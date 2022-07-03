@@ -64,5 +64,6 @@ func (s *service) validDNShard(request *txn.TxnRequest) {
 }
 
 func createSender(cfg Config) (rpc.TxnSender, error) {
+	// TODO: impl
 	return nil, nil
 }
