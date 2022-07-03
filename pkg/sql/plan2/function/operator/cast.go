@@ -55,13 +55,13 @@ func formatCastError(vec *vector.Vector, typ types.Type, extraInfo string) error
 	var errStr string
 	if vec.IsScalar() {
 		if vec.ConstVectorIsNull() {
-			errStr = fmt.Sprintf("can't cast 'NULL' as %v type.", typ)
+			errStr = fmt.Sprintf("Can't cast 'NULL' as %v type.", typ)
 		} else {
 			valueStr := strings.TrimRight(strings.TrimLeft(fmt.Sprintf("%v", vec.Col), "["), "]")
-			errStr = fmt.Sprintf("can't cast '%s' from %v type to %v type.", valueStr, vec.Typ, typ)
+			errStr = fmt.Sprintf("Can't cast '%s' from %v type to %v type.", valueStr, vec.Typ, typ)
 		}
 	} else {
-		errStr = fmt.Sprintf("can't cast column from %v type to %v type because of one or more values in that column.", vec.Typ, typ)
+		errStr = fmt.Sprintf("Can't cast column from %v type to %v type because of one or more values in that column.", vec.Typ, typ)
 	}
 	return errors.New(errno.InternalError, errStr+extraInfo)
 }

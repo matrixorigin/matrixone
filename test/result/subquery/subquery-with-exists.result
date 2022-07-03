@@ -345,18 +345,13 @@ id	st
 3	FL
 7	FL
 SELECT id, st FROM t1  WHERE st IN ('GA','FL') AND EXISTS(SELECT 1 FROM t2 WHERE t2.id=t1.id) GROUP BY id;
-id	st
-1	GA
-3	FL
-7	FL
+column "t1.st" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT id, st FROM t1 WHERE st IN ('GA','FL') AND NOT EXISTS(SELECT 1 FROM t2 WHERE t2.id=t1.id);
 id	st
 2	GA
 4	FL
 SELECT id, st FROM t1 WHERE st IN ('GA','FL') AND NOT EXISTS(SELECT 1 FROM t2 WHERE t2.id=t1.id) GROUP BY id;
-id	st
-2	GA
-4	FL
+column "t1.st" must appear in the GROUP BY clause or be used in an aggregate function
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;

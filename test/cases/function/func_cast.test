@@ -31,9 +31,7 @@ select CAST(0xffffffffffffffff as unsigned);
 select CAST(0xfffffffffffffffe as signed);
 select cast('-10a' as signed integer);
 select cast('a10' as unsigned integer);
--- @bvt:issue#3247
 select 10+'a';
--- @bvt:issue
 -- @bvt:issue#3280
 select 10.0+cast('a' as decimal);
 -- @bvt:issue
