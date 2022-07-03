@@ -344,6 +344,27 @@ func (l *store) AddDNStoreHeartbeat(ctx context.Context,
 	return nil
 }
 
+func (l *store) GetCommandBatch(ctx context.Context,
+	uuid string) (pb.CommandBatch, error) {
+	v, err := l.read(ctx,
+		hakeeper.DefaultHAKeeperShardID, &hakeeper.ScheduleCommandQuery{UUID: uuid})
+	if err != nil {
+		return pb.CommandBatch{}, err
+	}
+	return *(v.(*pb.CommandBatch)), nil
+}
+
+func (l *store) addScheduleCommands(ctx context.Context,
+	term uint64, cmds []pb.ScheduleCommand) error {
+	cmd := hakeeper.GetUpdateCommandsCmd(term, cmds)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if _, err := l.propose(ctx, session, cmd); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (l *store) getLeaseHolderID(ctx context.Context,
 	shardID uint64, entries []raftpb.Entry) (uint64, error) {
 	if len(entries) == 0 {
