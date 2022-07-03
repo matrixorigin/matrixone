@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -31,18 +32,6 @@ func CompareUint64(left, right uint64) int {
 		return -1
 	}
 	return 0
-}
-
-type Waitable interface {
-	Wait() error
-}
-
-type waitable struct {
-	fn func() error
-}
-
-func (w *waitable) Wait() error {
-	return w.fn()
 }
 
 type CommitInfo struct {
@@ -446,11 +435,17 @@ func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) (ok 
 }
 
 func (be *BaseEntry) String() string {
-	s := fmt.Sprintf("[Op=%s][ID=%d][%d=>%d]%s", OpNames[be.CurrOp], be.ID, be.CreateAt, be.DeleteAt, be.LogIndex.String())
+	var w bytes.Buffer
+	_, _ = w.WriteString(fmt.Sprintf("[Op=%s][ID=%d][%d=>%d]%s",
+		OpNames[be.CurrOp],
+		be.ID,
+		be.CreateAt,
+		be.DeleteAt,
+		be.LogIndex.String()))
 	if be.Txn != nil {
-		s = fmt.Sprintf("%s%s", s, be.Txn.Repr())
+		_, _ = w.WriteString(be.Txn.Repr())
 	}
-	return s
+	return w.String()
 }
 
 func (be *BaseEntry) PrepareWrite(txn txnif.TxnReader, rwlocker *sync.RWMutex) (err error) {
