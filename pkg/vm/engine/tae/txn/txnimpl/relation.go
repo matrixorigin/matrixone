@@ -308,6 +308,6 @@ func (h *txnRelation) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (er
 	return h.Txn.GetStore().LogTxnEntry(h.table.entry.GetDB().ID, h.table.entry.GetID(), entry, readed)
 }
 
-func (h *txnRelation) GetDB(name string) (handle.Database, error) {
-	return h.Txn.GetStore().GetDatabase(name)
+func (h *txnRelation) GetDB() (handle.Database, error) {
+	return h.Txn.GetStore().GetDatabase(h.GetMeta().(*catalog.TableEntry).GetDB().GetName())
 }

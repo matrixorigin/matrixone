@@ -118,7 +118,7 @@ func (rel *txnRelation) Delete(_ uint64, data *vector.Vector, col string, _ engi
 func (rel *txnRelation) Truncate(_ engine.Snapshot) (uint64, error) {
 	rows := uint64(rel.Rows())
 	name := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema().Name
-	db, err := rel.handle.GetDB(rel.handle.GetMeta().(*catalog.TableEntry).GetDB().GetName())
+	db, err := rel.handle.GetDB()
 	if err != nil {
 		return 0, err
 	}
