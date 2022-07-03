@@ -163,7 +163,6 @@ func TestHiddenWithPK1(t *testing.T) {
 			if meta.IsAppendable() {
 				assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
 			} else {
-				segMeta = meta.GetSegment()
 				assert.Equal(t, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, offsets)
 			}
 			it.Next()
@@ -190,8 +189,8 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 	assert.NoError(t, err)
 	blk := getOneBlock(rel)
 	view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil)
-	defer view.Close()
 	assert.NoError(t, err)
+	defer view.Close()
 	_ = view.GetData().Foreach(func(v any, _ int) (err error) {
 		sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
 		t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)

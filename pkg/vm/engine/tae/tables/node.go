@@ -161,7 +161,7 @@ func (node *appendableNode) OnLoad() {
 	}
 }
 
-func (node *appendableNode) flushData(ts uint64, colsData *containers.Batch) (err error) {
+func (node *appendableNode) flushData(ts uint64, colsData *containers.Batch, opCtx Operation) (err error) {
 	if exception := node.exception.Load(); exception != nil {
 		logutil.Error("[Exception]", common.ExceptionField(exception))
 		err = exception.(error)
@@ -171,7 +171,7 @@ func (node *appendableNode) flushData(ts uint64, colsData *containers.Batch) (er
 	if node.GetBlockMaxFlushTS() == ts {
 		err = data.ErrStaleRequest
 		logutil.Info("[Done]", common.TimestampField(ts),
-			common.OperationField("flush"),
+			common.OperationField(opCtx.OpName()),
 			common.ErrorField(err),
 			common.ReasonField("already flushed"),
 			common.OperandField(node.block.meta.AsCommonID().String()))
@@ -205,7 +205,7 @@ func (node *appendableNode) flushData(ts uint64, colsData *containers.Batch) (er
 		return
 	}
 	dnode := n.(*updates.DeleteNode)
-	logutil.Info("[Running]", common.OperationField("flush"),
+	logutil.Info("[Running]", common.OperationField(opCtx.OpName()),
 		common.OperandField(node.block.meta.AsCommonID().String()),
 		common.TimestampField(ts))
 	var deletes *roaring.Bitmap
@@ -236,7 +236,7 @@ func (node *appendableNode) OnUnload() {
 	}
 	ts := node.block.mvcc.LoadMaxVisible()
 	needCkp := true
-	if err := node.flushData(ts, node.data); err != nil {
+	if err := node.flushData(ts, node.data, new(unloadOp)); err != nil {
 		needCkp = false
 		if err == data.ErrStaleRequest {
 			// err = nil
