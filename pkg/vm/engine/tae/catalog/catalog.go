@@ -657,17 +657,14 @@ func (catalog *Catalog) SimplePPString(level common.PPLevel) string {
 }
 
 func (catalog *Catalog) PPString(level common.PPLevel, depth int, prefix string) string {
+	var w bytes.Buffer
 	cnt := 0
-	var body string
 	it := catalog.MakeDBIt(true)
 	for it.Valid() {
 		cnt++
-		table := it.Get().GetPayload().(*DBEntry)
-		if len(body) == 0 {
-			body = table.PPString(level, depth+1, "")
-		} else {
-			body = fmt.Sprintf("%s\n%s", body, table.PPString(level, depth+1, ""))
-		}
+		entry := it.Get().GetPayload().(*DBEntry)
+		_ = w.WriteByte('\n')
+		_, _ = w.WriteString(entry.PPString(level, depth+1, ""))
 		it.Next()
 	}
 
@@ -677,13 +674,10 @@ func (catalog *Catalog) PPString(level common.PPLevel, depth int, prefix string)
 		ckp = catalog.checkpoints[len(catalog.checkpoints)-1]
 	}
 	catalog.ckpmu.RUnlock()
-
-	head := fmt.Sprintf("CATALOG[CNT=%d][%s]", cnt, ckp.String())
-
-	if len(body) == 0 {
-		return head
-	}
-	return fmt.Sprintf("%s\n%s", head, body)
+	var w2 bytes.Buffer
+	_, _ = w2.WriteString(fmt.Sprintf("CATALOG[CNT=%d][%s]", cnt, ckp.String()))
+	_, _ = w2.WriteString(w.String())
+	return w2.String()
 }
 
 func (catalog *Catalog) RemoveEntry(database *DBEntry) error {

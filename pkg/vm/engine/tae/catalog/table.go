@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"sync"
@@ -195,25 +196,19 @@ func (entry *TableEntry) GetDB() *DBEntry {
 }
 
 func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string) string {
-	s := fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.String())
+	var w bytes.Buffer
+	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.String()))
 	if level == common.PPL0 {
-		return s
+		return w.String()
 	}
-	var body string
 	it := entry.MakeSegmentIt(true)
 	for it.Valid() {
 		segment := it.Get().GetPayload().(*SegmentEntry)
-		if len(body) == 0 {
-			body = segment.PPString(level, depth+1, prefix)
-		} else {
-			body = fmt.Sprintf("%s\n%s", body, segment.PPString(level, depth+1, prefix))
-		}
+		_ = w.WriteByte('\n')
+		_, _ = w.WriteString(segment.PPString(level, depth+1, prefix))
 		it.Next()
 	}
-	if len(body) == 0 {
-		return s
-	}
-	return fmt.Sprintf("%s\n%s", s, body)
+	return w.String()
 }
 
 func (entry *TableEntry) String() string {
@@ -312,7 +307,9 @@ func (entry *TableEntry) PrepareRollback() (err error) {
 	currOp := entry.CurrOp
 	entry.RUnlock()
 	if currOp == OpCreate {
-		err = entry.GetDB().RemoveEntry(entry)
+		if err = entry.GetDB().RemoveEntry(entry); err != nil {
+			return
+		}
 	}
 	if err = entry.BaseEntry.PrepareRollback(); err != nil {
 		return
