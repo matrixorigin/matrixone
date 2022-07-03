@@ -59,7 +59,9 @@ type TxnService interface {
 // TxnStorage In order for TxnService to implement distributed transactions based on Clock-SI on a stand-alone
 // storage engine, it requires a number of interfaces implemented by the storage engine.
 type TxnStorage interface {
-	SetRecoveryHandler()
+	// SetRecoveryProcessor set txn recovery processor. TxnStorage recovery process must be started after the
+	// processor is set up.
+	SetRecoveryProcessor(TxnRecoveryProcessor)
 
 	// Read execute read requests sent by CN.
 	//
@@ -106,16 +108,6 @@ type TxnRecoveryProcessor interface {
 	// called, determining the status of these transactions at the time of the interruption. TxnRecoveryProcessor
 	// then goes from this final status to recover the transaction.
 	End() error
-}
-
-// TxnEventService is responsible for broadcasting events of a transaction in a DNStore, such as changes in
-// the status of a transaction.
-type TxnEventService interface {
-	// Subscribe subscribe the status change of a transaction and calls a notification function when the status
-	// of the transaction changed to the specified status.
-	Subscribe(txnID []byte, status []txn.TxnStatus, notifyFunc func(txnID []byte, status txn.TxnStatus))
-	// ChangeTo transaction status changed to the specified status. All Subscribe will be called.
-	ChangeTo(txnID []byte, status txn.TxnStatus) error
 }
 
 // ReadResult read result from TxnStorage. When a read operation encounters any concurrent write transaction,
