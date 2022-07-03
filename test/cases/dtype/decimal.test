@@ -19,9 +19,7 @@ create table t1 (a decimal(29,0) not null, primary key(a));
 insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFE), (18446744073709551613.0000000), (18446744073709551612.0000000001);
 select * from t1;
 select * from t1 where a=18446744073709551615;
--- @bvt:issue
--- @bvt:issue#3280
-delete from t1 where a=18446744073709551615.000000000;  
+delete from t1 where a=18446744073709551615.000000000;
 select * from t1;
 -- @bvt:issue
 drop table t1;
@@ -74,16 +72,12 @@ insert into t1 values (-17666000000000000000);
 -- @bvt:issue#3364
 select * from t1 where decimal_col=-17666000000000000000 order by 1 asc;
 -- @bvt:issue
--- @bvt:issue#3281
 select * from t1 where decimal_col='-17666000000000000000' order by decimal_col desc;
--- @bvt:issue
 drop table t1;
 
 #Test cases of cast
--- @bvt:issue#3282
-select cast(10000002383263201056 as decimal) mod 50 as result;
--- @bvt:issue
 -- @bvt:issue#3283
+select cast(10000002383263201056 as decimal) mod 50 as result;
 select cast(cast(19999999999999999999 as decimal) as unsigned);
 -- @bvt:issue
 CREATE TABLE t1 (id INT PRIMARY KEY,
@@ -97,7 +91,7 @@ INSERT INTO t1 (id,a) VALUES
 (4,CAST(0xFFFFFFFFFFFFFFFF AS UNSIGNED));
 UPDATE t1 SET b = a;
 -- @bvt:issue
--- @bvt:issue#3281
+-- @bvt:issue#3673
 select distinct * from t1 where ((a = '2147483647') and (b = '2147483647'));
 select a,count(a) from t1 group by a having count(a)>=2;
 -- @bvt:issue
@@ -106,42 +100,22 @@ select a,count(a) from t1 group by a having count(a)>=2;
 CREATE TABLE t_decimal(id decimal(10,5));
 INSERT INTO t_decimal VALUES (1), (2),(1.099999999),(2.20000000001);
 select * from t_decimal;
--- @bvt:issue#3280
 SELECT id, id >= 1.1 FROM t_decimal;
--- @bvt:issue
--- @bvt:issue#3282
 SELECT id, 1.1 <= id FROM t_decimal;
--- @bvt:issue
--- @bvt:issue#3280
 SELECT id, id = 1.1 FROM t_decimal;
--- @bvt:issue
--- @bvt:issue#3282
 SELECT id, 1.1 = id FROM t_decimal;
--- @bvt:issue
--- @bvt:issue#3280
 SELECT * from t_decimal WHERE id = 1.1;
 SELECT * from t_decimal WHERE id = 1.1e0;
--- @bvt:issue
--- @bvt:issue#3281
 SELECT * from t_decimal WHERE id = '1.1';
 SELECT * from t_decimal WHERE id = '1.1e0';
--- @bvt:issue
--- @bvt:issue#3280
 SELECT * from t_decimal WHERE id IN (1.1, 2.2);
 SELECT * from t_decimal WHERE id IN (1.1e0, 2.2e0);
--- @bvt:issue
--- @bvt:issue#3281
 SELECT * from t_decimal WHERE id IN ('1.1', '2.2');
 SELECT * from t_decimal WHERE id IN ('1.1e0', '2.2e0');
--- @bvt:issue
--- @bvt:issue#3280
 SELECT * from t_decimal WHERE id BETWEEN 1.1 AND 1.9;
 SELECT * from t_decimal WHERE id BETWEEN 1.1e0 AND 1.9e0;
--- @bvt:issue
--- @bvt:issue#3281
 SELECT * from t_decimal WHERE id BETWEEN '1.1' AND '1.9';
 SELECT * from t_decimal WHERE id BETWEEN '1.1e0' AND '1.9e0';
--- @bvt:issue
 drop table t1;
 CREATE TABLE t1 (a decimal(2,1));
 INSERT INTO t1 VALUES (1),(0.8999),(0.9);

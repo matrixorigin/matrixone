@@ -74,9 +74,7 @@ drop table if exists t2;
 create table t1 (a float);
 insert into t1 values (17.666);
 select * from t1 where a>=17.6660;
--- @bvt:issue#3277
 select * from t1 where a>='17.6660';
--- @bvt:issue
 select a  mod 50 as result from t1;
 select cast(a as unsigned) mod 50 as result from t1;
 select cast(a+a as signed) from t1;
@@ -95,8 +93,6 @@ INSERT INTO t1 (id,a) VALUES
 (4,CAST(0xFFFFFFFFFFFFFFFF AS UNSIGNED));
 select * from t1;
 UPDATE t1 SET b = a;
--- @bvt:issue
--- @bvt:issue#3277
 select a,count(a) from t1 where ((a = 9.223372036854776e18) and (b = '9.223372036854776e18')) group by a having count(a)>2 order by count(a);
 select distinct a,b from t1 where ((a != 9.223372036854776e18) and (b != '9.223372036854776e18')) order by 2;
 -- @bvt:issue
