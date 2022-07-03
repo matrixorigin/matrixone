@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -144,27 +145,21 @@ func (entry *SegmentEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) 
 }
 
 func (entry *SegmentEntry) PPString(level common.PPLevel, depth int, prefix string) string {
-	s := fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.String())
+	var w bytes.Buffer
+	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.String()))
 	if level == common.PPL0 {
-		return s
+		return w.String()
 	}
-	var body string
 	it := entry.MakeBlockIt(true)
 	for it.Valid() {
 		block := it.Get().GetPayload().(*BlockEntry)
 		block.RLock()
-		if len(body) == 0 {
-			body = block.PPString(level, depth+1, prefix)
-		} else {
-			body = fmt.Sprintf("%s\n%s", body, block.PPString(level, depth+1, prefix))
-		}
+		_ = w.WriteByte('\n')
+		_, _ = w.WriteString(block.PPString(level, depth+1, prefix))
 		block.RUnlock()
 		it.Next()
 	}
-	if len(body) == 0 {
-		return s
-	}
-	return fmt.Sprintf("%s\n%s", s, body)
+	return w.String()
 }
 
 func (entry *SegmentEntry) StringLocked() string {
