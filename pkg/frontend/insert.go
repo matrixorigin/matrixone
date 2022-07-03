@@ -16,6 +16,11 @@ package frontend
 
 import (
 	"fmt"
+	"go/constant"
+	"math"
+	"strconv"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,10 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go/constant"
-	"math"
-	"strconv"
-	"strings"
 )
 
 type InsertValues struct {
@@ -38,25 +39,20 @@ type InsertValues struct {
 	relation  engine.Relation
 }
 
-func (mce *MysqlCmdExecutor) handleInsertValues(stmt *tree.Insert, ts uint64) error {
+func (mce *MysqlCmdExecutor) handleInsertValues(stmt *tree.Insert, ts uint64) (uint64, error) {
 	snapshot := mce.GetSession().GetTxnHandler().GetTxn().GetCtx()
 
 	plan := &InsertValues{currentDb: mce.GetSession().GetDatabaseName()}
 
 	if err := buildInsertValues(stmt, plan, mce.GetSession().GetStorage(), snapshot); err != nil {
-		return err
+		return 0, err
 	}
-
 	defer plan.relation.Close(snapshot)
 	if err := plan.relation.Write(ts, plan.dataBatch, snapshot); err != nil {
-		return err
+		return 0, err
 	}
 
-	resp := NewOkResponse(uint64(vector.Length(plan.dataBatch.Vecs[0])), 0, 0, 0, int(COM_QUERY), "")
-	if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
-		return fmt.Errorf("routine send response failed. error:%v ", err)
-	}
-	return nil
+	return uint64(vector.Length(plan.dataBatch.Vecs[0])), nil
 }
 
 func getTableRef(tbl *tree.TableName, currentDB string, eg engine.Engine, snapshot engine.Snapshot) (string, string, engine.Relation, error) {
