@@ -5,9 +5,9 @@ select cast('2000-01-01' as date);
 cast('2000-01-01' as date)
 2000-01-01
 select cast('200-01-1' as date);
-can't cast '200-01-1' from VARCHAR type to DATE type.
+Can't cast '200-01-1' from VARCHAR type to DATE type.
 select cast('2021-02-29' as date);
-can't cast '2021-02-29' from VARCHAR type to DATE type.
+Can't cast '2021-02-29' from VARCHAR type to DATE type.
 select cast('2022-02-01' as date)-cast('2022-01-01' as date);
 cast('2022-02-01' as date)-cast('2022-01-01' as date)
 100
@@ -15,7 +15,7 @@ select cast('2020-02-01' as date)+NULL;
 cast('2020-02-01' as date)+NULL
 NULL
 select cast('0000-00-00' as date);
-can't cast '0000-00-00' from VARCHAR type to DATE type.
+Can't cast '0000-00-00' from VARCHAR type to DATE type.
 select cast(cast(0x13488c5 as signed) as date);
 cast(cast(0x13488c5 as signed) as date)
 2022-01-01
