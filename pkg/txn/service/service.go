@@ -15,6 +15,9 @@
 package service
 
 import (
+	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -24,8 +27,14 @@ import (
 var _ TxnService = (*service)(nil)
 
 type service struct {
-	cfg    Config
-	sender rpc.TxnSender // send txn requests to other txn service
+	cfg     Config
+	sender  rpc.TxnSender // send txn requests to other txn service
+	stopper *stopper.Stopper
+
+	mu struct {
+		sync.RWMutex
+		transactions map[string]txn.TxnMeta
+	}
 }
 
 func NewTxnService(cfg Config) (TxnService, error) {

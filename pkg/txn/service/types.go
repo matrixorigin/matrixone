@@ -33,7 +33,8 @@ type TxnService interface {
 	// Close close the txn service
 	Close() error
 
-	// Read handle txn read request from CN. For reuse, the response is provided by the caller
+	// Read handle txn read request from CN. For reuse, the response is provided by the
+	// TODO: only read log tail.
 	Read(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
 	// Write handle txn write request from CN. For reuse, the response is provided by the caller
 	Write(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
@@ -42,7 +43,7 @@ type TxnService interface {
 	// Rollback handle txn rollback request from CN. For reuse, the response is provided by the caller
 	Rollback(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
 
-	// Rollback handle txn rollback request from coordinator DN. For reuse, the response is provided by
+	// Prepare handle txn prepare request from coordinator DN. For reuse, the response is provided by
 	// the caller
 	Prepare(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
 	// GetStatus handle get txn status in current DNShard request from coordinator DN. For reuse, the
@@ -75,13 +76,8 @@ type TxnStorage interface {
 	// case2. Txn.Status == Prepared && CurrentTxn.SnapshotTimestamp > Txn.PreparedTimestamp
 	Read(txnMeta txn.TxnMeta, op int, payload []byte) (ReadResult, error)
 	// Write execute write requests sent by CN.
+	// TODO: Handle spec error by storage.
 	Write(txnMeta txn.TxnMeta, op int, payload []byte) error
-	// Commit commit the transaction. Only the transaction commit of a single DNShard will call.
-	// TxnStorage needs to do conflict locally.
-	Commit(txnMeta txn.TxnMeta) error
-	// Rollback rollback the transaction. Only the transaction commit of a single DNShard will call.
-	Rollback(txnMeta txn.TxnMeta) error
-
 	// Prepare prepare data written by a transaction on a DNShard. TxnStorage needs to do conflict
 	// detection locally. The txn metadata(status change to prepared) and the data should be written to
 	// LogService.
@@ -91,10 +87,10 @@ type TxnStorage interface {
 	Prepare(txnMeta txn.TxnMeta) error
 	// GetStatus returns the status of a transaction on the current DNShard.
 	GetStatus(txnID []byte) (txn.TxnMeta, error)
-	// CommitPrepared commit the prepared data.
-	CommitPrepared(txnMeta txn.TxnMeta) error
-	// RollbackPrepared rollback the prepared data.
-	RollbackPrepared(txnMeta txn.TxnMeta) error
+	// Commit commit the transaction. TxnStorage needs to do conflict locally.
+	Commit(txnMeta txn.TxnMeta) error
+	// Rollback rollback the transaction.
+	Rollback(txnMeta txn.TxnMeta) error
 }
 
 // TxnRecoveryProcessor The processor responsible for resuming the transaction when the DNShard is restarted.
@@ -104,7 +100,7 @@ type TxnRecoveryProcessor interface {
 	// transaction needs to be handed over to the TxnRecoveryProcessor to be used to continue the interrupted
 	// transaction.
 	AddLog(txn txn.TxnMeta) error
-	// End o-f all the Logs that need to be recovered, a txn may correspond to multiple status changes when End is
+	// End of all the Logs that need to be recovered, a txn may correspond to multiple status changes when End is
 	// called, determining the status of these transactions at the time of the interruption. TxnRecoveryProcessor
 	// then goes from this final status to recover the transaction.
 	End() error
