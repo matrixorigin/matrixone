@@ -17,10 +17,10 @@ SELECT YEAR("2015-09") as year;
 
 
 SELECT YEAR(2015) as year;
--- @bvt:issue#3598
+
 SELECT YEAR(1340124) as year;
 SELECT YEAR(0.45133) as year;
--- @bvt:issue
+
 SELECT YEAR(1=1) as year;
 
 

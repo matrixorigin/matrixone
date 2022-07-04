@@ -66,9 +66,9 @@ select date("1997-13-31 23:59:59.000001");
 -- @bvt:issue#3588
 SELECT DATE(20110512154559.6 + 0e0);
 -- @bvt:issue
--- @bvt:issue#3593
+
 SELECT DATE(concat_ws('a', 0));
--- @bvt:issue
+
 
 #timestamp type
 CREATE TABLE t1 (a timestamp);

@@ -17,12 +17,12 @@ drop table t1;
 drop table t2;
 
 #DATE TYPE
--- @bvt:issue#3498
+
 CREATE TABLE t1 (s char(8), b CHAR(100), c VARCHAR(255), d int, e float, f datetime);
 INSERT INTO t1 VALUES ('test', "hhhhhhh", "12jknfjniosdjcoijcpowef", 1234, 0.14123123, "2012-02-08 12:03:23");
 SELECT LENGTH(s), length(b), length(c), length(d), length(e), length(f) FROM t1;
 DROP TABLE t1;
--- @bvt:issue
+
 
 #INSERT, DISTINCT, ON CONDITION
 CREATE TABLE t1 (t1_fld1 int, b varchar(255));

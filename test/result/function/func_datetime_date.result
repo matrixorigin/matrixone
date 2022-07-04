@@ -50,8 +50,7 @@ SELECT DATE(20110512154559.6 + 0e0);
 DATE(20110512154559.6 + 0e0)
 2011-05-12
 SELECT DATE(concat_ws('a', 0));
-DATE(concat_ws('a', 0))
-null
+Incorrect date format
 CREATE TABLE t1 (a timestamp);
 INSERT INTO t1 VALUES ("2020-12-31 12:01:32");
 SELECT DATE(MIN(a)) FROM t1;
