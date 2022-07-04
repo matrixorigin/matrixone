@@ -14,38 +14,20 @@
 package logservice
 
 import (
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"sort"
 )
 
-type excludedFilter struct {
-	excluded map[string]struct{}
-}
-
-func newExcludedFilter(stores ...string) *excludedFilter {
-	e := excludedFilter{map[string]struct{}{}}
-	for _, store := range stores {
-		e.excluded[store] = struct{}{}
-	}
-	return &e
-}
-
-func (e *excludedFilter) Filter(store *util.Store) bool {
-	if _, ok := e.excluded[string(store.ID)]; ok {
-		return true
-	}
-	return false
-}
-
-func selector(shardInfo logservice.LogShardInfo, stores *util.ClusterStores) util.StoreID {
+func selectStore(shardInfo logservice.LogShardInfo, stores *util.ClusterStores) util.StoreID {
 	workingStores := stores.WorkingStores()
-	excluded := make([]string, 0)
+	excluded := make([]string, 0, len(shardInfo.Replicas))
 	for _, storeID := range shardInfo.Replicas {
 		excluded = append(excluded, storeID)
 	}
 
-	candidates := util.FilterStore(workingStores, []util.IFilter{newExcludedFilter(excluded...)})
+	candidates := util.FilterStore(workingStores, []util.IFilter{util.NewExcludedFilter(excluded...)})
 	if len(candidates) == 0 {
 		return ""
 	}
