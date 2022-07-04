@@ -187,12 +187,8 @@ select floor(123.45, -1);
 select floor(123.342124124214, 100);
 select floor(-123.342124124214, -100);
 
--- @bvt:issue#3315
 select floor(123.342, null);
--- @bvt:issue
 
 select floor(null, 1);
 
--- @bvt:issue#3315
 select floor(null, null);
--- @bvt:issue
