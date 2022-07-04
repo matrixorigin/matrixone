@@ -369,7 +369,7 @@ func (tbl *txnTable) IsLocalDeleted(row uint32) bool {
 	return tbl.localSegment.IsDeleted(row)
 }
 
-func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32) (err error) {
+func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
 	if isLocalSegment(id) {
 		return tbl.RangeDeleteLocalRows(start, end)
 	}
@@ -401,7 +401,7 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32) (err error) {
 		return
 	}
 	blkData := blk.GetBlockData()
-	node2, err := blkData.RangeDelete(tbl.store.txn, start, end)
+	node2, err := blkData.RangeDelete(tbl.store.txn, start, end, dt)
 	if err == nil {
 		id := blk.AsCommonID()
 		if err = tbl.AddDeleteNode(id, node2); err != nil {

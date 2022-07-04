@@ -232,7 +232,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (
 		vec.Append(colVal)
 		bat.AddVector(def.Name, vec)
 	}
-	if err = h.table.RangeDelete(id, row, row); err != nil {
+	if err = h.table.RangeDelete(id, row, row, handle.DT_Normal); err != nil {
 		return
 	}
 	err = h.Append(bat)
@@ -259,7 +259,7 @@ func (h *txnRelation) DeleteByFilter(filter *handle.Filter) (err error) {
 	if err != nil {
 		return
 	}
-	return h.RangeDelete(id, row, row)
+	return h.RangeDelete(id, row, row, handle.DT_Normal)
 }
 
 func (h *txnRelation) DeleteByHiddenKeys(keys containers.Vector) (err error) {
@@ -270,7 +270,7 @@ func (h *txnRelation) DeleteByHiddenKeys(keys containers.Vector) (err error) {
 	dbId := h.table.entry.GetDB().ID
 	err = keys.Foreach(func(key any, _ int) (err error) {
 		id.SegmentID, id.BlockID, row = model.DecodeHiddenKeyFromValue(key)
-		err = h.Txn.GetStore().RangeDelete(dbId, id, row, row)
+		err = h.Txn.GetStore().RangeDelete(dbId, id, row, row, handle.DT_Normal)
 		return
 	}, nil)
 	return
@@ -283,11 +283,11 @@ func (h *txnRelation) DeleteByHiddenKey(key any) error {
 		SegmentID: sid,
 		BlockID:   bid,
 	}
-	return h.Txn.GetStore().RangeDelete(h.table.entry.GetDB().ID, id, row, row)
+	return h.Txn.GetStore().RangeDelete(h.table.entry.GetDB().ID, id, row, row, handle.DT_Normal)
 }
 
-func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32) error {
-	return h.Txn.GetStore().RangeDelete(h.table.entry.GetDB().ID, id, start, end)
+func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) error {
+	return h.Txn.GetStore().RangeDelete(h.table.entry.GetDB().ID, id, start, end, dt)
 }
 
 func (h *txnRelation) GetValueByHiddenKey(key any, col int) (any, error) {

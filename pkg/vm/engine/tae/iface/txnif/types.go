@@ -132,7 +132,7 @@ type DeleteChain interface {
 	// GetID() *common.ID
 	RemoveNodeLocked(DeleteNode)
 
-	AddNodeLocked(txn AsyncTxn) DeleteNode
+	AddNodeLocked(txn AsyncTxn, deleteType handle.DeleteType) DeleteNode
 	AddMergeNode() DeleteNode
 
 	PrepareRangeDelete(start, end uint32, ts uint64) error
@@ -179,7 +179,7 @@ type TxnStore interface {
 
 	Append(dbId, id uint64, data *containers.Batch) error
 
-	RangeDelete(dbId uint64, id *common.ID, start, end uint32) error
+	RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) error
 	Update(dbId uint64, id *common.ID, row uint32, col uint16, v any) error
 	GetByFilter(dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
 	GetValue(dbId uint64, id *common.ID, row uint32, col uint16) (any, error)
