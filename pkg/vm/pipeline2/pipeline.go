@@ -16,7 +16,7 @@ package pipeline2
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/dispatch"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,12 +27,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func New(attrs []string, attrsTypes []plan.ColDef, ins vm.Instructions, reg *process.WaitRegister) *Pipeline {
+func New(attrs []string, ins vm.Instructions, reg *process.WaitRegister) *Pipeline {
 	return &Pipeline{
 		reg:          reg,
 		instructions: ins,
 		attrs:        attrs,
-		attrTypes:    attrsTypes,
 	}
 }
 
@@ -65,22 +64,15 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 	if err = overload.Prepare(p.instructions, proc); err != nil {
 		return false, err
 	}
-	//refCnts := make([]uint64, len(p.attrs))
-	refCnts := make([]uint64, p.getValidColLen())
-	validAttrs := p.getValidAttrs()
+	refCnts := make([]uint64, len(p.attrs))
 	for {
 		// read data from storage engine
-		//if bat, err = r.Read(refCnts, p.attrs); err != nil {
-		if bat, err = r.Read(refCnts, validAttrs); err != nil {
+		if bat, err = r.Read(refCnts, p.attrs); err != nil {
 			return false, err
 		}
-
 		if bat != nil {
 			bat.Cnt = 1
-			// Fill in the blanks to bat
-			bat = resetBat(bat, p.attrs, p.attrTypes, proc)
 		}
-
 		// processing the batch according to the instructions
 		proc.Reg.InputBatch = bat
 		if end, err = overload.Run(p.instructions, proc); err != nil || end { // end is true means pipeline successfully completed
