@@ -133,9 +133,9 @@ func roundUint64(xs []uint64, rs []uint64, digits int64) []uint64 {
 	case digits >= 0:
 		return xs
 	case digits > -maxUint64digits:
-		scale := float64(scaleTable[-digits])
+		scale := scaleTable[-digits]
 		for i := range xs {
-			value := int((float64(xs[i])+0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
+			value := (xs[i] + scale/2) / scale * scale //todo(broccoli): please find a better way to round away from zero
 			rs[i] = uint64(value)
 		}
 	case digits <= -maxUint64digits:
