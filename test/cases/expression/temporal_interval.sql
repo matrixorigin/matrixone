@@ -241,10 +241,8 @@ select i,c + INTERVAL 1 MINUTE from t1 where a - INTERVAL 1 SECOND  > "1997-01-0
 select t1.i,t2.i,t1.c + INTERVAL 1 MINUTE,t2.b + INTERVAL 1 YEAR from t1 join t2 where (t1.a + INTERVAL 1 DAY) = (t2.c -INTERVAL 1 DAY );
 
 
--- @bvt:issue#3284
 select '2007-01-01' + interval i day from t2;
 select b + interval i day from t2;
--- @bvt:issue
 
 update t1 set c = c + INTERVAL 1 DAY where i > 6;
 -- @bvt:issue#3290

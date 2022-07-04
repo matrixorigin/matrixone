@@ -25,30 +25,36 @@ import (
 
 func DateAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstVector := vectors[0]
+	secondVector := vectors[1]
 	firstValues := vector.MustTCols[types.Date](vectors[0])
 	secondValues := vector.MustTCols[int64](vectors[1])
 	thirdValues := vector.MustTCols[int64](vectors[2])
 
 	resultType := types.Type{Oid: types.T_date, Size: 4}
 	resultElementSize := int(resultType.Size)
-	if firstVector.IsScalar() {
-		if firstVector.ConstVectorIsNull() {
+	if firstVector.IsScalar() && secondVector.IsScalar() {
+		if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
-		resultValues := make([]types.Date, 1)
-		res, err := date_add.DateAdd(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues)
+		resultVector := proc.AllocScalarVector(resultType)
+		rs := make([]types.Date, 1)
+		res, err := date_add.DateAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(firstValues)))
+		var maxLen int
+		if len(firstValues) > len(secondValues) {
+			maxLen = len(firstValues)
+		} else {
+			maxLen = len(secondValues)
+		}
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*maxLen))
 		if err != nil {
 			return nil, err
 		}
 		resultValues := encoding.DecodeDateSlice(resultVector.Data)
-		resultValues = resultValues[:len(firstValues)]
-		nulls.Set(resultVector.Nsp, firstVector.Nsp)
-		res, err := date_add.DateAdd(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues)
+		resultValues = resultValues[:maxLen]
+		res, err := date_add.DateAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	}
@@ -56,63 +62,74 @@ func DateAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 
 func DatetimeAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstVector := vectors[0]
+	secondVector := vectors[1]
 	firstValues := vector.MustTCols[types.Datetime](vectors[0])
 	secondValues := vector.MustTCols[int64](vectors[1])
 	thirdValues := vector.MustTCols[int64](vectors[2])
 
 	resultType := types.Type{Oid: types.T_datetime, Precision: firstVector.Typ.Precision, Size: 8}
 	resultElementSize := int(resultType.Size)
-	if firstVector.IsScalar() {
-		if firstVector.ConstVectorIsNull() {
+
+	if firstVector.IsScalar() && secondVector.IsScalar() {
+		if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
-		resultValues := make([]types.Datetime, 1)
-		res, err := date_add.DatetimeAdd(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues)
+		resultVector := proc.AllocScalarVector(resultType)
+		rs := make([]types.Datetime, 1)
+		res, err := date_add.DatetimeAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(firstValues)))
+		var maxLen int
+		if len(firstValues) > len(secondValues) {
+			maxLen = len(firstValues)
+		} else {
+			maxLen = len(secondValues)
+		}
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*maxLen))
 		if err != nil {
 			return nil, err
 		}
 		resultValues := encoding.DecodeDatetimeSlice(resultVector.Data)
-		resultValues = resultValues[:len(firstValues)]
-		nulls.Set(resultVector.Nsp, firstVector.Nsp)
-		res, err := date_add.DatetimeAdd(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues)
+		resultValues = resultValues[:maxLen]
+		res, err := date_add.DatetimeAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	}
 }
 
-const maxGeneratedElementSize = 26
-
 func DateStringAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstVector := vectors[0]
+	secondVector := vectors[1]
 	firstValues := vector.MustBytesCols(vectors[0])
 	secondValues := vector.MustTCols[int64](vectors[1])
 	thirdValues := vector.MustTCols[int64](vectors[2])
 	resultType := types.Type{Oid: types.T_datetime, Precision: 6, Size: 8}
-	if firstVector.IsScalar() {
-		if firstVector.ConstVectorIsNull() {
+	resultElementSize := int(resultType.Size)
+
+	if firstVector.IsScalar() && secondVector.IsScalar() {
+		if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
-		resultValues := make([]types.Datetime, 1)
-		nulls.Set(resultVector.Nsp, firstVector.Nsp)
-		res, err := date_add.DateStringAdd(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues)
+		resultVector := proc.AllocScalarVector(resultType)
+		rs := make([]types.Datetime, 1)
+		res, err := date_add.DateStringAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	} else {
-		// maxGeneratedElementSize is max string generated by date/datetime
-		resultVector, err := proc.AllocVector(resultType, int64(maxGeneratedElementSize*len(firstValues.Lengths)))
+		var maxLen int
+		if len(firstValues.Lengths) > len(secondValues) {
+			maxLen = len(firstValues.Lengths)
+		} else {
+			maxLen = len(secondValues)
+		}
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*maxLen))
 		if err != nil {
 			return nil, err
 		}
 		resultValues := encoding.DecodeDatetimeSlice(resultVector.Data)
-		resultValues = resultValues[:len(firstValues.Lengths)]
-		nulls.Set(resultVector.Nsp, firstVector.Nsp)
-		res, err := date_add.DateStringAdd(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues)
+		resultValues = resultValues[:maxLen]
+		res, err := date_add.DateStringAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	}
@@ -120,30 +137,38 @@ func DateStringAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 
 func TimeStampAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstVector := vectors[0]
+	secondVector := vectors[1]
 	firstValues := vector.MustTCols[types.Timestamp](vectors[0])
 	secondValues := vector.MustTCols[int64](vectors[1])
 	thirdValues := vector.MustTCols[int64](vectors[2])
 
 	resultType := types.Type{Oid: types.T_timestamp, Precision: firstVector.Typ.Precision, Size: 8}
 	resultElementSize := int(resultType.Size)
-	if firstVector.IsScalar() {
-		if firstVector.ConstVectorIsNull() {
+
+	if firstVector.IsScalar() && secondVector.IsScalar() {
+		if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
-		resultValues := make([]types.Timestamp, 1)
-		resultValues, err := date_add.TimestampAdd(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues)
-		vector.SetCol(resultVector, resultValues)
+		resultVector := proc.AllocScalarVector(resultType)
+		rs := make([]types.Timestamp, 1)
+		res, err := date_add.TimestampAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
+		vector.SetCol(resultVector, res)
 		return resultVector, err
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(firstValues)))
+		var maxLen int
+		if len(firstValues) > len(secondValues) {
+			maxLen = len(firstValues)
+		} else {
+			maxLen = len(secondValues)
+		}
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*maxLen))
 		if err != nil {
 			return nil, err
 		}
 		resultValues := encoding.DecodeTimestampSlice(resultVector.Data)
-		resultValues = resultValues[:len(firstValues)]
+		resultValues = resultValues[:maxLen]
 		nulls.Set(resultVector.Nsp, firstVector.Nsp)
-		resultValues, err = date_add.TimestampAdd(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues)
+		resultValues, err = date_add.TimestampAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, err
 	}

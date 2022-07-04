@@ -47,6 +47,9 @@ const microSecondsDigits = 6
 
 var TimestampMinValue Timestamp
 var TimestampMaxValue Timestamp
+var (
+	ErrInvalidTimestampAddInterval = errors.New(errno.DataException, "Beyond the range of timestamp")
+)
 
 // the range for TIMESTAMP values is '1970-01-01 00:00:01.000000' to '2038-01-19 03:14:07.999999'.
 func init() {
@@ -98,7 +101,7 @@ func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
 		} else if msecStr[precision] >= '0' && msecStr[precision] <= '4' {
 			msecCarry = 0
 		} else {
-			return 0, 0, errIncorrectDatetimeValue
+			return 0, 0, ErrIncorrectDatetimeValue
 		}
 		msecStr = msecStr[:precision]
 	} else if len(msecStr) < int(precision) {
