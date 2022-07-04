@@ -80,8 +80,8 @@ func isRemoving(replica replica, removingReplicas []uint64) bool {
 }
 
 func shouldAdd(toAdd int, adding []uint64) bool {
-	if adding == nil || toAdd <= len(adding) {
-		return false
+	if toAdd > len(adding) {
+		return true
 	}
-	return true
+	return false
 }
