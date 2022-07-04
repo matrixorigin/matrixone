@@ -1,5 +1,5 @@
 SELECT bit_and(null), bit_or(null), bit_xor(null);
-bit_and(null)	bit_or(null)	bit_xor(null)
+bit_and(null) bit_or(null) bit_xor(null)
 null	null	null
 CREATE TABLE t1 (a int, b int);
 INSERT INTO t1 VALUES (1,null);

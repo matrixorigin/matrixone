@@ -1,4 +1,4 @@
-#SELECT 
+#SELECT
 SELECT RTRIM('barbar   ');
 SELECT LTRIM('  barbar');
 SELECT '    geeksforgeeks'  As OriginalString,

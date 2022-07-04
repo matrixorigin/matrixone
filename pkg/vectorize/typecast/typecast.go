@@ -186,10 +186,15 @@ func FloatToIntWithoutError[T1 constraints.Float, T2 constraints.Integer](xs []T
 	return rs, nil
 }
 
-func float64ToInt64(xs []float64, rs []int64) ([]int64, error) {
+func float64ToInt64(xs []float64, rs []int64, isEmptyStringOrNull ...[]int) ([]int64, error) {
+	usedEmptyStringOrNull := len(isEmptyStringOrNull) > 0
 	for i, x := range xs {
 		if x > math.MaxInt64 || x < math.MinInt64 {
-			return nil, moerr.NewError(moerr.OUT_OF_RANGE, "overflow from double to bigint")
+			if usedEmptyStringOrNull {
+				isEmptyStringOrNull[0][i] = 1
+			} else {
+				return nil, moerr.NewError(moerr.OUT_OF_RANGE, "overflow from double to bigint")
+			}
 		}
 		rs[i] = int64(math.Round((x)))
 	}
@@ -290,14 +295,22 @@ func Decimal128ToBytes(xs []types.Decimal128, rs *types.Bytes, scale int32) (*ty
 	return rs, nil
 }
 
-func BytesToFloat[T constraints.Float](xs *types.Bytes, rs []T) ([]T, error) {
+func BytesToFloat[T constraints.Float](xs *types.Bytes, rs []T, isEmptyStringOrNull ...[]int) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
-
+	usedEmptyStringOrNull := len(isEmptyStringOrNull) > 0
 	for i, o := range xs.Offsets {
 		s := string(xs.Data[o : o+xs.Lengths[i]])
 		val, err := strconv.ParseFloat(s, bitSize)
 		if err != nil {
-			return nil, err
+			if usedEmptyStringOrNull {
+				if !strings.Contains(err.Error(), "value out of range") {
+					isEmptyStringOrNull[0][i] = 2
+				} else {
+					isEmptyStringOrNull[0][i] = 1
+				}
+			} else {
+				return nil, err
+			}
 		}
 		rs[i] = T(val)
 	}
