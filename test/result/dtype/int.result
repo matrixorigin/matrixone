@@ -164,25 +164,25 @@ id
 SELECT * from t_int WHERE id = 1.1e0;
 id
 SELECT * from t_int WHERE id = '1.1';
-id
+Can't cast '1.1' from VARCHAR type to INT type.
 SELECT * from t_int WHERE id = '1.1e0';
-id
+Can't cast '1.1e0' from VARCHAR type to INT type.
 SELECT * from t_int WHERE id IN (1.1, 2.2);
 id
 SELECT * from t_int WHERE id IN (1.1e0, 2.2e0);
 id
 SELECT * from t_int WHERE id IN ('1.1', '2.2');
-id
+Can't cast '1.1' from VARCHAR type to INT type.
 SELECT * from t_int WHERE id IN ('1.1e0', '2.2e0');
-id
+Can't cast '1.1e0' from VARCHAR type to INT type.
 SELECT * from t_int WHERE id BETWEEN 1.1 AND 1.9;
 id
 SELECT * from t_int WHERE id BETWEEN 1.1e0 AND 1.9e0;
 id
 SELECT * from t_int WHERE id BETWEEN '1.1' AND '1.9';
-id
+Can't cast '1.1' from VARCHAR type to INT type.
 SELECT * from t_int WHERE id BETWEEN '1.1e0' AND '1.9e0';
-id
+Can't cast '1.1e0' from VARCHAR type to INT type.
 drop table t1;
 CREATE TABLE t1 (a INT);
 INSERT INTO t1 VALUES (1);
