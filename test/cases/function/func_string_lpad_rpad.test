@@ -35,7 +35,7 @@ select rpad('hello', 18446744073709551616, '1');
 select rpad('hello', -18446744073709551617, '1');
 select rpad('hello', 18446744073709551617, '1');
 
-
+-- @bvt:issue#3738
 select lpad('hello', -1, '1');
 select lpad('hello', -4294967295, '1');
 select lpad('hello', 4294967295, '1');
@@ -43,7 +43,7 @@ select lpad('hello', -4294967296, '1');
 select lpad('hello', 4294967296, '1');
 select lpad('hello', -4294967297, '1');
 select lpad('hello', 4294967297, '1');
-
+-- @bvt:issue
 
 select lpad('hello', -18446744073709551615, '1');
 select lpad('hello', 18446744073709551615, '1');
