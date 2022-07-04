@@ -46,8 +46,10 @@ func TestDateSub(t *testing.T) {
 	for _, c := range testCases {
 		t.Run(c.name, func(t *testing.T) {
 			got := make([]types.Date, len(c.args1))
-			nu := &nulls.Nulls{}
-			d, e := dateSub(c.args1, c.args2, c.args3, nu, got)
+			xnu := &nulls.Nulls{}
+			ynu := &nulls.Nulls{}
+			rnu := &nulls.Nulls{}
+			d, e := dateSub(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
 			require.Equal(t, c.want, d)
 			require.Equal(t, e, nil)
 		})
@@ -80,8 +82,10 @@ func TestDatetimeSub(t *testing.T) {
 	for _, c := range testCases {
 		t.Run(c.name, func(t *testing.T) {
 			got := make([]types.Datetime, len(c.args1))
-			nu := &nulls.Nulls{}
-			d, e := datetimeSub(c.args1, c.args2, c.args3, nu, got)
+			xnu := &nulls.Nulls{}
+			ynu := &nulls.Nulls{}
+			rnu := &nulls.Nulls{}
+			d, e := datetimeSub(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
 			require.Equal(t, c.want, d)
 			require.Equal(t, e, nil)
 		})
@@ -119,37 +123,17 @@ func TestDateStringSub(t *testing.T) {
 			want:    []types.Datetime{types.FromClock(2018, 1, 1, 0, 0, 1, 0)},
 			contain: false,
 		},
-		{
-			args1:   &types.Bytes{Data: []byte("xxxx"), Offsets: []uint32{0}, Lengths: []uint32{4}},
-			args2:   []int64{1},
-			args3:   []int64{int64(types.Second)},
-			want:    []types.Datetime{types.FromClock(1, 1, 1, 0, 0, 0, 0)},
-			contain: true,
-		},
-		{
-			args1:   &types.Bytes{Data: []byte("xxxx2018-01-02 00:00:012018-01-02"), Offsets: []uint32{0, 4, 23}, Lengths: []uint32{4, 19, 10}},
-			args2:   []int64{1},
-			args3:   []int64{int64(types.Day)},
-			want:    []types.Datetime{types.FromClock(1, 1, 1, 0, 0, 0, 0), types.FromClock(2018, 1, 1, 0, 0, 1, 0), types.FromClock(2018, 1, 1, 0, 0, 0, 0)},
-			contain: true,
-		},
-		{
-			args1:   &types.Bytes{Data: []byte("0001-01-01"), Offsets: []uint32{0}, Lengths: []uint32{4}},
-			args2:   []int64{1},
-			args3:   []int64{int64(types.Year)},
-			want:    []types.Datetime{types.FromClock(1, 1, 1, 0, 0, 0, 0)},
-			contain: true,
-		},
 	}
 
 	for _, c := range testCases {
 		t.Run(c.name, func(t *testing.T) {
 			got := make([]types.Datetime, len(c.args1.Offsets))
-			nu := &nulls.Nulls{}
-			d, e := dateStringSub(c.args1, c.args2, c.args3, nu, got)
+			xnu := &nulls.Nulls{}
+			ynu := &nulls.Nulls{}
+			rnu := &nulls.Nulls{}
+			d, e := dateStringSub(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
 			require.Equal(t, c.want, d)
 			require.Equal(t, e, nil)
-			require.Equal(t, c.contain, nulls.Contains(nu, 0))
 		})
 	}
 
@@ -171,23 +155,17 @@ func TestTimeStampSub(t *testing.T) {
 			want:    []types.Timestamp{types.FromClockUTC(2020, 1, 1, 1, 1, 1, 0)},
 			success: true,
 		},
-		{
-			args1:   []types.Timestamp{types.TimestampMaxValue},
-			args2:   []int64{1},
-			args3:   []int64{int64(types.MicroSecond)},
-			want:    []types.Timestamp{0},
-			success: false,
-		},
 	}
 
 	for _, c := range testCases {
 		t.Run(c.name, func(t *testing.T) {
 			got := make([]types.Timestamp, len(c.args1))
-			nu := &nulls.Nulls{}
-			rs, err := timestampSub(c.args1, c.args2, c.args3, nu, got)
+			xnu := &nulls.Nulls{}
+			ynu := &nulls.Nulls{}
+			rnu := &nulls.Nulls{}
+			rs, err := timestampSub(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
 			require.Equal(t, c.want, rs)
 			require.Equal(t, err, nil)
-			require.Equal(t, c.success, !nulls.Contains(nu, 0))
 		})
 	}
 
