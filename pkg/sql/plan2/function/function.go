@@ -245,17 +245,34 @@ func GetFunctionByName(name string, args []types.Type) (int64, types.Type, []typ
 	return EncodeOverloadID(fid, index), rt, targetTypes, nil
 }
 
+func ensureBinaryOperatorWithSamePrecision(targets []types.Type, hasSet []bool) {
+	if len(targets) == 2 && targets[0].Oid == targets[1].Oid {
+		if hasSet[0] && !hasSet[1] { // precision follow the left-part
+			copyType(&targets[1], &targets[0])
+			hasSet[1] = true
+		} else if !hasSet[0] && hasSet[1] { // precision follow the right-part
+			copyType(&targets[0], &targets[1])
+			hasSet[0] = true
+		}
+	}
+}
+
 func rewriteTypesIfNecessary(targets []types.Type, sources []types.Type) {
 	if len(targets) != 0 {
+		hasSet := make([]bool, len(sources))
 		for i := range targets {
 			oid1, oid2 := sources[i].Oid, targets[i].Oid
+			// ensure that we will not lose the original precision.
 			if oid2 == types.T_decimal64 || oid2 == types.T_decimal128 || oid2 == types.T_timestamp {
 				if oid1 == oid2 {
 					copyType(&targets[i], &sources[i])
-					continue
+					hasSet[i] = true
 				}
 			}
-			if oid2 != ScalarNull {
+		}
+		ensureBinaryOperatorWithSamePrecision(targets, hasSet)
+		for i := range targets {
+			if !hasSet[i] && targets[i].Oid != ScalarNull {
 				setDefaultPrecision(&targets[i])
 			}
 		}
@@ -287,7 +304,14 @@ func getRealReturnType(fid int32, f Function, realArgs []types.Type) types.Type 
 			}
 		}
 	}
-	return f.ReturnTyp.ToType()
+	rt := f.ReturnTyp.ToType()
+	for i := range realArgs {
+		if realArgs[i].Oid == rt.Oid {
+			copyType(&rt, &realArgs[i])
+			break
+		}
+	}
+	return rt
 }
 
 func copyType(dst, src *types.Type) {
