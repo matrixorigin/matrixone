@@ -220,15 +220,17 @@ func GetFunctionByName(name string, args []types.Type) (int64, types.Type, []typ
 	targetTypes := getTypeSlice(targetTs)
 	rewriteTypesIfNecessary(targetTypes, args)
 
+	finalTypes := make([]types.Type, len(args))
+	if targetTs != nil {
+		copy(finalTypes, targetTypes)
+	} else {
+		copy(finalTypes, args)
+	}
+
 	// deal the failed situations
 	switch index {
 	case wrongFunctionParameters:
-		ArgsToPrint := make([]types.T, len(args)) // arg information to print for error message
-		if targetTs != nil {
-			copy(ArgsToPrint, targetTs)
-		} else {
-			copy(ArgsToPrint, argTs)
-		}
+		ArgsToPrint := getOidSlice(finalTypes) // arg information to print for error message
 		if len(fs.Overloads) > 0 && fs.Overloads[0].isFunction() {
 			return -1, emptyType, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Function '%s' with parameters %v will be implemented in future version.", name, ArgsToPrint))
 		}
@@ -238,13 +240,13 @@ func GetFunctionByName(name string, args []types.Type) (int64, types.Type, []typ
 	}
 
 	// make the real return type of function overload.
-	rt := getRealReturnType(fid, fs.Overloads[index], targetTypes)
+	rt := getRealReturnType(fid, fs.Overloads[index], finalTypes)
 
 	return EncodeOverloadID(fid, index), rt, targetTypes, nil
 }
 
 func rewriteTypesIfNecessary(targets []types.Type, sources []types.Type) {
-	if targets != nil {
+	if len(targets) != 0 {
 		for i := range targets {
 			oid1, oid2 := sources[i].Oid, targets[i].Oid
 			if oid2 == types.T_decimal64 || oid2 == types.T_decimal128 || oid2 == types.T_timestamp {
