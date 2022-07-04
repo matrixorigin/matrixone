@@ -8,14 +8,14 @@
 
 ### 特点与框架
 
-在[MatrixOne简介](./../Overview/matrixone-introduction.md)中您可以了解到MO的超融合、云边协同特性以及其所创造的优异表现与独特价值。
-此外，在[MatrixOne框架](./../Overview/matrixone-architecture.md)中您可以详细地了解MO的整体架构，以及存储层、计算层、负责分布式管理的MatrixCube的具体组成情况。
+在[MatrixOne简介](./../../Overview/matrixone-introduction.md)中您可以了解到MO的超融合、云边协同特性以及其所创造的优异表现与独特价值。
+此外，在[MatrixOne框架](./../../Overview/matrixone-architecture.md)中您可以详细地了解MO的整体架构，以及存储层、计算层、负责分布式管理的MatrixCube的具体组成情况。
 同时，你也可以查阅[MatrixOne术语表](../../Glossary/glossary.md)来了解一些复杂的词汇。
-在技术层面，[SQL参考指南](./../Reference/SQL-Reference/Data-Definition-Statements/create-database.md) 为您提供了详细的SQL语言的参考，其中对语法和示例都有详细解释；同样，[自定义函数](./../Reference/Customer-Functions/year.md)提供了MO中自定义函数的相关解释。
+在技术层面，[SQL参考指南](./../../Reference/SQL-Reference/Data-Definition-Statements/create-database.md) 为您提供了详细的SQL语言的参考，其中对语法和示例都有详细解释；同样，[自定义函数](./../../Reference/Customer-Functions/year.md)提供了MO中自定义函数的相关解释。
 
 ### 建设情况
 
-目前，MatrixOne v0.3.0 已经发布了，您可以通过[版本发布指南](./Release-Notes/v0.3.0.md)来了解最新的发布信息，其中包含了最新的修改与优化。
+目前，MatrixOne v0.3.0 已经发布了，您可以通过[版本发布指南](./../../Release-Notes/v0.3.0.md)来了解最新的发布信息，其中包含了最新的修改与优化。
 同时，我们当前正在开发 v0.4.0和 v0.5.0版本，对应的工作任务在GitHub的milestone[0.4.0](https://github.com/matrixorigin/matrixone/milestone/5)中列出。
 关于长期的项目规划，请参阅[MatrixOne roadmap](https://github.com/matrixorigin/matrixone/issues/613)。
 
@@ -25,7 +25,7 @@
 
 * 报告代码中的bug或文档中的谬误。请在GitHub上提出[issue](https://github.com/matrixorigin/matrixone/issues/new/choose)，并提供问题的详细信息。请记得选取合适的[issue模板](./Report-Issues.md#issue-templates)，并打上标签。
 * 提议新的功能。请在[Feature Request](https://github.com/matrixorigin/matrixone/issues/new/choose)中描述详情并与社区中的开发人员商议。一旦我们的团队认可了您的计划，您就可以按照[工作流程](Contribute-Code.md#workflow)进行具体开发。
-* 实现某个功能或修复既有问题，请按照[工作流程](Contribute-Code.md#workflow)完成开发。如果你需要关于某一特定问题的更多背景信息，请就该问题发表评论。
+* 实现某个功能或修复既有问题，请按照[工作流程](./contribute-code.md#workflow)完成开发。如果你需要关于某一特定问题的更多背景信息，请就该问题发表评论。
 
 ## **工作目录与文件介绍** 
 
@@ -80,7 +80,7 @@ export PATH=$PATH:$GOPATH/bin
 
 若您需要补充Go语言的相关知识，可以通过[How to Write Go Code](http://golang.org/doc/code.html)进行了解。
 
-此外，确保您至少已经安装了单机版本的MatrixOne，具体过程可参照 [Install Standalone MatrixOne](./../Get-Started/install-standalone-matrixone.md)。
+此外，确保您至少已经安装了单机版本的MatrixOne，具体过程可参照 [Install Standalone MatrixOne](./../../Get-Started/install-standalone-matrixone.md)。
 
 ## **Github & Git**
 
