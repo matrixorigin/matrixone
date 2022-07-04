@@ -849,12 +849,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	argsLength := len(args)
 	argsType := make([]types.Type, argsLength)
 	for idx, expr := range args {
-		argsType[idx] = types.Type{
-			Oid:       types.T(expr.Typ.Id),
-			Width:     expr.Typ.Width,
-			Scale:     expr.Typ.Scale,
-			Precision: expr.Typ.Precision,
-		}
+		argsType[idx] = makeTypeByPlan2Expr(expr)
 	}
 
 	// get function definition
