@@ -444,62 +444,27 @@ func replaceColRefWithNull(expr *plan.Expr) *plan.Expr {
 	return expr
 }
 
-// Collect expression dependent columns
-func collectDepColumns(exprList []*Expr, collect *ColumnCollect) {
-	if exprList != nil {
-		for _, expr := range exprList {
-			collectExpr(expr, collect)
-		}
-	}
-}
-
-func collectExpr(expr *Expr, collect *ColumnCollect) {
-	switch ne := expr.Expr.(type) {
+func increaseRefCnt(expr *plan.Expr, colRefCnt map[[2]int32]int) {
+	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		pos := [2]int32{ne.Col.RelPos, ne.Col.ColPos}
-		collect.posMap[pos] = 1
+		colRefCnt[[2]int32{exprImpl.Col.RelPos, exprImpl.Col.ColPos}]++
+
 	case *plan.Expr_F:
-		for _, arg := range ne.F.GetArgs() {
-			collectExpr(arg, collect)
+		for _, arg := range exprImpl.F.Args {
+			increaseRefCnt(arg, colRefCnt)
 		}
 	}
 }
 
-func mergeColumnCollect(left *ColumnCollect, right *ColumnCollect) *ColumnCollect {
-	resCollect := newColumnCollect()
-	if left != nil {
-		for k, v := range left.posMap {
-			resCollect.posMap[k] = v
-		}
-	}
+func decreaseRefCnt(expr *plan.Expr, colRefCnt map[[2]int32]int) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		colRefCnt[[2]int32{exprImpl.Col.RelPos, exprImpl.Col.ColPos}]--
 
-	if right != nil {
-		for k, v := range right.posMap {
-			resCollect.posMap[k] = v
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			decreaseRefCnt(arg, colRefCnt)
 		}
-	}
-	return resCollect
-}
-
-func newColumnCollect() *ColumnCollect {
-	return &ColumnCollect{
-		posMap: make(map[[2]int32]int),
-	}
-}
-
-//You cannot prune all the columns in a table. Otherwise, you do not know how many rows there are in the table
-func checkFullPrune(tableDef *TableDef) {
-	var pruneAll bool = true
-	for _, colDef := range tableDef.Cols {
-		if !colDef.IsPrune {
-			pruneAll = false
-			break
-		}
-	}
-	if pruneAll {
-		tableDef.Cols[0].IsPrune = false
-	} else {
-		return
 	}
 }
 
