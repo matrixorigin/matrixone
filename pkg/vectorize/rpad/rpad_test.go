@@ -15,10 +15,11 @@
 package rpad
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 // getBytes converts a string slice to a *types.Bytes
@@ -103,7 +104,7 @@ func TestRpadFloat(t *testing.T) {
 	}
 	oriNsps = append(oriNsps, new(nulls.Nulls))
 
-	expectedStrs := getBytes("", "", "", "hello你好你", "hello你好你", "hello你好你")
+	expectedStrs := getBytes("", "", "", "hello你好你", "hello你好你", "hello你好你好")
 	expectedNsp := new(nulls.Nulls)
 	actualStrs, actualNsp, _ := Rpad(len(sizes), strs, sizes, padstrs, isConst, oriNsps)
 	require.Equal(t, expectedStrs, actualStrs)
