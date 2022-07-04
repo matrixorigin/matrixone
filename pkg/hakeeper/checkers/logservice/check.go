@@ -25,7 +25,7 @@ func Check(alloc util.IDAllocator, cluster pb.ClusterInfo, infos pb.LogState,
 	stores := parseLogStores(infos, currentTick)
 
 	for shardID, toAdd := range stats.toAdd {
-		for shouldAdd(toAdd, adding[shardID]) {
+		for toAdd > len(adding[shardID]) {
 			bestStore := selectStore(infos.Shards[shardID], stores)
 			newReplicaID, ok := alloc.Next()
 			if !ok {
@@ -75,13 +75,6 @@ func isRemoving(replica replica, removingReplicas []uint64) bool {
 		if replica.replicaID == removingID {
 			return true
 		}
-	}
-	return false
-}
-
-func shouldAdd(toAdd int, adding []uint64) bool {
-	if toAdd > len(adding) {
-		return true
 	}
 	return false
 }
