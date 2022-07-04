@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -133,8 +134,8 @@ func (n *MVCCHandle) CheckNotDeleted(start, end uint32, ts uint64) error {
 	return n.deletes.PrepareRangeDelete(start, end, ts)
 }
 
-func (n *MVCCHandle) CreateDeleteNode(txn txnif.AsyncTxn) txnif.DeleteNode {
-	return n.deletes.AddNodeLocked(txn)
+func (n *MVCCHandle) CreateDeleteNode(txn txnif.AsyncTxn, deleteType handle.DeleteType) txnif.DeleteNode {
+	return n.deletes.AddNodeLocked(txn, deleteType)
 }
 
 func (n *MVCCHandle) OnReplayDeleteNode(deleteNode txnif.DeleteNode) {
