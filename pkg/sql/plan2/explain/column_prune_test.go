@@ -37,7 +37,7 @@ func TestSingleTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_name", "n_regionkey"},
+					colNames:  []string{"n_name", "n_regionkey"},
 				},
 			},
 		},
@@ -48,7 +48,7 @@ func TestSingleTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_name", "n_regionkey"},
+					colNames:  []string{"n_name", "n_regionkey"},
 				},
 			},
 		},
@@ -59,7 +59,7 @@ func TestSingleTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_name", "n_regionkey"},
+					colNames:  []string{"n_name", "n_regionkey"},
 				},
 			},
 		},
@@ -70,7 +70,7 @@ func TestSingleTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_name"},
+					colNames:  []string{"n_name"},
 				},
 			},
 		},
@@ -81,7 +81,7 @@ func TestSingleTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"},
+					colNames:  []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"},
 				},
 			},
 		},
@@ -92,7 +92,7 @@ func TestSingleTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_nationkey"},
+					colNames:  []string{"n_nationkey"},
 				},
 			},
 		},
@@ -103,7 +103,7 @@ func TestSingleTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_nationkey", "n_name"},
+					colNames:  []string{"n_nationkey", "n_name"},
 				},
 			},
 		},
@@ -114,7 +114,7 @@ func TestSingleTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_name", "n_regionkey"},
+					colNames:  []string{"n_name", "n_regionkey"},
 				},
 			},
 		},
@@ -125,7 +125,7 @@ func TestSingleTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_name"},
+					colNames:  []string{"n_name"},
 				},
 			},
 		},
@@ -136,7 +136,7 @@ func TestSingleTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_name"},
+					colNames:  []string{"n_name"},
 				},
 			},
 		},
@@ -147,7 +147,7 @@ func TestSingleTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_nationkey", "n_regionkey"},
+					colNames:  []string{"n_nationkey", "n_regionkey"},
 				},
 			},
 		},
@@ -158,7 +158,7 @@ func TestSingleTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_nationkey", "n_name", "n_regionkey"},
+					colNames:  []string{"n_nationkey", "n_name", "n_regionkey"},
 				},
 			},
 		},
@@ -169,7 +169,7 @@ func TestSingleTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_nationkey", "n_regionkey"},
+					colNames:  []string{"n_nationkey", "n_regionkey"},
 				},
 			},
 		},
@@ -182,7 +182,7 @@ func TestSingleTableQueryPrune(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%+v", err)
 			}
-			columns, err := GetPrunedTableColumns(logicPlan)
+			columns, err := getPrunedTableColumns(logicPlan)
 			if err != nil {
 				t.Fatalf("%+v", err)
 			}
@@ -203,11 +203,11 @@ func TestJoinQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_name", "n_regionkey"},
+					colNames:  []string{"n_name", "n_regionkey"},
 				},
 				{
 					tableName: "region",
-					ColNames:  []string{"r_regionkey", "r_name"},
+					colNames:  []string{"r_regionkey", "r_name"},
 				},
 			},
 		},
@@ -217,11 +217,11 @@ func TestJoinQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_name", "n_regionkey"},
+					colNames:  []string{"n_name", "n_regionkey"},
 				},
 				{
 					tableName: "region",
-					ColNames:  []string{"r_regionkey", "r_name"},
+					colNames:  []string{"r_regionkey", "r_name"},
 				},
 			},
 		},
@@ -231,11 +231,11 @@ func TestJoinQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_name", "n_regionkey"},
+					colNames:  []string{"n_name", "n_regionkey"},
 				},
 				{
 					tableName: "region",
-					ColNames:  []string{"r_regionkey"},
+					colNames:  []string{"r_regionkey"},
 				},
 			},
 		},
@@ -245,11 +245,11 @@ func TestJoinQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation2",
-					ColNames:  []string{"n_name", "r_regionkey"},
+					colNames:  []string{"n_name", "r_regionkey"},
 				},
 				{
 					tableName: "region",
-					ColNames:  []string{"r_regionkey"},
+					colNames:  []string{"r_regionkey"},
 				},
 			},
 		},
@@ -259,11 +259,11 @@ func TestJoinQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation2",
-					ColNames:  []string{"n_name", "r_regionkey"},
+					colNames:  []string{"n_name", "r_regionkey"},
 				},
 				{
 					tableName: "region",
-					ColNames:  []string{"r_regionkey"},
+					colNames:  []string{"r_regionkey"},
 				},
 			},
 		},
@@ -273,11 +273,11 @@ func TestJoinQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_name"},
+					colNames:  []string{"n_name"},
 				},
 				{
 					tableName: "region",
-					ColNames:  []string{"r_regionkey"},
+					colNames:  []string{"r_regionkey"},
 				},
 			},
 		},
@@ -287,11 +287,11 @@ func TestJoinQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_name", "n_regionkey"},
+					colNames:  []string{"n_name", "n_regionkey"},
 				},
 				{
 					tableName: "region",
-					ColNames:  []string{"r_regionkey"},
+					colNames:  []string{"r_regionkey"},
 				},
 			},
 		},
@@ -301,15 +301,15 @@ func TestJoinQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "customer",
-					ColNames:  []string{"c_custkey"},
+					colNames:  []string{"c_custkey"},
 				},
 				{
 					tableName: "orders",
-					ColNames:  []string{"o_orderkey", "o_custkey"},
+					colNames:  []string{"o_orderkey", "o_custkey"},
 				},
 				{
 					tableName: "lineitem",
-					ColNames:  []string{"l_orderkey"},
+					colNames:  []string{"l_orderkey"},
 				},
 			},
 		},
@@ -319,15 +319,15 @@ func TestJoinQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "customer",
-					ColNames:  []string{"c_custkey", "c_name", "c_address", "c_nationkey", "c_phone", "c_acctbal", "c_mktsegment", "c_comment"},
+					colNames:  []string{"c_custkey", "c_name", "c_address", "c_nationkey", "c_phone", "c_acctbal", "c_mktsegment", "c_comment"},
 				},
 				{
 					tableName: "orders",
-					ColNames:  []string{"o_orderkey", "o_custkey"},
+					colNames:  []string{"o_orderkey", "o_custkey"},
 				},
 				{
 					tableName: "lineitem",
-					ColNames:  []string{"l_orderkey"},
+					colNames:  []string{"l_orderkey"},
 				},
 			},
 		},
@@ -337,15 +337,15 @@ func TestJoinQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "customer",
-					ColNames:  []string{"c_custkey", "c_name", "c_address", "c_nationkey", "c_phone", "c_acctbal", "c_mktsegment", "c_comment"},
+					colNames:  []string{"c_custkey", "c_name", "c_address", "c_nationkey", "c_phone", "c_acctbal", "c_mktsegment", "c_comment"},
 				},
 				{
 					tableName: "orders",
-					ColNames:  []string{"o_orderkey", "o_custkey", "o_orderstatus", "o_totalprice", "o_orderdate", "o_orderpriority", "o_clerk", "o_shippriority", "o_comment"},
+					colNames:  []string{"o_orderkey", "o_custkey", "o_orderstatus", "o_totalprice", "o_orderdate", "o_orderpriority", "o_clerk", "o_shippriority", "o_comment"},
 				},
 				{
 					tableName: "lineitem",
-					ColNames:  []string{"l_orderkey", "l_partkey", "l_suppkey", "l_linenumber", "l_quantity", "l_extendedprice", "l_discount", "l_tax", "l_returnflag", "l_linestatus", "l_shipdate", "l_commitdate", "l_receiptdate", "l_shipinstruct", "l_shipmode", "l_comment"},
+					colNames:  []string{"l_orderkey", "l_partkey", "l_suppkey", "l_linenumber", "l_quantity", "l_extendedprice", "l_discount", "l_tax", "l_returnflag", "l_linestatus", "l_shipdate", "l_commitdate", "l_receiptdate", "l_shipinstruct", "l_shipmode", "l_comment"},
 				},
 			},
 		},
@@ -355,11 +355,11 @@ func TestJoinQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"},
+					colNames:  []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"},
 				},
 				{
 					tableName: "region",
-					ColNames:  []string{"r_regionkey"},
+					colNames:  []string{"r_regionkey"},
 				},
 			},
 		},
@@ -369,11 +369,11 @@ func TestJoinQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"},
+					colNames:  []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"},
 				},
 				{
 					tableName: "region",
-					ColNames:  []string{"r_regionkey"},
+					colNames:  []string{"r_regionkey"},
 				},
 			},
 		},
@@ -386,7 +386,7 @@ func TestJoinQueryPrune(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%+v", err)
 			}
-			columns, err := GetPrunedTableColumns(logicPlan)
+			columns, err := getPrunedTableColumns(logicPlan)
 			if err != nil {
 				t.Fatalf("%+v", err)
 			}
@@ -408,11 +408,11 @@ func TestNestedQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"},
+					colNames:  []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"},
 				},
 				{
 					tableName: "region",
-					ColNames:  []string{"r_regionkey"},
+					colNames:  []string{"r_regionkey"},
 				},
 			},
 		},
@@ -422,11 +422,11 @@ func TestNestedQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"},
+					colNames:  []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"},
 				},
 				{
 					tableName: "region",
-					ColNames:  []string{"r_regionkey"},
+					colNames:  []string{"r_regionkey"},
 				},
 			},
 		},
@@ -436,15 +436,15 @@ func TestNestedQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "lineitem",
-					ColNames:  []string{"l_partkey", "l_quantity", "l_extendedprice"},
+					colNames:  []string{"l_partkey", "l_quantity", "l_extendedprice"},
 				},
 				{
 					tableName: "part",
-					ColNames:  []string{"p_partkey", "p_brand", "p_container"},
+					colNames:  []string{"p_partkey", "p_brand", "p_container"},
 				},
 				{
 					tableName: "lineitem",
-					ColNames:  []string{"l_partkey", "l_quantity"},
+					colNames:  []string{"l_partkey", "l_quantity"},
 				},
 			},
 		},
@@ -457,7 +457,7 @@ func TestNestedQueryPrune(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%+v", err)
 			}
-			columns, err := GetPrunedTableColumns(logicPlan)
+			columns, err := getPrunedTableColumns(logicPlan)
 			if err != nil {
 				t.Fatalf("%+v", err)
 			}
@@ -479,7 +479,7 @@ func TestDerivedTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "customer",
-					ColNames:  []string{"c_custkey"},
+					colNames:  []string{"c_custkey"},
 				},
 			},
 		},
@@ -489,7 +489,7 @@ func TestDerivedTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "customer",
-					ColNames:  []string{"c_custkey", "c_nationkey"},
+					colNames:  []string{"c_custkey", "c_nationkey"},
 				},
 			},
 		},
@@ -499,11 +499,11 @@ func TestDerivedTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "customer",
-					ColNames:  []string{"c_custkey", "c_nationkey"},
+					colNames:  []string{"c_custkey", "c_nationkey"},
 				},
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_nationkey", "n_regionkey"},
+					colNames:  []string{"n_nationkey", "n_regionkey"},
 				},
 			},
 		},
@@ -513,11 +513,11 @@ func TestDerivedTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "customer",
-					ColNames:  []string{"c_custkey", "c_nationkey"},
+					colNames:  []string{"c_custkey", "c_nationkey"},
 				},
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_nationkey", "n_regionkey"},
+					colNames:  []string{"n_nationkey", "n_regionkey"},
 				},
 			},
 		},
@@ -527,11 +527,11 @@ func TestDerivedTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "customer",
-					ColNames:  []string{"c_custkey", "c_nationkey"},
+					colNames:  []string{"c_custkey", "c_nationkey"},
 				},
 				{
 					tableName: "nation",
-					ColNames:  []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"},
+					colNames:  []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"},
 				},
 			},
 		},
@@ -544,7 +544,7 @@ func TestDerivedTableQueryPrune(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%+v", err)
 			}
-			columns, err := GetPrunedTableColumns(logicPlan)
+			columns, err := getPrunedTableColumns(logicPlan)
 			if err != nil {
 				t.Fatalf("%+v", err)
 			}
@@ -566,11 +566,11 @@ func buildOneStmt(opt plan2.Optimizer, t *testing.T, sql string) (*plan2.Plan, e
 
 type Entry[K any, V any] struct {
 	tableName K
-	ColNames  V
+	colNames  V
 }
 
 // Get the remaining columns after the table is cropped
-func GetPrunedTableColumns(logicPlan *plan2.Plan) ([]Entry[string, []string], error) {
+func getPrunedTableColumns(logicPlan *plan2.Plan) ([]Entry[string, []string], error) {
 	query := logicPlan.GetQuery()
 	if query.StmtType != plan.Query_SELECT {
 		return nil, errors.New(errno.FeatureNotSupported, "SQL is not a DQL")
@@ -588,7 +588,7 @@ func GetPrunedTableColumns(logicPlan *plan2.Plan) ([]Entry[string, []string], er
 			}
 			entry := Entry[string, []string]{
 				tableName: tableName,
-				ColNames:  columns,
+				colNames:  columns,
 			}
 			res = append(res, entry)
 		}
