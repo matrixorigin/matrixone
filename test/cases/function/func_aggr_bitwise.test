@@ -1,7 +1,7 @@
 #NULL
--- @bvt:issue#3654
+
 SELECT bit_and(null), bit_or(null), bit_xor(null);
--- @bvt:issue
+
 
 #EXTREME VALUE
 -- @bvt:issue#3343

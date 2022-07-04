@@ -75,8 +75,7 @@ select * from t2;
 c0	c1	c2
 342	23413	14141
 SELECT t1.c0, t2.c0 from t1 join t2 on abs(t1.c0) = abs(t2.c0) having abs(t1.c0)>100;
-c0	c0
-342	342
+column "t1.c0" must appear in the GROUP BY clause or be used in an aggregate function
 drop table t1;
 drop table t2;
 SELECT abs(10)-abs(-34);

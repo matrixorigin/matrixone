@@ -52,9 +52,9 @@ DROP TABLE t1;
 #LEAST函数0.5MO暂时不支持
 #SELECT ROUND(LEAST(15, -4939092, 0.2704), STDDEV('a'));
 
--- @bvt:issue#3611
+
 SELECT ROUND(sin(0.45), cos(0.8));
--- @bvt:issue
+
 
 #extreme value
 
