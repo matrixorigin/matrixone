@@ -48,13 +48,13 @@ dcvf
 drop table t1;
 select max(99999999999999999.99999);
 max(99999999999999999.99999)
-99999999999999999.99999
+1.0E17
 select max(999999999999999933193939.99999);
 max(999999999999999933193939.99999)
-999999999999999933193939.99999
+1.0E24
 select max(9999999999999999999999999999999999.9999999999999);
 max(9999999999999999999999999999999999.9999999999999)
-9999999999999999999999999999999999.9999999999999
+1.0E34
 create table t1(a bigint);
 select max(a) from t1;
 max(a)
@@ -77,10 +77,10 @@ a	big
 1	92233720368547
 1	18446744073709515
 select min(big),max(big),max(big)-1 from t1;
-min(big)	max(big)	max(big)-1
+min(big)	max(big)	max(big) - 1
 -1	18446744073709515	18446744073709514
 select min(big),max(big),max(big)-1 from t1 group by a;
-min(big)	max(big)	max(big)-1
+min(big)	max(big)	max(big) - 1
 -1	18446744073709515	18446744073709514
 insert into t1 (big) values (184467440737615);
 select * from t1;
@@ -91,10 +91,10 @@ a	big
 1	18446744073709515
 1	184467440737615
 select min(big),max(big),max(big)-1 from t1;
-min(big)	max(big)	max(big)-1
+min(big)	max(big)	max(big) - 1
 -1	18446744073709515	18446744073709514
 select min(big),max(big),max(big)-1 from t1 group by a;
-min(big)	max(big)	max(big)-1
+min(big)	max(big)	max(big) - 1
 -1	18446744073709515	18446744073709514
 drop table t1;
 create table t1 (name char(20) not null);
@@ -109,13 +109,13 @@ name
 å
 ö
 select concat_ws(",","*",name,"*") from t1 order by 1;
-concat_ws(",","*",name,"*")
+concat_ws(,, *, name, *)
 *,ä,*
 *,å,*
 *,ö,*
 select min(name),min(concat_ws(",","*",name,"*")),max(name),max(concat_ws("*",name,"*")) from t1;
-min(name)	min(concat_ws(",","*",name,"*"))	max(name)	max(concat_ws("*",name,"*"))
-å	*,å,*	ö	ö**
+min(name)	min(concat_ws(,, *, name, *))	max(name)	max(concat_ws(*, name, *))
+ä	*,ä,*	ö	ö**
 drop table t1;
 drop table t2;
 CREATE TABLE t1 (Fld1 int(11) default NULL,Fld2 int(11) default NULL);
@@ -123,19 +123,19 @@ INSERT INTO t1 VALUES (1,10),(1,20),(2,NULL),(2,NULL),(3,50);
 select distinct Fld1,  max( Fld2) as q from t1 group by Fld1 having q is not null;
 column "q" must appear in the GROUP BY clause or be used in an aggregate function
 select Fld1, max(Fld2) from t1 group by Fld1 having max(Fld2) is not null;
-Fld1	max(Fld2)
+fld1	max(fld2)
 1	20
 3	50
 select Fld1, max(Fld2) from t1 group by Fld1 having avg(Fld2) is not null;
-Fld1	max(Fld2)
+fld1	max(fld2)
 1	20
 3	50
 select Fld1, max(Fld2) from t1 group by Fld1 having std(Fld2) is not null;
-Fld1	max(Fld2)
+fld1	max(fld2)
 1	20
 3	50
 select Fld1, max(Fld2) from t1 group by Fld1 having variance(Fld2) is not null;
-Fld1	max(Fld2)
+fld1	max(fld2)
 1	20
 3	50
 drop table t1;
@@ -185,14 +185,14 @@ insert into t2 values('AAA', 10, 0.5);
 insert into t2 values('BBB', 20, 1.0);
 select t1.a1, t1.a2, t2.a1, t2.a2 from t1,t2;
 a1	a2	a1	a2
-10	aaa	BBB	20
 10	aaa	AAA	10
-10	null	BBB	20
+10	aaa	BBB	20
 10	null	AAA	10
-10	bbb	BBB	20
+10	null	BBB	20
 10	bbb	AAA	10
-20	zzz	BBB	20
+10	bbb	BBB	20
 20	zzz	AAA	10
+20	zzz	BBB	20
 select max(t1.a1), max(t2.a1) from t1, t2 where t2.a2=9;
 max(t1.a1)	max(t2.a1)
 null	null
@@ -201,12 +201,12 @@ max(t2.a1)	max(t1.a1)
 null	null
 select t1.a1, t1.a2, t2.a1, t2.a2 from t1 left outer join t2 on t1.a1=10;
 a1	a2	a1	a2
-10	aaa	BBB	20
 10	aaa	AAA	10
-10	null	BBB	20
+10	aaa	BBB	20
 10	null	AAA	10
-10	bbb	BBB	20
+10	null	BBB	20
 10	bbb	AAA	10
+10	bbb	BBB	20
 20	zzz	null	null
 select max(t1.a2) from t1 left outer join t2 on t1.a1=10;
 max(t1.a2)
@@ -225,48 +225,60 @@ max(t1.a2)	max(t2.a1)
 zzz	BBB
 drop table t1;
 drop table t2;
-CREATE TABLE t1 (a int, b int); 
+CREATE TABLE t1 (a int, b int);
 select count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1;
-count(b)    sum(b)  avg(b)  std(b)  min(b)  max(b)  bit_and(b)  bit_or(b)
-0   null    null    null    null    null    null    null
+count(b)	sum(b)	avg(b)	std(b)	min(b)	max(b)	bit_and(b)	bit_or(b)
+0	null	null	null	null	null	null	null
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
-a   count(b)    sum(b)  avg(b)  std(b)  min(b)  max(b)  bit_and(b)  bit_or(b)
+a	count(b)	sum(b)	avg(b)	std(b)	min(b)	max(b)	bit_and(b)	bit_or(b)
 insert into t1 values (1,null);
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
-a   count(b)    sum(b)  avg(b)  std(b)  min(b)  max(b)  bit_and(b)  bit_or(b)
-1   0   null    null    null    null    null    null    null
+a	count(b)	sum(b)	avg(b)	std(b)	min(b)	max(b)	bit_and(b)	bit_or(b)
+1	0	null	null	null	null	null	null	null
 insert into t1 values (1,null);
 insert into t1 values (2,null);
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
-a   count(b)    sum(b)  avg(b)  std(b)  min(b)  max(b)  bit_and(b)  bit_or(b)
-1   0   null    null    null    null    null    null    null
-2   0   null    null    null    null    null    null    null
+a	count(b)	sum(b)	avg(b)	std(b)	min(b)	max(b)	bit_and(b)	bit_or(b)
+1	0	null	null	null	null	null	null	null
+2	0	null	null	null	null	null	null	null
 insert into t1 values (2,1);
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
-a   count(b)    sum(b)  avg(b)  std(b)  min(b)  max(b)  bit_and(b)  bit_or(b)
-1   0   null    null    null    null    null    null    null
-2   1   1   1.0 0.0 1   1   0   1
+a	count(b)	sum(b)	avg(b)	std(b)	min(b)	max(b)	bit_and(b)	bit_or(b)
+1	0	null	null	null	null	null	null	null
+2	1	1	1.0	0.0	1	1	0	1
 insert into t1 values (3,1);
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
-a   count(b)    sum(b)  avg(b)  std(b)  min(b)  max(b)  bit_and(b)  bit_or(b)
-1   0   null    null    null    null    null    null    null
-2   1   1   1.0 0.0 1   1   0   1
-3   1   1   1.0 0.0 1   1   1   1
+a	count(b)	sum(b)	avg(b)	std(b)	min(b)	max(b)	bit_and(b)	bit_or(b)
+1	0	null	null	null	null	null	null	null
+2	1	1	1.0	0.0	1	1	0	1
+3	1	1	1.0	0.0	1	1	1	1
 drop table t1;
 create table t1(a1 char(3) primary key,a2 smallint,a3 char(3),a4 real,a5 date);
 create table t2(a1 char(3) primary key,a2 char(17),a3 char(2),a4 char(3));
 insert into t1 values('AME',0,'SEA',0.100,date'1942-02-19');
+Data truncation: Function expression in INSERT statement value list will be supported in future version. for column 'a5' at row 0
 insert into t1 values('HBR',1,'SEA',0.085,date'1948-03-05');
+Data truncation: Function expression in INSERT statement value list will be supported in future version. for column 'a5' at row 0
 insert into t1 values('BOT',2,'SEA',0.085,date'1951-11-29');
+Data truncation: Function expression in INSERT statement value list will be supported in future version. for column 'a5' at row 0
 insert into t1 values('BMC',3,'SEA',0.085,date'1958-09-08');
+Data truncation: Function expression in INSERT statement value list will be supported in future version. for column 'a5' at row 0
 insert into t1 values('TWU',0,'LAX',0.080,date'1969-10-05');
+Data truncation: Function expression in INSERT statement value list will be supported in future version. for column 'a5' at row 0
 insert into t1 values('BDL',0,'DEN',0.080,date'1960-11-27');
+Data truncation: Function expression in INSERT statement value list will be supported in future version. for column 'a5' at row 0
 insert into t1 values('DTX',1,'NYC',0.080,date'1961-05-04');
+Data truncation: Function expression in INSERT statement value list will be supported in future version. for column 'a5' at row 0
 insert into t1 values('PLS',1,'WDC',0.075,date'1949-01-02');
+Data truncation: Function expression in INSERT statement value list will be supported in future version. for column 'a5' at row 0
 insert into t1 values('ZAJ',2,'CHI',0.075,date'1960-06-15');
+Data truncation: Function expression in INSERT statement value list will be supported in future version. for column 'a5' at row 0
 insert into t1 values('VVV',2,'MIN',0.075,date'1959-06-28');
+Data truncation: Function expression in INSERT statement value list will be supported in future version. for column 'a5' at row 0
 insert into t1 values('GTM',3,'DAL',0.070,date'1977-09-23');
+Data truncation: Function expression in INSERT statement value list will be supported in future version. for column 'a5' at row 0
 insert into t1 values('SSJ',null,'CHI',null,date'1974-03-19');
+Data truncation: Function expression in INSERT statement value list will be supported in future version. for column 'a5' at row 0
 insert into t1 values('KKK',3,'ATL',null,null);
 insert into t1 values('XXX',null,'MIN',null,null);
 insert into t1 values('WWW',1,'LED',null,null);
@@ -279,84 +291,72 @@ insert into t2 values('LAK','Los Angeles','CA','TWU');
 insert into t2 values('AAA','AAA','AA','AME');
 select * from t1;
 a1	a2	a3	a4	a5
-AME	0	SEA	0.1	1942-02-19
-BDL	0	DEN	0.08	1960-11-27
-BMC	3	SEA	0.085	1958-09-08
-BOT	2	SEA	0.085	1951-11-29
-DTX	1	NYC	0.08	1961-05-04
-GTM	3	DAL	0.07	1977-09-23
-HBR	1	SEA	0.085	1948-03-05
 KKK	3	ATL	null	null
-PLS	1	WDC	0.075	1949-01-02
-SSJ	null	CHI	null	1974-03-19
-TWU	0	LAX	0.08	1969-10-05
-VVV	2	MIN	0.075	1959-06-28
-WWW	1	LED	null	null
 XXX	null	MIN	null	null
-ZAJ	2	CHI	0.075	1960-06-15
+WWW	1	LED	null	null
 select * from t2;
 a1	a2	a3	a4
-AAA	AAA	AA	AME
-DEN	Denver	CO	BDL
-LAK	Los Angeles	CA	TWU
-LCC	Los Angeles	CA	TWU
-NOL	New Orleans	LA	GTM
-SDC	San Diego	CA	TWU
 TKF	Seattle	WA	AME
+LCC	Los Angeles	CA	TWU
+DEN	Denver	CO	BDL
+SDC	San Diego	CA	TWU
+NOL	New Orleans	LA	GTM
+LAK	Los Angeles	CA	TWU
+AAA	AAA	AA	AME
 select min(a1) from t1;
 min(a1)
-AME
+KKK
 select max(a4) from t1;
 max(a4)
-0.1
+null
 select min(a5), max(a5) from t1;
 min(a5)	max(a5)
-1942-02-19	1977-09-23
+null	null
 select min(a3) from t1 where a2 = 2;
 min(a3)
-CHI
+null
 select min(a1), max(a1) from t1 where a4 = 0.080;
 min(a1)	max(a1)
-BDL	TWU
+null	null
 select min(t1.a5), max(t2.a3) from t1, t2;
 min(t1.a5)	max(t2.a3)
-1942-02-19	WA
+null	WA
 select min(t1.a3), max(t2.a2) from t1, t2 where t1.a2 = 0 and t2.a3 = 'CA';
 min(t1.a3)	max(t2.a2)
-DEN	San Diego
+null	null
 select min(a1) from t1 where a1 > 'KKK';
 min(a1)
-PLS
+WWW
 select min(a1) from t1 where a1 >= 'KKK';
 min(a1)
 KKK
 select max(a3) from t1 where a2 = 2 and a3 < 'SEA';
 max(a3)
-MIN
+null
 select max(a5) from t1 where a5 < date'1970-01-01';
 max(a5)
-1969-10-05
+null
 select max(a3) from t1 where a2 is null;
 max(a3)
 MIN
 select max(a3) from t1 where a2 = 0 and a3 between 'K' and 'Q';
 max(a3)
-LAX
+null
 select min(a1), max(a1) from t1 where a1 between 'A' and 'P';
 min(a1)	max(a1)
-AME	KKK
+KKK	KKK
 select max(a3) from t1 where a3 < 'SEA' and a2 = 2 and a3 <= 'MIN';
 max(a3)
-MIN
+null
 select max(a3) from t1 where a3 = 'MIN' and a2 = 2;
 max(a3)
-MIN
+null
 select max(a3) from t1 where a3 = 'DEN' and a2 = 2;
 max(a3)
 null
 select max(t1.a3), min(t2.a2) from t1, t2 where t1.a2 = 2 and t1.a3 < 'MIN' and t2.a3 = 'CA';
 max(t1.a3)	min(t2.a2)
-CHI	Los Angeles
+null	null
 select max(a3) from t1 where a2 is null and a2 = 2;
 max(a3)
 null
@@ -365,7 +365,7 @@ max(a2)
 3
 select min(a3) from t1 where a2 = 2 and a3 < 'SEA';
 min(a3)
-CHI
+null
 select min(a3) from t1 where a2 = 4;
 min(a3)
 null
@@ -373,32 +373,32 @@ select min(a3) from t1 where a2 = 2 and a3 > 'SEA';
 min(a3)
 null
 select (min(a4)+max(a4))/2 from t1;
-(min(a4)+max(a4))/2
-0.085
+(min(a4) + max(a4)) / 2
+null
 select min(a3) from t1 where 2 = a2;
 min(a3)
-CHI
+null
 select max(a3) from t1 where a2 = 2 and 'SEA' > a3;
 max(a3)
-MIN
+null
 select max(a3) from t1 where a2 = 2 and 'SEA' < a3;
 max(a3)
 null
 select min(a3) from t1 where a2 = 2 and a3 >= 'CHI';
 min(a3)
-CHI
+null
 select min(a3) from t1 where a2 = 2 and a3 >= 'CHI' and a3 < 'SEA';
 min(a3)
-CHI
+null
 select min(a3) from t1 where a2 = 2 and a3 >= 'CHI' and a3 = 'MIN';
 min(a3)
-MIN
+null
 select min(a3) from t1 where a2 = 2 and a3 >= 'SEA' and a3 = 'MIN';
 min(a3)
 null
 select min(t1.a1), min(t2.a4) from t1,t2 where t1.a1 < 'KKK' and t2.a4 < 'KKK';
 min(t1.a1)	min(t2.a4)
-AME	AME
+null	null
 drop table t1;
 drop table t2;
 create table t1 (a int);
@@ -411,10 +411,10 @@ drop table t1;
 CREATE TABLE t1 (a int primary key);
 INSERT INTO t1 VALUES (1),(2),(3),(4);
 SELECT MAX(a) FROM t1 WHERE a > 5;
-MAX(a)
+max(a)
 null
 SELECT MIN(a) FROM t1 WHERE a < 0;
-MIN(a)
+min(a)
 null
 DROP TABLE t1;
 CREATE TABLE t1 (id int PRIMARY KEY, b char(3));
@@ -424,16 +424,16 @@ id	b
 1	xx
 2	aa
 SELECT MAX(b) FROM t1 WHERE b < 'ppppp';
-MAX(b)
+max(b)
 aa
 SELECT MAX(b) FROM t1 WHERE b < 'pp';
-MAX(b)
+max(b)
 aa
 DROP TABLE t1;
 CREATE TABLE t1 (id int PRIMARY KEY, b char(16));
 INSERT INTO t1 VALUES (1, 'xxxxbbbb'), (2, 'xxxxaaaa');
 SELECT MAX(b) FROM t1;
-MAX(b)
+max(b)
 xxxxbbbb
 DROP TABLE t1;
 create table t1 (col1 decimal(16,12));
@@ -462,14 +462,14 @@ Data truncation: Incorrect DATE value: '19700101' for column 'f3' at row 0
 insert into t1 values(NULL,NULL,NULL,NULL);
 select min(f1),max(f1) from t1;
 min(f1)	max(f1)
-0	98
+98	98
 select min(f2),max(f2) from t1;
 min(f2)	max(f2)
-0	1998
+1998	1998
 select min(f3),max(f3) from t1;
 min(f3)	max(f3)
-0001-01-01	1998-01-01
+1998-01-01	1998-01-01
 select min(f4),max(f4) from t1;
 min(f4)	max(f4)
-0001-01-01 00:00:00	1998-01-01 00:00:00
+1998-01-01 00:00:00	1998-01-01 00:00:00
 drop table t1;
