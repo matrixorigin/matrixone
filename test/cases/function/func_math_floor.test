@@ -27,7 +27,7 @@ select floor(999999999999999999);
 select floor(9999999999999999999999);
 -- @bvt:issue
 
--- @bvt:issue#3192
+-- @bvt:issue#3579
 select floor(9.999999999999999999999);
 -- @bvt:issue
 
