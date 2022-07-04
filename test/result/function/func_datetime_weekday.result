@@ -44,8 +44,7 @@ SELECT weekday('2015-09.30') as weekday;
 weekday
 2
 SELECT weekday('2015-0') as weekday;
-weekday
-null
+Can't cast '2015-0' from VARCHAR type to DATE type.
 SELECT weekday('2015-09.30 12') as weekday;
 weekday
 2
@@ -53,23 +52,17 @@ SELECT weekday('2015-09-26 08:09:22') AS weekday;
 weekday
 5
 select weekday("2020-08");
-weekday("2020-08")
-null
+Can't cast '2020-08' from VARCHAR type to DATE type.
 select weekday("0000-00-00");
-weekday("0000-00-00")
-null
+Can't cast '0000-00-00' from VARCHAR type to DATE type.
 select weekday("-0001-03-03");
-weekday("-0001-03-03")
-null
+Can't cast '-0001-03-03' from VARCHAR type to DATE type.
 select weekday("10000-03-02");
-weekday("10000-03-02")
-null
+Can't cast '10000-03-02' from VARCHAR type to DATE type.
 select weekday("2021-13-09");
-weekday("2021-13-09")
-null
+Can't cast '2021-13-09' from VARCHAR type to DATE type.
 select weekday("2020-10-32");
-weekday("2020-10-32")
-null
+Can't cast '2020-10-32' from VARCHAR type to DATE type.
 SELECT weekday("2015-09-10")- weekday("2016-04-24");
 weekday("2015-09-10")- weekday("2016-04-24")
 -3
