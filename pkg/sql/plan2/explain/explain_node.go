@@ -28,11 +28,11 @@ type NodeDescribeImpl struct {
 	Node *plan.Node
 }
 
-func (ndesc *NodeDescribeImpl) GetTableDefine(options *ExplainOptions) (string, error) {
-	var result string = "Table Define:"
+func (ndesc *NodeDescribeImpl) GetTableDef(options *ExplainOptions) (string, error) {
+	var result string = "Table: "
 	if ndesc.Node.NodeType == plan.Node_TABLE_SCAN {
 		tableDef := ndesc.Node.TableDef
-		result += "TABLE '" + tableDef.Name + "'("
+		result += "'" + tableDef.Name + "' ("
 		var first bool = true
 		for i, col := range tableDef.Cols {
 			if !first {
@@ -40,11 +40,7 @@ func (ndesc *NodeDescribeImpl) GetTableDefine(options *ExplainOptions) (string, 
 			}
 			first = false
 			//result += "'" + col.Name + "':" + col.Typ.Id.String()
-			if col.IsPrune {
-				result += "'" + col.Name + "'#[0," + strconv.Itoa(i) + "](*)"
-			} else {
-				result += "'" + col.Name + "'#[0," + strconv.Itoa(i) + "]"
-			}
+			result += strconv.Itoa(i) + ":'" + col.Name + "'"
 		}
 		result += ")"
 	} else {
