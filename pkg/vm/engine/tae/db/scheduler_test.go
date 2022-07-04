@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -119,7 +120,7 @@ func TestCheckpoint1(t *testing.T) {
 		blk := it.GetBlock()
 		err := blk.Update(1, 3, int32(333))
 		assert.Nil(t, err)
-		err = blk.RangeDelete(3, 3)
+		err = blk.RangeDelete(3, 3, handle.DT_Normal)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}

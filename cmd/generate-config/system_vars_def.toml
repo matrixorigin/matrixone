@@ -448,16 +448,6 @@ values = ["true", "false"]
 comment = "default is true. if true, metrics can be scraped through host:status/metrics endpoint"
 update-mode = "dynamic"
 
-[[parameter]]
-name = "needInitdb"
-scope = ["global"]
-access = ["file"]
-type = "bool"
-domain-type = "set"
-values = ["true", "false"]
-comment = "default is true. if true, initdb for tae in every booting"
-update-mode = "dynamic"
-
 
 # Cluster Configs
 pre-allocated-group-num = 20

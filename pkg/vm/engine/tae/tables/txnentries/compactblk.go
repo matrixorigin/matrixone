@@ -115,7 +115,7 @@ func (entry *compactBlockEntry) PrepareCommit() (err error) {
 			if entry.mapping != nil && len(entry.mapping) > int(row) {
 				row = entry.mapping[row]
 			}
-			if err = entry.to.RangeDelete(row, row); err != nil {
+			if err = entry.to.RangeDelete(row, row, handle.DT_MergeCompact); err != nil {
 				return
 			}
 		}

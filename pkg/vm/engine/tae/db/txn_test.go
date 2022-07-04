@@ -647,7 +647,7 @@ func TestTxn8(t *testing.T) {
 	filter = handle.NewEQFilter(pkv)
 	id, row, err = rel.GetByFilter(filter)
 	assert.NoError(t, err)
-	err = rel.RangeDelete(id, row, row)
+	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 	assert.NoError(t, err)
 
 	tae.Close()
@@ -763,7 +763,7 @@ func TestTxn9(t *testing.T) {
 	filter := handle.NewEQFilter(v)
 	id, row, err := rel.GetByFilter(filter)
 	assert.NoError(t, err)
-	err = rel.RangeDelete(id, row, row)
+	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 	wg.Wait()

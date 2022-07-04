@@ -184,7 +184,7 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 			for it.HasNext() {
 				row := it.Next()
 				toPos, toRow := entry.resolveAddr(fromPos, row)
-				if err = blks[toPos].RangeDelete(toRow, toRow); err != nil {
+				if err = blks[toPos].RangeDelete(toRow, toRow, handle.DT_MergeCompact); err != nil {
 					return
 				}
 			}
