@@ -512,17 +512,17 @@ func (c *Compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope, join
 		}
 	case plan.Node_ANTI:
 		for i := range rs {
-			// if isEq {
-			// 	rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
-			// 		Op:  overload.Complement,
-			// 		Arg: constructComplement(n, c.proc),
-			// 	})
-			// } else {
-			rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
-				Op:  overload.LoopComplement,
-				Arg: constructLoopComplement(n, c.proc),
-			})
-			// }
+			if isEq && len(n.OnList) == 1 {
+				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+					Op:  overload.Complement,
+					Arg: constructComplement(n, c.proc),
+				})
+			} else {
+				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+					Op:  overload.LoopComplement,
+					Arg: constructLoopComplement(n, c.proc),
+				})
+			}
 		}
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join typ '%v' not support now", n.JoinType)))
