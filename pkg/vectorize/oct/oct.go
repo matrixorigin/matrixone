@@ -15,6 +15,9 @@
 package oct
 
 import (
+	"fmt"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"golang.org/x/exp/constraints"
 )
@@ -55,6 +58,35 @@ func Oct[T constraints.Unsigned | constraints.Signed](xs []T, rs *types.Bytes) *
 	}
 
 	return rs
+}
+
+func OctFloat[T constraints.Float](xs []T, rs *types.Bytes) (*types.Bytes, error) {
+	var cursor uint32
+
+	var octbytes []byte
+	for idx := range xs {
+		if xs[idx] < 0 {
+			val, err := strconv.ParseInt(fmt.Sprintf("%1.0f", xs[idx]), 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			octbytes = uint64ToOctonary(uint64(val))
+		} else {
+			val, err := strconv.ParseUint(fmt.Sprintf("%1.0f", xs[idx]), 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			octbytes = uint64ToOctonary(val)
+		}
+
+		for i := range octbytes {
+			rs.Data = append(rs.Data, octbytes[i])
+		}
+		rs.Offsets[idx] = cursor
+		rs.Lengths[idx] = uint32(len(octbytes))
+		cursor += uint32(len(octbytes))
+	}
+	return rs, nil
 }
 
 func uint64ToOctonary(x uint64) []byte {
