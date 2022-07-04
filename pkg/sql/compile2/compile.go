@@ -295,18 +295,12 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			return nil, err
 		}
 		src := &Source{
-			RelationName:   n.TableDef.Name,
-			SchemaName:     n.ObjRef.SchemaName,
-			Attributes:     make([]string, len(n.TableDef.Cols)),
-			AttributeTypes: make([]plan.ColDef, len(n.TableDef.Cols)),
+			RelationName: n.TableDef.Name,
+			SchemaName:   n.ObjRef.SchemaName,
+			Attributes:   make([]string, len(n.TableDef.Cols)),
 		}
 		for i, col := range n.TableDef.Cols {
-			src.AttributeTypes[i] = *col
-			if col.IsPrune {
-				continue
-			} else {
-				src.Attributes[i] = col.Name
-			}
+			src.Attributes[i] = col.Name
 		}
 		nodes := rel.Nodes(snap)
 		if len(nodes) == 0 {
@@ -512,17 +506,17 @@ func (c *Compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope, join
 		}
 	case plan.Node_ANTI:
 		for i := range rs {
-			// if isEq {
-			// 	rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
-			// 		Op:  overload.Complement,
-			// 		Arg: constructComplement(n, c.proc),
-			// 	})
-			// } else {
-			rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
-				Op:  overload.LoopComplement,
-				Arg: constructLoopComplement(n, c.proc),
-			})
-			// }
+			if isEq && len(n.OnList) == 1 {
+				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+					Op:  overload.Complement,
+					Arg: constructComplement(n, c.proc),
+				})
+			} else {
+				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+					Op:  overload.LoopComplement,
+					Arg: constructLoopComplement(n, c.proc),
+				})
+			}
 		}
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join typ '%v' not support now", n.JoinType)))

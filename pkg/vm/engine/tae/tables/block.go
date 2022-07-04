@@ -540,13 +540,13 @@ func (blk *dataBlock) updateWithFineLock(
 
 func (blk *dataBlock) RangeDelete(
 	txn txnif.AsyncTxn,
-	start, end uint32) (node txnif.DeleteNode, err error) {
+	start, end uint32, dt handle.DeleteType) (node txnif.DeleteNode, err error) {
 	blk.mvcc.Lock()
 	defer blk.mvcc.Unlock()
 	err = blk.mvcc.CheckNotDeleted(start, end, txn.GetStartTS())
 	if err == nil {
 		if err = blk.mvcc.CheckNotUpdated(start, end, txn.GetStartTS()); err == nil {
-			node = blk.mvcc.CreateDeleteNode(txn)
+			node = blk.mvcc.CreateDeleteNode(txn, dt)
 			node.RangeDeleteLocked(start, end)
 		}
 	}

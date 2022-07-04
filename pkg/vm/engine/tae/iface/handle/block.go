@@ -79,7 +79,7 @@ type BlockWriter interface {
 	io.Closer
 	Append(data *containers.Batch, offset uint32) (uint32, error)
 	Update(row uint32, col uint16, v any) error
-	RangeDelete(start, end uint32) error
+	RangeDelete(start, end uint32, dt DeleteType) error
 
 	PushDeleteOp(filter Filter) error
 	PushUpdateOp(filter Filter, attr string, val any) error
@@ -89,3 +89,10 @@ type Block interface {
 	BlockReader
 	BlockWriter
 }
+
+type DeleteType int8
+
+const (
+	DT_Normal DeleteType = iota
+	DT_MergeCompact
+)
