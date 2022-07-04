@@ -16,12 +16,13 @@ package typecast
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/div"
 	"math"
 	"strconv"
 	"strings"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/div"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"golang.org/x/exp/constraints"
@@ -35,8 +36,8 @@ var (
 	Uint16ToInt8  = NumericToNumeric[uint16, int8]
 	Uint32ToInt8  = NumericToNumeric[uint32, int8]
 	Uint64ToInt8  = NumericToNumeric[uint64, int8]
-	Float32ToInt8 = NumericToNumeric[float32, int8]
-	Float64ToInt8 = NumericToNumeric[float64, int8]
+	Float32ToInt8 = FloatToIntWithoutError[float32, int8]
+	Float64ToInt8 = FloatToIntWithoutError[float64, int8]
 
 	Int8ToInt16    = NumericToNumeric[int8, int16]
 	Int32ToInt16   = NumericToNumeric[int32, int16]
@@ -45,8 +46,8 @@ var (
 	Uint16ToInt16  = NumericToNumeric[uint16, int16]
 	Uint32ToInt16  = NumericToNumeric[uint32, int16]
 	Uint64ToInt16  = NumericToNumeric[uint64, int16]
-	Float32ToInt16 = NumericToNumeric[float32, int16]
-	Float64ToInt16 = NumericToNumeric[float64, int16]
+	Float32ToInt16 = FloatToIntWithoutError[float32, int16]
+	Float64ToInt16 = FloatToIntWithoutError[float64, int16]
 
 	Int8ToInt32    = NumericToNumeric[int8, int32]
 	Int16ToInt32   = NumericToNumeric[int16, int32]
@@ -65,7 +66,7 @@ var (
 	Uint16ToInt64  = NumericToNumeric[uint16, int64]
 	Uint32ToInt64  = NumericToNumeric[uint32, int64]
 	Uint64ToInt64  = uint64ToInt64 // we handle overflow error in this function
-	Float32ToInt64 = NumericToNumeric[float32, int64]
+	Float32ToInt64 = FloatToIntWithoutError[float32, int64]
 	Float64ToInt64 = float64ToInt64
 
 	Int8ToUint8    = NumericToNumeric[int8, uint8]
@@ -75,8 +76,8 @@ var (
 	Uint16ToUint8  = NumericToNumeric[uint16, uint8]
 	Uint32ToUint8  = NumericToNumeric[uint32, uint8]
 	Uint64ToUint8  = NumericToNumeric[uint64, uint8]
-	Float32ToUint8 = NumericToNumeric[float32, uint8]
-	Float64ToUint8 = NumericToNumeric[float64, uint8]
+	Float32ToUint8 = FloatToIntWithoutError[float32, uint8]
+	Float64ToUint8 = FloatToIntWithoutError[float64, uint8]
 
 	Int8ToUint16    = NumericToNumeric[int8, uint16]
 	Int16ToUint16   = NumericToNumeric[int16, uint16]
@@ -95,8 +96,8 @@ var (
 	Uint8ToUint32   = NumericToNumeric[uint8, uint32]
 	Uint16ToUint32  = NumericToNumeric[uint16, uint32]
 	Uint64ToUint32  = NumericToNumeric[uint64, uint32]
-	Float32ToUint32 = NumericToNumeric[float32, uint32]
-	Float64ToUint32 = NumericToNumeric[float64, uint32]
+	Float32ToUint32 = FloatToIntWithoutError[float32, uint32]
+	Float64ToUint32 = FloatToIntWithoutError[float64, uint32]
 
 	Int8ToUint64    = NumericToNumeric[int8, uint64]
 	Int16ToUint64   = NumericToNumeric[int16, uint64]
@@ -105,8 +106,8 @@ var (
 	Uint8ToUint64   = NumericToNumeric[uint8, uint64]
 	Uint16ToUint64  = NumericToNumeric[uint16, uint64]
 	Uint32ToUint64  = NumericToNumeric[uint32, uint64]
-	Float32ToUint64 = NumericToNumeric[float32, uint64]
-	Float64ToUint64 = NumericToNumeric[float64, uint64]
+	Float32ToUint64 = FloatToIntWithoutError[float32, uint64]
+	Float64ToUint64 = FloatToIntWithoutError[float64, uint64]
 
 	Int8ToFloat32    = NumericToNumeric[int8, float32]
 	Int16ToFloat32   = NumericToNumeric[int16, float32]
@@ -178,12 +179,24 @@ func NumericToNumeric[T1, T2 constraints.Integer | constraints.Float](xs []T1, r
 	return rs, nil
 }
 
-func float64ToInt64(xs []float64, rs []int64) ([]int64, error) {
+func FloatToIntWithoutError[T1 constraints.Float, T2 constraints.Integer](xs []T1, rs []T2) ([]T2, error) {
+	for i, x := range xs {
+		rs[i] = T2(math.Round(float64(x)))
+	}
+	return rs, nil
+}
+
+func float64ToInt64(xs []float64, rs []int64, isEmptyStringOrNull ...[]int) ([]int64, error) {
+	usedEmptyStringOrNull := len(isEmptyStringOrNull) > 0
 	for i, x := range xs {
 		if x > math.MaxInt64 || x < math.MinInt64 {
-			return nil, moerr.NewError(moerr.OUT_OF_RANGE, "overflow from double to bigint")
+			if usedEmptyStringOrNull {
+				isEmptyStringOrNull[0][i] = 1
+			} else {
+				return nil, moerr.NewError(moerr.OUT_OF_RANGE, "overflow from double to bigint")
+			}
 		}
-		rs[i] = int64(x)
+		rs[i] = int64(math.Round((x)))
 	}
 	return rs, nil
 }
@@ -282,14 +295,22 @@ func Decimal128ToBytes(xs []types.Decimal128, rs *types.Bytes, scale int32) (*ty
 	return rs, nil
 }
 
-func BytesToFloat[T constraints.Float](xs *types.Bytes, rs []T) ([]T, error) {
+func BytesToFloat[T constraints.Float](xs *types.Bytes, rs []T, isEmptyStringOrNull ...[]int) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
-
+	usedEmptyStringOrNull := len(isEmptyStringOrNull) > 0
 	for i, o := range xs.Offsets {
 		s := string(xs.Data[o : o+xs.Lengths[i]])
 		val, err := strconv.ParseFloat(s, bitSize)
 		if err != nil {
-			return nil, err
+			if usedEmptyStringOrNull {
+				if !strings.Contains(err.Error(), "value out of range") {
+					isEmptyStringOrNull[0][i] = 2
+				} else {
+					isEmptyStringOrNull[0][i] = 1
+				}
+			} else {
+				return nil, err
+			}
 		}
 		rs[i] = T(val)
 	}

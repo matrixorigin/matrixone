@@ -1,8 +1,6 @@
 #SELECT,科学计数
 select ceiling(5.5),ceiling(-5.5);
--- @bvt:issue#3550
 select ceiling(cast(-2 as unsigned)), ceiling(18446744073709551614), ceiling(-2);
--- @bvt:issue
 select ceiling(1.1e5);
 
 

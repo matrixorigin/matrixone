@@ -19,10 +19,10 @@ import (
 )
 
 var (
-	DateAdd       func([]types.Date, []int64, []int64, *nulls.Nulls, []types.Date) ([]types.Date, error)
-	DatetimeAdd   func([]types.Datetime, []int64, []int64, *nulls.Nulls, []types.Datetime) ([]types.Datetime, error)
-	DateStringAdd func(*types.Bytes, []int64, []int64, *nulls.Nulls, []types.Datetime) ([]types.Datetime, error)
-	TimestampAdd  func([]types.Timestamp, []int64, []int64, *nulls.Nulls, []types.Timestamp) ([]types.Timestamp, error)
+	DateAdd       func([]types.Date, []int64, []int64, *nulls.Nulls, *nulls.Nulls, *nulls.Nulls, []types.Date) ([]types.Date, error)
+	DatetimeAdd   func([]types.Datetime, []int64, []int64, *nulls.Nulls, *nulls.Nulls, *nulls.Nulls, []types.Datetime) ([]types.Datetime, error)
+	DateStringAdd func(*types.Bytes, []int64, []int64, *nulls.Nulls, *nulls.Nulls, *nulls.Nulls, []types.Datetime) ([]types.Datetime, error)
+	TimestampAdd  func([]types.Timestamp, []int64, []int64, *nulls.Nulls, *nulls.Nulls, *nulls.Nulls, []types.Timestamp) ([]types.Timestamp, error)
 )
 
 func init() {
@@ -32,91 +32,262 @@ func init() {
 	TimestampAdd = timestampAdd
 }
 
-func dateAdd(xs []types.Date, ys []int64, zs []int64, ns *nulls.Nulls, rs []types.Date) ([]types.Date, error) {
+func dateAdd(xs []types.Date, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Date) ([]types.Date, error) {
 	if len(ys) == 0 || len(zs) == 0 {
 		for i := range xs {
-			nulls.Add(ns, uint64(i))
+			nulls.Add(rns, uint64(i))
 		}
 		return rs, nil
 	}
-	for i, d := range xs {
-		date, success := d.ToTime().AddInterval(ys[0], types.IntervalType(zs[0]), types.DateType)
-		if success {
-			rs[i] = date.ToDate()
-		} else {
-			rs[i] = 0
-			nulls.Add(ns, uint64(i))
+
+	for _, y := range ys {
+		err := types.JudgeIntervalNumOverflow(y, types.IntervalType(zs[0]))
+		if err != nil {
+			return rs, err
+		}
+	}
+	// xs == nil and ys == nil
+	if xs == nil {
+		for i := range ys {
+			nulls.Add(rns, uint64(i))
+		}
+	} else if len(xs) == len(ys) {
+		for i, d := range xs {
+			if nulls.Contains(xns, uint64(i)) || nulls.Contains(yns, uint64(i)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			date, success := d.ToTime().AddInterval(ys[i], types.IntervalType(zs[0]), types.DateType)
+			if success {
+				rs[i] = date.ToDate()
+			} else {
+				return rs, types.ErrInvalidDateAddInterval
+			}
+		}
+	} else if len(xs) == 1 {
+		for i, d := range ys {
+			if nulls.Contains(xns, uint64(0)) || nulls.Contains(yns, uint64(i)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			date, success := xs[0].ToTime().AddInterval(d, types.IntervalType(zs[0]), types.DateType)
+			if success {
+				rs[i] = date.ToDate()
+			} else {
+				return rs, types.ErrInvalidDateAddInterval
+			}
+		}
+	} else if len(ys) == 1 {
+		for i, d := range xs {
+			if nulls.Contains(xns, uint64(i)) || nulls.Contains(yns, uint64(0)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			date, success := d.ToTime().AddInterval(ys[0], types.IntervalType(zs[0]), types.DateType)
+			if success {
+				rs[i] = date.ToDate()
+			} else {
+				return rs, types.ErrInvalidDateAddInterval
+			}
 		}
 	}
 	return rs, nil
 }
 
-func datetimeAdd(xs []types.Datetime, ys []int64, zs []int64, ns *nulls.Nulls, rs []types.Datetime) ([]types.Datetime, error) {
+func datetimeAdd(xs []types.Datetime, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Datetime) ([]types.Datetime, error) {
 	if len(ys) == 0 || len(zs) == 0 {
 		for i := range xs {
-			nulls.Add(ns, uint64(i))
+			nulls.Add(rns, uint64(i))
 		}
 		return rs, nil
 	}
-	for i, d := range xs {
-		date, success := d.AddInterval(ys[0], types.IntervalType(zs[0]), types.DateTimeType)
-		if success {
-			rs[i] = date
-		} else {
-			rs[i] = 0
-			nulls.Add(ns, uint64(i))
+	for _, y := range ys {
+		err := types.JudgeIntervalNumOverflow(y, types.IntervalType(zs[0]))
+		if err != nil {
+			return rs, err
+		}
+	}
+	if xs == nil {
+		for i := range ys {
+			nulls.Add(rns, uint64(i))
+		}
+	} else if len(xs) == len(ys) {
+		for i, d := range xs {
+			if nulls.Contains(xns, uint64(i)) || nulls.Contains(yns, uint64(i)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			date, success := d.AddInterval(ys[i], types.IntervalType(zs[0]), types.DateTimeType)
+			if success {
+				rs[i] = date
+			} else {
+				return rs, types.ErrInvalidDatetimeAddInterval
+			}
+		}
+	} else if len(xs) == 1 {
+		for i, d := range ys {
+			if nulls.Contains(xns, uint64(0)) || nulls.Contains(yns, uint64(i)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			date, success := xs[0].AddInterval(d, types.IntervalType(zs[0]), types.DateTimeType)
+			if success {
+				rs[i] = date
+			} else {
+				return rs, types.ErrInvalidDatetimeAddInterval
+			}
+		}
+	} else if len(ys) == 1 {
+		for i, d := range xs {
+			if nulls.Contains(xns, uint64(i)) || nulls.Contains(yns, uint64(0)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			date, success := d.AddInterval(ys[0], types.IntervalType(zs[0]), types.DateTimeType)
+			if success {
+				rs[i] = date
+			} else {
+				return rs, types.ErrInvalidDatetimeAddInterval
+			}
 		}
 	}
 	return rs, nil
 }
 
-func dateStringAdd(xs *types.Bytes, ys []int64, zs []int64, ns *nulls.Nulls, rs []types.Datetime) ([]types.Datetime, error) {
+func dateStringAdd(xs *types.Bytes, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Datetime) ([]types.Datetime, error) {
 	if len(ys) == 0 || len(zs) == 0 {
 		for i := range xs.Lengths {
-			nulls.Add(ns, uint64(i))
+			nulls.Add(rns, uint64(i))
 			rs[i] = 0
 		}
 		return rs, nil
 	}
+	for _, y := range ys {
+		err := types.JudgeIntervalNumOverflow(y, types.IntervalType(zs[0]))
+		if err != nil {
+			return rs, err
+		}
+	}
+	ds := make([]types.Datetime, len(xs.Lengths))
 	for i := range xs.Lengths {
+		if nulls.Contains(xns, uint64(i)) {
+			continue
+		}
 		str := string(xs.Get(int64(i)))
 		d, e := types.ParseDatetime(str, 6)
 		if e != nil {
-			// set null
-			nulls.Add(ns, uint64(i))
-			rs[i] = 0
-			continue
+			return rs, e
 		}
-		date, success := d.AddInterval(ys[0], types.IntervalType(zs[0]), types.DateTimeType)
-		if success {
-			rs[i] = date
-		} else {
-			nulls.Add(ns, uint64(i))
-			rs[i] = 0
+		ds[i] = d
+	}
+	if xs == nil {
+		for i := range ys {
+			nulls.Add(rns, uint64(i))
+		}
+		return rs, nil
+	} else if len(ds) == len(ys) {
+		for i, d := range ds {
+			if nulls.Contains(xns, uint64(i)) || nulls.Contains(yns, uint64(i)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			date, success := d.AddInterval(ys[i], types.IntervalType(zs[0]), types.DateTimeType)
+			if success {
+				rs[i] = date
+			} else {
+				return rs, types.ErrInvalidDatetimeAddInterval
+			}
+		}
+	} else if len(ds) == 1 {
+		for i, d := range ys {
+			if nulls.Contains(xns, uint64(0)) || nulls.Contains(yns, uint64(i)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			date, success := ds[0].AddInterval(d, types.IntervalType(zs[0]), types.DateTimeType)
+			if success {
+				rs[i] = date
+			} else {
+				return rs, types.ErrInvalidDatetimeAddInterval
+			}
+		}
+	} else if len(ys) == 1 {
+		for i, d := range ds {
+			if nulls.Contains(xns, uint64(i)) || nulls.Contains(yns, uint64(0)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			date, success := d.AddInterval(ys[0], types.IntervalType(zs[0]), types.DateTimeType)
+			if success {
+				rs[i] = date
+			} else {
+				return rs, types.ErrInvalidDatetimeAddInterval
+			}
 		}
 	}
 	return rs, nil
 }
 
-func timestampAdd(xs []types.Timestamp, ys []int64, zs []int64, ns *nulls.Nulls, rs []types.Timestamp) ([]types.Timestamp, error) {
+func timestampAdd(xs []types.Timestamp, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Timestamp) ([]types.Timestamp, error) {
 	if len(ys) == 0 || len(zs) == 0 {
 		for i := range xs {
-			nulls.Add(ns, uint64(i))
+			nulls.Add(rns, uint64(i))
 		}
 		return rs, nil
+	}
+	for _, y := range ys {
+		err := types.JudgeIntervalNumOverflow(y, types.IntervalType(zs[0]))
+		if err != nil {
+			return rs, err
+		}
 	}
 	ds := make([]types.Datetime, len(xs))
 	ds, err := types.TimestampToDatetime(xs, ds)
 	if err != nil {
 		return rs, err
 	}
-	for i, d := range ds {
-		d, success := d.AddInterval(ys[0], types.IntervalType(zs[0]), types.TimeStampType)
-		if success {
-			rs[i] = types.FromClockUTC(int32(d.Year()), d.Month(), d.Day(), uint8(d.Hour()), uint8(d.Minute()), uint8(d.Sec()), uint32(d.MicroSec()))
-		} else {
-			rs[i] = 0
-			nulls.Add(ns, uint64(i))
+	if xs == nil {
+		for i := range ys {
+			nulls.Add(rns, uint64(i))
+		}
+	} else if len(xs) == len(ys) {
+		for i, d := range ds {
+			if nulls.Contains(xns, uint64(i)) || nulls.Contains(yns, uint64(i)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			date, success := d.AddInterval(ys[i], types.IntervalType(zs[0]), types.TimeStampType)
+			if success {
+				rs[i] = types.FromClockUTC(int32(date.Year()), date.Month(), date.Day(), uint8(date.Hour()), uint8(date.Minute()), uint8(date.Sec()), uint32(date.MicroSec()))
+			} else {
+				return rs, types.ErrInvalidTimestampAddInterval
+			}
+		}
+	} else if len(xs) == 1 {
+		for i, d := range ys {
+			if nulls.Contains(xns, uint64(0)) || nulls.Contains(yns, uint64(i)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			date, success := ds[0].AddInterval(d, types.IntervalType(zs[0]), types.TimeStampType)
+			if success {
+				rs[i] = types.FromClockUTC(int32(date.Year()), date.Month(), date.Day(), uint8(date.Hour()), uint8(date.Minute()), uint8(date.Sec()), uint32(date.MicroSec()))
+			} else {
+				return rs, types.ErrInvalidTimestampAddInterval
+			}
+		}
+	} else if len(ys) == 1 {
+		for i, d := range ds {
+			if nulls.Contains(xns, uint64(i)) || nulls.Contains(yns, uint64(0)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			date, success := d.AddInterval(ys[0], types.IntervalType(zs[0]), types.TimeStampType)
+			if success {
+				rs[i] = types.FromClockUTC(int32(date.Year()), date.Month(), date.Day(), uint8(date.Hour()), uint8(date.Minute()), uint8(date.Sec()), uint32(date.MicroSec()))
+			} else {
+				return rs, types.ErrInvalidTimestampAddInterval
+			}
 		}
 	}
 	return rs, nil

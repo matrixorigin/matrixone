@@ -20,40 +20,6 @@ import (
 	"testing"
 )
 
-func TestExcludedFilter(t *testing.T) {
-	cases := []struct {
-		inputs   []*util.Store
-		excluded []string
-		expected []*util.Store
-	}{
-		{
-			inputs:   []*util.Store{{ID: "a"}, {ID: "b"}, {ID: "c"}},
-			excluded: []string{"a"},
-			expected: []*util.Store{{ID: "b"}, {ID: "c"}},
-		},
-		{
-			inputs:   []*util.Store{{ID: "a"}, {ID: "b"}, {ID: "c"}},
-			excluded: []string{"a", "b"},
-			expected: []*util.Store{{ID: "c"}},
-		},
-		{
-			inputs:   []*util.Store{{ID: "a"}, {ID: "b"}, {ID: "c"}},
-			excluded: []string{"a", "b", "c"},
-			expected: nil,
-		},
-		{
-			inputs:   []*util.Store{{ID: "a"}, {ID: "b"}, {ID: "c"}},
-			excluded: []string{"A", "B", "C"},
-			expected: []*util.Store{{ID: "a"}, {ID: "b"}, {ID: "c"}},
-		},
-	}
-
-	for _, c := range cases {
-		outputs := util.FilterStore(c.inputs, []util.IFilter{newExcludedFilter(c.excluded...)})
-		assert.Equal(t, c.expected, outputs)
-	}
-}
-
 func TestSelector(t *testing.T) {
 	cases := []struct {
 		shardInfo logservice.LogShardInfo
@@ -91,7 +57,7 @@ func TestSelector(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		output := selector(c.shardInfo, c.stores)
+		output := selectStore(c.shardInfo, c.stores)
 		assert.Equal(t, c.expected, output)
 	}
 }

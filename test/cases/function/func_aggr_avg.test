@@ -115,7 +115,7 @@ INSERT INTO t1 VALUES('innfj', 2, 2, 2, 2);
 #SELECT SUM( DISTINCT c ) FROM t1 GROUP BY c HAVING c IN ( AVG( 1 ), 1 + c);
 #SELECT SUM( DISTINCT d ) FROM t1 GROUP BY d HAVING d IN ( AVG( 1 ), 1 + d);
 #SELECT SUM( DISTINCT e ) FROM t1 GROUP BY e HAVING e IN ( AVG( 1 ), 1 + e);
--- @bvt:issue#3343
+-- @bvt:issue#3376
 SELECT DISTINCT SUM(  a ) FROM t1 GROUP BY a HAVING a IN ( AVG( 1 ), 1 + a);
 -- @bvt:issue
 SELECT DISTINCT SUM(  b ) FROM t1 GROUP BY b HAVING b IN ( AVG( 1 ), 1 + b);
@@ -165,7 +165,7 @@ select t1.id, avg(rating) from t1 left join t2 on ( t1.id = t2.id ) group by t1.
 drop table t1;
 drop table t2;
 
--- @bvt:issue#3343
+
 CREATE TABLE t1 (a int, b int);
 select count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1;
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
@@ -179,7 +179,6 @@ select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b)
 insert into t1 values (3,1);
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
 drop table t1;
--- @bvt:issue
 
 create table t1 (a int);
 select avg(2) from t1;

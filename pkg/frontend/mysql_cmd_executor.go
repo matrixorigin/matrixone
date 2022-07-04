@@ -1920,6 +1920,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 
 		switch st := stmt.(type) {
 		case *tree.Select:
+			ses.ep.Outfile = false
 			if st.Ep != nil {
 				mce.exportDataClose = NewCloseExportData()
 				ses.ep = st.Ep

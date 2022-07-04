@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"testing"
@@ -34,7 +33,7 @@ func TestDateAdd(t *testing.T) {
 		{
 			name: "TEST01",
 			vecs: makeDateAddVectors("2022-01-01", true, 1, types.Day),
-			proc: process.New(mheap.New(nil)),
+			proc: makeProcess(),
 			want: "2022-01-02",
 		},
 	}
@@ -61,7 +60,7 @@ func TestDatetimeAdd(t *testing.T) {
 		{
 			name: "TEST01",
 			vecs: makeDatetimeAddVectors("2022-01-01 00:00:00", true, 1, types.Day),
-			proc: process.New(mheap.New(nil)),
+			proc: makeProcess(),
 			want: "2022-01-02 00:00:00",
 		},
 	}
@@ -80,50 +79,47 @@ func TestDatetimeAdd(t *testing.T) {
 
 func TestDateStringAdd(t *testing.T) {
 	cases := []struct {
-		name    string
-		vecs    []*vector.Vector
-		proc    *process.Process
-		want    string
-		contain bool
+		name string
+		vecs []*vector.Vector
+		proc *process.Process
+		want string
+		err  error
 	}{
 		{
-			name:    "TEST01",
-			vecs:    makeDateStringAddVectors("2022-01-01", true, 1, types.Day),
-			proc:    process.New(mheap.New(nil)),
-			want:    "2022-01-02 00:00:00",
-			contain: false,
+			name: "TEST01",
+			vecs: makeDateStringAddVectors("2022-01-01", true, 1, types.Day),
+			proc: makeProcess(),
+			want: "2022-01-02 00:00:00",
+			err:  nil,
 		},
 		{
-			name:    "TEST02",
-			vecs:    makeDateStringAddVectors("2022-01-01 00:00:00", true, 1, types.Day),
-			proc:    process.New(mheap.New(nil)),
-			want:    "2022-01-02 00:00:00",
-			contain: false,
+			name: "TEST02",
+			vecs: makeDateStringAddVectors("2022-01-01 00:00:00", true, 1, types.Day),
+			proc: makeProcess(),
+			want: "2022-01-02 00:00:00",
+			err:  nil,
 		},
 		{
-			name:    "TEST03",
-			vecs:    makeDateStringAddVectors("2022-01-01", true, 1, types.Second),
-			proc:    process.New(mheap.New(nil)),
-			want:    "2022-01-01 00:00:01",
-			contain: false,
+			name: "TEST03",
+			vecs: makeDateStringAddVectors("2022-01-01", true, 1, types.Second),
+			proc: makeProcess(),
+			want: "2022-01-01 00:00:01",
+			err:  nil,
 		},
 		{
-			name:    "TEST04",
-			vecs:    makeDateStringAddVectors("xxxx", true, 1, types.Second),
-			proc:    process.New(mheap.New(nil)),
-			want:    "0001-01-01 00:00:00",
-			contain: true,
+			name: "TEST04",
+			vecs: makeDateStringAddVectors("xxxx", true, 1, types.Second),
+			proc: makeProcess(),
+			want: "0001-01-01 00:00:00",
+			err:  types.ErrIncorrectDatetimeValue,
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			date, err := DateStringAdd(c.vecs, c.proc)
-			if err != nil {
-				t.Fatal(err)
-			}
 			require.Equal(t, c.want, date.Col.([]types.Datetime)[0].String())
-			require.Equal(t, c.contain, nulls.Contains(date.Nsp, 0))
+			require.Equal(t, c.err, err)
 		})
 	}
 

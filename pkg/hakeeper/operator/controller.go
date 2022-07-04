@@ -21,14 +21,11 @@
 package operator
 
 import (
-	"sync"
-
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 // Controller is used to manage operators.
 type Controller struct {
-	sync.RWMutex
 	operators map[uint64][]*Operator
 }
 
@@ -40,16 +37,14 @@ func NewController() *Controller {
 
 // RemoveOperator removes an operator from the operators.
 func (c *Controller) RemoveOperator(op *Operator) bool {
-	c.Lock()
-	removed := c.removeOperatorLocked(op)
-	c.Unlock()
+	removed := c.removeOperator(op)
 	if removed {
 		_ = op.Cancel()
 	}
 	return removed
 }
 
-func (c *Controller) removeOperatorLocked(op *Operator) bool {
+func (c *Controller) removeOperator(op *Operator) bool {
 	for i, curOp := range c.operators[op.shardID] {
 		if curOp == op {
 			c.operators[op.shardID] = append(c.operators[op.shardID][:i], c.operators[op.shardID][i+1:]...)
@@ -64,9 +59,6 @@ func (c *Controller) removeOperatorLocked(op *Operator) bool {
 
 // GetOperators gets operators from the given shard.
 func (c *Controller) GetOperators(shardID uint64) []*Operator {
-	c.RLock()
-	defer c.RUnlock()
-
 	return c.operators[shardID]
 }
 
@@ -98,10 +90,10 @@ func (c *Controller) GetAddingReplicas() (adding map[uint64][]uint64) {
 	return
 }
 
-func (c *Controller) RemoveFinishedOperator(dnState pb.DNState, state pb.LogState) {
+func (c *Controller) RemoveFinishedOperator(logState pb.LogState, dnState pb.DNState) {
 	for _, ops := range c.operators {
 		for _, op := range ops {
-			op.Check(state, dnState)
+			op.Check(logState, dnState)
 			switch op.Status() {
 			case SUCCESS, EXPIRED:
 				c.RemoveOperator(op)
