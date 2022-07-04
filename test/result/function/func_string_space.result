@@ -40,13 +40,11 @@ the space count exceeds maxallowedCount 8000
 select space(-18446744073709551616);
 space(-18446744073709551616)
 select space(18446744073709551616);
-space(18446744073709551616)
-null
+the space count exceeds maxallowedCount 8000
 select space(-18446744073709551617);
 space(-18446744073709551617)
 select space(18446744073709551617);
-space(18446744073709551617)
-null
+the space count exceeds maxallowedCount 8000
 SELECT space(9223372036854775808);
 the space count exceeds maxallowedCount 8000
 SELECT length(space(9223372036854775809));

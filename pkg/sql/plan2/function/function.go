@@ -255,7 +255,9 @@ func rewriteTypesIfNecessary(targets []types.Type, sources []types.Type) {
 					continue
 				}
 			}
-			setDefaultPrecision(&targets[i])
+			if oid2 != ScalarNull {
+				setDefaultPrecision(&targets[i])
+			}
 		}
 	}
 }
@@ -279,7 +281,7 @@ func setDefaultPrecision(typ *types.Type) {
 func getRealReturnType(fid int32, f Function, realArgs []types.Type) types.Type {
 	if f.IsAggregate() {
 		switch fid {
-		case MIN, MAX, SUM:
+		case MIN, MAX:
 			if realArgs[0].Oid != ScalarNull {
 				return realArgs[0]
 			}
