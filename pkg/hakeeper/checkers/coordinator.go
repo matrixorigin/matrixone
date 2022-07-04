@@ -40,7 +40,7 @@ func NewCoordinator() *Coordinator {
 func (c *Coordinator) Check(alloc util.IDAllocator, cluster pb.ClusterInfo,
 	dnState pb.DNState, logState pb.LogState, currentTick uint64) []pb.ScheduleCommand {
 
-	c.OperatorController.RemoveFinishedOperator(dnState, logState)
+	c.OperatorController.RemoveFinishedOperator(logState, dnState)
 
 	// if we've discovered unhealth already, no need to keep alive anymore.
 	if c.teardown {

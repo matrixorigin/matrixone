@@ -41,21 +41,21 @@ SELECT dayofyear(10) as dayofyear;
 SELECT dayofyear(1=1) as dayofyear;
 SELECT dayofyear('2015-09.30') as dayofyear;
 -- @bvt:issue
--- @bvt:issue#3593
+
 SELECT dayofyear('2015-0') as dayofyear;
--- @bvt:issue
+
 SELECT dayofyear('2015-09.30 12') as dayofyear;
 SELECT dayofyear('2015-09-26 08:09:22') AS dayofyear;
 
 #EXTREME VALUE
--- @bvt:issue#3593
+
 select dayofyear("2020-08");
 select dayofyear("0000-00-00");
 select dayofyear("-0001-03-03");
 select dayofyear("10000-03-02");
 select dayofyear("2021-13-09");
 select dayofyear("2020-10-32");
--- @bvt:issue
+
 
 #算术操作
 SELECT dayofyear("2015-09-10")- dayofyear("2016-04-24");

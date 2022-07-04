@@ -25,7 +25,7 @@ import (
 
 func DateToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_uint8, Size: 1}
+	resultType := types.Type{Oid: types.T_int64, Size: 8}
 	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[types.Date](inputVector)
 	if inputVector.IsScalar() {
@@ -33,7 +33,7 @@ func DateToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType)
-		resultValues := make([]uint8, 1)
+		resultValues := make([]int64, 1)
 		vector.SetCol(resultVector, weekday.DateToWeekday(inputValues, resultValues))
 		return resultVector, nil
 	} else {
@@ -41,7 +41,7 @@ func DateToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeUint8Slice(resultVector.Data)
+		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		vector.SetCol(resultVector, weekday.DateToWeekday(inputValues, resultValues))
@@ -51,7 +51,7 @@ func DateToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 
 func DatetimeToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_uint8, Size: 1}
+	resultType := types.Type{Oid: types.T_int64, Size: 8}
 	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
 	if inputVector.IsScalar() {
@@ -59,7 +59,7 @@ func DatetimeToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType)
-		resultValues := make([]uint8, 1)
+		resultValues := make([]int64, 1)
 		vector.SetCol(resultVector, weekday.DatetimeToWeekday(inputValues, resultValues))
 		return resultVector, nil
 	} else {
@@ -67,7 +67,7 @@ func DatetimeToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeUint8Slice(resultVector.Data)
+		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		vector.SetCol(resultVector, weekday.DatetimeToWeekday(inputValues, resultValues))

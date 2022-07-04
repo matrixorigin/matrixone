@@ -98,7 +98,7 @@ drop table t2;
 #EXTREME VALUE
 SELECT REVERSE("@($)@($#)_@(#");
 
--- @bvt:issue#3500
+-- @bvt:issue#3716
 SELECT REVERSE(space(500)+space(600));
 -- @bvt:issue
 

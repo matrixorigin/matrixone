@@ -249,11 +249,9 @@ a	a
 drop table t1;
 drop table t2;
 SELECT RTRIM(space(100000000)+"123");
-RTRIM(space(100000000)+"123")
-null
+Operator '+' with parameters [VARCHAR VARCHAR] will be implemented in future version.
 SELECT LTRIM("123"+space(100000000));
-LTRIM("123"+space(100000000))
-null
+Operator '+' with parameters [VARCHAR VARCHAR] will be implemented in future version.
 SELECT LTRIM("    1241241^&@%#^*^!@#&*(!&");
 LTRIM("    1241241^&@%#^*^!@#&*(!&")
 1241241^&@%#^*^!@#&*(!&
