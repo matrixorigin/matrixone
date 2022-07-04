@@ -1,4 +1,3 @@
--- @bvt:issue#3233
 use tpch;
 select
 	l_returnflag,
@@ -22,4 +21,3 @@ order by
 	l_returnflag,
 	l_linestatus
 ;
--- @bvt:issue
