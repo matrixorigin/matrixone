@@ -16,7 +16,6 @@ package loopcomplement
 
 import (
 	"bytes"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -138,17 +137,6 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
 	}
-	{
-		fmt.Printf("build:\n")
-		for i, vec := range ctr.bat.Vecs {
-			fmt.Printf("\t[%v] = %v\n", i, vec)
-		}
-		fmt.Printf("probe:\n")
-		for i, vec := range bat.Vecs {
-			fmt.Printf("\t[%v] = %v\n", i, vec)
-		}
-
-	}
 	count := len(bat.Zs)
 	for i := 0; i < count; i++ {
 		flg := true
@@ -157,9 +145,6 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			return err
 		}
 		bs := vec.Col.([]bool)
-		{
-			fmt.Printf("\t[%v] = %v, %v\n", i, ap.Cond, bs)
-		}
 		for _, b := range bs {
 			if b {
 				flg = false

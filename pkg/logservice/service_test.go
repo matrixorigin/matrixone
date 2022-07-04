@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ func getServiceTestConfig() Config {
 	}
 }
 
-func runServiceTest(t *testing.T, fn func(*testing.T, *Service)) {
+func runServiceTest(t *testing.T, hakeeper bool, fn func(*testing.T, *Service)) {
 	defer leaktest.AfterTest(t)()
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
@@ -50,7 +51,11 @@ func runServiceTest(t *testing.T, fn func(*testing.T, *Service)) {
 	require.NoError(t, err)
 	peers := make(map[uint64]dragonboat.Target)
 	peers[1] = service.ID()
-	require.NoError(t, service.store.StartReplica(1, 1, peers, false))
+	if hakeeper {
+		require.NoError(t, service.store.StartHAKeeperReplica(1, peers, false))
+	} else {
+		require.NoError(t, service.store.StartReplica(1, 1, peers, false))
+	}
 	defer func() {
 		assert.NoError(t, service.Close())
 	}()
@@ -80,7 +85,7 @@ func TestServiceConnect(t *testing.T) {
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
-	runServiceTest(t, fn)
+	runServiceTest(t, false, fn)
 }
 
 func TestServiceConnectTimeout(t *testing.T) {
@@ -97,7 +102,7 @@ func TestServiceConnectTimeout(t *testing.T) {
 		assert.Equal(t, pb.Timeout, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
-	runServiceTest(t, fn)
+	runServiceTest(t, false, fn)
 }
 
 func TestServiceConnectRO(t *testing.T) {
@@ -114,7 +119,7 @@ func TestServiceConnectRO(t *testing.T) {
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
-	runServiceTest(t, fn)
+	runServiceTest(t, false, fn)
 }
 
 func getTestAppendCmd(id uint64, data []byte) []byte {
@@ -123,6 +128,92 @@ func getTestAppendCmd(id uint64, data []byte) []byte {
 	binaryEnc.PutUint64(cmd[headerSize:], id)
 	copy(cmd[headerSize+8:], data)
 	return cmd
+}
+
+func TestServiceHandleLogHeartbeat(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		req := pb.Request{
+			Method:  pb.LOG_HEARTBEAT,
+			Timeout: int64(time.Second),
+			LogHeartbeat: pb.LogStoreHeartbeat{
+				UUID: "uuid1",
+			},
+		}
+		sc1 := pb.ScheduleCommand{
+			UUID: "uuid1",
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID: 1,
+				},
+			},
+		}
+		sc2 := pb.ScheduleCommand{
+			UUID: "uuid2",
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID: 2,
+				},
+			},
+		}
+		sc3 := pb.ScheduleCommand{
+			UUID: "uuid1",
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID: 3,
+				},
+			},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t,
+			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
+		resp := s.handleLogHeartbeat(req)
+		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
+	}
+	runServiceTest(t, true, fn)
+}
+
+func TestServiceHandleDNHeartbeat(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		req := pb.Request{
+			Method:  pb.DN_HEARTBEAT,
+			Timeout: int64(time.Second),
+			DNHeartbeat: pb.DNStoreHeartbeat{
+				UUID: "uuid1",
+			},
+		}
+		sc1 := pb.ScheduleCommand{
+			UUID: "uuid1",
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID: 1,
+				},
+			},
+		}
+		sc2 := pb.ScheduleCommand{
+			UUID: "uuid2",
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID: 2,
+				},
+			},
+		}
+		sc3 := pb.ScheduleCommand{
+			UUID: "uuid1",
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID: 3,
+				},
+			},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t,
+			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
+		resp := s.handleDNHeartbeat(req)
+		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
+	}
+	runServiceTest(t, true, fn)
 }
 
 func TestServiceHandleAppend(t *testing.T) {
@@ -153,7 +244,7 @@ func TestServiceHandleAppend(t *testing.T) {
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(4), resp.LogResponse.Index)
 	}
-	runServiceTest(t, fn)
+	runServiceTest(t, false, fn)
 }
 
 func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
@@ -184,7 +275,7 @@ func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(0), resp.LogResponse.Index)
 	}
-	runServiceTest(t, fn)
+	runServiceTest(t, false, fn)
 }
 
 func TestServiceHandleRead(t *testing.T) {
@@ -235,7 +326,7 @@ func TestServiceHandleRead(t *testing.T) {
 		assert.Equal(t, pb.UserRecord, records.Records[3].Type)
 		assert.Equal(t, cmd, records.Records[3].Data)
 	}
-	runServiceTest(t, fn)
+	runServiceTest(t, false, fn)
 }
 
 func TestServiceTruncate(t *testing.T) {
@@ -303,7 +394,7 @@ func TestServiceTruncate(t *testing.T) {
 		assert.Equal(t, pb.IndexAlreadyTruncated, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
-	runServiceTest(t, fn)
+	runServiceTest(t, false, fn)
 }
 
 func TestShardInfoCanBeQueried(t *testing.T) {

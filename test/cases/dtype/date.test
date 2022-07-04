@@ -13,7 +13,7 @@ select cast('2021-02-29' as date);
 -- @bvt:issue#3291
 select cast('2022-02-01' as date)-cast('2022-01-01' as date);
 -- @bvt:issue
--- @bvt:issue#3292
+-- @bvt:issue#3291
 select cast('2020-02-01' as date)+NULL;
 -- @bvt:issue
 select cast('0000-00-00' as date);
@@ -79,9 +79,7 @@ insert into t2 values('2022-01-01', 5);
 select * from t1;
 select * from t2;
 select * from t1 join t2 on t1.dvalue=t2.dvalue order by 1 desc,t2.value32 asc;
--- @bvt:issue#3253
 select * from t1 join t2 on t1.dvalue=t2.dvalue where t1.dvalue>='2022-01-01' group by t1.dvalue order by t2.dvalue;
--- @bvt:issue
 
 #Test cases of operators
 drop table if exists t1;
@@ -91,7 +89,7 @@ insert INTO t_date VALUES ('2020-01-01'), ('2022-01-02');
 -- @bvt:issue#3257
 SELECT id, id >= 20200102 FROM t_date;
 -- @bvt:issue
--- @bvt:issue#3253
+-- @bvt:issue#3676
 SELECT id, 1.1 <= '2020-01-01' FROM t_date;
 -- @bvt:issue
 -- @bvt:issue#3257
@@ -106,17 +104,15 @@ SELECT * from t_date WHERE id = 20200101;
 -- @bvt:issue#3297
 SELECT * from t_date WHERE id = 2.0200101e7;
 -- @bvt:issue
--- @bvt:issue#3253
 SELECT * from t_date WHERE id = '20200101';
 SELECT * from t_date WHERE id IN ('2020-01-01','2022-01-03');
--- @bvt:issue
 -- @bvt:issue#3297
 SELECT * from t_date WHERE id IN (2.0200101e7,2.0200103e7 );
 -- @bvt:issue
 -- @bvt:issue#3257
 SELECT * from t_date WHERE id IN (20220101, 20220103);
 -- @bvt:issue
--- @bvt:issue#3253
+-- @bvt:issue#3676
 SELECT * from t_date WHERE id IN ('2.0200101e7','2.0200103e7');
 -- @bvt:issue
 -- @bvt:issue#3257
@@ -125,8 +121,8 @@ SELECT * from t_date WHERE id BETWEEN 20191231 AND 20200101;
 -- @bvt:issue#3297
 SELECT * from t_date WHERE id BETWEEN 2.0200101e7 and 2.0200103e7;
 -- @bvt:issue
--- @bvt:issue#3253
 SELECT * from t_date WHERE id BETWEEN '2020-01-02' AND '2020-01-03';
+-- @bvt:issue#3676
 SELECT * from t_date WHERE id BETWEEN '2.0200101e7' and '2.0200103e7';
 -- @bvt:issue
 drop table if exists t1;
@@ -143,7 +139,7 @@ SELECT CAST(20220101 AS date) BETWEEN 20220101 AND -1;
 SELECT CAST(00000501 AS date) NOT BETWEEN 100 AND -1;
 SELECT CAST(0 AS date) BETWEEN 0 AND -1;
 -- @bvt:issue
--- @bvt:issue#3253
+-- @bvt:issue#3679
 SELECT CAST(10000101 as date) BETWEEN '1000-01-01' and '1000-01-02';
 -- @bvt:issue
 
@@ -155,13 +151,11 @@ drop table if exists t21;
 drop table if exists t12;
 CREATE TABLE t1 (a date, b int primary key);
 insert INTO t1 VALUES ('2022-01-01',1),('2022-01-01',2);
--- @bvt:issue#3253
 update t1 set a='2022-01-02' where a='2022-01-01' limit 1;
 select * from t1;
 insert INTO t1 VALUES ('2022-01-01',3);
 update t1 set a='2022-01-02' where a='2022-01-01';
 select * from t1;
--- @bvt:issue
 drop table t1;
 create table t1 (
 a date not null,

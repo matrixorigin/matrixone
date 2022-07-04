@@ -57,7 +57,7 @@ func TestCatalog1(t *testing.T) {
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 
 	{
-		txn, rel = getDefaultRelation(t, db, schema.Name)
+		_, rel = getDefaultRelation(t, db, schema.Name)
 		it := rel.MakeBlockIt()
 		cnt := 0
 		for it.Valid() {

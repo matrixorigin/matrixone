@@ -365,6 +365,9 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		ss = c.compileSort(n, ss)
 		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
 	case plan.Node_DELETE:
+		if n.DeleteInfo.CanTruncate {
+			return nil, nil
+		}
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
 		if err != nil {
 			return nil, err

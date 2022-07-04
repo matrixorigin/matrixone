@@ -12,13 +12,13 @@ select ceiling(1.1e5);
 #SELECT * FROM t;
 #DROP TABLE t;
 
--- @bvt:issue#3316
+
 create table t(a double);
 insert into t select (CEILING(18446744073709551615));
 insert into t select (FLOOR(18446744073709551615));
 select * from t;
 drop table t;
--- @bvt:issue
+
 
 
 #SELECT, 嵌套，DATATYPE， EXTREME VALUE

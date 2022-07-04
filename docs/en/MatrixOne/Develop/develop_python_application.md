@@ -6,7 +6,7 @@ This tutorial shows you how to build a simple Python application with MatrixOne.
 
 This demo will store the historical stock data of the China stock market and make a simple analysis to find the best stocks to buy.
 
-The basic idea is that we track the P/E (Price-to-Earnings), P/B (Price-to-Book) level of each stock, which can represent a company's market capitalization. If you are not familiar with these two concepts, please refer to [P/E](https://www.investopedia.com/terms/p/price-earningsratio.asp) and [P/B](https://www.investopedia.com/terms/p/price-to-bookratio.asp).
+The basic idea is that we track the P/E (Price-to-Earnings) and P/B (Price-to-Book) level of each stock since these can represent a company's market capitalization. If you are not familiar with these two concepts, please refer to [P/E](https://www.investopedia.com/terms/p/price-earningsratio.asp) and [P/B](https://www.investopedia.com/terms/p/price-to-bookratio.asp).
 
 Every day after the market closes, we compare the P/E and P/B value with the historical lowest P/E and P/B. If the current P/E or P/B is even lower than the historical lowest, the stock is very likely under-estimated. We can further investigate its reason of falling and judge if it's a good time to buy it. 
 

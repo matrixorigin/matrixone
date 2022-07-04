@@ -208,11 +208,11 @@ func (dt Datetime) UTC() Datetime {
 }
 
 func (dt Datetime) UnixTimestamp() int64 {
-	return dt.sec() - unixEpoch
+	return dt.sec() - unixEpoch - localTZ
 }
 
 func FromUnix(time int64) Datetime {
-	return Datetime((time + unixEpoch) << 20)
+	return Datetime((time + unixEpoch + localTZ) << 20)
 }
 
 func UnixToTimestamp(time int64) Timestamp {

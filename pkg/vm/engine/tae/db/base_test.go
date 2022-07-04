@@ -56,12 +56,12 @@ func (e *testEngine) createRelAndAppend(bat *containers.Batch, createDB bool) (h
 	return createRelationAndAppend(e.t, e.DB, defaultTestDB, e.schema, bat, createDB)
 }
 
-func (e *testEngine) getRows() int {
-	txn, rel := e.getRelation()
-	rows := rel.Rows()
-	assert.NoError(e.t, txn.Commit())
-	return int(rows)
-}
+// func (e *testEngine) getRows() int {
+// 	txn, rel := e.getRelation()
+// 	rows := rel.Rows()
+// 	assert.NoError(e.t, txn.Commit())
+// 	return int(rows)
+// }
 
 func (e *testEngine) checkRowsByScan(exp int, applyDelete bool) {
 	txn, rel := e.getRelation()
@@ -325,10 +325,10 @@ func getColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDel
 func forEachColumnView(rel handle.Relation, colIdx int, fn func(view *model.ColumnView) error) {
 	forEachBlock(rel, func(blk handle.Block) (err error) {
 		view, err := blk.GetColumnDataById(colIdx, nil)
-		defer view.Close()
 		if err != nil {
 			return
 		}
+		defer view.Close()
 		err = fn(view)
 		return
 	})

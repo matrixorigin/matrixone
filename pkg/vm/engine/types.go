@@ -156,6 +156,8 @@ type Relation interface {
 
 	Delete(uint64, *vector.Vector, string, Snapshot) error
 
+	Truncate(Snapshot) (uint64, error)
+
 	AddTableDef(uint64, TableDef, Snapshot) error
 	DelTableDef(uint64, TableDef, Snapshot) error
 

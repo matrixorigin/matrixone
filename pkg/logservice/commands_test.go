@@ -38,7 +38,7 @@ func TestHandleStartReplica(t *testing.T) {
 		s.handleCommands([]pb.ScheduleCommand{cmd})
 		mustHaveReplica(t, s.store, 1, 1)
 	}
-	runServiceTest(t, fn)
+	runServiceTest(t, false, fn)
 }
 
 func TestHandleStopReplica(t *testing.T) {
@@ -67,7 +67,7 @@ func TestHandleStopReplica(t *testing.T) {
 		s.handleCommands([]pb.ScheduleCommand{cmd})
 		assert.False(t, hasReplica(s.store, 1, 1))
 	}
-	runServiceTest(t, fn)
+	runServiceTest(t, false, fn)
 }
 
 func TestHandleAddReplica(t *testing.T) {

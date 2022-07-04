@@ -74,6 +74,10 @@ func initTypeCheckRelated() {
 	// init binaryTable
 	var convertRuleForBinaryTable [][4]types.T // left-input, right-input, left-target, right-target
 	{
+		for _, typ := range all {
+			convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{ScalarNull, typ, typ, typ})
+			convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{typ, ScalarNull, typ, typ})
+		}
 		for _, typ1 := range numbers {
 			for _, typ2 := range floats {
 				convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{typ1, typ2, types.T_float64, types.T_float64})
@@ -150,6 +154,10 @@ func initTypeCheckRelated() {
 	// init binaryTable2
 	var convertRuleForBinaryTable2 [][4]types.T
 	{
+		for _, typ := range all {
+			convertRuleForBinaryTable2 = append(convertRuleForBinaryTable, [4]types.T{ScalarNull, typ, typ, typ})
+			convertRuleForBinaryTable2 = append(convertRuleForBinaryTable, [4]types.T{typ, ScalarNull, typ, typ})
+		}
 		for i := range numbers {
 			for j := range numbers {
 				convertRuleForBinaryTable2 = append(convertRuleForBinaryTable2, [4]types.T{numbers[i], numbers[j], types.T_float64, types.T_float64})
@@ -333,31 +341,30 @@ var (
 )
 
 func generalBinaryOperatorTypeCheckFn(overloads []Function, inputs []types.T, convertRule func(types.T, types.T) (types.T, types.T, bool)) (overloadIndex int32, ts []types.T) {
-	targets := make([]types.T, 2)
+	targets := make([]types.T, 0, 2)
 	if len(inputs) == 2 {
 		matched := make([]int32, 0, 4)
 		t1, t2, convert := convertRule(inputs[0], inputs[1])
-		targets[0], targets[1] = t1, t2
+		targets = append(targets, t1, t2)
 		for _, o := range overloads {
 			if ok, _ := tryToMatch(targets, o.Args); ok == matchedDirectly {
 				matched = append(matched, o.Index)
 			}
 		}
+		if !convert {
+			targets = nil
+		}
 		if len(matched) == 1 {
-			if convert {
-				return matched[0], targets
-			}
-			return matched[0], nil
+			return matched[0], targets
 		} else if len(matched) > 1 {
 			for j := range inputs {
 				if inputs[j] == ScalarNull {
-					return matched[0], nil
+					return matched[0], targets
 				}
 			}
-			return tooManyFunctionsMatched, nil
 		}
 	}
-	return wrongFunctionParameters, nil
+	return wrongFunctionParameters, targets
 }
 
 func generalBinaryParamsConvert(l, r types.T) (types.T, types.T, bool) {

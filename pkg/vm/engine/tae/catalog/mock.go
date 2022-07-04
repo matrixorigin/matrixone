@@ -93,6 +93,10 @@ type mockTableHandle struct {
 	entry   *TableEntry
 }
 
+func (h *mockTableHandle) GetDB() (handle.Database, error) {
+	return h.Txn.GetStore().GetDatabase(h.GetMeta().(*TableEntry).GetDB().GetName())
+}
+
 func newMockDBHandle(catalog *Catalog, txn txnif.AsyncTxn, entry *DBEntry) *mockDBHandle {
 	return &mockDBHandle{
 		TxnDatabase: &txnbase.TxnDatabase{
