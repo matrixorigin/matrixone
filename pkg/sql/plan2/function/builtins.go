@@ -642,6 +642,20 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_varchar, Fn: unary.Oct[int64],
 			},
+			{
+				Index:     8,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_float32},
+				ReturnTyp: types.T_varchar, Fn: unary.OctFloat[float32],
+			},
+			{
+				Index:     9,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_float64},
+				ReturnTyp: types.T_varchar, Fn: unary.OctFloat[float64],
+			},
 		},
 	},
 	REVERSE: {

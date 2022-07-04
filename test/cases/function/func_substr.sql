@@ -93,9 +93,9 @@ select lpad(c,0,'*') from t1;
 select lpad(c,1,'*') from t1;
 select lpad(c,5,'*') from t1;
 select lpad(c,10,'*') from t1;
--- @bvt:issue#3165
+
 select rpad(c,'1','*') from t1;
--- @bvt:issue
+
 
 -- @case
 -- @desc:test for rpad

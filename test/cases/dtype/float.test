@@ -78,9 +78,9 @@ select * from t1 where a>='17.6660';
 select a  mod 50 as result from t1;
 select cast(a as unsigned) mod 50 as result from t1;
 select cast(a+a as signed) from t1;
--- @bvt:issue#3367
+
 select cast(0-a as signed) from t1;
--- @bvt:issue
+
 drop table t1;
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a float(20),
