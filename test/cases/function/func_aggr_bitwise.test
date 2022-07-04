@@ -2,7 +2,6 @@
 
 SELECT bit_and(null), bit_or(null), bit_xor(null);
 
-
 #EXTREME VALUE
 -- @bvt:issue#3343
 CREATE TABLE t1 (a int, b int);
