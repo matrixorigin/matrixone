@@ -36,3 +36,22 @@ func FilterStore(stores []*Store, filters []IFilter) (candidates []*Store) {
 	}
 	return candidates
 }
+
+type ExcludedFilter struct {
+	excluded map[string]struct{}
+}
+
+func NewExcludedFilter(stores ...string) *ExcludedFilter {
+	e := ExcludedFilter{map[string]struct{}{}}
+	for _, store := range stores {
+		e.excluded[store] = struct{}{}
+	}
+	return &e
+}
+
+func (e *ExcludedFilter) Filter(store *Store) bool {
+	if _, ok := e.excluded[string(store.ID)]; ok {
+		return true
+	}
+	return false
+}
