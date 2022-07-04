@@ -58,6 +58,7 @@ const (
 type StateQuery struct{}
 type logShardIDQuery struct{ name string }
 type logShardIDQueryResult struct{ id uint64 }
+type ScheduleCommandQuery struct{ UUID string }
 
 type stateMachine struct {
 	replicaID uint64
@@ -298,11 +299,20 @@ func (s *stateMachine) handleShardIDQuery(name string) *logShardIDQueryResult {
 	return &logShardIDQueryResult{}
 }
 
+func (s *stateMachine) handleScheduleCommandQuery(uuid string) *pb.CommandBatch {
+	if batch, ok := s.state.ScheduleCommands[uuid]; ok {
+		return &batch
+	}
+	return &pb.CommandBatch{}
+}
+
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 	if q, ok := query.(*logShardIDQuery); ok {
 		return s.handleShardIDQuery(q.name), nil
 	} else if _, ok := query.(*StateQuery); ok {
 		return s.handleStateQuery(), nil
+	} else if q, ok := query.(*ScheduleCommandQuery); ok {
+		return s.handleScheduleCommandQuery(q.UUID), nil
 	}
 	panic("unknown query type")
 }

@@ -167,6 +167,7 @@ message Response {
   ErrorCode ErrorCode     = 3;
   string ErrorMessage     = 4;
   LogResponse LogResponse = 5 [(gogoproto.nullable) = false];
+  CommandBatch CommandBatch = 6 [(gogoproto.nullable) = false];
 };
 
 message LogRecordResponse {
@@ -289,8 +290,7 @@ message HAKeeperRSMState {
     uint64 Tick                                = 1;
     uint64 NextID                              = 2;
     uint64 Term                                = 3;
-    map<string, CommandBatch> ScheduleCommands = 4
-        [(gogoproto.nullable) = false];
+    map<string, CommandBatch> ScheduleCommands = 4 [(gogoproto.nullable) = false];
     map<string, uint64> LogShards = 5;
     DNState DNState               = 6 [(gogoproto.nullable) = false];
     LogState LogState             = 7 [(gogoproto.nullable) = false];

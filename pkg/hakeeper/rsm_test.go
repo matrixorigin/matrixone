@@ -295,3 +295,47 @@ func TestUpdateScheduleCommandsCmd(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, pb.CommandBatch{Commands: []pb.ScheduleCommand{sc2}}, l2)
 }
+
+func TestScheduleCommandQuery(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	sc1 := pb.ScheduleCommand{
+		UUID: "uuid1",
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
+				ShardID: 1,
+			},
+		},
+	}
+	sc2 := pb.ScheduleCommand{
+		UUID: "uuid2",
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
+				ShardID: 2,
+			},
+		},
+	}
+	sc3 := pb.ScheduleCommand{
+		UUID: "uuid1",
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
+				ShardID: 3,
+			},
+		},
+	}
+	b := pb.CommandBatch{
+		Term:     101,
+		Commands: []pb.ScheduleCommand{sc1, sc2, sc3},
+	}
+	cmd := GetUpdateCommandsCmd(b.Term, b.Commands)
+	_, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	require.NoError(t, err)
+	r, err := tsm1.Lookup(&ScheduleCommandQuery{UUID: "uuid1"})
+	require.NoError(t, err)
+	cb, ok := r.(*pb.CommandBatch)
+	require.True(t, ok)
+	assert.Equal(t, 2, len(cb.Commands))
+	b = pb.CommandBatch{
+		Commands: []pb.ScheduleCommand{sc1, sc3},
+	}
+	assert.Equal(t, b, *cb)
+}
