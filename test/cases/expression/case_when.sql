@@ -89,10 +89,8 @@ insert into t1 (a, b) values (1,4572794622775114594), (2,18196094287899841997),
 insert into t2 (c) values (1), (2), (3);
 select t1.a, (case t1.a when 0 then 0 else t1.b end) d from t1
   join t2 on t1.a=t2.c order by d;
--- @bvt:issue#3298
 select t1.a, (case t1.a when 0 then 0 else t1.b end) d from t1
   join t2 on t1.a=t2.c where b=11120436154190595086 order by d;
--- @bvt:issue
 drop table if exists small;
 drop table if exists big;
 CREATE TABLE small (id int not null,PRIMARY KEY (id));
@@ -121,10 +119,8 @@ SELECT CASE '1' WHEN '2' THEN 'BUG' ELSE 'nobug' END;
 drop table t1;
 CREATE TABLE t1(a int);
 insert into t1 values(1),(1),(2),(1),(3),(2),(1);
--- @bvt:issue#3298
 SELECT 1 FROM t1 WHERE a=1 AND CASE 1 WHEN a THEN 1 ELSE 1 END;
 DROP TABLE if exists t1;
--- @bvt:issue#
 
 -- @case
 -- @desc:test for case_when expression with count()
