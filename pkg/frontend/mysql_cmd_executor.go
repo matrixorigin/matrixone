@@ -53,6 +53,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 func onlyCreateStatementErrorInfo() string {
@@ -131,6 +133,28 @@ func (mce *MysqlCmdExecutor) SetRoutineManager(mgr *RoutineManager) {
 
 func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
+}
+
+func (mce *MysqlCmdExecutor) RecordStatement(ses *Session, sql string, beginIns time.Time) context.Context {
+	//trace.AddStatement
+	statementId := uint64(0)
+	trace.CollectStatement(
+		trace.Statement{
+			StatementID:          statementId,
+			SessionID:            0,
+			TransactionID:        0,
+			Account:              "account",
+			User:                 ses.GetUserName(),
+			Host:                 ses.Pu.SV.GetHost(),
+			Database:             ses.GetDatabaseName(),
+			Statement:            sql,
+			StatementFingerprint: "",
+			StatementTag:         "",
+			RequestAt:            beginIns,
+		},
+	)
+	return trace.ContextWithSpanContext(trace.DefaultContext(),
+		trace.SpanContextWithID(trace.TraceID(statementId)))
 }
 
 type outputQueue struct {
@@ -1650,6 +1674,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	proto := ses.GetMysqlProtocol()
 	ses.SetSql(sql)
 	ses.ep.Outfile = false
+
+	mce.RecordStatement(ses, sql, beginInstant)
 
 	proc := process.New(mheap.New(ses.GuestMmu))
 	proc.Id = mce.getNextProcessId()
