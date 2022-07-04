@@ -104,16 +104,7 @@ func (l *store) healthCheck() {
 		cmds := l.checker.Check(l.alloc,
 			state.ClusterInfo, state.DNState, state.LogState, state.Tick)
 		if len(cmds) > 0 {
-			ctx2, cancel2 := context.WithTimeout(context.Background(),
-				hakeeperCmdUploadTimeout)
-			defer cancel2()
-			b := &pb.CommandBatch{
-				Term:     term,
-				Commands: cmds,
-			}
-			data := MustMarshal(b)
-			session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
-			if _, err := l.propose(ctx2, session, data); err != nil {
+			if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
 				// TODO: check whether this is temp error
 				return
 			}

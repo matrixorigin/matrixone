@@ -236,6 +236,10 @@ func (s *Service) handle(req pb.Request,
 		return s.handleConnect(req), pb.LogRecordResponse{}
 	case pb.CONNECT_RO:
 		return s.handleConnectRO(req), pb.LogRecordResponse{}
+	case pb.LOG_HEARTBEAT:
+		return s.handleLogHeartbeat(req), pb.LogRecordResponse{}
+	case pb.DN_HEARTBEAT:
+		return s.handleDNHeartbeat(req), pb.LogRecordResponse{}
 	default:
 		panic("unknown method type")
 	}
@@ -318,5 +322,44 @@ func (s *Service) handleGetTruncatedIndex(req pb.Request) pb.Response {
 	} else {
 		resp.LogResponse.Index = index
 	}
+	return resp
+}
+
+// TODO: add tests to see what happens when request is sent to non hakeeper stores
+func (s *Service) handleLogHeartbeat(req pb.Request) pb.Response {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
+	defer cancel()
+	hb := req.LogHeartbeat
+	resp := getResponse(req)
+	if err := s.store.AddLogStoreHeartbeat(ctx, hb); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	if cb, err := s.store.GetCommandBatch(ctx, hb.UUID); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	} else {
+		resp.CommandBatch = cb
+	}
+
+	return resp
+}
+
+func (s *Service) handleDNHeartbeat(req pb.Request) pb.Response {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
+	defer cancel()
+	hb := req.DNHeartbeat
+	resp := getResponse(req)
+	if err := s.store.AddDNStoreHeartbeat(ctx, hb); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	if cb, err := s.store.GetCommandBatch(ctx, hb.UUID); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	} else {
+		resp.CommandBatch = cb
+	}
+
 	return resp
 }
