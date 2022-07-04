@@ -118,7 +118,8 @@ func TestBootstrap(t *testing.T) {
 			log: pb.LogState{
 				Stores: map[string]pb.LogStoreInfo{
 					"log-a": {Tick: 100},
-					"log-b": {Tick: 110}},
+					"log-b": {Tick: 110},
+				},
 			},
 
 			expectedNum:            0,
@@ -162,18 +163,9 @@ func TestCheckBootstrap(t *testing.T) {
 			},
 			log: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
-					1: {
-						ShardID:  1,
-						Replicas: map[uint64]string{1: "a", 2: "b"},
-					},
-					2: {
-						ShardID:  2,
-						Replicas: map[uint64]string{1: "a", 3: "c"},
-					},
-					3: {
-						ShardID:  3,
-						Replicas: map[uint64]string{2: "b", 3: "c"},
-					},
+					1: {ShardID: 1, Replicas: map[uint64]string{1: "a", 2: "b"}},
+					2: {ShardID: 2, Replicas: map[uint64]string{1: "a", 3: "c"}},
+					3: {ShardID: 3, Replicas: map[uint64]string{2: "b", 3: "c"}},
 				},
 			},
 			expected: true,
@@ -189,18 +181,9 @@ func TestCheckBootstrap(t *testing.T) {
 			},
 			log: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
-					1: {
-						ShardID:  1,
-						Replicas: map[uint64]string{1: "a"},
-					},
-					2: {
-						ShardID:  2,
-						Replicas: map[uint64]string{1: "a", 3: "c"},
-					},
-					3: {
-						ShardID:  3,
-						Replicas: map[uint64]string{2: "b", 3: "c"},
-					},
+					1: {ShardID: 1, Replicas: map[uint64]string{1: "a"}},
+					2: {ShardID: 2, Replicas: map[uint64]string{1: "a", 3: "c"}},
+					3: {ShardID: 3, Replicas: map[uint64]string{2: "b", 3: "c"}},
 				},
 			},
 			expected: false,
@@ -230,7 +213,7 @@ func TestSortLogStores(t *testing.T) {
 	}}
 
 	for _, c := range cases {
-		output := sortLogStoresByTick(c.logStores)
+		output := LogStoresSortedByTick(c.logStores)
 		assert.Equal(t, c.expected, output)
 	}
 }
@@ -250,7 +233,7 @@ func TestSortDNStores(t *testing.T) {
 	}}
 
 	for _, c := range cases {
-		output := sortDNStoresByTick(c.dnStores)
+		output := DNStoresSortedByTick(c.dnStores)
 		assert.Equal(t, c.expected, output)
 	}
 }

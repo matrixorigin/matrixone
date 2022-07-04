@@ -7,6 +7,24 @@ import (
 	"testing"
 )
 
+func TestIsFinish(t *testing.T) {
+	logState := pb.LogState{
+		Shards: map[uint64]pb.LogShardInfo{1: {
+			ShardID:  1,
+			Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+			Epoch:    1,
+		}},
+		Stores: nil,
+	}
+
+	dnState := pb.DNState{}
+
+	assert.False(t, AddLogService{StoreID: "d", ShardID: 1, ReplicaID: 4}.IsFinish(logState, dnState))
+	assert.True(t, AddLogService{StoreID: "c", ShardID: 1, ReplicaID: 3}.IsFinish(logState, dnState))
+	assert.False(t, RemoveLogService{StoreID: "c", ShardID: 1, ReplicaID: 3}.IsFinish(logState, dnState))
+	assert.True(t, RemoveLogService{StoreID: "d", ShardID: 1, ReplicaID: 4}.IsFinish(logState, dnState))
+}
+
 func TestAddLogService(t *testing.T) {
 	cases := []struct {
 		desc     string

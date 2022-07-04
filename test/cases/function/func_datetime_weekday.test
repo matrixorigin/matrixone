@@ -40,27 +40,25 @@ SELECT weekday(10) as weekday;
 SELECT weekday(1=1) as weekday;
 -- @bvt:issue
 SELECT weekday('2015-09.30') as weekday;
--- @bvt:issue#3593
+
 SELECT weekday('2015-0') as weekday;
--- @bvt:issue
+
 SELECT weekday('2015-09.30 12') as weekday;
 SELECT weekday('2015-09-26 08:09:22') AS weekday;
 -- @bvt:issue
 
 #EXTREME VALUE
--- @bvt:issue#3593
+
 select weekday("2020-08");
 select weekday("0000-00-00");
 select weekday("-0001-03-03");
 select weekday("10000-03-02");
 select weekday("2021-13-09");
 select weekday("2020-10-32");
--- @bvt:issue
+
 
 #算术操作
--- @bvt:issue#3597
 SELECT weekday("2015-09-10")- weekday("2016-04-24");
--- @bvt:issue
 SELECT weekday("2015-09-10")+ weekday("2016-04-24");
 SELECT weekday("2015-09-10")*weekday("2016-04-24");
 SELECT weekday("2015-09-10")/weekday("2016-04-24");

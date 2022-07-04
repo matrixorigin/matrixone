@@ -112,7 +112,7 @@ SELECT COUNT(i), i, COUNT(i)*i FROM t1 GROUP BY i;
 SELECT COUNT(i), (i+0), COUNT(i)*(i+0) FROM t1 GROUP BY i; 
 DROP TABLE t1;
 
--- @bvt:issue#3343
+
 CREATE TABLE t1 (a int, b int);
 select count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1;
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
@@ -126,7 +126,7 @@ select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b)
 insert into t1 values (3,1);
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
 drop table t1;
--- @bvt:issue
+
 
 
 #CREATE TABLE t1 (id int(10) unsigned NOT NULL,val enum('one','two','three') NOT NULL default 'one',PRIMARY KEY  (id));

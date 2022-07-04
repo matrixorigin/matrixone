@@ -21,26 +21,71 @@
 package operator
 
 import (
-	"testing"
-
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
+	"testing"
 )
 
-func TestOperatorStep(t *testing.T) {
+func TestHasStarted(t *testing.T) {
+	op := NewOperator("", 1, 1)
+	assert.Equal(t, true, op.HasStarted())
+}
+
+func TestCheckSuccess(t *testing.T) {
+	op := NewOperator("", 1, 1, AddLogService{}, RemoveLogService{})
+	assert.Equal(t, false, op.CheckSuccess())
+
+	op.currentStep = 1
+	assert.Equal(t, false, op.CheckSuccess())
+
+	op.currentStep = 2
+	assert.Equal(t, true, op.CheckSuccess())
+}
+
+func TestCheck(t *testing.T) {
+	op := NewOperator("", 1, 1,
+		AddLogService{"a", "d", 1, 4, 1},
+		RemoveLogService{"a", "c", 1, 3})
+
 	logState := pb.LogState{
 		Shards: map[uint64]pb.LogShardInfo{1: {
 			ShardID:  1,
 			Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-			Epoch:    1,
+			Epoch:    0,
 		}},
-		Stores: nil,
 	}
+	currentStep := op.Check(logState, pb.DNState{})
 
-	dnState := pb.DNState{}
+	assert.Equal(t,
+		AddLogService{"a", "d", 1, 4, 1},
+		currentStep)
+	assert.NotEqual(t, SUCCESS, op.Status())
 
-	assert.False(t, AddLogService{StoreID: "d", ShardID: 1, ReplicaID: 4}.IsFinish(logState, dnState))
-	assert.True(t, AddLogService{StoreID: "c", ShardID: 1, ReplicaID: 3}.IsFinish(logState, dnState))
-	assert.False(t, RemoveLogService{StoreID: "c", ShardID: 1, ReplicaID: 3}.IsFinish(logState, dnState))
-	assert.True(t, RemoveLogService{StoreID: "d", ShardID: 1, ReplicaID: 4}.IsFinish(logState, dnState))
+	logState = pb.LogState{
+		Shards: map[uint64]pb.LogShardInfo{1: {
+			ShardID:  1,
+			Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
+			Epoch:    0,
+		}},
+	}
+	currentStep = op.Check(logState, pb.DNState{})
+
+	assert.Equal(t,
+		RemoveLogService{"a", "c", 1, 3},
+		currentStep)
+	assert.NotEqual(t, SUCCESS, op.Status())
+
+	logState = pb.LogState{
+		Shards: map[uint64]pb.LogShardInfo{1: {
+			ShardID:  1,
+			Replicas: map[uint64]string{1: "a", 2: "b", 4: "d"},
+			Epoch:    0,
+		}},
+	}
+	currentStep = op.Check(logState, pb.DNState{})
+
+	assert.Equal(t, nil, currentStep)
+	assert.Equal(t, SUCCESS, op.Status())
+
+	assert.Equal(t, nil, op.Check(pb.LogState{}, pb.DNState{}))
 }

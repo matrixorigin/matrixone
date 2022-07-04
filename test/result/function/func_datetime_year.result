@@ -24,10 +24,10 @@ year
 null
 SELECT YEAR(1340124) as year;
 year
-134
+null
 SELECT YEAR(0.45133) as year;
 year
-0
+null
 SELECT YEAR(1=1) as year;
 year
 null

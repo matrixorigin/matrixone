@@ -16,6 +16,8 @@ extract(HOUR FROM "1999-01-02 10:11:12")
 select extract(SECOND FROM "1999-01-02 10:11:12");
 extract(SECOND FROM "1999-01-02 10:11:12")
 12
+select extract(MONTH FROM "2001-02-00");
+Can't cast '2001-02-00' from VARCHAR type to DATETIME type.
 SELECT EXTRACT(QUARTER FROM '2004-01-15') AS quarter;
 quarter
 1
@@ -98,27 +100,22 @@ extract(MINUTE FROM "10:11:12")
 select extract(MINUTE_SECOND FROM "10:11:12");
 extract(MINUTE_SECOND FROM "10:11:12")
 1112
-select extract(MONTH FROM "2001-02-00");
-extract(MONTH FROM "2001-02-00")
-2
+SELECT EXTRACT(HOUR FROM '100000:02:03');
+EXTRACT(HOUR FROM '100000:02:03')
+838
+select reverse(concat_ws(",",extract(year from 20090702)));
+Function 'extract' with parameters [VARCHAR BIGINT] will be implemented in future version.
 create table t1 (d date, dt datetime, t timestamp, c char(10));
 insert ignore into t1 values ("0000-00-00", "0000-00-00", "0000-00-00", "0000-00-00");
 You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 14 near 'ignore'; 
 select extract(MONTH FROM "0000-00-00"),extract(MONTH FROM d),extract(MONTH FROM dt),extract(MONTH FROM t),extract(MONTH FROM c) from t1;
 extract(MONTH FROM "0000-00-00")	extract(MONTH FROM d)	extract(MONTH FROM dt)	extract(MONTH FROM t)	extract(MONTH FROM c)
-null	0	0	0	null
 drop table t1;
-SELECT EXTRACT(HOUR FROM '100000:02:03');
-EXTRACT(HOUR FROM '100000:02:03')
-838
-select reverse(concat_ws(",",extract(year from 20090702)));
-reverse(concat_ws(",",extract(year from 20090702)))
-9002
 CREATE TABLE t1 (i1 INT,d1 DATETIME);
 INSERT INTO t1 values(1, "2023-04-23 08:23:21");
 SELECT i1, EXTRACT(HOUR FROM d1) FROM t1;
 i1	EXTRACT(HOUR FROM d1)
-1	8
+1	08
 DROP TABLE t1;
 CREATE TABLE t1
 (`date` date,
@@ -161,5 +158,5 @@ SELECT distinct extracted_week from t1;
 extracted_week
 52
 select date from t1 having extract(day FROM date)=1;
-column "date" must appear in the GROUP BY clause or be used in an aggregate function
+column "t1.date" must appear in the GROUP BY clause or be used in an aggregate function
 drop table t1;

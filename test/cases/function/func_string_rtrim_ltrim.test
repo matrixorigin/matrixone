@@ -1,4 +1,4 @@
-#SELECT 
+#SELECT
 SELECT RTRIM('barbar   ');
 SELECT LTRIM('  barbar');
 SELECT '    geeksforgeeks'  As OriginalString,
@@ -166,7 +166,7 @@ drop table t1;
 drop table t2;
 
 #EXTREME VALUE
--- @bvt:issue#3500
+-- @bvt:issue#3716
 SELECT RTRIM(space(100000000)+"123");
 SELECT LTRIM("123"+space(100000000));
 -- @bvt:issue

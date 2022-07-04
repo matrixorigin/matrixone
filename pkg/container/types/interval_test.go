@@ -105,17 +105,18 @@ func TestConv(t *testing.T) {
 
 	val, vt, err = NormalizeInterval("", Hour_Minute)
 	require.Equal(t, val, int64(0), "HM error")
-	require.Equal(t, vt, Minute, "HM error")
-	require.Equal(t, err, nil, "HM error")
+	require.Equal(t, vt, IntervalTypeInvalid, "HM error")
+	require.NotEqual(t, err, nil, "HM error")
 
 	val, vt, err = NormalizeInterval("foo", Hour_Minute)
 	require.Equal(t, val, int64(0), "HM error")
-	require.Equal(t, vt, Minute, "HM error")
-	require.Equal(t, err, nil, "HM error")
+	require.Equal(t, vt, IntervalTypeInvalid, "HM error")
+	require.NotEqual(t, err, nil, "HM error")
 
 	val, vt, err = NormalizeInterval("1 01:02:03.4", Day_MicroSecond)
-	val2, vt2, _ := NormalizeInterval("1 01:02:03", Day_MicroSecond)
+	val2, vt2, _ := NormalizeInterval("1 01:02:03.0", Day_MicroSecond)
 	val3, vt3, _ := NormalizeInterval("0 00:00:00.4", Day_MicroSecond)
+
 	require.Equal(t, err, nil, "HM error")
 	require.Equal(t, vt, MicroSecond, "D_US error")
 	require.Equal(t, vt, vt2, "D_US error")

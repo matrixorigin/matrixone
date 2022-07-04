@@ -181,7 +181,7 @@ func TestFixExpiredStore(t *testing.T) {
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
-								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Replicas: map[uint64]string{2: "b", 3: "c"},
 								Epoch:    1,
 								LeaderID: 1},
 							ReplicaID: 2,
@@ -192,7 +192,7 @@ func TestFixExpiredStore(t *testing.T) {
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
-								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Replicas: map[uint64]string{2: "b", 3: "c"},
 								Epoch:    1,
 								LeaderID: 1},
 							ReplicaID: 3,
@@ -280,9 +280,9 @@ func TestFixExpiredStore(t *testing.T) {
 	}
 
 	for i, c := range cases {
+		fmt.Printf("case %v: %s\n", i, c.desc)
 		coordinator := NewCoordinator()
 		output := coordinator.Check(c.idAlloc, c.cluster, c.dn, c.log, c.currentTick)
-		fmt.Printf("case %v: %s\n", i, c.desc)
 		assert.Equal(t, c.expected, output)
 	}
 }

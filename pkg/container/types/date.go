@@ -55,13 +55,13 @@ func init() {
 }
 
 var (
-	ErrIncorrectDateValue = errors.New(errno.DataException, "Incorrect date value")
+	ErrIncorrectDateValue = errors.New(errno.DataException, "Incorrect date format")
 
 	leapYearMonthDays = []uint8{31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 	flatYearMonthDays = []uint8{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 
 	//regDate = regexp.MustCompile(`^(?P<year>[0-9]+)[-](?P<month>[0-9]+)[-](?P<day>[0-9]+)$`)
-	errInvalidDateAddInterval = errors.New(errno.DataException, "Invalid date result")
+	ErrInvalidDateAddInterval = errors.New(errno.DataException, "Beyond the range of date")
 )
 
 const (
