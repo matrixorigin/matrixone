@@ -2482,6 +2482,9 @@ func TestCompactBlk(t *testing.T) {
 	filter = handle.NewEQFilter(v)
 	_, _, err = rel.GetByFilter(filter)
 	assert.NotNil(t, err)
+
+	tae.restart()
+	assert.Equal(t, int64(2), rel.Rows())
 }
 
 func TestDelete3(t *testing.T) {
