@@ -131,7 +131,7 @@ func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
 	return db.Append(id, data)
 }
 
-func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32) (err error) {
+func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
@@ -139,7 +139,7 @@ func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32
 	// if table.IsDeleted() {
 	// 	return txnbase.ErrNotFound
 	// }
-	return db.RangeDelete(id, start, end)
+	return db.RangeDelete(id, start, end, dt)
 }
 
 func (store *txnStore) GetByFilter(dbId, tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {

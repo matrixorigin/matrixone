@@ -361,12 +361,10 @@ func main() {
 	} else if engineName == "tae" {
 		fmt.Println("Initialize the TAE engine ...")
 		tae = initTae()
-		if config.GlobalSystemVariables.GetNeedInitdb() {
-			err := frontend.InitDB(tae.eng)
-			if err != nil {
-				logutil.Infof("Initialize catalog failed. error:%v", err)
-				os.Exit(InitCatalogExit)
-			}
+		err := frontend.InitDB(tae.eng)
+		if err != nil {
+			logutil.Infof("Initialize catalog failed. error:%v", err)
+			os.Exit(InitCatalogExit)
 		}
 		fmt.Println("Initialize the TAE engine Done")
 	} else {

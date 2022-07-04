@@ -168,8 +168,8 @@ func (blk *txnBlock) getDBID() uint64 {
 	return blk.entry.GetSegment().GetTable().GetDB().ID
 }
 
-func (blk *txnBlock) RangeDelete(start, end uint32) (err error) {
-	return blk.Txn.GetStore().RangeDelete(blk.getDBID(), blk.entry.AsCommonID(), start, end)
+func (blk *txnBlock) RangeDelete(start, end uint32, dt handle.DeleteType) (err error) {
+	return blk.Txn.GetStore().RangeDelete(blk.getDBID(), blk.entry.AsCommonID(), start, end, dt)
 }
 
 func (blk *txnBlock) Update(row uint32, col uint16, v any) (err error) {
