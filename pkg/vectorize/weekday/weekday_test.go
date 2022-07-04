@@ -34,12 +34,12 @@ func parseDatetime(s string) types.Datetime {
 func TestDateToWeekday(t *testing.T) {
 	type args struct {
 		xs []types.Date
-		rs []uint8
+		rs []int64
 	}
 	tests := []struct {
 		name string
 		args args
-		want []uint8
+		want []int64
 	}{
 		{
 			name: "normal date test",
@@ -54,9 +54,9 @@ func TestDateToWeekday(t *testing.T) {
 					parseDate("2022-01-07"),
 					parseDate("2022-01-08"),
 				},
-				rs: make([]uint8, 8),
+				rs: make([]int64, 8),
 			},
-			want: []uint8{5, 6, 0, 1, 2, 3, 4, 5},
+			want: []int64{5, 6, 0, 1, 2, 3, 4, 5},
 		},
 	}
 
@@ -72,12 +72,12 @@ func TestDateToWeekday(t *testing.T) {
 func TestDatetimeToWeekday(t *testing.T) {
 	type args struct {
 		xs []types.Datetime
-		rs []uint8
+		rs []int64
 	}
 	tests := []struct {
 		name string
 		args args
-		want []uint8
+		want []int64
 	}{
 		{
 			name: "normal datetime test",
@@ -92,9 +92,9 @@ func TestDatetimeToWeekday(t *testing.T) {
 					parseDatetime("2022-01-07 22:23:00"),
 					parseDatetime("2022-01-08 22:23:00"),
 				},
-				rs: make([]uint8, 8),
+				rs: make([]int64, 8),
 			},
-			want: []uint8{5, 6, 0, 1, 2, 3, 4, 5},
+			want: []int64{5, 6, 0, 1, 2, 3, 4, 5},
 		},
 	}
 

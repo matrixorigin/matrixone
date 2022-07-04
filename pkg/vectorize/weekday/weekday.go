@@ -18,8 +18,8 @@ import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 // vectorize weekday function
 var (
-	DateToWeekday     func([]types.Date, []uint8) []uint8
-	DatetimeToWeekday func([]types.Datetime, []uint8) []uint8
+	DateToWeekday     func([]types.Date, []int64) []int64
+	DatetimeToWeekday func([]types.Datetime, []int64) []int64
 )
 
 func init() {
@@ -28,18 +28,18 @@ func init() {
 }
 
 // Returns the weekday index for date (0 = Monday, 1 = Tuesday, … 6 = Sunday)
-func weekdayToIndex(weekday types.Weekday) uint8 {
-	return uint8((weekday + 6) % 7)
+func weekdayToIndex(weekday types.Weekday) int64 {
+	return int64((weekday + 6) % 7)
 }
 
-func dateToWeekday(xs []types.Date, rs []uint8) []uint8 {
+func dateToWeekday(xs []types.Date, rs []int64) []int64 {
 	for i, x := range xs {
 		rs[i] = weekdayToIndex(x.DayOfWeek())
 	}
 	return rs
 }
 
-func datetimeToWeekday(xs []types.Datetime, rs []uint8) []uint8 {
+func datetimeToWeekday(xs []types.Datetime, rs []int64) []int64 {
 	for i, x := range xs {
 		rs[i] = weekdayToIndex(x.ToDate().DayOfWeek())
 	}

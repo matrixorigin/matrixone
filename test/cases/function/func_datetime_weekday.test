@@ -58,9 +58,7 @@ select weekday("2020-10-32");
 -- @bvt:issue
 
 #算术操作
--- @bvt:issue#3597
 SELECT weekday("2015-09-10")- weekday("2016-04-24");
--- @bvt:issue
 SELECT weekday("2015-09-10")+ weekday("2016-04-24");
 SELECT weekday("2015-09-10")*weekday("2016-04-24");
 SELECT weekday("2015-09-10")/weekday("2016-04-24");
