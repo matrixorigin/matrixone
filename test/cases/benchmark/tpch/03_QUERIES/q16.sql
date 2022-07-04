@@ -1,4 +1,3 @@
--- @bvt:issue#3233
 use tpch;
 select
     p_brand,
@@ -31,4 +30,3 @@ order by
     p_type,
     p_size
 ;
--- @bvt:issue

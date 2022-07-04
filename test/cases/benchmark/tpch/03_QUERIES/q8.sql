@@ -1,4 +1,3 @@
--- @bvt:issue#3233
 use tpch;
 select
     o_year,
@@ -38,4 +37,3 @@ group by
 order by
     o_year
 ;
--- @bvt:issue

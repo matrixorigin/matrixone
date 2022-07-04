@@ -1,4 +1,3 @@
--- @bvt:issue#3233
 use tpch;
 select
     cntrycode,
@@ -38,4 +37,3 @@ group by
 order by
     cntrycode
 ;
--- @bvt:issue

@@ -1,4 +1,3 @@
--- @bvt:issue#3233
 use tpch;
 select
     sum(l_extendedprice) / 7.0 as avg_yearly
@@ -17,4 +16,3 @@ where
         where
             l_partkey = p_partkey
     );
--- @bvt:issue
