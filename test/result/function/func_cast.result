@@ -20,7 +20,7 @@ cast(NULL as signed)
 null
 select cast(1/2 as signed);
 cast(1 / 2 as signed)
-0
+1
 select cast("2001-1-1" as DATE), cast("2001-1-1" as DATETIME);
 cast("2001-1-1" as DATE)	cast("2001-1-1" as DATETIME)
 2001-01-01	2001-01-01 00:00:00
