@@ -289,6 +289,7 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 						startPos = l0freePos
 						nextPos = l0freePos + 1
 						allocatedPage = 0
+						startIdx = idx
 					} else {
 						nextPos++
 						allocatedPage++
