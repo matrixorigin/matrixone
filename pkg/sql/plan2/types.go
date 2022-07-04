@@ -217,8 +217,3 @@ type Binding struct {
 	refCnts     []uint
 	colIdByName map[string]int32
 }
-
-// Used to collect used columns during column clipping
-type ColumnCollect struct {
-	posMap map[[2]int32]int
-}

@@ -69,7 +69,7 @@ type Block interface {
 	GetBufMgr() base.INodeManager
 
 	MakeAppender() (BlockAppender, error)
-	RangeDelete(txn txnif.AsyncTxn, start, end uint32) (txnif.DeleteNode, error)
+	RangeDelete(txn txnif.AsyncTxn, start, end uint32, dt handle.DeleteType) (txnif.DeleteNode, error)
 	Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v any) (txnif.UpdateNode, error)
 
 	GetTotalChanges() int
