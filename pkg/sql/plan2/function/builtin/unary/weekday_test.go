@@ -25,7 +25,7 @@ func TestWeekday(t *testing.T) {
 	convey.Convey("WeekDayDateCase", t, func() {
 		type kase struct {
 			s    string
-			want uint8
+			want int64
 		}
 
 		kases := []kase{
@@ -44,14 +44,14 @@ func TestWeekday(t *testing.T) {
 		}
 
 		var inStrs []string
-		var wantUint8 []uint8
+		var wantInt64 []int64
 		for _, k := range kases {
 			inStrs = append(inStrs, k.s)
-			wantUint8 = append(wantUint8, k.want)
+			wantInt64 = append(wantInt64, k.want)
 		}
 
 		inVector := testutil.MakeDateVector(inStrs, nil)
-		wantVec := testutil.MakeUint8Vector(wantUint8, nil)
+		wantVec := testutil.MakeInt64Vector(wantInt64, nil)
 		proc := testutil.NewProc()
 		res, err := DateToWeekday([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
@@ -62,7 +62,7 @@ func TestWeekday(t *testing.T) {
 	convey.Convey("ScalarWeekDayDateCase", t, func() {
 		type kase struct {
 			s    string
-			want uint8
+			want int64
 		}
 
 		k := kase{
@@ -71,7 +71,7 @@ func TestWeekday(t *testing.T) {
 		}
 
 		inVector := testutil.MakeScalarDate(k.s, 10)
-		wantVec := testutil.MakeScalarUint8(k.want, 10)
+		wantVec := testutil.MakeScalarInt64(k.want, 10)
 		proc := testutil.NewProc()
 		res, err := DateToWeekday([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
@@ -82,7 +82,7 @@ func TestWeekday(t *testing.T) {
 	convey.Convey("WeekDayDateTimeCase", t, func() {
 		type kase struct {
 			s    string
-			want uint8
+			want int64
 		}
 
 		kases := []kase{
@@ -101,14 +101,14 @@ func TestWeekday(t *testing.T) {
 		}
 
 		var inStrs []string
-		var wantUint8 []uint8
+		var wantInt64 []int64
 		for _, k := range kases {
 			inStrs = append(inStrs, k.s)
-			wantUint8 = append(wantUint8, k.want)
+			wantInt64 = append(wantInt64, k.want)
 		}
 
 		inVector := testutil.MakeDateTimeVector(inStrs, nil)
-		wantVec := testutil.MakeUint8Vector(wantUint8, nil)
+		wantVec := testutil.MakeInt64Vector(wantInt64, nil)
 		proc := testutil.NewProc()
 		res, err := DatetimeToWeekday([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
@@ -119,7 +119,7 @@ func TestWeekday(t *testing.T) {
 	convey.Convey("ScalarWeekDayDateTimeCase", t, func() {
 		type kase struct {
 			s    string
-			want uint8
+			want int64
 		}
 
 		k := kase{
@@ -128,7 +128,7 @@ func TestWeekday(t *testing.T) {
 		}
 
 		inVector := testutil.MakeScalarDateTime(k.s, 10)
-		wantVec := testutil.MakeScalarUint8(k.want, 10)
+		wantVec := testutil.MakeScalarInt64(k.want, 10)
 		proc := testutil.NewProc()
 		res, err := DatetimeToWeekday([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
