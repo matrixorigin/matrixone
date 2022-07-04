@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -150,8 +151,8 @@ func (chain *DeleteChain) RemoveNodeLocked(node txnif.DeleteNode) {
 
 func (chain *DeleteChain) DepthLocked() int { return chain.Link.Depth() }
 
-func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn) txnif.DeleteNode {
-	node := NewDeleteNode(txn)
+func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn, deleteType handle.DeleteType) txnif.DeleteNode {
+	node := NewDeleteNode(txn, deleteType)
 	node.AttachTo(chain)
 	return node
 }
