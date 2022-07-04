@@ -867,7 +867,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			args[0].Typ = makePlan2Type(&returnType)
 		}
 	}
-	if argsCastType != nil {
+	if len(argsCastType) != 0 {
 		if len(argsCastType) != argsLength {
 			return nil, errors.New("", "cast types length not match args length")
 		}
