@@ -179,120 +179,132 @@ message LogRecordResponse {
 // HAKeeper related pb
 //
 
+enum HAKeeperState {
+  HAKeeperCreated = 0;
+  HAKeeperBootstrapping = 1;
+  HAKeeperBootstrapFailed = 2;
+  HAKeeperRunning = 3;
+}
 
 // Replica of the shard
 message Replica {
-    // UUID which store the Replica is located in
-    string UUID = 1;
+  // UUID which store the Replica is located in
+  string UUID = 1;
 
-    uint64 ShardID   = 2;
-    uint64 ReplicaID = 3;
-    uint64 Epoch     = 4;
+  uint64 ShardID   = 2;
+  uint64 ReplicaID = 3;
+  uint64 Epoch     = 4;
 }
 
 // ConfigChangeType indicates config change command type.
 enum ConfigChangeType {
-    AddReplica    = 0;
-    RemoveReplica = 1;
-    StartReplica  = 2;
-    StopReplica   = 3;
+  AddReplica    = 0;
+  RemoveReplica = 1;
+  StartReplica  = 2;
+  StopReplica   = 3;
 }
 
 // ConfigChange is the detail of a config change.
 message ConfigChange {
-    Replica Replica             = 1 [(gogoproto.nullable) = false];
-    ConfigChangeType ChangeType = 2;
+  Replica Replica             = 1 [(gogoproto.nullable) = false];
+  ConfigChangeType ChangeType = 2;
 
-    // only used for bootstrap
-    map<uint64, string> InitialMembers = 3;
+  // only used for bootstrap
+  map<uint64, string> InitialMembers = 3;
 }
 
 // ShutdownStore would stop store.
 message ShutdownStore {
-    string StoreID = 1;
+  string StoreID = 1;
 }
 
 // ServiceType specifies type of service
 enum ServiceType {
-    LogService = 0;
-    DnService  = 1;
+  LogService = 0;
+  DnService  = 1;
 }
 
 // ScheduleCommand contains a shard schedule command.
 message ScheduleCommand {
-    // UUID which store the ScheduleCommand is sent to
-    string UUID = 1;
+  // UUID which store the ScheduleCommand is sent to
+  string UUID = 1;
 
-    ConfigChange ConfigChange   = 2;
-    ServiceType ServiceType     = 3;
-    ShutdownStore ShutdownStore = 4;
+  ConfigChange ConfigChange   = 2;
+  ServiceType ServiceType     = 3;
+  ShutdownStore ShutdownStore = 4;
 }
 
 message CommandBatch {
-    uint64 Term                       = 1;
-    repeated ScheduleCommand Commands = 2 [(gogoproto.nullable) = false];
+  uint64 Term                       = 1;
+  repeated ScheduleCommand Commands = 2 [(gogoproto.nullable) = false];
 }
 
 // DNStoreInfo contins information on a list of shards.
 message DNStoreInfo {
-    uint64 Tick                 = 1;
-    repeated DNShardInfo Shards = 2 [(gogoproto.nullable) = false];
+  uint64 Tick                 = 1;
+  repeated DNShardInfo Shards = 2 [(gogoproto.nullable) = false];
 }
 
 // DNState contains all DN details known to the HAKeeper.
 message DNState {
-    // Stores is keyed by DN store UUID, it contains details found on each DN
-    // store. Each DNStoreInfo reflects what was last reported by each DN store.
-    map<string, DNStoreInfo> Stores = 1 [(gogoproto.nullable) = false];
+  // Stores is keyed by DN store UUID, it contains details found on each DN
+  // store. Each DNStoreInfo reflects what was last reported by each DN store.
+  map<string, DNStoreInfo> Stores = 1 [(gogoproto.nullable) = false];
 }
 
 // ClusterInfo provides a global view of all shards in the cluster. It
 // describes the logical sharding of the system, rather than physical
 // distribution of all replicas that belong to those shards.
 message ClusterInfo {
-    repeated metadata.DNShardRecord DNShards = 1 [(gogoproto.nullable) = false];
-    repeated metadata.LogShardRecord LogShards = 2
-        [(gogoproto.nullable) = false];
+  repeated metadata.DNShardRecord DNShards = 1 [(gogoproto.nullable) = false];
+  repeated metadata.LogShardRecord LogShards = 2 [(gogoproto.nullable) = false];
+}
+
+message InitialClusterRequest {
+  uint64 NumOfLogShards   = 1;
+  uint64 NumOfDNShards    = 2;
+  uint64 NumOfLogReplicas = 3;
 }
 
 // LogStoreInfo contains information of all replicas found on a Log store.
 message LogStoreInfo {
-    uint64 Tick                                 = 1;
-    string RaftAddress                          = 2;
-    string ServiceAddress                       = 3;
-    string GossipAddress                        = 4;
-    repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
+  uint64 Tick                                 = 1;
+  string RaftAddress                          = 2;
+  string ServiceAddress                       = 3;
+  string GossipAddress                        = 4;
+  repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
 }
 
 message LogState {
-    // Shards is keyed by ShardID, it contains details aggregated from all Log
-    // stores. Each pb.LogShardInfo here contains data aggregated from
-    // different replicas and thus reflect a more accurate description on each
-    // shard.
-    map<uint64, LogShardInfo> Shards = 1 [(gogoproto.nullable) = false];
-    // Stores is keyed by log store UUID, it contains details found on each
-    // store. Each LogStoreInfo here reflects what was last reported by each Log
-    // store.
-    map<string, LogStoreInfo> Stores = 2 [(gogoproto.nullable) = false];
+  // Shards is keyed by ShardID, it contains details aggregated from all Log
+  // stores. Each pb.LogShardInfo here contains data aggregated from
+  // different replicas and thus reflect a more accurate description on each
+  // shard.
+  map<uint64, LogShardInfo> Shards = 1 [(gogoproto.nullable) = false];
+  // Stores is keyed by log store UUID, it contains details found on each
+  // store. Each LogStoreInfo here reflects what was last reported by each Log
+  // store.
+  map<string, LogStoreInfo> Stores = 2 [(gogoproto.nullable) = false];
 }
 
-// HAKeeperState contains all HAKeeper state required for making schedule
+// CheckerState contains all HAKeeper state required for making schedule
 // commands.
-message HAKeeperState {
-    uint64 Tick             = 1;
-    ClusterInfo ClusterInfo = 2 [(gogoproto.nullable) = false];
-    DNState DNState         = 3 [(gogoproto.nullable) = false];
-    LogState LogState       = 4 [(gogoproto.nullable) = false];
+message CheckerState {
+  uint64 Tick             = 1;
+  ClusterInfo ClusterInfo = 2 [(gogoproto.nullable) = false];
+  DNState DNState         = 3 [(gogoproto.nullable) = false];
+  LogState LogState       = 4 [(gogoproto.nullable) = false];
 }
 
 // HAKeeperRSMState contains state maintained by HAKeeper's RSM.
 message HAKeeperRSMState {
-    uint64 Tick                                = 1;
-    uint64 NextID                              = 2;
-    uint64 Term                                = 3;
-    map<string, CommandBatch> ScheduleCommands = 4 [(gogoproto.nullable) = false];
-    map<string, uint64> LogShards = 5;
-    DNState DNState               = 6 [(gogoproto.nullable) = false];
-    LogState LogState             = 7 [(gogoproto.nullable) = false];
-    ClusterInfo ClusterInfo       = 8 [(gogoproto.nullable) = false];
+  uint64 Tick                                = 1;
+  uint64 NextID                              = 2;
+  uint64 Term                                = 3;
+  HAKeeperState State                        = 4;
+  map<string, CommandBatch> ScheduleCommands = 5 [(gogoproto.nullable) = false];
+  map<string, uint64> LogShards = 6;
+  DNState DNState               = 7 [(gogoproto.nullable) = false];
+  LogState LogState             = 8 [(gogoproto.nullable) = false];
+  ClusterInfo ClusterInfo       = 9 [(gogoproto.nullable) = false];
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 func TestAssignID(t *testing.T) {
@@ -338,4 +339,90 @@ func TestScheduleCommandQuery(t *testing.T) {
 		Commands: []pb.ScheduleCommand{sc1, sc3},
 	}
 	assert.Equal(t, b, *cb)
+}
+
+func TestInitialState(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	assert.Equal(t, pb.HAKeeperCreated, rsm.state.State)
+}
+
+func TestSetState(t *testing.T) {
+	tests := []struct {
+		initialState pb.HAKeeperState
+		newState     pb.HAKeeperState
+		result       pb.HAKeeperState
+	}{
+		{pb.HAKeeperCreated, pb.HAKeeperBootstrapping, pb.HAKeeperCreated},
+		{pb.HAKeeperCreated, pb.HAKeeperBootstrapFailed, pb.HAKeeperCreated},
+		{pb.HAKeeperCreated, pb.HAKeeperRunning, pb.HAKeeperCreated},
+		{pb.HAKeeperCreated, pb.HAKeeperCreated, pb.HAKeeperCreated},
+		{pb.HAKeeperBootstrapping, pb.HAKeeperCreated, pb.HAKeeperBootstrapping},
+		{pb.HAKeeperBootstrapping, pb.HAKeeperBootstrapFailed, pb.HAKeeperBootstrapFailed},
+		{pb.HAKeeperBootstrapping, pb.HAKeeperRunning, pb.HAKeeperRunning},
+		{pb.HAKeeperBootstrapping, pb.HAKeeperBootstrapping, pb.HAKeeperBootstrapping},
+		{pb.HAKeeperBootstrapFailed, pb.HAKeeperBootstrapFailed, pb.HAKeeperBootstrapFailed},
+		{pb.HAKeeperBootstrapFailed, pb.HAKeeperCreated, pb.HAKeeperBootstrapFailed},
+		{pb.HAKeeperBootstrapFailed, pb.HAKeeperBootstrapping, pb.HAKeeperBootstrapFailed},
+		{pb.HAKeeperBootstrapFailed, pb.HAKeeperRunning, pb.HAKeeperBootstrapFailed},
+		{pb.HAKeeperRunning, pb.HAKeeperRunning, pb.HAKeeperRunning},
+		{pb.HAKeeperRunning, pb.HAKeeperCreated, pb.HAKeeperRunning},
+		{pb.HAKeeperRunning, pb.HAKeeperBootstrapping, pb.HAKeeperRunning},
+		{pb.HAKeeperRunning, pb.HAKeeperBootstrapFailed, pb.HAKeeperRunning},
+	}
+
+	for _, tt := range tests {
+		rsm := stateMachine{
+			state: pb.HAKeeperRSMState{
+				State: tt.initialState,
+			},
+		}
+		cmd := GetSetStateCmd(tt.newState)
+		rsm.Update(sm.Entry{Cmd: cmd})
+		assert.Equal(t, tt.result, rsm.state.State)
+	}
+}
+
+func TestInitialClusterRequestCmd(t *testing.T) {
+	cmd := GetInitialClusterRequestCmd(2, 2, 3)
+	assert.True(t, isInitialClusterRequestCmd(cmd))
+	assert.False(t, isInitialClusterRequestCmd(GetTickCmd()))
+	req := parseInitialClusterRequestCmd(cmd)
+	assert.Equal(t, uint64(2), req.NumOfLogShards)
+	assert.Equal(t, uint64(2), req.NumOfDNShards)
+	assert.Equal(t, uint64(3), req.NumOfLogReplicas)
+}
+
+func TestHandleInitialClusterRequestCmd(t *testing.T) {
+	cmd := GetInitialClusterRequestCmd(2, 2, 3)
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	result, err := rsm.Update(sm.Entry{Cmd: cmd})
+	require.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 0}, result)
+
+	expected := pb.ClusterInfo{
+		LogShards: []metadata.LogShardRecord{
+			{
+				ShardID:          1,
+				NumberOfReplicas: 3,
+			},
+			{
+				ShardID:          3,
+				NumberOfReplicas: 3,
+			},
+		},
+		DNShards: []metadata.DNShardRecord{
+			{
+				ShardID:    2,
+				LogShardID: 1,
+			},
+			{
+				ShardID:    4,
+				LogShardID: 3,
+			},
+		},
+	}
+
+	assert.Equal(t, expected, rsm.state.ClusterInfo)
+	assert.Equal(t, pb.HAKeeperBootstrapping, rsm.state.State)
+	assert.Equal(t, uint64(5), rsm.state.NextID)
 }
