@@ -176,24 +176,25 @@ func TestRpadUint(t *testing.T) {
 }
 
 func TestTypes(t *testing.T) {
-	isConst := []bool{false, false, false}
+	isConst := []bool{false, true, false}
 
 	// test sizes with a non-numerical type
 	sizes := getBytes("aaasdasdsada")
 	padstrs := getBytes("a", "a")
 	strs := getBytes("", "test")
 	oriNsps := []*nulls.Nulls{new(nulls.Nulls), new(nulls.Nulls), new(nulls.Nulls)}
-	nulls.Add(oriNsps[0], 0) // the first str is NULL
+	// nulls.Add(oriNsps[0], 0) // the first str is NULL
 
 	expectedNsp := new(nulls.Nulls)
-	nulls.Add(expectedNsp, 0)
+	// nulls.Add(expectedNsp, 0)
 	expectedStrs := getBytes("", "")
 
-	actualStrs, actualNsp, _ := Rpad(len(sizes.Lengths), strs, sizes, padstrs, isConst, oriNsps)
+	actualStrs, actualNsp, _ := Rpad(len(strs.Lengths), strs, sizes, padstrs, isConst, oriNsps)
 	require.Equal(t, expectedStrs, actualStrs)
 	require.Equal(t, expectedNsp, actualNsp)
 
 	// test padstrs with a numerical type
+	isConst = []bool{false, false, false}
 	sizes2 := []int64{-1, 2, 10}
 	padstrs2 := []int32{8, 9, 10}
 	strs2 := getBytes("test", "test", "test")

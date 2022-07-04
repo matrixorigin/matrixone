@@ -1,8 +1,8 @@
 #SELECT, extreme value
 
--- @bvt:issue#3273
+
 select -(0-3),round(-(0-3)), round(9999999999999999999);
--- @bvt:issue
+
 
 select round(5.5),round(-5.5);
 select round(5.64,1),round(5.64,2),round(5.64,-1),round(5.64,-2);
@@ -17,8 +17,9 @@ select round(5.64,1),round(5.64,2),round(5.64,-1),round(5.64,-2);
 select round(111,-10);
 select round(-5000111000111000155,-1);
 
--- @bvt:issue#3273
+
 select round(15000111000111000155,-1);
+-- @bvt:issue#3273
 select round(cast(-2 as unsigned), 1), round(18446744073709551614, 1), round(-2, 1);
 select round(4, cast(-2 as unsigned)), round(4, 18446744073709551614), round(4, -2);
 select round(1.5, -4294967296), round(1.5, 4294967296);
@@ -52,9 +53,9 @@ DROP TABLE t1;
 #LEAST函数0.5MO暂时不支持
 #SELECT ROUND(LEAST(15, -4939092, 0.2704), STDDEV('a'));
 
--- @bvt:issue#3611
+
 SELECT ROUND(sin(0.45), cos(0.8));
--- @bvt:issue
+
 
 #extreme value
 

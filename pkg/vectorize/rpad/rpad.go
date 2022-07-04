@@ -15,19 +15,23 @@
 package rpad
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/typecast"
 )
 
 var (
-	Rpad func(int, *types.Bytes, interface{}, interface{}, []bool, []*nulls.Nulls) (*types.Bytes, *nulls.Nulls, error)
+	Rpad   func(int, *types.Bytes, interface{}, interface{}, []bool, []*nulls.Nulls) (*types.Bytes, *nulls.Nulls, error)
+	MaxPad int64
 )
 
 const UINT16_MAX = ^uint16(0)
 
 func init() {
 	Rpad = rpad
+	MaxPad = int64(16 * 1024 * 1024)
 }
 
 // rpad returns a *types.Bytes containing the padded strings and a corresponding bitmap *nulls.Nulls.
@@ -92,8 +96,9 @@ func rpad(rowCount int, strs *types.Bytes, sizes interface{}, pads interface{}, 
 		result, nsp = rpadInt64(rowCount, strs, sizesInt64, padstrs, isConst, oriNsp)
 	case []float64:
 		sizesInt64 := make([]int64, len(sz))
-		sizesInt64, err2 = typecast.Float64ToInt64(sz, sizesInt64)
-		result, nsp = rpadInt64(rowCount, strs, sizesInt64, padstrs, isConst, oriNsp)
+		isEmptyStringOrNull := make([]int, len(sz))
+		sizesInt64, err2 = typecast.Float64ToInt64(sz, sizesInt64, isEmptyStringOrNull)
+		result, nsp = rpadInt64(rowCount, strs, sizesInt64, padstrs, isConst, oriNsp, isEmptyStringOrNull)
 	case []float32:
 		sizesInt64 := make([]int64, len(sz))
 		sizesInt64, err2 = typecast.Float32ToInt64(sz, sizesInt64)
@@ -112,6 +117,15 @@ func rpad(rowCount int, strs *types.Bytes, sizes interface{}, pads interface{}, 
 		sizesUint64 := make([]uint64, len(sz))
 		sizesUint64, err2 = typecast.Uint8ToUint64(sz, sizesUint64)
 		result, nsp = rpadUint64(rowCount, strs, sizesUint64, padstrs, isConst, oriNsp)
+	case *types.Bytes:
+		sizesFloat64 := make([]float64, len(sz.Lengths))
+		isEmptyStringOrNull := make([]int, len(sz.Lengths))
+		sizesFloat64, err2 = typecast.BytesToFloat(sz, sizesFloat64, isEmptyStringOrNull)
+		sizesInt64 := make([]int64, len(sz.Lengths))
+		for i, val := range sizesFloat64 { //for func rpad,like '1.8', is 1, not 2.
+			sizesInt64[i] = int64(math.Floor(val))
+		}
+		result, nsp = rpadInt64(rowCount, strs, sizesInt64, padstrs, isConst, oriNsp, isEmptyStringOrNull)
 	default:
 		// return empty strings if sizes is a non-numerical type slice
 		nsp = new(nulls.Nulls)
@@ -127,20 +141,37 @@ func rpad(rowCount int, strs *types.Bytes, sizes interface{}, pads interface{}, 
 	return result, nsp, nil
 }
 
-func rpadInt64(rowCount int, strs *types.Bytes, sizes []int64, padstrs *types.Bytes, isConst []bool, oriNsp []*nulls.Nulls) (*types.Bytes, *nulls.Nulls) {
+//note that: for flag:
+//0: nothing todo
+//1: is an overflow flag
+//2: is an parse_error flag
+func rpadInt64(rowCount int, strs *types.Bytes, sizes []int64, padstrs *types.Bytes, isConst []bool, oriNsp []*nulls.Nulls, isEmptyStringOrNull ...[]int) (*types.Bytes, *nulls.Nulls) {
 	results := &types.Bytes{}
 	resultNsp := new(nulls.Nulls)
+	usedEmptyStringOrNull := len(isEmptyStringOrNull) > 0
 	for i := 0; i < rowCount; i++ {
 		var newSize int64
+		var EmptyStringOrNull int //we use flag1 to see if we need to give "" but not NULL
 		if isConst[1] {
+			if usedEmptyStringOrNull {
+				EmptyStringOrNull = isEmptyStringOrNull[0][0]
+			}
 			// accepts a constant literal
 			newSize = sizes[0]
 		} else {
+			if usedEmptyStringOrNull {
+				EmptyStringOrNull = isEmptyStringOrNull[0][i]
+			}
 			// accepts an attribute name
 			newSize = sizes[i]
 		}
+		if EmptyStringOrNull == 2 {
+			results.Offsets = append(results.Offsets, uint32(len(results.Data)))
+			results.Lengths = append(results.Lengths, 0)
+			continue
+		}
 		// gets NULL if any arg is NULL or the newSize < 0
-		if row := uint64(i); nulls.Contains(oriNsp[0], row) || nulls.Contains(oriNsp[1], row) || nulls.Contains(oriNsp[2], row) || newSize < 0 || newSize > int64(UINT16_MAX) {
+		if row := uint64(i); nulls.Contains(oriNsp[0], row) || nulls.Contains(oriNsp[1], row) || nulls.Contains(oriNsp[2], row) || newSize < 0 || newSize > int64(UINT16_MAX) || newSize > MaxPad {
 			nulls.Add(resultNsp, row)
 			results.Offsets = append(results.Offsets, uint32(len(results.Data)))
 			results.Lengths = append(results.Lengths, 0)
@@ -217,7 +248,7 @@ func rpadUint64(rowCount int, strs *types.Bytes, sizes []uint64, padstrs *types.
 			newSize = sizes[i]
 		}
 		// gets NULL if any arg is NULL or the newSize < 0
-		if row := uint64(i); nulls.Contains(oriNsp[0], row) || nulls.Contains(oriNsp[1], row) || nulls.Contains(oriNsp[2], row) || newSize > uint64(UINT16_MAX) {
+		if row := uint64(i); nulls.Contains(oriNsp[0], row) || nulls.Contains(oriNsp[1], row) || nulls.Contains(oriNsp[2], row) || newSize > uint64(UINT16_MAX) || newSize > uint64(MaxPad) {
 			nulls.Add(resultNsp, row)
 			results.Offsets = append(results.Offsets, uint32(len(results.Data)))
 			results.Lengths = append(results.Lengths, 0)
