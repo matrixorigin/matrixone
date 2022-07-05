@@ -677,7 +677,6 @@ func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
 		}
 		switch ex := arg.Expr.(type) {
 		case *plan.Expr_C:
-			arg.Typ.Id = plan.Type_BOOL
 			switch value := ex.C.Value.(type) {
 			case *plan.Const_Ival:
 				if value.Ival == 0 {
@@ -687,6 +686,7 @@ func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
 				} else {
 					return errors.New("", fmt.Sprintf("Can't cast '%v' as boolean type.", value.Ival))
 				}
+				arg.Typ.Id = plan.Type_BOOL
 			}
 		}
 	}

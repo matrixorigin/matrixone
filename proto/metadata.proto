@@ -25,10 +25,6 @@ message DNShardRecord {
   uint64 ShardID    = 1;
   // LogShardID a DN corresponds to a unique Shard of LogService.
   uint64 LogShardID = 2;
-  // Start A DN manages data within a range [Start, end)
-  bytes  Start      = 3;
-  // End A DN manages data within a range [Start, end)
-  bytes  End        = 4;
 };
 
 // DNShard 

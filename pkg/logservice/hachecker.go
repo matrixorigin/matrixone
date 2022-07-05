@@ -100,7 +100,7 @@ func (l *store) healthCheck() {
 			// TODO: check whether this is temp error
 			return
 		}
-		state := s.(*pb.HAKeeperState)
+		state := s.(*pb.CheckerState)
 		cmds := l.checker.Check(l.alloc,
 			state.ClusterInfo, state.DNState, state.LogState, state.Tick)
 		if len(cmds) > 0 {

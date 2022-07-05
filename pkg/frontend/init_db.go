@@ -17,7 +17,6 @@ package frontend
 import (
 	"errors"
 	"fmt"
-	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -802,8 +801,6 @@ func isWanted(want, actual []string) bool {
 	copy(w, want)
 	a := make([]string, len(actual))
 	copy(a, actual)
-	sort.Strings(w)
-	sort.Strings(a)
 	for i := 0; i < len(w); i++ {
 		if w[i] != a[i] {
 			return false
