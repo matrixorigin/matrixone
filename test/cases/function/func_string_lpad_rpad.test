@@ -85,9 +85,7 @@ SELECT RPAD('a', -1, 'x');
 
 
 #IN
--- @bvt:issue#3614
 SELECT (rpad(1.0,2048,1)) IS NOT FALSE;
--- @bvt:issue
 
 
 SELECT ((+0) IN
