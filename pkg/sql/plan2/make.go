@@ -121,7 +121,7 @@ func makePlan2TimestampConstExpr(v types.Timestamp) *plan.Expr_C {
 }
 
 func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
-	t1, t2 := types.T(expr.Typ.Id), types.T(targetType.Id)
+	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil
 	}
@@ -129,12 +129,12 @@ func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
 		expr.Typ = copyType(targetType)
 		return expr, nil
 	}
-	_, id, _, err := function.GetFunctionByName("cast", []types.T{t1, t2})
+	id, _, _, err := function.GetFunctionByName("cast", []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
 	}
 	t := &plan.Expr{Expr: &plan.Expr_T{T: &plan.TargetType{
-		Typ: rewriteDecimalTypeIfNecessary(copyType(targetType)),
+		Typ: copyType(targetType),
 	}}}
 	return &plan.Expr{Expr: &plan.Expr_F{
 		F: &plan.Function{
@@ -222,4 +222,39 @@ func rewriteDecimalTypeIfNecessary(typ *plan.Type) *plan.Type {
 		typ.Size = int32(types.T_decimal64.TypeLen())
 	}
 	return typ
+}
+
+func makePlan2Type(typ *types.Type) *plan.Type {
+	return &plan.Type{
+		Id:        plan.Type_TypeId(typ.Oid),
+		Width:     typ.Width,
+		Precision: typ.Precision,
+		Size:      typ.Size,
+		Scale:     typ.Scale,
+	}
+}
+
+func makeTypeByPlan2Type(typ *plan.Type) types.Type {
+	return types.Type{
+		Oid:       types.T(typ.Id),
+		Size:      typ.Size,
+		Width:     typ.Width,
+		Scale:     typ.Scale,
+		Precision: typ.Precision,
+	}
+}
+
+func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
+	var size int32 = 0
+	oid := types.T(expr.Typ.Id)
+	if oid != types.T_any && oid != types.T_interval {
+		size = int32(oid.TypeLen())
+	}
+	return types.Type{
+		Oid:       oid,
+		Size:      size,
+		Width:     expr.Typ.Width,
+		Scale:     expr.Typ.Scale,
+		Precision: expr.Typ.Precision,
+	}
 }

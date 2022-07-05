@@ -57,7 +57,7 @@ func init() {
 				vs := vecs[0].Col.([]uint8)
 				if len(vecs) > 1 {
 					if !cs[1] || vecs[1].Typ.Oid != types.T_int64 {
-						return nil, errors.New("the second argument of the round function must be an int64 constant")
+						return nil, errors.New("the second argument of the floor function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
 				}
@@ -88,7 +88,7 @@ func init() {
 				vs := vecs[0].Col.([]uint16)
 				if len(vecs) > 1 {
 					if !cs[1] || vecs[1].Typ.Oid != types.T_int64 {
-						return nil, errors.New("the second argument of the round function must be an int64 constant")
+						return nil, errors.New("the second argument of the floor function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
 				}
@@ -119,7 +119,7 @@ func init() {
 				vs := vecs[0].Col.([]uint32)
 				if len(vecs) > 1 {
 					if !cs[1] || vecs[1].Typ.Oid != types.T_int64 {
-						return nil, errors.New("the second argument of the round function must be an int64 constant")
+						return nil, errors.New("the second argument of the floor function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
 				}
@@ -151,7 +151,7 @@ func init() {
 				vs := vecs[0].Col.([]uint64)
 				if len(vecs) > 1 {
 					if !cs[1] || vecs[1].Typ.Oid != types.T_int64 {
-						return nil, errors.New("the second argument of the round function must be an int64 constant")
+						return nil, errors.New("the second argument of the floor function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
 				}
@@ -183,7 +183,7 @@ func init() {
 				vs := vecs[0].Col.([]int8)
 				if len(vecs) > 1 {
 					if !cs[1] || vecs[1].Typ.Oid != types.T_int64 {
-						return nil, errors.New("the second argument of the round function must be an int64 constant")
+						return nil, errors.New("the second argument of the floor function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
 				}
@@ -215,7 +215,7 @@ func init() {
 				vs := vecs[0].Col.([]int16)
 				if len(vecs) > 1 {
 					if !cs[1] || vecs[1].Typ.Oid != types.T_int64 {
-						return nil, errors.New("the second argument of the round function must be an int64 constant")
+						return nil, errors.New("the second argument of the floor function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
 				}
@@ -247,7 +247,7 @@ func init() {
 				vs := vecs[0].Col.([]int32)
 				if len(vecs) > 1 {
 					if !cs[1] || vecs[1].Typ.Oid != types.T_int64 {
-						return nil, errors.New("the second argument of the round function must be an int64 constant")
+						return nil, errors.New("the second argument of the floor function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
 				}
@@ -279,7 +279,7 @@ func init() {
 				vs := vecs[0].Col.([]int64)
 				if len(vecs) > 1 {
 					if !cs[1] || vecs[1].Typ.Oid != types.T_int64 {
-						return nil, errors.New("the second argument of the round function must be an int64 constant")
+						return nil, errors.New("the second argument of the floor function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
 				}
@@ -311,7 +311,7 @@ func init() {
 				vs := vecs[0].Col.([]float32)
 				if len(vecs) > 1 {
 					if !cs[1] || vecs[1].Typ.Oid != types.T_int64 {
-						return nil, errors.New("the second argument of the round function must be an int64 constant")
+						return nil, errors.New("the second argument of the floor function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
 				}
@@ -343,7 +343,7 @@ func init() {
 				vs := vecs[0].Col.([]float64)
 				if len(vecs) > 1 {
 					if !cs[1] || vecs[1].Typ.Oid != types.T_int64 {
-						return nil, errors.New("the second argument of the round function must be an int64 constant")
+						return nil, errors.New("the second argument of the floor function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
 				}
