@@ -291,6 +291,7 @@ func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
 			return
 		}
 		db = newTxnDB(store, entry)
+		db.idx = len(store.dbs)
 		store.dbs[id] = db
 	}
 	return
@@ -411,7 +412,11 @@ func (store *txnStore) PreApplyCommit() (err error) {
 }
 
 func (store *txnStore) CollectCmd() (err error) {
+	dbs := make([]*txnDB, len(store.dbs))
 	for _, db := range store.dbs {
+		dbs[db.idx] = db
+	}
+	for _, db := range dbs {
 		if err = db.CollectCmd(store.cmdMgr); err != nil {
 			return
 		}

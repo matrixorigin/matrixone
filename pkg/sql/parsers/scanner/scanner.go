@@ -156,7 +156,7 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 	case '|':
 		if s.cur() == '|' {
 			s.skip(1)
-			return OR, ""
+			return PIPE_CONCAT, ""
 		}
 		return int(ch), ""
 	case '?':

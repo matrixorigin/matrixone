@@ -52,13 +52,13 @@ var querys = []string{
 	"select spID,userID,score from t1 limit 2 offset 1;",
 	"select sum(score) as sum from t1 where spID=6 group by score order by sum desc;",
 	"select userID, userID DIV 2 as user_dir, userID%2 as user_percent, userID MOD 2 as user_mod from t1;",
-	"select userID,MAX(score) max_score from t1 where userID <2 || userID > 3 group by userID order by max_score;",
+	// "select userID,MAX(score) max_score from t1 where userID <2 || userID > 3 group by userID order by max_score;",
 	"select userID, userID DIV 2 as user_dir, userID%2 as user_percent, userID MOD 2 as user_mod from t1 WHERE userID > 3 ;",
 	"select CAST(userID AS CHAR) userid_cast, userID from t1 where CAST(spID AS CHAR)='1';",
 	"select CAST(userID AS DOUBLE) cast_double, CAST(userID AS FLOAT(3)) cast_float , CAST(userID AS REAL) cast_real, CAST(userID AS SIGNED) cast_signed, CAST(userID AS UNSIGNED) cast_unsigned from t1 limit 2;",
-	"select * from t1 where spID>2 AND userID <2 || userID >=2 OR userID < 2 limit 3;",
+	// "select * from t1 where spID>2 AND userID <2 || userID >=2 OR userID < 2 limit 3;",
 	"select * from t1 where (spID >2  or spID <= 2) && score <> 1 AND userID/2>2;",
-	"select * from t1 where spID >2  || spID <= 2 && score !=1 limit 3;",
+	// "select * from t1 where spID >2  || spID <= 2 && score !=1 limit 3;",
 
 	`select
 		sum(lo_revenue) as revenue
