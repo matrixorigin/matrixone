@@ -16,10 +16,11 @@ package operator
 
 import (
 	"fmt"
-	"github.com/RoaringBitmap/roaring/roaring64"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strconv"
 	"strings"
+
+	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -2122,7 +2123,10 @@ func CastStringToBool(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 		vec := proc.AllocScalarVector(resultType)
 		rs := make([]bool, 1)
 		val, err := strconv.ParseFloat(string(srcStr), 64)
-		if err == nil && val != 0 {
+		if err != nil {
+			return nil, err
+		}
+		if val != 0 {
 			rs[0] = true
 		}
 		nulls.Reset(vec.Nsp)

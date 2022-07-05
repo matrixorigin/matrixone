@@ -24,6 +24,7 @@ func initTokens(dialectType dialect.DialectType) {
 	switch dialectType {
 	case dialect.MYSQL:
 		LEX_ERROR = MYSQL_LEX_ERROR
+		PIPE_CONCAT = MYSQL_PIPE_CONCAT
 		CONFIG = MYSQL_CONFIG
 		SOME = MYSQL_SOME
 		ANY = MYSQL_ANY
@@ -918,6 +919,7 @@ func initTokens(dialectType dialect.DialectType) {
 
 // mysql
 var (
+	PIPE_CONCAT              int
 	CONFIG                   int
 	SOME                     int
 	ANY                      int
