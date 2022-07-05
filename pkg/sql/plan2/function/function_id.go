@@ -292,6 +292,7 @@ var functionIdRegister = map[string]int32{
 	"ceil":              CEIL,
 	"ceiling":           CEIL,
 	"concat_ws":         CONCAT_WS,
+	"concat":            CONCAT,
 	"current_timestamp": CURRENT_TIMESTAMP,
 	"now":               CURRENT_TIMESTAMP,
 	"floor":             FLOOR,

@@ -214,7 +214,12 @@ func restartStore(t *testing.T, s *baseStore) *baseStore {
 	}
 	s, err = NewBaseStore(s.dir, s.name, cfg)
 	assert.Nil(t, err)
+	pre := uint64(0)
 	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
+		if group == 11 {
+			assert.Less(t, pre, commitId)
+			pre = commitId
+		}
 		// fmt.Printf("%s", payload)
 	}
 	err = s.Replay(a)
@@ -277,6 +282,7 @@ func TestReplay3(t *testing.T) {
 	t.Log(s.file.(*rotateFile).uncommitted[0].String())
 
 	assert.Equal(t, 0, len(s.file.GetHistory().EntryIds()))
+	assert.Nil(t, s.Close())
 
 }
 func TestMergePartialCKP(t *testing.T) {

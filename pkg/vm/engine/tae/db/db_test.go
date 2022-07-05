@@ -2523,3 +2523,44 @@ func TestDelete3(t *testing.T) {
 	}
 	t.Logf(tae.Catalog.SimplePPString(common.PPL1))
 }
+
+func TestDropCreated1(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	assert.Nil(t, err)
+	_, err = txn.CreateDatabase("db")
+	assert.Nil(t, err)
+	db, err := txn.DropDatabase("db")
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).CreateAt)
+	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).DeleteAt)
+
+	tae.restart()
+}
+
+func TestDropCreated2(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	schema := catalog.MockSchemaAll(1, -1)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err := txn.CreateDatabase("db")
+	assert.Nil(t, err)
+	rel, err := db.CreateRelation(schema)
+	assert.Nil(t, err)
+	_, err = db.DropRelationByName(schema.Name)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).CreateAt)
+	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).DeleteAt)
+
+	tae.restart()
+}

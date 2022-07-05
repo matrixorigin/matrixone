@@ -182,7 +182,7 @@ import (
 %nonassoc LOWER_THAN_CHARSET
 %nonassoc <str> CHARSET
 %right <str> UNIQUE KEY
-%left <str> OR
+%left <str> OR PIPE_CONCAT
 %left <str> XOR
 %left <str> AND
 %right <str> NOT '!'
@@ -5138,6 +5138,14 @@ expression:
     {
         $$ = tree.NewOrExpr($1, $3)
     }
+|	expression PIPE_CONCAT expression %prec PIPE_CONCAT
+	{
+		name := tree.SetUnresolvedName(strings.ToLower("concat"))
+        $$ = &tree.FuncExpr{
+             Func: tree.FuncName2ResolvableFunctionReference(name),
+             Exprs: tree.Exprs{$1, $3},
+        }
+	}
 |   expression XOR expression %prec XOR
     {
         $$ = tree.NewXorExpr($1, $3)

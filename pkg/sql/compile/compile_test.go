@@ -63,7 +63,7 @@ var querys = []string{
 	"select userID,MAX(score) from t1 where userID between 2 and 3 group by userID;",
 	"select userID,MAX(score) from t1 where userID not between 2 and 3 group by userID order by userID desc;",
 	"select sum(score) as sum from t1 where spID=6 group by score order by sum desc;",
-	"select userID,MAX(score) max_score from t1 where userID <2 || userID > 3 group by userID order by max_score;",
+	// "select userID,MAX(score) max_score from t1 where userID <2 || userID > 3 group by userID order by max_score;",
 }
 
 func TestCompile(t *testing.T) {

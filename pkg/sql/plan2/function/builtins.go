@@ -178,6 +178,40 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	CONCAT: {
+		Id: CONCAT,
+		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			if len(inputs) > 1 {
+				ret := make([]types.T, len(inputs))
+				convert := false
+				for i, t := range inputs {
+					if t != types.T_char && t != types.T_varchar && t != types.T_any {
+						if castTable[t][types.T_varchar] {
+							ret[i] = types.T_varchar
+							convert = true
+							continue
+						}
+						return wrongFunctionParameters, nil
+					}
+					ret[i] = t
+				}
+				if convert {
+					return int32(0), ret
+				}
+				return int32(0), nil
+			}
+			return wrongFunctionParameters, nil
+		},
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_varchar, Fn: multi.Concat,
+			},
+		},
+	},
 	CURRENT_TIMESTAMP: {
 		Id: CURRENT_TIMESTAMP,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
