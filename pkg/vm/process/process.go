@@ -40,6 +40,7 @@ func NewFromProc(m *mheap.Mheap, p *Process, regNumber int) *Process {
 	proc.Lim = p.Lim
 	proc.UnixTime = p.UnixTime
 	proc.Snapshot = p.Snapshot
+	proc.SessionInfo = p.SessionInfo
 	// reg and cancel
 	proc.Cancel = cancel
 	proc.Reg.MergeReceivers = make([]*WaitRegister, regNumber)
