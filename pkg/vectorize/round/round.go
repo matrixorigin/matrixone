@@ -82,7 +82,7 @@ func roundUint8(xs []uint8, rs []uint8, digits int64) []uint8 {
 
 		/////
 		for i := range xs {
-			value := (float64(xs[i]) + 0.5*scale) / scale * scale //todo(broccoli): please find a better way to round away from zero
+			value := int((float64(xs[i])+0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
 			rs[i] = uint8(value)
 		}
 	case digits <= -maxUint8digits:
@@ -100,7 +100,7 @@ func roundUint16(xs []uint16, rs []uint16, digits int64) []uint16 {
 	case digits > -maxUint16digits:
 		scale := float64(scaleTable[-digits])
 		for i := range xs {
-			value := (float64(xs[i]) + 0.5*scale) / scale * scale //todo(broccoli): please find a better way to round away from zero
+			value := int((float64(xs[i])+0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
 			rs[i] = uint16(value)
 		}
 	case digits <= -maxUint16digits:
@@ -118,7 +118,7 @@ func roundUint32(xs []uint32, rs []uint32, digits int64) []uint32 {
 	case digits > -maxUint32digits:
 		scale := float64(scaleTable[-digits])
 		for i := range xs {
-			value := ((float64(xs[i]) + 0.5*scale) / scale) * scale //todo(broccoli): please find a better way to round away from zero
+			value := int((float64(xs[i])+0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
 			rs[i] = uint32(value)
 		}
 	case digits <= maxUint32digits:
@@ -162,7 +162,7 @@ func roundInt8(xs []int8, rs []int8, digits int64) []int8 {
 		scale := float64(scaleTable[-digits])
 		for i := range xs {
 			if xs[i] > 0 {
-				value := (float64(xs[i]) + 0.5*scale) / scale * scale //todo(broccoli): please find a better way to round away from zero
+				value := int((float64(xs[i])+0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
 				rs[i] = int8(value)
 			} else if xs[i] < 0 {
 				value := (float64(xs[i]) - 0.5*scale) / scale * scale //todo(broccoli): please find a better way to round away from zero
@@ -187,10 +187,10 @@ func roundInt16(xs []int16, rs []int16, digits int64) []int16 {
 		scale := float64(scaleTable[-digits])
 		for i := range xs {
 			if xs[i] > 0 {
-				value := (float64(xs[i]) + 0.5*scale) / scale * scale //todo(broccoli): please find a better way to round away from zero
+				value := int((float64(xs[i])+0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
 				rs[i] = int16(value)
 			} else if xs[i] < 0 {
-				value := (float64(xs[i]) - 0.5*scale) / scale * scale //todo(broccoli): please find a better way to round away from zero
+				value := int((float64(xs[i])-0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
 				rs[i] = int16(value)
 			} else {
 				rs[i] = 0
@@ -212,7 +212,7 @@ func roundInt32(xs []int32, rs []int32, digits int64) []int32 {
 		scale := float64(scaleTable[-digits])
 		for i := range xs {
 			if xs[i] > 0 {
-				value := (float64(xs[i]) + 0.5*scale) / scale * scale //todo(broccoli): please find a better way to round away from zero
+				value := int((float64(xs[i])+0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
 				rs[i] = int32(value)
 			} else if xs[i] < 0 {
 				value := int((float64(xs[i])-0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
