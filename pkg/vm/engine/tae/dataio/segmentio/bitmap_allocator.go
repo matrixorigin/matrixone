@@ -250,7 +250,7 @@ func (b *BitmapAllocator) Allocate(needLen uint64) (uint64, uint64) {
 			l0end := (l1freePos+1)*BITS_PER_UNITSET + uint32(l1pos*BITS_PER_UNITSET*BITS_PER_UNIT)
 			for idx := l0pos / BITS_PER_UNIT; idx < l0end/BITS_PER_UNIT &&
 				length > allocated; idx++ {
-				if idx >= uint32(len(b.level0)-1) {
+				if idx >= uint32(len(b.level0)) {
 					return 0, 0
 				}
 				val := &(b.level0[idx])
