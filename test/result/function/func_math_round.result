@@ -11,7 +11,6 @@ select round(111,-10);
 round(111,-10)
 0
 select round(-5000111000111000155,-1);
-round(-5000111000111000155,-1)
 round operation overflowed
 select round(15000111000111000155,-1);
 round operation overflowed
@@ -74,8 +73,7 @@ select round(999999999.0, -9);
 round(999999999.0, -9)
 1000000000
 select round(999999999999999999, -18);
-round(999999999999999999, -18)
-1000000000000000000
+round operation overflowed
 select round(999999999999999999.0, -18);
 round(999999999999999999.0, -18)
 1000000000000000000
@@ -105,11 +103,9 @@ null
 drop table t1;
 drop table t2;
 select round(cast(-2 as unsigned), 1), round(18446744073709551614, 1), round(-2, 1);
-round(cast(-2 as unsigned), 1)	round(18446744073709551614, 1)	round(-2, 1)
-18446744073709551614	18446744073709551614	-2
+Can't cast '-2' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
 select round(4, cast(-2 as unsigned)), round(4, 18446744073709551614), round(4, -2);
-round(4, cast(-2 as unsigned))	round(4, 18446744073709551614)	round(4, -2)
-4	4	0
+Can't cast '-2' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
 select round(10000000000000000000, -19);
 round operation overflowed
 select round(1e0, -309);
@@ -137,9 +133,9 @@ select round(1.5, -4294967296), round(1.5, 4294967296);
 round(1.5, -4294967296)	round(1.5, 4294967296)
 0	1.5
 select round(1.5, -9223372036854775808), round(1.5, 9223372036854775808);
-Function 'round' with parameters [DOUBLE DECIMAL128] will be implemented in future version.
+Operator 'cast' with parameters [DECIMAL128 BIGINT] will be implemented in future version.
 select round(1.5, 18446744073709551615);
-overflow from bigint unsigned to bigint
+Can't cast '18446744073709551615' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 select round(18446744073709551614, -1);
 round operation overflowed
 select round(4, -4294967200);

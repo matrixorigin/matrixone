@@ -1,12 +1,8 @@
 #SELECT, extreme value
 
-<<<<<<< HEAD
-select -(0-3),round(-(0-3)), round(9999999999999999999);
-=======
 
 select -(0-3),round(-(0-3)), round(9999999999999999999);
 
->>>>>>> main
 
 select round(5.5),round(-5.5);
 select round(5.64,1),round(5.64,2),round(5.64,-1),round(5.64,-2);
