@@ -68,7 +68,7 @@ func InitServerVersion(v string) {
 			serverVersion = string(vv)
 		}
 	} else {
-		serverVersion = "0.3.0"
+		serverVersion = "0.5.0"
 	}
 }
 
