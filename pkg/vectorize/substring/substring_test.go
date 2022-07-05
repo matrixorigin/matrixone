@@ -56,6 +56,13 @@ func TestGetSliceFromLeft(t *testing.T) {
 			wantBytes: []byte(""),
 			wantLen:   0,
 		},
+		{
+			name:      "TEST05",
+			bytes:     []byte("你好asd世界"),
+			offset:    3,
+			wantBytes: []byte("sd世界"),
+			wantLen:   8,
+		},
 	}
 
 	for _, c := range cases {
@@ -140,6 +147,14 @@ func TestGetSliceFromLeftWithLength(t *testing.T) {
 			wantBytes: []byte(""),
 			wantlen:   0,
 		},
+		{
+			name:      "Test09",
+			bytes:     []byte("明天abcdef我爱你中国"),
+			offset:    5 - 1,
+			length:    6,
+			wantBytes: []byte("cdef我爱"),
+			wantlen:   10,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -178,6 +193,13 @@ func TestGetSliceFromRight(t *testing.T) {
 			offset:    16,
 			wantBytes: []byte(""),
 			wantLen:   0,
+		},
+		{
+			name:      "Test04",
+			bytes:     []byte("abcdef我爱你中国"),
+			offset:    7,
+			wantBytes: []byte("ef我爱你中国"),
+			wantLen:   17,
 		},
 	}
 
@@ -294,6 +316,14 @@ func TestGetSliceFromRightWithLength(t *testing.T) {
 			length:    -1,
 			wantBytes: []byte(""),
 			wantLen:   0,
+		},
+		{
+			name:      "Test12",
+			bytes:     []byte("明天abcdef我爱你中国"),
+			offset:    8,
+			length:    5,
+			wantBytes: []byte("def我爱"),
+			wantLen:   9,
 		},
 	}
 
