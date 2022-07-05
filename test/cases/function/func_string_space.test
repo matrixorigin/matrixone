@@ -27,16 +27,16 @@ select space(-4294967296);
 select space(4294967296);
 select space(-4294967297);
 select space(4294967297);
--- @bvt:issue#3155
 select space(-18446744073709551615);
--- @bvt:issue
 
 select space(18446744073709551615);
 
--- @bvt:issue#3155
 select space(-18446744073709551616);
+-- @bvt:issue#3743
 select space(18446744073709551616);
+-- @bvt:issue
 select space(-18446744073709551617);
+-- @bvt:issue#3743
 select space(18446744073709551617);
 -- @bvt:issue
 
