@@ -13,16 +13,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
 
-type node struct {
-	buf []byte
+type node []byte
+
+func (n *node) setBuf(buf []byte) {
+	*n = buf
 }
 
 func (n *node) GetBuf() []byte {
-	return n.buf
+	return *n
 }
 
 func (n *node) Size() int {
-	return cap(n.buf)
+	return cap(*n)
 }
 
 type allocator struct {
@@ -70,7 +72,7 @@ func (a *allocator) Alloc(sz int) stl.MemNode {
 		return nil
 	}
 	n := new(node)
-	n.buf = (*[MaxArrayLen]byte)(unsafe.Pointer(ptr))[:sz:sz]
+	n.setBuf((*[MaxArrayLen]byte)(unsafe.Pointer(ptr))[:sz:sz])
 	return n
 }
 
