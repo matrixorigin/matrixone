@@ -44,7 +44,7 @@ type SegmentWriter interface {
 	io.Closer
 	String() string
 	Update(blk uint64, row uint32, col uint16, v any) error
-	RangeDelete(blk uint64, start, end uint32) error
+	RangeDelete(blk uint64, start, end uint32, dt DeleteType) error
 
 	PushDeleteOp(filter Filter) error
 	PushUpdateOp(filter Filter, attr string, val any) error

@@ -30,6 +30,13 @@ import (
 
 type IntervalType int8
 
+const IntervalNumMAX = int32(^uint32(0) >> 1)
+const IntervalInt64MAX = int64(^uint64(0) >> 1)
+
+var (
+	ErrIntervalNumOverflow = errors.New(errno.DataException, "Interval num overflow")
+)
+
 const (
 	IntervalTypeInvalid IntervalType = iota
 	MicroSecond
@@ -120,8 +127,6 @@ func IntervalTypeOf(s string) (IntervalType, error) {
 // so we use method to solve this: we count the length of the num, use 1e(6 - length) * ret[len(ret) - 1]
 // for example: when the s is "1:001"
 // the last number length is 3, so the last number should be 1e(6 - 3) * 1 = 1000
-// typeMaxLength means when I use Second_MicroSecond, the typeMaxLength is 2
-// when s is "1", we don't think number 1 is microsecond
 // so there are a few strange things.
 //	1. Only takes 0-9, may have leading 0, still means decimal instead oct.
 //  2. 1-1 is parsed out as 1, 1 '-' is delim, so is '+', '.' etc.
@@ -141,7 +146,7 @@ func parseInts(s string, isxxxMicrosecond bool, typeMaxLength int) ([]int64, err
 				ret[cur] = 10*ret[cur] + int64(c-rune('0'))
 				numLength++
 				if ret[cur] < 0 {
-					return nil, errors.New(errno.DataException, "Invalid string interval value")
+					return nil, ErrIntervalNumOverflow
 				}
 			}
 		} else {
@@ -156,14 +161,33 @@ func parseInts(s string, isxxxMicrosecond bool, typeMaxLength int) ([]int64, err
 			ret[len(ret)-1] *= int64(math.Pow10(6 - numLength))
 		}
 	}
+	// parse "-1:1"
+	for _, c := range s {
+		if c == ' ' {
+			continue
+		} else if c == '-' {
+			for i := range ret {
+				ret[i] = -ret[i]
+			}
+			break
+		} else {
+			break
+		}
+	}
 	return ret, nil
 }
 
 func conv(a []int64, mul []int64, rt IntervalType) (int64, IntervalType, error) {
-	if len(a) > len(mul) {
+	if len(a) != len(mul) {
 		return 0, IntervalTypeInvalid, errors.New(errno.DataException, "Invalid interval format")
 	}
 
+	var largerThanZero bool
+	for _, num := range a {
+		if num > 0 || num < 0 {
+			largerThanZero = num > 0
+		}
+	}
 	var ret int64
 	var curMul int64 = 1
 
@@ -171,9 +195,12 @@ func conv(a []int64, mul []int64, rt IntervalType) (int64, IntervalType, error) 
 		curMul = curMul * mul[i]
 		ret += int64(a[i]) * curMul
 	}
-	if ret < 0 {
-		return 0, IntervalTypeInvalid, errors.New(errno.DataException, "Interval value overflow")
+	if largerThanZero && ret < 0 {
+		return 0, IntervalTypeInvalid, ErrIntervalNumOverflow
+	} else if !largerThanZero && ret > 0 {
+		return 0, IntervalTypeInvalid, ErrIntervalNumOverflow
 	}
+
 	return ret, rt, nil
 }
 
@@ -274,4 +301,15 @@ func typeMaxLength(it IntervalType) int {
 // use to judge a string whether need to become date/datetime type when we use date_add/sub(str string, interval type)
 func UnitIsDayOrLarger(it IntervalType) bool {
 	return it == Day || it == Week || it == Month || it == Quarter || it == Year || it == Year_Month
+}
+
+func JudgeIntervalNumOverflow(num int64, it IntervalType) error {
+	if it == MicroSecond {
+		return nil
+	} else if num > int64(IntervalNumMAX) {
+		return ErrIntervalNumOverflow
+	} else if -num > int64(IntervalNumMAX) {
+		return ErrIntervalNumOverflow
+	}
+	return nil
 }

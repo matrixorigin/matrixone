@@ -24,23 +24,66 @@ import (
 	"go.uber.org/zap"
 )
 
+// WithSenderPayloadBufferSize set buffer size for copy payload data to socket.
+func WithSenderPayloadBufferSize(value int) SenderOption {
+	return func(s *sender) {
+		s.options.payloadCopyBufferSize = value
+	}
+}
+
+// WithSenderBackendOptions set options for create backend connections
+func WithSenderBackendOptions(options ...morpc.BackendOption) SenderOption {
+	return func(s *sender) {
+		s.options.backendCreateOptions = options
+	}
+}
+
+// WithSenderClientOptions set options for create client
+func WithSenderClientOptions(options ...morpc.ClientOption) SenderOption {
+	return func(s *sender) {
+		s.options.clientOptions = options
+	}
+}
+
 type sender struct {
 	logger *zap.Logger
 	client morpc.RPCClient
+
+	options struct {
+		payloadCopyBufferSize int
+		backendCreateOptions  []morpc.BackendOption
+		clientOptions         []morpc.ClientOption
+	}
 }
 
 // NewSender create a txn sender
-func NewSender(logger *zap.Logger) (TxnSender, error) {
+func NewSender(logger *zap.Logger, options ...SenderOption) (TxnSender, error) {
 	logger = logutil.Adjust(logger)
-	codec := morpc.NewMessageCodec(func() morpc.Message { return &txn.TxnResponse{} }, 0)
-	bf := morpc.NewGoettyBasedBackendFactory(codec,
-		morpc.WithBackendConnectWhenCreate(),
-		morpc.WithBackendLogger(logger))
-	client, err := morpc.NewClient(bf, morpc.WithClientLogger(logger))
+	s := &sender{logger: logger}
+	for _, opt := range options {
+		opt(s)
+	}
+	s.adjust()
+
+	codec := morpc.NewMessageCodec(func() morpc.Message { return &txn.TxnResponse{} }, s.options.payloadCopyBufferSize)
+	bf := morpc.NewGoettyBasedBackendFactory(codec, s.options.backendCreateOptions...)
+	client, err := morpc.NewClient(bf, s.options.clientOptions...)
 	if err != nil {
 		return nil, err
 	}
-	return &sender{logger: logger, client: client}, nil
+	s.client = client
+	return s, nil
+}
+
+func (s *sender) adjust() {
+	if s.options.payloadCopyBufferSize == 0 {
+		s.options.payloadCopyBufferSize = 16 * 1024
+	}
+	s.options.backendCreateOptions = append(s.options.backendCreateOptions,
+		morpc.WithBackendConnectWhenCreate(),
+		morpc.WithBackendLogger(s.logger))
+
+	s.options.clientOptions = append(s.options.clientOptions, morpc.WithClientLogger(s.logger))
 }
 
 func (s *sender) Close() error {
@@ -48,6 +91,8 @@ func (s *sender) Close() error {
 }
 
 func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) ([]txn.TxnResponse, error) {
+	s.mustSetupTimeoutAt(ctx, requests)
+
 	if len(requests) == 1 {
 		resp, err := s.doSend(ctx, requests[0])
 		if err != nil {
@@ -109,6 +154,16 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 		return txn.TxnResponse{}, err
 	}
 	return *(v.(*txn.TxnResponse)), nil
+}
+
+func (s *sender) mustSetupTimeoutAt(ctx context.Context, requests []txn.TxnRequest) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		s.logger.Fatal("context deadline not set")
+	}
+	for idx := range requests {
+		requests[idx].TimeoutAt = deadline.UnixNano()
+	}
 }
 
 type executor struct {

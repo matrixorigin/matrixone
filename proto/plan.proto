@@ -249,7 +249,6 @@ message ColDef {
 	DefaultExpr default = 4;
 	bool primary        = 5;
 	int32 pkidx 		= 6;
-	string alias		= 7;
 }
 
 message IndexDef {
@@ -287,7 +286,6 @@ message TableDef {
 	string name				= 1;
 	repeated ColDef cols	= 2;
 	repeated DefType defs	= 3;
-	string alias			= 4;
 }
 
 message Cost {
@@ -441,9 +439,14 @@ message Node {
 	ObjectRef obj_ref = 18;
 	RowsetData rowset_data = 19;
 	string extra_options = 20;
-	string useDeleteKey = 21;
+	DeleteInfo delete_info = 21;
 
 	repeated int32 binding_tags = 22;
+}
+
+message DeleteInfo {
+	string useDeleteKey = 1;
+	bool canTruncate = 2;
 }
 
 message Query {

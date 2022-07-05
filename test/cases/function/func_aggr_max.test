@@ -126,7 +126,7 @@ select max(t1.a2),max(t2.a1) from t1 left outer join t2 on t1.a1=10;
 drop table t1;
 drop table t2;
 
--- @bvt:issue#3343
+
 CREATE TABLE t1 (a int, b int);
 select count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1;
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
@@ -140,7 +140,7 @@ select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b)
 insert into t1 values (3,1);
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
 drop table t1;
--- @bvt:issue
+
 
 
 -- @bvt:issue#3139

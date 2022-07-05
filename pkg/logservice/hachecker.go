@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
-	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 const (
@@ -100,20 +100,11 @@ func (l *store) healthCheck() {
 			// TODO: check whether this is temp error
 			return
 		}
-		state := s.(*hapb.HAKeeperState)
+		state := s.(*pb.CheckerState)
 		cmds := l.checker.Check(l.alloc,
 			state.ClusterInfo, state.DNState, state.LogState, state.Tick)
 		if len(cmds) > 0 {
-			ctx2, cancel2 := context.WithTimeout(context.Background(),
-				hakeeperCmdUploadTimeout)
-			defer cancel2()
-			b := &hapb.CommandBatch{
-				Term:     term,
-				Commands: cmds,
-			}
-			data := MustMarshal(b)
-			session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
-			if _, err := l.propose(ctx2, session, data); err != nil {
+			if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
 				// TODO: check whether this is temp error
 				return
 			}

@@ -359,6 +359,9 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		ss = c.compileSort(n, ss)
 		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
 	case plan.Node_DELETE:
+		if n.DeleteInfo.CanTruncate {
+			return nil, nil
+		}
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
 		if err != nil {
 			return nil, err
@@ -503,7 +506,7 @@ func (c *Compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope, join
 		}
 	case plan.Node_ANTI:
 		for i := range rs {
-			if isEq {
+			if isEq && len(n.OnList) == 1 {
 				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 					Op:  overload.Complement,
 					Arg: constructComplement(n, c.proc),

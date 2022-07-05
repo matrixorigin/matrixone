@@ -70,7 +70,9 @@ func (store *NoopTxnStore) BatchDedup(uint64, uint64, ...containers.Vector) (err
 func (store *NoopTxnStore) Update(uint64, *common.ID, uint32, uint16, any) (err error) {
 	return
 }
-func (store *NoopTxnStore) RangeDelete(uint64, *common.ID, uint32, uint32) (err error) { return }
+func (store *NoopTxnStore) RangeDelete(uint64, *common.ID, uint32, uint32, handle.DeleteType) (err error) {
+	return
+}
 func (store *NoopTxnStore) GetByFilter(uint64, uint64, *handle.Filter) (id *common.ID, offset uint32, err error) {
 	return
 }

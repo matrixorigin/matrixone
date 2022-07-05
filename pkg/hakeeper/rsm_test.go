@@ -22,8 +22,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 func TestAssignID(t *testing.T) {
@@ -232,42 +232,42 @@ func TestGetIDCmd(t *testing.T) {
 
 func TestUpdateScheduleCommandsCmd(t *testing.T) {
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
-	sc1 := hapb.ScheduleCommand{
+	sc1 := pb.ScheduleCommand{
 		UUID: "uuid1",
-		ConfigChange: &hapb.ConfigChange{
-			Replica: hapb.Replica{
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
 				ShardID: 1,
 			},
 		},
 	}
-	sc2 := hapb.ScheduleCommand{
+	sc2 := pb.ScheduleCommand{
 		UUID: "uuid2",
-		ConfigChange: &hapb.ConfigChange{
-			Replica: hapb.Replica{
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
 				ShardID: 2,
 			},
 		},
 	}
-	sc3 := hapb.ScheduleCommand{
+	sc3 := pb.ScheduleCommand{
 		UUID: "uuid1",
-		ConfigChange: &hapb.ConfigChange{
-			Replica: hapb.Replica{
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
 				ShardID: 3,
 			},
 		},
 	}
-	sc4 := hapb.ScheduleCommand{
+	sc4 := pb.ScheduleCommand{
 		UUID: "uuid3",
-		ConfigChange: &hapb.ConfigChange{
-			Replica: hapb.Replica{
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
 				ShardID: 4,
 			},
 		},
 	}
 
-	b := hapb.CommandBatch{
+	b := pb.CommandBatch{
 		Term:     101,
-		Commands: []hapb.ScheduleCommand{sc1, sc2, sc3},
+		Commands: []pb.ScheduleCommand{sc1, sc2, sc3},
 	}
 	cmd := GetUpdateCommandsCmd(b.Term, b.Commands)
 	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
@@ -277,13 +277,13 @@ func TestUpdateScheduleCommandsCmd(t *testing.T) {
 	require.Equal(t, 2, len(tsm1.state.ScheduleCommands))
 	l1, ok := tsm1.state.ScheduleCommands["uuid1"]
 	assert.True(t, ok)
-	assert.Equal(t, hapb.CommandBatch{Commands: []hapb.ScheduleCommand{sc1, sc3}}, l1)
+	assert.Equal(t, pb.CommandBatch{Commands: []pb.ScheduleCommand{sc1, sc3}}, l1)
 	l2, ok := tsm1.state.ScheduleCommands["uuid2"]
 	assert.True(t, ok)
-	assert.Equal(t, hapb.CommandBatch{Commands: []hapb.ScheduleCommand{sc2}}, l2)
+	assert.Equal(t, pb.CommandBatch{Commands: []pb.ScheduleCommand{sc2}}, l2)
 
 	cmd2 := GetUpdateCommandsCmd(b.Term-1,
-		[]hapb.ScheduleCommand{sc1, sc2, sc3, sc4})
+		[]pb.ScheduleCommand{sc1, sc2, sc3, sc4})
 	result, err = tsm1.Update(sm.Entry{Cmd: cmd2})
 	require.NoError(t, err)
 	assert.Equal(t, sm.Result{}, result)
@@ -291,8 +291,138 @@ func TestUpdateScheduleCommandsCmd(t *testing.T) {
 	require.Equal(t, 2, len(tsm1.state.ScheduleCommands))
 	l1, ok = tsm1.state.ScheduleCommands["uuid1"]
 	assert.True(t, ok)
-	assert.Equal(t, hapb.CommandBatch{Commands: []hapb.ScheduleCommand{sc1, sc3}}, l1)
+	assert.Equal(t, pb.CommandBatch{Commands: []pb.ScheduleCommand{sc1, sc3}}, l1)
 	l2, ok = tsm1.state.ScheduleCommands["uuid2"]
 	assert.True(t, ok)
-	assert.Equal(t, hapb.CommandBatch{Commands: []hapb.ScheduleCommand{sc2}}, l2)
+	assert.Equal(t, pb.CommandBatch{Commands: []pb.ScheduleCommand{sc2}}, l2)
+}
+
+func TestScheduleCommandQuery(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	sc1 := pb.ScheduleCommand{
+		UUID: "uuid1",
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
+				ShardID: 1,
+			},
+		},
+	}
+	sc2 := pb.ScheduleCommand{
+		UUID: "uuid2",
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
+				ShardID: 2,
+			},
+		},
+	}
+	sc3 := pb.ScheduleCommand{
+		UUID: "uuid1",
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
+				ShardID: 3,
+			},
+		},
+	}
+	b := pb.CommandBatch{
+		Term:     101,
+		Commands: []pb.ScheduleCommand{sc1, sc2, sc3},
+	}
+	cmd := GetUpdateCommandsCmd(b.Term, b.Commands)
+	_, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	require.NoError(t, err)
+	r, err := tsm1.Lookup(&ScheduleCommandQuery{UUID: "uuid1"})
+	require.NoError(t, err)
+	cb, ok := r.(*pb.CommandBatch)
+	require.True(t, ok)
+	assert.Equal(t, 2, len(cb.Commands))
+	b = pb.CommandBatch{
+		Commands: []pb.ScheduleCommand{sc1, sc3},
+	}
+	assert.Equal(t, b, *cb)
+}
+
+func TestInitialState(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	assert.Equal(t, pb.HAKeeperCreated, rsm.state.State)
+}
+
+func TestSetState(t *testing.T) {
+	tests := []struct {
+		initialState pb.HAKeeperState
+		newState     pb.HAKeeperState
+		result       pb.HAKeeperState
+	}{
+		{pb.HAKeeperCreated, pb.HAKeeperBootstrapping, pb.HAKeeperCreated},
+		{pb.HAKeeperCreated, pb.HAKeeperBootstrapFailed, pb.HAKeeperCreated},
+		{pb.HAKeeperCreated, pb.HAKeeperRunning, pb.HAKeeperCreated},
+		{pb.HAKeeperCreated, pb.HAKeeperCreated, pb.HAKeeperCreated},
+		{pb.HAKeeperBootstrapping, pb.HAKeeperCreated, pb.HAKeeperBootstrapping},
+		{pb.HAKeeperBootstrapping, pb.HAKeeperBootstrapFailed, pb.HAKeeperBootstrapFailed},
+		{pb.HAKeeperBootstrapping, pb.HAKeeperRunning, pb.HAKeeperRunning},
+		{pb.HAKeeperBootstrapping, pb.HAKeeperBootstrapping, pb.HAKeeperBootstrapping},
+		{pb.HAKeeperBootstrapFailed, pb.HAKeeperBootstrapFailed, pb.HAKeeperBootstrapFailed},
+		{pb.HAKeeperBootstrapFailed, pb.HAKeeperCreated, pb.HAKeeperBootstrapFailed},
+		{pb.HAKeeperBootstrapFailed, pb.HAKeeperBootstrapping, pb.HAKeeperBootstrapFailed},
+		{pb.HAKeeperBootstrapFailed, pb.HAKeeperRunning, pb.HAKeeperBootstrapFailed},
+		{pb.HAKeeperRunning, pb.HAKeeperRunning, pb.HAKeeperRunning},
+		{pb.HAKeeperRunning, pb.HAKeeperCreated, pb.HAKeeperRunning},
+		{pb.HAKeeperRunning, pb.HAKeeperBootstrapping, pb.HAKeeperRunning},
+		{pb.HAKeeperRunning, pb.HAKeeperBootstrapFailed, pb.HAKeeperRunning},
+	}
+
+	for _, tt := range tests {
+		rsm := stateMachine{
+			state: pb.HAKeeperRSMState{
+				State: tt.initialState,
+			},
+		}
+		cmd := GetSetStateCmd(tt.newState)
+		rsm.Update(sm.Entry{Cmd: cmd})
+		assert.Equal(t, tt.result, rsm.state.State)
+	}
+}
+
+func TestInitialClusterRequestCmd(t *testing.T) {
+	cmd := GetInitialClusterRequestCmd(2, 2, 3)
+	assert.True(t, isInitialClusterRequestCmd(cmd))
+	assert.False(t, isInitialClusterRequestCmd(GetTickCmd()))
+	req := parseInitialClusterRequestCmd(cmd)
+	assert.Equal(t, uint64(2), req.NumOfLogShards)
+	assert.Equal(t, uint64(2), req.NumOfDNShards)
+	assert.Equal(t, uint64(3), req.NumOfLogReplicas)
+}
+
+func TestHandleInitialClusterRequestCmd(t *testing.T) {
+	cmd := GetInitialClusterRequestCmd(2, 2, 3)
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	result, err := rsm.Update(sm.Entry{Cmd: cmd})
+	require.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 0}, result)
+
+	expected := pb.ClusterInfo{
+		LogShards: []metadata.LogShardRecord{
+			{
+				ShardID:          1,
+				NumberOfReplicas: 3,
+			},
+			{
+				ShardID:          3,
+				NumberOfReplicas: 3,
+			},
+		},
+		DNShards: []metadata.DNShardRecord{
+			{
+				ShardID:    2,
+				LogShardID: 1,
+			},
+			{
+				ShardID:    4,
+				LogShardID: 3,
+			},
+		},
+	}
+
+	assert.Equal(t, expected, rsm.state.ClusterInfo)
+	assert.Equal(t, pb.HAKeeperBootstrapping, rsm.state.State)
+	assert.Equal(t, uint64(5), rsm.state.NextID)
 }

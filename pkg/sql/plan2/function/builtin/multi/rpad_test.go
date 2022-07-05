@@ -20,7 +20,7 @@ var int64VecBase = []int64{-1, 0, 4, 8, 0}
 var int64VecBase2 = []int64{-1, 16, 0}
 var uint64VecBase = []uint64{0, 1, 4, 16, 0}
 var uint64VecBase2 = []uint64{0, 16, 0}
-var float64VecBase = []float64{-1.1, 0.01, 4.2, 8.9, 0}
+var float64VecBase = []float64{-1.1, 0.01, 4.2, 8.4, 0}
 var float64VecBase2 = []float64{0.01, 2.3, 0}
 var charVecBase = []string{"-1", "0", "4", "8", ""}
 var charVecBase2 = []string{"a", "12", ""}
@@ -738,20 +738,15 @@ func Test_varchar13(t *testing.T) {
 			strVec[i] = strVecBase[i/(n2*n3)]
 			inputVec[i] = charVecBase[(i/n3)%n2]
 			inputVec2[i] = int64VecBase2[i%n3]
-			if (i / (n2 * n3)) == (n1 - 1) {
-				nsp1 = append(nsp1, uint64(i))
-			}
-			if ((i / n3) % n2) == (n2 - 1) {
-				nsp2 = append(nsp2, uint64(i))
-			}
-			if i%n3 == (n3 - 1) {
-				nsp3 = append(nsp3, uint64(i))
-			}
 		}
+		// fmt.Printf("strVec: %v\n", strVec)
+		// fmt.Printf("inputVec: %v\n", inputVec)
+		// fmt.Printf("inputVec2: %v\n", inputVec2)
 		origVecs[0] = testutil.MakeCharVector(strVec, nsp1)
 		origVecs[1] = testutil.MakeCharVector(inputVec, nsp2)
 		origVecs[2] = testutil.MakeInt64Vector(inputVec2, nsp3)
 		vec, err := Rpad(origVecs, proc)
+		// fmt.Println(vec.Col)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -759,14 +754,20 @@ func Test_varchar13(t *testing.T) {
 		if !ok {
 			log.Fatal(errors.New("the Rpad function return value type is not types.Bytes"))
 		}
-		compVec = []string{"", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}
-		compNsp = []int64{30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44}
+		compVec = []string{"", "", "", "", "", "", "a-1-", "a161", "a000", "a-1-1-1-",
+			"a1616161", "a0000000", "", "", "", "", "", "", "", "",
+			"", "-1-1", "1616", "0000", "-1-1-1-1", "16161616", "00000000", "", "", "",
+			"", "", "", "", "", "", "-1-1", "1616", "0000", "-1-1-1-1",
+			"16161616", "00000000", "", "", ""}
+		compNsp = []int64{0, 1, 2, 15, 16, 17, 30, 31, 32}
 		for i := 0; i < len(data.Lengths); i++ {
 			str := string(data.Data[data.Offsets[i] : data.Offsets[i]+data.Lengths[i]])
+			// fmt.Println("abc: ", i)
 			convey.So(str, convey.ShouldEqual, compVec[i])
 		}
 		j := 0
 		for i := 0; i < len(compVec); i++ {
+			// fmt.Println(i)
 			if j < len(compNsp) {
 				if compNsp[j] == int64(i) {
 					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeTrue)

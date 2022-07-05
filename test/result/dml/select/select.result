@@ -262,9 +262,9 @@ a	big
 1	9223372036854775807
 1	18446744073709551615
 select min(big),max(big),max(big)-1 from t1;
-overflow from bigint unsigned to bigint
+Can't cast column from BIGINT UNSIGNED type to BIGINT type because of one or more values in that column. Reason: overflow
 select min(big),max(big),max(big)-1 from t1 group by a;
-overflow from bigint unsigned to bigint
+Can't cast column from BIGINT UNSIGNED type to BIGINT type because of one or more values in that column. Reason: overflow
 drop table if exists t1;
 create table t1 (
 value64 bigint unsigned not null,

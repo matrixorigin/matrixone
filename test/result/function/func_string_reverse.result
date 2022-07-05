@@ -114,8 +114,7 @@ SELECT REVERSE("@($)@($#)_@(#");
 REVERSE("@($)@($#)_@(#")
 #(@_)#$(@)$(@
 SELECT REVERSE(space(500)+space(600));
-REVERSE(space(500)+space(600))
-0
+Operator '+' with parameters [VARCHAR VARCHAR] will be implemented in future version.
 SELECT REVERSE(123124);
 REVERSE(123124)
 421321

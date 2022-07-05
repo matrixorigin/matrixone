@@ -56,9 +56,16 @@ func TestDateAdd(t *testing.T) {
 	for _, c := range testCases {
 		t.Run(c.name, func(t *testing.T) {
 			got := make([]types.Date, len(c.args1))
-			nu := &nulls.Nulls{}
-			require.Equal(t, c.want, dateAdd(c.args1, c.args2, c.args3, nu, got))
-			require.Equal(t, c.success, !nulls.Contains(nu, 0))
+			xnu := &nulls.Nulls{}
+			ynu := &nulls.Nulls{}
+			rnu := &nulls.Nulls{}
+			d, e := dateAdd(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
+			if c.success {
+				require.Equal(t, e, nil)
+			} else {
+				require.NotEqual(t, e, nil)
+			}
+			require.Equal(t, c.want, d)
 		})
 	}
 
@@ -99,9 +106,16 @@ func TestDatetimeAdd(t *testing.T) {
 	for _, c := range testCases {
 		t.Run(c.name, func(t *testing.T) {
 			got := make([]types.Datetime, len(c.args1))
-			nu := &nulls.Nulls{}
-			require.Equal(t, c.want, datetimeAdd(c.args1, c.args2, c.args3, nu, got))
-			require.Equal(t, c.success, !nulls.Contains(nu, 0))
+			xnu := &nulls.Nulls{}
+			ynu := &nulls.Nulls{}
+			rnu := &nulls.Nulls{}
+			d, e := datetimeAdd(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
+			if c.success {
+				require.Equal(t, e, nil)
+			} else {
+				require.NotEqual(t, e, nil)
+			}
+			require.Equal(t, c.want, d)
 		})
 	}
 
@@ -113,63 +127,52 @@ func TestDateStringAdd(t *testing.T) {
 		args1   *types.Bytes
 		args2   []int64
 		args3   []int64
-		want    *types.Bytes
-		contain bool
+		want    []types.Datetime
+		success bool
 	}{
 		{
 			args1:   &types.Bytes{Data: []byte("2018-01-01"), Offsets: []uint32{0}, Lengths: []uint32{10}},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Day)},
-			want:    &types.Bytes{Data: []byte("2018-01-02"), Offsets: []uint32{0}, Lengths: []uint32{10}},
-			contain: false,
+			want:    []types.Datetime{types.FromClock(2018, 1, 2, 0, 0, 0, 0)},
+			success: true,
 		},
 		{
 			args1:   &types.Bytes{Data: []byte("2018-01-01"), Offsets: []uint32{0}, Lengths: []uint32{10}},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Second)},
-			want:    &types.Bytes{Data: []byte("2018-01-01 00:00:01"), Offsets: []uint32{0}, Lengths: []uint32{19}},
-			contain: false,
+			want:    []types.Datetime{types.FromClock(2018, 1, 1, 0, 0, 1, 0)},
+			success: true,
 		},
 		{
 			args1:   &types.Bytes{Data: []byte("2018-01-01 00:00:01"), Offsets: []uint32{0}, Lengths: []uint32{19}},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Second)},
-			want:    &types.Bytes{Data: []byte("2018-01-01 00:00:02"), Offsets: []uint32{0}, Lengths: []uint32{19}},
-			contain: false,
+			want:    []types.Datetime{types.FromClock(2018, 1, 1, 0, 0, 2, 0)},
+			success: true,
 		},
 		{
 			args1:   &types.Bytes{Data: []byte("xxxx"), Offsets: []uint32{0}, Lengths: []uint32{4}},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Second)},
-			want:    &types.Bytes{Data: []byte(""), Offsets: []uint32{0}, Lengths: []uint32{0}},
-			contain: true,
-		},
-		{
-			args1:   &types.Bytes{Data: []byte("xxxx2018-01-01 00:00:012018-01-01"), Offsets: []uint32{0, 4, 23}, Lengths: []uint32{4, 19, 10}},
-			args2:   []int64{1},
-			args3:   []int64{int64(types.Day)},
-			want:    &types.Bytes{Data: []byte("2018-01-02 00:00:012018-01-02"), Offsets: []uint32{0, 0, 19}, Lengths: []uint32{0, 19, 10}},
-			contain: true,
-		},
-		{
-			args1:   &types.Bytes{Data: []byte("9999-01-01"), Offsets: []uint32{0}, Lengths: []uint32{10}},
-			args2:   []int64{1},
-			args3:   []int64{int64(types.Year)},
-			want:    &types.Bytes{Data: []byte(""), Offsets: []uint32{0}, Lengths: []uint32{0}},
-			contain: true,
+			want:    []types.Datetime{types.FromClock(1, 1, 1, 0, 0, 0, 0)},
+			success: false,
 		},
 	}
 
 	for _, c := range testCases {
 		t.Run(c.name, func(t *testing.T) {
-			got := &types.Bytes{
-				Data:    make([]byte, 0),
-				Offsets: make([]uint32, 0),
-				Lengths: make([]uint32, 0),
+			got := make([]types.Datetime, len(c.args1.Offsets))
+			xnu := &nulls.Nulls{}
+			ynu := &nulls.Nulls{}
+			rnu := &nulls.Nulls{}
+			d, e := dateStringAdd(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
+			if c.success {
+				require.Equal(t, e, nil)
+			} else {
+				require.NotEqual(t, e, nil)
 			}
-			nu := &nulls.Nulls{}
-			require.Equal(t, c.want, dateStringAdd(c.args1, c.args2, c.args3, nu, got))
-			require.Equal(t, c.contain, nulls.Contains(nu, 0))
+			require.Equal(t, c.want, d)
 		})
 	}
 
@@ -203,11 +206,16 @@ func TestTimeStampAdd(t *testing.T) {
 	for _, c := range testCases {
 		t.Run(c.name, func(t *testing.T) {
 			got := make([]types.Timestamp, len(c.args1))
-			nu := &nulls.Nulls{}
-			rs, err := timestampAdd(c.args1, c.args2, c.args3, nu, got)
+			xnu := &nulls.Nulls{}
+			ynu := &nulls.Nulls{}
+			rnu := &nulls.Nulls{}
+			rs, err := timestampAdd(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
 			require.Equal(t, c.want, rs)
-			require.Equal(t, err, nil)
-			require.Equal(t, c.success, !nulls.Contains(nu, 0))
+			if c.success {
+				require.Equal(t, err, nil)
+			} else {
+				require.NotEqual(t, err, nil)
+			}
 		})
 	}
 

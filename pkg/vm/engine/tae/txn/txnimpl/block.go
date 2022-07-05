@@ -168,8 +168,8 @@ func (blk *txnBlock) getDBID() uint64 {
 	return blk.entry.GetSegment().GetTable().GetDB().ID
 }
 
-func (blk *txnBlock) RangeDelete(start, end uint32) (err error) {
-	return blk.Txn.GetStore().RangeDelete(blk.getDBID(), blk.entry.AsCommonID(), start, end)
+func (blk *txnBlock) RangeDelete(start, end uint32, dt handle.DeleteType) (err error) {
+	return blk.Txn.GetStore().RangeDelete(blk.getDBID(), blk.entry.AsCommonID(), start, end, dt)
 }
 
 func (blk *txnBlock) Update(row uint32, col uint16, v any) (err error) {
@@ -263,14 +263,24 @@ func (it *relBlockIt) Valid() bool {
 	if it.err != nil {
 		return false
 	}
-	it.segmentIt.Next()
-	if !it.segmentIt.Valid() {
-		if err = it.segmentIt.GetError(); err != nil {
-			it.err = err
+	var seg handle.Segment
+	for {
+		it.segmentIt.Next()
+		if !it.segmentIt.Valid() {
+			if err = it.segmentIt.GetError(); err != nil {
+				it.err = err
+			}
+			return false
 		}
-		return false
+		seg = it.segmentIt.GetSegment()
+		meta := seg.GetMeta().(*catalog.SegmentEntry)
+		meta.RLock()
+		cnt := meta.BlockCnt()
+		meta.RUnlock()
+		if cnt != 0 {
+			break
+		}
 	}
-	seg := it.segmentIt.GetSegment()
 	it.blockIt = seg.MakeBlockIt()
 	if err = it.blockIt.GetError(); err != nil {
 		it.err = err

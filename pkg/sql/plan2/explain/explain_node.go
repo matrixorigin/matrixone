@@ -28,6 +28,27 @@ type NodeDescribeImpl struct {
 	Node *plan.Node
 }
 
+func (ndesc *NodeDescribeImpl) GetTableDef(options *ExplainOptions) (string, error) {
+	var result string = "Table: "
+	if ndesc.Node.NodeType == plan.Node_TABLE_SCAN {
+		tableDef := ndesc.Node.TableDef
+		result += "'" + tableDef.Name + "' ("
+		var first bool = true
+		for i, col := range tableDef.Cols {
+			if !first {
+				result += ", "
+			}
+			first = false
+			//result += "'" + col.Name + "':" + col.Typ.Id.String()
+			result += strconv.Itoa(i) + ":'" + col.Name + "'"
+		}
+		result += ")"
+	} else {
+		panic("implement me")
+	}
+	return result, nil
+}
+
 func NewNodeDescriptionImpl(node *plan.Node) *NodeDescribeImpl {
 	return &NodeDescribeImpl{
 		Node: node,

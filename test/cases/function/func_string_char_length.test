@@ -14,14 +14,12 @@ select char_length(a), length(a), a from t1 order by a;
 drop table t1;
 
 #EXTRME VALUE
--- @bvt:issue#3313
 select char_length('\n\t\r\b\0\_\%\\');
--- @bvt:issue
 
 #嵌套
--- @bvt:issue#3404
+
 SELECT CHAR_LENGTH(concat_ws(" ",121,83,81,'76')) as my_column;
--- @bvt:issue
+
 
 
 create table t (c varchar(20));
@@ -48,7 +46,7 @@ drop table t;
 
 
 #DATATYPE
--- @bvt:issue#3404
+-- @bvt:issue#3614
 create table t1(a tinyint, b SMALLINT, c BIGINT, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19), i DATE, k datetime, l TIMESTAMP, m char(255), n varchar(255));
 insert into t1 values(1, 1, 2, 43, 5, 35.5, 31.133, 14.314, "2012-03-10",  "2012-03-12 10:03:12", "2022-03-12 13:03:12", "ab23c", "d5cf");
 insert into t1 values(71, 1, 2, 34, 5, 5.5, 341.13, 15.314, "2012-03-22",  "2013-03-12 10:03:12", "2032-03-12 13:04:12", "abr23c", "3dcf");

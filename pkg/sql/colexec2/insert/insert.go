@@ -69,9 +69,21 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		// scalar vector's extension
 		for i := range bat.Vecs {
 			bat.Attrs[i] = n.TargetColDefs[i].GetName()
-			if bat.Vecs[i].IsScalarNull() && bat.Vecs[i].Typ.Oid != types.T_any {
-				vector.PreAlloc(bat.Vecs[i], bat.Vecs[i], bat.Vecs[i].Length, proc.Mp)
-				vector.SetLength(bat.Vecs[i], bat.Vecs[i].Length)
+			if bat.Vecs[i].IsScalarNull() {
+				if bat.Vecs[i].Typ.Oid == types.T_any {
+					bat.Vecs[i].Typ.Oid = types.T(n.TargetColDefs[i].Typ.GetId())
+				}
+				switch bat.Vecs[i].Typ.Oid {
+				case types.T_char, types.T_varchar:
+					bat.Vecs[i].Col = &types.Bytes{
+						Data:    nil,
+						Offsets: make([]uint32, len(bat.Zs)),
+						Lengths: make([]uint32, len(bat.Zs)),
+					}
+				default:
+					vector.PreAlloc(bat.Vecs[i], bat.Vecs[i], bat.Vecs[i].Length, proc.Mp)
+				}
+				vector.SetVectorLength(bat.Vecs[i], bat.Vecs[i].Length)
 			}
 			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp)
 		}

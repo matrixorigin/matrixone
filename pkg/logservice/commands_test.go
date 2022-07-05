@@ -21,53 +21,53 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 func TestHandleStartReplica(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
-		cmd := hapb.ScheduleCommand{
-			ConfigChange: &hapb.ConfigChange{
-				ChangeType: hapb.StartReplica,
-				Replica: hapb.Replica{
+		cmd := pb.ScheduleCommand{
+			ConfigChange: &pb.ConfigChange{
+				ChangeType: pb.StartReplica,
+				Replica: pb.Replica{
 					ShardID:   1,
 					ReplicaID: 1,
 				},
 			},
 		}
-		s.handleCommands([]hapb.ScheduleCommand{cmd})
+		s.handleCommands([]pb.ScheduleCommand{cmd})
 		mustHaveReplica(t, s.store, 1, 1)
 	}
-	runServiceTest(t, fn)
+	runServiceTest(t, false, fn)
 }
 
 func TestHandleStopReplica(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
-		cmd := hapb.ScheduleCommand{
-			ConfigChange: &hapb.ConfigChange{
-				ChangeType: hapb.StartReplica,
-				Replica: hapb.Replica{
+		cmd := pb.ScheduleCommand{
+			ConfigChange: &pb.ConfigChange{
+				ChangeType: pb.StartReplica,
+				Replica: pb.Replica{
 					ShardID:   1,
 					ReplicaID: 1,
 				},
 			},
 		}
-		s.handleCommands([]hapb.ScheduleCommand{cmd})
+		s.handleCommands([]pb.ScheduleCommand{cmd})
 		mustHaveReplica(t, s.store, 1, 1)
 
-		cmd = hapb.ScheduleCommand{
-			ConfigChange: &hapb.ConfigChange{
-				ChangeType: hapb.StopReplica,
-				Replica: hapb.Replica{
+		cmd = pb.ScheduleCommand{
+			ConfigChange: &pb.ConfigChange{
+				ChangeType: pb.StopReplica,
+				Replica: pb.Replica{
 					ShardID:   1,
 					ReplicaID: 1,
 				},
 			},
 		}
-		s.handleCommands([]hapb.ScheduleCommand{cmd})
+		s.handleCommands([]pb.ScheduleCommand{cmd})
 		assert.False(t, hasReplica(s.store, 1, 1))
 	}
-	runServiceTest(t, fn)
+	runServiceTest(t, false, fn)
 }
 
 func TestHandleAddReplica(t *testing.T) {
@@ -81,10 +81,10 @@ func TestHandleAddReplica(t *testing.T) {
 	service1 := Service{
 		store: store1,
 	}
-	cmd := hapb.ScheduleCommand{
-		ConfigChange: &hapb.ConfigChange{
-			ChangeType: hapb.AddReplica,
-			Replica: hapb.Replica{
+	cmd := pb.ScheduleCommand{
+		ConfigChange: &pb.ConfigChange{
+			ChangeType: pb.AddReplica,
+			Replica: pb.Replica{
 				UUID:      uuid.New().String(),
 				ShardID:   1,
 				ReplicaID: 3,
@@ -92,7 +92,7 @@ func TestHandleAddReplica(t *testing.T) {
 			},
 		},
 	}
-	service1.handleCommands([]hapb.ScheduleCommand{cmd})
+	service1.handleCommands([]pb.ScheduleCommand{cmd})
 	count, ok := checkReplicaCount(store1, 1)
 	require.True(t, ok)
 	assert.Equal(t, 3, count)
@@ -109,17 +109,17 @@ func TestHandleRemoveReplica(t *testing.T) {
 	service1 := Service{
 		store: store1,
 	}
-	cmd := hapb.ScheduleCommand{
-		ConfigChange: &hapb.ConfigChange{
-			ChangeType: hapb.RemoveReplica,
-			Replica: hapb.Replica{
+	cmd := pb.ScheduleCommand{
+		ConfigChange: &pb.ConfigChange{
+			ChangeType: pb.RemoveReplica,
+			Replica: pb.Replica{
 				ShardID:   1,
 				ReplicaID: 2,
 				Epoch:     2,
 			},
 		},
 	}
-	service1.handleCommands([]hapb.ScheduleCommand{cmd})
+	service1.handleCommands([]pb.ScheduleCommand{cmd})
 	count, ok := checkReplicaCount(store1, 1)
 	require.True(t, ok)
 	assert.Equal(t, 1, count)

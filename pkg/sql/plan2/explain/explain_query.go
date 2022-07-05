@@ -76,6 +76,14 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 				settings.buffer.PushNewLine(projecrtInfo, false, settings.level)
 			}
 
+			if nodedescImpl.Node.NodeType == plan.Node_TABLE_SCAN {
+				tableDef, err := nodedescImpl.GetTableDef(options)
+				if err != nil {
+					return err
+				}
+				settings.buffer.PushNewLine(tableDef, false, settings.level)
+			}
+
 			if nodedescImpl.Node.NodeType == plan.Node_VALUE_SCAN {
 				rowsetDataDescImpl := &RowsetDataDescribeImpl{
 					RowsetData: nodedescImpl.Node.RowsetData,

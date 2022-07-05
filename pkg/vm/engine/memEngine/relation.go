@@ -40,6 +40,10 @@ func (r *relation) GetPrimaryKeys(_ engine.Snapshot) []*engine.Attribute {
 	return nil
 }
 
+func (r *relation) Truncate(_ engine.Snapshot) (uint64, error) {
+	panic(any("implement me"))
+}
+
 func (r *relation) GetHideKey(_ engine.Snapshot) *engine.Attribute {
 	return nil
 }

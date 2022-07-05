@@ -31,8 +31,7 @@ SELECT dayofyear('2015-09.30') as dayofyear;
 dayofyear
 273
 SELECT dayofyear('2015-0') as dayofyear;
-dayofyear
-null
+Can't cast '2015-0' from VARCHAR type to DATE type.
 SELECT dayofyear('2015-09.30 12') as dayofyear;
 dayofyear
 273
@@ -40,23 +39,17 @@ SELECT dayofyear('2015-09-26 08:09:22') AS dayofyear;
 dayofyear
 269
 select dayofyear("2020-08");
-dayofyear("2020-08")
-null
+Can't cast '2020-08' from VARCHAR type to DATE type.
 select dayofyear("0000-00-00");
-dayofyear("0000-00-00")
-null
+Can't cast '0000-00-00' from VARCHAR type to DATE type.
 select dayofyear("-0001-03-03");
-dayofyear("-0001-03-03")
-null
+Can't cast '-0001-03-03' from VARCHAR type to DATE type.
 select dayofyear("10000-03-02");
-dayofyear("10000-03-02")
-null
+Can't cast '10000-03-02' from VARCHAR type to DATE type.
 select dayofyear("2021-13-09");
-dayofyear("2021-13-09")
-null
+Can't cast '2021-13-09' from VARCHAR type to DATE type.
 select dayofyear("2020-10-32");
-dayofyear("2020-10-32")
-null
+Can't cast '2020-10-32' from VARCHAR type to DATE type.
 SELECT dayofyear("2015-09-10")- dayofyear("2016-04-24");
 dayofyear("2015-09-10")- dayofyear("2016-04-24")
 138
@@ -71,19 +64,19 @@ dayofyear("2015-09-10")/dayofyear("2016-04-24")
 2.2000
 SELECT dayofyear("2015-09-10")>dayofyear("2016-04-24");
 dayofyear("2015-09-10")>dayofyear("2016-04-24")
-1
+true
 SELECT dayofyear("2015-09-10")<dayofyear("2016-04-24");
 dayofyear("2015-09-10")<dayofyear("2016-04-24")
-0
+false
 SELECT dayofyear("2015-09-10")=dayofyear("2016-04-24");
 dayofyear("2015-09-10")=dayofyear("2016-04-24")
-0
+false
 SELECT dayofyear("2015-09-10")<>dayofyear("2016-04-24");
 dayofyear("2015-09-10")<>dayofyear("2016-04-24")
-1
+true
 SELECT dayofyear("2015-09-10")!=dayofyear("2016-04-24");
 dayofyear("2015-09-10")!=dayofyear("2016-04-24")
-1
+true
 CREATE TABLE Product(Product_id INT,  Product_name VARCHAR(100) NOT NULL,Buying_price DECIMAL(13, 2) NOT NULL,Selling_price DECIMAL(13, 2) NOT NULL,Selling_Date Date NOT NULL,PRIMARY KEY(Product_id));
 INSERT INTO  Product(Product_name, Buying_price, Selling_price, Selling_Date) VALUES ('Audi Q8', 10000000.00, 15000000.00, '2018-01-26' ),('Volvo XC40', 2000000.00, 3000000.00, '2018-04-20' ),('Audi A6', 4000000.00, 5000000.00, '2018-07-25' ),('BMW X5', 5000500.00, 7006500.00, '2018-10-18'  ),('Jaguar XF', 5000000, 7507000.00, '2019-01-27'  ),('Mercedes-Benz C-Class', 4000000.00, 6000000.00, '2019-04-01'  ),('Jaguar F-PACE', 5000000.00, 7000000.00, '2019-12-26'  ),('Porsche Macan', 6500000.00, 8000000.00, '2020-04-16' ) ;
 Field 'Product_id' doesn't have a default value

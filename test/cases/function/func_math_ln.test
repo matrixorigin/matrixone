@@ -26,7 +26,7 @@ SELECT * FROM t1 ORDER BY a;
 drop table t1;
 
 #DATATYPE
--- @bvt:issue#3397
+-- @bvt:issue#3588
 create table t1(a tinyint, b SMALLINT, c bigint, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19));
 insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314);
 select ln(a),ln(b),ln(c),ln(d),ln(e),ln(f),ln(g),ln(h) from t1;

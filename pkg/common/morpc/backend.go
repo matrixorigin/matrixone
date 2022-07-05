@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/stop"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 )
@@ -99,10 +99,9 @@ type remoteBackend struct {
 	logger     *zap.Logger
 	codec      Codec
 	conn       goetty.IOSession
-	resetReadC chan struct{}
 	writeC     chan *Future
 	resetConnC chan struct{}
-	stopper    *stop.Stopper
+	stopper    *stopper.Stopper
 	closeOnce  sync.Once
 	futurePool sync.Pool
 
@@ -118,7 +117,8 @@ type remoteBackend struct {
 
 	stateMu struct {
 		sync.RWMutex
-		state int32
+		state          int32
+		readLoopActive bool
 	}
 
 	mu struct {
@@ -140,10 +140,9 @@ func NewRemoteBackend(
 	codec Codec,
 	options ...BackendOption) (Backend, error) {
 	rb := &remoteBackend{
-		stopper:    stop.NewStopper(fmt.Sprintf("backend-%s", remote)),
+		stopper:    stopper.NewStopper(fmt.Sprintf("backend-%s", remote)),
 		remote:     remote,
 		codec:      codec,
-		resetReadC: make(chan struct{}, 1),
 		resetConnC: make(chan struct{}),
 	}
 
@@ -168,18 +167,15 @@ func NewRemoteBackend(
 			return nil, err
 		}
 	}
+	rb.activeReadLoop()
 
 	if err := rb.stopper.RunTask(rb.writeLoop); err != nil {
-		return nil, err
-	}
-	if err := rb.stopper.RunTask(rb.readLoop); err != nil {
 		return nil, err
 	}
 	if err := rb.stopper.RunTask(rb.cleanStreams); err != nil {
 		return nil, err
 	}
 
-	rb.activeReadLoop()
 	return rb, nil
 }
 
@@ -217,6 +213,7 @@ func (rb *remoteBackend) Send(ctx context.Context, request Message, opts SendOpt
 	f := rb.newFuture()
 	f.init(ctx, request, opts, false)
 	if err := rb.doSend(f); err != nil {
+		f.Close()
 		return nil, err
 	}
 	return f, nil
@@ -243,14 +240,11 @@ func (rb *remoteBackend) doSend(f *Future) error {
 		rb.stateMu.RLock()
 		if rb.stateMu.state == stateStopped {
 			rb.stateMu.RUnlock()
-			f.unRef()
-			f.Close()
 			return errBackendClosed
 		}
 
 		if !added {
 			rb.addFuture(f)
-			f.ref()
 			added = true
 		}
 
@@ -263,8 +257,6 @@ func (rb *remoteBackend) doSend(f *Future) error {
 			return nil
 		case <-f.ctx.Done():
 			rb.stateMu.RUnlock()
-			f.unRef()
-			f.Close()
 			return f.ctx.Err()
 		default:
 			rb.stateMu.RUnlock()
@@ -370,7 +362,8 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 				writeTimeout := time.Duration(0)
 				sendFutures := rb.options.filter(futures)
 				for _, f := range sendFutures {
-					if !f.timeout() {
+					f.mu.Lock()
+					if !f.mu.closed && !f.timeout() {
 						writeTimeout += f.opts.Timeout
 						if err := rb.conn.Write(f.request, goetty.WriteOptions{}); err != nil {
 							rb.logger.Error("write request failed",
@@ -378,10 +371,12 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 								zap.Error(err))
 							retry = true
 							written = 0
+							f.mu.Unlock()
 							break
 						}
 						written++
 					}
+					f.mu.Unlock()
 				}
 
 				if written > 0 {
@@ -432,21 +427,19 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 		case <-ctx.Done():
 			rb.clean()
 			return
-		case _, ok := <-rb.resetReadC:
-			if ok {
-				rb.logger.Info("read loop actived, ready to read from backend")
-				for {
-					msg, err := rb.conn.Read(goetty.ReadOptions{})
-					if err != nil {
-						rb.logger.Error("read from backend failed, wait for reactive read loop",
-							zap.Error(err))
-						rb.closeStreams()
-						rb.scheduleResetConn()
-						break
-					}
-
-					rb.requestDone(msg.(Message))
+		default:
+			for {
+				msg, err := rb.conn.Read(goetty.ReadOptions{})
+				if err != nil {
+					rb.logger.Error("read from backend failed",
+						zap.Error(err))
+					rb.inactiveReadLoop()
+					rb.closeStreams()
+					rb.scheduleResetConn()
+					return
 				}
+
+				rb.requestDone(msg.(Message))
 			}
 		}
 	}
@@ -465,7 +458,6 @@ func (rb *remoteBackend) cleanClosedStreams() {
 
 func (rb *remoteBackend) doClose() {
 	rb.closeOnce.Do(func() {
-		close(rb.resetReadC)
 		close(rb.resetConnC)
 		rb.closeConn()
 	})
@@ -514,6 +506,7 @@ func (rb *remoteBackend) addFuture(f *Future) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 
+	f.ref()
 	rb.mu.futures[f.request.GetID()] = f
 }
 
@@ -551,10 +544,26 @@ func (rb *remoteBackend) resetConn() error {
 }
 
 func (rb *remoteBackend) activeReadLoop() {
-	select {
-	case rb.resetReadC <- struct{}{}:
-	default:
+	rb.stateMu.Lock()
+	defer rb.stateMu.Unlock()
+
+	if rb.stateMu.readLoopActive {
+		return
 	}
+
+	if err := rb.stopper.RunTask(rb.readLoop); err != nil {
+		rb.logger.Error("active read loop failed",
+			zap.Error(err))
+		return
+	}
+	rb.stateMu.readLoopActive = true
+}
+
+func (rb *remoteBackend) inactiveReadLoop() {
+	rb.stateMu.Lock()
+	defer rb.stateMu.Unlock()
+
+	rb.stateMu.readLoopActive = false
 }
 
 func (rb *remoteBackend) running() bool {

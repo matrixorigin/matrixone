@@ -1,6 +1,6 @@
 #SELECT, 嵌套，中文
 SELECT FIND_IN_SET('b','a,b,c,d');
--- @bvt:issue#3406
+-- @bvt:issue#3657
 select bin(concat_ws(" ",find_in_set('b','a,b,c,d')));
 -- @bvt:issue
 select find_in_set("b","a,b,c"),find_in_set("c","a,b,c"),find_in_set("dd","a,bbb,dd"),find_in_set("bbb","a,bbb,dd");
@@ -33,7 +33,7 @@ drop table t1;
 
 
 
--- @bvt:issue#3406
+
 #ON, 比较操作
 CREATE TABLE t1 (
 access_id int NOT NULL default 0,
@@ -52,7 +52,7 @@ INSERT INTO t2 VALUES (261,265,1),(490,494,1);
 SELECT t2.faq_id FROM t1 INNER JOIN t2 ON (t1.access_id = t2.access_id) LEFT JOIN t2 t ON (t.faq_group_id = t2.faq_group_id AND find_in_set(t.access_id, '1,4') < find_in_set(t2.access_id, '1,4')) WHERE t2.access_id IN (1,4) AND t.access_id IS NULL AND t2.faq_id in (265);
 drop table t1;
 drop table t2;
--- @bvt:issue
+
 
 
 #INSERT,distinct

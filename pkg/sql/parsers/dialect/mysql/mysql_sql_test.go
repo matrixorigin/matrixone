@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "SELECT ((+0) IN ((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)), (32767.1)));",
-		output: "select ((+0) in ((0b111111111111111111111111111111111111111111111111111), (rpad(1.0, 2048, 1)), (32767.1)))",
+		input:  "select 'a\\'b'",
+		output: "select a'b",
 	}
 )
 
@@ -52,6 +52,18 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select 'a\\'b'",
+		output: "select a'b",
+	}, {
+		input:  "select char_length('\\n\\t\\r\\b\\0\\_\\%\\\\');",
+		output: "select char_length(\\n\\t\\r\\b\\0\\_\\%\\\\)",
+	}, {
+		input:  "select CAST('10 ' as unsigned);",
+		output: "select cast(10  as unsigned)",
+	}, {
+		input:  "select CAST('10 ' as unsigned integer);",
+		output: "select cast(10  as integer unsigned)",
+	}, {
 		input:  "SELECT ((+0) IN ((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)), (32767.1)));",
 		output: "select ((+0) in ((0b111111111111111111111111111111111111111111111111111), (rpad(1.0, 2048, 1)), (32767.1)))",
 	}, {

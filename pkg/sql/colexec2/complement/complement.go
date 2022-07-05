@@ -231,6 +231,7 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 		ctr.strHashMap.InsertStringBatchWithRing(ctr.zValues, ctr.strHashStates, ctr.keys[:n], ctr.values)
 		for k, v := range ctr.values[:n] {
 			if ctr.zValues[k] == 0 {
+				ctr.hasNull = true
 				continue
 			}
 			if v > ctr.rows {
@@ -277,6 +278,10 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
+	}
+	if (len(ctr.bat.Zs) == 1 && ctr.hasNull) || len(ctr.bat.Zs) == 0 {
+		proc.Reg.InputBatch = rbat
+		return nil
 	}
 	for i, cond := range ap.Conditions[0] {
 		vec, err := colexec.EvalExpr(bat, proc, cond.Expr)

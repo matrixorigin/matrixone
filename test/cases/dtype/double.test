@@ -79,9 +79,7 @@ drop table if exists t2;
 create table t1 (a double);
 insert into t1 values (17.666);
 select * from t1 where a>=17.6660;
--- @bvt:issue#3279
 select * from t1 where a>='17.6660';
--- @bvt:issue
 drop table t1;
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a double(20),
@@ -95,8 +93,6 @@ INSERT INTO t1 (id,a) VALUES
 select * from t1;
 UPDATE t1 SET b = a;
 select * from t1;
--- @bvt:issue
--- @bvt:issue#3279
 select a,count(a) from t1 where ((a = 9.223372036854776e18) and (b = '9.223372036854776e18')) group by a having count(a)>1 order by count(a);
 select distinct a,b from t1 where ((a = 1.844674407370955e19) and (b != '9.223372036854776e18')) order by 1;
 -- @bvt:issue
@@ -110,22 +106,18 @@ SELECT id, 1.1 = id FROM t_double;
 SELECT * from t_double WHERE id = 1.1;
 SELECT * from t_double WHERE id = 1.1e0;
 -- @bvt:issue
--- @bvt:issue#3279
+-- @bvt:issue#3677
 SELECT * from t_double WHERE id = '1.1';
 SELECT * from t_double WHERE id = '1.1e0';
 SELECT * from t_double WHERE id IN (1.1, 2.2);
 SELECT * from t_double WHERE id IN (1.1e0, 2.2e0);
--- @bvt:issue
--- @bvt:issue#3279
 SELECT * from t_double WHERE id IN ('1.1', '2.2');
 SELECT * from t_double WHERE id IN ('1.1e0', '2.2e0');
 -- @bvt:issue
 SELECT * from t_double WHERE id BETWEEN 1.1 AND 1.9;
 SELECT * from t_double WHERE id BETWEEN 1.1e0 AND 1.9e0;
--- @bvt:issue#3279
 SELECT * from t_double WHERE id BETWEEN '1.1' AND '1.9';
 SELECT * from t_double WHERE id BETWEEN '1.1e0' AND '1.9e0';
--- @bvt:issue
 drop table t1;
 CREATE TABLE t1 (a double(5,4));
 INSERT INTO t1 VALUES (1),(0.8999),(0.800000);

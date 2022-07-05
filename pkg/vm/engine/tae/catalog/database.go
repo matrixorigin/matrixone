@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -121,26 +122,19 @@ func (e *DBEntry) MakeTableIt(reverse bool) *common.LinkIt {
 }
 
 func (e *DBEntry) PPString(level common.PPLevel, depth int, prefix string) string {
-	s := fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, e.String())
+	var w bytes.Buffer
+	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, e.String()))
 	if level == common.PPL0 {
-		return s
+		return w.String()
 	}
-	var body string
 	it := e.MakeTableIt(true)
 	for it.Valid() {
 		table := it.Get().GetPayload().(*TableEntry)
-		if len(body) == 0 {
-			body = table.PPString(level, depth+1, "")
-		} else {
-			body = fmt.Sprintf("%s\n%s", body, table.PPString(level, depth+1, ""))
-		}
+		_ = w.WriteByte('\n')
+		_, _ = w.WriteString(table.PPString(level, depth+1, ""))
 		it.Next()
 	}
-
-	if len(body) == 0 {
-		return s
-	}
-	return fmt.Sprintf("%s\n%s", s, body)
+	return w.String()
 }
 
 func (e *DBEntry) GetBlockEntryByID(id *common.ID) (blk *BlockEntry, err error) {
@@ -323,7 +317,9 @@ func (e *DBEntry) PrepareRollback() (err error) {
 	currOp := e.CurrOp
 	e.RUnlock()
 	if currOp == OpCreate {
-		err = e.catalog.RemoveEntry(e)
+		if err = e.catalog.RemoveEntry(e); err != nil {
+			return
+		}
 	}
 	if err = e.BaseEntry.PrepareRollback(); err != nil {
 		return

@@ -730,9 +730,11 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	switch name {
 	case "date":
 		// rewrite date function to cast function, and retrun directly
-		return appendCastBeforeExpr(args[0], &Type{
-			Id: plan.Type_DATE,
-		})
+		if args[0].Typ.Id != plan.Type_VARCHAR && args[0].Typ.Id != plan.Type_CHAR {
+			return appendCastBeforeExpr(args[0], &Type{
+				Id: plan.Type_DATE,
+			})
+		}
 	case "interval":
 		// rewrite interval function to ListExpr, and retrun directly
 		return &plan.Expr{
@@ -866,9 +868,10 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 		for idx, castType := range argsCastType {
 			if argsType[idx] != castType && castType != types.T_any {
-				args[idx], err = appendCastBeforeExpr(args[idx], &plan.Type{
+				typ := rewriteDecimalTypeIfNecessary(&plan.Type{
 					Id: plan.Type_TypeId(castType),
 				})
+				args[idx], err = appendCastBeforeExpr(args[idx], typ)
 				if err != nil {
 					return nil, err
 				}

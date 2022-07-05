@@ -97,11 +97,11 @@ select count(a) from t1 where a = 100;
 select count(a) from t1 where a >= 10;
 
 
--- @bvt:issue#3374
+
 select count(b) from t1 where b >= 2;
 select count(b) from t1 where b >= 10;
 select count(c) from t1 where c = 10;
--- @bvt:issue
+
 drop table t1;
 
 CREATE TABLE t1 (d DATETIME, i INT);
@@ -112,7 +112,7 @@ SELECT COUNT(i), i, COUNT(i)*i FROM t1 GROUP BY i;
 SELECT COUNT(i), (i+0), COUNT(i)*(i+0) FROM t1 GROUP BY i; 
 DROP TABLE t1;
 
--- @bvt:issue#3343
+
 CREATE TABLE t1 (a int, b int);
 select count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1;
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
@@ -126,7 +126,7 @@ select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b)
 insert into t1 values (3,1);
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
 drop table t1;
--- @bvt:issue
+
 
 
 #CREATE TABLE t1 (id int(10) unsigned NOT NULL,val enum('one','two','three') NOT NULL default 'one',PRIMARY KEY  (id));
@@ -170,28 +170,28 @@ select std(s1/s2) from bug22555 where i=2 group by i;
 select std(s1/s2) from bug22555 where i=3 group by i;
 select std(s1/s2) from bug22555 group by i order by i;
 select i, count(*), std(o1/o2) from bug22555 group by i order by i;
--- @bvt:issue#3374
+-- @bvt:issue#3588
 select i, count(*), std(e1/e2) from bug22555 group by i order by i;
 -- @bvt:issue
 select i, count(*), variance(s1/s2) from bug22555 group by i order by i;
 select i, count(*), variance(o1/o2) from bug22555 group by i order by i;
 
--- @bvt:issue#3374
+-- @bvt:issue#3588
 select i, count(*), variance(e1/e2) from bug22555 group by i order by i;
 -- @bvt:issue
 select i, count(*), std(s1/s2) from bug22555 group by i order by i;
 select i, count(*), std(o1/o2) from bug22555 group by i order by i;
--- @bvt:issue#3374
+-- @bvt:issue#3588
 select i, count(*), std(e1/e2) from bug22555 group by i order by i;
 -- @bvt:issue
 select i, count(*), variance(s1/s2) from bug22555 group by i order by i;
 select i, count(*), variance(o1/o2) from bug22555 group by i order by i;
--- @bvt:issue#3374
+-- @bvt:issue#3588
 select i, count(*), variance(e1/e2) from bug22555 group by i order by i;
 -- @bvt:issue
 select i, count(*), std(s1/s2) from bug22555 group by i order by i;
 select i, count(*), std(o1/o2) from bug22555 group by i order by i;
--- @bvt:issue#3374
+-- @bvt:issue#3588
 select i, count(*), std(e1/e2) from bug22555 group by i order by i;
 -- @bvt:issue
 insert into bug22555 values (1,53,78,53,78,53,78),(2,17,78,17,78,17,78),(3,18,76,18,76,18,76);
@@ -199,22 +199,22 @@ insert into bug22555 values (1,53,78,53,78,53,78),(2,17,78,17,78,17,78),(3,18,76
 insert into bug22555 values (1,53,78,53,78,53,78),(2,17,78,17,78,17,78),(3,18,76,18,76,18,76);
 select i, count(*), std(s1/s2) from bug22555 group by i order by i;
 select i, count(*), round(std(o1/o2), 16) from bug22555 group by i order by i;
--- @bvt:issue#3374
+-- @bvt:issue#3588
 select i, count(*), std(e1/e2) from bug22555 group by i order by i;
 -- @bvt:issue
 select std(s1/s2) from bug22555;
 select std(o1/o2) from bug22555;
--- @bvt:issue#3374
+-- @bvt:issue#3588
 select std(e1/e2) from bug22555;
 -- @bvt:issue
 select i, count(*), std(s1/s2) from bug22555 group by i order by i;
 select i, count(*), round(std(o1/o2), 16) from bug22555 group by i order by i;
--- @bvt:issue#3374
+-- @bvt:issue#3588
 select i, count(*), std(e1/e2) from bug22555 group by i order by i;
 -- @bvt:issue
 select round(std(s1/s2), 17) from bug22555;
 select std(o1/o2) from bug22555;
--- @bvt:issue#3374
+-- @bvt:issue#3588
 select round(std(e1/e2), 17) from bug22555;
 -- @bvt:issue
 drop table bug22555;
