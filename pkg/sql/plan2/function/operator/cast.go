@@ -16,11 +16,10 @@ package operator
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
-
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -52,6 +51,16 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return vec, err
 }
 
+// shorten the string to the one with no more than 100 characters.
+func shortenValueString(valueStr string) string {
+	utf8Str := []rune(valueStr)
+	l := len(utf8Str)
+	if l > 100 {
+		return string(utf8Str[:100]) + "..."
+	}
+	return valueStr
+}
+
 func formatCastError(vec *vector.Vector, typ types.Type, extraInfo string) error {
 	var errStr string
 	if vec.IsScalar() {
@@ -59,7 +68,8 @@ func formatCastError(vec *vector.Vector, typ types.Type, extraInfo string) error
 			errStr = fmt.Sprintf("Can't cast 'NULL' as %v type.", typ)
 		} else {
 			valueStr := strings.TrimRight(strings.TrimLeft(fmt.Sprintf("%v", vec.Col), "["), "]")
-			errStr = fmt.Sprintf("Can't cast '%s' from %v type to %v type.", valueStr, vec.Typ, typ)
+			shortenValueStr := shortenValueString(valueStr)
+			errStr = fmt.Sprintf("Can't cast '%s' from %v type to %v type.", shortenValueStr, vec.Typ, typ)
 		}
 	} else {
 		errStr = fmt.Sprintf("Can't cast column from %v type to %v type because of one or more values in that column.", vec.Typ, typ)
