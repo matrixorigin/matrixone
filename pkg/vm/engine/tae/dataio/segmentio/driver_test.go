@@ -410,6 +410,11 @@ func TestSegment_Replay2(t *testing.T) {
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
 		assert.Nil(t, err)
 	}
+	logStat, err := seg.logFile.Stat()
+	assert.Nil(t, err)
+	if logStat.Size() < int64(LOG_SIZE+LOG_START-2*INODE_SIZE) {
+		assert.Nil(t, logStat.Size())
+	}
 	seg1 := Driver{}
 	err = seg1.Open(name)
 	assert.Nil(t, err)

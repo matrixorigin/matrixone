@@ -17,6 +17,7 @@ package segmentio
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"sync"
 
@@ -25,14 +26,14 @@ import (
 	"github.com/pierrec/lz4"
 )
 
-const INODE_NUM = 4096
+const INODE_NUM = 20480
 const INODE_SIZE = 512
 const BLOCK_SIZE = 4096
 const SIZE = 2 * 1024 * 1024 * 1024
 const LOG_START = 2 * BLOCK_SIZE
-const DATA_START = LOG_START + INODE_SIZE*INODE_NUM
+const DATA_START = 0
 const DATA_SIZE = SIZE - DATA_START
-const LOG_SIZE = DATA_START - LOG_START
+const LOG_SIZE = INODE_NUM * INODE_SIZE
 const HOLE_SIZE = 512 * INODE_SIZE
 const MAGIC = 0xFFFFFFFF
 
@@ -48,6 +49,7 @@ type SuperBlock struct {
 type Driver struct {
 	mutex     sync.Mutex
 	segFile   *os.File
+	logFile   *os.File
 	lastInode uint64
 	super     SuperBlock
 	nodes     map[string]*DriverFile
@@ -77,10 +79,12 @@ func (s *Driver) Init(name string) (err error) {
 	if err != nil {
 		return
 	}
-	s.segFile = segmentFile
-	if err = s.segFile.Truncate(DATA_START); err != nil {
+	logFile, err := os.Create(s.EncodeLogName(name))
+	if err != nil {
 		return
 	}
+	s.segFile = segmentFile
+	s.logFile = logFile
 	if err = binary.Write(&sbuffer, binary.BigEndian, s.super.version); err != nil {
 		return
 	}
@@ -103,9 +107,13 @@ func (s *Driver) Init(name string) (err error) {
 		}
 	}
 
-	_, err = s.segFile.Write(sbuffer.Bytes())
+	_, err = s.logFile.Write(sbuffer.Bytes())
 	logutil.Debugf(" %s-%p | SegmentFile | Init ", s.name, &(s.name))
 	return
+}
+
+func (s *Driver) EncodeLogName(name string) string {
+	return fmt.Sprintf("%s.log", name)
 }
 
 func (s *Driver) Open(name string) (err error) {
@@ -115,6 +123,9 @@ func (s *Driver) Open(name string) (err error) {
 		return
 	}
 	if s.segFile, err = os.OpenFile(name, os.O_RDWR, os.ModePerm); err != nil {
+		return
+	}
+	if s.logFile, err = os.OpenFile(s.EncodeLogName(name), os.O_RDWR, os.ModePerm); err != nil {
 		return
 	}
 	s.name = name
@@ -153,6 +164,7 @@ func (s *Driver) Mount() {
 	s.log.logFile = logFile
 	s.log.offset = LOG_START + s.log.logFile.snode.size
 	s.log.seq = seq + 1
+	s.log.name = s.logFile.Name()
 	s.nodes[logFile.name] = s.log.logFile
 	s.allocator = NewBitmapAllocator(DATA_SIZE, s.GetPageSize())
 	s.log.allocator = NewBitmapAllocator(LOG_SIZE, s.GetInodeSize())
@@ -170,11 +182,20 @@ func (s *Driver) Destroy() {
 	if err != nil {
 		panic(any(err.Error()))
 	}
+	err = s.logFile.Close()
+	if err != nil {
+		panic(any(err.Error()))
+	}
 	s.PrintLog("Null", "SegmentFile | Destroying")
 	err = os.Remove(s.name)
 	if err != nil {
 		panic(any(err.Error()))
 	}
+	err = os.Remove(s.log.name)
+	if err != nil {
+		panic(any(err.Error()))
+	}
+	s.logFile = nil
 	s.segFile = nil
 	s.allocator = nil
 	s.log.allocator = nil
