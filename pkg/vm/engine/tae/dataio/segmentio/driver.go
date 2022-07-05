@@ -241,9 +241,6 @@ func (s *Driver) NewBlockFile(fname string) *DriverFile {
 }
 
 func (s *Driver) Append(fd *DriverFile, pl []byte) (err error) {
-	if len(s.nodes) >= INODE_NUM {
-		return ErrInodeLimit
-	}
 	buf := pl
 	if fd.snode.algo == compress.Lz4 {
 		colSize := len(pl)

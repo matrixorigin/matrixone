@@ -286,6 +286,9 @@ func (l *Log) Append(file *DriverFile) error {
 	}
 	ibufLen := (segment.super.inodeSize - (uint32(ibuffer.Len()) % segment.super.inodeSize)) + uint32(ibuffer.Len())
 	offset, allocated := l.allocator.Allocate(uint64(ibufLen))
+	if allocated == 0 {
+		return ErrInodeLimit
+	}
 	if n, err := segment.logFile.WriteAt(ibuffer.Bytes(), int64(offset+LOG_START)); err != nil || n != ibuffer.Len() {
 		return err
 	}
