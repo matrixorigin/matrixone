@@ -15,8 +15,13 @@
 package frontend
 
 import (
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	cvey "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
+	"math"
 	"sort"
 	"testing"
 	"time"
@@ -438,5 +443,49 @@ func TestWildcardMatch(t *testing.T) {
 				}
 			}
 		}
+	})
+}
+
+func TestGetSimpleExprValue(t *testing.T) {
+	cvey.Convey("", t, func() {
+		type args struct {
+			sql     string
+			wantErr bool
+			want    interface{}
+		}
+
+		kases := []args{
+			{"set @@x=1", false, 1},
+			{"set @@x=-1", false, -1},
+			{"set @@x=1.0", false, 1.0},
+			{"set @@x=-1.0", false, -1.0},
+			{fmt.Sprintf("set @@x=%d", math.MaxInt64), false, math.MaxInt64},
+			{fmt.Sprintf("set @@x=%d", -math.MaxInt64), false, -math.MaxInt64},
+			{"set @@x=true", false, true},
+			{"set @@x=false", false, false},
+			{"set @@x=on", false, "on"},
+			{"set @@x=off", false, "off"},
+			{"set @@x=abc", false, "abc"},
+			{"set @@x=null", false, nil},
+			{"set @@x=-null", true, nil},
+			{"set @@x=-x", true, nil},
+		}
+
+		for _, kase := range kases {
+			stmt, err := parsers.ParseOne(dialect.MYSQL, kase.sql)
+			cvey.So(err, cvey.ShouldBeNil)
+
+			sv, ok := stmt.(*tree.SetVar)
+			cvey.So(ok, cvey.ShouldBeTrue)
+
+			value, err := GetSimpleExprValue(sv.Assignments[0].Value)
+			if kase.wantErr {
+				cvey.So(err, cvey.ShouldNotBeNil)
+			} else {
+				cvey.So(err, cvey.ShouldBeNil)
+				cvey.So(value, cvey.ShouldEqual, kase.want)
+			}
+		}
+
 	})
 }
