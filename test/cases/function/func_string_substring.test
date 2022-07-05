@@ -151,13 +151,11 @@ drop table t2;
 
 #字符集
 
--- @bvt:issue#3241
 create table t1 (a varchar(50));
 insert into t1 values("你好"), ("再见"), ("今天");
 select * from t1;
 select substring(a, 1, 1) from t1;
 drop table t1;
--- @bvt:issue
 
 #NULL
 select substring(null, 1, 1);
