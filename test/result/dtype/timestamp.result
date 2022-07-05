@@ -94,7 +94,7 @@ CREATE TABLE t_timestamp(id timestamp(6));
 INSERT INTO t_timestamp VALUES ('2020-01-01 23:59:59.999999'), ('2022-01-02 00:00:00');
 SELECT id, id >= 20200102 FROM t_timestamp;
 id	id >= 20200102
-2020-01-01 23:59:59.999999000	true
+2020-01-01 23:59:59.999999000	false
 2022-01-02 00:00:00	true
 SELECT id, id = 202020101 FROM t_timestamp;
 id	id = 202020101
