@@ -373,8 +373,8 @@ func (entry *TableEntry) CloneCreateEntry() *TableEntry {
 		schema:    entry.schema,
 		db:        entry.db,
 	}
-	cloned.CurrOp=OpCreate
-	cloned.RWMutex=&sync.RWMutex{}
+	cloned.CurrOp = OpCreate
+	cloned.RWMutex = &sync.RWMutex{}
 	return cloned
 }
 
