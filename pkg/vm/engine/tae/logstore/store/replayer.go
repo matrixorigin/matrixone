@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -44,7 +45,7 @@ type replayer struct {
 	applyEntry      ApplyHandle
 
 	//syncbase
-	addrs     map[uint32]map[int]common.ClosedIntervals
+	addrs     map[uint32]map[int]*common.ClosedIntervals
 	groupLSN  map[uint32]uint64
 	tidlsnMap map[uint32]map[uint64]uint64
 
@@ -56,11 +57,11 @@ type replayer struct {
 func (r *replayer) updateaddrs(groupId uint32, version int, lsn uint64) {
 	m, ok := r.addrs[groupId]
 	if !ok {
-		m = make(map[int]common.ClosedIntervals)
+		m = make(map[int]*common.ClosedIntervals)
 	}
 	interval, ok := m[version]
 	if !ok {
-		interval = *common.NewClosedIntervals()
+		interval = common.NewClosedIntervals()
 	}
 	interval.TryMerge(*common.NewClosedIntervalsByInt(lsn))
 	m[version] = interval
@@ -81,26 +82,10 @@ func newReplayer(h ApplyHandle) *replayer {
 		checkpoints:     make([]*replayEntry, 0),
 		mergeFuncs:      make(map[uint32]func(pre []byte, curr []byte) []byte),
 		applyEntry:      h,
-		addrs:           make(map[uint32]map[int]common.ClosedIntervals),
+		addrs:           make(map[uint32]map[int]*common.ClosedIntervals),
 		groupLSN:        make(map[uint32]uint64),
 		tidlsnMap:       make(map[uint32]map[uint64]uint64),
-		// vinfoAddrs:      make(map[uint32]map[uint64]int),
 	}
-}
-
-func defaultMergePayload(pre, curr []byte) []byte {
-	return append(pre, curr...)
-}
-func (r *replayer) mergeUncommittedEntries(pre, curr *replayEntry) *replayEntry {
-	if pre == nil {
-		return curr
-	}
-	mergePayload, ok := r.mergeFuncs[curr.group]
-	if !ok {
-		mergePayload = defaultMergePayload
-	}
-	curr.payload = mergePayload(pre.payload, curr.payload)
-	return curr
 }
 
 func (r *replayer) Apply() {
@@ -108,7 +93,17 @@ func (r *replayer) Apply() {
 		r.applyEntry(e.group, e.commitId, e.payload, e.entryType, e.info)
 	}
 
+	sort.Slice(r.entrys, func(i, j int) (ret bool) {
+		// defer logutil.Infof("swap %d, %d less %v", i, j, ret)
+		if r.entrys[i].group != r.entrys[j].group {
+			ret = true
+			return
+		}
+		return r.entrys[i].commitId < r.entrys[j].commitId
+	})
+
 	for _, e := range r.entrys {
+		// logutil.Infof("offset %d, glsn %d-%d", i, e.group, e.commitId)
 		ckpinfo, ok := r.checkpointrange[e.group]
 		if ok {
 			if ckpinfo.ranges.ContainsInterval(
@@ -116,21 +111,7 @@ func (r *replayer) Apply() {
 				continue
 			}
 		}
-		if e.entryType == entry.ETTxn {
-			// var pre *replayEntry
-			tidMap, ok := r.uncommit[e.group]
-			if ok {
-				entries, ok := tidMap[e.tid]
-				if ok {
-					for _, entry := range entries {
-						r.applyEntry(entry.group, entry.commitId, entry.payload, entry.entryType, nil)
-					}
-				}
-			}
-			r.applyEntry(e.group, e.commitId, e.payload, e.entryType, nil)
-		} else {
-			r.applyEntry(e.group, e.commitId, e.payload, e.entryType, nil)
-		}
+		r.applyEntry(e.group, e.commitId, e.payload, e.entryType, nil)
 	}
 }
 
@@ -138,7 +119,6 @@ type replayEntry struct {
 	entryType uint16
 	group     uint32
 	commitId  uint64
-	tid       uint64
 	payload   []byte
 	info      any
 }
@@ -306,6 +286,21 @@ func (r *replayer) MergeCkps(vfiles []VFile) {
 	for _, vf := range vfiles {
 		addrs, addrmu := vf.GetAddrs()
 		addrmu.RLock()
+		for group, lsnOffset := range addrs {
+			verLsn, ok := r.addrs[group]
+			if !ok {
+				verLsn = make(map[int]*common.ClosedIntervals)
+				r.addrs[group] = verLsn
+			}
+			lsn, ok := verLsn[vf.Id()]
+			if !ok {
+				lsn = common.NewClosedIntervals()
+				verLsn[vf.Id()] = lsn
+			}
+			for vinfoLsn := range lsnOffset {
+				lsn.TryMerge(*common.NewClosedIntervalsByInt(vinfoLsn))
+			}
+		}
 		for lsn, offset := range addrs[entry.GTInternal] {
 			e, err := vf.LoadByOffset(offset)
 			r.updateGroupLSN(entry.GTInternal, lsn)

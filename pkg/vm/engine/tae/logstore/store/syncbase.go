@@ -277,7 +277,7 @@ type syncBase struct {
 	checkpointed, synced, ckpCnt *syncMap
 	tidLsnMaps                   map[uint32]map[uint64]uint64
 	tidLsnMapmu                  *sync.RWMutex
-	addrs                        map[uint32]map[int]common.ClosedIntervals //group-version-glsn range
+	addrs                        map[uint32]map[int]*common.ClosedIntervals //group-version-glsn range
 	addrmu                       sync.RWMutex
 	commitCond                   sync.Cond
 
@@ -298,7 +298,7 @@ func newSyncBase() *syncBase {
 		ckpCnt:         newSyncMap(),
 		tidLsnMaps:     make(map[uint32]map[uint64]uint64),
 		tidLsnMapmu:    &sync.RWMutex{},
-		addrs:          make(map[uint32]map[int]common.ClosedIntervals),
+		addrs:          make(map[uint32]map[int]*common.ClosedIntervals),
 		addrmu:         sync.RWMutex{},
 		ckpmu:          &sync.RWMutex{},
 		commitCond:     *sync.NewCond(new(sync.Mutex)),
@@ -491,12 +491,12 @@ func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 	addr := v.Info.(*VFileAddress)
 	versionRanges, ok := base.addrs[addr.Group]
 	if !ok {
-		versionRanges = make(map[int]common.ClosedIntervals)
+		versionRanges = make(map[int]*common.ClosedIntervals)
 	}
 	base.OnCalculateVersion(addr.Version)
 	interval, ok := versionRanges[addr.Version]
 	if !ok {
-		interval = *common.NewClosedIntervals()
+		interval = common.NewClosedIntervals()
 	}
 	interval.TryMerge(*common.NewClosedIntervalsByInt(addr.LSN))
 	versionRanges[addr.Version] = interval

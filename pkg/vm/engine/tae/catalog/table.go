@@ -366,6 +366,18 @@ func (entry *TableEntry) CloneCreate() CheckpointItem {
 	return cloned
 }
 
+// for collect commands
+func (entry *TableEntry) CloneCreateEntry() *TableEntry {
+	cloned := &TableEntry{
+		BaseEntry: entry.BaseEntry.Clone(),
+		schema:    entry.schema,
+		db:        entry.db,
+	}
+	cloned.CurrOp = OpCreate
+	cloned.RWMutex = &sync.RWMutex{}
+	return cloned
+}
+
 // Coarse API: no consistency check
 func (entry *TableEntry) IsActive() bool {
 	db := entry.GetDB()
