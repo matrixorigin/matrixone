@@ -165,7 +165,7 @@ func roundInt8(xs []int8, rs []int8, digits int64) []int8 {
 				value := int((float64(xs[i])+0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
 				rs[i] = int8(value)
 			} else if xs[i] < 0 {
-				value := (float64(xs[i]) - 0.5*scale) / scale * scale //todo(broccoli): please find a better way to round away from zero
+				value := int((float64(xs[i])-0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
 				rs[i] = int8(value)
 			} else {
 				rs[i] = 0
