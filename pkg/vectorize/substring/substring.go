@@ -46,49 +46,63 @@ func init() {
 
 //Slice from left to right, starting from 0
 func getSliceFromLeft(bytes []byte, offset int64) ([]byte, int64) {
-	elemsize := int64(len(bytes))
+	sourceRune := []rune(string(bytes))
+	elemsize := int64(len(sourceRune))
 	if offset > elemsize {
 		return []byte{}, 0
 	}
-	return bytes[offset:], elemsize - offset
+	substrRune := sourceRune[offset:]
+	substrSlice := []byte(string(substrRune))
+	substrSliceLen := int64(len(substrSlice))
+	return substrSlice, substrSliceLen
 }
 
 // Cut the slice with length from left to right, starting from 0
 func getSliceFromLeftWithLength(bytes []byte, offset int64, length int64) ([]byte, int64) {
-	elemsize := int64(len(bytes))
-
+	sourceRune := []rune(string(bytes))
+	elemsize := int64(len(sourceRune))
 	if length < 0 {
 		length = 0
 	}
 	if offset >= elemsize || length < 0 {
 		return []byte{}, 0
 	}
-	return bytes[offset : offset+min(length, elemsize-offset)], min(length, elemsize-offset)
+	substrRune := sourceRune[offset : offset+min(length, elemsize-offset)]
+	substrSlice := []byte(string(substrRune))
+	substrSliceLen := int64(len(substrSlice))
+	return substrSlice, substrSliceLen
 }
 
 // Cut slices from right to left, starting from 1
 func getSliceFromRight(bytes []byte, offset int64) ([]byte, int64) {
-	elemsize := int64(len(bytes))
+	sourceRune := []rune(string(bytes))
+	elemsize := int64(len(sourceRune))
 	if offset > elemsize {
 		return []byte{}, 0
 	}
-	return bytes[elemsize-offset:], offset
+	substrRune := sourceRune[elemsize-offset:]
+	substrSlice := []byte(string(substrRune))
+	substrSliceLen := int64(len(substrSlice))
+	return substrSlice, substrSliceLen
 }
 
 // From right to left, cut the slice with length from 1
 func getSliceFromRightWithLength(bytes []byte, offset int64, length int64) ([]byte, int64) {
-	elemsize := int64(len(bytes))
+	sourceRune := []rune(string(bytes))
+	elemsize := int64(len(sourceRune))
 	if length < 0 {
 		length = 0
 	}
 	if length < 0 || offset < 0 {
 		return []byte{}, 0
 	}
-
 	if offset > elemsize {
 		return []byte{}, 0
 	}
-	return bytes[elemsize-offset : elemsize-offset+min(length, offset)], min(length, offset)
+	substrRune := sourceRune[elemsize-offset : elemsize-offset+min(length, offset)]
+	substrSlice := []byte(string(substrRune))
+	substrSliceLen := int64(len(substrSlice))
+	return substrSlice, substrSliceLen
 }
 
 //The length parameter is not bound. Cut the string from the left
