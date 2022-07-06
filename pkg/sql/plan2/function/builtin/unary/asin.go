@@ -21,10 +21,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/asin"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"golang.org/x/exp/constraints"
 )
 
-func Asin[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func Asin(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	origVec := vs[0]
 	//Here we need to classify it into three scenes
 	//1. if it is a constant
@@ -35,7 +34,7 @@ func Asin[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *
 		if origVec.IsScalarNull() {
 			return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
 		} else {
-			origVecCol := vector.MustTCols[T](origVec)
+			origVecCol := vector.MustTCols[float64](origVec)
 			resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
 			resultValues := make([]float64, 1)
 			// nulls.Set(resultVector.Nsp, origVec.Nsp)
@@ -47,7 +46,7 @@ func Asin[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *
 			return resultVector, nil
 		}
 	} else {
-		origVecCol := vector.MustTCols[T](origVec)
+		origVecCol := vector.MustTCols[float64](origVec)
 		resultVector, err := proc.AllocVector(types.Type{Oid: types.T_float64, Size: 8}, 8*int64(len(origVecCol)))
 		if err != nil {
 			return nil, err

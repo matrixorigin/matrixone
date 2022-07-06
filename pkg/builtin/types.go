@@ -42,7 +42,6 @@ const (
 	Sinh
 	Cos
 	Acos
-	Asin
 	Tan
 	Atan
 	Cot

@@ -26,22 +26,12 @@ import (
 )
 
 func TestAsin(t *testing.T) {
-	asinIntAndFloat[int8](t, types.T_int8, 0, 0)
-	asinIntAndFloat[int16](t, types.T_int16, 0, 0)
-	asinIntAndFloat[int32](t, types.T_int32, 0, 0)
-	asinIntAndFloat[int64](t, types.T_int64, 0, 0)
-
-	asinIntAndFloat[uint8](t, types.T_uint8, 1, 1.5707963267948966)
-	asinIntAndFloat[uint16](t, types.T_uint16, 1, 1.5707963267948966)
-	asinIntAndFloat[uint32](t, types.T_uint32, 1, 1.5707963267948966)
-	asinIntAndFloat[uint64](t, types.T_uint64, 1, 1.5707963267948966)
-
-	asinIntAndFloatInValid[float32](t, types.T_float32, 1.0001)
-
-	asinIntAndFloatInValid(t, types.T_float64, 1.0001)
+	testAsin(t, 0, 0)
+	testAsin(t, 1, 1.5707963267948966)
+	testAsinInvalid(t, 1.0001)
 }
 
-func asinIntAndFloatInValid[T constraints.Integer | constraints.Float](t *testing.T, typ types.T, src T) {
+func testAsinInvalid(t *testing.T, src float64) {
 	procs := makeProcess()
 	cases := []struct {
 		name       string
@@ -52,7 +42,7 @@ func asinIntAndFloatInValid[T constraints.Integer | constraints.Float](t *testin
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makeasinVectors(src, true, typ),
+			vecs:       makeVectors(src, true, types.T_float64),
 			proc:       procs,
 			wantBytes:  []float64{},
 			wantScalar: true,
@@ -61,7 +51,7 @@ func asinIntAndFloatInValid[T constraints.Integer | constraints.Float](t *testin
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			plus, err := Asin[T](c.vecs, c.proc)
+			plus, err := Asin(c.vecs, c.proc)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -71,7 +61,7 @@ func asinIntAndFloatInValid[T constraints.Integer | constraints.Float](t *testin
 	}
 }
 
-func asinIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, typ types.T, src T, res float64) {
+func testAsin(t *testing.T, src float64, res float64) {
 	procs := makeProcess()
 	cases := []struct {
 		name       string
@@ -82,7 +72,7 @@ func asinIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, ty
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makeasinVectors(src, true, typ),
+			vecs:       makeVectors(src, true, types.T_float64),
 			proc:       procs,
 			wantBytes:  []float64{res},
 			wantScalar: true,
@@ -91,7 +81,7 @@ func asinIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, ty
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			plus, err := Asin[T](c.vecs, c.proc)
+			plus, err := Asin(c.vecs, c.proc)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -101,8 +91,7 @@ func asinIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, ty
 	}
 }
 
-// Construct the vector parameter of the plus operator
-func makeasinVectors[T constraints.Integer | constraints.Float](src T, srcScalar bool, t types.T) []*vector.Vector {
+func makeVectors[T constraints.Integer | constraints.Float](src T, srcScalar bool, t types.T) []*vector.Vector {
 	vectors := make([]*vector.Vector, 1)
 	vectors[0] = &vector.Vector{
 		Col:     []T{src},
@@ -113,10 +102,3 @@ func makeasinVectors[T constraints.Integer | constraints.Float](src T, srcScalar
 	}
 	return vectors
 }
-
-// NULL return not a value
-// func MakeScalarNullSlice(length int) []*vector.Vector {
-// 	vectors := make([]*vector.Vector, 1)
-// 	vectors[0] = testutil.MakeScalarNull(4)
-// 	return vectors
-// }
