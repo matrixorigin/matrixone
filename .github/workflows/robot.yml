@@ -66,8 +66,8 @@ jobs:
           echo "bvt_coverage='bvt_coverage.out'" >> $GITHUB_ENV
           echo "ut_html_coverage='ut_coverage.html'" >> $GITHUB_ENV
           echo "bvt_html_coverage='bvt_coverage.html'" >> $GITHUB_ENV
-          echo "ut_excluded_pkg='pkg/pb\|vm/driver\|engine/aoe\|pkg/catalog\|engine/memEngine\|pkg/logger\|sql/plan/\|sql/compile/\|sql/colexec/\|sql/viewexec\|pkg/rpcserver\|sql/handler\|sql/protocol\|sql/rewrite\|pkg/internal\|pkg/prefetch\|vm/malloc\|vm/pipeline/\|epochgc'" >> $GITHUB_ENV
-          echo "bvt_excluded_pkg='pkg/txn\|/testutil\|/unittest\|pkg/fileservice\|pkg/logservice\|pkg/hakeeper\|pkg/pb\|vm/driver\|engine/aoe\|pkg/catalog\|engine/memEngine\|pkg/logger\|sql/plan/\|sql/compile/\|sql/colexec/\|sql/viewexec\|pkg/rpcserver\|sql/handler\|sql/protocol\|sql/rewrite\|pkg/internal\|pkg/prefetch\|vm/malloc\|vm/pipeline/\|epochgc'" >> $GITHUB_ENV
+          echo "ut_excluded_pkg='pkg/pb\|vm/driver\|engine/aoe\|pkg/catalog\|engine/memEngine\|pkg/logger\|sql/plan/\|sql/compile/\|sql/colexec/\|sql/viewexec\|pkg/rpcserver\|sql/handler\|sql/protocol\|sql/rewrite\|pkg/internal\|pkg/prefetch\|vm/malloc\|vm/pipeline/\|epochgc\|pkg/builtin\|pkg/sql/parsers/goyacc'" >> $GITHUB_ENV
+          echo "bvt_excluded_pkg='pkg/txn\|/testutil\|/unittest\|pkg/fileservice\|pkg/logservice\|pkg/hakeeper\|pkg/pb\|vm/driver\|engine/aoe\|pkg/catalog\|engine/memEngine\|pkg/logger\|sql/plan/\|sql/compile/\|sql/colexec/\|sql/viewexec\|pkg/rpcserver\|sql/handler\|sql/protocol\|sql/rewrite\|pkg/internal\|pkg/prefetch\|vm/malloc\|vm/pipeline/\|epochgc\|pkg/builtin\|pkg/sql/parsers/goyacc'" >> $GITHUB_ENV
 
       - name: Unit Test
         timeout-minutes: 60
