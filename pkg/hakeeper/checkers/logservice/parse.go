@@ -34,16 +34,25 @@ func newFixingShard(origin pb.LogShardInfo) *fixingShard {
 func fixedLogShardInfo(record metadata.LogShardRecord, info pb.LogShardInfo,
 	expiredStores util.StoreSlice) *fixingShard {
 	fixing := newFixingShard(info)
+	diff := len(fixing.replicas) - int(record.NumberOfReplicas)
+	if record.ShardID == 0 {
+		diff = 0
+	}
+
+	// The number of replicas is less than expected.
+	// Record how many replicas should be added.
+	if diff < 0 {
+		fixing.toAdd = uint32(-diff)
+	}
 
 	for replicaID, uuid := range info.Replicas {
 		if expiredStores.Contains(uuid) {
 			delete(fixing.replicas, replicaID)
+			// do not remove replicas more than expected.
+			if diff > 0 {
+				diff--
+			}
 		}
-	}
-
-	diff := len(fixing.replicas) - int(record.NumberOfReplicas)
-	if record.ShardID == 0 {
-		diff = 0
 	}
 
 	// The number of replicas is more than expected.
@@ -54,12 +63,6 @@ func fixedLogShardInfo(record metadata.LogShardRecord, info pb.LogShardInfo,
 		for i := 0; i < diff; i++ {
 			delete(fixing.replicas, idSlice[i])
 		}
-	}
-
-	// The number of replicas is less than expected.
-	// Record how many replicas should be added.
-	if diff < 0 {
-		fixing.toAdd = uint32(-diff)
 	}
 
 	return fixing
