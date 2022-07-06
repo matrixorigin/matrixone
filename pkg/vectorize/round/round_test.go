@@ -15,7 +15,6 @@
 package round
 
 import (
-	"fmt"
 	"math"
 	"testing"
 
@@ -27,13 +26,11 @@ func TestRoundUint8(t *testing.T) {
 	nums := []uint8{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233}
 	res := make([]uint8, len(nums))
 	res0 := roundUint8(nums, res, 0)
-	fmt.Println(res0)
 	correctRes0 := []uint8{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233}
 	for i := range res0 {
 		require.Equal(t, res0[i], correctRes0[i])
 	}
 	resMinus1 := roundUint8(nums, res, -1)
-	fmt.Println(resMinus1)
 	correctResMinus1 := []uint8{0, 0, 0, 10, 10, 10, 20, 30, 60, 90, 140, 230}
 	for i := range resMinus1 {
 		require.Equal(t, correctResMinus1[i], resMinus1[i])

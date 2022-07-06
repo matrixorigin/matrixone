@@ -28,6 +28,7 @@ package round
 */
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
@@ -70,6 +71,7 @@ var maxInt64digits = floor.MaxInt64digits
 
 var scaleTable = floor.ScaleTable
 
+// roundUint8, roundUint16, roundUint32, roundInt8, roundInt16, roundInt32 are basically orphan code, only called in plan1 and will be deleted soon.
 func roundUint8(xs []uint8, rs []uint8, digits int64) []uint8 {
 	// maximum uint8 number is 255, so we only need to worry about a few digit cases,
 	switch {
@@ -132,11 +134,19 @@ func roundUint64(xs []uint64, rs []uint64, digits int64) []uint64 {
 	switch {
 	case digits >= 0:
 		return xs
-	case digits > -maxUint64digits:
+	case digits > -maxUint64digits: // round algorithm contributed by @ffftian
 		scale := scaleTable[-digits]
 		for i := range xs {
-			value := (xs[i] + scale/2) / scale * scale //todo(broccoli): please find a better way to round away from zero
-			rs[i] = uint64(value)
+			step1 := xs[i] / scale * scale
+			step2 := xs[i] % scale
+			if step2 >= scale/2 {
+				rs[i] = step1 + scale
+				if rs[i] < step1 {
+					panic(moerr.NewError(moerr.OUT_OF_RANGE, "round operation overflowed"))
+				}
+			} else {
+				rs[i] = step1
+			}
 		}
 	case digits <= -maxUint64digits:
 		for i := range xs {
@@ -226,14 +236,30 @@ func roundInt64(xs []int64, rs []int64, digits int64) []int64 {
 	case digits >= 0:
 		return xs
 	case digits > -maxInt64digits:
-		scale := float64(scaleTable[-digits])
+		scale := int64(scaleTable[-digits]) // round algorithm contributed by @ffftian
 		for i := range xs {
 			if xs[i] > 0 {
-				value := int((float64(xs[i])+0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
-				rs[i] = int64(value)
+				step1 := xs[i] / scale * scale
+				step2 := xs[i] % scale
+				if step2 >= scale/2 {
+					rs[i] = step1 + scale
+					if rs[i] < step1 {
+						panic(moerr.NewError(moerr.OUT_OF_RANGE, "round operation overflowed"))
+					}
+				} else {
+					rs[i] = step1
+				}
 			} else if xs[i] < 0 {
-				value := int((float64(xs[i])-0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
-				rs[i] = int64(value)
+				step1 := xs[i] / scale * scale
+				step2 := xs[i] % scale // module operation with negative numbers, the result is negative
+				if step2 <= scale/2 {
+					rs[i] = step1 - scale
+					if rs[i] > step1 {
+						panic(moerr.NewError(moerr.OUT_OF_RANGE, "round operation overflowed"))
+					}
+				} else {
+					rs[i] = step1
+				}
 			} else {
 				rs[i] = 0
 			}
@@ -251,6 +277,14 @@ func roundFloat32(xs []float32, rs []float32, digits int64) []float32 {
 		for i := range xs {
 			rs[i] = float32(math.RoundToEven(float64(xs[i])))
 		}
+	} else if digits >= 38 { // the range of float32 e-38 ~ e38
+		for i := range xs {
+			rs[i] = xs[i]
+		}
+	} else if digits <= -38 {
+		for i := range xs {
+			rs[i] = 0
+		}
 	} else {
 		scale := math.Pow10(int(digits))
 		for i := range xs {
@@ -266,6 +300,14 @@ func roundFloat64(xs []float64, rs []float64, digits int64) []float64 {
 	if digits == 0 {
 		for i := range xs {
 			rs[i] = math.RoundToEven(xs[i])
+		}
+	} else if digits >= 308 { // the range of float64
+		for i := range xs {
+			rs[i] = xs[i]
+		}
+	} else if digits <= -308 {
+		for i := range xs {
+			rs[i] = 0
 		}
 	} else {
 		scale := math.Pow10(int(digits))
