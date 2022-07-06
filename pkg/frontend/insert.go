@@ -1016,7 +1016,7 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			}
 			return float64(v), nil
 		case types.T_timestamp:
-			res, err := types.ParseTimestamp(constant.StringVal(val), typ.Precision)
+			res, err := types.ParseTimestamp(str, typ.Precision)
 			if err != nil {
 				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
@@ -1181,19 +1181,19 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			case types.T_char, types.T_varchar:
 				return str, nil
 			case types.T_date:
-				res, err := types.ParseDate(constant.StringVal(val))
+				res, err := types.ParseDate(str)
 				if err != nil {
 					return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
 				}
 				return res, nil
 			case types.T_datetime:
-				res, err := types.ParseDatetime(constant.StringVal(val), typ.Precision)
+				res, err := types.ParseDatetime(str, typ.Precision)
 				if err != nil {
 					return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
 				}
 				return res, nil
 			case types.T_timestamp:
-				res, err := types.ParseTimestamp(constant.StringVal(val), typ.Precision)
+				res, err := types.ParseTimestamp(str, typ.Precision)
 				if err != nil {
 					return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
 				}
