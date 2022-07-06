@@ -1578,7 +1578,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		switch stmt.(type) {
 		case *tree.BeginTransaction:
 			fromTxnCommand = TxnBegin
-			err = txnHandler.StartByBegin()
+			err = txnHandler.StartByBeginIfNeeded()
 			if err != nil {
 				goto handleFailed
 			}

@@ -416,6 +416,16 @@ func (th *TxnHandler) StartByBegin() error {
 	return err
 }
 
+func (th *TxnHandler) StartByBeginIfNeeded() error {
+	logutil.Infof("start txn by begin if needed")
+	var err error
+	if th.IsInTaeTxn() {
+		return nil
+	}
+	err = th.StartByBegin()
+	return err
+}
+
 func (th *TxnHandler) StartByAutocommit() error {
 	logutil.Infof("start txn by autocommit")
 	var err error
@@ -474,7 +484,8 @@ func (th *TxnHandler) commit(option int) error {
 			err = th.taeTxn.Commit()
 		}
 	case TxnInit, TxnEnd:
-		err = errorTaeTxnHasNotBeenBegan
+		//Note:behaviors look like mysql
+		//err = errorTaeTxnHasNotBeenBegan
 	case TxnErr:
 		err = errorTaeTxnInIllegalState
 	}
@@ -538,7 +549,8 @@ func (th *TxnHandler) rollback(option int) error {
 			err = th.taeTxn.Rollback()
 		}
 	case TxnInit, TxnEnd:
-		err = errorTaeTxnHasNotBeenBegan
+		//Note:behaviors look like mysql
+		//err = errorTaeTxnHasNotBeenBegan
 	case TxnErr:
 		err = errorTaeTxnInIllegalState
 	}
