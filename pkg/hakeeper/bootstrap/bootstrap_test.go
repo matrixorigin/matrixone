@@ -213,7 +213,7 @@ func TestSortLogStores(t *testing.T) {
 	}}
 
 	for _, c := range cases {
-		output := LogStoresSortedByTick(c.logStores)
+		output := logStoresSortedByTick(c.logStores)
 		assert.Equal(t, c.expected, output)
 	}
 }
@@ -233,7 +233,7 @@ func TestSortDNStores(t *testing.T) {
 	}}
 
 	for _, c := range cases {
-		output := DNStoresSortedByTick(c.dnStores)
+		output := dnStoresSortedByTick(c.dnStores)
 		assert.Equal(t, c.expected, output)
 	}
 }
