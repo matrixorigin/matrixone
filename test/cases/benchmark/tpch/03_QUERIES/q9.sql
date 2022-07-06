@@ -1,4 +1,3 @@
--- @bvt:issue#3233
 use tpch;
 select
     nation,
@@ -33,4 +32,3 @@ order by
     nation,
     o_year desc
 ;
--- @bvt:issue

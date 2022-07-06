@@ -117,9 +117,9 @@ func Test_load(t *testing.T) {
 					Type: types.Type{
 						Oid:       types.T_decimal64,
 						Size:      0,
-						Width:     0,
+						Width:     10,
 						Scale:     2,
-						Precision: 10,
+						Precision: 0,
 					},
 					Name: "o"}},
 			&engine.AttributeDef{
@@ -127,9 +127,9 @@ func Test_load(t *testing.T) {
 					Type: types.Type{
 						Oid:       types.T_decimal128,
 						Size:      0,
-						Width:     0,
+						Width:     20,
 						Scale:     2,
-						Precision: 20,
+						Precision: 0,
 					},
 					Name: "p"}},
 			&engine.AttributeDef{
@@ -203,11 +203,9 @@ func Test_load(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		epochgc := getPCI()
-
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
+		ses := NewSession(proto, guestMmu, pu.Mempool, pu, gSysVariables)
 
 		mce := NewMysqlCmdExecutor()
 
@@ -293,9 +291,9 @@ func Test_load(t *testing.T) {
 					Type: types.Type{
 						Oid:       types.T_decimal64,
 						Size:      0,
-						Width:     0,
+						Width:     10,
 						Scale:     2,
-						Precision: 10,
+						Precision: 0,
 					},
 					Name: "o"}},
 			&engine.AttributeDef{
@@ -303,9 +301,9 @@ func Test_load(t *testing.T) {
 					Type: types.Type{
 						Oid:       types.T_decimal128,
 						Size:      0,
-						Width:     0,
+						Width:     20,
 						Scale:     2,
-						Precision: 20,
+						Precision: 0,
 					},
 					Name: "p"}},
 			&engine.AttributeDef{
@@ -395,11 +393,9 @@ func Test_load(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		epochgc := getPCI()
-
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
+		ses := NewSession(proto, guestMmu, pu.Mempool, pu, gSysVariables)
 
 		mce := NewMysqlCmdExecutor()
 

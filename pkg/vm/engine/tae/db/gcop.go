@@ -36,7 +36,7 @@ func gcBlockClosure(entry *catalog.BlockEntry, gct GCType) tasks.FuncT {
 		logutil.Debugf("[GCBLK] | %s | Started", entry.Repr())
 		defer func() {
 			if err == nil {
-				logutil.Infof("[GCBLK] | %s | Removed", entry.Repr())
+				logutil.Debugf("[GCBLK] | %s | Removed", entry.Repr())
 			} else {
 				logutil.Warnf("Cannot remove block %s, maybe removed before", entry.String())
 			}
@@ -64,7 +64,7 @@ func gcSegmentClosure(entry *catalog.SegmentEntry, gct GCType) tasks.FuncT {
 			if err != nil {
 				logutil.Warnf("Cannot remove segment %s, maybe removed before: %v", entry.String(), err)
 			} else {
-				logutil.Infof("[GCSEG] | %s | BLKS=%s | Removed", entry.Repr(), common.IDArraryString(scopes))
+				logutil.Debugf("[GCSEG] | %s | BLKS=%s | Removed", entry.Repr(), common.IDArraryString(scopes))
 			}
 		}()
 		table := entry.GetTable()
@@ -90,9 +90,9 @@ func gcSegmentClosure(entry *catalog.SegmentEntry, gct GCType) tasks.FuncT {
 func gcTableClosure(entry *catalog.TableEntry, gct GCType) tasks.FuncT {
 	return func() (err error) {
 		scopes := make([]common.ID, 0)
-		logutil.Infof("[GCTABLE] | %s | Started", entry.String())
+		logutil.Debugf("[GCTABLE] | %s | Started", entry.String())
 		defer func() {
-			logutil.Infof("[GCTABLE] | %s | Ended: %v | SEGS=%s", entry.String(), err, common.IDArraryString(scopes))
+			logutil.Debugf("[GCTABLE] | %s | Ended: %v | SEGS=%s", entry.String(), err, common.IDArraryString(scopes))
 		}()
 		dbEntry := entry.GetDB()
 		it := entry.MakeSegmentIt(false)
@@ -113,9 +113,9 @@ func gcTableClosure(entry *catalog.TableEntry, gct GCType) tasks.FuncT {
 func gcDatabaseClosure(entry *catalog.DBEntry) tasks.FuncT {
 	return func() (err error) {
 		scopes := make([]common.ID, 0)
-		logutil.Infof("[GCDB] | %s | Started", entry.String())
+		logutil.Debugf("[GCDB] | %s | Started", entry.String())
 		defer func() {
-			logutil.Infof("[GCDB] | %s | Ended: %v | TABLES=%s", entry.String(), err, common.IDArraryString(scopes))
+			logutil.Debugf("[GCDB] | %s | Ended: %v | TABLES=%s", entry.String(), err, common.IDArraryString(scopes))
 		}()
 		it := entry.MakeTableIt(false)
 		for it.Valid() {

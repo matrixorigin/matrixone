@@ -310,6 +310,7 @@ func (c *APP1Client) BuyGood(goodId uint64, count uint64) error {
 	if count > left {
 		logutil.Warnf("NotEnough Good %d: Repe %d, Requested %d", goodId, left, count)
 		err = errNotEnoughRepertory
+		return err
 	}
 	newLeft := left - count
 	rel, _ := c.DB.GetRelationByName(repertory.Name)
@@ -646,7 +647,7 @@ func TestTxn8(t *testing.T) {
 	filter = handle.NewEQFilter(pkv)
 	id, row, err = rel.GetByFilter(filter)
 	assert.NoError(t, err)
-	err = rel.RangeDelete(id, row, row)
+	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 	assert.NoError(t, err)
 
 	tae.Close()
@@ -762,7 +763,7 @@ func TestTxn9(t *testing.T) {
 	filter := handle.NewEQFilter(v)
 	id, row, err := rel.GetByFilter(filter)
 	assert.NoError(t, err)
-	err = rel.RangeDelete(id, row, row)
+	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 	wg.Wait()

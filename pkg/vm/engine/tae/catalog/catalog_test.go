@@ -276,9 +276,7 @@ func TestTableEntry2(t *testing.T) {
 				} else {
 					// t.Logf("db-ttxn=%d, %v", ttxn.GetID(), err)
 					_, err := database.GetRelationByName(schema.Name)
-					if err != nil {
-						// t.Logf("rel-ttxn=%d, %s", ttxn.GetID(), err)
-					}
+					assert.NoError(t, err)
 				}
 			}
 		}(txn)
@@ -339,21 +337,20 @@ func TestTable1(t *testing.T) {
 		txn, _ := txnMgr.StartTxn(nil)
 		db, err := txn.GetDatabase(name)
 		assert.Nil(t, err)
-		rel, err := db.GetRelationByName(tbName)
+		_, err = db.GetRelationByName(tbName)
 		if err == ErrNotFound {
 			schema := MockSchema(1, 0)
 			schema.Name = tbName
-			if rel, err = db.CreateRelation(schema); err != nil {
+			if _, err = db.CreateRelation(schema); err != nil {
 				return
 			}
 		} else {
-			if rel, err = db.DropRelationByName(tbName); err != nil {
+			if _, err = db.DropRelationByName(tbName); err != nil {
 				return
 			}
 		}
 		err = txn.Commit()
 		assert.Nil(t, err)
-		assert.NotNil(t, rel)
 		// t.Log(rel.String())
 	}
 	{

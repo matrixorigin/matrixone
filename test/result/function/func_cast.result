@@ -1,18 +1,17 @@
 select CAST(1-2 AS UNSIGNED);
-overflow from bigint to bigint unsigned
+Can't cast '-1' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
 select CAST(CAST(1-2 AS UNSIGNED) AS SIGNED INTEGER);
-overflow from bigint to bigint unsigned
+Can't cast '-1' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
 select CAST('10 ' as unsigned integer);
-CAST('10 ' as unsigned integer)
+cast(10  as integer unsigned)
 10
 select CAST('10x' as unsigned integer);
-CAST('10x' as unsigned integer)
-10
+Can't cast '10x' from VARCHAR type to BIGINT UNSIGNED type.
 select cast(-5 as unsigned) | 1, cast(-5 as unsigned) & -1;
 cast(-5 as unsigned) | 1	cast(-5 as unsigned) & -1
 18446744073709551611	18446744073709551611
 select cast(-5 as unsigned) -1, cast(-5 as unsigned) + 1;
-overflow from bigint to bigint unsigned
+Can't cast '-5' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
 select cast(5 as unsigned) -6.0;
 cast(5 as unsigned) -6.0
 -1.0
@@ -21,7 +20,7 @@ cast(NULL as signed)
 null
 select cast(1/2 as signed);
 cast(1 / 2 as signed)
-0
+1
 select cast("2001-1-1" as DATE), cast("2001-1-1" as DATETIME);
 cast("2001-1-1" as DATE)	cast("2001-1-1" as DATETIME)
 2001-01-01	2001-01-01 00:00:00
@@ -38,21 +37,18 @@ select CAST(0xb3 as signed);
 CAST(0xb3 as signed)
 179
 select CAST(0x8fffffffffffffff as signed);
-overflow from bigint unsigned to bigint
+Can't cast '10376293541461622783' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 select CAST(0xffffffffffffffff as unsigned);
 CAST(0xffffffffffffffff as unsigned)
 18446744073709551615
 select CAST(0xfffffffffffffffe as signed);
-overflow from bigint unsigned to bigint
+Can't cast '18446744073709551614' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 select cast('-10a' as signed integer);
-cast('-10a' as signed integer)
--10
+Can't cast '-10a' from VARCHAR type to BIGINT type.
 select cast('a10' as unsigned integer);
-cast('a10' as unsigned integer)
-0
+Can't cast 'a10' from VARCHAR type to BIGINT UNSIGNED type.
 select 10+'a';
-10+'a'
-10.0
+Can't cast 'a' from VARCHAR type to BIGINT type.
 select 10.0+cast('a' as decimal);
 10.0+cast('a' as decimal)
 10.0
@@ -60,32 +56,25 @@ select 10E+0+'a';
 10E+0+'a'
 10.0
 select cast('18446744073709551616' as unsigned);
-cast('18446744073709551616' as unsigned)
-18446744073709551615
+Can't cast '18446744073709551616' from VARCHAR type to BIGINT UNSIGNED type.
 select cast('18446744073709551616' as signed);
-cast('18446744073709551616' as signed)
--1
+Can't cast '18446744073709551616' from VARCHAR type to BIGINT type.
 select cast('9223372036854775809' as signed);
-cast('9223372036854775809' as signed)
--9223372036854775807
+Can't cast '9223372036854775809' from VARCHAR type to BIGINT type.
 select cast('-1' as unsigned);
-cast('-1' as unsigned)
-18446744073709551615
+Can't cast '-1' from VARCHAR type to BIGINT UNSIGNED type.
 select cast('abc' as signed);
-cast('abc' as signed)
-0
+Can't cast 'abc' from VARCHAR type to BIGINT type.
 select cast('1a' as signed);
-cast('1a' as signed)
-1
+Can't cast '1a' from VARCHAR type to BIGINT type.
 select cast('' as signed);
-cast('' as signed)
-0
+Can't cast '' from VARCHAR type to BIGINT type.
 select cast("2001-1-1" as date) = "2001-01-01";
 cast("2001-1-1" as date) = "2001-01-01"
-1
+true
 select cast("2001-1-1" as datetime) = "2001-01-01 00:00:00";
 cast("2001-1-1" as datetime) = "2001-01-01 00:00:00"
-1
+true
 select cast(NULL as DATE);
 cast(NULL as DATE)
 null
@@ -96,13 +85,12 @@ select cast(18446744073709551615 as unsigned);
 cast(18446744073709551615 as unsigned)
 18446744073709551615
 select cast(18446744073709551615 as signed);
-overflow from bigint unsigned to bigint
+Can't cast '18446744073709551615' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 select cast('18446744073709551615' as unsigned);
 cast('18446744073709551615' as unsigned)
 18446744073709551615
 select cast('18446744073709551615' as signed);
-cast('18446744073709551615' as signed)
--1
+Can't cast '18446744073709551615' from VARCHAR type to BIGINT type.
 select cast('9223372036854775807' as signed);
 cast('9223372036854775807' as signed)
 9223372036854775807
@@ -168,8 +156,7 @@ SELECT CAST(1/3 AS FLOAT) as float_col,CAST(1/3 AS DOUBLE) as double_col, CAST(1
 float_col	double_col	real_col
 0.333333	0.333333333	0.333333333
 SELECT CAST(DATE'2000-01-01' AS FLOAT), CAST(DATE'2000-01-01' AS DOUBLE);
-CAST(DATE'2000-01-01' AS FLOAT)	CAST(DATE'2000-01-01' AS DOUBLE)
-2.00001E7	2.0000101E7
+Operator 'cast' with parameters [DATE FLOAT] will be implemented in future version.
 SELECT CAST(TIMESTAMP'2000-01-01 23:59:59' AS FLOAT), CAST(TIMESTAMP'2000-01-01 23:59:59' AS DOUBLE);
 Operator 'cast' with parameters [TIMESTAMP FLOAT] will be implemented in future version.
 SELECT CAST(TIMESTAMP'2000-01-01 23:59:59.123456' AS FLOAT), CAST(TIMESTAMP'2000-01-01 23:59:59.123456' AS DOUBLE);
@@ -210,8 +197,7 @@ create table t1(f1 date, f2 timestamp, f3 datetime);
 insert into t1 values ("2006-01-01", "2006-01-01 12:01:01", "2006-01-01 12:01:01");
 insert into t1 values ("2006-01-02", "2006-01-02 12:01:02", "2006-01-02 12:01:02");
 select f1 from t1 where f1 between CAST("2006-1-1" as date) and CAST(20060101 as date);
-f1
-2006-01-01
+Operator 'cast' with parameters [BIGINT DATE] will be implemented in future version.
 select f1 from t1 where f1 between cast("2006-1-1" as date) and cast("2006.1.1" as date);
 f1
 2006-01-01
@@ -222,8 +208,7 @@ select f3 from t1 where f3 between cast("2006-1-1 12:1:1" as datetime) and cast(
 f3
 2006-01-01 12:01:01
 select f3 from t1 where timestamp(f3) between cast("2006-1-1 12:1:1" as datetime) and cast("2006-1-1 12:1:2" as datetime);
-f3
-2006-01-01 12:01:01
+Operator '>=' with parameters [TIMESTAMP DATETIME] will be implemented in future version.
 select f1 from t1 where cast("2006-1-1" as date) between f1 and f3;
 f1
 2006-01-01
@@ -231,7 +216,7 @@ select f1 from t1 where cast("2006-1-1" as date) between date(f1) and date(f3);
 f1
 2006-01-01
 select f1 from t1 where cast("2006-1-1" as date) between f1 and cast('zzz' as date);
-[22000]Incorrect date value
+Can't cast 'zzz' from VARCHAR type to DATE type.
 drop table t1;
 create table t1 (field DATE);
 insert into t1 values ('2006-11-06');

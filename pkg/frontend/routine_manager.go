@@ -26,15 +26,7 @@ import (
 type RoutineManager struct {
 	rwlock  sync.RWMutex
 	clients map[goetty.IOSession]*Routine
-
-	//epoch gc handler
-	pdHook *PDCallbackImpl
-
-	pu *config.ParameterUnit
-}
-
-func (rm *RoutineManager) getEpochgc() *PDCallbackImpl {
-	return rm.pdHook
+	pu      *config.ParameterUnit
 }
 
 func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
@@ -99,13 +91,6 @@ func (rm *RoutineManager) killStatement(id uint64) error {
 }
 
 func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received uint64) error {
-	if rm.pu.SV.GetRejectWhenHeartbeatFromPDLeaderIsTimeout() {
-		if !rm.pdHook.CanAcceptSomething() {
-			logutil.Errorf("The Heartbeat From PDLeader Is Timeout. The Server Go Offline.")
-			return errors.New("The Heartbeat From PDLeader Is Timeout. The Server Reject Connection.\n")
-		}
-	}
-
 	rm.rwlock.RLock()
 	routine, ok := rm.clients[rs]
 	rm.rwlock.RUnlock()
@@ -166,12 +151,10 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	return nil
 }
 
-func NewRoutineManager(pu *config.ParameterUnit, pdHook *PDCallbackImpl) *RoutineManager {
+func NewRoutineManager(pu *config.ParameterUnit) *RoutineManager {
 	rm := &RoutineManager{
 		clients: make(map[goetty.IOSession]*Routine),
-
-		pdHook: pdHook,
-		pu:     pu,
+		pu:      pu,
 	}
 	return rm
 }

@@ -21,14 +21,11 @@
 package operator
 
 import (
-	"sync"
-
-	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 // Controller is used to manage operators.
 type Controller struct {
-	sync.RWMutex
 	operators map[uint64][]*Operator
 }
 
@@ -40,16 +37,14 @@ func NewController() *Controller {
 
 // RemoveOperator removes an operator from the operators.
 func (c *Controller) RemoveOperator(op *Operator) bool {
-	c.Lock()
-	removed := c.removeOperatorLocked(op)
-	c.Unlock()
+	removed := c.removeOperator(op)
 	if removed {
 		_ = op.Cancel()
 	}
 	return removed
 }
 
-func (c *Controller) removeOperatorLocked(op *Operator) bool {
+func (c *Controller) removeOperator(op *Operator) bool {
 	for i, curOp := range c.operators[op.shardID] {
 		if curOp == op {
 			c.operators[op.shardID] = append(c.operators[op.shardID][:i], c.operators[op.shardID][i+1:]...)
@@ -64,9 +59,6 @@ func (c *Controller) removeOperatorLocked(op *Operator) bool {
 
 // GetOperators gets operators from the given shard.
 func (c *Controller) GetOperators(shardID uint64) []*Operator {
-	c.RLock()
-	defer c.RUnlock()
-
 	return c.operators[shardID]
 }
 
@@ -98,10 +90,10 @@ func (c *Controller) GetAddingReplicas() (adding map[uint64][]uint64) {
 	return
 }
 
-func (c *Controller) RemoveFinishedOperator(dnState hapb.DNState, state hapb.LogState) {
+func (c *Controller) RemoveFinishedOperator(logState pb.LogState, dnState pb.DNState) {
 	for _, ops := range c.operators {
 		for _, op := range ops {
-			op.Check(state, dnState)
+			op.Check(logState, dnState)
 			switch op.Status() {
 			case SUCCESS, EXPIRED:
 				c.RemoveOperator(op)
@@ -110,105 +102,105 @@ func (c *Controller) RemoveFinishedOperator(dnState hapb.DNState, state hapb.Log
 	}
 }
 
-func (c *Controller) Dispatch(ops []*Operator, logState hapb.LogState, dnState hapb.DNState) (commands []hapb.ScheduleCommand) {
+func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.DNState) (commands []pb.ScheduleCommand) {
 	for _, op := range ops {
 		c.operators[op.shardID] = append(c.operators[op.shardID], op)
 		step := op.Check(logState, dnState)
-		var cmd hapb.ScheduleCommand
+		var cmd pb.ScheduleCommand
 		switch st := step.(type) {
 		case AddLogService:
-			cmd = hapb.ScheduleCommand{
+			cmd = pb.ScheduleCommand{
 				UUID: st.Target,
-				ConfigChange: &hapb.ConfigChange{
-					Replica: hapb.Replica{
+				ConfigChange: &pb.ConfigChange{
+					Replica: pb.Replica{
 						UUID:      st.StoreID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 						Epoch:     st.Epoch,
 					},
-					ChangeType: hapb.AddReplica,
+					ChangeType: pb.AddReplica,
 				},
-				ServiceType: hapb.LogService,
+				ServiceType: pb.LogService,
 			}
 		case RemoveLogService:
-			cmd = hapb.ScheduleCommand{
+			cmd = pb.ScheduleCommand{
 				UUID: st.Target,
-				ConfigChange: &hapb.ConfigChange{
-					Replica: hapb.Replica{
+				ConfigChange: &pb.ConfigChange{
+					Replica: pb.Replica{
 						UUID:      st.StoreID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: hapb.RemoveReplica,
+					ChangeType: pb.RemoveReplica,
 				},
-				ServiceType: hapb.LogService,
+				ServiceType: pb.LogService,
 			}
 		case StartLogService:
-			cmd = hapb.ScheduleCommand{
+			cmd = pb.ScheduleCommand{
 				UUID: st.StoreID,
-				ConfigChange: &hapb.ConfigChange{
-					Replica: hapb.Replica{
+				ConfigChange: &pb.ConfigChange{
+					Replica: pb.Replica{
 						UUID:      st.StoreID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: hapb.StartReplica,
+					ChangeType: pb.StartReplica,
 				},
-				ServiceType: hapb.LogService,
+				ServiceType: pb.LogService,
 			}
 		case StopLogService:
-			cmd = hapb.ScheduleCommand{
+			cmd = pb.ScheduleCommand{
 				UUID: st.StoreID,
-				ConfigChange: &hapb.ConfigChange{
-					Replica: hapb.Replica{
+				ConfigChange: &pb.ConfigChange{
+					Replica: pb.Replica{
 						UUID:    st.StoreID,
 						ShardID: st.ShardID,
 					},
-					ChangeType: hapb.StopReplica,
+					ChangeType: pb.StopReplica,
 				},
-				ServiceType: hapb.LogService,
+				ServiceType: pb.LogService,
 			}
 		case AddDnReplica:
-			cmd = hapb.ScheduleCommand{
+			cmd = pb.ScheduleCommand{
 				UUID: st.StoreID,
-				ConfigChange: &hapb.ConfigChange{
-					Replica: hapb.Replica{
+				ConfigChange: &pb.ConfigChange{
+					Replica: pb.Replica{
 						UUID:      st.StoreID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: hapb.AddReplica,
+					ChangeType: pb.AddReplica,
 				},
-				ServiceType: hapb.DnService,
+				ServiceType: pb.DnService,
 			}
 		case RemoveDnReplica:
-			cmd = hapb.ScheduleCommand{
+			cmd = pb.ScheduleCommand{
 				UUID: st.StoreID,
-				ConfigChange: &hapb.ConfigChange{
-					Replica: hapb.Replica{
+				ConfigChange: &pb.ConfigChange{
+					Replica: pb.Replica{
 						UUID:      st.StoreID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: hapb.RemoveReplica,
+					ChangeType: pb.RemoveReplica,
 				},
-				ServiceType: hapb.DnService,
+				ServiceType: pb.DnService,
 			}
 		case StopDnStore:
-			cmd = hapb.ScheduleCommand{
+			cmd = pb.ScheduleCommand{
 				UUID: st.StoreID,
-				ShutdownStore: &hapb.ShutdownStore{
+				ShutdownStore: &pb.ShutdownStore{
 					StoreID: st.StoreID,
 				},
-				ServiceType: hapb.DnService,
+				ServiceType: pb.DnService,
 			}
 		case StopLogStore:
-			cmd = hapb.ScheduleCommand{
+			cmd = pb.ScheduleCommand{
 				UUID: st.StoreID,
-				ShutdownStore: &hapb.ShutdownStore{
+				ShutdownStore: &pb.ShutdownStore{
 					StoreID: st.StoreID,
 				},
-				ServiceType: hapb.LogService,
+				ServiceType: pb.LogService,
 			}
 		}
 

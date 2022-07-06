@@ -17,10 +17,11 @@ package compile2
 import (
 	"context"
 	"fmt"
+	"runtime"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/update"
-	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
 
@@ -135,6 +136,9 @@ func (s *Scope) Delete(ts uint64, snapshot engine.Snapshot, engine engine.Engine
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 	arg.Ts = ts
+	if arg.CanTruncate {
+		return arg.TableSource.Truncate(snapshot)
+	}
 	defer arg.TableSource.Close(snapshot)
 	if err := s.MergeRun(engine); err != nil {
 		return 0, err
@@ -458,6 +462,7 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 		ss[i].Proc.Lim = s.Proc.Lim
 		ss[i].Proc.UnixTime = s.Proc.UnixTime
 		ss[i].Proc.Snapshot = s.Proc.Snapshot
+		ss[i].Proc.SessionInfo = s.Proc.SessionInfo
 	}
 	{
 		var flg bool

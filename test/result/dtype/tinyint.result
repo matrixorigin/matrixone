@@ -163,26 +163,25 @@ id
 SELECT * from t_tinyint WHERE id = 1.1e0;
 id
 SELECT * from t_tinyint WHERE id = '1.1';
-id
+Can't cast '1.1' from VARCHAR type to TINYINT type.
 SELECT * from t_tinyint WHERE id = '1.1e0';
-id
+Can't cast '1.1e0' from VARCHAR type to TINYINT type.
 SELECT * from t_tinyint WHERE id IN (1.1, 2.2);
 id
 SELECT * from t_tinyint WHERE id IN (1.1e0, 2.2e0);
 id
 SELECT * from t_tinyint WHERE id IN ('1.1', '2.2');
-id
+Can't cast '1.1' from VARCHAR type to TINYINT type.
 SELECT * from t_tinyint WHERE id IN ('1.1e0', '2.2e0');
-id
+Can't cast '1.1e0' from VARCHAR type to TINYINT type.
 SELECT * from t_tinyint WHERE id BETWEEN 1.1 AND 1.9;
 id
 SELECT * from t_tinyint WHERE id BETWEEN 1.1e0 AND 1.9e0;
 id
 SELECT * from t_tinyint WHERE id BETWEEN '1.1' AND '1.9';
-id
+Can't cast '1.1' from VARCHAR type to TINYINT type.
 SELECT * from t_tinyint WHERE id BETWEEN '1.1e0' AND '1.9e0';
-id
-drop table t1;
+Can't cast '1.1e0' from VARCHAR type to TINYINT type.
 CREATE TABLE t1 (a TINYINT);
 INSERT INTO t1 VALUES (1);
 SELECT * FROM t1 WHERE coalesce(a) BETWEEN 0 and 0.9;

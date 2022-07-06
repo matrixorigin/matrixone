@@ -236,6 +236,215 @@ func TestSubStr(t *testing.T) {
 	}
 }
 
+func TestSubStrUTF(t *testing.T) {
+	procs := makeProcess()
+	cases := []struct {
+		name       string
+		vecs       []*vector.Vector
+		proc       *process.Process
+		wantBytes  []byte
+		wantScalar bool
+	}{
+		{
+			name:       "TEST01",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", 5, 0, false),
+			proc:       procs,
+			wantBytes:  []byte("cdef我爱你中国"),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST02",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", 7, 0, false),
+			proc:       procs,
+			wantBytes:  []byte("ef我爱你中国"),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST03",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", 11, 0, false),
+			proc:       procs,
+			wantBytes:  []byte("你中国"),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST04",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", 16, 0, false),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST05",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", 5, 6, true),
+			proc:       procs,
+			wantBytes:  []byte("cdef我爱"),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST06",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", 5, 10, true),
+			proc:       procs,
+			wantBytes:  []byte("cdef我爱你中国"),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST07",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", 5, 0, true),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST08",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", 6, -8, true),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST09",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", 6, -9, true),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST09",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", 6, -4, true),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST10",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", 6, -1, true),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "Test11",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", -4, 0, false),
+			proc:       procs,
+			wantBytes:  []byte("爱你中国"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test12",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", -13, 0, false),
+			proc:       procs,
+			wantBytes:  []byte("明天abcdef我爱你中国"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test13",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", -16, 0, false),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "Test14",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", -4, 3, true),
+			proc:       procs,
+			wantBytes:  []byte("爱你中"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test15",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", -13, 10, true),
+			proc:       procs,
+			wantBytes:  []byte("明天abcdef我爱"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test16",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", -13, 15, true),
+			proc:       procs,
+			wantBytes:  []byte("明天abcdef我爱你中国"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test17",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", -16, 10, true),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "Test18",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", -16, 20, true),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "Test19",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", -16, 2, true),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "Test20",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", -12, 2, true),
+			proc:       procs,
+			wantBytes:  []byte("天a"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test21",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", -12, 14, true),
+			proc:       procs,
+			wantBytes:  []byte("天abcdef我爱你中国"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test22",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", -12, 0, true),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "Test23",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", -6, -5, true),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "Test24",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", -6, -10, true),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "Test25",
+			vecs:       makeSubStrVectors("明天abcdef我爱你中国", -6, -1, true),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			substr, err := Substring(c.vecs, c.proc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			col := substr.Col.(*types.Bytes)
+			offset := col.Offsets[0]
+			length := col.Lengths[0]
+			resBytes := col.Data[offset:length]
+			require.Equal(t, c.wantBytes, resBytes)
+			require.Equal(t, c.wantScalar, substr.IsScalar())
+		})
+	}
+}
+
 func makeProcess() *process.Process {
 	hm := host.New(1 << 40)
 	gm := guest.New(1<<40, hm)

@@ -71,17 +71,12 @@ drop table t1;
 create table t1 (bigint_col bigint unsigned);
 insert into t1 values (17666000000000000000);
 select * from t1 where bigint_col=17666000000000000000;
--- @bvt:issue#3274
 select * from t1 where bigint_col='17666000000000000000';
--- @bvt:issue
-
 #Test cases of cast
 drop table t1;
--- @bvt:issue#3249
 select cast(10000002383263201056 as unsigned) mod 50 as result;
 select cast(19999999999999999999 as signed);
 select cast(-19999999999999999999 as signed);
--- @bvt:issue
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a BIGINT(20) UNSIGNED,
 b VARCHAR(20));
@@ -104,22 +99,16 @@ SELECT id, id = 1.1 FROM t_bigint;
 SELECT id, 1.1 = id FROM t_bigint;
 SELECT * from t_bigint WHERE id = 1.1;
 SELECT * from t_bigint WHERE id = 1.1e0;
--- @bvt:issue#3274
 SELECT * from t_bigint WHERE id = '1.1';
 SELECT * from t_bigint WHERE id = '1.1e0';
--- @bvt:issue
 SELECT * from t_bigint WHERE id IN (1.1, 2.2);
 SELECT * from t_bigint WHERE id IN (1.1e0, 2.2e0);
--- @bvt:issue#3274
 SELECT * from t_bigint WHERE id IN ('1.1', '2.2');
 SELECT * from t_bigint WHERE id IN ('1.1e0', '2.2e0');
--- @bvt:issue
 SELECT * from t_bigint WHERE id BETWEEN 1.1 AND 1.9;
 SELECT * from t_bigint WHERE id BETWEEN 1.1e0 AND 1.9e0;
--- @bvt:issue#3274
 SELECT * from t_bigint WHERE id BETWEEN '1.1' AND '1.9';
 SELECT * from t_bigint WHERE id BETWEEN '1.1e0' AND '1.9e0';
--- @bvt:issue
 drop table t1;
 CREATE TABLE t1 (a BIGINT);
 insert INTO t1 VALUES (1);

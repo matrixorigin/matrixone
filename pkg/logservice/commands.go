@@ -16,20 +16,20 @@ package logservice
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
-	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-func (s *Service) handleCommands(cmds []hapb.ScheduleCommand) {
+func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 	for _, cmd := range cmds {
 		if cmd.GetConfigChange() != nil {
 			switch cmd.ConfigChange.ChangeType {
-			case hapb.AddReplica:
+			case pb.AddReplica:
 				s.handleAddReplica(cmd)
-			case hapb.RemoveReplica:
+			case pb.RemoveReplica:
 				s.handleRemoveReplica(cmd)
-			case hapb.StartReplica:
+			case pb.StartReplica:
 				s.handleStartReplica(cmd)
-			case hapb.StopReplica:
+			case pb.StopReplica:
 				s.handleStopReplica(cmd)
 			default:
 				panic("unknown type")
@@ -43,7 +43,7 @@ func (s *Service) handleCommands(cmds []hapb.ScheduleCommand) {
 	}
 }
 
-func (s *Service) handleAddReplica(cmd hapb.ScheduleCommand) {
+func (s *Service) handleAddReplica(cmd pb.ScheduleCommand) {
 	shardID := cmd.ConfigChange.Replica.ShardID
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
 	epoch := cmd.ConfigChange.Replica.Epoch
@@ -53,7 +53,7 @@ func (s *Service) handleAddReplica(cmd hapb.ScheduleCommand) {
 	}
 }
 
-func (s *Service) handleRemoveReplica(cmd hapb.ScheduleCommand) {
+func (s *Service) handleRemoveReplica(cmd pb.ScheduleCommand) {
 	shardID := cmd.ConfigChange.Replica.ShardID
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
 	epoch := cmd.ConfigChange.Replica.Epoch
@@ -62,7 +62,7 @@ func (s *Service) handleRemoveReplica(cmd hapb.ScheduleCommand) {
 	}
 }
 
-func (s *Service) handleStartReplica(cmd hapb.ScheduleCommand) {
+func (s *Service) handleStartReplica(cmd pb.ScheduleCommand) {
 	shardID := cmd.ConfigChange.Replica.ShardID
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
 	if shardID == hakeeper.DefaultHAKeeperShardID {
@@ -76,7 +76,7 @@ func (s *Service) handleStartReplica(cmd hapb.ScheduleCommand) {
 	}
 }
 
-func (s *Service) handleStopReplica(cmd hapb.ScheduleCommand) {
+func (s *Service) handleStopReplica(cmd pb.ScheduleCommand) {
 	shardID := cmd.ConfigChange.Replica.ShardID
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
 	if err := s.store.stopReplica(shardID, replicaID); err != nil {

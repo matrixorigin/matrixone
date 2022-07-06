@@ -16,8 +16,10 @@ package logservice
 
 import (
 	"context"
+	"sync"
 	"time"
 
+	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/dragonboat/v4/logger"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -48,9 +50,17 @@ func firstError(err1 error, err2 error) error {
 type RPCRequest struct {
 	pb.Request
 	payload []byte
+	pool    *sync.Pool
 }
 
 var _ morpc.PayloadMessage = (*RPCRequest)(nil)
+
+func (r *RPCRequest) Release() {
+	if r.pool != nil {
+		r.payload = nil
+		r.pool.Put(r)
+	}
+}
 
 func (r *RPCRequest) SetID(id uint64) {
 	r.RequestID = id
@@ -76,9 +86,17 @@ func (r *RPCRequest) SetPayloadField(data []byte) {
 type RPCResponse struct {
 	pb.Response
 	payload []byte
+	pool    *sync.Pool
 }
 
 var _ morpc.PayloadMessage = (*RPCResponse)(nil)
+
+func (r *RPCResponse) Release() {
+	if r.pool != nil {
+		r.payload = nil
+		r.pool.Put(r)
+	}
+}
 
 func (r *RPCResponse) SetID(id uint64) {
 	r.RequestID = id
@@ -106,9 +124,11 @@ func (r *RPCResponse) SetPayloadField(data []byte) {
 // clients owned by DN nodes and the HAKeeper service via network, it can
 // be considered as the interface layer of the LogService.
 type Service struct {
-	cfg    Config
-	store  *store
-	server morpc.RPCServer
+	cfg      Config
+	store    *store
+	server   morpc.RPCServer
+	pool     *sync.Pool
+	respPool *sync.Pool
 }
 
 func NewService(cfg Config) (*Service, error) {
@@ -122,21 +142,34 @@ func NewService(cfg Config) (*Service, error) {
 		plog.Errorf("failed to create log store %v", err)
 		return nil, err
 	}
+	pool := &sync.Pool{}
+	pool.New = func() interface{} {
+		return &RPCRequest{pool: pool}
+	}
+	respPool := &sync.Pool{}
+	respPool.New = func() interface{} {
+		return &RPCResponse{pool: respPool}
+	}
 
 	mf := func() morpc.Message {
-		return &RPCRequest{}
+		return pool.Get().(*RPCRequest)
 	}
 	codec := morpc.NewMessageCodec(mf, 16*1024)
-	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.ServiceListenAddress, codec)
+	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.ServiceListenAddress, codec,
+		morpc.WithServerGoettyOptions(goetty.WithReleaseMsgFunc(func(i interface{}) {
+			respPool.Put(i)
+		})))
 	if err != nil {
 		return nil, err
 	}
 
 	plog.Infof("store created")
 	service := &Service{
-		cfg:    cfg,
-		store:  store,
-		server: server,
+		cfg:      cfg,
+		store:    store,
+		server:   server,
+		pool:     pool,
+		respPool: respPool,
 	}
 	server.RegisterRequestHandler(service.handleRPCRequest)
 
@@ -169,17 +202,19 @@ func (s *Service) handleRPCRequest(req morpc.Message,
 	if !ok {
 		panic("unexpected message type")
 	}
+	defer rr.Release()
 	resp, records := s.handle(rr.Request, rr.GetPayloadField())
 	var recs []byte
 	if len(records.Records) > 0 {
+		plog.Infof("total recs: %d", len(records.Records))
 		recs = MustMarshal(&records)
 	}
-	// FIXME: set timeout value
 	resp.RequestID = rr.RequestID
-	return cs.Write(&RPCResponse{
-		Response: resp,
-		payload:  recs,
-	}, morpc.SendOptions{})
+	response := s.respPool.Get().(*RPCResponse)
+	response.Response = resp
+	response.payload = recs
+	return cs.Write(response,
+		morpc.SendOptions{Timeout: time.Duration(rr.Request.Timeout)})
 }
 
 func (s *Service) handle(req pb.Request,
@@ -201,6 +236,10 @@ func (s *Service) handle(req pb.Request,
 		return s.handleConnect(req), pb.LogRecordResponse{}
 	case pb.CONNECT_RO:
 		return s.handleConnectRO(req), pb.LogRecordResponse{}
+	case pb.LOG_HEARTBEAT:
+		return s.handleLogHeartbeat(req), pb.LogRecordResponse{}
+	case pb.DN_HEARTBEAT:
+		return s.handleDNHeartbeat(req), pb.LogRecordResponse{}
 	default:
 		panic("unknown method type")
 	}
@@ -213,8 +252,9 @@ func getResponse(req pb.Request) pb.Response {
 func (s *Service) handleConnect(req pb.Request) pb.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
+	r := req.LogRequest
 	resp := getResponse(req)
-	if err := s.store.GetOrExtendDNLease(ctx, req.ShardID, req.DNID); err != nil {
+	if err := s.store.GetOrExtendDNLease(ctx, r.ShardID, r.DNID); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
@@ -223,9 +263,10 @@ func (s *Service) handleConnect(req pb.Request) pb.Response {
 func (s *Service) handleConnectRO(req pb.Request) pb.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
+	r := req.LogRequest
 	resp := getResponse(req)
 	// we only check whether the specified shard is available
-	if _, err := s.store.GetTruncatedIndex(ctx, req.ShardID); err != nil {
+	if _, err := s.store.GetTruncatedIndex(ctx, r.ShardID); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
@@ -234,12 +275,13 @@ func (s *Service) handleConnectRO(req pb.Request) pb.Response {
 func (s *Service) handleAppend(req pb.Request, payload []byte) pb.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
+	r := req.LogRequest
 	resp := getResponse(req)
-	lsn, err := s.store.Append(ctx, req.ShardID, payload)
+	lsn, err := s.store.Append(ctx, r.ShardID, payload)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.Index = lsn
+		resp.LogResponse.Index = lsn
 	}
 	return resp
 }
@@ -247,12 +289,13 @@ func (s *Service) handleAppend(req pb.Request, payload []byte) pb.Response {
 func (s *Service) handleRead(req pb.Request) (pb.Response, pb.LogRecordResponse) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
+	r := req.LogRequest
 	resp := getResponse(req)
-	records, lsn, err := s.store.QueryLog(ctx, req.ShardID, req.Index, req.MaxSize)
+	records, lsn, err := s.store.QueryLog(ctx, r.ShardID, r.Index, r.MaxSize)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.LastIndex = lsn
+		resp.LogResponse.LastIndex = lsn
 	}
 	return resp, pb.LogRecordResponse{Records: records}
 }
@@ -260,8 +303,9 @@ func (s *Service) handleRead(req pb.Request) (pb.Response, pb.LogRecordResponse)
 func (s *Service) handleTruncate(req pb.Request) pb.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
+	r := req.LogRequest
 	resp := getResponse(req)
-	if err := s.store.TruncateLog(ctx, req.ShardID, req.Index); err != nil {
+	if err := s.store.TruncateLog(ctx, r.ShardID, r.Index); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
@@ -270,12 +314,52 @@ func (s *Service) handleTruncate(req pb.Request) pb.Response {
 func (s *Service) handleGetTruncatedIndex(req pb.Request) pb.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
+	r := req.LogRequest
 	resp := getResponse(req)
-	index, err := s.store.GetTruncatedIndex(ctx, req.ShardID)
+	index, err := s.store.GetTruncatedIndex(ctx, r.ShardID)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.Index = index
+		resp.LogResponse.Index = index
 	}
+	return resp
+}
+
+// TODO: add tests to see what happens when request is sent to non hakeeper stores
+func (s *Service) handleLogHeartbeat(req pb.Request) pb.Response {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
+	defer cancel()
+	hb := req.LogHeartbeat
+	resp := getResponse(req)
+	if err := s.store.AddLogStoreHeartbeat(ctx, hb); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	if cb, err := s.store.GetCommandBatch(ctx, hb.UUID); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	} else {
+		resp.CommandBatch = cb
+	}
+
+	return resp
+}
+
+func (s *Service) handleDNHeartbeat(req pb.Request) pb.Response {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
+	defer cancel()
+	hb := req.DNHeartbeat
+	resp := getResponse(req)
+	if err := s.store.AddDNStoreHeartbeat(ctx, hb); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	if cb, err := s.store.GetCommandBatch(ctx, hb.UUID); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	} else {
+		resp.CommandBatch = cb
+	}
+
 	return resp
 }

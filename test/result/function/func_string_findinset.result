@@ -43,7 +43,8 @@ find_in_set('a', 'abcd')
 create table t1 (a varchar(255));
 insert into t1 values('1'),('-1'),('0'),("abc");
 select * from t1 where find_in_set('-1', a);
-Only bool expression can be used as filter condition.
+a
+-1
 drop table t1;
 CREATE TABLE t1 (
 access_id int NOT NULL default 0,

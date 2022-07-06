@@ -4,8 +4,7 @@ name varchar(10),
 level smallint unsigned);
 insert into t1 values ('string',1);
 select reverse("123"+space(level)+"456") from t1;
-reverse("123"+space(level)+"456")
-975
+Operator '+' with parameters [VARCHAR VARCHAR] will be implemented in future version.
 select concat_ws("abc", name,space(level)), concat_ws("abc",name, space(level)) from t1;
 concat_ws("abc", name,space(level))	concat_ws("abc",name, space(level))
 stringabc 	stringabc
@@ -40,13 +39,11 @@ the space count exceeds maxallowedCount 8000
 select space(-18446744073709551616);
 space(-18446744073709551616)
 select space(18446744073709551616);
-space(18446744073709551616)
-null
+the space count exceeds maxallowedCount 8000
 select space(-18446744073709551617);
 space(-18446744073709551617)
 select space(18446744073709551617);
-space(18446744073709551617)
-null
+the space count exceeds maxallowedCount 8000
 SELECT space(9223372036854775808);
 the space count exceeds maxallowedCount 8000
 SELECT length(space(9223372036854775809));
@@ -56,17 +53,13 @@ SELECT SPACE(NULL);
 SPACE(NULL)
 null
 SELECT SPACE(12)+"123";
-SPACE(12)+"123"
-123.0
+Operator '+' with parameters [VARCHAR VARCHAR] will be implemented in future version.
 SELECT SPACE(12314.14123)+"123";
-SPACE(12314.14123)+"123"
-123.0
+Operator '+' with parameters [VARCHAR VARCHAR] will be implemented in future version.
 SELECT SPACE("1231")+"123";
-SPACE("1231")+"123"
-123.0
+Operator '+' with parameters [VARCHAR VARCHAR] will be implemented in future version.
 SELECT SPACE("2012-03-12")+"123";
-SPACE("2012-03-12")+"123"
-123.0
+Operator '+' with parameters [VARCHAR VARCHAR] will be implemented in future version.
 CREATE TABLE t(i BIGINT UNSIGNED);
 INSERT INTO t values(9223372036854775808);
 SELECT space(i) FROM t;
@@ -104,5 +97,4 @@ a	a
 drop table t1;
 drop table t2;
 SELECT space("你好")+"你好";
-space("你好")+"你好"
-0.0
+Operator '+' with parameters [VARCHAR VARCHAR] will be implemented in future version.

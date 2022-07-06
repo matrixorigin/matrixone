@@ -22,6 +22,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -46,6 +47,7 @@ type DeleteNode struct {
 	commitTs   uint64
 	nt         NodeType
 	id         *common.ID
+	dt         handle.DeleteType
 }
 
 func NewMergedNode(commitTs uint64) *DeleteNode {
@@ -60,12 +62,13 @@ func NewMergedNode(commitTs uint64) *DeleteNode {
 	return n
 }
 
-func NewDeleteNode(txn txnif.AsyncTxn) *DeleteNode {
+func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 	n := &DeleteNode{
 		RWMutex: new(sync.RWMutex),
 		mask:    roaring.New(),
 		txn:     txn,
 		nt:      NT_Normal,
+		dt:      dt,
 	}
 	if txn != nil {
 		n.startTs = txn.GetStartTS()
@@ -287,11 +290,13 @@ func (node *DeleteNode) PrepareRollback() (err error) {
 func (node *DeleteNode) ApplyRollback() (err error) { return }
 
 func (node *DeleteNode) OnApply() (err error) {
-	listener := node.chain.mvcc.GetDeletesListener()
-	if listener == nil {
-		return
+	if node.dt == handle.DT_Normal {
+		listener := node.chain.mvcc.GetDeletesListener()
+		if listener == nil {
+			return
+		}
+		err = listener(node.mask.GetCardinality(), node.mask.Iterator(), node.commitTs)
 	}
-	err = listener(node.mask.GetCardinality(), node.mask.Iterator(), node.commitTs)
 	return
 }
 

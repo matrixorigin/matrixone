@@ -187,6 +187,49 @@ func TestBitmapAllocator_Allocate3(t *testing.T) {
 
 }
 
+func TestBitmapAllocator_Allocate4(t *testing.T) {
+	dir := testutils.InitTestEnv(ModuleName, t)
+	name := path.Join(dir, "init.driver")
+	seg := Driver{}
+	err := seg.Init(name)
+	assert.Nil(t, err)
+	seg.Mount()
+	level0 := seg.allocator.(*BitmapAllocator).level0
+	level0[0] = 0xfc00000000000000
+	level0[1] = 0xffffffffffffe07f
+	level0[2] = 0x3fff
+	level0[3] = ALL_UNIT_CLEAR
+	level0[4] = ALL_UNIT_CLEAR
+	file := seg.NewBlockFile("test_1.blk")
+	file.snode.algo = compress.None
+	buffer := mockData(73728)
+	assert.NotNil(t, buffer)
+	err = file.driver.Append(file, buffer)
+	assert.Nil(t, err)
+	ret := 0xFFFFFFFF8000007F - level0[1]
+	assert.Equal(t, 0, int(ret))
+	file1 := seg.NewBlockFile("test_2.blk")
+	file1.snode.algo = compress.None
+	buffer1 := mockData(135168)
+	assert.NotNil(t, buffer1)
+	err = file.driver.Append(file1, buffer1)
+	assert.Nil(t, err)
+	ret = 0x7F - level0[1]
+	assert.Equal(t, 0, int(ret))
+	level0[1] = 0xFFFFFFFF8000007F
+	file1 = seg.NewBlockFile("test_3.blk")
+	file1.snode.algo = compress.None
+	buffer1 = mockData(143360)
+	assert.NotNil(t, buffer1)
+	err = file.driver.Append(file1, buffer1)
+	assert.Nil(t, err)
+	ret = 0x7F - level0[1]
+	assert.Equal(t, 0, int(ret))
+	ret = 0x3FFC - level0[2]
+	assert.Equal(t, 0, int(ret))
+
+}
+
 func TestBitmapAllocator_Free(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	name := path.Join(dir, "free.driver")
@@ -366,6 +409,11 @@ func TestSegment_Replay2(t *testing.T) {
 		file.snode.algo = compress.None
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
 		assert.Nil(t, err)
+	}
+	logStat, err := seg.logFile.Stat()
+	assert.Nil(t, err)
+	if logStat.Size() < int64(LOG_SIZE+LOG_START-2*INODE_SIZE) {
+		assert.Nil(t, logStat.Size())
 	}
 	seg1 := Driver{}
 	err = seg1.Open(name)

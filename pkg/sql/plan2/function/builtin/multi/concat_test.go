@@ -12,31 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package length
+package multi
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-
-	"golang.org/x/sys/cpu"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
+	"github.com/stretchr/testify/require"
+	"testing"
 )
 
-func strLengthAvx2Asm(x []uint32, r []int64)
-func strLengthAvx512Asm(x []uint32, r []int64)
+func TestConcat(t *testing.T) {
+	v1 := testutil.MakeVarcharVector([]string{"hello "}, []uint64{})
+	v2 := testutil.MakeVarcharVector([]string{"world"}, []uint64{})
 
-func init() {
-	if cpu.X86.HasAVX512 {
-		StrLength = strLengthAvx512
-	} else if cpu.X86.HasAVX2 {
-		StrLength = strLengthAvx2
-	}
-}
-
-func strLengthAvx2(xs *types.Bytes, rs []int64) []int64 {
-	strLengthAvx2Asm(xs.Lengths, rs)
-	return rs
-}
-
-func strLengthAvx512(xs *types.Bytes, rs []int64) []int64 {
-	strLengthAvx512Asm(xs.Lengths, rs)
-	return rs
+	inputVectors := []*vector.Vector{v1, v2}
+	proc := testutil.NewProc()
+	outputVector, err := Concat(inputVectors, proc)
+	require.NoError(t, err)
+	outputBytes := outputVector.Col.(*types.Bytes)
+	require.Equal(t, []byte("hello world"), outputBytes.Data)
 }

@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ func getServiceTestConfig() Config {
 	}
 }
 
-func runServiceTest(t *testing.T, fn func(*testing.T, *Service)) {
+func runServiceTest(t *testing.T, hakeeper bool, fn func(*testing.T, *Service)) {
 	defer leaktest.AfterTest(t)()
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
@@ -50,7 +51,11 @@ func runServiceTest(t *testing.T, fn func(*testing.T, *Service)) {
 	require.NoError(t, err)
 	peers := make(map[uint64]dragonboat.Target)
 	peers[1] = service.ID()
-	require.NoError(t, service.store.StartReplica(1, 1, peers, false))
+	if hakeeper {
+		require.NoError(t, service.store.StartHAKeeperReplica(1, peers, false))
+	} else {
+		require.NoError(t, service.store.StartReplica(1, 1, peers, false))
+	}
 	defer func() {
 		assert.NoError(t, service.Close())
 	}()
@@ -70,45 +75,51 @@ func TestServiceConnect(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		req := pb.Request{
 			Method:  pb.CONNECT,
-			ShardID: 1,
 			Timeout: int64(time.Second),
-			DNID:    100,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				DNID:    100,
+			},
 		}
 		resp := s.handleConnect(req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
-	runServiceTest(t, fn)
+	runServiceTest(t, false, fn)
 }
 
 func TestServiceConnectTimeout(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		req := pb.Request{
 			Method:  pb.CONNECT,
-			ShardID: 1,
 			Timeout: 50 * int64(time.Millisecond),
-			DNID:    100,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				DNID:    100,
+			},
 		}
 		resp := s.handleConnect(req)
 		assert.Equal(t, pb.Timeout, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
-	runServiceTest(t, fn)
+	runServiceTest(t, false, fn)
 }
 
 func TestServiceConnectRO(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		req := pb.Request{
 			Method:  pb.CONNECT_RO,
-			ShardID: 1,
 			Timeout: int64(time.Second),
-			DNID:    100,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				DNID:    100,
+			},
 		}
 		resp := s.handleConnect(req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
-	runServiceTest(t, fn)
+	runServiceTest(t, false, fn)
 }
 
 func getTestAppendCmd(id uint64, data []byte) []byte {
@@ -119,95 +130,195 @@ func getTestAppendCmd(id uint64, data []byte) []byte {
 	return cmd
 }
 
+func TestServiceHandleLogHeartbeat(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		req := pb.Request{
+			Method:  pb.LOG_HEARTBEAT,
+			Timeout: int64(time.Second),
+			LogHeartbeat: pb.LogStoreHeartbeat{
+				UUID: "uuid1",
+			},
+		}
+		sc1 := pb.ScheduleCommand{
+			UUID: "uuid1",
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID: 1,
+				},
+			},
+		}
+		sc2 := pb.ScheduleCommand{
+			UUID: "uuid2",
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID: 2,
+				},
+			},
+		}
+		sc3 := pb.ScheduleCommand{
+			UUID: "uuid1",
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID: 3,
+				},
+			},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t,
+			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
+		resp := s.handleLogHeartbeat(req)
+		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
+	}
+	runServiceTest(t, true, fn)
+}
+
+func TestServiceHandleDNHeartbeat(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		req := pb.Request{
+			Method:  pb.DN_HEARTBEAT,
+			Timeout: int64(time.Second),
+			DNHeartbeat: pb.DNStoreHeartbeat{
+				UUID: "uuid1",
+			},
+		}
+		sc1 := pb.ScheduleCommand{
+			UUID: "uuid1",
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID: 1,
+				},
+			},
+		}
+		sc2 := pb.ScheduleCommand{
+			UUID: "uuid2",
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID: 2,
+				},
+			},
+		}
+		sc3 := pb.ScheduleCommand{
+			UUID: "uuid1",
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID: 3,
+				},
+			},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t,
+			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
+		resp := s.handleDNHeartbeat(req)
+		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
+	}
+	runServiceTest(t, true, fn)
+}
+
 func TestServiceHandleAppend(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		req := pb.Request{
 			Method:  pb.CONNECT_RO,
-			ShardID: 1,
 			Timeout: int64(time.Second),
-			DNID:    100,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				DNID:    100,
+			},
 		}
 		resp := s.handleConnect(req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
-		cmd := getTestAppendCmd(req.DNID, data)
+		cmd := getTestAppendCmd(req.LogRequest.DNID, data)
 		req = pb.Request{
 			Method:  pb.APPEND,
-			ShardID: 1,
 			Timeout: int64(time.Second),
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+			},
 		}
 		resp = s.handleAppend(req, cmd)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(4), resp.Index)
+		assert.Equal(t, uint64(4), resp.LogResponse.Index)
 	}
-	runServiceTest(t, fn)
+	runServiceTest(t, false, fn)
 }
 
 func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		req := pb.Request{
 			Method:  pb.CONNECT_RO,
-			ShardID: 1,
 			Timeout: int64(time.Second),
-			DNID:    100,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				DNID:    100,
+			},
 		}
 		resp := s.handleConnect(req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
-		cmd := getTestAppendCmd(req.DNID+1, data)
+		cmd := getTestAppendCmd(req.LogRequest.DNID+1, data)
 		req = pb.Request{
 			Method:  pb.APPEND,
-			ShardID: 1,
 			Timeout: int64(time.Second),
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+			},
 		}
 		resp = s.handleAppend(req, cmd)
 		assert.Equal(t, pb.NotLeaseHolder, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(0), resp.Index)
+		assert.Equal(t, uint64(0), resp.LogResponse.Index)
 	}
-	runServiceTest(t, fn)
+	runServiceTest(t, false, fn)
 }
 
 func TestServiceHandleRead(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		req := pb.Request{
 			Method:  pb.CONNECT_RO,
-			ShardID: 1,
 			Timeout: int64(time.Second),
-			DNID:    100,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				DNID:    100,
+			},
 		}
 		resp := s.handleConnect(req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
-		cmd := getTestAppendCmd(req.DNID, data)
+		cmd := getTestAppendCmd(req.LogRequest.DNID, data)
 		req = pb.Request{
 			Method:  pb.APPEND,
-			ShardID: 1,
 			Timeout: int64(time.Second),
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+			},
 		}
 		resp = s.handleAppend(req, cmd)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(4), resp.Index)
+		assert.Equal(t, uint64(4), resp.LogResponse.Index)
 
 		req = pb.Request{
 			Method:  pb.READ,
-			ShardID: 1,
 			Timeout: int64(time.Second),
-			Index:   1,
-			MaxSize: 1024 * 32,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				Index:   1,
+				MaxSize: 1024 * 32,
+			},
 		}
 		resp, records := s.handleRead(req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(1), resp.LastIndex)
+		assert.Equal(t, uint64(1), resp.LogResponse.LastIndex)
 		require.Equal(t, 4, len(records.Records))
 		assert.Equal(t, pb.Internal, records.Records[0].Type)
 		assert.Equal(t, pb.Internal, records.Records[1].Type)
@@ -215,65 +326,75 @@ func TestServiceHandleRead(t *testing.T) {
 		assert.Equal(t, pb.UserRecord, records.Records[3].Type)
 		assert.Equal(t, cmd, records.Records[3].Data)
 	}
-	runServiceTest(t, fn)
+	runServiceTest(t, false, fn)
 }
 
 func TestServiceTruncate(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		req := pb.Request{
 			Method:  pb.CONNECT_RO,
-			ShardID: 1,
 			Timeout: int64(time.Second),
-			DNID:    100,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				DNID:    100,
+			},
 		}
 		resp := s.handleConnect(req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
-		cmd := getTestAppendCmd(req.DNID, data)
+		cmd := getTestAppendCmd(req.LogRequest.DNID, data)
 		req = pb.Request{
 			Method:  pb.APPEND,
-			ShardID: 1,
 			Timeout: int64(time.Second),
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+			},
 		}
 		resp = s.handleAppend(req, cmd)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(4), resp.Index)
+		assert.Equal(t, uint64(4), resp.LogResponse.Index)
 
 		req = pb.Request{
 			Method:  pb.TRUNCATE,
-			ShardID: 1,
 			Timeout: int64(time.Second),
-			Index:   4,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				Index:   4,
+			},
 		}
 		resp = s.handleTruncate(req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(0), resp.Index)
+		assert.Equal(t, uint64(0), resp.LogResponse.Index)
 
 		req = pb.Request{
 			Method:  pb.GET_TRUNCATE,
-			ShardID: 1,
 			Timeout: int64(time.Second),
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+			},
 		}
 		resp = s.handleGetTruncatedIndex(req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(4), resp.Index)
+		assert.Equal(t, uint64(4), resp.LogResponse.Index)
 
 		req = pb.Request{
 			Method:  pb.TRUNCATE,
-			ShardID: 1,
 			Timeout: int64(time.Second),
-			Index:   3,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				Index:   3,
+			},
 		}
 		resp = s.handleTruncate(req)
 		assert.Equal(t, pb.IndexAlreadyTruncated, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
-	runServiceTest(t, fn)
+	runServiceTest(t, false, fn)
 }
 
 func TestShardInfoCanBeQueried(t *testing.T) {

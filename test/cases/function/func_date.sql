@@ -30,9 +30,8 @@ select month(c),month(vc) from t1;
 -- @label:bvt
 select weekday(d),weekday(dt) from t1;
 
--- @bvt:issue#3378
+
 select weekday(c),weekday(vc) from t1;
--- @bvt:issue
 
 -- select week(d),week(dt) from t1;
 -- select day(d),day(dt) from t1;

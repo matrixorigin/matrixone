@@ -25,9 +25,9 @@ import (
 	"github.com/lni/dragonboat/v4/config"
 	"github.com/lni/dragonboat/v4/raftpb"
 	sm "github.com/lni/dragonboat/v4/statemachine"
-	"github.com/lni/goutils/syncutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -98,7 +98,7 @@ type store struct {
 	haKeeperReplicaID uint64
 	checker           hakeeper.Checker
 	alloc             hakeeper.IDAllocator
-	stopper           *syncutil.Stopper
+	stopper           *stopper.Stopper
 
 	mu struct {
 		sync.Mutex
@@ -108,9 +108,7 @@ type store struct {
 }
 
 func newLogStore(cfg Config) (*store, error) {
-	plog.Infof("creating nodehost")
 	nh, err := dragonboat.NewNodeHost(getNodeHostConfig(cfg))
-	plog.Infof("create nodehost returned")
 	if err != nil {
 		return nil, err
 	}
@@ -118,12 +116,12 @@ func newLogStore(cfg Config) (*store, error) {
 		cfg:     cfg,
 		nh:      nh,
 		alloc:   newIDAllocator(),
-		stopper: syncutil.NewStopper(),
+		stopper: stopper.NewStopper("log-store"),
 	}
 	ls.mu.truncateCh = make(chan struct{})
 	ls.mu.pendingTruncate = make(map[uint64]struct{})
-	ls.stopper.RunWorker(func() {
-		ls.truncationWorker()
+	ls.stopper.RunTask(func(ctx context.Context) {
+		ls.truncationWorker(ctx)
 	})
 	return ls, nil
 }
@@ -148,8 +146,8 @@ func (l *store) StartHAKeeperReplica(replicaID uint64,
 		join, hakeeper.NewStateMachine, raftConfig); err != nil {
 		return err
 	}
-	l.stopper.RunWorker(func() {
-		l.ticker()
+	l.stopper.RunTask(func(ctx context.Context) {
+		l.ticker(ctx)
 	})
 	return nil
 }
@@ -167,6 +165,10 @@ func (l *store) stopReplica(shardID uint64, replicaID uint64) error {
 	// FIXME: stop the hakeeper ticker when the replica being stopped
 	// is a hakeeper replica
 	return l.nh.StopReplica(shardID, replicaID)
+}
+
+func (l *store) requestLeaderTransfer(shardID uint64, targetReplicaID uint64) error {
+	return l.nh.RequestLeaderTransfer(shardID, targetReplicaID)
 }
 
 func (l *store) addReplica(shardID uint64, replicaID uint64,
@@ -340,6 +342,27 @@ func (l *store) AddDNStoreHeartbeat(ctx context.Context,
 	return nil
 }
 
+func (l *store) GetCommandBatch(ctx context.Context,
+	uuid string) (pb.CommandBatch, error) {
+	v, err := l.read(ctx,
+		hakeeper.DefaultHAKeeperShardID, &hakeeper.ScheduleCommandQuery{UUID: uuid})
+	if err != nil {
+		return pb.CommandBatch{}, err
+	}
+	return *(v.(*pb.CommandBatch)), nil
+}
+
+func (l *store) addScheduleCommands(ctx context.Context,
+	term uint64, cmds []pb.ScheduleCommand) error {
+	cmd := hakeeper.GetUpdateCommandsCmd(term, cmds)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if _, err := l.propose(ctx, session, cmd); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (l *store) getLeaseHolderID(ctx context.Context,
 	shardID uint64, entries []raftpb.Entry) (uint64, error) {
 	if len(entries) == 0 {
@@ -470,7 +493,7 @@ func (l *store) QueryLog(ctx context.Context, shardID uint64,
 	}
 }
 
-func (l *store) ticker() {
+func (l *store) ticker(ctx context.Context) {
 	ticker := time.NewTicker(hakeeper.TickDuration)
 	defer ticker.Stop()
 	haTicker := time.NewTicker(hakeeper.CheckDuration)
@@ -482,19 +505,19 @@ func (l *store) ticker() {
 			l.hakeeperTick()
 		case <-haTicker.C:
 			l.healthCheck()
-		case <-l.stopper.ShouldStop():
+		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-func (l *store) truncationWorker() {
+func (l *store) truncationWorker(ctx context.Context) {
 	for {
 		select {
-		case <-l.stopper.ShouldStop():
+		case <-ctx.Done():
 			return
 		case <-l.mu.truncateCh:
-			if err := l.truncateLog(); err != nil {
+			if err := l.truncateLog(ctx); err != nil {
 				panic(err)
 			}
 		}
@@ -521,7 +544,7 @@ func (l *store) hakeeperTick() {
 }
 
 // TODO: add tests for this
-func (l *store) truncateLog() error {
+func (l *store) truncateLog(ctx context.Context) error {
 	l.mu.Lock()
 	pendings := l.mu.pendingTruncate
 	l.mu.pendingTruncate = make(map[uint64]struct{})
@@ -529,7 +552,7 @@ func (l *store) truncateLog() error {
 
 	for shardID := range pendings {
 		select {
-		case <-l.stopper.ShouldStop():
+		case <-ctx.Done():
 			return nil
 		default:
 		}

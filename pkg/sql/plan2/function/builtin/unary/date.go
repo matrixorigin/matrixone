@@ -76,3 +76,32 @@ func DatetimeToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 		return resultVector, nil
 	}
 }
+
+func DateStringToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := vectors[0]
+	resultType := types.Type{Oid: types.T_date, Size: 4}
+	resultElementSize := int(resultType.Size)
+	inputValues := vector.MustBytesCols(inputVector)
+
+	if inputVector.IsScalar() {
+		if inputVector.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
+		resultVector := vector.NewConst(resultType)
+		resultValues := make([]types.Date, 1)
+		result, err := date.DateStringToDate(inputValues, resultValues)
+		vector.SetCol(resultVector, result)
+		return resultVector, err
+	} else {
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
+		if err != nil {
+			return nil, err
+		}
+		resultValues := encoding.DecodeDateSlice(resultVector.Data)
+		resultValues = resultValues[:len(inputValues.Lengths)]
+		nulls.Set(resultVector.Nsp, inputVector.Nsp)
+		result, err := date.DateStringToDate(inputValues, resultValues)
+		vector.SetCol(resultVector, result)
+		return resultVector, err
+	}
+}

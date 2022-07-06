@@ -158,9 +158,6 @@ type Session struct {
 	//protocol layer
 	protocol Protocol
 
-	//epoch gc handler
-	pdHook *PDCallbackImpl
-
 	//cmd from the client
 	Cmd int
 
@@ -189,11 +186,10 @@ type Session struct {
 	gSysVars        *GlobalSystemVariables
 }
 
-func NewSession(proto Protocol, pdHook *PDCallbackImpl, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
+func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
 	txnHandler := InitTxnHandler(config.StorageEngine)
 	ses := &Session{
 		protocol: proto,
-		pdHook:   pdHook,
 		GuestMmu: gm,
 		Mempool:  mp,
 		Pu:       PU,
@@ -223,7 +219,7 @@ func (ses *Session) SetGlobalVar(name string, value interface{}) error {
 // GetGlobalVar gets this value of the system variable in global
 func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 	if def, val, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
-		if def.Scope == ScopeSession {
+		if def.GetScope() == ScopeSession {
 			//empty
 			return nil, errorSystemVariableSessionEmpty
 		}
@@ -239,19 +235,19 @@ func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 // SetSessionVar sets the value of system variable in session
 func (ses *Session) SetSessionVar(name string, value interface{}) error {
 	if def, _, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
-		if def.Scope == ScopeGlobal {
+		if def.GetScope() == ScopeGlobal {
 			return errorSystemVariableIsGlobal
 		}
 		//scope session & both
-		if !def.Dynamic {
+		if !def.GetDynamic() {
 			return errorSystemVariableIsReadOnly
 		}
 
-		cv, err := def.Type.Convert(value)
+		cv, err := def.GetType().Convert(value)
 		if err != nil {
 			return err
 		}
-		ses.sysVars[def.Name] = cv
+		ses.sysVars[def.GetName()] = cv
 	} else {
 		return errorSystemVariableDoesNotExist
 	}
@@ -262,7 +258,7 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 func (ses *Session) GetSessionVar(name string) (interface{}, error) {
 	if def, gVal, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
 		ciname := strings.ToLower(name)
-		if def.Scope == ScopeGlobal {
+		if def.GetScope() == ScopeGlobal {
 			return gVal, nil
 		}
 		return ses.sysVars[ciname], nil
@@ -298,10 +294,6 @@ func (ses *Session) GetTxnHandler() *TxnHandler {
 	return ses.txnHandler
 }
 
-func (ses *Session) GetEpochgc() *PDCallbackImpl {
-	return ses.pdHook
-}
-
 func (ses *Session) GetTxnCompilerContext() *TxnCompilerContext {
 	return ses.txnCompileCtx
 }
@@ -332,8 +324,16 @@ func (ses *Session) SetDatabaseName(db string) {
 	ses.txnCompileCtx.SetDatabase(db)
 }
 
+func (ses *Session) DatabaseNameIsEmpty() bool {
+	return len(ses.GetDatabaseName()) == 0
+}
+
 func (ses *Session) GetUserName() string {
 	return ses.protocol.GetUserName()
+}
+
+func (ses *Session) SetUserName(uname string) {
+	ses.protocol.SetUserName(uname)
 }
 
 func (th *TxnHandler) GetStorage() engine.Engine {
@@ -602,9 +602,6 @@ type TxnCompilerContext struct {
 }
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
-	if len(db) == 0 {
-		db = "mo_catalog"
-	}
 	return &TxnCompilerContext{txnHandler: txn, dbName: db, QryTyp: TXN_DEFAULT}
 }
 
@@ -636,16 +633,17 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	return true
 }
 
-func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
-	if len(dbName) == 0 {
-		dbName = tcc.DefaultDatabase()
+func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (engine.Relation, error) {
+	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
+	if err != nil {
+		return nil, err
 	}
 
 	//open database
 	db, err := tcc.txnHandler.GetStorage().Database(dbName, tcc.txnHandler.GetTxn().GetCtx())
 	if err != nil {
 		logutil.Errorf("get database %v error %v", dbName, err)
-		return nil, nil
+		return nil, err
 	}
 
 	tableNames := db.Relations(tcc.txnHandler.GetTxn().GetCtx())
@@ -655,9 +653,30 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	table, err := db.Relation(tableName, tcc.txnHandler.GetTxn().GetCtx())
 	if err != nil {
 		logutil.Errorf("get table %v error %v", tableName, err)
+		return nil, err
+	}
+	return table, nil
+}
+
+func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, error) {
+	if len(dbName) == 0 {
+		dbName = tcc.DefaultDatabase()
+	}
+	if len(dbName) == 0 {
+		return "", NewMysqlError(ER_NO_DB_ERROR)
+	}
+	return dbName, nil
+}
+
+func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
+	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
+	if err != nil {
 		return nil, nil
 	}
-
+	table, err := tcc.getRelation(dbName, tableName)
+	if err != nil {
+		return nil, nil
+	}
 	engineDefs := table.TableDefs(tcc.txnHandler.GetTxn().GetCtx())
 
 	var defs []*plan2.ColDef
@@ -717,24 +736,12 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 }
 
 func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*plan2.ColDef {
-	if len(dbName) == 0 {
-		dbName = tcc.DefaultDatabase()
-	}
-
-	//open database
-	db, err := tcc.txnHandler.GetStorage().Database(dbName, tcc.txnHandler.GetTxn().GetCtx())
+	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
-		logutil.Errorf("get database %v error %v", dbName, err)
 		return nil
 	}
-
-	tableNames := db.Relations(tcc.txnHandler.GetTxn().GetCtx())
-	logutil.Infof("dbName %v tableNames %v", dbName, tableNames)
-
-	//open table
-	relation, err := db.Relation(tableName, tcc.txnHandler.GetTxn().GetCtx())
+	relation, err := tcc.getRelation(dbName, tableName)
 	if err != nil {
-		logutil.Errorf("get table %v error %v", tableName, err)
 		return nil
 	}
 
@@ -761,24 +768,12 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 }
 
 func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *plan2.ColDef {
-	if len(dbName) == 0 {
-		dbName = tcc.DefaultDatabase()
-	}
-
-	//open database
-	db, err := tcc.txnHandler.GetStorage().Database(dbName, tcc.txnHandler.GetTxn().GetCtx())
+	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
-		logutil.Errorf("get database %v error %v", dbName, err)
 		return nil
 	}
-
-	tableNames := db.Relations(tcc.txnHandler.GetTxn().GetCtx())
-	logutil.Infof("dbName %v tableNames %v", dbName, tableNames)
-
-	//open table
-	relation, err := db.Relation(tableName, tcc.txnHandler.GetTxn().GetCtx())
+	relation, err := tcc.getRelation(dbName, tableName)
 	if err != nil {
-		logutil.Errorf("get table %v error %v", tableName, err)
 		return nil
 	}
 
@@ -802,5 +797,16 @@ func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *p
 }
 
 func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) *plan2.Cost {
-	return &plan2.Cost{}
+	dbName := obj.GetSchemaName()
+	tableName := obj.GetObjName()
+	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
+	if err != nil {
+		return nil
+	}
+	table, err := tcc.getRelation(dbName, tableName)
+	if err != nil {
+		return nil
+	}
+	rows := table.Rows()
+	return &plan2.Cost{Card: float64(rows)}
 }

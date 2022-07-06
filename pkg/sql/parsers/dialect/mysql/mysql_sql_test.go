@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "SELECT ((+0) IN ((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)), (32767.1)));",
-		output: "select ((+0) in ((0b111111111111111111111111111111111111111111111111111), (rpad(1.0, 2048, 1)), (32767.1)))",
+		input:  "select a || 'hello' || 'world' from t1;",
+		output: "select concat(concat(a, hello), world) from t1",
 	}
 )
 
@@ -52,6 +52,27 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select a || 'hello' || 'world' from t1;",
+		output: "select concat(concat(a, hello), world) from t1",
+	}, {
+		input:  "select col || 'bar'",
+		output: "select concat(col, bar)",
+	}, {
+		input:  "select 'foo' || 'bar'",
+		output: "select concat(foo, bar)",
+	}, {
+		input:  "select 'a\\'b'",
+		output: "select a'b",
+	}, {
+		input:  "select char_length('\\n\\t\\r\\b\\0\\_\\%\\\\');",
+		output: "select char_length(\\n\\t\\r\\b\\0\\_\\%\\\\)",
+	}, {
+		input:  "select CAST('10 ' as unsigned);",
+		output: "select cast(10  as unsigned)",
+	}, {
+		input:  "select CAST('10 ' as unsigned integer);",
+		output: "select cast(10  as integer unsigned)",
+	}, {
 		input:  "SELECT ((+0) IN ((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)), (32767.1)));",
 		output: "select ((+0) in ((0b111111111111111111111111111111111111111111111111111), (rpad(1.0, 2048, 1)), (32767.1)))",
 	}, {
@@ -410,12 +431,12 @@ var (
 		output: "show tables from test01 where tables_in_test01 like %t2%",
 	}, {
 		input:  "select userID,MAX(score) max_score from t1 where userID <2 || userID > 3 group by userID order by max_score",
-		output: "select userid, max(score) as max_score from t1 where userid < 2 or userid > 3 group by userid order by max_score",
+		output: "select userid, max(score) as max_score from t1 where concat(userid < 2, userid > 3) group by userid order by max_score",
 	}, {
 		input: "select c1, -c2 from t2 order by -c1 desc",
 	}, {
 		input:  "select * from t1 where spID>2 AND userID <2 || userID >=2 OR userID < 2 limit 3",
-		output: "select * from t1 where spid > 2 and userid < 2 or userid >= 2 or userid < 2 limit 3",
+		output: "select * from t1 where concat(spid > 2 and userid < 2, userid >= 2) or userid < 2 limit 3",
 	}, {
 		input:  "select * from t10 where (b='ba' or b='cb') and (c='dc' or c='ed');",
 		output: "select * from t10 where (b = ba or b = cb) and (c = dc or c = ed)",

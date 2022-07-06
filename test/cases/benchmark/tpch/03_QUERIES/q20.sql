@@ -1,4 +1,3 @@
--- @bvt:issue#3233
 use tpch;
 select
     s_name,
@@ -37,4 +36,3 @@ where
     and n_name = 'VIETNAM'
 order by s_name
 ;
--- @bvt:issue

@@ -6,18 +6,18 @@
 -- @bvt:issue#3304
 SELECT 1 IN (SELECT 1);
 -- @bvt:issue
--- @bvt:issue#3323
+-- @bvt:issue#3307
 SELECT 1 FROM (SELECT 1 as a) b WHERE 1 IN (SELECT (SELECT a));
 -- @bvt:issue
--- @bvt:issue#3320
+-- @bvt:issue#3556
 SELECT 1 FROM (SELECT 1 as a) b WHERE 1 not IN (SELECT (SELECT a));
 -- @bvt:issue
 SELECT * FROM (SELECT 1 as id) b WHERE id IN (SELECT * FROM (SELECT 1 as id) c ORDER BY id);
--- @bvt:issue#3309
+-- @bvt:issue#3308
 SELECT * FROM (SELECT 1) a  WHERE 1 IN (SELECT 1,1);
 -- @bvt:issue
 SELECT * FROM (SELECT 1) b WHERE 1 IN (SELECT *);
--- @bvt:issue#3309
+-- @bvt:issue#3308
 SELECT ((0,1) NOT IN (SELECT NULL,1)) IS NULL;
 -- @bvt:issue
 
@@ -42,7 +42,7 @@ select * from t3 where a not in (select b from t2);
 -- @bvt:issue#3304
 SELECT 0 IN (SELECT 1 FROM t1 a);
 -- @bvt:issue
--- @bvt:issue#3309
+-- @bvt:issue#3308
 select * from t3 where a in (select a,b from t2);
 select * from t3 where a in (select * from t2);
 -- @bvt:issue
@@ -80,9 +80,7 @@ INSERT INTO t1 VALUES (1), (2), (3), (4);
 INSERT INTO t2 VALUES (1,10), (3,30);
 select * from t1 where t1.a in (SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a=t1.a);
 SELECT * FROM t2 LEFT JOIN t3 ON t2.b=t3.b WHERE t3.b IS NOT NULL OR t2.a > 10;
--- @bvt:issue#3320
 SELECT * FROM t1 WHERE t1.a NOT IN (SELECT a FROM t2 LEFT JOIN t3 ON t2.b=t3.b WHERE t3.b IS NOT NULL OR t2.a > 10);
--- @bvt:issue
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -119,7 +117,7 @@ CREATE TABLE `c` (
 INSERT INTO `c` VALUES (9,9), (0,0), (8,6), (3,6), (7,6), (0,4),
 (1,7), (9,4), (0,8), (9,4), (0,7), (5,5), (0,0), (8,5), (8,7),
 (5,2), (1,8), (7,0), (0,9), (9,5);
--- @bvt:issue#3323
+-- @bvt:issue#3307
 SELECT * FROM c WHERE `int_key` IN (SELECT `int_nokey`);
 -- @bvt:issue
 DROP TABLE IF EXISTS c;
@@ -130,9 +128,7 @@ CREATE TABLE t1(c INT);
 CREATE TABLE t2(a INT, b INT);
 INSERT INTO t2 VALUES (1, 10), (2, NULL);
 INSERT INTO t1 VALUES (1), (3);
--- @bvt:issue#3320
 SELECT * FROM t2 WHERE b NOT IN (SELECT max(t.c) FROM t1, t1 t WHERE t.c>10);
--- @bvt:issue
 drop table if exists t1;
 drop table if exists t2;
 
@@ -355,7 +351,7 @@ select (1, 1, 'a') IN (select b,a,c from t1 limit 2);
 DROP TABLE IF EXISTS t1;
 
 create table t1 (a integer, b integer);
--- @bvt:issue#3309
+-- @bvt:issue#3308
 select (1,(2,2)) in (select * from t1 );
 -- error
 select (1,(2,2)) = (select * from t1 );
@@ -371,7 +367,7 @@ INSERT INTO t1 VALUES (100, 200);
 INSERT INTO t1 VALUES (101, 201);
 INSERT INTO t2 VALUES (101, 201);
 INSERT INTO t2 VALUES (103, 203);
--- @bvt:issue#3309
+-- @bvt:issue#3308
 SELECT ((a1,a2) IN (SELECT * FROM t2 WHERE b2 > 0)) IS NULL FROM t1;
 -- @bvt:issue
 
@@ -386,7 +382,7 @@ PRIMARY KEY (pk)
 );
 INSERT INTO t1 VALUES (1, 1, 7, '2001-11-04 19:07:55.051133');
 CREATE TABLE t2(field1 INT, field2 INT);
--- @bvt:issue#3309
+-- @bvt:issue#3308
 SELECT * FROM t2 WHERE (field1, field2) IN (
   SELECT MAX(col_datetime_key), col_int_key
   FROM t1
@@ -401,11 +397,11 @@ create table t1 (a int, b int);
 insert into t1 values (0,0), (2,2), (3,3);
 create table t2 (a int, b int);
 insert into t2 values (1,1), (3,3);
--- @bvt:issue#3309
+-- @bvt:issue#3308
 select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 -- @bvt:issue
 insert into t2 values (NULL,4);
--- @bvt:issue#3309
+-- @bvt:issue#3308
 select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 -- @bvt:issue
 DROP TABLE IF EXISTS t1;
@@ -414,7 +410,7 @@ drop table if exists t2;
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1 (a INT);
 INSERT INTO t1 VALUES (1), (2), (11);
--- @bvt:issue#3309
+-- @bvt:issue#3308
 SELECT a, (11, 12) = (SELECT a, 22), (11, 12) IN (SELECT a, 22) FROM t1 GROUP BY t1.a;
 SELECT a, (11, 12) = (SELECT a, 12), (11, 12) IN (SELECT a, 12) FROM t1 GROUP BY t1.a;
 SELECT a, (11, 12) = (SELECT a, 22), (11, 12) IN (SELECT a, 22) FROM t1;
@@ -423,7 +419,7 @@ SELECT a AS x, (11, 12) = (SELECT MAX(x), 22), (11, 12) IN (SELECT MAX(x), 22) F
 SELECT a AS x, (11, 12) = (SELECT MAX(x), 12), (11, 12) IN (SELECT MAX(x), 12) FROM t1;
 -- @bvt:issue
 DROP TABLE IF EXISTS t1;
--- @bvt:issue#3309
+-- @bvt:issue#3308
 SELECT (1,2) = (SELECT NULL, NULL), (1,2) IN (SELECT NULL, NULL);
 SELECT (1,2) = (SELECT   1,  NULL), (1,2) IN (SELECT    1, NULL);
 SELECT (1,2) = (SELECT NULL,    2), (1,2) IN (SELECT NULL,    2);
@@ -445,7 +441,7 @@ insert into t_in values ('1a', '1a', '1a');
 insert into t_in values ('2a', '2a', '2a');
 insert into t_in values (NULL, '2a', '2a');
 insert into t_in values ('3a', NULL, '3a');
--- @bvt:issue#3309
+-- @bvt:issue#3308
 select subcase,
        (a1, b1, c1)     IN (select * from t_in where a2 = 'no_match') pred_in,
        (a1, b1, c1) NOT IN (select * from t_in where a2 = 'no_match') pred_not_in
@@ -596,7 +592,7 @@ drop table if exists t2;
 
 create table t1 (a int, b int);
 create table t2 (a int, b int);
--- @bvt:issue#3309
+-- @bvt:issue#3308
 select * from t1 where (a,b) in (select a,b from t2);
 -- @bvt:issue
 DROP TABLE IF EXISTS t1;
@@ -604,7 +600,7 @@ drop table if exists t2;
 
 create table t1 (a int);
 insert into t1 values (1), (2), (3);
--- @bvt:issue#3309
+-- @bvt:issue#3312
 SELECT 1 FROM t1 WHERE (SELECT 1) in (SELECT 1);
 -- @bvt:issue
 DROP TABLE IF EXISTS t1;
@@ -615,7 +611,7 @@ drop table if exists t2;
 CREATE TABLE t1( a INT );
 INSERT INTO t1 VALUES (1),(2);
 CREATE TABLE t2( a INT, b INT );
--- @bvt:issue#3309
+-- @bvt:issue#3308
 SELECT * FROM t2 WHERE (a, b) IN (SELECT a, b FROM t2);
 -- @bvt:issue
 -- error
@@ -643,7 +639,7 @@ create table t4 (a int(11) default null);
 insert into t4 values (0),(1);
 create table t5 (a int(11) default null);
 insert into t5 values (0),(1),(0),(1);
--- @bvt:issue#3320
+-- @bvt:issue#3303
 select * from t2, t3
 where
     t2.a < 10 and
@@ -668,7 +664,7 @@ INSERT INTO t1 VALUES (NULL, NULL);
 CREATE TABLE t2 (i1 int DEFAULT NULL,i2 int DEFAULT NULL) ;
 INSERT INTO t2 VALUES (4, NULL);
 INSERT INTO t2 VALUES (5, 0);
--- @bvt:issue#3309
+-- @bvt:issue#3308
 SELECT i1, i2
 FROM t1
 WHERE (i1, i2)
@@ -799,9 +795,7 @@ CREATE TABLE t1 (a INT);
 INSERT INTO t1 VALUES (1),(2),(3);
 CREATE TABLE t2 (a INT);
 INSERT INTO t1 VALUES (1),(2),(3);
--- @bvt:issue#3320
-SELECT 1 FROM t1 WHERE t1.a NOT IN (SELECT 1 FROM t1, t2 WHERE 0);
--- @bvt:issue
+SELECT 1 FROM t1 WHERE t1.a NOT IN (SELECT 1 FROM t1, t2 WHERE false);
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 
@@ -896,7 +890,7 @@ create table t1 (a int, b int, c int);
 insert into t1 select 2*A, 2*A, 100 from t3;
 create table t4 (x int);
 insert into t4 select A.a + 10*B.a from t1 A, t1 B;
--- @bvt:issue#3309
+-- @bvt:issue#3308
 select a,b, oref, (a,b) in (select a,b from t1 where c=t2.oref) z from t2;
 -- @bvt:issue
 
@@ -908,12 +902,12 @@ create table t1 (oref char(4), grp int, ie1 int, ie2 int);
 insert into t1 (oref, grp, ie1, ie2) values('aa', 10, 2, 1),('aa', 10, 1, 1),('aa', 20, 2, 1),('bb', 10, 3, 1),('cc', 10, 4, 2),('cc', 20, 3, 2),('ee', 10, 2, 1),('ee', 10, 1, 2),('ff', 20, 2, 2),('ff', 20, 1, 2);
 create table t2 (oref char(4), a int, b int);
 insert into t2 values('ee', NULL, 1),('bb', 2, 1),('ff', 2, 2),('cc', 3, NULL),('bb', NULL, NULL),('aa', 1, 1),('dd', 1, NULL);
--- @bvt:issue#3309
+-- @bvt:issue#3308
 select oref, a, b, (a,b) in (select ie1,ie2 from t1 where oref=t2.oref) Z from t2 where a=3 and b is null ;
 -- @bvt:issue
 insert into t2 values ('new1', 10,10);
 insert into t1 values ('new1', 1234, 10, NULL);
--- @bvt:issue#3309
+-- @bvt:issue#3308
 select oref, a, b, (a,b) in (select ie1,ie2 from t1 where oref=t2.oref) Z from t2 where a=10 and b=10;
 -- @bvt:issue
 
@@ -927,31 +921,23 @@ insert into t2 values('ee', NULL),('bb', 2),('ff', 2),('cc', 3),('aa', 1),('dd',
 select oref, a, a in (select ie from t1 where oref=t2.oref) Z from t2;
 -- @bvt:issue
 select oref, a from t2 where a in (select ie from t1 where oref=t2.oref);
--- @bvt:issue#3320
 select oref, a from t2 where a not in (select ie from t1 where oref=t2.oref);
--- @bvt:issue
 -- @bvt:issue#3304
 select oref, a, a in (select min(ie) from t1 where oref=t2.oref group by grp) Z from t2;
 -- @bvt:issue
 select oref, a from t2 where a in (select min(ie) from t1 where oref=t2.oref group by grp);
--- @bvt:issue#3320
 select oref, a from t2 where a not in (select min(ie) from t1 where oref=t2.oref group by grp);
--- @bvt:issue
 update t1 set ie=3 where oref='ff' and ie=1;
 -- @bvt:issue#3304
 select oref, a, a in (select min(ie) from t1 where oref=t2.oref group by grp) Z from t2;
 -- @bvt:issue
 select oref, a from t2 where a in (select min(ie) from t1 where oref=t2.oref group by grp);
--- @bvt:issue#3320
 select oref, a from t2 where a not in (select min(ie) from t1 where oref=t2.oref group by grp);
--- @bvt:issue
 -- @bvt:issue#3304
 select oref, a, a in (select min(ie) from t1 where oref=t2.oref group by grp having min(ie) > 1) Z from t2;
 -- @bvt:issue
 select oref, a from t2 where a in (select min(ie) from t1 where oref=t2.oref group by grp having min(ie) > 1);
--- @bvt:issue#3320
 select oref, a from t2 where a not in (select min(ie) from t1 where oref=t2.oref group by grp having min(ie) > 1);
--- @bvt:issue
 
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
@@ -959,7 +945,7 @@ create table t1 (oref char(4), grp int, ie1 int, ie2 int);
 insert into t1 (oref, grp, ie1, ie2) values ('aa', 10, 2, 1),('aa', 10, 1, 1),('aa', 20, 2, 1),('bb', 10, 3, 1),('cc', 10, 4, 2),('cc', 20, 3, 2),('ee', 10, 2, 1),('ee', 10, 1, 2),('ff', 20, 2, 2),('ff', 20, 1, 2);
 create table t2 (oref char(4), a int, b int);
 insert into t2 values('ee', NULL, 1),('bb', 2, 1), ('ff', 2, 2),('cc', 3, NULL),('bb', NULL, NULL),('aa', 1, 1),('dd', 1, NULL);
--- @bvt:issue#3309
+-- @bvt:issue#3308
 select oref, a, b, (a,b) in (select ie1,ie2 from t1 where oref=t2.oref) Z from t2;
 select oref, a, b from t2 where (a,b) in (select ie1,ie2 from t1 where oref=t2.oref);
 select oref, a, b from t2 where (a,b) not in (select ie1,ie2 from t1 where oref=t2.oref);
@@ -990,9 +976,7 @@ CREATE TABLE t2 (b int, PRIMARY KEY(b));
 INSERT INTO t1 VALUES (1), (NULL), (4);
 INSERT INTO t2 VALUES (3), (1),(2), (5), (4), (7), (6);
 SELECT a FROM t1, t2 WHERE a=b AND (b NOT IN (SELECT a FROM t1));
--- @bvt:issue#3320
 SELECT a FROM t1, t2 WHERE a=b AND (b NOT IN (SELECT a FROM t1 WHERE a > 4));
--- @bvt:issue
 
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
@@ -1002,9 +986,7 @@ CREATE TABLE t3 (id int PRIMARY KEY, name varchar(10));
 INSERT INTO t1 VALUES (2), (NULL), (3), (1);
 INSERT INTO t2 VALUES (234), (345), (457);
 INSERT INTO t3 VALUES (222,'bbb'), (333,'ccc'), (111,'aaa');
--- @bvt:issue#3320
 SELECT * FROM t1 WHERE t1.id NOT IN (SELECT t2.id FROM t2,t3  WHERE t3.name='xxx' AND t2.id=t3.id);
--- @bvt:issue
 -- @bvt:issue#3304
 SELECT (t1.id IN (SELECT t2.id FROM t2,t3  WHERE t3.name='xxx' AND t2.id=t3.id)) AS x FROM t1;
 -- @bvt:issue
@@ -1077,7 +1059,6 @@ CREATE TABLE parent (id int);
 INSERT INTO parent VALUES (1), (2);
 CREATE TABLE child (parent_id int, other int);
 INSERT INTO child VALUES (1,NULL);
--- @bvt:issue#3320
 SELECT    p.id, c.parent_id
 FROM      parent p
 LEFT JOIN child  c
@@ -1107,7 +1088,6 @@ WHERE     c.parent_id IN (
               FROM   child
               WHERE  parent_id = 3
           );
--- @bvt:issue
 
 DROP TABLE IF EXISTS parent;
 DROP TABLE IF EXISTS child;
@@ -1149,7 +1129,7 @@ CREATE TABLE b (
 );
 INSERT INTO b VALUES (1,7,'f');
 
--- @bvt:issue#3309
+-- @bvt:issue#3308
 SELECT col_int_key
 FROM b granparent1
 WHERE (col_int_key, col_int_key) IN (
@@ -1218,10 +1198,14 @@ INSERT INTO t1 VALUES(0);
 -- @bvt:issue#3304
 SELECT NULL IN (SELECT 1 FROM t1);
 -- @bvt:issue
--- @bvt:issue#3309
+-- @bvt:issue#3312
 SELECT (NULL AND 1) IN (SELECT 1 FROM t1);
+-- @bvt:issue
+-- @bvt:issue#3308
 SELECT (NULL, 1) IN (SELECT 1,1 FROM t1);
 SELECT (NULL, NULL) IN (SELECT 1,1 FROM t1);
+-- @bvt:issue
+-- @bvt:issue#3312
 SELECT (NULL OR 1) IN (SELECT 1 FROM t1);
 -- @bvt:issue
 SELECT (NULL IS NULL) IN  (SELECT 1 FROM t1);
@@ -1230,7 +1214,7 @@ DELETE FROM t1;
 SELECT NULL IN (SELECT 1 FROM t1);
 -- @bvt:issue
 SELECT (NULL AND 1) IN (SELECT 1 FROM t1);
--- @bvt:issue#3309
+-- @bvt:issue#3308
 SELECT (NULL, 1) IN (SELECT 1,1 FROM t1);
 SELECT (NULL, NULL) IN (SELECT 1,1 FROM t1);
 -- @bvt:issue

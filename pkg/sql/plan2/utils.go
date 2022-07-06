@@ -275,6 +275,14 @@ func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, e
 		if err != nil {
 			return nil, err
 		}
+		// expr must be bool type, if not, try to do type convert
+		// but just ignore the subQuery. It will be solved at optimizer.
+		if expr.GetSub() == nil {
+			expr, err = makePlan2CastExpr(expr, &plan.Type{Id: plan.Type_BOOL})
+			if err != nil {
+				return nil, err
+			}
+		}
 		exprs[i] = expr
 	}
 
@@ -434,4 +442,40 @@ func replaceColRefWithNull(expr *plan.Expr) *plan.Expr {
 	}
 
 	return expr
+}
+
+func increaseRefCnt(expr *plan.Expr, colRefCnt map[[2]int32]int) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		colRefCnt[[2]int32{exprImpl.Col.RelPos, exprImpl.Col.ColPos}]++
+
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			increaseRefCnt(arg, colRefCnt)
+		}
+	}
+}
+
+func decreaseRefCnt(expr *plan.Expr, colRefCnt map[[2]int32]int) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		colRefCnt[[2]int32{exprImpl.Col.RelPos, exprImpl.Col.ColPos}]--
+
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			decreaseRefCnt(arg, colRefCnt)
+		}
+	}
+}
+
+func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge map[int32]any) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		hyperEdge[leafByTag[exprImpl.Col.RelPos]] = nil
+
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			getHyperEdgeFromExpr(arg, leafByTag, hyperEdge)
+		}
+	}
 }

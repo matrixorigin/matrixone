@@ -39,7 +39,7 @@ type Relation interface {
 
 	DeleteByHiddenKeys(keys containers.Vector) error
 
-	RangeDelete(id *common.ID, start, end uint32) error
+	RangeDelete(id *common.ID, start, end uint32, dt DeleteType) error
 	Update(id *common.ID, row uint32, col uint16, v any) error
 	GetByFilter(filter *Filter) (id *common.ID, offset uint32, err error)
 	GetValue(id *common.ID, row uint32, col uint16) (any, error)
@@ -56,6 +56,8 @@ type Relation interface {
 	GetSegment(id uint64) (Segment, error)
 
 	SoftDeleteSegment(id uint64) (err error)
+
+	GetDB() (Database, error)
 }
 
 type RelationIt interface {

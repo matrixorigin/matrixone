@@ -182,7 +182,7 @@ import (
 %nonassoc LOWER_THAN_CHARSET
 %nonassoc <str> CHARSET
 %right <str> UNIQUE KEY
-%left <str> OR
+%left <str> OR PIPE_CONCAT
 %left <str> XOR
 %left <str> AND
 %right <str> NOT '!'
@@ -4508,13 +4508,13 @@ cast_type:
 	        },
         }
     }
-|   DATETIME length_opt
+|   DATETIME timestamp_option_opt
     {
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
 		        Family:             tree.TimestampFamily,
-		        Precision:          0,
+		        Precision:          $2,
                 FamilyString: $1,
                 DisplayWith: $2,
 		        TimePrecisionIsSet: false,
@@ -4540,11 +4540,15 @@ cast_type:
     }
 |   SIGNED integer_opt
     {
+    	name := $1
+    	if $2 != "" {
+    		name = $2
+    	}
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
 		        Family: tree.IntFamily,
-                FamilyString: $1,
+                FamilyString: name,
 		        Width:  64,
 		        Locale: &locale,
 		        Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
@@ -4557,7 +4561,7 @@ cast_type:
         $$ = &tree.T{
             InternalType: tree.InternalType{
 		        Family: tree.IntFamily,
-                FamilyString: $1,
+                FamilyString: $2,
 		        Width:  64,
 		        Locale: &locale,
                 Unsigned: true,
@@ -5134,6 +5138,14 @@ expression:
     {
         $$ = tree.NewOrExpr($1, $3)
     }
+|	expression PIPE_CONCAT expression %prec PIPE_CONCAT
+	{
+		name := tree.SetUnresolvedName(strings.ToLower("concat"))
+        $$ = &tree.FuncExpr{
+             Func: tree.FuncName2ResolvableFunctionReference(name),
+             Exprs: tree.Exprs{$1, $3},
+        }
+	}
 |   expression XOR expression %prec XOR
     {
         $$ = tree.NewXorExpr($1, $3)

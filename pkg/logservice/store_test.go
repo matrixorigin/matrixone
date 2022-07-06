@@ -271,6 +271,49 @@ func TestHAKeeperTick(t *testing.T) {
 	runStoreTest(t, fn)
 }
 
+func TestAddScheduleCommands(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.ID()
+		assert.NoError(t, store.StartHAKeeperReplica(1, peers, false))
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		sc1 := pb.ScheduleCommand{
+			UUID: "uuid1",
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID: 1,
+				},
+			},
+		}
+		sc2 := pb.ScheduleCommand{
+			UUID: "uuid2",
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID: 2,
+				},
+			},
+		}
+		sc3 := pb.ScheduleCommand{
+			UUID: "uuid1",
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID: 3,
+				},
+			},
+		}
+		require.NoError(t,
+			store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
+		cb, err := store.GetCommandBatch(ctx, "uuid1")
+		require.NoError(t, err)
+		assert.Equal(t, []pb.ScheduleCommand{sc1, sc3}, cb.Commands)
+		cb, err = store.GetCommandBatch(ctx, "uuid2")
+		require.NoError(t, err)
+		assert.Equal(t, []pb.ScheduleCommand{sc2}, cb.Commands)
+	}
+	runStoreTest(t, fn)
+}
+
 func TestGetHeartbeatMessage(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		peers := make(map[uint64]dragonboat.Target)
@@ -381,15 +424,23 @@ func getTestStores() (*store, *store, error) {
 		return nil, nil, err
 	}
 
-	for {
-		_, _, ok, err := store1.nh.GetLeaderID(1)
+	for i := 0; i <= 30000; i++ {
+		leaderID, _, ok, err := store1.nh.GetLeaderID(1)
 		if err != nil {
 			return nil, nil, err
 		}
-		if ok {
+		if ok && leaderID == 1 {
 			break
 		}
+		if ok && leaderID != 1 {
+			if err := store1.requestLeaderTransfer(1, 1); err != nil {
+				plog.Errorf("failed to transfer leader")
+			}
+		}
 		time.Sleep(time.Millisecond)
+		if i == 30000 {
+			panic("failed to have leader elected in 30 seconds")
+		}
 	}
 	return store1, store2, nil
 }

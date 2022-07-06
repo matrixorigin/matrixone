@@ -136,7 +136,7 @@ result
 17.666000366210938
 select cast(a as unsigned) mod 50 as result from t1;
 result
-17
+18
 select cast(a+a as signed) from t1;
 cast(a+a as signed)
 35
@@ -200,8 +200,10 @@ SELECT * from t_float WHERE id IN (1.1e0, 2.2e0);
 id
 SELECT * from t_float WHERE id IN ('1.1', '2.2');
 id
+1.1
 SELECT * from t_float WHERE id IN ('1.1e0', '2.2e0');
 id
+1.1
 SELECT * from t_float WHERE id BETWEEN 1.1 AND 1.9;
 id
 1.1

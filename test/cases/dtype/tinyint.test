@@ -63,9 +63,7 @@ drop table t1;
 create table t1 (tinyint_col tinyint unsigned);
 insert into t1 values (250);
 select * from t1 where tinyint_col=250;
--- @bvt:issue#3267
 select * from t1 where tinyint_col='250';
--- @bvt:issue
 drop table t1;
 
 #Test cases of query with operators
@@ -82,8 +80,6 @@ INSERT INTO t1 (id,a) VALUES
 (3,CAST(0x80 AS UNSIGNED)),
 (4,CAST(0xFF AS UNSIGNED));
 UPDATE t1 SET b = a;
--- @bvt:issue
--- @bvt:issue#3267
 select * from t1 where ((a = 255) and (b = '255')) order by 1 desc, 2 asc;
 -- @bvt:issue
 CREATE TABLE t_tinyint(id TINYINT);
@@ -94,22 +90,16 @@ SELECT id, id = 1.1 FROM t_tinyint;
 SELECT id, 1.1 = id FROM t_tinyint;
 SELECT * from t_tinyint WHERE id = 1.1;
 SELECT * from t_tinyint WHERE id = 1.1e0;
--- @bvt:issue#3267
 SELECT * from t_tinyint WHERE id = '1.1';
 SELECT * from t_tinyint WHERE id = '1.1e0';
--- @bvt:issue
 SELECT * from t_tinyint WHERE id IN (1.1, 2.2);
 SELECT * from t_tinyint WHERE id IN (1.1e0, 2.2e0);
--- @bvt:issue#3267
 SELECT * from t_tinyint WHERE id IN ('1.1', '2.2');
 SELECT * from t_tinyint WHERE id IN ('1.1e0', '2.2e0');
--- @bvt:issue
 SELECT * from t_tinyint WHERE id BETWEEN 1.1 AND 1.9;
 SELECT * from t_tinyint WHERE id BETWEEN 1.1e0 AND 1.9e0;
--- @bvt:issue#3267
 SELECT * from t_tinyint WHERE id BETWEEN '1.1' AND '1.9';
 SELECT * from t_tinyint WHERE id BETWEEN '1.1e0' AND '1.9e0';
-drop table t1;
 -- @bvt:issue
 CREATE TABLE t1 (a TINYINT);
 INSERT INTO t1 VALUES (1);

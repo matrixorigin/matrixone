@@ -15,6 +15,7 @@
 package common
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -284,12 +285,19 @@ func (mp *Mempool) Capacity() uint64 {
 }
 
 func (mp *Mempool) String() string {
+	var w bytes.Buffer
 	usage := atomic.LoadUint64(&mp.usage)
 	peak := atomic.LoadUint64(&mp.peakusage)
-	s := fmt.Sprintf("<Mempool>(Cap=%s)(Usage=%s)(Quota=%s)(Peak=%s)", ToH(mp.capacity), ToH(usage), ToH(atomic.LoadUint64(&mp.quotausage)), ToH(peak))
+	_, _ = w.WriteString(fmt.Sprintf("<Mempool>(Cap=%s)(Usage=%s)(Quota=%s)(Peak=%s)",
+		ToH(mp.capacity),
+		ToH(usage),
+		ToH(atomic.LoadUint64(&mp.quotausage)),
+		ToH(peak)))
 	for idx := range mp.pools {
-		s = fmt.Sprintf("%s\nPage: %s, Count: %d", s, ToH(PageSizes[idx]), mp.pools[idx].Count())
+		_ = w.WriteByte('\n')
+		_, _ = w.WriteString(fmt.Sprintf("Page: %s, Count: %d", ToH(PageSizes[idx]), mp.pools[idx].Count()))
 	}
-	s = fmt.Sprintf("%s\nPage: [UDEF], Count: %d", s, atomic.LoadUint64(&mp.other))
-	return s
+	_ = w.WriteByte('\n')
+	_, _ = w.WriteString(fmt.Sprintf("Page: [UDEF], Count: %d", atomic.LoadUint64(&mp.other)))
+	return w.String()
 }

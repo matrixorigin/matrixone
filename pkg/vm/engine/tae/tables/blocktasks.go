@@ -199,7 +199,7 @@ func (blk *dataBlock) ForceCompact() (err error) {
 	}
 	defer bat.Close()
 	needCkp := true
-	if err = blk.node.flushData(ts, bat); err != nil {
+	if err = blk.node.flushData(ts, bat, new(forceCompactOp)); err != nil {
 		if err == data.ErrStaleRequest {
 			err = nil
 			needCkp = false
@@ -236,17 +236,8 @@ func (blk *dataBlock) ABlkFlushData(
 	// 	return data.ErrStaleRequest
 	// }
 
-	if err := blk.file.WriteSnapshot(bat, ts, masks, vals, nil); err != nil {
+	if err := blk.file.WriteSnapshot(bat, ts, masks, vals, deletes); err != nil {
 		return err
-	}
-	if deletes != nil {
-		var buf []byte
-		if buf, err = deletes.ToBytes(); err != nil {
-			return
-		}
-		if err = blk.file.WriteDeletes(buf); err != nil {
-			return
-		}
 	}
 	if err = blk.file.Sync(); err != nil {
 		return

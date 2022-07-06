@@ -100,23 +100,17 @@ select lpad('hello', 4294967297, '1');
 lpad('hello', 4294967297, '1')
 null
 select lpad('hello', -18446744073709551615, '1');
-lpad('hello', -18446744073709551615, '1')
-null
+Operator 'cast' with parameters [DECIMAL128 BIGINT] will be implemented in future version.
 select lpad('hello', 18446744073709551615, '1');
-lpad('hello', 18446744073709551615, '1')
-null
+Can't cast '18446744073709551615' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 select lpad('hello', -18446744073709551616, '1');
-lpad('hello', -18446744073709551616, '1')
-null
+Operator 'cast' with parameters [DECIMAL128 BIGINT] will be implemented in future version.
 select lpad('hello', 18446744073709551616, '1');
-lpad('hello', 18446744073709551616, '1')
-null
+Operator 'cast' with parameters [DECIMAL128 BIGINT] will be implemented in future version.
 select lpad('hello', -18446744073709551617, '1');
-lpad('hello', -18446744073709551617, '1')
-null
+Operator 'cast' with parameters [DECIMAL128 BIGINT] will be implemented in future version.
 select lpad('hello', 18446744073709551617, '1');
-lpad('hello', 18446744073709551617, '1')
-null
+Operator 'cast' with parameters [DECIMAL128 BIGINT] will be implemented in future version.
 SELECT RPAD('hi', year(FROM_UNIXTIME(-1)),'?');
 RPAD('hi', year(FROM_UNIXTIME(-1)),'?')
 null
@@ -188,15 +182,11 @@ SELECT RPAD('a', -1, 'x');
 RPAD('a', -1, 'x')
 null
 SELECT (rpad(1.0,2048,1)) IS NOT FALSE;
-(rpad(1.0,2048,1)) IS NOT FALSE
-1
+Can't cast '1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111...' from VARCHAR type to BOOL type.
 SELECT ((+0) IN
 ((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)),
 (32767.1)));
-((+0) IN
-((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)),
-(32767.1)))
-0
+Can't cast '1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111...' from VARCHAR type to BIGINT type.
 SELECT ((rpad(1.0,2048,1)) = ('4(') ^ (0.1));
 ((rpad(1.0,2048,1)) = ('4(') ^ (0.1))
 0

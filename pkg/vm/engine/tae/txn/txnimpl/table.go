@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -41,6 +40,7 @@ var (
 type txnTable struct {
 	store        *txnStore
 	createEntry  txnif.TxnEntry
+	createIdx    int
 	dropEntry    txnif.TxnEntry
 	localSegment *localSegment
 	updateNodes  map[common.ID]txnif.UpdateNode
@@ -53,6 +53,8 @@ type txnTable struct {
 
 	txnEntries []txnif.TxnEntry
 	csnStart   uint32
+
+	idx int
 }
 
 func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
@@ -91,7 +93,10 @@ func (tbl *txnTable) WaitSynced() {
 
 func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) (err error) {
 	tbl.csnStart = uint32(cmdMgr.GetCSN())
-	for _, txnEntry := range tbl.txnEntries {
+	for i, txnEntry := range tbl.txnEntries {
+		if tbl.createEntry != nil && tbl.dropEntry != nil && i == tbl.createIdx {
+			txnEntry = txnEntry.(*catalog.TableEntry).CloneCreateEntry()
+		}
 		csn := cmdMgr.GetCSN()
 		cmd, err := txnEntry.MakeCommand(csn)
 		// logutil.Infof("%d-%d",csn,cmd.GetType())
@@ -249,6 +254,7 @@ func (tbl *txnTable) SetCreateEntry(e txnif.TxnEntry) {
 	}
 	tbl.store.IncreateWriteCnt()
 	tbl.createEntry = e
+	tbl.createIdx = len(tbl.txnEntries)
 	tbl.txnEntries = append(tbl.txnEntries, e)
 	tbl.store.warChecker.ReadDB(tbl.entry.GetDB().GetID())
 }
@@ -256,9 +262,6 @@ func (tbl *txnTable) SetCreateEntry(e txnif.TxnEntry) {
 func (tbl *txnTable) SetDropEntry(e txnif.TxnEntry) error {
 	if tbl.dropEntry != nil {
 		panic("logic error")
-	}
-	if tbl.createEntry != nil {
-		return txnbase.ErrDDLDropCreated
 	}
 	tbl.store.IncreateWriteCnt()
 	tbl.dropEntry = e
@@ -369,7 +372,7 @@ func (tbl *txnTable) IsLocalDeleted(row uint32) bool {
 	return tbl.localSegment.IsDeleted(row)
 }
 
-func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32) (err error) {
+func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
 	if isLocalSegment(id) {
 		return tbl.RangeDeleteLocalRows(start, end)
 	}
@@ -401,7 +404,7 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32) (err error) {
 		return
 	}
 	blkData := blk.GetBlockData()
-	node2, err := blkData.RangeDelete(tbl.store.txn, start, end)
+	node2, err := blkData.RangeDelete(tbl.store.txn, start, end, dt)
 	if err == nil {
 		id := blk.AsCommonID()
 		if err = tbl.AddDeleteNode(id, node2); err != nil {

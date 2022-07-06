@@ -17,7 +17,6 @@ package frontend
 import (
 	"errors"
 	"fmt"
-	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -641,77 +640,85 @@ func InitDB(tae engine.Engine) error {
 	//2. create table mo_global_variables
 	gvSch := DefineSchemaForMoGlobalVariables()
 	gvDefs := convertCatalogSchemaToTableDef(gvSch)
-	err = catalogDB.Create(0, gvSch.GetName(), gvDefs, txnCtx.GetCtx())
-	if err != nil {
-		logutil.Infof("create table %v failed.error:%v", gvSch.GetName(), err)
-		err2 := txnCtx.Rollback()
-		if err2 != nil {
-			logutil.Infof("txnCtx rollback failed. error:%v", err2)
-			return err2
+	rel, _ := catalogDB.Relation(gvSch.GetName(), txnCtx.GetCtx())
+
+	if rel == nil {
+		err = catalogDB.Create(0, gvSch.GetName(), gvDefs, txnCtx.GetCtx())
+		if err != nil {
+			logutil.Infof("create table %v failed.error:%v", gvSch.GetName(), err)
+			err2 := txnCtx.Rollback()
+			if err2 != nil {
+				logutil.Infof("txnCtx rollback failed. error:%v", err2)
+				return err2
+			}
+			return err
 		}
-		return err
 	}
 
-	//write initial data into mo_global_variables
-	gvTable, err := catalogDB.Relation(gvSch.GetName(), txnCtx.GetCtx())
-	if err != nil {
-		logutil.Infof("get table %v failed.error:%v", gvSch.GetName(), err)
-		err2 := txnCtx.Rollback()
-		if err2 != nil {
-			logutil.Infof("txnCtx rollback failed. error:%v", err2)
-			return err2
+	if rel == nil {
+		//write initial data into mo_global_variables
+		gvTable, err := catalogDB.Relation(gvSch.GetName(), txnCtx.GetCtx())
+		if err != nil {
+			logutil.Infof("get table %v failed.error:%v", gvSch.GetName(), err)
+			err2 := txnCtx.Rollback()
+			if err2 != nil {
+				logutil.Infof("txnCtx rollback failed. error:%v", err2)
+				return err2
+			}
+			return err
 		}
-		return err
-	}
 
-	gvBatch := FillInitialDataForMoGlobalVariables()
-	err = gvTable.Write(0, gvBatch, txnCtx.GetCtx())
-	if err != nil {
-		logutil.Infof("write into table %v failed.error:%v", gvSch.GetName(), err)
-		err2 := txnCtx.Rollback()
-		if err2 != nil {
-			logutil.Infof("txnCtx rollback failed. error:%v", err2)
-			return err2
+		gvBatch := FillInitialDataForMoGlobalVariables()
+		err = gvTable.Write(0, gvBatch, txnCtx.GetCtx())
+		if err != nil {
+			logutil.Infof("write into table %v failed.error:%v", gvSch.GetName(), err)
+			err2 := txnCtx.Rollback()
+			if err2 != nil {
+				logutil.Infof("txnCtx rollback failed. error:%v", err2)
+				return err2
+			}
+			return err
 		}
-		return err
 	}
-
-	//3. create table mo_user
 	userSch := DefineSchemaForMoUser()
 	userDefs := convertCatalogSchemaToTableDef(userSch)
-	err = catalogDB.Create(0, userSch.GetName(), userDefs, txnCtx.GetCtx())
-	if err != nil {
-		logutil.Infof("create table %v failed.error:%v", userSch.GetName(), err)
-		err2 := txnCtx.Rollback()
-		if err2 != nil {
-			logutil.Infof("txnCtx rollback failed. error:%v", err2)
-			return err2
+	rel, _ = catalogDB.Relation(userSch.GetName(), txnCtx.GetCtx())
+	if rel == nil {
+		//3. create table mo_user
+		err = catalogDB.Create(0, userSch.GetName(), userDefs, txnCtx.GetCtx())
+		if err != nil {
+			logutil.Infof("create table %v failed.error:%v", userSch.GetName(), err)
+			err2 := txnCtx.Rollback()
+			if err2 != nil {
+				logutil.Infof("txnCtx rollback failed. error:%v", err2)
+				return err2
+			}
+			return err
 		}
-		return err
-	}
 
-	//write initial data into mo_user
-	userTable, err := catalogDB.Relation(userSch.GetName(), txnCtx.GetCtx())
-	if err != nil {
-		logutil.Infof("get table %v failed.error:%v", userSch.GetName(), err)
-		err2 := txnCtx.Rollback()
-		if err2 != nil {
-			logutil.Infof("txnCtx rollback failed. error:%v", err2)
-			return err2
+		//write initial data into mo_user
+		userTable, err := catalogDB.Relation(userSch.GetName(), txnCtx.GetCtx())
+		if err != nil {
+			logutil.Infof("get table %v failed.error:%v", userSch.GetName(), err)
+			err2 := txnCtx.Rollback()
+			if err2 != nil {
+				logutil.Infof("txnCtx rollback failed. error:%v", err2)
+				return err2
+			}
+			return err
 		}
-		return err
-	}
 
-	userBatch := FillInitialDataForMoUser()
-	err = userTable.Write(0, userBatch, txnCtx.GetCtx())
-	if err != nil {
-		logutil.Infof("write into table %v failed.error:%v", userSch.GetName(), err)
-		err2 := txnCtx.Rollback()
-		if err2 != nil {
-			logutil.Infof("txnCtx rollback failed. error:%v", err2)
-			return err2
+		userBatch := FillInitialDataForMoUser()
+		err = userTable.Write(0, userBatch, txnCtx.GetCtx())
+		if err != nil {
+			logutil.Infof("write into table %v failed.error:%v", userSch.GetName(), err)
+			err2 := txnCtx.Rollback()
+			if err2 != nil {
+				logutil.Infof("txnCtx rollback failed. error:%v", err2)
+				return err2
+			}
+			return err
 		}
-		return err
 	}
 
 	/*
@@ -720,16 +727,21 @@ func InitDB(tae engine.Engine) error {
 	*/
 	//1. create database information_schema
 	infoSchemaName := "information_schema"
-	err = tae.Create(0, infoSchemaName, 0, txnCtx.GetCtx())
-	if err != nil {
-		logutil.Infof("create database %v failed.error:%v", infoSchemaName, err)
-		err2 := txnCtx.Rollback()
-		if err2 != nil {
-			logutil.Infof("txnCtx rollback failed. error:%v", err2)
-			return err2
+	db, err := tae.Database(infoSchemaName, txnCtx.GetCtx())
+
+	if db == nil {
+		err = tae.Create(0, infoSchemaName, 0, txnCtx.GetCtx())
+		if err != nil {
+			logutil.Infof("create database %v failed.error:%v", infoSchemaName, err)
+			err2 := txnCtx.Rollback()
+			if err2 != nil {
+				logutil.Infof("txnCtx rollback failed. error:%v", err2)
+				return err2
+			}
+			return err
 		}
-		return err
 	}
+
 	//TODO: create views after the computation engine is ready
 	err = txnCtx.Commit()
 	if err != nil {
@@ -754,7 +766,7 @@ func sanityCheck(tae engine.Engine) error {
 	// databases: mo_catalog,information_schema
 	dbs := tae.Databases(txnCtx.GetCtx())
 	wantDbs := []string{"mo_catalog", "information_schema"}
-	if !isWanted(dbs, wantDbs) {
+	if !isWanted(wantDbs, dbs) {
 		logutil.Infof("wantDbs %v,dbs %v", wantDbs, dbs)
 		return errorMissingCatalogDatabases
 	}
@@ -789,11 +801,6 @@ func isWanted(want, actual []string) bool {
 	copy(w, want)
 	a := make([]string, len(actual))
 	copy(a, actual)
-	sort.Strings(w)
-	sort.Strings(a)
-	if len(w) != len(a) {
-		return false
-	}
 	for i := 0; i < len(w); i++ {
 		if w[i] != a[i] {
 			return false
@@ -816,7 +823,7 @@ func isWantedDatabase(taeEngine moengine.TxnEngine, txnCtx moengine.Txn,
 		return err
 	}
 	tablesOfMoCatalog := db.Relations(txnCtx.GetCtx())
-	if !isWanted(tablesOfMoCatalog, tables) {
+	if !isWanted(tables, tablesOfMoCatalog) {
 		logutil.Infof("wantTables %v, tables %v", tables, tablesOfMoCatalog)
 		return errorMissingCatalogTables
 	}

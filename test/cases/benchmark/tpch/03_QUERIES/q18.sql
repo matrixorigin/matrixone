@@ -1,4 +1,3 @@
--- @bvt:issue#3233
 use tpch;
 select
     c_name,
@@ -34,4 +33,3 @@ order by
     o_orderdate
 limit 100
 ;
--- @bvt:issue

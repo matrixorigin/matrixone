@@ -39,11 +39,10 @@ type internalExecutor struct {
 	// MySqlCmdExecutor struct is used here, because we want to doComQuery directly
 	executor     *MysqlCmdExecutor
 	pu           *config.ParameterUnit
-	pdHook       *PDCallbackImpl
 	baseSessOpts ie.SessionOverrideOptions
 }
 
-func NewIternalExecutor(pu *config.ParameterUnit, pdHook *PDCallbackImpl) *internalExecutor {
+func NewIternalExecutor(pu *config.ParameterUnit) *internalExecutor {
 	proto := &internalProtocol{}
 	exec := NewMysqlCmdExecutor()
 
@@ -51,7 +50,6 @@ func NewIternalExecutor(pu *config.ParameterUnit, pdHook *PDCallbackImpl) *inter
 		proto:        proto,
 		executor:     exec,
 		pu:           pu,
-		pdHook:       pdHook,
 		baseSessOpts: ie.NewOptsBuilder().Finish(),
 	}
 }
@@ -67,14 +65,7 @@ func (ie *internalExecutor) Exec(sql string, opts ie.SessionOverrideOptions) err
 }
 
 func (ie *internalExecutor) newCmdSession(opts ie.SessionOverrideOptions) *Session {
-	sess := NewSession(
-		ie.proto,
-		ie.pdHook,
-		guest.New(ie.pu.SV.GetGuestMmuLimitation(), ie.pu.HostMmu),
-		ie.pu.Mempool,
-		ie.pu,
-		gSysVariables,
-	)
+	sess := NewSession(ie.proto, guest.New(ie.pu.SV.GetGuestMmuLimitation(), ie.pu.HostMmu), ie.pu.Mempool, ie.pu, gSysVariables)
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)
 	return sess

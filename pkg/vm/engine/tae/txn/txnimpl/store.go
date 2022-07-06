@@ -131,7 +131,7 @@ func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
 	return db.Append(id, data)
 }
 
-func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32) (err error) {
+func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
@@ -139,7 +139,7 @@ func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32
 	// if table.IsDeleted() {
 	// 	return txnbase.ErrNotFound
 	// }
-	return db.RangeDelete(id, start, end)
+	return db.RangeDelete(id, start, end, dt)
 }
 
 func (store *txnStore) GetByFilter(dbId, tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
@@ -291,6 +291,7 @@ func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
 			return
 		}
 		db = newTxnDB(store, entry)
+		db.idx = len(store.dbs)
 		store.dbs[id] = db
 	}
 	return
@@ -411,7 +412,11 @@ func (store *txnStore) PreApplyCommit() (err error) {
 }
 
 func (store *txnStore) CollectCmd() (err error) {
+	dbs := make([]*txnDB, len(store.dbs))
 	for _, db := range store.dbs {
+		dbs[db.idx] = db
+	}
+	for _, db := range dbs {
 		if err = db.CollectCmd(store.cmdMgr); err != nil {
 			return
 		}

@@ -53,11 +53,6 @@ func ParseVersion(name, prefix, suffix string) (int, error) {
 	return v, nil
 }
 
-//TODO: commented due to static check
-//type files struct {
-//	files []*vFile
-//}
-
 type rotateFile struct {
 	*sync.RWMutex
 	dir, name   string
@@ -207,17 +202,6 @@ func (rf *rotateFile) Replay(r *replayer, o ReplayObserver) error {
 			}
 		}
 		err := vf.ReplayCWithCkp(r, o)
-		if err != nil {
-			panic(err)
-		}
-	}
-	for _, vf := range entries {
-		for _, id := range failedIDs {
-			if vf.Id() == id {
-				continue
-			}
-		}
-		err := vf.ReplayUCWithCkp(r, o)
 		if err != nil {
 			panic(err)
 		}

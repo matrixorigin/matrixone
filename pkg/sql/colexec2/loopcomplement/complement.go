@@ -58,13 +58,17 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				continue
 			}
 			if ctr.bat == nil {
-				bat.Clean(proc.Mp)
-				continue
-			}
-			if err := ctr.probe(bat, ap, proc); err != nil {
-				ctr.state = End
-				proc.Reg.InputBatch = nil
-				return true, err
+				if err := ctr.emptyProbe(bat, ap, proc); err != nil {
+					ctr.state = End
+					proc.Reg.InputBatch = nil
+					return true, err
+				}
+			} else {
+				if err := ctr.probe(bat, ap, proc); err != nil {
+					ctr.state = End
+					proc.Reg.InputBatch = nil
+					return true, err
+				}
 			}
 			return false, nil
 		default:
@@ -98,6 +102,32 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 		}
 		bat.Clean(proc.Mp)
 	}
+	return nil
+}
+
+func (ctr *Container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+	defer bat.Clean(proc.Mp)
+	rbat := batch.NewWithSize(len(ap.Result))
+	for i, pos := range ap.Result {
+		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
+	}
+	count := len(bat.Zs)
+	for i := 0; i < count; i += UnitLimit {
+		n := count - i
+		if n > UnitLimit {
+			n = UnitLimit
+		}
+		for k := 0; k < n; k++ {
+			for j, pos := range ap.Result {
+				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp); err != nil {
+					rbat.Clean(proc.Mp)
+					return err
+				}
+			}
+			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
+		}
+	}
+	proc.Reg.InputBatch = rbat
 	return nil
 }
 
