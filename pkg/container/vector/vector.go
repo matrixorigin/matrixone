@@ -44,6 +44,9 @@ func (v *Vector[T]) Reset() {
 }
 
 func (v *Vector[T]) Length() int {
+	if v.IsConst {
+		return v.Const.Size
+	}
 	return len(v.Col)
 }
 
