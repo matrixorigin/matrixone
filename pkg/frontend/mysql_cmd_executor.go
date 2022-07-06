@@ -1931,8 +1931,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		usePlan2 = true
 	}
 
-	//isAoe := !ses.IsTaeEngine()
-
 	proc := process.New(mheap.New(ses.GuestMmu))
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = ses.Pu.SV.GetProcessLimitationSize()
@@ -2089,47 +2087,15 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			selfHandle = true
 			err = errors.New(errno.FeatureNotSupported, "not support explain analyze statement now")
 			goto handleFailed
-		//case *tree.ShowDatabases:
-		//	if usePlan2 && isAoe {
-		//		selfHandle = true
-		//		if err = mce.handleShowDatabases(st); err != nil {
-		//			goto handleFailed
-		//		}
-		//	}
-		//case *tree.ShowTables:
-		//	if usePlan2 && isAoe {
-		//		selfHandle = true
-		//		if err = mce.handleShowTables(st); err != nil {
-		//			goto handleFailed
-		//		}
-		//	}
-		//case *tree.ShowColumns:
-		//	ses.showStmtType = ShowColumns
-		//	ses.Data = nil
-		//	if usePlan2 && isAoe {
-		//		selfHandle = true
-		//		if err = mce.handleShowColumns(st); err != nil {
-		//			goto handleFailed
-		//		}
-		//	}
-		//case *tree.ShowCreateDatabase:
-		//	ses.showStmtType = ShowCreateDatabase
-		//	ses.Data = nil
-		//	if usePlan2 && isAoe {
-		//		selfHandle = true
-		//		if err = mce.handleShowCreateDatabase(st); err != nil {
-		//			goto handleFailed
-		//		}
-		//	}
-		//case *tree.ShowCreateTable:
-		//	ses.showStmtType = ShowCreateTable
-		//	ses.Data = nil
-		//	if usePlan2 && isAoe {
-		//		selfHandle = true
-		//		if err = mce.handleShowCreateTable(st); err != nil {
-		//			goto handleFailed
-		//		}
-		//	}
+		case *tree.ShowColumns:
+			ses.showStmtType = ShowColumns
+			ses.Data = nil
+		case *tree.ShowCreateDatabase:
+			ses.showStmtType = ShowCreateDatabase
+			ses.Data = nil
+		case *tree.ShowCreateTable:
+			ses.showStmtType = ShowCreateTable
+			ses.Data = nil
 		case *tree.Delete:
 			ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 		case *tree.Update:
