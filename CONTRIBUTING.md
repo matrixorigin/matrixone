@@ -21,8 +21,8 @@ Contributions to MatrixOne fall into the following categories.
 Remember to [sync your forked repository](https://docs.github.com/en/get-started/quickstart/fork-a-repo#keep-your-fork-synced) **before** submitting proposed changes upstream. If you have an existing local repository, please update it before you start, to minimize the chance of merge conflicts.
 ```shell
 git remote add upstream git@github.com:matrixorigin/matrixone.git
-git checkout master
-git pull upstream master
+git checkout main
+git pull upstream main
 git checkout -b topic-branch
 ```
 If you still have some trouble, please refer to [GitHub Docs](https://docs.github.com/en) for help.

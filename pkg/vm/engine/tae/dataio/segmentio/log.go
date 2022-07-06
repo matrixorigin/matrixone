@@ -27,6 +27,7 @@ type Log struct {
 	seq       uint64
 	offset    uint64
 	allocator Allocator
+	name      string
 }
 
 func (l *Log) readInode(cache *bytes.Buffer, file *DriverFile) (n int, err error) {
@@ -126,7 +127,7 @@ func (l *Log) Replay(cache *bytes.Buffer) error {
 			}
 			return err
 		}
-		if pos >= LOG_SIZE || hole >= HOLE_SIZE {
+		if off >= LOG_SIZE || hole >= HOLE_SIZE {
 			return nil
 		}
 		off += int64(pos)
@@ -135,12 +136,9 @@ func (l *Log) Replay(cache *bytes.Buffer) error {
 
 func (l *Log) replayData(data *bytes.Buffer, offset int64) (pos int, hole uint32, err error) {
 	hole = 0
-	pos, err = l.logFile.driver.segFile.ReadAt(data.Bytes(), offset)
+	pos, err = l.logFile.driver.logFile.ReadAt(data.Bytes(), offset)
 	if err != nil && err != io.EOF {
 		return 0, hole, err
-	}
-	if pos != data.Len() {
-		panic(any("Replay read error"))
 	}
 	l.logFile.driver.mutex.Lock()
 	defer l.logFile.driver.mutex.Unlock()
@@ -288,7 +286,10 @@ func (l *Log) Append(file *DriverFile) error {
 	}
 	ibufLen := (segment.super.inodeSize - (uint32(ibuffer.Len()) % segment.super.inodeSize)) + uint32(ibuffer.Len())
 	offset, allocated := l.allocator.Allocate(uint64(ibufLen))
-	if n, err := segment.segFile.WriteAt(ibuffer.Bytes(), int64(offset+LOG_START)); err != nil || n != ibuffer.Len() {
+	if allocated == 0 {
+		return ErrInodeLimit
+	}
+	if n, err := segment.logFile.WriteAt(ibuffer.Bytes(), int64(offset+LOG_START)); err != nil || n != ibuffer.Len() {
 		return err
 	}
 	if file.snode.state == REMOVE {
@@ -318,7 +319,7 @@ func (l *Log) CoverState(start uint32, state StateType) error {
 	if err = binary.Write(&ibuffer, binary.BigEndian, state); err != nil {
 		return err
 	}
-	if n, err := segment.segFile.WriteAt(ibuffer.Bytes(), int64(start+16)); err != nil || n != ibuffer.Len() {
+	if n, err := segment.logFile.WriteAt(ibuffer.Bytes(), int64(start+16)); err != nil || n != ibuffer.Len() {
 		return err
 	}
 	return nil
