@@ -44,7 +44,6 @@ package types
 import (
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"strconv"
 	"strings"
@@ -149,9 +148,6 @@ import (
 // }
 // void int128_is_negative(void* a, void* result) {
 //      *(bool*)result = (*(__int128*)a) < 0;
-// }
-// void int128_is_positive(void* a, void* result) {
-//      *(bool*)result = (*(__int128*)a) > 0;
 // }
 // void int128_is_zero(void* a, void* result) {
 //      *(bool*)result = (*(__int128*)a) == 0;
@@ -280,10 +276,6 @@ func Decimal64Int64Mul(a Decimal64, b int64) (result Decimal64) {
 
 func Decimal128Decimal128Mul(a Decimal128, b Decimal128) (result Decimal128) {
 	C.mul_int128_int128(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
-
-	if Decimal128IsNotZero(a) && Decimal128Decimal128DivAligned(result, a) != b {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal multiply overflow"))
-	}
 	return result
 }
 
@@ -291,6 +283,7 @@ func Decimal128Int64Mul(a Decimal128, b int64) (result Decimal128) {
 	C.mul_int128_int64(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
 	return result
 }
+
 func InitDecimal128(value int64) (result Decimal128) {
 	if value == 1 {
 		C.init_int128_as_1(unsafe.Pointer(&result))
@@ -319,11 +312,6 @@ func InitDecimal128UsingUint(value uint64) (result Decimal128) {
 
 func Decimal128IsNegative(a Decimal128) (result bool) {
 	C.int128_is_negative(unsafe.Pointer(&a), unsafe.Pointer(&result))
-	return result
-}
-
-func Decimal128IsPositive(a Decimal128) (result bool) {
-	C.int128_is_positive(unsafe.Pointer(&a), unsafe.Pointer(&result))
 	return result
 }
 
@@ -374,7 +362,6 @@ func decimalStringPreprocess(s string, precision, scale int32) (result []byte, c
 	if len(s) >= 50 {
 		s = s[:50] // to prevent attack,
 	}
-	s = strings.TrimSpace(s)
 	exponent := 0
 	if strings.Contains(s, "e") {
 		s2 := strings.Split(s, "e")
@@ -685,13 +672,6 @@ func Decimal64Add(a, b Decimal64, aScale, bScale int32) (result Decimal64) {
 
 func Decimal64AddAligned(a, b Decimal64) (result Decimal64) {
 	result = Decimal64(int64(a) + int64(b))
-
-	if a > 0 && b > 0 && result <= 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal add overflow"))
-	}
-	if a < 0 && b < 0 && result >= 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal add overflow"))
-	}
 	return result
 }
 
@@ -714,12 +694,6 @@ func Decimal64Sub(a, b Decimal64, aScale, bScale int32) (result Decimal64) {
 
 func Decimal64SubAligned(a, b Decimal64) (result Decimal64) {
 	result = Decimal64(int64(a) - int64(b))
-	if a < 0 && b > 0 && result >= 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal subtraction overflow"))
-	}
-	if a > 0 && b < 0 && result <= 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal subtraction overflow"))
-	}
 	return result
 }
 
@@ -746,12 +720,6 @@ func Decimal128Add(a, b Decimal128, aScale, bScale int32) (result Decimal128) {
 
 func Decimal128AddAligned(a, b Decimal128) (result Decimal128) {
 	C.add_int128_int128(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
-	if Decimal128IsPositive(a) && Decimal128IsPositive(b) && (Decimal128IsNegative(result) || Decimal128IsZero(result)) {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal add overflow"))
-	}
-	if Decimal128IsNegative(a) && Decimal128IsNegative(b) && (Decimal128IsPositive(result) || Decimal128IsZero(result)) {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal add overflow"))
-	}
 	return result
 }
 
@@ -778,12 +746,6 @@ func Decimal128Sub(a, b Decimal128, aScale, bScale int32) (result Decimal128) {
 
 func Decimal128SubAligned(a, b Decimal128) (result Decimal128) {
 	C.sub_int128_int128(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
-	if Decimal128IsNegative(a) && Decimal128IsPositive(b) && (Decimal128IsPositive(result) || Decimal128IsZero(result)) {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal subtraction overflow"))
-	}
-	if Decimal128IsPositive(a) && Decimal128IsNegative(b) && (Decimal128IsNegative(result) || Decimal128IsZero(result)) {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal subtraction overflow"))
-	}
 	return result
 }
 
@@ -808,11 +770,6 @@ func Decimal128Decimal128Div(a, b Decimal128, aScale, bScale int32) (result Deci
 		aScaled = ScaleDecimal128By10(aScaled)
 	}
 	C.div_int128_int128(unsafe.Pointer(&aScaled), unsafe.Pointer(&b), unsafe.Pointer(&result))
-	return result
-}
-
-func Decimal128Decimal128DivAligned(a, b Decimal128) (result Decimal128) {
-	C.div_int128_int128(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
 	return result
 }
 

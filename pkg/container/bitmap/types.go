@@ -12,42 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package mempool
+package bitmap
 
-func New() *Mempool {
-	return &Mempool{}
-}
-
-func (m *Mempool) Free(_ []byte) {
-}
-
-func (m *Mempool) Alloc(size int) (ret []byte) {
-	return make([]byte, size)
-}
-
-func Realloc(data []byte, size int64) int64 {
-	if data == nil {
-		return size
-	}
-	n := int64(cap(data))
-	if size <= n {
-		return n
-	}
-	newcap := n
-	doublecap := n + n
-	if size > doublecap {
-		newcap = size
-	} else {
-		if len(data) < 1024 {
-			newcap = doublecap
-		} else {
-			for 0 < newcap && newcap < size {
-				newcap += newcap / 4
-			}
-			if newcap <= 0 {
-				newcap = size
-			}
-		}
-	}
-	return newcap
+// Nulls represent line numbers of tuple's is null
+type Bitmap struct {
+	// Len represent the size of bitmap
+	Len int
+	// Any representat whether or not the vector has any null values set
+	Any  bool
+	Data []byte
 }

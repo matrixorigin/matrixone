@@ -16,30 +16,6 @@ package vm
 
 const (
 	Top = iota
-	Join
-	Plus
-	Limit
-	Times
-	Merge
-	Dedup
-	Order
-	Oplus
-	Output
-	Offset
-	Restrict
-	Connector
-	Transform
-	Projection
-	UnTransform
-
-	MergeDedup
-	MergeLimit
-	MergeOffset
-	MergeOrder
-	MergeTop
-
-	DeleteTag
-	UpdateTag
 )
 
 // Instruction contains relational algebra

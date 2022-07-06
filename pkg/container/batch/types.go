@@ -14,71 +14,19 @@
 
 package batch
 
-import (
-	"bufio"
-
-	"github.com/matrixorigin/matrixone/pkg/container/ring"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-)
+import "github.com/matrixorigin/matrixone/pkg/container/vector"
 
 // Batch represents a part of a relationship
 // including an optional list of row numbers, columns and list of attributes
-//  (SelsData, Sels) - list of row numbers
-//  (Attrs) - list of attributes
-//  (vecs) 	- columns
+//  (Sels) - list of row numbers
+//  (vecs)  - columns
 type Batch struct {
-	// Ro if true, Attrs is read only
-	Ro bool
 	// reference count, default is 1
 	Cnt int64
-	// SelsData encoded row number list
-	SelsData []byte
 	// Sels row number list
 	Sels []int64
-	// Attrs column name list
-	Attrs []string
 	// Vecs col data
-	Vecs []*vector.Vector
-	// ring
-	Zs     []int64
-	As     []string // alias list
-	Refs   []uint64 // reference count
-	Rs     []ring.Ring
-	Ht     interface{} // hash table
-	Result *DumpResult
-}
-
-type DumpOption struct {
-	Db_name       []string
-	Table_name    []string
-	Keys          bool
-	Values        bool
-	Decode_key    bool
-	Decode_value  bool
-	Limit         []uint64
-	Filename      string
-	Max_file_size int64
-	Writer        *bufio.Writer
-	PrimaryKey    []byte
-	ReadCnt       uint64
-	UseKey        bool
-	PrimaryValue  []string
-	UseValue      bool
-}
-
-type DumpKey []byte
-type DumpValue []byte
-type DumpDecodeItem []interface{}
-type DecodeItem struct {
-	// Attrs column name list
-	Attrs []string
-	// column data, origin Data
-	Vecs []DumpDecodeItem
-}
-
-type DumpResult struct {
-	Keys          []DumpKey
-	Values        []DumpValue
-	Decode_keys   DecodeItem
-	Decode_values DecodeItem
+	Vecs []vector.AnyVector
+	Zs   []int64
+	Ht   interface{} // hash table
 }

@@ -16,7 +16,6 @@ package types
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -68,6 +67,10 @@ const (
 	T_tuple T = T(plan.Type_TUPLE) // immutable, size = 24
 )
 
+type Element interface {
+	Size() int // return the size of space  the Element need
+}
+
 type Type struct {
 	Oid  T     `json:"oid,string"`
 	Size int32 `json:"size,string"` // e.g. int8.Size = 1, int16.Size = 2, char.Size = 24(SliceHeader size)
@@ -80,14 +83,19 @@ type Type struct {
 	Precision int32 `json:"Precision,string"`
 }
 
-type Bytes struct {
-	Data    []byte
-	Offsets []uint32
-	Lengths []uint32
-}
+type Bool bool
+type Int8 int8
+type Int16 int16
+type Int32 int32
+type Int64 int64
+type UInt8 uint8
+type UInt16 uint16
+type UInt32 uint32
+type UInt64 uint64
+type Float32 float32
+type Float64 float64
 
 type Date int32
-
 type Datetime int64
 type Timestamp int64
 
@@ -97,85 +105,72 @@ type Decimal128 struct {
 	Hi int64
 }
 
-var Types map[string]T = map[string]T{
-	"bool": T_bool,
+type String []byte
 
-	"tinyint":  T_int8,
-	"smallint": T_int16,
-	"int":      T_int32,
-	"integer":  T_int32,
-	"bigint":   T_int64,
+type Ints interface {
+	Int8 | Int16 | Int32 | Int64
+}
 
-	"tinyint unsigned":  T_uint8,
-	"smallint unsigned": T_uint16,
-	"int unsigned":      T_uint32,
-	"integer unsigned":  T_uint32,
-	"bigint unsigned":   T_uint64,
+type UInts interface {
+	UInt8 | UInt16 | UInt32 | UInt64
+}
 
-	"decimal64":  T_decimal64,
-	"decimal128": T_decimal128,
+type Floats interface {
+	Float32 | Float64
+}
 
-	"float":  T_float32,
-	"double": T_float64,
+type Decimal interface {
+	Decimal64 | Decimal128
+}
 
-	"date":      T_date,
-	"datetime":  T_datetime,
-	"timestamp": T_timestamp,
-	"interval":  T_interval,
+type Number interface {
+	Ints | UInts | Floats | Decimal
+}
 
-	"char":    T_char,
-	"varchar": T_varchar,
+type Generic interface {
+	Ints | UInts | Floats | Date | Datetime | Timestamp | Decimal64
+}
 
-	"json": T_json,
+type All interface {
+	Bool | Ints | UInts | Floats | Date | Datetime | Timestamp | Decimal | String
+}
+
+func New(oid T, width, scale, precision int32) Type {
+	return Type{
+		Oid:       oid,
+		Width:     width,
+		Scale:     scale,
+		Precision: precision,
+		Size:      int32(TypeSize(oid)),
+	}
+}
+
+func TypeSize(oid T) int {
+	switch oid {
+	case T_bool:
+		return 1
+	case T_int8, T_uint8:
+		return 1
+	case T_int16, T_uint16:
+		return 2
+	case T_int32, T_uint32, T_float32, T_date:
+		return 4
+	case T_int64, T_uint64, T_float64, T_datetime, T_timestamp, T_decimal64:
+		return 8
+	case T_char, T_varchar:
+		return 24
+	case T_decimal128:
+		return 16
+	}
+	panic(moerr.NewInternalError("Unknow type %s", oid))
+}
+
+func (t Type) TypeSize() int {
+	return TypeSize(t.Oid)
 }
 
 func (t Type) String() string {
 	return t.Oid.String()
-}
-
-func (a Type) Eq(b Type) bool {
-	return a.Oid == b.Oid && a.Size == b.Size && a.Width == b.Width && a.Scale == b.Scale
-}
-
-func (t T) ToType() Type {
-	var typ Type
-
-	typ.Oid = t
-	switch t {
-	case T_bool:
-		typ.Size = 1
-	case T_int8:
-		typ.Size = 1
-	case T_int16:
-		typ.Size = 2
-	case T_int32, T_date:
-		typ.Size = 4
-	case T_int64, T_datetime, T_timestamp:
-		typ.Size = 8
-	case T_uint8:
-		typ.Size = 1
-	case T_uint16:
-		typ.Size = 2
-	case T_uint32:
-		typ.Size = 4
-	case T_uint64:
-		typ.Size = 8
-	case T_float32:
-		typ.Size = 4
-	case T_float64:
-		typ.Size = 8
-	case T_char:
-		typ.Size = 24
-	case T_varchar:
-		typ.Size = 24
-	case T_sel:
-		typ.Size = 8
-	case T_decimal64:
-		typ.Size = 8
-	case T_decimal128:
-		typ.Size = 16
-	}
-	return typ
 }
 
 func (t T) String() string {
@@ -226,167 +221,4 @@ func (t T) String() string {
 		return "DECIMAL128"
 	}
 	return fmt.Sprintf("unexpected type: %d", t)
-}
-
-// functions only used to generate pkg/sql/colexec/extend/overload
-
-// OidString returns T string
-func (t T) OidString() string {
-	switch t {
-	case T_bool:
-		return "T_bool"
-	case T_int64:
-		return "T_int64"
-	case T_int32:
-		return "T_int32"
-	case T_int16:
-		return "T_int16"
-	case T_int8:
-		return "T_int8"
-	case T_float64:
-		return "T_float64"
-	case T_float32:
-		return "T_float32"
-	case T_uint8:
-		return "T_uint8"
-	case T_uint16:
-		return "T_uint16"
-	case T_uint32:
-		return "T_uint32"
-	case T_uint64:
-		return "T_uint64"
-	case T_sel:
-		return "T_sel"
-	case T_char:
-		return "T_char"
-	case T_varchar:
-		return "T_varchar"
-	case T_date:
-		return "T_date"
-	case T_datetime:
-		return "T_datetime"
-	case T_timestamp:
-		return "T_timestamp"
-	case T_decimal64:
-		return "T_decimal64"
-	case T_decimal128:
-		return "T_decimal128"
-	}
-	return "unknown_type"
-}
-
-// GoType returns go type string for T
-func (t T) GoType() string {
-	switch t {
-	case T_bool:
-		return "bool"
-	case T_int64:
-		return "int64"
-	case T_int32:
-		return "int32"
-	case T_int16:
-		return "int16"
-	case T_int8:
-		return "int8"
-	case T_float64:
-		return "float64"
-	case T_float32:
-		return "float32"
-	case T_uint8:
-		return "uint8"
-	case T_uint16:
-		return "uint16"
-	case T_uint32:
-		return "uint32"
-	case T_uint64:
-		return "uint64"
-	case T_sel:
-		return "int64"
-	case T_char:
-		return "string"
-	case T_varchar:
-		return "string"
-	case T_date:
-		return "date"
-	case T_datetime:
-		return "datetime"
-	case T_timestamp:
-		return "timestamp"
-	case T_decimal64:
-		return "decimal64"
-	case T_decimal128:
-		return "decimal128"
-	}
-	return "unknown type"
-}
-
-// GoGoType returns special go type string for T
-func (t T) GoGoType() string {
-	if t == T_char || t == T_varchar {
-		return "Str"
-	}
-	k := t.GoType()
-	return strings.ToUpper(k[:1]) + k[1:]
-}
-
-// TypeLen returns type's length whose type oid is T
-func (t T) TypeLen() int {
-	switch t {
-	case T_int8, T_bool:
-		return 1
-	case T_int16:
-		return 2
-	case T_int32, T_date:
-		return 4
-	case T_int64, T_datetime, T_timestamp:
-		return 8
-	case T_uint8:
-		return 1
-	case T_uint16:
-		return 2
-	case T_uint32:
-		return 4
-	case T_uint64:
-		return 8
-	case T_float32:
-		return 4
-	case T_float64:
-		return 8
-	case T_char:
-		return 24
-	case T_varchar:
-		return 24
-	case T_sel:
-		return 8
-	case T_decimal64:
-		return 8
-	case T_decimal128:
-		return 16
-	}
-	panic(moerr.NewInternalError("Unknow type %s", t))
-}
-
-// dangerous code, use TypeLen() if you don't want -8, -16, -24
-func (t T) FixedLength() int {
-	switch t {
-	case T_int8, T_uint8, T_bool:
-		return 1
-	case T_int16, T_uint16:
-		return 2
-	case T_int32, T_uint32, T_date, T_float32:
-		return 4
-	case T_int64, T_uint64, T_datetime, T_float64, T_timestamp:
-		return 8
-	case T_decimal64:
-		return -8
-	case T_decimal128:
-		return -16
-	case T_char:
-		return -24
-	case T_varchar:
-		return -24
-	case T_sel:
-		return 8
-	}
-	panic(moerr.NewInternalError("Unknow type %s", t))
 }

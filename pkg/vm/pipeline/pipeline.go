@@ -17,23 +17,27 @@ package pipeline
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/dispatch"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/connector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/overload"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func New(cs []uint64, attrs []string, ins vm.Instructions) *Pipeline {
+func New(attrs []string, ins vm.Instructions, reg *process.WaitRegister) *Pipeline {
 	return &Pipeline{
-		refCnts:      cs,
+		reg:          reg,
 		instructions: ins,
 		attrs:        attrs,
 	}
 }
 
-func NewMerge(ins vm.Instructions) *Pipeline {
+func NewMerge(ins vm.Instructions, reg *process.WaitRegister) *Pipeline {
 	return &Pipeline{
+		reg:          reg,
 		instructions: ins,
 	}
 }
@@ -41,7 +45,7 @@ func NewMerge(ins vm.Instructions) *Pipeline {
 func (p *Pipeline) String() string {
 	var buf bytes.Buffer
 
-	vm.String(p.instructions, &buf)
+	overload.String(p.instructions, &buf)
 	return buf.String()
 }
 
@@ -50,62 +54,110 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 	var err error
 	var bat *batch.Batch
 
-	defer func() {
-		if err != nil {
-			for i, in := range p.instructions {
-				if in.Op == vm.Connector {
-					arg := p.instructions[i].Arg.(*connector.Argument)
-					arg.Reg.Ch <- nil
-					break
-				}
-			}
-		} else {
-			proc.Reg.InputBatch = nil
-			_, err = vm.Run(p.instructions, proc)
+	defer cleanup(p, proc)
+	if p.reg != nil { // used to handle some push-down request
+		select {
+		case <-p.reg.Ctx.Done():
+		case <-p.reg.Ch:
 		}
-	}()
-	if err = vm.Prepare(p.instructions, proc); err != nil {
+	}
+	if err = overload.Prepare(p.instructions, proc); err != nil {
 		return false, err
 	}
+	refCnts := make([]uint64, len(p.attrs))
 	for {
 		// read data from storage engine
-		if bat, err = r.Read(p.refCnts, p.attrs); err != nil {
+		if bat, err = r.Read(refCnts, p.attrs); err != nil {
 			return false, err
+		}
+		if bat != nil {
+			bat.Cnt = 1
 		}
 		// processing the batch according to the instructions
 		proc.Reg.InputBatch = bat
-		if end, err = vm.Run(p.instructions, proc); err != nil || end { // end is true means pipeline successfully completed
+		if end, err = overload.Run(p.instructions, proc); err != nil || end { // end is true means pipeline successfully completed
 			return end, err
 		}
 	}
 }
 
-func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
+func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, error) {
+	var end bool // exist flag
+	var err error
+
+	defer cleanup(p, proc)
+	if p.reg != nil { // used to handle some push-down request
+		select {
+		case <-p.reg.Ctx.Done():
+		case <-p.reg.Ch:
+		}
+	}
+	if err = overload.Prepare(p.instructions, proc); err != nil {
+		return false, err
+	}
+	bat.Cnt = 1
+	// processing the batch according to the instructions
+	proc.Reg.InputBatch = bat
+	end, err = overload.Run(p.instructions, proc)
+	proc.Reg.InputBatch = nil
+	overload.Run(p.instructions, proc)
+	return end, err
+}
+
+func (p *Pipeline) MergeRun(proc *process.Process) (bool, error) {
 	var end bool
 	var err error
 
 	defer func() {
-		if err != nil {
-			for i, in := range p.instructions {
-				if in.Op == vm.Connector {
-					arg := p.instructions[i].Arg.(*connector.Argument)
-					arg.Reg.Ch <- nil
-					break
+		cleanup(p, proc)
+		for i := 0; i < len(proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
+			for len(proc.Reg.MergeReceivers[i].Ch) > 0 {
+				bat := <-proc.Reg.MergeReceivers[i].Ch
+				if bat != nil {
+					bat.Clean(proc.Mp)
 				}
 			}
-		} else {
-			proc.Reg.InputBatch = nil
-			_, err = vm.Run(p.instructions, proc)
 		}
 		proc.Cancel()
 	}()
-	if err := vm.Prepare(p.instructions, proc); err != nil {
+	if p.reg != nil { // used to handle some push-down request
+		select {
+		case <-p.reg.Ctx.Done():
+		case <-p.reg.Ch:
+		}
+	}
+	if err := overload.Prepare(p.instructions, proc); err != nil {
 		return false, err
 	}
 	for {
 		proc.Reg.InputBatch = nil
-		if end, err = vm.Run(p.instructions, proc); err != nil || end {
+		if end, err = overload.Run(p.instructions, proc); err != nil || end {
 			return end, err
+		}
+	}
+}
+
+func cleanup(p *Pipeline, proc *process.Process) {
+	proc.Reg.InputBatch = nil
+	overload.Run(p.instructions, proc)
+	for i, in := range p.instructions {
+		if in.Op == overload.Connector {
+			arg := p.instructions[i].Arg.(*connector.Argument)
+			select {
+			case <-arg.Reg.Ctx.Done():
+			case arg.Reg.Ch <- nil:
+			}
+			break
+		}
+		if in.Op == overload.Dispatch {
+			arg := p.instructions[i].Arg.(*dispatch.Argument)
+			for _, reg := range arg.Regs {
+				select {
+				case <-reg.Ctx.Done():
+				case reg.Ch <- nil:
+				}
+			}
+			break
 		}
 	}
 }

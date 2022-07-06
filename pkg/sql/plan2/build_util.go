@@ -649,11 +649,11 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 			case plan.Type_CHAR, plan.Type_VARCHAR:
 				return constant.StringVal(val), nil
 			case plan.Type_DATE:
-				return types.ParseDate(str)
+				return types.ParseDate(constant.StringVal(val))
 			case plan.Type_DATETIME:
-				return types.ParseDatetime(str, typ.Precision)
+				return types.ParseDatetime(constant.StringVal(val), typ.Precision)
 			case plan.Type_TIMESTAMP:
-				return types.ParseTimestamp(str, typ.Precision)
+				return types.ParseTimestamp(constant.StringVal(val), typ.Precision)
 			}
 		}
 	}

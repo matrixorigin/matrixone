@@ -15,58 +15,42 @@
 package vector
 
 import (
-	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-/*
-type Vector interface {
-	Reset()
+// Vector represent a column
+type Vector[T types.Element] struct {
+	// Col represent the decoding column data
+	Col []T
+	// Data represent the encoding column data
+	Data []byte
+	// Type represent the type of column
+	Typ types.Type
+	Nsp *bitmap.Bitmap
 
-    Col() interface{}
-    SetCol(interface{})
-
-    Length() int
-
-    Window(int, int) Vector
-
-	Append(interface{})
-
-    Shuffle([]int64) Vector
-
-	UnionOne(Vector, int64) error
-
-    Read([]byte) error
-    Show() ([]byte, error)
-
-    String() string
-}
-*/
-
-/*
- * origin true:
- * 				count || type || bitmap size || bitmap || vector
- * origin false:
- *  			count || vector
- */
-type Vector struct {
-	Or   bool   // true: origin
-	Ref  uint64 // reference count
-	Link uint64 // link count
-	Data []byte // raw data
-	Typ  types.Type
-	Col  interface{}  // column data, encoded Data
-	Nsp  *nulls.Nulls // nulls list
-
-	// some attributes for const vector (a vector with a lot of rows of a same const value)
+	// Const used for const vector (a vector with a lot of rows of a same const value)
 	IsConst bool
-	Length  int
+	Const   struct {
+		Size int
+	}
+
+	// used for array and string
+	Array struct {
+		Offsets []uint64
+		Lengths []uint64
+	}
 }
 
-// emptyInterface is the header for an interface{} value.
-type emptyInterface struct {
-	_    *int
-	word unsafe.Pointer
+// Vector represent a memory column
+type AnyVector interface {
+	Reset()
+	Length() int
+	SetLength(n int)
+	Type() types.Type
+	NewNulls(int)
+	Free(*mheap.Mheap)
+	Nulls() *bitmap.Bitmap
+	Realloc(size int, m *mheap.Mheap) error
 }

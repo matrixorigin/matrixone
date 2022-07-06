@@ -15,15 +15,12 @@
 package engine
 
 import (
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
-
-type Snapshot []byte
 
 type Nodes []Node
 
@@ -34,8 +31,8 @@ type Node struct {
 }
 
 type Attribute struct {
+	IsHide  bool
 	Name    string      // name of attribute
-	Alg     compress.T  // compression algorithm
 	Type    types.Type  // type of attribute
 	Default DefaultExpr // default value of this attribute.
 	Primary bool        // if true, it is primary key
@@ -43,77 +40,15 @@ type Attribute struct {
 
 type DefaultExpr struct {
 	Exist  bool
-	Value  interface{} // int64, float32, float64, string, types.Date, types.Datetime
+	Expr   *plan.Expr
 	IsNull bool
-}
-
-type PrimaryIndexDef struct {
-	TableDef
-	Names []string
-}
-
-type PropertiesDef struct {
-	TableDef
-	Properties []Property
-}
-
-type Property struct {
-	Key   string
-	Value string
-}
-
-type NodeInfo struct {
-	Mcpu int
 }
 
 type Statistics interface {
 	Rows() int64
 	Size(string) int64
+	Cardinal(string) int64
 }
-
-type ListPartition struct {
-	Name         string
-	Extends      []extend.Extend
-	Subpartition *PartitionByDef
-}
-
-type RangePartition struct {
-	Name         string
-	From         []extend.Extend
-	To           []extend.Extend
-	Subpartition *PartitionByDef
-}
-
-type PartitionByDef struct {
-	Fields []string
-	List   []ListPartition
-	Range  []RangePartition
-}
-
-type IndexTableDef struct {
-	Typ      IndexT
-	ColNames []string
-	Name     string
-}
-
-type IndexT int
-
-func (node IndexT) ToString() string {
-	switch node {
-	case ZoneMap:
-		return "ZONEMAP"
-	case BsiIndex:
-		return "BSI"
-	default:
-		return "INVAILD"
-	}
-}
-
-const (
-	Invalid IndexT = iota
-	ZoneMap
-	BsiIndex
-)
 
 type AttributeDef struct {
 	Attr Attribute
@@ -127,110 +62,49 @@ type TableDef interface {
 	tableDef()
 }
 
-func (*CommentDef) tableDef()     {}
-func (*AttributeDef) tableDef()   {}
-func (*IndexTableDef) tableDef()  {}
-func (*PartitionByDef) tableDef() {}
-func (*PropertiesDef) tableDef()  {}
+func (*CommentDef) tableDef()   {}
+func (*AttributeDef) tableDef() {}
 
 type Relation interface {
 	Statistics
 
-	Close(Snapshot)
+	Nodes(*plan.Expr) Nodes
 
-	ID(Snapshot) string
+	TableDefs() []TableDef
 
-	Nodes(Snapshot) Nodes
+	GetPrimaryKey() Attribute
 
-	TableDefs(Snapshot) []TableDef
+	Write(uint64, *batch.Batch) error
 
-	GetPrimaryKeys(Snapshot) []*Attribute
+	Update(uint64, *batch.Batch) error
 
-	GetHideKey(Snapshot) *Attribute
-	// true: primary key, false: hide key
-	GetPriKeyOrHideKey(Snapshot) ([]Attribute, bool)
+	Delete(uint64, vector.AnyVector, string) error
 
-	Write(uint64, *batch.Batch, Snapshot) error
+	Truncate() (uint64, error)
 
-	Update(uint64, *batch.Batch, Snapshot) error
-
-	Delete(uint64, *vector.Vector, string, Snapshot) error
-
-	Truncate(Snapshot) (uint64, error)
-
-	AddTableDef(uint64, TableDef, Snapshot) error
-	DelTableDef(uint64, TableDef, Snapshot) error
+	AddTableDef(TableDef) error
+	DelTableDef(TableDef) error
 
 	// first argument is the number of reader, second argument is the filter extend,  third parameter is the payload required by the engine
-	NewReader(int, extend.Extend, []byte, Snapshot) []Reader
+	NewReader(int, *plan.Expr, []byte) []Reader
 }
 
 type Reader interface {
-	Read([]uint64, []string) (*batch.Batch, error)
-}
-
-type Filter interface {
-	Eq(string, interface{}) (*roaring.Bitmap, error)
-	Ne(string, interface{}) (*roaring.Bitmap, error)
-	Lt(string, interface{}) (*roaring.Bitmap, error)
-	Le(string, interface{}) (*roaring.Bitmap, error)
-	Gt(string, interface{}) (*roaring.Bitmap, error)
-	Ge(string, interface{}) (*roaring.Bitmap, error)
-	Btw(string, interface{}, interface{}) (*roaring.Bitmap, error)
-}
-
-type Summarizer interface {
-	Count(string, *roaring.Bitmap) (uint64, error)
-	NullCount(string, *roaring.Bitmap) (uint64, error)
-	Max(string, *roaring.Bitmap) (interface{}, error)
-	Min(string, *roaring.Bitmap) (interface{}, error)
-	Sum(string, *roaring.Bitmap) (int64, uint64, error)
-}
-
-type SparseFilter interface {
-	Eq(string, interface{}) (Reader, error)
-	Ne(string, interface{}) (Reader, error)
-	Lt(string, interface{}) (Reader, error)
-	Le(string, interface{}) (Reader, error)
-	Gt(string, interface{}) (Reader, error)
-	Ge(string, interface{}) (Reader, error)
-	Btw(string, interface{}, interface{}) (Reader, error)
+	Read([]string) (*batch.Batch, error)
 }
 
 type Database interface {
-	Relations(Snapshot) []string
-	Relation(string, Snapshot) (Relation, error)
+	Relations() []string
+	Relation(string) (Relation, error)
 
-	Delete(uint64, string, Snapshot) error
-	Create(uint64, string, []TableDef, Snapshot) error // Create Table - (name, table define)
+	Delete(string) error
+	Create(string, []TableDef) error // Create Table - (name, table define)
 }
 
 type Engine interface {
-	Delete(uint64, string, Snapshot) error
-	Create(uint64, string, int, Snapshot) error // Create Database - (name, engine type)
+	Delete(string, client.TxnOperator) error
+	Create(string, client.TxnOperator) error // Create Database
 
-	Databases(Snapshot) []string
-	Database(string, Snapshot) (Database, error)
-
-	Node(string, Snapshot) *NodeInfo
-}
-
-// MakeDefaultExpr returns a new DefaultExpr
-func MakeDefaultExpr(exist bool, value interface{}, isNull bool) DefaultExpr {
-	return DefaultExpr{
-		Exist:  exist,
-		Value:  value,
-		IsNull: isNull,
-	}
-}
-
-// EmptyDefaultExpr means there is no definition for default expr
-var EmptyDefaultExpr = DefaultExpr{Exist: false}
-
-func (node Attribute) HasDefaultExpr() bool {
-	return node.Default.Exist
-}
-
-func (node Attribute) GetDefaultExpr() (interface{}, bool) {
-	return node.Default.Value, node.Default.IsNull
+	Databases(client.TxnOperator) []string
+	Database(string, client.TxnOperator) (Database, error)
 }

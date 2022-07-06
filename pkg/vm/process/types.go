@@ -18,7 +18,6 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
@@ -30,14 +29,8 @@ type WaitRegister struct {
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.
 type Register struct {
-	// Ss, temporarily stores the row number list in the execution of operators
-	// and it can be reused in the future execution.
-	Ss [][]int64
 	// InputBatch, stores the result of the previous operator.
 	InputBatch *batch.Batch
-	// Vecs, temporarily stores the column data in the execution of operators
-	// and it can be reused in the future execution to avoid mem alloc and type casting overhead.
-	Vecs []*vector.Vector
 	// MergeReceivers, receives result of multi previous operators from other pipelines
 	// e.g. merge operator.
 	MergeReceivers []*WaitRegister
@@ -53,52 +46,6 @@ type Limitation struct {
 	BatchSize int64
 	// PartitionRows, max rows for partition.
 	PartitionRows int64
-}
-
-// session information
-type SessionInfo struct {
-	User         string
-	Host         string
-	Role         string
-	ConnectionID uint64
-	Database     string
-	Version      string
-}
-
-func (si *SessionInfo) GetUser() string {
-	return si.User
-}
-
-func (si *SessionInfo) GetHost() string {
-	return si.Host
-}
-
-func (si *SessionInfo) GetUserHost() string {
-	return si.User + "@" + si.Host
-}
-
-func (si *SessionInfo) GetRole() string {
-	return si.Role
-}
-
-func (si *SessionInfo) GetCharset() string {
-	return "utf8mb4"
-}
-
-func (si *SessionInfo) GetCollation() string {
-	return "utf8mb4_general_ci"
-}
-
-func (si *SessionInfo) GetConnectionID() uint64 {
-	return si.ConnectionID
-}
-
-func (si *SessionInfo) GetDatabase() string {
-	return si.Database
-}
-
-func (si *SessionInfo) GetVersion() string {
-	return si.Version
 }
 
 // Process contains context used in query execution
@@ -117,8 +64,5 @@ type Process struct {
 	// snapshot is transaction context
 	Snapshot []byte
 
-	SessionInfo SessionInfo
-
-	// snapshot is transaction context
 	Cancel context.CancelFunc
 }
