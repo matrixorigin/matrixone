@@ -696,7 +696,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 		var eng engine.Engine
 		proc := &process.Process{}
 		ses := &Session{}
-		cw, err := GetComputationWrapper(db, sql, user, eng, proc, ses, false)
+		cw, err := GetComputationWrapper(db, sql, user, eng, proc, ses)
 		convey.So(cw, convey.ShouldNotBeEmpty)
 		convey.So(err, convey.ShouldBeNil)
 	})
