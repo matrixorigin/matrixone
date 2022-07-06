@@ -47,8 +47,6 @@ Currently, `cast` can support following conversion:
 
 ## **Constraints**
 
-Currently, MatrixOne doesn't support select function() without from tables.
-
 * Non-numeric character types cannot be converted to numeric types.
 * Numeric and character types with formats of Data cannot be converted to Date.
 * Date and Datetime types cannot be converted to character types.

@@ -2,7 +2,7 @@
 
 ## **Description**
 
-The LIKE operator is used in a WHERE clause to search for a specified pattern in a column.
+The `LIKE` operator is used in a WHERE clause to search for a specified pattern in a column.
 
 There are two wildcards often used in conjunction with the LIKE operator:
 
@@ -42,7 +42,3 @@ WHERE ContactName LIKE 'a%o'; //The following SQL statement selects all customer
 WHERE CustomerName NOT LIKE 'a%'; //The following SQL statement selects all customers with a CustomerName that does NOT start with "a"
 
 ```
-
-## **Constraints**
-
-NOT LIKE is not supported for now. 
