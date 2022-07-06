@@ -1184,28 +1184,6 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 	return mce.doComQuery(sql)
 }
 
-// this function is temporary, it should be removed when mo support sql like selct const_expr
-// func (mce *MysqlCmdExecutor) handleSelect1(nv *tree.NumVal) error {
-// 	ses := mce.GetSession()
-// 	proto := ses.protocol
-
-// 	v_str := nv.Value.String()
-// 	col := new(MysqlColumn)
-// 	col.SetName(v_str)
-// 	col.SetColumnType(defines.MYSQL_TYPE_LONG)
-// 	ses.Mrs.AddColumn(col)
-// 	v, _ := strconv.Atoi(v_str)
-// 	ses.Mrs.AddRow([]interface{}{v})
-
-// 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
-// 	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
-
-// 	if err := proto.SendResponse(resp); err != nil {
-// 		return fmt.Errorf("routine send response failed. error:%v ", err)
-// 	}
-// 	return nil
-// }
-
 func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	es := explain.NewExplainDefaultOptions()
 
@@ -1945,8 +1923,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	ses := mce.GetSession()
 	ses.showStmtType = NotShowStatement
 	proto := ses.GetMysqlProtocol()
-	pdHook := ses.GetEpochgc()
-	statementCount := uint64(1)
 	txnHandler := ses.GetTxnHandler()
 	ses.SetSql(sql)
 
@@ -1956,12 +1932,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	}
 
 	isAoe := !ses.IsTaeEngine()
-
-	//pin the epoch with 1
-	epoch, _ := pdHook.IncQueryCountAtCurrentEpoch(statementCount)
-	defer func() {
-		pdHook.DecQueryCountAtEpoch(epoch, statementCount)
-	}()
 
 	proc := process.New(mheap.New(ses.GuestMmu))
 	proc.Id = mce.getNextProcessId()
@@ -2013,9 +1983,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	for _, cw := range cws {
 		ses.Mrs = &MysqlResultSet{}
 		stmt := cw.GetAst()
-		//temp try 0 epoch
-		pdHook.IncQueryCountAtEpoch(epoch, 1)
-		statementCount++
 
 		var fromTxnCommand TxnCommand = TxnNoCommand
 		//check transaction states
@@ -2143,7 +2110,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			_, ok := st.Rows.Select.(*tree.ValuesClause)
 			if ok && usePlan2 {
 				selfHandle = true
-				rspLen, err = mce.handleInsertValues(st, epoch)
+				rspLen, err = mce.handleInsertValues(st, 0)
 				if err != nil {
 					goto handleFailed
 				}
@@ -2314,7 +2281,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 					goto handleFailed
 				}
 			}
-			if err = runner.Run(epoch); err != nil {
+			if err = runner.Run(0); err != nil {
 				goto handleFailed
 			}
 			if ses.showStmtType == ShowCreateTable {
@@ -2369,20 +2336,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			/*
 				Step 1: Start
 			*/
-			if err = runner.Run(epoch); err != nil {
+			if err = runner.Run(0); err != nil {
 				goto handleFailed
 			}
 
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
 				logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
-			}
-
-			//record ddl drop xxx after the success
-			switch stmt.(type) {
-			case *tree.DropTable, *tree.DropDatabase,
-				*tree.DropIndex, *tree.DropUser, *tree.DropRole:
-				//test ddl
-				pdHook.IncDDLCountAtEpoch(epoch, 1)
 			}
 
 			rspLen = cw.GetAffectedRows()
@@ -2491,14 +2450,6 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 	logutil.Infof("cmd %v", req.GetCmd())
 
 	ses := mce.GetSession()
-	if ses.Pu.SV.GetRejectWhenHeartbeatFromPDLeaderIsTimeout() {
-		pdHook := ses.GetEpochgc()
-		if !pdHook.CanAcceptSomething() {
-			resp = NewGeneralErrorResponse(uint8(req.GetCmd()), fmt.Errorf("heartbeat from pdleader is timeout. the server reject sql request. cmd %d \n", req.GetCmd()))
-			return resp, nil
-		}
-	}
-
 	switch uint8(req.GetCmd()) {
 	case COM_QUIT:
 		/*resp = NewResponse(

@@ -158,9 +158,6 @@ type Session struct {
 	//protocol layer
 	protocol Protocol
 
-	//epoch gc handler
-	pdHook *PDCallbackImpl
-
 	//cmd from the client
 	Cmd int
 
@@ -189,11 +186,10 @@ type Session struct {
 	gSysVars        *GlobalSystemVariables
 }
 
-func NewSession(proto Protocol, pdHook *PDCallbackImpl, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
+func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
 	txnHandler := InitTxnHandler(config.StorageEngine)
 	ses := &Session{
 		protocol: proto,
-		pdHook:   pdHook,
 		GuestMmu: gm,
 		Mempool:  mp,
 		Pu:       PU,
@@ -296,10 +292,6 @@ func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, interfac
 
 func (ses *Session) GetTxnHandler() *TxnHandler {
 	return ses.txnHandler
-}
-
-func (ses *Session) GetEpochgc() *PDCallbackImpl {
-	return ses.pdHook
 }
 
 func (ses *Session) GetTxnCompilerContext() *TxnCompilerContext {

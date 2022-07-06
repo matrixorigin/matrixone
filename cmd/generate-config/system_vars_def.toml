@@ -78,26 +78,6 @@ comment = "listening ip"
 update-mode = "dynamic"
 
 [[parameter]]
-name = "sendRow"
-scope = ["global"]
-access = ["file"]
-type = "bool"
-domain-type = "set"
-values = []
-comment = "send data row while producing"
-update-mode = "dynamic"
-
-[[parameter]]
-name = "dumpEnv"
-scope = ["global"]
-access = ["file"]
-type = "bool"
-domain-type = "set"
-values = []
-comment = "dump Environment with memEngine Null nodes for testing"
-update-mode = "dynamic"
-
-[[parameter]]
 name = "hostMmuLimitation"
 scope = ["global"]
 access = ["file"]
@@ -188,66 +168,6 @@ comment = "send the count of rows to the client"
 update-mode = "dynamic"
 
 [[parameter]]
-name = "periodOfEpochTimer"
-scope = ["global"]
-access = ["file"]
-type = "int64"
-domain-type = "set"
-values = ["5"]
-comment = "the period of epoch timer in second"
-update-mode = "dynamic"
-
-[[parameter]]
-name = "periodOfPersistence"
-scope = ["global"]
-access = ["file"]
-type = "int64"
-domain-type = "set"
-values = ["20"]
-comment = "the period of persistence in second"
-update-mode = "dynamic"
-
-[[parameter]]
-name = "periodOfDDLDeleteTimer"
-scope = ["global"]
-access = ["file"]
-type = "int64"
-domain-type = "set"
-values = ["20"]
-comment = "the period of the ddl delete in second"
-update-mode = "dynamic"
-
-[[parameter]]
-name = "timeoutOfHeartbeat"
-scope = ["global"]
-access = ["file"]
-type = "int64"
-domain-type = "set"
-values = ["20"]
-comment = "the timeout of heartbeat in second. In a distributed setting, adjust this setting according to you network status. For poor network connections, set this value larger."
-update-mode = "dynamic"
-
-[[parameter]]
-name = "rejectWhenHeartbeatFromPDLeaderIsTimeout"
-scope = ["global"]
-access = ["file"]
-type = "bool"
-domain-type = "set"
-values = ["false"]
-comment = "default value is false. the server will reject the connection and sql request when the heartbeat from pdleader is timeout."
-update-mode = "dynamic"
-
-[[parameter]]
-name = "enableEpochLogging"
-scope = ["global"]
-access = ["file"]
-type = "bool"
-domain-type = "set"
-values = ["false"]
-comment = "default is false. Print logs when the server calls catalog service to run the ddl."
-update-mode = "dynamic"
-
-[[parameter]]
 name = "recordTimeElapsedOfSqlRequest"
 scope = ["global"]
 access = ["file"]
@@ -319,16 +239,6 @@ comment = "default is fase. Skip writing batch into the storage"
 update-mode = "dynamic"
 
 [[parameter]]
-name = "cubeLogLevel"
-scope = ["global"]
-access = ["file"]
-type = "string"
-domain-type = "set"
-values = ["debug","info","error","warning","warn","fatal"]
-comment = "default is debug. The log level for cube."
-update-mode = "dynamic"
-
-[[parameter]]
 name = "enableProfileGetDataFromPipeline"
 scope = ["global"]
 access = ["file"]
@@ -379,22 +289,12 @@ comment = "export data to csv file default flush size"
 update-mode = "dynamic"
 
 [[parameter]]
-name = "disablePCI"
-scope = ["global"]
-access = ["file"]
-type = "bool"
-domain-type = "set"
-values = []
-comment = "default is false. Disable epochgc pci."
-update-mode = "dynamic"
-
-[[parameter]]
 name = "storageEngine"
 scope = ["global"]
 access = ["file"]
 type = "string"
 domain-type = "set"
-values = ["tae", "aoe"]
+values = ["tae"]
 comment = "default engine is 'tae'."
 update-mode = "dynamic"
 

@@ -367,7 +367,7 @@ func TestVariables(t *testing.T) {
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
 		proto := NewMysqlClientProtocol(0, ioses, 1024, nil)
-		return NewSession(proto, nil, nil, nil, nil, gSysVars)
+		return NewSession(proto, nil, nil, nil, gSysVars)
 	}
 
 	checkWant := func(ses, existSes, newSesAfterSession *Session,

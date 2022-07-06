@@ -15,7 +15,6 @@
 package frontend
 
 import (
-	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -25,9 +24,7 @@ import (
 
 func TestIe(t *testing.T) {
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, config.ClusterCatalog)
-	ppu := NewPDCallbackParameterUnit(int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()), int(config.GlobalSystemVariables.GetPeriodOfPersistence()), int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()), int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()), config.GlobalSystemVariables.GetEnableEpochLogging(), math.MaxInt64)
-	pci := NewPDCallbackImpl(ppu)
-	executor := NewIternalExecutor(pu, pci)
+	executor := NewIternalExecutor(pu)
 	executor.ApplySessionOverride(ie.NewOptsBuilder().Username("test").Finish())
 	sess := executor.newCmdSession(ie.NewOptsBuilder().Database("testdb").Internal(true).Finish())
 	assert.Equal(t, "test", sess.GetMysqlProtocol().GetUserName())
@@ -38,7 +35,7 @@ func TestIe(t *testing.T) {
 
 func TestProtoMoreCoverage(t *testing.T) {
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, config.ClusterCatalog)
-	executor := NewIternalExecutor(pu, nil)
+	executor := NewIternalExecutor(pu)
 	p := executor.proto
 	assert.True(t, p.IsEstablished())
 	p.SetEstablished()
