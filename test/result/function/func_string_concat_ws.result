@@ -96,17 +96,7 @@ pk <> CONCAT_WS( ':','%I','%m' )+CONCAT_WS('-','%y','%H','%V','%k','%k' )
 OR
 year(col_datetime_5) < year(utc_timestamp())
 ORDER BY 1;
-c1	c2
-0001-01-01 00:00:00	0001-01-01 00:00:00
-0001-01-01 00:00:00	0001-01-01 00:00:00
-0001-01-01 00:00:00	0001-01-01 00:00:00
-0001-01-01 00:00:00	0001-01-01 00:00:00
-0001-01-01 00:00:00	2008-06-04 23:05:50.036420000
-2000-01-14 17:55:57.030000000	0001-01-01 00:00:00
-2000-10-17 22:03:12.010000000	0001-01-01 00:00:00
-2000-10-22 23:52:09.010000000	null
-2001-10-20 00:00:00	2001-09-20 11:18:18.036300000
-2006-12-27 07:25:14.040000000	null
+Operator '+' with parameters [VARCHAR VARCHAR] will be implemented in future version.
 DROP TABLE t1;
 SELECT CONCAT_WS(1471290948102948112341241204312904-23412412-4141, "a", "b");
 CONCAT_WS(1471290948102948112341241204312904-23412412-4141, "a", "b")
@@ -125,8 +115,6 @@ create table t2(a INT,  b date);
 insert into t1 values(1, "2012-10-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
 insert into t2 values(1, "2012-10-12"),(2, "1994-10-04"),(3, "2018-06-04"),(4, "2012-10-12");
 SELECT t1.a,t1.b, t2.a,t2.b FROM t1 JOIN t2 ON (concat_ws(t1.a, t1.b) = concat_ws(t2.a, t2.b)) HAVING substring(concat_ws(t1.a, t1.b),1,1)='2';
-a	b	a	b
-1	2012-10-12	1	2012-10-12
-1	2012-10-12	4	2012-10-12
+column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 drop table t1;
 drop table t2;

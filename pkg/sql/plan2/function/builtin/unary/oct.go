@@ -15,6 +15,8 @@
 package unary
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -52,6 +54,47 @@ func Oct[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, 
 		}
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		vector.SetCol(resultVector, oct.Oct(inputValues, resultValues))
+		return resultVector, nil
+	}
+}
+
+func OctFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := vectors[0]
+	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultElementSize := int(resultType.Size)
+	inputValues := vector.MustTCols[T](inputVector)
+	if inputVector.IsScalar() {
+		if inputVector.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
+		resultVector := vector.NewConst(resultType)
+		resultValues := &types.Bytes{
+			Data:    []byte{},
+			Offsets: make([]uint32, 1),
+			Lengths: make([]uint32, 1),
+		}
+		col, err := oct.OctFloat(inputValues, resultValues)
+		if err != nil {
+			return nil, fmt.Errorf("the input value is out of integer range")
+		}
+		vector.SetCol(resultVector, col)
+		return resultVector, nil
+	} else {
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
+		if err != nil {
+			return nil, err
+		}
+		resultValues := &types.Bytes{
+			Data:    []byte{},
+			Offsets: make([]uint32, len(inputValues)),
+			Lengths: make([]uint32, len(inputValues)),
+		}
+		nulls.Set(resultVector.Nsp, inputVector.Nsp)
+		col, err := oct.OctFloat(inputValues, resultValues)
+		if err != nil {
+			return nil, fmt.Errorf("the input value is out of integer range")
+		}
+		vector.SetCol(resultVector, col)
 		return resultVector, nil
 	}
 }

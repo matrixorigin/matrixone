@@ -252,11 +252,7 @@ drop table if exists t1;
 create table t1(b varchar(5));
 insert into t1 values('ab'), ('abc'), ('abcd'), ('abcde');
 select b from t1 group by b having substring(b,1,1)+'a'='aa';
-b
-ab
-abc
-abcd
-abcde
+Operator '+' with parameters [VARCHAR VARCHAR] will be implemented in future version.
 drop table t1;
 drop table if exists t1;
 drop table if exists t2;

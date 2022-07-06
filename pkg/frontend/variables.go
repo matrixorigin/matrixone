@@ -743,6 +743,30 @@ type SystemVariable struct {
 	Default interface{}
 }
 
+func (sv SystemVariable) GetName() string {
+	return sv.Name
+}
+
+func (sv SystemVariable) GetScope() Scope {
+	return sv.Scope
+}
+
+func (sv SystemVariable) GetDynamic() bool {
+	return sv.Dynamic
+}
+
+func (sv SystemVariable) GetSetVarHintApplies() bool {
+	return sv.SetVarHintApplies
+}
+
+func (sv SystemVariable) GetType() SystemVariableType {
+	return sv.Type
+}
+
+func (sv SystemVariable) GetDefault() interface{} {
+	return sv.Default
+}
+
 type GlobalSystemVariables struct {
 	mu sync.Mutex
 	// name -> value/default
@@ -760,7 +784,7 @@ func InitGlobalSystemVariables(gsv *GlobalSystemVariables) {
 		gsv.sysVars = make(map[string]interface{})
 	}
 	for _, def := range gSysVarsDefs {
-		gsv.sysVars[def.Name] = def.Default
+		gsv.sysVars[def.GetName()] = def.GetDefault()
 	}
 }
 
@@ -770,10 +794,10 @@ func (gsv *GlobalSystemVariables) AddSysVariables(vars []SystemVariable) {
 	defer gsv.mu.Unlock()
 	for _, v := range vars {
 		vv := v
-		lname := strings.ToLower(vv.Name)
+		lname := strings.ToLower(vv.GetName())
 		vv.Name = lname
 		gSysVarsDefs[lname] = vv
-		gsv.sysVars[lname] = vv.Default
+		gsv.sysVars[lname] = vv.GetDefault()
 	}
 }
 
@@ -784,7 +808,7 @@ func (gsv *GlobalSystemVariables) SetValues(values map[string]interface{}) error
 	for name, val := range values {
 		name = strings.ToLower(name)
 		if sv, ok := gSysVarsDefs[name]; ok {
-			cv, err := sv.Type.Convert(val)
+			cv, err := sv.GetType().Convert(val)
 			if err != nil {
 				return err
 			}
@@ -819,19 +843,30 @@ func (gsv *GlobalSystemVariables) GetGlobalSysVar(name string) (SystemVariable, 
 	return SystemVariable{}, nil, false
 }
 
+// get the definition of the system variable
+func (gsv *GlobalSystemVariables) GetDefinitionOfSysVar(name string) (SystemVariable, bool) {
+	gsv.mu.Lock()
+	defer gsv.mu.Unlock()
+	name = strings.ToLower(name)
+	if v, ok := gSysVarsDefs[name]; ok {
+		return v, ok
+	}
+	return SystemVariable{}, false
+}
+
 // set global dynamic variable by SET GLOBAL
 func (gsv *GlobalSystemVariables) SetGlobalSysVar(name string, value interface{}) error {
 	gsv.mu.Lock()
 	defer gsv.mu.Unlock()
 	name = strings.ToLower(name)
 	if sv, ok := gSysVarsDefs[name]; ok {
-		if sv.Scope == ScopeSession {
+		if sv.GetScope() == ScopeSession {
 			return errorSystemVariableIsSession
 		}
-		if !sv.Dynamic {
+		if !sv.GetDynamic() {
 			return errorSystemVariableIsReadOnly
 		}
-		val, err := sv.Type.Convert(value)
+		val, err := sv.GetType().Convert(value)
 		if err != nil {
 			return err
 		}
@@ -935,5 +970,53 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("testbotchvar_nodyn", 0, 100, false),
 		Default:           int64(0),
+	},
+	"character_set_client": {
+		Name:              "character_set_client",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("character_set_client"),
+		Default:           "utf8mb4",
+	},
+	"character_set_connection": {
+		Name:              "character_set_connection",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("character_set_connection"),
+		Default:           "utf8mb4",
+	},
+	"character_set_results": {
+		Name:              "character_set_results",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("character_set_results"),
+		Default:           "utf8mb4",
+	},
+	"collation_connection": {
+		Name:              "collation_connection",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("collation_connection"),
+		Default:           "default",
+	},
+	"autocommit": {
+		Name:              "autocommit",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("autocommit"),
+		Default:           "on",
+	},
+	"sql_mode": {
+		Name:              "sql_mode",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: true,
+		Type:              InitSystemVariableSetType("sql_mode", "ALLOW_INVALID_DATES", "ANSI_QUOTES", "ERROR_FOR_DIVISION_BY_ZERO", "HIGH_NOT_PRECEDENCE", "IGNORE_SPACE", "NO_AUTO_VALUE_ON_ZERO", "NO_BACKSLASH_ESCAPES", "NO_DIR_IN_CREATE", "NO_ENGINE_SUBSTITUTION", "NO_UNSIGNED_SUBTRACTION", "NO_ZERO_DATE", "NO_ZERO_IN_DATE", "ONLY_FULL_GROUP_BY", "PAD_CHAR_TO_FULL_LENGTH", "PIPES_AS_CONCAT", "REAL_AS_FLOAT", "STRICT_ALL_TABLES", "STRICT_TRANS_TABLES", "TIME_TRUNCATE_FRACTIONAL"),
+		Default:           "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
 	},
 }

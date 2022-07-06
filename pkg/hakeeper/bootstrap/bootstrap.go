@@ -16,10 +16,11 @@ package bootstrap
 
 import (
 	"errors"
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"sort"
 )
 
 type Manager struct {
@@ -53,8 +54,8 @@ func NewBootstrapManager(cluster pb.ClusterInfo) *Manager {
 func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 	dn pb.DNState, log pb.LogState) (commands []pb.ScheduleCommand, err error) {
 
-	logStores := sortLogStoresByTick(log.Stores)
-	dnStores := sortDNStoresByTick(dn.Stores)
+	logStores := LogStoresSortedByTick(log.Stores)
+	dnStores := DNStoresSortedByTick(dn.Stores)
 
 	for _, shardRecord := range bm.cluster.LogShards {
 		if shardRecord.NumberOfReplicas > uint64(len(logStores)) {
@@ -63,17 +64,13 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 
 		initialMembers := make(map[uint64]string)
 
-		for _, storeInfo := range logStores {
-			if uint64(len(initialMembers)) == shardRecord.NumberOfReplicas {
-				break
-			}
-
+		for i := uint64(0); i < shardRecord.NumberOfReplicas; i++ {
 			replicaID, ok := alloc.Next()
 			if !ok {
 				return nil, errors.New("id allocator error")
 			}
 
-			initialMembers[replicaID] = storeInfo
+			initialMembers[replicaID] = logStores[i]
 		}
 
 		for replicaID, uuid := range initialMembers {
@@ -94,27 +91,27 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 		}
 	}
 
-	for _, dnRecord := range bm.cluster.DNShards {
-		for _, uuid := range dnStores {
-			replicaID, ok := alloc.Next()
-			if !ok {
-				return nil, errors.New("id allocator error")
-			}
-
-			commands = append(commands, pb.ScheduleCommand{
-				UUID: uuid,
-				ConfigChange: &pb.ConfigChange{
-					Replica: pb.Replica{
-						UUID:      uuid,
-						ShardID:   dnRecord.ShardID,
-						ReplicaID: replicaID,
-					},
-					ChangeType: pb.AddReplica,
-				},
-				ServiceType: pb.DnService,
-			})
-			break
+	for i, dnRecord := range bm.cluster.DNShards {
+		if i >= len(dnStores) {
+			i = i % len(dnStores)
 		}
+		replicaID, ok := alloc.Next()
+		if !ok {
+			return nil, errors.New("id allocator error")
+		}
+
+		commands = append(commands, pb.ScheduleCommand{
+			UUID: dnStores[i],
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					UUID:      dnStores[i],
+					ShardID:   dnRecord.ShardID,
+					ReplicaID: replicaID,
+				},
+				ChangeType: pb.AddReplica,
+			},
+			ServiceType: pb.DnService,
+		})
 	}
 
 	return
@@ -141,18 +138,17 @@ func (bm *Manager) CheckBootstrap(log pb.LogState) bool {
 	return true
 }
 
-func sortLogStoresByTick(logStores map[string]pb.LogStoreInfo) []string {
-	storeSlice := make([]struct {
+func LogStoresSortedByTick(logStores map[string]pb.LogStoreInfo) []string {
+	type infoWithID struct {
 		uuid string
 		pb.LogStoreInfo
-	}, 0, len(logStores))
+	}
+
+	storeSlice := make([]infoWithID, 0, len(logStores))
 	uuidSlice := make([]string, 0, len(logStores))
 
 	for uuid, storeInfo := range logStores {
-		storeSlice = append(storeSlice, struct {
-			uuid string
-			pb.LogStoreInfo
-		}{uuid, storeInfo})
+		storeSlice = append(storeSlice, infoWithID{uuid, storeInfo})
 	}
 
 	sort.Slice(storeSlice, func(i, j int) bool {
@@ -166,18 +162,17 @@ func sortLogStoresByTick(logStores map[string]pb.LogStoreInfo) []string {
 	return uuidSlice
 }
 
-func sortDNStoresByTick(dnStores map[string]pb.DNStoreInfo) []string {
-	storeSlice := make([]struct {
+func DNStoresSortedByTick(dnStores map[string]pb.DNStoreInfo) []string {
+	type infoWithID struct {
 		uuid string
 		pb.DNStoreInfo
-	}, 0, len(dnStores))
+	}
+
+	storeSlice := make([]infoWithID, 0, len(dnStores))
 	uuidSlice := make([]string, 0, len(dnStores))
 
 	for uuid, storeInfo := range dnStores {
-		storeSlice = append(storeSlice, struct {
-			uuid string
-			pb.DNStoreInfo
-		}{uuid, storeInfo})
+		storeSlice = append(storeSlice, infoWithID{uuid, storeInfo})
 	}
 
 	sort.Slice(storeSlice, func(i, j int) bool {

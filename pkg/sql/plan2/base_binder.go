@@ -847,30 +847,28 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 
 	// get args(exprs) & types
 	argsLength := len(args)
-	argsType := make([]types.T, argsLength)
+	argsType := make([]types.Type, argsLength)
 	for idx, expr := range args {
-		argsType[idx] = types.T(expr.Typ.Id)
+		argsType[idx] = makeTypeByPlan2Expr(expr)
 	}
 
 	// get function definition
-	funcDef, funcId, argsCastType, err := function.GetFunctionByName(name, argsType)
+	funcId, returnType, argsCastType, err := function.GetFunctionByName(name, argsType)
 	if err != nil {
 		return nil, err
 	}
-	if funcDef.IsAggregate() {
+	if function.GetFunctionIsAggregateByName(name) {
 		if constExpr, ok := args[0].Expr.(*plan.Expr_C); ok && constExpr.C.Isnull {
-			args[0].Typ.Id = plan.Type_TypeId(funcDef.ReturnTyp)
+			args[0].Typ = makePlan2Type(&returnType)
 		}
 	}
-	if argsCastType != nil {
+	if len(argsCastType) != 0 {
 		if len(argsCastType) != argsLength {
 			return nil, errors.New("", "cast types length not match args length")
 		}
 		for idx, castType := range argsCastType {
-			if argsType[idx] != castType && castType != types.T_any {
-				typ := rewriteDecimalTypeIfNecessary(&plan.Type{
-					Id: plan.Type_TypeId(castType),
-				})
+			if !argsType[idx].Eq(castType) && castType.Oid != types.T_any {
+				typ := makePlan2Type(&castType)
 				args[idx], err = appendCastBeforeExpr(args[idx], typ)
 				if err != nil {
 					return nil, err
@@ -887,9 +885,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				Args: args,
 			},
 		},
-		Typ: &Type{
-			Id: plan.Type_TypeId(funcDef.ReturnTyp),
-		},
+		Typ: makePlan2Type(&returnType),
 	}, nil
 }
 
@@ -1038,11 +1034,11 @@ func appendCastBeforeExpr(expr *Expr, toType *Type) (*Expr, error) {
 	if expr.Typ.Id == plan.Type_ANY {
 		return expr, nil
 	}
-	argsType := []types.T{
-		types.T(expr.Typ.Id),
-		types.T(toType.Id),
+	argsType := []types.Type{
+		makeTypeByPlan2Expr(expr),
+		makeTypeByPlan2Type(toType),
 	}
-	_, funcId, _, err := function.GetFunctionByName("cast", argsType)
+	funcId, _, _, err := function.GetFunctionByName("cast", argsType)
 	if err != nil {
 		return nil, err
 	}

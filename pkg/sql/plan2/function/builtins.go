@@ -178,6 +178,40 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	CONCAT: {
+		Id: CONCAT,
+		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			if len(inputs) > 1 {
+				ret := make([]types.T, len(inputs))
+				convert := false
+				for i, t := range inputs {
+					if t != types.T_char && t != types.T_varchar && t != types.T_any {
+						if castTable[t][types.T_varchar] {
+							ret[i] = types.T_varchar
+							convert = true
+							continue
+						}
+						return wrongFunctionParameters, nil
+					}
+					ret[i] = t
+				}
+				if convert {
+					return int32(0), ret
+				}
+				return int32(0), nil
+			}
+			return wrongFunctionParameters, nil
+		},
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_varchar, Fn: multi.Concat,
+			},
+		},
+	},
 	CURRENT_TIMESTAMP: {
 		Id: CURRENT_TIMESTAMP,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
@@ -642,6 +676,20 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_varchar, Fn: unary.Oct[int64],
 			},
+			{
+				Index:     8,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_float32},
+				ReturnTyp: types.T_varchar, Fn: unary.OctFloat[float32],
+			},
+			{
+				Index:     9,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_float64},
+				ReturnTyp: types.T_varchar, Fn: unary.OctFloat[float64],
+			},
 		},
 	},
 	REVERSE: {
@@ -804,14 +852,14 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_date},
-				ReturnTyp: types.T_uint8, Fn: unary.DateToWeekday,
+				ReturnTyp: types.T_int64, Fn: unary.DateToWeekday,
 			},
 			{
 				Index:     1,
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_datetime},
-				ReturnTyp: types.T_uint8, Fn: unary.DatetimeToWeekday,
+				ReturnTyp: types.T_int64, Fn: unary.DatetimeToWeekday,
 			},
 		},
 	},
@@ -2212,6 +2260,174 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_timestamp,
 				Fn:        unary.DateStringToTimestamp,
+			},
+		},
+	},
+	DATABASE: {
+		Id: DATABASE,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.Database,
+			},
+		},
+	},
+	USER: {
+		Id: USER,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.User,
+			},
+		},
+	},
+	CONNECTION_ID: {
+		Id: CONNECTION_ID,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_uint64,
+				Fn:        unary.ConnectionID,
+			},
+		},
+	},
+	CHARSET: {
+		Id: CHARSET,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.Charset,
+			},
+		},
+	},
+	CURRENT_ROLE: {
+		Id: CURRENT_ROLE,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.CurrentRole,
+			},
+		},
+	},
+	FOUND_ROWS: {
+		Id: FOUND_ROWS,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_uint64,
+				Fn:        unary.FoundRows,
+			},
+		},
+	},
+	ICULIBVERSION: {
+		Id: ICULIBVERSION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.ICULIBVersion,
+			},
+		},
+	},
+	LAST_INSERT_ID: {
+		Id: LAST_INSERT_ID,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_uint64,
+				Fn:        unary.LastInsertID,
+			},
+		},
+	},
+	ROLES_GRAPHML: {
+		Id: ROLES_GRAPHML,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.RolesGraphml,
+			},
+		},
+	},
+	ROW_COUNT: {
+		Id: ROW_COUNT,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_uint64,
+				Fn:        unary.RowCount,
+			},
+		},
+	},
+	VERSION: {
+		Id: VERSION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.Version,
+			},
+		},
+	},
+	COLLATION: {
+		Id: COLLATION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.Collation,
 			},
 		},
 	},

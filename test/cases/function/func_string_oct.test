@@ -6,9 +6,7 @@ select oct(0b11111111);
 select oct(12);
 SELECT oct(1314);
 
--- @bvt:issue#3620
 select oct(2e5);
--- @bvt:issue
 
 #NULL
 SELECT oct(null);
@@ -21,10 +19,8 @@ SELECT concat_ws(",", oct(1000), oct(2000));
 select oct(0);
 select oct(-1);
 
--- @bvt:issue#3620
 select oct(10e50);
 select oct(-10e50);
--- @bvt:issue
 select oct(0.00000000000000000000000001);
 select oct(-0.00000000000000000000000001);
 -- @bvt:issue#3506
@@ -69,7 +65,7 @@ HAVING oct(a) <>0;
 DROP TABLE t1;
 
 #WHERE, 算术运算
--- @bvt:issue#3500
+-- @bvt:issue#3716
 drop table if exists t1;
 create table t1(a INT,  b int);
 insert into t1 values(1, 2),(2, 3),(3, 4),(4, 5);

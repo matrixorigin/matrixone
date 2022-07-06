@@ -5,8 +5,7 @@ select floor(1.1e5);
 floor(1.1e5)
 110000.0
 select floor(cast(-2 as unsigned)), floor(18446744073709551614), floor(-2);
-floor(cast(-2 as unsigned))	floor(18446744073709551614)	floor(-2)
-18446744073709551614	18446744073709551614	-2
+Can't cast '-2' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
 SELECT floor(ceil(12345678901234567890));
 floor(ceil(12345678901234567890))
 12345678901234567890
@@ -136,11 +135,9 @@ select floor(-123.342124124214, -100);
 floor(-123.342124124214, -100)
 -1.0E100
 select floor(123.342, null);
-floor(123.342, null)
-null
+the second argument of the floor function must be an int64 constant
 select floor(null, 1);
 floor(null, 1)
 null
 select floor(null, null);
-floor(null, null)
-null
+the second argument of the floor function must be an int64 constant

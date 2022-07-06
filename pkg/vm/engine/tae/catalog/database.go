@@ -378,6 +378,16 @@ func (entry *DBEntry) CloneCreate() CheckpointItem {
 	return cloned
 }
 
+func (entry *DBEntry) CloneCreateEntry() *DBEntry {
+	cloned := &DBEntry{
+		BaseEntry: entry.BaseEntry.Clone(),
+		name:      entry.name,
+	}
+	cloned.RWMutex = &sync.RWMutex{}
+	cloned.CurrOp = OpCreate
+	return cloned
+}
+
 // Coarse API: no consistency check
 func (entry *DBEntry) IsActive() bool {
 	entry.RLock()
