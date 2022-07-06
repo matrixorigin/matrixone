@@ -6239,7 +6239,6 @@ reserved_keyword:
 |   RENAME
 |   REPLACE
 |   RIGHT
-|   ROLE
 |   REQUIRE
 |   REPEAT
 |   ROW_COUNT
@@ -6399,6 +6398,7 @@ non_reserved_keyword:
 |   PROCEDURE
 |   PROXY
 |   QUERY
+|   ROLE
 |   RANGE
 |   READ
 |   REAL
