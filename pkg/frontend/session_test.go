@@ -108,8 +108,8 @@ func TestTxnHandler(t *testing.T) {
 		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnEnd)
 
 		err = txn.CommitAfterBegin()
-		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnErr)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnEnd)
 
 		err = txn.CleanTxn()
 		convey.So(err, convey.ShouldBeNil)
@@ -136,8 +136,8 @@ func TestTxnHandler(t *testing.T) {
 		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnEnd)
 
 		err = txn.Rollback()
-		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnErr)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnEnd)
 
 		err = txn.CleanTxn()
 		convey.So(err, convey.ShouldBeNil)

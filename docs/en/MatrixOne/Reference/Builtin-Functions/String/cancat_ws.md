@@ -34,8 +34,11 @@ SELECT CONCAT_WS(',','First name','Second name','Last Name');
 | First name,Second name,Last Name                 |
 +--------------------------------------------------+
 1 row in set (0.01 sec)
+> SELECT CONCAT_WS(',','First name',NULL,'Last Name');
++-------------------------------------------+
+| concat_ws(,, First name, null, Last Name) |
++-------------------------------------------+
+| First name,Last Name                      |
++-------------------------------------------+
+1 row in set (0.01 sec)
 ```
-
-## **Constraints**
-
-Currently, MatrixOne doesn't support NULL values after function delimiter arguments.
