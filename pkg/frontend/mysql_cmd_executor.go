@@ -1931,7 +1931,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		usePlan2 = true
 	}
 
-	isAoe := !ses.IsTaeEngine()
+	//isAoe := !ses.IsTaeEngine()
 
 	proc := process.New(mheap.New(ses.GuestMmu))
 	proc.Id = mce.getNextProcessId()
@@ -2021,70 +2021,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				ses.ep = st.Ep
 				ses.closeRef = mce.exportDataClose
 			}
-
-			//we need it in plan1.
-			//The code block here will be removed after the plan1 is offline.
-			if !usePlan2 {
-				if sc, ok := st.Select.(*tree.SelectClause); ok {
-					if len(sc.Exprs) == 1 {
-						if fe, ok := sc.Exprs[0].Expr.(*tree.FuncExpr); ok {
-							if un, ok := fe.Func.FunctionReference.(*tree.UnresolvedName); ok {
-								param := strings.ToLower(un.Parts[0])
-								if param == "database" ||
-									param == "current_user" ||
-									param == "connection_id" {
-									err = mce.handleSelectXXX(param)
-									if err != nil {
-										goto handleFailed
-									}
-
-									//next statement
-									goto handleSucceeded
-								}
-							}
-						} else if ve, ok := sc.Exprs[0].Expr.(*tree.VarExpr); ok {
-							//TODO: fix multiple variables in single statement like `select @@a,@@b,@@c`
-							err = mce.handleSelectVariables(ve)
-							if err != nil {
-								goto handleFailed
-							}
-							//next statement
-							goto handleSucceeded
-						}
-					}
-				}
-			}
-		}
-
-		//check database
-		/*we need it in plan1.
-		The code block here will be removed after the plan1 is offline.
-		But when it is the plan2.
-		When the database is "", Cases like following can be executed also.
-		select @@version_comment limit 1;
-		SELECT DATABASE();
-		*/
-		if !usePlan2 && ses.DatabaseNameIsEmpty() {
-			//if none database has been selected, database operations must be failed.
-			switch t := stmt.(type) {
-			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowCreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
-				*tree.ShowStatus, *tree.ShowVariables, *tree.DropDatabase, *tree.Load,
-				*tree.Use, *tree.SetVar,
-				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
-			case *tree.ShowColumns:
-				if t.Table.ToTableName().SchemaName == "" {
-					err = NewMysqlError(ER_NO_DB_ERROR)
-					goto handleFailed
-				}
-			case *tree.ShowTables:
-				if t.DBName == "" {
-					err = NewMysqlError(ER_NO_DB_ERROR)
-					goto handleFailed
-				}
-			default:
-				err = NewMysqlError(ER_NO_DB_ERROR)
-				goto handleFailed
-			}
 		}
 
 		selfHandle = false
@@ -2153,47 +2089,47 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			selfHandle = true
 			err = errors.New(errno.FeatureNotSupported, "not support explain analyze statement now")
 			goto handleFailed
-		case *tree.ShowDatabases:
-			if usePlan2 && isAoe {
-				selfHandle = true
-				if err = mce.handleShowDatabases(st); err != nil {
-					goto handleFailed
-				}
-			}
-		case *tree.ShowTables:
-			if usePlan2 && isAoe {
-				selfHandle = true
-				if err = mce.handleShowTables(st); err != nil {
-					goto handleFailed
-				}
-			}
-		case *tree.ShowColumns:
-			ses.showStmtType = ShowColumns
-			ses.Data = nil
-			if usePlan2 && isAoe {
-				selfHandle = true
-				if err = mce.handleShowColumns(st); err != nil {
-					goto handleFailed
-				}
-			}
-		case *tree.ShowCreateDatabase:
-			ses.showStmtType = ShowCreateDatabase
-			ses.Data = nil
-			if usePlan2 && isAoe {
-				selfHandle = true
-				if err = mce.handleShowCreateDatabase(st); err != nil {
-					goto handleFailed
-				}
-			}
-		case *tree.ShowCreateTable:
-			ses.showStmtType = ShowCreateTable
-			ses.Data = nil
-			if usePlan2 && isAoe {
-				selfHandle = true
-				if err = mce.handleShowCreateTable(st); err != nil {
-					goto handleFailed
-				}
-			}
+		//case *tree.ShowDatabases:
+		//	if usePlan2 && isAoe {
+		//		selfHandle = true
+		//		if err = mce.handleShowDatabases(st); err != nil {
+		//			goto handleFailed
+		//		}
+		//	}
+		//case *tree.ShowTables:
+		//	if usePlan2 && isAoe {
+		//		selfHandle = true
+		//		if err = mce.handleShowTables(st); err != nil {
+		//			goto handleFailed
+		//		}
+		//	}
+		//case *tree.ShowColumns:
+		//	ses.showStmtType = ShowColumns
+		//	ses.Data = nil
+		//	if usePlan2 && isAoe {
+		//		selfHandle = true
+		//		if err = mce.handleShowColumns(st); err != nil {
+		//			goto handleFailed
+		//		}
+		//	}
+		//case *tree.ShowCreateDatabase:
+		//	ses.showStmtType = ShowCreateDatabase
+		//	ses.Data = nil
+		//	if usePlan2 && isAoe {
+		//		selfHandle = true
+		//		if err = mce.handleShowCreateDatabase(st); err != nil {
+		//			goto handleFailed
+		//		}
+		//	}
+		//case *tree.ShowCreateTable:
+		//	ses.showStmtType = ShowCreateTable
+		//	ses.Data = nil
+		//	if usePlan2 && isAoe {
+		//		selfHandle = true
+		//		if err = mce.handleShowCreateTable(st); err != nil {
+		//			goto handleFailed
+		//		}
+		//	}
 		case *tree.Delete:
 			ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 		case *tree.Update:
