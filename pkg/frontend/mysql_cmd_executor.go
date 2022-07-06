@@ -1457,29 +1457,16 @@ func buildPlan(ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, err
 /*
 GetComputationWrapper gets the execs from the computation engine
 */
-var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session, usePlan2 bool) ([]ComputationWrapper, error) {
+var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	var cw []ComputationWrapper = nil
-	if usePlan2 {
-		stmts, err := parsers.Parse(dialect.MYSQL, sql)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, stmt := range stmts {
-			cw = append(cw, InitTxnComputationWrapper(ses, stmt, proc))
-		}
-	} else {
-		comp := compile1.New(db, sql, user, eng, proc)
-		execs, err := comp.Build()
-		if err != nil {
-			return nil, err
-		}
-
-		for _, e := range execs {
-			cw = append(cw, NewComputationWrapperImpl(e))
-		}
+	stmts, err := parsers.Parse(dialect.MYSQL, sql)
+	if err != nil {
+		return nil, err
 	}
 
+	for _, stmt := range stmts {
+		cw = append(cw, InitTxnComputationWrapper(ses, stmt, proc))
+	}
 	return cw, nil
 }
 
@@ -1535,11 +1522,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	txnHandler := ses.GetTxnHandler()
 	ses.SetSql(sql)
 
-	usePlan2 := ses.IsTaeEngine()
-	if ses.Pu.SV.GetUsePlan2() {
-		usePlan2 = true
-	}
-
 	proc := process.New(mheap.New(ses.GuestMmu))
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = ses.Pu.SV.GetProcessLimitationSize()
@@ -1557,7 +1539,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		sql,
 		ses.GetUserName(),
 		ses.Pu.StorageEngine,
-		proc, ses, usePlan2)
+		proc, ses)
 	if err != nil {
 		return NewMysqlError(ER_PARSE_ERROR, err, "")
 	}
@@ -1651,7 +1633,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			}
 		case *tree.Insert:
 			_, ok := st.Rows.Select.(*tree.ValuesClause)
-			if ok && usePlan2 {
+			if ok {
 				selfHandle = true
 				rspLen, err = mce.handleInsertValues(st, 0)
 				if err != nil {
