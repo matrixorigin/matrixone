@@ -175,7 +175,16 @@ func (vec *StdVector[T]) AppendMany(vals ...T) {
 	}
 	predictSize := len(vals) + len(vec.slice)
 	if predictSize > vec.capacity {
-		vec.tryExpand(predictSize)
+		var newCap int
+		if vec.capacity < 2 {
+			newCap = 4
+		} else {
+			newCap = vec.capacity * 2
+		}
+		if newCap < predictSize {
+			newCap = predictSize
+		}
+		vec.tryExpand(newCap)
 	}
 	vec.slice = append(vec.slice, vals...)
 	vec.buf = unsafe.Slice((*byte)(unsafe.Pointer(&vec.slice[0])), stl.SizeOfMany[T](predictSize))
