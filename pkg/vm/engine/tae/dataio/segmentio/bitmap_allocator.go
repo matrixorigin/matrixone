@@ -255,6 +255,10 @@ func (b *BitmapAllocator) Allocate(needLen uint64) (uint64, uint64) {
 				}
 				val := &(b.level0[idx])
 				if *val == ALL_UNIT_CLEAR {
+					// ALL_UNIT_CLEAR needs to be reset
+					startIdx = 0
+					setStart = false
+					allocatedPage = 0
 					continue
 				}
 				//TODO:Need to allocate huge pages to debug

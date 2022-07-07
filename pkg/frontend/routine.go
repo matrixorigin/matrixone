@@ -98,7 +98,7 @@ func (routine *Routine) Loop() {
 		routine.protocol.(*MysqlProtocolImpl).sequenceId = req.seq
 
 		if ses == nil {
-			ses = NewSession(routine.protocol, mgr.getEpochgc(), routine.guestMmu, routine.mempool, mgr.getParameterUnit(), gSysVariables)
+			ses = NewSession(routine.protocol, routine.guestMmu, routine.mempool, mgr.getParameterUnit(), gSysVariables)
 		}
 
 		routine.executor.PrepareSessionBeforeExecRequest(ses)

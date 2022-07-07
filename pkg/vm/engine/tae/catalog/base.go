@@ -284,7 +284,7 @@ func (be *BaseEntry) ApplyDeleteCmd(ts uint64, index *wal.Index) error {
 }
 
 func (be *BaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
-	if be.Txn == nil {
+	if be.Txn == nil || be.Txn == txnCtx {
 		if be.HasDropped() {
 			return ErrNotFound
 		}

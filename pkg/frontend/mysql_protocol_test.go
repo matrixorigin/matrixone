@@ -273,10 +273,7 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	config.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, nil)
 
-	ppu := NewPDCallbackParameterUnit(int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()), int(config.GlobalSystemVariables.GetPeriodOfPersistence()), int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()), int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()), config.GlobalSystemVariables.GetEnableEpochLogging(), math.MaxInt64)
-	pci := NewPDCallbackImpl(ppu)
-	pci.Id = 0
-	rm := NewRoutineManager(pu, pci)
+	rm := NewRoutineManager(pu)
 
 	encoder, decoder := NewSqlCodec()
 

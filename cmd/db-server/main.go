@@ -15,44 +15,22 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"math"
-	"os"
-	"os/signal"
-	"strconv"
-	"strings"
-	"syscall"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
+	"os"
+	"os/signal"
+	"syscall"
 
-	"github.com/BurntSushi/toml"
-	"github.com/cockroachdb/pebble"
-	"github.com/matrixorigin/matrixcube/pb/metapb"
-	"github.com/matrixorigin/matrixcube/storage"
-	"github.com/matrixorigin/matrixcube/storage/kv"
-	cPebble "github.com/matrixorigin/matrixcube/storage/kv/pebble"
-	"github.com/matrixorigin/matrixcube/vfs"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/rpcserver"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/handler"
-	"github.com/matrixorigin/matrixone/pkg/vm/driver"
-	aoeDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
-	dConfig "github.com/matrixorigin/matrixone/pkg/vm/driver/config"
-	kvDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/kv"
-	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	aoeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/engine"
-	aoeStorage "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -80,9 +58,7 @@ const (
 )
 
 var (
-	c   *catalog.Catalog
-	mo  *frontend.MOServer
-	pci *frontend.PDCallbackImpl
+	mo *frontend.MOServer
 )
 
 var (
@@ -93,15 +69,15 @@ var (
 	MoVersion    = ""
 )
 
-func createMOServer(callback *frontend.PDCallbackImpl) {
+func createMOServer() {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, config.ClusterCatalog)
-	mo = frontend.NewMOServer(address, pu, callback)
+	mo = frontend.NewMOServer(address, pu)
 	if config.GlobalSystemVariables.GetEnableMetric() {
 		ieFactory := func() ie.InternalExecutor {
-			return frontend.NewIternalExecutor(pu, callback)
+			return frontend.NewIternalExecutor(pu)
 		}
-		metric.InitMetric(ieFactory, pu, callback.Id, metric.ALL_IN_ONE_MODE)
+		metric.InitMetric(ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
 	}
 	frontend.InitServerVersion(MoVersion)
 }
@@ -131,123 +107,9 @@ func recreateDir(dir string) (err error) {
 	return err
 }
 
-/**
-call the catalog service to remove the epoch
-*/
-func removeEpoch(epoch uint64) {
-	//logutil.Infof("removeEpoch %d",epoch)
-	var err error
-	if c != nil {
-		_, err = c.RemoveDeletedTable(epoch)
-		if err != nil {
-			fmt.Printf("catalog remove ddl failed. error :%v \n", err)
-		}
-	}
-}
-
-type aoeHandler struct {
-	cube       driver.CubeDriver
-	port       int64
-	kvStorage  storage.DataStorage
-	aoeStorage storage.DataStorage
-	eng        engine.Engine
-}
-
-type tpeHandler struct {
-	aoe *aoeHandler
-}
-
 type taeHandler struct {
 	eng engine.Engine
 	tae *db.DB
-}
-
-func initAoe(configFilePath string) *aoeHandler {
-	targetDir := config.GlobalSystemVariables.GetStorePath()
-	if err := recreateDir(targetDir); err != nil {
-		logutil.Infof("Recreate dir error:%v\n", err)
-		os.Exit(RecreateDirExit)
-	}
-
-	cfg := parseConfig(configFilePath, targetDir)
-
-	//aoe : kvstorage config
-	_, kvStorage := getKVDataStorage(targetDir, cfg)
-
-	//aoe : catalog
-	catalogListener := catalog.NewCatalogListener()
-	aoeStorage := getAOEDataStorage(configFilePath, targetDir, catalogListener, cfg)
-
-	//aoe cube driver
-	a, err := driver.NewCubeDriverWithOptions(kvStorage, aoeStorage, &cfg)
-	if err != nil {
-		logutil.Infof("Create cube driver failed, %v", err)
-		os.Exit(CreateCubeExit)
-	}
-	err = a.Start()
-	if err != nil {
-		logutil.Infof("Start cube driver failed, %v", err)
-		os.Exit(StartCubeExit)
-	}
-
-	//aoe: address for computation
-	addr := cfg.CubeConfig.AdvertiseClientAddr
-	if len(addr) != 0 {
-		logutil.Infof("compile init address from cube AdvertiseClientAddr %s", addr)
-	} else {
-		logutil.Infof("compile init address from cube ClientAddr %s", cfg.CubeConfig.ClientAddr)
-		addr = cfg.CubeConfig.ClientAddr
-	}
-
-	//put the node info to the computation
-	compile.InitAddress(addr)
-
-	//aoe: catalog
-	c = catalog.NewCatalog(a)
-	config.ClusterCatalog = c
-	catalogListener.UpdateCatalog(c)
-	cngineConfig := aoeEngine.EngineConfig{}
-	_, err = toml.DecodeFile(configFilePath, &cngineConfig)
-	if err != nil {
-		logutil.Infof("Decode cube config error:%v\n", err)
-		os.Exit(DecodeCubeConfigExit)
-	}
-
-	eng := aoeEngine.New(c, &cngineConfig)
-
-	err = waitClusterStartup(a, 300*time.Second, int(cfg.CubeConfig.Prophet.Replication.MaxReplicas), int(cfg.ClusterConfig.PreAllocatedGroupNum))
-
-	if err != nil {
-		logutil.Infof("wait cube cluster startup failed, %v", err)
-		os.Exit(WaitCubeStartExit)
-	}
-
-	//test storage aoe_storage
-	config.StorageEngine = eng
-
-	li := strings.LastIndex(cfg.CubeConfig.ClientAddr, ":")
-	if li == -1 {
-		logutil.Infof("There is no port in client addr")
-		os.Exit(LoadConfigExit)
-	}
-	cubePort, err := strconv.ParseInt(string(cfg.CubeConfig.ClientAddr[li+1:]), 10, 32)
-	if err != nil {
-		logutil.Infof("Invalid port")
-		os.Exit(LoadConfigExit)
-	}
-	return &aoeHandler{
-		cube:       a,
-		port:       cubePort,
-		kvStorage:  kvStorage,
-		aoeStorage: aoeStorage,
-		eng:        eng,
-	}
-}
-
-func closeAoe(aoe *aoeHandler) {
-	aoe.kvStorage.Close()
-	aoe.aoeStorage.Close()
-	aoe.cube.Close()
 }
 
 func initTae() *taeHandler {
@@ -342,25 +204,12 @@ func main() {
 	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
 
 	Host := config.GlobalSystemVariables.GetHost()
-	NodeId := config.GlobalSystemVariables.GetNodeID()
-
-	ppu := frontend.NewPDCallbackParameterUnit(int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()), int(config.GlobalSystemVariables.GetPeriodOfPersistence()), int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()), int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()), config.GlobalSystemVariables.GetEnableEpochLogging(), math.MaxInt64)
-
-	//aoe : epochgc ?
-	pci = frontend.NewPDCallbackImpl(ppu)
-	pci.Id = int(NodeId)
-	pci.SetRemoveEpoch(removeEpoch)
-
 	engineName := config.GlobalSystemVariables.GetStorageEngine()
 	var port int64
 	port = config.GlobalSystemVariables.GetPortOfRpcServerInComputationEngine()
 
-	var aoe *aoeHandler
 	var tae *taeHandler
-	if engineName == "aoe" {
-		aoe = initAoe(configFilePath)
-		port = aoe.port
-	} else if engineName == "tae" {
+	if engineName == "tae" {
 		fmt.Println("Initialize the TAE engine ...")
 		tae = initTae()
 		err := frontend.InitDB(tae.eng)
@@ -392,7 +241,7 @@ func main() {
 		}
 	}()
 
-	createMOServer(pci)
+	createMOServer()
 
 	err = runMOServer()
 	if err != nil {
@@ -409,115 +258,7 @@ func main() {
 
 	cleanup()
 
-	if engineName == "aoe" {
-		closeAoe(aoe)
-	} else if engineName == "tae" {
+	if engineName == "tae" {
 		closeTae(tae)
 	}
-}
-
-func waitClusterStartup(driver driver.CubeDriver, timeout time.Duration, maxReplicas int, minimalAvailableShard int) error {
-	timeoutC := time.After(timeout)
-	for {
-		select {
-		case <-timeoutC:
-			return errors.New("wait for available shard timeout")
-		default:
-			router := driver.RaftStore().GetRouter()
-			if router != nil {
-				nodeCnt := maxReplicas
-				shardCnt := 0
-				router.ForeachShards(uint64(pb.AOEGroup), func(shard metapb.Shard) bool {
-					fmt.Printf("shard %d, peer count is %d\n", shard.ID, len(shard.Replicas))
-					shardCnt++
-					if len(shard.Replicas) < nodeCnt {
-						nodeCnt = len(shard.Replicas)
-					}
-					return true
-				})
-				if nodeCnt >= maxReplicas && shardCnt >= minimalAvailableShard {
-					kvNodeCnt := maxReplicas
-					kvCnt := 0
-					router.ForeachShards(uint64(pb.KVGroup), func(shard metapb.Shard) bool {
-						kvCnt++
-						if len(shard.Replicas) < kvNodeCnt {
-							kvNodeCnt = len(shard.Replicas)
-						}
-						return true
-					})
-					if kvCnt >= 1 && kvNodeCnt >= maxReplicas {
-						fmt.Println("ClusterStatus is ok now")
-						return nil
-					}
-
-				}
-			}
-			time.Sleep(time.Millisecond * 10)
-		}
-	}
-}
-
-func parseConfig(configFilePath, targetDir string) dConfig.Config {
-	cfg := dConfig.Config{}
-	_, err := toml.DecodeFile(configFilePath, &cfg.CubeConfig)
-	if err != nil {
-		logutil.Infof("Decode cube config error:%v\n", err)
-		os.Exit(DecodeCubeConfigExit)
-	}
-	_, err = toml.DecodeFile(configFilePath, &cfg.FeaturesConfig)
-	if err != nil {
-		logutil.Infof("Decode cube config error:%v\n", err)
-		os.Exit(DecodeCubeConfigExit)
-	}
-
-	cfg.CubeConfig.DataPath = targetDir + "/cube"
-	_, err = toml.DecodeFile(configFilePath, &cfg.ClusterConfig)
-	if err != nil {
-		logutil.Infof("Decode cluster config error:%v\n", err)
-		os.Exit(DecodeClusterConfigExit)
-	}
-
-	if !config.GlobalSystemVariables.GetDisablePCI() {
-		cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pci
-	}
-	cfg.CubeConfig.Logger = logutil.GetGlobalLogger()
-	return cfg
-}
-
-func getKVDataStorage(targetDir string, cfg dConfig.Config) (*cPebble.Storage, storage.DataStorage) {
-	kvs, err := cPebble.NewStorage(targetDir+"/pebble/data", nil, &pebble.Options{
-		FS:                          vfs.NewPebbleFS(vfs.Default),
-		MemTableSize:                1024 * 1024 * 128,
-		MemTableStopWritesThreshold: 4,
-	})
-	if err != nil {
-		logutil.Infof("create kv data storage error, %v\n", err)
-		os.Exit(CreateAoeExit)
-	}
-
-	kvBase := kv.NewBaseStorage(kvs, vfs.Default)
-	return kvs, kv.NewKVDataStorage(kvBase, kvDriver.NewkvExecutor(kvs),
-		kv.WithLogger(cfg.CubeConfig.Logger),
-		kv.WithFeature(cfg.FeaturesConfig.KV.Feature()))
-}
-
-func getAOEDataStorage(configFilePath, targetDir string,
-	catalogListener *catalog.CatalogListener,
-	cfg dConfig.Config) storage.DataStorage {
-	var aoeDataStorage *aoeDriver.Storage
-	opt := aoeStorage.Options{}
-	_, err := toml.DecodeFile(configFilePath, &opt)
-	if err != nil {
-		logutil.Infof("Decode aoe config error:%v\n", err)
-		os.Exit(DecodeAoeConfigExit)
-	}
-
-	opt.EventListener = catalogListener
-	aoeDataStorage, err = aoeDriver.NewStorageWithOptions(targetDir+"/aoe",
-		cfg.FeaturesConfig.AOE.Feature(), &opt)
-	if err != nil {
-		logutil.Infof("Create aoe driver error, %v\n", err)
-		os.Exit(CreateAoeExit)
-	}
-	return aoeDataStorage
 }
