@@ -136,13 +136,13 @@ func (r *IntAgg) BulkFill(i int64, zs []int64, vec vector.AnyVector) {
 }
 
 // r[x] += a[y]
-func (r *IntAgg) Add(a agg.Agg[any], x, y int64) {
+func (r *IntAgg) Merge(a agg.Agg[any], x, y int64) {
 	ar := a.(*IntAgg)
 	r.Vs[x] += ar.Vs[y]
 	r.Ns[x] += ar.Ns[y]
 }
 
-func (r *IntAgg) BatchAdd(a agg.Agg[any], start int64, os []uint8, vps []uint64) {
+func (r *IntAgg) BatchMerge(a agg.Agg[any], start int64, os []uint8, vps []uint64) {
 	ar := a.(*IntAgg)
 	for i := range os {
 		r.Vs[vps[i]-1] += ar.Vs[int64(i)+start]

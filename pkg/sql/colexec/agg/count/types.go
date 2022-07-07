@@ -18,8 +18,8 @@ import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 type IntAgg struct {
 	Da  []byte
-	Ns  []int64
+	Ns  []int64    // the number of null-value of each group
 	In  types.Type // input vector's type
 	Typ types.Type
-	Vs  []types.Int64
+	Vs  []types.Int64 // the number of value of each group
 }
