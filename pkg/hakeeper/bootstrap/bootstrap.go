@@ -76,7 +76,8 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 		for replicaID, uuid := range initialMembers {
 			commands = append(commands,
 				pb.ScheduleCommand{
-					UUID: uuid,
+					UUID:          uuid,
+					Bootstrapping: true,
 					ConfigChange: &pb.ConfigChange{
 						Replica: pb.Replica{
 							UUID:      uuid,
