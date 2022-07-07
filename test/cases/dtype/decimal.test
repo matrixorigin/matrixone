@@ -17,22 +17,22 @@ drop table if exists t1;
 create table t1 (a decimal(29,0) not null, primary key(a));
 -- @bvt:issue#3364
 insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFE), (18446744073709551613.0000000), (18446744073709551612.0000000001);
-select * from t1;
-select * from t1 where a=18446744073709551615;
+select * from t1 order by 1 asc;
+select * from t1 where a=18446744073709551615 order by a desc;
 delete from t1 where a=18446744073709551615.000000000;
 select * from t1;
 -- @bvt:issue
 drop table t1;
 create table t1 ( a int not null default 1, big decimal(29,11) );
 insert into t1 (big) values (-1),(12.34567891234567),(92.23372036854775807);
-select * from t1;
+select * from t1 order by a desc, big asc;
 select min(big),max(big),max(big)-1 from t1;
-select min(big),avg(big),max(big)-1 from t1 group by a;
+select min(big),avg(big),max(big)-1 from t1 group by a order by 1+2;
 -- @bvt:issue#3364
 drop table t1;
 create table t1 ( a int not null default 1, big decimal(20,4) primary key);
 insert into t1 (big) values (0),(18446744073), (0xFFFFFE), (184467.13), (184462);
-select * from t1 order by 2 desc;
+select * from t1 order by 1,2 desc;
 select * from t1 order by big limit 1,2;
 select * from t1 order by big limit 2 offset 1;
 select min(big),max(big),max(big)-1 from t1;
@@ -90,6 +90,8 @@ INSERT INTO t1 (id,a) VALUES
 (3,CAST(0x8000000000000000 AS UNSIGNED)),
 (4,CAST(0xFFFFFFFFFFFFFFFF AS UNSIGNED));
 UPDATE t1 SET b = a;
+-- @bvt:issue
+-- @bvt:issue#3673
 select distinct * from t1 where ((a = '2147483647') and (b = '2147483647'));
 select a,count(a) from t1 group by a having count(a)>=2;
 -- @bvt:issue

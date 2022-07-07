@@ -1,13 +1,13 @@
 drop table if exists t1;
 create table t1 (a timestamp(0) not null, primary key(a));
 insert into t1 values ('20200101000000'), ('2022-01-02'), ('2022-01-02 00:00:01'), ('2022-01-02 00:00:01.512345');
-select * from t1;
+select * from t1 order by a asc;
 a
 2020-01-01 00:00:00
 2022-01-02 00:00:00
 2022-01-02 00:00:01
 2022-01-02 00:00:02
-select * from t1 where a='2022-01-02';
+select * from t1 where a='2022-01-02' order by 1 desc;
 a
 2022-01-02 00:00:00
 select * from t1 where a>20220102;
@@ -29,12 +29,12 @@ a
 drop table t1;
 create table t1 ( a int not null default 1, big timestamp(4) primary key);
 insert into t1 (big) values ('20220103'),('2022-01-01'),('2022-01-01 00:00:01'),('2022-01-02 00:00:00.000050');
-select * from t1;
+select * from t1 order by a desc;
 a	big
-1	2022-01-03 00:00:00
-1	2022-01-01 00:00:00
-1	2022-01-01 00:00:01
 1	2022-01-02 00:00:00.000100000
+1	2022-01-01 00:00:01
+1	2022-01-01 00:00:00
+1	2022-01-03 00:00:00
 select * from t1 order by big limit 1,3;
 a	big
 1	2022-01-01 00:00:01
@@ -45,7 +45,7 @@ a	big
 1	2022-01-01 00:00:01
 1	2022-01-02 00:00:00.000100000
 1	2022-01-03 00:00:00
-select min(big),max(big),max(big)-1 from t1 group by a;
+select min(big),max(big),max(big)-1 from t1 group by a order by 1 asc, 3 asc;
 min(big)	max(big)	max(big)-1
 2022-01-01 00:00:00.0000	2022-01-03 00:00:00.0000	20220102999999.0000
 select big,count(big) from t1 group by big having count(big)>1 order by 2;
@@ -75,35 +75,35 @@ insert into t2 values('2022-01-01 00:00:00.005', 4);
 insert into t2 values('2022-01-01 00:00:00.001', 5);
 select * from t1;
 dt	value32
-2022-01-01 00:00:00.000050000	1
-2022-01-01 00:00:00.000500000	2
-2022-01-01 00:00:00.005000000	3
+2022-01-01 00:00:00.000050	1
+2022-01-01 00:00:00.000500	2
+2022-01-01 00:00:00.005000	3
 select * from t2;
 dt	value32
-2022-01-01 00:00:00.005000000	4
-2022-01-01 00:00:00.001000000	5
+2022-01-01 00:00:00.001	5
+2022-01-01 00:00:00.005	4
 select * from t1 join t2 on t1.dt=t2.dt order by 1 desc, t2.dt asc;
 dt	value32	dt	value32
-2022-01-01 00:00:00.005000000	3	2022-01-01 00:00:00.005000000	4
-select * from t1 join t2 on t1.dt=t2.dt where t1.value32<>t2.value32;
+2022-01-01 00:00:00.005000	3	2022-01-01 00:00:00.005	4
+select * from t1 join t2 on t1.dt=t2.dt where t1.value32<>t2.value32 order by 3 desc, 4 desc;
 dt	value32	dt	value32
-2022-01-01 00:00:00.005000000	3	2022-01-01 00:00:00.005000000	4
+2022-01-01 00:00:00.005000	3	2022-01-01 00:00:00.005	4
 drop table if exists t1;
 drop table if exists t2;
 CREATE TABLE t_timestamp(id timestamp(6));
 INSERT INTO t_timestamp VALUES ('2020-01-01 23:59:59.999999'), ('2022-01-02 00:00:00');
 SELECT id, id >= 20200102 FROM t_timestamp;
 id	id >= 20200102
-2020-01-01 23:59:59.999999000	false
-2022-01-02 00:00:00	true
+2020-01-01 23:59:59.999999	false	
+2022-01-02 00:00:00.000000	true	
 SELECT id, id = 202020101 FROM t_timestamp;
 id	id = 202020101
-2020-01-01 23:59:59.999999000	false
-2022-01-02 00:00:00	false
+2020-01-01 23:59:59.999999	false	
+2022-01-02 00:00:00.000000	false	
 SELECT id, 20200101 = id FROM t_timestamp;
 id	20200101 = id
-2020-01-01 23:59:59.999999000	false
-2022-01-02 00:00:00	false
+2020-01-01 23:59:59.999999	false	
+2022-01-02 00:00:00.000000	false	
 SELECT * from t_timestamp WHERE id = 20200102;
 id
 SELECT * from t_timestamp WHERE id = 2.0200102e7;
@@ -112,7 +112,7 @@ SELECT * from t_timestamp WHERE id = '20200102';
 id
 SELECT * from t_timestamp WHERE id IN ('2020-01-01','2022-01-02');
 id
-2022-01-02 00:00:00
+2022-01-02 00:00:00.000000
 SELECT * from t_timestamp WHERE id IN (2.0200101e7,2.0200102e7 );
 id
 SELECT * from t_timestamp WHERE id IN ('20220101', 20220102);
@@ -127,10 +127,10 @@ id
 2020-01-01 23:59:59.999999
 SELECT * from t_timestamp WHERE id BETWEEN '2020-01-01' AND '2020-01-02';
 id
-2020-01-01 23:59:59.999999000
+2020-01-01 23:59:59.999999
 SELECT * from t_timestamp WHERE id BETWEEN '2022-01-01 00:00:00' AND '2022-01-02 00:00:00.000000';
 id
-2022-01-02 00:00:00
+2022-01-02 00:00:00.000000
 drop table if exists t1;
 CREATE TABLE t1 (a timestamp(6));
 INSERT INTO t1 VALUES ('2022-03-01 00:00:01.0001');
