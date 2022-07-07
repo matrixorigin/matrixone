@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"os"
 	"runtime/pprof"
 	"sort"
@@ -1119,7 +1120,6 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 	return mce.doComQuery(sql)
 }
 
-/*
 //Note: for pass the compile quickly. We will remove the comments in the future.
 func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	es := explain.NewExplainDefaultOptions()
@@ -1180,8 +1180,8 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	session := mce.GetSession()
 	protocol := session.GetMysqlProtocol()
 
-	attrs := plan.BuildExplainResultColumns()
-	columns, err := GetExplainColumns(attrs)
+	explainColName := "QUERY PLAN"
+	columns, err := GetExplainColumns(explainColName)
 	if err != nil {
 		logutil.Errorf("GetColumns from ExplainColumns handler failed, error: %v", err)
 		return err
@@ -1200,9 +1200,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	for _, c := range columns {
 		mysqlc := c.(Column)
 		session.Mrs.AddColumn(mysqlc)
-
 		//	mysql COM_QUERY response: send the column definition per column
-
 		err := protocol.SendColumnDefinitionPacket(mysqlc, cmd)
 		if err != nil {
 			return err
@@ -1211,13 +1209,12 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 
 	//	mysql COM_QUERY response: End after the column has been sent.
 	//	send EOF packet
-
 	err = protocol.SendEOFPacketIf(0, 0)
 	if err != nil {
 		return err
 	}
 
-	err = buildMoExplainQuery(attrs, buffer, session, getDataFromPipeline)
+	err = buildMoExplainQuery(explainColName, buffer, session, getDataFromPipeline)
 	if err != nil {
 		return err
 	}
@@ -1229,32 +1226,26 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	return nil
 }
 
-func GetExplainColumns(attrs []*plan.Attribute) ([]interface{}, error) {
-	//attrs := plan.BuildExplainResultColumns()
-	cols := make([]*compile.Col, len(attrs))
-	for i, attr := range attrs {
-		cols[i] = &compile.Col{
-			Name: attr.Name,
-			Typ:  attr.Type.Oid,
-		}
+func GetExplainColumns(explainColName string) ([]interface{}, error) {
+	cols := []*plan2.ColDef{
+		{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_varchar)}, Name: explainColName},
 	}
-	//e.resultCols = cols
-	var mysqlCols []interface{} = make([]interface{}, len(cols))
+	columns := make([]interface{}, len(cols))
 	var err error = nil
-	for i, c := range cols {
-		col := new(MysqlColumn)
-		col.SetName(c.Name)
-		err = convertEngineTypeToMysqlType(c.Typ, col)
+	for i, col := range cols {
+		c := new(MysqlColumn)
+		c.SetName(col.Name)
+		err = convertEngineTypeToMysqlType(types.T(col.Typ.Id), c)
 		if err != nil {
 			return nil, err
 		}
-		mysqlCols[i] = col
+		columns[i] = c
 	}
-	return mysqlCols, err
+	return columns, err
 }
 
-func buildMoExplainQuery(attrs []*plan.Attribute, buffer *explain.ExplainDataBuffer, session *Session, fill func(interface{}, *batch.Batch) error) error {
-	bat := batch.New(true, []string{attrs[0].Name})
+func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffer, session *Session, fill func(interface{}, *batch.Batch) error) error {
+	bat := batch.New(true, []string{explainColName})
 	rs := buffer.Lines
 	vs := make([][]byte, len(rs))
 
@@ -1265,7 +1256,7 @@ func buildMoExplainQuery(attrs []*plan.Attribute, buffer *explain.ExplainDataBuf
 		count++
 	}
 	vs = vs[:count]
-	vec := vector.New(attrs[0].Type)
+	vec := vector.New(types.T_varchar.ToType())
 	if err := vector.Append(vec, vs); err != nil {
 		return err
 	}
@@ -1274,7 +1265,6 @@ func buildMoExplainQuery(attrs []*plan.Attribute, buffer *explain.ExplainDataBuf
 
 	return fill(session, bat)
 }
-*/
 
 var _ ComputationWrapper = &TxnComputationWrapper{}
 
@@ -1598,9 +1588,9 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			}
 		case *tree.ExplainStmt:
 			selfHandle = true
-			//if err = mce.handleExplainStmt(st); err != nil {
-			//	goto handleFailed
-			//}
+			if err = mce.handleExplainStmt(st); err != nil {
+				goto handleFailed
+			}
 			goto handleFailed
 		case *tree.ExplainAnalyze:
 			selfHandle = true
