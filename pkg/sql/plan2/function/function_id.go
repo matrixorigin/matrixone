@@ -221,6 +221,8 @@ const (
 
 	TIMESTAMP // TIMESTAMP
 
+	JSON_EXTRACT // JSON_EXTRACT
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -357,6 +359,7 @@ var functionIdRegister = map[string]int32{
 	"row_count":      ROW_COUNT,
 	"version":        VERSION,
 	"collation":      COLLATION,
+	"json_extract":   JSON_EXTRACT,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

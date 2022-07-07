@@ -295,6 +295,9 @@ import (
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
+//JSON function
+%token <str> JSON_EXTRACT
+
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE
 
@@ -365,6 +368,7 @@ import (
 %type <funcExpr> function_call_keyword
 %type <funcExpr> function_call_nonkeyword
 %type <funcExpr> function_call_aggregate
+%type <funcExpr> function_call_json
 
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list
@@ -372,7 +376,7 @@ import (
 %type <str> not_keyword func_not_keyword
 %type <str> reserved_keyword non_reserved_keyword
 %type <str> equal_opt reserved_sql_id reserved_table_id
-%type <str> as_name_opt as_opt_id table_id id_or_var name_string ident
+%type <str> as_name_opt as_opt_id table_id id_or_var name_string ident json_string path_string
 %type <str> database_id table_alias explain_sym
 %type <unresolvedObjectName> unresolved_object_name table_column_name
 %type <unresolvedObjectName> table_name_unresolved
@@ -3117,6 +3121,18 @@ auth_option:
 		}
 	}
 
+json_string:
+	    STRING
+    {
+	$$ = $1
+    }
+
+path_string:
+	    STRING
+    {
+	$$ = $1
+    }
+
 name_string:
     ident
 |   STRING
@@ -4416,6 +4432,10 @@ simple_expr:
     {
         $$ = $1
     }
+| function_call_json
+    {
+        $$ = $1
+    }
 
 else_opt:
 	{
@@ -4816,6 +4836,17 @@ function_call_generic:
              Func: tree.FuncName2ResolvableFunctionReference(name),
              Exprs: tree.Exprs{arg1, $4, $6},
         }
+	}
+function_call_json:
+	JSON_EXTRACT '(' json_string ',' path_string ')'
+	{
+		name := tree.SetUnresolvedName(strings.ToLower($1))
+		a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+		a2 := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
+	$$ = &tree.FuncExpr{
+	     Func: tree.FuncName2ResolvableFunctionReference(name),
+	     Exprs: tree.Exprs{a1, a2},
+	}
 	}
 
 trim_direction:
