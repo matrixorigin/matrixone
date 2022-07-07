@@ -6,9 +6,7 @@
 #Test cases of query without table
 select 0.00,1.11,1234567890.1234567890123456789;
 select 1123.2333+1233.3331;
--- @bvt:issue#3806
 select cast(9223372.036854775808 as decimal)+1;
--- @bvt:issue
 -- @bvt:issue#3183
 select round(cast(2320310.66666612312 as decimal));
 select floor(cast(2231231.501231 as decimal));
@@ -139,10 +137,8 @@ select count(*) from t
 where id between 88947549497796.3574 and 889475494977969.358;
 drop table t;
 -- @bvt:issue
--- @bvt:issue#3806
 SELECT CAST(1.00 AS decimal) BETWEEN 1 AND -1;
 SELECT CAST(1.00 AS decimal) NOT BETWEEN 1 AND -1;
--- @bvt:issue
 SELECT CAST(-0 AS decimal) BETWEEN 0 AND -1;
 SELECT CAST(0 AS decimal) NOT BETWEEN 0 AND -1;
 
