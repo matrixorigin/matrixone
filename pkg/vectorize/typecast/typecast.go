@@ -532,6 +532,38 @@ func Decimal128ToInt64(xs []types.Decimal128, scale int32, rs []int64) ([]int64,
 	return rs, nil
 }
 
+func Decimal64ToUint64(xs []types.Decimal64, scale int32, rs []uint64) ([]uint64, error) {
+	for i, x := range xs {
+		xStr := string(x.Decimal64ToString(scale))
+		floatRepresentation, err := strconv.ParseFloat(xStr, 64)
+		if err != nil {
+			return []uint64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT UNSIGNED correctly")
+		}
+		result := int64(math.Round(floatRepresentation))
+		if result>>63 == 1 {
+			return []uint64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT UNSIGNED correctly")
+		}
+		rs[i] = uint64(result)
+	}
+	return rs, nil
+}
+
+func Decimal128ToUint64(xs []types.Decimal128, scale int32, rs []uint64) ([]uint64, error) {
+	for i, x := range xs {
+		xStr := string(x.Decimal128ToString(scale))
+		floatRepresentation, err := strconv.ParseFloat(xStr, 64)
+		if err != nil {
+			return []uint64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT UNSIGNED correctly")
+		}
+		result := int64(math.Round(floatRepresentation))
+		if result>>63 == 1 {
+			return []uint64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT UNSIGNED correctly")
+		}
+		rs[i] = uint64(result)
+	}
+	return rs, nil
+}
+
 func NumericToBool[T constraints.Integer | constraints.Float](xs []T, rs []bool) ([]bool, error) {
 	for i, x := range xs {
 		rs[i] = (x != 0)
