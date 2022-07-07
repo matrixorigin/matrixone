@@ -347,3 +347,16 @@ domain-type = "set"
 values = ["true", "false"]
 comment = "default is true. if true, enable metric at booting"
 update-mode = "dynamic"
+
+# ====================================================
+# Configuration for logutil
+# Logger Configs
+level = "debug" # debug, info, warn, error, fatal.
+format = "json" # json, console.
+
+# log file config
+filename = "" # log file.
+max-size = 512 # maximum log file size.
+max-days = 0 # maximum log file days kept.
+max-backups = 0 # maximum numbers of old log files to retain.
+# ====================================================
