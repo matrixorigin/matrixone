@@ -15,13 +15,31 @@
 package unary
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/asin"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+type asinResult struct {
+	Result []float64
+	Nsp    *nulls.Nulls
+}
+
+func asin(inputValues []float64, rs []float64) asinResult {
+	result := asinResult{Result: rs, Nsp: new(nulls.Nulls)}
+	for i, n := range inputValues {
+		if n < -1 || n > 1 {
+			nulls.Add(result.Nsp, uint64(i))
+		} else {
+			result.Result[i] = math.Asin(n)
+		}
+	}
+	return result
+}
 
 func Asin(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	origVec := vs[0]
@@ -38,7 +56,7 @@ func Asin(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 			resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
 			resultValues := make([]float64, 1)
 			// nulls.Set(resultVector.Nsp, origVec.Nsp)
-			results := asin.Asin(origVecCol, resultValues)
+			results := asin(origVecCol, resultValues)
 			if nulls.Any(results.Nsp) {
 				return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
 			}
@@ -54,7 +72,7 @@ func Asin(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		results := encoding.DecodeFloat64Slice(resultVector.Data)
 		results = results[:len(origVecCol)]
 		resultVector.Col = results
-		res := asin.Asin(origVecCol, results)
+		res := asin(origVecCol, results)
 		nulls.Set(resultVector.Nsp, origVec.Nsp.Or(res.Nsp))
 		vector.SetCol(resultVector, res.Result)
 		return resultVector, nil
