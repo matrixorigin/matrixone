@@ -105,16 +105,17 @@ func TestCheck(t *testing.T) {
 					LeaderID: 1,
 					Term:     1,
 				}},
-				Stores: map[string]pb.LogStoreInfo{"a": {
-					Tick: 0,
-					Replicas: []pb.LogReplicaInfo{{
-						LogShardInfo: pb.LogShardInfo{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-							Epoch:    1,
-							LeaderID: 1,
-							Term:     1,
-						}, ReplicaID: 1}}},
+				Stores: map[string]pb.LogStoreInfo{
+					"a": {
+						Tick: 0,
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 1,
+								Term:     1,
+							}, ReplicaID: 1}}},
 					"b": {
 						Tick: uint64(13 * hakeeper.TickPerSecond * 60),
 						Replicas: []pb.LogReplicaInfo{{
@@ -135,18 +136,23 @@ func TestCheck(t *testing.T) {
 								LeaderID: 1,
 								Term:     1,
 							}, ReplicaID: 3}}},
+					"d": {
+						Tick: uint64(12 * hakeeper.TickPerSecond * 60),
+					},
 				},
 			},
 			removing:    nil,
 			adding:      nil,
 			currentTick: uint64(15 * hakeeper.TickPerSecond * 60),
-			expected: []*operator.Operator{operator.NewOperator("rm peer: store [a]", 1,
-				1, operator.RemoveLogService{
-					Target:    "b",
-					StoreID:   "a",
-					ShardID:   1,
-					ReplicaID: 1,
-				})},
+			expected: []*operator.Operator{
+				operator.NewOperator("", 1, 1,
+					operator.RemoveLogService{
+						Target:    "b",
+						StoreID:   "a",
+						ShardID:   1,
+						ReplicaID: 1,
+					}),
+			},
 		},
 		{
 			desc: "shard 1 has only 2 replicas, which expected as 3",
