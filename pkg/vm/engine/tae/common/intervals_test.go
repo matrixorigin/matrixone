@@ -176,3 +176,33 @@ func TestContains3(t *testing.T) {
 	assert.False(t, i1.Contains(*i2))
 	assert.True(t, i2.Equal(i2bk)) //i2 should remain the same
 }
+
+func TestNewBySlice(t *testing.T) {
+	i := NewClosedIntervalsBySlice([]uint64{})
+	t.Log(i)
+	assert.Equal(t, 0, len(i.Intervals))
+	i = NewClosedIntervalsBySlice([]uint64{1})
+	t.Log(i)
+	assert.Equal(t, 1, len(i.Intervals))
+	i = NewClosedIntervalsBySlice([]uint64{1, 2})
+	t.Log(i)
+	assert.Equal(t, 1, len(i.Intervals))
+	i = NewClosedIntervalsBySlice([]uint64{2, 1})
+	t.Log(i)
+	assert.Equal(t, 1, len(i.Intervals))
+	i = NewClosedIntervalsBySlice([]uint64{1, 2, 3})
+	t.Log(i)
+	assert.Equal(t, 1, len(i.Intervals))
+	i = NewClosedIntervalsBySlice([]uint64{1, 3, 2})
+	t.Log(i)
+	assert.Equal(t, 1, len(i.Intervals))
+	i = NewClosedIntervalsBySlice([]uint64{1, 3, 4})
+	t.Log(i)
+	assert.Equal(t, 2, len(i.Intervals))
+	i = NewClosedIntervalsBySlice([]uint64{1, 4, 3})
+	t.Log(i)
+	assert.Equal(t, 2, len(i.Intervals))
+	i = NewClosedIntervalsBySlice([]uint64{1, 4, 3, 3, 2, 5, 3, 4, 6, 10, 7, 4567, 654, 67, 78, 67, 68})
+	t.Log(i)
+	assert.Equal(t, 6, len(i.Intervals))
+}
