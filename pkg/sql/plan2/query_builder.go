@@ -962,6 +962,38 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 	node.NodeId = nodeId
 	builder.qry.Nodes = append(builder.qry.Nodes, node)
 	builder.ctxByNode = append(builder.ctxByNode, ctx)
+
+	// TODO: better estimation
+	switch node.NodeType {
+	case plan.Node_JOIN:
+		leftCost := builder.qry.Nodes[node.Children[0]].Cost
+		rightCost := builder.qry.Nodes[node.Children[1]].Cost
+
+		switch node.JoinType {
+		case plan.Node_SEMI, plan.Node_ANTI, plan.Node_MARK:
+			node.Cost = &plan.Cost{
+				Card: leftCost.Card,
+			}
+
+		default:
+			node.Cost = &plan.Cost{
+				Card: leftCost.Card * rightCost.Card,
+			}
+		}
+
+	default:
+		if len(node.Children) > 0 {
+			childCost := builder.qry.Nodes[node.Children[0]].Cost
+			node.Cost = &plan.Cost{
+				Card: childCost.Card,
+			}
+		} else if node.Cost == nil {
+			node.Cost = &plan.Cost{
+				Card: 1,
+			}
+		}
+	}
+
 	return nodeId
 }
 
@@ -1113,6 +1145,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 		nodeId = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_TABLE_SCAN,
+			Cost:        builder.compCtx.Cost(obj, nil),
 			ObjRef:      obj,
 			TableDef:    tableDef,
 			BindingTags: []int32{builder.genNewTag()},
@@ -1725,6 +1758,9 @@ func (builder *QueryBuilder) resolveJoinOrder(nodeId int32) int32 {
 
 		eligible := adjMat[firstConnected*nLeaf : (firstConnected+1)*nLeaf]
 
+		var leftCard, rightCard float64
+		leftCard = leaves[firstConnected].Cost.Card
+
 		for {
 			nextSibling := nLeaf
 			for i := range eligible {
@@ -1740,11 +1776,20 @@ func (builder *QueryBuilder) resolveJoinOrder(nodeId int32) int32 {
 
 			visited[nextSibling] = true
 
+			rightCard = leaves[nextSibling].Cost.Card
+
+			children := []int32{nodeId, leaves[nextSibling].NodeId}
+			if leftCard > rightCard {
+				children[0], children[1] = children[1], children[0]
+			}
+
 			nodeId = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
-				Children: []int32{nodeId, leaves[nextSibling].NodeId},
+				Children: children,
 				JoinType: plan.Node_INNER,
 			}, nil)
+
+			leftCard *= rightCard
 
 			for i, adj := range adjMat[nextSibling*nLeaf : (nextSibling+1)*nLeaf] {
 				eligible[i] = eligible[i] || adj
