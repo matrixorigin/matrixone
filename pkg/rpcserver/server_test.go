@@ -15,14 +15,12 @@
 package rpcserver
 
 import (
-	"os"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/logger"
 	"github.com/matrixorigin/matrixone/pkg/rpcserver/message"
 
 	"github.com/fagongzi/goetty"
@@ -33,11 +31,9 @@ type hello struct {
 }
 
 func TestServer(t *testing.T) {
-	log := logger.New(os.Stderr, "hello:")
-	log.SetLevel(logger.WARN)
 	srv, err := New("127.0.0.1:8080", 1<<30, logutil.GetGlobalLogger())
 	if err != nil {
-		log.Fatal(err)
+		t.Fatal(err)
 	}
 	h := new(hello)
 	h.cmd = srv.Register(h.process)
