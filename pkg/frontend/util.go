@@ -330,7 +330,7 @@ func getParameterUnit(configFile string, eng engine.Engine) (*mo_config.Paramete
 
 	fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
 
-	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, engine.Nodes{}, nil)
+	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, engine.Nodes{})
 
 	return pu, nil
 }

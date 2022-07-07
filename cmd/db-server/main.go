@@ -67,7 +67,7 @@ var (
 
 func createMOServer() {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, config.ClusterCatalog)
+	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
 	mo = frontend.NewMOServer(address, pu)
 	if config.GlobalSystemVariables.GetEnableMetric() {
 		ieFactory := func() ie.InternalExecutor {
