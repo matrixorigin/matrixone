@@ -18,7 +18,7 @@ package bitmap
 type Bitmap struct {
 	// Len represent the size of bitmap
 	Len int
-	// Any representat whether or not the vector has any null values set
+	// Any represent whether or not the vector has any null values set
 	Any  bool
 	Data []byte
 }
