@@ -15,7 +15,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 )
@@ -47,17 +46,4 @@ func main() {
 
 	defer file.Close()
 	defer openFile.Close()
-
-	scanner := bufio.NewScanner(file)
-	isOtherConfigs := false
-	for scanner.Scan() {
-		if !isOtherConfigs && scanner.Text() == "# Cluster Configs" {
-			isOtherConfigs = true
-		}
-		if isOtherConfigs {
-			if _, err := openFile.WriteString(scanner.Text() + "\n"); err != nil {
-				panic(err)
-			}
-		}
-	}
 }
