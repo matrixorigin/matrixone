@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sort
+package compare
 
 import (
-	"sort"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,14 +28,13 @@ import (
 )
 
 const (
-	Rows          = 100
-	BenchmarkRows = 100000
+	Rows = 100
 )
 
 type testCase struct {
 	desc bool
-	vec  vector.AnyVector
 	proc *process.Process
+	vecs []vector.AnyVector
 }
 
 var (
@@ -93,122 +91,30 @@ func init() {
 	}
 }
 
-func TestSort(t *testing.T) {
+func TestCompare(t *testing.T) {
 	for _, tc := range tcs {
-		os := make([]int64, tc.vec.Length())
+		os := make([]int64, tc.vecs[0].Length())
 		for i := range os {
 			os[i] = int64(i)
 		}
-		Sort(tc.desc, os, tc.vec)
-		checkResult(t, tc.desc, tc.vec, os)
-		tc.vec.Free(tc.proc.Mp)
+		c := New(tc.vecs[0].Type(), tc.desc)
+		c.Set(0, tc.vecs[0])
+		c.Set(1, tc.vecs[1])
+		c.Copy(0, 1, 0, 0)
+		c.Compare(0, 1, 0, 0)
+		tc.vecs[0].Free(tc.proc.Mp)
+		tc.vecs[1].Free(tc.proc.Mp)
 		require.Equal(t, int64(0), tc.proc.Mp.Size())
 	}
 }
 
-func BenchmarkSortInt(b *testing.B) {
-	vs := make([]int, BenchmarkRows)
-	for i := range vs {
-		vs[i] = i
-	}
-	for i := 0; i < b.N; i++ {
-		sort.Ints(vs)
-	}
-}
-
-func BenchmarkSortIntVector(b *testing.B) {
-	m := mheap.New(guest.New(1<<30, hm))
-	vec := testutil.NewInt32Vector(BenchmarkRows, types.New(types.T_int32, 0, 0, 0), m, true)
-	os := make([]int64, vec.Length())
-	for i := range os {
-		os[i] = int64(i)
-	}
-	for i := 0; i < b.N; i++ {
-		Sort(false, os, vec)
-	}
-}
-
-func checkResult(t *testing.T, desc bool, vec vector.AnyVector, os []int64) {
-	switch vec.Type().Oid {
-	case types.T_int32:
-		vs := make([]int, len(os))
-		col := (any)(vec).(*vector.Vector[types.Int32]).Col
-		for i := range vs {
-			vs[i] = int(col[i])
-		}
-		sort.Ints(vs)
-		if desc {
-			j := len(vs) - 1
-			for _, v := range vs {
-				require.Equal(t, v, int(col[os[j]]))
-				j--
-			}
-		} else {
-			for i, v := range vs {
-				require.Equal(t, v, int(col[os[i]]))
-			}
-		}
-	case types.T_int64:
-		vs := make([]int, len(os))
-		col := (any)(vec).(*vector.Vector[types.Int64]).Col
-		for i := range vs {
-			vs[i] = int(col[i])
-		}
-		sort.Ints(vs)
-		if desc {
-			j := len(vs) - 1
-			for _, v := range vs {
-				require.Equal(t, v, int(col[os[j]]))
-				j--
-			}
-		} else {
-			for i, v := range vs {
-				require.Equal(t, v, int(col[os[i]]))
-			}
-		}
-	case types.T_float32:
-		vs := make([]float64, len(os))
-		col := (any)(vec).(*vector.Vector[types.Float32]).Col
-		for i := range vs {
-			vs[i] = float64(col[i])
-		}
-		sort.Float64s(vs)
-		if desc {
-			j := len(vs) - 1
-			for _, v := range vs {
-				require.Equal(t, v, float64(col[os[j]]))
-				j--
-			}
-		} else {
-			for i, v := range vs {
-				require.Equal(t, v, float64(col[os[i]]))
-			}
-		}
-	case types.T_float64:
-		vs := make([]float64, len(os))
-		col := (any)(vec).(*vector.Vector[types.Float64]).Col
-		for i := range vs {
-			vs[i] = float64(col[i])
-		}
-		sort.Float64s(vs)
-		if desc {
-			j := len(vs) - 1
-			for _, v := range vs {
-				require.Equal(t, v, float64(col[os[j]]))
-				j--
-			}
-		} else {
-			for i, v := range vs {
-				require.Equal(t, v, float64(col[os[i]]))
-			}
-		}
-	}
-}
-
 func newTestCase(desc bool, m *mheap.Mheap, typ types.Type) testCase {
+	vecs := make([]vector.AnyVector, 2)
+	vecs[0] = testutil.NewVector(Rows, typ, m, true)
+	vecs[1] = testutil.NewVector(Rows, typ, m, true)
 	return testCase{
 		desc: desc,
+		vecs: vecs,
 		proc: process.New(m),
-		vec:  testutil.NewVector(Rows, typ, m, true),
 	}
 }

@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,622 +12,208 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package plan
+package plan2
 
 import (
-	"bytes"
-	"fmt"
+	"math"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 const (
-	FULL = iota
-	LEFT
-	SEMI
-	ANTI
-	INNER
-	CROSS
-	RIGHT
-	NATURAL
-	RELATION
+	JoinSideNone       int8 = 0
+	JoinSideLeft            = 1 << iota
+	JoinSideRight           = 1 << iota
+	JoinSideBoth            = JoinSideLeft | JoinSideRight
+	JoinSideCorrelated      = 1 << iota
 )
 
-// Direction for ordering results.
-type Direction int8
+type TableDef = plan.TableDef
+type ColDef = plan.ColDef
+type ObjectRef = plan.ObjectRef
+type ColRef = plan.ColRef
+type Cost = plan.Cost
+type Const = plan.Const
+type Expr = plan.Expr
+type Node = plan.Node
+type RowsetData = plan.RowsetData
+type Query = plan.Query
+type Plan = plan.Plan
+type Type = plan.Type
+type Plan_Query = plan.Plan_Query
 
-// Direction values.
+type CompilerContext interface {
+	// Default database/schema in context
+	DefaultDatabase() string
+	// check if database exist
+	DatabaseExists(name string) bool
+	// get table definition by database/schema
+	Resolve(schemaName string, tableName string) (*ObjectRef, *TableDef)
+	// get the value of variable
+	ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	// get the definition of primary key
+	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
+	// get the definition of hide key
+	GetHideKeyDef(dbName string, tableName string) *ColDef
+	// get estimated cost by table & expr
+	Cost(obj *ObjectRef, e *Expr) *Cost
+}
+
+type Optimizer interface {
+	Optimize(stmt tree.Statement) (*Query, error)
+	CurrentContext() CompilerContext
+}
+
+type Rule interface {
+	Match(*Node) bool    // rule match?
+	Apply(*Node, *Query) // apply the rule
+}
+
+// BaseOptimizer is base optimizer, capable of handling only a few simple rules
+type BaseOptimizer struct {
+	qry   *Query
+	rules []Rule
+	ctx   CompilerContext
+}
+
+///////////////////////////////
+// Data structures for refactor
+///////////////////////////////
+
+type QueryBuilder struct {
+	qry     *plan.Query
+	compCtx CompilerContext
+
+	ctxByNode []*BindContext
+	nextTag   int32
+}
+
+type CTERef struct {
+	ast        *tree.CTE
+	maskedCTEs map[string]any
+}
+
+type BindContext struct {
+	binder Binder
+
+	cteByName  map[string]*CTERef
+	maskedCTEs map[string]any
+
+	cteName  string
+	headings []string
+
+	groupTag     int32
+	aggregateTag int32
+	projectTag   int32
+	resultTag    int32
+
+	groups     []*plan.Expr
+	aggregates []*plan.Expr
+	projects   []*plan.Expr
+	results    []*plan.Expr
+
+	groupByAst     map[string]int32
+	aggregateByAst map[string]int32
+	projectByExpr  map[string]int32
+
+	aliasMap map[string]int32
+
+	bindings       []*Binding
+	bindingByTag   map[int32]*Binding //rel_pos
+	bindingByTable map[string]*Binding
+	bindingByCol   map[string]*Binding
+
+	// for join tables
+	bindingTree *BindingTreeNode
+
+	isDistinct   bool
+	isCorrelated bool
+	hasSingleRow bool
+
+	parent     *BindContext
+	leftChild  *BindContext
+	rightChild *BindContext
+}
+
+type NameTuple struct {
+	table string
+	col   string
+}
+
+type BindingTreeNode struct {
+	using []NameTuple
+
+	binding *Binding
+
+	left  *BindingTreeNode
+	right *BindingTreeNode
+}
+
+type Binder interface {
+	BindExpr(tree.Expr, int32, bool) (*plan.Expr, error)
+	BindColRef(*tree.UnresolvedName, int32, bool) (*plan.Expr, error)
+	BindAggFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error)
+	BindWinFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error)
+	BindSubquery(*tree.Subquery, bool) (*plan.Expr, error)
+}
+
+type baseBinder struct {
+	builder   *QueryBuilder
+	ctx       *BindContext
+	impl      Binder
+	boundCols []string
+}
+
+type TableBinder struct {
+	baseBinder
+}
+
+type WhereBinder struct {
+	baseBinder
+}
+
+type GroupBinder struct {
+	baseBinder
+}
+
+type HavingBinder struct {
+	baseBinder
+	insideAgg bool
+}
+
+type ProjectionBinder struct {
+	baseBinder
+	havingBinder *HavingBinder
+}
+
+type OrderBinder struct {
+	*ProjectionBinder
+	selectList tree.SelectExprs
+}
+
+type LimitBinder struct {
+	baseBinder
+}
+
+var _ Binder = (*TableBinder)(nil)
+var _ Binder = (*WhereBinder)(nil)
+var _ Binder = (*GroupBinder)(nil)
+var _ Binder = (*HavingBinder)(nil)
+var _ Binder = (*ProjectionBinder)(nil)
+var _ Binder = (*LimitBinder)(nil)
+
 const (
-	DefaultDirection Direction = iota
-	Ascending
-	Descending
+	NotFound      int32 = math.MaxInt32
+	AmbiguousName int32 = math.MinInt32
 )
 
-type Plan interface {
-	fmt.Stringer
-	ResultColumns() []*Attribute
-}
-
-type Attribute struct {
-	Ref  int        // reference count
-	Name string     // name of attribute
-	Type types.Type // type of attribute
-}
-
-type Aggregation struct {
-	Op    int     //  opcode of aggregation function
-	Ref   int     // reference count
-	Type  types.T //  return type of aggregation function
-	Name  string  //  name of attribute
-	Alias string
-	E     extend.Extend
-}
-
-type Relation struct {
-	Rows   int64
-	Name   string                // table name
-	Schema string                // schema name
-	Attrs  map[string]*Attribute // table's column information
-
-	Flg  bool // indicate if transform is required
-	Proj Projection
-	Cond extend.Extend
-
-	FreeVars  []string
-	BoundVars []*Aggregation
-}
-
-type DerivedRelation struct {
-	Proj Projection
-	Cond extend.Extend
-
-	Flg       bool // indicate if transform is required
-	FreeVars  []string
-	BoundVars []*Aggregation
-}
-
-type SymbolTable struct {
-	Entries map[string]*Attribute
-}
-
-type ResultAttributes struct {
-	Attrs    []string
-	AttrsMap map[string]*Attribute
-}
-
-type Scope struct {
-	Name     string
-	Children []*Scope
-	Op       interface{}
-	Result   ResultAttributes
-}
-
-// R.Rattr = S.Sattr
-type JoinCondition struct {
-	R     int
-	S     int
-	Rattr string
-	Sattr string
-
-	Alias int
-}
-
-type ScopeSet struct {
-	JoinType int
-	Scopes   []*Scope
-	Conds    []*JoinCondition
-}
-
-type Query struct {
-	Flg        bool // rebuild flag
-	Scope      *Scope
-	Result     []string
-	Stack      []*ScopeSet
-	Aggs       []*Aggregation
-	RenameRels map[string]*Scope
-	Rels       map[string]map[string]*Scope
-
-	Children []*Scope // subquery
-}
-
-type Field struct {
-	Attr string
-	Type Direction
-}
-
-type Join struct {
-	Type   int // join type
-	Vars   [][]int
-	Result []string
-}
-
-type Dedup struct {
-}
-
-type Order struct {
-	Fs []*Field
-}
-
-type Limit struct {
-	Limit int64
-}
-
-type Offset struct {
-	Offset int64
-}
-
-type Restrict struct {
-	E extend.Extend
-}
-
-type Untransform struct {
-	FreeVars []string
-}
-
-type Rename struct {
-	Rs []uint64 // reference count list
-	As []string // alias name list
-	Es []extend.Extend
-}
-
-type Projection struct {
-	Rs []uint64 // reference count list
-	As []string // alias name list
-	Es []extend.Extend
-}
-
-type ResultProjection struct {
-	Rs []uint64 // reference count list
-	As []string // alias name list
-	Es []extend.Extend
-}
-
-type Edge struct {
-	Vs []int
-}
-
-type Graph struct {
-	Es []*Edge
-}
-
-type VertexSet struct {
-	Is []int
-	Es []*Edge
-}
-
-type EdgeSet struct {
-	W      int // weight
-	I1, I2 int // subscript for E1 and E2
-	E1, E2 *Edge
-}
-
-type CreateDatabase struct {
-	IfNotExistFlag bool
-	Id             string
-	E              engine.Engine
-}
-
-type CreateTable struct {
-	IfNotExistFlag bool
-	Id             string
-	Db             engine.Database
-	Defs           []engine.TableDef
-	PartitionBy    *engine.PartitionByDef
-}
-
-type CreateIndex struct {
-	IfNotExistFlag bool
-	HasExist       bool // if true, means this index has existed.
-	Id             string
-	Relation       engine.Relation
-	Defs           []engine.TableDef
-}
-
-type DropDatabase struct {
-	IfExistFlag bool
-	Id          string
-	E           engine.Engine
-}
-
-type DropTable struct {
-	IfExistFlag bool
-	Ids         []string
-	Dbs         []string
-	E           engine.Engine
-}
-
-type DropIndex struct {
-	IfExistFlag bool
-	NotExisted  bool // if true, means this index does not exist.
-	Id          string
-	Relation    engine.Relation
-}
-
-type ShowDatabases struct {
-	E    engine.Engine
-	Like []byte
-	//Where     extend.Extend
-}
-
-type ShowTables struct {
-	Db   engine.Database
-	Like []byte
-}
-
-type ShowColumns struct {
-	Relation engine.Relation
-	Like     []byte
-}
-
-type ShowCreateTable struct {
-	Relation  engine.Relation
-	TableName string
-}
-
-type ShowCreateDatabase struct {
-	IfNotExistFlag bool
-	Id             string
-	E              engine.Engine
-}
-
-type ExplainQuery struct {
-	Context *plan2.CompilerContext
-	Query   *plan.Query
-	Options *explain.ExplainOptions
-	Buffer  *explain.ExplainDataBuffer
-}
-
-type Insert struct {
-	Id       string
-	Db       string
-	Bat      *batch.Batch
-	Relation engine.Relation
-}
-
-type Delete struct {
-	Qry *Query
-}
-
-type Update struct {
-	Qry         *Query
-	UpdateList  []extend.UpdateExtend
-	UpdateAttrs []string
-	OtherAttrs  []string
-}
-
-type build struct {
-	flg      bool // use for having clause
-	isModify bool
-	db       string // name of schema
-	sql      string
-	e        engine.Engine
-}
-
-func (qry *Query) ResultColumns() []*Attribute {
-	attrs := make([]*Attribute, len(qry.Result))
-	for i, attr := range qry.Result {
-		attrs[i] = qry.Scope.Result.AttrsMap[attr]
-	}
-	return attrs
-}
-
-func (qry *Query) String() string {
-	var buf bytes.Buffer
-
-	printScopes(nil, []*Scope{qry.Scope}, &buf)
-	return buf.String()
-}
-
-func (n *Field) String() string {
-	s := n.Attr
-	if n.Type != DefaultDirection {
-		s += " " + n.Type.String()
-	}
-	return s
-}
-
-func (attr *Attribute) String() string {
-	return attr.Name
-}
-
-var directionName = [...]string{
-	DefaultDirection: "",
-	Ascending:        "ASC",
-	Descending:       "DESC",
-}
-
-func (i Direction) String() string {
-	if i < 0 || i > Direction(len(directionName)-1) {
-		return fmt.Sprintf("Direction(%d)", i)
-	}
-	return directionName[i]
-}
-
-func (c CreateDatabase) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("create database ")
-	if c.IfNotExistFlag {
-		buf.WriteString("if not exists ")
-	}
-	buf.WriteString(c.Id)
-	return buf.String()
-}
-
-func (c CreateDatabase) ResultColumns() []*Attribute {
-	return nil
-}
-
-func (c CreateTable) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("create table ")
-	if c.IfNotExistFlag {
-		buf.WriteString("if not exists ")
-	}
-	// todo: db name lost.
-	buf.WriteString(fmt.Sprintf("%s (", c.Id))
-	for i := range c.Defs {
-		_ = i
-		buf.WriteString("\n")
-		// column def
-		// index def
-		// constraint def
-	}
-	buf.WriteString(")")
-	if c.PartitionBy != nil {
-		// list
-		// range
-		// hash
-	}
-	return buf.String()
-}
-
-func (c CreateTable) ResultColumns() []*Attribute {
-	return nil
-}
-
-func (c CreateIndex) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("create index ")
-	if c.IfNotExistFlag {
-		buf.WriteString("if not exists ")
-	}
-	for _, def := range c.Defs {
-		buf.WriteString(def.(*engine.AttributeDef).Attr.Name)
-	}
-	buf.WriteString(fmt.Sprintf("on %s", c.Relation))
-	return buf.String()
-}
-
-func (c CreateIndex) ResultColumns() []*Attribute {
-	return nil
-}
-
-func (d DropDatabase) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("drop database ")
-	if d.IfExistFlag {
-		buf.WriteString("if exists ")
-	}
-	buf.WriteString(d.Id)
-	return buf.String()
-}
-
-func (d DropDatabase) ResultColumns() []*Attribute {
-	return nil
-}
-
-func (d DropTable) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("drop table ")
-	if d.IfExistFlag {
-		buf.WriteString("if exists")
-	}
-	for i := 0; i < len(d.Dbs); i++ {
-		buf.WriteString(d.Dbs[i] + "." + d.Ids[i])
-	}
-	return buf.String()
-}
-
-func (d DropTable) ResultColumns() []*Attribute {
-	return nil
-}
-
-func (d DropIndex) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("drop index ")
-	if d.IfExistFlag {
-		buf.WriteString("if exists ")
-	}
-	buf.WriteString(d.Id)
-	return buf.String()
-}
-
-func (d DropIndex) ResultColumns() []*Attribute {
-	return nil
-}
-
-func (s ShowDatabases) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("show databases")
-	if s.Like != nil {
-		buf.WriteString(fmt.Sprintf(" likes %s", string(s.Like)))
-	}
-	return buf.String()
-}
-
-func (s ShowDatabases) ResultColumns() []*Attribute {
-	return []*Attribute{
-		{
-			Ref:  1,
-			Name: "Databases",
-			Type: types.Type{
-				Oid:  types.T_varchar,
-				Size: 24,
-			},
-		},
-	}
-}
-
-func (s ShowTables) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("show tables")
-	if s.Like != nil {
-		buf.WriteString(fmt.Sprintf(" likes %s", string(s.Like)))
-	}
-	return buf.String()
-}
-
-func (s ShowTables) ResultColumns() []*Attribute {
-	return []*Attribute{
-		{
-			Ref:  1,
-			Name: "Tables",
-			Type: types.Type{
-				Oid:  types.T_varchar,
-				Size: 24,
-			},
-		},
-	}
-}
-
-func (s ShowColumns) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("show columns")
-	return buf.String()
-}
-
-func (s ShowColumns) ResultColumns() []*Attribute {
-	attrs := []*Attribute{
-		{Ref: 1, Name: "Field", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		{Ref: 1, Name: "Type", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		{Ref: 1, Name: "Null", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		{Ref: 1, Name: "Key", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		{Ref: 1, Name: "Default", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		{Ref: 1, Name: "Extra", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-	}
-	return attrs
-}
-
-func (s ShowCreateTable) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("show create table")
-	return buf.String()
-}
-
-func (s ShowCreateTable) ResultColumns() []*Attribute {
-	attrs := []*Attribute{
-		{Ref: 1, Name: "Table", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		{Ref: 1, Name: "Create Table", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-	}
-	return attrs
-}
-
-func (d ShowCreateDatabase) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("show create database ")
-	if d.IfNotExistFlag {
-		buf.WriteString("if not exists ")
-	}
-	buf.WriteString(d.Id)
-	return buf.String()
-}
-
-func (d ShowCreateDatabase) ResultColumns() []*Attribute {
-	attrs := []*Attribute{
-		{Ref: 1, Name: "Database", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		{Ref: 1, Name: "Show Database", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-	}
-	return attrs
-}
-
-func (e ExplainQuery) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("explain Query")
-	return buf.String()
-}
-
-func (e ExplainQuery) ResultColumns() []*Attribute {
-	return []*Attribute{
-		{
-			Ref:  1,
-			Name: "QUERY PLAN",
-			Type: types.Type{
-				Oid:  types.T_varchar,
-				Size: 24,
-			},
-		},
-	}
-}
-
-func (i Insert) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("insert into")
-	// index
-	// values
-	return buf.String()
-}
-
-func (i Insert) ResultColumns() []*Attribute {
-	return nil
-}
-
-func (d Delete) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("delete from")
-	// TODO: where, Order, Limit
-	return buf.String()
-}
-
-func (d Delete) ResultColumns() []*Attribute {
-	return nil
-}
-
-func (p Update) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("update table")
-	// TODO: where, Order, Limit
-	return buf.String()
-}
-
-func (p Update) ResultColumns() []*Attribute {
-	return nil
-}
-
-type BeginTxn struct {
-}
-
-func (b BeginTxn) String() string {
-	return "begin transaction"
-}
-
-func (b BeginTxn) ResultColumns() []*Attribute {
-	return nil
-}
-
-type CommitTxn struct {
-}
-
-func (c CommitTxn) String() string {
-	return "commit transaction"
-}
-
-func (c CommitTxn) ResultColumns() []*Attribute {
-	return nil
-}
-
-type RollbackTxn struct {
-}
-
-func (r RollbackTxn) String() string {
-	return "rollback transaction"
-}
-
-func (r RollbackTxn) ResultColumns() []*Attribute {
-	return nil
+type Binding struct {
+	tag         int32
+	nodeId      int32
+	table       string
+	cols        []string
+	types       []*plan.Type
+	refCnts     []uint
+	colIdByName map[string]int32
 }

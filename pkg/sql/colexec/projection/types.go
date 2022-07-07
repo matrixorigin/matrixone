@@ -14,10 +14,8 @@
 
 package projection
 
-import "github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 type Argument struct {
-	Rs []uint64 // reference count list
-	As []string // alias name list
-	Es []extend.Extend
+	Es []*plan.Expr
 }

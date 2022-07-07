@@ -14,7 +14,12 @@
 
 package order
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
 
 // Direction for ordering results.
 type Direction int8
@@ -26,13 +31,18 @@ const (
 	Descending
 )
 
+type evalVector struct {
+	needFree bool
+	vec      *vector.Vector
+}
+
 type Container struct {
-	ds    []bool   // ds[i] == true: the attrs[i] are in descending order
-	attrs []string // sorted list of attributes
+	ds   []bool       // ds[i] == true: the attrs[i] are in descending order
+	vecs []evalVector // sorted list of attributes
 }
 
 type Field struct {
-	Attr string
+	E    *plan.Expr
 	Type Direction
 }
 
@@ -48,7 +58,7 @@ var directionName = [...]string{
 }
 
 func (n Field) String() string {
-	s := n.Attr
+	s := fmt.Sprintf("%v", n.E)
 	if n.Type != DefaultDirection {
 		s += " " + n.Type.String()
 	}

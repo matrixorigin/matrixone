@@ -86,7 +86,7 @@ func (v *Vector[T]) Free(m *mheap.Mheap) {
 
 func (v *Vector[T]) Realloc(size int, m *mheap.Mheap) error {
 	oldLen := len(v.Data)
-	data, err := m.Grow(v.Data, int64(oldLen+size))
+	data, err := m.Grow(v.Data, int64(cap(v.Data)+size))
 	if err != nil {
 		return err
 	}
@@ -96,7 +96,7 @@ func (v *Vector[T]) Realloc(size int, m *mheap.Mheap) error {
 	case *Vector[types.String]:
 		vec.Col = vec.Col[:0]
 		for i, off := range vec.Array.Offsets {
-			vec.Col = append(vec.Col, vec.Data[off:off+vec.Array.Lengths[i]])
+			vec.Col = append(vec.Col, v.Data[off:off+vec.Array.Lengths[i]])
 		}
 	default:
 		v.Col = encoding.DecodeSlice[T](v.Data[:len(data)], size)[:oldLen/size]
@@ -110,15 +110,15 @@ func (v *Vector[T]) Append(w T, m *mheap.Mheap) error {
 		wv, _ := (any)(w).(types.String)
 		n := len(v.Data)
 		if n+w.Size() >= cap(v.Data) {
-			if err := v.Realloc(n+w.Size()-cap(v.Data), m); err != nil {
+			if err := v.Realloc(n+w.Size()-cap(v.Data)+1, m); err != nil {
 				return err
 			}
 		}
 		vec.Array.Lengths = append(vec.Array.Lengths, uint64(len(wv)))
 		vec.Array.Offsets = append(vec.Array.Offsets, uint64(len(v.Data)))
-		size := len(vec.Data)
-		vec.Data = append(vec.Data, wv...)
-		vec.Col = append(vec.Col, vec.Data[size:size+len(wv)])
+		size := len(v.Data)
+		v.Data = append(v.Data, wv...)
+		vec.Col = append(vec.Col, v.Data[size:size+len(wv)])
 	default:
 		n := len(v.Col)
 		if n+1 >= cap(v.Col) {

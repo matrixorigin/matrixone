@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,12 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package plan
+package compare
 
-import "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+)
 
-func (b *build) BuildDropDatabase(stmt *tree.DropDatabase, plan *DropDatabase) error {
-	plan.Id = string(stmt.Name)
-	plan.IfExistFlag = stmt.IfExists
-	return nil
+type Compare interface {
+	Vector() vector.AnyVector
+	Set(int, vector.AnyVector)
+	Copy(int, int, int64, int64)
+	Compare(int, int, int64, int64) int
+}
+
+type compare[T types.All] struct {
+	xs  [][]T
+	cmp func(T, T) int
+	ns  []*bitmap.Bitmap
+	vs  []vector.AnyVector
+	cpy func([]T, []T, int64, int64)
 }

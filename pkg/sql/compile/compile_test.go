@@ -12,95 +12,90 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compile
+package compile2
 
 import (
-	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"log"
-	"testing"
+	"github.com/stretchr/testify/require"
 )
 
-var querys = []string{
-	"CREATE DATABASE db;",
-	"CREATE DATABASE IF NOT EXISTS db;",
-	"CREATE TABLE table1(a int);",
-	"CREATE TABLE IF NOT EXISTS table1(a int);",
-	"CREATE INDEX idx on table1(a);",
-	// "DROP INDEX idx on table1;",
-	"SHOW DATABASES;",
-	"SHOW TABLES;",
-	"SHOW COLUMNS FROM table1;",
-	"SHOW CREATE TABLE table1;",
-	// "SHOW CREATE DATABASE db;",
-	"INSERT INTO table1 values(12);",
-	"DROP TABLE table1;",
-	"DROP DATABASE IF EXISTS db;",
-	"select * from R join S on R.uid = S.uid",
-	"select sum(R.price) from R join S on R.uid = S.uid",
-	"select * from R join S on R.uid = S.uid group by R.uid",
-	"select sum(R.price) from R join S on R.uid = S.uid group by R.uid",
+type compileTestCase struct {
+	sql  string
+	pn   *plan.Plan
+	e    engine.Engine
+	proc *process.Process
+}
 
-	"SELECT userID, MIN(score) FROM t1 GROUP BY userID;",
-	"SELECT userID, MIN(score) FROM t1 GROUP BY userID ORDER BY userID asc;",
-	"SELECT userID, SUM(score) FROM t1 GROUP BY userID ORDER BY userID desc;",
-	"SELECT userID as a, MIN(score) as b FROM t1 GROUP BY userID;",
-	"SELECT userID as user, MAX(score) as max FROM t1 GROUP BY userID order by user;",
-	"SELECT userID as user, MAX(score) as max FROM t1 GROUP BY userID order by max desc;",
-	"select userID,count(score) from t1 group by userID having count(score)>1;",
-	"select userID,count(score) from t1 where userID>2 group by userID having count(score)>1;",
-	"select userID,count(score) from t1 group by userID having count(score)>1;",
-	"SELECT distinct userID, count(score) FROM t1 GROUP BY userID;",
-	"select distinct sum(spID) from t1 group by userID;",
-	"select distinct sum(spID) as sum from t1 group by userID order by sum asc;",
-	"select distinct sum(spID) as sum from t1 where score>1 group by userID order by sum asc;",
-	"select userID,MAX(score) from t1 where userID between 2 and 3 group by userID;",
-	"select userID,MAX(score) from t1 where userID not between 2 and 3 group by userID order by userID desc;",
-	"select sum(score) as sum from t1 where spID=6 group by score order by sum desc;",
-	// "select userID,MAX(score) max_score from t1 where userID <2 || userID > 3 group by userID order by max_score;",
+var (
+	tcs []compileTestCase
+)
+
+func init() {
+	tcs = []compileTestCase{
+		newTestCase("select 1", new(testing.T)),
+		newTestCase("select * from R", new(testing.T)),
+		newTestCase("select * from R where uid > 1", new(testing.T)),
+		newTestCase("select * from R order by uid", new(testing.T)),
+		newTestCase("select * from R order by uid limit 1", new(testing.T)),
+		newTestCase("select * from R limit 1", new(testing.T)),
+		newTestCase("select * from R limit 2, 1", new(testing.T)),
+		newTestCase("select count(*) from R", new(testing.T)),
+		newTestCase("select * from R join S on R.uid = S.uid", new(testing.T)),
+		newTestCase("select * from R left join S on R.uid = S.uid", new(testing.T)),
+		newTestCase("select * from R right join S on R.uid = S.uid", new(testing.T)),
+		newTestCase("select * from R join S on R.uid > S.uid", new(testing.T)),
+		newTestCase("insert into R select * from R", new(testing.T)),
+	}
+}
+
+func testPrint(_ interface{}, _ *batch.Batch) error {
+	return nil
+}
+
+func TestInitAddress(t *testing.T) {
+	InitAddress("0")
 }
 
 func TestCompile(t *testing.T) {
-	InitAddress("127.0.0.1")
+	for _, tc := range tcs {
+		c := New("test", tc.sql, "", tc.e, tc.proc)
+		err := c.Compile(tc.pn, nil, testPrint)
+		require.NoError(t, err)
+		c.GetAffectedRows()
+		err = c.Run(0)
+		require.NoError(t, err)
+	}
+}
+
+func newTestCase(sql string, t *testing.T) compileTestCase {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	proc := process.New(mheap.New(gm))
 	e := memEngine.NewTestEngine()
-	for _, query := range querys {
-		processQuery(query, e, proc)
-	}
-}
-
-func sqlOutput(_ interface{}, bat *batch.Batch) error {
-	fmt.Printf("%v\n", bat.Zs)
-	fmt.Printf("%v\n", bat)
-	return nil
-}
-
-func processQuery(query string, e engine.Engine, proc *process.Process) {
-	c := New("test", query, "", e, proc)
-	es, err := c.Build()
-	if err != nil {
-		log.Fatal(err)
-	}
-	for _, e := range es {
-		fmt.Printf("%s\n", query)
-		if err := e.Compile(nil, sqlOutput); err != nil {
-			log.Fatal(err)
-		}
-		attrs := e.Columns()
-		fmt.Printf("result:\n")
-		for i, attr := range attrs {
-			fmt.Printf("\t[%v] = %v:%v\n", i, attr.Name, attr.Typ)
-		}
-		if err := e.Run(0); err != nil {
-			log.Fatal(err)
-		}
+	opt := plan2.NewBaseOptimizer(e.(*memEngine.MemEngine))
+	stmts, err := mysql.Parse(sql)
+	require.NoError(t, err)
+	qry, err := opt.Optimize(stmts[0])
+	require.NoError(t, err)
+	return compileTestCase{
+		e:    e,
+		sql:  sql,
+		proc: proc,
+		pn: &plan.Plan{
+			Plan: &plan.Plan_Query{
+				Query: qry,
+			},
+		},
 	}
 }

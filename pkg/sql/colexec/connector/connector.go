@@ -17,9 +17,7 @@ package connector
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,22 +30,21 @@ func Prepare(_ *process.Process, _ interface{}) error {
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
-	n := arg.(*Argument)
-	reg := n.Reg
+	ap := arg.(*Argument)
+	reg := ap.Reg
 	bat := proc.Reg.InputBatch
 	if bat == nil {
 		select {
 		case <-reg.Ctx.Done():
-			process.FreeRegisters(proc)
 			return true, nil
 		case reg.Ch <- bat:
-			return false, nil
+			return true, nil
 		}
 	}
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}
-	vecs := n.vecs[:0]
+	vecs := ap.vecs[:0]
 	for i := range bat.Vecs {
 		if bat.Vecs[i].Or {
 			vec, err := vector.Dup(bat.Vecs[i], proc.Mp)
@@ -63,17 +60,11 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			vecs = vecs[1:]
 		}
 	}
-	size := mheap.Size(proc.Mp)
 	select {
 	case <-reg.Ctx.Done():
-		batch.Clean(bat, proc.Mp)
-		process.FreeRegisters(proc)
+		bat.Clean(proc.Mp)
 		return true, nil
 	case reg.Ch <- bat:
-		if err := n.Mmu.Alloc(size); err != nil {
-			return false, err
-		}
-		proc.Mp.Gm.Free(size)
 		return false, nil
 	}
 }

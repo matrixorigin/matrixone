@@ -21,7 +21,7 @@ import (
 )
 
 func String(_ interface{}, buf *bytes.Buffer) {
-	buf.WriteString(" + ")
+	buf.WriteString(" merge ")
 }
 
 func Prepare(_ *process.Process, arg interface{}) error {

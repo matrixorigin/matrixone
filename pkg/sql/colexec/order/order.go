@@ -18,17 +18,17 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/partition"
 	"github.com/matrixorigin/matrixone/pkg/sort"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
-	n := arg.(*Argument)
+	ap := arg.(*Argument)
 	buf.WriteString("τ([")
-	for i, f := range n.Fs {
+	for i, f := range ap.Fs {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
@@ -38,14 +38,13 @@ func String(arg interface{}, buf *bytes.Buffer) {
 }
 
 func Prepare(_ *process.Process, arg interface{}) error {
-	n := arg.(*Argument)
-	n.ctr = new(Container)
+	ap := arg.(*Argument)
+	ap.ctr = new(Container)
 	{
-		n.ctr.ds = make([]bool, len(n.Fs))
-		n.ctr.attrs = make([]string, len(n.Fs))
-		for i, f := range n.Fs {
-			n.ctr.attrs[i] = f.Attr
-			n.ctr.ds[i] = f.Type == Descending
+		ap.ctr.ds = make([]bool, len(ap.Fs))
+		ap.ctr.vecs = make([]evalVector, len(ap.Fs))
+		for i, f := range ap.Fs {
+			ap.ctr.ds[i] = f.Type == Descending
 		}
 	}
 	return nil
@@ -53,43 +52,62 @@ func Prepare(_ *process.Process, arg interface{}) error {
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	bat := proc.Reg.InputBatch
-	if bat == nil || len(bat.Zs) == 0 {
+	if bat == nil {
+		return true, nil
+	}
+	if len(bat.Zs) == 0 {
 		return false, nil
 	}
-	n := arg.(*Argument)
-	return n.ctr.process(bat, proc)
+	ap := arg.(*Argument)
+	return ap.ctr.process(ap, bat, proc)
 }
 
-func (ctr *Container) process(bat *batch.Batch, proc *process.Process) (bool, error) {
-	ovec := batch.GetVector(bat, ctr.attrs[0])
-	n := len(bat.Zs)
-	data, err := mheap.Alloc(proc.Mp, int64(n*8))
-	if err != nil {
-		batch.Clean(bat, proc.Mp)
-		proc.Reg.InputBatch = &batch.Batch{}
-		return false, err
-	}
-	sels := encoding.DecodeInt64Slice(data)
-	{
-		for i := range sels {
-			sels[i] = int64(i)
+func (ctr *Container) process(ap *Argument, bat *batch.Batch, proc *process.Process) (bool, error) {
+	for i, f := range ap.Fs {
+		vec, err := colexec.EvalExpr(bat, proc, f.E)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				if ctr.vecs[j].needFree {
+					vector.Clean(ctr.vecs[j].vec, proc.Mp)
+				}
+			}
+			return false, err
+		}
+		ctr.vecs[i].vec = vec
+		ctr.vecs[i].needFree = true
+		for j := range bat.Vecs {
+			if bat.Vecs[j] == vec {
+				ctr.vecs[i].needFree = false
+				break
+			}
 		}
 	}
+	defer func() {
+		for i := range ctr.vecs {
+			if ctr.vecs[i].needFree {
+				vector.Clean(ctr.vecs[i].vec, proc.Mp)
+			}
+		}
+	}()
+	ovec := ctr.vecs[0].vec
+	n := len(bat.Zs)
+	sels := make([]int64, n)
+	for i := range sels {
+		sels[i] = int64(i)
+	}
 	sort.Sort(ctr.ds[0], sels, ovec)
-	if len(ctr.attrs) == 1 {
-		bat.Sels = sels
-		bat.SelsData = data
-		if err := batch.Shuffle(bat, proc.Mp); err != nil {
+	if len(ctr.vecs) == 1 {
+		if err := bat.Shuffle(sels, proc.Mp); err != nil {
 			panic(err)
 		}
 		return false, nil
 	}
 	ps := make([]int64, 0, 16)
 	ds := make([]bool, len(sels))
-	for i, j := 1, len(ctr.attrs); i < j; i++ {
+	for i, j := 1, len(ctr.vecs); i < j; i++ {
 		desc := ctr.ds[i]
 		ps = partition.Partition(sels, ds, ps, ovec)
-		vec := batch.GetVector(bat, ctr.attrs[i])
+		vec := ctr.vecs[i].vec
 		for i, j := 0, len(ps); i < j; i++ {
 			if i == j-1 {
 				sort.Sort(desc, sels[ps[i]:], vec)
@@ -99,9 +117,7 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) (bool, er
 		}
 		ovec = vec
 	}
-	bat.Sels = sels
-	bat.SelsData = data
-	if err := batch.Shuffle(bat, proc.Mp); err != nil {
+	if err := bat.Shuffle(sels, proc.Mp); err != nil {
 		panic(err)
 	}
 	return false, nil
