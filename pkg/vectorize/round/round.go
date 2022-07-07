@@ -310,11 +310,24 @@ func roundFloat64(xs []float64, rs []float64, digits int64) []float64 {
 			rs[i] = 0
 		}
 	} else {
-		scale := math.Pow10(int(digits))
-		for i := range xs {
-			value := xs[i] * scale
-			roundResult := math.RoundToEven(value)
-			rs[i] = roundResult / scale
+		var abs_digits uint64
+		if digits < 0 {
+			abs_digits = uint64(-digits)
+		} else {
+			abs_digits = uint64(digits)
+		}
+		var tmp float64 = math.Pow(10.0, float64(abs_digits))
+
+		if digits > 0 {
+			for i := range xs {
+				var value_mul_tmp float64 = xs[i] * tmp
+				rs[i] = math.RoundToEven(value_mul_tmp) / tmp
+			}
+		} else {
+			for i := range xs {
+				var value_div_tmp float64 = xs[i] / tmp
+				rs[i] = math.RoundToEven(value_div_tmp) * tmp
+			}
 		}
 	}
 	return rs
