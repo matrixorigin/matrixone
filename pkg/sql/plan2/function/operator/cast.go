@@ -2166,7 +2166,7 @@ func CastDecimal128ToDecimal64(lv, rv *vector.Vector, proc *process.Process) (*v
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Decimal64, 1)
-		if _, err := typecast.Decimal128ToDecimal64(lvs, lv.Typ.Scale, rv.Typ.Precision, rv.Typ.Scale, rs); err != nil {
+		if _, err := typecast.Decimal128ToDecimal64(lvs, lv.Typ.Scale, rv.Typ.Width, rv.Typ.Scale, rs); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
