@@ -37,11 +37,15 @@ drop table t1;
 #drop table t1;
 
 #EXTREME VALUE, DISTINCT
+-- @bvt:issue#3807
 select variance(99999999999999999.99999);
 select variance(999999999999999933193939.99999);
+-- @bvt:issue
 select variance(9999999999999999999999999999999999.9999999999999);
+-- @bvt:issue#3807
 select variance(-99999999999999999.99999);
 select variance(-999999999999999933193939.99999);
+-- @bvt:issue
 select variance(-9999999999999999999999999999999999.9999999999999);
 create table t1(a bigint);
 select variance(a) from t1;
