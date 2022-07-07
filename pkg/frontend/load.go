@@ -1931,6 +1931,7 @@ LoadLoop reads data from stream, extracts the fields, and saves into the table
 func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
 	ses := mce.GetSession()
 
+	var m sync.Mutex
 	//begin:=  time.Now()
 	//defer func() {
 	//	logutil.Infof("-----load loop exit %s",time.Since(begin))
@@ -2066,6 +2067,8 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 		defer wg.Done()
 		wait_b := time.Now()
 
+		m.Lock()
+		defer m.Unlock()
 		err := handler.simdCsvReader.ReadLoop(getLineOutChan(handler.simdCsvGetParsedLinesChan))
 		if err != nil {
 			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_READ_SIMDCSV_ERROR, err, nil)
@@ -2118,6 +2121,8 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 				//
 				handler.simdCsvReader.Close()
 				handler.closeOnceGetParsedLinesChan.Do(func() {
+					m.Lock()
+					defer m.Unlock()
 					close(getLineOutChan(handler.simdCsvGetParsedLinesChan))
 				})
 				go func() {
