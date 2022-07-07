@@ -17,9 +17,8 @@ package offset
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,7 +33,10 @@ func Prepare(_ *process.Process, _ interface{}) error {
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	bat := proc.Reg.InputBatch
-	if bat == nil || len(bat.Zs) == 0 {
+	if bat == nil {
+		return true, nil
+	}
+	if len(bat.Zs) == 0 {
 		return false, nil
 	}
 	n := arg.(*Argument)
@@ -43,31 +45,22 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	length := len(bat.Zs)
 	if n.Seen+uint64(length) > n.Offset {
-		data, sels, err := newSels(int64(n.Offset-n.Seen), int64(length)-int64(n.Offset-n.Seen), proc.Mp)
-		if err != nil {
-			batch.Clean(bat, proc.Mp)
-			return false, err
-		}
+		sels := newSels(int64(n.Offset-n.Seen), int64(length)-int64(n.Offset-n.Seen))
 		n.Seen += uint64(length)
-		batch.Shrink(bat, sels)
-		mheap.Free(proc.Mp, data)
+		bat.Shrink(sels)
 		proc.Reg.InputBatch = bat
 		return false, nil
 	}
 	n.Seen += uint64(length)
-	batch.Clean(bat, proc.Mp)
+	bat.Clean(proc.Mp)
 	proc.Reg.InputBatch = &batch.Batch{}
 	return false, nil
 }
 
-func newSels(start, count int64, mp *mheap.Mheap) ([]byte, []int64, error) {
-	data, err := mheap.Alloc(mp, count*8)
-	if err != nil {
-		return nil, nil, err
-	}
-	sels := encoding.DecodeInt64Slice(data)
+func newSels(start, count int64) []int64 {
+	sels := make([]int64, count)
 	for i := int64(0); i < count; i++ {
 		sels[i] = start + i
 	}
-	return data, sels[:count], nil
+	return sels[:count]
 }
