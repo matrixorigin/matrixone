@@ -2079,6 +2079,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	var statsWg sync.WaitGroup
 	statsWg.Add(1)
 
+	closechannel := CloseFlag{}
 	var retErr error = nil
 	go func() {
 		defer statsWg.Done()
@@ -2124,7 +2125,14 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 					defer m.Unlock()
 					close(getLineOutChan(handler.simdCsvGetParsedLinesChan))
 				})
-
+				go func() {
+					for closechannel.IsOpened() {
+						select {
+						case <-handler.simdCsvNotiyEventChan:
+						default:
+						}
+					}
+				}()
 				break
 			}
 		}
@@ -2152,6 +2160,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	//wait stats to quit
 	statsWg.Wait()
 	close.Close()
+	closechannel.Close()
 
 	//logutil.Infof("-----total row2col %s fillBlank %s toStorage %s",
 	//	handler.row2col,handler.fillBlank,handler.toStorage)
