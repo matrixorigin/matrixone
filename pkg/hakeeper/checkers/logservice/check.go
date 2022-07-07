@@ -21,11 +21,11 @@ import (
 
 func Check(alloc util.IDAllocator, cluster pb.ClusterInfo, infos pb.LogState,
 	removing map[uint64][]uint64, adding map[uint64][]uint64, currentTick uint64) (operators []*operator.Operator) {
-	stats := parseLogShards(cluster, infos, currentTick)
 	stores := parseLogStores(infos, currentTick)
+	stats := parseLogShards(cluster, infos, stores.ExpiredStores())
 
 	for shardID, toAdd := range stats.toAdd {
-		for toAdd > len(adding[shardID]) {
+		for toAdd > uint32(len(adding[shardID])) {
 			bestStore := selectStore(infos.Shards[shardID], stores)
 			newReplicaID, ok := alloc.Next()
 			if !ok {

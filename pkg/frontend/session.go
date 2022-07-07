@@ -158,9 +158,6 @@ type Session struct {
 	//protocol layer
 	protocol Protocol
 
-	//epoch gc handler
-	pdHook *PDCallbackImpl
-
 	//cmd from the client
 	Cmd int
 
@@ -189,11 +186,10 @@ type Session struct {
 	gSysVars        *GlobalSystemVariables
 }
 
-func NewSession(proto Protocol, pdHook *PDCallbackImpl, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
+func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
 	txnHandler := InitTxnHandler(config.StorageEngine)
 	ses := &Session{
 		protocol: proto,
-		pdHook:   pdHook,
 		GuestMmu: gm,
 		Mempool:  mp,
 		Pu:       PU,
@@ -296,10 +292,6 @@ func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, interfac
 
 func (ses *Session) GetTxnHandler() *TxnHandler {
 	return ses.txnHandler
-}
-
-func (ses *Session) GetEpochgc() *PDCallbackImpl {
-	return ses.pdHook
 }
 
 func (ses *Session) GetTxnCompilerContext() *TxnCompilerContext {
@@ -424,6 +416,16 @@ func (th *TxnHandler) StartByBegin() error {
 	return err
 }
 
+func (th *TxnHandler) StartByBeginIfNeeded() error {
+	logutil.Infof("start txn by begin if needed")
+	var err error
+	if th.IsInTaeTxn() {
+		return nil
+	}
+	err = th.StartByBegin()
+	return err
+}
+
 func (th *TxnHandler) StartByAutocommit() error {
 	logutil.Infof("start txn by autocommit")
 	var err error
@@ -482,7 +484,8 @@ func (th *TxnHandler) commit(option int) error {
 			err = th.taeTxn.Commit()
 		}
 	case TxnInit, TxnEnd:
-		err = errorTaeTxnHasNotBeenBegan
+		//Note:behaviors look like mysql
+		//err = errorTaeTxnHasNotBeenBegan
 	case TxnErr:
 		err = errorTaeTxnInIllegalState
 	}
@@ -546,7 +549,8 @@ func (th *TxnHandler) rollback(option int) error {
 			err = th.taeTxn.Rollback()
 		}
 	case TxnInit, TxnEnd:
-		err = errorTaeTxnHasNotBeenBegan
+		//Note:behaviors look like mysql
+		//err = errorTaeTxnHasNotBeenBegan
 	case TxnErr:
 		err = errorTaeTxnInIllegalState
 	}

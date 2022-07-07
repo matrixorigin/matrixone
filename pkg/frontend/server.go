@@ -57,9 +57,9 @@ func nextConnectionID() uint32 {
 	return atomic.AddUint32(&initConnectionID, 1)
 }
 
-func NewMOServer(addr string, pu *config.ParameterUnit, pdHook *PDCallbackImpl) *MOServer {
+func NewMOServer(addr string, pu *config.ParameterUnit) *MOServer {
 	encoder, decoder := NewSqlCodec()
-	rm := NewRoutineManager(pu, pdHook)
+	rm := NewRoutineManager(pu)
 	// TODO asyncFlushBatch
 	app, err := goetty.NewTCPApplication(addr, rm.Handler,
 		goetty.WithAppSessionOptions(

@@ -26,8 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select a || 'hello' || 'world' from t1;",
-		output: "select concat(concat(a, hello), world) from t1",
+		input: "select role from t1",
 	}
 )
 
@@ -52,6 +51,8 @@ var (
 		input  string
 		output string
 	}{{
+		input: "select role from t1",
+	}, {
 		input:  "select a || 'hello' || 'world' from t1;",
 		output: "select concat(concat(a, hello), world) from t1",
 	}, {

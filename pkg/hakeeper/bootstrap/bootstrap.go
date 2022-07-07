@@ -54,8 +54,8 @@ func NewBootstrapManager(cluster pb.ClusterInfo) *Manager {
 func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 	dn pb.DNState, log pb.LogState) (commands []pb.ScheduleCommand, err error) {
 
-	logStores := LogStoresSortedByTick(log.Stores)
-	dnStores := DNStoresSortedByTick(dn.Stores)
+	logStores := logStoresSortedByTick(log.Stores)
+	dnStores := dnStoresSortedByTick(dn.Stores)
 
 	for _, shardRecord := range bm.cluster.LogShards {
 		if shardRecord.NumberOfReplicas > uint64(len(logStores)) {
@@ -138,7 +138,7 @@ func (bm *Manager) CheckBootstrap(log pb.LogState) bool {
 	return true
 }
 
-func LogStoresSortedByTick(logStores map[string]pb.LogStoreInfo) []string {
+func logStoresSortedByTick(logStores map[string]pb.LogStoreInfo) []string {
 	type infoWithID struct {
 		uuid string
 		pb.LogStoreInfo
@@ -162,7 +162,7 @@ func LogStoresSortedByTick(logStores map[string]pb.LogStoreInfo) []string {
 	return uuidSlice
 }
 
-func DNStoresSortedByTick(dnStores map[string]pb.DNStoreInfo) []string {
+func dnStoresSortedByTick(dnStores map[string]pb.DNStoreInfo) []string {
 	type infoWithID struct {
 		uuid string
 		pb.DNStoreInfo
