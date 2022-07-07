@@ -597,6 +597,9 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 	if lv.Typ.Oid == types.T_decimal128 && rv.Typ.Oid == types.T_uint64 {
 		return CastDecimal128ToUint64(lv, rv, proc)
 	}
+	if lv.Typ.Oid == types.T_decimal128 && rv.Typ.Oid == types.T_decimal64 {
+		return CastDecimal128ToDecimal64(lv, rv, proc)
+	}
 	// if lv.Typ.Oid == types.T_timestamp && rv.Typ.Oid == types.T_time {
 	// 	return CastTimestampAsTime(lv, rv, proc)
 	// }
@@ -2146,6 +2149,37 @@ func CastDecimal128ToUint64(lv, rv *vector.Vector, proc *process.Process) (*vect
 	rs := encoding.DecodeUint64Slice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := typecast.Decimal128ToUint64(lvs, lv.Typ.Scale, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+// this cast function is too slow, and therefore only temporary, rewrite needed
+func CastDecimal128ToDecimal64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := 8
+	if lv.Typ.Scale > 18 {
+		return nil, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal128 to decimal64 correctly")
+	}
+	lvs := lv.Col.([]types.Decimal128)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]types.Decimal64, 1)
+		if _, err := typecast.Decimal128ToDecimal64(lvs, lv.Typ.Scale, rv.Typ.Precision, rv.Typ.Scale, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVector(rv.Typ, int64(len(lvs)*rtl))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeDecimal64Slice(vec.Data)
+	rs = rs[:len(lvs)]
+	if _, err := typecast.Decimal128ToDecimal64(lvs, lv.Typ.Scale, rv.Typ.Precision, rv.Typ.Scale, rs); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
