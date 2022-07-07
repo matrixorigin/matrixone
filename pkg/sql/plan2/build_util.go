@@ -649,11 +649,11 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 			case plan.Type_CHAR, plan.Type_VARCHAR:
 				return constant.StringVal(val), nil
 			case plan.Type_DATE:
-				return types.ParseDate(constant.StringVal(val))
+				return types.ParseDate(str)
 			case plan.Type_DATETIME:
-				return types.ParseDatetime(constant.StringVal(val), typ.Precision)
+				return types.ParseDatetime(str, typ.Precision)
 			case plan.Type_TIMESTAMP:
-				return types.ParseTimestamp(constant.StringVal(val), typ.Precision)
+				return types.ParseTimestamp(str, typ.Precision)
 			}
 		}
 	}
@@ -677,7 +677,6 @@ func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
 		}
 		switch ex := arg.Expr.(type) {
 		case *plan.Expr_C:
-			arg.Typ.Id = plan.Type_BOOL
 			switch value := ex.C.Value.(type) {
 			case *plan.Const_Ival:
 				if value.Ival == 0 {
@@ -687,6 +686,7 @@ func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
 				} else {
 					return errors.New("", fmt.Sprintf("Can't cast '%v' as boolean type.", value.Ival))
 				}
+				arg.Typ.Id = plan.Type_BOOL
 			}
 		}
 	}

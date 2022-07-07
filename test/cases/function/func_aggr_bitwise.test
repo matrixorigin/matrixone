@@ -1,10 +1,9 @@
 #NULL
--- @bvt:issue#3654
+
 SELECT bit_and(null), bit_or(null), bit_xor(null);
--- @bvt:issue
 
 #EXTREME VALUE
--- @bvt:issue#3343
+
 CREATE TABLE t1 (a int, b int);
 INSERT INTO t1 VALUES (1,null);
 INSERT INTO t1 VALUES (1,null);
@@ -19,7 +18,7 @@ SELECT a, OCT(BIT_AND(b)), OCT(BIT_OR(b)), OCT(BIT_XOR(b)) FROM t1 GROUP BY a;
 INSERT INTO t1 VALUES (4,-4124124);
 SELECT a, OCT(BIT_AND(b)), OCT(BIT_OR(b)), OCT(BIT_XOR(b)) FROM t1 GROUP BY a;
 DROP TABLE t1;
--- @bvt:issue
+
 
 #DATA TYPES
 create table t1(a tinyint, b SMALLINT, c bigint, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19), i DATE, k datetime, l TIMESTAMP, m char(255), n varchar(255));
@@ -33,9 +32,9 @@ select bit_and(c) from t1;
 select bit_and(d) from t1;
 select bit_and(e) from t1;
 
--- @bvt:issue#3343
+
 select bit_and(f) from t1;
--- @bvt:issue
+
 select bit_and(g) from t1;
 
 -- @bvt:issue#3588
@@ -61,9 +60,9 @@ select bit_or(c) from t1;
 select bit_or(d) from t1;
 select bit_or(e) from t1;
 
--- @bvt:issue#3343
+
 select bit_or(f) from t1;
--- @bvt:issue
+
 select bit_or(g) from t1;
 
 -- @bvt:issue#3588
@@ -88,9 +87,9 @@ select bit_xor(b) from t1;
 select bit_xor(c) from t1;
 select bit_xor(d) from t1;
 select bit_xor(e) from t1;
--- @bvt:issue#3343
+
 select bit_xor(f) from t1;
--- @bvt:issue
+
 select bit_xor(g) from t1;
 
 -- @bvt:issue#3588
@@ -112,8 +111,9 @@ drop table t1;
 #drop table t1;
 
 #EXTREME VALUE, DISTINCT
--- @bvt:issue#3343
+
 select BIT_AND(99999999999999999.99999), BIT_OR(99999999999999999.99999), BIT_XOR(99999999999999999.99999);
+-- @bvt:issue#3734
 select BIT_AND(999999999999999933193939.99999),BIT_OR(999999999999999933193939.99999),BIT_XOR(999999999999999933193939.99999);
 select BIT_AND(9999999999999999999999999999999999.9999999999999),BIT_OR(9999999999999999999999999999999999.9999999999999),BIT_XOR(9999999999999999999999999999999999.9999999999999);
 select BIT_AND(-99999999999999999.99999),BIT_OR(-99999999999999999.99999),BIT_XOR(-99999999999999999.99999);
@@ -121,7 +121,6 @@ select BIT_AND(-999999999999999933193939.99999),BIT_OR(-999999999999999933193939
 select BIT_AND(-9999999999999999999999999999999999.9999999999999),BIT_OR(-9999999999999999999999999999999999.9999999999999),BIT_XOR(-9999999999999999999999999999999999.9999999999999);
 -- @bvt:issue
 
--- @bvt:issue#3343
 create table t1(a bigint);
 select BIT_AND(a),BIT_OR(a), BIT_XOR(a) from t1;
 insert into t1 values(null),(null),(null),(null);
@@ -129,7 +128,6 @@ select BIT_AND(a),BIT_OR(a), BIT_XOR(a)  from t1;
 insert into t1 values(12417249128419),(124124125124151),(5124125151415),(124125152651515);
 select BIT_AND(a),BIT_OR(a), BIT_XOR(a) from t1;
 drop table t1;
--- @bvt:issue
 
 
 create table t1 ( a int not null default 1, big bigint );
@@ -145,7 +143,7 @@ drop table t1;
 
 
 
--- @bvt:issue#3343
+
 #HAVING,DISTINCT
 CREATE TABLE t1 (Fld1 int(11) default NULL,Fld2 int(11) default NULL);
 INSERT INTO t1 VALUES (1,10),(1,20),(2,NULL),(2,NULL),(3,50);
@@ -154,7 +152,7 @@ select Fld1, BIT_AND(Fld2),BIT_OR(Fld2), BIT_XOR(Fld2) from t1 group by Fld1 hav
 select Fld1, BIT_AND(Fld2),BIT_OR(Fld2), BIT_XOR(Fld2) from t1 group by Fld1 having BIT_OR(Fld2) is not null;
 select Fld1, BIT_AND(Fld2),BIT_OR(Fld2), BIT_XOR(Fld2) from t1 group by Fld1 having BIT_XOR(Fld2) is not null;
 drop table t1;
--- @bvt:issue
+
 
 
 #比较操作

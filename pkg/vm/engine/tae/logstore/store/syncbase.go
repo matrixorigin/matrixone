@@ -80,6 +80,31 @@ func (info *checkpointInfo) UpdateWithCommandInfo(lsn uint64, cmds *entry.Comman
 		delete(info.partial, lsn)
 	}
 }
+
+func (info *checkpointInfo) MergeCommandMap(cmdMap map[uint64]entry.CommandInfo) {
+	ckpedLsn := make([]uint64, 0)
+	for lsn, cmds := range cmdMap {
+		if info.ranges.Contains(*common.NewClosedIntervalsByInt(lsn)) {
+			continue
+		}
+		partialInfo, ok := info.partial[lsn]
+		if !ok {
+			partialInfo = newPartialCkpInfo(cmds.Size)
+			info.partial[lsn] = partialInfo
+		}
+		partialInfo.MergeCommandInfos(&cmds)
+		if partialInfo.IsAllCheckpointed() {
+			ckpedLsn = append(ckpedLsn, lsn)
+			delete(info.partial, lsn)
+		}
+	}
+	if len(ckpedLsn) == 0 {
+		return
+	}
+	intervals := common.NewClosedIntervalsBySlice(ckpedLsn)
+	info.ranges.TryMerge(*intervals)
+}
+
 func (info *checkpointInfo) MergeCheckpointInfo(ockp *checkpointInfo) {
 	info.ranges.TryMerge(*ockp.ranges)
 	for lsn, ockpinfo := range ockp.partial {
@@ -277,7 +302,7 @@ type syncBase struct {
 	checkpointed, synced, ckpCnt *syncMap
 	tidLsnMaps                   map[uint32]map[uint64]uint64
 	tidLsnMapmu                  *sync.RWMutex
-	addrs                        map[uint32]map[int]common.ClosedIntervals //group-version-glsn range
+	addrs                        map[uint32]map[int]*common.ClosedIntervals //group-version-glsn range
 	addrmu                       sync.RWMutex
 	commitCond                   sync.Cond
 
@@ -298,7 +323,7 @@ func newSyncBase() *syncBase {
 		ckpCnt:         newSyncMap(),
 		tidLsnMaps:     make(map[uint32]map[uint64]uint64),
 		tidLsnMapmu:    &sync.RWMutex{},
-		addrs:          make(map[uint32]map[int]common.ClosedIntervals),
+		addrs:          make(map[uint32]map[int]*common.ClosedIntervals),
 		addrmu:         sync.RWMutex{},
 		ckpmu:          &sync.RWMutex{},
 		commitCond:     *sync.NewCond(new(sync.Mutex)),
@@ -464,9 +489,7 @@ func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 				ckpInfo.UpdateWtihRanges(intervals.Ranges)
 			}
 			if intervals.Command != nil {
-				for lsn, cmds := range intervals.Command {
-					ckpInfo.UpdateWithCommandInfo(lsn, &cmds)
-				}
+				ckpInfo.MergeCommandMap(intervals.Command)
 			}
 			base.ckpmu.Unlock()
 		}
@@ -491,12 +514,12 @@ func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 	addr := v.Info.(*VFileAddress)
 	versionRanges, ok := base.addrs[addr.Group]
 	if !ok {
-		versionRanges = make(map[int]common.ClosedIntervals)
+		versionRanges = make(map[int]*common.ClosedIntervals)
 	}
 	base.OnCalculateVersion(addr.Version)
 	interval, ok := versionRanges[addr.Version]
 	if !ok {
-		interval = *common.NewClosedIntervals()
+		interval = common.NewClosedIntervals()
 	}
 	interval.TryMerge(*common.NewClosedIntervalsByInt(addr.LSN))
 	versionRanges[addr.Version] = interval

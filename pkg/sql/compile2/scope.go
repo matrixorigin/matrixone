@@ -303,7 +303,7 @@ func (s *Scope) NumCPU() int {
 
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(e engine.Engine) (err error) {
-	p := pipeline2.New(s.DataSource.Attributes, s.DataSource.AttributeTypes, s.Instructions, s.Reg)
+	p := pipeline2.New(s.DataSource.Attributes, s.Instructions, s.Reg)
 	if s.DataSource.Bat != nil {
 		if _, err = p.ConstRun(s.DataSource.Bat, s.Proc); err != nil {
 			return err
@@ -451,11 +451,10 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 		ss[i] = &Scope{
 			Magic: Normal,
 			DataSource: &Source{
-				R:              rds[i],
-				SchemaName:     s.DataSource.SchemaName,
-				RelationName:   s.DataSource.RelationName,
-				Attributes:     s.DataSource.Attributes,
-				AttributeTypes: s.DataSource.AttributeTypes,
+				R:            rds[i],
+				SchemaName:   s.DataSource.SchemaName,
+				RelationName: s.DataSource.RelationName,
+				Attributes:   s.DataSource.Attributes,
 			},
 		}
 		ss[i].Proc = process.New(mheap.New(s.Proc.Mp.Gm))
@@ -463,6 +462,7 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 		ss[i].Proc.Lim = s.Proc.Lim
 		ss[i].Proc.UnixTime = s.Proc.UnixTime
 		ss[i].Proc.Snapshot = s.Proc.Snapshot
+		ss[i].Proc.SessionInfo = s.Proc.SessionInfo
 	}
 	{
 		var flg bool

@@ -93,7 +93,8 @@ func FormatString(str string) string {
 		} else if ch == '\t' {
 			buffer.WriteString("\\t")
 		} else {
-			buffer.WriteByte(byte(ch))
+			// buffer.WriteByte(byte(ch))
+			buffer.WriteRune(ch)
 		}
 	}
 	res := buffer.String()

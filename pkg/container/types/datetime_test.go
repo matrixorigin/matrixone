@@ -259,6 +259,17 @@ func TestParseDatetime(t *testing.T) {
 			args: "1987-12-12 11:02:3",
 			want: "1987-12-12 11:02:03.000000",
 		},
+		{
+			name: "bug",
+			args: "1987-12-12 00:00:00.0000006",
+			want: "1987-12-12 00:00:00.000001",
+		},
+		{
+			name:    "wrong format",
+			args:    "2022-01-02 00:00.00.000050",
+			want:    "",
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

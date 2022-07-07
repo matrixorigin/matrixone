@@ -108,7 +108,7 @@ func FloorUInt64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Vec
 	vs := vector.MustTCols[uint64](vecs[0])
 	// if the second paramter is null ,show error
 	if !vecs[1].IsScalar() || vecs[1].Typ.Oid != types.T_int64 || vecs[1].IsScalarNull() {
-		return nil, errors.New("the second argument of the round function must be an int64 constant")
+		return nil, errors.New("the second argument of the floor function must be an int64 constant")
 	}
 	digits = vecs[1].Col.([]int64)[0]
 	if vecs[0].IsScalar() {
@@ -139,7 +139,7 @@ func FloorInt64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Vect
 	vs := vector.MustTCols[int64](vecs[0])
 	// if the second paramter is null ,show error
 	if !vecs[1].IsScalar() || vecs[1].Typ.Oid != types.T_int64 || vecs[1].IsScalarNull() {
-		return nil, errors.New("the second argument of the round function must be an int64 constant")
+		return nil, errors.New("the second argument of the floor function must be an int64 constant")
 	}
 	digits = vecs[1].Col.([]int64)[0]
 	if vecs[0].IsScalar() {
@@ -170,7 +170,7 @@ func FloorFloat64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Ve
 	vs := vector.MustTCols[float64](vecs[0])
 
 	if !vecs[1].IsScalar() || vecs[1].Typ.Oid != types.T_int64 || vecs[1].IsScalarNull() {
-		return nil, errors.New("the second argument of the round function must be an int64 constant")
+		return nil, errors.New("the second argument of the floor function must be an int64 constant")
 	}
 	digits = vecs[1].Col.([]int64)[0]
 

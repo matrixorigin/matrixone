@@ -20,7 +20,7 @@ cast(NULL as signed)
 null
 select cast(1/2 as signed);
 cast(1 / 2 as signed)
-0
+1
 select cast("2001-1-1" as DATE), cast("2001-1-1" as DATETIME);
 cast("2001-1-1" as DATE)	cast("2001-1-1" as DATETIME)
 2001-01-01	2001-01-01 00:00:00
@@ -156,8 +156,7 @@ SELECT CAST(1/3 AS FLOAT) as float_col,CAST(1/3 AS DOUBLE) as double_col, CAST(1
 float_col	double_col	real_col
 0.333333	0.333333333	0.333333333
 SELECT CAST(DATE'2000-01-01' AS FLOAT), CAST(DATE'2000-01-01' AS DOUBLE);
-CAST(DATE'2000-01-01' AS FLOAT)	CAST(DATE'2000-01-01' AS DOUBLE)
-2.00001E7	2.0000101E7
+Operator 'cast' with parameters [DATE FLOAT] will be implemented in future version.
 SELECT CAST(TIMESTAMP'2000-01-01 23:59:59' AS FLOAT), CAST(TIMESTAMP'2000-01-01 23:59:59' AS DOUBLE);
 Operator 'cast' with parameters [TIMESTAMP FLOAT] will be implemented in future version.
 SELECT CAST(TIMESTAMP'2000-01-01 23:59:59.123456' AS FLOAT), CAST(TIMESTAMP'2000-01-01 23:59:59.123456' AS DOUBLE);

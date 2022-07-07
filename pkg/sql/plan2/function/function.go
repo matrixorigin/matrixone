@@ -35,8 +35,8 @@ const (
 )
 
 var (
-	// an empty function structure just for return when we couldn't meet any function.
-	emptyFunction = Function{}
+	// an empty type structure just for return when we couldn't meet any function.
+	emptyType = types.Type{}
 
 	// AndFunctionEncodedID is the encoded overload id of And(bool, bool)
 	// used to make an AndExpr
@@ -204,29 +204,134 @@ func GetFunctionIsAggregateByName(name string) bool {
 
 // GetFunctionByName check a function exist or not according to input function name and arg types,
 // if matches,
-// return function structure and encoded overload id
-// and final converted argument types(if it needs to do type level-up work, it will be nil if not).
-func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T, error) {
+// return the encoded overload id and the overload's return type
+// and final converted argument types( it will be nil if there's no need to do type level-up work).
+func GetFunctionByName(name string, args []types.Type) (int64, types.Type, []types.Type, error) {
 	fid, err := fromNameToFunctionId(name)
 	if err != nil {
-		return emptyFunction, -1, nil, err
+		return -1, emptyType, nil, err
 	}
 	fs := functionRegister[fid]
 
-	index, targetTypes := fs.TypeCheck(args)
-	if index == wrongFunctionParameters {
-		errArgPrint := make([]types.T, len(args))
-		if targetTypes != nil {
-			copy(errArgPrint, targetTypes)
-		} else {
-			copy(errArgPrint, args)
-		}
-		if len(fs.Overloads) > 0 && fs.Overloads[0].isFunction() {
-			return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Function '%s' with parameters %v will be implemented in future version.", name, errArgPrint))
-		}
-		return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Operator '%s' with parameters %v will be implemented in future version.", name, errArgPrint))
-	} else if index == tooManyFunctionsMatched {
-		return emptyFunction, -1, nil, errors.New(errno.AmbiguousParameter, fmt.Sprintf("too many overloads matched for '%s%v'", name, args))
+	argTs := getOidSlice(args)
+	index, targetTs := fs.TypeCheck(argTs)
+
+	// if implicit type conversion happens, set the right precision for target types.
+	targetTypes := getTypeSlice(targetTs)
+	rewriteTypesIfNecessary(targetTypes, args)
+
+	finalTypes := make([]types.Type, len(args))
+	if targetTs != nil {
+		copy(finalTypes, targetTypes)
+	} else {
+		copy(finalTypes, args)
 	}
-	return fs.Overloads[index], EncodeOverloadID(fid, index), targetTypes, nil
+
+	// deal the failed situations
+	switch index {
+	case wrongFunctionParameters:
+		ArgsToPrint := getOidSlice(finalTypes) // arg information to print for error message
+		if len(fs.Overloads) > 0 && fs.Overloads[0].isFunction() {
+			return -1, emptyType, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Function '%s' with parameters %v will be implemented in future version.", name, ArgsToPrint))
+		}
+		return -1, emptyType, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Operator '%s' with parameters %v will be implemented in future version.", name, ArgsToPrint))
+	case tooManyFunctionsMatched:
+		return -1, emptyType, nil, errors.New(errno.AmbiguousParameter, fmt.Sprintf("too many overloads matched for '%s%v'", name, args))
+	}
+
+	// make the real return type of function overload.
+	rt := getRealReturnType(fid, fs.Overloads[index], finalTypes)
+
+	return EncodeOverloadID(fid, index), rt, targetTypes, nil
+}
+
+func ensureBinaryOperatorWithSamePrecision(targets []types.Type, hasSet []bool) {
+	if len(targets) == 2 && targets[0].Oid == targets[1].Oid {
+		if hasSet[0] && !hasSet[1] { // precision follow the left-part
+			copyType(&targets[1], &targets[0])
+			hasSet[1] = true
+		} else if !hasSet[0] && hasSet[1] { // precision follow the right-part
+			copyType(&targets[0], &targets[1])
+			hasSet[0] = true
+		}
+	}
+}
+
+func rewriteTypesIfNecessary(targets []types.Type, sources []types.Type) {
+	if len(targets) != 0 {
+		hasSet := make([]bool, len(sources))
+		for i := range targets {
+			oid1, oid2 := sources[i].Oid, targets[i].Oid
+			// ensure that we will not lose the original precision.
+			if oid2 == types.T_decimal64 || oid2 == types.T_decimal128 || oid2 == types.T_timestamp {
+				if oid1 == oid2 {
+					copyType(&targets[i], &sources[i])
+					hasSet[i] = true
+				}
+			}
+		}
+		ensureBinaryOperatorWithSamePrecision(targets, hasSet)
+		for i := range targets {
+			if !hasSet[i] && targets[i].Oid != ScalarNull {
+				setDefaultPrecision(&targets[i])
+			}
+		}
+	}
+}
+
+// set default precision / scalar / width for a type
+func setDefaultPrecision(typ *types.Type) {
+	if typ.Oid == types.T_decimal64 {
+		typ.Scale = 2
+		typ.Width = 6
+	} else if typ.Oid == types.T_decimal128 {
+		typ.Scale = 10
+		typ.Width = 38
+	} else if typ.Oid == types.T_timestamp {
+		typ.Precision = 6
+	} else if typ.Oid == types.T_datetime {
+		typ.Precision = 6
+	}
+	typ.Size = int32(typ.Oid.TypeLen())
+}
+
+func getRealReturnType(fid int32, f Function, realArgs []types.Type) types.Type {
+	if f.IsAggregate() {
+		switch fid {
+		case MIN, MAX:
+			if realArgs[0].Oid != ScalarNull {
+				return realArgs[0]
+			}
+		}
+	}
+	rt := f.ReturnTyp.ToType()
+	for i := range realArgs {
+		if realArgs[i].Oid == rt.Oid {
+			copyType(&rt, &realArgs[i])
+			break
+		}
+	}
+	return rt
+}
+
+func copyType(dst, src *types.Type) {
+	dst.Width = src.Width
+	dst.Scale = src.Scale
+	dst.Precision = src.Precision
+}
+
+func getOidSlice(ts []types.Type) []types.T {
+	ret := make([]types.T, len(ts))
+	for i := range ts {
+		ret[i] = ts[i].Oid
+	}
+	return ret
+}
+
+func getTypeSlice(ts []types.T) []types.Type {
+	ret := make([]types.Type, len(ts))
+	for i := range ts {
+		ret[i] = ts[i].ToType()
+	}
+	return ret
 }

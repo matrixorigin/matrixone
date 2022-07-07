@@ -17,6 +17,8 @@ package frontend
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"go/constant"
 	"os"
 	"runtime"
 	"strconv"
@@ -298,107 +300,8 @@ func cleanupTmpDir() error {
 	return os.RemoveAll(tmpDir)
 }
 
-/*
-type FrontendStub struct{
-	eng engine.Engine
-	srv rpcserver.Server
-	mo *MOServer
-	kvForEpochgc storage.Storage
-	wg sync.WaitGroup
-	cf *CloseFlag
-	pci *PDCallbackImpl
-	proc *process.Process
-}
-
-func NewFrontendStub() (*FrontendStub,error) {
-	e, srv, err, proc := getMemEngineAndComputationEngine()
-	if err != nil {
-		return nil,err
-	}
-
-	pci := getPCI()
-	mo, err := getMOserver("./test/system_vars_config.toml",
-		6002, pci , e)
-
-	if err != nil {
-		return nil, err
-	}
-
-	err = mo.Start()
-	if err != nil {
-		return nil, err
-	}
-
-	return &FrontendStub{
-		eng: e,
-		srv: srv,
-		mo: mo,
-		kvForEpochgc: storage.NewTestStorage(),
-		cf:&CloseFlag{},
-		pci:pci,
-		proc:proc,
-	},nil
-}
-
-func StartFrontendStub(fs *FrontendStub) error {
-	return fs.pci.Start(fs.kvForEpochgc)
-}
-
-func CloseFrontendStub(fs *FrontendStub) error {
-	err := fs.mo.Stop()
-	if err != nil {
-		return err
-	}
-
-	fs.srv.Stop()
-	return fs.pci.Stop(fs.kvForEpochgc)
-}
-*/
-
 var testPorts = []int{6002, 6003, 6004}
 var testConfigFile = "./test/system_vars_config.toml"
-
-/*
-func getMemEngineAndComputationEngine() (engine.Engine, rpcserver.Server, error, *process.Process) {
-	e, err := testutil.NewTestEngine()
-	if err != nil {
-		return nil, nil, err, nil
-	}
-	hm := host.New(1 << 40)
-	gm := guest.New(1<<40, hm)
-	proc := process.New(mheap.New(gm))
-	{
-		proc.Id = "0"
-		proc.Lim.Size = 10 << 32
-		proc.Lim.BatchRows = 10 << 32
-		proc.Lim.PartitionRows = 10 << 32
-	}
-
-	srv, err := testutil.NewTestServer(e, proc)
-	if err != nil {
-		return nil, nil, err, nil
-	}
-
-	go srv.Run()
-	return e, srv, err, proc
-}
-*/
-
-func getMOserver(configFile string, port int, pd *PDCallbackImpl, eng engine.Engine) (*MOServer, error) {
-	pu, err := getParameterUnit(configFile, eng)
-	if err != nil {
-		return nil, err
-	}
-
-	address := fmt.Sprintf("%s:%d", pu.SV.GetHost(), port)
-	sver := NewMOServer(address, pu, pd)
-	return sver, nil
-}
-
-func getPCI() *PDCallbackImpl {
-	ppu := NewPDCallbackParameterUnit(1, 1, 1, 1, false, 10000)
-	return NewPDCallbackImpl(ppu)
-}
 
 func getSystemVariables(configFile string) (*mo_config.SystemVariables, error) {
 	sv := &mo_config.SystemVariables{}
@@ -926,4 +829,46 @@ func WildcardMatch(pattern, target string) bool {
 		p++
 	}
 	return p >= plen
+}
+
+// only support single value and unary minus
+func GetSimpleExprValue(e tree.Expr) (interface{}, error) {
+	var value interface{}
+	switch v := e.(type) {
+	case *tree.NumVal:
+		switch v.Value.Kind() {
+		case constant.Unknown:
+			value = nil
+		case constant.Bool:
+			value = constant.BoolVal(v.Value)
+		case constant.String:
+			value = constant.StringVal(v.Value)
+		case constant.Int:
+			value, _ = constant.Int64Val(v.Value)
+		case constant.Float:
+			value, _ = constant.Float64Val(v.Value)
+		default:
+			return nil, errorNumericTypeIsNotSupported
+		}
+	case *tree.UnaryExpr:
+		ival, err := GetSimpleExprValue(v.Expr)
+		if err != nil {
+			return nil, err
+		}
+		if v.Op == tree.UNARY_MINUS {
+			switch iival := ival.(type) {
+			case float64:
+				value = -1 * iival
+			case int64:
+				value = -1 * iival
+			default:
+				return nil, errorUnaryMinusForNonNumericTypeIsNotSupported
+			}
+		}
+	case *tree.UnresolvedName:
+		return v.Parts[0], nil
+	default:
+		return nil, errorComplicateExprIsNotSupported
+	}
+	return value, nil
 }

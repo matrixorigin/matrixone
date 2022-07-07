@@ -36,7 +36,7 @@ func init() {
 func init() {
 	extend.FunctionRegistry["weekday"] = builtin.Weekday
 	extend.UnaryReturnTypes[builtin.Weekday] = func(_ extend.Extend) types.T {
-		return types.T_uint8
+		return types.T_int64
 	}
 	extend.UnaryStrings[builtin.Weekday] = func(e extend.Extend) string {
 		return fmt.Sprintf("weekday(%s)", e)
@@ -45,14 +45,14 @@ func init() {
 	overload.UnaryOps[builtin.Weekday] = []*overload.UnaryOp{
 		{
 			Typ:        types.T_date,
-			ReturnType: types.T_uint8,
+			ReturnType: types.T_int64,
 			Fn: func(lv *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				lvs := lv.Col.([]types.Date)
-				vec, err := process.Get(proc, 1*int64(len(lvs)), types.Type{Oid: types.T_uint8, Size: 1})
+				vec, err := process.Get(proc, 8*int64(len(lvs)), types.Type{Oid: types.T_int64, Size: 8})
 				if err != nil {
 					return nil, err
 				}
-				rs := encoding.DecodeUint8Slice(vec.Data)
+				rs := encoding.DecodeInt64Slice(vec.Data)
 				rs = rs[:len(lvs)]
 				vec.Col = rs
 				nulls.Set(vec.Nsp, lv.Nsp)
@@ -62,14 +62,14 @@ func init() {
 		},
 		{
 			Typ:        types.T_datetime,
-			ReturnType: types.T_uint8,
+			ReturnType: types.T_int64,
 			Fn: func(lv *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				lvs := lv.Col.([]types.Datetime)
-				vec, err := process.Get(proc, 1*int64(len(lvs)), types.Type{Oid: types.T_uint8, Size: 1})
+				vec, err := process.Get(proc, 8*int64(len(lvs)), types.Type{Oid: types.T_int64, Size: 8})
 				if err != nil {
 					return nil, err
 				}
-				rs := encoding.DecodeUint8Slice(vec.Data)
+				rs := encoding.DecodeInt64Slice(vec.Data)
 				rs = rs[:len(lvs)]
 				vec.Col = rs
 				nulls.Set(vec.Nsp, lv.Nsp)

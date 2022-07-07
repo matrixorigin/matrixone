@@ -20,12 +20,12 @@ select cast('0000-00-00' as date);
 -- @bvt:issue#3293
 select cast(cast(0x13488c5 as signed) as date);
 -- @bvt:issue
--- @bvt:issue#3359
+
 SELECT DATE_ADD('2017-06-15', INTERVAL 10 DAY);
 SELECT DATE_ADD('2017-06-15', INTERVAL 10 MONTH);
 SELECT DATE_ADD('2017-06-15', INTERVAL 1 YEAR);
 SELECT DATE_ADD('20200215', INTERVAL 14 DAY);
--- @bvt:issue
+
 
 #Test cases of query with single table
 drop table if exists t1;
@@ -89,9 +89,7 @@ insert INTO t_date VALUES ('2020-01-01'), ('2022-01-02');
 -- @bvt:issue#3257
 SELECT id, id >= 20200102 FROM t_date;
 -- @bvt:issue
--- @bvt:issue#3676
 SELECT id, 1.1 <= '2020-01-01' FROM t_date;
--- @bvt:issue
 -- @bvt:issue#3257
 SELECT id, id = 202020101 FROM t_date;
 -- @bvt:issue
@@ -112,9 +110,7 @@ SELECT * from t_date WHERE id IN (2.0200101e7,2.0200103e7 );
 -- @bvt:issue#3257
 SELECT * from t_date WHERE id IN (20220101, 20220103);
 -- @bvt:issue
--- @bvt:issue#3676
 SELECT * from t_date WHERE id IN ('2.0200101e7','2.0200103e7');
--- @bvt:issue
 -- @bvt:issue#3257
 SELECT * from t_date WHERE id BETWEEN 20191231 AND 20200101;
 -- @bvt:issue
@@ -122,9 +118,7 @@ SELECT * from t_date WHERE id BETWEEN 20191231 AND 20200101;
 SELECT * from t_date WHERE id BETWEEN 2.0200101e7 and 2.0200103e7;
 -- @bvt:issue
 SELECT * from t_date WHERE id BETWEEN '2020-01-02' AND '2020-01-03';
--- @bvt:issue#3676
 SELECT * from t_date WHERE id BETWEEN '2.0200101e7' and '2.0200103e7';
--- @bvt:issue
 drop table if exists t1;
 CREATE TABLE t1 (a date);
 insert INTO t1 VALUES ('2022-03-01');
@@ -139,9 +133,7 @@ SELECT CAST(20220101 AS date) BETWEEN 20220101 AND -1;
 SELECT CAST(00000501 AS date) NOT BETWEEN 100 AND -1;
 SELECT CAST(0 AS date) BETWEEN 0 AND -1;
 -- @bvt:issue
--- @bvt:issue#3679
 SELECT CAST(10000101 as date) BETWEEN '1000-01-01' and '1000-01-02';
--- @bvt:issue
 
 #Test cases of update with single table
 drop table if exists t1;

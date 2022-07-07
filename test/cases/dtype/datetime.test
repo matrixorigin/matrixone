@@ -6,15 +6,17 @@
 #Test cases of query without table, cast and interval included
 select cast('2000-01-01 00:00:00' as datetime(0));
 select cast('2000-01-01 00:00:00.0011' as datetime(0));
--- @bvt:issue#3359
+
 select cast('2000-01-01 00:00:00.9011' as datetime(0));
 select cast('2000-01-01 00:00:00.001100999' as datetime(6));
 select cast('2000-01-01 00:00:00.001109' as datetime(5));
 select cast('2000-01-01 00:00:00.501109' as datetime(0));
 select cast('2000-01-01 00:00:00.49999' as datetime(0));
--- @bvt:issue#
+
 select cast('2000-01-01' as datetime(0));
+
 select cast('2022-01-01 25:00:00' as datetime(0));
+
 -- @bvt:issue#3254
 select cast('2000-01-01' as datetime(0))+1;
 select cast('2000-01-01' as datetime(0))*1;
@@ -49,11 +51,11 @@ drop table t1;
 
 create table t1 ( a int not null default 1, big datetime(4) primary key);
 insert into t1 (big) values ('20220103'),('2022-01-01'),('2022-01-01 00:00:01'),('2022-01-02 00:00:00.000050');
--- @bvt:issue#3668
+
 select * from t1;
 select * from t1 order by big limit 1,3;
 select * from t1 order by big limit 3 offset 1;
--- @bvt:issue
+
 -- @bvt:issue#3258
 select min(big),max(big),max(big)-1 from t1 group by a;
 select big,count(big) from t1 group by big having count(big)>1 order by 2;
@@ -62,9 +64,9 @@ drop table t1;
 
 create table t1 (id datetime(6) not null default "2022-01-31 00:00:00.0000006", a int, primary key (a));
 insert into t1(a) values(1);
--- @bvt:issue#3359
+
 select * from t1;
--- @bvt:issue
+
 
 #Test cases of query with multi tables
 drop table if exists t1;

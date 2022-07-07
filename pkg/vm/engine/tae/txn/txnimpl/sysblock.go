@@ -7,6 +7,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
@@ -45,11 +46,11 @@ func (blk *txnSysBlock) BatchDedup(pks containers.Vector, invisibility *roaring.
 	return blk.txnBlock.BatchDedup(pks, invisibility)
 }
 
-func (blk *txnSysBlock) RangeDelete(start, end uint32) (err error) {
+func (blk *txnSysBlock) RangeDelete(start, end uint32, dt handle.DeleteType) (err error) {
 	if blk.isSysTable() {
 		panic("not supported")
 	}
-	return blk.txnBlock.RangeDelete(start, end)
+	return blk.txnBlock.RangeDelete(start, end, dt)
 }
 
 func (blk *txnSysBlock) Update(row uint32, col uint16, v any) (err error) {

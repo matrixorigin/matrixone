@@ -43,7 +43,7 @@ type Checker interface {
 // BootstrapManager is the interface suppose to be implemented by HAKeeper's
 // bootstrap manager.
 type BootstrapManager interface {
-	Bootstrap(util.IDAllocator, pb.DNState, pb.LogState) []pb.ScheduleCommand
+	Bootstrap(util.IDAllocator, pb.DNState, pb.LogState) ([]pb.ScheduleCommand, error)
 
 	CheckBootstrap(pb.LogState) bool
 }

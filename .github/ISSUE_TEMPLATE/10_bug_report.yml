@@ -3,7 +3,7 @@ description: Create a bug report to improve MatrixOne
 title: "[Bug]: "
 labels: [kind/bug, needs-triage]
 assignees:
-  - m-schen
+  - matrix-meow
 body:
   - type: checkboxes
     attributes:

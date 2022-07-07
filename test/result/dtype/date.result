@@ -21,16 +21,16 @@ cast(cast(0x13488c5 as signed) as date)
 2022-01-01
 SELECT DATE_ADD('2017-06-15', INTERVAL 10 DAY);
 DATE_ADD('2017-06-15', INTERVAL 10 DAY)
-2017-06-25 00:00:00.000000
+2017-06-25 00:00:00
 SELECT DATE_ADD('2017-06-15', INTERVAL 10 MONTH);
 DATE_ADD('2017-06-15', INTERVAL 10 MONTH)
-2018-04-15 00:00:00.000000
+2018-04-15 00:00:00
 SELECT DATE_ADD('2017-06-15', INTERVAL 1 YEAR);
 DATE_ADD('2017-06-15', INTERVAL 1 YEAR)
-2018-06-15 00:00:00.000000
+2018-06-15 00:00:00
 SELECT DATE_ADD('20200215', INTERVAL 14 DAY);
 DATE_ADD(20200215, INTERVAL 14 DAY)
-2020-02-29 00:00:00.000000
+2020-02-29 00:00:00
 drop table if exists t1;
 create table t1 (a date not null, primary key(a));
 insert into t1 values ('2022-01-01'), ('20220102'),('2022-01-03'),('20220104');
@@ -128,9 +128,7 @@ id	id >= 20200102
 2020-01-01	false	
 2022-01-02	true	
 SELECT id, 1.1 <= '2020-01-01' FROM t_date;
-id	1.1 <= '2020-01-01'
-2020-01-01	true	
-2022-01-02	true	
+Can't cast '2020-01-01' from VARCHAR type to DOUBLE type.
 SELECT id, id = 202020101 FROM t_date;
 id	id = 202020101
 2020-01-01	false	
@@ -157,7 +155,7 @@ id
 SELECT * from t_date WHERE id IN (20220101, 20220103);
 id
 SELECT * from t_date WHERE id IN ('2.0200101e7','2.0200103e7');
-id
+Can't cast '2.0200101e7' from VARCHAR type to DATE type.
 SELECT * from t_date WHERE id BETWEEN 20191231 AND 20200101;
 id
 2020-01-01
@@ -167,7 +165,7 @@ id
 SELECT * from t_date WHERE id BETWEEN '2020-01-02' AND '2020-01-03';
 id
 SELECT * from t_date WHERE id BETWEEN '2.0200101e7' and '2.0200103e7';
-id
+Can't cast '2.0200101e7' from VARCHAR type to DATE type.
 drop table if exists t1;
 CREATE TABLE t1 (a date);
 insert INTO t1 VALUES ('2022-03-01');
@@ -191,8 +189,7 @@ SELECT CAST(0 AS date) BETWEEN 0 AND -1;
 CAST(0 AS date) BETWEEN 0 AND -1
 NULL
 SELECT CAST(10000101 as date) BETWEEN '1000-01-01' and '1000-01-02';
-CAST(10000101 as date) BETWEEN '1000-01-01' and '1000-01-02'
-true
+Operator 'cast' with parameters [BIGINT DATE] will be implemented in future version.
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;

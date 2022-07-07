@@ -30,3 +30,33 @@ func TestDispatchAndRemoveOperator(t *testing.T) {
 	c.RemoveOperator(operator3)
 	assert.Equal(t, []*Operator(nil), c.operators[2])
 }
+
+func TestRemoveFinishedOperator(t *testing.T) {
+	c := NewController()
+	op1 := NewOperator("", 1, 1, AddLogService{
+		Target:    "a",
+		StoreID:   "d",
+		ShardID:   1,
+		ReplicaID: 4,
+	})
+	logState := pb.LogState{
+		Shards: map[uint64]pb.LogShardInfo{1: {
+			ShardID:  1,
+			Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+			Epoch:    0,
+		}},
+	}
+
+	c.Dispatch([]*Operator{op1}, logState, pb.DNState{})
+	assert.Equal(t, []*Operator{op1}, c.GetOperators(1))
+
+	logState = pb.LogState{
+		Shards: map[uint64]pb.LogShardInfo{1: {
+			ShardID:  1,
+			Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
+			Epoch:    0,
+		}},
+	}
+	c.RemoveFinishedOperator(logState, pb.DNState{})
+	assert.Equal(t, []*Operator(nil), c.GetOperators(1))
+}

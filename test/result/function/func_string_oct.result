@@ -23,11 +23,9 @@ select oct(-1);
 oct(-1)
 1777777777777777777777
 select oct(10e50);
-oct(10e50)
-1
+the input value is out of integer range
 select oct(-10e50);
-oct(-10e50)
-1777777777777777777777
+the input value is out of integer range
 select oct(0.00000000000000000000000001);
 oct(0.00000000000000000000000001)
 0
@@ -73,11 +71,7 @@ drop table if exists t1;
 create table t1(a INT,  b int);
 insert into t1 values(1, 2),(2, 3),(3, 4),(4, 5);
 select oct(a)+oct(b) from t1 where oct(a)+oct(b)<>0;
-oct(a)+oct(b)
-3
-5
-7
-9
+Operator '+' with parameters [VARCHAR VARCHAR] will be implemented in future version.
 drop table t1;
 CREATE TABLE t1 (a int);
 CREATE TABLE t2 (a int);

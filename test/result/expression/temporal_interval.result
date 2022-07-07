@@ -71,14 +71,11 @@ select date_add("1997-12-31 23:59:59",INTERVAL -100000 DAY);
 date_add("1997-12-31 23:59:59",INTERVAL -100000 DAY)
 1724-03-17 23:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL 100000 MONTH);
-date_add("1997-12-31 23:59:59",INTERVAL 100000 MONTH)
-null
+Beyond the range of datetime
 select date_add("1997-12-31 23:59:59",INTERVAL 100000 QUARTER);
-date_add("1997-12-31 23:59:59",INTERVAL 100000 QUARTER)
-null
+Beyond the range of datetime
 select date_add("1997-12-31 23:59:59",INTERVAL -100000 YEAR);
-date_add("1997-12-31 23:59:59",INTERVAL -100000 YEAR)
-null
+Beyond the range of datetime
 select date_add("1997-12-31 23:59:59",INTERVAL "10000:1" MINUTE_SECOND);
 date_add("1997-12-31 23:59:59",INTERVAL "10000:1" MINUTE_SECOND)
 1998-01-07 22:40:00
@@ -116,11 +113,9 @@ select date_add("1997-12-31 23:59:59",INTERVAL NULL MINUTE_SECOND);
 date_add("1997-12-31 23:59:59",INTERVAL NULL MINUTE_SECOND)
 null
 select date_add("9999-12-31 23:59:59",INTERVAL 1 SECOND);
-date_add("9999-12-31 23:59:59",INTERVAL 1 SECOND)
-null
+Beyond the range of datetime
 select date_sub("0000-00-00 00:00:00",INTERVAL 1 SECOND);
-date_sub("0000-00-00 00:00:00",INTERVAL 1 SECOND)
-null
+Incorrect datetime format
 select date_add('1998-01-30',Interval 1 month);
 date_add('1998-01-30',Interval 1 month)
 1998-02-28 00:00:00
@@ -134,16 +129,16 @@ select date_add('1996-02-29',Interval q year);
 Column 'q' does not exist
 select date_add("1997-12-31 23:59:59",INTERVAL 1.5 SECOND);
 date_add("1997-12-31 23:59:59",INTERVAL 1.5 SECOND)
-1998-01-01 00:00:00
+1998-01-01 00:00:01
 select date_add("1997-12-31 23:59:59",INTERVAL 1.5 MINUTE);
 date_add("1997-12-31 23:59:59",INTERVAL 1.5 MINUTE)
-1998-01-01 00:00:59
+1998-01-01 00:01:59
 select date_add("1997-12-31 23:59:59",INTERVAL 1.5 HOUR);
 date_add("1997-12-31 23:59:59",INTERVAL 1.5 HOUR)
-1998-01-01 00:59:59
+1998-01-01 01:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL 1.5 DAY);
 date_add("1997-12-31 23:59:59",INTERVAL 1.5 DAY)
-1998-01-01 23:59:59
+1998-01-02 23:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL 1.5 ABC);
 You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 55 near 'abc';
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND);
@@ -183,14 +178,11 @@ select date_sub("1998-01-01 00:00:00",INTERVAL -100000 DAY);
 date_sub("1998-01-01 00:00:00",INTERVAL -100000 DAY)
 2271-10-17 00:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 100000 MONTH);
-date_sub("1998-01-01 00:00:00",INTERVAL 100000 MONTH)
-null
+Beyond the range of datetime
 select date_sub("1998-01-01 00:00:00",INTERVAL 100000 QUARTER);
-date_sub("1998-01-01 00:00:00",INTERVAL 100000 QUARTER)
-null
+Beyond the range of datetime
 select date_sub("1998-01-01 00:00:00",INTERVAL -100000 YEAR);
-date_sub("1998-01-01 00:00:00",INTERVAL -100000 YEAR)
-null
+Beyond the range of datetime
 select date_sub("1998-01-01 00:00:00",INTERVAL "1:1" MINUTE_SECOND);
 date_sub("1998-01-01 00:00:00",INTERVAL "1:1" MINUTE_SECOND)
 1997-12-31 23:58:59
@@ -267,8 +259,7 @@ select date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND);
 date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND)
 1997-12-31 23:59:59
 select date_sub("0000-00-00 00:00:00",INTERVAL 1 SECOND);
-date_sub("0000-00-00 00:00:00",INTERVAL 1 SECOND)
-null
+Incorrect datetime format
 select date_add('1998-01-30',Interval 1 month);
 date_add('1998-01-30',Interval 1 month)
 1998-02-28 00:00:00
@@ -282,22 +273,22 @@ select date_add('1996-02-29',Interval a year);
 Column 'a' does not exist
 select date_sub("1998-01-01 00:00:00",INTERVAL 1.5 SECOND);
 date_sub("1998-01-01 00:00:00",INTERVAL 1.5 SECOND)
-1997-12-31 23:59:59
+1997-12-31 23:59:58
 select date_sub("1998-01-01 00:00:00",INTERVAL 1.5 MINUTE);
 date_sub("1998-01-01 00:00:00",INTERVAL 1.5 MINUTE)
-1997-12-31 23:59:00
+1997-12-31 23:58:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 1.5 HOUR);
 date_sub("1998-01-01 00:00:00",INTERVAL 1.5 HOUR)
-1997-12-31 23:00:00
+1997-12-31 22:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 1.5 DAY);
 date_sub("1998-01-01 00:00:00",INTERVAL 1.5 DAY)
-1997-12-31 00:00:00
+1997-12-30 00:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 1.5 MONTH);
 date_sub("1998-01-01 00:00:00",INTERVAL 1.5 MONTH)
-1997-12-01 00:00:00
+1997-11-01 00:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 1.5 QUARTER);
 date_sub("1998-01-01 00:00:00",INTERVAL 1.5 QUARTER)
-1997-10-01 00:00:00
+1997-07-01 00:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 ABC);
 You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 53 near 'abc';
 select date_sub(NULL,INTERVAL 100000 SECOND);
@@ -521,16 +512,16 @@ select t1.i,t2.i,t1.c + INTERVAL 1 MINUTE,t2.b + INTERVAL 1 YEAR from t1 join t2
 i	i	t1.c + INTERVAL 1 MINUTE	t2.b + INTERVAL 1 YEAR
 select '2007-01-01' + interval i day from t2;
 '2007-01-01' + interval i day
-2007-01-02
-2007-01-03
-2007-01-04
-2007-01-05
-2007-01-06
-2007-01-07
-2007-01-08
-2007-01-09
-2007-01-10
-2007-01-11
+2007-01-02 00:00:00
+2007-01-03 00:00:00
+2007-01-04 00:00:00
+2007-01-05 00:00:00
+2007-01-06 00:00:00
+2007-01-07 00:00:00
+2007-01-08 00:00:00
+2007-01-09 00:00:00
+2007-01-10 00:00:00
+2007-01-11 00:00:00
 select b + interval i day from t2;
 b + interval i day
 1998-01-02 00:00:59
@@ -582,19 +573,19 @@ CAST('2006-09-26' AS DATE) + INTERVAL 1 WEEK
 drop table if exists t1;
 create table t1 (d date);
 insert into t1 (d) select date_sub('2000-01-01', INTERVAL 2001 YEAR);
+Beyond the range of datetime
 insert into t1 (d) select date_add('2000-01-01',interval 8000 year);
+Beyond the range of datetime
 insert into t1 select date_add(NULL, INTERVAL 1 DAY);
 insert into t1 select date_add('2000-01-04', INTERVAL NULL DAY);
 insert into t1 (d) select date_sub('2000-01-01', INTERVAL 2001 YEAR);
+Beyond the range of datetime
 insert into t1 (d) select date_add('2000-01-01',interval 8000 year);
+Beyond the range of datetime
 insert into t1 select date_add(NULL, INTERVAL 1 DAY);
 insert into t1 select date_add('2000-01-04', INTERVAL NULL DAY);
 select * from t1;
 d
-null
-null
-null
-null
 null
 null
 null

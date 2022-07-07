@@ -361,7 +361,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, view.DeleteMask)
 		assert.Equal(t, bat.Vecs[2].Length(), view.Length())
 
-		_, err = dataBlk.RangeDelete(txn, 1, 2)
+		_, err = dataBlk.RangeDelete(txn, 1, 2, handle.DT_Normal)
 		assert.Nil(t, err)
 
 		view, err = dataBlk.GetColumnDataById(txn, 2, nil)
@@ -484,7 +484,7 @@ func TestCompactBlock1(t *testing.T) {
 			filter.Val = v
 			id, offset, err := rel.GetByFilter(filter)
 			assert.Nil(t, err)
-			err = rel.RangeDelete(id, offset, offset)
+			err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
 			assert.Nil(t, err)
 			err = rel.Update(id, offset+1, 3, int64(99))
 			assert.Nil(t, err)
@@ -575,7 +575,7 @@ func TestCompactBlock2(t *testing.T) {
 		assert.NoError(t, err)
 		defer view.Close()
 		assert.True(t, view.GetData().Equals(bat.Vecs[3]))
-		err = blk.RangeDelete(1, 2)
+		err = blk.RangeDelete(1, 2, handle.DT_Normal)
 		assert.Nil(t, err)
 		err = blk.Update(3, 3, int64(999))
 		assert.Nil(t, err)
@@ -633,7 +633,7 @@ func TestCompactBlock2(t *testing.T) {
 			assert.NoError(t, err)
 			blk, err := seg.GetBlock(newBlockFp.BlockID)
 			assert.NoError(t, err)
-			err = blk.RangeDelete(4, 5)
+			err = blk.RangeDelete(4, 5, handle.DT_Normal)
 			assert.NoError(t, err)
 			err = blk.Update(3, 3, int64(1999))
 			assert.NoError(t, err)
@@ -663,7 +663,7 @@ func TestCompactBlock2(t *testing.T) {
 		assert.NoError(t, err)
 		blk2, err := seg2.GetBlock(newBlockFp.BlockID)
 		assert.NoError(t, err)
-		err = blk2.RangeDelete(7, 7)
+		err = blk2.RangeDelete(7, 7, handle.DT_Normal)
 		assert.NoError(t, err)
 
 		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blk.GetMeta().(*catalog.BlockEntry), db.Scheduler)
@@ -1145,7 +1145,7 @@ func TestDelete1(t *testing.T) {
 		var err error
 		id, row, err = rel.GetByFilter(filter)
 		assert.NoError(t, err)
-		err = rel.RangeDelete(id, row, row)
+		err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit())
 	}
@@ -1180,7 +1180,7 @@ func TestDelete1(t *testing.T) {
 		assert.Nil(t, view.DeleteMask)
 		assert.Equal(t, bat.Vecs[0].Length()-1, view.Length())
 
-		err = blk.RangeDelete(0, 0)
+		err = blk.RangeDelete(0, 0, handle.DT_Normal)
 		assert.NoError(t, err)
 		view, err = blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil)
 		assert.NoError(t, err)
@@ -1242,7 +1242,7 @@ func TestLogIndex1(t *testing.T) {
 		filter := handle.NewEQFilter(v)
 		id, offset, err = rel.GetByFilter(filter)
 		assert.Nil(t, err)
-		err = rel.RangeDelete(id, offset, offset)
+		err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
@@ -1663,7 +1663,7 @@ func TestADA(t *testing.T) {
 	filter := handle.NewEQFilter(v)
 	id, row, err := rel.GetByFilter(filter)
 	assert.NoError(t, err)
-	err = rel.RangeDelete(id, row, row)
+	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 	assert.NoError(t, err)
 	_, _, err = rel.GetByFilter(filter)
 	assert.Error(t, err)
@@ -1679,7 +1679,7 @@ func TestADA(t *testing.T) {
 	assert.NoError(t, err)
 	checkAllColRowsByScan(t, rel, 1, true)
 
-	err = rel.RangeDelete(id, row, row)
+	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 	assert.NoError(t, err)
 	_, _, err = rel.GetByFilter(filter)
 	assert.Error(t, err)
@@ -1696,7 +1696,7 @@ func TestADA(t *testing.T) {
 	assert.Error(t, err)
 	id, row, err = rel.GetByFilter(filter)
 	assert.NoError(t, err)
-	err = rel.RangeDelete(id, row, row)
+	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 	assert.NoError(t, err)
 	_, _, err = rel.GetByFilter(filter)
 	assert.Error(t, err)
@@ -1710,7 +1710,7 @@ func TestADA(t *testing.T) {
 	err = rel.Append(bat)
 	assert.Error(t, err)
 
-	err = rel.RangeDelete(id, row, row)
+	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 	assert.NoError(t, err)
 	_, _, err = rel.GetByFilter(filter)
 	assert.Error(t, err)
@@ -1724,7 +1724,7 @@ func TestADA(t *testing.T) {
 	assert.Error(t, err)
 	id, row, err = rel.GetByFilter(filter)
 	assert.NoError(t, err)
-	err = rel.RangeDelete(id, row, row)
+	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 	assert.NoError(t, err)
 	_, _, err = rel.GetByFilter(filter)
 	assert.Error(t, err)
@@ -1807,7 +1807,7 @@ func TestGetByFilter(t *testing.T) {
 	// Step 4
 	{
 		txn2, rel := getDefaultRelation(t, tae, schema.Name)
-		err := rel.RangeDelete(id, row, row)
+		err := rel.RangeDelete(id, row, row, handle.DT_Normal)
 		assert.NoError(t, err)
 		assert.NoError(t, txn2.Commit())
 	}
@@ -1854,7 +1854,7 @@ func TestChaos1(t *testing.T) {
 		id, row, err := rel.GetByFilter(filter)
 		// logutil.Infof("id=%v,row=%d,err=%v", id, row, err)
 		if err == nil {
-			err = rel.RangeDelete(id, row, row)
+			err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 			if err != nil {
 				t.Logf("delete: %v", err)
 				// assert.Equal(t, txnif.TxnWWConflictErr, err)
@@ -1943,7 +1943,7 @@ func TestSnapshotIsolation1(t *testing.T) {
 	// Step 5
 	id, row, err := rel1.GetByFilter(filter)
 	assert.NoError(t, err)
-	err = rel1.RangeDelete(id, row, row)
+	err = rel1.RangeDelete(id, row, row, handle.DT_Normal)
 	t.Log(err)
 	assert.ErrorIs(t, err, txnif.TxnWWConflictErr)
 	_ = txn1.Rollback()
@@ -1958,7 +1958,7 @@ func TestSnapshotIsolation1(t *testing.T) {
 	v, err = rel.GetValueByFilter(filter, 3)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(3333), v.(int64))
-	err = rel.RangeDelete(id, row, row)
+	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 }
@@ -2027,7 +2027,7 @@ func TestMergeBlocks(t *testing.T) {
 	assert.Nil(t, err)
 	it := rel.MakeBlockIt()
 	blkID := it.GetBlock().Fingerprint()
-	err = rel.RangeDelete(blkID, 5, 9)
+	err = rel.RangeDelete(blkID, 5, 9, handle.DT_Normal)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
@@ -2465,6 +2465,7 @@ func TestCompactBlk(t *testing.T) {
 
 	_, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, 2, true)
+	assert.Equal(t, int64(2), rel.Rows())
 
 	v := getSingleSortKeyValue(bat, schema, 3)
 	filter := handle.NewEQFilter(v)
@@ -2481,6 +2482,9 @@ func TestCompactBlk(t *testing.T) {
 	filter = handle.NewEQFilter(v)
 	_, _, err = rel.GetByFilter(filter)
 	assert.NotNil(t, err)
+
+	tae.restart()
+	assert.Equal(t, int64(2), rel.Rows())
 }
 
 func TestDelete3(t *testing.T) {
@@ -2518,4 +2522,45 @@ func TestDelete3(t *testing.T) {
 		}
 	}
 	t.Logf(tae.Catalog.SimplePPString(common.PPL1))
+}
+
+func TestDropCreated1(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	assert.Nil(t, err)
+	_, err = txn.CreateDatabase("db")
+	assert.Nil(t, err)
+	db, err := txn.DropDatabase("db")
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).CreateAt)
+	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).DeleteAt)
+
+	tae.restart()
+}
+
+func TestDropCreated2(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	schema := catalog.MockSchemaAll(1, -1)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err := txn.CreateDatabase("db")
+	assert.Nil(t, err)
+	rel, err := db.CreateRelation(schema)
+	assert.Nil(t, err)
+	_, err = db.DropRelationByName(schema.Name)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).CreateAt)
+	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).DeleteAt)
+
+	tae.restart()
 }

@@ -67,7 +67,7 @@ select date_sub("1998-01-01 00:00:00",INTERVAL 1 QUARTER);
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 YEAR);
 select date_sub("1998-01-01 00:00:00",INTERVAL 100000 SECOND);
 select date_sub("1998-01-01 00:00:009",INTERVAL -100000 MINUTE);
--- @bvt:issue#3259
+-- @bvt:issue#3703
 select date_sub("1998-01-01 00:00:00",INTERVAL 100000 HOUR);
 -- @bvt:issue
 select date_sub("1998-01-01 00:00:00",INTERVAL 0 HOUR);
@@ -127,7 +127,7 @@ select date_sub("1998-01-02",INTERVAL 31 DAY);
 select "1997-12-31 23:59:59" + INTERVAL 1 SECOND;
 select INTERVAL 1 DAY + "1997-12-31";
 select "1998-01-01 00:00:00" - INTERVAL 1 SECOND;
--- @bvt:issue#3259
+-- @bvt:issue#3703
 SELECT "1900-01-01 00:00:00" + INTERVAL 2147483648 SECOND;
 SELECT "1900-01-01 00:00:00" + INTERVAL "1:2147483647" MINUTE_SECOND;
 SELECT "1900-01-01 00:00:00" + INTERVAL "100000000:214748364700" MINUTE_SECOND;
@@ -140,7 +140,9 @@ SELECT "1900-01-01 00:00:00" + INTERVAL 1<<20 HOUR;
 SELECT "1900-01-01 00:00:00" + INTERVAL 1<<38 SECOND;
 SELECT "1900-01-01 00:00:00" + INTERVAL 1<<33 MINUTE;
 SELECT "1900-01-01 00:00:00" + INTERVAL 1<<30 HOUR;
+-- @bvt:issue
 
+-- @bvt:issue#3703
 SELECT "1900-01-01 00:00:00" + INTERVAL "1000000000:214748364700" MINUTE_SECOND;
 -- @bvt:issue
 
@@ -239,10 +241,8 @@ select i,c + INTERVAL 1 MINUTE from t1 where a - INTERVAL 1 SECOND  > "1997-01-0
 select t1.i,t2.i,t1.c + INTERVAL 1 MINUTE,t2.b + INTERVAL 1 YEAR from t1 join t2 where (t1.a + INTERVAL 1 DAY) = (t2.c -INTERVAL 1 DAY );
 
 
--- @bvt:issue#3284
 select '2007-01-01' + interval i day from t2;
 select b + interval i day from t2;
--- @bvt:issue
 
 update t1 set c = c + INTERVAL 1 DAY where i > 6;
 -- @bvt:issue#3290

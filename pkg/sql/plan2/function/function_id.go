@@ -204,7 +204,23 @@ const (
 	DATE_SUB              // DATE_SUB
 	APPROX_COUNT_DISTINCT // APPROX_COUNT_DISTINCT, special aggregate
 
+	//information functions
+	//Reference to : https://dev.mysql.com/doc/refman/8.0/en/information-functions.html
+	DATABASE
+	USER
+	CONNECTION_ID
+	CHARSET
+	CURRENT_ROLE
+	FOUND_ROWS
+	ICULIBVERSION
+	LAST_INSERT_ID
+	ROLES_GRAPHML
+	ROW_COUNT
+	VERSION
+	COLLATION
+
 	TIMESTAMP // TIMESTAMP
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -276,6 +292,7 @@ var functionIdRegister = map[string]int32{
 	"ceil":              CEIL,
 	"ceiling":           CEIL,
 	"concat_ws":         CONCAT_WS,
+	"concat":            CONCAT,
 	"current_timestamp": CURRENT_TIMESTAMP,
 	"now":               CURRENT_TIMESTAMP,
 	"floor":             FLOOR,
@@ -290,40 +307,56 @@ var functionIdRegister = map[string]int32{
 	"from_unixtime":     FROM_UNIXTIME,
 	// unary functions
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
-	"abs":         ABS,
-	"acos":        ACOS,
-	"bit_length":  BIT_LENGTH,
-	"date":        DATE,
-	"day":         DAY,
-	"dayofyear":   DAYOFYEAR,
-	"exp":         EXP,
-	"empty":       EMPTY,
-	"length":      LENGTH,
-	"lengthutf8":  LENGTH_UTF8,
-	"char_length": LENGTH_UTF8,
-	"ln":          LN,
-	"log":         LOG,
-	"ltrim":       LTRIM,
-	"month":       MONTH,
-	"oct":         OCT,
-	"reverse":     REVERSE,
-	"rtrim":       RTRIM,
-	"sin":         SIN,
-	"sinh":        SINH,
-	"space":       SPACE,
-	"tan":         TAN,
-	"week":        WEEK,
-	"weekday":     WEEKDAY,
-	"year":        YEAR,
-	"extract":     EXTRACT,
-	"if":          IFF,
-	"iff":         IFF,
-	"date_add":    DATE_ADD,
-	"date_sub":    DATE_SUB,
-	"atan":        ATAN,
-	"cos":         COS,
-	"cot":         COT,
-	"timestamp":   TIMESTAMP,
+	"abs":            ABS,
+	"acos":           ACOS,
+	"bit_length":     BIT_LENGTH,
+	"date":           DATE,
+	"day":            DAY,
+	"dayofyear":      DAYOFYEAR,
+	"exp":            EXP,
+	"empty":          EMPTY,
+	"length":         LENGTH,
+	"lengthutf8":     LENGTH_UTF8,
+	"char_length":    LENGTH_UTF8,
+	"ln":             LN,
+	"log":            LOG,
+	"ltrim":          LTRIM,
+	"month":          MONTH,
+	"oct":            OCT,
+	"reverse":        REVERSE,
+	"rtrim":          RTRIM,
+	"sin":            SIN,
+	"sinh":           SINH,
+	"space":          SPACE,
+	"tan":            TAN,
+	"week":           WEEK,
+	"weekday":        WEEKDAY,
+	"year":           YEAR,
+	"extract":        EXTRACT,
+	"if":             IFF,
+	"iff":            IFF,
+	"date_add":       DATE_ADD,
+	"date_sub":       DATE_SUB,
+	"atan":           ATAN,
+	"cos":            COS,
+	"cot":            COT,
+	"timestamp":      TIMESTAMP,
+	"database":       DATABASE,
+	"schema":         DATABASE,
+	"user":           USER,
+	"system_user":    USER,
+	"session_user":   USER,
+	"current_user":   USER,
+	"connection_id":  CONNECTION_ID,
+	"charset":        CHARSET,
+	"current_role":   CURRENT_ROLE,
+	"found_rows":     FOUND_ROWS,
+	"icu_version":    ICULIBVERSION,
+	"last_insert_id": LAST_INSERT_ID,
+	"roles_graphml":  ROLES_GRAPHML,
+	"row_count":      ROW_COUNT,
+	"version":        VERSION,
+	"collation":      COLLATION,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

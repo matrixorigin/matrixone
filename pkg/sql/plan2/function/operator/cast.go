@@ -16,10 +16,11 @@ package operator
 
 import (
 	"fmt"
-	"github.com/RoaringBitmap/roaring/roaring64"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strconv"
 	"strings"
+
+	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -51,6 +52,16 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return vec, err
 }
 
+// shorten the string to the one with no more than 100 characters.
+func shortenValueString(valueStr string) string {
+	utf8Str := []rune(valueStr)
+	l := len(utf8Str)
+	if l > 100 {
+		return string(utf8Str[:100]) + "..."
+	}
+	return valueStr
+}
+
 func formatCastError(vec *vector.Vector, typ types.Type, extraInfo string) error {
 	var errStr string
 	if vec.IsScalar() {
@@ -58,7 +69,8 @@ func formatCastError(vec *vector.Vector, typ types.Type, extraInfo string) error
 			errStr = fmt.Sprintf("Can't cast 'NULL' as %v type.", typ)
 		} else {
 			valueStr := strings.TrimRight(strings.TrimLeft(fmt.Sprintf("%v", vec.Col), "["), "]")
-			errStr = fmt.Sprintf("Can't cast '%s' from %v type to %v type.", valueStr, vec.Typ, typ)
+			shortenValueStr := shortenValueString(valueStr)
+			errStr = fmt.Sprintf("Can't cast '%s' from %v type to %v type.", shortenValueStr, vec.Typ, typ)
 		}
 	} else {
 		errStr = fmt.Sprintf("Can't cast column from %v type to %v type because of one or more values in that column.", vec.Typ, typ)
@@ -285,42 +297,42 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		case types.T_float32:
 			switch rv.Typ.Oid {
 			case types.T_int8:
-				return CastLeftToRight[float32, int8](lv, rv, proc)
+				return CastFloatToInt[float32, int8](lv, rv, proc)
 			case types.T_int16:
-				return CastLeftToRight[float32, int16](lv, rv, proc)
+				return CastFloatToInt[float32, int16](lv, rv, proc)
 			case types.T_int32:
-				return CastLeftToRight[float32, int32](lv, rv, proc)
+				return CastFloatToInt[float32, int32](lv, rv, proc)
 			case types.T_int64:
-				return CastLeftToRight[float32, int64](lv, rv, proc)
+				return CastFloatToInt[float32, int64](lv, rv, proc)
 			case types.T_uint8:
-				return CastLeftToRight[float32, uint8](lv, rv, proc)
+				return CastFloatToInt[float32, uint8](lv, rv, proc)
 			case types.T_uint16:
-				return CastLeftToRight[float32, uint16](lv, rv, proc)
+				return CastFloatToInt[float32, uint16](lv, rv, proc)
 			case types.T_uint32:
-				return CastLeftToRight[float32, uint32](lv, rv, proc)
+				return CastFloatToInt[float32, uint32](lv, rv, proc)
 			case types.T_uint64:
-				return CastLeftToRight[float32, uint64](lv, rv, proc)
+				return CastFloatToInt[float32, uint64](lv, rv, proc)
 			case types.T_float64:
 				return CastLeftToRight[float32, float64](lv, rv, proc)
 			}
 		case types.T_float64:
 			switch rv.Typ.Oid {
 			case types.T_int8:
-				return CastLeftToRight[float64, int8](lv, rv, proc)
+				return CastFloatToInt[float64, int8](lv, rv, proc)
 			case types.T_int16:
-				return CastLeftToRight[float64, int16](lv, rv, proc)
+				return CastFloatToInt[float64, int16](lv, rv, proc)
 			case types.T_int32:
-				return CastLeftToRight[float64, int32](lv, rv, proc)
+				return CastFloatToInt[float64, int32](lv, rv, proc)
 			case types.T_int64:
 				return CastFloat64ToInt64(lv, rv, proc)
 			case types.T_uint8:
-				return CastLeftToRight[float64, uint8](lv, rv, proc)
+				return CastFloatToInt[float64, uint8](lv, rv, proc)
 			case types.T_uint16:
-				return CastLeftToRight[float64, uint16](lv, rv, proc)
+				return CastFloatToInt[float64, uint16](lv, rv, proc)
 			case types.T_uint32:
-				return CastLeftToRight[float64, uint32](lv, rv, proc)
+				return CastFloatToInt[float64, uint32](lv, rv, proc)
 			case types.T_uint64:
-				return CastLeftToRight[float64, uint64](lv, rv, proc)
+				return CastFloatToInt[float64, uint64](lv, rv, proc)
 			case types.T_float32:
 				return CastLeftToRight[float64, float32](lv, rv, proc)
 			}
@@ -802,8 +814,6 @@ func CastSameType2[T types.Date | types.Datetime | types.Timestamp](lv, rv *vect
 // uint16 -> (int8/int16/int32/int64/uint8/uint32/uint64/float32/float64)
 // uint32 -> (int8/int16/int32/int64/uint8/uint16/uint64/float32/float64)
 // uint64 -> (int8/int16/int32/int64/uint8/uint16/uint32/float32/float64)
-// float32 -> (int8/int16/int32/int64/uint8/uint16/uint32/uint64/float64)
-// float64 -> (int8/int16/int32/int64/uint8/uint16/uint32/uint64/float32)
 func CastLeftToRight[T1, T2 constraints.Integer | constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := rv.Typ.Oid.TypeLen()
 	lvs := vector.MustTCols[T1](lv)
@@ -825,6 +835,34 @@ func CastLeftToRight[T1, T2 constraints.Integer | constraints.Float](lv, rv *vec
 	}
 	rs := encoding.DecodeFixedSlice[T2](vec.Data, rtl)
 	if _, err := typecast.NumericToNumeric(lvs, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastFloatToInt[T1 constraints.Float, T2 constraints.Integer](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := rv.Typ.Oid.TypeLen()
+	lvs := vector.MustTCols[T1](lv)
+
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]T2, 1)
+		if _, err := typecast.FloatToIntWithoutError(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVector(rv.Typ, int64(rtl)*int64(len(lvs)))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeFixedSlice[T2](vec.Data, rtl)
+	if _, err := typecast.FloatToIntWithoutError(lvs, rs); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
@@ -1317,7 +1355,7 @@ func CastVarcharAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vecto
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Datetime, 1)
 		varcharValue := vs.Get(0)
-		data, err2 := types.ParseDatetime(string(varcharValue), 6)
+		data, err2 := types.ParseDatetime(string(varcharValue), rv.Typ.Precision)
 		if err2 != nil {
 			return nil, err2
 		}
@@ -1338,7 +1376,7 @@ func CastVarcharAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vecto
 			continue
 		}
 		varcharValue := vs.Get(int64(i))
-		data, err2 := types.ParseDatetime(string(varcharValue), 6)
+		data, err2 := types.ParseDatetime(string(varcharValue), rv.Typ.Precision)
 		if err2 != nil {
 			return nil, err2
 		}
@@ -2085,7 +2123,10 @@ func CastStringToBool(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 		vec := proc.AllocScalarVector(resultType)
 		rs := make([]bool, 1)
 		val, err := strconv.ParseFloat(string(srcStr), 64)
-		if err == nil && val != 0 {
+		if err != nil {
+			return nil, err
+		}
+		if val != 0 {
 			rs[0] = true
 		}
 		nulls.Reset(vec.Nsp)

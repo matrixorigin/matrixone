@@ -228,6 +228,20 @@ func TestBitmapAllocator_Allocate4(t *testing.T) {
 	ret = 0x3FFC - level0[2]
 	assert.Equal(t, 0, int(ret))
 
+	level0[0] = 0xfffff00000000000
+	level0[1] = ALL_UNIT_CLEAR
+	level0[2] = ALL_UNIT_SET
+	file1 = seg.NewBlockFile("test_4.blk")
+	file1.snode.algo = compress.None
+	buffer1 = mockData(98304)
+	assert.NotNil(t, buffer1)
+	err = file.driver.Append(file1, buffer1)
+	assert.Nil(t, err)
+	ret = 0xfffff00000000000 - level0[0]
+	assert.Equal(t, 0, int(ret))
+	ret = 0xFFFFFFFFFF000000 - level0[2]
+	assert.Equal(t, 0, int(ret))
+
 }
 
 func TestBitmapAllocator_Free(t *testing.T) {
@@ -409,6 +423,11 @@ func TestSegment_Replay2(t *testing.T) {
 		file.snode.algo = compress.None
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
 		assert.Nil(t, err)
+	}
+	logStat, err := seg.logFile.Stat()
+	assert.Nil(t, err)
+	if logStat.Size() < int64(LOG_SIZE+LOG_START-2*INODE_SIZE) {
+		assert.Nil(t, logStat.Size())
 	}
 	seg1 := Driver{}
 	err = seg1.Open(name)
