@@ -18,6 +18,7 @@ import (
 	goErrors "errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"os"
 	"runtime/pprof"
 	"sort"
@@ -30,8 +31,6 @@ import (
 	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
