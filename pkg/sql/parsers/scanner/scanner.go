@@ -31,15 +31,20 @@ type Scanner struct {
 	posVarIndex         int
 	dialectType         dialect.DialectType
 	MysqlSpecialComment *Scanner
+	keywords            map[string]int
 
 	Pos int
 	buf string
 }
 
 func NewScanner(dialectType dialect.DialectType, sql string) *Scanner {
-	initTokens(dialectType)
+	rwlock.Lock()
+	m := initTokens(dialectType)
+	rwlock.Unlock()
+
 	return &Scanner{
-		buf: sql,
+		buf:      sql,
+		keywords: m,
 	}
 }
 
@@ -568,7 +573,7 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 	}
 	keywordName := s.buf[start:s.Pos]
 	lower := strings.ToLower(keywordName)
-	if keywordID, found := keywords[lower]; found {
+	if keywordID, found := s.keywords[lower]; found {
 		return keywordID, lower
 	}
 	// dual must always be case-insensitive
