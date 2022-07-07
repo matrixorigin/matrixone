@@ -35,7 +35,7 @@ func TestNulls(t *testing.T) {
 	require.Equal(t, true, ok)
 	np.Del(0)
 	ok = np.IsEmpty()
-	require.Equal(t, true, ok)
+	require.Equal(t, false, ok)
 	np.Filter([]int64{0})
 	np.Rows()
 	fmt.Printf("%v\n", np.String())
