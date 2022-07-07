@@ -80,6 +80,31 @@ func (info *checkpointInfo) UpdateWithCommandInfo(lsn uint64, cmds *entry.Comman
 		delete(info.partial, lsn)
 	}
 }
+
+func (info *checkpointInfo) MergeCommandMap(cmdMap map[uint64]entry.CommandInfo){
+	ckpedLsn:=make([]uint64,0)
+	for lsn,cmds:=range cmdMap{
+		if info.ranges.Contains(*common.NewClosedIntervalsByInt(lsn)) {
+			continue
+		}
+		partialInfo, ok := info.partial[lsn]
+		if !ok {
+			partialInfo = newPartialCkpInfo(cmds.Size)
+			info.partial[lsn] = partialInfo
+		}
+		partialInfo.MergeCommandInfos(&cmds)
+		if partialInfo.IsAllCheckpointed() {
+			ckpedLsn = append(ckpedLsn, lsn)
+			delete(info.partial, lsn)
+		}
+	}
+	if len(ckpedLsn)==0{
+		return
+	}
+	intervals:=common.NewClosedIntervalsBySlice(ckpedLsn)
+	info.ranges.TryMerge(*intervals)
+}
+
 func (info *checkpointInfo) MergeCheckpointInfo(ockp *checkpointInfo) {
 	info.ranges.TryMerge(*ockp.ranges)
 	for lsn, ockpinfo := range ockp.partial {
@@ -464,9 +489,7 @@ func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 				ckpInfo.UpdateWtihRanges(intervals.Ranges)
 			}
 			if intervals.Command != nil {
-				for lsn, cmds := range intervals.Command {
-					ckpInfo.UpdateWithCommandInfo(lsn, &cmds)
-				}
+				ckpInfo.MergeCommandMap(intervals.Command)
 			}
 			base.ckpmu.Unlock()
 		}
