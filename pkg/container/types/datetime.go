@@ -138,6 +138,9 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 		middleAndBack := strings.Split(strArr[1], ".")
 		// solve hour/minute/second
 		middle := strings.Split(middleAndBack[0], ":")
+		if len(middle) != 3 {
+			return -1, ErrIncorrectDatetimeValue
+		}
 		unum, err = strconv.ParseUint(middle[0], 10, 8)
 		if err != nil {
 			return -1, ErrIncorrectDatetimeValue

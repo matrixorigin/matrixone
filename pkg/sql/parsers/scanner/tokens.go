@@ -16,11 +16,12 @@ package scanner
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"sync"
 )
 
-var keywords map[string]int
+var rwlock sync.RWMutex
 
-func initTokens(dialectType dialect.DialectType) {
+func initTokens(dialectType dialect.DialectType) map[string]int {
 	switch dialectType {
 	case dialect.MYSQL:
 		LEX_ERROR = MYSQL_LEX_ERROR
@@ -458,7 +459,7 @@ func initTokens(dialectType dialect.DialectType) {
 		HEXNUM = POSTGRESQL_HEXNUM
 		BIT_LITERAL = POSTGRESQL_BIT_LITERAL
 	}
-	keywords = map[string]int{
+	return map[string]int{
 		"accessible":               UNUSED,
 		"account":                  ACCOUNT,
 		"add":                      ADD,
