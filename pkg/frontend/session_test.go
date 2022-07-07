@@ -108,8 +108,8 @@ func TestTxnHandler(t *testing.T) {
 		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnEnd)
 
 		err = txn.CommitAfterBegin()
-		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnErr)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnEnd)
 
 		err = txn.CleanTxn()
 		convey.So(err, convey.ShouldBeNil)
@@ -136,8 +136,8 @@ func TestTxnHandler(t *testing.T) {
 		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnEnd)
 
 		err = txn.Rollback()
-		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnErr)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnEnd)
 
 		err = txn.CleanTxn()
 		convey.So(err, convey.ShouldBeNil)
@@ -367,7 +367,7 @@ func TestVariables(t *testing.T) {
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
 		proto := NewMysqlClientProtocol(0, ioses, 1024, nil)
-		return NewSession(proto, nil, nil, nil, nil, gSysVars)
+		return NewSession(proto, nil, nil, nil, gSysVars)
 	}
 
 	checkWant := func(ses, existSes, newSesAfterSession *Session,

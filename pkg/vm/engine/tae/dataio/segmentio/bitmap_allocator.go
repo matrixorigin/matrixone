@@ -220,10 +220,10 @@ func (b *BitmapAllocator) Free(start uint32, len uint32) {
 	b.lastPos = uint64(start)
 }
 
-func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
+func (b *BitmapAllocator) Allocate(needLen uint64) (uint64, uint64) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
-	length := p2roundup(len, uint64(b.pageSize))
+	length := p2roundup(needLen, uint64(b.pageSize))
 	var allocated uint64 = 0
 	l1pos := b.lastPos / uint64(b.pageSize) / BITS_PER_UNITSET / BITS_PER_UNIT
 	l1end := cap(b.level1)
@@ -250,8 +250,15 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 			l0end := (l1freePos+1)*BITS_PER_UNITSET + uint32(l1pos*BITS_PER_UNITSET*BITS_PER_UNIT)
 			for idx := l0pos / BITS_PER_UNIT; idx < l0end/BITS_PER_UNIT &&
 				length > allocated; idx++ {
+				if idx >= uint32(len(b.level0)) {
+					return 0, 0
+				}
 				val := &(b.level0[idx])
 				if *val == ALL_UNIT_CLEAR {
+					// ALL_UNIT_CLEAR needs to be reset
+					startIdx = 0
+					setStart = false
+					allocatedPage = 0
 					continue
 				}
 				//TODO:Need to allocate huge pages to debug

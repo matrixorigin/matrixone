@@ -2,7 +2,7 @@
 
 作为一款开源数据库，MatrixOne目前支持主流的Linux和MacOS系统。你可以直接从[源代码](#使用源代码搭建)搭建单机版本的MatrixOne，也可以使用[docker](#使用docker)安装部署。
 
-## **从 AUR 安装**
+## **方法1：从 AUR 安装**
 
 ArchLinux 用户可以从 [AUR](https://aur.archlinux.org/packages/matrixone) 安装 MatrixOne。
 
@@ -12,7 +12,7 @@ $ cd matrixone
 $ makepkg -rsi
 ```
 
-## **使用源代码搭建**
+## **方法2：使用源代码搭建**
 
 #### 1. 安装部署Go语言环境
 
@@ -40,7 +40,7 @@ $ make build
 $ ./mo-server system_vars_config.toml
 ```
 
-## **下载二进制包**
+## **方法3：下载二进制包**
 
 从0.3.0版本开始，您可以直接下载二进制包，然后在X86_64 Linux环境或者X86_64的MacOS环境中运行MatrixOne。
 
@@ -66,7 +66,7 @@ $ unzip mo-server-v0.4.0-darwin-x86_64.zip
 $./mo-server system_vars_config.toml
 ```
 
-## **使用docker**
+## **方法4：使用docker**
 
 #### 1. 安装docker
 
@@ -81,5 +81,11 @@ $ docker --version
 使用以下命令将从Docker Hub中拉取最近的MatrixOne镜像：
 
 ```
-$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
+$ docker run -d -p 6001:6001 --名称 matrixone matrixorigin/matrixone:latest
 ```
+
+## 下一步：连接 MatrixOne 服务
+
+当你完成安装 MatrixOne，你可以参考下面的章节，连接到 MatrixOne 服务器。
+
+参见[连接 MatrixOne 服务](https://docs.matrixorigin.io/0.4.0/MatrixOne/Get-Started/connect-to-matrixone-server/#2-connect-to-matrixone-server.html)。
