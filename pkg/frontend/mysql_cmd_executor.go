@@ -17,6 +17,7 @@ package frontend
 import (
 	goErrors "errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"os"
 	"runtime/pprof"
 	"sort"
@@ -27,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile2"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	compile1 "github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -913,29 +912,6 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 				}
 			}
 		}
-	} else {
-		if mce.tableInfos == nil || mce.db != dbName {
-			if ses.Pu.ClusterCatalog == nil {
-				return fmt.Errorf("need cluster catalog")
-			}
-			tableInfos, err := ses.Pu.ClusterCatalog.ListTablesByName(dbName)
-			if err != nil {
-				return err
-			}
-
-			mce.db = ses.GetDatabaseName()
-			mce.tableInfos = make(map[string][]ColumnInfo)
-
-			//cache these info in the executor
-			for _, table := range tableInfos {
-				var infos []ColumnInfo
-				for _, column := range table.Columns {
-					infos = append(infos, &aoeColumnInfo{info: column})
-				}
-				mce.tableInfos[table.Name] = infos
-
-			}
-		}
 	}
 
 	cols, ok := mce.tableInfos[tableName]
@@ -1257,9 +1233,9 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 
 func GetExplainColumns(attrs []*plan.Attribute) ([]interface{}, error) {
 	//attrs := plan.BuildExplainResultColumns()
-	cols := make([]*compile1.Col, len(attrs))
+	cols := make([]*compile.Col, len(attrs))
 	for i, attr := range attrs {
-		cols[i] = &compile1.Col{
+		cols[i] = &compile.Col{
 			Name: attr.Name,
 			Typ:  attr.Type.Oid,
 		}
@@ -1301,54 +1277,6 @@ func buildMoExplainQuery(attrs []*plan.Attribute, buffer *explain.ExplainDataBuf
 	return fill(session, bat)
 }
 
-//----------------------------------------------------------------------------------------------------
-
-type ComputationWrapperImpl struct {
-	exec *compile1.Exec
-}
-
-func NewComputationWrapperImpl(e *compile1.Exec) *ComputationWrapperImpl {
-	return &ComputationWrapperImpl{exec: e}
-}
-
-// GetAst gets ast of the statement
-func (cw *ComputationWrapperImpl) GetAst() tree.Statement {
-	return cw.exec.Statement()
-}
-
-//SetDatabaseName sets the database name
-func (cw *ComputationWrapperImpl) SetDatabaseName(db string) error {
-	return cw.exec.SetSchema(db)
-}
-
-func (cw *ComputationWrapperImpl) GetColumns() ([]interface{}, error) {
-	columns := cw.exec.Columns()
-	var mysqlCols []interface{} = make([]interface{}, len(columns))
-	var err error = nil
-	for i, c := range columns {
-		col := new(MysqlColumn)
-		col.SetName(c.Name)
-		err = convertEngineTypeToMysqlType(c.Typ, col)
-		if err != nil {
-			return nil, err
-		}
-		mysqlCols[i] = col
-	}
-	return mysqlCols, err
-}
-
-func (cw *ComputationWrapperImpl) GetAffectedRows() uint64 {
-	return cw.exec.GetAffectedRows()
-}
-
-func (cw *ComputationWrapperImpl) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return cw.exec, cw.exec.Compile(u, fill)
-}
-
-func (cw *ComputationWrapperImpl) Run(ts uint64) error {
-	return cw.exec.Run(ts)
-}
-
 var _ ComputationWrapper = &TxnComputationWrapper{}
 
 type TxnComputationWrapper struct {
@@ -1356,7 +1284,7 @@ type TxnComputationWrapper struct {
 	plan    *plan2.Plan
 	proc    *process.Process
 	ses     *Session
-	compile *compile2.Compile
+	compile *compile.Compile
 }
 
 func InitTxnComputationWrapper(ses *Session, stmt tree.Statement, proc *process.Process) *TxnComputationWrapper {
@@ -1421,7 +1349,7 @@ func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{},
 	cwft.proc.UnixTime = time.Now().UnixNano()
 	txnHandler := cwft.ses.GetTxnHandler()
 	cwft.proc.Snapshot = txnHandler.GetTxn().GetCtx()
-	cwft.compile = compile2.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), cwft.ses.GetStorage(), cwft.proc)
+	cwft.compile = compile.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), cwft.ses.GetStorage(), cwft.proc)
 	err = cwft.compile.Compile(cwft.plan, cwft.ses, fill)
 	if err != nil {
 		return nil, err

@@ -3,7 +3,6 @@ package frontend
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"testing"
 
 	"github.com/fagongzi/goetty/buf"
