@@ -920,9 +920,10 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 			Id: plan.Type_DECIMAL128,
 			// Width: int32(len(val)),
 			// Scale: 0,
-			Width:    38,
-			Scale:    scale,
-			Nullable: false,
+			Width:     38,
+			Scale:     scale,
+			Precision: 38,
+			Nullable:  false,
 		}
 		return appendCastBeforeExpr(getStringExpr(val), typ)
 	}
@@ -1002,14 +1003,14 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 	case tree.P_float64:
 		originString := astExpr.String()
 		if !strings.Contains(originString, "e") {
-			expr, err := returnDecimalExpr(astExpr.String())
+			expr, err := returnDecimalExpr(originString)
 			if err == nil {
 				return expr, nil
 			}
 		}
 		floatValue, ok := constant.Float64Val(astExpr.Value)
 		if !ok {
-			return returnDecimalExpr(astExpr.String())
+			return returnDecimalExpr(originString)
 		}
 		//if astExpr.Negative() {
 		//	floatValue = -floatValue
