@@ -16,10 +16,11 @@ package bootstrap
 
 import (
 	"errors"
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"sort"
 )
 
 type Manager struct {
