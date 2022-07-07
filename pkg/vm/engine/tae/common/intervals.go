@@ -215,7 +215,7 @@ func NewClosedIntervalsBySlice(array []uint64) *ClosedIntervals {
 			pre = idx
 		}
 	}
-	interval.End=pre
+	interval.End = pre
 	ranges.Intervals = append(ranges.Intervals, interval)
 	return ranges
 }

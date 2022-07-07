@@ -81,9 +81,9 @@ func (info *checkpointInfo) UpdateWithCommandInfo(lsn uint64, cmds *entry.Comman
 	}
 }
 
-func (info *checkpointInfo) MergeCommandMap(cmdMap map[uint64]entry.CommandInfo){
-	ckpedLsn:=make([]uint64,0)
-	for lsn,cmds:=range cmdMap{
+func (info *checkpointInfo) MergeCommandMap(cmdMap map[uint64]entry.CommandInfo) {
+	ckpedLsn := make([]uint64, 0)
+	for lsn, cmds := range cmdMap {
 		if info.ranges.Contains(*common.NewClosedIntervalsByInt(lsn)) {
 			continue
 		}
@@ -98,10 +98,10 @@ func (info *checkpointInfo) MergeCommandMap(cmdMap map[uint64]entry.CommandInfo)
 			delete(info.partial, lsn)
 		}
 	}
-	if len(ckpedLsn)==0{
+	if len(ckpedLsn) == 0 {
 		return
 	}
-	intervals:=common.NewClosedIntervalsBySlice(ckpedLsn)
+	intervals := common.NewClosedIntervalsBySlice(ckpedLsn)
 	info.ranges.TryMerge(*intervals)
 }
 
