@@ -347,3 +347,63 @@ domain-type = "set"
 values = ["true", "false"]
 comment = "default is true. if true, enable metric at booting"
 update-mode = "dynamic"
+
+[[parameter]]
+name = "logLevel"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["debug", "info", "warn", "error", "fatal"]
+comment = "default is 'debug'. the level of log."
+update-mode = "dynamic"
+
+[[parameter]]
+name = "logFormat"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["json", "console"]
+comment = "default is 'json'. the format of log."
+update-mode = "dynamic"
+
+[[parameter]]
+name = "logFilename"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = [""]
+comment = "default is ''. the filename of log file."
+update-mode = "dynamic"
+
+[[parameter]]
+name = "logMaxSize"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["512"]
+comment = "default is 512MB. the maximum of log file size"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "logMaxDays"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["0"]
+comment = "default is 0. the maximum days of log file to be kept"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "logMaxBackups"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["0"]
+comment = "default is 0. the maximum numbers of log file to be retained"
+update-mode = "dynamic"
