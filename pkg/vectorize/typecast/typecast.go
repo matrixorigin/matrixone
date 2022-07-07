@@ -506,6 +506,32 @@ func Decimal128ToFloat64(xs []types.Decimal128, scale int32, rs []float64) ([]fl
 	return rs, nil
 }
 
+func Decimal64ToInt64(xs []types.Decimal64, scale int32, rs []int64) ([]int64, error) {
+	for i, x := range xs {
+		xStr := string(x.Decimal64ToString(scale))
+		floatRepresentation, err := strconv.ParseFloat(xStr, 64)
+		if err != nil {
+			return []int64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT correctly")
+		}
+		result := int64(math.Round(floatRepresentation))
+		rs[i] = result
+	}
+	return rs, nil
+}
+
+func Decimal128ToInt64(xs []types.Decimal128, scale int32, rs []int64) ([]int64, error) {
+	for i, x := range xs {
+		xStr := string(x.Decimal128ToString(scale))
+		floatRepresentation, err := strconv.ParseFloat(xStr, 64)
+		if err != nil {
+			return []int64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT correctly")
+		}
+		result := int64(math.Round(floatRepresentation))
+		rs[i] = result
+	}
+	return rs, nil
+}
+
 func NumericToBool[T constraints.Integer | constraints.Float](xs []T, rs []bool) ([]bool, error) {
 	for i, x := range xs {
 		rs[i] = (x != 0)
