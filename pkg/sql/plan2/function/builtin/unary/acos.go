@@ -15,16 +15,33 @@
 package unary
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/acos"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"golang.org/x/exp/constraints"
 )
 
-func Acos[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+type acosResult struct {
+	Result []float64
+	Nsp    *nulls.Nulls
+}
+
+func acos(inputValues []float64, rs []float64) acosResult {
+	result := acosResult{Result: rs, Nsp: new(nulls.Nulls)}
+	for i, n := range inputValues {
+		if n < -1 || n > 1 {
+			nulls.Add(result.Nsp, uint64(i))
+		} else {
+			result.Result[i] = math.Acos(n)
+		}
+	}
+	return result
+}
+
+func Acos(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	origVec := vs[0]
 	//Here we need to classify it into three scenes
 	//1. if it is a constant
@@ -35,11 +52,11 @@ func Acos[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *
 		if origVec.IsScalarNull() {
 			return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
 		} else {
-			origVecCol := vector.MustTCols[T](origVec)
+			origVecCol := vector.MustTCols[float64](origVec)
 			resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
 			resultValues := make([]float64, 1)
 			// nulls.Set(resultVector.Nsp, origVec.Nsp)
-			results := acos.Acos(origVecCol, resultValues)
+			results := acos(origVecCol, resultValues)
 			if nulls.Any(results.Nsp) {
 				return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
 			}
@@ -47,7 +64,7 @@ func Acos[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *
 			return resultVector, nil
 		}
 	} else {
-		origVecCol := vector.MustTCols[T](origVec)
+		origVecCol := vector.MustTCols[float64](origVec)
 		resultVector, err := proc.AllocVector(types.Type{Oid: types.T_float64, Size: 8}, 8*int64(len(origVecCol)))
 		if err != nil {
 			return nil, err
@@ -55,7 +72,7 @@ func Acos[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *
 		results := encoding.DecodeFloat64Slice(resultVector.Data)
 		results = results[:len(origVecCol)]
 		resultVector.Col = results
-		res := acos.Acos(origVecCol, results)
+		res := acos(origVecCol, results)
 		nulls.Set(resultVector.Nsp, origVec.Nsp.Or(res.Nsp))
 		vector.SetCol(resultVector, res.Result)
 		return resultVector, nil

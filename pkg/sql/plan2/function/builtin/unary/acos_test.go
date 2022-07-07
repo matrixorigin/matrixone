@@ -26,22 +26,12 @@ import (
 )
 
 func TestAcos(t *testing.T) {
-	acosIntAndFloat[int8](t, types.T_int8, 1, 0)
-	acosIntAndFloat[int16](t, types.T_int16, 1, 0)
-	acosIntAndFloat[int32](t, types.T_int32, 1, 0)
-	acosIntAndFloat[int64](t, types.T_int64, 1, 0)
-
-	acosIntAndFloat[uint8](t, types.T_uint8, 0, 1.5707963267948966)
-	acosIntAndFloat[uint16](t, types.T_uint16, 0, 1.5707963267948966)
-	acosIntAndFloat[uint32](t, types.T_uint32, 0, 1.5707963267948966)
-	acosIntAndFloat[uint64](t, types.T_uint64, 0, 1.5707963267948966)
-
-	acosIntAndFloatInValid[float32](t, types.T_float32, 1.0001)
-
-	acosIntAndFloatInValid(t, types.T_float64, 1.0001)
+	testAcos(t, 1, 0)
+	testAcos(t, 0, 1.5707963267948966)
+	testAcosInvalid(t, 1.0001)
 }
 
-func acosIntAndFloatInValid[T constraints.Integer | constraints.Float](t *testing.T, typ types.T, src T) {
+func testAcosInvalid(t *testing.T, src float64) {
 	procs := makeProcess()
 	cases := []struct {
 		name       string
@@ -52,7 +42,7 @@ func acosIntAndFloatInValid[T constraints.Integer | constraints.Float](t *testin
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makeacosVectors(src, true, typ),
+			vecs:       makeAcosVectors(src, true, types.T_float64),
 			proc:       procs,
 			wantBytes:  []float64{},
 			wantScalar: true,
@@ -61,7 +51,7 @@ func acosIntAndFloatInValid[T constraints.Integer | constraints.Float](t *testin
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			plus, err := Acos[T](c.vecs, c.proc)
+			plus, err := Acos(c.vecs, c.proc)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -71,7 +61,7 @@ func acosIntAndFloatInValid[T constraints.Integer | constraints.Float](t *testin
 	}
 }
 
-func acosIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, typ types.T, src T, res float64) {
+func testAcos(t *testing.T, src float64, res float64) {
 	procs := makeProcess()
 	cases := []struct {
 		name       string
@@ -82,7 +72,7 @@ func acosIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, ty
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makeacosVectors(src, true, typ),
+			vecs:       makeAcosVectors(src, true, types.T_float64),
 			proc:       procs,
 			wantBytes:  []float64{res},
 			wantScalar: true,
@@ -91,7 +81,7 @@ func acosIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, ty
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			plus, err := Acos[T](c.vecs, c.proc)
+			plus, err := Acos(c.vecs, c.proc)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -101,8 +91,7 @@ func acosIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, ty
 	}
 }
 
-// Construct the vector parameter of the plus operator
-func makeacosVectors[T constraints.Integer | constraints.Float](src T, srcScalar bool, t types.T) []*vector.Vector {
+func makeAcosVectors[T constraints.Integer | constraints.Float](src T, srcScalar bool, t types.T) []*vector.Vector {
 	vectors := make([]*vector.Vector, 1)
 	vectors[0] = &vector.Vector{
 		Col:     []T{src},
@@ -113,10 +102,3 @@ func makeacosVectors[T constraints.Integer | constraints.Float](src T, srcScalar
 	}
 	return vectors
 }
-
-// NULL return not a value
-// func MakeScalarNullSlice(length int) []*vector.Vector {
-// 	vectors := make([]*vector.Vector, 1)
-// 	vectors[0] = testutil.MakeScalarNull(4)
-// 	return vectors
-// }

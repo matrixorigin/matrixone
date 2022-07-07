@@ -42,7 +42,7 @@ func testAsinInvalid(t *testing.T, src float64) {
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makeVectors(src, true, types.T_float64),
+			vecs:       makeAsinVectors(src, true, types.T_float64),
 			proc:       procs,
 			wantBytes:  []float64{},
 			wantScalar: true,
@@ -72,7 +72,7 @@ func testAsin(t *testing.T, src float64, res float64) {
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makeVectors(src, true, types.T_float64),
+			vecs:       makeAsinVectors(src, true, types.T_float64),
 			proc:       procs,
 			wantBytes:  []float64{res},
 			wantScalar: true,
@@ -91,7 +91,7 @@ func testAsin(t *testing.T, src float64, res float64) {
 	}
 }
 
-func makeVectors[T constraints.Integer | constraints.Float](src T, srcScalar bool, t types.T) []*vector.Vector {
+func makeAsinVectors[T constraints.Integer | constraints.Float](src T, srcScalar bool, t types.T) []*vector.Vector {
 	vectors := make([]*vector.Vector, 1)
 	vectors[0] = &vector.Vector{
 		Col:     []T{src},

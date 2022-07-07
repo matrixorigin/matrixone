@@ -41,7 +41,6 @@ const (
 	Sin
 	Sinh
 	Cos
-	Acos
 	Tan
 	Atan
 	Cot
