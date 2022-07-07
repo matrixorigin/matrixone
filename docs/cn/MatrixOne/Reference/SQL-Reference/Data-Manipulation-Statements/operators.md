@@ -16,7 +16,7 @@
 
 | 名称 | 描述|
 |---|-----|
-| [=](operators/assignment/equal.md) | 等于运算符，用于赋值 |
+| [=](operators/assignment-operators/equal.md) | 等于运算符，用于赋值 |
 
 ## [**强制转换函数和运算符**](operators/cast-functions-and-operators/cast-functions-and-operators-overview.md)
 
@@ -34,16 +34,16 @@
 | [<](operators/comparison-functions-and-operators/less-than.md) | 小于 |
 | [<>,!=](operators/comparison-functions-and-operators/not-equal.md) | 不等于 |
 | [<=](operators/comparison-functions-and-operators/less-than-or-equal.md) | 小于等于 |
-| [=](operators/assignment-operators.html#assign-equal.md) | 等于 |
+| [=](operators/comparison-functions-and-operators/assign-equal.md) | 等于 |
 | [BETWEEN ... AND ...](operators/comparison-functions-and-operators/between.md) | 在两值之间 |
 | [IN()](operators/comparison-functions-and-operators/in.md) | 在集合中 |
 | [IS](operators/comparison-functions-and-operators/is.md) | 测试值是否是布尔值，若是布尔值，则返回“true” |
 | [IS NOT](operators/comparison-functions-and-operators/is-not.md) | 测试值是否是布尔值，IS 的否定用法 |
 | [IS NOT NULL](operators/comparison-functions-and-operators/is-not-null.md) | 不为空 |
 | [IS NULL](operators/comparison-functions-and-operators/is-null.md) | 为空 |
-| [LIKE](operators/string-comparison-functions.html#like.md) | 模糊匹配 |
+| [LIKE](operators/comparison-functions-and-operators/like.md) | 模糊匹配 |
 | [NOT BETWEEN ... AND ...](operators/comparison-functions-and-operators/not-between.md) | 不在两值之间 |
-| [NOT LIKE](operators/string-comparison-functions.html#not-like.md) | 模糊匹配，Like的否定用法 |
+| [NOT LIKE](operators/comparison-functions-and-operators/not-like.md) | 模糊匹配，Like的否定用法 |
 
 ## [**控制流函数**](operators/flow-control-functions/flow-control-functions-overview.md)
 

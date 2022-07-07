@@ -16,7 +16,7 @@
 
 | Name | Description|
 |---|-----|
-| [=](operators/assignment/equal.md) | Equal operator |
+| [=](operators/assignment-operators/equal.md) | Equal operator |
 
 ## [**Cast Functions and Operators**](operators/cast-functions-and-operators/cast-functions-and-operators-overview.md)
 
@@ -34,16 +34,16 @@
 | [<](operators/comparison-functions-and-operators/less-than.md) | Less than operator |
 | [<>,!=](operators/comparison-functions-and-operators/not-equal.md) | Not equal operator |
 | [<=](operators/comparison-functions-and-operators/less-than-or-equal.md) | Less than or equal operator |
-| [=](operators/assignment-operators.html#assign-equal.md) | Equal operator |
+| [=](operators/comparison-functions-and-operators/assign-equal.md) | Equal operator |
 | [BETWEEN ... AND ...](operators/comparison-functions-and-operators/between.md) | Whether a value is within a range of values |
 | [IN()](operators/comparison-functions-and-operators/in.md) | Whether a value is within a set of values |
 | [IS](operators/comparison-functions-and-operators/is.md) | Test a value against a boolean |
 | [IS NOT](operators/comparison-functions-and-operators/is-not.md) | Test a value against a boolean |
 | [IS NOT NULL](operators/comparison-functions-and-operators/is-not-null.md) | NOT NULL value test |
 | [IS NULL](operators/comparison-functions-and-operators/is-null.md) | NULL value test |
-| [LIKE](operators/string-comparison-functions.html#like.md) | Simple pattern matching |
+| [LIKE](operators/comparison-functions-and-operators/like.md) | Simple pattern matching |
 | [NOT BETWEEN ... AND ...](operators/comparison-functions-and-operators/not-between.md) | Whether a value is not within a range of values |
-| [NOT LIKE](operators/string-comparison-functions.html#not-like.md) | Negation of simple pattern matching |
+| [NOT LIKE](operators/comparison-functions-and-operators/not-like.md) | Negation of simple pattern matching |
 
 ## [**Flow Control Functions**](operators/flow-control-functions/flow-control-functions-overview.md)
 
