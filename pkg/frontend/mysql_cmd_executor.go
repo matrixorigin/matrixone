@@ -27,16 +27,14 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
-
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -1121,6 +1119,8 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 	return mce.doComQuery(sql)
 }
 
+/*
+//Note: for pass the compile quickly. We will remove the comments in the future.
 func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	es := explain.NewExplainDefaultOptions()
 
@@ -1186,9 +1186,8 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 		logutil.Errorf("GetColumns from ExplainColumns handler failed, error: %v", err)
 		return err
 	}
-	/*
-		Step 1 : send column count and column definition.
-	*/
+
+	//	Step 1 : send column count and column definition.
 	//send column count
 	colCnt := uint64(len(columns))
 	err = protocol.SendColumnCountPacket(colCnt)
@@ -1201,18 +1200,18 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	for _, c := range columns {
 		mysqlc := c.(Column)
 		session.Mrs.AddColumn(mysqlc)
-		/*
-			mysql COM_QUERY response: send the column definition per column
-		*/
+
+		//	mysql COM_QUERY response: send the column definition per column
+
 		err := protocol.SendColumnDefinitionPacket(mysqlc, cmd)
 		if err != nil {
 			return err
 		}
 	}
-	/*
-		mysql COM_QUERY response: End after the column has been sent.
-		send EOF packet
-	*/
+
+	//	mysql COM_QUERY response: End after the column has been sent.
+	//	send EOF packet
+
 	err = protocol.SendEOFPacketIf(0, 0)
 	if err != nil {
 		return err
@@ -1275,6 +1274,7 @@ func buildMoExplainQuery(attrs []*plan.Attribute, buffer *explain.ExplainDataBuf
 
 	return fill(session, bat)
 }
+*/
 
 var _ ComputationWrapper = &TxnComputationWrapper{}
 
@@ -1598,9 +1598,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			}
 		case *tree.ExplainStmt:
 			selfHandle = true
-			if err = mce.handleExplainStmt(st); err != nil {
-				goto handleFailed
-			}
+			//if err = mce.handleExplainStmt(st); err != nil {
+			//	goto handleFailed
+			//}
+			goto handleFailed
 		case *tree.ExplainAnalyze:
 			selfHandle = true
 			err = errors.New(errno.FeatureNotSupported, "not support explain analyze statement now")
