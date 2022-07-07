@@ -580,6 +580,7 @@ func toDecimal(e *extend.ValueExtend) error {
 	}
 	vec.Col = []types.Decimal128{value}
 	vec.Typ.Width = 38
+	vec.Typ.Precision = 38
 	vec.Typ.Scale = scale
 	e.V = vec
 	return nil
