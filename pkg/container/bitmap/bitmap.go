@@ -30,6 +30,7 @@ func (n *Bitmap) IsEmpty() bool {
 }
 
 func (n *Bitmap) Add(row uint64) {
+	n.Any = true
 	n.Data[row>>3] |= 1 << (row & 0x7)
 }
 
