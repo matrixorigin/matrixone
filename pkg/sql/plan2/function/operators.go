@@ -4085,12 +4085,28 @@ var operators = map[int]Functions{
 				Index:     184,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_decimal64, types.T_char},
+				ReturnTyp: types.T_char,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     185,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_decimal128, types.T_char},
+				ReturnTyp: types.T_char,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     186,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_timestamp, types.T_date},
 				ReturnTyp: types.T_date,
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     185,
+				Index:     187,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_int8, types.T_timestamp},
@@ -4098,7 +4114,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     186,
+				Index:     188,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_int16, types.T_timestamp},
@@ -4106,7 +4122,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     187,
+				Index:     189,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_int32, types.T_timestamp},
@@ -4114,7 +4130,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     188,
+				Index:     190,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_int64, types.T_timestamp},
@@ -4122,7 +4138,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     189,
+				Index:     191,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_uint8, types.T_timestamp},
@@ -4130,7 +4146,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     190,
+				Index:     192,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_uint16, types.T_timestamp},
@@ -4138,7 +4154,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     191,
+				Index:     193,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_uint32, types.T_timestamp},
@@ -4146,7 +4162,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     192,
+				Index:     194,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_uint64, types.T_timestamp},
@@ -4154,7 +4170,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     193,
+				Index:     195,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_decimal64, types.T_timestamp},
@@ -4162,7 +4178,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     194,
+				Index:     196,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_decimal128, types.T_timestamp},
@@ -4170,7 +4186,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     195,
+				Index:     197,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_decimal64, types.T_float32},
@@ -4178,7 +4194,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     196,
+				Index:     198,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_decimal128, types.T_float32},
@@ -4186,7 +4202,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     197,
+				Index:     199,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_decimal64, types.T_float64},
@@ -4194,7 +4210,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     198,
+				Index:     200,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_decimal128, types.T_float64},
@@ -4202,7 +4218,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     199,
+				Index:     201,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_char, types.T_date},
@@ -4210,7 +4226,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     200,
+				Index:     202,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_char, types.T_datetime},
@@ -4218,7 +4234,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     201,
+				Index:     203,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_char, types.T_timestamp},
@@ -4226,7 +4242,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     202,
+				Index:     204,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_int8, types.T_decimal64},
@@ -4234,7 +4250,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     203,
+				Index:     205,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_int16, types.T_decimal64},
@@ -4242,7 +4258,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     204,
+				Index:     206,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_int32, types.T_decimal64},
@@ -4250,7 +4266,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     205,
+				Index:     207,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_int64, types.T_decimal64},
@@ -4258,7 +4274,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     206,
+				Index:     208,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_int8, types.T_bool},
@@ -4266,7 +4282,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     207,
+				Index:     209,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_int16, types.T_bool},
@@ -4274,7 +4290,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     208,
+				Index:     210,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_int32, types.T_bool},
@@ -4282,7 +4298,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     209,
+				Index:     211,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_int64, types.T_bool},
@@ -4290,7 +4306,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     210,
+				Index:     212,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_uint8, types.T_bool},
@@ -4298,7 +4314,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     211,
+				Index:     213,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_uint16, types.T_bool},
@@ -4306,7 +4322,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     212,
+				Index:     214,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_uint32, types.T_bool},
@@ -4314,7 +4330,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     213,
+				Index:     215,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_uint64, types.T_bool},
@@ -4322,7 +4338,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     214,
+				Index:     216,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_float32, types.T_bool},
@@ -4330,7 +4346,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     215,
+				Index:     217,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_float64, types.T_bool},
@@ -4338,7 +4354,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     216,
+				Index:     218,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_char, types.T_bool},
@@ -4346,7 +4362,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     217,
+				Index:     219,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_varchar, types.T_bool},
@@ -4354,7 +4370,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     218,
+				Index:     220,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_decimal64, types.T_float64},
@@ -4362,7 +4378,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     219,
+				Index:     221,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_decimal128, types.T_float64},
@@ -4370,7 +4386,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     220,
+				Index:     222,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_decimal64, types.T_int64},
@@ -4378,7 +4394,7 @@ var operators = map[int]Functions{
 				Fn:        operator.Cast,
 			},
 			{
-				Index:     221,
+				Index:     223,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_decimal128, types.T_int64},
