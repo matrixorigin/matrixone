@@ -41,40 +41,100 @@ var (
 )
 
 func acquireWaiter() *waiter {
-	return waiterPool.Get().(*waiter)
+	w := waiterPool.Get().(*waiter)
+	w.ref()
+	w.reuse++
+	return w
 }
 
 type waiter struct {
-	targets  []txn.TxnStatus
-	c        chan txn.TxnStatus
-	notified bool
+	c     chan txn.TxnStatus
+	reuse uint64
+
+	mu struct {
+		sync.RWMutex
+		closed bool
+		// A waiter can only be notified once, regardless of how many transactions it watches.
+		notified bool
+		// The wait will held by notifier and the place to use waiter. The waiter can only be recycled to
+		// sync.Pool if it is no longer referenced by any.
+		ref int
+	}
 }
 
-func (w *waiter) addWaitStatus(targets []txn.TxnStatus) {
-	w.targets = append(w.targets, targets...)
+func (w *waiter) ref() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.mu.ref++
 }
 
-func (w *waiter) notify(status txn.TxnStatus) {
+func (w *waiter) unref() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.unrefLocked()
+	w.maybeReleaseLocked()
+}
+
+func (w *waiter) unrefLocked() {
+	w.mu.ref--
+	if w.mu.ref < 0 {
+		panic("invalid ref value")
+	}
+}
+
+func (w *waiter) notify(status txn.TxnStatus) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.mu.notified {
+		panic("already notified")
+	}
+
+	w.mu.notified = true
+	if w.mu.closed {
+		return false
+	}
 	select {
 	case w.c <- status:
 	default:
 		panic("BUG")
 	}
-	w.notified = true
+	return true
 }
 
 func (w *waiter) close() {
-	w.targets = w.targets[:0]
-	w.notified = false
-	waiterPool.Put(w)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.mu.closed = true
+	w.unrefLocked()
+	w.maybeReleaseLocked()
 }
 
-func (w *waiter) wait(ctx context.Context) (txn.TxnStatus, bool) {
+func (w *waiter) maybeReleaseLocked() {
+	if w.mu.ref == 0 {
+		w.mu.closed = false
+		w.mu.notified = false
+		select {
+		case <-w.c:
+		default:
+		}
+		waiterPool.Put(w)
+	}
+}
+
+// wait only 3 results:
+// 1. want status, nil
+// 2. any, context.Done error
+// 3. final status(committed or aborted), nil
+func (w *waiter) wait(ctx context.Context) (txn.TxnStatus, error) {
 	select {
 	case <-ctx.Done():
-		return txn.TxnStatus_Aborted, false
-	case status, ok := <-w.c:
-		return status, ok
+		return txn.TxnStatus_Aborted, ctx.Err()
+	case status := <-w.c:
+		return status, nil
 	}
 }
 
@@ -84,17 +144,25 @@ func (w *waiter) setFinalizer() {
 	})
 }
 
+func acquireNotifier() *notifier {
+	return notifierPool.Get().(*notifier)
+}
+
+// notifier a transaction corresponds to a notifier, for other transactions that need to be notified that
+// the current transaction has reached the specified status.
 type notifier struct {
 	sync.Mutex
 	waiters [][]*waiter
 }
 
-func (s *notifier) close() {
+func (s *notifier) close(status txn.TxnStatus) {
 	s.Lock()
 	defer s.Unlock()
 
 	for i, waiters := range s.waiters {
 		for j := range waiters {
+			waiters[j].notify(status)
+			waiters[j].unref()
 			waiters[j] = nil
 		}
 		s.waiters[i] = waiters[:0]
@@ -102,52 +170,33 @@ func (s *notifier) close() {
 	notifierPool.Put(s)
 }
 
-func (s *notifier) notify(status txn.TxnStatus) {
+func (s *notifier) notify(status txn.TxnStatus) int {
 	s.Lock()
 	defer s.Unlock()
 
 	if !s.hasWaitersLocked(status) {
-		return
+		return 0
 	}
 
 	waiters := s.waiters[status]
+	n := 0
 	for idx, w := range waiters {
-		w.notify(status)
+		if w.notify(status) {
+			n++
+		}
+		w.unref()
 		waiters[idx] = nil
 	}
 	s.waiters[status] = waiters[:0]
-
-	s.removeWaiter(int(status))
+	return n
 }
 
-func (s *notifier) removeWaiter(excludeIndex int) {
-	for i, waiters := range s.waiters {
-		if i == excludeIndex {
-			continue
-		}
-
-		newWaiters := waiters[:0]
-		for _, w := range waiters {
-			if !w.notified {
-				newWaiters = append(newWaiters, w)
-			}
-		}
-		s.waiters[i] = newWaiters
-
-		n := len(waiters)
-		for j := len(newWaiters); j < n; j++ {
-			waiters[j] = nil
-		}
-	}
-}
-
-func (s *notifier) addWaiter(w *waiter) {
+func (s *notifier) addWaiter(w *waiter, status txn.TxnStatus) {
 	s.Lock()
 	defer s.Unlock()
 
-	for _, st := range w.targets {
-		s.waiters[st] = append(s.waiters[st], w)
-	}
+	w.ref()
+	s.waiters[status] = append(s.waiters[status], w)
 }
 
 func (s *notifier) hasWaitersLocked(status txn.TxnStatus) bool {

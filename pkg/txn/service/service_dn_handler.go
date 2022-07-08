@@ -15,16 +15,72 @@
 package service
 
 import (
+	"bytes"
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
 func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+	response.PrepareResponse = &txn.TxnPrepareResponse{}
+	s.validDNShard(request)
+
+	txnID := request.Txn.ID
+	txnCtx := s.getTxnContext(txnID)
+	if txnCtx == nil {
+		response.TxnError = newTxnNotFoundError()
+		return nil
+	}
+
+	txnCtx.mu.Lock()
+	defer txnCtx.mu.Unlock()
+
+	newTxn := txnCtx.getTxnLocked()
+	if !bytes.Equal(newTxn.ID, txnID) {
+		response.TxnError = newTxnNotFoundError()
+		return nil
+	}
+
+	response.Txn = &newTxn
+	switch newTxn.Status {
+	case txn.TxnStatus_Active:
+		break
+	case txn.TxnStatus_Prepared:
+		return nil
+	default:
+		response.TxnError = newTxnNotActiveError()
+		return nil
+	}
+
+	if err := s.storage.Prepare(request.Txn); err != nil {
+		response.TxnError = newTAEPrepareError(err)
+		return nil
+	}
+
+	newTxn.Status = txn.TxnStatus_Prepared
+	txnCtx.changeStatusLocked(txn.TxnStatus_Prepared)
 	return nil
 }
 
 func (s *service) GetStatus(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+	response.GetStatusResponse = &txn.TxnGetStatusResponse{}
+	s.validDNShard(request)
+
+	txnID := request.Txn.ID
+	txnCtx := s.getTxnContext(txnID)
+	if txnCtx == nil {
+		return nil
+	}
+
+	txnCtx.mu.RLock()
+	defer txnCtx.mu.RUnlock()
+
+	txn := txnCtx.getTxnLocked()
+	if !bytes.Equal(txn.ID, txnID) {
+		return nil
+	}
+
+	response.Txn = &txn
 	return nil
 }
 

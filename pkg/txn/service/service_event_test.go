@@ -15,6 +15,7 @@
 package service
 
 import (
+	"context"
 	"runtime/debug"
 	"sync"
 	"testing"
@@ -24,6 +25,11 @@ import (
 )
 
 func TestGCWaiter(t *testing.T) {
+	pool := waiterPool
+	defer func() {
+		waiterPool = pool
+	}()
+
 	var c chan txn.TxnStatus
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -32,16 +38,127 @@ func TestGCWaiter(t *testing.T) {
 		w := acquireWaiter()
 		c = w.c
 		w.close()
+		waiterPool = sync.Pool{}
 	}()
 	wg.Wait()
 
 	debug.FreeOSMemory()
+	_, ok := <-c
+	assert.False(t, ok)
+}
 
+func TestAcquireAndCloseWaiter(t *testing.T) {
+	checker := func(w *waiter) {
+		assert.False(t, w.mu.closed)
+		assert.False(t, w.mu.notified)
+	}
+
+	w := acquireWaiter()
+	assert.Equal(t, 1, w.mu.ref)
+	checker(w)
+
+	w.ref()
+	w.notify(txn.TxnStatus_Active)
+	w.close()
+	assert.True(t, w.mu.closed)
+	assert.True(t, w.mu.notified)
+
+	w2 := w
+	w.unref()
+	assert.Equal(t, 0, w2.mu.ref)
+	checker(w2)
+}
+
+func TestWaiterNotify(t *testing.T) {
+	w := acquireWaiter()
+	defer w.close()
+
+	w.notify(txn.TxnStatus_Committed)
+	s, err := w.wait(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, txn.TxnStatus_Committed, s)
+}
+
+func TestWaiterNotifyMoreTimesWillPanic(t *testing.T) {
 	defer func() {
-		if err := recover(); err != nil {
-			return
+		if err := recover(); err == nil {
+			assert.Fail(t, "must panic")
 		}
-		assert.Fail(t, "must panic")
 	}()
-	c <- txn.TxnStatus_Aborted
+
+	w := acquireWaiter()
+	defer w.close()
+
+	w.notify(txn.TxnStatus_Committed)
+	w.notify(txn.TxnStatus_Aborted)
+}
+
+func TestWaiterTimeout(t *testing.T) {
+	w := acquireWaiter()
+	defer w.close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := w.wait(ctx)
+	assert.Error(t, err)
+}
+
+func TestNotifyWithEmptyWaiters(t *testing.T) {
+	nt := acquireNotifier()
+	defer nt.close(txn.TxnStatus_Aborted)
+
+	assert.Equal(t, 0, nt.notify(txn.TxnStatus_Active))
+}
+
+func TestNotify(t *testing.T) {
+	nt := acquireNotifier()
+	defer nt.close(txn.TxnStatus_Aborted)
+
+	w := acquireWaiter()
+	defer func() {
+		w.close()
+		assert.Equal(t, 0, w.mu.ref)
+		assert.False(t, w.mu.closed)
+		assert.False(t, w.mu.notified)
+	}()
+
+	nt.addWaiter(w, txn.TxnStatus_Prepared)
+	assert.Equal(t, 0, nt.notify(txn.TxnStatus_Active))
+	assert.Equal(t, 1, nt.notify(txn.TxnStatus_Prepared))
+
+	s, err := w.wait(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, txn.TxnStatus_Prepared, s)
+}
+
+func TestNotifyWithFinalStatus(t *testing.T) {
+	nt := acquireNotifier()
+
+	w := acquireWaiter()
+	defer w.close()
+
+	nt.addWaiter(w, txn.TxnStatus_Prepared)
+
+	nt.close(txn.TxnStatus_Aborted)
+
+	s, err := w.wait(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, txn.TxnStatus_Aborted, s)
+}
+
+func TestNotifyAfterWaiterClose(t *testing.T) {
+	nt := acquireNotifier()
+
+	w := acquireWaiter()
+	nt.addWaiter(w, txn.TxnStatus_Prepared)
+
+	w.close()
+	assert.Equal(t, 1, w.mu.ref)
+	assert.True(t, w.mu.closed)
+	assert.False(t, w.mu.notified)
+
+	assert.Equal(t, 0, nt.notify(txn.TxnStatus_Prepared))
+
+	assert.Equal(t, 0, w.mu.ref)
+	assert.False(t, w.mu.closed)
+	assert.False(t, w.mu.notified)
 }

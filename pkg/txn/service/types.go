@@ -28,8 +28,8 @@ import (
 //
 // The txn service use Clock-SI to implement distributed transaction.
 type TxnService interface {
-	// Metadata returns the metadata of DNShard
-	Metadata() metadata.DNShard
+	// Shard returns the metadata of DNShard
+	Shard() metadata.DNShard
 	// Close close the txn service
 	Close() error
 
@@ -77,7 +77,7 @@ type TxnStorage interface {
 	Read(txnMeta txn.TxnMeta, op int, payload []byte) (ReadResult, error)
 	// Write execute write requests sent by CN.
 	// TODO: Handle spec error by storage.
-	Write(txnMeta txn.TxnMeta, op int, payload []byte) error
+	Write(txnMeta txn.TxnMeta, op int, payload []byte) ([]byte, error)
 	// Prepare prepare data written by a transaction on a DNShard. TxnStorage needs to do conflict
 	// detection locally. The txn metadata(status change to prepared) and the data should be written to
 	// LogService.

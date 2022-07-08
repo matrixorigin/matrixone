@@ -68,8 +68,7 @@ func (m TxnRequest) DebugString() string {
 
 // DebugString returns debug string
 func (m TxnError) DebugString() string {
-	// TODO: impl
-	return ""
+	return fmt.Sprintf("%s: %s", m.Code.String(), m.Message)
 }
 
 // DebugString returns debug string
@@ -166,9 +165,9 @@ func (m TxnRequest) GetTargetDN() metadata.DNShard {
 	case TxnMethod_Read, TxnMethod_Write:
 		return m.CNRequest.Target
 	case TxnMethod_Commit:
-		return m.CommitRequest.DNShards[0]
+		return m.Txn.DNShards[0]
 	case TxnMethod_Rollback:
-		return m.RollbackRequest.DNShards[0]
+		return m.Txn.DNShards[0]
 	case TxnMethod_Prepare:
 		return m.PrepareRequest.DNShard
 	case TxnMethod_GetStatus:
