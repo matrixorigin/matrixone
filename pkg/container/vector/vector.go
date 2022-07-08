@@ -43,6 +43,14 @@ func (v *Vector[T]) Reset() {
 	}
 }
 
+func (v *Vector[T]) SetConst() {
+	v.IsConst = true
+}
+
+func (v *Vector[T]) SetData(data []byte) {
+	v.Data = data
+}
+
 func (v *Vector[T]) Length() int {
 	if v.IsConst {
 		return v.Const.Size

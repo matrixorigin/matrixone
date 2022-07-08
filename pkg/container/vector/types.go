@@ -47,6 +47,8 @@ type Vector[T types.Element] struct {
 type AnyVector interface {
 	Reset()
 	Length() int
+	SetConst()
+	SetData([]byte)
 	SetLength(n int)
 	Type() types.Type
 	Free(*mheap.Mheap)

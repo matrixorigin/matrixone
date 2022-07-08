@@ -17,8 +17,16 @@ package batch
 import (
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
+
+func New(n int) *Batch {
+	return &Batch{
+		Cnt:  1,
+		Vecs: make([]vector.AnyVector, n),
+	}
+}
 
 func Length(bat *Batch) int {
 	return len(bat.Zs)
