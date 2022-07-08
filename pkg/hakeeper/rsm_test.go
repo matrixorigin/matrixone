@@ -356,18 +356,31 @@ func TestSetState(t *testing.T) {
 		{pb.HAKeeperCreated, pb.HAKeeperBootstrapFailed, pb.HAKeeperCreated},
 		{pb.HAKeeperCreated, pb.HAKeeperRunning, pb.HAKeeperCreated},
 		{pb.HAKeeperCreated, pb.HAKeeperCreated, pb.HAKeeperCreated},
+		{pb.HAKeeperCreated, pb.HAKeeperBootstrapCommandsReceived, pb.HAKeeperCreated},
+
 		{pb.HAKeeperBootstrapping, pb.HAKeeperCreated, pb.HAKeeperBootstrapping},
-		{pb.HAKeeperBootstrapping, pb.HAKeeperBootstrapFailed, pb.HAKeeperBootstrapFailed},
-		{pb.HAKeeperBootstrapping, pb.HAKeeperRunning, pb.HAKeeperRunning},
+		{pb.HAKeeperBootstrapping, pb.HAKeeperBootstrapFailed, pb.HAKeeperBootstrapping},
+		{pb.HAKeeperBootstrapping, pb.HAKeeperRunning, pb.HAKeeperBootstrapping},
 		{pb.HAKeeperBootstrapping, pb.HAKeeperBootstrapping, pb.HAKeeperBootstrapping},
+		{pb.HAKeeperBootstrapping, pb.HAKeeperBootstrapCommandsReceived, pb.HAKeeperBootstrapCommandsReceived},
+
 		{pb.HAKeeperBootstrapFailed, pb.HAKeeperBootstrapFailed, pb.HAKeeperBootstrapFailed},
 		{pb.HAKeeperBootstrapFailed, pb.HAKeeperCreated, pb.HAKeeperBootstrapFailed},
 		{pb.HAKeeperBootstrapFailed, pb.HAKeeperBootstrapping, pb.HAKeeperBootstrapFailed},
 		{pb.HAKeeperBootstrapFailed, pb.HAKeeperRunning, pb.HAKeeperBootstrapFailed},
+		{pb.HAKeeperBootstrapFailed, pb.HAKeeperBootstrapCommandsReceived, pb.HAKeeperBootstrapFailed},
+
 		{pb.HAKeeperRunning, pb.HAKeeperRunning, pb.HAKeeperRunning},
 		{pb.HAKeeperRunning, pb.HAKeeperCreated, pb.HAKeeperRunning},
 		{pb.HAKeeperRunning, pb.HAKeeperBootstrapping, pb.HAKeeperRunning},
 		{pb.HAKeeperRunning, pb.HAKeeperBootstrapFailed, pb.HAKeeperRunning},
+		{pb.HAKeeperRunning, pb.HAKeeperBootstrapCommandsReceived, pb.HAKeeperRunning},
+
+		{pb.HAKeeperBootstrapCommandsReceived, pb.HAKeeperCreated, pb.HAKeeperBootstrapCommandsReceived},
+		{pb.HAKeeperBootstrapCommandsReceived, pb.HAKeeperBootstrapping, pb.HAKeeperBootstrapCommandsReceived},
+		{pb.HAKeeperBootstrapCommandsReceived, pb.HAKeeperBootstrapCommandsReceived, pb.HAKeeperBootstrapCommandsReceived},
+		{pb.HAKeeperBootstrapCommandsReceived, pb.HAKeeperBootstrapFailed, pb.HAKeeperBootstrapFailed},
+		{pb.HAKeeperBootstrapCommandsReceived, pb.HAKeeperRunning, pb.HAKeeperRunning},
 	}
 
 	for _, tt := range tests {
