@@ -77,7 +77,9 @@ SELECT * from t_timestamp WHERE id = 20200102;
 SELECT * from t_timestamp WHERE id = 2.0200102e7;
 -- @bvt:issue
 SELECT * from t_timestamp WHERE id = '20200102';
+-- @bvt:issue#3290
 SELECT * from t_timestamp WHERE id IN ('2020-01-01','2022-01-02');
+-- @bvt:issue
 -- @bvt:issue#3271
 SELECT * from t_timestamp WHERE id IN (2.0200101e7,2.0200102e7 );
 -- @bvt:issue
