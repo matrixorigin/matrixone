@@ -237,3 +237,48 @@ func TestSortDNStores(t *testing.T) {
 		assert.Equal(t, c.expected, output)
 	}
 }
+
+func TestIssue3814(t *testing.T) {
+	cases := []struct {
+		desc string
+
+		cluster pb.ClusterInfo
+		dn      pb.DNState
+		log     pb.LogState
+
+		expected error
+	}{
+		{
+			desc: "case not enough log store",
+			cluster: pb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          1,
+					NumberOfReplicas: 3,
+					Name:             "",
+				}},
+			},
+			log:      pb.LogState{},
+			expected: errors.New("not enough log stores"),
+		},
+		{
+			desc: "case not enough dn stores",
+			cluster: pb.ClusterInfo{
+				DNShards: []metadata.DNShardRecord{{
+					ShardID:    1,
+					LogShardID: 1,
+				}},
+			},
+			dn: pb.DNState{
+				Stores: map[string]pb.DNStoreInfo{},
+			},
+			expected: errors.New("not enough dn stores"),
+		},
+	}
+
+	for _, c := range cases {
+		alloc := util.NewTestIDAllocator(0)
+		bm := NewBootstrapManager(c.cluster)
+		_, err := bm.Bootstrap(alloc, c.dn, c.log)
+		assert.Equal(t, c.expected, err)
+	}
+}
