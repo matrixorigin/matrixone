@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,13 +15,22 @@
 package compare
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Compare interface {
-	Vector() *vector.Vector
-	Set(int, *vector.Vector)
+	Vector() vector.AnyVector
+	Set(int, vector.AnyVector)
+	Copy(int, int, int64, int64)
 	Compare(int, int, int64, int64) int
-	Copy(int, int, int64, int64, *process.Process) error
+}
+
+type compare[T types.All] struct {
+	xs  [][]T
+	cmp func(T, T) int
+	ns  []*nulls.Nulls
+	vs  []vector.AnyVector
+	cpy func([]T, []T, int64, int64)
 }

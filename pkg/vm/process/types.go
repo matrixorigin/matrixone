@@ -18,7 +18,6 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
@@ -35,9 +34,6 @@ type Register struct {
 	Ss [][]int64
 	// InputBatch, stores the result of the previous operator.
 	InputBatch *batch.Batch
-	// Vecs, temporarily stores the column data in the execution of operators
-	// and it can be reused in the future execution to avoid mem alloc and type casting overhead.
-	Vecs []*vector.Vector
 	// MergeReceivers, receives result of multi previous operators from other pipelines
 	// e.g. merge operator.
 	MergeReceivers []*WaitRegister

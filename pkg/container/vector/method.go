@@ -83,3 +83,9 @@ func NewWithType(typ types.Type) AnyVector {
 	}
 	panic(fmt.Sprintf("unexpected parameters [%v] for function NewWithType", typ))
 }
+
+func NewConst(typ types.Type) AnyVector {
+	v := NewWithType(typ)
+	v.SetConst()
+	return v
+}

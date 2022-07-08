@@ -70,19 +70,19 @@ type Ring interface {
 	// zs[0] = 1 means group 0 has 1 data.
 	// zs[1] = 2 means group 1 has 2 date.
 	// and data source may contain the NULL value and not always all numbers.
-	Eval(zs []int64) *vector.Vector
+	Eval(zs []int64) vector.AnyVector
 
 	// Fill use a row of the vector to update the data of ring's group
 	// i is the index number of the group
 	// j is the index number of the row
 	// z is the count number of the row, if N, there are other N-1 rows are same to this.
 	// and we should update the rings N times.
-	Fill(i int64, j int64, z int64, v *vector.Vector)
+	Fill(i int64, j int64, z int64, v vector.AnyVector)
 
 	// BulkFill use the whole vector to update the data of ring's group
 	// i is the index number of the group
 	// zs is the count number of each row.
-	BulkFill(i int64, zs []int64, v *vector.Vector)
+	BulkFill(i int64, zs []int64, v vector.AnyVector)
 
 	// BatchFill use part of the vector to update the data of ring's group
 	// 		os(origin-s) records information about which groups need to be updated
@@ -94,7 +94,7 @@ type Ring interface {
 	// 		ring's (vps[i]-1)th group is related to vector's (offset+i)th row.
 	// 		zs[i] is count number of the row[i]
 	// For a more detailed introduction of zs, please refer to comments of Function Fill.
-	BatchFill(offset int64, os []uint8, vps []uint64, zs []int64, v *vector.Vector)
+	BatchFill(offset int64, os []uint8, vps []uint64, zs []int64, v vector.AnyVector)
 
 	// Add may be called merge in other databases.
 	// It merges group1 and group2.
