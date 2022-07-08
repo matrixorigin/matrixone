@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
@@ -136,7 +136,7 @@ func (rel *baseRelation) Delete(_ uint64, data *vector.Vector, col string, _ eng
 	return nil
 }
 
-func (rel *baseRelation) NewReader(num int, _ extend.Extend, _ []byte, _ engine.Snapshot) (rds []engine.Reader) {
+func (rel *baseRelation) NewReader(num int, _ *plan.Expr, _ []byte, _ engine.Snapshot) (rds []engine.Reader) {
 	it := rel.handle.MakeBlockIt()
 	for i := 0; i < num; i++ {
 		reader := newReader(rel.handle, it)

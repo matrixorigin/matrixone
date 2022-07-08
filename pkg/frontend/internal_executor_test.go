@@ -33,7 +33,7 @@ func TestIe(t *testing.T) {
 }
 
 func TestProtoMoreCoverage(t *testing.T) {
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, config.ClusterCatalog)
+	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
 	executor := NewIternalExecutor(pu)
 	p := executor.proto
 	assert.True(t, p.IsEstablished())
