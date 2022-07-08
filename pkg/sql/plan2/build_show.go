@@ -41,7 +41,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	sql := `
 		SELECT mc.* 
 			FROM %s.mo_tables mt JOIN %s.mo_columns mc 
-				ON mt.relname = mc.att_relname 
+				ON mt.relname = mc.att_relname and mt.reldatabase=mc.att_database 
 		WHERE mt.reldatabase = '%s' AND mt.relname = '%s'
 	`
 	tblName := stmt.Name.Parts[0]
