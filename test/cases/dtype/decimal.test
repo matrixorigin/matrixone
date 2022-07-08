@@ -90,8 +90,6 @@ INSERT INTO t1 (id,a) VALUES
 (3,CAST(0x8000000000000000 AS UNSIGNED)),
 (4,CAST(0xFFFFFFFFFFFFFFFF AS UNSIGNED));
 UPDATE t1 SET b = a;
--- @bvt:issue
--- @bvt:issue#3673
 select distinct * from t1 where ((a = '2147483647') and (b = '2147483647'));
 select a,count(a) from t1 group by a having count(a)>=2;
 -- @bvt:issue
