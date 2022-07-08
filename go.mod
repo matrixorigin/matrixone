@@ -76,7 +76,7 @@ require (
 	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/valyala/fastrand v1.1.0 // indirect
 	github.com/valyala/histogram v1.2.0 // indirect
-	golang.org/x/sys v0.0.0-20220622161953-175b2fd9d664
+	golang.org/x/sys v0.0.0-20220622161953-175b2fd9d664 // indirect
 	gopkg.in/ini.v1 v1.57.0 // indirect
 )
 
