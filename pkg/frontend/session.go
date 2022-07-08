@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
@@ -416,6 +416,16 @@ func (th *TxnHandler) StartByBegin() error {
 	return err
 }
 
+func (th *TxnHandler) StartByBeginIfNeeded() error {
+	logutil.Infof("start txn by begin if needed")
+	var err error
+	if th.IsInTaeTxn() {
+		return nil
+	}
+	err = th.StartByBegin()
+	return err
+}
+
 func (th *TxnHandler) StartByAutocommit() error {
 	logutil.Infof("start txn by autocommit")
 	var err error
@@ -474,7 +484,8 @@ func (th *TxnHandler) commit(option int) error {
 			err = th.taeTxn.Commit()
 		}
 	case TxnInit, TxnEnd:
-		err = errorTaeTxnHasNotBeenBegan
+		//Note:behaviors look like mysql
+		//err = errorTaeTxnHasNotBeenBegan
 	case TxnErr:
 		err = errorTaeTxnInIllegalState
 	}
@@ -538,7 +549,8 @@ func (th *TxnHandler) rollback(option int) error {
 			err = th.taeTxn.Rollback()
 		}
 	case TxnInit, TxnEnd:
-		err = errorTaeTxnHasNotBeenBegan
+		//Note:behaviors look like mysql
+		//err = errorTaeTxnHasNotBeenBegan
 	case TxnErr:
 		err = errorTaeTxnInIllegalState
 	}

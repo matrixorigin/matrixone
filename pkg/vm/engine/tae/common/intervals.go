@@ -191,7 +191,34 @@ func NewClosedIntervals() *ClosedIntervals {
 		Intervals: make([]*ClosedInterval, 0),
 	}
 }
-
+func NewClosedIntervalsBySlice(array []uint64) *ClosedIntervals {
+	ranges := &ClosedIntervals{
+		Intervals: make([]*ClosedInterval, 0),
+	}
+	if len(array) == 0 {
+		return ranges
+	}
+	sort.Slice(array, func(i, j int) bool {
+		return array[i] < array[j]
+	})
+	interval := &ClosedInterval{Start: array[0]}
+	pre := array[0]
+	array = array[1:]
+	for _, idx := range array {
+		if idx <= pre+1 {
+			pre = idx
+			continue
+		} else {
+			interval.End = pre
+			ranges.Intervals = append(ranges.Intervals, interval)
+			interval = &ClosedInterval{Start: idx}
+			pre = idx
+		}
+	}
+	interval.End = pre
+	ranges.Intervals = append(ranges.Intervals, interval)
+	return ranges
+}
 func NewClosedIntervalsByInt(i uint64) *ClosedIntervals {
 	return &ClosedIntervals{
 		Intervals: []*ClosedInterval{{

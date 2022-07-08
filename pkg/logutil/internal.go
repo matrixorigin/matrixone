@@ -19,19 +19,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/BurntSushi/toml"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 // SetupMOLogger sets up the global logger for MO Server.
-func SetupMOLogger(path string) {
-	var conf loggerConfig
-	if _, err := toml.DecodeFile(path, &conf); err != nil {
-		panic(err)
-	}
-	logger, err := initMOLogger(&conf)
+func SetupMOLogger(conf *LogConfig) {
+	logger, err := initMOLogger(conf)
 	if err != nil {
 		panic(err)
 	}
@@ -40,7 +35,7 @@ func SetupMOLogger(path string) {
 }
 
 // initMOLogger initializes a zap Logger.
-func initMOLogger(cfg *loggerConfig) (*zap.Logger, error) {
+func initMOLogger(cfg *LogConfig) (*zap.Logger, error) {
 	return GetLoggerWithOptions(cfg.getLevel(), cfg.getEncoder(), cfg.getSyncer()), nil
 }
 
@@ -49,7 +44,7 @@ var _globalLogger atomic.Value
 
 // init initializes a default zap logger before set up logger.
 func init() {
-	conf := &loggerConfig{Level: "info", Format: "console"}
+	conf := &LogConfig{Level: "info", Format: "console"}
 	logger, _ := initMOLogger(conf)
 	replaceGlobalLogger(logger)
 }
@@ -64,7 +59,7 @@ func replaceGlobalLogger(logger *zap.Logger) {
 	_globalLogger.Store(logger)
 }
 
-type loggerConfig struct {
+type LogConfig struct {
 	Level      string `toml:"level"`
 	Format     string `toml:"format"`
 	Filename   string `toml:"filename"`
@@ -73,7 +68,7 @@ type loggerConfig struct {
 	MaxBackups int    `toml:"max-backups"`
 }
 
-func (cfg *loggerConfig) getSyncer() zapcore.WriteSyncer {
+func (cfg *LogConfig) getSyncer() zapcore.WriteSyncer {
 	if cfg.Filename == "" || cfg.Filename == "console" {
 		return getConsoleSyncer()
 	}
@@ -98,11 +93,11 @@ func (cfg *loggerConfig) getSyncer() zapcore.WriteSyncer {
 	})
 }
 
-func (cfg *loggerConfig) getEncoder() zapcore.Encoder {
+func (cfg *LogConfig) getEncoder() zapcore.Encoder {
 	return getLoggerEncoder(cfg.Format)
 }
 
-func (cfg *loggerConfig) getLevel() zap.AtomicLevel {
+func (cfg *LogConfig) getLevel() zap.AtomicLevel {
 	level := zap.NewAtomicLevel()
 	err := level.UnmarshalText([]byte(cfg.Level))
 	if err != nil {

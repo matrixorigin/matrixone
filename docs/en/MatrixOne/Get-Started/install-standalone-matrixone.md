@@ -4,7 +4,7 @@ MatrixOne supports Linux and MacOS. You can install a standalone MatrixOne versi
 
 Recommended hardware specification: x86 CPU with 4 cores and 32GB memory, with CentOS 7+ OS.
 
-## **Install From AUR**
+## **Method 1: Install From AUR**
 
 ArchLinux User can install MatrixOne from [AUR](https://aur.archlinux.org/packages/matrixone).
 
@@ -14,12 +14,12 @@ $ cd matrixone
 $ makepkg -rsi
 ```
 
-## **Building from source**
+## **Method 2: Building from source**
 
 #### 1. Install Go as necessary
 
 Go version 1.18 is required.
-  
+
 #### 2. Get the MatrixOne code
 
 ```
@@ -42,7 +42,7 @@ $ make build
 $ ./mo-server system_vars_config.toml
 ```
 
-## **Downloading binary packages**
+## **Method 3: Downloading binary packages**
 
 Starting with 0.3.0, you can download binary packages directly to run MatrixOne in the X86_64 Linux or Mac X86_64 environment.
 
@@ -68,7 +68,7 @@ $ unzip mo-server-v0.4.0-darwin-x86_64.zip
 $./mo-server system_vars_config.toml
 ```
 
-## **Using docker**
+## **Method 4: Using docker**
 
 #### 1. Install Docker
 
@@ -85,3 +85,13 @@ It will pull the image from Docker Hub if not exists.
 ```
 $ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
 ```
+
+!!! note  "<font size=4>note</font>"
+<font size=3>For the information on the user name and password, see step 2.</font>
+
+## Next step: Connect to MatrixOne Server
+
+When you finish installing MatrixOne, you can refer to the section below to connect to the MatrixOne server.
+
+See [Connect to MatrixOne server](https://docs.matrixorigin.io/0.4.0/MatrixOne/Get-Started/connect-to-matrixone-server/#2-connect-to-matrixone-server.html)
+.

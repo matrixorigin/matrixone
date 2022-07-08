@@ -126,20 +126,86 @@ func TestSendWithMultiDN(t *testing.T) {
 	}
 }
 
+func TestSendWithMultiDNAndLocal(t *testing.T) {
+	addrs := []string{testDN1Addr, testDN2Addr, testDN3Addr}
+	for _, addr := range addrs[1:] {
+		s := newTestTxnServer(t, addr)
+		defer func() {
+			assert.NoError(t, s.Close())
+		}()
+
+		s.RegisterRequestHandler(func(m morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+			request := m.(*txn.TxnRequest)
+			return cs.Write(&txn.TxnResponse{
+				RequestID:    request.GetID(),
+				CNOpResponse: &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", request.GetTargetDN().Address, sequence))},
+			}, morpc.SendOptions{})
+		})
+	}
+
+	sd, err := NewSender(nil, WithSenderLocalDispatch(func(d metadata.DNShard) TxnRequestHandleFunc {
+		if d.Address != testDN1Addr {
+			return nil
+		}
+		sequence := 0
+		return func(ctx context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
+			sequence++
+			resp.RequestID = req.RequestID
+			resp.CNOpResponse = &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", req.GetTargetDN().Address, sequence))}
+			return nil
+		}
+	}))
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, sd.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	var requests []txn.TxnRequest
+	n := 10
+	for i := 0; i < n; i++ {
+		requests = append(requests, txn.TxnRequest{
+			Method: txn.TxnMethod_Read,
+			CNRequest: &txn.CNOpRequest{
+				Target: metadata.DNShard{
+					Address: addrs[i%len(addrs)],
+				},
+			},
+		})
+	}
+
+	resps, err := sd.Send(ctx, requests)
+	assert.NoError(t, err)
+	assert.Equal(t, n, len(resps))
+
+	counts := make(map[string]int)
+	for i := 0; i < n; i++ {
+		addr := addrs[i%len(addrs)]
+		seq := 1
+		if v, ok := counts[addr]; ok {
+			seq = v + 1
+		}
+		counts[addr] = seq
+		assert.Equal(t, []byte(fmt.Sprintf("%s-%d", addr, seq)), resps[i].CNOpResponse.Payload)
+	}
+}
+
 func TestNewExecutor(t *testing.T) {
 	ts := newTestStream(1, nil)
 	defer func() {
 		assert.NoError(t, ts.Close())
 	}()
 
-	_, err := newExecutor(context.Background(), nil, ts)
+	_, err := newExecutor(context.Background(), nil, ts, false)
 	assert.NoError(t, err)
 }
 
 func TestNewExectorWithClosedStream(t *testing.T) {
 	ts := newTestStream(1, nil)
 	assert.NoError(t, ts.Close())
-	_, err := newExecutor(context.Background(), nil, ts)
+	_, err := newExecutor(context.Background(), nil, ts, false)
 	assert.Error(t, err)
 }
 
@@ -153,7 +219,7 @@ func TestExecute(t *testing.T) {
 		assert.NoError(t, ts.Close())
 	}()
 
-	exec, err := newExecutor(context.Background(), nil, ts)
+	exec, err := newExecutor(context.Background(), nil, ts, false)
 	assert.NoError(t, err)
 
 	n := 10
@@ -172,10 +238,34 @@ func TestExecute(t *testing.T) {
 	}
 }
 
+func TestExecuteWithLocalStream(t *testing.T) {
+	localHandle := func(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+		return nil
+	}
+
+	ts := newLocalStream(nil)
+	defer func() {
+		assert.NoError(t, ts.Close())
+	}()
+
+	exec, err := newExecutor(context.Background(), nil, ts, true)
+	assert.NoError(t, err)
+
+	n := 10
+	ts.setup(exec.ctx, make([]txn.TxnResponse, n), localHandle)
+	for i := 0; i < n; i++ {
+		assert.NoError(t, exec.execute(txn.NewTxnRequest(nil), i))
+	}
+	assert.Equal(t, n, len(exec.indexes))
+	for i := 0; i < n; i++ {
+		assert.Equal(t, i, exec.indexes[i])
+	}
+}
+
 func TestExecuteWithClosedStream(t *testing.T) {
 	ts := newTestStream(1, nil)
 
-	exec, err := newExecutor(context.Background(), nil, ts)
+	exec, err := newExecutor(context.Background(), nil, ts, false)
 	assert.NoError(t, err)
 
 	assert.NoError(t, ts.Close())
@@ -192,9 +282,36 @@ func TestWaitCompleted(t *testing.T) {
 	}()
 
 	n := 10
-	exec, err := newExecutor(context.Background(), make([]txn.TxnResponse, n), ts)
+	exec, err := newExecutor(context.Background(), make([]txn.TxnResponse, n), ts, false)
 	assert.NoError(t, err)
 
+	for i := 0; i < n; i++ {
+		assert.NoError(t, exec.execute(txn.NewTxnRequest(&txn.CNOpRequest{Payload: []byte{byte(n - i - 1)}}), n-i-1))
+	}
+
+	assert.NoError(t, exec.waitCompleted())
+	for i := 0; i < n; i++ {
+		assert.Equal(t, []byte{byte(i)}, exec.responses[i].CNOpResponse.Payload)
+	}
+}
+
+func TestWaitCompletedWithLocal(t *testing.T) {
+	localHandle := func(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+		response.RequestID = request.RequestID
+		response.CNOpResponse = &txn.CNOpResponse{Payload: request.CNRequest.Payload}
+		return nil
+	}
+
+	ts := newLocalStream(nil)
+	defer func() {
+		assert.NoError(t, ts.Close())
+	}()
+
+	n := 10
+	exec, err := newExecutor(context.Background(), make([]txn.TxnResponse, n), ts, true)
+	assert.NoError(t, err)
+
+	ts.setup(exec.ctx, exec.responses, localHandle)
 	for i := 0; i < n; i++ {
 		assert.NoError(t, exec.execute(txn.NewTxnRequest(&txn.CNOpRequest{Payload: []byte{byte(n - i - 1)}}), n-i-1))
 	}
@@ -215,7 +332,7 @@ func TestWaitCompletedWithContextDone(t *testing.T) {
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1)
-	exec, err := newExecutor(ctx, make([]txn.TxnResponse, 1), ts)
+	exec, err := newExecutor(ctx, make([]txn.TxnResponse, 1), ts, false)
 	assert.NoError(t, err)
 
 	assert.NoError(t, exec.execute(txn.NewTxnRequest(&txn.CNOpRequest{Payload: []byte{byte(0)}}), 0))
@@ -233,7 +350,7 @@ func TestWaitCompletedWithStreamClosed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	exec, err := newExecutor(ctx, make([]txn.TxnResponse, 1), ts)
+	exec, err := newExecutor(ctx, make([]txn.TxnResponse, 1), ts, false)
 	assert.NoError(t, err)
 	assert.NoError(t, exec.execute(txn.NewTxnRequest(&txn.CNOpRequest{Payload: []byte{byte(0)}}), 0))
 	<-ts.c

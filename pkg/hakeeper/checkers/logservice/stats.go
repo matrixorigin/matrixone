@@ -26,12 +26,12 @@ type stats struct {
 
 	// toAdd collects replicas that needs to be added in config.
 	// The key is shardID and the value is the number of replicas to be added.
-	toAdd map[uint64]int
+	toAdd map[uint64]uint32
 }
 
 func newStats() *stats {
 	return &stats{
 		toRemove: make(map[uint64][]replica),
-		toAdd:    make(map[uint64]int),
+		toAdd:    make(map[uint64]uint32),
 	}
 }

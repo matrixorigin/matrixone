@@ -15,12 +15,32 @@
 package compile
 
 import (
-	"strconv"
+	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedup"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopcomplement"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregate"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/complement"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergededup"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
@@ -28,17 +48,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/join"
-	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/times"
-	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
-	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transformer"
-	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/untransform"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var constBat *batch.Batch
+
+func init() {
+	constBat = batch.NewWithSize(0)
+	constBat.Zs = []int64{1}
+}
 
 func dupInstruction(in vm.Instruction) vm.Instruction {
 	rin := vm.Instruction{
@@ -54,38 +80,45 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		rin.Arg = &limit.Argument{
 			Limit: arg.Limit,
 		}
-	case *dedup.Argument:
-		rin.Arg = &dedup.Argument{}
+	case *join.Argument:
+		rin.Arg = &join.Argument{
+			IsPreBuild: arg.IsPreBuild,
+			Result:     arg.Result,
+			Conditions: arg.Conditions,
+		}
+	case *semi.Argument:
+		rin.Arg = &semi.Argument{
+			IsPreBuild: arg.IsPreBuild,
+			Result:     arg.Result,
+			Conditions: arg.Conditions,
+		}
+	case *left.Argument:
+		rin.Arg = &left.Argument{
+			IsPreBuild: arg.IsPreBuild,
+			Result:     arg.Result,
+			Conditions: arg.Conditions,
+		}
+	case *product.Argument:
+		rin.Arg = &product.Argument{
+			Result: arg.Result,
+		}
+	case *complement.Argument:
+		rin.Arg = &complement.Argument{
+			IsPreBuild: arg.IsPreBuild,
+			Result:     arg.Result,
+			Conditions: arg.Conditions,
+		}
+	case *offset.Argument:
+		rin.Arg = &offset.Argument{
+			Offset: arg.Offset,
+		}
 	case *order.Argument:
 		rin.Arg = &order.Argument{
 			Fs: arg.Fs,
 		}
 	case *projection.Argument:
 		rin.Arg = &projection.Argument{
-			Rs: arg.Rs,
 			Es: arg.Es,
-			As: arg.As,
-		}
-	case *transform.Argument:
-		rin.Arg = &transform.Argument{
-			Typ:        arg.Typ,
-			IsMerge:    arg.IsMerge,
-			FreeVars:   arg.FreeVars,
-			Restrict:   arg.Restrict,
-			Projection: arg.Projection,
-			BoundVars:  arg.BoundVars,
-		}
-	case *join.Argument:
-		rin.Arg = &join.Argument{
-			Vars:   arg.Vars,
-			Bats:   arg.Bats,
-			Result: arg.Result,
-		}
-	case *times.Argument:
-		rin.Arg = &times.Argument{
-			Vars:   arg.Vars,
-			Bats:   arg.Bats,
-			Result: arg.Result,
 		}
 	case *restrict.Argument:
 		rin.Arg = &restrict.Argument{
@@ -93,366 +126,481 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		}
 	case *output.Argument:
 		rin.Arg = &output.Argument{
-			Attrs: arg.Attrs,
-			Data:  arg.Data,
-			Func:  arg.Func,
+			Data: arg.Data,
+			Func: arg.Func,
 		}
+	case *loopjoin.Argument:
+		rin.Arg = &loopjoin.Argument{
+			Cond:   arg.Cond,
+			Result: arg.Result,
+		}
+	case *loopsemi.Argument:
+		rin.Arg = &loopsemi.Argument{
+			Cond:   arg.Cond,
+			Result: arg.Result,
+		}
+	case *loopleft.Argument:
+		rin.Arg = &loopleft.Argument{
+			Cond:   arg.Cond,
+			Result: arg.Result,
+		}
+	case *loopcomplement.Argument:
+		rin.Arg = &loopcomplement.Argument{
+			Cond:   arg.Cond,
+			Result: arg.Result,
+		}
+	case *dispatch.Argument:
+	case *connector.Argument:
+	default:
+		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Unsupport instruction %T\n", in.Arg)))
 	}
 	return rin
 }
 
-func constructDedup() *dedup.Argument {
-	return &dedup.Argument{}
-}
-
-func constructMergeDedup() *mergededup.Argument {
-	return &mergededup.Argument{}
-}
-
-func constructLimit(op *plan.Limit) *limit.Argument {
-	return &limit.Argument{
-		Limit: uint64(op.Limit),
-	}
-}
-
-func constructMergeLimit(op *plan.Limit) *mergelimit.Argument {
-	return &mergelimit.Argument{
-		Limit: uint64(op.Limit),
-	}
-}
-
-func constructOffset(op *plan.Offset) *offset.Argument {
-	return &offset.Argument{
-		Offset: uint64(op.Offset),
-	}
-}
-
-func constructMergeOffset(op *plan.Offset) *mergeoffset.Argument {
-	return &mergeoffset.Argument{
-		Offset: uint64(op.Offset),
-	}
-}
-
-func constructOrder(op *plan.Order) *order.Argument {
-	arg := &order.Argument{
-		Fs: make([]order.Field, len(op.Fs)),
-	}
-	for i, f := range op.Fs {
-		arg.Fs[i].Attr = f.Attr
-		arg.Fs[i].Type = order.Direction(f.Type)
-	}
-	return arg
-}
-
-func constructMergeOrder(op *plan.Order) *mergeorder.Argument {
-	arg := &mergeorder.Argument{
-		Fields: make([]order.Field, len(op.Fs)),
-	}
-	for i, f := range op.Fs {
-		arg.Fields[i].Attr = f.Attr
-		arg.Fields[i].Type = order.Direction(f.Type)
-	}
-	return arg
-
-}
-
-func constructTop(op interface{}, limit int64) *top.Argument {
-	fs := op.(*order.Argument).Fs
-	arg := &top.Argument{
-		Limit: limit,
-		Fs:    make([]top.Field, len(fs)),
-	}
-	for i, f := range fs {
-		arg.Fs[i].Attr = f.Attr
-		arg.Fs[i].Type = top.Direction(f.Type)
-	}
-	return arg
-}
-
-func constructMergeTop(op interface{}, limit int64) *mergetop.Argument {
-	fs := op.(*mergeorder.Argument).Fields
-	arg := &mergetop.Argument{
-		Limit:  limit,
-		Fields: make([]top.Field, len(fs)),
-	}
-	for i, f := range fs {
-		arg.Fields[i].Attr = f.Attr
-		arg.Fields[i].Type = top.Direction(f.Type)
-	}
-	return arg
-}
-
-func constructRestrict(op *plan.Restrict) *restrict.Argument {
+func constructRestrict(n *plan.Node) *restrict.Argument {
 	return &restrict.Argument{
-		E: op.E,
+		E: colexec.RewriteFilterExprList(n.FilterList),
 	}
 }
 
-func constructRename(op *plan.Rename) *projection.Argument {
-	arg := &projection.Argument{
-		Rs: make([]uint64, len(op.Rs)),
-		As: make([]string, len(op.As)),
-		Es: make([]extend.Extend, len(op.Es)),
+func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*deletion.Argument, error) {
+	dbSource, err := eg.Database(n.ObjRef.SchemaName, snapshot)
+	if err != nil {
+		return nil, err
 	}
-	for i := range op.Rs {
-		arg.As[i] = op.As[i]
-		arg.Es[i] = op.Es[i]
-		arg.Rs[i] = op.Rs[i]
+	relation, err := dbSource.Relation(n.TableDef.Name, snapshot)
+	if err != nil {
+		return nil, err
 	}
-	return arg
+	return &deletion.Argument{
+		TableSource:  relation,
+		UseDeleteKey: n.DeleteInfo.UseDeleteKey,
+		CanTruncate:  n.DeleteInfo.CanTruncate,
+	}, nil
 }
 
-func constructProjection(op *plan.Projection) *projection.Argument {
-	arg := &projection.Argument{
-		Rs: make([]uint64, len(op.Rs)),
-		As: make([]string, len(op.As)),
-		Es: make([]extend.Extend, len(op.Es)),
+func constructInsert(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*insert.Argument, error) {
+	db, err := eg.Database(n.ObjRef.SchemaName, snapshot)
+	if err != nil {
+		return nil, err
 	}
-	for i := range op.Rs {
-		arg.As[i] = op.As[i]
-		arg.Es[i] = op.Es[i]
-		arg.Rs[i] = op.Rs[i]
+	relation, err := db.Relation(n.TableDef.Name, snapshot)
+	if err != nil {
+		return nil, err
 	}
-	return arg
+	return &insert.Argument{
+		TargetTable:   relation,
+		TargetColDefs: n.TableDef.Cols,
+	}, nil
 }
 
-func constructResultProjection(op *plan.ResultProjection) *projection.Argument {
-	arg := &projection.Argument{
-		Rs: make([]uint64, len(op.Rs)),
-		As: make([]string, len(op.As)),
-		Es: make([]extend.Extend, len(op.Es)),
+func constructUpdate(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*update.Argument, error) {
+	dbSource, err := eg.Database(n.ObjRef.SchemaName, snapshot)
+	if err != nil {
+		return nil, err
 	}
-	for i := range op.Rs {
-		arg.As[i] = op.As[i]
-		arg.Es[i] = op.Es[i]
-		arg.Rs[i] = op.Rs[i]
+	relation, err := dbSource.Relation(n.TableDef.Name, snapshot)
+	if err != nil {
+		return nil, err
 	}
-	return arg
+	return &update.Argument{
+		TableSource: relation,
+		PriKey:      n.UpdateInfo.PriKey,
+		PriKeyIdx:   n.UpdateInfo.PriKeyIdx,
+		HideKey:     n.UpdateInfo.HideKey,
+		UpdateAttrs: n.UpdateInfo.UpdateAttrs,
+		OtherAttrs:  n.UpdateInfo.OtherAttrs,
+		AttrOrders:  n.UpdateInfo.AttrOrders,
+	}, nil
 }
 
-func constructUntransform(op *plan.Untransform) *untransform.Argument {
-	return &untransform.Argument{
-		FreeVars: op.FreeVars,
+func constructProjection(n *plan.Node) *projection.Argument {
+	return &projection.Argument{
+		Es: n.ProjectList,
 	}
 }
 
-func constructCAQUntransform(op *plan.Untransform) *untransform.Argument {
-	return &untransform.Argument{
-		FreeVars: op.FreeVars,
-		Type:     untransform.CAQ,
+func constructTop(n *plan.Node, proc *process.Process) *top.Argument {
+	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)
+	if err != nil {
+		panic(err)
+	}
+	fs := make([]top.Field, len(n.OrderBy))
+	for i, e := range n.OrderBy {
+		fs[i].E = e.Expr
+		if e.Flag == plan.OrderBySpec_DESC {
+			fs[i].Type = top.Descending
+		}
+	}
+	return &top.Argument{
+		Fs:    fs,
+		Limit: vec.Col.([]int64)[0],
 	}
 }
 
-func constructBareTransform(op *plan.Relation) *transform.Argument {
-	arg := &transform.Argument{
-		Typ: transform.Bare,
+func constructJoin(n *plan.Node, proc *process.Process) *join.Argument {
+	result := make([]join.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
-	if op.Cond != nil {
-		arg.Restrict = &restrict.Argument{E: op.Cond}
+	conds := make([][]join.Condition, 2)
+	{
+		conds[0] = make([]join.Condition, len(n.OnList))
+		conds[1] = make([]join.Condition, len(n.OnList))
 	}
-	if n := len(op.Proj.Es); n > 0 {
-		proj := &projection.Argument{
-			Rs: make([]uint64, n),
-			As: make([]string, n),
-			Es: make([]extend.Extend, n),
-		}
-		for i := range op.Proj.Es {
-			proj.As[i] = op.Proj.As[i]
-			proj.Es[i] = op.Proj.Es[i]
-			proj.Rs[i] = op.Proj.Rs[i]
-		}
-		arg.Projection = proj
+	for i, expr := range n.OnList {
+		conds[0][i].Expr, conds[1][i].Expr = constructJoinCondition(expr)
 	}
-	return arg
+	return &join.Argument{
+		IsPreBuild: false,
+		Conditions: conds,
+		Result:     result,
+	}
 }
 
-func constructBareTransformFromDerived(op *plan.DerivedRelation) *transform.Argument {
-	arg := &transform.Argument{
-		Typ: transform.Bare,
-	}
-	if op.Cond != nil {
-		arg.Restrict = &restrict.Argument{E: op.Cond}
-	}
-	if n := len(op.Proj.Es); n > 0 {
-		proj := &projection.Argument{
-			Rs: make([]uint64, n),
-			As: make([]string, n),
-			Es: make([]extend.Extend, n),
+func constructSemi(n *plan.Node, proc *process.Process) *semi.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		rel, pos := constructJoinResult(expr)
+		if rel != 0 {
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("complement result '%s' not support now", expr)))
 		}
-		for i := range op.Proj.Es {
-			proj.As[i] = op.Proj.As[i]
-			proj.Es[i] = op.Proj.Es[i]
-			proj.Rs[i] = op.Proj.Rs[i]
-		}
-		arg.Projection = proj
+		result[i] = pos
 	}
-	return arg
+	conds := make([][]semi.Condition, 2)
+	{
+		conds[0] = make([]semi.Condition, len(n.OnList))
+		conds[1] = make([]semi.Condition, len(n.OnList))
+	}
+	for i, expr := range n.OnList {
+		conds[0][i].Expr, conds[1][i].Expr = constructJoinCondition(expr)
+	}
+	return &semi.Argument{
+		IsPreBuild: false,
+		Conditions: conds,
+		Result:     result,
+	}
 }
 
-func constructTransform(op *plan.Relation) *transform.Argument {
-	arg := new(transform.Argument)
-	if len(op.FreeVars) == 0 {
-		arg.Typ = transform.BoundVars
-	} else {
-		arg.Typ = transform.FreeVarsAndBoundVars
-		arg.FreeVars = append(arg.FreeVars, op.FreeVars...)
+func constructLeft(n *plan.Node, proc *process.Process) *left.Argument {
+	result := make([]left.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
-	for _, bvar := range op.BoundVars {
-		arg.BoundVars = append(arg.BoundVars, transformer.Transformer{
-			Ref:   bvar.Ref,
-			Op:    bvar.Op,
-			Name:  bvar.Name,
-			Alias: bvar.Alias,
-		})
+	conds := make([][]left.Condition, 2)
+	{
+		conds[0] = make([]left.Condition, len(n.OnList))
+		conds[1] = make([]left.Condition, len(n.OnList))
 	}
-	if op.Cond != nil {
-		arg.Restrict = &restrict.Argument{E: op.Cond}
+	for i, expr := range n.OnList {
+		conds[0][i].Expr, conds[1][i].Expr = constructJoinCondition(expr)
 	}
-	if n := len(op.Proj.Es); n > 0 {
-		proj := &projection.Argument{
-			Rs: make([]uint64, n),
-			As: make([]string, n),
-			Es: make([]extend.Extend, n),
-		}
-		for i := range op.Proj.Es {
-			proj.As[i] = op.Proj.As[i]
-			proj.Es[i] = op.Proj.Es[i]
-			proj.Rs[i] = op.Proj.Rs[i]
-		}
-		arg.Projection = proj
+	return &left.Argument{
+		IsPreBuild: false,
+		Conditions: conds,
+		Result:     result,
 	}
-	return arg
 }
 
-func constructTransformFromDerived(op *plan.DerivedRelation) *transform.Argument {
-	arg := new(transform.Argument)
-	if len(op.FreeVars) == 0 {
-		arg.Typ = transform.BoundVars
-	} else {
-		arg.Typ = transform.FreeVarsAndBoundVars
-		arg.FreeVars = append(arg.FreeVars, op.FreeVars...)
+func constructProduct(n *plan.Node, proc *process.Process) *product.Argument {
+	result := make([]product.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
-	for _, bvar := range op.BoundVars {
-		arg.BoundVars = append(arg.BoundVars, transformer.Transformer{
-			Ref:   bvar.Ref,
-			Op:    bvar.Op,
-			Name:  bvar.Name,
-			Alias: bvar.Alias,
-		})
-	}
-	if op.Cond != nil {
-		arg.Restrict = &restrict.Argument{E: op.Cond}
-	}
-	if n := len(op.Proj.Es); n > 0 {
-		proj := &projection.Argument{
-			Rs: make([]uint64, n),
-			As: make([]string, n),
-			Es: make([]extend.Extend, n),
-		}
-		for i := range op.Proj.Es {
-			proj.As[i] = op.Proj.As[i]
-			proj.Es[i] = op.Proj.Es[i]
-			proj.Rs[i] = op.Proj.Rs[i]
-		}
-		arg.Projection = proj
-	}
-	return arg
+	return &product.Argument{Result: result}
 }
 
-func constructCAQTransform(op *plan.Relation) *transform.Argument {
-	arg := new(transform.Argument)
-	arg.IsMerge = true
-	if len(op.FreeVars) == 0 {
-		arg.Typ = transform.BoundVars
-	} else {
-		arg.Typ = transform.FreeVarsAndBoundVars
-		arg.FreeVars = append(arg.FreeVars, op.FreeVars...)
-	}
-	for _, bvar := range op.BoundVars {
-		arg.BoundVars = append(arg.BoundVars, transformer.Transformer{
-			Ref:   bvar.Ref,
-			Op:    bvar.Op,
-			Name:  bvar.Name,
-			Alias: bvar.Alias,
-		})
-	}
-	if op.Cond != nil {
-		arg.Restrict = &restrict.Argument{E: op.Cond}
-	}
-	if n := len(op.Proj.Es); n > 0 {
-		proj := &projection.Argument{
-			Rs: make([]uint64, n),
-			As: make([]string, n),
-			Es: make([]extend.Extend, n),
+func constructComplement(n *plan.Node, proc *process.Process) *complement.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		rel, pos := constructJoinResult(expr)
+		if rel != 0 {
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("complement result '%s' not support now", expr)))
 		}
-		for i := range op.Proj.Es {
-			proj.As[i] = op.Proj.As[i]
-			proj.Es[i] = op.Proj.Es[i]
-			proj.Rs[i] = op.Proj.Rs[i]
-		}
-		arg.Projection = proj
+		result[i] = pos
 	}
-	return arg
+	conds := make([][]complement.Condition, 2)
+	{
+		conds[0] = make([]complement.Condition, len(n.OnList))
+		conds[1] = make([]complement.Condition, len(n.OnList))
+	}
+	for i, expr := range n.OnList {
+		conds[0][i].Expr, conds[1][i].Expr = constructJoinCondition(expr)
+	}
+	return &complement.Argument{
+		IsPreBuild: false,
+		Conditions: conds,
+		Result:     result,
+	}
 }
 
-func constructCAQTransformFromDerived(op *plan.DerivedRelation) *transform.Argument {
-	arg := new(transform.Argument)
-	arg.IsMerge = true
-	if len(op.FreeVars) == 0 {
-		arg.Typ = transform.BoundVars
-	} else {
-		arg.Typ = transform.FreeVarsAndBoundVars
-		arg.FreeVars = append(arg.FreeVars, op.FreeVars...)
-	}
-	for _, bvar := range op.BoundVars {
-		arg.BoundVars = append(arg.BoundVars, transformer.Transformer{
-			Ref:   bvar.Ref,
-			Op:    bvar.Op,
-			Name:  bvar.Name,
-			Alias: bvar.Alias,
-		})
-	}
-	if op.Cond != nil {
-		arg.Restrict = &restrict.Argument{E: op.Cond}
-	}
-	if n := len(op.Proj.Es); n > 0 {
-		proj := &projection.Argument{
-			Rs: make([]uint64, n),
-			As: make([]string, n),
-			Es: make([]extend.Extend, n),
+func constructOrder(n *plan.Node, proc *process.Process) *order.Argument {
+	fs := make([]order.Field, len(n.OrderBy))
+	for i, e := range n.OrderBy {
+		fs[i].E = e.Expr
+		if e.Flag == plan.OrderBySpec_DESC {
+			fs[i].Type = order.Descending
 		}
-		for i := range op.Proj.Es {
-			proj.As[i] = op.Proj.As[i]
-			proj.Es[i] = op.Proj.Es[i]
-			proj.Rs[i] = op.Proj.Rs[i]
-		}
-		arg.Projection = proj
 	}
-	return arg
+	return &order.Argument{
+		Fs: fs,
+	}
 }
 
-func constructJoin(op *plan.Join) *join.Argument {
-	arg := new(join.Argument)
-	arg.Vars = make([][]string, len(op.Vars)-1)
-	for i := 1; i < len(op.Vars); i++ {
-		arg.Vars[i-1] = make([]string, len(op.Vars[i]))
-		for j := range op.Vars[i] {
-			arg.Vars[i-1][j] = strconv.Itoa(op.Vars[i][j])
-		}
+func constructOffset(n *plan.Node, proc *process.Process) *offset.Argument {
+	vec, err := colexec.EvalExpr(constBat, proc, n.Offset)
+	if err != nil {
+		panic(err)
 	}
-	arg.Result = append(arg.Result, op.Result...)
-	return arg
+	return &offset.Argument{
+		Offset: uint64(vec.Col.([]int64)[0]),
+	}
 }
 
-func constructTimes(op *plan.Join) *times.Argument {
-	arg := new(times.Argument)
-	arg.Vars = make([][]string, len(op.Vars)-1)
-	for i := 1; i < len(op.Vars); i++ {
-		arg.Vars[i-1] = make([]string, len(op.Vars[i]))
-		for j := range op.Vars[i] {
-			arg.Vars[i-1][j] = strconv.Itoa(op.Vars[i][j])
+func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
+	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)
+	if err != nil {
+		panic(err)
+	}
+	return &limit.Argument{
+		Limit: uint64(vec.Col.([]int64)[0]),
+	}
+}
+
+func constructGroup(n, cn *plan.Node) *group.Argument {
+	aggs := make([]aggregate.Aggregate, len(n.AggList))
+	for i, expr := range n.AggList {
+		if f, ok := expr.Expr.(*plan.Expr_F); ok {
+			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
+			f.F.Func.Obj = int64(uint64(f.F.Func.Obj) & function.DistinctMask)
+			fun, err := function.GetFunctionByID(f.F.Func.GetObj())
+			if err != nil {
+				panic(err)
+			}
+			aggs[i] = aggregate.Aggregate{
+				E:    f.F.Args[0],
+				Dist: distinct,
+				Op:   fun.AggregateInfo,
+			}
 		}
 	}
-	arg.Result = append(arg.Result, op.Result...)
-	return arg
+	typs := make([]types.Type, len(cn.ProjectList))
+	for i, e := range cn.ProjectList {
+		typs[i].Oid = types.T(e.Typ.Id)
+		typs[i].Width = e.Typ.Width
+		typs[i].Size = e.Typ.Size
+		typs[i].Scale = e.Typ.Scale
+		typs[i].Precision = e.Typ.Precision
+	}
+	return &group.Argument{
+		Aggs:  aggs,
+		Types: typs,
+		Exprs: n.GroupBy,
+	}
+}
+
+func constructMergeGroup(_ *plan.Node, needEval bool) *mergegroup.Argument {
+	return &mergegroup.Argument{
+		NeedEval: needEval,
+	}
+}
+
+func constructMergeTop(n *plan.Node, proc *process.Process) *mergetop.Argument {
+	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)
+	if err != nil {
+		panic(err)
+	}
+	fs := make([]top.Field, len(n.OrderBy))
+	for i, e := range n.OrderBy {
+		fs[i].E = e.Expr
+		if e.Flag == plan.OrderBySpec_DESC {
+			fs[i].Type = top.Descending
+		}
+	}
+	return &mergetop.Argument{
+		Fs:    fs,
+		Limit: vec.Col.([]int64)[0],
+	}
+}
+
+func constructMergeOffset(n *plan.Node, proc *process.Process) *mergeoffset.Argument {
+	vec, err := colexec.EvalExpr(constBat, proc, n.Offset)
+	if err != nil {
+		panic(err)
+	}
+	return &mergeoffset.Argument{
+		Offset: uint64(vec.Col.([]int64)[0]),
+	}
+}
+
+func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argument {
+	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)
+	if err != nil {
+		panic(err)
+	}
+	return &mergelimit.Argument{
+		Limit: uint64(vec.Col.([]int64)[0]),
+	}
+}
+
+func constructMergeOrder(n *plan.Node, proc *process.Process) *mergeorder.Argument {
+	fs := make([]order.Field, len(n.OrderBy))
+	for i, e := range n.OrderBy {
+		fs[i].E = e.Expr
+		if e.Flag == plan.OrderBySpec_DESC {
+			fs[i].Type = order.Descending
+		}
+	}
+	return &mergeorder.Argument{
+		Fs: fs,
+	}
+}
+
+func constructLoopJoin(n *plan.Node, proc *process.Process) *loopjoin.Argument {
+	result := make([]loopjoin.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+	}
+	return &loopjoin.Argument{
+		Result: result,
+		Cond:   colexec.RewriteFilterExprList(n.OnList),
+	}
+}
+
+func constructLoopSemi(n *plan.Node, proc *process.Process) *loopsemi.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		rel, pos := constructJoinResult(expr)
+		if rel != 0 {
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("complement result '%s' not support now", expr)))
+		}
+		result[i] = pos
+	}
+	return &loopsemi.Argument{
+		Result: result,
+		Cond:   colexec.RewriteFilterExprList(n.OnList),
+	}
+}
+
+func constructLoopLeft(n *plan.Node, proc *process.Process) *loopleft.Argument {
+	result := make([]loopleft.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+	}
+	return &loopleft.Argument{
+		Result: result,
+		Cond:   colexec.RewriteFilterExprList(n.OnList),
+	}
+}
+
+func constructLoopComplement(n *plan.Node, proc *process.Process) *loopcomplement.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		rel, pos := constructJoinResult(expr)
+		if rel != 0 {
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("complement result '%s' not support now", expr)))
+		}
+		result[i] = pos
+	}
+	return &loopcomplement.Argument{
+		Result: result,
+		Cond:   colexec.RewriteFilterExprList(n.OnList),
+	}
+}
+
+func constructJoinResult(expr *plan.Expr) (int32, int32) {
+	e, ok := expr.Expr.(*plan.Expr_Col)
+	if !ok {
+		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join result '%s' not support now", expr)))
+	}
+	return e.Col.RelPos, e.Col.ColPos
+}
+
+func constructJoinCondition(expr *plan.Expr) (*plan.Expr, *plan.Expr) {
+	if e, ok := expr.Expr.(*plan.Expr_C); ok { // constant bool
+		b, ok := e.C.Value.(*plan.Const_Bval)
+		if !ok {
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join condition '%s' not support now", expr)))
+		}
+		if b.Bval {
+			return expr, expr
+		}
+		return expr, &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Value: &plan.Const_Bval{Bval: true},
+				},
+			},
+		}
+	}
+	e, ok := expr.Expr.(*plan.Expr_F)
+	if !ok || !supportedJoinCondition(e.F.Func.GetObj()) {
+		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join condition '%s' not support now", expr)))
+	}
+	if exprRelPos(e.F.Args[0]) == 1 {
+		return e.F.Args[1], e.F.Args[0]
+	}
+	return e.F.Args[0], e.F.Args[1]
+}
+
+func isEquiJoin(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if e, ok := expr.Expr.(*plan.Expr_F); ok {
+			if !supportedJoinCondition(e.F.Func.GetObj()) {
+				return false
+			}
+			lpos, rpos := hasColExpr(e.F.Args[0], -1), hasColExpr(e.F.Args[1], -1)
+			if lpos == -1 || rpos == -1 || (lpos != rpos) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func supportedJoinCondition(id int64) bool {
+	fid, _ := function.DecodeOverloadID(id)
+	return fid == function.EQUAL
+}
+
+func hasColExpr(expr *plan.Expr, pos int32) int32 {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if pos == -1 {
+			return e.Col.ColPos
+		}
+		if pos != e.Col.ColPos {
+			return -1
+		}
+		return pos
+	case *plan.Expr_F:
+		for i := range e.F.Args {
+			pos0 := hasColExpr(e.F.Args[i], pos)
+			switch {
+			case pos0 == -1:
+			case pos == -1:
+				pos = pos0
+			case pos != pos0:
+				return -1
+			}
+		}
+		return pos
+	default:
+		return pos
+	}
+}
+
+func exprRelPos(expr *plan.Expr) int32 {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return e.Col.RelPos
+	case *plan.Expr_F:
+		for i := range e.F.Args {
+			if relPos := exprRelPos(e.F.Args[i]); relPos >= 0 {
+				return relPos
+			}
+		}
+	}
+	return -1
 }

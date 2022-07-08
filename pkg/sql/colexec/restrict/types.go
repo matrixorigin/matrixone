@@ -14,9 +14,8 @@
 
 package restrict
 
-import "github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 type Argument struct {
-	Attrs []string
-	E     extend.Extend
+	E *plan.Expr
 }

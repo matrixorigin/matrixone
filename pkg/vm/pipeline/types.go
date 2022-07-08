@@ -16,6 +16,7 @@ package pipeline
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // Pipeline contains the information associated with a pipeline in a query execution plan.
@@ -79,8 +80,7 @@ import (
 type Pipeline struct {
 	// attrs, column list.
 	attrs []string
-	// refCnts, reference count for attribute.
-	refCnts []uint64
-	// instructions, stores ordered instruction list that to be executed.
-	instructions vm.Instructions // orders to be executed.
+	// orders to be executed
+	instructions vm.Instructions
+	reg          *process.WaitRegister
 }

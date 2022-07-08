@@ -70,6 +70,8 @@ type PayloadMessage interface {
 type SendOptions struct {
 	// Timeout set write deadline for backend connection
 	Timeout time.Duration
+	// Arg send arg
+	Arg any
 }
 
 // RPCClient morpc is not a normal remote method call, rather it is a message-based asynchronous
