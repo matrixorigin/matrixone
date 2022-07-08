@@ -59,11 +59,8 @@ SELECT ROUND(sin(0.45), cos(0.8));
 #extreme value
 
 select round(999999999, -9);
--- @bvt:issue#3747
 select round(999999999.0, -9);
--- @bvt:issue
 select round(999999999999999999, -18);
--- @bvt:issue#3747
 select round(999999999999999999.0, -18);
 -- @bvt:issue
 

@@ -160,7 +160,6 @@ func main() {
 	}
 
 	configFilePath := args[0]
-	logutil.SetupMOLogger(configFilePath)
 
 	//before anything using the configuration
 	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
@@ -172,6 +171,17 @@ func main() {
 		logutil.Infof("Load config error:%v\n", err)
 		os.Exit(LoadConfigExit)
 	}
+
+	logConf := logutil.LogConfig{
+		Level:      config.GlobalSystemVariables.GetLogLevel(),
+		Format:     config.GlobalSystemVariables.GetLogFormat(),
+		Filename:   config.GlobalSystemVariables.GetLogFilename(),
+		MaxSize:    int(config.GlobalSystemVariables.GetLogMaxSize()),
+		MaxDays:    int(config.GlobalSystemVariables.GetLogMaxDays()),
+		MaxBackups: int(config.GlobalSystemVariables.GetLogMaxBackups()),
+	}
+
+	logutil.SetupMOLogger(&logConf)
 
 	//just initialize the tae after configuration has been loaded
 	if len(args) == 2 && args[1] == "initdb" {

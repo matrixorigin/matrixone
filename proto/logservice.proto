@@ -180,10 +180,11 @@ message LogRecordResponse {
 //
 
 enum HAKeeperState {
-  HAKeeperCreated = 0;
-  HAKeeperBootstrapping = 1;
-  HAKeeperBootstrapFailed = 2;
-  HAKeeperRunning = 3;
+  HAKeeperCreated                    = 0;
+  HAKeeperBootstrapping              = 1;
+  HAKeeperBootstrapCommandsReceived  = 2;
+  HAKeeperBootstrapFailed            = 3;
+  HAKeeperRunning                    = 4;
 }
 
 // Replica of the shard
@@ -228,10 +229,11 @@ enum ServiceType {
 message ScheduleCommand {
   // UUID which store the ScheduleCommand is sent to
   string UUID = 1;
+  bool Bootstrapping          = 2;
 
-  ConfigChange ConfigChange   = 2;
-  ServiceType ServiceType     = 3;
-  ShutdownStore ShutdownStore = 4;
+  ConfigChange ConfigChange   = 3;
+  ServiceType ServiceType     = 4;
+  ShutdownStore ShutdownStore = 5;
 }
 
 message CommandBatch {
@@ -294,6 +296,7 @@ message CheckerState {
   ClusterInfo ClusterInfo = 2 [(gogoproto.nullable) = false];
   DNState DNState         = 3 [(gogoproto.nullable) = false];
   LogState LogState       = 4 [(gogoproto.nullable) = false];
+  HAKeeperState State     = 5;
 }
 
 // HAKeeperRSMState contains state maintained by HAKeeper's RSM.

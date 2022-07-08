@@ -40,7 +40,7 @@ const (
 	// TickDuration defines the frequency of ticks.
 	TickDuration = time.Second
 	// CheckDuration defines how often HAKeeper checks the health state of the cluster
-	CheckDuration = 2 * time.Second
+	CheckDuration = time.Second
 	// DefaultHAKeeperShardID is the shard ID assigned to the special HAKeeper
 	// shard.
 	DefaultHAKeeperShardID uint64 = 0
@@ -251,9 +251,20 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 		return sm.Result{}
 	}
 
+	for _, c := range b.Commands {
+		if c.Bootstrapping {
+			if s.state.State != pb.HAKeeperBootstrapping {
+				return sm.Result{}
+			}
+		}
+	}
+
 	s.state.Term = b.Term
 	s.state.ScheduleCommands = make(map[string]pb.CommandBatch)
 	for _, c := range b.Commands {
+		if c.Bootstrapping {
+			s.handleSetStateCmd(GetSetStateCmd(pb.HAKeeperBootstrapCommandsReceived))
+		}
 		l, ok := s.state.ScheduleCommands[c.UUID]
 		if !ok {
 			l = pb.CommandBatch{
@@ -325,6 +336,12 @@ func (s *stateMachine) handleSetStateCmd(cmd []byte) sm.Result {
 	case pb.HAKeeperCreated:
 		return re()
 	case pb.HAKeeperBootstrapping:
+		if state == pb.HAKeeperBootstrapCommandsReceived {
+			s.state.State = state
+			return sm.Result{}
+		}
+		return re()
+	case pb.HAKeeperBootstrapCommandsReceived:
 		if state == pb.HAKeeperBootstrapFailed || state == pb.HAKeeperRunning {
 			s.state.State = state
 			return sm.Result{}
@@ -409,6 +426,7 @@ func (s *stateMachine) handleStateQuery() interface{} {
 		ClusterInfo: s.state.ClusterInfo,
 		DNState:     s.state.DNState,
 		LogState:    s.state.LogState,
+		State:       s.state.State,
 	}
 }
 

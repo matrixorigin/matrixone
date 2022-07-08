@@ -54,10 +54,21 @@ func NewStore(storeID string, length int, capacity int) *Store {
 	}
 }
 
+type StoreSlice []*Store
+
+func (ss StoreSlice) Contains(storeID string) bool {
+	for _, s := range ss {
+		if StoreID(storeID) == s.ID {
+			return true
+		}
+	}
+	return false
+}
+
 // ClusterStores collects stores by their status.
 type ClusterStores struct {
-	Working []*Store
-	Expired []*Store
+	Working StoreSlice
+	Expired StoreSlice
 }
 
 func NewClusterStores() *ClusterStores {
@@ -76,12 +87,12 @@ func (cs *ClusterStores) RegisterExpired(store *Store) {
 
 // WorkingStores returns all recorded working stores.
 // NB: the returned order isn't deterministic.
-func (cs *ClusterStores) WorkingStores() []*Store {
+func (cs *ClusterStores) WorkingStores() StoreSlice {
 	return cs.Working
 }
 
 // ExpiredStores returns all recorded expired stores.
 // NB: the returned order isn't deterministic.
-func (cs *ClusterStores) ExpiredStores() []*Store {
+func (cs *ClusterStores) ExpiredStores() StoreSlice {
 	return cs.Expired
 }

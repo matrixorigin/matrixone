@@ -158,3 +158,55 @@ func Test_RoundFloat64AndInt64(t *testing.T) {
 		}
 	})
 }
+
+func Test_Round2(t *testing.T) {
+	convey.Convey("Test_RoundFloat64AndInt64_2", t, func() {
+		type kase struct {
+			n      float64
+			format int64
+			want   float64
+		}
+
+		kases := []kase{
+			{
+				n:      999999999.0,
+				format: -9,
+				want:   1000000000,
+			},
+			{
+				n:      999999999.0,
+				format: -8,
+				want:   1000000000,
+			},
+			{
+				n:      999999999999999999.0,
+				format: -18,
+				want:   1000000000000000000,
+			},
+			{
+				n:      999999999999999999.0,
+				format: -10,
+				want:   1000000000000000000,
+			},
+			{
+				n:      9999999.99999999999,
+				format: 10,
+				want:   10000000.0000000000,
+			},
+		}
+		for _, k := range kases {
+			srcVector := testutil.MakeScalarFloat64(k.n, 1)
+			formatVector := testutil.MakeScalarInt64(k.format, 1)
+
+			wantVec := testutil.MakeScalarFloat64(k.want, 1)
+			proc := testutil.NewProc()
+			res, err := RoundFloat64([]*vector.Vector{srcVector, formatVector}, proc)
+			convey.So(err, convey.ShouldBeNil)
+			compare := testutil.CompareVectors(wantVec, res)
+			convey.So(compare, convey.ShouldBeTrue)
+
+		}
+
+	})
+
+}
