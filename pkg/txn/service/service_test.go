@@ -13,15 +13,3 @@
 // limitations under the License.
 
 package service
-
-import "testing"
-
-func BenchmarkBB(b *testing.B) {
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		v := bb()
-		if v.PrepareRequest == nil {
-			b.Fail()
-		}
-	}
-}

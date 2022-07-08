@@ -175,6 +175,44 @@ func (s *service) releaseTxnContext(txnCtx *txnContext) {
 	s.pool.Put(txnCtx)
 }
 
+func (s *service) parallelSendNotify(ctx context.Context,
+	purpose string,
+	txnMeta txn.TxnMeta,
+	requests []txn.TxnRequest) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			responses, err := s.sender.Send(ctx, requests)
+			if err != nil {
+				s.logger.Error("send requests failed",
+					zap.String("purpose", purpose),
+					util.TxnIDFieldWithID(txnMeta.ID),
+					zap.Error(err))
+				continue
+			}
+			hasError := false
+			newRequests := requests[:0]
+			for idx, resp := range responses {
+				if resp.TxnError != nil {
+					hasError = true
+					s.logger.Error("send requests failed, retry later",
+						zap.String("purpose", purpose),
+						util.TxnIDFieldWithID(txnMeta.ID),
+						zap.String("target-dn-shard", txnMeta.DNShards[idx+1].DebugString()),
+						zap.Error(err))
+					newRequests = append(newRequests, requests[idx])
+				}
+			}
+			if !hasError {
+				return
+			}
+			requests = newRequests
+		}
+	}
+}
+
 type txnContext struct {
 	nt       *notifier
 	createAt time.Time
@@ -217,10 +255,6 @@ func (c *txnContext) getTxnLocked() txn.TxnMeta {
 	return c.mu.txn
 }
 
-func (c *txnContext) updateTxnLocked(txn txn.TxnMeta) {
-	c.mu.txn = txn
-}
-
 func (c *txnContext) resetLocked() {
 	c.nt.close(c.mu.txn.Status)
 	c.nt = nil
@@ -245,11 +279,4 @@ func (s *service) mustGetTimeoutAtFromContext(ctx context.Context) int64 {
 		s.logger.Fatal("context deadline not set")
 	}
 	return deadline.UnixNano()
-}
-
-func bb() txn.TxnRequest {
-	return txn.TxnRequest{
-		Method:         txn.TxnMethod_Prepare,
-		PrepareRequest: &txn.TxnPrepareRequest{DNShard: metadata.DNShard{}},
-	}
 }

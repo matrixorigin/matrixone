@@ -147,6 +147,8 @@ enum TxnMethod {
     // immediately, otherwise when the transaction coordinator node is down and restarted, the commit 
     // status of the transaction cannot be determined in the recovery process, as it is possible that
     // some participating DNShards cannot find the transaction information.
+    //
+    // TODO: needs to work with TAE's log compaction, not currently supported.
     RemoveMedata      = 8;
 }
 

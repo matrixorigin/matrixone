@@ -17,6 +17,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
@@ -197,16 +198,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	// 1. send prepare request to all DNShards.
 	// 2. start async commit task if all prepare succeed.
 	// 3. response to client txn committed.
-
-	// TODO: At present, due to TAE, the prepare phase cannot be fully parallelized. Later, we need to change
-	// it to fully parallelized and add an RPC request to delete the memory metadata left by TAE after Commit,
-	// i.e. TAE does not delete the metadata immediately after Commit.
-	if err := s.storage.Prepare(newTxn); err != nil {
-		changeStatus(txn.TxnStatus_Aborted)
-		response.TxnError = newTAEPrepareError(err)
-		return nil
-	}
-	for _, dn := range newTxn.DNShards[1:] {
+	for _, dn := range newTxn.DNShards {
 		txnCtx.mu.requests = append(txnCtx.mu.requests, txn.TxnRequest{
 			Txn:            newTxn,
 			Method:         txn.TxnMethod_Prepare,
@@ -214,11 +206,12 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 			PrepareRequest: &txn.TxnPrepareRequest{DNShard: dn},
 		})
 	}
+	//
 	responses, err := s.sender.Send(ctx, txnCtx.mu.requests)
 	if err != nil {
-		s.startAsyncRollbackTask(newTxn)
 		changeStatus(txn.TxnStatus_Aborted)
 		response.TxnError = newRPCError(err)
+		s.startAsyncRollbackTask(newTxn)
 		return nil
 	}
 	hasError := false
@@ -229,23 +222,22 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 				util.TxnIDFieldWithID(txnID),
 				zap.String("target-dn-shard", newTxn.DNShards[1+idx].DebugString()),
 				zap.String("error", resp.TxnError.DebugString()))
+			continue
+		}
+
+		if newTxn.CommitTS == nil {
+			newTxn.CommitTS = resp.Txn.PreparedTS
 		}
 	}
 	if hasError {
-		s.startAsyncRollbackTask(newTxn)
 		changeStatus(txn.TxnStatus_Aborted)
 		response.TxnError = newRPCError(err)
-		return nil
-	}
-
-	// all dnshards prepared
-	if err := s.startAsyncCommitTask(newTxn); err != nil {
 		s.startAsyncRollbackTask(newTxn)
-		changeStatus(txn.TxnStatus_Aborted)
-		response.TxnError = newTAECommitError(err)
 		return nil
 	}
 
+	// All DNShards means completed
+	s.startAsyncCommitTask(newTxn)
 	changeStatus(txn.TxnStatus_Committed)
 	return nil
 }
@@ -294,63 +286,53 @@ func (s *service) checkCNRequest(request *txn.TxnRequest) {
 }
 
 func (s *service) startAsyncRollbackTask(txnMeta txn.TxnMeta) {
-	if err := s.storage.Rollback(txnMeta); err != nil {
-		s.logger.Error("rollback coordinator dn failed",
-			util.TxnIDFieldWithID(txnMeta.ID),
-			zap.Error(err))
-	}
-	if len(txnMeta.DNShards) == 1 {
-		return
-	}
-
-	// rollback other dnshards
 	s.stopper.RunTask(func(ctx context.Context) {
-		requests := make([]txn.TxnRequest, 0, len(txnMeta.DNShards)-1)
-		for _, dn := range txnMeta.DNShards[1:] {
+		requests := make([]txn.TxnRequest, 0, len(txnMeta.DNShards))
+		for _, dn := range txnMeta.DNShards {
 			requests = append(requests, txn.TxnRequest{
 				Txn:            txnMeta,
 				Method:         txn.TxnMethod_Prepare,
-				TimeoutAt:      s.mustGetTimeoutAtFromContext(ctx),
 				PrepareRequest: &txn.TxnPrepareRequest{DNShard: dn},
 			})
 		}
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				responses, err := s.sender.Send(ctx, requests)
-				if err != nil {
-					s.logger.Error("async rollback DNShard failed",
-						util.TxnIDFieldWithID(txnMeta.ID),
-						zap.Error(err))
-					break
-				}
-				hasError := false
-				for idx, resp := range responses {
-					if resp.TxnError != nil {
-						hasError = true
-						s.logger.Error("async rollback DNShard failed",
-							util.TxnIDFieldWithID(txnMeta.ID),
-							zap.String("target-dn-shard", txnMeta.DNShards[idx+1].DebugString()),
-							zap.Error(err))
-					}
-				}
-				if !hasError {
-					return
-				}
-			}
-		}
+		s.parallelSendNotify(ctx, "rollback txn", txnMeta, requests)
 	})
 }
 
-func (s *service) startAsyncCommitTask(txn txn.TxnMeta) error {
-	if err := s.storage.Commit(txn); err != nil {
-		s.logger.Error("commit coordinator dn failed",
-			util.TxnIDFieldWithID(txn.ID),
-			zap.Error(err))
-		return err
-	}
-	return nil
+func (s *service) startAsyncCommitTask(txnMeta txn.TxnMeta) error {
+	return s.stopper.RunTask(func(ctx context.Context) {
+		txnMeta.Status = txn.TxnStatus_Committing
+
+		for {
+			err := s.storage.Committing(txnMeta)
+			if err == nil {
+				break
+			}
+			s.logger.Error("save committing txn failed, retry later",
+				util.TxnIDFieldWithID(txnMeta.ID),
+				zap.Error(err))
+			// TODO: make config
+			time.Sleep(time.Second)
+		}
+
+		requests := make([]txn.TxnRequest, 0, len(txnMeta.DNShards))
+		for _, dn := range txnMeta.DNShards {
+			requests = append(requests, txn.TxnRequest{
+				Txn:                  txnMeta,
+				Method:               txn.TxnMethod_CommitDNShard,
+				CommitDNShardRequest: &txn.TxnCommitDNShardRequest{DNShard: dn},
+			})
+		}
+
+		s.parallelSendNotify(ctx, "commit txn", txnMeta, requests[1:])
+		if ce := s.logger.Check(zap.DebugLevel, "other dnshards committed"); ce != nil {
+			ce.Write(util.TxnIDFieldWithID(txnMeta.ID))
+		}
+
+		s.parallelSendNotify(ctx, "commit txn", txnMeta, requests[:1])
+		if ce := s.logger.Check(zap.DebugLevel, "coordinator dnshard committed, txn committed"); ce != nil {
+			ce.Write(util.TxnIDFieldWithID(txnMeta.ID))
+		}
+	})
 }

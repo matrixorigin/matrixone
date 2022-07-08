@@ -85,8 +85,9 @@ type TxnStorage interface {
 	// Note that for a distributed transaction, when all DNShards are Prepared, then the transaction is
 	// considered to have been committed.
 	Prepare(txnMeta txn.TxnMeta) error
-	// GetStatus returns the status of a transaction on the current DNShard.
-	GetStatus(txnID []byte) (txn.TxnMeta, error)
+	// Committing for distributed transactions, all participating DNShards have been PREPARED and the status
+	// of the transaction is logged to the LogService.
+	Committing(txnMeta txn.TxnMeta) error
 	// Commit commit the transaction. TxnStorage needs to do conflict locally.
 	Commit(txnMeta txn.TxnMeta) error
 	// Rollback rollback the transaction.
