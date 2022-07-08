@@ -81,9 +81,12 @@ SELECT * from t_timestamp WHERE id IN (2.0200101e7,2.0200102e7 );
 -- @bvt:issue
 -- @bvt:issue#3739
 SELECT * from t_timestamp WHERE id IN ('20220101', 20220102);
+-- @bvt:issue#3739
 SELECT * from t_timestamp WHERE id IN ('2.0200101e7','2.0200102e7');
 SELECT * from t_timestamp WHERE id BETWEEN 20191231 AND 20200101;
+-- @bvt:issue#3271
 SELECT * from t_timestamp WHERE id BETWEEN 2.0200101e7 and 2.0200102e7;
+-- @bvt:issue
 SELECT * from t_timestamp WHERE id BETWEEN '2020-01-01' AND '2020-01-02';
 SELECT * from t_timestamp WHERE id BETWEEN '2022-01-01 00:00:00' AND '2022-01-02 00:00:00.000000';
 -- @bvt:issue
