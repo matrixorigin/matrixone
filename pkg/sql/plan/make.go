@@ -136,12 +136,15 @@ func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
 	t := &plan.Expr{Expr: &plan.Expr_T{T: &plan.TargetType{
 		Typ: copyType(targetType),
 	}}}
-	return &plan.Expr{Expr: &plan.Expr_F{
-		F: &plan.Function{
-			Func: &ObjectRef{Obj: id},
-			Args: []*Expr{expr, t},
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &ObjectRef{Obj: id},
+				Args: []*Expr{expr, t},
+			},
 		},
-	}}, nil
+		Typ: targetType,
+	}, nil
 }
 
 func copyType(t *Type) *Type {
