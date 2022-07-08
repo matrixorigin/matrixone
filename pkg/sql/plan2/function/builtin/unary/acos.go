@@ -32,10 +32,11 @@ type acosResult struct {
 func acos(inputValues []float64, rs []float64) acosResult {
 	result := acosResult{Result: rs, Nsp: new(nulls.Nulls)}
 	for i, n := range inputValues {
-		if n < -1 || n > 1 {
+		r := math.Acos(n)
+		if math.IsNaN(r) {
 			nulls.Add(result.Nsp, uint64(i))
 		} else {
-			result.Result[i] = math.Acos(n)
+			result.Result[i] = r
 		}
 	}
 	return result
@@ -55,7 +56,6 @@ func Acos(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 			origVecCol := vector.MustTCols[float64](origVec)
 			resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
 			resultValues := make([]float64, 1)
-			// nulls.Set(resultVector.Nsp, origVec.Nsp)
 			results := acos(origVecCol, resultValues)
 			if nulls.Any(results.Nsp) {
 				return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
