@@ -20,30 +20,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 )
 
-// state values
 const (
-	running = iota
-	end
+	Build = iota
+	Eval
+	End
 )
 
-type container struct {
-	// state signs the statement of mergeOrder operator
-	//	1. if state is running, operator still range the mergeReceivers to do merge-sort.
-	//	2. if state is end, operator has done and should push data to next operator.
-	state uint8
+type Container struct {
+	n     int // result vector number
+	state int
+	poses []int32           // sorted list of attributes
+	cmps  []compare.Compare // compare structures used to do sort work for attrs
 
-	attrs []string // sorted list of attributes
-	ds    []bool   // Directions, ds[i] == true: the attrs[i] are in descending order
-
-	cmps []compare.Compare // compare structures used to do sort work for attrs
-
-	// bat store the result of merge-order
-	bat *batch.Batch
+	bat *batch.Batch // bat store the result of merge-order
 }
 
 type Argument struct {
-	// Fields store the order information
-	Fields []order.Field
-	// ctr stores the attributes needn't do Serialization work
-	ctr container
+	Fs  []order.Field // Fields store the order information
+	ctr *Container    // ctr stores the attributes needn't do Serialization work
 }

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -26,8 +27,10 @@ const (
 	minIDAllocCapacity uint64 = 1024
 	defaultIDBatchSize uint64 = 1024 * 10
 
-	hakeeperDefaultTimeout   = time.Second
+	hakeeperDefaultTimeout   = 2 * time.Second
 	hakeeperCmdUploadTimeout = 10 * time.Second
+
+	checkBootstrapInterval = 100
 )
 
 type idAllocator struct {
@@ -64,6 +67,24 @@ func (a *idAllocator) Capacity() uint64 {
 	return 0
 }
 
+func (l *store) setInitialClusterInfo(numOfLogShards uint64,
+	numOfDNShards uint64, numOfLogReplicas uint64) error {
+	cmd := hakeeper.GetInitialClusterRequestCmd(numOfLogShards,
+		numOfDNShards, numOfLogReplicas)
+	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+	defer cancel()
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		plog.Errorf("failed to propose initial cluster info, %v", err)
+		return err
+	}
+	if result.Value != uint64(pb.HAKeeperCreated) {
+		plog.Errorf("tried to set initial cluster info again")
+	}
+	return nil
+}
+
 func (l *store) updateIDAlloc(count uint64) error {
 	cmd := hakeeper.GetGetIDCmd(count)
 	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
@@ -79,35 +100,147 @@ func (l *store) updateIDAlloc(count uint64) error {
 	return nil
 }
 
-func (l *store) healthCheck() {
-	leaderID, term, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
+func (l *store) hakeeperCheck() {
+	isLeader, term, err := l.isLeaderHAKeeper()
 	if err != nil {
 		plog.Errorf("failed to get HAKeeper Leader ID, %v", err)
 		return
 	}
-	if ok && leaderID == l.haKeeperReplicaID {
-		if l.alloc.Capacity() < minIDAllocCapacity {
-			if err := l.updateIDAlloc(defaultIDBatchSize); err != nil {
-				// TODO: check whether this is temp error
-				plog.Errorf("failed to update ID alloc, %v", err)
-				return
-			}
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
-		defer cancel()
-		s, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID, &hakeeper.StateQuery{})
+
+	if isLeader {
+		state, err := l.getCheckerState()
 		if err != nil {
 			// TODO: check whether this is temp error
+			plog.Errorf("failed to get checker state, %v", err)
 			return
 		}
-		state := s.(*pb.CheckerState)
-		cmds := l.checker.Check(l.alloc,
-			state.ClusterInfo, state.DNState, state.LogState, state.Tick)
-		if len(cmds) > 0 {
-			if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
-				// TODO: check whether this is temp error
-				return
-			}
+		switch state.State {
+		case pb.HAKeeperCreated:
+			plog.Warningf("missing initial cluster info, check skipped")
+			return
+		case pb.HAKeeperBootstrapping:
+			l.bootstrap(term, state)
+		case pb.HAKeeperBootstrapCommandsReceived:
+			l.checkBootstrap(state)
+		case pb.HAKeeperBootstrapFailed:
+			l.handleBootstrapFailure()
+		case pb.HAKeeperRunning:
+			l.healthCheck(term, state)
+		default:
+			panic("unknown HAKeeper state")
 		}
 	}
+}
+
+func (l *store) assertHAKeeperState(s pb.HAKeeperState) {
+	state, err := l.getCheckerState()
+	if err != nil {
+		// TODO: check whether this is temp error
+		plog.Errorf("failed to get checker state, %v", err)
+		return
+	}
+	if state.State != s {
+		plog.Panicf("expected state %s, got %s", s, state.State)
+	}
+}
+
+func (l *store) handleBootstrapFailure() {
+	panic("failed to bootstrap the cluster")
+}
+
+func (l *store) healthCheck(term uint64, state *pb.CheckerState) {
+	l.assertHAKeeperState(pb.HAKeeperRunning)
+	defer l.assertHAKeeperState(pb.HAKeeperRunning)
+	cmds, err := l.getScheduleCommand(true, term, state)
+	if err != nil {
+		plog.Errorf("failed to get check schedule commands, %v", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+	defer cancel()
+	if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
+		// TODO: check whether this is temp error
+		plog.Infof("failed to add schedule commands, %v", err)
+		return
+	}
+}
+
+func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
+	cmds, err := l.getScheduleCommand(false, term, state)
+	if err != nil {
+		plog.Errorf("failed to get bootstrap schedule commands, %v", err)
+		return
+	}
+	if len(cmds) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+		defer cancel()
+		if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
+			// TODO: check whether this is temp error
+			plog.Infof("failed to add schedule commands, %v", err)
+			return
+		}
+		l.bootstrapCheckInterval = checkBootstrapInterval
+		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo)
+		l.assertHAKeeperState(pb.HAKeeperBootstrapCommandsReceived)
+	}
+}
+
+func (l *store) checkBootstrap(state *pb.CheckerState) {
+	if l.bootstrapCheckInterval == 0 {
+		if err := l.setBootstrapState(false); err != nil {
+			panic(err)
+		}
+		l.assertHAKeeperState(pb.HAKeeperBootstrapFailed)
+	}
+
+	if l.bootstrapMgr == nil {
+		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo)
+	}
+	if !l.bootstrapMgr.CheckBootstrap(state.LogState) {
+		l.bootstrapCheckInterval--
+	} else {
+		if err := l.setBootstrapState(true); err != nil {
+			panic(err)
+		}
+		l.assertHAKeeperState(pb.HAKeeperRunning)
+	}
+}
+
+func (l *store) setBootstrapState(success bool) error {
+	state := pb.HAKeeperRunning
+	if !success {
+		state = pb.HAKeeperBootstrapFailed
+	}
+	cmd := hakeeper.GetSetStateCmd(state)
+	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+	defer cancel()
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	_, err := l.propose(ctx, session, cmd)
+	return err
+}
+
+func (l *store) getCheckerState() (*pb.CheckerState, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+	defer cancel()
+	s, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID, &hakeeper.StateQuery{})
+	if err != nil {
+		return &pb.CheckerState{}, err
+	}
+	return s.(*pb.CheckerState), nil
+}
+
+func (l *store) getScheduleCommand(check bool,
+	term uint64, state *pb.CheckerState) ([]pb.ScheduleCommand, error) {
+	if l.alloc.Capacity() < minIDAllocCapacity {
+		if err := l.updateIDAlloc(defaultIDBatchSize); err != nil {
+			return nil, err
+		}
+	}
+
+	if check {
+		return l.checker.Check(l.alloc,
+			state.ClusterInfo, state.DNState, state.LogState, state.Tick), nil
+	}
+	m := bootstrap.NewBootstrapManager(state.ClusterInfo)
+	return m.Bootstrap(l.alloc, state.DNState, state.LogState)
 }

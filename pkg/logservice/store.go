@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -99,6 +100,9 @@ type store struct {
 	checker           hakeeper.Checker
 	alloc             hakeeper.IDAllocator
 	stopper           *stopper.Stopper
+
+	bootstrapCheckInterval uint64
+	bootstrapMgr           *bootstrap.Manager
 
 	mu struct {
 		sync.Mutex
@@ -504,7 +508,7 @@ func (l *store) ticker(ctx context.Context) {
 		case <-ticker.C:
 			l.hakeeperTick()
 		case <-haTicker.C:
-			l.healthCheck()
+			l.hakeeperCheck()
 		case <-ctx.Done():
 			return
 		}
@@ -524,14 +528,24 @@ func (l *store) truncationWorker(ctx context.Context) {
 	}
 }
 
+func (l *store) isLeaderHAKeeper() (bool, uint64, error) {
+	leaderID, term, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
+	if err != nil {
+		plog.Errorf("failed to get HAKeeper Leader ID, %v", err)
+		return false, 0, err
+	}
+	return ok && leaderID == l.haKeeperReplicaID, term, nil
+}
+
 // TODO: add test for this
 func (l *store) hakeeperTick() {
-	leaderID, _, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
+	isLeader, _, err := l.isLeaderHAKeeper()
 	if err != nil {
 		plog.Errorf("failed to get HAKeeper Leader ID, %v", err)
 		return
 	}
-	if ok && leaderID == l.haKeeperReplicaID {
+
+	if isLeader {
 		cmd := hakeeper.GetTickCmd()
 		ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 		defer cancel()

@@ -16,6 +16,7 @@ package rpc
 
 import (
 	"context"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -45,11 +46,20 @@ func WithSenderClientOptions(options ...morpc.ClientOption) SenderOption {
 	}
 }
 
+// WithSenderLocalDispatch set options for dispatch request to local to avoid rpc call
+func WithSenderLocalDispatch(localDispatch LocalDispatch) SenderOption {
+	return func(s *sender) {
+		s.options.localDispatch = localDispatch
+	}
+}
+
 type sender struct {
-	logger *zap.Logger
-	client morpc.RPCClient
+	logger          *zap.Logger
+	client          morpc.RPCClient
+	localStreamPool sync.Pool
 
 	options struct {
+		localDispatch         LocalDispatch
 		payloadCopyBufferSize int
 		backendCreateOptions  []morpc.BackendOption
 		clientOptions         []morpc.ClientOption
@@ -72,6 +82,9 @@ func NewSender(logger *zap.Logger, options ...SenderOption) (TxnSender, error) {
 		return nil, err
 	}
 	s.client = client
+	s.localStreamPool.New = func() any {
+		return newLocalStream(s.releaseLocalStream)
+	}
 	return s, nil
 }
 
@@ -117,11 +130,29 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) ([]txn.Txn
 		dn := req.GetTargetDN()
 		exec, ok := executors[dn.Address]
 		if !ok {
-			st, err := s.client.NewStream(dn.Address, len(requests))
+			var st morpc.Stream
+			var err error
+			var local bool
+			if s.options.localDispatch != nil {
+				if h := s.options.localDispatch(dn); h != nil {
+					local = true
+					ls := s.acquireLocalStream()
+					ls.setup(ctx, responses, h)
+					local = true
+					st = ls
+				}
+			}
 			if err != nil {
 				return nil, err
 			}
-			exec, err = newExecutor(ctx, responses, st)
+			if st == nil {
+				st, err = s.client.NewStream(dn.Address, len(requests))
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			exec, err = newExecutor(ctx, responses, st, local)
 			if err != nil {
 				return nil, err
 			}
@@ -143,7 +174,16 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) ([]txn.Txn
 }
 
 func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnResponse, error) {
-	f, err := s.client.Send(ctx, request.GetTargetDN().Address, &request, morpc.SendOptions{})
+	dn := request.GetTargetDN()
+	if s.options.localDispatch != nil {
+		if handle := s.options.localDispatch(dn); handle != nil {
+			response := txn.TxnResponse{}
+			err := handle(ctx, &request, &response)
+			return response, err
+		}
+	}
+
+	f, err := s.client.Send(ctx, dn.Address, &request, morpc.SendOptions{})
 	if err != nil {
 		return txn.TxnResponse{}, err
 	}
@@ -166,31 +206,44 @@ func (s *sender) mustSetupTimeoutAt(ctx context.Context, requests []txn.TxnReque
 	}
 }
 
+func (s *sender) acquireLocalStream() *localStream {
+	return s.localStreamPool.Get().(*localStream)
+}
+
+func (s *sender) releaseLocalStream(ls *localStream) {
+	s.localStreamPool.Put(ls)
+}
+
 type executor struct {
 	ctx       context.Context
 	stream    morpc.Stream
+	local     bool
 	responses []txn.TxnResponse
 	indexes   []int
 	c         chan morpc.Message
 }
 
-func newExecutor(ctx context.Context, responses []txn.TxnResponse, stream morpc.Stream) (*executor, error) {
-	c, err := stream.Receive()
-	if err != nil {
-		return nil, err
-	}
-	return &executor{
+func newExecutor(ctx context.Context, responses []txn.TxnResponse, stream morpc.Stream, local bool) (*executor, error) {
+	exec := &executor{
 		ctx:       ctx,
+		local:     local,
 		stream:    stream,
 		responses: responses,
-		c:         c,
-	}, nil
+	}
+	if !local {
+		c, err := stream.Receive()
+		if err != nil {
+			return nil, err
+		}
+		exec.c = c
+	}
+	return exec, nil
 }
 
 func (se *executor) execute(req txn.TxnRequest, index int) error {
 	se.indexes = append(se.indexes, index)
 	req.RequestID = se.stream.ID()
-	return se.stream.Send(&req, morpc.SendOptions{})
+	return se.stream.Send(&req, morpc.SendOptions{Arg: index})
 }
 
 func (se *executor) close() error {
@@ -198,6 +251,9 @@ func (se *executor) close() error {
 }
 
 func (se *executor) waitCompleted() error {
+	if se.local {
+		return nil
+	}
 	for _, idx := range se.indexes {
 		select {
 		case <-se.ctx.Done():
@@ -208,6 +264,63 @@ func (se *executor) waitCompleted() error {
 			}
 			se.responses[idx] = *(v.(*txn.TxnResponse))
 		}
+	}
+	return nil
+}
+
+type localStream struct {
+	releaseFunc func(ls *localStream)
+	handleFunc  TxnRequestHandleFunc
+
+	// reset fields
+	closed    bool
+	ctx       context.Context
+	responses []txn.TxnResponse
+}
+
+func newLocalStream(releaseFunc func(ls *localStream)) *localStream {
+	return &localStream{
+		releaseFunc: releaseFunc,
+	}
+}
+
+func (ls *localStream) setup(ctx context.Context, responses []txn.TxnResponse, handleFunc TxnRequestHandleFunc) {
+	ls.handleFunc = handleFunc
+	ls.ctx = ctx
+	ls.responses = responses
+	ls.closed = false
+}
+
+func (ls *localStream) ID() uint64 {
+	return 0
+}
+
+func (ls *localStream) Send(request morpc.Message, opts morpc.SendOptions) error {
+	if ls.closed {
+		panic("send after closed")
+	}
+
+	response := &ls.responses[opts.Arg.(int)]
+	err := ls.handleFunc(ls.ctx, request.(*txn.TxnRequest), response)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (ls *localStream) Receive() (chan morpc.Message, error) {
+	panic("not support")
+}
+
+func (ls *localStream) Close() error {
+	if ls.closed {
+		panic("closed")
+	}
+	ls.closed = true
+	ls.ctx = nil
+	ls.responses = nil
+	if ls.releaseFunc != nil {
+		ls.releaseFunc(ls)
 	}
 	return nil
 }

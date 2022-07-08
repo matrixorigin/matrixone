@@ -4,11 +4,11 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/pierrec/lz4"
@@ -67,7 +67,7 @@ func (r *relation) TableDefs(_ engine.Snapshot) []engine.TableDef {
 	return defs
 }
 
-func (r *relation) NewReader(n int, _ extend.Extend, _ []byte, _ engine.Snapshot) []engine.Reader {
+func (r *relation) NewReader(n int, _ *plan.Expr, _ []byte, _ engine.Snapshot) []engine.Reader {
 	segs := make([]string, r.md.Segs)
 	for i := range segs {
 		segs[i] = sKey(i, r.id)
