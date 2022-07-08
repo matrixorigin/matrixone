@@ -75,7 +75,6 @@ type client struct {
 	cfg      ClientConfig
 	client   morpc.RPCClient
 	addr     string
-	req      *RPCRequest
 	pool     *sync.Pool
 	respPool *sync.Pool
 }
@@ -98,7 +97,6 @@ func CreateClient(ctx context.Context,
 	}
 	c := &client{
 		cfg:      cfg,
-		req:      &RPCRequest{},
 		pool:     pool,
 		respPool: respPool,
 	}
@@ -256,9 +254,10 @@ func (c *client) tsoRequest(ctx context.Context, count uint64) (uint64, error) {
 			Count: count,
 		},
 	}
-	c.req.Request = req
+	r := c.pool.Get().(*RPCRequest)
+	r.Request = req
 	future, err := c.client.Send(ctx,
-		c.addr, c.req, morpc.SendOptions{Timeout: time.Duration(timeout)})
+		c.addr, r, morpc.SendOptions{Timeout: time.Duration(timeout)})
 	if err != nil {
 		return 0, err
 	}

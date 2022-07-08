@@ -32,6 +32,7 @@ var _ morpc.PayloadMessage = (*RPCRequest)(nil)
 
 func (r *RPCRequest) Release() {
 	if r.pool != nil {
+		r.Request = pb.Request{}
 		r.payload = nil
 		r.pool.Put(r)
 	}
@@ -68,6 +69,7 @@ var _ morpc.PayloadMessage = (*RPCResponse)(nil)
 
 func (r *RPCResponse) Release() {
 	if r.pool != nil {
+		r.Response = pb.Response{}
 		r.payload = nil
 		r.pool.Put(r)
 	}
