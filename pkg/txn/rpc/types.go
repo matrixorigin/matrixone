@@ -17,6 +17,7 @@ package rpc
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
@@ -48,3 +49,6 @@ type TxnRequestHandleFunc func(context.Context, *txn.TxnRequest, *txn.TxnRespons
 
 // SenderOption option for create Sender
 type SenderOption func(*sender)
+
+// LocalDispatch used to returns request handler on local, avoid rpc
+type LocalDispatch func(metadata.DNShard) TxnRequestHandleFunc
