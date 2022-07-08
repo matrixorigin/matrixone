@@ -1,9 +1,21 @@
+// Copyright 2022 MatrixOrigin.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package logservice
 
 import (
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -131,7 +143,7 @@ func parseLogStores(infos pb.LogState, currentTick uint64) *util.ClusterStores {
 	stores := util.NewClusterStores()
 	for uuid, storeInfo := range infos.Stores {
 		store := util.NewStore(uuid, len(storeInfo.Replicas), LogStoreCapacity)
-		if currentTick > hakeeper.ExpiredTick(storeInfo.Tick, hakeeper.LogStoreTimeout) {
+		if currentTick > util.ExpiredTick(storeInfo.Tick, util.LogStoreTimeout) {
 			stores.RegisterExpired(store)
 		} else {
 			stores.RegisterWorking(store)
