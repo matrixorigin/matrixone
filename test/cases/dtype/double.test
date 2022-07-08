@@ -13,12 +13,12 @@ select 1.7976931348623158E+308*1,-2.2250738585072015E-308+1.2250738585072015E-30
 drop table if exists t1;
 create table t1 (a double not null, primary key(a));
 insert into t1 values(-1.7976931348623157E+308),(-2.2250738585072014E-308),(0),(2.2250738585072014E-308),(1.7976931348623157E+308);
-select * from t1;
+select * from t1 order by a asc;
 delete from t1 where a>0;
 drop table if exists t1;
 create table t1(a double(53,30));
 insert into t1 values(-1.7976931348623157),(2.2250738585072014),(0),(2.2250738585072014),(1.7976931348623157);
-select * from t1;
+select * from t1 order by 1 asc;
 drop table if exists t1;
 create table t1(a double(53,5));
 insert into t1 values(-1.7976931348623157),(2.2250738585072014),(0),(2.2250738585072014),(1.7976931348623157);
@@ -29,9 +29,9 @@ show create table t1;
 drop table t1;
 create table t1 ( a double not null default 1, big double(30,5) );
 insert into t1 (big) values (-1),(12345678.901234567),(92233720368547.75807);
-select * from t1;
+select * from t1 order by a desc, big asc;
 select min(big),max(big),max(big)-1 from t1;
-select min(big),max(big),max(big)-1 from t1 group by a;
+select min(big),max(big),max(big)-1 from t1 group by a order by 1+2;
 drop table t1;
 create table t1 ( a double not null default 1, big double);
 insert into t1 (big) values (-1),(12345678.901234567),(92233720368547.75807);
@@ -70,7 +70,7 @@ insert into t1 values(3,5);
 select * from t1;
 select * from t2;
 select * from t1 join t2 on t1.a=t2.a order by 1 asc, 2 desc;
-select * from t1 join t2 on t1.a=t2.a where t1.a>=0.123456;
+select * from t1 join t2 on t1.a=t2.a where t1.a>=0.123456 order by abs(1);
 select * from t1 join t2 on t2.b=t1.a order by t1.a, t2.b asc;
 
 #Test cases of operators
