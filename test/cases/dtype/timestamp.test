@@ -9,9 +9,8 @@ create table t1 (a timestamp(0) not null, primary key(a));
 insert into t1 values ('20200101000000'), ('2022-01-02'), ('2022-01-02 00:00:01'), ('2022-01-02 00:00:01.512345');
 select * from t1 order by a asc;
 select * from t1 where a='2022-01-02' order by 1 desc;
--- @bvt:issue#3268
+-- @bvt:issue#3739
 select * from t1 where a>20220102;
--- @bvt:issue
 select * from t1 where a!='2022-01-02';
 update t1 set a=DATE_ADD(a ,INTERVAL 1 WEEK) where a>'20220102';
 -- @bvt:issue
