@@ -397,6 +397,34 @@ func TestServiceTruncate(t *testing.T) {
 	runServiceTest(t, false, fn)
 }
 
+func TestServiceTsoUpdate(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		req := pb.Request{
+			Method:  pb.TSO_UPDATE,
+			Timeout: int64(time.Second),
+			TsoRequest: pb.TsoRequest{
+				Count: 100,
+			},
+		}
+		resp := s.handleTsoUpdate(req)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
+		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint64(1), resp.TsoResponse.Value)
+
+		req.TsoRequest.Count = 1000
+		resp = s.handleTsoUpdate(req)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
+		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint64(101), resp.TsoResponse.Value)
+
+		resp = s.handleTsoUpdate(req)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
+		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint64(1101), resp.TsoResponse.Value)
+	}
+	runServiceTest(t, false, fn)
+}
+
 func TestShardInfoCanBeQueried(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg1 := Config{

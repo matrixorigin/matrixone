@@ -46,78 +46,6 @@ func firstError(err1 error, err2 error) error {
 	return err2
 }
 
-// RPCRequest is request message type used in morpc
-type RPCRequest struct {
-	pb.Request
-	payload []byte
-	pool    *sync.Pool
-}
-
-var _ morpc.PayloadMessage = (*RPCRequest)(nil)
-
-func (r *RPCRequest) Release() {
-	if r.pool != nil {
-		r.payload = nil
-		r.pool.Put(r)
-	}
-}
-
-func (r *RPCRequest) SetID(id uint64) {
-	r.RequestID = id
-}
-
-func (r *RPCRequest) GetID() uint64 {
-	return r.RequestID
-}
-
-func (r *RPCRequest) DebugString() string {
-	return ""
-}
-
-func (r *RPCRequest) GetPayloadField() []byte {
-	return r.payload
-}
-
-func (r *RPCRequest) SetPayloadField(data []byte) {
-	r.payload = data
-}
-
-// RPCResponse is response message type used in morpc
-type RPCResponse struct {
-	pb.Response
-	payload []byte
-	pool    *sync.Pool
-}
-
-var _ morpc.PayloadMessage = (*RPCResponse)(nil)
-
-func (r *RPCResponse) Release() {
-	if r.pool != nil {
-		r.payload = nil
-		r.pool.Put(r)
-	}
-}
-
-func (r *RPCResponse) SetID(id uint64) {
-	r.RequestID = id
-}
-
-func (r *RPCResponse) GetID() uint64 {
-	return r.RequestID
-}
-
-func (r *RPCResponse) DebugString() string {
-	return ""
-}
-
-func (r *RPCResponse) GetPayloadField() []byte {
-	return r.payload
-}
-
-func (r *RPCResponse) SetPayloadField(data []byte) {
-	r.payload = data
-}
-
 // Service is the top layer component of a log service node. It manages the
 // underlying log store which in turn manages all log shards including the
 // HAKeeper shard. The Log Service component communicates with LogService
@@ -220,10 +148,8 @@ func (s *Service) handleRPCRequest(req morpc.Message,
 func (s *Service) handle(req pb.Request,
 	payload []byte) (pb.Response, pb.LogRecordResponse) {
 	switch req.Method {
-	case pb.CREATE:
-		panic("not implemented")
-	case pb.DESTROY:
-		panic("not implemented")
+	case pb.TSO_UPDATE:
+		return s.handleTsoUpdate(req), pb.LogRecordResponse{}
 	case pb.APPEND:
 		return s.handleAppend(req, payload), pb.LogRecordResponse{}
 	case pb.READ:
@@ -247,6 +173,19 @@ func (s *Service) handle(req pb.Request,
 
 func getResponse(req pb.Request) pb.Response {
 	return pb.Response{Method: req.Method}
+}
+
+func (s *Service) handleTsoUpdate(req pb.Request) pb.Response {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
+	defer cancel()
+	r := req.TsoRequest
+	resp := getResponse(req)
+	if v, err := s.store.TsoUpdate(ctx, r.Count); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	} else {
+		resp.TsoResponse.Value = v
+	}
+	return resp
 }
 
 func (s *Service) handleConnect(req pb.Request) pb.Response {
