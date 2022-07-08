@@ -24,7 +24,7 @@ select * from t1 order by a desc;
 select * from t1 order by big limit 1,3;
 select * from t1 order by big limit 3 offset 1;
 
--- @bvt:issue#3268
+-- @bvt:issue#3739
 select min(big),max(big),max(big)-1 from t1 group by a order by 1 asc, 3 asc;
 select big,count(big) from t1 group by big having count(big)>1 order by 2;
 -- @bvt:issue
