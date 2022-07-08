@@ -92,6 +92,10 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 		}
 	}
 
+	if len(dnStores) < len(bm.cluster.DNShards) {
+		return nil, errors.New("not enough dn stores")
+	}
+
 	for i, dnRecord := range bm.cluster.DNShards {
 		if i >= len(dnStores) {
 			i = i % len(dnStores)

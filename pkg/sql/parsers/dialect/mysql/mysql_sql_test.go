@@ -26,7 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input: "select role from t1",
+		input:  "show schemas like 'db1'",
+		output: "show databases like db1",
 	}
 )
 
@@ -51,6 +52,9 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "show schemas where 1",
+		output: "show databases where 1",
+	}, {
 		input: "select role from t1",
 	}, {
 		input:  "select a || 'hello' || 'world' from t1;",
