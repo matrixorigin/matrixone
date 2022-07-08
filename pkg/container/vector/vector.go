@@ -76,17 +76,17 @@ func (v *Vector[T]) Nulls() *nulls.Nulls {
 
 func (v *Vector[T]) Free(m *mheap.Mheap) {
 	if v.Data != nil {
-		m.Free(v.Data)
+		mheap.Free(m, v.Data)
 	}
 }
 
 func (v *Vector[T]) Realloc(size int, m *mheap.Mheap) error {
 	oldLen := len(v.Data)
-	data, err := m.Grow(v.Data, int64(cap(v.Data)+size))
+	data, err := mheap.Grow(m, v.Data, int64(cap(v.Data)+size))
 	if err != nil {
 		return err
 	}
-	m.Free(v.Data)
+	mheap.Free(m, v.Data)
 	v.Data = data[:oldLen]
 	switch vec := (any)(v).(type) {
 	case *Vector[types.String]:
@@ -189,7 +189,7 @@ func (v *Vector[T]) Shuffle(sels []int64, m *mheap.Mheap) error {
 				maxSize = size
 			}
 		}
-		data, err := m.Alloc(int64(maxSize))
+		data, err := mheap.Alloc(m, int64(maxSize))
 		if err != nil {
 			return err
 		}
@@ -203,7 +203,7 @@ func (v *Vector[T]) Shuffle(sels []int64, m *mheap.Mheap) error {
 			ns[i] = uint64(len(vec.Col[sel]))
 			o += ns[i]
 		}
-		m.Free(v.Data)
+		mheap.Free(m, v.Data)
 		v.Data = data
 		vec.Col = vec.Col[:len(sels)]
 		for i, o := range os {

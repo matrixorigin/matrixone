@@ -58,7 +58,7 @@ func TestAppend(t *testing.T) {
 
 	vx.Free(m)
 	vy.Free(m)
-	require.Equal(t, int64(0), m.Size())
+	require.Equal(t, int64(0), mheap.Size(m))
 }
 
 func TestAppendStr(t *testing.T) {
@@ -94,5 +94,5 @@ func TestAppendStr(t *testing.T) {
 
 	vx.Free(m)
 	vy.Free(m)
-	require.Equal(t, int64(0), m.Size())
+	require.Equal(t, int64(0), mheap.Size(m))
 }

@@ -16,13 +16,14 @@ package function
 
 import (
 	"fmt"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
 )
 
 const (
@@ -125,7 +126,7 @@ type Function struct {
 
 	// Fn is implementation of built-in function and operator
 	// it received vector list, and return result vector.
-	Fn func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
+	Fn func(vs []vector.AnyVector, proc *process.Process) (vector.AnyVector, error)
 
 	// AggregateInfo is related information about aggregate function.
 	AggregateInfo int
@@ -140,7 +141,7 @@ func (f Function) ReturnType() (typ types.T, nullable bool) {
 	return f.ReturnTyp, true
 }
 
-func (f Function) VecFn(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func (f Function) VecFn(vs []vector.AnyVector, proc *process.Process) (vector.AnyVector, error) {
 	if f.Fn == nil {
 		return nil, errors.New(errno.AmbiguousFunction, "function doesn't implement its eval method")
 	}

@@ -42,8 +42,8 @@ var (
 	constTimestampType  = types.Type{Oid: types.T_timestamp}
 )
 
-func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
-	var vec *vector.Vector
+func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (vector.AnyVector, error) {
+	var vec vector.AnyVector
 
 	if len(bat.Zs) == 0 {
 		return vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}), nil
