@@ -19,6 +19,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
+	"time"
 )
 
 const (
@@ -35,11 +37,25 @@ type defaultSpanKey int
 // TracerConfig is a group of options for a Tracer.
 type TracerConfig struct {
 	Name string
+
+	reminder export.Reminder
 }
 
 // TracerOption applies an option to a TracerConfig.
 type TracerOption interface {
 	apply(*TracerConfig)
+}
+
+type tracerOptionFunc func(*TracerConfig)
+
+func (f tracerOptionFunc) apply(cfg *TracerConfig) {
+	f(cfg)
+}
+
+func WithReminder(r export.Reminder) tracerOptionFunc {
+	return tracerOptionFunc(func(cfg *TracerConfig) {
+		cfg.reminder = r
+	})
 }
 
 // TraceFlags contains flags that can be set on a SpanContext.
@@ -92,7 +108,9 @@ func Init(ctx context.Context, opt ...TracerProviderOption) (context.Context, er
 
 	gTracerProvider = newMOTracerProvider(opt...)
 
-	gTracer = gTracerProvider.Tracer("MatrixOrigin")
+	gTracer = gTracerProvider.Tracer("MatrixOrigin",
+		WithReminder(export.NewNormalReminder(time.Duration(15*time.Second))),
+	)
 
 	sc := SpanContext{}
 	sc.traceID, sc.spanID = gTracerProvider.idGenerator.NewIDs()

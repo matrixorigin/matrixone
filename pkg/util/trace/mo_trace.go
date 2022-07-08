@@ -16,6 +16,7 @@ package trace
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -74,6 +75,8 @@ type MOSpan struct {
 	name        string
 	startTimeNS util.TimeNano
 	duration    util.TimeNano
+
+	tracer *MOTracer
 }
 
 // SpanConfig is a group of options for a Span.
@@ -154,4 +157,13 @@ func (s *MOSpan) SpanContext() SpanContext {
 
 func (s *MOSpan) SetName(name string) {
 	s.name = name
+}
+
+func (s MOSpan) GetItemType() string {
+	return "MOSpan"
+}
+
+type TraceItemBuffer[T any, B any] struct {
+	reminder export.Reminder
+	mux      sync.Mutex
 }

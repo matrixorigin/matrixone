@@ -16,6 +16,7 @@ package trace
 
 import (
 	"context"
+	"sync"
 )
 
 /*
@@ -108,6 +109,11 @@ func (p *MOTracerProvider) Tracer(instrumentationName string, opts ...TracerOpti
 		tracer := &MOTracer{
 			TracerConfig: TracerConfig{Name: instrumentationName},
 		}
+		tracer.spanPool = &sync.Pool{New: func() any {
+			return &MOSpan{
+				tracer: tracer,
+			}
+		}}
 		for _, opt := range opts {
 			opt.apply(&tracer.TracerConfig)
 		}
