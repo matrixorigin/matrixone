@@ -262,7 +262,7 @@ import (
 %token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES
 
 // Supported SHOW tokens
-%token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES
+%token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS
 
 // SET tokens
 %token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
@@ -1832,6 +1832,10 @@ show_tables_stmt:
 
 show_databases_stmt:
     SHOW DATABASES like_opt where_expression_opt
+    {
+        $$ = &tree.ShowDatabases{Like: $3, Where: $4}
+    }
+|   SHOW SCHEMAS like_opt where_expression_opt
     {
         $$ = &tree.ShowDatabases{Like: $3, Where: $4}
     }
@@ -6245,6 +6249,7 @@ reserved_keyword:
 |   RECURSIVE
 |   REVERSE
 |   SCHEMA
+|   SCHEMAS
 |   SELECT
 |   SECOND
 |   SEPARATOR
