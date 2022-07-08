@@ -14,13 +14,6 @@ TARGET_OS ?=
 TARGET_ARCH ?=
 BVT_BRANCH ?= master
 
-# generate files generated from .template and needs to delete when clean
-GENERATE_OVERLOAD_LOGIC := ./pkg/sql/colexec/extend/overload/and.go ./pkg/sql/colexec/extend/overload/or.go
-GENERATE_OVERLOAD_MATH := ./pkg/sql/colexec/extend/overload/div.go ./pkg/sql/colexec/extend/overload/minus.go ./pkg/sql/colexec/extend/overload/mod.go ./pkg/sql/colexec/extend/overload/plus.go ./pkg/sql/colexec/extend/overload/mult.go 
-GENERATE_OVERLOAD_COMPARE := ./pkg/sql/colexec/extend/overload/eq.go ./pkg/sql/colexec/extend/overload/ge.go ./pkg/sql/colexec/extend/overload/ne.go /pkg/sql/colexec/extend/overload/ge.go ./pkg/sql/colexec/extend/overload/gt.go ./pkg/sql/colexec/extend/overload/le.go ./pkg/sql/colexec/extend/overload/lt.go
-GENERATE_OVERLOAD_OTHERS := ./pkg/sql/colexec/extend/overload/like.go ./pkg/sql/colexec/extend/overload/cast.go
-GENERATE_OVERLOAD_UNARYS := ./pkg/sql/colexec/extend/overload/unaryops.go
-
 # files generated from cmd/generate-config
 # they need to be deleted in cleaning
 CONFIG_CODE_GENERATED := ./pkg/config/system_vars.go ./pkg/config/system_vars_test.go
@@ -37,8 +30,6 @@ config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/g
 	@mv -f cmd/generate-config/system_vars_test.go pkg/config
 
 .PHONY: generate
-generate: pkg/sql/colexec/extend/overload/$(wildcard *.go)
-	@go generate ./pkg/sql/colexec/extend/overload
 
 .PHONY: generate-pb
 generate-pb:
@@ -104,11 +95,6 @@ clean:
 	$(info [Clean up])
 	$(info Clean go test cache)
 	@go clean -testcache
-	@rm -f $(GENERATE_OVERLOAD_LOGIC)
-	@rm -f $(GENERATE_OVERLOAD_MATH)
-	@rm -f $(GENERATE_OVERLOAD_COMPARE)
-	@rm -f $(GENERATE_OVERLOAD_OTHERS)
-	@rm -f $(GENERATE_OVERLOAD_UNARYS)
 	@rm -f $(CONFIG_CODE_GENERATED)
 ifneq ($(wildcard $(BIN_NAME)),)
 	$(info Remove file $(BIN_NAME))
