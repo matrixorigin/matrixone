@@ -20,45 +20,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func findInStrList(str, strlist string) uint64 {
+// bytes.Split should be used here instead of converting to a string operation every time, and the specific implementor of the function needs to refactor this part of the code.
+
+func findInStrList(str, strlist string) types.UInt64 {
 	for j, s := range strings.Split(strlist, ",") {
 		if s == str {
-			return uint64(j + 1)
+			return types.UInt64(j + 1)
 		}
 	}
 	return 0
 }
 
-func FindInSet(lv, rv *types.Bytes, rs []uint64) []uint64 {
-	for i := range lv.Offsets {
-		strlist := string(rv.Data[rv.Offsets[i] : rv.Offsets[i]+rv.Lengths[i]])
-		target := string(lv.Data[lv.Offsets[i] : lv.Offsets[i]+lv.Lengths[i]])
-		rs[i] = findInStrList(target, strlist)
+func FindInSet(lvs, rvs []types.String, rs []types.UInt64) []types.UInt64 {
+	for i, lv := range lvs {
+		rs[i] = findInStrList(string(lv), string(rvs[i]))
 	}
 	return rs
 }
 
-func FindInSetWithLeftConst(lv, rv *types.Bytes, rs []uint64) []uint64 {
-	target := string(lv.Data[lv.Offsets[0] : lv.Offsets[0]+lv.Lengths[0]])
-	for i := range rv.Offsets {
-		strlist := string(rv.Data[rv.Offsets[i] : rv.Offsets[i]+rv.Lengths[i]])
-		rs[i] = findInStrList(target, strlist)
+func FindInSetWithLeftConst(lvs, rvs []types.String, rs []types.UInt64) []types.UInt64 {
+	for i, rv := range rvs {
+		rs[i] = findInStrList(string(lvs[0]), string(rv))
 	}
 	return rs
 }
 
-func FindInSetWithRightConst(lv, rv *types.Bytes, rs []uint64) []uint64 {
-	strlist := string(rv.Data[rv.Offsets[0] : rv.Offsets[0]+rv.Lengths[0]])
-	for i := range lv.Offsets {
-		target := string(lv.Data[lv.Offsets[i] : lv.Offsets[i]+lv.Lengths[i]])
-		rs[i] = findInStrList(target, strlist)
+func FindInSetWithRightConst(lvs, rvs []types.String, rs []types.UInt64) []types.UInt64 {
+	for i, lv := range lvs {
+		rs[i] = findInStrList(string(lv), string(rvs[0]))
 	}
 	return rs
 }
 
-func FindInSetWithAllConst(lv, rv *types.Bytes, rs []uint64) []uint64 {
-	target := string(lv.Data[lv.Offsets[0] : lv.Offsets[0]+lv.Lengths[0]])
-	strlist := string(rv.Data[rv.Offsets[0] : rv.Offsets[0]+rv.Lengths[0]])
-	rs[0] = findInStrList(target, strlist)
+func FindInSetWithAllConst(lvs, rvs []types.String, rs []types.UInt64) []types.UInt64 {
+	rs[0] = findInStrList(string(lvs[0]), string(rvs[0]))
 	return rs
 }

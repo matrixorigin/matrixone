@@ -50,6 +50,9 @@ type AnyVector interface {
 	SetConst()
 	SetData([]byte)
 	SetLength(n int)
+	IsScalar() bool
+	IsScalarNull() bool
+	ConstVectorIsNull() bool
 	Type() types.Type
 	Free(*mheap.Mheap)
 	Nulls() *nulls.Nulls

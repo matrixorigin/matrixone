@@ -19,16 +19,16 @@ import (
 )
 
 var (
-	StrLength func(*types.Bytes, []int64) []int64
+	StrLength func([]types.String, []types.Int64) []types.Int64
 )
 
 func init() {
 	StrLength = strLength
 }
 
-func strLength(xs *types.Bytes, rs []int64) []int64 {
-	for i, n := range xs.Lengths {
-		rs[i] = int64(n)
+func strLength(xs []types.String, rs []types.Int64) []types.Int64 {
+	for i, x := range xs {
+		rs[i] = types.Int64(len(x))
 	}
 	return rs
 }

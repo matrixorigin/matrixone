@@ -22,11 +22,15 @@ import (
 )
 
 // assert related method
-func MustTVector[T types.Element](v *AnyVector) *Vector[T] {
+func MustTVector[T types.Element](v AnyVector) *Vector[T] {
 	if vt, ok := any(v).(*Vector[T]); ok {
 		return vt
 	}
 	panic(fmt.Sprintf("unexpected type assert for AnyVector"))
+}
+
+func SetCol[T types.Element](v *Vector[T], col []T) {
+	v.Col = col
 }
 
 // scalar vector related methods.
@@ -36,6 +40,11 @@ func (v *Vector[T]) IsScalar() bool {
 
 func (v *Vector[T]) IsScalarNull() bool {
 	return v.IsConst && nulls.Any(v.Nsp)
+}
+
+// ConstVectorIsNull checks whether a const vector is null
+func (v *Vector[T]) ConstVectorIsNull() bool {
+	return v.Nsp != nil && nulls.Contains(v.Nsp, 0)
 }
 
 // generic vector related methods

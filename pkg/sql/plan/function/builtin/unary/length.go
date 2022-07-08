@@ -18,36 +18,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/length"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Length(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_int64, Size: 8}
-	if inputVector.IsScalarNull() {
-		return proc.AllocScalarNullVector(resultType), nil
+func Length(vecs []vector.AnyVector, proc *process.Process) (vector.AnyVector, error) {
+	rtyp := types.New(types.T_int64, 0, 0, 0)
+	if vecs[0].IsScalarNull() {
+		return proc.AllocScalarNullVector(rtyp), nil
 	}
-	resultElementSize := int(resultType.Size)
-	inputValues := vector.MustBytesCols(inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+	ivec := vector.MustTVector[types.String](vecs[0])
+	if ivec.IsScalar() {
+		if ivec.IsScalarNull() {
+			return proc.AllocScalarNullVector(rtyp), nil
 		}
-		resultVector := vector.NewConst(resultType)
-		resultValues := make([]int64, 1)
-		vector.SetCol(resultVector, length.StrLength(inputValues, resultValues))
-		return resultVector, nil
-	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
-		if err != nil {
-			return nil, err
-		}
-		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues.Lengths)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, length.StrLength(inputValues, resultValues))
-		return resultVector, nil
+		rvec := vector.New[types.Int64](rtyp)
+		rvec.IsConst = true
+		rvec.Col = []types.Int64{types.Int64(len(ivec.Col[0]))}
+		return rvec, nil
 	}
+	rvec := vector.New[types.Int64](rtyp)
+	vs, err := rvec.ReallocForFixedSlice(len(ivec.Col), proc.Mp)
+	if err != nil {
+		return nil, err
+	}
+	vector.SetCol(rvec, length.StrLength(ivec.Col, vs))
+	nulls.Set(rvec.Nsp, ivec.Nsp)
+	return rvec, nil
 }

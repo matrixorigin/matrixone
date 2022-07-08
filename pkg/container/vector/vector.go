@@ -88,6 +88,19 @@ func (v *Vector[T]) Free(m *mheap.Mheap) {
 	}
 }
 
+func (v *Vector[T]) ReallocForFixedSlice(n int, m *mheap.Mheap) ([]T, error) {
+	var w T
+
+	len := len(v.Col)
+	if n+len >= cap(v.Col) {
+		if err := v.Realloc(w.Size()*(cap(v.Col)-n-len+1), m); err != nil {
+			return nil, err
+		}
+	}
+	v.Col = v.Col[:n+len]
+	return v.Col, nil
+}
+
 func (v *Vector[T]) Realloc(size int, m *mheap.Mheap) error {
 	oldLen := len(v.Data)
 	data, err := mheap.Grow(m, v.Data, int64(cap(v.Data)+size))
