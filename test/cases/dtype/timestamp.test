@@ -27,7 +27,6 @@ select * from t1 order by big limit 3 offset 1;
 -- @bvt:issue#3739
 select min(big),max(big),max(big)-1 from t1 group by a order by 1 asc, 3 asc;
 select big,count(big) from t1 group by big having count(big)>1 order by 2;
--- @bvt:issue
 drop table t1;
 create table t1 (id timestamp(6) not null default "2022-01-31 00:00:00.0000006", a int, primary key (a));
 insert into t1(a) values(1);
@@ -53,7 +52,6 @@ insert into t1 values('2022-01-01 00:00:00.000500', 2);
 insert into t1 values('2022-01-01 00:00:00.005000', 3);
 insert into t2 values('2022-01-01 00:00:00.005', 4);
 insert into t2 values('2022-01-01 00:00:00.001', 5);
--- @bvt:issue#3680
 select * from t1;
 select * from t2;
 select * from t1 join t2 on t1.dt=t2.dt order by 1 desc, t2.dt asc;
