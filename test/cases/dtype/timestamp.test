@@ -59,7 +59,6 @@ select * from t2;
 select * from t1 join t2 on t1.dt=t2.dt order by 1 desc, t2.dt asc;
 select * from t1 join t2 on t1.dt=t2.dt where t1.value32<>t2.value32 order by 3 desc, 4 desc;
 
-
 #Test cases of operators
 drop table if exists t1;
 drop table if exists t2;
@@ -71,14 +70,12 @@ SELECT id, id >= 20200102 FROM t_timestamp;
 SELECT id, id = 202020101 FROM t_timestamp;
 SELECT id, 20200101 = id FROM t_timestamp;
 SELECT * from t_timestamp WHERE id = 20200102;
-
 -- @bvt:issue#3271
 SELECT * from t_timestamp WHERE id = 2.0200102e7;
 -- @bvt:issue
 
 SELECT * from t_timestamp WHERE id = '20200102';
 SELECT * from t_timestamp WHERE id IN ('2020-01-01','2022-01-02');
-
 -- @bvt:issue#3271
 SELECT * from t_timestamp WHERE id IN (2.0200101e7,2.0200102e7 );
 -- @bvt:issue
