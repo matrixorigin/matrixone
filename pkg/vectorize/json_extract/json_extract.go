@@ -14,16 +14,29 @@
 
 package json_extract
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+)
 
 var (
-	JsonExtract func(*types.Bytes, *types.Bytes, []string) []string
+	JsonExtract func(*types.Bytes, *types.Bytes, *types.Bytes) *types.Bytes
 )
 
 func init() {
 	JsonExtract = jsonExtract
 }
 
-func jsonExtract(json *types.Bytes, path *types.Bytes, result []string) []string {
+func jsonExtract(json *types.Bytes, path *types.Bytes, result *types.Bytes) *types.Bytes {
+	logutil.Debugf("jsonExtract: json=%s, path=%s, result=%s", json, path, result)
+	for i := range json.Offsets {
+		jOff, jLen := json.Offsets[i], json.Lengths[i]
+		pOff, pLen := path.Offsets[i], path.Lengths[i]
+		result.AppendOnce(jsonExtractOne(json.Data[jOff:jOff+jLen], path.Data[pOff:pOff+pLen]))
+	}
 	return result
+}
+func jsonExtractOne(json, path []byte) []byte {
+	return []byte(fmt.Sprintf("%s: %s", string(json), string(path)))
 }
