@@ -25,6 +25,7 @@ func initTokens(dialectType dialect.DialectType) map[string]int {
 	switch dialectType {
 	case dialect.MYSQL:
 		LEX_ERROR = MYSQL_LEX_ERROR
+		SCHEMAS = MYSQL_SCHEMAS
 		PIPE_CONCAT = MYSQL_PIPE_CONCAT
 		CONFIG = MYSQL_CONFIG
 		SOME = MYSQL_SOME
@@ -771,7 +772,7 @@ func initTokens(dialectType dialect.DialectType) map[string]int {
 		"row_count":                ROW_COUNT,
 		"rtree":                    RTREE,
 		"schema":                   SCHEMA,
-		"schemas":                  UNUSED,
+		"schemas":                  SCHEMAS,
 		"second":                   SECOND,
 		"select":                   SELECT,
 		"sensitive":                UNUSED,
@@ -920,6 +921,7 @@ func initTokens(dialectType dialect.DialectType) map[string]int {
 
 // mysql
 var (
+	SCHEMAS                  int
 	PIPE_CONCAT              int
 	CONFIG                   int
 	SOME                     int

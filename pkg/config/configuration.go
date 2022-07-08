@@ -15,7 +15,6 @@
 package config
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -34,9 +33,6 @@ var StorageEngine engine.Engine
 
 //Cluster Nodes
 var ClusterNodes engine.Nodes
-
-//cube catalog
-var ClusterCatalog *catalog.Catalog
 
 /**
 check if x in a slice
@@ -88,18 +84,14 @@ type ParameterUnit struct {
 
 	//Cluster Nodes
 	ClusterNodes engine.Nodes
-
-	//Cube Catalog
-	ClusterCatalog *catalog.Catalog
 }
 
-func NewParameterUnit(sv *SystemVariables, hostMmu *host.Mmu, mempool *mempool.Mempool, storageEngine engine.Engine, clusterNodes engine.Nodes, catalogRef *catalog.Catalog) *ParameterUnit {
+func NewParameterUnit(sv *SystemVariables, hostMmu *host.Mmu, mempool *mempool.Mempool, storageEngine engine.Engine, clusterNodes engine.Nodes) *ParameterUnit {
 	return &ParameterUnit{
-		SV:             sv,
-		HostMmu:        hostMmu,
-		Mempool:        mempool,
-		StorageEngine:  storageEngine,
-		ClusterNodes:   clusterNodes,
-		ClusterCatalog: catalogRef,
+		SV:            sv,
+		HostMmu:       hostMmu,
+		Mempool:       mempool,
+		StorageEngine: storageEngine,
+		ClusterNodes:  clusterNodes,
 	}
 }
