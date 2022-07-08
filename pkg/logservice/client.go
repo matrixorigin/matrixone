@@ -68,14 +68,16 @@ type Client interface {
 	Read(ctx context.Context, firstIndex Lsn, maxSize uint64) ([]pb.LogRecord, Lsn, error)
 	Truncate(ctx context.Context, index Lsn) error
 	GetTruncatedIndex(ctx context.Context) (Lsn, error)
+	GetTSOTimestamp(ctx context.Context, count uint64) (uint64, error)
 }
 
 type client struct {
-	cfg    ClientConfig
-	client morpc.RPCClient
-	addr   string
-	req    *RPCRequest
-	pool   *sync.Pool
+	cfg      ClientConfig
+	client   morpc.RPCClient
+	addr     string
+	req      *RPCRequest
+	pool     *sync.Pool
+	respPool *sync.Pool
 }
 
 var _ Client = (*client)(nil)
@@ -88,16 +90,21 @@ func CreateClient(ctx context.Context,
 	cfg ClientConfig) (Client, error) {
 	pool := &sync.Pool{}
 	pool.New = func() interface{} {
-		return &RPCResponse{pool: pool}
+		return &RPCRequest{pool: pool}
+	}
+	respPool := &sync.Pool{}
+	respPool.New = func() interface{} {
+		return &RPCResponse{pool: respPool}
 	}
 	c := &client{
-		cfg:  cfg,
-		req:  &RPCRequest{},
-		pool: pool,
+		cfg:      cfg,
+		req:      &RPCRequest{},
+		pool:     pool,
+		respPool: respPool,
 	}
 	var e error
 	for _, addr := range cfg.ServiceAddresses {
-		cc, err := getRPCClient(ctx, addr, c.pool)
+		cc, err := getRPCClient(ctx, addr, c.respPool)
 		if err != nil {
 			e = err
 			continue
@@ -168,6 +175,13 @@ func (c *client) GetTruncatedIndex(ctx context.Context) (Lsn, error) {
 	return c.getTruncatedIndex(ctx)
 }
 
+// GetTSOTimestamp requests a total of count unique timestamps from the TSO and
+// return the first assigned such timestamp, that is TSO timestamps
+// [returned value, returned value + count] will be owned by the caller.
+func (c *client) GetTSOTimestamp(ctx context.Context, count uint64) (uint64, error) {
+	return c.tsoRequest(ctx, count)
+}
+
 func (c *client) readOnly() bool {
 	return c.cfg.ReadOnly
 }
@@ -200,10 +214,11 @@ func (c *client) request(ctx context.Context,
 			MaxSize: maxSize,
 		},
 	}
-	c.req.Request = req
-	c.req.payload = payload
+	r := c.pool.Get().(*RPCRequest)
+	r.Request = req
+	r.payload = payload
 	future, err := c.client.Send(ctx,
-		c.addr, c.req, morpc.SendOptions{Timeout: time.Duration(timeout)})
+		c.addr, r, morpc.SendOptions{Timeout: time.Duration(timeout)})
 	if err != nil {
 		return pb.Response{}, nil, err
 	}
@@ -227,6 +242,42 @@ func (c *client) request(ctx context.Context,
 		return pb.Response{}, nil, err
 	}
 	return resp, recs.Records, nil
+}
+
+func (c *client) tsoRequest(ctx context.Context, count uint64) (uint64, error) {
+	timeout, err := getTimeoutFromContext(ctx)
+	if err != nil {
+		return 0, err
+	}
+	req := pb.Request{
+		Method:  pb.TSO_UPDATE,
+		Timeout: int64(timeout),
+		TsoRequest: pb.TsoRequest{
+			Count: count,
+		},
+	}
+	c.req.Request = req
+	future, err := c.client.Send(ctx,
+		c.addr, c.req, morpc.SendOptions{Timeout: time.Duration(timeout)})
+	if err != nil {
+		return 0, err
+	}
+	defer future.Close()
+	msg, err := future.Get()
+	if err != nil {
+		return 0, err
+	}
+	response, ok := msg.(*RPCResponse)
+	if !ok {
+		panic("unexpected response type")
+	}
+	resp := response.Response
+	defer response.Release()
+	err = toError(response.Response)
+	if err != nil {
+		return 0, err
+	}
+	return resp.TsoResponse.Value, nil
 }
 
 func (c *client) connect(ctx context.Context, mt pb.MethodType) error {

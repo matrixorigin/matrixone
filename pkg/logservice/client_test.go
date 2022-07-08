@@ -69,6 +69,25 @@ func TestClientCanBeCreated(t *testing.T) {
 	runClientTest(t, true, fn)
 }
 
+func TestClientGetTSOTimestamp(t *testing.T) {
+	fn := func(t *testing.T, cfg ClientConfig, c Client) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		v, err := c.GetTSOTimestamp(ctx, 100)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(1), v)
+
+		v, err = c.GetTSOTimestamp(ctx, 1000)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(101), v)
+
+		v, err = c.GetTSOTimestamp(ctx, 100)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(1101), v)
+	}
+	runClientTest(t, false, fn)
+}
+
 func TestClientAppend(t *testing.T) {
 	fn := func(t *testing.T, cfg ClientConfig, c Client) {
 		cmd := make([]byte, 16+headerSize+8)
