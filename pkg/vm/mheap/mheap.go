@@ -12,19 +12,19 @@ func New(gm *guest.Mmu) *Mheap {
 	}
 }
 
-func (m *Mheap) Size() int64 {
+func Size(m *Mheap) int64 {
 	return m.Gm.Size()
 }
 
-func (m *Mheap) HostSize() int64 {
+func HostSize(m *Mheap) int64 {
 	return m.Gm.HostSize()
 }
 
-func (m *Mheap) Free(data []byte) {
+func Free(m *Mheap, data []byte) {
 	m.Gm.Free(int64(cap(data)))
 }
 
-func (m *Mheap) Alloc(size int64) ([]byte, error) {
+func Alloc(m *Mheap, size int64) ([]byte, error) {
 	data := mempool.Alloc(m.Mp, int(size))
 	if err := m.Gm.Alloc(int64(cap(data))); err != nil {
 		return nil, err
@@ -32,8 +32,8 @@ func (m *Mheap) Alloc(size int64) ([]byte, error) {
 	return data[:size], nil
 }
 
-func (m *Mheap) Grow(old []byte, size int64) ([]byte, error) {
-	data, err := m.Alloc(mempool.Realloc(old, size))
+func Grow(m *Mheap, old []byte, size int64) ([]byte, error) {
+	data, err := Alloc(m, mempool.Realloc(old, size))
 	if err != nil {
 		return nil, err
 	}

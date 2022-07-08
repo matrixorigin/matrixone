@@ -178,6 +178,47 @@ func (a Type) Eq(b Type) bool {
 	return a.Oid == b.Oid && a.Size == b.Size && a.Width == b.Width && a.Scale == b.Scale
 }
 
+func (t T) ToType() Type {
+	var typ Type
+
+	typ.Oid = t
+	switch t {
+	case T_bool:
+		typ.Size = 1
+	case T_int8:
+		typ.Size = 1
+	case T_int16:
+		typ.Size = 2
+	case T_int32, T_date:
+		typ.Size = 4
+	case T_int64, T_datetime, T_timestamp:
+		typ.Size = 8
+	case T_uint8:
+		typ.Size = 1
+	case T_uint16:
+		typ.Size = 2
+	case T_uint32:
+		typ.Size = 4
+	case T_uint64:
+		typ.Size = 8
+	case T_float32:
+		typ.Size = 4
+	case T_float64:
+		typ.Size = 8
+	case T_char:
+		typ.Size = 24
+	case T_varchar:
+		typ.Size = 24
+	case T_sel:
+		typ.Size = 8
+	case T_decimal64:
+		typ.Size = 8
+	case T_decimal128:
+		typ.Size = 16
+	}
+	return typ
+}
+
 func (t T) String() string {
 	switch t {
 	case T_any:
