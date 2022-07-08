@@ -10,7 +10,7 @@ The `ANY_VALUE` function is useful for `GROUP BY` queries when the `ONLY_FULL_GR
 > ANY_VALUE(arg)
 ```
 
-## **参数释义**
+## **Arguments**
 
 |  Arguments   | Description  |
 |  ----  | ----  |
