@@ -54,11 +54,12 @@ insert into t1 values('2022-01-01 00:00:00.000500', 2);
 insert into t1 values('2022-01-01 00:00:00.005000', 3);
 insert into t2 values('2022-01-01 00:00:00.005', 4);
 insert into t2 values('2022-01-01 00:00:00.001', 5);
+-- @bvt:issue#3290
 select * from t1;
 select * from t2;
 select * from t1 join t2 on t1.dt=t2.dt order by 1 desc, t2.dt asc;
 select * from t1 join t2 on t1.dt=t2.dt where t1.value32<>t2.value32 order by 3 desc, 4 desc;
-
+-- @bvt:issue
 #Test cases of operators
 drop table if exists t1;
 drop table if exists t2;
@@ -67,9 +68,11 @@ INSERT INTO t_timestamp VALUES ('2020-01-01 23:59:59.999999'), ('2022-01-02 00:0
 -- @bvt:issue#3739
 SELECT id, id >= 20200102 FROM t_timestamp;
 -- @bvt:issue
+-- @bvt:issue#3290
 SELECT id, id = 202020101 FROM t_timestamp;
 SELECT id, 20200101 = id FROM t_timestamp;
 SELECT * from t_timestamp WHERE id = 20200102;
+-- @bvt:issue
 -- @bvt:issue#3271
 SELECT * from t_timestamp WHERE id = 2.0200102e7;
 -- @bvt:issue
@@ -86,8 +89,10 @@ SELECT * from t_timestamp WHERE id BETWEEN 20191231 AND 20200101;
 -- @bvt:issue#3271
 SELECT * from t_timestamp WHERE id BETWEEN 2.0200101e7 and 2.0200102e7;
 -- @bvt:issue
+-- @bvt:issue#3290
 SELECT * from t_timestamp WHERE id BETWEEN '2020-01-01' AND '2020-01-02';
 SELECT * from t_timestamp WHERE id BETWEEN '2022-01-01 00:00:00' AND '2022-01-02 00:00:00.000000';
+-- @bvt:issue
 drop table if exists t1;
 CREATE TABLE t1 (a timestamp(6));
 INSERT INTO t1 VALUES ('2022-03-01 00:00:01.0001');
