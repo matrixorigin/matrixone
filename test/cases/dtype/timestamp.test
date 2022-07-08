@@ -64,7 +64,7 @@ drop table if exists t1;
 drop table if exists t2;
 CREATE TABLE t_timestamp(id timestamp(6));
 INSERT INTO t_timestamp VALUES ('2020-01-01 23:59:59.999999'), ('2022-01-02 00:00:00');
--- @bvt:issue#3268
+-- @bvt:issue#3739
 SELECT id, id >= 20200102 FROM t_timestamp;
 SELECT id, id = 202020101 FROM t_timestamp;
 SELECT id, 20200101 = id FROM t_timestamp;
