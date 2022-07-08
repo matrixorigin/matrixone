@@ -37,6 +37,7 @@ require (
 	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
 	go.etcd.io/etcd/raft/v3 v3.5.1
 	go.uber.org/zap v1.21.0
+	golang.org/x/sys v0.0.0-20220622161953-175b2fd9d664
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 
@@ -76,7 +77,6 @@ require (
 	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/valyala/fastrand v1.1.0 // indirect
 	github.com/valyala/histogram v1.2.0 // indirect
-	golang.org/x/sys v0.0.0-20220622161953-175b2fd9d664 // indirect
 	gopkg.in/ini.v1 v1.57.0 // indirect
 )
 
