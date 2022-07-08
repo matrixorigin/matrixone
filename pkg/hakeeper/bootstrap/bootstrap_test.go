@@ -261,7 +261,7 @@ func TestIssue3814(t *testing.T) {
 			expected: errors.New("not enough log stores"),
 		},
 		{
-			desc: "",
+			desc: "case not enough dn stores",
 			cluster: pb.ClusterInfo{
 				DNShards: []metadata.DNShardRecord{{
 					ShardID:    1,
