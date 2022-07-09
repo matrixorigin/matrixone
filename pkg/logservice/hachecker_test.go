@@ -107,11 +107,11 @@ func runHAKeeperStoreTest(t *testing.T, fn func(*testing.T, *store)) {
 	store, err := getTestStore(cfg)
 	assert.NoError(t, err)
 	defer func() {
-		assert.NoError(t, store.Close())
+		assert.NoError(t, store.close())
 	}()
 	peers := make(map[uint64]dragonboat.Target)
-	peers[1] = store.ID()
-	assert.NoError(t, store.StartHAKeeperReplica(1, peers, false))
+	peers[1] = store.id()
+	assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
 	fn(t, store)
 }
 
@@ -159,14 +159,14 @@ func testBootstrap(t *testing.T, fail bool) {
 		m := store.getHeartbeatMessage()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		assert.NoError(t, store.AddLogStoreHeartbeat(ctx, m))
+		assert.NoError(t, store.addLogStoreHeartbeat(ctx, m))
 
 		dnMsg := pb.DNStoreHeartbeat{
-			UUID:   store.ID(),
+			UUID:   store.id(),
 			Shards: make([]pb.DNShardInfo, 0),
 		}
 		dnMsg.Shards = append(dnMsg.Shards, pb.DNShardInfo{ShardID: 2, ReplicaID: 3})
-		assert.NoError(t, store.AddDNStoreHeartbeat(ctx, dnMsg))
+		assert.NoError(t, store.addDNStoreHeartbeat(ctx, dnMsg))
 
 		_, term, err := store.isLeaderHAKeeper()
 		require.NoError(t, err)
@@ -193,14 +193,14 @@ func testBootstrap(t *testing.T, fail bool) {
 			assert.Equal(t, pb.HAKeeperBootstrapFailed, state.State)
 		} else {
 			// FIXME: waiting for the bootstrap code to be fixed
-			cb, err := store.GetCommandBatch(ctx, store.ID())
+			cb, err := store.getCommandBatch(ctx, store.id())
 			require.NoError(t, err)
 			require.Equal(t, 1, len(cb.Commands))
 			service := &Service{store: store}
 			service.handleStartReplica(cb.Commands[0])
 
 			m := store.getHeartbeatMessage()
-			assert.NoError(t, store.AddLogStoreHeartbeat(ctx, m))
+			assert.NoError(t, store.addLogStoreHeartbeat(ctx, m))
 
 			state, err = store.getCheckerState()
 			require.NoError(t, err)

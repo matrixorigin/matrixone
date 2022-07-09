@@ -29,14 +29,7 @@ var (
 
 const (
 	firstLogShardID uint64 = 1
-	headerSize             = 2
-)
-
-const (
-	leaseHolderIDTag uint16 = iota + 0xBF01
-	truncatedIndexTag
-	userEntryTag
-	tsoTag
+	headerSize             = 4
 )
 
 // used to indicate query types
@@ -49,13 +42,13 @@ func getAppendCmd(cmd []byte, replicaID uint64) []byte {
 	if len(cmd) < headerSize+8 {
 		panic("cmd too small")
 	}
-	binaryEnc.PutUint16(cmd, userEntryTag)
+	binaryEnc.PutUint32(cmd, uint32(pb.UserEntryUpdate))
 	binaryEnc.PutUint64(cmd[headerSize:], replicaID)
 	return cmd
 }
 
-func parseCmdTag(cmd []byte) uint16 {
-	return binaryEnc.Uint16(cmd)
+func parseCmdTag(cmd []byte) pb.UpdateType {
+	return pb.UpdateType(binaryEnc.Uint32(cmd))
 }
 
 func parseTruncatedIndex(cmd []byte) uint64 {
@@ -72,21 +65,21 @@ func parseTsoUpdateCmd(cmd []byte) uint64 {
 
 func getSetLeaseHolderCmd(leaseHolderID uint64) []byte {
 	cmd := make([]byte, headerSize+8)
-	binaryEnc.PutUint16(cmd, leaseHolderIDTag)
+	binaryEnc.PutUint32(cmd, uint32(pb.LeaseHolderIDUpdate))
 	binaryEnc.PutUint64(cmd[headerSize:], leaseHolderID)
 	return cmd
 }
 
 func getSetTruncatedIndexCmd(index uint64) []byte {
 	cmd := make([]byte, headerSize+8)
-	binaryEnc.PutUint16(cmd, truncatedIndexTag)
+	binaryEnc.PutUint32(cmd, uint32(pb.TruncatedLSNUpdate))
 	binaryEnc.PutUint64(cmd[headerSize:], index)
 	return cmd
 }
 
 func getTsoUpdateCmd(count uint64) []byte {
 	cmd := make([]byte, headerSize+8)
-	binaryEnc.PutUint16(cmd, tsoTag)
+	binaryEnc.PutUint32(cmd, uint32(pb.TSOUpdate))
 	binaryEnc.PutUint64(cmd[headerSize:], count)
 	return cmd
 }
@@ -95,25 +88,25 @@ func isTsoUpdate(cmd []byte) bool {
 	if len(cmd) != headerSize+8 {
 		return false
 	}
-	return parseCmdTag(cmd) == tsoTag
+	return parseCmdTag(cmd) == pb.TSOUpdate
 }
 
 func isSetLeaseHolderUpdate(cmd []byte) bool {
-	return tagMatch(cmd, leaseHolderIDTag)
+	return tagMatch(cmd, pb.LeaseHolderIDUpdate)
 }
 
 func isSetTruncatedIndexUpdate(cmd []byte) bool {
-	return tagMatch(cmd, truncatedIndexTag)
+	return tagMatch(cmd, pb.TruncatedLSNUpdate)
 }
 
 func isUserUpdate(cmd []byte) bool {
 	if len(cmd) < headerSize+8 {
 		return false
 	}
-	return parseCmdTag(cmd) == userEntryTag
+	return parseCmdTag(cmd) == pb.UserEntryUpdate
 }
 
-func tagMatch(cmd []byte, expectedTag uint16) bool {
+func tagMatch(cmd []byte, expectedTag pb.UpdateType) bool {
 	if len(cmd) != headerSize+8 {
 		return false
 	}

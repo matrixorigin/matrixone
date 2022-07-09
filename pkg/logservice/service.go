@@ -105,7 +105,7 @@ func NewService(cfg Config) (*Service, error) {
 	// replicas already known to the local store
 	if err := server.Start(); err != nil {
 		plog.Errorf("failed to start the server %v", err)
-		if err := store.Close(); err != nil {
+		if err := store.close(); err != nil {
 			plog.Errorf("failed to close the store, %v", err)
 		}
 		return nil, err
@@ -116,12 +116,12 @@ func NewService(cfg Config) (*Service, error) {
 
 func (s *Service) Close() (err error) {
 	err = firstError(err, s.server.Close())
-	err = firstError(err, s.store.Close())
+	err = firstError(err, s.store.close())
 	return err
 }
 
 func (s *Service) ID() string {
-	return s.store.ID()
+	return s.store.id()
 }
 
 func (s *Service) handleRPCRequest(req morpc.Message,
@@ -180,7 +180,7 @@ func (s *Service) handleTsoUpdate(req pb.Request) pb.Response {
 	defer cancel()
 	r := req.TsoRequest
 	resp := getResponse(req)
-	if v, err := s.store.TsoUpdate(ctx, r.Count); err != nil {
+	if v, err := s.store.tsoUpdate(ctx, r.Count); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
 		resp.TsoResponse.Value = v
@@ -193,7 +193,7 @@ func (s *Service) handleConnect(req pb.Request) pb.Response {
 	defer cancel()
 	r := req.LogRequest
 	resp := getResponse(req)
-	if err := s.store.GetOrExtendDNLease(ctx, r.ShardID, r.DNID); err != nil {
+	if err := s.store.getOrExtendDNLease(ctx, r.ShardID, r.DNID); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
@@ -205,7 +205,7 @@ func (s *Service) handleConnectRO(req pb.Request) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
 	// we only check whether the specified shard is available
-	if _, err := s.store.GetTruncatedIndex(ctx, r.ShardID); err != nil {
+	if _, err := s.store.getTruncatedIndex(ctx, r.ShardID); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
@@ -216,7 +216,7 @@ func (s *Service) handleAppend(req pb.Request, payload []byte) pb.Response {
 	defer cancel()
 	r := req.LogRequest
 	resp := getResponse(req)
-	lsn, err := s.store.Append(ctx, r.ShardID, payload)
+	lsn, err := s.store.append(ctx, r.ShardID, payload)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
@@ -230,7 +230,7 @@ func (s *Service) handleRead(req pb.Request) (pb.Response, pb.LogRecordResponse)
 	defer cancel()
 	r := req.LogRequest
 	resp := getResponse(req)
-	records, lsn, err := s.store.QueryLog(ctx, r.ShardID, r.Index, r.MaxSize)
+	records, lsn, err := s.store.queryLog(ctx, r.ShardID, r.Index, r.MaxSize)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
@@ -244,7 +244,7 @@ func (s *Service) handleTruncate(req pb.Request) pb.Response {
 	defer cancel()
 	r := req.LogRequest
 	resp := getResponse(req)
-	if err := s.store.TruncateLog(ctx, r.ShardID, r.Index); err != nil {
+	if err := s.store.truncateLog(ctx, r.ShardID, r.Index); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
@@ -255,7 +255,7 @@ func (s *Service) handleGetTruncatedIndex(req pb.Request) pb.Response {
 	defer cancel()
 	r := req.LogRequest
 	resp := getResponse(req)
-	index, err := s.store.GetTruncatedIndex(ctx, r.ShardID)
+	index, err := s.store.getTruncatedIndex(ctx, r.ShardID)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
@@ -270,11 +270,11 @@ func (s *Service) handleLogHeartbeat(req pb.Request) pb.Response {
 	defer cancel()
 	hb := req.LogHeartbeat
 	resp := getResponse(req)
-	if err := s.store.AddLogStoreHeartbeat(ctx, hb); err != nil {
+	if err := s.store.addLogStoreHeartbeat(ctx, hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	}
-	if cb, err := s.store.GetCommandBatch(ctx, hb.UUID); err != nil {
+	if cb, err := s.store.getCommandBatch(ctx, hb.UUID); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
@@ -289,11 +289,11 @@ func (s *Service) handleDNHeartbeat(req pb.Request) pb.Response {
 	defer cancel()
 	hb := req.DNHeartbeat
 	resp := getResponse(req)
-	if err := s.store.AddDNStoreHeartbeat(ctx, hb); err != nil {
+	if err := s.store.addDNStoreHeartbeat(ctx, hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	}
-	if cb, err := s.store.GetCommandBatch(ctx, hb.UUID); err != nil {
+	if cb, err := s.store.getCommandBatch(ctx, hb.UUID); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {

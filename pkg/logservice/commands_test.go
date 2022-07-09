@@ -74,8 +74,8 @@ func TestHandleAddReplica(t *testing.T) {
 	store1, store2, err := getTestStores()
 	require.NoError(t, err)
 	defer func() {
-		require.NoError(t, store1.Close())
-		require.NoError(t, store2.Close())
+		require.NoError(t, store1.close())
+		require.NoError(t, store2.close())
 	}()
 
 	service1 := Service{
@@ -102,8 +102,8 @@ func TestHandleRemoveReplica(t *testing.T) {
 	store1, store2, err := getTestStores()
 	require.NoError(t, err)
 	defer func() {
-		require.NoError(t, store1.Close())
-		require.NoError(t, store2.Close())
+		require.NoError(t, store1.close())
+		require.NoError(t, store2.close())
 	}()
 
 	service1 := Service{

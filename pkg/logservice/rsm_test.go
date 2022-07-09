@@ -20,6 +20,8 @@ import (
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
 	"github.com/stretchr/testify/assert"
+
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 func TestGetLeaseHistory(t *testing.T) {
@@ -94,7 +96,7 @@ func TestGetSetTruncatedIndexCmd(t *testing.T) {
 
 func TestIsUserUpdate(t *testing.T) {
 	cmd := make([]byte, headerSize+8+1)
-	binaryEnc.PutUint16(cmd, userEntryTag)
+	binaryEnc.PutUint32(cmd, uint32(pb.UserEntryUpdate))
 	assert.True(t, isUserUpdate(cmd))
 	cmd2 := getSetLeaseHolderCmd(1234)
 	cmd3 := getSetTruncatedIndexCmd(200)
@@ -170,7 +172,7 @@ func TestTruncatedIndexCanBeUpdated(t *testing.T) {
 
 func TestStateMachineUserUpdate(t *testing.T) {
 	cmd := make([]byte, headerSize+8+1)
-	binaryEnc.PutUint16(cmd, userEntryTag)
+	binaryEnc.PutUint32(cmd, uint32(pb.UserEntryUpdate))
 	binaryEnc.PutUint64(cmd[headerSize:], uint64(1234))
 
 	tsm := newStateMachine(1, 2).(*stateMachine)

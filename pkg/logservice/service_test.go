@@ -52,9 +52,9 @@ func runServiceTest(t *testing.T, hakeeper bool, fn func(*testing.T, *Service)) 
 	peers := make(map[uint64]dragonboat.Target)
 	peers[1] = service.ID()
 	if hakeeper {
-		require.NoError(t, service.store.StartHAKeeperReplica(1, peers, false))
+		require.NoError(t, service.store.startHAKeeperReplica(1, peers, false))
 	} else {
-		require.NoError(t, service.store.StartReplica(1, 1, peers, false))
+		require.NoError(t, service.store.startReplica(1, 1, peers, false))
 	}
 	defer func() {
 		assert.NoError(t, service.Close())
@@ -124,7 +124,7 @@ func TestServiceConnectRO(t *testing.T) {
 
 func getTestAppendCmd(id uint64, data []byte) []byte {
 	cmd := make([]byte, len(data)+headerSize+8)
-	binaryEnc.PutUint16(cmd, userEntryTag)
+	binaryEnc.PutUint32(cmd, uint32(pb.UserEntryUpdate))
 	binaryEnc.PutUint64(cmd[headerSize:], id)
 	copy(cmd[headerSize+8:], data)
 	return cmd
@@ -455,7 +455,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	}()
 	peers1 := make(map[uint64]dragonboat.Target)
 	peers1[1] = service1.ID()
-	assert.NoError(t, service1.store.StartReplica(1, 1, peers1, false))
+	assert.NoError(t, service1.store.startReplica(1, 1, peers1, false))
 
 	service2, err := NewService(cfg2)
 	require.NoError(t, err)
@@ -464,7 +464,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	}()
 	peers2 := make(map[uint64]dragonboat.Target)
 	peers2[1] = service2.ID()
-	assert.NoError(t, service2.store.StartReplica(2, 1, peers2, false))
+	assert.NoError(t, service2.store.startReplica(2, 1, peers2, false))
 
 	nhID1 := service1.ID()
 	nhID2 := service2.ID()
