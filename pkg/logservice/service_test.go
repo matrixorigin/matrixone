@@ -43,7 +43,8 @@ func getServiceTestConfig() Config {
 	}
 }
 
-func runServiceTest(t *testing.T, hakeeper bool, fn func(*testing.T, *Service)) {
+func runServiceTest(t *testing.T,
+	hakeeper bool, startReplica bool, fn func(*testing.T, *Service)) {
 	defer leaktest.AfterTest(t)()
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
@@ -51,10 +52,14 @@ func runServiceTest(t *testing.T, hakeeper bool, fn func(*testing.T, *Service)) 
 	require.NoError(t, err)
 	peers := make(map[uint64]dragonboat.Target)
 	peers[1] = service.ID()
-	if hakeeper {
-		require.NoError(t, service.store.startHAKeeperReplica(1, peers, false))
-	} else {
-		require.NoError(t, service.store.startReplica(1, 1, peers, false))
+	if startReplica {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = service.ID()
+		if hakeeper {
+			require.NoError(t, service.store.startHAKeeperReplica(1, peers, false))
+		} else {
+			require.NoError(t, service.store.startReplica(1, 1, peers, false))
+		}
 	}
 	defer func() {
 		assert.NoError(t, service.Close())
@@ -85,7 +90,7 @@ func TestServiceConnect(t *testing.T) {
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
-	runServiceTest(t, false, fn)
+	runServiceTest(t, false, true, fn)
 }
 
 func TestServiceConnectTimeout(t *testing.T) {
@@ -102,7 +107,7 @@ func TestServiceConnectTimeout(t *testing.T) {
 		assert.Equal(t, pb.Timeout, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
-	runServiceTest(t, false, fn)
+	runServiceTest(t, false, true, fn)
 }
 
 func TestServiceConnectRO(t *testing.T) {
@@ -119,7 +124,7 @@ func TestServiceConnectRO(t *testing.T) {
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
-	runServiceTest(t, false, fn)
+	runServiceTest(t, false, true, fn)
 }
 
 func getTestAppendCmd(id uint64, data []byte) []byte {
@@ -170,7 +175,7 @@ func TestServiceHandleLogHeartbeat(t *testing.T) {
 		resp := s.handleLogHeartbeat(req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
 	}
-	runServiceTest(t, true, fn)
+	runServiceTest(t, true, true, fn)
 }
 
 func TestServiceHandleDNHeartbeat(t *testing.T) {
@@ -213,7 +218,7 @@ func TestServiceHandleDNHeartbeat(t *testing.T) {
 		resp := s.handleDNHeartbeat(req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
 	}
-	runServiceTest(t, true, fn)
+	runServiceTest(t, true, true, fn)
 }
 
 func TestServiceHandleAppend(t *testing.T) {
@@ -244,7 +249,7 @@ func TestServiceHandleAppend(t *testing.T) {
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
 	}
-	runServiceTest(t, false, fn)
+	runServiceTest(t, false, true, fn)
 }
 
 func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
@@ -275,7 +280,7 @@ func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(0), resp.LogResponse.Lsn)
 	}
-	runServiceTest(t, false, fn)
+	runServiceTest(t, false, true, fn)
 }
 
 func TestServiceHandleRead(t *testing.T) {
@@ -326,7 +331,7 @@ func TestServiceHandleRead(t *testing.T) {
 		assert.Equal(t, pb.UserRecord, records.Records[3].Type)
 		assert.Equal(t, cmd, records.Records[3].Data)
 	}
-	runServiceTest(t, false, fn)
+	runServiceTest(t, false, true, fn)
 }
 
 func TestServiceTruncate(t *testing.T) {
@@ -394,7 +399,7 @@ func TestServiceTruncate(t *testing.T) {
 		assert.Equal(t, pb.LsnAlreadyTruncated, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
-	runServiceTest(t, false, fn)
+	runServiceTest(t, false, true, fn)
 }
 
 func TestServiceTsoUpdate(t *testing.T) {
@@ -422,7 +427,7 @@ func TestServiceTsoUpdate(t *testing.T) {
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(1101), resp.TsoResponse.Value)
 	}
-	runServiceTest(t, false, fn)
+	runServiceTest(t, false, true, fn)
 }
 
 func TestShardInfoCanBeQueried(t *testing.T) {

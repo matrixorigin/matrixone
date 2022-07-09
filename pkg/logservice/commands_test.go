@@ -33,12 +33,13 @@ func TestHandleStartReplica(t *testing.T) {
 					ShardID:   1,
 					ReplicaID: 1,
 				},
+				InitialMembers: map[uint64]string{1: s.ID()},
 			},
 		}
 		s.handleCommands([]pb.ScheduleCommand{cmd})
 		mustHaveReplica(t, s.store, 1, 1)
 	}
-	runServiceTest(t, false, fn)
+	runServiceTest(t, false, false, fn)
 }
 
 func TestHandleStopReplica(t *testing.T) {
@@ -50,6 +51,7 @@ func TestHandleStopReplica(t *testing.T) {
 					ShardID:   1,
 					ReplicaID: 1,
 				},
+				InitialMembers: map[uint64]string{1: s.ID()},
 			},
 		}
 		s.handleCommands([]pb.ScheduleCommand{cmd})
@@ -67,7 +69,7 @@ func TestHandleStopReplica(t *testing.T) {
 		s.handleCommands([]pb.ScheduleCommand{cmd})
 		assert.False(t, hasReplica(s.store, 1, 1))
 	}
-	runServiceTest(t, false, fn)
+	runServiceTest(t, false, false, fn)
 }
 
 func TestHandleAddReplica(t *testing.T) {
