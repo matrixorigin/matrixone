@@ -74,7 +74,6 @@ func (s *Driver) Init(name string) (err error) {
 		magic: MAGIC,
 		inode: 1,
 		size:  0,
-		state: RESIDENT,
 	}
 	s.name = name
 	s.super.lognode = log
