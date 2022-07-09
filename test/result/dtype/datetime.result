@@ -63,13 +63,13 @@ cast(cast('2000-12-31' as datetime(0)) as date)
 drop table if exists t1;
 create table t1 (a datetime(0) not null, primary key(a));
 insert into t1 values ('20200101000000'), ('2022-01-02'), ('2022-01-02 00:00:01'), ('2022-01-02 00:00:01.512345');
-select * from t1;
+select * from t1 order by a asc;
 a
 2020-01-01 00:00:00
 2022-01-02 00:00:00
 2022-01-02 00:00:01
 2022-01-02 00:00:02
-select * from t1 where a='2022-01-02';
+select * from t1 where a='2022-01-02' order by 1 asc;
 a
 2022-01-02 00:00:00
 select * from t1 where a>20220102;

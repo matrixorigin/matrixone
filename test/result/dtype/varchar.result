@@ -7,13 +7,13 @@ insert into t1 values('ab_def');
 insert into t1 values('abc_ef');
 insert into t1 values('abcd_f');
 insert into t1 values('abcde_');
-select * from t1 where a like 'ab\_def';
+select * from t1 where a like 'ab\_def' order by 1 asc;
 a
 ab_def
-select * from t1 where a not like 'a%';
+select * from t1 where a not like 'a%' order by a desc;
 a
 _bcdef
-select * from t1 where a like "\__cdef";
+select * from t1 where a like "\__cdef" order by 1 desc;
 a
 _bcdef
 select * from t1 where a not like "%d_\_";
@@ -185,7 +185,7 @@ insert into job values
 (6,'Sales Manager (NA)'),
 (7,'Sales Rep'),
 (8,'Marketing');
-select employeeNumber,e.jobTitle,j.jobid from employees e join job j on e.jobTitle=j.jobTitle;
+select employeeNumber,e.jobTitle,j.jobid from employees e join job j on e.jobTitle=j.jobTitle order by 1 asc, 3 asc;
 employeeNumber	jobTitle	jobid
 1002	President	1
 1056	VP Sales	2

@@ -21,7 +21,7 @@ delete from t1 where a>0;
 drop table if exists t1;
 create table t1(a float(23,22));
 insert into t1 values(-3.402823466),(-1.175494351),(0),(1.175494351),(3.402823466);
-select * from t1;
+select * from t1 order by 1 asc;
 a
 -3.4028234481811523000000
 -1.1754943132400513000000
@@ -31,7 +31,7 @@ a
 drop table if exists t1;
 create table t1(a float(23));
 insert into t1 values(-3.402823466),(-1.175494351),(0),(1.175494351),(3.402823466);
-select * from t1;
+select * from t1 order by a asc;
 a
 -3.40282
 -1.17549
@@ -41,7 +41,7 @@ a
 drop table t1;
 create table t1 ( a float not null default 1, big float(20,5) primary key);
 insert into t1 (big) values (-1),(12345678.901234567),(92233720368547.75807);
-select * from t1;
+select * from t1 order by a desc, big asc;
 a	big
 1	-1.00000
 1	12345679.00000
@@ -49,13 +49,13 @@ a	big
 select min(big),max(big),max(big)-1 from t1;
 min(big)	max(big)	max(big)-1
 -1.00000	92233718038528.00000	92233718038527.00000
-select min(big),max(big),max(big)-1 from t1 group by a;
+select min(big),max(big),max(big)-1 from t1 group by a order by 3;
 min(big)	max(big)	max(big)-1
 -1.00000	92233718038528.00000	92233718038527.00000
 drop table t1;
 create table t1 ( a float not null default 1, big float);
 insert into t1 (big) values (-1),(12345678.901234567),(92233720368547.75807);
-select * from t1;
+select * from t1 order by a asc, big asc;
 a	big
 1.0	-1.0
 1.0	1.2345679E7
@@ -71,7 +71,7 @@ a	big
 select min(big),max(big),max(big)-1 from t1;
 min(big)	max(big)	max(big)-1
 -1	92233700000000	92233718038527
-select min(big),max(big),max(big)-1 from t1 group by a;
+select min(big),max(big),max(big)-1 from t1 group by a order by 1+2;
 min(big)	max(big)	max(big)-1
 -1	92233700000000	92233718038527
 drop table t1;
@@ -115,7 +115,7 @@ a	b
 select * from t1 join t2 on t1.a=t2.a order by t1.a asc, t2.b desc;
 a	b	a	b
 0.123456	1	0.123456	3
-select * from t1 join t2 on t1.a=t2.a where t1.a>=0.123456;
+select * from t1 join t2 on t1.a=t2.a where t1.a>=0.123456 order by abs(3);
 a	b	a	b
 0.123456	1	0.123456	3
 select * from t1 join t2 on t2.b=t1.a order by 1,2 desc;
