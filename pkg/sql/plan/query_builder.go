@@ -1023,7 +1023,7 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 		return 0, err
 	}
 
-	for i := 1; i < len(stmt); i ++ {
+	for i := 1; i < len(stmt); i++ {
 		rightCtx := NewBindContext(builder, ctx)
 		rightChildId, err := builder.buildTable(stmt[i], rightCtx)
 		if err != nil {
@@ -1036,7 +1036,7 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 			JoinType: plan.Node_INNER,
 		}, nil)
 
-		if i == len(stmt) - 1 {
+		if i == len(stmt)-1 {
 			builder.ctxByNode[leftChildId] = ctx
 			err = ctx.mergeContexts(leftCtx, rightCtx)
 		} else {
