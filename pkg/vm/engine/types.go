@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 type Snapshot []byte
@@ -71,25 +71,6 @@ type Statistics interface {
 	Size(string) int64
 }
 
-type ListPartition struct {
-	Name         string
-	Extends      []extend.Extend
-	Subpartition *PartitionByDef
-}
-
-type RangePartition struct {
-	Name         string
-	From         []extend.Extend
-	To           []extend.Extend
-	Subpartition *PartitionByDef
-}
-
-type PartitionByDef struct {
-	Fields []string
-	List   []ListPartition
-	Range  []RangePartition
-}
-
 type IndexTableDef struct {
 	Typ      IndexT
 	ColNames []string
@@ -127,11 +108,10 @@ type TableDef interface {
 	tableDef()
 }
 
-func (*CommentDef) tableDef()     {}
-func (*AttributeDef) tableDef()   {}
-func (*IndexTableDef) tableDef()  {}
-func (*PartitionByDef) tableDef() {}
-func (*PropertiesDef) tableDef()  {}
+func (*CommentDef) tableDef()    {}
+func (*AttributeDef) tableDef()  {}
+func (*IndexTableDef) tableDef() {}
+func (*PropertiesDef) tableDef() {}
 
 type Relation interface {
 	Statistics
@@ -162,7 +142,7 @@ type Relation interface {
 	DelTableDef(uint64, TableDef, Snapshot) error
 
 	// first argument is the number of reader, second argument is the filter extend,  third parameter is the payload required by the engine
-	NewReader(int, extend.Extend, []byte, Snapshot) []Reader
+	NewReader(int, *plan.Expr, []byte, Snapshot) []Reader
 }
 
 type Reader interface {

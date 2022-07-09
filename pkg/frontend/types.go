@@ -4,7 +4,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 )
 
 type ComputationRunner interface {
@@ -31,20 +30,7 @@ type ColumnInfo interface {
 	GetType() types.T
 }
 
-var _ ColumnInfo = &aoeColumnInfo{}
 var _ ColumnInfo = &engineColumnInfo{}
-
-type aoeColumnInfo struct {
-	info aoe.ColumnInfo
-}
-
-func (ac *aoeColumnInfo) GetName() string {
-	return ac.info.Name
-}
-
-func (ac *aoeColumnInfo) GetType() types.T {
-	return ac.info.Type.Oid
-}
 
 type TableInfo interface {
 	GetColumns()

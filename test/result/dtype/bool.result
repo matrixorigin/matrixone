@@ -8,7 +8,7 @@ true	false
 true	true
 false	false
 null	null
-SELECT * FROM t1 WHERE IF(a AND 1, 0, 1);
+SELECT * FROM t1 WHERE IF(a AND 1, 0, 1) order by a asc;
 a	b
 false	true
 false	false
@@ -18,7 +18,7 @@ a	b
 false	true
 false	false
 null	null
-SELECT * FROM t1 where NOT(a AND 1);
+SELECT * FROM t1 where NOT(a AND 1) order by a asc, b desc;
 a	b
 false	true
 false	false
@@ -34,11 +34,11 @@ SELECT * FROM t1 where (1 AND a)=0;
 a	b
 false	true
 false	false
-SELECT * FROM t1 where (1 AND a)=1;
+SELECT * FROM t1 where (1 AND a)=1 order by a asc, 2 asc;
 a	b
 true	false
 true	true
-SELECT * FROM t1 where (1 AND a) IS NULL;
+SELECT * FROM t1 where (1 AND a) IS NULL order by 1 desc, 2 asc;
 a	b
 null	null
 select not a,a and b,a or b,a xor b from t1;
@@ -119,7 +119,7 @@ a	b
 false	true
 true	true
 false	false
-select t1.a,t2.b from t1 join t2 on t1.a=t2.a order by t1.a desc;
+select t1.a,t2.b from t1 join t2 on t1.a=t2.a order by t1.a desc, 2 desc;
 a	b
 true	2
 true	2

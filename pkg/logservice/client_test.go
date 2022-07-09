@@ -30,7 +30,7 @@ import (
 )
 
 func runClientTest(t *testing.T,
-	readOnly bool, fn func(*testing.T, LogServiceClientConfig, Client)) {
+	readOnly bool, fn func(*testing.T, ClientConfig, Client)) {
 	defer leaktest.AfterTest(t)()
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
@@ -44,7 +44,7 @@ func runClientTest(t *testing.T,
 	init[2] = service.ID()
 	assert.NoError(t, service.store.StartReplica(1, 2, init, false))
 
-	scfg := LogServiceClientConfig{
+	scfg := ClientConfig{
 		ReadOnly:         readOnly,
 		ShardID:          1,
 		ReplicaID:        2,
@@ -53,7 +53,7 @@ func runClientTest(t *testing.T,
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	c, err := CreateClient(ctx, "shard1", scfg)
+	c, err := CreateClient(ctx, scfg)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, c.Close())
@@ -63,14 +63,33 @@ func runClientTest(t *testing.T,
 }
 
 func TestClientCanBeCreated(t *testing.T) {
-	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
+	fn := func(t *testing.T, cfg ClientConfig, c Client) {
 	}
 	runClientTest(t, false, fn)
 	runClientTest(t, true, fn)
 }
 
+func TestClientGetTSOTimestamp(t *testing.T) {
+	fn := func(t *testing.T, cfg ClientConfig, c Client) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		v, err := c.GetTSOTimestamp(ctx, 100)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(1), v)
+
+		v, err = c.GetTSOTimestamp(ctx, 1000)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(101), v)
+
+		v, err = c.GetTSOTimestamp(ctx, 100)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(1101), v)
+	}
+	runClientTest(t, false, fn)
+}
+
 func TestClientAppend(t *testing.T) {
-	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
+	fn := func(t *testing.T, cfg ClientConfig, c Client) {
 		cmd := make([]byte, 16+headerSize+8)
 		cmd = getAppendCmd(cmd, cfg.ReplicaID)
 		rand.Read(cmd[headerSize+8:])
@@ -92,7 +111,7 @@ func TestClientAppend(t *testing.T) {
 }
 
 func TestClientAppendAlloc(t *testing.T) {
-	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
+	fn := func(t *testing.T, cfg ClientConfig, c Client) {
 		cmd := make([]byte, 16+headerSize+8)
 		cmd = getAppendCmd(cmd, cfg.ReplicaID)
 		rand.Read(cmd[headerSize+8:])
@@ -108,7 +127,7 @@ func TestClientAppendAlloc(t *testing.T) {
 }
 
 func TestClientRead(t *testing.T) {
-	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
+	fn := func(t *testing.T, cfg ClientConfig, c Client) {
 		cmd := make([]byte, 16+headerSize+8)
 		cmd = getAppendCmd(cmd, cfg.ReplicaID)
 		rand.Read(cmd[headerSize+8:])
@@ -140,7 +159,7 @@ func TestClientRead(t *testing.T) {
 }
 
 func TestClientTruncate(t *testing.T) {
-	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
+	fn := func(t *testing.T, cfg ClientConfig, c Client) {
 		cmd := make([]byte, 16+headerSize+8)
 		cmd = getAppendCmd(cmd, cfg.ReplicaID)
 		rand.Read(cmd[headerSize+8:])
@@ -161,7 +180,7 @@ func TestClientTruncate(t *testing.T) {
 }
 
 func TestReadOnlyClientRejectWriteRequests(t *testing.T) {
-	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
+	fn := func(t *testing.T, cfg ClientConfig, c Client) {
 		cmd := make([]byte, 16+headerSize+8)
 		cmd = getAppendCmd(cmd, cfg.ReplicaID)
 		rand.Read(cmd[headerSize+8:])

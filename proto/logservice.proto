@@ -85,23 +85,23 @@ message DNStoreHeartbeat {
 };
 
 message RSMState {
-  uint64 Index = 1;
-  uint64 LeaseHolderID = 2;
-  uint64 TruncatedIndex = 3;
-  map<uint64, uint64> LeaseHistory = 4; // log index -> truncate index
+  uint64 Tso = 1;
+  uint64 Index = 2;
+  uint64 LeaseHolderID = 3;
+  uint64 TruncatedIndex = 4;
+  map<uint64, uint64> LeaseHistory = 5; // log index -> truncate index
 }
 
 enum MethodType {
-  CREATE       = 0;
-  DESTROY      = 1;
-  APPEND       = 2;
-  READ         = 3;
-  TRUNCATE     = 4;
-  GET_TRUNCATE = 5;
-  CONNECT      = 6;
-  CONNECT_RO   = 7;
-  LOG_HEARTBEAT = 8;
-  DN_HEARTBEAT  = 9;
+  TSO_UPDATE    = 0;
+  APPEND        = 1;
+  READ          = 2;
+  TRUNCATE      = 3;
+  GET_TRUNCATE  = 4;
+  CONNECT       = 5;
+  CONNECT_RO    = 6;
+  LOG_HEARTBEAT = 7;
+  DN_HEARTBEAT  = 8;
 };
 
 enum RecordType {
@@ -127,13 +127,18 @@ message LogRequest {
   uint64 DNID         = 6;
 }
 
+message TsoRequest {
+  uint64 Count        = 1;
+}
+
 message Request {
   uint64 RequestID               = 1;
   MethodType Method              = 2;
   int64 Timeout                  = 3;
   LogRequest LogRequest          = 4 [(gogoproto.nullable) = false];
   LogStoreHeartbeat LogHeartbeat = 5 [(gogoproto.nullable) = false];
-  DNStoreHeartbeat DNHeartbeat   = 6 [(gogoproto.nullable) = false]; 
+  DNStoreHeartbeat DNHeartbeat   = 6 [(gogoproto.nullable) = false];
+  TsoRequest TsoRequest          = 7 [(gogoproto.nullable) = false];
 };
 
 enum ErrorCode {
@@ -168,22 +173,27 @@ message Response {
   string ErrorMessage     = 4;
   LogResponse LogResponse = 5 [(gogoproto.nullable) = false];
   CommandBatch CommandBatch = 6 [(gogoproto.nullable) = false];
+  TsoResponse TsoResponse = 7 [(gogoproto.nullable) = false];
 };
 
 message LogRecordResponse {
   repeated LogRecord Records = 1 [(gogoproto.nullable) = false];
 };
 
+message TsoResponse {
+  uint64 Value = 1;
+}
 
 //
 // HAKeeper related pb
 //
 
 enum HAKeeperState {
-  HAKeeperCreated = 0;
-  HAKeeperBootstrapping = 1;
-  HAKeeperBootstrapFailed = 2;
-  HAKeeperRunning = 3;
+  HAKeeperCreated                    = 0;
+  HAKeeperBootstrapping              = 1;
+  HAKeeperBootstrapCommandsReceived  = 2;
+  HAKeeperBootstrapFailed            = 3;
+  HAKeeperRunning                    = 4;
 }
 
 // Replica of the shard
@@ -228,10 +238,11 @@ enum ServiceType {
 message ScheduleCommand {
   // UUID which store the ScheduleCommand is sent to
   string UUID = 1;
+  bool Bootstrapping          = 2;
 
-  ConfigChange ConfigChange   = 2;
-  ServiceType ServiceType     = 3;
-  ShutdownStore ShutdownStore = 4;
+  ConfigChange ConfigChange   = 3;
+  ServiceType ServiceType     = 4;
+  ShutdownStore ShutdownStore = 5;
 }
 
 message CommandBatch {
@@ -294,6 +305,7 @@ message CheckerState {
   ClusterInfo ClusterInfo = 2 [(gogoproto.nullable) = false];
   DNState DNState         = 3 [(gogoproto.nullable) = false];
   LogState LogState       = 4 [(gogoproto.nullable) = false];
+  HAKeeperState State     = 5;
 }
 
 // HAKeeperRSMState contains state maintained by HAKeeper's RSM.

@@ -76,7 +76,8 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 		for replicaID, uuid := range initialMembers {
 			commands = append(commands,
 				pb.ScheduleCommand{
-					UUID: uuid,
+					UUID:          uuid,
+					Bootstrapping: true,
 					ConfigChange: &pb.ConfigChange{
 						Replica: pb.Replica{
 							UUID:      uuid,
@@ -89,6 +90,10 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 					ServiceType: pb.LogService,
 				})
 		}
+	}
+
+	if len(dnStores) < len(bm.cluster.DNShards) {
+		return nil, errors.New("not enough dn stores")
 	}
 
 	for i, dnRecord := range bm.cluster.DNShards {
@@ -139,49 +144,28 @@ func (bm *Manager) CheckBootstrap(log pb.LogState) bool {
 }
 
 func logStoresSortedByTick(logStores map[string]pb.LogStoreInfo) []string {
-	type infoWithID struct {
-		uuid string
-		pb.LogStoreInfo
-	}
-
-	storeSlice := make([]infoWithID, 0, len(logStores))
 	uuidSlice := make([]string, 0, len(logStores))
 
-	for uuid, storeInfo := range logStores {
-		storeSlice = append(storeSlice, infoWithID{uuid, storeInfo})
+	for uuid := range logStores {
+		uuidSlice = append(uuidSlice, uuid)
 	}
 
-	sort.Slice(storeSlice, func(i, j int) bool {
-		return storeSlice[i].Tick > storeSlice[j].Tick
+	sort.Slice(uuidSlice, func(i, j int) bool {
+		return logStores[uuidSlice[i]].Tick > logStores[uuidSlice[j]].Tick
 	})
-
-	for _, store := range storeSlice {
-		uuidSlice = append(uuidSlice, store.uuid)
-	}
 
 	return uuidSlice
 }
 
 func dnStoresSortedByTick(dnStores map[string]pb.DNStoreInfo) []string {
-	type infoWithID struct {
-		uuid string
-		pb.DNStoreInfo
-	}
-
-	storeSlice := make([]infoWithID, 0, len(dnStores))
 	uuidSlice := make([]string, 0, len(dnStores))
-
-	for uuid, storeInfo := range dnStores {
-		storeSlice = append(storeSlice, infoWithID{uuid, storeInfo})
+	for uuid := range dnStores {
+		uuidSlice = append(uuidSlice, uuid)
 	}
 
-	sort.Slice(storeSlice, func(i, j int) bool {
-		return storeSlice[i].Tick > storeSlice[j].Tick
+	sort.Slice(uuidSlice, func(i, j int) bool {
+		return dnStores[uuidSlice[i]].Tick > dnStores[uuidSlice[j]].Tick
 	})
-
-	for _, store := range storeSlice {
-		uuidSlice = append(uuidSlice, store.uuid)
-	}
 
 	return uuidSlice
 }

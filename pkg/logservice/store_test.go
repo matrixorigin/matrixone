@@ -187,6 +187,20 @@ func TestAppendLogIsRejectedForMismatchedLeaseHolderID(t *testing.T) {
 	runStoreTest(t, fn)
 }
 
+func TestStoreTsoUpdate(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+		defer cancel()
+		v1, err := store.TsoUpdate(ctx, 100)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(1), v1)
+		v2, err := store.TsoUpdate(ctx, 1000)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(101), v2)
+	}
+	runStoreTest(t, fn)
+}
+
 func TestTruncateLog(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)

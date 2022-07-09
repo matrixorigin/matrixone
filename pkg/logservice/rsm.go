@@ -28,7 +28,8 @@ var (
 )
 
 const (
-	headerSize = 2
+	firstLogShardID uint64 = 1
+	headerSize             = 2
 )
 
 const (
@@ -36,6 +37,7 @@ const (
 	truncatedIndexTag
 	userEntryTag
 	indexTag
+	tsoTag
 )
 
 // used to indicate query types
@@ -65,6 +67,10 @@ func parseLeaseHolderID(cmd []byte) uint64 {
 	return binaryEnc.Uint64(cmd[headerSize:])
 }
 
+func parseTsoUpdateCmd(cmd []byte) uint64 {
+	return binaryEnc.Uint64(cmd[headerSize:])
+}
+
 func getSetLeaseHolderCmd(leaseHolderID uint64) []byte {
 	cmd := make([]byte, headerSize+8)
 	binaryEnc.PutUint16(cmd, leaseHolderIDTag)
@@ -77,6 +83,20 @@ func getSetTruncatedIndexCmd(index uint64) []byte {
 	binaryEnc.PutUint16(cmd, truncatedIndexTag)
 	binaryEnc.PutUint64(cmd[headerSize:], index)
 	return cmd
+}
+
+func getTsoUpdateCmd(count uint64) []byte {
+	cmd := make([]byte, headerSize+8)
+	binaryEnc.PutUint16(cmd, tsoTag)
+	binaryEnc.PutUint64(cmd[headerSize:], count)
+	return cmd
+}
+
+func isTsoUpdate(cmd []byte) bool {
+	if len(cmd) != headerSize+8 {
+		return false
+	}
+	return parseCmdTag(cmd) == tsoTag
 }
 
 func isSetLeaseHolderUpdate(cmd []byte) bool {
@@ -111,6 +131,7 @@ var _ (sm.IStateMachine) = (*stateMachine)(nil)
 
 func newStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
 	state := pb.RSMState{
+		Tso:          1,
 		LeaseHistory: make(map[uint64]uint64),
 	}
 	return &stateMachine{
@@ -172,6 +193,13 @@ func (s *stateMachine) handleUserUpdate(cmd []byte) sm.Result {
 	return sm.Result{Value: s.state.Index}
 }
 
+func (s *stateMachine) handleTsoUpdate(cmd []byte) sm.Result {
+	count := parseTsoUpdateCmd(cmd)
+	result := sm.Result{Value: s.state.Tso}
+	s.state.Tso += count
+	return result
+}
+
 func (s *stateMachine) Close() error {
 	return nil
 }
@@ -185,6 +213,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleTruncateIndex(cmd), nil
 	} else if isUserUpdate(cmd) {
 		return s.handleUserUpdate(cmd), nil
+	} else if isTsoUpdate(cmd) {
+		return s.handleTsoUpdate(cmd), nil
 	}
 	panic("corrupted entry")
 }

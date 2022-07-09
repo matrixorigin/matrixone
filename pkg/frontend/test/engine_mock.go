@@ -11,7 +11,7 @@ import (
 	gomock "github.com/golang/mock/gomock"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
 	vector "github.com/matrixorigin/matrixone/pkg/container/vector"
-	extend "github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	engine "github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -236,7 +236,7 @@ func (mr *MockRelationMockRecorder) ID(arg0 interface{}) *gomock.Call {
 }
 
 // NewReader mocks base method.
-func (m *MockRelation) NewReader(arg0 int, arg1 extend.Extend, arg2 []byte, arg3 engine.Snapshot) []engine.Reader {
+func (m *MockRelation) NewReader(arg0 int, arg1 *plan.Expr, arg2 []byte, arg3 engine.Snapshot) []engine.Reader {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "NewReader", arg0, arg1, arg2, arg3)
 	ret0, _ := ret[0].([]engine.Reader)

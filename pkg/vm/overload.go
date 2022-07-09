@@ -16,14 +16,26 @@ package vm
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/updateTag"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopcomplement"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/complement"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedup"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deleteTag"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergededup"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
@@ -31,98 +43,112 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
-	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/join"
-	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/oplus"
-	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/plus"
-	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/times"
-	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
-	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/untransform"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var stringFunc = [...]func(interface{}, *bytes.Buffer){
-	Top:         top.String,
-	Join:        join.String,
-	Plus:        plus.String,
-	Times:       times.String,
-	Limit:       limit.String,
-	Dedup:       dedup.String,
-	Order:       order.String,
-	Merge:       merge.String,
-	Oplus:       oplus.String,
-	Output:      output.String,
-	Offset:      offset.String,
-	Restrict:    restrict.String,
-	Connector:   connector.String,
-	Transform:   transform.String,
-	Projection:  projection.String,
-	UnTransform: untransform.String,
+	Top:        top.String,
+	Join:       join.String,
+	Semi:       semi.String,
+	Left:       left.String,
+	Limit:      limit.String,
+	Order:      order.String,
+	Group:      group.String,
+	Merge:      merge.String,
+	Output:     output.String,
+	Offset:     offset.String,
+	Product:    product.String,
+	Restrict:   restrict.String,
+	Dispatch:   dispatch.String,
+	Connector:  connector.String,
+	Projection: projection.String,
+	Complement: complement.String,
 
-	MergeDedup:  mergededup.String,
-	MergeLimit:  mergelimit.String,
-	MergeOffset: mergeoffset.String,
-	MergeOrder:  mergeorder.String,
+	LoopJoin:       loopjoin.String,
+	LoopLeft:       loopleft.String,
+	LoopSemi:       loopsemi.String,
+	LoopComplement: loopcomplement.String,
+
 	MergeTop:    mergetop.String,
+	MergeLimit:  mergelimit.String,
+	MergeOrder:  mergeorder.String,
+	MergeGroup:  mergegroup.String,
+	MergeOffset: mergeoffset.String,
 
-	DeleteTag: deleteTag.String,
-	UpdateTag: updateTag.String,
+	Deletion: deletion.String,
+	Insert:   insert.String,
+	Update:   update.String,
 }
 
 var prepareFunc = [...]func(*process.Process, interface{}) error{
-	Top:         top.Prepare,
-	Join:        join.Prepare,
-	Plus:        plus.Prepare,
-	Times:       times.Prepare,
-	Limit:       limit.Prepare,
-	Dedup:       dedup.Prepare,
-	Order:       order.Prepare,
-	Merge:       merge.Prepare,
-	Oplus:       oplus.Prepare,
-	Output:      output.Prepare,
-	Offset:      offset.Prepare,
-	Restrict:    restrict.Prepare,
-	Connector:   connector.Prepare,
-	Transform:   transform.Prepare,
-	Projection:  projection.Prepare,
-	UnTransform: untransform.Prepare,
+	Top:        top.Prepare,
+	Join:       join.Prepare,
+	Semi:       semi.Prepare,
+	Left:       left.Prepare,
+	Limit:      limit.Prepare,
+	Order:      order.Prepare,
+	Group:      group.Prepare,
+	Merge:      merge.Prepare,
+	Output:     output.Prepare,
+	Offset:     offset.Prepare,
+	Product:    product.Prepare,
+	Restrict:   restrict.Prepare,
+	Dispatch:   dispatch.Prepare,
+	Connector:  connector.Prepare,
+	Projection: projection.Prepare,
+	Complement: complement.Prepare,
 
-	MergeDedup:  mergededup.Prepare,
-	MergeLimit:  mergelimit.Prepare,
-	MergeOffset: mergeoffset.Prepare,
-	MergeOrder:  mergeorder.Prepare,
+	LoopJoin:       loopjoin.Prepare,
+	LoopLeft:       loopleft.Prepare,
+	LoopSemi:       loopsemi.Prepare,
+	LoopComplement: loopcomplement.Prepare,
+
 	MergeTop:    mergetop.Prepare,
+	MergeLimit:  mergelimit.Prepare,
+	MergeOrder:  mergeorder.Prepare,
+	MergeGroup:  mergegroup.Prepare,
+	MergeOffset: mergeoffset.Prepare,
 
-	DeleteTag: deleteTag.Prepare,
-	UpdateTag: updateTag.Prepare,
+	Deletion: deletion.Prepare,
+	Insert:   insert.Prepare,
+	Update:   update.Prepare,
 }
 
 var execFunc = [...]func(*process.Process, interface{}) (bool, error){
-	Top:         top.Call,
-	Join:        join.Call,
-	Plus:        plus.Call,
-	Times:       times.Call,
-	Limit:       limit.Call,
-	Dedup:       dedup.Call,
-	Order:       order.Call,
-	Merge:       merge.Call,
-	Oplus:       oplus.Call,
-	Output:      output.Call,
-	Offset:      offset.Call,
-	Restrict:    restrict.Call,
-	Connector:   connector.Call,
-	Transform:   transform.Call,
-	Projection:  projection.Call,
-	UnTransform: untransform.Call,
+	Top:        top.Call,
+	Join:       join.Call,
+	Semi:       semi.Call,
+	Left:       left.Call,
+	Limit:      limit.Call,
+	Order:      order.Call,
+	Group:      group.Call,
+	Merge:      merge.Call,
+	Output:     output.Call,
+	Offset:     offset.Call,
+	Product:    product.Call,
+	Restrict:   restrict.Call,
+	Dispatch:   dispatch.Call,
+	Connector:  connector.Call,
+	Projection: projection.Call,
+	Complement: complement.Call,
 
-	MergeDedup:  mergededup.Call,
-	MergeLimit:  mergelimit.Call,
-	MergeOffset: mergeoffset.Call,
-	MergeOrder:  mergeorder.Call,
+	LoopJoin:       loopjoin.Call,
+	LoopLeft:       loopleft.Call,
+	LoopSemi:       loopsemi.Call,
+	LoopComplement: loopcomplement.Call,
+
 	MergeTop:    mergetop.Call,
+	MergeLimit:  mergelimit.Call,
+	MergeOrder:  mergeorder.Call,
+	MergeGroup:  mergegroup.Call,
+	MergeOffset: mergeoffset.Call,
 
-	DeleteTag: deleteTag.Call,
-	UpdateTag: updateTag.Call,
+	Deletion: deletion.Call,
+	Insert:   insert.Call,
+	Update:   update.Call,
 }

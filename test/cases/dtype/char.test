@@ -33,9 +33,9 @@ insert into t1 values('ab_def');
 insert into t1 values('abc_ef');
 insert into t1 values('abcd_f');
 insert into t1 values('abcde_');
-select * from t1 where a like 'ab\_def';
-select * from t1 where a not like 'a%';
-select * from t1 where a like "\__cdef";
+select * from t1 where a like 'ab\_def' order by a desc;
+select * from t1 where a not like 'a%' order by 1 asc;
+select * from t1 where a like "\__cdef" order by 1 desc;
 select * from t1 where a not like "%d_\_";
 CREATE TABLE Demochar
 (

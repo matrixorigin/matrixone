@@ -25,7 +25,10 @@ import (
 )
 
 var (
-	ErrDeadlineNotSet  = moerr.NewError(moerr.INVALID_INPUT, "deadline not set")
+	// ErrDeadlineNotSet is returned when deadline is not set in the context.
+	ErrDeadlineNotSet = moerr.NewError(moerr.INVALID_INPUT, "deadline not set")
+	// ErrInvalidDeadline is returned when the specified deadline is invalid, e.g.
+	// deadline is in the past.
 	ErrInvalidDeadline = moerr.NewError(moerr.INVALID_INPUT, "invalid deadline")
 	// ErrIncompatibleClient is returned when write requests are made on read-only clients.
 	ErrIncompatibleClient = moerr.NewError(moerr.INVALID_INPUT, "incompatible client")
@@ -36,55 +39,70 @@ const (
 	defaultWriteSocketSize = 64 * 1024
 )
 
-// IsTempError returns a boolean value indicating whether the specified error is a temp
-// error that worth to be retried, e.g. timeouts, temp network issues, operation can be
-// completed as Raft leader is being elected. Non-temp error means the error is caused
-// by program logics rather than some external factors.
+// IsTempError returns a boolean value indicating whether the specified error
+// is a temp error that worth to be retried, e.g. timeouts, temp network
+// issues. Non-temp error caused by program logics rather than some external
+// factors.
 func IsTempError(err error) bool {
 	return isTempError(err)
 }
 
-type LogServiceClientConfig struct {
-	ReadOnly  bool
-	ShardID   uint64
+// ClientConfig is the configuration for log service clients.
+type ClientConfig struct {
+	// ReadOnly indicates whether this is a read-only client.
+	ReadOnly bool
+	// ShardID is the shard ID of the log service shard to be used.
+	ShardID uint64
+	// ReplicaID is the replica ID of the DN that owns the created client.
 	ReplicaID uint64
-	// LogService nodes service addresses
+	// LogService nodes service addresses. This field is provided for testing
+	// purposes only.
 	ServiceAddresses []string
 }
 
+// Client is the Log Service Client interface exposed to the DN.
 type Client interface {
 	Close() error
-	Config() LogServiceClientConfig
+	Config() ClientConfig
 	Append(ctx context.Context, rec pb.LogRecord) (Lsn, error)
 	Read(ctx context.Context, firstIndex Lsn, maxSize uint64) ([]pb.LogRecord, Lsn, error)
 	Truncate(ctx context.Context, index Lsn) error
 	GetTruncatedIndex(ctx context.Context) (Lsn, error)
+	GetTSOTimestamp(ctx context.Context, count uint64) (uint64, error)
 }
 
 type client struct {
-	cfg    LogServiceClientConfig
-	client morpc.RPCClient
-	addr   string
-	req    *RPCRequest
-	pool   *sync.Pool
+	cfg      ClientConfig
+	client   morpc.RPCClient
+	addr     string
+	pool     *sync.Pool
+	respPool *sync.Pool
 }
 
 var _ Client = (*client)(nil)
 
+// CreateClient creates a Log Service client. Each returned client can be used
+// to synchronously issue requests to the Log Service. To send multiple requests
+// to the Log Service in parallel, multiple clients should be created and used
+// to do so.
 func CreateClient(ctx context.Context,
-	name string, cfg LogServiceClientConfig) (Client, error) {
+	cfg ClientConfig) (Client, error) {
 	pool := &sync.Pool{}
 	pool.New = func() interface{} {
-		return &RPCResponse{pool: pool}
+		return &RPCRequest{pool: pool}
+	}
+	respPool := &sync.Pool{}
+	respPool.New = func() interface{} {
+		return &RPCResponse{pool: respPool}
 	}
 	c := &client{
-		cfg:  cfg,
-		req:  &RPCRequest{},
-		pool: pool,
+		cfg:      cfg,
+		pool:     pool,
+		respPool: respPool,
 	}
 	var e error
 	for _, addr := range cfg.ServiceAddresses {
-		cc, err := getRPCClient(ctx, addr, c.pool)
+		cc, err := getRPCClient(ctx, addr, c.respPool)
 		if err != nil {
 			e = err
 			continue
@@ -108,14 +126,19 @@ func CreateClient(ctx context.Context,
 	return nil, e
 }
 
+// Close closes the client.
 func (c *client) Close() error {
 	return c.client.Close()
 }
 
-func (c *client) Config() LogServiceClientConfig {
+// Config returns the specified configuration when creating the client.
+func (c *client) Config() ClientConfig {
 	return c.cfg
 }
 
+// Append appends the specified LogRecrd into the Log Service. On success, the
+// assigned Lsn will be returned. For the specified LogRecord, only its Dsta
+// field is used with all other fields ignored by Append().
 func (c *client) Append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
 	if c.readOnly() {
 		return 0, ErrIncompatibleClient
@@ -124,11 +147,19 @@ func (c *client) Append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
 	return c.append(ctx, rec)
 }
 
+// Read reads the Log Service from the specified Lsn position until the
+// returned LogRecord set reachs the specified maxSize in bytes. The returned
+// Lsn indicates the next Lsn to use to resume the read, or it means
+// everything available has been read when it equals to the specified Lsn.
 func (c *client) Read(ctx context.Context,
 	firstIndex Lsn, maxSize uint64) ([]pb.LogRecord, Lsn, error) {
 	return c.read(ctx, firstIndex, maxSize)
 }
 
+// Truncate truncates the Log Service log at the specified Lsn with Lsn
+// itself included. This allows the Log Service to free up storage capacities
+// for future appends, all future reads must start after the specified Lsn
+// position.
 func (c *client) Truncate(ctx context.Context, lsn Lsn) error {
 	if c.readOnly() {
 		return ErrIncompatibleClient
@@ -136,8 +167,17 @@ func (c *client) Truncate(ctx context.Context, lsn Lsn) error {
 	return c.truncate(ctx, lsn)
 }
 
+// GetTruncatedIndex returns the largest Lsn value that has been specified for
+// truncation.
 func (c *client) GetTruncatedIndex(ctx context.Context) (Lsn, error) {
 	return c.getTruncatedIndex(ctx)
+}
+
+// GetTSOTimestamp requests a total of count unique timestamps from the TSO and
+// return the first assigned such timestamp, that is TSO timestamps
+// [returned value, returned value + count] will be owned by the caller.
+func (c *client) GetTSOTimestamp(ctx context.Context, count uint64) (uint64, error) {
+	return c.tsoRequest(ctx, count)
 }
 
 func (c *client) readOnly() bool {
@@ -172,10 +212,11 @@ func (c *client) request(ctx context.Context,
 			MaxSize: maxSize,
 		},
 	}
-	c.req.Request = req
-	c.req.payload = payload
+	r := c.pool.Get().(*RPCRequest)
+	r.Request = req
+	r.payload = payload
 	future, err := c.client.Send(ctx,
-		c.addr, c.req, morpc.SendOptions{Timeout: time.Duration(timeout)})
+		c.addr, r, morpc.SendOptions{Timeout: time.Duration(timeout)})
 	if err != nil {
 		return pb.Response{}, nil, err
 	}
@@ -199,6 +240,43 @@ func (c *client) request(ctx context.Context,
 		return pb.Response{}, nil, err
 	}
 	return resp, recs.Records, nil
+}
+
+func (c *client) tsoRequest(ctx context.Context, count uint64) (uint64, error) {
+	timeout, err := getTimeoutFromContext(ctx)
+	if err != nil {
+		return 0, err
+	}
+	req := pb.Request{
+		Method:  pb.TSO_UPDATE,
+		Timeout: int64(timeout),
+		TsoRequest: pb.TsoRequest{
+			Count: count,
+		},
+	}
+	r := c.pool.Get().(*RPCRequest)
+	r.Request = req
+	future, err := c.client.Send(ctx,
+		c.addr, r, morpc.SendOptions{Timeout: time.Duration(timeout)})
+	if err != nil {
+		return 0, err
+	}
+	defer future.Close()
+	msg, err := future.Get()
+	if err != nil {
+		return 0, err
+	}
+	response, ok := msg.(*RPCResponse)
+	if !ok {
+		panic("unexpected response type")
+	}
+	resp := response.Response
+	defer response.Release()
+	err = toError(response.Response)
+	if err != nil {
+		return 0, err
+	}
+	return resp.TsoResponse.Value, nil
 }
 
 func (c *client) connect(ctx context.Context, mt pb.MethodType) error {
