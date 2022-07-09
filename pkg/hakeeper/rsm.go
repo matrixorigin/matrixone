@@ -44,18 +44,7 @@ const (
 	// DefaultHAKeeperShardID is the shard ID assigned to the special HAKeeper
 	// shard.
 	DefaultHAKeeperShardID uint64 = 0
-	headerSize                    = 2
-)
-
-const (
-	createLogShardTag uint16 = iota + 0xAE01
-	tickTag
-	dnHeartbeatTag
-	logHeartbeatTag
-	getIDTag
-	updateScheduleCommandTag
-	setStateTag
-	initialClusterRequestTag
+	headerSize                    = 4
 )
 
 type StateQuery struct{}
@@ -68,8 +57,8 @@ type stateMachine struct {
 	state     pb.HAKeeperRSMState
 }
 
-func parseCmdTag(cmd []byte) uint16 {
-	return binaryEnc.Uint16(cmd)
+func parseCmdTag(cmd []byte) pb.HAKeeperUpdateType {
+	return pb.HAKeeperUpdateType(binaryEnc.Uint32(cmd))
 }
 
 func GetInitialClusterRequestCmd(numOfLogShards uint64,
@@ -84,18 +73,18 @@ func GetInitialClusterRequestCmd(numOfLogShards uint64,
 		panic(err)
 	}
 	cmd := make([]byte, headerSize+len(payload))
-	binaryEnc.PutUint16(cmd, initialClusterRequestTag)
+	binaryEnc.PutUint32(cmd, uint32(pb.InitialClusterUpdate))
 	copy(cmd[headerSize:], payload)
 	return cmd
 }
 
 func isInitialClusterRequestCmd(cmd []byte) bool {
-	return parseCmdTag(cmd) == initialClusterRequestTag
+	return parseCmdTag(cmd) == pb.InitialClusterUpdate
 }
 
 func parseInitialClusterRequestCmd(cmd []byte) pb.InitialClusterRequest {
-	if parseCmdTag(cmd) != initialClusterRequestTag {
-		panic("not a initialClusterRequestTag")
+	if parseCmdTag(cmd) != pb.InitialClusterUpdate {
+		panic("not a initial cluster update")
 	}
 	payload := cmd[headerSize:]
 	var result pb.InitialClusterRequest
@@ -111,7 +100,7 @@ func GetUpdateCommandsCmd(term uint64, cmds []pb.ScheduleCommand) []byte {
 		Commands: cmds,
 	}
 	data := make([]byte, headerSize+b.Size())
-	binaryEnc.PutUint16(data, updateScheduleCommandTag)
+	binaryEnc.PutUint32(data, uint32(pb.ScheduleCommandUpdate))
 	if _, err := b.MarshalTo(data[headerSize:]); err != nil {
 		panic(err)
 	}
@@ -119,40 +108,25 @@ func GetUpdateCommandsCmd(term uint64, cmds []pb.ScheduleCommand) []byte {
 }
 
 func isUpdateCommandsCmd(cmd []byte) bool {
-	return parseCmdTag(cmd) == updateScheduleCommandTag
+	return parseCmdTag(cmd) == pb.ScheduleCommandUpdate
 }
 
 func GetGetIDCmd(count uint64) []byte {
 	cmd := make([]byte, headerSize+8)
-	binaryEnc.PutUint16(cmd, getIDTag)
+	binaryEnc.PutUint32(cmd, uint32(pb.GetIDUpdate))
 	binaryEnc.PutUint64(cmd[headerSize:], count)
 	return cmd
 }
 
-func getCreateLogShardCmd(name string) []byte {
-	return getLogShardCmd(name, createLogShardTag)
-}
-
-func getLogShardCmd(name string, tag uint16) []byte {
-	cmd := make([]byte, headerSize+len(name))
-	binaryEnc.PutUint16(cmd, tag)
-	copy(cmd[headerSize:], []byte(name))
-	return cmd
-}
-
-func isCreateLogShardCmd(cmd []byte) (string, bool) {
-	return isLogShardCmd(cmd, createLogShardTag)
-}
-
 func isDNHeartbeatCmd(cmd []byte) bool {
-	return isHeartbeatCmd(cmd, dnHeartbeatTag)
+	return isHeartbeatCmd(cmd, pb.DNHeartbeatUpdate)
 }
 
 func isLogHeartbeatCmd(cmd []byte) bool {
-	return isHeartbeatCmd(cmd, logHeartbeatTag)
+	return isHeartbeatCmd(cmd, pb.LogHeartbeatUpdate)
 }
 
-func isHeartbeatCmd(cmd []byte, tag uint16) bool {
+func isHeartbeatCmd(cmd []byte, tag pb.HAKeeperUpdateType) bool {
 	if len(cmd) <= headerSize {
 		return false
 	}
@@ -163,22 +137,12 @@ func parseHeartbeatCmd(cmd []byte) []byte {
 	return cmd[headerSize:]
 }
 
-func isLogShardCmd(cmd []byte, tag uint16) (string, bool) {
-	if len(cmd) <= headerSize {
-		return "", false
-	}
-	if parseCmdTag(cmd) == tag {
-		return string(cmd[headerSize:]), true
-	}
-	return "", false
-}
-
 func isTickCmd(cmd []byte) bool {
-	return len(cmd) == headerSize && binaryEnc.Uint16(cmd) == tickTag
+	return len(cmd) == headerSize && parseCmdTag(cmd) == pb.TickUpdate
 }
 
 func isGetIDCmd(cmd []byte) bool {
-	return len(cmd) == headerSize+8 && binaryEnc.Uint16(cmd) == getIDTag
+	return len(cmd) == headerSize+8 && parseCmdTag(cmd) == pb.GetIDUpdate
 }
 
 func parseGetIDCmd(cmd []byte) uint64 {
@@ -186,7 +150,7 @@ func parseGetIDCmd(cmd []byte) uint64 {
 }
 
 func isSetStateCmd(cmd []byte) bool {
-	return len(cmd) == headerSize+4 && binaryEnc.Uint16(cmd) == setStateTag
+	return len(cmd) == headerSize+4 && parseCmdTag(cmd) == pb.SetStateUpdate
 }
 
 func parseSetStateCmd(cmd []byte) pb.HAKeeperState {
@@ -195,28 +159,28 @@ func parseSetStateCmd(cmd []byte) pb.HAKeeperState {
 
 func GetSetStateCmd(state pb.HAKeeperState) []byte {
 	cmd := make([]byte, headerSize+4)
-	binaryEnc.PutUint16(cmd, setStateTag)
+	binaryEnc.PutUint32(cmd, uint32(pb.SetStateUpdate))
 	binaryEnc.PutUint32(cmd[headerSize:], uint32(state))
 	return cmd
 }
 
 func GetTickCmd() []byte {
 	cmd := make([]byte, headerSize)
-	binaryEnc.PutUint16(cmd, tickTag)
+	binaryEnc.PutUint32(cmd, uint32(pb.TickUpdate))
 	return cmd
 }
 
 func GetLogStoreHeartbeatCmd(data []byte) []byte {
-	return getHeartbeatCmd(data, logHeartbeatTag)
+	return getHeartbeatCmd(data, pb.LogHeartbeatUpdate)
 }
 
 func GetDNStoreHeartbeatCmd(data []byte) []byte {
-	return getHeartbeatCmd(data, dnHeartbeatTag)
+	return getHeartbeatCmd(data, pb.DNHeartbeatUpdate)
 }
 
-func getHeartbeatCmd(data []byte, tag uint16) []byte {
+func getHeartbeatCmd(data []byte, tag pb.HAKeeperUpdateType) []byte {
 	cmd := make([]byte, headerSize+len(data))
-	binaryEnc.PutUint16(cmd, tag)
+	binaryEnc.PutUint32(cmd, uint32(tag))
 	copy(cmd[headerSize:], data)
 	return cmd
 }
@@ -276,20 +240,6 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	}
 
 	return sm.Result{}
-}
-
-func (s *stateMachine) handleCreateLogShardCmd(cmd []byte) sm.Result {
-	name, ok := isCreateLogShardCmd(cmd)
-	if !ok {
-		panic(moerr.NewError(moerr.INVALID_INPUT, "not create log shard cmd"))
-	}
-	if shardID, ok := s.state.LogShards[name]; ok {
-		data := make([]byte, 8)
-		binaryEnc.PutUint64(data, shardID)
-		return sm.Result{Value: 0, Data: data}
-	}
-	s.state.LogShards[name] = s.assignID()
-	return sm.Result{Value: s.state.NextID}
 }
 
 func (s *stateMachine) handleDNHeartbeat(cmd []byte) sm.Result {
@@ -399,9 +349,7 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	// TODO: we need to make sure InitialClusterRequestCmd is the
 	// first user cmd added to the Raft log
 	cmd := e.Cmd
-	if _, ok := isCreateLogShardCmd(cmd); ok {
-		return s.handleCreateLogShardCmd(cmd), nil
-	} else if isDNHeartbeatCmd(cmd) {
+	if isDNHeartbeatCmd(cmd) {
 		return s.handleDNHeartbeat(cmd), nil
 	} else if isLogHeartbeatCmd(cmd) {
 		return s.handleLogHeartbeat(cmd), nil

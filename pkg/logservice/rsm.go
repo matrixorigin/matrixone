@@ -36,7 +36,6 @@ const (
 	leaseHolderIDTag uint16 = iota + 0xBF01
 	truncatedIndexTag
 	userEntryTag
-	indexTag
 	tsoTag
 )
 

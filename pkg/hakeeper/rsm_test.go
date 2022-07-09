@@ -33,13 +33,6 @@ func TestAssignID(t *testing.T) {
 	assert.Equal(t, uint64(1), tsm.state.NextID)
 }
 
-func TestCreateLogShardCmd(t *testing.T) {
-	cmd := getCreateLogShardCmd("test")
-	name, ok := isCreateLogShardCmd(cmd)
-	assert.True(t, ok)
-	assert.Equal(t, "test", name)
-}
-
 func TestHAKeeperStateMachineCanBeCreated(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
@@ -64,47 +57,6 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 	assert.Equal(t, tsm1.state.NextID, tsm2.state.NextID)
 	assert.Equal(t, tsm1.state.LogShards, tsm2.state.LogShards)
 	assert.True(t, tsm1.replicaID != tsm2.replicaID)
-}
-
-func TestHAKeeperLogShardCanBeCreated(t *testing.T) {
-	cmd := getCreateLogShardCmd("test1")
-	tsm1 := NewStateMachine(0, 1).(*stateMachine)
-	tsm1.state.NextID = 100
-
-	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
-	assert.Nil(t, err)
-	assert.Equal(t, sm.Result{Value: 101}, result)
-	assert.Equal(t, uint64(101), tsm1.state.NextID)
-
-	tsm1.state.NextID = 200
-	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
-	assert.Nil(t, err)
-	data := make([]byte, 8)
-	binaryEnc.PutUint64(data, 101)
-	assert.Equal(t, sm.Result{Data: data}, result)
-}
-
-func TestHAKeeperQueryLogShardID(t *testing.T) {
-	cmd := getCreateLogShardCmd("test1")
-	tsm1 := NewStateMachine(0, 1).(*stateMachine)
-	tsm1.state.NextID = 100
-	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
-	assert.Nil(t, err)
-	assert.Equal(t, sm.Result{Value: 101}, result)
-
-	q1 := &logShardIDQuery{name: "test1"}
-	r, err := tsm1.Lookup(q1)
-	assert.NoError(t, err)
-	r1, ok := r.(*logShardIDQueryResult)
-	assert.True(t, ok)
-	assert.Equal(t, uint64(101), r1.id)
-
-	q2 := &logShardIDQuery{name: "test2"}
-	r, err = tsm1.Lookup(q2)
-	assert.NoError(t, err)
-	r2, ok := r.(*logShardIDQueryResult)
-	assert.True(t, ok)
-	assert.Equal(t, uint64(0), r2.id)
 }
 
 func TestHAKeeperCanBeClosed(t *testing.T) {

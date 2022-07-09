@@ -20,6 +20,13 @@ import "metadata.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = false;
 
+enum UpdateType {
+  LeaseHolderIDUpdate = 0;
+  TruncatedLSNUpdate  = 1;
+  UserEntryUpdate     = 2;
+  TSOUpdate           = 3;
+}
+
 // LogShardInfo contains information a log shard.
 message LogShardInfo {
   // ShardID is the ID of a Log shard.
@@ -187,6 +194,16 @@ message TsoResponse {
 //
 // HAKeeper related pb
 //
+
+enum HAKeeperUpdateType {
+  TickUpdate            = 0;
+  DNHeartbeatUpdate     = 1;
+  LogHeartbeatUpdate    = 2;
+  GetIDUpdate           = 3;
+  ScheduleCommandUpdate = 4;
+  SetStateUpdate        = 5;
+  InitialClusterUpdate  = 6;
+}
 
 enum HAKeeperState {
   HAKeeperCreated                    = 0;
