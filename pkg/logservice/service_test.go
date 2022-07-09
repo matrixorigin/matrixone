@@ -242,7 +242,7 @@ func TestServiceHandleAppend(t *testing.T) {
 		resp = s.handleAppend(req, cmd)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(4), resp.LogResponse.Index)
+		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
 	}
 	runServiceTest(t, false, fn)
 }
@@ -273,7 +273,7 @@ func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
 		resp = s.handleAppend(req, cmd)
 		assert.Equal(t, pb.NotLeaseHolder, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(0), resp.LogResponse.Index)
+		assert.Equal(t, uint64(0), resp.LogResponse.Lsn)
 	}
 	runServiceTest(t, false, fn)
 }
@@ -304,21 +304,21 @@ func TestServiceHandleRead(t *testing.T) {
 		resp = s.handleAppend(req, cmd)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(4), resp.LogResponse.Index)
+		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
 
 		req = pb.Request{
 			Method:  pb.READ,
 			Timeout: int64(time.Second),
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				Index:   1,
+				Lsn:     1,
 				MaxSize: 1024 * 32,
 			},
 		}
 		resp, records := s.handleRead(req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(1), resp.LogResponse.LastIndex)
+		assert.Equal(t, uint64(1), resp.LogResponse.LastLsn)
 		require.Equal(t, 4, len(records.Records))
 		assert.Equal(t, pb.Internal, records.Records[0].Type)
 		assert.Equal(t, pb.Internal, records.Records[1].Type)
@@ -355,20 +355,20 @@ func TestServiceTruncate(t *testing.T) {
 		resp = s.handleAppend(req, cmd)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(4), resp.LogResponse.Index)
+		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
 
 		req = pb.Request{
 			Method:  pb.TRUNCATE,
 			Timeout: int64(time.Second),
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				Index:   4,
+				Lsn:     4,
 			},
 		}
 		resp = s.handleTruncate(req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(0), resp.LogResponse.Index)
+		assert.Equal(t, uint64(0), resp.LogResponse.Lsn)
 
 		req = pb.Request{
 			Method:  pb.GET_TRUNCATE,
@@ -380,18 +380,18 @@ func TestServiceTruncate(t *testing.T) {
 		resp = s.handleGetTruncatedIndex(req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(4), resp.LogResponse.Index)
+		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
 
 		req = pb.Request{
 			Method:  pb.TRUNCATE,
 			Timeout: int64(time.Second),
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				Index:   3,
+				Lsn:     3,
 			},
 		}
 		resp = s.handleTruncate(req)
-		assert.Equal(t, pb.IndexAlreadyTruncated, resp.ErrorCode)
+		assert.Equal(t, pb.LsnAlreadyTruncated, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
 	runServiceTest(t, false, fn)

@@ -35,8 +35,8 @@ const (
 // used to indicate query types
 type leaseHolderIDQuery struct{}
 type indexQuery struct{}
-type truncatedIndexQuery struct{}
-type leaseHistoryQuery struct{ index uint64 }
+type truncatedLsnQuery struct{}
+type leaseHistoryQuery struct{ lsn uint64 }
 
 func getAppendCmd(cmd []byte, replicaID uint64) []byte {
 	if len(cmd) < headerSize+8 {
@@ -51,7 +51,7 @@ func parseCmdTag(cmd []byte) pb.UpdateType {
 	return pb.UpdateType(binaryEnc.Uint32(cmd))
 }
 
-func parseTruncatedIndex(cmd []byte) uint64 {
+func parseTruncatedLsn(cmd []byte) uint64 {
 	return binaryEnc.Uint64(cmd[headerSize:])
 }
 
@@ -70,10 +70,10 @@ func getSetLeaseHolderCmd(leaseHolderID uint64) []byte {
 	return cmd
 }
 
-func getSetTruncatedIndexCmd(index uint64) []byte {
+func getSetTruncatedLsnCmd(lsn uint64) []byte {
 	cmd := make([]byte, headerSize+8)
 	binaryEnc.PutUint32(cmd, uint32(pb.TruncatedLSNUpdate))
-	binaryEnc.PutUint64(cmd[headerSize:], index)
+	binaryEnc.PutUint64(cmd[headerSize:], lsn)
 	return cmd
 }
 
@@ -95,7 +95,7 @@ func isSetLeaseHolderUpdate(cmd []byte) bool {
 	return tagMatch(cmd, pb.LeaseHolderIDUpdate)
 }
 
-func isSetTruncatedIndexUpdate(cmd []byte) bool {
+func isSetTruncatedLsnUpdate(cmd []byte) bool {
 	return tagMatch(cmd, pb.TruncatedLSNUpdate)
 }
 
@@ -133,20 +133,20 @@ func newStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
 	}
 }
 
-func (s *stateMachine) truncateLeaseHistory(index uint64) {
-	_, index = s.getLeaseHistory(index)
+func (s *stateMachine) truncateLeaseHistory(lsn uint64) {
+	_, lsn = s.getLeaseHistory(lsn)
 	for key := range s.state.LeaseHistory {
-		if key < index {
+		if key < lsn {
 			delete(s.state.LeaseHistory, key)
 		}
 	}
 }
 
-func (s *stateMachine) getLeaseHistory(index uint64) (uint64, uint64) {
+func (s *stateMachine) getLeaseHistory(lsn uint64) (uint64, uint64) {
 	max := uint64(0)
 	lease := uint64(0)
 	for key, val := range s.state.LeaseHistory {
-		if key >= index {
+		if key >= lsn {
 			continue
 		}
 		if key > max {
@@ -163,14 +163,14 @@ func (s *stateMachine) handleSetLeaseHolderID(cmd []byte) sm.Result {
 	return sm.Result{}
 }
 
-func (s *stateMachine) handleTruncateIndex(cmd []byte) sm.Result {
-	index := parseTruncatedIndex(cmd)
-	if index > s.state.TruncatedIndex {
-		s.state.TruncatedIndex = index
-		s.truncateLeaseHistory(index)
+func (s *stateMachine) handleTruncateLsn(cmd []byte) sm.Result {
+	lsn := parseTruncatedLsn(cmd)
+	if lsn > s.state.TruncatedLsn {
+		s.state.TruncatedLsn = lsn
+		s.truncateLeaseHistory(lsn)
 		return sm.Result{}
 	}
-	return sm.Result{Value: s.state.TruncatedIndex}
+	return sm.Result{Value: s.state.TruncatedLsn}
 }
 
 // handleUserUpdate returns an empty sm.Result on success or it returns a
@@ -201,8 +201,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	s.state.Index = e.Index
 	if isSetLeaseHolderUpdate(cmd) {
 		return s.handleSetLeaseHolderID(cmd), nil
-	} else if isSetTruncatedIndexUpdate(cmd) {
-		return s.handleTruncateIndex(cmd), nil
+	} else if isSetTruncatedLsnUpdate(cmd) {
+		return s.handleTruncateLsn(cmd), nil
 	} else if isUserUpdate(cmd) {
 		return s.handleUserUpdate(cmd), nil
 	} else if isTsoUpdate(cmd) {
@@ -216,10 +216,10 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 		return s.state.Index, nil
 	} else if _, ok := query.(leaseHolderIDQuery); ok {
 		return s.state.LeaseHolderID, nil
-	} else if _, ok := query.(truncatedIndexQuery); ok {
-		return s.state.TruncatedIndex, nil
+	} else if _, ok := query.(truncatedLsnQuery); ok {
+		return s.state.TruncatedLsn, nil
 	} else if v, ok := query.(leaseHistoryQuery); ok {
-		lease, _ := s.getLeaseHistory(v.index)
+		lease, _ := s.getLeaseHistory(v.lsn)
 		return lease, nil
 	}
 	panic("unknown lookup command type")

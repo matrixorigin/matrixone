@@ -205,7 +205,7 @@ func (s *Service) handleConnectRO(req pb.Request) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
 	// we only check whether the specified shard is available
-	if _, err := s.store.getTruncatedIndex(ctx, r.ShardID); err != nil {
+	if _, err := s.store.getTruncatedLsn(ctx, r.ShardID); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
@@ -220,7 +220,7 @@ func (s *Service) handleAppend(req pb.Request, payload []byte) pb.Response {
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.LogResponse.Index = lsn
+		resp.LogResponse.Lsn = lsn
 	}
 	return resp
 }
@@ -230,11 +230,11 @@ func (s *Service) handleRead(req pb.Request) (pb.Response, pb.LogRecordResponse)
 	defer cancel()
 	r := req.LogRequest
 	resp := getResponse(req)
-	records, lsn, err := s.store.queryLog(ctx, r.ShardID, r.Index, r.MaxSize)
+	records, lsn, err := s.store.queryLog(ctx, r.ShardID, r.Lsn, r.MaxSize)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.LogResponse.LastIndex = lsn
+		resp.LogResponse.LastLsn = lsn
 	}
 	return resp, pb.LogRecordResponse{Records: records}
 }
@@ -244,7 +244,7 @@ func (s *Service) handleTruncate(req pb.Request) pb.Response {
 	defer cancel()
 	r := req.LogRequest
 	resp := getResponse(req)
-	if err := s.store.truncateLog(ctx, r.ShardID, r.Index); err != nil {
+	if err := s.store.truncateLog(ctx, r.ShardID, r.Lsn); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
@@ -255,11 +255,11 @@ func (s *Service) handleGetTruncatedIndex(req pb.Request) pb.Response {
 	defer cancel()
 	r := req.LogRequest
 	resp := getResponse(req)
-	index, err := s.store.getTruncatedIndex(ctx, r.ShardID)
+	lsn, err := s.store.getTruncatedLsn(ctx, r.ShardID)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.LogResponse.Index = index
+		resp.LogResponse.Lsn = lsn
 	}
 	return resp
 }

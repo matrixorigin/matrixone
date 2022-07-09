@@ -65,9 +65,9 @@ type Client interface {
 	Close() error
 	Config() ClientConfig
 	Append(ctx context.Context, rec pb.LogRecord) (Lsn, error)
-	Read(ctx context.Context, firstIndex Lsn, maxSize uint64) ([]pb.LogRecord, Lsn, error)
-	Truncate(ctx context.Context, index Lsn) error
-	GetTruncatedIndex(ctx context.Context) (Lsn, error)
+	Read(ctx context.Context, firstLsn Lsn, maxSize uint64) ([]pb.LogRecord, Lsn, error)
+	Truncate(ctx context.Context, lsn Lsn) error
+	GetTruncatedLsn(ctx context.Context) (Lsn, error)
 	GetTSOTimestamp(ctx context.Context, count uint64) (uint64, error)
 }
 
@@ -152,8 +152,8 @@ func (c *client) Append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
 // Lsn indicates the next Lsn to use to resume the read, or it means
 // everything available has been read when it equals to the specified Lsn.
 func (c *client) Read(ctx context.Context,
-	firstIndex Lsn, maxSize uint64) ([]pb.LogRecord, Lsn, error) {
-	return c.read(ctx, firstIndex, maxSize)
+	firstLsn Lsn, maxSize uint64) ([]pb.LogRecord, Lsn, error) {
+	return c.read(ctx, firstLsn, maxSize)
 }
 
 // Truncate truncates the Log Service log at the specified Lsn with Lsn
@@ -167,10 +167,10 @@ func (c *client) Truncate(ctx context.Context, lsn Lsn) error {
 	return c.truncate(ctx, lsn)
 }
 
-// GetTruncatedIndex returns the largest Lsn value that has been specified for
+// GetTruncatedLsn returns the largest Lsn value that has been specified for
 // truncation.
-func (c *client) GetTruncatedIndex(ctx context.Context) (Lsn, error) {
-	return c.getTruncatedIndex(ctx)
+func (c *client) GetTruncatedLsn(ctx context.Context) (Lsn, error) {
+	return c.getTruncatedLsn(ctx)
 }
 
 // GetTSOTimestamp requests a total of count unique timestamps from the TSO and
@@ -196,7 +196,7 @@ func (c *client) connectReadOnly(ctx context.Context) error {
 }
 
 func (c *client) request(ctx context.Context,
-	mt pb.MethodType, payload []byte, index Lsn,
+	mt pb.MethodType, payload []byte, lsn Lsn,
 	maxSize uint64) (pb.Response, []pb.LogRecord, error) {
 	timeout, err := getTimeoutFromContext(ctx)
 	if err != nil {
@@ -208,7 +208,7 @@ func (c *client) request(ctx context.Context,
 		LogRequest: pb.LogRequest{
 			ShardID: c.cfg.ShardID,
 			DNID:    c.cfg.ReplicaID,
-			Index:   index,
+			Lsn:     lsn,
 			MaxSize: maxSize,
 		},
 	}
@@ -289,16 +289,16 @@ func (c *client) append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
 	if err != nil {
 		return 0, err
 	}
-	return resp.LogResponse.Index, nil
+	return resp.LogResponse.Lsn, nil
 }
 
 func (c *client) read(ctx context.Context,
-	firstIndex Lsn, maxSize uint64) ([]pb.LogRecord, Lsn, error) {
-	resp, recs, err := c.request(ctx, pb.READ, nil, firstIndex, maxSize)
+	firstLsn Lsn, maxSize uint64) ([]pb.LogRecord, Lsn, error) {
+	resp, recs, err := c.request(ctx, pb.READ, nil, firstLsn, maxSize)
 	if err != nil {
 		return nil, 0, err
 	}
-	return recs, resp.LogResponse.LastIndex, nil
+	return recs, resp.LogResponse.LastLsn, nil
 }
 
 func (c *client) truncate(ctx context.Context, lsn Lsn) error {
@@ -306,12 +306,12 @@ func (c *client) truncate(ctx context.Context, lsn Lsn) error {
 	return err
 }
 
-func (c *client) getTruncatedIndex(ctx context.Context) (Lsn, error) {
+func (c *client) getTruncatedLsn(ctx context.Context) (Lsn, error) {
 	resp, _, err := c.request(ctx, pb.GET_TRUNCATE, nil, 0, 0)
 	if err != nil {
 		return 0, err
 	}
-	return resp.LogResponse.Index, nil
+	return resp.LogResponse.Lsn, nil
 }
 
 func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RPCClient, error) {

@@ -34,9 +34,9 @@ import (
 )
 
 var (
-	ErrInvalidTruncateIndex = moerr.NewError(moerr.INVALID_INPUT, "invalid input")
-	ErrNotLeaseHolder       = moerr.NewError(moerr.INVALID_STATE, "not lease holder")
-	ErrInvalidShardID       = moerr.NewError(moerr.INVALID_INPUT, "invalid shard ID")
+	ErrInvalidTruncateLsn = moerr.NewError(moerr.INVALID_INPUT, "invalid input")
+	ErrNotLeaseHolder     = moerr.NewError(moerr.INVALID_STATE, "not lease holder")
+	ErrInvalidShardID     = moerr.NewError(moerr.INVALID_INPUT, "invalid shard ID")
 
 	ErrOutOfRange = dragonboat.ErrInvalidRange
 )
@@ -274,7 +274,7 @@ func (l *store) getOrExtendDNLease(ctx context.Context,
 func (l *store) truncateLog(ctx context.Context,
 	shardID uint64, index Lsn) error {
 	session := l.nh.GetNoOPSession(shardID)
-	cmd := getSetTruncatedIndexCmd(index)
+	cmd := getSetTruncatedLsnCmd(index)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
 		plog.Errorf("propose truncate log cmd failed, %v", err)
@@ -282,7 +282,7 @@ func (l *store) truncateLog(ctx context.Context,
 	}
 	if result.Value > 0 {
 		plog.Errorf("shardID %d already truncated to index %d", shardID, result.Value)
-		return errors.Wrapf(ErrInvalidTruncateIndex, "already truncated to %d", result.Value)
+		return errors.Wrapf(ErrInvalidTruncateLsn, "already truncated to %d", result.Value)
 	}
 	l.mu.Lock()
 	l.mu.pendingTruncate[shardID] = struct{}{}
@@ -313,9 +313,9 @@ func (l *store) append(ctx context.Context,
 	return result.Value, nil
 }
 
-func (l *store) getTruncatedIndex(ctx context.Context,
+func (l *store) getTruncatedLsn(ctx context.Context,
 	shardID uint64) (uint64, error) {
-	v, err := l.read(ctx, shardID, truncatedIndexQuery{})
+	v, err := l.read(ctx, shardID, truncatedLsnQuery{})
 	if err != nil {
 		return 0, err
 	}
@@ -388,7 +388,7 @@ func (l *store) getLeaseHolderID(ctx context.Context,
 	if isSetLeaseHolderUpdate(e.Cmd) {
 		return parseLeaseHolderID(e.Cmd), nil
 	}
-	v, err := l.read(ctx, shardID, leaseHistoryQuery{index: e.Index})
+	v, err := l.read(ctx, shardID, leaseHistoryQuery{lsn: e.Index})
 	if err != nil {
 		plog.Errorf("failed to read, %v", err)
 		return 0, err
@@ -430,8 +430,8 @@ func (l *store) markEntries(ctx context.Context,
 		if isRaftInternalEntry(e) {
 			// raft internal stuff
 			result = append(result, LogRecord{
-				Type:  pb.Internal,
-				Index: e.Index,
+				Type: pb.Internal,
+				Lsn:  e.Index,
 			})
 			continue
 		}
@@ -439,8 +439,8 @@ func (l *store) markEntries(ctx context.Context,
 		if isSetLeaseHolderUpdate(cmd) {
 			leaseHolderID = parseLeaseHolderID(cmd)
 			result = append(result, LogRecord{
-				Type:  pb.LeaseUpdate,
-				Index: e.Index,
+				Type: pb.LeaseUpdate,
+				Lsn:  e.Index,
 			})
 			continue
 		}
@@ -448,15 +448,15 @@ func (l *store) markEntries(ctx context.Context,
 			if parseLeaseHolderID(cmd) != leaseHolderID {
 				// lease not match, skip
 				result = append(result, LogRecord{
-					Type:  pb.LeaseUpdate,
-					Index: e.Index,
+					Type: pb.LeaseUpdate,
+					Lsn:  e.Index,
 				})
 				continue
 			}
 			result = append(result, LogRecord{
-				Data:  cmd,
-				Type:  pb.UserRecord,
-				Index: e.Index,
+				Data: cmd,
+				Type: pb.UserRecord,
+				Lsn:  e.Index,
 			})
 		}
 	}
@@ -585,17 +585,17 @@ func (l *store) processTruncateLog(ctx context.Context) error {
 		if err := func() error {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			index, err := l.getTruncatedIndex(ctx, shardID)
+			lsn, err := l.getTruncatedLsn(ctx, shardID)
 			if err != nil {
 				plog.Errorf("GetTruncatedIndex failed, %v", err)
 				// FIXME: check error type, see whether it is a tmp one
 				return err
 			}
 			// the first 4 entries for a 3-replica raft group are tiny anyway
-			if index > 1 {
+			if lsn > 1 {
 				opts := dragonboat.SnapshotOption{
 					OverrideCompactionOverhead: true,
-					CompactionIndex:            index - 1,
+					CompactionIndex:            lsn - 1,
 				}
 				if _, err := l.nh.SyncRequestSnapshot(ctx, shardID, opts); err != nil {
 					plog.Errorf("SyncRequestSnapshot failed, %v", err)

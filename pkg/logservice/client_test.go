@@ -170,11 +170,11 @@ func TestClientTruncate(t *testing.T) {
 		assert.Equal(t, uint64(4), lsn)
 
 		require.NoError(t, c.Truncate(ctx, 4))
-		lsn, err = c.GetTruncatedIndex(ctx)
+		lsn, err = c.GetTruncatedLsn(ctx)
 		assert.NoError(t, err)
 		assert.Equal(t, Lsn(4), lsn)
 
-		assert.Equal(t, ErrInvalidTruncateIndex, c.Truncate(ctx, 3))
+		assert.Equal(t, ErrInvalidTruncateLsn, c.Truncate(ctx, 3))
 	}
 	runClientTest(t, false, fn)
 }

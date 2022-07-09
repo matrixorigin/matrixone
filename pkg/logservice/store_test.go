@@ -211,7 +211,7 @@ func TestTruncateLog(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, store.truncateLog(ctx, 1, 4))
 		err = store.truncateLog(ctx, 1, 3)
-		assert.True(t, errors.Is(err, ErrInvalidTruncateIndex))
+		assert.True(t, errors.Is(err, ErrInvalidTruncateLsn))
 	}
 	runStoreTest(t, fn)
 }
@@ -220,7 +220,7 @@ func TestGetTruncatedIndex(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
-		index, err := store.getTruncatedIndex(ctx, 1)
+		index, err := store.getTruncatedLsn(ctx, 1)
 		assert.Equal(t, uint64(0), index)
 		assert.NoError(t, err)
 		assert.NoError(t, store.getOrExtendDNLease(ctx, 1, 100))
@@ -228,7 +228,7 @@ func TestGetTruncatedIndex(t *testing.T) {
 		_, err = store.append(ctx, 1, cmd)
 		assert.NoError(t, err)
 		assert.NoError(t, store.truncateLog(ctx, 1, 4))
-		index, err = store.getTruncatedIndex(ctx, 1)
+		index, err = store.getTruncatedLsn(ctx, 1)
 		assert.Equal(t, uint64(4), index)
 		assert.NoError(t, err)
 	}
