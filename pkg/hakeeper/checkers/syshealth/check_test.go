@@ -16,11 +16,9 @@ package syshealth
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-
 	"github.com/stretchr/testify/require"
 )
 
@@ -67,7 +65,7 @@ func TestShutdownStores(t *testing.T) {
 func TestParseLogStores(t *testing.T) {
 	expiredTick := uint64(10)
 	// construct current tick in order to make hearbeat tick expired
-	currTick := hakeeper.ExpiredTick(expiredTick, hakeeper.LogStoreTimeout) + 1
+	currTick := util.ExpiredTick(expiredTick, util.LogStoreTimeout) + 1
 
 	logState := pb.LogState{
 		Stores: map[string]pb.LogStoreInfo{
@@ -101,7 +99,7 @@ func TestParseLogStores(t *testing.T) {
 func TestParseDnStores(t *testing.T) {
 	expiredTick := uint64(10)
 	// construct current tick in order to make hearbeat tick expired
-	currTick := hakeeper.ExpiredTick(expiredTick, hakeeper.LogStoreTimeout) + 1
+	currTick := util.ExpiredTick(expiredTick, util.LogStoreTimeout) + 1
 
 	dnState := pb.DNState{
 		Stores: map[string]pb.DNStoreInfo{
@@ -200,7 +198,7 @@ func TestLogShardMap(t *testing.T) {
 func TestCheck(t *testing.T) {
 	expiredTick := uint64(10)
 	// construct current tick in order to make hearbeat tick expired
-	currTick := hakeeper.ExpiredTick(expiredTick, hakeeper.LogStoreTimeout) + 1
+	currTick := util.ExpiredTick(expiredTick, util.LogStoreTimeout) + 1
 
 	// system healthy
 	{
