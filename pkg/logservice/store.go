@@ -322,6 +322,17 @@ func (l *store) GetTruncatedIndex(ctx context.Context,
 	return v.(uint64), nil
 }
 
+func (l *store) TsoUpdate(ctx context.Context, count uint64) (uint64, error) {
+	cmd := getTsoUpdateCmd(count)
+	session := l.nh.GetNoOPSession(firstLogShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		plog.Errorf("failed to propose tso update, %v", err)
+		return 0, err
+	}
+	return result.Value, nil
+}
+
 func (l *store) AddLogStoreHeartbeat(ctx context.Context,
 	hb pb.LogStoreHeartbeat) error {
 	data := MustMarshal(&hb)

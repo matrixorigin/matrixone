@@ -190,6 +190,16 @@ func TestStateMachineUserUpdate(t *testing.T) {
 	assert.Equal(t, tsm.state.LeaseHolderID, binaryEnc.Uint64(result.Data))
 }
 
+func TestTsoUpdate(t *testing.T) {
+	tsm := newStateMachine(1, 2).(*stateMachine)
+	tsm.state.Tso = 200
+	cmd := getTsoUpdateCmd(100)
+	result, err := tsm.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(200), result.Value)
+	assert.Equal(t, uint64(300), tsm.state.Tso)
+}
+
 func TestStateMachineSnapshot(t *testing.T) {
 	buf := bytes.NewBuffer(nil)
 	tsm := newStateMachine(1, 2).(*stateMachine)
