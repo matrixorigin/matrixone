@@ -44,7 +44,7 @@ const (
 	// DefaultHAKeeperShardID is the shard ID assigned to the special HAKeeper
 	// shard.
 	DefaultHAKeeperShardID uint64 = 0
-	headerSize                    = 4
+	headerSize                    = pb.HeaderSize
 )
 
 type StateQuery struct{}

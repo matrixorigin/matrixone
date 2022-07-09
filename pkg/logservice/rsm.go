@@ -29,7 +29,7 @@ var (
 
 const (
 	firstLogShardID uint64 = 1
-	headerSize             = 4
+	headerSize             = pb.HeaderSize
 )
 
 // used to indicate query types
