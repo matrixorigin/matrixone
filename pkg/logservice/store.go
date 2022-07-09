@@ -34,9 +34,9 @@ import (
 )
 
 var (
-	ErrInvalidTruncateIndex = moerr.NewError(moerr.INVALID_INPUT, "invalid input")
-	ErrNotLeaseHolder       = moerr.NewError(moerr.INVALID_STATE, "not lease holder")
-	ErrInvalidShardID       = moerr.NewError(moerr.INVALID_INPUT, "invalid shard ID")
+	ErrInvalidTruncateLsn = moerr.NewError(moerr.INVALID_INPUT, "invalid input")
+	ErrNotLeaseHolder     = moerr.NewError(moerr.INVALID_STATE, "not lease holder")
+	ErrInvalidShardID     = moerr.NewError(moerr.INVALID_INPUT, "invalid shard ID")
 
 	ErrOutOfRange = dragonboat.ErrInvalidRange
 )
@@ -130,7 +130,7 @@ func newLogStore(cfg Config) (*store, error) {
 	return ls, nil
 }
 
-func (l *store) Close() error {
+func (l *store) close() error {
 	l.stopper.Stop()
 	if l.nh != nil {
 		l.nh.Close()
@@ -138,11 +138,11 @@ func (l *store) Close() error {
 	return nil
 }
 
-func (l *store) ID() string {
+func (l *store) id() string {
 	return l.nh.ID()
 }
 
-func (l *store) StartHAKeeperReplica(replicaID uint64,
+func (l *store) startHAKeeperReplica(replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target, join bool) error {
 	l.haKeeperReplicaID = replicaID
 	raftConfig := getRaftConfig(hakeeper.DefaultHAKeeperShardID, replicaID)
@@ -156,7 +156,7 @@ func (l *store) StartHAKeeperReplica(replicaID uint64,
 	return nil
 }
 
-func (l *store) StartReplica(shardID uint64, replicaID uint64,
+func (l *store) startReplica(shardID uint64, replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target, join bool) error {
 	if shardID == hakeeper.DefaultHAKeeperShardID {
 		return ErrInvalidShardID
@@ -263,7 +263,7 @@ func (l *store) read(ctx context.Context,
 	}
 }
 
-func (l *store) GetOrExtendDNLease(ctx context.Context,
+func (l *store) getOrExtendDNLease(ctx context.Context,
 	shardID uint64, dnID uint64) error {
 	session := l.nh.GetNoOPSession(shardID)
 	cmd := getSetLeaseHolderCmd(dnID)
@@ -271,10 +271,10 @@ func (l *store) GetOrExtendDNLease(ctx context.Context,
 	return err
 }
 
-func (l *store) TruncateLog(ctx context.Context,
+func (l *store) truncateLog(ctx context.Context,
 	shardID uint64, index Lsn) error {
 	session := l.nh.GetNoOPSession(shardID)
-	cmd := getSetTruncatedIndexCmd(index)
+	cmd := getSetTruncatedLsnCmd(index)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
 		plog.Errorf("propose truncate log cmd failed, %v", err)
@@ -282,7 +282,7 @@ func (l *store) TruncateLog(ctx context.Context,
 	}
 	if result.Value > 0 {
 		plog.Errorf("shardID %d already truncated to index %d", shardID, result.Value)
-		return errors.Wrapf(ErrInvalidTruncateIndex, "already truncated to %d", result.Value)
+		return errors.Wrapf(ErrInvalidTruncateLsn, "already truncated to %d", result.Value)
 	}
 	l.mu.Lock()
 	l.mu.pendingTruncate[shardID] = struct{}{}
@@ -291,7 +291,7 @@ func (l *store) TruncateLog(ctx context.Context,
 	return nil
 }
 
-func (l *store) Append(ctx context.Context,
+func (l *store) append(ctx context.Context,
 	shardID uint64, cmd []byte) (Lsn, error) {
 	if !isUserUpdate(cmd) {
 		panic(moerr.NewError(moerr.INVALID_INPUT, "not user update"))
@@ -313,16 +313,16 @@ func (l *store) Append(ctx context.Context,
 	return result.Value, nil
 }
 
-func (l *store) GetTruncatedIndex(ctx context.Context,
+func (l *store) getTruncatedLsn(ctx context.Context,
 	shardID uint64) (uint64, error) {
-	v, err := l.read(ctx, shardID, truncatedIndexQuery{})
+	v, err := l.read(ctx, shardID, truncatedLsnQuery{})
 	if err != nil {
 		return 0, err
 	}
 	return v.(uint64), nil
 }
 
-func (l *store) TsoUpdate(ctx context.Context, count uint64) (uint64, error) {
+func (l *store) tsoUpdate(ctx context.Context, count uint64) (uint64, error) {
 	cmd := getTsoUpdateCmd(count)
 	session := l.nh.GetNoOPSession(firstLogShardID)
 	result, err := l.propose(ctx, session, cmd)
@@ -333,7 +333,7 @@ func (l *store) TsoUpdate(ctx context.Context, count uint64) (uint64, error) {
 	return result.Value, nil
 }
 
-func (l *store) AddLogStoreHeartbeat(ctx context.Context,
+func (l *store) addLogStoreHeartbeat(ctx context.Context,
 	hb pb.LogStoreHeartbeat) error {
 	data := MustMarshal(&hb)
 	cmd := hakeeper.GetLogStoreHeartbeatCmd(data)
@@ -345,7 +345,7 @@ func (l *store) AddLogStoreHeartbeat(ctx context.Context,
 	return nil
 }
 
-func (l *store) AddDNStoreHeartbeat(ctx context.Context,
+func (l *store) addDNStoreHeartbeat(ctx context.Context,
 	hb pb.DNStoreHeartbeat) error {
 	data := MustMarshal(&hb)
 	cmd := hakeeper.GetDNStoreHeartbeatCmd(data)
@@ -357,7 +357,7 @@ func (l *store) AddDNStoreHeartbeat(ctx context.Context,
 	return nil
 }
 
-func (l *store) GetCommandBatch(ctx context.Context,
+func (l *store) getCommandBatch(ctx context.Context,
 	uuid string) (pb.CommandBatch, error) {
 	v, err := l.read(ctx,
 		hakeeper.DefaultHAKeeperShardID, &hakeeper.ScheduleCommandQuery{UUID: uuid})
@@ -388,7 +388,7 @@ func (l *store) getLeaseHolderID(ctx context.Context,
 	if isSetLeaseHolderUpdate(e.Cmd) {
 		return parseLeaseHolderID(e.Cmd), nil
 	}
-	v, err := l.read(ctx, shardID, leaseHistoryQuery{index: e.Index})
+	v, err := l.read(ctx, shardID, leaseHistoryQuery{lsn: e.Index})
 	if err != nil {
 		plog.Errorf("failed to read, %v", err)
 		return 0, err
@@ -430,8 +430,8 @@ func (l *store) markEntries(ctx context.Context,
 		if isRaftInternalEntry(e) {
 			// raft internal stuff
 			result = append(result, LogRecord{
-				Type:  pb.Internal,
-				Index: e.Index,
+				Type: pb.Internal,
+				Lsn:  e.Index,
 			})
 			continue
 		}
@@ -439,8 +439,8 @@ func (l *store) markEntries(ctx context.Context,
 		if isSetLeaseHolderUpdate(cmd) {
 			leaseHolderID = parseLeaseHolderID(cmd)
 			result = append(result, LogRecord{
-				Type:  pb.LeaseUpdate,
-				Index: e.Index,
+				Type: pb.LeaseUpdate,
+				Lsn:  e.Index,
 			})
 			continue
 		}
@@ -448,15 +448,15 @@ func (l *store) markEntries(ctx context.Context,
 			if parseLeaseHolderID(cmd) != leaseHolderID {
 				// lease not match, skip
 				result = append(result, LogRecord{
-					Type:  pb.LeaseUpdate,
-					Index: e.Index,
+					Type: pb.LeaseUpdate,
+					Lsn:  e.Index,
 				})
 				continue
 			}
 			result = append(result, LogRecord{
-				Data:  cmd,
-				Type:  pb.UserRecord,
-				Index: e.Index,
+				Data: cmd,
+				Type: pb.UserRecord,
+				Lsn:  e.Index,
 			})
 		}
 	}
@@ -474,7 +474,7 @@ func getNextIndex(entries []raftpb.Entry, firstIndex Lsn, lastIndex Lsn) Lsn {
 	return firstIndex
 }
 
-func (l *store) QueryLog(ctx context.Context, shardID uint64,
+func (l *store) queryLog(ctx context.Context, shardID uint64,
 	firstIndex Lsn, maxSize uint64) ([]LogRecord, Lsn, error) {
 	v, err := l.read(ctx, shardID, indexQuery{})
 	if err != nil {
@@ -532,7 +532,7 @@ func (l *store) truncationWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-l.mu.truncateCh:
-			if err := l.truncateLog(ctx); err != nil {
+			if err := l.processTruncateLog(ctx); err != nil {
 				panic(err)
 			}
 		}
@@ -569,7 +569,7 @@ func (l *store) hakeeperTick() {
 }
 
 // TODO: add tests for this
-func (l *store) truncateLog(ctx context.Context) error {
+func (l *store) processTruncateLog(ctx context.Context) error {
 	l.mu.Lock()
 	pendings := l.mu.pendingTruncate
 	l.mu.pendingTruncate = make(map[uint64]struct{})
@@ -585,17 +585,17 @@ func (l *store) truncateLog(ctx context.Context) error {
 		if err := func() error {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			index, err := l.GetTruncatedIndex(ctx, shardID)
+			lsn, err := l.getTruncatedLsn(ctx, shardID)
 			if err != nil {
 				plog.Errorf("GetTruncatedIndex failed, %v", err)
 				// FIXME: check error type, see whether it is a tmp one
 				return err
 			}
 			// the first 4 entries for a 3-replica raft group are tiny anyway
-			if index > 1 {
+			if lsn > 1 {
 				opts := dragonboat.SnapshotOption{
 					OverrideCompactionOverhead: true,
-					CompactionIndex:            index - 1,
+					CompactionIndex:            lsn - 1,
 				}
 				if _, err := l.nh.SyncRequestSnapshot(ctx, shardID, opts); err != nil {
 					plog.Errorf("SyncRequestSnapshot failed, %v", err)

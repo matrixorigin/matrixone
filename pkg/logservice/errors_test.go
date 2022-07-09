@@ -69,7 +69,7 @@ func TestIsTempError(t *testing.T) {
 
 		{ErrDeadlineNotSet, false},
 		{ErrInvalidDeadline, false},
-		{ErrInvalidTruncateIndex, false},
+		{ErrInvalidTruncateLsn, false},
 		{ErrNotLeaseHolder, false},
 		{ErrOutOfRange, false},
 		{ErrInvalidShardID, false},

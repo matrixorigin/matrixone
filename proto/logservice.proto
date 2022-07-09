@@ -20,6 +20,13 @@ import "metadata.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = false;
 
+enum UpdateType {
+  LeaseHolderIDUpdate = 0;
+  TruncatedLSNUpdate  = 1;
+  UserEntryUpdate     = 2;
+  TSOUpdate           = 3;
+}
+
 // LogShardInfo contains information a log shard.
 message LogShardInfo {
   // ShardID is the ID of a Log shard.
@@ -88,8 +95,8 @@ message RSMState {
   uint64 Tso = 1;
   uint64 Index = 2;
   uint64 LeaseHolderID = 3;
-  uint64 TruncatedIndex = 4;
-  map<uint64, uint64> LeaseHistory = 5; // log index -> truncate index
+  uint64 TruncatedLsn = 4;
+  map<uint64, uint64> LeaseHistory = 5; // log lsn -> truncate lsn
 }
 
 enum MethodType {
@@ -113,7 +120,7 @@ enum RecordType {
 
 // LogRecord is what we store into the LogService.
 message LogRecord {
-  uint64 Index    = 1;
+  uint64 Lsn    = 1;
   RecordType Type = 2;
   bytes Data      = 3;
 };
@@ -121,7 +128,7 @@ message LogRecord {
 message LogRequest {
   string Name         = 1;
   uint64 ShardID      = 2;
-  uint64 Index        = 3;
+  uint64 Lsn          = 3;
   uint64 MaxSize      = 4;
   uint64 DNShardID    = 5;
   uint64 DNID         = 6;
@@ -153,7 +160,7 @@ enum ErrorCode {
   ShardNotReady         = 8;
   SystemClosed          = 9;
 
-  IndexAlreadyTruncated = 100;
+  LsnAlreadyTruncated = 100;
   OutOfRange            = 101;
   NotLeaseHolder        = 102;
 
@@ -162,8 +169,8 @@ enum ErrorCode {
 
 message LogResponse {
   uint64 ShardID      = 1;
-  uint64 Index        = 2;
-  uint64 LastIndex    = 3;
+  uint64 Lsn          = 2;
+  uint64 LastLsn      = 3;
 }
 
 message Response {
@@ -187,6 +194,16 @@ message TsoResponse {
 //
 // HAKeeper related pb
 //
+
+enum HAKeeperUpdateType {
+  TickUpdate            = 0;
+  DNHeartbeatUpdate     = 1;
+  LogHeartbeatUpdate    = 2;
+  GetIDUpdate           = 3;
+  ScheduleCommandUpdate = 4;
+  SetStateUpdate        = 5;
+  InitialClusterUpdate  = 6;
+}
 
 enum HAKeeperState {
   HAKeeperCreated                    = 0;

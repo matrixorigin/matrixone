@@ -49,7 +49,7 @@ func getErrorToCodeMapping() []errorToCode {
 		{dragonboat.ErrClosed, pb.SystemClosed, true},
 		{dragonboat.ErrInvalidRange, pb.OutOfRange, true},
 
-		{ErrInvalidTruncateIndex, pb.IndexAlreadyTruncated, true},
+		{ErrInvalidTruncateLsn, pb.LsnAlreadyTruncated, true},
 		{ErrNotLeaseHolder, pb.NotLeaseHolder, true},
 	}
 }
