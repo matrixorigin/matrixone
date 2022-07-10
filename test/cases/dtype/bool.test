@@ -8,14 +8,14 @@ DROP TABLE IF EXISTS t1;
 create table t1 (a boolean,b bool);
 insert into t1 values (0,1),(true,false),(true,1),(0,false),(NULL,NULL);
 select * from t1;
-SELECT * FROM t1 WHERE IF(a AND 1, 0, 1);
+SELECT * FROM t1 WHERE IF(a AND 1, 0, 1) order by a asc;
 SELECT * FROM t1 WHERE IF(1 AND a, 0, 1);
-SELECT * FROM t1 where NOT(a AND 1);
+SELECT * FROM t1 where NOT(a AND 1) order by a asc, b desc;
 SELECT * FROM t1 where NOT(1 AND a);
 SELECT * FROM t1 where (a AND 1)=0;
 SELECT * FROM t1 where (1 AND a)=0;
-SELECT * FROM t1 where (1 AND a)=1;
-SELECT * FROM t1 where (1 AND a) IS NULL;
+SELECT * FROM t1 where (1 AND a)=1 order by a asc, 2 asc;
+SELECT * FROM t1 where (1 AND a) IS NULL order by 1 desc, 2 asc;
 select not a,a and b,a or b,a xor b from t1;
 select not a and not b from t1;
 select not a or b xor b from t1;
@@ -44,7 +44,7 @@ select * from t1 where a<=b and a is not NULL;
 
 #Test cases of multi tables 
 -- @bvt:issue#3289
-select t1.a,t2.b from t1 join t2 on t1.a=t2.a order by t1.a desc;
+select t1.a,t2.b from t1 join t2 on t1.a=t2.a order by t1.a desc, 2 desc;
 -- @bvt:issue
 select a,count(a) from t1 group by a having count(a)>1; 
 select a,any_value(b) from t1 group by a order by a asc;

@@ -77,26 +77,24 @@ message TxnMeta {
     // transaction.
     timestamp.Timestamp SnapshotTS  = 3 [(gogoproto.nullable) = false];
     // PreparedTS timestamp to complete the first phase of a 2pc commit transaction.
-    timestamp.Timestamp PreparedTS  = 4;
+    timestamp.Timestamp PreparedTS  = 4 [(gogoproto.nullable) = false];
     // CommitTS transaction commit timestamp. For a 2pc transaction, commitTS = max(preparedTS).
-    timestamp.Timestamp CommitTS    = 5;
-    // Coordinator the coordinator DN. CN uses the first DN of the transaction operation
-    // as the Coordinator.
-    metadata.DNShard    Coordinator = 6;
+    timestamp.Timestamp CommitTS    = 5 [(gogoproto.nullable) = false];
+    // DNShards all DNShards that have written data. The first DN is the coordinator of the 
+    // transaction
+    repeated metadata.DNShard DNShards = 6 [(gogoproto.nullable) = false];
 }
 
 // CNTxnSnapshot snapshot of the cn txn operation.
 message CNTxnSnapshot {
     // ID txn id
     TxnMeta                   Txn      = 1 [(gogoproto.nullable) = false];
-    // DNShards DNs for which data has been written in the current transaction
-    repeated metadata.DNShard DNShards = 2 [(gogoproto.nullable) = false]; 
     // ReadyOnly txn options
-    bool ReadyOnly        = 3;
+    bool ReadyOnly        = 2;
     // EnableCacheWrite txn options
-    bool EnableCacheWrite = 4;
+    bool EnableCacheWrite = 3;
     // Disable1PCOpt txn options
-    bool Disable1PCOpt    = 5;
+    bool Disable1PCOpt    = 4;
 }
 
 // CNOpRequest cn read/write request, CN -> DN. If data is written to more than one DN (>1) in a 
@@ -142,6 +140,16 @@ enum TxnMethod {
     // RollbackDNShard after the 2pc transaction is aborted, the temporary data on each DN needs
     // to cleanup.
     RollbackDNShard   = 7;
+    // RemoveMedata Remove metadata for transactions on DNShard. For a 2pc distributed transaction, 
+    // after all participating DNShards have Prepared successfully, the asynchronous commit process 
+    // starts, sending CommitDNShard requests to all participating DNShards in parallel. After each 
+    // DNShard has processed the CommitDNShard, the metadata of the transaction cannot be deleted 
+    // immediately, otherwise when the transaction coordinator node is down and restarted, the commit 
+    // status of the transaction cannot be determined in the recovery process, as it is possible that
+    // some participating DNShards cannot find the transaction information.
+    //
+    // TODO: needs to work with TAE's log compaction, not currently supported.
+    RemoveMedata      = 8;
 }
 
 // TxnRequest transaction request. All requests for the transaction are made using TxnRequest, so that 
@@ -150,7 +158,8 @@ enum TxnMethod {
 //
 // Request flow of TxnRequest as below:
 // 1. CN -> DN (TxnMethod.Read, TxnMethod.Write, TxnMethod.Commit, TxnMethod.Rollback)
-// 2. DN -> DN (TxnMethod.Prepare, TxnMethod.GetStatus, TxnMethod.CommitDNShard, TxnMethod.RollbackDNShard)
+// 2. DN -> DN (TxnMethod.Prepare, TxnMethod.GetStatus, TxnMethod.CommitDNShard, TxnMethod.RollbackDNShard,
+//             TxnMethod.RemoveMetadata)
 message TxnRequest {
     // RequestID request id
     uint64                      RequestID                = 1;
@@ -176,6 +185,8 @@ message TxnRequest {
     TxnCommitDNShardRequest     CommitDNShardRequest     = 11;
     // TxnRollbackDNShardRequest corresponds to TxnMethod.RollbackDNShard
     TxnRollbackDNShardRequest   RollbackDNShardRequest   = 12;
+    // TxnRemoveMetadataRequest  corresponds to TxnMethod.RemoveMetadata
+    TxnRemoveMetadataRequest    RemoveMetadata           = 13;
 }
 
 // TxnResponse response of TxnRequest.
@@ -207,13 +218,12 @@ message TxnResponse {
     TxnCommitDNShardResponse     CommitDNShardResponse     = 11;
     // TxnRollbackDNShardResponse corresponds to TxnMethod.RollbackDNShard response
     TxnRollbackDNShardResponse   RollbackDNShardResponse   = 12;
+     // TxnRemoveMetadataResponse  corresponds to TxnMethod.RemoveMetadata
+     TxnRemoveMetadataResponse   RemoveMetadata            = 13;
 }
 
 // TxnCommitRequest CN sent the commit request to coordinator DN.
 message TxnCommitRequest {
-    // DNShards DNs for which data has been written in the current transaction.
-    // The first DN is the coordinator of the transaction.
-    repeated metadata.DNShard DNShards    = 1 [(gogoproto.nullable) = false]; 
     bool                      Disable1PCOpt = 2;
 }
 
@@ -223,8 +233,6 @@ message TxnCommitResponse {
 
 // TxnCommitRequest CN sent the rollback request to coordinator DN.
 message TxnRollbackRequest {
-    // DNShards DNs for which data has been written in the current transaction.
-    repeated metadata.DNShard DNShards = 1 [(gogoproto.nullable) = false]; 
 }
 
 // TxnRollbackResponse response of TxnRollbackRequest.
@@ -237,12 +245,6 @@ message TxnRollbackResponse {
 message TxnPrepareRequest {
     // DNShard prepare DN
     metadata.DNShard          DNShard  = 1 [(gogoproto.nullable) = false];
-    // DNShards if the DNShard is the coordinator DN, DNShards is not empty, 
-    // otherwise is empty. The coordinator DN needs to write the DNShards and prepare 
-    // data together atomically to the LogService. So during error recovery we can use 
-    // the coordinator DN to find all the DNs involved in the transaction to commit or
-    // rollback the transaction.
-    repeated metadata.DNShard DNShards = 2 [(gogoproto.nullable) = false]; 
 }
 
 // TxnPrepareResponse response of TxnPrepareRequest
@@ -271,7 +273,7 @@ message TxnCommitDNShardRequest {
 message TxnCommitDNShardResponse {
 }
 
-// TxnCommitDNShardRequest rollback txn on DNShard
+// TxnRollbackDNShardRequest rollback txn on DNShard
 message TxnRollbackDNShardRequest {
      // DNShard target DN
      metadata.DNShard DNShard = 1 [(gogoproto.nullable) = false];
@@ -281,7 +283,43 @@ message TxnRollbackDNShardRequest {
 message TxnRollbackDNShardResponse {
 }
 
+
+// TxnRemoveMetadataRequest remove txn metadata on DNShard
+message TxnRemoveMetadataRequest {
+    // DNShard target DN
+    metadata.DNShard DNShard = 1 [(gogoproto.nullable) = false];
+}
+
+// TxnRemoveMetadataResponse response of TxnRemoveMetadataRequest
+message TxnRemoveMetadataResponse {
+}
+
 // TxnError all explicit errors in transaction operations.
 message TxnError {
+    // Code error code
+    ErrorCode Code    = 1;
+    // Message error message
+    string    Message = 2;
+}
 
+// ErrorCode error type code
+enum ErrorCode {
+    // TAERead execute tae read error
+    TAERead      = 0;
+    // TAEWrite execute tae write error
+    TAEWrite     = 1;
+    // TAECommit execute tae commit error
+    TAECommit    = 2;
+    // TAERollback execute tae rollback error
+    TAERollback  = 3;
+    // TAEPrepare execute tae prepare error
+    TAEPrepare   = 4;
+    // RPCError rpc error
+    RPCError     = 5;
+    // WaitTxn wait txn error
+    WaitTxn      = 6;
+    // TxnNotFound txn metadata not found
+    TxnNotFound  = 7;
+    // TxnNotActive txn status not in active
+    TxnNotActive = 9;
 }

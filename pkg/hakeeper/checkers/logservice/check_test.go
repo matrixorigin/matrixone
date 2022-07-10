@@ -15,13 +15,13 @@ package logservice
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestCheck(t *testing.T) {
@@ -117,7 +117,7 @@ func TestCheck(t *testing.T) {
 								Term:     1,
 							}, ReplicaID: 1}}},
 					"b": {
-						Tick: uint64(13 * hakeeper.TickPerSecond * 60),
+						Tick: uint64(13 * util.TickPerSecond * 60),
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -127,7 +127,7 @@ func TestCheck(t *testing.T) {
 								Term:     1,
 							}, ReplicaID: 2}}},
 					"c": {
-						Tick: uint64(14 * hakeeper.TickPerSecond * 60),
+						Tick: uint64(14 * util.TickPerSecond * 60),
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -137,13 +137,13 @@ func TestCheck(t *testing.T) {
 								Term:     1,
 							}, ReplicaID: 3}}},
 					"d": {
-						Tick: uint64(12 * hakeeper.TickPerSecond * 60),
+						Tick: uint64(12 * util.TickPerSecond * 60),
 					},
 				},
 			},
 			removing:    nil,
 			adding:      nil,
-			currentTick: uint64(15 * hakeeper.TickPerSecond * 60),
+			currentTick: uint64(15 * util.TickPerSecond * 60),
 			expected: []*operator.Operator{
 				operator.NewOperator("", 1, 1,
 					operator.RemoveLogService{
@@ -172,7 +172,7 @@ func TestCheck(t *testing.T) {
 					Term:     1,
 				}},
 				Stores: map[string]pb.LogStoreInfo{"a": {
-					Tick: uint64(14 * hakeeper.TickPerSecond * 60),
+					Tick: uint64(14 * util.TickPerSecond * 60),
 					Replicas: []pb.LogReplicaInfo{{
 						LogShardInfo: pb.LogShardInfo{
 							ShardID:  1,
@@ -182,7 +182,7 @@ func TestCheck(t *testing.T) {
 							Term:     1,
 						}, ReplicaID: 1}}},
 					"b": {
-						Tick: uint64(13 * hakeeper.TickPerSecond * 60),
+						Tick: uint64(13 * util.TickPerSecond * 60),
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -192,13 +192,13 @@ func TestCheck(t *testing.T) {
 								Term:     1,
 							}, ReplicaID: 2}}},
 					"c": {
-						Tick:     uint64(14 * hakeeper.TickPerSecond * 60),
+						Tick:     uint64(14 * util.TickPerSecond * 60),
 						Replicas: []pb.LogReplicaInfo{}},
 				},
 			},
 			removing:    nil,
 			adding:      nil,
-			currentTick: uint64(15 * hakeeper.TickPerSecond * 60),
+			currentTick: uint64(15 * util.TickPerSecond * 60),
 			expected: []*operator.Operator{operator.NewOperator("adding 1:4(at epoch 1) to c", 1,
 				1, operator.AddLogService{
 					Target:    "a",
@@ -226,7 +226,7 @@ func TestCheck(t *testing.T) {
 					Term:     1,
 				}},
 				Stores: map[string]pb.LogStoreInfo{"a": {
-					Tick: uint64(14 * hakeeper.TickPerSecond * 60),
+					Tick: uint64(14 * util.TickPerSecond * 60),
 					Replicas: []pb.LogReplicaInfo{{
 						LogShardInfo: pb.LogShardInfo{
 							ShardID:  1,
@@ -236,7 +236,7 @@ func TestCheck(t *testing.T) {
 							Term:     1,
 						}, ReplicaID: 1}}},
 					"b": {
-						Tick: uint64(13 * hakeeper.TickPerSecond * 60),
+						Tick: uint64(13 * util.TickPerSecond * 60),
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -246,13 +246,13 @@ func TestCheck(t *testing.T) {
 								Term:     1,
 							}, ReplicaID: 2}}},
 					"c": {
-						Tick:     uint64(14 * hakeeper.TickPerSecond * 60),
+						Tick:     uint64(14 * util.TickPerSecond * 60),
 						Replicas: []pb.LogReplicaInfo{}},
 				},
 			},
 			removing:    nil,
 			adding:      nil,
-			currentTick: uint64(15 * hakeeper.TickPerSecond * 60),
+			currentTick: uint64(15 * util.TickPerSecond * 60),
 			expected: []*operator.Operator{operator.NewOperator("", 1,
 				1, operator.StartLogService{
 					StoreID:   "c",
@@ -288,7 +288,7 @@ func TestCheck(t *testing.T) {
 							Term:     1,
 						}, ReplicaID: 1}}},
 					"b": {
-						Tick: uint64(13 * hakeeper.TickPerSecond * 60),
+						Tick: uint64(13 * util.TickPerSecond * 60),
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -298,7 +298,7 @@ func TestCheck(t *testing.T) {
 								Term:     1,
 							}, ReplicaID: 2}}},
 					"c": {
-						Tick: uint64(14 * hakeeper.TickPerSecond * 60),
+						Tick: uint64(14 * util.TickPerSecond * 60),
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -311,7 +311,7 @@ func TestCheck(t *testing.T) {
 			},
 			removing:    map[uint64][]uint64{1: {1}},
 			adding:      nil,
-			currentTick: uint64(15 * hakeeper.TickPerSecond * 60),
+			currentTick: uint64(15 * util.TickPerSecond * 60),
 			expected:    []*operator.Operator{},
 		},
 	}

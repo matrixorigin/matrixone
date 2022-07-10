@@ -17,7 +17,7 @@ package dnservice
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 
 	"github.com/stretchr/testify/require"
@@ -26,7 +26,7 @@ import (
 func TestParseDNState(t *testing.T) {
 	expiredTick := uint64(10)
 	// construct current tick in order to make hearbeat tick expired
-	currTick := hakeeper.ExpiredTick(expiredTick, hakeeper.DnStoreTimeout) + 1
+	currTick := util.ExpiredTick(expiredTick, util.DnStoreTimeout) + 1
 
 	// 1. no working dn stores
 	{
