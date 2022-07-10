@@ -77,9 +77,9 @@ message TxnMeta {
     // transaction.
     timestamp.Timestamp SnapshotTS  = 3 [(gogoproto.nullable) = false];
     // PreparedTS timestamp to complete the first phase of a 2pc commit transaction.
-    timestamp.Timestamp PreparedTS  = 4;
+    timestamp.Timestamp PreparedTS  = 4 [(gogoproto.nullable) = false];
     // CommitTS transaction commit timestamp. For a 2pc transaction, commitTS = max(preparedTS).
-    timestamp.Timestamp CommitTS    = 5;
+    timestamp.Timestamp CommitTS    = 5 [(gogoproto.nullable) = false];
     // DNShards all DNShards that have written data. The first DN is the coordinator of the 
     // transaction
     repeated metadata.DNShard DNShards = 6 [(gogoproto.nullable) = false];
@@ -310,8 +310,10 @@ enum ErrorCode {
     TAEWrite     = 1;
     // TAECommit execute tae commit error
     TAECommit    = 2;
+    // TAERollback execute tae rollback error
+    TAERollback  = 3;
     // TAEPrepare execute tae prepare error
-    TAEPrepare   = 3;
+    TAEPrepare   = 4;
     // RPCError rpc error
     RPCError     = 5;
     // WaitTxn wait txn error
@@ -319,5 +321,5 @@ enum ErrorCode {
     // TxnNotFound txn metadata not found
     TxnNotFound  = 7;
     // TxnNotActive txn status not in active
-    TxnNotActive = 8;
+    TxnNotActive = 9;
 }

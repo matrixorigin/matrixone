@@ -19,11 +19,15 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/util"
+	"go.uber.org/zap"
 )
 
 func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+	s.waitRecoveryCompleted()
+
 	response.PrepareResponse = &txn.TxnPrepareResponse{}
-	s.validDNShard(request)
+	s.validDNShard(request.GetTargetDN())
 
 	txnID := request.Txn.ID
 	txnCtx := s.getTxnContext(txnID)
@@ -40,8 +44,8 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 		response.TxnError = newTxnNotFoundError()
 		return nil
 	}
-
 	response.Txn = &newTxn
+
 	switch newTxn.Status {
 	case txn.TxnStatus_Active:
 		break
@@ -52,10 +56,13 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 		return nil
 	}
 
-	if err := s.storage.Prepare(request.Txn); err != nil {
+	newTxn.DNShards = request.Txn.DNShards
+	newTxn.PreparedTS, _ = s.clocker.Now()
+	if err := s.storage.Prepare(newTxn); err != nil {
 		response.TxnError = newTAEPrepareError(err)
 		return nil
 	}
+	txnCtx.updateTxnLocked(newTxn)
 
 	newTxn.Status = txn.TxnStatus_Prepared
 	txnCtx.changeStatusLocked(txn.TxnStatus_Prepared)
@@ -63,8 +70,10 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 }
 
 func (s *service) GetStatus(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+	s.waitRecoveryCompleted()
+
 	response.GetStatusResponse = &txn.TxnGetStatusResponse{}
-	s.validDNShard(request)
+	s.validDNShard(request.GetTargetDN())
 
 	txnID := request.Txn.ID
 	txnCtx := s.getTxnContext(txnID)
@@ -75,19 +84,114 @@ func (s *service) GetStatus(ctx context.Context, request *txn.TxnRequest, respon
 	txnCtx.mu.RLock()
 	defer txnCtx.mu.RUnlock()
 
-	txn := txnCtx.getTxnLocked()
-	if !bytes.Equal(txn.ID, txnID) {
+	newTxn := txnCtx.getTxnLocked()
+	if !bytes.Equal(newTxn.ID, txnID) {
 		return nil
 	}
-
-	response.Txn = &txn
+	response.Txn = &newTxn
 	return nil
 }
 
 func (s *service) CommitDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+	s.waitRecoveryCompleted()
+
+	response.CommitDNShardResponse = &txn.TxnCommitDNShardResponse{}
+	s.validDNShard(request.GetTargetDN())
+
+	txnID := request.Txn.ID
+	txnCtx := s.getTxnContext(txnID)
+	if txnCtx == nil {
+		// txn must be committed, donot need to return newTxnNotFoundError
+		return nil
+	}
+
+	txnCtx.mu.Lock()
+	defer txnCtx.mu.Unlock()
+
+	newTxn := txnCtx.getTxnLocked()
+	if !bytes.Equal(newTxn.ID, txnID) {
+		// txn must be committed, donot need to return newTxnNotFoundError
+		return nil
+	}
+
+	defer func() {
+		if response.Txn.Status == txn.TxnStatus_Committed {
+			s.removeTxn(txnID)
+			s.releaseTxnContext(txnCtx)
+		}
+	}()
+
+	response.Txn = &newTxn
+	switch newTxn.Status {
+	case txn.TxnStatus_Prepared:
+		break
+	case txn.TxnStatus_Committed:
+		return nil
+	default:
+		s.logger.Fatal("commit on invalid status",
+			zap.String("status", newTxn.Status.String()),
+			util.TxnIDFieldWithID(newTxn.ID))
+	}
+
+	newTxn.CommitTS = request.Txn.CommitTS
+	if err := s.storage.Commit(newTxn); err != nil {
+		response.TxnError = newTAECommitError(err)
+		return nil
+	}
+	txnCtx.updateTxnLocked(newTxn)
+
+	newTxn.Status = txn.TxnStatus_Committed
+	txnCtx.changeStatusLocked(txn.TxnStatus_Committed)
 	return nil
 }
 
 func (s *service) RollbackDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+	s.waitRecoveryCompleted()
+
+	response.RollbackDNShardResponse = &txn.TxnRollbackDNShardResponse{}
+	s.validDNShard(request.GetTargetDN())
+
+	txnID := request.Txn.ID
+	txnCtx := s.getTxnContext(txnID)
+	if txnCtx == nil {
+		// txn must be aborted, no need to return newTxnNotFoundError
+		return nil
+	}
+
+	txnCtx.mu.Lock()
+	defer txnCtx.mu.Unlock()
+
+	newTxn := txnCtx.getTxnLocked()
+	if !bytes.Equal(newTxn.ID, txnID) {
+		// txn must be aborted, donot need to return newTxnNotFoundError
+		return nil
+	}
+
+	defer func() {
+		if response.Txn.Status == txn.TxnStatus_Aborted {
+			s.removeTxn(txnID)
+			s.releaseTxnContext(txnCtx)
+		}
+	}()
+
+	response.Txn = &newTxn
+	switch newTxn.Status {
+	case txn.TxnStatus_Prepared:
+		break
+	case txn.TxnStatus_Aborted:
+		return nil
+	default:
+		s.logger.Fatal("rollback on invalid status",
+			zap.String("status", newTxn.Status.String()),
+			util.TxnIDFieldWithID(newTxn.ID))
+	}
+
+	if err := s.storage.Rollback(newTxn); err != nil {
+		response.TxnError = newTAERollbackError(err)
+		return nil
+	}
+
+	newTxn.Status = txn.TxnStatus_Aborted
+	txnCtx.changeStatusLocked(txn.TxnStatus_Aborted)
 	return nil
 }

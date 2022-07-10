@@ -32,6 +32,13 @@ func newTAECommitError(err error) *txn.TxnError {
 	}
 }
 
+func newTAERollbackError(err error) *txn.TxnError {
+	return &txn.TxnError{
+		Code:    txn.ErrorCode_TAERollback,
+		Message: err.Error(),
+	}
+}
+
 func newTxnNotFoundError() *txn.TxnError {
 	return &txn.TxnError{
 		Code:    txn.ErrorCode_TxnNotFound,

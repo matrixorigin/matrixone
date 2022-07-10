@@ -145,13 +145,13 @@ func (m TxnMeta) DebugString() string {
 	buffer.WriteString(m.SnapshotTS.String())
 	buffer.WriteString(", ")
 
-	if m.PreparedTS != nil {
+	if !m.PreparedTS.IsEmpty() {
 		buffer.WriteString("prepared-ts: ")
 		buffer.WriteString(m.PreparedTS.String())
 		buffer.WriteString(", ")
 	}
 
-	if m.CommitTS != nil {
+	if !m.CommitTS.IsEmpty() {
 		buffer.WriteString("commit-ts: ")
 		buffer.WriteString(m.CommitTS.String())
 		buffer.WriteString(", ")

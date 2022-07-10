@@ -1,0 +1,272 @@
+// Copyright 2021 - 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package service
+
+import (
+	"context"
+	"math"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestReadBasic(t *testing.T) {
+	sender := newTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	s := newTestTxnService(t, 1, sender, newTestClock(0))
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	sender.addTxnService(s)
+
+	rTxn := newTestTxn(1, 1)
+	resp := readTestData(t, sender, 1, rTxn, 1)
+	checkReadResponses(t, resp, "")
+}
+
+func TestReadWithSelfWrite(t *testing.T) {
+	sender := newTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	s := newTestTxnService(t, 1, sender, newTestClock(0))
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+	sender.addTxnService(s)
+
+	rwTxn := newTestTxn(1, 1)
+	checkResponses(t, writeTestData(t, sender, 1, rwTxn, 1))
+	checkReadResponses(t, readTestData(t, sender, 1, rwTxn, 1), "1-1-1")
+	checkResponses(t, writeTestData(t, sender, 1, rwTxn, 2))
+	checkReadResponses(t, readTestData(t, sender, 1, rwTxn, 2), "2-1-1")
+}
+
+func TestReadCannotBlockByUncomitted(t *testing.T) {
+	sender := newTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	s := newTestTxnService(t, 1, sender, newTestClock(1))
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+	sender.addTxnService(s)
+
+	wTxn := newTestTxn(1, 1)
+	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
+
+	rTxn := newTestTxn(2, 1)
+	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 1), "")
+}
+
+func TestReadCommitted(t *testing.T) {
+	sender := newTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	s := newTestTxnService(t, 1, sender, newTestClock(1))
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+	sender.addTxnService(s)
+
+	wTxn1 := newTestTxn(1, 1, 1) // commit at 2
+	checkResponses(t, writeTestData(t, sender, 1, wTxn1, 1))
+	checkResponses(t, commitWriteData(t, sender, wTxn1))
+
+	wTxn2 := newTestTxn(2, 1, 1) // commit at 3
+	checkResponses(t, writeTestData(t, sender, 1, wTxn2, 2))
+	checkResponses(t, commitWriteData(t, sender, wTxn2))
+
+	rTxn := newTestTxn(3, 2)
+	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 1), "")
+	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 2), "")
+
+	rTxn = newTestTxn(3, 3)
+	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 1), string(getTestValue(1, wTxn1)))
+	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 2), "")
+
+	rTxn = newTestTxn(3, 4)
+	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 1), string(getTestValue(1, wTxn1)))
+	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 2), string(getTestValue(2, wTxn2)))
+}
+
+func TestWriteBasic(t *testing.T) {
+	sender := newTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	s := newTestTxnService(t, 1, sender, newTestClock(0))
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	sender.addTxnService(s)
+
+	wTxn := newTestTxn(1, 1)
+	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
+
+	kv := s.storage.(*mem.KVTxnStorage).GetUncommittedKV()
+	v, ok := kv.Get(getTestKey(1))
+	assert.True(t, ok)
+	assert.Equal(t, getTestValue(1, wTxn), v)
+}
+
+func TestWriteWithWWConflict(t *testing.T) {
+	sender := newTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	s := newTestTxnService(t, 1, sender, newTestClock(0))
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	sender.addTxnService(s)
+
+	wTxn := newTestTxn(1, 1)
+	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
+
+	wTxn2 := newTestTxn(2, 1)
+	checkResponses(t, writeTestData(t, sender, 1, wTxn2, 1),
+		newTAEWriteError(storage.ErrWriteConflict))
+}
+
+func TestCommitWithSingleDNShard(t *testing.T) {
+	sender := newTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	s := newTestTxnService(t, 1, sender, newTestClock(1))
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	sender.addTxnService(s)
+
+	n := byte(10)
+	wTxn := newTestTxn(1, 1, 1)
+	for i := byte(0); i < n; i++ {
+		checkResponses(t, writeTestData(t, sender, 1, wTxn, i))
+	}
+	checkResponses(t, commitWriteData(t, sender, wTxn))
+
+	for i := byte(0); i < n; i++ {
+		var values [][]byte
+		var timestamps []timestamp.Timestamp
+		kv := s.storage.(*mem.KVTxnStorage).GetCommittedKV()
+
+		kv.AscendRange(getTestKey(i), newTestTimestamp(0), newTestTimestamp(math.MaxInt64), func(value []byte, ts timestamp.Timestamp) {
+			values = append(values, value)
+			timestamps = append(timestamps, ts)
+		})
+		assert.Equal(t, [][]byte{getTestValue(i, wTxn)}, values)
+		assert.Equal(t, []timestamp.Timestamp{newTestTimestamp(2)}, timestamps)
+	}
+}
+
+func TestCommitWithMultiDNShards(t *testing.T) {
+	sender := newTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	s1 := newTestTxnService(t, 1, sender, newTestClock(1))
+	assert.NoError(t, s1.Start())
+	defer func() {
+		assert.NoError(t, s1.Close())
+	}()
+	s2 := newTestTxnService(t, 2, sender, newTestClock(1))
+	assert.NoError(t, s2.Start())
+	defer func() {
+		assert.NoError(t, s2.Close())
+	}()
+
+	sender.addTxnService(s1)
+	sender.addTxnService(s2)
+
+	wTxn := newTestTxn(1, 1, 1, 2)
+	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
+	checkResponses(t, writeTestData(t, sender, 2, wTxn, 2))
+	checkResponses(t, commitWriteData(t, sender, wTxn))
+
+}
+
+func writeTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, wTxn txn.TxnMeta, keys ...byte) []txn.TxnResponse {
+	var requests []txn.TxnRequest
+	for _, k := range keys {
+		requests = append(requests, newTestWriteRequest(k, wTxn, toShard))
+	}
+	responses, err := sender.Send(context.Background(), requests)
+	assert.NoError(t, err)
+	assert.Equal(t, len(keys), len(responses))
+	return responses
+}
+
+func commitWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []txn.TxnResponse {
+	responses, err := sender.Send(context.Background(), []txn.TxnRequest{newTestCommitRequest(wTxn)})
+	assert.NoError(t, err)
+	return responses
+}
+
+func readTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, rTxn txn.TxnMeta, keys ...byte) []txn.TxnResponse {
+	var requests []txn.TxnRequest
+	for _, k := range keys {
+		requests = append(requests, newTestReadRequest(k, rTxn, toShard))
+	}
+	responses, err := sender.Send(context.Background(), requests)
+	assert.NoError(t, err)
+	assert.Equal(t, len(keys), len(responses))
+	return responses
+}
+
+func checkReadResponses(t *testing.T, response []txn.TxnResponse, expectValues ...string) {
+	for idx, resp := range response {
+		values := mem.MustParseGetPayload(resp.CNOpResponse.Payload)
+		assert.Equal(t, expectValues[idx], string(values[0]))
+	}
+}
+
+func checkResponses(t *testing.T, response []txn.TxnResponse, expectErrors ...*txn.TxnError) {
+	if len(expectErrors) == 0 {
+		expectErrors = make([]*txn.TxnError, len(response))
+	}
+	for idx, resp := range response {
+		assert.Equal(t, expectErrors[idx], resp.TxnError)
+	}
+}

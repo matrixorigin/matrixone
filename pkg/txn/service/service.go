@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"go.uber.org/zap"
 )
@@ -38,7 +39,7 @@ var _ TxnService = (*service)(nil)
 type service struct {
 	logger  *zap.Logger
 	shard   metadata.DNShard
-	storage TxnStorage
+	storage storage.TxnStorage
 	sender  rpc.TxnSender
 	clocker clock.Clock
 	stopper *stopper.Stopper
@@ -59,11 +60,14 @@ type service struct {
 	transactions  sync.Map // string(txn.id) -> txnContext
 	zombieTimeout time.Duration
 	pool          sync.Pool
+	recoveryC     chan struct{}
+	txnC          chan txn.TxnMeta
 }
 
+// NewTxnService create TxnService
 func NewTxnService(logger *zap.Logger,
 	shard metadata.DNShard,
-	storage TxnStorage,
+	storage storage.TxnStorage,
 	sender rpc.TxnSender,
 	clocker clock.Clock,
 	zombieTimeout time.Duration) TxnService {
@@ -82,6 +86,8 @@ func NewTxnService(logger *zap.Logger,
 			shard.ShardID,
 			shard.ReplicaID), stopper.WithLogger(logger)),
 		zombieTimeout: zombieTimeout,
+		recoveryC:     make(chan struct{}),
+		txnC:          make(chan txn.TxnMeta, 16),
 	}
 	s.stopper.RunTask(s.gcZombieTxn)
 	return s
@@ -91,7 +97,14 @@ func (s *service) Shard() metadata.DNShard {
 	return s.shard
 }
 
+func (s *service) Start() error {
+	s.startRecovery()
+	return nil
+}
+
 func (s *service) Close() error {
+	s.waitRecoveryCompleted()
+	s.stopper.Stop()
 	return s.sender.Close()
 }
 
@@ -132,7 +145,7 @@ func (s *service) maybeAddTxn(meta txn.TxnMeta) (*txnContext, bool) {
 
 	txnCtx := s.acquireTxnContext()
 	v, loaded := s.transactions.LoadOrStore(id, txnCtx)
-	if !loaded {
+	if loaded {
 		s.releaseTxnContext(txnCtx)
 		return v.(*txnContext), false
 	}
@@ -156,11 +169,8 @@ func (s service) getTxnContext(txnID []byte) *txnContext {
 	return v.(*txnContext)
 }
 
-func (s *service) validDNShard(request *txn.TxnRequest) {
-	dn := request.GetTargetDN()
-
-	if dn.ShardID != s.shard.ShardID ||
-		dn.ReplicaID != s.shard.ReplicaID {
+func (s *service) validDNShard(dn metadata.DNShard) {
+	if !s.shard.Equal(dn) {
 		s.logger.Fatal("DN metadata not match",
 			zap.String("request-dn", dn.DebugString()),
 			zap.String("local-dn", s.shard.DebugString()))
@@ -175,14 +185,14 @@ func (s *service) releaseTxnContext(txnCtx *txnContext) {
 	s.pool.Put(txnCtx)
 }
 
-func (s *service) parallelSendNotify(ctx context.Context,
+func (s *service) parallelSendWithRetry(ctx context.Context,
 	purpose string,
 	txnMeta txn.TxnMeta,
-	requests []txn.TxnRequest) {
+	requests []txn.TxnRequest) []txn.TxnResponse {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		default:
 			responses, err := s.sender.Send(ctx, requests)
 			if err != nil {
@@ -193,7 +203,6 @@ func (s *service) parallelSendNotify(ctx context.Context,
 				continue
 			}
 			hasError := false
-			newRequests := requests[:0]
 			for idx, resp := range responses {
 				if resp.TxnError != nil {
 					hasError = true
@@ -202,13 +211,11 @@ func (s *service) parallelSendNotify(ctx context.Context,
 						util.TxnIDFieldWithID(txnMeta.ID),
 						zap.String("target-dn-shard", txnMeta.DNShards[idx+1].DebugString()),
 						zap.Error(err))
-					newRequests = append(newRequests, requests[idx])
 				}
 			}
 			if !hasError {
-				return
+				return responses
 			}
-			requests = newRequests
 		}
 	}
 }
@@ -251,8 +258,19 @@ func (c *txnContext) getTxn() txn.TxnMeta {
 	return c.getTxnLocked()
 }
 
+func (c *txnContext) updateTxn(txn txn.TxnMeta) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.updateTxnLocked(txn)
+}
+
 func (c *txnContext) getTxnLocked() txn.TxnMeta {
 	return c.mu.txn
+}
+
+func (c *txnContext) updateTxnLocked(txn txn.TxnMeta) {
+	c.mu.txn = txn
 }
 
 func (c *txnContext) resetLocked() {
@@ -270,7 +288,7 @@ func (c *txnContext) changeStatusLocked(status txn.TxnStatus) {
 }
 
 func (c *txnContext) updateCommitTimestampLocked(ts timestamp.Timestamp) {
-	c.mu.txn.CommitTS = &ts
+	c.mu.txn.CommitTS = ts
 }
 
 func (s *service) mustGetTimeoutAtFromContext(ctx context.Context) int64 {

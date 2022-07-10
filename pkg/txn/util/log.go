@@ -9,8 +9,8 @@ import (
 )
 
 // TxnIDField returns a txn id field
-func TxnIDField(meta txn.TxnMeta) zap.Field {
-	return TxnIDFieldWithID(meta.ID)
+func TxnIDField(txnMeta txn.TxnMeta) zap.Field {
+	return TxnIDFieldWithID(txnMeta.ID)
 }
 
 // TxnIDFieldWithID returns a txn id field
@@ -21,4 +21,9 @@ func TxnIDFieldWithID(id []byte) zap.Field {
 // TxnDNShardField returns a dn shard zap field
 func TxnDNShardField(dn metadata.DNShard) zap.Field {
 	return zap.String("dn-shard", dn.DebugString())
+}
+
+// TxnField returns a txn zap field
+func TxnField(txnMeta txn.TxnMeta) zap.Field {
+	return zap.String("txn", txnMeta.DebugString())
 }
