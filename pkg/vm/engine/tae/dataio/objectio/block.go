@@ -206,7 +206,7 @@ func (bf *blockFile) LoadBatch(
 			}
 			if len(decompress) != int(f.Stat().OriginSize()) {
 				panic(any(fmt.Sprintf("invalid decompressed size: %d, %d is expected",
-					len(decompress), colBlk.data.stat.OriginSize())))
+					len(decompress), colBlk.data.stat.DataSize())))
 			}
 			r := bytes.NewBuffer(decompress)
 			if _, err = vec.ReadFrom(r); err != nil {

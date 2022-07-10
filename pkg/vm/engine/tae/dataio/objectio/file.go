@@ -23,7 +23,7 @@ type ObjectFile struct {
 	common.RefHelper
 	inode *Inode
 	fs    *ObjectFS
-	stat  *fileStat
+	stat  *objectFileStat
 }
 
 func (b *ObjectFile) GetFS() *ObjectFS {
@@ -51,7 +51,7 @@ func (b *ObjectFile) SetIdxs(idxs uint32) {
 func (b *ObjectFile) GetStat() fs.FileInfo {
 	b.inode.mutex.RLock()
 	defer b.inode.mutex.RUnlock()
-	stat := &fileStat{}
+	stat := &objectFileStat{}
 	stat.size = int64(b.inode.size)
 	stat.dataSize = int64(b.inode.size)
 	return stat
