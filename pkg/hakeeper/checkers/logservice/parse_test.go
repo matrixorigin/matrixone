@@ -1,14 +1,27 @@
+// Copyright 2022 MatrixOrigin.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package logservice
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"sort"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
-	"sort"
-	"testing"
 )
 
 func TestFixedLogShardInfo(t *testing.T) {
@@ -384,20 +397,20 @@ func TestCollectStore(t *testing.T) {
 				}},
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {
-						Tick:     uint64(10 * hakeeper.TickPerSecond * 60),
+						Tick:     uint64(10 * util.TickPerSecond * 60),
 						Replicas: nil,
 					},
 					"b": {
-						Tick:     uint64(13 * hakeeper.TickPerSecond * 60),
+						Tick:     uint64(13 * util.TickPerSecond * 60),
 						Replicas: nil,
 					},
 					"c": {
-						Tick:     uint64(12 * hakeeper.TickPerSecond * 60),
+						Tick:     uint64(12 * util.TickPerSecond * 60),
 						Replicas: nil,
 					},
 				},
 			},
-			tick: uint64(10 * hakeeper.TickPerSecond * 60),
+			tick: uint64(10 * util.TickPerSecond * 60),
 			expected: util.ClusterStores{
 				Working: []*util.Store{{
 					ID:       "a",
@@ -433,7 +446,7 @@ func TestCollectStore(t *testing.T) {
 				}},
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {
-						Tick:     uint64(10 * hakeeper.TickPerSecond * 60),
+						Tick:     uint64(10 * util.TickPerSecond * 60),
 						Replicas: nil,
 					},
 					"b": {
@@ -441,12 +454,12 @@ func TestCollectStore(t *testing.T) {
 						Replicas: nil,
 					},
 					"c": {
-						Tick:     uint64(12 * hakeeper.TickPerSecond * 60),
+						Tick:     uint64(12 * util.TickPerSecond * 60),
 						Replicas: nil,
 					},
 				},
 			},
-			tick: uint64(15 * hakeeper.TickPerSecond * 60),
+			tick: uint64(15 * util.TickPerSecond * 60),
 			expected: util.ClusterStores{
 				Working: []*util.Store{{
 					ID:       "a",

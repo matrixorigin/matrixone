@@ -1,12 +1,12 @@
 create table t1 (a int unsigned not null, primary key(a));
 insert into t1 values (4294967295), (0xFFFFFFFE), (4294967293), (4294967291);
-select * from t1;
+select * from t1 order by a asc;
 a
 4294967291
 4294967293
 4294967294
 4294967295
-select * from t1 where a=4294967295;
+select * from t1 where a=4294967295 order by 1 desc;
 a
 4294967295
 delete from t1 where a=4294967295;
@@ -18,7 +18,7 @@ a
 drop table t1;
 create table t1 ( a int not null default 1, int32 int primary key);
 insert into t1 (int32) values (-1),(1234567890),(2147483647);
-select * from t1;
+select * from t1 order by a desc, int32 asc;
 a	int32
 1	-1
 1	1234567890
@@ -32,7 +32,7 @@ min(int32)	max(int32)	max(int32)-1
 drop table t1;
 create table t1 ( a int not null default 1, int32 int unsigned primary key);
 insert into t1 (int32) values (0),(4294967295), (0xFFFFFFFE), (4294967293), (4294967291);
-select * from t1;
+select * from t1 order by a desc, 2 asc;
 a	int32
 1	0
 1	4294967291
@@ -58,7 +58,7 @@ min(int32)	max(int32)	max(int32)-1
 drop table t1;
 create table t1 (id int primary key, a int);
 insert into t1 values (1,1);
-select * from t1;
+select * from t1 order by 1+2;
 id	a
 1	1
 select * from t1 limit 9999999999;
@@ -87,7 +87,7 @@ valueu32	value32
 5	-2147483648
 4294967295	1
 2147483647	2
-select * from t2;
+select * from t2 order by 2 asc;
 valueu32	value32
 5	-2147483648
 4294967295	3
@@ -97,7 +97,7 @@ valueu32	value32	valueu32	value32
 5	-2147483648	5	-2147483648
 2147483647	2	2147483647	4
 4294967295	1	4294967295	3
-select * from t1 join t2 on t1.valueu32=t2.valueu32 where t1.valueu32=4294967295;
+select * from t1 join t2 on t1.valueu32=t2.valueu32 where t1.valueu32=4294967295 order by abs(3) desc;
 valueu32	value32	valueu32	value32
 4294967295	1	4294967295	3
 select * from t1 join t2 on t1.value32=t2.value32 order by 2 desc;
@@ -107,7 +107,7 @@ drop table if exists t1;
 drop table if exists t2;
 create table t1 (sint32 int not null);
 insert into t1 values (-2147483648);
-select * from t1;
+select * from t1 order by 1 desc;
 sint32
 -2147483648
 drop table t1;

@@ -15,7 +15,6 @@
 package dnservice
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -33,7 +32,7 @@ func parseDnState(
 
 	for storeID, storeInfo := range dnState.Stores {
 		expired := false
-		if hakeeper.ExpiredTick(storeInfo.Tick, hakeeper.DnStoreTimeout) < currTick {
+		if util.ExpiredTick(storeInfo.Tick, util.DnStoreTimeout) < currTick {
 			expired = true
 		}
 
