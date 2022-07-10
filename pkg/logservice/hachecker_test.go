@@ -195,9 +195,10 @@ func testBootstrap(t *testing.T, fail bool) {
 		} else {
 			cb, err := store.getCommandBatch(ctx, store.id())
 			require.NoError(t, err)
-			require.Equal(t, 1, len(cb.Commands))
+			require.Equal(t, 2, len(cb.Commands))
 			service := &Service{store: store}
 			service.handleStartReplica(cb.Commands[0])
+			service.handleStartReplica(cb.Commands[1])
 
 			for i := 0; i < 100; i++ {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)

@@ -37,6 +37,13 @@ var (
 )
 
 const (
+	// When bootstrapping, k8s will first bootstrap the HAKeeper by starting some
+	// Log stores with command line options specifying that those stores will be hosting
+	// a HAKeeper replicas. It will be k8s' responsibility to assign Replica IDs to those
+	// HAKeeper replicas, and those IDs will have to be assigned from the range
+	// [K8SIDRangeStart, K8SIDRangeEnd)
+	K8SIDRangeStart uint64 = 131072
+	K8SIDRangeEnd   uint64 = 262144
 	// TickDuration defines the frequency of ticks.
 	TickDuration = time.Second
 	// CheckDuration defines how often HAKeeper checks the health state of the cluster
@@ -261,7 +268,7 @@ func (s *stateMachine) handleSetStateCmd(cmd []byte) sm.Result {
 		return sm.Result{Data: data}
 	}
 	defer func() {
-		plog.Infof("HAKeeper set to %s state", s.state.State)
+		plog.Infof("HAKeeper is in %s state", s.state.State)
 	}()
 	state := parseSetStateCmd(cmd)
 	switch s.state.State {
@@ -288,6 +295,8 @@ func (s *stateMachine) handleSetStateCmd(cmd []byte) sm.Result {
 	}
 }
 
+// FIXME: NextID should be set to K8SIDRangeEnd once HAKeeper state is
+// set to HAKeeperBootstrapping.
 func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 	result := sm.Result{Value: uint64(s.state.State)}
 	if s.state.State != pb.HAKeeperCreated {
@@ -298,11 +307,16 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 		panic("DN:Log 1:1 mode is the only supported mode")
 	}
 
-	// FIXME: NextID should be initialized to 1, as 0 is already statically
-	// assigned to HAKeeper itself
-	s.state.NextID++
 	dnShards := make([]metadata.DNShardRecord, 0)
 	logShards := make([]metadata.LogShardRecord, 0)
+	// HAKeeper shard is assigned ShardID 0
+	rec := metadata.LogShardRecord{
+		ShardID:          0,
+		NumberOfReplicas: req.NumOfLogReplicas,
+	}
+	logShards = append(logShards, rec)
+
+	s.state.NextID++
 	for i := uint64(0); i < req.NumOfLogShards; i++ {
 		rec := metadata.LogShardRecord{
 			ShardID:          s.state.NextID,
@@ -327,6 +341,12 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 	return result
 }
 
+func (s *stateMachine) assertState() {
+	if s.state.State != pb.HAKeeperRunning && s.state.State != pb.HAKeeperBootstrapping {
+		panic("HAKeeper not in the running state")
+	}
+}
+
 func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	// TODO: we need to make sure InitialClusterRequestCmd is the
 	// first user cmd added to the Raft log
@@ -341,6 +361,7 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	case pb.TickUpdate:
 		return s.handleTick(cmd), nil
 	case pb.GetIDUpdate:
+		s.assertState()
 		return s.handleGetIDCmd(cmd), nil
 	case pb.ScheduleCommandUpdate:
 		return s.handleUpdateCommandsCmd(cmd), nil
