@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/tfs"
 	"path"
 	"strconv"
 	"strings"
@@ -69,7 +70,7 @@ type segmentFile struct {
 	ts     uint64
 	blocks map[uint64]*blockFile
 	name   string
-	driver *Driver
+	fs     tfs.FS
 }
 
 func openSegment(name string, id uint64) *segmentFile {
@@ -77,11 +78,7 @@ func openSegment(name string, id uint64) *segmentFile {
 		blocks: make(map[uint64]*blockFile),
 		name:   name,
 	}
-	sf.driver = &Driver{}
-	err := sf.driver.Open(sf.name)
-	if err != nil {
-		panic(any(err.Error()))
-	}
+	sf.fs = newObjectFS()
 	sf.id = &common.ID{
 		SegmentID: id,
 	}
@@ -118,9 +115,7 @@ func (sf *segmentFile) Destroy() {
 			panic(any(err))
 		}
 	}
-	sf.driver.Unmount()
-	sf.driver.Destroy()
-	sf.driver = nil
+	sf.fs = nil
 }
 
 func (sf *segmentFile) OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (block file.Block, err error) {
@@ -149,10 +144,10 @@ func (sf *segmentFile) String() string {
 	return s
 }
 
-func (sf *segmentFile) GetSegmentFile() *Driver {
-	return sf.driver
+func (sf *segmentFile) GetSegmentFile() tfs.FS {
+	return sf.fs
 }
 
 func (sf *segmentFile) Sync() error {
-	return sf.driver.Sync()
+	return nil
 }

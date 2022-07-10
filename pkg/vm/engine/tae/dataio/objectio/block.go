@@ -17,6 +17,8 @@ package objectio
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/tfs"
+	"os"
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
@@ -32,6 +34,7 @@ import (
 type blockFile struct {
 	common.RefHelper
 	seg       *segmentFile
+	dir       tfs.File
 	rows      uint32
 	id        uint64
 	ts        uint64
@@ -49,10 +52,12 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 	}
 	bf.deletes = newDeletes(bf)
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
-	bf.indexMeta.file = append(bf.indexMeta.file, bf.seg.GetSegmentFile().NewBlockFile(
-		fmt.Sprintf("%d_%d.idx", colCnt, bf.id)))
-	bf.indexMeta.file[0].SetCols(uint32(colCnt))
-	bf.indexMeta.file[0].snode.algo = compress.None
+	indexFile, err := bf.seg.GetSegmentFile().OpenFile(
+		fmt.Sprintf("%d_%d.idx", colCnt, bf.id), os.O_CREATE)
+	if err != nil {
+		panic(any(err))
+	}
+	bf.indexMeta.file = append(bf.indexMeta.file, indexFile)
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
 		cnt := 0
@@ -90,8 +95,8 @@ func (bf *blockFile) ReadRows() uint32 {
 
 func (bf *blockFile) WriteTS(ts uint64) (err error) {
 	bf.ts = ts
-	bf.deletes.SetFile(
-		bf.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.del", len(bf.columns), bf.id, ts)),
+	delete, err := bf.seg.GetSegmentFile().OpenFile(fmt.Sprintf("%d_%d_%d.del", len(bf.columns), bf.id, ts), os.O_CREATE)
+	bf.deletes.SetFile(delete,
 		uint32(len(bf.columns)),
 		uint32(len(bf.columns[0].indexes)))
 	return
@@ -169,7 +174,7 @@ func (bf *blockFile) Destroy() error {
 	return nil
 }
 
-func (bf *blockFile) Sync() error { return bf.seg.GetSegmentFile().Sync() }
+func (bf *blockFile) Sync() error { return bf.indexMeta.file[0].Sync() }
 
 func (bf *blockFile) LoadBatch(
 	colTypes []types.Type,

@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/tfs"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -25,7 +26,7 @@ const UPGRADE_FILE_NUM = 2
 type dataFile struct {
 	mutex  sync.RWMutex
 	colBlk *columnBlock
-	file   []*DriverFile
+	file   []tfs.File
 	buf    []byte
 	stat   *fileStat
 	cache  []byte
@@ -48,7 +49,7 @@ func newData(colBlk *columnBlock) *dataFile {
 	df := &dataFile{
 		colBlk: colBlk,
 		buf:    make([]byte, 0),
-		file:   make([]*DriverFile, 0),
+		file:   make([]tfs.File, 0),
 	}
 	df.stat = &fileStat{}
 	return df
@@ -79,15 +80,7 @@ func newDeletes(block *blockFile) *deletesFile {
 
 func (df *dataFile) Write(buf []byte) (n int, err error) {
 	file := df.GetFile()
-	if df.colBlk != nil && df.colBlk.block.rows > 0 {
-		file.SetRows(df.colBlk.block.rows)
-	}
-	err = file.GetSegement().Append(file, buf)
-	meta := file.GetInode()
-	df.stat.algo = meta.GetAlgo()
-	df.stat.originSize = meta.GetOriginSize()
-	df.stat.size = meta.GetFileSize()
-	df.upgradeFile()
+	_, err = file.Write(buf)
 	n = len(buf)
 	return
 }
@@ -102,22 +95,6 @@ func (df *dataFile) Read(buf []byte) (n int, err error) {
 	return n, nil
 }
 
-func (df *dataFile) upgradeFile() {
-	go func() {
-		df.mutex.Lock()
-		if len(df.file) < UPGRADE_FILE_NUM {
-			df.mutex.Unlock()
-			return
-		}
-		releaseFile := df.file[:len(df.file)-1]
-		df.file = df.file[len(df.file)-1 : len(df.file)]
-		df.mutex.Unlock()
-		for _, file := range releaseFile {
-			file.driver.ReleaseFile(file)
-		}
-	}()
-}
-
 func (df *dataFile) GetFileCnt() int {
 	df.mutex.Lock()
 	defer df.mutex.Unlock()
@@ -128,18 +105,16 @@ func (df *dataFile) GetFileType() common.FileType {
 	return common.DiskFile
 }
 
-func (df *dataFile) GetFile() *DriverFile {
+func (df *dataFile) GetFile() tfs.File {
 	df.mutex.RLock()
 	defer df.mutex.RUnlock()
 	return df.file[len(df.file)-1]
 }
 
-func (df *dataFile) SetFile(file *DriverFile, col, idx uint32) {
+func (df *dataFile) SetFile(file tfs.File, col, idx uint32) {
 	df.mutex.Lock()
 	defer df.mutex.Unlock()
 	df.file = append(df.file, file)
-	file.SetCols(col)
-	file.SetIdxs(idx)
 }
 
 func (df *dataFile) Ref()            { df.colBlk.Ref() }
@@ -152,7 +127,7 @@ func (df *dataFile) Destroy() {
 		if file == nil {
 			continue
 		}
-		file.Unref()
+		file.Close()
 	}
 	df.file = nil
 }

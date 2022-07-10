@@ -43,7 +43,7 @@ func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 		cb.indexes[i] = newIndex(cb)
 		cb.indexes[i].dataFile.file = append(cb.indexes[i].dataFile.file, cb.block.seg.GetSegmentFile().NewBlockFile(
 			fmt.Sprintf("%d_%d_%d.idx", cb.col, cb.block.id, i)))
-		cb.indexes[i].dataFile.file[0].snode.algo = compress.None
+		cb.indexes[i].dataFile.file[0].inode.algo = compress.None
 		cb.indexes[i].dataFile.file[0].SetIdxs(uint32(len(cb.indexes)))
 		cb.indexes[i].dataFile.file[0].SetCols(uint32(col))
 	}

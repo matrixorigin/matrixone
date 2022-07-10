@@ -16,135 +16,61 @@ package objectio
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"io"
 )
 
-type DriverFile struct {
+type ObjectFile struct {
 	common.RefHelper
-	snode  *Inode
-	name   string
-	driver *Driver
+	inode *Inode
+	fs    *ObjectFS
+	stat  *fileStat
 }
 
-func (b *DriverFile) GetSegement() *Driver {
-	return b.driver
+func (b *ObjectFile) GetFS() *ObjectFS {
+	return b.fs
 }
 
-func (b *DriverFile) GetInode() *Inode {
-	b.snode.mutex.RLock()
-	defer b.snode.mutex.RUnlock()
-	return b.snode
+func (b *ObjectFile) GetInode() *Inode {
+	b.inode.mutex.RLock()
+	defer b.inode.mutex.RUnlock()
+	return b.inode
 }
 
-func (b *DriverFile) SetRows(rows uint32) {
-	b.snode.rows = rows
+func (b *ObjectFile) SetRows(rows uint32) {
+	b.inode.rows = rows
 }
 
-func (b *DriverFile) SetCols(cols uint32) {
-	b.snode.cols = cols
+func (b *ObjectFile) SetCols(cols uint32) {
+	b.inode.cols = cols
 }
 
-func (b *DriverFile) SetIdxs(idxs uint32) {
-	b.snode.idxs = idxs
+func (b *ObjectFile) SetIdxs(idxs uint32) {
+	b.inode.idxs = idxs
 }
 
-func (b *DriverFile) GetName() string {
-	return b.name
+func (b *ObjectFile) GetName() string {
+	return b.inode.name
 }
 
-func (b *DriverFile) Append(offset uint64, data []byte, originSize uint32) (err error) {
-	cbufLen := uint32(p2roundup(uint64(len(data)), uint64(b.driver.super.blockSize)))
-	_, err = b.driver.segFile.WriteAt(data, int64(offset))
-	if err != nil {
-		return err
-	}
-	b.snode.mutex.Lock()
-	b.snode.extents = append(b.snode.extents, Extent{
-		typ:    APPEND,
-		offset: uint32(offset),
-		length: cbufLen,
-		data:   entry{offset: 0, length: uint32(len(data))},
-	})
-	b.snode.size += uint64(len(data))
-	b.snode.originSize += uint64(originSize)
-	b.snode.seq++
-	b.snode.mutex.Unlock()
-	return nil
+func (b *ObjectFile) Write(data []byte) (n int, err error) {
+	return b.fs.Append(b, data)
 }
 
-func (b *DriverFile) GetExtents() *[]Extent {
-	extents := &b.snode.extents
+func (b *ObjectFile) GetExtents() *[]Extent {
+	extents := &b.inode.extents
 	return extents
 }
 
-func (b *DriverFile) Read(data []byte) (n int, err error) {
-	bufLen := len(data)
-	if bufLen == 0 {
-		return 0, nil
-	}
-	n = 0
-	var boff uint32 = 0
-	var roff uint32 = 0
-	b.snode.mutex.RLock()
-	extents := b.snode.extents
-	b.snode.mutex.RUnlock()
-	for _, ext := range extents {
-		if bufLen == 0 {
-			break
-		}
-		buf := data[boff : boff+ext.GetData().GetLength()]
-		dataLen, err := b.ReadExtent(roff, ext.GetData().GetLength(), buf)
-		if err != nil && dataLen != ext.GetData().GetLength() {
-			return int(dataLen), err
-		}
-		n += int(dataLen)
-		boff += ext.GetData().GetLength()
-		roff += ext.Length()
-	}
-	return n, nil
+func (b *ObjectFile) GetFileInfo() {
+
 }
 
-func (b *DriverFile) ReadExtent(offset, length uint32, data []byte) (uint32, error) {
-	remain := uint32(b.snode.size) - offset - length
-	num := 0
-	for _, extent := range b.snode.extents {
-		if offset >= extent.length {
-			offset -= extent.length
-		} else {
-			break
-		}
-		num++
-	}
-	var read uint32 = 0
-	for {
-		buf := data
-		readOne := length
-		if offset > 0 {
-			if b.snode.extents[num].length-offset < length {
-				readOne = b.snode.extents[num].length - offset
-			}
-			offset = 0
-		} else if b.snode.extents[num].length < length {
-			readOne = b.snode.extents[num].length
-		}
-		buf = buf[read : read+readOne]
-		_, err := b.driver.segFile.ReadAt(buf, int64(b.snode.extents[num].offset)+int64(offset))
-		if err != nil && err != io.EOF {
-			return 0, err
-		}
-		read += readOne
-		length -= readOne
-		num++
-		if length == 0 || length == remain {
-			return read, nil
-		}
-	}
+func (b *ObjectFile) Read(data []byte) (n int, err error) {
+	return b.fs.Read(b, data)
 }
 
-func (b *DriverFile) close() {
+func (b *ObjectFile) close() {
 	b.Destroy()
 }
 
-func (b *DriverFile) Destroy() {
-	b.driver.ReleaseFile(b)
+func (b *ObjectFile) Destroy() {
 }
