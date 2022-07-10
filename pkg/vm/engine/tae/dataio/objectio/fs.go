@@ -155,5 +155,9 @@ func (o *ObjectFS) Read(file *ObjectFile, data []byte) (n int, err error) {
 }
 
 func (o *ObjectFS) Sync(file *ObjectFile) error {
-	return o.GetDataWithId(file.inode.objectId).oFile.Sync()
+	data := o.GetDataWithId(file.inode.objectId)
+	if data == nil {
+		return nil
+	}
+	return data.oFile.Sync()
 }
