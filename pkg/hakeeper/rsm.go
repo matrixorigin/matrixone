@@ -260,6 +260,9 @@ func (s *stateMachine) handleSetStateCmd(cmd []byte) sm.Result {
 		binaryEnc.PutUint32(data, uint32(s.state.State))
 		return sm.Result{Data: data}
 	}
+	defer func() {
+		plog.Infof("HAKeeper set to %s state", s.state.State)
+	}()
 	state := parseSetStateCmd(cmd)
 	switch s.state.State {
 	case pb.HAKeeperCreated:
@@ -319,7 +322,7 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 		DNShards:  dnShards,
 		LogShards: logShards,
 	}
-	plog.Infof("HAKeeper set to the BOOTSTRAPPING state")
+	plog.Infof("initial cluster set, HAKeeper is in BOOTSTRAPPING state")
 	s.state.State = pb.HAKeeperBootstrapping
 	return result
 }
