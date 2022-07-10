@@ -173,6 +173,100 @@ jobs:
             ${{ github.workspace }}
           retention-days: 7
 
+  tae-bvt-race:
+    # The type of runner that the job will run on.
+    runs-on: ubuntu-latest
+    name: BVT RACE Test on CentOS/x64
+    timeout-minutes: 30
+
+    # Steps represent a sequence of tasks that will be executed as part of the job.
+    steps:
+
+      - name: checkout head
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: '3'
+          path: ./head
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.18
+
+      - name: Build MatrixOne
+        run: |
+          cd $GITHUB_WORKSPACE/head && make clean && make config && make debug
+          git rev-parse --short HEAD
+          echo "base sha: ${{ github.event.pull_request.base.sha }}"
+          echo "head sha: ${{ github.event.pull_request.head.sha }}"
+
+      - name: Start MO
+        run: |
+          cd $GITHUB_WORKSPACE/head
+          ./mo-server ./system_vars_config.toml &>mo-server.log &
+
+      - name: Clone test-tool repository
+        uses: actions/checkout@v2
+        with:
+          repository: matrixorigin/mo-tester
+          path: ./mo-tester
+          ref: main
+
+      - name: Set up JDK 8 for x64
+        uses: actions/setup-java@v3
+        with:
+          java-version: '8'
+          distribution: 'adopt'
+          architecture: x64
+
+      - name: Start BVT Test
+        id: bvt_on_pr_version
+        run: |
+          timedatectl status
+          sudo timedatectl set-timezone "Asia/Shanghai"
+          timedatectl status
+          sleep 60s
+          cd $GITHUB_WORKSPACE/mo-tester
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
+
+      - name: Check MO-Server Status
+        if: ${{ always() }}
+        run: |
+          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
+          ps -ef
+
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: '3'
+          path: ./base
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: BVT Ignore Tag Check
+        run: |
+          if  [ ! -d  "./base/test/"  ]; then echo 'first add, skip check'; exit 0; fi
+          head_tag_count=$(grep -r 'bvt:issue' $GITHUB_WORKSPACE/head/test/cases | wc -l || 0)
+          base_tag_count=$(grep -r 'bvt:issue' $GITHUB_WORKSPACE/base/test/cases | wc -l || 0)
+          if [ $head_tag_count -gt $base_tag_count ]; then echo 'Tagging new case with bvt:issue is not permitted.'; exit 2; fi
+
+      - name: remove some files
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          cd $GITHUB_WORKSPACE
+          if  [ -d  "./head/mo-server"  ]; then rm -rf ./head/mo-server; fi
+          if  [ -d  "./base/"  ]; then rm -rf ./base/; fi
+          rm -rf ./mo-tester/.git
+          rm -rf ./mo-tester/lib
+
+      - uses: actions/upload-artifact@v2
+        if: ${{ always() }}
+        continue-on-error: true
+        with:
+          name: race_ci_reports
+          path: |
+            ${{ github.workspace }}
+          retention-days: 7
+          
   lint-docs:
     name: Lint Docs
     runs-on: ubuntu-latest
