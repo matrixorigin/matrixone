@@ -182,6 +182,7 @@ func (s *service) acquireTxnContext() *txnContext {
 }
 
 func (s *service) releaseTxnContext(txnCtx *txnContext) {
+	txnCtx.resetLocked()
 	s.pool.Put(txnCtx)
 }
 

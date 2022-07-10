@@ -84,7 +84,7 @@ func (s *service) end() error {
 
 		switch txnMeta.Status {
 		case txn.TxnStatus_Prepared:
-			if err := s.startAsyncCheckCommitTask(txnMeta); err != nil {
+			if err := s.startAsyncCheckCommitTask(txnCtx); err != nil {
 				panic(err)
 			}
 		case txn.TxnStatus_Committing:
@@ -102,8 +102,10 @@ func (s *service) waitRecoveryCompleted() {
 	<-s.recoveryC
 }
 
-func (s *service) startAsyncCheckCommitTask(txnMeta txn.TxnMeta) error {
+func (s *service) startAsyncCheckCommitTask(txnCtx *txnContext) error {
+	// TODO: clean txnCtx
 	return s.stopper.RunTask(func(ctx context.Context) {
+		txnMeta := txnCtx.getTxn()
 		requests := make([]txn.TxnRequest, 0, len(txnMeta.DNShards)-1)
 		for _, dn := range txnMeta.DNShards[1:] {
 			requests = append(requests, txn.TxnRequest{
@@ -126,7 +128,7 @@ func (s *service) startAsyncCheckCommitTask(txnMeta txn.TxnMeta) error {
 		}
 
 		if prepared == len(txnMeta.DNShards) {
-			if err := s.startAsyncCommitTask(txnMeta); err != nil {
+			if err := s.startAsyncCommitTask(txnCtx); err != nil {
 				s.logger.Error("start commit task failed",
 					util.TxnField(txnMeta))
 			}

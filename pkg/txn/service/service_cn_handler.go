@@ -199,7 +199,6 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 			changeStatus(txn.TxnStatus_Committed)
 		}
 
-		txnCtx.resetLocked()
 		return nil
 	}
 
