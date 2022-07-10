@@ -87,13 +87,6 @@ func TestGetSetLeaseHolderCmd(t *testing.T) {
 	assert.False(t, isSetLeaseHolderUpdate(cmd2))
 }
 
-func TestGetSetTruncatedIndexCmd(t *testing.T) {
-	cmd := getSetTruncatedLsnCmd(1234)
-	assert.True(t, isSetTruncatedLsnUpdate(cmd))
-	cmd2 := getSetLeaseHolderCmd(1234)
-	assert.False(t, isSetTruncatedLsnUpdate(cmd2))
-}
-
 func TestIsUserUpdate(t *testing.T) {
 	cmd := make([]byte, headerSize+8+1)
 	binaryEnc.PutUint32(cmd, uint32(pb.UserEntryUpdate))

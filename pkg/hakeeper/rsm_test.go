@@ -374,8 +374,6 @@ func TestSetState(t *testing.T) {
 
 func TestInitialClusterRequestCmd(t *testing.T) {
 	cmd := GetInitialClusterRequestCmd(2, 2, 3)
-	assert.True(t, isInitialClusterRequestCmd(cmd))
-	assert.False(t, isInitialClusterRequestCmd(GetTickCmd()))
 	req := parseInitialClusterRequestCmd(cmd)
 	assert.Equal(t, uint64(2), req.NumOfLogShards)
 	assert.Equal(t, uint64(2), req.NumOfDNShards)

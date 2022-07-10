@@ -53,6 +53,14 @@ func (l *storeMeta) unmarshal(data []byte) {
 	l.serviceAddress = string(data)
 }
 
+func isUserUpdate(cmd []byte) bool {
+	return parseCmdTag(cmd) == pb.UserEntryUpdate
+}
+
+func isSetLeaseHolderUpdate(cmd []byte) bool {
+	return parseCmdTag(cmd) == pb.LeaseHolderIDUpdate
+}
+
 func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 	meta := storeMeta{
 		serviceAddress: cfg.ServiceAddress,
@@ -293,9 +301,6 @@ func (l *store) truncateLog(ctx context.Context,
 
 func (l *store) append(ctx context.Context,
 	shardID uint64, cmd []byte) (Lsn, error) {
-	if !isUserUpdate(cmd) {
-		panic(moerr.NewError(moerr.INVALID_INPUT, "not user update"))
-	}
 	session := l.nh.GetNoOPSession(shardID)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
@@ -397,8 +402,8 @@ func (l *store) getLeaseHolderID(ctx context.Context,
 	}
 	// first entry is a update lease cmd
 	e := entries[0]
-	if isSetLeaseHolderUpdate(e.Cmd) {
-		return parseLeaseHolderID(e.Cmd), nil
+	if !isRaftInternalEntry(e) && isSetLeaseHolderUpdate(l.decodeCmd(e)) {
+		return parseLeaseHolderID(l.decodeCmd(e)), nil
 	}
 	v, err := l.read(ctx, shardID, leaseHistoryQuery{lsn: e.Index})
 	if err != nil {
@@ -460,7 +465,7 @@ func (l *store) markEntries(ctx context.Context,
 			if parseLeaseHolderID(cmd) != leaseHolderID {
 				// lease not match, skip
 				result = append(result, LogRecord{
-					Type: pb.LeaseUpdate,
+					Type: pb.LeaseRejected,
 					Lsn:  e.Index,
 				})
 				continue
@@ -486,6 +491,10 @@ func getNextIndex(entries []raftpb.Entry, firstIndex Lsn, lastIndex Lsn) Lsn {
 	return firstIndex
 }
 
+// high priority test
+// FIXME: add a test that queries the log with LeaseUpdate, LeaseRejected
+// entries, no matter what is the firstLsn specified in queryLog(), returned
+// results should make sense
 func (l *store) queryLog(ctx context.Context, shardID uint64,
 	firstIndex Lsn, maxSize uint64) ([]LogRecord, Lsn, error) {
 	v, err := l.read(ctx, shardID, indexQuery{})
