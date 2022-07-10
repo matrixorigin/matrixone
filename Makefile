@@ -61,22 +61,9 @@ endif
 
 # Building mo-server binary with "race detector" enabled for debugging.
 .PHONY: debug
-build: generate cmd/db-server/$(wildcard *.go)
-ifeq ($(TARGET_OS)$(TARGET_ARCH), )
-	$(info [Build binary])
-	@go build -race -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
-else ifneq ($(TARGET_OS), )
-ifneq ($(TARGET_ARCH), )
-	$(info [Cross Build binary])
-	$(info $(TARGET_OS))
-	$(info $(TARGET_ARCH))
-	@CGO_ENABLED=1 GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) go build -race -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
-else
-	$(info [Cross Build binary])
-	$(info $(TARGET_OS))
-	@CGO_ENABLED=1 GOOS=$(TARGET_OS) go build -race -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
-endif
-endif
+debug: generate cmd/db-server/$(wildcard *.go)
+$(info [Build Debug binary])
+@go build -race -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
 
 
 # Excluding frontend test cases temporarily
