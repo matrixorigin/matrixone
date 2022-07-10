@@ -353,6 +353,11 @@ func TestAddHeartbeat(t *testing.T) {
 		defer cancel()
 		assert.NoError(t, store.addLogStoreHeartbeat(ctx, m))
 
+		cnMsg := pb.CNStoreHeartbeat{
+			UUID: store.id(),
+		}
+		assert.NoError(t, store.addCNStoreHeartbeat(ctx, cnMsg))
+
 		dnMsg := pb.DNStoreHeartbeat{
 			UUID:   store.id(),
 			Shards: make([]pb.DNShardInfo, 0),
