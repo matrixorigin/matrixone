@@ -16,7 +16,6 @@ package bootstrap
 
 import (
 	"errors"
-	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
@@ -132,10 +131,6 @@ func (bm *Manager) CheckBootstrap(log pb.LogState) bool {
 				break
 			}
 		}
-
-		fmt.Printf("id: %d, replicas count %d, # of replicas %d\n",
-			shardInfo.ShardID,
-			len(shardInfo.Replicas), shardRecord.NumberOfReplicas)
 
 		if uint64(len(shardInfo.Replicas))*2 <= shardRecord.NumberOfReplicas {
 			return false
