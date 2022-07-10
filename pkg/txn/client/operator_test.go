@@ -40,41 +40,39 @@ func TestRead(t *testing.T) {
 
 func TestWrite(t *testing.T) {
 	runOperatorTests(func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
-		assert.Empty(t, tc.mu.dnShards)
+		assert.Empty(t, tc.mu.txn.DNShards)
 		respones, err := tc.Write(ctx, []txn.TxnRequest{newDNRequest(1, 1), newDNRequest(2, 2)})
 		assert.NoError(t, err)
 		assert.Equal(t, 2, len(respones))
 		assert.Equal(t, []byte("w-1"), respones[0].CNOpResponse.Payload)
 		assert.Equal(t, []byte("w-2"), respones[1].CNOpResponse.Payload)
 
-		assert.Equal(t, uint64(1), tc.mu.dnShards[0].ShardID)
-		assert.Equal(t, 2, len(tc.mu.dnShards))
+		assert.Equal(t, uint64(1), tc.mu.txn.DNShards[0].ShardID)
+		assert.Equal(t, 2, len(tc.mu.txn.DNShards))
 	})
 }
 
 func TestWriteWithCacheWriteEnabled(t *testing.T) {
 	runOperatorTests(func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
-		assert.Empty(t, tc.mu.dnShards)
+		assert.Empty(t, tc.mu.txn.DNShards)
 		respones, err := tc.Write(ctx, []txn.TxnRequest{newDNRequest(1, 1), newDNRequest(2, 2)})
 		assert.NoError(t, err)
 		assert.Empty(t, respones)
-		assert.Equal(t, uint64(1), tc.mu.dnShards[0].ShardID)
-		assert.Equal(t, 2, len(tc.mu.dnShards))
+		assert.Equal(t, uint64(1), tc.mu.txn.DNShards[0].ShardID)
+		assert.Equal(t, 2, len(tc.mu.txn.DNShards))
 		assert.Empty(t, ts.getLastRequests())
 	}, WithTxnCacheWrite())
 }
 
 func TestRollback(t *testing.T) {
 	runOperatorTests(func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
-		tc.mu.dnShards = append(tc.mu.dnShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
+		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
 		err := tc.Rollback(ctx)
 		assert.NoError(t, err)
 
 		requests := ts.getLastRequests()
 		assert.Equal(t, 1, len(requests))
 		assert.Equal(t, txn.TxnMethod_Rollback, requests[0].Method)
-		assert.Equal(t, 1, len(requests[0].RollbackRequest.DNShards))
-		assert.Equal(t, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}}, requests[0].RollbackRequest.DNShards[0])
 	})
 }
 
@@ -96,15 +94,13 @@ func TestRollbackReadOnly(t *testing.T) {
 
 func TestCommit(t *testing.T) {
 	runOperatorTests(func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
-		tc.mu.dnShards = append(tc.mu.dnShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
+		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
 		err := tc.Commit(ctx)
 		assert.NoError(t, err)
 
 		requests := ts.getLastRequests()
 		assert.Equal(t, 1, len(requests))
 		assert.Equal(t, txn.TxnMethod_Commit, requests[0].Method)
-		assert.Equal(t, 1, len(requests[0].CommitRequest.DNShards))
-		assert.Equal(t, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}}, requests[0].CommitRequest.DNShards[0])
 	})
 }
 
@@ -336,15 +332,15 @@ func TestApplySnapshotTxnOperator(t *testing.T) {
 		snapshot := &txn.CNTxnSnapshot{}
 		snapshot.Txn.ID = tc.mu.txn.ID
 		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
-		assert.Equal(t, 0, len(tc.mu.dnShards))
+		assert.Equal(t, 0, len(tc.mu.txn.DNShards))
 
-		snapshot.DNShards = append(snapshot.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
+		snapshot.Txn.DNShards = append(snapshot.Txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
 		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
-		assert.Equal(t, 1, len(tc.mu.dnShards))
+		assert.Equal(t, 1, len(tc.mu.txn.DNShards))
 
-		snapshot.DNShards = append(snapshot.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 2}})
+		snapshot.Txn.DNShards = append(snapshot.Txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 2}})
 		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
-		assert.Equal(t, 2, len(tc.mu.dnShards))
+		assert.Equal(t, 2, len(tc.mu.txn.DNShards))
 	})
 }
 

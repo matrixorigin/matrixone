@@ -91,7 +91,6 @@ type txnOperator struct {
 		closed       bool
 		txn          txn.TxnMeta
 		cachedWrites map[uint64][]txn.TxnRequest
-		dnShards     []metadata.DNShard
 	}
 }
 
@@ -164,7 +163,6 @@ func (tc *txnOperator) Snapshot() ([]byte, error) {
 
 	snapshot := &txn.CNTxnSnapshot{
 		Txn:              tc.mu.txn,
-		DNShards:         tc.mu.dnShards,
 		ReadyOnly:        tc.option.readyOnly,
 		EnableCacheWrite: tc.option.enableCacheWrite,
 		Disable1PCOpt:    tc.option.disable1PCOpt,
@@ -193,9 +191,9 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 		tc.logger.Fatal("apply snapshot with invalid txn id")
 	}
 
-	for _, dn := range snapshot.DNShards {
+	for _, dn := range snapshot.Txn.DNShards {
 		has := false
-		for _, v := range tc.mu.dnShards {
+		for _, v := range tc.mu.txn.DNShards {
 			if v.ShardID == dn.ShardID {
 				has = true
 				break
@@ -203,7 +201,7 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 		}
 
 		if !has {
-			tc.mu.dnShards = append(tc.mu.dnShards, dn)
+			tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, dn)
 		}
 	}
 	return nil
@@ -266,16 +264,14 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 	}()
 
 	// no write request handled
-	if len(tc.mu.dnShards) == 0 {
+	if len(tc.mu.txn.DNShards) == 0 {
 		tc.logger.Debug("rollback on 0 partitions")
 		return nil
 	}
 
 	_, err := tc.handleError(tc.doSend(ctx, []txn.TxnRequest{{
-		Method: txn.TxnMethod_Rollback,
-		RollbackRequest: &txn.TxnRollbackRequest{
-			DNShards: tc.mu.dnShards,
-		},
+		Method:          txn.TxnMethod_Rollback,
+		RollbackRequest: &txn.TxnRollbackRequest{},
 	}}, true))
 
 	if err != nil {
@@ -326,7 +322,7 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 	}
 
 	if commit {
-		if len(tc.mu.dnShards) == 0 { // commit no write handled txn
+		if len(tc.mu.txn.DNShards) == 0 { // commit no write handled txn
 			tc.logger.Debug("commit on 0 partitions")
 			return nil, nil
 		}
@@ -336,12 +332,11 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 			Method: txn.TxnMethod_Commit,
 			Flag:   txn.SkipResponseFlag,
 			CommitRequest: &txn.TxnCommitRequest{
-				DNShards:      tc.mu.dnShards,
 				Disable1PCOpt: tc.option.disable1PCOpt,
 			}})
 		if ce := tc.logger.Check(zap.DebugLevel, "commit on partitions"); ce != nil {
-			fields := make([]zap.Field, 0, len(tc.mu.dnShards))
-			for idx, p := range tc.mu.dnShards {
+			fields := make([]zap.Field, 0, len(tc.mu.txn.DNShards))
+			for idx, p := range tc.mu.txn.DNShards {
 				fields = append(fields, zap.String(fmt.Sprintf("partition-%d", idx), p.DebugString()))
 			}
 			ce.Write(fields...)
@@ -366,12 +361,12 @@ func (tc *txnOperator) updateWritePartitions(requests []txn.TxnRequest, locked b
 }
 
 func (tc *txnOperator) addPartitionLocked(dn metadata.DNShard) {
-	for idx := range tc.mu.dnShards {
-		if tc.mu.dnShards[idx].ShardID == dn.ShardID {
+	for idx := range tc.mu.txn.DNShards {
+		if tc.mu.txn.DNShards[idx].ShardID == dn.ShardID {
 			return
 		}
 	}
-	tc.mu.dnShards = append(tc.mu.dnShards, dn)
+	tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, dn)
 	if ce := tc.logger.Check(zap.DebugLevel, "partition added"); ce != nil {
 		ce.Write(zap.String("dn", dn.DebugString()))
 	}
