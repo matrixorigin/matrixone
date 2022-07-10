@@ -178,6 +178,22 @@ func TestServiceHandleLogHeartbeat(t *testing.T) {
 	runServiceTest(t, true, true, fn)
 }
 
+func TestServiceHandleCNHeartbeat(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		req := pb.Request{
+			Method:  pb.CN_HEARTBEAT,
+			Timeout: int64(time.Second),
+			CNHeartbeat: pb.CNStoreHeartbeat{
+				UUID: "uuid1",
+			},
+		}
+		resp := s.handleCNHeartbeat(req)
+		assert.Equal(t, 0, len(resp.CommandBatch.Commands))
+		assert.Equal(t, pb.ErrorCode(0), resp.ErrorCode)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
 func TestServiceHandleDNHeartbeat(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		req := pb.Request{

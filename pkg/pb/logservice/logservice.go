@@ -41,6 +41,7 @@ func NewRSMState() HAKeeperRSMState {
 	return HAKeeperRSMState{
 		ScheduleCommands: make(map[string]CommandBatch),
 		LogShards:        make(map[string]uint64),
+		CNState:          NewCNState(),
 		DNState:          NewDNState(),
 		LogState:         NewLogState(),
 		ClusterInfo:      newClusterInfo(),
@@ -54,6 +55,24 @@ func newClusterInfo() ClusterInfo {
 	}
 }
 
+// NewCNState creates a new CNState.
+func NewCNState() CNState {
+	return CNState{
+		Stores: make(map[string]CNStoreInfo),
+	}
+}
+
+// Update applies the incoming CNStoreHeartbeat into HAKeeper. Tick is the
+// current tick of the HAKeeper which is used as the timestamp of the heartbeat.
+func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
+	storeInfo, ok := s.Stores[hb.UUID]
+	if !ok {
+		storeInfo = CNStoreInfo{}
+	}
+	storeInfo.Tick = tick
+	s.Stores[hb.UUID] = storeInfo
+}
+
 // NewDNState creates a new DNState.
 func NewDNState() DNState {
 	return DNState{
@@ -62,8 +81,7 @@ func NewDNState() DNState {
 }
 
 // Update applies the incoming DNStoreHeartbeat into HAKeeper. Tick is the
-// current tick of the HAKeeper which can be used as the timestamp of the
-// heartbeat.
+// current tick of the HAKeeper which is used as the timestamp of the heartbeat.
 func (s *DNState) Update(hb DNStoreHeartbeat, tick uint64) {
 	storeInfo, ok := s.Stores[hb.UUID]
 	if !ok {

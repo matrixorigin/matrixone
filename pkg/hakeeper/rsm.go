@@ -118,6 +118,10 @@ func GetGetIDCmd(count uint64) []byte {
 	return cmd
 }
 
+func isCNHeartbeatCmd(cmd []byte) bool {
+	return isHeartbeatCmd(cmd, pb.CNHeartbeatUpdate)
+}
+
 func isDNHeartbeatCmd(cmd []byte) bool {
 	return isHeartbeatCmd(cmd, pb.DNHeartbeatUpdate)
 }
@@ -172,6 +176,10 @@ func GetTickCmd() []byte {
 
 func GetLogStoreHeartbeatCmd(data []byte) []byte {
 	return getHeartbeatCmd(data, pb.LogHeartbeatUpdate)
+}
+
+func GetCNStoreHeartbeatCmd(data []byte) []byte {
+	return getHeartbeatCmd(data, pb.CNHeartbeatUpdate)
 }
 
 func GetDNStoreHeartbeatCmd(data []byte) []byte {
@@ -239,6 +247,16 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 		s.state.ScheduleCommands[c.UUID] = l
 	}
 
+	return sm.Result{}
+}
+
+func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
+	data := parseHeartbeatCmd(cmd)
+	var hb pb.CNStoreHeartbeat
+	if err := hb.Unmarshal(data); err != nil {
+		panic(err)
+	}
+	s.state.CNState.Update(hb, s.state.Tick)
 	return sm.Result{}
 }
 
@@ -351,6 +369,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	cmd := e.Cmd
 	if isDNHeartbeatCmd(cmd) {
 		return s.handleDNHeartbeat(cmd), nil
+	} else if isCNHeartbeatCmd(cmd) {
+		return s.handleCNHeartbeat(cmd), nil
 	} else if isLogHeartbeatCmd(cmd) {
 		return s.handleLogHeartbeat(cmd), nil
 	} else if isTickCmd(cmd) {

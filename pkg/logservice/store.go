@@ -345,6 +345,18 @@ func (l *store) addLogStoreHeartbeat(ctx context.Context,
 	return nil
 }
 
+func (l *store) addCNStoreHeartbeat(ctx context.Context,
+	hb pb.CNStoreHeartbeat) error {
+	data := MustMarshal(&hb)
+	cmd := hakeeper.GetCNStoreHeartbeatCmd(data)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if _, err := l.propose(ctx, session, cmd); err != nil {
+		plog.Errorf("propose failed, %v", err)
+		return err
+	}
+	return nil
+}
+
 func (l *store) addDNStoreHeartbeat(ctx context.Context,
 	hb pb.DNStoreHeartbeat) error {
 	data := MustMarshal(&hb)
