@@ -5,17 +5,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/tfs"
 	"io/fs"
+	"strings"
 	"sync"
 )
 
 type ObjectFS struct {
 	sync.RWMutex
 	common.RefHelper
-	dirs   map[string]*ObjectDir
-	data   []*Object
-	meta   []*Object
-	attr   *Attr
-	lastId uint64
+	dirs      map[string]*ObjectDir
+	data      []*Object
+	meta      []*Object
+	attr      *Attr
+	lastId    uint64
+	lastInode uint64
 }
 
 type Attr struct {
@@ -29,14 +31,27 @@ func NewObjectFS(dir string) tfs.FS {
 			algo: compress.None,
 			dir:  dir,
 		},
+		dirs: make(map[string]*ObjectDir),
 	}
 	fs.lastId = 1
+	fs.lastInode = 1
 	return fs
 }
 
 func (o *ObjectFS) OpenFile(name string, flag int) (tfs.File, error) {
-	//TODO implement me
-	panic("implement me")
+	o.RWMutex.Lock()
+	defer o.RWMutex.Unlock()
+	fileName := strings.Split(name, "/")
+	dir := o.dirs[fileName[0]]
+	if dir == nil {
+		dir = openObjectDir(o, name)
+		o.dirs[fileName[0]] = dir
+	}
+	if len(fileName) == 1 {
+		return dir, nil
+	}
+	file := dir.OpenFile(o, fileName[1])
+	return file, nil
 }
 
 func (o *ObjectFS) ReadDir(dir string) ([]fs.FileInfo, error) {
@@ -137,4 +152,8 @@ func (o *ObjectFS) Read(file *ObjectFile, data []byte) (n int, err error) {
 	inode := file.GetInode()
 	dataObject := o.GetDataWithId(inode.objectId)
 	return dataObject.oFile.ReadAt(data, int64(inode.extents[0].offset))
+}
+
+func (o *ObjectFS) Sync(file *ObjectFile) error {
+	return o.GetDataWithId(file.inode.objectId).oFile.Sync()
 }

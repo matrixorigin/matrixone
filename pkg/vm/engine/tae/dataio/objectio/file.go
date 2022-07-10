@@ -26,6 +26,21 @@ type ObjectFile struct {
 	stat  *objectFileStat
 }
 
+func openObjectFile(fs *ObjectFS, name string) *ObjectFile {
+	inode := &Inode{
+		magic: MAGIC,
+		inode: fs.lastInode,
+		typ:   FILE,
+		name:  name,
+	}
+	file := &ObjectFile{
+		fs:    fs,
+		inode: inode,
+	}
+	fs.lastInode++
+	return file
+}
+
 func (b *ObjectFile) GetFS() *ObjectFS {
 	return b.fs
 }
@@ -48,13 +63,13 @@ func (b *ObjectFile) SetIdxs(idxs uint32) {
 	b.inode.idxs = idxs
 }
 
-func (b *ObjectFile) GetStat() fs.FileInfo {
+func (b *ObjectFile) Stat() (fs.FileInfo, error) {
 	b.inode.mutex.RLock()
 	defer b.inode.mutex.RUnlock()
 	stat := &objectFileStat{}
 	stat.size = int64(b.inode.size)
 	stat.dataSize = int64(b.inode.size)
-	return stat
+	return stat, nil
 }
 
 func (b *ObjectFile) GetName() string {
@@ -70,10 +85,6 @@ func (b *ObjectFile) GetExtents() *[]Extent {
 	return extents
 }
 
-func (b *ObjectFile) GetFileInfo() {
-
-}
-
 func (b *ObjectFile) Read(data []byte) (n int, err error) {
 	return b.fs.Read(b, data)
 }
@@ -83,4 +94,12 @@ func (b *ObjectFile) close() {
 }
 
 func (b *ObjectFile) Destroy() {
+}
+
+func (b *ObjectFile) Close() error {
+	return nil
+}
+
+func (b *ObjectFile) Sync() error {
+	return b.fs.Sync(b)
 }

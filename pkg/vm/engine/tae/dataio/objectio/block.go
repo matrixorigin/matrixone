@@ -53,7 +53,7 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 	bf.deletes = newDeletes(bf)
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
 	indexFile, err := bf.seg.GetSegmentFile().OpenFile(
-		fmt.Sprintf("%d_%d.idx", colCnt, bf.id), os.O_CREATE)
+		fmt.Sprintf("%d/%d_%d.idx", bf.id, colCnt, bf.id), os.O_CREATE)
 	if err != nil {
 		panic(any(err))
 	}
@@ -95,7 +95,7 @@ func (bf *blockFile) ReadRows() uint32 {
 
 func (bf *blockFile) WriteTS(ts uint64) (err error) {
 	bf.ts = ts
-	delete, err := bf.seg.GetSegmentFile().OpenFile(fmt.Sprintf("%d_%d_%d.del", len(bf.columns), bf.id, ts), os.O_CREATE)
+	delete, err := bf.seg.GetSegmentFile().OpenFile(fmt.Sprintf("%d/%d_%d_%d.del", bf.id, len(bf.columns), bf.id, ts), os.O_CREATE)
 	bf.deletes.SetFile(delete,
 		uint32(len(bf.columns)),
 		uint32(len(bf.columns[0].indexes)))
@@ -206,7 +206,7 @@ func (bf *blockFile) LoadBatch(
 			}
 			if len(decompress) != int(f.Stat().OriginSize()) {
 				panic(any(fmt.Sprintf("invalid decompressed size: %d, %d is expected",
-					len(decompress), colBlk.data.stat.DataSize())))
+					len(decompress), colBlk.data.stat.OriginSize())))
 			}
 			r := bytes.NewBuffer(decompress)
 			if _, err = vec.ReadFrom(r); err != nil {

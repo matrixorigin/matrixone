@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/tfs"
 	"sync"
 
@@ -82,6 +83,10 @@ func (df *dataFile) Write(buf []byte) (n int, err error) {
 	file := df.GetFile()
 	_, err = file.Write(buf)
 	n = len(buf)
+	stat, _ := file.Stat()
+	df.stat.algo = compress.None
+	df.stat.originSize = stat.Size()
+	df.stat.size = stat.Size()
 	return
 }
 

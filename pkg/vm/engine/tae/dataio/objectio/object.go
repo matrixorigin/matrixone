@@ -63,6 +63,7 @@ func OpenObject(id uint64, oType ObjectType, dir string) (object *Object, err er
 		id:    id,
 		oType: oType,
 	}
+	object.allocator = NewObjectAllocator(OBJECT_SIZE, PAGE_SIZE)
 	path := path.Join(dir, encodeName(id, oType))
 	if _, err = os.Stat(path); os.IsNotExist(err) {
 		object.oFile, err = os.Create(path)
@@ -72,7 +73,6 @@ func OpenObject(id uint64, oType ObjectType, dir string) (object *Object, err er
 	if object.oFile, err = os.OpenFile(path, os.O_RDWR, os.ModePerm); err != nil {
 		return
 	}
-	object.allocator = NewObjectAllocator(OBJECT_SIZE, PAGE_SIZE)
 	return
 }
 

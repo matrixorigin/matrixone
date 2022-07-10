@@ -17,9 +17,6 @@ package objectio
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/tfs"
-	"path"
-	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -40,27 +37,18 @@ func init() {
 
 type segmentFactory struct{}
 
-func (factory *segmentFactory) Build(dir string, id uint64) file.Segment {
-	baseName := factory.EncodeName(id)
-	name := path.Join(dir, baseName)
-	return openSegment(name, id)
-}
-
 func (factory *segmentFactory) EncodeName(id uint64) string {
-	return fmt.Sprintf("%d.seg", id)
+	//TODO implement me
+	panic("implement me")
 }
 
 func (factory *segmentFactory) DecodeName(name string) (id uint64, err error) {
-	trimmed := strings.TrimSuffix(name, ".seg")
-	if trimmed == name {
-		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
-		return
-	}
-	id, err = strconv.ParseUint(trimmed, 10, 64)
-	if err != nil {
-		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
-	}
-	return
+	//TODO implement me
+	panic("implement me")
+}
+
+func (factory *segmentFactory) Build(dir string, id uint64) file.Segment {
+	return openSegment(dir, id)
 }
 
 type segmentFile struct {

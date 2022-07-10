@@ -16,8 +16,8 @@ package objectio
 
 import (
 	"fmt"
+	"os"
 
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
@@ -41,11 +41,11 @@ func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 	}
 	for i := range cb.indexes {
 		cb.indexes[i] = newIndex(cb)
-		cb.indexes[i].dataFile.file = append(cb.indexes[i].dataFile.file, cb.block.seg.GetSegmentFile().NewBlockFile(
-			fmt.Sprintf("%d_%d_%d.idx", cb.col, cb.block.id, i)))
-		cb.indexes[i].dataFile.file[0].inode.algo = compress.None
-		cb.indexes[i].dataFile.file[0].SetIdxs(uint32(len(cb.indexes)))
-		cb.indexes[i].dataFile.file[0].SetCols(uint32(col))
+		file, err := cb.block.seg.GetSegmentFile().OpenFile(fmt.Sprintf("%d/%d_%d_%d.idx", cb.block.id, cb.col, cb.block.id, i), os.O_CREATE)
+		if err != nil {
+			panic(any(err))
+		}
+		cb.indexes[i].dataFile.file = append(cb.indexes[i].dataFile.file, file)
 	}
 	cb.updates = newUpdates(cb)
 	cb.data = newData(cb)
@@ -65,12 +65,24 @@ func (cb *columnBlock) AddIndex(idx int) {
 
 func (cb *columnBlock) WriteTS(ts uint64) (err error) {
 	cb.ts = ts
+	block, err := cb.block.seg.GetSegmentFile().OpenFile(
+		fmt.Sprintf("%d/%d_%d_%d.blk", cb.block.id, cb.col, cb.block.id, ts),
+		os.O_CREATE)
+	if err != nil {
+		return err
+	}
 	cb.data.SetFile(
-		cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.blk", cb.col, cb.block.id, ts)),
+		block,
 		uint32(len(cb.block.columns)),
 		uint32(len(cb.indexes)))
+	update, err := cb.block.seg.GetSegmentFile().OpenFile(
+		fmt.Sprintf("%d/%d_%d_%d.update", cb.block.id, cb.col, cb.block.id, ts),
+		os.O_CREATE)
+	if err != nil {
+		return err
+	}
 	cb.updates.SetFile(
-		cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.update", cb.col, cb.block.id, ts)),
+		update,
 		uint32(len(cb.block.columns)),
 		uint32(len(cb.indexes)))
 	return
