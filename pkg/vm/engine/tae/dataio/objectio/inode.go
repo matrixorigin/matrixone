@@ -20,29 +20,31 @@ const (
 	DIR
 )
 
+const MAGIC = 0xFFFFFFFF
+
 type Inode struct {
-	magic      uint64
-	inode      uint64
-	name       string
-	algo       uint8
-	size       uint64
-	originSize uint64
-	rows       uint32
-	cols       uint32
-	idxs       uint32
-	mutex      sync.RWMutex
-	extents    []Extent
-	typ        InodeType
-	seq        uint64
-	objectId   uint64
+	magic    uint64
+	inode    uint64
+	name     string
+	algo     uint8
+	size     uint64
+	dataSize uint64
+	rows     uint32
+	cols     uint32
+	idxs     uint32
+	mutex    sync.RWMutex
+	extents  []Extent
+	typ      InodeType
+	seq      uint64
+	objectId uint64
 }
 
 func (i *Inode) GetFileSize() int64 {
 	return int64(i.size)
 }
 
-func (i *Inode) GetOriginSize() int64 {
-	return int64(i.originSize)
+func (i *Inode) GetDataSize() int64 {
+	return int64(i.dataSize)
 }
 
 func (i *Inode) GetAlgo() uint8 {
@@ -89,7 +91,7 @@ func (i *Inode) Marshal() (buf []byte, err error) {
 	if err = binary.Write(&buffer, binary.BigEndian, i.size); err != nil {
 		return
 	}
-	if err = binary.Write(&buffer, binary.BigEndian, i.originSize); err != nil {
+	if err = binary.Write(&buffer, binary.BigEndian, i.dataSize); err != nil {
 		return
 	}
 	if err = binary.Write(&buffer, binary.BigEndian, i.rows); err != nil {
@@ -167,10 +169,10 @@ func (i *Inode) UnMarshal(cache *bytes.Buffer, inode *Inode) (n int, err error) 
 		return
 	}
 	n += int(unsafe.Sizeof(inode.size))
-	if err = binary.Read(cache, binary.BigEndian, &inode.originSize); err != nil {
+	if err = binary.Read(cache, binary.BigEndian, &inode.dataSize); err != nil {
 		return
 	}
-	n += int(unsafe.Sizeof(inode.originSize))
+	n += int(unsafe.Sizeof(inode.dataSize))
 	if err = binary.Read(cache, binary.BigEndian, &inode.rows); err != nil {
 		return
 	}

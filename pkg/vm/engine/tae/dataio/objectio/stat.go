@@ -14,14 +14,37 @@
 
 package objectio
 
+import (
+	"io/fs"
+	"time"
+)
+
 type fileStat struct {
-	name       string
-	size       int64
-	originSize int64
-	algo       uint8
+	name     string
+	size     int64
+	dataSize int64
 }
 
-func (stat *fileStat) Name() string      { return stat.name }
-func (stat *fileStat) Size() int64       { return stat.size }
-func (stat *fileStat) OriginSize() int64 { return stat.originSize }
-func (stat *fileStat) CompressAlgo() int { return int(stat.algo) }
+func (stat *fileStat) Mode() fs.FileMode {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (stat *fileStat) ModTime() time.Time {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (stat *fileStat) IsDir() bool {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (stat *fileStat) Sys() any {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (stat *fileStat) Name() string    { return stat.name }
+func (stat *fileStat) Size() int64     { return stat.size }
+func (stat *fileStat) DataSize() int64 { return stat.dataSize }

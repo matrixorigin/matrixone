@@ -78,7 +78,7 @@ func openSegment(name string, id uint64) *segmentFile {
 		blocks: make(map[uint64]*blockFile),
 		name:   name,
 	}
-	sf.fs = newObjectFS()
+	sf.fs = NewObjectFS(name)
 	sf.id = &common.ID{
 		SegmentID: id,
 	}

@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"io/fs"
 )
 
 type ObjectFile struct {
@@ -45,6 +46,15 @@ func (b *ObjectFile) SetCols(cols uint32) {
 
 func (b *ObjectFile) SetIdxs(idxs uint32) {
 	b.inode.idxs = idxs
+}
+
+func (b *ObjectFile) GetStat() fs.FileInfo {
+	b.inode.mutex.RLock()
+	defer b.inode.mutex.RUnlock()
+	stat := &fileStat{}
+	stat.size = int64(b.inode.size)
+	stat.dataSize = int64(b.inode.size)
+	return stat
 }
 
 func (b *ObjectFile) GetName() string {

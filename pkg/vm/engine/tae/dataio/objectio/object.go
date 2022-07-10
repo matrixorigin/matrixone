@@ -11,6 +11,7 @@ import (
 )
 
 const OBJECT_SIZE = 64 * 1024 * 1024
+const PAGE_SIZE = 4096
 
 type ObjectType uint8
 
@@ -71,6 +72,7 @@ func OpenObject(id uint64, oType ObjectType, dir string) (object *Object, err er
 	if object.oFile, err = os.OpenFile(path, os.O_RDWR, os.ModePerm); err != nil {
 		return
 	}
+	object.allocator = NewObjectAllocator(OBJECT_SIZE, PAGE_SIZE)
 	return
 }
 

@@ -1,6 +1,7 @@
 package objectio
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/tfs"
 	"io/fs"
@@ -10,13 +11,26 @@ import (
 type ObjectFS struct {
 	sync.RWMutex
 	common.RefHelper
-	dirs map[string]*ObjectDir
-	data []*Object
-	meta []*Object
+	dirs   map[string]*ObjectDir
+	data   []*Object
+	meta   []*Object
+	attr   *Attr
+	lastId uint64
 }
 
-func newObjectFS() tfs.FS {
-	fs := &ObjectFS{}
+type Attr struct {
+	algo uint8
+	dir  string
+}
+
+func NewObjectFS(dir string) tfs.FS {
+	fs := &ObjectFS{
+		attr: &Attr{
+			algo: compress.None,
+			dir:  dir,
+		},
+	}
+	fs.lastId = 1
 	return fs
 }
 
@@ -45,16 +59,30 @@ func (o *ObjectFS) MountInfo() *tfs.MountInfo {
 	panic("implement me")
 }
 
-func (o *ObjectFS) GetData() *Object {
-	o.RWMutex.RLock()
-	defer o.RWMutex.RUnlock()
-	return o.data[len(o.data)-1]
+func (o *ObjectFS) GetData(size uint64) (object *Object, err error) {
+	o.RWMutex.Lock()
+	defer o.RWMutex.Unlock()
+	if len(o.data) == 0 ||
+		o.data[len(o.data)-1].GetSize()+size >= OBJECT_SIZE {
+		object, err = OpenObject(o.lastId, DATATYPE, o.attr.dir)
+		o.data = append(o.data, object)
+		o.lastId++
+		return
+	}
+	return o.data[len(o.data)-1], nil
 }
 
-func (o *ObjectFS) GetMeta() *Object {
-	o.RWMutex.RLock()
-	defer o.RWMutex.RUnlock()
-	return o.meta[len(o.meta)-1]
+func (o *ObjectFS) GetMeta(size uint64) (object *Object, err error) {
+	o.RWMutex.Lock()
+	defer o.RWMutex.Unlock()
+	if len(o.meta) == 0 ||
+		o.meta[len(o.meta)-1].GetSize()+size >= OBJECT_SIZE {
+		object, err = OpenObject(o.lastId, METADATA, o.attr.dir)
+		o.meta = append(o.meta, object)
+		o.lastId++
+		return
+	}
+	return o.meta[len(o.meta)-1], nil
 }
 
 func (o *ObjectFS) GetDataWithId(id uint64) *Object {
@@ -69,7 +97,10 @@ func (o *ObjectFS) GetDataWithId(id uint64) *Object {
 }
 
 func (o *ObjectFS) Append(file *ObjectFile, data []byte) (n int, err error) {
-	dataObject := o.GetData()
+	dataObject, err := o.GetData(uint64(len(data)))
+	if err != nil {
+		return
+	}
 	offset, allocated, err := dataObject.Append(data)
 	if err != nil {
 		return int(allocated), err
@@ -82,7 +113,7 @@ func (o *ObjectFS) Append(file *ObjectFile, data []byte) (n int, err error) {
 		data:   entry{offset: 0, length: uint32(len(data))},
 	})
 	file.inode.size += uint64(len(data))
-	file.inode.originSize += uint64(len(data))
+	file.inode.dataSize += uint64(len(data))
 	file.inode.seq++
 	file.inode.objectId = dataObject.id
 	file.inode.mutex.Unlock()
@@ -90,7 +121,11 @@ func (o *ObjectFS) Append(file *ObjectFile, data []byte) (n int, err error) {
 	if err != nil {
 		return int(allocated), err
 	}
-	_, _, err = o.GetMeta().Append(inode)
+	metaObject, err := o.GetMeta(uint64(len(inode)))
+	if err != nil {
+		return
+	}
+	_, _, err = metaObject.Append(inode)
 	return int(allocated), err
 }
 
