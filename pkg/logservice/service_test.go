@@ -50,13 +50,15 @@ func runServiceTest(t *testing.T,
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg)
 	require.NoError(t, err)
+	peers := make(map[uint64]dragonboat.Target)
+	peers[1] = service.ID()
 	if startReplica {
 		peers := make(map[uint64]dragonboat.Target)
 		peers[1] = service.ID()
 		if hakeeper {
-			require.NoError(t, service.store.StartHAKeeperReplica(1, peers, false))
+			require.NoError(t, service.store.startHAKeeperReplica(1, peers, false))
 		} else {
-			require.NoError(t, service.store.StartReplica(1, 1, peers, false))
+			require.NoError(t, service.store.startReplica(1, 1, peers, false))
 		}
 	}
 	defer func() {
@@ -127,7 +129,7 @@ func TestServiceConnectRO(t *testing.T) {
 
 func getTestAppendCmd(id uint64, data []byte) []byte {
 	cmd := make([]byte, len(data)+headerSize+8)
-	binaryEnc.PutUint16(cmd, userEntryTag)
+	binaryEnc.PutUint32(cmd, uint32(pb.UserEntryUpdate))
 	binaryEnc.PutUint64(cmd[headerSize:], id)
 	copy(cmd[headerSize+8:], data)
 	return cmd
@@ -172,6 +174,22 @@ func TestServiceHandleLogHeartbeat(t *testing.T) {
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
 		resp := s.handleLogHeartbeat(req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceHandleCNHeartbeat(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		req := pb.Request{
+			Method:  pb.CN_HEARTBEAT,
+			Timeout: int64(time.Second),
+			CNHeartbeat: pb.CNStoreHeartbeat{
+				UUID: "uuid1",
+			},
+		}
+		resp := s.handleCNHeartbeat(req)
+		assert.Equal(t, 0, len(resp.CommandBatch.Commands))
+		assert.Equal(t, pb.ErrorCode(0), resp.ErrorCode)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -245,7 +263,7 @@ func TestServiceHandleAppend(t *testing.T) {
 		resp = s.handleAppend(req, cmd)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(4), resp.LogResponse.Index)
+		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
 	}
 	runServiceTest(t, false, true, fn)
 }
@@ -276,7 +294,7 @@ func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
 		resp = s.handleAppend(req, cmd)
 		assert.Equal(t, pb.NotLeaseHolder, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(0), resp.LogResponse.Index)
+		assert.Equal(t, uint64(0), resp.LogResponse.Lsn)
 	}
 	runServiceTest(t, false, true, fn)
 }
@@ -307,21 +325,21 @@ func TestServiceHandleRead(t *testing.T) {
 		resp = s.handleAppend(req, cmd)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(4), resp.LogResponse.Index)
+		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
 
 		req = pb.Request{
 			Method:  pb.READ,
 			Timeout: int64(time.Second),
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				Index:   1,
+				Lsn:     1,
 				MaxSize: 1024 * 32,
 			},
 		}
 		resp, records := s.handleRead(req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(1), resp.LogResponse.LastIndex)
+		assert.Equal(t, uint64(1), resp.LogResponse.LastLsn)
 		require.Equal(t, 4, len(records.Records))
 		assert.Equal(t, pb.Internal, records.Records[0].Type)
 		assert.Equal(t, pb.Internal, records.Records[1].Type)
@@ -358,20 +376,20 @@ func TestServiceTruncate(t *testing.T) {
 		resp = s.handleAppend(req, cmd)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(4), resp.LogResponse.Index)
+		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
 
 		req = pb.Request{
 			Method:  pb.TRUNCATE,
 			Timeout: int64(time.Second),
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				Index:   4,
+				Lsn:     4,
 			},
 		}
 		resp = s.handleTruncate(req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(0), resp.LogResponse.Index)
+		assert.Equal(t, uint64(0), resp.LogResponse.Lsn)
 
 		req = pb.Request{
 			Method:  pb.GET_TRUNCATE,
@@ -383,18 +401,18 @@ func TestServiceTruncate(t *testing.T) {
 		resp = s.handleGetTruncatedIndex(req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
-		assert.Equal(t, uint64(4), resp.LogResponse.Index)
+		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
 
 		req = pb.Request{
 			Method:  pb.TRUNCATE,
 			Timeout: int64(time.Second),
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				Index:   3,
+				Lsn:     3,
 			},
 		}
 		resp = s.handleTruncate(req)
-		assert.Equal(t, pb.IndexAlreadyTruncated, resp.ErrorCode)
+		assert.Equal(t, pb.LsnAlreadyTruncated, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
 	runServiceTest(t, false, true, fn)
@@ -458,7 +476,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	}()
 	peers1 := make(map[uint64]dragonboat.Target)
 	peers1[1] = service1.ID()
-	assert.NoError(t, service1.store.StartReplica(1, 1, peers1, false))
+	assert.NoError(t, service1.store.startReplica(1, 1, peers1, false))
 
 	service2, err := NewService(cfg2)
 	require.NoError(t, err)
@@ -467,7 +485,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	}()
 	peers2 := make(map[uint64]dragonboat.Target)
 	peers2[1] = service2.ID()
-	assert.NoError(t, service2.store.StartReplica(2, 1, peers2, false))
+	assert.NoError(t, service2.store.startReplica(2, 1, peers2, false))
 
 	nhID1 := service1.ID()
 	nhID2 := service2.ID()
