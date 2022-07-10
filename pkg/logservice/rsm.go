@@ -72,7 +72,7 @@ func getSetLeaseHolderCmd(leaseHolderID uint64) []byte {
 
 func getSetTruncatedLsnCmd(lsn uint64) []byte {
 	cmd := make([]byte, headerSize+8)
-	binaryEnc.PutUint32(cmd, uint32(pb.TruncatedLSNUpdate))
+	binaryEnc.PutUint32(cmd, uint32(pb.TruncateLSNUpdate))
 	binaryEnc.PutUint64(cmd[headerSize:], lsn)
 	return cmd
 }
@@ -82,35 +82,6 @@ func getTsoUpdateCmd(count uint64) []byte {
 	binaryEnc.PutUint32(cmd, uint32(pb.TSOUpdate))
 	binaryEnc.PutUint64(cmd[headerSize:], count)
 	return cmd
-}
-
-func isTsoUpdate(cmd []byte) bool {
-	if len(cmd) != headerSize+8 {
-		return false
-	}
-	return parseCmdTag(cmd) == pb.TSOUpdate
-}
-
-func isSetLeaseHolderUpdate(cmd []byte) bool {
-	return tagMatch(cmd, pb.LeaseHolderIDUpdate)
-}
-
-func isSetTruncatedLsnUpdate(cmd []byte) bool {
-	return tagMatch(cmd, pb.TruncatedLSNUpdate)
-}
-
-func isUserUpdate(cmd []byte) bool {
-	if len(cmd) < headerSize+8 {
-		return false
-	}
-	return parseCmdTag(cmd) == pb.UserEntryUpdate
-}
-
-func tagMatch(cmd []byte, expectedTag pb.UpdateType) bool {
-	if len(cmd) != headerSize+8 {
-		return false
-	}
-	return parseCmdTag(cmd) == expectedTag
 }
 
 type stateMachine struct {
@@ -199,16 +170,19 @@ func (s *stateMachine) Close() error {
 func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	cmd := e.Cmd
 	s.state.Index = e.Index
-	if isSetLeaseHolderUpdate(cmd) {
+
+	switch parseCmdTag(cmd) {
+	case pb.LeaseHolderIDUpdate:
 		return s.handleSetLeaseHolderID(cmd), nil
-	} else if isSetTruncatedLsnUpdate(cmd) {
+	case pb.TruncateLSNUpdate:
 		return s.handleTruncateLsn(cmd), nil
-	} else if isUserUpdate(cmd) {
+	case pb.UserEntryUpdate:
 		return s.handleUserUpdate(cmd), nil
-	} else if isTsoUpdate(cmd) {
+	case pb.TSOUpdate:
 		return s.handleTsoUpdate(cmd), nil
+	default:
+		panic("unknown entry type")
 	}
-	panic("corrupted entry")
 }
 
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
