@@ -491,6 +491,10 @@ func getNextIndex(entries []raftpb.Entry, firstIndex Lsn, lastIndex Lsn) Lsn {
 	return firstIndex
 }
 
+// high priority test
+// FIXME: add a test that queries the log with LeaseUpdate, LeaseRejected
+// entries, no matter what is the firstLsn specified in queryLog(), returned
+// results should make sense
 func (l *store) queryLog(ctx context.Context, shardID uint64,
 	firstIndex Lsn, maxSize uint64) ([]LogRecord, Lsn, error) {
 	v, err := l.read(ctx, shardID, indexQuery{})
