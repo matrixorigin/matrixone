@@ -222,7 +222,21 @@ func exportDataToCSVFile(oq *outputQueue) error {
 
 		switch mysqlColumn.ColumnType() {
 		case defines.MYSQL_TYPE_DECIMAL:
-			return fmt.Errorf("unsupported Decimal")
+			if value, err2 := oq.mrs.GetString(0, i); err2 != nil {
+				return err2
+			} else {
+				if err = formatOutputString(oq, []byte(value), oq.ep.Symbol[i], oq.ep.Fields.EnclosedBy, oq.ep.ColumnFlag[i]); err != nil {
+					return err
+				}
+			}
+		case defines.MYSQL_TYPE_BOOL:
+			if value, err2 := oq.mrs.GetString(0, i); err2 != nil {
+				return err2
+			} else {
+				if err = formatOutputString(oq, []byte(value), oq.ep.Symbol[i], oq.ep.Fields.EnclosedBy, oq.ep.ColumnFlag[i]); err != nil {
+					return err
+				}
+			}
 		case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
 			if value, err2 := oq.mrs.GetInt64(0, i); err2 != nil {
 				return err2
@@ -299,11 +313,19 @@ func exportDataToCSVFile(oq *outputQueue) error {
 			if value, err2 := oq.mrs.GetValue(0, i); err2 != nil {
 				return err2
 			} else {
-				if err = formatOutputString(oq, []byte(value.(types.Datetime).String()), oq.ep.Symbol[i], oq.ep.Fields.EnclosedBy, oq.ep.ColumnFlag[i]); err != nil {
+				if err = formatOutputString(oq, []byte(value.(string)), oq.ep.Symbol[i], oq.ep.Fields.EnclosedBy, oq.ep.ColumnFlag[i]); err != nil {
 					return err
 				}
 			}
-		case defines.MYSQL_TYPE_TIMESTAMP, defines.MYSQL_TYPE_TIME:
+		case defines.MYSQL_TYPE_TIMESTAMP:
+			if value, err2 := oq.mrs.GetString(0, i); err2 != nil {
+				return err2
+			} else {
+				if err = formatOutputString(oq, []byte(value), oq.ep.Symbol[i], oq.ep.Fields.EnclosedBy, oq.ep.ColumnFlag[i]); err != nil {
+					return err
+				}
+			}
+		case defines.MYSQL_TYPE_TIME:
 			return fmt.Errorf("unsupported DATE/DATETIME/TIMESTAMP/MYSQL_TYPE_TIME")
 		default:
 			return fmt.Errorf("unsupported column type %d ", mysqlColumn.ColumnType())
