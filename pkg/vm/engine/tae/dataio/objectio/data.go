@@ -82,11 +82,12 @@ func newDeletes(block *blockFile) *deletesFile {
 func (df *dataFile) Write(buf []byte) (n int, err error) {
 	file := df.GetFile()
 	_, err = file.Write(buf)
-	n = len(buf)
 	stat, _ := file.Stat()
 	df.stat.algo = compress.None
 	df.stat.originSize = stat.Size()
 	df.stat.size = stat.Size()
+	df.upgradeFile()
+	n = len(buf)
 	return
 }
 
@@ -98,6 +99,18 @@ func (df *dataFile) Read(buf []byte) (n int, err error) {
 	file := df.GetFile()
 	n, err = file.Read(buf)
 	return n, nil
+}
+
+func (df *dataFile) upgradeFile() {
+	go func() {
+		df.mutex.Lock()
+		if len(df.file) < UPGRADE_FILE_NUM {
+			df.mutex.Unlock()
+			return
+		}
+		df.file = df.file[len(df.file)-1 : len(df.file)]
+		df.mutex.Unlock()
+	}()
 }
 
 func (df *dataFile) GetFileCnt() int {
