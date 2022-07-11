@@ -325,14 +325,14 @@ func (s *mfset) getSql(buf *bytes.Buffer) string {
 
 			switch mf.GetType() {
 			case pb.MetricType_COUNTER:
-				time := types.Datetime(metric.GetCollecttime()).String()
+				time := localTimeStr(metric.GetCollecttime())
 				writeValues(time, metric.Counter.GetValue(), lbls)
 			case pb.MetricType_GAUGE:
-				time := types.Datetime(metric.GetCollecttime()).String()
+				time := localTimeStr(metric.GetCollecttime())
 				writeValues(time, metric.Gauge.GetValue(), lbls)
 			case pb.MetricType_RAWHIST:
 				for _, sample := range metric.RawHist.Samples {
-					time := types.Datetime(sample.GetDatetime()).String()
+					time := localTimeStr(sample.GetDatetime())
 					writeValues(time, sample.GetValue(), lbls)
 				}
 			default:
@@ -344,4 +344,11 @@ func (s *mfset) getSql(buf *bytes.Buffer) string {
 	// metric has at least one row, so we can remove the tail comma safely
 	sql = sql[:len(sql)-1]
 	return sql
+}
+
+var _, localOffset = time.Now().Zone()
+
+// temp timezone workaround, fix it in 0.6 version
+func localTimeStr(time int64) string {
+	return types.Datetime((time>>20 + int64(localOffset)) << 20).String()
 }
