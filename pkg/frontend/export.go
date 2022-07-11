@@ -201,6 +201,9 @@ var writeDataToCSVFile = func(ep *tree.ExportParam, output []byte) error {
 func exportDataToCSVFile(oq *outputQueue) error {
 	oq.ep.LineSize = 0
 
+	symbol := oq.ep.Symbol
+	closeby := oq.ep.Fields.EnclosedBy
+	flag := oq.ep.ColumnFlag
 	for i := uint64(0); i < oq.mrs.GetColumnCount(); i++ {
 		column, err := oq.mrs.GetColumn(i)
 		if err != nil {
@@ -210,11 +213,11 @@ func exportDataToCSVFile(oq *outputQueue) error {
 		if !ok {
 			return fmt.Errorf("sendColumn need MysqlColumn")
 		}
-		if isNil, err1 := oq.mrs.ColumnIsNull(0, i); err1 != nil {
-			return err1
+		if isNil, err := oq.mrs.ColumnIsNull(0, i); err != nil {
+			return err
 		} else if isNil {
 			//NULL is output as \N
-			if err = formatOutputString(oq, []byte{'\\', 'N'}, oq.ep.Symbol[i], oq.ep.Fields.EnclosedBy, false); err != nil {
+			if err = formatOutputString(oq, []byte{'\\', 'N'}, symbol[i], closeby, false); err != nil {
 				return err
 			}
 			continue
@@ -222,108 +225,108 @@ func exportDataToCSVFile(oq *outputQueue) error {
 
 		switch mysqlColumn.ColumnType() {
 		case defines.MYSQL_TYPE_DECIMAL:
-			if value, err2 := oq.mrs.GetString(0, i); err2 != nil {
-				return err2
-			} else {
-				if err = formatOutputString(oq, []byte(value), oq.ep.Symbol[i], oq.ep.Fields.EnclosedBy, oq.ep.ColumnFlag[i]); err != nil {
-					return err
-				}
+			value, err := oq.mrs.GetString(0, i)
+			if err != nil {
+				return err
+			}
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i]); err != nil {
+				return err
 			}
 		case defines.MYSQL_TYPE_BOOL:
-			if value, err2 := oq.mrs.GetString(0, i); err2 != nil {
-				return err2
-			} else {
-				if err = formatOutputString(oq, []byte(value), oq.ep.Symbol[i], oq.ep.Fields.EnclosedBy, oq.ep.ColumnFlag[i]); err != nil {
-					return err
-				}
+			value, err := oq.mrs.GetString(0, i)
+			if err != nil {
+				return err
+			}
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i]); err != nil {
+				return err
 			}
 		case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
-			if value, err2 := oq.mrs.GetInt64(0, i); err2 != nil {
-				return err2
-			} else {
-				if mysqlColumn.ColumnType() == defines.MYSQL_TYPE_YEAR {
-					if value == 0 {
-						if err = formatOutputString(oq, []byte("0000"), oq.ep.Symbol[i], oq.ep.Fields.EnclosedBy, oq.ep.ColumnFlag[i]); err != nil {
-							return err
-						}
-					} else {
-						oq.ResetLineStr()
-						oq.lineStr = strconv.AppendInt(oq.lineStr, value, 10)
-						if err = formatOutputString(oq, oq.lineStr, oq.ep.Symbol[i], oq.ep.Fields.EnclosedBy, oq.ep.ColumnFlag[i]); err != nil {
-							return err
-						}
+			value, err := oq.mrs.GetInt64(0, i)
+			if err != nil {
+				return err
+			}
+			if mysqlColumn.ColumnType() == defines.MYSQL_TYPE_YEAR {
+				if value == 0 {
+					if err = formatOutputString(oq, []byte("0000"), symbol[i], closeby, flag[i]); err != nil {
+						return err
 					}
 				} else {
 					oq.ResetLineStr()
 					oq.lineStr = strconv.AppendInt(oq.lineStr, value, 10)
-					if err = formatOutputString(oq, oq.lineStr, oq.ep.Symbol[i], oq.ep.Fields.EnclosedBy, oq.ep.ColumnFlag[i]); err != nil {
+					if err = formatOutputString(oq, oq.lineStr, symbol[i], closeby, flag[i]); err != nil {
 						return err
 					}
+				}
+			} else {
+				oq.ResetLineStr()
+				oq.lineStr = strconv.AppendInt(oq.lineStr, value, 10)
+				if err = formatOutputString(oq, oq.lineStr, symbol[i], closeby, flag[i]); err != nil {
+					return err
 				}
 			}
 		case defines.MYSQL_TYPE_FLOAT, defines.MYSQL_TYPE_DOUBLE:
-			if value, err2 := oq.mrs.GetFloat64(0, i); err2 != nil {
-				return err2
-			} else {
-				oq.ResetLineStr()
-				oq.lineStr = strconv.AppendFloat(oq.lineStr, value, 'f', 4, 64)
-				if err = formatOutputString(oq, oq.lineStr, oq.ep.Symbol[i], oq.ep.Fields.EnclosedBy, oq.ep.ColumnFlag[i]); err != nil {
-					return err
-				}
+			value, err := oq.mrs.GetFloat64(0, i)
+			if err != nil {
+				return err
+			}
+			oq.ResetLineStr()
+			oq.lineStr = strconv.AppendFloat(oq.lineStr, value, 'f', 4, 64)
+			if err = formatOutputString(oq, oq.lineStr, symbol[i], closeby, flag[i]); err != nil {
+				return err
 			}
 		case defines.MYSQL_TYPE_LONGLONG:
 			if uint32(mysqlColumn.Flag())&defines.UNSIGNED_FLAG != 0 {
-				if value, err2 := oq.mrs.GetUint64(0, i); err2 != nil {
-					return err2
+				if value, err := oq.mrs.GetUint64(0, i); err != nil {
+					return err
 				} else {
 					oq.ResetLineStr()
 					oq.lineStr = strconv.AppendUint(oq.lineStr, value, 10)
-					if err = formatOutputString(oq, oq.lineStr, oq.ep.Symbol[i], oq.ep.Fields.EnclosedBy, oq.ep.ColumnFlag[i]); err != nil {
+					if err = formatOutputString(oq, oq.lineStr, symbol[i], closeby, flag[i]); err != nil {
 						return err
 					}
 				}
 			} else {
-				if value, err2 := oq.mrs.GetInt64(0, i); err2 != nil {
-					return err2
+				if value, err := oq.mrs.GetInt64(0, i); err != nil {
+					return err
 				} else {
 					oq.ResetLineStr()
 					oq.lineStr = strconv.AppendInt(oq.lineStr, value, 10)
-					if err = formatOutputString(oq, oq.lineStr, oq.ep.Symbol[i], oq.ep.Fields.EnclosedBy, oq.ep.ColumnFlag[i]); err != nil {
+					if err = formatOutputString(oq, oq.lineStr, symbol[i], closeby, flag[i]); err != nil {
 						return err
 					}
 				}
 			}
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING:
-			if value, err2 := oq.mrs.GetValue(0, i); err2 != nil {
-				return err2
-			} else {
-				if err = formatOutputString(oq, value.([]byte), oq.ep.Symbol[i], oq.ep.Fields.EnclosedBy, oq.ep.ColumnFlag[i]); err != nil {
-					return err
-				}
+			value, err := oq.mrs.GetValue(0, i)
+			if err != nil {
+				return err
+			}
+			if err = formatOutputString(oq, value.([]byte), symbol[i], closeby, flag[i]); err != nil {
+				return err
 			}
 		case defines.MYSQL_TYPE_DATE:
-			if value, err2 := oq.mrs.GetValue(0, i); err2 != nil {
-				return err2
-			} else {
-				if err = formatOutputString(oq, []byte(value.(types.Date).String()), oq.ep.Symbol[i], oq.ep.Fields.EnclosedBy, oq.ep.ColumnFlag[i]); err != nil {
-					return err
-				}
+			value, err := oq.mrs.GetValue(0, i)
+			if err != nil {
+				return err
+			}
+			if err = formatOutputString(oq, []byte(value.(types.Date).String()), symbol[i], closeby, flag[i]); err != nil {
+				return err
 			}
 		case defines.MYSQL_TYPE_DATETIME:
-			if value, err2 := oq.mrs.GetValue(0, i); err2 != nil {
-				return err2
-			} else {
-				if err = formatOutputString(oq, []byte(value.(string)), oq.ep.Symbol[i], oq.ep.Fields.EnclosedBy, oq.ep.ColumnFlag[i]); err != nil {
-					return err
-				}
+			value, err := oq.mrs.GetValue(0, i)
+			if err != nil {
+				return err
+			}
+			if err = formatOutputString(oq, []byte(value.(string)), symbol[i], closeby, flag[i]); err != nil {
+				return err
 			}
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			if value, err2 := oq.mrs.GetString(0, i); err2 != nil {
-				return err2
-			} else {
-				if err = formatOutputString(oq, []byte(value), oq.ep.Symbol[i], oq.ep.Fields.EnclosedBy, oq.ep.ColumnFlag[i]); err != nil {
-					return err
-				}
+			value, err := oq.mrs.GetString(0, i)
+			if err != nil {
+				return err
+			}
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i]); err != nil {
+				return err
 			}
 		case defines.MYSQL_TYPE_TIME:
 			return fmt.Errorf("unsupported DATE/DATETIME/TIMESTAMP/MYSQL_TYPE_TIME")
