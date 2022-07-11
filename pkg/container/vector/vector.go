@@ -530,6 +530,10 @@ func (v *Vector) Realloc(size int, m *mheap.Mheap) error {
 		v.Col = encoding.DecodeSlice[uint32](v.Data[:len(data)], size)[:oldLen/size]
 	case types.T_uint64:
 		v.Col = encoding.DecodeSlice[uint64](v.Data[:len(data)], size)[:oldLen/size]
+	case types.T_float32:
+		v.Col = encoding.DecodeSlice[float32](v.Data[:len(data)], size)[:oldLen/size]
+	case types.T_float64:
+		v.Col = encoding.DecodeSlice[float64](v.Data[:len(data)], size)[:oldLen/size]
 	case types.T_date:
 		v.Col = encoding.DecodeSlice[types.Date](v.Data[:len(data)], size)[:oldLen/size]
 	case types.T_datetime:
