@@ -44,7 +44,7 @@ const (
 	// DefaultHAKeeperShardID is the shard ID assigned to the special HAKeeper
 	// shard.
 	DefaultHAKeeperShardID uint64 = 0
-	headerSize                    = 4
+	headerSize                    = pb.HeaderSize
 )
 
 type StateQuery struct{}
@@ -78,10 +78,6 @@ func GetInitialClusterRequestCmd(numOfLogShards uint64,
 	return cmd
 }
 
-func isInitialClusterRequestCmd(cmd []byte) bool {
-	return parseCmdTag(cmd) == pb.InitialClusterUpdate
-}
-
 func parseInitialClusterRequestCmd(cmd []byte) pb.InitialClusterRequest {
 	if parseCmdTag(cmd) != pb.InitialClusterUpdate {
 		panic("not a initial cluster update")
@@ -107,10 +103,6 @@ func GetUpdateCommandsCmd(term uint64, cmds []pb.ScheduleCommand) []byte {
 	return data
 }
 
-func isUpdateCommandsCmd(cmd []byte) bool {
-	return parseCmdTag(cmd) == pb.ScheduleCommandUpdate
-}
-
 func GetGetIDCmd(count uint64) []byte {
 	cmd := make([]byte, headerSize+8)
 	binaryEnc.PutUint32(cmd, uint32(pb.GetIDUpdate))
@@ -118,39 +110,12 @@ func GetGetIDCmd(count uint64) []byte {
 	return cmd
 }
 
-func isDNHeartbeatCmd(cmd []byte) bool {
-	return isHeartbeatCmd(cmd, pb.DNHeartbeatUpdate)
-}
-
-func isLogHeartbeatCmd(cmd []byte) bool {
-	return isHeartbeatCmd(cmd, pb.LogHeartbeatUpdate)
-}
-
-func isHeartbeatCmd(cmd []byte, tag pb.HAKeeperUpdateType) bool {
-	if len(cmd) <= headerSize {
-		return false
-	}
-	return parseCmdTag(cmd) == tag
-}
-
 func parseHeartbeatCmd(cmd []byte) []byte {
 	return cmd[headerSize:]
 }
 
-func isTickCmd(cmd []byte) bool {
-	return len(cmd) == headerSize && parseCmdTag(cmd) == pb.TickUpdate
-}
-
-func isGetIDCmd(cmd []byte) bool {
-	return len(cmd) == headerSize+8 && parseCmdTag(cmd) == pb.GetIDUpdate
-}
-
 func parseGetIDCmd(cmd []byte) uint64 {
 	return binaryEnc.Uint64(cmd[headerSize:])
-}
-
-func isSetStateCmd(cmd []byte) bool {
-	return len(cmd) == headerSize+4 && parseCmdTag(cmd) == pb.SetStateUpdate
 }
 
 func parseSetStateCmd(cmd []byte) pb.HAKeeperState {
@@ -172,6 +137,10 @@ func GetTickCmd() []byte {
 
 func GetLogStoreHeartbeatCmd(data []byte) []byte {
 	return getHeartbeatCmd(data, pb.LogHeartbeatUpdate)
+}
+
+func GetCNStoreHeartbeatCmd(data []byte) []byte {
+	return getHeartbeatCmd(data, pb.CNHeartbeatUpdate)
 }
 
 func GetDNStoreHeartbeatCmd(data []byte) []byte {
@@ -239,6 +208,16 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 		s.state.ScheduleCommands[c.UUID] = l
 	}
 
+	return sm.Result{}
+}
+
+func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
+	data := parseHeartbeatCmd(cmd)
+	var hb pb.CNStoreHeartbeat
+	if err := hb.Unmarshal(data); err != nil {
+		panic(err)
+	}
+	s.state.CNState.Update(hb, s.state.Tick)
 	return sm.Result{}
 }
 
@@ -349,22 +328,26 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	// TODO: we need to make sure InitialClusterRequestCmd is the
 	// first user cmd added to the Raft log
 	cmd := e.Cmd
-	if isDNHeartbeatCmd(cmd) {
+	switch parseCmdTag(cmd) {
+	case pb.DNHeartbeatUpdate:
 		return s.handleDNHeartbeat(cmd), nil
-	} else if isLogHeartbeatCmd(cmd) {
+	case pb.CNHeartbeatUpdate:
+		return s.handleCNHeartbeat(cmd), nil
+	case pb.LogHeartbeatUpdate:
 		return s.handleLogHeartbeat(cmd), nil
-	} else if isTickCmd(cmd) {
+	case pb.TickUpdate:
 		return s.handleTick(cmd), nil
-	} else if isGetIDCmd(cmd) {
+	case pb.GetIDUpdate:
 		return s.handleGetIDCmd(cmd), nil
-	} else if isUpdateCommandsCmd(cmd) {
+	case pb.ScheduleCommandUpdate:
 		return s.handleUpdateCommandsCmd(cmd), nil
-	} else if isSetStateCmd(cmd) {
+	case pb.SetStateUpdate:
 		return s.handleSetStateCmd(cmd), nil
-	} else if isInitialClusterRequestCmd(cmd) {
+	case pb.InitialClusterUpdate:
 		return s.handleInitialClusterRequestCmd(cmd), nil
+	default:
+		panic(moerr.NewError(moerr.INVALID_INPUT, "unexpected haKeeper cmd"))
 	}
-	panic(moerr.NewError(moerr.INVALID_INPUT, "unexpected haKeeper cmd"))
 }
 
 func (s *stateMachine) handleStateQuery() interface{} {

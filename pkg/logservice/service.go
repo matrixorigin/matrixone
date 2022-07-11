@@ -164,10 +164,12 @@ func (s *Service) handle(req pb.Request,
 		return s.handleConnectRO(req), pb.LogRecordResponse{}
 	case pb.LOG_HEARTBEAT:
 		return s.handleLogHeartbeat(req), pb.LogRecordResponse{}
+	case pb.CN_HEARTBEAT:
+		return s.handleCNHeartbeat(req), pb.LogRecordResponse{}
 	case pb.DN_HEARTBEAT:
 		return s.handleDNHeartbeat(req), pb.LogRecordResponse{}
 	default:
-		panic("unknown method type")
+		panic("unknown log service method type")
 	}
 }
 
@@ -279,6 +281,19 @@ func (s *Service) handleLogHeartbeat(req pb.Request) pb.Response {
 		return resp
 	} else {
 		resp.CommandBatch = cb
+	}
+
+	return resp
+}
+
+func (s *Service) handleCNHeartbeat(req pb.Request) pb.Response {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
+	defer cancel()
+	hb := req.CNHeartbeat
+	resp := getResponse(req)
+	if err := s.store.addCNStoreHeartbeat(ctx, hb); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
 	}
 
 	return resp

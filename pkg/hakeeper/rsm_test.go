@@ -166,6 +166,31 @@ func TestHandleDNHeartbeat(t *testing.T) {
 	assert.Equal(t, hb.Shards, dninfo.Shards)
 }
 
+func TestHandleCNHeartbeat(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	cmd := GetTickCmd()
+	_, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	hb := pb.CNStoreHeartbeat{
+		UUID: "uuid1",
+	}
+	data, err := hb.Marshal()
+	require.NoError(t, err)
+	cmd = GetCNStoreHeartbeatCmd(data)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	s := tsm1.state.CNState
+	assert.Equal(t, 1, len(s.Stores))
+	cninfo, ok := s.Stores[hb.UUID]
+	assert.True(t, ok)
+	assert.Equal(t, uint64(3), cninfo.Tick)
+}
+
 func TestGetIDCmd(t *testing.T) {
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
 	cmd := GetGetIDCmd(100)
@@ -349,8 +374,6 @@ func TestSetState(t *testing.T) {
 
 func TestInitialClusterRequestCmd(t *testing.T) {
 	cmd := GetInitialClusterRequestCmd(2, 2, 3)
-	assert.True(t, isInitialClusterRequestCmd(cmd))
-	assert.False(t, isInitialClusterRequestCmd(GetTickCmd()))
 	req := parseInitialClusterRequestCmd(cmd)
 	assert.Equal(t, uint64(2), req.NumOfLogShards)
 	assert.Equal(t, uint64(2), req.NumOfDNShards)

@@ -46,14 +46,14 @@ func runClientTest(t *testing.T,
 
 	scfg := ClientConfig{
 		ReadOnly:         readOnly,
-		ShardID:          1,
-		ReplicaID:        2,
+		LogShardID:       1,
+		DNReplicaID:      2,
 		ServiceAddresses: []string{testServiceAddress},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	c, err := CreateClient(ctx, scfg)
+	c, err := NewClient(ctx, scfg)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, c.Close())
@@ -90,35 +90,35 @@ func TestClientGetTSOTimestamp(t *testing.T) {
 
 func TestClientAppend(t *testing.T) {
 	fn := func(t *testing.T, cfg ClientConfig, c Client) {
-		cmd := make([]byte, 16+headerSize+8)
-		cmd = getAppendCmd(cmd, cfg.ReplicaID)
-		rand.Read(cmd[headerSize+8:])
+		rec := c.GetLogRecord(16)
+		rand.Read(rec.Payload())
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		lsn, err := c.Append(ctx, pb.LogRecord{Data: cmd})
+		lsn, err := c.Append(ctx, rec)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(4), lsn)
 
-		lsn, err = c.Append(ctx, pb.LogRecord{Data: cmd})
+		lsn, err = c.Append(ctx, rec)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(5), lsn)
 
-		cmd = getAppendCmd(cmd, cfg.ReplicaID+1)
+		cmd := make([]byte, 16+headerSize+8)
+		cmd = getAppendCmd(cmd, cfg.DNReplicaID+1)
 		_, err = c.Append(ctx, pb.LogRecord{Data: cmd})
 		assert.Equal(t, ErrNotLeaseHolder, err)
 	}
 	runClientTest(t, false, fn)
 }
 
+// FIXME: actually enforce allowed allocation
 func TestClientAppendAlloc(t *testing.T) {
 	fn := func(t *testing.T, cfg ClientConfig, c Client) {
-		cmd := make([]byte, 16+headerSize+8)
-		cmd = getAppendCmd(cmd, cfg.ReplicaID)
-		rand.Read(cmd[headerSize+8:])
+		rec := c.GetLogRecord(16)
+		rand.Read(rec.Payload())
 		ac := testing.AllocsPerRun(1000, func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			_, err := c.Append(ctx, pb.LogRecord{Data: cmd})
+			_, err := c.Append(ctx, rec)
 			require.NoError(t, err)
 		})
 		plog.Infof("ac: %f", ac)
@@ -128,19 +128,17 @@ func TestClientAppendAlloc(t *testing.T) {
 
 func TestClientRead(t *testing.T) {
 	fn := func(t *testing.T, cfg ClientConfig, c Client) {
-		cmd := make([]byte, 16+headerSize+8)
-		cmd = getAppendCmd(cmd, cfg.ReplicaID)
-		rand.Read(cmd[headerSize+8:])
+		rec := c.GetLogRecord(16)
+		rand.Read(rec.Payload())
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		lsn, err := c.Append(ctx, pb.LogRecord{Data: cmd})
+		lsn, err := c.Append(ctx, rec)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(4), lsn)
 
-		cmd2 := make([]byte, 16+headerSize+8)
-		cmd2 = getAppendCmd(cmd2, cfg.ReplicaID)
-		rand.Read(cmd2[headerSize+8:])
-		lsn, err = c.Append(ctx, pb.LogRecord{Data: cmd2})
+		rec2 := c.GetLogRecord(16)
+		rand.Read(rec2.Payload())
+		lsn, err = c.Append(ctx, rec2)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(5), lsn)
 
@@ -149,8 +147,8 @@ func TestClientRead(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, uint64(4), lsn)
 		require.Equal(t, 2, len(recs))
-		assert.Equal(t, cmd, recs[0].Data)
-		assert.Equal(t, cmd2, recs[1].Data)
+		assert.Equal(t, rec.Data, recs[0].Data)
+		assert.Equal(t, rec2.Data, recs[1].Data)
 
 		_, _, err = c.Read(ctx, 6, math.MaxUint64)
 		assert.Equal(t, ErrOutOfRange, err)
@@ -160,12 +158,11 @@ func TestClientRead(t *testing.T) {
 
 func TestClientTruncate(t *testing.T) {
 	fn := func(t *testing.T, cfg ClientConfig, c Client) {
-		cmd := make([]byte, 16+headerSize+8)
-		cmd = getAppendCmd(cmd, cfg.ReplicaID)
-		rand.Read(cmd[headerSize+8:])
+		rec := c.GetLogRecord(16)
+		rand.Read(rec.Payload())
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		lsn, err := c.Append(ctx, pb.LogRecord{Data: cmd})
+		lsn, err := c.Append(ctx, rec)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(4), lsn)
 
@@ -181,12 +178,11 @@ func TestClientTruncate(t *testing.T) {
 
 func TestReadOnlyClientRejectWriteRequests(t *testing.T) {
 	fn := func(t *testing.T, cfg ClientConfig, c Client) {
-		cmd := make([]byte, 16+headerSize+8)
-		cmd = getAppendCmd(cmd, cfg.ReplicaID)
-		rand.Read(cmd[headerSize+8:])
+		rec := c.GetLogRecord(16)
+		rand.Read(rec.Payload())
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_, err := c.Append(ctx, pb.LogRecord{Data: cmd})
+		_, err := c.Append(ctx, rec)
 		require.Equal(t, ErrIncompatibleClient, err)
 		require.Equal(t, ErrIncompatibleClient, c.Truncate(ctx, 4))
 	}
