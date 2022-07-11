@@ -125,6 +125,16 @@ const (
 	// RollbackDNShard after the 2pc transaction is aborted, the temporary data on each DN needs
 	// to cleanup.
 	TxnMethod_RollbackDNShard TxnMethod = 7
+	// RemoveMedata Remove metadata for transactions on DNShard. For a 2pc distributed transaction,
+	// after all participating DNShards have Prepared successfully, the asynchronous commit process
+	// starts, sending CommitDNShard requests to all participating DNShards in parallel. After each
+	// DNShard has processed the CommitDNShard, the metadata of the transaction cannot be deleted
+	// immediately, otherwise when the transaction coordinator node is down and restarted, the commit
+	// status of the transaction cannot be determined in the recovery process, as it is possible that
+	// some participating DNShards cannot find the transaction information.
+	//
+	// TODO: needs to work with TAE's log compaction, not currently supported.
+	TxnMethod_RemoveMedata TxnMethod = 8
 )
 
 var TxnMethod_name = map[int32]string{
@@ -136,6 +146,7 @@ var TxnMethod_name = map[int32]string{
 	5: "GetStatus",
 	6: "CommitDNShard",
 	7: "RollbackDNShard",
+	8: "RemoveMedata",
 }
 
 var TxnMethod_value = map[string]int32{
@@ -147,6 +158,7 @@ var TxnMethod_value = map[string]int32{
 	"GetStatus":       5,
 	"CommitDNShard":   6,
 	"RollbackDNShard": 7,
+	"RemoveMedata":    8,
 }
 
 func (x TxnMethod) String() string {
@@ -155,6 +167,62 @@ func (x TxnMethod) String() string {
 
 func (TxnMethod) EnumDescriptor() ([]byte, []int) {
 	return fileDescriptor_4f782e76b37adb9a, []int{1}
+}
+
+// ErrorCode error type code
+type ErrorCode int32
+
+const (
+	// TAERead execute tae read error
+	ErrorCode_TAERead ErrorCode = 0
+	// TAEWrite execute tae write error
+	ErrorCode_TAEWrite ErrorCode = 1
+	// TAECommit execute tae commit error
+	ErrorCode_TAECommit ErrorCode = 2
+	// TAERollback execute tae rollback error
+	ErrorCode_TAERollback ErrorCode = 3
+	// TAEPrepare execute tae prepare error
+	ErrorCode_TAEPrepare ErrorCode = 4
+	// RPCError rpc error
+	ErrorCode_RPCError ErrorCode = 5
+	// WaitTxn wait txn error
+	ErrorCode_WaitTxn ErrorCode = 6
+	// TxnNotFound txn metadata not found
+	ErrorCode_TxnNotFound ErrorCode = 7
+	// TxnNotActive txn status not in active
+	ErrorCode_TxnNotActive ErrorCode = 9
+)
+
+var ErrorCode_name = map[int32]string{
+	0: "TAERead",
+	1: "TAEWrite",
+	2: "TAECommit",
+	3: "TAERollback",
+	4: "TAEPrepare",
+	5: "RPCError",
+	6: "WaitTxn",
+	7: "TxnNotFound",
+	9: "TxnNotActive",
+}
+
+var ErrorCode_value = map[string]int32{
+	"TAERead":      0,
+	"TAEWrite":     1,
+	"TAECommit":    2,
+	"TAERollback":  3,
+	"TAEPrepare":   4,
+	"RPCError":     5,
+	"WaitTxn":      6,
+	"TxnNotFound":  7,
+	"TxnNotActive": 9,
+}
+
+func (x ErrorCode) String() string {
+	return proto.EnumName(ErrorCode_name, int32(x))
+}
+
+func (ErrorCode) EnumDescriptor() ([]byte, []int) {
+	return fileDescriptor_4f782e76b37adb9a, []int{2}
 }
 
 // TxnMeta transaction metadata
@@ -169,15 +237,15 @@ type TxnMeta struct {
 	// transaction.
 	SnapshotTS timestamp.Timestamp `protobuf:"bytes,3,opt,name=SnapshotTS,proto3" json:"SnapshotTS"`
 	// PreparedTS timestamp to complete the first phase of a 2pc commit transaction.
-	PreparedTS *timestamp.Timestamp `protobuf:"bytes,4,opt,name=PreparedTS,proto3" json:"PreparedTS,omitempty"`
+	PreparedTS timestamp.Timestamp `protobuf:"bytes,4,opt,name=PreparedTS,proto3" json:"PreparedTS"`
 	// CommitTS transaction commit timestamp. For a 2pc transaction, commitTS = max(preparedTS).
-	CommitTS *timestamp.Timestamp `protobuf:"bytes,5,opt,name=CommitTS,proto3" json:"CommitTS,omitempty"`
-	// Coordinator the coordinator DN. CN uses the first DN of the transaction operation
-	// as the Coordinator.
-	Coordinator          *metadata.DNShard `protobuf:"bytes,6,opt,name=Coordinator,proto3" json:"Coordinator,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}          `json:"-"`
-	XXX_unrecognized     []byte            `json:"-"`
-	XXX_sizecache        int32             `json:"-"`
+	CommitTS timestamp.Timestamp `protobuf:"bytes,5,opt,name=CommitTS,proto3" json:"CommitTS"`
+	// DNShards all DNShards that have written data. The first DN is the coordinator of the
+	// transaction
+	DNShards             []metadata.DNShard `protobuf:"bytes,6,rep,name=DNShards,proto3" json:"DNShards"`
+	XXX_NoUnkeyedLiteral struct{}           `json:"-"`
+	XXX_unrecognized     []byte             `json:"-"`
+	XXX_sizecache        int32              `json:"-"`
 }
 
 func (m *TxnMeta) Reset()         { *m = TxnMeta{} }
@@ -234,23 +302,23 @@ func (m *TxnMeta) GetSnapshotTS() timestamp.Timestamp {
 	return timestamp.Timestamp{}
 }
 
-func (m *TxnMeta) GetPreparedTS() *timestamp.Timestamp {
+func (m *TxnMeta) GetPreparedTS() timestamp.Timestamp {
 	if m != nil {
 		return m.PreparedTS
 	}
-	return nil
+	return timestamp.Timestamp{}
 }
 
-func (m *TxnMeta) GetCommitTS() *timestamp.Timestamp {
+func (m *TxnMeta) GetCommitTS() timestamp.Timestamp {
 	if m != nil {
 		return m.CommitTS
 	}
-	return nil
+	return timestamp.Timestamp{}
 }
 
-func (m *TxnMeta) GetCoordinator() *metadata.DNShard {
+func (m *TxnMeta) GetDNShards() []metadata.DNShard {
 	if m != nil {
-		return m.Coordinator
+		return m.DNShards
 	}
 	return nil
 }
@@ -259,14 +327,12 @@ func (m *TxnMeta) GetCoordinator() *metadata.DNShard {
 type CNTxnSnapshot struct {
 	// ID txn id
 	Txn TxnMeta `protobuf:"bytes,1,opt,name=Txn,proto3" json:"Txn"`
-	// DNShards DNs for which data has been written in the current transaction
-	DNShards []metadata.DNShard `protobuf:"bytes,2,rep,name=DNShards,proto3" json:"DNShards"`
 	// ReadyOnly txn options
-	ReadyOnly bool `protobuf:"varint,3,opt,name=ReadyOnly,proto3" json:"ReadyOnly,omitempty"`
+	ReadyOnly bool `protobuf:"varint,2,opt,name=ReadyOnly,proto3" json:"ReadyOnly,omitempty"`
 	// EnableCacheWrite txn options
-	EnableCacheWrite bool `protobuf:"varint,4,opt,name=EnableCacheWrite,proto3" json:"EnableCacheWrite,omitempty"`
+	EnableCacheWrite bool `protobuf:"varint,3,opt,name=EnableCacheWrite,proto3" json:"EnableCacheWrite,omitempty"`
 	// Disable1PCOpt txn options
-	Disable1PCOpt        bool     `protobuf:"varint,5,opt,name=Disable1PCOpt,proto3" json:"Disable1PCOpt,omitempty"`
+	Disable1PCOpt        bool     `protobuf:"varint,4,opt,name=Disable1PCOpt,proto3" json:"Disable1PCOpt,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -310,13 +376,6 @@ func (m *CNTxnSnapshot) GetTxn() TxnMeta {
 		return m.Txn
 	}
 	return TxnMeta{}
-}
-
-func (m *CNTxnSnapshot) GetDNShards() []metadata.DNShard {
-	if m != nil {
-		return m.DNShards
-	}
-	return nil
 }
 
 func (m *CNTxnSnapshot) GetReadyOnly() bool {
@@ -464,7 +523,8 @@ func (m *CNOpResponse) GetPayload() []byte {
 //
 // Request flow of TxnRequest as below:
 // 1. CN -> DN (TxnMethod.Read, TxnMethod.Write, TxnMethod.Commit, TxnMethod.Rollback)
-// 2. DN -> DN (TxnMethod.Prepare, TxnMethod.GetStatus, TxnMethod.CommitDNShard, TxnMethod.RollbackDNShard)
+// 2. DN -> DN (TxnMethod.Prepare, TxnMethod.GetStatus, TxnMethod.CommitDNShard, TxnMethod.RollbackDNShard,
+//             TxnMethod.RemoveMetadata)
 type TxnRequest struct {
 	// RequestID request id
 	RequestID uint64 `protobuf:"varint,1,opt,name=RequestID,proto3" json:"RequestID,omitempty"`
@@ -490,9 +550,11 @@ type TxnRequest struct {
 	CommitDNShardRequest *TxnCommitDNShardRequest `protobuf:"bytes,11,opt,name=CommitDNShardRequest,proto3" json:"CommitDNShardRequest,omitempty"`
 	// TxnRollbackDNShardRequest corresponds to TxnMethod.RollbackDNShard
 	RollbackDNShardRequest *TxnRollbackDNShardRequest `protobuf:"bytes,12,opt,name=RollbackDNShardRequest,proto3" json:"RollbackDNShardRequest,omitempty"`
-	XXX_NoUnkeyedLiteral   struct{}                   `json:"-"`
-	XXX_unrecognized       []byte                     `json:"-"`
-	XXX_sizecache          int32                      `json:"-"`
+	// TxnRemoveMetadataRequest  corresponds to TxnMethod.RemoveMetadata
+	RemoveMetadata       *TxnRemoveMetadataRequest `protobuf:"bytes,13,opt,name=RemoveMetadata,proto3" json:"RemoveMetadata,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}                  `json:"-"`
+	XXX_unrecognized     []byte                    `json:"-"`
+	XXX_sizecache        int32                     `json:"-"`
 }
 
 func (m *TxnRequest) Reset()         { *m = TxnRequest{} }
@@ -612,6 +674,13 @@ func (m *TxnRequest) GetRollbackDNShardRequest() *TxnRollbackDNShardRequest {
 	return nil
 }
 
+func (m *TxnRequest) GetRemoveMetadata() *TxnRemoveMetadataRequest {
+	if m != nil {
+		return m.RemoveMetadata
+	}
+	return nil
+}
+
 // TxnResponse response of TxnRequest.
 type TxnResponse struct {
 	// RequestID corresponding request id
@@ -641,9 +710,11 @@ type TxnResponse struct {
 	CommitDNShardResponse *TxnCommitDNShardResponse `protobuf:"bytes,11,opt,name=CommitDNShardResponse,proto3" json:"CommitDNShardResponse,omitempty"`
 	// TxnRollbackDNShardResponse corresponds to TxnMethod.RollbackDNShard response
 	RollbackDNShardResponse *TxnRollbackDNShardResponse `protobuf:"bytes,12,opt,name=RollbackDNShardResponse,proto3" json:"RollbackDNShardResponse,omitempty"`
-	XXX_NoUnkeyedLiteral    struct{}                    `json:"-"`
-	XXX_unrecognized        []byte                      `json:"-"`
-	XXX_sizecache           int32                       `json:"-"`
+	// TxnRemoveMetadataResponse  corresponds to TxnMethod.RemoveMetadata
+	RemoveMetadata       *TxnRemoveMetadataResponse `protobuf:"bytes,13,opt,name=RemoveMetadata,proto3" json:"RemoveMetadata,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}                   `json:"-"`
+	XXX_unrecognized     []byte                     `json:"-"`
+	XXX_sizecache        int32                      `json:"-"`
 }
 
 func (m *TxnResponse) Reset()         { *m = TxnResponse{} }
@@ -763,15 +834,19 @@ func (m *TxnResponse) GetRollbackDNShardResponse() *TxnRollbackDNShardResponse {
 	return nil
 }
 
+func (m *TxnResponse) GetRemoveMetadata() *TxnRemoveMetadataResponse {
+	if m != nil {
+		return m.RemoveMetadata
+	}
+	return nil
+}
+
 // TxnCommitRequest CN sent the commit request to coordinator DN.
 type TxnCommitRequest struct {
-	// DNShards DNs for which data has been written in the current transaction.
-	// The first DN is the coordinator of the transaction.
-	DNShards             []metadata.DNShard `protobuf:"bytes,1,rep,name=DNShards,proto3" json:"DNShards"`
-	Disable1PCOpt        bool               `protobuf:"varint,2,opt,name=Disable1PCOpt,proto3" json:"Disable1PCOpt,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}           `json:"-"`
-	XXX_unrecognized     []byte             `json:"-"`
-	XXX_sizecache        int32              `json:"-"`
+	Disable1PCOpt        bool     `protobuf:"varint,2,opt,name=Disable1PCOpt,proto3" json:"Disable1PCOpt,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
 }
 
 func (m *TxnCommitRequest) Reset()         { *m = TxnCommitRequest{} }
@@ -806,13 +881,6 @@ func (m *TxnCommitRequest) XXX_DiscardUnknown() {
 }
 
 var xxx_messageInfo_TxnCommitRequest proto.InternalMessageInfo
-
-func (m *TxnCommitRequest) GetDNShards() []metadata.DNShard {
-	if m != nil {
-		return m.DNShards
-	}
-	return nil
-}
 
 func (m *TxnCommitRequest) GetDisable1PCOpt() bool {
 	if m != nil {
@@ -863,11 +931,9 @@ var xxx_messageInfo_TxnCommitResponse proto.InternalMessageInfo
 
 // TxnCommitRequest CN sent the rollback request to coordinator DN.
 type TxnRollbackRequest struct {
-	// DNShards DNs for which data has been written in the current transaction.
-	DNShards             []metadata.DNShard `protobuf:"bytes,1,rep,name=DNShards,proto3" json:"DNShards"`
-	XXX_NoUnkeyedLiteral struct{}           `json:"-"`
-	XXX_unrecognized     []byte             `json:"-"`
-	XXX_sizecache        int32              `json:"-"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
 }
 
 func (m *TxnRollbackRequest) Reset()         { *m = TxnRollbackRequest{} }
@@ -902,13 +968,6 @@ func (m *TxnRollbackRequest) XXX_DiscardUnknown() {
 }
 
 var xxx_messageInfo_TxnRollbackRequest proto.InternalMessageInfo
-
-func (m *TxnRollbackRequest) GetDNShards() []metadata.DNShard {
-	if m != nil {
-		return m.DNShards
-	}
-	return nil
-}
 
 // TxnRollbackResponse response of TxnRollbackRequest.
 type TxnRollbackResponse struct {
@@ -955,16 +1014,10 @@ var xxx_messageInfo_TxnRollbackResponse proto.InternalMessageInfo
 // is to send prepare requests to all DNs.
 type TxnPrepareRequest struct {
 	// DNShard prepare DN
-	DNShard metadata.DNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard"`
-	// DNShards if the DNShard is the coordinator DN, DNShards is not empty,
-	// otherwise is empty. The coordinator DN needs to write the DNShards and prepare
-	// data together atomically to the LogService. So during error recovery we can use
-	// the coordinator DN to find all the DNs involved in the transaction to commit or
-	// rollback the transaction.
-	DNShards             []metadata.DNShard `protobuf:"bytes,2,rep,name=DNShards,proto3" json:"DNShards"`
-	XXX_NoUnkeyedLiteral struct{}           `json:"-"`
-	XXX_unrecognized     []byte             `json:"-"`
-	XXX_sizecache        int32              `json:"-"`
+	DNShard              metadata.DNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard"`
+	XXX_NoUnkeyedLiteral struct{}         `json:"-"`
+	XXX_unrecognized     []byte           `json:"-"`
+	XXX_sizecache        int32            `json:"-"`
 }
 
 func (m *TxnPrepareRequest) Reset()         { *m = TxnPrepareRequest{} }
@@ -1005,13 +1058,6 @@ func (m *TxnPrepareRequest) GetDNShard() metadata.DNShard {
 		return m.DNShard
 	}
 	return metadata.DNShard{}
-}
-
-func (m *TxnPrepareRequest) GetDNShards() []metadata.DNShard {
-	if m != nil {
-		return m.DNShards
-	}
-	return nil
 }
 
 // TxnPrepareResponse response of TxnPrepareRequest
@@ -1233,7 +1279,7 @@ func (m *TxnCommitDNShardResponse) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_TxnCommitDNShardResponse proto.InternalMessageInfo
 
-// TxnCommitDNShardRequest rollback txn on DNShard
+// TxnRollbackDNShardRequest rollback txn on DNShard
 type TxnRollbackDNShardRequest struct {
 	// DNShard target DN
 	DNShard              metadata.DNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard"`
@@ -1322,8 +1368,101 @@ func (m *TxnRollbackDNShardResponse) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_TxnRollbackDNShardResponse proto.InternalMessageInfo
 
+// TxnRemoveMetadataRequest remove txn metadata on DNShard
+type TxnRemoveMetadataRequest struct {
+	// DNShard target DN
+	DNShard              metadata.DNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard"`
+	XXX_NoUnkeyedLiteral struct{}         `json:"-"`
+	XXX_unrecognized     []byte           `json:"-"`
+	XXX_sizecache        int32            `json:"-"`
+}
+
+func (m *TxnRemoveMetadataRequest) Reset()         { *m = TxnRemoveMetadataRequest{} }
+func (m *TxnRemoveMetadataRequest) String() string { return proto.CompactTextString(m) }
+func (*TxnRemoveMetadataRequest) ProtoMessage()    {}
+func (*TxnRemoveMetadataRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_4f782e76b37adb9a, []int{18}
+}
+func (m *TxnRemoveMetadataRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *TxnRemoveMetadataRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_TxnRemoveMetadataRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *TxnRemoveMetadataRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_TxnRemoveMetadataRequest.Merge(m, src)
+}
+func (m *TxnRemoveMetadataRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *TxnRemoveMetadataRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_TxnRemoveMetadataRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_TxnRemoveMetadataRequest proto.InternalMessageInfo
+
+func (m *TxnRemoveMetadataRequest) GetDNShard() metadata.DNShard {
+	if m != nil {
+		return m.DNShard
+	}
+	return metadata.DNShard{}
+}
+
+// TxnRemoveMetadataResponse response of TxnRemoveMetadataRequest
+type TxnRemoveMetadataResponse struct {
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *TxnRemoveMetadataResponse) Reset()         { *m = TxnRemoveMetadataResponse{} }
+func (m *TxnRemoveMetadataResponse) String() string { return proto.CompactTextString(m) }
+func (*TxnRemoveMetadataResponse) ProtoMessage()    {}
+func (*TxnRemoveMetadataResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_4f782e76b37adb9a, []int{19}
+}
+func (m *TxnRemoveMetadataResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *TxnRemoveMetadataResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_TxnRemoveMetadataResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *TxnRemoveMetadataResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_TxnRemoveMetadataResponse.Merge(m, src)
+}
+func (m *TxnRemoveMetadataResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *TxnRemoveMetadataResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_TxnRemoveMetadataResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_TxnRemoveMetadataResponse proto.InternalMessageInfo
+
 // TxnError all explicit errors in transaction operations.
 type TxnError struct {
+	// Code error code
+	Code ErrorCode `protobuf:"varint,1,opt,name=Code,proto3,enum=txn.ErrorCode" json:"Code,omitempty"`
+	// Message error message
+	Message              string   `protobuf:"bytes,2,opt,name=Message,proto3" json:"Message,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -1333,7 +1472,7 @@ func (m *TxnError) Reset()         { *m = TxnError{} }
 func (m *TxnError) String() string { return proto.CompactTextString(m) }
 func (*TxnError) ProtoMessage()    {}
 func (*TxnError) Descriptor() ([]byte, []int) {
-	return fileDescriptor_4f782e76b37adb9a, []int{18}
+	return fileDescriptor_4f782e76b37adb9a, []int{20}
 }
 func (m *TxnError) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1362,9 +1501,24 @@ func (m *TxnError) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_TxnError proto.InternalMessageInfo
 
+func (m *TxnError) GetCode() ErrorCode {
+	if m != nil {
+		return m.Code
+	}
+	return ErrorCode_TAERead
+}
+
+func (m *TxnError) GetMessage() string {
+	if m != nil {
+		return m.Message
+	}
+	return ""
+}
+
 func init() {
 	proto.RegisterEnum("txn.TxnStatus", TxnStatus_name, TxnStatus_value)
 	proto.RegisterEnum("txn.TxnMethod", TxnMethod_name, TxnMethod_value)
+	proto.RegisterEnum("txn.ErrorCode", ErrorCode_name, ErrorCode_value)
 	proto.RegisterType((*TxnMeta)(nil), "txn.TxnMeta")
 	proto.RegisterType((*CNTxnSnapshot)(nil), "txn.CNTxnSnapshot")
 	proto.RegisterType((*CNOpRequest)(nil), "txn.CNOpRequest")
@@ -1383,79 +1537,89 @@ func init() {
 	proto.RegisterType((*TxnCommitDNShardResponse)(nil), "txn.TxnCommitDNShardResponse")
 	proto.RegisterType((*TxnRollbackDNShardRequest)(nil), "txn.TxnRollbackDNShardRequest")
 	proto.RegisterType((*TxnRollbackDNShardResponse)(nil), "txn.TxnRollbackDNShardResponse")
+	proto.RegisterType((*TxnRemoveMetadataRequest)(nil), "txn.TxnRemoveMetadataRequest")
+	proto.RegisterType((*TxnRemoveMetadataResponse)(nil), "txn.TxnRemoveMetadataResponse")
 	proto.RegisterType((*TxnError)(nil), "txn.TxnError")
 }
 
 func init() { proto.RegisterFile("txn.proto", fileDescriptor_4f782e76b37adb9a) }
 
 var fileDescriptor_4f782e76b37adb9a = []byte{
-	// 1056 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x56, 0xdd, 0x6e, 0xe3, 0x44,
-	0x14, 0xae, 0xf3, 0xeb, 0x9c, 0xfc, 0xac, 0x7b, 0xfa, 0x97, 0xad, 0x4a, 0xb6, 0xb2, 0x56, 0xab,
-	0x52, 0x41, 0xc2, 0xb6, 0x70, 0x03, 0x52, 0xa5, 0x6e, 0xba, 0x2c, 0x95, 0xd8, 0xb6, 0x9a, 0x44,
-	0x20, 0xb8, 0x41, 0x93, 0x7a, 0x48, 0xad, 0x4d, 0x3c, 0xc6, 0x99, 0xa0, 0x54, 0x48, 0x3c, 0x00,
-	0x8f, 0xc0, 0x2b, 0xf0, 0x22, 0x7b, 0xb9, 0xd7, 0x5c, 0x20, 0xe8, 0x93, 0x20, 0x8f, 0x67, 0x92,
-	0xd8, 0x8e, 0xab, 0xdd, 0xde, 0x79, 0xce, 0x39, 0xdf, 0x77, 0xce, 0x9c, 0xf9, 0x7c, 0x66, 0xa0,
-	0x22, 0x66, 0x5e, 0xdb, 0x0f, 0xb8, 0xe0, 0x98, 0x17, 0x33, 0x6f, 0xf7, 0xd3, 0xa1, 0x2b, 0x6e,
-	0xa6, 0x83, 0xf6, 0x35, 0x1f, 0x77, 0x86, 0x7c, 0xc8, 0x3b, 0xd2, 0x37, 0x98, 0xfe, 0x2c, 0x57,
-	0x72, 0x21, 0xbf, 0x22, 0xcc, 0xee, 0x23, 0xe1, 0x8e, 0xd9, 0x44, 0xd0, 0xb1, 0xaf, 0x0c, 0x8d,
-	0x31, 0x13, 0xd4, 0xa1, 0x82, 0x46, 0x6b, 0xfb, 0xcf, 0x1c, 0x94, 0xfb, 0x33, 0xef, 0x35, 0x13,
-	0x14, 0x1b, 0x90, 0x3b, 0x3f, 0x6b, 0x1a, 0xfb, 0xc6, 0x41, 0x8d, 0xe4, 0xce, 0xcf, 0xf0, 0x19,
-	0x94, 0x7a, 0x82, 0x8a, 0xe9, 0xa4, 0x99, 0xdb, 0x37, 0x0e, 0x1a, 0x47, 0x8d, 0x76, 0x58, 0x4c,
-	0x7f, 0xe6, 0x45, 0x56, 0xa2, 0xbc, 0xf8, 0x25, 0x40, 0xcf, 0xa3, 0xfe, 0xe4, 0x86, 0x8b, 0x7e,
-	0xaf, 0x99, 0xdf, 0x37, 0x0e, 0xaa, 0x47, 0x9b, 0xed, 0x45, 0xe6, 0xbe, 0xfe, 0x7a, 0x51, 0x78,
-	0xfb, 0xcf, 0x93, 0x35, 0xb2, 0x14, 0x8d, 0x9f, 0x03, 0x5c, 0x05, 0xcc, 0xa7, 0x01, 0x73, 0xfa,
-	0xbd, 0x66, 0x21, 0x1b, 0x4b, 0x96, 0xe2, 0xf0, 0x33, 0x30, 0xbb, 0x7c, 0x3c, 0x76, 0xc3, 0x7c,
-	0xc5, 0x7b, 0x30, 0xf3, 0x28, 0x3c, 0x86, 0x6a, 0x97, 0xf3, 0xc0, 0x71, 0x3d, 0x2a, 0x78, 0xd0,
-	0x2c, 0x49, 0xd0, 0x7a, 0x7b, 0xde, 0x8d, 0xb3, 0x8b, 0xde, 0x0d, 0x0d, 0x1c, 0xb2, 0x1c, 0x65,
-	0xff, 0x6d, 0x40, 0xbd, 0x7b, 0x11, 0x6e, 0x58, 0x15, 0x8c, 0x4f, 0x21, 0xdf, 0x9f, 0x79, 0xb2,
-	0x47, 0xd5, 0xa3, 0x9a, 0xee, 0x47, 0xd8, 0x3d, 0xb5, 0xb7, 0xd0, 0x8d, 0xc7, 0x60, 0x2a, 0xbe,
-	0xb0, 0x75, 0xf9, 0x95, 0x99, 0x54, 0xfc, 0x3c, 0x10, 0xf7, 0xa0, 0x42, 0x18, 0x75, 0x6e, 0x2f,
-	0xbd, 0xd1, 0xad, 0x6c, 0xa2, 0x49, 0x16, 0x06, 0x3c, 0x04, 0xeb, 0xa5, 0x47, 0x07, 0x23, 0xd6,
-	0xa5, 0xd7, 0x37, 0xec, 0xfb, 0xc0, 0x15, 0x4c, 0x76, 0xcb, 0x24, 0x29, 0x3b, 0x3e, 0x85, 0xfa,
-	0x99, 0x3b, 0x09, 0x8d, 0xcf, 0xaf, 0xba, 0x97, 0xbe, 0x90, 0x2d, 0x32, 0x49, 0xdc, 0x68, 0xfb,
-	0x50, 0xed, 0x5e, 0x5c, 0xfa, 0x84, 0xfd, 0x32, 0x65, 0x13, 0x81, 0xdb, 0x50, 0xba, 0xf4, 0xbb,
-	0xdc, 0x61, 0x72, 0x73, 0x75, 0xa2, 0x56, 0xd8, 0x84, 0xf2, 0x15, 0xbd, 0x1d, 0x71, 0xea, 0x48,
-	0x15, 0xd4, 0x88, 0x5e, 0x62, 0x07, 0x4a, 0x7d, 0x1a, 0x0c, 0x99, 0x50, 0x47, 0x9e, 0xb9, 0x47,
-	0x15, 0x66, 0x1f, 0x40, 0x2d, 0xca, 0x38, 0xf1, 0xb9, 0x37, 0x89, 0x51, 0x1b, 0x31, 0x6a, 0xfb,
-	0x8f, 0x22, 0x40, 0x7f, 0xe6, 0xe9, 0xda, 0x64, 0x6b, 0xe4, 0xa7, 0xd2, 0x67, 0x81, 0x2c, 0x0c,
-	0xa1, 0x37, 0x3c, 0x71, 0x3e, 0x15, 0xa7, 0x42, 0xd6, 0x98, 0x27, 0x0b, 0x83, 0x3e, 0xb1, 0xfc,
-	0xfd, 0x27, 0xf6, 0x0c, 0x4a, 0xaf, 0x99, 0xb8, 0xe1, 0x8e, 0x6c, 0xea, 0x92, 0xd4, 0x23, 0x2b,
-	0x51, 0x5e, 0x44, 0x28, 0x7c, 0x3d, 0xa2, 0x43, 0xd9, 0xd1, 0x3a, 0x91, 0xdf, 0xd8, 0x86, 0x4a,
-	0xf7, 0x42, 0x95, 0xa3, 0x84, 0x65, 0x49, 0xf8, 0x52, 0x7b, 0xc9, 0x22, 0x04, 0xbf, 0x82, 0x7a,
-	0x24, 0x4b, 0x8d, 0x29, 0x4b, 0xcc, 0x96, 0x4e, 0x19, 0x73, 0x92, 0x78, 0x2c, 0x9e, 0xc2, 0x23,
-	0xc2, 0x47, 0xa3, 0x01, 0xbd, 0x7e, 0xa3, 0xe1, 0xa6, 0x84, 0xef, 0x68, 0x78, 0xc2, 0x4d, 0x92,
-	0xf1, 0x78, 0x02, 0x0d, 0xf5, 0x2b, 0x69, 0x86, 0x8a, 0x64, 0xd8, 0xd6, 0x0c, 0x71, 0x2f, 0x49,
-	0x44, 0xe3, 0x19, 0x58, 0xaf, 0x98, 0x50, 0x33, 0x40, 0x31, 0x80, 0x64, 0x68, 0x6a, 0x86, 0xa4,
-	0x9f, 0xa4, 0x10, 0x78, 0x05, 0x9b, 0xd1, 0xce, 0xf4, 0x9f, 0xa7, 0x98, 0xaa, 0x92, 0x69, 0x2f,
-	0xde, 0x8c, 0x78, 0x0c, 0x59, 0x89, 0xc4, 0xef, 0x60, 0x5b, 0x6f, 0x35, 0xc1, 0x59, 0x93, 0x9c,
-	0xad, 0x64, 0x87, 0x12, 0xac, 0x19, 0x68, 0xfb, 0xaf, 0x22, 0x54, 0xa5, 0x18, 0x95, 0x6c, 0xef,
-	0x57, 0x63, 0x2b, 0xd2, 0x5b, 0x2e, 0xad, 0xb7, 0xa4, 0xd2, 0xf2, 0xef, 0xa5, 0xb4, 0xc2, 0x92,
-	0xd2, 0x3e, 0x06, 0xb3, 0x3f, 0xf3, 0x5e, 0x06, 0x01, 0x0f, 0xd4, 0xd8, 0xab, 0x6b, 0xb4, 0x34,
-	0x92, 0xb9, 0x1b, 0xbf, 0x88, 0xff, 0x6b, 0xf3, 0x81, 0xb7, 0xd0, 0x65, 0xe4, 0x20, 0xf1, 0x5f,
-	0xf2, 0x04, 0x1a, 0x5a, 0x6f, 0x0a, 0x58, 0x8e, 0x6b, 0x23, 0xee, 0x25, 0x89, 0xe8, 0x50, 0x1b,
-	0x0b, 0xb9, 0x29, 0x06, 0x33, 0xae, 0x8d, 0xa4, 0x9f, 0xa4, 0x10, 0xa1, 0xc8, 0xe7, 0x9a, 0x53,
-	0x24, 0x95, 0xb8, 0xc8, 0x13, 0x6e, 0x92, 0x8c, 0xc7, 0x57, 0xb0, 0xbe, 0x24, 0x39, 0x45, 0x12,
-	0xa9, 0xf4, 0xf1, 0x0a, 0x95, 0x2a, 0x9a, 0x34, 0x06, 0x7b, 0xb0, 0x95, 0x50, 0x9b, 0x22, 0x8b,
-	0x84, 0xfa, 0x51, 0x86, 0x50, 0x15, 0xe1, 0x6a, 0x2c, 0xfe, 0x00, 0x3b, 0x29, 0xb1, 0x29, 0xda,
-	0x48, 0xab, 0x4f, 0x32, 0xb5, 0xaa, 0x88, 0xb3, 0xf0, 0xf6, 0x18, 0xac, 0xe4, 0x0c, 0x89, 0xdd,
-	0x47, 0xc6, 0xfb, 0xde, 0x47, 0xa9, 0x5b, 0x24, 0xb7, 0xea, 0x16, 0xd9, 0x80, 0xf5, 0x94, 0x2a,
-	0xec, 0x73, 0xc0, 0xf4, 0x20, 0x7a, 0x50, 0x15, 0xf6, 0x16, 0x6c, 0xac, 0xd0, 0x8c, 0xfd, 0x9b,
-	0x4c, 0x9b, 0x18, 0x4c, 0xcf, 0xa1, 0xac, 0x70, 0xea, 0x82, 0xce, 0xe4, 0xd7, 0x71, 0x0f, 0xba,
-	0xa9, 0xed, 0x4d, 0xb9, 0xbd, 0x84, 0xe2, 0xec, 0x6f, 0x64, 0xa5, 0xa9, 0x39, 0xf7, 0xe1, 0x45,
-	0xd9, 0xdb, 0xb0, 0xb9, 0x4a, 0x9d, 0xf6, 0xb7, 0xb0, 0x93, 0x31, 0x11, 0x1f, 0x92, 0x65, 0x17,
-	0x9a, 0x59, 0xb2, 0xb5, 0x2f, 0xe0, 0x71, 0xe6, 0x9c, 0x7c, 0x48, 0xae, 0x3d, 0xd8, 0xcd, 0xd6,
-	0xb2, 0x0d, 0x8b, 0xb1, 0x76, 0xf8, 0x13, 0x54, 0xe6, 0x0f, 0x4c, 0x04, 0x28, 0x9d, 0x5e, 0x0b,
-	0xf7, 0x57, 0x66, 0xad, 0x61, 0x0d, 0x4c, 0xfd, 0x00, 0xb4, 0x0c, 0x6c, 0x00, 0x44, 0x95, 0x0b,
-	0xd7, 0x1b, 0x5a, 0x39, 0xac, 0x43, 0x45, 0xad, 0x99, 0x63, 0xe5, 0xc3, 0xe0, 0xd3, 0x01, 0x0f,
-	0xa4, 0xb3, 0x80, 0x55, 0x28, 0xcb, 0x15, 0x73, 0xac, 0xe2, 0xe1, 0xef, 0x32, 0x81, 0x1a, 0xb2,
-	0x26, 0x14, 0xc2, 0x27, 0x96, 0xb5, 0x86, 0x15, 0x28, 0xca, 0xc7, 0x93, 0x65, 0x84, 0x59, 0x23,
-	0x2e, 0x2b, 0x17, 0x12, 0xe9, 0xaa, 0xad, 0x7c, 0x48, 0xa4, 0x6a, 0xb0, 0x0a, 0x61, 0xca, 0xf9,
-	0x11, 0x59, 0x45, 0x5c, 0xd7, 0xb7, 0xba, 0xda, 0x9d, 0x55, 0xc2, 0x8d, 0xc5, 0x5d, 0xad, 0x8d,
-	0xe5, 0x17, 0x27, 0xef, 0xfe, 0x6b, 0x19, 0x6f, 0xef, 0x5a, 0xc6, 0xbb, 0xbb, 0x96, 0xf1, 0xef,
-	0x5d, 0xcb, 0xf8, 0xf1, 0x93, 0xa5, 0x27, 0xfd, 0x98, 0x8a, 0xc0, 0x9d, 0xf1, 0xc0, 0x1d, 0xba,
-	0x9e, 0x5e, 0x78, 0xac, 0xe3, 0xbf, 0x19, 0x76, 0xfc, 0x41, 0x47, 0xcc, 0xbc, 0x41, 0x49, 0xbe,
-	0xdb, 0x8f, 0xff, 0x0f, 0x00, 0x00, 0xff, 0xff, 0x7a, 0xb9, 0x4e, 0x19, 0x19, 0x0c, 0x00, 0x00,
+	// 1178 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x57, 0x5b, 0x6e, 0xdb, 0x46,
+	0x14, 0x0d, 0xf5, 0x24, 0xaf, 0x1e, 0xa6, 0xc7, 0x2f, 0xc5, 0x75, 0x15, 0x83, 0x08, 0x02, 0xd7,
+	0x68, 0x25, 0xc4, 0x41, 0x8b, 0xa2, 0x05, 0x0c, 0x28, 0xb2, 0x9c, 0x04, 0xa8, 0x65, 0x63, 0x44,
+	0x34, 0x68, 0x7f, 0x0a, 0xca, 0x9a, 0xca, 0x44, 0x24, 0x92, 0xa5, 0x46, 0x01, 0xbd, 0x8b, 0x7e,
+	0x74, 0x0b, 0xed, 0x5a, 0xf2, 0x99, 0x6e, 0xa0, 0x68, 0xbd, 0x85, 0x6e, 0xa0, 0x98, 0xe1, 0x0c,
+	0x29, 0x92, 0x62, 0x52, 0xf8, 0x8f, 0x73, 0xef, 0x3d, 0xe7, 0x5e, 0x1e, 0x9d, 0x19, 0x8e, 0x40,
+	0xa3, 0x81, 0xd3, 0xf1, 0x7c, 0x97, 0xba, 0xa8, 0x48, 0x03, 0x67, 0xff, 0x8b, 0xa9, 0x4d, 0x6f,
+	0x96, 0xe3, 0xce, 0xb5, 0x3b, 0xef, 0x4e, 0xdd, 0xa9, 0xdb, 0xe5, 0xb9, 0xf1, 0xf2, 0x67, 0xbe,
+	0xe2, 0x0b, 0xfe, 0x14, 0x62, 0xf6, 0x37, 0xa8, 0x3d, 0x27, 0x0b, 0x6a, 0xcd, 0x3d, 0x11, 0x68,
+	0xce, 0x09, 0xb5, 0x26, 0x16, 0xb5, 0xc2, 0xb5, 0xf1, 0x47, 0x01, 0xaa, 0x66, 0xe0, 0x5c, 0x10,
+	0x6a, 0xa1, 0x26, 0x14, 0x5e, 0x9d, 0xb5, 0x94, 0x43, 0xe5, 0xa8, 0x8e, 0x0b, 0xaf, 0xce, 0xd0,
+	0x13, 0xa8, 0x8c, 0xa8, 0x45, 0x97, 0x8b, 0x56, 0xe1, 0x50, 0x39, 0x6a, 0x9e, 0x34, 0x3b, 0x6c,
+	0x18, 0x33, 0x70, 0xc2, 0x28, 0x16, 0x59, 0xf4, 0x0d, 0xc0, 0xc8, 0xb1, 0xbc, 0xc5, 0x8d, 0x4b,
+	0xcd, 0x51, 0xab, 0x78, 0xa8, 0x1c, 0xd5, 0x4e, 0xb6, 0x3b, 0x71, 0x67, 0x53, 0x3e, 0x3d, 0x2f,
+	0xbd, 0xfb, 0xeb, 0xd1, 0x03, 0xbc, 0x52, 0xcd, 0xb0, 0x57, 0x3e, 0xf1, 0x2c, 0x9f, 0x4c, 0xcc,
+	0x51, 0xab, 0xf4, 0x71, 0x6c, 0x5c, 0x8d, 0xbe, 0x02, 0xb5, 0xef, 0xce, 0xe7, 0x36, 0xeb, 0x5a,
+	0xfe, 0x28, 0x32, 0xaa, 0x45, 0xcf, 0x40, 0x3d, 0x1b, 0x8e, 0x6e, 0x2c, 0x7f, 0xb2, 0x68, 0x55,
+	0x0e, 0x8b, 0x47, 0xb5, 0x93, 0xcd, 0x4e, 0x24, 0x8b, 0xc8, 0x48, 0x90, 0x2c, 0x34, 0x7e, 0x57,
+	0xa0, 0xd1, 0x1f, 0xb2, 0x97, 0x17, 0xc3, 0xa3, 0xc7, 0x50, 0x34, 0x03, 0x87, 0xeb, 0x55, 0x3b,
+	0xa9, 0x4b, 0x6d, 0x98, 0x92, 0x02, 0xcc, 0xd2, 0xe8, 0x00, 0x34, 0x4c, 0xac, 0xc9, 0xed, 0xa5,
+	0x33, 0xbb, 0xe5, 0x3a, 0xaa, 0x38, 0x0e, 0xa0, 0x63, 0xd0, 0x07, 0x8e, 0x35, 0x9e, 0x91, 0xbe,
+	0x75, 0x7d, 0x43, 0x5e, 0xfb, 0x36, 0x25, 0x5c, 0x40, 0x15, 0x67, 0xe2, 0xe8, 0x31, 0x34, 0xce,
+	0xec, 0x05, 0x0b, 0x3e, 0xbd, 0xea, 0x5f, 0x7a, 0x94, 0xab, 0xa5, 0xe2, 0x64, 0xd0, 0xf0, 0xa0,
+	0xd6, 0x1f, 0x5e, 0x7a, 0x98, 0xfc, 0xb2, 0x24, 0x0b, 0x8a, 0x76, 0xa1, 0x72, 0xe9, 0xf5, 0xdd,
+	0x09, 0xe1, 0x73, 0x36, 0xb0, 0x58, 0xa1, 0x16, 0x54, 0xaf, 0xac, 0xdb, 0x99, 0x6b, 0x4d, 0xf8,
+	0x50, 0x75, 0x2c, 0x97, 0xa8, 0x0b, 0x15, 0xd3, 0xf2, 0xa7, 0x84, 0x8a, 0x5f, 0x32, 0x57, 0x1b,
+	0x51, 0x66, 0x1c, 0x41, 0x3d, 0xec, 0xb8, 0xf0, 0x5c, 0x67, 0x91, 0xa0, 0x56, 0x12, 0xd4, 0xc6,
+	0x9f, 0x65, 0x00, 0x33, 0x70, 0xe4, 0x6c, 0x5c, 0x1a, 0xfe, 0x28, 0x6c, 0x57, 0xc2, 0x71, 0x80,
+	0x65, 0xd9, 0x4f, 0xe8, 0x2e, 0x69, 0x8f, 0xf2, 0x19, 0x8b, 0x38, 0x0e, 0x48, 0xf1, 0x8b, 0x1f,
+	0x16, 0xff, 0x09, 0x54, 0x2e, 0x08, 0xbd, 0x71, 0x27, 0x5c, 0xab, 0x15, 0x07, 0x87, 0x51, 0x2c,
+	0xb2, 0x08, 0x41, 0xe9, 0x7c, 0x66, 0x4d, 0xb9, 0x8b, 0x1a, 0x98, 0x3f, 0xa3, 0x0e, 0x68, 0xfd,
+	0xa1, 0x18, 0xa7, 0x55, 0xe1, 0x7d, 0x74, 0x0e, 0x5f, 0x91, 0x17, 0xc7, 0x25, 0xe8, 0x5b, 0x68,
+	0x84, 0x0e, 0x93, 0x98, 0x2a, 0xc7, 0xec, 0xc8, 0x96, 0x89, 0x24, 0x4e, 0xd6, 0xa2, 0x1e, 0x6c,
+	0x60, 0x77, 0x36, 0x1b, 0x5b, 0xd7, 0x6f, 0x24, 0x5c, 0xe5, 0xf0, 0x3d, 0x09, 0x4f, 0xa5, 0x71,
+	0xba, 0x1e, 0x9d, 0x42, 0x53, 0xec, 0x0d, 0xc9, 0xa0, 0x71, 0x86, 0x5d, 0xc9, 0x90, 0xcc, 0xe2,
+	0x54, 0x35, 0x3a, 0x03, 0xfd, 0x05, 0xa1, 0x62, 0x6b, 0x0b, 0x06, 0xe0, 0x0c, 0x2d, 0xc9, 0x90,
+	0xce, 0xe3, 0x0c, 0x02, 0x5d, 0xc1, 0x76, 0xf8, 0x66, 0xc2, 0x2b, 0x92, 0xa9, 0xc6, 0x99, 0x0e,
+	0x92, 0x62, 0x24, 0x6b, 0xf0, 0x5a, 0x24, 0xfa, 0x1e, 0x76, 0xe5, 0xab, 0xa6, 0x38, 0xeb, 0x9c,
+	0xb3, 0x9d, 0x56, 0x28, 0xc5, 0x9a, 0x83, 0x46, 0x03, 0x68, 0x62, 0x32, 0x77, 0xdf, 0x92, 0x0b,
+	0x61, 0xef, 0x56, 0x83, 0xf3, 0x7d, 0x1a, 0xf1, 0x25, 0xb2, 0x91, 0x6c, 0xc9, 0xb0, 0xf1, 0x6f,
+	0x19, 0x6a, 0xbc, 0x58, 0xb8, 0xff, 0xc3, 0xa6, 0x6e, 0x87, 0xb6, 0x2d, 0x64, 0x6d, 0x9b, 0x36,
+	0x6c, 0xf1, 0x7f, 0x19, 0xb6, 0xb4, 0x62, 0xd8, 0xcf, 0x40, 0x35, 0x03, 0x67, 0xe0, 0xfb, 0xae,
+	0x2f, 0x8e, 0xc3, 0x86, 0x44, 0xf3, 0x20, 0x8e, 0xd2, 0xe8, 0xcb, 0xe4, 0x96, 0x15, 0xf6, 0xde,
+	0x5c, 0xb1, 0x77, 0x98, 0xc0, 0xc9, 0x9d, 0x7d, 0x0a, 0x4d, 0x69, 0x5b, 0x01, 0xac, 0x26, 0x2d,
+	0x96, 0xcc, 0xe2, 0x54, 0x35, 0xb3, 0x58, 0xec, 0x5a, 0xc1, 0xa0, 0x26, 0x2d, 0x96, 0xce, 0xe3,
+	0x0c, 0x82, 0xed, 0x95, 0xc8, 0xba, 0x82, 0x44, 0x4b, 0xee, 0x95, 0x54, 0x1a, 0xa7, 0xeb, 0xd1,
+	0x0b, 0xd8, 0x5c, 0x71, 0xae, 0x20, 0x09, 0xcd, 0xfe, 0x70, 0x8d, 0xd9, 0x05, 0x4d, 0x16, 0x83,
+	0x46, 0xb0, 0x93, 0x32, 0xad, 0x20, 0xab, 0x25, 0xbd, 0xb4, 0xb6, 0x08, 0xaf, 0xc7, 0xa2, 0x1f,
+	0x60, 0x2f, 0xe3, 0x59, 0x41, 0x1b, 0x5a, 0xfe, 0x51, 0xae, 0xe5, 0x05, 0x71, 0x1e, 0x1e, 0x9d,
+	0xe7, 0x98, 0xbe, 0x9d, 0x67, 0x7a, 0xf9, 0x4b, 0xa6, 0x5c, 0xff, 0x35, 0xe8, 0xe9, 0x23, 0x2d,
+	0xfb, 0x7d, 0x2a, 0xac, 0xfb, 0x3e, 0x6d, 0xc1, 0x66, 0xc6, 0x28, 0xc6, 0x36, 0xa0, 0xec, 0x11,
+	0x67, 0xec, 0xc0, 0xd6, 0x1a, 0x47, 0x18, 0xe7, 0x9c, 0x21, 0x75, 0x7a, 0x3d, 0x85, 0xaa, 0x78,
+	0x57, 0xf1, 0x41, 0xce, 0xfd, 0x6c, 0xc9, 0x3a, 0xd1, 0x34, 0x65, 0x0d, 0xe3, 0x25, 0x6f, 0x9a,
+	0x39, 0xd7, 0xee, 0xc1, 0xbf, 0x0b, 0xdb, 0xeb, 0x6c, 0x64, 0x7c, 0x07, 0x7b, 0x39, 0x27, 0xe0,
+	0x7d, 0xba, 0xec, 0x43, 0x2b, 0xcf, 0x5f, 0xc6, 0x10, 0x1e, 0xe6, 0x9e, 0x8b, 0xf7, 0xe9, 0x75,
+	0x00, 0xfb, 0xf9, 0xa6, 0x33, 0x2e, 0xf8, 0x24, 0x6b, 0x4f, 0xcd, 0xfb, 0x34, 0xfb, 0x24, 0x1c,
+	0x7e, 0xad, 0x1f, 0x8d, 0x97, 0xf1, 0x59, 0x87, 0x0c, 0x28, 0x45, 0x17, 0x1c, 0x79, 0x62, 0xf2,
+	0x0c, 0x8b, 0xe2, 0x92, 0xbc, 0xee, 0x5c, 0x90, 0xc5, 0xc2, 0x9a, 0x12, 0xee, 0x4a, 0x0d, 0xcb,
+	0xe5, 0xf1, 0x4f, 0xa0, 0x45, 0x37, 0x5a, 0x04, 0x50, 0xe9, 0x5d, 0x53, 0xfb, 0x2d, 0xd1, 0x1f,
+	0xa0, 0x3a, 0xa8, 0xf2, 0xae, 0xa9, 0x2b, 0xa8, 0x09, 0x10, 0x6a, 0x4c, 0x6d, 0x67, 0xaa, 0x17,
+	0x50, 0x03, 0x34, 0xb1, 0x26, 0x13, 0xbd, 0xc8, 0x8a, 0x7b, 0x63, 0xd7, 0xe7, 0xc9, 0x12, 0xaa,
+	0x41, 0x95, 0xaf, 0xc8, 0x44, 0x2f, 0x1f, 0xff, 0xaa, 0xf0, 0x0e, 0xe2, 0xe0, 0x56, 0xa1, 0xc4,
+	0x6e, 0x7f, 0xfa, 0x03, 0xa4, 0x41, 0x99, 0xdf, 0xeb, 0x74, 0x85, 0xb5, 0x0d, 0xc9, 0xf4, 0x02,
+	0x63, 0x92, 0x02, 0xeb, 0x45, 0xc6, 0x24, 0x86, 0xd0, 0x4b, 0xac, 0x67, 0xe4, 0x26, 0xbd, 0x8c,
+	0x36, 0xe5, 0x85, 0x43, 0x28, 0xa6, 0x57, 0xd0, 0x56, 0x7c, 0x8d, 0x90, 0xc1, 0x2a, 0xd2, 0xa1,
+	0x2e, 0x55, 0x64, 0x1a, 0xea, 0xea, 0xf1, 0x6f, 0x0a, 0x68, 0x91, 0x42, 0xac, 0x87, 0xd9, 0x1b,
+	0x88, 0xa9, 0xea, 0xa0, 0x9a, 0xbd, 0x81, 0x1c, 0xac, 0x01, 0x9a, 0xd9, 0x1b, 0x44, 0xb3, 0x6d,
+	0x40, 0x8d, 0x55, 0xc6, 0xe3, 0x35, 0x01, 0xcc, 0xde, 0x20, 0x9e, 0x90, 0x0d, 0x7f, 0xd5, 0xe7,
+	0xd4, 0x7a, 0x99, 0x11, 0xbf, 0xb6, 0x6c, 0x6a, 0x06, 0x8e, 0x5e, 0xe1, 0xd8, 0xc0, 0x19, 0xba,
+	0xf4, 0xdc, 0x5d, 0x3a, 0x62, 0xac, 0x30, 0x20, 0x14, 0xd7, 0x9e, 0x9f, 0xbe, 0xff, 0xa7, 0xad,
+	0xbc, 0xbb, 0x6b, 0x2b, 0xef, 0xef, 0xda, 0xca, 0xdf, 0x77, 0x6d, 0xe5, 0xc7, 0xcf, 0x57, 0xfe,
+	0xed, 0xcc, 0x2d, 0xea, 0xdb, 0x81, 0xeb, 0xdb, 0x53, 0xdb, 0x91, 0x0b, 0x87, 0x74, 0xbd, 0x37,
+	0xd3, 0xae, 0x37, 0xee, 0xd2, 0xc0, 0x19, 0x57, 0xf8, 0x5f, 0x9a, 0x67, 0xff, 0x05, 0x00, 0x00,
+	0xff, 0xff, 0xfe, 0xe8, 0xd0, 0xbd, 0x34, 0x0d, 0x00, 0x00,
 }
 
 func (m *TxnMeta) Marshal() (dAtA []byte, err error) {
@@ -1482,42 +1646,40 @@ func (m *TxnMeta) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
-	if m.Coordinator != nil {
-		{
-			size, err := m.Coordinator.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
+	if len(m.DNShards) > 0 {
+		for iNdEx := len(m.DNShards) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.DNShards[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintTxn(dAtA, i, uint64(size))
 			}
-			i -= size
-			i = encodeVarintTxn(dAtA, i, uint64(size))
+			i--
+			dAtA[i] = 0x32
 		}
-		i--
-		dAtA[i] = 0x32
 	}
-	if m.CommitTS != nil {
-		{
-			size, err := m.CommitTS.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintTxn(dAtA, i, uint64(size))
+	{
+		size, err := m.CommitTS.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
 		}
-		i--
-		dAtA[i] = 0x2a
+		i -= size
+		i = encodeVarintTxn(dAtA, i, uint64(size))
 	}
-	if m.PreparedTS != nil {
-		{
-			size, err := m.PreparedTS.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintTxn(dAtA, i, uint64(size))
+	i--
+	dAtA[i] = 0x2a
+	{
+		size, err := m.PreparedTS.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
 		}
-		i--
-		dAtA[i] = 0x22
+		i -= size
+		i = encodeVarintTxn(dAtA, i, uint64(size))
 	}
+	i--
+	dAtA[i] = 0x22
 	{
 		size, err := m.SnapshotTS.MarshalToSizedBuffer(dAtA[:i])
 		if err != nil {
@@ -1575,7 +1737,7 @@ func (m *CNTxnSnapshot) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA[i] = 0
 		}
 		i--
-		dAtA[i] = 0x28
+		dAtA[i] = 0x20
 	}
 	if m.EnableCacheWrite {
 		i--
@@ -1585,7 +1747,7 @@ func (m *CNTxnSnapshot) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA[i] = 0
 		}
 		i--
-		dAtA[i] = 0x20
+		dAtA[i] = 0x18
 	}
 	if m.ReadyOnly {
 		i--
@@ -1595,21 +1757,7 @@ func (m *CNTxnSnapshot) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA[i] = 0
 		}
 		i--
-		dAtA[i] = 0x18
-	}
-	if len(m.DNShards) > 0 {
-		for iNdEx := len(m.DNShards) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.DNShards[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintTxn(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x12
-		}
+		dAtA[i] = 0x10
 	}
 	{
 		size, err := m.Txn.MarshalToSizedBuffer(dAtA[:i])
@@ -1730,6 +1878,18 @@ func (m *TxnRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.RemoveMetadata != nil {
+		{
+			size, err := m.RemoveMetadata.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintTxn(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x6a
 	}
 	if m.RollbackDNShardRequest != nil {
 		{
@@ -1871,6 +2031,18 @@ func (m *TxnResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.RemoveMetadata != nil {
+		{
+			size, err := m.RemoveMetadata.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintTxn(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x6a
 	}
 	if m.RollbackDNShardResponse != nil {
 		{
@@ -2032,20 +2204,6 @@ func (m *TxnCommitRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x10
 	}
-	if len(m.DNShards) > 0 {
-		for iNdEx := len(m.DNShards) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.DNShards[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintTxn(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0xa
-		}
-	}
 	return len(dAtA) - i, nil
 }
 
@@ -2100,20 +2258,6 @@ func (m *TxnRollbackRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
-	if len(m.DNShards) > 0 {
-		for iNdEx := len(m.DNShards) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.DNShards[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintTxn(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0xa
-		}
-	}
 	return len(dAtA) - i, nil
 }
 
@@ -2167,20 +2311,6 @@ func (m *TxnPrepareRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	if len(m.DNShards) > 0 {
-		for iNdEx := len(m.DNShards) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.DNShards[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintTxn(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x12
-		}
 	}
 	{
 		size, err := m.DNShard.MarshalToSizedBuffer(dAtA[:i])
@@ -2414,6 +2544,70 @@ func (m *TxnRollbackDNShardResponse) MarshalToSizedBuffer(dAtA []byte) (int, err
 	return len(dAtA) - i, nil
 }
 
+func (m *TxnRemoveMetadataRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *TxnRemoveMetadataRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *TxnRemoveMetadataRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	{
+		size, err := m.DNShard.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintTxn(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0xa
+	return len(dAtA) - i, nil
+}
+
+func (m *TxnRemoveMetadataResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *TxnRemoveMetadataResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *TxnRemoveMetadataResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	return len(dAtA) - i, nil
+}
+
 func (m *TxnError) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
@@ -2437,6 +2631,18 @@ func (m *TxnError) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.Message) > 0 {
+		i -= len(m.Message)
+		copy(dAtA[i:], m.Message)
+		i = encodeVarintTxn(dAtA, i, uint64(len(m.Message)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if m.Code != 0 {
+		i = encodeVarintTxn(dAtA, i, uint64(m.Code))
+		i--
+		dAtA[i] = 0x8
 	}
 	return len(dAtA) - i, nil
 }
@@ -2467,17 +2673,15 @@ func (m *TxnMeta) Size() (n int) {
 	}
 	l = m.SnapshotTS.Size()
 	n += 1 + l + sovTxn(uint64(l))
-	if m.PreparedTS != nil {
-		l = m.PreparedTS.Size()
-		n += 1 + l + sovTxn(uint64(l))
-	}
-	if m.CommitTS != nil {
-		l = m.CommitTS.Size()
-		n += 1 + l + sovTxn(uint64(l))
-	}
-	if m.Coordinator != nil {
-		l = m.Coordinator.Size()
-		n += 1 + l + sovTxn(uint64(l))
+	l = m.PreparedTS.Size()
+	n += 1 + l + sovTxn(uint64(l))
+	l = m.CommitTS.Size()
+	n += 1 + l + sovTxn(uint64(l))
+	if len(m.DNShards) > 0 {
+		for _, e := range m.DNShards {
+			l = e.Size()
+			n += 1 + l + sovTxn(uint64(l))
+		}
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -2493,12 +2697,6 @@ func (m *CNTxnSnapshot) Size() (n int) {
 	_ = l
 	l = m.Txn.Size()
 	n += 1 + l + sovTxn(uint64(l))
-	if len(m.DNShards) > 0 {
-		for _, e := range m.DNShards {
-			l = e.Size()
-			n += 1 + l + sovTxn(uint64(l))
-		}
-	}
 	if m.ReadyOnly {
 		n += 2
 	}
@@ -2599,6 +2797,10 @@ func (m *TxnRequest) Size() (n int) {
 		l = m.RollbackDNShardRequest.Size()
 		n += 1 + l + sovTxn(uint64(l))
 	}
+	if m.RemoveMetadata != nil {
+		l = m.RemoveMetadata.Size()
+		n += 1 + l + sovTxn(uint64(l))
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -2656,6 +2858,10 @@ func (m *TxnResponse) Size() (n int) {
 		l = m.RollbackDNShardResponse.Size()
 		n += 1 + l + sovTxn(uint64(l))
 	}
+	if m.RemoveMetadata != nil {
+		l = m.RemoveMetadata.Size()
+		n += 1 + l + sovTxn(uint64(l))
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -2668,12 +2874,6 @@ func (m *TxnCommitRequest) Size() (n int) {
 	}
 	var l int
 	_ = l
-	if len(m.DNShards) > 0 {
-		for _, e := range m.DNShards {
-			l = e.Size()
-			n += 1 + l + sovTxn(uint64(l))
-		}
-	}
 	if m.Disable1PCOpt {
 		n += 2
 	}
@@ -2701,12 +2901,6 @@ func (m *TxnRollbackRequest) Size() (n int) {
 	}
 	var l int
 	_ = l
-	if len(m.DNShards) > 0 {
-		for _, e := range m.DNShards {
-			l = e.Size()
-			n += 1 + l + sovTxn(uint64(l))
-		}
-	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -2733,12 +2927,6 @@ func (m *TxnPrepareRequest) Size() (n int) {
 	_ = l
 	l = m.DNShard.Size()
 	n += 1 + l + sovTxn(uint64(l))
-	if len(m.DNShards) > 0 {
-		for _, e := range m.DNShards {
-			l = e.Size()
-			n += 1 + l + sovTxn(uint64(l))
-		}
-	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -2835,12 +3023,45 @@ func (m *TxnRollbackDNShardResponse) Size() (n int) {
 	return n
 }
 
+func (m *TxnRemoveMetadataRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = m.DNShard.Size()
+	n += 1 + l + sovTxn(uint64(l))
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *TxnRemoveMetadataResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
 func (m *TxnError) Size() (n int) {
 	if m == nil {
 		return 0
 	}
 	var l int
 	_ = l
+	if m.Code != 0 {
+		n += 1 + sovTxn(uint64(m.Code))
+	}
+	l = len(m.Message)
+	if l > 0 {
+		n += 1 + l + sovTxn(uint64(l))
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -2997,9 +3218,6 @@ func (m *TxnMeta) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.PreparedTS == nil {
-				m.PreparedTS = &timestamp.Timestamp{}
-			}
 			if err := m.PreparedTS.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
@@ -3033,16 +3251,13 @@ func (m *TxnMeta) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.CommitTS == nil {
-				m.CommitTS = &timestamp.Timestamp{}
-			}
 			if err := m.CommitTS.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
 		case 6:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Coordinator", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field DNShards", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -3069,10 +3284,8 @@ func (m *TxnMeta) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.Coordinator == nil {
-				m.Coordinator = &metadata.DNShard{}
-			}
-			if err := m.Coordinator.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			m.DNShards = append(m.DNShards, metadata.DNShard{})
+			if err := m.DNShards[len(m.DNShards)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -3161,40 +3374,6 @@ func (m *CNTxnSnapshot) Unmarshal(dAtA []byte) error {
 			}
 			iNdEx = postIndex
 		case 2:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field DNShards", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowTxn
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthTxn
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthTxn
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.DNShards = append(m.DNShards, metadata.DNShard{})
-			if err := m.DNShards[len(m.DNShards)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
-		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field ReadyOnly", wireType)
 			}
@@ -3214,7 +3393,7 @@ func (m *CNTxnSnapshot) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.ReadyOnly = bool(v != 0)
-		case 4:
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field EnableCacheWrite", wireType)
 			}
@@ -3234,7 +3413,7 @@ func (m *CNTxnSnapshot) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.EnableCacheWrite = bool(v != 0)
-		case 5:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Disable1PCOpt", wireType)
 			}
@@ -3888,6 +4067,42 @@ func (m *TxnRequest) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 13:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RemoveMetadata", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTxn
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthTxn
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthTxn
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.RemoveMetadata == nil {
+				m.RemoveMetadata = &TxnRemoveMetadataRequest{}
+			}
+			if err := m.RemoveMetadata.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipTxn(dAtA[iNdEx:])
@@ -4320,6 +4535,42 @@ func (m *TxnResponse) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 13:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RemoveMetadata", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTxn
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthTxn
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthTxn
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.RemoveMetadata == nil {
+				m.RemoveMetadata = &TxnRemoveMetadataResponse{}
+			}
+			if err := m.RemoveMetadata.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipTxn(dAtA[iNdEx:])
@@ -4371,40 +4622,6 @@ func (m *TxnCommitRequest) Unmarshal(dAtA []byte) error {
 			return fmt.Errorf("proto: TxnCommitRequest: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
-		case 1:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field DNShards", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowTxn
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthTxn
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthTxn
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.DNShards = append(m.DNShards, metadata.DNShard{})
-			if err := m.DNShards[len(m.DNShards)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
 		case 2:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Disable1PCOpt", wireType)
@@ -4527,40 +4744,6 @@ func (m *TxnRollbackRequest) Unmarshal(dAtA []byte) error {
 			return fmt.Errorf("proto: TxnRollbackRequest: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
-		case 1:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field DNShards", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowTxn
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthTxn
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthTxn
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.DNShards = append(m.DNShards, metadata.DNShard{})
-			if err := m.DNShards[len(m.DNShards)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipTxn(dAtA[iNdEx:])
@@ -4693,40 +4876,6 @@ func (m *TxnPrepareRequest) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			if err := m.DNShard.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
-		case 2:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field DNShards", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowTxn
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthTxn
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthTxn
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.DNShards = append(m.DNShards, metadata.DNShard{})
-			if err := m.DNShards[len(m.DNShards)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -5208,6 +5357,141 @@ func (m *TxnRollbackDNShardResponse) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
+func (m *TxnRemoveMetadataRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowTxn
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: TxnRemoveMetadataRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: TxnRemoveMetadataRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DNShard", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTxn
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthTxn
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthTxn
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.DNShard.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipTxn(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthTxn
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *TxnRemoveMetadataResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowTxn
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: TxnRemoveMetadataResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: TxnRemoveMetadataResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		default:
+			iNdEx = preIndex
+			skippy, err := skipTxn(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthTxn
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
 func (m *TxnError) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
@@ -5237,6 +5521,57 @@ func (m *TxnError) Unmarshal(dAtA []byte) error {
 			return fmt.Errorf("proto: TxnError: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Code", wireType)
+			}
+			m.Code = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTxn
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Code |= ErrorCode(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Message", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTxn
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthTxn
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthTxn
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Message = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipTxn(dAtA[iNdEx:])

@@ -843,6 +843,27 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				return nil, err
 			}
 		}
+	case "variance":
+		if args[0].Typ.Id == plan.Type_DECIMAL128 || args[0].Typ.Id == plan.Type_DECIMAL64 {
+			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
+				Id:       plan.Type_FLOAT64,
+				Nullable: false,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+		}
+	case "stddev_pop":
+		if args[0].Typ.Id == plan.Type_DECIMAL128 || args[0].Typ.Id == plan.Type_DECIMAL64 {
+			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
+				Id:       plan.Type_FLOAT64,
+				Nullable: false,
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	// get args(exprs) & types
@@ -912,11 +933,18 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 	}
 
 	returnDecimalExpr := func(val string) (*Expr, error) {
+		_, scale, err := types.ParseStringToDecimal128WithoutTable(val)
+		if err != nil {
+			return nil, err
+		}
 		typ := &plan.Type{
-			Id:       plan.Type_DECIMAL128,
-			Width:    int32(len(val)),
-			Scale:    0,
-			Nullable: false,
+			Id: plan.Type_DECIMAL128,
+			// Width: int32(len(val)),
+			// Scale: 0,
+			Width:     38,
+			Scale:     scale,
+			Precision: 38,
+			Nullable:  false,
 		}
 		return appendCastBeforeExpr(getStringExpr(val), typ)
 	}
@@ -994,9 +1022,16 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 	case tree.P_decimal:
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_float64:
+		originString := astExpr.String()
+		if !strings.Contains(originString, "e") {
+			expr, err := returnDecimalExpr(originString)
+			if err == nil {
+				return expr, nil
+			}
+		}
 		floatValue, ok := constant.Float64Val(astExpr.Value)
 		if !ok {
-			return returnDecimalExpr(astExpr.String())
+			return returnDecimalExpr(originString)
 		}
 		//if astExpr.Negative() {
 		//	floatValue = -floatValue
