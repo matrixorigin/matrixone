@@ -280,6 +280,45 @@ func TestCommitWithRollbackIfAnyPrepareFailed(t *testing.T) {
 	checkData(t, wTxn, s2, 2, 2, false)
 }
 
+func TestRollback(t *testing.T) {
+	sender := newTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	s1 := newTestTxnService(t, 1, sender, newTestClock(1))
+	assert.NoError(t, s1.Start())
+	defer func() {
+		assert.NoError(t, s1.Close())
+	}()
+	s2 := newTestTxnService(t, 2, sender, newTestClock(1))
+	assert.NoError(t, s2.Start())
+	defer func() {
+		assert.NoError(t, s2.Close())
+	}()
+
+	sender.addTxnService(s1)
+	sender.addTxnService(s2)
+
+	wTxn := newTestTxn(1, 1, 1)
+	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
+	wTxn.DNShards = append(wTxn.DNShards, newTestDNShard(2))
+	checkResponses(t, writeTestData(t, sender, 2, wTxn, 2))
+
+	w1 := addTestWaiter(t, s1, wTxn, txn.TxnStatus_Aborted)
+	defer w1.close()
+	w2 := addTestWaiter(t, s2, wTxn, txn.TxnStatus_Aborted)
+	defer w2.close()
+
+	checkResponses(t, rollbackWriteData(t, sender, wTxn))
+
+	checkWaiter(t, w1, txn.TxnStatus_Aborted)
+	checkWaiter(t, w2, txn.TxnStatus_Aborted)
+
+	checkData(t, wTxn, s1, 2, 0, false)
+	checkData(t, wTxn, s2, 2, 0, false)
+}
+
 func writeTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, wTxn txn.TxnMeta, keys ...byte) []txn.TxnResponse {
 	var requests []txn.TxnRequest
 	for _, k := range keys {
@@ -293,6 +332,12 @@ func writeTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, wTxn txn.
 
 func commitWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []txn.TxnResponse {
 	responses, err := sender.Send(context.Background(), []txn.TxnRequest{newTestCommitRequest(wTxn)})
+	assert.NoError(t, err)
+	return responses
+}
+
+func rollbackWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []txn.TxnResponse {
+	responses, err := sender.Send(context.Background(), []txn.TxnRequest{newTestRollbackRequest(wTxn)})
 	assert.NoError(t, err)
 	return responses
 }
@@ -330,10 +375,13 @@ func checkData(t *testing.T, wTxn txn.TxnMeta, s *service, commitTS int64, k byt
 	kv := s.storage.(*mem.KVTxnStorage)
 
 	if committed {
+		kv.RLock()
 		v, ok := kv.GetCommittedKV().Get(getTestKey(k), newTestTimestamp(commitTS))
 		assert.True(t, ok)
 		assert.Equal(t, getTestValue(k, wTxn), v)
+		kv.RUnlock()
 	} else {
+		kv.RLock()
 		n := 0
 		kv.GetCommittedKV().AscendRange(getTestKey(k),
 			newTestTimestamp(commitTS).Next(),
@@ -341,6 +389,7 @@ func checkData(t *testing.T, wTxn txn.TxnMeta, s *service, commitTS int64, k byt
 				n++
 			})
 		assert.Equal(t, 0, n)
+		kv.RUnlock()
 	}
 
 	v, ok := kv.GetUncommittedKV().Get(getTestKey(k))

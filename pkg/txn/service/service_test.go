@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -36,16 +37,23 @@ import (
 )
 
 func newTestTxnService(t *testing.T, shard uint64, sender rpc.TxnSender, clocker clock.Clock) *service {
+	return newTestTxnServiceWithLog(t, shard, sender, clocker, nil)
+}
+
+func newTestTxnServiceWithLog(t *testing.T, shard uint64, sender rpc.TxnSender, clocker clock.Clock, log logservice.Client) *service {
 	return NewTxnService(logutil.GetPanicLoggerWithLevel(zapcore.DebugLevel).With(zap.String("case", t.Name())),
 		newTestDNShard(shard),
-		newTestTxnStorage(),
+		newTestTxnStorage(log),
 		sender,
 		clocker,
 		time.Minute).(*service)
 }
 
-func newTestTxnStorage() storage.TxnStorage {
-	return mem.NewKVTxnStorage(0, mem.NewMemLog())
+func newTestTxnStorage(log logservice.Client) storage.TxnStorage {
+	if log == nil {
+		log = mem.NewMemLog()
+	}
+	return mem.NewKVTxnStorage(0, log)
 }
 
 func newTestDNShard(id uint64) metadata.DNShard {
@@ -167,6 +175,14 @@ func newTestCommitRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 		Method:        txn.TxnMethod_Commit,
 		Txn:           wTxn,
 		CommitRequest: &txn.TxnCommitRequest{},
+	}
+}
+
+func newTestRollbackRequest(wTxn txn.TxnMeta) txn.TxnRequest {
+	return txn.TxnRequest{
+		Method:          txn.TxnMethod_Rollback,
+		Txn:             wTxn,
+		RollbackRequest: &txn.TxnRollbackRequest{},
 	}
 }
 

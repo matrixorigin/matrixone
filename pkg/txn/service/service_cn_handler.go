@@ -304,22 +304,15 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 		return nil
 	}
 
-	defer func() {
-		s.removeTxn(txnID)
-		s.releaseTxnContext(txnCtx)
-	}()
-
 	response.Txn = &newTxn
 	newTxn.DNShards = request.Txn.DNShards
 
 	s.startAsyncRollbackTask(newTxn)
-	newTxn.Status = txn.TxnStatus_Aborted
-	txnCtx.changeStatusLocked(txn.TxnStatus_Aborted)
 	return nil
 }
 
 func (s *service) startAsyncRollbackTask(txnMeta txn.TxnMeta) {
-	s.stopper.RunTask(func(ctx context.Context) {
+	err := s.stopper.RunTask(func(ctx context.Context) {
 		requests := make([]txn.TxnRequest, 0, len(txnMeta.DNShards))
 		for _, dn := range txnMeta.DNShards {
 			requests = append(requests, txn.TxnRequest{
@@ -331,6 +324,11 @@ func (s *service) startAsyncRollbackTask(txnMeta txn.TxnMeta) {
 
 		s.parallelSendWithRetry(ctx, "rollback txn", txnMeta, requests, rollbackIngoreErrorCodes)
 	})
+	if err != nil {
+		s.logger.Error("start rollback task failed",
+			zap.Error(err),
+			util.TxnIDFieldWithID(txnMeta.ID))
+	}
 }
 
 func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {

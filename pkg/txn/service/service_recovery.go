@@ -1,3 +1,17 @@
+// Copyright 2021 - 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package service
 
 import (
@@ -105,9 +119,10 @@ func (s *service) waitRecoveryCompleted() {
 }
 
 func (s *service) startAsyncCheckCommitTask(txnCtx *txnContext) error {
-	// TODO: clean txnCtx
 	return s.stopper.RunTask(func(ctx context.Context) {
 		txnMeta := txnCtx.getTxn()
+		s.removeTxn(txnMeta.ID)
+
 		requests := make([]txn.TxnRequest, 0, len(txnMeta.DNShards)-1)
 		for _, dn := range txnMeta.DNShards[1:] {
 			requests = append(requests, txn.TxnRequest{
@@ -123,18 +138,29 @@ func (s *service) startAsyncCheckCommitTask(txnCtx *txnContext) error {
 		}
 
 		prepared := 1
+		txnMeta.CommitTS = txnMeta.PreparedTS
 		for _, resp := range responses {
 			if resp.Txn != nil && resp.Txn.Status == txn.TxnStatus_Prepared {
 				prepared++
+				if txnMeta.CommitTS.Less(resp.Txn.PreparedTS) {
+					txnMeta.PreparedTS = resp.Txn.PreparedTS
+				}
 			}
 		}
 
+		txnCtx.mu.Lock()
+		defer txnCtx.mu.Unlock()
+
 		if prepared == len(txnMeta.DNShards) {
+			txnCtx.updateTxnLocked(txnMeta)
 			if err := s.startAsyncCommitTask(txnCtx); err != nil {
 				s.logger.Error("start commit task failed",
+					zap.Error(err),
 					util.TxnField(txnMeta))
 			}
 		} else {
+			txnCtx.changeStatusLocked(txn.TxnStatus_Aborted)
+			s.releaseTxnContext(txnCtx)
 			s.startAsyncRollbackTask(txnMeta)
 		}
 	})

@@ -88,7 +88,6 @@ func NewTxnService(logger *zap.Logger,
 		zombieTimeout: zombieTimeout,
 		recoveryC:     make(chan struct{}),
 		txnC:          make(chan txn.TxnMeta, 16),
-		// transactions:  &sync.Map{},
 	}
 	s.stopper.RunTask(s.gcZombieTxn)
 	return s

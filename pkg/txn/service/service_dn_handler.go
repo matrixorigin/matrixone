@@ -60,6 +60,11 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 	newTxn.PreparedTS, _ = s.clocker.Now()
 	if err := s.storage.Prepare(newTxn); err != nil {
 		response.TxnError = newTAEPrepareError(err)
+		if err := s.storage.Rollback(newTxn); err != nil {
+			s.logger.Error("rollback failed",
+				util.TxnIDFieldWithID(newTxn.ID),
+				zap.Error(err))
+		}
 		return nil
 	}
 	txnCtx.updateTxnLocked(newTxn)
@@ -175,6 +180,8 @@ func (s *service) RollbackDNShard(ctx context.Context, request *txn.TxnRequest, 
 	response.Txn = &newTxn
 	switch newTxn.Status {
 	case txn.TxnStatus_Prepared:
+		break
+	case txn.TxnStatus_Active:
 		break
 	case txn.TxnStatus_Aborted:
 		return nil
