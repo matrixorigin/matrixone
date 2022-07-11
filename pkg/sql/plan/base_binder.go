@@ -843,6 +843,27 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				return nil, err
 			}
 		}
+	case "variance":
+		if args[0].Typ.Id == plan.Type_DECIMAL128 || args[0].Typ.Id == plan.Type_DECIMAL64 {
+			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
+				Id:       plan.Type_FLOAT64,
+				Nullable: false,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+		}
+	case "stddev_pop":
+		if args[0].Typ.Id == plan.Type_DECIMAL128 || args[0].Typ.Id == plan.Type_DECIMAL64 {
+			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
+				Id:       plan.Type_FLOAT64,
+				Nullable: false,
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	// get args(exprs) & types
