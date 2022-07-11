@@ -26,7 +26,7 @@ func (o *ObjectAllocator) Allocate(needLen uint64) (uint64, uint64) {
 	defer o.mutex.Unlock()
 	offset := o.available
 	o.available += needLen
-	return offset, o.available
+	return offset, needLen
 }
 
 func (o *ObjectAllocator) GetAvailable() uint64 {

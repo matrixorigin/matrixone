@@ -32,10 +32,12 @@ const DELETE_SUFFIX = "del"
 var SegmentFactory file.SegmentFactory
 
 func init() {
-	SegmentFactory = new(segmentFactory)
+	SegmentFactory = &segmentFactory{fs: NewObjectFS()}
 }
 
-type segmentFactory struct{}
+type segmentFactory struct {
+	fs tfs.FS
+}
 
 func (factory *segmentFactory) EncodeName(id uint64) string {
 	//TODO implement me
@@ -48,7 +50,8 @@ func (factory *segmentFactory) DecodeName(name string) (id uint64, err error) {
 }
 
 func (factory *segmentFactory) Build(dir string, id uint64) file.Segment {
-	return openSegment(dir, id)
+	factory.fs.(*ObjectFS).SetDir(dir)
+	return openSegment(dir, id, factory.fs)
 }
 
 type segmentFile struct {
@@ -61,12 +64,12 @@ type segmentFile struct {
 	fs     tfs.FS
 }
 
-func openSegment(name string, id uint64) *segmentFile {
+func openSegment(name string, id uint64, fs tfs.FS) *segmentFile {
 	sf := &segmentFile{
 		blocks: make(map[uint64]*blockFile),
 		name:   name,
 	}
-	sf.fs = NewObjectFS(name)
+	sf.fs = fs
 	sf.id = &common.ID{
 		SegmentID: id,
 	}

@@ -2,6 +2,7 @@ package objectio
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/tfs"
 	"io/fs"
@@ -25,11 +26,10 @@ type Attr struct {
 	dir  string
 }
 
-func NewObjectFS(dir string) tfs.FS {
+func NewObjectFS() tfs.FS {
 	fs := &ObjectFS{
 		attr: &Attr{
 			algo: compress.None,
-			dir:  dir,
 		},
 		dirs: make(map[string]*ObjectDir),
 	}
@@ -38,13 +38,17 @@ func NewObjectFS(dir string) tfs.FS {
 	return fs
 }
 
+func (o *ObjectFS) SetDir(dir string) {
+	o.attr.dir = dir
+}
+
 func (o *ObjectFS) OpenFile(name string, flag int) (tfs.File, error) {
 	o.RWMutex.Lock()
 	defer o.RWMutex.Unlock()
 	fileName := strings.Split(name, "/")
 	dir := o.dirs[fileName[0]]
 	if dir == nil {
-		dir = openObjectDir(o, name)
+		dir = openObjectDir(o, fileName[0])
 		o.dirs[fileName[0]] = dir
 	}
 	if len(fileName) == 1 {
@@ -120,6 +124,7 @@ func (o *ObjectFS) Append(file *ObjectFile, data []byte) (n int, err error) {
 	if err != nil {
 		return int(allocated), err
 	}
+	logutil.Infof("file: %v, offset: %d, allocated: %d", file.inode.name, offset, allocated)
 	file.inode.mutex.Lock()
 	file.inode.extents = append(file.inode.extents, Extent{
 		typ:    APPEND,
