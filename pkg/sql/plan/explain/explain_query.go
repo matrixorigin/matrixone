@@ -77,23 +77,26 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 			}
 
 			if nodedescImpl.Node.NodeType == plan.Node_TABLE_SCAN {
-				tableDef, err := nodedescImpl.GetTableDef(options)
-				if err != nil {
-					return err
+				if nodedescImpl.Node.TableDef != nil {
+					tableDef, err := nodedescImpl.GetTableDef(options)
+					if err != nil {
+						return err
+					}
+					settings.buffer.PushNewLine(tableDef, false, settings.level)
 				}
-				settings.buffer.PushNewLine(tableDef, false, settings.level)
 			}
 
 			if nodedescImpl.Node.NodeType == plan.Node_VALUE_SCAN {
-				rowsetDataDescImpl := &RowsetDataDescribeImpl{
-					RowsetData: nodedescImpl.Node.RowsetData,
+				if nodedescImpl.Node.RowsetData != nil {
+					rowsetDataDescImpl := &RowsetDataDescribeImpl{
+						RowsetData: nodedescImpl.Node.RowsetData,
+					}
+					rowsetInfo, err := rowsetDataDescImpl.GetDescription(options)
+					if err != nil {
+						return err
+					}
+					settings.buffer.PushNewLine(rowsetInfo, false, settings.level)
 				}
-				rowsetInfo, err := rowsetDataDescImpl.GetDescription(options)
-				if err != nil {
-					return err
-				}
-				rowdatadesc := "Output: " + rowsetInfo
-				settings.buffer.PushNewLine(rowdatadesc, false, settings.level)
 			}
 		}
 

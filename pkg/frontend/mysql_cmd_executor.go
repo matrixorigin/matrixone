@@ -17,15 +17,16 @@ package frontend
 import (
 	goErrors "errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"os"
 	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -632,7 +633,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
 					vs := vec.Col.([]types.Decimal128)
 					row[i] = vs[rowIndex].Decimal128ToString(scale)
-					fmt.Println(row[i])
 				} else {
 					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
 						row[i] = nil
@@ -1148,12 +1148,23 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 				es.Format = explain.EXPLAIN_FORMAT_TEXT
 			} else if strings.EqualFold(v.Value, "JSON") {
 				es.Format = explain.EXPLAIN_FORMAT_JSON
+			} else if strings.EqualFold(v.Value, "DOT") {
+				es.Format = explain.EXPLAIN_FORMAT_DOT
 			} else {
 				return errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized value for EXPLAIN option \"%s\": \"%s\"", v.Name, v.Value))
 			}
 		} else {
 			return errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized EXPLAIN option \"%s\"", v.Name))
 		}
+	}
+
+	switch stmt.Statement.(type) {
+	case *tree.Delete:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
+	case *tree.Update:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+	default:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
 	}
 
 	//get query optimizer and execute Optimize
@@ -1591,7 +1602,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			if err = mce.handleExplainStmt(st); err != nil {
 				goto handleFailed
 			}
-			goto handleFailed
+			//goto handleFailed
 		case *tree.ExplainAnalyze:
 			selfHandle = true
 			err = errors.New(errno.FeatureNotSupported, "not support explain analyze statement now")

@@ -376,13 +376,13 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 			for k := 0; k < n; k++ {
 				ctr.keys[k] = ctr.keys[k][:0]
 			}
-			bat.Clean(proc.Mp)
 		}
 		for i := range ctr.vecs {
 			if ctr.vecs[i].needFree {
 				vector.Clean(ctr.vecs[i].vec, proc.Mp)
 			}
 		}
+		bat.Clean(proc.Mp)
 	}
 }
 
