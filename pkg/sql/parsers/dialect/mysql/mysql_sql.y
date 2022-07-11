@@ -229,6 +229,7 @@ import (
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS
 %token <str> TYPE ANY SOME
+%token <str> PREPARE DEALLOCATE
 
 // MO table option
 %token <str> PROPERTIES
@@ -317,6 +318,7 @@ import (
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt
 %type <statement> analyze_stmt
+%type <statement> prepare_stmt prepareable_stmt
 %type <exportParm> export_data_param_opt
 
 %type <select> select_stmt select_no_parens
@@ -373,7 +375,7 @@ import (
 %type <str> reserved_keyword non_reserved_keyword
 %type <str> equal_opt reserved_sql_id reserved_table_id
 %type <str> as_name_opt as_opt_id table_id id_or_var name_string ident
-%type <str> database_id table_alias explain_sym
+%type <str> database_id table_alias explain_sym prepare_sym
 %type <unresolvedObjectName> unresolved_object_name table_column_name
 %type <unresolvedObjectName> table_name_unresolved
 %type <comparisionExpr> like_opt
@@ -519,6 +521,7 @@ stmt:
 |   delete_stmt
 |   drop_stmt
 |   explain_stmt
+|   prepare_stmt
 |   show_stmt
 |   alter_stmt
 |   analyze_stmt
@@ -1509,6 +1512,22 @@ update_expression:
         $$ = &tree.UpdateExpr{Names: []*tree.UnresolvedName{$1}, Expr: $3}
     }
 
+prepareable_stmt:
+    delete_stmt
+|   insert_stmt
+|   update_stmt
+|   select_stmt
+    {
+        $$ = $1
+    }
+
+prepare_stmt:
+    prepare_sym unresolved_object_name FROM prepareable_stmt
+    {
+        $$ = tree.NewPrepareStmt($2, $4)
+    }
+
+
 explainable_stmt:
     delete_stmt
 |   insert_stmt
@@ -1583,6 +1602,9 @@ explain_foramt_value:
     JSON
 |   TEXT
 
+
+prepare_sym:
+    PREPARE
 
 explain_sym:
     EXPLAIN
