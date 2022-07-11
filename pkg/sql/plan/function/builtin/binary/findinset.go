@@ -15,62 +15,68 @@
 package binary
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/findinset"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	left, right := vectors[0], vectors[1]
-	resultType := types.Type{Oid: types.T_uint64, Size: 8}
-	resultElementSize := int(resultType.Size)
-	leftValues, rightValues := vector.MustBytesCols(left), vector.MustBytesCols(right)
+func FindInSet(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	left, right := vecs[0], vecs[1]
+	rtyp := types.New(types.T_uint64, 0, 0, 0)
+	rvec := vector.New(rtyp)
+	lvs, rvs := vector.MustBytesCols(left), vector.MustBytesCols(right)
 	switch {
 	case left.IsScalar() && right.IsScalar():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			rvec.IsConst = true
+			nulls.Add(rvec.Nsp, 0)
+		} else {
+			rvec.IsConst = true
+			col := make([]uint64, 1)
+			findinset.FindInSetWithAllConst(lvs, rvs, col)
+			{
+				fmt.Printf("col: %v\n", col)
+			}
+			rvec.Col = col
 		}
-		resultVector := vector.NewConst(resultType)
-		resultValues := make([]uint64, 1)
-		vector.SetCol(resultVector, findinset.FindInSetWithAllConst(leftValues, rightValues, resultValues))
-		return resultVector, nil
 	case left.IsScalar() && !right.IsScalar():
 		if left.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			rvec.IsConst = true
+			nulls.Add(rvec.Nsp, 0)
+		} else {
+			if err := rvec.Realloc(len(rvs.Lengths)*rtyp.Oid.TypeLen(), proc.Mp); err != nil {
+				return nil, err
+			}
+			col := rvec.Col.([]uint64)[:len(rvs.Lengths)]
+			nulls.Set(rvec.Nsp, right.Nsp)
+			findinset.FindInSetWithLeftConst(lvs, rvs, col)
+			rvec.Col = col
 		}
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues.Lengths)))
-		if err != nil {
-			return nil, err
-		}
-		resultValues := encoding.DecodeUint64Slice(resultVector.Data)
-		resultValues = resultValues[:len(rightValues.Lengths)]
-		nulls.Set(resultVector.Nsp, right.Nsp)
-		vector.SetCol(resultVector, findinset.FindInSetWithLeftConst(leftValues, rightValues, resultValues))
-		return resultVector, nil
 	case !left.IsScalar() && right.IsScalar():
 		if right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			rvec.IsConst = true
+			nulls.Add(rvec.Nsp, 0)
+		} else {
+			if err := rvec.Realloc(len(lvs.Lengths)*rtyp.Oid.TypeLen(), proc.Mp); err != nil {
+				return nil, err
+			}
+			col := rvec.Col.([]uint64)[:len(lvs.Lengths)]
+			nulls.Set(rvec.Nsp, left.Nsp)
+			findinset.FindInSetWithRightConst(lvs, rvs, col)
+			rvec.Col = col
 		}
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(leftValues.Lengths)))
-		if err != nil {
+	default:
+		if err := rvec.Realloc(len(rvs.Lengths)*rtyp.Oid.TypeLen(), proc.Mp); err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeUint64Slice(resultVector.Data)
-		resultValues = resultValues[:len(leftValues.Lengths)]
-		nulls.Set(resultVector.Nsp, left.Nsp)
-		vector.SetCol(resultVector, findinset.FindInSetWithRightConst(leftValues, rightValues, resultValues))
-		return resultVector, nil
+		col := rvec.Col.([]uint64)[:len(lvs.Lengths)]
+		nulls.Or(left.Nsp, right.Nsp, rvec.Nsp)
+		findinset.FindInSet(lvs, rvs, col)
+		rvec.Col = col
 	}
-	resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues.Lengths)))
-	if err != nil {
-		return nil, err
-	}
-	resultValues := encoding.DecodeUint64Slice(resultVector.Data)
-	resultValues = resultValues[:len(rightValues.Lengths)]
-	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-	vector.SetCol(resultVector, findinset.FindInSet(leftValues, rightValues, resultValues))
-	return resultVector, nil
+	return rvec, nil
 }
