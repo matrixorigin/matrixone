@@ -534,6 +534,8 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 			nulls.Add(vec.Nsp, uint64(i))
 		}
 		switch vec.Typ.Oid {
+		case types.T_bool:
+			vec.Col = make([]bool, len(rows.Rows))
 		case types.T_int8:
 			vec.Col = make([]int8, len(rows.Rows))
 		case types.T_int16:

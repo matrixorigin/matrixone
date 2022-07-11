@@ -336,6 +336,13 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 		DNShards:  dnShards,
 		LogShards: logShards,
 	}
+
+	// make sure we are not using the ID range assigned to k8s
+	if s.state.NextID > K8SIDRangeStart {
+		panic("too many IDs assigned during initial cluster request")
+	}
+	s.state.NextID = K8SIDRangeEnd
+
 	plog.Infof("initial cluster set, HAKeeper is in BOOTSTRAPPING state")
 	s.state.State = pb.HAKeeperBootstrapping
 	return result
