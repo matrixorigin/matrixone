@@ -1764,7 +1764,7 @@ func (builder *QueryBuilder) resolveJoinOrder(nodeId int32) int32 {
 			rightCard = leaves[nextSibling].Cost.Card
 
 			children := []int32{nodeId, leaves[nextSibling].NodeId}
-			if leftCard > rightCard {
+			if leftCard < rightCard {
 				children[0], children[1] = children[1], children[0]
 			}
 
