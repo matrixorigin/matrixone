@@ -1905,7 +1905,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 	case COM_INIT_DB:
 		var dbname = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
-		query := "use " + dbname
+		query := "use `" + dbname + "`"
 		err := mce.doComQuery(query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_INIT_DB, err)
