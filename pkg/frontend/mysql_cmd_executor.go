@@ -1602,7 +1602,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			if err = mce.handleExplainStmt(st); err != nil {
 				goto handleFailed
 			}
-			goto handleFailed
+			//goto handleFailed
 		case *tree.ExplainAnalyze:
 			selfHandle = true
 			err = errors.New(errno.FeatureNotSupported, "not support explain analyze statement now")
