@@ -84,10 +84,12 @@ func (s *service) end() error {
 
 		switch txnMeta.Status {
 		case txn.TxnStatus_Prepared:
+			s.removeTxn(txnMeta.ID)
 			if err := s.startAsyncCheckCommitTask(txnCtx); err != nil {
 				panic(err)
 			}
 		case txn.TxnStatus_Committing:
+			s.removeTxn(txnMeta.ID)
 			if err := s.startAsyncCommitTask(txnCtx); err != nil {
 				panic(err)
 			}

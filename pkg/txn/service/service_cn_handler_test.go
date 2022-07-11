@@ -223,8 +223,16 @@ func TestCommitWithMultiDNShards(t *testing.T) {
 	wTxn := newTestTxn(1, 1, 1, 2)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 	checkResponses(t, writeTestData(t, sender, 2, wTxn, 2))
-	checkResponses(t, commitWriteData(t, sender, wTxn))
 
+	txnCtx := s1.getTxnContext(wTxn.ID)
+	assert.NotNil(t, txnCtx)
+	w := acquireWaiter()
+	assert.True(t, txnCtx.addWaiter(wTxn.ID, w, txn.TxnStatus_Committed))
+
+	checkResponses(t, commitWriteData(t, sender, wTxn))
+	status, err := w.wait(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, txn.TxnStatus_Committed, status)
 }
 
 func writeTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, wTxn txn.TxnMeta, keys ...byte) []txn.TxnResponse {

@@ -166,6 +166,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 
 	completed := true
 	defer func() {
+		// remove txnCtx, commit can only execute once.
 		s.removeTxn(txnID)
 		if completed {
 			s.releaseTxnContext(txnCtx)
@@ -329,44 +330,52 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 		txnCtx.mu.Lock()
 		defer txnCtx.mu.Unlock()
 
-		if txnCtx.mu.txn.Status != txn.TxnStatus_Committing {
+		txnMeta := txnCtx.getTxnLocked()
+		if txnMeta.Status != txn.TxnStatus_Committing {
 			for {
-				err := s.storage.Committing(txnCtx.mu.txn)
+				err := s.storage.Committing(txnMeta)
 				if err == nil {
 					txnCtx.changeStatusLocked(txn.TxnStatus_Committing)
 					break
 				}
 				s.logger.Error("save committing txn failed, retry later",
-					util.TxnIDFieldWithID(txnCtx.mu.txn.ID),
+					util.TxnIDFieldWithID(txnMeta.ID),
 					zap.Error(err))
 				// TODO: make config
 				time.Sleep(time.Second)
 			}
 		}
 
-		requests := make([]txn.TxnRequest, 0, len(txnCtx.mu.txn.DNShards))
-		for _, dn := range txnCtx.mu.txn.DNShards {
+		requests := make([]txn.TxnRequest, 0, len(txnMeta.DNShards)-1)
+		for _, dn := range txnMeta.DNShards[1:] {
 			requests = append(requests, txn.TxnRequest{
-				Txn:                  txnCtx.mu.txn,
+				Txn:                  txnMeta,
 				Method:               txn.TxnMethod_CommitDNShard,
 				CommitDNShardRequest: &txn.TxnCommitDNShardRequest{DNShard: dn},
 			})
 		}
 
-		// not timeout, keep retry until TxnService.Close
+		// no timeout, keep retry until TxnService.Close
 		ctx, cancel := context.WithTimeout(ctx, time.Duration(math.MaxInt64))
 		defer cancel()
 
-		if len(s.parallelSendWithRetry(ctx, "commit txn", txnCtx.mu.txn, requests[1:])) > 0 {
+		if len(s.parallelSendWithRetry(ctx, "commit txn", txnMeta, requests)) > 0 {
 			if ce := s.logger.Check(zap.DebugLevel, "other dnshards committed"); ce != nil {
-				ce.Write(util.TxnIDFieldWithID(txnCtx.mu.txn.ID))
+				ce.Write(util.TxnIDFieldWithID(txnMeta.ID))
 			}
-		}
 
-		if len(s.parallelSendWithRetry(ctx, "commit txn", txnCtx.mu.txn, requests[:1])) > 0 {
-			if ce := s.logger.Check(zap.DebugLevel, "coordinator dnshard committed, txn committed"); ce != nil {
-				ce.Write(util.TxnIDFieldWithID(txnCtx.mu.txn.ID))
+			if err := s.storage.Commit(txnMeta); err != nil {
+				s.logger.Fatal("commit failed after prepared",
+					util.TxnIDFieldWithID(txnMeta.ID),
+					zap.Error(err))
 			}
+
+			if ce := s.logger.Check(zap.DebugLevel, "coordinator dnshard committed, txn committed"); ce != nil {
+				ce.Write(util.TxnIDFieldWithID(txnMeta.ID))
+			}
+
+			txnCtx.changeStatusLocked(txn.TxnStatus_Committed)
+			s.releaseTxnContext(txnCtx)
 		}
 	})
 }
