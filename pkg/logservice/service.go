@@ -186,6 +186,10 @@ func NewService(cfg Config) (*Service, error) {
 	return service, nil
 }
 
+func (s *Service) GetStore()*store{
+	return s.store
+}
+
 func (s *Service) Close() (err error) {
 	err = firstError(err, s.server.Close())
 	err = firstError(err, s.store.Close())

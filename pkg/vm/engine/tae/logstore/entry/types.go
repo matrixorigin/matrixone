@@ -51,6 +51,7 @@ type Desc interface {
 	SetPayloadSize(int)
 	GetInfoSize() int
 	SetInfoSize(int)
+	GetMetaSize() int
 	TotalSize() int
 	GetMetaBuf() []byte
 	IsFlush() bool

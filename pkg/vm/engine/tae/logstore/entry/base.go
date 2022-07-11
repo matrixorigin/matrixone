@@ -399,7 +399,6 @@ func (b *Base) Unmarshal(buf []byte) error {
 	b.SetPayloadSize(len(buf))
 	return nil
 }
-
 func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 	if b.node == nil {
 		b.node = common.GPool.Alloc(uint64(b.GetPayloadSize()))
