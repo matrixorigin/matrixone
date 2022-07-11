@@ -56,6 +56,7 @@ type Info struct {
 	GroupLSN uint64
 
 	PostCommitVersion int
+	TargetLsn uint64
 	Info              any
 }
 

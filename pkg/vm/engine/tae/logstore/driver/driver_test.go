@@ -8,32 +8,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/stretchr/testify/assert"
 )
-var testServiceAddress="localhost:9000"
-
-func startLogServiceServer()*logservice.Service{
-	
-	cfg:=logservice.Config{
-		RTTMillisecond:       10,
-		GossipSeedAddresses:  []string{"127.0.0.1:9000"},
-		DeploymentID:         1,
-		FS:                   vfs.NewStrictMem(),
-		ServiceListenAddress: testServiceAddress,
-		ServiceAddress:       testServiceAddress,
-	}
-	service, _ := logservice.NewService(cfg)
-	return service
-}
-
-func startReplica(s *logservice.Service,shardID,replicaID uint64){
-	init := make(map[uint64]string)
-	init[2] = s.ID()
-	s.GetStore().StartReplica(1, 2, init, false)
-}
 
 func TestAppendRead(t *testing.T) {
-	s:=startLogServiceServer()
-	startReplica(s,1,1)
-	d:=NewLogServiceDriver(1,1,testServiceAddress)
+	fs := vfs.NewStrictMem()
+	service, ccfg, err := logservice.NewTestService(fs)
+	assert.NoError(t, err)
+	defer service.Close()
+	d:=NewLogServiceDriver(1,1,&ccfg)
 	t.Log(d.logServiceClient)
 	e:=entry.GetBase()
 	info:=entry.Info{

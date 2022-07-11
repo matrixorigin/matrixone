@@ -16,16 +16,10 @@ type LogServiceDriver struct {
 	logServiceClient logservice.Client
 }
 
-func NewLogServiceDriver(shardID, replicaID uint64,addr string) *LogServiceDriver {
-	scfg := logservice.LogServiceClientConfig{
-		ReadOnly:         false,
-		ShardID:          shardID,
-		ReplicaID:        replicaID,
-		ServiceAddresses: []string{addr},
-	}
+func NewLogServiceDriver(shardID, replicaID uint64,clientConfig *logservice.ClientConfig) *LogServiceDriver {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	c, err := logservice.CreateClient(ctx, "shard1", scfg) // TODO retry
+	c, err := logservice.NewClient(ctx, *clientConfig) // TODO retry
 	logutil.Infof("err is %v", err)
 	return &LogServiceDriver{logServiceClient: c}
 }
@@ -63,15 +57,15 @@ func (d *LogServiceDriver) Append(e entry.Entry) (lsn uint64) {
 	}
 	return lsn
 }
-func (d *LogServiceDriver) Truncate(lsn uint64) {
+func (d *LogServiceDriver) Truncate(lsn uint64)error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	d.logServiceClient.Truncate(ctx, lsn) // TODO retry
+	return d.logServiceClient.Truncate(ctx, lsn) // TODO retry
 }
 func (d *LogServiceDriver) GetTruncated() (lsn uint64) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	lsn, _ = d.logServiceClient.GetTruncatedIndex(ctx) //TODO retry
+	lsn, _ = d.logServiceClient.GetTruncatedLsn(ctx) //TODO retry
 	return
 }
 func (d *LogServiceDriver) Read(lsn uint64) entry.Entry {
