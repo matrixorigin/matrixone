@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strconv"
+	"sync"
 	"time"
 	"unicode"
 
@@ -279,6 +280,8 @@ type MysqlProtocolImpl struct {
 	rowHandler
 
 	SV *config.SystemVariables
+
+	m sync.Mutex
 }
 
 func (mp *MysqlProtocolImpl) GetDatabaseName() string {
@@ -1682,7 +1685,9 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 		if err != nil {
 			return err
 		}
+		mp.m.Lock()
 		mp.sequenceId++
+		mp.m.Unlock()
 
 		if i+curLen == length && curLen == int(MaxPayloadSize) {
 			//if the size of the last packet is exactly MaxPayloadSize, a zero-size payload should be sent

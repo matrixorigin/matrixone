@@ -121,9 +121,9 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 				ctr.cmps = make([]compare.Compare, len(bat.Vecs))
 				for i := range ctr.cmps {
 					if pos, ok := mp[i]; ok {
-						ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, ap.Fs[pos].Type == top.Descending)
+						ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, ap.Fs[pos].Type == top.Descending)
 					} else {
-						ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, true)
+						ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, true)
 					}
 				}
 			}
