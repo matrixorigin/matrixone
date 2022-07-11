@@ -175,7 +175,6 @@ Then you can query data in MatrixOne with the created table.
 
 ## **5. Run TPCH Queries**
 
-
 ```sql
 --Q1
 select
@@ -2955,4 +2954,3 @@ Q22
 7 rows in set 
 
 ```
-
