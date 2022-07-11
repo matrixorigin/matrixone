@@ -283,7 +283,7 @@ func TestIssue3814(t *testing.T) {
 			dn: pb.DNState{
 				Stores: map[string]pb.DNStoreInfo{},
 			},
-			expected: errors.New("not enough dn stores"),
+			expected: nil,
 		},
 	}
 
