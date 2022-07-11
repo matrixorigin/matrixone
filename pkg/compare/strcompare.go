@@ -15,27 +15,35 @@
 package compare
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type Compare interface {
-	Vector() *vector.Vector
-	Set(int, *vector.Vector)
-	Compare(int, int, int64, int64) int
-	Copy(int, int, int64, int64, *process.Process) error
+func (c *strCompare) Vector() *vector.Vector {
+	return c.vs[0]
 }
 
-type compare[T any] struct {
-	xs  [][]T
-	cmp func(T, T) int
-	ns  []*nulls.Nulls
-	vs  []*vector.Vector
-	cpy func([]T, []T, int64, int64)
+func (c *strCompare) Set(idx int, v *vector.Vector) {
+	c.vs[idx] = v
 }
 
-type strCompare struct {
-	desc bool
-	vs   []*vector.Vector
+func (c *strCompare) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Process) error {
+	if nulls.Any(c.vs[vecSrc].Nsp) && nulls.Contains(c.vs[vecSrc].Nsp, uint64(src)) {
+		nulls.Add(c.vs[vecDst].Nsp, uint64(dst))
+		return nil
+	}
+	nulls.Del(c.vs[vecDst].Nsp, uint64(dst))
+	return vector.Copy(c.vs[vecDst], c.vs[vecSrc], dst, src, proc.Mp)
+}
+
+func (c *strCompare) Compare(veci, vecj int, vi, vj int64) int {
+	x, y := c.vs[veci].Col.(*types.Bytes), c.vs[vecj].Col.(*types.Bytes)
+	if c.desc {
+		return bytes.Compare(x.Get(vi), y.Get(vj)) * -1
+	}
+	return bytes.Compare(x.Get(vi), y.Get(vj))
 }
