@@ -14,14 +14,42 @@
 
 package objectio
 
-type fileStat struct {
-	name       string
-	size       int64
-	originSize int64
-	algo       uint8
+import (
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"io/fs"
+	"time"
+)
+
+type objectFileStat struct {
+	common.FileInfo
+	name     string
+	size     int64
+	dataSize int64
+	oType    InodeType
 }
 
-func (stat *fileStat) Name() string      { return stat.name }
-func (stat *fileStat) Size() int64       { return stat.size }
-func (stat *fileStat) OriginSize() int64 { return stat.originSize }
-func (stat *fileStat) CompressAlgo() int { return int(stat.algo) }
+func (stat *objectFileStat) Mode() fs.FileMode {
+	return 0
+}
+
+func (stat *objectFileStat) ModTime() time.Time {
+	return time.Time{}
+}
+
+func (stat *objectFileStat) IsDir() bool {
+	if stat.oType == DIR {
+		return true
+	}
+	return false
+}
+
+func (stat *objectFileStat) Sys() any {
+	return nil
+}
+
+func (stat *objectFileStat) Name() string      { return stat.name }
+func (stat *objectFileStat) Size() int64       { return stat.size }
+func (stat *objectFileStat) DataSize() int64   { return stat.dataSize }
+func (stat *objectFileStat) OriginSize() int64 { return stat.size }
+func (stat *objectFileStat) CompressAlgo() int { return compress.None }
