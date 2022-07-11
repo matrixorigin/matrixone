@@ -80,7 +80,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 	case plan.Node_MATERIAL:
 		pname = "Material"
 	case plan.Node_RECURSIVE_CTE:
-		pname = "Recursive etc"
+		pname = "Recursive CTE"
 	case plan.Node_SINK:
 		pname = "Sink"
 	case plan.Node_SINK_SCAN:
@@ -445,7 +445,8 @@ func (c *CostDescribeImpl) GetDescription(options *ExplainOptions) (string, erro
 			".." + strconv.FormatFloat(c.Cost.Total, 'f', 2, 64) +
 			" card=" + strconv.FormatFloat(c.Cost.Card, 'f', 2, 64) +
 			" ndv=" + strconv.FormatFloat(c.Cost.Ndv, 'f', 2, 64) +
-			" rowsize=" + strconv.FormatFloat(c.Cost.Rowsize, 'f', 0, 64)
+			" rowsize=" + strconv.FormatFloat(c.Cost.Rowsize, 'f', 0, 64) +
+			")"
 	}
 
 	return result, nil
@@ -522,7 +523,7 @@ type RowsetDataDescribeImpl struct {
 }
 
 func (r *RowsetDataDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
-	var result string
+	var result string = "Value:"
 	if r.RowsetData == nil {
 		return result, nil
 	}

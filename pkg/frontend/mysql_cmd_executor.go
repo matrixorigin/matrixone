@@ -1148,12 +1148,23 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 				es.Format = explain.EXPLAIN_FORMAT_TEXT
 			} else if strings.EqualFold(v.Value, "JSON") {
 				es.Format = explain.EXPLAIN_FORMAT_JSON
+			} else if strings.EqualFold(v.Value, "DOT") {
+				es.Format = explain.EXPLAIN_FORMAT_DOT
 			} else {
 				return errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized value for EXPLAIN option \"%s\": \"%s\"", v.Name, v.Value))
 			}
 		} else {
 			return errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized EXPLAIN option \"%s\"", v.Name))
 		}
+	}
+
+	switch stmt.Statement.(type) {
+	case *tree.Delete:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
+	case *tree.Update:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+	default:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
 	}
 
 	//get query optimizer and execute Optimize
