@@ -16,7 +16,7 @@ package objectio
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/compress"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/tfs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/tfs"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"

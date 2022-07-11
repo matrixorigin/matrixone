@@ -1,7 +1,8 @@
-package codec
+package objectio
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/tfs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/adaptors"
 	"io/fs"
 	"os"
@@ -9,7 +10,6 @@ import (
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/tfs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 

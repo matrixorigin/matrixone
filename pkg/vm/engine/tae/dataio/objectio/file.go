@@ -21,6 +21,7 @@ import (
 
 type ObjectFile struct {
 	common.RefHelper
+	nodes map[string]*ObjectFile
 	inode *Inode
 	fs    *ObjectFS
 	stat  *objectFileStat
@@ -33,10 +34,9 @@ func openObjectFile(fs *ObjectFS, name string) *ObjectFile {
 		typ:   FILE,
 		name:  name,
 	}
-	file := &ObjectFile{
-		fs:    fs,
-		inode: inode,
-	}
+	file := &ObjectFile{}
+	file.fs = fs
+	file.inode = inode
 	fs.lastInode++
 	return file
 }
@@ -69,6 +69,7 @@ func (b *ObjectFile) Stat() (fs.FileInfo, error) {
 	stat := &objectFileStat{}
 	stat.size = int64(b.inode.size)
 	stat.dataSize = int64(b.inode.size)
+	stat.oType = b.inode.typ
 	return stat, nil
 }
 

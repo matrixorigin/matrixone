@@ -16,18 +16,13 @@ package objectio
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/tfs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/tfs"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 )
-
-const BLOCK_SUFFIX = "blk"
-const UPDATE_SUFFIX = "update"
-const INDEX_SUFFIX = "idx"
-const DELETE_SUFFIX = "del"
 
 var SegmentFactory file.SegmentFactory
 
@@ -40,13 +35,11 @@ type segmentFactory struct {
 }
 
 func (factory *segmentFactory) EncodeName(id uint64) string {
-	//TODO implement me
-	panic("implement me")
+	return ""
 }
 
 func (factory *segmentFactory) DecodeName(name string) (id uint64, err error) {
-	//TODO implement me
-	panic("implement me")
+	return 0, nil
 }
 
 func (factory *segmentFactory) Build(dir string, id uint64) file.Segment {
@@ -135,7 +128,7 @@ func (sf *segmentFile) String() string {
 	return s
 }
 
-func (sf *segmentFile) GetSegmentFile() tfs.FS {
+func (sf *segmentFile) GetFs() tfs.FS {
 	return sf.fs
 }
 

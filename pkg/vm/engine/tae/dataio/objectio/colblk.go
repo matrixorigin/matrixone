@@ -41,7 +41,7 @@ func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 	}
 	for i := range cb.indexes {
 		cb.indexes[i] = newIndex(cb)
-		file, err := cb.block.seg.GetSegmentFile().OpenFile(fmt.Sprintf("%d/%d_%d_%d.idx", cb.block.id, cb.col, cb.block.id, i), os.O_CREATE)
+		file, err := cb.block.seg.GetFs().OpenFile(fmt.Sprintf("%d/%d_%d_%d.idx", cb.block.id, cb.col, cb.block.id, i), os.O_CREATE)
 		if err != nil {
 			panic(any(err))
 		}
@@ -65,7 +65,7 @@ func (cb *columnBlock) AddIndex(idx int) {
 
 func (cb *columnBlock) WriteTS(ts uint64) (err error) {
 	cb.ts = ts
-	block, err := cb.block.seg.GetSegmentFile().OpenFile(
+	block, err := cb.block.seg.GetFs().OpenFile(
 		fmt.Sprintf("%d/%d_%d_%d.blk", cb.block.id, cb.col, cb.block.id, ts),
 		os.O_CREATE)
 	if err != nil {
@@ -75,7 +75,7 @@ func (cb *columnBlock) WriteTS(ts uint64) (err error) {
 		block,
 		uint32(len(cb.block.columns)),
 		uint32(len(cb.indexes)))
-	update, err := cb.block.seg.GetSegmentFile().OpenFile(
+	update, err := cb.block.seg.GetFs().OpenFile(
 		fmt.Sprintf("%d/%d_%d_%d.update", cb.block.id, cb.col, cb.block.id, ts),
 		os.O_CREATE)
 	if err != nil {

@@ -23,26 +23,26 @@ type objectFileStat struct {
 	name     string
 	size     int64
 	dataSize int64
+	oType    InodeType
 }
 
 func (stat *objectFileStat) Mode() fs.FileMode {
-	//TODO implement me
-	panic("implement me")
+	return 0
 }
 
 func (stat *objectFileStat) ModTime() time.Time {
-	//TODO implement me
-	panic("implement me")
+	return time.Time{}
 }
 
 func (stat *objectFileStat) IsDir() bool {
-	//TODO implement me
-	panic("implement me")
+	if stat.oType == DIR {
+		return true
+	}
+	return false
 }
 
 func (stat *objectFileStat) Sys() any {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (stat *objectFileStat) Name() string    { return stat.name }

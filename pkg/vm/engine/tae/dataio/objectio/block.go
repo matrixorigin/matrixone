@@ -17,7 +17,6 @@ package objectio
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/tfs"
 	"os"
 	"sync"
 
@@ -34,7 +33,6 @@ import (
 type blockFile struct {
 	common.RefHelper
 	seg       *segmentFile
-	dir       tfs.File
 	rows      uint32
 	id        uint64
 	ts        uint64
@@ -50,9 +48,13 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 		id:      id,
 		columns: make([]*columnBlock, colCnt),
 	}
+	var err error
+	if err != nil {
+		panic(any(err))
+	}
 	bf.deletes = newDeletes(bf)
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
-	indexFile, err := bf.seg.GetSegmentFile().OpenFile(
+	indexFile, err := bf.seg.GetFs().OpenFile(
 		fmt.Sprintf("%d/%d_%d.idx", bf.id, colCnt, bf.id), os.O_CREATE)
 	if err != nil {
 		panic(any(err))
@@ -95,7 +97,7 @@ func (bf *blockFile) ReadRows() uint32 {
 
 func (bf *blockFile) WriteTS(ts uint64) (err error) {
 	bf.ts = ts
-	delete, err := bf.seg.GetSegmentFile().OpenFile(fmt.Sprintf("%d/%d_%d_%d.del", bf.id, len(bf.columns), bf.id, ts), os.O_CREATE)
+	delete, err := bf.seg.GetFs().OpenFile(fmt.Sprintf("%d/%d_%d_%d.del", bf.id, len(bf.columns), bf.id, ts), os.O_CREATE)
 	bf.deletes.SetFile(delete,
 		uint32(len(bf.columns)),
 		uint32(len(bf.columns[0].indexes)))

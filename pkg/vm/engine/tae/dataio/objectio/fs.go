@@ -2,10 +2,10 @@ package objectio
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/compress"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/tfs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/tfs"
 	"io/fs"
+	"os"
 	"strings"
 	"sync"
 )
@@ -13,7 +13,7 @@ import (
 type ObjectFS struct {
 	sync.RWMutex
 	common.RefHelper
-	dirs      map[string]*ObjectDir
+	dirs      map[string]tfs.File
 	data      []*Object
 	meta      []*Object
 	attr      *Attr
@@ -31,7 +31,7 @@ func NewObjectFS() tfs.FS {
 		attr: &Attr{
 			algo: compress.None,
 		},
-		dirs: make(map[string]*ObjectDir),
+		dirs: make(map[string]tfs.File),
 	}
 	fs.lastId = 1
 	fs.lastInode = 1
@@ -54,28 +54,38 @@ func (o *ObjectFS) OpenFile(name string, flag int) (tfs.File, error) {
 	if len(fileName) == 1 {
 		return dir, nil
 	}
-	file := dir.OpenFile(o, fileName[1])
+	file := dir.(*ObjectDir).OpenFile(o, fileName[1])
 	return file, nil
 }
 
 func (o *ObjectFS) ReadDir(dir string) ([]fs.FileInfo, error) {
-	//TODO implement me
-	panic("implement me")
+	fileInfos := make([]fs.FileInfo, 0)
+	entry := o.dirs[dir]
+	info, err := entry.Stat()
+	if err != nil {
+		return nil, err
+	}
+	fileInfos = append(fileInfos, info)
+	return fileInfos, nil
 }
 
 func (o *ObjectFS) Remove(name string) error {
-	//TODO implement me
-	panic("implement me")
+	o.RWMutex.Lock()
+	defer o.RWMutex.Unlock()
+	fileName := strings.Split(name, "/")
+	dir := o.dirs[fileName[0]]
+	if dir == nil {
+		return os.ErrNotExist
+	}
+	return dir.(*ObjectDir).Remove(fileName[1])
 }
 
 func (o *ObjectFS) RemoveAll(dir string) error {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (o *ObjectFS) MountInfo() *tfs.MountInfo {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (o *ObjectFS) GetData(size uint64) (object *Object, err error) {
@@ -124,7 +134,6 @@ func (o *ObjectFS) Append(file *ObjectFile, data []byte) (n int, err error) {
 	if err != nil {
 		return int(allocated), err
 	}
-	logutil.Infof("file: %v, offset: %d, allocated: %d", file.inode.name, offset, allocated)
 	file.inode.mutex.Lock()
 	file.inode.extents = append(file.inode.extents, Extent{
 		typ:    APPEND,
@@ -165,4 +174,8 @@ func (o *ObjectFS) Sync(file *ObjectFile) error {
 		return nil
 	}
 	return data.oFile.Sync()
+}
+
+func (o *ObjectFS) Delete(file tfs.File) error {
+	return nil
 }
