@@ -188,6 +188,18 @@ func TestCheckBootstrap(t *testing.T) {
 			},
 			expected: false,
 		},
+		{
+			desc: "shard 1 not exists in log state",
+			cluster: pb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{
+					{ShardID: 1, NumberOfReplicas: 3},
+				},
+			},
+			log: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{},
+			},
+			expected: false,
+		},
 	}
 
 	for i, c := range cases {
@@ -280,5 +292,49 @@ func TestIssue3814(t *testing.T) {
 		bm := NewBootstrapManager(c.cluster)
 		_, err := bm.Bootstrap(alloc, c.dn, c.log)
 		assert.Equal(t, c.expected, err)
+	}
+}
+
+func TestIssue3845(t *testing.T) {
+	cases := []struct {
+		desc string
+
+		cluster pb.ClusterInfo
+		log     pb.LogState
+
+		expected bool
+	}{
+		{
+			desc: "shardID is 0",
+			cluster: pb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          0,
+					NumberOfReplicas: 1,
+				}},
+			},
+			log: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{0: {
+					ShardID:  0,
+					Replicas: map[uint64]string{1: "a"},
+				}},
+				Stores: map[string]pb.LogStoreInfo{"a": {
+					Tick: 0,
+					Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{
+							ShardID:  0,
+							Replicas: map[uint64]string{1: "a"},
+						},
+						ReplicaID: 1,
+					}},
+				}},
+			},
+			expected: true,
+		},
+	}
+
+	for _, c := range cases {
+		bm := NewBootstrapManager(c.cluster)
+		output := bm.CheckBootstrap(c.log)
+		assert.Equal(t, c.expected, output)
 	}
 }

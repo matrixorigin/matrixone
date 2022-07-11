@@ -54,11 +54,21 @@ func TestPrepare(t *testing.T) {
 
 	wTxn := writeTestData(t, s, 1, nil, 1)
 
-	prepareTestTxn(t, s, &wTxn, 2)
+	prepareTestTxn(t, s, &wTxn, 2, nil)
 
 	checkUncommitted(t, s, wTxn, 1)
 	checkLogCount(t, l, 1)
 	checkLog(t, l, 0, wTxn, 1)
+}
+
+func TestPrepareWithConflict(t *testing.T) {
+	l := NewMemLog()
+	s := NewKVTxnStorage(0, l)
+
+	writeCommittedData(t, s, 1, 2, 1)
+
+	wTxn := writeTestData(t, s, 1, nil, 1)
+	prepareTestTxn(t, s, &wTxn, 5, storage.ErrWriteConflict)
 }
 
 func TestCommit(t *testing.T) {
@@ -95,7 +105,7 @@ func TestCommitAfterPrepared(t *testing.T) {
 	s := NewKVTxnStorage(0, l)
 
 	wTxn := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &wTxn, 2)
+	prepareTestTxn(t, s, &wTxn, 2, nil)
 	commitTestTxn(t, s, &wTxn, 3, nil)
 
 	checkCommitted(t, s, wTxn, 1)
@@ -157,10 +167,10 @@ func TestWaitReadByPreparedTxn(t *testing.T) {
 
 	writeCommittedData(t, s, 0, 1, 1)
 
-	wTxn := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &wTxn, 1)
+	wTxn := writeTestData(t, s, 2, nil, 1)
+	prepareTestTxn(t, s, &wTxn, 5, nil)
 
-	readTestData(t, s, 2, [][]byte{wTxn.ID}, 1)
+	readTestData(t, s, 6, [][]byte{wTxn.ID}, 1)
 }
 
 func TestReadByGTPreparedTxnCanNotWait(t *testing.T) {
@@ -169,8 +179,8 @@ func TestReadByGTPreparedTxnCanNotWait(t *testing.T) {
 
 	writeCommittedData(t, s, 0, 1, 1)
 
-	wTxn := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &wTxn, 2)
+	wTxn := writeTestData(t, s, 2, nil, 1)
+	prepareTestTxn(t, s, &wTxn, 5, nil)
 
 	readTestData(t, s, 2, nil, 1)
 }
@@ -181,11 +191,11 @@ func TestWaitReadByCommittingTxn(t *testing.T) {
 
 	writeCommittedData(t, s, 0, 1, 1)
 
-	wTxn := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &wTxn, 1)
-	committingTestTxn(t, s, &wTxn, 1)
+	wTxn := writeTestData(t, s, 2, nil, 1)
+	prepareTestTxn(t, s, &wTxn, 5, nil)
+	committingTestTxn(t, s, &wTxn, 6)
 
-	readTestData(t, s, 2, [][]byte{wTxn.ID}, 1)
+	readTestData(t, s, 7, [][]byte{wTxn.ID}, 1)
 }
 
 func TestReadByGTCommittingTxnCanNotWait(t *testing.T) {
@@ -194,11 +204,11 @@ func TestReadByGTCommittingTxnCanNotWait(t *testing.T) {
 
 	writeCommittedData(t, s, 0, 1, 1)
 
-	wTxn := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &wTxn, 2)
-	committingTestTxn(t, s, &wTxn, 2)
+	wTxn := writeTestData(t, s, 2, nil, 1)
+	prepareTestTxn(t, s, &wTxn, 3, nil)
+	committingTestTxn(t, s, &wTxn, 4)
 
-	readTestData(t, s, 2, nil, 1)
+	readTestData(t, s, 3, nil, 1)
 }
 
 func TestReadAfterWaitTxnResloved(t *testing.T) {
@@ -206,10 +216,10 @@ func TestReadAfterWaitTxnResloved(t *testing.T) {
 	s := NewKVTxnStorage(0, l)
 
 	wTxn1 := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &wTxn1, 2)
+	prepareTestTxn(t, s, &wTxn1, 2, nil)
 
 	wTxn2 := writeTestData(t, s, 1, nil, 2)
-	prepareTestTxn(t, s, &wTxn2, 2)
+	prepareTestTxn(t, s, &wTxn2, 2, nil)
 
 	_, rs := readTestData(t, s, 5, [][]byte{wTxn1.ID, wTxn2.ID}, 1, 2)
 	_, err := rs.Read()
@@ -229,7 +239,7 @@ func TestRecovery(t *testing.T) {
 	s := NewKVTxnStorage(0, l)
 
 	prepareTxn := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &prepareTxn, 2)
+	prepareTestTxn(t, s, &prepareTxn, 2, nil)
 	checkLog(t, l, 0, prepareTxn, 1)
 
 	committedTxn := writeTestData(t, s, 1, nil, 2)
@@ -237,13 +247,13 @@ func TestRecovery(t *testing.T) {
 	checkLog(t, l, 1, committedTxn, 2)
 
 	committedAndPreparedTxn := writeTestData(t, s, 1, nil, 3)
-	prepareTestTxn(t, s, &committedAndPreparedTxn, 2)
+	prepareTestTxn(t, s, &committedAndPreparedTxn, 2, nil)
 	checkLog(t, l, 2, committedAndPreparedTxn, 3)
 	commitTestTxn(t, s, &committedAndPreparedTxn, 3, nil)
 	checkLog(t, l, 3, committedAndPreparedTxn)
 
 	committingTxn := writeTestData(t, s, 1, nil, 4)
-	prepareTestTxn(t, s, &committingTxn, 2)
+	prepareTestTxn(t, s, &committingTxn, 2, nil)
 	checkLog(t, l, 4, committingTxn, 4)
 	committingTestTxn(t, s, &committingTxn, 3)
 	checkLog(t, l, 5, committingTxn)
@@ -266,9 +276,9 @@ func TestRecovery(t *testing.T) {
 	assert.Equal(t, 6, len(txns))
 }
 
-func prepareTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64) {
+func prepareTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64, err error) {
 	wTxn.PreparedTS = newTimestamp(ts)
-	assert.NoError(t, s.Prepare(*wTxn))
+	assert.Equal(t, err, s.Prepare(*wTxn))
 	wTxn.Status = txn.TxnStatus_Prepared
 }
 
