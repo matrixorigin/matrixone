@@ -4,17 +4,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/tfs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/adaptors"
-	"io/fs"
 	"os"
 
-	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type Writer struct {
-	fs tfs.FS
+	fs    tfs.FS
+	block blockFile
 }
 
 func NewWriter(fs tfs.FS) *Writer {
@@ -26,16 +25,14 @@ func NewWriter(fs tfs.FS) *Writer {
 func (w *Writer) WriteABlkColumn(
 	version uint64,
 	id *common.ID,
-	column containers.Vector) (info fs.FileInfo, err error) {
+	column containers.Vector) (info common.FileInfo, err error) {
 	name := EncodeColBlkNameWithVersion(id, version, w.fs)
 	f, err := w.fs.OpenFile(name, os.O_CREATE)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	if info, err = f.Stat(); err != nil {
-		return
-	}
+	info = f.Stat()
 	writerBuffer := adaptors.NewBuffer(nil)
 	defer writerBuffer.Close()
 	if _, err = column.WriteTo(writerBuffer); err != nil {
@@ -50,8 +47,8 @@ func (w *Writer) WriteABlkColumn(
 func (w *Writer) WriteABlkColumns(
 	version uint64,
 	id *common.ID,
-	columns *containers.Batch) (infos []fs.FileInfo, err error) {
-	var info fs.FileInfo
+	columns *containers.Batch) (infos []common.FileInfo, err error) {
+	var info common.FileInfo
 	for colIdx := range columns.Attrs {
 		colId := *id
 		colId.Idx = uint16(colIdx)
@@ -66,8 +63,7 @@ func (w *Writer) WriteABlkColumns(
 func (w *Writer) WriteBlockColumn(
 	version uint64,
 	id *common.ID,
-	column *movec.Vector,
-) (err error) {
+	column *vector.Vector) (err error) {
 	name := EncodeColBlkNameWithVersion(id, version, w.fs)
 	f, err := w.fs.OpenFile(name, os.O_CREATE)
 	if err != nil {
@@ -85,16 +81,69 @@ func (w *Writer) WriteBlockColumn(
 func (w *Writer) WriteUpdates(
 	version uint64,
 	id *common.ID,
-	view *model.BlockView) (err error) {
-	// TODO
+	data []byte) (err error) {
+	name := EncodeUpdateNameWithVersion(id, version, w.fs)
+	f, err := w.fs.OpenFile(name, os.O_CREATE)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, err = f.Write(data)
 	return
 }
 
 func (w *Writer) WriteDeletes(
 	version uint64,
 	id *common.ID,
-	view *model.BlockView) (err error) {
-	// TODO
+	data []byte) (err error) {
+	name := EncodeDeleteNameWithVersion(id, version, w.fs)
+	f, err := w.fs.OpenFile(name, os.O_CREATE)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, err = f.Write(data)
+	return
+}
+
+func (w *Writer) WriteIndexMeta(
+	id *common.ID,
+	data []byte) (err error) {
+	name := EncodeMetaIndexName(id, w.fs)
+	f, err := w.fs.OpenFile(name, os.O_CREATE)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, err = f.Write(data)
+	return
+}
+
+func (w *Writer) WriteIndex(
+	id *common.ID,
+	idx int,
+	data []byte) (err error) {
+	name := EncodeIndexName(id, idx, w.fs)
+	f, err := w.fs.OpenFile(name, os.O_CREATE)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, err = f.Write(data)
+	return
+}
+
+func (w *Writer) WriteData(
+	version uint64,
+	id *common.ID,
+	data []byte) (err error) {
+	name := EncodeColBlkNameWithVersion(id, version, w.fs)
+	f, err := w.fs.OpenFile(name, os.O_CREATE)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, err = f.Write(data)
 	return
 }
 
@@ -103,7 +152,7 @@ func (w *Writer) WriteZonemapIndexFromSource(
 	cols []int,
 	indexT catalog.IndexT,
 	id *common.ID,
-	source *movec.Vector) (err error) {
+	source *vector.Vector) (err error) {
 	// TODO
 	return
 }

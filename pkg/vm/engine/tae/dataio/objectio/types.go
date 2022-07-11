@@ -47,9 +47,9 @@ func EncodeColBlkNameWithVersion(id *common.ID, version uint64, fs tfs.FS) (name
 	return
 }
 
-func EncodeIndexName(id *common.ID, fs tfs.FS) (name string) {
+func EncodeIndexName(id *common.ID, idx int, fs tfs.FS) (name string) {
 	dir := EncodeDir(id)
-	basename := fmt.Sprintf("%d.%s", id.Idx, ExtensionName(IndexExt))
+	basename := fmt.Sprintf("%d-%d.%s", id.Idx, idx, ExtensionName(IndexExt))
 	name = filepath.Join(dir, basename)
 	return
 }

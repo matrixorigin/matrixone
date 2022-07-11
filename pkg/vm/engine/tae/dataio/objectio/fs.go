@@ -4,7 +4,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/tfs"
-	"io/fs"
 	"os"
 	"strings"
 	"sync"
@@ -58,13 +57,10 @@ func (o *ObjectFS) OpenFile(name string, flag int) (tfs.File, error) {
 	return file, nil
 }
 
-func (o *ObjectFS) ReadDir(dir string) ([]fs.FileInfo, error) {
-	fileInfos := make([]fs.FileInfo, 0)
+func (o *ObjectFS) ReadDir(dir string) ([]common.FileInfo, error) {
+	fileInfos := make([]common.FileInfo, 0)
 	entry := o.dirs[dir]
-	info, err := entry.Stat()
-	if err != nil {
-		return nil, err
-	}
+	info := entry.Stat()
 	fileInfos = append(fileInfos, info)
 	return fileInfos, nil
 }

@@ -1,14 +1,15 @@
 package tfs
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io"
-	"io/fs"
 )
 
 type File interface {
-	fs.File
+	common.IVFile
 	io.Writer
 	Sync() error
+	Close() error
 }
 
 type MountInfo struct {
@@ -21,7 +22,7 @@ type MountFsFuncT = func(name string) (FS, error)
 
 type FS interface {
 	OpenFile(name string, flag int) (File, error)
-	ReadDir(dir string) ([]fs.FileInfo, error)
+	ReadDir(dir string) ([]common.FileInfo, error)
 	Remove(name string) error
 	RemoveAll(dir string) error
 	MountInfo() *MountInfo

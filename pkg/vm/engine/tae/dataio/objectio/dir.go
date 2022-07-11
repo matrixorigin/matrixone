@@ -3,7 +3,6 @@ package objectio
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/tfs"
-	"io/fs"
 	"os"
 )
 
@@ -30,14 +29,14 @@ func openObjectDir(fs *ObjectFS, name string) *ObjectDir {
 	return file
 }
 
-func (d *ObjectDir) Stat() (fs.FileInfo, error) {
+func (d *ObjectDir) Stat() common.FileInfo {
 	d.inode.mutex.RLock()
 	defer d.inode.mutex.RUnlock()
 	stat := &objectFileStat{}
 	stat.size = int64(len(d.nodes))
 	stat.dataSize = int64(len(d.nodes))
 	stat.oType = d.inode.typ
-	return stat, nil
+	return stat
 }
 
 func (d *ObjectDir) Read(bytes []byte) (int, error) {
@@ -82,4 +81,8 @@ func (d *ObjectDir) OpenFile(fs *ObjectFS, name string) tfs.File {
 		d.nodes[name] = file
 	}
 	return file
+}
+
+func (d *ObjectDir) GetFileType() common.FileType {
+	return common.DiskFile
 }

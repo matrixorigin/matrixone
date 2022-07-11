@@ -15,11 +15,14 @@
 package objectio
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io/fs"
 	"time"
 )
 
 type objectFileStat struct {
+	common.FileInfo
 	name     string
 	size     int64
 	dataSize int64
@@ -45,6 +48,8 @@ func (stat *objectFileStat) Sys() any {
 	return nil
 }
 
-func (stat *objectFileStat) Name() string    { return stat.name }
-func (stat *objectFileStat) Size() int64     { return stat.size }
-func (stat *objectFileStat) DataSize() int64 { return stat.dataSize }
+func (stat *objectFileStat) Name() string      { return stat.name }
+func (stat *objectFileStat) Size() int64       { return stat.size }
+func (stat *objectFileStat) DataSize() int64   { return stat.dataSize }
+func (stat *objectFileStat) OriginSize() int64 { return stat.size }
+func (stat *objectFileStat) CompressAlgo() int { return compress.None }

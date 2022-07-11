@@ -15,144 +15,97 @@
 package objectio
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
+	"os"
 )
 
 type columnBlock struct {
 	common.RefHelper
 	block   *blockFile
 	ts      uint64
-	indexes []*indexFile
-	updates *updatesFile
-	data    *dataFile
-	col     int
+	indexes int
+	id      *common.ID
 }
 
 func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
+	cId := &common.ID{
+		SegmentID: block.id.SegmentID,
+		BlockID:   block.id.BlockID,
+		Idx:       uint16(col),
+	}
 	cb := &columnBlock{
 		block:   block,
-		indexes: make([]*indexFile, indexCnt),
-		col:     col,
+		indexes: indexCnt,
+		id:      cId,
 	}
-	for i := range cb.indexes {
-		cb.indexes[i] = newIndex(cb)
-		file, err := cb.block.seg.GetFs().OpenFile(fmt.Sprintf("%d/%d_%d_%d.idx", cb.block.id, cb.col, cb.block.id, i), os.O_CREATE)
-		if err != nil {
-			panic(any(err))
-		}
-		cb.indexes[i].dataFile.file = append(cb.indexes[i].dataFile.file, file)
-	}
-	cb.updates = newUpdates(cb)
-	cb.data = newData(cb)
 	cb.OnZeroCB = cb.close
 	cb.Ref()
 	return cb
 }
 
-func (cb *columnBlock) AddIndex(idx int) {
-	idxCnt := len(cb.indexes)
-	if idx > idxCnt {
-		for i := idxCnt; i < idx; i++ {
-			cb.indexes = append(cb.indexes, newIndex(cb))
-		}
-	}
-}
-
 func (cb *columnBlock) WriteTS(ts uint64) (err error) {
 	cb.ts = ts
-	block, err := cb.block.seg.GetFs().OpenFile(
-		fmt.Sprintf("%d/%d_%d_%d.blk", cb.block.id, cb.col, cb.block.id, ts),
-		os.O_CREATE)
-	if err != nil {
-		return err
-	}
-	cb.data.SetFile(
-		block,
-		uint32(len(cb.block.columns)),
-		uint32(len(cb.indexes)))
-	update, err := cb.block.seg.GetFs().OpenFile(
-		fmt.Sprintf("%d/%d_%d_%d.update", cb.block.id, cb.col, cb.block.id, ts),
-		os.O_CREATE)
-	if err != nil {
-		return err
-	}
-	cb.updates.SetFile(
-		update,
-		uint32(len(cb.block.columns)),
-		uint32(len(cb.indexes)))
 	return
 }
 
 func (cb *columnBlock) WriteData(buf []byte) (err error) {
-	_, err = cb.data.Write(buf)
-	return
+	return cb.block.writer.WriteData(cb.ts, cb.id, buf)
 }
 
 func (cb *columnBlock) WriteUpdates(buf []byte) (err error) {
-	_, err = cb.updates.Write(buf)
-	return
+	return cb.block.writer.WriteUpdates(cb.ts, cb.id, buf)
 }
 
 func (cb *columnBlock) WriteIndex(idx int, buf []byte) (err error) {
-	if idx >= len(cb.indexes) {
-		err = file.ErrInvalidParam
-		return
-	}
-	vfile := cb.indexes[idx]
-	_, err = vfile.Write(buf)
-	return
+	return cb.block.writer.WriteIndex(cb.id, idx, buf)
 }
 
 func (cb *columnBlock) ReadTS() uint64 { return cb.ts }
 
 func (cb *columnBlock) ReadData(buf []byte) (err error) {
-	_, err = cb.data.Read(buf)
 	return
 }
 
 func (cb *columnBlock) ReadUpdates(buf []byte) (err error) {
-	_, err = cb.updates.Read(buf)
 	return
 }
 
 func (cb *columnBlock) ReadIndex(idx int, buf []byte) (err error) {
-	if idx >= len(cb.indexes) {
-		err = file.ErrInvalidParam
-		return
-	}
-	vfile := cb.indexes[idx]
-	_, err = vfile.Read(buf)
 	return
 }
 
 func (cb *columnBlock) GetDataFileStat() (stat common.FileInfo) {
-	return cb.data.stat
+	return nil
 }
 
 func (cb *columnBlock) OpenIndexFile(idx int) (vfile common.IRWFile, err error) {
-	if idx >= len(cb.indexes) {
-		err = file.ErrInvalidParam
+	name := EncodeIndexName(cb.id, idx, nil)
+	vfile, err = cb.block.seg.fs.OpenFile(name, os.O_RDWR)
+	if err != nil {
 		return
 	}
-	vfile = cb.indexes[idx]
 	vfile.Ref()
 	return
 }
 
 func (cb *columnBlock) OpenUpdateFile() (vfile common.IRWFile, err error) {
-	cb.updates.Ref()
-	vfile = cb.updates
+	name := EncodeUpdateNameWithVersion(cb.id, cb.ts, nil)
+	vfile, err = cb.block.seg.fs.OpenFile(name, os.O_RDWR)
+	if err != nil {
+		return
+	}
+	vfile.Ref()
 	return
 }
 
 func (cb *columnBlock) OpenDataFile() (vfile common.IRWFile, err error) {
-	cb.data.Ref()
-	vfile = cb.data
+	name := EncodeColBlkNameWithVersion(cb.id, cb.ts, nil)
+	vfile, err = cb.block.seg.fs.OpenFile(name, os.O_RDWR)
+	if err != nil {
+		return
+	}
+	vfile.Ref()
 	return
 }
 
@@ -172,12 +125,4 @@ func (cb *columnBlock) close() {
 
 func (cb *columnBlock) Destroy() {
 	logutil.Infof("Destroying Block %d Col @ TS %d", cb.block.id, cb.ts)
-	cb.data.Destroy()
-	cb.data = nil
-	for _, index := range cb.indexes {
-		index.Destroy()
-	}
-	cb.indexes = nil
-	cb.updates.Destroy()
-	cb.updates = nil
 }
