@@ -12,13 +12,14 @@ import (
 )
 
 type Reader struct {
-	block blockFile
+	block *blockFile
 	fs    tfs.FS
 }
 
-func NewReader(fs tfs.FS) *Reader {
+func NewReader(fs tfs.FS, block *blockFile) *Reader {
 	return &Reader{
-		fs: fs,
+		fs:    fs,
+		block: block,
 	}
 }
 
@@ -58,6 +59,20 @@ func (r *Reader) LoadDeletes(id *common.ID) (mask *roaring.Bitmap, err error) {
 	}
 	mask = roaring.New()
 	err = mask.UnmarshalBinary(node.Buf[:size])
+	return
+}
+
+func (r *Reader) Read(
+	version uint64,
+	id *common.ID,
+	data []byte) (err error) {
+	name := EncodeColBlkNameWithVersion(id, version, r.fs)
+	f, err := r.fs.OpenFile(name, os.O_RDWR)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, err = f.Read(data)
 	return
 }
 

@@ -45,9 +45,9 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 		seg:     seg,
 		id:      blockID,
 		columns: make([]*columnBlock, colCnt),
-		writer:  NewWriter(seg.fs),
-		reader:  NewReader(seg.fs),
 	}
+	bf.reader = NewReader(seg.fs, bf)
+	bf.writer = NewWriter(seg.fs)
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
 		cnt := 0
