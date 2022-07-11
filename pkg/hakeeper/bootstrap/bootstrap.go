@@ -58,6 +58,11 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 	dnStores := dnStoresSortedByTick(dn.Stores)
 
 	for _, shardRecord := range bm.cluster.LogShards {
+		// skip HAKeeper shard
+		if shardRecord.ShardID == 0 {
+			continue
+		}
+
 		if shardRecord.NumberOfReplicas > uint64(len(logStores)) {
 			return nil, errors.New("not enough log stores")
 		}
@@ -123,13 +128,10 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 }
 
 func (bm *Manager) CheckBootstrap(log pb.LogState) bool {
-	for _, shardInfo := range log.Shards {
-		var shardRecord metadata.LogShardRecord
-		for _, record := range bm.cluster.LogShards {
-			if record.ShardID == shardInfo.ShardID {
-				shardRecord = record
-				break
-			}
+	for _, shardRecord := range bm.cluster.LogShards {
+		shardInfo, ok := log.Shards[shardRecord.ShardID]
+		if !ok {
+			return false
 		}
 
 		if uint64(len(shardInfo.Replicas))*2 <= shardRecord.NumberOfReplicas {
