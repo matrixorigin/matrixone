@@ -20,6 +20,8 @@ import (
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
 	"github.com/stretchr/testify/assert"
+
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 func TestGetLeaseHistory(t *testing.T) {
@@ -81,23 +83,16 @@ func TestTruncateLeaseHistory(t *testing.T) {
 func TestGetSetLeaseHolderCmd(t *testing.T) {
 	cmd := getSetLeaseHolderCmd(100)
 	assert.True(t, isSetLeaseHolderUpdate(cmd))
-	cmd2 := getSetTruncatedIndexCmd(200)
+	cmd2 := getSetTruncatedLsnCmd(200)
 	assert.False(t, isSetLeaseHolderUpdate(cmd2))
-}
-
-func TestGetSetTruncatedIndexCmd(t *testing.T) {
-	cmd := getSetTruncatedIndexCmd(1234)
-	assert.True(t, isSetTruncatedIndexUpdate(cmd))
-	cmd2 := getSetLeaseHolderCmd(1234)
-	assert.False(t, isSetTruncatedIndexUpdate(cmd2))
 }
 
 func TestIsUserUpdate(t *testing.T) {
 	cmd := make([]byte, headerSize+8+1)
-	binaryEnc.PutUint16(cmd, userEntryTag)
+	binaryEnc.PutUint32(cmd, uint32(pb.UserEntryUpdate))
 	assert.True(t, isUserUpdate(cmd))
 	cmd2 := getSetLeaseHolderCmd(1234)
-	cmd3 := getSetTruncatedIndexCmd(200)
+	cmd3 := getSetTruncatedLsnCmd(200)
 	assert.False(t, isUserUpdate(cmd2))
 	assert.False(t, isUserUpdate(cmd3))
 }
@@ -138,7 +133,7 @@ func TestDNLeaseHolderCanBeUpdated(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, uint64(1000), v)
 
-	cmd = getSetTruncatedIndexCmd(110)
+	cmd = getSetTruncatedLsnCmd(110)
 	e = sm.Entry{Cmd: cmd}
 	result, err = tsm.Update(e)
 	assert.Equal(t, sm.Result{}, result)
@@ -148,20 +143,20 @@ func TestDNLeaseHolderCanBeUpdated(t *testing.T) {
 }
 
 func TestTruncatedIndexCanBeUpdated(t *testing.T) {
-	cmd := getSetTruncatedIndexCmd(200)
+	cmd := getSetTruncatedLsnCmd(200)
 	tsm := newStateMachine(1, 2).(*stateMachine)
 	e := sm.Entry{Cmd: cmd}
 	result, err := tsm.Update(e)
 	assert.Equal(t, sm.Result{}, result)
 	assert.Nil(t, err)
 
-	cmd2 := getSetTruncatedIndexCmd(220)
+	cmd2 := getSetTruncatedLsnCmd(220)
 	e2 := sm.Entry{Cmd: cmd2}
 	result, err = tsm.Update(e2)
 	assert.Equal(t, sm.Result{}, result)
 	assert.Nil(t, err)
 
-	cmd3 := getSetTruncatedIndexCmd(100)
+	cmd3 := getSetTruncatedLsnCmd(100)
 	e3 := sm.Entry{Cmd: cmd3}
 	result, err = tsm.Update(e3)
 	assert.Equal(t, sm.Result{Value: 220}, result)
@@ -170,7 +165,7 @@ func TestTruncatedIndexCanBeUpdated(t *testing.T) {
 
 func TestStateMachineUserUpdate(t *testing.T) {
 	cmd := make([]byte, headerSize+8+1)
-	binaryEnc.PutUint16(cmd, userEntryTag)
+	binaryEnc.PutUint32(cmd, uint32(pb.UserEntryUpdate))
 	binaryEnc.PutUint64(cmd[headerSize:], uint64(1234))
 
 	tsm := newStateMachine(1, 2).(*stateMachine)
@@ -190,17 +185,27 @@ func TestStateMachineUserUpdate(t *testing.T) {
 	assert.Equal(t, tsm.state.LeaseHolderID, binaryEnc.Uint64(result.Data))
 }
 
+func TestTsoUpdate(t *testing.T) {
+	tsm := newStateMachine(1, 2).(*stateMachine)
+	tsm.state.Tso = 200
+	cmd := getTsoUpdateCmd(100)
+	result, err := tsm.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(200), result.Value)
+	assert.Equal(t, uint64(300), tsm.state.Tso)
+}
+
 func TestStateMachineSnapshot(t *testing.T) {
 	buf := bytes.NewBuffer(nil)
 	tsm := newStateMachine(1, 2).(*stateMachine)
 	tsm.state.LeaseHolderID = 123456
-	tsm.state.TruncatedIndex = 456789
+	tsm.state.TruncatedLsn = 456789
 	assert.Nil(t, tsm.SaveSnapshot(buf, nil, nil))
 
 	tsm2 := newStateMachine(3, 4).(*stateMachine)
 	assert.Nil(t, tsm2.RecoverFromSnapshot(buf, nil, nil))
 	assert.Equal(t, tsm.state.LeaseHolderID, tsm2.state.LeaseHolderID)
-	assert.Equal(t, tsm.state.TruncatedIndex, tsm2.state.TruncatedIndex)
+	assert.Equal(t, tsm.state.TruncatedLsn, tsm2.state.TruncatedLsn)
 	assert.Equal(t, uint64(3), tsm2.shardID)
 	assert.Equal(t, uint64(4), tsm2.replicaID)
 }
@@ -209,14 +214,14 @@ func TestStateMachineLookup(t *testing.T) {
 	tsm := newStateMachine(1, 2).(*stateMachine)
 	tsm.state.Index = 1234
 	tsm.state.LeaseHolderID = 123456
-	tsm.state.TruncatedIndex = 456789
+	tsm.state.TruncatedLsn = 456789
 	v, err := tsm.Lookup(leaseHolderIDQuery{})
 	assert.Nil(t, err)
 	assert.Equal(t, tsm.state.LeaseHolderID, v.(uint64))
 
-	v2, err := tsm.Lookup(truncatedIndexQuery{})
+	v2, err := tsm.Lookup(truncatedLsnQuery{})
 	assert.Nil(t, err)
-	assert.Equal(t, tsm.state.TruncatedIndex, v2.(uint64))
+	assert.Equal(t, tsm.state.TruncatedLsn, v2.(uint64))
 
 	v3, err := tsm.Lookup(indexQuery{})
 	assert.Nil(t, err)

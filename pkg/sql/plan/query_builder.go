@@ -1017,55 +1017,40 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 		return builder.buildTable(stmt[0], ctx)
 	}
 
-	var rightChildId int32
 	leftCtx := NewBindContext(builder, ctx)
-	rightCtx := NewBindContext(builder, ctx)
-
-	nodeId, err := builder.buildTable(stmt[0], leftCtx)
+	leftChildId, err := builder.buildTable(stmt[0], leftCtx)
 	if err != nil {
 		return 0, err
 	}
 
-	rightChildId, err = builder.buildTable(stmt[1], rightCtx)
-	if err != nil {
-		return 0, err
-	}
-
-	nodeId = builder.appendNode(&plan.Node{
-		NodeType: plan.Node_JOIN,
-		Children: []int32{nodeId, rightChildId},
-		JoinType: plan.Node_INNER,
-	}, nil)
-
-	// build the rest table with preNode as join step by step
-	for i := 2; i < len(stmt); i++ {
-		newCtx := NewBindContext(builder, ctx)
-
-		builder.ctxByNode[nodeId] = newCtx
-		err = newCtx.mergeContexts(leftCtx, rightCtx)
+	for i := 1; i < len(stmt); i++ {
+		rightCtx := NewBindContext(builder, ctx)
+		rightChildId, err := builder.buildTable(stmt[i], rightCtx)
 		if err != nil {
 			return 0, err
 		}
 
-		rightCtx = NewBindContext(builder, ctx)
-		rightChildId, err = builder.buildTable(stmt[i], rightCtx)
-		if err != nil {
-			return 0, err
-		}
-
-		nodeId = builder.appendNode(&plan.Node{
+		leftChildId = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeId, rightChildId},
+			Children: []int32{leftChildId, rightChildId},
 			JoinType: plan.Node_INNER,
 		}, nil)
 
-		leftCtx = newCtx
+		if i == len(stmt)-1 {
+			builder.ctxByNode[leftChildId] = ctx
+			err = ctx.mergeContexts(leftCtx, rightCtx)
+		} else {
+			newCtx := NewBindContext(builder, ctx)
+			builder.ctxByNode[leftChildId] = newCtx
+			err = newCtx.mergeContexts(leftCtx, rightCtx)
+			if err != nil {
+				return 0, err
+			}
+			leftCtx = newCtx
+		}
 	}
 
-	builder.ctxByNode[nodeId] = ctx
-	err = ctx.mergeContexts(leftCtx, rightCtx)
-
-	return nodeId, err
+	return leftChildId, err
 }
 
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (nodeId int32, err error) {
@@ -1779,7 +1764,7 @@ func (builder *QueryBuilder) resolveJoinOrder(nodeId int32) int32 {
 			rightCard = leaves[nextSibling].Cost.Card
 
 			children := []int32{nodeId, leaves[nextSibling].NodeId}
-			if leftCard > rightCard {
+			if leftCard < rightCard {
 				children[0], children[1] = children[1], children[0]
 			}
 

@@ -19,12 +19,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -56,8 +58,22 @@ func TestIDAllocatorCapacity(t *testing.T) {
 
 func TestIDAllocatorSet(t *testing.T) {
 	alloc := idAllocator{nextID: 100, lastID: 200}
-	alloc.Set(200, 300)
-	assert.Equal(t, idAllocator{nextID: 200, lastID: 300}, alloc)
+	alloc.Set(hakeeper.K8SIDRangeEnd, hakeeper.K8SIDRangeEnd+100)
+	expected := idAllocator{
+		nextID: hakeeper.K8SIDRangeEnd,
+		lastID: hakeeper.K8SIDRangeEnd + 100,
+	}
+	assert.Equal(t, expected, alloc)
+}
+
+func TestIDAllocatorRejectInvalidSetInput(t *testing.T) {
+	alloc := idAllocator{nextID: 100, lastID: 200}
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("failed to trigger panic")
+		}
+	}()
+	alloc.Set(300, 400)
 }
 
 func TestIDAllocatorNext(t *testing.T) {
@@ -100,18 +116,18 @@ func TestHandleBootstrapFailure(t *testing.T) {
 	s.handleBootstrapFailure()
 }
 
-func runHAKeeperStoreTest(t *testing.T, fn func(*testing.T, *store)) {
+func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T, *store)) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg)
+	store, err := getTestStore(cfg, startLogReplica)
 	assert.NoError(t, err)
 	defer func() {
-		assert.NoError(t, store.Close())
+		assert.NoError(t, store.close())
 	}()
 	peers := make(map[uint64]dragonboat.Target)
-	peers[1] = store.ID()
-	assert.NoError(t, store.StartHAKeeperReplica(1, peers, false))
+	peers[1] = store.id()
+	assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
 	fn(t, store)
 }
 
@@ -121,7 +137,7 @@ func TestGetCheckerState(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
 	}
-	runHAKeeperStoreTest(t, fn)
+	runHAKeeperStoreTest(t, false, fn)
 }
 
 func TestSetInitialClusterInfo(t *testing.T) {
@@ -134,18 +150,18 @@ func TestSetInitialClusterInfo(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
 	}
-	runHAKeeperStoreTest(t, fn)
+	runHAKeeperStoreTest(t, false, fn)
 }
+
+// FIXME: re-enable this test
 
 func TestFailedBootstrap(t *testing.T) {
 	testBootstrap(t, true)
 }
 
-// FIXME: re-enable this test
-/*
 func TestBootstrap(t *testing.T) {
 	testBootstrap(t, false)
-}*/
+}
 
 func testBootstrap(t *testing.T, fail bool) {
 	fn := func(t *testing.T, store *store) {
@@ -159,14 +175,14 @@ func testBootstrap(t *testing.T, fail bool) {
 		m := store.getHeartbeatMessage()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		assert.NoError(t, store.AddLogStoreHeartbeat(ctx, m))
+		assert.NoError(t, store.addLogStoreHeartbeat(ctx, m))
 
 		dnMsg := pb.DNStoreHeartbeat{
-			UUID:   store.ID(),
+			UUID:   uuid.New().String(),
 			Shards: make([]pb.DNShardInfo, 0),
 		}
 		dnMsg.Shards = append(dnMsg.Shards, pb.DNShardInfo{ShardID: 2, ReplicaID: 3})
-		assert.NoError(t, store.AddDNStoreHeartbeat(ctx, dnMsg))
+		assert.NoError(t, store.addDNStoreHeartbeat(ctx, dnMsg))
 
 		_, term, err := store.isLeaderHAKeeper()
 		require.NoError(t, err)
@@ -179,7 +195,7 @@ func testBootstrap(t *testing.T, fail bool) {
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
 		assert.Equal(t, uint64(checkBootstrapInterval), store.bootstrapCheckInterval)
-		assert.NotNil(t, store.bootstrapMgr)
+		require.NotNil(t, store.bootstrapMgr)
 		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
 
 		if fail {
@@ -192,24 +208,35 @@ func testBootstrap(t *testing.T, fail bool) {
 			require.NoError(t, err)
 			assert.Equal(t, pb.HAKeeperBootstrapFailed, state.State)
 		} else {
-			// FIXME: waiting for the bootstrap code to be fixed
-			cb, err := store.GetCommandBatch(ctx, store.ID())
+			cb, err := store.getCommandBatch(ctx, store.id())
 			require.NoError(t, err)
 			require.Equal(t, 1, len(cb.Commands))
 			service := &Service{store: store}
 			service.handleStartReplica(cb.Commands[0])
+			//service.handleStartReplica(cb.Commands[1])
 
-			m := store.getHeartbeatMessage()
-			assert.NoError(t, store.AddLogStoreHeartbeat(ctx, m))
+			for i := 0; i < 100; i++ {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				m := store.getHeartbeatMessage()
+				assert.NoError(t, store.addLogStoreHeartbeat(ctx, m))
 
-			state, err = store.getCheckerState()
-			require.NoError(t, err)
-			store.checkBootstrap(state)
+				state, err = store.getCheckerState()
+				require.NoError(t, err)
+				store.checkBootstrap(state)
 
-			state, err = store.getCheckerState()
-			require.NoError(t, err)
-			assert.Equal(t, pb.HAKeeperRunning, state.State)
+				state, err = store.getCheckerState()
+				require.NoError(t, err)
+				if state.State != pb.HAKeeperRunning {
+					time.Sleep(50 * time.Millisecond)
+				} else {
+					return
+				}
+				if i == 2999 {
+					t.Fatalf("failed to complete bootstrap")
+				}
+			}
 		}
 	}
-	runHAKeeperStoreTest(t, fn)
+	runHAKeeperStoreTest(t, false, fn)
 }

@@ -128,7 +128,7 @@ id	id >= 20200102
 2020-01-01	false	
 2022-01-02	true	
 SELECT id, 1.1 <= '2020-01-01' FROM t_date;
-Can't cast '2020-01-01' from VARCHAR type to DOUBLE type.
+Can't cast '2020-01-01' from VARCHAR type to DECIMAL128 type.
 SELECT id, id = 202020101 FROM t_date;
 id	id = 202020101
 2020-01-01	false	

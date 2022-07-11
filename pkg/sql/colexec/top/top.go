@@ -107,9 +107,9 @@ func (ctr *Container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 		ctr.cmps = make([]compare.Compare, len(bat.Vecs))
 		for i := range ctr.cmps {
 			if pos, ok := mp[i]; ok {
-				ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, ap.Fs[pos].Type == Descending)
+				ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, ap.Fs[pos].Type == Descending)
 			} else {
-				ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, true)
+				ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, true)
 			}
 		}
 	}
