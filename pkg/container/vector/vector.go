@@ -663,6 +663,32 @@ func (v *Vector) Append(w any, m *mheap.Mheap) error {
 		col = append(col, wv)
 		v.Col = col
 		v.Data = v.Data[:(n+1)*8]
+	case types.T_float32:
+		wv := w.(float32)
+		col := v.Col.([]float32)
+		n := len(col)
+		if n+1 >= cap(col) {
+			if err := v.Realloc(4, m); err != nil {
+				return err
+			}
+			col = v.Col.([]float32)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n+1)*4]
+	case types.T_float64:
+		wv := w.(float64)
+		col := v.Col.([]float64)
+		n := len(col)
+		if n+1 >= cap(col) {
+			if err := v.Realloc(8, m); err != nil {
+				return err
+			}
+			col = v.Col.([]float64)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n+1)*8]
 	case types.T_date:
 		wv := w.(types.Date)
 		col := v.Col.([]types.Date)
