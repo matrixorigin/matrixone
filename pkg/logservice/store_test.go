@@ -75,16 +75,18 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 	}()
 }
 
-func getTestStore(cfg Config) (*store, error) {
+func getTestStore(cfg Config, startLogReplica bool) (*store, error) {
 	store, err := newLogStore(cfg)
 	if err != nil {
 		return nil, err
 	}
-	peers := make(map[uint64]dragonboat.Target)
-	peers[2] = store.nh.ID()
-	if err := store.startReplica(1, 2, peers, false); err != nil {
-		store.close()
-		return nil, err
+	if startLogReplica {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[2] = store.nh.ID()
+		if err := store.startReplica(1, 2, peers, false); err != nil {
+			store.close()
+			return nil, err
+		}
 	}
 	return store, nil
 }
@@ -108,7 +110,7 @@ func TestStateMachineCanBeStarted(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg)
+	store, err := getTestStore(cfg, true)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -120,7 +122,7 @@ func TestReplicaCanBeStopped(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg)
+	store, err := getTestStore(cfg, true)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -134,7 +136,7 @@ func runStoreTest(t *testing.T, fn func(*testing.T, *store)) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg)
+	store, err := getTestStore(cfg, true)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())

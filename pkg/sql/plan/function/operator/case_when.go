@@ -167,6 +167,9 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 					return proc.AllocScalarNullVector(t), nil
 				} else {
 					r := proc.AllocScalarVector(t)
+					r.Typ.Precision = thenv.Typ.Precision
+					r.Typ.Width = thenv.Typ.Width
+					r.Typ.Scale = thenv.Typ.Scale
 					r.Col = make([]T, 1)
 					r.Col.([]T)[0] = thencols[0]
 					return r, nil

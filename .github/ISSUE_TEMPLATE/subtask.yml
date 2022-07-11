@@ -2,7 +2,7 @@ name: Subtask
 description: "Propose a subtask for MatrixOne :)"
 title: "[Subtask]: "
 labels:
-  - subtask
+  - kind/subtask
 
 body:
   - type: textarea

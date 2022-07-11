@@ -62,6 +62,10 @@ func GetFixedVectorValues[T any](v *Vector, sz int) []T {
 	return DecodeFixedCol[T](v, sz)
 }
 
+func GenericVectorValues[T any](v *Vector) []T {
+	return v.Col.([]T)
+}
+
 func (v *Vector) FillDefaultValue() {
 	if !nulls.Any(v.Nsp) || len(v.Data) == 0 {
 		return
@@ -491,6 +495,281 @@ func (v *Vector) IsScalarNull() bool {
 // ConstVectorIsNull checks whether a const vector is null
 func (v *Vector) ConstVectorIsNull() bool {
 	return v.Nsp != nil && nulls.Contains(v.Nsp, 0)
+}
+
+func (v *Vector) Free(m *mheap.Mheap) {
+	if v.Data != nil {
+		mheap.Free(m, v.Data)
+	}
+}
+
+func (v *Vector) Realloc(size int, m *mheap.Mheap) error {
+	oldLen := len(v.Data)
+	data, err := mheap.Grow(m, v.Data, int64(cap(v.Data)+size))
+	if err != nil {
+		return err
+	}
+	mheap.Free(m, v.Data)
+	v.Data = data[:oldLen]
+	switch v.Typ.Oid {
+	case types.T_bool:
+		v.Col = encoding.DecodeSlice[bool](v.Data[:len(data)], size)[:oldLen/size]
+	case types.T_int8:
+		v.Col = encoding.DecodeSlice[int8](v.Data[:len(data)], size)[:oldLen/size]
+	case types.T_int16:
+		v.Col = encoding.DecodeSlice[int16](v.Data[:len(data)], size)[:oldLen/size]
+	case types.T_int32:
+		v.Col = encoding.DecodeSlice[int32](v.Data[:len(data)], size)[:oldLen/size]
+	case types.T_int64:
+		v.Col = encoding.DecodeSlice[int64](v.Data[:len(data)], size)[:oldLen/size]
+	case types.T_uint8:
+		v.Col = encoding.DecodeSlice[uint8](v.Data[:len(data)], size)[:oldLen/size]
+	case types.T_uint16:
+		v.Col = encoding.DecodeSlice[uint16](v.Data[:len(data)], size)[:oldLen/size]
+	case types.T_uint32:
+		v.Col = encoding.DecodeSlice[uint32](v.Data[:len(data)], size)[:oldLen/size]
+	case types.T_uint64:
+		v.Col = encoding.DecodeSlice[uint64](v.Data[:len(data)], size)[:oldLen/size]
+	case types.T_date:
+		v.Col = encoding.DecodeSlice[types.Date](v.Data[:len(data)], size)[:oldLen/size]
+	case types.T_datetime:
+		v.Col = encoding.DecodeSlice[types.Datetime](v.Data[:len(data)], size)[:oldLen/size]
+	case types.T_timestamp:
+		v.Col = encoding.DecodeSlice[types.Timestamp](v.Data[:len(data)], size)[:oldLen/size]
+	case types.T_decimal64:
+		v.Col = encoding.DecodeSlice[types.Decimal64](v.Data[:len(data)], size)[:oldLen/size]
+	case types.T_decimal128:
+		v.Col = encoding.DecodeSlice[types.Decimal128](v.Data[:len(data)], size)[:oldLen/size]
+	}
+	return nil
+}
+
+func (v *Vector) Append(w any, m *mheap.Mheap) error {
+	switch v.Typ.Oid {
+	case types.T_bool:
+		wv := w.(bool)
+		col := v.Col.([]bool)
+		n := len(col)
+		if n+1 >= cap(col) {
+			if err := v.Realloc(1, m); err != nil {
+				return err
+			}
+			col = v.Col.([]bool)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n + 1)]
+	case types.T_int8:
+		wv := w.(int8)
+		col := v.Col.([]int8)
+		n := len(col)
+		if n+1 >= cap(col) {
+			if err := v.Realloc(1, m); err != nil {
+				return err
+			}
+			col = v.Col.([]int8)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n+1)*1]
+	case types.T_int16:
+		wv := w.(int16)
+		col := v.Col.([]int16)
+		n := len(col)
+		if n+1 >= cap(col) {
+			if err := v.Realloc(2, m); err != nil {
+				return err
+			}
+			col = v.Col.([]int16)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n+1)*2]
+	case types.T_int32:
+		wv := w.(int32)
+		col := v.Col.([]int32)
+		n := len(col)
+		if n+1 >= cap(col) {
+			if err := v.Realloc(4, m); err != nil {
+				return err
+			}
+			col = v.Col.([]int32)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n+1)*4]
+	case types.T_int64:
+		wv := w.(int64)
+		col := v.Col.([]int64)
+		n := len(col)
+		if n+1 >= cap(col) {
+			if err := v.Realloc(8, m); err != nil {
+				return err
+			}
+			col = v.Col.([]int64)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n+1)*8]
+	case types.T_uint8:
+		wv := w.(uint8)
+		col := v.Col.([]uint8)
+		n := len(col)
+		if n+1 >= cap(col) {
+			if err := v.Realloc(1, m); err != nil {
+				return err
+			}
+			col = v.Col.([]uint8)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n + 1)]
+	case types.T_uint16:
+		wv := w.(uint16)
+		col := v.Col.([]uint16)
+		n := len(col)
+		if n+1 >= cap(col) {
+			if err := v.Realloc(2, m); err != nil {
+				return err
+			}
+			col = v.Col.([]uint16)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n+1)*2]
+	case types.T_uint32:
+		wv := w.(uint32)
+		col := v.Col.([]uint32)
+		n := len(col)
+		if n+1 >= cap(col) {
+			if err := v.Realloc(4, m); err != nil {
+				return err
+			}
+			col = v.Col.([]uint32)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n+1)*4]
+	case types.T_uint64:
+		wv := w.(uint64)
+		col := v.Col.([]uint64)
+		n := len(col)
+		if n+1 >= cap(col) {
+			if err := v.Realloc(8, m); err != nil {
+				return err
+			}
+			col = v.Col.([]uint64)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n+1)*8]
+	case types.T_float32:
+		wv := w.(float32)
+		col := v.Col.([]float32)
+		n := len(col)
+		if n+1 >= cap(col) {
+			if err := v.Realloc(4, m); err != nil {
+				return err
+			}
+			col = v.Col.([]float32)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n+1)*4]
+	case types.T_float64:
+		wv := w.(float64)
+		col := v.Col.([]float64)
+		n := len(col)
+		if n+1 >= cap(col) {
+			if err := v.Realloc(8, m); err != nil {
+				return err
+			}
+			col = v.Col.([]float64)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n+1)*8]
+	case types.T_date:
+		wv := w.(types.Date)
+		col := v.Col.([]types.Date)
+		n := len(col)
+		if n+1 >= cap(col) {
+			if err := v.Realloc(4, m); err != nil {
+				return err
+			}
+			col = v.Col.([]types.Date)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n+1)*4]
+	case types.T_datetime:
+		wv := w.(types.Datetime)
+		col := v.Col.([]types.Datetime)
+		n := len(col)
+		if n+1 >= cap(col) {
+			if err := v.Realloc(8, m); err != nil {
+				return err
+			}
+			col = v.Col.([]types.Datetime)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n+1)*8]
+	case types.T_timestamp:
+		wv := w.(types.Timestamp)
+		col := v.Col.([]types.Timestamp)
+		n := len(col)
+		if n+1 >= cap(col) {
+			if err := v.Realloc(8, m); err != nil {
+				return err
+			}
+			col = v.Col.([]types.Timestamp)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n+1)*8]
+	case types.T_decimal64:
+		wv := w.(types.Decimal64)
+		col := v.Col.([]types.Decimal64)
+		n := len(col)
+		if n+1 >= cap(col) {
+			if err := v.Realloc(8, m); err != nil {
+				return err
+			}
+			col = v.Col.([]types.Decimal64)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n+1)*8]
+	case types.T_decimal128:
+		wv := w.(types.Decimal128)
+		col := v.Col.([]types.Decimal128)
+		n := len(col)
+		if n+1 >= cap(col) {
+			if err := v.Realloc(16, m); err != nil {
+				return err
+			}
+			col = v.Col.([]types.Decimal128)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n+1)*16]
+	case types.T_char, types.T_varchar:
+		wv := w.([]byte)
+		n := len(v.Data)
+		if n+len(wv) >= cap(v.Data) {
+			if err := v.Realloc(n+len(wv)-cap(v.Data)+1, m); err != nil {
+				return err
+			}
+		}
+		col := v.Col.(*types.Bytes)
+		col.Lengths = append(col.Lengths, uint32(len(wv)))
+		col.Offsets = append(col.Offsets, uint32(len(v.Data)))
+		v.Data = append(v.Data, wv...)
+		col.Data = v.Data
+		v.Col = col
+	}
+	return nil
 }
 
 func Reset(v *Vector) {

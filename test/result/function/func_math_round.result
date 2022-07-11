@@ -24,7 +24,7 @@ select round(1.5, -4294967296), round(1.5, 4294967296);
 round(1.5, -4294967296)	round(1.5, 4294967296)
 0	1.5
 select round(1.5, -9223372036854775808), round(1.5, 9223372036854775808);
-Operator 'cast' with parameters [DECIMAL128 BIGINT] will be implemented in future version.
+Can't cast '9223372036854775808' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 CREATE TABLE t1 (a DOUBLE);
 INSERT INTO t1 VALUES (-1.1), (1.1),
 (-1.5), (1.5),
@@ -136,7 +136,7 @@ select round(1.5, -4294967296), round(1.5, 4294967296);
 round(1.5, -4294967296)	round(1.5, 4294967296)
 0	1.5
 select round(1.5, -9223372036854775808), round(1.5, 9223372036854775808);
-Operator 'cast' with parameters [DECIMAL128 BIGINT] will be implemented in future version.
+Can't cast '9223372036854775808' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 select round(1.5, 18446744073709551615);
 Can't cast '18446744073709551615' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 select round(18446744073709551614, -1);
