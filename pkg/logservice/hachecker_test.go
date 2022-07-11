@@ -139,10 +139,10 @@ func TestSetInitialClusterInfo(t *testing.T) {
 }
 
 // FIXME: re-enable this test
-/*
+
 func TestFailedBootstrap(t *testing.T) {
 	testBootstrap(t, true)
-}*/
+}
 
 func TestBootstrap(t *testing.T) {
 	testBootstrap(t, false)
@@ -181,7 +181,7 @@ func testBootstrap(t *testing.T, fail bool) {
 		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
 		assert.Equal(t, uint64(checkBootstrapInterval), store.bootstrapCheckInterval)
 		require.NotNil(t, store.bootstrapMgr)
-		// assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
+		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
 
 		if fail {
 			// keep checking, bootstrap will eventually be set as failed
@@ -195,10 +195,10 @@ func testBootstrap(t *testing.T, fail bool) {
 		} else {
 			cb, err := store.getCommandBatch(ctx, store.id())
 			require.NoError(t, err)
-			require.Equal(t, 2, len(cb.Commands))
+			require.Equal(t, 1, len(cb.Commands))
 			service := &Service{store: store}
 			service.handleStartReplica(cb.Commands[0])
-			service.handleStartReplica(cb.Commands[1])
+			//service.handleStartReplica(cb.Commands[1])
 
 			for i := 0; i < 100; i++ {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)

@@ -711,7 +711,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						} else if field == "false" || field == "0" {
 							cols[rowIdx] = false
 						} else {
-							return errors.New(fmt.Sprintf("the input value '%s' is not bool type", field))
+							return fmt.Errorf("the input value '%s' is not bool type", field)
 						}
 					}
 				case types.T_int8:
@@ -1146,7 +1146,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						} else if field == "false" || field == "0" {
 							cols[i] = false
 						} else {
-							return errors.New(fmt.Sprintf("the input value '%s' is not bool type", field))
+							return fmt.Errorf("the input value '%s' is not bool type", field)
 						}
 					}
 				}
