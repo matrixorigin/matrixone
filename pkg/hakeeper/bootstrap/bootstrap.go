@@ -131,9 +131,6 @@ func (bm *Manager) CheckBootstrap(log pb.LogState) bool {
 				break
 			}
 		}
-		if shardRecord.ShardID == 0 {
-			return false
-		}
 
 		if uint64(len(shardInfo.Replicas))*2 <= shardRecord.NumberOfReplicas {
 			return false

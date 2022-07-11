@@ -193,6 +193,7 @@ func TestHandleCNHeartbeat(t *testing.T) {
 
 func TestGetIDCmd(t *testing.T) {
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	tsm1.state.State = pb.HAKeeperRunning
 	cmd := GetGetIDCmd(100)
 	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
@@ -389,6 +390,10 @@ func TestHandleInitialClusterRequestCmd(t *testing.T) {
 
 	expected := pb.ClusterInfo{
 		LogShards: []metadata.LogShardRecord{
+			{
+				ShardID:          0,
+				NumberOfReplicas: 3,
+			},
 			{
 				ShardID:          1,
 				NumberOfReplicas: 3,

@@ -282,3 +282,47 @@ func TestIssue3814(t *testing.T) {
 		assert.Equal(t, c.expected, err)
 	}
 }
+
+func TestIssue3845(t *testing.T) {
+	cases := []struct {
+		desc string
+
+		cluster pb.ClusterInfo
+		log     pb.LogState
+
+		expected bool
+	}{
+		{
+			desc: "shardID is 0",
+			cluster: pb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          0,
+					NumberOfReplicas: 1,
+				}},
+			},
+			log: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{1: {
+					ShardID:  0,
+					Replicas: map[uint64]string{1: "a"},
+				}},
+				Stores: map[string]pb.LogStoreInfo{"a": {
+					Tick: 0,
+					Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{
+							ShardID:  0,
+							Replicas: map[uint64]string{1: "a"},
+						},
+						ReplicaID: 1,
+					}},
+				}},
+			},
+			expected: true,
+		},
+	}
+
+	for _, c := range cases {
+		bm := NewBootstrapManager(c.cluster)
+		output := bm.CheckBootstrap(c.log)
+		assert.Equal(t, c.expected, output)
+	}
+}

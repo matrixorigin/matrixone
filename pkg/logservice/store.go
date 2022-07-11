@@ -634,7 +634,7 @@ func (l *store) processTruncateLog(ctx context.Context) error {
 
 func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 	m := pb.LogStoreHeartbeat{
-		UUID:           l.cfg.NodeHostID,
+		UUID:           l.id(),
 		RaftAddress:    l.cfg.RaftAddress,
 		ServiceAddress: l.cfg.ServiceAddress,
 		GossipAddress:  l.cfg.GossipAddress,
