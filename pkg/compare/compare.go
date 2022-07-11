@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,116 +15,193 @@
 package compare
 
 import (
-	adates "github.com/matrixorigin/matrixone/pkg/compare/asc/dates"
-	adatetimes "github.com/matrixorigin/matrixone/pkg/compare/asc/datetimes"
-	adecimal128s "github.com/matrixorigin/matrixone/pkg/compare/asc/decimal128s"
-	adecimal64s "github.com/matrixorigin/matrixone/pkg/compare/asc/decimal64s"
-	afloat32s "github.com/matrixorigin/matrixone/pkg/compare/asc/float32s"
-	afloat64s "github.com/matrixorigin/matrixone/pkg/compare/asc/float64s"
-	aint16s "github.com/matrixorigin/matrixone/pkg/compare/asc/int16s"
-	aint32s "github.com/matrixorigin/matrixone/pkg/compare/asc/int32s"
-	aint64s "github.com/matrixorigin/matrixone/pkg/compare/asc/int64s"
-	aint8s "github.com/matrixorigin/matrixone/pkg/compare/asc/int8s"
-	auint16s "github.com/matrixorigin/matrixone/pkg/compare/asc/uint16s"
-	auint32s "github.com/matrixorigin/matrixone/pkg/compare/asc/uint32s"
-	auint64s "github.com/matrixorigin/matrixone/pkg/compare/asc/uint64s"
-	auint8s "github.com/matrixorigin/matrixone/pkg/compare/asc/uint8s"
-	avarchar "github.com/matrixorigin/matrixone/pkg/compare/asc/varchar"
-	ddates "github.com/matrixorigin/matrixone/pkg/compare/desc/dates"
-	ddatetimes "github.com/matrixorigin/matrixone/pkg/compare/desc/datetimes"
-	ddecimal128s "github.com/matrixorigin/matrixone/pkg/compare/desc/decimal128s"
-	ddecimal64s "github.com/matrixorigin/matrixone/pkg/compare/desc/decimal64s"
-	dfloat32s "github.com/matrixorigin/matrixone/pkg/compare/desc/float32s"
-	dfloat64s "github.com/matrixorigin/matrixone/pkg/compare/desc/float64s"
-	dint16s "github.com/matrixorigin/matrixone/pkg/compare/desc/int16s"
-	dint32s "github.com/matrixorigin/matrixone/pkg/compare/desc/int32s"
-	dint64s "github.com/matrixorigin/matrixone/pkg/compare/desc/int64s"
-	dint8s "github.com/matrixorigin/matrixone/pkg/compare/desc/int8s"
-	duint16s "github.com/matrixorigin/matrixone/pkg/compare/desc/uint16s"
-	duint32s "github.com/matrixorigin/matrixone/pkg/compare/desc/uint32s"
-	duint64s "github.com/matrixorigin/matrixone/pkg/compare/desc/uint64s"
-	duint8s "github.com/matrixorigin/matrixone/pkg/compare/desc/uint8s"
-	dvarchar "github.com/matrixorigin/matrixone/pkg/compare/desc/varchar"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func New(typ types.T, desc bool) Compare {
-	switch typ {
+func New(typ types.Type, desc bool) Compare {
+	switch typ.Oid {
+	case types.T_bool:
+		if desc {
+			return newCompare(boolDescCompare[bool], boolCopy[bool])
+		}
+		return newCompare(boolCompare[bool], boolCopy[bool])
 	case types.T_int8:
 		if desc {
-			return dint8s.New()
+			return newCompare(genericDescCompare[int8], genericCopy[int8])
 		}
-		return aint8s.New()
+		return newCompare(genericCompare[int8], genericCopy[int8])
 	case types.T_int16:
 		if desc {
-			return dint16s.New()
+			return newCompare(genericDescCompare[int16], genericCopy[int16])
 		}
-		return aint16s.New()
+		return newCompare(genericCompare[int16], genericCopy[int16])
 	case types.T_int32:
 		if desc {
-			return dint32s.New()
+			return newCompare(genericDescCompare[int32], genericCopy[int32])
 		}
-		return aint32s.New()
+		return newCompare(genericCompare[int32], genericCopy[int32])
 	case types.T_int64:
 		if desc {
-			return dint64s.New()
+			return newCompare(genericDescCompare[int64], genericCopy[int64])
 		}
-		return aint64s.New()
+		return newCompare(genericCompare[int64], genericCopy[int64])
 	case types.T_uint8:
 		if desc {
-			return duint8s.New()
+			return newCompare(genericDescCompare[uint8], genericCopy[uint8])
 		}
-		return auint8s.New()
+		return newCompare(genericCompare[uint8], genericCopy[uint8])
 	case types.T_uint16:
 		if desc {
-			return duint16s.New()
+			return newCompare(genericDescCompare[uint16], genericCopy[uint16])
 		}
-		return auint16s.New()
+		return newCompare(genericCompare[uint16], genericCopy[uint16])
 	case types.T_uint32:
 		if desc {
-			return duint32s.New()
+			return newCompare(genericDescCompare[uint32], genericCopy[uint32])
 		}
-		return auint32s.New()
+		return newCompare(genericCompare[uint32], genericCopy[uint32])
 	case types.T_uint64:
 		if desc {
-			return duint64s.New()
+			return newCompare(genericDescCompare[uint64], genericCopy[uint64])
 		}
-		return auint64s.New()
+		return newCompare(genericCompare[uint64], genericCopy[uint64])
 	case types.T_float32:
 		if desc {
-			return dfloat32s.New()
+			return newCompare(genericDescCompare[float32], genericCopy[float32])
 		}
-		return afloat32s.New()
+		return newCompare(genericCompare[float32], genericCopy[float32])
 	case types.T_float64:
 		if desc {
-			return dfloat64s.New()
+			return newCompare(genericDescCompare[float64], genericCopy[float64])
 		}
-		return afloat64s.New()
-	case types.T_char, types.T_json, types.T_varchar:
-		if desc {
-			return dvarchar.New()
-		}
-		return avarchar.New()
+		return newCompare(genericCompare[float64], genericCopy[float64])
 	case types.T_date:
 		if desc {
-			return ddates.New()
+			return newCompare(genericDescCompare[types.Date], genericCopy[types.Date])
 		}
-		return adates.New()
+		return newCompare(genericCompare[types.Date], genericCopy[types.Date])
 	case types.T_datetime:
 		if desc {
-			return ddatetimes.New()
+			return newCompare(genericDescCompare[types.Datetime], genericCopy[types.Datetime])
 		}
-		return adatetimes.New()
+		return newCompare(genericCompare[types.Datetime], genericCopy[types.Datetime])
+	case types.T_timestamp:
+		if desc {
+			return newCompare(genericDescCompare[types.Timestamp], genericCopy[types.Timestamp])
+		}
+		return newCompare(genericCompare[types.Timestamp], genericCopy[types.Timestamp])
 	case types.T_decimal64:
 		if desc {
-			return ddecimal64s.New()
+			return newCompare(genericDescCompare[types.Decimal64], genericCopy[types.Decimal64])
 		}
-		return adecimal64s.New()
+		return newCompare(genericCompare[types.Decimal64], genericCopy[types.Decimal64])
 	case types.T_decimal128:
 		if desc {
-			return ddecimal128s.New()
+			return newCompare(decimal128DescCompare[types.Decimal128], decimal128Copy[types.Decimal128])
 		}
-		return adecimal128s.New()
+		return newCompare(decimal128Compare[types.Decimal128], decimal128Copy[types.Decimal128])
+	case types.T_char, types.T_varchar:
+		return &strCompare{
+			desc: desc,
+			vs:   make([]*vector.Vector, 2),
+		}
+	}
+	return nil
+}
+
+func boolCompare[T bool](x, y T) int {
+	if x == y {
+		return 0
+	}
+	if !x && y {
+		return -1
+	}
+	return 1
+}
+
+func decimal128Compare[T types.Decimal128](x, y T) int {
+	return int(types.CompareDecimal128Decimal128Aligned(types.Decimal128(x), types.Decimal128(y)))
+}
+
+func genericCompare[T types.Generic](x, y T) int {
+	if x == y {
+		return 0
+	}
+	if x < y {
+		return -1
+	}
+	return 1
+}
+
+func boolDescCompare[T bool](x, y T) int {
+	if x == y {
+		return 0
+	}
+	if !x && y {
+		return 1
+	}
+	return -1
+}
+
+func decimal128DescCompare[T types.Decimal128](x, y T) int {
+	return int(types.CompareDecimal128Decimal128Aligned(types.Decimal128(x), types.Decimal128(y))) * -1
+}
+
+func genericDescCompare[T types.Generic](x, y T) int {
+	if x == y {
+		return 0
+	}
+	if x < y {
+		return 1
+	}
+	return -1
+}
+
+func boolCopy[T bool](vecDst, vecSrc []T, dst, src int64) {
+	vecDst[dst] = vecSrc[src]
+}
+
+func decimal128Copy[T types.Decimal128](vecDst, vecSrc []T, dst, src int64) {
+	vecDst[dst] = vecSrc[src]
+}
+
+func genericCopy[T types.Generic](vecDst, vecSrc []T, dst, src int64) {
+	vecDst[dst] = vecSrc[src]
+}
+
+func newCompare[T any](cmp func(T, T) int, cpy func([]T, []T, int64, int64)) *compare[T] {
+	return &compare[T]{
+		cmp: cmp,
+		cpy: cpy,
+		xs:  make([][]T, 2),
+		ns:  make([]*nulls.Nulls, 2),
+		vs:  make([]*vector.Vector, 2),
+	}
+}
+
+func (c *compare[T]) Vector() *vector.Vector {
+	return c.vs[0]
+}
+
+func (c *compare[T]) Set(idx int, vec *vector.Vector) {
+	c.vs[idx] = vec
+	c.ns[idx] = vec.Nsp
+	c.xs[idx] = vec.Col.([]T)
+}
+
+func (c *compare[T]) Compare(veci, vecj int, vi, vj int64) int {
+	return c.cmp(c.xs[veci][vi], c.xs[vecj][vj])
+}
+
+func (c *compare[T]) Copy(vecSrc, vecDst int, src, dst int64, _ *process.Process) error {
+	if nulls.Contains(c.ns[vecSrc], uint64(src)) {
+		nulls.Add(c.ns[vecDst], uint64(dst))
+	} else {
+		nulls.Del(c.ns[vecDst], uint64(dst))
+		c.cpy(c.xs[vecDst], c.xs[vecSrc], dst, src)
 	}
 	return nil
 }
