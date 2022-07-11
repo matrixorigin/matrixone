@@ -57,7 +57,7 @@ func TestNewBootstrapManager(t *testing.T) {
 
 	for _, c := range cases {
 		bm := NewBootstrapManager(c.cluster)
-		assert.Equal(t, c.expected, bm)
+		assert.Equal(t, c.expected.cluster, bm.cluster)
 	}
 }
 
