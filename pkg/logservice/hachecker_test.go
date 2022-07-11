@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -57,8 +58,22 @@ func TestIDAllocatorCapacity(t *testing.T) {
 
 func TestIDAllocatorSet(t *testing.T) {
 	alloc := idAllocator{nextID: 100, lastID: 200}
-	alloc.Set(200, 300)
-	assert.Equal(t, idAllocator{nextID: 200, lastID: 300}, alloc)
+	alloc.Set(hakeeper.K8SIDRangeEnd, hakeeper.K8SIDRangeEnd+100)
+	expected := idAllocator{
+		nextID: hakeeper.K8SIDRangeEnd,
+		lastID: hakeeper.K8SIDRangeEnd + 100,
+	}
+	assert.Equal(t, expected, alloc)
+}
+
+func TestIDAllocatorRejectInvalidSetInput(t *testing.T) {
+	alloc := idAllocator{nextID: 100, lastID: 200}
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("failed to trigger panic")
+		}
+	}()
+	alloc.Set(300, 400)
 }
 
 func TestIDAllocatorNext(t *testing.T) {

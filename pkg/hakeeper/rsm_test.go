@@ -417,5 +417,5 @@ func TestHandleInitialClusterRequestCmd(t *testing.T) {
 
 	assert.Equal(t, expected, rsm.state.ClusterInfo)
 	assert.Equal(t, pb.HAKeeperBootstrapping, rsm.state.State)
-	assert.Equal(t, uint64(5), rsm.state.NextID)
+	assert.Equal(t, K8SIDRangeEnd, rsm.state.NextID)
 }
