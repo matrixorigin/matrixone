@@ -16,6 +16,7 @@ package json_extract
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/json"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
@@ -37,6 +38,10 @@ func jsonExtract(json *types.Bytes, path *types.Bytes, result *types.Bytes) *typ
 	}
 	return result
 }
-func jsonExtractOne(json, path []byte) []byte {
-	return []byte(fmt.Sprintf("%s: %s", string(json), string(path)))
+func jsonExtractOne(jbytes, pbytes []byte) []byte {
+	bj, err := json.ParseFromByteSlice(jbytes)
+	if err != nil {
+		logutil.Debugf("jsonExtractOne: error:%v", err)
+	}
+	return []byte(fmt.Sprintf("%s: %s", bj.String(), string(pbytes)))
 }

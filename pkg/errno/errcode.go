@@ -99,4 +99,6 @@ const (
 	OperatorIntervention                    = "56000"
 	SystemError                             = "58000"
 	InternalError                           = "XX000"
+	InvalidJsonText                         = "XX001"
+	EmptyJsonText                           = "XX002"
 )
