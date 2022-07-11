@@ -16,36 +16,11 @@ package service
 
 import (
 	"context"
-	"runtime/debug"
-	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/stretchr/testify/assert"
 )
-
-func TestGCWaiter(t *testing.T) {
-	pool := waiterPool
-	defer func() {
-		waiterPool = pool
-	}()
-
-	var c chan txn.TxnStatus
-	var wg sync.WaitGroup
-	wg.Add(1)
-	func() {
-		defer wg.Done()
-		w := acquireWaiter()
-		c = w.c
-		w.close()
-		waiterPool = sync.Pool{}
-	}()
-	wg.Wait()
-
-	debug.FreeOSMemory()
-	_, ok := <-c
-	assert.False(t, ok)
-}
 
 func TestAcquireAndCloseWaiter(t *testing.T) {
 	checker := func(w *waiter) {

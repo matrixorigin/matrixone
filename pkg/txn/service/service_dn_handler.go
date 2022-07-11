@@ -168,10 +168,8 @@ func (s *service) RollbackDNShard(ctx context.Context, request *txn.TxnRequest, 
 	}
 
 	defer func() {
-		if response.Txn.Status == txn.TxnStatus_Aborted {
-			s.removeTxn(txnID)
-			s.releaseTxnContext(txnCtx)
-		}
+		s.removeTxn(txnID)
+		s.releaseTxnContext(txnCtx)
 	}()
 
 	response.Txn = &newTxn
@@ -188,7 +186,6 @@ func (s *service) RollbackDNShard(ctx context.Context, request *txn.TxnRequest, 
 
 	if err := s.storage.Rollback(newTxn); err != nil {
 		response.TxnError = newTAERollbackError(err)
-		return nil
 	}
 
 	newTxn.Status = txn.TxnStatus_Aborted

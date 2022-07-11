@@ -25,6 +25,16 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	rollbackIngoreErrorCodes = map[txn.ErrorCode]struct{}{
+		txn.ErrorCode_TxnNotFound: {},
+	}
+
+	prepareIngoreErrorCodes = map[txn.ErrorCode]struct{}{
+		txn.ErrorCode_TxnNotFound: {},
+	}
+)
+
 func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
 
@@ -230,15 +240,13 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 
 	// get latest txn metadata
 	newTxn = txnCtx.getTxnLocked()
-	if newTxn.PreparedTS.IsEmpty() {
-		s.logger.Fatal("missing prepared timestamp",
-			util.TxnIDFieldWithID(newTxn.ID))
-	}
 	newTxn.CommitTS = newTxn.PreparedTS
 
 	hasError := false
+	var txnErr *txn.TxnError
 	for idx, resp := range responses {
 		if resp.TxnError != nil {
+			txnErr = resp.TxnError
 			hasError = true
 			s.logger.Error("prepare dn failed",
 				util.TxnIDFieldWithID(txnID),
@@ -259,7 +267,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	}
 	if hasError {
 		changeStatus(txn.TxnStatus_Aborted)
-		response.TxnError = newRPCError(err)
+		response.TxnError = txnErr
 		s.startAsyncRollbackTask(newTxn)
 		return nil
 	}
@@ -315,13 +323,13 @@ func (s *service) startAsyncRollbackTask(txnMeta txn.TxnMeta) {
 		requests := make([]txn.TxnRequest, 0, len(txnMeta.DNShards))
 		for _, dn := range txnMeta.DNShards {
 			requests = append(requests, txn.TxnRequest{
-				Txn:            txnMeta,
-				Method:         txn.TxnMethod_Prepare,
-				PrepareRequest: &txn.TxnPrepareRequest{DNShard: dn},
+				Txn:                    txnMeta,
+				Method:                 txn.TxnMethod_RollbackDNShard,
+				RollbackDNShardRequest: &txn.TxnRollbackDNShardRequest{DNShard: dn},
 			})
 		}
 
-		s.parallelSendWithRetry(ctx, "rollback txn", txnMeta, requests)
+		s.parallelSendWithRetry(ctx, "rollback txn", txnMeta, requests, rollbackIngoreErrorCodes)
 	})
 }
 
@@ -359,7 +367,7 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 		ctx, cancel := context.WithTimeout(ctx, time.Duration(math.MaxInt64))
 		defer cancel()
 
-		if len(s.parallelSendWithRetry(ctx, "commit txn", txnMeta, requests)) > 0 {
+		if len(s.parallelSendWithRetry(ctx, "commit txn", txnMeta, requests, rollbackIngoreErrorCodes)) > 0 {
 			if ce := s.logger.Check(zap.DebugLevel, "other dnshards committed"); ce != nil {
 				ce.Write(util.TxnIDFieldWithID(txnMeta.ID))
 			}

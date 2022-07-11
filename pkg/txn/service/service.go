@@ -88,6 +88,7 @@ func NewTxnService(logger *zap.Logger,
 		zombieTimeout: zombieTimeout,
 		recoveryC:     make(chan struct{}),
 		txnC:          make(chan txn.TxnMeta, 16),
+		// transactions:  &sync.Map{},
 	}
 	s.stopper.RunTask(s.gcZombieTxn)
 	return s
@@ -156,11 +157,11 @@ func (s *service) maybeAddTxn(meta txn.TxnMeta) (*txnContext, bool) {
 	return txnCtx, true
 }
 
-func (s *service) removeTxn(id []byte) {
-	s.transactions.Delete(hack.SliceToString(id))
+func (s *service) removeTxn(txnID []byte) {
+	s.transactions.Delete(hack.SliceToString(txnID))
 }
 
-func (s service) getTxnContext(txnID []byte) *txnContext {
+func (s *service) getTxnContext(txnID []byte) *txnContext {
 	id := hack.SliceToString(txnID)
 	v, ok := s.transactions.Load(id)
 	if !ok {
@@ -189,7 +190,7 @@ func (s *service) releaseTxnContext(txnCtx *txnContext) {
 func (s *service) parallelSendWithRetry(ctx context.Context,
 	purpose string,
 	txnMeta txn.TxnMeta,
-	requests []txn.TxnRequest) []txn.TxnResponse {
+	requests []txn.TxnRequest, ignoreTxnErrorCodes map[txn.ErrorCode]struct{}) []txn.TxnResponse {
 	for {
 		select {
 		case <-ctx.Done():
@@ -206,12 +207,15 @@ func (s *service) parallelSendWithRetry(ctx context.Context,
 			hasError := false
 			for idx, resp := range responses {
 				if resp.TxnError != nil {
-					hasError = true
+					_, ok := ignoreTxnErrorCodes[resp.TxnError.Code]
+					if !ok {
+						hasError = true
+					}
 					s.logger.Error("send requests failed, retry later",
 						zap.String("purpose", purpose),
 						util.TxnIDFieldWithID(txnMeta.ID),
 						zap.String("target-dn-shard", txnMeta.DNShards[idx+1].DebugString()),
-						zap.Error(err))
+						zap.String("error", resp.TxnError.DebugString()))
 				}
 			}
 			if !hasError {

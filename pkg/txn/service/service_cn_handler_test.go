@@ -224,15 +224,60 @@ func TestCommitWithMultiDNShards(t *testing.T) {
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 	checkResponses(t, writeTestData(t, sender, 2, wTxn, 2))
 
-	txnCtx := s1.getTxnContext(wTxn.ID)
-	assert.NotNil(t, txnCtx)
-	w := acquireWaiter()
-	assert.True(t, txnCtx.addWaiter(wTxn.ID, w, txn.TxnStatus_Committed))
+	w1 := addTestWaiter(t, s1, wTxn, txn.TxnStatus_Committed)
+	defer w1.close()
+	w2 := addTestWaiter(t, s2, wTxn, txn.TxnStatus_Committed)
+	defer w2.close()
 
 	checkResponses(t, commitWriteData(t, sender, wTxn))
-	status, err := w.wait(context.Background())
-	assert.NoError(t, err)
-	assert.Equal(t, txn.TxnStatus_Committed, status)
+
+	checkWaiter(t, w1, txn.TxnStatus_Committed)
+	checkWaiter(t, w2, txn.TxnStatus_Committed)
+
+	checkData(t, wTxn, s1, 2, 1, true)
+	checkData(t, wTxn, s2, 2, 2, true)
+}
+
+func TestCommitWithRollbackIfAnyPrepareFailed(t *testing.T) {
+	sender := newTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	s1 := newTestTxnService(t, 1, sender, newTestClock(1))
+	assert.NoError(t, s1.Start())
+	defer func() {
+		assert.NoError(t, s1.Close())
+	}()
+	s2 := newTestTxnService(t, 2, sender, newTestClock(1))
+	assert.NoError(t, s2.Start())
+	defer func() {
+		assert.NoError(t, s2.Close())
+	}()
+
+	sender.addTxnService(s1)
+	sender.addTxnService(s2)
+
+	wTxn1 := newTestTxn(1, 1, 1)
+	writeTestData(t, sender, 1, wTxn1, 1)
+	checkResponses(t, commitWriteData(t, sender, wTxn1)) // commit at 2
+
+	wTxn := newTestTxn(1, 1, 1, 2)
+	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
+	checkResponses(t, writeTestData(t, sender, 2, wTxn, 2))
+
+	w1 := addTestWaiter(t, s1, wTxn, txn.TxnStatus_Aborted)
+	defer w1.close()
+	w2 := addTestWaiter(t, s2, wTxn, txn.TxnStatus_Aborted)
+	defer w2.close()
+
+	checkResponses(t, commitWriteData(t, sender, wTxn), newTAEPrepareError(storage.ErrWriteConflict))
+
+	checkWaiter(t, w1, txn.TxnStatus_Aborted)
+	checkWaiter(t, w2, txn.TxnStatus_Aborted)
+
+	checkData(t, wTxn, s1, 2, 2, false)
+	checkData(t, wTxn, s2, 2, 2, false)
 }
 
 func writeTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, wTxn txn.TxnMeta, keys ...byte) []txn.TxnResponse {
@@ -277,4 +322,44 @@ func checkResponses(t *testing.T, response []txn.TxnResponse, expectErrors ...*t
 	for idx, resp := range response {
 		assert.Equal(t, expectErrors[idx], resp.TxnError)
 	}
+}
+
+func checkData(t *testing.T, wTxn txn.TxnMeta, s *service, commitTS int64, k byte, committed bool) {
+	assert.Nil(t, s.getTxnContext(wTxn.ID))
+
+	kv := s.storage.(*mem.KVTxnStorage)
+
+	if committed {
+		v, ok := kv.GetCommittedKV().Get(getTestKey(k), newTestTimestamp(commitTS))
+		assert.True(t, ok)
+		assert.Equal(t, getTestValue(k, wTxn), v)
+	} else {
+		n := 0
+		kv.GetCommittedKV().AscendRange(getTestKey(k),
+			newTestTimestamp(commitTS).Next(),
+			newTestTimestamp(math.MaxInt64), func(b []byte, t timestamp.Timestamp) {
+				n++
+			})
+		assert.Equal(t, 0, n)
+	}
+
+	v, ok := kv.GetUncommittedKV().Get(getTestKey(k))
+	assert.False(t, ok)
+	assert.Empty(t, v)
+
+	assert.Nil(t, kv.GetUncommittedTxn(wTxn.ID))
+}
+
+func addTestWaiter(t *testing.T, s *service, wTxn txn.TxnMeta, status txn.TxnStatus) *waiter {
+	txnCtx := s.getTxnContext(wTxn.ID)
+	assert.NotNil(t, txnCtx)
+	w := acquireWaiter()
+	assert.True(t, txnCtx.addWaiter(wTxn.ID, w, status))
+	return w
+}
+
+func checkWaiter(t *testing.T, w *waiter, expectStatus txn.TxnStatus) {
+	status, err := w.wait(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, expectStatus, status)
 }

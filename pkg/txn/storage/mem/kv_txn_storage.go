@@ -247,6 +247,11 @@ func (kv *KVTxnStorage) Prepare(txnMeta txn.TxnMeta) error {
 		return storage.ErrMissingTxn
 	}
 
+	writeKeys := kv.getWriteKeysLocked(txnMeta)
+	if kv.hasConflict(txnMeta.SnapshotTS, txnMeta.PreparedTS.Next(), writeKeys) {
+		return storage.ErrWriteConflict
+	}
+
 	log := kv.getLogWithDataLocked(txnMeta)
 	log.Txn.Status = txn.TxnStatus_Prepared
 	lsn, err := kv.saveLog(log)
@@ -291,7 +296,7 @@ func (kv *KVTxnStorage) Commit(txnMeta txn.TxnMeta) error {
 	}
 
 	writeKeys := kv.getWriteKeysLocked(txnMeta)
-	if kv.hasConflict(txnMeta, writeKeys) {
+	if kv.hasConflict(txnMeta.SnapshotTS, txnMeta.CommitTS.Next(), writeKeys) {
 		return storage.ErrWriteConflict
 	}
 
@@ -360,10 +365,10 @@ func (kv *KVTxnStorage) getLogWithDataLocked(txnMeta txn.TxnMeta) *KVLog {
 	return log
 }
 
-func (kv *KVTxnStorage) hasConflict(txnMeta txn.TxnMeta, writeKeys [][]byte) bool {
+func (kv *KVTxnStorage) hasConflict(from, to timestamp.Timestamp, writeKeys [][]byte) bool {
 	for _, key := range writeKeys {
 		n := 0
-		kv.committed.AscendRange(key, txnMeta.SnapshotTS, txnMeta.CommitTS.Next(), func(b []byte, t timestamp.Timestamp) {
+		kv.committed.AscendRange(key, from, to, func(b []byte, t timestamp.Timestamp) {
 			n++
 		})
 		if n > 0 {
