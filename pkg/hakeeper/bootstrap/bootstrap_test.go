@@ -188,6 +188,18 @@ func TestCheckBootstrap(t *testing.T) {
 			},
 			expected: false,
 		},
+		{
+			desc: "shard 1 not exists in log state",
+			cluster: pb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{
+					{ShardID: 1, NumberOfReplicas: 3},
+				},
+			},
+			log: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{},
+			},
+			expected: false,
+		},
 	}
 
 	for i, c := range cases {
@@ -301,7 +313,7 @@ func TestIssue3845(t *testing.T) {
 				}},
 			},
 			log: pb.LogState{
-				Shards: map[uint64]pb.LogShardInfo{1: {
+				Shards: map[uint64]pb.LogShardInfo{0: {
 					ShardID:  0,
 					Replicas: map[uint64]string{1: "a"},
 				}},
