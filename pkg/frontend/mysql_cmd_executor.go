@@ -17,15 +17,16 @@ package frontend
 import (
 	goErrors "errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"os"
 	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -632,7 +633,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
 					vs := vec.Col.([]types.Decimal128)
 					row[i] = vs[rowIndex].Decimal128ToString(scale)
-					fmt.Println(row[i])
 				} else {
 					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
 						row[i] = nil
@@ -1916,7 +1916,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 	case COM_INIT_DB:
 		var dbname = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
-		query := "use " + dbname
+		query := "use `" + dbname + "`"
 		err := mce.doComQuery(query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_INIT_DB, err)

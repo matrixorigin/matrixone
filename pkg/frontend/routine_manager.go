@@ -101,7 +101,10 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	protocol := routine.protocol.(*MysqlProtocolImpl)
 
 	packet, ok := msg.(*Packet)
+
+	protocol.m.Lock()
 	protocol.sequenceId = uint8(packet.SequenceID + 1)
+	protocol.m.Unlock()
 	var seq = protocol.sequenceId
 	if !ok {
 		return errors.New("message is not Packet")
