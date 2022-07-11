@@ -146,7 +146,7 @@ select officeCode,count(officeCode) from employees group by officeCode having co
 officecode	count(officecode)
 1	6
 4	4
-select lastName,firstName from employees where cast(officeCode as unsigned)>5 limit 2 offset 1 order by 1 asc;
+select lastName,firstName from employees where cast(officeCode as unsigned)>5 limit 2 offset 1;
 lastname	firstname
 Bott	Larry
 Jones	Barry
