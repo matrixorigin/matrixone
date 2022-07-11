@@ -14,13 +14,6 @@ TARGET_OS ?=
 TARGET_ARCH ?=
 BVT_BRANCH ?= master
 
-# generate files generated from .template and needs to delete when clean
-GENERATE_OVERLOAD_LOGIC := ./pkg/sql/colexec/extend/overload/and.go ./pkg/sql/colexec/extend/overload/or.go
-GENERATE_OVERLOAD_MATH := ./pkg/sql/colexec/extend/overload/div.go ./pkg/sql/colexec/extend/overload/minus.go ./pkg/sql/colexec/extend/overload/mod.go ./pkg/sql/colexec/extend/overload/plus.go ./pkg/sql/colexec/extend/overload/mult.go 
-GENERATE_OVERLOAD_COMPARE := ./pkg/sql/colexec/extend/overload/eq.go ./pkg/sql/colexec/extend/overload/ge.go ./pkg/sql/colexec/extend/overload/ne.go /pkg/sql/colexec/extend/overload/ge.go ./pkg/sql/colexec/extend/overload/gt.go ./pkg/sql/colexec/extend/overload/le.go ./pkg/sql/colexec/extend/overload/lt.go
-GENERATE_OVERLOAD_OTHERS := ./pkg/sql/colexec/extend/overload/like.go ./pkg/sql/colexec/extend/overload/cast.go
-GENERATE_OVERLOAD_UNARYS := ./pkg/sql/colexec/extend/overload/unaryops.go
-
 # files generated from cmd/generate-config
 # they need to be deleted in cleaning
 CONFIG_CODE_GENERATED := ./pkg/config/system_vars.go ./pkg/config/system_vars_test.go
@@ -37,8 +30,6 @@ config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/g
 	@mv -f cmd/generate-config/system_vars_test.go pkg/config
 
 .PHONY: generate
-generate: pkg/sql/colexec/extend/overload/$(wildcard *.go)
-	@go generate ./pkg/sql/colexec/extend/overload
 
 .PHONY: generate-pb
 generate-pb:
@@ -68,14 +59,24 @@ else
 endif
 endif
 
-# Building mo-server binary for debugging, it uses the latest MatrixCube from master.
+# Building mo-server binary for debugging, "race detector" enabled.
 .PHONY: debug
 debug: generate cmd/db-server/$(wildcard *.go)
-	$(info [Build binary for debug])
-	go get github.com/matrixorigin/matrixcube
-	go mod tidy
-	go build -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
-
+ifeq ($(TARGET_OS)$(TARGET_ARCH), )
+	$(info [Build debug binary])
+	@go build -race -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
+else ifneq ($(TARGET_OS), )
+ifneq ($(TARGET_ARCH), )
+	$(info [Cross Build  debugbinary])
+	$(info $(TARGET_OS))
+	$(info $(TARGET_ARCH))
+	@CGO_ENABLED=1 GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) go build  -race -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
+else
+	$(info [Cross Build debug binary])
+	$(info $(TARGET_OS))
+	@CGO_ENABLED=1 GOOS=$(TARGET_OS) go build  -race -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
+endif
+endif
 
 # Excluding frontend test cases temporarily
 # Argument SKIP_TEST to skip a specific go test
@@ -104,11 +105,6 @@ clean:
 	$(info [Clean up])
 	$(info Clean go test cache)
 	@go clean -testcache
-	@rm -f $(GENERATE_OVERLOAD_LOGIC)
-	@rm -f $(GENERATE_OVERLOAD_MATH)
-	@rm -f $(GENERATE_OVERLOAD_COMPARE)
-	@rm -f $(GENERATE_OVERLOAD_OTHERS)
-	@rm -f $(GENERATE_OVERLOAD_UNARYS)
 	@rm -f $(CONFIG_CODE_GENERATED)
 ifneq ($(wildcard $(BIN_NAME)),)
 	$(info Remove file $(BIN_NAME))

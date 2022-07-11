@@ -15,7 +15,6 @@
 package syshealth
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -175,7 +174,7 @@ func (s *storeSet) shutdownWorkingStores() []*operator.Operator {
 func parseLogStores(logState pb.LogState, currTick uint64) *storeSet {
 	set := newStoreSet(pb.LogService)
 	for id, storeInfo := range logState.Stores {
-		if hakeeper.ExpiredTick(storeInfo.Tick, hakeeper.LogStoreTimeout) < currTick {
+		if util.ExpiredTick(storeInfo.Tick, util.LogStoreTimeout) < currTick {
 			set.expired[util.StoreID(id)] = struct{}{}
 		} else {
 			set.working[util.StoreID(id)] = struct{}{}
@@ -188,7 +187,7 @@ func parseLogStores(logState pb.LogState, currTick uint64) *storeSet {
 func parseDnStores(dnState pb.DNState, currTick uint64) *storeSet {
 	set := newStoreSet(pb.DnService)
 	for id, storeInfo := range dnState.Stores {
-		if hakeeper.ExpiredTick(storeInfo.Tick, hakeeper.DnStoreTimeout) < currTick {
+		if util.ExpiredTick(storeInfo.Tick, util.DnStoreTimeout) < currTick {
 			set.expired[util.StoreID(id)] = struct{}{}
 		} else {
 			set.working[util.StoreID(id)] = struct{}{}

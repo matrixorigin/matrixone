@@ -17,6 +17,9 @@ package frontend
 import (
 	goErrors "errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"os"
 	"runtime/pprof"
 	"sort"
@@ -25,20 +28,14 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile2"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
-
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	compile1 "github.com/matrixorigin/matrixone/pkg/sql/compile"
+	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -913,29 +910,6 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 				}
 			}
 		}
-	} else {
-		if mce.tableInfos == nil || mce.db != dbName {
-			if ses.Pu.ClusterCatalog == nil {
-				return fmt.Errorf("need cluster catalog")
-			}
-			tableInfos, err := ses.Pu.ClusterCatalog.ListTablesByName(dbName)
-			if err != nil {
-				return err
-			}
-
-			mce.db = ses.GetDatabaseName()
-			mce.tableInfos = make(map[string][]ColumnInfo)
-
-			//cache these info in the executor
-			for _, table := range tableInfos {
-				var infos []ColumnInfo
-				for _, column := range table.Columns {
-					infos = append(infos, &aoeColumnInfo{info: column})
-				}
-				mce.tableInfos[table.Name] = infos
-
-			}
-		}
 	}
 
 	cols, ok := mce.tableInfos[tableName]
@@ -1146,6 +1120,7 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 	return mce.doComQuery(sql)
 }
 
+//Note: for pass the compile quickly. We will remove the comments in the future.
 func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	es := explain.NewExplainDefaultOptions()
 
@@ -1205,15 +1180,14 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	session := mce.GetSession()
 	protocol := session.GetMysqlProtocol()
 
-	attrs := plan.BuildExplainResultColumns()
-	columns, err := GetExplainColumns(attrs)
+	explainColName := "QUERY PLAN"
+	columns, err := GetExplainColumns(explainColName)
 	if err != nil {
 		logutil.Errorf("GetColumns from ExplainColumns handler failed, error: %v", err)
 		return err
 	}
-	/*
-		Step 1 : send column count and column definition.
-	*/
+
+	//	Step 1 : send column count and column definition.
 	//send column count
 	colCnt := uint64(len(columns))
 	err = protocol.SendColumnCountPacket(colCnt)
@@ -1226,24 +1200,21 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	for _, c := range columns {
 		mysqlc := c.(Column)
 		session.Mrs.AddColumn(mysqlc)
-		/*
-			mysql COM_QUERY response: send the column definition per column
-		*/
+		//	mysql COM_QUERY response: send the column definition per column
 		err := protocol.SendColumnDefinitionPacket(mysqlc, cmd)
 		if err != nil {
 			return err
 		}
 	}
-	/*
-		mysql COM_QUERY response: End after the column has been sent.
-		send EOF packet
-	*/
+
+	//	mysql COM_QUERY response: End after the column has been sent.
+	//	send EOF packet
 	err = protocol.SendEOFPacketIf(0, 0)
 	if err != nil {
 		return err
 	}
 
-	err = buildMoExplainQuery(attrs, buffer, session, getDataFromPipeline)
+	err = buildMoExplainQuery(explainColName, buffer, session, getDataFromPipeline)
 	if err != nil {
 		return err
 	}
@@ -1255,32 +1226,26 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	return nil
 }
 
-func GetExplainColumns(attrs []*plan.Attribute) ([]interface{}, error) {
-	//attrs := plan.BuildExplainResultColumns()
-	cols := make([]*compile1.Col, len(attrs))
-	for i, attr := range attrs {
-		cols[i] = &compile1.Col{
-			Name: attr.Name,
-			Typ:  attr.Type.Oid,
-		}
+func GetExplainColumns(explainColName string) ([]interface{}, error) {
+	cols := []*plan2.ColDef{
+		{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_varchar)}, Name: explainColName},
 	}
-	//e.resultCols = cols
-	var mysqlCols []interface{} = make([]interface{}, len(cols))
+	columns := make([]interface{}, len(cols))
 	var err error = nil
-	for i, c := range cols {
-		col := new(MysqlColumn)
-		col.SetName(c.Name)
-		err = convertEngineTypeToMysqlType(c.Typ, col)
+	for i, col := range cols {
+		c := new(MysqlColumn)
+		c.SetName(col.Name)
+		err = convertEngineTypeToMysqlType(types.T(col.Typ.Id), c)
 		if err != nil {
 			return nil, err
 		}
-		mysqlCols[i] = col
+		columns[i] = c
 	}
-	return mysqlCols, err
+	return columns, err
 }
 
-func buildMoExplainQuery(attrs []*plan.Attribute, buffer *explain.ExplainDataBuffer, session *Session, fill func(interface{}, *batch.Batch) error) error {
-	bat := batch.New(true, []string{attrs[0].Name})
+func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffer, session *Session, fill func(interface{}, *batch.Batch) error) error {
+	bat := batch.New(true, []string{explainColName})
 	rs := buffer.Lines
 	vs := make([][]byte, len(rs))
 
@@ -1291,7 +1256,7 @@ func buildMoExplainQuery(attrs []*plan.Attribute, buffer *explain.ExplainDataBuf
 		count++
 	}
 	vs = vs[:count]
-	vec := vector.New(attrs[0].Type)
+	vec := vector.New(types.T_varchar.ToType())
 	if err := vector.Append(vec, vs); err != nil {
 		return err
 	}
@@ -1301,54 +1266,6 @@ func buildMoExplainQuery(attrs []*plan.Attribute, buffer *explain.ExplainDataBuf
 	return fill(session, bat)
 }
 
-//----------------------------------------------------------------------------------------------------
-
-type ComputationWrapperImpl struct {
-	exec *compile1.Exec
-}
-
-func NewComputationWrapperImpl(e *compile1.Exec) *ComputationWrapperImpl {
-	return &ComputationWrapperImpl{exec: e}
-}
-
-// GetAst gets ast of the statement
-func (cw *ComputationWrapperImpl) GetAst() tree.Statement {
-	return cw.exec.Statement()
-}
-
-//SetDatabaseName sets the database name
-func (cw *ComputationWrapperImpl) SetDatabaseName(db string) error {
-	return cw.exec.SetSchema(db)
-}
-
-func (cw *ComputationWrapperImpl) GetColumns() ([]interface{}, error) {
-	columns := cw.exec.Columns()
-	var mysqlCols []interface{} = make([]interface{}, len(columns))
-	var err error = nil
-	for i, c := range columns {
-		col := new(MysqlColumn)
-		col.SetName(c.Name)
-		err = convertEngineTypeToMysqlType(c.Typ, col)
-		if err != nil {
-			return nil, err
-		}
-		mysqlCols[i] = col
-	}
-	return mysqlCols, err
-}
-
-func (cw *ComputationWrapperImpl) GetAffectedRows() uint64 {
-	return cw.exec.GetAffectedRows()
-}
-
-func (cw *ComputationWrapperImpl) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return cw.exec, cw.exec.Compile(u, fill)
-}
-
-func (cw *ComputationWrapperImpl) Run(ts uint64) error {
-	return cw.exec.Run(ts)
-}
-
 var _ ComputationWrapper = &TxnComputationWrapper{}
 
 type TxnComputationWrapper struct {
@@ -1356,7 +1273,7 @@ type TxnComputationWrapper struct {
 	plan    *plan2.Plan
 	proc    *process.Process
 	ses     *Session
-	compile *compile2.Compile
+	compile *compile.Compile
 }
 
 func InitTxnComputationWrapper(ses *Session, stmt tree.Statement, proc *process.Process) *TxnComputationWrapper {
@@ -1421,7 +1338,7 @@ func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{},
 	cwft.proc.UnixTime = time.Now().UnixNano()
 	txnHandler := cwft.ses.GetTxnHandler()
 	cwft.proc.Snapshot = txnHandler.GetTxn().GetCtx()
-	cwft.compile = compile2.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), cwft.ses.GetStorage(), cwft.proc)
+	cwft.compile = compile.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), cwft.ses.GetStorage(), cwft.proc)
 	err = cwft.compile.Compile(cwft.plan, cwft.ses, fill)
 	if err != nil {
 		return nil, err
@@ -1521,6 +1438,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	proto := ses.GetMysqlProtocol()
 	txnHandler := ses.GetTxnHandler()
 	ses.SetSql(sql)
+	ses.ep.Outfile = false
 
 	proc := process.New(mheap.New(ses.GuestMmu))
 	proc.Id = mce.getNextProcessId()
@@ -1604,7 +1522,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 
 		switch st := stmt.(type) {
 		case *tree.Select:
-			ses.ep.Outfile = false
 			if st.Ep != nil {
 				mce.exportDataClose = NewCloseExportData()
 				ses.ep = st.Ep
@@ -1674,6 +1591,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			if err = mce.handleExplainStmt(st); err != nil {
 				goto handleFailed
 			}
+			goto handleFailed
 		case *tree.ExplainAnalyze:
 			selfHandle = true
 			err = errors.New(errno.FeatureNotSupported, "not support explain analyze statement now")
@@ -1987,7 +1905,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 	case COM_INIT_DB:
 		var dbname = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
-		query := "use " + dbname
+		query := "use `" + dbname + "`"
 		err := mce.doComQuery(query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_INIT_DB, err)

@@ -1,9 +1,21 @@
+// Copyright 2022 MatrixOrigin.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package logservice
 
 import (
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -11,67 +23,117 @@ import (
 
 const LogStoreCapacity int = 32
 
-func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, currentTick uint64) *stats {
-	collect := newStats()
+type fixingShard struct {
+	shardID  uint64
+	replicas map[uint64]string
+	toAdd    uint32
+}
 
-	for _, shardInfo := range infos.Shards {
-		var record metadata.LogShardRecord
-		for _, logShardRecord := range cluster.LogShards {
-			if logShardRecord.ShardID == shardInfo.ShardID {
-				record = logShardRecord
-			}
-		}
+func newFixingShard(origin pb.LogShardInfo) *fixingShard {
+	shard := &fixingShard{
+		shardID:  origin.ShardID,
+		replicas: make(map[uint64]string),
+		toAdd:    0,
+	}
 
-		// Check lacks
-		if record.ShardID != 0 && len(shardInfo.Replicas) < int(record.NumberOfReplicas) {
-			collect.toAdd[shardInfo.ShardID] += int(record.NumberOfReplicas) - len(shardInfo.Replicas)
-		}
+	for replicaID, uuid := range origin.Replicas {
+		shard.replicas[replicaID] = uuid
+	}
 
-		// Check redundant
-		if record.ShardID != 0 && uint64(len(shardInfo.Replicas)) > record.NumberOfReplicas {
-			replicaSlice := make([]uint64, 0, len(shardInfo.Replicas))
-			for replicaID := range shardInfo.Replicas {
-				replicaSlice = append(replicaSlice, replicaID)
-			}
-			sort.Slice(replicaSlice, func(i, j int) bool { return replicaSlice[i] < replicaSlice[j] })
+	return shard
+}
 
-			for i := 0; i < len(shardInfo.Replicas)-int(record.NumberOfReplicas); i++ {
-				collect.toRemove[shardInfo.ShardID] = append(collect.toRemove[shardInfo.ShardID],
-					replica{uuid: util.StoreID(shardInfo.Replicas[replicaSlice[i]]),
-						shardID: shardInfo.ShardID, replicaID: replicaSlice[i]})
-			}
-		}
+func fixedLogShardInfo(record metadata.LogShardRecord, info pb.LogShardInfo,
+	expiredStores util.StoreSlice) *fixingShard {
+	fixing := newFixingShard(info)
+	diff := len(fixing.replicas) - int(record.NumberOfReplicas)
+	if record.ShardID == 0 {
+		diff = 0
+	}
 
-		for replicaID, uuid := range shardInfo.Replicas {
-			// Check dangling
-			started := false
-			for _, replica := range infos.Stores[uuid].Replicas {
-				if replica.ShardID == shardInfo.ShardID {
-					started = true
-				}
-			}
-			if !started {
-				collect.toStart = append(collect.toStart, replica{uuid: util.StoreID(uuid),
-					shardID: shardInfo.ShardID, replicaID: replicaID})
-			}
+	// The number of replicas is less than expected.
+	// Record how many replicas should be added.
+	if diff < 0 {
+		fixing.toAdd = uint32(-diff)
+	}
 
-			// Check expired
-			if hakeeper.ExpiredTick(infos.Stores[uuid].Tick, hakeeper.LogStoreTimeout) < currentTick {
-				collect.toRemove[shardInfo.ShardID] = append(collect.toRemove[shardInfo.ShardID],
-					replica{uuid: util.StoreID(uuid), shardID: shardInfo.ShardID,
-						epoch: shardInfo.Epoch, replicaID: replicaID})
+	for replicaID, uuid := range info.Replicas {
+		if expiredStores.Contains(uuid) {
+			delete(fixing.replicas, replicaID)
+			// do not remove replicas more than expected.
+			if diff > 0 {
+				diff--
 			}
 		}
 	}
 
+	// The number of replicas is more than expected.
+	// Remove some of them.
+	if diff > 0 {
+		idSlice := sortedReplicaID(fixing.replicas)
+
+		for i := 0; i < diff; i++ {
+			delete(fixing.replicas, idSlice[i])
+		}
+	}
+
+	return fixing
+}
+
+// parseLogShards collects stats for further use.
+func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired util.StoreSlice) *stats {
+	collect := newStats()
+
+	for _, shardInfo := range infos.Shards {
+		shardID := shardInfo.ShardID
+		record := getRecord(shardID, cluster.LogShards)
+		fixing := fixedLogShardInfo(record, shardInfo, expired)
+
+		toRemove := make([]replica, 0, len(shardInfo.Replicas)-len(fixing.replicas))
+		for id, uuid := range shardInfo.Replicas {
+			if _, ok := fixing.replicas[id]; ok {
+				continue
+			}
+			rep := replica{
+				uuid:      util.StoreID(uuid),
+				shardID:   shardID,
+				replicaID: id,
+			}
+			toRemove = append(toRemove, rep)
+		}
+
+		toStart := make([]replica, 0)
+		for id, uuid := range fixing.replicas {
+			store := infos.Stores[uuid]
+			// Check dangling
+			if !replicaStarted(shardID, store.Replicas) {
+				rep := replica{
+					uuid:      util.StoreID(uuid),
+					shardID:   shardID,
+					replicaID: id,
+				}
+				toStart = append(toStart, rep)
+			}
+		}
+		if fixing.toAdd > 0 {
+			collect.toAdd[shardID] = fixing.toAdd
+		}
+		if len(toRemove) > 0 {
+			collect.toRemove[shardID] = toRemove
+		}
+		collect.toStart = append(collect.toStart, toStart...)
+	}
+
 	// Check zombies
 	for uuid, storeInfo := range infos.Stores {
+		toStop := make([]replica, 0)
 		for _, replicaInfo := range storeInfo.Replicas {
 			if replicaInfo.Epoch < infos.Shards[replicaInfo.ShardID].Epoch {
-				collect.toStop = append(collect.toStop, replica{uuid: util.StoreID(uuid),
+				toStop = append(toStop, replica{uuid: util.StoreID(uuid),
 					shardID: replicaInfo.ShardID})
 			}
 		}
+		collect.toStop = append(collect.toStop, toStop...)
 	}
 
 	return collect
@@ -80,12 +142,8 @@ func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, currentTick uint6
 func parseLogStores(infos pb.LogState, currentTick uint64) *util.ClusterStores {
 	stores := util.NewClusterStores()
 	for uuid, storeInfo := range infos.Stores {
-		expired := false
 		store := util.NewStore(uuid, len(storeInfo.Replicas), LogStoreCapacity)
-		if currentTick > hakeeper.ExpiredTick(storeInfo.Tick, hakeeper.LogStoreTimeout) {
-			expired = true
-		}
-		if expired {
+		if currentTick > util.ExpiredTick(storeInfo.Tick, util.LogStoreTimeout) {
 			stores.RegisterExpired(store)
 		} else {
 			stores.RegisterWorking(store)
@@ -93,4 +151,34 @@ func parseLogStores(infos pb.LogState, currentTick uint64) *util.ClusterStores {
 	}
 
 	return stores
+}
+
+// getRecord returns the LogShardRecord with the given shardID.
+func getRecord(shardID uint64, LogShards []metadata.LogShardRecord) metadata.LogShardRecord {
+	for _, record := range LogShards {
+		if record.ShardID == shardID {
+			return record
+		}
+	}
+	return metadata.LogShardRecord{}
+}
+
+// sortedReplicaID returns a sorted replica id slice
+func sortedReplicaID(replicas map[uint64]string) []uint64 {
+	idSlice := make([]uint64, 0, len(replicas))
+	for id := range replicas {
+		idSlice = append(idSlice, id)
+	}
+	sort.Slice(idSlice, func(i, j int) bool { return idSlice[i] < idSlice[j] })
+	return idSlice
+}
+
+// replicaStarted checks if a replica is started in LogReplicaInfo.
+func replicaStarted(shardID uint64, replicas []pb.LogReplicaInfo) bool {
+	for _, r := range replicas {
+		if r.ShardID == shardID {
+			return true
+		}
+	}
+	return false
 }

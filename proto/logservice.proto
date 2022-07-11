@@ -20,6 +20,13 @@ import "metadata.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = false;
 
+enum UpdateType {
+  LeaseHolderIDUpdate = 0;
+  TruncateLSNUpdate   = 1;
+  UserEntryUpdate     = 2;
+  TSOUpdate           = 3;
+}
+
 // LogShardInfo contains information a log shard.
 message LogShardInfo {
   // ShardID is the ID of a Log shard.
@@ -44,6 +51,11 @@ message LogReplicaInfo {
   LogShardInfo LogShardInfo = 1 [(gogoproto.nullable) = false, (gogoproto.embed) = true];
   // ReplciaID is the ID of a replica within the Log shard. 
   uint64 ReplicaID = 2;
+}
+
+// CNStoreHeartbeat is the periodic message sent tp the HAKeeper by CN stores.
+message CNStoreHeartbeat {
+  string UUID = 1;
 }
 
 // LogStoreHeartbeat is the periodic message sent to the HAKeeper by Log Stores.
@@ -85,22 +97,23 @@ message DNStoreHeartbeat {
 };
 
 message RSMState {
-  uint64 Index = 1;
-  uint64 LeaseHolderID = 2;
-  uint64 TruncatedIndex = 3;
-  map<uint64, uint64> LeaseHistory = 4; // log index -> truncate index
+  uint64 Tso = 1;
+  uint64 Index = 2;
+  uint64 LeaseHolderID = 3;
+  uint64 TruncatedLsn = 4;
+  map<uint64, uint64> LeaseHistory = 5; // log lsn -> truncate lsn
 }
 
 enum MethodType {
-  CREATE       = 0;
-  DESTROY      = 1;
-  APPEND       = 2;
-  READ         = 3;
-  TRUNCATE     = 4;
-  GET_TRUNCATE = 5;
-  CONNECT      = 6;
-  CONNECT_RO   = 7;
-  LOG_HEARTBEAT = 8;
+  TSO_UPDATE    = 0;
+  APPEND        = 1;
+  READ          = 2;
+  TRUNCATE      = 3;
+  GET_TRUNCATE  = 4;
+  CONNECT       = 5;
+  CONNECT_RO    = 6;
+  LOG_HEARTBEAT = 7;
+  CN_HEARTBEAT  = 8;
   DN_HEARTBEAT  = 9;
 };
 
@@ -113,7 +126,7 @@ enum RecordType {
 
 // LogRecord is what we store into the LogService.
 message LogRecord {
-  uint64 Index    = 1;
+  uint64 Lsn    = 1;
   RecordType Type = 2;
   bytes Data      = 3;
 };
@@ -121,10 +134,14 @@ message LogRecord {
 message LogRequest {
   string Name         = 1;
   uint64 ShardID      = 2;
-  uint64 Index        = 3;
+  uint64 Lsn          = 3;
   uint64 MaxSize      = 4;
   uint64 DNShardID    = 5;
   uint64 DNID         = 6;
+}
+
+message TsoRequest {
+  uint64 Count        = 1;
 }
 
 message Request {
@@ -133,7 +150,9 @@ message Request {
   int64 Timeout                  = 3;
   LogRequest LogRequest          = 4 [(gogoproto.nullable) = false];
   LogStoreHeartbeat LogHeartbeat = 5 [(gogoproto.nullable) = false];
-  DNStoreHeartbeat DNHeartbeat   = 6 [(gogoproto.nullable) = false]; 
+  CNStoreHeartbeat CNHeartbeat   = 6 [(gogoproto.nullable) = false];
+  DNStoreHeartbeat DNHeartbeat   = 7 [(gogoproto.nullable) = false];
+  TsoRequest TsoRequest          = 8 [(gogoproto.nullable) = false];
 };
 
 enum ErrorCode {
@@ -148,7 +167,7 @@ enum ErrorCode {
   ShardNotReady         = 8;
   SystemClosed          = 9;
 
-  IndexAlreadyTruncated = 100;
+  LsnAlreadyTruncated = 100;
   OutOfRange            = 101;
   NotLeaseHolder        = 102;
 
@@ -157,8 +176,8 @@ enum ErrorCode {
 
 message LogResponse {
   uint64 ShardID      = 1;
-  uint64 Index        = 2;
-  uint64 LastIndex    = 3;
+  uint64 Lsn          = 2;
+  uint64 LastLsn      = 3;
 }
 
 message Response {
@@ -168,22 +187,38 @@ message Response {
   string ErrorMessage     = 4;
   LogResponse LogResponse = 5 [(gogoproto.nullable) = false];
   CommandBatch CommandBatch = 6 [(gogoproto.nullable) = false];
+  TsoResponse TsoResponse = 7 [(gogoproto.nullable) = false];
 };
 
 message LogRecordResponse {
   repeated LogRecord Records = 1 [(gogoproto.nullable) = false];
 };
 
+message TsoResponse {
+  uint64 Value = 1;
+}
 
 //
 // HAKeeper related pb
 //
 
+enum HAKeeperUpdateType {
+  TickUpdate            = 0;
+  CNHeartbeatUpdate     = 1;
+  DNHeartbeatUpdate     = 2;
+  LogHeartbeatUpdate    = 3;
+  GetIDUpdate           = 4;
+  ScheduleCommandUpdate = 5;
+  SetStateUpdate        = 6;
+  InitialClusterUpdate  = 7;
+}
+
 enum HAKeeperState {
-  HAKeeperCreated = 0;
-  HAKeeperBootstrapping = 1;
-  HAKeeperBootstrapFailed = 2;
-  HAKeeperRunning = 3;
+  HAKeeperCreated                    = 0;
+  HAKeeperBootstrapping              = 1;
+  HAKeeperBootstrapCommandsReceived  = 2;
+  HAKeeperBootstrapFailed            = 3;
+  HAKeeperRunning                    = 4;
 }
 
 // Replica of the shard
@@ -228,10 +263,11 @@ enum ServiceType {
 message ScheduleCommand {
   // UUID which store the ScheduleCommand is sent to
   string UUID = 1;
+  bool Bootstrapping          = 2;
 
-  ConfigChange ConfigChange   = 2;
-  ServiceType ServiceType     = 3;
-  ShutdownStore ShutdownStore = 4;
+  ConfigChange ConfigChange   = 3;
+  ServiceType ServiceType     = 4;
+  ShutdownStore ShutdownStore = 5;
 }
 
 message CommandBatch {
@@ -239,7 +275,19 @@ message CommandBatch {
   repeated ScheduleCommand Commands = 2 [(gogoproto.nullable) = false];
 }
 
-// DNStoreInfo contins information on a list of shards.
+// CNStoreInfo contains infroamtion on a CN store.
+message CNStoreInfo {
+  uint64 Tick                 = 1;
+}
+
+// CNState contains all CN details known to the HAKeeper.
+message CNState {
+  // Stores is keyed by CN store UUID. 
+  map<string, CNStoreInfo> Stores = 1 [(gogoproto.nullable) = false];
+}
+
+
+// DNStoreInfo contins information on a DN store.
 message DNStoreInfo {
   uint64 Tick                 = 1;
   repeated DNShardInfo Shards = 2 [(gogoproto.nullable) = false];
@@ -247,8 +295,7 @@ message DNStoreInfo {
 
 // DNState contains all DN details known to the HAKeeper.
 message DNState {
-  // Stores is keyed by DN store UUID, it contains details found on each DN
-  // store. Each DNStoreInfo reflects what was last reported by each DN store.
+  // Stores is keyed by DN store UUID.
   map<string, DNStoreInfo> Stores = 1 [(gogoproto.nullable) = false];
 }
 
@@ -294,6 +341,7 @@ message CheckerState {
   ClusterInfo ClusterInfo = 2 [(gogoproto.nullable) = false];
   DNState DNState         = 3 [(gogoproto.nullable) = false];
   LogState LogState       = 4 [(gogoproto.nullable) = false];
+  HAKeeperState State     = 5;
 }
 
 // HAKeeperRSMState contains state maintained by HAKeeper's RSM.
@@ -304,7 +352,8 @@ message HAKeeperRSMState {
   HAKeeperState State                        = 4;
   map<string, CommandBatch> ScheduleCommands = 5 [(gogoproto.nullable) = false];
   map<string, uint64> LogShards = 6;
-  DNState DNState               = 7 [(gogoproto.nullable) = false];
-  LogState LogState             = 8 [(gogoproto.nullable) = false];
-  ClusterInfo ClusterInfo       = 9 [(gogoproto.nullable) = false];
+  CNState CNState               = 7  [(gogoproto.nullable) = false];
+  DNState DNState               = 8  [(gogoproto.nullable) = false];
+  LogState LogState             = 9  [(gogoproto.nullable) = false];
+  ClusterInfo ClusterInfo       = 10 [(gogoproto.nullable) = false];
 }

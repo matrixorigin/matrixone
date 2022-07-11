@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -53,7 +52,7 @@ func TestFixExpiredStore(t *testing.T) {
 				}},
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {
-						Tick: 12 * hakeeper.TickPerSecond * 60,
+						Tick: 12 * util.TickPerSecond * 60,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -62,7 +61,7 @@ func TestFixExpiredStore(t *testing.T) {
 							ReplicaID: 1},
 						}},
 					"b": {
-						Tick: 13 * hakeeper.TickPerSecond * 60,
+						Tick: 13 * util.TickPerSecond * 60,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -73,7 +72,7 @@ func TestFixExpiredStore(t *testing.T) {
 						}},
 					},
 					"c": {
-						Tick: 14 * hakeeper.TickPerSecond * 60,
+						Tick: 14 * util.TickPerSecond * 60,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -85,7 +84,7 @@ func TestFixExpiredStore(t *testing.T) {
 					},
 				},
 			},
-			currentTick: 15 * hakeeper.TickPerSecond * 60,
+			currentTick: 15 * util.TickPerSecond * 60,
 			expected:    []pb.ScheduleCommand(nil),
 		},
 		{
@@ -107,7 +106,7 @@ func TestFixExpiredStore(t *testing.T) {
 				}},
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {
-						Tick: 3 * hakeeper.TickPerSecond * 60,
+						Tick: 3 * util.TickPerSecond * 60,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -116,7 +115,7 @@ func TestFixExpiredStore(t *testing.T) {
 							ReplicaID: 1},
 						}},
 					"b": {
-						Tick: 13 * hakeeper.TickPerSecond * 60,
+						Tick: 13 * util.TickPerSecond * 60,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -127,7 +126,7 @@ func TestFixExpiredStore(t *testing.T) {
 						}},
 					},
 					"c": {
-						Tick: 14 * hakeeper.TickPerSecond * 60,
+						Tick: 14 * util.TickPerSecond * 60,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -139,7 +138,7 @@ func TestFixExpiredStore(t *testing.T) {
 					},
 				},
 			},
-			currentTick: 15 * hakeeper.TickPerSecond * 60,
+			currentTick: 15 * util.TickPerSecond * 60,
 			expected: []pb.ScheduleCommand{{
 				UUID: "b",
 				ConfigChange: &pb.ConfigChange{
@@ -173,11 +172,11 @@ func TestFixExpiredStore(t *testing.T) {
 				}},
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {
-						Tick:     12 * hakeeper.TickPerSecond * 60,
+						Tick:     12 * util.TickPerSecond * 60,
 						Replicas: []pb.LogReplicaInfo{},
 					},
 					"b": {
-						Tick: 13 * hakeeper.TickPerSecond * 60,
+						Tick: 13 * util.TickPerSecond * 60,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -188,7 +187,7 @@ func TestFixExpiredStore(t *testing.T) {
 						}},
 					},
 					"c": {
-						Tick: 14 * hakeeper.TickPerSecond * 60,
+						Tick: 14 * util.TickPerSecond * 60,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -200,7 +199,7 @@ func TestFixExpiredStore(t *testing.T) {
 					},
 				},
 			},
-			currentTick: 15 * hakeeper.TickPerSecond * 60,
+			currentTick: 15 * util.TickPerSecond * 60,
 			expected: []pb.ScheduleCommand{{
 				UUID: "b",
 				ConfigChange: &pb.ConfigChange{
@@ -234,11 +233,11 @@ func TestFixExpiredStore(t *testing.T) {
 				}},
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {
-						Tick:     12 * hakeeper.TickPerSecond * 60,
+						Tick:     12 * util.TickPerSecond * 60,
 						Replicas: []pb.LogReplicaInfo{},
 					},
 					"b": {
-						Tick: 13 * hakeeper.TickPerSecond * 60,
+						Tick: 13 * util.TickPerSecond * 60,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -249,7 +248,7 @@ func TestFixExpiredStore(t *testing.T) {
 						}},
 					},
 					"c": {
-						Tick: 14 * hakeeper.TickPerSecond * 60,
+						Tick: 14 * util.TickPerSecond * 60,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -261,7 +260,7 @@ func TestFixExpiredStore(t *testing.T) {
 					},
 				},
 			},
-			currentTick: 15 * hakeeper.TickPerSecond * 60,
+			currentTick: 15 * util.TickPerSecond * 60,
 			expected: []pb.ScheduleCommand{
 				{
 					UUID: "a",
@@ -316,7 +315,7 @@ func TestFixZombie(t *testing.T) {
 				}},
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {
-						Tick: 12 * hakeeper.TickPerSecond * 60,
+						Tick: 12 * util.TickPerSecond * 60,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -326,7 +325,7 @@ func TestFixZombie(t *testing.T) {
 							ReplicaID: 1},
 						}},
 					"b": {
-						Tick: 13 * hakeeper.TickPerSecond * 60,
+						Tick: 13 * util.TickPerSecond * 60,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -337,7 +336,7 @@ func TestFixZombie(t *testing.T) {
 						}},
 					},
 					"c": {
-						Tick: 14 * hakeeper.TickPerSecond * 60,
+						Tick: 14 * util.TickPerSecond * 60,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -348,7 +347,7 @@ func TestFixZombie(t *testing.T) {
 						}},
 					},
 					"d": {
-						Tick: 14 * hakeeper.TickPerSecond * 60,
+						Tick: 14 * util.TickPerSecond * 60,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -360,7 +359,7 @@ func TestFixZombie(t *testing.T) {
 					},
 				},
 			},
-			currentTick: 15 * hakeeper.TickPerSecond * 60,
+			currentTick: 15 * util.TickPerSecond * 60,
 			expected: []pb.ScheduleCommand{
 				{
 					UUID: "c",

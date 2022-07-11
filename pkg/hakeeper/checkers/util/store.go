@@ -14,6 +14,8 @@
 
 package util
 
+import "time"
+
 // IDAllocator is used to fetch new replica ID.
 type IDAllocator interface {
 	// When IDAllocator was exhaused temporarily, return `false`.
@@ -54,10 +56,21 @@ func NewStore(storeID string, length int, capacity int) *Store {
 	}
 }
 
+type StoreSlice []*Store
+
+func (ss StoreSlice) Contains(storeID string) bool {
+	for _, s := range ss {
+		if StoreID(storeID) == s.ID {
+			return true
+		}
+	}
+	return false
+}
+
 // ClusterStores collects stores by their status.
 type ClusterStores struct {
-	Working []*Store
-	Expired []*Store
+	Working StoreSlice
+	Expired StoreSlice
 }
 
 func NewClusterStores() *ClusterStores {
@@ -76,12 +89,23 @@ func (cs *ClusterStores) RegisterExpired(store *Store) {
 
 // WorkingStores returns all recorded working stores.
 // NB: the returned order isn't deterministic.
-func (cs *ClusterStores) WorkingStores() []*Store {
+func (cs *ClusterStores) WorkingStores() StoreSlice {
 	return cs.Working
 }
 
 // ExpiredStores returns all recorded expired stores.
 // NB: the returned order isn't deterministic.
-func (cs *ClusterStores) ExpiredStores() []*Store {
+func (cs *ClusterStores) ExpiredStores() StoreSlice {
 	return cs.Expired
+}
+
+const (
+	// FIXME: configuration item or some other
+	TickPerSecond   = 10
+	LogStoreTimeout = 10 * time.Minute
+	DnStoreTimeout  = 10 * time.Second
+)
+
+func ExpiredTick(start uint64, timeout time.Duration) uint64 {
+	return uint64(timeout/time.Second)*TickPerSecond + start
 }

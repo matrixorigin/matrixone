@@ -213,7 +213,7 @@ func TestSortLogStores(t *testing.T) {
 	}}
 
 	for _, c := range cases {
-		output := LogStoresSortedByTick(c.logStores)
+		output := logStoresSortedByTick(c.logStores)
 		assert.Equal(t, c.expected, output)
 	}
 }
@@ -233,7 +233,96 @@ func TestSortDNStores(t *testing.T) {
 	}}
 
 	for _, c := range cases {
-		output := DNStoresSortedByTick(c.dnStores)
+		output := dnStoresSortedByTick(c.dnStores)
+		assert.Equal(t, c.expected, output)
+	}
+}
+
+func TestIssue3814(t *testing.T) {
+	cases := []struct {
+		desc string
+
+		cluster pb.ClusterInfo
+		dn      pb.DNState
+		log     pb.LogState
+
+		expected error
+	}{
+		{
+			desc: "case not enough log store",
+			cluster: pb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          1,
+					NumberOfReplicas: 3,
+					Name:             "",
+				}},
+			},
+			log:      pb.LogState{},
+			expected: errors.New("not enough log stores"),
+		},
+		{
+			desc: "case not enough dn stores",
+			cluster: pb.ClusterInfo{
+				DNShards: []metadata.DNShardRecord{{
+					ShardID:    1,
+					LogShardID: 1,
+				}},
+			},
+			dn: pb.DNState{
+				Stores: map[string]pb.DNStoreInfo{},
+			},
+			expected: errors.New("not enough dn stores"),
+		},
+	}
+
+	for _, c := range cases {
+		alloc := util.NewTestIDAllocator(0)
+		bm := NewBootstrapManager(c.cluster)
+		_, err := bm.Bootstrap(alloc, c.dn, c.log)
+		assert.Equal(t, c.expected, err)
+	}
+}
+
+func TestIssue3845(t *testing.T) {
+	cases := []struct {
+		desc string
+
+		cluster pb.ClusterInfo
+		log     pb.LogState
+
+		expected bool
+	}{
+		{
+			desc: "shardID is 0",
+			cluster: pb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          0,
+					NumberOfReplicas: 1,
+				}},
+			},
+			log: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{1: {
+					ShardID:  0,
+					Replicas: map[uint64]string{1: "a"},
+				}},
+				Stores: map[string]pb.LogStoreInfo{"a": {
+					Tick: 0,
+					Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{
+							ShardID:  0,
+							Replicas: map[uint64]string{1: "a"},
+						},
+						ReplicaID: 1,
+					}},
+				}},
+			},
+			expected: true,
+		},
+	}
+
+	for _, c := range cases {
+		bm := NewBootstrapManager(c.cluster)
+		output := bm.CheckBootstrap(c.log)
 		assert.Equal(t, c.expected, output)
 	}
 }

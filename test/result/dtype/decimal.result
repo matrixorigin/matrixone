@@ -16,13 +16,13 @@ floor(cast(2231231.501231 as decimal))
 drop table if exists t1;
 create table t1 (a decimal(29,0) not null, primary key(a));
 insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFE), (18446744073709551613.0000000), (18446744073709551612.0000000001);
-select * from t1;
+select * from t1 order by 1 asc;
 a
 72057594037927934
 18446744073709551612
 18446744073709551613
 18446744073709551615
-select * from t1 where a=18446744073709551615;
+select * from t1 where a=18446744073709551615 order by a desc;
 a
 18446744073709551615
 delete from t1 where a=18446744073709551615.000000000;
@@ -34,7 +34,7 @@ a
 drop table t1;
 create table t1 ( a int not null default 1, big decimal(29,11) );
 insert into t1 (big) values (-1),(12.34567891234567),(92.23372036854775807);
-select * from t1;
+select * from t1 order by a desc, big asc;
 a	big
 1	-1.00000000000
 1	12.34567891235
@@ -42,13 +42,13 @@ a	big
 select min(big),max(big),max(big)-1 from t1;
 min(big)	max(big)	max(big)-1
 -1.00000000000	92.23372036855	91.23372036855
-select min(big),avg(big),max(big)-1 from t1 group by a;
+select min(big),avg(big),max(big)-1 from t1 group by a order by 1+2;
 min(big)	avg(big)	max(big)-1
 -1.00000000000	34.526466426966667	91.23372036855
 drop table t1;
 create table t1 ( a int not null default 1, big decimal(20,4) primary key);
 insert into t1 (big) values (0),(18446744073), (0xFFFFFE), (184467.13), (184462);
-select * from t1 order by 2 desc;
+select * from t1 order by 1,2 desc;
 a	big
 1	18446744073.0000
 1	16777214.0000

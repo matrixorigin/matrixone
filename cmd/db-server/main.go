@@ -29,12 +29,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/rpcserver"
-	"github.com/matrixorigin/matrixone/pkg/sql/handler"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -71,7 +67,7 @@ var (
 
 func createMOServer() {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, config.ClusterCatalog)
+	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
 	mo = frontend.NewMOServer(address, pu)
 	if config.GlobalSystemVariables.GetEnableMetric() {
 		ieFactory := func() ie.InternalExecutor {
@@ -164,7 +160,6 @@ func main() {
 	}
 
 	configFilePath := args[0]
-	logutil.SetupMOLogger(configFilePath)
 
 	//before anything using the configuration
 	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
@@ -176,6 +171,17 @@ func main() {
 		logutil.Infof("Load config error:%v\n", err)
 		os.Exit(LoadConfigExit)
 	}
+
+	logConf := logutil.LogConfig{
+		Level:      config.GlobalSystemVariables.GetLogLevel(),
+		Format:     config.GlobalSystemVariables.GetLogFormat(),
+		Filename:   config.GlobalSystemVariables.GetLogFilename(),
+		MaxSize:    int(config.GlobalSystemVariables.GetLogMaxSize()),
+		MaxDays:    int(config.GlobalSystemVariables.GetLogMaxDays()),
+		MaxBackups: int(config.GlobalSystemVariables.GetLogMaxBackups()),
+	}
+
+	logutil.SetupMOLogger(&logConf)
 
 	//just initialize the tae after configuration has been loaded
 	if len(args) == 2 && args[1] == "initdb" {
@@ -228,11 +234,6 @@ func main() {
 		logutil.Infof("Create rpcserver failed, %v", err)
 		os.Exit(CreateRPCExit)
 	}
-	hm := host.New(1 << 40)
-	gm := guest.New(1<<40, hm)
-	proc := process.New(mheap.New(gm))
-	hp := handler.New(config.StorageEngine, proc)
-	srv.Register(hp.Process)
 
 	go func() {
 		if err := srv.Run(); err != nil {

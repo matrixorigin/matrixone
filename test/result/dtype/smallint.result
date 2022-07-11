@@ -1,12 +1,12 @@
 create table t1 (a smallint unsigned not null, primary key(a));
 insert into t1 values (65535), (0xFFFC), (65534), (65533);
-select * from t1;
+select * from t1 order by a asc;
 a
 65532
 65533
 65534
 65535
-select * from t1 where a=65535;
+select * from t1 where a=65535 order by 1 desc;
 a
 65535
 delete from t1 where a=65535;
@@ -18,7 +18,7 @@ a
 drop table t1;
 create table t1 ( a smallint not null default 1, smallint16 smallint primary key);
 insert into t1 (smallint16) values (-1),(32767),(-32768);
-select * from t1;
+select * from t1 order by a desc, 2 asc;
 a	smallint16
 1	-32768
 1	-1
@@ -26,7 +26,7 @@ a	smallint16
 select min(smallint16),max(smallint16),max(smallint16)-1 from t1;
 min(smallint16)	max(smallint16)	max(smallint16)-1
 -32768	32767	32766
-select min(smallint16),max(smallint16),max(smallint16)-1 from t1 group by a;
+select min(smallint16),max(smallint16),max(smallint16)-1 from t1 group by a order by 1 asc;
 min(smallint16)	max(smallint16)	max(smallint16)-1
 -32768	32767	32766
 drop table t1;
@@ -97,7 +97,7 @@ valueu16	value16	valueu16	value16
 5	-32768	5	-32768
 32767	2	32767	4
 65535	1	65535	3
-select * from t1 join t2 on t1.valueu16=t2.valueu16 where t1.valueu16=65535;
+select * from t1 join t2 on t1.valueu16=t2.valueu16 where t1.valueu16=65535 order by 1+2 asc;
 valueu16	value16	valueu16	value16
 65535	1	65535	3
 select * from t1 join t2 on t1.value16=t2.value16 order by 2;
@@ -113,7 +113,7 @@ smallint16
 drop table t1;
 create table t1 (smallint_col smallint unsigned);
 insert into t1 values (65500);
-select * from t1 where smallint_col=65500;
+select * from t1 where smallint_col=65500 order by abs(1) asc;
 smallint_col
 65500
 select * from t1 where smallint_col='65500';

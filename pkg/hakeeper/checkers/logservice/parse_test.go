@@ -1,22 +1,104 @@
+// Copyright 2022 MatrixOrigin.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package logservice
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"sort"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
-	"sort"
-	"testing"
 )
+
+func TestFixedLogShardInfo(t *testing.T) {
+	cases := []struct {
+		desc string
+
+		record        metadata.LogShardRecord
+		info          pb.LogShardInfo
+		expiredStores util.StoreSlice
+
+		expected *fixingShard
+	}{
+		{
+			desc: "normal case",
+			record: metadata.LogShardRecord{
+				ShardID:          1,
+				NumberOfReplicas: 3,
+				Name:             "shard-1",
+			},
+			info: pb.LogShardInfo{
+				ShardID:  1,
+				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+			},
+			expected: &fixingShard{
+				shardID:  1,
+				replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+				toAdd:    0,
+			},
+		},
+		{
+			desc: "shard 1 has 2 replicas, which expected to be 3",
+			record: metadata.LogShardRecord{
+				ShardID:          1,
+				NumberOfReplicas: 3,
+				Name:             "shard-1",
+			},
+			info: pb.LogShardInfo{
+				ShardID:  1,
+				Replicas: map[uint64]string{1: "a", 2: "b"},
+			},
+			expected: &fixingShard{
+				shardID:  1,
+				replicas: map[uint64]string{1: "a", 2: "b"},
+				toAdd:    1,
+			},
+		},
+		{
+			desc: "shard 1 has 2 replicas, which expected to be 3",
+			record: metadata.LogShardRecord{
+				ShardID:          1,
+				NumberOfReplicas: 3,
+				Name:             "shard-1",
+			},
+			info: pb.LogShardInfo{
+				ShardID:  1,
+				Replicas: map[uint64]string{1: "a", 2: "b"},
+			},
+			expected: &fixingShard{
+				shardID:  1,
+				replicas: map[uint64]string{1: "a", 2: "b"},
+				toAdd:    1,
+			},
+		},
+	}
+
+	for _, c := range cases {
+		output := fixedLogShardInfo(c.record, c.info, c.expiredStores)
+		assert.Equal(t, c.expected, output)
+	}
+}
 
 func TestCollectStats(t *testing.T) {
 	cases := []struct {
 		desc     string
 		cluster  pb.ClusterInfo
 		infos    pb.LogState
-		tick     uint64
+		expired  util.StoreSlice
 		expected *stats
 	}{
 		{
@@ -62,8 +144,11 @@ func TestCollectStats(t *testing.T) {
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
 								LeaderID: 0,
-								Term:     0}}}}},
-			}, tick: 10, expected: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]int{}}},
+								Term:     0}}}},
+				},
+			},
+			expired:  []*util.Store{},
+			expected: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}}},
 		{
 			desc: "Shard 1 has only 2 replicas, which is expected as 3.",
 			cluster: pb.ClusterInfo{
@@ -97,7 +182,9 @@ func TestCollectStats(t *testing.T) {
 								LeaderID: 0,
 								Term:     0}}}},
 				},
-			}, tick: 10, expected: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]int{1: 1}}},
+			},
+			expired:  []*util.Store{},
+			expected: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{1: 1}}},
 		{
 			desc: "replica on Store c is not started.",
 			infos: pb.LogState{
@@ -128,9 +215,9 @@ func TestCollectStats(t *testing.T) {
 					"c": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
 						Replicas: []pb.LogReplicaInfo{}},
 				},
-			}, tick: 10,
+			},
 			expected: &stats{toStart: []replica{{"c", 1, 0, 3}},
-				toRemove: map[uint64][]replica{}, toAdd: map[uint64]int{}}},
+				toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}}},
 		{
 			desc: "replica on Store d is a zombie.",
 			infos: pb.LogState{
@@ -175,9 +262,9 @@ func TestCollectStats(t *testing.T) {
 								LeaderID: 0,
 								Term:     0}}}},
 				},
-			}, tick: 10,
+			},
 			expected: &stats{toStop: []replica{{"d", 1, 0, 0}},
-				toRemove: map[uint64][]replica{}, toAdd: map[uint64]int{}}},
+				toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}}},
 		{
 			desc: "Shard 1 has 4 replicas, which is expected as 3.",
 			cluster: pb.ClusterInfo{
@@ -228,9 +315,9 @@ func TestCollectStats(t *testing.T) {
 								LeaderID: 0,
 								Term:     0}}}},
 				},
-			}, tick: 10,
+			},
 			expected: &stats{toRemove: map[uint64][]replica{1: {{"a", 1, 0, 1}}},
-				toAdd: map[uint64]int{},
+				toAdd: map[uint64]uint32{},
 			},
 		},
 		{
@@ -268,17 +355,18 @@ func TestCollectStats(t *testing.T) {
 								Epoch:    1,
 								LeaderID: 0,
 								Term:     0}}}}},
-			}, tick: 999999999,
+			},
+			expired: []*util.Store{{ID: "a"}},
 			expected: &stats{
-				toRemove: map[uint64][]replica{1: {{"a", 1, 1, 1}}},
-				toAdd:    map[uint64]int{},
+				toRemove: map[uint64][]replica{1: {{uuid: "a", shardID: 1, replicaID: 1}}},
+				toAdd:    map[uint64]uint32{},
 			},
 		},
 	}
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		stat := parseLogShards(c.cluster, c.infos, c.tick)
+		stat := parseLogShards(c.cluster, c.infos, c.expired)
 		assert.Equal(t, c.expected, stat)
 	}
 }
@@ -309,20 +397,20 @@ func TestCollectStore(t *testing.T) {
 				}},
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {
-						Tick:     uint64(10 * hakeeper.TickPerSecond * 60),
+						Tick:     uint64(10 * util.TickPerSecond * 60),
 						Replicas: nil,
 					},
 					"b": {
-						Tick:     uint64(13 * hakeeper.TickPerSecond * 60),
+						Tick:     uint64(13 * util.TickPerSecond * 60),
 						Replicas: nil,
 					},
 					"c": {
-						Tick:     uint64(12 * hakeeper.TickPerSecond * 60),
+						Tick:     uint64(12 * util.TickPerSecond * 60),
 						Replicas: nil,
 					},
 				},
 			},
-			tick: uint64(10 * hakeeper.TickPerSecond * 60),
+			tick: uint64(10 * util.TickPerSecond * 60),
 			expected: util.ClusterStores{
 				Working: []*util.Store{{
 					ID:       "a",
@@ -358,7 +446,7 @@ func TestCollectStore(t *testing.T) {
 				}},
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {
-						Tick:     uint64(10 * hakeeper.TickPerSecond * 60),
+						Tick:     uint64(10 * util.TickPerSecond * 60),
 						Replicas: nil,
 					},
 					"b": {
@@ -366,12 +454,12 @@ func TestCollectStore(t *testing.T) {
 						Replicas: nil,
 					},
 					"c": {
-						Tick:     uint64(12 * hakeeper.TickPerSecond * 60),
+						Tick:     uint64(12 * util.TickPerSecond * 60),
 						Replicas: nil,
 					},
 				},
 			},
-			tick: uint64(15 * hakeeper.TickPerSecond * 60),
+			tick: uint64(15 * util.TickPerSecond * 60),
 			expected: util.ClusterStores{
 				Working: []*util.Store{{
 					ID:       "a",
