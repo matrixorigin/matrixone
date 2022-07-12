@@ -34,6 +34,7 @@ const (
 	// Group 2: numeric
 	DIVIVISION_BY_ZERO = 2000 + iota
 	OUT_OF_RANGE
+	INVALID_ARGUMENT
 
 	// Group 3: invalid input
 	BAD_CONFIGURATION = 3000 + iota

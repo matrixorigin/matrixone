@@ -27,6 +27,20 @@ enum UpdateType {
   TSOUpdate           = 3;
 }
 
+message CNNode {
+  string UUID    = 1;
+  string Address = 2;
+  uint64 Tick    = 3;
+}
+
+message DNNode {
+  string UUID      = 1;
+  uint64 ShardID   = 2;
+  uint64 ReplicaID = 3;
+  string Address   = 4;
+  uint64 Tick      = 5;
+}
+
 // LogShardInfo contains information a log shard.
 message LogShardInfo {
   // ShardID is the ID of a Log shard.
@@ -105,16 +119,17 @@ message RSMState {
 }
 
 enum MethodType {
-  TSO_UPDATE    = 0;
-  APPEND        = 1;
-  READ          = 2;
-  TRUNCATE      = 3;
-  GET_TRUNCATE  = 4;
-  CONNECT       = 5;
-  CONNECT_RO    = 6;
-  LOG_HEARTBEAT = 7;
-  CN_HEARTBEAT  = 8;
-  DN_HEARTBEAT  = 9;
+  TSO_UPDATE     = 0;
+  APPEND         = 1;
+  READ           = 2;
+  TRUNCATE       = 3;
+  GET_TRUNCATE   = 4;
+  CONNECT        = 5;
+  CONNECT_RO     = 6;
+  LOG_HEARTBEAT  = 7;
+  CN_HEARTBEAT   = 8;
+  DN_HEARTBEAT   = 9;
+  CHECK_HAKEEPER = 10;
 };
 
 enum RecordType {
@@ -181,13 +196,14 @@ message LogResponse {
 }
 
 message Response {
-  uint64 RequestID        = 1;
-  MethodType Method       = 2;
-  ErrorCode ErrorCode     = 3;
-  string ErrorMessage     = 4;
-  LogResponse LogResponse = 5 [(gogoproto.nullable) = false];
-  CommandBatch CommandBatch = 6 [(gogoproto.nullable) = false];
-  TsoResponse TsoResponse = 7 [(gogoproto.nullable) = false];
+  uint64 RequestID          = 1;
+  MethodType Method         = 2;
+  ErrorCode ErrorCode       = 3;
+  string ErrorMessage       = 4;
+  bool IsHAKeeper           = 5;
+  LogResponse LogResponse   = 6 [(gogoproto.nullable) = false];
+  CommandBatch CommandBatch = 7 [(gogoproto.nullable) = false];
+  TsoResponse TsoResponse   = 8 [(gogoproto.nullable) = false];
 };
 
 message LogRecordResponse {
@@ -297,6 +313,11 @@ message DNStoreInfo {
 message DNState {
   // Stores is keyed by DN store UUID.
   map<string, DNStoreInfo> Stores = 1 [(gogoproto.nullable) = false];
+}
+
+message ClusterDetails {
+  repeated DNNode DNNodes = 1 [(gogoproto.nullable) = false];
+  repeated CNNode CNNodes = 2 [(gogoproto.nullable) = false]; 
 }
 
 // ClusterInfo provides a global view of all shards in the cluster. It
