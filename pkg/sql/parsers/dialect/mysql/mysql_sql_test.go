@@ -26,8 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  "show schemas like 'db1'",
-		output: "show databases like db1",
+		input: "select cast(false as varchar)",
 	}
 )
 
@@ -52,6 +51,20 @@ var (
 		input  string
 		output string
 	}{{
+		input: "select cast(false as varchar)",
+	}, {
+		input:  "select cast(a as timestamp)",
+		output: "select cast(a as timestamp(26, 6))",
+	}, {
+		input:  "select cast(\"2022-01-30\" as varchar);",
+		output: "select cast(2022-01-30 as varchar)",
+	}, {
+		input:  "select cast(b as timestamp) from t2",
+		output: "select cast(b as timestamp(26, 6)) from t2",
+	}, {
+		input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
+		output: "select cast(2022-01-01 01:23:34 as varchar)",
+	}, {
 		input:  "show schemas where 1",
 		output: "show databases where 1",
 	}, {
@@ -946,6 +959,21 @@ var (
 	}, {
 		input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE' MAX_FILE_SIZE 100 FORCE_QUOTE (a, b)",
 		output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false max_file_size 102400 force_quote a, b",
+	}, {
+		input: "drop prepare stmt_name1",
+	}, {
+		input: "deallocate prepare stmt_name1",
+	}, {
+		input: "execute stmt_name1",
+	}, {
+		input: "execute stmt_name1 using @var_name,@@sys_name",
+	}, {
+		input: "prepare stmt_name1 from select * from t1",
+	}, {
+		input:  "prepare stmt_name1 from 'select * from t1'",
+		output: "prepare stmt_name1 from select * from t1",
+	}, {
+		input: "prepare stmt_name1 from select * from t1 where a > ? or abs(b) < ?",
 	}}
 )
 

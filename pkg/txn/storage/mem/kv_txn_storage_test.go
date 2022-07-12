@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
@@ -276,6 +277,30 @@ func TestRecovery(t *testing.T) {
 	assert.Equal(t, 6, len(txns))
 }
 
+func TestEvent(t *testing.T) {
+	l := NewMemLog()
+	s := NewKVTxnStorage(0, l)
+
+	wTxn := writeTestData(t, s, 1, nil, 1)
+	prepareTestTxn(t, s, &wTxn, 2, nil)
+	e := <-s.GetEventC()
+	assert.Equal(t, e, Event{Type: PrepareType, Txn: wTxn})
+
+	committingTestTxn(t, s, &wTxn, 3)
+	e = <-s.GetEventC()
+	assert.Equal(t, e, Event{Type: CommittingType, Txn: wTxn})
+
+	commitTestTxn(t, s, &wTxn, 3, nil)
+	e = <-s.GetEventC()
+	assert.Equal(t, e, Event{Type: CommitType, Txn: wTxn})
+
+	wTxn = writeTestData(t, s, 1, nil, 2)
+	assert.NoError(t, s.Rollback(wTxn))
+	checkRollback(t, s, wTxn, 2)
+	e = <-s.GetEventC()
+	assert.Equal(t, e, Event{Type: RollbackType, Txn: wTxn})
+}
+
 func prepareTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64, err error) {
 	wTxn.PreparedTS = newTimestamp(ts)
 	assert.Equal(t, err, s.Prepare(*wTxn))
@@ -294,14 +319,18 @@ func commitTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64, e
 	wTxn.Status = txn.TxnStatus_Committed
 }
 
-func checkLogCount(t *testing.T, l *memLogClient, expect int) {
+func checkLogCount(t *testing.T, ll logservice.Client, expect int) {
+	l := ll.(*memLogClient)
+
 	l.RLock()
 	defer l.RUnlock()
 
 	assert.Equal(t, expect, len(l.logs))
 }
 
-func checkLog(t *testing.T, l *memLogClient, offset int, wTxn txn.TxnMeta, keys ...byte) {
+func checkLog(t *testing.T, ll logservice.Client, offset int, wTxn txn.TxnMeta, keys ...byte) {
+	l := ll.(*memLogClient)
+
 	l.RLock()
 	defer l.RUnlock()
 
