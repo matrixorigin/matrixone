@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/joincondition"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -56,7 +57,7 @@ func init() {
 	gm := guest.New(1<<30, hm)
 	tcs = []joinTestCase{
 		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
-			[][]Condition{
+			[][]joincondition.Condition{
 				{
 					{0, newExpr(0, types.Type{Oid: types.T_int8})},
 				},
@@ -65,7 +66,7 @@ func init() {
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
-			[][]Condition{
+			[][]joincondition.Condition{
 				{
 					{0, newExpr(0, types.Type{Oid: types.T_int8})},
 				},
@@ -74,7 +75,7 @@ func init() {
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_decimal64}}, []int32{0},
-			[][]Condition{
+			[][]joincondition.Condition{
 				{
 					{0, newExpr(0, types.Type{Oid: types.T_decimal64})},
 				},
@@ -83,7 +84,7 @@ func init() {
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_decimal64}}, []int32{0},
-			[][]Condition{
+			[][]joincondition.Condition{
 				{
 					{0, newExpr(0, types.Type{Oid: types.T_decimal64})},
 				},
@@ -92,7 +93,7 @@ func init() {
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_decimal128}}, []int32{0},
-			[][]Condition{
+			[][]joincondition.Condition{
 				{
 					{0, newExpr(0, types.Type{Oid: types.T_decimal128})},
 				},
@@ -101,7 +102,7 @@ func init() {
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_decimal128}}, []int32{0},
-			[][]Condition{
+			[][]joincondition.Condition{
 				{
 					{0, newExpr(0, types.Type{Oid: types.T_decimal128})},
 				},
@@ -110,7 +111,7 @@ func init() {
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []int32{0},
-			[][]Condition{
+			[][]joincondition.Condition{
 				{
 					{0, newExpr(1, types.Type{Oid: types.T_int64})},
 				},
@@ -119,7 +120,7 @@ func init() {
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []int32{0},
-			[][]Condition{
+			[][]joincondition.Condition{
 				{
 					{0, newExpr(1, types.Type{Oid: types.T_int64})},
 				},
@@ -128,7 +129,7 @@ func init() {
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal64}}, []int32{0},
-			[][]Condition{
+			[][]joincondition.Condition{
 				{
 					{0, newExpr(1, types.Type{Oid: types.T_decimal64})},
 				},
@@ -137,7 +138,7 @@ func init() {
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal64}}, []int32{0},
-			[][]Condition{
+			[][]joincondition.Condition{
 				{
 					{0, newExpr(1, types.Type{Oid: types.T_decimal64})},
 				},
@@ -146,7 +147,7 @@ func init() {
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal128}}, []int32{0},
-			[][]Condition{
+			[][]joincondition.Condition{
 				{
 					{0, newExpr(1, types.Type{Oid: types.T_decimal128})},
 				},
@@ -155,7 +156,7 @@ func init() {
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal128}}, []int32{0},
-			[][]Condition{
+			[][]joincondition.Condition{
 				{
 					{0, newExpr(1, types.Type{Oid: types.T_decimal128})},
 				},
@@ -164,7 +165,7 @@ func init() {
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal64}, {Oid: types.T_char}}, []int32{0},
-			[][]Condition{
+			[][]joincondition.Condition{
 				{
 					{0, newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1})},
 					{0, newExpr(1, types.Type{Oid: types.T_char})},
@@ -175,7 +176,7 @@ func init() {
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal64}, {Oid: types.T_char}}, []int32{0},
-			[][]Condition{
+			[][]joincondition.Condition{
 				{
 					{0, newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1})},
 					{0, newExpr(1, types.Type{Oid: types.T_char})},
@@ -186,7 +187,7 @@ func init() {
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal128}, {Oid: types.T_char}}, []int32{0},
-			[][]Condition{
+			[][]joincondition.Condition{
 				{
 					{0, newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1})},
 					{0, newExpr(1, types.Type{Oid: types.T_char})},
@@ -197,7 +198,7 @@ func init() {
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal128}, {Oid: types.T_char}}, []int32{0},
-			[][]Condition{
+			[][]joincondition.Condition{
 				{
 					{0, newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1})},
 					{0, newExpr(1, types.Type{Oid: types.T_char})},
@@ -251,7 +252,7 @@ func BenchmarkJoin(b *testing.B) {
 		gm := guest.New(1<<30, hm)
 		tcs = []joinTestCase{
 			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
-				[][]Condition{
+				[][]joincondition.Condition{
 					{
 						{0, newExpr(0, types.Type{Oid: types.T_int8})},
 					},
@@ -260,7 +261,7 @@ func BenchmarkJoin(b *testing.B) {
 					},
 				}),
 			newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
-				[][]Condition{
+				[][]joincondition.Condition{
 					{
 						{0, newExpr(0, types.Type{Oid: types.T_int8})},
 					},
@@ -307,7 +308,7 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 	}
 }
 
-func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []int32, cs [][]Condition) joinTestCase {
+func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []int32, cs [][]joincondition.Condition) joinTestCase {
 	proc := process.New(m)
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
