@@ -123,6 +123,9 @@ func (s *Driver) EncodeLogName(name string) string {
 func (s *Driver) Open(name string) (err error) {
 	if _, err = os.Stat(name); os.IsNotExist(err) {
 		err = s.Init(name)
+		if err != nil {
+			return
+		}
 		s.Mount()
 		return
 	}
