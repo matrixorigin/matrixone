@@ -15,8 +15,9 @@
 package scanner
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
 var rwlock sync.RWMutex
@@ -450,6 +451,8 @@ func initTokens(dialectType dialect.DialectType) map[string]int {
 		QUERY = MYSQL_QUERY
 		EXPANSION = MYSQL_EXPANSION
 		UNUSED = MYSQL_UNUSED
+		PREPARE = MYSQL_PREPARE
+		DEALLOCATE = MYSQL_DEALLOCATE
 
 	case dialect.POSTGRESQL:
 		USE = POSTGRESQL_USE
@@ -916,6 +919,8 @@ func initTokens(dialectType dialect.DialectType) map[string]int {
 		"minute_microsecond":       MINUTE_MICROSECOND,
 		"min":                      MIN,
 		"second_microsecond":       SECOND_MICROSECOND,
+		"prepare":                  PREPARE,
+		"deallocate":               DEALLOCATE,
 	}
 }
 
@@ -1347,4 +1352,6 @@ var (
 	INT4                     int
 	INT8                     int
 	VERBOSE                  int
+	PREPARE                  int
+	DEALLOCATE               int
 )
