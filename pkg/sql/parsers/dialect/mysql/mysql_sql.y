@@ -147,6 +147,7 @@ import (
     fieldsList []*tree.Fields
     lines *tree.Lines
     varExpr *tree.VarExpr
+    varExprs []*tree.VarExpr
     loadColumn tree.LoadColumn
     loadColumns []tree.LoadColumn
     assignments []*tree.Assignment
@@ -229,6 +230,7 @@ import (
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS
 %token <str> TYPE ANY SOME
+%token <str> PREPARE DEALLOCATE
 
 // MO table option
 %token <str> PROPERTIES
@@ -303,7 +305,7 @@ import (
 %type <statement> stmt
 %type <statements> stmt_list
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt
-%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt
+%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt
 %type <statement> drop_role_stmt drop_user_stmt
 %type <statement> create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt
@@ -317,6 +319,7 @@ import (
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt
 %type <statement> analyze_stmt
+%type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt
 %type <exportParm> export_data_param_opt
 
 %type <select> select_stmt select_no_parens
@@ -373,7 +376,7 @@ import (
 %type <str> reserved_keyword non_reserved_keyword
 %type <str> equal_opt reserved_sql_id reserved_table_id
 %type <str> as_name_opt as_opt_id table_id id_or_var name_string ident
-%type <str> database_id table_alias explain_sym
+%type <str> database_id table_alias explain_sym prepare_sym deallocate_sym stmt_name
 %type <unresolvedObjectName> unresolved_object_name table_column_name
 %type <unresolvedObjectName> table_name_unresolved
 %type <comparisionExpr> like_opt
@@ -466,6 +469,7 @@ import (
 %type <lines> load_lines export_lines_opt
 %type <int64Val> ignore_lines
 %type <varExpr> user_variable variable system_variable
+%type <varExprs> variable_list
 %type <loadColumn> columns_or_variable
 %type <loadColumns> columns_or_variable_list columns_or_variable_list_opt
 %type <unresolvedName> normal_ident
@@ -519,6 +523,9 @@ stmt:
 |   delete_stmt
 |   drop_stmt
 |   explain_stmt
+|   prepare_stmt
+|   deallocate_stmt
+|   execute_stmt
 |   show_stmt
 |   alter_stmt
 |   analyze_stmt
@@ -644,6 +651,16 @@ columns_or_variable:
 |   user_variable
     {
         $$ = $1
+    }
+
+variable_list:
+    variable
+    {
+        $$ = []*tree.VarExpr{$1}
+    }
+|   variable_list ',' variable
+    {
+        $$ = append($1, $3)
     }
 
 variable:
@@ -1509,6 +1526,41 @@ update_expression:
         $$ = &tree.UpdateExpr{Names: []*tree.UnresolvedName{$1}, Expr: $3}
     }
 
+prepareable_stmt:
+    delete_stmt
+|   insert_stmt
+|   update_stmt
+|   select_stmt
+    {
+        $$ = $1
+    }
+
+prepare_stmt:
+    prepare_sym stmt_name FROM prepareable_stmt
+    {
+        $$ = tree.NewPrepare(tree.Identifier($2), $4)
+    }
+|   prepare_sym stmt_name FROM STRING
+    {
+        $$ = tree.NewPrepareFromStr(tree.Identifier($2), $4) 
+    }
+
+execute_stmt:
+    execute_sym stmt_name
+    {
+        $$ = tree.NewExecute(tree.Identifier($2))
+    }
+|   execute_sym stmt_name USING variable_list
+    {
+        $$ = tree.NewExecuteWithVariables(tree.Identifier($2), $4)
+    }
+
+deallocate_stmt:
+    deallocate_sym PREPARE stmt_name
+    {
+        $$ = tree.NewDeallocate(tree.Identifier($3), false)
+    }
+
 explainable_stmt:
     delete_stmt
 |   insert_stmt
@@ -1583,6 +1635,15 @@ explain_foramt_value:
     JSON
 |   TEXT
 
+
+prepare_sym:
+    PREPARE
+
+deallocate_sym:
+    DEALLOCATE
+
+execute_sym:
+    EXECUTE
 
 explain_sym:
     EXPLAIN
@@ -1949,6 +2010,7 @@ drop_stmt:
 
 drop_ddl_stmt:
     drop_database_stmt
+|   drop_prepare_stmt
 |   drop_table_stmt
 |   drop_index_stmt
 |   drop_role_stmt
@@ -1992,6 +2054,12 @@ drop_database_stmt:
     DROP DATABASE exists_opt database_id
     {
         $$ = &tree.DropDatabase{Name: tree.Identifier($4), IfExists: $3}
+    }
+
+drop_prepare_stmt:
+    DROP PREPARE stmt_name
+    {
+        $$ = tree.NewDeallocate(tree.Identifier($3), true)
     }
 
 delete_stmt:
@@ -2886,6 +2954,9 @@ as_name_opt:
 	{
 		$$ = $2
 	}
+
+stmt_name:
+    ident
 
 database_id:
     id_or_var
@@ -5428,6 +5499,10 @@ literal:
             return 1
         }
 	}
+|   VALUE_ARG
+    {
+        $$ = tree.NewArgExpr()
+    }
 
 column_type:
     numeric_type unsigned_opt zero_fill_opt
