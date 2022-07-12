@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/typecast"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
 )
@@ -83,25 +83,25 @@ func rpad(rowCount int, strs *types.Bytes, sizes interface{}, pads interface{}, 
 	case *types.Bytes:
 		padstrs = pd
 	case []int64:
-		_, err = typecast.Int64ToBytes(pd, padstrs)
+		_, err = binary.Int64ToBytes(pd, padstrs)
 	case []int32:
-		_, err = typecast.Int32ToBytes(pd, padstrs)
+		_, err = binary.Int32ToBytes(pd, padstrs)
 	case []int16:
-		_, err = typecast.Int16ToBytes(pd, padstrs)
+		_, err = binary.Int16ToBytes(pd, padstrs)
 	case []int8:
-		_, err = typecast.Int8ToBytes(pd, padstrs)
+		_, err = binary.Int8ToBytes(pd, padstrs)
 	case []uint64:
-		_, err = typecast.Uint64ToBytes(pd, padstrs)
+		_, err = binary.Uint64ToBytes(pd, padstrs)
 	case []uint32:
-		_, err = typecast.Uint32ToBytes(pd, padstrs)
+		_, err = binary.Uint32ToBytes(pd, padstrs)
 	case []uint16:
-		_, err = typecast.Uint16ToBytes(pd, padstrs)
+		_, err = binary.Uint16ToBytes(pd, padstrs)
 	case []uint8:
-		_, err = typecast.Uint8ToBytes(pd, padstrs)
+		_, err = binary.Uint8ToBytes(pd, padstrs)
 	case []float32:
-		_, err = typecast.Float32ToBytes(pd, padstrs)
+		_, err = binary.Float32ToBytes(pd, padstrs)
 	case []float64:
-		_, err = typecast.Float64ToBytes(pd, padstrs)
+		_, err = binary.Float64ToBytes(pd, padstrs)
 	default:
 		// empty string
 		padstrs = &types.Bytes{
@@ -123,43 +123,43 @@ func rpad(rowCount int, strs *types.Bytes, sizes interface{}, pads interface{}, 
 		result, nsp = rpadInt64(rowCount, strs, sz, padstrs, isConst, oriNsp)
 	case []int32:
 		sizesInt64 := make([]int64, len(sz))
-		sizesInt64, err2 = typecast.Int32ToInt64(sz, sizesInt64)
+		sizesInt64, err2 = binary.Int32ToInt64(sz, sizesInt64)
 		result, nsp = rpadInt64(rowCount, strs, sizesInt64, padstrs, isConst, oriNsp)
 	case []int16:
 		sizesInt64 := make([]int64, len(sz))
-		sizesInt64, err2 = typecast.Int16ToInt64(sz, sizesInt64)
+		sizesInt64, err2 = binary.Int16ToInt64(sz, sizesInt64)
 		result, nsp = rpadInt64(rowCount, strs, sizesInt64, padstrs, isConst, oriNsp)
 	case []int8:
 		sizesInt64 := make([]int64, len(sz))
-		sizesInt64, err2 = typecast.Int8ToInt64(sz, sizesInt64)
+		sizesInt64, err2 = binary.Int8ToInt64(sz, sizesInt64)
 		result, nsp = rpadInt64(rowCount, strs, sizesInt64, padstrs, isConst, oriNsp)
 	case []float64:
 		sizesInt64 := make([]int64, len(sz))
 		isEmptyStringOrNull := make([]int, len(sz))
-		sizesInt64, err2 = typecast.Float64ToInt64(sz, sizesInt64, isEmptyStringOrNull)
+		sizesInt64, err2 = binary.Float64ToInt64(sz, sizesInt64, isEmptyStringOrNull)
 		result, nsp = rpadInt64(rowCount, strs, sizesInt64, padstrs, isConst, oriNsp, isEmptyStringOrNull)
 	case []float32:
 		sizesInt64 := make([]int64, len(sz))
-		sizesInt64, err2 = typecast.Float32ToInt64(sz, sizesInt64)
+		sizesInt64, err2 = binary.Float32ToInt64(sz, sizesInt64)
 		result, nsp = rpadInt64(rowCount, strs, sizesInt64, padstrs, isConst, oriNsp)
 	case []uint64:
 		result, nsp = rpadUint64(rowCount, strs, sz, padstrs, isConst, oriNsp)
 	case []uint32:
 		sizesUint64 := make([]uint64, len(sz))
-		sizesUint64, err2 = typecast.Uint32ToUint64(sz, sizesUint64)
+		sizesUint64, err2 = binary.Uint32ToUint64(sz, sizesUint64)
 		result, nsp = rpadUint64(rowCount, strs, sizesUint64, padstrs, isConst, oriNsp)
 	case []uint16:
 		sizesUint64 := make([]uint64, len(sz))
-		sizesUint64, err2 = typecast.Uint16ToUint64(sz, sizesUint64)
+		sizesUint64, err2 = binary.Uint16ToUint64(sz, sizesUint64)
 		result, nsp = rpadUint64(rowCount, strs, sizesUint64, padstrs, isConst, oriNsp)
 	case []uint8:
 		sizesUint64 := make([]uint64, len(sz))
-		sizesUint64, err2 = typecast.Uint8ToUint64(sz, sizesUint64)
+		sizesUint64, err2 = binary.Uint8ToUint64(sz, sizesUint64)
 		result, nsp = rpadUint64(rowCount, strs, sizesUint64, padstrs, isConst, oriNsp)
 	case *types.Bytes:
 		sizesFloat64 := make([]float64, len(sz.Lengths))
 		isEmptyStringOrNull := make([]int, len(sz.Lengths))
-		sizesFloat64, err2 = typecast.BytesToFloat(sz, sizesFloat64, isEmptyStringOrNull)
+		sizesFloat64, err2 = binary.BytesToFloat(sz, sizesFloat64, isEmptyStringOrNull)
 		sizesInt64 := make([]int64, len(sz.Lengths))
 		for i, val := range sizesFloat64 { //for func rpad,like '1.8', is 1, not 2.
 			sizesInt64[i] = int64(math.Floor(val))
