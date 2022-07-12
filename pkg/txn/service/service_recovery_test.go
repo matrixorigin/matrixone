@@ -214,7 +214,54 @@ func TestRecoveryFromMultiDNShardWithAnyNotPrepared(t *testing.T) {
 }
 
 func TestRecoveryFromMultiDNShardWithCommitting(t *testing.T) {
+	mlog1 := mem.NewMemLog()
+	mlog2 := mem.NewMemLog()
 
+	wTxn := newTestTxn(1, 1, 1, 2)
+	wTxn.Status = txn.TxnStatus_Prepared
+	wTxn.PreparedTS = newTestTimestamp(2)
+
+	addLog(t, mlog1, wTxn, 1)
+	addLog(t, mlog2, wTxn, 2)
+
+	wTxn.CommitTS = newTestTimestamp(2)
+	wTxn.Status = txn.TxnStatus_Committing
+	addLog(t, mlog1, wTxn, 1)
+
+	sender := newTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	s1 := newTestTxnServiceWithLog(t, 1, sender, newTestClock(0), mlog1)
+	s2 := newTestTxnServiceWithLog(t, 2, sender, newTestClock(0), mlog2)
+	sender.addTxnService(s1)
+	sender.addTxnService(s2)
+
+	assert.NoError(t, s1.Start())
+	defer func() {
+		assert.NoError(t, s1.Close())
+	}()
+
+	assert.NoError(t, s2.Start())
+	defer func() {
+		assert.NoError(t, s2.Close())
+	}()
+
+	for e := range s1.storage.(*mem.KVTxnStorage).GetEventC() {
+		if e.Type == mem.CommitType {
+			break
+		}
+	}
+
+	for e := range s2.storage.(*mem.KVTxnStorage).GetEventC() {
+		if e.Type == mem.CommitType {
+			break
+		}
+	}
+
+	checkData(t, wTxn, s1, 2, 1, true)
+	checkData(t, wTxn, s2, 2, 2, true)
 }
 
 func addLog(t *testing.T, l logservice.Client, wTxn txn.TxnMeta, keys ...byte) {

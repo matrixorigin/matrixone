@@ -55,7 +55,7 @@ func (s *service) addLog(txnMeta txn.TxnMeta) error {
 		if txnCtx == nil {
 			s.maybeAddTxn(txnMeta)
 		} else {
-			if txnCtx.getTxn().Status != txn.TxnStatus_Prepared ||
+			if txnCtx.getTxn().Status != txn.TxnStatus_Prepared &&
 				txnCtx.getTxn().Status != txn.TxnStatus_Committing {
 				s.logger.Fatal("invalid txn status before committing",
 					zap.String("prev-status", txnCtx.getTxn().Status.String()),
@@ -98,7 +98,6 @@ func (s *service) end() error {
 
 		switch txnMeta.Status {
 		case txn.TxnStatus_Prepared:
-			s.removeTxn(txnMeta.ID)
 			if err := s.startAsyncCheckCommitTask(txnCtx); err != nil {
 				panic(err)
 			}
@@ -121,7 +120,6 @@ func (s *service) waitRecoveryCompleted() {
 func (s *service) startAsyncCheckCommitTask(txnCtx *txnContext) error {
 	return s.stopper.RunTask(func(ctx context.Context) {
 		txnMeta := txnCtx.getTxn()
-		s.removeTxn(txnMeta.ID)
 
 		requests := make([]txn.TxnRequest, 0, len(txnMeta.DNShards)-1)
 		for _, dn := range txnMeta.DNShards[1:] {
@@ -148,19 +146,15 @@ func (s *service) startAsyncCheckCommitTask(txnCtx *txnContext) error {
 			}
 		}
 
-		txnCtx.mu.Lock()
-		defer txnCtx.mu.Unlock()
-
 		if prepared == len(txnMeta.DNShards) {
 			txnCtx.updateTxnLocked(txnMeta)
+			s.removeTxn(txnMeta.ID)
 			if err := s.startAsyncCommitTask(txnCtx); err != nil {
 				s.logger.Error("start commit task failed",
 					zap.Error(err),
 					util.TxnField(txnMeta))
 			}
 		} else {
-			txnCtx.changeStatusLocked(txn.TxnStatus_Aborted)
-			s.releaseTxnContext(txnCtx)
 			s.startAsyncRollbackTask(txnMeta)
 		}
 	})

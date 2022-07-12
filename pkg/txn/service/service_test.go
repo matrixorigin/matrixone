@@ -178,6 +178,26 @@ func newTestCommitRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 	}
 }
 
+func newTestCommitShardRequest(wTxn txn.TxnMeta) txn.TxnRequest {
+	return txn.TxnRequest{
+		Method: txn.TxnMethod_CommitDNShard,
+		Txn:    wTxn,
+		CommitDNShardRequest: &txn.TxnCommitDNShardRequest{
+			DNShard: wTxn.DNShards[0],
+		},
+	}
+}
+
+func newTestRollbackShardRequest(wTxn txn.TxnMeta) txn.TxnRequest {
+	return txn.TxnRequest{
+		Method: txn.TxnMethod_RollbackDNShard,
+		Txn:    wTxn,
+		RollbackDNShardRequest: &txn.TxnRollbackDNShardRequest{
+			DNShard: wTxn.DNShards[0],
+		},
+	}
+}
+
 func newTestRollbackRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 	return txn.TxnRequest{
 		Method:          txn.TxnMethod_Rollback,
