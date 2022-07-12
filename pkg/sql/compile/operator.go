@@ -81,46 +81,22 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Limit: arg.Limit,
 		}
 	case *join.Argument:
-		conds := make([][]join.Condition, len(arg.Conditions))
-		for i := range arg.Conditions {
-			conds[i] = make([]join.Condition, len(arg.Conditions[i]))
-			for j := range arg.Conditions[i] {
-				conds[i][j].Expr = arg.Conditions[i][j].Expr
-				conds[i][j].Scale = arg.Conditions[i][j].Scale
-			}
-		}
 		rin.Arg = &join.Argument{
-			Conditions: conds,
 			IsPreBuild: arg.IsPreBuild,
 			Result:     arg.Result,
+			Conditions: copyCondition(arg.Conditions),
 		}
 	case *semi.Argument:
-		conds := make([][]semi.Condition, len(arg.Conditions))
-		for i := range arg.Conditions {
-			conds[i] = make([]semi.Condition, len(arg.Conditions[i]))
-			for j := range arg.Conditions[i] {
-				conds[i][j].Expr = arg.Conditions[i][j].Expr
-				conds[i][j].Scale = arg.Conditions[i][j].Scale
-			}
-		}
 		rin.Arg = &semi.Argument{
-			Conditions: conds,
 			IsPreBuild: arg.IsPreBuild,
 			Result:     arg.Result,
+			Conditions: copySemiCondition(arg.Conditions),
 		}
 	case *left.Argument:
-		conds := make([][]left.Condition, len(arg.Conditions))
-		for i := range arg.Conditions {
-			conds[i] = make([]left.Condition, len(arg.Conditions[i]))
-			for j := range arg.Conditions[i] {
-				conds[i][j].Expr = arg.Conditions[i][j].Expr
-				conds[i][j].Scale = arg.Conditions[i][j].Scale
-			}
-		}
 		rin.Arg = &left.Argument{
-			Conditions: conds,
 			IsPreBuild: arg.IsPreBuild,
 			Result:     arg.Result,
+			Conditions: copyLeftCondition(arg.Conditions),
 		}
 	case *product.Argument:
 		rin.Arg = &product.Argument{
@@ -627,4 +603,40 @@ func exprRelPos(expr *plan.Expr) int32 {
 		}
 	}
 	return -1
+}
+
+func copyCondition(conds [][]join.Condition) [][]join.Condition {
+	rconds := make([][]join.Condition, len(conds))
+	for i := range conds {
+		rconds[i] = make([]join.Condition, len(conds[i]))
+		for j := range conds[i] {
+			rconds[i][j].Expr = conds[i][j].Expr
+			rconds[i][j].Scale = conds[i][j].Scale
+		}
+	}
+	return rconds
+}
+
+func copySemiCondition(conds [][]semi.Condition) [][]semi.Condition {
+	rconds := make([][]semi.Condition, len(conds))
+	for i := range conds {
+		rconds[i] = make([]semi.Condition, len(conds[i]))
+		for j := range conds[i] {
+			rconds[i][j].Expr = conds[i][j].Expr
+			rconds[i][j].Scale = conds[i][j].Scale
+		}
+	}
+	return rconds
+}
+
+func copyLeftCondition(conds [][]left.Condition) [][]left.Condition {
+	rconds := make([][]left.Condition, len(conds))
+	for i := range conds {
+		rconds[i] = make([]left.Condition, len(conds[i]))
+		for j := range conds[i] {
+			rconds[i][j].Expr = conds[i][j].Expr
+			rconds[i][j].Scale = conds[i][j].Scale
+		}
+	}
+	return rconds
 }
