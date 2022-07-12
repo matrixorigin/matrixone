@@ -254,19 +254,19 @@ func BenchmarkJoin(b *testing.B) {
 			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}},
 				[][]joincondition.Condition{
 					{
-						{0, newExpr(0, types.Type{Oid: types.T_int8})},
+						{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_int8})},
 					},
 					{
-						{0, newExpr(0, types.Type{Oid: types.T_int8})},
+						{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_int8})},
 					},
 				}),
 			newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}},
 				[][]joincondition.Condition{
 					{
-						{0, newExpr(0, types.Type{Oid: types.T_int8})},
+						{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_int8})},
 					},
 					{
-						{0, newExpr(0, types.Type{Oid: types.T_int8})},
+						{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_int8})},
 					},
 				}),
 		}
