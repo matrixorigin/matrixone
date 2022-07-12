@@ -809,7 +809,7 @@ func TestRpadInt(t *testing.T) {
 	oriNsps = append(oriNsps, new(nulls.Nulls))
 	expectedNsp := new(nulls.Nulls)
 
-	actualStrs, actualNsp, _ := Rpad(len(sizes), strs, sizes, padstrs, isConst, oriNsps)
+	actualStrs, actualNsp, _ := rpad(len(sizes), strs, sizes, padstrs, isConst, oriNsps)
 	require.Equal(t, expectedStrs, actualStrs)
 	require.Equal(t, expectedNsp, actualNsp)
 
@@ -818,7 +818,7 @@ func TestRpadInt(t *testing.T) {
 	sizes = []int16{3}
 	padstrs = getBytes("111")
 	expectedStrs = getBytes("hel", "hel", "hel", "hel", "hel", "hel", "hel")
-	actualStrs, actualNsp, _ = Rpad(len(strs.Lengths), strs, sizes, padstrs, isConst, oriNsps)
+	actualStrs, actualNsp, _ = rpad(len(strs.Lengths), strs, sizes, padstrs, isConst, oriNsps)
 	require.Equal(t, expectedStrs, actualStrs)
 	require.Equal(t, expectedNsp, actualNsp)
 
@@ -849,7 +849,7 @@ func TestRpadInt(t *testing.T) {
 		nulls.Add(expectedNsp, uint64(i)) // all strings are NULLs
 
 	}
-	actualStrs, actualNsp, _ = Rpad(len(sizes), strs, sizes, padstrs, isConst, oriNsps)
+	actualStrs, actualNsp, _ = rpad(len(sizes), strs, sizes, padstrs, isConst, oriNsps)
 	require.Equal(t, expectedStrs, actualStrs)
 	require.Equal(t, expectedNsp, actualNsp)
 }
@@ -868,13 +868,13 @@ func TestRpadFloat(t *testing.T) {
 
 	expectedStrs := getBytes("", "", "", "hello你好你", "hello你好你", "hello你好你好")
 	expectedNsp := new(nulls.Nulls)
-	actualStrs, actualNsp, _ := Rpad(len(sizes), strs, sizes, padstrs, isConst, oriNsps)
+	actualStrs, actualNsp, _ := rpad(len(sizes), strs, sizes, padstrs, isConst, oriNsps)
 	require.Equal(t, expectedStrs, actualStrs)
 	require.Equal(t, expectedNsp, actualNsp)
 
 	// test float32
 	sizes2 := []float32{0.0, 0.1, -0.1, 8, 8.4, 8.6}
-	actualStrs, actualNsp, _ = Rpad(len(sizes2), strs, sizes2, padstrs, isConst, oriNsps)
+	actualStrs, actualNsp, _ = rpad(len(sizes2), strs, sizes2, padstrs, isConst, oriNsps)
 	require.Equal(t, expectedStrs, actualStrs)
 	require.Equal(t, expectedNsp, actualNsp)
 }
@@ -893,7 +893,7 @@ func TestRpadUint(t *testing.T) {
 	oriNsps = append(oriNsps, new(nulls.Nulls))
 	expectedNsp := new(nulls.Nulls)
 
-	actualStrs, actualNsp, _ := Rpad(len(sizes), strs, sizes, padstrs, isConst, oriNsps)
+	actualStrs, actualNsp, _ := rpad(len(sizes), strs, sizes, padstrs, isConst, oriNsps)
 	require.Equal(t, expectedStrs, actualStrs)
 	require.Equal(t, expectedNsp, actualNsp)
 
@@ -902,7 +902,7 @@ func TestRpadUint(t *testing.T) {
 	sizes = []uint32{3}
 	padstrs = getBytes("111")
 	expectedStrs = getBytes("hel", "hel", "hel", "hel", "hel", "hel", "hel")
-	actualStrs, actualNsp, _ = Rpad(len(strs.Lengths), strs, sizes, padstrs, isConst, oriNsps)
+	actualStrs, actualNsp, _ = rpad(len(strs.Lengths), strs, sizes, padstrs, isConst, oriNsps)
 	require.Equal(t, expectedStrs, actualStrs)
 	require.Equal(t, expectedNsp, actualNsp)
 
@@ -932,7 +932,7 @@ func TestRpadUint(t *testing.T) {
 		nulls.Add(expectedNsp, uint64(i)) // all strings are NULLs
 
 	}
-	actualStrs, actualNsp, _ = Rpad(len(sizes), strs, sizes, padstrs, isConst, oriNsps)
+	actualStrs, actualNsp, _ = rpad(len(sizes), strs, sizes, padstrs, isConst, oriNsps)
 	require.Equal(t, expectedStrs, actualStrs)
 	require.Equal(t, expectedNsp, actualNsp)
 }
@@ -951,7 +951,7 @@ func TestTypes(t *testing.T) {
 	// nulls.Add(expectedNsp, 0)
 	expectedStrs := getBytes("", "")
 
-	actualStrs, actualNsp, _ := Rpad(len(strs.Lengths), strs, sizes, padstrs, isConst, oriNsps)
+	actualStrs, actualNsp, _ := rpad(len(strs.Lengths), strs, sizes, padstrs, isConst, oriNsps)
 	require.Equal(t, expectedStrs, actualStrs)
 	require.Equal(t, expectedNsp, actualNsp)
 
@@ -965,7 +965,7 @@ func TestTypes(t *testing.T) {
 	expectedNsp2 := new(nulls.Nulls)
 	nulls.Add(expectedNsp2, 0)
 	expectedStrs2 := getBytes("", "te", "test101010")
-	actualStrs, actualNsp, _ = Rpad(len(sizes2), strs2, sizes2, padstrs2, isConst, oriNsps2)
+	actualStrs, actualNsp, _ = rpad(len(sizes2), strs2, sizes2, padstrs2, isConst, oriNsps2)
 	require.Equal(t, expectedStrs2, actualStrs)
 	require.Equal(t, expectedNsp2, actualNsp)
 }
