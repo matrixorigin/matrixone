@@ -17,6 +17,7 @@ package compile
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/joincondition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopcomplement"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
@@ -90,13 +91,13 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		rin.Arg = &semi.Argument{
 			IsPreBuild: arg.IsPreBuild,
 			Result:     arg.Result,
-			Conditions: copySemiCondition(arg.Conditions),
+			Conditions: copyCondition(arg.Conditions),
 		}
 	case *left.Argument:
 		rin.Arg = &left.Argument{
 			IsPreBuild: arg.IsPreBuild,
 			Result:     arg.Result,
-			Conditions: copyLeftCondition(arg.Conditions),
+			Conditions: copyCondition(arg.Conditions),
 		}
 	case *product.Argument:
 		rin.Arg = &product.Argument{
@@ -243,10 +244,10 @@ func constructJoin(n *plan.Node, proc *process.Process) *join.Argument {
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
-	conds := make([][]join.Condition, 2)
+	conds := make([][]joincondition.Condition, 2)
 	{
-		conds[0] = make([]join.Condition, len(n.OnList))
-		conds[1] = make([]join.Condition, len(n.OnList))
+		conds[0] = make([]joincondition.Condition, len(n.OnList))
+		conds[1] = make([]joincondition.Condition, len(n.OnList))
 	}
 	for i, expr := range n.OnList {
 		conds[0][i].Expr, conds[1][i].Expr = constructJoinCondition(expr)
@@ -267,10 +268,10 @@ func constructSemi(n *plan.Node, proc *process.Process) *semi.Argument {
 		}
 		result[i] = pos
 	}
-	conds := make([][]semi.Condition, 2)
+	conds := make([][]joincondition.Condition, 2)
 	{
-		conds[0] = make([]semi.Condition, len(n.OnList))
-		conds[1] = make([]semi.Condition, len(n.OnList))
+		conds[0] = make([]joincondition.Condition, len(n.OnList))
+		conds[1] = make([]joincondition.Condition, len(n.OnList))
 	}
 	for i, expr := range n.OnList {
 		conds[0][i].Expr, conds[1][i].Expr = constructJoinCondition(expr)
@@ -287,10 +288,10 @@ func constructLeft(n *plan.Node, proc *process.Process) *left.Argument {
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
-	conds := make([][]left.Condition, 2)
+	conds := make([][]joincondition.Condition, 2)
 	{
-		conds[0] = make([]left.Condition, len(n.OnList))
-		conds[1] = make([]left.Condition, len(n.OnList))
+		conds[0] = make([]joincondition.Condition, len(n.OnList))
+		conds[1] = make([]joincondition.Condition, len(n.OnList))
 	}
 	for i, expr := range n.OnList {
 		conds[0][i].Expr, conds[1][i].Expr = constructJoinCondition(expr)
@@ -605,34 +606,10 @@ func exprRelPos(expr *plan.Expr) int32 {
 	return -1
 }
 
-func copyCondition(conds [][]join.Condition) [][]join.Condition {
-	rconds := make([][]join.Condition, len(conds))
+func copyCondition(conds [][]joincondition.Condition) [][]joincondition.Condition {
+	rconds := make([][]joincondition.Condition, len(conds))
 	for i := range conds {
-		rconds[i] = make([]join.Condition, len(conds[i]))
-		for j := range conds[i] {
-			rconds[i][j].Expr = conds[i][j].Expr
-			rconds[i][j].Scale = conds[i][j].Scale
-		}
-	}
-	return rconds
-}
-
-func copySemiCondition(conds [][]semi.Condition) [][]semi.Condition {
-	rconds := make([][]semi.Condition, len(conds))
-	for i := range conds {
-		rconds[i] = make([]semi.Condition, len(conds[i]))
-		for j := range conds[i] {
-			rconds[i][j].Expr = conds[i][j].Expr
-			rconds[i][j].Scale = conds[i][j].Scale
-		}
-	}
-	return rconds
-}
-
-func copyLeftCondition(conds [][]left.Condition) [][]left.Condition {
-	rconds := make([][]left.Condition, len(conds))
-	for i := range conds {
-		rconds[i] = make([]left.Condition, len(conds[i]))
+		rconds[i] = make([]joincondition.Condition, len(conds[i]))
 		for j := range conds[i] {
 			rconds[i][j].Expr = conds[i][j].Expr
 			rconds[i][j].Scale = conds[i][j].Scale
