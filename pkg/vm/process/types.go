@@ -65,6 +65,38 @@ type SessionInfo struct {
 	Version      string
 }
 
+// explain analyze information for query
+type AnalyzeInfo struct {
+	NodeId       int32 // Node index of query
+	InputRows    int64 // number of rows accepted by node
+	OutputRows   int64 // number of rows output by node
+	TimeConsumed int64 // time taken by the node in milliseconds
+	InputSize    int64 // data size accepted by node
+	OutputSize   int64 // data size output by node
+}
+
+// Process contains context used in query execution
+// one or more pipeline will be generated for one query,
+// and one pipeline has one process instance.
+type Process struct {
+	// Id, query id.
+	Id  string
+	Reg Register
+	Lim Limitation
+	Mp  *mheap.Mheap
+
+	// unix timestamp
+	UnixTime int64
+
+	// snapshot is transaction context
+	Snapshot []byte
+
+	SessionInfo SessionInfo
+
+	// snapshot is transaction context
+	Cancel context.CancelFunc
+}
+
 func (si *SessionInfo) GetUser() string {
 	return si.User
 }
@@ -99,26 +131,4 @@ func (si *SessionInfo) GetDatabase() string {
 
 func (si *SessionInfo) GetVersion() string {
 	return si.Version
-}
-
-// Process contains context used in query execution
-// one or more pipeline will be generated for one query,
-// and one pipeline has one process instance.
-type Process struct {
-	// Id, query id.
-	Id  string
-	Reg Register
-	Lim Limitation
-	Mp  *mheap.Mheap
-
-	// unix timestamp
-	UnixTime int64
-
-	// snapshot is transaction context
-	Snapshot []byte
-
-	SessionInfo SessionInfo
-
-	// snapshot is transaction context
-	Cancel context.CancelFunc
 }
