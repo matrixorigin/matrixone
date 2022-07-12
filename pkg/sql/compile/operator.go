@@ -84,19 +84,19 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		rin.Arg = &join.Argument{
 			IsPreBuild: arg.IsPreBuild,
 			Result:     arg.Result,
-			Conditions: arg.Conditions,
+			Conditions: copyCondition(arg.Conditions),
 		}
 	case *semi.Argument:
 		rin.Arg = &semi.Argument{
 			IsPreBuild: arg.IsPreBuild,
 			Result:     arg.Result,
-			Conditions: arg.Conditions,
+			Conditions: copySemiCondition(arg.Conditions),
 		}
 	case *left.Argument:
 		rin.Arg = &left.Argument{
 			IsPreBuild: arg.IsPreBuild,
 			Result:     arg.Result,
-			Conditions: arg.Conditions,
+			Conditions: copyLeftCondition(arg.Conditions),
 		}
 	case *product.Argument:
 		rin.Arg = &product.Argument{
@@ -603,4 +603,40 @@ func exprRelPos(expr *plan.Expr) int32 {
 		}
 	}
 	return -1
+}
+
+func copyCondition(conds [][]join.Condition) [][]join.Condition {
+	rconds := make([][]join.Condition, len(conds))
+	for i := range conds {
+		rconds[i] = make([]join.Condition, len(conds[i]))
+		for j := range conds[i] {
+			rconds[i][j].Expr = conds[i][j].Expr
+			rconds[i][j].Scale = conds[i][j].Scale
+		}
+	}
+	return rconds
+}
+
+func copySemiCondition(conds [][]semi.Condition) [][]semi.Condition {
+	rconds := make([][]semi.Condition, len(conds))
+	for i := range conds {
+		rconds[i] = make([]semi.Condition, len(conds[i]))
+		for j := range conds[i] {
+			rconds[i][j].Expr = conds[i][j].Expr
+			rconds[i][j].Scale = conds[i][j].Scale
+		}
+	}
+	return rconds
+}
+
+func copyLeftCondition(conds [][]left.Condition) [][]left.Condition {
+	rconds := make([][]left.Condition, len(conds))
+	for i := range conds {
+		rconds[i] = make([]left.Condition, len(conds[i]))
+		for j := range conds[i] {
+			rconds[i][j].Expr = conds[i][j].Expr
+			rconds[i][j].Scale = conds[i][j].Scale
+		}
+	}
+	return rconds
 }
