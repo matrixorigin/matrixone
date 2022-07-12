@@ -29,9 +29,7 @@ create database t012345678901234567890123456789012345678901234567890123456789012
 -- @case
 -- @desc:test for show database
 -- @label:bvt
--- @bvt:issue#3661
 show databases;
--- @bvt:issue
 drop database if exists test01;
 drop database if exists test03;
 drop database if exists test04;

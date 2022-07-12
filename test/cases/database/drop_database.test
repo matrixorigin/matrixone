@@ -7,6 +7,4 @@ drop database if exists drop_database;
 -- @label:bvt
 create database test01;
 drop database test01;
--- @bvt:issue#3661
 show databases;
--- @bvt:issue
