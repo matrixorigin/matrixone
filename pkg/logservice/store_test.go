@@ -70,9 +70,11 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	store, err := newLogStore(cfg)
 	assert.NoError(t, err)
+	plog.Infof("1")
 	defer func() {
 		assert.NoError(t, store.close())
 	}()
+	plog.Infof("2")
 }
 
 func getTestStore(cfg Config, startLogReplica bool) (*store, error) {

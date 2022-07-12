@@ -56,6 +56,11 @@ func (a *idAllocator) Next() (uint64, bool) {
 }
 
 func (a *idAllocator) Set(next uint64, last uint64) {
+	// make sure that this id allocator never emit any id smaller than
+	// K8SIDRangeEnd
+	if next < hakeeper.K8SIDRangeEnd {
+		panic("invalid id allocator range")
+	}
 	a.nextID = next
 	a.lastID = last
 }

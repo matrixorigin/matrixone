@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -57,8 +58,22 @@ func TestIDAllocatorCapacity(t *testing.T) {
 
 func TestIDAllocatorSet(t *testing.T) {
 	alloc := idAllocator{nextID: 100, lastID: 200}
-	alloc.Set(200, 300)
-	assert.Equal(t, idAllocator{nextID: 200, lastID: 300}, alloc)
+	alloc.Set(hakeeper.K8SIDRangeEnd, hakeeper.K8SIDRangeEnd+100)
+	expected := idAllocator{
+		nextID: hakeeper.K8SIDRangeEnd,
+		lastID: hakeeper.K8SIDRangeEnd + 100,
+	}
+	assert.Equal(t, expected, alloc)
+}
+
+func TestIDAllocatorRejectInvalidSetInput(t *testing.T) {
+	alloc := idAllocator{nextID: 100, lastID: 200}
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("failed to trigger panic")
+		}
+	}()
+	alloc.Set(300, 400)
 }
 
 func TestIDAllocatorNext(t *testing.T) {
@@ -139,10 +154,10 @@ func TestSetInitialClusterInfo(t *testing.T) {
 }
 
 // FIXME: re-enable this test
-/*
+
 func TestFailedBootstrap(t *testing.T) {
 	testBootstrap(t, true)
-}*/
+}
 
 func TestBootstrap(t *testing.T) {
 	testBootstrap(t, false)
@@ -181,7 +196,7 @@ func testBootstrap(t *testing.T, fail bool) {
 		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
 		assert.Equal(t, uint64(checkBootstrapInterval), store.bootstrapCheckInterval)
 		require.NotNil(t, store.bootstrapMgr)
-		// assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
+		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
 
 		if fail {
 			// keep checking, bootstrap will eventually be set as failed
@@ -195,10 +210,10 @@ func testBootstrap(t *testing.T, fail bool) {
 		} else {
 			cb, err := store.getCommandBatch(ctx, store.id())
 			require.NoError(t, err)
-			require.Equal(t, 2, len(cb.Commands))
+			require.Equal(t, 1, len(cb.Commands))
 			service := &Service{store: store}
 			service.handleStartReplica(cb.Commands[0])
-			service.handleStartReplica(cb.Commands[1])
+			//service.handleStartReplica(cb.Commands[1])
 
 			for i := 0; i < 100; i++ {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)

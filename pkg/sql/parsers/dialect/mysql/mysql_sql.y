@@ -341,7 +341,7 @@ import (
 %type <tableName> table_name
 %type <tableNames> table_name_list
 %type <columnTableDef> column_def
-%type <columnType> cast_type
+%type <columnType> mo_cast_type mysql_cast_type
 %type <columnType> column_type char_type spatial_type time_type numeric_type decimal_type int_type
 %type <str> integer_opt
 %type <columnAttribute> column_attribute_elem keys
@@ -4459,11 +4459,11 @@ simple_expr:
 			Else: $4,
 		}
 	}
-|   CAST '(' expression AS cast_type ')' 
+|   CAST '(' expression AS mo_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
     }
-|   CONVERT '(' expression ',' cast_type ')' 
+|   CONVERT '(' expression ',' mysql_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
     }
@@ -4530,7 +4530,41 @@ when_clause:
 		}
 	}
 
-cast_type:
+mo_cast_type:
+	column_type
+|   SIGNED integer_opt
+    {
+    	name := $1
+    	if $2 != "" {
+    		name = $2
+    	}
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+		        Family: tree.IntFamily,
+                FamilyString: name,
+		        Width:  64,
+		        Locale: &locale,
+		        Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
+	        },
+        }
+    }
+|   UNSIGNED integer_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+		        Family: tree.IntFamily,
+                FamilyString: $2,
+		        Width:  64,
+		        Locale: &locale,
+                Unsigned: true,
+		        Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
+	        },
+        }
+    }
+
+mysql_cast_type:
     decimal_type
 |   BINARY length_opt
     {

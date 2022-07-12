@@ -144,11 +144,11 @@ select distinct t.a from (select * from t1) t where a not in (2) order by t.a as
 Can't cast '2' as boolean type.
 select a and b from t1 where exists (select a from t1 where a is null) order by a desc;
 a and b
+false
 true
 false
+false
 null
-false
-false
 update t1 set a=false where b is null;
 delete from t1 where a=false;
 select * from t1;

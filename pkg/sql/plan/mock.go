@@ -67,7 +67,7 @@ type Schema struct {
 	card float64
 }
 
-const SF float64 = 10
+const SF float64 = 1
 
 func NewMockCompilerContext() *MockCompilerContext {
 	tpchSchema := make(map[string]*Schema)
@@ -116,7 +116,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"p_retailprice", plan.Type_FLOAT64, false, 15, 2},
 			{"p_comment", plan.Type_VARCHAR, false, 23, 0},
 		},
-		card: SF * 2e5,
+		card: SF * 2e4,
 	}
 	tpchSchema["supplier"] = &Schema{
 		cols: []col{
@@ -128,7 +128,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"s_acctbal", plan.Type_FLOAT64, false, 15, 2},
 			{"s_comment", plan.Type_VARCHAR, false, 101, 0},
 		},
-		card: SF * 1e4,
+		card: SF * 1e3,
 	}
 	tpchSchema["partsupp"] = &Schema{
 		cols: []col{
@@ -138,7 +138,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"ps_supplycost", plan.Type_FLOAT64, false, 15, 2},
 			{"ps_comment", plan.Type_VARCHAR, false, 199, 0},
 		},
-		card: SF * 8e5,
+		card: SF * 8e4,
 	}
 	tpchSchema["customer"] = &Schema{
 		cols: []col{
@@ -151,7 +151,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"c_mktsegment", plan.Type_VARCHAR, false, 10, 0},
 			{"c_comment", plan.Type_VARCHAR, false, 117, 0},
 		},
-		card: SF * 15e4,
+		card: SF * 15e3,
 	}
 	tpchSchema["orders"] = &Schema{
 		cols: []col{
@@ -165,7 +165,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"o_shippriority", plan.Type_INT32, false, 0, 0},
 			{"o_comment", plan.Type_VARCHAR, false, 79, 0},
 		},
-		card: SF * 15e5,
+		card: SF * 15e4,
 	}
 	tpchSchema["lineitem"] = &Schema{
 		cols: []col{
@@ -186,7 +186,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"l_shipmode", plan.Type_VARCHAR, false, 10, 0},
 			{"l_comment", plan.Type_VARCHAR, false, 44, 0},
 		},
-		card: SF * 6e6,
+		card: SF * 6e5,
 	}
 
 	moSchema["mo_database"] = &Schema{

@@ -26,8 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  "show schemas like 'db1'",
-		output: "show databases like db1",
+		input: "select cast(false as varchar)",
 	}
 )
 
@@ -52,6 +51,20 @@ var (
 		input  string
 		output string
 	}{{
+		input: "select cast(false as varchar)",
+	}, {
+		input:  "select cast(a as timestamp)",
+		output: "select cast(a as timestamp(26, 6))",
+	}, {
+		input:  "select cast(\"2022-01-30\" as varchar);",
+		output: "select cast(2022-01-30 as varchar)",
+	}, {
+		input:  "select cast(b as timestamp) from t2",
+		output: "select cast(b as timestamp(26, 6)) from t2",
+	}, {
+		input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
+		output: "select cast(2022-01-01 01:23:34 as varchar)",
+	}, {
 		input:  "show schemas where 1",
 		output: "show databases where 1",
 	}, {

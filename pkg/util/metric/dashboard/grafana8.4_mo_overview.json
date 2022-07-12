@@ -18,7 +18,7 @@
     "fiscalYearStartMonth": 0,
     "graphTooltip": 0,
     "id": 4,
-    "iteration": 1655711770352,
+    "iteration": 1657527417584,
     "links": [],
     "liveNow": false,
     "panels": [
@@ -360,7 +360,7 @@
                     "metricColumn": "none",
                     "queryType": "randomWalk",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  collecttime as time_sec,\n  value as cpu\nFROM process_cpu_percent\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  unix_timestamp(collecttime) as time_sec,\n  value as cpu\nFROM process_cpu_percent\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
                     "refId": "A",
                     "select": [
                         [
@@ -471,7 +471,7 @@
                     "metricColumn": "none",
                     "queryType": "randomWalk",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  collecttime as time_sec,\n  value as memory\nFROM process_resident_memory_bytes\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  unix_timestamp(collecttime) as time_sec,\n  value as memory\nFROM process_resident_memory_bytes\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
                     "refId": "A",
                     "select": [
                         [
@@ -738,7 +738,7 @@
                     "metricColumn": "none",
                     "queryType": "randomWalk",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  collecttime as time_sec,\n  value as cpu\nFROM sys_cpu_combined_percent\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  unix_timestamp(collecttime) as time_sec,\n  value as cpu\nFROM sys_cpu_combined_percent\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
                     "refId": "A",
                     "select": [
                         [
@@ -850,7 +850,7 @@
                     "metricColumn": "none",
                     "queryType": "randomWalk",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  collecttime as time_sec,\n  value as used\nFROM sys_memory_used\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  unix_timestamp(collecttime) as time_sec,\n  value as used\nFROM sys_memory_used\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
                     "refId": "A",
                     "select": [
                         [
@@ -881,7 +881,7 @@
                     "hide": false,
                     "metricColumn": "none",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  collecttime as time_sec,\n  value as available\nFROM sys_memory_available\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  unix_timestamp(collecttime) as time_sec,\n  value as available\nFROM sys_memory_available\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
                     "refId": "B",
                     "select": [
                         [
