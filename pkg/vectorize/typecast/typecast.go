@@ -513,6 +513,11 @@ func Decimal64ToInt64(xs []types.Decimal64, scale int32, rs []int64) ([]int64, e
 		if err != nil {
 			return []int64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT correctly")
 		}
+
+		if floatRepresentation > math.MaxInt64 || floatRepresentation < math.MinInt64 {
+			return []int64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT correctly")
+		}
+
 		result := int64(math.Round(floatRepresentation))
 		rs[i] = result
 	}
@@ -526,6 +531,11 @@ func Decimal128ToInt64(xs []types.Decimal128, scale int32, rs []int64) ([]int64,
 		if err != nil {
 			return []int64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT correctly")
 		}
+
+		if floatRepresentation > math.MaxInt64 || floatRepresentation < math.MinInt64 {
+			return []int64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT correctly")
+		}
+
 		result := int64(math.Round(floatRepresentation))
 		rs[i] = result
 	}
