@@ -59,153 +59,153 @@ func init() {
 		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 			[][]joincondition.Condition{
 				{
-					{0, newExpr(0, types.Type{Oid: types.T_int8})},
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_int8})},
 				},
 				{
-					{0, newExpr(0, types.Type{Oid: types.T_int8})},
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_int8})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 			[][]joincondition.Condition{
 				{
-					{0, newExpr(0, types.Type{Oid: types.T_int8})},
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_int8})},
 				},
 				{
-					{0, newExpr(0, types.Type{Oid: types.T_int8})},
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_int8})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_decimal64}}, []int32{0},
 			[][]joincondition.Condition{
 				{
-					{0, newExpr(0, types.Type{Oid: types.T_decimal64})},
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal64})},
 				},
 				{
-					{0, newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1})},
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_decimal64}}, []int32{0},
 			[][]joincondition.Condition{
 				{
-					{0, newExpr(0, types.Type{Oid: types.T_decimal64})},
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal64})},
 				},
 				{
-					{0, newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1})},
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_decimal128}}, []int32{0},
 			[][]joincondition.Condition{
 				{
-					{0, newExpr(0, types.Type{Oid: types.T_decimal128})},
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal128})},
 				},
 				{
-					{0, newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1})},
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_decimal128}}, []int32{0},
 			[][]joincondition.Condition{
 				{
-					{0, newExpr(0, types.Type{Oid: types.T_decimal128})},
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal128})},
 				},
 				{
-					{0, newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1})},
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []int32{0},
 			[][]joincondition.Condition{
 				{
-					{0, newExpr(1, types.Type{Oid: types.T_int64})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_int64})},
 				},
 				{
-					{0, newExpr(1, types.Type{Oid: types.T_int64})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_int64})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []int32{0},
 			[][]joincondition.Condition{
 				{
-					{0, newExpr(1, types.Type{Oid: types.T_int64})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_int64})},
 				},
 				{
-					{0, newExpr(1, types.Type{Oid: types.T_int64})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_int64})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal64}}, []int32{0},
 			[][]joincondition.Condition{
 				{
-					{0, newExpr(1, types.Type{Oid: types.T_decimal64})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_decimal64})},
 				},
 				{
-					{0, newExpr(1, types.Type{Oid: types.T_decimal64, Scale: 1})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_decimal64, Scale: 1})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal64}}, []int32{0},
 			[][]joincondition.Condition{
 				{
-					{0, newExpr(1, types.Type{Oid: types.T_decimal64})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_decimal64})},
 				},
 				{
-					{0, newExpr(1, types.Type{Oid: types.T_decimal64, Scale: 1})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_decimal64, Scale: 1})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal128}}, []int32{0},
 			[][]joincondition.Condition{
 				{
-					{0, newExpr(1, types.Type{Oid: types.T_decimal128})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_decimal128})},
 				},
 				{
-					{0, newExpr(1, types.Type{Oid: types.T_decimal128, Scale: 1})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_decimal128, Scale: 1})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal128}}, []int32{0},
 			[][]joincondition.Condition{
 				{
-					{0, newExpr(1, types.Type{Oid: types.T_decimal128})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_decimal128})},
 				},
 				{
-					{0, newExpr(1, types.Type{Oid: types.T_decimal128, Scale: 1})},
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal64}, {Oid: types.T_char}}, []int32{0},
-			[][]joincondition.Condition{
-				{
-					{0, newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1})},
-					{0, newExpr(1, types.Type{Oid: types.T_char})},
-				},
-				{
-					{0, newExpr(0, types.Type{Oid: types.T_decimal64})},
-					{0, newExpr(1, types.Type{Oid: types.T_char})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_decimal128, Scale: 1})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal64}, {Oid: types.T_char}}, []int32{0},
 			[][]joincondition.Condition{
 				{
-					{0, newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1})},
-					{0, newExpr(1, types.Type{Oid: types.T_char})},
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_char})},
 				},
 				{
-					{0, newExpr(0, types.Type{Oid: types.T_decimal64})},
-					{0, newExpr(1, types.Type{Oid: types.T_char})},
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal64})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_char})},
+				},
+			}),
+		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal64}, {Oid: types.T_char}}, []int32{0},
+			[][]joincondition.Condition{
+				{
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_char})},
+				},
+				{
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal64})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_char})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal128}, {Oid: types.T_char}}, []int32{0},
 			[][]joincondition.Condition{
 				{
-					{0, newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1})},
-					{0, newExpr(1, types.Type{Oid: types.T_char})},
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_char})},
 				},
 				{
-					{0, newExpr(0, types.Type{Oid: types.T_decimal128})},
-					{0, newExpr(1, types.Type{Oid: types.T_char})},
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal128})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_char})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal128}, {Oid: types.T_char}}, []int32{0},
 			[][]joincondition.Condition{
 				{
-					{0, newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1})},
-					{0, newExpr(1, types.Type{Oid: types.T_char})},
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_char})},
 				},
 				{
-					{0, newExpr(0, types.Type{Oid: types.T_decimal128})},
-					{0, newExpr(1, types.Type{Oid: types.T_char})},
+					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal128})},
+					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_char})},
 				},
 			}),
 	}
