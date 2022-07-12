@@ -19,8 +19,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+)
+
+var (
+	ErrNoHAKeeper = moerr.NewError(moerr.INVALID_STATE, "failed to locate HAKeeper")
 )
 
 // CNHAKeeperClient is the HAKeeper client used by a CN store.
@@ -100,6 +105,13 @@ func newHAKeeperClient(ctx context.Context,
 		} else if err != nil {
 			e = err
 		}
+		if err := cc.Close(); err != nil {
+			plog.Errorf("failed to close the client %v", err)
+		}
+	}
+	if e == nil {
+		// didn't encounter any error
+		return nil, ErrNoHAKeeper
 	}
 	return nil, e
 }
