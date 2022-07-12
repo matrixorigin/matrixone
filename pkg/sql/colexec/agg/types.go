@@ -28,7 +28,7 @@ type Agg[T any] interface {
 	Type() types.Type
 
 	// InputType return the type of the agg's input.
-	InputType() types.Type
+	InputType() []types.Type
 
 	// String return related information of the agg.
 	// used to show query plans.
@@ -50,12 +50,12 @@ type Agg[T any] interface {
 
 	// Fill use the rowIndex-rows of vector to update the data of groupIndex-group.
 	// rowCount indicates the number of times the rowIndex-row is repeated.
-	Fill(groupIndex int64, rowIndex int64, rowCount int64, vec *vector.Vector)
+	Fill(groupIndex int64, rowIndex int64, rowCount int64, vecs []*vector.Vector)
 
 	// BulkFill use a whole vector to update the data of agg's group
 	// groupIndex is the index number of the group
 	// rowCounts is the count number of each row.
-	BulkFill(groupIndex int64, rowCounts []int64, v *vector.Vector)
+	BulkFill(groupIndex int64, rowCounts []int64, vecs []*vector.Vector)
 
 	// BatchFill use part of the vector to update the data of agg's group
 	//      os(origin-s) records information about which groups need to be updated
@@ -67,7 +67,7 @@ type Agg[T any] interface {
 	//      agg's (vps[i]-1)th group is related to vector's (offset+i)th row.
 	//      rowCounts[i] is count number of the row[i]
 	// For a more detailed introduction of rowCounts, please refer to comments of Function Fill.
-	BatchFill(offset int64, os []uint8, vps []uint64, rowCounts []int64, v *vector.Vector)
+	BatchFill(offset int64, os []uint8, vps []uint64, rowCounts []int64, vecs []*vector.Vector)
 
 	// Merge will merge a couple of group between 2 aggregate function structures.
 	// It merges the groupIndex1-group of agg1 and
