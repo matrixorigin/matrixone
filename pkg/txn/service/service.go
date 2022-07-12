@@ -89,7 +89,10 @@ func NewTxnService(logger *zap.Logger,
 		recoveryC:     make(chan struct{}),
 		txnC:          make(chan txn.TxnMeta, 16),
 	}
-	s.stopper.RunTask(s.gcZombieTxn)
+	if err := s.stopper.RunTask(s.gcZombieTxn); err != nil {
+		s.logger.Fatal("start gc zombie txn failed",
+			zap.Error(err))
+	}
 	return s
 }
 
@@ -130,7 +133,11 @@ func (s *service) gcZombieTxn(ctx context.Context) {
 			})
 			for _, txn := range cleanTxns {
 				s.removeTxn(txn.ID)
-				s.storage.Rollback(txn)
+				if err := s.storage.Rollback(txn); err != nil {
+					s.logger.Error("start rollback task failed",
+						util.TxnIDFieldWithID(txn.ID),
+						zap.Error(err))
+				}
 			}
 			cleanTxns = cleanTxns[:0]
 		}

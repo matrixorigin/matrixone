@@ -110,7 +110,7 @@ func (s *testSender) Send(ctx context.Context, requests []txn.TxnRequest) ([]txn
 	s.mu.cancels = append(s.mu.cancels, cancel)
 	s.mu.Unlock()
 
-	var responses []txn.TxnResponse
+	responses := make([]txn.TxnResponse, 0, len(requests))
 	for _, req := range requests {
 		v, _ := ctx.Deadline()
 		req.TimeoutAt = v.UnixNano()

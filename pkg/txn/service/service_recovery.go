@@ -23,7 +23,10 @@ import (
 )
 
 func (s *service) startRecovery() {
-	s.stopper.RunTask(s.doRecovery)
+	if err := s.stopper.RunTask(s.doRecovery); err != nil {
+		s.logger.Fatal("start recover task failed",
+			zap.Error(err))
+	}
 	s.storage.StartRecovery(s.txnC)
 	s.waitRecoveryCompleted()
 }
@@ -43,9 +46,9 @@ func (s *service) doRecovery(ctx context.Context) {
 	}
 }
 
-func (s *service) addLog(txnMeta txn.TxnMeta) error {
+func (s *service) addLog(txnMeta txn.TxnMeta) {
 	if len(txnMeta.DNShards) <= 1 {
-		return nil
+		return
 	}
 
 	switch txnMeta.Status {
@@ -84,10 +87,9 @@ func (s *service) addLog(txnMeta txn.TxnMeta) error {
 		s.logger.Fatal("invalid recovery status",
 			util.TxnField(txnMeta))
 	}
-	return nil
 }
 
-func (s *service) end() error {
+func (s *service) end() {
 	defer close(s.recoveryC)
 	s.transactions.Range(func(key, value any) bool {
 		txnCtx := value.(*txnContext)
@@ -109,8 +111,6 @@ func (s *service) end() error {
 		}
 		return true
 	})
-
-	return nil
 }
 
 func (s *service) waitRecoveryCompleted() {

@@ -275,8 +275,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	// All DNShards prepared means the transaction is committed
 	completed = false
 	txnCtx.updateTxnLocked(newTxn)
-	s.startAsyncCommitTask(txnCtx)
-	return nil
+	return s.startAsyncCommitTask(txnCtx)
 }
 
 func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
