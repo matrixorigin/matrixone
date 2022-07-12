@@ -418,9 +418,6 @@ func (kv *KVTxnStorage) getWriteKeysLocked(txnMeta txn.TxnMeta) [][]byte {
 			writeKeys = append(writeKeys, []byte(k))
 		}
 	}
-	if len(writeKeys) == 0 {
-		panic("commit empty write set")
-	}
 	return writeKeys
 }
 
