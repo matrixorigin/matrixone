@@ -56,7 +56,7 @@ func TestNewBootstrapManager(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		bm := NewBootstrapManager(c.cluster)
+		bm := NewBootstrapManager(c.cluster, nil)
 		assert.Equal(t, c.expected.cluster, bm.cluster)
 	}
 }
@@ -132,7 +132,7 @@ func TestBootstrap(t *testing.T) {
 		fmt.Printf("case %v: %s\n", i, c.desc)
 
 		alloc := util.NewTestIDAllocator(0)
-		bm := NewBootstrapManager(c.cluster)
+		bm := NewBootstrapManager(c.cluster, nil)
 		output, err := bm.Bootstrap(alloc, c.dn, c.log)
 		assert.Equal(t, c.err, err)
 		if err != nil {
@@ -204,7 +204,7 @@ func TestCheckBootstrap(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		bm := NewBootstrapManager(c.cluster)
+		bm := NewBootstrapManager(c.cluster, nil)
 		output := bm.CheckBootstrap(c.log)
 		assert.Equal(t, c.expected, output)
 	}
@@ -289,7 +289,7 @@ func TestIssue3814(t *testing.T) {
 
 	for _, c := range cases {
 		alloc := util.NewTestIDAllocator(0)
-		bm := NewBootstrapManager(c.cluster)
+		bm := NewBootstrapManager(c.cluster, nil)
 		_, err := bm.Bootstrap(alloc, c.dn, c.log)
 		assert.Equal(t, c.expected, err)
 	}
@@ -333,7 +333,7 @@ func TestIssue3845(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		bm := NewBootstrapManager(c.cluster)
+		bm := NewBootstrapManager(c.cluster, nil)
 		output := bm.CheckBootstrap(c.log)
 		assert.Equal(t, c.expected, output)
 	}
