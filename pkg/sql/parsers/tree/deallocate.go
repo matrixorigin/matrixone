@@ -30,7 +30,7 @@ func (node *Deallocate) Format(ctx *FmtCtx) {
 	node.Name.Format(ctx)
 }
 
-func NewDeallocateStmt(name Identifier, isDrop bool) *Deallocate {
+func NewDeallocate(name Identifier, isDrop bool) *Deallocate {
 	return &Deallocate{
 		IsDrop: isDrop,
 		Name:   name,
