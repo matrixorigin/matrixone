@@ -17,6 +17,7 @@ package momath
 import (
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -34,6 +35,111 @@ func Acos(arg, result *vector.Vector) error {
 			} else {
 				resCol[i] = math.Acos(v)
 			}
+		}
+	}
+	return nil
+}
+
+func Atan(arg, result *vector.Vector) error {
+	argCol := vector.MustTCols[float64](arg)
+	resCol := vector.MustTCols[float64](result)
+	nulls.Set(result.Nsp, arg.Nsp)
+	for i, v := range argCol {
+		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
+			resCol[i] = math.Atan(v)
+		}
+	}
+	return nil
+}
+
+func Cos(arg, result *vector.Vector) error {
+	argCol := vector.MustTCols[float64](arg)
+	resCol := vector.MustTCols[float64](result)
+	nulls.Set(result.Nsp, arg.Nsp)
+	for i, v := range argCol {
+		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
+			resCol[i] = math.Cos(v)
+		}
+	}
+	return nil
+}
+
+func Cot(arg, result *vector.Vector) error {
+	argCol := vector.MustTCols[float64](arg)
+	resCol := vector.MustTCols[float64](result)
+	nulls.Set(result.Nsp, arg.Nsp)
+	for i, v := range argCol {
+		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
+			if v == 0 {
+				// panic or return error.   need refactor later.
+				panic(moerr.NewError(moerr.OUT_OF_RANGE, "cot(0) value out of range"))
+			} else {
+				resCol[i] = math.Tan(math.Pi/2.0 - v)
+			}
+		}
+	}
+	return nil
+}
+
+func Exp(arg, result *vector.Vector) error {
+	argCol := vector.MustTCols[float64](arg)
+	resCol := vector.MustTCols[float64](result)
+	nulls.Set(result.Nsp, arg.Nsp)
+	for i, v := range argCol {
+		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
+			resCol[i] = math.Exp(v)
+		}
+	}
+	return nil
+}
+
+func Ln(arg, result *vector.Vector) error {
+	argCol := vector.MustTCols[float64](arg)
+	resCol := vector.MustTCols[float64](result)
+	nulls.Set(result.Nsp, arg.Nsp)
+	for i, v := range argCol {
+		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
+			if v <= 0 {
+				nulls.Add(result.Nsp, uint64(i))
+			} else {
+				resCol[i] = math.Log(v)
+			}
+		}
+	}
+	return nil
+}
+
+func Sin(arg, result *vector.Vector) error {
+	argCol := vector.MustTCols[float64](arg)
+	resCol := vector.MustTCols[float64](result)
+	nulls.Set(result.Nsp, arg.Nsp)
+	for i, v := range argCol {
+		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
+			resCol[i] = math.Sin(v)
+		}
+	}
+	return nil
+}
+
+func Sinh(arg, result *vector.Vector) error {
+	argCol := vector.MustTCols[float64](arg)
+	resCol := vector.MustTCols[float64](result)
+	nulls.Set(result.Nsp, arg.Nsp)
+	for i, v := range argCol {
+		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
+			resCol[i] = math.Sinh(v)
+		}
+	}
+	return nil
+}
+
+func Tan(arg, result *vector.Vector) error {
+	argCol := vector.MustTCols[float64](arg)
+	resCol := vector.MustTCols[float64](result)
+	nulls.Set(result.Nsp, arg.Nsp)
+	for i, v := range argCol {
+		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
+			resCol[i] = math.Tan(v)
 		}
 	}
 	return nil
