@@ -849,3 +849,17 @@ func NewVarExpr(n string, s bool, g bool, e Expr) *VarExpr {
 		Expr:   e,
 	}
 }
+
+// select a from t1 where a > ?
+type ArgExpr struct {
+	exprImpl
+}
+
+// incomplete
+func (node *ArgExpr) Format(ctx *FmtCtx) {
+	ctx.WriteByte('?')
+}
+
+func NewArgExpr() *ArgExpr {
+	return &ArgExpr{}
+}
