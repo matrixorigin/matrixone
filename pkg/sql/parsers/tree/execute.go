@@ -14,42 +14,35 @@
 
 package tree
 
-type PrepareStmt struct {
+type ExecuteStmt struct {
 	Statement
-	Name Identifier
-	Stmt Statement
+	Name      Identifier
+	Variables []*VarExpr
 }
 
-type PrepareStringStmt struct {
-	Statement
-	Name Identifier
-	Sql  string
-}
-
-func (node *PrepareStmt) Format(ctx *FmtCtx) {
-	ctx.WriteString("prepare ")
+func (node *ExecuteStmt) Format(ctx *FmtCtx) {
+	ctx.WriteString("execute ")
 	node.Name.Format(ctx)
-	ctx.WriteString(" from ")
-	node.Stmt.Format(ctx)
-}
-
-func (node *PrepareStringStmt) Format(ctx *FmtCtx) {
-	ctx.WriteString("prepare ")
-	node.Name.Format(ctx)
-	ctx.WriteString(" from ")
-	ctx.WriteString(node.Sql)
-}
-
-func NewPrepareStmt(name Identifier, statement Statement) *PrepareStmt {
-	return &PrepareStmt{
-		Name: name,
-		Stmt: statement,
+	if len(node.Variables) > 0 {
+		ctx.WriteString(" using ")
+		for i, varExpr := range node.Variables {
+			if i > 0 {
+				ctx.WriteString(",")
+			}
+			varExpr.Format(ctx)
+		}
 	}
 }
 
-func NewPrepareStmtFromStr(name Identifier, sql string) *PrepareStringStmt {
-	return &PrepareStringStmt{
+func NewExecuteStmt(name Identifier) *ExecuteStmt {
+	return &ExecuteStmt{
 		Name: name,
-		Sql:  sql,
+	}
+}
+
+func NewExecuteStmtWithVariables(name Identifier, variables []*VarExpr) *ExecuteStmt {
+	return &ExecuteStmt{
+		Name:      name,
+		Variables: variables,
 	}
 }

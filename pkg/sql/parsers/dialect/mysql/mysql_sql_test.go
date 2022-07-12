@@ -946,6 +946,19 @@ var (
 	}, {
 		input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE' MAX_FILE_SIZE 100 FORCE_QUOTE (a, b)",
 		output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false max_file_size 102400 force_quote a, b",
+	}, {
+		input: "drop prepare stmt_name1",
+	}, {
+		input: "deallocate prepare stmt_name1",
+	}, {
+		input: "execute stmt_name1",
+	}, {
+		input: "execute stmt_name1 using @var_name,@@sys_name",
+	}, {
+		input: "prepare stmt_name1 from select * from t1",
+	}, {
+		input:  "prepare stmt_name1 from 'select * from t1'",
+		output: "prepare stmt_name1 from select * from t1",
 	}}
 )
 
