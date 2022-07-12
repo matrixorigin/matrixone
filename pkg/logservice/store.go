@@ -655,6 +655,7 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 			},
 			ReplicaID: ci.ReplicaID,
 		}
+		// FIXME: why we need this?
 		if replicaInfo.Replicas == nil {
 			replicaInfo.Replicas = make(map[uint64]dragonboat.Target)
 		}
