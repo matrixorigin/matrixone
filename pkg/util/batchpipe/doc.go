@@ -12,18 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metric
-
-var initCollectors = []Collector{
-	SQLLatencyObserverFactory,
-	StatementCounterFactory,
-	processCollector,
-	hardwareStatsCollector,
-}
-
-// register all defined collector here
-func registerAllMetrics() {
-	for _, c := range initCollectors {
-		mustRegister(c)
-	}
-}
+// A common util to export data (trace and metric for now) as batch
+package batchpipe
