@@ -99,6 +99,8 @@ const (
 	OperatorIntervention                    = "56000"
 	SystemError                             = "58000"
 	InternalError                           = "XX000"
-	InvalidJsonText                         = "XX001"
-	EmptyJsonText                           = "XX002"
+	InvalidJsonText                         = "the JSON text is not valid"
+	EmptyJsonText                           = "the JSON text is empty"
+	InvalidJsonNumber                       = "the JSON number is not valid"
+	InvalidJsonKeyTooLong                   = "the JSON key is too long"
 )
