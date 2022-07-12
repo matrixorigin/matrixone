@@ -38,10 +38,7 @@ func (stat *objectFileStat) ModTime() time.Time {
 }
 
 func (stat *objectFileStat) IsDir() bool {
-	if stat.oType == DIR {
-		return true
-	}
-	return false
+	return stat.oType == DIR
 }
 
 func (stat *objectFileStat) Sys() any {
