@@ -14,13 +14,13 @@
 
 package tree
 
-type DeallocateStmt struct {
+type Deallocate struct {
 	Statement
 	IsDrop bool
 	Name   Identifier
 }
 
-func (node *DeallocateStmt) Format(ctx *FmtCtx) {
+func (node *Deallocate) Format(ctx *FmtCtx) {
 	if node.IsDrop {
 		ctx.WriteString("drop")
 	} else {
@@ -30,8 +30,8 @@ func (node *DeallocateStmt) Format(ctx *FmtCtx) {
 	node.Name.Format(ctx)
 }
 
-func NewDeallocateStmt(name Identifier, isDrop bool) *DeallocateStmt {
-	return &DeallocateStmt{
+func NewDeallocateStmt(name Identifier, isDrop bool) *Deallocate {
+	return &Deallocate{
 		IsDrop: isDrop,
 		Name:   name,
 	}

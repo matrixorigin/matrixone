@@ -14,41 +14,41 @@
 
 package tree
 
-type PrepareStmt struct {
+type Prepare struct {
 	Statement
 	Name Identifier
 	Stmt Statement
 }
 
-type PrepareStringStmt struct {
+type PrepareString struct {
 	Statement
 	Name Identifier
 	Sql  string
 }
 
-func (node *PrepareStmt) Format(ctx *FmtCtx) {
+func (node *Prepare) Format(ctx *FmtCtx) {
 	ctx.WriteString("prepare ")
 	node.Name.Format(ctx)
 	ctx.WriteString(" from ")
 	node.Stmt.Format(ctx)
 }
 
-func (node *PrepareStringStmt) Format(ctx *FmtCtx) {
+func (node *PrepareString) Format(ctx *FmtCtx) {
 	ctx.WriteString("prepare ")
 	node.Name.Format(ctx)
 	ctx.WriteString(" from ")
 	ctx.WriteString(node.Sql)
 }
 
-func NewPrepareStmt(name Identifier, statement Statement) *PrepareStmt {
-	return &PrepareStmt{
+func NewPrepareStmt(name Identifier, statement Statement) *Prepare {
+	return &Prepare{
 		Name: name,
 		Stmt: statement,
 	}
 }
 
-func NewPrepareStmtFromStr(name Identifier, sql string) *PrepareStringStmt {
-	return &PrepareStringStmt{
+func NewPrepareStmtFromStr(name Identifier, sql string) *PrepareString {
+	return &PrepareString{
 		Name: name,
 		Sql:  sql,
 	}

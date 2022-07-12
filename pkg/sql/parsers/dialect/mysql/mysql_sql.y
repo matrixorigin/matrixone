@@ -1538,27 +1538,27 @@ prepareable_stmt:
 prepare_stmt:
     prepare_sym stmt_name FROM prepareable_stmt
     {
-        $$ = tree.NewPrepareStmt(tree.Identifier($2), $4)
+        $$ = tree.NewPrepare(tree.Identifier($2), $4)
     }
 |   prepare_sym stmt_name FROM STRING
     {
-        $$ = tree.NewPrepareStmtFromStr(tree.Identifier($2), $4) 
+        $$ = tree.NewPrepareFromStr(tree.Identifier($2), $4) 
     }
 
 execute_stmt:
     execute_sym stmt_name
     {
-        $$ = tree.NewExecuteStmt(tree.Identifier($2))
+        $$ = tree.NewExecute(tree.Identifier($2))
     }
 |   execute_sym stmt_name USING variable_list
     {
-        $$ = tree.NewExecuteStmtWithVariables(tree.Identifier($2), $4)
+        $$ = tree.NewExecuteWithVariables(tree.Identifier($2), $4)
     }
 
 deallocate_stmt:
     deallocate_sym PREPARE stmt_name
     {
-        $$ = tree.NewDeallocateStmt(tree.Identifier($3), false)
+        $$ = tree.NewDeallocate(tree.Identifier($3), false)
     }
 
 explainable_stmt:
@@ -2059,7 +2059,7 @@ drop_database_stmt:
 drop_prepare_stmt:
     DROP PREPARE stmt_name
     {
-        $$ = tree.NewDeallocateStmt(tree.Identifier($3), true)
+        $$ = tree.NewDeallocate(tree.Identifier($3), true)
     }
 
 delete_stmt:
@@ -2956,8 +2956,7 @@ as_name_opt:
 	}
 
 stmt_name:
-    id_or_var
-|   non_reserved_keyword
+    ident
 
 database_id:
     id_or_var

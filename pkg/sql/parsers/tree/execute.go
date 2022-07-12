@@ -14,13 +14,13 @@
 
 package tree
 
-type ExecuteStmt struct {
+type Execute struct {
 	Statement
 	Name      Identifier
 	Variables []*VarExpr
 }
 
-func (node *ExecuteStmt) Format(ctx *FmtCtx) {
+func (node *Execute) Format(ctx *FmtCtx) {
 	ctx.WriteString("execute ")
 	node.Name.Format(ctx)
 	if len(node.Variables) > 0 {
@@ -34,14 +34,14 @@ func (node *ExecuteStmt) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewExecuteStmt(name Identifier) *ExecuteStmt {
-	return &ExecuteStmt{
+func NewExecute(name Identifier) *Execute {
+	return &Execute{
 		Name: name,
 	}
 }
 
-func NewExecuteStmtWithVariables(name Identifier, variables []*VarExpr) *ExecuteStmt {
-	return &ExecuteStmt{
+func NewExecuteWithVariables(name Identifier, variables []*VarExpr) *Execute {
+	return &Execute{
 		Name:      name,
 		Variables: variables,
 	}
