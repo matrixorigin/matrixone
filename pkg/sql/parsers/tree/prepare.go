@@ -40,14 +40,14 @@ func (node *PrepareString) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Sql)
 }
 
-func NewPrepareStmt(name Identifier, statement Statement) *Prepare {
+func NewPrepare(name Identifier, statement Statement) *Prepare {
 	return &Prepare{
 		Name: name,
 		Stmt: statement,
 	}
 }
 
-func NewPrepareStmtFromStr(name Identifier, sql string) *PrepareString {
+func NewPrepareFromStr(name Identifier, sql string) *PrepareString {
 	return &PrepareString{
 		Name: name,
 		Sql:  sql,
