@@ -81,22 +81,46 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Limit: arg.Limit,
 		}
 	case *join.Argument:
+		conds := make([][]join.Condition, len(arg.Conditions))
+		for i := range arg.Conditions {
+			conds[i] = make([]join.Condition, len(arg.Conditions[i]))
+			for j := range arg.Conditions[i] {
+				conds[i][j].Expr = arg.Conditions[i][j].Expr
+				conds[i][j].Scale = arg.Conditions[i][j].Scale
+			}
+		}
 		rin.Arg = &join.Argument{
+			Conditions: conds,
 			IsPreBuild: arg.IsPreBuild,
 			Result:     arg.Result,
-			Conditions: arg.Conditions,
 		}
 	case *semi.Argument:
+		conds := make([][]semi.Condition, len(arg.Conditions))
+		for i := range arg.Conditions {
+			conds[i] = make([]semi.Condition, len(arg.Conditions[i]))
+			for j := range arg.Conditions[i] {
+				conds[i][j].Expr = arg.Conditions[i][j].Expr
+				conds[i][j].Scale = arg.Conditions[i][j].Scale
+			}
+		}
 		rin.Arg = &semi.Argument{
+			Conditions: conds,
 			IsPreBuild: arg.IsPreBuild,
 			Result:     arg.Result,
-			Conditions: arg.Conditions,
 		}
 	case *left.Argument:
+		conds := make([][]left.Condition, len(arg.Conditions))
+		for i := range arg.Conditions {
+			conds[i] = make([]left.Condition, len(arg.Conditions[i]))
+			for j := range arg.Conditions[i] {
+				conds[i][j].Expr = arg.Conditions[i][j].Expr
+				conds[i][j].Scale = arg.Conditions[i][j].Scale
+			}
+		}
 		rin.Arg = &left.Argument{
+			Conditions: conds,
 			IsPreBuild: arg.IsPreBuild,
 			Result:     arg.Result,
-			Conditions: arg.Conditions,
 		}
 	case *product.Argument:
 		rin.Arg = &product.Argument{
