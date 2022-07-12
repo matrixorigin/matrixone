@@ -5500,6 +5500,10 @@ literal:
             return 1
         }
 	}
+|   VALUE_ARG
+    {
+        $$ = tree.NewArgExpr()
+    }
 
 column_type:
     numeric_type unsigned_opt zero_fill_opt
