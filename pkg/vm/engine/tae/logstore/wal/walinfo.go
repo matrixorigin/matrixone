@@ -8,7 +8,7 @@ import (
 	"math"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
+	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
@@ -55,7 +55,7 @@ func (w *WalInfo) allocateLsn(gid uint32) uint64 {
 	return lsn
 }
 
-func (w *WalInfo) logDriverLsn(driverEntry *driver.Entry) {
+func (w *WalInfo) logDriverLsn(driverEntry *driverEntry.Entry) {
 	info := driverEntry.Entry.GetInfo().(*entry.Info)
 	if info.Group == GroupCKP {
 		w.logCheckpointInfo(info)
@@ -165,7 +165,7 @@ func (w *WalInfo) makeInternalCheckpointEntry() (e entry.Entry) {
 	if err != nil {
 		panic(err)
 	}
-	err = e.Unmarshal(buf)
+	err = e.SetPayload(buf)
 	if err != nil {
 		panic(err)
 	}

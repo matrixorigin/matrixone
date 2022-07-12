@@ -42,7 +42,7 @@ func init() {
 	FlushEntry = entry.GetBase()
 	FlushEntry.SetType(entry.ETFlush)
 	payload := make([]byte, 0)
-	err := FlushEntry.Unmarshal(payload)
+	err := FlushEntry.SetPayload(payload)
 	if err != nil {
 		panic(err)
 	}

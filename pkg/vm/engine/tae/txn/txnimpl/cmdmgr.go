@@ -64,7 +64,7 @@ func (mgr *commandManager) ApplyTxnRecord(tid uint64) (logEntry entry.Entry, err
 	}
 	logEntry = entry.GetBase()
 	logEntry.SetType(ETTxnRecord)
-	if err = logEntry.Unmarshal(buf); err != nil {
+	if err = logEntry.SetPayload(buf); err != nil {
 		return
 	}
 	info := &entry.Info{

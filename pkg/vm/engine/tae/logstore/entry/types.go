@@ -66,8 +66,11 @@ type Entry interface {
 	GetInfoBuf() []byte
 	SetInfoBuf(buf []byte)
 
-	Unmarshal([]byte) error
+	SetPayload([]byte) error
 	UnmarshalFromNode(*common.MemNode, bool) error
+
+	Unmarshal(buf []byte) error
+	Marshal() (buf []byte, err error)
 	ReadFrom(io.Reader) (int64, error)
 	WriteTo(io.Writer) (int64, error)
 

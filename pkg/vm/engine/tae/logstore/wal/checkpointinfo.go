@@ -9,7 +9,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
-
 type checkpointInfo struct {
 	ranges  *common.ClosedIntervals
 	partial map[uint64]*partialCkpInfo

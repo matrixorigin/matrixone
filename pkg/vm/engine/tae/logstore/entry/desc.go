@@ -79,7 +79,7 @@ func (desc *descriptor) GetInfoSize() int {
 	return int(binary.BigEndian.Uint32(desc.descBuf[InfoSizeOffset:]))
 }
 
-func (desc *descriptor) GetMetaSize() int{
+func (desc *descriptor) GetMetaSize() int {
 	return DescriptorSize
 }
 func (desc *descriptor) TotalSize() int {

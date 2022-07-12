@@ -5,6 +5,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
+	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
@@ -23,7 +24,7 @@ type WalImpl struct {
 	checkpointQueue chan any
 
 	truncatingQueue chan any
-	truncateQueue chan any
+	truncateQueue   chan any
 }
 
 func (w *WalImpl) Append(gid uint32, e entry.Entry) (lsn uint64, err error) {
@@ -54,10 +55,10 @@ func (w *WalImpl) Append(gid uint32, e entry.Entry) (lsn uint64, err error) {
 }
 
 func (w *WalImpl) onDriverAppendQueue1(items []any) any {
-	results := make([]*driver.Entry, 0)
+	results := make([]*driverEntry.Entry, 0)
 	for _, item := range items {
 		e := item.(entry.Entry)
-		driverEntry := driver.NewEntry(e)
+		driverEntry := driverEntry.NewEntry(e)
 		w.driver.Append(driverEntry)
 		results = append(results, driverEntry)
 	}
@@ -65,9 +66,9 @@ func (w *WalImpl) onDriverAppendQueue1(items []any) any {
 }
 
 func (w *WalImpl) onDoneWithErrQueue(items []any) any {
-	result := make([]*driver.Entry, 0)
+	result := make([]*driverEntry.Entry, 0)
 	for _, v := range items {
-		batch := v.([]*driver.Entry)
+		batch := v.([]*driverEntry.Entry)
 		for _, e := range batch {
 			e.WaitDone()
 			info := e.Entry.GetInfo()
@@ -83,7 +84,7 @@ func (w *WalImpl) onDoneWithErrQueue(items []any) any {
 
 func (w *WalImpl) onLogInfoQueue(items []any) any {
 	for _, v := range items {
-		batch := v.([]*driver.Entry)
+		batch := v.([]*driverEntry.Entry)
 		for _, e := range batch {
 			w.logDriverLsn(e)
 		}

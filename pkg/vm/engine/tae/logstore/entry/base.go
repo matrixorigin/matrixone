@@ -15,6 +15,7 @@
 package entry
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -56,7 +57,7 @@ type Info struct {
 	GroupLSN uint64
 
 	PostCommitVersion int
-	TargetLsn uint64
+	TargetLsn         uint64
 	Info              any
 }
 
@@ -391,7 +392,8 @@ func (b *Base) UnmarshalFromNode(n *common.MemNode, own bool) error {
 	return nil
 }
 
-func (b *Base) Unmarshal(buf []byte) error {
+//TODO Unmarshal->SetPayload
+func (b *Base) SetPayload(buf []byte) error {
 	if b.node != nil {
 		common.GPool.Free(b.node)
 		b.node = nil
@@ -400,7 +402,29 @@ func (b *Base) Unmarshal(buf []byte) error {
 	b.SetPayloadSize(len(buf))
 	return nil
 }
+
+func (b *Base) Unmarshal(buf []byte) error {
+	bbuf := bytes.NewBuffer(buf)
+	_, err := b.ReadFrom(bbuf)
+	return err
+}
+
+func (b *Base) Marshal() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if _, err = b.WriteTo(&bbuf); err != nil {
+		return
+	}
+	buf = bbuf.Bytes()
+	return
+}
+
 func (b *Base) ReadFrom(r io.Reader) (int64, error) {
+	metaBuf := b.GetMetaBuf()
+	_, err := r.Read(metaBuf)
+	if err != nil {
+		return 0, err
+	}
+
 	if b.node == nil {
 		b.node = common.GPool.Alloc(uint64(b.GetPayloadSize()))
 		b.payload = b.node.Buf[:b.GetPayloadSize()]

@@ -238,7 +238,7 @@ func (e *CheckpointEntry) MakeLogEntry() (logEntry LogEntry, err error) {
 	}
 	logEntry = entry.GetBase()
 	logEntry.SetType(ETCatalogCheckpoint)
-	err = logEntry.Unmarshal(buf)
+	err = logEntry.SetPayload(buf)
 	return
 }
 
