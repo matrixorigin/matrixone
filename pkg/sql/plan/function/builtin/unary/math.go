@@ -64,3 +64,40 @@ func math1(vs []*vector.Vector, proc *process.Process, fn mathFn) (*vector.Vecto
 func Acos(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return math1(vs, proc, momath.Acos)
 }
+
+func Atan(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return math1(vs, proc, momath.Atan)
+}
+
+func Cos(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return math1(vs, proc, momath.Cos)
+}
+
+func Cot(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return math1(vs, proc, momath.Cot)
+}
+
+func Exp(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return math1(vs, proc, momath.Exp)
+}
+
+func Ln(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return math1(vs, proc, momath.Ln)
+}
+
+func Log(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	// MySQL log is the same as ln.
+	return math1(vs, proc, momath.Ln)
+}
+
+func Sin(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return math1(vs, proc, momath.Sin)
+}
+
+func Sinh(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return math1(vs, proc, momath.Sinh)
+}
+
+func Tan(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return math1(vs, proc, momath.Tan)
+}
