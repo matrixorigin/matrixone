@@ -175,14 +175,14 @@ func (vf *vFile) Sync() error {
 	t0 := time.Now()
 	buf := vf.buf.Bytes()
 	n, err := vf.File.WriteAt(buf[:targetpos], int64(vf.syncpos))
+	if err != nil {
+		return err
+	}
 	if n != targetpos {
-		panic("logic err")
+		panic(fmt.Errorf("logic err, err is %v, expect %d bytes, sync %d bytes", err, targetpos, n))
 	}
 	if vf.bsInfo != nil {
 		vf.bsInfo.writeDuration += time.Since(t0)
-	}
-	if err != nil {
-		return err
 	}
 	// fmt.Printf("%p|sync [%v,%v](total%v|n=%d)\n", vf, vf.syncpos, vf.syncpos+vf.bufpos, vf.bufpos, n)
 	// buf := make([]byte, 10)
