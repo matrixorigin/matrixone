@@ -17,15 +17,17 @@ package moengine
 import (
 	"bytes"
 	"fmt"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -211,11 +213,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 func GenericUpdateFixedValue[T any](vec *vector.Vector, row uint32, v any) {
 	_, isNull := v.(types.Null)
 	if isNull {
-		if vec.Nsp.Np == nil {
-			vec.Nsp.Np = roaring64.BitmapOf(uint64(row))
-		} else {
-			vec.Nsp.Np.Add(uint64(row))
-		}
+		nulls.Add(vec.Nsp, uint64(row))
 	} else {
 		vvals := vec.Col.([]T)
 		vvals[row] = v.(T)
@@ -231,11 +229,7 @@ func AppendFixedValue[T any](vec *vector.Vector, v any) {
 	if isNull {
 		row := len(vvals)
 		vec.Col = append(vvals, types.DefaultVal[T]())
-		if vec.Nsp.Np == nil {
-			vec.Nsp.Np = roaring64.BitmapOf(uint64(row))
-		} else {
-			vec.Nsp.Np.Add(uint64(row))
-		}
+		nulls.Add(vec.Nsp, uint64(row))
 	} else {
 		vec.Col = append(vvals, v.(T))
 	}
@@ -281,11 +275,7 @@ func AppendValue(vec *vector.Vector, v any) {
 		offset := len(vvals.Data)
 		var val []byte
 		if _, ok := v.(types.Null); ok {
-			if vec.Nsp.Np == nil {
-				vec.Nsp.Np = roaring64.BitmapOf(uint64(offset))
-			} else {
-				vec.Nsp.Np.Add(uint64(offset))
-			}
+			nulls.Add(vec.Nsp, uint64(offset))
 		} else {
 			val = v.([]byte)
 		}
@@ -512,8 +502,8 @@ func ApplyDeleteToVector(vec *vector.Vector, deletes *roaring.Bitmap) *vector.Ve
 	}
 	col := vec.Col
 	deletesIterator := deletes.Iterator()
-	np := roaring64.New()
-	var nspIterator roaring64.IntPeekable64
+	np := bitmap.New(0)
+	var nspIterator bitmap.Iterator
 	if vec.Nsp != nil && vec.Nsp.Np != nil {
 		nspIterator = vec.Nsp.Np.Iterator()
 	}
@@ -630,11 +620,7 @@ func ApplyUpdateToVector(vec *vector.Vector, mask *roaring.Bitmap, vals map[uint
 			row := iterator.Next()
 			v := vals[row]
 			if _, ok := v.(types.Null); ok {
-				if vec.Nsp.Np == nil {
-					vec.Nsp.Np = roaring64.BitmapOf(uint64(row))
-				} else {
-					vec.Nsp.Np.Add(uint64(row))
-				}
+				nulls.Add(vec.Nsp, uint64(row))
 				continue
 			}
 			if pre != -1 {

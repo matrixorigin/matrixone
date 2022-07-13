@@ -18,32 +18,31 @@
 package nulls
 
 import (
-	"bytes"
 	"fmt"
 	"unsafe"
 
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/container/bitmap"
 )
 
 // Or performs union operation on Nulls n,m and store the result in r
 func Or(n, m, r *Nulls) {
 	if (n == nil || (n != nil && n.Np == nil)) && m != nil && m.Np != nil {
 		if r.Np == nil {
-			r.Np = roaring.NewBitmap()
+			r.Np = bitmap.New(0)
 		}
 		r.Np.Or(m.Np)
 		return
 	}
 	if (m == nil || (m != nil && m.Np == nil)) && n != nil && n.Np != nil {
 		if r.Np == nil {
-			r.Np = roaring.NewBitmap()
+			r.Np = bitmap.New(0)
 		}
 		r.Np.Or(n.Np)
 		return
 	}
 	if m != nil && m.Np != nil && n != nil && n.Np != nil {
 		if r.Np == nil {
-			r.Np = roaring.NewBitmap()
+			r.Np = bitmap.New(0)
 		}
 		r.Np.Or(n.Np)
 		r.Np.Or(m.Np)
@@ -69,7 +68,7 @@ func Size(n *Nulls) int {
 	if n.Np == nil {
 		return 0
 	}
-	return int(n.Np.GetSizeInBytes())
+	return int(n.Np.Size())
 }
 
 // Length returns the number of integers contained in the Nulls
@@ -77,7 +76,7 @@ func Length(n *Nulls) int {
 	if n.Np == nil {
 		return 0
 	}
-	return int(n.Np.GetCardinality())
+	return int(n.Np.Numbers())
 }
 
 func String(n *Nulls) string {
@@ -97,8 +96,9 @@ func Contains(n *Nulls, row uint64) bool {
 
 func Add(n *Nulls, rows ...uint64) {
 	if n.Np == nil {
-		n.Np = roaring.BitmapOf(rows...)
-		return
+		n.Np = bitmap.New(int(rows[len(rows)-1]) + 1)
+	} else {
+		n.Np.TryExpandWithSize(int(rows[len(rows)-1]) + 1)
 	}
 	n.Np.AddMany(rows)
 }
@@ -116,7 +116,7 @@ func Del(n *Nulls, rows ...uint64) {
 func Set(n, m *Nulls) {
 	if m != nil && m.Np != nil {
 		if n.Np == nil {
-			n.Np = roaring.NewBitmap()
+			n.Np = bitmap.New(0)
 		}
 		n.Np.Or(m.Np)
 	}
@@ -152,14 +152,14 @@ func Range(n *Nulls, start, end uint64, m *Nulls) *Nulls {
 	switch {
 	case n.Np == nil && m.Np == nil:
 	case n.Np != nil && m.Np == nil:
-		m.Np = roaring.NewBitmap()
+		m.Np = bitmap.New(int(end + 1))
 		for ; start < end; start++ {
 			if n.Np.Contains(start) {
 				m.Np.Add(start)
 			}
 		}
 	case n.Np != nil && m.Np != nil:
-		m.Np.Clear()
+		m.Np = bitmap.New(int(end + 1))
 		for ; start < end; start++ {
 			if n.Np.Contains(start) {
 				m.Np.Add(start)
@@ -177,7 +177,7 @@ func Filter(n *Nulls, sels []int64) *Nulls {
 	if len(sels) > 0 {
 		sp = unsafe.Slice((*uint64)(unsafe.Pointer(&sels[0])), cap(sels))[:len(sels)]
 	}
-	np := roaring.NewBitmap()
+	np := bitmap.New(int(sels[len(sels)-1]))
 	for i, sel := range sp {
 		if n.Np.Contains(sel) {
 			np.Add(uint64(i))
@@ -188,27 +188,18 @@ func Filter(n *Nulls, sels []int64) *Nulls {
 }
 
 func (n *Nulls) Show() ([]byte, error) {
-	var buf bytes.Buffer
-
 	if n.Np == nil {
 		return nil, nil
 	}
-	if _, err := n.Np.WriteTo(&buf); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return n.Np.Show(), nil
 }
 
 func (n *Nulls) Read(data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
-	n.Np = roaring.NewBitmap()
-	if err := n.Np.UnmarshalBinary(data); err != nil {
-		n.Np = nil
-		return err
-	}
-	return nil
+	n.Np = bitmap.New(0)
+	return n.Np.Read(data)
 }
 
 func (n *Nulls) Or(m *Nulls) *Nulls {
