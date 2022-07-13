@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"math"
 	"reflect"
 	"sort"
@@ -27,10 +28,6 @@ import (
 	"strings"
 	"unicode/utf8"
 	"unsafe"
-)
-
-import (
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
 func (bj ByteJson) String() string {
@@ -42,41 +39,7 @@ func (bj ByteJson) MarshalJSON() ([]byte, error) {
 	ret := make([]byte, 0, len(bj.Data)*3/2)
 	return bj.to(ret)
 }
-func (bj ByteJson) to(buf []byte) ([]byte, error) {
-	switch bj.Type {
-	case TpCodeLiteral:
-		buf = toLiteral(buf, bj.Data[0])
-	case TpCodeString:
-		buf = addString(buf, string(bj.Data))
 
-	}
-	return buf, nil
-}
-
-func toLiteral(buf []byte, litTp byte) []byte {
-	switch litTp {
-	case LiteralNull:
-		buf = append(buf, "null"...)
-	case LiteralTrue:
-		buf = append(buf, "true"...)
-	case LiteralFalse:
-		buf = append(buf, "false"...)
-	}
-	return buf
-}
-
-//transform byte string to visible string
-func toString(buf, data []byte) ([]byte, error) {
-	return buf, nil
-}
-
-func (bj ByteJson) GetString() []byte {
-	num, length := uint64(bj.Data[0]), 1
-	if num >= utf8.RuneSelf {
-		num, length = binary.Uvarint(bj.Data)
-	}
-	return bj.Data[length : length+int(num)]
-}
 func (bj *ByteJson) UnmarshalJSON(data []byte) error {
 	var decoder = json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
@@ -93,6 +56,245 @@ func (bj *ByteJson) UnmarshalJSON(data []byte) error {
 	bj.Type = tpCode
 	bj.Data = buf
 	return nil
+}
+
+func (bj ByteJson) GetElemCnt() int {
+	return int(endian.Uint32(bj.Data))
+}
+
+func (bj ByteJson) GetInt64() int64 {
+	return int64(bj.GetUint64())
+}
+func (bj ByteJson) GetUint64() uint64 {
+	return endian.Uint64(bj.Data)
+}
+
+func (bj ByteJson) GetFloat64() float64 {
+	return math.Float64frombits(bj.GetUint64())
+}
+
+func (bj ByteJson) GetString() []byte {
+	num, length := calStrLen(bj.Data)
+	return bj.Data[length : length+num]
+}
+
+func (bj ByteJson) to(buf []byte) ([]byte, error) {
+	var err error
+	switch bj.Type {
+	case TpCodeArray:
+		buf, err = bj.toArray(buf)
+	case TpCodeObject:
+		buf, err = bj.toObject(buf)
+	case TpCodeInt64:
+		buf = bj.toInt64(buf)
+	case TpCodeUint64:
+		buf = bj.toUint64(buf)
+	case TpCodeLiteral:
+		buf = bj.toLiteral(buf)
+	case TpCodeFloat64:
+		buf, err = bj.toFloat64(buf)
+	case TpCodeString:
+		buf = bj.toString(buf)
+	default:
+		err = errors.New(errno.UnSupportedJsonType, fmt.Sprintf("invalid type:%d", bj.Type))
+	}
+	return buf, err
+}
+
+func (bj ByteJson) toArray(buf []byte) ([]byte, error) {
+	cnt := bj.GetElemCnt()
+	buf = append(buf, '[')
+	var err error
+	for i := 0; i < cnt; i++ {
+		if i != 0 {
+			buf = append(buf, ", "...)
+		}
+		buf, err = bj.getArrayElem(i).to(buf)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return append(buf, ']'), nil
+}
+
+func (bj ByteJson) toObject(buf []byte) ([]byte, error) {
+	cnt := bj.GetElemCnt()
+	buf = append(buf, '{')
+	for i := 0; i < cnt; i++ {
+		if i != 0 {
+			buf = append(buf, ", "...)
+		}
+		var err error
+		buf = toString(buf, bj.getObjectKey(i))
+		buf = append(buf, ": "...)
+		buf, err = bj.getObjectVal(i).to(buf)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return append(buf, '}'), nil
+}
+
+func (bj ByteJson) toInt64(buf []byte) []byte {
+	return strconv.AppendInt(buf, bj.GetInt64(), 10)
+}
+func (bj ByteJson) toUint64(buf []byte) []byte {
+	return strconv.AppendUint(buf, bj.GetUint64(), 10)
+}
+
+func (bj ByteJson) toLiteral(buf []byte) []byte {
+	litTp := bj.Data[0]
+	switch litTp {
+	case LiteralNull:
+		buf = append(buf, "null"...)
+	case LiteralTrue:
+		buf = append(buf, "true"...)
+	case LiteralFalse:
+		buf = append(buf, "false"...)
+	}
+	return buf
+}
+
+func (bj ByteJson) toFloat64(buf []byte) ([]byte, error) {
+	// NOTE: copied from Go standard library & tidb server
+	f := bj.GetFloat64()
+	if math.IsInf(f, 0) || math.IsNaN(f) {
+		return buf, &json.UnsupportedValueError{Str: strconv.FormatFloat(f, 'g', -1, 64)}
+	}
+
+	// Convert as if by ES6 number to string conversion.
+	// This matches most other JSON generators.
+	// See golang.org/issue/6384 and golang.org/issue/14135.
+	// Like fmt %g, but the exponent cutoffs are different
+	// and exponents themselves are not padded to two digits.
+	abs := math.Abs(f)
+	ffmt := byte('f')
+	// Note: Must use float32 comparisons for underlying float32 value to get precise cutoffs right.
+	if abs != 0 {
+		if abs < 1e-6 || abs >= 1e21 {
+			ffmt = 'e'
+		}
+	}
+	buf = strconv.AppendFloat(buf, f, ffmt, -1, 64)
+	if ffmt == 'e' {
+		// clean up e-09 to e-9
+		n := len(buf)
+		if n >= 4 && buf[n-4] == 'e' && buf[n-3] == '-' && buf[n-2] == '0' {
+			buf[n-2] = buf[n-1]
+			buf = buf[:n-1]
+		}
+	}
+	return buf, nil
+}
+
+func toString(buf, data []byte) []byte {
+	// NOTE: copied from Go standard library & tidb server
+	// NOTE: keep in sync with string above.
+	buf = append(buf, '"')
+	start := 0
+	for i := 0; i < len(data); {
+		if b := data[i]; b < utf8.RuneSelf {
+			if safeSet[b] {
+				i++
+				continue
+			}
+			if start < i {
+				buf = append(buf, data[start:i]...)
+			}
+			switch b {
+			case '\\', '"':
+				buf = append(buf, '\\', b)
+			case '\n':
+				buf = append(buf, '\\', 'n')
+			case '\r':
+				buf = append(buf, '\\', 'r')
+			case '\t':
+				buf = append(buf, '\\', 't')
+			default:
+				// This encodes bytes < 0x20 except for \t, \n and \r.
+				// If escapeHTML is set, it also escapes <, >, and &
+				// because they can lead to security holes when
+				// user-controlled strings are rendered into JSON
+				// and served to some browsers.
+				buf = append(buf, `\u00`...)
+				buf = append(buf, hexChars[b>>4], hexChars[b&0xF])
+			}
+			i++
+			start = i
+			continue
+		}
+		c, size := utf8.DecodeRune(data[i:])
+		if c == utf8.RuneError && size == 1 {
+			if start < i {
+				buf = append(buf, data[start:i]...)
+			}
+			buf = append(buf, `\ufffd`...)
+			i += size
+			start = i
+			continue
+		}
+		// U+2028 is LINE SEPARATOR.
+		// U+2029 is PARAGRAPH SEPARATOR.
+		// They are both technically valid characters in JSON strings,
+		// but don't work in JSONP, which has to be evaluated as JavaScript,
+		// and can lead to security holes there. It is valid JSON to
+		// escape them, so we do so unconditionally.
+		// See http://timelessrepo.com/json-isnt-a-javascript-subset for discussion.
+		if c == '\u2028' || c == '\u2029' {
+			if start < i {
+				buf = append(buf, data[start:i]...)
+			}
+			buf = append(buf, `\u202`...)
+			buf = append(buf, hexChars[c&0xF])
+			i += size
+			start = i
+			continue
+		}
+		i += size
+	}
+	if start < len(data) {
+		buf = append(buf, data[start:]...)
+	}
+	buf = append(buf, '"')
+	return buf
+}
+
+//transform byte string to visible string
+func (bj ByteJson) toString(buf []byte) []byte {
+	data := bj.GetString()
+	return toString(buf, data)
+}
+
+func (bj ByteJson) getObjectKey(i int) []byte {
+	keyOff := int(endian.Uint32(bj.Data[headerSize+i*keyEntrySize:]))
+	keyLen := int(endian.Uint16(bj.Data[headerSize+i*keyEntrySize+keyLenOff:]))
+	return bj.Data[keyOff : keyOff+keyLen]
+}
+
+func (bj ByteJson) getArrayElem(i int) ByteJson {
+	return bj.getValEntry(headerSize + i*valEntrySize)
+}
+
+func (bj ByteJson) getObjectVal(i int) ByteJson {
+	cnt := bj.GetElemCnt()
+	return bj.getValEntry(headerSize + cnt*keyEntrySize + i*valEntrySize)
+}
+
+func (bj ByteJson) getValEntry(off int) ByteJson {
+	tpCode := bj.Data[off]
+	valOff := endian.Uint32(bj.Data[off+valTypeSize:])
+	switch tpCode {
+	case TpCodeLiteral:
+		return ByteJson{Type: TpCodeLiteral, Data: bj.Data[off+valTypeSize : off+valTypeSize+1]}
+	case TpCodeUint64, TpCodeInt64, TpCodeFloat64:
+		return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+8]}
+	case TpCodeString:
+		num, length := calStrLen(bj.Data[valOff:])
+		totalLen := uint32(num) + uint32(length)
+		return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+totalLen]}
+	}
+	dataSize := endian.Uint32(bj.Data[valOff+dataSizeOff:])
+	return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+dataSize]}
 }
 
 func addElem(buf []byte, in interface{}) (TpCode, []byte, error) {
@@ -138,7 +340,7 @@ func addElem(buf []byte, in interface{}) (TpCode, []byte, error) {
 }
 
 // extend slice to have n zero bytes
-func addZero(buf []byte, n int) []byte {
+func extendByte(buf []byte, n int) []byte {
 	buf = append(buf, make([]byte, n)...)
 	return buf
 }
@@ -146,21 +348,25 @@ func addZero(buf []byte, n int) []byte {
 //add a uint64 to slice
 func addUint64(buf []byte, x uint64) []byte {
 	off := len(buf)
-	buf = addZero(buf, 8)
+	buf = extendByte(buf, 8)
 	endian.PutUint64(buf[off:], x)
 	return buf
 }
 
+func addInt64(buf []byte, x int64) []byte {
+	return addUint64(buf, uint64(x))
+}
+
 func addFloat64(buf []byte, num float64) []byte {
 	off := len(buf)
-	buf = addZero(buf, 8)
+	buf = extendByte(buf, 8)
 	endian.PutUint64(buf[off:], math.Float64bits(num))
 	return buf
 }
 func addString(buf []byte, in string) []byte {
 	off := len(buf)
 	//encoding length
-	buf = addZero(buf, binary.MaxVarintLen64)
+	buf = extendByte(buf, binary.MaxVarintLen64)
 	inLen := binary.PutUvarint(buf[off:], uint64(len(in)))
 	//cut length
 	buf = buf[:off+inLen]
@@ -173,11 +379,11 @@ func addObject(buf []byte, in map[string]interface{}) ([]byte, error) {
 	off := len(buf)
 	buf = addUint32(buf, uint32(len(in)))
 	objSizeStart := len(buf)
-	buf = addZero(buf, dataSizeOff)
+	buf = extendByte(buf, dataSizeOff)
 	keyEntryStart := len(buf)
-	buf = addZero(buf, len(in)*keyEntrySize)
+	buf = extendByte(buf, len(in)*keyEntrySize)
 	valEntryStart := len(buf)
-	buf = addZero(buf, len(in)*valEntrySize)
+	buf = extendByte(buf, len(in)*valEntrySize)
 	kvs := make([]kv, 0, len(in))
 	for k, v := range in {
 		kvs = append(kvs, kv{k, v})
@@ -211,9 +417,9 @@ func addArray(buf []byte, in []interface{}) ([]byte, error) {
 	off := len(buf)
 	buf = addUint32(buf, uint32(len(in)))
 	arrSizeStart := len(buf)
-	buf = addZero(buf, dataSizeOff)
+	buf = extendByte(buf, dataSizeOff)
 	valEntryStart := len(buf)
-	buf = addZero(buf, len(in)*valEntrySize)
+	buf = extendByte(buf, len(in)*valEntrySize)
 	for i, v := range in {
 		var err error
 		buf, err = addValEntry(buf, off, valEntryStart+i*valEntrySize, v)
@@ -247,7 +453,7 @@ func addValEntry(buf []byte, bufStart, entryStart int, in interface{}) ([]byte, 
 
 func addUint32(buf []byte, x uint32) []byte {
 	off := len(buf)
-	buf = addZero(buf, 4)
+	buf = extendByte(buf, 4)
 	endian.PutUint32(buf[off:], x)
 	return buf
 }
@@ -261,7 +467,7 @@ func addJsonNumber(buf []byte, in json.Number) (TpCode, []byte, error) {
 		buf = addFloat64(buf, num)
 		return TpCodeFloat64, buf, nil
 	} else if val, err := in.Int64(); err == nil {
-		return TpCodeInt64, addUint64(buf, uint64(val)), nil
+		return TpCodeInt64, addInt64(buf, val), nil
 	} else if val, err := strconv.ParseUint(string(in), 10, 64); err == nil {
 		return TpCodeUint64, addUint64(buf, val), nil
 	}
@@ -298,4 +504,11 @@ func string2Slice(s string) []byte {
 	retPtr.Len = str.Len
 	retPtr.Cap = str.Len
 	return ret
+}
+func calStrLen(buf []byte) (int, int) {
+	strLen, lenLen := uint64(buf[0]), 1
+	if strLen >= utf8.RuneSelf {
+		strLen, lenLen = binary.Uvarint(buf)
+	}
+	return int(strLen), lenLen
 }
