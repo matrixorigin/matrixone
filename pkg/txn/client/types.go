@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
 
 // TxnOption options for setup transaction
@@ -54,14 +55,17 @@ type TxnOperator interface {
 	// Read transaction read operation, the operator routes the message based
 	// on the given DN node information and waits for the read data synchronously.
 	// The transaction has been aborted if ErrTxnAborted returned.
-	Read(ctx context.Context, ops []txn.TxnRequest) ([]txn.TxnResponse, error)
+	// After use, SendResult needs to call the Release method
+	Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 	// Write transaction write operation, and the operator will record the DN
 	// nodes written by the current transaction, and when it finds that multiple
 	// DN nodes are written, it will start distributed transaction processing.
 	// The transaction has been aborted if ErrTxnAborted returned.
-	Write(ctx context.Context, ops []txn.TxnRequest) ([]txn.TxnResponse, error)
+	// After use, SendResult needs to call the Release method
+	Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 	// WriteAndCommit is similar to Write, but commit the transaction after write.
-	WriteAndCommit(ctx context.Context, ops []txn.TxnRequest) ([]txn.TxnResponse, error)
+	// After use, SendResult needs to call the Release method
+	WriteAndCommit(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 	// Commit the transaction. If data has been written to multiple DN nodes, a
 	// 2pc distributed transaction commit process is used.
 	Commit(ctx context.Context) error
