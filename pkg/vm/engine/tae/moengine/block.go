@@ -46,7 +46,6 @@ func (blk *txnBlock) Read(cs []uint64, attrs []string, compressed []*bytes.Buffe
 		} else {
 			bat.Vecs[i] = VectorsToMO(view.GetData())
 		}
-		bat.Attrs[i] = attr
 		view.Close()
 	}
 	return bat, nil

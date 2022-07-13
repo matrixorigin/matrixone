@@ -23,6 +23,7 @@ import (
 	"github.com/lni/dragonboat/v4/logger"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -168,6 +169,8 @@ func (s *Service) handle(req pb.Request,
 		return s.handleCNHeartbeat(req), pb.LogRecordResponse{}
 	case pb.DN_HEARTBEAT:
 		return s.handleDNHeartbeat(req), pb.LogRecordResponse{}
+	case pb.CHECK_HAKEEPER:
+		return s.handleCheckHAKeeper(req), pb.LogRecordResponse{}
 	default:
 		panic("unknown log service method type")
 	}
@@ -315,5 +318,18 @@ func (s *Service) handleDNHeartbeat(req pb.Request) pb.Response {
 		resp.CommandBatch = cb
 	}
 
+	return resp
+}
+
+func (s *Service) handleCheckHAKeeper(req pb.Request) pb.Response {
+	resp := getResponse(req)
+	hb := s.store.getHeartbeatMessage()
+	for _, replicaInfo := range hb.Replicas {
+		si := replicaInfo.LogShardInfo
+		if si.ShardID == hakeeper.DefaultHAKeeperShardID {
+			resp.IsHAKeeper = true
+			return resp
+		}
+	}
 	return resp
 }
