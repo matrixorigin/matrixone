@@ -32,7 +32,7 @@ func Empty(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint8, 1)
 		vector.SetCol(resultVector, empty.Empty(inputValues, resultValues))
 		return resultVector, nil

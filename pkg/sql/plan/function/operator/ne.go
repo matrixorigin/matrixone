@@ -131,9 +131,9 @@ func NeGeneral[T NormalType](vs []*vector.Vector, proc *process.Process) (*vecto
 		vec.Col.([]bool)[0] = col1[0] != col2[0]
 		return vec, nil
 	case c1 && !c2:
-		return ScalarNeNotScalar[T](v1, v2, col1, col2, proc)
+		return ScalarNeNotScalar(v1, v2, col1, col2, proc)
 	case !c1 && c2:
-		return ScalarNeNotScalar[T](v2, v1, col2, col1, proc)
+		return ScalarNeNotScalar(v2, v1, col2, col1, proc)
 	}
 	// case !c1 && !c2
 	length := int64(vector.Length(v1))

@@ -1,7 +1,7 @@
 # **Playground**
 
 [MatrixOne Playground](https://playground.matrixorigin.io/?tutorial=SSB-test-with-matrixone&step=1) allows you to try SQL statements and explore features of MatrixOne instantly from your web browser with interactive tutorials.  
- 
+
 * For docs about our SQL commands, you can see [SQL Reference](../Reference/SQL-Reference/Data-Definition-Statements/create-database.md).  
 * For tutorials about **SSB** test, you can see [Tutorial](../Get-Started/Tutorial/SSB-test-with-matrixone.md).
 
@@ -10,14 +10,14 @@
 You can only operate in **read-only** mode in MatixOrigin Playground，so DDL commands and part of DML commands which may change the data are not available. The detail limitations are shown below:
 
 * **DDL** commands are not available:  
-```create/drop table``` , ```truncate``` , ```update``` , ```set``` ,```use```  
-  
+`create/drop table` , `truncate` , `update` , `set` , `use`  
+
 * Part of **DML** commands are not available：  
-```insert``` , ```replace``` , ```delete```,```select into```  
+`insert` , `replace` , `delete`,`select into`  
 
-* ```commit``` is not available
+* `commit` is not available
 
-* ```call``` is not available
+* `call` is not available
 
 * **max_result_rows**=2000  
 
@@ -25,8 +25,8 @@ You can only operate in **read-only** mode in MatixOrigin Playground，so DDL co
 
 In Playground, You can follow different interactive tutorials and pick one in the list box, and now the supported tutorials are shown below:  
 
-* [**SSB Test with MatrixOne**](https://playground.matrixorigin.io/?tutorial=SSB-test-with-matrixone&step=1) 
-     
+* [**SSB Test with MatrixOne**](https://playground.matrixorigin.io/?tutorial=SSB-test-with-matrixone&step=1)
+
 We will use **SSB Test** as an example to show you the overall operation process of Playground.  
 
 ### **Test Preperations**  
@@ -55,7 +55,7 @@ select sum(lo_revenue) as revenue
 from lineorder join dates on lo_orderdate = d_datekey；
 ```
 
-And you can use ```join``` in queries: 
+And you can use ```join``` in queries:
 
 * **Run Q1.2 query**
 
@@ -86,4 +86,4 @@ More query commands are provided in **Playground**, you can test on your own.
 This page describes the features, limitations, and examples of Playground. For information on other options that are available when trying out MatrixOne, see the following:
 
 * [Install MatrixOne](install-standalone-matrixone.md)
-* [What‘s New](../Overview/what's-new.md)
+* [What‘s New](../Overview/whats-new.md)

@@ -425,15 +425,17 @@ func New(typ types.Type) *Vector {
 	}
 }
 
-func NewConst(typ types.Type) *Vector {
+func NewConst(typ types.Type, length int) *Vector {
 	v := New(typ)
 	v.IsConst = true
+	v.Length = length
 	return v
 }
 
-func NewConstNull(typ types.Type) *Vector {
+func NewConstNull(typ types.Type, length int) *Vector {
 	v := New(typ)
 	v.IsConst = true
+	v.Length = length
 	switch typ.Oid {
 	case types.T_bool:
 		v.Col = []bool{false}
