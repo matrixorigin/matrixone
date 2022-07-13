@@ -34,4 +34,3 @@ MatrixOne supports the conversion between different data types, the supported an
 |                              | DECIMAL          | ✔            | ✔             |
 |                              | TIMESTAMP        | ✔            | ✔             |
 |                              | DATETIME         | ✔            | ✔             |
-

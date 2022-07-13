@@ -12,7 +12,7 @@ where option can be one of:
     FORMAT { TEXT | JSON }
 ```
 
-For 0.5.0, only `TEXT ` format is supported.
+For 0.5.0, only `TEXT` format is supported.
 
 ## Description
 
@@ -32,7 +32,7 @@ Specify the output format, which can be TEXT, JSON. Non-text output contains the
 
 * BOOLEAN: 
 
-Specifies whether the selected option should be turned on or off. You can write `TRUE `to enable the option, and `FALSE` to disable it. The *`boolean`* value can also be omitted, in which case `TRUE` is assumed.
+Specifies whether the selected option should be turned on or off. You can write `TRUE`to enable the option, and `FALSE` to disable it. The *`boolean`* value can also be omitted, in which case `TRUE` is assumed.
 
 * STETEMENT
 
@@ -265,7 +265,7 @@ mysql> explain verbose SELECT count(*) FROM NATION group by N_NAME;
 +-------------------------------------------------------------------------------------+
 ```
 
-####  Node_JOIN
+#### Node_JOIN
 
 ```sql
 mysql> explain verbose SELECT NATION.N_NAME, REGION.R_NAME FROM NATION join REGION on NATION.N_REGIONKEY = REGION.R_REGIONKEY WHERE NATION.N_REGIONKEY > 10 AND LENGTH(NATION.N_NAME) > LENGTH(REGION.R_NAME);
