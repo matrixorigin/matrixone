@@ -104,7 +104,7 @@ func (s *testSender) addTxnService(ts TxnService) {
 	s.router[s.getRouteKey(txn.TxnMethod_RollbackDNShard, ts.Shard())] = ts.RollbackDNShard
 }
 
-func (s *testSender) Send(ctx context.Context, requests []txn.TxnRequest) ([]txn.TxnResponse, error) {
+func (s *testSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	s.mu.Lock()
 	s.mu.cancels = append(s.mu.cancels, cancel)
@@ -121,7 +121,7 @@ func (s *testSender) Send(ctx context.Context, requests []txn.TxnRequest) ([]txn
 		}
 		responses = append(responses, resp)
 	}
-	return responses, nil
+	return &rpc.SendResult{Responses: responses}, nil
 }
 
 func (s *testSender) Close() error {
