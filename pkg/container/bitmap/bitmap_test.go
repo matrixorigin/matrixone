@@ -35,7 +35,7 @@ func TestNulls(t *testing.T) {
 	require.Equal(t, true, ok)
 	np.Remove(0)
 	ok = np.IsEmpty()
-	require.Equal(t, true, ok)
+	require.Equal(t, false, ok)
 	np.Filter([]int64{0})
 	np.ToArray()
 	fmt.Printf("%v\n", np.String())
@@ -54,7 +54,7 @@ func BenchmarkAdd(b *testing.B) {
 			np.Contains(uint64(j))
 		}
 		for j := 0; j < BenchmarkRows; j++ {
-			np.Del(uint64(j))
+			np.Remove(uint64(j))
 		}
 	}
 }
