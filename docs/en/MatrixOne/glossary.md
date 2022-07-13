@@ -1,4 +1,4 @@
-# **Glossary** 
+# **Glossary**
 
 ### **Terms**
 
@@ -14,12 +14,15 @@ It's helpful to understand a few terms before reading our architecture documenta
  | Data Storage  | A DataStorage is an interface for implementing distributed storage service. It must be defined in prior to using MatrixCube. DataStorage needs to be implemented based on the characteristics of storage engine.|
 | E  |  |
   | Event Notify | The machanism of synchronizing heartbeat information to all nodes is called an event notify. |
+  | Explicit Transactions| Explicit Transaction has the beginning, ending and rollback of transactions with the command Begin Transaction, Commit Transaction and Rollback Transaction. |
   | F  |  |
   | Factorization | The factorization method uses basic factorization formula to reduce any algebraic or quadratic equation into its simpler form. MatrixOne uses compact factorized representations at the physical layer to reduce data redundancy and boost query performance. |
   | H  |  |
   | Heartbeat | Every node in a MatrixOne cluster will periodically sends its status information, this information is called a heartbeat. |
+  |I|  |
+  | Implicit Transactions| Implicit Transaction is the auto commit. There is no beginning or ending of the transaction. |
  | M  |  |
-  | MatrixCube | MatrixCube is a framework for building distributed systems, which offers guarantees about reliability, consistency, and scalability. It is designed to facilitate distributed, stateful application building to allow developers only need to focus on the business logic on a single node. | 
+  | MatrixCube | MatrixCube is a framework for building distributed systems, which offers guarantees about reliability, consistency, and scalability. It is designed to facilitate distributed, stateful application building to allow developers only need to focus on the business logic on a single node. |
  | P  |  |
   | Prophet | Prophet is a scheduling module in MatrixCube. It takes charge of Auto-Rebalance, which keeps the system storage level and read/write throughput level balanced across Stores. The initial 3 Stores of a MatrixCube cluster are all Prophet Nodes. |
    | Pure Storage | In contrast to Prophet, pure storage is another type of node, which doesn't handle any scheduling job and works as simple storage. |
@@ -60,6 +63,6 @@ MatrixOne relies heavily on the following concepts. Being familiar with them wil
  | S  |  |
   | SIMD instruction | SIMD is short for Single Instruction/Multiple Data, while the term SIMD operations refers to a computing method that enables processing of multiple data with a single instruction. |
 | T  |  |
-| Transaction | A set of operations performed on your database that satisfy the requirements of ACID semantics. | 
+| Transaction | A set of operations performed on your database that satisfy the requirements of ACID semantics. |
 | V  |  |
 | Vectorized Execution  | Vectorized data processing helps with developing faster analytical query engines by making efficient utilization of CPU cache. Arrow's columnar format allows to use lightweight schemes like dictionary encoding, bit packing, and run length encoding, which favor query performance over compression ratio. |
