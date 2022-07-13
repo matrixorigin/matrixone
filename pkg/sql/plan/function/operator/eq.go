@@ -149,9 +149,9 @@ func EqGeneral[T NormalType](vs []*vector.Vector, proc *process.Process) (*vecto
 		vec.Col.([]bool)[0] = col1[0] == col2[0]
 		return vec, nil
 	case c1 && !c2:
-		return ScalarEqNotScalar[T](v1, v2, col1, col2, proc)
+		return ScalarEqNotScalar(v1, v2, col1, col2, proc)
 	case !c1 && c2:
-		return ScalarEqNotScalar[T](v2, v1, col2, col1, proc)
+		return ScalarEqNotScalar(v2, v1, col2, col1, proc)
 	}
 	// case !c1 && !c2
 	length := int64(vector.Length(v1))

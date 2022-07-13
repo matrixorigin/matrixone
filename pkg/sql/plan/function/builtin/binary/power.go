@@ -33,7 +33,7 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]float64, 1)
 		vector.SetCol(resultVector, power.Power(leftValues, rightValues, resultValues))
 		return resultVector, nil

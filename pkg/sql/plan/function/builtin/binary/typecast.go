@@ -233,9 +233,9 @@ func BytesToInt[T constraints.Signed](xs *types.Bytes, rs []T) ([]T, error) {
 		val, err := strconv.ParseInt(strings.TrimSpace(s), 10, bitSize)
 		if err != nil {
 			if strings.Contains(err.Error(), "value out of range") {
-				return nil, fmt.Errorf("Overflow when cast '%s' as type of integer", s)
+				return nil, fmt.Errorf("overflow when cast '%s' as type of integer", s)
 			}
-			return nil, fmt.Errorf("Can't cast '%s' as type of integer", s)
+			return nil, fmt.Errorf("can't cast '%s' as type of integer", s)
 		}
 		rs[i] = T(val)
 	}
@@ -250,9 +250,9 @@ func BytesToUint[T constraints.Unsigned](xs *types.Bytes, rs []T) ([]T, error) {
 		val, err := strconv.ParseUint(strings.TrimSpace(s), 10, bitSize)
 		if err != nil {
 			if strings.Contains(err.Error(), "value out of range") {
-				return nil, fmt.Errorf("Overflow when cast '%s' as type of unsigned integer", s)
+				return nil, fmt.Errorf("overflow when cast '%s' as type of unsigned integer", s)
 			}
-			return nil, fmt.Errorf("Can't cast '%s' as type of unsigned integer", s)
+			return nil, fmt.Errorf("can't cast '%s' as type of unsigned integer", s)
 		}
 		rs[i] = T(val)
 	}
