@@ -229,7 +229,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	// unlock and lock here, because the prepare request will be sent to the current TxnService, it
 	// will need to get the Lock when processing the Prepare.
 	txnCtx.mu.Unlock()
-	responses, err := s.sender.Send(ctx, txnCtx.mu.requests)
+	result, err := s.sender.Send(ctx, txnCtx.mu.requests)
 	txnCtx.mu.Lock()
 	if err != nil {
 		changeStatus(txn.TxnStatus_Aborted)
@@ -238,13 +238,15 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 		return nil
 	}
 
+	defer result.Release()
+
 	// get latest txn metadata
 	newTxn = txnCtx.getTxnLocked()
 	newTxn.CommitTS = newTxn.PreparedTS
 
 	hasError := false
 	var txnErr *txn.TxnError
-	for idx, resp := range responses {
+	for idx, resp := range result.Responses {
 		if resp.TxnError != nil {
 			txnErr = resp.TxnError
 			hasError = true
@@ -364,7 +366,8 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 		ctx, cancel := context.WithTimeout(ctx, time.Duration(math.MaxInt64))
 		defer cancel()
 
-		if len(s.parallelSendWithRetry(ctx, "commit txn", txnMeta, requests, rollbackIngoreErrorCodes)) > 0 {
+		if result := s.parallelSendWithRetry(ctx, "commit txn", txnMeta, requests, rollbackIngoreErrorCodes); result != nil {
+			result.Release()
 			if ce := s.logger.Check(zap.DebugLevel, "other dnshards committed"); ce != nil {
 				ce.Write(util.TxnIDFieldWithID(txnMeta.ID))
 			}

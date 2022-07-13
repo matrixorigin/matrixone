@@ -16,6 +16,9 @@ package logservice
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -582,14 +585,10 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	assert.True(t, done)
 }
 
-// TODO: re-enable this test.
-// this test will fail on go1.18 when -race is enabled as it will hit the 8192
-// goroutine. it works fine with go1.19 beta 1 as it has the goroutine limit
-// removed.
-
-/*
 func TestGossipConvergeDelay(t *testing.T) {
 	if os.Getenv("LONG_TEST") == "" {
+		// this test will fail on go1.18 when -race is enabled as it requires more
+		// than 8128 goroutines. it works fine on go1.19 beta1.
 		t.Skip("Skipping long test")
 	}
 	defer leaktest.AfterTest(t)()
@@ -641,9 +640,9 @@ func TestGossipConvergeDelay(t *testing.T) {
 		replicas[r1] = services[i*3].ID()
 		replicas[r2] = services[i*3+1].ID()
 		replicas[r3] = services[i*3+2].ID()
-		require.NoError(t, services[i*3+0].store.StartReplica(shardID, r1, replicas))
-		require.NoError(t, services[i*3+1].store.StartReplica(shardID, r2, replicas))
-		require.NoError(t, services[i*3+2].store.StartReplica(shardID, r3, replicas))
+		require.NoError(t, services[i*3+0].store.startReplica(shardID, r1, replicas, false))
+		require.NoError(t, services[i*3+1].store.startReplica(shardID, r2, replicas, false))
+		require.NoError(t, services[i*3+2].store.startReplica(shardID, r3, replicas, false))
 	}
 	wait := func() {
 		time.Sleep(10 * time.Millisecond)
@@ -717,4 +716,4 @@ func TestGossipConvergeDelay(t *testing.T) {
 		}
 		require.True(t, retry < 499)
 	}
-}*/
+}

@@ -15,6 +15,8 @@
 package operator
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
@@ -22,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"math"
 )
 
 // ErrModByZero is reported when computing the rest of a division by zero.
@@ -48,7 +49,7 @@ func ModInt[T constraints.Integer](vectors []*vector.Vector, proc *process.Proce
 					return nil, ErrModByZero
 				}
 			}
-			vector.SetCol(vec, IntMod[T](lvs, rvs, rs))
+			vector.SetCol(vec, IntMod(lvs, rvs, rs))
 			return vec, nil
 		}
 		sels := process.GetSels(proc)
@@ -62,7 +63,7 @@ func ModInt[T constraints.Integer](vectors []*vector.Vector, proc *process.Proce
 			}
 			sels = append(sels, int64(i))
 		}
-		vector.SetCol(vec, IntModSels[T](lvs, rvs, rs, sels))
+		vector.SetCol(vec, IntModSels(lvs, rvs, rs, sels))
 		return vec, nil
 	case lv.IsScalar() && !rv.IsScalar():
 		if !nulls.Any(rv.Nsp) {
@@ -77,7 +78,7 @@ func ModInt[T constraints.Integer](vectors []*vector.Vector, proc *process.Proce
 			}
 			rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
 			nulls.Set(vec.Nsp, rv.Nsp)
-			vector.SetCol(vec, IntModScalar[T](lvs[0], rvs, rs))
+			vector.SetCol(vec, IntModScalar(lvs[0], rvs, rs))
 			return vec, nil
 		}
 		sels := process.GetSels(proc)
@@ -97,7 +98,7 @@ func ModInt[T constraints.Integer](vectors []*vector.Vector, proc *process.Proce
 		}
 		rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
 		nulls.Set(vec.Nsp, rv.Nsp)
-		vector.SetCol(vec, IntModByScalarSels[T](lvs[0], rvs, rs, sels))
+		vector.SetCol(vec, IntModByScalarSels(lvs[0], rvs, rs, sels))
 		return vec, nil
 	case !lv.IsScalar() && rv.IsScalar():
 		if rvs[0] == 0 {
@@ -109,7 +110,7 @@ func ModInt[T constraints.Integer](vectors []*vector.Vector, proc *process.Proce
 		}
 		rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
 		nulls.Set(vec.Nsp, lv.Nsp)
-		vector.SetCol(vec, IntModByScalar[T](rvs[0], lvs, rs))
+		vector.SetCol(vec, IntModByScalar(rvs[0], lvs, rs))
 		return vec, nil
 	}
 	vec, err := proc.AllocVector(lv.Typ, int64(rtl)*int64(len(lvs)))
@@ -124,7 +125,7 @@ func ModInt[T constraints.Integer](vectors []*vector.Vector, proc *process.Proce
 				return nil, ErrModByZero
 			}
 		}
-		vector.SetCol(vec, IntMod[T](lvs, rvs, rs))
+		vector.SetCol(vec, IntMod(lvs, rvs, rs))
 		return vec, nil
 	}
 	sels := process.GetSels(proc)
@@ -138,7 +139,7 @@ func ModInt[T constraints.Integer](vectors []*vector.Vector, proc *process.Proce
 		}
 		sels = append(sels, int64(i))
 	}
-	vector.SetCol(vec, IntModSels[T](lvs, rvs, rs, sels))
+	vector.SetCol(vec, IntModSels(lvs, rvs, rs, sels))
 	return vec, nil
 }
 
@@ -162,7 +163,7 @@ func ModFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 					return nil, ErrModByZero
 				}
 			}
-			vector.SetCol(vec, FloatMod[T](lvs, rvs, rs))
+			vector.SetCol(vec, FloatMod(lvs, rvs, rs))
 			return vec, nil
 		}
 		sels := process.GetSels(proc)
@@ -176,7 +177,7 @@ func ModFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 			}
 			sels = append(sels, int64(i))
 		}
-		vector.SetCol(vec, FloatModSels[T](lvs, rvs, rs, sels))
+		vector.SetCol(vec, FloatModSels(lvs, rvs, rs, sels))
 		return vec, nil
 	case lv.IsScalar() && !rv.IsScalar():
 		if !nulls.Any(rv.Nsp) {
@@ -191,7 +192,7 @@ func ModFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 			}
 			rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
 			nulls.Set(vec.Nsp, rv.Nsp)
-			vector.SetCol(vec, FloatModScalar[T](lvs[0], rvs, rs))
+			vector.SetCol(vec, FloatModScalar(lvs[0], rvs, rs))
 			return vec, nil
 		}
 		sels := process.GetSels(proc)
@@ -211,7 +212,7 @@ func ModFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 		}
 		rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
 		nulls.Set(vec.Nsp, rv.Nsp)
-		vector.SetCol(vec, FloatModByScalarSels[T](lvs[0], rvs, rs, sels))
+		vector.SetCol(vec, FloatModByScalarSels(lvs[0], rvs, rs, sels))
 		return vec, nil
 	case !lv.IsScalar() && rv.IsScalar():
 		if rvs[0] == 0 {
@@ -223,7 +224,7 @@ func ModFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 		}
 		rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
 		nulls.Set(vec.Nsp, lv.Nsp)
-		vector.SetCol(vec, FloatModByScalar[T](rvs[0], lvs, rs))
+		vector.SetCol(vec, FloatModByScalar(rvs[0], lvs, rs))
 		return vec, nil
 	}
 	vec, err := proc.AllocVector(lv.Typ, int64(rtl)*int64(len(lvs)))
@@ -238,7 +239,7 @@ func ModFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 				return nil, ErrModByZero
 			}
 		}
-		vector.SetCol(vec, FloatMod[T](lvs, rvs, rs))
+		vector.SetCol(vec, FloatMod(lvs, rvs, rs))
 		return vec, nil
 	}
 	sels := process.GetSels(proc)
@@ -252,7 +253,7 @@ func ModFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 		}
 		sels = append(sels, int64(i))
 	}
-	vector.SetCol(vec, FloatModSels[T](lvs, rvs, rs, sels))
+	vector.SetCol(vec, FloatModSels(lvs, rvs, rs, sels))
 	return vec, nil
 }
 

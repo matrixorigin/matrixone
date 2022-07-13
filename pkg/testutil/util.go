@@ -20,6 +20,7 @@ import (
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -30,6 +31,7 @@ func NewBatch(ts []types.Type, random bool, n int, m *mheap.Mheap) *batch.Batch 
 	bat.InitZsOne(n)
 	for i := range bat.Vecs {
 		bat.Vecs[i] = NewVector(n, ts[i], m, random)
+		nulls.New(bat.Vecs[i].Nsp, n)
 	}
 	return bat
 }

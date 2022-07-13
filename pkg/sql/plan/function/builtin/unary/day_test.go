@@ -58,7 +58,7 @@ func TestDateToDayFunc(t *testing.T) {
 		{
 			name:     "Date to day test - null",
 			proc:     procs,
-			expected: []uint8{},
+			expected: []uint8{0},
 			isScalar: true,
 		},
 	}
@@ -119,7 +119,7 @@ func TestDatetimeToDayFunc(t *testing.T) {
 		{
 			name:     "Datetime to day test - null",
 			proc:     procs,
-			expected: []uint8{},
+			expected: []uint8{0},
 			isScalar: true,
 		},
 	}
