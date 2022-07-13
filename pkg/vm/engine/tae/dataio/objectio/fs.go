@@ -27,7 +27,7 @@ import (
 type ObjectFS struct {
 	sync.RWMutex
 	common.RefHelper
-	dirs      map[string]tfs.File
+	nodes     map[string]tfs.File
 	data      []*Object
 	meta      []*Object
 	attr      *Attr
@@ -45,7 +45,7 @@ func NewObjectFS() tfs.FS {
 		attr: &Attr{
 			algo: compress.Lz4,
 		},
-		dirs: make(map[string]tfs.File),
+		nodes: make(map[string]tfs.File),
 	}
 	fs.lastId = 1
 	fs.lastInode = 1
@@ -56,25 +56,41 @@ func (o *ObjectFS) SetDir(dir string) {
 	o.attr.dir = dir
 }
 
-func (o *ObjectFS) OpenFile(name string, flag int) (tfs.File, error) {
+func (o *ObjectFS) OpenDir(name string, nodes *map[string]tfs.File) (*map[string]tfs.File, tfs.File, error) {
+	dir := (*nodes)[name]
+	if dir == nil {
+		dir = openObjectDir(o, name)
+		(*nodes)[name] = dir
+	}
+	return nodes, dir, nil
+}
+
+func (o *ObjectFS) OpenFile(name string, flag int) (file tfs.File, err error) {
 	o.RWMutex.Lock()
 	defer o.RWMutex.Unlock()
 	fileName := strings.Split(name, "/")
-	dir := o.dirs[fileName[0]]
-	if dir == nil {
-		dir = openObjectDir(o, fileName[0])
-		o.dirs[fileName[0]] = dir
+	nodes := &o.nodes
+	var dir tfs.File
+	paths := len(fileName)
+	if strings.Contains(name, ".") {
+		paths--
 	}
-	if len(fileName) == 1 {
+	for i := 0; i < paths; i++ {
+		nodes, dir, err = o.OpenDir(fileName[i], nodes)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if strings.Contains(name, ".") {
 		return dir, nil
 	}
-	file := dir.(*ObjectDir).OpenFile(o, fileName[1])
+	file = dir.(*ObjectDir).OpenFile(o, fileName[paths])
 	return file, nil
 }
 
 func (o *ObjectFS) ReadDir(dir string) ([]common.FileInfo, error) {
 	fileInfos := make([]common.FileInfo, 0)
-	entry := o.dirs[dir]
+	entry := o.nodes[dir]
 	info := entry.Stat()
 	fileInfos = append(fileInfos, info)
 	return fileInfos, nil
@@ -84,7 +100,7 @@ func (o *ObjectFS) Remove(name string) error {
 	o.RWMutex.Lock()
 	defer o.RWMutex.Unlock()
 	fileName := strings.Split(name, "/")
-	dir := o.dirs[fileName[0]]
+	dir := o.nodes[fileName[0]]
 	if dir == nil {
 		return os.ErrNotExist
 	}
@@ -103,8 +119,8 @@ func (o *ObjectFS) GetData(size uint64) (object *Object, err error) {
 	o.RWMutex.Lock()
 	defer o.RWMutex.Unlock()
 	if len(o.data) == 0 ||
-		o.data[len(o.data)-1].GetSize()+size >= OBJECT_SIZE {
-		object, err = OpenObject(o.lastId, DATATYPE, o.attr.dir)
+		o.data[len(o.data)-1].GetSize()+size >= ObjectSize {
+		object, err = OpenObject(o.lastId, DataType, o.attr.dir)
 		o.data = append(o.data, object)
 		o.lastId++
 		return
@@ -116,8 +132,8 @@ func (o *ObjectFS) GetMeta(size uint64) (object *Object, err error) {
 	o.RWMutex.Lock()
 	defer o.RWMutex.Unlock()
 	if len(o.meta) == 0 ||
-		o.meta[len(o.meta)-1].GetSize()+size >= OBJECT_SIZE {
-		object, err = OpenObject(o.lastId, METADATA, o.attr.dir)
+		o.meta[len(o.meta)-1].GetSize()+size >= ObjectSize {
+		object, err = OpenObject(o.lastId, MetadataType, o.attr.dir)
 		o.meta = append(o.meta, object)
 		o.lastId++
 		return

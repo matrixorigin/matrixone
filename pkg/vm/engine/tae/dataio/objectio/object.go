@@ -24,19 +24,21 @@ import (
 	"sync"
 )
 
-const OBJECT_SIZE = 64 * 1024 * 1024
-const PAGE_SIZE = 4096
+const ObjectSize = 64 * 1024 * 1024
+const PageSize = 4096
 
 type ObjectType uint8
 
 const (
-	DATATYPE ObjectType = iota
-	METADATA
+	DataType ObjectType = iota
+	MetadataType
+	NodeType
 )
 
 const (
 	DATA = "data"
 	META = "meta"
+	INODE = "inode"
 )
 
 type Object struct {
@@ -48,8 +50,10 @@ type Object struct {
 }
 
 func encodeName(id uint64, oType ObjectType) string {
-	if oType == DATATYPE {
+	if oType == DataType {
 		return fmt.Sprintf("%d.%s", id, DATA)
+	} else if oType == NodeType {
+		return fmt.Sprintf("%d.%s", id, INODE)
 	}
 	return fmt.Sprintf("%d.%s", id, META)
 }
@@ -65,9 +69,11 @@ func decodeName(name string) (id uint64, oType ObjectType, err error) {
 		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
 	}
 	if oName[1] == DATA {
-		oType = DATATYPE
+		oType = DataType
+	} else if oName[1] == INODE {
+		oType = NodeType
 	} else {
-		oType = METADATA
+		oType = MetadataType
 	}
 	return
 }
@@ -77,7 +83,7 @@ func OpenObject(id uint64, oType ObjectType, dir string) (object *Object, err er
 		id:    id,
 		oType: oType,
 	}
-	object.allocator = NewObjectAllocator(OBJECT_SIZE, PAGE_SIZE)
+	object.allocator = NewObjectAllocator(ObjectSize, PageSize)
 	path := path.Join(dir, encodeName(id, oType))
 	if _, err = os.Stat(path); os.IsNotExist(err) {
 		object.oFile, err = os.Create(path)
