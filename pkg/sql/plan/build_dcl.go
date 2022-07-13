@@ -90,8 +90,8 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	}
 
 	prepare := &plan.Prepare{
-		Name:      stmtName,
-		Statement: preparePlan,
+		Name: stmtName,
+		Plan: preparePlan,
 	}
 
 	return &Plan{

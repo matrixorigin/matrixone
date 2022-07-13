@@ -5501,7 +5501,7 @@ literal:
 	}
 |   VALUE_ARG
     {
-        $$ = tree.NewArgExpr(yyp)
+        $$ = tree.NewParamExpr(yyp)
     }
 
 column_type:

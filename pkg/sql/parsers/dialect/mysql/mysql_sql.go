@@ -12545,7 +12545,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:5503
 		{
-			yyLOCAL = tree.NewArgExpr(yyp)
+			yyLOCAL = tree.NewParamExpr(yyp)
 		}
 		yyVAL.union = yyLOCAL
 	case 990:

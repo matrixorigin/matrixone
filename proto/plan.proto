@@ -664,11 +664,11 @@ message SetVariablesItem {
 
 message Prepare {
 	string name		 = 1;
-	Plan   statement = 2;
+	Plan   plan		 = 2;
 }
 
 message Execute {
-	string name			= 1;
+	string name 		= 1;
 	repeated Expr args 	= 2;
 }
 
