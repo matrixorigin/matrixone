@@ -21,10 +21,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -176,44 +175,5 @@ func newExpression(pos int32) *plan.Expr {
 
 // create a new block based on the type information, ds[i] == true: in descending order
 func newBatch(t *testing.T, ds []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	bat := batch.NewWithSize(len(ts))
-	bat.InitZsOne(int(rows))
-	for i := range bat.Vecs {
-		flg := ds[i]
-		vec := vector.New(ts[i])
-		switch vec.Typ.Oid {
-		case types.T_int8:
-			data, err := mheap.Alloc(proc.Mp, rows*1)
-			require.NoError(t, err)
-			vec.Data = data
-			vs := encoding.DecodeInt8Slice(vec.Data)[:rows]
-			if flg {
-				for i := range vs {
-					vs[i] = int8(rows) - int8(i) - 1
-				}
-			} else {
-				for i := range vs {
-					vs[i] = int8(i)
-				}
-			}
-			vec.Col = vs
-		case types.T_int64:
-			data, err := mheap.Alloc(proc.Mp, rows*8)
-			require.NoError(t, err)
-			vec.Data = data
-			vs := encoding.DecodeInt64Slice(vec.Data)[:rows]
-			if flg {
-				for i := range vs {
-					vs[i] = int64(rows) - int64(i) - 1
-				}
-			} else {
-				for i := range vs {
-					vs[i] = int64(i)
-				}
-			}
-			vec.Col = vs
-		}
-		bat.Vecs[i] = vec
-	}
-	return bat
+	return testutil.NewBatch(ts, false, int(rows), proc.Mp)
 }

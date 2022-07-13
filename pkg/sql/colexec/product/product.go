@@ -129,6 +129,7 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
 		}
 	}
+	rbat.ExpandNulls()
 	proc.Reg.InputBatch = rbat
 	return nil
 }

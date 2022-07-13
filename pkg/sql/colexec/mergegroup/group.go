@@ -60,6 +60,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 						ctr.bat.Zs[i] = 1
 					}
 				}
+				ctr.bat.ExpandNulls()
 			}
 			proc.Reg.InputBatch = ctr.bat
 			ctr.bat = nil
