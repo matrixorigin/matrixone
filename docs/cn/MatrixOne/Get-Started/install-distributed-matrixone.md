@@ -18,12 +18,12 @@ MatrixOne集群中有两种类型的节点(store)：调度节点(prophet stores)
 
 此处使用五个节点来演示部署教程。
 
-### **步骤1** 
+### **步骤1**
 
 准备3台服务器作为调度节点。
-每个节点必须安装单机版本的MatrixOne。安装步骤与[单机版安装教程](install-standalone-matrixone.zh.md)一致。
- 
-### **步骤2** 
+每个节点必须安装单机版本的MatrixOne。安装步骤与[单机版安装教程](install-standalone-matrixone.md)一致。
+
+### **步骤2**
 
 创建store1，称之为`Prophet Genesis Store`（种子调度节点）
 
@@ -72,16 +72,16 @@ storage-node = true
 max-replicas = 3
 ```
 
-### **步骤3** 
+### **步骤3**
 
 将store2与store3设置为调度节点，并重复步骤1与步骤2。唯一的区别在于需要设置独特的`nodeID`与`join`地址：
 
-``` 
-nodeID = 2 or 3; 
+```
+nodeID = 2 or 3;
 join = "ip_address_of_store1"
 ```
 
-### **步骤4** 
+### **步骤4**
 
 设置其他两个节点为纯存储节点（pure storage store），并重复步骤1与步骤2。有三个额外的参数需要指定：
 
@@ -97,4 +97,4 @@ storage-node = ["ip_address_of_prophet_store1","ip_address_of_prophet_store2","i
 
 ## **相关信息**
 
-本节介绍了分布式MatrixOne集群的安装部署流程。若想了解更多关于分布式架构配置参数的信息，可以查阅[分布式配置参数手册](../Reference/System-Parameters/distributed-settings.md). 
+本节介绍了分布式MatrixOne集群的安装部署流程。若想了解更多关于分布式架构配置参数的信息，可以查阅[分布式配置参数手册](../Reference/System-Parameters/distributed-settings.md).
