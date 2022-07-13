@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"fmt"
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -148,4 +149,44 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 
 		s.Shards[incoming.ShardID] = recorded
 	}
+}
+
+// LogString returns "ServiceType/ConfigChangeType UUID RepUuid:RepShardID:RepID InitialMembers"
+func (m *ScheduleCommand) LogString() string {
+	var serviceType = map[ServiceType]string{
+		LogService: "L",
+		DnService:  "D",
+	}
+
+	var configChangeType = map[ConfigChangeType]string{
+		AddReplica:    "Add",
+		RemoveReplica: "Remove",
+		StartReplica:  "Start",
+		StopReplica:   "Stop",
+	}
+	scheUuid := m.UUID
+	if len(m.UUID) > 6 {
+		scheUuid = scheUuid[:6]
+	}
+
+	repUuid := m.ConfigChange.Replica.UUID
+	if len(repUuid) > 6 {
+		repUuid = repUuid[:6]
+	}
+
+	initMems := make(map[uint64]string)
+	for repId, uuid := range m.ConfigChange.InitialMembers {
+		if len(uuid) > 6 {
+			initMems[repId] = uuid[:6]
+		} else {
+			initMems[repId] = uuid
+		}
+	}
+
+	s := fmt.Sprintf("%s/%s %s %s:%d:%d %v", serviceType[m.ServiceType],
+		configChangeType[m.ConfigChange.ChangeType], scheUuid,
+		repUuid, m.ConfigChange.Replica.ShardID,
+		m.ConfigChange.Replica.ReplicaID, initMems)
+
+	return s
 }
