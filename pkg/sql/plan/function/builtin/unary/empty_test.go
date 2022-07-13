@@ -79,7 +79,7 @@ func TestEmpty(t *testing.T) {
 		{
 			name:     "Null",
 			proc:     procs,
-			expected: []uint8{},
+			expected: []uint8{0},
 			isScalar: true,
 		},
 	}

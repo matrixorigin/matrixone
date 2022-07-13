@@ -55,6 +55,10 @@ func Reset(n *Nulls) {
 	}
 }
 
+func New(n *Nulls, size int) {
+	n.Np = bitmap.New(size)
+}
+
 // Any returns true if any bit in the Nulls is set, otherwise it will return false.
 func Any(n *Nulls) bool {
 	if n.Np == nil {

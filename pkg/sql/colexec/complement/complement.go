@@ -129,6 +129,7 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 	for {
 		bat := <-proc.Reg.MergeReceivers[1].Ch
 		if bat == nil {
+			ctr.bat.ExpandNulls()
 			break
 		}
 		if len(bat.Zs) == 0 {
