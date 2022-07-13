@@ -17,6 +17,7 @@ package moengine
 import (
 	"bytes"
 	"fmt"
+	"github.com/RoaringBitmap/roaring/roaring64"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -642,61 +643,52 @@ func MOToVector(v *vector.Vector, nullable bool) containers.Vector {
 	switch v.Typ.Oid {
 	case types.Type_BOOL:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]bool), 1)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_INT8:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]int8), 1)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_INT16:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]int16), 2)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_INT32:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]int32), 4)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_INT64:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]int64), 8)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_UINT8:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]uint8), 1)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_UINT16:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]uint16), 2)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_UINT32:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]uint32), 4)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_UINT64:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]uint64), 8)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_FLOAT32:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]float32), 4)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_FLOAT64:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]float64), 8)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_DATE:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Date), 4)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_DATETIME:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Datetime), 8)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_TIMESTAMP:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Timestamp), 8)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_DECIMAL64:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Decimal64), 8)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_DECIMAL128:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		vbs := v.Col.(*types.Bytes)
 		bs.Data = vbs.Data
 		bs.Offset = vbs.Offsets
 		bs.Length = vbs.Lengths
-		vec.ResetWithData(bs, v.Nsp.Np)
 	default:
 		panic(any(fmt.Errorf("%s not supported", v.Typ.String())))
 	}
+	if v.Nsp.Np != nil {
+		np := &roaring64.Bitmap{}
+		np.AddMany(v.Nsp.Np.ToArray())
+		logutil.Infof("sie : %d", np.GetCardinality())
+		vec.ResetWithData(bs, np)
+		return vec
+	}
+	vec.ResetWithData(bs, nil)
 	return vec
 }
 
@@ -744,7 +736,6 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 		} else {
 			bs.Data = encoding.EncodeFixedSlice(v.Col.([]int64), 8)
 		}
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_UINT8:
 		if v.Col == nil || len(v.Col.([]uint8)) == 0 {
 			bs.Data = make([]byte, v.Length)
@@ -845,7 +836,14 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 	default:
 		panic(any(fmt.Errorf("%s not supported", v.Typ.String())))
 	}
-	vec.ResetWithData(bs, v.Nsp.Np)
+	if v.Nsp.Np != nil {
+		np := &roaring64.Bitmap{}
+		np.AddMany(v.Nsp.Np.ToArray())
+		logutil.Infof("sie : %d", np.GetCardinality())
+		vec.ResetWithData(bs, np)
+		return vec
+	}
+	vec.ResetWithData(bs, nil)
 	return vec
 }
 
@@ -855,7 +853,9 @@ func CopyToMoVector(vec containers.Vector) *vector.Vector {
 	_, _ = w.Write(types.EncodeType(vec.GetType()))
 	if vec.HasNull() {
 		var nullBuf []byte
-		nullBuf, _ = vec.NullMask().ToBytes()
+		np := bitmap.New(vec.Length())
+		np.AddMany(vec.NullMask().ToArray())
+		nullBuf = np.Show()
 		_, _ = w.Write(types.EncodeFixed(uint32(len(nullBuf))))
 		_, _ = w.Write(nullBuf)
 	} else {
@@ -886,7 +886,9 @@ func VectorsToMO(vec containers.Vector) *vector.Vector {
 	mov.Typ = typ
 	mov.Or = true
 	if vec.HasNull() {
-		mov.Nsp.Np = vec.NullMask()
+		mov.Nsp.Np = bitmap.New(vec.Length())
+		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
+		//mov.Nsp.Np = vec.NullMask()
 	}
 	mov.Data = data
 	switch vec.GetType().Oid {
