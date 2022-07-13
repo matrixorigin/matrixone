@@ -431,6 +431,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 
 		"prepare stmt1 from select * from nation",
 		"prepare stmt1 from select * from nation where n_name = ?",
+		"prepare stmt1 from 'select * from nation where n_name = ?'",
 		"prepare stmt1 from select N_REGIONKEY from nation group by N_REGIONKEY having abs(nation.N_REGIONKEY - ?) > ?",
 		"execute stmt1",
 		"execute stmt1 using @str_var, @@global.int_var",
