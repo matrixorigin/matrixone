@@ -61,9 +61,7 @@ type Service struct {
 }
 
 func NewService(cfg Config) (*Service, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
+	cfg.Validate()
 	cfg.Fill()
 	plog.Infof("calling newLogStore")
 	store, err := newLogStore(cfg)
