@@ -517,6 +517,7 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 		}
 	}
+	rbat.ExpandNulls()
 	proc.Reg.InputBatch = rbat
 	return nil
 }

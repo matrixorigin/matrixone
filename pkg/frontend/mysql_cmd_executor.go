@@ -24,11 +24,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -1884,7 +1884,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
-		logutil.Infof("query:%s", SubStringFromBegin(query, int(ses.Pu.SV.GetLengthOfQueryPrinted())))
+		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), SubStringFromBegin(query, int(ses.Pu.SV.GetLengthOfQueryPrinted())))
 		seps := strings.Split(query, " ")
 		if len(seps) <= 0 {
 			resp = NewGeneralErrorResponse(COM_QUERY, fmt.Errorf("invalid query"))
