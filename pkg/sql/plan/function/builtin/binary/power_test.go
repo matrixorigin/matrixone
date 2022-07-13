@@ -14,10 +14,11 @@
 package binary
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -60,7 +61,7 @@ func powerFloat64[T constraints.Integer | constraints.Float](t *testing.T, typ t
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makePowerVectors[T](src, src2, true, typ),
+			vecs:       makePowerVectors(src, src2, true, typ),
 			proc:       procs,
 			wantBytes:  []float64{res},
 			wantScalar: true,

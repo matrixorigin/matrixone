@@ -32,7 +32,7 @@ func DateToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]int64, 1)
 		vector.SetCol(resultVector, weekday.DateToWeekday(inputValues, resultValues))
 		return resultVector, nil
@@ -58,7 +58,7 @@ func DatetimeToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]int64, 1)
 		vector.SetCol(resultVector, weekday.DatetimeToWeekday(inputValues, resultValues))
 		return resultVector, nil

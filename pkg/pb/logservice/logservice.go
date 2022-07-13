@@ -71,6 +71,7 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 		storeInfo = CNStoreInfo{}
 	}
 	storeInfo.Tick = tick
+	storeInfo.ServiceAddress = hb.ServiceAddress
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -90,6 +91,7 @@ func (s *DNState) Update(hb DNStoreHeartbeat, tick uint64) {
 	}
 	storeInfo.Tick = tick
 	storeInfo.Shards = hb.Shards
+	storeInfo.ServiceAddress = hb.ServiceAddress
 	s.Stores[hb.UUID] = storeInfo
 }
 

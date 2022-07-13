@@ -548,33 +548,38 @@ func writeTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, wTxn txn.
 	for _, k := range keys {
 		requests = append(requests, newTestWriteRequest(k, wTxn, toShard))
 	}
-	responses, err := sender.Send(context.Background(), requests)
+	result, err := sender.Send(context.Background(), requests)
 	assert.NoError(t, err)
+	responses := result.Responses
 	assert.Equal(t, len(keys), len(responses))
 	return responses
 }
 
 func commitShardWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []txn.TxnResponse {
-	responses, err := sender.Send(context.Background(), []txn.TxnRequest{newTestCommitShardRequest(wTxn)})
+	result, err := sender.Send(context.Background(), []txn.TxnRequest{newTestCommitShardRequest(wTxn)})
 	assert.NoError(t, err)
+	responses := result.Responses
 	return responses
 }
 
 func rollbackShardWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []txn.TxnResponse {
-	responses, err := sender.Send(context.Background(), []txn.TxnRequest{newTestRollbackShardRequest(wTxn)})
+	result, err := sender.Send(context.Background(), []txn.TxnRequest{newTestRollbackShardRequest(wTxn)})
 	assert.NoError(t, err)
+	responses := result.Responses
 	return responses
 }
 
 func commitWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []txn.TxnResponse {
-	responses, err := sender.Send(context.Background(), []txn.TxnRequest{newTestCommitRequest(wTxn)})
+	result, err := sender.Send(context.Background(), []txn.TxnRequest{newTestCommitRequest(wTxn)})
 	assert.NoError(t, err)
+	responses := result.Responses
 	return responses
 }
 
 func rollbackWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []txn.TxnResponse {
-	responses, err := sender.Send(context.Background(), []txn.TxnRequest{newTestRollbackRequest(wTxn)})
+	result, err := sender.Send(context.Background(), []txn.TxnRequest{newTestRollbackRequest(wTxn)})
 	assert.NoError(t, err)
+	responses := result.Responses
 	return responses
 }
 
@@ -583,8 +588,9 @@ func readTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, rTxn txn.T
 	for _, k := range keys {
 		requests = append(requests, newTestReadRequest(k, rTxn, toShard))
 	}
-	responses, err := sender.Send(context.Background(), requests)
+	result, err := sender.Send(context.Background(), requests)
 	assert.NoError(t, err)
+	responses := result.Responses
 	assert.Equal(t, len(keys), len(responses))
 	return responses
 }
