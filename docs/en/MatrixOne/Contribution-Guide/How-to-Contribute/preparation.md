@@ -8,19 +8,19 @@ Thanks for understanding that English is used as a shared language in this repos
 
 ### Basic Information
 
-You can see [MatrixOne Introduction](../../Overview/matrixone-introduction.md) for key features of MatrixOne, [MatrixOne Architecture](../../Overview/matrixone-architecture.md) for MatrixOne architecture and operational logic.  For our distributed framework, see [MatrixCube Tech Design](./../../Overview/matrixcube/natrixcube-introduction.md).
+You can see [MatrixOne Introduction](../../Overview/matrixone-introduction.md) for key features of MatrixOne, [MatrixOne Architecture](../../Overview/matrixone-architecture.md) for MatrixOne architecture and operational logic.  For our distributed framework, see [MatrixCube Tech Design](./../../Overview/matrixcube/matrixcube-introduction.md).
 
-Besides, you can browse [SQL Reference](../../Reference/SQL-Reference/Data-Definition-Statements/create-database.md) and [Custom Functions](../../Reference/Customer-Functions/year.md) to know more about our interactive details.
+Besides, you can browse [SQL Reference](../../Reference/SQL-Reference/Data-Definition-Statements/create-database.md) and [Custom Functions](../../Reference/Builtin-Functions/Datetime/year.md) to know more about our interactive details.
 
-These introductions will help you go through you the key concepts and user details to understand the project. 
+These introductions will help you go through you the key concepts and user details to understand the project.
 
 ### Roadmap
 
-MatrixOne v0.3.0 has been released, you can see [Release Notes](../Release-Notes/v0.3.0.md) to know more information. 
+MatrixOne v0.3.0 has been released, you can see [Release Notes](../../Release-Notes/v0.4.0.md) to know more information.
 
 Currently, we are working at v0.4.0 and v0.5.0 releases, the job tasks of these releases are listed in the Github milestones [0.4.0](https://github.com/matrixorigin/matrixone/milestone/5).
 
-For the long-term project roadmap, please refer to [MatrixOne roadmap](https://github.com/matrixorigin/matrixone/issues/613) for a more general overview. 
+For the long-term project roadmap, please refer to [MatrixOne roadmap](https://github.com/matrixorigin/matrixone/issues/613) for a more general overview.
 
 ## **What Contributions Can I Make**
 
@@ -30,9 +30,9 @@ Contributions to MatrixOne are not limited to writing code. What follows are dif
 * To propose a new feature, please file a [new feature request](https://github.com/matrixorigin/matrixone/issues/new/choose). Describe the intended feature and discuss the design and implementation with the team and community. Once the team agrees on the plan, you can follow the [Contribution Workflow](contribute-code.md#workflow) to implement it.  
 * To implement a feature or bug-fix for an existing outstanding issue, follow the [Contribution workflow](contribute-code.md#workflow). If you need more context on a particular issue, comment on the issue to let people know.
 
-## **Working Directories and Files** 
+## **Working Directories and Files**
 
-For contributing code, [matrixone](https://github.com/matrixorigin/matrixone) is the main repository you'll be working on. The main working directories are listed below: 
+For contributing code, [matrixone](https://github.com/matrixorigin/matrixone) is the main repository you'll be working on. The main working directories are listed below:
 
 | Directory              | Working Files                                                  |
 | ------------------------------ | ------------------------------------------------------------ |
@@ -96,4 +96,4 @@ And you can learn how to use it throuth following introduction:
 
 ### **Install and Run MatrixOne**
 
-See [Install Standalone MatrixOne](../../Get-Started/install-standalone-matrixone.md) for more details. 
+See [Install Standalone MatrixOne](../../Get-Started/install-standalone-matrixone.md) for more details.
