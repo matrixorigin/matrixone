@@ -22,6 +22,14 @@ type ObjectAllocator struct {
 	pageSize  uint32
 }
 
+func p2align(x uint64, align uint64) uint64 {
+	return x & -align
+}
+
+func p2roundup(x uint64, align uint64) uint64 {
+	return -(-x & -align)
+}
+
 func NewObjectAllocator(capacity uint64, pageSize uint32) *ObjectAllocator {
 	allocator := &ObjectAllocator{
 		pageSize: pageSize,
@@ -38,8 +46,9 @@ func (o *ObjectAllocator) Init(capacity uint64, pageSize uint32) {
 func (o *ObjectAllocator) Allocate(needLen uint64) (uint64, uint64) {
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
+	length := p2roundup(needLen, uint64(o.pageSize))
 	offset := o.available
-	o.available += needLen
+	o.available += length
 	return offset, needLen
 }
 

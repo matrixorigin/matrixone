@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/tfs"
+	"github.com/pierrec/lz4"
 	"os"
 	"strings"
 	"sync"
@@ -42,7 +43,7 @@ type Attr struct {
 func NewObjectFS() tfs.FS {
 	fs := &ObjectFS{
 		attr: &Attr{
-			algo: compress.None,
+			algo: compress.Lz4,
 		},
 		dirs: make(map[string]tfs.File),
 	}
@@ -140,7 +141,14 @@ func (o *ObjectFS) Append(file *ObjectFile, data []byte) (n int, err error) {
 	if err != nil {
 		return
 	}
-	offset, allocated, err := dataObject.Append(data)
+	buf := data
+	if o.attr.algo == compress.Lz4 {
+		buf = make([]byte, lz4.CompressBlockBound(len(buf)))
+		if buf, err = compress.Compress(data, buf, compress.Lz4); err != nil {
+			return
+		}
+	}
+	offset, allocated, err := dataObject.Append(buf)
 	if err != nil {
 		return int(allocated), err
 	}
@@ -148,10 +156,10 @@ func (o *ObjectFS) Append(file *ObjectFile, data []byte) (n int, err error) {
 	file.inode.extents = append(file.inode.extents, Extent{
 		typ:    APPEND,
 		offset: uint32(offset),
-		length: uint32(len(data)),
-		data:   entry{offset: 0, length: uint32(len(data))},
+		length: uint32(allocated),
+		data:   entry{offset: 0, length: uint32(len(buf))},
 	})
-	file.inode.size += uint64(len(data))
+	file.inode.size += uint64(len(buf))
 	file.inode.dataSize += uint64(len(data))
 	file.inode.seq++
 	file.inode.objectId = dataObject.id

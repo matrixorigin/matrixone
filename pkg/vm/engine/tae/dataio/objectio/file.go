@@ -67,7 +67,8 @@ func (b *ObjectFile) Stat() common.FileInfo {
 	defer b.inode.mutex.RUnlock()
 	stat := &objectFileStat{}
 	stat.size = int64(b.inode.size)
-	stat.dataSize = int64(b.inode.size)
+	stat.dataSize = int64(b.inode.dataSize)
+	stat.algo =b.fs.attr.algo
 	stat.oType = b.inode.typ
 	return stat
 }
