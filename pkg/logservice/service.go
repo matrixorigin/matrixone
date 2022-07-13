@@ -171,6 +171,8 @@ func (s *Service) handle(req pb.Request,
 		return s.handleDNHeartbeat(req), pb.LogRecordResponse{}
 	case pb.CHECK_HAKEEPER:
 		return s.handleCheckHAKeeper(req), pb.LogRecordResponse{}
+	case pb.GET_CLUSTER_DETAILS:
+		return s.handleGetClusterDetails(req), pb.LogRecordResponse{}
 	default:
 		panic("unknown log service method type")
 	}
@@ -178,6 +180,18 @@ func (s *Service) handle(req pb.Request,
 
 func getResponse(req pb.Request) pb.Response {
 	return pb.Response{Method: req.Method}
+}
+
+func (s *Service) handleGetClusterDetails(req pb.Request) pb.Response {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
+	defer cancel()
+	resp := getResponse(req)
+	if v, err := s.store.getClusterDetails(ctx); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	} else {
+		resp.ClusterDetails = v
+	}
+	return resp
 }
 
 func (s *Service) handleTsoUpdate(req pb.Request) pb.Response {

@@ -140,7 +140,14 @@ func (c *hakeeperClient) Close() error {
 }
 
 func (c *hakeeperClient) GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
-	panic("not implemented")
+	req := pb.Request{
+		Method: pb.GET_CLUSTER_DETAILS,
+	}
+	resp, err := c.request(ctx, req)
+	if err != nil {
+		return pb.ClusterDetails{}, err
+	}
+	return resp.ClusterDetails, nil
 }
 
 func (c *hakeeperClient) SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) error {

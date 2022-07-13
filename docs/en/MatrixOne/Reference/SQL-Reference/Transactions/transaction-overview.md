@@ -1,6 +1,6 @@
 ## Transactions
 
-MatrixOne supports bundling multiple SQL statements into a single all-or-nothing transaction. Each transaction guarantees ACID semantics spanning arbitrary tables and rows. If a transaction succeeds, all mutations are applied together with virtual simultaneity. If any part of a transaction fails, the entire transaction is aborted, and the database is left unchanged. MatrixOne guarantees that while a transaction is pending, it is isolated from other concurrent transactions with serializable isolation.
+MatrixOne supports bundling multiple SQL statements into a single all-or-nothing transaction. Each transaction guarantees ACID semantics spanning arbitrary tables and rows. If a transaction succeeds, all mutations are applied together with virtual simultaneity. If any part of a transaction fails, the entire transaction is aborted, and the database is left unchanged. MatrixOne guarantees that while a transaction is pending, it is isolated from other concurrent transactions with snapshot isolation.
 
 In 0.5.0 version, MatrixOne supports standalone database transaction. MatrixOne supports optimistic transaction mode.
 
@@ -168,3 +168,68 @@ mysql> select * from t1;
 ```
 
 In the above example, the transaction remains open after the failed `INSERT` statements. The final insert statement is then successful and changes are committed.
+
+#### Snapshot Isolation Level 
+
+Transaction isolation is one of the foundations of database transaction processing. Isolation is one of the four key properties of a transaction (commonly referred as ACID).
+
+The SQL-92 standard defines four levels of transaction isolation: Read Uncommitted, Read Committed, Repeatable Read, and Serializable. See the following table for details:
+
+| Isolation Level  | Dirty Write  | Dirty Read   | Fuzzy Read   | Phantom      |
+| :--------------- | :----------- | :----------- | :----------- | :----------- |
+| READ UNCOMMITTED | Not Possible | Possible     | Possible     | Possible     |
+| READ COMMITTED   | Not Possible | Not possible | Possible     | Possible     |
+| REPEATABLE READ  | Not Possible | Not possible | Not possible | Possible     |
+| SERIALIZABLE     | Not Possible | Not possible | Not possible | Not possible |
+
+MatrixOne implements Snapshot Isolation (SI) consistency, this level of isolation is between `REPEATABLE READ` and `SERIALIZABLE` for SQL-92 standard.
+
+In a snapshot isolated system, each transaction appears to operate on an independent, consistent snapshot of the database. Its changes are visible only to that transaction until commit time, when all changes become visible atomically to any transaction which begins at a later time.If transaction T1 has modified an object *x*, and another transaction T2 committed a write to *x* after T1’s snapshot began, and before T1’s commit, then T1 must abort.
+
+If we look at the isolation levels with the possible anomalies allowed proposed by [A Critique of ANSI SQL Isolation Levels](https://arxiv.org/ftp/cs/papers/0701/0701157.pdf), we can conclude MatrixOne's isolation level with such a following table, which is slightly different with the Snapshot Isolation in the article.
+
+| Isolation Level                | P0 Dirty Write | P1 Dirty Read | P4C Cursor Lost Update | P4 Lost Update | P2 Fuzzy Read | P3 Phantom   | A5A Read Skew | A5B Write Skew |
+| ------------------------------ | -------------- | ------------- | ---------------------- | -------------- | ------------- | ------------ | ------------- | -------------- |
+| MatrixOne's Snapshot Isolation | Not Possible   | Not Possible  | Not Possible           | Not Possible   | Not Possible  | Not Possible | Not Possible  | Possible       |
+
+#### Optimistic Transaction Model
+
+MatrixOne supports an optimistic transaction model. Users who use optimistic concurrency do not lock a row when reading it. When a user wants to update a row, the application must determine whether another user has changed the row since it was read. Optimistic concurrency is generally used in environments with a low contention for data. 
+
+In an optimistic concurrency model, a violation is considered to have occurred if, after a user receives a value from the database, another user modifies the value before the first user has attempted to modify it. How the server resolves a concurrency violation is best shown by first describing the following example.
+
+The following tables follow an example of optimistic concurrency.
+
+At 1:00 p.m., User1 reads a row from the database with the following values:
+
+**CustID LastName FirstName**
+
+101 Smith Bob
+
+| Column name | Original value | Current value | Value in database |
+| :---------- | :------------- | :------------ | :---------------- |
+| CustID      | 101            | 101           | 101               |
+| LastName    | Smith          | Smith         | Smith             |
+| FirstName   | Bob            | Bob           | Bob               |
+
+At 1:01 p.m., User2 reads the same row.
+
+At 1:03 p.m., User2 changes **FirstName** from "Bob" to "Robert" and updates the database.
+
+| Column name | Original value | Current value | Value in database |
+| :---------- | :------------- | :------------ | :---------------- |
+| CustID      | 101            | 101           | 101               |
+| LastName    | Smith          | Smith         | Smith             |
+| FirstName   | Bob            | Robert        | Bob               |
+
+The update succeeds because the values in the database at the time of update match the original values that User2 has.
+
+At 1:05 p.m., User1 changes "Bob"'s first name to "James" and tries to update the row.
+
+| Column name | Original value | Current value | Value in database |
+| :---------- | :------------- | :------------ | :---------------- |
+| CustID      | 101            | 101           | 101               |
+| LastName    | Smith          | Smith         | Smith             |
+| FirstName   | Bob            | James         | Robert            |
+
+At this point, User1 encounters an optimistic concurrency violation because the value in the database ("Robert") no longer matches the original value that User1 was expecting ("Bob"). The concurrency violation simply lets you know that the update failed. The decision now needs to be made whether to overwrite the changes supplied by User2 with the changes supplied by User1, or to cancel the changes by User1.

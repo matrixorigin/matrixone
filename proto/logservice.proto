@@ -28,17 +28,15 @@ enum UpdateType {
 }
 
 message CNNode {
-  string UUID    = 1;
-  string Address = 2;
-  uint64 Tick    = 3;
+  string UUID           = 1;
+  string ServiceAddress = 2;
+  uint64 Tick           = 3;
 }
 
 message DNNode {
-  string UUID      = 1;
-  uint64 ShardID   = 2;
-  uint64 ReplicaID = 3;
-  string Address   = 4;
-  uint64 Tick      = 5;
+  string UUID           = 1;
+  string ServiceAddress = 2;
+  uint64 Tick           = 3;
 }
 
 // LogShardInfo contains information a log shard.
@@ -69,7 +67,8 @@ message LogReplicaInfo {
 
 // CNStoreHeartbeat is the periodic message sent tp the HAKeeper by CN stores.
 message CNStoreHeartbeat {
-  string UUID = 1;
+  string UUID           = 1;
+  string ServiceAddress = 2;
 }
 
 // LogStoreHeartbeat is the periodic message sent to the HAKeeper by Log Stores.
@@ -104,10 +103,11 @@ message DNShardInfo {
 // DNStoreHeartbeat is the periodic message sent to the HAKeeper by DN stores.
 message DNStoreHeartbeat {
   // UUID is the uuid of the DN Store.
-  string UUID = 1;
+  string UUID                 = 1; 
+  string ServiceAddress       = 2;
   // Shards is a list of DNShardInfo instances collected on the specified
   // DN store. 
-  repeated DNShardInfo Shards = 2 [(gogoproto.nullable) = false];
+  repeated DNShardInfo Shards = 3 [(gogoproto.nullable) = false];
 };
 
 message RSMState {
@@ -130,6 +130,7 @@ enum MethodType {
   CN_HEARTBEAT   = 8;
   DN_HEARTBEAT   = 9;
   CHECK_HAKEEPER = 10;
+  GET_CLUSTER_DETAILS = 11;
 };
 
 enum RecordType {
@@ -204,6 +205,7 @@ message Response {
   LogResponse LogResponse   = 6 [(gogoproto.nullable) = false];
   CommandBatch CommandBatch = 7 [(gogoproto.nullable) = false];
   TsoResponse TsoResponse   = 8 [(gogoproto.nullable) = false];
+  ClusterDetails ClusterDetails = 9 [(gogoproto.nullable) = false];
 };
 
 message LogRecordResponse {
@@ -285,7 +287,7 @@ message ScheduleCommand {
   ServiceType ServiceType     = 4;
   ShutdownStore ShutdownStore = 5;
 }
-
+      
 message CommandBatch {
   uint64 Term                       = 1;
   repeated ScheduleCommand Commands = 2 [(gogoproto.nullable) = false];
@@ -294,6 +296,7 @@ message CommandBatch {
 // CNStoreInfo contains infroamtion on a CN store.
 message CNStoreInfo {
   uint64 Tick                 = 1;
+  string ServiceAddress       = 2;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -306,7 +309,8 @@ message CNState {
 // DNStoreInfo contins information on a DN store.
 message DNStoreInfo {
   uint64 Tick                 = 1;
-  repeated DNShardInfo Shards = 2 [(gogoproto.nullable) = false];
+  string ServiceAddress       = 2;
+  repeated DNShardInfo Shards = 3 [(gogoproto.nullable) = false];
 }
 
 // DNState contains all DN details known to the HAKeeper.
