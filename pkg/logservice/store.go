@@ -379,9 +379,20 @@ func (l *store) getCommandBatch(ctx context.Context,
 	v, err := l.read(ctx,
 		hakeeper.DefaultHAKeeperShardID, &hakeeper.ScheduleCommandQuery{UUID: uuid})
 	if err != nil {
+		// FIXME: handle not HAKeeper error
 		return pb.CommandBatch{}, err
 	}
 	return *(v.(*pb.CommandBatch)), nil
+}
+
+func (l *store) getClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
+	v, err := l.read(ctx,
+		hakeeper.DefaultHAKeeperShardID, &hakeeper.ClusterDetailsQuery{})
+	if err != nil {
+		// FIXME: handle not HAKeeper error
+		return pb.ClusterDetails{}, err
+	}
+	return *(v.(*pb.ClusterDetails)), nil
 }
 
 func (l *store) addScheduleCommands(ctx context.Context,
@@ -391,7 +402,6 @@ func (l *store) addScheduleCommands(ctx context.Context,
 	if _, err := l.propose(ctx, session, cmd); err != nil {
 		return err
 	}
-
 	return nil
 }
 
