@@ -84,7 +84,6 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		resetArgRule := NewResetArgRule(args)
 		VisitQuery = NewVisitQuery(pp.Query, &resetArgRule)
 		pp.Query, err = VisitQuery.Visit()
-
 		if err != nil {
 			return nil, err
 		}

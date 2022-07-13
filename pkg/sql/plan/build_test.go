@@ -31,7 +31,7 @@ func TestSingleSql(t *testing.T) {
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
 	// sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
-	sql := "prepare st1 from select n_name from nation where n_nationkey > ?"
+	sql := "drop prepare stmt1"
 	// sql := "explain a"
 	// sql := "select 18446744073709551500"
 	// stmts, err := mysql.Parse(sql)
@@ -428,6 +428,14 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SET @var = abs(-1), @@session.string_var = 'aaa'",
 		"SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'",
 		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_NAME", //test distinct with order by
+
+		"prepare stmt1 from select * from nation",
+		"prepare stmt1 from select * from nation where n_name = ?",
+		"prepare stmt1 from select N_REGIONKEY from nation group by N_REGIONKEY having abs(nation.N_REGIONKEY - ?) > ?",
+		"execute stmt1",
+		"execute stmt1 using @str_var, @@global.int_var",
+		"deallocate prepare stmt1",
+		"drop prepare stmt1",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -448,6 +456,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_REGIONKEY", //test distinct with order by
 		//"select 18446744073709551500",                             //over int64
 		//"select 0xffffffffffffffff",                               //over int64
+		"execute stmt1 using @not_exist_var", //var not exist
 	}
 	runTestShouldError(mock, t, sqls)
 }
