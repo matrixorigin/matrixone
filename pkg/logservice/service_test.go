@@ -464,7 +464,7 @@ func TestServiceCheckHAKeeper(t *testing.T) {
 	fn = func(t *testing.T, s *Service) {
 		init := make(map[uint64]dragonboat.Target)
 		init[1] = s.ID()
-		s.store.startHAKeeperReplica(1, init, false)
+		require.NoError(t, s.store.startHAKeeperReplica(1, init, false))
 		req := pb.Request{
 			Method:  pb.CHECK_HAKEEPER,
 			Timeout: int64(time.Second),

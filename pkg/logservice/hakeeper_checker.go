@@ -27,9 +27,7 @@ const (
 	minIDAllocCapacity uint64 = 1024
 	defaultIDBatchSize uint64 = 1024 * 10
 
-	hakeeperDefaultTimeout   = 2 * time.Second
-	hakeeperCmdUploadTimeout = 10 * time.Second
-
+	hakeeperDefaultTimeout = 2 * time.Second
 	checkBootstrapInterval = 100
 )
 
