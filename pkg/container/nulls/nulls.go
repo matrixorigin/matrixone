@@ -63,6 +63,14 @@ func Any(n *Nulls) bool {
 	return !n.Np.IsEmpty()
 }
 
+// Any returns true if any bit in the Nulls is set, otherwise it will return false.
+func PreciseAny(n *Nulls) bool {
+	if n.Np == nil {
+		return false
+	}
+	return len(n.Np.ToArray()) != 0
+}
+
 // Size estimates the memory usage of the Nulls.
 func Size(n *Nulls) int {
 	if n.Np == nil {
@@ -86,6 +94,12 @@ func String(n *Nulls) string {
 	return fmt.Sprintf("%v", n.Np.ToArray())
 }
 
+func TryExpand(n *Nulls, size int) {
+	if n.Np != nil {
+		n.Np.TryExpandWithSize(size)
+	}
+}
+
 // Contains returns true if the integer is contained in the Nulls
 func Contains(n *Nulls, row uint64) bool {
 	if n.Np != nil {
@@ -95,6 +109,9 @@ func Contains(n *Nulls, row uint64) bool {
 }
 
 func Add(n *Nulls, rows ...uint64) {
+	if len(rows) == 0 {
+		return
+	}
 	if n.Np == nil {
 		n.Np = bitmap.New(int(rows[len(rows)-1]) + 1)
 	} else {
@@ -125,7 +142,11 @@ func Set(n, m *Nulls) {
 // FilterCount returns the number count that appears in both n and sel
 func FilterCount(n *Nulls, sels []int64) int {
 	var cnt int
+
 	if n.Np == nil {
+		return cnt
+	}
+	if len(sels) == 0 {
 		return cnt
 	}
 	var sp []uint64
@@ -171,6 +192,9 @@ func Range(n *Nulls, start, end uint64, m *Nulls) *Nulls {
 
 func Filter(n *Nulls, sels []int64) *Nulls {
 	if n.Np == nil {
+		return n
+	}
+	if len(sels) == 0 {
 		return n
 	}
 	var sp []uint64

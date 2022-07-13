@@ -75,6 +75,7 @@ func (n *Bitmap) Add(row uint64) {
 }
 
 func (n *Bitmap) AddMany(rows []uint64) {
+	n.Any = true
 	for _, row := range rows {
 		n.Data[row>>3] |= 1 << (row & 0x7)
 	}
