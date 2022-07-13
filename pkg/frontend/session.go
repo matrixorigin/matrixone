@@ -336,6 +336,10 @@ func (ses *Session) SetUserName(uname string) {
 	ses.protocol.SetUserName(uname)
 }
 
+func (ses *Session) GetConnectionID() uint32 {
+	return ses.protocol.ConnectionID()
+}
+
 func (th *TxnHandler) GetStorage() engine.Engine {
 	return th.storage
 }
