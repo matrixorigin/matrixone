@@ -1538,11 +1538,11 @@ prepareable_stmt:
 prepare_stmt:
     prepare_sym stmt_name FROM prepareable_stmt
     {
-        $$ = tree.NewPrepare(tree.Identifier($2), $4)
+        $$ = tree.NewPrepareStmt(tree.Identifier($2), $4)
     }
 |   prepare_sym stmt_name FROM STRING
     {
-        $$ = tree.NewPrepareFromStr(tree.Identifier($2), $4) 
+        $$ = tree.NewPrepareString(tree.Identifier($2), $4) 
     }
 
 execute_stmt:
@@ -5501,7 +5501,7 @@ literal:
 	}
 |   VALUE_ARG
     {
-        $$ = tree.NewArgExpr()
+        $$ = tree.NewArgExpr(yyp)
     }
 
 column_type:

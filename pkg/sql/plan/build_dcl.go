@@ -17,8 +17,142 @@ package plan
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
+	var preparePlan *Plan
+	var err error
+	var stmtName string
+
+	switch pstmt := stmt.(type) {
+	case *tree.PrepareStmt:
+		stmtName = string(pstmt.Name)
+		preparePlan, err = BuildPlan(ctx, pstmt.Stmt)
+		if err != nil {
+			return nil, err
+		}
+
+	case *tree.PrepareString:
+		stmts, err := mysql.Parse(pstmt.Sql)
+		if err != nil {
+			return nil, err
+		}
+		if len(stmts) > 1 {
+			return nil, errors.New("", "can't prepare from muti statements")
+		}
+		stmtName = string(pstmt.Name)
+		preparePlan, err = BuildPlan(ctx, stmts[0])
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// dcl tcl is not support
+	switch pp := preparePlan.Plan.(type) {
+	case *plan.Plan_Tcl, *plan.Plan_Dcl:
+		return nil, errors.New("", "can't prepare from TCL and DCL statement")
+
+	case *plan.Plan_Ddl:
+		if pp.Ddl.Query != nil {
+			getArgRule := NewGetArgRule()
+			VisitQuery := NewVisitQuery(pp.Ddl.Query, &getArgRule)
+			_, err = VisitQuery.Visit()
+			if err != nil {
+				return nil, err
+			}
+			// TODO : need confirm
+			if len(getArgRule.args) > 0 {
+				return nil, errors.New("", "ArgExpr is not support in DDL statement")
+			}
+		}
+	case *plan.Plan_Query:
+		// collect args
+		getArgRule := NewGetArgRule()
+		VisitQuery := NewVisitQuery(pp.Query, &getArgRule)
+		pp.Query, err = VisitQuery.Visit()
+		if err != nil {
+			return nil, err
+		}
+
+		// set arg order
+		getArgRule.SetArgOrder()
+		args := getArgRule.args
+
+		// set arg order
+		resetArgRule := NewResetArgRule(args)
+		VisitQuery = NewVisitQuery(pp.Query, &resetArgRule)
+		pp.Query, err = VisitQuery.Visit()
+
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	prepare := &plan.Prepare{
+		Name:      stmtName,
+		Statement: preparePlan,
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Dcl{
+			Dcl: &plan.DataControl{
+				DclType: plan.DataControl_PREPARE,
+				Control: &plan.DataControl_Prepare{
+					Prepare: prepare,
+				},
+			},
+		},
+	}, nil
+}
+
+func buildExecute(stmt *tree.Execute, ctx CompilerContext) (*Plan, error) {
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	binder := NewWhereBinder(builder, &BindContext{})
+
+	var args []*Expr
+	for _, variable := range stmt.Variables {
+		arg, err := binder.baseBindExpr(variable, 0, true)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, arg)
+	}
+
+	execute := &plan.Execute{
+		Name: string(stmt.Name),
+		Args: args,
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Dcl{
+			Dcl: &plan.DataControl{
+				DclType: plan.DataControl_EXECUTE,
+				Control: &plan.DataControl_Execute{
+					Execute: execute,
+				},
+			},
+		},
+	}, nil
+}
+
+func buildDeallocate(stmt *tree.Deallocate, ctx CompilerContext) (*Plan, error) {
+	deallocate := &plan.Deallocate{
+		Name: string(stmt.Name),
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Dcl{
+			Dcl: &plan.DataControl{
+				DclType: plan.DataControl_DEALLOCATE,
+				Control: &plan.DataControl_Deallocate{
+					Deallocate: deallocate,
+				},
+			},
+		},
+	}, nil
+}
 
 func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext) (*Plan, error) {
 	var err error

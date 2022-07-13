@@ -6877,7 +6877,7 @@ yydefault:
 		var yyLOCAL tree.Statement
 //line mysql_sql.y:1540
 		{
-			yyLOCAL = tree.NewPrepare(tree.Identifier(yyDollar[2].str), yyDollar[4].statementUnion())
+			yyLOCAL = tree.NewPrepareStmt(tree.Identifier(yyDollar[2].str), yyDollar[4].statementUnion())
 		}
 		yyVAL.union = yyLOCAL
 	case 194:
@@ -6885,7 +6885,7 @@ yydefault:
 		var yyLOCAL tree.Statement
 //line mysql_sql.y:1544
 		{
-			yyLOCAL = tree.NewPrepareFromStr(tree.Identifier(yyDollar[2].str), yyDollar[4].str)
+			yyLOCAL = tree.NewPrepareString(tree.Identifier(yyDollar[2].str), yyDollar[4].str)
 		}
 		yyVAL.union = yyLOCAL
 	case 195:
@@ -12545,7 +12545,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:5503
 		{
-			yyLOCAL = tree.NewArgExpr()
+			yyLOCAL = tree.NewArgExpr(yyp)
 		}
 		yyVAL.union = yyLOCAL
 	case 990:

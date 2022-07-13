@@ -853,13 +853,15 @@ func NewVarExpr(n string, s bool, g bool, e Expr) *VarExpr {
 // select a from t1 where a > ?
 type ArgExpr struct {
 	exprImpl
+	Offset int
 }
 
-// incomplete
 func (node *ArgExpr) Format(ctx *FmtCtx) {
 	ctx.WriteByte('?')
 }
 
-func NewArgExpr() *ArgExpr {
-	return &ArgExpr{}
+func NewArgExpr(offset int) *ArgExpr {
+	return &ArgExpr{
+		Offset: offset,
+	}
 }

@@ -31,21 +31,21 @@ func TestSingleSql(t *testing.T) {
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
 	// sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
-	sql := "select n_name from nation where n_nationkey > ?"
+	sql := "prepare st1 from select n_name from nation where n_nationkey > ?"
 	// sql := "explain a"
 	// sql := "select 18446744073709551500"
-	stmts, err := mysql.Parse(sql)
-	if err != nil {
-		t.Fatalf("%+v", err)
-	}
-	t.Logf("%+v", string(getJson(stmts[0], t)))
-
-	// mock := NewMockOptimizer()
-	// logicPlan, err := runOneStmt(mock, t, sql)
+	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)
 	// }
-	// outPutPlan(logicPlan, true, t)
+	// t.Logf("%+v", string(getJson(stmts[0], t)))
+
+	mock := NewMockOptimizer()
+	logicPlan, err := runOneStmt(mock, t, sql)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	outPutPlan(logicPlan, true, t)
 }
 
 //Test Query Node Tree
@@ -815,6 +815,8 @@ func outPutPlan(logicPlan *Plan, toFile bool, t *testing.T) {
 		json = getJson(logicPlan.GetTcl(), t)
 	case *plan.Plan_Ddl:
 		json = getJson(logicPlan.GetDdl(), t)
+	case *plan.Plan_Dcl:
+		json = getJson(logicPlan.GetDcl(), t)
 	}
 	if toFile {
 		err := ioutil.WriteFile("/tmp/mo_plan_test.json", json, 0777)
