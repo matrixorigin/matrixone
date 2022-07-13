@@ -44,7 +44,7 @@ func TestHandleMessageWithSender(t *testing.T) {
 
 		v, err := cli.Send(ctx, []txn.TxnRequest{{CNRequest: &txn.CNOpRequest{Target: metadata.DNShard{Address: testDN1Addr}}}})
 		assert.NoError(t, err)
-		assert.Equal(t, 1, len(v))
+		assert.Equal(t, 1, v.count)
 	})
 }
 

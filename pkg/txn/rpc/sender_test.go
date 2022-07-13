@@ -65,10 +65,10 @@ func TestSendWithSingleRequest(t *testing.T) {
 			},
 		},
 	}
-	resps, err := sd.Send(ctx, []txn.TxnRequest{req})
+	result, err := sd.Send(ctx, []txn.TxnRequest{req})
 	assert.NoError(t, err)
-	assert.Equal(t, 1, len(resps))
-	assert.Equal(t, txn.TxnMethod_Write, resps[0].Method)
+	assert.Equal(t, 1, result.count)
+	assert.Equal(t, txn.TxnMethod_Write, result.Responses[0].Method)
 }
 
 func TestSendWithMultiDN(t *testing.T) {
@@ -110,9 +110,9 @@ func TestSendWithMultiDN(t *testing.T) {
 		})
 	}
 
-	resps, err := sd.Send(ctx, requests)
+	result, err := sd.Send(ctx, requests)
 	assert.NoError(t, err)
-	assert.Equal(t, n, len(resps))
+	assert.Equal(t, n, result.count)
 
 	counts := make(map[string]int)
 	for i := 0; i < n; i++ {
@@ -122,7 +122,7 @@ func TestSendWithMultiDN(t *testing.T) {
 			seq = v + 1
 		}
 		counts[addr] = seq
-		assert.Equal(t, []byte(fmt.Sprintf("%s-%d", addr, seq)), resps[i].CNOpResponse.Payload)
+		assert.Equal(t, []byte(fmt.Sprintf("%s-%d", addr, seq)), result.Responses[i].CNOpResponse.Payload)
 	}
 }
 
@@ -176,9 +176,9 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 		})
 	}
 
-	resps, err := sd.Send(ctx, requests)
+	result, err := sd.Send(ctx, requests)
 	assert.NoError(t, err)
-	assert.Equal(t, n, len(resps))
+	assert.Equal(t, n, result.count)
 
 	counts := make(map[string]int)
 	for i := 0; i < n; i++ {
@@ -188,7 +188,7 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 			seq = v + 1
 		}
 		counts[addr] = seq
-		assert.Equal(t, []byte(fmt.Sprintf("%s-%d", addr, seq)), resps[i].CNOpResponse.Payload)
+		assert.Equal(t, []byte(fmt.Sprintf("%s-%d", addr, seq)), result.Responses[i].CNOpResponse.Payload)
 	}
 }
 
