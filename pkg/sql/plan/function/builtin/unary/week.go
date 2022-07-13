@@ -32,7 +32,7 @@ func DateToWeek(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if inputVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint8, 1)
 		vector.SetCol(resultVector, week.DateToWeek(inputValues, resultValues))
 		return resultVector, nil
@@ -58,7 +58,7 @@ func DatetimeToWeek(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 		if inputVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint8, 1)
 		vector.SetCol(resultVector, week.DatetimeToWeek(inputValues, resultValues))
 		return resultVector, nil
