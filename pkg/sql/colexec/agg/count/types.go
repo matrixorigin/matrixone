@@ -17,16 +17,16 @@ package count
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 type Count struct {
-	Da   []byte     // memory of Vs
-	Vs   []int64    // the number of value of each group
-	Ityp types.Type // input vector's type
-	Otyp types.Type // output vector's type
+	Da   []byte       // memory of Vs
+	Vs   []int64      // the number of value of each group
+	Ityp []types.Type // input vector's type
+	Otyp types.Type   // output vector's type
 }
 
 type DistCount struct {
-	Da   []byte     // memory of Vs
-	Vs   []int64    // the number of value of each group
-	Ityp types.Type // input vector's type
-	Otyp types.Type // output vector's type
-	Ms   []map[any]uint8
+	Da   []byte       // memory of Vs
+	Vs   []int64      // the number of value of each group
+	Ityp []types.Type // input vector's type
+	Otyp types.Type   // output vector's type
+	Ms   []map[any]int64
 }
