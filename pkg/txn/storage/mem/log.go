@@ -48,7 +48,7 @@ func (l *KVLog) MustMarshal() []byte {
 }
 
 // NewMemLog new log use memory as backend
-func NewMemLog() *memLogClient {
+func NewMemLog() logservice.Client {
 	return &memLogClient{}
 }
 

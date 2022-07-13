@@ -446,6 +446,33 @@ func TestServiceTsoUpdate(t *testing.T) {
 	runServiceTest(t, false, true, fn)
 }
 
+func TestServiceCheckHAKeeper(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		req := pb.Request{
+			Method:  pb.CHECK_HAKEEPER,
+			Timeout: int64(time.Second),
+		}
+		resp := s.handleCheckHAKeeper(req)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
+		assert.False(t, resp.IsHAKeeper)
+	}
+	runServiceTest(t, false, false, fn)
+
+	fn = func(t *testing.T, s *Service) {
+		init := make(map[uint64]dragonboat.Target)
+		init[1] = s.ID()
+		s.store.startHAKeeperReplica(1, init, false)
+		req := pb.Request{
+			Method:  pb.CHECK_HAKEEPER,
+			Timeout: int64(time.Second),
+		}
+		resp := s.handleCheckHAKeeper(req)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
+		assert.True(t, resp.IsHAKeeper)
+	}
+	runServiceTest(t, false, false, fn)
+}
+
 func TestShardInfoCanBeQueried(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg1 := Config{
