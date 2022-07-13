@@ -13,7 +13,7 @@ on:
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel.
 jobs:
 
-  tae-sca:
+  linux-tae-sca:
     # The type of runner that the job will run on.
     runs-on: ubuntu-latest
     name: SCA Test on CentOS/x64
@@ -48,7 +48,7 @@ jobs:
           make install-static-check-tools
           make static-check
 
-  tae-ut:
+  linux-tae-ut:
     # The type of runner that the job will run on.
     runs-on: ubuntu-latest
     name: UT Test on CentOS/x64
@@ -74,12 +74,12 @@ jobs:
         if: ${{ always() }}
         continue-on-error: true
         with:
-          name: ut_reports
+          name: linux_ut_reports
           path: |
             ${{ github.workspace }}
           retention-days: 7
 
-  tae-bvt:
+  linux-tae-bvt:
     # The type of runner that the job will run on.
     runs-on: ubuntu-latest
     name: BVT Test on CentOS/x64
@@ -173,7 +173,7 @@ jobs:
             ${{ github.workspace }}
           retention-days: 7
 
-  tae-bvt-race:
+  linux-tae-bvt-race:
     # The type of runner that the job will run on.
     runs-on: ubuntu-latest
     name: BVT RACE Test on CentOS/x64
@@ -267,6 +267,37 @@ jobs:
             ${{ github.workspace }}
           retention-days: 7
           
+  
+  linux-arm-ut:
+    # The type of runner that the job will run on.
+    runs-on: arm64-runner
+    name: UT Test on arm
+
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so the job can access it.
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: '3'
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.18
+
+      - name: Unit Testing
+        run: |
+          cd $GITHUB_WORKSPACE && make clean && make config
+          make ut
+
+      - uses: actions/upload-artifact@v2
+        if: ${{ always() }}
+        continue-on-error: true
+        with:
+          name: linux_arm_ut_reports
+          path: |
+            ${{ github.workspace }}
+          retention-days: 7
+  
   lint-docs:
     name: Lint Docs
     runs-on: ubuntu-latest
