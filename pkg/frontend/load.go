@@ -2162,44 +2162,5 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	close.Close()
 	closechannel.Close()
 
-	//logutil.Infof("-----total row2col %s fillBlank %s toStorage %s",
-	//	handler.row2col,handler.fillBlank,handler.toStorage)
-	//logutil.Infof("-----write batch %s reset batch %s",
-	//	handler.writeBatch,handler.resetBatch)
-	//logutil.Infof("----- simdcsv end %s " +
-	//	"stage1_first_chunk %s stage1_end %s " +
-	//	"stage2_first_chunkinfo - [begin end] [%s %s ] [%s %s ] [%s %s ] " +
-	//	"readLoop_first_records %s ",
-	//	handler.simdCsvReader.End,
-	//	handler.simdCsvReader.Stage1_first_chunk,
-	//	handler.simdCsvReader.Stage1_end,
-	//	handler.simdCsvReader.Stage2_first_chunkinfo[0],
-	//	handler.simdCsvReader.Stage2_end[0],
-	//	handler.simdCsvReader.Stage2_first_chunkinfo[1],
-	//	handler.simdCsvReader.Stage2_end[1],
-	//	handler.simdCsvReader.Stage2_first_chunkinfo[2],
-	//	handler.simdCsvReader.Stage2_end[2],
-	//	handler.simdCsvReader.ReadLoop_first_records,
-	//	)
-	//
-	//logutil.Infof("-----call_back %s " +
-	//	"process_block - callback %s " +
-	//	"asyncChan %s asyncChanLoop %s asyncChan - asyncChanLoop %s " +
-	//	"csvLineArray1 %s csvLineArray2 %s saveParsedLineToBatch %s " +
-	//	"choose_true %s choose_false %s ",
-	//	handler.callback,
-	//	process_block - handler.callback,
-	//	handler.asyncChan,
-	//	handler.asyncChanLoop,
-	//	handler.asyncChan -	handler.asyncChanLoop,
-	//	handler.csvLineArray1,
-	//	handler.csvLineArray2,
-	//	handler.saveParsedLine,
-	//	handler.choose_true,
-	//	handler.choose_false,
-	//	)
-	//
-	//	logutil.Infof("-----process time %s ",time.Since(processTime))
-
 	return result, retErr
 }

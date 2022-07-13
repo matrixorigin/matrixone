@@ -210,7 +210,7 @@ const (
 /*
 handle show create table in plan2 and tae
 */
-func handleShowCreateTable2(ses *Session) error {
+func handleShowCreateTable(ses *Session) error {
 	tableName := string(ses.Data[0][tableNamePos].([]byte))
 	createStr := fmt.Sprintf("CREATE TABLE `%s` (", tableName)
 	rowCount := 0
@@ -266,7 +266,7 @@ func handleShowCreateTable2(ses *Session) error {
 	ses.Mrs.AddRow(row)
 
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, 1); err != nil {
-		logutil.Errorf("handleShowCreateTable2 error %v \n", err)
+		logutil.Errorf("handleShowCreateTable error %v \n", err)
 		return err
 	}
 	return nil
@@ -275,7 +275,7 @@ func handleShowCreateTable2(ses *Session) error {
 /*
 handle show create database in plan2 and tae
 */
-func handleShowCreateDatabase2(ses *Session) error {
+func handleShowCreateDatabase(ses *Session) error {
 	dbNameIndex := ses.Mrs.Name2Index["Database"]
 	dbsqlIndex := ses.Mrs.Name2Index["Create Database"]
 	firstRow := ses.Data[0]
@@ -298,7 +298,7 @@ func handleShowCreateDatabase2(ses *Session) error {
 /*
 handle show columns from table in plan2 and tae
 */
-func handleShowColumns2(ses *Session) error {
+func handleShowColumns(ses *Session) error {
 	for _, d := range ses.Data {
 		row := make([]interface{}, 6)
 		colName := string(d[0].([]byte))
@@ -319,7 +319,7 @@ func handleShowColumns2(ses *Session) error {
 		ses.Mrs.AddRow(row)
 	}
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, ses.Mrs.GetRowCount()); err != nil {
-		logutil.Errorf("handleShowCreateTable2 error %v \n", err)
+		logutil.Errorf("handleShowCreateTable error %v \n", err)
 		return err
 	}
 	return nil
@@ -1707,15 +1707,15 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				goto handleFailed
 			}
 			if ses.showStmtType == ShowCreateTable {
-				if err = handleShowCreateTable2(ses); err != nil {
+				if err = handleShowCreateTable(ses); err != nil {
 					goto handleFailed
 				}
 			} else if ses.showStmtType == ShowCreateDatabase {
-				if err = handleShowCreateDatabase2(ses); err != nil {
+				if err = handleShowCreateDatabase(ses); err != nil {
 					goto handleFailed
 				}
 			} else if ses.showStmtType == ShowColumns {
-				if err = handleShowColumns2(ses); err != nil {
+				if err = handleShowColumns(ses); err != nil {
 					goto handleFailed
 				}
 			}

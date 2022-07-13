@@ -123,7 +123,6 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 	if err != nil {
 		return err
 	}
-
 	for i, rows := range rows.Rows {
 		if len(attrs) != len(rows) {
 			return errors.New(errno.InvalidColumnReference, fmt.Sprintf("Column count doesn't match value count at row '%v'", i))
@@ -821,44 +820,26 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 		switch e.Op {
 		case tree.PLUS:
 			floatResult = lf + rf
-			if lf > 0 && rf > 0 && floatResult <= 0 {
-				return nil, errBinaryOutRange
-			}
-			if lf < 0 && rf < 0 && floatResult >= 0 {
+			if math.IsInf(floatResult, 0) { //lf > 0 && rf > 0 && floatResult <= 0 {
 				return nil, errBinaryOutRange
 			}
 		case tree.MINUS:
 			floatResult = lf - rf
-			if lf < 0 && rf > 0 && floatResult >= 0 {
-				return nil, errBinaryOutRange
-			}
-			if lf > 0 && rf < 0 && floatResult <= 0 {
+			if math.IsInf(floatResult, 0) { //lf > 0 && rf > 0 && floatResult <= 0 {
 				return nil, errBinaryOutRange
 			}
 		case tree.MULTI:
 			floatResult = lf * rf
-			if floatResult < 0 {
-				if (lf > 0 && rf > 0) || (lf < 0 && rf < 0) {
-					return nil, errBinaryOutRange
-				}
-			} else if floatResult > 0 {
-				if (lf > 0 && rf < 0) || (lf < 0 && rf > 0) {
-					return nil, errBinaryOutRange
-				}
+			if math.IsInf(floatResult, 0) { //lf > 0 && rf > 0 && floatResult <= 0 {
+				return nil, errBinaryOutRange
 			}
 		case tree.DIV:
 			if rf == 0 {
 				return nil, ErrDivByZero
 			}
 			floatResult = lf / rf
-			if floatResult < 0 {
-				if (lf > 0 && rf > 0) || (lf < 0 && rf < 0) {
-					return nil, errBinaryOutRange
-				}
-			} else if floatResult > 0 {
-				if (lf > 0 && rf < 0) || (lf < 0 && rf > 0) {
-					return nil, errBinaryOutRange
-				}
+			if math.IsInf(floatResult, 0) { //lf > 0 && rf > 0 && floatResult <= 0 {
+				return nil, errBinaryOutRange
 			}
 		case tree.INTEGER_DIV:
 			if rf == 0 {
@@ -1052,7 +1033,7 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			parts := strings.Split(str, ".")
 			v, err := strconv.ParseUint(parts[0], 10, 64)
 			if err != nil || len(parts) == 1 {
-				return v, errConstantOutRange
+				return nil, errConstantOutRange
 			}
 			if len(parts[1]) > 0 && parts[1][0] >= '5' {
 				if v+1 < v {
