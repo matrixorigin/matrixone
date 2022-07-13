@@ -16,7 +16,13 @@ type readCache struct {
 	records map[uint64]*recordEntry
 	readMu  sync.RWMutex
 }
-
+func newReadCache()*readCache{
+	return &readCache{
+		lsns: make([]uint64, 0),
+		records: make(map[uint64]*recordEntry),
+		readMu: sync.RWMutex{},
+	}
+}
 func (d *LogServiceDriver) Read(drlsn uint64) entry.Entry {
 	lsn, err := d.getLogServiceLsnByDriverLsn(drlsn)
 	if err != nil {
@@ -48,7 +54,6 @@ func (d *LogServiceDriver) readFromLogService(lsn uint64) {
 		panic(err)
 	}
 	d.appendRecords(records, lsn)
-	client.Close() //TODO reuse clients without close
 	d.clientPool.Put(client)
 }
 
@@ -62,7 +67,7 @@ func (d *LogServiceDriver) appendRecords(records []logservice.LogRecord, firstls
 		if ok {
 			continue
 		}
-		d.records[lsn] = &recordEntry{record: &record}
+		d.records[lsn] = &recordEntry{record: record}
 		lsns = append(lsns, lsn)
 	}
 	d.lsns = append(d.lsns, lsns...)

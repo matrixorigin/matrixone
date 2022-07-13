@@ -7,12 +7,15 @@ import (
 
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 
 	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestAppendRead(t *testing.T) {
+//TODO update
+//copy from logservice
+func TestDemo(t *testing.T) {
 	fs := vfs.NewStrictMem()
 	service, ccfg, err := logservice.NewTestService(fs)
 	assert.NoError(t, err)
@@ -52,4 +55,34 @@ func TestAppendRead(t *testing.T) {
 	assert.Equal(t, 2, len(recs))
 	assert.Equal(t, rec1.Payload(), recs[0].Payload())
 	assert.Equal(t, rec2.Payload(), recs[1].Payload())
+}
+
+func initTest(t *testing.T) (*logservice.Service, *logservice.ClientConfig) {
+	fs := vfs.NewStrictMem()
+	service, ccfg, err := logservice.NewTestService(fs)
+	assert.NoError(t, err)
+	return service, &ccfg
+}
+
+func TestAppend(t *testing.T) {
+	service, ccfg := initTest(t)
+	defer service.Close()
+
+	cfg := newTestConfig(ccfg)
+	driver := NewLogServiceDriver(cfg)
+	defer func() {
+		assert.NoError(t, driver.Close())
+	}()
+
+	entries := make([]*entry.Entry, 0)
+	for i := 0; i < 5000; i++ {
+		e := entry.MockEntry()
+		driver.Append(e)
+		entries = append(entries, e)
+	}
+
+	for _, e := range entries {
+		e.WaitDone()
+	}
+
 }

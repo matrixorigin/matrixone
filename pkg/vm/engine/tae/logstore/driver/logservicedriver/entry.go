@@ -1,25 +1,117 @@
 package logservicedriver
 
 import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"io"
+
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
 type meta struct {
-	appended uint64
-	addr     map[uint64]uint64
+	appended    uint64
+	addr        map[uint64]uint64
+	payloadSize uint64
 }
 
+func newMeta()*meta{
+	return &meta{addr:make(map[uint64]uint64)}
+}
+
+func (m *meta) SetAppended(appended uint64) {
+	m.appended = appended
+}
+
+func (m *meta) WriteTo(w io.Writer) (n int64, err error) {
+	if err = binary.Write(w, binary.BigEndian, m.appended); err != nil {
+		return
+	}
+	n += 8
+	length := uint16(len(m.addr))
+	if err = binary.Write(w, binary.BigEndian, length); err != nil {
+		return
+	}
+	n += 2
+	for lsn, offset := range m.addr {
+		if err = binary.Write(w, binary.BigEndian, lsn); err != nil {
+			return
+		}
+		n += 8
+		if err = binary.Write(w, binary.BigEndian, offset); err != nil {
+			return
+		}
+		n += 8
+	}
+	if err = binary.Write(w, binary.BigEndian, m.payloadSize); err != nil {
+		return
+	}
+	n += 8
+	return
+}
+
+func (m *meta) ReadFrom(r io.Reader) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &m.appended); err != nil {
+		return
+	}
+	n += 8
+	length := uint16(0)
+	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+		return
+	}
+	n += 2
+	m.addr = make(map[uint64]uint64)
+	for i := 0; i < int(length); i++ {
+		lsn := uint64(0)
+		if err = binary.Read(r, binary.BigEndian, &lsn); err != nil {
+			return
+		}
+		n += 8
+		offset := uint64(0)
+		if err = binary.Read(r, binary.BigEndian, &offset); err != nil {
+			return
+		}
+		n += 8
+		m.addr[lsn] = offset
+	}
+	if err = binary.Read(r, binary.BigEndian, &m.payloadSize); err != nil {
+		return
+	}
+	n += 8
+	return
+}
+
+func (m *meta) Unmarshal(buf []byte) error {
+	bbuf := bytes.NewBuffer(buf)
+	_, err := m.ReadFrom(bbuf)
+	return err
+}
+
+func (m *meta) Marshal() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if _, err = m.WriteTo(&bbuf); err != nil {
+		return
+	}
+	buf = bbuf.Bytes()
+	return
+}
+
+//read: logrecord -> meta+payload -> entry
+//write: entries+meta -> payload -> record
 type recordEntry struct {
-	meta    *meta
+	*meta
 	entries []*entry.Entry
 	size    int
 
-	payloads []byte
-
 	//for read
-	record    *logservice.LogRecord
+	record    logservice.LogRecord
+	payload   []byte
 	marshaled bool
+}
+
+func newRecordEntry()*recordEntry{
+	return &recordEntry{entries: make([]*entry.Entry, 0),meta: newMeta()}
 }
 
 func (r *recordEntry) append(e *entry.Entry) {
@@ -27,8 +119,65 @@ func (r *recordEntry) append(e *entry.Entry) {
 	r.size += e.GetSize()
 }
 
-func (r *recordEntry) makeRecord() logservice.LogRecord {
-	return logservice.LogRecord{} //TODO
+func (r *recordEntry) WriteTo(w io.Writer) (n int64, err error) {
+	n1, err := r.meta.WriteTo(w)
+	if err != nil {
+		return 0, err
+	}
+	n += n1
+	for _, e := range r.entries {
+		n1, err = e.Entry.WriteTo(w)
+		if err != nil {
+			return
+		}
+		n += n1
+	}
+	return
+}
+
+func (r *recordEntry) ReadFrom(reader io.Reader) (n int64, err error) {
+	n1, err := r.meta.ReadFrom(reader)
+	if err != nil {
+		return 0, err
+	}
+	n += n1
+	r.payload = make([]byte, r.meta.payloadSize)
+	n2, err := reader.Read(r.payload)
+	if err != nil {
+		return 0, err
+	}
+	if n2 != int(r.meta.payloadSize) {
+		panic(fmt.Errorf("logic err: err is %v, expect %d, get %d", err, r.meta.payloadSize, n2))
+	}
+	return
+}
+
+func (r *recordEntry) Unmarshal(buf []byte) error {
+	bbuf := bytes.NewBuffer(buf)
+	_, err := r.ReadFrom(bbuf)
+	return err
+}
+
+func (r *recordEntry) Marshal() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if _, err = r.WriteTo(&bbuf); err != nil {
+		return
+	}
+	buf = bbuf.Bytes()
+	return
+}
+func (r *recordEntry) prepareRecord()(size int){
+	var err error
+	r.payload,err=r.Marshal()
+	if err != nil{
+		panic(err)
+	}
+	return len(r.payload)
+}
+
+func (r *recordEntry) makeRecord() {
+	copy(r.record.Payload(),r.payload)
+	return
 }
 
 func (r *recordEntry) readEntry(lsn uint64) *entry.Entry {

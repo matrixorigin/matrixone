@@ -15,6 +15,18 @@ type driverInfo struct {
 	appending  uint64
 	appended   *common.ClosedIntervals
 	appendedMu sync.RWMutex
+	logserviceAppended *common.ClosedIntervals
+	logserviceAppendedMu sync.RWMutex
+}
+
+func newDriverInfo()*driverInfo{
+	return &driverInfo{
+		addr: make(map[uint64]*common.ClosedIntervals),
+		addrMu: sync.RWMutex{},
+		appended: common.NewClosedIntervals(),
+		appendedMu: sync.RWMutex{},
+		logserviceAppendedMu: sync.RWMutex{},
+	}
 }
 
 func (info *driverInfo) getAppended() uint64 {
@@ -45,7 +57,7 @@ func (info *driverInfo) logAppend(appender *driverAppender) {
 	info.addrMu.Unlock()
 }
 
-func (info *driverInfo) onAppend(appended []uint64) {
+func (info *driverInfo) onAppend(appended,logserviceAppended []uint64) {
 	appendedArray := common.NewClosedIntervalsBySlice(appended)
 	info.appendedMu.Lock()
 	info.appended.TryMerge(*appendedArray)
