@@ -23,7 +23,7 @@ import (
 
 func UTCTimestamp(_ []*vector.Vector, _ *process.Process) (*vector.Vector, error) {
 	resultType := types.Type{Oid: types.T_datetime, Size: 8}
-	resultVector := vector.NewConst(resultType)
+	resultVector := vector.NewConst(resultType, 1)
 	result := make([]types.Datetime, 1)
 	result[0] = get_timestamp.GetUTCTimestamp()
 	vector.SetCol(resultVector, result)

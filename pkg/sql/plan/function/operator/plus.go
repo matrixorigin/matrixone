@@ -78,7 +78,7 @@ func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 		resultVector := proc.AllocScalarVector(typ)
 		resultValues := make([]T, 1)
 		nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, add.NumericAdd[T](leftValues, rightValues, resultValues))
+		vector.SetCol(resultVector, add.NumericAdd(leftValues, rightValues, resultValues))
 		return resultVector, nil
 	case left.IsScalar() && !right.IsScalar():
 		resultVector, err := proc.AllocVector(typ, int64(resultElementSize*len(rightValues)))
@@ -87,7 +87,7 @@ func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 		}
 		resultValues := encoding.DecodeFixedSlice[T](resultVector.Data, resultElementSize)
 		nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, add.NumericAddScalar[T](leftValues[0], rightValues, resultValues))
+		vector.SetCol(resultVector, add.NumericAddScalar(leftValues[0], rightValues, resultValues))
 		return resultVector, nil
 	case !left.IsScalar() && right.IsScalar():
 		resultVector, err := proc.AllocVector(typ, int64(resultElementSize*len(leftValues)))
@@ -96,7 +96,7 @@ func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 		}
 		resultValues := encoding.DecodeFixedSlice[T](resultVector.Data, resultElementSize)
 		nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, add.NumericAddScalar[T](rightValues[0], leftValues, resultValues))
+		vector.SetCol(resultVector, add.NumericAddScalar(rightValues[0], leftValues, resultValues))
 		return resultVector, nil
 	}
 	resultVector, err := proc.AllocVector(typ, int64(resultElementSize*len(leftValues)))
@@ -105,7 +105,7 @@ func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 	}
 	resultValues := encoding.DecodeFixedSlice[T](resultVector.Data, resultElementSize)
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-	vector.SetCol(resultVector, add.NumericAdd[T](leftValues, rightValues, resultValues))
+	vector.SetCol(resultVector, add.NumericAdd(leftValues, rightValues, resultValues))
 	return resultVector, nil
 }
 

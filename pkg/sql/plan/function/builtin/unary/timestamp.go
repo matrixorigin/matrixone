@@ -32,7 +32,7 @@ func DateToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]types.Timestamp, 1)
 		vector.SetCol(resultVector, timestamp.DateToTimestamp(inputValues, resultVector.Nsp, resultValues))
 		vector.SetCol(resultVector, resultValues)
@@ -59,7 +59,7 @@ func DatetimeToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vect
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]types.Timestamp, 1)
 		vector.SetCol(resultVector, timestamp.DatetimeToTimestamp(inputValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
@@ -85,7 +85,7 @@ func TimestampToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vec
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]types.Timestamp, 1)
 		copy(resultValues, inputValues)
 		vector.SetCol(resultVector, resultValues)
@@ -114,7 +114,7 @@ func DateStringToTimestamp(vectors []*vector.Vector, proc *process.Process) (*ve
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]types.Timestamp, 1)
 		vector.SetCol(resultVector, timestamp.DateStringToTimestamp(inputValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
