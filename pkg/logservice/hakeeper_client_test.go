@@ -69,17 +69,42 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		c, err := NewCNHAKeeperClient(ctx, cfg)
+		c1, err := NewCNHAKeeperClient(ctx, cfg)
 		require.NoError(t, err)
 		defer func() {
-			assert.NoError(t, c.Close())
+			assert.NoError(t, c1.Close())
 		}()
 		hb := pb.CNStoreHeartbeat{
-			UUID: s.ID(),
+			UUID:           s.ID(),
+			ServiceAddress: "addr1",
 		}
-		require.NoError(t, c.SendCNHeartbeat(ctx, hb))
-		// TODO: use GetClusterDetails to see whether this CN itself is included
-		// in the return value
+		require.NoError(t, c1.SendCNHeartbeat(ctx, hb))
+
+		c2, err := NewDNHAKeeperClient(ctx, cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, c2.Close())
+		}()
+		hb2 := pb.DNStoreHeartbeat{
+			UUID:           s.ID(),
+			ServiceAddress: "addr2",
+		}
+		cb, err := c2.SendDNHeartbeat(ctx, hb2)
+		require.NoError(t, err)
+		assert.Equal(t, 0, len(cb.Commands))
+
+		cd, err := c1.GetClusterDetails(ctx)
+		require.NoError(t, err)
+		cn := pb.CNNode{
+			UUID:           s.ID(),
+			ServiceAddress: "addr1",
+		}
+		dn := pb.DNNode{
+			UUID:           s.ID(),
+			ServiceAddress: "addr2",
+		}
+		assert.Equal(t, []pb.CNNode{cn}, cd.CNNodes)
+		assert.Equal(t, []pb.DNNode{dn}, cd.DNNodes)
 	}
 	runServiceTest(t, true, true, fn)
 }

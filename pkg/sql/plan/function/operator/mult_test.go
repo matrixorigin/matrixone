@@ -15,13 +15,14 @@
 package operator
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/constraints"
-	"testing"
 )
 
 func TestMult(t *testing.T) {
@@ -36,7 +37,7 @@ func TestMult(t *testing.T) {
 	multIntAndFloat[uint64](t, types.T_uint64, 10, 5, 50)
 
 	multIntAndFloat[float32](t, types.T_float32, 20.85, 12.5, 260.625)
-	multIntAndFloat[float64](t, types.T_float64, 20.85, 12.5, 260.625)
+	multIntAndFloat(t, types.T_float64, 20.85, 12.5, 260.625)
 
 	leftType1 := types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 5}
 	rightType1 := types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 5}
@@ -62,28 +63,28 @@ func multIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, ty
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makeMultVectors[T](left, true, right, true, typ),
+			vecs:       makeMultVectors(left, true, right, true, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: true,
 		},
 		{
 			name:       "TEST02",
-			vecs:       makeMultVectors[T](left, false, right, true, typ),
+			vecs:       makeMultVectors(left, false, right, true, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: false,
 		},
 		{
 			name:       "TEST03",
-			vecs:       makeMultVectors[T](left, true, right, false, typ),
+			vecs:       makeMultVectors(left, true, right, false, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: false,
 		},
 		{
 			name:       "TEST04",
-			vecs:       makeMultVectors[T](left, false, right, false, typ),
+			vecs:       makeMultVectors(left, false, right, false, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: false,

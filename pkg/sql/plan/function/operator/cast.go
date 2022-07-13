@@ -16,11 +16,11 @@ package operator
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"strconv"
 	"strings"
 
-	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -1865,10 +1865,7 @@ func CastIntAsTimestamp[T constraints.Signed](lv, rv *vector.Vector, proc *proce
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Timestamp, 1)
 		if lvs[0] < 0 || int64(lvs[0]) > 32536771199 {
-			if lv.Nsp.Np == nil {
-				lv.Nsp.Np = &roaring64.Bitmap{}
-			}
-			lv.Nsp.Np.AddInt(0)
+			nulls.Add(lv.Nsp, 0)
 		}
 		if _, err := binary.NumericToTimestamp(lvs, rs); err != nil {
 			return nil, err
@@ -1884,11 +1881,8 @@ func CastIntAsTimestamp[T constraints.Signed](lv, rv *vector.Vector, proc *proce
 	rs := encoding.DecodeTimestampSlice(vec.Data)
 	rs = rs[:len(lvs)]
 	for i := 0; i < len(lvs); i++ {
-		if lv.Nsp.Np == nil {
-			lv.Nsp.Np = &roaring64.Bitmap{}
-		}
 		if lvs[i] < 0 || int64(lvs[i]) > 32536771199 {
-			lv.Nsp.Np.AddInt(i)
+			nulls.Add(lv.Nsp, uint64(i))
 		}
 	}
 	if _, err := binary.NumericToTimestamp(lvs, rs); err != nil {
@@ -1906,10 +1900,7 @@ func CastUIntAsTimestamp[T constraints.Unsigned](lv, rv *vector.Vector, proc *pr
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Timestamp, 1)
 		if lvs[0] < 0 || uint64(lvs[0]) > 32536771199 {
-			if lv.Nsp.Np == nil {
-				lv.Nsp.Np = &roaring64.Bitmap{}
-			}
-			lv.Nsp.Np.AddInt(0)
+			nulls.Add(lv.Nsp, 0)
 		}
 		if _, err := binary.NumericToTimestamp(lvs, rs); err != nil {
 			return nil, err
@@ -1925,11 +1916,8 @@ func CastUIntAsTimestamp[T constraints.Unsigned](lv, rv *vector.Vector, proc *pr
 	rs := encoding.DecodeTimestampSlice(vec.Data)
 	rs = rs[:len(lvs)]
 	for i := 0; i < len(lvs); i++ {
-		if lv.Nsp.Np == nil {
-			lv.Nsp.Np = &roaring64.Bitmap{}
-		}
 		if lvs[i] < 0 || uint64(lvs[i]) > 32536771199 {
-			lv.Nsp.Np.AddInt(i)
+			nulls.Add(lv.Nsp, uint64(i))
 		}
 	}
 	if _, err := binary.NumericToTimestamp(lvs, rs); err != nil {

@@ -2,10 +2,11 @@ package multi
 
 import (
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/stretchr/testify/require"
 	"log"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -712,64 +713,6 @@ func Test_varchar12(t *testing.T) {
 		}
 		j := 0
 		for i := 0; i < len(compVec); i++ {
-			if j < len(compNsp) {
-				if compNsp[j] == int64(i) {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeTrue)
-					j++
-				} else {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
-				}
-			} else {
-				convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
-			}
-		}
-	})
-}
-
-func Test_varchar13(t *testing.T) {
-	convey.Convey("Test rpad varchar T_varchar and int64 succ", t, func() {
-		n1, n2, n3 := len(strVecBase), len(charVecBase), len(int64VecBase2)
-		strVec := make([]string, n1*n2*n3)
-		inputVec := make([]string, len(strVec))
-		inputVec2 := make([]int64, len(strVec))
-
-		nsp1 := make([]uint64, 0)
-		nsp2 := make([]uint64, 0)
-		nsp3 := make([]uint64, 0)
-		for i := 0; i < len(strVec); i++ {
-			strVec[i] = strVecBase[i/(n2*n3)]
-			inputVec[i] = charVecBase[(i/n3)%n2]
-			inputVec2[i] = int64VecBase2[i%n3]
-		}
-		// fmt.Printf("strVec: %v\n", strVec)
-		// fmt.Printf("inputVec: %v\n", inputVec)
-		// fmt.Printf("inputVec2: %v\n", inputVec2)
-		origVecs[0] = testutil.MakeCharVector(strVec, nsp1)
-		origVecs[1] = testutil.MakeCharVector(inputVec, nsp2)
-		origVecs[2] = testutil.MakeInt64Vector(inputVec2, nsp3)
-		vec, err := Rpad(origVecs, proc)
-		// fmt.Println(vec.Col)
-		if err != nil {
-			log.Fatal(err)
-		}
-		data, ok := vec.Col.(*types.Bytes)
-		if !ok {
-			log.Fatal(errors.New("the Rpad function return value type is not types.Bytes"))
-		}
-		compVec = []string{"", "", "", "", "", "", "a-1-", "a161", "a000", "a-1-1-1-",
-			"a1616161", "a0000000", "", "", "", "", "", "", "", "",
-			"", "-1-1", "1616", "0000", "-1-1-1-1", "16161616", "00000000", "", "", "",
-			"", "", "", "", "", "", "-1-1", "1616", "0000", "-1-1-1-1",
-			"16161616", "00000000", "", "", ""}
-		compNsp = []int64{0, 1, 2, 15, 16, 17, 30, 31, 32}
-		for i := 0; i < len(data.Lengths); i++ {
-			str := string(data.Data[data.Offsets[i] : data.Offsets[i]+data.Lengths[i]])
-			// fmt.Println("abc: ", i)
-			convey.So(str, convey.ShouldEqual, compVec[i])
-		}
-		j := 0
-		for i := 0; i < len(compVec); i++ {
-			// fmt.Println(i)
 			if j < len(compNsp) {
 				if compNsp[j] == int64(i) {
 					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeTrue)

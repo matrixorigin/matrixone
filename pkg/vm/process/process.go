@@ -82,11 +82,17 @@ func (proc *Process) AllocVector(typ types.Type, size int64) (*vector.Vector, er
 }
 
 func (proc *Process) AllocScalarVector(typ types.Type) *vector.Vector {
-	return vector.NewConst(typ)
+	return vector.NewConst(typ, 1)
 }
 
 func (proc *Process) AllocScalarNullVector(typ types.Type) *vector.Vector {
-	vec := vector.NewConst(typ)
+	vec := vector.NewConst(typ, 1)
+	nulls.Add(vec.Nsp, 0)
+	return vec
+}
+
+func (proc *Process) AllocConstNullVector(typ types.Type, cnt int) *vector.Vector {
+	vec := vector.NewConstNull(typ, cnt)
 	nulls.Add(vec.Nsp, 0)
 	return vec
 }

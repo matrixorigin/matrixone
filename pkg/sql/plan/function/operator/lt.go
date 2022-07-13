@@ -201,9 +201,9 @@ func LtGeneral[T OrderedValue](vs []*vector.Vector, proc *process.Process) (*vec
 		vec.Col.([]bool)[0] = col1[0] < col2[0]
 		return vec, nil
 	case c1 && !c2:
-		return ScalarLtNotScalar[T](v1, v2, col1, col2, proc)
+		return ScalarLtNotScalar(v1, v2, col1, col2, proc)
 	case !c1 && c2:
-		return NotScalarLtScalar[T](v2, v1, col2, col1, proc)
+		return NotScalarLtScalar(v2, v1, col2, col1, proc)
 	}
 	// case !c1 && !c2
 	length := int64(vector.Length(v1))
