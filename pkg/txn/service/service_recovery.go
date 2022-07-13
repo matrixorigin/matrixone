@@ -130,14 +130,15 @@ func (s *service) startAsyncCheckCommitTask(txnCtx *txnContext) error {
 			})
 		}
 
-		responses := s.parallelSendWithRetry(ctx, "get txn status", txnMeta, requests, prepareIngoreErrorCodes)
-		if len(responses) == 0 {
+		result := s.parallelSendWithRetry(ctx, "get txn status", txnMeta, requests, prepareIngoreErrorCodes)
+		if result == nil {
 			return
 		}
+		defer result.Release()
 
 		prepared := 1
 		txnMeta.CommitTS = txnMeta.PreparedTS
-		for _, resp := range responses {
+		for _, resp := range result.Responses {
 			if resp.Txn != nil && resp.Txn.Status == txn.TxnStatus_Prepared {
 				prepared++
 				if txnMeta.CommitTS.Less(resp.Txn.PreparedTS) {

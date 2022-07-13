@@ -16,6 +16,7 @@ package rpc
 
 import (
 	"context"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -26,7 +27,7 @@ type TxnSender interface {
 	// Send send request to the specified DN node, and wait for response synchronously.
 	// For any reason, if no response is received, the internal will keep retrying until
 	// the Context times out.
-	Send(context.Context, []txn.TxnRequest) ([]txn.TxnResponse, error)
+	Send(context.Context, []txn.TxnRequest) (*SendResult, error)
 	// Close the txn sender
 	Close() error
 }
@@ -52,3 +53,11 @@ type SenderOption func(*sender)
 
 // LocalDispatch used to returns request handler on local, avoid rpc
 type LocalDispatch func(metadata.DNShard) TxnRequestHandleFunc
+
+// SendResult wrapping []txn.TxnResponse for reuse
+type SendResult struct {
+	Responses []txn.TxnResponse
+	pool      *sync.Pool
+	size      int
+	count     int
+}
