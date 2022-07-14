@@ -29,7 +29,7 @@ import (
 
 const chanCapConst = 10000
 
-// Name decides which table the owner will go to
+// HasName decides which table the owner will go to
 type HasName interface {
 	GetName() string
 }
@@ -42,22 +42,22 @@ type Reminder interface {
 	RemindReset()
 }
 
-// Stash items and construct a batch can be stored. for instance, an sql inserting all items into a table
+// ItemBuffer Stash items and construct a batch can be stored. for instance, an sql inserting all items into a table
 type ItemBuffer[T any, B any] interface {
 	Reminder
 	Add(item T)
 	Reset()
 	IsEmpty() bool
 	ShouldFlush() bool
-	// bytes.Buffer is used to mitigate mem allocaction and the returned bytes should own its data
+	// GetBatch use bytes.Buffer to mitigate mem allocation and the returned bytes should own its data
 	GetBatch(buf *bytes.Buffer) B
 }
 
 type PipeImpl[T any, B any] interface {
-	// create a new buffer for one kind of Item
+	// NewItemBuffer create a new buffer for one kind of Item
 	NewItemBuffer(name string) ItemBuffer[T, B]
-	// BatchHandler handle the StoreBatch from an ItemBuffer, for example, execute an instert sql.
-	// this handle may be running on multiple gorutine
+	// NewItemBatchHandler handle the StoreBatch from an ItemBuffer, for example, execute an insert sql.
+	// this handle may be running on multiple goroutine
 	NewItemBatchHandler() func(batch B)
 }
 
