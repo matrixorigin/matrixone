@@ -511,8 +511,8 @@ func order2[T any](data []T, a, b int, swaps *int, os []int64, fn func([]T, int6
 // median returns x where data[x] is the median of data[a],data[b],data[c], where x is a, b, or c.
 func median[T any](data []T, a, b, c int, swaps *int, os []int64, fn func([]T, int64, int64) bool) int {
 	a, b = order2(data, a, b, swaps, os, fn)
-	b, c = order2(data, b, c, swaps, os, fn)
-	a, b = order2(data, a, b, swaps, os, fn)
+	b, _ = order2(data, b, c, swaps, os, fn)
+	_, b = order2(data, a, b, swaps, os, fn)
 	return b
 }
 

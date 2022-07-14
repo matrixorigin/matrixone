@@ -49,12 +49,9 @@ import (
 )
 
 var (
-	errorDatabaseIsNull                            = goErrors.New("the database name is an empty string")
-	errorNoSuchGlobalSystemVariable                = goErrors.New("there is no such global system variable")
 	errorComplicateExprIsNotSupported              = goErrors.New("the complicate expression is not supported")
 	errorNumericTypeIsNotSupported                 = goErrors.New("the numeric type is not supported")
 	errorUnaryMinusForNonNumericTypeIsNotSupported = goErrors.New("unary minus for no numeric type is not supported")
-	errorFunctionIsNotSupported                    = goErrors.New("function is not supported")
 )
 
 //tableInfos of a database
@@ -210,7 +207,7 @@ const (
 /*
 handle show create table in plan2 and tae
 */
-func handleShowCreateTable2(ses *Session) error {
+func handleShowCreateTable(ses *Session) error {
 	tableName := string(ses.Data[0][tableNamePos].([]byte))
 	createStr := fmt.Sprintf("CREATE TABLE `%s` (", tableName)
 	rowCount := 0
@@ -266,7 +263,7 @@ func handleShowCreateTable2(ses *Session) error {
 	ses.Mrs.AddRow(row)
 
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, 1); err != nil {
-		logutil.Errorf("handleShowCreateTable2 error %v \n", err)
+		logutil.Errorf("handleShowCreateTable error %v \n", err)
 		return err
 	}
 	return nil
@@ -275,7 +272,7 @@ func handleShowCreateTable2(ses *Session) error {
 /*
 handle show create database in plan2 and tae
 */
-func handleShowCreateDatabase2(ses *Session) error {
+func handleShowCreateDatabase(ses *Session) error {
 	dbNameIndex := ses.Mrs.Name2Index["Database"]
 	dbsqlIndex := ses.Mrs.Name2Index["Create Database"]
 	firstRow := ses.Data[0]
@@ -289,7 +286,7 @@ func handleShowCreateDatabase2(ses *Session) error {
 
 	ses.Mrs.AddRow(row)
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, 1); err != nil {
-		logutil.Errorf("handleShowCreateDatabase2 error %v \n", err)
+		logutil.Errorf("handleShowCreateDatabase error %v \n", err)
 		return err
 	}
 	return nil
@@ -298,7 +295,7 @@ func handleShowCreateDatabase2(ses *Session) error {
 /*
 handle show columns from table in plan2 and tae
 */
-func handleShowColumns2(ses *Session) error {
+func handleShowColumns(ses *Session) error {
 	for _, d := range ses.Data {
 		row := make([]interface{}, 6)
 		colName := string(d[0].([]byte))
@@ -319,7 +316,7 @@ func handleShowColumns2(ses *Session) error {
 		ses.Mrs.AddRow(row)
 	}
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, ses.Mrs.GetRowCount()); err != nil {
-		logutil.Errorf("handleShowCreateTable2 error %v \n", err)
+		logutil.Errorf("handleShowCreateTable error %v \n", err)
 		return err
 	}
 	return nil
@@ -769,7 +766,7 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 handle Load DataSource statement
 */
 func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
-	var err error = nil
+	var err error
 	ses := mce.GetSession()
 	proto := ses.protocol
 
@@ -864,7 +861,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 handle cmd CMD_FIELD_LIST
 */
 func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
-	var err error = nil
+	var err error
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 
@@ -1058,7 +1055,7 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 		sysVars = ses.CopyAllSessionVars()
 	}
 
-	var rows [][]interface{}
+	rows := make([][]interface{}, 0, len(sysVars))
 	for name, value := range sysVars {
 		if hasLike && !WildcardMatch(likePattern, name) {
 			continue
@@ -1481,7 +1478,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	var cmpBegin time.Time
 	var ret interface{}
 	var runner ComputationRunner
-	var selfHandle = false
+	var selfHandle bool
 	var fromLoadData = false
 	var txnErr error
 	var rspLen uint64
@@ -1604,7 +1601,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			}
 			//goto handleFailed
 		case *tree.ExplainAnalyze:
-			selfHandle = true
 			err = errors.New(errno.FeatureNotSupported, "not support explain analyze statement now")
 			goto handleFailed
 		case *tree.ShowColumns:
@@ -1707,15 +1703,15 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				goto handleFailed
 			}
 			if ses.showStmtType == ShowCreateTable {
-				if err = handleShowCreateTable2(ses); err != nil {
+				if err = handleShowCreateTable(ses); err != nil {
 					goto handleFailed
 				}
 			} else if ses.showStmtType == ShowCreateDatabase {
-				if err = handleShowCreateDatabase2(ses); err != nil {
+				if err = handleShowCreateDatabase(ses); err != nil {
 					goto handleFailed
 				}
 			} else if ses.showStmtType == ShowColumns {
-				if err = handleShowColumns2(ses); err != nil {
+				if err = handleShowColumns(ses); err != nil {
 					goto handleFailed
 				}
 			}

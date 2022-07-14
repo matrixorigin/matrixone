@@ -23,30 +23,32 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-type deleteRange struct {
-	pos     uint32
-	deleted uint32
-}
+// unused
+// type deleteRange struct {
+// 	pos     uint32
+// 	deleted uint32
+// }
 
-func findDeleteRange(pos uint32, ranges []*deleteRange) *deleteRange {
-	left, right := 0, len(ranges)-1
-	var mid int
-	for left <= right {
-		mid = (left + right) / 2
-		if ranges[mid].pos < pos {
-			left = mid + 1
-		} else if ranges[mid].pos > pos {
-			right = mid - 1
-		} else {
-			break
-		}
-	}
-	if mid == 0 && ranges[mid].pos < pos {
-		mid = mid + 1
-	}
-	// logutil.Infof("pos=%d, mid=%d, range.pos=%d,range.deleted=%d", pos, mid, ranges[mid].pos, ranges[mid].deleted)
-	return ranges[mid]
-}
+// unused
+// func findDeleteRange(pos uint32, ranges []*deleteRange) *deleteRange {
+// 	left, right := 0, len(ranges)-1
+// 	var mid int
+// 	for left <= right {
+// 		mid = (left + right) / 2
+// 		if ranges[mid].pos < pos {
+// 			left = mid + 1
+// 		} else if ranges[mid].pos > pos {
+// 			right = mid - 1
+// 		} else {
+// 			break
+// 		}
+// 	}
+// 	if mid == 0 && ranges[mid].pos < pos {
+// 		mid = mid + 1
+// 	}
+// 	// logutil.Infof("pos=%d, mid=%d, range.pos=%d,range.deleted=%d", pos, mid, ranges[mid].pos, ranges[mid].deleted)
+// 	return ranges[mid]
+// }
 
 func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]any, deleteMask, deletes *roaring.Bitmap) (destMask *roaring.Bitmap, destVals map[uint32]any, destDelets *roaring.Bitmap) {
 	if deletes == nil || deletes.IsEmpty() {

@@ -257,7 +257,7 @@ func (n *MVCCHandle) GetMaxVisibleRowLocked(ts uint64) (row uint32, visible bool
 	return
 }
 
-//for replay
+// GetTotalRow is only for replay
 func (n *MVCCHandle) GetTotalRow() uint32 {
 	if len(n.appends) == 0 {
 		return 0
@@ -308,7 +308,7 @@ func (n *MVCCHandle) getMaxVisibleRowLocked(ts uint64) (int, uint32, bool, error
 			state := txn.GetTxnState(true)
 			// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
 			if state == txnif.TxnStateUnknown {
-				err = txnif.TxnInternalErr
+				err = txnif.ErrTxnInternal
 			} else if state == txnif.TxnStateRollbacked {
 				panic("append node shoul not be rollbacked")
 			}

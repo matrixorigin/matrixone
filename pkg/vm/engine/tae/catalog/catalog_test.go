@@ -91,7 +91,7 @@ func TestCreateDB1(t *testing.T) {
 	txn2, _ := txnMgr.StartTxn(nil)
 
 	_, err = txn2.CreateDatabase(name)
-	assert.Equal(t, txnif.TxnWWConflictErr, err)
+	assert.Equal(t, txnif.ErrTxnWWConflict, err)
 
 	_, err = txn1.GetDatabase(name)
 	assert.Nil(t, err)
@@ -178,7 +178,7 @@ func TestTableEntry1(t *testing.T) {
 	assert.Equal(t, err, ErrNotFound)
 
 	_, err = txn2.CreateDatabase(name)
-	assert.Equal(t, err, txnif.TxnWWConflictErr)
+	assert.Equal(t, err, txnif.ErrTxnWWConflict)
 
 	_, err = txn2.DropDatabase(name)
 	assert.Equal(t, err, ErrNotFound)
@@ -207,7 +207,7 @@ func TestTableEntry1(t *testing.T) {
 	assert.Nil(t, err)
 
 	_, err = db.DropRelationByName(schema.Name)
-	assert.Equal(t, txnif.TxnWWConflictErr, err)
+	assert.Equal(t, txnif.ErrTxnWWConflict, err)
 
 	err = txn3.Commit()
 	assert.Nil(t, err)
