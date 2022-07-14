@@ -274,7 +274,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		ds.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, 0)
 		bat := batch.NewWithSize(1)
 		{
-			bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64})
+			bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
 			bat.Vecs[0].Col = make([]int64, 1)
 			bat.InitZsOne(1)
 		}
@@ -358,7 +358,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		ss = c.compileSort(n, ss)
 		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
 	case plan.Node_DELETE:
-		if n.DeleteInfo.CanTruncate {
+		if n.DeleteTablesCtx[0].CanTruncate {
 			return nil, nil
 		}
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)

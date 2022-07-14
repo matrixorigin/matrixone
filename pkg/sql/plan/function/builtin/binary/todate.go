@@ -15,12 +15,13 @@
 package binary
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"time"
 )
 
 // var usage = "to_date usage: "
@@ -34,7 +35,7 @@ func ToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 	inputBytes1 := vector.MustBytesCols(vectors[1])
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
 	if vectors[0].IsScalar() && vectors[1].IsScalar() {
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		results := &types.Bytes{
 			Data:    make([]byte, 0),
 			Offsets: make([]uint32, 1),
@@ -51,6 +52,9 @@ func ToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, 0) // I think we can calculate the bytes needed ahead and get rid of append though
+		if err != nil {
+			return nil, err
+		}
 		results := &types.Bytes{
 			Data:    make([]byte, 0),
 			Offsets: make([]uint32, len(inputBytes0.Lengths)),

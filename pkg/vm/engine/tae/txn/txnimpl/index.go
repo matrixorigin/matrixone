@@ -120,9 +120,9 @@ func (idx *simpleTableIndex) Delete(vv any) error {
 	idx.Lock()
 	defer idx.Unlock()
 	var v any
-	switch vv.(type) {
+	switch vv := vv.(type) {
 	case []uint8:
-		v = string(vv.([]uint8))
+		v = string(vv)
 	default:
 		v = vv
 	}

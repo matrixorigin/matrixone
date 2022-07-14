@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -53,19 +54,19 @@ type testTxnSender struct {
 	sync.Mutex
 	lastRequests []txn.TxnRequest
 	auto         bool
-	manualFunc   func([]txn.TxnResponse, error) ([]txn.TxnResponse, error)
+	manualFunc   func(*rpc.SendResult, error) (*rpc.SendResult, error)
 }
 
 func (ts *testTxnSender) Close() error {
 	return nil
 }
 
-func (ts *testTxnSender) Send(ctx context.Context, requests []txn.TxnRequest) ([]txn.TxnResponse, error) {
+func (ts *testTxnSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
 	ts.Lock()
 	defer ts.Unlock()
 	ts.lastRequests = requests
 
-	respones := make([]txn.TxnResponse, 0, len(requests))
+	responses := make([]txn.TxnResponse, 0, len(requests))
 	for _, req := range requests {
 		resp := txn.TxnResponse{
 			Txn:    &req.Txn,
@@ -79,15 +80,17 @@ func (ts *testTxnSender) Send(ctx context.Context, requests []txn.TxnRequest) ([
 			resp.CNOpResponse = &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("w-%d", req.CNRequest.OpCode))}
 		}
 
-		respones = append(respones, resp)
+		responses = append(responses, resp)
 	}
+
+	result := &rpc.SendResult{Responses: responses}
 	if !ts.auto {
-		return ts.manualFunc(respones, nil)
+		return ts.manualFunc(result, nil)
 	}
-	return respones, nil
+	return result, nil
 }
 
-func (ts *testTxnSender) setManual(manualFunc func([]txn.TxnResponse, error) ([]txn.TxnResponse, error)) {
+func (ts *testTxnSender) setManual(manualFunc func(*rpc.SendResult, error) (*rpc.SendResult, error)) {
 	ts.Lock()
 	defer ts.Unlock()
 	ts.manualFunc = manualFunc

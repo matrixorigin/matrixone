@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
@@ -269,7 +270,7 @@ func TestRecovery(t *testing.T) {
 	checkCommitted(t, s2, committedAndPreparedTxn, 3)
 	checkUncommitted(t, s2, committingTxn, 4)
 
-	var txns []txn.TxnMeta
+	txns := make([]txn.TxnMeta, 0, 6)
 	for v := range c {
 		txns = append(txns, v)
 	}
@@ -318,14 +319,18 @@ func commitTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64, e
 	wTxn.Status = txn.TxnStatus_Committed
 }
 
-func checkLogCount(t *testing.T, l *memLogClient, expect int) {
+func checkLogCount(t *testing.T, ll logservice.Client, expect int) {
+	l := ll.(*memLogClient)
+
 	l.RLock()
 	defer l.RUnlock()
 
 	assert.Equal(t, expect, len(l.logs))
 }
 
-func checkLog(t *testing.T, l *memLogClient, offset int, wTxn txn.TxnMeta, keys ...byte) {
+func checkLog(t *testing.T, ll logservice.Client, offset int, wTxn txn.TxnMeta, keys ...byte) {
+	l := ll.(*memLogClient)
+
 	l.RLock()
 	defer l.RUnlock()
 

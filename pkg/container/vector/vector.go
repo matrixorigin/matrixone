@@ -249,6 +249,10 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 	return v
 }
 
+func (v *Vector) TryExpandNulls(n int) {
+	nulls.TryExpand(v.Nsp, n)
+}
+
 func fillDefaultValue[T any](v *Vector) {
 	var dv T
 
@@ -425,15 +429,24 @@ func New(typ types.Type) *Vector {
 	}
 }
 
-func NewConst(typ types.Type) *Vector {
+func NewConst(typ types.Type, length int) *Vector {
 	v := New(typ)
 	v.IsConst = true
+	v.initConst(typ)
+	v.Length = length
 	return v
 }
 
-func NewConstNull(typ types.Type) *Vector {
+func NewConstNull(typ types.Type, length int) *Vector {
 	v := New(typ)
 	v.IsConst = true
+	v.initConst(typ)
+	nulls.Add(v.Nsp, 0)
+	v.Length = length
+	return v
+}
+
+func (v *Vector) initConst(typ types.Type) {
 	switch typ.Oid {
 	case types.T_bool:
 		v.Col = []bool{false}
@@ -474,8 +487,6 @@ func NewConstNull(typ types.Type) *Vector {
 			Data:    []byte{},
 		}
 	}
-	nulls.Add(v.Nsp, 0)
-	return v
 }
 
 // IsScalar return true if the vector means a scalar value.

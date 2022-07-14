@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/year"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,9 +31,9 @@ func DateToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]int64, 1)
-		year.DateToYearPlan2(inputValues, resultValues)
+		DateToYearPlan2(inputValues, resultValues)
 		// resultValues2 := make([]int64, 1)
 		// resultValues2[0] = int64(resultValues[0])
 		vector.SetCol(resultVector, resultValues)
@@ -47,7 +46,7 @@ func DateToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		year.DateToYearPlan2(inputValues, resultValues)
+		DateToYearPlan2(inputValues, resultValues)
 		// resultValues2 := make([]int64, len(resultValues))
 		// for i, x := range resultValues {
 		// 	resultValues2[i] = int64(x)
@@ -66,9 +65,9 @@ func DatetimeToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]int64, 1)
-		year.DatetimeToYearPlan2(inputValues, resultValues)
+		DatetimeToYearPlan2(inputValues, resultValues)
 		// resultValues2 := make([]int64, 1)
 		// resultValues2[0] = int64(resultValues[0])
 		vector.SetCol(resultVector, resultValues)
@@ -82,7 +81,7 @@ func DatetimeToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		year.DatetimeToYearPlan2(inputValues, resultValues)
+		DatetimeToYearPlan2(inputValues, resultValues)
 		// resultValues2 := make([]int64, len(resultValues))
 		// for i, x := range resultValues {
 		// 	resultValues2[i] = int64(x)
@@ -101,9 +100,9 @@ func DateStringToYear(vectors []*vector.Vector, proc *process.Process) (*vector.
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]int64, 1)
-		year.DateStringToYearPlan2(inputValues, resultVector.Nsp, resultValues)
+		DateStringToYearPlan2(inputValues, resultVector.Nsp, resultValues)
 		// resultValues2 := make([]int64, 1)
 		// resultValues2[0] = int64(resultValues[0])
 		vector.SetCol(resultVector, resultValues)
@@ -116,7 +115,7 @@ func DateStringToYear(vectors []*vector.Vector, proc *process.Process) (*vector.
 		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues.Lengths)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		year.DateStringToYearPlan2(inputValues, resultVector.Nsp, resultValues)
+		DateStringToYearPlan2(inputValues, resultVector.Nsp, resultValues)
 		// resultValues2 := make([]int64, len(resultValues))
 		// for i, x := range resultValues {
 		// 	resultValues2[i] = int64(x)
@@ -124,4 +123,75 @@ func DateStringToYear(vectors []*vector.Vector, proc *process.Process) (*vector.
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	}
+}
+
+// vectorize year and toYear function
+var (
+	DateToYearPlan2       func([]types.Date, []int64) []int64
+	DatetimeToYearPlan2   func([]types.Datetime, []int64) []int64
+	DateStringToYearPlan2 func(*types.Bytes, *nulls.Nulls, []int64) []int64
+)
+
+func init() {
+	DateToYearPlan2 = dateToYearPlan2
+	DatetimeToYearPlan2 = datetimeToYearPlan2
+	DateStringToYearPlan2 = dateStringToYearPlan2
+}
+
+func dateToYear(xs []types.Date, rs []uint16) []uint16 {
+	for i, x := range xs {
+		rs[i] = x.Year()
+	}
+	return rs
+}
+
+func datetimeToYear(xs []types.Datetime, rs []uint16) []uint16 {
+	for i, x := range xs {
+		rs[i] = x.Year()
+	}
+	return rs
+}
+
+func dateStringToYear(xs *types.Bytes, ns *nulls.Nulls, rs []uint16) []uint16 {
+	for i := range xs.Lengths {
+		str := string(xs.Get(int64(i)))
+		d, e := types.ParseDateCast(str)
+		if e != nil {
+			// set null
+			nulls.Add(ns, uint64(i))
+			rs[i] = 0
+			continue
+		}
+		rs[i] = d.Year()
+	}
+	return rs
+}
+
+func dateToYearPlan2(xs []types.Date, rs []int64) []int64 {
+	for i, x := range xs {
+		rs[i] = int64(x.Year())
+	}
+	return rs
+}
+
+func datetimeToYearPlan2(xs []types.Datetime, rs []int64) []int64 {
+	for i, x := range xs {
+		rs[i] = int64(x.Year())
+	}
+	return rs
+}
+
+func dateStringToYearPlan2(xs *types.Bytes, ns *nulls.Nulls, rs []int64) []int64 {
+	for i := range xs.Lengths {
+		str := string(xs.Get(int64(i)))
+		d, e := types.ParseDateCast(str)
+		if e != nil {
+			// set null
+			nulls.Add(ns, uint64(i))
+			rs[i] = 0
+			continue
+		}
+		rs[i] = int64(d.Year())
+	}
+	return rs
 }
