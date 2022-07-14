@@ -132,7 +132,7 @@ func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T
 }
 
 func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
-	defer leaktest.AfterTest(t)()
+	//defer leaktest.AfterTest(t)()
 	cfg1 := Config{
 		FS:                  vfs.NewStrictMem(),
 		DeploymentID:        1,
@@ -288,6 +288,19 @@ func TestHAKeeperClusterCanBootstrapLogShard(t *testing.T) {
 		services = services[1:]
 
 		for i := 0; i < 5000; i++ {
+			m := services[0].store.getHeartbeatMessage()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			assert.NoError(t, services[0].store.addLogStoreHeartbeat(ctx, m))
+			m = services[1].store.getHeartbeatMessage()
+			ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			assert.NoError(t, services[1].store.addLogStoreHeartbeat(ctx, m))
+			m = services[2].store.getHeartbeatMessage()
+			ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			assert.NoError(t, services[0].store.addLogStoreHeartbeat(ctx, m))
+
 			for _, s := range services {
 				if hasShard(s.store, 0) {
 					s.store.hakeeperTick()
