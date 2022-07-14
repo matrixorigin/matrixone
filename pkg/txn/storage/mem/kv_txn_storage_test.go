@@ -270,7 +270,7 @@ func TestRecovery(t *testing.T) {
 	checkCommitted(t, s2, committedAndPreparedTxn, 3)
 	checkUncommitted(t, s2, committingTxn, 4)
 
-	var txns []txn.TxnMeta
+	txns := make([]txn.TxnMeta, 0, 6)
 	for v := range c {
 		txns = append(txns, v)
 	}

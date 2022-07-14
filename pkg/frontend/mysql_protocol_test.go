@@ -2037,14 +2037,14 @@ func Test_handleHandshake_Recover(t *testing.T) {
 		var payload []byte
 		for i := 0; i < count; i++ {
 			f.Fuzz(&payload)
-			mp.handleHandshake(payload)
+			_ = mp.handleHandshake(payload)
 			maxLen = Max(maxLen, len(payload))
 		}
 		maxLen = 0
 		var payload2 string
 		for i := 0; i < count; i++ {
 			f.Fuzz(&payload2)
-			mp.handleHandshake([]byte(payload2))
+			_ = mp.handleHandshake([]byte(payload2))
 			maxLen = Max(maxLen, len(payload2))
 		}
 	})
