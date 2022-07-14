@@ -535,11 +535,17 @@ message DataControl {
 		GRANT			= 1;
 		REVOKE			= 2;
 		DENY			= 3;
+		PREPARE			= 4;
+		EXECUTE			= 5;
+		DEALLOCATE		= 6;
 	}
 	//DataDefinition type
 	DclType dcl_type = 1;
 	oneof control {
-		SetVariables set_variables = 2;
+		SetVariables set_variables  = 2;
+		Prepare prepare 			= 3;
+		Execute execute				= 4;
+		Deallocate deallocate 		= 5;
 	}
 }
 
@@ -656,4 +662,18 @@ message SetVariablesItem {
 	string name     = 3;
 	Expr   value    = 4;
 	Expr   reserved = 5;
+}
+
+message Prepare {
+	string name		 = 1;
+	Plan   plan		 = 2;
+}
+
+message Execute {
+	string name 		= 1;
+	repeated Expr args 	= 2;
+}
+
+message Deallocate {
+	string name			= 1;
 }

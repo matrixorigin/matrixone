@@ -25,15 +25,6 @@ import (
 )
 
 func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select) (*Plan, error) {
-	// query, binderCtx := newQueryAndSelectCtx(stmtType)
-	// nodeId, err := buildSelect(stmt, ctx, query, binderCtx)
-	// query.Steps = append(query.Steps, nodeId)
-	// return &Plan{
-	// 	Plan: &plan.Plan_Query{
-	// 		Query: query,
-	// 	},
-	// }, err
-
 	builder := NewQueryBuilder(stmtType, ctx)
 	bindCtx := NewBindContext(builder, nil)
 	rootId, err := builder.buildSelect(stmt, bindCtx, true)
@@ -106,6 +97,12 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildShowProcessList(stmt, ctx)
 	case *tree.SetVar:
 		return buildSetVariables(stmt, ctx)
+	case *tree.Execute:
+		return buildExecute(stmt, ctx)
+	case *tree.Deallocate:
+		return buildDeallocate(stmt, ctx)
+	case tree.Prepare: //Prepare is an interface
+		return buildPrepare(stmt, ctx)
 	default:
 		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 	}
