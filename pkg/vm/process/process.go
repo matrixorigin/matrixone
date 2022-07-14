@@ -38,9 +38,9 @@ func NewFromProc(m *mheap.Mheap, p *Process, regNumber int) *Process {
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Id = p.Id
 	proc.Lim = p.Lim
-	proc.UnixTime = p.UnixTime
-	proc.Snapshot = p.Snapshot
-	proc.SessionInfo = p.SessionInfo
+	proc.TxnOp = p.TxnOp
+	proc.AnalInfo = p.AnalInfo
+	proc.SessInfo = p.SessInfo
 	// reg and cancel
 	proc.Cancel = cancel
 	proc.Reg.MergeReceivers = make([]*WaitRegister, regNumber)
@@ -53,7 +53,7 @@ func NewFromProc(m *mheap.Mheap, p *Process, regNumber int) *Process {
 	return proc
 }
 
-func GetSels(proc *Process) []int64 {
+func (proc *Process) GetSels() []int64 {
 	if len(proc.Reg.Ss) == 0 {
 		return make([]int64, 0, 16)
 	}
@@ -62,13 +62,8 @@ func GetSels(proc *Process) []int64 {
 	return sels[:0]
 }
 
-func PutSels(sels []int64, proc *Process) {
+func (proc *Process) PutSels(sels []int64) {
 	proc.Reg.Ss = append(proc.Reg.Ss, sels)
-}
-
-func (proc *Process) GetBoolTyp(typ types.Type) (typ2 types.Type) {
-	typ.Oid = types.T_bool
-	return typ
 }
 
 func (proc *Process) AllocVector(typ types.Type, size int64) (*vector.Vector, error) {
@@ -95,38 +90,4 @@ func (proc *Process) AllocConstNullVector(typ types.Type, cnt int) *vector.Vecto
 	vec := vector.NewConstNull(typ, cnt)
 	nulls.Add(vec.Nsp, 0)
 	return vec
-}
-
-func Get(proc *Process, size int64, typ types.Type) (*vector.Vector, error) {
-	for i, vec := range proc.Reg.Vecs {
-		if int64(cap(vec.Data)) >= size {
-			vec.Ref = 0
-			vec.Or = false
-			vec.Typ = typ
-			nulls.Reset(vec.Nsp)
-			vec.Data = vec.Data[:size]
-			proc.Reg.Vecs[i] = proc.Reg.Vecs[len(proc.Reg.Vecs)-1]
-			proc.Reg.Vecs = proc.Reg.Vecs[:len(proc.Reg.Vecs)-1]
-			return vec, nil
-		}
-	}
-	data, err := mheap.Alloc(proc.Mp, size)
-	if err != nil {
-		return nil, err
-	}
-	vec := vector.New(typ)
-	vec.Data = data
-	return vec, nil
-}
-
-func Put(proc *Process, vec *vector.Vector) {
-	proc.Reg.Vecs = append(proc.Reg.Vecs, vec)
-}
-
-func FreeRegisters(proc *Process) {
-	for _, vec := range proc.Reg.Vecs {
-		vec.Ref = 0
-		vector.Free(vec, proc.Mp)
-	}
-	proc.Reg.Vecs = proc.Reg.Vecs[:0]
 }
