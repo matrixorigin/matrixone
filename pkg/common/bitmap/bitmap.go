@@ -96,8 +96,25 @@ func (n *Bitmap) Contains(row uint64) bool {
 	return (n.data[row>>6] & (1 << (row & 0x3F))) != 0
 }
 
+func (n *Bitmap) AddRange(start, end uint64) {
+	if start >= end {
+		return
+	}
+	i, j := start>>6, (end-1)>>6
+	if i == j {
+		n.data[i] |= (^uint64(0) << uint(start&0x3F)) & (^uint64(0) >> (uint(-end) & 0x3F))
+		return
+	}
+	n.data[i] |= (^uint64(0) << uint(start&0x3F))
+	for k := i + 1; k < j; k++ {
+		n.data[k] = ^uint64(0)
+	}
+	n.data[j] |= (^uint64(0) >> (uint(-end) & 0x3F))
+}
+
 func (n *Bitmap) RemoveRange(start, end uint64) {
 	if start >= end {
+		return
 	}
 	i, j := start>>6, (end-1)>>6
 	if i == j {

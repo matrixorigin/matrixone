@@ -28,6 +28,11 @@ const (
 
 func TestNulls(t *testing.T) {
 	np := New(Rows)
+	np.AddRange(0, 0)
+	np.AddRange(1, 10)
+	require.Equal(t, 9, np.Count())
+	np.Clear()
+
 	ok := np.IsEmpty()
 	require.Equal(t, true, ok)
 	np.Add(0)
