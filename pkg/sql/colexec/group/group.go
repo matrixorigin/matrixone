@@ -78,6 +78,7 @@ func (ctr *Container) process(ap *Argument, proc *process.Process) (bool, error)
 			}
 		}
 		if ctr.bat != nil {
+			ctr.bat.ExpandNulls()
 			proc.Reg.InputBatch = ctr.bat
 			ctr.bat = nil
 			return true, nil
@@ -166,6 +167,7 @@ func (ctr *Container) processWithGroup(ap *Argument, proc *process.Process) (boo
 			default:
 				ctr.bat.Ht = ctr.strHashMap
 			}
+			ctr.bat.ExpandNulls()
 			proc.Reg.InputBatch = ctr.bat
 			ctr.bat = nil
 			return true, nil

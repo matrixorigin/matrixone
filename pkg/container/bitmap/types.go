@@ -12,27 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package nulls
+package bitmap
 
-import "github.com/matrixorigin/matrixone/pkg/container/bitmap"
-
-/*
-type Nulls interface{
-	Any() bool
-
-	Length() int
-
-	Add(...uint64)
-	Del(...uint64)
-	Range(uint64, uint64) Nulls
-
-	Or(Nulls)
-
-	Read([]byte) error
-	Show() ([]byte, error)
+type Iterator interface {
+	HasNext() bool
+	Next() uint64
+	PeekNext() uint64
 }
-*/
 
-type Nulls struct {
-	Np *bitmap.Bitmap
+// Nulls represent line numbers of tuple's is null
+type Bitmap struct {
+	// Len represent the size of bitmap
+	Len int
+	// Any representat whether or not the vector has any null values set
+	Any  bool
+	Data []byte
+}
+
+type BitmapIterator struct {
+	i  uint64
+	bm *Bitmap
 }
