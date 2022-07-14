@@ -566,7 +566,7 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row, col int) (v any, err err
 		chain.RLock()
 		v, err = chain.GetValueLocked(uint32(row), ts)
 		chain.RUnlock()
-		if err == txnif.TxnInternalErr {
+		if err == txnif.ErrTxnInternal {
 			blk.mvcc.RUnlock()
 			return
 		}
@@ -789,7 +789,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 			row := it.Next()
 			key := pks.Get(int(row))
 			if blk.index.HasDeleteFrom(key, ts) {
-				err = txnif.TxnWWConflictErr
+				err = txnif.ErrTxnWWConflict
 				break
 			}
 		}

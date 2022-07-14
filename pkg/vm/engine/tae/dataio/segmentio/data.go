@@ -99,7 +99,7 @@ func (df *dataFile) Read(buf []byte) (n int, err error) {
 	}
 	file := df.GetFile()
 	n, err = file.Read(buf)
-	return n, nil
+	return n, err
 }
 
 func (df *dataFile) upgradeFile() {

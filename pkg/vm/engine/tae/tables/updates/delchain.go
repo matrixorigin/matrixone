@@ -111,7 +111,7 @@ func (chain *DeleteChain) IsDeleted(row uint32, ts uint64, rwlocker *sync.RWMute
 				} else if state == txnif.TxnStateCommitting {
 					logutil.Fatal("txn state error")
 				} else if state == txnif.TxnStateUnknown {
-					err = txnif.TxnInternalErr
+					err = txnif.ErrTxnInternal
 				}
 			}
 		}
@@ -132,7 +132,7 @@ func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts uint64) (err 
 			if n.txn == nil || n.txn.GetStartTS() == ts {
 				err = data.ErrNotFound
 			} else {
-				err = txnif.TxnWWConflictErr
+				err = txnif.ErrTxnWWConflict
 			}
 			return false
 		}
@@ -194,7 +194,7 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 	return merged
 }
 
-// [startTs, endTs)
+// CollectDeletesInRange collects [startTs, endTs)
 func (chain *DeleteChain) CollectDeletesInRange(startTs, endTs uint64) (mask *roaring.Bitmap, indexes []*wal.Index, err error) {
 	n, err := chain.CollectDeletesLocked(startTs, true)
 	if err != nil {
@@ -258,7 +258,7 @@ func (chain *DeleteChain) CollectDeletesLocked(ts uint64, collectIndex bool) (tx
 			if state == txnif.TxnStateRollbacked {
 				return true
 			} else if state == txnif.TxnStateUnknown {
-				err = txnif.TxnInternalErr
+				err = txnif.ErrTxnInternal
 				return false
 			}
 			n.RLock()

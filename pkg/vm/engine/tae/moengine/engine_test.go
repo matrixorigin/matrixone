@@ -367,8 +367,8 @@ func TestTxnRelation_Update(t *testing.T) {
 
 	tae.Close()
 	tae, err = db.Open(tae.Dir, nil)
-	defer tae.Close()
 	assert.NoError(t, err)
+	defer func() { assert.NoError(t, tae.Close()) }()
 	e = NewEngine(tae)
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)

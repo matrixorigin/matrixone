@@ -25,5 +25,5 @@ type Segment interface {
 	GetID() uint64
 	GetSegmentFile() file.Segment
 	BatchDedup(txn txnif.AsyncTxn, pks containers.Vector) error
-	Destory() error
+	Destroy() error
 }
