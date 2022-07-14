@@ -29,7 +29,7 @@ type getParamRule struct {
 	args map[int]int
 }
 
-func NewGetArgRule() getParamRule {
+func NewGetParamRule() getParamRule {
 	return getParamRule{
 		args: map[int]int{},
 	}

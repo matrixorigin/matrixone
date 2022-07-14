@@ -56,33 +56,33 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
-			getArgRule := NewGetArgRule()
-			VisitQuery := NewVisitQuery(pp.Ddl.Query, &getArgRule)
+			getParamRule := NewGetParamRule()
+			VisitQuery := NewVisitQuery(pp.Ddl.Query, &getParamRule)
 			_, err = VisitQuery.Visit()
 			if err != nil {
 				return nil, err
 			}
 			// TODO : need confirm
-			if len(getArgRule.args) > 0 {
+			if len(getParamRule.args) > 0 {
 				return nil, errors.New("", "ArgExpr is not support in DDL statement")
 			}
 		}
 	case *plan.Plan_Query:
 		// collect args
-		getArgRule := NewGetArgRule()
-		VisitQuery := NewVisitQuery(pp.Query, &getArgRule)
+		getParamRule := NewGetParamRule()
+		VisitQuery := NewVisitQuery(pp.Query, &getParamRule)
 		pp.Query, err = VisitQuery.Visit()
 		if err != nil {
 			return nil, err
 		}
 
 		// set arg order
-		getArgRule.SetParamOrder()
-		args := getArgRule.args
+		getParamRule.SetParamOrder()
+		args := getParamRule.args
 
 		// set arg order
-		resetArgRule := NewResetParamRule(args)
-		VisitQuery = NewVisitQuery(pp.Query, &resetArgRule)
+		resetParamRule := NewResetParamRule(args)
+		VisitQuery = NewVisitQuery(pp.Query, &resetParamRule)
 		pp.Query, err = VisitQuery.Visit()
 		if err != nil {
 			return nil, err
