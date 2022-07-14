@@ -27,7 +27,7 @@ func (b *Buffer) Write(p []byte) (n int, err error) {
 	return
 }
 
-// TODO: avoid string to []byte copy
+// WriteString TODO: avoid string to []byte copy
 func (b *Buffer) WriteString(s string) (n int, err error) {
 	n = len(s)
 	b.storage.AppendMany([]byte(s)...)
