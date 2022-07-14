@@ -166,9 +166,12 @@ import (
 }
 
 %token LEX_ERROR
+%nonassoc EMPTY
 %left <str> UNION
 %token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR
-%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT SET LOCK KEYS
+%nonassoc LOWER_THAN_SET
+%nonassoc <str> SET
+%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
@@ -203,7 +206,7 @@ import (
 
 // Transaction
 %token <str> BEGIN START TRANSACTION COMMIT ROLLBACK WORK CONSISTENT SNAPSHOT
-%token <str> CHAIN NO RELEASE
+%token <str> CHAIN NO RELEASE PRIORITY QUICK
 
 // Type
 %token <str> BIT TINYINT SMALLINT MEDIUMINT INT INTEGER BIGINT INTNUM
@@ -217,6 +220,7 @@ import (
 
 // Select option
 %token <str> SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT
+%token <str> LOW_PRIORITY HIGH_PRIORITY DELAYED
 
 // Create Table
 %token <str> CREATE ALTER DROP RENAME ANALYZE ADD
@@ -305,6 +309,7 @@ import (
 %type <statement> stmt
 %type <statements> stmt_list
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt
+%type <statement> delete_without_using_stmt delete_with_using_stmt
 %type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt
 %type <statement> drop_role_stmt drop_user_stmt
 %type <statement> create_user_stmt create_role_stmt
@@ -326,8 +331,8 @@ import (
 %type <selectStatement> simple_select select_with_parens simple_select_clause
 %type <selectExprs> select_expression_list
 %type <selectExpr> select_expression
-%type <tableExprs> table_references
-%type <tableExpr> table_reference table_factor join_table into_table_name
+%type <tableExprs> table_references table_name_wild_list
+%type <tableExpr> table_reference table_factor join_table into_table_name escaped_table_reference
 %type <direction> asc_desc_opt
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt
@@ -338,7 +343,7 @@ import (
 
 %type <tableDefs> table_elem_list_opt table_elem_list
 %type <tableDef> table_elem constaint_def constraint_elem
-%type <tableName> table_name
+%type <tableName> table_name table_name_opt_wild
 %type <tableNames> table_name_list
 %type <columnTableDef> column_def
 %type <columnType> mo_cast_type mysql_cast_type
@@ -495,6 +500,7 @@ import (
 %type <str> utility_option_name utility_option_arg
 %type <str> explain_option_key select_option_opt
 %type <str> explain_foramt_value view_recursive_opt trim_direction
+%type <str> priority_opt priority quick_opt ignore_opt wild_opt
 
 %start start_command
 
@@ -2066,19 +2072,103 @@ drop_prepare_stmt:
     }
 
 delete_stmt:
-    DELETE FROM table_reference where_expression_opt order_by_opt limit_opt
+	delete_without_using_stmt
+|	delete_with_using_stmt
+|	with_clause delete_with_using_stmt
+	{
+		$2.(*tree.Delete).With = $1
+		$$ = $2
+	}
+|	with_clause delete_without_using_stmt
+	{
+    	$2.(*tree.Delete).With = $1
+        $$ = $2
+    }
+
+delete_without_using_stmt:
+    DELETE priority_opt quick_opt ignore_opt FROM table_name partition_clause_opt as_opt_id where_expression_opt order_by_opt limit_opt
     {
+    	// Single-Table Syntax
+    	t := &tree.AliasedTableExpr {
+    		Expr: $6,
+    		As: tree.AliasClause{
+    			Alias: tree.Identifier($8),
+    		},
+    	}
         $$ = &tree.Delete{
-            Table: $3,
-            Where: $4,
-            OrderBy: $5,
-            Limit: $6,
+            Tables: tree.TableExprs{t},
+            Where: $9,
+            OrderBy: $10,
+            Limit: $11,
         }
     }
-//     DELETE comment_opt ignore_opt FROM table_name partition_clause_opt where_expression_opt order_by_opt limit_opt
-// |   DELETE comment_opt ignore_opt FROM table_name_list USING table_references where_expression_opt
-// |   DELETE comment_opt ignore_opt table_name_list from_or_using table_references where_expression_opt
-// |   DELETE comment_opt ignore_opt delete_table_list from_or_using table_references where_expression_opt
+|	DELETE priority_opt quick_opt ignore_opt table_name_wild_list FROM table_references where_expression_opt
+	{
+		// Multiple-Table Syntax
+		$$ = &tree.Delete{
+			Tables: $5,
+			Where: $8,
+			TableRefs: $7,
+		}
+	}
+
+
+
+delete_with_using_stmt:
+	DELETE priority_opt quick_opt ignore_opt FROM table_name_wild_list USING table_references where_expression_opt
+	{
+		// Multiple-Table Syntax
+		$$ = &tree.Delete{
+			Tables: $6,
+			Where: $9,
+			TableRefs: $8,
+		}
+	}
+
+table_name_wild_list:
+	table_name_opt_wild
+	{
+		$$ = tree.TableExprs{$1}
+	}
+|	table_name_wild_list ',' table_name_opt_wild
+	{
+		$$ = append($1, $3)
+	}
+
+table_name_opt_wild:
+	ident wild_opt
+	{
+		prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        $$ = tree.NewTableName(tree.Identifier($1), prefix)
+	}
+|	ident '.' ident wild_opt
+	{
+		prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier($3), prefix)
+	}
+
+wild_opt:
+	%prec EMPTY
+	{}
+|	'.' '*'
+	{}
+
+priority_opt:
+	{}
+|	priority
+
+priority:
+	LOW_PRIORITY
+|	HIGH_PRIORITY
+|	DELAYED
+
+quick_opt:
+	{}
+|	QUICK
+
+ignore_opt:
+	{}
+|	IGNORE
 
 insert_stmt:
     INSERT into_table_name partition_clause_opt insert_data
@@ -2737,14 +2827,17 @@ from_clause:
     }
 
 table_references:
-    table_reference
+    escaped_table_reference
     {
         $$ = tree.TableExprs{$1}
     }
-|   table_references ',' table_reference
+|   table_references ',' escaped_table_reference
     {
         $$ = append($1, $3)
     }
+
+escaped_table_reference:
+	table_reference %prec LOWER_THAN_SET
 
 table_reference:
     table_factor
@@ -6412,6 +6505,11 @@ reserved_keyword:
 |	LEADING
 |	TRAILING
 |   CHARACTER
+|	LOW_PRIORITY
+|	HIGH_PRIORITY
+|	DELAYED
+|   PARTITION
+|	QUICK
 
 non_reserved_keyword:
     AGAINST
@@ -6508,7 +6606,6 @@ non_reserved_keyword:
 |   OPTION
 |   PACK_KEYS
 |   PARTIAL
-|   PARTITION
 |   PARTITIONS
 |   POINT
 |   POLYGON
