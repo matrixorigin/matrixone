@@ -489,6 +489,16 @@ func TestRemoveReplica(t *testing.T) {
 	}
 }
 
+func hasShard(s *store, shardID uint64) bool {
+	hb := s.getHeartbeatMessage()
+	for _, info := range hb.Replicas {
+		if info.ShardID == shardID {
+			return true
+		}
+	}
+	return false
+}
+
 func hasReplica(s *store, shardID uint64, replicaID uint64) bool {
 	hb := s.getHeartbeatMessage()
 	for _, info := range hb.Replicas {

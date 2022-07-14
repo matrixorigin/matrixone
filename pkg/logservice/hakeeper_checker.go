@@ -161,6 +161,9 @@ func (l *store) healthCheck(term uint64, state *pb.CheckerState) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 	defer cancel()
+	for _, cmd := range cmds {
+		plog.Infof("ha cmd: %s", cmd.LogString())
+	}
 	if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
 		// TODO: check whether this is temp error
 		plog.Infof("failed to add schedule commands, %v", err)
@@ -175,6 +178,9 @@ func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
 		return
 	}
 	if len(cmds) > 0 {
+		for _, c := range cmds {
+			plog.Infof("bootstrap cmd: %s", c.LogString())
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 		defer cancel()
 		if err := l.addScheduleCommands(ctx, term, cmds); err != nil {

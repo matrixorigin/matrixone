@@ -131,6 +131,191 @@ func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T
 	fn(t, store)
 }
 
+func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
+	defer leaktest.AfterTest(t)()
+	cfg1 := Config{
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-1",
+		ServiceAddress:      "127.0.0.1:9002",
+		RaftAddress:         "127.0.0.1:9000",
+		GossipAddress:       "127.0.0.1:9001",
+		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9021", "127.0.0.1:9031"},
+	}
+	cfg2 := Config{
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-2",
+		ServiceAddress:      "127.0.0.1:9012",
+		RaftAddress:         "127.0.0.1:9010",
+		GossipAddress:       "127.0.0.1:9011",
+		GossipSeedAddresses: []string{"127.0.0.1:9001", "127.0.0.1:9021", "127.0.0.1:9031"},
+	}
+	cfg3 := Config{
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-3",
+		ServiceAddress:      "127.0.0.1:9022",
+		RaftAddress:         "127.0.0.1:9020",
+		GossipAddress:       "127.0.0.1:9021",
+		GossipSeedAddresses: []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9031"},
+	}
+	cfg4 := Config{
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-4",
+		ServiceAddress:      "127.0.0.1:9032",
+		RaftAddress:         "127.0.0.1:9030",
+		GossipAddress:       "127.0.0.1:9031",
+		GossipSeedAddresses: []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9021"},
+	}
+	service1, err := NewService(cfg1)
+	require.NoError(t, err)
+	defer func() {
+		//assert.NoError(t, service1.Close())
+	}()
+	service2, err := NewService(cfg2)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, service2.Close())
+	}()
+	service3, err := NewService(cfg3)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, service3.Close())
+	}()
+	service4, err := NewService(cfg4)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, service4.Close())
+	}()
+
+	peers := make(map[uint64]dragonboat.Target)
+	peers[1] = service1.ID()
+	peers[2] = service2.ID()
+	peers[3] = service3.ID()
+	assert.NoError(t, service1.store.startHAKeeperReplica(1, peers, false))
+	assert.NoError(t, service2.store.startHAKeeperReplica(2, peers, false))
+	assert.NoError(t, service3.store.startHAKeeperReplica(3, peers, false))
+	fn(t, []*Service{service1, service2, service3, service4})
+}
+
+func TestHAKeeperClusterCanBootstrapLogShard(t *testing.T) {
+	fn := func(t *testing.T, services []*Service) {
+		store1 := services[0].store
+		state, err := store1.getCheckerState()
+		require.NoError(t, err)
+		assert.Equal(t, pb.HAKeeperCreated, state.State)
+		require.NoError(t, store1.setInitialClusterInfo(1, 1, 3))
+		state, err = store1.getCheckerState()
+		require.NoError(t, err)
+		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
+
+		sendHeartbeat := func(ss []*Service) {
+			for _, s := range ss {
+				m := s.store.getHeartbeatMessage()
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				assert.NoError(t, s.store.addLogStoreHeartbeat(ctx, m))
+			}
+		}
+		sendHeartbeat(services[:3])
+
+		var term uint64
+		var leaderStore *store
+		for _, s := range services[:3] {
+			isLeader, curTerm, err := s.store.isLeaderHAKeeper()
+			require.NoError(t, err)
+			if isLeader {
+				term = curTerm
+				leaderStore = s.store
+				break
+			}
+		}
+		require.NotNil(t, leaderStore)
+		require.True(t, term > 0)
+
+		state, err = leaderStore.getCheckerState()
+		require.NoError(t, err)
+		leaderStore.bootstrap(term, state)
+
+		state, err = leaderStore.getCheckerState()
+		require.NoError(t, err)
+		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
+		assert.Equal(t, uint64(checkBootstrapInterval), leaderStore.bootstrapCheckInterval)
+		require.NotNil(t, leaderStore.bootstrapMgr)
+		assert.False(t, leaderStore.bootstrapMgr.CheckBootstrap(state.LogState))
+
+		// get and apply all schedule commands
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		for _, s := range services[:3] {
+			cb, err := s.store.getCommandBatch(ctx, s.store.id())
+			require.NoError(t, err)
+			if len(cb.Commands) > 0 {
+				s.handleStartReplica(cb.Commands[0])
+			}
+		}
+
+		// check bootstrap can be completed
+		for i := 0; i < 100; i++ {
+			sendHeartbeat(services[:3])
+			state, err = leaderStore.getCheckerState()
+			require.NoError(t, err)
+			leaderStore.checkBootstrap(state)
+
+			state, err = leaderStore.getCheckerState()
+			require.NoError(t, err)
+			if state.State != pb.HAKeeperRunning {
+				// FIXME: why wait here?
+				time.Sleep(50 * time.Millisecond)
+			} else {
+				break
+			}
+			if i == 99 {
+				t.Fatalf("failed to complete bootstrap")
+			}
+		}
+
+		// stop store 1
+		require.NoError(t, services[0].Close())
+		services[0] = nil
+		services = services[1:]
+
+		for i := 0; i < 5000; i++ {
+			for _, s := range services {
+				if hasShard(s.store, 0) {
+					s.store.hakeeperTick()
+					s.store.hakeeperCheck()
+				}
+				cb, err := services[0].store.getCommandBatch(ctx, s.store.id())
+				require.NoError(t, err)
+				s.handleCommands(cb.Commands)
+			}
+
+			notReady := false
+			for _, s := range services {
+				if !hasShard(s.store, 0) || !hasShard(s.store, 1) {
+					notReady = true
+					break
+				}
+			}
+			if notReady {
+				time.Sleep(time.Millisecond)
+			} else {
+				return
+			}
+		}
+		t.Fatalf("failed to repair shards")
+	}
+	runHAKeeperClusterTest(t, fn)
+}
+
 func TestGetCheckerState(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		state, err := store.getCheckerState()
@@ -152,8 +337,6 @@ func TestSetInitialClusterInfo(t *testing.T) {
 	}
 	runHAKeeperStoreTest(t, false, fn)
 }
-
-// FIXME: re-enable this test
 
 func TestFailedBootstrap(t *testing.T) {
 	testBootstrap(t, true)
@@ -213,7 +396,6 @@ func testBootstrap(t *testing.T, fail bool) {
 			require.Equal(t, 1, len(cb.Commands))
 			service := &Service{store: store}
 			service.handleStartReplica(cb.Commands[0])
-			//service.handleStartReplica(cb.Commands[1])
 
 			for i := 0; i < 100; i++ {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
