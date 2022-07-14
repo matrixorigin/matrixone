@@ -196,10 +196,10 @@ func TestMVART(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, m.RowCount(int32(12)))
 
-	_, err = m.DeleteOne(int32(12), uint32(100))
+	err = m.DeleteOne(int32(12), uint32(100))
 	require.Error(t, err)
 	require.Equal(t, 3, m.RowCount(int32(12)))
-	_, err = m.DeleteOne(int32(12), uint32(13))
+	err = m.DeleteOne(int32(12), uint32(13))
 	require.NoError(t, err)
 	require.Equal(t, 2, m.RowCount(int32(12)))
 	err = m.DeleteAll(int32(12))

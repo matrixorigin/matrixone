@@ -101,7 +101,7 @@ func (blk *dataBlock) ReplayIndex() (err error) {
 		keysCtx.Start = 0
 		keysCtx.Count = keysCtx.Keys.Length()
 		defer keysCtx.Keys.Close()
-		err = blk.index.BatchUpsert(keysCtx, 0, 0)
+		_, err = blk.index.BatchUpsert(keysCtx, 0, 0)
 		return
 	}
 	if blk.meta.GetSchema().HasSortKey() {

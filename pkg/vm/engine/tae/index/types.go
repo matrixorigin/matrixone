@@ -50,7 +50,7 @@ type SecondaryIndex interface {
 
 type MutipleRowsIndex interface {
 	Insert(key any, row uint32) error
-	DeleteOne(key any, row uint32) (int, error)
+	DeleteOne(key any, row uint32) error
 	DeleteAll(key any) error
 	GetRowsNode(key any) (*RowsNode, bool)
 	Contains(key any) bool

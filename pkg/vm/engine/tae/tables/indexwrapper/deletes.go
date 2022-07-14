@@ -1,8 +1,10 @@
 package indexwrapper
 
 import (
+	"fmt"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
@@ -42,6 +44,27 @@ func (m *DeletesMap) LogDeletedKey(key any, row uint32, ts uint64) (err error) {
 		}
 	}
 	return
+}
+
+func (m *DeletesMap) RemoveOne(key any, row uint32) {
+	m.idx.DeleteOne(key, row)
+}
+
+func (m *DeletesMap) RemoveTs(ts uint64) {
+	if _, existed := m.tssIdx[ts]; !existed {
+		panic(fmt.Errorf("RemoveTs cannot found ts %d", ts))
+	}
+	pos := compute.BinarySearch[uint64](m.tss, ts)
+	if pos == -1 {
+		panic(fmt.Errorf("RemoveTs cannot found ts %d", ts))
+	}
+	m.tss = append(m.tss[:pos], m.tss[pos+1:]...)
+	delete(m.tssIdx, ts)
+	if len(m.tss) == 0 {
+		m.maxTs = 0
+	} else {
+		m.maxTs = m.tss[len(m.tss)-1]
+	}
 }
 
 func (m *DeletesMap) HasDeleteFrom(key any, fromTs uint64) (existed bool) {
