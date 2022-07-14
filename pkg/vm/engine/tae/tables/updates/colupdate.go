@@ -172,7 +172,7 @@ func (node *ColumnUpdateNode) GetUpdateCntLocked() int {
 	return int(node.mask.GetCardinality())
 }
 
-// TODO: rewrite
+// ReadFrom TODO: rewrite
 func (node *ColumnUpdateNode) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int
 	buf := make([]byte, txnbase.IDSize)

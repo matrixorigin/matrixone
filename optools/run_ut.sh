@@ -100,7 +100,7 @@ function run_tests(){
         go test -v -tags matrixone_test -p 1 -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
     fi
     IS_BUILD_FAIL=$(egrep "^FAIL.*\ \[build\ failed\]$" $UT_REPORT)
-    egrep -a '^=== RUN *Test[^\/]*$|^\-\-\- PASS: *Test|^\-\-\- FAIL: *Test'  $UT_REPORT > $UT_FILTER
+    egrep -a '^=== RUN *Test[^\/]*$|^\-\-\- PASS: *Test|^\-\-\- FAIL: *Test|^\-\-\- SKIP: *Test'  $UT_REPORT > $UT_FILTER
     logger "INF" "Refer to $UT_REPORT for details"
 
 }
@@ -109,11 +109,15 @@ function ut_summary(){
     cd $BUILD_WKSP
     local total=$(cat "$UT_FILTER" | egrep '^=== RUN *Test' | wc -l | xargs)
     local pass=$(cat "$UT_FILTER" | egrep "^\-\-\- PASS: *Test" | wc -l | xargs)
+    local skip=$(cat "$UT_FILTER" | egrep "^\-\-\- SKIP: *Test" | wc -l | xargs)
     local fail=$(cat "$UT_FILTER" | egrep "^\-\-\- FAIL: *Test" | wc -l | xargs)
     local unknown=$(cat "$UT_FILTER" | sed '/^=== RUN/{x;p;x;}' | sed -n '/=== RUN/N;/--- /!p' | grep -v '^$' | wc -l | xargs)
     cat << EOF > $UT_COUNT
-# Total: $total; Passed: $pass; Failed: $fail; Unknown: $unknown
+# Total: $total; Passed: $pass; Skipped: $skip; Failed: $fail; Unknown: $unknown
 #
+# SKIPPED CASES:
+$(cat "$UT_FILTER" | egrep "^\-\-\- SKIP: *Test")
+
 # FAILED CASES:
 $(cat "$UT_FILTER" | egrep "^\-\-\- FAIL: *Test")
 

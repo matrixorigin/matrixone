@@ -16,6 +16,7 @@ package hakeeper
 
 import (
 	"bytes"
+	"sort"
 	"testing"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
@@ -319,6 +320,56 @@ func TestScheduleCommandQuery(t *testing.T) {
 	assert.Equal(t, b, *cb)
 }
 
+func TestClusterDetailsQuery(t *testing.T) {
+	tsm := NewStateMachine(0, 1).(*stateMachine)
+	tsm.state.CNState = pb.CNState{
+		Stores: make(map[string]pb.CNStoreInfo),
+	}
+	tsm.state.CNState.Stores["uuid1"] = pb.CNStoreInfo{
+		Tick:           1,
+		ServiceAddress: "addr1",
+	}
+	tsm.state.CNState.Stores["uuid2"] = pb.CNStoreInfo{
+		Tick:           2,
+		ServiceAddress: "addr2",
+	}
+	tsm.state.DNState = pb.DNState{
+		Stores: make(map[string]pb.DNStoreInfo),
+	}
+	tsm.state.DNState.Stores["uuid3"] = pb.DNStoreInfo{
+		Tick:           3,
+		ServiceAddress: "addr3",
+	}
+	v, err := tsm.Lookup(&ClusterDetailsQuery{})
+	require.NoError(t, err)
+	expected := &pb.ClusterDetails{
+		DNNodes: []pb.DNNode{
+			{
+				UUID:           "uuid3",
+				Tick:           3,
+				ServiceAddress: "addr3",
+			},
+		},
+		CNNodes: []pb.CNNode{
+			{
+				UUID:           "uuid1",
+				Tick:           1,
+				ServiceAddress: "addr1",
+			},
+			{
+				UUID:           "uuid2",
+				Tick:           2,
+				ServiceAddress: "addr2",
+			},
+		},
+	}
+	result := v.(*pb.ClusterDetails)
+	sort.Slice(result.CNNodes, func(i, j int) bool {
+		return result.CNNodes[i].UUID < result.CNNodes[j].UUID
+	})
+	assert.Equal(t, expected, result)
+}
+
 func TestInitialState(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	assert.Equal(t, pb.HAKeeperCreated, rsm.state.State)
@@ -368,7 +419,8 @@ func TestSetState(t *testing.T) {
 			},
 		}
 		cmd := GetSetStateCmd(tt.newState)
-		rsm.Update(sm.Entry{Cmd: cmd})
+		_, err := rsm.Update(sm.Entry{Cmd: cmd})
+		require.NoError(t, err)
 		assert.Equal(t, tt.result, rsm.state.State)
 	}
 }

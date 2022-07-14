@@ -15,18 +15,19 @@
 package operator
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/constraints"
-	"testing"
 )
 
 func TestIntegerDiv(t *testing.T) {
 	integerDivFloat[float32](t, types.T_float32, 235, 7.5, 31)
-	integerDivFloat[float64](t, types.T_float64, 21.45, 40.55, 0)
+	integerDivFloat(t, types.T_float64, 21.45, 40.55, 0)
 }
 
 // Unit test input of float type parameter of integerdiv operator
@@ -41,28 +42,28 @@ func integerDivFloat[T constraints.Float](t *testing.T, typ types.T, left T, rig
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makeIntegerDivVectors[T](left, true, right, true, typ),
+			vecs:       makeIntegerDivVectors(left, true, right, true, typ),
 			proc:       procs,
 			wantBytes:  []int64{res},
 			wantScalar: true,
 		},
 		{
 			name:       "TEST02",
-			vecs:       makeIntegerDivVectors[T](left, false, right, true, typ),
+			vecs:       makeIntegerDivVectors(left, false, right, true, typ),
 			proc:       procs,
 			wantBytes:  []int64{res},
 			wantScalar: false,
 		},
 		{
 			name:       "TEST03",
-			vecs:       makeIntegerDivVectors[T](left, true, right, false, typ),
+			vecs:       makeIntegerDivVectors(left, true, right, false, typ),
 			proc:       procs,
 			wantBytes:  []int64{res},
 			wantScalar: false,
 		},
 		{
 			name:       "TEST04",
-			vecs:       makeIntegerDivVectors[T](left, false, right, false, typ),
+			vecs:       makeIntegerDivVectors(left, false, right, false, typ),
 			proc:       procs,
 			wantBytes:  []int64{res},
 			wantScalar: false,

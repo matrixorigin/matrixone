@@ -16,6 +16,9 @@ package insert
 
 import (
 	"fmt"
+	"reflect"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -23,8 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
-	"reflect"
-	"testing"
 )
 
 type mockRelation struct {

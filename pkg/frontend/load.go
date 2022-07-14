@@ -1624,6 +1624,10 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 	}
 
 	handler.batchFilled = batchBegin + fetchCnt
+	{
+		handler.batchData.InitZsOne(handler.batchSize)
+		handler.batchData.ExpandNulls()
+	}
 
 	//if handler.batchFilled == handler.batchSize {
 	//	minLen := math.MaxInt64
