@@ -107,15 +107,20 @@ type recordEntry struct {
 	//for read
 	record    logservice.LogRecord
 	payload   []byte
-	marshaled bool
+	unmarshaled bool
 }
 
 func newRecordEntry()*recordEntry{
 	return &recordEntry{entries: make([]*entry.Entry, 0),meta: newMeta()}
 }
 
+func newEmptyRecordEntry(r logservice.LogRecord)*recordEntry{
+	return &recordEntry{record: r,meta: newMeta()}
+}
+
 func (r *recordEntry) append(e *entry.Entry) {
 	r.entries = append(r.entries, e)
+	r.meta.addr[e.Lsn]=uint64(r.size)
 	r.size += e.GetSize()
 }
 
@@ -177,9 +182,20 @@ func (r *recordEntry) prepareRecord()(size int){
 
 func (r *recordEntry) makeRecord() {
 	copy(r.record.Payload(),r.payload)
-	return
+}
+
+func (r *recordEntry) unmarshal(){
+	if r.unmarshaled{
+		return
+	}
+	r.Unmarshal(r.record.Payload())
 }
 
 func (r *recordEntry) readEntry(lsn uint64) *entry.Entry {
-	return nil //TODO
+	r.unmarshal()
+	offset:=r.meta.addr[lsn]
+	bbuf:=bytes.NewBuffer(r.payload[offset:])
+	e:=entry.NewEmptyEntry()
+	e.ReadFrom(bbuf)
+	return e
 }

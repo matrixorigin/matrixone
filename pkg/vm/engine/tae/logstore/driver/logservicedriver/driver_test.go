@@ -64,6 +64,11 @@ func initTest(t *testing.T) (*logservice.Service, *logservice.ClientConfig) {
 	return service, &ccfg
 }
 
+func restartDriver(t *testing.T, d *LogServiceDriver) *LogServiceDriver {
+	assert.NoError(t, d.Close())
+	return NewLogServiceDriver(d.config)
+}
+
 func TestAppend(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
@@ -75,7 +80,7 @@ func TestAppend(t *testing.T) {
 	}()
 
 	entries := make([]*entry.Entry, 0)
-	for i := 0; i < 5000; i++ {
+	for i := 0; i < 10; i++ {
 		e := entry.MockEntry()
 		driver.Append(e)
 		entries = append(entries, e)
@@ -85,4 +90,10 @@ func TestAppend(t *testing.T) {
 		e.WaitDone()
 	}
 
+	for _, e := range entries {
+		e2 := driver.Read(e.Lsn)
+		assert.Equal(t, e2.Lsn, e.Lsn)
+	}
+
+	driver = restartDriver(t, driver)
 }

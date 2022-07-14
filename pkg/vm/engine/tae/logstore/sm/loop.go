@@ -7,7 +7,7 @@ import (
 
 type Loop struct {
 	queue        chan any
-	fn           func([]any) any
+	fn           func([]any, chan any)
 	nextQueue    chan any
 	queueCtx     context.Context
 	cancelFn     context.CancelFunc
@@ -15,7 +15,7 @@ type Loop struct {
 	maxBatchSize int
 }
 
-func NewLoop(queue, nextQueue chan any, fn func([]any) any, maxBatchSize int) *Loop {
+func NewLoop(queue, nextQueue chan any, fn func([]any, chan any), maxBatchSize int) *Loop {
 	return &Loop{
 		queue:        queue,
 		fn:           fn,
@@ -50,11 +50,7 @@ func (l *Loop) loop() {
 				}
 			}
 		}
-		if l.nextQueue != nil {
-			l.nextQueue <- l.fn(batch)
-		} else {
-			l.fn(batch)
-		}
+		l.fn(batch,l.nextQueue)
 	}
 }
 

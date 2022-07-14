@@ -3,6 +3,7 @@ package logservicedriver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -16,15 +17,16 @@ type readCache struct {
 	records map[uint64]*recordEntry
 	readMu  sync.RWMutex
 }
-func newReadCache()*readCache{
+
+func newReadCache() *readCache {
 	return &readCache{
-		lsns: make([]uint64, 0),
+		lsns:    make([]uint64, 0),
 		records: make(map[uint64]*recordEntry),
-		readMu: sync.RWMutex{},
+		readMu:  sync.RWMutex{},
 	}
 }
 func (d *LogServiceDriver) Read(drlsn uint64) entry.Entry {
-	lsn, err := d.getLogServiceLsnByDriverLsn(drlsn)
+	lsn, err := d.tryGetLogServiceLsnByDriverLsn(drlsn)
 	if err != nil {
 		panic(err)
 	}
@@ -49,17 +51,20 @@ func (d *LogServiceDriver) readFromLogService(lsn uint64) {
 	ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
 	defer cancel()
 	client := d.clientPool.Get().(logservice.Client)
-	records, lsn, err := client.Read(ctx, lsn, d.config.ReadMaxSize)
+	records, firstlsn, err := client.Read(ctx, lsn, d.config.ReadMaxSize)
 	if err != nil { //TODO
 		panic(err)
 	}
-	d.appendRecords(records, lsn)
+	if firstlsn != lsn {
+		panic(fmt.Errorf("logic err, expect %d, get %d, length is %d", lsn, firstlsn,len(records)))
+	}
+	d.appendRecords(records, firstlsn)
 	d.clientPool.Put(client)
 }
 
 func (d *LogServiceDriver) appendRecords(records []logservice.LogRecord, firstlsn uint64) {
 	d.readMu.Lock()
-	d.readMu.Unlock()
+	defer d.readMu.Unlock()
 	lsns := make([]uint64, 0)
 	for i, record := range records {
 		lsn := firstlsn + uint64(i)

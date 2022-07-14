@@ -1,6 +1,7 @@
 package entry
 
 import (
+	"io"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -21,6 +22,18 @@ func NewEntry(e entry.Entry) *Entry {
 	}
 	en.wg.Add(1)
 	return en
+}
+func NewEmptyEntry() *Entry{
+	en:=&Entry{
+		Entry: entry.GetBase(),
+		wg: sync.WaitGroup{},
+	}
+	en.wg.Add(1)
+	return en
+}
+
+func (e *Entry) ReadFrom(r io.Reader){
+	e.Entry.ReadFrom(r)
 }
 
 func (e *Entry) WaitDone() error {

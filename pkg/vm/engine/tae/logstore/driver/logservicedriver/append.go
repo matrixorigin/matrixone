@@ -41,7 +41,7 @@ func (d *LogServiceDriver) doFlush() {
 	}
 }
 
-func (d *LogServiceDriver) onPreAppend(items []any) any {
+func (d *LogServiceDriver) onPreAppend(items []any, _ chan any) {
 	for _, item := range items {
 		switch v := item.(type) {
 		case *entry.Entry:
@@ -51,10 +51,9 @@ func (d *LogServiceDriver) onPreAppend(items []any) any {
 			d.doFlush()
 		}
 	}
-	return nil
 }
 
-func (d *LogServiceDriver) onAppendQueue(items []any) any {
+func (d *LogServiceDriver) onAppendQueue(items []any, q chan any) {
 	for _, item := range items {
 		appender := item.(*driverAppender)
 		appender.client, appender.appendlsn = d.getClient()
@@ -63,7 +62,7 @@ func (d *LogServiceDriver) onAppendQueue(items []any) any {
 		appender.wg.Add(1)
 		go appender.append()
 	}
-	return items
+	q <- items
 }
 
 func (d *LogServiceDriver) getClient() (client logservice.Client, lsn uint64) {
@@ -75,9 +74,8 @@ func (d *LogServiceDriver) getClient() (client logservice.Client, lsn uint64) {
 	return
 }
 
-func (d *LogServiceDriver) onAppendedQueue(items []any) any {
-	appended := make([]uint64, 0)
-	logserviceAppended := make([]uint64, 0)
+func (d *LogServiceDriver) onAppendedQueue(items []any, q chan any) {
+	appenders:=make([]*driverAppender,0)
 	for _, v := range items {
 		batch := v.([]any)
 		for _, item := range batch {
@@ -85,11 +83,22 @@ func (d *LogServiceDriver) onAppendedQueue(items []any) any {
 			appender.waitDone()
 			d.clientPool.Put(appender.client)
 			appender.freeEntries()
+			appenders=append(appenders, appender)
+		}
+	}
+	q <- appenders
+}
+
+func (d *LogServiceDriver) onPostAppendQueue(items []any, _ chan any) {
+	appended := make([]uint64, 0)
+	logserviceAppended := make([]uint64, 0)
+	for _, v := range items {
+		batch := v.([]*driverAppender)
+		for _, appender := range batch {
 			d.logAppend(appender)
 			appended = append(appended, appender.appendlsn)
 			logserviceAppended = append(logserviceAppended, appender.logserviceLsn)
 		}
 	}
 	d.onAppend(appended, logserviceAppended)
-	return nil
 }
