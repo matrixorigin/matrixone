@@ -246,6 +246,7 @@ func (sf *segmentFile) Replay() error {
 			if ts == 0 && len(info) < 3 {
 				setFile(&bf.indexMeta.file, file)
 				sf.replayInfo(bf.indexMeta.stat, file)
+				break
 			}
 			if int(col) > len(bf.columns)-1 {
 				bf.AddColumn(int(col + 1))
