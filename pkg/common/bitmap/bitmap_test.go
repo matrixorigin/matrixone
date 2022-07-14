@@ -33,14 +33,33 @@ func TestNulls(t *testing.T) {
 	np.Add(0)
 	ok = np.Contains(0)
 	require.Equal(t, true, ok)
+	require.Equal(t, 1, np.Count())
+
+	itr := np.Iterator()
+	require.Equal(t, uint64(0), itr.PeekNext())
+	require.Equal(t, true, itr.HasNext())
+	require.Equal(t, uint64(0), itr.Next())
+
 	np.Remove(0)
 	ok = np.IsEmpty()
 	require.Equal(t, true, ok)
+
+	np.AddMany([]uint64{1, 2, 3})
+	require.Equal(t, 3, np.Count())
+	np.RemoveRange(1, 3)
+	require.Equal(t, 0, np.Count())
+
+	np.AddMany([]uint64{1, 2, 3})
 	np.Filter([]int64{0})
-	np.ToArray()
 	fmt.Printf("%v\n", np.String())
-	fmt.Printf("size: %v\n", np.Count())
+	fmt.Printf("size: %v\n", np.Size())
 	fmt.Printf("numbers: %v\n", np.Count())
+
+	nq := New(Rows)
+	nq.Unmarshal(np.Marshal())
+
+	require.Equal(t, np.ToArray(), nq.ToArray())
+
 	np.Clear()
 }
 

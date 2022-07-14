@@ -178,7 +178,7 @@ func (n *Bitmap) Marshal() []byte {
 	var buf bytes.Buffer
 
 	buf.Write(encoding.EncodeUint64(uint64(n.len)))
-	buf.Write(encoding.EncodeUint64(uint64(len(n.data))))
+	buf.Write(encoding.EncodeUint64(uint64(len(n.data) * 8)))
 	buf.Write(encoding.EncodeFixedSlice(n.data, 8))
 	return buf.Bytes()
 }
