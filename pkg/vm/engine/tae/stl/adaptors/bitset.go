@@ -27,6 +27,8 @@ func NewBitSet(size int) *BitSet {
 	}
 }
 
+func (bs *BitSet) Size() int { return bs.size }
+
 func (bs *BitSet) Close() {
 	if bs.storage != nil {
 		bs.storage.Close()
