@@ -15,8 +15,9 @@
 package types
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestTimestamp_String(t *testing.T) {
@@ -126,9 +127,9 @@ func TestParseTimestamp(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(TimestampMinValue+1<<20), int64(a))
 
-	a, err = ParseTimestamp("1966-01-01 00:00:01.52345", 0)
+	_, err = ParseTimestamp("1966-01-01 00:00:01.52345", 0)
 	require.Error(t, err)
 
-	a, err = ParseTimestamp("2966-01-01 00:00:01.52345", 0)
+	_, err = ParseTimestamp("2966-01-01 00:00:01.52345", 0)
 	require.Error(t, err)
 }
