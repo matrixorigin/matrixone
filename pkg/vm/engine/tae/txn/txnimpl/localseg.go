@@ -97,7 +97,6 @@ func (seg *localSegment) ApplyAppend() (err error) {
 				seg.table.store.IncreateWriteCnt()
 				seg.table.txnEntries = append(seg.table.txnEntries, anode)
 			}
-			anode = nil
 			prev = nil
 		}
 		prevAppender = ctx.driver
@@ -156,6 +155,9 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			appender = seg.tableHandle.SetAppender(blk.Fingerprint())
 		}
 		toAppend, err := appender.PrepareAppend(node.RowsWithoutDeletes() - appended)
+		if err != nil {
+			return err
+		}
 		toAppendWithDeletes := node.LengthWithDeletes(appended, toAppend)
 		ctx := &appendCtx{
 			driver: appender,
