@@ -66,7 +66,7 @@ func (ts *testTxnSender) Send(ctx context.Context, requests []txn.TxnRequest) (*
 	defer ts.Unlock()
 	ts.lastRequests = requests
 
-	respones := make([]txn.TxnResponse, 0, len(requests))
+	responses := make([]txn.TxnResponse, 0, len(requests))
 	for _, req := range requests {
 		resp := txn.TxnResponse{
 			Txn:    &req.Txn,
@@ -80,10 +80,10 @@ func (ts *testTxnSender) Send(ctx context.Context, requests []txn.TxnRequest) (*
 			resp.CNOpResponse = &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("w-%d", req.CNRequest.OpCode))}
 		}
 
-		respones = append(respones, resp)
+		responses = append(responses, resp)
 	}
 
-	result := &rpc.SendResult{Responses: respones}
+	result := &rpc.SendResult{Responses: responses}
 	if !ts.auto {
 		return ts.manualFunc(result, nil)
 	}
