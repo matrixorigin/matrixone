@@ -61,6 +61,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 					vector.Clean(ctr.bat.Vecs[i], proc.Mp)
 				}
 				ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
+				ctr.bat.ExpandNulls()
 			}
 			proc.Reg.InputBatch = ctr.bat
 			ctr.bat = nil
@@ -120,9 +121,9 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 				ctr.cmps = make([]compare.Compare, len(bat.Vecs))
 				for i := range ctr.cmps {
 					if pos, ok := mp[i]; ok {
-						ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, ap.Fs[pos].Type == order.Descending)
+						ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, ap.Fs[pos].Type == order.Descending)
 					} else {
-						ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, true)
+						ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, true)
 					}
 				}
 			} else {

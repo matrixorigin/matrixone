@@ -19,15 +19,19 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"go.uber.org/zap"
 )
 
 type Manager struct {
 	cluster pb.ClusterInfo
+
+	logger *zap.Logger
 }
 
-func NewBootstrapManager(cluster pb.ClusterInfo) *Manager {
+func NewBootstrapManager(cluster pb.ClusterInfo, logger *zap.Logger) *Manager {
 	var dnShard []metadata.DNShardRecord
 	var logShard []metadata.LogShardRecord
 
@@ -46,24 +50,45 @@ func NewBootstrapManager(cluster pb.ClusterInfo) *Manager {
 			DNShards:  dnShard,
 			LogShards: logShard,
 		},
+		logger: logutil.Adjust(logger).Named("hakeeper"),
 	}
 
 	return manager
 }
 
 func (bm *Manager) Bootstrap(alloc util.IDAllocator,
-	dn pb.DNState, log pb.LogState) (commands []pb.ScheduleCommand, err error) {
+	dn pb.DNState, log pb.LogState) ([]pb.ScheduleCommand, error) {
+	logCommands, err := bm.bootstrapLogService(alloc, log)
+	dnCommands := bm.bootstrapDN(alloc, dn)
+	if err != nil {
+		return nil, err
+	}
 
+	commands := append(logCommands, dnCommands...)
+	for _, command := range commands {
+		bm.logger.Info("schedule command generated", zap.String("command", command.LogString()))
+	}
+	if len(commands) != 0 {
+		bm.logger.Info("bootstrap commands generated")
+	}
+	return commands, nil
+}
+
+func (bm *Manager) bootstrapLogService(alloc util.IDAllocator,
+	log pb.LogState) (commands []pb.ScheduleCommand, err error) {
 	logStores := logStoresSortedByTick(log.Stores)
-	dnStores := dnStoresSortedByTick(dn.Stores)
 
 	for _, shardRecord := range bm.cluster.LogShards {
+		// skip HAKeeper shard
+		if shardRecord.ShardID == 0 {
+			continue
+		}
+
 		if shardRecord.NumberOfReplicas > uint64(len(logStores)) {
 			return nil, errors.New("not enough log stores")
 		}
 
 		initialMembers := make(map[uint64]string)
-
 		for i := uint64(0); i < shardRecord.NumberOfReplicas; i++ {
 			replicaID, ok := alloc.Next()
 			if !ok {
@@ -91,9 +116,13 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 				})
 		}
 	}
+	return
+}
 
+func (bm *Manager) bootstrapDN(alloc util.IDAllocator, dn pb.DNState) (commands []pb.ScheduleCommand) {
+	dnStores := dnStoresSortedByTick(dn.Stores)
 	if len(dnStores) < len(bm.cluster.DNShards) {
-		return nil, errors.New("not enough dn stores")
+		return nil
 	}
 
 	for i, dnRecord := range bm.cluster.DNShards {
@@ -102,7 +131,7 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 		}
 		replicaID, ok := alloc.Next()
 		if !ok {
-			return nil, errors.New("id allocator error")
+			return nil
 		}
 
 		commands = append(commands, pb.ScheduleCommand{
@@ -123,13 +152,10 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 }
 
 func (bm *Manager) CheckBootstrap(log pb.LogState) bool {
-	for _, shardInfo := range log.Shards {
-		var shardRecord metadata.LogShardRecord
-		for _, record := range bm.cluster.LogShards {
-			if record.ShardID == shardInfo.ShardID {
-				shardRecord = record
-				break
-			}
+	for _, shardRecord := range bm.cluster.LogShards {
+		shardInfo, ok := log.Shards[shardRecord.ShardID]
+		if !ok {
+			return false
 		}
 
 		if uint64(len(shardInfo.Replicas))*2 <= shardRecord.NumberOfReplicas {

@@ -16,6 +16,7 @@ package binary
 
 import (
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -76,7 +77,7 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint32, 1)
 		unit := string(leftValues.Get(0))
 		results, err := extract.ExtractFromDate(unit, rightValues, resultValues)
@@ -118,7 +119,7 @@ func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vect
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := &types.Bytes{
 			Data:    make([]byte, 0),
 			Offsets: make([]uint32, 1),

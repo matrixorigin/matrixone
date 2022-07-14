@@ -56,8 +56,8 @@ func TestNewBootstrapManager(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		bm := NewBootstrapManager(c.cluster)
-		assert.Equal(t, c.expected, bm)
+		bm := NewBootstrapManager(c.cluster, nil)
+		assert.Equal(t, c.expected.cluster, bm.cluster)
 	}
 }
 
@@ -103,7 +103,30 @@ func TestBootstrap(t *testing.T) {
 			},
 		},
 		{
-			desc: "err: not enough log stores",
+			desc: "ignore shard 0",
+
+			cluster: pb.ClusterInfo{
+				DNShards: []metadata.DNShardRecord{},
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          0,
+					NumberOfReplicas: 3,
+				}},
+			},
+			dn: pb.DNState{
+				Stores: map[string]pb.DNStoreInfo{},
+			},
+			log: pb.LogState{
+				Stores: map[string]pb.LogStoreInfo{
+					"log-a": {Tick: 100},
+					"log-b": {Tick: 110},
+				},
+			},
+
+			expectedNum: 0,
+			err:         nil,
+		},
+		{
+			desc: "1 log shard with 3 replicas and 1 dn shard",
 
 			cluster: pb.ClusterInfo{
 				DNShards: []metadata.DNShardRecord{{ShardID: 1, LogShardID: 1}},
@@ -119,12 +142,17 @@ func TestBootstrap(t *testing.T) {
 				Stores: map[string]pb.LogStoreInfo{
 					"log-a": {Tick: 100},
 					"log-b": {Tick: 110},
+					"log-c": {Tick: 120},
+					"log-d": {Tick: 130},
 				},
 			},
 
-			expectedNum:            0,
-			expectedInitialMembers: map[uint64]string{},
-			err:                    errors.New("not enough log stores"),
+			expectedNum: 4,
+			expectedInitialMembers: map[uint64]string{
+				1: "log-d",
+				2: "log-c",
+				3: "log-b",
+			},
 		},
 	}
 
@@ -132,14 +160,16 @@ func TestBootstrap(t *testing.T) {
 		fmt.Printf("case %v: %s\n", i, c.desc)
 
 		alloc := util.NewTestIDAllocator(0)
-		bm := NewBootstrapManager(c.cluster)
+		bm := NewBootstrapManager(c.cluster, nil)
 		output, err := bm.Bootstrap(alloc, c.dn, c.log)
 		assert.Equal(t, c.err, err)
 		if err != nil {
 			continue
 		}
 		assert.Equal(t, c.expectedNum, len(output))
-		assert.Equal(t, c.expectedInitialMembers, output[0].ConfigChange.InitialMembers)
+		if len(output) != 0 {
+			assert.Equal(t, c.expectedInitialMembers, output[0].ConfigChange.InitialMembers)
+		}
 	}
 }
 
@@ -188,11 +218,23 @@ func TestCheckBootstrap(t *testing.T) {
 			},
 			expected: false,
 		},
+		{
+			desc: "shard 1 not exists in log state",
+			cluster: pb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{
+					{ShardID: 1, NumberOfReplicas: 3},
+				},
+			},
+			log: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{},
+			},
+			expected: false,
+		},
 	}
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		bm := NewBootstrapManager(c.cluster)
+		bm := NewBootstrapManager(c.cluster, nil)
 		output := bm.CheckBootstrap(c.log)
 		assert.Equal(t, c.expected, output)
 	}
@@ -271,13 +313,13 @@ func TestIssue3814(t *testing.T) {
 			dn: pb.DNState{
 				Stores: map[string]pb.DNStoreInfo{},
 			},
-			expected: errors.New("not enough dn stores"),
+			expected: nil,
 		},
 	}
 
 	for _, c := range cases {
 		alloc := util.NewTestIDAllocator(0)
-		bm := NewBootstrapManager(c.cluster)
+		bm := NewBootstrapManager(c.cluster, nil)
 		_, err := bm.Bootstrap(alloc, c.dn, c.log)
 		assert.Equal(t, c.expected, err)
 	}
@@ -301,7 +343,7 @@ func TestIssue3845(t *testing.T) {
 				}},
 			},
 			log: pb.LogState{
-				Shards: map[uint64]pb.LogShardInfo{1: {
+				Shards: map[uint64]pb.LogShardInfo{0: {
 					ShardID:  0,
 					Replicas: map[uint64]string{1: "a"},
 				}},
@@ -321,7 +363,7 @@ func TestIssue3845(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		bm := NewBootstrapManager(c.cluster)
+		bm := NewBootstrapManager(c.cluster, nil)
 		output := bm.CheckBootstrap(c.log)
 		assert.Equal(t, c.expected, output)
 	}

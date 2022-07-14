@@ -17,9 +17,6 @@ package frontend
 import (
 	goErrors "errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"os"
 	"runtime/pprof"
 	"sort"
@@ -28,6 +25,10 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -48,12 +49,9 @@ import (
 )
 
 var (
-	errorDatabaseIsNull                            = goErrors.New("the database name is an empty string")
-	errorNoSuchGlobalSystemVariable                = goErrors.New("there is no such global system variable")
 	errorComplicateExprIsNotSupported              = goErrors.New("the complicate expression is not supported")
 	errorNumericTypeIsNotSupported                 = goErrors.New("the numeric type is not supported")
 	errorUnaryMinusForNonNumericTypeIsNotSupported = goErrors.New("unary minus for no numeric type is not supported")
-	errorFunctionIsNotSupported                    = goErrors.New("function is not supported")
 )
 
 //tableInfos of a database
@@ -632,7 +630,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
 					vs := vec.Col.([]types.Decimal128)
 					row[i] = vs[rowIndex].Decimal128ToString(scale)
-					fmt.Println(row[i])
 				} else {
 					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
 						row[i] = nil
@@ -769,7 +766,7 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 handle Load DataSource statement
 */
 func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
-	var err error = nil
+	var err error
 	ses := mce.GetSession()
 	proto := ses.protocol
 
@@ -864,7 +861,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 handle cmd CMD_FIELD_LIST
 */
 func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
-	var err error = nil
+	var err error
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 
@@ -1058,7 +1055,7 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 		sysVars = ses.CopyAllSessionVars()
 	}
 
-	var rows [][]interface{}
+	rows := make([][]interface{}, 0, len(sysVars))
 	for name, value := range sysVars {
 		if hasLike && !WildcardMatch(likePattern, name) {
 			continue
@@ -1148,12 +1145,23 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 				es.Format = explain.EXPLAIN_FORMAT_TEXT
 			} else if strings.EqualFold(v.Value, "JSON") {
 				es.Format = explain.EXPLAIN_FORMAT_JSON
+			} else if strings.EqualFold(v.Value, "DOT") {
+				es.Format = explain.EXPLAIN_FORMAT_DOT
 			} else {
 				return errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized value for EXPLAIN option \"%s\": \"%s\"", v.Name, v.Value))
 			}
 		} else {
 			return errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized EXPLAIN option \"%s\"", v.Name))
 		}
+	}
+
+	switch stmt.Statement.(type) {
+	case *tree.Delete:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
+	case *tree.Update:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+	default:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
 	}
 
 	//get query optimizer and execute Optimize
@@ -1470,7 +1478,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	var cmpBegin time.Time
 	var ret interface{}
 	var runner ComputationRunner
-	var selfHandle = false
+	var selfHandle bool
 	var fromLoadData = false
 	var txnErr error
 	var rspLen uint64
@@ -1591,9 +1599,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			if err = mce.handleExplainStmt(st); err != nil {
 				goto handleFailed
 			}
-			goto handleFailed
+			//goto handleFailed
 		case *tree.ExplainAnalyze:
-			selfHandle = true
 			err = errors.New(errno.FeatureNotSupported, "not support explain analyze statement now")
 			goto handleFailed
 		case *tree.ShowColumns:
@@ -1873,7 +1880,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
-		logutil.Infof("query:%s", SubStringFromBegin(query, int(ses.Pu.SV.GetLengthOfQueryPrinted())))
+		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), SubStringFromBegin(query, int(ses.Pu.SV.GetLengthOfQueryPrinted())))
 		seps := strings.Split(query, " ")
 		if len(seps) <= 0 {
 			resp = NewGeneralErrorResponse(COM_QUERY, fmt.Errorf("invalid query"))

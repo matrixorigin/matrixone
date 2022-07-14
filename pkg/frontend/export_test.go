@@ -230,7 +230,7 @@ func Test_exportDataToCSVFile(t *testing.T) {
 		data[6] = 1
 		data[7] = []byte{1}
 		data[8] = types.Date(1)
-		data[9] = types.Datetime(1)
+		data[9] = "2022-02-28 23:59:59.9999"
 		oq.mrs.AddRow(data)
 
 		oq.ep.Symbol = make([][]byte, len(col))
@@ -264,10 +264,12 @@ func Test_exportDataToCSVFile(t *testing.T) {
 		var data = make([]interface{}, len(col))
 		data[0] = 1
 		oq.mrs.AddRow(data)
+		oq.ep.Symbol = make([][]byte, len(col))
+		oq.ep.ColumnFlag = make([]bool, len(col))
 
 		stubs := gostub.StubFunc(&formatOutputString, nil)
 		defer stubs.Reset()
 
-		convey.So(exportDataToCSVFile(oq), convey.ShouldNotBeNil)
+		convey.So(exportDataToCSVFile(oq), convey.ShouldBeNil)
 	})
 }

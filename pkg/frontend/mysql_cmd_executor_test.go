@@ -198,7 +198,7 @@ func Test_mce(t *testing.T) {
 			data: []byte("test anywhere"),
 		}
 
-		resp, err = mce.ExecRequest(req)
+		_, err = mce.ExecRequest(req)
 		convey.So(err, convey.ShouldBeNil)
 		//COM_INIT_DB replaced by changeDB()
 		//convey.So(resp.category, convey.ShouldEqual, OkResponse)

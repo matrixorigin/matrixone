@@ -15,13 +15,14 @@
 package operator
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/constraints"
-	"testing"
 )
 
 func TestDiv(t *testing.T) {
@@ -52,28 +53,28 @@ func divFloat[T constraints.Float](t *testing.T, typ types.T, left T, right T, r
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makeDivVectors[T](left, true, right, true, typ),
+			vecs:       makeDivVectors(left, true, right, true, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: true,
 		},
 		{
 			name:       "TEST02",
-			vecs:       makeDivVectors[T](left, false, right, true, typ),
+			vecs:       makeDivVectors(left, false, right, true, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: false,
 		},
 		{
 			name:       "TEST03",
-			vecs:       makeDivVectors[T](left, true, right, false, typ),
+			vecs:       makeDivVectors(left, true, right, false, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: false,
 		},
 		{
 			name:       "TEST04",
-			vecs:       makeDivVectors[T](left, false, right, false, typ),
+			vecs:       makeDivVectors(left, false, right, false, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: false,

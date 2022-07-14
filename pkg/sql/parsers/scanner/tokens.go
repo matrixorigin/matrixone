@@ -15,8 +15,9 @@
 package scanner
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
 var rwlock sync.RWMutex
@@ -25,6 +26,9 @@ func initTokens(dialectType dialect.DialectType) map[string]int {
 	switch dialectType {
 	case dialect.MYSQL:
 		LEX_ERROR = MYSQL_LEX_ERROR
+		QUICK = MYSQL_QUICK
+		LOW_PRIORITY = MYSQL_LOW_PRIORITY
+		HIGH_PRIORITY = MYSQL_HIGH_PRIORITY
 		SCHEMAS = MYSQL_SCHEMAS
 		PIPE_CONCAT = MYSQL_PIPE_CONCAT
 		CONFIG = MYSQL_CONFIG
@@ -91,7 +95,6 @@ func initTokens(dialectType dialect.DialectType) map[string]int {
 		DATE_ADD = MYSQL_DATE_ADD
 		DATE_SUB = MYSQL_DATE_SUB
 		EXTRACT = MYSQL_EXTRACT
-		MAX = MYSQL_MAX
 		MID = MYSQL_MID
 		NOW = MYSQL_NOW
 		POSITION = MYSQL_POSITION
@@ -450,6 +453,8 @@ func initTokens(dialectType dialect.DialectType) map[string]int {
 		QUERY = MYSQL_QUERY
 		EXPANSION = MYSQL_EXPANSION
 		UNUSED = MYSQL_UNUSED
+		PREPARE = MYSQL_PREPARE
+		DEALLOCATE = MYSQL_DEALLOCATE
 
 	case dialect.POSTGRESQL:
 		USE = POSTGRESQL_USE
@@ -555,7 +560,7 @@ func initTokens(dialectType dialect.DialectType) map[string]int {
 		"decimal":                  DECIMAL,
 		"declare":                  UNUSED,
 		"default":                  DEFAULT,
-		"delayed":                  UNUSED,
+		"delayed":                  DELAYED,
 		"delete":                   DELETE,
 		"desc":                     DESC,
 		"describe":                 DESCRIBE,
@@ -616,7 +621,7 @@ func initTokens(dialectType dialect.DialectType) map[string]int {
 		"group_concat":             GROUP_CONCAT,
 		"having":                   HAVING,
 		"hash":                     HASH,
-		"high_priority":            UNUSED,
+		"high_priority":            HIGH_PRIORITY,
 		"hour":                     HOUR,
 		"identified":               IDENTIFIED,
 		"if":                       IF,
@@ -670,7 +675,7 @@ func initTokens(dialectType dialect.DialectType) map[string]int {
 		"longblob":                 LONGBLOB,
 		"longtext":                 LONGTEXT,
 		"loop":                     UNUSED,
-		"low_priority":             UNUSED,
+		"low_priority":             LOW_PRIORITY,
 		"local":                    LOCAL,
 		"master_bind":              UNUSED,
 		"match":                    MATCH,
@@ -739,6 +744,7 @@ func initTokens(dialectType dialect.DialectType) map[string]int {
 		"privileges":               PRIVILEGES,
 		"query":                    QUERY,
 		"quarter":                  QUARTER,
+		"quick":                    QUICK,
 		"range":                    RANGE,
 		"read":                     READ,
 		"reads":                    UNUSED,
@@ -916,11 +922,17 @@ func initTokens(dialectType dialect.DialectType) map[string]int {
 		"minute_microsecond":       MINUTE_MICROSECOND,
 		"min":                      MIN,
 		"second_microsecond":       SECOND_MICROSECOND,
+		"prepare":                  PREPARE,
+		"deallocate":               DEALLOCATE,
 	}
 }
 
 // mysql
 var (
+	QUICK                    int
+	DELAYED                  int
+	HIGH_PRIORITY            int
+	LOW_PRIORITY             int
 	SCHEMAS                  int
 	PIPE_CONCAT              int
 	CONFIG                   int
@@ -1347,4 +1359,6 @@ var (
 	INT4                     int
 	INT8                     int
 	VERBOSE                  int
+	PREPARE                  int
+	DEALLOCATE               int
 )

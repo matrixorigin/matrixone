@@ -132,9 +132,11 @@ func newLogStore(cfg Config) (*store, error) {
 	}
 	ls.mu.truncateCh = make(chan struct{})
 	ls.mu.pendingTruncate = make(map[uint64]struct{})
-	ls.stopper.RunTask(func(ctx context.Context) {
+	if err := ls.stopper.RunTask(func(ctx context.Context) {
 		ls.truncationWorker(ctx)
-	})
+	}); err != nil {
+		return nil, err
+	}
 	return ls, nil
 }
 
@@ -158,9 +160,11 @@ func (l *store) startHAKeeperReplica(replicaID uint64,
 		join, hakeeper.NewStateMachine, raftConfig); err != nil {
 		return err
 	}
-	l.stopper.RunTask(func(ctx context.Context) {
+	if err := l.stopper.RunTask(func(ctx context.Context) {
 		l.ticker(ctx)
-	})
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -379,9 +383,20 @@ func (l *store) getCommandBatch(ctx context.Context,
 	v, err := l.read(ctx,
 		hakeeper.DefaultHAKeeperShardID, &hakeeper.ScheduleCommandQuery{UUID: uuid})
 	if err != nil {
+		// FIXME: handle not HAKeeper error
 		return pb.CommandBatch{}, err
 	}
 	return *(v.(*pb.CommandBatch)), nil
+}
+
+func (l *store) getClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
+	v, err := l.read(ctx,
+		hakeeper.DefaultHAKeeperShardID, &hakeeper.ClusterDetailsQuery{})
+	if err != nil {
+		// FIXME: handle not HAKeeper error
+		return pb.ClusterDetails{}, err
+	}
+	return *(v.(*pb.ClusterDetails)), nil
 }
 
 func (l *store) addScheduleCommands(ctx context.Context,
@@ -391,7 +406,6 @@ func (l *store) addScheduleCommands(ctx context.Context,
 	if _, err := l.propose(ctx, session, cmd); err != nil {
 		return err
 	}
-
 	return nil
 }
 
@@ -655,6 +669,7 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 			},
 			ReplicaID: ci.ReplicaID,
 		}
+		// FIXME: why we need this?
 		if replicaInfo.Replicas == nil {
 			replicaInfo.Replicas = make(map[uint64]dragonboat.Target)
 		}

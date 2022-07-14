@@ -58,6 +58,7 @@ type StateQuery struct{}
 type logShardIDQuery struct{ name string }
 type logShardIDQueryResult struct{ id uint64 }
 type ScheduleCommandQuery struct{ UUID string }
+type ClusterDetailsQuery struct{}
 
 type stateMachine struct {
 	replicaID uint64
@@ -336,6 +337,13 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 		DNShards:  dnShards,
 		LogShards: logShards,
 	}
+
+	// make sure we are not using the ID range assigned to k8s
+	if s.state.NextID > K8SIDRangeStart {
+		panic("too many IDs assigned during initial cluster request")
+	}
+	s.state.NextID = K8SIDRangeEnd
+
 	plog.Infof("initial cluster set, HAKeeper is in BOOTSTRAPPING state")
 	s.state.State = pb.HAKeeperBootstrapping
 	return result
@@ -400,6 +408,30 @@ func (s *stateMachine) handleScheduleCommandQuery(uuid string) *pb.CommandBatch 
 	return &pb.CommandBatch{}
 }
 
+func (s *stateMachine) handleClusterDetailsQuery() *pb.ClusterDetails {
+	cd := &pb.ClusterDetails{
+		CNNodes: make([]pb.CNNode, 0),
+		DNNodes: make([]pb.DNNode, 0),
+	}
+	for uuid, info := range s.state.CNState.Stores {
+		n := pb.CNNode{
+			UUID:           uuid,
+			Tick:           info.Tick,
+			ServiceAddress: info.ServiceAddress,
+		}
+		cd.CNNodes = append(cd.CNNodes, n)
+	}
+	for uuid, info := range s.state.DNState.Stores {
+		n := pb.DNNode{
+			UUID:           uuid,
+			Tick:           info.Tick,
+			ServiceAddress: info.ServiceAddress,
+		}
+		cd.DNNodes = append(cd.DNNodes, n)
+	}
+	return cd
+}
+
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 	if q, ok := query.(*logShardIDQuery); ok {
 		return s.handleShardIDQuery(q.name), nil
@@ -407,6 +439,8 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 		return s.handleStateQuery(), nil
 	} else if q, ok := query.(*ScheduleCommandQuery); ok {
 		return s.handleScheduleCommandQuery(q.UUID), nil
+	} else if _, ok := query.(*ClusterDetailsQuery); ok {
+		return s.handleClusterDetailsQuery(), nil
 	}
 	panic("unknown query type")
 }

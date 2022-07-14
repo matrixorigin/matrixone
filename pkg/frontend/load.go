@@ -361,6 +361,8 @@ func makeBatch(handler *ParseLineHandler, id int) *PoolElement {
 	for i := 0; i < len(handler.attrName); i++ {
 		vec := vector.New(handler.cols[i].Attr.Type)
 		switch vec.Typ.Oid {
+		case types.T_bool:
+			vec.Col = make([]bool, batchSize)
 		case types.T_int8:
 			vec.Col = make([]int8, batchSize)
 		case types.T_int16:
@@ -699,6 +701,19 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 				//logutil.Infof("data set col %d : %v ",j,field)
 
 				switch vec.Typ.Oid {
+				case types.T_bool:
+					cols := vec.Col.([]bool)
+					if isNullOrEmpty {
+						nulls.Add(vec.Nsp, uint64(rowIdx))
+					} else {
+						if field == "true" || field == "1" {
+							cols[rowIdx] = true
+						} else if field == "false" || field == "0" {
+							cols[rowIdx] = false
+						} else {
+							return fmt.Errorf("the input value '%s' is not bool type", field)
+						}
+					}
 				case types.T_int8:
 					cols := vec.Col.([]int8)
 					if isNullOrEmpty {
@@ -726,7 +741,6 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 								d = 0
 							}
 							cols[rowIdx] = int8(d)
-
 						}
 					}
 				case types.T_int16:
@@ -1119,6 +1133,23 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 			columnFLags[j] = 1
 
 			switch vec.Typ.Oid {
+			case types.T_bool:
+				cols := vec.Col.([]bool)
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						nulls.Add(vec.Nsp, uint64(i))
+					} else {
+						field := line[j]
+						if field == "true" || field == "1" {
+							cols[i] = true
+						} else if field == "false" || field == "0" {
+							cols[i] = false
+						} else {
+							return fmt.Errorf("the input value '%s' is not bool type", field)
+						}
+					}
+				}
 			case types.T_int8:
 				cols := vec.Col.([]int8)
 				//row
@@ -1593,6 +1624,10 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 	}
 
 	handler.batchFilled = batchBegin + fetchCnt
+	{
+		handler.batchData.InitZsOne(handler.batchSize)
+		handler.batchData.ExpandNulls()
+	}
 
 	//if handler.batchFilled == handler.batchSize {
 	//	minLen := math.MaxInt64
@@ -1745,6 +1780,9 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 					}
 					//remove row
 					switch vec.Typ.Oid {
+					case types.T_bool:
+						cols := vec.Col.([]bool)
+						vec.Col = cols[:needLen]
 					case types.T_int8:
 						cols := vec.Col.([]int8)
 						vec.Col = cols[:needLen]

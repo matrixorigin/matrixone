@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "show schemas like 'db1'",
-		output: "show databases like db1",
+		input:  "with t2 as (select * from t1) DELETE FROM a1, a2 USING t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id;",
+		output: "with t2 as (select * from t1) delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
 	}
 )
 
@@ -52,6 +52,35 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "with t2 as (select * from t1) DELETE FROM a1, a2 USING t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id;",
+		output: "with t2 as (select * from t1) delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
+	}, {
+		input:  "DELETE FROM a1, a2 USING t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id;",
+		output: "delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
+	}, {
+		input:  "DELETE a1, a2 FROM t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id",
+		output: "delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
+	}, {
+		input:  "DELETE FROM t1, t2 USING t1 INNER JOIN t2 INNER JOIN t3 WHERE t1.id=t2.id AND t2.id=t3.id",
+		output: "delete from t1, t2 using t1 inner join t2 inner join t3 where t1.id = t2.id and t2.id = t3.id",
+	}, {
+		input:  "DELETE t1, t2 FROM t1 INNER JOIN t2 INNER JOIN t3 WHERE t1.id=t2.id AND t2.id=t3.id",
+		output: "delete from t1, t2 using t1 inner join t2 inner join t3 where t1.id = t2.id and t2.id = t3.id",
+	}, {
+		input: "select cast(false as varchar)",
+	}, {
+		input:  "select cast(a as timestamp)",
+		output: "select cast(a as timestamp(26, 6))",
+	}, {
+		input:  "select cast(\"2022-01-30\" as varchar);",
+		output: "select cast(2022-01-30 as varchar)",
+	}, {
+		input:  "select cast(b as timestamp) from t2",
+		output: "select cast(b as timestamp(26, 6)) from t2",
+	}, {
+		input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
+		output: "select cast(2022-01-01 01:23:34 as varchar)",
+	}, {
 		input:  "show schemas where 1",
 		output: "show databases where 1",
 	}, {
@@ -946,6 +975,21 @@ var (
 	}, {
 		input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE' MAX_FILE_SIZE 100 FORCE_QUOTE (a, b)",
 		output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false max_file_size 102400 force_quote a, b",
+	}, {
+		input: "drop prepare stmt_name1",
+	}, {
+		input: "deallocate prepare stmt_name1",
+	}, {
+		input: "execute stmt_name1",
+	}, {
+		input: "execute stmt_name1 using @var_name,@@sys_name",
+	}, {
+		input: "prepare stmt_name1 from select * from t1",
+	}, {
+		input:  "prepare stmt_name1 from 'select * from t1'",
+		output: "prepare stmt_name1 from select * from t1",
+	}, {
+		input: "prepare stmt_name1 from select * from t1 where a > ? or abs(b) < ?",
 	}}
 )
 
