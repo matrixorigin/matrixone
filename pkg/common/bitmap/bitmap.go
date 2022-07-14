@@ -200,13 +200,12 @@ func (n *Bitmap) Marshal() []byte {
 	return buf.Bytes()
 }
 
-func (n *Bitmap) Unmarshal(data []byte) error {
+func (n *Bitmap) Unmarshal(data []byte) {
 	n.len = int(encoding.DecodeUint64(data[:8]))
 	data = data[8:]
 	size := int(encoding.DecodeUint64(data[:8]))
 	data = data[8:]
 	n.data = encoding.DecodeFixedSlice[uint64](data[:size], 8)
-	return nil
 }
 
 func (n *Bitmap) String() string {
