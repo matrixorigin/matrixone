@@ -21,6 +21,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
+	switch stmt := stmt.(type) {
+	case *tree.Select, *tree.ParenSelect,
+		*tree.Update, *tree.Delete, *tree.Insert,
+		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowColumns,
+		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
+		opt := NewBaseOptimizer(ctx)
+		optimized, err := opt.Optimize(stmt)
+		if err != nil {
+			return nil, err
+		}
+		return &Plan{
+			Plan: &Plan_Query{
+				Query: optimized,
+			},
+		}, nil
+	default:
+		return BuildPlan(ctx, stmt)
+	}
+}
+
 func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	var preparePlan *Plan
 	var err error
@@ -29,7 +50,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	switch pstmt := stmt.(type) {
 	case *tree.PrepareStmt:
 		stmtName = string(pstmt.Name)
-		preparePlan, err = BuildPlan(ctx, pstmt.Stmt)
+		preparePlan, err = getPreparePlan(ctx, pstmt.Stmt)
 		if err != nil {
 			return nil, err
 		}
@@ -43,7 +64,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 			return nil, errors.New("", "can't prepare from muti statements")
 		}
 		stmtName = string(pstmt.Name)
-		preparePlan, err = BuildPlan(ctx, stmts[0])
+		preparePlan, err = getPreparePlan(ctx, stmts[0])
 		if err != nil {
 			return nil, err
 		}
