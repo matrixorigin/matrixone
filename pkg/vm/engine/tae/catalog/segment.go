@@ -384,7 +384,7 @@ func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *BaseEntry) 
 
 func (entry *SegmentEntry) DestroyData() (err error) {
 	if entry.segData != nil {
-		err = entry.segData.Destory()
+		err = entry.segData.Destroy()
 	}
 	return
 }

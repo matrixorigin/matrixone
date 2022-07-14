@@ -164,17 +164,11 @@ func (bs *baseStore) flushLoop() {
 				t0 = time.Now()
 				syncBatch := make([]*batch, len(bats))
 				copy(syncBatch, bats)
-				// for _, b := range syncBatch {
-				// 	for _, e := range b.entrys {
-				// 		e.StartTime()
-				// 	}
-				// }
 				bs.syncQueue <- syncBatch
 				bats = bats[:0]
 			}
 			entries = entries[:0]
 			bs.flushLoop2Duration += time.Since(t1)
-			t1 = time.Now()
 		case <-ticker.C:
 			bs.tickerTimes++
 			bs.flushQueueDuration += time.Since(t1)
@@ -188,7 +182,6 @@ func (bs *baseStore) flushLoop() {
 				bats = bats[:0]
 			}
 			bs.flushLoop2Duration += time.Since(t1)
-			t1 = time.Now()
 		}
 	}
 }
