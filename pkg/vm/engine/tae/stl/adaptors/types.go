@@ -5,6 +5,12 @@ import (
 )
 
 type Buffer struct {
-	// storage *containers.StdVector[byte]
 	storage stl.Vector[byte]
+}
+
+type BitSet struct {
+	storage stl.Vector[byte]
+	set     []byte
+	size    int
+	bitcnt  int
 }
