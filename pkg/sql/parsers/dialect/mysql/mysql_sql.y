@@ -1527,8 +1527,11 @@ update_expression:
     }
 
 prepareable_stmt:
-    delete_stmt
+    create_stmt
 |   insert_stmt
+|   delete_stmt
+|   drop_stmt
+|   show_stmt
 |   update_stmt
 |   select_stmt
     {
