@@ -2,8 +2,9 @@ package frontend
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/fagongzi/goetty/buf"
 	"github.com/golang/mock/gomock"
@@ -694,6 +695,102 @@ func Test_GetComputationWrapper(t *testing.T) {
 		ses := &Session{}
 		cw, err := GetComputationWrapper(db, sql, user, eng, proc, ses)
 		convey.So(cw, convey.ShouldNotBeEmpty)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func Test_handleShowCreateTable(t *testing.T) {
+	convey.Convey("handleShowCreateTable succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		if err != nil {
+			t.Error(err)
+		}
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses.Data = make([][]interface{}, 1)
+		ses.Data[0] = make([]interface{}, primaryKeyPos+1)
+		ses.Data[0][tableNamePos] = []byte("table")
+		ses.Data[0][attrNamePos] = []byte("col1")
+		ses.Data[0][attrTypPos] = int32(1)
+		ses.Data[0][charWidthPos] = int32(1)
+		ses.Data[0][defaultPos] = int8(1)
+		ses.Data[0][primaryKeyPos] = []byte("p")
+
+		ses.Mrs = &MysqlResultSet{}
+		err = handleShowCreateTable(ses)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func Test_handleShowCreateDatabase(t *testing.T) {
+	convey.Convey("handleShowCreateDatabase succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		if err != nil {
+			t.Error(err)
+		}
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+
+		ses.Mrs = &MysqlResultSet{}
+		ses.Mrs.Name2Index = make(map[string]uint64)
+		ses.Mrs.Name2Index["Database"] = 1
+		ses.Mrs.Name2Index["Create Database"] = 2
+		ses.Data = make([][]interface{}, 1)
+		ses.Data[0] = make([]interface{}, 3)
+
+		err = handleShowCreateDatabase(ses)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func Test_handleShowColumns(t *testing.T) {
+	convey.Convey("handleShowColumns succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		if err != nil {
+			t.Error(err)
+		}
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses.Data = make([][]interface{}, 1)
+		ses.Data[0] = make([]interface{}, primaryKeyPos+1)
+		ses.Data[0][0] = []byte("col1")
+		ses.Data[0][1] = int32(1)
+		ses.Data[0][2] = int8(2)
+		ses.Data[0][primaryKeyPos] = []byte("p")
+
+		ses.Mrs = &MysqlResultSet{}
+		err = handleShowColumns(ses)
+		convey.So(err, convey.ShouldBeNil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
