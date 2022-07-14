@@ -165,18 +165,28 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 }
 
 func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*deletion.Argument, error) {
-	dbSource, err := eg.Database(n.ObjRef.SchemaName, snapshot)
-	if err != nil {
-		return nil, err
+	count := len(n.DeleteTablesCtx)
+	ds := make([]*deletion.DeleteCtx, count)
+	for i := 0; i < count; i++ {
+
+		dbSource, err := eg.Database(n.DeleteTablesCtx[i].DbName, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		relation, err := dbSource.Relation(n.DeleteTablesCtx[i].TblName, snapshot)
+		if err != nil {
+			return nil, err
+		}
+
+		ds[i] = &deletion.DeleteCtx{
+			TableSource:  relation,
+			UseDeleteKey: n.DeleteTablesCtx[i].UseDeleteKey,
+			CanTruncate:  n.DeleteTablesCtx[i].CanTruncate,
+		}
 	}
-	relation, err := dbSource.Relation(n.TableDef.Name, snapshot)
-	if err != nil {
-		return nil, err
-	}
+
 	return &deletion.Argument{
-		TableSource:  relation,
-		UseDeleteKey: n.DeleteInfo.UseDeleteKey,
-		CanTruncate:  n.DeleteInfo.CanTruncate,
+		DeleteCtxs: ds,
 	}, nil
 }
 
