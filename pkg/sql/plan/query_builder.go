@@ -1039,6 +1039,9 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 		if i == len(stmt)-1 {
 			builder.ctxByNode[leftChildId] = ctx
 			err = ctx.mergeContexts(leftCtx, rightCtx)
+			if err != nil {
+				return 0, err
+			}
 		} else {
 			newCtx := NewBindContext(builder, ctx)
 			builder.ctxByNode[leftChildId] = newCtx
@@ -1442,7 +1445,6 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 			}
 
 			if joinSides[i]&JoinSideRight != 0 && canTurnInner && node.JoinType == plan.Node_LEFT && rejectsNull(filter) {
-				turnInner = true
 				for _, cond := range node.OnList {
 					filters = append(filters, splitPlanConjunction(applyDistributivity(cond))...)
 				}
