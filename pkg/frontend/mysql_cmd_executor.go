@@ -201,6 +201,7 @@ const (
 	attrNamePos   = 2
 	attrTypPos    = 3
 	charWidthPos  = 5
+	defaultPos    = 7
 	primaryKeyPos = 10
 )
 
@@ -218,7 +219,7 @@ func handleShowCreateTable(ses *Session) error {
 			continue
 		}
 		nullOrNot := ""
-		if d[7].(int8) != 0 {
+		if d[defaultPos].(int8) != 0 {
 			nullOrNot = "NOT NULL"
 		} else {
 			nullOrNot = "DEFAULT NULL"
