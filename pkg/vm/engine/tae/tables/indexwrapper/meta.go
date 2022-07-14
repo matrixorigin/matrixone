@@ -100,7 +100,6 @@ func (meta *IndexMeta) Unmarshal(buf []byte) error {
 	meta.Size = types.DecodeFixed[uint32](buf[:4])
 	buf = buf[4:]
 	meta.RawSize = types.DecodeFixed[uint32](buf[:4])
-	buf = buf[4:]
 	return nil
 }
 

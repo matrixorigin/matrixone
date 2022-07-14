@@ -47,6 +47,7 @@ func (n *bloomFilterNode) OnLoad() {
 	rawSize := stat.OriginSize()
 	buf := make([]byte, rawSize)
 	if err = Decompress(data, buf, CompressType(compressTyp)); err != nil {
+		panic(err)
 	}
 	n.impl, err = index.NewBinaryFuseFilterFromSource(buf)
 	if err != nil {
