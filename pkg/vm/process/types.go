@@ -91,6 +91,9 @@ type Process struct {
 	Lim Limitation
 	Mp  *mheap.Mheap
 
+	// unix timestamp
+	UnixTime int64
+
 	// snapshot is transaction context
 	Snapshot []byte
 
