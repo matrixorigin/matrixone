@@ -171,6 +171,10 @@ func TypeSize(oid T) int {
 	return oid.TypeLen()
 }
 
+func (t Type) TypeSize() int {
+	return t.Oid.TypeLen()
+}
+
 func (t Type) String() string {
 	return t.Oid.String()
 }

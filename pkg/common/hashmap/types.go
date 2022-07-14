@@ -12,20 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package deletion
+package hashmap
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+import "github.com/matrixorigin/matrixone/pkg/container/hashtable"
+
+const (
+	UnitLimit = 256
 )
 
-type Argument struct {
-	Ts           uint64
-	DeleteCtxs   []*DeleteCtx
-	AffectedRows uint64
-}
-
-type DeleteCtx struct {
-	TableSource  engine.Relation
-	UseDeleteKey string
-	CanTruncate  bool
+type HashMap struct {
+	rows          uint64
+	keys          [][]byte
+	values        []uint64
+	strHashStates [][3]uint64
+	hashMap       *hashtable.StringHashMap
 }
