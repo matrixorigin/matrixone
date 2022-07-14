@@ -197,7 +197,7 @@ func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (
 			if state == txnif.TxnStateRollbacked {
 				return true
 			} else if state == txnif.TxnStateUnknown {
-				err = txnif.TxnInternalErr
+				err = txnif.ErrTxnInternal
 				return false
 			}
 			// 3.1.2. Committed

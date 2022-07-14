@@ -32,8 +32,9 @@ import (
 )
 
 var (
-	errorTaeTxnBeginInBegan           = goErrors.New("begin txn in the began txn")
-	errorTaeTxnHasNotBeenBegan        = goErrors.New("the txn has not been began")
+	errorTaeTxnBeginInBegan = goErrors.New("begin txn in the began txn")
+	//used in future
+	//errorTaeTxnHasNotBeenBegan        = goErrors.New("the txn has not been began")
 	errorTaeTxnAutocommitInAutocommit = goErrors.New("start autocommit txn in the autocommit txn")
 	errorTaeTxnBeginInAutocommit      = goErrors.New("begin txn in the autocommit txn")
 	errorTaeTxnAutocommitInBegan      = goErrors.New("start autocommit txn in the txn has been began")
@@ -336,6 +337,10 @@ func (ses *Session) SetUserName(uname string) {
 	ses.protocol.SetUserName(uname)
 }
 
+func (ses *Session) GetConnectionID() uint32 {
+	return ses.protocol.ConnectionID()
+}
+
 func (th *TxnHandler) GetStorage() engine.Engine {
 	return th.storage
 }
@@ -387,6 +392,9 @@ func (th *TxnHandler) createTxn(beganErr, autocommitErr error) (moengine.Txn, er
 		case TxnInit, TxnEnd:
 			//begin a transaction
 			txn, err = taeEng.StartTxn(nil)
+			if err != nil {
+				logutil.Errorf("start tae txn error:%v", err)
+			}
 		case TxnBegan:
 			err = beganErr
 		case TxnAutocommit:
@@ -469,6 +477,9 @@ func (th *TxnHandler) commit(option int) error {
 		switch option {
 		case TxnCommitAfterBegan:
 			err = th.taeTxn.Commit()
+			if err != nil {
+				logutil.Errorf("commit tae txn error:%v", err)
+			}
 		case TxnCommitAfterAutocommit:
 			err = errorIsNotAutocommitTxn
 		case TxnCommitAfterAutocommitOnly:
@@ -482,12 +493,16 @@ func (th *TxnHandler) commit(option int) error {
 			err = errorIsNotBeginCommitTxn
 		case TxnCommitAfterAutocommit, TxnCommitAfterAutocommitOnly:
 			err = th.taeTxn.Commit()
+			if err != nil {
+				logutil.Errorf("commit tae txn error:%v", err)
+			}
 		}
 	case TxnInit, TxnEnd:
 		//Note:behaviors look like mysql
 		//err = errorTaeTxnHasNotBeenBegan
 	case TxnErr:
-		err = errorTaeTxnInIllegalState
+		//err = errorTaeTxnInIllegalState
+		switchTxnState = false
 	}
 
 	if switchTxnState {
@@ -538,6 +553,9 @@ func (th *TxnHandler) rollback(option int) error {
 		switch option {
 		case TxnRollbackAfterBeganAndAutocommit:
 			err = th.taeTxn.Rollback()
+			if err != nil {
+				logutil.Errorf("rollback tae txn error:%v", err)
+			}
 		case TxnRollbackAfterAutocommitOnly:
 			//if it is the txn started by BEGIN statement,
 			//we do not commit it.
@@ -547,12 +565,16 @@ func (th *TxnHandler) rollback(option int) error {
 		switch option {
 		case TxnRollbackAfterBeganAndAutocommit, TxnRollbackAfterAutocommitOnly:
 			err = th.taeTxn.Rollback()
+			if err != nil {
+				logutil.Errorf("rollback tae txn error:%v", err)
+			}
 		}
 	case TxnInit, TxnEnd:
 		//Note:behaviors look like mysql
 		//err = errorTaeTxnHasNotBeenBegan
 	case TxnErr:
-		err = errorTaeTxnInIllegalState
+		//err = errorTaeTxnInIllegalState
+		switchTxnState = false
 	}
 
 	if switchTxnState {
@@ -589,7 +611,7 @@ func (th *TxnHandler) CleanTxn() error {
 		th.taeTxn = InitTaeTxnDumpImpl()
 		th.txnState.switchToState(TxnInit, nil)
 	case TxnErr:
-		logutil.Errorf("clean txn. Get error:%v txnError:%v", th.txnState.getError(), th.taeTxn.GetError())
+		//logutil.Errorf("clean txn. Get error:%v txnError:%v", th.txnState.getError(), th.taeTxn.GetError())
 		th.taeTxn = InitTaeTxnDumpImpl()
 		th.txnState.switchToState(TxnInit, nil)
 	}
@@ -762,7 +784,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 		return nil
 	}
 
-	var priDefs []*plan2.ColDef = nil
+	priDefs := make([]*plan2.ColDef, 0, len(priKeys))
 	for _, key := range priKeys {
 		priDefs = append(priDefs, &plan2.ColDef{
 			Name: key.Name,

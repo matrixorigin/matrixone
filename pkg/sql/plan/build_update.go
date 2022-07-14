@@ -56,7 +56,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	}
 
 	// Check if update primary key
-	var updateAttrs []string = nil
+	updateAttrs := make([]string, 0, len(stmt.Exprs))
 	for _, expr := range stmt.Exprs {
 		if len(expr.Names) != 1 {
 			return nil, errors.New(errno.CaseNotFound, "the set list of update must be one")

@@ -384,12 +384,12 @@ func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *BaseEntry) 
 
 func (entry *SegmentEntry) DestroyData() (err error) {
 	if entry.segData != nil {
-		err = entry.segData.Destory()
+		err = entry.segData.Destroy()
 	}
 	return
 }
 
-// Coarse API: no consistency check
+// IsActive is coarse API: no consistency check
 func (entry *SegmentEntry) IsActive() bool {
 	table := entry.GetTable()
 	if !table.IsActive() {
