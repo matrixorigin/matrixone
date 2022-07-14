@@ -73,7 +73,9 @@ func (idx *mutableIndex) RevertUpsert(keys containers.Vector, updatePositions, u
 		for i := 0; i < len(posArr); i++ {
 			key := keys.Get(int(posArr[i]))
 			idx.deletes.RemoveOne(key, rowArr[i])
-			idx.art.Insert(key, rowArr[i])
+			if err = idx.art.Insert(key, rowArr[i]); err != nil {
+				return
+			}
 		}
 		idx.deletes.RemoveTs(ts)
 	}

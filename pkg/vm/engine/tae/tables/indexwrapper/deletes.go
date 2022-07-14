@@ -47,7 +47,9 @@ func (m *DeletesMap) LogDeletedKey(key any, row uint32, ts uint64) (err error) {
 }
 
 func (m *DeletesMap) RemoveOne(key any, row uint32) {
-	m.idx.DeleteOne(key, row)
+	if err := m.idx.DeleteOne(key, row); err != nil {
+		panic(err)
+	}
 }
 
 func (m *DeletesMap) RemoveTs(ts uint64) {
