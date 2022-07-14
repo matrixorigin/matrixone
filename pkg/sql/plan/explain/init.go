@@ -12,5 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// explain explain statment
+// explain explain statement
 package explain
