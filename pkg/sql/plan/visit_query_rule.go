@@ -21,51 +21,51 @@ import (
 )
 
 var (
-	_ Rule = &getArgRule{}
-	_ Rule = &resetArgRule{}
+	_ Rule = &getParamRule{}
+	_ Rule = &resetParamRule{}
 )
 
-type getArgRule struct {
+type getParamRule struct {
 	args map[int]int
 }
 
-func NewGetArgRule() getArgRule {
-	return getArgRule{
+func NewGetArgRule() getParamRule {
+	return getParamRule{
 		args: map[int]int{},
 	}
 }
 
-func (rule *getArgRule) Match(_ *Node) bool {
+func (rule *getParamRule) Match(_ *Node) bool {
 	return true
 }
 
-func (rule *getArgRule) Apply(node *Node, _ *Query) {
+func (rule *getParamRule) Apply(node *Node, _ *Query) {
 	if node.Limit != nil {
-		node.Limit = rule.getArg(node.Limit)
+		node.Limit = rule.getParam(node.Limit)
 	}
 
 	if node.Offset != nil {
-		node.Offset = rule.getArg(node.Offset)
+		node.Offset = rule.getParam(node.Offset)
 	}
 
 	for i := range node.OnList {
-		node.OnList[i] = rule.getArg(node.OnList[i])
+		node.OnList[i] = rule.getParam(node.OnList[i])
 	}
 
 	for i := range node.FilterList {
-		node.FilterList[i] = rule.getArg(node.FilterList[i])
+		node.FilterList[i] = rule.getParam(node.FilterList[i])
 	}
 
 	for i := range node.ProjectList {
-		node.ProjectList[i] = rule.getArg(node.ProjectList[i])
+		node.ProjectList[i] = rule.getParam(node.ProjectList[i])
 	}
 }
 
-func (rule *getArgRule) getArg(e *plan.Expr) *plan.Expr {
+func (rule *getParamRule) getParam(e *plan.Expr) *plan.Expr {
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
 		for i := range exprImpl.F.Args {
-			exprImpl.F.Args[i] = rule.getArg(exprImpl.F.Args[i])
+			exprImpl.F.Args[i] = rule.getParam(exprImpl.F.Args[i])
 		}
 		return e
 	case *plan.Expr_P:
@@ -76,7 +76,7 @@ func (rule *getArgRule) getArg(e *plan.Expr) *plan.Expr {
 	}
 }
 
-func (rule *getArgRule) SetArgOrder() {
+func (rule *getParamRule) SetParamOrder() {
 	argPos := []int{}
 	for pos := range rule.args {
 		argPos = append(argPos, pos)
@@ -89,21 +89,21 @@ func (rule *getArgRule) SetArgOrder() {
 
 // ---------------------------
 
-type resetArgRule struct {
+type resetParamRule struct {
 	args map[int]int
 }
 
-func NewResetArgRule(args map[int]int) resetArgRule {
-	return resetArgRule{
+func NewResetArgRule(args map[int]int) resetParamRule {
+	return resetParamRule{
 		args: args,
 	}
 }
 
-func (rule *resetArgRule) Match(_ *Node) bool {
+func (rule *resetParamRule) Match(_ *Node) bool {
 	return true
 }
 
-func (rule *resetArgRule) Apply(node *Node, qry *Query) {
+func (rule *resetParamRule) Apply(node *Node, qry *Query) {
 
 	if node.Limit != nil {
 		node.Limit = rule.setOrder(node.Limit)
@@ -126,7 +126,7 @@ func (rule *resetArgRule) Apply(node *Node, qry *Query) {
 	}
 }
 
-func (rule *resetArgRule) setOrder(e *plan.Expr) *plan.Expr {
+func (rule *resetParamRule) setOrder(e *plan.Expr) *plan.Expr {
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
 		for i := range exprImpl.F.Args {

@@ -168,7 +168,9 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 
 func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	return &Expr{
-		Typ: &plan.Type{},
+		Typ: &plan.Type{
+			Id: plan.Type_ANY,
+		},
 		Expr: &plan.Expr_P{
 			P: &plan.ParamRef{
 				Pos: int32(astExpr.Offset),

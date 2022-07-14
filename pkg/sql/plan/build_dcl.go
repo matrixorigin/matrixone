@@ -77,7 +77,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		}
 
 		// set arg order
-		getArgRule.SetArgOrder()
+		getArgRule.SetParamOrder()
 		args := getArgRule.args
 
 		// set arg order
