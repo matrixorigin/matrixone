@@ -409,7 +409,6 @@ func rejectsNull(filter *plan.Expr) bool {
 	if err != nil {
 		return false
 	}
-
 	if nulls.Any(vec.Nsp) {
 		return true
 	}

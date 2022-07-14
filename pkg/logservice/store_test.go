@@ -130,7 +130,7 @@ func TestReplicaCanBeStopped(t *testing.T) {
 		assert.NoError(t, store.close())
 	}()
 	mustHaveReplica(t, store, 1, 2)
-	store.stopReplica(1, 2)
+	require.NoError(t, store.stopReplica(1, 2))
 	assert.False(t, hasReplica(store, 1, 2))
 }
 

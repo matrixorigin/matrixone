@@ -56,7 +56,7 @@ func TestBitLength(t *testing.T) {
 		{
 			name:     "Null",
 			proc:     procs,
-			expected: []int64{},
+			expected: []int64{0},
 			isScalar: true,
 		},
 	}

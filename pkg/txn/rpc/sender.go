@@ -54,15 +54,19 @@ func WithSenderLocalDispatch(localDispatch LocalDispatch) SenderOption {
 }
 
 type sender struct {
-	logger          *zap.Logger
-	client          morpc.RPCClient
-	localStreamPool sync.Pool
+	logger *zap.Logger
+	client morpc.RPCClient
 
 	options struct {
 		localDispatch         LocalDispatch
 		payloadCopyBufferSize int
 		backendCreateOptions  []morpc.BackendOption
 		clientOptions         []morpc.ClientOption
+	}
+
+	pool struct {
+		resultPool      sync.Pool
+		localStreamPool sync.Pool
 	}
 }
 
@@ -75,15 +79,24 @@ func NewSender(logger *zap.Logger, options ...SenderOption) (TxnSender, error) {
 	}
 	s.adjust()
 
-	codec := morpc.NewMessageCodec(func() morpc.Message { return &txn.TxnResponse{} }, s.options.payloadCopyBufferSize)
+	codec := morpc.NewMessageCodec(func() morpc.Message { return &txn.TxnResponse{} },
+		s.options.payloadCopyBufferSize)
 	bf := morpc.NewGoettyBasedBackendFactory(codec, s.options.backendCreateOptions...)
 	client, err := morpc.NewClient(bf, s.options.clientOptions...)
 	if err != nil {
 		return nil, err
 	}
 	s.client = client
-	s.localStreamPool.New = func() any {
+	s.pool.localStreamPool.New = func() any {
 		return newLocalStream(s.releaseLocalStream)
+	}
+	s.pool.resultPool.New = func() any {
+		rs := &SendResult{
+			Responses: make([]txn.TxnResponse, 16),
+			size:      16,
+			pool:      &s.pool.resultPool,
+		}
+		return rs
 	}
 	return s, nil
 }
@@ -103,18 +116,22 @@ func (s *sender) Close() error {
 	return s.client.Close()
 }
 
-func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) ([]txn.TxnResponse, error) {
+func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResult, error) {
 	s.mustSetupTimeoutAt(ctx, requests)
 
+	rs := s.acquireSendResult()
 	if len(requests) == 1 {
+		rs.reset(1)
 		resp, err := s.doSend(ctx, requests[0])
 		if err != nil {
+			rs.Release()
 			return nil, err
 		}
-		return []txn.TxnResponse{resp}, nil
+		rs.Responses[0] = resp
+		return rs, nil
 	}
 
-	responses := make([]txn.TxnResponse, len(requests))
+	rs.reset(len(requests))
 	executors := make(map[string]*executor, len(requests))
 	defer func() {
 		for dn, st := range executors {
@@ -137,23 +154,26 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) ([]txn.Txn
 				if h := s.options.localDispatch(dn); h != nil {
 					local = true
 					ls := s.acquireLocalStream()
-					ls.setup(ctx, responses, h)
+					ls.setup(ctx, rs.Responses, h)
 					local = true
 					st = ls
 				}
 			}
 			if err != nil {
+				rs.Release()
 				return nil, err
 			}
 			if st == nil {
 				st, err = s.client.NewStream(dn.Address, len(requests))
 				if err != nil {
+					rs.Release()
 					return nil, err
 				}
 			}
 
-			exec, err = newExecutor(ctx, responses, st, local)
+			exec, err = newExecutor(ctx, rs.Responses, st, local)
 			if err != nil {
+				rs.Release()
 				return nil, err
 			}
 			executors[dn.Address] = exec
@@ -161,16 +181,18 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) ([]txn.Txn
 
 		req.RequestID = exec.stream.ID()
 		if err := exec.execute(req, idx); err != nil {
+			rs.Release()
 			return nil, err
 		}
 	}
 
 	for _, se := range executors {
 		if err := se.waitCompleted(); err != nil {
+			rs.Release()
 			return nil, err
 		}
 	}
-	return responses, nil
+	return rs, nil
 }
 
 func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnResponse, error) {
@@ -207,11 +229,15 @@ func (s *sender) mustSetupTimeoutAt(ctx context.Context, requests []txn.TxnReque
 }
 
 func (s *sender) acquireLocalStream() *localStream {
-	return s.localStreamPool.Get().(*localStream)
+	return s.pool.localStreamPool.Get().(*localStream)
 }
 
 func (s *sender) releaseLocalStream(ls *localStream) {
-	s.localStreamPool.Put(ls)
+	s.pool.localStreamPool.Put(ls)
+}
+
+func (s *sender) acquireSendResult() *SendResult {
+	return s.pool.resultPool.Get().(*SendResult)
 }
 
 type executor struct {
@@ -323,4 +349,23 @@ func (ls *localStream) Close() error {
 		ls.releaseFunc(ls)
 	}
 	return nil
+}
+
+func (sr *SendResult) reset(size int) {
+	if sr.size < size {
+		sr.Responses = make([]txn.TxnResponse, size)
+	} else {
+		for i := 0; i < size; i++ {
+			sr.Responses = append(sr.Responses, txn.TxnResponse{})
+		}
+	}
+	sr.count = size
+}
+
+// Release release send result
+func (sr *SendResult) Release() {
+	if sr.pool != nil {
+		sr.Responses = sr.Responses[:0]
+		sr.pool.Put(sr)
+	}
 }

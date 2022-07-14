@@ -3,4 +3,4 @@
 | Name | Description|
 |---|-----|
 | [CASE](case.md) | Case operator |
-| [IF()](operators/function_if.md) | If/else construct |
+| [IF()](function_if.md) | If/else construct |
