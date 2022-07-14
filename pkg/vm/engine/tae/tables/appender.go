@@ -83,7 +83,7 @@ func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (err error) {
 			keysCtx.Start = 0
 			keysCtx.Count = bat.Length()
 			// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
-			err = appender.node.block.index.BatchUpsert(keysCtx, from, 0)
+			_, err = appender.node.block.index.BatchUpsert(keysCtx, from, 0)
 			if err != nil {
 				panic(err)
 			}
@@ -121,7 +121,7 @@ func (appender *blockAppender) ApplyAppend(
 			keysCtx.Start = 0
 			keysCtx.Count = bat.Length()
 			// logutil.Infof("Append into %s: %s", appender.node.block.meta.Repr(), keysCtx.Keys.String())
-			err = appender.node.block.index.BatchUpsert(keysCtx, from, txn.GetStartTS())
+			_, err = appender.node.block.index.BatchUpsert(keysCtx, from, txn.GetStartTS())
 			if err != nil {
 				panic(err)
 			}
