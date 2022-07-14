@@ -661,6 +661,13 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 	}
 	nhi := l.nh.GetNodeHostInfo(opts)
 	for _, ci := range nhi.ShardInfoList {
+		if ci.Pending {
+			plog.Infof("skipping a ci")
+			continue
+		}
+		if ci.ConfigChangeIndex == 0 {
+			panic("ci.ConfigChangeIndex is 0")
+		}
 		replicaInfo := pb.LogReplicaInfo{
 			LogShardInfo: pb.LogShardInfo{
 				ShardID:  ci.ShardID,
