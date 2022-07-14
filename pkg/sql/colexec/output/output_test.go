@@ -73,21 +73,27 @@ func TestString(t *testing.T) {
 
 func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
-		Prepare(tc.proc, tc.arg)
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
 	}
 }
 
 func TestOutput(t *testing.T) {
 	for _, tc := range tcs {
-		Prepare(tc.proc, tc.arg)
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		Call(tc.proc, tc.arg)
+		_, err = Call(tc.proc, tc.arg)
+		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		Call(tc.proc, tc.arg)
+		_, err = Call(tc.proc, tc.arg)
+		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = &batch.Batch{}
-		Call(tc.proc, tc.arg)
+		_, err = Call(tc.proc, tc.arg)
+		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = nil
-		Call(tc.proc, tc.arg)
+		_, err = Call(tc.proc, tc.arg)
+		require.NoError(t, err)
 		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
 	}
 }
