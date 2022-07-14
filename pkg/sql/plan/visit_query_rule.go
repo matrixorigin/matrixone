@@ -93,7 +93,7 @@ type resetParamRule struct {
 	args map[int]int
 }
 
-func NewResetArgRule(args map[int]int) resetParamRule {
+func NewResetParamRule(args map[int]int) resetParamRule {
 	return resetParamRule{
 		args: args,
 	}

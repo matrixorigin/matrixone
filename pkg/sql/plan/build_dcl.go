@@ -81,7 +81,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		args := getArgRule.args
 
 		// set arg order
-		resetArgRule := NewResetArgRule(args)
+		resetArgRule := NewResetParamRule(args)
 		VisitQuery = NewVisitQuery(pp.Query, &resetArgRule)
 		pp.Query, err = VisitQuery.Visit()
 		if err != nil {
