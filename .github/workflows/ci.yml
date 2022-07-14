@@ -329,7 +329,7 @@ jobs:
         id: bvt_on_pr_version
         run: |
           sudo systemsetup -settimezone "Asia/Shanghai"
-          sleep 60s
+          sleep 60
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
 
