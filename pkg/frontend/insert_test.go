@@ -614,17 +614,6 @@ func Test_makeExprFromVal(t *testing.T) {
 		convey.So(tmp.Negative(), convey.ShouldBeFalse)
 	})
 
-	convey.Convey("makeExprFromVal timestamp", t, func() {
-		typ.Oid = types.T_timestamp
-		value = types.Timestamp(100)
-		ret = makeExprFromVal(typ, value, isNull)
-		tmp, ok := ret.(*tree.NumVal)
-		convey.So(ok, convey.ShouldBeTrue)
-		convey.So(tmp.Value, convey.ShouldResemble, constant.MakeString("0001-01-01 08:00:00"))
-		convey.So(tmp.String(), convey.ShouldEqual, "0001-01-01 08:00:00")
-		convey.So(tmp.Negative(), convey.ShouldBeFalse)
-	})
-
 	convey.Convey("makeExprFromVal decimal64", t, func() {
 		typ.Oid = types.T_decimal64
 		value = types.Decimal64(100)
@@ -1471,12 +1460,6 @@ func Test_buildConstantValue(t *testing.T) {
 		convey.So(ret, convey.ShouldBeNil)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		num = tree.NewNumVal(constant.MakeString("2022-07-13 11:11:11.1234"), "2022-07-13 11:11:11.1234", false)
-		typ.Oid = types.T_timestamp
-		ret, err = buildConstantValue(typ, num)
-		convey.So(ret, convey.ShouldEqual, types.Timestamp(66892100975722496))
-		convey.So(err, convey.ShouldBeNil)
-
 		num = tree.NewNumVal(constant.MakeString("2022-07-130 11:11:11.1234"), "2022-07-130 11:11:11.1234", false)
 		ret, err = buildConstantValue(typ, num)
 		convey.So(ret, convey.ShouldBeNil)
@@ -1485,6 +1468,7 @@ func Test_buildConstantValue(t *testing.T) {
 
 	convey.Convey("buildConstantValue Complex", t, func() {
 		num = tree.NewNumVal(constant.MakeImag(constant.MakeInt64(1)), "123", false)
+		ret, err = buildConstantValue(typ, num)
 		convey.So(ret, convey.ShouldBeNil)
 		convey.So(err, convey.ShouldNotBeNil)
 	})

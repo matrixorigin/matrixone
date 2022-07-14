@@ -295,7 +295,7 @@ func handleShowCreateDatabase(ses *Session) error {
 /*
 handle show columns from table in plan2 and tae
 */
-func handleShowColumns2(ses *Session) error {
+func handleShowColumns(ses *Session) error {
 	for _, d := range ses.Data {
 		row := make([]interface{}, 6)
 		colName := string(d[0].([]byte))
@@ -1711,7 +1711,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 					goto handleFailed
 				}
 			} else if ses.showStmtType == ShowColumns {
-				if err = handleShowColumns2(ses); err != nil {
+				if err = handleShowColumns(ses); err != nil {
 					goto handleFailed
 				}
 			}
