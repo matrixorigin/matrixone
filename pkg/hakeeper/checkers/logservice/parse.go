@@ -94,11 +94,7 @@ func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired util.Stor
 			if _, ok := fixing.replicas[id]; ok {
 				continue
 			}
-			rep := replica{
-				uuid:      util.StoreID(uuid),
-				shardID:   shardID,
-				replicaID: id,
-			}
+			rep := replica{uuid: util.StoreID(uuid), shardID: shardID, replicaID: id}
 			toRemove = append(toRemove, rep)
 		}
 
@@ -107,11 +103,7 @@ func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired util.Stor
 			store := infos.Stores[uuid]
 			// Check dangling
 			if !replicaStarted(shardID, store.Replicas) {
-				rep := replica{
-					uuid:      util.StoreID(uuid),
-					shardID:   shardID,
-					replicaID: id,
-				}
+				rep := replica{uuid: util.StoreID(uuid), shardID: shardID, replicaID: id}
 				toStart = append(toStart, rep)
 			}
 		}
@@ -128,10 +120,12 @@ func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired util.Stor
 	for uuid, storeInfo := range infos.Stores {
 		toStop := make([]replica, 0)
 		for _, replicaInfo := range storeInfo.Replicas {
-			if replicaInfo.Epoch < infos.Shards[replicaInfo.ShardID].Epoch {
-				toStop = append(toStop, replica{uuid: util.StoreID(uuid),
-					shardID: replicaInfo.ShardID})
+			_, ok := infos.Shards[replicaInfo.ShardID].Replicas[replicaInfo.ReplicaID]
+			if ok || replicaInfo.Epoch >= infos.Shards[replicaInfo.ShardID].Epoch {
+				continue
 			}
+			toStop = append(toStop, replica{uuid: util.StoreID(uuid),
+				shardID: replicaInfo.ShardID})
 		}
 		collect.toStop = append(collect.toStop, toStop...)
 	}
