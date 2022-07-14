@@ -328,8 +328,7 @@ jobs:
       - name: Start BVT Test
         id: bvt_on_pr_version
         run: |
-          timedatectl status
-          sudo timedatectl set-timezone "Asia/Shanghai"
+          sudo systemsetup -settimezone "Asia/Shanghai"
           timedatectl status
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-tester
