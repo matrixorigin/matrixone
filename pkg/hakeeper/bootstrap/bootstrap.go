@@ -19,15 +19,19 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"go.uber.org/zap"
 )
 
 type Manager struct {
 	cluster pb.ClusterInfo
+
+	logger *zap.Logger
 }
 
-func NewBootstrapManager(cluster pb.ClusterInfo) *Manager {
+func NewBootstrapManager(cluster pb.ClusterInfo, logger *zap.Logger) *Manager {
 	var dnShard []metadata.DNShardRecord
 	var logShard []metadata.LogShardRecord
 
@@ -46,6 +50,7 @@ func NewBootstrapManager(cluster pb.ClusterInfo) *Manager {
 			DNShards:  dnShard,
 			LogShards: logShard,
 		},
+		logger: logutil.Adjust(logger).Named("hakeeper"),
 	}
 
 	return manager
@@ -59,7 +64,14 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 		return nil, err
 	}
 
-	return append(logCommands, dnCommands...), nil
+	commands := append(logCommands, dnCommands...)
+	for _, command := range commands {
+		bm.logger.Info("schedule command generated", zap.String("command", command.LogString()))
+	}
+	if len(commands) != 0 {
+		bm.logger.Info("bootstrap commands generated")
+	}
+	return commands, nil
 }
 
 func (bm *Manager) bootstrapLogService(alloc util.IDAllocator,

@@ -187,6 +187,14 @@ func NewWithSize(n int) *Batch {
 	}
 }
 
+func (bat *Batch) ExpandNulls() {
+	if len(bat.Zs) > 0 {
+		for i := range bat.Vecs {
+			bat.Vecs[i].TryExpandNulls(len(bat.Zs))
+		}
+	}
+}
+
 func (bat *Batch) Shrink(sels []int64) {
 	mp := make(map[*vector.Vector]uint8)
 	for _, vec := range bat.Vecs {

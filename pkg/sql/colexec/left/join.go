@@ -419,6 +419,7 @@ func (ctr *Container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 		}
 	}
+	rbat.ExpandNulls()
 	proc.Reg.InputBatch = rbat
 	return nil
 }
@@ -570,6 +571,7 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 		}
 	}
+	rbat.ExpandNulls()
 	proc.Reg.InputBatch = rbat
 	return nil
 }

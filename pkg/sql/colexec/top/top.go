@@ -184,6 +184,7 @@ func (ctr *Container) eval(limit int64, proc *process.Process) error {
 		vector.Clean(ctr.bat.Vecs[i], proc.Mp)
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
+	ctr.bat.ExpandNulls()
 	proc.Reg.InputBatch = ctr.bat
 	ctr.bat = nil
 	return nil

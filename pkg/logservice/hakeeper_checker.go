@@ -27,9 +27,7 @@ const (
 	minIDAllocCapacity uint64 = 1024
 	defaultIDBatchSize uint64 = 1024 * 10
 
-	hakeeperDefaultTimeout   = 2 * time.Second
-	hakeeperCmdUploadTimeout = 10 * time.Second
-
+	hakeeperDefaultTimeout = 2 * time.Second
 	checkBootstrapInterval = 100
 )
 
@@ -185,7 +183,7 @@ func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
 			return
 		}
 		l.bootstrapCheckInterval = checkBootstrapInterval
-		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo)
+		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo, nil)
 		l.assertHAKeeperState(pb.HAKeeperBootstrapCommandsReceived)
 	}
 }
@@ -199,7 +197,7 @@ func (l *store) checkBootstrap(state *pb.CheckerState) {
 	}
 
 	if l.bootstrapMgr == nil {
-		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo)
+		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo, nil)
 	}
 	if !l.bootstrapMgr.CheckBootstrap(state.LogState) {
 		l.bootstrapCheckInterval--
@@ -246,6 +244,6 @@ func (l *store) getScheduleCommand(check bool,
 		return l.checker.Check(l.alloc,
 			state.ClusterInfo, state.DNState, state.LogState, state.Tick), nil
 	}
-	m := bootstrap.NewBootstrapManager(state.ClusterInfo)
+	m := bootstrap.NewBootstrapManager(state.ClusterInfo, nil)
 	return m.Bootstrap(l.alloc, state.DNState, state.LogState)
 }
