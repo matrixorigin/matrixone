@@ -28,10 +28,11 @@ type ObjectFile struct {
 
 func openObjectFile(fs *ObjectFS, name string) *ObjectFile {
 	inode := &Inode{
-		magic: MAGIC,
-		inode: fs.lastInode,
-		typ:   FILE,
-		name:  name,
+		magic:  MAGIC,
+		inode:  fs.lastInode,
+		typ:    FILE,
+		name:   name,
+		create: fs.seq,
 	}
 	file := &ObjectFile{}
 	file.fs = fs
@@ -68,7 +69,7 @@ func (b *ObjectFile) Stat() common.FileInfo {
 	stat := &objectFileStat{}
 	stat.size = int64(b.inode.size)
 	stat.dataSize = int64(b.inode.dataSize)
-	stat.algo =b.fs.attr.algo
+	stat.algo = b.fs.attr.algo
 	stat.oType = b.inode.typ
 	return stat
 }
