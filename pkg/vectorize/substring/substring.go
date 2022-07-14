@@ -363,19 +363,6 @@ func min(x, y int64) int64 {
 	return y
 }
 
-// get src string value of column by index
-func getStrColumnValue(src *types.Bytes, cursor uint32, curLen uint32, isConstant bool) []byte {
-	var dstValue []byte
-	if isConstant {
-		cursor0 := src.Offsets[0]
-		curLen0 := src.Lengths[0]
-		dstValue = src.Data[cursor0 : cursor0+curLen0]
-	} else {
-		dstValue = src.Data[cursor : cursor+curLen]
-	}
-	return dstValue
-}
-
 // get value of column by index
 func getColumnValue(srcColumn interface{}, columnType types.T, idx int, isConsttant bool) int64 {
 	var dstValue int64

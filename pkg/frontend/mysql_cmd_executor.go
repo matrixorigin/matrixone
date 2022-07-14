@@ -49,12 +49,9 @@ import (
 )
 
 var (
-	errorDatabaseIsNull                            = goErrors.New("the database name is an empty string")
-	errorNoSuchGlobalSystemVariable                = goErrors.New("there is no such global system variable")
 	errorComplicateExprIsNotSupported              = goErrors.New("the complicate expression is not supported")
 	errorNumericTypeIsNotSupported                 = goErrors.New("the numeric type is not supported")
 	errorUnaryMinusForNonNumericTypeIsNotSupported = goErrors.New("unary minus for no numeric type is not supported")
-	errorFunctionIsNotSupported                    = goErrors.New("function is not supported")
 )
 
 //tableInfos of a database
@@ -769,7 +766,7 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 handle Load DataSource statement
 */
 func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
-	var err error = nil
+	var err error
 	ses := mce.GetSession()
 	proto := ses.protocol
 
@@ -864,7 +861,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 handle cmd CMD_FIELD_LIST
 */
 func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
-	var err error = nil
+	var err error
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 
@@ -1058,7 +1055,7 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 		sysVars = ses.CopyAllSessionVars()
 	}
 
-	var rows [][]interface{}
+	rows := make([][]interface{}, 0, len(sysVars))
 	for name, value := range sysVars {
 		if hasLike && !WildcardMatch(likePattern, name) {
 			continue
@@ -1481,7 +1478,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	var cmpBegin time.Time
 	var ret interface{}
 	var runner ComputationRunner
-	var selfHandle = false
+	var selfHandle bool
 	var fromLoadData = false
 	var txnErr error
 	var rspLen uint64
@@ -1604,7 +1601,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			}
 			//goto handleFailed
 		case *tree.ExplainAnalyze:
-			selfHandle = true
 			err = errors.New(errno.FeatureNotSupported, "not support explain analyze statement now")
 			goto handleFailed
 		case *tree.ShowColumns:
