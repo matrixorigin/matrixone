@@ -268,8 +268,8 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeID int32, ctx *BindC
 	var err error
 
 	var subPreds []*plan.Expr
-	for i, childId := range node.Children {
-		node.Children[i], subPreds, err = builder.pullupCorrelatedPredicates(childId, ctx)
+	for i, childID := range node.Children {
+		node.Children[i], subPreds, err = builder.pullupCorrelatedPredicates(childID, ctx)
 		if err != nil {
 			return 0, nil, err
 		}

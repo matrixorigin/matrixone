@@ -154,8 +154,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		internalMap := make(map[[2]int32][2]int32)
 
-		leftId := node.Children[0]
-		leftRemapping, err := builder.remapAllColRefs(leftId, colRefCnt)
+		leftID := node.Children[0]
+		leftRemapping, err := builder.remapAllColRefs(leftID, colRefCnt)
 		if err != nil {
 			return nil, err
 		}
@@ -182,7 +182,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			}
 		}
 
-		childProjList := builder.qry.Nodes[leftId].ProjectList
+		childProjList := builder.qry.Nodes[leftID].ProjectList
 		for i, globalRef := range leftRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
 				continue
@@ -247,7 +247,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			remapping.addColRef(leftRemapping.localToGlobal[0])
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: builder.qry.Nodes[leftId].ProjectList[0].Typ,
+				Typ: builder.qry.Nodes[leftID].ProjectList[0].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -1039,6 +1039,9 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 		if i == len(stmt)-1 {
 			builder.ctxByNode[leftChildID] = ctx
 			err = ctx.mergeContexts(leftCtx, rightCtx)
+			if err != nil {
+				return 0, err
+			}
 		} else {
 			newCtx := NewBindContext(builder, ctx)
 			builder.ctxByNode[leftChildID] = newCtx
@@ -1442,7 +1445,6 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 			}
 
 			if joinSides[i]&JoinSideRight != 0 && canTurnInner && node.JoinType == plan.Node_LEFT && rejectsNull(filter) {
-				turnInner = true
 				for _, cond := range node.OnList {
 					filters = append(filters, splitPlanConjunction(applyDistributivity(cond))...)
 				}
