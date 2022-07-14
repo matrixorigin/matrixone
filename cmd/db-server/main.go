@@ -15,6 +15,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -23,6 +24,7 @@ import (
 
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 
@@ -68,6 +70,14 @@ func createMOServer() {
 		metric.InitMetric(ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
 	}
 	frontend.InitServerVersion(MoVersion)
+	if config.GlobalSystemVariables.GetEnableTrace() {
+		if _, err := trace.Init(context.Background(),
+			trace.WithMOVersion(MoVersion),
+			trace.WithNode(config.GlobalSystemVariables.GetNodeID(), trace.SpanKindDN),
+		); err != nil {
+			panic(err)
+		}
+	}
 }
 
 func runMOServer() error {

@@ -14,27 +14,23 @@
 
 package trace
 
-import "expvar"
-
-type Resource struct {
-	elems []expvar.KeyValue
-}
+type Resource map[string]any
 
 type SpanKind int
 
 const (
-	NodeTypeCN SpanKind = iota
-	NodeTypeDN
-	NodeTypeLogService
+	SpanKindCN SpanKind = iota
+	SpanKindDN
+	SpanKindLogService
 )
 
 func (t SpanKind) String() string {
 	switch t {
-	case NodeTypeCN:
+	case SpanKindCN:
 		return "CN"
-	case NodeTypeDN:
+	case SpanKindDN:
 		return "DN"
-	case NodeTypeLogService:
+	case SpanKindLogService:
 		return "LogService"
 	default:
 		return "Unknown"

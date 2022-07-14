@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"time"
 )
@@ -86,6 +87,10 @@ func (tf TraceFlags) String() string {
 	return hex.EncodeToString([]byte{byte(tf)}[:])
 }
 
+type MOLogLevel int
+
+var _ batchpipe.HasName = &MOLogModel{}
+
 type MOLogModel struct {
 	statementId uint64
 	spanId      uint64
@@ -96,9 +101,9 @@ type MOLogModel struct {
 	logLine     string
 }
 
-type MOLogLevel int
-
-type SpanType int
+func (MOLogModel) GetName() string {
+	return "MOLogModel"
+}
 
 var gTracerProvider *MOTracerProvider
 var gTracer Tracer

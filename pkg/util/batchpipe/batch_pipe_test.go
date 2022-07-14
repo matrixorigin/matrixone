@@ -121,6 +121,8 @@ func (b *posBuf) GetBatch(buf *bytes.Buffer) string {
 	return buf.String()
 }
 
+var _ PipeImpl[*TestItem, string] = &testCollector{}
+
 type testCollector struct {
 	sync.Mutex
 	*BaseBatchPipe[*TestItem, string]

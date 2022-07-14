@@ -16,6 +16,7 @@ package trace
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"sync"
 
@@ -34,7 +35,7 @@ type MOTracer struct {
 
 func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (context.Context, Span) {
 	span := t.spanPool.Get().(*MOSpan)
-	opts = append(opts, WithNodeResource(t.node))
+	opts = append(opts, withNodeResource(t.node))
 	span.init(name, opts...)
 
 	parent := SpanFromContext(ctx)
@@ -64,19 +65,8 @@ func SpanContextWithID(id TraceID) SpanContext {
 }
 
 type MONodeResource struct {
-	nodeId   string
-	nodeType SpanType
-}
-
-var _ Span = &MOSpan{}
-
-type MOSpan struct {
-	SpanConfig
-	name        string
-	startTimeNS util.TimeNano
-	duration    util.TimeNano
-
-	tracer *MOTracer
+	NodeID   int64
+	NodeType SpanKind
 }
 
 // SpanConfig is a group of options for a Span.
@@ -123,7 +113,7 @@ func WithNewRoot(newRoot bool) spanOptionFunc {
 	})
 }
 
-func WithNodeResource(r *MONodeResource) spanOptionFunc {
+func withNodeResource(r *MONodeResource) spanOptionFunc {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.Node = r
 	})
@@ -133,6 +123,22 @@ func WithRemote(remote bool) spanOptionFunc {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.remote = remote
 	})
+}
+
+var _ Span = &MOSpan{}
+var _ batchpipe.HasName = &MOSpan{}
+
+type MOSpan struct {
+	SpanConfig
+	name        string
+	startTimeNS util.TimeNano
+	duration    util.TimeNano
+
+	tracer *MOTracer
+}
+
+func (s *MOSpan) GetName() string {
+	return "MOSpan"
 }
 
 func (s *MOSpan) init(name string, opts ...SpanOption) {
@@ -148,6 +154,7 @@ func (s *MOSpan) End(options ...SpanEndOption) {
 	s.duration = util.NowNS() - s.startTimeNS
 
 	//TODO implement me: cooperate with Exporter
+
 	panic("implement me")
 }
 

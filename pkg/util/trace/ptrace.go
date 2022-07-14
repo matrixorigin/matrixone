@@ -78,7 +78,7 @@ type tracerProviderConfig struct {
 	idGenerator IDGenerator
 
 	// resource contains attributes representing an entity that produces telemetry.
-	resource *Resource
+	resource Resource
 
 	enableTracer bool
 
@@ -90,6 +90,28 @@ type TracerProviderOption interface {
 	apply(*tracerProviderConfig)
 }
 
+type tracerProviderOptionFunc func(config *tracerProviderConfig)
+
+func (f tracerProviderOptionFunc) apply(config *tracerProviderConfig) {
+	f(config)
+}
+
+func WithMOVersion(v string) tracerProviderOptionFunc {
+	return func(config *tracerProviderConfig) {
+		config.resource["version"] = v
+	}
+}
+
+// WithNode give id as NodeId, t as NodeType
+func WithNode(id int64, t SpanKind) tracerProviderOptionFunc {
+	return func(cfg *tracerProviderConfig) {
+		cfg.resource["node"] = &MONodeResource{
+			NodeID:   id,
+			NodeType: t,
+		}
+	}
+}
+
 var _ TracerProvider = &MOTracerProvider{}
 
 type MOTracerProvider struct {
@@ -97,11 +119,12 @@ type MOTracerProvider struct {
 }
 
 func newMOTracerProvider(opts ...TracerProviderOption) *MOTracerProvider {
-	ptracer := &MOTracerProvider{}
+	pTracer := &MOTracerProvider{}
+	pTracer.resource = make(Resource)
 	for _, opt := range opts {
-		opt.apply(&ptracer.tracerProviderConfig)
+		opt.apply(&pTracer.tracerProviderConfig)
 	}
-	return ptracer
+	return pTracer
 }
 
 func (p *MOTracerProvider) Tracer(instrumentationName string, opts ...TracerOption) Tracer {
