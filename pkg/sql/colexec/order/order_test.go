@@ -65,27 +65,29 @@ func TestString(t *testing.T) {
 
 func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
-		Prepare(tc.proc, tc.arg)
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
 	}
 }
 
 func TestOrder(t *testing.T) {
 	for _, tc := range tcs {
-		Prepare(tc.proc, tc.arg)
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		Call(tc.proc, tc.arg)
+		_, _ = Call(tc.proc, tc.arg)
 		if tc.proc.Reg.InputBatch != nil {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 		}
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		Call(tc.proc, tc.arg)
+		_, _ = Call(tc.proc, tc.arg)
 		if tc.proc.Reg.InputBatch != nil {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 		}
 		tc.proc.Reg.InputBatch = &batch.Batch{}
-		Call(tc.proc, tc.arg)
+		_, _ = Call(tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = nil
-		Call(tc.proc, tc.arg)
+		_, _ = Call(tc.proc, tc.arg)
 		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
 	}
 }
@@ -100,21 +102,22 @@ func BenchmarkOrder(b *testing.B) {
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
-			Prepare(tc.proc, tc.arg)
+			err := Prepare(tc.proc, tc.arg)
+			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, BenchmarkRows)
-			Call(tc.proc, tc.arg)
+			_, _ = Call(tc.proc, tc.arg)
 			if tc.proc.Reg.InputBatch != nil {
 				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 			}
 			tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, BenchmarkRows)
-			Call(tc.proc, tc.arg)
+			_, _ = Call(tc.proc, tc.arg)
 			if tc.proc.Reg.InputBatch != nil {
 				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 			}
 			tc.proc.Reg.InputBatch = &batch.Batch{}
-			Call(tc.proc, tc.arg)
+			_, _ = Call(tc.proc, tc.arg)
 			tc.proc.Reg.InputBatch = nil
-			Call(tc.proc, tc.arg)
+			_, _ = Call(tc.proc, tc.arg)
 		}
 	}
 }
