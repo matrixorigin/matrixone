@@ -544,7 +544,7 @@ func TestRollback(t *testing.T) {
 }
 
 func writeTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, wTxn txn.TxnMeta, keys ...byte) []txn.TxnResponse {
-	var requests []txn.TxnRequest
+	requests := make([]txn.TxnRequest, 0, len(keys))
 	for _, k := range keys {
 		requests = append(requests, newTestWriteRequest(k, wTxn, toShard))
 	}
@@ -584,7 +584,7 @@ func rollbackWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []t
 }
 
 func readTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, rTxn txn.TxnMeta, keys ...byte) []txn.TxnResponse {
-	var requests []txn.TxnRequest
+	requests := make([]txn.TxnRequest, 0, len(keys))
 	for _, k := range keys {
 		requests = append(requests, newTestReadRequest(k, rTxn, toShard))
 	}

@@ -16,11 +16,11 @@ package objectio
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
+	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"os"
 	"path"
-	"strconv"
-	"strings"
+	// "strconv"
+	// "strings"
 	"sync"
 )
 
@@ -54,23 +54,24 @@ func encodeName(id uint64, oType ObjectType) string {
 	return fmt.Sprintf("%d.%s", id, META)
 }
 
-func decodeName(name string) (id uint64, oType ObjectType, err error) {
-	oName := strings.Split(name, ".")
-	if len(oName) != 2 {
-		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
-		return
-	}
-	id, err = strconv.ParseUint(oName[0], 10, 64)
-	if err != nil {
-		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
-	}
-	if oName[1] == DATA {
-		oType = DATATYPE
-	} else {
-		oType = METADATA
-	}
-	return
-}
+// Unused
+// func decodeName(name string) (id uint64, oType ObjectType, err error) {
+// 	oName := strings.Split(name, ".")
+// 	if len(oName) != 2 {
+// 		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
+// 		return
+// 	}
+// 	id, err = strconv.ParseUint(oName[0], 10, 64)
+// 	if err != nil {
+// 		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
+// 	}
+// 	if oName[1] == DATA {
+// 		oType = DATATYPE
+// 	} else {
+// 		oType = METADATA
+// 	}
+// 	return
+// }
 
 func OpenObject(id uint64, oType ObjectType, dir string) (object *Object, err error) {
 	object = &Object{

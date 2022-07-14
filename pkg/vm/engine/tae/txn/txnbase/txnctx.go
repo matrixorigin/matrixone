@@ -55,8 +55,8 @@ func NewTxnCtx(rwlocker *sync.RWMutex, id, start uint64, info []byte) *TxnCtx {
 	}
 }
 
-func (txn *TxnCtx) GetCtx() []byte {
-	return txn.IDCtx
+func (ctx *TxnCtx) GetCtx() []byte {
+	return ctx.IDCtx
 }
 
 func (ctx *TxnCtx) Repr() string {
@@ -131,5 +131,5 @@ func (ctx *TxnCtx) ToUnknownLocked() {
 	ctx.State = txnif.TxnStateUnknown
 }
 
-// For testing
+// MockSetCommitTSLocked is for testing
 func (ctx *TxnCtx) MockSetCommitTSLocked(ts uint64) { ctx.CommitTS = ts }

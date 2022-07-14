@@ -1857,7 +1857,7 @@ func TestChaos1(t *testing.T) {
 			err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 			if err != nil {
 				t.Logf("delete: %v", err)
-				// assert.Equal(t, txnif.TxnWWConflictErr, err)
+				// assert.Equal(t, txnif.ErrTxnWWConflict, err)
 				assert.NoError(t, txn.Rollback())
 				return
 			}
@@ -1938,14 +1938,14 @@ func TestSnapshotIsolation1(t *testing.T) {
 	// Step 4
 	err = rel1.UpdateByFilter(filter, 3, int64(1111))
 	t.Log(err)
-	assert.ErrorIs(t, err, txnif.TxnWWConflictErr)
+	assert.ErrorIs(t, err, txnif.ErrTxnWWConflict)
 
 	// Step 5
 	id, row, err := rel1.GetByFilter(filter)
 	assert.NoError(t, err)
 	err = rel1.RangeDelete(id, row, row, handle.DT_Normal)
 	t.Log(err)
-	assert.ErrorIs(t, err, txnif.TxnWWConflictErr)
+	assert.ErrorIs(t, err, txnif.ErrTxnWWConflict)
 	_ = txn1.Rollback()
 
 	// Step 6
@@ -2000,7 +2000,7 @@ func TestSnapshotIsolation2(t *testing.T) {
 	// Step 4
 	err = rel1.Append(bat)
 	t.Log(err)
-	assert.ErrorIs(t, err, txnif.TxnWWConflictErr)
+	assert.ErrorIs(t, err, txnif.ErrTxnWWConflict)
 	_ = txn1.Rollback()
 }
 

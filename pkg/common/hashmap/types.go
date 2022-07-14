@@ -12,25 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package handle
+package hashmap
 
-import (
-	"errors"
-	"io"
-	"sync"
+import "github.com/matrixorigin/matrixone/pkg/container/hashtable"
+
+const (
+	UnitLimit = 256
 )
 
-var (
-	ErrIteratorEnd = errors.New("end of interator")
-)
-
-// Iterator TODO: this is not thread-safe
-type Iterator interface {
-	sync.Locker
-	RLock()
-	RUnlock()
-	io.Closer
-	Valid() bool
-	Next()
-	GetError() error
+type HashMap struct {
+	rows          uint64
+	keys          [][]byte
+	values        []uint64
+	strHashStates [][3]uint64
+	hashMap       *hashtable.StringHashMap
 }
