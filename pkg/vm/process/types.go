@@ -94,9 +94,9 @@ type Process struct {
 	// snapshot is transaction context
 	Snapshot []byte
 
-	SessInfo SessionInfo
-
 	AnalInfo *AnalyzeInfo
+
+	SessionInfo SessionInfo
 
 	// snapshot is transaction context
 	Cancel context.CancelFunc

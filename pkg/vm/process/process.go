@@ -40,7 +40,7 @@ func NewFromProc(m *mheap.Mheap, p *Process, regNumber int) *Process {
 	proc.Lim = p.Lim
 	proc.Snapshot = p.Snapshot
 	proc.AnalInfo = p.AnalInfo
-	proc.SessInfo = p.SessInfo
+	proc.SessionInfo = p.SessionInfo
 
 	// reg and cancel
 	proc.Cancel = cancel
