@@ -389,7 +389,7 @@ func (entry *SegmentEntry) DestroyData() (err error) {
 	return
 }
 
-// Coarse API: no consistency check
+// IsActive is coarse API: no consistency check
 func (entry *SegmentEntry) IsActive() bool {
 	table := entry.GetTable()
 	if !table.IsActive() {

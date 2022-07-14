@@ -82,8 +82,8 @@ func TestComposedCmd(t *testing.T) {
 
 	r := bytes.NewBuffer(buf)
 	composed2, _, err := txnbase.BuildCommandFrom(r)
-	defer composed2.Close()
 	assert.Nil(t, err)
+	defer composed2.Close()
 	cmd1 := composed.Cmds
 	cmd2 := composed2.(*txnbase.ComposedCmd).Cmds
 

@@ -226,7 +226,6 @@ func (sf *segmentFile) Replay() error {
 			if len(bf.columns[col].updates.file) == 0 || updateTs < ts {
 				setFile(&bf.columns[col].updates.file, file)
 				sf.replayInfo(bf.columns[col].updates.stat, file)
-				break
 			}
 		case DELETE_SUFFIX:
 			if bf.ts <= ts {
@@ -242,13 +241,11 @@ func (sf *segmentFile) Replay() error {
 			if len(bf.deletes.file) == 0 || delTs < ts {
 				setFile(&bf.deletes.file, file)
 				sf.replayInfo(bf.deletes.stat, file)
-				break
 			}
 		case INDEX_SUFFIX:
 			if ts == 0 && len(info) < 3 {
 				setFile(&bf.indexMeta.file, file)
 				sf.replayInfo(bf.indexMeta.stat, file)
-				break
 			}
 			if int(col) > len(bf.columns)-1 {
 				bf.AddColumn(int(col + 1))
