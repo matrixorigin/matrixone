@@ -54,6 +54,19 @@ func (idx *mutableIndex) IsKeyDeleted(key any, ts uint64) (deleted, existed bool
 }
 
 func (idx *mutableIndex) GetMaxDeleteTS() uint64 { return idx.deletes.GetMaxTS() }
+
+func (idx *mutableIndex) RevertUpsert(keys containers.Vector, ts uint64) (err error) {
+	defer func() {
+		err = TranslateError(err)
+	}()
+	// op := func(key any, _ int) error {
+	// 	_, err := idx.art.Delete(key)
+	// 	return err
+	// }
+	// err = keys.Foreach(op, nil)
+	return
+}
+
 func (idx *mutableIndex) Delete(key any, ts uint64) (err error) {
 	defer func() {
 		err = TranslateError(err)
