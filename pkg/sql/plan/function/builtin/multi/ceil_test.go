@@ -17,10 +17,10 @@ import (
 
 func Test_CeilUint64(t *testing.T) {
 	convey.Convey("Test ceil for uint64 succ", t, func() {
-		var uint64VecBase = []uint64{1, 4, 8, 16, 32, math.MaxUint64, 0}
-		var nsp1 []uint64 = []uint64{6}
-		var origVecs = make([]*vector.Vector, 1)
-		var proc = process.New(mheap.New(&guest.Mmu{Mmu: host.New(100000), Limit: 100000}))
+		uint64VecBase := []uint64{1, 4, 8, 16, 32, math.MaxUint64, 0}
+		nsp1 := []uint64{6}
+		origVecs := make([]*vector.Vector, 1)
+		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(100000), Limit: 100000}))
 		origVecs[0] = testutil.MakeUint64Vector(uint64VecBase, nsp1)
 		vec, err := CeilUint64(origVecs, proc)
 		if err != nil {

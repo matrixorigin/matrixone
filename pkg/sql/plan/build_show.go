@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-const MO_CATALOG_DB_NAME = "mo_catalog"
+const MoCatalogDbName = "mo_catalog"
 
 func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase, ctx CompilerContext) (*Plan, error) {
 	if !ctx.DatabaseExists(stmt.Name) {
@@ -33,8 +33,8 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase, ctx CompilerContext)
 	}
 
 	//sql := fmt.Sprintf("SELECT md.datname as `Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
-	sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
-	return returnByRewriteSql(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
+	sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database md WHERE md.datname = '%s'", MoCatalogDbName, stmt.Name)
+	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 }
 
 func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Plan, error) {
@@ -55,10 +55,10 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, errors.New(errno.UndefinedTable, fmt.Sprintf("table '%v' doesn't exist", tblName))
 	}
 
-	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
+	sql = fmt.Sprintf(sql, MoCatalogDbName, MoCatalogDbName, dbName, tblName)
 	// log.Println(sql)
 
-	return returnByRewriteSql(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
+	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
 }
 
 func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, error) {
@@ -66,10 +66,10 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 		return nil, errors.New(errno.SyntaxError, "like clause and where clause cannot exist at the same time")
 	}
 	ddlType := plan.DataDefinition_SHOW_DATABASES
-	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database", MO_CATALOG_DB_NAME)
+	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database", MoCatalogDbName)
 
 	if stmt.Where != nil {
-		return returnByWhereAndBaseSql(ctx, sql, stmt.Where, ddlType)
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
 	}
 
 	if stmt.Like != nil {
@@ -79,7 +79,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 		return returnByLikeAndSql(ctx, sql, likeExpr, ddlType)
 	}
 
-	return returnByRewriteSql(ctx, sql, ddlType)
+	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
 func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) {
@@ -99,10 +99,10 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	}
 
 	ddlType := plan.DataDefinition_SHOW_TABLES
-	sql := fmt.Sprintf("SELECT relname as Tables_in_%s FROM %s.mo_tables WHERE reldatabase = '%s'", dbName, MO_CATALOG_DB_NAME, dbName)
+	sql := fmt.Sprintf("SELECT relname as Tables_in_%s FROM %s.mo_tables WHERE reldatabase = '%s'", dbName, MoCatalogDbName, dbName)
 
 	if stmt.Where != nil {
-		return returnByWhereAndBaseSql(ctx, sql, stmt.Where, ddlType)
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
 	}
 
 	if stmt.Like != nil {
@@ -112,7 +112,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		return returnByLikeAndSql(ctx, sql, likeExpr, ddlType)
 	}
 
-	return returnByRewriteSql(ctx, sql, ddlType)
+	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
 func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
@@ -140,10 +140,10 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
 	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
 
-	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName)
+	sql = fmt.Sprintf(sql, MoCatalogDbName, dbName, tblName)
 
 	if stmt.Where != nil {
-		return returnByWhereAndBaseSql(ctx, sql, stmt.Where, ddlType)
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
 	}
 
 	if stmt.Like != nil {
@@ -153,7 +153,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		return returnByLikeAndSql(ctx, sql, likeExpr, ddlType)
 	}
 
-	return returnByRewriteSql(ctx, sql, ddlType)
+	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
 func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
@@ -214,18 +214,18 @@ func buildShowProcessList(stmt *tree.ShowProcessList, ctx CompilerContext) (*Pla
 	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 }
 
-func returnByRewriteSql(ctx CompilerContext, sql string, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
-	stmt, err := getRewriteSqlStmt(sql)
+func returnByRewriteSQL(ctx CompilerContext, sql string, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
+	stmt, err := getRewriteSQLStmt(sql)
 	if err != nil {
 		return nil, err
 	}
 	return getReturnDdlBySelectStmt(ctx, stmt, ddlType)
 }
 
-func returnByWhereAndBaseSql(ctx CompilerContext, baseSql string, where *tree.Where, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
-	sql := fmt.Sprintf("SELECT * FROM (%s) tbl", baseSql)
+func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string, where *tree.Where, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
+	sql := fmt.Sprintf("SELECT * FROM (%s) tbl", baseSQL)
 	// log.Println(sql)
-	newStmt, err := getRewriteSqlStmt(sql)
+	newStmt, err := getRewriteSQLStmt(sql)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +235,7 @@ func returnByWhereAndBaseSql(ctx CompilerContext, baseSql string, where *tree.Wh
 }
 
 func returnByLikeAndSql(ctx CompilerContext, sql string, like *tree.ComparisonExpr, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
-	newStmt, err := getRewriteSqlStmt(sql)
+	newStmt, err := getRewriteSQLStmt(sql)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +261,7 @@ func returnByLikeAndSql(ctx CompilerContext, sql string, like *tree.ComparisonEx
 	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
 }
 
-func getRewriteSqlStmt(sql string) (tree.Statement, error) {
+func getRewriteSQLStmt(sql string) (tree.Statement, error) {
 	newStmts, err := parsers.Parse(dialect.MYSQL, sql)
 	if err != nil {
 		return nil, err

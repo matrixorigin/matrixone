@@ -1145,11 +1145,11 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 			if v.Name == "NULL" {
 				return errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a parameter", v.Name))
 			} else if strings.EqualFold(v.Value, "TEXT") {
-				es.Format = explain.EXPLAIN_FORMAT_TEXT
+				es.Format = explain.ExplainFormatText
 			} else if strings.EqualFold(v.Value, "JSON") {
-				es.Format = explain.EXPLAIN_FORMAT_JSON
+				es.Format = explain.ExplainFormatJSON
 			} else if strings.EqualFold(v.Value, "DOT") {
-				es.Format = explain.EXPLAIN_FORMAT_DOT
+				es.Format = explain.ExplainFormatDot
 			} else {
 				return errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized value for EXPLAIN option \"%s\": \"%s\"", v.Name, v.Value))
 			}
@@ -1373,7 +1373,7 @@ func buildPlan(ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, err
 			return nil, err
 		}
 		return &plan2.Plan{
-			Plan: &plan2.Plan_Query{
+			Plan: &plan2.PlanQuery{
 				Query: optimized,
 			},
 		}, nil

@@ -28,11 +28,10 @@ const (
 	ParameterPadString    = int(2)
 )
 
-/*
-First Parameter: source string
-Second Parameter: length
-Third Parameter: pad string
-*/
+// Lpad
+// First Parameter: source string
+// Second Parameter: length
+// Third Parameter: pad string
 func Lpad(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() || vecs[2].IsScalarNull() {
 		return proc.AllocScalarNullVector(vecs[0].Typ), nil

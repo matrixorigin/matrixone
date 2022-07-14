@@ -115,7 +115,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
-				ReturnTyp: types.T_varchar, Fn: multi.Concat_ws,
+				ReturnTyp: types.T_varchar, Fn: multi.ConcatWs,
 			},
 		},
 	},

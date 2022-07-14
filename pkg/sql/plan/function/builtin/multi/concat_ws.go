@@ -22,8 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// todo(broccoli): revise this, maybe rewrite this? at least clean up the logic
-func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+// ConcatWs todo(broccoli): revise this, maybe rewrite this? at least clean up the logic
+func ConcatWs(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
 	if vectors[0].IsScalar() {
 		if vectors[0].ConstVectorIsNull() {

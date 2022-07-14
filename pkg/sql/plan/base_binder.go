@@ -293,7 +293,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		if binding, ok := b.ctx.bindingByCol[col]; ok {
 			if binding != nil {
 				relPos = binding.tag
-				colPos = binding.colIdByName[col]
+				colPos = binding.colIDByName[col]
 				typ = binding.types[colPos]
 				table = binding.table
 			} else {
@@ -371,11 +371,11 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Expr, error) {
 	subCtx := NewBindContext(b.builder, b.ctx)
 
-	var nodeId int32
+	var nodeID int32
 	var err error
 	switch subquery := astExpr.Select.(type) {
 	case *tree.ParenSelect:
-		nodeId, err = b.builder.buildSelect(subquery.Select, subCtx, false)
+		nodeID, err = b.builder.buildSelect(subquery.Select, subCtx, false)
 		if err != nil {
 			return nil, err
 		}
@@ -390,7 +390,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		},
 		Expr: &plan.Expr_Sub{
 			Sub: &plan.SubqueryRef{
-				NodeId: nodeId,
+				NodeId: nodeID,
 			},
 		},
 	}
@@ -413,7 +413,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 }
 
 func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32, isRoot bool) (*Expr, error) {
-	var args []tree.Expr
+	args := make([]tree.Expr, 0, len(astExpr.Whens)*2+1)
 	caseExist := astExpr.Expr != nil
 
 	for _, whenExpr := range astExpr.Whens {
@@ -507,22 +507,22 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		op = "like"
 
 	case tree.NOT_LIKE:
-		new_expr := tree.NewComparisonExpr(tree.LIKE, astExpr.Left, astExpr.Right)
-		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{new_expr}, depth)
+		newExpr := tree.NewComparisonExpr(tree.LIKE, astExpr.Left, astExpr.Right)
+		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
 	case tree.IN:
 		switch list := astExpr.Right.(type) {
 		case *tree.Tuple:
-			var new_expr tree.Expr
+			var newExpr tree.Expr
 			for _, expr := range list.Exprs {
-				if new_expr == nil {
-					new_expr = tree.NewComparisonExpr(tree.EQUAL, astExpr.Left, expr)
+				if newExpr == nil {
+					newExpr = tree.NewComparisonExpr(tree.EQUAL, astExpr.Left, expr)
 				} else {
-					equal_expr := tree.NewComparisonExpr(tree.EQUAL, astExpr.Left, expr)
-					new_expr = tree.NewOrExpr(new_expr, equal_expr)
+					equalExpr := tree.NewComparisonExpr(tree.EQUAL, astExpr.Left, expr)
+					newExpr = tree.NewOrExpr(newExpr, equalExpr)
 				}
 			}
-			return b.impl.BindExpr(new_expr, depth, false)
+			return b.impl.BindExpr(newExpr, depth, false)
 
 		default:
 			leftArg, err := b.impl.BindExpr(astExpr.Left, depth, false)
@@ -556,16 +556,16 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 	case tree.NOT_IN:
 		switch list := astExpr.Right.(type) {
 		case *tree.Tuple:
-			var new_expr tree.Expr
+			var newExpr tree.Expr
 			for _, expr := range list.Exprs {
-				if new_expr == nil {
-					new_expr = tree.NewComparisonExpr(tree.NOT_EQUAL, astExpr.Left, expr)
+				if newExpr == nil {
+					newExpr = tree.NewComparisonExpr(tree.NOT_EQUAL, astExpr.Left, expr)
 				} else {
 					equal_expr := tree.NewComparisonExpr(tree.NOT_EQUAL, astExpr.Left, expr)
-					new_expr = tree.NewAndExpr(new_expr, equal_expr)
+					newExpr = tree.NewAndExpr(newExpr, equal_expr)
 				}
 			}
-			return b.impl.BindExpr(new_expr, depth, false)
+			return b.impl.BindExpr(newExpr, depth, false)
 
 		default:
 			leftArg, err := b.impl.BindExpr(astExpr.Left, depth, false)
@@ -874,7 +874,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	}
 
 	// get function definition
-	funcId, returnType, argsCastType, err := function.GetFunctionByName(name, argsType)
+	funcID, returnType, argsCastType, err := function.GetFunctionByName(name, argsType)
 	if err != nil {
 		return nil, err
 	}
@@ -902,7 +902,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: getFunctionObjRef(funcId, name),
+				Func: getFunctionObjRef(funcID, name),
 				Args: args,
 			},
 		},
@@ -1073,14 +1073,14 @@ func appendCastBeforeExpr(expr *Expr, toType *Type) (*Expr, error) {
 		makeTypeByPlan2Expr(expr),
 		makeTypeByPlan2Type(toType),
 	}
-	funcId, _, _, err := function.GetFunctionByName("cast", argsType)
+	funcID, _, _, err := function.GetFunctionByName("cast", argsType)
 	if err != nil {
 		return nil, err
 	}
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: getFunctionObjRef(funcId, "cast"),
+				Func: getFunctionObjRef(funcID, "cast"),
 				Args: []*Expr{expr, {
 					Expr: &plan.Expr_T{
 						T: &plan.TargetType{

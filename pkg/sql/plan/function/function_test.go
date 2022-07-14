@@ -16,8 +16,9 @@ package function
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/stretchr/testify/require"
 )
@@ -25,19 +26,19 @@ import (
 func TestFunctionOverloadID(t *testing.T) {
 	tcs := []struct {
 		fid        int32
-		overloadId int32
+		overloadID int32
 	}{
-		{fid: 0, overloadId: 0},
-		{fid: 1, overloadId: 10},
-		{fid: 10, overloadId: 15},
-		{fid: 400, overloadId: 1165},
-		{fid: 3004, overloadId: 12345},
+		{fid: 0, overloadID: 0},
+		{fid: 1, overloadID: 10},
+		{fid: 10, overloadID: 15},
+		{fid: 400, overloadID: 1165},
+		{fid: 3004, overloadID: 12345},
 	}
 	for _, tc := range tcs {
-		f := EncodeOverloadID(tc.fid, tc.overloadId)
+		f := EncodeOverloadID(tc.fid, tc.overloadID)
 		actualF, actualO := DecodeOverloadID(f)
 		require.Equal(t, tc.fid, actualF)
-		require.Equal(t, tc.overloadId, actualO)
+		require.Equal(t, tc.overloadID, actualO)
 	}
 }
 

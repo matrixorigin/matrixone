@@ -29,11 +29,11 @@ type NodeDescribeImpl struct {
 }
 
 func (ndesc *NodeDescribeImpl) GetTableDef(options *ExplainOptions) (string, error) {
-	var result string = "Table: "
+	result := "Table: "
 	if ndesc.Node.NodeType == plan.Node_TABLE_SCAN {
 		tableDef := ndesc.Node.TableDef
 		result += "'" + tableDef.Name + "' ("
-		var first bool = true
+		first := true
 		for i, col := range tableDef.Cols {
 			if !first {
 				result += ", "
@@ -124,7 +124,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 	}
 
 	// Get Node's operator object info ,such as table, view
-	if options.Format == EXPLAIN_FORMAT_TEXT {
+	if options.Format == ExplainFormatText {
 		result += pname
 		switch ndesc.Node.NodeType {
 		case plan.Node_VALUE_SCAN:
@@ -196,7 +196,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 	}
 
 	// Get Costs info of Node
-	if options.Format == EXPLAIN_FORMAT_TEXT {
+	if options.Format == ExplainFormatText {
 		costDescImpl := &CostDescribeImpl{
 			Cost: ndesc.Node.GetCost(),
 		}
@@ -207,9 +207,9 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 		result += costInfo
 
 		//result += " (cost=%.2f..%.2f rows=%.0f width=%f)"
-	} else if options.Format == EXPLAIN_FORMAT_JSON {
+	} else if options.Format == ExplainFormatJSON {
 		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
-	} else if options.Format == EXPLAIN_FORMAT_DOT {
+	} else if options.Format == ExplainFormatDot {
 		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
 	}
 	return result, nil
@@ -303,7 +303,7 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 }
 
 func (ndesc *NodeDescribeImpl) GetProjectListInfo(options *ExplainOptions) (string, error) {
-	var result string = "Output:"
+	result := "Output:"
 	exprs := NewExprListDescribeImpl(ndesc.Node.ProjectList)
 	describe, err := exprs.GetDescription(options)
 	if err != nil {
@@ -314,12 +314,12 @@ func (ndesc *NodeDescribeImpl) GetProjectListInfo(options *ExplainOptions) (stri
 }
 
 func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(options *ExplainOptions) (string, error) {
-	var result string = "Join Type: " + ndesc.Node.JoinType.String()
+	result := "Join Type: " + ndesc.Node.JoinType.String()
 	return result, nil
 }
 
 func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(options *ExplainOptions) (string, error) {
-	var result string = "Join Cond:"
+	result := "Join Cond:"
 	exprs := NewExprListDescribeImpl(ndesc.Node.OnList)
 	describe, err := exprs.GetDescription(options)
 	if err != nil {
@@ -330,9 +330,9 @@ func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(options *ExplainOptions) (st
 }
 
 func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(options *ExplainOptions) (string, error) {
-	var result string = "Filter Cond: "
-	if options.Format == EXPLAIN_FORMAT_TEXT {
-		var first bool = true
+	result := "Filter Cond: "
+	if options.Format == ExplainFormatText {
+		first := true
 		for _, v := range ndesc.Node.FilterList {
 			if !first {
 				result += ", "
@@ -344,18 +344,18 @@ func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(options *ExplainOptions) (
 			}
 			result += descV
 		}
-	} else if options.Format == EXPLAIN_FORMAT_JSON {
+	} else if options.Format == ExplainFormatJSON {
 		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
-	} else if options.Format == EXPLAIN_FORMAT_DOT {
+	} else if options.Format == ExplainFormatDot {
 		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
 	}
 	return result, nil
 }
 
 func (ndesc *NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) (string, error) {
-	var result string = "Group Key:"
-	if options.Format == EXPLAIN_FORMAT_TEXT {
-		var first bool = true
+	result := "Group Key:"
+	if options.Format == ExplainFormatText {
+		first := true
 		for _, v := range ndesc.Node.GetGroupBy() {
 			if !first {
 				result += ", "
@@ -367,18 +367,18 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) (string, 
 			}
 			result += descV
 		}
-	} else if options.Format == EXPLAIN_FORMAT_JSON {
+	} else if options.Format == ExplainFormatJSON {
 		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
-	} else if options.Format == EXPLAIN_FORMAT_DOT {
+	} else if options.Format == ExplainFormatDot {
 		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
 	}
 	return result, nil
 }
 
 func (ndesc *NodeDescribeImpl) GetAggregationInfo(options *ExplainOptions) (string, error) {
-	var result string = "Aggregate Functions: "
-	if options.Format == EXPLAIN_FORMAT_TEXT {
-		var first bool = true
+	result := "Aggregate Functions: "
+	if options.Format == ExplainFormatText {
+		first := true
 		for _, v := range ndesc.Node.GetAggList() {
 			if !first {
 				result += ", "
@@ -390,18 +390,18 @@ func (ndesc *NodeDescribeImpl) GetAggregationInfo(options *ExplainOptions) (stri
 			}
 			result += descV
 		}
-	} else if options.Format == EXPLAIN_FORMAT_JSON {
+	} else if options.Format == ExplainFormatJSON {
 		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
-	} else if options.Format == EXPLAIN_FORMAT_DOT {
+	} else if options.Format == ExplainFormatDot {
 		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
 	}
 	return result, nil
 }
 
 func (ndesc *NodeDescribeImpl) GetOrderByInfo(options *ExplainOptions) (string, error) {
-	var result string = "Sort Key:"
-	if options.Format == EXPLAIN_FORMAT_TEXT {
-		var first bool = true
+	result := "Sort Key:"
+	if options.Format == ExplainFormatText {
+		first := true
 		for _, v := range ndesc.Node.GetOrderBy() {
 			if !first {
 				result += ", "
@@ -414,9 +414,9 @@ func (ndesc *NodeDescribeImpl) GetOrderByInfo(options *ExplainOptions) (string, 
 			}
 			result += describe
 		}
-	} else if options.Format == EXPLAIN_FORMAT_JSON {
+	} else if options.Format == ExplainFormatJSON {
 		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
-	} else if options.Format == EXPLAIN_FORMAT_DOT {
+	} else if options.Format == ExplainFormatDot {
 		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
 	}
 	return result, nil
@@ -463,9 +463,9 @@ func NewExprListDescribeImpl(ExprList []*plan.Expr) *ExprListDescribeImpl {
 }
 
 func (e *ExprListDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
-	var first bool = true
-	var result string = " "
-	if options.Format == EXPLAIN_FORMAT_TEXT {
+	first := true
+	result := " "
+	if options.Format == ExplainFormatText {
 		for _, v := range e.ExprList {
 			if !first {
 				result += ", "
@@ -477,9 +477,9 @@ func (e *ExprListDescribeImpl) GetDescription(options *ExplainOptions) (string, 
 			}
 			result += descV
 		}
-	} else if options.Format == EXPLAIN_FORMAT_JSON {
+	} else if options.Format == ExplainFormatJSON {
 		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
-	} else if options.Format == EXPLAIN_FORMAT_DOT {
+	} else if options.Format == ExplainFormatDot {
 		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
 	}
 	return result, nil
@@ -496,7 +496,7 @@ func NewOrderByDescribeImpl(OrderBy *plan.OrderBySpec) *OrderByDescribeImpl {
 }
 
 func (o *OrderByDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
-	var result string = " "
+	result := " "
 	descExpr, err := describeExpr(o.OrderBy.Expr, options)
 	if err != nil {
 		return result, err
@@ -523,12 +523,12 @@ type RowsetDataDescribeImpl struct {
 }
 
 func (r *RowsetDataDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
-	var result string = "Value:"
+	result := "Value:"
 	if r.RowsetData == nil {
 		return result, nil
 	}
 
-	var first bool = true
+	first := true
 	for index := range r.RowsetData.Cols {
 		if !first {
 			result += ", "

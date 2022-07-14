@@ -226,8 +226,8 @@ const (
 	FUNCTION_END_NUMBER
 )
 
-// functionIdRegister is what function we have registered already.
-var functionIdRegister = map[string]int32{
+// functionIDRegister is what function we have registered already.
+var functionIDRegister = map[string]int32{
 	// operators
 	"=":           EQUAL,
 	">":           GREAT_THAN,
@@ -360,7 +360,7 @@ var functionIdRegister = map[string]int32{
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
-	fid, err := fromNameToFunctionId(name)
+	fid, err := fromNameToFunctionID(name)
 	if err != nil {
 		return false
 	}

@@ -15,6 +15,8 @@
 package operator
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -22,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"math"
 )
 
 var (
@@ -112,7 +113,7 @@ func Minus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, 
 	}
 }
 
-// Since the underlying operator does not generically process decimal64 and decimal128, sub of decimal64 and decimal128 are not generalized
+// MinusDecimal64 Since the underlying operator does not generically process decimal64 and decimal128, sub of decimal64 and decimal128 are not generalized
 func MinusDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
 	lvs, rvs := vector.MustTCols[types.Decimal64](lv), vector.MustTCols[types.Decimal64](rv)

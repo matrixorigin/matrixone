@@ -12,8 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// plan build and optimize logical plan
-package plan
-
-func init() {
-}
+// rule rule base optimize
+package rule
