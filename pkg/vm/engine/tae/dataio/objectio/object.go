@@ -25,15 +25,18 @@ import (
 	"sync"
 )
 
-const ObjectSize = 64 * 1024 * 1024
-const PageSize = 4096
-
 type ObjectType uint8
 
 const (
 	DataType ObjectType = iota
 	MetadataType
 	NodeType
+)
+
+const (
+	ObjectSize = 64 * 1024 * 1024
+	PageSize   = 4096
+	MetaSize   = 512
 )
 
 const (
@@ -48,6 +51,45 @@ type Object struct {
 	oFile     *os.File
 	allocator *ObjectAllocator
 	oType     ObjectType
+}
+
+func OpenObject(id uint64, oType ObjectType, dir string) (object *Object, err error) {
+	object = &Object{
+		id:    id,
+		oType: oType,
+	}
+	path := path.Join(dir, encodeName(id, oType))
+	if _, err = os.Stat(path); os.IsNotExist(err) {
+		object.oFile, err = os.Create(path)
+		return
+	}
+
+	if object.oFile, err = os.OpenFile(path, os.O_RDWR, os.ModePerm); err != nil {
+		return
+	}
+	return
+}
+
+func (o *Object) Mount(capacity uint64, pageSize uint32) {
+	o.allocator = NewObjectAllocator(capacity, pageSize)
+}
+
+func (o *Object) Append(data []byte) (offset, allocated uint64, err error) {
+	offset, allocated = o.allocator.Allocate(uint64(len(data)))
+	_, err = o.oFile.WriteAt(data, int64(offset))
+	if err != nil {
+		return
+	}
+	return
+}
+
+func (o *Object) Read(offset int64, data []byte) (length int, err error) {
+	length, err = o.oFile.ReadAt(data, offset)
+	return
+}
+
+func (o *Object) GetSize() uint64 {
+	return o.allocator.GetAvailable()
 }
 
 func encodeName(id uint64, oType ObjectType) string {
@@ -77,40 +119,4 @@ func decodeName(name string) (id uint64, oType ObjectType, err error) {
 		oType = MetadataType
 	}
 	return
-}
-
-func OpenObject(id uint64, oType ObjectType, dir string) (object *Object, err error) {
-	object = &Object{
-		id:    id,
-		oType: oType,
-	}
-	object.allocator = NewObjectAllocator(ObjectSize, PageSize)
-	path := path.Join(dir, encodeName(id, oType))
-	if _, err = os.Stat(path); os.IsNotExist(err) {
-		object.oFile, err = os.Create(path)
-		return
-	}
-
-	if object.oFile, err = os.OpenFile(path, os.O_RDWR, os.ModePerm); err != nil {
-		return
-	}
-	return
-}
-
-func (o *Object) Append(data []byte) (offset, allocated uint64, err error) {
-	offset, allocated = o.allocator.Allocate(uint64(len(data)))
-	_, err = o.oFile.WriteAt(data, int64(offset))
-	if err != nil {
-		return
-	}
-	return
-}
-
-func (o *Object) Read(offset int64, data []byte) (length int, err error) {
-	length, err = o.oFile.ReadAt(data, offset)
-	return
-}
-
-func (o *Object) GetSize() uint64 {
-	return o.allocator.GetAvailable()
 }

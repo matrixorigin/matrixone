@@ -81,7 +81,7 @@ func (o *ObjectFS) OpenFile(name string, flag int) (file tfs.File, err error) {
 			return nil, err
 		}
 	}
-	if strings.Contains(name, ".") {
+	if !strings.Contains(name, ".") {
 		return dir, nil
 	}
 	file = dir.(*ObjectDir).OpenFile(o, fileName[paths])
@@ -121,6 +121,7 @@ func (o *ObjectFS) GetData(size uint64) (object *Object, err error) {
 	if len(o.data) == 0 ||
 		o.data[len(o.data)-1].GetSize()+size >= ObjectSize {
 		object, err = OpenObject(o.lastId, DataType, o.attr.dir)
+		object.Mount(ObjectSize, PageSize)
 		o.data = append(o.data, object)
 		o.lastId++
 		return
@@ -134,6 +135,7 @@ func (o *ObjectFS) GetMeta(size uint64) (object *Object, err error) {
 	if len(o.meta) == 0 ||
 		o.meta[len(o.meta)-1].GetSize()+size >= ObjectSize {
 		object, err = OpenObject(o.lastId, MetadataType, o.attr.dir)
+		object.Mount(ObjectSize, MetaSize)
 		o.meta = append(o.meta, object)
 		o.lastId++
 		return

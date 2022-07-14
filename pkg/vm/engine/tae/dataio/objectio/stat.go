@@ -25,7 +25,7 @@ type objectFileStat struct {
 	name     string
 	size     int64
 	dataSize int64
-	algo       uint8
+	algo     uint8
 	oType    InodeType
 }
 
@@ -48,4 +48,4 @@ func (stat *objectFileStat) Sys() any {
 func (stat *objectFileStat) Name() string      { return stat.name }
 func (stat *objectFileStat) Size() int64       { return stat.size }
 func (stat *objectFileStat) OriginSize() int64 { return stat.dataSize }
-func (stat *objectFileStat) CompressAlgo() int { return  int(stat.algo)}
+func (stat *objectFileStat) CompressAlgo() int { return int(stat.algo) }
