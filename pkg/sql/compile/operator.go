@@ -348,6 +348,7 @@ func constructOrder(n *plan.Node, proc *process.Process) *order.Argument {
 	}
 }
 
+/*
 func constructOffset(n *plan.Node, proc *process.Process) *offset.Argument {
 	vec, err := colexec.EvalExpr(constBat, proc, n.Offset)
 	if err != nil {
@@ -357,6 +358,7 @@ func constructOffset(n *plan.Node, proc *process.Process) *offset.Argument {
 		Offset: uint64(vec.Col.([]int64)[0]),
 	}
 }
+*/
 
 func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)

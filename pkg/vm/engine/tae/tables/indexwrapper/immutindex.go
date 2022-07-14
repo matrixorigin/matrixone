@@ -42,7 +42,7 @@ func (index *immutableIndex) Dedup(key any) (err error) {
 	return
 }
 
-func (idx *immutableIndex) String() string {
+func (index *immutableIndex) String() string {
 	panic("implement me")
 }
 func (index *immutableIndex) GetMaxDeleteTS() uint64                    { panic("not supported") }
