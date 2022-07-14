@@ -26,7 +26,7 @@ import (
 	iw "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 )
 
-var ErrOpCancelled = errors.New("Op cancelled")
+var ErrOpCancelled = errors.New("op cancelled")
 
 type Cmd = uint8
 

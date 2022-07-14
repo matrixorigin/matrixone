@@ -110,7 +110,7 @@ func TestColumnChain2(t *testing.T) {
 	txn2.TxnCtx = txnbase.NewTxnCtx(nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
 	n2 := chain.AddNode(txn2)
 	err = chain.TryUpdateNodeLocked(2, int32(222), n2)
-	assert.Equal(t, txnif.TxnWWConflictErr, err)
+	assert.Equal(t, txnif.ErrTxnWWConflict, err)
 	err = chain.TryUpdateNodeLocked(4, int32(44), n2)
 	assert.Nil(t, err)
 	assert.Equal(t, 4, chain.view.RowCnt())
@@ -120,7 +120,7 @@ func TestColumnChain2(t *testing.T) {
 	_ = n1.ApplyCommit(nil)
 
 	err = chain.TryUpdateNodeLocked(2, int32(222), n2)
-	assert.Equal(t, txnif.TxnWWConflictErr, err)
+	assert.Equal(t, txnif.ErrTxnWWConflict, err)
 
 	assert.Equal(t, 1, chain.view.links[1].Depth())
 	assert.Equal(t, 1, chain.view.links[2].Depth())
@@ -240,8 +240,8 @@ func TestColumnChain3(t *testing.T) {
 	r := bytes.NewBuffer(buf)
 
 	cmd2, _, err := txnbase.BuildCommandFrom(r)
-	defer cmd2.Close()
 	assert.Nil(t, err)
+	defer cmd2.Close()
 	updateCmd := cmd2.(*UpdateCmd)
 	assert.Equal(t, txnbase.CmdUpdate, updateCmd.GetType())
 	assert.Equal(t, *node.id, *updateCmd.update.id)

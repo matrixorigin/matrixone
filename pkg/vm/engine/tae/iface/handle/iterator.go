@@ -24,7 +24,7 @@ var (
 	ErrIteratorEnd = errors.New("end of interator")
 )
 
-// TODO: this is not thread-safe
+// Iterator TODO: this is not thread-safe
 type Iterator interface {
 	sync.Locker
 	RLock()

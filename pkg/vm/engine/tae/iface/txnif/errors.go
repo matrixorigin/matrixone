@@ -17,7 +17,7 @@ package txnif
 import "errors"
 
 var (
-	TxnInternalErr   = errors.New("tae txn: internal error")
-	TxnRWConflictErr = errors.New("tae txn: r-w conflict error")
-	TxnWWConflictErr = errors.New("tae txn: w-w conflict error")
+	ErrTxnInternal   = errors.New("tae txn: internal error")
+	ErrTxnRWConflict = errors.New("tae txn: r-w conflict error")
+	ErrTxnWWConflict = errors.New("tae txn: w-w conflict error")
 )

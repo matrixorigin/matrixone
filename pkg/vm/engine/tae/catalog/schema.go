@@ -162,7 +162,7 @@ func (s *Schema) IsCompoundSortKey() bool { return s.SortKey != nil && s.SortKey
 func (s *Schema) HasPK() bool             { return s.SortKey != nil && s.SortKey.IsPrimary() }
 func (s *Schema) HasSortKey() bool        { return s.SortKey != nil }
 
-// Should be call only if IsSinglePK is checked
+// GetSingleSortKey should be call only if IsSinglePK is checked
 func (s *Schema) GetSingleSortKey() *ColDef { return s.SortKey.Defs[0] }
 func (s *Schema) GetSingleSortKeyIdx() int  { return s.SortKey.Defs[0].Idx }
 
