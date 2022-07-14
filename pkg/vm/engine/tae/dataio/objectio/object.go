@@ -17,10 +17,11 @@ package objectio
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
-	"os"
-	"path"
 	"strconv"
 	"strings"
+
+	"os"
+	"path"
 	"sync"
 )
 
@@ -36,8 +37,8 @@ const (
 )
 
 const (
-	DATA = "data"
-	META = "meta"
+	DATA  = "data"
+	META  = "meta"
 	INODE = "inode"
 )
 

@@ -165,18 +165,28 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 }
 
 func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*deletion.Argument, error) {
-	dbSource, err := eg.Database(n.ObjRef.SchemaName, snapshot)
-	if err != nil {
-		return nil, err
+	count := len(n.DeleteTablesCtx)
+	ds := make([]*deletion.DeleteCtx, count)
+	for i := 0; i < count; i++ {
+
+		dbSource, err := eg.Database(n.DeleteTablesCtx[i].DbName, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		relation, err := dbSource.Relation(n.DeleteTablesCtx[i].TblName, snapshot)
+		if err != nil {
+			return nil, err
+		}
+
+		ds[i] = &deletion.DeleteCtx{
+			TableSource:  relation,
+			UseDeleteKey: n.DeleteTablesCtx[i].UseDeleteKey,
+			CanTruncate:  n.DeleteTablesCtx[i].CanTruncate,
+		}
 	}
-	relation, err := dbSource.Relation(n.TableDef.Name, snapshot)
-	if err != nil {
-		return nil, err
-	}
+
 	return &deletion.Argument{
-		TableSource:  relation,
-		UseDeleteKey: n.DeleteInfo.UseDeleteKey,
-		CanTruncate:  n.DeleteInfo.CanTruncate,
+		DeleteCtxs: ds,
 	}, nil
 }
 
@@ -348,6 +358,7 @@ func constructOrder(n *plan.Node, proc *process.Process) *order.Argument {
 	}
 }
 
+/*
 func constructOffset(n *plan.Node, proc *process.Process) *offset.Argument {
 	vec, err := colexec.EvalExpr(constBat, proc, n.Offset)
 	if err != nil {
@@ -357,6 +368,7 @@ func constructOffset(n *plan.Node, proc *process.Process) *offset.Argument {
 		Offset: uint64(vec.Col.([]int64)[0]),
 	}
 }
+*/
 
 func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)

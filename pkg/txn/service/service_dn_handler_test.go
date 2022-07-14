@@ -127,13 +127,13 @@ func TestGetStatus(t *testing.T) {
 }
 
 func prepareTestTxn(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta, shard uint64) []txn.TxnResponse {
-	responses, err := sender.Send(context.Background(), []txn.TxnRequest{newTestPrepareRequest(wTxn, shard)})
+	result, err := sender.Send(context.Background(), []txn.TxnRequest{newTestPrepareRequest(wTxn, shard)})
 	assert.NoError(t, err)
-	return responses
+	return result.Responses
 }
 
 func getTestTxnStatus(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta, shard uint64) []txn.TxnResponse {
-	responses, err := sender.Send(context.Background(), []txn.TxnRequest{newTestGetStatusRequest(wTxn, shard)})
+	result, err := sender.Send(context.Background(), []txn.TxnRequest{newTestGetStatusRequest(wTxn, shard)})
 	assert.NoError(t, err)
-	return responses
+	return result.Responses
 }

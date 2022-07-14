@@ -50,9 +50,8 @@ func (node *ExplainStmt) Format(ctx *FmtCtx) {
 	}
 
 	stmt := node.explainImpl.Statement
-	switch stmt.(type) {
+	switch st := stmt.(type) {
 	case *ShowColumns:
-		st := stmt.(*ShowColumns)
 		if st.Table != nil {
 			ctx.WriteByte(' ')
 			st.Table.ToTableName().Format(ctx)

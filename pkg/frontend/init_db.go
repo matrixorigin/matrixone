@@ -27,12 +27,13 @@ import (
 )
 
 var (
-	errorIsNotTaeEngine           = errors.New("the engine is not tae")
-	errorMissingCatalogTables     = errors.New("missing catalog tables")
-	errorMissingCatalogDatabases  = errors.New("missing catalog databases")
-	errorNoSuchAttribute          = errors.New("no such attribute in the schema")
-	errorAttributeTypeIsDifferent = errors.New("attribute type is different with that in the schema")
-	errorAttributeIsNotPrimary    = errors.New("attribute is not primary key")
+	errorIsNotTaeEngine          = errors.New("the engine is not tae")
+	errorMissingCatalogTables    = errors.New("missing catalog tables")
+	errorMissingCatalogDatabases = errors.New("missing catalog databases")
+	//used in future
+	//errorNoSuchAttribute          = errors.New("no such attribute in the schema")
+	//errorAttributeTypeIsDifferent = errors.New("attribute type is different with that in the schema")
+	//errorAttributeIsNotPrimary    = errors.New("attribute is not primary key")
 )
 
 // CatalogSchemaAttribute defines the attribute of the schema
@@ -727,7 +728,7 @@ func InitDB(tae engine.Engine) error {
 	*/
 	//1. create database information_schema
 	infoSchemaName := "information_schema"
-	db, err := tae.Database(infoSchemaName, txnCtx.GetCtx())
+	db, _ := tae.Database(infoSchemaName, txnCtx.GetCtx())
 
 	if db == nil {
 		err = tae.Create(0, infoSchemaName, 0, txnCtx.GetCtx())
@@ -921,7 +922,7 @@ func isWantedTable(db engine.Database, txnCtx moengine.Txn,
 }
 
 func convertCatalogSchemaToTableDef(sch *CatalogSchema) []engine.TableDef {
-	var defs []engine.TableDef
+	defs := make([]engine.TableDef, 0, len(sch.GetAttributes()))
 	var primaryKeyName []string
 
 	for _, attr := range sch.GetAttributes() {

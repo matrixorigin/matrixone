@@ -33,7 +33,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint8, 1)
 		vector.SetCol(resultVector, endswith.EndsWithAllConst(leftValues, rightValues, resultValues))
 		return resultVector, nil
