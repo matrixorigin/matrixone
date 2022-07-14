@@ -68,14 +68,15 @@ func hasCorrCol(expr *plan.Expr) bool {
 }
 
 func decreaseDepthAndDispatch(preds []*plan.Expr) ([]*plan.Expr, []*plan.Expr) {
-	var filterPreds, joinPreds []*plan.Expr
-	for _, pred := range preds {
+	filterPreds := make([]*plan.Expr, len(preds))
+	var joinPreds []*plan.Expr
+	for idx, pred := range preds {
 		newPred, correlated := decreaseDepth(pred)
 		if !correlated {
 			joinPreds = append(joinPreds, newPred)
 			continue
 		}
-		filterPreds = append(filterPreds, newPred)
+		filterPreds[idx] = newPred
 	}
 
 	return filterPreds, joinPreds

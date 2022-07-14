@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// abs function's evaluation for arguments: [uint64]
+// AbsUInt64 abs function's evaluation for arguments: [uint64]
 func AbsUInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_uint64, Size: 8}
@@ -50,7 +50,7 @@ func AbsUInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	}
 }
 
-// abs function's evaluation for arguments: [int64]
+// AbsInt64 abs function's evaluation for arguments: [int64]
 func AbsInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_int64, Size: 8}

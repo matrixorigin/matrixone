@@ -34,8 +34,8 @@ func NewExplainQueryImpl(query *plan.Query) *ExplainQueryImpl {
 }
 
 func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions) error {
-	var Nodes []*plan.Node = e.QueryPlan.Nodes
-	for index, rootNodeId := range e.QueryPlan.Steps {
+	nodes := e.QueryPlan.Nodes
+	for index, rootNodeID := range e.QueryPlan.Steps {
 		logutil.Infof("------------------------------------Query Plan-%v ---------------------------------------------", index)
 		settings := FormatSettings{
 			buffer: buffer,
@@ -43,7 +43,7 @@ func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *Expla
 			indent: 2,
 			level:  0,
 		}
-		err := traversalPlan(Nodes[rootNodeId], Nodes, &settings, options)
+		err := traversalPlan(nodes[rootNodeID], nodes, &settings, options)
 		if err != nil {
 			return err
 		}
@@ -59,7 +59,7 @@ func (e *ExplainQueryImpl) ExplainAnalyze(buffer *ExplainDataBuffer, options *Ex
 func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOptions) error {
 	nodedescImpl := NewNodeDescriptionImpl(step)
 
-	if options.Format == EXPLAIN_FORMAT_TEXT {
+	if options.Format == ExplainFormatText {
 		basicNodeInfo, err := nodedescImpl.GetNodeBasicInfo(options)
 		if err != nil {
 			return nil
@@ -108,9 +108,9 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 		for _, line := range extraInfo {
 			settings.buffer.PushNewLine(line, false, settings.level)
 		}
-	} else if options.Format == EXPLAIN_FORMAT_JSON {
+	} else if options.Format == ExplainFormatJSON {
 		return errors.New(errno.FeatureNotSupported, "unimplement explain format json")
-	} else if options.Format == EXPLAIN_FORMAT_DOT {
+	} else if options.Format == ExplainFormatDot {
 		return errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
 	}
 	return nil
@@ -127,8 +127,8 @@ func traversalPlan(node *plan.Node, Nodes []*plan.Node, settings *FormatSettings
 	settings.level++
 	// Recursive traversal Query Plan
 	if len(node.Children) > 0 {
-		for _, childNodeId := range node.Children {
-			index, err := serachNodeIndex(childNodeId, Nodes)
+		for _, childNodeID := range node.Children {
+			index, err := serachNodeIndex(childNodeID, Nodes)
 			if err != nil {
 				return err
 			}
@@ -143,9 +143,9 @@ func traversalPlan(node *plan.Node, Nodes []*plan.Node, settings *FormatSettings
 }
 
 // serach target node's index in Nodes slice
-func serachNodeIndex(nodeId int32, Nodes []*plan.Node) (int32, error) {
+func serachNodeIndex(nodeID int32, Nodes []*plan.Node) (int32, error) {
 	for i, node := range Nodes {
-		if node.NodeId == nodeId {
+		if node.NodeId == nodeID {
 			return int32(i), nil
 		}
 	}

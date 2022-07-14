@@ -270,9 +270,9 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 				if v.Name == "NULL" {
 					return errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a parameter", v.Name))
 				} else if strings.EqualFold(v.Value, "TEXT") {
-					es.Format = EXPLAIN_FORMAT_TEXT
+					es.Format = ExplainFormatText
 				} else if strings.EqualFold(v.Value, "JSON") {
-					es.Format = EXPLAIN_FORMAT_JSON
+					es.Format = ExplainFormatJSON
 				} else {
 					return errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized value for EXPLAIN option \"%s\": \"%s\"", v.Name, v.Value))
 				}

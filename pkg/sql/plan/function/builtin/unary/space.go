@@ -23,7 +23,7 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-// the function registeration for generics functions may have some problem now, change this to generics later
+// SpaceInt64 the function registeration for generics functions may have some problem now, change this to generics later
 func SpaceInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}

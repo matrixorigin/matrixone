@@ -16,6 +16,7 @@ package multi
 
 import (
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -24,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// floor function's evaluation for arguments: [uint64]
+// FloorUInt64 floor function's evaluation for arguments: [uint64]
 func FloorUInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	digits := int64(0)
 	vs := vector.MustTCols[uint64](vecs[0])
@@ -50,7 +51,7 @@ func FloorUInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	}
 }
 
-// floor function's evaluation for arguments: [int64]
+// FloorInt64 floor function's evaluation for arguments: [int64]
 func FloorInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	digits := int64(0)
 	vs := vector.MustTCols[int64](vecs[0])
@@ -76,7 +77,7 @@ func FloorInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	}
 }
 
-// floor function's evaluation for arguments: [float64]
+// FloorFloat64 floor function's evaluation for arguments: [float64]
 func FloorFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	digits := int64(0)
 	vs := vector.MustTCols[float64](vecs[0])
@@ -102,7 +103,7 @@ func FloorFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 	}
 }
 
-// floor function's evaluation for arguments: [uint64, int64]
+// FloorUInt64Int64 floor function's evaluation for arguments: [uint64, int64]
 func FloorUInt64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	digits := int64(0)
 	vs := vector.MustTCols[uint64](vecs[0])
@@ -133,7 +134,7 @@ func FloorUInt64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Vec
 	}
 }
 
-// floor function's evaluation for arguments: [int64, int64]
+// FloorInt64Int64 floor function's evaluation for arguments: [int64, int64]
 func FloorInt64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	digits := int64(0)
 	vs := vector.MustTCols[int64](vecs[0])
@@ -164,7 +165,7 @@ func FloorInt64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Vect
 	}
 }
 
-// floor function's evaluation for arguments: [float64, int64]
+// FloorFloat64Int64 floor function's evaluation for arguments: [float64, int64]
 func FloorFloat64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	digits := int64(0)
 	vs := vector.MustTCols[float64](vecs[0])

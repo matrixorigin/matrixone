@@ -36,8 +36,8 @@ func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerConte
 
 	builder := NewQueryBuilder(stmtType, ctx)
 	bindCtx := NewBindContext(builder, nil)
-	rootId, err := builder.buildSelect(stmt, bindCtx, true)
-	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	rootID, err := builder.buildSelect(stmt, bindCtx, true)
+	builder.qry.Steps = append(builder.qry.Steps, rootID)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 	}
 }
 
-//GetResultColumnsFromPlan
+// GetResultColumnsFromPlan return result columns
 func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	getResultColumnsByProjectionlist := func(query *Query) []*ColDef {
 		lastNode := query.Nodes[query.Steps[len(query.Steps)-1]]

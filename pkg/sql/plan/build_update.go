@@ -56,8 +56,8 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	}
 
 	// Check if update primary key
-	var updateAttrs []string = nil
-	for _, expr := range stmt.Exprs {
+	updateAttrs := make([]string, len(stmt.Exprs))
+	for idx, expr := range stmt.Exprs {
 		if len(expr.Names) != 1 {
 			return nil, errors.New(errno.CaseNotFound, "the set list of update must be one")
 		}
@@ -67,7 +67,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 				return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "update's column name is duplicate")
 			}
 		}
-		updateAttrs = append(updateAttrs, updateColName)
+		updateAttrs[idx] = updateColName
 	}
 
 	var useProjectExprs tree.SelectExprs

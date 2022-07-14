@@ -41,7 +41,7 @@ type RowsetData = plan.RowsetData
 type Query = plan.Query
 type Plan = plan.Plan
 type Type = plan.Type
-type Plan_Query = plan.Plan_Query
+type PlanQuery = plan.Plan_Query
 
 type CompilerContext interface {
 	// Default database/schema in context
@@ -210,10 +210,10 @@ const (
 
 type Binding struct {
 	tag         int32
-	nodeId      int32
+	nodeID      int32
 	table       string
 	cols        []string
 	types       []*plan.Type
 	refCnts     []uint
-	colIdByName map[string]int32
+	colIDByName map[string]int32
 }

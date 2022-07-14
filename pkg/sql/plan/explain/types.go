@@ -83,7 +83,7 @@ func calcSpaceNum(level int) int {
 }
 
 func (buf *ExplainDataBuffer) PushNewLine(line string, isNewNode bool, level int) {
-	var prefix string = ""
+	prefix := ""
 	if level <= 0 {
 		if isNewNode {
 			prefix += ""
@@ -91,7 +91,7 @@ func (buf *ExplainDataBuffer) PushNewLine(line string, isNewNode bool, level int
 			prefix += "  "
 		}
 	} else {
-		var offset int = calcSpaceNum(level)
+		offset := calcSpaceNum(level)
 		if isNewNode {
 			prefix += strings.Repeat(" ", offset-6) + "->  "
 		} else {
@@ -110,10 +110,10 @@ func (buf *ExplainDataBuffer) PushNewLine(line string, isNewNode bool, level int
 type ExplainFormat int32
 
 const (
-	EXPLAIN_FORMAT_TEXT ExplainFormat = 0
-	EXPLAIN_FORMAT_XML  ExplainFormat = 1
-	EXPLAIN_FORMAT_JSON ExplainFormat = 2
-	EXPLAIN_FORMAT_DOT  ExplainFormat = 3
+	ExplainFormatText ExplainFormat = 0
+	ExplainFormatXml  ExplainFormat = 1
+	ExplainFormatJSON ExplainFormat = 2
+	ExplainFormatDot  ExplainFormat = 3
 )
 
 type ExplainOptions struct {
@@ -126,6 +126,6 @@ func NewExplainDefaultOptions() *ExplainOptions {
 	return &ExplainOptions{
 		Verbose: false,
 		Anzlyze: false,
-		Format:  EXPLAIN_FORMAT_TEXT,
+		Format:  ExplainFormatText,
 	}
 }

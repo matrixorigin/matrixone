@@ -193,7 +193,7 @@ func doCurrentRole(proc *process.Process, params ...interface{}) (interface{}, e
 	return result, nil
 }
 
-// Current_Role returns the current active roles
+// CurrentRole returns the current active roles
 func CurrentRole(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return adapter(vectors, proc, types.T_varchar.ToType(),
 		0,
@@ -211,7 +211,7 @@ func doFoundRows(proc *process.Process, params ...interface{}) (interface{}, err
 	return result, nil
 }
 
-// For a SELECT with a LIMIT clause, the number of rows that would be returned were there no LIMIT clause
+// FoundRows For a SELECT with a LIMIT clause, the number of rows that would be returned were there no LIMIT clause
 func FoundRows(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return adapter(vectors, proc, types.T_uint64.ToType(),
 		0,
@@ -236,7 +236,7 @@ func ICULIBVersion(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	)
 }
 
-// Value of the AUTOINCREMENT column for the last INSERT
+// LastInsertID Value of the AUTOINCREMENT column for the last INSERT
 func LastInsertID(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return adapter(vectors, proc, types.T_uint64.ToType(), 0,
 		func(proc *process.Process, params ...interface{}) (int, error) {
@@ -250,7 +250,7 @@ func LastInsertID(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	)
 }
 
-//RolesGraphml returns a GraphML document representing memory role subgraphs
+// RolesGraphml returns a GraphML document representing memory role subgraphs
 func RolesGraphml(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return adapter(vectors, proc, types.T_varchar.ToType(), 0,
 		func(proc *process.Process, params ...interface{}) (int, error) {
@@ -267,7 +267,7 @@ func RolesGraphml(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	)
 }
 
-//RowCount returns The number of rows updated
+// RowCount returns The number of rows updated
 func RowCount(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return adapter(vectors, proc, types.T_uint64.ToType(), 0,
 		func(proc *process.Process, params ...interface{}) (int, error) {
@@ -298,7 +298,7 @@ func Version(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	)
 }
 
-//Collation	returns the collation of the string argument
+// Collation	returns the collation of the string argument
 func Collation(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return adapter(vectors, proc, types.T_varchar.ToType(), 0,
 		func(proc *process.Process, params ...interface{}) (int, error) {

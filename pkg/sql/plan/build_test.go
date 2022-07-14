@@ -38,7 +38,7 @@ func TestSingleSql(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	t.Logf("%+v", string(getJson(stmts[0], t)))
+	t.Logf("%+v", string(getJSON(stmts[0], t)))
 
 	// mock := NewMockOptimizer()
 	// logicPlan, err := runOneStmt(mock, t, sql)
@@ -749,7 +749,7 @@ func TestResultColumns(t *testing.T) {
 		return GetResultColumnsFromPlan(logicPlan)
 	}
 
-	returnNilSql := []string{
+	returnNilSQL := []string{
 		"begin",
 		"commit",
 		"rollback",
@@ -761,7 +761,7 @@ func TestResultColumns(t *testing.T) {
 		"create table tbl_name (b int unsigned, c char(20))",
 		"drop table nation",
 	}
-	for _, sql := range returnNilSql {
+	for _, sql := range returnNilSQL {
 		columns := getColumns(sql)
 		if columns != nil {
 			t.Fatalf("sql:%+v, return columns should be nil", sql)
@@ -793,7 +793,7 @@ func TestResultColumns(t *testing.T) {
 	}
 }
 
-func getJson(v any, t *testing.T) []byte {
+func getJSON(v any, t *testing.T) []byte {
 	b, err := json.Marshal(v)
 	if err != nil {
 		t.Logf("%+v", v)
@@ -810,11 +810,11 @@ func outPutPlan(logicPlan *Plan, toFile bool, t *testing.T) {
 	var json []byte
 	switch logicPlan.Plan.(type) {
 	case *plan.Plan_Query:
-		json = getJson(logicPlan.GetQuery(), t)
+		json = getJSON(logicPlan.GetQuery(), t)
 	case *plan.Plan_Tcl:
-		json = getJson(logicPlan.GetTcl(), t)
+		json = getJSON(logicPlan.GetTcl(), t)
 	case *plan.Plan_Ddl:
-		json = getJson(logicPlan.GetDdl(), t)
+		json = getJSON(logicPlan.GetDdl(), t)
 	}
 	if toFile {
 		err := ioutil.WriteFile("/tmp/mo_plan_test.json", json, 0777)
@@ -836,13 +836,13 @@ func runOneStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 	return BuildPlan(ctx, stmts[0])
 }
 
-func runTestShouldPass(opt Optimizer, t *testing.T, sqls []string, printJson bool, toFile bool) {
+func runTestShouldPass(opt Optimizer, t *testing.T, sqls []string, printJSON bool, toFile bool) {
 	for _, sql := range sqls {
 		logicPlan, err := runOneStmt(opt, t, sql)
 		if err != nil {
 			t.Fatalf("%+v, sql=%v", err, sql)
 		}
-		if printJson {
+		if printJSON {
 			outPutPlan(logicPlan, toFile, t)
 		}
 	}

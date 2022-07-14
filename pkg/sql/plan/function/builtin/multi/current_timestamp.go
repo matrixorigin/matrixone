@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// a general round method is needed for timestamp fsp
+// CurrentTimestamp a general round method is needed for timestamp fsp
 func CurrentTimestamp(vectors []*vector.Vector, _ *process.Process) (*vector.Vector, error) {
 	resultPrecision := int32(6)
 	if len(vectors) == 1 {

@@ -19,29 +19,29 @@ import (
 )
 
 func (b *Binding) FindColumn(col string) int32 {
-	if id, ok := b.colIdByName[col]; ok {
+	if id, ok := b.colIDByName[col]; ok {
 		return id
 	}
 
 	return NotFound
 }
 
-func NewBinding(tag, nodeId int32, table string, cols []string, types []*plan.Type) *Binding {
+func NewBinding(tag, nodeID int32, table string, cols []string, types []*plan.Type) *Binding {
 	binding := &Binding{
 		tag:     tag,
-		nodeId:  nodeId,
+		nodeID:  nodeID,
 		table:   table,
 		cols:    cols,
 		types:   types,
 		refCnts: make([]uint, len(cols)),
 	}
 
-	binding.colIdByName = make(map[string]int32)
+	binding.colIDByName = make(map[string]int32)
 	for i, col := range cols {
-		if _, ok := binding.colIdByName[col]; ok {
-			binding.colIdByName[col] = AmbiguousName
+		if _, ok := binding.colIDByName[col]; ok {
+			binding.colIDByName[col] = AmbiguousName
 		} else {
-			binding.colIdByName[col] = int32(i)
+			binding.colIDByName[col] = int32(i)
 		}
 	}
 

@@ -33,7 +33,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 	es := &ExplainOptions{
 		Verbose: true,
 		Anzlyze: false,
-		Format:  EXPLAIN_FORMAT_TEXT,
+		Format:  ExplainFormatText,
 	}
 
 	_, fn, _, _ := runtime.Caller(0)

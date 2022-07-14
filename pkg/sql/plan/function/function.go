@@ -16,13 +16,14 @@ package function
 
 import (
 	"fmt"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
 )
 
 const (
@@ -162,8 +163,8 @@ func (f Function) isFunction() bool {
 var functionRegister []Functions
 
 // get function id from map functionIdRegister, see functionIds.go
-func fromNameToFunctionId(name string) (int32, error) {
-	if fid, ok := functionIdRegister[name]; ok {
+func fromNameToFunctionID(name string) (int32, error) {
+	if fid, ok := functionIDRegister[name]; ok {
 		return fid, nil
 	}
 	return -1, errors.New(errno.UndefinedFunction, fmt.Sprintf("Function or operator '%s' will be implemented in future version.", name))
@@ -194,7 +195,7 @@ func GetFunctionByID(overloadID int64) (Function, error) {
 }
 
 func GetFunctionIsAggregateByName(name string) bool {
-	fid, err := fromNameToFunctionId(name)
+	fid, err := fromNameToFunctionID(name)
 	if err != nil {
 		return false
 	}
@@ -207,21 +208,21 @@ func GetFunctionIsAggregateByName(name string) bool {
 // return the encoded overload id and the overload's return type
 // and final converted argument types( it will be nil if there's no need to do type level-up work).
 func GetFunctionByName(name string, args []types.Type) (int64, types.Type, []types.Type, error) {
-	fid, err := fromNameToFunctionId(name)
+	fid, err := fromNameToFunctionID(name)
 	if err != nil {
 		return -1, emptyType, nil, err
 	}
 	fs := functionRegister[fid]
 
-	argTs := getOidSlice(args)
-	index, targetTs := fs.TypeCheck(argTs)
+	argTS := getOidSlice(args)
+	index, targetTS := fs.TypeCheck(argTS)
 
 	// if implicit type conversion happens, set the right precision for target types.
-	targetTypes := getTypeSlice(targetTs)
+	targetTypes := getTypeSlice(targetTS)
 	rewriteTypesIfNecessary(targetTypes, args)
 
 	finalTypes := make([]types.Type, len(args))
-	if targetTs != nil {
+	if targetTS != nil {
 		copy(finalTypes, targetTypes)
 	} else {
 		copy(finalTypes, args)
