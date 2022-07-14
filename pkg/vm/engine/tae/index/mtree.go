@@ -81,7 +81,7 @@ func (art *mvART) Insert(key any, row uint32) (err error) {
 	return
 }
 
-func (art *mvART) DeleteOne(key any, row uint32) (pos int, err error) {
+func (art *mvART) DeleteOne(key any, row uint32) (err error) {
 	bufk := types.EncodeValue(key, art.typ)
 	v, found := art.tree.Search(bufk)
 	if !found {
@@ -89,9 +89,13 @@ func (art *mvART) DeleteOne(key any, row uint32) (pos int, err error) {
 	} else {
 		n := v.(*RowsNode)
 		var deleted bool
-		pos, deleted = n.DeleteRow(row)
+		_, deleted = n.DeleteRow(row)
 		if !deleted {
 			err = ErrNotFound
+		} else {
+			if n.Size() == 0 {
+				art.tree.Delete(bufk)
+			}
 		}
 	}
 	return
