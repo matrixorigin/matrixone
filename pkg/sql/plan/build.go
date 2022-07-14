@@ -113,21 +113,13 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	getResultColumnsByProjectionlist := func(query *Query) []*ColDef {
 		lastNode := query.Nodes[query.Steps[len(query.Steps)-1]]
 		columns := make([]*ColDef, len(lastNode.ProjectList))
-		if len(query.Headings) > 0 { // use refactor plan
-			for idx, expr := range lastNode.ProjectList {
-				columns[idx] = &ColDef{
-					Name: query.Headings[idx],
-					Typ:  expr.Typ,
-				}
-			}
-		} else {
-			for idx, expr := range lastNode.ProjectList {
-				columns[idx] = &ColDef{
-					Name: expr.ColName,
-					Typ:  expr.Typ,
-				}
+		for idx, expr := range lastNode.ProjectList {
+			columns[idx] = &ColDef{
+				Name: query.Headings[idx],
+				Typ:  expr.Typ,
 			}
 		}
+
 		return columns
 	}
 

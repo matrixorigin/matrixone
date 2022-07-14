@@ -112,8 +112,9 @@ message VarRef {
 
 // Reference a column in the proj list of a node.
 message ColRef {
-	int32 rel_pos	= 1;
-	int32 col_pos	= 2;
+	int32	rel_pos	= 1;
+	int32	col_pos	= 2;
+	string	name	= 3;
 }
 
 // Reference a correlated column in the proj list of a node.
@@ -193,7 +194,7 @@ message Function {
 }
 
 message Expr {
-	Type	typ			= 1;
+	Type typ = 1;
 	oneof expr {
 		Const		c		= 2;
 		ParamRef	p		= 3;
@@ -205,8 +206,6 @@ message Expr {
 		TargetType  t		= 9;
 		ExprList	list	= 10;
 	}
-	string	table_name	= 11;
-	string	col_name	= 12;
 }
 
 enum CompressType {
