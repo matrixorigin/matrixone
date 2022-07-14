@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
@@ -57,7 +58,6 @@ type LocalDispatch func(metadata.DNShard) TxnRequestHandleFunc
 // SendResult wrapping []txn.TxnResponse for reuse
 type SendResult struct {
 	Responses []txn.TxnResponse
+	streams   map[uint64]morpc.Stream
 	pool      *sync.Pool
-	size      int
-	count     int
 }

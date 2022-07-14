@@ -15,13 +15,14 @@
 package operator
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/constraints"
-	"testing"
 )
 
 func TestMinus(t *testing.T) {
@@ -62,28 +63,28 @@ func minusIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, t
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makeMinusVectors[T](left, true, right, true, typ),
+			vecs:       makeMinusVectors(left, true, right, true, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: true,
 		},
 		{
 			name:       "TEST02",
-			vecs:       makeMinusVectors[T](left, false, right, true, typ),
+			vecs:       makeMinusVectors(left, false, right, true, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: false,
 		},
 		{
 			name:       "TEST03",
-			vecs:       makeMinusVectors[T](left, true, right, false, typ),
+			vecs:       makeMinusVectors(left, true, right, false, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: false,
 		},
 		{
 			name:       "TEST04",
-			vecs:       makeMinusVectors[T](left, false, right, false, typ),
+			vecs:       makeMinusVectors(left, false, right, false, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: false,
