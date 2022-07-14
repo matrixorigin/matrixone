@@ -26,7 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input: "select cast(false as varchar)",
+		input:  "with t2 as (select * from t1) DELETE FROM a1, a2 USING t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id;",
+		output: "with t2 as (select * from t1) delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
 	}
 )
 
@@ -51,6 +52,21 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "with t2 as (select * from t1) DELETE FROM a1, a2 USING t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id;",
+		output: "with t2 as (select * from t1) delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
+	}, {
+		input:  "DELETE FROM a1, a2 USING t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id;",
+		output: "delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
+	}, {
+		input:  "DELETE a1, a2 FROM t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id",
+		output: "delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
+	}, {
+		input:  "DELETE FROM t1, t2 USING t1 INNER JOIN t2 INNER JOIN t3 WHERE t1.id=t2.id AND t2.id=t3.id",
+		output: "delete from t1, t2 using t1 inner join t2 inner join t3 where t1.id = t2.id and t2.id = t3.id",
+	}, {
+		input:  "DELETE t1, t2 FROM t1 INNER JOIN t2 INNER JOIN t3 WHERE t1.id=t2.id AND t2.id=t3.id",
+		output: "delete from t1, t2 using t1 inner join t2 inner join t3 where t1.id = t2.id and t2.id = t3.id",
+	}, {
 		input: "select cast(false as varchar)",
 	}, {
 		input:  "select cast(a as timestamp)",
