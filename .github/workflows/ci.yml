@@ -226,7 +226,7 @@ jobs:
           
       - name: Check race warnings
         run: |
-          if [ "$(grep 'DATA RACE' $GITHUB_WORKSPACE/head/mo-server.log | wc -l || 0)" -gt 0 ]; then grep -A 'DATA RACE' $GITHUB_WORKSPACE/head/mo-server.log; exit 1; fi
+          if [ "$(grep 'DATA RACE' $GITHUB_WORKSPACE/head/mo-server.log | wc -l || 0)" -gt 0 ]; then grep -A 5 'DATA RACE' $GITHUB_WORKSPACE/head/mo-server.log; exit 1; fi
                           
       - name: remove some files
         if: ${{ always() }}
