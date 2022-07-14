@@ -1,4 +1,4 @@
-From 0.5.0 version, MatrixOne introduces an automatic testing framework MO-Tester. https://github.com/matrixorigin/mo-tester
+From 0.5.0 version, MatrixOne introduces an automatic testing framework MO-Tester. <https://github.com/matrixorigin/mo-tester>
 
 This tester is designed to test MatrixOne or other database functionalities with SQL.
 
@@ -8,13 +8,13 @@ MO-Tester is a java-based teste suite for MatrixOne. It has built a whole toolch
 
 MO-Tester content locations: 
 
-* *Cases*: https://github.com/matrixorigin/mo-tester/tree/main/cases
+* *Cases*: <https://github.com/matrixorigin/mo-tester/tree/main/cases>
 
-* *Result*: https://github.com/matrixorigin/mo-tester/tree/main/result
+* *Result*: <https://github.com/matrixorigin/mo-tester/tree/main/result>
 
 * *Report*: once finished running, a `mo-tester/report` will be generated in local directory.
 
-The Cases and Results are 1-1 correspondance, and they are actually `git submodules` from MatrixOne repository. Adding new cases and results should be in MatrixOne repo: https://github.com/matrixorigin/matrixone/tree/main/test
+The Cases and Results are 1-1 correspondance, and they are actually `git submodules` from MatrixOne repository. Adding new cases and results should be in MatrixOne repo: <https://github.com/matrixorigin/matrixone/tree/main/test>
 
 MO-Tester include testing cases of the following table.
 
@@ -136,4 +136,3 @@ c	d
 c	d
 1	1
 ```
-
