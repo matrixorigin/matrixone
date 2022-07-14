@@ -159,8 +159,7 @@ func (s *Driver) Open(name string) (err error) {
 
 func (s *Driver) Mount() {
 	s.lastInode = 1
-	var seq uint64
-	seq = 0
+	seq := uint64(0)
 	s.nodes = make(map[string]*DriverFile)
 	logFile := &DriverFile{
 		snode:  s.super.lognode,

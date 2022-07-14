@@ -75,20 +75,6 @@ type appendInfo struct {
 	destOff, destLen uint32
 }
 
-func mockAppendInfo() *appendInfo {
-	return &appendInfo{
-		seq:    1,
-		srcOff: 678,
-		srcLen: 2134,
-		dest: &common.ID{
-			TableID:   1234,
-			SegmentID: 45,
-			BlockID:   9,
-		},
-		destOff: 6790,
-		destLen: 9876,
-	}
-}
 func (info *appendInfo) GetDest() *common.ID {
 	return info.dest
 }
@@ -197,7 +183,7 @@ func NewInsertNode(tbl *txnTable, mgr base.INodeManager, id *common.ID, driver w
 	impl.driver = driver
 	impl.typ = txnbase.PersistNode
 	impl.UnloadFunc = impl.OnUnload
-	impl.DestroyFunc = impl.OnDestory
+	impl.DestroyFunc = impl.OnDestroy
 	impl.LoadFunc = impl.OnLoad
 	impl.table = tbl
 	impl.appends = make([]*appendInfo, 0)
@@ -271,7 +257,7 @@ func (n *insertNode) ToTransient() {
 	atomic.StoreInt32(&n.typ, txnbase.TransientNode)
 }
 
-func (n *insertNode) OnDestory() {
+func (n *insertNode) OnDestroy() {
 	if n.data != nil {
 		n.data.Close()
 	}
