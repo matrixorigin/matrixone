@@ -63,13 +63,15 @@ func TestString(t *testing.T) {
 
 func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
-		Prepare(tc.proc, tc.arg)
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
 	}
 }
 
 func TestDispatch(t *testing.T) {
 	for _, tc := range tcs {
-		Prepare(tc.proc, tc.arg)
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
 		bat := newBatch(t, tc.types, tc.proc, Rows)
 		tc.proc.Reg.InputBatch = bat
 		{
@@ -79,11 +81,11 @@ func TestDispatch(t *testing.T) {
 				}
 			}
 		}
-		Call(tc.proc, tc.arg)
+		_, _ = Call(tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = &batch.Batch{}
-		Call(tc.proc, tc.arg)
+		_, _ = Call(tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = nil
-		Call(tc.proc, tc.arg)
+		_, _ = Call(tc.proc, tc.arg)
 		for {
 			bat := <-tc.arg.Regs[0].Ch
 			if bat == nil {
