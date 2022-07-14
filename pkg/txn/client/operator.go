@@ -207,7 +207,7 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 	return nil
 }
 
-func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) ([]txn.TxnResponse, error) {
+func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
 	for idx := range requests {
 		requests[idx].Method = txn.TxnMethod_Read
 	}
@@ -228,11 +228,11 @@ func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) ([]t
 	return tc.trimResponses(tc.handleError(tc.doSend(ctx, requests, false)))
 }
 
-func (tc *txnOperator) Write(ctx context.Context, requests []txn.TxnRequest) ([]txn.TxnResponse, error) {
+func (tc *txnOperator) Write(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
 	return tc.doWrite(ctx, requests, false)
 }
 
-func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnRequest) ([]txn.TxnResponse, error) {
+func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
 	return tc.doWrite(ctx, requests, true)
 }
 
@@ -244,13 +244,18 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 		return nil
 	}
 
-	_, err := tc.doWrite(ctx, nil, true)
+	result, err := tc.doWrite(ctx, nil, true)
 	if err != nil {
 		tc.logger.Error("commit txn failed",
 			zap.String("txn", tc.mu.txn.DebugString()),
 			zap.Error(err))
+		return err
 	}
-	return err
+
+	if result != nil {
+		result.Release()
+	}
+	return nil
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) error {
@@ -269,20 +274,21 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 		return nil
 	}
 
-	_, err := tc.handleError(tc.doSend(ctx, []txn.TxnRequest{{
+	result, err := tc.handleError(tc.doSend(ctx, []txn.TxnRequest{{
 		Method:          txn.TxnMethod_Rollback,
 		RollbackRequest: &txn.TxnRollbackRequest{},
 	}}, true))
-
 	if err != nil {
 		tc.logger.Error("rollback txn failed",
 			zap.String("txn", tc.mu.txn.DebugString()),
 			zap.Error(err))
+		return err
 	}
-	return err
+	result.Release()
+	return nil
 }
 
-func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, commit bool) ([]txn.TxnResponse, error) {
+func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, commit bool) (*rpc.SendResult, error) {
 	for idx := range requests {
 		requests[idx].Method = txn.TxnMethod_Write
 	}
@@ -471,7 +477,7 @@ func (tc *txnOperator) getTxnMeta(locked bool) txn.TxnMeta {
 	return tc.mu.txn
 }
 
-func (tc *txnOperator) doSend(ctx context.Context, requests []txn.TxnRequest, locked bool) ([]txn.TxnResponse, error) {
+func (tc *txnOperator) doSend(ctx context.Context, requests []txn.TxnRequest, locked bool) (*rpc.SendResult, error) {
 	txnMeta := tc.getTxnMeta(locked)
 	for idx := range requests {
 		requests[idx].Txn = txnMeta
@@ -486,7 +492,7 @@ func (tc *txnOperator) doSend(ctx context.Context, requests []txn.TxnRequest, lo
 		ce.Write(fields...)
 	}
 
-	responses, err := tc.sender.Send(ctx, requests)
+	result, err := tc.sender.Send(ctx, requests)
 	if err != nil {
 		tc.logger.Error("send requests failed",
 			zap.Int("count", len(requests)),
@@ -496,29 +502,31 @@ func (tc *txnOperator) doSend(ctx context.Context, requests []txn.TxnRequest, lo
 	}
 
 	if ce := tc.logger.Check(zap.DebugLevel, "receive responses"); ce != nil {
-		fields := make([]zap.Field, 0, len(responses)+1)
-		fields = append(fields, zap.Int("count", len(responses)))
-		for idx, resp := range responses {
-			fields = append(fields, zap.String(fmt.Sprintf("response-%d", idx), resp.DebugString()))
+		fields := make([]zap.Field, 0, len(requests)+1)
+		fields = append(fields, zap.Int("count", len(requests)))
+		for idx := range result.Responses {
+			fields = append(fields, zap.String(fmt.Sprintf("response-%d", idx), result.Responses[idx].DebugString()))
 		}
 		ce.Write(fields...)
 	}
-	return responses, nil
+	return result, nil
 }
 
-func (tc *txnOperator) handleError(responses []txn.TxnResponse, err error) ([]txn.TxnResponse, error) {
+func (tc *txnOperator) handleError(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
 	if err != nil {
 		return nil, err
 	}
 
-	for _, resp := range responses {
-		switch resp.Txn.GetStatus() {
+	for idx := range result.Responses {
+		switch result.Responses[idx].Txn.GetStatus() {
 		case txn.TxnStatus_Aborted, txn.TxnStatus_Aborting:
 			// read after txn aborted
+			result.Release()
 			return nil, errTxnAborted
 		case txn.TxnStatus_Committed, txn.TxnStatus_Committing, txn.TxnStatus_Prepared:
-			switch resp.Method {
+			switch result.Responses[idx].Method {
 			case txn.TxnMethod_Read, txn.TxnMethod_Write:
+				result.Release()
 				return nil, errTxnClosed
 			case txn.TxnMethod_Rollback:
 				panic("BUG")
@@ -529,19 +537,20 @@ func (tc *txnOperator) handleError(responses []txn.TxnResponse, err error) ([]tx
 
 		// TODO: handle explicit txn error to error,  resp.TxnError
 	}
-	return responses, nil
+	return result, nil
 }
 
-func (tc *txnOperator) trimResponses(responses []txn.TxnResponse, err error) ([]txn.TxnResponse, error) {
+func (tc *txnOperator) trimResponses(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
 	if err != nil {
 		return nil, err
 	}
 
-	values := responses[:0]
-	for _, resp := range responses {
+	values := result.Responses[:0]
+	for _, resp := range result.Responses {
 		if !resp.HasFlag(txn.SkipResponseFlag) {
 			values = append(values, resp)
 		}
 	}
-	return values, nil
+	result.Responses = values
+	return result, nil
 }

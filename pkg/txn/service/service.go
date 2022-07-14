@@ -196,13 +196,13 @@ func (s *service) releaseTxnContext(txnCtx *txnContext) {
 func (s *service) parallelSendWithRetry(ctx context.Context,
 	purpose string,
 	txnMeta txn.TxnMeta,
-	requests []txn.TxnRequest, ignoreTxnErrorCodes map[txn.ErrorCode]struct{}) []txn.TxnResponse {
+	requests []txn.TxnRequest, ignoreTxnErrorCodes map[txn.ErrorCode]struct{}) *rpc.SendResult {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		default:
-			responses, err := s.sender.Send(ctx, requests)
+			result, err := s.sender.Send(ctx, requests)
 			if err != nil {
 				s.logger.Error("send requests failed",
 					zap.String("purpose", purpose),
@@ -211,7 +211,7 @@ func (s *service) parallelSendWithRetry(ctx context.Context,
 				continue
 			}
 			hasError := false
-			for idx, resp := range responses {
+			for idx, resp := range result.Responses {
 				if resp.TxnError != nil {
 					_, ok := ignoreTxnErrorCodes[resp.TxnError.Code]
 					if !ok {
@@ -225,8 +225,9 @@ func (s *service) parallelSendWithRetry(ctx context.Context,
 				}
 			}
 			if !hasError {
-				return responses
+				return result
 			}
+			result.Release()
 		}
 	}
 }

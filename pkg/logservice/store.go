@@ -132,9 +132,11 @@ func newLogStore(cfg Config) (*store, error) {
 	}
 	ls.mu.truncateCh = make(chan struct{})
 	ls.mu.pendingTruncate = make(map[uint64]struct{})
-	ls.stopper.RunTask(func(ctx context.Context) {
+	if err := ls.stopper.RunTask(func(ctx context.Context) {
 		ls.truncationWorker(ctx)
-	})
+	}); err != nil {
+		return nil, err
+	}
 	return ls, nil
 }
 
@@ -158,9 +160,11 @@ func (l *store) startHAKeeperReplica(replicaID uint64,
 		join, hakeeper.NewStateMachine, raftConfig); err != nil {
 		return err
 	}
-	l.stopper.RunTask(func(ctx context.Context) {
+	if err := l.stopper.RunTask(func(ctx context.Context) {
 		l.ticker(ctx)
-	})
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 

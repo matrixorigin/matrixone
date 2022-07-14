@@ -414,7 +414,8 @@ func TestSetState(t *testing.T) {
 			},
 		}
 		cmd := GetSetStateCmd(tt.newState)
-		rsm.Update(sm.Entry{Cmd: cmd})
+		_, err := rsm.Update(sm.Entry{Cmd: cmd})
+		require.NoError(t, err)
 		assert.Equal(t, tt.result, rsm.state.State)
 	}
 }
