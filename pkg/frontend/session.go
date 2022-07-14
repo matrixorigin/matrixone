@@ -32,8 +32,9 @@ import (
 )
 
 var (
-	errorTaeTxnBeginInBegan           = goErrors.New("begin txn in the began txn")
-	errorTaeTxnHasNotBeenBegan        = goErrors.New("the txn has not been began")
+	errorTaeTxnBeginInBegan = goErrors.New("begin txn in the began txn")
+	//used in future
+	//errorTaeTxnHasNotBeenBegan        = goErrors.New("the txn has not been began")
 	errorTaeTxnAutocommitInAutocommit = goErrors.New("start autocommit txn in the autocommit txn")
 	errorTaeTxnBeginInAutocommit      = goErrors.New("begin txn in the autocommit txn")
 	errorTaeTxnAutocommitInBegan      = goErrors.New("start autocommit txn in the txn has been began")
@@ -783,7 +784,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 		return nil
 	}
 
-	var priDefs []*plan2.ColDef = nil
+	priDefs := make([]*plan2.ColDef, 0, len(priKeys))
 	for _, key := range priKeys {
 		priDefs = append(priDefs, &plan2.ColDef{
 			Name: key.Name,

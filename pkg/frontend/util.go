@@ -292,17 +292,6 @@ func MakeDebugInfo(data []byte, bytesCount int, bytesPerLine int) string {
 	return ps
 }
 
-var (
-	tmpDir = "./cube-test"
-)
-
-func cleanupTmpDir() error {
-	return os.RemoveAll(tmpDir)
-}
-
-var testPorts = []int{6002, 6003, 6004}
-var testConfigFile = "./test/system_vars_config.toml"
-
 func getSystemVariables(configFile string) (*mo_config.SystemVariables, error) {
 	sv := &mo_config.SystemVariables{}
 	var err error
