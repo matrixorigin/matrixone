@@ -47,9 +47,9 @@ func fixedLogShardInfo(record metadata.LogShardRecord, info pb.LogShardInfo,
 	expiredStores util.StoreSlice) *fixingShard {
 	fixing := newFixingShard(info)
 	diff := len(fixing.replicas) - int(record.NumberOfReplicas)
-	if record.ShardID == 0 {
-		diff = 0
-	}
+	//if record.ShardID == 0 {
+	//	diff = 0
+	//}
 
 	// The number of replicas is less than expected.
 	// Record how many replicas should be added.
@@ -128,10 +128,12 @@ func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired util.Stor
 	for uuid, storeInfo := range infos.Stores {
 		toStop := make([]replica, 0)
 		for _, replicaInfo := range storeInfo.Replicas {
-			if replicaInfo.Epoch < infos.Shards[replicaInfo.ShardID].Epoch {
-				toStop = append(toStop, replica{uuid: util.StoreID(uuid),
-					shardID: replicaInfo.ShardID})
+			_, ok := infos.Shards[replicaInfo.ShardID].Replicas[replicaInfo.ReplicaID]
+			if ok || replicaInfo.Epoch >= infos.Shards[replicaInfo.ShardID].Epoch {
+				continue
 			}
+			toStop = append(toStop, replica{uuid: util.StoreID(uuid),
+				shardID: replicaInfo.ShardID})
 		}
 		collect.toStop = append(collect.toStop, toStop...)
 	}
