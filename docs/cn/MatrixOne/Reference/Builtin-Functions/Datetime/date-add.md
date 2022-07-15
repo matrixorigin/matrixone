@@ -33,6 +33,4 @@
 
 ## **限制**
 
-目前date格式只支持 `yyyy-mm-dd` 和 `yyyymmdd` 的数据格式。  
-
-MatrixOne目前只支持在查询表的时候使用函数，不支持单独使用函数。
+目前date格式只支持 `yyyy-mm-dd` 和 `yyyymmdd` 的数据格式。
