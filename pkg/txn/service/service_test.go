@@ -74,6 +74,10 @@ func newTestClock(start int64) clock.Clock {
 	}, math.MaxInt64)
 }
 
+func newTestSpecClock(fn func() int64) clock.Clock {
+	return clock.NewHLCClock(fn, math.MaxInt64)
+}
+
 type testSender struct {
 	router map[string]rpc.TxnRequestHandleFunc
 
