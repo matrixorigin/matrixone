@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/*
+Package logservice implement MO's LogService component.
+*/
 package logservice
 
 import (

@@ -31,7 +31,6 @@ else
 fi
 
 shopt -s expand_aliases
-source $HOME/.bash_profile
 source ./utilities.sh
 go version
 

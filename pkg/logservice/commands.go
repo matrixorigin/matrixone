@@ -22,6 +22,7 @@ import (
 func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 	for _, cmd := range cmds {
 		if cmd.GetConfigChange() != nil {
+			plog.Infof("applying schedule command: %s", cmd.LogString())
 			switch cmd.ConfigChange.ChangeType {
 			case pb.AddReplica:
 				s.handleAddReplica(cmd)
@@ -32,13 +33,12 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 			case pb.StopReplica:
 				s.handleStopReplica(cmd)
 			default:
-				panic("unknown type")
+				panic("unknown config change cmd type")
 			}
-			return
-		}
-
-		if cmd.GetShutdownStore() != nil {
-			// FIXME: add logic to shutdown store
+		} else if cmd.GetShutdownStore() != nil {
+			s.handleShutdownStore(cmd)
+		} else {
+			panic("unknown schedule command type")
 		}
 	}
 }
@@ -84,4 +84,8 @@ func (s *Service) handleStopReplica(cmd pb.ScheduleCommand) {
 	if err := s.store.stopReplica(shardID, replicaID); err != nil {
 		plog.Errorf("failed to stop replica %v", err)
 	}
+}
+
+func (s *Service) handleShutdownStore(cmd pb.ScheduleCommand) {
+	panic("not implemented")
 }
