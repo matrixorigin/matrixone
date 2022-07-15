@@ -47,9 +47,6 @@ func fixedLogShardInfo(record metadata.LogShardRecord, info pb.LogShardInfo,
 	expiredStores util.StoreSlice) *fixingShard {
 	fixing := newFixingShard(info)
 	diff := len(fixing.replicas) - int(record.NumberOfReplicas)
-	if record.ShardID == 0 {
-		diff = 0
-	}
 
 	// The number of replicas is less than expected.
 	// Record how many replicas should be added.

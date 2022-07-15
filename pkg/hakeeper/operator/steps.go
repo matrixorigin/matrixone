@@ -57,12 +57,12 @@ func (a AddLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
 type RemoveLogService struct {
 	Target string
 
-	StoreID            string
-	ShardID, ReplicaID uint64
+	StoreID                   string
+	ShardID, ReplicaID, Epoch uint64
 }
 
 func (a RemoveLogService) String() string {
-	return fmt.Sprintf("removing %v:%v on log store %s", a.ShardID, a.ReplicaID, a.StoreID)
+	return fmt.Sprintf("removing %v:%v(at epoch %v) on log store %s", a.ShardID, a.ReplicaID, a.Epoch, a.StoreID)
 }
 
 func (a RemoveLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
