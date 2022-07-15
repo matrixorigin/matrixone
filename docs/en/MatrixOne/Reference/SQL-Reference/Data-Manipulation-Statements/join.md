@@ -35,3 +35,5 @@ For more information, see the reference below:
 - [RIGHT JOIN](join/right-join.md)
 - [INNER JOIN](join/inner-join.md)
 - [FULL JOIN](join/full-join.md)
+- [OUTER JOIN](join/outer-join.md)
+- [NATURAL JOIN](join/natural-join.md)

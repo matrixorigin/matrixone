@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"sync"
 	"testing"
 	"time"
@@ -72,9 +73,9 @@ func TestSendWithAlreadyContextDone(t *testing.T) {
 			assert.Nil(t, resp)
 		},
 		WithBackendConnectWhenCreate(),
-		WithBackendFilter(func(f []*Future) []*Future {
+		WithBackendFilter(func(Message) bool {
 			cancel()
-			return f
+			return true
 		}))
 }
 
@@ -97,9 +98,9 @@ func TestSendWithResetConnAndRetry(t *testing.T) {
 			assert.Equal(t, req, resp)
 			assert.True(t, retry > 0)
 		},
-		WithBackendFilter(func(fs []*Future) []*Future {
+		WithBackendFilter(func(Message) bool {
 			retry++
-			return fs
+			return true
 		}))
 }
 
@@ -155,15 +156,10 @@ func TestStream(t *testing.T) {
 			return conn.Write(msg, goetty.WriteOptions{Flush: true})
 		},
 		func(b *remoteBackend) {
-			st, err := b.NewStream(1)
+			st, err := b.NewStream()
 			assert.NoError(t, err)
 			defer func() {
 				assert.NoError(t, st.Close())
-				b.mu.RLock()
-				assert.Equal(t, 1, len(b.mu.futures))
-				b.mu.RUnlock()
-
-				b.cleanClosedStreams()
 				b.mu.RLock()
 				assert.Equal(t, 0, len(b.mu.futures))
 				b.mu.RUnlock()
@@ -192,40 +188,18 @@ func TestStreamClosedByConnReset(t *testing.T) {
 			return conn.Close()
 		},
 		func(b *remoteBackend) {
-			st, err := b.NewStream(1)
+			st, err := b.NewStream()
 			assert.NoError(t, err)
 			defer func() {
 				assert.NoError(t, st.Close())
 			}()
 			c, err := st.Receive()
 			assert.NoError(t, err)
-
 			assert.NoError(t, st.Send(&testMessage{id: st.ID()}, SendOptions{}))
 
-			_, ok := <-c
-			assert.False(t, ok)
-		},
-		WithBackendConnectWhenCreate())
-}
-
-func TestCleanClosedStream(t *testing.T) {
-	testBackendSend(t,
-		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
-			return conn.Close()
-		},
-		func(b *remoteBackend) {
-			st, err := b.NewStream(1)
-			assert.NoError(t, err)
-			assert.NoError(t, st.Close())
-
-			b.mu.RLock()
-			assert.Equal(t, 1, len(b.mu.streams))
-			b.mu.RUnlock()
-
-			b.cleanClosedStreams()
-			b.mu.RLock()
-			assert.Equal(t, 0, len(b.mu.streams))
-			b.mu.RUnlock()
+			v, ok := <-c
+			assert.True(t, ok)
+			assert.Nil(t, v)
 		},
 		WithBackendConnectWhenCreate())
 }
@@ -255,12 +229,12 @@ func TestBusy(t *testing.T) {
 			c <- struct{}{}
 		},
 		WithBackendConnectWhenCreate(),
-		WithBackendFilter(func(fs []*Future) []*Future {
+		WithBackendFilter(func(Message) bool {
 			if n == 0 {
 				<-c
 				n++
 			}
-			return nil
+			return false
 		}),
 		WithBackendBatchSendSize(1),
 		WithBackendBufferSize(10),
@@ -268,19 +242,28 @@ func TestBusy(t *testing.T) {
 }
 
 func TestDoneWithClosedStreamCannotPanic(t *testing.T) {
-	var f *Future
 	c := make(chan Message, 1)
-	s := newStream(1, c, func(v *Future) error {
-		f = v
+	s := newStream(c, func(m backendSendMessage) error {
 		return nil
-	})
+	}, func(s *stream) {})
+	s.init(1)
 	assert.NoError(t, s.Send(&testMessage{id: s.ID()}, SendOptions{}))
 	assert.NoError(t, s.Close())
+	assert.Nil(t, <-c)
+
+	s.done(nil)
+}
+
+func TestGCStream(t *testing.T) {
+	c := make(chan Message, 1)
+	s := newStream(c, func(m backendSendMessage) error {
+		return nil
+	}, func(s *stream) {})
+	s.init(1)
+	s = nil
+	debug.FreeOSMemory()
 	_, ok := <-c
 	assert.False(t, ok)
-
-	f.done(nil)
-	f.Close()
 }
 
 func testBackendSend(t *testing.T,
@@ -343,14 +326,14 @@ type testBackend struct {
 
 func (b *testBackend) Send(ctx context.Context, request Message, opts SendOptions) (*Future, error) {
 	f := newFuture(nil)
-	f.init(ctx, request, opts, false)
+	f.init(request.GetID(), ctx)
 	return f, nil
 }
 
-func (b *testBackend) NewStream(bufferSize int) (Stream, error) {
-	return newStream(1, make(chan Message, bufferSize), func(f *Future) error {
-		return nil
-	}), nil
+func (b *testBackend) NewStream() (Stream, error) {
+	st := newStream(make(chan Message, 1), func(m backendSendMessage) error { return nil }, func(s *stream) {})
+	st.init(1)
+	return st, nil
 }
 
 func (b *testBackend) Close()     {}
