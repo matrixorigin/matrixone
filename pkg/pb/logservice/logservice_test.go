@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,12 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package client
+package logservice
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-var (
-	errTxnClosed = moerr.NewError(moerr.ErrTxnClosed, "the transaction has been committed or aborted")
-)
+func TestLogRecord(t *testing.T) {
+	r := LogRecord{
+		Data: make([]byte, 32),
+	}
+	assert.Equal(t, 32-HeaderSize-8, len(r.Payload()))
+	r.ResizePayload(2)
+	assert.Equal(t, HeaderSize+8+2, len(r.Data))
+	assert.Equal(t, 2, len(r.Payload()))
+}

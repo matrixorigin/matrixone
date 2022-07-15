@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -575,7 +576,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	for i, rootId := range builder.qry.Steps {
 		rootId = builder.pushdownSemiAntiJoins(rootId)
 		rootId, _ = builder.pushdownFilters(rootId, nil)
-		rootId = builder.resolveJoinOrder(rootId)
+		rootId = builder.determineJoinOrder(rootId)
 		builder.qry.Steps[i] = rootId
 
 		colRefCnt := make(map[[2]int32]int)
@@ -1004,14 +1005,41 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 		rightCost := builder.qry.Nodes[node.Children[1]].Cost
 
 		switch node.JoinType {
-		case plan.Node_SEMI, plan.Node_ANTI, plan.Node_MARK:
+		case plan.Node_INNER:
+			node.Cost = &plan.Cost{
+				Card: math.Cbrt(leftCost.Card) * rightCost.Card,
+			}
+
+		case plan.Node_LEFT, plan.Node_RIGHT:
+			node.Cost = &plan.Cost{
+				Card: math.Pow(leftCost.Card*rightCost.Card, 2./3.),
+			}
+
+		case plan.Node_OUTER:
+			node.Cost = &plan.Cost{
+				Card: math.Pow(leftCost.Card*rightCost.Card, 2./3.) + leftCost.Card + rightCost.Card,
+			}
+
+		case plan.Node_SEMI, plan.Node_ANTI:
+			node.Cost = &plan.Cost{
+				Card: leftCost.Card * .7,
+			}
+
+		case plan.Node_SINGLE, plan.Node_MARK:
 			node.Cost = &plan.Cost{
 				Card: leftCost.Card,
 			}
+		}
 
-		default:
+	case plan.Node_AGG:
+		if len(node.GroupBy) > 0 {
+			childCost := builder.qry.Nodes[node.Children[0]].Cost
 			node.Cost = &plan.Cost{
-				Card: leftCost.Card * rightCost.Card,
+				Card: math.Pow(childCost.Card, 2./3.),
+			}
+		} else {
+			node.Cost = &plan.Cost{
+				Card: 1,
 			}
 		}
 
@@ -1728,12 +1756,50 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 	return nodeID
 }
 
-func (builder *QueryBuilder) resolveJoinOrder(nodeID int32) int32 {
+func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	node := builder.qry.Nodes[nodeID]
 
 	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER {
-		for i, child := range node.Children {
-			node.Children[i] = builder.resolveJoinOrder(child)
+		if len(node.Children) > 0 {
+			for i, child := range node.Children {
+				node.Children[i] = builder.determineJoinOrder(child)
+			}
+
+			switch node.NodeType {
+			case plan.Node_JOIN:
+				leftCost := builder.qry.Nodes[node.Children[0]].Cost
+				rightCost := builder.qry.Nodes[node.Children[1]].Cost
+
+				switch node.JoinType {
+				case plan.Node_LEFT, plan.Node_RIGHT:
+					node.Cost.Card = math.Pow(leftCost.Card*rightCost.Card, 2./3.)
+
+				case plan.Node_OUTER:
+					node.Cost.Card = math.Pow(leftCost.Card*rightCost.Card, 2./3.) + leftCost.Card + rightCost.Card
+
+				case plan.Node_SEMI, plan.Node_ANTI:
+					node.Cost.Card = leftCost.Card * .7
+
+				case plan.Node_SINGLE, plan.Node_MARK:
+					node.Cost.Card = leftCost.Card
+				}
+
+			case plan.Node_AGG:
+				if len(node.GroupBy) > 0 {
+					childCost := builder.qry.Nodes[node.Children[0]].Cost
+					node.Cost = &plan.Cost{
+						Card: math.Pow(childCost.Card, 2./3.),
+					}
+				} else {
+					node.Cost = &plan.Cost{
+						Card: 1,
+					}
+				}
+
+			default:
+				childCost := builder.qry.Nodes[node.Children[0]].Cost
+				node.Cost.Card = childCost.Card
+			}
 		}
 
 		return nodeID
@@ -1812,6 +1878,7 @@ func (builder *QueryBuilder) resolveJoinOrder(nodeID int32) int32 {
 			children := []int32{nodeID, leaves[nextSibling].NodeId}
 			if leftCard < rightCard {
 				children[0], children[1] = children[1], children[0]
+				leftCard, rightCard = rightCard, leftCard
 			}
 
 			nodeID = builder.appendNode(&plan.Node{
@@ -1820,7 +1887,7 @@ func (builder *QueryBuilder) resolveJoinOrder(nodeID int32) int32 {
 				JoinType: plan.Node_INNER,
 			}, nil)
 
-			leftCard *= rightCard
+			leftCard = math.Cbrt(leftCard) * rightCard
 
 			for i, adj := range adjMat[nextSibling*nLeaf : (nextSibling+1)*nLeaf] {
 				eligible[i] = eligible[i] || adj
@@ -1859,7 +1926,7 @@ func (builder *QueryBuilder) resolveJoinOrder(nodeID int32) int32 {
 
 func (builder *QueryBuilder) gatherJoinLeavesAndConds(joinNode *plan.Node, leaves []*plan.Node, conds []*plan.Expr) ([]*plan.Node, []*plan.Expr) {
 	if joinNode.NodeType != plan.Node_JOIN || joinNode.JoinType != plan.Node_INNER {
-		nodeID := builder.resolveJoinOrder(joinNode.NodeId)
+		nodeID := builder.determineJoinOrder(joinNode.NodeId)
 		leaves = append(leaves, builder.qry.Nodes[nodeID])
 		return leaves, conds
 	}
