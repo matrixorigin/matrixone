@@ -15,6 +15,7 @@
 package agg
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -81,10 +82,41 @@ type UnaryAgg[T1, T2 any] struct {
 	// es, es[i] is true to indicate that this group has not yet been populated with any value
 	es []bool
 	da []byte
+
+	isCount bool
 	// output vecotr's type
 	otyp types.Type
 	// type list of input vecotrs
 	ityps []types.Type
+
+	grows func(int)
+	eval  func([]T2) []T2
+	merge func(T2, T2, bool, bool) (T2, bool)
+	// fill, first parameter is the value to be fed, the second is the value of the group to be filled, the third is the number of times the first parameter needs to be fed, the fourth represents whether it is a new group, and the fifth represents whether the value to be fed is null
+	fill func(T1, T2, int64, bool, bool) (T2, bool)
+}
+
+// generic aggregation function with one input vector and with distinct
+type UnaryDistAgg[T1, T2 any] struct {
+	vs []T2
+	// es, es[i] is true to indicate that this group has not yet been populated with any value
+	es []bool
+	da []byte
+
+	isCount bool
+
+	maps []*hashmap.StrHashMap
+
+	// raw values of input vectors
+	srcs [][]T1
+
+	// output vecotr's type
+	otyp types.Type
+	// type list of input vecotrs
+	ityps []types.Type
+
+	grows func(int)
+	eval  func([]T2) []T2
 	merge func(T2, T2, bool, bool) (T2, bool)
 	// fill, first parameter is the value to be fed, the second is the value of the group to be filled, the third is the number of times the first parameter needs to be fed, the fourth represents whether it is a new group, and the fifth represents whether the value to be fed is null
 	fill func(T1, T2, int64, bool, bool) (T2, bool)

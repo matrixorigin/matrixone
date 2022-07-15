@@ -20,7 +20,8 @@ const (
 	UnitLimit = 256
 )
 
-type HashMap struct {
+type StrHashMap struct {
+	hasNull       bool
 	rows          uint64
 	keys          [][]byte
 	values        []uint64

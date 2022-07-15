@@ -221,6 +221,13 @@ func Filter(n *Nulls, sels []int64) *Nulls {
 	return n
 }
 
+func (n *Nulls) Any() bool {
+	if n.Np == nil {
+		return false
+	}
+	return !n.Np.IsEmpty()
+}
+
 func (n *Nulls) Set(row uint64) {
 	if n.Np == nil {
 		n.Np = bitmap.New(int(row) + 1)

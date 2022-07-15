@@ -24,12 +24,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-func NewUnaryAgg[T1, T2 any](ityp, otyp types.Type, merge func(T2, T2, bool, bool) (T2, bool), fill func(T1, T2, int64, bool, bool) (T2, bool)) Agg[*UnaryAgg[T1, T2]] {
+func NewUnaryAgg[T1, T2 any](isCount bool, ityp, otyp types.Type, grows func(int),
+	eval func([]T2) []T2, merge func(T2, T2, bool, bool) (T2, bool),
+	fill func(T1, T2, int64, bool, bool) (T2, bool)) Agg[*UnaryAgg[T1, T2]] {
 	return &UnaryAgg[T1, T2]{
-		otyp:  otyp,
-		fill:  fill,
-		merge: merge,
-		ityps: []types.Type{ityp},
+		otyp:    otyp,
+		eval:    eval,
+		fill:    fill,
+		merge:   merge,
+		grows:   grows,
+		isCount: isCount,
+		ityps:   []types.Type{ityp},
 	}
 }
 
@@ -72,6 +77,7 @@ func (a *UnaryAgg[T1, T2]) Grows(size int, m *mheap.Mheap) error {
 			a.es = append(a.es, true)
 			a.vs = append(a.vs, v)
 		}
+		a.grows(size)
 		return nil
 	}
 	sz := a.otyp.TypeSize()
@@ -99,6 +105,7 @@ func (a *UnaryAgg[T1, T2]) Grows(size int, m *mheap.Mheap) error {
 	for i := 0; i < size; i++ {
 		a.es = append(a.es, true)
 	}
+	a.grows(size)
 	return nil
 }
 
@@ -168,13 +175,16 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mheap.Mheap) (*vector.Vector, error) {
 		a.es = nil
 	}()
 	nsp := nulls.NewWithSize(len(a.es))
-	for i, e := range a.es {
-		if e {
-			nsp.Set(uint64(i))
+	if !a.isCount {
+		for i, e := range a.es {
+			if e {
+				nsp.Set(uint64(i))
+			}
 		}
 	}
 	if a.otyp.IsString() {
 		vec := vector.New(a.otyp)
+		a.vs = a.eval(a.vs)
 		vs := (any)(a.vs).([][]byte)
 		for _, v := range vs {
 			if err := vec.Append(v, m); err != nil {
@@ -184,5 +194,5 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mheap.Mheap) (*vector.Vector, error) {
 		}
 		return vec, nil
 	}
-	return vector.NewWithData(a.otyp, a.da, a.vs, nsp), nil
+	return vector.NewWithData(a.otyp, a.da, a.eval(a.vs), nsp), nil
 }
