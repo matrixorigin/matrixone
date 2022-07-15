@@ -239,7 +239,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 }
 
 func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan, error) {
-	createDb := &plan.CreateDatabase{
+	createDB := &plan.CreateDatabase{
 		IfNotExists: stmt.IfNotExists,
 		Database:    string(stmt.Name),
 	}
@@ -249,7 +249,7 @@ func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan,
 			Ddl: &plan.DataDefinition{
 				DdlType: plan.DataDefinition_CREATE_DATABASE,
 				Definition: &plan.DataDefinition_CreateDatabase{
-					CreateDatabase: createDb,
+					CreateDatabase: createDB,
 				},
 			},
 		},
@@ -257,7 +257,7 @@ func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan,
 }
 
 func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, error) {
-	dropDb := &plan.DropDatabase{
+	dropDB := &plan.DropDatabase{
 		IfExists: stmt.IfExists,
 		Database: string(stmt.Name),
 	}
@@ -267,7 +267,7 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 			Ddl: &plan.DataDefinition{
 				DdlType: plan.DataDefinition_DROP_DATABASE,
 				Definition: &plan.DataDefinition_DropDatabase{
-					DropDatabase: dropDb,
+					DropDatabase: dropDB,
 				},
 			},
 		},
