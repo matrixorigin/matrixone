@@ -16,6 +16,8 @@ package plan
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go/constant"
 	"math"
 	"strconv"
@@ -227,7 +229,7 @@ func convertToPlanValue(value interface{}) *plan.ConstantValue {
 // rangeCheck do range check for value, and do type conversion.
 func rangeCheck(value interface{}, typ *plan.Type, columnName string, rowNumber int) (interface{}, error) {
 	errString := "Out of range value for column '%s' at row %d"
-
+	logutil.Infof("rangeCheck: %v,type:%T", value, value)
 	switch v := value.(type) {
 	case int64:
 		switch typ.GetId() {
@@ -299,6 +301,8 @@ func rangeCheck(value interface{}, typ *plan.Type, columnName string, rowNumber 
 			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
 		}
 		return nil, errors.New(errno.DataException, fmt.Sprintf("Data too long for column '%s' at row %d", columnName, rowNumber))
+	case bytejson.ByteJson:
+		return v, nil
 	case bool, types.Date, types.Datetime, types.Timestamp, types.Decimal64, types.Decimal128:
 		return v, nil
 	default:
@@ -606,6 +610,8 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 		}
 	case constant.String:
 		switch typ.GetId() {
+		case plan.Type_JSON:
+			logutil.Infof("Parse:%v", val)
 		case plan.Type_BOOL:
 			switch strings.ToLower(str) {
 			case "false":

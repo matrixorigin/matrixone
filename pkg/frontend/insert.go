@@ -17,6 +17,7 @@ package frontend
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go/constant"
 	"math"
 	"strconv"
@@ -574,7 +575,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 			vec.Col = make([]float32, len(rows.Rows))
 		case types.T_float64:
 			vec.Col = make([]float64, len(rows.Rows))
-		case types.T_char, types.T_varchar:
+		case types.T_char, types.T_varchar, types.T_json:
 			col := &types.Bytes{}
 			if err = col.Append(make([][]byte, len(rows.Rows))); err != nil {
 				return err
@@ -660,7 +661,7 @@ func makeExprFromVal(typ types.Type, value interface{}, isNull bool) tree.Expr {
 		res := value.(float64)
 		str := strconv.FormatFloat(res, 'f', 10, 64)
 		return tree.NewNumVal(constant.MakeFloat64(res), str, res < 0)
-	case types.T_char, types.T_varchar:
+	case types.T_char, types.T_varchar, types.T_json:
 		res := string(value.([]byte)[:])
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	case types.T_date:
@@ -975,7 +976,6 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 	val := num.Value
 	str := num.String()
-
 	switch val.Kind() {
 	case constant.Unknown:
 		return nil, nil
@@ -1233,7 +1233,7 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 // rangeCheck do range check for value, and do type conversion.
 func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber int) (interface{}, error) {
 	errString := "Out of range value for column '%s' at row %d"
-
+	logutil.Infof("rangeCheck: json building test: %v,%T", value, value)
 	switch v := value.(type) {
 	case int64:
 		switch typ.Oid {
@@ -1294,9 +1294,9 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 		return nil, errors.New(errno.DataException, fmt.Sprintf(errString, columnName, rowNumber))
 	case string:
 		switch typ.Oid {
-		case types.T_char, types.T_varchar, types.T_json: // string family should compare the length but not value
+		case types.T_char, types.T_varchar: // string family should compare the length but not value
 			if len(v) > math.MaxUint16 {
-				return nil, errors.New(errno.DataException, "length out of uint16 is unexpected for char / varchar / json value")
+				return nil, errors.New(errno.DataException, "length out of uint16 is unexpected for char / varchar value")
 			}
 			if len(v) <= int(typ.Width) {
 				return v, nil
@@ -1305,6 +1305,8 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
 		}
 		return nil, errors.New(errno.DataException, fmt.Sprintf("Data too long for column '%s' at row %d", columnName, rowNumber))
+	case bytejson.ByteJson:
+		return v, nil
 	case types.Date, types.Datetime, types.Timestamp, types.Decimal64, types.Decimal128, bool:
 		return v, nil
 	default:

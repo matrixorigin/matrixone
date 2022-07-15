@@ -235,6 +235,7 @@ message ConstantValue {
 		int64 timeStamp_v = 10;
 		string string_v = 11;
 		bool bool_v = 12;
+		string json_v = 13;
 	}
 }
 
