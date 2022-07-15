@@ -56,7 +56,7 @@ func (m *DeletesMap) RemoveTs(ts uint64) {
 	if _, existed := m.tssIdx[ts]; !existed {
 		panic(fmt.Errorf("RemoveTs cannot found ts %d", ts))
 	}
-	pos := compute.BinarySearch[uint64](m.tss, ts)
+	pos := compute.BinarySearch(m.tss, ts)
 	if pos == -1 {
 		panic(fmt.Errorf("RemoveTs cannot found ts %d", ts))
 	}
