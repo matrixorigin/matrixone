@@ -89,7 +89,6 @@ func ScalarOrNotScalar(sv, nsv *vector.Vector, col1, col2 []bool, proc *process.
 			vec.Nsp.Np.Remove(uint64(i))
 		}
 	}
-	fillNullPos(vec)
 	return vec, nil
 }
 
@@ -138,6 +137,5 @@ func Or(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 			}
 		}
 	}
-	fillNullPos(vec)
 	return vec, nil
 }

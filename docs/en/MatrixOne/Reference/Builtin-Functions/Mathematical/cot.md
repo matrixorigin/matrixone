@@ -31,7 +31,3 @@ The COT() function returns the cotangent of input number(given in radians).
 |  2.5574 | 1.0000 |
 +---------+--------+
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.

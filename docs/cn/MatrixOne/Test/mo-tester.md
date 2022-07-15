@@ -1,24 +1,28 @@
-From the 0.5.0 version, MatrixOne introduces an automatic testing framework [MO-Tester](https://github.com/matrixorigin/mo-tester).
+从 0.5.0 版本开始，MatrixOne 引入了一个自动测试框架 [MO-Tester](https://github.com/matrixorigin/mo-tester)。
 
-This tester is designed to test MatrixOne or other database functionalities with SQL.
+MO-Tester 测试框架，也可以称作为测试器，是通过 SQL 测试 MatrixOne 或其他数据库功能的。
 
-# What's in MO-Tester?
+# MO-Tester 简介
 
-MO-Tester is a java-based tester suite for MatrixOne. It has built a whole toolchain to run automatic SQL tests. It contains the test cases and results. Once launched, MO-Tester runs all SQL test cases with MatrixOne, and compares all output SQL results with expected results. All successful and failed cases will be logged into reports.
+MO-Tester 是基于 Java 语言进行开发，用于 MatrixOne 的测试套件。MO-Tester 构建了一整套完整的工具链来进行 SQL 自动测试。它包含测试用例和运行结果。MO-Tester 启动后，MO-Tester 将使用 MatrixOne 运行所有 SQL 测试用例，并将所有输出 SQL 测试结果与预期结果进行比较。所有案例的结果无论成功或者失败，都将记录在报告中。
 
-MO-Tester content locations:
+MO-Tester 相关用例、结果和报告的链接如下：
 
 * *Cases*: <https://github.com/matrixorigin/mo-tester/tree/main/cases>
 
 * *Result*: <https://github.com/matrixorigin/mo-tester/tree/main/result>
 
-* *Report*: once finished running, a `mo-tester/report` will be generated in local directory.
+* *Report*: 运行结束后，本地目录自动生成 `mo-tester/report`。
 
 The Cases and Results are 1-1 correspondence, and they are actually `git submodules` from MatrixOne repository. Adding new cases and results should be in MatrixOne repo: <https://github.com/matrixorigin/matrixone/tree/main/test>
 
 MO-Tester includes testing cases in the following table.
 
-| Test cases     | Description                                                  |
+测试用例和测试结果一一对应。如需添加新的测试用例和测试结果请进入右侧所示 MatrixOne 仓库路径中进行添加：<https://github.com/matrixorigin/matrixone/tree/main/test>
+
+MO-Tester 测试用例如下表所示：
+
+| 测试用例     | 描述                                                  |
 | -------------- | ------------------------------------------------------------ |
 | Benchmark/TPCH | DDL and 22 Queries of TPCH Benchmark                         |
 | Database       | DDL Statements, creation/drop databases                      |
@@ -33,23 +37,25 @@ MO-Tester includes testing cases in the following table.
 | Subquery       | Including Select/From/Where subquery                         |
 | Transaction    | Test of isolation level, atomicity                           |
 
-# How to use MO-Tester?
+# 使用 MO-Tester
 
-## 1. Prepare testing environment
+## 1. 准备测试环境
 
-* Make sure you have installed jdk8.
+* 请先确认已安装 jdk8。
 
-* Launch MatrixOne or other database instance. Please refer to more information about [how to install and launch MatrixOne](https://docs.matrixorigin.io/0.5.0/MatrixOne/Get-Started/install-standalone-matrixone/).
+* 启动 MatrixOne 或其他数据库用例。参见更多信息 >>[安装单机版 MatrixOne](https://docs.matrixorigin.io/0.5.0/MatrixOne/Get-Started/install-standalone-matrixone/).
 
-* Clone `mo-tester` repository.
+* 克隆 MO-Tester 仓库.
 
   ```
   git clone https://github.com/matrixorigin/mo-tester.git
   ```
 
-## 2. Configure `mo-tester`
+## 2. 配置 MO-Tester
 
-* In `mo.yml` file, configure the server address, default database name, username&password, etc. MO-tester is based on java, so these parameters are required for the JDBC driver. Below is a default example for a local standalone version MatrixOne.
+MO-tester 基于 Java 语言进行开发，因此 JDBC 驱动程序需要配置参数信息：打开 `mo.yml` 文件，配置服务器地址、默认的数据库名称、用户名和密码等。
+
+以下是本地独立版本 MatrixOne 的默认示例。
 
   ```
   #jdbc
@@ -75,15 +81,16 @@ MO-Tester includes testing cases in the following table.
     passwrod: "111"
   ```
 
-## 3. Run mo-tester
+## 3. 运行 MO-Tester
 
-* With the simple below command, all the SQL test cases will automatically run and generate reports and error messages to `report/report.txt` and `report/error.txt`.
+运行以下所示命令行，SQL 所有测试用例将自动运行，并将报告和错误消息生成至 `report/report.txt` 和 `report/error.txt` 文件中。
 
 ```
 > ./run.sh
 ```
 
-If you'd like to adjust the test range, you can just change the `path` parameter of `run.yml`. And you can also specify some 			parameters when executing the command `run.sh`, parameters are as followings:
+如果你想调整测试范围，你可以修改 `run.yml` 文件中的 `path` 参数。或者，在执行 `run.sh` 命令时，你也可以指定一些参数，参数如下：
+<!--请确认这段描述是否正确-->
 
 ```
 -p  set the path of test cases needed to be executed by mo-tester, the default value is configured by the `path` in `run.yaml`
@@ -104,15 +111,16 @@ Examples:
 bash run.sh -p case -m run -t script -r 100 -i select,subquery -e substring -g
 ```
 
-If you want to automatically generate SQL results for the new SQL cases, you can just change the `method` parameter of `run.yml` to `genrs`. Running the `run.sh` scripts will directly record test results in the `result/` path with their original filenames.
+如果你想测试新的 SQL 用例并自动生成 SQL 结果，你只需要将 `run` 中的 `method` 参数 `yml` 修改为 `genrs`。运行 `run.sh` 后，在`result/` 路径下将直接记录测试结果及其原始文件名。
+<!--记录的是新的SQL用例的测试结果和新用例的文件名吗？-->
 
-Note: every time running `run.sh` will overwrite the `error`, `report`, and `success` reports.
+注意：每次运行 `run.sh` 都会覆盖 `error.txt`、`report.txt` 和 `success.txt` 报告文件。
 
-## 4. Check the report
+## 4. 查看测试报告
 
-* Once the test is finished, `mo-tester` generates `error`, `report` and `success` reports in `txt` format.
+测试完成后，MO-Tester 生成 `error.txt`，`report.txt` 和  `success.txt` 报告文件。
 
-* An example of `report.txt`  looks like this:
+* `report.txt` 示例如下：
 
 ```[SUMMARY] TOTAL : 486, SUCCESS : 486, ERROR :0, NOEXE :0, SUCCESS RATE : 100%
 [SUMMARY] TOTAL : 486, SUCCESS : 485, ERROR :1, NOEXE :0, SUCCESS RATE : 99%
@@ -121,7 +129,7 @@ Note: every time running `run.sh` will overwrite the `error`, `report`, and `suc
 [cases/transaction/isolation_1.sql] TOTAL : 217, SUCCESS : 217, ERROR :0, NOEXE :0, SUCCESS RATE : 100%
 ```
 
-* An example of `error.txt` looks like this:
+* `error.txt` 示例如下：
 
 ```
 [ERROR]

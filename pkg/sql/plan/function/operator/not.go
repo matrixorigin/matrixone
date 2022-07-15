@@ -20,16 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func fillNullPos(vec *vector.Vector) {
-	if nulls.Any(vec.Nsp) {
-		rows := vec.Nsp.Np.ToArray()
-		cols := vec.Col.([]bool)
-		for _, row := range rows {
-			cols[row] = false
-		}
-	}
-}
-
 func NotScalar(sv, nsv *vector.Vector, col1, col2 []bool, proc *process.Process) (*vector.Vector, error) {
 	length := vector.Length(nsv)
 	vec := allocateBoolVector(length, proc)
@@ -39,7 +29,6 @@ func NotScalar(sv, nsv *vector.Vector, col1, col2 []bool, proc *process.Process)
 		vcols[i] = value && col2[i]
 	}
 	nulls.Or(nsv.Nsp, nil, vec.Nsp)
-	fillNullPos(vec)
 	return vec, nil
 }
 
@@ -65,6 +54,5 @@ func Not(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		vcols[i] = !col1[i]
 	}
 	nulls.Or(v1.Nsp, nil, vec.Nsp)
-	fillNullPos(vec)
 	return vec, nil
 }
