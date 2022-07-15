@@ -30,7 +30,7 @@ const (
 )
 
 func TestInsert(t *testing.T) {
-	mp := New()
+	mp := NewStrMap(false)
 	ts := []types.Type{
 		types.New(types.T_int8, 0, 0, 0),
 		types.New(types.T_int16, 0, 0, 0),

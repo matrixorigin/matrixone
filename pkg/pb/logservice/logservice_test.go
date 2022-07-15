@@ -12,8 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// plan build & optimize logical plan
-package plan
+package logservice
 
-func init() {
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestLogRecord(t *testing.T) {
+	r := LogRecord{
+		Data: make([]byte, 32),
+	}
+	assert.Equal(t, 32-HeaderSize-8, len(r.Payload()))
+	r.ResizePayload(2)
+	assert.Equal(t, HeaderSize+8+2, len(r.Data))
+	assert.Equal(t, 2, len(r.Payload()))
 }

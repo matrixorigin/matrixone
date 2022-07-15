@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/*
+Package hakeeper implements MO's hakeeper component.
+*/
 package hakeeper
 
 import (

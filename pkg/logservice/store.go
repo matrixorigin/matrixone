@@ -525,7 +525,7 @@ func (l *store) queryLog(ctx context.Context, shardID uint64,
 		return nil, 0, err
 	}
 	select {
-	case v := <-rs.CompletedC:
+	case v := <-rs.ResultC():
 		if v.Completed() {
 			entries, logRange := v.RaftLogs()
 			next := getNextIndex(entries, firstIndex, logRange.LastIndex)

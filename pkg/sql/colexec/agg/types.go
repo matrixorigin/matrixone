@@ -15,6 +15,7 @@
 package agg
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -25,10 +26,10 @@ type Agg[T any] interface {
 	Dup() Agg[any]
 
 	// Type return the type of the agg's result.
-	Type() types.Type
+	OutputType() types.Type
 
 	// InputType return the type of the agg's input.
-	InputType() []types.Type
+	InputTypes() []types.Type
 
 	// String return related information of the agg.
 	// used to show query plans.
@@ -41,12 +42,7 @@ type Agg[T any] interface {
 	Grows(n int, _ *mheap.Mheap) error
 
 	// Eval method calculates and returns the final result of the aggregate function.
-	// zs means the date number of each group
-	// e.g.
-	// If zs is [1, 2]
-	// zs[0] = 1 means group 0 has 1 data.
-	// zs[1] = 2 means group 1 has 2 data.
-	Eval(zs []int64, _ *mheap.Mheap) *vector.Vector
+	Eval(_ *mheap.Mheap) (*vector.Vector, error)
 
 	// Fill use the rowIndex-rows of vector to update the data of groupIndex-group.
 	// rowCount indicates the number of times the rowIndex-row is repeated.
@@ -77,5 +73,69 @@ type Agg[T any] interface {
 	// BatchAdd merges multi groups of agg1 and agg2
 	//  agg1's (vps[i]-1)th group is related to agg2's (start+i)th group
 	// For more introduction of os, please refer to comments of Function BatchFill.
-	BatchMerge(r2 Agg[any], start int64, os []uint8, vps []uint64)
+	BatchMerge(agg2 Agg[any], start int64, os []uint8, vps []uint64)
+}
+
+// generic aggregation function with one input vector and without distinct
+type UnaryAgg[T1, T2 any] struct {
+	// vs is result value list
+	vs []T2
+	// es, es[i] is true to indicate that this group has not yet been populated with any value
+	es []bool
+	// memory of vs
+	da []byte
+
+	// iscount is true,  it means that the aggregation function is count
+	isCount bool
+	// otyp is output vecotr's type
+	otyp types.Type
+	// ityps is type list of input vectors
+	ityps []types.Type
+
+	// grows used for add groups
+	grows func(int)
+	// eval used to get final aggregated value
+	eval func([]T2) []T2
+	// merge The first argument is the value of the group corresponding to the first aggregate function,
+	//		the second argument is the value of the group corresponding to the second aggregate function,
+	//      the third argument is whether the value corresponding to the first aggregate function is empty,
+	//      and the fourth argument is whether the value corresponding to the second aggregate function is empty
+	merge func(T2, T2, bool, bool) (T2, bool)
+	// fill, first parameter is the value to be fed, the second is the value of the group to be filled, the third is the number of times the first parameter needs to be fed, the fourth represents whether it is a new group, and the fifth represents whether the value to be fed is null
+	fill func(T1, T2, int64, bool, bool) (T2, bool)
+}
+
+// generic aggregation function with one input vector and with distinct
+type UnaryDistAgg[T1, T2 any] struct {
+	// vs is result value list
+	vs []T2
+	// es, es[i] is true to indicate that this group has not yet been populated with any value
+	es []bool
+	// memory of vs
+	da []byte
+
+	// iscount is true,  it means that the aggregation function is count
+	isCount bool
+
+	maps []*hashmap.StrHashMap
+
+	// raw values of input vectors
+	srcs [][]T1
+
+	// output vecotr's type
+	otyp types.Type
+	// type list of input vectors
+	ityps []types.Type
+
+	// grows used for add groups
+	grows func(int)
+	// eval used to get final aggregated value
+	eval func([]T2) []T2
+	// merge The first argument is the value of the group corresponding to the first aggregate function,
+	//		the second argument is the value of the group corresponding to the second aggregate function,
+	//      the third argument is whether the value corresponding to the first aggregate function is empty,
+	//      and the fourth argument is whether the value corresponding to the second aggregate function is empty
+	merge func(T2, T2, bool, bool) (T2, bool)
+	// fill, first parameter is the value to be fed, the second is the value of the group to be filled, the third is the number of times the first parameter needs to be fed, the fourth represents whether it is a new group, and the fifth represents whether the value to be fed is null
+	fill func(T1, T2, int64, bool, bool) (T2, bool)
 }

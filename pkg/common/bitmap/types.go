@@ -20,9 +20,9 @@ type Iterator interface {
 	PeekNext() uint64
 }
 
-// Nulls represent line numbers of tuple's is null
+// Bitmap represents line numbers of tuple's is null
 type Bitmap struct {
-	// Len represent the size of bitmap
+	// len represents the size of bitmap
 	len  int
 	data []uint64
 }
