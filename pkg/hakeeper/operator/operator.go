@@ -72,6 +72,11 @@ func (o *Operator) Status() OpStatus {
 	return o.status.Status()
 }
 
+// SetStatus only used for tests.
+func (o *Operator) SetStatus(status OpStatus) {
+	o.status.setStatus(status)
+}
+
 // Cancel marks the operator canceled.
 func (o *Operator) Cancel() bool {
 	return o.status.To(CANCELED)

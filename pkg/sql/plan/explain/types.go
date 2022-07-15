@@ -83,7 +83,7 @@ func calcSpaceNum(level int) int {
 }
 
 func (buf *ExplainDataBuffer) PushNewLine(line string, isNewNode bool, level int) {
-	var prefix string = ""
+	prefix := ""
 	if level <= 0 {
 		if isNewNode {
 			prefix += ""
@@ -91,7 +91,7 @@ func (buf *ExplainDataBuffer) PushNewLine(line string, isNewNode bool, level int
 			prefix += "  "
 		}
 	} else {
-		var offset int = calcSpaceNum(level)
+		offset := calcSpaceNum(level)
 		if isNewNode {
 			prefix += strings.Repeat(" ", offset-6) + "->  "
 		} else {
