@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package scanner
+package postgresql
 
 import (
 	"fmt"
@@ -31,20 +31,15 @@ type Scanner struct {
 	posVarIndex         int
 	dialectType         dialect.DialectType
 	MysqlSpecialComment *Scanner
-	keywords            map[string]int
 
 	Pos int
 	buf string
 }
 
 func NewScanner(dialectType dialect.DialectType, sql string) *Scanner {
-	rwlock.Lock()
-	m := initTokens(dialectType)
-	rwlock.Unlock()
 
 	return &Scanner{
-		buf:      sql,
-		keywords: m,
+		buf: sql,
 	}
 }
 
@@ -573,7 +568,7 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 	}
 	keywordName := s.buf[start:s.Pos]
 	lower := strings.ToLower(keywordName)
-	if keywordID, found := s.keywords[lower]; found {
+	if keywordID, found := keywords[lower]; found {
 		return keywordID, lower
 	}
 	// dual must always be case-insensitive
