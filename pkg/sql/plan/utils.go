@@ -112,6 +112,10 @@ func decreaseDepth(expr *plan.Expr) (*plan.Expr, bool) {
 }
 
 func DeepCopyExpr(expr *Expr) *Expr {
+	if expr == nil {
+		return nil
+	}
+
 	new_expr := &Expr{
 		Typ: &plan.Type{
 			Id:        expr.Typ.GetId(),

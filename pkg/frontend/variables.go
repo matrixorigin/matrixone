@@ -3,13 +3,14 @@ package frontend
 import (
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"math"
 	bits2 "math/bits"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 var (
@@ -22,6 +23,7 @@ var (
 	errorConvertToStringFailed      = errors.New("convert to the system variable string type failed")
 	errorConvertToNullFailed        = errors.New("convert to the system variable null type failed")
 	errorSystemVariableDoesNotExist = errors.New("the system variable does not exist")
+	errorPrepareStatementNotExist   = errors.New("the prepare statement does not exist")
 	errorSystemVariableIsSession    = errors.New("the system variable is session")
 	errorSystemVariableSessionEmpty = errors.New("the value of the system variable with scope session is empty")
 	errorSystemVariableIsGlobal     = errors.New("the system variable is global")

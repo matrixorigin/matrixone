@@ -185,6 +185,8 @@ type Session struct {
 	sysVars         map[string]interface{}
 	userDefinedVars map[string]interface{}
 	gSysVars        *GlobalSystemVariables
+
+	prepareStmts map[string]*PrepareStmt
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
@@ -206,9 +208,26 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 		sysVars:         gSysVars.CopySysVarsToSession(),
 		userDefinedVars: make(map[string]interface{}),
 		gSysVars:        gSysVars,
+
+		prepareStmts: make(map[string]*PrepareStmt),
 	}
 	ses.txnCompileCtx.SetSession(ses)
 	return ses
+}
+
+func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) {
+	ses.prepareStmts[name] = prepareStmt
+}
+
+func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
+	if prepareStmt, ok := ses.prepareStmts[name]; ok {
+		return prepareStmt, nil
+	}
+	return nil, errorPrepareStatementNotExist
+}
+
+func (ses *Session) RemovePrepareStmt(name string) {
+	delete(ses.prepareStmts, name)
 }
 
 // SetGlobalVar sets the value of system variable in global.

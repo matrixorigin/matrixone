@@ -140,3 +140,65 @@ func (rule *resetParamRule) setOrder(e *plan.Expr) *plan.Expr {
 		return e
 	}
 }
+
+// ---------------------------
+
+type resetParamRefRule struct {
+	args map[int]*Expr
+}
+
+func NewResetParamRefRule(args map[int]*Expr) resetParamRefRule {
+	return resetParamRefRule{
+		args: args,
+	}
+}
+
+func (rule *resetParamRefRule) Match(_ *Node) bool {
+	return true
+}
+
+func (rule *resetParamRefRule) Apply(node *Node, qry *Query) {
+	if node.Limit != nil {
+		node.Limit = rule.resetParamRef(node.Limit)
+	}
+
+	if node.Offset != nil {
+		node.Offset = rule.resetParamRef(node.Offset)
+	}
+
+	for i := range node.OnList {
+		node.OnList[i] = rule.resetParamRef(node.OnList[i])
+	}
+
+	for i := range node.FilterList {
+		node.FilterList[i] = rule.resetParamRef(node.FilterList[i])
+	}
+
+	for i := range node.ProjectList {
+		node.ProjectList[i] = rule.resetParamRef(node.ProjectList[i])
+	}
+}
+
+func (rule *resetParamRefRule) resetParamRef(e *plan.Expr) *plan.Expr {
+	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_F:
+		needResetFunction := false
+		for i, arg := range exprImpl.F.Args {
+			if _, ok := arg.Expr.(*plan.Expr_P); ok {
+				needResetFunction = true
+			}
+			exprImpl.F.Args[i] = rule.resetParamRef(arg)
+		}
+		// reset function
+
+		if needResetFunction {
+			newExpr, _ := bindFuncExprImplByPlanExpr(exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
+			return newExpr
+		}
+		return e
+	case *plan.Expr_P:
+		return rule.args[int(exprImpl.P.Pos)]
+	default:
+		return e
+	}
+}

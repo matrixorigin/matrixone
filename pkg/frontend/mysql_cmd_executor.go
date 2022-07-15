@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 
@@ -44,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -1344,6 +1346,23 @@ func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{},
 		return nil, err
 	}
 
+	if _, ok := cwft.stmt.(*tree.Execute); ok {
+		executePlan := cwft.plan.GetDcl().GetExecute()
+		stmtName := executePlan.GetName()
+		prepareStmt, err := cwft.ses.GetPrepareStmt(stmtName)
+		if err != nil {
+			return nil, err
+		}
+
+		query := plan.DeepCopyQuery(prepareStmt.PreparePlan.GetQuery())
+
+		//reset plan & stmt
+		cwft.stmt = prepareStmt.PrepareStmt
+		cwft.plan = &plan.Plan{Plan: &plan.Plan_Query{
+			Query: query,
+		}}
+	}
+
 	cwft.proc.UnixTime = time.Now().UnixNano()
 	txnHandler := cwft.ses.GetTxnHandler()
 	cwft.proc.Snapshot = txnHandler.GetTxn().GetCtx()
@@ -1578,6 +1597,43 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			if err != nil {
 				goto handleFailed
 			}
+		case *tree.PrepareStmt:
+			selfHandle = true
+			preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
+			if err != nil {
+				goto handleFailed
+			}
+
+			mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), &PrepareStmt{
+				Name:        preparePlan.GetDcl().GetPrepare().GetName(),
+				PreparePlan: preparePlan,
+				PrepareStmt: st.Stmt,
+				BuildTime:   time.Now().Second(),
+			})
+		case *tree.PrepareString:
+			selfHandle = true
+			preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
+			if err != nil {
+				goto handleFailed
+			}
+			stmts, err := mysql.Parse(st.Sql)
+			if err != nil {
+				goto handleFailed
+			}
+
+			mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), &PrepareStmt{
+				Name:        preparePlan.GetDcl().GetPrepare().GetName(),
+				PreparePlan: preparePlan,
+				PrepareStmt: stmts[0],
+				BuildTime:   time.Now().Second(),
+			})
+		case *tree.Deallocate:
+			selfHandle = true
+			deallocatePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
+			if err != nil {
+				goto handleFailed
+			}
+			mce.ses.RemovePrepareStmt(deallocatePlan.GetDcl().GetDeallocate().GetName())
 		case *tree.SetVar:
 			selfHandle = true
 			err = mce.handleSetVar(st)
@@ -1785,7 +1841,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
-				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete:
+				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete,
+				*tree.PrepareStmt, *tree.PrepareString, *tree.Deallocate:
 				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 				if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
 					return fmt.Errorf("routine send response failed. error:%v ", err)
