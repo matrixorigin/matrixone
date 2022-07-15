@@ -28,7 +28,10 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		return nil, errors.New(errno.CaseNotFound, "no column will be update")
 	}
 	// Check database's name and table's name
-	alsTbl, ok := stmt.Table.(*tree.AliasedTableExpr)
+	if len(stmt.Tables) != 1 {
+		return nil, errors.New(errno.FeatureNotSupported, "cannot update from multiple tables")
+	}
+	alsTbl, ok := stmt.Tables[0].(*tree.AliasedTableExpr)
 	if !ok {
 		return nil, errors.New(errno.FeatureNotSupported, "cannot update from multiple tables")
 	}
@@ -132,7 +135,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	selectStmt := &tree.Select{
 		Select: &tree.SelectClause{
 			Exprs: useProjectExprs,
-			From:  &tree.From{Tables: tree.TableExprs{stmt.Table}},
+			From:  &tree.From{Tables: stmt.Tables},
 			Where: stmt.Where,
 		},
 		OrderBy: stmt.OrderBy,
