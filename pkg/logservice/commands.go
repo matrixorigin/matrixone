@@ -23,6 +23,7 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 	for _, cmd := range cmds {
 		plog.Infof("%s applying cmd: %s", s.ID(), cmd.LogString())
 		if cmd.GetConfigChange() != nil {
+			plog.Infof("applying schedule command: %s", cmd.LogString())
 			switch cmd.ConfigChange.ChangeType {
 			case pb.AddReplica:
 				s.handleAddReplica(cmd)

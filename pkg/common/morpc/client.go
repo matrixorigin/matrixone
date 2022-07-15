@@ -160,13 +160,13 @@ func (c *client) Send(ctx context.Context, backend string, request Message, opts
 	return f, nil
 }
 
-func (c *client) NewStream(backend string, receiveChanBuffer int) (Stream, error) {
+func (c *client) NewStream(backend string) (Stream, error) {
 	b, err := c.getBackend(backend)
 	if err != nil {
 		return nil, err
 	}
 
-	return b.NewStream(receiveChanBuffer)
+	return b.NewStream()
 }
 
 func (c *client) Close() error {

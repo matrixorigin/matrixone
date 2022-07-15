@@ -162,7 +162,7 @@ func (l *store) healthCheck(term uint64, state *pb.CheckerState) {
 	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 	defer cancel()
 	for _, cmd := range cmds {
-		plog.Infof("ha cmd: %s", cmd.LogString())
+		plog.Infof("adding schedule command to hakeeper: %s", cmd.LogString())
 	}
 	if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
 		// TODO: check whether this is temp error

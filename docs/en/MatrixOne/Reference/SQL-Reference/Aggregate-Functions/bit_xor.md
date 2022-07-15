@@ -35,7 +35,3 @@ The BIT_XOR(expr) function returns the bitwise XOR of all bits in expr.
 | b    |              10 |
 +------+-----------------+
 ```
-
-## **Constraints**
-
-Currently, MatrixOne doesn't support select function() without from tables.

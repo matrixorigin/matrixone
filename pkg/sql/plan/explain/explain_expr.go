@@ -28,11 +28,15 @@ func describeExpr(expr *plan.Expr, options *ExplainOptions) (string, error) {
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		result += "#["
-		result += strconv.FormatInt(int64(exprImpl.Col.RelPos), 10)
-		result += ","
-		result += strconv.FormatInt(int64(exprImpl.Col.ColPos), 10)
-		result += "]"
+		if len(exprImpl.Col.Name) > 0 {
+			result += exprImpl.Col.Name
+		} else {
+			result += "#["
+			result += strconv.FormatInt(int64(exprImpl.Col.RelPos), 10)
+			result += ","
+			result += strconv.FormatInt(int64(exprImpl.Col.ColPos), 10)
+			result += "]"
+		}
 	case *plan.Expr_C:
 		if exprImpl.C.Isnull {
 			result += expr.Typ.Id.String() + "(null)"
@@ -92,7 +96,7 @@ func describeExpr(expr *plan.Expr, options *ExplainOptions) (string, error) {
 	return result, nil
 }
 
-// generator function expression(Expr_F) explain infomation
+// generator function expression(Expr_F) explain information
 func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOptions) (string, error) {
 	// SysFunsAndOperatorsMap
 	var result string

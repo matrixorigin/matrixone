@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"sync/atomic"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -35,15 +36,16 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		return false, nil
 	}
 	defer bat.Clean(proc.Mp)
-	err := p.TableSource.Delete(p.Ts, bat.GetVector(0), p.UseDeleteKey, proc.Snapshot)
-	if err != nil {
-		return false, err
+
+	for i := range p.DeleteCtxs {
+		err := p.DeleteCtxs[i].TableSource.Delete(p.Ts, bat.GetVector(int32(i)), p.DeleteCtxs[i].UseDeleteKey, proc.Snapshot)
+		if err != nil {
+			return false, err
+		}
 	}
 
 	affectedRows := uint64(batch.Length(bat))
+	atomic.AddUint64(&p.AffectedRows, affectedRows)
 
-	p.M.Lock()
-	p.AffectedRows += affectedRows
-	p.M.Unlock()
 	return false, nil
 }

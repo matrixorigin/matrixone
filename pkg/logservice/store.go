@@ -668,7 +668,6 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 		if ci.ConfigChangeIndex == 0 {
 			panic("ci.ConfigChangeIndex is 0")
 		}
-		plog.Infof("reporting %d:%d", ci.ShardID, ci.ReplicaID)
 		replicaInfo := pb.LogReplicaInfo{
 			LogShardInfo: pb.LogShardInfo{
 				ShardID:  ci.ShardID,
