@@ -169,6 +169,10 @@ func (m *ScheduleCommand) LogString() string {
 		scheUuid = scheUuid[:6]
 	}
 
+	if m.ConfigChange == nil {
+		return fmt.Sprintf("%s/shutdown %s", serviceType[m.ServiceType], scheUuid)
+	}
+
 	repUuid := m.ConfigChange.Replica.UUID
 	if len(repUuid) > 6 {
 		repUuid = repUuid[:6]
@@ -183,10 +187,10 @@ func (m *ScheduleCommand) LogString() string {
 		}
 	}
 
-	s := fmt.Sprintf("%s/%s %s %s:%d:%d %v", serviceType[m.ServiceType],
+	s := fmt.Sprintf("%s/%s %s %s:%d:%d:%d %v", serviceType[m.ServiceType],
 		configChangeType[m.ConfigChange.ChangeType], scheUuid,
 		repUuid, m.ConfigChange.Replica.ShardID,
-		m.ConfigChange.Replica.ReplicaID, initMems)
+		m.ConfigChange.Replica.ReplicaID, m.ConfigChange.Replica.Epoch, initMems)
 
 	return s
 }
