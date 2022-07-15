@@ -20,13 +20,8 @@
 
 ```sql
 > select a,length(a) from t1;
-
 a	length(a)
-a       1 
-ab      2 
-abc     3 
+a       1
+ab      2
+abc     3
 ```
-
-## **限制**
-
-MatrixOne目前只支持在查询表的时候使用函数，不支持单独使用函数。

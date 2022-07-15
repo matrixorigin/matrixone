@@ -30,7 +30,3 @@ This function RTRIM() returns the string with trailing space characters removed.
 | matrix   | matrixone |
 +----------+-----------+
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.

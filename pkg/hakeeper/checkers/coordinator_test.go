@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
@@ -382,4 +383,46 @@ func TestFixZombie(t *testing.T) {
 		output := coordinator.Check(c.idAlloc, c.cluster, c.dn, c.log, c.currentTick)
 		assert.Equal(t, c.expected, output)
 	}
+}
+
+func TestOpExpiredAndThenCompleted(t *testing.T) {
+	cluster := pb.ClusterInfo{LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 3}}}
+	idAlloc := util.NewTestIDAllocator(2)
+	coordinator := NewCoordinator()
+	fn := func(time uint64) uint64 { return time * util.TickPerSecond * 60 }
+
+	replicas := map[uint64]string{1: "a", 2: "b"}
+	logShardInfo := pb.LogShardInfo{ShardID: 1, Replicas: replicas, Epoch: 2, LeaderID: 1}
+	logState := pb.LogState{
+		Shards: map[uint64]pb.LogShardInfo{1: {ShardID: 1, Replicas: replicas, Epoch: 1, LeaderID: 1}},
+		Stores: map[string]pb.LogStoreInfo{
+			"a": {Tick: fn(12), Replicas: []pb.LogReplicaInfo{{LogShardInfo: logShardInfo, ReplicaID: 1}}},
+			"b": {Tick: fn(13), Replicas: []pb.LogReplicaInfo{{LogShardInfo: logShardInfo, ReplicaID: 2}}},
+			"c": {Tick: fn(14) * util.TickPerSecond * 60},
+		},
+	}
+
+	assert.NotNil(t, coordinator.Check(idAlloc, cluster, pb.DNState{}, logState, fn(15)))
+	assert.Nil(t, coordinator.Check(idAlloc, cluster, pb.DNState{}, logState, fn(16)))
+
+	ops := coordinator.OperatorController.GetOperators(1)
+	assert.Equal(t, 1, len(ops))
+	ops[0].SetStatus(operator.EXPIRED)
+
+	assert.NotNil(t, coordinator.Check(idAlloc, cluster, pb.DNState{}, logState, fn(17)))
+	ops = coordinator.OperatorController.GetOperators(1)
+	assert.Equal(t, 1, len(ops))
+
+	replicas = map[uint64]string{1: "a", 2: "b", 4: "c"}
+	logShardInfo = pb.LogShardInfo{ShardID: 1, Replicas: replicas, Epoch: 2, LeaderID: 1}
+	logState = pb.LogState{
+		Shards: map[uint64]pb.LogShardInfo{1: {ShardID: 1, Replicas: replicas, Epoch: 1, LeaderID: 1}},
+		Stores: map[string]pb.LogStoreInfo{
+			"a": {Tick: fn(12), Replicas: []pb.LogReplicaInfo{{LogShardInfo: logShardInfo, ReplicaID: 1}}},
+			"b": {Tick: fn(13), Replicas: []pb.LogReplicaInfo{{LogShardInfo: logShardInfo, ReplicaID: 2}}},
+			"c": {Tick: fn(14), Replicas: []pb.LogReplicaInfo{{LogShardInfo: logShardInfo, ReplicaID: 4}}},
+		},
+	}
+
+	assert.Nil(t, coordinator.Check(idAlloc, cluster, pb.DNState{}, logState, fn(18)))
 }

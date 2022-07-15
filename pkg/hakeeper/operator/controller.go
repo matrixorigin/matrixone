@@ -62,7 +62,8 @@ func (c *Controller) GetOperators(shardID uint64) []*Operator {
 	return c.operators[shardID]
 }
 
-func (c *Controller) GetRemovingReplicas() (removing map[uint64][]uint64) {
+func (c *Controller) GetRemovingReplicas() map[uint64][]uint64 {
+	removing := make(map[uint64][]uint64)
 	for shardID, operators := range c.operators {
 		for _, op := range operators {
 			for _, step := range op.steps {
@@ -73,10 +74,11 @@ func (c *Controller) GetRemovingReplicas() (removing map[uint64][]uint64) {
 			}
 		}
 	}
-	return
+	return removing
 }
 
-func (c *Controller) GetAddingReplicas() (adding map[uint64][]uint64) {
+func (c *Controller) GetAddingReplicas() map[uint64][]uint64 {
+	adding := make(map[uint64][]uint64)
 	for shardID, operators := range c.operators {
 		for _, op := range operators {
 			for _, step := range op.steps {
@@ -87,7 +89,7 @@ func (c *Controller) GetAddingReplicas() (adding map[uint64][]uint64) {
 			}
 		}
 	}
-	return
+	return adding
 }
 
 func (c *Controller) RemoveFinishedOperator(logState pb.LogState, dnState pb.DNState) {

@@ -31,7 +31,3 @@ The SIN() function returns the sine of input number(given in radians).
 | -0.8415 | 1.0000 |
 +---------+--------+
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.
