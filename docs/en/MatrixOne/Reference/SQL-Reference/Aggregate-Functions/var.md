@@ -44,7 +44,3 @@ The VAR(expr) function returns the population standard variance of expr.
 1 row in set (0.04 sec)
 
 ```
-
-## **Constraints**
-
-Currently, MatrixOne doesn't support select function() without from tables.

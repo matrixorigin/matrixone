@@ -52,7 +52,3 @@ Returns 1 whether string starts with the specified prefix, otherwise it returns 
 |    1 | Ananya Majumdar | IX   |
 +------+-----------------+------+
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.
