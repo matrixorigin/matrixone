@@ -49,7 +49,9 @@ type Inode struct {
 	mutex    sync.RWMutex
 	extents  []Extent
 	typ      InodeType
-	seq      uint64
+	state    StateType
+	create   uint64
+	delete   uint64
 	objectId uint64
 }
 
@@ -90,13 +92,16 @@ func (i *Inode) Marshal() (buf []byte, err error) {
 	if err = binary.Write(&buffer, binary.BigEndian, i.typ); err != nil {
 		return
 	}
+	if err = binary.Write(&buffer, binary.BigEndian, i.state); err != nil {
+		return
+	}
 	if err = binary.Write(&buffer, binary.BigEndian, uint32(len([]byte(i.name)))); err != nil {
 		return
 	}
 	if err = binary.Write(&buffer, binary.BigEndian, []byte(i.name)); err != nil {
 		return
 	}
-	if err = binary.Write(&buffer, binary.BigEndian, i.seq); err != nil {
+	if err = binary.Write(&buffer, binary.BigEndian, i.create); err != nil {
 		return
 	}
 	if err = binary.Write(&buffer, binary.BigEndian, i.algo); err != nil {
@@ -161,6 +166,10 @@ func (i *Inode) UnMarshal(cache *bytes.Buffer, inode *Inode) (n int, err error) 
 		return
 	}
 	n += int(unsafe.Sizeof(inode.typ))
+	if err = binary.Read(cache, binary.BigEndian, &inode.state); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(inode.state))
 	if err = binary.Read(cache, binary.BigEndian, &nameLen); err != nil {
 		return
 	}
@@ -171,10 +180,10 @@ func (i *Inode) UnMarshal(cache *bytes.Buffer, inode *Inode) (n int, err error) 
 	}
 	n += len(name)
 	inode.name = string(name)
-	if err = binary.Read(cache, binary.BigEndian, &inode.seq); err != nil {
+	if err = binary.Read(cache, binary.BigEndian, &inode.create); err != nil {
 		return
 	}
-	n += int(unsafe.Sizeof(inode.seq))
+	n += int(unsafe.Sizeof(inode.create))
 	if err = binary.Read(cache, binary.BigEndian, &inode.algo); err != nil {
 		return
 	}

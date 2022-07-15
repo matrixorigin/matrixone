@@ -30,10 +30,11 @@ type ObjectDir struct {
 
 func openObjectDir(fs *ObjectFS, name string) *ObjectDir {
 	inode := &Inode{
-		magic: MAGIC,
-		inode: fs.lastInode,
-		typ:   DIR,
-		name:  name,
+		magic:  MAGIC,
+		inode:  fs.lastInode,
+		typ:    DIR,
+		name:   name,
+		create: fs.seq,
 	}
 	file := &ObjectDir{}
 	file.fs = fs
@@ -91,6 +92,7 @@ func (d *ObjectDir) Remove(name string) error {
 func (d *ObjectDir) OpenFile(fs *ObjectFS, name string) tfs.File {
 	file := d.nodes[name]
 	if file == nil {
+		fs.seq++
 		file = openObjectFile(fs, name)
 		d.nodes[name] = file
 	}

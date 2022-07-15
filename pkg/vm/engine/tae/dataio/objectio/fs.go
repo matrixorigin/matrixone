@@ -33,6 +33,7 @@ type ObjectFS struct {
 	attr      *Attr
 	lastId    uint64
 	lastInode uint64
+	seq       uint64
 }
 
 type Attr struct {
@@ -59,6 +60,7 @@ func (o *ObjectFS) SetDir(dir string) {
 func (o *ObjectFS) OpenDir(name string, nodes *map[string]tfs.File) (*map[string]tfs.File, tfs.File, error) {
 	dir := (*nodes)[name]
 	if dir == nil {
+		o.seq++
 		dir = openObjectDir(o, name)
 		(*nodes)[name] = dir
 	}
@@ -179,7 +181,6 @@ func (o *ObjectFS) Append(file *ObjectFile, data []byte) (n int, err error) {
 	})
 	file.inode.size += uint64(len(buf))
 	file.inode.dataSize += uint64(len(data))
-	file.inode.seq++
 	file.inode.objectId = dataObject.id
 	file.inode.mutex.Unlock()
 	inode, err := file.inode.Marshal()
