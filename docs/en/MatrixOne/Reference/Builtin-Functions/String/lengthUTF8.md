@@ -30,7 +30,3 @@ The lengthUTF8() function returns the length of the string str, measured in code
 +---------------+---------------+
 
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.

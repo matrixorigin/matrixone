@@ -36,7 +36,3 @@ Returns 1 for an empty string or 0 for a non-empty string.
 |        0 |        1 |
 +----------+----------+
 ```
-
-## **Constraints**
-
-Currently, MatrixOne doesn't support select function() without from tables.
