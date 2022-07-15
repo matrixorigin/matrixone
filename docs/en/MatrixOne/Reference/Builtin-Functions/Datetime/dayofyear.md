@@ -59,4 +59,3 @@ Returns the day of the year for date, in the range 1 to 366.
 
 * DAYOFYEAR() only supports date type for now.
 * The date type supports only `yyyy-mm-dd` and `yyyymmdd` for now. 
-* Currently, MatrixOne doesn't support select function() without from tables.

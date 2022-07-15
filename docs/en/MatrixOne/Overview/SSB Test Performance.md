@@ -11,7 +11,7 @@ In v0.2.0, both single table and multiple tables can work in MatrixOne, and we c
 Recommended server specification: x86 CPU with 16 cores and 64GB memory, with CentOS 7+ OS.
 
 !!! note  "<font size=4>note</font>"
-    <font size=3>The following test results are the average of the three tests in seconds.</font>  
+    <font size=3>The following test results are based on MatrixOne v0.2.0, and are the average of the three tests in seconds.</font>  
 
 In order to show the single-table query performance, we combine five tables into a flat table called `lineorder_flat`.  
 
