@@ -71,8 +71,8 @@ func (r *PredicatePushdown) newExpr(relPos int32, expr *plan.Expr, n *plan.Node,
 	case *plan.Expr_C:
 		return relPos, expr
 	case *plan.Expr_F:
-		overloadId := e.F.Func.GetObj()
-		f, err := function.GetFunctionByID(overloadId)
+		overloadID := e.F.Func.GetObj()
+		f, err := function.GetFunctionByID(overloadID)
 		if err != nil {
 			return relPos, nil
 		}
