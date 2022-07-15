@@ -22,8 +22,8 @@ func ReturnType(_ []types.Type) types.Type {
 	return types.New(types.T_int64, 0, 0, 0)
 }
 
-func New[T1, T2 any]() *Count[T1, T2] {
-	return &Count[T1, T2]{}
+func New[T1, T2 any](isStar bool) *Count[T1, T2] {
+	return &Count[T1, T2]{isStar: isStar}
 }
 
 func (c *Count[T1, T2]) Grows(_ int) {
@@ -38,7 +38,7 @@ func (c *Count[T1, T2]) Merge(x, y T2, _ bool, _ bool) (T2, bool) {
 }
 
 func (c *Count[T1, T2]) Fill(_ T1, v T2, z int64, _ bool, hasNull bool) (T2, bool) {
-	if hasNull {
+	if hasNull && !c.isStar {
 		return v, false
 	}
 	return any((any)(v).(int64) + z).(T2), false

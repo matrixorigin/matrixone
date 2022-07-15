@@ -32,7 +32,7 @@ const (
 )
 
 func TestCount(t *testing.T) {
-	c := New[int8, int64]()
+	c := New[int8, int64](false)
 	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
 	vec := testutil.NewVector(Rows, types.New(types.T_int8, 0, 0, 0), m, true)
 	{

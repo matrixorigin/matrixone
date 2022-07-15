@@ -15,4 +15,6 @@
 package count
 
 type Count[T1, T2 any] struct {
+	// isStar is true: count(*)
+	isStar bool
 }
