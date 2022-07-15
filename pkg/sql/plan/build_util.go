@@ -100,6 +100,8 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			return &plan.Type{Id: plan.Type_DECIMAL64, Size: 8, Width: n.InternalType.DisplayWith, Scale: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_BOOL:
 			return &plan.Type{Id: plan.Type_BOOL, Size: 1}, nil
+		case defines.MYSQL_TYPE_JSON:
+			return &plan.Type{Id: plan.Type_JSON}, nil
 		default:
 			return nil, errors.New("", fmt.Sprintf("Data type: '%s', will be supported in future version.", tree.String(&n.InternalType, dialect.MYSQL)))
 		}

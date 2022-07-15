@@ -20,6 +20,7 @@ package encoding
 import (
 	"bytes"
 	"encoding/gob"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -52,6 +53,19 @@ func Encode(v interface{}) ([]byte, error) {
 
 func Decode(data []byte, v interface{}) error {
 	return gob.NewDecoder(bytes.NewReader(data)).Decode(v)
+}
+
+func EncodeJson(v string) ([]byte, error) {
+	bj, err := bytejson.ParseFromString(v)
+	if err != nil {
+		return nil, err
+	}
+	return EncodeFixed(*bj), nil
+}
+
+func DecodeJson(buf []byte) string {
+	bj := *(*bytejson.ByteJson)(unsafe.Pointer(&buf[0]))
+	return bj.String()
 }
 
 func EncodeType(v types.Type) []byte {

@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"go/constant"
 	"math"
 	"strconv"
@@ -148,6 +149,25 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 	// insert values for columns
 	for i, vec := range bat.Vecs {
 		switch vec.Typ.Oid {
+		case types.T_json:
+			vs := make([]bytejson.ByteJson, len(rows.Rows))
+			{
+				for j, row := range rows.Rows {
+					v, err := buildConstant(vec.Typ, row[i])
+					if err != nil {
+						return err
+					}
+					if v == nil {
+						nulls.Add(vec.Nsp, uint64(j))
+					} else {
+						if vv, err := rangeCheck(v.(bytejson.ByteJson), vec.Typ, bat.Attrs[i], j+1); err != nil {
+							return err
+						} else {
+							vs[j] = vv.(bytejson.ByteJson)
+						}
+					}
+				}
+			}
 		case types.T_bool:
 			vs := make([]bool, len(rows.Rows))
 			{
@@ -1095,6 +1115,12 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 		return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
 	case constant.String:
 		switch typ.Oid {
+		case types.T_json:
+			res, err := bytejson.ParseValueToByteJson(num)
+			if err != nil {
+				return nil, err
+			}
+			return res, nil
 		case types.T_bool:
 			switch strings.ToLower(str) {
 			case "false":
@@ -1268,9 +1294,9 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 		return nil, errors.New(errno.DataException, fmt.Sprintf(errString, columnName, rowNumber))
 	case string:
 		switch typ.Oid {
-		case types.T_char, types.T_varchar: // string family should compare the length but not value
+		case types.T_char, types.T_varchar, types.T_json: // string family should compare the length but not value
 			if len(v) > math.MaxUint16 {
-				return nil, errors.New(errno.DataException, "length out of uint16 is unexpected for char / varchar value")
+				return nil, errors.New(errno.DataException, "length out of uint16 is unexpected for char / varchar / json value")
 			}
 			if len(v) <= int(typ.Width) {
 				return v, nil

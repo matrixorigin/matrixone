@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"math"
 	"reflect"
 	"sort"
@@ -29,6 +30,13 @@ import (
 	"unicode/utf8"
 	"unsafe"
 )
+
+func ParseValueToByteJson(num *tree.NumVal) (ByteJson, error) {
+	val := num.String()
+	bj, err := ParseFromString(val)
+	return *bj, err
+
+}
 
 func (bj ByteJson) String() string {
 	ret, _ := bj.MarshalJSON()
