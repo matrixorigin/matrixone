@@ -66,6 +66,27 @@ func GenericVectorValues[T any](v *Vector) []T {
 	return v.Col.([]T)
 }
 
+func GetColumn[T any](v *Vector) []T {
+	return v.Col.([]T)
+}
+
+// return the number of rows in the vector
+func (v *Vector) Count() int {
+	return Length(v)
+}
+
+func (v *Vector) GetType() types.Type {
+	return v.Typ
+}
+
+func (v *Vector) GetNulls() *nulls.Nulls {
+	return v.Nsp
+}
+
+func (v *Vector) GetString(i int64) []byte {
+	return v.Col.(*types.Bytes).Get(i)
+}
+
 func (v *Vector) FillDefaultValue() {
 	if !nulls.Any(v.Nsp) || len(v.Data) == 0 {
 		return
@@ -300,6 +321,15 @@ func expandVector[T any](v *Vector, sz int, m *mheap.Mheap) *Vector {
 
 func DecodeFixedCol[T any](v *Vector, sz int) []T {
 	return encoding.DecodeFixedSlice[T](v.Data, sz)
+}
+
+func NewWithData(typ types.Type, data []byte, col interface{}, nsp *nulls.Nulls) *Vector {
+	return &Vector{
+		Nsp:  nsp,
+		Col:  col,
+		Typ:  typ,
+		Data: data,
+	}
 }
 
 func New(typ types.Type) *Vector {
