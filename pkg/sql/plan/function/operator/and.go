@@ -78,7 +78,6 @@ func ScalarAndNotScalar(sv, nsv *vector.Vector, col1, col2 []bool, proc *process
 	if value {
 		nulls.Or(nsv.Nsp, nil, vec.Nsp)
 	}
-	fillNullPos(vec)
 	return vec, nil
 }
 

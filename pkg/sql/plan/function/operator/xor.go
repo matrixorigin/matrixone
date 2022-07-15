@@ -29,7 +29,6 @@ func ScalarXorNotScalar(sv, nsv *vector.Vector, col1, col2 []bool, proc *process
 		vcols[i] = (col2[i] || value) && !(col2[i] && value)
 	}
 	nulls.Or(nsv.Nsp, nil, vec.Nsp)
-	fillNullPos(vec)
 	return vec, nil
 }
 
@@ -60,6 +59,5 @@ func Xor(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		vcols[i] = (col1[i] || col2[i]) && !(col1[i] && col2[i])
 	}
 	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
-	fillNullPos(vec)
 	return vec, nil
 }
