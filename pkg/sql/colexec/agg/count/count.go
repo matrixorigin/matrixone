@@ -37,6 +37,9 @@ func (c *Count[T1, T2]) Merge(x, y T2, _ bool, _ bool) (T2, bool) {
 	return any((any)(x).(int64) + (any)(y).(int64)).(T2), false
 }
 
-func (c *Count[T1, T2]) Fill(_ T1, v T2, z int64, _ bool, _ bool) (T2, bool) {
+func (c *Count[T1, T2]) Fill(_ T1, v T2, z int64, _ bool, hasNull bool) (T2, bool) {
+	if hasNull {
+		return v, false
+	}
 	return any((any)(v).(int64) + z).(T2), false
 }
