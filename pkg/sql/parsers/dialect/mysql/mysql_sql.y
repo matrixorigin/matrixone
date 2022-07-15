@@ -317,7 +317,7 @@ import (
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> alter_user_stmt update_stmt use_stmt
+%type <statement> alter_user_stmt update_stmt use_stmt update_no_with_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt
@@ -1504,17 +1504,34 @@ use_stmt:
     }
 
 update_stmt:
-    UPDATE table_reference SET update_list where_expression_opt order_by_opt limit_opt
+	update_no_with_stmt
+|	with_clause update_no_with_stmt
+	{
+		$2.(*tree.Update).With = $1
+		$$ = $2
+	}
+
+update_no_with_stmt:
+    UPDATE priority_opt ignore_opt table_reference SET update_list where_expression_opt order_by_opt limit_opt
     {
+    	// Single-table syntax
         $$ = &tree.Update{
-            Table: $2,
-            Exprs: $4,
-            Where: $5,
-            OrderBy: $6,
-            Limit: $7,
+            Tables: tree.TableExprs{$4},
+            Exprs: $6,
+            Where: $7,
+            OrderBy: $8,
+            Limit: $9,
         }
     }
-// |   UPDATE comment_opt ignore_opt table_references SET update_list where_expression_opt order_by_opt limit_opt 
+|	UPDATE priority_opt ignore_opt table_references SET update_list where_expression_opt
+	{
+		// Multiple-table syntax
+		$$ = &tree.Update{
+			Tables: $4,
+			Exprs: $6,
+			Where: $7,
+		}
+	}
 
 update_list:
     update_expression
