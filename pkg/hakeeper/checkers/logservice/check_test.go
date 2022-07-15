@@ -151,6 +151,7 @@ func TestCheck(t *testing.T) {
 						StoreID:   "a",
 						ShardID:   1,
 						ReplicaID: 1,
+						Epoch:     1,
 					}),
 			},
 		},
