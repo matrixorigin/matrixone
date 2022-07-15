@@ -54,6 +54,9 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 	// find out use keys to delete
 	var useProjectExprs tree.SelectExprs = nil
 	useProjectExprs, useKey, err := buildUseProjection(stmt, useProjectExprs, objRef, tableDef, ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// build the stmt of select and append select node
 	selectStmt := &tree.Select{
