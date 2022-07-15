@@ -44,7 +44,3 @@ PI() returns the value of π (pi).
 |   NULL | NULL |
 +--------+------+
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.

@@ -43,7 +43,7 @@ func main() {
 		panic(err)
 	}
 
-	st, err := cli.NewStream(addr, 1)
+	st, err := cli.NewStream(addr)
 	if err != nil {
 		panic(err)
 	}
@@ -64,6 +64,9 @@ func main() {
 	}
 
 	for m := range ch {
+		if m == nil {
+			return
+		}
 		log.Printf("%s", m.DebugString())
 	}
 }

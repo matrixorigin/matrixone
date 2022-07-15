@@ -2,7 +2,7 @@
 
 ## **Description**
 
-LOG(X) returns the natural logarithm of X. 
+LOG(X) returns the natural logarithm of X.
 
 ## **Syntax**
 
@@ -32,5 +32,4 @@ LOG(X) returns the natural logarithm of X.
 
 ## **Constraints**
 
-* LOG(X) only support one parameter input for now. 
-* Currently, MatrixOne doesn't support select function() without from tables.
+LOG(X) only support one parameter input for now. 
