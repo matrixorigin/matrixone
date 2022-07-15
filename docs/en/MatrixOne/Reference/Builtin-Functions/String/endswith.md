@@ -53,7 +53,3 @@ Returns whether to end with the specified suffix. Returns 1 if the string ends w
 |    6 | Tapan Samanta | XI   |
 +------+---------------+------+
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.

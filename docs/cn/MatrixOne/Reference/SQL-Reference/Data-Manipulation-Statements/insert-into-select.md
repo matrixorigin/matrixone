@@ -23,8 +23,7 @@ WHERE condition;
 > create table t2(id int, appname varchar(10), country varchar(10));
 > insert into t2 values(1, 'appone', 'CN');
 > insert into t2 values(2, 'apptwo', 'CN');
-> INSERT INTO t1 (name)
-> SELECT appname FROM t2;
+> INSERT INTO t1 (name) SELECT appname FROM t2;
 > Query OK, 2 rows affected (0.01 sec)
 > select * from t1;
 +------+--------+

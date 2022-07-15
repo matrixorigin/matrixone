@@ -1,4 +1,4 @@
-## MatrixOne Catalog
+# MatrixOne Catalog
 
 MatrixOne catalog is a component where MatrixOne stores system information. We can access the system information by `mo_catalog` database.  The `mo_catalog` database is created by MatrixOne at initialization.
 
@@ -6,9 +6,9 @@ In 0.5.0, the `mo_catalog` is not fully implemented, users can check basic infor
 
 There are three tables in the `mo_catalog` database:
 
-#### mo_database table
+## mo_database table
 
-This table contains the database information. 
+This table contains the database information.
 
 * table structure:
 
@@ -20,7 +20,7 @@ This table contains the database information.
 
 * table initial rows:
 
-At initiaizaion, `mo_database` have some default rows in place. 
+At initialization, `mo_database` have some default rows in place.
 
 | datname            | dat_catalog_name | dat_createsql                                    |
 | ------------------ | ---------------- | ------------------------------------------------ |
@@ -28,7 +28,7 @@ At initiaizaion, `mo_database` have some default rows in place.
 | information_schema | def              | create database if not exists information_schema |
 | system_metrics     | def              |                                                  |
 
-#### mo_tables table
+## mo_tables table
 
 This table contains the information about the table, index, view etc.
 
@@ -45,7 +45,7 @@ This table contains the information about the table, index, view etc.
 
 * table initial rows:
 
-At initiaizaion, `mo_tables` have some default rows in place. 
+At initialization, `mo_tables` have some default rows in place.
 
 | relname             | reldatabase        | repersistence | relkind | rel_createsql | rel_comment                                            |
 | ------------------- | ------------------ | ------------- | ------- | ------------- | ------------------------------------------------------ |
@@ -60,7 +60,7 @@ At initiaizaion, `mo_tables` have some default rows in place.
 | key_column_usage    | information_schema | 'p'           | 'v'     | create sql    | columns related to unique, primary key, or foreign key |
 | views               | information_schema | 'p'           | 'v'     | create sql    | views                                                  |
 
-#### mo_columns table
+## mo_columns table
 
 This table contains the information about the table attributes.
 
@@ -113,7 +113,7 @@ This table contains the information about the table attributes.
 | mo_catalog   | mo_columns  | att_is_hidden         | tinyint | 13     | 1          |           |             |              |                     |                 |                       |                 |               |
 | ...          |             |                       |         |        |            |           |             |              |                     |                 |                       |                 |               |
 
-#### mo_global_variables table
+## mo_global_variables table
 
 This table contains the information about the system variables.
 
@@ -137,7 +137,7 @@ This table contains the information about the system variables.
 | batchSizeInLoadData | 40000             |
 | ...                 |                   |
 
-#### mo_user table
+## mo_user table
 
 This table contains the information of user accounts.
 

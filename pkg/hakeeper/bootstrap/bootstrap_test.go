@@ -169,6 +169,7 @@ func TestBootstrap(t *testing.T) {
 		assert.Equal(t, c.expectedNum, len(output))
 		if len(output) != 0 {
 			assert.Equal(t, c.expectedInitialMembers, output[0].ConfigChange.InitialMembers)
+			assert.Equal(t, pb.StartReplica, output[0].ConfigChange.ChangeType)
 		}
 	}
 }
