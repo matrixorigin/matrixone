@@ -12,22 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package bitmap
+package count
 
-type Iterator interface {
-	HasNext() bool
-	Next() uint64
-	PeekNext() uint64
-}
-
-// Bitmap represents line numbers of tuple's is null
-type Bitmap struct {
-	// len represents the size of bitmap
-	len  int
-	data []uint64
-}
-
-type BitmapIterator struct {
-	i  uint64
-	bm *Bitmap
+type Count[T1, T2 any] struct {
+	// isStar is true: count(*)
+	isStar bool
 }
