@@ -16,7 +16,6 @@ package bytejson
 
 import (
 	"encoding/binary"
-	"unicode/utf8"
 )
 
 type TpCode byte
@@ -40,118 +39,14 @@ const (
 	TpCodeString  = 0x07
 )
 
-// safeSet holds the value true if the ASCII character with the given array
-// position can be represented inside a JSON string without any further
-// escaping.
-
-// All values are true except for the ASCII control characters (0-31), the
-// double quote ("), and the backslash character ("\").
-var safeSet = [utf8.RuneSelf]bool{
-	' ':      true,
-	'!':      true,
-	'"':      false,
-	'#':      true,
-	'$':      true,
-	'%':      true,
-	'&':      true,
-	'\'':     true,
-	'(':      true,
-	')':      true,
-	'*':      true,
-	'+':      true,
-	',':      true,
-	'-':      true,
-	'.':      true,
-	'/':      true,
-	'0':      true,
-	'1':      true,
-	'2':      true,
-	'3':      true,
-	'4':      true,
-	'5':      true,
-	'6':      true,
-	'7':      true,
-	'8':      true,
-	'9':      true,
-	':':      true,
-	';':      true,
-	'<':      true,
-	'=':      true,
-	'>':      true,
-	'?':      true,
-	'@':      true,
-	'A':      true,
-	'B':      true,
-	'C':      true,
-	'D':      true,
-	'E':      true,
-	'F':      true,
-	'G':      true,
-	'H':      true,
-	'I':      true,
-	'J':      true,
-	'K':      true,
-	'L':      true,
-	'M':      true,
-	'N':      true,
-	'O':      true,
-	'P':      true,
-	'Q':      true,
-	'R':      true,
-	'S':      true,
-	'T':      true,
-	'U':      true,
-	'V':      true,
-	'W':      true,
-	'X':      true,
-	'Y':      true,
-	'Z':      true,
-	'[':      true,
-	'\\':     false,
-	']':      true,
-	'^':      true,
-	'_':      true,
-	'`':      true,
-	'a':      true,
-	'b':      true,
-	'c':      true,
-	'd':      true,
-	'e':      true,
-	'f':      true,
-	'g':      true,
-	'h':      true,
-	'i':      true,
-	'j':      true,
-	'k':      true,
-	'l':      true,
-	'm':      true,
-	'n':      true,
-	'o':      true,
-	'p':      true,
-	'q':      true,
-	'r':      true,
-	's':      true,
-	't':      true,
-	'u':      true,
-	'v':      true,
-	'w':      true,
-	'x':      true,
-	'y':      true,
-	'z':      true,
-	'{':      true,
-	'|':      true,
-	'}':      true,
-	'~':      true,
-	'\u007f': true,
-}
-
 const (
 	headerSize   = 8 // element size + data size.
-	dataSizeOff  = 4
+	docSizeOff   = 4 //
 	keyEntrySize = 6 // keyOff +  keyLen
-	keyLenOff    = 4
-	valTypeSize  = 1
-	valEntrySize = 5
+	keyOriginOff = 4 // offset -> uint32
+	valTypeSize  = 1 // TpCode -> byte
+	valEntrySize = 5 // TpCode + offset-or-inline-value
+	numberSize   = 8 // float64|int64|uint64
 )
 
 const (

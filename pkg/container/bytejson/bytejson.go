@@ -49,12 +49,12 @@ func (bj *ByteJson) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	buf := make([]byte, 0, len(data))
-	tpCode, buf, err := addElem(buf, in)
-	if err != nil {
-		return errors.New(errno.InvalidJsonText, fmt.Sprintf("err:%v", err.Error()))
+	if tpCode, buf, err := addElem(buf, in); err != nil {
+		return err
+	} else {
+		bj.Data = buf
+		bj.Type = tpCode
 	}
-	bj.Type = tpCode
-	bj.Data = buf
 	return nil
 }
 
@@ -151,112 +151,32 @@ func (bj ByteJson) toLiteral(buf []byte) []byte {
 		buf = append(buf, "true"...)
 	case LiteralFalse:
 		buf = append(buf, "false"...)
+	default:
+		panic(fmt.Sprintf("invalid literal type:%d", litTp))
 	}
 	return buf
 }
 
 func (bj ByteJson) toFloat64(buf []byte) ([]byte, error) {
-	// NOTE: copied from Go standard library & tidb server
 	f := bj.GetFloat64()
-	if math.IsInf(f, 0) || math.IsNaN(f) {
-		return buf, &json.UnsupportedValueError{Str: strconv.FormatFloat(f, 'g', -1, 64)}
+	err := checkFloat64(f)
+	if err != nil {
+		return nil, err
 	}
-
-	// Convert as if by ES6 number to string conversion.
-	// This matches most other JSON generators.
-	// See golang.org/issue/6384 and golang.org/issue/14135.
-	// Like fmt %g, but the exponent cutoffs are different
-	// and exponents themselves are not padded to two digits.
+	// https://github.com/golang/go/issues/14135
+	var format byte
 	abs := math.Abs(f)
-	ffmt := byte('f')
-	// Note: Must use float32 comparisons for underlying float32 value to get precise cutoffs right.
-	if abs != 0 {
-		if abs < 1e-6 || abs >= 1e21 {
-			ffmt = 'e'
-		}
+	if abs == 0 || 1e-6 <= abs && abs < 1e21 {
+		format = 'f'
+	} else {
+		format = 'e'
 	}
-	buf = strconv.AppendFloat(buf, f, ffmt, -1, 64)
-	if ffmt == 'e' {
-		// clean up e-09 to e-9
-		n := len(buf)
-		if n >= 4 && buf[n-4] == 'e' && buf[n-3] == '-' && buf[n-2] == '0' {
-			buf[n-2] = buf[n-1]
-			buf = buf[:n-1]
-		}
-	}
+	buf = strconv.AppendFloat(buf, f, format, -1, 64)
 	return buf, nil
 }
 
 func toString(buf, data []byte) []byte {
-	// NOTE: copied from Go standard library & tidb server
-	// NOTE: keep in sync with string above.
-	buf = append(buf, '"')
-	start := 0
-	for i := 0; i < len(data); {
-		if b := data[i]; b < utf8.RuneSelf {
-			if safeSet[b] {
-				i++
-				continue
-			}
-			if start < i {
-				buf = append(buf, data[start:i]...)
-			}
-			switch b {
-			case '\\', '"':
-				buf = append(buf, '\\', b)
-			case '\n':
-				buf = append(buf, '\\', 'n')
-			case '\r':
-				buf = append(buf, '\\', 'r')
-			case '\t':
-				buf = append(buf, '\\', 't')
-			default:
-				// This encodes bytes < 0x20 except for \t, \n and \r.
-				// If escapeHTML is set, it also escapes <, >, and &
-				// because they can lead to security holes when
-				// user-controlled strings are rendered into JSON
-				// and served to some browsers.
-				buf = append(buf, `\u00`...)
-				buf = append(buf, hexChars[b>>4], hexChars[b&0xF])
-			}
-			i++
-			start = i
-			continue
-		}
-		c, size := utf8.DecodeRune(data[i:])
-		if c == utf8.RuneError && size == 1 {
-			if start < i {
-				buf = append(buf, data[start:i]...)
-			}
-			buf = append(buf, `\ufffd`...)
-			i += size
-			start = i
-			continue
-		}
-		// U+2028 is LINE SEPARATOR.
-		// U+2029 is PARAGRAPH SEPARATOR.
-		// They are both technically valid characters in JSON strings,
-		// but don't work in JSONP, which has to be evaluated as JavaScript,
-		// and can lead to security holes there. It is valid JSON to
-		// escape them, so we do so unconditionally.
-		// See http://timelessrepo.com/json-isnt-a-javascript-subset for discussion.
-		if c == '\u2028' || c == '\u2029' {
-			if start < i {
-				buf = append(buf, data[start:i]...)
-			}
-			buf = append(buf, `\u202`...)
-			buf = append(buf, hexChars[c&0xF])
-			i += size
-			start = i
-			continue
-		}
-		i += size
-	}
-	if start < len(data) {
-		buf = append(buf, data[start:]...)
-	}
-	buf = append(buf, '"')
-	return buf
+	return strconv.AppendQuote(buf, string(data))
 }
 
 //transform byte string to visible string
@@ -267,7 +187,7 @@ func (bj ByteJson) toString(buf []byte) []byte {
 
 func (bj ByteJson) getObjectKey(i int) []byte {
 	keyOff := int(endian.Uint32(bj.Data[headerSize+i*keyEntrySize:]))
-	keyLen := int(endian.Uint16(bj.Data[headerSize+i*keyEntrySize+keyLenOff:]))
+	keyLen := int(endian.Uint16(bj.Data[headerSize+i*keyEntrySize+keyOriginOff:]))
 	return bj.Data[keyOff : keyOff+keyLen]
 }
 
@@ -287,14 +207,14 @@ func (bj ByteJson) getValEntry(off int) ByteJson {
 	case TpCodeLiteral:
 		return ByteJson{Type: TpCodeLiteral, Data: bj.Data[off+valTypeSize : off+valTypeSize+1]}
 	case TpCodeUint64, TpCodeInt64, TpCodeFloat64:
-		return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+8]}
+		return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+numberSize]}
 	case TpCodeString:
 		num, length := calStrLen(bj.Data[valOff:])
 		totalLen := uint32(num) + uint32(length)
 		return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+totalLen]}
 	}
-	dataSize := endian.Uint32(bj.Data[valOff+dataSizeOff:])
-	return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+dataSize]}
+	dataBytes := endian.Uint32(bj.Data[valOff+docSizeOff:])
+	return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+dataBytes]}
 }
 
 func addElem(buf []byte, in interface{}) (TpCode, []byte, error) {
@@ -348,7 +268,7 @@ func extendByte(buf []byte, n int) []byte {
 //add a uint64 to slice
 func addUint64(buf []byte, x uint64) []byte {
 	off := len(buf)
-	buf = extendByte(buf, 8)
+	buf = extendByte(buf, numberSize)
 	endian.PutUint64(buf[off:], x)
 	return buf
 }
@@ -359,7 +279,7 @@ func addInt64(buf []byte, x int64) []byte {
 
 func addFloat64(buf []byte, num float64) []byte {
 	off := len(buf)
-	buf = extendByte(buf, 8)
+	buf = extendByte(buf, numberSize)
 	endian.PutUint64(buf[off:], math.Float64bits(num))
 	return buf
 }
@@ -375,11 +295,24 @@ func addString(buf []byte, in string) []byte {
 	return buf
 }
 
+func addKeyEntry(buf []byte, start, keyOff int, key string) ([]byte, error) {
+	keyLen := uint32(len(key))
+	if keyLen > math.MaxUint16 {
+		return nil, errors.New(errno.InvalidJsonKeyTooLong, fmt.Sprintf("key: %s", key))
+	}
+	//put key offset
+	endian.PutUint32(buf[start:], uint32(keyOff))
+	//put key length
+	endian.PutUint16(buf[start+keyOriginOff:], uint16(keyLen))
+	buf = append(buf, key...)
+	return buf, nil
+}
+
 func addObject(buf []byte, in map[string]interface{}) ([]byte, error) {
 	off := len(buf)
 	buf = addUint32(buf, uint32(len(in)))
-	objSizeStart := len(buf)
-	buf = extendByte(buf, dataSizeOff)
+	objStart := len(buf)
+	buf = extendByte(buf, docSizeOff)
 	keyEntryStart := len(buf)
 	buf = extendByte(buf, len(in)*keyEntrySize)
 	valEntryStart := len(buf)
@@ -392,15 +325,13 @@ func addObject(buf []byte, in map[string]interface{}) ([]byte, error) {
 		return kvs[i].key < kvs[j].key
 	})
 	for i, kv := range kvs {
-		keyEntryOff := keyEntryStart + i*keyEntrySize
+		start := keyEntryStart + i*keyEntrySize
 		keyOff := len(buf) - off
-		keyLen := uint32(len(kv.key))
-		if keyLen > math.MaxUint16 {
-			return nil, errors.New(errno.InvalidJsonKeyTooLong, fmt.Sprintf("key:%s", kv.key))
+		var err error
+		buf, err = addKeyEntry(buf, start, keyOff, kv.key)
+		if err != nil {
+			return nil, err
 		}
-		endian.PutUint32(buf[keyEntryOff:], uint32(keyOff))
-		endian.PutUint16(buf[keyEntryOff+keyLenOff:], uint16(keyLen))
-		buf = append(buf, kv.key...)
 	}
 	for i, kv := range kvs {
 		var err error
@@ -410,14 +341,14 @@ func addObject(buf []byte, in map[string]interface{}) ([]byte, error) {
 			return nil, err
 		}
 	}
-	endian.PutUint32(buf[objSizeStart:], uint32(len(buf)-off))
+	endian.PutUint32(buf[objStart:], uint32(len(buf)-off))
 	return buf, nil
 }
 func addArray(buf []byte, in []interface{}) ([]byte, error) {
 	off := len(buf)
 	buf = addUint32(buf, uint32(len(in)))
 	arrSizeStart := len(buf)
-	buf = extendByte(buf, dataSizeOff)
+	buf = extendByte(buf, docSizeOff)
 	valEntryStart := len(buf)
 	buf = extendByte(buf, len(in)*valEntrySize)
 	for i, v := range in {
@@ -458,25 +389,39 @@ func addUint32(buf []byte, x uint32) []byte {
 	return buf
 }
 
+func checkFloat64(n float64) error {
+	if math.IsInf(n, 0) || math.IsNaN(n) {
+		return errors.New(errno.InvalidJsonNumber, fmt.Sprintf("the number %v is Inf or NaN", n))
+	}
+	return nil
+}
+
 func addJsonNumber(buf []byte, in json.Number) (TpCode, []byte, error) {
+	//check if it is a float
 	if strings.ContainsAny(string(in), "Ee.") {
-		num, err := in.Float64()
+		val, err := in.Float64()
 		if err != nil {
-			return TpCodeFloat64, nil, errors.New(errno.InvalidJsonNumber, fmt.Sprintf("err:%v", err.Error()))
+			return TpCodeFloat64, nil, errors.New(errno.InvalidJsonNumber, fmt.Sprintf("error occurs while transforming float,err :%v", err.Error()))
 		}
-		buf = addFloat64(buf, num)
-		return TpCodeFloat64, buf, nil
-	} else if val, err := in.Int64(); err == nil {
+		if err = checkFloat64(val); err != nil {
+			return TpCodeFloat64, nil, err
+		}
+		return TpCodeFloat64, addFloat64(buf, val), nil
+	}
+	if val, err := in.Int64(); err == nil { //check if it is an int
 		return TpCodeInt64, addInt64(buf, val), nil
-	} else if val, err := strconv.ParseUint(string(in), 10, 64); err == nil {
+	}
+	if val, err := strconv.ParseUint(string(in), 10, 64); err == nil { //check if it is a uint
 		return TpCodeUint64, addUint64(buf, val), nil
 	}
-	val, err := in.Float64()
-	if err == nil {
+	if val, err := in.Float64(); err == nil { //check if it is a float
+		if err = checkFloat64(val); err != nil {
+			return TpCodeFloat64, nil, err
+		}
 		return TpCodeFloat64, addFloat64(buf, val), nil
 	}
 	var tpCode TpCode
-	return tpCode, nil, errors.New(errno.InvalidJsonNumber, fmt.Sprintf("err:%v", err.Error()))
+	return tpCode, nil, errors.New(errno.InvalidJsonNumber, fmt.Sprintf("error occurs while transforming number"))
 }
 
 func ParseFromString(s string) (*ByteJson, error) {
@@ -491,7 +436,7 @@ func ParseFromByteSlice(s []byte) (*ByteJson, error) {
 		return nil, errors.New(errno.EmptyJsonText, "")
 	}
 	if !json.Valid(s) {
-		return nil, errors.New(errno.InvalidJsonText, "")
+		return nil, errors.New(errno.InvalidJsonText, fmt.Sprintf("invalid json text:%s", s))
 	}
 	bj := &ByteJson{}
 	return bj, bj.UnmarshalJSON(s)
