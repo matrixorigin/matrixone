@@ -87,7 +87,6 @@ MO-tester 基于 Java 语言进行开发，因此 JDBC 驱动程序需要配置�
 
 如果你想调整测试范围，你可以修改 `run.yml` 文件中的 `path` 参数。或者，在执行 `run.sh` 命令时，你也可以指定一些参数，参数如下：
 
-
 ```
 -p  set the path of test cases needed to be executed by mo-tester, the default value is configured by the `path` in `run.yaml`
 -m  set the method that mo-tester will run with, the default value is configured by the `method` in `run.yaml`
