@@ -86,5 +86,6 @@ func TestRemoveBuild(t *testing.T) {
 		StoreID:   "c",
 		ShardID:   1,
 		ReplicaID: 3,
+		Epoch:     1,
 	}, build.steps[0])
 }

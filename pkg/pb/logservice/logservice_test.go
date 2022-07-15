@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package bitmap
+package logservice
 
-type Iterator interface {
-	HasNext() bool
-	Next() uint64
-	PeekNext() uint64
-}
+import (
+	"testing"
 
-// Bitmap represents line numbers of tuple's is null
-type Bitmap struct {
-	// len represents the size of bitmap
-	len  int
-	data []uint64
-}
+	"github.com/stretchr/testify/assert"
+)
 
-type BitmapIterator struct {
-	i  uint64
-	bm *Bitmap
+func TestLogRecord(t *testing.T) {
+	r := LogRecord{
+		Data: make([]byte, 32),
+	}
+	assert.Equal(t, 32-HeaderSize-8, len(r.Payload()))
+	r.ResizePayload(2)
+	assert.Equal(t, HeaderSize+8+2, len(r.Data))
+	assert.Equal(t, 2, len(r.Payload()))
 }

@@ -164,6 +164,7 @@ func (b *Builder) buildSteps() error {
 			StoreID:   uuid,
 			ShardID:   b.shardID,
 			ReplicaID: replicaID,
+			Epoch:     b.epoch,
 		})
 		delete(b.toRemove, uuid)
 		continue
