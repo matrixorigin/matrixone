@@ -34,7 +34,7 @@ func New() *HashMap {
 	}
 }
 
-// Inserts a row from multiple columns into the hashmap, return true if it is new data, false otherwise
+// Insert a row from multiple columns into the hashmap, return true if it is new data, false otherwise
 func (m *HashMap) Insert(vecs []*vector.Vector, row int) bool {
 	for _, vec := range vecs {
 		switch typLen := vec.Typ.TypeSize(); typLen {
