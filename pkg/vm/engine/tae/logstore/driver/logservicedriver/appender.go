@@ -2,16 +2,17 @@ package logservicedriver
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
 type driverAppender struct {
 	flushed         bool
-	client          logservice.Client
+	client          *clientWithRecord
 	appendlsn       uint64
 	logserviceLsn   uint64
 	entry           *recordEntry
@@ -33,9 +34,14 @@ func (a *driverAppender) appendEntry(e *entry.Entry) {
 func (a *driverAppender) append() {
 	ctx, cancel := context.WithTimeout(context.Background(), a.contextDuration)
 	defer cancel()
-	a.entry.record = a.client.GetLogRecord(a.entry.prepareRecord())
-	a.entry.makeRecord()
-	lsn, err := a.client.Append(ctx, a.entry.record)
+	size := a.entry.prepareRecord()
+	if size > int(common.K)*20 { //todo
+		panic(fmt.Errorf("record size %d, larger than max size 20K", size))
+	}
+	record := a.client.record
+	copy(record.Payload(), a.entry.payload)
+	record.ResizePayload(size)
+	lsn, err := a.client.c.Append(ctx, record)
 	if err != nil {
 		panic(err)
 	}
@@ -47,8 +53,8 @@ func (a *driverAppender) waitDone() {
 	a.wg.Wait()
 }
 
-func (a *driverAppender) freeEntries(){
-	for _,e:=range a.entry.entries{
+func (a *driverAppender) freeEntries() {
+	for _, e := range a.entry.entries {
 		e.DoneWithErr(nil)
 	}
 }

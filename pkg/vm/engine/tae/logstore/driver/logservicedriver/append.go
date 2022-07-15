@@ -3,22 +3,20 @@ package logservicedriver
 import (
 	"errors"
 
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
 var ErrTooMuchPenddings = errors.New("too much penddings")
 
-type flushEntry struct {
-	c int
-}
+type flushEntry struct {}
 
 func (d *LogServiceDriver) Append(e *entry.Entry) {
+	e.Lsn=d.allocateDriverLsn()
 	d.preAppendQueue <- e
 }
 
 func (d *LogServiceDriver) getAppender(size int) *driverAppender {
-	if d.appendable.entry.size+size > d.config.RecordSize {
+	if int(d.appendable.entry.payloadSize)+size > d.config.RecordSize {
 		d.appendAppender()
 	}
 	return d.appendable
@@ -34,7 +32,7 @@ func (d *LogServiceDriver) flushAppend() {
 }
 
 func (d *LogServiceDriver) doFlush() {
-	if d.appendable.flushed && d.appendable.entry.size != 0 {
+	if d.appendable.flushed && d.appendable.entry.payloadSize != 0 {
 		d.appendAppender()
 	} else {
 		d.appendable.flushed = true
@@ -65,12 +63,12 @@ func (d *LogServiceDriver) onAppendQueue(items []any, q chan any) {
 	q <- items
 }
 
-func (d *LogServiceDriver) getClient() (client logservice.Client, lsn uint64) {
+func (d *LogServiceDriver) getClient() (client *clientWithRecord, lsn uint64) {
 	lsn, err := d.tryAllocate(uint64(d.config.ClientAppendDuration))
 	if err != nil {
 		panic(err) //TODO retry
 	}
-	client = d.clientPool.Get().(logservice.Client)
+	client = d.clientPool.Get().(*clientWithRecord)
 	return
 }
 

@@ -10,6 +10,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
 
+type clientWithRecord struct {
+	c      logservice.Client
+	record logservice.LogRecord
+}
+
+func (c *clientWithRecord) Close() {
+	c.c.Close()
+}
 var DefaultReadMaxSize = uint64(10)
 
 type Config struct {
@@ -17,6 +25,7 @@ type Config struct {
 	ReadCacheSize        int
 	AppenderMaxCount     int
 	ReadMaxSize          uint64
+	NewRecordSize        int
 	NewClientDuration    time.Duration
 	ClientAppendDuration time.Duration
 	TruncateDuration     time.Duration
@@ -30,7 +39,9 @@ func newDefaultConfig(cfg *logservice.ClientConfig) *Config {
 	return &Config{
 		RecordSize:           int(common.K * 16),
 		ReadCacheSize:        100,
+		ReadMaxSize:          common.K * 20,
 		AppenderMaxCount:     100,
+		NewRecordSize:        int(common.K * 20),
 		NewClientDuration:    time.Second,
 		AppendFrequency:      time.Millisecond * 5,
 		ClientAppendDuration: time.Second,
@@ -45,7 +56,9 @@ func newTestConfig(cfg *logservice.ClientConfig) *Config {
 	return &Config{
 		RecordSize:           int(common.K),
 		ReadCacheSize:        10,
+		ReadMaxSize:          common.K * 20,
 		AppenderMaxCount:     10,
+		NewRecordSize:        int(common.K * 20),
 		AppendFrequency:      time.Millisecond * 5,
 		NewClientDuration:    time.Second,
 		ClientAppendDuration: time.Second,
@@ -57,7 +70,7 @@ func newTestConfig(cfg *logservice.ClientConfig) *Config {
 }
 
 type LogServiceDriver struct {
-	clients    []logservice.Client
+	clients    []*clientWithRecord
 	clientPool sync.Pool
 	config     *Config
 	appendable *driverAppender
@@ -79,7 +92,7 @@ type LogServiceDriver struct {
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	d := &LogServiceDriver{
-		clients:         make([]logservice.Client, 0),
+		clients:         make([]*clientWithRecord, 0),
 		config:          cfg,
 		appendable:      newDriverAppender(),
 		driverInfo:      newDriverInfo(),
@@ -120,12 +133,16 @@ func (d *LogServiceDriver) appendTicker() {
 func (d *LogServiceDriver) newClient() any {
 	ctx, cancel := context.WithTimeout(context.Background(), d.config.NewClientDuration)
 	defer cancel()
-	client, err := logservice.NewClient(ctx, *d.config.ClientConfig)
+	logserviceClient, err := logservice.NewClient(ctx, *d.config.ClientConfig)
 	if err != nil {
 		panic(err) //TODO retry
 	}
-	d.clients = append(d.clients, client)
-	return client
+	c := &clientWithRecord{
+		c:      logserviceClient,
+		record: logserviceClient.GetLogRecord(d.config.NewRecordSize),
+	}
+	d.clients = append(d.clients, c)
+	return c
 }
 
 func (d *LogServiceDriver) Close() error {

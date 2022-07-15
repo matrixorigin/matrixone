@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
@@ -102,12 +104,10 @@ func (m *meta) Marshal() (buf []byte, err error) {
 type recordEntry struct {
 	*meta
 	entries []*entry.Entry
-	size    int
 
-	//for read
-	record    logservice.LogRecord
 	payload   []byte
-	unmarshaled bool
+	unmarshaled uint32
+	mashalMu sync.RWMutex
 }
 
 func newRecordEntry()*recordEntry{
@@ -115,13 +115,15 @@ func newRecordEntry()*recordEntry{
 }
 
 func newEmptyRecordEntry(r logservice.LogRecord)*recordEntry{
-	return &recordEntry{record: r,meta: newMeta()}
+	payload:=make([]byte,len(r.Payload()))
+	copy(payload,r.Payload())
+	return &recordEntry{payload: payload,meta: newMeta(),mashalMu: sync.RWMutex{}}
 }
 
 func (r *recordEntry) append(e *entry.Entry) {
 	r.entries = append(r.entries, e)
-	r.meta.addr[e.Lsn]=uint64(r.size)
-	r.size += e.GetSize()
+	r.meta.addr[e.Lsn]=uint64(r.payloadSize)
+	r.payloadSize += uint64(e.GetSize())
 }
 
 func (r *recordEntry) WriteTo(w io.Writer) (n int64, err error) {
@@ -146,14 +148,15 @@ func (r *recordEntry) ReadFrom(reader io.Reader) (n int64, err error) {
 		return 0, err
 	}
 	n += n1
-	r.payload = make([]byte, r.meta.payloadSize)
-	n2, err := reader.Read(r.payload)
+	payload := make([]byte, r.meta.payloadSize)
+	n2, err := reader.Read(payload)
 	if err != nil {
 		return 0, err
 	}
 	if n2 != int(r.meta.payloadSize) {
 		panic(fmt.Errorf("logic err: err is %v, expect %d, get %d", err, r.meta.payloadSize, n2))
 	}
+	r.payload=payload
 	return
 }
 
@@ -180,15 +183,21 @@ func (r *recordEntry) prepareRecord()(size int){
 	return len(r.payload)
 }
 
-func (r *recordEntry) makeRecord() {
-	copy(r.record.Payload(),r.payload)
-}
-
 func (r *recordEntry) unmarshal(){
-	if r.unmarshaled{
+	marshaled:=atomic.LoadUint32(&r.unmarshaled)
+	if marshaled==1{
 		return
 	}
-	r.Unmarshal(r.record.Payload())
+	r.mashalMu.Lock()
+	defer r.mashalMu.Unlock()
+	marshaled=atomic.LoadUint32(&r.unmarshaled)
+	if marshaled==1{
+		return
+	}
+	buf:=r.payload
+	r.payload=nil
+	r.Unmarshal(buf)
+	atomic.StoreUint32(&r.unmarshaled,1)
 }
 
 func (r *recordEntry) readEntry(lsn uint64) *entry.Entry {
@@ -197,5 +206,6 @@ func (r *recordEntry) readEntry(lsn uint64) *entry.Entry {
 	bbuf:=bytes.NewBuffer(r.payload[offset:])
 	e:=entry.NewEmptyEntry()
 	e.ReadFrom(bbuf)
+	e.Lsn=lsn
 	return e
 }

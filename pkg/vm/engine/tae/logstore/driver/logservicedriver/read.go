@@ -3,10 +3,10 @@ package logservicedriver
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
@@ -25,7 +25,8 @@ func newReadCache() *readCache {
 		readMu:  sync.RWMutex{},
 	}
 }
-func (d *LogServiceDriver) Read(drlsn uint64) entry.Entry {
+
+func (d *LogServiceDriver) Read(drlsn uint64) (*entry.Entry, error) {
 	lsn, err := d.tryGetLogServiceLsnByDriverLsn(drlsn)
 	if err != nil {
 		panic(err)
@@ -38,8 +39,9 @@ func (d *LogServiceDriver) Read(drlsn uint64) entry.Entry {
 			panic(err)
 		}
 	}
-	return *r.readEntry(drlsn)
+	return r.readEntry(drlsn), nil
 }
+
 func (d *LogServiceDriver) tryRead(lsn uint64) (*recordEntry, error) {
 	record, ok := d.records[lsn]
 	if !ok {
@@ -50,15 +52,12 @@ func (d *LogServiceDriver) tryRead(lsn uint64) (*recordEntry, error) {
 func (d *LogServiceDriver) readFromLogService(lsn uint64) {
 	ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
 	defer cancel()
-	client := d.clientPool.Get().(logservice.Client)
-	records, firstlsn, err := client.Read(ctx, lsn, d.config.ReadMaxSize)
+	client := d.clientPool.Get().(*clientWithRecord)
+	records, _, err := client.c.Read(ctx, lsn, d.config.ReadMaxSize)
 	if err != nil { //TODO
 		panic(err)
 	}
-	if firstlsn != lsn {
-		panic(fmt.Errorf("logic err, expect %d, get %d, length is %d", lsn, firstlsn,len(records)))
-	}
-	d.appendRecords(records, firstlsn)
+	d.appendRecords(records, lsn)
 	d.clientPool.Put(client)
 }
 
@@ -67,12 +66,15 @@ func (d *LogServiceDriver) appendRecords(records []logservice.LogRecord, firstls
 	defer d.readMu.Unlock()
 	lsns := make([]uint64, 0)
 	for i, record := range records {
+		if record.GetType() != pb.UserRecord {
+			continue
+		}
 		lsn := firstlsn + uint64(i)
 		_, ok := d.records[lsn]
 		if ok {
 			continue
 		}
-		d.records[lsn] = &recordEntry{record: record}
+		d.records[lsn] = newEmptyRecordEntry(record)
 		lsns = append(lsns, lsn)
 	}
 	d.lsns = append(d.lsns, lsns...)
