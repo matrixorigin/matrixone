@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	ExpireTime         = 5 * time.Minute
+	ExpireTime         = 15 * time.Second
 	NoopEpoch   uint64 = 0
 	NoopShardID uint64 = 0
 )

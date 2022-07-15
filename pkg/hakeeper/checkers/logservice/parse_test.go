@@ -187,6 +187,10 @@ func TestCollectStats(t *testing.T) {
 			expected: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{1: 1}}},
 		{
 			desc: "replica on Store c is not started.",
+			cluster: pb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          1,
+					NumberOfReplicas: 3}}},
 			infos: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
 					1: {
@@ -220,6 +224,10 @@ func TestCollectStats(t *testing.T) {
 				toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}}},
 		{
 			desc: "replica on Store d is a zombie.",
+			cluster: pb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          1,
+					NumberOfReplicas: 3}}},
 			infos: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
 					1: {
@@ -265,6 +273,51 @@ func TestCollectStats(t *testing.T) {
 			},
 			expected: &stats{toStop: []replica{{"d", 1, 0, 0}},
 				toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}}},
+		{
+			desc: "do not remove replica d if it is in LogShardInfo.Replicas, despite it's epoch is small.",
+			cluster: pb.ClusterInfo{
+				DNShards: nil,
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          1,
+					NumberOfReplicas: 4}}},
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
+					1: {ShardID: 1,
+						Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
+						Epoch:    1}},
+				Stores: map[string]pb.LogStoreInfo{
+					"a": {Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{
+							ShardID:  1,
+							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+							Epoch:    1},
+						ReplicaID: 1,
+					}}},
+					"b": {Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{
+							ShardID:  1,
+							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+							Epoch:    1},
+						ReplicaID: 2,
+					}}},
+					"c": {Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{
+							ShardID:  1,
+							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+							Epoch:    1},
+						ReplicaID: 3,
+					}}},
+					"d": {Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{
+							ShardID:  1,
+							Replicas: map[uint64]string{1: "a", 2: "b", 4: "d"}},
+						ReplicaID: 4,
+					}}},
+				},
+			},
+			expected: &stats{
+				toRemove: map[uint64][]replica{},
+				toAdd:    map[uint64]uint32{}}},
 		{
 			desc: "Shard 1 has 4 replicas, which is expected as 3.",
 			cluster: pb.ClusterInfo{
@@ -322,6 +375,10 @@ func TestCollectStats(t *testing.T) {
 		},
 		{
 			desc: "Store a is expired",
+			cluster: pb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          1,
+					NumberOfReplicas: 3}}},
 			infos: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
 					1: {
