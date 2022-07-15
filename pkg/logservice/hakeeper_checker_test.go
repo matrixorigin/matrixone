@@ -306,7 +306,11 @@ func TestHAKeeperClusterCanBootstrapLogShard(t *testing.T) {
 					s.store.hakeeperTick()
 					s.store.hakeeperCheck()
 				}
+
 				cb, err := services[0].store.getCommandBatch(ctx, s.store.id())
+				for _, cmd := range cb.Commands {
+					plog.Infof("store returned schedule command: %s", cmd.LogString())
+				}
 				require.NoError(t, err)
 				s.handleCommands(cb.Commands)
 			}
