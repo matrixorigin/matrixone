@@ -78,19 +78,28 @@ type Agg[T any] interface {
 
 // generic aggregation function with one input vector and without distinct
 type UnaryAgg[T1, T2 any] struct {
+	// vs is result value list
 	vs []T2
 	// es, es[i] is true to indicate that this group has not yet been populated with any value
 	es []bool
+	// memory of vs
 	da []byte
 
+	// iscount is true,  it means that the aggregation function is count
 	isCount bool
-	// output vecotr's type
+	// otyp is output vecotr's type
 	otyp types.Type
-	// type list of input vectors
+	// ityps is type list of input vectors
 	ityps []types.Type
 
+	// grows used for add groups
 	grows func(int)
-	eval  func([]T2) []T2
+	// eval used to get final aggregated value
+	eval func([]T2) []T2
+	// merge The first argument is the value of the group corresponding to the first aggregate function,
+	//		the second argument is the value of the group corresponding to the second aggregate function,
+	//      the third argument is whether the value corresponding to the first aggregate function is empty,
+	//      and the fourth argument is whether the value corresponding to the second aggregate function is empty
 	merge func(T2, T2, bool, bool) (T2, bool)
 	// fill, first parameter is the value to be fed, the second is the value of the group to be filled, the third is the number of times the first parameter needs to be fed, the fourth represents whether it is a new group, and the fifth represents whether the value to be fed is null
 	fill func(T1, T2, int64, bool, bool) (T2, bool)
@@ -98,11 +107,14 @@ type UnaryAgg[T1, T2 any] struct {
 
 // generic aggregation function with one input vector and with distinct
 type UnaryDistAgg[T1, T2 any] struct {
+	// vs is result value list
 	vs []T2
 	// es, es[i] is true to indicate that this group has not yet been populated with any value
 	es []bool
+	// memory of vs
 	da []byte
 
+	// iscount is true,  it means that the aggregation function is count
 	isCount bool
 
 	maps []*hashmap.StrHashMap
@@ -115,8 +127,14 @@ type UnaryDistAgg[T1, T2 any] struct {
 	// type list of input vectors
 	ityps []types.Type
 
+	// grows used for add groups
 	grows func(int)
-	eval  func([]T2) []T2
+	// eval used to get final aggregated value
+	eval func([]T2) []T2
+	// merge The first argument is the value of the group corresponding to the first aggregate function,
+	//		the second argument is the value of the group corresponding to the second aggregate function,
+	//      the third argument is whether the value corresponding to the first aggregate function is empty,
+	//      and the fourth argument is whether the value corresponding to the second aggregate function is empty
 	merge func(T2, T2, bool, bool) (T2, bool)
 	// fill, first parameter is the value to be fed, the second is the value of the group to be filled, the third is the number of times the first parameter needs to be fed, the fourth represents whether it is a new group, and the fifth represents whether the value to be fed is null
 	fill func(T1, T2, int64, bool, bool) (T2, bool)
