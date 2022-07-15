@@ -51,7 +51,10 @@ func ExtensionName(ext Extension) (name string) {
 }
 
 func EncodeDir(id *common.ID) (dir string) {
-	return fmt.Sprintf("%d-%d", id.SegmentID, id.BlockID)
+	segDir := fmt.Sprintf("%d", id.SegmentID)
+	blkDir := fmt.Sprintf("%d-%d", id.SegmentID, id.BlockID)
+	name := filepath.Join(segDir, blkDir)
+	return name
 }
 
 func EncodeColBlkNameWithVersion(id *common.ID, version uint64, fs tfs.FS) (name string) {

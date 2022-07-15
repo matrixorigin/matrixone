@@ -62,7 +62,7 @@ func (o *ObjectFS) OpenDir(name string, nodes *map[string]tfs.File) (*map[string
 		dir = openObjectDir(o, name)
 		(*nodes)[name] = dir
 	}
-	return nodes, dir, nil
+	return &dir.(*ObjectDir).nodes, dir, nil
 }
 
 func (o *ObjectFS) OpenFile(name string, flag int) (file tfs.File, err error) {
