@@ -176,15 +176,10 @@ func (n *Bitmap) Count() int {
 func (n *Bitmap) ToArray() []uint64 {
 	var rows []uint64
 
-	start := uint64(0)
-	for i := 0; i < len(n.data); i++ {
-		bit := n.data[i]
-		for bit != 0 {
-			t := bit & -bit
-			rows = append(rows, start+uint64(bits.OnesCount64(t-1)))
-			bit ^= t
+	for i := uint64(0); i < uint64(n.len); i++ {
+		if (n.data[i>>6] & (1 << (i & 0x3F))) != 0 {
+			rows = append(rows, i)
 		}
-		start += 64
 	}
 	return rows
 }

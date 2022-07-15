@@ -65,7 +65,7 @@ func (m *StrHashMap) InsertValue(val any) bool {
 	return false
 }
 
-// Inserts a row from multiple columns into the hashmap, return true if it is new, otherwise false
+// Insert a row from multiple columns into the hashmap, return true if it is new, otherwise false
 func (m *StrHashMap) Insert(vecs []*vector.Vector, row int) bool {
 	defer func() { m.keys[0] = m.keys[0][:0] }()
 	for _, vec := range vecs {
