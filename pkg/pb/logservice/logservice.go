@@ -23,13 +23,15 @@ import (
 
 const (
 	// NoLeader is the replica ID of the leader node.
-	NoLeader   uint64 = 0
-	HeaderSize        = 4
+	NoLeader uint64 = 0
+	// HeaderSize is the size of the header for each logservice and
+	// hakeeper command.
+	HeaderSize = 4
 )
 
 // ResizePayload resizes the payload length to length bytes.
 func (m *LogRecord) ResizePayload(length int) {
-	m.Data = m.Data[HeaderSize+8+length:]
+	m.Data = m.Data[:HeaderSize+8+length]
 }
 
 // Payload returns the payload byte slice.
