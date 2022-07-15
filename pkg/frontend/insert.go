@@ -17,7 +17,6 @@ package frontend
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go/constant"
 	"math"
 	"strconv"
@@ -151,7 +150,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 	for i, vec := range bat.Vecs {
 		switch vec.Typ.Oid {
 		case types.T_json:
-			vs := make([]bytejson.ByteJson, len(rows.Rows))
+			vs := make([][]byte, len(rows.Rows))
 			{
 				for j, row := range rows.Rows {
 					v, err := buildConstant(vec.Typ, row[i])
@@ -161,13 +160,20 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(bytejson.ByteJson), vec.Typ, bat.Attrs[i], j+1); err != nil {
+						vv, err := rangeCheck(v.(bytejson.ByteJson), vec.Typ, bat.Attrs[i], j+1)
+						if err != nil {
 							return err
-						} else {
-							vs[j] = vv.(bytejson.ByteJson)
 						}
+						json, err := (vv.(bytejson.ByteJson)).MarshalJSON()
+						if err != nil {
+							return err
+						}
+						vs[j] = json
 					}
 				}
+			}
+			if err := vector.Append(vec, vs); err != nil {
+				return err
 			}
 		case types.T_bool:
 			vs := make([]bool, len(rows.Rows))
@@ -1233,7 +1239,7 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 // rangeCheck do range check for value, and do type conversion.
 func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber int) (interface{}, error) {
 	errString := "Out of range value for column '%s' at row %d"
-	logutil.Infof("rangeCheck: json building test: %v,%T", value, value)
+	//logutil.Infof("rangeCheck: json building test: %v,%T", value, value)
 	switch v := value.(type) {
 	case int64:
 		switch typ.Oid {

@@ -526,7 +526,7 @@ func SetCol(v *Vector, col interface{}) {
 func PreAlloc(v, w *Vector, rows int, m *mheap.Mheap) {
 	defer func() {
 		size := v.Typ.Oid.TypeLen()
-		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar {
+		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar && v.Typ.Oid != types.T_json {
 			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
 		}
 	}()
@@ -623,7 +623,7 @@ func PreAlloc(v, w *Vector, rows int, m *mheap.Mheap) {
 		}
 		v.Data = data
 		v.Col = encoding.DecodeTimestampSlice(v.Data)[:0]
-	case types.T_char, types.T_varchar:
+	case types.T_char, types.T_varchar, types.T_json:
 		vs, ws := v.Col.(*types.Bytes), w.Col.(*types.Bytes)
 		data, err := mheap.Alloc(m, int64(rows*len(ws.Data)/len(ws.Offsets)))
 		if err != nil {
@@ -1170,7 +1170,7 @@ func Shrink(v *Vector, sels []int64) {
 	}
 	defer func() {
 		size := v.Typ.Oid.TypeLen()
-		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar {
+		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar && v.Typ.Oid != types.T_json {
 			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
 		}
 	}()
