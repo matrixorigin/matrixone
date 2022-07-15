@@ -33,6 +33,7 @@ var (
 )
 
 // TODO: add toml or json support
+
 // Config defines the Configurations supported by the Log Service.
 type Config struct {
 	FS                   vfs.FS
