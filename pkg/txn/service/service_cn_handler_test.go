@@ -17,6 +17,7 @@ package service
 import (
 	"context"
 	"math"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -65,6 +66,32 @@ func TestReadWithSelfWrite(t *testing.T) {
 	checkReadResponses(t, readTestData(t, sender, 1, rwTxn, 1), "1-1-1")
 	checkResponses(t, writeTestData(t, sender, 1, rwTxn, 2))
 	checkReadResponses(t, readTestData(t, sender, 1, rwTxn, 2), "2-1-1")
+}
+
+func TestReadBlockWithClock(t *testing.T) {
+	sender := newTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	ts := int64(0)
+	s := newTestTxnService(t, 1, sender, newTestSpecClock(func() int64 {
+		return atomic.AddInt64(&ts, 1)
+	}))
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+	sender.addTxnService(s)
+
+	c := make(chan struct{})
+	go func() {
+		rwTxn := newTestTxn(1, 3)
+		checkReadResponses(t, readTestData(t, sender, 1, rwTxn, 1), "")
+		c <- struct{}{}
+	}()
+	<-c
+	assert.Equal(t, int64(3), ts)
 }
 
 func TestReadCannotBlockByUncomitted(t *testing.T) {
