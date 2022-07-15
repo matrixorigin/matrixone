@@ -57,15 +57,15 @@ const (
 
 	// Group 10: txn
 	// ErrTxnAborted read and write a transaction that has been rolled back.
-	ErrTxnAborted = 10000 + iota
-	// ErrTxnClosed read and write a transaction after Commit or Rollback method called.
-	ErrTxnClosed
+	ErrTxnClosed = 10000 + iota
 	// ErrTxnWriteConflict write conflict error for concurrent transactions
 	ErrTxnWriteConflict
 	// ErrMissingTxn missing transaction error
 	ErrMissingTxn
 	// ErrUnreslovedConflict read transaction encounters unresloved data
 	ErrUnreslovedConflict
+	// ErrTxnError TxnError wrapper
+	ErrTxnError
 )
 
 type Error struct {
