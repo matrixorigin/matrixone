@@ -1533,8 +1533,11 @@ update_expression:
     }
 
 prepareable_stmt:
-    delete_stmt
+    create_stmt
 |   insert_stmt
+|   delete_stmt
+|   drop_stmt
+|   show_stmt
 |   update_stmt
 |   select_stmt
     {
@@ -1544,11 +1547,11 @@ prepareable_stmt:
 prepare_stmt:
     prepare_sym stmt_name FROM prepareable_stmt
     {
-        $$ = tree.NewPrepare(tree.Identifier($2), $4)
+        $$ = tree.NewPrepareStmt(tree.Identifier($2), $4)
     }
 |   prepare_sym stmt_name FROM STRING
     {
-        $$ = tree.NewPrepareFromStr(tree.Identifier($2), $4) 
+        $$ = tree.NewPrepareString(tree.Identifier($2), $4) 
     }
 
 execute_stmt:
@@ -5594,7 +5597,7 @@ literal:
 	}
 |   VALUE_ARG
     {
-        $$ = tree.NewArgExpr()
+        $$ = tree.NewParamExpr(yyp)
     }
 
 column_type:

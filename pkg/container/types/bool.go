@@ -17,6 +17,7 @@ package types
 import (
 	"fmt"
 	"go/constant"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -44,4 +45,15 @@ func AppendBoolToByteArray(b bool, arr []byte) []byte {
 		arr = append(arr, '0')
 	}
 	return arr
+}
+
+func ParseBool(s string) (bool, error) {
+	s = strings.ToLower(s)
+	if s == "true" || s == "1" {
+		return true, nil
+	} else if s == "false" || s == "0" {
+		return false, nil
+	} else {
+		return false, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("the input value '%s' is not bool type", s))
+	}
 }

@@ -31,21 +31,21 @@ func TestSingleSql(t *testing.T) {
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
 	// sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
-	sql := "select n_name from nation where n_nationkey > ?"
+	sql := "prepare stmt1 from 'select current_timestamp() + 1'"
 	// sql := "explain a"
 	// sql := "select 18446744073709551500"
-	stmts, err := mysql.Parse(sql)
-	if err != nil {
-		t.Fatalf("%+v", err)
-	}
-	t.Logf("%+v", string(getJson(stmts[0], t)))
-
-	// mock := NewMockOptimizer()
-	// logicPlan, err := runOneStmt(mock, t, sql)
+	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)
 	// }
-	// outPutPlan(logicPlan, true, t)
+	// t.Logf("%+v", string(getJson(stmts[0], t)))
+
+	mock := NewMockOptimizer()
+	logicPlan, err := runOneStmt(mock, t, sql)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	outPutPlan(logicPlan, true, t)
 }
 
 //Test Query Node Tree
@@ -428,6 +428,21 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SET @var = abs(-1), @@session.string_var = 'aaa'",
 		"SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'",
 		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_NAME", //test distinct with order by
+
+		"prepare stmt1 from select * from nation",
+		"prepare stmt1 from select * from nation where n_name = ?",
+		"prepare stmt1 from 'select * from nation where n_name = ?'",
+		"prepare stmt1 from 'update nation set n_name = ? where n_nationkey > ?'",
+		"prepare stmt1 from 'delete from nation where n_nationkey > ?'",
+		"prepare stmt1 from 'insert into nation select * from nation2 where n_name = ?'",
+		"prepare stmt1 from 'select * from nation where n_name = ?'",
+		"prepare stmt1 from 'drop table t1'",
+		"prepare stmt1 from 'create table t1 (a int)'",
+		"prepare stmt1 from select N_REGIONKEY from nation group by N_REGIONKEY having abs(nation.N_REGIONKEY - ?) > ?",
+		"execute stmt1",
+		"execute stmt1 using @str_var, @@global.int_var",
+		"deallocate prepare stmt1",
+		"drop prepare stmt1",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -448,6 +463,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_REGIONKEY", //test distinct with order by
 		//"select 18446744073709551500",                             //over int64
 		//"select 0xffffffffffffffff",                               //over int64
+		"execute stmt1 using @not_exist_var", //var not exist
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -815,6 +831,8 @@ func outPutPlan(logicPlan *Plan, toFile bool, t *testing.T) {
 		json = getJson(logicPlan.GetTcl(), t)
 	case *plan.Plan_Ddl:
 		json = getJson(logicPlan.GetDdl(), t)
+	case *plan.Plan_Dcl:
+		json = getJson(logicPlan.GetDcl(), t)
 	}
 	if toFile {
 		err := ioutil.WriteFile("/tmp/mo_plan_test.json", json, 0777)
