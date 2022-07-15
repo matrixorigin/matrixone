@@ -65,14 +65,15 @@ func (s *Service) handleRemoveReplica(cmd pb.ScheduleCommand) {
 func (s *Service) handleStartReplica(cmd pb.ScheduleCommand) {
 	shardID := cmd.ConfigChange.Replica.ShardID
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
+	join := len(cmd.ConfigChange.InitialMembers) == 0
 	if shardID == hakeeper.DefaultHAKeeperShardID {
 		if err := s.store.startHAKeeperReplica(replicaID,
-			cmd.ConfigChange.InitialMembers, false); err != nil {
+			cmd.ConfigChange.InitialMembers, join); err != nil {
 			plog.Errorf("failed to start HAKeeper replica %v", err)
 		}
 	} else {
 		if err := s.store.startReplica(shardID,
-			replicaID, cmd.ConfigChange.InitialMembers, false); err != nil {
+			replicaID, cmd.ConfigChange.InitialMembers, join); err != nil {
 			plog.Errorf("failed to start log replica %v", err)
 		}
 	}

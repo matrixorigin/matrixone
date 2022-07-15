@@ -102,7 +102,7 @@ func (cs *ClusterStores) ExpiredStores() StoreSlice {
 const (
 	// FIXME: configuration item or some other
 	TickPerSecond   = 10
-	LogStoreTimeout = 10 * time.Minute
+	LogStoreTimeout = 5 * time.Minute
 	DnStoreTimeout  = 10 * time.Second
 )
 

@@ -45,7 +45,7 @@ func TestCheckSuccess(t *testing.T) {
 func TestCheck(t *testing.T) {
 	op := NewOperator("", 1, 1,
 		AddLogService{"a", "d", 1, 4, 1},
-		RemoveLogService{"a", "c", 1, 3})
+		RemoveLogService{"a", "c", 1, 3, 1})
 
 	logState := pb.LogState{
 		Shards: map[uint64]pb.LogShardInfo{1: {
@@ -71,7 +71,7 @@ func TestCheck(t *testing.T) {
 	currentStep = op.Check(logState, pb.DNState{})
 
 	assert.Equal(t,
-		RemoveLogService{"a", "c", 1, 3},
+		RemoveLogService{"a", "c", 1, 3, 1},
 		currentStep)
 	assert.NotEqual(t, SUCCESS, op.Status())
 
