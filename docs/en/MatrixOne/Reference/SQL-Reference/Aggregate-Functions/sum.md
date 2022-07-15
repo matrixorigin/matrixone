@@ -60,5 +60,4 @@ If there are no matching rows, SUM() returns NULL.
 
 ## Constraints
 
-1. Currently, MatrixOne doesn't support select function() without from tables.
-2. SUM(DISTINCT) is not supported for the 0.5.0 version.
+SUM(DISTINCT) is not supported for the 0.5.0 version.

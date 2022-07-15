@@ -55,7 +55,3 @@ If there are no matching rows, COUNT() returns 0.
 |        3 |
 +----------+
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.
