@@ -2,7 +2,7 @@
 
 ## **Description**
 
-The EXP() function returns the value of e (the base of natural logarithms) raised to the power of X. 
+The EXP() function returns the value of e (the base of natural logarithms) raised to the power of X.
 
 ## **Syntax**
 
@@ -32,7 +32,3 @@ The EXP() function returns the value of e (the base of natural logarithms) raise
 +----------+---------+
 
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.

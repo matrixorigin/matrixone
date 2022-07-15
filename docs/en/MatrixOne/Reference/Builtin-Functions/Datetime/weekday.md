@@ -35,6 +35,4 @@ This function returns the weekday index for date (0 = Monday, 1 = Tuesday, … 6
 
 ## **Constraints**
 
-The date type supports only `yyyy-mm-dd` and `yyyymmdd` for now. 
-
-Currently, MatrixOne doesn't support select function() without from tables.
+The date type supports only `yyyy-mm-dd` and `yyyymmdd` for now.

@@ -20,7 +20,7 @@ The MAX() function calculates the maximum value across a group of values.
 
 ## **Returned Value**
 
-Returns the maximum value of expr. MAX() may take a string argument, in such cases, it returns the maximum string value. 
+Returns the maximum value of expr. MAX() may take a string argument, in such cases, it returns the maximum string value.
 
 ## **Examples**
 
@@ -51,7 +51,3 @@ Returns the maximum value of expr. MAX() may take a string argument, in such cas
 |    4 |
 +------+
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.

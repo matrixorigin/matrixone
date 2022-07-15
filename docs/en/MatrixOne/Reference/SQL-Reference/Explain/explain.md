@@ -30,7 +30,7 @@ Display additional information regarding the plan. Specifically, include the out
 
 Specify the output format, which can be TEXT, JSON. Non-text output contains the same information as the text output format, but is easier for programs to parse. This parameter is `TEXT` by dafault.
 
-* BOOLEAN: 
+* BOOLEAN:
 
 Specifies whether the selected option should be turned on or off. You can write `TRUE`to enable the option, and `FALSE` to disable it. The *`boolean`* value can also be omitted, in which case `TRUE` is assumed.
 
@@ -42,7 +42,7 @@ MatrixOne supports any `SELECT`, `UPDATE`, `DELETE` statement execution plan. Fo
 
 The command's result is a textual description of the plan selected for the *`statement`*, optionally annotated with execution statistics.
 
-Take the following SQL as an example, we demonstrate the output structure. 
+Take the following SQL as an example, we demonstrate the output structure.
 
 ```
 explain select city,libname1,count(libname1) as a from t3 join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1;
@@ -69,7 +69,7 @@ explain select city,libname1,count(libname1) as a from t3 join t1 on libname1=li
 13 rows in set (0.00 sec)
 ```
 
-EXPLAIN outputs a tree structure, named as `Execution Plan Tree`. Every leaf node includes the information of node type, affected objects and other properties such as `cost`, `rowsize` etc. We can simplify the above example only with node type information. It visualizes the whole process of a SQL query,  shows which operation nodes it goes through and what are their cost  estimation. 
+EXPLAIN outputs a tree structure, named as `Execution Plan Tree`. Every leaf node includes the information of node type, affected objects and other properties such as `cost`, `rowsize` etc. We can simplify the above example only with node type information. It visualizes the whole process of a SQL query,  shows which operation nodes it goes through and what are their cost  estimation.
 
 ```
 Project
@@ -83,7 +83,7 @@ Project
 
 ## Node types
 
-in 0.5.0 version, the following node types are supported.
+In 0.5.0 version, the following node types are supported.
 
 | Node Type       | Name in Explain |
 | --------------- | --------------- |
@@ -232,7 +232,7 @@ mysql> explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE abs(N_REGIONKEY) > 0
 ```
 
 ```sql
-mysql> explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE abs(N_REGIONKEY) > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY LIMIT 10 offset 20; 
+mysql> explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE abs(N_REGIONKEY) > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY LIMIT 10 offset 20;
 +-------------------------------------------------------------------------------------------+
 | QUERY PLAN                                                                                |
 +-------------------------------------------------------------------------------------------+

@@ -1,26 +1,26 @@
 # MatrixOne Catalog
 
-MatrixOne catalog is a component where MatrixOne stores system information. We can access the system information by `mo_catalog` database.  The `mo_catalog` database is created by MatrixOne at initialization.
+MatrixOne Catalog 是 MatrixOne 存储系统信息的组件。你可以通过 `mo_catalog` 数据库访问系统信息。`mo_catalog` 数据库由 `MatrixOne` 在初始化时创建。
 
-In 0.5.0, the `mo_catalog` is not fully implemented, users can check basic information about the their database and tables, but writing values into `mo_catalog` by users is not supported yet.
+在 0.5.0 中，`mo_catalog` 还未完全实现，仅支持查看数据库和数据表的基本信息，暂不支持将值写入 `mo_catalog` 。
 
-There are three tables in the `mo_catalog` database:
+在 `mo_catalog` 数据库中有三个表:
 
-## mo_database table
+## mo_database 表
 
-This table contains the database information.
+mo_database 表中包含数据库信息。
 
-* table structure:
+* 表结构：
 
-| Attributes       | Type          | Primary key | Description   |
+| 属性       | 类型          | 主键 | 描述   |
 | ---------------- | ------------- | ----------- | ------------- |
 | datname          | varchar(256)  | Primary key | database name |
 | dat_catalog_name | varchar(256)  |             | catalog name  |
 | dat_createsql    | varchar(4096) |             | create sql    |
 
-* table initial rows:
+* 表初始行
 
-At initialization, `mo_database` have some default rows in place.
+在初始化时，`mo_database` 有一些默认行。
 
 | datname            | dat_catalog_name | dat_createsql                                    |
 | ------------------ | ---------------- | ------------------------------------------------ |
@@ -28,13 +28,13 @@ At initialization, `mo_database` have some default rows in place.
 | information_schema | def              | create database if not exists information_schema |
 | system_metrics     | def              |                                                  |
 
-## mo_tables table
+## mo_tables 表
 
-This table contains the information about the table, index, view etc.
+mo_tables 表包含表、索引、视图等信息。
 
-* table structure:
+* 表结构：
 
-| Attributes     | Type          | Primary key | Description                                                  |
+| 属性     | 类型         | 主键 | 描述                                                  |
 | -------------- | ------------- | ----------- | ------------------------------------------------------------ |
 | relname        | varchar(256)  | PK          | Name of the table, index, view, etc.                         |
 | reldatabase    | varchar(256)  | PK,FK       | The database that contains this relation. reference mo_database.datname |
@@ -43,9 +43,9 @@ This table contains the information about the table, index, view etc.
 | rel_comment    | varchar(1024) |             | comment                                                      |
 | rel_createsql  | varchar(4096) |             | create sql                                                   |
 
-* table initial rows:
+* 表初始行：
 
-At initialization, `mo_tables` have some default rows in place.
+在初始化时，`mo_tables` 有一些默认行。
 
 | relname             | reldatabase        | repersistence | relkind | rel_createsql | rel_comment                                            |
 | ------------------- | ------------------ | ------------- | ------- | ------------- | ------------------------------------------------------ |
@@ -62,11 +62,11 @@ At initialization, `mo_tables` have some default rows in place.
 
 ## mo_columns table
 
-This table contains the information about the table attributes.
+mo_columns 表包含表属性信息。
 
-* table structure:
+* 表结构：
 
-| Attributes            | Type          | Primary key | Description                                                  |
+| 属性            | 类型          | 主键 | 描述                                                 |
 | --------------------- | ------------- | ----------- | ------------------------------------------------------------ |
 | att_database          | varchar(256)  | PK          | database                                                     |
 | att_relname           | varchar(256)  | PK,UK       | The table this column belongs to.(references mo_tables.relname) |
@@ -84,7 +84,7 @@ This table contains the information about the table attributes.
 | att_comment           | varchar(1024) |             | comment                                                      |
 | att_is_hidden         | tinyint(1)    |             | hidden or not                                                |
 
-* table initial rows:
+* 表初始行：
 
 | att_database | att_relname | attname               | atttyp  | attnum | attnotnull | atthasdef | att_default | attisdropped | att_constraint_type | att_is_unsigned | att_is_auto_increment | att_comment     | att_is_hidden |
 | ------------ | ----------- | --------------------- | ------- | ------ | ---------- | --------- | ----------- | ------------ | ------------------- | --------------- | --------------------- | --------------- | ------------- |
@@ -113,18 +113,18 @@ This table contains the information about the table attributes.
 | mo_catalog   | mo_columns  | att_is_hidden         | tinyint | 13     | 1          |           |             |              |                     |                 |                       |                 |               |
 | ...          |             |                       |         |        |            |           |             |              |                     |                 |                       |                 |               |
 
-## mo_global_variables table
+## mo_global_variables 表
 
-This table contains the information about the system variables.
+mo_global_variables 表包含系统变量信息。
 
-* table structure:
+* 表结构：
 
 | Attributes        | Type          | Primary key | Description    |
 | ----------------- | ------------- | ----------- | -------------- |
 | gv_variable_name  | varchar(256)  | PK          | variable name  |
 | gv_variable_value | varchar(1024) |             | variable value |
 
-* table initial rows:
+* 表初始行：
 
 | gv_variable_name    | gv_variable_value |
 | ------------------- | ----------------- |
@@ -137,11 +137,11 @@ This table contains the information about the system variables.
 | batchSizeInLoadData | 40000             |
 | ...                 |                   |
 
-## mo_user table
+## mo_user 表
 
-This table contains the information of user accounts.
+mo_user 表包含用户账户信息。
 
-* table structure:
+* 表结构：
 
 | Attributes             | Type          | Primary key | Description |
 | ---------------------- | ------------- | ----------- | ----------- |
@@ -185,7 +185,7 @@ This table contains the information of user accounts.
 | Create_role_priv       | char          |             | 'N','Y'     |
 | Drop_role_priv         | char          |             | 'N','Y'     |
 
-* table initial rows:
+* 表初始行：
 
 | user_host | user_name | authentication_string |
 | --------- | --------- | --------------------- |
