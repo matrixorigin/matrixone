@@ -50,6 +50,13 @@ func (trk *OpStatusTracker) Status() OpStatus {
 	return trk.current
 }
 
+// SetStatus only used for tests.
+func (trk *OpStatusTracker) setStatus(status OpStatus) {
+	trk.rw.Lock()
+	defer trk.rw.Unlock()
+	trk.current = status
+}
+
 // ReachTime returns the reach time of current status.
 func (trk *OpStatusTracker) ReachTime() time.Time {
 	trk.rw.RLock()

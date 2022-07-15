@@ -76,7 +76,3 @@ The FLOOR() function returns the largest round number that is less than or equal
 |   12 |      -14.0000 |
 +------+---------------+
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.
