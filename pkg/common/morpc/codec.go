@@ -113,7 +113,9 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf) error {
 		if _, err := message.MarshalTo(out.RawBuf()[index : index+msize]); err != nil {
 			return err
 		}
-		out.SetWriterIndex(index + msize)
+		if err := out.SetWriterIndex(index + msize); err != nil {
+			panic(err)
+		}
 
 		// payload
 		if hasPayload {
