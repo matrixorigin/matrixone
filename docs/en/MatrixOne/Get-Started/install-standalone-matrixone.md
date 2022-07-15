@@ -1,12 +1,16 @@
 # **Install standalone MatrixOne**
 
-MatrixOne supports Linux and MacOS. You can install a standalone MatrixOne version either by [building from source](#building-from-source) or [using docker](#using-docker).
+MatrixOne supports Linux and MacOS. You can install a standalone MatrixOne version by 3 methods: 
+
+* Building from source.
+* Using binary package.
+* Using Docker.
 
 Recommended hardware specification: x86 CPU with 4 cores and 32GB memory, with CentOS 7+ OS.
 
 ## **Method 1: Building from source**
 
-#### 1. Install Go as necessary
+#### 1. Install Go as necessary dependancy
 
 Go version 1.18 is required.
 
@@ -29,6 +33,7 @@ If you want to get the latest stable version code released by MatrixOne, please 
 
 ```
 $ git clone https://github.com/matrixorigin/matrixone.git
+$ git checkout 0.5.0
 $ cd matrixone
 ```
 
@@ -55,7 +60,7 @@ See [Connect to MatrixOne server](connect-to-matrixone-server.md).
 
 ## **Method 2: Downloading binary packages**
 
-Starting with 0.5.0, you can download binary packages directly to run MatrixOne in the X86_64 Linux or Mac X86_64 environment.
+For each release, you can download binary packages directly to run MatrixOne in the X86_64 Linux or Mac X86_64 environment.
 
 #### 1. Download binary packages and decompress
 
@@ -95,12 +100,20 @@ Please verify that Docker daemon is running in the background:
 $ docker --version
 ```
 
-#### 2. Create and run the container for the latest release of MatrixOne
+#### 2. Create and run the container of MatrixOne
 
-It will pull the image from Docker Hub if not exists.
+It will pull the image from Docker Hub if not exists. You can choose to pull the latest image or a stable version.
+
+Latest Image
 
 ```
 $ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
+```
+
+0.5.0 Version Image
+
+```
+$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
 ```
 
 For the information on the user name and password, see the next step - Connect to MatrixOne Server.
