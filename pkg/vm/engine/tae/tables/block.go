@@ -439,22 +439,24 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 	colIdx int,
 	buffer *bytes.Buffer,
 	raw bool) (view *model.ColumnView, err error) {
-	err = blk.node.DoWithPin(func() (err error) {
-		maxRow := uint32(0)
-		var visible bool
-		blk.mvcc.RLock()
-		if ts >= blk.GetMaxVisibleTS() {
-			maxRow = blk.node.rows
-			visible = true
-		} else {
-			maxRow, visible, err = blk.mvcc.GetMaxVisibleRowLocked(ts)
-		}
-		blk.mvcc.RUnlock()
-		if !visible || err != nil {
-			return
-		}
+	var (
+		maxRow  uint32
+		visible bool
+	)
+	blk.mvcc.RLock()
+	if ts >= blk.GetMaxVisibleTS() {
+		maxRow = blk.node.rows
+		visible = true
+	} else {
+		maxRow, visible, err = blk.mvcc.GetMaxVisibleRowLocked(ts)
+	}
+	blk.mvcc.RUnlock()
+	if !visible || err != nil {
+		return
+	}
 
-		view = model.NewColumnView(ts, colIdx)
+	view = model.NewColumnView(ts, colIdx)
+	err = blk.node.DoWithPin(func() (err error) {
 		if raw {
 			var data containers.Vector
 			data, err = blk.node.GetColumnDataCopy(maxRow, colIdx, buffer)
@@ -470,19 +472,24 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 			return
 		}
 		view.SetData(vec)
-		blk.mvcc.RLock()
-		err = blk.FillColumnUpdates(view)
-		if err == nil {
-			err = blk.FillColumnDeletes(view)
-		}
-		blk.mvcc.RUnlock()
-		if err != nil {
-			return
-		}
-
-		err = view.Eval(true)
 		return
 	})
+
+	if err != nil {
+		return
+	}
+
+	blk.mvcc.RLock()
+	err = blk.FillColumnUpdates(view)
+	if err == nil {
+		err = blk.FillColumnDeletes(view)
+	}
+	blk.mvcc.RUnlock()
+	if err != nil {
+		return
+	}
+
+	err = view.Eval(true)
 
 	return
 }
@@ -566,7 +573,7 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row, col int) (v any, err err
 		chain.RLock()
 		v, err = chain.GetValueLocked(uint32(row), ts)
 		chain.RUnlock()
-		if err == txnif.TxnInternalErr {
+		if err == txnif.ErrTxnInternal {
 			blk.mvcc.RUnlock()
 			return
 		}
@@ -789,7 +796,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 			row := it.Next()
 			key := pks.Get(int(row))
 			if blk.index.HasDeleteFrom(key, ts) {
-				err = txnif.TxnWWConflictErr
+				err = txnif.ErrTxnWWConflict
 				break
 			}
 		}

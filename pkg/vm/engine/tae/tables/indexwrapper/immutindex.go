@@ -17,10 +17,11 @@ func NewImmutableIndex() *immutableIndex {
 	return new(immutableIndex)
 }
 
-func (index *immutableIndex) IsKeyDeleted(any, uint64) (bool, bool) { panic("not supported") }
-func (index *immutableIndex) GetActiveRow(any) (uint32, error)      { panic("not supported") }
-func (index *immutableIndex) Delete(any, uint64) error              { panic("not supported") }
-func (index *immutableIndex) BatchUpsert(*index.KeysCtx, int, uint64) error {
+func (index *immutableIndex) IsKeyDeleted(any, uint64) (bool, bool)        { panic("not supported") }
+func (index *immutableIndex) GetActiveRow(any) (uint32, error)             { panic("not supported") }
+func (index *immutableIndex) Delete(any, uint64) error                     { panic("not supported") }
+func (index *immutableIndex) RevertUpsert(containers.Vector, uint64) error { panic("not supported") }
+func (index *immutableIndex) BatchUpsert(*index.KeysCtx, int, uint64) (*index.BatchResp, error) {
 	panic("not supported")
 }
 
@@ -42,7 +43,7 @@ func (index *immutableIndex) Dedup(key any) (err error) {
 	return
 }
 
-func (idx *immutableIndex) String() string {
+func (index *immutableIndex) String() string {
 	panic("implement me")
 }
 func (index *immutableIndex) GetMaxDeleteTS() uint64                    { panic("not supported") }

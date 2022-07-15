@@ -202,7 +202,7 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 }
 
 func TestLocalStreamDestroy(t *testing.T) {
-	ls := newLocalStream(func(ls *localStream) {})
+	ls := newLocalStream(func(ls *localStream) {}, func() *txn.TxnResponse { return &txn.TxnResponse{} })
 	c := ls.in
 	ls = nil
 	debug.FreeOSMemory()

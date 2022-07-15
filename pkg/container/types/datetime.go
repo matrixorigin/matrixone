@@ -30,9 +30,9 @@ const (
 	secsPerHour   = 60 * secsPerMinute
 	secsPerDay    = 24 * secsPerHour
 	//secsPerWeek   = 7 * secsPerDay
-	microSecondBitMask = 0xfffff
-	MaxDatetimeYear    = 9999
-	MinDatetimeYear    = 1
+	//microSecondBitMask = 0xfffff
+	MaxDatetimeYear = 9999
+	MinDatetimeYear = 1
 )
 
 // The higher 44 bits holds number of seconds since January 1, year 1 in Gregorian

@@ -115,7 +115,7 @@ func (n *Node) Destroy() {
 	}
 }
 
-// Should be guarded by lock
+// Load should be guarded by lock
 func (n *Node) Load() {
 	if n.state == base.NODE_LOADED {
 		return
@@ -126,7 +126,7 @@ func (n *Node) Load() {
 	n.state = base.NODE_LOADED
 }
 
-// Should be guarded by lock
+// Unload should be guarded by lock
 func (n *Node) Unload() {
 	if n.state == base.NODE_UNLOAD {
 		return
@@ -138,7 +138,7 @@ func (n *Node) Unload() {
 	n.state = base.NODE_UNLOAD
 }
 
-// Should be guarded by lock
+// Unloadable should be guarded by lock
 func (n *Node) Unloadable() bool {
 	if n.state == base.NODE_UNLOAD {
 		return false
@@ -153,7 +153,7 @@ func (n *Node) Unloadable() bool {
 	return ret
 }
 
-// Should be guarded by lock
+// GetState should be guarded by lock
 func (n *Node) GetState() base.NodeState {
 	return n.state
 }
@@ -194,7 +194,7 @@ func (n *Node) rollbackExpand(delta uint64) {
 	n.mgr.RetuernQuota(delta)
 }
 
-// Should be guarded by lock
+// IsLoaded should be guarded by lock
 func (n *Node) IsLoaded() bool { return n.state == base.NODE_LOADED }
 
 func (n *Node) IncIteration() uint64 {

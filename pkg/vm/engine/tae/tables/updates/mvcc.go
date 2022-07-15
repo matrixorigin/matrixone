@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -30,6 +31,7 @@ type MVCCHandle struct {
 	*sync.RWMutex
 	columns         map[uint16]*ColumnChain
 	deletes         *DeleteChain
+	holes           *roaring.Bitmap
 	meta            *catalog.BlockEntry
 	maxVisible      uint64
 	appends         []*AppendNode
@@ -74,6 +76,24 @@ func (n *MVCCHandle) HasActiveAppendNode() bool {
 	txn := node.txn
 	node.RUnlock()
 	return txn != nil
+}
+
+func (n *MVCCHandle) AddHoles(start, end int) {
+	if n.holes != nil {
+		n.holes = roaring.New()
+	}
+	n.holes.AddRange(uint64(start), uint64(end))
+}
+
+func (n *MVCCHandle) HasHole() bool {
+	return n.holes != nil && !n.holes.IsEmpty()
+}
+
+func (n *MVCCHandle) HoleCnt() int {
+	if !n.HasHole() {
+		return 0
+	}
+	return int(n.holes.GetCardinality())
 }
 
 func (n *MVCCHandle) IncChangeNodeCnt() {
@@ -237,7 +257,7 @@ func (n *MVCCHandle) GetMaxVisibleRowLocked(ts uint64) (row uint32, visible bool
 	return
 }
 
-//for replay
+// GetTotalRow is only for replay
 func (n *MVCCHandle) GetTotalRow() uint32 {
 	if len(n.appends) == 0 {
 		return 0
@@ -288,7 +308,7 @@ func (n *MVCCHandle) getMaxVisibleRowLocked(ts uint64) (int, uint32, bool, error
 			state := txn.GetTxnState(true)
 			// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
 			if state == txnif.TxnStateUnknown {
-				err = txnif.TxnInternalErr
+				err = txnif.ErrTxnInternal
 			} else if state == txnif.TxnStateRollbacked {
 				panic("append node shoul not be rollbacked")
 			}
