@@ -66,5 +66,4 @@ NaN if the input parameter is empty.
 
 ## Constraints
 
-1. Currently, MatrixOne doesn't support select function() without from tables.
-2. AVG(DISTINCT) is not supported for the 0.5.0 version.
+AVG(DISTINCT) is not supported for the 0.5.0 version.
