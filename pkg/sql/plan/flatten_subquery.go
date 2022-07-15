@@ -323,6 +323,13 @@ func (builder *QueryBuilder) pullupThroughAgg(ctx *BindContext, node *plan.Node,
 		colPos := int32(len(node.GroupBy))
 		node.GroupBy = append(node.GroupBy, expr)
 
+		if colRef, ok := expr.Expr.(*plan.Expr_Col); ok {
+			oldMapId := [2]int32{colRef.Col.RelPos, colRef.Col.ColPos}
+			newMapId := [2]int32{tag, colPos}
+
+			builder.nameByColRef[newMapId] = builder.nameByColRef[oldMapId]
+		}
+
 		return &plan.Expr{
 			Typ: expr.Typ,
 			Expr: &plan.Expr_Col{
@@ -356,6 +363,13 @@ func (builder *QueryBuilder) pullupThroughProj(ctx *BindContext, node *plan.Node
 
 		colPos := int32(len(node.ProjectList))
 		node.ProjectList = append(node.ProjectList, expr)
+
+		if colRef, ok := expr.Expr.(*plan.Expr_Col); ok {
+			oldMapId := [2]int32{colRef.Col.RelPos, colRef.Col.ColPos}
+			newMapId := [2]int32{tag, colPos}
+
+			builder.nameByColRef[newMapId] = builder.nameByColRef[oldMapId]
+		}
 
 		return &plan.Expr{
 			Typ: expr.Typ,
