@@ -32,11 +32,11 @@ import (
 )
 
 func appendQueryNode(query *Query, node *Node) int32 {
-	nodeId := int32(len(query.Nodes))
-	node.NodeId = nodeId
+	nodeID := int32(len(query.Nodes))
+	node.NodeId = nodeID
 	query.Nodes = append(query.Nodes, node)
 
-	return nodeId
+	return nodeID
 }
 
 func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
@@ -660,9 +660,9 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 	return nil, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("unsupport value: %v", val))
 }
 
-func getFunctionObjRef(funcId int64, name string) *ObjectRef {
+func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 	return &ObjectRef{
-		Obj:     funcId,
+		Obj:     funcID,
 		ObjName: name,
 	}
 }

@@ -56,9 +56,9 @@ func TestWrite(t *testing.T) {
 func TestWriteWithCacheWriteEnabled(t *testing.T) {
 	runOperatorTests(func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		assert.Empty(t, tc.mu.txn.DNShards)
-		respones, err := tc.Write(ctx, []txn.TxnRequest{newDNRequest(1, 1), newDNRequest(2, 2)})
+		responses, err := tc.Write(ctx, []txn.TxnRequest{newDNRequest(1, 1), newDNRequest(2, 2)})
 		assert.NoError(t, err)
-		assert.Empty(t, respones)
+		assert.Empty(t, responses)
 		assert.Equal(t, uint64(1), tc.mu.txn.DNShards[0].ShardID)
 		assert.Equal(t, 2, len(tc.mu.txn.DNShards))
 		assert.Empty(t, ts.getLastRequests())
@@ -263,7 +263,7 @@ func TestReadOnAbortedTxn(t *testing.T) {
 		})
 		responses, err := tc.Read(ctx, []txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1})})
 		assert.Error(t, err)
-		assert.Equal(t, errTxnAborted, err)
+		assert.Equal(t, errTxnClosed, err)
 		assert.Empty(t, responses)
 	})
 }
@@ -278,7 +278,7 @@ func TestWriteOnAbortedTxn(t *testing.T) {
 		})
 		result, err := tc.Write(ctx, []txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1})})
 		assert.Error(t, err)
-		assert.Equal(t, errTxnAborted, err)
+		assert.Equal(t, errTxnClosed, err)
 		assert.Empty(t, result)
 	})
 }
