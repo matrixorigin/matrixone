@@ -174,7 +174,14 @@ func (c *hakeeperClient) SendLogHeartbeat(ctx context.Context,
 		Method:       pb.LOG_HEARTBEAT,
 		LogHeartbeat: hb,
 	}
-	return c.sendHeartbeat(ctx, req)
+	cb, err := c.sendHeartbeat(ctx, req)
+	if err != nil {
+		return pb.CommandBatch{}, err
+	}
+	for _, cmd := range cb.Commands {
+		plog.Infof("hakeeper client received cmd: %s", cmd.LogString())
+	}
+	return cb, nil
 }
 
 func (c *hakeeperClient) sendHeartbeat(ctx context.Context,
