@@ -96,7 +96,7 @@ func describeExpr(expr *plan.Expr, options *ExplainOptions) (string, error) {
 	return result, nil
 }
 
-// generator function expression(Expr_F) explain infomation
+// generator function expression(Expr_F) explain information
 func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOptions) (string, error) {
 	// SysFunsAndOperatorsMap
 	var result string
