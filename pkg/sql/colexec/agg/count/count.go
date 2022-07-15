@@ -12,21 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package hashmap
+package count
 
-import "github.com/matrixorigin/matrixone/pkg/container/hashtable"
-
-const (
-	UnitLimit = 256
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// StrHashMap, key is []byte, value a uint64 value (starting from 1)
-// 	each time a new key is inserted, the hashtable returns a lastvalue+1 or, if the old key is inserted, the value corresponding to that key
-type StrHashMap struct {
-	hasNull       bool
-	rows          uint64
-	keys          [][]byte
-	values        []uint64
-	strHashStates [][3]uint64
-	hashMap       *hashtable.StringHashMap
+func ReturnType(_ []types.Type) types.Type {
+	return types.New(types.T_int64, 0, 0, 0)
+}
+
+func New[T1, T2 any]() *Count[T1, T2] {
+	return &Count[T1, T2]{}
+}
+
+func (c *Count[T1, T2]) Grows(_ int) {
+}
+
+func (c *Count[T1, T2]) Eval(vs []T2) []T2 {
+	return vs
+}
+
+func (c *Count[T1, T2]) Merge(x, y T2, _ bool, _ bool) (T2, bool) {
+	return any((any)(x).(int64) + (any)(y).(int64)).(T2), false
+}
+
+func (c *Count[T1, T2]) Fill(_ T1, v T2, z int64, _ bool, _ bool) (T2, bool) {
+	return any((any)(v).(int64) + z).(T2), false
 }

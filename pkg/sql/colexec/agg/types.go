@@ -86,7 +86,7 @@ type UnaryAgg[T1, T2 any] struct {
 	isCount bool
 	// output vecotr's type
 	otyp types.Type
-	// type list of input vecotrs
+	// type list of input vectors
 	ityps []types.Type
 
 	grows func(int)
@@ -112,7 +112,7 @@ type UnaryDistAgg[T1, T2 any] struct {
 
 	// output vecotr's type
 	otyp types.Type
-	// type list of input vecotrs
+	// type list of input vectors
 	ityps []types.Type
 
 	grows func(int)

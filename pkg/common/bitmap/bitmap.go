@@ -184,8 +184,6 @@ func (n *Bitmap) ToArray() []uint64 {
 			rows = append(rows, start+uint64(bits.OnesCount64(t-1)))
 			bit ^= t
 		}
-		if n.data[i] != 0 {
-		}
 		start += 64
 	}
 	return rows
