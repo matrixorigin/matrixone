@@ -30,7 +30,7 @@ func TestNewFutureWillPanic(t *testing.T) {
 		}
 	}()
 	f := newFuture(nil)
-	f.init(context.Background(), nil, SendOptions{}, false)
+	f.init(0, context.Background())
 }
 
 func TestCloseChanAfterGC(t *testing.T) {
@@ -55,16 +55,15 @@ func TestNewFuture(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	req := newTestMessage(1)
 	f := newFuture(nil)
-	f.init(ctx, req, SendOptions{}, false)
+	f.init(1, ctx)
 	defer f.Close()
 
 	assert.NotNil(t, f)
 	assert.False(t, f.mu.closed, false)
 	assert.NotNil(t, f.c)
 	assert.Equal(t, 0, len(f.c))
-	assert.Equal(t, f.request, req)
+	assert.Equal(t, uint64(1), f.id)
 	assert.Equal(t, ctx, f.ctx)
 }
 
@@ -74,12 +73,12 @@ func TestReleaseFuture(t *testing.T) {
 
 	req := newTestMessage(1)
 	f := newFuture(func(f *Future) { f.reset() })
-	f.init(ctx, req, SendOptions{}, false)
+	f.init(1, ctx)
 	f.c <- req
 	f.Close()
 	assert.True(t, f.mu.closed)
 	assert.Equal(t, 0, len(f.c))
-	assert.Nil(t, f.request)
+	assert.Equal(t, uint64(0), f.id)
 	assert.Nil(t, f.ctx)
 }
 
@@ -89,7 +88,7 @@ func TestGet(t *testing.T) {
 
 	req := newTestMessage(1)
 	f := newFuture(func(f *Future) { f.reset() })
-	f.init(ctx, req, SendOptions{}, false)
+	f.init(1, ctx)
 	defer f.Close()
 
 	f.done(req)
@@ -102,9 +101,8 @@ func TestGetWithTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1)
 	defer cancel()
 
-	req := newTestMessage(1)
 	f := newFuture(func(f *Future) { f.reset() })
-	f.init(ctx, req, SendOptions{}, false)
+	f.init(1, ctx)
 	defer f.Close()
 
 	resp, err := f.Get()
@@ -117,9 +115,8 @@ func TestGetWithInvalidResponse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	req := newTestMessage(1)
 	f := newFuture(func(f *Future) { f.reset() })
-	f.init(ctx, req, SendOptions{}, false)
+	f.init(1, ctx)
 	defer f.Close()
 
 	f.done(newTestMessage(2))
@@ -128,9 +125,8 @@ func TestGetWithInvalidResponse(t *testing.T) {
 
 func TestTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
-	req := newTestMessage(1)
 	f := newFuture(func(f *Future) { f.reset() })
-	f.init(ctx, req, SendOptions{}, false)
+	f.init(1, ctx)
 	defer f.Close()
 
 	assert.False(t, f.timeout())

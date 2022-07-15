@@ -214,7 +214,7 @@ func (s *sender) createStream(ctx context.Context, dn metadata.DNShard, response
 			return ls, nil
 		}
 	}
-	return s.client.NewStream(dn.Address, len(responses))
+	return s.client.NewStream(dn.Address)
 }
 
 func (s *sender) acquireLocalStream() *localStream {
