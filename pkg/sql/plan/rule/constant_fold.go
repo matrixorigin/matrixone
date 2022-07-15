@@ -36,7 +36,7 @@ func NewConstantFlod() *ConstantFold {
 	}
 }
 
-// always true
+// Match always true
 func (r *ConstantFold) Match(n *plan.Node) bool {
 	return true
 }
@@ -70,8 +70,8 @@ func (r *ConstantFold) constantFold(e *plan.Expr) *plan.Expr {
 	if !ok {
 		return e
 	}
-	overloadId := ef.F.Func.GetObj()
-	f, err := function.GetFunctionByID(overloadId)
+	overloadID := ef.F.Func.GetObj()
+	f, err := function.GetFunctionByID(overloadID)
 	if err != nil {
 		return e
 	}
@@ -138,8 +138,8 @@ func isConstant(e *plan.Expr) bool {
 	case *plan.Expr_C:
 		return true
 	case *plan.Expr_F:
-		overloadId := ef.F.Func.GetObj()
-		f, err := function.GetFunctionByID(overloadId)
+		overloadID := ef.F.Func.GetObj()
+		f, err := function.GetFunctionByID(overloadID)
 		if err != nil {
 			return false
 		}
