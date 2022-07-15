@@ -51,7 +51,3 @@ Returns the string str with the order of the characters reversed.
 | dafds       |     sdfad   |
 +-------------+-------------+
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.
