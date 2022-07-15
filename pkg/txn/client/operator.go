@@ -20,12 +20,43 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"go.uber.org/zap"
+)
+
+var (
+	readTxnErrors = map[txn.ErrorCode]struct{}{
+		txn.ErrorCode_TAERead:      {},
+		txn.ErrorCode_RPCError:     {},
+		txn.ErrorCode_WaitTxn:      {},
+		txn.ErrorCode_TxnNotFound:  {},
+		txn.ErrorCode_TxnNotActive: {},
+	}
+	writeTxnErrors = map[txn.ErrorCode]struct{}{
+		txn.ErrorCode_TAEWrite:     {},
+		txn.ErrorCode_RPCError:     {},
+		txn.ErrorCode_TxnNotFound:  {},
+		txn.ErrorCode_TxnNotActive: {},
+	}
+	commitTxnErrors = map[txn.ErrorCode]struct{}{
+		txn.ErrorCode_TAECommit:    {},
+		txn.ErrorCode_TAERollback:  {},
+		txn.ErrorCode_TAEPrepare:   {},
+		txn.ErrorCode_RPCError:     {},
+		txn.ErrorCode_TxnNotFound:  {},
+		txn.ErrorCode_TxnNotActive: {},
+	}
+	rollbackTxnErrors = map[txn.ErrorCode]struct{}{
+		txn.ErrorCode_TAERollback:  {},
+		txn.ErrorCode_RPCError:     {},
+		txn.ErrorCode_TxnNotFound:  {},
+		txn.ErrorCode_TxnNotActive: {},
+	}
 )
 
 // WithTxnReadyOnly setup readyonly flag
@@ -517,27 +548,104 @@ func (tc *txnOperator) handleError(result *rpc.SendResult, err error) (*rpc.Send
 		return nil, err
 	}
 
-	for idx := range result.Responses {
-		switch result.Responses[idx].Txn.GetStatus() {
-		case txn.TxnStatus_Aborted, txn.TxnStatus_Aborting:
-			// read after txn aborted
+	for _, resp := range result.Responses {
+		if err := tc.handleErrorResponse(resp); err != nil {
 			result.Release()
-			return nil, errTxnAborted
-		case txn.TxnStatus_Committed, txn.TxnStatus_Committing, txn.TxnStatus_Prepared:
-			switch result.Responses[idx].Method {
-			case txn.TxnMethod_Read, txn.TxnMethod_Write:
-				result.Release()
-				return nil, errTxnClosed
-			case txn.TxnMethod_Rollback:
-				panic("BUG")
-			case txn.TxnMethod_Commit:
-				// it's ok
-			}
+			return nil, err
 		}
-
-		// TODO: handle explicit txn error to error,  resp.TxnError
 	}
 	return result, nil
+}
+
+func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
+	switch resp.Method {
+	case txn.TxnMethod_Read:
+		if err := tc.checkResponseTxnStatusForReadWrite(resp.Txn); err != nil {
+			return err
+		}
+		return tc.checkTxnError(resp.TxnError, readTxnErrors)
+	case txn.TxnMethod_Write:
+		if err := tc.checkResponseTxnStatusForReadWrite(resp.Txn); err != nil {
+			return err
+		}
+		return tc.checkTxnError(resp.TxnError, writeTxnErrors)
+	case txn.TxnMethod_Commit:
+		if err := tc.checkResponseTxnStatusForCommit(resp.Txn); err != nil {
+			return err
+		}
+		return tc.checkTxnError(resp.TxnError, commitTxnErrors)
+	case txn.TxnMethod_Rollback:
+		if err := tc.checkResponseTxnStatusForRollback(resp.Txn); err != nil {
+			return err
+		}
+		return tc.checkTxnError(resp.TxnError, rollbackTxnErrors)
+	default:
+		tc.logger.Fatal("invalid response",
+			zap.String("response", resp.DebugString()))
+	}
+	return nil
+}
+
+func (tc *txnOperator) checkResponseTxnStatusForReadWrite(txnMeta *txn.TxnMeta) error {
+	if txnMeta == nil {
+		return errTxnClosed
+	}
+
+	switch txnMeta.Status {
+	case txn.TxnStatus_Active:
+		return nil
+	case txn.TxnStatus_Aborted, txn.TxnStatus_Aborting,
+		txn.TxnStatus_Committed, txn.TxnStatus_Committing:
+		return errTxnClosed
+	default:
+		tc.logger.Fatal("invalid response status for read or write",
+			util.TxnField(*txnMeta))
+	}
+	return nil
+}
+
+func (tc *txnOperator) checkTxnError(txnError *txn.TxnError, possibleErrorMap map[txn.ErrorCode]struct{}) error {
+	if txnError == nil {
+		return nil
+	}
+
+	if _, ok := possibleErrorMap[txnError.Code]; ok {
+		return moerr.NewError(moerr.ErrTxnError, txnError.Message)
+	}
+
+	tc.logger.Fatal("invalid txn error",
+		zap.String("txn-error", txnError.DebugString()))
+	return nil
+}
+
+func (tc *txnOperator) checkResponseTxnStatusForCommit(txnMeta *txn.TxnMeta) error {
+	if txnMeta == nil {
+		return errTxnClosed
+	}
+
+	switch txnMeta.Status {
+	case txn.TxnStatus_Committed, txn.TxnStatus_Aborted:
+		return nil
+	default:
+		tc.logger.Fatal("invalid response status for commit",
+			util.TxnField(*txnMeta))
+	}
+	return nil
+}
+
+func (tc *txnOperator) checkResponseTxnStatusForRollback(txnMeta *txn.TxnMeta) error {
+	if txnMeta == nil {
+		return errTxnClosed
+	}
+
+	switch txnMeta.Status {
+	case txn.TxnStatus_Aborted:
+		return nil
+	default:
+		tc.logger.Fatal("invalid response status for rollback",
+			util.TxnField(*txnMeta))
+	}
+	return nil
 }
 
 func (tc *txnOperator) trimResponses(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
