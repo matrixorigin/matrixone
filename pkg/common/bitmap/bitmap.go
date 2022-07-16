@@ -22,11 +22,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 )
 
+//
+// In case len is not multiple of 64, many of these code following assumes the trailing
+// bits of last uint64 are zero.   This may well be true in all our usage.  So let's
+// leave as it is for now.
+//
+
 func New(n int) *Bitmap {
 	return &Bitmap{
 		len:  n,
 		data: make([]uint64, (n-1)/64+1),
 	}
+}
+
+func (n *Bitmap) Clone() *Bitmap {
+	var ret Bitmap
+	ret.len = n.len
+	ret.data = make([]uint64, len(n.data))
+	copy(ret.data, n.data)
+	return &ret
 }
 
 func (n *Bitmap) Iterator() Iterator {
@@ -128,10 +142,29 @@ func (n *Bitmap) RemoveRange(start, end uint64) {
 	n.data[j] &= ^(^uint64(0) >> (uint(-end) & 0x3F))
 }
 
+func (n *Bitmap) IsSame(m *Bitmap) bool {
+	if n.len != m.len || len(m.data) != len(n.data) {
+		return false
+	}
+	for i := 0; i < len(n.data); i++ {
+		if n.data[i] != m.data[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (n *Bitmap) Or(m *Bitmap) {
 	n.TryExpand(m)
 	for i := 0; i < len(n.data); i++ {
 		n.data[i] |= m.data[i]
+	}
+}
+
+func (n *Bitmap) And(m *Bitmap) {
+	n.TryExpand(m)
+	for i := 0; i < len(n.data); i++ {
+		n.data[i] &= m.data[i]
 	}
 }
 
