@@ -135,7 +135,7 @@ install-static-check-tools:
 DIRS=pkg/... \
 	 cmd/...
 
-EXTRA_LINTERS=-E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert \
+EXTRA_LINTERS=-E exportloopref -E rowserrcheck -E depguard -D unconvert \
 	-E prealloc -E gofmt -E stylecheck
 
 .PHONY: static-check
