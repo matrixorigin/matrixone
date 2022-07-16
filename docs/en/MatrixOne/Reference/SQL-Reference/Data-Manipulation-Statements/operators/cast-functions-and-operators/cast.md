@@ -24,6 +24,8 @@ Currently, `cast` can support following conversion:
  * Numeric types to character CHAR type.
  * Numeric character types to numerical types(negative into SIGNED).
 
+ A detailed data type conversion rule can be refered to [Data Conversion Rule](../../../../Data-Types/data-type-conversion.md).
+
 ## **Examples**
 
 ```sql
