@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -132,46 +133,50 @@ func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T
 }
 
 func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
-	//defer leaktest.AfterTest(t)()
+	defer leaktest.AfterTest(t)()
 	cfg1 := Config{
-		FS:                  vfs.NewStrictMem(),
-		DeploymentID:        1,
-		RTTMillisecond:      5,
-		DataDir:             "data-1",
-		ServiceAddress:      "127.0.0.1:9002",
-		RaftAddress:         "127.0.0.1:9000",
-		GossipAddress:       "127.0.0.1:9001",
-		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9021", "127.0.0.1:9031"},
+		FS:                    vfs.NewStrictMem(),
+		DeploymentID:          1,
+		RTTMillisecond:        5,
+		DataDir:               "data-1",
+		ServiceAddress:        "127.0.0.1:9002",
+		RaftAddress:           "127.0.0.1:9000",
+		GossipAddress:         "127.0.0.1:9001",
+		GossipSeedAddresses:   []string{"127.0.0.1:9011", "127.0.0.1:9021", "127.0.0.1:9031"},
+		DisableHAKeeperTicker: true,
 	}
 	cfg2 := Config{
-		FS:                  vfs.NewStrictMem(),
-		DeploymentID:        1,
-		RTTMillisecond:      5,
-		DataDir:             "data-2",
-		ServiceAddress:      "127.0.0.1:9012",
-		RaftAddress:         "127.0.0.1:9010",
-		GossipAddress:       "127.0.0.1:9011",
-		GossipSeedAddresses: []string{"127.0.0.1:9001", "127.0.0.1:9021", "127.0.0.1:9031"},
+		FS:                    vfs.NewStrictMem(),
+		DeploymentID:          1,
+		RTTMillisecond:        5,
+		DataDir:               "data-2",
+		ServiceAddress:        "127.0.0.1:9012",
+		RaftAddress:           "127.0.0.1:9010",
+		GossipAddress:         "127.0.0.1:9011",
+		GossipSeedAddresses:   []string{"127.0.0.1:9001", "127.0.0.1:9021", "127.0.0.1:9031"},
+		DisableHAKeeperTicker: true,
 	}
 	cfg3 := Config{
-		FS:                  vfs.NewStrictMem(),
-		DeploymentID:        1,
-		RTTMillisecond:      5,
-		DataDir:             "data-3",
-		ServiceAddress:      "127.0.0.1:9022",
-		RaftAddress:         "127.0.0.1:9020",
-		GossipAddress:       "127.0.0.1:9021",
-		GossipSeedAddresses: []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9031"},
+		FS:                    vfs.NewStrictMem(),
+		DeploymentID:          1,
+		RTTMillisecond:        5,
+		DataDir:               "data-3",
+		ServiceAddress:        "127.0.0.1:9022",
+		RaftAddress:           "127.0.0.1:9020",
+		GossipAddress:         "127.0.0.1:9021",
+		GossipSeedAddresses:   []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9031"},
+		DisableHAKeeperTicker: true,
 	}
 	cfg4 := Config{
-		FS:                  vfs.NewStrictMem(),
-		DeploymentID:        1,
-		RTTMillisecond:      5,
-		DataDir:             "data-4",
-		ServiceAddress:      "127.0.0.1:9032",
-		RaftAddress:         "127.0.0.1:9030",
-		GossipAddress:       "127.0.0.1:9031",
-		GossipSeedAddresses: []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9021"},
+		FS:                    vfs.NewStrictMem(),
+		DeploymentID:          1,
+		RTTMillisecond:        5,
+		DataDir:               "data-4",
+		ServiceAddress:        "127.0.0.1:9032",
+		RaftAddress:           "127.0.0.1:9030",
+		GossipAddress:         "127.0.0.1:9031",
+		GossipSeedAddresses:   []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9021"},
+		DisableHAKeeperTicker: true,
 	}
 	service1, err := NewService(cfg1)
 	require.NoError(t, err)
@@ -204,8 +209,16 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	fn(t, []*Service{service1, service2, service3, service4})
 }
 
-func TestHAKeeperClusterCanBootstrapLogShard(t *testing.T) {
+func TestHAKeeperClusterCanBootstrapAndRepairLogShard(t *testing.T) {
+	if os.Getenv("LONG_TEST") == "" {
+		// this test will fail on go1.18 when -race is enabled, as it always
+		// timeout. go1.19 has a much faster -race implementation and it works fine
+		t.Skip("Skipping long test")
+	}
+
 	fn := func(t *testing.T, services []*Service) {
+		// bootstrap the cluster, 1 DN 1 Log shard, Log and HAKeeper have
+		// 3 replicas
 		store1 := services[0].store
 		state, err := store1.getCheckerState()
 		require.NoError(t, err)
@@ -225,6 +238,7 @@ func TestHAKeeperClusterCanBootstrapLogShard(t *testing.T) {
 		}
 		sendHeartbeat(services[:3])
 
+		// find out the leader HAKeeper store as we need the term value
 		var term uint64
 		var leaderStore *store
 		for _, s := range services[:3] {
@@ -239,6 +253,7 @@ func TestHAKeeperClusterCanBootstrapLogShard(t *testing.T) {
 		require.NotNil(t, leaderStore)
 		require.True(t, term > 0)
 
+		// bootstrap the cluster
 		state, err = leaderStore.getCheckerState()
 		require.NoError(t, err)
 		leaderStore.bootstrap(term, state)
@@ -250,10 +265,9 @@ func TestHAKeeperClusterCanBootstrapLogShard(t *testing.T) {
 		require.NotNil(t, leaderStore.bootstrapMgr)
 		assert.False(t, leaderStore.bootstrapMgr.CheckBootstrap(state.LogState))
 
-		// get and apply all schedule commands
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// get and apply all bootstrap schedule commands
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
 		defer cancel()
-
 		for _, s := range services[:3] {
 			cb, err := s.store.getCommandBatch(ctx, s.store.id())
 			require.NoError(t, err)
@@ -284,21 +298,17 @@ func TestHAKeeperClusterCanBootstrapLogShard(t *testing.T) {
 
 		// stop store 1
 		require.NoError(t, services[0].Close())
-		services[0] = nil
+		// no service.Close can be repeatedly called
+		services[0].store = nil
 		services = services[1:]
 
+		// wait for HAKeeper to repair the cluster
 		for i := 0; i < 5000; i++ {
 			m := services[0].store.getHeartbeatMessage()
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
 			assert.NoError(t, services[0].store.addLogStoreHeartbeat(ctx, m))
 			m = services[1].store.getHeartbeatMessage()
-			ctx, cancel = context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
 			assert.NoError(t, services[1].store.addLogStoreHeartbeat(ctx, m))
 			m = services[2].store.getHeartbeatMessage()
-			ctx, cancel = context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
 			assert.NoError(t, services[0].store.addLogStoreHeartbeat(ctx, m))
 
 			for _, s := range services {
@@ -325,6 +335,7 @@ func TestHAKeeperClusterCanBootstrapLogShard(t *testing.T) {
 			if notReady {
 				time.Sleep(time.Millisecond)
 			} else {
+				plog.Infof("repair completed, i: %d", i)
 				return
 			}
 		}

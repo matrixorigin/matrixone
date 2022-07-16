@@ -48,6 +48,9 @@ type Config struct {
 	GossipAddress        string
 	GossipListenAddress  string
 	GossipSeedAddresses  []string
+	// DisableHAKeeperTicker disables the HAKeeper ticker in test. Never set this
+	// field to true in production
+	DisableHAKeeperTicker bool
 }
 
 // Validate validates the configuration.
