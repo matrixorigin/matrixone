@@ -29,7 +29,7 @@ type ObjectFS struct {
 	common.RefHelper
 	nodes     map[string]tfs.File
 	data      []*Object
-	meta      []*Object
+	driver    *MetaDriver
 	attr      *Attr
 	lastId    uint64
 	lastInode uint64
@@ -46,7 +46,8 @@ func NewObjectFS() tfs.FS {
 		attr: &Attr{
 			algo: compress.Lz4,
 		},
-		nodes: make(map[string]tfs.File),
+		nodes:  make(map[string]tfs.File),
+		driver: &MetaDriver{},
 	}
 	fs.lastId = 1
 	fs.lastInode = 1
@@ -91,6 +92,8 @@ func (o *ObjectFS) OpenFile(name string, flag int) (file tfs.File, err error) {
 }
 
 func (o *ObjectFS) ReadDir(dir string) ([]common.FileInfo, error) {
+	o.RWMutex.Lock()
+	defer o.RWMutex.Unlock()
 	fileInfos := make([]common.FileInfo, 0)
 	entry := o.nodes[dir]
 	info := entry.Stat()
@@ -183,15 +186,7 @@ func (o *ObjectFS) Append(file *ObjectFile, data []byte) (n int, err error) {
 	file.inode.dataSize += uint64(len(data))
 	file.inode.objectId = dataObject.id
 	file.inode.mutex.Unlock()
-	inode, err := file.inode.Marshal()
-	if err != nil {
-		return int(allocated), err
-	}
-	metaObject, err := o.GetMeta(uint64(len(inode)))
-	if err != nil {
-		return
-	}
-	_, _, err = metaObject.Append(inode)
+	err = o.driver.Append(file.inode)
 	return int(allocated), err
 }
 
@@ -211,6 +206,10 @@ func (o *ObjectFS) Sync(file *ObjectFile) error {
 		return nil
 	}
 	return data.oFile.Sync()
+}
+
+func (o *ObjectFS) GetLastId() {
+
 }
 
 func (o *ObjectFS) Delete(file tfs.File) error {

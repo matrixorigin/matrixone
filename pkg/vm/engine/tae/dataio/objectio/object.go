@@ -29,7 +29,8 @@ type ObjectType uint8
 
 const (
 	DataType ObjectType = iota
-	MetadataType
+	MetadataSegType
+	MetadataBlkType
 	NodeType
 )
 
@@ -42,6 +43,8 @@ const (
 const (
 	DATA  = "data"
 	META  = "meta"
+	SEG   = "seg"
+	BLK   = "blk"
 	INODE = "inode"
 )
 
@@ -93,12 +96,14 @@ func (o *Object) GetSize() uint64 {
 }
 
 func encodeName(id uint64, oType ObjectType) string {
-	if oType == DataType {
-		return fmt.Sprintf("%d.%s", id, DATA)
-	} else if oType == NodeType {
+	if oType == NodeType {
 		return fmt.Sprintf("%d.%s", id, INODE)
+	} else if oType == MetadataSegType {
+		return fmt.Sprintf("%d.%s", id, SEG)
+	} else if oType == MetadataBlkType {
+		return fmt.Sprintf("%d.%s", id, BLK)
 	}
-	return fmt.Sprintf("%d.%s", id, META)
+	return fmt.Sprintf("%d.%s", id, DATA)
 }
 
 func decodeName(name string) (id uint64, oType ObjectType, err error) {
@@ -115,8 +120,10 @@ func decodeName(name string) (id uint64, oType ObjectType, err error) {
 		oType = DataType
 	} else if oName[1] == INODE {
 		oType = NodeType
-	} else {
-		oType = MetadataType
+	} else if oName[1] == SEG {
+		oType = MetadataSegType
+	} else if oName[1] == BLK {
+		oType = MetadataBlkType
 	}
 	return
 }
