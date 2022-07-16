@@ -195,14 +195,16 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 }
 
 // CollectDeletesInRange collects [startTs, endTs)
-func (chain *DeleteChain) CollectDeletesInRange(startTs, endTs uint64) (mask *roaring.Bitmap, indexes []*wal.Index, err error) {
-	n, err := chain.CollectDeletesLocked(startTs, true)
+func (chain *DeleteChain) CollectDeletesInRange(
+	startTs, endTs uint64,
+	rwlocker *sync.RWMutex) (mask *roaring.Bitmap, indexes []*wal.Index, err error) {
+	n, err := chain.CollectDeletesLocked(startTs, true, rwlocker)
 	if err != nil {
 		return
 	}
 	startNode := n.(*DeleteNode)
 	// n, err = chain.CollectDeletesLocked(endTs-1, true)
-	n, err = chain.CollectDeletesLocked(endTs, true)
+	n, err = chain.CollectDeletesLocked(endTs, true, rwlocker)
 	if err != nil {
 		return
 	}
@@ -222,7 +224,10 @@ func (chain *DeleteChain) CollectDeletesInRange(startTs, endTs uint64) (mask *ro
 	return
 }
 
-func (chain *DeleteChain) CollectDeletesLocked(ts uint64, collectIndex bool) (txnif.DeleteNode, error) {
+func (chain *DeleteChain) CollectDeletesLocked(
+	ts uint64,
+	collectIndex bool,
+	rwlocker *sync.RWMutex) (txnif.DeleteNode, error) {
 	var merged *DeleteNode
 	var err error
 	chain.LoopChainLocked(func(n *DeleteNode) bool {
@@ -239,34 +244,53 @@ func (chain *DeleteChain) CollectDeletesLocked(ts uint64, collectIndex bool) (tx
 		}
 		n.RLock()
 		txn := n.txn
-		if txn != nil && txn.GetStartTS() == ts {
+
+		if txn == nil {
+			if n.GetCommitTSLocked() <= ts {
+				if merged == nil {
+					merged = NewMergedNode(n.GetCommitTSLocked())
+				}
+				merged.MergeLocked(n, collectIndex)
+			}
+			n.RUnlock()
+			return true
+		}
+
+		if txn.SameTxn(ts) {
 			// Use the delete from the same active txn
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}
 			merged.MergeLocked(n, collectIndex)
-		} else if txn != nil && n.GetCommitTSLocked() > ts {
+		} else if txn.CommitAfter(ts) {
 			// Skip txn deletes committed after ts
 			n.RUnlock()
 			return true
-		} else if txn != nil {
+		} else {
 			// Wait committing txn with commit ts before ts
 			n.RUnlock()
+			if rwlocker != nil {
+				rwlocker.RUnlock()
+			}
 			state := txn.GetTxnState(true)
 			// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
 			// If the txn is rollbacked. skip to the next
 			if state == txnif.TxnStateRollbacked {
+				if rwlocker != nil {
+					rwlocker.RLock()
+				}
 				return true
 			} else if state == txnif.TxnStateUnknown {
 				err = txnif.ErrTxnInternal
+				if rwlocker != nil {
+					rwlocker.RLock()
+				}
 				return false
 			}
-			n.RLock()
-			if merged == nil {
-				merged = NewMergedNode(n.GetCommitTSLocked())
+			if rwlocker != nil {
+				rwlocker.RLock()
 			}
-			merged.MergeLocked(n, collectIndex)
-		} else if n.GetCommitTSLocked() <= ts {
+			n.RLock()
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}
