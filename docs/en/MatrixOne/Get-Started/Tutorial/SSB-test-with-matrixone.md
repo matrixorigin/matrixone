@@ -2,8 +2,6 @@
 
 The Star Schema Benchmark（SSB）Test is a popular scenario for OLAP database performance tests. By going through this tutorial, you’ll learn how to complete a SSB Test with MatrixOne.
 
-In v0.1.0, only single table can work in MatrixOne. The following contents can be followed for generating data, importing data, and querying data.
-
 ## **Before you begin**
 
 Make sure you have already [installed MatrixOne](../install-standalone-matrixone.md) and [connected to MatrixOne Server](../connect-to-matrixone-server.md).
@@ -26,6 +24,12 @@ $ ./dbgen -s 1 -T l
 $ ./dbgen -s 1 -T p
 $ ./dbgen -s 1 -T s
 $ ./dbgen -s 1 -T d
+```
+
+We have also prepared a 1GB dataset for downloading.  You can get the data files directly:
+
+```
+https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/lineorder_flat.tar.bz2
 ```
 
 ## **3. Create tables in MatrixOne**
@@ -156,12 +160,6 @@ CREATE TABLE lineorder_flat(
 ```
 
 ## **4. Load data into the created tables**
-
-Modify the parameter of system_vars_config.toml to a larger one in matrixone directory, such as 10GB. And restart MatrixOne service.
-
-```
-max-entry-bytes = "10GB"
-```
 
 Load data into related tables with this command in MatrixOne.
 
