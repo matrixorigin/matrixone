@@ -143,8 +143,13 @@ func (node *AppendNode) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (node *AppendNode) PrepareRollback() (err error) { return }
-func (node *AppendNode) ApplyRollback() (err error)   { return }
+func (node *AppendNode) PrepareRollback() (err error) {
+	node.mvcc.Lock()
+	defer node.mvcc.Unlock()
+	node.mvcc.DeleteAppendNodeLocked(node)
+	return
+}
+func (node *AppendNode) ApplyRollback() (err error) { return }
 func (node *AppendNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = NewAppendCmd(id, node)
 	return
