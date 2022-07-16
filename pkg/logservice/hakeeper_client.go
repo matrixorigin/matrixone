@@ -100,6 +100,7 @@ func newHAKeeperClient(ctx context.Context,
 		c.addr = addr
 		c.client = cc
 		isHAKeeper, err := c.checkRemote(ctx)
+		plog.Infof("isHAKeeper: %t, err: %v", isHAKeeper, err)
 		if err == nil && isHAKeeper {
 			return c, nil
 		} else if err != nil {

@@ -17,6 +17,7 @@ package logservice
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/errors"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -127,6 +129,7 @@ func newLogStore(cfg Config) (*store, error) {
 	ls := &store{
 		cfg:     cfg,
 		nh:      nh,
+		checker: checkers.NewCoordinator(),
 		alloc:   newIDAllocator(),
 		stopper: stopper.NewStopper("log-store"),
 	}
@@ -154,16 +157,19 @@ func (l *store) id() string {
 
 func (l *store) startHAKeeperReplica(replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target, join bool) error {
-	l.haKeeperReplicaID = replicaID
 	raftConfig := getRaftConfig(hakeeper.DefaultHAKeeperShardID, replicaID)
 	if err := l.nh.StartReplica(initialReplicas,
 		join, hakeeper.NewStateMachine, raftConfig); err != nil {
 		return err
 	}
-	if err := l.stopper.RunTask(func(ctx context.Context) {
-		l.ticker(ctx)
-	}); err != nil {
-		return err
+	atomic.StoreUint64(&l.haKeeperReplicaID, replicaID)
+	if !l.cfg.DisableHAKeeperTicker {
+		if err := l.stopper.RunTask(func(ctx context.Context) {
+			l.ticker(ctx)
+		}); err != nil {
+			return err
+		}
+		plog.Infof("HAKeeper ticker restarted")
 	}
 	return nil
 }
@@ -659,6 +665,14 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 	}
 	nhi := l.nh.GetNodeHostInfo(opts)
 	for _, ci := range nhi.ShardInfoList {
+		if ci.Pending {
+			plog.Infof("shard %d is pending, not included into the heartbeat",
+				ci.ShardID)
+			continue
+		}
+		if ci.ConfigChangeIndex == 0 {
+			panic("ci.ConfigChangeIndex is 0")
+		}
 		replicaInfo := pb.LogReplicaInfo{
 			LogShardInfo: pb.LogShardInfo{
 				ShardID:  ci.ShardID,
