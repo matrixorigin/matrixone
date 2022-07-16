@@ -24,3 +24,7 @@ Writing data.
 |  123 |   abc   |
 +------+---------+
 ```
+
+## **Constraints**
+
+Built-in functions inside `INSERT INTO...VALUES(function)` syntax is not supported yet.
