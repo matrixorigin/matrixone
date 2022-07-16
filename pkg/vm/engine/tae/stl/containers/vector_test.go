@@ -22,6 +22,7 @@ func withAllocator(opts *Options) *Options {
 func TestVector1(t *testing.T) {
 	opts := new(Options)
 	opts.Capacity = 1
+	opts.Allocator = stl.NewSimpleAllocator()
 	vec := NewVector[int64](opts)
 	now := time.Now()
 
@@ -75,7 +76,9 @@ func TestVector2(t *testing.T) {
 }
 
 func TestVector3(t *testing.T) {
-	vec := NewVector[[]byte]()
+	opts := new(Options)
+	opts.Allocator = stl.NewSimpleAllocator()
+	vec := NewVector[[]byte](opts)
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("h2"))
 	vec.Append([]byte("h3"))
@@ -98,7 +101,10 @@ func TestVector3(t *testing.T) {
 }
 
 func TestVector4(t *testing.T) {
-	vec := NewVector[[]byte]()
+	opts := &Options{
+		Allocator: stl.NewSimpleAllocator(),
+	}
+	vec := NewVector[[]byte](opts)
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("h2"))
 	vec.Append([]byte("h3"))
@@ -123,7 +129,7 @@ func TestVector5(t *testing.T) {
 	opts := &Options{
 		Allocator: stl.NewSimpleAllocator(),
 	}
-	vec := NewVector[[]byte]()
+	vec := NewVector[[]byte](opts)
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("hh2"))
 	vec.Append([]byte("hhh3"))
