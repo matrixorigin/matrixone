@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package scanner
+package mysql
 
 import (
 	"fmt"
@@ -22,7 +22,6 @@ import (
 )
 
 func TestLiteralID(t *testing.T) {
-	initTokens(dialect.MYSQL)
 	testcases := []struct {
 		in  string
 		id  int
@@ -76,7 +75,6 @@ func tokenName(id int) string {
 }
 
 func TestString(t *testing.T) {
-	initTokens(dialect.MYSQL)
 	testcases := []struct {
 		in   string
 		id   int
@@ -148,7 +146,6 @@ func TestString(t *testing.T) {
 }
 
 func TestBuffer(t *testing.T) {
-	initTokens(dialect.MYSQL)
 	testcases := []struct {
 		in   string
 		id   int

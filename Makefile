@@ -40,63 +40,57 @@ generate-pb:
 pb: generate-pb fmt
 	$(info all protos are generated) 
 
+.PHONY: cgo
+cgo:
+	@(cd cgo; make)
+
 # Building mo-server binary
 .PHONY: build
-build: generate cmd/db-server/$(wildcard *.go)
+build: generate cgo cmd/db-server/$(wildcard *.go)
 ifeq ($(TARGET_OS)$(TARGET_ARCH), )
 	$(info [Build binary])
-	@go build -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
+	@CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo" go build -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
 else ifneq ($(TARGET_OS), )
 ifneq ($(TARGET_ARCH), )
 	$(info [Cross Build binary])
 	$(info $(TARGET_OS))
 	$(info $(TARGET_ARCH))
-	@CGO_ENABLED=1 GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) go build -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
+	@CGO_ENABLED=1 CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo" GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) go build -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
 else
 	$(info [Cross Build binary])
 	$(info $(TARGET_OS))
-	@CGO_ENABLED=1 GOOS=$(TARGET_OS) go build -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
+	@CGO_ENABLED=1 CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo" GOOS=$(TARGET_OS) go build -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
 endif
 endif
 
 # Building mo-server binary for debugging, "race detector" enabled.
 .PHONY: debug
-debug: generate cmd/db-server/$(wildcard *.go)
+debug: generate cgo cmd/db-server/$(wildcard *.go)
 ifeq ($(TARGET_OS)$(TARGET_ARCH), )
 	$(info [Build debug binary])
-	@go build -race -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
+	@CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo" go build -race -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
 else ifneq ($(TARGET_OS), )
 ifneq ($(TARGET_ARCH), )
 	$(info [Cross Build  debugbinary])
 	$(info $(TARGET_OS))
 	$(info $(TARGET_ARCH))
-	@CGO_ENABLED=1 GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) go build  -race -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
+	@CGO_ENABLED=1 CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo" GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) go build  -race -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
 else
 	$(info [Cross Build debug binary])
 	$(info $(TARGET_OS))
-	@CGO_ENABLED=1 GOOS=$(TARGET_OS) go build  -race -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
+	@CGO_ENABLED=1 CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo" GOOS=$(TARGET_OS) go build  -race -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
 endif
 endif
 
 # Excluding frontend test cases temporarily
 # Argument SKIP_TEST to skip a specific go test
 .PHONY: ut 
-ut: generate
+ut: generate cgo
 	$(info [Unit testing])
 ifeq ($(UNAME_S),Darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
 else
 	@cd optools && timeout 60m ./run_ut.sh UT $(SKIP_TEST)
-endif
-
-# Running build verification tests
-.PHONY: bvt
-bvt: mo-server
-	$(info [Build verification testing])
-ifeq ($(UNAME_S),Darwin)
-	@cd optools; ./run_bvt.sh BVT False $(BVT_BRANCH)
-else
-	@cd optools; timeout 60m ./run_bvt.sh BVT False $(BVT_BRANCH)
 endif
 
 # Tear down
@@ -135,14 +129,14 @@ install-static-check-tools:
 DIRS=pkg/... \
 	 cmd/...
 
-EXTRA_LINTERS=-E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert \
+EXTRA_LINTERS=-E exportloopref -E rowserrcheck -E depguard -D unconvert \
 	-E prealloc -E gofmt -E stylecheck
 
 .PHONY: static-check
-static-check: generate
-	@staticcheck -checks SA9001,S1009,S1023,S1002,S1025,ST1017,ST1019,S1019,S1004,SA1030,S1011,S1008,SA1024,SA4003,S1039,S1028,SA6005 ./...
-	@go vet -vettool=$(which molint) ./...
-	@go-licenses check ./...
+static-check: generate cgo
+	@CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo" staticcheck -checks SA9001,S1009,S1023,S1002,S1025,ST1017,ST1019,S1019,S1004,SA1030,S1011,S1008,SA1024,SA4003,S1039,S1028,SA6005 ./...
+	@CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo" go vet -vettool=$(which molint) ./...
+	@CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo" go-licenses check ./...
 	@for p in $(DIRS); do \
-    golangci-lint run $(EXTRA_LINTERS) --new-from-rev=HEAD~ $$p ; \
+    CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo" golangci-lint run $(EXTRA_LINTERS) --new-from-rev=HEAD~ $$p ; \
   done;

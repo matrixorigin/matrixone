@@ -82,3 +82,42 @@ func BenchmarkAdd(b *testing.B) {
 		}
 	}
 }
+
+func TestC(t *testing.T) {
+	bm3 := New(10000)
+	bm5 := New(10000)
+
+	require.True(t, bm3.IsEmpty())
+	require.True(t, bm3.C_IsEmpty())
+	require.True(t, bm3.Count() == 0)
+	require.True(t, bm3.C_Count() == 0)
+
+	for i := 0; i < 10000; i += 3 {
+		bm3.Add(uint64(i))
+	}
+	for i := 0; i < 10000; i += 5 {
+		bm3.Add(uint64(i))
+	}
+
+	require.False(t, bm3.IsEmpty())
+	require.False(t, bm3.C_IsEmpty())
+
+	bm3Copy := bm3.Clone()
+	require.True(t, bm3.IsSame(bm3Copy))
+	require.True(t, bm3.C_Count() == bm3Copy.C_Count())
+	bm5Copy := bm5.Clone()
+	require.True(t, bm5.IsSame(bm5Copy))
+	require.True(t, bm5.C_Count() == bm5Copy.C_Count())
+
+	bm3CopyAgain := bm3.Clone()
+
+	bm3.Or(bm5)
+	bm3Copy.C_Or(bm5)
+	require.True(t, bm3.IsSame(bm3Copy))
+	require.True(t, bm3.Count() == int(bm3Copy.C_Count()))
+
+	bm5.And(bm3CopyAgain)
+	bm5Copy.C_And(bm3CopyAgain)
+	require.True(t, bm5.IsSame(bm5Copy))
+	require.True(t, bm5.Count() == int(bm5Copy.C_Count()))
+}
