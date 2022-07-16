@@ -29,6 +29,9 @@ func (m *MetaDriver) Append(file *ObjectFile) (err error) {
 		return err
 	}
 	page, err := m.GetPage(uint64(len(buf)), NodeType)
+	if err != nil {
+		return err
+	}
 	_, err = page.object.Append(buf, int64(page.extent.offset))
 	if err != nil {
 		return err
@@ -39,6 +42,9 @@ func (m *MetaDriver) Append(file *ObjectFile) (err error) {
 		return err
 	}
 	page, err = m.GetPage(uint64(len(buf)), MetadataBlkType)
+	if err != nil {
+		return err
+	}
 	file.parent.inode.mutex.Lock()
 	file.parent.inode.objectId = page.object.id
 	file.parent.extent = page.extent

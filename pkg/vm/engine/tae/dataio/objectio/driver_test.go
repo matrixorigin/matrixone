@@ -1,8 +1,6 @@
 package objectio
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -11,23 +9,6 @@ import (
 	"os"
 	"testing"
 )
-
-func mockData(size uint32) []byte {
-	var sbuffer bytes.Buffer
-	err := binary.Write(&sbuffer, binary.BigEndian, []byte(fmt.Sprintf("this is tests %d", size)))
-	if err != nil {
-		return nil
-	}
-	ibufLen := (size - (uint32(sbuffer.Len()) % size)) + uint32(sbuffer.Len())
-	if ibufLen > uint32(sbuffer.Len()) {
-		zero := make([]byte, ibufLen-uint32(sbuffer.Len()))
-		err = binary.Write(&sbuffer, binary.BigEndian, zero)
-		if err != nil {
-			return nil
-		}
-	}
-	return sbuffer.Bytes()
-}
 
 func TestMetaDriver_Replay(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)

@@ -20,10 +20,8 @@ import (
 
 type ObjectFile struct {
 	common.RefHelper
-	nodes  map[string]*ObjectFile
 	inode  *Inode
 	fs     *ObjectFS
-	stat   *objectFileStat
 	extent Extent
 	parent *ObjectDir
 }
@@ -92,10 +90,6 @@ func (b *ObjectFile) GetExtents() *[]Extent {
 
 func (b *ObjectFile) Read(data []byte) (n int, err error) {
 	return b.fs.Read(b, data)
-}
-
-func (b *ObjectFile) close() {
-	b.Destroy()
 }
 
 func (b *ObjectFile) Destroy() {

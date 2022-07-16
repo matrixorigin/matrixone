@@ -22,10 +22,6 @@ type ObjectAllocator struct {
 	pageSize  uint32
 }
 
-func p2align(x uint64, align uint64) uint64 {
-	return x & -align
-}
-
 func p2roundup(x uint64, align uint64) uint64 {
 	return -(-x & -align)
 }

@@ -25,7 +25,6 @@ type ObjectDir struct {
 	nodes  map[string]tfs.File
 	inode  *Inode
 	fs     *ObjectFS
-	stat   *objectFileStat
 	extent Extent
 }
 

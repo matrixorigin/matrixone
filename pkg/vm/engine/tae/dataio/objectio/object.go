@@ -22,7 +22,6 @@ import (
 
 	"os"
 	"path"
-	"sync"
 )
 
 type ObjectType uint8
@@ -51,7 +50,6 @@ const (
 
 type Object struct {
 	id        uint64
-	mutex     sync.Mutex
 	oFile     *os.File
 	allocator *ObjectAllocator
 	oType     ObjectType
