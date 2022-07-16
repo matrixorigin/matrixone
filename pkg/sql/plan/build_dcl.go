@@ -131,13 +131,13 @@ func buildExecute(stmt *tree.Execute, ctx CompilerContext) (*Plan, error) {
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
 	binder := NewWhereBinder(builder, &BindContext{})
 
-	var args []*Expr
-	for _, variable := range stmt.Variables {
+	args := make([]*Expr, len(stmt.Variables))
+	for idx, variable := range stmt.Variables {
 		arg, err := binder.baseBindExpr(variable, 0, true)
 		if err != nil {
 			return nil, err
 		}
-		args = append(args, arg)
+		args[idx] = arg
 	}
 
 	execute := &plan.Execute{
