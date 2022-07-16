@@ -40,6 +40,7 @@ type Inode struct {
 	magic    uint64
 	inode    uint64
 	name     string
+	parent   string
 	algo     uint8
 	size     uint64
 	dataSize uint64
@@ -49,7 +50,8 @@ type Inode struct {
 	mutex    sync.RWMutex
 	extents  []Extent
 	typ      InodeType
-	seq      uint64
+	state    StateType
+	create   uint64
 	objectId uint64
 }
 
@@ -90,13 +92,22 @@ func (i *Inode) Marshal() (buf []byte, err error) {
 	if err = binary.Write(&buffer, binary.BigEndian, i.typ); err != nil {
 		return
 	}
+	if err = binary.Write(&buffer, binary.BigEndian, i.state); err != nil {
+		return
+	}
 	if err = binary.Write(&buffer, binary.BigEndian, uint32(len([]byte(i.name)))); err != nil {
 		return
 	}
 	if err = binary.Write(&buffer, binary.BigEndian, []byte(i.name)); err != nil {
 		return
 	}
-	if err = binary.Write(&buffer, binary.BigEndian, i.seq); err != nil {
+	if err = binary.Write(&buffer, binary.BigEndian, uint32(len([]byte(i.parent)))); err != nil {
+		return
+	}
+	if err = binary.Write(&buffer, binary.BigEndian, []byte(i.parent)); err != nil {
+		return
+	}
+	if err = binary.Write(&buffer, binary.BigEndian, i.create); err != nil {
 		return
 	}
 	if err = binary.Write(&buffer, binary.BigEndian, i.algo); err != nil {
@@ -144,6 +155,7 @@ func (i *Inode) Marshal() (buf []byte, err error) {
 }
 func (i *Inode) UnMarshal(cache *bytes.Buffer, inode *Inode) (n int, err error) {
 	var nameLen uint32
+	var parentLen uint32
 	var extentLen uint64
 	n = 0
 	if err = binary.Read(cache, binary.BigEndian, &inode.magic); err != nil {
@@ -161,6 +173,10 @@ func (i *Inode) UnMarshal(cache *bytes.Buffer, inode *Inode) (n int, err error) 
 		return
 	}
 	n += int(unsafe.Sizeof(inode.typ))
+	if err = binary.Read(cache, binary.BigEndian, &inode.state); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(inode.state))
 	if err = binary.Read(cache, binary.BigEndian, &nameLen); err != nil {
 		return
 	}
@@ -171,10 +187,20 @@ func (i *Inode) UnMarshal(cache *bytes.Buffer, inode *Inode) (n int, err error) 
 	}
 	n += len(name)
 	inode.name = string(name)
-	if err = binary.Read(cache, binary.BigEndian, &inode.seq); err != nil {
+	if err = binary.Read(cache, binary.BigEndian, &parentLen); err != nil {
 		return
 	}
-	n += int(unsafe.Sizeof(inode.seq))
+	n += int(unsafe.Sizeof(parentLen))
+	parent := make([]byte, parentLen)
+	if err = binary.Read(cache, binary.BigEndian, &parent); err != nil {
+		return
+	}
+	n += len(parent)
+	inode.parent = string(parent)
+	if err = binary.Read(cache, binary.BigEndian, &inode.create); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(inode.create))
 	if err = binary.Read(cache, binary.BigEndian, &inode.algo); err != nil {
 		return
 	}

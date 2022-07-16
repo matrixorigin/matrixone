@@ -22,18 +22,19 @@ import (
 
 type ObjectDir struct {
 	common.RefHelper
-	nodes map[string]tfs.File
-	inode *Inode
-	fs    *ObjectFS
-	stat  *objectFileStat
+	nodes  map[string]tfs.File
+	inode  *Inode
+	fs     *ObjectFS
+	extent Extent
 }
 
 func openObjectDir(fs *ObjectFS, name string) *ObjectDir {
 	inode := &Inode{
-		magic: MAGIC,
-		inode: fs.lastInode,
-		typ:   DIR,
-		name:  name,
+		magic:  MAGIC,
+		inode:  fs.lastInode,
+		typ:    DIR,
+		name:   name,
+		create: fs.seq,
 	}
 	file := &ObjectDir{}
 	file.fs = fs
@@ -91,7 +92,8 @@ func (d *ObjectDir) Remove(name string) error {
 func (d *ObjectDir) OpenFile(fs *ObjectFS, name string) tfs.File {
 	file := d.nodes[name]
 	if file == nil {
-		file = openObjectFile(fs, name)
+		fs.seq++
+		file = openObjectFile(fs, d, name)
 		d.nodes[name] = file
 	}
 	return file
@@ -99,4 +101,14 @@ func (d *ObjectDir) OpenFile(fs *ObjectFS, name string) tfs.File {
 
 func (d *ObjectDir) GetFileType() common.FileType {
 	return common.DiskFile
+}
+
+func (d *ObjectDir) Marshal() (buf []byte, err error) {
+	d.inode.mutex.RLock()
+	d.inode.extents = make([]Extent, 0)
+	for _, node := range d.nodes {
+		d.inode.extents = append(d.inode.extents, node.(*ObjectFile).extent)
+	}
+	d.inode.mutex.RUnlock()
+	return d.inode.Marshal()
 }

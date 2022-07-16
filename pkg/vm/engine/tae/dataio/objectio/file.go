@@ -20,22 +20,24 @@ import (
 
 type ObjectFile struct {
 	common.RefHelper
-	nodes map[string]*ObjectFile
-	inode *Inode
-	fs    *ObjectFS
-	stat  *objectFileStat
+	inode  *Inode
+	fs     *ObjectFS
+	extent Extent
+	parent *ObjectDir
 }
 
-func openObjectFile(fs *ObjectFS, name string) *ObjectFile {
+func openObjectFile(fs *ObjectFS, dir *ObjectDir, name string) *ObjectFile {
 	inode := &Inode{
-		magic: MAGIC,
-		inode: fs.lastInode,
-		typ:   FILE,
-		name:  name,
+		magic:  MAGIC,
+		inode:  fs.lastInode,
+		typ:    FILE,
+		name:   name,
+		create: fs.seq,
 	}
 	file := &ObjectFile{}
 	file.fs = fs
 	file.inode = inode
+	file.parent = dir
 	fs.lastInode++
 	return file
 }
@@ -67,7 +69,8 @@ func (b *ObjectFile) Stat() common.FileInfo {
 	defer b.inode.mutex.RUnlock()
 	stat := &objectFileStat{}
 	stat.size = int64(b.inode.size)
-	stat.dataSize = int64(b.inode.size)
+	stat.dataSize = int64(b.inode.dataSize)
+	stat.algo = b.fs.attr.algo
 	stat.oType = b.inode.typ
 	return stat
 }
@@ -87,10 +90,6 @@ func (b *ObjectFile) GetExtents() *[]Extent {
 
 func (b *ObjectFile) Read(data []byte) (n int, err error) {
 	return b.fs.Read(b, data)
-}
-
-func (b *ObjectFile) close() {
-	b.Destroy()
 }
 
 func (b *ObjectFile) Destroy() {
