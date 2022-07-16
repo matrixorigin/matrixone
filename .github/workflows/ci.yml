@@ -1,7 +1,6 @@
 # Define workflow name.
 name: MatrixOne CI
 
-# Controls when the workflow will run.
 on:
   pull_request:
     types: [ opened, synchronize, reopened ]
@@ -48,21 +47,21 @@ jobs:
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
-          golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt -E stylecheck --new-from-rev=HEAD~ ./pkg/...
+          CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo" golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt -E stylecheck --new-from-rev=HEAD~ ./pkg/...
 
       - name: Run golangci-lint for cmd
         id: sca-2
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
-          golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt -E stylecheck --new-from-rev=HEAD~ ./cmd/...
+          CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo" golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt -E stylecheck --new-from-rev=HEAD~ ./cmd/...
           
       - name: Run more staticcheck checks
         id: sca-3
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
-          staticcheck -checks SA9001,S1009,S1023,S1002,S1025,ST1017,ST1019,S1019,S1004,SA1030,S1011,S1008,SA1024,SA4003,S1039,S1028,SA6005 ./...
+          CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo" staticcheck -checks SA9001,S1009,S1023,S1002,S1025,ST1017,ST1019,S1019,S1004,SA1030,S1011,S1008,SA1024,SA4003,S1039,S1028,SA6005 ./...
       
       - name: Check on failures
         if: steps.sca-3.outcome != 'success' || steps.sca-2.outcome != 'success' || steps.sca-1.outcome != 'success'
