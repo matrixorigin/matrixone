@@ -48,14 +48,14 @@ jobs:
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
-          golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt -E stylecheck ./pkg/...
+          golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt -E stylecheck --new-from-rev=HEAD~ ./pkg/...
 
       - name: Run golangci-lint for cmd
         id: sca-2
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
-          golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt -E stylecheck ./cmd/...
+          golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt -E stylecheck --new-from-rev=HEAD~ ./cmd/...
           
       - name: Run more staticcheck checks
         id: sca-3
