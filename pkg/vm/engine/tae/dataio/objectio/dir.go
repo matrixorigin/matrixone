@@ -15,8 +15,6 @@
 package objectio
 
 import (
-	"bytes"
-	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/tfs"
 	"os"
@@ -96,7 +94,7 @@ func (d *ObjectDir) OpenFile(fs *ObjectFS, name string) tfs.File {
 	file := d.nodes[name]
 	if file == nil {
 		fs.seq++
-		file = openObjectFile(fs, name)
+		file = openObjectFile(fs, d, name)
 		d.nodes[name] = file
 	}
 	return file
@@ -107,61 +105,11 @@ func (d *ObjectDir) GetFileType() common.FileType {
 }
 
 func (d *ObjectDir) Marshal() (buf []byte, err error) {
-	var (
-		buffer bytes.Buffer
-	)
-	if err = binary.Write(&buffer, binary.BigEndian, d.inode.magic); err != nil {
-		return
-	}
-	if err = binary.Write(&buffer, binary.BigEndian, d.inode.inode); err != nil {
-		return
-	}
-	if err = binary.Write(&buffer, binary.BigEndian, d.inode.typ); err != nil {
-		return
-	}
-	if err = binary.Write(&buffer, binary.BigEndian, d.inode.state); err != nil {
-		return
-	}
-	if err = binary.Write(&buffer, binary.BigEndian, uint32(len([]byte(d.inode.name)))); err != nil {
-		return
-	}
-	if err = binary.Write(&buffer, binary.BigEndian, []byte(d.inode.name)); err != nil {
-		return
-	}
-	if err = binary.Write(&buffer, binary.BigEndian, d.inode.create); err != nil {
-		return
-	}
-	if err = binary.Write(&buffer, binary.BigEndian, d.inode.algo); err != nil {
-		return
-	}
-	if err = binary.Write(&buffer, binary.BigEndian, d.inode.size); err != nil {
-		return
-	}
-	if err = binary.Write(&buffer, binary.BigEndian, d.inode.dataSize); err != nil {
-		return
-	}
-	if err = binary.Write(&buffer, binary.BigEndian, d.inode.rows); err != nil {
-		return
-	}
-	if err = binary.Write(&buffer, binary.BigEndian, d.inode.cols); err != nil {
-		return
-	}
-	if err = binary.Write(&buffer, binary.BigEndian, d.inode.idxs); err != nil {
-		return
-	}
-	if err = binary.Write(&buffer, binary.BigEndian, uint64(len(d.nodes))); err != nil {
-		return
-	}
 	d.inode.mutex.RLock()
-	nodes := d.nodes
-	d.inode.mutex.RUnlock()
-	for _, node := range nodes {
-		if err = binary.Write(&buffer, binary.BigEndian, node.(*ObjectFile).extent.offset); err != nil {
-			return
-		}
-		if err = binary.Write(&buffer, binary.BigEndian, node.(*ObjectFile).extent.length); err != nil {
-			return
-		}
+	d.inode.extents = make([]Extent, 0)
+	for _, node := range d.nodes {
+		d.inode.extents = append(d.inode.extents, node.(*ObjectFile).extent)
 	}
-	return buffer.Bytes(), err
+	d.inode.mutex.RUnlock()
+	return d.inode.Marshal()
 }

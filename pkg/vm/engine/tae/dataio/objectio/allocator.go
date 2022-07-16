@@ -49,7 +49,7 @@ func (o *ObjectAllocator) Allocate(needLen uint64) (uint64, uint64) {
 	length := p2roundup(needLen, uint64(o.pageSize))
 	offset := o.available
 	o.available += length
-	return offset, needLen
+	return offset, length
 }
 
 func (o *ObjectAllocator) GetAvailable() uint64 {

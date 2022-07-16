@@ -28,7 +28,7 @@ type ObjectFile struct {
 	parent *ObjectDir
 }
 
-func openObjectFile(fs *ObjectFS, name string) *ObjectFile {
+func openObjectFile(fs *ObjectFS, dir *ObjectDir, name string) *ObjectFile {
 	inode := &Inode{
 		magic:  MAGIC,
 		inode:  fs.lastInode,
@@ -39,6 +39,7 @@ func openObjectFile(fs *ObjectFS, name string) *ObjectFile {
 	file := &ObjectFile{}
 	file.fs = fs
 	file.inode = inode
+	file.parent = dir
 	fs.lastInode++
 	return file
 }
