@@ -19,7 +19,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/tfs"
 	"github.com/pierrec/lz4"
+	"io/ioutil"
 	"os"
+	gsort "sort"
 	"strings"
 	"sync"
 )
@@ -201,4 +203,56 @@ func (o *ObjectFS) GetLastId() {
 
 func (o *ObjectFS) Delete(file tfs.File) error {
 	return nil
+}
+
+func (o *ObjectFS) RebuildObject() (err error) {
+	files, err := ioutil.ReadDir(o.attr.dir)
+	if err != nil {
+		return
+	}
+	for _, file := range files {
+		id, oType, err := decodeName(file.Name())
+		if id > o.lastId {
+			o.lastId = id
+		}
+		if err != nil {
+			return
+		}
+		if oType == DataType {
+			object, err := OpenObject(id, DataType, o.attr.dir)
+			if err != nil {
+				return
+			}
+			object.Mount(ObjectSize, PageSize)
+			o.data = append(o.data, object)
+		} else if oType == NodeType {
+			object, err := OpenObject(id, NodeType, o.attr.dir)
+			if err != nil {
+				return
+			}
+			object.Mount(ObjectSize, MetaSize)
+			o.driver.inode = append(o.driver.inode, object)
+		} else if oType == MetadataBlkType {
+			object, err := OpenObject(id, MetadataBlkType, o.attr.dir)
+			if err != nil {
+				return
+			}
+			object.Mount(ObjectSize, MetaSize)
+			o.driver.blk = append(o.driver.blk, object)
+		}
+	}
+	Sort(o.data)
+	Sort(o.driver.inode)
+	Sort(o.driver.blk)
+	return
+}
+
+type ObjectList []*Object
+
+func (s ObjectList) Len() int           { return len(s) }
+func (s ObjectList) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+func (s ObjectList) Less(i, j int) bool { return s[i].id < s[j].id }
+
+func Sort(data []*Object) {
+	gsort.Sort(ObjectList(data))
 }

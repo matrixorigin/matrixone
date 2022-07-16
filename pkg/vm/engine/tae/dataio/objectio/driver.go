@@ -1,15 +1,15 @@
 package objectio
 
-type DriverPage struct {
-	object *Object
-	extent Extent
-}
-
 type MetaDriver struct {
-	seg   []*Object
+	//seg   []*Object
 	blk   []*Object
 	inode []*Object
 	fs    *ObjectFS
+}
+
+type MetaPage struct {
+	object *Object
+	extent Extent
 }
 
 func newMetaDriver(fs *ObjectFS) *MetaDriver {
@@ -21,7 +21,7 @@ func (m *MetaDriver) Append(file *ObjectFile) (err error) {
 	if err != nil {
 		return err
 	}
-	page, err := m.GetMeta(uint64(len(buf)), NodeType)
+	page, err := m.GetPage(uint64(len(buf)), NodeType)
 	_, err = page.object.Append(buf, int64(page.extent.offset))
 	if err != nil {
 		return err
@@ -31,23 +31,20 @@ func (m *MetaDriver) Append(file *ObjectFile) (err error) {
 	if err != nil {
 		return err
 	}
-	page, err = m.GetMeta(uint64(len(buf)), MetadataBlkType)
+	page, err = m.GetPage(uint64(len(buf)), MetadataBlkType)
 	file.parent.inode.mutex.Lock()
 	file.parent.inode.objectId = page.object.id
 	file.parent.extent = page.extent
 	file.parent.inode.mutex.Unlock()
 	_, err = page.object.Append(buf, int64(page.extent.offset))
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
-func (m *MetaDriver) GetMeta(size uint64, typ ObjectType) (page *DriverPage, err error) {
+// GetPage Find a metadata object based on type and allocate a page
+func (m *MetaDriver) GetPage(size uint64, typ ObjectType) (page *MetaPage, err error) {
 	m.fs.RWMutex.Lock()
 	defer m.fs.RWMutex.Unlock()
-	page = &DriverPage{}
+	page = &MetaPage{}
 	page.extent = Extent{}
 	var object *Object
 	objects := &m.blk
@@ -61,6 +58,8 @@ func (m *MetaDriver) GetMeta(size uint64, typ ObjectType) (page *DriverPage, err
 			return
 		}
 		object.Mount(ObjectSize, MetaSize)
+		// reserve the page for writing the object header
+		object.allocator.available += MetaSize
 		*objects = append(*objects, object)
 		m.fs.lastId++
 	}
@@ -74,4 +73,8 @@ func (m *MetaDriver) GetMeta(size uint64, typ ObjectType) (page *DriverPage, err
 		data:   entry{offset: 0, length: uint32(size)},
 	}
 	return
+}
+
+func (m *MetaDriver) Replay() error {
+	return nil
 }
