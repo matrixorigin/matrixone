@@ -20,10 +20,12 @@ import (
 
 type ObjectFile struct {
 	common.RefHelper
-	nodes map[string]*ObjectFile
-	inode *Inode
-	fs    *ObjectFS
-	stat  *objectFileStat
+	nodes  map[string]*ObjectFile
+	inode  *Inode
+	fs     *ObjectFS
+	stat   *objectFileStat
+	extent Extent
+	parent *ObjectDir
 }
 
 func openObjectFile(fs *ObjectFS, name string) *ObjectFile {

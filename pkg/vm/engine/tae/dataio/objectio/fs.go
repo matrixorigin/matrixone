@@ -46,9 +46,9 @@ func NewObjectFS() tfs.FS {
 		attr: &Attr{
 			algo: compress.Lz4,
 		},
-		nodes:  make(map[string]tfs.File),
-		driver: &MetaDriver{},
+		nodes: make(map[string]tfs.File),
 	}
+	fs.driver = newMetaDriver(fs)
 	fs.lastId = 1
 	fs.lastInode = 1
 	return fs
@@ -134,20 +134,6 @@ func (o *ObjectFS) GetData(size uint64) (object *Object, err error) {
 	return o.data[len(o.data)-1], nil
 }
 
-func (o *ObjectFS) GetMeta(size uint64) (object *Object, err error) {
-	o.RWMutex.Lock()
-	defer o.RWMutex.Unlock()
-	if len(o.meta) == 0 ||
-		o.meta[len(o.meta)-1].GetSize()+size >= ObjectSize {
-		object, err = OpenObject(o.lastId, MetadataType, o.attr.dir)
-		object.Mount(ObjectSize, MetaSize)
-		o.meta = append(o.meta, object)
-		o.lastId++
-		return
-	}
-	return o.meta[len(o.meta)-1], nil
-}
-
 func (o *ObjectFS) GetDataWithId(id uint64) *Object {
 	o.RWMutex.RLock()
 	defer o.RWMutex.RUnlock()
@@ -171,7 +157,8 @@ func (o *ObjectFS) Append(file *ObjectFile, data []byte) (n int, err error) {
 			return
 		}
 	}
-	offset, allocated, err := dataObject.Append(buf)
+	offset, allocated := dataObject.allocator.Allocate(uint64(len(buf)))
+	_, err = dataObject.Append(buf, int64(offset))
 	if err != nil {
 		return int(allocated), err
 	}
@@ -186,7 +173,7 @@ func (o *ObjectFS) Append(file *ObjectFile, data []byte) (n int, err error) {
 	file.inode.dataSize += uint64(len(data))
 	file.inode.objectId = dataObject.id
 	file.inode.mutex.Unlock()
-	err = o.driver.Append(file.inode)
+	err = o.driver.Append(file)
 	return int(allocated), err
 }
 

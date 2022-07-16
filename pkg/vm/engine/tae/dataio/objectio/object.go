@@ -77,9 +77,8 @@ func (o *Object) Mount(capacity uint64, pageSize uint32) {
 	o.allocator = NewObjectAllocator(capacity, pageSize)
 }
 
-func (o *Object) Append(data []byte) (offset, allocated uint64, err error) {
-	offset, allocated = o.allocator.Allocate(uint64(len(data)))
-	_, err = o.oFile.WriteAt(data, int64(offset))
+func (o *Object) Append(data []byte, offset int64) (n int, err error) {
+	n, err = o.oFile.WriteAt(data, offset)
 	if err != nil {
 		return
 	}

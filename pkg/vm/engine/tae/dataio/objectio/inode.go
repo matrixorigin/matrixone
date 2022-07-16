@@ -40,6 +40,7 @@ type Inode struct {
 	magic    uint64
 	inode    uint64
 	name     string
+	parent   string
 	algo     uint8
 	size     uint64
 	dataSize uint64
