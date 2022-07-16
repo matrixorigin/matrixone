@@ -81,7 +81,12 @@ func (o *ObjectFS) OpenFile(name string, flag int) (file tfs.File, err error) {
 		paths--
 	}
 	for i := 0; i < paths; i++ {
+		parent := fileName[i]
+		if i > 0 {
+			parent = fileName[i-1]
+		}
 		nodes, dir, err = o.OpenDir(fileName[i], nodes)
+		dir.(*ObjectDir).inode.parent = parent
 		if err != nil {
 			return nil, err
 		}
@@ -205,46 +210,49 @@ func (o *ObjectFS) Delete(file tfs.File) error {
 	return nil
 }
 
-func (o *ObjectFS) RebuildObject() (err error) {
+func (o *ObjectFS) RebuildObject() error {
 	files, err := ioutil.ReadDir(o.attr.dir)
 	if err != nil {
-		return
+		return err
 	}
 	for _, file := range files {
 		id, oType, err := decodeName(file.Name())
+		if err != nil {
+			return err
+		}
 		if id > o.lastId {
 			o.lastId = id
-		}
-		if err != nil {
-			return
 		}
 		if oType == DataType {
 			object, err := OpenObject(id, DataType, o.attr.dir)
 			if err != nil {
-				return
+				return err
 			}
 			object.Mount(ObjectSize, PageSize)
+			object.allocator.available = p2roundup(uint64(file.Size()), PageSize)
 			o.data = append(o.data, object)
 		} else if oType == NodeType {
 			object, err := OpenObject(id, NodeType, o.attr.dir)
 			if err != nil {
-				return
+				return err
 			}
 			object.Mount(ObjectSize, MetaSize)
+			object.allocator.available = p2roundup(uint64(file.Size()), MetaSize)
 			o.driver.inode = append(o.driver.inode, object)
 		} else if oType == MetadataBlkType {
 			object, err := OpenObject(id, MetadataBlkType, o.attr.dir)
 			if err != nil {
-				return
+				return err
 			}
 			object.Mount(ObjectSize, MetaSize)
+			object.allocator.available = p2roundup(uint64(file.Size()), MetaSize)
 			o.driver.blk = append(o.driver.blk, object)
 		}
 	}
 	Sort(o.data)
 	Sort(o.driver.inode)
 	Sort(o.driver.blk)
-	return
+	return nil
 }
 
 type ObjectList []*Object

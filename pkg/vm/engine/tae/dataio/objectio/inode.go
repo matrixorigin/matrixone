@@ -102,6 +102,12 @@ func (i *Inode) Marshal() (buf []byte, err error) {
 	if err = binary.Write(&buffer, binary.BigEndian, []byte(i.name)); err != nil {
 		return
 	}
+	if err = binary.Write(&buffer, binary.BigEndian, uint32(len([]byte(i.parent)))); err != nil {
+		return
+	}
+	if err = binary.Write(&buffer, binary.BigEndian, []byte(i.parent)); err != nil {
+		return
+	}
 	if err = binary.Write(&buffer, binary.BigEndian, i.create); err != nil {
 		return
 	}
@@ -150,6 +156,7 @@ func (i *Inode) Marshal() (buf []byte, err error) {
 }
 func (i *Inode) UnMarshal(cache *bytes.Buffer, inode *Inode) (n int, err error) {
 	var nameLen uint32
+	var parentLen uint32
 	var extentLen uint64
 	n = 0
 	if err = binary.Read(cache, binary.BigEndian, &inode.magic); err != nil {
@@ -181,6 +188,16 @@ func (i *Inode) UnMarshal(cache *bytes.Buffer, inode *Inode) (n int, err error) 
 	}
 	n += len(name)
 	inode.name = string(name)
+	if err = binary.Read(cache, binary.BigEndian, &parentLen); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(parentLen))
+	parent := make([]byte, parentLen)
+	if err = binary.Read(cache, binary.BigEndian, &parent); err != nil {
+		return
+	}
+	n += len(parent)
+	inode.parent = string(parent)
 	if err = binary.Read(cache, binary.BigEndian, &inode.create); err != nil {
 		return
 	}

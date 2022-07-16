@@ -38,6 +38,7 @@ const (
 	ObjectSize = 64 * 1024 * 1024
 	PageSize   = 4096
 	MetaSize   = 512
+	HoleSize   = 8 * MetaSize
 )
 
 const (
