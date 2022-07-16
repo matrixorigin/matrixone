@@ -127,7 +127,6 @@ func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.Clust
 		}
 		return cd, err
 	}
-	panic("not suppose to reach here")
 }
 
 func (c *managedHAKeeperClient) SendCNHeartbeat(ctx context.Context,
