@@ -93,16 +93,6 @@ else
 	@cd optools && timeout 60m ./run_ut.sh UT $(SKIP_TEST)
 endif
 
-# Running build verification tests
-.PHONY: bvt
-bvt: mo-server 
-	$(info [Build verification testing])
-ifeq ($(UNAME_S),Darwin)
-	@cd optools; ./run_bvt.sh BVT False $(BVT_BRANCH)
-else
-	@cd optools; timeout 60m ./run_bvt.sh BVT False $(BVT_BRANCH)
-endif
-
 # Tear down
 .PHONY: clean
 clean:
@@ -143,10 +133,10 @@ EXTRA_LINTERS=-E misspell -E exportloopref -E rowserrcheck -E depguard -D unconv
 	-E prealloc -E gofmt -E stylecheck
 
 .PHONY: static-check
-static-check: generate
-	@staticcheck -checks SA9001,S1009,S1023,S1002,S1025,ST1017,ST1019,S1019,S1004,SA1030,S1011,S1008,SA1024,SA4003,S1039,S1028,SA6005 ./...
-	@go vet -vettool=$(which molint) ./...
-	@go-licenses check ./...
+static-check: generate cgo
+	@CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo" staticcheck -checks SA9001,S1009,S1023,S1002,S1025,ST1017,ST1019,S1019,S1004,SA1030,S1011,S1008,SA1024,SA4003,S1039,S1028,SA6005 ./...
+	@CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo" go vet -vettool=$(which molint) ./...
+	@CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo" go-licenses check ./...
 	@for p in $(DIRS); do \
-    golangci-lint run $(EXTRA_LINTERS) --new-from-rev=HEAD~ $$p ; \
+    CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo" golangci-lint run $(EXTRA_LINTERS) --new-from-rev=HEAD~ $$p ; \
   done;
