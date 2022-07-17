@@ -61,12 +61,12 @@ func TestTables1(t *testing.T) {
 
 	blkCnt := 3
 	rows := schema.BlockMaxRows * uint32(blkCnt)
-	toAppend, err := appender.PrepareAppend(rows)
+	_, _, toAppend, err := appender.PrepareAppend(rows, nil)
 	assert.Equal(t, schema.BlockMaxRows, toAppend)
 	assert.Nil(t, err)
 	t.Log(toAppend)
 
-	toAppend, err = appender.PrepareAppend(rows - toAppend)
+	_, _, toAppend, err = appender.PrepareAppend(rows-toAppend, nil)
 	assert.Nil(t, err)
 	assert.Equal(t, uint32(0), toAppend)
 
@@ -77,7 +77,7 @@ func TestTables1(t *testing.T) {
 	id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
 	appender = handle.SetAppender(id)
 
-	toAppend, err = appender.PrepareAppend(rows - toAppend)
+	_, _, toAppend, err = appender.PrepareAppend(rows-toAppend, nil)
 	assert.Nil(t, err)
 	assert.Equal(t, schema.BlockMaxRows, toAppend)
 
@@ -89,7 +89,7 @@ func TestTables1(t *testing.T) {
 
 	id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
 	appender = handle.SetAppender(id)
-	toAppend, err = appender.PrepareAppend(rows - 2*toAppend)
+	_, _, toAppend, err = appender.PrepareAppend(rows-2*toAppend, nil)
 	assert.Nil(t, err)
 	assert.Equal(t, schema.BlockMaxRows, toAppend)
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
