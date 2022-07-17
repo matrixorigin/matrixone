@@ -207,10 +207,19 @@ func (n *MVCCHandle) TrySetMaxVisible(ts uint64) {
 		n.maxVisible = ts
 	}
 }
-func (n *MVCCHandle) AddAppendNodeLocked(txn txnif.AsyncTxn, maxRow uint32) *AppendNode {
-	an := NewAppendNode(txn, maxRow, n)
-	n.appends = append(n.appends, an)
-	return an
+func (n *MVCCHandle) AddAppendNodeLocked(
+	txn txnif.AsyncTxn,
+	maxRow uint32) (an *AppendNode, created bool) {
+	if len(n.appends) == 0 || n.appends[len(n.appends)-1].txn != txn {
+		an = NewAppendNode(txn, maxRow, n)
+		n.appends = append(n.appends, an)
+		created = true
+	} else {
+		an = n.appends[len(n.appends)-1]
+		created = false
+		an.SetMaxRow(maxRow)
+	}
+	return
 }
 
 func (n *MVCCHandle) DeleteAppendNodeLocked(node *AppendNode) {

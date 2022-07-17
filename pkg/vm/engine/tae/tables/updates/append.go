@@ -88,6 +88,9 @@ func (node *AppendNode) GetMaxRow() uint32    { return node.maxRow }
 func (node *AppendNode) SetMaxRow(row uint32) { node.maxRow = row }
 
 func (node *AppendNode) PrepareCommit() error {
+	node.Lock()
+	defer node.Unlock()
+	node.commitTs = node.txn.GetCommitTS()
 	return nil
 }
 
