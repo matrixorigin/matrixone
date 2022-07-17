@@ -39,11 +39,12 @@ type CheckpointUnit interface {
 type BlockAppender interface {
 	GetID() *common.ID
 	GetMeta() any
-	PrepareAppend(rows uint32) (n uint32, err error)
+	PrepareAppend(rows uint32,
+		txn txnif.AsyncTxn) (
+		node txnif.AppendNode, created bool, n uint32, err error)
 	ApplyAppend(bat *containers.Batch,
 		txn txnif.AsyncTxn,
-		anode txnif.AppendNode,
-	) (txnif.AppendNode, int, error)
+	) (int, error)
 	IsAppendable() bool
 	ReplayAppend(bat *containers.Batch) error
 }
