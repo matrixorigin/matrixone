@@ -639,7 +639,14 @@ func checkResponses(t *testing.T, response []txn.TxnResponse, expectErrors ...*t
 }
 
 func checkData(t *testing.T, wTxn txn.TxnMeta, s *service, commitTS int64, k byte, committed bool) {
-	assert.Nil(t, s.getTxnContext(wTxn.ID))
+	for {
+		v := s.getTxnContext(wTxn.ID)
+		if v != nil {
+			time.Sleep(time.Millisecond * 100)
+			continue
+		}
+		break
+	}
 
 	kv := s.storage.(*mem.KVTxnStorage)
 
