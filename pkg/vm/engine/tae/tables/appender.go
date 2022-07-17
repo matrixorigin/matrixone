@@ -61,7 +61,9 @@ func (appender *blockAppender) PrepareAppend(
 		n = rows
 	}
 	appender.placeholder += n
-	node, created = appender.node.block.mvcc.AddAppendNodeLocked(txn, appender.placeholder)
+	appender.node.block.mvcc.Lock()
+	defer appender.node.block.mvcc.Unlock()
+	node, created = appender.node.block.mvcc.AddAppendNodeLocked(txn, appender.placeholder+appender.rows)
 	return
 }
 func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (err error) {
