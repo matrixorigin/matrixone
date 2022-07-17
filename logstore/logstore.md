@@ -88,5 +88,6 @@ logservice会维护三套lsn：driver lsn, append lsn, logservice lsn。
 
 ### 关于并发
   在步骤2中，append是并发的。每个进入append queue的appender，调用logservice client做append后，会直接返回，不会等待结果。同时会有多个client做append。append返回的lsn不一定按照原来的顺序。
+  * logrecord里会写入一个lsn，在这个logservice lsn对应的entry之前入队的所有的entry都已经append成功。这样，replay的时候读到这里时，就能确定在这个lsn之前的entry已经全部读到，不会遗漏。
   * logservice lsn和入队顺序之差可以控制。会记录已经append成功返回的lsn（appended），和append但未返回的lsn（appending）。如果某个recordentry，在它之后又分配了很多append lsn做并发，但它一直没有append成功，就会停止之后的append并发。即，如果等待的即appended中第一个区间的end，加上a（暂时是100），不能小于append值。不满足条件，append lsn就无法分配，无法拿到新的client做并发。这样，logservice lsn离原来的顺序不会非常大，在replay的时候，可以用一个cache读到。
   * 提交顺序时串行的。步骤3中，entry的wait done是串行的。entry进入每个队列的顺序会保持一致。所以，对于每个entry，只有当它之前所有的entry都做完waitdone，这个entry才有可能成功waitdone。
