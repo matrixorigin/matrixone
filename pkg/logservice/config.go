@@ -32,6 +32,14 @@ var (
 	ErrInvalidConfig = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid log service configuration")
 )
 
+// HAKeeperClientConfig is the config for HAKeeper clients.
+type HAKeeperClientConfig struct {
+	// DiscoveryAddress is the Log Service discovery address provided by k8s.
+	DiscoveryAddress string
+	// ServiceAddresses is a list of well known Log Services' service addresses.
+	ServiceAddresses []string
+}
+
 // TODO: add toml or json support
 
 // Config defines the Configurations supported by the Log Service.
@@ -48,9 +56,11 @@ type Config struct {
 	GossipAddress        string
 	GossipListenAddress  string
 	GossipSeedAddresses  []string
-	// DisableHAKeeperTicker disables the HAKeeper ticker in test. Never set this
-	// field to true in production
-	DisableHAKeeperTicker bool
+	HAKeeperClientConfig HAKeeperClientConfig
+
+	// DisableWorkers disables the HAKeeper ticker and HAKeeper client in tests.
+	// Never set this field to true in production
+	DisableWorkers bool
 }
 
 // Validate validates the configuration.

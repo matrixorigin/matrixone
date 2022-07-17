@@ -163,7 +163,7 @@ func (l *store) startHAKeeperReplica(replicaID uint64,
 		return err
 	}
 	atomic.StoreUint64(&l.haKeeperReplicaID, replicaID)
-	if !l.cfg.DisableHAKeeperTicker {
+	if !l.cfg.DisableWorkers {
 		if err := l.stopper.RunTask(func(ctx context.Context) {
 			l.ticker(ctx)
 		}); err != nil {
