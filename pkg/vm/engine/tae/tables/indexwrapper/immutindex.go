@@ -127,7 +127,6 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 		default:
 			panic("unsupported index type")
 		}
-		idxFile.Unref()
 	}
 	return
 }
