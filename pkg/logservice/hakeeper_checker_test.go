@@ -181,7 +181,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	service1, err := NewService(cfg1)
 	require.NoError(t, err)
 	defer func() {
-		//assert.NoError(t, service1.Close())
+		assert.NoError(t, service1.Close())
 	}()
 	service2, err := NewService(cfg2)
 	require.NoError(t, err)
