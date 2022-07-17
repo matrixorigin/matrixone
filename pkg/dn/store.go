@@ -57,7 +57,7 @@ type store struct {
 }
 
 func NewStore(cfg *Config, opts ...Option) (Store, error) {
-	if err := cfg.adjust(); err != nil {
+	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 
@@ -114,14 +114,19 @@ func (s *store) initTxnServer() error {
 }
 
 func (s *store) initClocker() error {
-	s.clock = clockFactories[s.cfg.Txn.Clock](s.stopper, s.cfg)
+	switch s.cfg.Txn.Clock.Source {
+	case localClockSource:
+		s.createMemClock()
+	case hlcClockSource:
+		panic("not implement")
+	}
 	return nil
 }
 
 func (s *store) initHAKeeperClient() error {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HAKeeper.DiscoveryTimeout.Duration)
 	defer cancel()
-	client, err := logservice.NewDNHAKeeperClient(ctx, s.cfg.HAKeeper.HAKeeperClient)
+	client, err := logservice.NewDNHAKeeperClient(ctx, s.cfg.HAKeeper.ClientConfig)
 	if err != nil {
 		return err
 	}
@@ -137,7 +142,7 @@ func (s *store) getBackendOptions() []morpc.BackendOption {
 		}),
 		morpc.WithBackendBusyBufferSize(s.cfg.RPC.BusyQueueSize),
 		morpc.WithBackendBufferSize(s.cfg.RPC.SendQueueSize),
-		morpc.WithBackendGoettyOptions(goetty.WithBufSize(int(s.cfg.RPC.ReceiveBufferSize), int(s.cfg.RPC.SendBufferSize))),
+		morpc.WithBackendGoettyOptions(goetty.WithBufSize(int(s.cfg.RPC.ReadBufferSize), int(s.cfg.RPC.WriteBufferSize))),
 	}
 }
 
