@@ -348,6 +348,16 @@ func (l *store) tsoUpdate(ctx context.Context, count uint64) (uint64, error) {
 	return result.Value, nil
 }
 
+func handleNotHAKeeperError(err error) error {
+	if err == nil {
+		return err
+	}
+	if errors.Is(err, dragonboat.ErrShardNotFound) {
+		return ErrNotHAKeeper
+	}
+	return err
+}
+
 func (l *store) addLogStoreHeartbeat(ctx context.Context,
 	hb pb.LogStoreHeartbeat) error {
 	data := MustMarshal(&hb)
@@ -355,7 +365,7 @@ func (l *store) addLogStoreHeartbeat(ctx context.Context,
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if _, err := l.propose(ctx, session, cmd); err != nil {
 		plog.Errorf("propose failed, %v", err)
-		return err
+		return handleNotHAKeeperError(err)
 	}
 	return nil
 }
@@ -367,7 +377,7 @@ func (l *store) addCNStoreHeartbeat(ctx context.Context,
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if _, err := l.propose(ctx, session, cmd); err != nil {
 		plog.Errorf("propose failed, %v", err)
-		return err
+		return handleNotHAKeeperError(err)
 	}
 	return nil
 }
@@ -379,7 +389,7 @@ func (l *store) addDNStoreHeartbeat(ctx context.Context,
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if _, err := l.propose(ctx, session, cmd); err != nil {
 		plog.Errorf("propose failed, %v", err)
-		return err
+		return handleNotHAKeeperError(err)
 	}
 	return nil
 }
@@ -389,8 +399,7 @@ func (l *store) getCommandBatch(ctx context.Context,
 	v, err := l.read(ctx,
 		hakeeper.DefaultHAKeeperShardID, &hakeeper.ScheduleCommandQuery{UUID: uuid})
 	if err != nil {
-		// FIXME: handle not HAKeeper error
-		return pb.CommandBatch{}, err
+		return pb.CommandBatch{}, handleNotHAKeeperError(err)
 	}
 	return *(v.(*pb.CommandBatch)), nil
 }
@@ -399,8 +408,7 @@ func (l *store) getClusterDetails(ctx context.Context) (pb.ClusterDetails, error
 	v, err := l.read(ctx,
 		hakeeper.DefaultHAKeeperShardID, &hakeeper.ClusterDetailsQuery{})
 	if err != nil {
-		// FIXME: handle not HAKeeper error
-		return pb.ClusterDetails{}, err
+		return pb.ClusterDetails{}, handleNotHAKeeperError(err)
 	}
 	return *(v.(*pb.ClusterDetails)), nil
 }
@@ -410,7 +418,7 @@ func (l *store) addScheduleCommands(ctx context.Context,
 	cmd := hakeeper.GetUpdateCommandsCmd(term, cmds)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if _, err := l.propose(ctx, session, cmd); err != nil {
-		return err
+		return handleNotHAKeeperError(err)
 	}
 	return nil
 }
