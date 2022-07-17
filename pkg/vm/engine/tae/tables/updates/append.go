@@ -86,6 +86,9 @@ func (node *AppendNode) GetID() *common.ID {
 func (node *AppendNode) GetCommitTS() uint64 {
 	node.RLock()
 	defer node.RUnlock()
+	if node.txn != nil {
+		return node.txn.GetCommitTS()
+	}
 	return node.commitTs
 }
 func (node *AppendNode) GetMaxRow() uint32    { return node.maxRow }
