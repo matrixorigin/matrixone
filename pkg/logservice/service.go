@@ -127,6 +127,9 @@ func NewService(cfg Config) (*Service, error) {
 
 func (s *Service) Close() (err error) {
 	s.stopper.Stop()
+	if s.haClient != nil {
+		err = firstError(err, s.haClient.Close())
+	}
 	err = firstError(err, s.server.Close())
 	if s.store != nil {
 		err = firstError(err, s.store.close())

@@ -558,9 +558,15 @@ func (l *store) queryLog(ctx context.Context, shardID uint64,
 }
 
 func (l *store) ticker(ctx context.Context) {
-	ticker := time.NewTicker(hakeeper.TickDuration)
+	if l.cfg.HAKeeperTickInterval == 0 {
+		panic("invalid HAKeeperTickInterval")
+	}
+	ticker := time.NewTicker(l.cfg.HAKeeperTickInterval)
 	defer ticker.Stop()
-	haTicker := time.NewTicker(hakeeper.CheckDuration)
+	if l.cfg.HAKeeperCheckInterval == 0 {
+		panic("invalid HAKeeperCheckInterval")
+	}
+	haTicker := time.NewTicker(l.cfg.HAKeeperCheckInterval)
 	defer haTicker.Stop()
 
 	for {

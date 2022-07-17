@@ -98,7 +98,10 @@ func (s *Service) handleShutdownStore(cmd pb.ScheduleCommand) {
 
 func (s *Service) heartbeatWorker(ctx context.Context) {
 	// TODO: check tick interval
-	ticker := time.NewTicker(time.Second)
+	if s.cfg.HeartbeatInterval == 0 {
+		panic("invalid heartbeat interval")
+	}
+	ticker := time.NewTicker(s.cfg.HeartbeatInterval)
 	defer ticker.Stop()
 
 	for {
