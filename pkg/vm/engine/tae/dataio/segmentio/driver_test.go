@@ -454,6 +454,50 @@ func TestSegment_Replay2(t *testing.T) {
 	checkSegment(t, &seg, &seg1)
 }
 
+func TestSegment_Replay4(t *testing.T) {
+	dir := testutils.InitTestEnv(ModuleName, t)
+	name := path.Join(dir, "init.driver")
+	seg := Driver{}
+	err := seg.Init(name)
+	assert.Nil(t, err)
+	seg.Mount()
+	var file *DriverFile
+	for i := 0; i < INODE_NUM/2-1; i++ {
+		file = seg.NewBlockFile(fmt.Sprintf("test_%d.blk", i))
+		file.snode.algo = compress.None
+		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
+		assert.Nil(t, err)
+	}
+	logStat, err := seg.logFile.Stat()
+	assert.Nil(t, err)
+	if logStat.Size() < int64(LOG_SIZE/2+LOG_START-2*INODE_SIZE) {
+		assert.Nil(t, logStat.Size())
+	}
+	seg1 := Driver{}
+	err = seg1.Open(name)
+	assert.Nil(t, err)
+	seg1.Mount()
+	cache := bytes.NewBuffer(make([]byte, 2*1024*1024))
+	err = seg1.Replay(cache)
+	assert.Nil(t, err)
+	assert.Equal(t, INODE_NUM/2, len(seg1.nodes))
+	checkSegment(t, &seg, &seg1)
+
+	for _, file := range seg1.nodes {
+		if file.name == "logfile" {
+			continue
+		}
+		file.Unref()
+	}
+	assert.Equal(t, 1, len(seg1.nodes))
+	name = path.Join(dir, "init2.driver")
+	seg = Driver{}
+	err = seg.Init(name)
+	assert.Nil(t, err)
+	seg.Mount()
+	checkSegment(t, &seg, &seg1)
+}
+
 func TestSegment_Replay(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	name := path.Join(dir, "init.driver")
