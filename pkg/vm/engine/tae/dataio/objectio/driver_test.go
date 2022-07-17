@@ -13,6 +13,7 @@ import (
 func TestMetaDriver_Replay(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	id := common.NextGlobalSeqNum()
+	SegmentFactory.(*segmentFactory).fs = NewObjectFS()
 	seg := SegmentFactory.Build(dir, id).(*segmentFile)
 	fs := seg.fs
 	fs.(*ObjectFS).attr.algo = compress.None
