@@ -33,8 +33,9 @@ func TestMetaDriver_Replay(t *testing.T) {
 	f := fs1.(*ObjectFS)
 	f.SetDir(dir)
 	f.attr.algo = compress.None
-	f.RebuildObject()
-	err := f.driver.Replay()
+	err := f.RebuildObject()
+	assert.Nil(t, err)
+	err = f.driver.Replay()
 	assert.Nil(t, err)
 	assert.Equal(t, len(fs.(*ObjectFS).nodes), len(f.nodes))
 }
