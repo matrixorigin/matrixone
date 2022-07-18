@@ -23,7 +23,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/container/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
