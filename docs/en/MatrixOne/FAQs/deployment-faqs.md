@@ -71,4 +71,3 @@ ulimit -n 65536
 * For Linux, please refer to this detailed [guide](https://www.linuxtechi.com/set-ulimit-file-descriptors-limit-linux-servers/) to set the ulimit to 100000.
 
 After setting this value, there will be no more `too many open files` error.
-

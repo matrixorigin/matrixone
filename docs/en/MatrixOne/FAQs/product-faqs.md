@@ -14,7 +14,6 @@
   MatrixOne is a completely redesigned database. It's compatible with part of MySQL syntax and semantics. We are currently working to support more database semantics such as PostgreSQL, Hive, Clickhouse, since we intend to develop MatrixOne as a hyperconverged database.  
   To learn more about the compatibility with MySQL, you can visit [MySQL-Compatibility](../Overview/mysql-compatibility.md).
 
-
 * **Which programming language is MatrixOne developed with ?**
 
   Currently, the primary programming language used for our programming is **Golang**.
@@ -38,4 +37,3 @@
 * **In addition to the MatrixOne documentation, are there any other ways to acquire MatrixOne knowledge?**
 
   Currently [MatrixOne documentation](https://docs.matrixorigin.io/) is the most important and timely way to get MatrixOne related knowledge. In addition, we also have some technical communication groups in Slack and WeChat. If you have any needs, contact [opensource@matrixorigin.io](mailto:opensource@matrixorigin.io).
-
