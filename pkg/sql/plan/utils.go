@@ -480,3 +480,8 @@ func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge 
 		}
 	}
 }
+
+func getNumOfCharacters(str string) int {
+	strRune := []rune(str)
+	return len(strRune)
+}

@@ -718,13 +718,15 @@ func Test_handleShowCreateTable(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
 		ses.Data = make([][]interface{}, 1)
-		ses.Data[0] = make([]interface{}, primaryKeyPos+1)
-		ses.Data[0][tableNamePos] = []byte("table")
+		ses.Data[0] = make([]interface{}, showCreateTableAttrCount)
+		ses.Data[0][tableNamePos] = []byte("tableName")
+		ses.Data[0][tableCommentPos] = []byte("table comment")
 		ses.Data[0][attrNamePos] = []byte("col1")
 		ses.Data[0][attrTypPos] = int32(1)
 		ses.Data[0][charWidthPos] = int32(1)
 		ses.Data[0][defaultPos] = int8(1)
 		ses.Data[0][primaryKeyPos] = []byte("p")
+		ses.Data[0][attrCommentPos] = []byte("column comment")
 
 		ses.Mrs = &MysqlResultSet{}
 		err = handleShowCreateTable(ses)
