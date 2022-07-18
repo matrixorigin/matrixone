@@ -15,11 +15,11 @@ package logservice
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"sort"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -501,7 +501,9 @@ func TestCollectStore(t *testing.T) {
 	}
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		stores := parseLogStores(hakeeper.DefaultTimeoutConfig(), c.infos, c.tick)
+		cfg := hakeeper.Config{}
+		cfg.Fill()
+		stores := parseLogStores(cfg, c.infos, c.tick)
 		sort.Slice(stores.Working, func(i, j int) bool {
 			return stores.Working[i].ID < stores.Working[j].ID
 		})
@@ -509,7 +511,9 @@ func TestCollectStore(t *testing.T) {
 			return stores.Expired[i].ID < stores.Expired[j].ID
 		})
 		assert.Equal(t, c.expected, *stores)
-		stores = parseLogStores(hakeeper.DefaultTimeoutConfig().SetLogStoreTimeout(time.Hour), c.infos, c.tick)
+		cfg1 := hakeeper.Config{LogStoreTimeout: time.Hour}
+		cfg1.Fill()
+		stores = parseLogStores(cfg1, c.infos, c.tick)
 		assert.Nil(t, stores.ExpiredStores())
 	}
 }

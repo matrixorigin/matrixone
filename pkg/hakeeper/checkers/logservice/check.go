@@ -20,9 +20,9 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-func Check(alloc util.IDAllocator, config *hakeeper.HAConfig, cluster pb.ClusterInfo, infos pb.LogState,
+func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, infos pb.LogState,
 	removing map[uint64][]uint64, adding map[uint64][]uint64, currentTick uint64) (operators []*operator.Operator) {
-	stores := parseLogStores(config, infos, currentTick)
+	stores := parseLogStores(cfg, infos, currentTick)
 	stats := parseLogShards(cluster, infos, stores.ExpiredStores())
 
 	for shardID, toAdd := range stats.toAdd {

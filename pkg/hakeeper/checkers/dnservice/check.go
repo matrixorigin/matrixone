@@ -28,9 +28,9 @@ import (
 // The less shard ID, the higher priority.
 // NB: the returned order should be deterministic.
 func Check(
-	idAlloc util.IDAllocator, config *hakeeper.HAConfig, dnState pb.DNState, currTick uint64,
+	idAlloc util.IDAllocator, cfg hakeeper.Config, dnState pb.DNState, currTick uint64,
 ) []*operator.Operator {
-	stores, shards := parseDnState(config, dnState, currTick)
+	stores, shards := parseDnState(cfg, dnState, currTick)
 	if len(stores.WorkingStores()) < 1 {
 		// warning with no working store
 		return nil

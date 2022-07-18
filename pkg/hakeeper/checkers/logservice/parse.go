@@ -139,11 +139,11 @@ func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired util.Stor
 	return collect
 }
 
-func parseLogStores(config *hakeeper.HAConfig, infos pb.LogState, currentTick uint64) *util.ClusterStores {
+func parseLogStores(cfg hakeeper.Config, infos pb.LogState, currentTick uint64) *util.ClusterStores {
 	stores := util.NewClusterStores()
 	for uuid, storeInfo := range infos.Stores {
 		store := util.NewStore(uuid, len(storeInfo.Replicas), LogStoreCapacity)
-		if config.LogStoreExpired(storeInfo.Tick, currentTick) {
+		if cfg.LogStoreExpired(storeInfo.Tick, currentTick) {
 			stores.RegisterExpired(store)
 		} else {
 			stores.RegisterWorking(store)

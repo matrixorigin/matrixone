@@ -14,7 +14,9 @@
 
 package hakeeper
 
-import "time"
+import (
+	"time"
+)
 
 const (
 	DefaultTickPerSecond   = 10
@@ -22,45 +24,47 @@ const (
 	DefaultDnStoreTimeout  = 10 * time.Second
 )
 
-type HAConfig struct {
+type Config struct {
+	// TickPerSecond indicates how many ticks every second.
+	// In HAKeeper, we do not use actual time to measure time elapse.
+	// Instead, we use ticks.
 	TickPerSecond int
 
+	// LogStoreTimeout is the actual time limit between a log store's heartbeat.
+	// If HAKeeper does not receive two heartbeat within LogStoreTimeout,
+	// it regards the log store as down.
 	LogStoreTimeout time.Duration
 
+	// DnStoreTimeout is the actual time limit between a dn store's heartbeat.
+	// If HAKeeper does not receive two heartbeat within DnStoreTimeout,
+	// it regards the dn store as down.
 	DnStoreTimeout time.Duration
 }
 
-func DefaultTimeoutConfig() *HAConfig {
-	return &HAConfig{
-		TickPerSecond:   DefaultTickPerSecond,
-		LogStoreTimeout: DefaultLogStoreTimeout,
-		DnStoreTimeout:  DefaultDnStoreTimeout,
+func (cfg *Config) Validate() error {
+	return nil
+}
+
+func (cfg *Config) Fill() {
+	if cfg.TickPerSecond == 0 {
+		cfg.TickPerSecond = DefaultTickPerSecond
+	}
+	if cfg.LogStoreTimeout == 0 {
+		cfg.LogStoreTimeout = DefaultLogStoreTimeout
+	}
+	if cfg.DnStoreTimeout == 0 {
+		cfg.DnStoreTimeout = DefaultDnStoreTimeout
 	}
 }
 
-func (config *HAConfig) SetTickPerSecond(tickPerSecond int) *HAConfig {
-	config.TickPerSecond = tickPerSecond
-	return config
+func (cfg *Config) LogStoreExpired(start, current uint64) bool {
+	return uint64(int(cfg.LogStoreTimeout/time.Second)*cfg.TickPerSecond)+start < current
 }
 
-func (config *HAConfig) SetLogStoreTimeout(timeout time.Duration) *HAConfig {
-	config.LogStoreTimeout = timeout
-	return config
+func (cfg Config) DnStoreExpired(start, current uint64) bool {
+	return uint64(int(cfg.DnStoreTimeout/time.Second)*cfg.TickPerSecond)+start < current
 }
 
-func (config *HAConfig) SetDnStoreTimeout(timeout time.Duration) *HAConfig {
-	config.DnStoreTimeout = timeout
-	return config
-}
-
-func (config *HAConfig) LogStoreExpired(start, current uint64) bool {
-	return uint64(int(config.LogStoreTimeout/time.Second)*config.TickPerSecond)+start < current
-}
-
-func (config *HAConfig) DnStoreExpired(start, current uint64) bool {
-	return uint64(int(config.DnStoreTimeout/time.Second)*config.TickPerSecond)+start < current
-}
-
-func (config *HAConfig) ExpiredTick(start uint64, timeout time.Duration) uint64 {
-	return uint64(timeout/time.Second)*uint64(config.TickPerSecond) + start
+func (cfg Config) ExpiredTick(start uint64, timeout time.Duration) uint64 {
+	return uint64(timeout/time.Second)*uint64(cfg.TickPerSecond) + start
 }

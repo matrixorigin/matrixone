@@ -27,9 +27,9 @@ const (
 
 // Check checks system healthy or not.
 // If system wasn't healthy, we would generate
-// operators in order to shutdown all stores.
+// operators in order to shut down all stores.
 func Check(
-	config *hakeeper.HAConfig,
+	cfg hakeeper.Config,
 	cluster pb.ClusterInfo,
 	dnState pb.DNState,
 	logState pb.LogState,
@@ -38,7 +38,7 @@ func Check(
 	sysHealthy := true
 
 	// parse all log stores for expired stores mainly
-	logStores := parseLogStores(config, logState, currTick)
+	logStores := parseLogStores(cfg, logState, currTick)
 	if len(logStores.expired) == 0 {
 		return nil, sysHealthy
 	}
@@ -57,7 +57,7 @@ func Check(
 	}
 
 	// parse all dn stores
-	dnStores := parseDnStores(config, dnState, currTick)
+	dnStores := parseDnStores(cfg, dnState, currTick)
 
 	// generate operators to shutdown all stores
 	operators := make([]*operator.Operator, 0, logStores.length()+dnStores.length())
@@ -173,10 +173,10 @@ func (s *storeSet) shutdownWorkingStores() []*operator.Operator {
 }
 
 // parseLogStores separates log stores as expired and working.
-func parseLogStores(config *hakeeper.HAConfig, logState pb.LogState, currTick uint64) *storeSet {
+func parseLogStores(cfg hakeeper.Config, logState pb.LogState, currTick uint64) *storeSet {
 	set := newStoreSet(pb.LogService)
 	for id, storeInfo := range logState.Stores {
-		if config.LogStoreExpired(storeInfo.Tick, currTick) {
+		if cfg.LogStoreExpired(storeInfo.Tick, currTick) {
 			set.expired[util.StoreID(id)] = struct{}{}
 		} else {
 			set.working[util.StoreID(id)] = struct{}{}
@@ -186,10 +186,10 @@ func parseLogStores(config *hakeeper.HAConfig, logState pb.LogState, currTick ui
 }
 
 // parseDnStores separates dn stores as expired and working.
-func parseDnStores(config *hakeeper.HAConfig, dnState pb.DNState, currTick uint64) *storeSet {
+func parseDnStores(cfg hakeeper.Config, dnState pb.DNState, currTick uint64) *storeSet {
 	set := newStoreSet(pb.DnService)
 	for id, storeInfo := range dnState.Stores {
-		if config.DnStoreExpired(storeInfo.Tick, currTick) {
+		if cfg.DnStoreExpired(storeInfo.Tick, currTick) {
 			set.expired[util.StoreID(id)] = struct{}{}
 		} else {
 			set.working[util.StoreID(id)] = struct{}{}

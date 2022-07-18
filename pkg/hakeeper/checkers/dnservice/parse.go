@@ -25,7 +25,7 @@ const (
 )
 
 // parseDnState parses cluster dn state.
-func parseDnState(config *hakeeper.HAConfig,
+func parseDnState(cfg hakeeper.Config,
 	dnState pb.DNState, currTick uint64,
 ) (*util.ClusterStores, *clusterShards) {
 	stores := util.NewClusterStores()
@@ -33,7 +33,7 @@ func parseDnState(config *hakeeper.HAConfig,
 
 	for storeID, storeInfo := range dnState.Stores {
 		expired := false
-		if config.DnStoreExpired(storeInfo.Tick, currTick) {
+		if cfg.DnStoreExpired(storeInfo.Tick, currTick) {
 			expired = true
 		}
 

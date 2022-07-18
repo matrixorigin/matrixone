@@ -15,9 +15,9 @@ package logservice
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -321,7 +321,9 @@ func TestCheck(t *testing.T) {
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
 		alloc := util.NewTestIDAllocator(3)
-		operators := Check(alloc, hakeeper.DefaultTimeoutConfig(), c.cluster, c.infos, c.removing, c.adding, c.currentTick)
+		cfg := hakeeper.Config{}
+		cfg.Fill()
+		operators := Check(alloc, cfg, c.cluster, c.infos, c.removing, c.adding, c.currentTick)
 
 		assert.Equal(t, len(c.expected), len(operators))
 		for j, op := range operators {

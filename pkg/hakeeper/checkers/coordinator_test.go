@@ -15,9 +15,9 @@ package checkers
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -282,7 +282,7 @@ func TestFixExpiredStore(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		coordinator := NewCoordinator()
+		coordinator := NewCoordinator(hakeeper.Config{})
 		output := coordinator.Check(c.idAlloc, c.cluster, c.dn, c.log, c.currentTick)
 		assert.Equal(t, c.expected, output)
 	}
@@ -380,7 +380,7 @@ func TestFixZombie(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		coordinator := NewCoordinator()
+		coordinator := NewCoordinator(hakeeper.Config{})
 		output := coordinator.Check(c.idAlloc, c.cluster, c.dn, c.log, c.currentTick)
 		assert.Equal(t, c.expected, output)
 	}
@@ -389,7 +389,7 @@ func TestFixZombie(t *testing.T) {
 func TestOpExpiredAndThenCompleted(t *testing.T) {
 	cluster := pb.ClusterInfo{LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 3}}}
 	idAlloc := util.NewTestIDAllocator(2)
-	coordinator := NewCoordinator()
+	coordinator := NewCoordinator(hakeeper.Config{})
 	fn := func(time uint64) uint64 { return time * hakeeper.DefaultTickPerSecond * 60 }
 
 	replicas := map[uint64]string{1: "a", 2: "b"}
