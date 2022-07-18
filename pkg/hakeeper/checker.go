@@ -36,8 +36,8 @@ type Checker interface {
 	// Check is periodically called by the HAKeeper for checking the cluster
 	// health status, a list of Operator instances will be returned describing
 	// actions required to ensure the high availability of the cluster.
-	Check(alloc util.IDAllocator, cluster pb.ClusterInfo,
-		dn pb.DNState, log pb.LogState, currentTick uint64) []pb.ScheduleCommand
+	Check(alloc util.IDAllocator, config *HAConfig, cluster pb.ClusterInfo,
+		dnState pb.DNState, logState pb.LogState, currentTick uint64) []pb.ScheduleCommand
 }
 
 // BootstrapManager is the interface suppose to be implemented by HAKeeper's
