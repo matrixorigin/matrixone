@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
+// Analyze analyze information for operator
 type Analyze interface {
 	Stop()
 	Start()
