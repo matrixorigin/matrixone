@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -183,7 +184,9 @@ func mockDnShard(
 func TestCheck(t *testing.T) {
 	expiredTick := uint64(10)
 	// construct current tick in order to make hearbeat tick expired
-	currTick := util.ExpiredTick(expiredTick, util.DnStoreTimeout) + 1
+	config := hakeeper.Config{}
+	config.Fill()
+	currTick := config.ExpiredTick(expiredTick, config.DnStoreTimeout) + 1
 
 	enough := true
 	newReplicaID := uint64(100)
@@ -208,7 +211,7 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		steps := Check(idAlloc, dnState, currTick)
+		steps := Check(idAlloc, config, dnState, currTick)
 		require.Equal(t, len(steps), 0)
 	}
 
@@ -249,7 +252,7 @@ func TestCheck(t *testing.T) {
 		//  10 - add replica
 		//  12 - remove two extra replica (16, 13)
 		//  14 - no command
-		operators := Check(idAlloc, dnState, currTick)
+		operators := Check(idAlloc, config, dnState, currTick)
 		require.Equal(t, 2, len(operators))
 
 		// shard 10 - single operator step

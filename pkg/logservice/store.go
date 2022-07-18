@@ -69,7 +69,7 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 	}
 	return config.NodeHostConfig{
 		DeploymentID:        cfg.DeploymentID,
-		NodeHostID:          cfg.NodeHostID,
+		NodeHostID:          cfg.UUID,
 		NodeHostDir:         cfg.DataDir,
 		RTTMillisecond:      cfg.RTTMillisecond,
 		AddressByNodeHostID: true,
@@ -129,7 +129,7 @@ func newLogStore(cfg Config) (*store, error) {
 	ls := &store{
 		cfg:     cfg,
 		nh:      nh,
-		checker: checkers.NewCoordinator(),
+		checker: checkers.NewCoordinator(cfg.GetHAKeeperConfig()),
 		alloc:   newIDAllocator(),
 		stopper: stopper.NewStopper("log-store"),
 	}

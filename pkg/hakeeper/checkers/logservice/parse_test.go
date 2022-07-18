@@ -17,7 +17,9 @@ import (
 	"fmt"
 	"sort"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -439,12 +441,8 @@ func TestCollectStore(t *testing.T) {
 		{
 			desc: "no expired stores",
 			cluster: pb.ClusterInfo{
-				DNShards: nil,
-				LogShards: []metadata.LogShardRecord{{
-					ShardID:          1,
-					NumberOfReplicas: 3,
-					Name:             "",
-				}},
+				DNShards:  nil,
+				LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 3}},
 			},
 			infos: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{1: {
@@ -454,46 +452,30 @@ func TestCollectStore(t *testing.T) {
 				}},
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {
-						Tick:     uint64(10 * util.TickPerSecond * 60),
-						Replicas: nil,
+						Tick: uint64(10 * hakeeper.DefaultTickPerSecond * 60),
 					},
 					"b": {
-						Tick:     uint64(13 * util.TickPerSecond * 60),
-						Replicas: nil,
+						Tick: uint64(13 * hakeeper.DefaultTickPerSecond * 60),
 					},
 					"c": {
-						Tick:     uint64(12 * util.TickPerSecond * 60),
-						Replicas: nil,
+						Tick: uint64(12 * hakeeper.DefaultTickPerSecond * 60),
 					},
 				},
 			},
-			tick: uint64(10 * util.TickPerSecond * 60),
+			tick: uint64(10 * hakeeper.DefaultTickPerSecond * 60),
 			expected: util.ClusterStores{
-				Working: []*util.Store{{
-					ID:       "a",
-					Length:   0,
-					Capacity: 32,
-				}, {
-					ID:       "b",
-					Length:   0,
-					Capacity: 32,
-				}, {
-					ID:       "c",
-					Length:   0,
-					Capacity: 32,
-				}},
-				Expired: nil,
+				Working: []*util.Store{
+					{ID: "a", Capacity: 32},
+					{ID: "b", Capacity: 32},
+					{ID: "c", Capacity: 32},
+				},
 			},
 		},
 		{
 			desc: "store b expired",
 			cluster: pb.ClusterInfo{
-				DNShards: nil,
-				LogShards: []metadata.LogShardRecord{{
-					ShardID:          1,
-					NumberOfReplicas: 3,
-					Name:             "",
-				}},
+				DNShards:  nil,
+				LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 3}},
 			},
 			infos: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{1: {
@@ -502,44 +484,26 @@ func TestCollectStore(t *testing.T) {
 					Epoch:    1,
 				}},
 				Stores: map[string]pb.LogStoreInfo{
-					"a": {
-						Tick:     uint64(10 * util.TickPerSecond * 60),
-						Replicas: nil,
-					},
-					"b": {
-						Tick:     0,
-						Replicas: nil,
-					},
-					"c": {
-						Tick:     uint64(12 * util.TickPerSecond * 60),
-						Replicas: nil,
-					},
+					"a": {Tick: uint64(10 * hakeeper.DefaultTickPerSecond * 60)},
+					"b": {Tick: 0},
+					"c": {Tick: uint64(12 * hakeeper.DefaultTickPerSecond * 60)},
 				},
 			},
-			tick: uint64(15 * util.TickPerSecond * 60),
+			tick: uint64(15 * hakeeper.DefaultTickPerSecond * 60),
 			expected: util.ClusterStores{
-				Working: []*util.Store{{
-					ID:       "a",
-					Length:   0,
-					Capacity: 32,
-				}, {
-					ID:       "c",
-					Length:   0,
-					Capacity: 32,
-				}},
-				Expired: []*util.Store{
-					{
-						ID:       "b",
-						Length:   0,
-						Capacity: 32,
-					},
+				Working: []*util.Store{
+					{ID: "a", Capacity: 32},
+					{ID: "c", Capacity: 32},
 				},
+				Expired: []*util.Store{{ID: "b", Capacity: 32}},
 			},
 		},
 	}
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		stores := parseLogStores(c.infos, c.tick)
+		cfg := hakeeper.Config{}
+		cfg.Fill()
+		stores := parseLogStores(cfg, c.infos, c.tick)
 		sort.Slice(stores.Working, func(i, j int) bool {
 			return stores.Working[i].ID < stores.Working[j].ID
 		})
@@ -547,5 +511,9 @@ func TestCollectStore(t *testing.T) {
 			return stores.Expired[i].ID < stores.Expired[j].ID
 		})
 		assert.Equal(t, c.expected, *stores)
+		cfg1 := hakeeper.Config{LogStoreTimeout: time.Hour}
+		cfg1.Fill()
+		stores = parseLogStores(cfg1, c.infos, c.tick)
+		assert.Nil(t, stores.ExpiredStores())
 	}
 }

@@ -16,6 +16,7 @@ package logservice
 import (
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -47,9 +48,6 @@ func fixedLogShardInfo(record metadata.LogShardRecord, info pb.LogShardInfo,
 	expiredStores util.StoreSlice) *fixingShard {
 	fixing := newFixingShard(info)
 	diff := len(fixing.replicas) - int(record.NumberOfReplicas)
-	//if record.ShardID == 0 {
-	//	diff = 0
-	//}
 
 	// The number of replicas is less than expected.
 	// Record how many replicas should be added.
@@ -141,11 +139,11 @@ func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired util.Stor
 	return collect
 }
 
-func parseLogStores(infos pb.LogState, currentTick uint64) *util.ClusterStores {
+func parseLogStores(cfg hakeeper.Config, infos pb.LogState, currentTick uint64) *util.ClusterStores {
 	stores := util.NewClusterStores()
 	for uuid, storeInfo := range infos.Stores {
 		store := util.NewStore(uuid, len(storeInfo.Replicas), LogStoreCapacity)
-		if currentTick > util.ExpiredTick(storeInfo.Tick, util.LogStoreTimeout) {
+		if cfg.LogStoreExpired(storeInfo.Tick, currentTick) {
 			stores.RegisterExpired(store)
 		} else {
 			stores.RegisterWorking(store)
