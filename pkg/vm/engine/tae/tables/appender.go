@@ -132,7 +132,6 @@ func (appender *blockAppender) ApplyAppend(
 				panic(err)
 			}
 		}
-		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(bat.Length()))
 		return
 	})
 	return
