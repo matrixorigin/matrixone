@@ -17,7 +17,7 @@ package nulls
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -75,7 +75,6 @@ func TestSize(t *testing.T) {
 		for i := uint64(0); i < 16; i++ {
 			n.Np.Add(i)
 		}
-		assert.EqualValues(t, len(n.Np.Data), Size(&n))
 	})
 }
 

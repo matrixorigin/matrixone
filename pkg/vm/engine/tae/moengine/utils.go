@@ -17,8 +17,9 @@ package moengine
 import (
 	"bytes"
 	"fmt"
-	"github.com/RoaringBitmap/roaring/roaring64"
 	"strconv"
+
+	"github.com/RoaringBitmap/roaring/roaring64"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -26,8 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
@@ -855,7 +856,7 @@ func CopyToMoVector(vec containers.Vector) *vector.Vector {
 		var nullBuf []byte
 		np := bitmap.New(vec.Length())
 		np.AddMany(vec.NullMask().ToArray())
-		nullBuf = np.Show()
+		nullBuf = np.Marshal()
 		_, _ = w.Write(types.EncodeFixed(uint32(len(nullBuf))))
 		_, _ = w.Write(nullBuf)
 	} else {
