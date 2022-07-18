@@ -342,8 +342,10 @@ func (n *MVCCHandle) getMaxVisibleRowLocked(ts uint64) (int, uint32, bool, error
 		node.RUnlock()
 		// Note: Maybe there is a deadlock risk here
 		if txn != nil && node.GetCommitTS() > n.LoadMaxVisible() {
+			node.mvcc.RUnlock()
 			// Append node should not be rollbacked because apply append is the last step of prepare commit
 			state := txn.GetTxnState(true)
+			node.mvcc.RLock()
 			// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
 			if state == txnif.TxnStateUnknown {
 				err = txnif.ErrTxnInternal
