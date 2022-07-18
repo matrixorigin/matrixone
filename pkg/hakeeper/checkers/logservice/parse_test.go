@@ -15,12 +15,12 @@ package logservice
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/config"
 	"sort"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/config"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"

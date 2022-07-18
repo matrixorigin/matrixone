@@ -15,10 +15,10 @@ package checkers
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/config"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/config"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
