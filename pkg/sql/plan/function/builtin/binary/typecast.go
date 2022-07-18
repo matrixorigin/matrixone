@@ -575,7 +575,7 @@ func Decimal128ToUint64(xs []types.Decimal128, scale int32, rs []uint64) ([]uint
 func Decimal128ToDecimal64(xs []types.Decimal128, xsScale int32, ysPrecision, ysScale int32, rs []types.Decimal64) ([]types.Decimal64, error) {
 	var err error
 	for i, x := range xs {
-		rs[i], err = types.ParseStringToDecimal64(string(x.Decimal128ToString(xsScale)), ysPrecision, ysScale)
+		rs[i], _ = x.ToDecimal64()
 		if err != nil {
 			return []types.Decimal64{}, moerr.NewError(moerr.OUT_OF_RANGE, fmt.Sprintf("cannot convert to Decimal(%d, %d) correctly", ysPrecision, ysScale))
 		}

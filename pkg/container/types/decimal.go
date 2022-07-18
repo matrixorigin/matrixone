@@ -20,6 +20,7 @@ package types
 import "C"
 
 import (
+	"strings"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -97,8 +98,9 @@ var Decimal128Max = Decimal128_Inf()
 
 // Return a null terminated copy of the string.
 func zstr(s string) []byte {
-	buf := make([]byte, len(s)+1)
-	copy(buf, []byte(s))
+	trims := strings.TrimSpace(s)
+	buf := make([]byte, len(trims)+1)
+	copy(buf, []byte(trims))
 	return buf
 }
 
@@ -123,6 +125,16 @@ func (d *Decimal64) FromFloat64(f float64) {
 func (d *Decimal64) FromString(s string) error {
 	buf := zstr(s)
 	rc := C.Decimal64_FromString(dec64PtrToC(d), bytesPtrToC(buf))
+	if rc == moerr.DATA_TRUNCATED {
+		return moerr.NewError(moerr.DATA_TRUNCATED, "decimal64 data truncated")
+	} else if rc != 0 {
+		return moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal64")
+	}
+	return nil
+}
+func (d *Decimal64) FromStringWithScale(s string, scale int32) error {
+	buf := zstr(s)
+	rc := C.Decimal64_FromStringWithScale(dec64PtrToC(d), bytesPtrToC(buf), C.int32_t(scale))
 	if rc != 0 {
 		return moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal64")
 	}
@@ -150,6 +162,16 @@ func (d *Decimal128) FromFloat64(f float64) {
 func (d *Decimal128) FromString(s string) error {
 	buf := zstr(s)
 	rc := C.Decimal128_FromString(dec128PtrToC(d), bytesPtrToC(buf))
+	if rc == moerr.DATA_TRUNCATED {
+		return moerr.NewError(moerr.DATA_TRUNCATED, "decimal128 data truncated")
+	} else if rc != 0 {
+		return moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal128")
+	}
+	return nil
+}
+func (d *Decimal128) FromStringWithScale(s string, scale int32) error {
+	buf := zstr(s)
+	rc := C.Decimal128_FromStringWithScale(dec128PtrToC(d), bytesPtrToC(buf), C.int32_t(scale))
 	if rc != 0 {
 		return moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal128")
 	}
@@ -174,13 +196,16 @@ func (d *Decimal64) ToInt64() int64 {
 	panic(moerr.NewError(int32(rc), "error when converting decimal128 to float64"))
 }
 
+func (d Decimal64) String() string {
+	return d.ToString()
+}
 func (d *Decimal64) ToString() string {
 	buf := make([]byte, DECIMAL64_ZSTR_LEN)
 	C.Decimal64_ToString(bytesPtrToC(buf), dec64PtrToC(d))
 	return zstrToString(buf)
 }
 func (d *Decimal64) Decimal64ToString(scale int32) string {
-	return d.ToString()
+	return d.ToStringWithScale(scale)
 }
 func (d *Decimal64) ToStringWithScale(scale int32) string {
 	buf := make([]byte, DECIMAL64_ZSTR_LEN)
@@ -205,13 +230,16 @@ func (d *Decimal128) ToInt64() int64 {
 	panic(moerr.NewError(int32(rc), "error when converting decimal128 to float64"))
 }
 
+func (d Decimal128) String() string {
+	return d.ToString()
+}
 func (d *Decimal128) ToString() string {
 	buf := make([]byte, DECIMAL128_ZSTR_LEN)
 	C.Decimal128_ToString(bytesPtrToC(buf), dec128PtrToC(d))
 	return zstrToString(buf)
 }
 func (d *Decimal128) Decimal128ToString(scale int32) string {
-	return d.ToString()
+	return d.ToStringWithScale(scale)
 }
 func (d *Decimal128) ToStringWithScale(scale int32) string {
 	buf := make([]byte, DECIMAL128_ZSTR_LEN)
@@ -471,13 +499,13 @@ func (d *Decimal128) DivInt64(x int64) Decimal128 {
 // Wrap old decimal api.   Most likely we should delete them.
 func ParseStringToDecimal64(s string, pre int32, scale int32) (Decimal64, error) {
 	var d Decimal64
-	err := d.FromString(s)
+	err := d.FromStringWithScale(s, scale)
 	return d, err
 }
 
 func ParseStringToDecimal128(s string, pre int32, scale int32) (Decimal128, error) {
 	var d Decimal128
-	err := d.FromString(s)
+	err := d.FromStringWithScale(s, scale)
 	return d, err
 }
 
@@ -638,8 +666,14 @@ func ParseStringToDecimal64WithoutTable(s string) (Decimal64, int32, error) {
 
 func ParseStringToDecimal128WithoutTable(s string) (Decimal128, int32, error) {
 	var d Decimal128
-	err := d.FromString(s)
-	return d, 0, err
+	ss := strings.TrimSpace(s)
+	err := d.FromString(ss)
+	var scale int32
+	idx := int32(strings.LastIndex(ss, "."))
+	if idx >= 0 {
+		scale = int32(len(ss)) - idx - 1
+	}
+	return d, scale, err
 }
 
 func CompareDecimal64Decimal64(a, b Decimal64, s1, s2 int32) int64 {

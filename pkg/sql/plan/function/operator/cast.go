@@ -52,7 +52,7 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return vec, err
 }
 
-// shorten the string to the one with no more than 100 characters.
+// shorten the string to the one with no more than 101 characters.
 func shortenValueString(valueStr string) string {
 	utf8Str := []rune(valueStr)
 	l := len(utf8Str)

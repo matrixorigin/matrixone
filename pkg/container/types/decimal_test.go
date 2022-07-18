@@ -17,6 +17,7 @@ package types
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,6 +37,38 @@ func TestBasic(t *testing.T) {
 	require.True(t, Decimal128_Ten.Eq(Decimal128FromInt32(10)))
 	require.True(t, Decimal128_Ten.Eq(Decimal128FromString("10")))
 	require.True(t, Decimal128_Ten.Eq(Decimal128FromString("10.000")))
+}
+
+func TestParse(t *testing.T) {
+	var err error
+	var d64 Decimal64
+	var d128 Decimal128
+	var dd Decimal64
+
+	err = d64.FromString("1.23456789")
+	require.True(t, err == nil)
+	require.True(t, d64.Gt(Decimal64_One))
+	require.True(t, d64.Lt(Decimal64_Ten))
+
+	err = d128.FromString("1.23456789")
+	require.True(t, err == nil)
+	dd, err = d128.ToDecimal64()
+	require.True(t, d64.Eq(dd))
+	require.True(t, err == nil)
+
+	longstr := "1.23456789999999999999999"
+
+	err = d64.FromString(longstr)
+	require.True(t, err != nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED))
+	require.True(t, d64.Gt(Decimal64_One))
+	require.True(t, d64.Lt(Decimal64_Ten))
+
+	err = d128.FromString(longstr)
+	require.True(t, err == nil)
+	dd, err = d128.ToDecimal64()
+	require.True(t, d64.Eq(dd))
+	require.True(t, err == nil)
 }
 
 func TestAdd(t *testing.T) {

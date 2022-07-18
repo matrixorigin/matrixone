@@ -27,9 +27,10 @@ static const int32_t RC_WARN = 2;
 
 static const int32_t RC_INTERNAL_ERROR = 1001;
 
-static const int32_t RC_DIVISON_BY_ZERO = 2000;
+static const int32_t RC_DIVISION_BY_ZERO = 2000;
 static const int32_t RC_OUT_OF_RANGE = 2001;
-static const int32_t RC_INVALID_ARGUMENT = 2002;
+static const int32_t RC_DATA_TRUNCATED = 2002;
+static const int32_t RC_INVALID_ARGUMENT = 2003;
 
 #include "bitmap.h"
 

@@ -135,9 +135,9 @@ drop table t1;
 select cast(10000002383263201056 as unsigned) mod 50 as result;
 Can't cast '10000002383263201056' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 select cast(19999999999999999999 as signed);
-Can't cast '{1553255926290448383 1}' from DECIMAL128 type to BIGINT type. Reason: overflow
+Can't cast '19999999999999999999' from DECIMAL128 type to BIGINT type. Reason: overflow
 select cast(-19999999999999999999 as signed);
-Can't cast '{-1553255926290448383 -2}' from DECIMAL128 type to BIGINT type. Reason: overflow
+Can't cast '-19999999999999999999' from DECIMAL128 type to BIGINT type. Reason: overflow
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a BIGINT(20) UNSIGNED,
 b VARCHAR(20));

@@ -28,6 +28,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -1039,12 +1040,15 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						var d types.Decimal64
 						err := d.FromString(fs)
 						if err != nil {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							// we tolerate loss of digits.
+							if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = types.Decimal64_Zero
 							}
-							result.Warnings++
-							d = types.Decimal64_Zero
 						}
 						cols[rowIdx] = d
 					}
@@ -1057,12 +1061,15 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						var d types.Decimal128
 						err := d.FromString(fs)
 						if err != nil {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							// we tolerate loss of digits.
+							if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = types.Decimal128_Zero
 							}
-							result.Warnings++
-							d = types.Decimal128_Zero
 						}
 						cols[rowIdx] = d
 					}
