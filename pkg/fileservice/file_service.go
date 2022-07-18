@@ -45,7 +45,8 @@ type IOEntry struct {
 	// offset in file, [0, len(file) - 1]
 	Offset int
 
-	// number of bytes to be read of written, [1, len(file)]
+	// number of bytes to read or write, [1, len(file)]
+	// when reading, pass -1 to read to the end of file
 	Size int
 
 	// raw content
