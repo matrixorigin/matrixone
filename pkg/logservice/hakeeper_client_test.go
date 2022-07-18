@@ -205,11 +205,13 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 		GossipSeedAddresses: []string{"127.0.0.1:9001"},
 		DisableWorkers:      true,
 	}
+	cfg1.Fill()
 	service1, err := NewService(cfg1)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, service1.Close())
 	}()
+	cfg2.Fill()
 	service2, err := NewService(cfg2)
 	require.NoError(t, err)
 	defer func() {

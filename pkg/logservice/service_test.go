@@ -36,7 +36,7 @@ const (
 )
 
 func getServiceTestConfig() Config {
-	return Config{
+	c := Config{
 		RTTMillisecond:       10,
 		GossipSeedAddresses:  []string{"127.0.0.1:9000"},
 		DeploymentID:         1,
@@ -45,6 +45,8 @@ func getServiceTestConfig() Config {
 		ServiceAddress:       testServiceAddress,
 		DisableWorkers:       true,
 	}
+	c.Fill()
+	return c
 }
 
 func runServiceTest(t *testing.T,
@@ -501,7 +503,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		GossipSeedAddresses: []string{"127.0.0.1:9001"},
 		DisableWorkers:      true,
 	}
-
+	cfg1.Fill()
 	service1, err := NewService(cfg1)
 	require.NoError(t, err)
 	defer func() {
@@ -510,7 +512,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	peers1 := make(map[uint64]dragonboat.Target)
 	peers1[1] = service1.ID()
 	assert.NoError(t, service1.store.startReplica(1, 1, peers1, false))
-
+	cfg2.Fill()
 	service2, err := NewService(cfg2)
 	require.NoError(t, err)
 	defer func() {
