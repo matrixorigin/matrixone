@@ -15,19 +15,32 @@
 package dnservice
 
 import (
-	"bytes"
 	"testing"
 
-	"github.com/BurntSushi/toml"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestCfg(t *testing.T) {
+func TestValidate(t *testing.T) {
 	c := &Config{}
-	c.RPC.BusyQueueSize = 10
+	assert.Error(t, c.validate())
+	c.UUID = "dn1"
+	assert.Error(t, c.validate())
+	c.DataDir = "/tmp"
+	assert.NoError(t, c.validate())
 
-	buf := bytes.NewBuffer(nil)
-	enc := toml.NewEncoder(buf)
-	assert.NoError(t, enc.Encode(c))
-	assert.Equal(t, "", buf.String())
+	assert.Equal(t, defaultListenAddress, c.ListenAddress)
+	assert.Equal(t, c.ListenAddress, c.ServiceAddress)
+	assert.Equal(t, defaultMaxConnections, c.RPC.MaxConnections)
+	assert.Equal(t, defaultSendQueueSize, c.RPC.SendQueueSize)
+	assert.Equal(t, toml.ByteSize(defaultBufferSize), c.RPC.WriteBufferSize)
+	assert.Equal(t, toml.ByteSize(defaultBufferSize), c.RPC.ReadBufferSize)
+	assert.Equal(t, defaultMaxClockOffset, c.Txn.Clock.MaxClockOffset.Duration)
+	assert.Equal(t, localClockBackend, c.Txn.Clock.Backend)
+	assert.Equal(t, taeStorageBackend, c.Txn.Storage.Backend)
+	assert.Equal(t, defaultZombieTimeout, c.Txn.ZombieTimeout.Duration)
+	assert.Equal(t, defaultDiscoveryTimeout, c.HAKeeper.DiscoveryTimeout.Duration)
+	assert.Equal(t, defaultHeatbeatDuration, c.HAKeeper.HeatbeatDuration.Duration)
+	assert.Equal(t, defaultHeatbeatTimeout, c.HAKeeper.HeatbeatTimeout.Duration)
+	assert.Equal(t, defaultConnectTimeout, c.LogService.ConnectTimeout.Duration)
 }

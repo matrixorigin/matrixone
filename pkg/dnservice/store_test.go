@@ -15,22 +15,31 @@
 package dnservice
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"os"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-// Option store option
-type Option func(*store)
+var (
+	testDNStoreAddr = "unix:///tmp/test-dnstore.sock"
+)
 
-// Service DN Service
-type Service interface {
-	// Start start dn store. Start all DNShards currently managed by the Store and listen
-	// to and process requests from CN and other DNs.
-	Start() error
-	// Close close dn store
-	Close() error
+func TestNewStore(t *testing.T) {
 
-	// StartDNReplica start the DNShard replica
-	StartDNReplica(metadata.DNShard) error
-	// CloseDNReplica close the DNShard replica.
-	CloseDNReplica(shard metadata.DNShard) error
+}
+
+func newTestStore(t *testing.T, uuid string, options ...Option) *store {
+	assert.NoError(t, os.RemoveAll(testDNStoreAddr[7:]))
+	c := &Config{
+		UUID:          uuid,
+		ListenAddress: testDNStoreAddr,
+	}
+	c.Txn.Clock.Backend = localClockBackend
+	c.Txn.Storage.Backend = memStorageBackend
+	c.FileService.Backend = memFileServiceBackend
+
+	s, err := New(c, options...)
+	assert.NoError(t, err)
+	return s.(*store)
 }

@@ -13,24 +13,3 @@
 // limitations under the License.
 
 package dnservice
-
-import (
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-)
-
-// Option store option
-type Option func(*store)
-
-// Service DN Service
-type Service interface {
-	// Start start dn store. Start all DNShards currently managed by the Store and listen
-	// to and process requests from CN and other DNs.
-	Start() error
-	// Close close dn store
-	Close() error
-
-	// StartDNReplica start the DNShard replica
-	StartDNReplica(metadata.DNShard) error
-	// CloseDNReplica close the DNShard replica.
-	CloseDNReplica(shard metadata.DNShard) error
-}

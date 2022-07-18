@@ -29,13 +29,12 @@ var (
 	defaultMaxConnections   = 400
 	defaultSendQueueSize    = 10240
 	defaultMaxClockOffset   = time.Millisecond * 500
-	defaultTxnStorage       = "TAE"
-	defaultClock            = "HLC"
 	defaultZombieTimeout    = time.Hour
 	defaultDiscoveryTimeout = time.Second * 30
 	defaultHeatbeatDuration = time.Second
 	defaultConnectTimeout   = time.Second * 30
 	defaultHeatbeatTimeout  = time.Millisecond * 500
+	defaultBufferSize       = 1024
 )
 
 // Config dn store configuration
@@ -64,8 +63,6 @@ type Config struct {
 
 	// LogService log service configuration
 	LogService struct {
-		// Backend logservice backend implementation. [MEM|DISK]. Default is DISK.
-		Backend string `toml:"backend"`
 		// ConnectTimeout timeout for connect to logservice. Default is 30s.
 		ConnectTimeout toml.Duration `toml:"connect-timeout"`
 	}
@@ -151,22 +148,22 @@ func (c *Config) validate() error {
 		c.RPC.BusyQueueSize = c.RPC.SendQueueSize * 3 / 4
 	}
 	if c.RPC.WriteBufferSize == 0 {
-		c.RPC.WriteBufferSize = 1024
+		c.RPC.WriteBufferSize = toml.ByteSize(defaultBufferSize)
 	}
 	if c.RPC.ReadBufferSize == 0 {
-		c.RPC.ReadBufferSize = 1024
+		c.RPC.ReadBufferSize = toml.ByteSize(defaultBufferSize)
 	}
 	if c.Txn.Clock.MaxClockOffset.Duration == 0 {
 		c.Txn.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
 	}
 	if c.Txn.Clock.Backend == "" {
-		c.Txn.Clock.Backend = defaultClock
+		c.Txn.Clock.Backend = localClockBackend
 	}
 	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Txn.Clock.Backend)]; !ok {
 		return fmt.Errorf("%s clock backend not support", c.Txn.Storage)
 	}
 	if c.Txn.Storage.Backend == "" {
-		c.Txn.Storage.Backend = defaultTxnStorage
+		c.Txn.Storage.Backend = taeStorageBackend
 	}
 	if _, ok := supportTxnStorageBackends[strings.ToUpper(c.Txn.Storage.Backend)]; !ok {
 		return fmt.Errorf("%s txn storage backend not support", c.Txn.Storage)
@@ -185,12 +182,6 @@ func (c *Config) validate() error {
 	}
 	if c.LogService.ConnectTimeout.Duration == 0 {
 		c.LogService.ConnectTimeout.Duration = defaultConnectTimeout
-	}
-	if c.LogService.Backend == "" {
-		c.LogService.Backend = diskLogServiceBackend
-	}
-	if _, ok := supportLogServiceBackends[strings.ToUpper(c.LogService.Backend)]; !ok {
-		return fmt.Errorf("%s log service backend not support", c.LogService.Backend)
 	}
 	if c.FileService.Backend == "" {
 		c.FileService.Backend = diskFileServiceBackend

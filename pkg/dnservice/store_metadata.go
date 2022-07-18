@@ -37,10 +37,14 @@ func (s *store) initMetadata() error {
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: 0,
+				Size:   -1,
 			},
 		},
 	}
 	if err := s.metadataFS.Read(ctx, vec); err != nil {
+		if err == fileservice.ErrFileNotFound {
+			return nil
+		}
 		return err
 	}
 
@@ -50,10 +54,41 @@ func (s *store) initMetadata() error {
 
 	v := &metadata.DNStore{}
 	protoc.MustUnmarshal(v, vec.Entries[0].Data)
-	if v.UUID != s.metadata.UUID {
+	if v.UUID != s.mu.metadata.UUID {
 		s.logger.Fatal("BUG: disk DNStore and start DNStore not match",
 			zap.String("disk-store", v.UUID))
 	}
-	s.metadata = *v
+	s.mu.metadata = *v
 	return nil
+}
+
+func (s *store) addDNShard(shard metadata.DNShard) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, dn := range s.mu.metadata.Shards {
+		if dn.ShardID == shard.ShardID {
+			return
+		}
+	}
+	s.mu.metadata.Shards = append(s.mu.metadata.Shards, shard)
+	s.mustUpdateMetadataLocked()
+}
+
+func (s *store) removeDNShard(id uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var newShards []metadata.DNShard
+	for _, dn := range s.mu.metadata.Shards {
+		if dn.ShardID != id {
+			newShards = append(newShards, dn)
+		}
+	}
+	s.mu.metadata.Shards = newShards
+	s.mustUpdateMetadataLocked()
+}
+
+func (s *store) mustUpdateMetadataLocked() {
+	// TODO: use replace fileservice to update local metadata file.
 }

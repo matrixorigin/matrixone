@@ -50,9 +50,29 @@ func WithRequestFilter(filter func(*txn.TxnRequest) bool) Option {
 	}
 }
 
+// WithDisableHAKeeper set disable HAKeeper
+func WithDisableHAKeeper() Option {
+	return func(s *store) {
+		s.options.disableHAKeeper = true
+	}
+}
+
+// WithMetadataFSFactory set metadata file service factory
+func WithMetadataFSFactory(factory func() fileservice.FileService) Option {
+	return func(s *store) {
+		s.options.metadataFSFactory = factory
+	}
+}
+
+// WithLogServiceClientFactory set log service client factory
+func WithLogServiceClientFactory(factory func(metadata.DNShard) (logservice.Client, error)) Option {
+	return func(s *store) {
+		s.options.logServiceClientFactory = factory
+	}
+}
+
 type store struct {
 	cfg            *Config
-	metadata       metadata.DNStore
 	logger         *zap.Logger
 	clock          clock.Clock
 	sender         rpc.TxnSender
@@ -64,11 +84,20 @@ type store struct {
 	stopper        *stopper.Stopper
 
 	options struct {
-		requestFilter func(*txn.TxnRequest) bool
+		logServiceClientFactory func(metadata.DNShard) (logservice.Client, error)
+		metadataFSFactory       func() fileservice.FileService
+		requestFilter           func(*txn.TxnRequest) bool
+		disableHAKeeper         bool
+	}
+
+	mu struct {
+		sync.RWMutex
+		metadata metadata.DNStore
 	}
 }
 
-func NewStore(cfg *Config, opts ...Option) (Store, error) {
+// New create DN Service
+func New(cfg *Config, opts ...Option) (Service, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -78,8 +107,9 @@ func NewStore(cfg *Config, opts ...Option) (Store, error) {
 		opt(s)
 	}
 	s.logger = logutil.Adjust(s.logger).With(zap.String("dn-store", cfg.UUID))
+	s.replicas = &sync.Map{}
 	s.stopper = stopper.NewStopper("dn-store", stopper.WithLogger(s.logger))
-	s.metadata = metadata.DNStore{UUID: cfg.UUID}
+	s.mu.metadata = metadata.DNStore{UUID: cfg.UUID}
 
 	if err := s.initClocker(); err != nil {
 		return nil, err
@@ -108,6 +138,9 @@ func (s *store) Start() error {
 	}
 	if err := s.server.Start(); err != nil {
 		return err
+	}
+	if s.options.disableHAKeeper {
+		return nil
 	}
 	s.stopper.RunTask(s.startDNShardHeartbeat)
 	return nil
@@ -144,7 +177,10 @@ func (s *store) CloseDNReplica(shard metadata.DNShard) error {
 }
 
 func (s *store) startDNShards() error {
-	for _, shard := range s.metadata.Shards {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, shard := range s.mu.metadata.Shards {
 		if err := s.createReplica(shard); err != nil {
 			return err
 		}
@@ -249,6 +285,7 @@ func (s *store) createReplica(shard metadata.DNShard) error {
 			}
 		}
 	})
+	s.addDNShard(shard)
 	return nil
 }
 
@@ -256,6 +293,7 @@ func (s *store) removeReplica(dnShardID uint64) error {
 	if r := s.getReplica(dnShardID); r != nil {
 		err := r.close()
 		s.replicas.Delete(dnShardID)
+		s.removeDNShard(dnShardID)
 		return err
 	}
 	return nil
@@ -301,6 +339,10 @@ func (s *store) initClocker() error {
 }
 
 func (s *store) initHAKeeperClient() error {
+	if s.options.disableHAKeeper {
+		return nil
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HAKeeper.DiscoveryTimeout.Duration)
 	defer cancel()
 	client, err := logservice.NewDNHAKeeperClient(ctx, s.cfg.HAKeeper.ClientConfig)
@@ -312,16 +354,21 @@ func (s *store) initHAKeeperClient() error {
 }
 
 func (s *store) initFileService() error {
-	fs, err := fileservice.NewLocalFS(s.cfg.getMetadataDir())
-	if err != nil {
-		return err
+	if s.options.metadataFSFactory != nil {
+		s.metadataFS = s.options.metadataFSFactory()
+	} else {
+		fs, err := fileservice.NewLocalFS(s.cfg.getMetadataDir())
+		if err != nil {
+			return err
+		}
+		s.metadataFS = fs
 	}
-	s.metadataFS = fs
 
-	s.dataFS, err = s.createFileService()
+	fs, err := s.createFileService()
 	if err != nil {
 		return err
 	}
+	s.dataFS = fs
 	return nil
 }
 

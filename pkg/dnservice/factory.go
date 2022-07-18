@@ -37,9 +37,6 @@ const (
 	diskFileServiceBackend  = "DISK"
 	s3FileServiceBackend    = "S3"
 	minioFileServiceBackend = "MINIO"
-
-	memLogServiceBackend  = "MEM"
-	diskLogServiceBackend = "DISK"
 )
 
 var (
@@ -58,11 +55,6 @@ var (
 		diskFileServiceBackend:  {},
 		s3FileServiceBackend:    {},
 		minioFileServiceBackend: {},
-	}
-
-	supportLogServiceBackends = map[string]struct{}{
-		memLogServiceBackend:  {},
-		diskLogServiceBackend: {},
 	}
 )
 
@@ -90,14 +82,10 @@ func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, er
 }
 
 func (s *store) createLogServiceClient(shard metadata.DNShard) (logservice.Client, error) {
-	switch s.cfg.LogService.Backend {
-	case memLogServiceBackend:
-		return s.newMemLogServiceClient(shard)
-	case diskFileServiceBackend:
-		return s.newDiskLogServiceClient(shard)
-	default:
-		return nil, fmt.Errorf("not implment for %s", s.cfg.Txn.Clock.Backend)
+	if s.options.logServiceClientFactory != nil {
+		return s.options.logServiceClientFactory(shard)
 	}
+	return s.newLogServiceClient(shard)
 }
 
 func (s *store) createFileService() (fileservice.FileService, error) {
@@ -111,15 +99,11 @@ func (s *store) createFileService() (fileservice.FileService, error) {
 	case s3FileServiceBackend:
 		return s.newS3FileService()
 	default:
-		panic(fmt.Sprintf("not support fileservice backend: %s", s.cfg.FileService.Backend))
+		return nil, fmt.Errorf("not implment for %s", s.cfg.FileService.Backend)
 	}
 }
 
-func (s *store) newMemLogServiceClient(shard metadata.DNShard) (logservice.Client, error) {
-	return mem.NewMemLog(), nil
-}
-
-func (s *store) newDiskLogServiceClient(shard metadata.DNShard) (logservice.Client, error) {
+func (s *store) newLogServiceClient(shard metadata.DNShard) (logservice.Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.LogService.ConnectTimeout.Duration)
 	defer cancel()
 	return logservice.NewClient(ctx, logservice.ClientConfig{
