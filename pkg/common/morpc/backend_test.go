@@ -55,6 +55,44 @@ func TestSend(t *testing.T) {
 		WithBackendConnectWhenCreate())
 }
 
+func TestCloseWhileContinueSending(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			c := make(chan struct{})
+
+			go func() {
+				sendFunc := func() {
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+					defer cancel()
+					req := newTestMessage(1)
+					f, err := b.Send(ctx, req, SendOptions{})
+					if err != nil {
+						return
+					}
+					defer f.Close()
+
+					resp, err := f.Get()
+					assert.NoError(t, err)
+					assert.Equal(t, req, resp)
+					select {
+					case c <- struct{}{}:
+					default:
+					}
+				}
+
+				for {
+					sendFunc()
+				}
+			}()
+			<-c
+			b.Close()
+		},
+		WithBackendConnectWhenCreate())
+}
+
 func TestSendWithAlreadyContextDone(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 
