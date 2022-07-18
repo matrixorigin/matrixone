@@ -184,26 +184,26 @@ func TestHAKeeperClientSendLogHeartbeat(t *testing.T) {
 func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAKeeperClient)) {
 	defer leaktest.AfterTest(t)()
 	cfg1 := Config{
-		FS:                    vfs.NewStrictMem(),
-		DeploymentID:          1,
-		RTTMillisecond:        5,
-		DataDir:               "data-1",
-		ServiceAddress:        "127.0.0.1:9002",
-		RaftAddress:           "127.0.0.1:9000",
-		GossipAddress:         "127.0.0.1:9001",
-		GossipSeedAddresses:   []string{"127.0.0.1:9011"},
-		DisableHAKeeperTicker: true,
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-1",
+		ServiceAddress:      "127.0.0.1:9002",
+		RaftAddress:         "127.0.0.1:9000",
+		GossipAddress:       "127.0.0.1:9001",
+		GossipSeedAddresses: []string{"127.0.0.1:9011"},
+		DisableWorkers:      true,
 	}
 	cfg2 := Config{
-		FS:                    vfs.NewStrictMem(),
-		DeploymentID:          1,
-		RTTMillisecond:        5,
-		DataDir:               "data-2",
-		ServiceAddress:        "127.0.0.1:9012",
-		RaftAddress:           "127.0.0.1:9010",
-		GossipAddress:         "127.0.0.1:9011",
-		GossipSeedAddresses:   []string{"127.0.0.1:9001"},
-		DisableHAKeeperTicker: true,
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-2",
+		ServiceAddress:      "127.0.0.1:9012",
+		RaftAddress:         "127.0.0.1:9010",
+		GossipAddress:       "127.0.0.1:9011",
+		GossipSeedAddresses: []string{"127.0.0.1:9001"},
+		DisableWorkers:      true,
 	}
 	service1, err := NewService(cfg1)
 	require.NoError(t, err)
