@@ -1645,11 +1645,14 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				goto handleFailed
 			}
 
-			mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), &PrepareStmt{
+			err = mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), &PrepareStmt{
 				Name:        preparePlan.GetDcl().GetPrepare().GetName(),
 				PreparePlan: preparePlan,
 				PrepareStmt: stmts[0],
 			})
+			if err != nil {
+				goto handleFailed
+			}
 		case *tree.Deallocate:
 			selfHandle = true
 			deallocatePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
