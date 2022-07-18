@@ -66,7 +66,7 @@ Contents
 MatrixOne is a future-oriented hyper-converged cloud and edge native DBMS that supports transactional, analytical, and streaming workloads with a simplified and distributed database engine, across multiple data centers, clouds, edges and other heterogeneous infrastructures.
 
 <p align="center">
-  <img alt="MatrixOne" height="500" width="700" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/all-in-one.png?raw=true">
+  <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/all-in-one.png?raw=true">
 </p>
 
 ##  🎯 <a id="key-features">Key Features</a>
@@ -144,7 +144,7 @@ MatrixOne is a future-oriented hyper-converged cloud and edge native DBMS that s
 ## 🔎 <a id="architecture">Architecture</a>
 MatrixOne's architecture is as below:   
 <p align="center">
-  <img alt="MatrixOne" height="500" width="700" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone_new_arch.png?raw=true">
+  <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone_new_arch.png?raw=true">
 </p>
 
 For more details, you can checkout [MatrixOne Architecture](https://docs.matrixorigin.io/0.5.0/MatrixOne/Overview/matrixone-architecture/).
