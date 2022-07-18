@@ -16,13 +16,67 @@ package logservice
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/lni/dragonboat/v4"
+	"github.com/lni/goutils/leaktest"
+	"github.com/lni/vfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
+
+func TestBackgroundTickAndHeartbeat(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg := Config{
+		FS:                   vfs.NewStrictMem(),
+		DeploymentID:         1,
+		RTTMillisecond:       5,
+		DataDir:              "data-1",
+		ServiceAddress:       "127.0.0.1:9002",
+		RaftAddress:          "127.0.0.1:9000",
+		GossipAddress:        "127.0.0.1:9001",
+		GossipSeedAddresses:  []string{"127.0.0.1:9010"},
+		HeartbeatInterval:    5 * time.Millisecond,
+		HAKeeperTickInterval: 5 * time.Millisecond,
+		HAKeeperClientConfig: HAKeeperClientConfig{
+			ServiceAddresses: []string{"127.0.0.1:9002"},
+		},
+	}
+	service, err := NewService(cfg)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, service.Close())
+	}()
+	peers := make(map[uint64]dragonboat.Target)
+	peers[1] = service.ID()
+	require.NoError(t, service.store.startHAKeeperReplica(1, peers, false))
+
+	for i := 0; i < 500; i++ {
+		done := true
+		state, err := service.store.getCheckerState()
+		require.NoError(t, err)
+		if state.Tick < 10 {
+			done = false
+		}
+		si, ok := state.LogState.Stores[service.ID()]
+		if !ok {
+			done = false
+		} else {
+			if si.Tick < 10 {
+				done = false
+			}
+		}
+		if done {
+			return
+		} else {
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	t.Fatalf("failed to tick/heartbeat")
+}
 
 func TestHandleStartReplica(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {

@@ -15,10 +15,13 @@
 package logservice
 
 import (
+	"time"
+
 	"github.com/cockroachdb/errors"
 	"github.com/lni/vfs"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 )
 
 const (
@@ -31,6 +34,23 @@ const (
 var (
 	ErrInvalidConfig = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid log service configuration")
 )
+
+const (
+	defaultHeartbeatInterval = time.Second
+)
+
+// HAKeeperConfig is the config for HAKeeper.
+type HAKeeperConfig struct {
+	// TODO: implement this
+}
+
+// HAKeeperClientConfig is the config for HAKeeper clients.
+type HAKeeperClientConfig struct {
+	// DiscoveryAddress is the Log Service discovery address provided by k8s.
+	DiscoveryAddress string
+	// ServiceAddresses is a list of well known Log Services' service addresses.
+	ServiceAddresses []string
+}
 
 // TODO: add toml or json support
 
@@ -48,9 +68,17 @@ type Config struct {
 	GossipAddress        string
 	GossipListenAddress  string
 	GossipSeedAddresses  []string
-	// DisableHAKeeperTicker disables the HAKeeper ticker in test. Never set this
-	// field to true in production
-	DisableHAKeeperTicker bool
+
+	HeartbeatInterval     time.Duration
+	HAKeeperTickInterval  time.Duration
+	HAKeeperCheckInterval time.Duration
+
+	HAKeeperConfig       HAKeeperConfig
+	HAKeeperClientConfig HAKeeperClientConfig
+
+	// DisableWorkers disables the HAKeeper ticker and HAKeeper client in tests.
+	// Never set this field to true in production
+	DisableWorkers bool
 }
 
 // Validate validates the configuration.
@@ -76,6 +104,15 @@ func (c *Config) Validate() error {
 }
 
 func (c *Config) Fill() {
+	if c.HeartbeatInterval == 0 {
+		c.HeartbeatInterval = defaultHeartbeatInterval
+	}
+	if c.HAKeeperTickInterval == 0 {
+		c.HAKeeperTickInterval = hakeeper.TickDuration
+	}
+	if c.HAKeeperCheckInterval == 0 {
+		c.HAKeeperCheckInterval = hakeeper.CheckDuration
+	}
 	if c.RTTMillisecond == 0 {
 		c.RTTMillisecond = 200
 	}

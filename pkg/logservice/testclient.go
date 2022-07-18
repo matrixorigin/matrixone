@@ -29,6 +29,7 @@ func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 		FS:                   fs,
 		ServiceListenAddress: addr,
 		ServiceAddress:       addr,
+		DisableWorkers:       true,
 	}
 	cfg.Fill()
 	service, err := NewService(cfg)
