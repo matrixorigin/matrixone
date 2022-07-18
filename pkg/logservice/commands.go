@@ -21,6 +21,7 @@ import (
 
 func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 	for _, cmd := range cmds {
+		plog.Infof("%s applying cmd: %s", s.ID(), cmd.LogString())
 		if cmd.GetConfigChange() != nil {
 			plog.Infof("applying schedule command: %s", cmd.LogString())
 			switch cmd.ConfigChange.ChangeType {
@@ -33,13 +34,12 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 			case pb.StopReplica:
 				s.handleStopReplica(cmd)
 			default:
-				panic("unknown type")
+				panic("unknown config change cmd type")
 			}
-			return
-		}
-
-		if cmd.GetShutdownStore() != nil {
-			// FIXME: add logic to shutdown store
+		} else if cmd.GetShutdownStore() != nil {
+			s.handleShutdownStore(cmd)
+		} else {
+			panic("unknown schedule command type")
 		}
 	}
 }
@@ -66,14 +66,15 @@ func (s *Service) handleRemoveReplica(cmd pb.ScheduleCommand) {
 func (s *Service) handleStartReplica(cmd pb.ScheduleCommand) {
 	shardID := cmd.ConfigChange.Replica.ShardID
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
+	join := len(cmd.ConfigChange.InitialMembers) == 0
 	if shardID == hakeeper.DefaultHAKeeperShardID {
 		if err := s.store.startHAKeeperReplica(replicaID,
-			cmd.ConfigChange.InitialMembers, false); err != nil {
+			cmd.ConfigChange.InitialMembers, join); err != nil {
 			plog.Errorf("failed to start HAKeeper replica %v", err)
 		}
 	} else {
 		if err := s.store.startReplica(shardID,
-			replicaID, cmd.ConfigChange.InitialMembers, false); err != nil {
+			replicaID, cmd.ConfigChange.InitialMembers, join); err != nil {
 			plog.Errorf("failed to start log replica %v", err)
 		}
 	}
@@ -85,4 +86,8 @@ func (s *Service) handleStopReplica(cmd pb.ScheduleCommand) {
 	if err := s.store.stopReplica(shardID, replicaID); err != nil {
 		plog.Errorf("failed to stop replica %v", err)
 	}
+}
+
+func (s *Service) handleShutdownStore(cmd pb.ScheduleCommand) {
+	panic("not implemented")
 }

@@ -207,10 +207,38 @@ func (n *MVCCHandle) TrySetMaxVisible(ts uint64) {
 		n.maxVisible = ts
 	}
 }
-func (n *MVCCHandle) AddAppendNodeLocked(txn txnif.AsyncTxn, maxRow uint32) *AppendNode {
-	an := NewAppendNode(txn, maxRow, n)
-	n.appends = append(n.appends, an)
-	return an
+func (n *MVCCHandle) AddAppendNodeLocked(
+	txn txnif.AsyncTxn,
+	maxRow uint32) (an *AppendNode, created bool) {
+	if len(n.appends) == 0 {
+		an = NewAppendNode(txn, maxRow, n)
+		n.appends = append(n.appends, an)
+		created = true
+	} else {
+		an = n.appends[len(n.appends)-1]
+		an.RLock()
+		nTxn := an.txn
+		an.RUnlock()
+		if nTxn != txn {
+			an = NewAppendNode(txn, maxRow, n)
+			n.appends = append(n.appends, an)
+			created = true
+		} else {
+			created = false
+			an.SetMaxRow(maxRow)
+		}
+	}
+	return
+}
+
+func (n *MVCCHandle) DeleteAppendNodeLocked(node *AppendNode) {
+	for i := len(n.appends) - 1; i >= 0; i-- {
+		if n.appends[i].maxRow == node.maxRow {
+			n.appends = append(n.appends[:i], n.appends[i+1:]...)
+		} else if n.appends[i].maxRow < node.maxRow {
+			break
+		}
+	}
 }
 
 func (n *MVCCHandle) IsVisibleLocked(row uint32, ts uint64) (bool, error) {

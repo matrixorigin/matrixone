@@ -566,10 +566,12 @@ func TestReplay2(t *testing.T) {
 // TODO check rows
 func TestReplay3(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	tae := newTestEngine(t, nil)
+	defer tae.Close()
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
 	bat := catalog.MockBatch(schema, 1)
 	defer bat.Close()
 	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
@@ -591,85 +593,61 @@ func TestReplay3(t *testing.T) {
 		blkID, row, err = tbl.GetByFilter(filter)
 		assert.Nil(t, err)
 		err = tbl.RangeDelete(blkID, row, row, handle.DT_Normal)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		err = tbl.Append(bat)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 	}
-	assert.Nil(t, txn.Commit())
+	assert.NoError(t, txn.Commit())
 
 	for i := 0; i < 10; i++ {
-		txn, err := tae.StartTxn(nil)
+		txn, rel := tae.getRelation()
+		blkID, row, err := rel.GetByFilter(filter)
 		assert.Nil(t, err)
-		db, err = txn.GetDatabase("db")
-		assert.Nil(t, err)
-		tbl, err = db.GetRelationByName(schema.Name)
-		assert.Nil(t, err)
-		blkID, row, err := tbl.GetByFilter(filter)
-		assert.Nil(t, err)
-		err = tbl.Update(blkID, row, 0, int32(33))
+		err = rel.Update(blkID, row, 0, int32(33))
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 
-		txn, err = tae.StartTxn(nil)
+		txn, rel = tae.getRelation()
+		blkID, row, err = rel.GetByFilter(filter)
 		assert.Nil(t, err)
-		db, err = txn.GetDatabase("db")
-		assert.Nil(t, err)
-		tbl, err = db.GetRelationByName(schema.Name)
-		assert.Nil(t, err)
-		blkID, row, err = tbl.GetByFilter(filter)
-		assert.Nil(t, err)
-		err = tbl.RangeDelete(blkID, row, row, handle.DT_Normal)
+		err = rel.RangeDelete(blkID, row, row, handle.DT_Normal)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 
-		txn, err = tae.StartTxn(nil)
-		assert.Nil(t, err)
-		db, err = txn.GetDatabase("db")
-		assert.Nil(t, err)
-		tbl, err = db.GetRelationByName(schema.Name)
-		assert.Nil(t, err)
-		err = tbl.Append(bat)
+		txn, rel = tae.getRelation()
+		err = rel.Append(bat)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
+		// {
+		// 	txn, rel := tae.getRelation()
+		// 	blk := getOneBlock(rel)
+		// 	t.Log(blk.String())
+		// 	assert.Nil(t, txn.Rollback())
+		// }
 	}
 
-	tae.Close()
+	tae.restart()
 
-	tae2, err := Open(tae.Dir, nil)
-	assert.Nil(t, err)
+	txn, rel := tae.getRelation()
+	assert.Equal(t, uint64(1), rel.GetMeta().(*catalog.TableEntry).GetRows())
+	assert.NoError(t, txn.Commit())
 
-	txn, err = tae2.StartTxn(nil)
-	assert.Nil(t, err)
-	db, err = txn.GetDatabase("db")
-	assert.Nil(t, err)
-	tbl, err = db.GetRelationByName(schema.Name)
-	assert.Nil(t, err)
-	assert.Equal(t, uint64(1), tbl.GetMeta().(*catalog.TableEntry).GetRows())
-	assert.Nil(t, txn.Commit())
-
-	txn, err = tae2.StartTxn(nil)
-	assert.Nil(t, err)
-	db, err = txn.GetDatabase("db")
-	assert.Nil(t, err)
-	tbl, err = db.GetRelationByName(schema.Name)
-	assert.Nil(t, err)
-	blkIterator := tbl.MakeBlockIt()
+	txn, rel = tae.getRelation()
+	blkIterator := rel.MakeBlockIt()
 	for blkIterator.Valid() {
 		blk := blkIterator.GetBlock()
 		blkdata := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
 		blkdata.Flush()
 		blkIterator.Next()
 	}
-	err = tae2.Catalog.Checkpoint(txn.GetStartTS())
-	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	err = tae.Catalog.Checkpoint(txn.GetStartTS())
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
 
 	testutils.WaitExpect(4000, func() bool {
-		return tae2.Wal.GetPenddingCnt() == 0
+		return tae.Wal.GetPenddingCnt() == 0
 	})
-	assert.Equal(t, uint64(0), tae2.Wal.GetPenddingCnt())
-
-	tae2.Close()
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 }
 
 // append, delete, compact, mergeblocks, ckp

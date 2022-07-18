@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	testServiceAddress = "localhost:9000"
+	testServiceAddress = "127.0.0.1:9000"
 )
 
 func getServiceTestConfig() Config {

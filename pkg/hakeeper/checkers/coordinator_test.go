@@ -147,7 +147,7 @@ func TestFixExpiredStore(t *testing.T) {
 						UUID:      "a",
 						ShardID:   1,
 						ReplicaID: 1,
-						Epoch:     0,
+						Epoch:     1,
 					},
 					ChangeType: pb.RemoveReplica,
 				},
@@ -418,8 +418,8 @@ func TestOpExpiredAndThenCompleted(t *testing.T) {
 	logState = pb.LogState{
 		Shards: map[uint64]pb.LogShardInfo{1: {ShardID: 1, Replicas: replicas, Epoch: 1, LeaderID: 1}},
 		Stores: map[string]pb.LogStoreInfo{
-			"a": {Tick: fn(12), Replicas: []pb.LogReplicaInfo{{LogShardInfo: logShardInfo, ReplicaID: 1}}},
-			"b": {Tick: fn(13), Replicas: []pb.LogReplicaInfo{{LogShardInfo: logShardInfo, ReplicaID: 2}}},
+			"a": {Tick: fn(16), Replicas: []pb.LogReplicaInfo{{LogShardInfo: logShardInfo, ReplicaID: 1}}},
+			"b": {Tick: fn(17), Replicas: []pb.LogReplicaInfo{{LogShardInfo: logShardInfo, ReplicaID: 2}}},
 			"c": {Tick: fn(14), Replicas: []pb.LogReplicaInfo{{LogShardInfo: logShardInfo, ReplicaID: 4}}},
 		},
 	}

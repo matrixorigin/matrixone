@@ -182,10 +182,11 @@ enum ErrorCode {
   Rejected              = 7;
   ShardNotReady         = 8;
   SystemClosed          = 9;
-
-  LsnAlreadyTruncated = 100;
+  
+  LsnAlreadyTruncated   = 100;
   OutOfRange            = 101;
   NotLeaseHolder        = 102;
+  NotHAKeeper           = 103;
 
   OtherSystemError      = 1000;
 };

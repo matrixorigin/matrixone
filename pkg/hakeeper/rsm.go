@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/*
+Package hakeeper implements MO's hakeeper component.
+*/
 package hakeeper
 
 import (
@@ -195,6 +198,7 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	for _, c := range b.Commands {
 		if c.Bootstrapping {
 			if s.state.State != pb.HAKeeperBootstrapping {
+				plog.Errorf("ignored bootstrapping cmd: %s", c.LogString())
 				return sm.Result{}
 			}
 		}
@@ -212,6 +216,7 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 				Commands: make([]pb.ScheduleCommand, 0),
 			}
 		}
+		plog.Infof("adding schedule command to hakeeper rsm: %s", c.LogString())
 		l.Commands = append(l.Commands, c)
 		s.state.ScheduleCommands[c.UUID] = l
 	}

@@ -356,9 +356,9 @@ func (blk *dataBlock) FillColumnUpdates(view *model.ColumnView) (err error) {
 	return
 }
 
-func (blk *dataBlock) FillColumnDeletes(view *model.ColumnView) (err error) {
+func (blk *dataBlock) FillColumnDeletes(view *model.ColumnView, rwlocker *sync.RWMutex) (err error) {
 	deleteChain := blk.mvcc.GetDeleteChain()
-	n, err := deleteChain.CollectDeletesLocked(view.Ts, false)
+	n, err := deleteChain.CollectDeletesLocked(view.Ts, false, rwlocker)
 	if err != nil {
 		return
 	}
@@ -424,7 +424,7 @@ func (blk *dataBlock) ResolveColumnMVCCData(
 	blk.mvcc.RLock()
 	err = blk.FillColumnUpdates(view)
 	if err == nil {
-		err = blk.FillColumnDeletes(view)
+		err = blk.FillColumnDeletes(view, blk.mvcc.RWMutex)
 	}
 	blk.mvcc.RUnlock()
 	if err != nil {
@@ -482,7 +482,7 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 	blk.mvcc.RLock()
 	err = blk.FillColumnUpdates(view)
 	if err == nil {
-		err = blk.FillColumnDeletes(view)
+		err = blk.FillColumnDeletes(view, blk.mvcc.RWMutex)
 	}
 	blk.mvcc.RUnlock()
 	if err != nil {
@@ -856,7 +856,7 @@ func (blk *dataBlock) CollectChangesInRange(startTs, endTs uint64) (view *model.
 		}
 	}
 	deleteChain := blk.mvcc.GetDeleteChain()
-	view.DeleteMask, view.DeleteLogIndexes, err = deleteChain.CollectDeletesInRange(startTs, endTs)
+	view.DeleteMask, view.DeleteLogIndexes, err = deleteChain.CollectDeletesInRange(startTs, endTs, blk.mvcc.RWMutex)
 	blk.mvcc.RUnlock()
 	return
 }

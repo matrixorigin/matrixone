@@ -20,6 +20,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"go.uber.org/zap"
@@ -41,6 +42,8 @@ func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *t
 	response.CNOpResponse = &txn.CNOpResponse{}
 	s.checkCNRequest(request)
 	s.validDNShard(request.GetTargetDN())
+
+	s.waitClockTo(request.Txn.SnapshotTS)
 
 	// We do not write transaction information to sync.Map during read operations because commit and abort
 	// for read-only transactions are not sent to the DN node, so there is no way to clean up the transaction
@@ -391,5 +394,15 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 func (s *service) checkCNRequest(request *txn.TxnRequest) {
 	if request.CNRequest == nil {
 		s.logger.Fatal("missing CNRequest")
+	}
+}
+
+func (s *service) waitClockTo(ts timestamp.Timestamp) {
+	for {
+		now, _ := s.clocker.Now()
+		if now.GreaterEq(ts) {
+			return
+		}
+		time.Sleep(time.Duration(ts.PhysicalTime + 1 - now.PhysicalTime))
 	}
 }

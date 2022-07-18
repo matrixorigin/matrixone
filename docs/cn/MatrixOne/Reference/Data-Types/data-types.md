@@ -34,7 +34,15 @@ MatrixOne 的数据类型与MySQL数据类型的定义一致，可参考：
 |  数据类型  | 存储空间  | 精度 |  最小值   | 最大值  | 语法表示 |
 |  ----  | ----  |   ----  |  ----  | ----  |   ----  |
 | Date  | 4 byte | day | 1000-01-01  | 9999-12-31 | YYYY-MM-DD |
-| DateTime  | 4 byte | second | 1970-01-01 00:00:00  | 2105-12-31 23:59:59 | YYYY-MM-DD hh:mm:ss |
+| DateTime  | 8 byte | second | 0001-01-01 00:00:00.000000  | 9999-12-31 23:59:59.999999 | YYYY-MM-DD hh:mi:ssssss |
+| TIMESTAMP|8 byte|second|1970-01-01 00:00:01.000000|2038-01-19 03:14:07.999999|YYYYMMDD hh:mi:ss.ssssss|
+
+## **Bool**
+
+|  数据类型  | 存储空间  |
+|  ----  | ----  |
+| True  | 1 byte |
+|False|1 byte|
 
 ## **定点类型Decimal(Beta)**
 
@@ -73,13 +81,13 @@ MatrixOne 的数据类型与MySQL数据类型的定义一致，可参考：
 //Create a table named "names" with 2 attributes of a "varchar" and a "char"
 > create table names(name varchar(255),age char(255));
 
-//Insert a data of "varchar" and "char" into table "names" 
+//Insert a data of "varchar" and "char" into table "names"
 > insert into names(name, age) values('Abby', '24');
 
 //Create a table named "calendar" with 2 attributes of a "date" and a "datetime"
 > create table calendar(a date, b datetime);
 
-//Insert a data of "date" and "datetime" into table "calendar" 
+//Insert a data of "date" and "datetime" into table "calendar"
 > insert into calendar(a, b) values('20220202', '2022-02-02 00:10:30');
 > insert into calendar(a, b) values('2022-02-02', '2022-02-02 00:10:30');
 

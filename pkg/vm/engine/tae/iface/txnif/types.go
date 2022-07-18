@@ -50,6 +50,10 @@ type TxnReader interface {
 	String() string
 	Repr() string
 	GetLSN() uint64
+
+	SameTxn(startTs uint64) bool
+	CommitBefore(startTs uint64) bool
+	CommitAfter(startTs uint64) bool
 }
 
 type TxnHandle interface {
@@ -137,7 +141,7 @@ type DeleteChain interface {
 
 	PrepareRangeDelete(start, end uint32, ts uint64) error
 	DepthLocked() int
-	CollectDeletesLocked(ts uint64, collectIndex bool) (DeleteNode, error)
+	CollectDeletesLocked(ts uint64, collectIndex bool, rwlocker *sync.RWMutex) (DeleteNode, error)
 }
 
 type AppendNode interface {

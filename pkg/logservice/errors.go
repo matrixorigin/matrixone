@@ -49,6 +49,7 @@ func getErrorToCodeMapping() []errorToCode {
 		{dragonboat.ErrClosed, pb.SystemClosed, true},
 		{dragonboat.ErrInvalidRange, pb.OutOfRange, true},
 
+		{ErrNotHAKeeper, pb.NotHAKeeper, true},
 		{ErrInvalidTruncateLsn, pb.LsnAlreadyTruncated, true},
 		{ErrNotLeaseHolder, pb.NotLeaseHolder, true},
 	}
@@ -87,6 +88,9 @@ func toError(resp pb.Response) error {
 }
 
 func isTempError(err error) bool {
+	if errors.Is(err, ErrNotHAKeeper) {
+		return true
+	}
 	if dragonboat.IsTempError(err) {
 		return true
 	}
