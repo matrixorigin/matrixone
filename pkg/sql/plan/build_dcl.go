@@ -84,7 +84,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 				return nil, err
 			}
 			// TODO : need confirm
-			if len(getParamRule.args) > 0 {
+			if len(getParamRule.params) > 0 {
 				return nil, errors.New("", "ArgExpr is not support in DDL statement")
 			}
 		}
@@ -99,10 +99,10 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 
 		// set arg order
 		getParamRule.SetParamOrder()
-		args := getParamRule.args
+		args := getParamRule.params
 
 		// set arg order
-		resetParamRule := NewResetParamRule(args)
+		resetParamRule := NewResetParamOrderRule(args)
 		VisitQuery = NewVisitQuery(pp.Query, &resetParamRule)
 		pp.Query, err = VisitQuery.Visit()
 		if err != nil {

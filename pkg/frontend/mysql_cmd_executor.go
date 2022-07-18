@@ -1354,7 +1354,15 @@ func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{},
 			return nil, err
 		}
 
-		query := plan.DeepCopyQuery(prepareStmt.PreparePlan.GetQuery())
+		query := plan.DeepCopyQuery(prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.GetQuery())
+
+		// reset params
+		resetParamRule := plan.NewResetParamRefRule(executePlan.Args)
+		VisitQuery := plan.NewVisitQuery(query, &resetParamRule)
+		query, err = VisitQuery.Visit()
+		if err != nil {
+			return nil, err
+		}
 
 		//reset plan & stmt
 		cwft.stmt = prepareStmt.PrepareStmt
