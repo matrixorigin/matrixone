@@ -123,3 +123,5 @@ For the information on the user name and password, see the next step - Connect t
 When you finish installing MatrixOne, you can refer to the section below to connect to the MatrixOne server.
 
 See [Connect to MatrixOne server](connect-to-matrixone-server.md).
+
+Some common issues for installation and deployment can be found in [Deployment FAQs](../FAQs/deployment-faqs.md).
