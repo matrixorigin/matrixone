@@ -103,9 +103,7 @@ func (c *Config) GetHAKeeperConfig() hakeeper.Config {
 
 func (c *Config) GetHAKeeperClientConfig() HAKeeperClientConfig {
 	addrs := make([]string, 0)
-	for _, addr := range c.HAKeeperClientConfig.ServiceAddresses {
-		addrs = append(addrs, addr)
-	}
+	addrs = append(addrs, c.HAKeeperClientConfig.ServiceAddresses...)
 	return HAKeeperClientConfig{
 		DiscoveryAddress: c.HAKeeperClientConfig.DiscoveryAddress,
 		ServiceAddresses: addrs,
