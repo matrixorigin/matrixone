@@ -36,6 +36,6 @@ type Span interface {
 	// is usable even after the End method has been called for the Span.
 	SpanContext() SpanContext
 
-	// SetName sets the Span name.
+	// SetName sets the Span Name.
 	SetName(name string)
 }

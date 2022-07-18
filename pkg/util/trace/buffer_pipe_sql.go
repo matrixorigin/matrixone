@@ -1,0 +1,395 @@
+package trace
+
+import (
+	"bytes"
+	"fmt"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util"
+	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+)
+
+const (
+	systemDBConst    = "system"
+	statsDatabase    = systemDBConst
+	spanInfoTbl      = "span_info"
+	logInfoTbl       = "log_info"
+	statementInfoTbl = "statement_info"
+	errorInfoTbl     = "error_info"
+)
+
+const (
+	createSpanInfoTable = `CREATE TABLE IF NOT EXISTS span_info(
+ span_id BIGINT UNSIGNED,
+ statement_id BIGINT UNSIGNED,
+ parent_span_id BIGINT UNSIGNED,
+ node_id BIGINT COMMENT "MO中的节点ID",
+ node_type varchar(64) COMMENT "MO中的节点类型, 例如: DN, CN, LogService; /*TODO: 应为enum类型*/",
+ resource varchar(4096) COMMENT "json结构, 记录静态资源信息 /*TODO: 应为JSON类型*/",
+ Name varchar(1024) COMMENT "span的名字, 例如: 执行计划的步骤名, 代码中的函数名",
+ start_time datetime,
+ end_time datetime,
+ Duration BIGINT COMMENT "执行耗时, 单位: ns"
+)`
+	createLogInfoTable = `CREATE TABLE IF NOT EXISTS statement_info(
+ id BIGINT UNSIGNED COMMENT "主键, 应为auto increment类型",
+ span_id BIGINT UNSIGNED,
+ statement_id BIGINT UNSIGNED,
+ node_id BIGINT COMMENT "MO中的节点ID",
+ node_type varchar(64) COMMENT "MO中的节点类型, 例如: DN, CN, LogService; /*TODO: 应为enum类型*/",
+ Timestamp datetime COMMENT "日志时间戳",
+ Level varchar(32) COMMENT "日志级别, 例如: DEBUG, INFO, WARN, ERROR",
+ code_line varchar(4096) COMMENT "写日志所在代码行",
+ Message varchar(4096) COMMENT "日志内容/*TODO: 应为text*/"
+)`
+	createStatementInfoTable = `CREATE TABLE IF NOT EXISTS statement_info(
+ statement_id BIGINT UNSIGNED,
+ transaction_id BIGINT UNSIGNED,
+ session_id BIGINT UNSIGNED,
+ ` + "`account`" + ` varchar(1024) COMMENT '用户账号',
+ user varchar(1024) COMMENT '用户访问DB 鉴权用户名',
+ host varchar(1024) COMMENT '用户访问DB 鉴权ip',
+ ` + "`database`" + ` varchar(1024) COMMENT '数据库名',
+ statement varchar(10240) COMMENT '执行sql/*TODO: 应为类型 TEXT或 BLOB */',
+ statement_tag varchar(1024),
+ statement_fingerprint varchar(10240) COMMENT '执行SQL脱敏后的语句/*应为TEXT或BLOB类型*/',
+ request_at datetime,
+ status varchar(1024) COMMENT '运行状态, 包括: Running, Success, Failed',
+ exec_plan varchar(4096) COMMENT "Sql执行计划的耗时结果; /*TODO: 应为JSON 类型*/"
+)`
+	createErrorInfoTable = `CREATE TABLE IF NOT EXISTS error_info(
+ id BIGINT UNSIGNED COMMENT "主键, 应为auto increment类型",
+ err_code varchar(1024),
+ stack varchar(4096),
+ timestamp datetime COMMENT "日志时间戳",
+)`
+)
+
+const (
+	B int64 = 1 << (iota * 10)
+	KB
+	MB
+	GB
+)
+
+const (
+	MOStatementType = "MOStatementType"
+	MOSpanType      = "MOSpan"
+	MOLogType       = "MOLog"
+	MOErrorType     = "MOError"
+)
+
+type HasItemSize interface {
+	bp.HasName
+	Size() int64
+}
+
+var _ bp.PipeImpl[HasItemSize, string] = &batchSqlHandler{}
+
+type batchSqlHandler struct {
+	opt []buffer2SqlOption
+}
+
+func NewBufferPipe2SqlWorker(opt ...buffer2SqlOption) bp.PipeImpl[HasItemSize, string] {
+	return &batchSqlHandler{opt}
+}
+
+// NewItemBuffer implement batchpipe.PipeImpl
+func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[HasItemSize, string] {
+	var f genBatchFunc
+	switch name {
+	case MOSpanType:
+		f = t.genSpanBatchSql
+	case MOLogType:
+		f = t.genLogBatchSql
+	case MOStatementType:
+		f = t.genStatementBatchSql
+	case MOErrorType:
+		f = t.genErrorBatchSql
+	default:
+		// fixme: catch Panic Error
+		panic(fmt.Sprintf("unknown type %s", name))
+	}
+	opt := t.opt[:]
+	opt = append(opt, withGenBatchFunc(f))
+	return newBuffer2Sql(opt...)
+}
+
+// NewItemBatchHandler implement batchpipe.PipeImpl
+func (t batchSqlHandler) NewItemBatchHandler() func(batch string) {
+	exec := gTracerProvider.sqlExecutor()
+	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(statsDatabase).Internal(true).Finish())
+	return func(batch string) {
+		_, span := Start(DefaultContext(), "BatchHandle")
+		defer span.End()
+		if err := exec.Exec(batch, ie.NewOptsBuilder().Finish()); err != nil {
+			// fixme: catch panic error
+			// fixme: handle error situation re-try
+			logutil.Errorf("[Metric] insert error. sql: %s; err: %v", batch, err)
+		}
+	}
+}
+
+func quote(value string) string {
+	replaceRules := []struct{ src, dst string }{
+		{`\\`, `\\\\`},
+		{`'`, `\'`},
+		{`\0`, `\\0`},
+		{"\n", "\\n"},
+		{"\r", "\\r"},
+		{`"`, `\"`},
+		{"\x1a", "\\\\Z"},
+	}
+	for _, rule := range replaceRules {
+		value = strings.Replace(value, rule.src, rule.dst, -1)
+	}
+	return value
+}
+
+func (t batchSqlHandler) genSpanBatchSql(in []HasItemSize, buf *bytes.Buffer) string {
+	buf.Reset()
+	if len(in) == 0 {
+		return ""
+	}
+
+	buf.WriteString(fmt.Sprintf("insert into %s.%s ", statsDatabase, spanInfoTbl))
+	buf.WriteString("(")
+	buf.WriteString("`span_id`")
+	buf.WriteString(", `statement_id`")
+	buf.WriteString(", `parent_span_id`")
+	buf.WriteString(", `node_id`")
+	buf.WriteString(", `node_type`")
+	buf.WriteString(", `resource`")
+	buf.WriteString(", `name`")
+	buf.WriteString(", `start_time`")
+	buf.WriteString(", `end_time`")
+	buf.WriteString(", `duration`")
+	buf.WriteString(") values ")
+
+	for _, item := range in {
+		s, _ := item.(*MOSpan)
+		buf.WriteString("(")
+		buf.WriteString(fmt.Sprintf("%d", s.SpanID))
+		buf.WriteString(fmt.Sprintf(", %d", s.TraceID))
+		buf.WriteString(fmt.Sprintf(", %d", s.parent.SpanContext().SpanID))
+		buf.WriteString(fmt.Sprintf(", %d", s.Node.NodeID))                                  //node_d
+		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Node.NodeType.String()))                   // node_type
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.tracer.provider.resource.String()))) // resource
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Name)))                              // Name
+		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.StartTimeNS).String2(6))) // start_time
+		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.EndTimeNS).String2(6)))   // end_time
+		buf.WriteString(fmt.Sprintf(", %d", s.Duration))                                     // Duration
+		buf.WriteString("),")
+	}
+	buf.Truncate(buf.Len() - 1)
+
+	return buf.String()
+}
+
+func (t batchSqlHandler) genLogBatchSql(in []HasItemSize, buf *bytes.Buffer) string {
+	buf.Reset()
+	if len(in) == 0 {
+		return ""
+	}
+
+	buf.WriteString(fmt.Sprintf("insert into %s.%s ", statsDatabase, logInfoTbl))
+	buf.WriteString("(")
+	buf.WriteString("`span_id`")
+	buf.WriteString(", `statement_id`")
+	buf.WriteString(", `node_id`")
+	buf.WriteString(", `node_type`")
+	buf.WriteString(", `timestamp`")
+	buf.WriteString(", `level`")
+	buf.WriteString(", `code_line`")
+	buf.WriteString(", `message`")
+	buf.WriteString(") values ")
+
+	for _, item := range in {
+		s, _ := item.(*MOLog)
+		buf.WriteString("(")
+		buf.WriteString(fmt.Sprintf("%d", s.SpanId))
+		buf.WriteString(fmt.Sprintf(", %d", s.Statement))
+		buf.WriteString(fmt.Sprintf(", %d", s.Node.NodeID))                                //node_d
+		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Node.NodeType.String()))                 // node_type
+		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.Timestamp).String2(6))) //Timestamp
+		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Level.String()))                         // end_time
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.CodeLine)))                        // Duration
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Message)))                         // Duration
+		buf.WriteString("),")
+	}
+	buf.Truncate(buf.Len() - 1)
+
+	return buf.String()
+}
+
+func (t batchSqlHandler) genStatementBatchSql(in []HasItemSize, buf *bytes.Buffer) string {
+	buf.Reset()
+	if len(in) == 0 {
+		return ""
+	}
+
+	buf.WriteString(fmt.Sprintf("insert into %s.%s ", statsDatabase, statementInfoTbl))
+	buf.WriteString("(")
+	buf.WriteString(", `statement_id`")
+	buf.WriteString(", `transaction_id`")
+	buf.WriteString(", `session_id`")
+	buf.WriteString(", `account`")
+	buf.WriteString(", `user`")
+	buf.WriteString(", `host`")
+	buf.WriteString(", `database`")
+	buf.WriteString(", `statement`")
+	buf.WriteString(", `statement_fingerprint`")
+	buf.WriteString(", `statement_tag`")
+	buf.WriteString(", `request_at`")
+	buf.WriteString(", `status`")
+	buf.WriteString(", `exec_plan`")
+	buf.WriteString(") values ")
+
+	for _, item := range in {
+		s, _ := item.(*StatementInfo)
+		buf.WriteString("(")
+		buf.WriteString(fmt.Sprintf("%d", s.StatementID))
+		buf.WriteString(fmt.Sprintf(", %d", s.TransactionID))
+		buf.WriteString(fmt.Sprintf(", %d", s.SessionID))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Account)))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.User)))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Host)))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Database)))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Statement)))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.StatementFingerprint)))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.StatementTag)))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.RequestAt).String2(6)))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Status.String())))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.ExecPlan)))
+		buf.WriteString("),")
+	}
+	buf.Truncate(buf.Len() - 1)
+
+	return buf.String()
+}
+
+func (t batchSqlHandler) genErrorBatchSql(in []HasItemSize, buf *bytes.Buffer) string {
+	buf.Reset()
+	if len(in) == 0 {
+		return ""
+	}
+
+	buf.WriteString(fmt.Sprintf("insert into %s.%s ", statsDatabase, errorInfoTbl))
+	buf.WriteString("(")
+	buf.WriteString("`err_code`")
+	buf.WriteString(", `stack`")
+	buf.WriteString(", `timestamp`")
+	buf.WriteString(") values ")
+
+	for _, item := range in {
+		s, _ := item.(*MOErrorHolder)
+		buf.WriteString("(")
+		buf.WriteString(fmt.Sprintf("\"%s\"", quote(s.Error.Error())))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(fmt.Sprintf("%+v", s.Error))))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.Timestamp).String2(6)))
+		buf.WriteString("),")
+	}
+	buf.Truncate(buf.Len() - 1)
+
+	return buf.String()
+}
+
+var _ bp.ItemBuffer[HasItemSize, string] = &buffer2Sql{}
+
+// buffer2Sql catch item, like trace/log/error, buffer
+type buffer2Sql struct {
+	bp.Reminder
+	buf           []HasItemSize
+	mux           sync.Mutex
+	size          int64 // default: 1 MB
+	sizeThreshold int64 // const
+
+	batchFunc genBatchFunc
+}
+
+type genBatchFunc func([]HasItemSize, *bytes.Buffer) string
+
+var genBatchEmptySQL = genBatchFunc(func([]HasItemSize, *bytes.Buffer) string { return "" })
+
+func newBuffer2Sql(opts ...buffer2SqlOption) *buffer2Sql {
+	b := &buffer2Sql{
+		Reminder:      bp.NewConstantClock(5 * time.Second),
+		sizeThreshold: 1 * MB,
+		batchFunc:     genBatchEmptySQL,
+	}
+	for _, opt := range opts {
+		opt.apply(b)
+	}
+	return b
+}
+
+func (b *buffer2Sql) Add(item HasItemSize) {
+	b.mux.Lock()
+	defer b.mux.Unlock()
+	b.buf = append(b.buf, item)
+	b.size += item.Size()
+}
+
+func (b *buffer2Sql) Reset() {
+	b.mux.Lock()
+	defer b.mux.Unlock()
+	b.buf = b.buf[0:0]
+	b.size = 0
+}
+
+func (b *buffer2Sql) IsEmpty() bool {
+	b.mux.Lock()
+	defer b.mux.Unlock()
+	return len(b.buf) == 0
+}
+
+func (b *buffer2Sql) ShouldFlush() bool {
+	return atomic.LoadInt64(&b.size) > b.sizeThreshold
+}
+
+func (b *buffer2Sql) GetBatch(buf *bytes.Buffer) string {
+	_, span := Start(DefaultContext(), "GenBatch")
+	defer span.End()
+	b.mux.Lock()
+	defer b.mux.Unlock()
+
+	if b.IsEmpty() {
+		return ""
+	}
+	b.batchFunc(b.buf, buf)
+	return buf.String()
+}
+
+type buffer2SqlOption interface {
+	apply(*buffer2Sql)
+}
+
+type buffer2SqlOptionFunc func(*buffer2Sql)
+
+func (f buffer2SqlOptionFunc) apply(b *buffer2Sql) {
+	f(b)
+}
+
+func withSizeThreshold(size int64) buffer2SqlOption {
+	return buffer2SqlOptionFunc(func(b *buffer2Sql) {
+		b.sizeThreshold = size
+	})
+}
+
+func withGenBatchFunc(f genBatchFunc) buffer2SqlOption {
+	return buffer2SqlOptionFunc(func(b *buffer2Sql) {
+		b.batchFunc = f
+	})
+}
+
+// nanoSec2Datetime implement container/types/datetime.go Datetime.String2
+func nanoSec2Datetime(t util.TimeMono) types.Datetime {
+	sec, nsec := t/1e9, t%1e9
+	return types.Datetime((sec << 20) + nsec/1000)
+}

@@ -18,10 +18,13 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"go.uber.org/zap/zapcore"
+	"time"
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
-	"time"
 )
 
 const (
@@ -87,22 +90,25 @@ func (tf TraceFlags) String() string {
 	return hex.EncodeToString([]byte{byte(tf)}[:])
 }
 
-type MOLogLevel int
+var _ batchpipe.HasName = &MOLog{}
+var _ HasItemSize = &MOLog{}
 
-var _ batchpipe.HasName = &MOLogModel{}
-
-type MOLogModel struct {
-	statementId uint64
-	spanId      uint64
-	resource    *Resource
-	timestamp   util.TimeNano
-	codeLine    string // like "util/trace/trace.go:666"
-	level       MOLogLevel
-	logLine     string
+type MOLog struct {
+	Statement uint64          `json:"statement_id"`
+	SpanId    uint64          `json:"span_id"`
+	Node      *MONodeResource `json:"Node"`
+	Timestamp util.TimeNano   `json:"Timestamp"`
+	Level     zapcore.Level   `json:"Level"`
+	CodeLine  string          `json:"code_line"` // like "util/trace/trace.go:666"
+	Message   string          `json:"Message"`
 }
 
-func (MOLogModel) GetName() string {
-	return "MOLogModel"
+func (l MOLog) Size() int64 {
+	return int64(unsafe.Sizeof(l)) + int64(len(l.CodeLine)+len(l.Message))
+}
+
+func (MOLog) GetName() string {
+	return MOLogType
 }
 
 var gTracerProvider *MOTracerProvider
@@ -115,11 +121,11 @@ func Init(ctx context.Context, opt ...TracerProviderOption) (context.Context, er
 	config := gTracerProvider.tracerProviderConfig
 
 	gTracer = gTracerProvider.Tracer("MatrixOrigin",
-		WithReminder(batchpipe.NewConstantClock(time.Duration(15*time.Second))),
+		WithReminder(batchpipe.NewConstantClock(15*time.Second)),
 	)
 
 	sc := SpanContext{}
-	sc.traceID, sc.spanID = gTracerProvider.idGenerator.NewIDs()
+	sc.TraceID, sc.SpanID = gTracerProvider.idGenerator.NewIDs()
 
 	gTraceContext = ContextWithSpanContext(ctx, sc)
 
@@ -127,9 +133,12 @@ func Init(ctx context.Context, opt ...TracerProviderOption) (context.Context, er
 	// init all batch Process for trace/log/error
 	switch {
 	case config.batchProcessMode == "singleton":
-		export.Register(&MOTracer{}, NewTraceBufferPipeWorker().(batchpipe.PipeImpl[batchpipe.HasName, any]))
+		/*export.Register(&MOSpan{}, NewBufferPipe2SqlWorker(
+			withSizeThreshold(MB),
+		).(batchpipe.PipeImpl[batchpipe.HasName, any]))
+		export.Register(&MOLog{}, NewBufferPipe2SqlWorker().(batchpipe.PipeImpl[batchpipe.HasName, any]))*/
 	case config.batchProcessMode == "distributed":
-		//export.Register(&MOTracer{}, NewTraceBufferPipeWorker())
+		//export.Register(&MOTracer{}, NewBufferPipe2SqlWorker())
 	}
 
 	return nil, nil

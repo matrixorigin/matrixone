@@ -14,7 +14,32 @@
 
 package trace
 
-type Resource map[string]any
+import "encoding/json"
+
+type Resource struct {
+	m map[string]any
+}
+
+func newResource() *Resource {
+	return &Resource{m: make(map[string]any)}
+
+}
+
+func (r *Resource) Put(key string, val any) {
+	r.m[key] = val
+}
+
+func (r *Resource) Get(key string) (any, bool) {
+	val, has := r.m[key]
+	return val, has
+}
+
+// String need to improve
+func (r *Resource) String() string {
+	buf, _ := json.Marshal(r.m)
+	return string(buf)
+
+}
 
 type SpanKind int
 

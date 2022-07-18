@@ -74,6 +74,9 @@ func createMOServer() {
 		if _, err := trace.Init(context.Background(),
 			trace.WithMOVersion(MoVersion),
 			trace.WithNode(config.GlobalSystemVariables.GetNodeID(), trace.SpanKindDN),
+			trace.WithSQLExecuter(func() ie.InternalExecutor {
+				return frontend.NewIternalExecutor(pu)
+			}),
 		); err != nil {
 			panic(err)
 		}

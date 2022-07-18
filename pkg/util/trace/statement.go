@@ -15,35 +15,76 @@
 package trace
 
 import (
-	"time"
+	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 )
 
-type Statement struct {
-	StatementID          uint64
-	SessionID            uint64
-	TransactionID        uint64
-	Account              string
-	User                 string
-	Host                 string
-	Database             string
-	Statement            string
-	StatementFingerprint string
-	StatementTag         string
-	RequestAt            time.Time
+var _ HasItemSize = &StatementInfo{}
+
+type StatementInfo struct {
+	StatementID          uint64              `json:"statement_id"`
+	TransactionID        uint64              `json:"transaction_id"`
+	SessionID            uint64              `jons:"session_id"`
+	Account              string              `json:"account"`
+	User                 string              `json:"user"`
+	Host                 string              `json:"host"`
+	Database             string              `json:"database"`
+	Statement            string              `json:"statement"`
+	StatementFingerprint string              `json:"statement_fingerprint"`
+	StatementTag         string              `json:"statement_tag"`
+	RequestAt            util.TimeNano       `json:"request_at"`
+	Status               StatementInfoStatus `json:"status"`
+	ExecPlan             string              `json:"exec_plan"`
+}
+
+func (s StatementInfo) GetName() string {
+	return MOStatementType
+}
+
+func (s StatementInfo) Size() int64 {
+	return int64(unsafe.Sizeof(s)) + int64(
+		len(s.Account)+len(s.User)+len(s.Host)+
+			len(s.Database)+len(s.Statement)+len(s.StatementFingerprint)+len(s.StatementTag),
+	)
+}
+
+type StatementInfoStatus int
+
+const (
+	StatementStatusRunning StatementInfoStatus = iota
+	StatementStatusSuccess
+	StatementStatusFailed
+)
+
+func (s StatementInfoStatus) String() string {
+	switch s {
+	case StatementStatusSuccess:
+		return "Success"
+	case StatementStatusRunning:
+		return "Running"
+	case StatementStatusFailed:
+		return "Failed"
+	}
+	return "Unknown"
 }
 
 type StatementOption interface {
-	Apply(*Statement)
+	Apply(*StatementInfo)
 }
 
-type StatementOptionFunc func(*Statement)
+type StatementOptionFunc func(*StatementInfo)
 
-func WithRequestAt(t time.Time) StatementOptionFunc {
-	return StatementOptionFunc(func(s *Statement) {
+func WithRequestAt(t util.TimeNano) StatementOptionFunc {
+	return StatementOptionFunc(func(s *StatementInfo) {
 		s.RequestAt = t
 	})
 }
 
-func CollectStatement(s Statement) error {
-	return nil
+func CollectStatement(s *StatementInfo) error {
+	return export.GetGlobalBatchProcessor().Collect(DefaultContext(), s)
 }
+
+// TODO: update statement status
+// TODO: update statement exec plan

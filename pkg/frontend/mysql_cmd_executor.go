@@ -19,9 +19,6 @@ import (
 	goErrors "errors"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
-
 	"os"
 	"runtime/pprof"
 	"sort"
@@ -43,12 +40,15 @@ import (
 	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -139,7 +139,7 @@ func (mce *MysqlCmdExecutor) RecordStatement(ses *Session, sql string, beginIns 
 	//trace.AddStatement
 	statementId := uint64(0)
 	trace.CollectStatement(
-		trace.Statement{
+		&trace.StatementInfo{
 			StatementID:          statementId,
 			SessionID:            0,
 			TransactionID:        0,
@@ -150,7 +150,7 @@ func (mce *MysqlCmdExecutor) RecordStatement(ses *Session, sql string, beginIns 
 			Statement:            sql,
 			StatementFingerprint: "",
 			StatementTag:         "",
-			RequestAt:            beginIns,
+			RequestAt:            util.NowNS(),
 		},
 	)
 	return trace.ContextWithSpanContext(trace.DefaultContext(),

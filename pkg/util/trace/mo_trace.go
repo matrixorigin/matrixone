@@ -16,9 +16,9 @@ package trace
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"sync"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/util"
 )
@@ -31,10 +31,7 @@ type MOTracer struct {
 	ptrace   TracerProvider
 	spanPool *sync.Pool
 	node     *MONodeResource
-}
-
-func (t *MOTracer) GetName() string {
-	return "MOTracer"
+	provider *MOTracerProvider
 }
 
 func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (context.Context, Span) {
@@ -45,9 +42,9 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (
 	parent := SpanFromContext(ctx)
 
 	if span.NewRoot {
-		span.traceID, span.spanID = TraceID(util.Fastrand64()), SpanID(util.Fastrand64())
+		span.TraceID, span.SpanID = TraceID(util.Fastrand64()), SpanID(util.Fastrand64())
 	} else {
-		span.spanID = SpanID(util.Fastrand64())
+		span.SpanID = SpanID(util.Fastrand64())
 		span.parent = parent
 	}
 
@@ -56,21 +53,21 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (
 
 // SpanContext contains identifying trace information about a Span.
 type SpanContext struct {
-	traceID    TraceID
-	spanID     SpanID
-	traceFlags TraceFlags
-	remote     bool
+	TraceID    TraceID
+	SpanID     SpanID
+	TraceFlags TraceFlags
+	Remote     bool
 }
 
 func SpanContextWithID(id TraceID) SpanContext {
 	return SpanContext{
-		traceID: id,
+		TraceID: id,
 	}
 }
 
 type MONodeResource struct {
-	NodeID   int64
-	NodeType SpanKind
+	NodeID   int64    `json:"node_id"`
+	NodeType SpanKind `json:"node_type"`
 }
 
 // SpanConfig is a group of options for a Span.
@@ -81,7 +78,7 @@ type SpanConfig struct {
 	// commonly used when an existing trace crosses trust boundaries and the
 	// remote parent span context should be ignored for security.
 	NewRoot bool
-	Node    *MONodeResource
+	Node    *MONodeResource `json:"node"`
 	parent  Span
 }
 
@@ -125,43 +122,45 @@ func withNodeResource(r *MONodeResource) spanOptionFunc {
 
 func WithRemote(remote bool) spanOptionFunc {
 	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.remote = remote
+		cfg.Remote = remote
 	})
 }
 
 var _ Span = &MOSpan{}
-var _ batchpipe.HasName = &MOSpan{}
+var _ HasItemSize = &MOSpan{}
 
 type MOSpan struct {
 	SpanConfig
-	name        string
-	startTimeNS util.TimeNano
-	duration    util.TimeNano
+	Name        string        `json:"name"`
+	StartTimeNS util.TimeNano `json:"start_time"`
+	EndTimeNS   util.TimeNano `jons:"end_time"`
+	Duration    util.TimeNano `json:"duration"`
 
-	tracer *MOTracer
+	tracer *MOTracer `json:"-"`
+}
+
+func (s *MOSpan) Size() int64 {
+	return int64(unsafe.Sizeof(*s)) + int64(len(s.Name))
 }
 
 func (s *MOSpan) GetName() string {
-	return "MOSpan"
+	return MOSpanType
 }
 
 func (s *MOSpan) init(name string, opts ...SpanOption) {
-	s.name = name
-	s.startTimeNS = util.NowNS()
-	//s.duration = 0
+	s.Name = name
+	s.StartTimeNS = util.NowNS()
+	//s.Duration = 0
 	for _, opt := range opts {
 		opt.applySpanStart(&s.SpanConfig)
 	}
 }
 
 func (s *MOSpan) End(options ...SpanEndOption) {
-	s.duration = util.NowNS() - s.startTimeNS
+	s.EndTimeNS = util.NowNS()
+	s.Duration = s.EndTimeNS - s.StartTimeNS
 
 	export.GetGlobalBatchProcessor().Collect(DefaultContext(), s)
-
-	//TODO implement me: cooperate with Exporter
-
-	panic("implement me")
 }
 
 func (s *MOSpan) SpanContext() SpanContext {
@@ -169,7 +168,7 @@ func (s *MOSpan) SpanContext() SpanContext {
 }
 
 func (s *MOSpan) SetName(name string) {
-	s.name = name
+	s.Name = name
 }
 
 func (s MOSpan) GetItemType() string {

@@ -29,7 +29,7 @@ func ContextWithSpanContext(parent context.Context, sc SpanContext) context.Cont
 }
 
 func ContextWithRemoteSpanContext(parent context.Context, rsc SpanContext) context.Context {
-	rsc.remote = true
+	rsc.Remote = true
 	return ContextWithSpanContext(parent, rsc)
 }
 

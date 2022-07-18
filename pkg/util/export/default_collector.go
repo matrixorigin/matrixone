@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -41,65 +41,78 @@ func (h *pipeImplHolder) Put(name string, impl batchpipe.PipeImpl[batchpipe.HasN
 	}
 }
 
-// reminderHolder
-type reminderHolder struct {
-	reminder batchpipe.Reminder
-	buffer   *bufferHolder
-	trigger  *time.Timer
-	C        chan *reminderHolder
+// bufferHolder
+type bufferHolder struct {
+	// buffer is instance of batchpipe.ItemBuffer with its own elimination algorithm(like LRU, LFU)
+	buffer batchpipe.ItemBuffer[batchpipe.HasName, any]
+	// signal send signal to Collector
+	signal bufferSignalFunc
+	// flush do real action for flush
+	flush func(any)
+	// trigger handle Reminder strategy
+	trigger *time.Timer
+
+	mux      sync.RWMutex
+	readonly int32
+
+	batch *any
 }
 
-func newReminderHolder(reminder batchpipe.Reminder) *reminderHolder {
-	r := &reminderHolder{
-		reminder: reminder,
-		C:        make(chan *reminderHolder),
+type bufferSignalFunc func(*bufferHolder)
+
+func newBufferHolder(name batchpipe.HasName, impl batchpipe.PipeImpl[batchpipe.HasName, any], signal bufferSignalFunc) *bufferHolder {
+	buffer := impl.NewItemBuffer(name.GetName())
+	b := &bufferHolder{
+		buffer: buffer,
+		signal: signal,
+		flush:  impl.NewItemBatchHandler(),
 	}
-	r.trigger = time.AfterFunc(reminder.RemindNextAfter(), func() { r.C <- r })
-	return r
+	reminder := buffer.(batchpipe.Reminder)
+	b.trigger = time.AfterFunc(reminder.RemindNextAfter(), func() { signal(b) })
+	return b
 }
 
-func (r *reminderHolder) Stop() bool {
+// Add directly call buffer.Add(), while bufferHolder is NOT readonly
+func (r *bufferHolder) Add(item batchpipe.HasName) {
+	r.mux.RLock()
+	defer r.mux.RUnlock()
+	for atomic.LoadInt32(&r.readonly) != 0 {
+		time.Sleep(time.Millisecond)
+	}
+	r.buffer.Add(item)
+}
+
+// Stop set bufferHolder readonly, and hold Add request
+func (r *bufferHolder) Stop() bool {
+	if atomic.CompareAndSwapInt32(&r.readonly, 0, 1) {
+		return false
+	}
 	return r.trigger.Stop()
 }
 
-func (r *reminderHolder) Reset() {
-	r.trigger.Reset(r.reminder.RemindNextAfter())
-}
-
-// bufferHolder
-type bufferHolder struct {
-	buf      batchpipe.ItemBuffer[batchpipe.HasName, any]
-	flush    func(batch any)
-	reminder *reminderHolder
-}
-
-func newBufferHolder(buf batchpipe.ItemBuffer[batchpipe.HasName, any], f func(batch any)) *bufferHolder {
-	buffer := &bufferHolder{
-		buf:      buf,
-		flush:    f,
-		reminder: newReminderHolder(buf.(batchpipe.Reminder)),
-	}
-	buffer.reminder.buffer = buffer
-	return buffer
+func (r *bufferHolder) Reset() {
+	atomic.CompareAndSwapInt32(&r.readonly, 1, 0)
+	r.trigger.Reset(r.buffer.(batchpipe.Reminder).RemindNextAfter())
+	r.batch = nil
 }
 
 var _ BatchProcessor = &MOCollector{}
 
 // MOCollector handle all bufferPipe
 type MOCollector struct {
-	mux           sync.RWMutex
-	buffers       map[string]*bufferHolder
-	itemAwake     chan batchpipe.HasName
-	reminderAwake chan *reminderHolder
-	bufferAwake   chan *bufferHolder
+	mux         sync.RWMutex
+	buffers     map[string]*bufferHolder
+	itemAwake   chan batchpipe.HasName
+	bufferAwake chan *bufferHolder
+	batchAwake  chan *bufferHolder
+	stopping    int32
 }
 
 func newMOCollector() *MOCollector {
 	c := &MOCollector{
-		buffers:       make(map[string]*bufferHolder),
-		itemAwake:     make(chan batchpipe.HasName, 1024),
-		reminderAwake: make(chan *reminderHolder, 1024),
-		bufferAwake:   make(chan *bufferHolder, 1024),
+		buffers:     make(map[string]*bufferHolder),
+		itemAwake:   make(chan batchpipe.HasName, 1024),
+		bufferAwake: make(chan *bufferHolder, 1024),
 	}
 	return c
 
@@ -116,17 +129,22 @@ func (c *MOCollector) Start() bool {
 }
 
 func (c *MOCollector) Stop(graceful bool) (<-chan struct{}, bool) {
-	//TODO implement me
-	close(c.reminderAwake)
-	close(c.bufferAwake)
-	for _, buffer := range c.buffers {
-		if graceful {
-			c.flushBuffer(buffer)
-		} else {
-			c.flushBuffer2Disk(buffer)
-		}
+	if atomic.CompareAndSwapInt32(&c.stopping, 0, 1) {
+		return nil, false
 	}
-	panic("implement me")
+	stopCh := make(chan struct{})
+	close(c.bufferAwake)
+	go func() {
+		for _, buffer := range c.buffers {
+			if graceful {
+				c.flushBuffer(buffer)
+			} else {
+				c.flushBuffer2Disk(buffer)
+			}
+		}
+		close(stopCh)
+	}()
+	return stopCh, true
 }
 
 func (c *MOCollector) loop() {
@@ -135,10 +153,12 @@ func (c *MOCollector) loop() {
 		select {
 		case item := <-c.itemAwake:
 			c.doCollect(item)
-		case reminder := <-c.reminderAwake:
-			c.flushBuffer(reminder.buffer)
+
 		case holder := <-c.bufferAwake:
 			c.flushBuffer(holder)
+
+		case batch := <-c.batchAwake:
+			c.handleBatch(batch)
 		}
 	}
 }
@@ -154,29 +174,33 @@ func (c *MOCollector) doCollect(i batchpipe.HasName) error {
 			// TODO: PanicError
 			panic("unknown item type")
 		} else {
-			c.buffers[i.GetName()] = newBufferHolder(impl.NewItemBuffer(i.GetName()), impl.NewItemBatchHandler())
+			c.buffers[i.GetName()] = newBufferHolder(i, impl, func(holder *bufferHolder) { c.bufferAwake <- holder })
 		}
 	}
-	c.buffers[i.GetName()].buf.Add(i)
+	c.buffers[i.GetName()].buffer.Add(i)
 	return nil
+}
+
+func (c *MOCollector) genBatch(holder *bufferHolder, buf *bytes.Buffer) {
+	holder.Stop()
+	batch := holder.buffer.GetBatch(buf)
+	holder.batch = &batch
+}
+
+func (c *MOCollector) handleBatch(holder *bufferHolder) {
+	holder.flush(*holder.batch)
+	holder.Reset()
 }
 
 func (c *MOCollector) flushBuffer(holder *bufferHolder) {
 	buf := new(bytes.Buffer)
-	holder.reminder.Stop()
-	_, span := trace.Start(trace.DefaultContext(), "GenBatch")
-	batch := holder.buf.GetBatch(buf)
-	span.End()
-
-	_, span = trace.Start(trace.DefaultContext(), "BatchHandle")
-	holder.flush(batch)
-	span.End()
-	holder.reminder.Reset()
+	c.genBatch(holder, buf)
+	c.handleBatch(holder)
 }
 
 func (c *MOCollector) flushBuffer2Disk(holder *bufferHolder) {
 	// TODO:
-	//holder.buf.FlushDisk(Writer)
+	//holder.buffer.FlushDisk(Writer)
 
 }
 
@@ -191,8 +215,12 @@ func GetGlobalBatchProcessor() BatchProcessor {
 }
 
 var gBatchProcessor BatchProcessor
+var ini int32
 
 func Init() {
+	if !atomic.CompareAndSwapInt32(&ini, 0, 1) {
+		return
+	}
 	gBatchProcessor = newMOCollector()
 	gPipeHolder = newPipeImplHolder()
 

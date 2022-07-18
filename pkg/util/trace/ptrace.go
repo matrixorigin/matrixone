@@ -16,6 +16,7 @@ package trace
 
 import (
 	"context"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"sync"
 )
 
@@ -78,13 +79,15 @@ type tracerProviderConfig struct {
 	idGenerator IDGenerator
 
 	// resource contains attributes representing an entity that produces telemetry.
-	resource Resource
+	resource *Resource
 
 	enableTracer bool
 
 	debugMode bool // TODO: can check span's END
 
 	batchProcessMode string
+
+	sqlExecutor func() ie.InternalExecutor
 }
 
 // TracerProviderOption configures a TracerProvider.
@@ -100,17 +103,23 @@ func (f tracerProviderOptionFunc) apply(config *tracerProviderConfig) {
 
 func WithMOVersion(v string) tracerProviderOptionFunc {
 	return func(config *tracerProviderConfig) {
-		config.resource["version"] = v
+		config.resource.Put("version", v)
 	}
 }
 
 // WithNode give id as NodeId, t as NodeType
 func WithNode(id int64, t SpanKind) tracerProviderOptionFunc {
 	return func(cfg *tracerProviderConfig) {
-		cfg.resource["node"] = &MONodeResource{
+		cfg.resource.Put("Node", &MONodeResource{
 			NodeID:   id,
 			NodeType: t,
-		}
+		})
+	}
+}
+
+func WithSQLExecuter(f func() ie.InternalExecutor) tracerProviderOptionFunc {
+	return func(cfg *tracerProviderConfig) {
+		cfg.sqlExecutor = f
 	}
 }
 
@@ -122,7 +131,7 @@ type MOTracerProvider struct {
 
 func newMOTracerProvider(opts ...TracerProviderOption) *MOTracerProvider {
 	pTracer := &MOTracerProvider{}
-	pTracer.resource = make(Resource)
+	pTracer.resource = newResource()
 	for _, opt := range opts {
 		opt.apply(&pTracer.tracerProviderConfig)
 	}
@@ -133,6 +142,7 @@ func (p *MOTracerProvider) Tracer(instrumentationName string, opts ...TracerOpti
 	if p.enableTracer {
 		tracer := &MOTracer{
 			TracerConfig: TracerConfig{Name: instrumentationName},
+			provider:     p,
 		}
 		tracer.spanPool = &sync.Pool{New: func() any {
 			return &MOSpan{
