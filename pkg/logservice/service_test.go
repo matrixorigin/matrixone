@@ -43,6 +43,7 @@ func getServiceTestConfig() Config {
 		FS:                   vfs.NewStrictMem(),
 		ServiceListenAddress: testServiceAddress,
 		ServiceAddress:       testServiceAddress,
+		DisableWorkers:       true,
 	}
 }
 
@@ -487,6 +488,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		RaftAddress:         "127.0.0.1:9000",
 		GossipAddress:       "127.0.0.1:9001",
 		GossipSeedAddresses: []string{"127.0.0.1:9011"},
+		DisableWorkers:      true,
 	}
 	cfg2 := Config{
 		FS:                  vfs.NewStrictMem(),
@@ -497,6 +499,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		RaftAddress:         "127.0.0.1:9010",
 		GossipAddress:       "127.0.0.1:9011",
 		GossipSeedAddresses: []string{"127.0.0.1:9001"},
+		DisableWorkers:      true,
 	}
 
 	service1, err := NewService(cfg1)
@@ -605,6 +608,7 @@ func TestGossipConvergeDelay(t *testing.T) {
 			RaftAddress:         fmt.Sprintf("127.0.0.1:%d", 6000+10*i+1),
 			GossipAddress:       fmt.Sprintf("127.0.0.1:%d", 6000+10*i+2),
 			GossipSeedAddresses: []string{"127.0.0.1:6002", "127.0.0.1:6012"},
+			DisableWorkers:      true,
 		}
 		configs = append(configs, cfg)
 		service, err := NewService(cfg)
