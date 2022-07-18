@@ -32,6 +32,7 @@ func NewUnaryDistAgg[T1, T2 any](isCount bool, ityp, otyp types.Type, grows func
 		otyp:    otyp,
 		eval:    eval,
 		fill:    fill,
+		grows:   grows,
 		merge:   merge,
 		isCount: isCount,
 		ityps:   []types.Type{ityp},
@@ -56,6 +57,8 @@ func (a *UnaryDistAgg[T1, T2]) Dup() Agg[any] {
 		ityps: a.ityps,
 		fill:  a.fill,
 		merge: a.merge,
+		eval:  a.eval,
+		grows: a.grows,
 	}
 }
 
@@ -131,10 +134,8 @@ func (a *UnaryDistAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector
 	} else {
 		v = vector.GetColumn[T1](vec)[sel]
 	}
-	if a.maps[i].Insert(vecs, int(sel)) {
-		a.srcs[i] = append(a.srcs[i], v)
-		a.vs[i], a.es[i] = a.fill(v, a.vs[i], z, a.es[i], hasNull)
-	}
+	a.srcs[i] = append(a.srcs[i], v)
+	a.vs[i], a.es[i] = a.fill(v, a.vs[i], z, a.es[i], hasNull)
 }
 
 func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vecs []*vector.Vector) {
