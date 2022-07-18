@@ -158,7 +158,7 @@ jobs:
           path: ./head
 
       - name: Set up Go
-        uses: ./.github/actions/setup_env
+        uses: ./head/.github/actions/setup_env
 
       - name: Build MatrixOne
         run: |
@@ -233,7 +233,7 @@ jobs:
           path: ./head
 
       - name: Set up Go
-        uses: ./.github/actions/setup_env
+        uses: ./head/.github/actions/setup_env
 
       - name: Build MatrixOne
         run: |
@@ -308,7 +308,7 @@ jobs:
           path: ./head
 
       - name: Set up Go
-        uses: ./.github/actions/setup_env
+        uses: ./head/.github/actions/setup_env
 
       - name: Build MatrixOne
         run: |
@@ -381,7 +381,7 @@ jobs:
           path: ./head
 
       - name: Set up Go
-        uses: ./.github/actions/setup_env
+        uses: ./head/.github/actions/setup_env
 
       - name: Build MatrixOne
         run: |
