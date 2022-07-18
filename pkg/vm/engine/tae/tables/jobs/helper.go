@@ -28,6 +28,7 @@ func BuildAndFlushIndex(file file.Block, meta *catalog.BlockEntry, columnData co
 	if err != nil {
 		return
 	}
+	defer sortCol.Close()
 	zmIdx := uint16(0)
 	sfIdx := uint16(1)
 	metas := indexwrapper.NewEmptyIndicesMeta()
@@ -37,6 +38,7 @@ func BuildAndFlushIndex(file file.Block, meta *catalog.BlockEntry, columnData co
 	if err != nil {
 		return err
 	}
+	defer zmFile.Unref()
 	err = zoneMapWriter.Init(zmFile, indexwrapper.Plain, uint16(schema.GetSingleSortKey().Idx), zmIdx)
 	if err != nil {
 		return err
@@ -56,6 +58,7 @@ func BuildAndFlushIndex(file file.Block, meta *catalog.BlockEntry, columnData co
 	if err != nil {
 		return err
 	}
+	defer sfFile.Unref()
 	err = bfWriter.Init(sfFile, indexwrapper.Plain, uint16(schema.GetSingleSortKey().Idx), sfIdx)
 	if err != nil {
 		return err
