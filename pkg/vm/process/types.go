@@ -22,6 +22,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
+type Analyze interface {
+	Stop()
+	Start()
+	Alloc(int64)
+	Input(*batch.Batch)
+	Output(*batch.Batch)
+}
+
 // WaitRegister channel
 type WaitRegister struct {
 	Ctx context.Context
@@ -66,7 +74,6 @@ type SessionInfo struct {
 
 // AnalyzeInfo  analyze information for query
 type AnalyzeInfo struct {
-	start time.Time
 	// NodeId, index of query's node list
 	NodeId int32
 	// InputRows, number of rows accepted by node
@@ -105,6 +112,11 @@ type Process struct {
 
 	// snapshot is transaction context
 	Cancel context.CancelFunc
+}
+
+type analyze struct {
+	start    time.Time
+	analInfo *AnalyzeInfo
 }
 
 func (si *SessionInfo) GetUser() string {

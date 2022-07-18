@@ -43,12 +43,10 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 		return false, nil
 	}
 	ap := arg.(*Argument)
-	ai := proc.AnalInfos[idx]
-	{
-		ai.Start()
-		defer ai.End()
-		ai.Input(bat)
-	}
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
+	anal.Input(bat)
 	vec, err := colexec.EvalExpr(bat, proc, ap.E)
 	if err != nil {
 		bat.Clean(proc.Mp)
@@ -73,7 +71,7 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 		bat.Shrink(sels)
 		proc.PutSels(sels)
 	}
-	ai.Output(bat)
+	anal.Output(bat)
 	proc.Reg.InputBatch = bat
 	return false, nil
 }

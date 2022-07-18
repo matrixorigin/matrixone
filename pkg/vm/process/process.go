@@ -67,10 +67,6 @@ func PutSels(sels []int64, proc *Process) {
 	proc.Reg.Ss = append(proc.Reg.Ss, sels)
 }
 
-func (proc *Process) GetAnalInfo(idx int) *AnalyzeInfo {
-	return proc.AnalInfos[idx]
-}
-
 func (proc *Process) GetSels() []int64 {
 	if len(proc.Reg.Ss) == 0 {
 		return make([]int64, 0, 16)
@@ -78,6 +74,13 @@ func (proc *Process) GetSels() []int64 {
 	sels := proc.Reg.Ss[0]
 	proc.Reg.Ss = proc.Reg.Ss[1:]
 	return sels[:0]
+}
+
+func (proc *Process) GetAnalyze(idx int) Analyze {
+	if idx >= len(proc.AnalInfos) {
+		return &analyze{analInfo: nil}
+	}
+	return &analyze{analInfo: proc.AnalInfos[idx]}
 }
 
 func (proc *Process) PutSels(sels []int64) {

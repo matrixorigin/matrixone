@@ -33,24 +33,32 @@ func NewAnalyzeInfo(nodeId int32) *AnalyzeInfo {
 	}
 }
 
-func (a *AnalyzeInfo) Start() {
+func (a *analyze) Start() {
 	a.start = time.Now()
 }
 
-func (a *AnalyzeInfo) End() {
-	atomic.AddInt64(&a.TimeConsumed, int64(time.Now().Sub(a.start)/time.Millisecond))
+func (a *analyze) Stop() {
+	if a.analInfo != nil {
+		atomic.AddInt64(&a.analInfo.TimeConsumed, int64(time.Now().Sub(a.start)/time.Millisecond))
+	}
 }
 
-func (a *AnalyzeInfo) Alloc(size int64) {
-	atomic.AddInt64(&a.MemorySize, size)
+func (a *analyze) Alloc(size int64) {
+	if a.analInfo != nil {
+		atomic.AddInt64(&a.analInfo.MemorySize, size)
+	}
 }
 
-func (a *AnalyzeInfo) Input(bat *batch.Batch) {
-	atomic.AddInt64(&a.InputSize, int64(bat.Size()))
-	atomic.AddInt64(&a.InputRows, int64(bat.Length()))
+func (a *analyze) Input(bat *batch.Batch) {
+	if a.analInfo != nil {
+		atomic.AddInt64(&a.analInfo.InputSize, int64(bat.Size()))
+		atomic.AddInt64(&a.analInfo.InputRows, int64(bat.Length()))
+	}
 }
 
-func (a *AnalyzeInfo) Output(bat *batch.Batch) {
-	atomic.AddInt64(&a.OutputSize, int64(bat.Size()))
-	atomic.AddInt64(&a.OutputRows, int64(bat.Length()))
+func (a *analyze) Output(bat *batch.Batch) {
+	if a.analInfo != nil {
+		atomic.AddInt64(&a.analInfo.OutputSize, int64(bat.Size()))
+		atomic.AddInt64(&a.analInfo.OutputRows, int64(bat.Length()))
+	}
 }
