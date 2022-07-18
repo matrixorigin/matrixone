@@ -14,8 +14,6 @@
 
 package util
 
-import "time"
-
 // IDAllocator is used to fetch new replica ID.
 type IDAllocator interface {
 	// When IDAllocator was exhaused temporarily, return `false`.
@@ -97,15 +95,4 @@ func (cs *ClusterStores) WorkingStores() StoreSlice {
 // NB: the returned order isn't deterministic.
 func (cs *ClusterStores) ExpiredStores() StoreSlice {
 	return cs.Expired
-}
-
-const (
-	// FIXME: configuration item or some other
-	TickPerSecond   = 10
-	LogStoreTimeout = 5 * time.Minute
-	DnStoreTimeout  = 10 * time.Second
-)
-
-func ExpiredTick(start uint64, timeout time.Duration) uint64 {
-	return uint64(timeout/time.Second)*TickPerSecond + start
 }

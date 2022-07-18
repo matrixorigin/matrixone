@@ -16,6 +16,7 @@ package dnservice
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
@@ -27,9 +28,9 @@ import (
 // The less shard ID, the higher priority.
 // NB: the returned order should be deterministic.
 func Check(
-	idAlloc util.IDAllocator, dnState pb.DNState, currTick uint64,
+	idAlloc util.IDAllocator, config *hakeeper.HAConfig, dnState pb.DNState, currTick uint64,
 ) []*operator.Operator {
-	stores, shards := parseDnState(dnState, currTick)
+	stores, shards := parseDnState(config, dnState, currTick)
 	if len(stores.WorkingStores()) < 1 {
 		// warning with no working store
 		return nil

@@ -15,6 +15,7 @@
 package syshealth
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -28,6 +29,7 @@ const (
 // If system wasn't healthy, we would generate
 // operators in order to shutdown all stores.
 func Check(
+	config *hakeeper.HAConfig,
 	cluster pb.ClusterInfo,
 	dnState pb.DNState,
 	logState pb.LogState,
@@ -36,7 +38,7 @@ func Check(
 	sysHealthy := true
 
 	// parse all log stores for expired stores mainly
-	logStores := parseLogStores(logState, currTick)
+	logStores := parseLogStores(config, logState, currTick)
 	if len(logStores.expired) == 0 {
 		return nil, sysHealthy
 	}
@@ -55,7 +57,7 @@ func Check(
 	}
 
 	// parse all dn stores
-	dnStores := parseDnStores(dnState, currTick)
+	dnStores := parseDnStores(config, dnState, currTick)
 
 	// generate operators to shutdown all stores
 	operators := make([]*operator.Operator, 0, logStores.length()+dnStores.length())
@@ -171,10 +173,10 @@ func (s *storeSet) shutdownWorkingStores() []*operator.Operator {
 }
 
 // parseLogStores separates log stores as expired and working.
-func parseLogStores(logState pb.LogState, currTick uint64) *storeSet {
+func parseLogStores(config *hakeeper.HAConfig, logState pb.LogState, currTick uint64) *storeSet {
 	set := newStoreSet(pb.LogService)
 	for id, storeInfo := range logState.Stores {
-		if util.ExpiredTick(storeInfo.Tick, util.LogStoreTimeout) < currTick {
+		if config.LogStoreExpired(storeInfo.Tick, currTick) {
 			set.expired[util.StoreID(id)] = struct{}{}
 		} else {
 			set.working[util.StoreID(id)] = struct{}{}
@@ -184,10 +186,10 @@ func parseLogStores(logState pb.LogState, currTick uint64) *storeSet {
 }
 
 // parseDnStores separates dn stores as expired and working.
-func parseDnStores(dnState pb.DNState, currTick uint64) *storeSet {
+func parseDnStores(config *hakeeper.HAConfig, dnState pb.DNState, currTick uint64) *storeSet {
 	set := newStoreSet(pb.DnService)
 	for id, storeInfo := range dnState.Stores {
-		if util.ExpiredTick(storeInfo.Tick, util.DnStoreTimeout) < currTick {
+		if config.DnStoreExpired(storeInfo.Tick, currTick) {
 			set.expired[util.StoreID(id)] = struct{}{}
 		} else {
 			set.working[util.StoreID(id)] = struct{}{}

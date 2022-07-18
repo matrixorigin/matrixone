@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package config
+package hakeeper
 
 import "time"
 
@@ -22,7 +22,7 @@ const (
 	DefaultDnStoreTimeout  = 10 * time.Second
 )
 
-type TimeoutConfig struct {
+type HAConfig struct {
 	TickPerSecond int
 
 	LogStoreTimeout time.Duration
@@ -30,33 +30,37 @@ type TimeoutConfig struct {
 	DnStoreTimeout time.Duration
 }
 
-func DefaultTimeoutConfig() *TimeoutConfig {
-	return &TimeoutConfig{
+func DefaultTimeoutConfig() *HAConfig {
+	return &HAConfig{
 		TickPerSecond:   DefaultTickPerSecond,
 		LogStoreTimeout: DefaultLogStoreTimeout,
 		DnStoreTimeout:  DefaultDnStoreTimeout,
 	}
 }
 
-func (config *TimeoutConfig) SetTickPerSecond(tickPerSecond int) *TimeoutConfig {
+func (config *HAConfig) SetTickPerSecond(tickPerSecond int) *HAConfig {
 	config.TickPerSecond = tickPerSecond
 	return config
 }
 
-func (config *TimeoutConfig) SetLogStoreTimeout(timeout time.Duration) *TimeoutConfig {
+func (config *HAConfig) SetLogStoreTimeout(timeout time.Duration) *HAConfig {
 	config.LogStoreTimeout = timeout
 	return config
 }
 
-func (config *TimeoutConfig) SetDnStoreTimeout(timeout time.Duration) *TimeoutConfig {
+func (config *HAConfig) SetDnStoreTimeout(timeout time.Duration) *HAConfig {
 	config.DnStoreTimeout = timeout
 	return config
 }
 
-func (config *TimeoutConfig) LogStoreExpired(start, current uint64) bool {
+func (config *HAConfig) LogStoreExpired(start, current uint64) bool {
 	return uint64(int(config.LogStoreTimeout/time.Second)*config.TickPerSecond)+start < current
 }
 
-func (config *TimeoutConfig) DnStoreExpired(start, current uint64) bool {
+func (config *HAConfig) DnStoreExpired(start, current uint64) bool {
 	return uint64(int(config.DnStoreTimeout/time.Second)*config.TickPerSecond)+start < current
+}
+
+func (config *HAConfig) ExpiredTick(start uint64, timeout time.Duration) uint64 {
+	return uint64(timeout/time.Second)*uint64(config.TickPerSecond) + start
 }

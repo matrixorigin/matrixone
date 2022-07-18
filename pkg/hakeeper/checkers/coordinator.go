@@ -15,11 +15,11 @@
 package checkers
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/logservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/syshealth"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/config"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -33,22 +33,22 @@ type Coordinator struct {
 	teardown    bool
 	teardownOps []*operator.Operator
 
-	timeoutConfig *config.TimeoutConfig
+	timeoutConfig *hakeeper.HAConfig
 }
 
 func NewCoordinator() *Coordinator {
 	return &Coordinator{
 		OperatorController: operator.NewController(),
-		timeoutConfig:      config.DefaultTimeoutConfig(),
+		timeoutConfig:      hakeeper.DefaultTimeoutConfig(),
 	}
 }
 
-func (c *Coordinator) SetTimeoutConfig(config *config.TimeoutConfig) *Coordinator {
+func (c *Coordinator) SetTimeoutConfig(config *hakeeper.HAConfig) *Coordinator {
 	c.timeoutConfig = config
 	return c
 }
 
-func (c *Coordinator) Check(alloc util.IDAllocator, config *config.TimeoutConfig, cluster pb.ClusterInfo,
+func (c *Coordinator) Check(alloc util.IDAllocator, config *hakeeper.HAConfig, cluster pb.ClusterInfo,
 	dnState pb.DNState, logState pb.LogState, currentTick uint64) []pb.ScheduleCommand {
 
 	c.OperatorController.RemoveFinishedOperator(logState, dnState)
@@ -59,7 +59,7 @@ func (c *Coordinator) Check(alloc util.IDAllocator, config *config.TimeoutConfig
 	}
 
 	// check whether system health or not.
-	if operators, health := syshealth.Check(cluster, dnState, logState, currentTick); !health {
+	if operators, health := syshealth.Check(config, cluster, dnState, logState, currentTick); !health {
 		c.teardown = true
 		c.teardownOps = operators
 		return c.OperatorController.Dispatch(c.teardownOps, logState, dnState)
@@ -71,7 +71,7 @@ func (c *Coordinator) Check(alloc util.IDAllocator, config *config.TimeoutConfig
 
 	operators := make([]*operator.Operator, 0)
 	operators = append(operators, logservice.Check(alloc, config, cluster, logState, removing, adding, currentTick)...)
-	operators = append(operators, dnservice.Check(alloc, dnState, currentTick)...)
+	operators = append(operators, dnservice.Check(alloc, config, dnState, currentTick)...)
 
 	return c.OperatorController.Dispatch(operators, logState, dnState)
 }

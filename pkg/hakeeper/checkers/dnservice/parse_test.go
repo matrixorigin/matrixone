@@ -15,9 +15,9 @@
 package dnservice
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 
 	"github.com/stretchr/testify/require"
@@ -26,7 +26,8 @@ import (
 func TestParseDNState(t *testing.T) {
 	expiredTick := uint64(10)
 	// construct current tick in order to make hearbeat tick expired
-	currTick := util.ExpiredTick(expiredTick, util.DnStoreTimeout) + 1
+	config := hakeeper.DefaultTimeoutConfig()
+	currTick := config.ExpiredTick(expiredTick, config.DnStoreTimeout) + 1
 
 	// 1. no working dn stores
 	{
@@ -47,7 +48,7 @@ func TestParseDNState(t *testing.T) {
 			},
 		}
 
-		stores, shards := parseDnState(dnState, currTick)
+		stores, shards := parseDnState(config, dnState, currTick)
 
 		// check stores
 		require.Equal(t, len(stores.WorkingStores()), 0)
@@ -94,7 +95,7 @@ func TestParseDNState(t *testing.T) {
 			},
 		}
 
-		stores, shards := parseDnState(dnState, currTick)
+		stores, shards := parseDnState(config, dnState, currTick)
 
 		// check stores
 		require.Equal(t, len(stores.WorkingStores()), 2)

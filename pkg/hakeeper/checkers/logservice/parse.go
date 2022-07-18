@@ -14,10 +14,10 @@
 package logservice
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/config"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
@@ -139,7 +139,7 @@ func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired util.Stor
 	return collect
 }
 
-func parseLogStores(config *config.TimeoutConfig, infos pb.LogState, currentTick uint64) *util.ClusterStores {
+func parseLogStores(config *hakeeper.HAConfig, infos pb.LogState, currentTick uint64) *util.ClusterStores {
 	stores := util.NewClusterStores()
 	for uuid, storeInfo := range infos.Stores {
 		store := util.NewStore(uuid, len(storeInfo.Replicas), LogStoreCapacity)

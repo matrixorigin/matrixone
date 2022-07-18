@@ -15,12 +15,12 @@ package logservice
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"sort"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/config"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
@@ -452,17 +452,17 @@ func TestCollectStore(t *testing.T) {
 				}},
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {
-						Tick: uint64(10 * config.DefaultTickPerSecond * 60),
+						Tick: uint64(10 * hakeeper.DefaultTickPerSecond * 60),
 					},
 					"b": {
-						Tick: uint64(13 * config.DefaultTickPerSecond * 60),
+						Tick: uint64(13 * hakeeper.DefaultTickPerSecond * 60),
 					},
 					"c": {
-						Tick: uint64(12 * config.DefaultTickPerSecond * 60),
+						Tick: uint64(12 * hakeeper.DefaultTickPerSecond * 60),
 					},
 				},
 			},
-			tick: uint64(10 * config.DefaultTickPerSecond * 60),
+			tick: uint64(10 * hakeeper.DefaultTickPerSecond * 60),
 			expected: util.ClusterStores{
 				Working: []*util.Store{
 					{ID: "a", Capacity: 32},
@@ -484,12 +484,12 @@ func TestCollectStore(t *testing.T) {
 					Epoch:    1,
 				}},
 				Stores: map[string]pb.LogStoreInfo{
-					"a": {Tick: uint64(10 * config.DefaultTickPerSecond * 60)},
+					"a": {Tick: uint64(10 * hakeeper.DefaultTickPerSecond * 60)},
 					"b": {Tick: 0},
-					"c": {Tick: uint64(12 * config.DefaultTickPerSecond * 60)},
+					"c": {Tick: uint64(12 * hakeeper.DefaultTickPerSecond * 60)},
 				},
 			},
-			tick: uint64(15 * config.DefaultTickPerSecond * 60),
+			tick: uint64(15 * hakeeper.DefaultTickPerSecond * 60),
 			expected: util.ClusterStores{
 				Working: []*util.Store{
 					{ID: "a", Capacity: 32},
@@ -501,7 +501,7 @@ func TestCollectStore(t *testing.T) {
 	}
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		stores := parseLogStores(config.DefaultTimeoutConfig(), c.infos, c.tick)
+		stores := parseLogStores(hakeeper.DefaultTimeoutConfig(), c.infos, c.tick)
 		sort.Slice(stores.Working, func(i, j int) bool {
 			return stores.Working[i].ID < stores.Working[j].ID
 		})
@@ -509,7 +509,7 @@ func TestCollectStore(t *testing.T) {
 			return stores.Expired[i].ID < stores.Expired[j].ID
 		})
 		assert.Equal(t, c.expected, *stores)
-		stores = parseLogStores(config.DefaultTimeoutConfig().SetLogStoreTimeout(time.Hour), c.infos, c.tick)
+		stores = parseLogStores(hakeeper.DefaultTimeoutConfig().SetLogStoreTimeout(time.Hour), c.infos, c.tick)
 		assert.Nil(t, stores.ExpiredStores())
 	}
 }
