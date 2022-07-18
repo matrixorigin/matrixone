@@ -283,7 +283,7 @@ func TestFixExpiredStore(t *testing.T) {
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
 		coordinator := NewCoordinator()
-		output := coordinator.Check(c.idAlloc, hakeeper.DefaultTimeoutConfig(), c.cluster, c.dn, c.log, c.currentTick)
+		output := coordinator.Check(c.idAlloc, c.cluster, c.dn, c.log, c.currentTick)
 		assert.Equal(t, c.expected, output)
 	}
 }
@@ -381,7 +381,7 @@ func TestFixZombie(t *testing.T) {
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
 		coordinator := NewCoordinator()
-		output := coordinator.Check(c.idAlloc, hakeeper.DefaultTimeoutConfig(), c.cluster, c.dn, c.log, c.currentTick)
+		output := coordinator.Check(c.idAlloc, c.cluster, c.dn, c.log, c.currentTick)
 		assert.Equal(t, c.expected, output)
 	}
 }
@@ -403,14 +403,14 @@ func TestOpExpiredAndThenCompleted(t *testing.T) {
 		},
 	}
 
-	assert.NotNil(t, coordinator.Check(idAlloc, hakeeper.DefaultTimeoutConfig(), cluster, pb.DNState{}, logState, fn(15)))
-	assert.Nil(t, coordinator.Check(idAlloc, hakeeper.DefaultTimeoutConfig(), cluster, pb.DNState{}, logState, fn(16)))
+	assert.NotNil(t, coordinator.Check(idAlloc, cluster, pb.DNState{}, logState, fn(15)))
+	assert.Nil(t, coordinator.Check(idAlloc, cluster, pb.DNState{}, logState, fn(16)))
 
 	ops := coordinator.OperatorController.GetOperators(1)
 	assert.Equal(t, 1, len(ops))
 	ops[0].SetStatus(operator.EXPIRED)
 
-	assert.NotNil(t, coordinator.Check(idAlloc, hakeeper.DefaultTimeoutConfig(), cluster, pb.DNState{}, logState, fn(17)))
+	assert.NotNil(t, coordinator.Check(idAlloc, cluster, pb.DNState{}, logState, fn(17)))
 	ops = coordinator.OperatorController.GetOperators(1)
 	assert.Equal(t, 1, len(ops))
 
@@ -425,5 +425,5 @@ func TestOpExpiredAndThenCompleted(t *testing.T) {
 		},
 	}
 
-	assert.Nil(t, coordinator.Check(idAlloc, hakeeper.DefaultTimeoutConfig(), cluster, pb.DNState{}, logState, fn(18)))
+	assert.Nil(t, coordinator.Check(idAlloc, cluster, pb.DNState{}, logState, fn(18)))
 }

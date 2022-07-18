@@ -33,23 +33,22 @@ type Coordinator struct {
 	teardown    bool
 	teardownOps []*operator.Operator
 
-	timeoutConfig *hakeeper.HAConfig
+	haConfig *hakeeper.HAConfig
 }
 
 func NewCoordinator() *Coordinator {
 	return &Coordinator{
 		OperatorController: operator.NewController(),
-		timeoutConfig:      hakeeper.DefaultTimeoutConfig(),
+		haConfig:           hakeeper.DefaultTimeoutConfig(),
 	}
 }
 
 func (c *Coordinator) SetTimeoutConfig(config *hakeeper.HAConfig) *Coordinator {
-	c.timeoutConfig = config
+	c.haConfig = config
 	return c
 }
 
-func (c *Coordinator) Check(alloc util.IDAllocator, config *hakeeper.HAConfig, cluster pb.ClusterInfo,
-	dnState pb.DNState, logState pb.LogState, currentTick uint64) []pb.ScheduleCommand {
+func (c *Coordinator) Check(alloc util.IDAllocator, cluster pb.ClusterInfo, dnState pb.DNState, logState pb.LogState, currentTick uint64) []pb.ScheduleCommand {
 
 	c.OperatorController.RemoveFinishedOperator(logState, dnState)
 
@@ -59,7 +58,7 @@ func (c *Coordinator) Check(alloc util.IDAllocator, config *hakeeper.HAConfig, c
 	}
 
 	// check whether system health or not.
-	if operators, health := syshealth.Check(config, cluster, dnState, logState, currentTick); !health {
+	if operators, health := syshealth.Check(c.haConfig, cluster, dnState, logState, currentTick); !health {
 		c.teardown = true
 		c.teardownOps = operators
 		return c.OperatorController.Dispatch(c.teardownOps, logState, dnState)
@@ -70,8 +69,8 @@ func (c *Coordinator) Check(alloc util.IDAllocator, config *hakeeper.HAConfig, c
 	adding := c.OperatorController.GetAddingReplicas()
 
 	operators := make([]*operator.Operator, 0)
-	operators = append(operators, logservice.Check(alloc, config, cluster, logState, removing, adding, currentTick)...)
-	operators = append(operators, dnservice.Check(alloc, config, dnState, currentTick)...)
+	operators = append(operators, logservice.Check(alloc, c.haConfig, cluster, logState, removing, adding, currentTick)...)
+	operators = append(operators, dnservice.Check(alloc, c.haConfig, dnState, currentTick)...)
 
 	return c.OperatorController.Dispatch(operators, logState, dnState)
 }
