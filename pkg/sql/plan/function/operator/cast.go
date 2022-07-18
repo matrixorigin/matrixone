@@ -1197,7 +1197,7 @@ func CastSpecialIntToDecimal[T constraints.Integer](
 
 func CastSpecialIntToDecimal64[T constraints.Integer](
 	lv, rv *vector.Vector,
-	i2d func(xs []T, rs []types.Decimal64, scale int64) ([]types.Decimal64, error),
+	i2d func(xs []T, rs []types.Decimal64) ([]types.Decimal64, error),
 	proc *process.Process) (*vector.Vector, error) {
 	resultScale := rv.Typ.Scale
 	resultTyp := types.Type{Oid: types.T_decimal64, Size: 8, Width: 38, Scale: resultScale}
@@ -1205,7 +1205,7 @@ func CastSpecialIntToDecimal64[T constraints.Integer](
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(resultTyp)
 		rs := make([]types.Decimal64, 1)
-		if _, err := i2d(lvs, rs, int64(resultScale)); err != nil {
+		if _, err := i2d(lvs, rs); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -1219,7 +1219,7 @@ func CastSpecialIntToDecimal64[T constraints.Integer](
 	}
 	rs := encoding.DecodeDecimal64Slice(vec.Data)
 	rs = rs[:len(lvs)]
-	if _, err := i2d(lvs, rs, int64(resultScale)); err != nil {
+	if _, err := i2d(lvs, rs); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)

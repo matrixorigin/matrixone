@@ -654,10 +654,12 @@ func makeExprFromVal(typ types.Type, value interface{}, isNull bool) tree.Expr {
 		res := value.(types.Timestamp).String2(typ.Precision)
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	case types.T_decimal64:
-		res := string(value.(types.Decimal64).Decimal64ToString(typ.Scale))
+		val, _ := value.(types.Decimal64)
+		res := val.ToString()
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	case types.T_decimal128:
-		res := string(value.(types.Decimal128).Decimal128ToString(typ.Scale))
+		val, _ := value.(types.Decimal128)
+		res := val.ToString()
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	}
 	return tree.NewNumVal(constant.MakeUnknown(), "NULL", false)

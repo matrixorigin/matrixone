@@ -20,4 +20,4 @@ install: libdecnumber.a
 	mkdir -p ../include/decnumber
 	mkdir -p ../lib
 	cp *.h ../include/decnumber/
-	cp libdecnumber.a ../lib/
+	cp libdecnumber.a ../..

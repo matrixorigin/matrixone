@@ -170,11 +170,6 @@ func DivDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 		rs := make([]types.Decimal128, 1)
 		nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 		if !nulls.Any(rv.Nsp) {
-			for _, v := range rvs {
-				if int64(v) == 0 {
-					return nil, ErrDivByZero
-				}
-			}
 			vector.SetCol(vec, div.Decimal64Div(lvs, rvs, lvScale, rvScale, rs))
 			vec.Typ = resultTyp
 			return vec, nil
@@ -185,30 +180,17 @@ func DivDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 			if nulls.Contains(rv.Nsp, i) {
 				continue
 			}
-			if int64(rvs[i]) == 0 {
-				return nil, ErrDivByZero
-			}
 			sels = append(sels, int64(i))
 		}
 		vector.SetCol(vec, div.Decimal64DivSels(lvs, rvs, lvScale, rvScale, rs, sels))
 		vec.Typ = resultTyp
 		return vec, nil
 	case lv.IsScalar() && !rv.IsScalar():
-		if !nulls.Any(rv.Nsp) {
-			for _, v := range rvs {
-				if int64(v) == 0 {
-					return nil, ErrDivByZero
-				}
-			}
-		}
 		sels := process.GetSels(proc)
 		defer process.PutSels(sels, proc)
 		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
 			if nulls.Contains(rv.Nsp, i) {
 				continue
-			}
-			if int64(rvs[i]) == 0 {
-				return nil, ErrDivByZero
 			}
 			sels = append(sels, int64(i))
 		}
@@ -223,9 +205,6 @@ func DivDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 		vec.Typ = resultTyp
 		return vec, nil
 	case !lv.IsScalar() && rv.IsScalar():
-		if int64(rvs[0]) == 0 {
-			return nil, ErrDivByZero
-		}
 		vec, err := proc.AllocVector(resultTyp, int64(resultTyp.Size)*int64(len(lvs)))
 		if err != nil {
 			return nil, err
@@ -245,11 +224,6 @@ func DivDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	rs = rs[:len(rvs)]
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	if !nulls.Any(rv.Nsp) {
-		for _, v := range rvs {
-			if int64(v) == 0 {
-				return nil, ErrDivByZero
-			}
-		}
 		vector.SetCol(vec, div.Decimal64Div(lvs, rvs, lvScale, rvScale, rs))
 		vec.Typ = resultTyp
 		return vec, nil
@@ -259,9 +233,6 @@ func DivDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
 		if nulls.Contains(rv.Nsp, i) {
 			continue
-		}
-		if int64(rvs[i]) == 0 {
-			return nil, ErrDivByZero
 		}
 		sels = append(sels, int64(i))
 	}

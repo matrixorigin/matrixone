@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package decimal128s
+package decimal64s
 
 import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 
 type sortElem struct {
-	data types.Decimal128
+	data types.Decimal64
 	idx  uint32
 }
 
@@ -29,7 +29,7 @@ func (x sortSlice) Less(i, j int) bool {
 func (x sortSlice) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
 
 type heapElem struct {
-	data types.Decimal128
+	data types.Decimal64
 	src  uint32
 	next uint32
 }

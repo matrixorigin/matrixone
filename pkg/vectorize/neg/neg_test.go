@@ -16,9 +16,10 @@ package neg
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func makeIbuffer(l int) []int64 {
@@ -52,10 +53,10 @@ func TestI64Sum(t *testing.T) {
 }
 
 func TestDecimal64Neg(t *testing.T) {
-	xs := []types.Decimal64{123, 234, 345, 0, -234}
+	xs := []types.Decimal64{types.InitDecimal64(123), types.InitDecimal64(234), types.InitDecimal64(345), types.Decimal64_Zero, types.InitDecimal64(-234)}
 	rs := make([]types.Decimal64, len(xs))
 	rs = Decimal64Neg(xs, rs)
-	expectedResult := []types.Decimal64{-123, -234, -345, 0, 234}
+	expectedResult := []types.Decimal64{types.InitDecimal64(-123), types.InitDecimal64(-234), types.InitDecimal64(-345), types.Decimal64_Zero, types.InitDecimal64(234)}
 	require.Equal(t, expectedResult, rs)
 }
 

@@ -34,9 +34,9 @@ func NewVector[T any](typ types.Type, nullable bool, opts ...*Options) *vector[T
 		typ:    typ,
 	}
 	if nullable {
-		vec.impl = newNullableVecImpl[T](vec)
+		vec.impl = newNullableVecImpl(vec)
 	} else {
-		vec.impl = newVecImpl[T](vec)
+		vec.impl = newVecImpl(vec)
 	}
 	return vec
 }
@@ -76,10 +76,16 @@ func (vec *vector[T]) Equals(o Vector) bool {
 			if !bytes.Equal(vec.Get(i).([]byte), o.Get(i).([]byte)) {
 				return false
 			}
+		} else if _, ok := any(v).(types.Decimal64); ok {
+			d := vec.Get(i).(types.Decimal64)
+			od := vec.Get(i).(types.Decimal64)
+			if d.Ne(od) {
+				return false
+			}
 		} else if _, ok := any(v).(types.Decimal128); ok {
 			d := vec.Get(i).(types.Decimal128)
 			od := vec.Get(i).(types.Decimal128)
-			if d.Hi != od.Hi || d.Lo != od.Lo {
+			if d.Ne(od) {
 				return false
 			}
 		} else {

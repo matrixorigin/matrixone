@@ -63,7 +63,6 @@ CONFIG_DEPS=cmd/generate-config/main.go  \
 	cmd/generate-config/config_template.go \
 	cmd/generate-config/system_vars_def.toml
 
-# generate build config
 .PHONY: config
 config: $(CONFIG_DEPS)
 	$(info [Create build config])
@@ -88,7 +87,7 @@ pb: generate-pb fmt
 ###############################################################################
 
 RACE_OPT := 
-CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo"
+CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo -ldecnumber"
 GO=$(CGO_OPTS) $(GOBIN)
 GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_VERSION)'"
 
@@ -113,7 +112,6 @@ debug: build
 ###############################################################################
 # run unit tests
 ###############################################################################
-
 # Excluding frontend test cases temporarily
 # Argument SKIP_TEST to skip a specific go test
 .PHONY: ut 
@@ -176,4 +174,4 @@ static-check: config cgo
 	@$(CGO_OPTS) go-licenses check ./...
 	@for p in $(DIRS); do \
     $(CGO_OPTS) golangci-lint run $(EXTRA_LINTERS) $$p ; \
-  done;
+done;

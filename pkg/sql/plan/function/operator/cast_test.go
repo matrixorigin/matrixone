@@ -1555,7 +1555,7 @@ func TestCastSpecial4(t *testing.T) {
 		return vectors
 	}
 	resType := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: 0}
-	decimal128 := types.Decimal128{Lo: 123, Hi: 0}
+	decimal128 := types.Decimal128FromInt32(123)
 	procs := makeProcess()
 	cases := []struct {
 		name       string
@@ -2013,7 +2013,7 @@ func TestCastFloatAsDecimal(t *testing.T) {
 			name:      "TEST01",
 			vecs:      makeTempVectors([]float32{123.2}, leftType, rightType),
 			proc:      makeProcess(),
-			wantBytes: []types.Decimal64{12320},
+			wantBytes: []types.Decimal64{types.Decimal64FromFloat64(123.2)},
 		},
 	}
 
@@ -2052,7 +2052,7 @@ func TestCastDecimalAsString(t *testing.T) {
 	}{
 		{
 			name: "TEST01",
-			vecs: makeTempVectors([]types.Decimal64{types.Decimal64(1230)}, leftType, rightType),
+			vecs: makeTempVectors([]types.Decimal64{types.Decimal64FromInt32(1230)}, leftType, rightType),
 			proc: makeProcess(),
 			wantBytes: &types.Bytes{
 				Data:    []byte{0x31, 0x32, 0x33, 0x30},
@@ -2136,6 +2136,9 @@ func TestCastDecimal64AsDecimal128(t *testing.T) {
 	//decimal(20, 5)
 	destType := types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}
 
+	d64_33333300 := types.Decimal64FromInt32(333333000)
+	d128_33333300 := types.Decimal128FromInt32(333333000)
+
 	procs := makeProcess()
 	cases := []struct {
 		name       string
@@ -2147,17 +2150,17 @@ func TestCastDecimal64AsDecimal128(t *testing.T) {
 	}{
 		{
 			name:       "TEST01", //cast(333.33300 as decimal(20, 5))
-			vecs:       makeTempVector(33333300, leftType, true, destType),
+			vecs:       makeTempVector(d64_33333300, leftType, true, destType),
 			proc:       procs,
-			wantBytes:  []types.Decimal128{{Lo: 33333300, Hi: 0}},
+			wantBytes:  []types.Decimal128{d128_33333300},
 			wantType:   types.T_decimal128,
 			wantScalar: true,
 		},
 		{
 			name:       "TEST01", //cast(333.33300 as decimal(20, 5))
-			vecs:       makeTempVector(33333300, leftType, false, destType),
+			vecs:       makeTempVector(d64_33333300, leftType, false, destType),
 			proc:       procs,
-			wantBytes:  []types.Decimal128{{Lo: 33333300, Hi: 0}},
+			wantBytes:  []types.Decimal128{d128_33333300},
 			wantType:   types.T_decimal128,
 			wantScalar: false,
 		},
@@ -2214,17 +2217,17 @@ func TestCastDecimal64AsDecimal64(t *testing.T) {
 	}{
 		{
 			name:       "TEST01", //cast(333.33300 as decimal(10, 4))
-			vecs:       makeTempVector(33333300, leftType, true, destType),
+			vecs:       makeTempVector(types.Decimal64FromInt32(33333300), leftType, true, destType),
 			proc:       procs,
-			wantBytes:  []types.Decimal64{33333300},
+			wantBytes:  []types.Decimal64{types.Decimal64FromInt32(33333300)},
 			wantType:   destType,
 			wantScalar: true,
 		},
 		{
 			name:       "TEST02", //cast(333.33300 as decimal(10, 4))
-			vecs:       makeTempVector(33333300, leftType, false, destType),
+			vecs:       makeTempVector(types.Decimal64FromInt32(33333300), leftType, false, destType),
 			proc:       procs,
-			wantBytes:  []types.Decimal64{33333300},
+			wantBytes:  []types.Decimal64{types.Decimal64FromInt32(33333300)},
 			wantType:   destType,
 			wantScalar: false,
 		},
@@ -2279,17 +2282,17 @@ func TestCastDecimal128AsDecimal128(t *testing.T) {
 	}{
 		{
 			name:       "TEST01", //cast(333.33300 as decimal(20, 5))
-			vecs:       makeTempVector(types.Decimal128{Lo: 33333300, Hi: 0}, leftType, true, destType),
+			vecs:       makeTempVector(types.Decimal128FromInt32(33333300), leftType, true, destType),
 			proc:       procs,
-			wantBytes:  []types.Decimal128{{Lo: 33333300, Hi: 0}},
+			wantBytes:  []types.Decimal128{types.Decimal128FromInt32(33333300)},
 			wantType:   destType,
 			wantScalar: true,
 		},
 		{
 			name:       "Test02",
-			vecs:       makeTempVector(types.Decimal128{Lo: 33333300, Hi: 0}, leftType, false, destType),
+			vecs:       makeTempVector(types.Decimal128FromInt32(33333300), leftType, false, destType),
 			proc:       procs,
-			wantBytes:  []types.Decimal128{{Lo: 33333300, Hi: 0}},
+			wantBytes:  []types.Decimal128{types.Decimal128FromInt32(33333300)},
 			wantType:   destType,
 			wantScalar: false,
 		},
@@ -2335,7 +2338,9 @@ func TestCastStringAsDecimal64(t *testing.T) {
 		}
 		vec := testutil.NewProc().AllocScalarVector(d64)
 		vec.Length = length
-		vec.Col = []types.Decimal64{types.Decimal64(v)}
+		var tmp types.Decimal64
+		tmp.FromInt64(v)
+		vec.Col = []types.Decimal64{tmp}
 		return vec
 	}
 
@@ -2875,223 +2880,6 @@ func TestCastIntegerAsTimestamp(t *testing.T) {
 		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
 		compare := testutil.CompareVectors(wantVec, res)
-		convey.So(compare, convey.ShouldBeTrue)
-	})
-}
-
-func TestCastDecimal64AsTimestamp(t *testing.T) {
-	makeTempVector := func(left types.Decimal64, leftType types.Type, leftScalar bool, destType types.Type) []*vector.Vector {
-		vectors := make([]*vector.Vector, 2)
-		vectors[0] = &vector.Vector{
-			Col:     []types.Decimal64{left},
-			Nsp:     &nulls.Nulls{},
-			Typ:     leftType,
-			IsConst: leftScalar,
-			Length:  1,
-		}
-
-		vectors[1] = &vector.Vector{
-			Col:     nil,
-			Nsp:     &nulls.Nulls{},
-			Typ:     destType,
-			IsConst: false,
-			Length:  0,
-		}
-		return vectors
-	}
-	// decimal(10,5)
-	leftType := types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 5}
-	//timestamp
-	destType := types.Type{Oid: types.T_timestamp, Size: 8}
-
-	procs := makeProcess()
-	cases := []struct {
-		name       string
-		vecs       []*vector.Vector
-		proc       *process.Process
-		wantBytes  interface{}
-		wantType   types.Type
-		wantScalar bool
-	}{
-		{
-			name:       "TEST01",
-			vecs:       makeTempVector(33333300, leftType, true, destType),
-			proc:       procs,
-			wantBytes:  []types.Timestamp{333},
-			wantType:   destType,
-			wantScalar: true,
-		},
-		{
-			name:       "TEST02", //cast(333.33300 as decimal(10, 4))
-			vecs:       makeTempVector(33333300, leftType, false, destType),
-			proc:       procs,
-			wantBytes:  []types.Timestamp{333},
-			wantType:   destType,
-			wantScalar: false,
-		},
-	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			castRes, err := Cast(c.vecs, c.proc)
-			if err != nil {
-				t.Fatal(err)
-			}
-			require.Equal(t, c.wantBytes, castRes.Col)
-			require.Equal(t, c.wantType.Oid, castRes.Typ.Oid)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
-		})
-	}
-
-}
-
-func TestCastDecimal128AsTimestamp(t *testing.T) {
-	// Cast converts decimal128 to decimal128
-	makeTempVector := func(left types.Decimal128, leftType types.Type, leftScalar bool, destType types.Type) []*vector.Vector {
-		vectors := make([]*vector.Vector, 2)
-		vectors[0] = &vector.Vector{
-			Col:     []types.Decimal128{left},
-			Nsp:     &nulls.Nulls{},
-			Typ:     leftType,
-			IsConst: leftScalar,
-			Length:  1,
-		}
-
-		vectors[1] = &vector.Vector{
-			Col:     nil,
-			Nsp:     &nulls.Nulls{},
-			Typ:     destType,
-			IsConst: false,
-			Length:  0,
-		}
-		return vectors
-	}
-
-	leftType1 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}
-	leftType2 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: 5}
-	leftType3 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}
-	destType := types.Type{Oid: types.T_timestamp, Size: 8}
-
-	procs := makeProcess()
-	cases := []struct {
-		name       string
-		vecs       []*vector.Vector
-		proc       *process.Process
-		wantBytes  interface{}
-		wantType   types.Type
-		wantScalar bool
-	}{
-		{
-			name:       "TEST01", //cast(333.33300 as decimal(20, 5))
-			vecs:       makeTempVector(types.Decimal128{Lo: 33333300, Hi: 0}, leftType1, true, destType),
-			proc:       procs,
-			wantBytes:  []types.Timestamp{333},
-			wantType:   destType,
-			wantScalar: true,
-		},
-		{
-			name:       "Test02",
-			vecs:       makeTempVector(types.Decimal128{Lo: 33333300, Hi: 0}, leftType1, false, destType),
-			proc:       procs,
-			wantBytes:  []types.Timestamp{333},
-			wantType:   destType,
-			wantScalar: false,
-		},
-		{
-			//types.Decimal128{Lo: 156783300, Hi: 0}, resType2
-			name:       "Test03",
-			vecs:       makeTempVector(types.Decimal128{Lo: 156783300, Hi: 0}, leftType2, false, destType),
-			proc:       procs,
-			wantBytes:  []types.Timestamp{1567},
-			wantType:   destType,
-			wantScalar: false,
-		},
-		{
-			name:       "Test04",
-			vecs:       makeTempVector(types.Decimal128{Lo: -123450000, Hi: -1}, leftType3, false, destType),
-			proc:       procs,
-			wantBytes:  []types.Timestamp{-1234},
-			wantType:   destType,
-			wantScalar: false,
-		},
-	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			castRes, err := Cast(c.vecs, c.proc)
-			if err != nil {
-				t.Fatal(err)
-			}
-			require.Equal(t, c.wantBytes, castRes.Col)
-			require.Equal(t, c.wantType.Oid, castRes.Typ.Oid)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
-		})
-	}
-
-}
-
-func TestCastDecimal128AsTimestamp2(t *testing.T) {
-	d128 := types.Type{
-		Oid:       types.T_decimal128,
-		Size:      16,
-		Precision: 20,
-		Width:     20,
-		Scale:     5,
-	}
-	ts := types.Type{
-		Oid:  types.T_timestamp,
-		Size: 8,
-	}
-
-	makeDecimal128Vector := func(values []types.Decimal128, precision int32, scale int32) *vector.Vector {
-		vec := vector.New(d128)
-		cols := make([]types.Decimal128, len(values))
-		vec.Col = cols
-		return vec
-	}
-
-	makeTimeStampVector := func(values []types.Timestamp) *vector.Vector {
-		vec := vector.New(ts)
-		ds := make([]types.Timestamp, len(values))
-		vec.Col = ds
-		return vec
-	}
-
-	convey.Convey("TestCol", t, func() {
-		type kase struct {
-			s    types.Decimal128
-			want types.Timestamp
-		}
-
-		kases := []kase{
-			{
-				s:    types.Decimal128{Lo: 33333300, Hi: 0},
-				want: types.Timestamp(333),
-			},
-			{
-				s:    types.Decimal128{Lo: 156783300, Hi: 0},
-				want: types.Timestamp(1567),
-			},
-			{
-				s:    types.Decimal128{Lo: 256783300, Hi: 0},
-				want: types.Timestamp(2567),
-			},
-		}
-
-		var inDecs []types.Decimal128
-		var wantDecs []types.Timestamp
-		for _, k := range kases {
-			inDecs = append(inDecs, k.s)
-			wantDecs = append(wantDecs, k.want)
-		}
-
-		decimal128Vector := makeDecimal128Vector(inDecs, d128.Precision, d128.Scale)
-		timestampVector := makeTimeStampVector(wantDecs)
-		destVector := testutil.MakeTimeStampVector(nil, nil)
-		proc := testutil.NewProc()
-		res, err := Cast([]*vector.Vector{decimal128Vector, destVector}, proc)
-		convey.So(err, convey.ShouldBeNil)
-		compare := testutil.CompareVectors(timestampVector, res)
 		convey.So(compare, convey.ShouldBeTrue)
 	})
 }

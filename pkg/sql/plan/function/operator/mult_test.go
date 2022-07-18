@@ -41,14 +41,14 @@ func TestMult(t *testing.T) {
 
 	leftType1 := types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 5}
 	rightType1 := types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 5}
-	resType1 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: 10}
-	multDecimal64(t, 33333300, leftType1, -123450000, rightType1, types.Decimal128{Lo: -4114995885000000, Hi: -1}, resType1)
+	resType1 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 34, Scale: 10}
+	multDecimal64(t, types.Decimal64FromInt32(33333300), leftType1, types.Decimal64FromInt32(-123450000), rightType1, types.Decimal128FromString("-4114995885000000"), resType1)
 
 	leftType2 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}
 	rightType2 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}
-	resType2 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: 10}
-	multDecimal128(t, types.Decimal128{Lo: 33333300, Hi: 0}, leftType2, types.Decimal128{Lo: -123450000, Hi: -1}, rightType2,
-		types.Decimal128{Lo: -4114995885000000, Hi: -1}, resType2)
+	resType2 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 34, Scale: 10}
+	multDecimal128(t, types.Decimal128FromInt32(33333300), leftType2, types.Decimal128FromInt32(-123450000), rightType2,
+		types.Decimal128FromString("-4114995885000000"), resType2)
 }
 
 // Unit test input of int and float parameters of mult operator

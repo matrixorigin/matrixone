@@ -19,6 +19,18 @@
 
 #include "mo.h"
 
+#include <stdlib.h>
+
+static const int32_t RC_SUCCESS = 0;
+static const int32_t RC_INFO = 1;
+static const int32_t RC_WARN = 2;
+
+static const int32_t RC_INTERNAL_ERROR = 1001;
+
+static const int32_t RC_DIVISON_BY_ZERO = 2000;
+static const int32_t RC_OUT_OF_RANGE = 2001;
+static const int32_t RC_INVALID_ARGUMENT = 2002;
+
 #include "bitmap.h"
 
 #endif /* _MO_IMPL_H_ */
