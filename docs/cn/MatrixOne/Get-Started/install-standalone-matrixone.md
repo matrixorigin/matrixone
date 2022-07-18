@@ -1,6 +1,12 @@
 # **安装单机版 MatrixOne**
 
-作为一款开源数据库，MatrixOne 目前支持主流的 Linux 和 MacOS 系统。你可以直接从[源代码](#使用源代码搭建)搭建单机版本的 MatrixOne，也可以使用[Docker](#使用docker)安装部署。
+作为一款开源数据库，MatrixOne 目前支持主流的 Linux 和 MacOS 系统。你可以通过以下三种方法安装单机版 MatrixOne：
+
+- [方法 1：使用源代码搭建](#方法 1：使用源代码搭建)
+- [方法 2：下载二进制包](#方法 2：下载二进制包)
+- [方法 3：使用 Docker](方法 3：使用 Docker)
+
+推荐硬件规格：x86 CPU；4核；32GB 内存，支持 CentOS 7+ 操作系统。
 
 ## **方法 1：使用源代码搭建**
 
@@ -29,6 +35,7 @@ $ cd matrixone
 
 ```
 $ git clone https://github.com/matrixorigin/matrixone.git
+$ git checkout 0.5.0
 $ cd matrixone
 ```
 
@@ -97,10 +104,18 @@ $ docker --version
 
 #### 2. 创建并运行容器
 
-使用以下命令将从 Docker Hub 中拉取最近的 MatrixOne 镜像：
+使用以下命令将从 Docker Hub 中拉取 MatrixOne 镜像，你可以选择最新的镜像，或稳定版本的镜像。
+
+- 最新版本的镜像：
 
 ```
-$ docker run -d -p 6001:6001 --名称 matrixone matrixorigin/matrixone:latest
+$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
+```
+
+- 0.5.0 稳定版本的镜像
+
+```
+$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
 ```
 
 运行 Docker Hub 时需要输入用户名和密码，获取用户名和密码可以参考下一步骤 - 连接 MatrixOne 服务

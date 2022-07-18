@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/container/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 )
 
 // Or performs union operation on Nulls n,m and store the result in r
@@ -73,14 +73,6 @@ func Any(n *Nulls) bool {
 	return !n.Np.IsEmpty()
 }
 
-// Any returns true if any bit in the Nulls is set, otherwise it will return false.
-func PreciseAny(n *Nulls) bool {
-	if n.Np == nil {
-		return false
-	}
-	return len(n.Np.ToArray()) != 0
-}
-
 // Size estimates the memory usage of the Nulls.
 func Size(n *Nulls) int {
 	if n.Np == nil {
@@ -94,7 +86,7 @@ func Length(n *Nulls) int {
 	if n.Np == nil {
 		return 0
 	}
-	return int(n.Np.Numbers())
+	return int(n.Np.Count())
 }
 
 func String(n *Nulls) string {
@@ -248,7 +240,7 @@ func (n *Nulls) Show() ([]byte, error) {
 	if n.Np == nil {
 		return nil, nil
 	}
-	return n.Np.Show(), nil
+	return n.Np.Marshal(), nil
 }
 
 func (n *Nulls) Read(data []byte) error {
@@ -256,7 +248,8 @@ func (n *Nulls) Read(data []byte) error {
 		return nil
 	}
 	n.Np = bitmap.New(0)
-	return n.Np.Read(data)
+	n.Np.Unmarshal(data)
+	return nil
 }
 
 func (n *Nulls) Or(m *Nulls) *Nulls {
