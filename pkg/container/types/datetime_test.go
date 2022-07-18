@@ -16,9 +16,10 @@ package types
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 var dayInMonth []int = []int{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
@@ -298,23 +299,15 @@ func TestUTC(t *testing.T) {
 }
 
 func TestUnix(t *testing.T) {
-	cases := []struct {
-		time      string
-		timestamp int64
-	}{
-		{"1955-08-25 09:21:34", -452961506},
-		{"2012-01-25 09:21:34", 1327483294},
-	}
+	for _, timestr := range []string{"1955-08-25 09:21:34", "2012-01-25 09:21:34"} {
+		motime, _ := ParseDatetime(timestr, 6)
+		motimeUnix := motime.UnixTimestamp()
+		goLcoalTime, _ := time.ParseInLocation("2006-01-02 15:04:05", timestr, time.Local)
+		goUnix := goLcoalTime.Unix()
 
-	for _, c := range cases {
-		time, _ := ParseDatetime(c.time, 6)
-		unix_time := time.UnixTimestamp()
-		if unix_time != c.timestamp {
-			t.Errorf("UnixTimestamp want %d but got %d ", c.timestamp, unix_time)
-		}
-		parse_time := FromUnix(unix_time)
-		if time != parse_time {
-			t.Errorf("FromUnix want %s but got %s ", time, parse_time)
-		}
+		require.Equal(t, motimeUnix, goUnix)
+
+		parse_time := FromUnix(motimeUnix)
+		require.Equal(t, motime, parse_time)
 	}
 }
