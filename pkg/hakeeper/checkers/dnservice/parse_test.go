@@ -15,11 +15,10 @@
 package dnservice
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-
 	"github.com/stretchr/testify/require"
 )
 

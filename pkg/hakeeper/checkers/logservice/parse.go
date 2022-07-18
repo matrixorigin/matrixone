@@ -14,9 +14,9 @@
 package logservice
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
