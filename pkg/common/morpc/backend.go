@@ -223,6 +223,7 @@ func (rb *remoteBackend) adjust() {
 	rb.logger = logutil.Adjust(rb.logger).With(zap.String("remote", rb.remote))
 	rb.options.goettyOptions = append(rb.options.goettyOptions,
 		goetty.WithCodec(rb.codec, rb.codec),
+		goetty.WithDisableReleaseOutBuf(),
 		goetty.WithLogger(rb.logger))
 }
 
@@ -302,6 +303,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	rb.logger.Info("write loop started")
 	defer func() {
 		rb.closeConn()
+		rb.conn.OutBuf().Release()
 		rb.logger.Info("write loop stopped")
 	}()
 
