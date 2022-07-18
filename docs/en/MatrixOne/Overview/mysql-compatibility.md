@@ -1,12 +1,12 @@
-# **MySQL Compatibility** 
+# **MySQL Compatibility**
 
-MatrixOne SQL syntax conforms with MySQL 8.0.23 version. 
+MatrixOne SQL syntax conforms with MySQL 8.0.23 version.
 
 |  SQL Type   | SQL Syntax  |  Compability with MySQL8.0.23   |
 |  ----  | ----  |  ----  |
 | DDL  | CREATE DATABASE | A database with Chinese name is not supported. |
 |   |   | Names with Latins support limitedly.  |
-|   |   | CHARSET, COLLATE, ENCRYPTION can be used but don't work. |
+|   |   | `CHARSET`, `COLLATE`, `ENCRYPTION` can be used but don't work. |
 |   | CREATE TABLE | Temporary tables are not supported.  |
 |   |   | Partition tables are not supported.  |
 |   |   | Create table .. as clause is not supported now. |

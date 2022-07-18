@@ -27,6 +27,7 @@ import (
 	"github.com/lni/dragonboat/v4/logger"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -61,6 +62,8 @@ type Service struct {
 	server   morpc.RPCServer
 	pool     *sync.Pool
 	respPool *sync.Pool
+	stopper  *stopper.Stopper
+	haClient LogHAKeeperClient
 }
 
 func NewService(cfg Config) (*Service, error) {
@@ -68,7 +71,6 @@ func NewService(cfg Config) (*Service, error) {
 		return nil, err
 	}
 	cfg.Fill()
-	plog.Infof("calling newLogStore")
 	store, err := newLogStore(cfg)
 	if err != nil {
 		plog.Errorf("failed to create log store %v", err)
@@ -82,10 +84,10 @@ func NewService(cfg Config) (*Service, error) {
 	respPool.New = func() interface{} {
 		return &RPCResponse{pool: respPool}
 	}
-
 	mf := func() morpc.Message {
 		return pool.Get().(*RPCRequest)
 	}
+	// TODO: check and fix all these magic numbers
 	codec := morpc.NewMessageCodec(mf, 16*1024)
 	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.ServiceListenAddress, codec,
 		morpc.WithServerGoettyOptions(goetty.WithReleaseMsgFunc(func(i interface{}) {
@@ -94,17 +96,15 @@ func NewService(cfg Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	plog.Infof("store created")
 	service := &Service{
 		cfg:      cfg,
 		store:    store,
 		server:   server,
 		pool:     pool,
 		respPool: respPool,
+		stopper:  stopper.NewStopper("log-service"),
 	}
 	server.RegisterRequestHandler(service.handleRPCRequest)
-
 	// TODO: before making the service available to the outside world, restore all
 	// replicas already known to the local store
 	if err := server.Start(); err != nil {
@@ -114,11 +114,22 @@ func NewService(cfg Config) (*Service, error) {
 		}
 		return nil, err
 	}
-	plog.Infof("server started")
+	// start the heartbeat worker
+	if !cfg.DisableWorkers {
+		if err := service.stopper.RunTask(func(ctx context.Context) {
+			service.heartbeatWorker(ctx)
+		}); err != nil {
+			return nil, err
+		}
+	}
 	return service, nil
 }
 
 func (s *Service) Close() (err error) {
+	s.stopper.Stop()
+	if s.haClient != nil {
+		err = firstError(err, s.haClient.Close())
+	}
 	err = firstError(err, s.server.Close())
 	if s.store != nil {
 		err = firstError(err, s.store.close())
@@ -140,7 +151,6 @@ func (s *Service) handleRPCRequest(req morpc.Message,
 	resp, records := s.handle(rr.Request, rr.GetPayloadField())
 	var recs []byte
 	if len(records.Records) > 0 {
-		plog.Infof("total recs: %d", len(records.Records))
 		recs = MustMarshal(&records)
 	}
 	resp.RequestID = rr.RequestID

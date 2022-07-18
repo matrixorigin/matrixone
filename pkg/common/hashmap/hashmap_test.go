@@ -48,3 +48,24 @@ func TestInsert(t *testing.T) {
 	bat.Clean(m)
 	require.Equal(t, int64(0), mheap.Size(m))
 }
+
+func TestIterator(t *testing.T) {
+	mp := NewStrMap(false)
+	ts := []types.Type{
+		types.New(types.T_int8, 0, 0, 0),
+		types.New(types.T_int16, 0, 0, 0),
+		types.New(types.T_int32, 0, 0, 0),
+		types.New(types.T_int64, 0, 0, 0),
+		types.New(types.T_decimal64, 0, 0, 0),
+		types.New(types.T_char, 0, 0, 0),
+	}
+	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
+	bat := testutil.NewBatch(ts, false, Rows, m)
+	itr := mp.NewIterator()
+	vs := itr.Insert(0, Rows, bat.Vecs)
+	require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
+	vs = itr.Find(0, Rows, bat.Vecs)
+	require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
+	bat.Clean(m)
+	require.Equal(t, int64(0), mheap.Size(m))
+}
