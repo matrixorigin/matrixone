@@ -126,10 +126,12 @@ func newLogStore(cfg Config) (*store, error) {
 	if err != nil {
 		return nil, err
 	}
+	haCfg := hakeeper.Config{}
+	haCfg.Fill()
 	ls := &store{
 		cfg:     cfg,
 		nh:      nh,
-		checker: checkers.NewCoordinator(),
+		checker: checkers.NewCoordinator(haCfg),
 		alloc:   newIDAllocator(),
 		stopper: stopper.NewStopper("log-store"),
 	}
