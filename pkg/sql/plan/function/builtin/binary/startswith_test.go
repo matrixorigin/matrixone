@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"

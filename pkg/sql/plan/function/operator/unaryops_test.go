@@ -17,13 +17,13 @@ package operator
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
 
 func TestUnaryMinusDecimal64(t *testing.T) {
-	input := testutil.MakeDecimal64Vector([]int64{123, 234, 345, 0}, []uint64{3})
+	input := testutil.MakeDecimal64Vector([]int64{123, 234, 345, 0}, []uint64{3}, testutil.MakeDecimal64Type(6, 2))
 	testProc := testutil.NewProc()
 	output, err := UnaryMinusDecimal64([]*vector.Vector{input}, testProc)
 	require.NoError(t, err)
@@ -33,7 +33,7 @@ func TestUnaryMinusDecimal64(t *testing.T) {
 }
 
 func TestUnaryMinusDecimal128(t *testing.T) {
-	input := testutil.MakeDecimal128Vector([]uint64{123, 234, 345, 0}, []uint64{3})
+	input := testutil.MakeDecimal128Vector([]uint64{123, 234, 345, 0}, []uint64{3}, testutil.MakeDecimal128Type(38, 10))
 	testProc := testutil.NewProc()
 	output, err := UnaryMinusDecimal128([]*vector.Vector{input}, testProc)
 	require.NoError(t, err)
