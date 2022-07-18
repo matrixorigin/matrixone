@@ -187,7 +187,7 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	}
 	node.chain.AddDeleteCnt(uint32(node.mask.GetCardinality()))
 	node.chain.mvcc.IncChangeNodeCnt()
-	return
+	return node.OnApply()
 }
 
 func (node *DeleteNode) GeneralString() string {
