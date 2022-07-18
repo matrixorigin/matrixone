@@ -53,6 +53,8 @@ const (
 	TxnNil               // placeholder
 )
 
+const MaxPrepareNumberInOneSession = 64
+
 // TxnState represents for Transaction Machine
 type TxnState struct {
 	state     int
@@ -216,8 +218,14 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 	return ses
 }
 
-func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) {
+func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error {
+	if _, ok := ses.prepareStmts[name]; !ok {
+		if len(ses.prepareStmts) >= MaxPrepareNumberInOneSession {
+			return errors.New("", fmt.Sprintf("more than '%d' prepare statment in one session", MaxPrepareNumberInOneSession))
+		}
+	}
 	ses.prepareStmts[name] = prepareStmt
+	return nil
 }
 
 func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
