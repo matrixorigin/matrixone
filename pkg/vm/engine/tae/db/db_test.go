@@ -2298,7 +2298,7 @@ func TestTruncate(t *testing.T) {
 			})
 		}
 		wg.Add(1)
-		_ = p.Submit(tryAppend(i + 1))
+		_ = p.Submit(tryAppend(i))
 		time.Sleep(time.Millisecond * 2)
 	}
 	wg.Wait()
