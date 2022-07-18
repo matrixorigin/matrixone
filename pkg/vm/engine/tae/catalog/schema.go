@@ -421,29 +421,22 @@ func (s *Schema) AppendColWithDefault(name string, typ types.Type, val Default) 
 }
 
 func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
+	var attrDefault Default
 	if attr.Default.Exist {
-		attrDefault := Default{
+		attrDefault = Default{
 			Set:   attr.Default.Exist,
 			Value: attr.Default.Value,
 			Null:  attr.Default.IsNull,
 		}
-		def := &ColDef{
-			Name:    attr.Name,
-			Type:    attr.Type,
-			SortIdx: -1,
-			Comment: attr.Comment,
-			Default: attrDefault,
-		}
-		return s.AppendColDef(def)
-	} else {
-		def := &ColDef{
-			Name:    attr.Name,
-			Type:    attr.Type,
-			SortIdx: -1,
-			Comment: attr.Comment,
-		}
-		return s.AppendColDef(def)
 	}
+	def := &ColDef{
+		Name:    attr.Name,
+		Type:    attr.Type,
+		SortIdx: -1,
+		Comment: attr.Comment,
+		Default: attrDefault,
+	}
+	return s.AppendColDef(def)
 }
 
 func (s *Schema) String() string {
