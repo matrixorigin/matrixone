@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/mohae/deepcopy"
 	"go.uber.org/zap"
 )
 
@@ -32,25 +32,15 @@ type Manager struct {
 }
 
 func NewBootstrapManager(cluster pb.ClusterInfo, logger *zap.Logger) *Manager {
-	var dnShard []metadata.DNShardRecord
-	var logShard []metadata.LogShardRecord
-
-	if cluster.DNShards != nil {
-		dnShard = make([]metadata.DNShardRecord, len(cluster.DNShards))
-		copy(dnShard, cluster.DNShards)
-	}
-
-	if cluster.LogShards != nil {
-		logShard = make([]metadata.LogShardRecord, len(cluster.LogShards))
-		copy(logShard, cluster.LogShards)
+	copied := deepcopy.Copy(cluster)
+	nc, ok := copied.(pb.ClusterInfo)
+	if !ok {
+		panic("deep copy failed")
 	}
 
 	manager := &Manager{
-		cluster: pb.ClusterInfo{
-			DNShards:  dnShard,
-			LogShards: logShard,
-		},
-		logger: logutil.Adjust(logger).Named("hakeeper"),
+		cluster: nc,
+		logger:  logutil.Adjust(logger).Named("hakeeper"),
 	}
 
 	return manager

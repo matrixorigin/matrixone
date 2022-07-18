@@ -61,7 +61,7 @@ message LogShardInfo {
 // LogReplicaInfo contains information of a log replica.
 message LogReplicaInfo {
   LogShardInfo LogShardInfo = 1 [(gogoproto.nullable) = false, (gogoproto.embed) = true];
-  // ReplciaID is the ID of a replica within the Log shard. 
+  // ReplicaID is the ID of a replica within the Log shard.
   uint64 ReplicaID = 2;
 }
 
@@ -75,7 +75,7 @@ message CNStoreHeartbeat {
 message LogStoreHeartbeat {
   // UUID is the uuid of the Log Store.
   string UUID = 1;
-  
+
   string RaftAddress    = 2;
   string ServiceAddress = 3;
   string GossipAddress  = 4;
@@ -182,7 +182,7 @@ enum ErrorCode {
   Rejected              = 7;
   ShardNotReady         = 8;
   SystemClosed          = 9;
-  
+
   LsnAlreadyTruncated   = 100;
   OutOfRange            = 101;
   NotLeaseHolder        = 102;
@@ -248,6 +248,9 @@ message Replica {
   uint64 ShardID   = 2;
   uint64 ReplicaID = 3;
   uint64 Epoch     = 4;
+
+  // LogShardID only used for DNShard.
+  uint64 LogShardID = 5;
 }
 
 // ConfigChangeType indicates config change command type.
@@ -288,13 +291,13 @@ message ScheduleCommand {
   ServiceType ServiceType     = 4;
   ShutdownStore ShutdownStore = 5;
 }
-      
+
 message CommandBatch {
   uint64 Term                       = 1;
   repeated ScheduleCommand Commands = 2 [(gogoproto.nullable) = false];
 }
 
-// CNStoreInfo contains infroamtion on a CN store.
+// CNStoreInfo contains information on a CN store.
 message CNStoreInfo {
   uint64 Tick                 = 1;
   string ServiceAddress       = 2;
@@ -307,7 +310,7 @@ message CNState {
 }
 
 
-// DNStoreInfo contins information on a DN store.
+// DNStoreInfo contains information on a DN store.
 message DNStoreInfo {
   uint64 Tick                 = 1;
   string ServiceAddress       = 2;
