@@ -2,7 +2,6 @@
   <p align="center">
    <img alt="MatrixOne All in One" height="50" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/logo.png?raw=true">
   </p>
-  <img src="" alt="license"/>
   </a>
   <a href="https://github.com/matrixorigin/matrixone/blob/main/LICENSE">
     <img src="https://img.shields.io/badge/License-Apache%202.0-red.svg" alt="license"/>
