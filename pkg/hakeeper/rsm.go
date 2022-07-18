@@ -25,6 +25,7 @@ import (
 
 	"github.com/lni/dragonboat/v4/logger"
 	sm "github.com/lni/dragonboat/v4/statemachine"
+	"github.com/mohae/deepcopy"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -388,14 +389,19 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 }
 
 func (s *stateMachine) handleStateQuery() interface{} {
-	// FIXME: pretty sure we need to deepcopy here
-	return &pb.CheckerState{
+	internal := &pb.CheckerState{
 		Tick:        s.state.Tick,
 		ClusterInfo: s.state.ClusterInfo,
 		DNState:     s.state.DNState,
 		LogState:    s.state.LogState,
 		State:       s.state.State,
 	}
+	copied := deepcopy.Copy(internal)
+	result, ok := copied.(*pb.CheckerState)
+	if !ok {
+		panic("deep copy failed")
+	}
+	return result
 }
 
 func (s *stateMachine) handleShardIDQuery(name string) *logShardIDQueryResult {
