@@ -18,11 +18,17 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 )
+
+func init() {
+	OneInt64s = make([]int64, UnitLimit)
+	for i := range OneInt64s {
+		OneInt64s[i] = 1
+	}
+}
 
 func NewStrMap(hasNull bool) *StrHashMap {
 	mp := &hashtable.StringHashMap{}
@@ -31,12 +37,25 @@ func NewStrMap(hasNull bool) *StrHashMap {
 		hashMap:       mp,
 		hasNull:       hasNull,
 		values:        make([]uint64, UnitLimit),
+		zValues:       make([]int64, UnitLimit),
 		keys:          make([][]byte, UnitLimit),
 		strHashStates: make([][3]uint64, UnitLimit),
 	}
 }
 
-// Insert a value, return true if it is new, otherwise false
+func (m *StrHashMap) NewIterator() Iterator {
+	return &strHashmapIterator{mp: m}
+}
+
+func (m *StrHashMap) GroupCount() uint64 {
+	return m.rows
+}
+
+func (m *StrHashMap) AddGroup() {
+	m.rows++
+}
+
+// InsertValue insert a value, return true if it is new, otherwise false
 // never handle null
 func (m *StrHashMap) InsertValue(val any) bool {
 	defer func() { m.keys[0] = m.keys[0][:0] }()
@@ -81,14 +100,7 @@ func (m *StrHashMap) Insert(vecs []*vector.Vector, row int) bool {
 		case 16:
 			fillGroupStr[types.Decimal128](m, vec, 1, 16, row)
 		default:
-			vs := vec.Col.(*types.Bytes)
-			if !nulls.Any(vec.Nsp) {
-				m.keys[0] = append(m.keys[0], vs.Get(int64(row))...)
-			} else {
-				if !nulls.Contains(vec.Nsp, uint64(row)) {
-					m.keys[0] = append(m.keys[0], vs.Get(int64(row))...)
-				}
-			}
+			fillStringGroupStr(m, vec, 1, row)
 		}
 	}
 	if l := len(m.keys[0]); l < 16 {
@@ -102,10 +114,36 @@ func (m *StrHashMap) Insert(vecs []*vector.Vector, row int) bool {
 	return false
 }
 
-/*
-func (m *HashMap) InsertBatch() {
+func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int) {
+	vs := vector.GetStrColumn(vec)
+	if !vec.GetNulls().Any() {
+		for i := 0; i < n; i++ {
+			if m.hasNull {
+				m.keys[i] = append(m.keys[i], byte(0))
+			}
+			m.keys[i] = append(m.keys[i], vs.Get(int64(i+start))...)
+		}
+	} else {
+		nsp := vec.GetNulls()
+		for i := 0; i < n; i++ {
+			hasNull := nsp.Contains(uint64(i + start))
+			if m.hasNull {
+				if hasNull {
+					m.keys[i] = append(m.keys[i], byte(1))
+				} else {
+					m.keys[i] = append(m.keys[i], byte(0))
+					m.keys[i] = append(m.keys[i], vs.Get(int64(i+start))...)
+				}
+			} else {
+				if hasNull {
+					m.zValues[i] = 0
+					continue
+				}
+				m.keys[i] = append(m.keys[i], vs.Get(int64(i+start))...)
+			}
+		}
+	}
 }
-*/
 
 func fillGroupStr[T any](m *StrHashMap, vec *vector.Vector, n int, sz int, start int) {
 	vs := vector.GetFixedVectorValues[T](vec, int(sz))
@@ -130,6 +168,7 @@ func fillGroupStr[T any](m *StrHashMap, vec *vector.Vector, n int, sz int, start
 				}
 			} else {
 				if hasNull {
+					m.zValues[i] = 0
 					continue
 				}
 				m.keys[i] = append(m.keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
