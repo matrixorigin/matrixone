@@ -12,18 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/*
+Package logservice implement MO's LogService component.
+*/
 package logservice
 
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/dragonboat/v4/logger"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -117,7 +120,9 @@ func NewService(cfg Config) (*Service, error) {
 
 func (s *Service) Close() (err error) {
 	err = firstError(err, s.server.Close())
-	err = firstError(err, s.store.close())
+	if s.store != nil {
+		err = firstError(err, s.store.close())
+	}
 	return err
 }
 
@@ -337,13 +342,8 @@ func (s *Service) handleDNHeartbeat(req pb.Request) pb.Response {
 
 func (s *Service) handleCheckHAKeeper(req pb.Request) pb.Response {
 	resp := getResponse(req)
-	hb := s.store.getHeartbeatMessage()
-	for _, replicaInfo := range hb.Replicas {
-		si := replicaInfo.LogShardInfo
-		if si.ShardID == hakeeper.DefaultHAKeeperShardID {
-			resp.IsHAKeeper = true
-			return resp
-		}
+	if atomic.LoadUint64(&s.store.haKeeperReplicaID) != 0 {
+		resp.IsHAKeeper = true
 	}
 	return resp
 }

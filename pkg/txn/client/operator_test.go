@@ -263,7 +263,7 @@ func TestReadOnAbortedTxn(t *testing.T) {
 		})
 		responses, err := tc.Read(ctx, []txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1})})
 		assert.Error(t, err)
-		assert.Equal(t, errTxnAborted, err)
+		assert.Equal(t, errTxnClosed, err)
 		assert.Empty(t, responses)
 	})
 }
@@ -278,7 +278,7 @@ func TestWriteOnAbortedTxn(t *testing.T) {
 		})
 		result, err := tc.Write(ctx, []txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1})})
 		assert.Error(t, err)
-		assert.Equal(t, errTxnAborted, err)
+		assert.Equal(t, errTxnClosed, err)
 		assert.Empty(t, result)
 	})
 }

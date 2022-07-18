@@ -21,36 +21,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
-func (builder *QueryBuilder) flattenSubqueries(nodeId int32, expr *plan.Expr, ctx *BindContext) (int32, *plan.Expr, error) {
+func (builder *QueryBuilder) flattenSubqueries(nodeID int32, expr *plan.Expr, ctx *BindContext) (int32, *plan.Expr, error) {
 	var err error
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for i, arg := range exprImpl.F.Args {
-			nodeId, exprImpl.F.Args[i], err = builder.flattenSubqueries(nodeId, arg, ctx)
+			nodeID, exprImpl.F.Args[i], err = builder.flattenSubqueries(nodeID, arg, ctx)
 			if err != nil {
 				return 0, nil, err
 			}
 		}
 
 	case *plan.Expr_Sub:
-		nodeId, expr, err = builder.flattenSubquery(nodeId, exprImpl.Sub, ctx)
+		nodeID, expr, err = builder.flattenSubquery(nodeID, exprImpl.Sub, ctx)
 	}
 
-	return nodeId, expr, err
+	return nodeID, expr, err
 }
 
-func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.SubqueryRef, ctx *BindContext) (int32, *plan.Expr, error) {
+func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.SubqueryRef, ctx *BindContext) (int32, *plan.Expr, error) {
 	// TODO: use SINGLE JOIN for scalar subquery and MARK JOIN for quantified subquery
 
-	subId := subquery.NodeId
-	subCtx := builder.ctxByNode[subId]
+	subID := subquery.NodeId
+	subCtx := builder.ctxByNode[subID]
 
 	if subquery.Typ == plan.SubqueryRef_SCALAR && !subCtx.hasSingleRow {
 		return 0, nil, errors.New("", "runtime check of scalar subquery will be supported in future version")
 	}
 
-	subId, preds, err := builder.pullupCorrelatedPredicates(subId, subCtx)
+	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -84,22 +84,22 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 			joinPreds = append(joinPreds, alwaysTrue)
 		}
 
-		nodeId = builder.appendNode(&plan.Node{
+		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeId, subId},
+			Children: []int32{nodeID, subID},
 			JoinType: plan.Node_LEFT,
 			OnList:   joinPreds,
 		}, ctx)
 
 		if len(filterPreds) > 0 {
-			nodeId = builder.appendNode(&plan.Node{
+			nodeID = builder.appendNode(&plan.Node{
 				NodeType:   plan.Node_FILTER,
-				Children:   []int32{nodeId},
+				Children:   []int32{nodeID},
 				FilterList: filterPreds,
 			}, ctx)
 		}
 
-		return nodeId, &plan.Expr{
+		return nodeID, &plan.Expr{
 			Typ: subCtx.projects[0].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -115,14 +115,14 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 			joinPreds = append(joinPreds, alwaysTrue)
 		}
 
-		nodeId = builder.appendNode(&plan.Node{
+		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeId, subId},
+			Children: []int32{nodeID, subID},
 			JoinType: plan.Node_SEMI,
 			OnList:   joinPreds,
 		}, ctx)
 
-		return nodeId, nil, nil
+		return nodeID, nil, nil
 
 	case plan.SubqueryRef_NOT_EXISTS:
 		// Uncorrelated subquery
@@ -130,14 +130,14 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 			joinPreds = append(joinPreds, alwaysTrue)
 		}
 
-		nodeId = builder.appendNode(&plan.Node{
+		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeId, subId},
+			Children: []int32{nodeID, subID},
 			JoinType: plan.Node_ANTI,
 			OnList:   joinPreds,
 		}, ctx)
 
-		return nodeId, nil, nil
+		return nodeID, nil, nil
 
 	case plan.SubqueryRef_IN:
 		expr, err := bindFuncExprImplByPlanExpr("=", []*plan.Expr{
@@ -158,14 +158,14 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 
 		joinPreds = append(joinPreds, expr)
 
-		nodeId = builder.appendNode(&plan.Node{
+		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeId, subId},
+			Children: []int32{nodeID, subID},
 			JoinType: plan.Node_SEMI,
 			OnList:   joinPreds,
 		}, ctx)
 
-		return nodeId, nil, nil
+		return nodeID, nil, nil
 
 	case plan.SubqueryRef_NOT_IN:
 		expr, err := bindFuncExprImplByPlanExpr("=", []*plan.Expr{
@@ -186,14 +186,14 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 
 		joinPreds = append(joinPreds, expr)
 
-		nodeId = builder.appendNode(&plan.Node{
+		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeId, subId},
+			Children: []int32{nodeID, subID},
 			JoinType: plan.Node_ANTI,
 			OnList:   joinPreds,
 		}, ctx)
 
-		return nodeId, nil, nil
+		return nodeID, nil, nil
 
 	case plan.SubqueryRef_ANY:
 		expr, err := bindFuncExprImplByPlanExpr(subquery.Op, []*plan.Expr{
@@ -214,14 +214,14 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 
 		joinPreds = append(joinPreds, expr)
 
-		nodeId = builder.appendNode(&plan.Node{
+		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeId, subId},
+			Children: []int32{nodeID, subID},
 			JoinType: plan.Node_SEMI,
 			OnList:   joinPreds,
 		}, ctx)
 
-		return nodeId, nil, nil
+		return nodeID, nil, nil
 
 	case plan.SubqueryRef_ALL:
 		expr, err := bindFuncExprImplByPlanExpr(subquery.Op, []*plan.Expr{
@@ -247,29 +247,29 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 
 		joinPreds = append(joinPreds, expr)
 
-		nodeId = builder.appendNode(&plan.Node{
+		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeId, subId},
+			Children: []int32{nodeID, subID},
 			JoinType: plan.Node_ANTI,
 			OnList:   joinPreds,
 		}, ctx)
 
-		return nodeId, nil, nil
+		return nodeID, nil, nil
 
 	default:
 		return 0, nil, errors.New("", fmt.Sprintf("%s subquery not supported", subquery.Typ.String()))
 	}
 }
 
-func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeId int32, ctx *BindContext) (int32, []*plan.Expr, error) {
-	node := builder.qry.Nodes[nodeId]
+func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeID int32, ctx *BindContext) (int32, []*plan.Expr, error) {
+	node := builder.qry.Nodes[nodeID]
 
 	var preds []*plan.Expr
 	var err error
 
 	var subPreds []*plan.Expr
-	for i, childId := range node.Children {
-		node.Children[i], subPreds, err = builder.pullupCorrelatedPredicates(childId, ctx)
+	for i, childID := range node.Children {
+		node.Children[i], subPreds, err = builder.pullupCorrelatedPredicates(childID, ctx)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -301,13 +301,13 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeId int32, ctx *BindC
 		}
 
 		if len(newFilterList) == 0 {
-			nodeId = node.Children[0]
+			nodeID = node.Children[0]
 		} else {
 			node.FilterList = newFilterList
 		}
 	}
 
-	return nodeId, preds, err
+	return nodeID, preds, err
 }
 
 func (builder *QueryBuilder) pullupThroughAgg(ctx *BindContext, node *plan.Node, tag int32, expr *plan.Expr) *plan.Expr {

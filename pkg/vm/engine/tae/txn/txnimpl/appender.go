@@ -16,11 +16,13 @@ package txnimpl
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 type appendCtx struct {
 	driver data.BlockAppender
 	node   InsertNode
+	anode  txnif.AppendNode
 	start  uint32
 	count  uint32
 }

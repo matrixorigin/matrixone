@@ -55,6 +55,12 @@ func Reset(n *Nulls) {
 	}
 }
 
+func NewWithSize(size int) *Nulls {
+	return &Nulls{
+		Np: bitmap.New(size),
+	}
+}
+
 func New(n *Nulls, size int) {
 	n.Np = bitmap.New(size)
 }
@@ -213,6 +219,29 @@ func Filter(n *Nulls, sels []int64) *Nulls {
 	}
 	n.Np = np
 	return n
+}
+
+func (n *Nulls) Any() bool {
+	if n.Np == nil {
+		return false
+	}
+	return !n.Np.IsEmpty()
+}
+
+func (n *Nulls) Set(row uint64) {
+	if n.Np == nil {
+		n.Np = bitmap.New(int(row) + 1)
+	} else {
+		n.Np.TryExpandWithSize(int(row) + 1)
+	}
+	n.Np.Add(row)
+}
+
+func (n *Nulls) Contains(row uint64) bool {
+	if n.Np != nil {
+		return n.Np.Contains(row)
+	}
+	return false
 }
 
 func (n *Nulls) Show() ([]byte, error) {

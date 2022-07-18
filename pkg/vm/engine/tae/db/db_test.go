@@ -44,29 +44,29 @@ import (
 
 func TestAppend(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
-	defer db.Close()
+	tae := newTestEngine(t, nil)
+	defer tae.Close()
 	schema := catalog.MockSchemaAll(14, 3)
 	schema.BlockMaxRows = options.DefaultBlockMaxRows
 	schema.SegmentMaxBlocks = options.DefaultBlocksPerSegment
+	tae.bindSchema(schema)
 	data := catalog.MockBatch(schema, int(schema.BlockMaxRows*2))
 	defer data.Close()
 	bats := data.Split(4)
 	now := time.Now()
-	createRelationAndAppend(t, db, "db", schema, bats[0], true)
+	tae.createRelAndAppend(bats[0], true)
 	t.Log(time.Since(now))
+	tae.checkRowsByScan(bats[0].Length(), false)
 
-	{
-		txn, _ := db.StartTxn(nil)
-		database, err := txn.GetDatabase("db")
-		assert.Nil(t, err)
-		rel, err := database.GetRelationByName(schema.Name)
-		assert.Nil(t, err)
-		appendClosure(t, bats[1], schema.Name, db, nil)()
-		err = rel.Append(bats[2])
-		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
-	}
+	txn, rel := tae.getRelation()
+	err := rel.Append(bats[1])
+	assert.NoError(t, err)
+	// FIXME
+	// checkAllColRowsByScan(t, rel, bats[0].Length()+bats[1].Length(), false)
+	err = rel.Append(bats[2])
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+	tae.checkRowsByScan(bats[0].Length()+bats[1].Length()+bats[2].Length(), false)
 }
 
 func TestAppend2(t *testing.T) {

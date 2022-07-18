@@ -199,7 +199,7 @@ func (node *appendableNode) flushData(ts uint64, colsData *containers.Batch, opC
 		return
 	}
 	deleteChain := mvcc.GetDeleteChain()
-	n, err := deleteChain.CollectDeletesLocked(ts, false)
+	n, err := deleteChain.CollectDeletesLocked(ts, false, mvcc.RWMutex)
 	mvcc.RUnlock()
 	if err != nil {
 		return
