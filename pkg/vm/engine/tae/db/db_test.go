@@ -1267,7 +1267,7 @@ func TestLogIndex1(t *testing.T) {
 		txn, rel := getDefaultRelation(t, tae, schema.Name)
 		blk := getOneBlock(rel)
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(0, txn.GetStartTS())
+		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(1, txn.GetStartTS())
 		assert.NoError(t, err)
 		for i, index := range indexes {
 			t.Logf("%d: %s", i, index.String())
@@ -2298,7 +2298,7 @@ func TestTruncate(t *testing.T) {
 			})
 		}
 		wg.Add(1)
-		_ = p.Submit(tryAppend(i + 1))
+		_ = p.Submit(tryAppend(i))
 		time.Sleep(time.Millisecond * 2)
 	}
 	wg.Wait()

@@ -97,6 +97,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		prefix:    meta.MakeKey(),
 	}
 	ts, _ := block.file.ReadTS()
+	block.mvcc.SetAppendListener(block.OnApplyAppend)
 	if meta.IsAppendable() {
 		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
 		node = newNode(bufMgr, block, file)
@@ -703,6 +704,11 @@ func (blk *dataBlock) GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (of
 
 func (blk *dataBlock) BlkApplyDelete(deleted uint64, gen common.RowGen, ts uint64) (err error) {
 	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
+	return
+}
+
+func (blk *dataBlock) OnApplyAppend(n txnif.AppendNode) (err error) {
+	blk.meta.GetSegment().GetTable().AddRows(uint64(n.GetMaxRow() - n.GetStartRow()))
 	return
 }
 
