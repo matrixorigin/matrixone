@@ -70,6 +70,10 @@ func GetColumn[T any](v *Vector) []T {
 	return v.Col.([]T)
 }
 
+func GetStrColumn(v *Vector) *types.Bytes {
+	return v.Col.(*types.Bytes)
+}
+
 // return the number of rows in the vector
 func (v *Vector) Count() int {
 	return Length(v)
