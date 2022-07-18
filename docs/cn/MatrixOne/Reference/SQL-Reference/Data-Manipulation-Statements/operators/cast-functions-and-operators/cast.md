@@ -26,7 +26,6 @@
 
 详细的数据类型转换规则，请参见[数据类型转换](../../../../Data-Types/data-type-conversion.md)。
 
-
 ## **示例**
 
 ```sql
