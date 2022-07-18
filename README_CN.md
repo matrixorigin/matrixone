@@ -256,4 +256,4 @@ Enter password:
 <!-- readme: contributors -end -->
 
 ## <a id="license">License</a>
-[Apache License, Version 2.0](LICENSE).
+[Apache License, Version 2.0](LICENSE)。

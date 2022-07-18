@@ -160,10 +160,24 @@ For other installation types, please refer to [MatrixOne installation](https://d
 
 1. Install Go (version 1.18 is required).
 
-2. Get the MatrixOne code:
+2. Get the MatrixOne code: Depending on your needs, choose whether you want to keep your code up to date, or if you want to get the latest stable version of the code.
+
+- *Option 1*: Get the MatrixOne(Preview Version) code
+
+The **main** branch is the default branch, the code on the main branch is always up-to-date but not stable enough.
 
 ```
 $ git clone https://github.com/matrixorigin/matrixone.git
+$ cd matrixone
+```
+
+- *Option 2*: Get the MatrixOne(Stable Version) code
+
+If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **0.5.0** first.
+
+```
+$ git clone https://github.com/matrixorigin/matrixone.git
+$ git checkout 0.5.0
 $ cd matrixone
 ```
 
@@ -192,8 +206,18 @@ $ docker --version
 
 2. Create and run the container for the latest release of MatrixOne. It will pull the image from Docker Hub if not exists.
 
+It will pull the image from Docker Hub if not exists. You can choose to pull the latest image or a stable version.
+
+- Latest Image
+
 ```
 $ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
+```
+
+- 0.5.0 Version Image
+
+```
+$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
 ```
 
 ### 🌟 Connecting to MatrixOne server
