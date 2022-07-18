@@ -2,11 +2,10 @@ package trace
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"sync"
 	"time"
+
+	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
 type HasItemSize interface {
@@ -19,17 +18,27 @@ var _ bp.PipeImpl[HasItemSize, string] = &traceBufferPipeWorker{}
 type traceBufferPipeWorker struct {
 }
 
+func NewTraceBufferPipeWorker(opt ...buffer2SqlOption) bp.PipeImpl[HasItemSize, string] {
+	return &traceBufferPipeWorker{}
+}
+
+// NewItemBuffer implement batchpipe.PipeImpl
 func (t traceBufferPipeWorker) NewItemBuffer(name string) bp.ItemBuffer[HasItemSize, string] {
 	return newBuffer2Sql(withSizeThreshold(1 << 20) /*1MB*/)
 }
 
+// NewItemBatchHandler implement batchpipe.PipeImpl
 func (t traceBufferPipeWorker) NewItemBatchHandler() func(batch string) {
-	exec := c.ieFactory()
+	/*exec := c.ieFactory()
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(metricDBConst).Internal(true).Finish())
 	return func(batch string) {
 		if err := exec.Exec(batch, ie.NewOptsBuilder().Finish()); err != nil {
 			logutil.Errorf("[Metric] insert error. sql: %s; err: %v", batch, err)
 		}
+	}
+	*/
+	// TODO
+	return func(batch string) {
 	}
 }
 

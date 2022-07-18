@@ -39,7 +39,7 @@ type defaultSpanKey int
 type TracerConfig struct {
 	Name string
 
-	reminder export.Reminder
+	reminder batchpipe.Reminder
 }
 
 // TracerOption applies an option to a TracerConfig.
@@ -53,7 +53,7 @@ func (f tracerOptionFunc) apply(cfg *TracerConfig) {
 	f(cfg)
 }
 
-func WithReminder(r export.Reminder) tracerOptionFunc {
+func WithReminder(r batchpipe.Reminder) tracerOptionFunc {
 	return tracerOptionFunc(func(cfg *TracerConfig) {
 		cfg.reminder = r
 	})
@@ -112,15 +112,25 @@ var gTraceContext context.Context
 func Init(ctx context.Context, opt ...TracerProviderOption) (context.Context, error) {
 
 	gTracerProvider = newMOTracerProvider(opt...)
+	config := gTracerProvider.tracerProviderConfig
 
 	gTracer = gTracerProvider.Tracer("MatrixOrigin",
-		WithReminder(export.NewNormalReminder(time.Duration(15*time.Second))),
+		WithReminder(batchpipe.NewConstantClock(time.Duration(15*time.Second))),
 	)
 
 	sc := SpanContext{}
 	sc.traceID, sc.spanID = gTracerProvider.idGenerator.NewIDs()
 
 	gTraceContext = ContextWithSpanContext(ctx, sc)
+
+	export.Init()
+	// init all batch Process for trace/log/error
+	switch {
+	case config.batchProcessMode == "singleton":
+		export.Register(&MOTracer{}, NewTraceBufferPipeWorker().(batchpipe.PipeImpl[batchpipe.HasName, any]))
+	case config.batchProcessMode == "distributed":
+		//export.Register(&MOTracer{}, NewTraceBufferPipeWorker())
+	}
 
 	return nil, nil
 }
@@ -131,28 +141,4 @@ func Start(ctx context.Context, spanName string, opts ...SpanOption) (context.Co
 
 func DefaultContext() context.Context {
 	return gTraceContext
-}
-
-type TracerProvider interface {
-	Tracer(instrumentationName string, opts ...TracerOption) Tracer
-}
-
-type Tracer interface {
-	// Start creates a span and a context.Context containing the newly-created span.
-	Start(ctx context.Context, spanName string, opts ...SpanOption) (context.Context, Span)
-}
-
-type Span interface {
-	// End completes the Span. The Span is considered complete and ready to be
-	// delivered through the rest of the telemetry pipeline after this method
-	// is called. Therefore, updates to the Span are not allowed after this
-	// method has been called.
-	End(options ...SpanEndOption)
-
-	// SpanContext returns the SpanContext of the Span. The returned SpanContext
-	// is usable even after the End method has been called for the Span.
-	SpanContext() SpanContext
-
-	// SetName sets the Span name.
-	SetName(name string)
 }

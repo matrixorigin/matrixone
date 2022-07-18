@@ -33,6 +33,10 @@ type MOTracer struct {
 	node     *MONodeResource
 }
 
+func (t *MOTracer) GetName() string {
+	return "MOTracer"
+}
+
 func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (context.Context, Span) {
 	span := t.spanPool.Get().(*MOSpan)
 	opts = append(opts, withNodeResource(t.node))
@@ -153,6 +157,8 @@ func (s *MOSpan) init(name string, opts ...SpanOption) {
 func (s *MOSpan) End(options ...SpanEndOption) {
 	s.duration = util.NowNS() - s.startTimeNS
 
+	export.GetGlobalBatchProcessor().Collect(DefaultContext(), s)
+
 	//TODO implement me: cooperate with Exporter
 
 	panic("implement me")
@@ -168,9 +174,4 @@ func (s *MOSpan) SetName(name string) {
 
 func (s MOSpan) GetItemType() string {
 	return "MOSpan"
-}
-
-type TraceItemBuffer[T any, B any] struct {
-	reminder export.Reminder
-	mux      sync.Mutex
 }

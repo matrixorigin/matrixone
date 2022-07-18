@@ -83,6 +83,8 @@ type tracerProviderConfig struct {
 	enableTracer bool
 
 	debugMode bool // TODO: can check span's END
+
+	batchProcessMode string
 }
 
 // TracerProviderOption configures a TracerProvider.
