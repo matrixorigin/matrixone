@@ -19,11 +19,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/logservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/syshealth"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/config"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-// NB: Coordinator is assumed to be used in synchronous, single-threaded context.
+// Coordinator is assumed to be used in synchronous, single-threaded context.
 type Coordinator struct {
 	OperatorController *operator.Controller
 
@@ -31,13 +32,23 @@ type Coordinator struct {
 	// there is no need for a mutext to protect.
 	teardown    bool
 	teardownOps []*operator.Operator
+
+	timeoutConfig *config.TimeoutConfig
 }
 
 func NewCoordinator() *Coordinator {
-	return &Coordinator{OperatorController: operator.NewController()}
+	return &Coordinator{
+		OperatorController: operator.NewController(),
+		timeoutConfig:      config.DefaultTimeoutConfig(),
+	}
 }
 
-func (c *Coordinator) Check(alloc util.IDAllocator, cluster pb.ClusterInfo,
+func (c *Coordinator) SetTimeoutConfig(config *config.TimeoutConfig) *Coordinator {
+	c.timeoutConfig = config
+	return c
+}
+
+func (c *Coordinator) Check(alloc util.IDAllocator, config *config.TimeoutConfig, cluster pb.ClusterInfo,
 	dnState pb.DNState, logState pb.LogState, currentTick uint64) []pb.ScheduleCommand {
 
 	c.OperatorController.RemoveFinishedOperator(logState, dnState)
@@ -59,7 +70,7 @@ func (c *Coordinator) Check(alloc util.IDAllocator, cluster pb.ClusterInfo,
 	adding := c.OperatorController.GetAddingReplicas()
 
 	operators := make([]*operator.Operator, 0)
-	operators = append(operators, logservice.Check(alloc, cluster, logState, removing, adding, currentTick)...)
+	operators = append(operators, logservice.Check(alloc, config, cluster, logState, removing, adding, currentTick)...)
 	operators = append(operators, dnservice.Check(alloc, dnState, currentTick)...)
 
 	return c.OperatorController.Dispatch(operators, logState, dnState)
