@@ -12,8 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dn
+package dnservice
 
-func (s *store) loadLocalMetadata() {
+import (
+	"bytes"
+	"testing"
 
+	"github.com/BurntSushi/toml"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestCfg(t *testing.T) {
+	c := &Config{}
+	c.RPC.BusyQueueSize = 10
+
+	buf := bytes.NewBuffer(nil)
+	enc := toml.NewEncoder(buf)
+	assert.NoError(t, enc.Encode(c))
+	assert.Equal(t, "", buf.String())
 }

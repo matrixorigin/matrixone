@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dn
+package dnservice
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 )
 
 // Option store option
@@ -31,12 +29,8 @@ type Store interface {
 	// Close close dn store
 	Close() error
 
-	// StartDNShard start the DNShard replica
+	// StartDNReplica start the DNShard replica
 	StartDNReplica(metadata.DNShard) error
-	// CloseDNReplica close the DNShard replica. Destroy the DNShard replica if destory is
-	// true.
-	CloseDNShard(shard metadata.DNShard, destroy bool) error
+	// CloseDNReplica close the DNShard replica.
+	CloseDNReplica(shard metadata.DNShard) error
 }
-
-// storageFactory storage factory used to create TxnStorage to manage a DNShard data
-type storageFactory func(shard metadata.DNShard, cfg *Config, logClient logservice.Client) (storage.TxnStorage, error)

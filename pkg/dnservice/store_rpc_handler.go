@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dn
+package dnservice
 
 import (
 	"context"
@@ -37,37 +37,89 @@ func (s *store) registerRPCHandlers() {
 }
 
 func (s *store) dispatchLocalRequest(shard metadata.DNShard) rpc.TxnRequestHandleFunc {
-	return nil
+	r := s.getReplica(shard.ShardID)
+	if r == nil {
+		return nil
+	}
+	return r.handleLocalRequest
 }
 
 func (s *store) handleRead(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
+	shard := request.GetTargetDN()
+	r := s.getReplica(shard.ShardID)
+	if r == nil {
+		return nil
+	}
+	r.waitStarted()
+	return r.service.Read(ctx, request, response)
 }
 
 func (s *store) handleWrite(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
+	shard := request.GetTargetDN()
+	r := s.getReplica(shard.ShardID)
+	if r == nil {
+		return nil
+	}
+	r.waitStarted()
+	return r.service.Write(ctx, request, response)
 }
 
 func (s *store) handleCommit(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
+	shard := request.GetTargetDN()
+	r := s.getReplica(shard.ShardID)
+	if r == nil {
+		return nil
+	}
+	r.waitStarted()
+	return r.service.Commit(ctx, request, response)
 }
 
 func (s *store) handleRollback(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
+	shard := request.GetTargetDN()
+	r := s.getReplica(shard.ShardID)
+	if r == nil {
+		return nil
+	}
+	r.waitStarted()
+	return r.service.Rollback(ctx, request, response)
 }
 
 func (s *store) handlePrepare(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
+	shard := request.GetTargetDN()
+	r := s.getReplica(shard.ShardID)
+	if r == nil {
+		return nil
+	}
+	r.waitStarted()
+	return r.service.Prepare(ctx, request, response)
 }
 
 func (s *store) handleCommitDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
+	shard := request.GetTargetDN()
+	r := s.getReplica(shard.ShardID)
+	if r == nil {
+		return nil
+	}
+	r.waitStarted()
+	return r.service.CommitDNShard(ctx, request, response)
 }
 
 func (s *store) handleRollbackDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
+	shard := request.GetTargetDN()
+	r := s.getReplica(shard.ShardID)
+	if r == nil {
+		return nil
+	}
+	r.waitStarted()
+	return r.service.RollbackDNShard(ctx, request, response)
 }
 
 func (s *store) handleGetStatus(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
+	shard := request.GetTargetDN()
+	r := s.getReplica(shard.ShardID)
+	if r == nil {
+		return nil
+	}
+	r.waitStarted()
+	return r.service.GetStatus(ctx, request, response)
 }

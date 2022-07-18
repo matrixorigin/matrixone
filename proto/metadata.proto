@@ -50,3 +50,11 @@ message LogShardRecord {
   // Name is the human readable name of the shard given by the DN.
   string Name = 3;
 };
+
+// DNStore DN store metadata
+message DNStore {
+  // UUID DNStore uuid id
+  string UUID = 1;
+  // Shards DNShards
+  repeated DNShard Shards = 2 [(gogoproto.nullable) = false];
+}

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dn
+package dnservice
 
 import (
 	"fmt"
@@ -35,12 +35,13 @@ var (
 	defaultDiscoveryTimeout = time.Second * 30
 	defaultHeatbeatDuration = time.Second
 	defaultConnectTimeout   = time.Second * 30
+	defaultHeatbeatTimeout  = time.Millisecond * 500
 )
 
 // Config dn store configuration
 type Config struct {
-	// StoreID dn store uuid
-	StoreID string `toml:"node-id"`
+	// UUID dn store uuid
+	UUID string `toml:"uuid"`
 	// DataDir storage directory for local data. Include DNShard metadata and TAE data.
 	DataDir string `toml:"data-dir"`
 	// ListenAddress listening address for receiving external requests.
@@ -53,6 +54,8 @@ type Config struct {
 	HAKeeper struct {
 		// HeatbeatDuration heartbeat duration to send message to hakeeper. Default is 1s
 		HeatbeatDuration toml.Duration `toml:"hakeeper-heartbeat-duration"`
+		// HeatbeatTimeout heartbeat request timeout. Default is 500ms
+		HeatbeatTimeout toml.Duration `toml:"hakeeper-heartbeat-timeout"`
 		// DiscoveryTimeout discovery HAKeeper service timeout. Default is 30s
 		DiscoveryTimeout toml.Duration `toml:"hakeeper-discovery-timeout"`
 		// ClientConfig hakeeper client configuration
@@ -61,15 +64,15 @@ type Config struct {
 
 	// LogService log service configuration
 	LogService struct {
+		// Backend logservice backend implementation. [MEM|DISK]. Default is DISK.
+		Backend string `toml:"backend"`
 		// ConnectTimeout timeout for connect to logservice. Default is 30s.
 		ConnectTimeout toml.Duration `toml:"connect-timeout"`
-		// ClientConfig logservice client configuration
-		ClientConfig logservice.ClientConfig
 	}
 
 	// FileService file service configuration
 	FileService struct {
-		// Backend file service backend. [Mem|DISK|S3], default S3
+		// Backend file service backend implementation. [Mem|DISK|S3|MINIO]. Default is DISK.
 		Backend string `toml:"backend"`
 		// S3 s3 configuration
 		S3 fileservice.S3Config `toml:"s3"`
@@ -103,26 +106,22 @@ type Config struct {
 
 		// Storage txn storage config
 		Storage struct {
-			// Engine storage engine. [TAE|Sqlite|Mem], default TAE.
-			Engine string `toml:"engine"`
+			// Backend txn storage backend implementation. [TAE|Mem], default TAE.
+			Backend string `toml:"backend"`
 
-			// TAEEngine tae storage configuration
-			TAEEngine struct {
+			// TAE tae storage configuration
+			TAE struct {
 			}
 
-			// SqliteEngine sqlite storage configuration
-			SqliteEngine struct {
-			}
-
-			// MemEngine mem storage configuration
-			MemEngine struct {
+			// Mem mem storage configuration
+			Mem struct {
 			}
 		}
 
 		// Clock txn clock type. [LOCAL|HLC], deafult is LOCAL.
 		Clock struct {
-			// Source clock source type. [LOCAL|HLC], default LOCAL.
-			Source string `toml:"source"`
+			// Backend clock backend implementation. [LOCAL|HLC], default LOCAL.
+			Backend string `toml:"source"`
 			// MaxClockOffset max clock offset between two nodes. Default is 500ms
 			MaxClockOffset toml.Duration `toml:"max-clock-offset"`
 		}
@@ -130,8 +129,8 @@ type Config struct {
 }
 
 func (c *Config) validate() error {
-	if c.StoreID == "" {
-		return fmt.Errorf("Config.StoreID not set")
+	if c.UUID == "" {
+		return fmt.Errorf("Config.UUID not set")
 	}
 	if c.DataDir == "" {
 		return fmt.Errorf("Config.DataDir not set")
@@ -160,17 +159,17 @@ func (c *Config) validate() error {
 	if c.Txn.Clock.MaxClockOffset.Duration == 0 {
 		c.Txn.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
 	}
-	if c.Txn.Clock.Source == "" {
-		c.Txn.Clock.Source = defaultClock
+	if c.Txn.Clock.Backend == "" {
+		c.Txn.Clock.Backend = defaultClock
 	}
-	if _, ok := supportTxnClockSources[strings.ToUpper(c.Txn.Clock.Source)]; !ok {
-		return fmt.Errorf("%s clock not support", c.Txn.Storage)
+	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Txn.Clock.Backend)]; !ok {
+		return fmt.Errorf("%s clock backend not support", c.Txn.Storage)
 	}
-	if c.Txn.Storage.Engine == "" {
-		c.Txn.Storage.Engine = defaultTxnStorage
+	if c.Txn.Storage.Backend == "" {
+		c.Txn.Storage.Backend = defaultTxnStorage
 	}
-	if _, ok := supportTxnStorageEngines[strings.ToUpper(c.Txn.Storage.Engine)]; !ok {
-		return fmt.Errorf("%s txn storage not support", c.Txn.Storage)
+	if _, ok := supportTxnStorageBackends[strings.ToUpper(c.Txn.Storage.Backend)]; !ok {
+		return fmt.Errorf("%s txn storage backend not support", c.Txn.Storage)
 	}
 	if c.Txn.ZombieTimeout.Duration == 0 {
 		c.Txn.ZombieTimeout.Duration = defaultZombieTimeout
@@ -181,11 +180,31 @@ func (c *Config) validate() error {
 	if c.HAKeeper.HeatbeatDuration.Duration == 0 {
 		c.HAKeeper.HeatbeatDuration.Duration = defaultHeatbeatDuration
 	}
+	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
+		c.HAKeeper.HeatbeatTimeout.Duration = defaultHeatbeatTimeout
+	}
 	if c.LogService.ConnectTimeout.Duration == 0 {
 		c.LogService.ConnectTimeout.Duration = defaultConnectTimeout
+	}
+	if c.LogService.Backend == "" {
+		c.LogService.Backend = diskLogServiceBackend
+	}
+	if _, ok := supportLogServiceBackends[strings.ToUpper(c.LogService.Backend)]; !ok {
+		return fmt.Errorf("%s log service backend not support", c.LogService.Backend)
+	}
+	if c.FileService.Backend == "" {
+		c.FileService.Backend = diskFileServiceBackend
 	}
 	if _, ok := supportFileServiceBackends[strings.ToUpper(c.FileService.Backend)]; !ok {
 		return fmt.Errorf("%s file service backend not support", c.Txn.Storage)
 	}
 	return nil
+}
+
+func (c Config) getMetadataDir() string {
+	return fmt.Sprintf("%s/metadata", c.DataDir)
+}
+
+func (c Config) getDataDir() string {
+	return fmt.Sprintf("%s/data", c.DataDir)
 }
