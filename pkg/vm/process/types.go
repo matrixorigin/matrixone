@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -63,8 +64,9 @@ type SessionInfo struct {
 	Version      string
 }
 
-// explain analyze information for query
+// AnalyzeInfo  analyze information for query
 type AnalyzeInfo struct {
+	start time.Time
 	// NodeId, index of query's node list
 	NodeId int32
 	// InputRows, number of rows accepted by node
@@ -97,7 +99,7 @@ type Process struct {
 	// snapshot is transaction context
 	Snapshot []byte
 
-	AnalInfo *AnalyzeInfo
+	AnalInfos []*AnalyzeInfo
 
 	SessionInfo SessionInfo
 
