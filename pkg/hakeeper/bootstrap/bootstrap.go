@@ -135,7 +135,8 @@ func (bm *Manager) bootstrapDN(alloc util.IDAllocator, dn pb.DNState) (commands 
 		}
 
 		commands = append(commands, pb.ScheduleCommand{
-			UUID: dnStores[i],
+			UUID:          dnStores[i],
+			Bootstrapping: true,
 			ConfigChange: &pb.ConfigChange{
 				Replica: pb.Replica{
 					UUID:      dnStores[i],

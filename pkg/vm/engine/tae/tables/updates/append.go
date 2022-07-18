@@ -83,11 +83,21 @@ func (node *AppendNode) SetLogIndex(idx *wal.Index) {
 func (node *AppendNode) GetID() *common.ID {
 	return node.id
 }
-func (node *AppendNode) GetCommitTS() uint64  { return node.commitTs }
+func (node *AppendNode) GetCommitTS() uint64 {
+	node.RLock()
+	defer node.RUnlock()
+	if node.txn != nil {
+		return node.txn.GetCommitTS()
+	}
+	return node.commitTs
+}
 func (node *AppendNode) GetMaxRow() uint32    { return node.maxRow }
 func (node *AppendNode) SetMaxRow(row uint32) { node.maxRow = row }
 
 func (node *AppendNode) PrepareCommit() error {
+	node.Lock()
+	defer node.Unlock()
+	node.commitTs = node.txn.GetCommitTS()
 	return nil
 }
 
@@ -143,8 +153,13 @@ func (node *AppendNode) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (node *AppendNode) PrepareRollback() (err error) { return }
-func (node *AppendNode) ApplyRollback() (err error)   { return }
+func (node *AppendNode) PrepareRollback() (err error) {
+	node.mvcc.Lock()
+	defer node.mvcc.Unlock()
+	node.mvcc.DeleteAppendNodeLocked(node)
+	return
+}
+func (node *AppendNode) ApplyRollback() (err error) { return }
 func (node *AppendNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = NewAppendCmd(id, node)
 	return

@@ -135,53 +135,53 @@ func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T
 func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	defer leaktest.AfterTest(t)()
 	cfg1 := Config{
-		FS:                    vfs.NewStrictMem(),
-		DeploymentID:          1,
-		RTTMillisecond:        5,
-		DataDir:               "data-1",
-		ServiceAddress:        "127.0.0.1:9002",
-		RaftAddress:           "127.0.0.1:9000",
-		GossipAddress:         "127.0.0.1:9001",
-		GossipSeedAddresses:   []string{"127.0.0.1:9011", "127.0.0.1:9021", "127.0.0.1:9031"},
-		DisableHAKeeperTicker: true,
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-1",
+		ServiceAddress:      "127.0.0.1:9002",
+		RaftAddress:         "127.0.0.1:9000",
+		GossipAddress:       "127.0.0.1:9001",
+		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9021", "127.0.0.1:9031"},
+		DisableWorkers:      true,
 	}
 	cfg2 := Config{
-		FS:                    vfs.NewStrictMem(),
-		DeploymentID:          1,
-		RTTMillisecond:        5,
-		DataDir:               "data-2",
-		ServiceAddress:        "127.0.0.1:9012",
-		RaftAddress:           "127.0.0.1:9010",
-		GossipAddress:         "127.0.0.1:9011",
-		GossipSeedAddresses:   []string{"127.0.0.1:9001", "127.0.0.1:9021", "127.0.0.1:9031"},
-		DisableHAKeeperTicker: true,
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-2",
+		ServiceAddress:      "127.0.0.1:9012",
+		RaftAddress:         "127.0.0.1:9010",
+		GossipAddress:       "127.0.0.1:9011",
+		GossipSeedAddresses: []string{"127.0.0.1:9001", "127.0.0.1:9021", "127.0.0.1:9031"},
+		DisableWorkers:      true,
 	}
 	cfg3 := Config{
-		FS:                    vfs.NewStrictMem(),
-		DeploymentID:          1,
-		RTTMillisecond:        5,
-		DataDir:               "data-3",
-		ServiceAddress:        "127.0.0.1:9022",
-		RaftAddress:           "127.0.0.1:9020",
-		GossipAddress:         "127.0.0.1:9021",
-		GossipSeedAddresses:   []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9031"},
-		DisableHAKeeperTicker: true,
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-3",
+		ServiceAddress:      "127.0.0.1:9022",
+		RaftAddress:         "127.0.0.1:9020",
+		GossipAddress:       "127.0.0.1:9021",
+		GossipSeedAddresses: []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9031"},
+		DisableWorkers:      true,
 	}
 	cfg4 := Config{
-		FS:                    vfs.NewStrictMem(),
-		DeploymentID:          1,
-		RTTMillisecond:        5,
-		DataDir:               "data-4",
-		ServiceAddress:        "127.0.0.1:9032",
-		RaftAddress:           "127.0.0.1:9030",
-		GossipAddress:         "127.0.0.1:9031",
-		GossipSeedAddresses:   []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9021"},
-		DisableHAKeeperTicker: true,
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-4",
+		ServiceAddress:      "127.0.0.1:9032",
+		RaftAddress:         "127.0.0.1:9030",
+		GossipAddress:       "127.0.0.1:9031",
+		GossipSeedAddresses: []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9021"},
+		DisableWorkers:      true,
 	}
 	service1, err := NewService(cfg1)
 	require.NoError(t, err)
 	defer func() {
-		//assert.NoError(t, service1.Close())
+		assert.NoError(t, service1.Close())
 	}()
 	service2, err := NewService(cfg2)
 	require.NoError(t, err)
@@ -209,7 +209,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	fn(t, []*Service{service1, service2, service3, service4})
 }
 
-func TestHAKeeperClusterCanBootstrapAndRepairLogShard(t *testing.T) {
+func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 	if os.Getenv("LONG_TEST") == "" {
 		// this test will fail on go1.18 when -race is enabled, as it always
 		// timeout. go1.19 has a much faster -race implementation and it works fine
@@ -237,6 +237,15 @@ func TestHAKeeperClusterCanBootstrapAndRepairLogShard(t *testing.T) {
 			}
 		}
 		sendHeartbeat(services[:3])
+
+		// fake a DN store
+		dnMsg := pb.DNStoreHeartbeat{
+			UUID:   uuid.New().String(),
+			Shards: make([]pb.DNShardInfo, 0),
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		require.NoError(t, services[0].store.addDNStoreHeartbeat(ctx, dnMsg))
 
 		// find out the leader HAKeeper store as we need the term value
 		var term uint64
@@ -266,8 +275,6 @@ func TestHAKeeperClusterCanBootstrapAndRepairLogShard(t *testing.T) {
 		assert.False(t, leaderStore.bootstrapMgr.CheckBootstrap(state.LogState))
 
 		// get and apply all bootstrap schedule commands
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
-		defer cancel()
 		for _, s := range services[:3] {
 			cb, err := s.store.getCommandBatch(ctx, s.store.id())
 			require.NoError(t, err)
@@ -296,48 +303,108 @@ func TestHAKeeperClusterCanBootstrapAndRepairLogShard(t *testing.T) {
 			}
 		}
 
+		// get the DN bootstrap command, it contains DN shard and replica ID
+		cb, err := leaderStore.getCommandBatch(ctx, dnMsg.UUID)
+		require.NoError(t, err)
+		require.Equal(t, 1, len(cb.Commands))
+		cmd := cb.Commands[0]
+		assert.True(t, cmd.Bootstrapping)
+		assert.Equal(t, pb.DnService, cmd.ServiceType)
+		dnShardInfo := pb.DNShardInfo{
+			ShardID:   cmd.ConfigChange.Replica.ShardID,
+			ReplicaID: cmd.ConfigChange.Replica.ReplicaID,
+		}
+		dnMsg.Shards = append(dnMsg.Shards, dnShardInfo)
+		// as if DN is running
+		require.NoError(t, services[0].store.addDNStoreHeartbeat(ctx, dnMsg))
+		// fake a free DN store
+		dnMsg2 := pb.DNStoreHeartbeat{
+			UUID:   uuid.New().String(),
+			Shards: make([]pb.DNShardInfo, 0),
+		}
+		require.NoError(t, services[0].store.addDNStoreHeartbeat(ctx, dnMsg2))
+
 		// stop store 1
 		require.NoError(t, services[0].Close())
 		// no service.Close can be repeatedly called
 		services[0].store = nil
 		services = services[1:]
 
-		// wait for HAKeeper to repair the cluster
+		// wait for HAKeeper to repair the Log & HAKeeper shards
+		dnRepaired := false
 		for i := 0; i < 5000; i++ {
-			m := services[0].store.getHeartbeatMessage()
-			assert.NoError(t, services[0].store.addLogStoreHeartbeat(ctx, m))
-			m = services[1].store.getHeartbeatMessage()
-			assert.NoError(t, services[1].store.addLogStoreHeartbeat(ctx, m))
-			m = services[2].store.getHeartbeatMessage()
-			assert.NoError(t, services[0].store.addLogStoreHeartbeat(ctx, m))
-
-			for _, s := range services {
-				if hasShard(s.store, 0) {
-					s.store.hakeeperTick()
-					s.store.hakeeperCheck()
+			tn := func() (bool, error) {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				m := services[0].store.getHeartbeatMessage()
+				if err := services[0].store.addLogStoreHeartbeat(ctx, m); err != nil {
+					return false, err
+				}
+				m = services[1].store.getHeartbeatMessage()
+				if err := services[1].store.addLogStoreHeartbeat(ctx, m); err != nil {
+					return false, err
+				}
+				m = services[2].store.getHeartbeatMessage()
+				if err := services[0].store.addLogStoreHeartbeat(ctx, m); err != nil {
+					return false, err
+				}
+				if err := services[0].store.addDNStoreHeartbeat(ctx, dnMsg2); err != nil {
+					return false, err
 				}
 
-				cb, err := services[0].store.getCommandBatch(ctx, s.store.id())
-				for _, cmd := range cb.Commands {
-					plog.Infof("store returned schedule command: %s", cmd.LogString())
+				for _, s := range services {
+					if hasShard(s.store, 0) {
+						s.store.hakeeperTick()
+						s.store.hakeeperCheck()
+					}
+
+					cb, err = services[0].store.getCommandBatch(ctx, dnMsg2.UUID)
+					if err != nil {
+						return false, err
+					}
+					if len(cb.Commands) > 0 {
+						cmd := cb.Commands[0]
+						if cmd.ServiceType == pb.DnService {
+							if cmd.ConfigChange.Replica.ShardID == dnShardInfo.ShardID &&
+								cmd.ConfigChange.Replica.ReplicaID > dnShardInfo.ReplicaID {
+								dnRepaired = true
+							}
+						}
+					}
+
+					cb, err = services[0].store.getCommandBatch(ctx, s.store.id())
+					if err != nil {
+						return false, err
+					}
+					for _, cmd := range cb.Commands {
+						plog.Infof("store returned schedule command: %s", cmd.LogString())
+					}
+					s.handleCommands(cb.Commands)
 				}
-				require.NoError(t, err)
-				s.handleCommands(cb.Commands)
+
+				logRepaired := true
+				for _, s := range services {
+					if !hasShard(s.store, 0) || !hasShard(s.store, 1) {
+						logRepaired = false
+						break
+					}
+				}
+				plog.Infof("dnRepairted %t, logRepaired %t", dnRepaired, logRepaired)
+				if !logRepaired || !dnRepaired {
+					return false, nil
+				} else {
+					plog.Infof("repair completed, i: %d", i)
+					return true, nil
+				}
 			}
-
-			notReady := false
-			for _, s := range services {
-				if !hasShard(s.store, 0) || !hasShard(s.store, 1) {
-					notReady = true
-					break
-				}
+			completed, err := tn()
+			if err != nil && err != dragonboat.ErrTimeout {
+				t.Fatalf("unexpected error %v", err)
 			}
-			if notReady {
-				time.Sleep(time.Millisecond)
-			} else {
-				plog.Infof("repair completed, i: %d", i)
+			if completed {
 				return
 			}
+			time.Sleep(5 * time.Millisecond)
 		}
 		t.Fatalf("failed to repair shards")
 	}
@@ -392,7 +459,6 @@ func testBootstrap(t *testing.T, fail bool) {
 			UUID:   uuid.New().String(),
 			Shards: make([]pb.DNShardInfo, 0),
 		}
-		dnMsg.Shards = append(dnMsg.Shards, pb.DNShardInfo{ShardID: 2, ReplicaID: 3})
 		assert.NoError(t, store.addDNStoreHeartbeat(ctx, dnMsg))
 
 		_, term, err := store.isLeaderHAKeeper()
@@ -419,9 +485,17 @@ func testBootstrap(t *testing.T, fail bool) {
 			require.NoError(t, err)
 			assert.Equal(t, pb.HAKeeperBootstrapFailed, state.State)
 		} else {
-			cb, err := store.getCommandBatch(ctx, store.id())
+			cb, err := store.getCommandBatch(ctx, dnMsg.UUID)
 			require.NoError(t, err)
 			require.Equal(t, 1, len(cb.Commands))
+			assert.True(t, cb.Commands[0].Bootstrapping)
+			assert.Equal(t, pb.DnService, cb.Commands[0].ServiceType)
+			assert.True(t, cb.Commands[0].ConfigChange.Replica.ReplicaID > 0)
+
+			cb, err = store.getCommandBatch(ctx, store.id())
+			require.NoError(t, err)
+			require.Equal(t, 1, len(cb.Commands))
+			assert.True(t, cb.Commands[0].Bootstrapping)
 			service := &Service{store: store}
 			service.handleStartReplica(cb.Commands[0])
 

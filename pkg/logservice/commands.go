@@ -15,6 +15,10 @@
 package logservice
 
 import (
+	"context"
+	"reflect"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -90,4 +94,52 @@ func (s *Service) handleStopReplica(cmd pb.ScheduleCommand) {
 
 func (s *Service) handleShutdownStore(cmd pb.ScheduleCommand) {
 	panic("not implemented")
+}
+
+func (s *Service) heartbeatWorker(ctx context.Context) {
+	// TODO: check tick interval
+	if s.cfg.HeartbeatInterval == 0 {
+		panic("invalid heartbeat interval")
+	}
+	ticker := time.NewTicker(s.cfg.HeartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			plog.Infof("heartbeat worker stopped")
+			return
+		case <-ticker.C:
+			s.heartbeat(ctx)
+		}
+	}
+}
+
+func (s *Service) heartbeat(ctx context.Context) {
+	ctx2, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+
+	if s.haClient == nil {
+		if reflect.DeepEqual(s.cfg.HAKeeperClientConfig, HAKeeperClientConfig{}) {
+			panic("empty HAKeeper client config")
+		}
+		cc, err := NewLogHAKeeperClient(ctx2, s.cfg.HAKeeperClientConfig)
+		if err != nil {
+			plog.Errorf("failed to create HAKeeper client, %v", err)
+			return
+		}
+		s.haClient = cc
+	}
+
+	hb := s.store.getHeartbeatMessage()
+	cb, err := s.haClient.SendLogHeartbeat(ctx2, hb)
+	if err != nil {
+		plog.Errorf("failed to send log service heartbeat, %v", err)
+		if err := s.haClient.Close(); err != nil {
+			plog.Errorf("failed to close hakeeper client %v", err)
+		}
+		s.haClient = nil
+		return
+	}
+	s.handleCommands(cb.Commands)
 }

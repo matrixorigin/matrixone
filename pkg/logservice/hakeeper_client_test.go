@@ -16,9 +16,13 @@ package logservice
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/lni/dragonboat/v4"
+	"github.com/lni/goutils/leaktest"
+	"github.com/lni/vfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -53,11 +57,11 @@ func TestHAKeeperClientCanNotConnectToNonHAKeeperNode(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		_, err := NewCNHAKeeperClient(ctx, cfg)
-		require.Equal(t, ErrNoHAKeeper, err)
+		require.Equal(t, ErrNotHAKeeper, err)
 		_, err = NewDNHAKeeperClient(ctx, cfg)
-		assert.Equal(t, ErrNoHAKeeper, err)
+		assert.Equal(t, ErrNotHAKeeper, err)
 		_, err = NewLogHAKeeperClient(ctx, cfg)
-		assert.Equal(t, ErrNoHAKeeper, err)
+		assert.Equal(t, ErrNotHAKeeper, err)
 	}
 	runServiceTest(t, false, true, fn)
 }
@@ -175,4 +179,120 @@ func TestHAKeeperClientSendLogHeartbeat(t *testing.T) {
 		require.Equal(t, sc, cb.Commands[0])
 	}
 	runServiceTest(t, true, true, fn)
+}
+
+func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAKeeperClient)) {
+	defer leaktest.AfterTest(t)()
+	cfg1 := Config{
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-1",
+		ServiceAddress:      "127.0.0.1:9002",
+		RaftAddress:         "127.0.0.1:9000",
+		GossipAddress:       "127.0.0.1:9001",
+		GossipSeedAddresses: []string{"127.0.0.1:9011"},
+		DisableWorkers:      true,
+	}
+	cfg2 := Config{
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-2",
+		ServiceAddress:      "127.0.0.1:9012",
+		RaftAddress:         "127.0.0.1:9010",
+		GossipAddress:       "127.0.0.1:9011",
+		GossipSeedAddresses: []string{"127.0.0.1:9001"},
+		DisableWorkers:      true,
+	}
+	service1, err := NewService(cfg1)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, service1.Close())
+	}()
+	service2, err := NewService(cfg2)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, service2.Close())
+	}()
+	// service2 is HAKeeper
+	peers := make(map[uint64]dragonboat.Target)
+	peers[1] = service2.ID()
+	assert.NoError(t, service2.store.startHAKeeperReplica(1, peers, false))
+	// manually construct a HAKeeper client that is connected to service1
+	pool := &sync.Pool{}
+	pool.New = func() interface{} {
+		return &RPCRequest{pool: pool}
+	}
+	respPool := &sync.Pool{}
+	respPool.New = func() interface{} {
+		return &RPCResponse{pool: respPool}
+	}
+	cfg := HAKeeperClientConfig{
+		ServiceAddresses: []string{cfg1.ServiceAddress, cfg2.ServiceAddress},
+	}
+	c := &hakeeperClient{
+		cfg:      cfg,
+		pool:     pool,
+		respPool: respPool,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	cc, err := getRPCClient(ctx, cfg1.ServiceAddress, c.respPool)
+	require.NoError(t, err)
+	c.addr = cfg1.ServiceAddress
+	c.client = cc
+	client := &managedHAKeeperClient{client: c, cfg: cfg}
+	defer func() {
+		require.NoError(t, client.Close())
+	}()
+	fn(t, client)
+}
+
+func TestGetClusterDetailsWhenNotConnectedToHAKeeper(t *testing.T) {
+	fn := func(t *testing.T, c *managedHAKeeperClient) {
+		oldc := c.client
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, err := c.GetClusterDetails(ctx)
+		require.NoError(t, err)
+		require.True(t, oldc != c.client)
+	}
+	testNotHAKeeperErrorIsHandled(t, fn)
+}
+
+func TestSendCNHeartbeatWhenNotConnectedToHAKeeper(t *testing.T) {
+	fn := func(t *testing.T, c *managedHAKeeperClient) {
+		oldc := c.client
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		err := c.SendCNHeartbeat(ctx, pb.CNStoreHeartbeat{})
+		require.NoError(t, err)
+		require.True(t, oldc != c.client)
+	}
+	testNotHAKeeperErrorIsHandled(t, fn)
+}
+
+func TestSendDNHeartbeatWhenNotConnectedToHAKeeper(t *testing.T) {
+	fn := func(t *testing.T, c *managedHAKeeperClient) {
+		oldc := c.client
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, err := c.SendDNHeartbeat(ctx, pb.DNStoreHeartbeat{})
+		require.NoError(t, err)
+		require.True(t, oldc != c.client)
+	}
+	testNotHAKeeperErrorIsHandled(t, fn)
+}
+
+func TestSendLogHeartbeatWhenNotConnectedToHAKeeper(t *testing.T) {
+	fn := func(t *testing.T, c *managedHAKeeperClient) {
+		oldc := c.client
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, err := c.SendLogHeartbeat(ctx, pb.LogStoreHeartbeat{})
+		require.NoError(t, err)
+		require.True(t, oldc != c.client)
+	}
+	testNotHAKeeperErrorIsHandled(t, fn)
 }
