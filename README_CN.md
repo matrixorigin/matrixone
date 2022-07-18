@@ -1,6 +1,6 @@
 <div class="column" align="middle">
   <p align="center">
-   <img alt="MatrixOne All in One" height="200" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/logo.png?raw=true">
+   <img alt="MatrixOne All in One" height="50" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/logo.png?raw=true">
   </p>
   <a href="https://github.com/matrixorigin/matrixone/blob/main/LICENSE">
     <img src="https://img.shields.io/badge/License-Apache%202.0-red.svg" alt="license"/>
@@ -58,6 +58,10 @@
 ## <a id="what-is-matrixone">MatrixOne是什么？</a>
 
 MatrixOne是一款面向未来的超融合异构云原生数据库，通过超融合数据引擎支持事务/分析/流处理等混合工作负载，通过异构云原生架构支持跨机房协同/多地协同/云边协同。简化开发运维，消简数据碎片，打破数据的系统、位置和创新边界。
+
+<p align="center">
+  <img alt="MatrixOne" height="500" width="700" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/all-in-one.png?raw=true">
+</p>
 
 
 ##  🎯 <a id="key-features">核心特性</a>
