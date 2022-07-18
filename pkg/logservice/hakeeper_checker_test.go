@@ -333,54 +333,78 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		// wait for HAKeeper to repair the Log & HAKeeper shards
 		dnRepaired := false
 		for i := 0; i < 5000; i++ {
-			m := services[0].store.getHeartbeatMessage()
-			assert.NoError(t, services[0].store.addLogStoreHeartbeat(ctx, m))
-			m = services[1].store.getHeartbeatMessage()
-			assert.NoError(t, services[1].store.addLogStoreHeartbeat(ctx, m))
-			m = services[2].store.getHeartbeatMessage()
-			assert.NoError(t, services[0].store.addLogStoreHeartbeat(ctx, m))
-			require.NoError(t, services[0].store.addDNStoreHeartbeat(ctx, dnMsg2))
-
-			for _, s := range services {
-				if hasShard(s.store, 0) {
-					s.store.hakeeperTick()
-					s.store.hakeeperCheck()
+			tn := func() (bool, error) {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				m := services[0].store.getHeartbeatMessage()
+				if err := services[0].store.addLogStoreHeartbeat(ctx, m); err != nil {
+					return false, err
+				}
+				m = services[1].store.getHeartbeatMessage()
+				if err := services[1].store.addLogStoreHeartbeat(ctx, m); err != nil {
+					return false, err
+				}
+				m = services[2].store.getHeartbeatMessage()
+				if err := services[0].store.addLogStoreHeartbeat(ctx, m); err != nil {
+					return false, err
+				}
+				if err := services[0].store.addDNStoreHeartbeat(ctx, dnMsg2); err != nil {
+					return false, err
 				}
 
-				cb, err = services[0].store.getCommandBatch(ctx, dnMsg2.UUID)
-				require.NoError(t, err)
-				if len(cb.Commands) > 0 {
-					cmd := cb.Commands[0]
-					if cmd.ServiceType == pb.DnService {
-						if cmd.ConfigChange.Replica.ShardID == dnShardInfo.ShardID &&
-							cmd.ConfigChange.Replica.ReplicaID > dnShardInfo.ReplicaID {
-							dnRepaired = true
+				for _, s := range services {
+					if hasShard(s.store, 0) {
+						s.store.hakeeperTick()
+						s.store.hakeeperCheck()
+					}
+
+					cb, err = services[0].store.getCommandBatch(ctx, dnMsg2.UUID)
+					if err != nil {
+						return false, err
+					}
+					if len(cb.Commands) > 0 {
+						cmd := cb.Commands[0]
+						if cmd.ServiceType == pb.DnService {
+							if cmd.ConfigChange.Replica.ShardID == dnShardInfo.ShardID &&
+								cmd.ConfigChange.Replica.ReplicaID > dnShardInfo.ReplicaID {
+								dnRepaired = true
+							}
 						}
 					}
+
+					cb, err = services[0].store.getCommandBatch(ctx, s.store.id())
+					if err != nil {
+						return false, err
+					}
+					for _, cmd := range cb.Commands {
+						plog.Infof("store returned schedule command: %s", cmd.LogString())
+					}
+					s.handleCommands(cb.Commands)
 				}
 
-				cb, err := services[0].store.getCommandBatch(ctx, s.store.id())
-				for _, cmd := range cb.Commands {
-					plog.Infof("store returned schedule command: %s", cmd.LogString())
+				logRepaired := true
+				for _, s := range services {
+					if !hasShard(s.store, 0) || !hasShard(s.store, 1) {
+						logRepaired = false
+						break
+					}
 				}
-				require.NoError(t, err)
-				s.handleCommands(cb.Commands)
-			}
-
-			logRepaired := true
-			for _, s := range services {
-				if !hasShard(s.store, 0) || !hasShard(s.store, 1) {
-					logRepaired = false
-					break
+				plog.Infof("dnRepairted %t, logRepaired %t", dnRepaired, logRepaired)
+				if !logRepaired || !dnRepaired {
+					return false, nil
+				} else {
+					plog.Infof("repair completed, i: %d", i)
+					return true, nil
 				}
 			}
-			plog.Infof("dnRepairted %t, logRepaired %t", dnRepaired, logRepaired)
-			if !logRepaired || !dnRepaired {
-				time.Sleep(time.Millisecond)
-			} else {
-				plog.Infof("repair completed, i: %d", i)
+			completed, err := tn()
+			if err != nil && err != dragonboat.ErrTimeout {
+				t.Fatalf("unexpected error %v", err)
+			}
+			if completed {
 				return
 			}
+			time.Sleep(5 * time.Millisecond)
 		}
 		t.Fatalf("failed to repair shards")
 	}

@@ -137,29 +137,55 @@ func (m *S3FSMinio) Write(ctx context.Context, vector IOVector) error {
 
 func (m *S3FSMinio) Read(ctx context.Context, vector *IOVector) error {
 
-	min, max := vector.offsetRange()
-	readLen := max - min
+	min, max, readToEnd := vector.offsetRange()
 
-	obj, err := m.client.GetObject(
-		ctx,
-		m.config.Bucket,
-		m.pathToKey(vector.FilePath),
-		minio.GetObjectOptions{},
-	)
-	err = m.mapError(err)
-	if err != nil {
-		return err
-	}
-	defer obj.Close()
-	_, err = obj.Seek(int64(min), io.SeekStart)
-	err = m.mapError(err)
-	if err != nil {
-		return err
-	}
-	content, err := io.ReadAll(io.LimitReader(obj, int64(readLen)))
-	err = m.mapError(err)
-	if err != nil {
-		return err
+	var content []byte
+
+	if readToEnd {
+		obj, err := m.client.GetObject(
+			ctx,
+			m.config.Bucket,
+			m.pathToKey(vector.FilePath),
+			minio.GetObjectOptions{},
+		)
+		err = m.mapError(err)
+		if err != nil {
+			return err
+		}
+		defer obj.Close()
+		_, err = obj.Seek(int64(min), io.SeekStart)
+		err = m.mapError(err)
+		if err != nil {
+			return err
+		}
+		content, err = io.ReadAll(obj)
+		err = m.mapError(err)
+		if err != nil {
+			return err
+		}
+
+	} else {
+		obj, err := m.client.GetObject(
+			ctx,
+			m.config.Bucket,
+			m.pathToKey(vector.FilePath),
+			minio.GetObjectOptions{},
+		)
+		err = m.mapError(err)
+		if err != nil {
+			return err
+		}
+		defer obj.Close()
+		_, err = obj.Seek(int64(min), io.SeekStart)
+		err = m.mapError(err)
+		if err != nil {
+			return err
+		}
+		content, err = io.ReadAll(io.LimitReader(obj, int64(max-min)))
+		err = m.mapError(err)
+		if err != nil {
+			return err
+		}
 	}
 
 	for i, entry := range vector.Entries {
@@ -167,11 +193,18 @@ func (m *S3FSMinio) Read(ctx context.Context, vector *IOVector) error {
 		if start >= len(content) {
 			return ErrEmptyRange
 		}
-		end := start + entry.Size
-		if end > len(content) {
-			return ErrUnexpectedEOF
+
+		var data []byte
+		if entry.Size < 0 {
+			// read to end
+			data = content[start:]
+		} else {
+			end := start + entry.Size
+			if end > len(content) {
+				return ErrUnexpectedEOF
+			}
+			data = content[start:end]
 		}
-		data := content[start:end]
 		if len(data) == 0 {
 			return ErrEmptyRange
 		}
@@ -189,7 +222,7 @@ func (m *S3FSMinio) Read(ctx context.Context, vector *IOVector) error {
 			*ptr = io.NopCloser(bytes.NewReader(data))
 		}
 		if setData {
-			if len(entry.Data) < entry.Size {
+			if len(entry.Data) < entry.Size || entry.Size < 0 {
 				vector.Entries[i].Data = data
 			} else {
 				copy(entry.Data, data)
