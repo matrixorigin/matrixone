@@ -71,6 +71,8 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	}
 
 	// dcl tcl is not support
+	var schemas []*plan.ObjectRef
+
 	switch pp := preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
 		return nil, errors.New("", "can't prepare from TCL and DCL statement")
@@ -100,6 +102,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		// set arg order
 		getParamRule.SetParamOrder()
 		args := getParamRule.params
+		schemas = getParamRule.schemas
 
 		// set arg order
 		resetParamRule := NewResetParamOrderRule(args)
@@ -111,8 +114,9 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	}
 
 	prepare := &plan.Prepare{
-		Name: stmtName,
-		Plan: preparePlan,
+		Name:    stmtName,
+		Schemas: schemas,
+		Plan:    preparePlan,
 	}
 
 	return &Plan{

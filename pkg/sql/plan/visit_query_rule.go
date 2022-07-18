@@ -27,16 +27,29 @@ var (
 )
 
 type GetParamRule struct {
-	params map[int]int
+	params  map[int]int
+	schemas []*plan.ObjectRef
 }
 
 func NewGetParamRule() GetParamRule {
 	return GetParamRule{
-		params: map[int]int{},
+		params: make(map[int]int),
 	}
 }
 
-func (rule *GetParamRule) Match(_ *Node) bool {
+func (rule *GetParamRule) Match(node *Node) bool {
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		rule.schemas = append(rule.schemas, &plan.ObjectRef{
+			Server:     node.ObjRef.Server,
+			Db:         node.ObjRef.Db,
+			Schema:     node.ObjRef.Schema,
+			Obj:        node.ObjRef.Obj,
+			ServerName: node.ObjRef.ServerName,
+			DbName:     node.ObjRef.DbName,
+			SchemaName: node.ObjRef.SchemaName,
+			ObjName:    node.ObjRef.ObjName,
+		})
+	}
 	return true
 }
 

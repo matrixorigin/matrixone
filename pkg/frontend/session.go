@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -223,7 +224,7 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 	if prepareStmt, ok := ses.prepareStmts[name]; ok {
 		return prepareStmt, nil
 	}
-	return nil, errorPrepareStatementNotExist
+	return nil, errors.New("", fmt.Sprintf("prepare statment '%s' does not exist", name))
 }
 
 func (ses *Session) RemovePrepareStmt(name string) {
@@ -727,6 +728,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		return nil, nil
 	}
 	table, err := tcc.getRelation(dbName, tableName)
+	tableId := table.ID(tcc.txnHandler.GetTxn().GetCtx())
 	if err != nil {
 		return nil, nil
 	}
@@ -764,6 +766,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 
 	//convert
 	obj := &plan2.ObjectRef{
+		DbName:     tableId,
 		SchemaName: dbName,
 		ObjName:    tableName,
 	}

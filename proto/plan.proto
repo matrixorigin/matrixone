@@ -664,8 +664,9 @@ message SetVariablesItem {
 }
 
 message Prepare {
-	string name		 = 1;
-	Plan   plan		 = 2;
+	string name		 			= 1;
+	repeated ObjectRef schemas 	= 2;
+	Plan   plan		 			= 3;
 }
 
 message Execute {

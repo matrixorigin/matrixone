@@ -4,6 +4,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 type ComputationRunner interface {
@@ -47,4 +48,10 @@ func (ec *engineColumnInfo) GetName() string {
 
 func (ec *engineColumnInfo) GetType() types.T {
 	return ec.typ.Oid
+}
+
+type PrepareStmt struct {
+	Name        string
+	PreparePlan *plan.Plan
+	PrepareStmt tree.Statement
 }

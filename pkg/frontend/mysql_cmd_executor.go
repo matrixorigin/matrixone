@@ -1354,7 +1354,21 @@ func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{},
 			return nil, err
 		}
 
-		query := plan.DeepCopyQuery(prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.GetQuery())
+		preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+
+		// check if schema change
+		for _, obj := range preparePlan.GetSchemas() {
+			newObj, _ := cwft.ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName)
+			if newObj == nil {
+				// old table must be droped
+				// TODO : The following conditions cannot be recognized:
+				// 		  drop table t1;  create table t1;
+				//        table had changed, but we don't know now.
+				return nil, errors.New("", fmt.Sprintf("table '%s' has been deleted, please reset prepare statement '%s'", obj.ObjName, stmtName))
+			}
+		}
+
+		query := preparePlan.Plan.GetQuery()
 
 		// reset params
 		resetParamRule := plan.NewResetParamRefRule(executePlan.Args)
@@ -1364,7 +1378,7 @@ func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{},
 			return nil, err
 		}
 
-		//reset plan & stmt
+		// reset plan & stmt
 		cwft.stmt = prepareStmt.PrepareStmt
 		cwft.plan = &plan.Plan{Plan: &plan.Plan_Query{
 			Query: query,
@@ -1616,7 +1630,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				Name:        preparePlan.GetDcl().GetPrepare().GetName(),
 				PreparePlan: preparePlan,
 				PrepareStmt: st.Stmt,
-				BuildTime:   time.Now().Second(),
 			})
 		case *tree.PrepareString:
 			selfHandle = true
@@ -1633,7 +1646,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				Name:        preparePlan.GetDcl().GetPrepare().GetName(),
 				PreparePlan: preparePlan,
 				PrepareStmt: stmts[0],
-				BuildTime:   time.Now().Second(),
 			})
 		case *tree.Deallocate:
 			selfHandle = true
