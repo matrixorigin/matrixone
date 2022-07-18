@@ -194,11 +194,6 @@ func FloatIntegerDivByScalarSels[T constraints.Float](x T, ys []T, rs []int64, s
 }
 
 func decimal64Div(xs, ys []types.Decimal64, xsScale, ysScale int32, rs []types.Decimal128) []types.Decimal128 {
-	// a / b
-	// to divide two decimal value
-	// 1. scale dividend using divisor's scale
-	// 2. perform integer division
-	// division result precision: 38(decimal64) division result scale: dividend's scale
 	for i, x := range xs {
 		rs[i] = types.Decimal64Decimal64Div(x, ys[i])
 	}

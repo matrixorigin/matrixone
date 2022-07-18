@@ -27,11 +27,13 @@ import (
 
 const (
 	// Max string buf + 1 (\0) needed by decimal64
-	DECIMAL64_ZSTR_LEN  = 25
-	DECIMAL64_PRECISION = 16
+	DECIMAL64_ZSTR_LEN = 25
+	DECIMAL64_WIDTH    = 16
+	DECIMAL64_NBYTES   = 8
 	// Max string buf + 1 (\0) needed by decimal128
-	DECIMAL128_ZSTR_LEN  = 43
-	DECIMAL128_PRECISION = 34
+	DECIMAL128_ZSTR_LEN = 43
+	DECIMAL128_WIDTH    = 34
+	DECIMAL128_NBYTES   = 16
 )
 
 func dec64PtrToC(p *Decimal64) *C.int64_t {
@@ -180,6 +182,11 @@ func (d *Decimal64) ToString() string {
 func (d *Decimal64) Decimal64ToString(scale int32) string {
 	return d.ToString()
 }
+func (d *Decimal64) ToStringWithScale(scale int32) string {
+	buf := make([]byte, DECIMAL64_ZSTR_LEN)
+	C.Decimal64_ToStringWithScale(bytesPtrToC(buf), dec64PtrToC(d), C.int32_t(scale))
+	return zstrToString(buf)
+}
 
 func (d *Decimal128) ToFloat64() float64 {
 	var ret C.double
@@ -205,6 +212,11 @@ func (d *Decimal128) ToString() string {
 }
 func (d *Decimal128) Decimal128ToString(scale int32) string {
 	return d.ToString()
+}
+func (d *Decimal128) ToStringWithScale(scale int32) string {
+	buf := make([]byte, DECIMAL128_ZSTR_LEN)
+	C.Decimal128_ToStringWithScale(bytesPtrToC(buf), dec128PtrToC(d), C.int32_t(scale))
+	return zstrToString(buf)
 }
 
 func (d *Decimal128) FromDecimal64(d64 Decimal64) {

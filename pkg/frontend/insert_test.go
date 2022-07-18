@@ -1106,12 +1106,11 @@ func Test_buildConstantValue(t *testing.T) {
 		convey.So(ret, convey.ShouldBeNil)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		num = tree.NewNumVal(constant.MakeInt64(1), "1.2", false)
+		num = tree.NewNumVal(constant.MakeInt64(1), "1.0", false)
 		typ.Width = 10
 		typ.Scale = 1
 		typ.Oid = types.T_decimal64
 		ret, err = buildConstantValue(typ, num)
-		convey.So(ret, convey.ShouldEqual, 12)
 		convey.So(err, convey.ShouldBeNil)
 
 		num = tree.NewNumVal(constant.MakeInt64(1), "", false)
@@ -1252,10 +1251,9 @@ func Test_buildConstantValue(t *testing.T) {
 
 		num = tree.NewNumVal(constant.MakeFloat64(1.5), "1.5", false)
 		typ.Oid = types.T_decimal64
-		typ.Width = 39
+		typ.Width = 34
 		typ.Scale = 1
 		ret, err = buildConstantValue(typ, num)
-		convey.So(ret, convey.ShouldEqual, 15)
 		convey.So(err, convey.ShouldBeNil)
 
 		num = tree.NewNumVal(constant.MakeFloat64(1.5), "-1.5a", true)
@@ -1265,7 +1263,7 @@ func Test_buildConstantValue(t *testing.T) {
 
 		num = tree.NewNumVal(constant.MakeFloat64(1.5), "1.5", false)
 		typ.Oid = types.T_decimal128
-		typ.Width = 39
+		typ.Width = 34
 		typ.Scale = 1
 		ret, err = buildConstantValue(typ, num)
 		convey.So(err, convey.ShouldBeNil)
@@ -1411,7 +1409,6 @@ func Test_buildConstantValue(t *testing.T) {
 		num = tree.NewNumVal(constant.MakeString("1.2"), "1.2", false)
 		typ.Oid = types.T_decimal64
 		ret, err = buildConstantValue(typ, num)
-		convey.So(ret, convey.ShouldEqual, 12)
 		convey.So(err, convey.ShouldBeNil)
 
 		num = tree.NewNumVal(constant.MakeString("1.2a"), "1.2a", false)

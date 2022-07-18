@@ -166,10 +166,81 @@ int32_t Decimal64_ToString(char *s, int64_t *d)
 	decDoubleToString(DecDoublePtr(d), s); 
 	return RC_SUCCESS;
 }
+
 int32_t Decimal128_ToString(char *s, int64_t *d)
 {
 	DECLARE_DEC128_CTXT;
 	decQuadToString(DecQuadPtr(d), s); 
+	return RC_SUCCESS;
+}
+
+decDouble* dec64_scale(int32_t s) {
+#define NSCALE 16 
+	static decDouble *p0;
+	static decDouble scale[NSCALE];
+	if (p0 == NULL) {
+		DECLARE_DEC64_CTXT;
+		decDouble ten;
+		decDoubleFromInt32(&ten, 10);
+		decDoubleFromInt32(&scale[0], 1);
+		for (int i = 1; i < NSCALE; i++) {
+			decDoubleDivide(&scale[i], &scale[i-1], &ten, &_fn_dc);
+		}
+		p0 = &scale[0];
+	}
+
+	if (s < 0 || s >= NSCALE) { 
+		return NULL;
+	}
+	return &scale[s];
+#undef NSCALE
+}
+
+decQuad* dec128_scale(int32_t s) {
+#define NSCALE 34
+	static decQuad *p0;
+	static decQuad scale[NSCALE];
+	if (p0 == NULL) {
+		DECLARE_DEC128_CTXT;
+		decQuad ten;
+		decQuadFromInt32(&ten, 10);
+		decQuadFromInt32(&scale[0], 1);
+		for (int i = 1; i < NSCALE; i++) {
+			decQuadDivide(&scale[i], &scale[i-1], &ten, &_fn_dc);
+		}
+		p0 = &scale[0];
+	}
+
+	if (s < 0 || s >= NSCALE) { 
+		return NULL;
+	}
+	return &scale[s];
+#undef NSCALE
+}
+
+int32_t Decimal64_ToStringWithScale(char *s, int64_t *d, int32_t scale)
+{
+	DECLARE_DEC64_CTXT;
+	decDouble *quan = dec64_scale(scale);
+	if (quan == NULL) {
+		return RC_INVALID_ARGUMENT;
+	}
+	decDouble tmp;
+	decDoubleQuantize(&tmp, DecDoublePtr(d), quan, &_fn_dc);
+	decDoubleToString(&tmp, s); 
+	return RC_SUCCESS;
+}
+
+int32_t Decimal128_ToStringWithScale(char *s, int64_t *d, int32_t scale)
+{
+	DECLARE_DEC128_CTXT;
+	decQuad *quan = dec128_scale(scale);
+	if (quan == NULL) {
+		return RC_INVALID_ARGUMENT;
+	}
+	decQuad tmp;
+	decQuadQuantize(&tmp, DecQuadPtr(d), quan, &_fn_dc);
+	decQuadToString(&tmp, s); 
 	return RC_SUCCESS;
 }
 

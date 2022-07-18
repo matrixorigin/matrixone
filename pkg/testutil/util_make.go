@@ -15,8 +15,6 @@
 package testutil
 
 import (
-	"unsafe"
-
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -85,19 +83,32 @@ var (
 
 	MakeDecimal64Vector = func(values []int64, nsp []uint64, typ types.Type) *vector.Vector {
 		vec := vector.New(decimal64Type)
-		for _, n := range nsp {
-			nulls.Add(vec.Nsp, n)
+		cols := make([]types.Decimal64, len(values))
+		if nsp == nil {
+			for i, v := range values {
+				cols[i].FromInt64(v)
+			}
+		} else {
+			for _, n := range nsp {
+				nulls.Add(vec.Nsp, n)
+			}
+			for i, v := range values {
+				if nulls.Contains(vec.Nsp, uint64(i)) {
+					continue
+				}
+				cols[i].FromInt64(v)
+			}
 		}
-		vec.Col = *(*[]types.Decimal64)(unsafe.Pointer(&values))
+		vec.Col = cols
 		return vec
 	}
 
-	MakeDecimal128Vector = func(values []uint64, nsp []uint64, typ types.Type) *vector.Vector {
+	MakeDecimal128Vector = func(values []int64, nsp []uint64, typ types.Type) *vector.Vector {
 		vec := vector.New(decimal128Type)
 		cols := make([]types.Decimal128, len(values))
 		if nsp == nil {
 			for i, v := range values {
-				d := types.InitDecimal128UsingUint(v)
+				d := types.InitDecimal128(v)
 				cols[i] = d
 			}
 		} else {
@@ -108,7 +119,7 @@ var (
 				if nulls.Contains(vec.Nsp, uint64(i)) {
 					continue
 				}
-				d := types.InitDecimal128UsingUint(v)
+				d := types.InitDecimal128(v)
 				cols[i] = d
 			}
 		}

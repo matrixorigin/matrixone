@@ -61,6 +61,9 @@ int32_t Decimal128_ToInt64(int64_t *r, int64_t *d);
 int32_t Decimal64_ToString(char *s, int64_t *d);
 int32_t Decimal128_ToString(char *s, int64_t *d);
 
+int32_t Decimal64_ToStringWithScale(char *s, int64_t *d, int32_t scale);
+int32_t Decimal128_ToStringWithScale(char *s, int64_t *d, int32_t scale);
+
 int32_t Decimal64_ToDecimal128(int64_t *d128, int64_t *d64);
 int32_t Decimal128_ToDecimal64(int64_t *d64, int64_t *d128);
 

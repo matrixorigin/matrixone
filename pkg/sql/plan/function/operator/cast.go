@@ -1287,14 +1287,9 @@ func CastFloatAsDecimal64[T constraints.Float](lv, rv *vector.Vector, proc *proc
 	resultType.Size = 8
 	vs := vector.MustTCols[T](lv)
 	if lv.IsScalar() {
-		srcStr := fmt.Sprintf("%f", vs[0])
 		vec := proc.AllocScalarVector(resultType)
 		rs := make([]types.Decimal64, 1)
-		decimal64, err := types.ParseStringToDecimal64(srcStr, resultType.Width, resultType.Scale)
-		if err != nil {
-			return nil, err
-		}
-		rs[0] = decimal64
+		rs[0].FromFloat64(float64(vs[0]))
 		nulls.Reset(vec.Nsp)
 		vector.SetCol(vec, rs)
 		return vec, nil
@@ -1310,12 +1305,7 @@ func CastFloatAsDecimal64[T constraints.Float](lv, rv *vector.Vector, proc *proc
 		if nulls.Contains(lv.Nsp, uint64(i)) {
 			continue
 		}
-		strValue := fmt.Sprintf("%f", vs[i])
-		decimal64, err2 := types.ParseStringToDecimal64(strValue, resultType.Width, resultType.Scale)
-		if err2 != nil {
-			return nil, err2
-		}
-		rs[i] = decimal64
+		rs[i].FromFloat64(float64(vs[i]))
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
 	vector.SetCol(vec, rs)
@@ -1443,7 +1433,7 @@ func CastVarcharAsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vect
 func CastDecimal64AsDecimal128(lv, _ *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lvScale := lv.Typ.Scale
 	resultScale := lvScale
-	resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
+	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: resultScale}
 	lvs := vector.MustTCols[types.Decimal64](lv)
 
 	if lv.IsScalar() {

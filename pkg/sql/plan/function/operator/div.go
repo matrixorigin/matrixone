@@ -158,7 +158,7 @@ func DivDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	lvs, rvs := vector.MustTCols[types.Decimal64](lv), vector.MustTCols[types.Decimal64](rv)
 	lvScale, rvScale := lv.Typ.Scale, rv.Typ.Scale
 	resultScale := lv.Typ.Scale
-	resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
+	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: resultScale}
 
 	if lv.IsScalarNull() || rv.IsScalarNull() {
 		return proc.AllocScalarNullVector(lv.Typ), nil
@@ -246,7 +246,7 @@ func DivDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	lvs, rvs := vector.MustTCols[types.Decimal128](lv), vector.MustTCols[types.Decimal128](rv)
 	lvScale, rvScale := lv.Typ.Scale, rv.Typ.Scale
 	resultScale := lv.Typ.Scale
-	resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
+	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: resultScale}
 	if lv.IsScalarNull() || rv.IsScalarNull() {
 		return proc.AllocScalarNullVector(lv.Typ), nil
 	}
