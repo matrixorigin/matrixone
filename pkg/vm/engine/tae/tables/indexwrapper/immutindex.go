@@ -98,6 +98,7 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 	if err != nil {
 		return
 	}
+	defer colFile.Close()
 	for _, meta := range metas.Metas {
 		idxFile, err := colFile.OpenIndexFile(int(meta.InternalIdx))
 		if err != nil {
@@ -111,6 +112,7 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 			size := idxFile.Stat().Size()
 			buf := make([]byte, size)
 			if _, err = idxFile.Read(buf); err != nil {
+				idxFile.Unref()
 				return err
 			}
 			index.zmReader = NewZMReader(blk.GetBufMgr(), idxFile, id)
@@ -118,6 +120,7 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 			size := idxFile.Stat().Size()
 			buf := make([]byte, size)
 			if _, err = idxFile.Read(buf); err != nil {
+				idxFile.Unref()
 				return err
 			}
 			index.bfReader = NewBFReader(blk.GetBufMgr(), idxFile, id)
