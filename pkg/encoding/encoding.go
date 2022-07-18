@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -55,17 +56,15 @@ func Decode(data []byte, v interface{}) error {
 	return gob.NewDecoder(bytes.NewReader(data)).Decode(v)
 }
 
-func EncodeJson(v string) ([]byte, error) {
-	bj, err := bytejson.ParseFromString(v)
-	if err != nil {
-		return nil, err
-	}
-	return EncodeFixed(*bj), nil
+func EncodeJson(v bytejson.ByteJson) ([]byte, error) {
+	logutil.Infof("EncodeJson: %s", v.String())
+	return EncodeFixed(v), nil
 }
 
-func DecodeJson(buf []byte) string {
+func DecodeJson(buf []byte) bytejson.ByteJson {
+	logutil.Infof("DecodeJson: %s", string(buf))
 	bj := *(*bytejson.ByteJson)(unsafe.Pointer(&buf[0]))
-	return bj.String()
+	return bj
 }
 
 func EncodeType(v types.Type) []byte {

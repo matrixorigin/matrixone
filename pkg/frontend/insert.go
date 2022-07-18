@@ -17,6 +17,7 @@ package frontend
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"go/constant"
 	"math"
 	"strconv"
@@ -164,7 +165,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 						if err != nil {
 							return err
 						}
-						json, err := (vv.(bytejson.ByteJson)).MarshalJSON()
+						json, err := encoding.EncodeJson(vv.(bytejson.ByteJson))
 						if err != nil {
 							return err
 						}
@@ -1122,7 +1123,7 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 	case constant.String:
 		switch typ.Oid {
 		case types.T_json:
-			res, err := bytejson.ParseValueToByteJson(num)
+			res, err := types.ParseValueToByteJson(num)
 			if err != nil {
 				return nil, err
 			}

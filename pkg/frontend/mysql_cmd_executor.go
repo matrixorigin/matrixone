@@ -18,6 +18,7 @@ import (
 	goErrors "errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
@@ -423,13 +424,23 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			switch vec.Typ.Oid { //get col
 			case types.T_json:
 				if !nulls.Any(vec.Nsp) {
-					vs := vec.Col.([]bytejson.ByteJson)
+					bytes := vec.Col.(*types.Bytes)
+					vs := make([]bytejson.ByteJson, 0, len(bytes.Lengths))
+					for i, length := range bytes.Lengths {
+						off := bytes.Offsets[i]
+						vs = append(vs, encoding.DecodeJson(bytes.Data[off:off+length]))
+					}
 					row[i] = vs[rowIndex]
 				} else {
 					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
 						row[i] = nil
 					} else {
-						vs := vec.Col.([]bytejson.ByteJson)
+						bytes := vec.Col.(*types.Bytes)
+						vs := make([]bytejson.ByteJson, 0, len(bytes.Lengths))
+						for i, length := range bytes.Lengths {
+							off := bytes.Offsets[i]
+							vs = append(vs, encoding.DecodeJson(bytes.Data[off:off+length]))
+						}
 						row[i] = vs[rowIndex]
 					}
 				}
