@@ -97,7 +97,9 @@ func NewUnixNanoHLCClockWithStopper(stopper *stopper.Stopper, maxOffset time.Dur
 		physicalClock: physicalClock,
 		maxOffset:     maxOffset,
 	}
-	stopper.RunTask(clock.offsetMonitor)
+	if err := stopper.RunTask(clock.offsetMonitor); err != nil {
+		panic(err)
+	}
 	return clock
 }
 
