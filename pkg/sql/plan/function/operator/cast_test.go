@@ -17,7 +17,6 @@ package operator
 import (
 	"testing"
 	"time"
-	"unsafe"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"

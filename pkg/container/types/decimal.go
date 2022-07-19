@@ -497,13 +497,13 @@ func (d *Decimal128) DivInt64(x int64) Decimal128 {
 }
 
 // Wrap old decimal api.   Most likely we should delete them.
-func ParseStringToDecimal64(s string, pre int32, scale int32) (Decimal64, error) {
+func ParseStringToDecimal64(s string, _ int32, scale int32) (Decimal64, error) {
 	var d Decimal64
 	err := d.FromStringWithScale(s, scale)
 	return d, err
 }
 
-func ParseStringToDecimal128(s string, pre int32, scale int32) (Decimal128, error) {
+func ParseStringToDecimal128(s string, _ int32, scale int32) (Decimal128, error) {
 	var d Decimal128
 	err := d.FromStringWithScale(s, scale)
 	return d, err
@@ -589,7 +589,7 @@ func InitDecimal64(i int64) Decimal64 {
 	d.FromInt64(i)
 	return d
 }
-func InitDecimal64UsingUint(i uint64, s int32) Decimal64 {
+func InitDecimal64UsingUint(i uint64, _ int32) Decimal64 {
 	var d Decimal64
 	d.FromUint64(i)
 	return d
@@ -648,12 +648,12 @@ func Decimal128Int64Div(a Decimal128, b int64) Decimal128 {
 	return a.DivInt64(b)
 }
 
-func AlignDecimal128UsingScaleDiffBatch(src, dst []Decimal128, scale int32) []Decimal128 {
+func AlignDecimal128UsingScaleDiffBatch(src, dst []Decimal128, _ int32) []Decimal128 {
 	copy(dst, src)
 	return dst
 }
 
-func AlignDecimal64UsingScaleDiffBatch(src, dst []Decimal64, scale int32) []Decimal64 {
+func AlignDecimal64UsingScaleDiffBatch(src, dst []Decimal64, _ int32) []Decimal64 {
 	copy(dst, src)
 	return dst
 }

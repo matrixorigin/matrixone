@@ -189,7 +189,7 @@ func (r *DecimalRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 		vs := vec.Col.([]types.Decimal64)
 		for j, v := range vs {
 			tmp := v.MulInt64(zs[j])
-			r.Vs[i].AddDecimal64(tmp)
+			r.Vs[i] = r.Vs[i].AddDecimal64(tmp)
 		}
 		if nulls.Any(vec.Nsp) {
 			for j := range vs {

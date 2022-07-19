@@ -71,6 +71,20 @@ func TestParse(t *testing.T) {
 	require.True(t, err == nil)
 }
 
+func TestNeg(t *testing.T) {
+	s := "123456.789"
+	d128, err := ParseStringToDecimal128(s, 20, 5)
+
+	require.True(t, err == nil)
+	require.Equal(t, d128.ToString(), s)
+
+	nd := NegDecimal128(d128)
+	require.Equal(t, nd.ToString(), "-"+s)
+
+	z := d128.Add(nd)
+	require.True(t, z.Eq(Decimal128_Zero))
+}
+
 func TestAdd(t *testing.T) {
 	require.True(t, Decimal64_One.Eq(Decimal64_Zero.Add(Decimal64_One)))
 	require.True(t, Decimal64_Ten.Eq(Decimal64_Zero.Add(Decimal64_Ten)))
@@ -78,4 +92,13 @@ func TestAdd(t *testing.T) {
 	require.True(t, Decimal128_One.Eq(Decimal128_Zero.Add(Decimal128_One)))
 	require.True(t, Decimal128_Ten.Eq(Decimal128_Zero.Add(Decimal128_Ten)))
 	require.True(t, Decimal128Max.Eq(Decimal128_Zero.Add(Decimal128Max)))
+}
+
+func TestBits(t *testing.T) {
+	var d1, d2 Decimal64
+	d1.FromStringWithScale("9.2234", 5)
+	d2.FromStringWithScale("9.22337777675788773437747747747347377", 4)
+
+	require.Equal(t, d1.ToInt64(), d2.ToInt64())
+	require.Equal(t, Decimal64ToInt64Raw(d1), Decimal64ToInt64Raw(d2))
 }

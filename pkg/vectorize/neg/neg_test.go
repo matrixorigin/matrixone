@@ -73,6 +73,8 @@ func TestDecimal128Neg(t *testing.T) {
 	rs := make([]types.Decimal128, 6)
 	rs = Decimal128Neg(xs, rs)
 
+	require.Equal(t, "-123456.79", string(rs[0].ToString()))
+
 	require.Equal(t, "-123456.79", string(rs[0].ToStringWithScale(2)))
 
 	require.Equal(t, "-120000.79", string(rs[1].ToStringWithScale(2)))

@@ -40,6 +40,14 @@
 #define CHECK_INEXACT CHECK_RET_STATUS(DEC_STATUS_INEXACT, RC_DATA_TRUNCATED) 
 #define CHECK_ALL CHECK_RET_STATUS(DEC_STATUS_ALL, RC_INVALID_ARGUMENT)
 
+/*
+ * About decDouble/decQuad cohort.  One decimal number may have serveral different 
+ * representations (cohort).   Cohort is useful in computing while maintaining a 
+ * meaningful accuracy.   MO does not use cohort, instead, cohort causes trouble when
+ * MO hash the value.
+ *
+ * Calling reduce before returning the number.
+ */
 
 int32_t Decimal64_Compare(int32_t *cmp, int64_t *a, int64_t *b)
 {
@@ -81,31 +89,35 @@ int32_t Decimal128_Compare(int32_t *cmp, int64_t *a, int64_t *b)
 
 int32_t Decimal64_FromInt32(int64_t *d, int32_t v) 
 {
+	DECLARE_DEC64_CTXT;
 	decDouble tmp;
 	decDoubleFromInt32(&tmp, v);
-	decDoubleCanonical(DecDoublePtr(d), &tmp);
+	decDoubleReduce(DecDoublePtr(d), &tmp, &_fn_dc);
 	return RC_SUCCESS;
 }
 int32_t Decimal128_FromInt32(int64_t *d, int32_t v) 
 {
+	DECLARE_DEC128_CTXT;
 	decQuad tmp;
 	decQuadFromInt32(&tmp, v);
-	decQuadCanonical(DecQuadPtr(d), &tmp);
+	decQuadReduce(DecQuadPtr(d), &tmp, &_fn_dc);
 	return RC_SUCCESS;
 }
 
 int32_t Decimal64_FromUint32(int64_t *d, uint32_t v) 
 {
+	DECLARE_DEC64_CTXT;
 	decDouble tmp;
 	decDoubleFromUInt32(&tmp, v);
-	decDoubleCanonical(DecDoublePtr(d), &tmp);
+	decDoubleReduce(DecDoublePtr(d), &tmp, &_fn_dc);
 	return RC_SUCCESS;
 }
 int32_t Decimal128_FromUint32(int64_t *d, uint32_t v) 
 {
+	DECLARE_DEC128_CTXT;
 	decQuad tmp;
 	decQuadFromUInt32(&tmp, v);
-	decQuadCanonical(DecQuadPtr(d), &tmp);
+	decQuadReduce(DecQuadPtr(d), &tmp, &_fn_dc);
 	return RC_SUCCESS;
 }
 
@@ -116,7 +128,7 @@ int32_t Decimal64_FromInt64(int64_t *d, int64_t v)
 	decDouble tmp;
 	sprintf(s, "%ld", v);
 	decDoubleFromString(&tmp, s, &_fn_dc);
-	decDoubleCanonical(DecDoublePtr(d), &tmp);
+	decDoubleReduce(DecDoublePtr(d), &tmp, &_fn_dc);
 	return RC_SUCCESS;
 }
 int32_t Decimal128_FromInt64(int64_t *d, int64_t v) 
@@ -126,7 +138,7 @@ int32_t Decimal128_FromInt64(int64_t *d, int64_t v)
 	char s[128];
 	sprintf(s, "%ld", v);
 	decQuadFromString(&tmp, s, &_fn_dc);
-	decQuadCanonical(DecQuadPtr(d), &tmp);
+	decQuadReduce(DecQuadPtr(d), &tmp, &_fn_dc);
 	return RC_SUCCESS;
 }
 
@@ -137,7 +149,7 @@ int32_t Decimal64_FromUint64(int64_t *d, uint64_t v)
 	char s[128];
 	sprintf(s, "%lu", v);
 	decDoubleFromString(&tmp, s, &_fn_dc);
-	decDoubleCanonical(DecDoublePtr(d), &tmp);
+	decDoubleReduce(DecDoublePtr(d), &tmp, &_fn_dc);
 	return RC_SUCCESS;
 }
 int32_t Decimal128_FromUint64(int64_t *d, uint64_t v) 
@@ -147,7 +159,7 @@ int32_t Decimal128_FromUint64(int64_t *d, uint64_t v)
 	char s[128];
 	sprintf(s, "%lu", v);
 	decQuadFromString(&tmp, s, &_fn_dc);
-	decQuadCanonical(DecQuadPtr(d), &tmp);
+	decQuadReduce(DecQuadPtr(d), &tmp, &_fn_dc);
 	return RC_SUCCESS;
 }
 
@@ -158,7 +170,7 @@ int32_t Decimal64_FromFloat64(int64_t *d, double v)
 	char s[128];
 	sprintf(s, "%g", v);
 	decDoubleFromString(&tmp, s, &_fn_dc);
-	decDoubleCanonical(DecDoublePtr(d), &tmp);
+	decDoubleReduce(DecDoublePtr(d), &tmp, &_fn_dc);
 	return RC_SUCCESS;
 }
 int32_t Decimal128_FromFloat64(int64_t *d, double v) 
@@ -168,7 +180,7 @@ int32_t Decimal128_FromFloat64(int64_t *d, double v)
 	char s[128];
 	sprintf(s, "%g", v);
 	decQuadFromString(&tmp, s, &_fn_dc);
-	decQuadCanonical(DecQuadPtr(d), &tmp);
+	decQuadReduce(DecQuadPtr(d), &tmp, &_fn_dc);
 	return RC_SUCCESS;
 }
 
@@ -177,7 +189,7 @@ int32_t Decimal64_FromString(int64_t *d, char *s)
 	DECLARE_DEC64_CTXT;
 	decDouble tmp;
 	decDoubleFromString(&tmp, s, &_fn_dc);
-	decDoubleCanonical(DecDoublePtr(d), &tmp);
+	decDoubleReduce(DecDoublePtr(d), &tmp, &_fn_dc);
 	CHECK_INEXACT;
 	CHECK_ALL;
 	return RC_SUCCESS;
@@ -188,7 +200,7 @@ int32_t Decimal128_FromString(int64_t *d, char *s)
 	DECLARE_DEC128_CTXT;
 	decQuad tmp;
 	decQuadFromString(&tmp, s, &_fn_dc);
-	decQuadCanonical(DecQuadPtr(d), &tmp);
+	decQuadReduce(DecQuadPtr(d), &tmp, &_fn_dc);
 	CHECK_INEXACT;
 	CHECK_ALL;
 	return RC_SUCCESS;
@@ -280,40 +292,40 @@ int32_t Decimal128_ToStringWithScale(char *s, int64_t *d, int32_t scale)
 
 int32_t Decimal64_FromStringWithScale(int64_t *d, char *s, int32_t scale)
 {
+	DECLARE_DEC64_CTXT;
 	decDouble tmp1;
 	decDouble tmp;
 	int32_t rc = Decimal64_FromString((int64_t*) &tmp1, s);
 	if (rc == 0 || rc == RC_DATA_TRUNCATED) {
-		DECLARE_DEC64_CTXT;
 		decDouble *quan = dec64_scale(scale);
 		if (quan == NULL) {
 			return RC_INVALID_ARGUMENT;
 		}
 		decDoubleQuantize(&tmp, &tmp1, quan, &_fn_dc); 
-		decDoubleCanonical(DecDoublePtr(d), &tmp);
+		decDoubleReduce(DecDoublePtr(d), &tmp, &_fn_dc);
 		return RC_SUCCESS;
 	} else {
-		decDoubleCanonical(DecDoublePtr(d), &tmp);
+		decDoubleReduce(DecDoublePtr(d), &tmp, &_fn_dc);
 		return rc;
 	}
 }
 
 int32_t Decimal128_FromStringWithScale(int64_t *d, char *s, int32_t scale)
 {
+	DECLARE_DEC128_CTXT;
 	decQuad tmp1;
 	decQuad tmp;
 	int32_t rc = Decimal128_FromString((int64_t*) &tmp1, s);
 	if (rc == 0 || rc == RC_DATA_TRUNCATED) {
-		DECLARE_DEC128_CTXT;
 		decQuad *quan = dec128_scale(scale);
 		if (quan == NULL) {
 			return RC_INVALID_ARGUMENT;
 		}
-		decQuadQuantize(&tmp1, &tmp, quan, &_fn_dc); 
-		decQuadCanonical(DecQuadPtr(d), &tmp);
+		decQuadQuantize(&tmp, &tmp1, quan, &_fn_dc); 
+		decQuadReduce(DecQuadPtr(d), &tmp, &_fn_dc);
 		return RC_SUCCESS;
 	} else {
-		decQuadCanonical(DecQuadPtr(d), &tmp);
+		decQuadReduce(DecQuadPtr(d), &tmp, &_fn_dc);
 		return rc;
 	}
 }
@@ -378,7 +390,7 @@ int32_t Decimal64_ToDecimal128(int64_t *d128, int64_t *d64)
 	decQuad tmp;
 	DECLARE_DEC128_CTXT;
 	decDoubleToWider(DecDoublePtr(d64), &tmp);
-	decQuadCanonical(DecQuadPtr(d128), &tmp);
+	decQuadReduce(DecQuadPtr(d128), &tmp, &_fn_dc);
 	return RC_SUCCESS;
 }
 int32_t Decimal128_ToDecimal64(int64_t *d64, int64_t *d128)
@@ -386,7 +398,7 @@ int32_t Decimal128_ToDecimal64(int64_t *d64, int64_t *d128)
 	decDouble tmp;
 	DECLARE_DEC64_CTXT;
 	decDoubleFromWider(&tmp, DecQuadPtr(d128), &_fn_dc);
-	decDoubleCanonical(DecDoublePtr(d64), &tmp);
+	decDoubleReduce(DecDoublePtr(d64), &tmp, &_fn_dc);
 	return RC_SUCCESS;
 }
 
@@ -395,7 +407,7 @@ int32_t Decimal64_Add(int64_t *r, int64_t *a, int64_t *b)
 	decDouble tmp;
 	DECLARE_DEC64_CTXT;
 	decDoubleAdd(&tmp, DecDoublePtr(a), DecDoublePtr(b), &_fn_dc);
-	decDoubleCanonical(DecDoublePtr(r), &tmp);
+	decDoubleReduce(DecDoublePtr(r), &tmp, &_fn_dc);
 	CHECK_OFUF;
 	return RC_SUCCESS;
 }
@@ -412,7 +424,7 @@ int32_t Decimal64_Sub(int64_t *r, int64_t *a, int64_t *b)
 	decDouble tmp;
 	DECLARE_DEC64_CTXT;
 	decDoubleSubtract(&tmp, DecDoublePtr(a), DecDoublePtr(b), &_fn_dc);
-	decDoubleCanonical(DecDoublePtr(r), &tmp);
+	decDoubleReduce(DecDoublePtr(r), &tmp, &_fn_dc);
 	CHECK_OFUF;
 	return RC_SUCCESS;
 }
@@ -429,7 +441,7 @@ int32_t Decimal64_Mul(int64_t *r, int64_t *a, int64_t *b)
 	decDouble tmp;
 	DECLARE_DEC64_CTXT;
 	decDoubleMultiply(&tmp, DecDoublePtr(a), DecDoublePtr(b), &_fn_dc);
-	decDoubleCanonical(DecDoublePtr(r), &tmp);
+	decDoubleReduce(DecDoublePtr(r), &tmp, &_fn_dc);
 	CHECK_OFUF;
 	return RC_SUCCESS;
 }
@@ -455,7 +467,7 @@ int32_t Decimal64_Div(int64_t *r, int64_t *a, int64_t *b)
 	decDouble tmp;
 	DECLARE_DEC64_CTXT;
 	decDoubleDivide(&tmp, DecDoublePtr(a), DecDoublePtr(b), &_fn_dc);
-	decDoubleCanonical(DecDoublePtr(r), &tmp);
+	decDoubleReduce(DecDoublePtr(r), &tmp, &_fn_dc);
 	CHECK_DIV;
 	CHECK_OFUF;
 	return RC_SUCCESS;
@@ -482,7 +494,7 @@ int32_t Decimal128_Add(int64_t *r, int64_t *a, int64_t *b)
 	decQuad tmp;
 	DECLARE_DEC128_CTXT;
 	decQuadAdd(&tmp, DecQuadPtr(a), DecQuadPtr(b), &_fn_dc);
-	decQuadCanonical(DecQuadPtr(r), &tmp);
+	decQuadReduce(DecQuadPtr(r), &tmp, &_fn_dc);
 	CHECK_OFUF;
 	return RC_SUCCESS;
 }
@@ -506,7 +518,7 @@ int32_t Decimal128_Sub(int64_t *r, int64_t *a, int64_t *b)
 	decQuad tmp;
 	DECLARE_DEC128_CTXT;
 	decQuadSubtract(&tmp, DecQuadPtr(a), DecQuadPtr(b), &_fn_dc);
-	decQuadCanonical(DecQuadPtr(r), &tmp);
+	decQuadReduce(DecQuadPtr(r), &tmp, &_fn_dc);
 	CHECK_OFUF;
 	return RC_SUCCESS;
 }
@@ -523,7 +535,7 @@ int32_t Decimal128_Mul(int64_t *r, int64_t *a, int64_t *b)
 	decQuad tmp;
 	DECLARE_DEC128_CTXT;
 	decQuadMultiply(&tmp, DecQuadPtr(a), DecQuadPtr(b), &_fn_dc);
-	decQuadCanonical(DecQuadPtr(r), &tmp);
+	decQuadReduce(DecQuadPtr(r), &tmp, &_fn_dc);
 	CHECK_OFUF;
 	return RC_SUCCESS;
 }
@@ -540,7 +552,7 @@ int32_t Decimal128_Div(int64_t *r, int64_t *a, int64_t *b)
 	decQuad tmp;
 	DECLARE_DEC128_CTXT;
 	decQuadDivide(&tmp, DecQuadPtr(a), DecQuadPtr(b), &_fn_dc);
-	decQuadCanonical(DecQuadPtr(r), &tmp);
+	decQuadReduce(DecQuadPtr(r), &tmp, &_fn_dc);
 	CHECK_DIV;
 	CHECK_OFUF;
 	return RC_SUCCESS;

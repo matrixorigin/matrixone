@@ -106,7 +106,7 @@ func (r *Decimal64Ring) Grow(m *mheap.Mheap) error {
 	}
 	r.Vs = r.Vs[:n+1]
 	r.Da = r.Da[:(n+1)*8]
-	r.Vs[n] = types.Decimal64Min
+	r.Vs[n] = types.Decimal64Max
 	r.Ns = append(r.Ns, 0)
 	r.Es = append(r.Es, true)
 	return nil
