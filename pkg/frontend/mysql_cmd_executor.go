@@ -197,12 +197,17 @@ func (o *outputQueue) flush() error {
 }
 
 const (
-	tableNamePos  = 1
-	attrNamePos   = 2
-	attrTypPos    = 3
-	charWidthPos  = 5
-	defaultPos    = 7
-	primaryKeyPos = 10
+	tableNamePos    = 0
+	tableCommentPos = 4
+
+	attrNamePos    = 8
+	attrTypPos     = 9
+	charWidthPos   = 11
+	defaultPos     = 13
+	primaryKeyPos  = 16
+	attrCommentPos = 19
+
+	showCreateTableAttrCount = 21
 )
 
 /*
@@ -224,6 +229,13 @@ func handleShowCreateTable(ses *Session) error {
 		} else {
 			nullOrNot = "DEFAULT NULL"
 		}
+
+		var hasAttrComment string
+		attrComment := string(d[attrCommentPos].([]byte))
+		if attrComment != "" {
+			hasAttrComment = " COMMENT '" + attrComment + "'"
+		}
+
 		if rowCount == 0 {
 			createStr += "\n"
 		} else {
@@ -234,7 +246,7 @@ func handleShowCreateTable(ses *Session) error {
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char {
 			typeStr += fmt.Sprintf("(%d)", d[charWidthPos].(int32))
 		}
-		createStr += fmt.Sprintf("`%s` %s %s", colName, typeStr, nullOrNot)
+		createStr += fmt.Sprintf("`%s` %s %s%s", colName, typeStr, nullOrNot, hasAttrComment)
 		rowCount++
 		if string(d[primaryKeyPos].([]byte)) == "p" {
 			pkDefs = append(pkDefs, colName)
@@ -256,6 +268,11 @@ func handleShowCreateTable(ses *Session) error {
 		createStr += "\n"
 	}
 	createStr += ")"
+
+	tableComment := string(ses.Data[0][tableCommentPos].([]byte))
+	if tableComment != "" {
+		createStr += " COMMENT='" + tableComment + "',"
+	}
 
 	row := make([]interface{}, 2)
 	row[0] = tableName

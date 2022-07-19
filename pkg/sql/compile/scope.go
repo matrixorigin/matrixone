@@ -231,6 +231,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 					IsNull: col.GetDefault().GetIsNull(),
 				},
 				Primary: col.GetPrimary(),
+				Comment: col.GetComment(),
 			},
 		}
 	}
