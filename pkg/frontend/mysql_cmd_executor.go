@@ -26,7 +26,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 
@@ -56,7 +55,7 @@ var (
 	errorUnaryMinusForNonNumericTypeIsNotSupported = goErrors.New("unary minus for no numeric type is not supported")
 )
 
-//tableInfos of a database
+// TableInfoCache tableInfos of a database
 type TableInfoCache struct {
 	db         string
 	tableInfos map[string][]ColumnInfo
@@ -1254,6 +1253,48 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	return nil
 }
 
+// handlePrepareStmt
+func (mce *MysqlCmdExecutor) handlePrepareStmt(st *tree.PrepareStmt) error {
+	preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
+	if err != nil {
+		return err
+	}
+
+	return mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), &PrepareStmt{
+		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
+		PreparePlan: preparePlan,
+		PrepareStmt: st.Stmt,
+	})
+}
+
+// handlePrepareString
+func (mce *MysqlCmdExecutor) handlePrepareString(st *tree.PrepareString) error {
+	preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
+	if err != nil {
+		return err
+	}
+	stmts, err := mysql.Parse(st.Sql)
+	if err != nil {
+		return err
+	}
+
+	return mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), &PrepareStmt{
+		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
+		PreparePlan: preparePlan,
+		PrepareStmt: stmts[0],
+	})
+}
+
+// handleDeallocate
+func (mce *MysqlCmdExecutor) handleDeallocate(st *tree.Deallocate) error {
+	deallocatePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
+	if err != nil {
+		return err
+	}
+	mce.ses.RemovePrepareStmt(deallocatePlan.GetDcl().GetDeallocate().GetName())
+	return nil
+}
+
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
 	cols := []*plan2.ColDef{
 		{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_varchar)}, Name: explainColName},
@@ -1384,8 +1425,8 @@ func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{},
 		query := preparePlan.Plan.GetQuery()
 
 		// reset params
-		resetParamRule := plan.NewResetParamRefRule(executePlan.Args)
-		VisitQuery := plan.NewVisitQuery(query, &resetParamRule)
+		resetParamRule := plan2.NewResetParamRefRule(executePlan.Args)
+		VisitQuery := plan2.NewVisitQuery(query, &resetParamRule)
 		query, err = VisitQuery.Visit()
 		if err != nil {
 			return nil, err
@@ -1393,7 +1434,7 @@ func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{},
 
 		// reset plan & stmt
 		cwft.stmt = prepareStmt.PrepareStmt
-		cwft.plan = &plan.Plan{Plan: &plan.Plan_Query{
+		cwft.plan = &plan2.Plan{Plan: &plan2.Plan_Query{
 			Query: query,
 		}}
 	}
@@ -1634,40 +1675,19 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			}
 		case *tree.PrepareStmt:
 			selfHandle = true
-			preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
-			if err != nil {
-				goto handleFailed
-			}
-
-			err = mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), &PrepareStmt{
-				Name:        preparePlan.GetDcl().GetPrepare().GetName(),
-				PreparePlan: preparePlan,
-				PrepareStmt: st.Stmt,
-			})
+			err = mce.handlePrepareStmt(st)
 			if err != nil {
 				goto handleFailed
 			}
 		case *tree.PrepareString:
 			selfHandle = true
-			preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
-			if err != nil {
-				goto handleFailed
-			}
-			stmts, err := mysql.Parse(st.Sql)
-			if err != nil {
-				goto handleFailed
-			}
-
-			err = mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), &PrepareStmt{
-				Name:        preparePlan.GetDcl().GetPrepare().GetName(),
-				PreparePlan: preparePlan,
-				PrepareStmt: stmts[0],
-			})
+			err = mce.handlePrepareString(st)
 			if err != nil {
 				goto handleFailed
 			}
 		case *tree.Deallocate:
 			selfHandle = true
+			err = mce.handleDeallocate(st)
 			deallocatePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
 			if err != nil {
 				goto handleFailed
