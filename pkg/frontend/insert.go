@@ -153,7 +153,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 				for j, row := range rows.Rows {
 					v, err := buildConstant(vec.Typ, row[i])
 					if err != nil {
-						return fmt.Errorf("Data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
+						return fmt.Errorf("data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
 					}
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
@@ -175,7 +175,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 				for j, row := range rows.Rows {
 					v, err := buildConstant(vec.Typ, row[i])
 					if err != nil {
-						return fmt.Errorf("Data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
+						return fmt.Errorf("data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
 					}
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
@@ -197,7 +197,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 				for j, row := range rows.Rows {
 					v, err := buildConstant(vec.Typ, row[i])
 					if err != nil {
-						return fmt.Errorf("Data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
+						return fmt.Errorf("data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
 					}
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
@@ -219,7 +219,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 				for j, row := range rows.Rows {
 					v, err := buildConstant(vec.Typ, row[i])
 					if err != nil {
-						return fmt.Errorf("Data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
+						return fmt.Errorf("data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
 					}
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
@@ -241,7 +241,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 				for j, row := range rows.Rows {
 					v, err := buildConstant(vec.Typ, row[i])
 					if err != nil {
-						return fmt.Errorf("Data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
+						return fmt.Errorf("data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
 					}
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
@@ -263,7 +263,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 				for j, row := range rows.Rows {
 					v, err := buildConstant(vec.Typ, row[i])
 					if err != nil {
-						return fmt.Errorf("Data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
+						return fmt.Errorf("data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
 					}
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
@@ -285,7 +285,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 				for j, row := range rows.Rows {
 					v, err := buildConstant(vec.Typ, row[i])
 					if err != nil {
-						return fmt.Errorf("Data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
+						return fmt.Errorf("data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
 					}
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
@@ -307,7 +307,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 				for j, row := range rows.Rows {
 					v, err := buildConstant(vec.Typ, row[i])
 					if err != nil {
-						return fmt.Errorf("Data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
+						return fmt.Errorf("data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
 					}
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
@@ -329,7 +329,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 				for j, row := range rows.Rows {
 					v, err := buildConstant(vec.Typ, row[i])
 					if err != nil {
-						return fmt.Errorf("Data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
+						return fmt.Errorf("data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
 					}
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
@@ -351,7 +351,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 				for j, row := range rows.Rows {
 					v, err := buildConstant(vec.Typ, row[i])
 					if err != nil {
-						return fmt.Errorf("Data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
+						return fmt.Errorf("data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
 					}
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
@@ -373,7 +373,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 				for j, row := range rows.Rows {
 					v, err := buildConstant(vec.Typ, row[i])
 					if err != nil {
-						return fmt.Errorf("Data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
+						return fmt.Errorf("data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
 					}
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
@@ -395,7 +395,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 				for j, row := range rows.Rows {
 					v, err := buildConstant(vec.Typ, row[i])
 					if err != nil {
-						return fmt.Errorf("Data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
+						return fmt.Errorf("data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
 					}
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
@@ -417,7 +417,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 				for j, row := range rows.Rows {
 					v, err := buildConstant(vec.Typ, row[i])
 					if err != nil {
-						return fmt.Errorf("Data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
+						return fmt.Errorf("data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
 					}
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
@@ -439,7 +439,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 				for j, row := range rows.Rows {
 					v, err := buildConstant(vec.Typ, row[i])
 					if err != nil {
-						return fmt.Errorf("Data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
+						return fmt.Errorf("data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
 					}
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
@@ -461,7 +461,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 				for j, row := range rows.Rows {
 					v, err := buildConstant(vec.Typ, row[i])
 					if err != nil {
-						return fmt.Errorf("Data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
+						return fmt.Errorf("data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
 					}
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
@@ -483,7 +483,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 				for j, row := range rows.Rows {
 					v, err := buildConstant(vec.Typ, row[i])
 					if err != nil {
-						return fmt.Errorf("Data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
+						return fmt.Errorf("data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
 					}
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
@@ -505,7 +505,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 				for j, row := range rows.Rows {
 					v, err := buildConstant(vec.Typ, row[i])
 					if err != nil {
-						return fmt.Errorf("Data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
+						return fmt.Errorf("data truncation: %s for column '%s' at row %v", err.Error(), bat.Attrs[i], j)
 					}
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
@@ -522,7 +522,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 				return err
 			}
 		default:
-			return fmt.Errorf("Data truncation: type of '%v' does not implement now", vec.Typ)
+			return fmt.Errorf("data truncation: type of '%v' does not implement now", vec.Typ)
 		}
 	}
 	// insert Null for other columns
@@ -735,7 +735,7 @@ func rewriteInsertRows(noInsertTarget bool, finalInsertTargets []string, relatio
 				}
 				if useOrder {
 					if orderDefault[j] == nil {
-						return nil, nil, fmt.Errorf("Field '%s' doesn't have a default value", finalInsertTargets[j])
+						return nil, nil, fmt.Errorf("field '%s' doesn't have a default value", finalInsertTargets[j])
 					}
 					rows[i][j] = *orderDefault[j]
 				}
@@ -747,7 +747,7 @@ func rewriteInsertRows(noInsertTarget bool, finalInsertTargets []string, relatio
 				}
 				rows[i][j], ok = defaultExprs[finalInsertTargets[j]]
 				if !ok {
-					return nil, nil, fmt.Errorf("Field '%s' doesn't have a default value", finalInsertTargets[j])
+					return nil, nil, fmt.Errorf("field '%s' doesn't have a default value", finalInsertTargets[j])
 				}
 			}
 		}
@@ -932,7 +932,7 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 			return nil, fmt.Errorf("unexpected return type '%v' for binary expression '%v'", typ, floatResult)
 		}
 	}
-	return nil, fmt.Errorf("Function expression in INSERT statement value list will be supported in future version.")
+	return nil, fmt.Errorf("function expression in INSERT statement value list will be supported in future version")
 }
 
 func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
@@ -949,7 +949,7 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 		case types.T_bool:
 			res, err := types.ParseValueToBool(num)
 			if err != nil {
-				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
 			return res, nil
 		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
@@ -969,13 +969,13 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 		case types.T_decimal64:
 			res, err := types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
 			if err != nil {
-				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
 			return res, nil
 		case types.T_decimal128:
 			res, err := types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
 			if err != nil {
-				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
 			return res, nil
 		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
@@ -1001,11 +1001,11 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 		case types.T_timestamp:
 			res, err := types.ParseTimestamp(str, typ.Precision)
 			if err != nil {
-				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
 			return res, nil
 		}
-		return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+		return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 	case constant.Float:
 		switch typ.Oid {
 		case types.T_int64, types.T_int32, types.T_int16, types.T_int8:
@@ -1065,17 +1065,17 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 		case types.T_decimal64:
 			res, err := types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
 			if err != nil {
-				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
 			return res, nil
 		case types.T_decimal128:
 			res, err := types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
 			if err != nil {
-				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
 			return res, nil
 		}
-		return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+		return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 	case constant.String:
 		switch typ.Oid {
 		case types.T_bool:
@@ -1085,77 +1085,77 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			case "true":
 				return true, nil
 			}
-			return nil, fmt.Errorf("Incorrect boolean value: '%s'", str)
+			return nil, fmt.Errorf("incorrect boolean value: '%s'", str)
 		case types.T_int8:
 			res, err := strconv.ParseInt(str, 10, 8)
 			if err != nil {
-				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
 			return res, nil
 		case types.T_int16:
 			res, err := strconv.ParseInt(str, 10, 16)
 			if err != nil {
-				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
 			return res, nil
 		case types.T_int32:
 			res, err := strconv.ParseInt(str, 10, 32)
 			if err != nil {
-				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
 			return res, nil
 		case types.T_int64:
 			res, err := strconv.ParseInt(str, 10, 64)
 			if err != nil {
-				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
 			return res, nil
 		case types.T_uint8:
 			res, err := strconv.ParseUint(str, 10, 8)
 			if err != nil {
-				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
 			return res, nil
 		case types.T_uint16:
 			res, err := strconv.ParseUint(str, 10, 16)
 			if err != nil {
-				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
 			return res, nil
 		case types.T_uint32:
 			res, err := strconv.ParseUint(str, 10, 32)
 			if err != nil {
-				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
 			return res, nil
 		case types.T_uint64:
 			res, err := strconv.ParseUint(str, 10, 64)
 			if err != nil {
-				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
 			return res, nil
 		case types.T_float32:
 			res, err := strconv.ParseFloat(str, 32)
 			if err != nil {
-				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
 			return float32(res), nil
 		case types.T_float64:
 			res, err := strconv.ParseFloat(str, 64)
 			if err != nil {
-				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
 			return res, nil
 		case types.T_decimal64:
 			res, err := types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
 			if err != nil {
-				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
 			return res, nil
 		case types.T_decimal128:
 			res, err := types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
 			if err != nil {
-				return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 			}
 			return res, nil
 		}
@@ -1166,19 +1166,19 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			case types.T_date:
 				res, err := types.ParseDate(str)
 				if err != nil {
-					return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+					return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 				}
 				return res, nil
 			case types.T_datetime:
 				res, err := types.ParseDatetime(str, typ.Precision)
 				if err != nil {
-					return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+					return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 				}
 				return res, nil
 			case types.T_timestamp:
 				res, err := types.ParseTimestamp(str, typ.Precision)
 				if err != nil {
-					return nil, fmt.Errorf("Incorrect %s value: '%s'", typ.Oid.String(), str)
+					return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 				}
 				return res, nil
 			}

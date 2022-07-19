@@ -19,5 +19,5 @@ import (
 )
 
 var (
-	OutOfMemory = errors.New("out of memory")
+	ErrOutOfMemory = errors.New("out of memory")
 )

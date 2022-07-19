@@ -278,9 +278,7 @@ func roundFloat32(xs []float32, rs []float32, digits int64) []float32 {
 			rs[i] = float32(math.RoundToEven(float64(xs[i])))
 		}
 	} else if digits >= 38 { // the range of float32 e-38 ~ e38
-		for i := range xs {
-			rs[i] = xs[i]
-		}
+		copy(rs, xs)
 	} else if digits <= -38 {
 		for i := range xs {
 			rs[i] = 0
@@ -302,9 +300,7 @@ func roundFloat64(xs []float64, rs []float64, digits int64) []float64 {
 			rs[i] = math.RoundToEven(xs[i])
 		}
 	} else if digits >= 308 { // the range of float64
-		for i := range xs {
-			rs[i] = xs[i]
-		}
+		copy(rs, xs)
 	} else if digits <= -308 {
 		for i := range xs {
 			rs[i] = 0
@@ -316,16 +312,16 @@ func roundFloat64(xs []float64, rs []float64, digits int64) []float64 {
 		} else {
 			abs_digits = uint64(digits)
 		}
-		var tmp float64 = math.Pow(10.0, float64(abs_digits))
+		var tmp = math.Pow(10.0, float64(abs_digits))
 
 		if digits > 0 {
 			for i := range xs {
-				var value_mul_tmp float64 = xs[i] * tmp
+				var value_mul_tmp = xs[i] * tmp
 				rs[i] = math.RoundToEven(value_mul_tmp) / tmp
 			}
 		} else {
 			for i := range xs {
-				var value_div_tmp float64 = xs[i] / tmp
+				var value_div_tmp = xs[i] / tmp
 				rs[i] = math.RoundToEven(value_div_tmp) * tmp
 			}
 		}
