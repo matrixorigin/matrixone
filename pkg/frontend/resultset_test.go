@@ -10,7 +10,7 @@ import (
 func Test_GetInt64(t *testing.T) {
 	var ret int64
 	var err error
-	var colNum int = 16
+	var colNum = 16
 	convey.Convey("GetInt64 succ", t, func() {
 		mrs := &MysqlResultSet{}
 		mrs.Data = make([][]interface{}, colNum)
@@ -116,7 +116,7 @@ func Test_GetInt64(t *testing.T) {
 func Test_GetUint64(t *testing.T) {
 	var ret uint64
 	var err error
-	var colNum int = 16
+	var colNum = 16
 	convey.Convey("GetUint64 succ", t, func() {
 		mrs := &MysqlResultSet{}
 		mrs.Data = make([][]interface{}, colNum)
@@ -222,7 +222,7 @@ func Test_GetUint64(t *testing.T) {
 func Test_GetFloat64(t *testing.T) {
 	var ret float64
 	var err error
-	var colNum int = 16
+	var colNum = 16
 	convey.Convey("GetFloat64 succ", t, func() {
 		mrs := &MysqlResultSet{}
 		mrs.Data = make([][]interface{}, colNum)
@@ -328,7 +328,7 @@ func Test_GetFloat64(t *testing.T) {
 func Test_GetString(t *testing.T) {
 	var ret string
 	var err error
-	var colNum int = 17
+	var colNum = 17
 	convey.Convey("GetString succ", t, func() {
 		mrs := &MysqlResultSet{}
 		mrs.Data = make([][]interface{}, colNum)

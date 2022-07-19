@@ -39,7 +39,7 @@ func (a *analyze) Start() {
 
 func (a *analyze) Stop() {
 	if a.analInfo != nil {
-		atomic.AddInt64(&a.analInfo.TimeConsumed, int64(time.Now().Sub(a.start)/time.Millisecond))
+		atomic.AddInt64(&a.analInfo.TimeConsumed, int64(time.Since(a.start)/time.Millisecond))
 	}
 }
 

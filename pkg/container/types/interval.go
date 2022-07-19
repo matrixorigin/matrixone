@@ -296,9 +296,9 @@ func typeMaxLength(it IntervalType) int {
 	return 0
 }
 
-// if interval type unit is day or larger, we return true
+// UnitIsDayOrLarger if interval type unit is day or larger, we return true
 // else return false
-// use to judge a string whether need to become date/datetime type when we use date_add/sub(str string, interval type)
+// use to judge a string whether it needs to become date/datetime type when we use date_add/sub(str string, interval type)
 func UnitIsDayOrLarger(it IntervalType) bool {
 	return it == Day || it == Week || it == Month || it == Quarter || it == Year || it == Year_Month
 }

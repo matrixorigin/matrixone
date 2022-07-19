@@ -18,7 +18,7 @@ import (
 func Test_FloorUint64(t *testing.T) {
 	convey.Convey("Test floor for uint64 succ", t, func() {
 		var uint64VecBase = []uint64{1, 4, 8, 16, 32, math.MaxUint64, 0}
-		var nsp1 []uint64 = []uint64{6}
+		var nsp1 = []uint64{6}
 		var origVecs = make([]*vector.Vector, 1)
 		var proc = process.New(mheap.New(&guest.Mmu{Mmu: host.New(100000), Limit: 100000}))
 		origVecs[0] = testutil.MakeUint64Vector(uint64VecBase, nsp1)
@@ -56,7 +56,7 @@ func Test_FloorUint64(t *testing.T) {
 func Test_FloorInt64(t *testing.T) {
 	convey.Convey("Test floor for int64 succ", t, func() {
 		var int64VecBase = []int64{math.MinInt64 + 1, math.MinInt64 + 2, -100, -1, 0, 1, 4, 8, 16, 32, 64, math.MaxInt64, 0}
-		var nsp1 []uint64 = []uint64{12}
+		var nsp1 = []uint64{12}
 		var origVecs = make([]*vector.Vector, 1)
 		var proc = process.New(mheap.New(&guest.Mmu{Mmu: host.New(100000), Limit: 100000}))
 		origVecs[0] = testutil.MakeInt64Vector(int64VecBase, nsp1)
@@ -94,7 +94,7 @@ func Test_FloorFloat64(t *testing.T) {
 	convey.Convey("Test floor for float64 succ", t, func() {
 		var float64VecBase = []float64{math.SmallestNonzeroFloat64, -1.2, -2.3, math.MinInt64 + 1, math.MinInt64 + 2, -100.2, -1.3, 0.9, 0,
 			1.5, 4.4, 8.5, 16.32, 32.345, 64.09, math.MaxInt64, math.MaxFloat64, 0}
-		var nsp1 []uint64 = []uint64{uint64(len(float64VecBase) - 1)}
+		var nsp1 = []uint64{uint64(len(float64VecBase) - 1)}
 		var origVecs = make([]*vector.Vector, 1)
 		var proc = process.New(mheap.New(&guest.Mmu{Mmu: host.New(100000), Limit: 100000}))
 		origVecs[0] = testutil.MakeFloat64Vector(float64VecBase, nsp1)
@@ -133,10 +133,10 @@ func Test_FloorFloat64AndInt64(t *testing.T) {
 	convey.Convey("Test floor for float64 and int64 succ", t, func() {
 		var float64VecBase = []float64{-1.234567, 0, 1.2345678, 0}
 		var int64VecBase = []int64{-4, -3, -2, -1, 0, 1, 2, 3, 4, 5}
-		var nsp1 []uint64 = []uint64{3}
+		var nsp1 = []uint64{3}
 		var origVecs = make([]*vector.Vector, 2)
 		var proc = process.New(mheap.New(&guest.Mmu{Mmu: host.New(100000), Limit: 100000}))
-		var compVecVec [][]float64 = [][]float64{{-10000, 0, 0, 0}, {-1000, 0, 0, 0}, {-100, 0, 0, 0}, {-10, 0, 0, 0}, {-2, 0, 1, 0},
+		var compVecVec = [][]float64{{-10000, 0, 0, 0}, {-1000, 0, 0, 0}, {-100, 0, 0, 0}, {-10, 0, 0, 0}, {-2, 0, 1, 0},
 			{-1.3, 0, 1.2, 0}, {-1.24, 0, 1.23, 0}, {-1.235, 0, 1.234, 0}, {-1.2346, 0, 1.2345, 0}, {-1.23457, 0, 1.23456, 0}}
 
 		origVecs[0] = testutil.MakeFloat64Vector(float64VecBase, nsp1)
