@@ -36,27 +36,35 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-func newTestTxnService(t *testing.T, shard uint64, sender rpc.TxnSender, clocker clock.Clock) *service {
-	return newTestTxnServiceWithLog(t, shard, sender, clocker, nil)
+// NewTestTxnService create a test TxnService for test
+func NewTestTxnService(t *testing.T, shard uint64, sender rpc.TxnSender, clocker clock.Clock) TxnService {
+	return NewTestTxnServiceWithLog(t, shard, sender, clocker, nil)
 }
 
-func newTestTxnServiceWithLog(t *testing.T, shard uint64, sender rpc.TxnSender, clocker clock.Clock, log logservice.Client) *service {
+// NewTestTxnServiceWithLog is similar to NewTestTxnService, used to recovery tests
+func NewTestTxnServiceWithLog(t *testing.T,
+	shard uint64,
+	sender rpc.TxnSender,
+	clocker clock.Clock,
+	log logservice.Client) TxnService {
 	return NewTxnService(logutil.GetPanicLoggerWithLevel(zapcore.DebugLevel).With(zap.String("case", t.Name())),
-		newTestDNShard(shard),
-		newTestTxnStorage(log),
+		NewTestDNShard(shard),
+		NewTestTxnStorage(log),
 		sender,
 		clocker,
 		time.Minute).(*service)
 }
 
-func newTestTxnStorage(log logservice.Client) storage.TxnStorage {
+// NewTestTxnStorage create a TxnStorage used to recovery tests
+func NewTestTxnStorage(log logservice.Client) storage.TxnStorage {
 	if log == nil {
 		log = mem.NewMemLog()
 	}
 	return mem.NewKVTxnStorage(0, log)
 }
 
-func newTestDNShard(id uint64) metadata.DNShard {
+// NewTestDNShard create a test DNShard
+func NewTestDNShard(id uint64) metadata.DNShard {
 	return metadata.DNShard{
 		DNShardRecord: metadata.DNShardRecord{
 			ShardID:    id,
@@ -67,18 +75,21 @@ func newTestDNShard(id uint64) metadata.DNShard {
 	}
 }
 
-func newTestClock(start int64) clock.Clock {
+// NewTestClock create test clock with start timestamp
+func NewTestClock(start int64) clock.Clock {
 	ts := start
 	return clock.NewHLCClock(func() int64 {
 		return atomic.AddInt64(&ts, 1)
 	}, math.MaxInt64)
 }
 
-func newTestSpecClock(fn func() int64) clock.Clock {
+// NewTestSpecClock create test clock with timestamp factory
+func NewTestSpecClock(fn func() int64) clock.Clock {
 	return clock.NewHLCClock(fn, math.MaxInt64)
 }
 
-type testSender struct {
+// TestSender test TxnSender for sending messages between TxnServices
+type TestSender struct {
 	router map[string]rpc.TxnRequestHandleFunc
 
 	mu struct {
@@ -87,17 +98,19 @@ type testSender struct {
 	}
 }
 
-func newTestSender(services ...TxnService) *testSender {
-	s := &testSender{
+// NewTestSender create test TxnSender
+func NewTestSender(services ...TxnService) *TestSender {
+	s := &TestSender{
 		router: make(map[string]rpc.TxnRequestHandleFunc),
 	}
 	for _, ts := range services {
-		s.addTxnService(ts)
+		s.AddTxnService(ts)
 	}
 	return s
 }
 
-func (s *testSender) addTxnService(ts TxnService) {
+// AddTxnService add txnservice into test TxnSender
+func (s *TestSender) AddTxnService(ts TxnService) {
 	s.router[s.getRouteKey(txn.TxnMethod_Read, ts.Shard())] = ts.Read
 	s.router[s.getRouteKey(txn.TxnMethod_Write, ts.Shard())] = ts.Write
 	s.router[s.getRouteKey(txn.TxnMethod_Commit, ts.Shard())] = ts.Commit
@@ -108,7 +121,8 @@ func (s *testSender) addTxnService(ts TxnService) {
 	s.router[s.getRouteKey(txn.TxnMethod_RollbackDNShard, ts.Shard())] = ts.RollbackDNShard
 }
 
-func (s *testSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+// Send TxnSender send
+func (s *TestSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	s.mu.Lock()
 	s.mu.cancels = append(s.mu.cancels, cancel)
@@ -128,7 +142,8 @@ func (s *testSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.
 	return &rpc.SendResult{Responses: responses}, nil
 }
 
-func (s *testSender) Close() error {
+// Close close the test TxnSender
+func (s *TestSender) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, cancel := range s.mu.cancels {
@@ -137,44 +152,51 @@ func (s *testSender) Close() error {
 	return nil
 }
 
-func (s *testSender) getRouteKey(method txn.TxnMethod, shard metadata.DNShard) string {
+func (s *TestSender) getRouteKey(method txn.TxnMethod, shard metadata.DNShard) string {
 	return fmt.Sprintf("%d-%s", shard.ShardID, method.String())
 }
 
-func newTestTxn(txnID byte, ts int64, shards ...uint64) txn.TxnMeta {
+// NewTestTxn create a transaction, specifying both the transaction snapshot time and the DNShard
+// for the transaction operation.
+func NewTestTxn(txnID byte, ts int64, shards ...uint64) txn.TxnMeta {
 	txnMeta := txn.TxnMeta{
 		ID:         []byte{txnID},
 		Status:     txn.TxnStatus_Active,
-		SnapshotTS: newTestTimestamp(ts),
+		SnapshotTS: NewTestTimestamp(ts),
 	}
 	for _, shard := range shards {
-		txnMeta.DNShards = append(txnMeta.DNShards, newTestDNShard(shard))
+		txnMeta.DNShards = append(txnMeta.DNShards, NewTestDNShard(shard))
 	}
 	return txnMeta
 }
 
-func newTestTimestamp(ts int64) timestamp.Timestamp {
+// NewTestTimestamp create a test timestamp and set only the PhysicalTime field
+func NewTestTimestamp(ts int64) timestamp.Timestamp {
 	return timestamp.Timestamp{PhysicalTime: ts}
 }
 
-func newTestWriteRequest(k byte, wTxn txn.TxnMeta, toShard uint64) txn.TxnRequest {
-	key := getTestKey(k)
-	value := getTestValue(k, wTxn)
+// NewTestWriteRequest create a Write request, using GetTestKey and GetTestValue as the KV data for
+// the test.
+func NewTestWriteRequest(k byte, wTxn txn.TxnMeta, toShard uint64) txn.TxnRequest {
+	key := GetTestKey(k)
+	value := GetTestValue(k, wTxn)
 	req := mem.NewSetTxnRequest([][]byte{key}, [][]byte{value})
 	req.Txn = wTxn
-	req.CNRequest.Target = newTestDNShard(toShard)
+	req.CNRequest.Target = NewTestDNShard(toShard)
 	return req
 }
 
-func newTestReadRequest(k byte, rTxn txn.TxnMeta, toShard uint64) txn.TxnRequest {
-	key := getTestKey(k)
+// NewTestReadRequest create a read request, using GetTestKey as the KV data for the test.
+func NewTestReadRequest(k byte, rTxn txn.TxnMeta, toShard uint64) txn.TxnRequest {
+	key := GetTestKey(k)
 	req := mem.NewGetTxnRequest([][]byte{key})
 	req.Txn = rTxn
-	req.CNRequest.Target = newTestDNShard(toShard)
+	req.CNRequest.Target = NewTestDNShard(toShard)
 	return req
 }
 
-func newTestCommitRequest(wTxn txn.TxnMeta) txn.TxnRequest {
+// NewTestCommitRequest create a commit request
+func NewTestCommitRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 	return txn.TxnRequest{
 		Method:        txn.TxnMethod_Commit,
 		Txn:           wTxn,
@@ -182,7 +204,8 @@ func newTestCommitRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 	}
 }
 
-func newTestCommitShardRequest(wTxn txn.TxnMeta) txn.TxnRequest {
+// NewTestCommitShardRequest create a commit DNShard request
+func NewTestCommitShardRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 	return txn.TxnRequest{
 		Method: txn.TxnMethod_CommitDNShard,
 		Txn:    wTxn,
@@ -192,7 +215,8 @@ func newTestCommitShardRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 	}
 }
 
-func newTestRollbackShardRequest(wTxn txn.TxnMeta) txn.TxnRequest {
+// NewTestRollbackShardRequest create a rollback DNShard request
+func NewTestRollbackShardRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 	return txn.TxnRequest{
 		Method: txn.TxnMethod_RollbackDNShard,
 		Txn:    wTxn,
@@ -202,7 +226,8 @@ func newTestRollbackShardRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 	}
 }
 
-func newTestRollbackRequest(wTxn txn.TxnMeta) txn.TxnRequest {
+// NewTestRollbackRequest create a rollback request
+func NewTestRollbackRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 	return txn.TxnRequest{
 		Method:          txn.TxnMethod_Rollback,
 		Txn:             wTxn,
@@ -210,30 +235,34 @@ func newTestRollbackRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 	}
 }
 
-func newTestPrepareRequest(wTxn txn.TxnMeta, shard uint64) txn.TxnRequest {
+// NewTestPrepareRequest create a prepare request
+func NewTestPrepareRequest(wTxn txn.TxnMeta, shard uint64) txn.TxnRequest {
 	return txn.TxnRequest{
 		Method: txn.TxnMethod_Prepare,
 		Txn:    wTxn,
 		PrepareRequest: &txn.TxnPrepareRequest{
-			DNShard: newTestDNShard(shard),
+			DNShard: NewTestDNShard(shard),
 		},
 	}
 }
 
-func newTestGetStatusRequest(wTxn txn.TxnMeta, shard uint64) txn.TxnRequest {
+// NewTestGetStatusRequest  create a get status request
+func NewTestGetStatusRequest(wTxn txn.TxnMeta, shard uint64) txn.TxnRequest {
 	return txn.TxnRequest{
 		Method: txn.TxnMethod_GetStatus,
 		Txn:    wTxn,
 		GetStatusRequest: &txn.TxnGetStatusRequest{
-			DNShard: newTestDNShard(shard),
+			DNShard: NewTestDNShard(shard),
 		},
 	}
 }
 
-func getTestKey(k byte) []byte {
+// GetTestKey encode test key
+func GetTestKey(k byte) []byte {
 	return []byte{k}
 }
 
-func getTestValue(k byte, wTxn txn.TxnMeta) []byte {
+// GetTestValue encode test value based on the key and txn's snapshot timestamp
+func GetTestValue(k byte, wTxn txn.TxnMeta) []byte {
 	return []byte(fmt.Sprintf("%d-%d-%d", k, wTxn.ID[0], wTxn.SnapshotTS.PhysicalTime))
 }
