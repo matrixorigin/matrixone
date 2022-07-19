@@ -175,6 +175,10 @@ func (t Type) TypeSize() int {
 	return t.Oid.TypeLen()
 }
 
+func (t Type) IsBoolean() bool {
+	return t.Oid == T_bool
+}
+
 func (t Type) IsString() bool {
 	return t.Oid == T_char || t.Oid == T_varchar
 }
