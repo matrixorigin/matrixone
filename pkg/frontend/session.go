@@ -731,7 +731,6 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		return nil, nil
 	}
 	table, err := tcc.getRelation(dbName, tableName)
-	tableId := table.ID(tcc.txnHandler.GetTxn().GetCtx())
 	if err != nil {
 		return nil, nil
 	}
@@ -769,7 +768,6 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 
 	//convert
 	obj := &plan2.ObjectRef{
-		DbName:     tableId,
 		SchemaName: dbName,
 		ObjName:    tableName,
 	}
