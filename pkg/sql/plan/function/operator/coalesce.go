@@ -15,6 +15,7 @@
 package operator
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -99,20 +100,36 @@ var (
 func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types.Type) (*vector.Vector, error) {
 	for i := 0; i < len(vs); i++ {
 		input := vs[i]
-		col := vector.MustTCols[T](vs[i])
+		col := vector.MustTCols[T](input)
 		if input.IsScalar() {
-			if !input.IsScalarNull() {
-				r := proc.AllocScalarVector(t)
-				r.Typ.Precision = input.Typ.Precision
-				r.Typ.Width = input.Typ.Width
-				r.Typ.Scale = input.Typ.Scale
-				r.Col = make([]T, 1)
-				r.Col.([]T)[0] = col[0]
-				return r, nil
+			if input.IsScalarNull() {
+				continue
 			}
+			r := proc.AllocScalarVector(t)
+			r.Typ.Precision = input.Typ.Precision
+			r.Typ.Width = input.Typ.Width
+			r.Typ.Scale = input.Typ.Scale
+			r.Col = make([]T, 1)
+			r.Col.([]T)[0] = col[0]
+			return r, nil
 		} else {
-			// input
-			// if nulls.Length() =
+			l := vector.Length(vs[0])
+			// all nulls
+			if nulls.Length(input.Nsp) == l {
+				continue
+			}
+
+			rs, err := proc.AllocVector(t, int64(l*t.Oid.TypeLen()))
+			if err != nil {
+				return nil, err
+			}
+			rs.Col = vector.DecodeFixedCol[T](rs, t.Oid.TypeLen())
+			rs.Col = rs.Col.([]T)[:l]
+			rs.Typ.Precision = input.Typ.Precision
+			rs.Typ.Width = input.Typ.Width
+			rs.Typ.Scale = input.Typ.Scale
+			rs.Nsp.Or(input.Nsp)
+			return rs, nil
 		}
 	}
 
