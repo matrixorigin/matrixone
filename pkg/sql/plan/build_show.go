@@ -39,7 +39,7 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase, ctx CompilerContext)
 
 func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Plan, error) {
 	sql := `
-		SELECT mc.* 
+		SELECT * 
 			FROM %s.mo_tables mt JOIN %s.mo_columns mc 
 				ON mt.relname = mc.att_relname and mt.reldatabase=mc.att_database 
 		WHERE mt.reldatabase = '%s' AND mt.relname = '%s'
