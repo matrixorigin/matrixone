@@ -108,8 +108,8 @@ func TestCompare(t *testing.T) {
 
 func newTestCase(desc bool, m *mheap.Mheap, typ types.Type) testCase {
 	vecs := make([]*vector.Vector, 2)
-	vecs[0] = testutil.NewVector(Rows, typ, m, true)
-	vecs[1] = testutil.NewVector(Rows, typ, m, true)
+	vecs[0] = testutil.NewVector(Rows, typ, m, true, nil)
+	vecs[1] = testutil.NewVector(Rows, typ, m, true, nil)
 	return testCase{
 		desc: desc,
 		vecs: vecs,

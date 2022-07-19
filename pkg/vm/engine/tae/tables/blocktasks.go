@@ -114,7 +114,7 @@ func (blk *dataBlock) ABlkCheckpointWAL(currTs uint64) (err error) {
 	if currTs <= ckpTs {
 		return
 	}
-	indexes, err := blk.CollectAppendLogIndexes(ckpTs+1, currTs+1)
+	indexes, err := blk.CollectAppendLogIndexes(ckpTs+1, currTs)
 	if err != nil {
 		return
 	}

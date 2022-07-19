@@ -30,10 +30,8 @@ func TestNewBootstrapManager(t *testing.T) {
 		expected *Manager
 	}{
 		{
-			cluster: pb.ClusterInfo{DNShards: nil, LogShards: nil},
-			expected: &Manager{
-				cluster: pb.ClusterInfo{DNShards: nil, LogShards: nil},
-			},
+			cluster:  pb.ClusterInfo{},
+			expected: &Manager{},
 		},
 		{
 			cluster: pb.ClusterInfo{
@@ -58,6 +56,8 @@ func TestNewBootstrapManager(t *testing.T) {
 	for _, c := range cases {
 		bm := NewBootstrapManager(c.cluster, nil)
 		assert.Equal(t, c.expected.cluster, bm.cluster)
+		c.expected.cluster = pb.ClusterInfo{XXX_sizecache: 1}
+		assert.NotEqual(t, c.expected.cluster, bm.cluster)
 	}
 }
 

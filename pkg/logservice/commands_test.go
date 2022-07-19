@@ -41,10 +41,9 @@ func TestBackgroundTickAndHeartbeat(t *testing.T) {
 		GossipSeedAddresses:  []string{"127.0.0.1:9010"},
 		HeartbeatInterval:    5 * time.Millisecond,
 		HAKeeperTickInterval: 5 * time.Millisecond,
-		HAKeeperClientConfig: HAKeeperClientConfig{
-			ServiceAddresses: []string{"127.0.0.1:9002"},
-		},
 	}
+	cfg.HAKeeperClientConfig.ServiceAddresses = []string{"127.0.0.1:9002"}
+	cfg.Fill()
 	service, err := NewService(cfg)
 	require.NoError(t, err)
 	defer func() {
