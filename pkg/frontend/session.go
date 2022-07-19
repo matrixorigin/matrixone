@@ -221,7 +221,7 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error {
 	if _, ok := ses.prepareStmts[name]; !ok {
 		if len(ses.prepareStmts) >= MaxPrepareNumberInOneSession {
-			return errors.New("", fmt.Sprintf("more than '%d' prepare statment in one session", MaxPrepareNumberInOneSession))
+			return errors.New("", fmt.Sprintf("more than '%d' prepare statement in one session", MaxPrepareNumberInOneSession))
 		}
 	}
 	ses.prepareStmts[name] = prepareStmt
@@ -232,7 +232,7 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 	if prepareStmt, ok := ses.prepareStmts[name]; ok {
 		return prepareStmt, nil
 	}
-	return nil, errors.New("", fmt.Sprintf("prepare statment '%s' does not exist", name))
+	return nil, errors.New("", fmt.Sprintf("prepare statement '%s' does not exist", name))
 }
 
 func (ses *Session) RemovePrepareStmt(name string) {
