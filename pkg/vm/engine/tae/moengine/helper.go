@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -63,27 +64,25 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 		}
 	}
 	for _, def := range defs {
-		if attrDef, ok := def.(*engine.AttributeDef); ok {
-			if idx, ok := pkMap[attrDef.Attr.Name]; ok {
-				if err = schema.AppendPKCol(attrDef.Attr.Name, attrDef.Attr.Type, idx); err != nil {
+		switch defVal := def.(type) {
+		case *engine.AttributeDef:
+			if idx, ok := pkMap[defVal.Attr.Name]; ok {
+				if err = schema.AppendPKColWithAttribute(defVal.Attr, idx); err != nil {
 					return
 				}
 			} else {
-				if attrDef.Attr.Default.Exist {
-					attrDefault := catalog.Default{
-						Set:   attrDef.Attr.Default.Exist,
-						Value: attrDef.Attr.Default.Value,
-						Null:  attrDef.Attr.Default.IsNull,
-					}
-					if err = schema.AppendColWithDefault(attrDef.Attr.Name, attrDef.Attr.Type, attrDefault); err != nil {
-						return
-					}
-					continue
-				}
-				if err = schema.AppendCol(attrDef.Attr.Name, attrDef.Attr.Type); err != nil {
+				if err = schema.AppendColWithAttribute(defVal.Attr); err != nil {
 					return
 				}
 			}
+		case *engine.PropertiesDef:
+			for _, property := range defVal.Properties {
+				if strings.ToLower(property.Key) == "comment" {
+					schema.Comment = property.Value
+				}
+			}
+		default:
+			// We will not deal with other cases for the time being
 		}
 	}
 	if err = schema.Finalize(false); err != nil {

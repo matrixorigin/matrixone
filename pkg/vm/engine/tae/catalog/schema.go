@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"io"
 	"math/rand"
 	"sort"
@@ -388,6 +389,18 @@ func (s *Schema) AppendPKCol(name string, typ types.Type, idx int) error {
 	return s.AppendColDef(def)
 }
 
+func (s *Schema) AppendPKColWithAttribute(attr engine.Attribute, idx int) error {
+	def := &ColDef{
+		Name:    attr.Name,
+		Type:    attr.Type,
+		SortIdx: int8(idx),
+		SortKey: int8(1),
+		Primary: int8(1),
+		Comment: attr.Comment,
+	}
+	return s.AppendColDef(def)
+}
+
 func (s *Schema) AppendCol(name string, typ types.Type) error {
 	def := &ColDef{
 		Name:    name,
@@ -403,6 +416,25 @@ func (s *Schema) AppendColWithDefault(name string, typ types.Type, val Default) 
 		Type:    typ,
 		SortIdx: -1,
 		Default: val,
+	}
+	return s.AppendColDef(def)
+}
+
+func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
+	var attrDefault Default
+	if attr.Default.Exist {
+		attrDefault = Default{
+			Set:   attr.Default.Exist,
+			Value: attr.Default.Value,
+			Null:  attr.Default.IsNull,
+		}
+	}
+	def := &ColDef{
+		Name:    attr.Name,
+		Type:    attr.Type,
+		SortIdx: -1,
+		Comment: attr.Comment,
+		Default: attrDefault,
 	}
 	return s.AppendColDef(def)
 }

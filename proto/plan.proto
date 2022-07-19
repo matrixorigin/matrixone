@@ -248,6 +248,7 @@ message ColDef {
 	DefaultExpr default = 4;
 	bool primary        = 5;
 	int32 pkidx 		= 6;
+	string comment	=7;
 }
 
 message IndexDef {

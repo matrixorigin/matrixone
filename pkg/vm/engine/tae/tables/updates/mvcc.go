@@ -37,6 +37,7 @@ type MVCCHandle struct {
 	appends         []*AppendNode
 	changes         uint32
 	deletesListener func(uint64, common.RowGen, uint64) error
+	appendListener  func(txnif.AppendNode) error
 }
 
 func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
@@ -55,6 +56,14 @@ func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
 		node.columns[i] = col
 	}
 	return node
+}
+
+func (n *MVCCHandle) SetAppendListener(l func(txnif.AppendNode) error) {
+	n.appendListener = l
+}
+
+func (n *MVCCHandle) GetAppendListener() func(txnif.AppendNode) error {
+	return n.appendListener
 }
 
 func (n *MVCCHandle) SetDeletesListener(l func(uint64, common.RowGen, uint64) error) {
@@ -209,9 +218,10 @@ func (n *MVCCHandle) TrySetMaxVisible(ts uint64) {
 }
 func (n *MVCCHandle) AddAppendNodeLocked(
 	txn txnif.AsyncTxn,
+	startRow uint32,
 	maxRow uint32) (an *AppendNode, created bool) {
 	if len(n.appends) == 0 {
-		an = NewAppendNode(txn, maxRow, n)
+		an = NewAppendNode(txn, startRow, maxRow, n)
 		n.appends = append(n.appends, an)
 		created = true
 	} else {
@@ -220,7 +230,7 @@ func (n *MVCCHandle) AddAppendNodeLocked(
 		nTxn := an.txn
 		an.RUnlock()
 		if nTxn != txn {
-			an = NewAppendNode(txn, maxRow, n)
+			an = NewAppendNode(txn, startRow, maxRow, n)
 			n.appends = append(n.appends, an)
 			created = true
 		} else {
@@ -332,8 +342,10 @@ func (n *MVCCHandle) getMaxVisibleRowLocked(ts uint64) (int, uint32, bool, error
 		node.RUnlock()
 		// Note: Maybe there is a deadlock risk here
 		if txn != nil && node.GetCommitTS() > n.LoadMaxVisible() {
+			node.mvcc.RUnlock()
 			// Append node should not be rollbacked because apply append is the last step of prepare commit
 			state := txn.GetTxnState(true)
+			node.mvcc.RLock()
 			// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
 			if state == txnif.TxnStateUnknown {
 				err = txnif.ErrTxnInternal

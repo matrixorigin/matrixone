@@ -119,7 +119,7 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 	Update:   update.Prepare,
 }
 
-var execFunc = [...]func(*process.Process, interface{}) (bool, error){
+var execFunc = [...]func(int, *process.Process, interface{}) (bool, error){
 	Top:        top.Call,
 	Join:       join.Call,
 	Semi:       semi.Call,

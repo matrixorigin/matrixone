@@ -86,7 +86,7 @@ func TestOrder(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
-			if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
+			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 				if tc.proc.Reg.InputBatch != nil {
 					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 				}
@@ -124,7 +124,7 @@ func BenchmarkOrder(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 			for {
-				if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
+				if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 					if tc.proc.Reg.InputBatch != nil {
 						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 					}
