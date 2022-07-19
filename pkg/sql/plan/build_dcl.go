@@ -161,7 +161,7 @@ func buildExecute(stmt *tree.Execute, ctx CompilerContext) (*Plan, error) {
 	}, nil
 }
 
-func buildDeallocate(stmt *tree.Deallocate, ctx CompilerContext) (*Plan, error) {
+func buildDeallocate(stmt *tree.Deallocate, _ CompilerContext) (*Plan, error) {
 	deallocate := &plan.Deallocate{
 		Name: string(stmt.Name),
 	}

@@ -1373,17 +1373,13 @@ func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{},
 
 		preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
 
-		// check if schema change
-		for _, obj := range preparePlan.GetSchemas() {
-			newObj, _ := cwft.ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName)
-			if newObj == nil {
-				// old table must be droped
-				// TODO : The following conditions cannot be recognized:
-				// 		  drop table t1;  create table t1;
-				//        table had changed, but we don't know now.
-				return nil, errors.New("", fmt.Sprintf("table '%s' has been deleted, please reset prepare statement '%s'", obj.ObjName, stmtName))
-			}
-		}
+		// TODO check if schema change, obj.Obj is zero all the time in 0.6
+		// for _, obj := range preparePlan.GetSchemas() {
+		// 	newObj, _ := cwft.ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName)
+		// 	if newObj == nil || newObj.Obj != obj.Obj {
+		// 		return nil, errors.New("", fmt.Sprintf("table '%s' has been changed, please reset prepare statement '%s'", obj.ObjName, stmtName))
+		// 	}
+		// }
 
 		query := preparePlan.Plan.GetQuery()
 
