@@ -1233,8 +1233,7 @@ func Test_{{.ConfigurationStructName}}_LoadConfigurationFromString(t *testing.T)
 }
 `
 
-// ConfigurationFileGenerator
-// Analyse the template files.
+// ConfigurationFileGenerator Analyse the template files.
 // Generate configuration file, operation interfaces.
 type ConfigurationFileGenerator interface {
 	/**

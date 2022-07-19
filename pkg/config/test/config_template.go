@@ -173,15 +173,15 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 	//check parameter
 	for _, p := range params.Parameter {
 		if !isGoIdentifier(p.Name) {
-			return fmt.Errorf("Name [%s] is not a valid identifier name within ascii characters", p.Name)
+			return fmt.Errorf("name [%s] is not a valid identifier name within ascii characters", p.Name)
 		}
 
 		if !isScope(p.Scope) {
-			return fmt.Errorf("Scope [%s] is not a valid scope", p.Scope)
+			return fmt.Errorf("scope [%s] is not a valid scope", p.Scope)
 		}
 
 		if !isAccess(p.Access) {
-			return fmt.Errorf("Access [%s] is not a valid access", p.Access)
+			return fmt.Errorf("access [%s] is not a valid access", p.Access)
 		}
 
 		if !isDataType(p.DataType) {
@@ -193,7 +193,7 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 		}
 
 		if !checkValues(p.DataType, p.DomainType, p.Values) {
-			return fmt.Errorf("Values [%s] is not compatible with data type %s and domain type %s", p.Values, p.DataType, p.DomainType)
+			return fmt.Errorf("values [%s] is not compatible with data type %s and domain type %s", p.Values, p.DataType, p.DomainType)
 		}
 
 		if !isUpdateMode(p.UpdateMode) {
@@ -207,7 +207,7 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 	if _, ok := dedup[params.ParameterStructName]; !ok {
 		dedup[params.ParameterStructName] = true
 	} else {
-		return fmt.Errorf("has duplicate parameter struct name %s.", params.ParameterStructName)
+		return fmt.Errorf("has duplicate parameter struct name %s", params.ParameterStructName)
 	}
 
 	if _, ok := dedup[params.ConfigurationStructName]; !ok {
