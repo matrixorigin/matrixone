@@ -60,7 +60,7 @@ func (c *BitAnd[T1, T2]) Eval(vs []T2) []T2 {
 	return vs
 }
 
-func (c *BitAnd[T1, T2]) Merge(x, y T2, IsEmpty1 bool, IsEmpty2 bool) (T2, bool) {
+func (c *BitAnd[T1, T2]) Merge(_, _ int64, x, y T2, IsEmpty1 bool, IsEmpty2 bool) (T2, bool) {
 	if IsEmpty1 && !IsEmpty2 {
 		return y, false
 	} else if IsEmpty2 && !IsEmpty1 {
@@ -72,7 +72,7 @@ func (c *BitAnd[T1, T2]) Merge(x, y T2, IsEmpty1 bool, IsEmpty2 bool) (T2, bool)
 	}
 }
 
-func (c *BitAnd[T1, T2]) Fill(v1 T1, v2 T2, z int64, IsEmpty bool, hasNull bool) (T2, bool) {
+func (c *BitAnd[T1, T2]) Fill(_ int64, v1 T1, v2 T2, z int64, IsEmpty bool, hasNull bool) (T2, bool) {
 	if hasNull {
 		return v2, IsEmpty
 	} else if IsEmpty {
