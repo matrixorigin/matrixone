@@ -24,10 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-func NewUnaryAgg[T1, T2 any](isCount bool, ityp, otyp types.Type, grows func(int),
-	eval func([]T2) []T2, merge func(int64, int64, T2, T2, bool, bool) (T2, bool),
+func NewUnaryAgg[T1, T2 any](priv any, isCount bool, ityp, otyp types.Type, grows func(int),
+	eval func([]T2) []T2, merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool),
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool)) Agg[*UnaryAgg[T1, T2]] {
 	return &UnaryAgg[T1, T2]{
+		priv:    priv,
 		otyp:    otyp,
 		eval:    eval,
 		fill:    fill,
@@ -159,14 +160,14 @@ func (a *UnaryAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vector) 
 // a[x] += b[y]
 func (a *UnaryAgg[T1, T2]) Merge(b Agg[any], x, y int64) {
 	b0 := b.(*UnaryAgg[T1, T2])
-	a.vs[x], a.es[x] = a.merge(x, y, a.vs[x], b0.vs[y], a.es[x], b0.es[y])
+	a.vs[x], a.es[x] = a.merge(x, y, a.vs[x], b0.vs[y], a.es[x], b0.es[y], b0.priv)
 }
 
 func (a *UnaryAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, vps []uint64) {
 	b0 := b.(*UnaryAgg[T1, T2])
 	for i := range os {
 		j := vps[i] - 1
-		a.vs[j], a.es[j] = a.merge(int64(j), int64(i)+start, a.vs[j], b0.vs[int64(i)+start], a.es[j], b0.es[int64(i)+start])
+		a.vs[j], a.es[j] = a.merge(int64(j), int64(i)+start, a.vs[j], b0.vs[int64(i)+start], a.es[j], b0.es[int64(i)+start], b0.priv)
 	}
 }
 

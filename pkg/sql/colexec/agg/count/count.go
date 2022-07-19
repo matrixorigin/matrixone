@@ -33,7 +33,7 @@ func (c *Count[T1, T2]) Eval(vs []T2) []T2 {
 	return vs
 }
 
-func (c *Count[T1, T2]) Merge(_, _ int64, x, y T2, _ bool, _ bool) (T2, bool) {
+func (c *Count[T1, T2]) Merge(_, _ int64, x, y T2, _ bool, _ bool, _ any) (T2, bool) {
 	return any((any)(x).(int64) + (any)(y).(int64)).(T2), false
 }
 

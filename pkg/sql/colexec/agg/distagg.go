@@ -26,7 +26,7 @@ import (
 )
 
 func NewUnaryDistAgg[T1, T2 any](isCount bool, ityp, otyp types.Type, grows func(int),
-	eval func([]T2) []T2, merge func(int64, int64, T2, T2, bool, bool) (T2, bool),
+	eval func([]T2) []T2, merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool),
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool)) Agg[*UnaryDistAgg[T1, T2]] {
 	return &UnaryDistAgg[T1, T2]{
 		otyp:    otyp,
