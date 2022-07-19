@@ -79,6 +79,10 @@ func (v *Vector) Count() int {
 	return Length(v)
 }
 
+func (v *Vector) Size() int {
+	return len(v.Data)
+}
+
 func (v *Vector) GetType() types.Type {
 	return v.Typ
 }
@@ -545,6 +549,7 @@ func (v *Vector) ConstVectorIsNull() bool {
 func (v *Vector) Free(m *mheap.Mheap) {
 	if v.Data != nil {
 		mheap.Free(m, v.Data)
+		v.Data = nil
 	}
 }
 

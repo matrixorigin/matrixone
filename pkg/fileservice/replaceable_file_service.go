@@ -14,36 +14,11 @@
 
 package fileservice
 
-import (
-	"testing"
+import "context"
 
-	"github.com/stretchr/testify/assert"
-)
+// ReplaceableFileService is an extension interface to FileService that allow replacing a whole file
+type ReplaceableFileService interface {
+	FileService
 
-func TestMemoryFS(t *testing.T) {
-
-	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func() FileService {
-			fs, err := NewMemoryFS()
-			assert.Nil(t, err)
-			return fs
-		})
-	})
-
-	t.Run("replaceable file service", func(t *testing.T) {
-		testReplaceableFileService(t, func() ReplaceableFileService {
-			fs, err := NewMemoryFS()
-			assert.Nil(t, err)
-			return fs
-		})
-	})
-
-}
-
-func BenchmarkMemoryFS(b *testing.B) {
-	benchmarkFileService(b, func() FileService {
-		fs, err := NewMemoryFS()
-		assert.Nil(b, err)
-		return fs
-	})
+	Replace(ctx context.Context, vector IOVector) error
 }

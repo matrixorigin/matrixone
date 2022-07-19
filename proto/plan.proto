@@ -343,6 +343,15 @@ message UpdateInfo {
 	repeated string attr_orders = 6;
 }
 
+message AnalyzeInfo {
+    int64 input_rows = 1;
+    int64 output_rows = 2;
+    int64 input_size = 3;
+    int64 output_size = 4;
+    int64 time_consumed = 5;
+    int64 memory_size = 6;
+}
+
 message Node {
 	enum NodeType {
 		UNKNOWN = 0;
@@ -442,6 +451,8 @@ message Node {
 	repeated DeleteTableCtx deleteTablesCtx = 21;
 
 	repeated int32 binding_tags = 22;
+
+    AnalyzeInfo analyze_info = 23;
 }
 
 message DeleteTableCtx {
