@@ -13,3 +13,46 @@
 // limitations under the License.
 
 package dnservice
+
+import (
+	"testing"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestNewReplica(t *testing.T) {
+	r := newReplica(newTestShard(1, 2, 3, "dn1"), nil)
+	select {
+	case <-r.startedC:
+		assert.Fail(t, "cannot started")
+	default:
+	}
+}
+
+func TestWaitStarted(t *testing.T) {
+	r := newReplica(newTestShard(1, 2, 3, "dn1"), nil)
+	c := make(chan struct{})
+	func() {
+		r.waitStarted()
+		c <- struct{}{}
+	}()
+
+	select {
+	case <-c:
+	case <-time.After(time.Minute):
+		assert.Fail(t, "wait started failed")
+	}
+}
+
+func newTestShard(shardID, replicaID, logShardID uint64, address string) metadata.DNShard {
+	return metadata.DNShard{
+		DNShardRecord: metadata.DNShardRecord{
+			ShardID:    shardID,
+			LogShardID: logShardID,
+		},
+		ReplicaID: replicaID,
+		Address:   address,
+	}
+}
