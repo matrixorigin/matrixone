@@ -39,11 +39,6 @@ const (
 	defaultHeartbeatInterval = time.Second
 )
 
-// HAKeeperConfig is the config for HAKeeper.
-type HAKeeperConfig struct {
-	// TODO: implement this
-}
-
 // HAKeeperClientConfig is the config for HAKeeper clients.
 type HAKeeperClientConfig struct {
 	// DiscoveryAddress is the Log Service discovery address provided by k8s.
@@ -52,33 +47,67 @@ type HAKeeperClientConfig struct {
 	ServiceAddresses []string
 }
 
-// TODO: add toml or json support
-
 // Config defines the Configurations supported by the Log Service.
 type Config struct {
 	FS                   vfs.FS
-	DeploymentID         uint64
-	NodeHostID           string
-	RTTMillisecond       uint64
-	DataDir              string
-	ServiceAddress       string
-	ServiceListenAddress string
-	RaftAddress          string
-	RaftListenAddress    string
-	GossipAddress        string
-	GossipListenAddress  string
-	GossipSeedAddresses  []string
+	DeploymentID         uint64   `toml:"deployment-id"`
+	UUID                 string   `toml:"uuid"`
+	RTTMillisecond       uint64   `toml:"rttmillisecond"`
+	DataDir              string   `toml:"data-dir"`
+	ServiceAddress       string   `toml:"service-address"`
+	ServiceListenAddress string   `toml:"serfice-listen-address"`
+	RaftAddress          string   `toml:"raft-address"`
+	RaftListenAddress    string   `toml:"raft-listen-address"`
+	GossipAddress        string   `toml:"gossip-address"`
+	GossipListenAddress  string   `toml:"gossip-listen-address"`
+	GossipSeedAddresses  []string `toml:"uuid"`
 
-	HeartbeatInterval     time.Duration
-	HAKeeperTickInterval  time.Duration
-	HAKeeperCheckInterval time.Duration
+	HeartbeatInterval     time.Duration `toml:"heartbeat-interval"`
+	HAKeeperTickInterval  time.Duration `toml:"tick-interval"`
+	HAKeeperCheckInterval time.Duration `toml:"check-interval"`
 
-	HAKeeperConfig       HAKeeperConfig
-	HAKeeperClientConfig HAKeeperClientConfig
+	HAKeeperConfig struct {
+		// TickPerSecond indicates how many ticks every second.
+		// In HAKeeper, we do not use actual time to measure time elapse.
+		// Instead, we use ticks.
+		TickPerSecond int `toml:"tick-per-second"`
+		// LogStoreTimeout is the actual time limit between a log store's heartbeat.
+		// If HAKeeper does not receive two heartbeat within LogStoreTimeout,
+		// it regards the log store as down.
+		LogStoreTimeout time.Duration `toml:"log-store-timeout"`
+		// DnStoreTimeout is the actual time limit between a dn store's heartbeat.
+		// If HAKeeper does not receive two heartbeat within DnStoreTimeout,
+		// it regards the dn store as down.
+		DnStoreTimeout time.Duration `toml:"dn-store-timeout"`
+	}
+
+	HAKeeperClientConfig struct {
+		// DiscoveryAddress is the Log Service discovery address provided by k8s.
+		DiscoveryAddress string `toml:"hakeeper-discovery-address"`
+		// ServiceAddresses is a list of well known Log Services' service addresses.
+		ServiceAddresses []string `toml:"hakeeper-service-addresses"`
+	}
 
 	// DisableWorkers disables the HAKeeper ticker and HAKeeper client in tests.
 	// Never set this field to true in production
 	DisableWorkers bool
+}
+
+func (c *Config) GetHAKeeperConfig() hakeeper.Config {
+	return hakeeper.Config{
+		TickPerSecond:   c.HAKeeperConfig.TickPerSecond,
+		LogStoreTimeout: c.HAKeeperConfig.LogStoreTimeout,
+		DnStoreTimeout:  c.HAKeeperConfig.DnStoreTimeout,
+	}
+}
+
+func (c *Config) GetHAKeeperClientConfig() HAKeeperClientConfig {
+	addrs := make([]string, 0)
+	addrs = append(addrs, c.HAKeeperClientConfig.ServiceAddresses...)
+	return HAKeeperClientConfig{
+		DiscoveryAddress: c.HAKeeperClientConfig.DiscoveryAddress,
+		ServiceAddresses: addrs,
+	}
 }
 
 // Validate validates the configuration.
@@ -99,6 +128,15 @@ func (c *Config) Validate() error {
 	}
 	if len(c.GossipSeedAddresses) == 0 {
 		return errors.Wrapf(ErrInvalidConfig, "GossipSeedAddresses not set")
+	}
+	if c.HAKeeperConfig.TickPerSecond == 0 {
+		return errors.Wrapf(ErrInvalidConfig, "TickPerSecond not set")
+	}
+	if c.HAKeeperConfig.LogStoreTimeout == 0 {
+		return errors.Wrapf(ErrInvalidConfig, "LogStoreTimeout not set")
+	}
+	if c.HAKeeperConfig.DnStoreTimeout == 0 {
+		return errors.Wrapf(ErrInvalidConfig, "DnStoreTimeout not set")
 	}
 	return nil
 }
@@ -136,5 +174,14 @@ func (c *Config) Fill() {
 		c.GossipListenAddress = defaultGossipAddress
 	} else if len(c.GossipAddress) != 0 && len(c.GossipListenAddress) == 0 {
 		c.GossipListenAddress = c.GossipAddress
+	}
+	if c.HAKeeperConfig.TickPerSecond == 0 {
+		c.HAKeeperConfig.TickPerSecond = hakeeper.DefaultTickPerSecond
+	}
+	if c.HAKeeperConfig.LogStoreTimeout == 0 {
+		c.HAKeeperConfig.LogStoreTimeout = hakeeper.DefaultLogStoreTimeout
+	}
+	if c.HAKeeperConfig.DnStoreTimeout == 0 {
+		c.HAKeeperConfig.DnStoreTimeout = hakeeper.DefaultDnStoreTimeout
 	}
 }

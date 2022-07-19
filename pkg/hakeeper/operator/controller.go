@@ -67,9 +67,9 @@ func (c *Controller) GetRemovingReplicas() map[uint64][]uint64 {
 	for shardID, operators := range c.operators {
 		for _, op := range operators {
 			for _, step := range op.steps {
-				switch step.(type) {
+				switch step := step.(type) {
 				case RemoveLogService:
-					removing[shardID] = append(removing[shardID], step.(RemoveLogService).ReplicaID)
+					removing[shardID] = append(removing[shardID], step.ReplicaID)
 				}
 			}
 		}
@@ -82,9 +82,9 @@ func (c *Controller) GetAddingReplicas() map[uint64][]uint64 {
 	for shardID, operators := range c.operators {
 		for _, op := range operators {
 			for _, step := range op.steps {
-				switch step.(type) {
+				switch step := step.(type) {
 				case AddLogService:
-					adding[shardID] = append(adding[shardID], step.(AddLogService).ReplicaID)
+					adding[shardID] = append(adding[shardID], step.ReplicaID)
 				}
 			}
 		}

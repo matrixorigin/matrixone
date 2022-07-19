@@ -210,7 +210,7 @@ func (r *FloatRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uint6
 	}
 }
 
-// r[x] += a[y] * z
+// Mul r[x] += a[y] * z
 func (r *FloatRing) Mul(a interface{}, x, y, z int64) {
 	ar := a.(*FloatRing)
 	r.Ns[x] += ar.Ns[y] * z

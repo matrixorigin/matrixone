@@ -17,7 +17,7 @@ import (
 func Test_AbsUint64(t *testing.T) {
 	convey.Convey("Test abs for uint64 succ", t, func() {
 		var uint64VecBase = []uint64{1, 0}
-		var nsp1 []uint64 = []uint64{2}
+		var nsp1 = []uint64{2}
 		var origVecs = make([]*vector.Vector, 1)
 		var proc = process.New(mheap.New(&guest.Mmu{Mmu: host.New(100000), Limit: 100000}))
 		origVecs[0] = testutil.MakeUint64Vector(uint64VecBase, nsp1)

@@ -36,7 +36,7 @@ func TestCompactBlockCmd(t *testing.T) {
 	blk, _ := seg.CreateBlock(nil, catalog.ES_Appendable, nil)
 
 	controller := NewMVCCHandle(blk)
-	node := MockAppendNode(341, 2515, controller)
+	node := MockAppendNode(341, 0, 2515, controller)
 	cmd := NewAppendCmd(1, node)
 
 	var w bytes.Buffer

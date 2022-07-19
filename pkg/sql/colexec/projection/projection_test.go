@@ -81,19 +81,19 @@ func TestProjection(t *testing.T) {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		_, _ = Call(tc.proc, tc.arg)
+		_, _ = Call(0, tc.proc, tc.arg)
 		if tc.proc.Reg.InputBatch != nil {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 		}
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		_, _ = Call(tc.proc, tc.arg)
+		_, _ = Call(0, tc.proc, tc.arg)
 		if tc.proc.Reg.InputBatch != nil {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 		}
 		tc.proc.Reg.InputBatch = &batch.Batch{}
-		_, _ = Call(tc.proc, tc.arg)
+		_, _ = Call(0, tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = nil
-		_, _ = Call(tc.proc, tc.arg)
+		_, _ = Call(0, tc.proc, tc.arg)
 		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
 	}
 }

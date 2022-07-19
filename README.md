@@ -1,4 +1,8 @@
 <div class="column" align="middle">
+  <p align="center">
+   <img alt="MatrixOne All in One" height="50" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/logo.png?raw=true">
+  </p>
+  </a>
   <a href="https://github.com/matrixorigin/matrixone/blob/main/LICENSE">
     <img src="https://img.shields.io/badge/License-Apache%202.0-red.svg" alt="license"/>
   </a>
@@ -10,11 +14,11 @@
   <a href="https://www.codefactor.io/repository/github/matrixorigin/matrixone">
     <img src="https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0" alt="codefactor"/>
   </a>
-  <a href="https://docs.matrixorigin.io/0.3.0/MatrixOne/Release-Notes/v0.3.0/">
-   <img src="https://img.shields.io/badge/Release-v0.3.0-green.svg" alt="release"/>
+  <a href="https://docs.matrixorigin.io/0.5.0/MatrixOne/Release-Notes/v0.5.0/">
+   <img src="https://img.shields.io/badge/Release-v0.5.0-green.svg" alt="release"/>
   </a>
   <br>
-  <a href="https://docs.matrixorigin.io/0.3.0/">
+  <a href="https://docs.matrixorigin.io/0.5.0/">
     <b>Docs</b>
   </a>
   <b>||</b>
@@ -61,17 +65,20 @@ Contents
 
 MatrixOne is a future-oriented hyper-converged cloud and edge native DBMS that supports transactional, analytical, and streaming workloads with a simplified and distributed database engine, across multiple data centers, clouds, edges and other heterogeneous infrastructures.
 
+<p align="center">
+  <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/all-in-one.png?raw=true">
+</p>
 
-##  🎯 <a id="key-features">Key Features</a> 
+##  🎯 <a id="key-features">Key Features</a>
 ### 💥 **Hyper-converged Engine**
 
 <details>
-  <summary><b><font size=4>Monolithic Engine</b></font></summary> 
+  <summary><b><font size=4>Monolithic Engine</b></font></summary>
           A monolithic database engine is designed to support hybrid workloads: transactional, analytical, streaming, time-series, machine learning, etc.
 </details>
 
 <details>
-  <summary><b><font size=4>Built-in Streaming Engine</b></font></summary> 
+  <summary><b><font size=4>Built-in Streaming Engine</b></font></summary>
                With the built-in streaming engine, MatrixOne supports in-database streaming processing by groundbreaking incremental materialized view maintenance.
 </details>
 
@@ -79,35 +86,35 @@ MatrixOne is a future-oriented hyper-converged cloud and edge native DBMS that s
 ### ☁️ **Cloud & Edge Native**
 
 <details>
-  <summary><b><font size=4>Real Infrastructure Agnostic</b></font></summary> 
+  <summary><b><font size=4>Real Infrastructure Agnostic</b></font></summary>
                MatrixOne supports seemless workload migration and bursting among different locations and infrastructures.
 </details>
 
 <details>
-  <summary><b><font size=4>Multi-site Active/Active</b></font></summary> 
+  <summary><b><font size=4>Multi-site Active/Active</b></font></summary>
                     MatrixOne provides industry-leading latency control with optimized consistency protocol.
 </details>
 
 ### 🚀 **Extreme Performance**
 
 <details>
-  <summary><b><font size=4>High Performance</b></font></summary> 
+  <summary><b><font size=4>High Performance</b></font></summary>
      Accelerated queries supported by patented vectorized execution as well as optimal computation push down strategies through factorization techniques.
 </details>
 
 <details>
-  <summary><b><font size=4>Strong Consistency</b></font></summary> 
+  <summary><b><font size=4>Strong Consistency</b></font></summary>
      MatrixOne introduces a global, high-performance distributed transaction protocol across storage engines.
 </details>
 
 <details>
-  <summary><b><font size=4>High Scalability</b></font></summary> 
+  <summary><b><font size=4>High Scalability</b></font></summary>
      Seamless and non-disruptive scaling by disaggregated storage and compute.   
 </details>
 
 ## 💎 **<a id="user-values">User Values</a>**
 <details>
-  <summary><b><font size=4>Simplify Database Management and Maintenance</b></font></summary> 
+  <summary><b><font size=4>Simplify Database Management and Maintenance</b></font></summary>
      To solve the problem of high and unpredictable cost of database selection process, management and maintenance due to database overabundance, MatrixOne all-in-one architecture will significantly simplify database management and maintenance, single database can serve multiple data applications.
 </details>
 <details>
@@ -137,10 +144,10 @@ MatrixOne is a future-oriented hyper-converged cloud and edge native DBMS that s
 ## 🔎 <a id="architecture">Architecture</a>
 MatrixOne's architecture is as below:   
 <p align="center">
-  <img alt="MatrixOne" height="500" width="700" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/overall-architecture.png?raw=true">
+  <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone_new_arch.png?raw=true">
 </p>
 
-For more details, you can checkout [MatrixOne Architecture](https://docs.matrixorigin.io/0.3.0/MatrixOne/Overview/matrixone-architecture/) and [MatrixOne Tech Design](https://docs.matrixorigin.io/0.3.0/MatrixOne/Overview/MatrixOne-Tech-Design/matrixone-techdesign/).
+For more details, you can checkout [MatrixOne Architecture](https://docs.matrixorigin.io/0.5.0/MatrixOne/Overview/matrixone-architecture/).
 
 
 ## ⚡️ <a id="quick-start">Quick start</a>
@@ -148,15 +155,29 @@ For more details, you can checkout [MatrixOne Architecture](https://docs.matrixo
 
 ### ⚙️ Install MatrixOne
 MatrixOne supports Linux and MacOS. You can install MatrixOne either by [building from source](#building-from-source) or [using docker](#using-docker).
-For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.io/0.3.0/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
+For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.io/0.5.0/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
 #### **Building from source**
 
 1. Install Go (version 1.18 is required).
-  
-2. Get the MatrixOne code:
+
+2. Get the MatrixOne code: Depending on your needs, choose whether you want to keep your code up to date, or if you want to get the latest stable version of the code.
+
+- *Option 1*: Get the MatrixOne(Preview Version) code
+
+The **main** branch is the default branch, the code on the main branch is always up-to-date but not stable enough.
 
 ```
 $ git clone https://github.com/matrixorigin/matrixone.git
+$ cd matrixone
+```
+
+- *Option 2*: Get the MatrixOne(Stable Version) code
+
+If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **0.5.0** first.
+
+```
+$ git clone https://github.com/matrixorigin/matrixone.git
+$ git checkout 0.5.0
 $ cd matrixone
 ```
 
@@ -184,15 +205,25 @@ $ docker --version
 ```
 
 2. Create and run the container for the latest release of MatrixOne. It will pull the image from Docker Hub if not exists.
-   
+
+It will pull the image from Docker Hub if not exists. You can choose to pull the latest image or a stable version.
+
+- Latest Image
+
 ```
 $ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
+```
+
+- 0.5.0 Version Image
+
+```
+$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
 ```
 
 ### 🌟 Connecting to MatrixOne server
 
 1. Install MySQL client.
-   
+
    MatrixOne supports the MySQL wire protocol, so you can use MySQL client drivers to connect from various languages. Currently, MatrixOne is only compatible with Oracle MySQL client. This means that some features might not work with MariaDB client.
 
 2. Connect to MatrixOne server:
@@ -200,7 +231,7 @@ $ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
 ```
 $ mysql -h IP -P PORT -uUsername -p
 ```
-   The connection string is the same format as MySQL accepts. You need to provide a user name and a password. 
+   The connection string is the same format as MySQL accepts. You need to provide a user name and a password.
 
    Use the built-in test account for example:
 
@@ -212,7 +243,7 @@ $ mysql -h 127.0.0.1 -P 6001 -udump -p
 Enter password:
 ```
 
-Now, MatrixOne only supports the TCP listener. 
+Now, MatrixOne only supports the TCP listener.
 
 
 
@@ -220,7 +251,7 @@ Now, MatrixOne only supports the TCP listener.
 ## 🙌 <a id="contributing">Contributing</a>
 
 Contributions to MatrixOne are welcome from everyone.  
- See [Contribution Guide](https://docs.matrixorigin.io/0.3.0/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow. 
+ See [Contribution Guide](https://docs.matrixorigin.io/0.5.0/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow.
 
 ### 👏 All contributors
 
@@ -721,5 +752,3 @@ Contributions to MatrixOne are welcome from everyone.
 
 ## <a id="license">License</a>
 MatrixOne is licensed under the [Apache License, Version 2.0](LICENSE).
-
-
