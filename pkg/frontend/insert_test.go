@@ -19,7 +19,7 @@ func Test_handleInsertValues(t *testing.T) {
 
 }
 
-var tableDefs []engine.TableDef = []engine.TableDef{
+var tableDefs = []engine.TableDef{
 	&engine.AttributeDef{
 		Attr: engine.Attribute{
 			Default: engine.DefaultExpr{Exist: true, Value: []byte("123")},
@@ -137,10 +137,10 @@ var tableDefs []engine.TableDef = []engine.TableDef{
 }
 
 func Test_buildInsertValues(t *testing.T) {
-	var stmt *tree.Insert = &tree.Insert{}
-	var plan *InsertValues = &InsertValues{}
+	var stmt = &tree.Insert{}
+	var plan = &InsertValues{}
 	var snapshot engine.Snapshot
-	var num *tree.NumVal = &tree.NumVal{}
+	var num = &tree.NumVal{}
 	var err error
 	convey.Convey("buildInsertValues failed", t, func() {
 		err = buildInsertValues(stmt, plan, nil, snapshot)
@@ -648,15 +648,15 @@ func Test_makeExprFromVal(t *testing.T) {
 }
 
 func Test_rewriteInsertRows(t *testing.T) {
-	var noInsertTarget bool = true
+	var noInsertTarget = true
 	var finalInsertTargets []string
 	var relationAttrs []string
 	var rows []tree.Exprs
-	var defaultExprs map[string]tree.Expr = make(map[string]tree.Expr)
+	var defaultExprs = make(map[string]tree.Expr)
 	var ret []tree.Exprs
 	var str []string
 	var err error
-	var num *tree.NumVal = &tree.NumVal{}
+	var num = &tree.NumVal{}
 	convey.Convey("rewriteInsertRows succ", t, func() {
 		finalInsertTargets = []string{"a", "b"}
 		relationAttrs = []string{"a", "b", "c", "d"}
@@ -694,7 +694,7 @@ func Test_buildConstant(t *testing.T) {
 	var typ types.Type
 	var n tree.Expr
 	var ret interface{}
-	var num *tree.NumVal = &tree.NumVal{}
+	var num = &tree.NumVal{}
 	var err error
 
 	convey.Convey("buildConstant ParenExpr", t, func() {
@@ -1051,7 +1051,7 @@ func Test_buildConstant(t *testing.T) {
 
 func Test_buildConstantValue(t *testing.T) {
 	var typ types.Type
-	var num *tree.NumVal = &tree.NumVal{}
+	var num = &tree.NumVal{}
 	var ret interface{}
 	var err error
 	convey.Convey("buildConstantValue Unknown", t, func() {

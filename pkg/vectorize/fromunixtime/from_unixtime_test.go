@@ -17,11 +17,13 @@ package fromunixtime
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func mustDatetime(s string) types.Datetime {
+func wantDatetimeFromUnix(ts int64) types.Datetime {
+	s := time.Unix(ts, 0).Local().Format("2006-01-02 15:04:05")
 	datetime, err := types.ParseDatetime(s, 6)
 	if err != nil {
 		panic("bad datetime")
@@ -30,13 +32,12 @@ func mustDatetime(s string) types.Datetime {
 }
 
 func TestFromUnixTimestamp(t *testing.T) {
-
 	xs := []int64{1641046980, 1641133380, 1641219780}
 	rs := make([]types.Datetime, 3)
 	want := []types.Datetime{
-		mustDatetime("2022-01-01 14:23:00"),
-		mustDatetime("2022-01-02 14:23:00"),
-		mustDatetime("2022-01-03 14:23:00"),
+		wantDatetimeFromUnix(xs[0]),
+		wantDatetimeFromUnix(xs[1]),
+		wantDatetimeFromUnix(xs[2]),
 	}
 
 	got := unixToDatetime(xs, rs)

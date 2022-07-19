@@ -24,7 +24,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-// CheckService check dn state and generate operator for expired dn store.
+// Check checks dn state and generate operator for expired dn store.
 // The less shard ID, the higher priority.
 // NB: the returned order should be deterministic.
 func Check(

@@ -173,15 +173,15 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 	//check parameter
 	for _, p := range params.Parameter {
 		if !isGoIdentifier(p.Name) {
-			return fmt.Errorf("Name [%s] is not a valid identifier name within ascii characters", p.Name)
+			return fmt.Errorf("name [%s] is not a valid identifier name within ascii characters", p.Name)
 		}
 
 		if !isScope(p.Scope) {
-			return fmt.Errorf("Scope [%s] is not a valid scope", p.Scope)
+			return fmt.Errorf("scope [%s] is not a valid scope", p.Scope)
 		}
 
 		if !isAccess(p.Access) {
-			return fmt.Errorf("Access [%s] is not a valid access", p.Access)
+			return fmt.Errorf("access [%s] is not a valid access", p.Access)
 		}
 
 		if !isDataType(p.DataType) {
@@ -193,7 +193,7 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 		}
 
 		if !checkValues(p.DataType, p.DomainType, p.Values) {
-			return fmt.Errorf("Values [%s] is not compatible with data type %s and domain type %s", p.Values, p.DataType, p.DomainType)
+			return fmt.Errorf("values [%s] is not compatible with data type %s and domain type %s", p.Values, p.DataType, p.DomainType)
 		}
 
 		if !isUpdateMode(p.UpdateMode) {
@@ -207,32 +207,32 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 	if _, ok := dedup[params.ParameterStructName]; !ok {
 		dedup[params.ParameterStructName] = true
 	} else {
-		return fmt.Errorf("has duplicate parameter struct name %s.", params.ParameterStructName)
+		return fmt.Errorf("has duplicate parameter struct name %s", params.ParameterStructName)
 	}
 
 	if _, ok := dedup[params.ConfigurationStructName]; !ok {
 		dedup[params.ConfigurationStructName] = true
 	} else {
-		return fmt.Errorf("has duplicate configuration struct name %s.", params.ConfigurationStructName)
+		return fmt.Errorf("has duplicate configuration struct name %s", params.ConfigurationStructName)
 	}
 
 	if _, ok := dedup[params.OperationFileName]; !ok {
 		dedup[params.OperationFileName] = true
 	} else {
-		return fmt.Errorf("has duplicate operation file name %s.", params.OperationFileName)
+		return fmt.Errorf("has duplicate operation file name %s", params.OperationFileName)
 	}
 
 	if _, ok := dedup[params.ConfigurationFileName]; !ok {
 		dedup[params.ConfigurationFileName] = true
 	} else {
-		return fmt.Errorf("has duplicate configuration file name %s.", params.ConfigurationFileName)
+		return fmt.Errorf("has duplicate configuration file name %s", params.ConfigurationFileName)
 	}
 
 	for _, p := range params.Parameter {
 		if _, ok := dedup[p.Name]; !ok {
 			dedup[p.Name] = true
 		} else {
-			return fmt.Errorf("has duplicate parameter name %s.", p.Name)
+			return fmt.Errorf("has duplicate parameter name %s", p.Name)
 		}
 	}
 
@@ -1278,7 +1278,7 @@ type ConfigurationFileGeneratorImpl struct {
 func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 	defDir, err := filepath.Abs(filepath.Dir(cfgi.parameterDefinitionFileName))
 	if err != nil {
-		return fmt.Errorf("Get the directory of parameter definition file failed.error:%v", err)
+		return fmt.Errorf("get the directory of parameter definition file failed.error:%v", err)
 	}
 
 	params := &parameters{}
@@ -1288,7 +1288,7 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 
 	parameterTmpl, err := template.New("MakeParameterTemplate").Parse(cfgi.parameterTemplate)
 	if err != nil {
-		return fmt.Errorf("Make parameter template failed. error:%v", err)
+		return fmt.Errorf("make parameter template failed. error:%v", err)
 	}
 
 	f, err := os.Create(defDir + "/" + params.OperationFileName + ".go")

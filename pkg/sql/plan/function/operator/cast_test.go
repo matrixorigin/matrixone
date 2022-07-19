@@ -16,6 +16,7 @@ package operator
 
 import (
 	"testing"
+	"time"
 	"unsafe"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
@@ -2601,6 +2602,10 @@ func TestCastDateAsTimeStamp(t *testing.T) {
 }
 
 func TestCastIntegerAsTimestamp(t *testing.T) {
+
+	wantDatetimeFromUnix := func(ts int64) string {
+		return time.Unix(ts, 0).Local().Format("2006-01-02 15:04:05")
+	}
 	//Cast converts int8 to timeStamp
 	convey.Convey("Cast int8 to timeStamp", t, func() {
 		type kase struct {
@@ -2610,11 +2615,11 @@ func TestCastIntegerAsTimestamp(t *testing.T) {
 		kases := []kase{
 			{
 				intval: 23,
-				want:   "1970-01-01 00:00:23",
+				want:   wantDatetimeFromUnix(23),
 			},
 			{
 				intval: 26,
-				want:   "1970-01-01 00:00:26",
+				want:   wantDatetimeFromUnix(26),
 			},
 		}
 
@@ -2644,11 +2649,11 @@ func TestCastIntegerAsTimestamp(t *testing.T) {
 		kases := []kase{
 			{
 				intval: 12000,
-				want:   "1970-01-01 03:20:00",
+				want:   wantDatetimeFromUnix(12000),
 			},
 			{
 				intval: 26200,
-				want:   "1970-01-01 07:16:40",
+				want:   wantDatetimeFromUnix(26200),
 			},
 		}
 
@@ -2678,11 +2683,11 @@ func TestCastIntegerAsTimestamp(t *testing.T) {
 		kases := []kase{
 			{
 				intval: 2300000,
-				want:   "1970-01-27 14:53:20",
+				want:   wantDatetimeFromUnix(2300000),
 			},
 			{
 				intval: 2710000,
-				want:   "1970-02-01 08:46:40",
+				want:   wantDatetimeFromUnix(2710000),
 			},
 		}
 
@@ -2712,11 +2717,11 @@ func TestCastIntegerAsTimestamp(t *testing.T) {
 		kases := []kase{
 			{
 				intval: 833453453,
-				want:   "1996-05-30 10:50:53",
+				want:   wantDatetimeFromUnix(833453453),
 			},
 			{
 				intval: 933453453,
-				want:   "1999-07-31 20:37:33",
+				want:   wantDatetimeFromUnix(933453453),
 			},
 		}
 
@@ -2746,11 +2751,11 @@ func TestCastIntegerAsTimestamp(t *testing.T) {
 		kases := []kase{
 			{
 				intval: 233,
-				want:   "1970-01-01 00:03:53",
+				want:   wantDatetimeFromUnix(233),
 			},
 			{
 				intval: 254,
-				want:   "1970-01-01 00:04:14",
+				want:   wantDatetimeFromUnix(254),
 			},
 		}
 
@@ -2780,11 +2785,11 @@ func TestCastIntegerAsTimestamp(t *testing.T) {
 		kases := []kase{
 			{
 				intval: 33345,
-				want:   "1970-01-01 09:15:45",
+				want:   wantDatetimeFromUnix(33345),
 			},
 			{
 				intval: 43345,
-				want:   "1970-01-01 12:02:25",
+				want:   wantDatetimeFromUnix(43345),
 			},
 		}
 
@@ -2814,11 +2819,11 @@ func TestCastIntegerAsTimestamp(t *testing.T) {
 		kases := []kase{
 			{
 				intval: 83345789,
-				want:   "1972-08-22 15:36:29",
+				want:   wantDatetimeFromUnix(83345789),
 			},
 			{
 				intval: 89345789,
-				want:   "1972-10-31 02:16:29",
+				want:   wantDatetimeFromUnix(89345789),
 			},
 		}
 
@@ -2848,11 +2853,11 @@ func TestCastIntegerAsTimestamp(t *testing.T) {
 		kases := []kase{
 			{
 				intval: 1998933575,
-				want:   "2033-05-05 19:19:35",
+				want:   wantDatetimeFromUnix(1998933575),
 			},
 			{
 				intval: 1298933575,
-				want:   "2011-02-28 22:52:55",
+				want:   wantDatetimeFromUnix(1298933575),
 			},
 		}
 

@@ -227,7 +227,7 @@ func (r *DecimalRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uin
 	}
 }
 
-// r[x] += a[y] * z
+// Mul r[x] += a[y] * z
 func (r *DecimalRing) Mul(a interface{}, x, y, z int64) {
 	ar := a.(*DecimalRing)
 	r.Ns[x] += ar.Ns[y] * z
