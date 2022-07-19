@@ -77,5 +77,5 @@ func TestHandleLocalCNRequestsWillPanic(t *testing.T) {
 	}()
 
 	req := service.NewTestReadRequest(1, txn.TxnMeta{}, 1)
-	r.handleLocalRequest(context.Background(), &req, &txn.TxnResponse{})
+	assert.NoError(t, r.handleLocalRequest(context.Background(), &req, &txn.TxnResponse{}))
 }

@@ -27,7 +27,7 @@ import (
 func TestHandleRead(t *testing.T) {
 	runDNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)
-		s.StartDNReplica(shard)
+		assert.NoError(t, s.StartDNReplica(shard))
 
 		req := service.NewTestReadRequest(1, service.NewTestTxn(1, 1, 1), 1)
 		req.CNRequest.Target.ReplicaID = 2
@@ -38,7 +38,7 @@ func TestHandleRead(t *testing.T) {
 func TestHandleWrite(t *testing.T) {
 	runDNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)
-		s.StartDNReplica(shard)
+		assert.NoError(t, s.StartDNReplica(shard))
 
 		req := service.NewTestWriteRequest(1, service.NewTestTxn(1, 1, 1), 1)
 		req.CNRequest.Target.ReplicaID = 2
@@ -49,7 +49,7 @@ func TestHandleWrite(t *testing.T) {
 func TestHandleCommit(t *testing.T) {
 	runDNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)
-		s.StartDNReplica(shard)
+		assert.NoError(t, s.StartDNReplica(shard))
 
 		req := service.NewTestCommitRequest(service.NewTestTxn(1, 1, 1))
 		req.Txn.DNShards[0].ReplicaID = 2
@@ -60,7 +60,7 @@ func TestHandleCommit(t *testing.T) {
 func TestHandleRollback(t *testing.T) {
 	runDNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)
-		s.StartDNReplica(shard)
+		assert.NoError(t, s.StartDNReplica(shard))
 
 		req := service.NewTestRollbackRequest(service.NewTestTxn(1, 1, 1))
 		req.Txn.DNShards[0].ReplicaID = 2
@@ -71,7 +71,7 @@ func TestHandleRollback(t *testing.T) {
 func TestHandlePrepare(t *testing.T) {
 	runDNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)
-		s.StartDNReplica(shard)
+		assert.NoError(t, s.StartDNReplica(shard))
 
 		req := service.NewTestPrepareRequest(service.NewTestTxn(1, 1, 1), 1)
 		req.PrepareRequest.DNShard.ReplicaID = 2
@@ -87,7 +87,7 @@ func TestHandlePrepare(t *testing.T) {
 func TestHandleGetStatus(t *testing.T) {
 	runDNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)
-		s.StartDNReplica(shard)
+		assert.NoError(t, s.StartDNReplica(shard))
 
 		req := service.NewTestGetStatusRequest(service.NewTestTxn(1, 1, 1), 1)
 		req.GetStatusRequest.DNShard.ReplicaID = 2
@@ -103,7 +103,7 @@ func TestHandleGetStatus(t *testing.T) {
 func TestHandleCommitDNShard(t *testing.T) {
 	runDNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)
-		s.StartDNReplica(shard)
+		assert.NoError(t, s.StartDNReplica(shard))
 
 		req := service.NewTestCommitShardRequest(service.NewTestTxn(1, 1, 1))
 		req.CommitDNShardRequest.DNShard.ReplicaID = 2
@@ -119,7 +119,7 @@ func TestHandleCommitDNShard(t *testing.T) {
 func TestHandleRollbackDNShard(t *testing.T) {
 	runDNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)
-		s.StartDNReplica(shard)
+		assert.NoError(t, s.StartDNReplica(shard))
 
 		req := service.NewTestRollbackShardRequest(service.NewTestTxn(1, 1, 1))
 		req.RollbackDNShardRequest.DNShard.ReplicaID = 2

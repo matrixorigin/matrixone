@@ -152,8 +152,7 @@ func (s *store) Start() error {
 	if err := s.server.Start(); err != nil {
 		return err
 	}
-	s.stopper.RunTask(s.heartbeatTask)
-	return nil
+	return s.stopper.RunTask(s.heartbeatTask)
 }
 
 func (s *store) Close() error {
@@ -278,7 +277,7 @@ func (s *store) createReplica(shard metadata.DNShard) error {
 	if err != nil {
 		return err
 	}
-	s.stopper.RunTask(func(ctx context.Context) {
+	err = s.stopper.RunTask(func(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
@@ -295,6 +294,10 @@ func (s *store) createReplica(shard metadata.DNShard) error {
 			}
 		}
 	})
+	if err != nil {
+		return err
+	}
+
 	s.addDNShard(shard)
 	return nil
 }

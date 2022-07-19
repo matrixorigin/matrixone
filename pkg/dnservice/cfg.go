@@ -115,7 +115,7 @@ type Config struct {
 			}
 		}
 
-		// Clock txn clock type. [LOCAL|HLC], deafult is LOCAL.
+		// Clock txn clock type. [LOCAL|HLC]. Default is LOCAL.
 		Clock struct {
 			// Backend clock backend implementation. [LOCAL|HLC], default LOCAL.
 			Backend string `toml:"source"`
