@@ -20,8 +20,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func NewMin[T any]() *Min[T] {
-	return &Min[T]{}
+func NewMin[T any](t types.Type) *Min[T] {
+	return &Min[T]{
+		typ: t,
+	}
 }
 
 func (m *Min[T]) Grows(_ int) {

@@ -20,8 +20,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func NewMax[T any]() *Max[T] {
-	return &Max[T]{}
+func NewMax[T any](t types.Type) *Max[T] {
+	return &Max[T]{
+		typ: t,
+	}
 }
 
 func (m *Max[T]) Grows(_ int) {
