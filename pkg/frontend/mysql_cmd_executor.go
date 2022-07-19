@@ -123,8 +123,8 @@ type outputQueue struct {
 	flushTime       time.Duration
 }
 
-func (oq *outputQueue) ResetLineStr() {
-	oq.lineStr = oq.lineStr[:0]
+func (o *outputQueue) ResetLineStr() {
+	o.lineStr = o.lineStr[:0]
 }
 
 func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *tree.ExportParam, showStatementType ShowStatementType) *outputQueue {
@@ -419,7 +419,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		if err != nil {
 			return err
 		}
-		var rowIndex int64 = int64(j)
+		var rowIndex = int64(j)
 		if len(bat.Sels) != 0 {
 			rowIndex = bat.Sels[j]
 		}
@@ -813,7 +813,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	}
 
 	if !isfile {
-		return fmt.Errorf("file %s is a directory.", load.File)
+		return fmt.Errorf("file %s is a directory", load.File)
 	}
 
 	/*
@@ -832,7 +832,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 
 	txnHandler := ses.GetTxnHandler()
 	if txnHandler.isTxnState(TxnBegan) {
-		return fmt.Errorf("Do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
+		return fmt.Errorf("do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
 	}
 	dbHandler, err := ses.Pu.StorageEngine.Database(loadDb, txnHandler.GetTxn().GetCtx())
 	if err != nil {
@@ -917,6 +917,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 				defs := table.TableDefs(txnHandler.GetTxn().GetCtx())
 				for _, def := range defs {
 					if attr, ok := def.(*engine.AttributeDef); ok {
+						// Fixme: attrs here is never used.
 						attrs = append(attrs, &engineColumnInfo{
 							name: attr.Attr.Name,
 							typ:  attr.Attr.Type,
@@ -1052,8 +1053,8 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 	ses.Mrs.AddColumn(col1)
 	ses.Mrs.AddColumn(col2)
 
-	var hasLike bool = false
-	var likePattern string = ""
+	var hasLike = false
+	var likePattern = ""
 	if sv.Like != nil {
 		hasLike = true
 		likePattern = strings.ToLower(sv.Like.Right.String())
@@ -1517,7 +1518,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		ses.Mrs = &MysqlResultSet{}
 		stmt := cw.GetAst()
 
-		var fromTxnCommand TxnCommand = TxnNoCommand
+		var fromTxnCommand = TxnNoCommand
 		//check transaction states
 		switch stmt.(type) {
 		case *tree.BeginTransaction:
@@ -1961,7 +1962,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 
 		return resp, nil
 	default:
-		err := fmt.Errorf("unsupported command. 0x%x \n", req.GetCmd())
+		err := fmt.Errorf("unsupported command. 0x%x", req.GetCmd())
 		resp = NewGeneralErrorResponse(uint8(req.GetCmd()), err)
 	}
 	return resp, nil
@@ -2030,7 +2031,7 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 	case types.T_decimal128:
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	default:
-		return fmt.Errorf("RunWhileSend : unsupported type %d \n", engineType)
+		return fmt.Errorf("RunWhileSend : unsupported type %d", engineType)
 	}
 	return nil
 }

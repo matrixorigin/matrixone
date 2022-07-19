@@ -36,7 +36,7 @@ func ParseOne(sql string) (tree.Statement, error) {
 		return nil, lexer.scanner.LastError
 	}
 	if len(lexer.stmts) != 1 {
-		return nil, errors.New("Sytax Error, or too many sql to parse")
+		return nil, errors.New("syntax Error, or too many sql to parse")
 	}
 	return lexer.stmts[0], nil
 }

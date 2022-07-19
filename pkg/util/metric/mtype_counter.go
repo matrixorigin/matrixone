@@ -208,10 +208,10 @@ func newRateCounterVec(opts CounterOpts, labelNames []string) *rateCounterVec {
 	return vec
 }
 
-func (r *rateCounterVec) CancelToProm() {}
+func (v *rateCounterVec) CancelToProm() {}
 
-func (r *rateCounterVec) CollectorToProm() prom.Collector {
-	return r.compat
+func (v *rateCounterVec) CollectorToProm() prom.Collector {
+	return v.compat
 }
 
 func (v *rateCounterVec) Collect(ch chan<- prom.Metric) {

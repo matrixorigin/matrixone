@@ -36,7 +36,7 @@ func TestCount(t *testing.T) {
 	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
 	vec := testutil.NewVector(Rows, types.New(types.T_int8, 0, 0, 0), m, true, nil)
 	{
-		agg := agg.NewUnaryAgg(true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill)
+		agg := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill)
 		err := agg.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -48,13 +48,13 @@ func TestCount(t *testing.T) {
 		v.Free(m)
 	}
 	{
-		agg0 := agg.NewUnaryAgg(true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill)
+		agg0 := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill)
 		err := agg0.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
 			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
 		}
-		agg1 := agg.NewUnaryAgg(true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill)
+		agg1 := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill)
 		err = agg1.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -65,6 +65,53 @@ func TestCount(t *testing.T) {
 			v, err := agg0.Eval(m)
 			require.NoError(t, err)
 			require.Equal(t, []int64{20}, vector.GetColumn[int64](v))
+			v.Free(m)
+		}
+		{
+			v, err := agg1.Eval(m)
+			require.NoError(t, err)
+			require.Equal(t, []int64{10}, vector.GetColumn[int64](v))
+			v.Free(m)
+		}
+	}
+	vec.Free(m)
+	require.Equal(t, int64(0), m.Size())
+}
+
+func TestDist(t *testing.T) {
+	c := New[int8, int64](false)
+	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
+	vec := testutil.NewVector(Rows, types.New(types.T_int8, 0, 0, 0), m, false, nil)
+	{
+		agg := agg.NewUnaryDistAgg(true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill)
+		err := agg.Grows(1, m)
+		require.NoError(t, err)
+		for i := 0; i < Rows; i++ {
+			agg.Fill(0, int64(i), 1, []*vector.Vector{vec})
+		}
+		v, err := agg.Eval(m)
+		require.NoError(t, err)
+		require.Equal(t, []int64{10}, vector.GetColumn[int64](v))
+		v.Free(m)
+	}
+	{
+		agg0 := agg.NewUnaryDistAgg(true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill)
+		err := agg0.Grows(1, m)
+		require.NoError(t, err)
+		for i := 0; i < Rows; i++ {
+			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
+		}
+		agg1 := agg.NewUnaryDistAgg(true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill)
+		err = agg1.Grows(1, m)
+		require.NoError(t, err)
+		for i := 0; i < Rows; i++ {
+			agg1.Fill(0, int64(i), 1, []*vector.Vector{vec})
+		}
+		agg0.Merge(agg1, 0, 0)
+		{
+			v, err := agg0.Eval(m)
+			require.NoError(t, err)
+			require.Equal(t, []int64{10}, vector.GetColumn[int64](v))
 			v.Free(m)
 		}
 		{

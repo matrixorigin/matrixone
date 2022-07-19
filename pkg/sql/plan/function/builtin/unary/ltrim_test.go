@@ -18,7 +18,7 @@ import (
 func Test_Ltrim(t *testing.T) {
 	convey.Convey("Test Ltrim succ", t, func() {
 		var charVecBase = []string{" 123", "  123", "123 ", " 8 ", " 8 a ", ""}
-		var nsp1 []uint64 = []uint64{5}
+		var nsp1 = []uint64{5}
 		var origVecs = make([]*vector.Vector, 1)
 		var proc = process.New(mheap.New(&guest.Mmu{Mmu: host.New(100000), Limit: 100000}))
 		origVecs[0] = testutil.MakeCharVector(charVecBase, nsp1)

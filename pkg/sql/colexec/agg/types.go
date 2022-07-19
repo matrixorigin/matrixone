@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
+// Agg
 type Agg[T any] interface {
 	// Dup will duplicate a new agg with the same type.
 	Dup() Agg[any]
@@ -76,8 +77,10 @@ type Agg[T any] interface {
 	BatchMerge(agg2 Agg[any], start int64, os []uint8, vps []uint64)
 }
 
-// generic aggregation function with one input vector and without distinct
+// UnaryAgg generic aggregation function with one input vector and without distinct
 type UnaryAgg[T1, T2 any] struct {
+	priv any
+
 	// vs is result value list
 	vs []T2
 	// es, es[i] is true to indicate that this group has not yet been populated with any value
@@ -96,16 +99,26 @@ type UnaryAgg[T1, T2 any] struct {
 	grows func(int)
 	// eval used to get final aggregated value
 	eval func([]T2) []T2
-	// merge The first argument is the value of the group corresponding to the first aggregate function,
-	//		the second argument is the value of the group corresponding to the second aggregate function,
-	//      the third argument is whether the value corresponding to the first aggregate function is empty,
-	//      and the fourth argument is whether the value corresponding to the second aggregate function is empty
-	merge func(T2, T2, bool, bool) (T2, bool)
-	// fill, first parameter is the value to be fed, the second is the value of the group to be filled, the third is the number of times the first parameter needs to be fed, the fourth represents whether it is a new group, and the fifth represents whether the value to be fed is null
-	fill func(T1, T2, int64, bool, bool) (T2, bool)
+	// merge
+	// 	first argument is the group number to be merged
+	//  second argument is the group number used to merge
+	// 	third argument is the value of the group corresponding to the first aggregate function,
+	//	fourth argument is the value of the group corresponding to the second aggregate function,
+	//  fifth argument is whether the value corresponding to the first aggregate function is empty,
+	//  sixth argument is whether the value corresponding to the second aggregate function is empty
+	//  seventh value is the private data
+	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool)
+	// fill
+	//  first argument is the group number to be filled
+	// 	second parameter is the value to be fed
+	//	third is the value of the group to be filled
+	// 	fourth is the number of times the first parameter needs to be fed
+	//  fifth represents whether it is a new group
+	//  sixth represents whether the value to be fed is null
+	fill func(int64, T1, T2, int64, bool, bool) (T2, bool)
 }
 
-// generic aggregation function with one input vector and with distinct
+// UnaryDistAgg generic aggregation function with one input vector and with distinct
 type UnaryDistAgg[T1, T2 any] struct {
 	// vs is result value list
 	vs []T2
@@ -131,11 +144,21 @@ type UnaryDistAgg[T1, T2 any] struct {
 	grows func(int)
 	// eval used to get final aggregated value
 	eval func([]T2) []T2
-	// merge The first argument is the value of the group corresponding to the first aggregate function,
-	//		the second argument is the value of the group corresponding to the second aggregate function,
-	//      the third argument is whether the value corresponding to the first aggregate function is empty,
-	//      and the fourth argument is whether the value corresponding to the second aggregate function is empty
-	merge func(T2, T2, bool, bool) (T2, bool)
-	// fill, first parameter is the value to be fed, the second is the value of the group to be filled, the third is the number of times the first parameter needs to be fed, the fourth represents whether it is a new group, and the fifth represents whether the value to be fed is null
-	fill func(T1, T2, int64, bool, bool) (T2, bool)
+	// merge
+	// 	first argument is the group number to be merged
+	//  second argument is the group number used to merge
+	// 	third argument is the value of the group corresponding to the first aggregate function,
+	//	fourth argument is the value of the group corresponding to the second aggregate function,
+	//  fifth argument is whether the value corresponding to the first aggregate function is empty,
+	//  sixth argument is whether the value corresponding to the second aggregate function is empty
+	//  seventh value is the private data
+	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool)
+	// fill
+	//  first argument is the group number to be filled
+	// 	second parameter is the value to be fed
+	//	third is the value of the group to be filled
+	// 	fourth is the number of times the first parameter needs to be fed
+	//  fifth represents whether it is a new group
+	//  sixth represents whether the value to be fed is null
+	fill func(int64, T1, T2, int64, bool, bool) (T2, bool)
 }

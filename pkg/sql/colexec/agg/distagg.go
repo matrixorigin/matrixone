@@ -26,12 +26,13 @@ import (
 )
 
 func NewUnaryDistAgg[T1, T2 any](isCount bool, ityp, otyp types.Type, grows func(int),
-	eval func([]T2) []T2, merge func(T2, T2, bool, bool) (T2, bool),
-	fill func(T1, T2, int64, bool, bool) (T2, bool)) Agg[*UnaryDistAgg[T1, T2]] {
+	eval func([]T2) []T2, merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool),
+	fill func(int64, T1, T2, int64, bool, bool) (T2, bool)) Agg[*UnaryDistAgg[T1, T2]] {
 	return &UnaryDistAgg[T1, T2]{
 		otyp:    otyp,
 		eval:    eval,
 		fill:    fill,
+		grows:   grows,
 		merge:   merge,
 		isCount: isCount,
 		ityps:   []types.Type{ityp},
@@ -56,6 +57,8 @@ func (a *UnaryDistAgg[T1, T2]) Dup() Agg[any] {
 		ityps: a.ityps,
 		fill:  a.fill,
 		merge: a.merge,
+		eval:  a.eval,
+		grows: a.grows,
 	}
 }
 
@@ -131,10 +134,8 @@ func (a *UnaryDistAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector
 	} else {
 		v = vector.GetColumn[T1](vec)[sel]
 	}
-	if a.maps[i].Insert(vecs, int(sel)) {
-		a.srcs[i] = append(a.srcs[i], v)
-		a.vs[i], a.es[i] = a.fill(v, a.vs[i], z, a.es[i], hasNull)
-	}
+	a.srcs[i] = append(a.srcs[i], v)
+	a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], z, a.es[i], hasNull)
 }
 
 func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vecs []*vector.Vector) {
@@ -146,7 +147,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 				hasNull := vec.GetNulls().Contains(uint64(i) + uint64(start))
 				v := (any)(vec.GetString(int64(i) + start)).(T1)
 				a.srcs[j] = append(a.srcs[j], v)
-				a.vs[j], a.es[j] = a.fill(v, a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+				a.vs[j], a.es[j] = a.fill(int64(j), v, a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
 			}
 		}
 		return
@@ -158,7 +159,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 			hasNull := vec.GetNulls().Contains(uint64(i) + uint64(start))
 			v := vs[int64(i)+start]
 			a.srcs[j] = append(a.srcs[j], v)
-			a.vs[j], a.es[j] = a.fill(v, a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+			a.vs[j], a.es[j] = a.fill(int64(j), v, a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
 		}
 	}
 }
@@ -172,7 +173,7 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vect
 				hasNull := vec.GetNulls().Contains(uint64(j))
 				v := (any)(vec.GetString(int64(j))).(T1)
 				a.srcs[i] = append(a.srcs[i], v)
-				a.vs[i], a.es[i] = a.fill(v, a.vs[i], zs[j], a.es[i], hasNull)
+				a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
 			}
 		}
 		return
@@ -182,7 +183,7 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vect
 		if a.maps[i].Insert(vecs, j) {
 			hasNull := vec.GetNulls().Contains(uint64(j))
 			a.srcs[i] = append(a.srcs[i], v)
-			a.vs[i], a.es[i] = a.fill(v, a.vs[i], zs[j], a.es[i], hasNull)
+			a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
 		}
 	}
 }
@@ -195,7 +196,7 @@ func (a *UnaryDistAgg[T1, T2]) Merge(b Agg[any], x, y int64) {
 	}
 	for _, v := range b0.srcs[y] {
 		if a.maps[x].InsertValue(v) {
-			a.vs[x], a.es[x] = a.fill(v, a.vs[x], 1, a.es[x], false)
+			a.vs[x], a.es[x] = a.fill(x, v, a.vs[x], 1, a.es[x], false)
 		}
 	}
 }
@@ -210,7 +211,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, v
 		}
 		for _, v := range b0.srcs[k] {
 			if a.maps[j].InsertValue(v) {
-				a.vs[j], a.es[j] = a.fill(v, a.vs[j], 1, a.es[j], false)
+				a.vs[j], a.es[j] = a.fill(int64(j), v, a.vs[j], 1, a.es[j], false)
 			}
 		}
 	}

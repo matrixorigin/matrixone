@@ -102,7 +102,7 @@ func NewInternalError(msg string, args ...interface{}) *Error {
 	return &err
 }
 
-// Convert a runtime panic to internal error.
+// NewPanicError converts a runtime panic to internal error.
 func NewPanicError(v interface{}) *Error {
 	if e, ok := v.(*Error); ok {
 		return e

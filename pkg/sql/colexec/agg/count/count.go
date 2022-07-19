@@ -33,11 +33,11 @@ func (c *Count[T1, T2]) Eval(vs []T2) []T2 {
 	return vs
 }
 
-func (c *Count[T1, T2]) Merge(x, y T2, _ bool, _ bool) (T2, bool) {
+func (c *Count[T1, T2]) Merge(_, _ int64, x, y T2, _ bool, _ bool, _ any) (T2, bool) {
 	return any((any)(x).(int64) + (any)(y).(int64)).(T2), false
 }
 
-func (c *Count[T1, T2]) Fill(_ T1, v T2, z int64, _ bool, hasNull bool) (T2, bool) {
+func (c *Count[T1, T2]) Fill(_ int64, _ T1, v T2, z int64, _ bool, hasNull bool) (T2, bool) {
 	if hasNull && !c.isStar {
 		return v, false
 	}
