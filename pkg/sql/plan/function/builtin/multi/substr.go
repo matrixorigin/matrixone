@@ -26,7 +26,7 @@ import (
 
 func Substring(inputVecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	// get the number of substr function parameters
-	var paramNum int = len(inputVecs)
+	var paramNum = len(inputVecs)
 	srcVector := inputVecs[0]
 	startVector := inputVecs[1]
 	// Substr function has no length parameter
@@ -49,7 +49,7 @@ func Substring(inputVecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 
 // substring first parameter is constant
 func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	var paramNum int = len(inputVecs)
+	var paramNum = len(inputVecs)
 	srcVector := inputVecs[0]
 	startVector := inputVecs[1]
 	columnSrcCol := vector.MustBytesCols(srcVector)
@@ -136,7 +136,7 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 
 // substring first paramter is column
 func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	var paramNum int = len(inputVecs)
+	var paramNum = len(inputVecs)
 	srcVector := inputVecs[0]
 	startVector := inputVecs[1]
 	columnSrcCol := srcVector.Col.(*types.Bytes)

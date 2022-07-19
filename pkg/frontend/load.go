@@ -319,11 +319,11 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 
 func AtomicAddDuration(v atomic.Value, t interface{}) {
 	var ti time.Duration = 0
-	switch t.(type) {
+	switch t := t.(type) {
 	case time.Duration:
-		ti = t.(time.Duration)
+		ti = t
 	case atomic.Value:
-		tx, _ := t.(atomic.Value)
+		tx := t
 		if tx.Load() != nil {
 			ti = tx.Load().(time.Duration)
 		}
@@ -1698,7 +1698,8 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		wait_a := time.Now()
 		handler.ThreadInfo.SetTime(wait_a)
 		handler.ThreadInfo.SetCnt(1)
-		dbHandler := handler.dbHandler
+		//dbHandler := handler.dbHandler
+		var dbHandler engine.Database
 		txnHandler := handler.txnHandler
 		tableHandler := handler.tableHandler
 		if !handler.skipWriteBatch {
@@ -1848,7 +1849,8 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				handler.ThreadInfo.SetCnt(1)
 				txnHandler := handler.txnHandler
 				tableHandler := handler.tableHandler
-				dbHandler := handler.dbHandler
+				// dbHandler := handler.dbHandler
+				var dbHandler engine.Database
 				if !handler.skipWriteBatch {
 					if handler.oneTxnPerBatch {
 						txnHandler = InitTxnHandler(config.StorageEngine)

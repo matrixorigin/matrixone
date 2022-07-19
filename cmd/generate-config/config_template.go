@@ -982,10 +982,10 @@ func (config *{{.ConfigurationStructName}}) LoadConfigurationFromFile(fname stri
 	if err != nil {
 		return err
 	}else if failed := metadata.Undecoded() ; len(failed) > 0 {
-		var failedItems []string
-		for _, item := range failed {
-			failedItems = append(failedItems, item.String())
-		}
+		//var failedItems []string
+		//for _, item := range failed {
+		//	failedItems = append(failedItems, item.String())
+		//}
 		//return fmt.Errorf("decode failed %s. error:%v",failedItems,err)
 	}
 
