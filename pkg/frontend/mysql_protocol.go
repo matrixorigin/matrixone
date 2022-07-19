@@ -623,7 +623,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 	if mp.checkPassword(psw, mp.salt, authResponse) {
 		logutil.Infof("check password succeeded\n")
 	} else {
-		return fmt.Errorf("check password failed\n")
+		return fmt.Errorf("check password failed")
 	}
 	return nil
 }
@@ -785,7 +785,7 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse41(data []byte) (bool, resp
 	}
 
 	if pos+22 >= len(data) {
-		return false, info, fmt.Errorf("skip reserved failed.")
+		return false, info, fmt.Errorf("skip reserved failed")
 	}
 	//string[23]         reserved (all [0])
 	//just skip it
@@ -914,7 +914,7 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse320(data []byte) (bool, res
 	info.capabilities = uint32(capa)
 
 	if pos+2 >= len(data) {
-		return false, info, fmt.Errorf("get max-packet-size failed.")
+		return false, info, fmt.Errorf("get max-packet-size failed")
 	}
 
 	//int<3>             max-packet size
@@ -1014,7 +1014,7 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod() ([]byte, error) {
 
 	pack, ok := read.(*Packet)
 	if !ok {
-		return nil, fmt.Errorf("It is not the Packet")
+		return nil, fmt.Errorf("it is not the Packet")
 	}
 
 	if pack == nil {

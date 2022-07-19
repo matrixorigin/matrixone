@@ -46,7 +46,7 @@ func (m *Mmu) Free(size int64) {
 
 func (m *Mmu) Alloc(size int64) error {
 	if atomic.LoadInt64(&m.size)+size > m.Limit {
-		return mmu.OutOfMemory
+		return mmu.ErrOutOfMemory
 	}
 	if err := m.Mmu.Alloc(size); err != nil {
 		return err

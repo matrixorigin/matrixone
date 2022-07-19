@@ -159,8 +159,8 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		}
 		vec.Length = len(bat.Zs)
 		vec.FillDefaultValue()
-		if vec.IsConst {
-		}
+		//if vec.IsConst {
+		//}
 		return vec, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub

@@ -252,7 +252,7 @@ func CompareDecimal128Decimal128(a, b Decimal128, aScale, bScale int32) (result 
 	return result
 }
 
-// void align_int128_using_scale_diff(void* src, void* dst, void* length, void* scale_diff) {
+// AlignDecimal128UsingScaleDiffBatch void align_int128_using_scale_diff(void* src, void* dst, void* length, void* scale_diff) {
 func AlignDecimal128UsingScaleDiffBatch(src, dst []Decimal128, scaleDiff int32) {
 	length := int64(len(src))
 	C.align_int128_using_scale_diff(unsafe.Pointer(&src[0]), unsafe.Pointer(&dst[0]), unsafe.Pointer(&length), unsafe.Pointer(&scaleDiff))
@@ -534,7 +534,7 @@ func decimalStringPreprocess(s string, precision, scale int32) (result []byte, c
 	}
 }
 
-//todo: use strconv to simplify this code
+// ParseStringToDecimal64 todo: use strconv to simplify this code
 func ParseStringToDecimal64(s string, precision, scale int32) (result Decimal64, err error) {
 	sInBytes, carry, neg, err := decimalStringPreprocess(s, precision, scale)
 	if err != nil {

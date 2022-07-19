@@ -173,9 +173,7 @@ func Reduce(bat *Batch, attrs []string, m *mheap.Mheap) {
 
 func Cow(bat *Batch) {
 	attrs := make([]string, len(bat.Attrs))
-	for i, attr := range bat.Attrs {
-		attrs[i] = attr
-	}
+	copy(attrs, bat.Attrs)
 	bat.Ro = false
 	bat.Attrs = attrs
 }
