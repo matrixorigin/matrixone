@@ -79,6 +79,8 @@ type Agg[T any] interface {
 
 // UnaryAgg generic aggregation function with one input vector and without distinct
 type UnaryAgg[T1, T2 any] struct {
+	priv any
+
 	// vs is result value list
 	vs []T2
 	// es, es[i] is true to indicate that this group has not yet been populated with any value
@@ -104,7 +106,8 @@ type UnaryAgg[T1, T2 any] struct {
 	//	fourth argument is the value of the group corresponding to the second aggregate function,
 	//  fifth argument is whether the value corresponding to the first aggregate function is empty,
 	//  sixth argument is whether the value corresponding to the second aggregate function is empty
-	merge func(int64, int64, T2, T2, bool, bool) (T2, bool)
+	//  seventh value is the private data
+	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool)
 	// fill
 	//  first argument is the group number to be filled
 	// 	second parameter is the value to be fed
@@ -148,7 +151,8 @@ type UnaryDistAgg[T1, T2 any] struct {
 	//	fourth argument is the value of the group corresponding to the second aggregate function,
 	//  fifth argument is whether the value corresponding to the first aggregate function is empty,
 	//  sixth argument is whether the value corresponding to the second aggregate function is empty
-	merge func(int64, int64, T2, T2, bool, bool) (T2, bool)
+	//  seventh value is the private data
+	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool)
 	// fill
 	//  first argument is the group number to be filled
 	// 	second parameter is the value to be fed
