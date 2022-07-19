@@ -213,26 +213,26 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 	if _, ok := dedup[params.ConfigurationStructName]; !ok {
 		dedup[params.ConfigurationStructName] = true
 	} else {
-		return fmt.Errorf("has duplicate configuration struct name %s.", params.ConfigurationStructName)
+		return fmt.Errorf("has duplicate configuration struct name %s", params.ConfigurationStructName)
 	}
 
 	if _, ok := dedup[params.OperationFileName]; !ok {
 		dedup[params.OperationFileName] = true
 	} else {
-		return fmt.Errorf("has duplicate operation file name %s.", params.OperationFileName)
+		return fmt.Errorf("has duplicate operation file name %s", params.OperationFileName)
 	}
 
 	if _, ok := dedup[params.ConfigurationFileName]; !ok {
 		dedup[params.ConfigurationFileName] = true
 	} else {
-		return fmt.Errorf("has duplicate configuration file name %s.", params.ConfigurationFileName)
+		return fmt.Errorf("has duplicate configuration file name %s", params.ConfigurationFileName)
 	}
 
 	for _, p := range params.Parameter {
 		if _, ok := dedup[p.Name]; !ok {
 			dedup[p.Name] = true
 		} else {
-			return fmt.Errorf("has duplicate parameter name %s.", p.Name)
+			return fmt.Errorf("has duplicate parameter name %s", p.Name)
 		}
 	}
 
@@ -1278,7 +1278,7 @@ type ConfigurationFileGeneratorImpl struct {
 func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 	defDir, err := filepath.Abs(filepath.Dir(cfgi.parameterDefinitionFileName))
 	if err != nil {
-		return fmt.Errorf("Get the directory of parameter definition file failed.error:%v", err)
+		return fmt.Errorf("get the directory of parameter definition file failed.error:%v", err)
 	}
 
 	params := &parameters{}
@@ -1288,7 +1288,7 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 
 	parameterTmpl, err := template.New("MakeParameterTemplate").Parse(cfgi.parameterTemplate)
 	if err != nil {
-		return fmt.Errorf("Make parameter template failed. error:%v", err)
+		return fmt.Errorf("make parameter template failed. error:%v", err)
 	}
 
 	f, err := os.Create(defDir + "/" + params.OperationFileName + ".go")
