@@ -234,6 +234,15 @@ func (bat *Batch) Shuffle(sels []int64, m *mheap.Mheap) error {
 	return nil
 }
 
+func (bat *Batch) Size() int {
+	var size int
+
+	for _, vec := range bat.Vecs {
+		size += len(vec.Data)
+	}
+	return size
+}
+
 func (bat *Batch) Length() int {
 	return len(bat.Zs)
 }

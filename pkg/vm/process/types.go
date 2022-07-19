@@ -16,10 +16,20 @@ package process
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
+
+// Analyze analyze information for operator
+type Analyze interface {
+	Stop()
+	Start()
+	Alloc(int64)
+	Input(*batch.Batch)
+	Output(*batch.Batch)
+}
 
 // WaitRegister channel
 type WaitRegister struct {
@@ -63,7 +73,7 @@ type SessionInfo struct {
 	Version      string
 }
 
-// explain analyze information for query
+// AnalyzeInfo  analyze information for query
 type AnalyzeInfo struct {
 	// NodeId, index of query's node list
 	NodeId int32
@@ -97,12 +107,17 @@ type Process struct {
 	// snapshot is transaction context
 	Snapshot []byte
 
-	AnalInfo *AnalyzeInfo
+	AnalInfos []*AnalyzeInfo
 
 	SessionInfo SessionInfo
 
 	// snapshot is transaction context
 	Cancel context.CancelFunc
+}
+
+type analyze struct {
+	start    time.Time
+	analInfo *AnalyzeInfo
 }
 
 func (si *SessionInfo) GetUser() string {

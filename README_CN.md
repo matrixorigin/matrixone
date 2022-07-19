@@ -1,4 +1,7 @@
 <div class="column" align="middle">
+  <p align="center">
+   <img alt="MatrixOne All in One" height="50" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/logo.png?raw=true">
+  </p>
   <a href="https://github.com/matrixorigin/matrixone/blob/main/LICENSE">
     <img src="https://img.shields.io/badge/License-Apache%202.0-red.svg" alt="license"/>
   </a>
@@ -10,11 +13,11 @@
   <a href="https://www.codefactor.io/repository/github/matrixorigin/matrixone">
     <img src="https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0" alt="codefactor"/>
   </a>
-  <a href="https://docs.matrixorigin.io/0.3.0/MatrixOne/Release-Notes/v0.3.0/">
-   <img src="https://img.shields.io/badge/Release-v0.3.0-green.svg" alt="release"/>
+  <a href="https://docs.matrixorigin.io/0.5.0/MatrixOne/Release-Notes/v0.5.0/">
+   <img src="https://img.shields.io/badge/Release-v0.5.0-green.svg" alt="release"/>
   </a>
   <br>
-  <a href="https://docs.matrixorigin.io/cn/0.3.0/">
+  <a href="https://docs.matrixorigin.io/cn/0.5.0/">
     <b>Docs</b>
   </a>
   <b>||</b>
@@ -26,7 +29,7 @@
     <b>English</b>
   </a>
   <b>||</b>
-  <a href="https://github.com/matrixorigin/matrixone/blob/main/README.zh.md">
+  <a href="https://github.com/matrixorigin/matrixone/blob/main/README_CN.md">
     <b>简体中文</b>
   </a>
 </div>
@@ -55,18 +58,20 @@
 ## <a id="what-is-matrixone">MatrixOne是什么？</a>
 
 MatrixOne是一款面向未来的超融合异构云原生数据库，通过超融合数据引擎支持事务/分析/流处理等混合工作负载，通过异构云原生架构支持跨机房协同/多地协同/云边协同。简化开发运维，消简数据碎片，打破数据的系统、位置和创新边界。
+<p align="center">
+  <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/all-in-one.png?raw=true">
+</p>
 
-
-##  🎯 <a id="key-features">核心特性</a> 
+##  🎯 <a id="key-features">核心特性</a>
 ### 💥 **超融合引擎**
 
 <details>
-  <summary><b><font size=4>超融合引擎</b></font></summary> 
+  <summary><b><font size=4>超融合引擎</b></font></summary>
            融合数据引擎，单数据库即可支持TP、AP、时序、机器学习等混合工作负载。
 </details>
 
 <details>
-  <summary><b><font size=4>内置流引擎</b></font></summary> 
+  <summary><b><font size=4>内置流引擎</b></font></summary>
      利用独有的增量物化视图能力，无需跨数据库即可实现实时数据流处理。
 </details>
 
@@ -75,12 +80,12 @@ MatrixOne是一款面向未来的超融合异构云原生数据库，通过超�
 
 
 <details>
-  <summary><b><font size=4>异构统一</b></font></summary> 
+  <summary><b><font size=4>异构统一</b></font></summary>
      支持跨机房协同/多地协同/云边协同，实现无感知扩缩容，提供高效统一的数据管理。
 </details>
 
 <details>
-  <summary><b><font size=4>多地多活</b></font></summary> 
+  <summary><b><font size=4>多地多活</b></font></summary>
      MatrixOne采用最优的一致性协议，实现业内最短网络延迟的多地多活。
 </details>
 
@@ -88,17 +93,15 @@ MatrixOne是一款面向未来的超融合异构云原生数据库，通过超�
 ### 🚀 **极致的性能**
 
 <details>
-  <summary><b><font size=4>高性能</b></font></summary> 
-     特有的因子化计算和向量化执行引擎，支持极速的复杂查询。单表、星型和雪花查询都具备极速分析性能。
-</details>
+  <summary><b><font size=4>高性能</b></font></summary>     特有的因子化计算和向量化执行引擎，支持极速的复杂查询。单表、星型和雪花查询都具备极速分析性能。</details>
 
 <details>
-  <summary><b><font size=4>强一致</b></font></summary> 
+  <summary><b><font size=4>强一致</b></font></summary>
      提供跨存储引擎的高性能全局分布式事务能力，在保证极速分析性能的同时支持更新、删除和实时点查询。
 </details>
 
 <details>
-  <summary><b><font size=4>高可用</b></font></summary> 
+  <summary><b><font size=4>高可用</b></font></summary>
      存算分离，支持存储节点与计算节点独立扩缩容，高效应对负载变化。
 </details>
 
@@ -106,7 +109,7 @@ MatrixOne是一款面向未来的超融合异构云原生数据库，通过超�
 
 ## 💎 **<a id="user-values">用户价值</a>**
 <details>
-  <summary><b><font size=4>简化数据开发和运维</b></font></summary> 
+  <summary><b><font size=4>简化数据开发和运维</b></font></summary>
       随着业务发展，企业使用的数据引擎和中间件越来越多，而每一个数据引擎平均依赖5+个基础组件，存储3+个数据副本，每一个数据引擎都要各自安装、监控、补丁和升级。这些都导致数据引擎的选型、开发及运维成本高昂且不可控。在MatrixOne的一体化架构下，用户使用单个数据库即可服务多种数据应用，引入的数据组件和技术栈减少80%，大大简化了数据库管理和维护的成本。
 </details>
 <details>
@@ -130,30 +133,46 @@ MatrixOne是一款面向未来的超融合异构云原生数据库，通过超�
     传统数仓无法兼顾性能和灵活度，性价比无法做到最优。MatrixOne基于存算分离的技术架构，支持存储节点与计算节点独立扩缩容，高效应对负载变化。
 </details>
 
-
-
 ## 🔎 <a id="architecture">架构一览</a>
 MatrixOne的架构图如下图所示：   
 <p align="center">
-  <img alt="MatrixOne" height="500" width="700" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/overall-architecture.png?raw=true">
+  <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone_new_arch.png?raw=true">
 </p>
 
-关于更详细的MatrixOne技术架构，可以参考[MatrixOne架构](https://docs.matrixorigin.io/cn/0.3.0/MatrixOne/Overview/matrixone-architecture/)与[MatrixOne技术设计](https://docs.matrixorigin.io/cn/0.3.0/MatrixOne/Overview/MatrixOne-Tech-Design/matrixone-techdesign/)
+关于更详细的MatrixOne技术架构，可以参考[MatrixOne架构](https://docs.matrixorigin.io/cn/0.5.0/MatrixOne/Overview/matrixone-architecture/)。
 
 ## ⚡️ <a id="quick-start">快速上手</a>
 
 ### ⚙️ 安装MatrixOne
 
-MatrixOne目前支持Linux及MacOS系统，您可以通过源码安装或者docker安装。其他安装方式请参见[MatrixOne安装指南](https://docs.matrixorigin.io/cn/0.3.0/MatrixOne/Get-Started/install-standalone-matrixone/)
+MatrixOne目前支持Linux及MacOS系统，您可以通过源码安装或者docker安装。其他安装方式请参见[MatrixOne安装指南](https://docs.matrixorigin.io/cn/0.5.0/MatrixOne/Get-Started/install-standalone-matrixone/)
 
 #### 使用源代码搭建
 
-**1.** 搭建Go语言环境（至少需要1.18版本）。
-  
-**2.** 获取MatrixOne源码
+**步骤 1.** 搭建Go语言环境（至少需要1.18版本）。
+
+**步骤 2.** 获取MatrixOne源码
+
+根据您的需要，选择您所获取的代码永远保持最新，还是获得稳定版本的代码。
+
+- *选项 1*：获取 MatrixOne(预览版本) 代码
+
+**main** 分支是默认分支，主分支上的代码总是最新的，但不够稳定。
+
+获取 MatrixOne(预览版本) 代码方法如下：
 
 ```
 $ git clone https://github.com/matrixorigin/matrixone.git
+$ cd matrixone
+```
+
+- *选项 2*：获取 MatrixOne(稳定版本) 代码
+
+如果您想获得 MatrixOne 发布的最新稳定版本代码，请先从 **main** 切换选择至 **0.5.0** 版本分支。
+
+```
+$ git clone https://github.com/matrixorigin/matrixone.git
+$ git checkout 0.5.0
 $ cd matrixone
 ```
 
@@ -174,26 +193,36 @@ $ ./mo-server system_vars_config.toml
 
 #### 使用docker
 
-1. 确保docker已经安装
+**步骤 1.** 确保docker已经安装
 
 请检查Docker daemon是否正在后台运行，并确认docker版本：
 ```
 $ docker --version
 ```
-2. 创建并运行容器
+**步骤 2.** 创建并运行容器
 
-使用以下命令将从Docker Hub中拉取最近的MatrixOne镜像：
+使用以下命令将从 Docker Hub 中拉取 MatrixOne 镜像，你可以选择最新的镜像，或稳定版本的镜像。
+
+- 最新版本的镜像：
+
 ```
 $ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
 ```
+
+- 0.5.0 稳定版本的镜像
+
+```
+$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
+```
+
+运行 Docker Hub 时需要输入用户名和密码，获取用户名和密码可以参考下一步骤 - 连接 MatrixOne 服务。
+
 ### 🌟 连接MatrixOne服务
 
 1. 安装MySQL客户端
-   
+
   MatrixOne支持MySQL连接协议，因此您可以使用各种语言通过MySQL客户机程序进行连接。  
   目前，MatrixOne只兼容Oracle MySQL客户端，因此一些特性可能无法在MariaDB、Percona客户端下正常工作。  
-
-
 
 2. 连接MatrixOne服务
 
@@ -202,6 +231,7 @@ $ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
 ```
 $ mysql -h IP -P PORT -uUsername -p
 ```
+
 连接符的格式与MySQL格式相同，您需要提供用户名和密码。  
 此处以内置帐号作为示例：  
 
@@ -215,13 +245,10 @@ Enter password:
 
 目前，MatrixOne只支持TCP监听。
 
-
-
-
 ## 🙌 <a id="contributing">参与贡献</a>
 
 欢迎大家对MatrixOne的贡献。  
-请查看[贡献指南](https://docs.matrixorigin.io/cn/0.3.0/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
+请查看[贡献指南](https://docs.matrixorigin.io/cn/0.5.0/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
 
 ### 👏贡献者们
 
@@ -229,5 +256,4 @@ Enter password:
 <!-- readme: contributors -end -->
 
 ## <a id="license">License</a>
-[Apache License, Version 2.0](LICENSE).
-
+[Apache License, Version 2.0](LICENSE)。
