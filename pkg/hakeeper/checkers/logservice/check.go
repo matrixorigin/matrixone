@@ -14,14 +14,15 @@
 package logservice
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-func Check(alloc util.IDAllocator, cluster pb.ClusterInfo, infos pb.LogState,
+func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, infos pb.LogState,
 	removing map[uint64][]uint64, adding map[uint64][]uint64, currentTick uint64) (operators []*operator.Operator) {
-	stores := parseLogStores(infos, currentTick)
+	stores := parseLogStores(cfg, infos, currentTick)
 	stats := parseLogShards(cluster, infos, stores.ExpiredStores())
 
 	for shardID, toAdd := range stats.toAdd {

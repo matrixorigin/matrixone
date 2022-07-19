@@ -146,6 +146,8 @@ type DeleteChain interface {
 
 type AppendNode interface {
 	TxnEntry
+	GetStartRow() uint32
+	GetMaxRow() uint32
 }
 
 type DeleteNode interface {

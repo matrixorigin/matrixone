@@ -16,7 +16,6 @@ package logservice
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -145,6 +144,9 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9021", "127.0.0.1:9031"},
 		DisableWorkers:      true,
 	}
+	cfg1.HAKeeperConfig.TickPerSecond = 10
+	cfg1.HAKeeperConfig.LogStoreTimeout = 5 * time.Second
+	cfg1.HAKeeperConfig.DnStoreTimeout = 10 * time.Second
 	cfg2 := Config{
 		FS:                  vfs.NewStrictMem(),
 		DeploymentID:        1,
@@ -156,6 +158,9 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 		GossipSeedAddresses: []string{"127.0.0.1:9001", "127.0.0.1:9021", "127.0.0.1:9031"},
 		DisableWorkers:      true,
 	}
+	cfg2.HAKeeperConfig.TickPerSecond = 10
+	cfg2.HAKeeperConfig.LogStoreTimeout = 5 * time.Second
+	cfg2.HAKeeperConfig.DnStoreTimeout = 10 * time.Second
 	cfg3 := Config{
 		FS:                  vfs.NewStrictMem(),
 		DeploymentID:        1,
@@ -167,6 +172,9 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 		GossipSeedAddresses: []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9031"},
 		DisableWorkers:      true,
 	}
+	cfg3.HAKeeperConfig.TickPerSecond = 10
+	cfg3.HAKeeperConfig.LogStoreTimeout = 5 * time.Second
+	cfg3.HAKeeperConfig.DnStoreTimeout = 10 * time.Second
 	cfg4 := Config{
 		FS:                  vfs.NewStrictMem(),
 		DeploymentID:        1,
@@ -178,21 +186,28 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 		GossipSeedAddresses: []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9021"},
 		DisableWorkers:      true,
 	}
+	cfg4.HAKeeperConfig.TickPerSecond = 10
+	cfg4.HAKeeperConfig.LogStoreTimeout = 5 * time.Second
+	cfg4.HAKeeperConfig.DnStoreTimeout = 10 * time.Second
+	cfg1.Fill()
 	service1, err := NewService(cfg1)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, service1.Close())
 	}()
+	cfg2.Fill()
 	service2, err := NewService(cfg2)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, service2.Close())
 	}()
+	cfg3.Fill()
 	service3, err := NewService(cfg3)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, service3.Close())
 	}()
+	cfg4.Fill()
 	service4, err := NewService(cfg4)
 	require.NoError(t, err)
 	defer func() {
@@ -210,12 +225,6 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 }
 
 func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
-	if os.Getenv("LONG_TEST") == "" {
-		// this test will fail on go1.18 when -race is enabled, as it always
-		// timeout. go1.19 has a much faster -race implementation and it works fine
-		t.Skip("Skipping long test")
-	}
-
 	fn := func(t *testing.T, services []*Service) {
 		// bootstrap the cluster, 1 DN 1 Log shard, Log and HAKeeper have
 		// 3 replicas

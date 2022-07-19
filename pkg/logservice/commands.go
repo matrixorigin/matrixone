@@ -123,7 +123,7 @@ func (s *Service) heartbeat(ctx context.Context) {
 		if reflect.DeepEqual(s.cfg.HAKeeperClientConfig, HAKeeperClientConfig{}) {
 			panic("empty HAKeeper client config")
 		}
-		cc, err := NewLogHAKeeperClient(ctx2, s.cfg.HAKeeperClientConfig)
+		cc, err := NewLogHAKeeperClient(ctx2, s.cfg.GetHAKeeperClientConfig())
 		if err != nil {
 			plog.Errorf("failed to create HAKeeper client, %v", err)
 			return

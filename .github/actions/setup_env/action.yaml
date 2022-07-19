@@ -1,0 +1,26 @@
+name: setup_env
+description: "setup build environment"
+inputs:
+  go-version:
+    description: 'version of golang'
+    required: false
+    default: "1.18"
+
+runs:
+  using: "composite"
+
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v3
+      with:
+        go-version: ${{ inputs.go-version }} 
+
+    - uses: actions/cache@v3
+      name: Restore go mod cache
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-mo-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-mo-
