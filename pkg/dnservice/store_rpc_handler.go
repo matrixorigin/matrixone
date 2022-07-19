@@ -51,6 +51,7 @@ func (s *store) handleRead(ctx context.Context, request *txn.TxnRequest, respons
 		return nil
 	}
 	r.waitStarted()
+	prepareResponse(request, response)
 	return r.service.Read(ctx, request, response)
 }
 
@@ -61,6 +62,7 @@ func (s *store) handleWrite(ctx context.Context, request *txn.TxnRequest, respon
 		return nil
 	}
 	r.waitStarted()
+	prepareResponse(request, response)
 	return r.service.Write(ctx, request, response)
 }
 
@@ -71,6 +73,7 @@ func (s *store) handleCommit(ctx context.Context, request *txn.TxnRequest, respo
 		return nil
 	}
 	r.waitStarted()
+	prepareResponse(request, response)
 	return r.service.Commit(ctx, request, response)
 }
 
@@ -81,6 +84,7 @@ func (s *store) handleRollback(ctx context.Context, request *txn.TxnRequest, res
 		return nil
 	}
 	r.waitStarted()
+	prepareResponse(request, response)
 	return r.service.Rollback(ctx, request, response)
 }
 
@@ -91,6 +95,7 @@ func (s *store) handlePrepare(ctx context.Context, request *txn.TxnRequest, resp
 		return nil
 	}
 	r.waitStarted()
+	prepareResponse(request, response)
 	return r.service.Prepare(ctx, request, response)
 }
 
@@ -101,6 +106,7 @@ func (s *store) handleCommitDNShard(ctx context.Context, request *txn.TxnRequest
 		return nil
 	}
 	r.waitStarted()
+	prepareResponse(request, response)
 	return r.service.CommitDNShard(ctx, request, response)
 }
 
@@ -111,6 +117,7 @@ func (s *store) handleRollbackDNShard(ctx context.Context, request *txn.TxnReque
 		return nil
 	}
 	r.waitStarted()
+	prepareResponse(request, response)
 	return r.service.RollbackDNShard(ctx, request, response)
 }
 
@@ -121,5 +128,12 @@ func (s *store) handleGetStatus(ctx context.Context, request *txn.TxnRequest, re
 		return nil
 	}
 	r.waitStarted()
+	prepareResponse(request, response)
 	return r.service.GetStatus(ctx, request, response)
+}
+
+func prepareResponse(request *txn.TxnRequest, response *txn.TxnResponse) {
+	response.Method = request.Method
+	response.Flag = request.Flag
+	response.RequestID = request.RequestID
 }

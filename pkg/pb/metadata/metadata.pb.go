@@ -22,7 +22,7 @@ var _ = math.Inf
 // is compatible with the proto package it is being compiled against.
 // A compilation error at this line likely means your copy of the
 // proto package needs to be updated.
-const _ = proto.GoGoProtoPackageIsVersion2 // please upgrade the proto package
+const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 
 // DNShardRecord is DN shard metadata describing what is a DN shard. It
 // is internally used by HAKeeper to maintain how many DNs available in
@@ -51,7 +51,7 @@ func (m *DNShardRecord) XXX_Marshal(b []byte, deterministic bool) ([]byte, error
 		return xxx_messageInfo_DNShardRecord.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -113,7 +113,7 @@ func (m *DNShard) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_DNShard.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -175,7 +175,7 @@ func (m *LogShardRecord) XXX_Marshal(b []byte, deterministic bool) ([]byte, erro
 		return xxx_messageInfo_LogShardRecord.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -309,7 +309,7 @@ var fileDescriptor_56d9f74966f40d04 = []byte{
 func (m *DNShardRecord) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -317,30 +317,36 @@ func (m *DNShardRecord) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *DNShardRecord) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *DNShardRecord) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.ShardID != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintMetadata(dAtA, i, uint64(m.ShardID))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if m.LogShardID != 0 {
-		dAtA[i] = 0x10
-		i++
 		i = encodeVarintMetadata(dAtA, i, uint64(m.LogShardID))
+		i--
+		dAtA[i] = 0x10
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if m.ShardID != 0 {
+		i = encodeVarintMetadata(dAtA, i, uint64(m.ShardID))
+		i--
+		dAtA[i] = 0x8
 	}
-	return i, nil
+	return len(dAtA) - i, nil
 }
 
 func (m *DNShard) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -348,39 +354,48 @@ func (m *DNShard) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *DNShard) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *DNShard) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	dAtA[i] = 0xa
-	i++
-	i = encodeVarintMetadata(dAtA, i, uint64(m.DNShardRecord.Size()))
-	n1, err1 := m.DNShardRecord.MarshalTo(dAtA[i:])
-	if err1 != nil {
-		return 0, err1
-	}
-	i += n1
-	if m.ReplicaID != 0 {
-		dAtA[i] = 0x10
-		i++
-		i = encodeVarintMetadata(dAtA, i, uint64(m.ReplicaID))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.Address) > 0 {
-		dAtA[i] = 0x1a
-		i++
+		i -= len(m.Address)
+		copy(dAtA[i:], m.Address)
 		i = encodeVarintMetadata(dAtA, i, uint64(len(m.Address)))
-		i += copy(dAtA[i:], m.Address)
+		i--
+		dAtA[i] = 0x1a
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if m.ReplicaID != 0 {
+		i = encodeVarintMetadata(dAtA, i, uint64(m.ReplicaID))
+		i--
+		dAtA[i] = 0x10
 	}
-	return i, nil
+	{
+		size, err := m.DNShardRecord.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintMetadata(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0xa
+	return len(dAtA) - i, nil
 }
 
 func (m *LogShardRecord) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -388,30 +403,37 @@ func (m *LogShardRecord) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *LogShardRecord) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *LogShardRecord) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.ShardID != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintMetadata(dAtA, i, uint64(m.ShardID))
-	}
-	if m.NumberOfReplicas != 0 {
-		dAtA[i] = 0x10
-		i++
-		i = encodeVarintMetadata(dAtA, i, uint64(m.NumberOfReplicas))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.Name) > 0 {
-		dAtA[i] = 0x1a
-		i++
+		i -= len(m.Name)
+		copy(dAtA[i:], m.Name)
 		i = encodeVarintMetadata(dAtA, i, uint64(len(m.Name)))
-		i += copy(dAtA[i:], m.Name)
+		i--
+		dAtA[i] = 0x1a
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if m.NumberOfReplicas != 0 {
+		i = encodeVarintMetadata(dAtA, i, uint64(m.NumberOfReplicas))
+		i--
+		dAtA[i] = 0x10
 	}
-	return i, nil
+	if m.ShardID != 0 {
+		i = encodeVarintMetadata(dAtA, i, uint64(m.ShardID))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
 }
 
 func (m *DNStore) Marshal() (dAtA []byte, err error) {
@@ -463,13 +485,15 @@ func (m *DNStore) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 }
 
 func encodeVarintMetadata(dAtA []byte, offset int, v uint64) int {
+	offset -= sovMetadata(v)
+	base := offset
 	for v >= 1<<7 {
 		dAtA[offset] = uint8(v&0x7f | 0x80)
 		v >>= 7
 		offset++
 	}
 	dAtA[offset] = uint8(v)
-	return offset + 1
+	return base
 }
 func (m *DNShardRecord) Size() (n int) {
 	if m == nil {
@@ -633,10 +657,7 @@ func (m *DNShardRecord) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthMetadata
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthMetadata
 			}
 			if (iNdEx + skippy) > l {
@@ -771,10 +792,7 @@ func (m *DNShard) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthMetadata
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthMetadata
 			}
 			if (iNdEx + skippy) > l {
@@ -895,10 +913,7 @@ func (m *LogShardRecord) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthMetadata
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthMetadata
 			}
 			if (iNdEx + skippy) > l {
@@ -1034,6 +1049,7 @@ func (m *DNStore) Unmarshal(dAtA []byte) error {
 func skipMetadata(dAtA []byte) (n int, err error) {
 	l := len(dAtA)
 	iNdEx := 0
+	depth := 0
 	for iNdEx < l {
 		var wire uint64
 		for shift := uint(0); ; shift += 7 {
@@ -1065,10 +1081,8 @@ func skipMetadata(dAtA []byte) (n int, err error) {
 					break
 				}
 			}
-			return iNdEx, nil
 		case 1:
 			iNdEx += 8
-			return iNdEx, nil
 		case 2:
 			var length int
 			for shift := uint(0); ; shift += 7 {
@@ -1089,55 +1103,30 @@ func skipMetadata(dAtA []byte) (n int, err error) {
 				return 0, ErrInvalidLengthMetadata
 			}
 			iNdEx += length
-			if iNdEx < 0 {
-				return 0, ErrInvalidLengthMetadata
-			}
-			return iNdEx, nil
 		case 3:
-			for {
-				var innerWire uint64
-				var start int = iNdEx
-				for shift := uint(0); ; shift += 7 {
-					if shift >= 64 {
-						return 0, ErrIntOverflowMetadata
-					}
-					if iNdEx >= l {
-						return 0, io.ErrUnexpectedEOF
-					}
-					b := dAtA[iNdEx]
-					iNdEx++
-					innerWire |= (uint64(b) & 0x7F) << shift
-					if b < 0x80 {
-						break
-					}
-				}
-				innerWireType := int(innerWire & 0x7)
-				if innerWireType == 4 {
-					break
-				}
-				next, err := skipMetadata(dAtA[start:])
-				if err != nil {
-					return 0, err
-				}
-				iNdEx = start + next
-				if iNdEx < 0 {
-					return 0, ErrInvalidLengthMetadata
-				}
-			}
-			return iNdEx, nil
+			depth++
 		case 4:
-			return iNdEx, nil
+			if depth == 0 {
+				return 0, ErrUnexpectedEndOfGroupMetadata
+			}
+			depth--
 		case 5:
 			iNdEx += 4
-			return iNdEx, nil
 		default:
 			return 0, fmt.Errorf("proto: illegal wireType %d", wireType)
 		}
+		if iNdEx < 0 {
+			return 0, ErrInvalidLengthMetadata
+		}
+		if depth == 0 {
+			return iNdEx, nil
+		}
 	}
-	panic("unreachable")
+	return 0, io.ErrUnexpectedEOF
 }
 
 var (
-	ErrInvalidLengthMetadata = fmt.Errorf("proto: negative length found during unmarshaling")
-	ErrIntOverflowMetadata   = fmt.Errorf("proto: integer overflow")
+	ErrInvalidLengthMetadata        = fmt.Errorf("proto: negative length found during unmarshaling")
+	ErrIntOverflowMetadata          = fmt.Errorf("proto: integer overflow")
+	ErrUnexpectedEndOfGroupMetadata = fmt.Errorf("proto: unexpected end of group")
 )

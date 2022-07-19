@@ -43,6 +43,13 @@ func WithLogger(logger *zap.Logger) Option {
 	}
 }
 
+// WithConfigAdjust set adjust config func
+func WithConfigAdjust(adjustConfigFunc func(c *Config)) Option {
+	return func(s *store) {
+		s.options.adjustConfigFunc = adjustConfigFunc
+	}
+}
+
 // WithRequestFilter set filtering txn.TxnRequest sent to other DNShard
 func WithRequestFilter(filter func(*txn.TxnRequest) bool) Option {
 	return func(s *store) {
@@ -50,17 +57,17 @@ func WithRequestFilter(filter func(*txn.TxnRequest) bool) Option {
 	}
 }
 
-// WithDisableHAKeeper set disable HAKeeper
-func WithDisableHAKeeper() Option {
+// WithMetadataFSFactory set metadata file service factory
+func WithMetadataFSFactory(factory func() fileservice.ReplaceableFileService) Option {
 	return func(s *store) {
-		s.options.disableHAKeeper = true
+		s.options.metadataFSFactory = factory
 	}
 }
 
-// WithMetadataFSFactory set metadata file service factory
-func WithMetadataFSFactory(factory func() fileservice.FileService) Option {
+// WithHAKeeperClientFactory set hakeeper client factory
+func WithHAKeeperClientFactory(factory func() (logservice.DNHAKeeperClient, error)) Option {
 	return func(s *store) {
-		s.options.metadataFSFactory = factory
+		s.options.hakeekerClientFactory = factory
 	}
 }
 
@@ -78,16 +85,17 @@ type store struct {
 	sender         rpc.TxnSender
 	server         rpc.TxnServer
 	hakeeperClient logservice.DNHAKeeperClient
-	metadataFS     fileservice.FileService
+	metadataFS     fileservice.ReplaceableFileService
 	dataFS         fileservice.FileService
 	replicas       *sync.Map
 	stopper        *stopper.Stopper
 
 	options struct {
 		logServiceClientFactory func(metadata.DNShard) (logservice.Client, error)
-		metadataFSFactory       func() fileservice.FileService
+		hakeekerClientFactory   func() (logservice.DNHAKeeperClient, error)
+		metadataFSFactory       func() fileservice.ReplaceableFileService
 		requestFilter           func(*txn.TxnRequest) bool
-		disableHAKeeper         bool
+		adjustConfigFunc        func(c *Config)
 	}
 
 	mu struct {
@@ -96,13 +104,15 @@ type store struct {
 	}
 }
 
-// New create DN Service
-func New(cfg *Config, opts ...Option) (Service, error) {
+// NewService create DN Service
+func NewService(cfg *Config, opts ...Option) (Service, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 
-	s := &store{}
+	s := &store{
+		cfg: cfg,
+	}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -110,6 +120,9 @@ func New(cfg *Config, opts ...Option) (Service, error) {
 	s.replicas = &sync.Map{}
 	s.stopper = stopper.NewStopper("dn-store", stopper.WithLogger(s.logger))
 	s.mu.metadata = metadata.DNStore{UUID: cfg.UUID}
+	if s.options.adjustConfigFunc != nil {
+		s.options.adjustConfigFunc(s.cfg)
+	}
 
 	if err := s.initClocker(); err != nil {
 		return nil, err
@@ -139,10 +152,7 @@ func (s *store) Start() error {
 	if err := s.server.Start(); err != nil {
 		return err
 	}
-	if s.options.disableHAKeeper {
-		return nil
-	}
-	s.stopper.RunTask(s.startDNShardHeartbeat)
+	s.stopper.RunTask(s.heartbeatTask)
 	return nil
 }
 
@@ -157,7 +167,7 @@ func (s *store) Close() error {
 	if e := s.server.Close(); e != nil {
 		err = multierr.Append(e, err)
 	}
-	s.replicas.Range(func(key, value any) bool {
+	s.replicas.Range(func(_, value any) bool {
 		r := value.(*replica)
 		if e := r.close(); e != nil {
 			err = multierr.Append(e, err)
@@ -190,7 +200,7 @@ func (s *store) startDNShards() error {
 
 func (s *store) getDNShardInfo() []logservicepb.DNShardInfo {
 	var shards []logservicepb.DNShardInfo
-	s.replicas.Range(func(key, value any) bool {
+	s.replicas.Range(func(_, value any) bool {
 		r := value.(*replica)
 		shards = append(shards, logservicepb.DNShardInfo{
 			ShardID:   r.shard.ShardID,
@@ -201,7 +211,7 @@ func (s *store) getDNShardInfo() []logservicepb.DNShardInfo {
 	return shards
 }
 
-func (s *store) startDNShardHeartbeat(ctx context.Context) {
+func (s *store) heartbeatTask(ctx context.Context) {
 	ticker := time.NewTicker(s.cfg.HAKeeper.HeatbeatDuration.Duration)
 	defer ticker.Stop()
 
@@ -238,7 +248,7 @@ func (s *store) startDNShardHeartbeat(ctx context.Context) {
 						err = s.createReplica(metadata.DNShard{
 							DNShardRecord: metadata.DNShardRecord{
 								ShardID:    cmd.ConfigChange.Replica.ShardID,
-								LogShardID: 0, // TODO: add log shard id
+								LogShardID: cmd.ConfigChange.Replica.LogShardID,
 							},
 							ReplicaID: cmd.ConfigChange.Replica.ReplicaID,
 							Address:   s.cfg.ServiceAddress,
@@ -339,7 +349,12 @@ func (s *store) initClocker() error {
 }
 
 func (s *store) initHAKeeperClient() error {
-	if s.options.disableHAKeeper {
+	if s.options.hakeekerClientFactory != nil {
+		client, err := s.options.hakeekerClientFactory()
+		if err != nil {
+			return err
+		}
+		s.hakeeperClient = client
 		return nil
 	}
 

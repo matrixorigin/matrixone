@@ -90,5 +90,21 @@ func (s *store) removeDNShard(id uint64) {
 }
 
 func (s *store) mustUpdateMetadataLocked() {
-	// TODO: use replace fileservice to update local metadata file.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	vec := fileservice.IOVector{
+		FilePath: metadataFile,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: 0,
+				Size:   s.mu.metadata.Size(),
+				Data:   protoc.MustMarshal(&s.mu.metadata),
+			},
+		},
+	}
+	if err := s.metadataFS.Replace(ctx, vec); err != nil {
+		s.logger.Fatal("update metadata to local file failed",
+			zap.Error(err))
+	}
 }

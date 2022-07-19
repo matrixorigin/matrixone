@@ -35,8 +35,9 @@ type replica struct {
 
 func newReplica(shard metadata.DNShard, logger *zap.Logger) *replica {
 	return &replica{
-		shard:  shard,
-		logger: logutil.Adjust(logger).With(util.TxnDNShardField(shard)),
+		shard:    shard,
+		logger:   logutil.Adjust(logger).With(util.TxnDNShardField(shard)),
+		startedC: make(chan struct{}),
 	}
 }
 
@@ -53,6 +54,7 @@ func (r *replica) close() error {
 
 func (r *replica) handleLocalRequest(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	r.waitStarted()
+	prepareResponse(request, response)
 
 	switch request.Method {
 	case txn.TxnMethod_GetStatus:

@@ -15,15 +15,17 @@
 package dnservice
 
 import (
+	"context"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNewReplica(t *testing.T) {
-	r := newReplica(newTestShard(1, 2, 3, "dn1"), nil)
+	r := newReplica(newTestDNShard(1, 2, 3), nil)
 	select {
 	case <-r.startedC:
 		assert.Fail(t, "cannot started")
@@ -32,13 +34,22 @@ func TestNewReplica(t *testing.T) {
 }
 
 func TestWaitStarted(t *testing.T) {
-	r := newReplica(newTestShard(1, 2, 3, "dn1"), nil)
+	r := newReplica(newTestDNShard(1, 2, 3), nil)
 	c := make(chan struct{})
-	func() {
+	go func() {
 		r.waitStarted()
 		c <- struct{}{}
 	}()
 
+	ts := service.NewTestTxnService(t, 1, service.NewTestSender(), service.NewTestClock(1))
+	defer func() {
+		assert.NoError(t, ts.Close())
+	}()
+
+	assert.NoError(t, r.start(ts))
+	defer func() {
+		assert.NoError(t, r.close())
+	}()
 	select {
 	case <-c:
 	case <-time.After(time.Minute):
@@ -46,13 +57,25 @@ func TestWaitStarted(t *testing.T) {
 	}
 }
 
-func newTestShard(shardID, replicaID, logShardID uint64, address string) metadata.DNShard {
-	return metadata.DNShard{
-		DNShardRecord: metadata.DNShardRecord{
-			ShardID:    shardID,
-			LogShardID: logShardID,
-		},
-		ReplicaID: replicaID,
-		Address:   address,
-	}
+func TestHandleLocalCNRequestsWillPanic(t *testing.T) {
+	defer func() {
+		if err := recover(); err != nil {
+			return
+		}
+		assert.Fail(t, "must panic")
+	}()
+
+	r := newReplica(newTestDNShard(1, 2, 3), nil)
+	ts := service.NewTestTxnService(t, 1, service.NewTestSender(), service.NewTestClock(1))
+	defer func() {
+		assert.NoError(t, ts.Close())
+	}()
+
+	assert.NoError(t, r.start(ts))
+	defer func() {
+		assert.NoError(t, r.close())
+	}()
+
+	req := service.NewTestReadRequest(1, txn.TxnMeta{}, 1)
+	r.handleLocalRequest(context.Background(), &req, &txn.TxnResponse{})
 }
