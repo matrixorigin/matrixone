@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
+	"go.uber.org/multierr"
 	"go.uber.org/zap"
 )
 
@@ -108,6 +109,9 @@ func (s *service) Start() error {
 func (s *service) Close() error {
 	s.waitRecoveryCompleted()
 	s.stopper.Stop()
+	if err := s.storage.Close(); err != nil {
+		return multierr.Append(err, s.sender.Close())
+	}
 	return s.sender.Close()
 }
 

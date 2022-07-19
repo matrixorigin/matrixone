@@ -183,6 +183,10 @@ func (kv *KVTxnStorage) StartRecovery(c chan txn.TxnMeta) {
 	}
 }
 
+func (kv *KVTxnStorage) Close() error {
+	return nil
+}
+
 func (kv *KVTxnStorage) GetLatestLsn() logservice.Lsn {
 	return kv.latest
 }
