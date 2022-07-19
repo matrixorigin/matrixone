@@ -175,6 +175,10 @@ func (t Type) TypeSize() int {
 	return t.Oid.TypeLen()
 }
 
+func (t Type) IsBoolean() bool {
+	return t.Oid == T_bool
+}
+
 func (t Type) IsString() bool {
 	return t.Oid == T_char || t.Oid == T_varchar
 }
@@ -183,8 +187,8 @@ func (t Type) String() string {
 	return t.Oid.String()
 }
 
-func (a Type) Eq(b Type) bool {
-	return a.Oid == b.Oid && a.Size == b.Size && a.Width == b.Width && a.Scale == b.Scale
+func (t Type) Eq(b Type) bool {
+	return t.Oid == b.Oid && t.Size == b.Size && t.Width == b.Width && t.Scale == b.Scale
 }
 
 func (t T) ToType() Type {
@@ -416,7 +420,7 @@ func (t T) TypeLen() int {
 	panic(moerr.NewInternalError("Unknow type %s", t))
 }
 
-// dangerous code, use TypeLen() if you don't want -8, -16, -24
+// FixedLength dangerous code, use TypeLen() if you don't want -8, -16, -24
 func (t T) FixedLength() int {
 	switch t {
 	case T_int8, T_uint8, T_bool:

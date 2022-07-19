@@ -362,7 +362,7 @@ func (r *AvgRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64)
 	}
 }
 
-// r[x] += a[y] * z
+// Mul r[x] += a[y] * z
 func (r *AvgRing) Mul(a interface{}, x, y, z int64) {
 	ar := a.(*AvgRing)
 	r.Ns[x] += ar.Ns[y] * z

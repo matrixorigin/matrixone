@@ -135,7 +135,7 @@ func (r *Decimal128Ring) Grows(size int, m *mheap.Mheap) error {
 	return nil
 }
 
-// what is this z?
+// Fill Fixme:what is this z?
 func (r *Decimal128Ring) Fill(i int64, sel, z int64, vec *vector.Vector) {
 	tmp := types.Decimal128Int64Mul(vec.Col.([]types.Decimal128)[sel], z)
 	r.Vs[i] = types.Decimal128AddAligned(r.Vs[i], tmp)
@@ -194,7 +194,7 @@ func (r *Decimal128Ring) BatchAdd(a interface{}, start int64, os []uint8, vps []
 	}
 }
 
-// r[x] += a[y] * z
+// Mul r[x] += a[y] * z
 func (r *Decimal128Ring) Mul(a interface{}, x, y, z int64) {
 	ar := a.(*Decimal128Ring)
 	if r.Typ.Width == 0 && ar.Typ.Width != 0 {

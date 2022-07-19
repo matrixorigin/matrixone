@@ -50,7 +50,7 @@ func Prepare(_ *process.Process, arg interface{}) error {
 	return nil
 }
 
-func Call(proc *process.Process, arg interface{}) (bool, error) {
+func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 	bat := proc.Reg.InputBatch
 	if bat == nil {
 		return true, nil

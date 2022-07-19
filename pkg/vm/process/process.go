@@ -39,7 +39,7 @@ func NewFromProc(m *mheap.Mheap, p *Process, regNumber int) *Process {
 	proc.Id = p.Id
 	proc.Lim = p.Lim
 	proc.Snapshot = p.Snapshot
-	proc.AnalInfo = p.AnalInfo
+	proc.AnalInfos = p.AnalInfos
 	proc.SessionInfo = p.SessionInfo
 
 	// reg and cancel
@@ -64,6 +64,38 @@ func GetSels(proc *Process) []int64 {
 }
 
 func PutSels(sels []int64, proc *Process) {
+	proc.Reg.Ss = append(proc.Reg.Ss, sels)
+}
+
+func (proc *Process) OperatorMemoryLimit() int64 {
+	return proc.Lim.Size
+}
+
+func (proc *Process) SetInputBatch(bat *batch.Batch) {
+	proc.Reg.InputBatch = bat
+}
+
+func (proc *Process) InputBatch() *batch.Batch {
+	return proc.Reg.InputBatch
+}
+
+func (proc *Process) GetSels() []int64 {
+	if len(proc.Reg.Ss) == 0 {
+		return make([]int64, 0, 16)
+	}
+	sels := proc.Reg.Ss[0]
+	proc.Reg.Ss = proc.Reg.Ss[1:]
+	return sels[:0]
+}
+
+func (proc *Process) GetAnalyze(idx int) Analyze {
+	if idx >= len(proc.AnalInfos) {
+		return &analyze{analInfo: nil}
+	}
+	return &analyze{analInfo: proc.AnalInfos[idx]}
+}
+
+func (proc *Process) PutSels(sels []int64) {
 	proc.Reg.Ss = append(proc.Reg.Ss, sels)
 }
 

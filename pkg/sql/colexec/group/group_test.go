@@ -109,22 +109,22 @@ func TestGroup(t *testing.T) {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		_, err = Call(tc.proc, tc.arg)
+		_, err = Call(0, tc.proc, tc.arg)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		_, err = Call(tc.proc, tc.arg)
+		_, err = Call(0, tc.proc, tc.arg)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = &batch.Batch{}
-		_, err = Call(tc.proc, tc.arg)
+		_, err = Call(0, tc.proc, tc.arg)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = nil
-		_, err = Call(tc.proc, tc.arg)
+		_, err = Call(0, tc.proc, tc.arg)
 		require.NoError(t, err)
 		if tc.proc.Reg.InputBatch != nil {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 		}
 		tc.proc.Reg.InputBatch = nil
-		_, err = Call(tc.proc, tc.arg)
+		_, err = Call(0, tc.proc, tc.arg)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
 	}
@@ -143,16 +143,16 @@ func BenchmarkGroup(b *testing.B) {
 			err := Prepare(tc.proc, tc.arg)
 			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.types, tc.proc, BenchmarkRows)
-			_, err = Call(tc.proc, tc.arg)
+			_, err = Call(0, tc.proc, tc.arg)
 			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.types, tc.proc, BenchmarkRows)
-			_, err = Call(tc.proc, tc.arg)
+			_, err = Call(0, tc.proc, tc.arg)
 			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = &batch.Batch{}
-			_, err = Call(tc.proc, tc.arg)
+			_, err = Call(0, tc.proc, tc.arg)
 			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = nil
-			_, err = Call(tc.proc, tc.arg)
+			_, err = Call(0, tc.proc, tc.arg)
 			require.NoError(t, err)
 			if tc.proc.Reg.InputBatch != nil {
 				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)

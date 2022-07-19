@@ -219,3 +219,8 @@ type Binding struct {
 	refCnts     []uint
 	colIdByName map[string]int32
 }
+
+const (
+	maxLengthOfTableComment  int = 2048
+	maxLengthOfColumnComment int = 1024
+)

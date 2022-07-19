@@ -80,7 +80,7 @@ func (r *BitOrRing) Shrink(selectedIndexes []int64) {
 	r.NullCounts = r.NullCounts[:len(selectedIndexes)]
 }
 
-func (v *BitOrRing) Shuffle(_ []int64, _ *mheap.Mheap) error {
+func (r *BitOrRing) Shuffle(_ []int64, _ *mheap.Mheap) error {
 	return nil
 }
 

@@ -123,8 +123,8 @@ type outputQueue struct {
 	flushTime       time.Duration
 }
 
-func (oq *outputQueue) ResetLineStr() {
-	oq.lineStr = oq.lineStr[:0]
+func (o *outputQueue) ResetLineStr() {
+	o.lineStr = o.lineStr[:0]
 }
 
 func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *tree.ExportParam, showStatementType ShowStatementType) *outputQueue {
@@ -197,12 +197,17 @@ func (o *outputQueue) flush() error {
 }
 
 const (
-	tableNamePos  = 1
-	attrNamePos   = 2
-	attrTypPos    = 3
-	charWidthPos  = 5
-	defaultPos    = 7
-	primaryKeyPos = 10
+	tableNamePos    = 0
+	tableCommentPos = 4
+
+	attrNamePos    = 8
+	attrTypPos     = 9
+	charWidthPos   = 11
+	defaultPos     = 13
+	primaryKeyPos  = 16
+	attrCommentPos = 19
+
+	showCreateTableAttrCount = 21
 )
 
 /*
@@ -224,6 +229,13 @@ func handleShowCreateTable(ses *Session) error {
 		} else {
 			nullOrNot = "DEFAULT NULL"
 		}
+
+		var hasAttrComment string
+		attrComment := string(d[attrCommentPos].([]byte))
+		if attrComment != "" {
+			hasAttrComment = " COMMENT '" + attrComment + "'"
+		}
+
 		if rowCount == 0 {
 			createStr += "\n"
 		} else {
@@ -234,7 +246,7 @@ func handleShowCreateTable(ses *Session) error {
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char {
 			typeStr += fmt.Sprintf("(%d)", d[charWidthPos].(int32))
 		}
-		createStr += fmt.Sprintf("`%s` %s %s", colName, typeStr, nullOrNot)
+		createStr += fmt.Sprintf("`%s` %s %s%s", colName, typeStr, nullOrNot, hasAttrComment)
 		rowCount++
 		if string(d[primaryKeyPos].([]byte)) == "p" {
 			pkDefs = append(pkDefs, colName)
@@ -256,6 +268,11 @@ func handleShowCreateTable(ses *Session) error {
 		createStr += "\n"
 	}
 	createStr += ")"
+
+	tableComment := string(ses.Data[0][tableCommentPos].([]byte))
+	if tableComment != "" {
+		createStr += " COMMENT='" + tableComment + "',"
+	}
 
 	row := make([]interface{}, 2)
 	row[0] = tableName
@@ -402,7 +419,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		if err != nil {
 			return err
 		}
-		var rowIndex int64 = int64(j)
+		var rowIndex = int64(j)
 		if len(bat.Sels) != 0 {
 			rowIndex = bat.Sels[j]
 		}
@@ -796,7 +813,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	}
 
 	if !isfile {
-		return fmt.Errorf("file %s is a directory.", load.File)
+		return fmt.Errorf("file %s is a directory", load.File)
 	}
 
 	/*
@@ -815,7 +832,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 
 	txnHandler := ses.GetTxnHandler()
 	if txnHandler.isTxnState(TxnBegan) {
-		return fmt.Errorf("Do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
+		return fmt.Errorf("do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
 	}
 	dbHandler, err := ses.Pu.StorageEngine.Database(loadDb, txnHandler.GetTxn().GetCtx())
 	if err != nil {
@@ -900,6 +917,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 				defs := table.TableDefs(txnHandler.GetTxn().GetCtx())
 				for _, def := range defs {
 					if attr, ok := def.(*engine.AttributeDef); ok {
+						// Fixme: attrs here is never used.
 						attrs = append(attrs, &engineColumnInfo{
 							name: attr.Attr.Name,
 							typ:  attr.Attr.Type,
@@ -1035,8 +1053,8 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 	ses.Mrs.AddColumn(col1)
 	ses.Mrs.AddColumn(col2)
 
-	var hasLike bool = false
-	var likePattern string = ""
+	var hasLike = false
+	var likePattern = ""
 	if sv.Like != nil {
 		hasLike = true
 		likePattern = strings.ToLower(sv.Like.Right.String())
@@ -1500,7 +1518,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		ses.Mrs = &MysqlResultSet{}
 		stmt := cw.GetAst()
 
-		var fromTxnCommand TxnCommand = TxnNoCommand
+		var fromTxnCommand = TxnNoCommand
 		//check transaction states
 		switch stmt.(type) {
 		case *tree.BeginTransaction:
@@ -1944,7 +1962,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 
 		return resp, nil
 	default:
-		err := fmt.Errorf("unsupported command. 0x%x \n", req.GetCmd())
+		err := fmt.Errorf("unsupported command. 0x%x", req.GetCmd())
 		resp = NewGeneralErrorResponse(uint8(req.GetCmd()), err)
 	}
 	return resp, nil
@@ -2013,7 +2031,7 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 	case types.T_decimal128:
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	default:
-		return fmt.Errorf("RunWhileSend : unsupported type %d \n", engineType)
+		return fmt.Errorf("RunWhileSend : unsupported type %d", engineType)
 	}
 	return nil
 }

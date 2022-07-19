@@ -18,18 +18,19 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-// CheckService check dn state and generate operator for expired dn store.
+// Check checks dn state and generate operator for expired dn store.
 // The less shard ID, the higher priority.
 // NB: the returned order should be deterministic.
 func Check(
-	idAlloc util.IDAllocator, dnState pb.DNState, currTick uint64,
+	idAlloc util.IDAllocator, cfg hakeeper.Config, dnState pb.DNState, currTick uint64,
 ) []*operator.Operator {
-	stores, shards := parseDnState(dnState, currTick)
+	stores, shards := parseDnState(cfg, dnState, currTick)
 	if len(stores.WorkingStores()) < 1 {
 		// warning with no working store
 		return nil
