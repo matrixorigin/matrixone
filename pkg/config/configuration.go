@@ -22,7 +22,7 @@ import (
 
 var GlobalSystemVariables SystemVariables
 
-//host memory
+//HostMmu host memory
 var HostMmu *host.Mmu = nil
 
 //mempool
