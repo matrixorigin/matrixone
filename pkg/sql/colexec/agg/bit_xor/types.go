@@ -12,12 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package mmu
+package bit_xor
 
-import (
-	"errors"
-)
-
-var (
-	ErrOutOfMemory = errors.New("out of memory")
-)
+type BitXor[T1, T2 any] struct {
+}

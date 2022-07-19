@@ -18,7 +18,7 @@ import (
 func Test_CeilUint64(t *testing.T) {
 	convey.Convey("Test ceil for uint64 succ", t, func() {
 		var uint64VecBase = []uint64{1, 4, 8, 16, 32, math.MaxUint64, 0}
-		var nsp1 []uint64 = []uint64{6}
+		var nsp1 = []uint64{6}
 		var origVecs = make([]*vector.Vector, 1)
 		var proc = process.New(mheap.New(&guest.Mmu{Mmu: host.New(100000), Limit: 100000}))
 		origVecs[0] = testutil.MakeUint64Vector(uint64VecBase, nsp1)
@@ -56,7 +56,7 @@ func Test_CeilUint64(t *testing.T) {
 func Test_CeilInt64(t *testing.T) {
 	convey.Convey("Test ceil for int64 succ", t, func() {
 		var int64VecBase = []int64{math.MinInt64 + 1, math.MinInt64 + 2, -100, -1, 0, 1, 4, 8, 16, 32, 64, math.MaxInt64, 0}
-		var nsp1 []uint64 = []uint64{12}
+		var nsp1 = []uint64{12}
 		var origVecs = make([]*vector.Vector, 1)
 		var proc = process.New(mheap.New(&guest.Mmu{Mmu: host.New(100000), Limit: 100000}))
 		origVecs[0] = testutil.MakeInt64Vector(int64VecBase, nsp1)
@@ -94,7 +94,7 @@ func Test_CeilFloat64(t *testing.T) {
 	convey.Convey("Test ceil for float64 succ", t, func() {
 		var float64VecBase = []float64{math.SmallestNonzeroFloat64, -1.2, -2.3, math.MinInt64 + 1, math.MinInt64 + 2, -100.2, -1.3, 0.9, 0,
 			1.5, 4.4, 8.5, 16.32, 32.345, 64.09, math.MaxInt64, math.MaxFloat64, 0}
-		var nsp1 []uint64 = []uint64{uint64(len(float64VecBase) - 1)}
+		var nsp1 = []uint64{uint64(len(float64VecBase) - 1)}
 		var origVecs = make([]*vector.Vector, 1)
 		var proc = process.New(mheap.New(&guest.Mmu{Mmu: host.New(100000), Limit: 100000}))
 		origVecs[0] = testutil.MakeFloat64Vector(float64VecBase, nsp1)

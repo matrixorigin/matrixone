@@ -499,7 +499,7 @@ const (
 
 func (th *TxnHandler) commit(option int) error {
 	var err error
-	var switchTxnState bool = true
+	var switchTxnState = true
 	switch th.getTxnState() {
 	case TxnBegan:
 		switch option {
@@ -546,16 +546,14 @@ func (th *TxnHandler) commit(option int) error {
 // CommitAfterBegin commits the tae txn started by the BEGIN statement
 func (th *TxnHandler) CommitAfterBegin() error {
 	logutil.Infof("commit began")
-	var err error
-	err = th.commit(TxnCommitAfterBegan)
+	err := th.commit(TxnCommitAfterBegan)
 	return err
 }
 
 // CommitAfterAutocommit commits the tae txn started by autocommit
 func (th *TxnHandler) CommitAfterAutocommit() error {
 	logutil.Infof("commit autocommit")
-	var err error
-	err = th.commit(TxnCommitAfterAutocommit)
+	err := th.commit(TxnCommitAfterAutocommit)
 	return err
 }
 
@@ -563,8 +561,7 @@ func (th *TxnHandler) CommitAfterAutocommit() error {
 // Do not check TxnBegan
 func (th *TxnHandler) CommitAfterAutocommitOnly() error {
 	logutil.Infof("commit autocommit only")
-	var err error
-	err = th.commit(TxnCommitAfterAutocommitOnly)
+	err := th.commit(TxnCommitAfterAutocommitOnly)
 	return err
 }
 
@@ -575,7 +572,7 @@ const (
 
 func (th *TxnHandler) rollback(option int) error {
 	var err error
-	var switchTxnState bool = true
+	var switchTxnState = true
 	switch th.getTxnState() {
 	case TxnBegan:
 		switch option {
@@ -618,15 +615,13 @@ func (th *TxnHandler) rollback(option int) error {
 
 func (th *TxnHandler) Rollback() error {
 	logutil.Infof("rollback ")
-	var err error
-	err = th.rollback(TxnRollbackAfterBeganAndAutocommit)
+	err := th.rollback(TxnRollbackAfterBeganAndAutocommit)
 	return err
 }
 
 func (th *TxnHandler) RollbackAfterAutocommitOnly() error {
 	logutil.Infof("rollback autocommit only")
-	var err error
-	err = th.rollback(TxnRollbackAfterAutocommitOnly)
+	err := th.rollback(TxnRollbackAfterAutocommitOnly)
 	return err
 }
 
