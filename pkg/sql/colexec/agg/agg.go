@@ -56,6 +56,8 @@ func (a *UnaryAgg[T1, T2]) Dup() Agg[any] {
 		ityps: a.ityps,
 		fill:  a.fill,
 		merge: a.merge,
+		grows: a.grows,
+		eval:  a.eval,
 	}
 }
 
