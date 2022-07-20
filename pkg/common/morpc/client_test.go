@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -186,4 +187,72 @@ func TestGetBackendWithCreateBackend(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, b)
 	assert.Equal(t, 1, len(c.mu.backends["b1"]))
+}
+
+func TestCloseIdleBackends(t *testing.T) {
+	rc, err := NewClient(newTestBackendFactory(),
+		WithClientMaxBackendPerHost(2),
+		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100),
+		WithClientCreateTaskChanSize(1))
+	assert.NoError(t, err)
+	c := rc.(*client)
+	defer func() {
+		assert.NoError(t, c.Close())
+	}()
+
+	b, err := c.getBackend("b1")
+	assert.NoError(t, err)
+	assert.NotNil(t, b)
+	b.(*testBackend).busy = true
+
+	_, err = c.getBackend("b1")
+	assert.NoError(t, err)
+	for {
+		c.mu.RLock()
+		v := len(c.mu.backends["b1"])
+		c.mu.RUnlock()
+		if v == 2 {
+			break
+		}
+	}
+
+	b, err = c.getBackend("b1")
+	assert.NoError(t, err)
+	assert.NotNil(t, b)
+
+	b2, err := c.getBackend("b1")
+	assert.NoError(t, err)
+	assert.NotNil(t, b2)
+	assert.NotEqual(t, b, b2)
+
+	go func() {
+		st, err := b2.NewStream()
+		assert.NoError(t, err)
+		for {
+			assert.NoError(t, st.Send(newTestMessage(1), SendOptions{}))
+		}
+	}()
+
+	for {
+		c.mu.RLock()
+		v := len(c.mu.backends["b1"])
+		c.mu.RUnlock()
+		if v == 1 {
+			tb := b.(*testBackend)
+			tb.RLock()
+			closed := tb.closed
+			tb.RUnlock()
+			if closed {
+				tb2 := b2.(*testBackend)
+				tb2.RLock()
+				assert.False(t, tb2.closed)
+				tb2.RUnlock()
+
+				c.mu.RLock()
+				assert.Equal(t, 1, len(c.mu.backends["b1"]))
+				c.mu.RUnlock()
+				return
+			}
+		}
+	}
 }
