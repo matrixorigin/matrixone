@@ -67,7 +67,7 @@ func WithClientCreateTaskChanSize(size int) ClientOption {
 	}
 }
 
-// WithClientMaxBackendMaxIdleTime set the maximum idle duration of the backend connection.
+// WithClientMaxBackendMaxIdleDuration set the maximum idle duration of the backend connection.
 // Backend connection that exceed this time will be automatically closed. 0 means no idle time
 // limit.
 func WithClientMaxBackendMaxIdleDuration(value time.Duration) ClientOption {
