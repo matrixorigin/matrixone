@@ -66,6 +66,8 @@ const (
 	ErrUnreslovedConflict
 	// ErrTxnError TxnError wrapper
 	ErrTxnError
+	// ErrDNShardNotFound DNShard not found, need to get the latest DN list from HAKeeper
+	ErrDNShardNotFound
 )
 
 type Error struct {
