@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCoalesceFun(t *testing.T) {
+func TestCoalesceGeneral(t *testing.T) {
 	testCases := []arg{
 		{
 			info: "coalesce(null, 1)", proc: testutil.NewProc(),
@@ -104,6 +104,85 @@ func TestCoalesceFun(t *testing.T) {
 			}
 
 			got, ergot := coalesceGeneral[int64](tc.vs, tc.proc, types.Type{Oid: types.T_int64})
+			if tc.err {
+				require.Errorf(t, ergot, fmt.Sprintf("case '%d' expected error, but no error happens", i))
+			} else {
+				require.NoError(t, ergot)
+				require.True(t, testutil.CompareVectors(tc.expect, got), "got vector is different with expected")
+			}
+		})
+	}
+}
+
+func TestCoalesceString(t *testing.T) {
+	testCases := []arg{
+		{
+			info: "coalesce(null, 'a', null, 'b')", proc: testutil.NewProc(),
+			vs: []*vector.Vector{
+				testutil.MakeScalarNull(1),
+				testutil.MakeScalarVarchar("a", 1),
+				testutil.MakeScalarNull(1),
+				testutil.MakeScalarVarchar("b", 1),
+			},
+			match:  true,
+			err:    false,
+			expect: testutil.MakeScalarVarchar("a", 1),
+		},
+
+		{
+			info: "coalesce(a, 'a', null, 'b')", proc: testutil.NewProc(),
+			vs: []*vector.Vector{
+				testutil.MakeVarcharVector([]string{"kk", "", "ss", ""}, []uint64{1, 3}),
+				testutil.MakeScalarVarchar("a", 1),
+				testutil.MakeScalarNull(1),
+				testutil.MakeScalarVarchar("b", 1),
+			},
+			match:  true,
+			err:    false,
+			expect: testutil.MakeVarcharVector([]string{"kk", "a", "ss", "a"}, nil),
+		},
+
+		{
+			info: "coalesce(a, null, 'b')", proc: testutil.NewProc(),
+			vs: []*vector.Vector{
+				testutil.MakeVarcharVector([]string{"kk", "", "ss", ""}, []uint64{1, 3}),
+				testutil.MakeScalarNull(1),
+				testutil.MakeScalarVarchar("b", 1),
+			},
+			match:  true,
+			err:    false,
+			expect: testutil.MakeVarcharVector([]string{"kk", "b", "ss", "b"}, nil),
+		},
+
+		{
+			info: "coalesce(a, null, b)", proc: testutil.NewProc(),
+			vs: []*vector.Vector{
+				testutil.MakeVarcharVector([]string{"a1", "", "a2", ""}, []uint64{1, 3}),
+				testutil.MakeScalarNull(1),
+				testutil.MakeVarcharVector([]string{"b1", "b2", "", ""}, []uint64{2, 3}),
+			},
+			match:  true,
+			err:    false,
+			expect: testutil.MakeVarcharVector([]string{"a1", "b2", "a2", ""}, []uint64{3}),
+		},
+	}
+
+	for i, tc := range testCases {
+		t.Run(tc.info, func(t *testing.T) {
+			{
+				inputTypes := make([]types.T, len(tc.vs))
+				for i := range inputTypes {
+					inputTypes[i] = tc.vs[i].Typ.Oid
+				}
+				b := CoalesceTypeCheckFn(inputTypes, nil, types.T_varchar)
+				if !tc.match {
+					require.False(t, b, fmt.Sprintf("case '%s' shouldn't meet the function's requirement but it meets.", tc.info))
+					return
+				}
+				require.True(t, b)
+			}
+
+			got, ergot := coalesceString(tc.vs, tc.proc, types.Type{Oid: types.T_varchar})
 			if tc.err {
 				require.Errorf(t, ergot, fmt.Sprintf("case '%d' expected error, but no error happens", i))
 			} else {
