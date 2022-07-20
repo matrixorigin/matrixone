@@ -273,7 +273,7 @@ func TestGCDB(t *testing.T) {
 	compactBlocks(t, tae, "db", schema2, true)
 	dropDB(t, tae, "db")
 
-	testutils.WaitExpect(2000, func() bool {
+	testutils.WaitExpect(4000, func() bool {
 		return tae.Catalog.CoarseDBCnt() == 1
 	})
 	assert.Equal(t, 1, tae.Catalog.CoarseDBCnt())

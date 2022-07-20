@@ -100,27 +100,27 @@ type IEvictHandle interface {
 type NodeState = uint32
 
 const (
-	NODE_UNLOAD NodeState = iota
-	NODE_LOADING
-	NODE_ROOLBACK
-	NODE_COMMIT
-	NODE_UNLOADING
-	NODE_LOADED
+	NodeUnload NodeState = iota
+	NodeLoading
+	NodeRollback
+	NodeCommit
+	NodeUnloadING
+	NodeLoaded
 )
 
 func NodeStateString(state NodeState) string {
 	switch state {
-	case NODE_UNLOAD:
+	case NodeUnload:
 		return "UNLOAD"
-	case NODE_LOADING:
+	case NodeLoading:
 		return "LOADING"
-	case NODE_ROOLBACK:
+	case NodeRollback:
 		return "ROLLBACK"
-	case NODE_COMMIT:
+	case NodeCommit:
 		return "COMMIT"
-	case NODE_UNLOADING:
+	case NodeUnloadING:
 		return "UNLOADING"
-	case NODE_LOADED:
+	case NodeLoaded:
 		return "LOADED"
 	}
 	panic(fmt.Sprintf("unsupported: %d", state))

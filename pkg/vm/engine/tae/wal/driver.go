@@ -117,8 +117,8 @@ func (driver *walDriver) GetCurrSeqNum() uint64 {
 	return driver.impl.GetCurrSeqNum(GroupC)
 }
 
-func (driver *walDriver) LoadEntry(groupId uint32, lsn uint64) (LogEntry, error) {
-	return driver.impl.Load(groupId, lsn)
+func (driver *walDriver) LoadEntry(groupID uint32, lsn uint64) (LogEntry, error) {
+	return driver.impl.Load(groupID, lsn)
 }
 
 func (driver *walDriver) AppendEntry(group uint32, e LogEntry) (uint64, error) {
