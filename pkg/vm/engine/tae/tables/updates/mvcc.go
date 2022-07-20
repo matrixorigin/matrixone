@@ -349,7 +349,7 @@ func (n *MVCCHandle) getMaxVisibleRowLocked(ts uint64) (int, uint32, bool, error
 			// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
 			if state == txnif.TxnStateUnknown {
 				err = txnif.ErrTxnInternal
-			} else if state == txnif.TxnStateRollbacked {
+			} else if state == txnif.TxnStateRollbacked || state == txnif.TxnStateCommitting {
 				panic("append node shoul not be rollbacked")
 			}
 		}
