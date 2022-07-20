@@ -143,6 +143,7 @@ ifneq ($(wildcard $(BUILD_CFG)),)
 	$(info Remove file $(BUILD_CFG))
 	@rm -f $(BUILD_CFG)
 endif
+	$(MAKE) -C cgo clean
 
 ###############################################################################
 # static checks
