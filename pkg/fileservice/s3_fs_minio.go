@@ -107,6 +107,13 @@ func (m *S3FSMinio) Write(ctx context.Context, vector IOVector) error {
 		}
 	}
 
+	return m.write(ctx, vector)
+}
+
+func (m *S3FSMinio) write(ctx context.Context, vector IOVector) error {
+
+	key := m.pathToKey(vector.FilePath)
+
 	// sort
 	sort.Slice(vector.Entries, func(i, j int) bool {
 		return vector.Entries[i].Offset < vector.Entries[j].Offset
@@ -120,7 +127,7 @@ func (m *S3FSMinio) Write(ctx context.Context, vector IOVector) error {
 	}
 
 	// put
-	_, err = m.client.PutObject(
+	_, err := m.client.PutObject(
 		ctx,
 		m.config.Bucket,
 		key,

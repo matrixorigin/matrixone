@@ -40,6 +40,15 @@ func TestLocalFS(t *testing.T) {
 		})
 	})
 
+	t.Run("replaceable file service", func(t *testing.T) {
+		testReplaceableFileService(t, func() ReplaceableFileService {
+			dir := t.TempDir()
+			fs, err := NewLocalFS(dir)
+			assert.Nil(t, err)
+			return fs
+		})
+	})
+
 }
 
 func BenchmarkLocalFS(b *testing.B) {
