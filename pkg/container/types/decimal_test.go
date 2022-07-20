@@ -32,11 +32,11 @@ func TestBasic(t *testing.T) {
 	require.True(t, Decimal128_Zero.Gt(Decimal128Min))
 
 	require.True(t, Decimal64_Ten.Eq(Decimal64FromInt32(10)))
-	require.True(t, Decimal64_Ten.Eq(Decimal64FromString("10")))
-	require.True(t, Decimal64_Ten.Eq(Decimal64FromString("10.000")))
+	require.True(t, Decimal64_Ten.Eq(MustDecimal64FromString("10")))
+	require.True(t, Decimal64_Ten.Eq(MustDecimal64FromString("10.000")))
 	require.True(t, Decimal128_Ten.Eq(Decimal128FromInt32(10)))
-	require.True(t, Decimal128_Ten.Eq(Decimal128FromString("10")))
-	require.True(t, Decimal128_Ten.Eq(Decimal128FromString("10.000")))
+	require.True(t, Decimal128_Ten.Eq(MustDecimal128FromString("10")))
+	require.True(t, Decimal128_Ten.Eq(MustDecimal128FromString("10.000")))
 }
 
 func TestParse(t *testing.T) {
@@ -96,8 +96,11 @@ func TestAdd(t *testing.T) {
 
 func TestBits(t *testing.T) {
 	var d1, d2 Decimal64
-	d1.FromStringWithScale("9.2234", 5)
-	d2.FromStringWithScale("9.22337777675788773437747747747347377", 4)
+	var err error
+	err = d1.FromStringWithScale("9.2234", 5)
+	require.True(t, err == nil)
+	err = d2.FromStringWithScale("9.22337777675788773437747747747347377", 4)
+	require.True(t, err == nil)
 
 	require.Equal(t, d1.ToInt64(), d2.ToInt64())
 	require.Equal(t, Decimal64ToInt64Raw(d1), Decimal64ToInt64Raw(d2))

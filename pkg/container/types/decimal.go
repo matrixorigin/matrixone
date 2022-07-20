@@ -509,47 +509,39 @@ func ParseStringToDecimal128(s string, _ int32, scale int32) (Decimal128, error)
 	return d, err
 }
 
-func Decimal64FromString(s string) Decimal64 {
+func MustDecimal64FromString(s string) Decimal64 {
 	var d Decimal64
-	d.FromString(s)
+	if err := d.FromString(s); err != nil {
+		panic(err)
+	}
 	return d
 }
-func Decimal128FromString(s string) Decimal128 {
+func MustDecimal128FromString(s string) Decimal128 {
 	var d Decimal128
-	d.FromString(s)
+	if err := d.FromString(s); err != nil {
+		panic(err)
+	}
 	return d
 }
 
 func Decimal64_Inf() Decimal64 {
-	var d Decimal64
-	d.FromString("inf")
-	return d
+	return MustDecimal64FromString("inf")
 }
 func Decimal64_NegInf() Decimal64 {
-	var d Decimal64
-	d.FromString("-inf")
-	return d
+	return MustDecimal64FromString("-inf")
 }
 func Decimal64_NaN() Decimal64 {
-	var d Decimal64
-	d.FromString("NaN")
-	return d
+	return MustDecimal64FromString("NaN")
 }
 
 func Decimal128_Inf() Decimal128 {
-	var d Decimal128
-	d.FromString("inf")
-	return d
+	return MustDecimal128FromString("inf")
 }
 func Decimal128_NegInf() Decimal128 {
-	var d Decimal128
-	d.FromString("-inf")
-	return d
+	return MustDecimal128FromString("-inf")
 }
 func Decimal128_NaN() Decimal128 {
-	var d Decimal128
-	d.FromString("NaN")
-	return d
+	return MustDecimal128FromString("NaN")
 }
 
 func Decimal64FromInt32(i int32) Decimal64 {
