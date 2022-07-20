@@ -66,9 +66,8 @@ func newCompactor(base *syncBase) *compactor {
 }
 
 type baseGroup struct {
-	groupType uint16
-	groupId   uint32
-	vInfo     *vInfo //get groupbyid
+	groupId uint32
+	vInfo   *vInfo //get groupbyid
 	// addrs     map[uint64]int //gid-lsn
 }
 

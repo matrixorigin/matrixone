@@ -27,7 +27,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
@@ -59,7 +58,6 @@ type rotateFile struct {
 	checker     RotateChecker
 	uncommitted []*vFile
 	history     History
-	commitMu    sync.RWMutex
 
 	commitWg        sync.WaitGroup
 	commitCtx       context.Context
@@ -68,7 +66,6 @@ type rotateFile struct {
 	postCommitQueue chan *vFile
 
 	nextVer uint64
-	idAlloc common.IdAllocator
 
 	wg sync.WaitGroup
 

@@ -32,10 +32,9 @@ import (
 var Metasize = 2
 
 type vFileState struct {
-	bufPos  int
-	bufSize int
-	pos     int
-	file    *vFile
+	bufPos int
+	pos    int
+	file   *vFile
 }
 
 type vFile struct {

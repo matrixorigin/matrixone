@@ -36,13 +36,13 @@ import (
 
 type appendableNode struct {
 	*buffer.Node
-	file      file.Block
-	block     *dataBlock
-	data      *containers.Batch
-	rows      uint32
-	mgr       base.INodeManager
-	flushTs   uint64
-	ckpTs     uint64
+	file    file.Block
+	block   *dataBlock
+	data    *containers.Batch
+	rows    uint32
+	mgr     base.INodeManager
+	flushTs uint64
+	// ckpTs     uint64 // unused
 	exception *atomic.Value
 }
 

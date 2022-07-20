@@ -16,11 +16,12 @@ package checkpoint
 
 import "testing"
 
-type mockUnit struct{}
+// mockUnit is unused
+// type mockUnit struct{}
 
-func (u *mockUnit) EstimateScore() int {
-	return 10
-}
+// func (u *mockUnit) EstimateScore() int {
+// 	return 10
+// }
 
 func TestDriver(t *testing.T) {
 	// driver := NewDriver()
