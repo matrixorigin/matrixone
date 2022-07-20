@@ -26,8 +26,8 @@ import (
 )
 
 type Writer struct {
-	fs    tfs.FS
-	block blockFile
+	fs tfs.FS
+	// block blockFile // unused
 }
 
 func NewWriter(fs tfs.FS) *Writer {
