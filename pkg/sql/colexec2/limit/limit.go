@@ -31,7 +31,7 @@ func Prepare(_ *process.Process, _ interface{}) error {
 	return nil
 }
 
-// returning only the first n tuples from its input
+// Call returning only the first n tuples from its input
 func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
