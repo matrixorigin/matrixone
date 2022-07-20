@@ -76,7 +76,7 @@ $ unzip mo-server-v0.4.0-linux-amd64.zip
 - **MacOS 环境**
 
 ```bash
-$ https://github.com/matrixorigin/matrixone/releases/download/v0.4.0/mo-server-v0.4.0-darwin-x86_64.zip
+$ wget https://github.com/matrixorigin/matrixone/releases/download/v0.4.0/mo-server-v0.4.0-darwin-x86_64.zip
 $ unzip mo-server-v0.4.0-darwin-x86_64.zip
 ```
 
@@ -108,13 +108,13 @@ $ docker --version
 
 - 最新版本的镜像：
 
-```
+```bash
 $ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
 ```
 
 - 0.5.0 稳定版本的镜像
 
-```
+```bash
 $ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
 ```
 
@@ -125,3 +125,7 @@ $ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
 当你完成安装 MatrixOne，你可以参考下面的章节，连接到 MatrixOne 服务器。
 
 参见[连接 MatrixOne 服务](connect-to-matrixone-server.md)。
+
+## 参考文档
+
+常见的安装和部署问题，参见[安装和部署常见问题](../FAQs/deployment-faqs.md)。
