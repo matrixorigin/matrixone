@@ -14,8 +14,6 @@ libmo.a: $(OBJS)
 libdecnumber.a:
 	(cd external; bash ./build.sh)
 
-.PHONY: libs
-
 .PHONY: clean
 clean:
 	rm -f *.o *.a
