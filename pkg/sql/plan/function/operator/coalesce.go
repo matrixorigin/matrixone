@@ -75,11 +75,11 @@ var (
 	}
 
 	CoalesceVarchar = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwString(vs, proc, types.Type{Oid: types.T_varchar})
+		return coalesceString(vs, proc, types.Type{Oid: types.T_varchar})
 	}
 
 	CoalesceChar = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwString(vs, proc, types.Type{Oid: types.T_char})
+		return coalesceString(vs, proc, types.Type{Oid: types.T_char})
 	}
 
 	CoalesceDecimal64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -106,8 +106,8 @@ func CoalesceTypeCheckFn(inputTypes []types.T, _ []types.T, ret types.T) bool {
 	return true
 }
 
-// coalesceGeneral is a general evaluate function for case-when operator
-// whose return type is uint / int / float / bool / date / datetime
+// coalesceGeneral is a general evaluate function for coalesce operator
+// when return type is uint / int / float / bool / date / datetime
 func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types.Type) (*vector.Vector, error) {
 	vecLen := vector.Length(vs[0])
 	returnIsScalar := vs[0].IsScalar()
@@ -160,6 +160,80 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 			for j := 0; j < vecLen; j++ {
 				if rs.Nsp.Contains(uint64(j)) && !input.Nsp.Contains(uint64(j)) {
 					rsCols[j] = cols[j]
+					rs.Nsp.Np.Remove(uint64(j))
+				}
+			}
+
+			if rs.Nsp.Np.IsEmpty() {
+				rs.Nsp.Np = nil
+				return rs, nil
+			}
+		}
+	}
+
+	return rs, nil
+}
+
+// coalesceGeneral is a general evaluate function for coalesce operator
+// when return type is char / varchar
+func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vector.Vector, error) {
+	vecLen := vector.Length(vs[0])
+	returnIsScalar := vs[0].IsScalar()
+
+	rs, err := proc.AllocVector(typ, 0)
+	if err != nil {
+		return nil, err
+	}
+	rs.Col = &types.Bytes{
+		Data:    nil,
+		Offsets: make([]uint32, vecLen),
+		Lengths: make([]uint32, vecLen),
+	}
+	// rsCols := rs.Col.(*types.Bytes)
+
+	rs.Nsp = nulls.NewWithSize(vecLen)
+	nullsIdx := make([]uint64, vecLen)
+	for i := 0; i < vecLen; i++ {
+		nullsIdx[i] = uint64(i)
+	}
+	rs.Nsp.Np.AddMany(nullsIdx)
+
+	for i := 0; i < len(vs); i++ {
+		input := vs[i]
+		cols := vector.MustBytesCols(input)
+		if input.IsScalar() {
+			if input.IsScalarNull() {
+				continue
+			}
+
+			if returnIsScalar {
+				r := proc.AllocScalarVector(typ)
+				r.Col = &types.Bytes{
+					Data:    make([]byte, cols.Lengths[0]),
+					Offsets: make([]uint32, 1),
+					Lengths: make([]uint32, 1),
+				}
+				copy(r.Col.(*types.Bytes).Data, cols.Data)
+				r.Col.(*types.Bytes).Lengths[0] = cols.Lengths[0]
+				return r, nil
+			}
+
+			// for j := 0; j < vecLen; j++ {
+			// 	if rs.Nsp.Contains(uint64(j)) {
+			// 		rsCols[j] = cols[0]
+			// 	}
+			// }
+			rs.Nsp.Np = nil
+			return rs, nil
+		} else {
+			returnIsScalar = false
+			if nulls.Length(input.Nsp) == vecLen {
+				continue
+			}
+
+			for j := 0; j < vecLen; j++ {
+				if rs.Nsp.Contains(uint64(j)) && !input.Nsp.Contains(uint64(j)) {
+					// rsCols[j] = cols[j]
 					rs.Nsp.Np.Remove(uint64(j))
 				}
 			}
