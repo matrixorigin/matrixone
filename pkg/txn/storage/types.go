@@ -16,6 +16,7 @@ package storage
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
@@ -57,7 +58,7 @@ type TxnStorage interface {
 	//
 	// Note that for a distributed transaction, when all DNShards are Prepared, then the transaction is
 	// considered to have been committed.
-	Prepare(txnMeta txn.TxnMeta) error
+	Prepare(txnMeta txn.TxnMeta) (timestamp.Timestamp, error)
 	// Committing for distributed transactions, all participating DNShards have been PREPARED and the status
 	// of the transaction is logged to the LogService.
 	Committing(txnMeta txn.TxnMeta) error

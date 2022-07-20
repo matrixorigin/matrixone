@@ -33,6 +33,7 @@ func TestValidate(t *testing.T) {
 	assert.Equal(t, c.ListenAddress, c.ServiceAddress)
 	assert.Equal(t, defaultMaxConnections, c.RPC.MaxConnections)
 	assert.Equal(t, defaultSendQueueSize, c.RPC.SendQueueSize)
+	assert.Equal(t, defaultMaxIdleDuration, c.RPC.MaxIdleDuration.Duration)
 	assert.Equal(t, toml.ByteSize(defaultBufferSize), c.RPC.WriteBufferSize)
 	assert.Equal(t, toml.ByteSize(defaultBufferSize), c.RPC.ReadBufferSize)
 	assert.Equal(t, defaultMaxClockOffset, c.Txn.Clock.MaxClockOffset.Duration)
