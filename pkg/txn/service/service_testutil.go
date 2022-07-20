@@ -49,18 +49,18 @@ func NewTestTxnServiceWithLog(t *testing.T,
 	log logservice.Client) TxnService {
 	return NewTxnService(logutil.GetPanicLoggerWithLevel(zapcore.DebugLevel).With(zap.String("case", t.Name())),
 		NewTestDNShard(shard),
-		NewTestTxnStorage(log),
+		NewTestTxnStorage(log, clocker),
 		sender,
 		clocker,
 		time.Minute).(*service)
 }
 
 // NewTestTxnStorage create a TxnStorage used to recovery tests
-func NewTestTxnStorage(log logservice.Client) storage.TxnStorage {
+func NewTestTxnStorage(log logservice.Client, clock clock.Clock) storage.TxnStorage {
 	if log == nil {
 		log = mem.NewMemLog()
 	}
-	return mem.NewKVTxnStorage(0, log)
+	return mem.NewKVTxnStorage(0, log, clock)
 }
 
 // NewTestDNShard create a test DNShard
