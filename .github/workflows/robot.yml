@@ -12,7 +12,7 @@ on:
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel.
 jobs:
   issue-notify:
-    if : github.event_name == 'issues' && github.event.action == 'assigned'
+    if : github.event_name == 'issues' && github.event.action == 'assigned' 
     runs-on: ubuntu-latest
     steps:
       - name : ISSUE Triggered
@@ -34,7 +34,7 @@ jobs:
           actions: 'open-issue'
           token: ${{ secrets.TOKEN_ACTION }}
           issue-number: ${{ github.event.issue.number }}
-
+          
   nightly-check:
     if: github.event_name != 'issues'
     runs-on: ubuntu-latest
@@ -59,7 +59,7 @@ jobs:
           cd $GITHUB_WORKSPACE/matrixone
           make install-static-check-tools
           make static-check &>lint.out
-
+          
       - name: count sca failed files
         run: |
           cd $GITHUB_WORKSPACE/matrixone

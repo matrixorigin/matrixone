@@ -22,12 +22,12 @@ jobs:
         uses: ./.github/actions/setup_env
         with:
           go-version: 1.18
-
+          
       - name: Formats Check
         run: |
           cd $GITHUB_WORKSPACE && make clean
           if [ "$(make fmt | grep -v gofmt | wc -l)" -gt 0 ]; then exit 1; fi
-
+          
       - name: Detect non-ascii characters
         run: |
           na_characters=$(find ${{ github.workspace }} -type f -name "*.go" -exec grep -P  '[\xE5-\xE9][\x80-\xBF][\x80-\xBF]|\xE4[\xB8-\xBF][\x80-\xBF]' {} + || true)
@@ -36,12 +36,12 @@ jobs:
             printf '%s\n' "${na_characters[*]}"
             exit 1
           fi
-
+          
       - name: Prepare Dependency
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config && make build
           make install-static-check-tools
-
+          
       - name: Run golangci-lint for pkg
         id: sca-1
         continue-on-error: true
@@ -55,14 +55,14 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE
           CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo" golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt -E stylecheck --new-from-rev=HEAD~ ./cmd/... --timeout=3m
-
+          
       - name: Run more staticcheck checks
         id: sca-3
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
           CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo" staticcheck -checks SA9001,S1009,S1023,S1002,S1025,ST1017,ST1019,S1019,S1004,SA1030,S1011,S1008,SA1024,SA4003,S1039,S1028,SA6005 ./...
-
+      
       - name: Check on failures
         if: steps.sca-3.outcome != 'success' || steps.sca-2.outcome != 'success' || steps.sca-1.outcome != 'success'
         run: exit 1
@@ -92,7 +92,7 @@ jobs:
           path: |
             ${{ github.workspace }}
           retention-days: 7
-
+          
   ut-mac-x86:
     runs-on: macos-12
     name: UT Test on Darwin/x86
@@ -118,7 +118,7 @@ jobs:
           path: |
             ${{ github.workspace }}
           retention-days: 7
-
+          
   ut-linux-arm:
     runs-on: arm64-runner
     name: UT Test on Linux/Arm
@@ -200,7 +200,7 @@ jobs:
         if: ${{ always() }}
         run: |
           if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
-
+        
       - name: remove some files
         if: ${{ always() }}
         continue-on-error: true
@@ -219,7 +219,7 @@ jobs:
           path: |
             ${{ github.workspace }}
           retention-days: 7
-
+          
   bvt-linux-arm:
     runs-on: ubuntu-latest
     name: BVT Test on Linux/Arm
@@ -275,7 +275,7 @@ jobs:
         if: ${{ always() }}
         run: |
           if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
-
+        
       - name: remove some files
         if: ${{ always() }}
         continue-on-error: true
@@ -294,7 +294,7 @@ jobs:
           path: |
             ${{ github.workspace }}
           retention-days: 7
-
+          
   bvt-darwin-x86:
     runs-on: macos-12
     name: BVT Test on Darwin/x86
@@ -348,7 +348,7 @@ jobs:
         if: ${{ always() }}
         run: |
           if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
-
+        
       - name: remove some files
         if: ${{ always() }}
         continue-on-error: true
@@ -423,11 +423,11 @@ jobs:
         if: ${{ always() }}
         run: |
           if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
-
+          
       - name: Check race warnings
         run: |
           if [ "$(grep 'DATA RACE' $GITHUB_WORKSPACE/head/mo-server.log | wc -l || 0)" -gt 0 ]; then grep -A 5 'DATA RACE' $GITHUB_WORKSPACE/head/mo-server.log; exit 1; fi
-
+                          
       - name: remove some files
         if: ${{ always() }}
         continue-on-error: true
@@ -445,14 +445,14 @@ jobs:
           path: |
             ${{ github.workspace }}
           retention-days: 7
-
+          
   lint-docs:
     name: Lint Docs
     runs-on: ubuntu-latest
     steps:
       - run: 'echo "No build required" '
-
-
+      
+      
   more-sca:
     runs-on: ubuntu-latest
     name: More SCA Test on Ubuntu/x64
@@ -464,12 +464,12 @@ jobs:
 
       - name: Set up Go
         uses: ./.github/actions/setup_env
-
+          
       - name: Prepare ENV
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config && make build
           make install-static-check-tools
-
+          
       - name: Static Code Analysis
         run: |
           cd $GITHUB_WORKSPACE
