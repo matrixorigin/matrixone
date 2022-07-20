@@ -406,5 +406,6 @@ func (s *store) getClientOptions() []morpc.ClientOption {
 	return []morpc.ClientOption{
 		morpc.WithClientLogger(s.logger),
 		morpc.WithClientMaxBackendPerHost(s.cfg.RPC.MaxConnections),
+		morpc.WithClientMaxBackendMaxIdleDuration(s.cfg.RPC.MaxIdleDuration.Duration),
 	}
 }
