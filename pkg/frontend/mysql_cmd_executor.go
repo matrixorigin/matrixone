@@ -911,20 +911,20 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 
 			names := db.Relations(txnHandler.GetTxn().GetCtx())
 			for _, name := range names {
-				_, err := db.Relation(name, txnHandler.GetTxn().GetCtx())
+				table, err := db.Relation(name, txnHandler.GetTxn().GetCtx())
 				if err != nil {
 					return err
 				}
-				// Fixme: attrs here is never used.
-				// defs := table.TableDefs(txnHandler.GetTxn().GetCtx())
-				// for _, def := range defs {
-				// 	if attr, ok := def.(*engine.AttributeDef); ok {
-				// 		attrs = append(attrs, &engineColumnInfo{
-				// 			name: attr.Attr.Name,
-				// 			typ:  attr.Attr.Type,
-				// 		})
-				// 	}
-				// }
+				defs := table.TableDefs(txnHandler.GetTxn().GetCtx())
+				for _, def := range defs {
+					if attr, ok := def.(*engine.AttributeDef); ok {
+						// Fixme: attrs here is never used.
+						attrs = append(attrs, &engineColumnInfo{
+							name: attr.Attr.Name,
+							typ:  attr.Attr.Type,
+						})
+					}
+				}
 			}
 		}
 	}
