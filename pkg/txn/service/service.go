@@ -106,10 +106,14 @@ func (s *service) Start() error {
 	return nil
 }
 
-func (s *service) Close() error {
+func (s *service) Close(destroy bool) error {
 	s.waitRecoveryCompleted()
 	s.stopper.Stop()
-	if err := s.storage.Close(); err != nil {
+	closer := s.storage.Close
+	if destroy {
+		closer = s.storage.Destroy
+	}
+	if err := closer(); err != nil {
 		return multierr.Append(err, s.sender.Close())
 	}
 	return s.sender.Close()
