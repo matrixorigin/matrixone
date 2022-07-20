@@ -46,13 +46,13 @@ jobs:
         id: sca-1
         run: |
           cd $GITHUB_WORKSPACE
-          CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo" golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt -E stylecheck --new-from-rev=HEAD~ ./pkg/... --timeout=3m
+          CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo" golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt  --new-from-rev=HEAD~ ./pkg/... --timeout=3m
 
       - name: Run golangci-lint for cmd
         id: sca-2
         run: |
           cd $GITHUB_WORKSPACE
-          CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo" golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt -E stylecheck --new-from-rev=HEAD~ ./cmd/... --timeout=3m
+          CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo" golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt  --new-from-rev=HEAD~ ./cmd/... --timeout=3m
           
       - name: Run more staticcheck checks
         id: sca-3
