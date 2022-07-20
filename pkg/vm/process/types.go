@@ -63,7 +63,7 @@ type Limitation struct {
 	ReaderSize int64
 }
 
-// session information
+// SessionInfo session information
 type SessionInfo struct {
 	User         string
 	Host         string
