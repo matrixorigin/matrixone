@@ -1107,7 +1107,7 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 	case constant.String:
 		switch typ.Oid {
 		case types.T_json:
-			res, err := types.ParseValueToByteJson(num)
+			res, err := types.ParseNumValToByteJson(num)
 			if err != nil {
 				return nil, err
 			}

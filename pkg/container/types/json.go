@@ -19,8 +19,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func ParseValueToByteJson(num *tree.NumVal) (bytejson.ByteJson, error) {
+func ParseNumValToByteJson(num *tree.NumVal) (bytejson.ByteJson, error) {
 	val := num.String()
-	bj, err := bytejson.ParseFromString(val)
-	return *bj, err
+	return ParseStringToByteJson(val)
+}
+
+func ParseStringToByteJson(str string)(bytejson.ByteJson, error) {
+	return bytejson.ParseFromString(str)
+}
+func ParseSliceToByteJson(dt []byte)(bytejson.ByteJson, error) {
+	return bytejson.ParseFromByteSlice(dt)
 }

@@ -29,22 +29,26 @@ import (
 	"unsafe"
 )
 
-func ParseFromString(s string) (*ByteJson, error) {
+func ParseFromString(s string) (ret ByteJson, err error) {
 	if len(s) == 0 {
-		return nil, errors.New(errno.EmptyJsonText, "")
+		err = errors.New(errno.EmptyJsonText, "")
+		return
 	}
 	data := string2Slice(s)
-	return ParseFromByteSlice(data)
+	ret, err = ParseFromByteSlice(data)
+	return
 }
-func ParseFromByteSlice(s []byte) (*ByteJson, error) {
+func ParseFromByteSlice(s []byte) (bj ByteJson, err error) {
 	if len(s) == 0 {
-		return nil, errors.New(errno.EmptyJsonText, "")
+		err = errors.New(errno.EmptyJsonText, "")
+		return
 	}
 	if !json.Valid(s) {
-		return nil, errors.New(errno.InvalidJsonText, fmt.Sprintf("invalid json text:%s", s))
+		err = errors.New(errno.InvalidJsonText, fmt.Sprintf("invalid json text:%s", s))
+		return
 	}
-	bj := &ByteJson{}
-	return bj, bj.UnmarshalJSON(s)
+	err = bj.UnmarshalJSON(s)
+	return
 }
 
 func toString(buf, data []byte) []byte {
@@ -255,7 +259,7 @@ func addJsonNumber(buf []byte, in json.Number) (TpCode, []byte, error) {
 		return TpCodeFloat64, addFloat64(buf, val), nil
 	}
 	var tpCode TpCode
-	return tpCode, nil, errors.New(errno.InvalidJsonNumber, fmt.Sprintf("error occurs while transforming number"))
+	return tpCode, nil, errors.New(errno.InvalidJsonNumber, "error occurs while transforming number")
 }
 func string2Slice(s string) []byte {
 	str := (*reflect.StringHeader)(unsafe.Pointer(&s))

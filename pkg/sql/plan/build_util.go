@@ -610,8 +610,7 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 	case constant.String:
 		switch typ.GetId() {
 		case plan.Type_JSON:
-			bj, err := bytejson.ParseFromString(str)
-			return *bj, err
+			return types.ParseStringToByteJson(str)
 		case plan.Type_BOOL:
 			switch strings.ToLower(str) {
 			case "false":
