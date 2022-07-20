@@ -173,7 +173,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: pb.AddReplica,
+					ChangeType: pb.StartReplica,
 				},
 				ServiceType: pb.DnService,
 			}
@@ -186,7 +186,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: pb.RemoveReplica,
+					ChangeType: pb.StopReplica,
 				},
 				ServiceType: pb.DnService,
 			}
