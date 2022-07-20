@@ -12,6 +12,7 @@ type unloadOp struct{}
 
 func (op *unloadOp) OpName() string { return "UnloadOp" }
 
-type loadOp struct{}
+// loadOp is unused
+// type loadOp struct{}
 
-func (op *loadOp) OpName() string { return "LoadOp" }
+// func (op *loadOp) OpName() string { return "LoadOp" }

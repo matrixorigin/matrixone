@@ -67,7 +67,7 @@ func (mgr *nodeManager) String() string {
 			id.String(),
 			base.NodeStateString(mgr.nodes[node.GetID()].GetState()),
 			mgr.nodes[node.GetID()].Size()))
-		if node.GetState() == base.NODE_LOADED {
+		if node.GetState() == base.NodeLoaded {
 			loaded++
 		}
 		node.RUnlock()

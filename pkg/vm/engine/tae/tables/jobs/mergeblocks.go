@@ -59,7 +59,6 @@ type mergeBlocksTask struct {
 	createdBlks []*catalog.BlockEntry
 	compacted   []handle.Block
 	rel         handle.Relation
-	newSeg      handle.Segment
 	scheduler   tasks.TaskScheduler
 	scopes      []common.ID
 	deletes     []*roaring.Bitmap

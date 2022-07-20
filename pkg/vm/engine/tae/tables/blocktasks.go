@@ -175,7 +175,7 @@ func (blk *dataBlock) ForceCompact() (err error) {
 		panic("todo")
 	}
 	ts := blk.mvcc.LoadMaxVisible()
-	if blk.node.GetBlockMaxFlushTS() >= ts {
+	if blk.node.GetBlockMaxflushTS() >= ts {
 		return
 	}
 	h, err := blk.bufMgr.TryPin(blk.node, time.Second)
@@ -184,7 +184,7 @@ func (blk *dataBlock) ForceCompact() (err error) {
 	}
 	defer h.Close()
 	// Why check again? May be a flush was executed in between
-	if blk.node.GetBlockMaxFlushTS() >= ts {
+	if blk.node.GetBlockMaxflushTS() >= ts {
 		return
 	}
 	blk.mvcc.RLock()
@@ -219,8 +219,8 @@ func (blk *dataBlock) ABlkFlushData(
 	masks map[uint16]*roaring.Bitmap,
 	vals map[uint16]map[uint32]any,
 	deletes *roaring.Bitmap) (err error) {
-	flushTs := blk.node.GetBlockMaxFlushTS()
-	if ts <= flushTs {
+	flushTS := blk.node.GetBlockMaxflushTS()
+	if ts <= flushTS {
 		logutil.Info("[Cancelled]",
 			common.ReprerField("blk", blk.meta),
 			common.OperationField("flush"),
@@ -242,7 +242,7 @@ func (blk *dataBlock) ABlkFlushData(
 	if err = blk.file.Sync(); err != nil {
 		return
 	}
-	blk.node.SetBlockMaxFlushTS(ts)
+	blk.node.SetBlockMaxflushTS(ts)
 	blk.resetNice()
 	logutil.Info("[Done]",
 		common.ReprerField("blk", blk.meta),
