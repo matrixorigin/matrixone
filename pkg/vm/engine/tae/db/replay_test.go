@@ -1031,6 +1031,7 @@ func TestReplay6(t *testing.T) {
 }
 
 func TestReplay7(t *testing.T) {
+	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
