@@ -305,21 +305,23 @@ message TxnError {
 // ErrorCode error type code
 enum ErrorCode {
     // TAERead execute tae read error
-    TAERead      = 0;
+    TAERead         = 0;
     // TAEWrite execute tae write error
-    TAEWrite     = 1;
+    TAEWrite        = 1;
     // TAECommit execute tae commit error
-    TAECommit    = 2;
+    TAECommit       = 2;
     // TAERollback execute tae rollback error
-    TAERollback  = 3;
+    TAERollback     = 3;
     // TAEPrepare execute tae prepare error
-    TAEPrepare   = 4;
+    TAEPrepare      = 4;
     // RPCError rpc error
-    RPCError     = 5;
+    RPCError        = 5;
     // WaitTxn wait txn error
-    WaitTxn      = 6;
+    WaitTxn         = 6;
     // TxnNotFound txn metadata not found
-    TxnNotFound  = 7;
+    TxnNotFound     = 7;
     // TxnNotActive txn status not in active
-    TxnNotActive = 9;
+    TxnNotActive    = 9;
+    // DNShardNotFound DNShard not found
+    DNShardNotFound = 10;
 }

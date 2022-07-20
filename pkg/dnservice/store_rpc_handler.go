@@ -16,6 +16,7 @@ package dnservice
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -37,6 +38,7 @@ func (s *store) registerRPCHandlers() {
 }
 
 func (s *store) dispatchLocalRequest(shard metadata.DNShard) rpc.TxnRequestHandleFunc {
+	// DNShard not found, TxnSender will RPC call
 	r := s.getReplica(shard.ShardID)
 	if r == nil {
 		return nil
@@ -45,8 +47,7 @@ func (s *store) dispatchLocalRequest(shard metadata.DNShard) rpc.TxnRequestHandl
 }
 
 func (s *store) handleRead(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	shard := request.GetTargetDN()
-	r := s.getReplica(shard.ShardID)
+	r := s.validDNShard(request, response)
 	if r == nil {
 		return nil
 	}
@@ -56,8 +57,7 @@ func (s *store) handleRead(ctx context.Context, request *txn.TxnRequest, respons
 }
 
 func (s *store) handleWrite(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	shard := request.GetTargetDN()
-	r := s.getReplica(shard.ShardID)
+	r := s.validDNShard(request, response)
 	if r == nil {
 		return nil
 	}
@@ -67,8 +67,7 @@ func (s *store) handleWrite(ctx context.Context, request *txn.TxnRequest, respon
 }
 
 func (s *store) handleCommit(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	shard := request.GetTargetDN()
-	r := s.getReplica(shard.ShardID)
+	r := s.validDNShard(request, response)
 	if r == nil {
 		return nil
 	}
@@ -78,8 +77,7 @@ func (s *store) handleCommit(ctx context.Context, request *txn.TxnRequest, respo
 }
 
 func (s *store) handleRollback(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	shard := request.GetTargetDN()
-	r := s.getReplica(shard.ShardID)
+	r := s.validDNShard(request, response)
 	if r == nil {
 		return nil
 	}
@@ -89,8 +87,7 @@ func (s *store) handleRollback(ctx context.Context, request *txn.TxnRequest, res
 }
 
 func (s *store) handlePrepare(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	shard := request.GetTargetDN()
-	r := s.getReplica(shard.ShardID)
+	r := s.validDNShard(request, response)
 	if r == nil {
 		return nil
 	}
@@ -100,8 +97,7 @@ func (s *store) handlePrepare(ctx context.Context, request *txn.TxnRequest, resp
 }
 
 func (s *store) handleCommitDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	shard := request.GetTargetDN()
-	r := s.getReplica(shard.ShardID)
+	r := s.validDNShard(request, response)
 	if r == nil {
 		return nil
 	}
@@ -111,8 +107,7 @@ func (s *store) handleCommitDNShard(ctx context.Context, request *txn.TxnRequest
 }
 
 func (s *store) handleRollbackDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	shard := request.GetTargetDN()
-	r := s.getReplica(shard.ShardID)
+	r := s.validDNShard(request, response)
 	if r == nil {
 		return nil
 	}
@@ -122,14 +117,30 @@ func (s *store) handleRollbackDNShard(ctx context.Context, request *txn.TxnReque
 }
 
 func (s *store) handleGetStatus(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	shard := request.GetTargetDN()
-	r := s.getReplica(shard.ShardID)
+	r := s.validDNShard(request, response)
 	if r == nil {
 		return nil
 	}
 	r.waitStarted()
 	prepareResponse(request, response)
 	return r.service.GetStatus(ctx, request, response)
+}
+
+func (s *store) validDNShard(request *txn.TxnRequest, response *txn.TxnResponse) *replica {
+	shard := request.GetTargetDN()
+	r := s.getReplica(shard.ShardID)
+	if r == nil {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		response.TxnError = &txn.TxnError{
+			Code: txn.ErrorCode_DNShardNotFound,
+			Message: fmt.Sprintf("DNShard[%s] not found on DNStore[%s]",
+				shard.DebugString(),
+				s.mu.metadata.UUID),
+		}
+		return nil
+	}
+	return r
 }
 
 func prepareResponse(request *txn.TxnRequest, response *txn.TxnResponse) {
