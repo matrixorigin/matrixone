@@ -14,7 +14,7 @@ For standalone installation, MatrixOne 0.5.0 supports the following operating sy
 | Oracle Enterprise Linux  | 7.3 or later 7.x releases |
 | Ubuntu LTS               | 22.04 or later            |
 
-MatrixOne also supports macOS operating system, but it's only recommanded to run as a test and development environment.
+MatrixOne also supports macOS operating system, but it's only recommended to run as a test and development environment.
 
 | macOS | Version                |
 | :---- | :--------------------- |
@@ -32,7 +32,7 @@ For standalone installation, MatrixOne 0.5.0 can be running on the 64-bit generi
 | :------ | :----- | :-------------- |
 | 4 core+ | 16 GB+ | SSD/HDD 200 GB+ |
 
-The Macbook M1/M2 with ARM architecture is also a good fit for development environment. 
+The Macbook M1/M2 with ARM architecture is also a good fit for development environment.
 
 ##### Production environment
 
@@ -50,7 +50,7 @@ Normally you don't need to change anything for installation. A default setting o
 
 Error: `Get "https://proxy.golang.org/........": dial tcp 142.251.43.17:443: i/o timeout`
 
-As MatrixOne needs many go libraries as dependency, it downloads them at the time of building it. This is an error of downloading timeout, it's mostly a networking issue. If you are using a Chinese mainland network, you need to set your go environment to a Chinese image site to accelerate the go library downloading. If you check your go environment by `go env`, you may see  `GOPROXY="https://proxy.golang.org,direct"`, you need to set it by 
+As MatrixOne needs many go libraries as dependency, it downloads them at the time of building it. This is an error of downloading timeout, it's mostly a networking issue. If you are using a Chinese mainland network, you need to set your go environment to a Chinese image site to accelerate the go library downloading. If you check your go environment by `go env`, you may see  `GOPROXY="https://proxy.golang.org,direct"`, you need to set it by
 
 ```
 go env -w GOPROXY=https://goproxy.cn,direct

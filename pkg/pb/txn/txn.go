@@ -120,7 +120,7 @@ func (m CNOpRequest) DebugString() string {
 	return buffer.String()
 }
 
-// CNOpResponse returns debug string
+// DebugString returns debug string
 func (m CNOpResponse) DebugString() string {
 	var buffer bytes.Buffer
 
@@ -181,12 +181,12 @@ func (m TxnRequest) GetTargetDN() metadata.DNShard {
 	}
 }
 
-// ID implement morpc Messgae
+// SetID implement morpc Messgae
 func (m *TxnRequest) SetID(id uint64) {
 	m.RequestID = id
 }
 
-// ID implement morpc Messgae
+// GetID implement morpc Messgae
 func (m *TxnRequest) GetID() uint64 {
 	return m.RequestID
 }
@@ -206,12 +206,12 @@ func (m *TxnRequest) SetPayloadField(data []byte) {
 	}
 }
 
-// ID implement morpc Messgae
+// SetID implement morpc Messgae
 func (m *TxnResponse) SetID(id uint64) {
 	m.RequestID = id
 }
 
-// ID implement morpc Messgae
+// GetID implement morpc Messgae
 func (m *TxnResponse) GetID() uint64 {
 	return m.RequestID
 }

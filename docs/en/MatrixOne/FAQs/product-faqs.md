@@ -20,7 +20,7 @@
 
 * **What operating system does MatrixOne support?**
 
-  MatrixOne supports Linux and MacOS. Please refer to [deployment FAQ](deployment-faqs.md) for more details. 
+  MatrixOne supports Linux and MacOS. Please refer to [deployment FAQ](deployment-faqs.md) for more details.
 
 * **Which MatrixOne data types are supported?**
 
@@ -28,12 +28,12 @@
 
 * **Where can I deploy MatrixOne?**
 
-  MatrixOne can be deployed on premise, public cloud, private cloud or kubernetes.
+  MatrixOne can be deployed on-premise, public cloud, private cloud, or Kubernetes.
 
 * **Can I contribute to MatrixOne?**
 
   Yes, MatrixOne is an open-source project developed on GitHub. Contribution instructions are published in [Contribution Guide](../Contribution-Guide/make-your-first-contribution.md). We welcome developers to contribute to the MatrixOne community.
-  
+
 * **In addition to the MatrixOne documentation, are there any other ways to acquire MatrixOne knowledge?**
 
   Currently [MatrixOne documentation](https://docs.matrixorigin.io/) is the most important and timely way to get MatrixOne related knowledge. In addition, we also have some technical communication groups in Slack and WeChat. If you have any needs, contact [opensource@matrixorigin.io](mailto:opensource@matrixorigin.io).

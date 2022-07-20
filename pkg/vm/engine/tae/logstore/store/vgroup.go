@@ -66,16 +66,15 @@ func newCompactor(base *syncBase) *compactor {
 }
 
 type baseGroup struct {
-	groupType uint16
-	groupId   uint32
-	vInfo     *vInfo //get groupbyid
+	groupID uint32
+	vInfo   *vInfo //get groupbyid
 	// addrs     map[uint64]int //gid-lsn
 }
 
 func newbaseGroup(v *vInfo, gid uint32) *baseGroup {
 	return &baseGroup{
 		vInfo:   v,
-		groupId: gid,
+		groupID: gid,
 	}
 }
 func (g *baseGroup) IsCovered(c *compactor)           {}
@@ -164,7 +163,7 @@ func newcommitGroup(v *vInfo, gid uint32) *commitGroup {
 }
 
 func (g *commitGroup) String() string {
-	s := fmt.Sprintf("G%dCommit[ckp-%s,commits-%s,tc-{", g.groupId, g.ckps, g.Commits)
+	s := fmt.Sprintf("G%dCommit[ckp-%s,commits-%s,tc-{", g.groupID, g.ckps, g.Commits)
 	for tid, cid := range g.tidCidMap {
 		s = fmt.Sprintf("%s%d-%d,", s, tid, cid)
 	}
@@ -187,7 +186,7 @@ func (g *commitGroup) Log(info any) error {
 }
 
 func (g *commitGroup) IsCovered(c *compactor) bool {
-	ckp, ok := c.checkpointed[g.groupId]
+	ckp, ok := c.checkpointed[g.groupID]
 	if !ok {
 		return false
 	}
@@ -202,22 +201,22 @@ func (g *commitGroup) IsCommitGroup() bool {
 }
 func (g *commitGroup) PrepareMerge(c *compactor) {
 	//tid cid map
-	gMap, ok := c.tidCidMap[g.groupId]
+	gMap, ok := c.tidCidMap[g.groupID]
 	if !ok {
 		gMap = make(map[uint64]uint64)
 	}
 	for tid, cid := range g.tidCidMap {
 		gMap[tid] = cid
 	}
-	c.tidCidMap[g.groupId] = gMap
+	c.tidCidMap[g.groupID] = gMap
 }
 func (g *commitGroup) MergeCheckpointInfo(c *compactor) {
 	//merge partialckp
-	// partialMap, ok := c.partialCKP[g.groupId]
+	// partialMap, ok := c.partialCKP[g.groupID]
 	// if !ok {
 	// 	partialMap = make(map[uint64]*partialCkpInfo)
 	// }
-	// gMap := c.tidCidMap[g.groupId]
+	// gMap := c.tidCidMap[g.groupID]
 	// for lsn, commandsInfo := range g.partialCkp {
 	// 	partial, ok := partialMap[lsn]
 	// 	if !ok {
@@ -235,22 +234,22 @@ func (g *commitGroup) MergeCheckpointInfo(c *compactor) {
 	// 	}
 	// 	partialMap[lsn] = partial
 	// }
-	// c.partialCKP[g.groupId] = partialMap
+	// c.partialCKP[g.groupID] = partialMap
 	// //merge ckps
 	// if len(g.ckps.Intervals) == 0 {
 	// 	return
 	// }
 	// if c.gIntervals == nil {
 	// 	ret := make(map[uint32]*common.ClosedIntervals)
-	// 	ret[g.groupId] = common.NewClosedIntervalsByIntervals(g.ckps)
+	// 	ret[g.groupID] = common.NewClosedIntervalsByIntervals(g.ckps)
 	// 	c.gIntervals = ret
 	// 	return
 	// }
-	// _, ok = c.gIntervals[g.groupId]
+	// _, ok = c.gIntervals[g.groupID]
 	// if !ok {
-	// 	c.gIntervals[g.groupId] = &common.ClosedIntervals{}
+	// 	c.gIntervals[g.groupID] = &common.ClosedIntervals{}
 	// }
-	// c.gIntervals[g.groupId].TryMerge(*g.ckps)
+	// c.gIntervals[g.groupID].TryMerge(*g.ckps)
 }
 
 func (g *commitGroup) IsCheckpointGroup() bool {
