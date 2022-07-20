@@ -1,7 +1,6 @@
 # **Operator Precedence**
 
-Operator precedences are shown in the following list, from highest precedence to the lowest. Operators that are shown
-together on a line have the same precedence.
+Operator precedences are shown in the following list, from highest precedence to the lowest. Operators that are shown together on a line have the same precedence.
 
 | From highest precedence to the lowest | Operators|
 |---|-----|
@@ -25,8 +24,6 @@ together on a line have the same precedence.
 
 <!--:= 位于assignment后，暂时不支持-->
 
-The precedence of = depends on whether it is used as a comparison operator (=) or as an assignment operator (=). When
-used as a comparison operator, it has the same precedence as <!--<=>-->, >=, >, <=, <, <>, !=, IS, LIKE, and IN().
+The precedence of = depends on whether it is used as a comparison operator (=) or as an assignment operator (=). When used as a comparison operator, it has the same precedence as <!--<=>-->, >=, >, <=, <, <>, !=, IS, LIKE, and IN().
 
-For operators that occur at the same precedence level within an expression, evaluation proceeds left to right, with the
-exception that assignments evaluate right to left.
+For operators that occur at the same precedence level within an expression, evaluation proceeds left to right, with the exception that assignments evaluate right to left.

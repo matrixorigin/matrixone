@@ -1,7 +1,6 @@
 # 事务概览
 
-MatrixOne 支持将多个 SQL 语句绑定到单个 All-or-Nothing（即，要么都不做，要么做全套） 事务中。每个事务保证 ACID
-语义跨越任意表和行。如果一个事务成功，所有的突变都应用在一起，并具有虚拟同时性。如果事务的任何部分失败，则整个事务将中止，数据库将保持不变。MatrixOne 保证当一个事务处于挂起状态时，它通过快照隔离与其他并发事务隔离。
+MatrixOne 支持将多个 SQL 语句绑定到单个 All-or-Nothing（即，要么都不做，要么做全套） 事务中。每个事务保证 ACID 语义跨越任意表和行。如果一个事务成功，所有的突变都应用在一起，并具有虚拟同时性。如果事务的任何部分失败，则整个事务将中止，数据库将保持不变。MatrixOne 保证当一个事务处于挂起状态时，它通过快照隔离与其他并发事务隔离。
 
 在 0.5.0 版本中，MatrixOne 支持独立数据库事务。MatrixOne 支持乐观事务模式。
 
@@ -30,8 +29,7 @@ BEGIN;
 START TRANSACTION;
 ```
 
-使用 `START TRANSACTION` 或 `BEGIN` 语句时，自动提交模式将处于禁用状态，直至通过 `COMMIT` 或 `ROLLBACK` 语句结束事务。事务结束后，自动提交模式将恢复到禁用之前的状态。与 MySQL
-不同，MatrixOne 中的 `START TRANSACTION` 语句没有控制事务特征的修饰符。
+使用 `START TRANSACTION` 或 `BEGIN` 语句时，自动提交模式将处于禁用状态，直至通过 `COMMIT` 或 `ROLLBACK` 语句结束事务。事务结束后，自动提交模式将恢复到禁用之前的状态。与 MySQL 不同，MatrixOne 中的 `START TRANSACTION` 语句没有控制事务特征的修饰符。
 
 ### 提交事务
 
@@ -57,8 +55,7 @@ ROLLBACK;
 
 ### 自动提交
 
-MatrixOne 运行时，默认启用自动提交模式。这表示，开启自动提交，每条 SOL 语句都会被当做一个单独的事务自动执行，即每执行一条 SQL 语句，事务都会提交一次，在自动模式开启期间，你不能通过 `ROLLBACK`
-进行回滚；但是，如果在语句执行过程中发生错误，则会回滚该语句。
+MatrixOne 运行时，默认启用自动提交模式。这表示，开启自动提交，每条 SOL 语句都会被当做一个单独的事务自动执行，即每执行一条 SQL 语句，事务都会提交一次，在自动模式开启期间，你不能通过 `ROLLBACK` 进行回滚；但是，如果在语句执行过程中发生错误，则会回滚该语句。
 
 示例如下：
 
@@ -89,8 +86,7 @@ ERROR 1105 (HY000): the txn has not been began
 1 row in set (0.01 sec)
 ```
 
-在上述所举的例子中，`ROLLBACK` 语句没有生效。这是因为开启了自动提交模式，而 `INSERT` 语句是在自动提交模式中执行的。`ROLLBACK` 只适用于 `BEGIN` 或 `START TRANSACTION`
-，也就是说，它相当于下面的单语句事务：
+在上述所举的例子中，`ROLLBACK` 语句没有生效。这是因为开启了自动提交模式，而 `INSERT` 语句是在自动提交模式中执行的。`ROLLBACK` 只适用于 `BEGIN` 或 `START TRANSACTION` ，也就是说，它相当于下面的单语句事务：
 
 ```
 START TRANSACTION;
@@ -189,11 +185,9 @@ SQL-92 标准定义了四种级别的事务隔离：读未提交、读已提交�
 
 MatrixOne实现了快照隔离(SI，Snapshot Isolation)一致性，该级别的隔离在 SQL-92 标准的 `REPEATABLE READ` 和 `SERIALIZABLE` 之间。
 
-在快照隔离的系统中，每个事务似乎都在数据库的独立、一致的快照上运行。在提交之前，事务的更改仅对该事务可见，此时所有更改对后续开始的任何事务都以原子方式可见。如果事务 T1 修改了一个对象 *x*，这时，另一个事务 T2 在 T1
-的快照开始后和在 T1 提交之前，向 *x* 提交了一个写操作，那么 T1 必须中止。
+在快照隔离的系统中，每个事务似乎都在数据库的独立、一致的快照上运行。在提交之前，事务的更改仅对该事务可见，此时所有更改对后续开始的任何事务都以原子方式可见。如果事务 T1 修改了一个对象 *x*，这时，另一个事务 T2 在 T1 的快照开始后和在 T1 提交之前，向 *x* 提交了一个写操作，那么 T1 必须中止。
 
-[ANSI SQL隔离级别评论](https://arxiv.org/ftp/cs/papers/0701/0701157.pdf)提出的可能异常的隔离级别，MatrixOne
-的隔离级别与[ANSI SQL隔离级别评论](https://arxiv.org/ftp/cs/papers/0701/0701157.pdf)所述略有不同，参见下表所示，可以查看 MatrixOne 的隔离级别：
+[ANSI SQL隔离级别评论](https://arxiv.org/ftp/cs/papers/0701/0701157.pdf)提出的可能异常的隔离级别，MatrixOne 的隔离级别与[ANSI SQL隔离级别评论](https://arxiv.org/ftp/cs/papers/0701/0701157.pdf)所述略有不同，参见下表所示，可以查看 MatrixOne 的隔离级别：
 
 | Isolation Level                | P0 Dirty Write | P1 Dirty Read | P4C Cursor Lost Update | P4 Lost Update | P2 Fuzzy Read | P3 Phantom   | A5A Read Skew | A5B Write Skew |
 | ------------------------------ | -------------- | ------------- | ---------------------- | -------------- | ------------- | ------------ | ------------- | -------------- |

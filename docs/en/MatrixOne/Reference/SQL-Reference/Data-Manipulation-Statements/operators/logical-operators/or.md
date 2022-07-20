@@ -2,9 +2,7 @@
 
 ## **Description**
 
-Logical `OR,||`. When both operands are non-NULL, the result is `true` if any operand is nonzero, and `false` otherwise.
-With a NULL operand, the result is `true` if the other operand is nonzero, and NULL otherwise. If both operands
-are `NULL`, the result is `NULL`.
+Logical `OR,||`. When both operands are non-NULL, the result is `true` if any operand is nonzero, and `false` otherwise. With a NULL operand, the result is `true` if the other operand is nonzero, and NULL otherwise. If both operands are `NULL`, the result is `NULL`.
 
 ## **Syntax**
 

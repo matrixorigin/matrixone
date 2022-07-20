@@ -25,8 +25,7 @@
 | [CAST()](operators/cast-functions-and-operators/cast.md) | Cast a value as a certain type |
 | [CONVERT()](operators/cast-functions-and-operators/convert.md) | Cast a value as a certain type |
 
-## [**Comparison Functions and
-Operators**](operators/comparison-functions-and-operators/comparison-functions-and-operators-overview.md)
+## [**Comparison Functions and Operators**](operators/comparison-functions-and-operators/comparison-functions-and-operators-overview.md)
 
 | Name | Description|
 |---|-----|

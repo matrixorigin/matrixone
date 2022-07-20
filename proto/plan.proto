@@ -113,9 +113,9 @@ message VarRef {
 
 // Reference a column in the proj list of a node.
 message ColRef {
-	int32  rel_pos = 1;
-	int32  col_pos = 2;
-	string  name = 3;
+	int32	rel_pos	= 1;
+	int32	col_pos	= 2;
+	string	name	= 3;
 }
 
 // Reference a correlated column in the proj list of a node.
@@ -249,8 +249,8 @@ message ColDef {
 	Type typ			= 3;
 	DefaultExpr default = 4;
 	bool primary        = 5;
-	int32 pkidx = 6;
-	string comment = 7;
+	int32 pkidx 		= 6;
+	string comment	=7;
 }
 
 message IndexDef {
@@ -346,12 +346,12 @@ message UpdateInfo {
 }
 
 message AnalyzeInfo {
-	int64 input_rows = 1;
-	int64 output_rows = 2;
-	int64 input_size = 3;
-	int64 output_size = 4;
-	int64 time_consumed = 5;
-	int64 memory_size = 6;
+    int64 input_rows = 1;
+    int64 output_rows = 2;
+    int64 input_size = 3;
+    int64 output_size = 4;
+    int64 time_consumed = 5;
+    int64 memory_size = 6;
 }
 
 message Node {
@@ -454,7 +454,7 @@ message Node {
 
 	repeated int32 binding_tags = 22;
 
-	AnalyzeInfo analyze_info = 23;
+    AnalyzeInfo analyze_info = 23;
 }
 
 message DeleteTableCtx {
@@ -544,21 +544,21 @@ message Plan {
 
 message DataControl {
 	enum DclType {
-		SET_VARIABLES = 0;
-		GRANT = 1;
-		REVOKE = 2;
-		DENY = 3;
-		PREPARE = 4;
-		EXECUTE = 5;
-		DEALLOCATE = 6;
+		SET_VARIABLES	= 0;
+		GRANT			= 1;
+		REVOKE			= 2;
+		DENY			= 3;
+		PREPARE			= 4;
+		EXECUTE			= 5;
+		DEALLOCATE		= 6;
 	}
 	//DataDefinition type
 	DclType dcl_type = 1;
 	oneof control {
-		SetVariables set_variables = 2;
-		Prepare prepare = 3;
-		Execute execute = 4;
-		Deallocate deallocate = 5;
+		SetVariables set_variables  = 2;
+		Prepare prepare 			= 3;
+		Execute execute				= 4;
+		Deallocate deallocate 		= 5;
 	}
 }
 
@@ -666,27 +666,27 @@ message ShowVariables {
 }
 
 message SetVariables {
-	repeated SetVariablesItem items = 1;
+	repeated SetVariablesItem items	= 1;
 }
 
 message SetVariablesItem {
-	bool system = 1;
-	bool global = 2;
-	string name = 3;
-	Expr   value = 4;
+	bool system     = 1;
+	bool global     = 2;
+	string name     = 3;
+	Expr   value    = 4;
 	Expr   reserved = 5;
 }
 
 message Prepare {
-	string name = 1;
-	Plan   plan = 2;
+	string name		 = 1;
+	Plan   plan		 = 2;
 }
 
 message Execute {
-	string name = 1;
-	repeated Expr args = 2;
+	string name 		= 1;
+	repeated Expr args 	= 2;
 }
 
 message Deallocate {
-	string name = 1;
+	string name			= 1;
 }

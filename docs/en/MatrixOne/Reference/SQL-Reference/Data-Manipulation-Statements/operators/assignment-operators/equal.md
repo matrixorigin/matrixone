@@ -4,13 +4,9 @@
 
 This `=` operator is used to perform value assignments in the below cases:
 
-- Within a `SET` statement, `=` is treated as an assignment operator that causes the user variable on the left hand side
-  of the operator to take on the value to its right. The value on the right hand side may be a literal value, another
-  variable storing a value, or any legal expression that yields a scalar value, including the result of a query (
-  provided that this value is a scalar value). You can perform multiple assignments in the same SET statement.
+- Within a `SET` statement, `=` is treated as an assignment operator that causes the user variable on the left hand side of the operator to take on the value to its right. The value on the right hand side may be a literal value, another variable storing a value, or any legal expression that yields a scalar value, including the result of a query (provided that this value is a scalar value). You can perform multiple assignments in the same SET statement.
 
-- In the `SET` clause of an `UPDATE` statement, `=` also acts as an assignment operator. You can make multiple
-  assignments in the same `SET` clause of an `UPDATE` statement.
+- In the `SET` clause of an `UPDATE` statement, `=` also acts as an assignment operator. You can make multiple assignments in the same `SET` clause of an `UPDATE` statement.
 
 - In any other context, `=` is treated as a comparison operator.
 

@@ -8,13 +8,9 @@ Thanks for understanding that English is used as a shared language in this repos
 
 ### Basic Information
 
-You can see [MatrixOne Introduction](../../Overview/matrixone-introduction.md) for key features of
-MatrixOne, [MatrixOne Architecture](../../Overview/matrixone-architecture.md) for MatrixOne architecture and operational
-logic. For our distributed framework,
-see [MatrixCube Tech Design](./../../Overview/matrixcube/matrixcube-introduction.md).
+You can see [MatrixOne Introduction](../../Overview/matrixone-introduction.md) for key features of MatrixOne, [MatrixOne Architecture](../../Overview/matrixone-architecture.md) for MatrixOne architecture and operational logic.  For our distributed framework, see [MatrixCube Tech Design](./../../Overview/matrixcube/matrixcube-introduction.md).
 
-Besides, you can browse [SQL Reference](../../Reference/SQL-Reference/Data-Definition-Statements/create-database.md)
-and [Custom Functions](../../Reference/Builtin-Functions/Datetime/year.md) to know more about our interactive details.
+Besides, you can browse [SQL Reference](../../Reference/SQL-Reference/Data-Definition-Statements/create-database.md) and [Custom Functions](../../Reference/Builtin-Functions/Datetime/year.md) to know more about our interactive details.
 
 These introductions will help you go through you the key concepts and user details to understand the project.
 
@@ -22,11 +18,9 @@ These introductions will help you go through you the key concepts and user detai
 
 MatrixOne v0.3.0 has been released, you can see [Release Notes](../../Release-Notes/v0.4.0.md) to know more information.
 
-Currently, we are working at v0.4.0 and v0.5.0 releases, the job tasks of these releases are listed in the Github
-milestones [0.4.0](https://github.com/matrixorigin/matrixone/milestone/5).
+Currently, we are working at v0.4.0 and v0.5.0 releases, the job tasks of these releases are listed in the Github milestones [0.4.0](https://github.com/matrixorigin/matrixone/milestone/5).
 
-For the long-term project roadmap, please refer
-to [MatrixOne roadmap](https://github.com/matrixorigin/matrixone/issues/613) for a more general overview.
+For the long-term project roadmap, please refer to [MatrixOne roadmap](https://github.com/matrixorigin/matrixone/issues/613) for a more general overview.
 
 ## **What Contributions Can I Make**
 
@@ -38,8 +32,7 @@ Contributions to MatrixOne are not limited to writing code. What follows are dif
 
 ## **Working Directories and Files**
 
-For contributing code, [matrixone](https://github.com/matrixorigin/matrixone) is the main repository you'll be working
-on. The main working directories are listed below:
+For contributing code, [matrixone](https://github.com/matrixorigin/matrixone) is the main repository you'll be working on. The main working directories are listed below:
 
 | Directory              | Working Files                                                  |
 | ------------------------------ | ------------------------------------------------------------ |
@@ -93,10 +86,10 @@ export PATH=$PATH:$GOPATH/bin
 
 MatrixOne is an open-source project built on Github, providing project maintainers and contributors with a platform to work together. Thus, in order to start working with MatrixOne repository, you will need a **GitHub** account and learn basic **git** commands.   
 If you don't have a Github account, please register at [https://github.com](https://github.com). In case you do not have [SSH](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/about-ssh) keys, you should generate them and then upload them on GitHub. It is required for sending over your patches. It is also possible to use the same SSH keys that you use with any other SSH servers - probably you already have those.  
-For detailed information about Github, you can see [Github Docs](https://docs.github.com/en).
+For detailed information about Github, you can see [Github Docs](https://docs.github.com/en).  
 
 To work with git repositories, please [install git](http://git-scm.com/downloads).
-And you can learn how to use it throuth following introduction:
+And you can learn how to use it throuth following introduction:  
 
 * A brief manual can be found [here](https://education.github.com/git-cheat-sheet-education.pdf).
 * A detailed manual can be found [here](https://git-scm.com/book/en/v2).

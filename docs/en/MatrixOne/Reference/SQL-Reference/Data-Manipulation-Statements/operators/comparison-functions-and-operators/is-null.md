@@ -4,8 +4,7 @@
 
 The `IS NOT NULL` function tests whether a value is `NULL`.
 
-It returns `TRUE` if a `NULL` value is found, otherwise it returns `FALSE`. It can be used in a `SELECT`, `INSERT`
-, `UPDATE`, or `DELETE` statement.
+It returns `TRUE` if a `NULL` value is found, otherwise it returns `FALSE`. It can be used in a `SELECT`, `INSERT`, `UPDATE`, or `DELETE` statement.
 
 ## **Syntax**
 

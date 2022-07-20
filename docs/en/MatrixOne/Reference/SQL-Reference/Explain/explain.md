@@ -16,46 +16,31 @@ For 0.5.0, only `TEXT` format is supported.
 
 ## Description
 
-This command displays the execution plan that the MatrixOne planner generates for the supplied statement. The execution
-plan shows how the table(s) referenced by the statement will be scanned — by plain sequential scan, index scan, etc. —
-and if multiple tables are referenced, what join algorithms will be used to bring together the required rows from each
-input table.
+This command displays the execution plan that the MatrixOne planner generates for the supplied statement. The execution plan shows how the table(s) referenced by the statement will be scanned — by plain sequential scan, index scan, etc. — and if multiple tables are referenced, what join algorithms will be used to bring together the required rows from each input table.
 
-The most critical part of the display is the estimated statement execution cost, which is the planner's guess at how
-long it will take to run the statement (measured in cost units that are arbitrary, but conventionally mean disk page
-fetches). Actually two numbers are shown: the start-up cost before the first row can be returned, and the total cost to
-return all the rows. For most queries the total cost is what matters, but in contexts such as a subquery in `EXISTS`,
-the planner will choose the smallest start-up cost instead of the smallest total cost (since the executor will stop
-after getting one row, anyway). Also, if you limit the number of rows to return with a `LIMIT` clause, the planner makes
-an appropriate interpolation between the endpoint costs to estimate which plan is really the cheapest.
+The most critical part of the display is the estimated statement execution cost, which is the planner's guess at how long it will take to run the statement (measured in cost units that are arbitrary, but conventionally mean disk page fetches). Actually two numbers are shown: the start-up cost before the first row can be returned, and the total cost to return all the rows. For most queries the total cost is what matters, but in contexts such as a subquery in `EXISTS`, the planner will choose the smallest start-up cost instead of the smallest total cost (since the executor will stop after getting one row, anyway). Also, if you limit the number of rows to return with a `LIMIT` clause, the planner makes an appropriate interpolation between the endpoint costs to estimate which plan is really the cheapest.
 
 ## Parameters
 
 * VERBOSE:
 
-Display additional information regarding the plan. Specifically, include the output column list for each node in the
-plan tree, schema-qualify table and function names, always label variables in expressions with their range table alias,
-and always print the name of each trigger for which statistics are displayed. This parameter is `FALSE` by default.
+Display additional information regarding the plan. Specifically, include the output column list for each node in the plan tree, schema-qualify table and function names, always label variables in expressions with their range table alias, and always print the name of each trigger for which statistics are displayed. This parameter is `FALSE` by default.
 
 * FORMAT:
 
-Specify the output format, which can be TEXT, JSON. Non-text output contains the same information as the text output
-format, but is easier for programs to parse. This parameter is `TEXT` by dafault.
+Specify the output format, which can be TEXT, JSON. Non-text output contains the same information as the text output format, but is easier for programs to parse. This parameter is `TEXT` by dafault.
 
 * BOOLEAN:
 
-Specifies whether the selected option should be turned on or off. You can write `TRUE`to enable the option, and `FALSE`
-to disable it. The *`boolean`* value can also be omitted, in which case `TRUE` is assumed.
+Specifies whether the selected option should be turned on or off. You can write `TRUE`to enable the option, and `FALSE` to disable it. The *`boolean`* value can also be omitted, in which case `TRUE` is assumed.
 
 * STETEMENT
 
-MatrixOne supports any `SELECT`, `UPDATE`, `DELETE` statement execution plan. For `INSERT` statement,
-only `INSERT INTO..SELECT` is supported in 0.5.0 version. `INSERT INTO...VALUES` is not supported yet.
+MatrixOne supports any `SELECT`, `UPDATE`, `DELETE` statement execution plan. For `INSERT` statement, only `INSERT INTO..SELECT` is supported in 0.5.0 version. `INSERT INTO...VALUES` is not supported yet.
 
 ## Output Structure
 
-The command's result is a textual description of the plan selected for the *`statement`*, optionally annotated with
-execution statistics.
+The command's result is a textual description of the plan selected for the *`statement`*, optionally annotated with execution statistics.
 
 Take the following SQL as an example, we demonstrate the output structure.
 
@@ -84,10 +69,7 @@ explain select city,libname1,count(libname1) as a from t3 join t1 on libname1=li
 13 rows in set (0.00 sec)
 ```
 
-EXPLAIN outputs a tree structure, named as `Execution Plan Tree`. Every leaf node includes the information of node type,
-affected objects and other properties such as `cost`, `rowsize` etc. We can simplify the above example only with node
-type information. It visualizes the whole process of a SQL query, shows which operation nodes it goes through and what
-are their cost estimation.
+EXPLAIN outputs a tree structure, named as `Execution Plan Tree`. Every leaf node includes the information of node type, affected objects and other properties such as `cost`, `rowsize` etc. We can simplify the above example only with node type information. It visualizes the whole process of a SQL query,  shows which operation nodes it goes through and what are their cost  estimation.
 
 ```
 Project
@@ -174,7 +156,7 @@ In 0.5.0 version, the following node types are supported.
 | -------- | ------------------------------------------------------------ | ----------------------------- |
 | cost     | (cost=0.00..0.00 card=25.00 ndv=0.00 rowsize=0)              | Estimated cost                |
 | output   | Output: #[0,0], #[0,1], #[0,2], #[0,3], #[0,4], #[0,5], #[0,6], #[0,7] | Node output information       |
-| Sort Key | Sort Key: #[0,0] DESC, #[0,1] INTERNAL                      | Sort key                      |
+| Sort Key | Sort Key: #[0,0] DESC,  #[0,1] INTERNAL                      | Sort key                      |
 | Limit    | Limit: 10                                                    | Number limit for output data  |
 | Offset   | Offset: 20                                                   | Number offset for output data |
 

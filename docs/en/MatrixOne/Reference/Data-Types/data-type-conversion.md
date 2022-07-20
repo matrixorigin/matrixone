@@ -1,10 +1,9 @@
 ## **Data Type Conversion**
 
-MatrixOne supports the conversion between different data types, the supported and unsupported conversions are listed in
-the following table.
+MatrixOne supports the conversion between different data types, the supported and unsupported conversions are listed in the following table.
 
 * **Castable**: explicit conversion with  `cast` function.
-* **Coercible**: implicit conversion without `cast` function.
+* **Coercible**: implicit conversion without `cast` function. 
 
 | Source Data Type             | Target Data Type | **Castable** | **Coercible** |
 | ---------------------------- | ---------------- | ------------ | ------------- |

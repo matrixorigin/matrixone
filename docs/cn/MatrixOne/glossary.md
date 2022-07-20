@@ -32,9 +32,9 @@
 | S  |  |
 | Snapshot Isolation (SI) | Snapshot Isolation是一种在实践中广泛应用的多版本并发控制技术，MatrixOne支持Snapshot隔离级别的分布式事务。|
 | Store |MatrixCube分布式系统包括一定数量的主机，数据正是存放在这些机器中，而我们把集群中的每台主机称之为Store。|
-  | Shard | 数据库中的数据按逻辑组织成表，而数据又可以按照不同的分区进行存储，如此可以得到更好的扩展性。因此，数据在MatrixCube集群中分片存储，每个数据分片我们称之为一个Shard，而一个Store中可以管理多个Shard；当Shard的存储容量超过限制时，会进行分裂(Split)。 |
- | Shard Splitting | 当一个Shard超过了规定的存储容量限制时，MatrixCube将会把该Shard分裂（Split）为两个存储量相当的Shard。 |
-  | Shard Proxy | Shard Proxy是接受用户读写请求的中心模块，在收到请求后将其发送到相应的节点以做出回应|
+| Shard | 数据库中的数据按逻辑组织成表，而数据又可以按照不同的分区进行存储，如此可以得到更好的扩展性。因此，数据在MatrixCube集群中分片存储，每个数据分片我们称之为一个Shard，而一个Store中可以管理多个Shard；当Shard的存储容量超过限制时，会进行分裂(Split)。 |
+| Shard Splitting | 当一个Shard超过了规定的存储容量限制时，MatrixCube将会把该Shard分裂（Split）为两个存储量相当的Shard。 |
+| Shard Proxy | Shard Proxy是接受用户读写请求的中心模块，在收到请求后将其发送到相应的节点以做出回应|
 
 ### **重要概念**
 

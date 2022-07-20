@@ -3,7 +3,7 @@ name: WeWork Robot
 # Controls when the workflow will run
 on:
   issues:
-    types: [ closed, assigned ]
+    types: [closed, assigned]
   schedule:
     - cron: '30 8 * * *'
   workflow_dispatch:
@@ -12,10 +12,10 @@ on:
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel.
 jobs:
   issue-notify:
-    if: github.event_name == 'issues' && github.event.action == 'assigned'
+    if : github.event_name == 'issues' && github.event.action == 'assigned'
     runs-on: ubuntu-latest
     steps:
-      - name: ISSUE Triggered
+      - name : ISSUE Triggered
         uses: chf007/action-wechat-work@master
         env:
           WECHAT_WORK_BOT_WEBHOOK: ${{secrets.WECHAT_WORK_BOT_WEBHOOK}}
@@ -25,7 +25,7 @@ jobs:
           content: "New Issue Opened or Assigned: [${{ github.event.issue.title }}](${{ github.event.issue.html_url }})\nAssignees:<font color=\"warning\">${{ join(github.event.issue.assignees.*.login, ', ') }}</font>\nOpen Issue Number: <font color=\"warning\">${{ github.event.repository.open_issues }}</font>"
 
   issue-reopen:
-    if: github.event.issue.user.login != github.event.sender.login && github.event.action == 'closed' && github.event.sender.login != 'yingfeng' && github.event.sender.login != 'aressu1985'
+    if : github.event.issue.user.login != github.event.sender.login && github.event.action == 'closed' && github.event.sender.login != 'yingfeng' && github.event.sender.login != 'aressu1985'
     runs-on: ubuntu-latest
     steps:
       - name: Reopen Issue

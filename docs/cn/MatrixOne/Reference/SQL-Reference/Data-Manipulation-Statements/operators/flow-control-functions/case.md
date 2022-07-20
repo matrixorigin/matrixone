@@ -30,7 +30,7 @@ CASE WHEN condition THEN result [WHEN condition THEN result ...] [ELSE result] E
 如果没有一个 `value=compare_value` 或者 `condition` 为 `true`，那么就会返回 `ELSE` 对应的结果，如果没有 `ELSE` 分支，那么返回 `NULL`。
 
 !!! note  "<font size=4>note</font>"
-<font size=3> `CASE` 语句不能有 `ELSE NULL` 从句, 并且 `CASE` 语句必须以 `END CASE` 结尾。
+    <font size=3> `CASE` 语句不能有 `ELSE NULL` 从句, 并且 `CASE` 语句必须以 `END CASE` 结尾。
 </font>
 
 ## **示例**

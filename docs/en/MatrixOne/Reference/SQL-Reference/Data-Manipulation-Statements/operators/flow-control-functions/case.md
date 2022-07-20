@@ -2,12 +2,9 @@
 
 ## **Description**
 
-`CASE WHEN` statement is used in that evaluates a list of conditions and returns one of multiple possible result
-expressions.
+`CASE WHEN` statement is used in that evaluates a list of conditions and returns one of multiple possible result expressions.
 
-Cases come in two formats: a simple `CASE` function compares an expression to a set of simple expressions to determine
-the result. The `CASE` search function evaluates a set of Boolean expressions to determine the result. Both formats
-support the optional `ELSE` argument.
+Cases come in two formats: a simple `CASE` function compares an expression to a set of simple expressions to determine the result. The `CASE` search function evaluates a set of Boolean expressions to determine the result. Both formats support the optional `ELSE` argument.
 
 ## **Syntax**
 
@@ -25,12 +22,10 @@ This `CASE` syntax returns the result for the first value=compare_value comparis
 CASE WHEN condition THEN result [WHEN condition THEN result ...] [ELSE result] END
 ```
 
-This `CASE` syntax returns the result for the first condition that is true. If no comparison or condition is true, the
-result after ELSE is returned, or NULL if there is no ELSE part.
+This `CASE` syntax returns the result for the first condition that is true. If no comparison or condition is true, the result after ELSE is returned, or NULL if there is no ELSE part.
 
 !!! note  "<font size=4>note</font>"
-<font size=3>The `CASE` statement cannot have an `ELSE NULL` clause, and it is terminated with `END CASE` instead
-of `END`.
+    <font size=3>The `CASE` statement cannot have an `ELSE NULL` clause, and it is terminated with `END CASE` instead of `END`.
 </font>
 
 ## **Examples**

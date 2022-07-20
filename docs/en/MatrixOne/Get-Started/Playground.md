@@ -10,32 +10,29 @@
 You can only operate in **read-only** mode in MatixOrigin Playground，so DDL commands and part of DML commands which may change the data are not available. The detail limitations are shown below:
 
 * **DDL** commands are not available:  
-  `create/drop table` , `truncate` , `update` , `set` , `use`
+`create/drop table` , `truncate` , `update` , `set` , `use`  
 
 * Part of **DML** commands are not available：  
-  `insert` , `replace` , `delete`,`select into`
+`insert` , `replace` , `delete`,`select into`  
 
 * `commit` is not available
 
 * `call` is not available
 
-* **max_result_rows**=2000
+* **max_result_rows**=2000  
 
 ## **Examples**
 
-In Playground, You can follow different interactive tutorials and pick one in the list box, and now the supported
-tutorials are shown below:
+In Playground, You can follow different interactive tutorials and pick one in the list box, and now the supported tutorials are shown below:  
 
 * [**SSB Test with MatrixOne**](https://playground.matrixorigin.io/?tutorial=SSB-test-with-matrixone&step=1)
 
-We will use **SSB Test** as an example to show you the overall operation process of Playground.
+We will use **SSB Test** as an example to show you the overall operation process of Playground.  
 
-### **Test Preperations**
+### **Test Preperations**  
 
-This tutorial walks you through the most popular **Star Schema Benchmark（SSB）**Test SQL statements with MatrixOne. To
-better experience MatrixOne's features and performance, test queries in this tutorial will run without filters.  
-Before you start, the test datasets have been pre-loaded in database `ssb`. To list available tables in the database you
-can query :
+This tutorial walks you through the most popular **Star Schema Benchmark（SSB）**Test SQL statements with MatrixOne. To better experience MatrixOne's features and performance, test queries in this tutorial will run without filters.  
+Before you start, the test datasets have been pre-loaded in  database `ssb`. To list available tables in the database you can query :
 
 ```
 SHOW TABLES；

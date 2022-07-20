@@ -18,9 +18,7 @@ where option can be one of:
 
 此命令主要作用是显示出 MatrixOne 计划程序为提供的语句生成的执行计划。执行计划显示了如何通过普通顺序扫描、索引扫描等方式扫描语句引用的表，如果引用了多个表，将使用什么连接算法将每个输入表中所需的行聚集在一起。
 
-显示的最关键部分是估计语句执行成本，即计划程序将估计运行语句所需时间(以任意一种成本单位衡量，但通常是听过磁盘页获取)
-。实际上这里显示了两个数字：返回第一行之前的启动成本，以及返回所有行的总成本。对于大多数查询来说，总成本是最重要的，但在 `EXISTS` 中的子查询中，计划程序会选择最小的启动成本，而不是最小的总成本(因为执行者在获得一行之后就会停止)
-。此外，如果您使用 `LIMIT` 从句限制返回的行数，计划程序将在端点成本之间进行适当的插值，以便估计哪个计划真正是最便宜的。
+显示的最关键部分是估计语句执行成本，即计划程序将估计运行语句所需时间(以任意一种成本单位衡量，但通常是听过磁盘页获取)。实际上这里显示了两个数字：返回第一行之前的启动成本，以及返回所有行的总成本。对于大多数查询来说，总成本是最重要的，但在 `EXISTS` 中的子查询中，计划程序会选择最小的启动成本，而不是最小的总成本(因为执行者在获得一行之后就会停止)。此外，如果您使用 `LIMIT` 从句限制返回的行数，计划程序将在端点成本之间进行适当的插值，以便估计哪个计划真正是最便宜的。
 
 ## 参数释义
 
@@ -38,8 +36,7 @@ where option can be one of:
 
 * STETEMENT
 
-MatrixOne 支持任何`SELECT`，`UPDATE`，`DELETE` 语句执行计划。在 MatrixOne 0.5.0 版本中仅支持 `INSERT`语句类型中的 `INSERT INTO..SELECT`
-语句，暂不支持 `INSERT INTO...VALUES` 语句。
+MatrixOne 支持任何`SELECT`，`UPDATE`，`DELETE` 语句执行计划。在 MatrixOne 0.5.0 版本中仅支持 `INSERT`语句类型中的 `INSERT INTO..SELECT` 语句，暂不支持 `INSERT INTO...VALUES` 语句。
 
 ## 输出结构
 
@@ -72,8 +69,7 @@ explain select city,libname1,count(libname1) as a from t3 join t1 on libname1=li
 13 rows in set (0.00 sec)
 ```
 
-EXPLAIN 输出一个名称为 `Execution Plan Tree` 树形结构，每个叶子节点都包含节点类型、受影响的对象以及其他属性的信息，如 `cost`， `rowsize`
-等。我们现在只使用节点类型信息来简化展示上面的示例。`Execution Plan Tree` 树形结构可以可视化 SQL 查询的整个过程，显示它所经过的操作节点以及它们的成本估计。
+EXPLAIN 输出一个名称为 `Execution Plan Tree` 树形结构，每个叶子节点都包含节点类型、受影响的对象以及其他属性的信息，如 `cost`， `rowsize` 等。我们现在只使用节点类型信息来简化展示上面的示例。`Execution Plan Tree` 树形结构可以可视化 SQL 查询的整个过程，显示它所经过的操作节点以及它们的成本估计。
 
 ```
 Project
@@ -160,7 +156,7 @@ MatrixOne 0.5.0 版本支持以下节点类型。
 | -------- | ------------------------------------------------------------ | ----------------------------- |
 | cost     | (cost=0.00..0.00 card=25.00 ndv=0.00 rowsize=0)              | Estimated cost                |
 | output   | Output: #[0,0], #[0,1], #[0,2], #[0,3], #[0,4], #[0,5], #[0,6], #[0,7] | Node output information       |
-| Sort Key | Sort Key: #[0,0] DESC, #[0,1] INTERNAL                      | Sort key                      |
+| Sort Key | Sort Key: #[0,0] DESC,  #[0,1] INTERNAL                      | Sort key                      |
 | Limit    | Limit: 10                                                    | Number limit for output data  |
 | Offset   | Offset: 20                                                   | Number offset for output data |
 

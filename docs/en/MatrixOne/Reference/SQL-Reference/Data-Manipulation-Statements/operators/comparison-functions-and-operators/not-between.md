@@ -2,8 +2,7 @@
 
 ## **Description**
 
-If expr is less than or equal to min and expr is greater than or equal to max, NOT BETWEEN returns `true`, otherwise it
-returns `false`.
+If expr is less than or equal to min and expr is greater than or equal to max, NOT BETWEEN returns `true`, otherwise it returns `false`.
 
 ## **Syntax**
 

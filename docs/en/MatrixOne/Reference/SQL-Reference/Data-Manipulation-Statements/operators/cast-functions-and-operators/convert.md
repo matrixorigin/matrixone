@@ -23,13 +23,13 @@ Or:
 |  ----  | ----  |
 | value  | Required. The value to convert. |
 | datatype  | Required. The datatype to convert to. |
-| charset |    Required. The character set to convert to. |
+| charset |	Required. The character set to convert to. |
 
 Currently, `convert` can support following conversion:
 
-* Conversion between numeric types, mainly including SIGNED, UNSIGNED, FLOAT, and DOUBLE type.
-* Numeric types to character CHAR type.
-* Numeric character types to numerical types(negative into SIGNED).
+ * Conversion between numeric types, mainly including SIGNED, UNSIGNED, FLOAT, and DOUBLE type.
+ * Numeric types to character CHAR type.
+ * Numeric character types to numerical types(negative into SIGNED).
 
 ## **Examples**
 

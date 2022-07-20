@@ -48,8 +48,8 @@ MatrixOne 的数据类型与MySQL数据类型的定义一致，可参考：
 
 |  数据类型   | 存储空间  |  精度   | 语法表示 |
 |  ----  | ----  |  ----  | ----  |
-| Decimal64  | 8 byte |    19位  | Decimal(N,S), N范围(1,18), S范围(0,N) |
-| Decimal128  | 16 byte |    38位  | Decimal(N,S), N范围(19,38), S范围(0,N) |
+| Decimal64  | 8 byte | 	19位  | Decimal(N,S), N范围(1,18), S范围(0,N) |
+| Decimal128  | 16 byte | 	38位  | Decimal(N,S), N范围(19,38), S范围(0,N) |
 
 ## **示例**
 

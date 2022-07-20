@@ -26,7 +26,7 @@ $ ./dbgen -s 1 -T s
 $ ./dbgen -s 1 -T d
 ```
 
-We have also prepared a 1GB dataset for downloading. You can get the data files directly:
+We have also prepared a 1GB dataset for downloading.  You can get the data files directly:
 
 ```
 https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/lineorder_flat.tar.bz2

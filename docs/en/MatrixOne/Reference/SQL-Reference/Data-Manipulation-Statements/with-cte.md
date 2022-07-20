@@ -2,11 +2,9 @@
 
 ## **Description**
 
-A common table expression (CTE) is a named temporary result set that exists within the scope of a single statement and
-that can be referred to later within that statement, possibly multiple times.
+A common table expression (CTE) is a named temporary result set that exists within the scope of a single statement and that can be referred to later within that statement, possibly multiple times.
 
-To specify common table expressions, use a `WITH` clause that has one or more comma-separated subclauses. Each
-sub-clause provides a subquery that produces a result set, and associates a name with the subquery.
+To specify common table expressions, use a `WITH` clause that has one or more comma-separated subclauses. Each sub-clause provides a subquery that produces a result set, and associates a name with the subquery.
 
 ## **Syntax**
 

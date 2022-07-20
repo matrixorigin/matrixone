@@ -1,6 +1,6 @@
 # **Install standalone MatrixOne**
 
-MatrixOne supports Linux and MacOS. You can install a standalone MatrixOne version by 3 methods:
+MatrixOne supports Linux and MacOS. You can install a standalone MatrixOne version by 3 methods: 
 
 * Building from source.
 * Using binary package.
@@ -16,8 +16,7 @@ Go version 1.18 is required.
 
 #### 2. Get the MatrixOne code
 
-Depending on your needs, choose whether you want to keep your code up to date, or if you want to get the latest stable
-version of the code.
+Depending on your needs, choose whether you want to keep your code up to date, or if you want to get the latest stable version of the code.
 
 ##### Option 1: Get the MatrixOne(Preview Version) code
 
@@ -30,8 +29,7 @@ $ cd matrixone
 
 ##### Option 2: Get the MatrixOne(Stable Version) code
 
-If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **
-0.5.0** first.
+If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **0.5.0** first.
 
 ```
 $ git clone https://github.com/matrixorigin/matrixone.git
@@ -62,8 +60,7 @@ See [Connect to MatrixOne server](connect-to-matrixone-server.md).
 
 ## **Method 2: Downloading binary packages**
 
-For each release, you can download binary packages directly to run MatrixOne in the X86_64 Linux or Mac X86_64
-environment.
+For each release, you can download binary packages directly to run MatrixOne in the X86_64 Linux or Mac X86_64 environment.
 
 #### 1. Download binary packages and decompress
 

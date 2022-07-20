@@ -2,11 +2,9 @@
 
 ## **Description**
 
-The `DIV` operator is used for integer division. Discards from the division result any fractional part to the right of
-the decimal point.
+The `DIV` operator is used for integer division. Discards from the division result any fractional part to the right of the decimal point.
 
-If either operand has a non-integer type, the operands are converted to `DECIMAL` and divided using `DECIMAL` arithmetic
-before converting the result to `BIGINT`. If the result exceeds `BIGINT` range, an error occurs.
+If either operand has a non-integer type, the operands are converted to `DECIMAL` and divided using `DECIMAL` arithmetic before converting the result to `BIGINT`. If the result exceeds `BIGINT` range, an error occurs.
 
 ## **Syntax**
 

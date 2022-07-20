@@ -69,7 +69,7 @@ MatrixOne is a future-oriented hyper-converged cloud and edge native DBMS that s
   <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/all-in-one.png?raw=true">
 </p>
 
-## 🎯 <a id="key-features">Key Features</a>
+##  🎯 <a id="key-features">Key Features</a>
 ### 💥 **Hyper-converged Engine**
 
 <details>
@@ -113,7 +113,6 @@ MatrixOne is a future-oriented hyper-converged cloud and edge native DBMS that s
 </details>
 
 ## 💎 **<a id="user-values">User Values</a>**
-
 <details>
   <summary><b><font size=4>Simplify Database Management and Maintenance</b></font></summary>
      To solve the problem of high and unpredictable cost of database selection process, management and maintenance due to database overabundance, MatrixOne all-in-one architecture will significantly simplify database management and maintenance, single database can serve multiple data applications.
@@ -143,30 +142,25 @@ MatrixOne is a future-oriented hyper-converged cloud and edge native DBMS that s
 
 
 ## 🔎 <a id="architecture">Architecture</a>
-MatrixOne's architecture is as below:
+MatrixOne's architecture is as below:   
 <p align="center">
   <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone_new_arch.png?raw=true">
 </p>
 
-For more details, you can
-checkout [MatrixOne Architecture](https://docs.matrixorigin.io/0.5.0/MatrixOne/Overview/matrixone-architecture/).
+For more details, you can checkout [MatrixOne Architecture](https://docs.matrixorigin.io/0.5.0/MatrixOne/Overview/matrixone-architecture/).
+
 
 ## ⚡️ <a id="quick-start">Quick start</a>
 
+
 ### ⚙️ Install MatrixOne
-
-MatrixOne supports Linux and MacOS. You can install MatrixOne either by [building from source](#building-from-source)
-or [using docker](#using-docker).
-For other installation types, please refer
-to [MatrixOne installation](https://docs.matrixorigin.io/0.5.0/MatrixOne/Get-Started/install-standalone-matrixone/) for
-more details.
-
+MatrixOne supports Linux and MacOS. You can install MatrixOne either by [building from source](#building-from-source) or [using docker](#using-docker).
+For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.io/0.5.0/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
 #### **Building from source**
 
 1. Install Go (version 1.18 is required).
 
-2. Get the MatrixOne code: Depending on your needs, choose whether you want to keep your code up to date, or if you want
-   to get the latest stable version of the code.
+2. Get the MatrixOne code: Depending on your needs, choose whether you want to keep your code up to date, or if you want to get the latest stable version of the code.
 
 - *Option 1*: Get the MatrixOne(Preview Version) code
 
@@ -179,8 +173,7 @@ $ cd matrixone
 
 - *Option 2*: Get the MatrixOne(Stable Version) code
 
-If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **
-0.5.0** first.
+If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **0.5.0** first.
 
 ```
 $ git clone https://github.com/matrixorigin/matrixone.git
@@ -203,16 +196,15 @@ $ make build
 $ ./mo-server system_vars_config.toml
 ```
 
-#### **Using docker**
 
+#### **Using docker**
 1. Make sure Docker is installed, verify Docker daemon is running in the background:
 
 ```
 $ docker --version
 ```
 
-2. Create and run the container for the latest release of MatrixOne. It will pull the image from Docker Hub if not
-   exists.
+2. Create and run the container for the latest release of MatrixOne. It will pull the image from Docker Hub if not exists.
 
 It will pull the image from Docker Hub if not exists. You can choose to pull the latest image or a stable version.
 
@@ -232,19 +224,16 @@ $ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
 
 1. Install MySQL client.
 
-   MatrixOne supports the MySQL wire protocol, so you can use MySQL client drivers to connect from various languages.
-   Currently, MatrixOne is only compatible with Oracle MySQL client. This means that some features might not work with
-   MariaDB client.
+   MatrixOne supports the MySQL wire protocol, so you can use MySQL client drivers to connect from various languages. Currently, MatrixOne is only compatible with Oracle MySQL client. This means that some features might not work with MariaDB client.
 
 2. Connect to MatrixOne server:
 
 ```
 $ mysql -h IP -P PORT -uUsername -p
 ```
+   The connection string is the same format as MySQL accepts. You need to provide a user name and a password.
 
-The connection string is the same format as MySQL accepts. You need to provide a user name and a password.
-
-Use the built-in test account for example:
+   Use the built-in test account for example:
 
    - user: dump
    - password: 111
@@ -262,8 +251,7 @@ Now, MatrixOne only supports the TCP listener.
 ## 🙌 <a id="contributing">Contributing</a>
 
 Contributions to MatrixOne are welcome from everyone.  
-See [Contribution Guide](https://docs.matrixorigin.io/0.5.0/MatrixOne/Contribution-Guide/make-your-first-contribution/)
-for details on submitting patches and the contribution workflow.
+ See [Contribution Guide](https://docs.matrixorigin.io/0.5.0/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow.
 
 ### 👏 All contributors
 

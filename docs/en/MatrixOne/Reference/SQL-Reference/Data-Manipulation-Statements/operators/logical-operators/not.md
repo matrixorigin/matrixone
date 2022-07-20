@@ -2,8 +2,7 @@
 
 ## **Description**
 
-Logical `NOT,!`. Evaluates to `true` if the operand is 0, to `false` if the operand is nonzero, and NOT NULL returns
-NULL.
+Logical `NOT,!`. Evaluates to `true` if the operand is 0, to `false` if the operand is nonzero, and NOT NULL returns NULL.
 
 ## **Syntax**
 

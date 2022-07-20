@@ -1,8 +1,6 @@
 # **完成 TPCH 测试**
 
-TPC
-Benchmark™H（TPC-H）是决策支持基准。它由一套面向业务的即时查询（ad-hoc）和并发数据修改组成。选择查询和填充数据库的数据具有广泛的行业相关性。该基准测试解释说明了决策支持系统，该系统可检查大量数据，执行高度复杂的查询并为关键业务问题提供答案。TPC-H
-是 OLAP 数据库广泛使用的基准测试。
+TPC Benchmark™H（TPC-H）是决策支持基准。它由一套面向业务的即时查询（ad-hoc）和并发数据修改组成。选择查询和填充数据库的数据具有广泛的行业相关性。该基准测试解释说明了决策支持系统，该系统可检查大量数据，执行高度复杂的查询并为关键业务问题提供答案。TPC-H 是 OLAP 数据库广泛使用的基准测试。
 
 通过阅读本教程，您将学习如何使用 MatrixOne 完成 TPC-H 测试。
 
@@ -892,8 +890,7 @@ order by
 
 以下为22个 TPCH 查询的预期结果。
 
-说明：由于 Q16
-的结果段落过长，无法在下文展示，请参阅此连结的完整结果：[Q16运行预期结果](https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/tpch/tpch1g_result_matrixone.md)
+说明：由于 Q16 的结果段落过长，无法在下文展示，请参阅此连结的完整结果：[Q16运行预期结果](https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/tpch/tpch1g_result_matrixone.md)
 
 ```
 Q1

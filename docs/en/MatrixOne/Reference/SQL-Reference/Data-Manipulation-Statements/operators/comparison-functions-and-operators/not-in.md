@@ -2,8 +2,7 @@
 
 ## **Description**
 
-The `NOT IN` operator allows you to specify multiple values in a `WHERE` clause. And it's a shorthand for multiple `XOR`
-conditions.
+The `NOT IN` operator allows you to specify multiple values in a `WHERE` clause. And it's a shorthand for multiple `XOR` conditions.
 
 ## **Syntax**
 
@@ -50,6 +49,6 @@ a	b	c	d	e
 
 ## **Constraints**
 
-* Currently, only constant lists are supported on the left side of `NOT IN`.
+* Currently, only constant lists are supported on the left side of `NOT IN`.  
 * There can only be a single column to the left of `NOT IN`, not a tuple of multiple columns.
 * `NULL` values couldn’t appear in the list to the right of `NOT IN`.  

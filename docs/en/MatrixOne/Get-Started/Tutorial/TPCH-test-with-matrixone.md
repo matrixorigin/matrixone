@@ -1,23 +1,16 @@
 # **Complete a TPCH Test with MatrixOne**
 
-The TPC-H is a decision support benchmark. It consists of a suite of business oriented ad-hoc queries and concurrent
-data modifications. The queries and the data populating the database have been chosen to have broad industry-wide
-relevance. This benchmark illustrates decision support systems that examine large volumes of data, execute queries with
-a high degree of complexity, and give answers to critical business questions. TPC-H is a widely used benchmark for OLAP
-databases.
+The TPC-H is a decision support benchmark. It consists of a suite of business oriented ad-hoc queries and concurrent data modifications. The queries and the data populating the database have been chosen to have broad industry-wide relevance. This benchmark illustrates decision support systems that examine large volumes of data, execute queries with a high degree of complexity, and give answers to critical business questions. TPC-H is a widely used benchmark for OLAP databases. 
 
 By walking through this tutorial, you'll learn how to complete a TPC-H Test with MatrixOne.
 
 ## **Before you begin**
 
-Make sure you have already [installed MatrixOne](../install-standalone-matrixone.md)
-and [connected to MatrixOne Server](../connect-to-matrixone-server.md).
+Make sure you have already [installed MatrixOne](../install-standalone-matrixone.md) and [connected to MatrixOne Server](../connect-to-matrixone-server.md).
 
 ## **1. Compile TPCH dbgen**
 
-The tpch dbgen utility generates, by default, a set of flat files suitable for loading into the tpch schema with the
-size based on the “Scale Factor” argument. A scale factor of 1 produces a complete data set of approximately 1 GB, a
-scale factor of 10 produces a data set of approximately 10 GB etc.
+The tpch dbgen utility generates, by default, a set of flat files suitable for loading into the tpch schema with the size based on the “Scale Factor” argument. A scale factor of 1 produces a complete data set of approximately 1 GB, a scale factor of 10 produces a data set of approximately 10 GB etc.
 
 ```
 $ git clone https://github.com/electrum/tpch-dbgen.git
@@ -47,7 +40,7 @@ total 2150000
 -rw-r--r--  1 deister  staff    1409184 13 may 12:05 supplier.tbl
 ```
 
-We have also prepared a 1GB dataset for downloading. You can get the data files directly:
+We have also prepared a 1GB dataset for downloading.  You can get the data files directly:
 
 ```
 https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/tpch/tpch-1g.zip
@@ -55,8 +48,7 @@ https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/tpch/tpch-1
 
 ## **3. Create tables in MatrixOne**
 
-As MatrixOne doesn't support composite primary key nor partition yet, we slightly modified the `PARTSUPP` and `LINEITEM`
-table creation.
+As MatrixOne doesn't support composite primary key nor partition yet, we slightly modified the `PARTSUPP` and `LINEITEM` table creation. 
 
 * The composite primary key of `PARTSUPP` and `LINEITEM` tables are removed.
 * `PARTITION BY KEY()` is removed for `LINEITEM` table.
@@ -179,7 +171,7 @@ load data infile '/YOUR_TPCH_DATA_PATH/customer.tbl' into table CUSTOMER FIELDS 
 load data infile '/YOUR_TPCH_DATA_PATH/lineitem.tbl' into table LINEITEM FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
 ```
 
-Then you can query data in MatrixOne with the created table.
+Then you can query data in MatrixOne with the created table. 
 
 ## **5. Run TPCH Queries**
 
@@ -893,8 +885,7 @@ order by
 
 ## **6. Expected Results**
 
-Below are the expected results for the 22 TPCH queries. Q16's result is too long to print, please refer to the complete
-result in this link：
+Below are the expected results for the 22 TPCH queries. Q16's result is too long to print, please refer to the complete result in this  link：
 
 ```
 https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/tpch/tpch1g_result_matrixone.md

@@ -3,8 +3,7 @@
 ## **Description**
 
 If expr1 is not `NULL`, `IFNULL()` returns expr1; otherwise it returns expr2.
-The default return type of `IFNULL(expr1,expr2)` is the more “general” of the two expressions, in the order `STRING`
-, `REAL`, or `INTEGER`.
+The default return type of `IFNULL(expr1,expr2)` is the more “general” of the two expressions, in the order `STRING`, `REAL`, or `INTEGER`.
 
 ## **Syntax**
 

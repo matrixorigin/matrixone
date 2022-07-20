@@ -2,8 +2,7 @@
 
 ## **Description**
 
-Logical `XOR`. Returns `NULL` if either operand is NULL. For non-NULL operands, evaluates to `true` if an odd number of
-operands is nonzero, otherwise `false` is returned.
+Logical `XOR`. Returns `NULL` if either operand is NULL. For non-NULL operands, evaluates to `true` if an odd number of operands is nonzero, otherwise `false` is returned.
 
 `a XOR b` is mathematically equal to `(a AND (NOT b)) OR ((NOT a) and b)`.
 

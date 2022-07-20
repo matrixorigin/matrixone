@@ -1,13 +1,10 @@
-From the 0.5.0 version, MatrixOne introduces an automatic testing
-framework [MO-Tester](https://github.com/matrixorigin/mo-tester).
+From the 0.5.0 version, MatrixOne introduces an automatic testing framework [MO-Tester](https://github.com/matrixorigin/mo-tester).
 
 This tester is designed to test MatrixOne or other database functionalities with SQL.
 
 # What's in MO-Tester?
 
-MO-Tester is a java-based tester suite for MatrixOne. It has built a whole toolchain to run automatic SQL tests. It
-contains the test cases and results. Once launched, MO-Tester runs all SQL test cases with MatrixOne, and compares all
-output SQL results with expected results. All successful and failed cases will be logged into reports.
+MO-Tester is a java-based tester suite for MatrixOne. It has built a whole toolchain to run automatic SQL tests. It contains the test cases and results. Once launched, MO-Tester runs all SQL test cases with MatrixOne, and compares all output SQL results with expected results. All successful and failed cases will be logged into reports.
 
 MO-Tester content locations:
 
@@ -17,8 +14,7 @@ MO-Tester content locations:
 
 * *Report*: once finished running, a `mo-tester/report` will be generated in local directory.
 
-The Cases and Results are 1-1 correspondence, and they are actually `git submodules` from MatrixOne repository. Adding
-new cases and results should be in MatrixOne repo: <https://github.com/matrixorigin/matrixone/tree/main/test>
+The Cases and Results are 1-1 correspondence, and they are actually `git submodules` from MatrixOne repository. Adding new cases and results should be in MatrixOne repo: <https://github.com/matrixorigin/matrixone/tree/main/test>
 
 MO-Tester includes testing cases in the following table.
 
@@ -43,9 +39,7 @@ MO-Tester includes testing cases in the following table.
 
 * Make sure you have installed jdk8.
 
-* Launch MatrixOne or other database instance. Please refer to more information
-  about [how to install and launch MatrixOne](https://docs.matrixorigin.io/0.5.0/MatrixOne/Get-Started/install-standalone-matrixone/)
-  .
+* Launch MatrixOne or other database instance. Please refer to more information about [how to install and launch MatrixOne](https://docs.matrixorigin.io/0.5.0/MatrixOne/Get-Started/install-standalone-matrixone/).
 
 * Clone `mo-tester` repository.
 
@@ -55,9 +49,7 @@ MO-Tester includes testing cases in the following table.
 
 ## 2. Configure `mo-tester`
 
-* In `mo.yml` file, configure the server address, default database name, username&password, etc. MO-tester is based on
-  java, so these parameters are required for the JDBC driver. Below is a default example for a local standalone version
-  MatrixOne.
+* In `mo.yml` file, configure the server address, default database name, username&password, etc. MO-tester is based on java, so these parameters are required for the JDBC driver. Below is a default example for a local standalone version MatrixOne.
 
   ```
   #jdbc
@@ -85,15 +77,13 @@ MO-Tester includes testing cases in the following table.
 
 ## 3. Run mo-tester
 
-* With the simple below command, all the SQL test cases will automatically run and generate reports and error messages
-  to `report/report.txt` and `report/error.txt`.
+* With the simple below command, all the SQL test cases will automatically run and generate reports and error messages to `report/report.txt` and `report/error.txt`.
 
 ```
 > ./run.sh
 ```
 
-If you'd like to adjust the test range, you can just change the `path` parameter of `run.yml`. And you can also specify
-some parameters when executing the command `run.sh`, parameters are as followings:
+If you'd like to adjust the test range, you can just change the `path` parameter of `run.yml`. And you can also specify some 			parameters when executing the command `run.sh`, parameters are as followings:
 
 ```
 -p  set the path of test cases needed to be executed by mo-tester, the default value is configured by the `path` in `run.yaml`
@@ -114,9 +104,7 @@ Examples:
 bash run.sh -p case -m run -t script -r 100 -i select,subquery -e substring -g
 ```
 
-If you want to automatically generate SQL results for the new SQL cases, you can just change the `method` parameter
-of `run.yml` to `genrs`. Running the `run.sh` scripts will directly record test results in the `result/` path with their
-original filenames.
+If you want to automatically generate SQL results for the new SQL cases, you can just change the `method` parameter of `run.yml` to `genrs`. Running the `run.sh` scripts will directly record test results in the `result/` path with their original filenames.
 
 Note: every time running `run.sh` will overwrite the `error`, `report`, and `success` reports.
 

@@ -2,8 +2,7 @@
 
 ## **Description**
 
-If expr is greater than or equal to min and expr is less than or equal to max, BETWEEN returns `true`, otherwise it
-returns `false`.
+If expr is greater than or equal to min and expr is less than or equal to max, BETWEEN returns `true`, otherwise it returns `false`.
 
 ## **Syntax**
 

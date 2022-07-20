@@ -2,8 +2,7 @@
 
 ## **Description**
 
-Logical `AND,&&`. Evaluates to `true` if all operands are nonzero and not NULL, to `false` if one or more operands are
-0, otherwise NULL is returned.
+Logical `AND,&&`. Evaluates to `true` if all operands are nonzero and not NULL, to `false` if one or more operands are 0, otherwise NULL is returned.
 
 ## **Syntax**
 

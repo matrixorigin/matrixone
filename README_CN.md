@@ -62,7 +62,7 @@ MatrixOne是一款面向未来的超融合异构云原生数据库，通过超�
   <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/all-in-one.png?raw=true">
 </p>
 
-## 🎯 <a id="key-features">核心特性</a>
+##  🎯 <a id="key-features">核心特性</a>
 ### 💥 **超融合引擎**
 
 <details>
@@ -77,6 +77,7 @@ MatrixOne是一款面向未来的超融合异构云原生数据库，通过超�
 
 
 ### ☁️ **异构云原生**
+
 
 <details>
   <summary><b><font size=4>异构统一</b></font></summary>
@@ -107,7 +108,6 @@ MatrixOne是一款面向未来的超融合异构云原生数据库，通过超�
 
 
 ## 💎 **<a id="user-values">用户价值</a>**
-
 <details>
   <summary><b><font size=4>简化数据开发和运维</b></font></summary>
       随着业务发展，企业使用的数据引擎和中间件越来越多，而每一个数据引擎平均依赖5+个基础组件，存储3+个数据副本，每一个数据引擎都要各自安装、监控、补丁和升级。这些都导致数据引擎的选型、开发及运维成本高昂且不可控。在MatrixOne的一体化架构下，用户使用单个数据库即可服务多种数据应用，引入的数据组件和技术栈减少80%，大大简化了数据库管理和维护的成本。
@@ -134,7 +134,7 @@ MatrixOne是一款面向未来的超融合异构云原生数据库，通过超�
 </details>
 
 ## 🔎 <a id="architecture">架构一览</a>
-MatrixOne的架构图如下图所示：
+MatrixOne的架构图如下图所示：   
 <p align="center">
   <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone_new_arch.png?raw=true">
 </p>
@@ -196,11 +196,9 @@ $ ./mo-server system_vars_config.toml
 **步骤 1.** 确保docker已经安装
 
 请检查Docker daemon是否正在后台运行，并确认docker版本：
-
 ```
 $ docker --version
 ```
-
 **步骤 2.** 创建并运行容器
 
 使用以下命令将从 Docker Hub 中拉取 MatrixOne 镜像，你可以选择最新的镜像，或稳定版本的镜像。
@@ -223,8 +221,8 @@ $ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
 
 1. 安装MySQL客户端
 
-MatrixOne支持MySQL连接协议，因此您可以使用各种语言通过MySQL客户机程序进行连接。  
-目前，MatrixOne只兼容Oracle MySQL客户端，因此一些特性可能无法在MariaDB、Percona客户端下正常工作。
+  MatrixOne支持MySQL连接协议，因此您可以使用各种语言通过MySQL客户机程序进行连接。  
+  目前，MatrixOne只兼容Oracle MySQL客户端，因此一些特性可能无法在MariaDB、Percona客户端下正常工作。  
 
 2. 连接MatrixOne服务
 
@@ -250,8 +248,7 @@ Enter password:
 ## 🙌 <a id="contributing">参与贡献</a>
 
 欢迎大家对MatrixOne的贡献。  
-请查看[贡献指南](https://docs.matrixorigin.io/cn/0.5.0/MatrixOne/Contribution-Guide/make-your-first-contribution/)
-来了解有关提交补丁和完成整个贡献流程的详细信息。
+请查看[贡献指南](https://docs.matrixorigin.io/cn/0.5.0/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
 
 ### 👏贡献者们
 
@@ -259,5 +256,4 @@ Enter password:
 <!-- readme: contributors -end -->
 
 ## <a id="license">License</a>
-
 [Apache License, Version 2.0](LICENSE)。

@@ -18,12 +18,10 @@ The `ANY_VALUE` function is useful for `GROUP BY` queries when the `ONLY_FULL_GR
 
 ## **Returned Value**
 
-The function return value and type are the same as the return value and type of its argument, but the function result is
-not checked for the `ONLY_FULL_GROUP_BY` SQL mode.
+The function return value and type are the same as the return value and type of its argument, but the function result is not checked for the `ONLY_FULL_GROUP_BY` SQL mode.
 
 !!! note  "<font size=4>note</font>"
-<font size=3>The execution result of `ANY_VALUE` is uncertain. The same input may produce different execution
-results.</font>
+    <font size=3>The execution result of `ANY_VALUE` is uncertain. The same input may produce different execution results.</font>
 
 ## **Examples**
 
