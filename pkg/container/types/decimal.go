@@ -47,12 +47,12 @@ func bytesPtrToC(bs []byte) *C.char {
 	return (*C.char)(unsafe.Pointer(&bs[0]))
 }
 func zstrToString(p []byte) string {
-	for i := 0; i < len(p); i++ {
-		if p[i] == 0 {
-			return string(p[:i])
-		}
+	str := string(p)
+	zidx := strings.IndexByte(str, 0)
+	if zidx > 0 {
+		str = str[:zidx]
 	}
-	return string(p)
+	return str
 }
 
 func Decimal64FromInt64Raw(a int64) Decimal64 {

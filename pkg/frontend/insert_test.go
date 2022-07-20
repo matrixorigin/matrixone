@@ -620,8 +620,8 @@ func Test_makeExprFromVal(t *testing.T) {
 		ret = makeExprFromVal(typ, value, isNull)
 		tmp, ok := ret.(*tree.NumVal)
 		convey.So(ok, convey.ShouldBeTrue)
-		convey.So(tmp.Value, convey.ShouldResemble, constant.MakeString("100"))
-		convey.So(tmp.String(), convey.ShouldEqual, "100")
+		convey.So(tmp.Value, convey.ShouldResemble, constant.MakeString("1E+2"))
+		convey.So(tmp.String(), convey.ShouldEqual, "1E+2")
 		convey.So(tmp.Negative(), convey.ShouldBeFalse)
 	})
 
@@ -631,8 +631,8 @@ func Test_makeExprFromVal(t *testing.T) {
 		ret = makeExprFromVal(typ, value, isNull)
 		tmp, ok := ret.(*tree.NumVal)
 		convey.So(ok, convey.ShouldBeTrue)
-		convey.So(tmp.Value, convey.ShouldResemble, constant.MakeString("100"))
-		convey.So(tmp.String(), convey.ShouldEqual, "100")
+		convey.So(tmp.Value, convey.ShouldResemble, constant.MakeString("1E+2"))
+		convey.So(tmp.String(), convey.ShouldEqual, "1E+2")
 		convey.So(tmp.Negative(), convey.ShouldBeFalse)
 	})
 
