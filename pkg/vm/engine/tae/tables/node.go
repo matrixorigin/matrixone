@@ -36,18 +36,18 @@ import (
 
 type appendableNode struct {
 	*buffer.Node
-	file      file.Block
-	block     *dataBlock
-	data      *containers.Batch
-	rows      uint32
-	mgr       base.INodeManager
-	flushTs   uint64
-	ckpTs     uint64
+	file    file.Block
+	block   *dataBlock
+	data    *containers.Batch
+	rows    uint32
+	mgr     base.INodeManager
+	flushTS uint64
+	// ckpTs     uint64 // unused
 	exception *atomic.Value
 }
 
 func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendableNode {
-	flushTs, err := file.ReadTS()
+	flushTS, err := file.ReadTS()
 	if err != nil {
 		panic(err)
 	}
@@ -61,7 +61,7 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	impl.file = file
 	impl.mgr = mgr
 	impl.block = block
-	impl.flushTs = flushTs
+	impl.flushTS = flushTS
 	impl.rows = file.ReadRows()
 	mgr.RegisterNode(impl)
 	return impl
@@ -131,12 +131,12 @@ func (node *appendableNode) GetColumnDataCopy(
 	return
 }
 
-func (node *appendableNode) SetBlockMaxFlushTS(ts uint64) {
-	atomic.StoreUint64(&node.flushTs, ts)
+func (node *appendableNode) SetBlockMaxflushTS(ts uint64) {
+	atomic.StoreUint64(&node.flushTS, ts)
 }
 
-func (node *appendableNode) GetBlockMaxFlushTS() uint64 {
-	return atomic.LoadUint64(&node.flushTs)
+func (node *appendableNode) GetBlockMaxflushTS() uint64 {
+	return atomic.LoadUint64(&node.flushTS)
 }
 
 func (node *appendableNode) OnLoad() {
@@ -168,7 +168,7 @@ func (node *appendableNode) flushData(ts uint64, colsData *containers.Batch, opC
 		return
 	}
 	mvcc := node.block.mvcc
-	if node.GetBlockMaxFlushTS() == ts {
+	if node.GetBlockMaxflushTS() == ts {
 		err = data.ErrStaleRequest
 		logutil.Info("[Done]", common.TimestampField(ts),
 			common.OperationField(opCtx.OpName()),

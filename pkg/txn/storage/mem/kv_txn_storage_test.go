@@ -363,7 +363,7 @@ func checkUncommitted(t *testing.T, s *KVTxnStorage, wTxn txn.TxnMeta, keys ...b
 		s.committed.AscendRange(key,
 			newTimestamp(0),
 			newTimestamp(math.MaxInt64),
-			func(b []byte, t timestamp.Timestamp) {
+			func(b []byte, _ timestamp.Timestamp) {
 				if bytes.Equal(b, value) {
 					n++
 				}
@@ -388,7 +388,7 @@ func checkRollback(t *testing.T, s *KVTxnStorage, wTxn txn.TxnMeta, keys ...byte
 		s.committed.AscendRange(key,
 			newTimestamp(0),
 			newTimestamp(math.MaxInt64),
-			func(b []byte, t timestamp.Timestamp) {
+			func(b []byte, _ timestamp.Timestamp) {
 				if bytes.Equal(b, value) {
 					n++
 				}
@@ -426,7 +426,7 @@ func checkCommitted(t *testing.T, s *KVTxnStorage, wTxn txn.TxnMeta, keys ...byt
 		s.committed.AscendRange(key,
 			newTimestamp(0),
 			newTimestamp(math.MaxInt64),
-			func(b []byte, ts timestamp.Timestamp) {
+			func(b []byte, _ timestamp.Timestamp) {
 				if bytes.Equal(value, b) {
 					hasCommitted = true
 				}

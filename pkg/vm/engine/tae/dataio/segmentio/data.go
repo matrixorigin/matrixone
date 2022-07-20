@@ -28,7 +28,7 @@ type dataFile struct {
 	file   []*DriverFile
 	buf    []byte
 	stat   *fileStat
-	cache  []byte
+	// cache  []byte // unused
 }
 
 type indexFile struct {
