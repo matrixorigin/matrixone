@@ -8,7 +8,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/meta"
 )
 
-// standalone memory engine
+// MemEngine standalone memory engine
 type MemEngine struct {
 	db *kv.KV
 	n  engine.Node
