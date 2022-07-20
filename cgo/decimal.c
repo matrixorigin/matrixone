@@ -3,6 +3,7 @@
 #include "decnumber/decDouble.h"
 #include "decnumber/decQuad.h"
 
+#include <inttypes.h>
 #include <errno.h>
 
 #define DecDoublePtr(X) ((decDouble*)(X))
@@ -126,7 +127,7 @@ int32_t Decimal64_FromInt64(int64_t *d, int64_t v)
 	DECLARE_DEC64_CTXT;
 	char s[128];
 	decDouble tmp;
-	sprintf(s, "%ld", v);
+	sprintf(s, "%" PRId64 "", v);
 	decDoubleFromString(&tmp, s, &_fn_dc);
 	decDoubleReduce(DecDoublePtr(d), &tmp, &_fn_dc);
 	return RC_SUCCESS;
@@ -136,7 +137,7 @@ int32_t Decimal128_FromInt64(int64_t *d, int64_t v)
 	DECLARE_DEC128_CTXT;
 	decQuad tmp;
 	char s[128];
-	sprintf(s, "%ld", v);
+	sprintf(s, "%" PRId64 "", v);
 	decQuadFromString(&tmp, s, &_fn_dc);
 	decQuadReduce(DecQuadPtr(d), &tmp, &_fn_dc);
 	return RC_SUCCESS;
@@ -147,7 +148,7 @@ int32_t Decimal64_FromUint64(int64_t *d, uint64_t v)
 	DECLARE_DEC64_CTXT;
 	decDouble tmp;
 	char s[128];
-	sprintf(s, "%lu", v);
+	sprintf(s, "%" PRIu64 "", v);
 	decDoubleFromString(&tmp, s, &_fn_dc);
 	decDoubleReduce(DecDoublePtr(d), &tmp, &_fn_dc);
 	return RC_SUCCESS;
@@ -157,7 +158,7 @@ int32_t Decimal128_FromUint64(int64_t *d, uint64_t v)
 	DECLARE_DEC128_CTXT;
 	decQuad tmp;
 	char s[128];
-	sprintf(s, "%lu", v);
+	sprintf(s, "%" PRIu64 "", v);
 	decQuadFromString(&tmp, s, &_fn_dc);
 	decQuadReduce(DecQuadPtr(d), &tmp, &_fn_dc);
 	return RC_SUCCESS;
