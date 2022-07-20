@@ -369,8 +369,9 @@ func TestFixZombie(t *testing.T) {
 						Replica: pb.Replica{
 							UUID:    "c",
 							ShardID: 1,
+							Epoch:   1,
 						},
-						ChangeType: pb.StopReplica,
+						ChangeType: pb.RemoveReplica,
 					},
 					ServiceType: pb.LogService,
 				},

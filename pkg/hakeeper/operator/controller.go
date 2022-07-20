@@ -158,8 +158,9 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 					Replica: pb.Replica{
 						UUID:    st.StoreID,
 						ShardID: st.ShardID,
+						Epoch:   st.Epoch,
 					},
-					ChangeType: pb.StopReplica,
+					ChangeType: pb.RemoveReplica,
 				},
 				ServiceType: pb.LogService,
 			}
