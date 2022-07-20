@@ -56,6 +56,5 @@ const (
 )
 
 var (
-	endian   = binary.LittleEndian
-	hexChars = "0123456789abcdef"
+	endian = binary.LittleEndian
 )

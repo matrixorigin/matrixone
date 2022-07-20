@@ -112,25 +112,3 @@ func TestArray(t *testing.T) {
 		}
 	}
 }
-
-//func TestName(t *testing.T) {
-//	for i := 0; i < 10; i++ {
-//		rd := rand.Int() % 99782309
-//		now := make([]byte, rd)
-//		for i := 0; i < rd; i++ {
-//			require.Equal(t, byte(0), now[i])
-//		}
-//	}
-//}
-
-//func BenchmarkAddZero(b *testing.B) {
-//
-//	for i := 0; i < b.N; i++ {
-//		addZero(nil, rand.Int()%10241)
-//	}
-//}
-//func BenchmarkAddZero2(b *testing.B) {
-//	for i := 0; i < b.N; i++ {
-//		addZero2(nil, rand.Int()%10241)
-//	}
-//}

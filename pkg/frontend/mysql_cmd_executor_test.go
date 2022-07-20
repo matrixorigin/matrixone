@@ -403,6 +403,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 					{Oid: types.T_varchar},
 					{Oid: types.T_date},
 					{Oid: types.T_datetime},
+					{Oid: types.T_json},
 				},
 				3)
 		}
@@ -471,6 +472,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 					{Oid: types.T_varchar},
 					{Oid: types.T_date},
 					{Oid: types.T_datetime},
+					{Oid: types.T_json},
 				},
 				3)
 		}
@@ -512,6 +514,7 @@ func Test_typeconvert(t *testing.T) {
 			types.T_varchar,
 			types.T_date,
 			types.T_datetime,
+			types.T_json,
 		}
 
 		type kase struct {
@@ -533,6 +536,7 @@ func Test_typeconvert(t *testing.T) {
 			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
 			{tp: defines.MYSQL_TYPE_DATE, signed: true},
 			{tp: defines.MYSQL_TYPE_DATETIME, signed: true},
+			{tp: defines.MYSQL_TYPE_JSON, signed: true},
 		}
 
 		convey.So(len(input), convey.ShouldEqual, len(output))
@@ -575,7 +579,7 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 			vec.Col = make([]float32, batchSize)
 		case types.T_float64:
 			vec.Col = make([]float64, batchSize)
-		case types.T_char, types.T_varchar:
+		case types.T_char, types.T_varchar, types.T_json:
 			vBytes := &types.Bytes{
 				Offsets: make([]uint32, batchSize),
 				Lengths: make([]uint32, batchSize),
