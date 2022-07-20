@@ -239,7 +239,7 @@ func (kv *KVTxnStorage) readValue(key []byte, txnMeta txn.TxnMeta) []byte {
 	}
 
 	var value []byte
-	kv.committed.AscendRange(key, timestamp.Timestamp{}, txnMeta.SnapshotTS, func(v []byte, t timestamp.Timestamp) {
+	kv.committed.AscendRange(key, timestamp.Timestamp{}, txnMeta.SnapshotTS, func(v []byte, _ timestamp.Timestamp) {
 		value = v
 	})
 	return value
@@ -405,7 +405,7 @@ func (kv *KVTxnStorage) getLogWithDataLocked(txnMeta txn.TxnMeta) *KVLog {
 func (kv *KVTxnStorage) hasConflict(from, to timestamp.Timestamp, writeKeys [][]byte) bool {
 	for _, key := range writeKeys {
 		n := 0
-		kv.committed.AscendRange(key, from, to, func(b []byte, t timestamp.Timestamp) {
+		kv.committed.AscendRange(key, from, to, func(_ []byte, _ timestamp.Timestamp) {
 			n++
 		})
 		if n > 0 {

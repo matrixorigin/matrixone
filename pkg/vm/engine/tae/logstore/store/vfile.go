@@ -32,10 +32,9 @@ import (
 var Metasize = 2
 
 type vFileState struct {
-	bufPos  int
-	bufSize int
-	pos     int
-	file    *vFile
+	bufPos int
+	pos    int
+	file   *vFile
 }
 
 type vFile struct {
@@ -357,7 +356,7 @@ func (vf *vFile) OnNewTxn(info *entry.Info) {
 }
 func (vf *vFile) OnNewUncommit(addrs []*VFileAddress) {}
 
-func (vf *vFile) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
+func (vf *vFile) Load(groupID uint32, lsn uint64) (entry.Entry, error) {
 	// if vf.HasCommitted() {
 	// err := vf.LoadMeta()
 	// defer vf.FreeMeta()
@@ -365,19 +364,19 @@ func (vf *vFile) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 	// 	return nil, err
 	// }
 	// }
-	offset, err := vf.GetOffsetByLSN(groupId, lsn)
+	offset, err := vf.GetOffsetByLSN(groupID, lsn)
 	if err == ErrVFileGroupNotExist || err == ErrVFileLsnNotExist {
 		for i := 0; i < 10; i++ {
-			logutil.Infof("load retry %d-%d", groupId, lsn)
+			logutil.Infof("load retry %d-%d", groupID, lsn)
 			vf.addrCond.L.Lock()
-			offset, err = vf.GetOffsetByLSN(groupId, lsn)
+			offset, err = vf.GetOffsetByLSN(groupID, lsn)
 			if err == nil {
 				vf.addrCond.L.Unlock()
 				break
 			}
 			vf.addrCond.Wait()
 			vf.addrCond.L.Unlock()
-			offset, err = vf.GetOffsetByLSN(groupId, lsn)
+			offset, err = vf.GetOffsetByLSN(groupID, lsn)
 			if err == nil {
 				break
 			}

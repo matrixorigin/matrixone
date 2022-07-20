@@ -41,6 +41,9 @@ type TxnClient interface {
 // TxnOperator operator for transaction clients, handling read and write
 // requests for transactions, and handling distributed transactions across DN
 // nodes.
+// Note: For Error returned by Read/Write/WriteAndCommit/Commit/Rollback, need
+// to check if it is a moerr.ErrDNShardNotFound error, if so, the DN information
+// held is out of date and needs to be reloaded by HAKeeper.
 type TxnOperator interface {
 	// Snapshot a snapshot of the transaction handle that can be passed around the
 	// network. In some scenarios, operations of a transaction are executed on multiple
