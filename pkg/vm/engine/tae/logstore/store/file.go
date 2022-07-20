@@ -369,12 +369,12 @@ func (rf *rotateFile) Sync() error {
 	return lastFile.Sync()
 }
 
-func (rf *rotateFile) Load(ver int, groupId uint32, lsn uint64) (entry.Entry, error) {
+func (rf *rotateFile) Load(ver int, groupID uint32, lsn uint64) (entry.Entry, error) {
 	vf, err := rf.GetEntryByVersion(ver)
 	if err != nil {
 		return nil, err
 	}
-	return vf.Load(groupId, lsn)
+	return vf.Load(groupID, lsn)
 }
 
 func (rf *rotateFile) GetEntryByVersion(version int) (VFile, error) {
