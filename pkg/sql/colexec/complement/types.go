@@ -40,12 +40,12 @@ type evalVector struct {
 }
 
 type Container struct {
-	state         int
-	rows          uint64
-	keys          [][]byte
-	values        []uint64
-	zValues       []int64
-	hashes        []uint64
+	state   int
+	rows    uint64
+	keys    [][]byte
+	values  []uint64
+	zValues []int64
+	//	hashes        []uint64
 	inserted      []uint8
 	zInserted     []uint8
 	strHashStates [][3]uint64
