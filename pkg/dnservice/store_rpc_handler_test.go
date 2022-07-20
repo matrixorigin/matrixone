@@ -136,7 +136,7 @@ func TestHandleDNShardNotFound(t *testing.T) {
 	runDNStoreTest(t, func(s *store) {
 		req := service.NewTestRollbackShardRequest(service.NewTestTxn(1, 1, 1))
 		resp := &txn.TxnResponse{}
-		s.handleRollbackDNShard(context.Background(), &req, resp)
+		assert.NoError(t, s.handleRollbackDNShard(context.Background(), &req, resp))
 		assert.Equal(t, txn.ErrorCode_DNShardNotFound, resp.TxnError.Code)
 	})
 }
