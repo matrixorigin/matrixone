@@ -27,6 +27,7 @@ import (
 var (
 	defaultListenAddress    = "unix:///tmp/dn.sock"
 	defaultMaxConnections   = 400
+	defaultMaxIdleDuration  = time.Minute
 	defaultSendQueueSize    = 10240
 	defaultMaxClockOffset   = time.Millisecond * 500
 	defaultZombieTimeout    = time.Hour
@@ -80,6 +81,9 @@ type Config struct {
 		// MaxConnections maximum number of connections to communicate with each DNStore.
 		// Default is 400.
 		MaxConnections int `toml:"max-connections"`
+		// MaxIdleDuration maximum connection idle time, connection will be closed automatically
+		// if this value is exceeded. Default is 1 min.
+		MaxIdleDuration toml.Duration `toml:"max-idle-duration"`
 		// SendQueueSize maximum capacity of the send request queue per connection, when the
 		// queue is full, the send request will be blocked. Default is 10240.
 		SendQueueSize int `toml:"send-queue-size"`
@@ -152,6 +156,9 @@ func (c *Config) validate() error {
 	}
 	if c.RPC.ReadBufferSize == 0 {
 		c.RPC.ReadBufferSize = toml.ByteSize(defaultBufferSize)
+	}
+	if c.RPC.MaxIdleDuration.Duration == 0 {
+		c.RPC.MaxIdleDuration.Duration = defaultMaxIdleDuration
 	}
 	if c.Txn.Clock.MaxClockOffset.Duration == 0 {
 		c.Txn.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
