@@ -128,7 +128,7 @@ func (s *service) gcZombieTxn(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-timer.C:
-			s.transactions.Range(func(key, value any) bool {
+			s.transactions.Range(func(_, value any) bool {
 				txnCtx := value.(*txnContext)
 				if now.Sub(txnCtx.createAt) > s.zombieTimeout {
 					cleanTxns = append(cleanTxns, txnCtx.getTxn())
