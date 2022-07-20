@@ -15,35 +15,52 @@
 package fileservice
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func TestMemoryFS(t *testing.T) {
+func testReplaceableFileService(
+	t *testing.T,
+	newFS func() ReplaceableFileService,
+) {
 
-	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func() FileService {
-			fs, err := NewMemoryFS()
-			assert.Nil(t, err)
-			return fs
-		})
+	ctx := context.Background()
+	fs := newFS()
+	err := fs.Write(ctx, IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{
+				Size: 4,
+				Data: []byte("abcd"),
+			},
+		},
 	})
+	assert.Nil(t, err)
 
-	t.Run("replaceable file service", func(t *testing.T) {
-		testReplaceableFileService(t, func() ReplaceableFileService {
-			fs, err := NewMemoryFS()
-			assert.Nil(t, err)
-			return fs
-		})
+	err = fs.Replace(ctx, IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{
+				Size: 2,
+				Data: []byte("cd"),
+			},
+		},
 	})
+	assert.Nil(t, err)
 
-}
+	vec := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{
+				Size: -1,
+			},
+		},
+	}
+	err = fs.Read(ctx, vec)
+	assert.Nil(t, err)
 
-func BenchmarkMemoryFS(b *testing.B) {
-	benchmarkFileService(b, func() FileService {
-		fs, err := NewMemoryFS()
-		assert.Nil(b, err)
-		return fs
-	})
+	assert.Equal(t, 2, len(vec.Entries[0].Data))
+
 }

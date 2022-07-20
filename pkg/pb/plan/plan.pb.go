@@ -9511,21 +9511,7 @@ func (m *Prepare) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			i = encodeVarintPlan(dAtA, i, uint64(size))
 		}
 		i--
-		dAtA[i] = 0x1a
-	}
-	if len(m.Schemas) > 0 {
-		for iNdEx := len(m.Schemas) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.Schemas[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPlan(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x12
-		}
+		dAtA[i] = 0x12
 	}
 	if len(m.Name) > 0 {
 		i -= len(m.Name)

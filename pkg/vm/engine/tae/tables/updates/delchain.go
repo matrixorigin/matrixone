@@ -275,7 +275,7 @@ func (chain *DeleteChain) CollectDeletesLocked(
 			state := txn.GetTxnState(true)
 			// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
 			// If the txn is rollbacked. skip to the next
-			if state == txnif.TxnStateRollbacked {
+			if state == txnif.TxnStateRollbacked || state == txnif.TxnStateRollbacking {
 				if rwlocker != nil {
 					rwlocker.RLock()
 				}

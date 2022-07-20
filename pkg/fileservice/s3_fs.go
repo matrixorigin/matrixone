@@ -149,6 +149,12 @@ func (m *S3FS) Write(ctx context.Context, vector IOVector) error {
 		return ErrFileExisted
 	}
 
+	return m.write(ctx, vector)
+}
+
+func (m *S3FS) write(ctx context.Context, vector IOVector) error {
+	key := m.pathToKey(vector.FilePath)
+
 	// sort
 	sort.Slice(vector.Entries, func(i, j int) bool {
 		return vector.Entries[i].Offset < vector.Entries[j].Offset

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
@@ -86,6 +87,19 @@ func NewUnixNanoHLCClock(ctx context.Context, maxOffset time.Duration) *HLCClock
 		clock.offsetMonitor(ctx)
 	}()
 
+	return clock
+}
+
+// NewUnixNanoHLCClockWithStopper is similar to NewUnixNanoHLCClock, but perform
+// clock check use stopper
+func NewUnixNanoHLCClockWithStopper(stopper *stopper.Stopper, maxOffset time.Duration) *HLCClock {
+	clock := &HLCClock{
+		physicalClock: physicalClock,
+		maxOffset:     maxOffset,
+	}
+	if err := stopper.RunTask(clock.offsetMonitor); err != nil {
+		panic(err)
+	}
 	return clock
 }
 
