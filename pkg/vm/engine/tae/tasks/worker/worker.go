@@ -39,13 +39,13 @@ type State = int32
 const (
 	CREATED State = iota
 	RUNNING
-	STOPPING_RECEIVER
-	STOPPING_CMD
+	StoppingReceiver
+	StoppingCMD
 	STOPPED
 )
 
 const (
-	QUEUE_SIZE = 10000
+	QueueSize = 10000
 )
 
 var (
@@ -104,12 +104,12 @@ type OpWorker struct {
 func NewOpWorker(name string, args ...int) *OpWorker {
 	var l int
 	if len(args) == 0 {
-		l = QUEUE_SIZE
+		l = QueueSize
 	} else {
 		l = args[0]
 		if l < 0 {
 			logutil.Warnf("Create OpWorker with negtive queue size %d", l)
-			l = QUEUE_SIZE
+			l = QueueSize
 		}
 	}
 	if name == "" {
@@ -163,10 +163,10 @@ func (w *OpWorker) Stop() {
 
 func (w *OpWorker) StopReceiver() {
 	state := atomic.LoadInt32(&w.State)
-	if state >= STOPPING_RECEIVER {
+	if state >= StoppingReceiver {
 		return
 	}
-	if atomic.CompareAndSwapInt32(&w.State, state, STOPPING_RECEIVER) {
+	if atomic.CompareAndSwapInt32(&w.State, state, StoppingReceiver) {
 		return
 	}
 }
@@ -179,7 +179,7 @@ func (w *OpWorker) WaitStop() {
 	if state == STOPPED {
 		return
 	}
-	if atomic.CompareAndSwapInt32(&w.State, STOPPING_RECEIVER, STOPPING_CMD) {
+	if atomic.CompareAndSwapInt32(&w.State, StoppingReceiver, StoppingCMD) {
 		pending := atomic.LoadInt64(&w.Pending)
 		for {
 			if pending == 0 {
@@ -228,7 +228,7 @@ func (w *OpWorker) onCmd(cmd Cmd) {
 		// log.Infof("Quit OpWorker")
 		close(w.CmdC)
 		close(w.OpC)
-		if !atomic.CompareAndSwapInt32(&w.State, STOPPING_CMD, STOPPED) {
+		if !atomic.CompareAndSwapInt32(&w.State, StoppingCMD, STOPPED) {
 			panic("logic error")
 		}
 		w.ClosedCh <- struct{}{}

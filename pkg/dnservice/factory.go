@@ -118,7 +118,7 @@ func (s *store) newLocalClock() clock.Clock {
 }
 
 func (s *store) newMemTxnStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
-	return mem.NewKVTxnStorage(0, logClient), nil
+	return mem.NewKVTxnStorage(0, logClient, s.clock), nil
 }
 
 func (s *store) newMemFileService() (fileservice.FileService, error) {
