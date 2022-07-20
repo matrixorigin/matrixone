@@ -91,7 +91,7 @@ func (s *service) addLog(txnMeta txn.TxnMeta) {
 
 func (s *service) end() {
 	defer close(s.recoveryC)
-	s.transactions.Range(func(key, value any) bool {
+	s.transactions.Range(func(_, value any) bool {
 		txnCtx := value.(*txnContext)
 		txnMeta := txnCtx.getTxn()
 		if !s.shard.Equal(txnMeta.DNShards[0]) {

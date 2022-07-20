@@ -661,7 +661,7 @@ func checkData(t *testing.T, wTxn txn.TxnMeta, s *service, commitTS int64, k byt
 		n := 0
 		kv.GetCommittedKV().AscendRange(GetTestKey(k),
 			NewTestTimestamp(commitTS).Next(),
-			NewTestTimestamp(math.MaxInt64), func(b []byte, t timestamp.Timestamp) {
+			NewTestTimestamp(math.MaxInt64), func(_ []byte, _ timestamp.Timestamp) {
 				n++
 			})
 		assert.Equal(t, 0, n)
