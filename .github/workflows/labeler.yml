@@ -1,0 +1,26 @@
+name: labeler
+on:
+  pull_request_target:
+    types: [ opened, synchronize, reopened ]
+    branches: main
+
+jobs:
+  pr-size-label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: size-label
+        uses: "pascalgn/size-label-action@v0.4.2"
+        env:
+          GITHUB_TOKEN: "${{ secrets.TOKEN_ACTION }}"
+          IGNORED: "docs/**"
+        with:
+          sizes: >
+            {
+              "0": "xs",
+              "10": "s",
+              "100": "m",
+              "500": "l",
+              "1000": "xl",
+              "2000": "xxl"
+            }
+            

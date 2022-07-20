@@ -38,7 +38,7 @@ func TestReadBasic(t *testing.T) {
 	s := NewTestTxnService(t, 1, sender, NewTestClock(0))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 
 	sender.AddTxnService(s)
@@ -57,7 +57,7 @@ func TestReadWithSelfWrite(t *testing.T) {
 	s := NewTestTxnService(t, 1, sender, NewTestClock(0))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 	sender.AddTxnService(s)
 
@@ -80,7 +80,7 @@ func TestReadBlockWithClock(t *testing.T) {
 	}))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 	sender.AddTxnService(s)
 
@@ -103,7 +103,7 @@ func TestReadCannotBlockByUncomitted(t *testing.T) {
 	s := NewTestTxnService(t, 1, sender, NewTestClock(1))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 	sender.AddTxnService(s)
 
@@ -123,7 +123,7 @@ func TestReadCannotBlockByPreparedIfSnapshotTSIsLEPreparedTS(t *testing.T) {
 	s := NewTestTxnService(t, 1, sender, NewTestClock(1))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 	sender.AddTxnService(s)
 
@@ -147,7 +147,7 @@ func TestReadWillBlockByPreparedIfSnapshotTSIsGTPreparedTS(t *testing.T) {
 	s := NewTestTxnService(t, 1, sender, NewTestClock(1))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 	sender.AddTxnService(s)
 
@@ -178,7 +178,7 @@ func TestReadAfterBlockTxnCommitted(t *testing.T) {
 	s := NewTestTxnService(t, 1, sender, NewTestClock(1))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 	sender.AddTxnService(s)
 
@@ -214,7 +214,7 @@ func TestReadAfterBlockTxnCommittedAndCannotReadCommittedValue(t *testing.T) {
 	s := NewTestTxnService(t, 1, sender, NewTestClock(1))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 	sender.AddTxnService(s)
 
@@ -250,7 +250,7 @@ func TestReadAfterBlockTxnAborted(t *testing.T) {
 	s := NewTestTxnService(t, 1, sender, NewTestClock(1))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 	sender.AddTxnService(s)
 
@@ -285,7 +285,7 @@ func TestReadCannotBlockByCommittingIfSnapshotTSIsLECommitTS(t *testing.T) {
 	s := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 	sender.AddTxnService(s)
 
@@ -312,7 +312,7 @@ func TestReadWillBlockByCommittingIfSnapshotTSIsGTCommitTS(t *testing.T) {
 	s := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 	sender.AddTxnService(s)
 
@@ -346,7 +346,7 @@ func TestReadCommitted(t *testing.T) {
 	s := NewTestTxnService(t, 1, sender, NewTestClock(1))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 	sender.AddTxnService(s)
 
@@ -380,7 +380,7 @@ func TestWriteBasic(t *testing.T) {
 	s := NewTestTxnService(t, 1, sender, NewTestClock(0)).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 
 	sender.AddTxnService(s)
@@ -403,7 +403,7 @@ func TestWriteWithWWConflict(t *testing.T) {
 	s := NewTestTxnService(t, 1, sender, NewTestClock(0))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 
 	sender.AddTxnService(s)
@@ -425,7 +425,7 @@ func TestCommitWithSingleDNShard(t *testing.T) {
 	s := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 
 	sender.AddTxnService(s)
@@ -460,12 +460,12 @@ func TestCommitWithMultiDNShards(t *testing.T) {
 	s1 := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s1.Start())
 	defer func() {
-		assert.NoError(t, s1.Close())
+		assert.NoError(t, s1.Close(false))
 	}()
 	s2 := NewTestTxnService(t, 2, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s2.Start())
 	defer func() {
-		assert.NoError(t, s2.Close())
+		assert.NoError(t, s2.Close(false))
 	}()
 
 	sender.AddTxnService(s1)
@@ -498,12 +498,12 @@ func TestCommitWithRollbackIfAnyPrepareFailed(t *testing.T) {
 	s1 := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s1.Start())
 	defer func() {
-		assert.NoError(t, s1.Close())
+		assert.NoError(t, s1.Close(false))
 	}()
 	s2 := NewTestTxnService(t, 2, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s2.Start())
 	defer func() {
-		assert.NoError(t, s2.Close())
+		assert.NoError(t, s2.Close(false))
 	}()
 
 	sender.AddTxnService(s1)
@@ -540,12 +540,12 @@ func TestRollback(t *testing.T) {
 	s1 := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s1.Start())
 	defer func() {
-		assert.NoError(t, s1.Close())
+		assert.NoError(t, s1.Close(false))
 	}()
 	s2 := NewTestTxnService(t, 2, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s2.Start())
 	defer func() {
-		assert.NoError(t, s2.Close())
+		assert.NoError(t, s2.Close(false))
 	}()
 
 	sender.AddTxnService(s1)
