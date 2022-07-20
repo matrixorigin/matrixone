@@ -18,9 +18,9 @@ import (
 	"reflect"
 	"testing"
 
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 func makeArgs(ss []string) *types.Bytes {
@@ -361,7 +361,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 	type args struct {
 		s     *types.Bytes
 		expr  []byte
-		nulls *roaring.Bitmap
+		nulls *bitmap.Bitmap
 		rs    []int64
 	}
 	tests := []struct {
@@ -377,7 +377,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc"}),
 				expr:  []byte("%"),
 				rs:    make([]int64, 2),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{0, 1},
 			wantErr: false,
@@ -389,7 +389,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc"}),
 				expr:  []byte("_"),
 				rs:    make([]int64, 2),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{0},
 			wantErr: false,
@@ -401,7 +401,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc"}),
 				expr:  []byte(""),
 				rs:    make([]int64, 2),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{},
 			wantErr: false,
@@ -413,7 +413,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc"}),
 				expr:  []byte("bc"),
 				rs:    make([]int64, 2),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{1},
 			wantErr: false,
@@ -425,7 +425,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc"}),
 				expr:  []byte("_c"),
 				rs:    make([]int64, 2),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{1},
 			wantErr: false,
@@ -437,7 +437,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc"}),
 				expr:  []byte("%c"),
 				rs:    make([]int64, 2),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{1},
 			wantErr: false,
@@ -449,7 +449,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc", "aca"}),
 				expr:  []byte("_c%"),
 				rs:    make([]int64, 3),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{1, 2},
 			wantErr: false,
@@ -461,7 +461,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc", "aca"}),
 				expr:  []byte("%c_"),
 				rs:    make([]int64, 3),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{2},
 			wantErr: false,
@@ -473,7 +473,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc", "aca"}),
 				expr:  []byte("_c_"),
 				rs:    make([]int64, 3),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{2},
 			wantErr: false,
@@ -485,7 +485,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc", "aca"}),
 				expr:  []byte("%c%"),
 				rs:    make([]int64, 3),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{1, 2},
 			wantErr: false,
@@ -497,7 +497,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"abc", "ac", "aca"}),
 				expr:  []byte("a%c"),
 				rs:    make([]int64, 3),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{0, 1},
 			wantErr: false,
@@ -509,7 +509,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"abc", "ac", "aca"}),
 				expr:  []byte("a_c"),
 				rs:    make([]int64, 3),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{0},
 			wantErr: false,
@@ -521,7 +521,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"abc", "ac", "aca"}),
 				expr:  []byte("a_"),
 				rs:    make([]int64, 3),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{1},
 			wantErr: false,
@@ -533,7 +533,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"abc", "ac", "aca"}),
 				expr:  []byte("a%"),
 				rs:    make([]int64, 3),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{0, 1, 2},
 			wantErr: false,

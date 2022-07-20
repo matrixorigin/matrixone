@@ -47,8 +47,8 @@ func (e *MemEngine) DatabaseExists(name string) bool {
 	return name == "test"
 }
 
-func (e *MemEngine) Resolve(schemaName string, tableName string) (*plan.ObjectRef, *plan.TableDef) {
-	schemaName = "test"
+func (e *MemEngine) Resolve(_ string, tableName string) (*plan.ObjectRef, *plan.TableDef) {
+	schemaName := "test"
 	db, err := e.Database(schemaName, nil)
 	if err != nil {
 		panic(err)

@@ -29,11 +29,11 @@ type NodeDescribeImpl struct {
 }
 
 func (ndesc *NodeDescribeImpl) GetTableDef(options *ExplainOptions) (string, error) {
-	var result string = "Table: "
+	result := "Table: "
 	if ndesc.Node.NodeType == plan.Node_TABLE_SCAN {
 		tableDef := ndesc.Node.TableDef
 		result += "'" + tableDef.Name + "' ("
-		var first bool = true
+		first := true
 		for i, col := range tableDef.Cols {
 			if !first {
 				result += ", "
@@ -80,7 +80,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 	case plan.Node_MATERIAL:
 		pname = "Material"
 	case plan.Node_RECURSIVE_CTE:
-		pname = "Recursive etc"
+		pname = "Recursive CTE"
 	case plan.Node_SINK:
 		pname = "Sink"
 	case plan.Node_SINK_SCAN:
@@ -303,7 +303,7 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 }
 
 func (ndesc *NodeDescribeImpl) GetProjectListInfo(options *ExplainOptions) (string, error) {
-	var result string = "Output:"
+	result := "Output:"
 	exprs := NewExprListDescribeImpl(ndesc.Node.ProjectList)
 	describe, err := exprs.GetDescription(options)
 	if err != nil {
@@ -314,12 +314,12 @@ func (ndesc *NodeDescribeImpl) GetProjectListInfo(options *ExplainOptions) (stri
 }
 
 func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(options *ExplainOptions) (string, error) {
-	var result string = "Join Type: " + ndesc.Node.JoinType.String()
+	result := "Join Type: " + ndesc.Node.JoinType.String()
 	return result, nil
 }
 
 func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(options *ExplainOptions) (string, error) {
-	var result string = "Join Cond:"
+	result := "Join Cond:"
 	exprs := NewExprListDescribeImpl(ndesc.Node.OnList)
 	describe, err := exprs.GetDescription(options)
 	if err != nil {
@@ -330,9 +330,9 @@ func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(options *ExplainOptions) (st
 }
 
 func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(options *ExplainOptions) (string, error) {
-	var result string = "Filter Cond: "
+	result := "Filter Cond: "
 	if options.Format == EXPLAIN_FORMAT_TEXT {
-		var first bool = true
+		first := true
 		for _, v := range ndesc.Node.FilterList {
 			if !first {
 				result += ", "
@@ -353,9 +353,9 @@ func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(options *ExplainOptions) (
 }
 
 func (ndesc *NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) (string, error) {
-	var result string = "Group Key:"
+	result := "Group Key:"
 	if options.Format == EXPLAIN_FORMAT_TEXT {
-		var first bool = true
+		first := true
 		for _, v := range ndesc.Node.GetGroupBy() {
 			if !first {
 				result += ", "
@@ -376,9 +376,9 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) (string, 
 }
 
 func (ndesc *NodeDescribeImpl) GetAggregationInfo(options *ExplainOptions) (string, error) {
-	var result string = "Aggregate Functions: "
+	result := "Aggregate Functions: "
 	if options.Format == EXPLAIN_FORMAT_TEXT {
-		var first bool = true
+		first := true
 		for _, v := range ndesc.Node.GetAggList() {
 			if !first {
 				result += ", "
@@ -399,9 +399,9 @@ func (ndesc *NodeDescribeImpl) GetAggregationInfo(options *ExplainOptions) (stri
 }
 
 func (ndesc *NodeDescribeImpl) GetOrderByInfo(options *ExplainOptions) (string, error) {
-	var result string = "Sort Key:"
+	result := "Sort Key:"
 	if options.Format == EXPLAIN_FORMAT_TEXT {
-		var first bool = true
+		first := true
 		for _, v := range ndesc.Node.GetOrderBy() {
 			if !first {
 				result += ", "
@@ -445,7 +445,8 @@ func (c *CostDescribeImpl) GetDescription(options *ExplainOptions) (string, erro
 			".." + strconv.FormatFloat(c.Cost.Total, 'f', 2, 64) +
 			" card=" + strconv.FormatFloat(c.Cost.Card, 'f', 2, 64) +
 			" ndv=" + strconv.FormatFloat(c.Cost.Ndv, 'f', 2, 64) +
-			" rowsize=" + strconv.FormatFloat(c.Cost.Rowsize, 'f', 0, 64)
+			" rowsize=" + strconv.FormatFloat(c.Cost.Rowsize, 'f', 0, 64) +
+			")"
 	}
 
 	return result, nil
@@ -462,8 +463,8 @@ func NewExprListDescribeImpl(ExprList []*plan.Expr) *ExprListDescribeImpl {
 }
 
 func (e *ExprListDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
-	var first bool = true
-	var result string = " "
+	first := true
+	result := " "
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		for _, v := range e.ExprList {
 			if !first {
@@ -495,7 +496,7 @@ func NewOrderByDescribeImpl(OrderBy *plan.OrderBySpec) *OrderByDescribeImpl {
 }
 
 func (o *OrderByDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
-	var result string = " "
+	result := " "
 	descExpr, err := describeExpr(o.OrderBy.Expr, options)
 	if err != nil {
 		return result, err
@@ -522,12 +523,12 @@ type RowsetDataDescribeImpl struct {
 }
 
 func (r *RowsetDataDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
-	var result string
+	result := "Value:"
 	if r.RowsetData == nil {
 		return result, nil
 	}
 
-	var first bool = true
+	first := true
 	for index := range r.RowsetData.Cols {
 		if !first {
 			result += ", "
@@ -545,7 +546,7 @@ type UpdateListDescribeImpl struct {
 func (u *UpdateListDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
 	// u.UpdateList.Columns
 	var result string
-	//var first bool = true
+	//first :=true
 	//if len(u.UpdateList.Columns) != len(u.UpdateList.Values) {
 	//	panic("update node number of columns and values is not equal")
 	//}

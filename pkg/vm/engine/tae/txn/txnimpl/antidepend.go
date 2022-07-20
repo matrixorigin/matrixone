@@ -133,16 +133,16 @@ func (checker *warChecker) check() (err error) {
 			if entry.DeleteBefore(commitTs) {
 				if !entry.IsCommitting() {
 					entry.RUnlock()
-					return txnif.TxnRWConflictErr
+					return txnif.ErrTxnRWConflict
 				}
 				eTxn := entry.GetTxn()
 				entry.RUnlock()
 				state := eTxn.GetTxnState(true)
 				if state == txnif.TxnStateCommitted {
-					logutil.Infof("TxnRWConflictErr Found:[%s]<===RW===[%s]", eTxn.String(), checker.txn.String())
-					return txnif.TxnRWConflictErr
+					logutil.Infof("ErrTxnRWConflict Found:[%s]<===RW===[%s]", eTxn.String(), checker.txn.String())
+					return txnif.ErrTxnRWConflict
 				} else if state == txnif.TxnStateUnknown {
-					return txnif.TxnInternalErr
+					return txnif.ErrTxnInternal
 				}
 				entry.RLock()
 			}

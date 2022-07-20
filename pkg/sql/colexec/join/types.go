@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/joincondition"
 )
 
 const (
@@ -69,14 +69,9 @@ type ResultPos struct {
 	Pos int32
 }
 
-type Condition struct {
-	Scale int32
-	Expr  *plan.Expr
-}
-
 type Argument struct {
 	ctr        *Container
 	IsPreBuild bool // hashtable is pre-build
 	Result     []ResultPos
-	Conditions [][]Condition
+	Conditions [][]joincondition.Condition
 }

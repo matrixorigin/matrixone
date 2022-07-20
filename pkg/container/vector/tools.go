@@ -35,7 +35,6 @@ func MustTCols[T ref](v *Vector) []T {
 }
 
 func MustBytesCols(v *Vector) *types.Bytes {
-
 	if t, ok := v.Col.(*types.Bytes); ok {
 		return t
 	}

@@ -101,6 +101,12 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 		return ErrFileExisted
 	}
 
+	return l.write(ctx, vector)
+}
+
+func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
+	nativePath := l.toNativeFilePath(vector.FilePath)
+
 	// sort
 	sort.Slice(vector.Entries, func(i, j int) bool {
 		return vector.Entries[i].Offset < vector.Entries[j].Offset
@@ -153,9 +159,6 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 
 func (l *LocalFS) Read(ctx context.Context, vector *IOVector) error {
 
-	min, max := vector.offsetRange()
-	readLen := max - min
-
 	nativePath := l.toNativeFilePath(vector.FilePath)
 	f, err := os.Open(nativePath)
 	if os.IsNotExist(err) {
@@ -165,6 +168,16 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) error {
 		return nil
 	}
 	defer f.Close()
+
+	min, max, readToEnd := vector.offsetRange()
+	if readToEnd {
+		stat, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		max = int(stat.Size())
+	}
+	readLen := max - min
 
 	_, err = f.Seek(int64(min), io.SeekStart)
 	if err != nil {
@@ -180,6 +193,9 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) error {
 		start := entry.Offset - min
 		if start >= len(content) {
 			return ErrEmptyRange
+		}
+		if entry.Size < 0 {
+			entry.Size = max
 		}
 		end := start + entry.Size
 		if end > len(content) {
@@ -392,4 +408,10 @@ func (l *LocalFS) Mutate(ctx context.Context, vector IOVector) error {
 	}
 
 	return nil
+}
+
+var _ ReplaceableFileService = new(LocalFS)
+
+func (l *LocalFS) Replace(ctx context.Context, vector IOVector) error {
+	return l.write(ctx, vector)
 }

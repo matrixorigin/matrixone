@@ -11,6 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.26.11
 	github.com/axiomhq/hyperloglog v0.0.0-20220105174342-98591331716a
 	github.com/cespare/xxhash/v2 v2.1.2
+	github.com/docker/go-units v0.4.0
 	github.com/fagongzi/goetty v1.13.0
 	github.com/fagongzi/goetty/v2 v2.0.3-0.20220629100032-f8e8c3c38772
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
@@ -25,6 +26,7 @@ require (
 	github.com/matrixorigin/matrixcube v0.3.1-0.20220606032431-c944d801f1e5
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
 	github.com/minio/minio-go/v7 v7.0.27
+	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
 	github.com/panjf2000/ants/v2 v2.4.6
 	github.com/pierrec/lz4 v2.6.1+incompatible
 	github.com/pierrec/lz4/v4 v4.1.14
@@ -76,9 +78,7 @@ require (
 	github.com/valyala/fastrand v1.1.0 // indirect
 	github.com/valyala/histogram v1.2.0 // indirect
 	go.etcd.io/etcd/raft/v3 v3.5.1 // indirect
-	golang.org/x/mod v0.6.0-dev.0.20220419223038-86c51ed26bb4 // indirect
 	golang.org/x/sys v0.0.0-20220622161953-175b2fd9d664 // indirect
-	golang.org/x/tools v0.1.11 // indirect
 	gopkg.in/ini.v1 v1.57.0 // indirect
 )
 
@@ -124,7 +124,7 @@ require (
 	github.com/tklauser/numcpus v0.4.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.2 // indirect
 	go.uber.org/atomic v1.9.0 // indirect
-	go.uber.org/multierr v1.8.0 // indirect
+	go.uber.org/multierr v1.8.0
 	golang.org/x/crypto v0.0.0-20220214200702-86341886e292 // indirect
 	golang.org/x/exp v0.0.0-20220414153411-bcd21879b8fd
 	golang.org/x/net v0.0.0-20211216030914-fe4d6282115f // indirect

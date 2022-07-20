@@ -18,7 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -57,7 +57,7 @@ func TestDateToWeekFunc(t *testing.T) {
 		{
 			name:     "Date to week test - null",
 			proc:     procs,
-			expected: []uint8{},
+			expected: []uint8{0},
 			isScalar: true,
 		},
 	}
@@ -117,7 +117,7 @@ func TestDatetimeToWeekFunc(t *testing.T) {
 		{
 			name:     "Datetime to week test - null",
 			proc:     procs,
-			expected: []uint8{},
+			expected: []uint8{0},
 			isScalar: true,
 		},
 	}

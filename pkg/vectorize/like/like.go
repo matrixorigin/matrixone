@@ -23,7 +23,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -37,11 +37,11 @@ var (
 	// BtConstAndConst is a like function between two const values.
 	BtConstAndConst func([]byte, []byte, []int64) ([]int64, error)
 	// BtSliceNullAndConst is a like function between a slice (has null value) and a const value.
-	BtSliceNullAndConst func(*types.Bytes, []byte, *roaring.Bitmap, []int64) ([]int64, error)
+	BtSliceNullAndConst func(*types.Bytes, []byte, *bitmap.Bitmap, []int64) ([]int64, error)
 	// BtSliceNullAndSliceNull is a like function between two slices which have null value.
-	BtSliceNullAndSliceNull func(*types.Bytes, *types.Bytes, *roaring.Bitmap, []int64) ([]int64, error)
+	BtSliceNullAndSliceNull func(*types.Bytes, *types.Bytes, *bitmap.Bitmap, []int64) ([]int64, error)
 	// BtConstAndSliceNull is a like function between a const value and a slice (has null value).
-	BtConstAndSliceNull func([]byte, *types.Bytes, *roaring.Bitmap, []int64) ([]int64, error)
+	BtConstAndSliceNull func([]byte, *types.Bytes, *bitmap.Bitmap, []int64) ([]int64, error)
 )
 
 var _ = BtSliceAndConst
@@ -336,7 +336,7 @@ func scalarLikeScalar(p []byte, expr []byte, rs []int64) ([]int64, error) {
 }
 
 // 'source' like <rule column may contains null>
-func sliceContainsNullLikeScalar(s *types.Bytes, expr []byte, nulls *roaring.Bitmap, rs []int64) ([]int64, error) {
+func sliceContainsNullLikeScalar(s *types.Bytes, expr []byte, nulls *bitmap.Bitmap, rs []int64) ([]int64, error) {
 	var cFlag int8 // case flag for like
 
 	reg, err := regexp.Compile(convert(expr))
@@ -465,7 +465,7 @@ func sliceContainsNullLikeScalar(s *types.Bytes, expr []byte, nulls *roaring.Bit
 }
 
 // <source column may contains null> like
-func likeBetweenSlicesContainNull(s *types.Bytes, exprs *types.Bytes, nulls *roaring.Bitmap, rs []int64) ([]int64, error) {
+func likeBetweenSlicesContainNull(s *types.Bytes, exprs *types.Bytes, nulls *bitmap.Bitmap, rs []int64) ([]int64, error) {
 	count := 0
 	nullsIter := nulls.Iterator()
 	nextNull := 0
@@ -499,7 +499,7 @@ func likeBetweenSlicesContainNull(s *types.Bytes, exprs *types.Bytes, nulls *roa
 }
 
 // 'source' like <rule column may contains null>
-func scalarLikeSliceContainsNull(p []byte, exprs *types.Bytes, nulls *roaring.Bitmap, rs []int64) ([]int64, error) {
+func scalarLikeSliceContainsNull(p []byte, exprs *types.Bytes, nulls *bitmap.Bitmap, rs []int64) ([]int64, error) {
 	count := 0
 	nullsIter := nulls.Iterator()
 	nextNull := 0

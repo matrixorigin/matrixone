@@ -288,12 +288,12 @@ func (e *BatchCmd) VerboseString() string {
 	return s
 }
 
-func (e *ComposedCmd) Close() {
-	for _, cmd := range e.Cmds {
+func (cc *ComposedCmd) Close() {
+	for _, cmd := range cc.Cmds {
 		cmd.Close()
 	}
 }
-func (e *ComposedCmd) GetType() int16 {
+func (cc *ComposedCmd) GetType() int16 {
 	return CmdComposed
 }
 

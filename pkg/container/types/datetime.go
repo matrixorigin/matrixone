@@ -30,9 +30,9 @@ const (
 	secsPerHour   = 60 * secsPerMinute
 	secsPerDay    = 24 * secsPerHour
 	//secsPerWeek   = 7 * secsPerDay
-	microSecondBitMask = 0xfffff
-	MaxDatetimeYear    = 9999
-	MinDatetimeYear    = 1
+	//microSecondBitMask = 0xfffff
+	MaxDatetimeYear = 9999
+	MinDatetimeYear = 1
 )
 
 // The higher 44 bits holds number of seconds since January 1, year 1 in Gregorian
@@ -328,8 +328,8 @@ func (dt Datetime) AddDateTime(date gotime.Time, addMsec, addSec, addMin, addHou
 	return FromClock(int32(date.Year()), uint8(date.Month()), uint8(date.Day()), uint8(date.Hour()), uint8(date.Minute()), uint8(date.Second()), uint32(date.Nanosecond()/1000)), true
 }
 
-// AddInterval
-// now date or datetime use the function to add/sub date, we need a bool arg to tell isDate/isDatetime
+// AddInterval now date or datetime use the function to add/sub date,
+// we need a bool arg to tell isDate/isDatetime
 // date/datetime have different regions, so we don't use same valid function
 // return type bool means the if the date/datetime is valid
 func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) (Datetime, bool) {

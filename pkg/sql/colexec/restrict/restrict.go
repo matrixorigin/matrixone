@@ -34,15 +34,19 @@ func Prepare(_ *process.Process, _ interface{}) error {
 	return nil
 }
 
-func Call(proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 	bat := proc.Reg.InputBatch
 	if bat == nil {
 		return true, nil
 	}
-	if len(bat.Zs) == 0 {
+	if bat.Length() == 0 {
 		return false, nil
 	}
 	ap := arg.(*Argument)
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
+	anal.Input(bat)
 	vec, err := colexec.EvalExpr(bat, proc, ap.E)
 	if err != nil {
 		bat.Clean(proc.Mp)
@@ -58,14 +62,16 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			bat.Shrink(nil)
 		}
 	} else {
-		sels := make([]int64, 0, 8)
+		sels := proc.GetSels()
 		for i, b := range bs {
 			if b {
 				sels = append(sels, int64(i))
 			}
 		}
 		bat.Shrink(sels)
+		proc.PutSels(sels)
 	}
+	anal.Output(bat)
 	proc.Reg.InputBatch = bat
 	return false, nil
 }

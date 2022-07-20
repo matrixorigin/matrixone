@@ -43,6 +43,20 @@ func init() {
 	Decimal128Size = int(unsafe.Sizeof(types.Decimal128{}))
 }
 
+func EncodeSlice[T any](v []T, sz int) (ret []byte) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*sz)[:len(v)*sz]
+	}
+	return
+}
+
+func DecodeSlice[T any](v []byte, sz int) (ret []T) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*T)(unsafe.Pointer(&v[0])), cap(v)/sz)[:len(v)/sz]
+	}
+	return
+}
+
 func Encode(v interface{}) ([]byte, error) {
 	var buf bytes.Buffer
 

@@ -24,6 +24,11 @@ func (m DNShard) IsEmpty() bool {
 	return m.ShardID == 0
 }
 
+// Equal returns true if DNShard is same
+func (m DNShard) Equal(dn DNShard) bool {
+	return m.ShardID == dn.ShardID && m.ReplicaID == dn.ReplicaID
+}
+
 // DebugString returns debug string
 func (m DNShard) DebugString() string {
 	var buffer bytes.Buffer

@@ -32,7 +32,7 @@ func BitLengthFunc(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]int64, 1)
 		vector.SetCol(resultVector, bit_length.StrBitLength(inputValues, resultValues))
 		return resultVector, nil

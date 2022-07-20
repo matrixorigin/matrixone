@@ -17,13 +17,14 @@ package frontend
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"go/constant"
 	"os"
 	"runtime"
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -292,17 +293,6 @@ func MakeDebugInfo(data []byte, bytesCount int, bytesPerLine int) string {
 	return ps
 }
 
-var (
-	tmpDir = "./cube-test"
-)
-
-func cleanupTmpDir() error {
-	return os.RemoveAll(tmpDir)
-}
-
-var testPorts = []int{6002, 6003, 6004}
-var testConfigFile = "./test/system_vars_config.toml"
-
 func getSystemVariables(configFile string) (*mo_config.SystemVariables, error) {
 	sv := &mo_config.SystemVariables{}
 	var err error
@@ -358,7 +348,7 @@ func toTypesType(t types.T) types.Type {
 }
 
 func AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs []*engine.AttributeDef, rowCount int) *batch.Batch {
-	var attributeNames []string = make([]string, len(attributeDefs))
+	var attributeNames = make([]string, len(attributeDefs))
 	for i, def := range attributeDefs {
 		attributeNames[i] = def.Attr.Name
 	}
@@ -375,6 +365,9 @@ func AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs []*engine.Attri
 		vec.Or = true
 		vec.Data = nil
 		switch vec.Typ.Oid {
+		case types.T_bool:
+			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_bool).Size))
+			vec.Col = encoding.DecodeBoolSlice(vec.Data)
 		case types.T_int8:
 			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_int8).Size))
 			vec.Col = encoding.DecodeInt8Slice(vec.Data)
@@ -438,6 +431,17 @@ func FillBatchWithData(data [][]string, batch *batch.Batch) {
 			vec := batch.Vecs[colIdx]
 
 			switch vec.Typ.Oid {
+			case types.T_bool:
+				cols := vec.Col.([]bool)
+				if isNullOrEmpty {
+					nulls.Add(vec.Nsp, uint64(rowIdx))
+				} else {
+					d, err := types.ParseBool(field)
+					if err != nil {
+						logutil.Errorf("parse field[%v] err:%v", field, err)
+					}
+					cols[rowIdx] = d
+				}
 			case types.T_int8:
 				cols := vec.Col.([]int8)
 				if isNullOrEmpty {
@@ -609,6 +613,18 @@ func FormatLineInBatch(bat *batch.Batch, rowIndex int) []string {
 	for i := 0; i < len(bat.Vecs); i++ {
 		vec := bat.Vecs[i]
 		switch vec.Typ.Oid { //get col
+		case types.T_bool:
+			if !nulls.Any(vec.Nsp) { //all data in this column are not null
+				vs := vec.Col.([]bool)
+				row[i] = vs[rowIndex]
+			} else {
+				if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+					row[i] = nil
+				} else {
+					vs := vec.Col.([]bool)
+					row[i] = vs[rowIndex]
+				}
+			}
 		case types.T_int8:
 			if !nulls.Any(vec.Nsp) { //all data in this column are not null
 				vs := vec.Col.([]int8)
@@ -729,19 +745,7 @@ func FormatLineInBatch(bat *batch.Batch, rowIndex int) []string {
 					row[i] = vs[rowIndex]
 				}
 			}
-		case types.T_char:
-			if !nulls.Any(vec.Nsp) { //all data in this column are not null
-				vs := vec.Col.(*types.Bytes)
-				row[i] = string(vs.Get(int64(rowIndex)))
-			} else {
-				if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-					row[i] = nil
-				} else {
-					vs := vec.Col.(*types.Bytes)
-					row[i] = string(vs.Get(int64(rowIndex)))
-				}
-			}
-		case types.T_varchar:
+		case types.T_char, types.T_varchar:
 			if !nulls.Any(vec.Nsp) { //all data in this column are not null
 				vs := vec.Col.(*types.Bytes)
 				row[i] = string(vs.Get(int64(rowIndex)))
@@ -789,8 +793,8 @@ func FormatLineInBatch(bat *batch.Batch, rowIndex int) []string {
 // pattern and target are ascii characters
 // TODO: add \_ and \%
 func WildcardMatch(pattern, target string) bool {
-	var p int = 0
-	var t int = 0
+	var p = 0
+	var t = 0
 	var positionOfPercentPlusOne int = -1
 	var positionOfTargetEncounterPercent int = -1
 	plen := len(pattern)

@@ -34,6 +34,7 @@ const (
 	// Group 2: numeric
 	DIVIVISION_BY_ZERO = 2000 + iota
 	OUT_OF_RANGE
+	INVALID_ARGUMENT
 
 	// Group 3: invalid input
 	BAD_CONFIGURATION = 3000 + iota
@@ -56,15 +57,17 @@ const (
 
 	// Group 10: txn
 	// ErrTxnAborted read and write a transaction that has been rolled back.
-	ErrTxnAborted = 10000 + iota
-	// ErrTxnClosed read and write a transaction after Commit or Rollback method called.
-	ErrTxnClosed
+	ErrTxnClosed = 10000 + iota
 	// ErrTxnWriteConflict write conflict error for concurrent transactions
 	ErrTxnWriteConflict
 	// ErrMissingTxn missing transaction error
 	ErrMissingTxn
 	// ErrUnreslovedConflict read transaction encounters unresloved data
 	ErrUnreslovedConflict
+	// ErrTxnError TxnError wrapper
+	ErrTxnError
+	// ErrDNShardNotFound DNShard not found, need to get the latest DN list from HAKeeper
+	ErrDNShardNotFound
 )
 
 type Error struct {
@@ -101,7 +104,7 @@ func NewInternalError(msg string, args ...interface{}) *Error {
 	return &err
 }
 
-// Convert a runtime panic to internal error.
+// NewPanicError converts a runtime panic to internal error.
 func NewPanicError(v interface{}) *Error {
 	if e, ok := v.(*Error); ok {
 		return e

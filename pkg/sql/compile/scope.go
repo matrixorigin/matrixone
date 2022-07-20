@@ -135,10 +135,17 @@ func (s *Scope) Delete(ts uint64, snapshot engine.Snapshot, engine engine.Engine
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 	arg.Ts = ts
-	if arg.CanTruncate {
-		return arg.TableSource.Truncate(snapshot)
+
+	if arg.DeleteCtxs[0].CanTruncate {
+		return arg.DeleteCtxs[0].TableSource.Truncate(snapshot)
 	}
-	defer arg.TableSource.Close(snapshot)
+
+	defer func() {
+		for i := range arg.DeleteCtxs {
+			arg.DeleteCtxs[i].TableSource.Close(snapshot)
+		}
+	}()
+
 	if err := s.MergeRun(engine); err != nil {
 		return 0, err
 	}
@@ -224,6 +231,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 					IsNull: col.GetDefault().GetIsNull(),
 				},
 				Primary: col.GetPrimary(),
+				Comment: col.GetComment(),
 			},
 		}
 	}

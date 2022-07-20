@@ -32,7 +32,3 @@ The ATAN() function returns the arctangent(given in radians) of the input number
 +---------+--------------+
 
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.

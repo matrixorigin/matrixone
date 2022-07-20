@@ -16,6 +16,8 @@ package deletion
 
 import (
 	"bytes"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -28,22 +30,23 @@ func Prepare(_ *process.Process, _ interface{}) error {
 	return nil
 }
 
-func Call(proc *process.Process, arg interface{}) (bool, error) {
+func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 	p := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 	if bat == nil || len(bat.Zs) == 0 {
 		return false, nil
 	}
 	defer bat.Clean(proc.Mp)
-	err := p.TableSource.Delete(p.Ts, bat.GetVector(0), p.UseDeleteKey, proc.Snapshot)
-	if err != nil {
-		return false, err
+
+	for i := range p.DeleteCtxs {
+		err := p.DeleteCtxs[i].TableSource.Delete(p.Ts, bat.GetVector(int32(i)), p.DeleteCtxs[i].UseDeleteKey, proc.Snapshot)
+		if err != nil {
+			return false, err
+		}
 	}
 
 	affectedRows := uint64(batch.Length(bat))
+	atomic.AddUint64(&p.AffectedRows, affectedRows)
 
-	p.M.Lock()
-	p.AffectedRows += affectedRows
-	p.M.Unlock()
 	return false, nil
 }

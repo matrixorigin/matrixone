@@ -17,7 +17,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -91,7 +91,7 @@ func TestFindInSetLength(t *testing.T) {
 			name:      "left null test",
 			proc:      procs,
 			right:     []string{"abc"},
-			expected:  []uint64{},
+			expected:  []uint64{0},
 			isScalarL: true,
 			isScalarR: true,
 		},
@@ -99,7 +99,7 @@ func TestFindInSetLength(t *testing.T) {
 			name:      "right null test",
 			proc:      procs,
 			left:      []string{"abc"},
-			expected:  []uint64{},
+			expected:  []uint64{0},
 			isScalarL: true,
 			isScalarR: true,
 		},

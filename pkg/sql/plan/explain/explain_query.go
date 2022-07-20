@@ -34,8 +34,8 @@ func NewExplainQueryImpl(query *plan.Query) *ExplainQueryImpl {
 }
 
 func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions) error {
-	var Nodes []*plan.Node = e.QueryPlan.Nodes
-	for index, rootNodeId := range e.QueryPlan.Steps {
+	nodes := e.QueryPlan.Nodes
+	for index, rootNodeID := range e.QueryPlan.Steps {
 		logutil.Infof("------------------------------------Query Plan-%v ---------------------------------------------", index)
 		settings := FormatSettings{
 			buffer: buffer,
@@ -43,7 +43,7 @@ func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *Expla
 			indent: 2,
 			level:  0,
 		}
-		err := traversalPlan(Nodes[rootNodeId], Nodes, &settings, options)
+		err := traversalPlan(nodes[rootNodeID], nodes, &settings, options)
 		if err != nil {
 			return err
 		}
@@ -77,23 +77,26 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 			}
 
 			if nodedescImpl.Node.NodeType == plan.Node_TABLE_SCAN {
-				tableDef, err := nodedescImpl.GetTableDef(options)
-				if err != nil {
-					return err
+				if nodedescImpl.Node.TableDef != nil {
+					tableDef, err := nodedescImpl.GetTableDef(options)
+					if err != nil {
+						return err
+					}
+					settings.buffer.PushNewLine(tableDef, false, settings.level)
 				}
-				settings.buffer.PushNewLine(tableDef, false, settings.level)
 			}
 
 			if nodedescImpl.Node.NodeType == plan.Node_VALUE_SCAN {
-				rowsetDataDescImpl := &RowsetDataDescribeImpl{
-					RowsetData: nodedescImpl.Node.RowsetData,
+				if nodedescImpl.Node.RowsetData != nil {
+					rowsetDataDescImpl := &RowsetDataDescribeImpl{
+						RowsetData: nodedescImpl.Node.RowsetData,
+					}
+					rowsetInfo, err := rowsetDataDescImpl.GetDescription(options)
+					if err != nil {
+						return err
+					}
+					settings.buffer.PushNewLine(rowsetInfo, false, settings.level)
 				}
-				rowsetInfo, err := rowsetDataDescImpl.GetDescription(options)
-				if err != nil {
-					return err
-				}
-				rowdatadesc := "Output: " + rowsetInfo
-				settings.buffer.PushNewLine(rowdatadesc, false, settings.level)
 			}
 		}
 
@@ -124,8 +127,8 @@ func traversalPlan(node *plan.Node, Nodes []*plan.Node, settings *FormatSettings
 	settings.level++
 	// Recursive traversal Query Plan
 	if len(node.Children) > 0 {
-		for _, childNodeId := range node.Children {
-			index, err := serachNodeIndex(childNodeId, Nodes)
+		for _, childNodeID := range node.Children {
+			index, err := serachNodeIndex(childNodeID, Nodes)
 			if err != nil {
 				return err
 			}
@@ -140,11 +143,11 @@ func traversalPlan(node *plan.Node, Nodes []*plan.Node, settings *FormatSettings
 }
 
 // serach target node's index in Nodes slice
-func serachNodeIndex(nodeId int32, Nodes []*plan.Node) (int32, error) {
+func serachNodeIndex(nodeID int32, Nodes []*plan.Node) (int32, error) {
 	for i, node := range Nodes {
-		if node.NodeId == nodeId {
+		if node.NodeId == nodeID {
 			return int32(i), nil
 		}
 	}
-	return -1, errors.New(errno.InternalError, "Invalid Plan nodeId")
+	return -1, errors.New(errno.InternalError, "Invalid Plan nodeID")
 }

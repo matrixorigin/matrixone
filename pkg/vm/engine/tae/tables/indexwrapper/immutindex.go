@@ -17,10 +17,11 @@ func NewImmutableIndex() *immutableIndex {
 	return new(immutableIndex)
 }
 
-func (index *immutableIndex) IsKeyDeleted(any, uint64) (bool, bool) { panic("not supported") }
-func (index *immutableIndex) GetActiveRow(any) (uint32, error)      { panic("not supported") }
-func (index *immutableIndex) Delete(any, uint64) error              { panic("not supported") }
-func (index *immutableIndex) BatchUpsert(*index.KeysCtx, int, uint64) error {
+func (index *immutableIndex) IsKeyDeleted(any, uint64) (bool, bool)        { panic("not supported") }
+func (index *immutableIndex) GetActiveRow(any) (uint32, error)             { panic("not supported") }
+func (index *immutableIndex) Delete(any, uint64) error                     { panic("not supported") }
+func (index *immutableIndex) RevertUpsert(containers.Vector, uint64) error { panic("not supported") }
+func (index *immutableIndex) BatchUpsert(*index.KeysCtx, int, uint64) (*index.BatchResp, error) {
 	panic("not supported")
 }
 
@@ -42,7 +43,7 @@ func (index *immutableIndex) Dedup(key any) (err error) {
 	return
 }
 
-func (idx *immutableIndex) String() string {
+func (index *immutableIndex) String() string {
 	panic("implement me")
 }
 func (index *immutableIndex) GetMaxDeleteTS() uint64                    { panic("not supported") }
@@ -97,6 +98,7 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 	if err != nil {
 		return
 	}
+	defer colFile.Close()
 	for _, meta := range metas.Metas {
 		idxFile, err := colFile.OpenIndexFile(int(meta.InternalIdx))
 		if err != nil {
@@ -110,6 +112,7 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 			size := idxFile.Stat().Size()
 			buf := make([]byte, size)
 			if _, err = idxFile.Read(buf); err != nil {
+				idxFile.Unref()
 				return err
 			}
 			index.zmReader = NewZMReader(blk.GetBufMgr(), idxFile, id)
@@ -117,6 +120,7 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 			size := idxFile.Stat().Size()
 			buf := make([]byte, size)
 			if _, err = idxFile.Read(buf); err != nil {
+				idxFile.Unref()
 				return err
 			}
 			index.bfReader = NewBFReader(blk.GetBufMgr(), idxFile, id)

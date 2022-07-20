@@ -97,6 +97,34 @@ type Decimal128 struct {
 	Hi int64
 }
 
+type Ints interface {
+	int8 | int16 | int32 | int64
+}
+
+type UInts interface {
+	uint8 | uint16 | uint32 | uint64
+}
+
+type Floats interface {
+	float32 | float64
+}
+
+type Decimal interface {
+	Decimal64 | Decimal128
+}
+
+type Number interface {
+	Ints | UInts | Floats | Decimal
+}
+
+type String interface {
+	Get(int64) []byte
+}
+
+type Generic interface {
+	Ints | UInts | Floats | Date | Datetime | Timestamp | Decimal64
+}
+
 var Types map[string]T = map[string]T{
 	"bool": T_bool,
 
@@ -129,12 +157,38 @@ var Types map[string]T = map[string]T{
 	"json": T_json,
 }
 
+func New(oid T, width, scale, precision int32) Type {
+	return Type{
+		Oid:       oid,
+		Width:     width,
+		Scale:     scale,
+		Precision: precision,
+		Size:      int32(TypeSize(oid)),
+	}
+}
+
+func TypeSize(oid T) int {
+	return oid.TypeLen()
+}
+
+func (t Type) TypeSize() int {
+	return t.Oid.TypeLen()
+}
+
+func (t Type) IsBoolean() bool {
+	return t.Oid == T_bool
+}
+
+func (t Type) IsString() bool {
+	return t.Oid == T_char || t.Oid == T_varchar
+}
+
 func (t Type) String() string {
 	return t.Oid.String()
 }
 
-func (a Type) Eq(b Type) bool {
-	return a.Oid == b.Oid && a.Size == b.Size && a.Width == b.Width && a.Scale == b.Scale
+func (t Type) Eq(b Type) bool {
+	return t.Oid == b.Oid && t.Size == b.Size && t.Width == b.Width && t.Scale == b.Scale
 }
 
 func (t T) ToType() Type {
@@ -372,7 +426,7 @@ func (t T) TypeLen() int {
 	panic(moerr.NewInternalError("Unknow type %s", t))
 }
 
-// dangerous code, use TypeLen() if you don't want -8, -16, -24
+// FixedLength dangerous code, use TypeLen() if you don't want -8, -16, -24
 func (t T) FixedLength() int {
 	switch t {
 	case T_json:

@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"fmt"
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -22,13 +23,15 @@ import (
 
 const (
 	// NoLeader is the replica ID of the leader node.
-	NoLeader   uint64 = 0
-	HeaderSize        = 4
+	NoLeader uint64 = 0
+	// HeaderSize is the size of the header for each logservice and
+	// hakeeper command.
+	HeaderSize = 4
 )
 
 // ResizePayload resizes the payload length to length bytes.
 func (m *LogRecord) ResizePayload(length int) {
-	m.Data = m.Data[HeaderSize+8+length:]
+	m.Data = m.Data[:HeaderSize+8+length]
 }
 
 // Payload returns the payload byte slice.
@@ -70,6 +73,7 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 		storeInfo = CNStoreInfo{}
 	}
 	storeInfo.Tick = tick
+	storeInfo.ServiceAddress = hb.ServiceAddress
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -89,6 +93,7 @@ func (s *DNState) Update(hb DNStoreHeartbeat, tick uint64) {
 	}
 	storeInfo.Tick = tick
 	storeInfo.Shards = hb.Shards
+	storeInfo.ServiceAddress = hb.ServiceAddress
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -146,4 +151,48 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 
 		s.Shards[incoming.ShardID] = recorded
 	}
+}
+
+// LogString returns "ServiceType/ConfigChangeType UUID RepUuid:RepShardID:RepID InitialMembers"
+func (m *ScheduleCommand) LogString() string {
+	var serviceType = map[ServiceType]string{
+		LogService: "L",
+		DnService:  "D",
+	}
+
+	var configChangeType = map[ConfigChangeType]string{
+		AddReplica:    "Add",
+		RemoveReplica: "Remove",
+		StartReplica:  "Start",
+		StopReplica:   "Stop",
+	}
+	scheUuid := m.UUID
+	if len(m.UUID) > 6 {
+		scheUuid = scheUuid[:6]
+	}
+
+	if m.ConfigChange == nil {
+		return fmt.Sprintf("%s/shutdown %s", serviceType[m.ServiceType], scheUuid)
+	}
+
+	repUuid := m.ConfigChange.Replica.UUID
+	if len(repUuid) > 6 {
+		repUuid = repUuid[:6]
+	}
+
+	initMems := make(map[uint64]string)
+	for repId, uuid := range m.ConfigChange.InitialMembers {
+		if len(uuid) > 6 {
+			initMems[repId] = uuid[:6]
+		} else {
+			initMems[repId] = uuid
+		}
+	}
+
+	s := fmt.Sprintf("%s/%s %s %s:%d:%d:%d %v", serviceType[m.ServiceType],
+		configChangeType[m.ConfigChange.ChangeType], scheUuid,
+		repUuid, m.ConfigChange.Replica.ShardID,
+		m.ConfigChange.Replica.ReplicaID, m.ConfigChange.Replica.Epoch, initMems)
+
+	return s
 }

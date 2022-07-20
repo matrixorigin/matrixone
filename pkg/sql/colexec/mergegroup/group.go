@@ -37,7 +37,7 @@ func Prepare(_ *process.Process, arg interface{}) error {
 	return nil
 }
 
-func Call(proc *process.Process, arg interface{}) (bool, error) {
+func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 	for {
@@ -60,6 +60,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 						ctr.bat.Zs[i] = 1
 					}
 				}
+				ctr.bat.ExpandNulls()
 			}
 			proc.Reg.InputBatch = ctr.bat
 			ctr.bat = nil

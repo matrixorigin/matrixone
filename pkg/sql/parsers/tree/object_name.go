@@ -60,23 +60,23 @@ func (node *UnresolvedObjectName) Format(ctx *FmtCtx) {
 	}
 }
 
-func (u *UnresolvedObjectName) ToTableName() TableName {
+func (node *UnresolvedObjectName) ToTableName() TableName {
 	return TableName{
 		objName: objName{
 			ObjectNamePrefix: ObjectNamePrefix{
-				SchemaName:      Identifier(u.Parts[1]),
-				CatalogName:     Identifier(u.Parts[2]),
-				ExplicitSchema:  u.NumParts >= 2,
-				ExplicitCatalog: u.NumParts >= 3,
+				SchemaName:      Identifier(node.Parts[1]),
+				CatalogName:     Identifier(node.Parts[2]),
+				ExplicitSchema:  node.NumParts >= 2,
+				ExplicitCatalog: node.NumParts >= 3,
 			},
-			ObjectName: Identifier(u.Parts[0]),
+			ObjectName: Identifier(node.Parts[0]),
 		},
 	}
 }
 
 func NewUnresolvedObjectName(num int, parts [3]string) (*UnresolvedObjectName, error) {
 	if num < 1 || num > 3 {
-		return nil, fmt.Errorf("invalid number of parts.")
+		return nil, fmt.Errorf("invalid number of parts")
 	}
 	return &UnresolvedObjectName{
 		NumParts: num,

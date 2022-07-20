@@ -20,9 +20,12 @@ The CAST() function converts a value (of any type) into the specified datatype.
 
 Currently, `cast` can support following conversion:
 
- * Conversion between numeric types, mainly including SIGNED, UNSIGNED, FLOAT, and DOUBLE type.
- * Numeric types to character CHAR type.
- * Numeric character types to numerical types(negative into SIGNED).
+* Conversion between numeric types, mainly including SIGNED, UNSIGNED, FLOAT, and DOUBLE type.
+* Numeric types to character CHAR type.
+* Numeric character types to numerical types(negative into SIGNED).
+
+A detailed data type conversion rule can be refered
+to [Data Conversion Rule](../../../../Data-Types/data-type-conversion.md).
 
 ## **Examples**
 

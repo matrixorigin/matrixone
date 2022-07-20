@@ -14,9 +14,7 @@
 
 package nulls
 
-import (
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
-)
+import "github.com/matrixorigin/matrixone/pkg/common/bitmap"
 
 /*
 type Nulls interface{
@@ -36,5 +34,5 @@ type Nulls interface{
 */
 
 type Nulls struct {
-	Np *roaring.Bitmap
+	Np *bitmap.Bitmap
 }

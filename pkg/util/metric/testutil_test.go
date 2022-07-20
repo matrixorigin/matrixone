@@ -51,7 +51,7 @@ func waitTimeout(wg *sync.WaitGroup, after time.Duration) error {
 }
 
 func makeDummyClock(startOffset int64) func() int64 {
-	var tick int64 = startOffset - 1
+	var tick = startOffset - 1
 	return func() int64 {
 		return atomic.AddInt64(&tick, 1)
 	}

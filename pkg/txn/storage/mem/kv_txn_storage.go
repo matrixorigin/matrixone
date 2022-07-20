@@ -61,6 +61,28 @@ func NewGetTxnRequest(ks [][]byte) txn.TxnRequest {
 	}
 }
 
+// EventType event type
+type EventType int
+
+var (
+	// PrepareType prepare event
+	PrepareType = EventType(0)
+	// CommitType commit event
+	CommitType = EventType(1)
+	// CommittingType committing type
+	CommittingType = EventType(2)
+	// RollbackType rollback type
+	RollbackType = EventType(3)
+)
+
+// Event event
+type Event struct {
+	// Txn event txn
+	Txn txn.TxnMeta
+	// Type event type
+	Type EventType
+}
+
 // KVTxnStorage KV-based implementation of TxnStorage. Just used to test.
 type KVTxnStorage struct {
 	sync.RWMutex
@@ -70,6 +92,7 @@ type KVTxnStorage struct {
 	uncommittedKeyTxnMap map[string]*txn.TxnMeta
 	uncommitted          *KV
 	committed            *MVCCKV
+	eventC               chan Event
 }
 
 // NewKVTxnStorage create KV-based implementation of TxnStorage
@@ -81,7 +104,12 @@ func NewKVTxnStorage(latest logservice.Lsn, logClient logservice.Client) *KVTxnS
 		uncommittedTxn:       make(map[string]*txn.TxnMeta),
 		uncommitted:          NewKV(),
 		committed:            NewMVCCKV(),
+		eventC:               make(chan Event, 1024*10),
 	}
+}
+
+func (kv *KVTxnStorage) GetEventC() chan Event {
+	return kv.eventC
 }
 
 func (kv *KVTxnStorage) GetUncommittedTxn(txnID []byte) *txn.TxnMeta {
@@ -155,6 +183,10 @@ func (kv *KVTxnStorage) StartRecovery(c chan txn.TxnMeta) {
 	}
 }
 
+func (kv *KVTxnStorage) Close() error {
+	return nil
+}
+
 func (kv *KVTxnStorage) GetLatestLsn() logservice.Lsn {
 	return kv.latest
 }
@@ -207,7 +239,7 @@ func (kv *KVTxnStorage) readValue(key []byte, txnMeta txn.TxnMeta) []byte {
 	}
 
 	var value []byte
-	kv.committed.AscendRange(key, timestamp.Timestamp{}, txnMeta.SnapshotTS, func(v []byte, t timestamp.Timestamp) {
+	kv.committed.AscendRange(key, timestamp.Timestamp{}, txnMeta.SnapshotTS, func(v []byte, _ timestamp.Timestamp) {
 		value = v
 	})
 	return value
@@ -247,6 +279,11 @@ func (kv *KVTxnStorage) Prepare(txnMeta txn.TxnMeta) error {
 		return storage.ErrMissingTxn
 	}
 
+	writeKeys := kv.getWriteKeysLocked(txnMeta)
+	if kv.hasConflict(txnMeta.SnapshotTS, txnMeta.PreparedTS.Next(), writeKeys) {
+		return storage.ErrWriteConflict
+	}
+
 	log := kv.getLogWithDataLocked(txnMeta)
 	log.Txn.Status = txn.TxnStatus_Prepared
 	lsn, err := kv.saveLog(log)
@@ -258,6 +295,7 @@ func (kv *KVTxnStorage) Prepare(txnMeta txn.TxnMeta) error {
 	newTxn.PreparedTS = txnMeta.PreparedTS
 	newTxn.DNShards = txnMeta.DNShards
 	kv.latest = lsn
+	kv.eventC <- Event{Txn: *newTxn, Type: PrepareType}
 	return nil
 }
 
@@ -279,6 +317,7 @@ func (kv *KVTxnStorage) Committing(txnMeta txn.TxnMeta) error {
 	newTxn := kv.changeUncommittedTxnStatusLocked(txnMeta.ID, txn.TxnStatus_Committing)
 	newTxn.CommitTS = txnMeta.CommitTS
 	kv.latest = lsn
+	kv.eventC <- Event{Txn: *newTxn, Type: CommittingType}
 	return nil
 }
 
@@ -291,14 +330,15 @@ func (kv *KVTxnStorage) Commit(txnMeta txn.TxnMeta) error {
 	}
 
 	writeKeys := kv.getWriteKeysLocked(txnMeta)
-	if kv.hasConflict(txnMeta, writeKeys) {
+	if kv.hasConflict(txnMeta.SnapshotTS, txnMeta.CommitTS.Next(), writeKeys) {
 		return storage.ErrWriteConflict
 	}
 
 	var log *KVLog
 	if txnMeta.Status == txn.TxnStatus_Active {
 		log = kv.getLogWithDataLocked(txnMeta)
-	} else if txnMeta.Status == txn.TxnStatus_Prepared {
+	} else if txnMeta.Status == txn.TxnStatus_Prepared ||
+		txnMeta.Status == txn.TxnStatus_Committing {
 		log = &KVLog{Txn: txnMeta}
 	} else {
 		panic(fmt.Sprintf("commit with invalid status: %s", txnMeta.Status))
@@ -311,6 +351,7 @@ func (kv *KVTxnStorage) Commit(txnMeta txn.TxnMeta) error {
 
 	kv.commitKeysLocked(txnMeta, writeKeys)
 	kv.latest = lsn
+	kv.eventC <- Event{Txn: log.Txn, Type: CommitType}
 	return nil
 }
 
@@ -335,6 +376,7 @@ func (kv *KVTxnStorage) Rollback(txnMeta txn.TxnMeta) error {
 	}
 
 	delete(kv.uncommittedTxn, string(txnMeta.ID))
+	kv.eventC <- Event{Txn: txnMeta, Type: RollbackType}
 	return nil
 }
 
@@ -360,10 +402,10 @@ func (kv *KVTxnStorage) getLogWithDataLocked(txnMeta txn.TxnMeta) *KVLog {
 	return log
 }
 
-func (kv *KVTxnStorage) hasConflict(txnMeta txn.TxnMeta, writeKeys [][]byte) bool {
+func (kv *KVTxnStorage) hasConflict(from, to timestamp.Timestamp, writeKeys [][]byte) bool {
 	for _, key := range writeKeys {
 		n := 0
-		kv.committed.AscendRange(key, txnMeta.SnapshotTS, txnMeta.CommitTS.Next(), func(b []byte, t timestamp.Timestamp) {
+		kv.committed.AscendRange(key, from, to, func(_ []byte, _ timestamp.Timestamp) {
 			n++
 		})
 		if n > 0 {
@@ -379,9 +421,6 @@ func (kv *KVTxnStorage) getWriteKeysLocked(txnMeta txn.TxnMeta) [][]byte {
 		if bytes.Equal(v.ID, txnMeta.ID) {
 			writeKeys = append(writeKeys, []byte(k))
 		}
-	}
-	if len(writeKeys) == 0 {
-		panic("commit empty write set")
 	}
 	return writeKeys
 }

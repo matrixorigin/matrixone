@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
@@ -54,11 +55,21 @@ func TestPrepare(t *testing.T) {
 
 	wTxn := writeTestData(t, s, 1, nil, 1)
 
-	prepareTestTxn(t, s, &wTxn, 2)
+	prepareTestTxn(t, s, &wTxn, 2, nil)
 
 	checkUncommitted(t, s, wTxn, 1)
 	checkLogCount(t, l, 1)
 	checkLog(t, l, 0, wTxn, 1)
+}
+
+func TestPrepareWithConflict(t *testing.T) {
+	l := NewMemLog()
+	s := NewKVTxnStorage(0, l)
+
+	writeCommittedData(t, s, 1, 2, 1)
+
+	wTxn := writeTestData(t, s, 1, nil, 1)
+	prepareTestTxn(t, s, &wTxn, 5, storage.ErrWriteConflict)
 }
 
 func TestCommit(t *testing.T) {
@@ -95,7 +106,7 @@ func TestCommitAfterPrepared(t *testing.T) {
 	s := NewKVTxnStorage(0, l)
 
 	wTxn := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &wTxn, 2)
+	prepareTestTxn(t, s, &wTxn, 2, nil)
 	commitTestTxn(t, s, &wTxn, 3, nil)
 
 	checkCommitted(t, s, wTxn, 1)
@@ -157,10 +168,10 @@ func TestWaitReadByPreparedTxn(t *testing.T) {
 
 	writeCommittedData(t, s, 0, 1, 1)
 
-	wTxn := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &wTxn, 1)
+	wTxn := writeTestData(t, s, 2, nil, 1)
+	prepareTestTxn(t, s, &wTxn, 5, nil)
 
-	readTestData(t, s, 2, [][]byte{wTxn.ID}, 1)
+	readTestData(t, s, 6, [][]byte{wTxn.ID}, 1)
 }
 
 func TestReadByGTPreparedTxnCanNotWait(t *testing.T) {
@@ -169,8 +180,8 @@ func TestReadByGTPreparedTxnCanNotWait(t *testing.T) {
 
 	writeCommittedData(t, s, 0, 1, 1)
 
-	wTxn := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &wTxn, 2)
+	wTxn := writeTestData(t, s, 2, nil, 1)
+	prepareTestTxn(t, s, &wTxn, 5, nil)
 
 	readTestData(t, s, 2, nil, 1)
 }
@@ -181,11 +192,11 @@ func TestWaitReadByCommittingTxn(t *testing.T) {
 
 	writeCommittedData(t, s, 0, 1, 1)
 
-	wTxn := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &wTxn, 1)
-	committingTestTxn(t, s, &wTxn, 1)
+	wTxn := writeTestData(t, s, 2, nil, 1)
+	prepareTestTxn(t, s, &wTxn, 5, nil)
+	committingTestTxn(t, s, &wTxn, 6)
 
-	readTestData(t, s, 2, [][]byte{wTxn.ID}, 1)
+	readTestData(t, s, 7, [][]byte{wTxn.ID}, 1)
 }
 
 func TestReadByGTCommittingTxnCanNotWait(t *testing.T) {
@@ -194,11 +205,11 @@ func TestReadByGTCommittingTxnCanNotWait(t *testing.T) {
 
 	writeCommittedData(t, s, 0, 1, 1)
 
-	wTxn := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &wTxn, 2)
-	committingTestTxn(t, s, &wTxn, 2)
+	wTxn := writeTestData(t, s, 2, nil, 1)
+	prepareTestTxn(t, s, &wTxn, 3, nil)
+	committingTestTxn(t, s, &wTxn, 4)
 
-	readTestData(t, s, 2, nil, 1)
+	readTestData(t, s, 3, nil, 1)
 }
 
 func TestReadAfterWaitTxnResloved(t *testing.T) {
@@ -206,10 +217,10 @@ func TestReadAfterWaitTxnResloved(t *testing.T) {
 	s := NewKVTxnStorage(0, l)
 
 	wTxn1 := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &wTxn1, 2)
+	prepareTestTxn(t, s, &wTxn1, 2, nil)
 
 	wTxn2 := writeTestData(t, s, 1, nil, 2)
-	prepareTestTxn(t, s, &wTxn2, 2)
+	prepareTestTxn(t, s, &wTxn2, 2, nil)
 
 	_, rs := readTestData(t, s, 5, [][]byte{wTxn1.ID, wTxn2.ID}, 1, 2)
 	_, err := rs.Read()
@@ -229,7 +240,7 @@ func TestRecovery(t *testing.T) {
 	s := NewKVTxnStorage(0, l)
 
 	prepareTxn := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &prepareTxn, 2)
+	prepareTestTxn(t, s, &prepareTxn, 2, nil)
 	checkLog(t, l, 0, prepareTxn, 1)
 
 	committedTxn := writeTestData(t, s, 1, nil, 2)
@@ -237,13 +248,13 @@ func TestRecovery(t *testing.T) {
 	checkLog(t, l, 1, committedTxn, 2)
 
 	committedAndPreparedTxn := writeTestData(t, s, 1, nil, 3)
-	prepareTestTxn(t, s, &committedAndPreparedTxn, 2)
+	prepareTestTxn(t, s, &committedAndPreparedTxn, 2, nil)
 	checkLog(t, l, 2, committedAndPreparedTxn, 3)
 	commitTestTxn(t, s, &committedAndPreparedTxn, 3, nil)
 	checkLog(t, l, 3, committedAndPreparedTxn)
 
 	committingTxn := writeTestData(t, s, 1, nil, 4)
-	prepareTestTxn(t, s, &committingTxn, 2)
+	prepareTestTxn(t, s, &committingTxn, 2, nil)
 	checkLog(t, l, 4, committingTxn, 4)
 	committingTestTxn(t, s, &committingTxn, 3)
 	checkLog(t, l, 5, committingTxn)
@@ -259,16 +270,40 @@ func TestRecovery(t *testing.T) {
 	checkCommitted(t, s2, committedAndPreparedTxn, 3)
 	checkUncommitted(t, s2, committingTxn, 4)
 
-	var txns []txn.TxnMeta
+	txns := make([]txn.TxnMeta, 0, 6)
 	for v := range c {
 		txns = append(txns, v)
 	}
 	assert.Equal(t, 6, len(txns))
 }
 
-func prepareTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64) {
+func TestEvent(t *testing.T) {
+	l := NewMemLog()
+	s := NewKVTxnStorage(0, l)
+
+	wTxn := writeTestData(t, s, 1, nil, 1)
+	prepareTestTxn(t, s, &wTxn, 2, nil)
+	e := <-s.GetEventC()
+	assert.Equal(t, e, Event{Type: PrepareType, Txn: wTxn})
+
+	committingTestTxn(t, s, &wTxn, 3)
+	e = <-s.GetEventC()
+	assert.Equal(t, e, Event{Type: CommittingType, Txn: wTxn})
+
+	commitTestTxn(t, s, &wTxn, 3, nil)
+	e = <-s.GetEventC()
+	assert.Equal(t, e, Event{Type: CommitType, Txn: wTxn})
+
+	wTxn = writeTestData(t, s, 1, nil, 2)
+	assert.NoError(t, s.Rollback(wTxn))
+	checkRollback(t, s, wTxn, 2)
+	e = <-s.GetEventC()
+	assert.Equal(t, e, Event{Type: RollbackType, Txn: wTxn})
+}
+
+func prepareTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64, err error) {
 	wTxn.PreparedTS = newTimestamp(ts)
-	assert.NoError(t, s.Prepare(*wTxn))
+	assert.Equal(t, err, s.Prepare(*wTxn))
 	wTxn.Status = txn.TxnStatus_Prepared
 }
 
@@ -284,14 +319,18 @@ func commitTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64, e
 	wTxn.Status = txn.TxnStatus_Committed
 }
 
-func checkLogCount(t *testing.T, l *memLogClient, expect int) {
+func checkLogCount(t *testing.T, ll logservice.Client, expect int) {
+	l := ll.(*memLogClient)
+
 	l.RLock()
 	defer l.RUnlock()
 
 	assert.Equal(t, expect, len(l.logs))
 }
 
-func checkLog(t *testing.T, l *memLogClient, offset int, wTxn txn.TxnMeta, keys ...byte) {
+func checkLog(t *testing.T, ll logservice.Client, offset int, wTxn txn.TxnMeta, keys ...byte) {
+	l := ll.(*memLogClient)
+
 	l.RLock()
 	defer l.RUnlock()
 
@@ -324,7 +363,7 @@ func checkUncommitted(t *testing.T, s *KVTxnStorage, wTxn txn.TxnMeta, keys ...b
 		s.committed.AscendRange(key,
 			newTimestamp(0),
 			newTimestamp(math.MaxInt64),
-			func(b []byte, t timestamp.Timestamp) {
+			func(b []byte, _ timestamp.Timestamp) {
 				if bytes.Equal(b, value) {
 					n++
 				}
@@ -349,7 +388,7 @@ func checkRollback(t *testing.T, s *KVTxnStorage, wTxn txn.TxnMeta, keys ...byte
 		s.committed.AscendRange(key,
 			newTimestamp(0),
 			newTimestamp(math.MaxInt64),
-			func(b []byte, t timestamp.Timestamp) {
+			func(b []byte, _ timestamp.Timestamp) {
 				if bytes.Equal(b, value) {
 					n++
 				}
@@ -387,7 +426,7 @@ func checkCommitted(t *testing.T, s *KVTxnStorage, wTxn txn.TxnMeta, keys ...byt
 		s.committed.AscendRange(key,
 			newTimestamp(0),
 			newTimestamp(math.MaxInt64),
-			func(b []byte, ts timestamp.Timestamp) {
+			func(b []byte, _ timestamp.Timestamp) {
 				if bytes.Equal(value, b) {
 					hasCommitted = true
 				}

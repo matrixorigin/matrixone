@@ -44,7 +44,3 @@ The STDDEV_POP(expr) function returns the population standard deviation of expr.
 1 row in set (0.01 sec)
 
 ```
-
-## **Constraints**
-
-Currently, MatrixOne doesn't support select function() without from tables.

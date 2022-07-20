@@ -32,4 +32,4 @@ decimal places (0.6028865979381443).
 
 - Arithmetic operators only apply to numbers.
 - To ensure that components and subcomponents of a calculation use the appropriate level of precision.
-  See [Cast Functions and Operators](cast-functions-and-operators-overview.md).
+  See [Cast Functions and Operators](../cast-functions-and-operators/cast-functions-and-operators-overview.md).

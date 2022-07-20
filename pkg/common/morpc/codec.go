@@ -84,15 +84,16 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf) error {
 		flag := byte(0)
 		size := 1 // 1 bytes flag
 		var payloadData []byte
+		var payload PayloadMessage
 		hasPayload := false
-		if payload, ok := message.(PayloadMessage); ok {
+		if payload, hasPayload = message.(PayloadMessage); hasPayload {
 			payloadData = payload.GetPayloadField()
-			if len(payloadData) > 0 {
+			hasPayload = len(payloadData) > 0
+			if hasPayload {
 				payload.SetPayloadField(nil)
 				flag = flagPayloadMessage
 				hasPayload = true
 				size += 4 + len(payloadData) // 4 bytes payload size + payload bytes
-				defer payload.SetPayloadField(payloadData)
 			}
 		}
 
@@ -113,10 +114,15 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf) error {
 		if _, err := message.MarshalTo(out.RawBuf()[index : index+msize]); err != nil {
 			return err
 		}
-		out.SetWriterIndex(index + msize)
+		if err := out.SetWriterIndex(index + msize); err != nil {
+			panic(err)
+		}
 
 		// payload
 		if hasPayload {
+			// recover payload
+			payload.SetPayloadField(payloadData)
+
 			if _, err := out.FlushToSink(); err != nil {
 				return err
 			}

@@ -145,6 +145,9 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 	case *tree.VarExpr:
 		expr, err = b.baseBindVar(exprImpl, depth, isRoot)
 
+	case *tree.ParamExpr:
+		expr, err = b.baseBindParam(exprImpl, depth, isRoot)
+
 	case *tree.StrVal:
 		err = errors.New("", fmt.Sprintf("expr str'%v' is not supported now", exprImpl))
 
@@ -161,6 +164,19 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 	}
 
 	return
+}
+
+func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
+	return &Expr{
+		Typ: &plan.Type{
+			Id: plan.Type_ANY,
+		},
+		Expr: &plan.Expr_P{
+			P: &plan.ParamRef{
+				Pos: int32(astExpr.Offset),
+			},
+		},
+	}, nil
 }
 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
@@ -371,11 +387,11 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Expr, error) {
 	subCtx := NewBindContext(b.builder, b.ctx)
 
-	var nodeId int32
+	var nodeID int32
 	var err error
 	switch subquery := astExpr.Select.(type) {
 	case *tree.ParenSelect:
-		nodeId, err = b.builder.buildSelect(subquery.Select, subCtx, false)
+		nodeID, err = b.builder.buildSelect(subquery.Select, subCtx, false)
 		if err != nil {
 			return nil, err
 		}
@@ -390,7 +406,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		},
 		Expr: &plan.Expr_Sub{
 			Sub: &plan.SubqueryRef{
-				NodeId: nodeId,
+				NodeId: nodeID,
 			},
 		},
 	}
@@ -413,7 +429,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 }
 
 func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32, isRoot bool) (*Expr, error) {
-	var args []tree.Expr
+	args := make([]tree.Expr, 0, len(astExpr.Whens)+1)
 	caseExist := astExpr.Expr != nil
 
 	for _, whenExpr := range astExpr.Whens {
@@ -507,22 +523,22 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		op = "like"
 
 	case tree.NOT_LIKE:
-		new_expr := tree.NewComparisonExpr(tree.LIKE, astExpr.Left, astExpr.Right)
-		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{new_expr}, depth)
+		newExpr := tree.NewComparisonExpr(tree.LIKE, astExpr.Left, astExpr.Right)
+		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
 	case tree.IN:
 		switch list := astExpr.Right.(type) {
 		case *tree.Tuple:
-			var new_expr tree.Expr
+			var newExpr tree.Expr
 			for _, expr := range list.Exprs {
-				if new_expr == nil {
-					new_expr = tree.NewComparisonExpr(tree.EQUAL, astExpr.Left, expr)
+				if newExpr == nil {
+					newExpr = tree.NewComparisonExpr(tree.EQUAL, astExpr.Left, expr)
 				} else {
-					equal_expr := tree.NewComparisonExpr(tree.EQUAL, astExpr.Left, expr)
-					new_expr = tree.NewOrExpr(new_expr, equal_expr)
+					equalExpr := tree.NewComparisonExpr(tree.EQUAL, astExpr.Left, expr)
+					newExpr = tree.NewOrExpr(newExpr, equalExpr)
 				}
 			}
-			return b.impl.BindExpr(new_expr, depth, false)
+			return b.impl.BindExpr(newExpr, depth, false)
 
 		default:
 			leftArg, err := b.impl.BindExpr(astExpr.Left, depth, false)
@@ -843,6 +859,27 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				return nil, err
 			}
 		}
+	case "variance":
+		if args[0].Typ.Id == plan.Type_DECIMAL128 || args[0].Typ.Id == plan.Type_DECIMAL64 {
+			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
+				Id:       plan.Type_FLOAT64,
+				Nullable: false,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+		}
+	case "stddev_pop":
+		if args[0].Typ.Id == plan.Type_DECIMAL128 || args[0].Typ.Id == plan.Type_DECIMAL64 {
+			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
+				Id:       plan.Type_FLOAT64,
+				Nullable: false,
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	// get args(exprs) & types
@@ -853,7 +890,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	}
 
 	// get function definition
-	funcId, returnType, argsCastType, err := function.GetFunctionByName(name, argsType)
+	funcID, returnType, argsCastType, err := function.GetFunctionByName(name, argsType)
 	if err != nil {
 		return nil, err
 	}
@@ -881,7 +918,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: getFunctionObjRef(funcId, name),
+				Func: getFunctionObjRef(funcID, name),
 				Args: args,
 			},
 		},
@@ -912,11 +949,18 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 	}
 
 	returnDecimalExpr := func(val string) (*Expr, error) {
+		_, scale, err := types.ParseStringToDecimal128WithoutTable(val)
+		if err != nil {
+			return nil, err
+		}
 		typ := &plan.Type{
-			Id:       plan.Type_DECIMAL128,
-			Width:    int32(len(val)),
-			Scale:    0,
-			Nullable: false,
+			Id: plan.Type_DECIMAL128,
+			// Width: int32(len(val)),
+			// Scale: 0,
+			Width:     38,
+			Scale:     scale,
+			Precision: 38,
+			Nullable:  false,
 		}
 		return appendCastBeforeExpr(getStringExpr(val), typ)
 	}
@@ -994,9 +1038,16 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 	case tree.P_decimal:
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_float64:
+		originString := astExpr.String()
+		if !strings.Contains(originString, "e") {
+			expr, err := returnDecimalExpr(originString)
+			if err == nil {
+				return expr, nil
+			}
+		}
 		floatValue, ok := constant.Float64Val(astExpr.Value)
 		if !ok {
-			return returnDecimalExpr(astExpr.String())
+			return returnDecimalExpr(originString)
 		}
 		//if astExpr.Negative() {
 		//	floatValue = -floatValue
@@ -1038,14 +1089,14 @@ func appendCastBeforeExpr(expr *Expr, toType *Type) (*Expr, error) {
 		makeTypeByPlan2Expr(expr),
 		makeTypeByPlan2Type(toType),
 	}
-	funcId, _, _, err := function.GetFunctionByName("cast", argsType)
+	funcID, _, _, err := function.GetFunctionByName("cast", argsType)
 	if err != nil {
 		return nil, err
 	}
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: getFunctionObjRef(funcId, "cast"),
+				Func: getFunctionObjRef(funcID, "cast"),
 				Args: []*Expr{expr, {
 					Expr: &plan.Expr_T{
 						T: &plan.TargetType{

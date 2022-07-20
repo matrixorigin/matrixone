@@ -91,7 +91,7 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 
 	testRPCServer(t, func(rs *server) {
 		c := newTestClient(t)
-		rs.RegisterRequestHandler(func(request Message, sequence uint64, cs ClientSession) error {
+		rs.RegisterRequestHandler(func(request Message, _ uint64, cs ClientSession) error {
 			assert.NoError(t, c.Close())
 			wc <- struct{}{}
 			return cs.Write(request, SendOptions{})
@@ -108,7 +108,7 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 		resp, err := f.Get()
 		assert.Error(t, ctx.Err(), err)
 		assert.Nil(t, resp)
-	}, WithServerWriteFilter(func(m Message) bool {
+	}, WithServerWriteFilter(func(_ Message) bool {
 		<-wc
 		return true
 	}))
@@ -124,7 +124,7 @@ func TestStreamServer(t *testing.T) {
 		wg := sync.WaitGroup{}
 		wg.Add(1)
 		n := 10
-		rs.RegisterRequestHandler(func(request Message, sequence uint64, cs ClientSession) error {
+		rs.RegisterRequestHandler(func(request Message, _ uint64, cs ClientSession) error {
 			go func() {
 				defer wg.Done()
 				for i := 0; i < n; i++ {
@@ -134,7 +134,7 @@ func TestStreamServer(t *testing.T) {
 			return nil
 		})
 
-		st, err := c.NewStream(testAddr, 1)
+		st, err := c.NewStream(testAddr)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, st.Close())

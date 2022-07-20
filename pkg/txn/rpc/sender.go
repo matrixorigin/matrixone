@@ -16,11 +16,13 @@ package rpc
 
 import (
 	"context"
+	"runtime"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"go.uber.org/zap"
 )
@@ -54,15 +56,20 @@ func WithSenderLocalDispatch(localDispatch LocalDispatch) SenderOption {
 }
 
 type sender struct {
-	logger          *zap.Logger
-	client          morpc.RPCClient
-	localStreamPool sync.Pool
+	logger *zap.Logger
+	client morpc.RPCClient
 
 	options struct {
 		localDispatch         LocalDispatch
 		payloadCopyBufferSize int
 		backendCreateOptions  []morpc.BackendOption
 		clientOptions         []morpc.ClientOption
+	}
+
+	pool struct {
+		resultPool      *sync.Pool
+		responsePool    *sync.Pool
+		localStreamPool *sync.Pool
 	}
 }
 
@@ -75,16 +82,34 @@ func NewSender(logger *zap.Logger, options ...SenderOption) (TxnSender, error) {
 	}
 	s.adjust()
 
-	codec := morpc.NewMessageCodec(func() morpc.Message { return &txn.TxnResponse{} }, s.options.payloadCopyBufferSize)
+	s.pool.localStreamPool = &sync.Pool{
+		New: func() any {
+			return newLocalStream(s.releaseLocalStream, s.acquireResponse)
+		},
+	}
+	s.pool.resultPool = &sync.Pool{
+		New: func() any {
+			rs := &SendResult{
+				pool:    s.pool.resultPool,
+				streams: make(map[uint64]morpc.Stream, 16),
+			}
+			return rs
+		},
+	}
+	s.pool.responsePool = &sync.Pool{
+		New: func() any {
+			return &txn.TxnResponse{}
+		},
+	}
+
+	codec := morpc.NewMessageCodec(func() morpc.Message { return s.acquireResponse() },
+		s.options.payloadCopyBufferSize)
 	bf := morpc.NewGoettyBasedBackendFactory(codec, s.options.backendCreateOptions...)
 	client, err := morpc.NewClient(bf, s.options.clientOptions...)
 	if err != nil {
 		return nil, err
 	}
 	s.client = client
-	s.localStreamPool.New = func() any {
-		return newLocalStream(s.releaseLocalStream)
-	}
 	return s, nil
 }
 
@@ -103,74 +128,58 @@ func (s *sender) Close() error {
 	return s.client.Close()
 }
 
-func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) ([]txn.TxnResponse, error) {
+func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResult, error) {
 	s.mustSetupTimeoutAt(ctx, requests)
 
+	sr := s.acquireSendResult()
 	if len(requests) == 1 {
+		sr.reset(requests)
 		resp, err := s.doSend(ctx, requests[0])
 		if err != nil {
+			sr.Release()
 			return nil, err
 		}
-		return []txn.TxnResponse{resp}, nil
+		sr.Responses[0] = resp
+		return sr, nil
 	}
 
-	responses := make([]txn.TxnResponse, len(requests))
-	executors := make(map[string]*executor, len(requests))
-	defer func() {
-		for dn, st := range executors {
-			if err := st.close(); err != nil {
-				s.logger.Error("close stream failed",
-					zap.String("dn", dn),
-					zap.Error(err))
+	sr.reset(requests)
+	for idx := range requests {
+		dn := requests[idx].GetTargetDN()
+		st := sr.getStream(dn.ShardID)
+		if st == nil {
+			v, err := s.createStream(ctx, dn, len(requests))
+			if err != nil {
+				sr.Release()
+				return nil, err
 			}
+			st = v
+			sr.setStream(dn.ShardID, v)
 		}
-	}()
 
-	for idx, req := range requests {
-		dn := req.GetTargetDN()
-		exec, ok := executors[dn.Address]
+		requests[idx].RequestID = st.ID()
+		if err := st.Send(&requests[idx], morpc.SendOptions{}); err != nil {
+			sr.Release()
+			return nil, err
+		}
+	}
+
+	for idx := range requests {
+		st := sr.getStream(requests[idx].GetTargetDN().ShardID)
+		c, err := st.Receive()
+		if err != nil {
+			sr.Release()
+			return nil, err
+		}
+		v, ok := <-c
 		if !ok {
-			var st morpc.Stream
-			var err error
-			var local bool
-			if s.options.localDispatch != nil {
-				if h := s.options.localDispatch(dn); h != nil {
-					local = true
-					ls := s.acquireLocalStream()
-					ls.setup(ctx, responses, h)
-					local = true
-					st = ls
-				}
-			}
-			if err != nil {
-				return nil, err
-			}
-			if st == nil {
-				st, err = s.client.NewStream(dn.Address, len(requests))
-				if err != nil {
-					return nil, err
-				}
-			}
-
-			exec, err = newExecutor(ctx, responses, st, local)
-			if err != nil {
-				return nil, err
-			}
-			executors[dn.Address] = exec
+			return nil, moerr.NewError(moerr.ErrStreamClosed, "stream closed")
 		}
-
-		req.RequestID = exec.stream.ID()
-		if err := exec.execute(req, idx); err != nil {
-			return nil, err
-		}
+		resp := v.(*txn.TxnResponse)
+		sr.setResponse(resp, idx)
+		s.releaseResponse(resp)
 	}
-
-	for _, se := range executors {
-		if err := se.waitCompleted(); err != nil {
-			return nil, err
-		}
-	}
-	return responses, nil
+	return sr, nil
 }
 
 func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnResponse, error) {
@@ -206,88 +215,79 @@ func (s *sender) mustSetupTimeoutAt(ctx context.Context, requests []txn.TxnReque
 	}
 }
 
+func (s *sender) createStream(ctx context.Context, dn metadata.DNShard, size int) (morpc.Stream, error) {
+	if s.options.localDispatch != nil {
+		if h := s.options.localDispatch(dn); h != nil {
+			ls := s.acquireLocalStream()
+			ls.setup(ctx, h)
+			return ls, nil
+		}
+	}
+	return s.client.NewStream(dn.Address)
+}
+
 func (s *sender) acquireLocalStream() *localStream {
-	return s.localStreamPool.Get().(*localStream)
+	return s.pool.localStreamPool.Get().(*localStream)
 }
 
 func (s *sender) releaseLocalStream(ls *localStream) {
-	s.localStreamPool.Put(ls)
+	s.pool.localStreamPool.Put(ls)
 }
 
-type executor struct {
-	ctx       context.Context
-	stream    morpc.Stream
-	local     bool
-	responses []txn.TxnResponse
-	indexes   []int
-	c         chan morpc.Message
+func (s *sender) acquireResponse() *txn.TxnResponse {
+	return s.pool.responsePool.Get().(*txn.TxnResponse)
 }
 
-func newExecutor(ctx context.Context, responses []txn.TxnResponse, stream morpc.Stream, local bool) (*executor, error) {
-	exec := &executor{
-		ctx:       ctx,
-		local:     local,
-		stream:    stream,
-		responses: responses,
-	}
-	if !local {
-		c, err := stream.Receive()
-		if err != nil {
-			return nil, err
-		}
-		exec.c = c
-	}
-	return exec, nil
+func (s *sender) releaseResponse(response *txn.TxnResponse) {
+	response.Reset()
+	s.pool.responsePool.Put(response)
 }
 
-func (se *executor) execute(req txn.TxnRequest, index int) error {
-	se.indexes = append(se.indexes, index)
-	req.RequestID = se.stream.ID()
-	return se.stream.Send(&req, morpc.SendOptions{Arg: index})
+func (s *sender) acquireSendResult() *SendResult {
+	return s.pool.resultPool.Get().(*SendResult)
 }
 
-func (se *executor) close() error {
-	return se.stream.Close()
-}
-
-func (se *executor) waitCompleted() error {
-	if se.local {
-		return nil
-	}
-	for _, idx := range se.indexes {
-		select {
-		case <-se.ctx.Done():
-			return se.ctx.Err()
-		case v, ok := <-se.c:
-			if !ok {
-				return moerr.NewError(moerr.ErrStreamClosed, "stream closed")
-			}
-			se.responses[idx] = *(v.(*txn.TxnResponse))
-		}
-	}
-	return nil
+type sendMessage struct {
+	request morpc.Message
+	// opts            morpc.SendOptions
+	handleFunc      TxnRequestHandleFunc
+	responseFactory func() *txn.TxnResponse
+	ctx             context.Context
 }
 
 type localStream struct {
-	releaseFunc func(ls *localStream)
-	handleFunc  TxnRequestHandleFunc
+	releaseFunc     func(ls *localStream)
+	responseFactory func() *txn.TxnResponse
+	in              chan sendMessage
+	out             chan morpc.Message
 
 	// reset fields
-	closed    bool
-	ctx       context.Context
-	responses []txn.TxnResponse
+	closed     bool
+	handleFunc TxnRequestHandleFunc
+	ctx        context.Context
 }
 
-func newLocalStream(releaseFunc func(ls *localStream)) *localStream {
-	return &localStream{
-		releaseFunc: releaseFunc,
+func newLocalStream(releaseFunc func(ls *localStream), responseFactory func() *txn.TxnResponse) *localStream {
+	ls := &localStream{
+		releaseFunc:     releaseFunc,
+		responseFactory: responseFactory,
+		in:              make(chan sendMessage, 32),
+		out:             make(chan morpc.Message, 32),
 	}
+	ls.setFinalizer()
+	ls.start()
+	return ls
 }
 
-func (ls *localStream) setup(ctx context.Context, responses []txn.TxnResponse, handleFunc TxnRequestHandleFunc) {
+func (ls *localStream) setFinalizer() {
+	runtime.SetFinalizer(ls, func(ls *localStream) {
+		ls.destroy()
+	})
+}
+
+func (ls *localStream) setup(ctx context.Context, handleFunc TxnRequestHandleFunc) {
 	ls.handleFunc = handleFunc
 	ls.ctx = ctx
-	ls.responses = responses
 	ls.closed = false
 }
 
@@ -300,27 +300,93 @@ func (ls *localStream) Send(request morpc.Message, opts morpc.SendOptions) error
 		panic("send after closed")
 	}
 
-	response := &ls.responses[opts.Arg.(int)]
-	err := ls.handleFunc(ls.ctx, request.(*txn.TxnRequest), response)
-	if err != nil {
-		return err
+	ls.in <- sendMessage{
+		request: request,
+		// opts:            opts,
+		handleFunc:      ls.handleFunc,
+		responseFactory: ls.responseFactory,
+		ctx:             ls.ctx,
 	}
 	return nil
 }
 
 func (ls *localStream) Receive() (chan morpc.Message, error) {
-	panic("not support")
+	if ls.closed {
+		panic("send after closed")
+	}
+
+	return ls.out, nil
 }
 
 func (ls *localStream) Close() error {
 	if ls.closed {
-		panic("closed")
+		return nil
 	}
 	ls.closed = true
 	ls.ctx = nil
-	ls.responses = nil
-	if ls.releaseFunc != nil {
-		ls.releaseFunc(ls)
-	}
+	ls.releaseFunc(ls)
 	return nil
+}
+
+func (ls *localStream) destroy() {
+	close(ls.in)
+	close(ls.out)
+}
+
+func (ls *localStream) start() {
+	go func(in chan sendMessage, out chan morpc.Message) {
+		for {
+			v, ok := <-in
+			if !ok {
+				return
+			}
+
+			response := v.responseFactory()
+			err := v.handleFunc(v.ctx, v.request.(*txn.TxnRequest), response)
+			if err != nil {
+				response.TxnError = &txn.TxnError{Code: txn.ErrorCode_RPCError, Message: err.Error()}
+			}
+			out <- response
+		}
+	}(ls.in, ls.out)
+}
+
+func (sr *SendResult) reset(requests []txn.TxnRequest) {
+	size := len(requests)
+	if size == len(sr.Responses) {
+		for i := 0; i < size; i++ {
+			sr.Responses[i] = txn.TxnResponse{}
+		}
+		return
+	}
+
+	for i := 0; i < size; i++ {
+		sr.Responses = append(sr.Responses, txn.TxnResponse{})
+	}
+}
+
+func (sr *SendResult) setStream(dn uint64, st morpc.Stream) {
+	sr.streams[dn] = st
+}
+
+func (sr *SendResult) getStream(dn uint64) morpc.Stream {
+	return sr.streams[dn]
+}
+
+func (sr *SendResult) setResponse(resp *txn.TxnResponse, index int) {
+	sr.Responses[index] = *resp
+}
+
+// Release release send result
+func (sr *SendResult) Release() {
+	if sr.pool != nil {
+		for k, st := range sr.streams {
+			if st != nil {
+				_ = st.Close()
+			}
+			delete(sr.streams, k)
+		}
+		sr.Responses = sr.Responses[:0]
+		sr.pool.Put(sr)
+	}
 }

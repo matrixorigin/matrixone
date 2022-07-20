@@ -44,29 +44,29 @@ import (
 
 func TestAppend(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
-	defer db.Close()
+	tae := newTestEngine(t, nil)
+	defer tae.Close()
 	schema := catalog.MockSchemaAll(14, 3)
 	schema.BlockMaxRows = options.DefaultBlockMaxRows
 	schema.SegmentMaxBlocks = options.DefaultBlocksPerSegment
+	tae.bindSchema(schema)
 	data := catalog.MockBatch(schema, int(schema.BlockMaxRows*2))
 	defer data.Close()
 	bats := data.Split(4)
 	now := time.Now()
-	createRelationAndAppend(t, db, "db", schema, bats[0], true)
+	tae.createRelAndAppend(bats[0], true)
 	t.Log(time.Since(now))
+	tae.checkRowsByScan(bats[0].Length(), false)
 
-	{
-		txn, _ := db.StartTxn(nil)
-		database, err := txn.GetDatabase("db")
-		assert.Nil(t, err)
-		rel, err := database.GetRelationByName(schema.Name)
-		assert.Nil(t, err)
-		appendClosure(t, bats[1], schema.Name, db, nil)()
-		err = rel.Append(bats[2])
-		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
-	}
+	txn, rel := tae.getRelation()
+	err := rel.Append(bats[1])
+	assert.NoError(t, err)
+	// FIXME
+	// checkAllColRowsByScan(t, rel, bats[0].Length()+bats[1].Length(), false)
+	err = rel.Append(bats[2])
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+	tae.checkRowsByScan(bats[0].Length()+bats[1].Length()+bats[2].Length(), false)
 }
 
 func TestAppend2(t *testing.T) {
@@ -1267,7 +1267,7 @@ func TestLogIndex1(t *testing.T) {
 		txn, rel := getDefaultRelation(t, tae, schema.Name)
 		blk := getOneBlock(rel)
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(0, txn.GetStartTS())
+		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(1, txn.GetStartTS())
 		assert.NoError(t, err)
 		for i, index := range indexes {
 			t.Logf("%d: %s", i, index.String())
@@ -1857,7 +1857,7 @@ func TestChaos1(t *testing.T) {
 			err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 			if err != nil {
 				t.Logf("delete: %v", err)
-				// assert.Equal(t, txnif.TxnWWConflictErr, err)
+				// assert.Equal(t, txnif.ErrTxnWWConflict, err)
 				assert.NoError(t, txn.Rollback())
 				return
 			}
@@ -1938,14 +1938,14 @@ func TestSnapshotIsolation1(t *testing.T) {
 	// Step 4
 	err = rel1.UpdateByFilter(filter, 3, int64(1111))
 	t.Log(err)
-	assert.ErrorIs(t, err, txnif.TxnWWConflictErr)
+	assert.ErrorIs(t, err, txnif.ErrTxnWWConflict)
 
 	// Step 5
 	id, row, err := rel1.GetByFilter(filter)
 	assert.NoError(t, err)
 	err = rel1.RangeDelete(id, row, row, handle.DT_Normal)
 	t.Log(err)
-	assert.ErrorIs(t, err, txnif.TxnWWConflictErr)
+	assert.ErrorIs(t, err, txnif.ErrTxnWWConflict)
 	_ = txn1.Rollback()
 
 	// Step 6
@@ -2000,7 +2000,7 @@ func TestSnapshotIsolation2(t *testing.T) {
 	// Step 4
 	err = rel1.Append(bat)
 	t.Log(err)
-	assert.ErrorIs(t, err, txnif.TxnWWConflictErr)
+	assert.ErrorIs(t, err, txnif.ErrTxnWWConflict)
 	_ = txn1.Rollback()
 }
 
@@ -2298,7 +2298,7 @@ func TestTruncate(t *testing.T) {
 			})
 		}
 		wg.Add(1)
-		_ = p.Submit(tryAppend(i + 1))
+		_ = p.Submit(tryAppend(i))
 		time.Sleep(time.Millisecond * 2)
 	}
 	wg.Wait()

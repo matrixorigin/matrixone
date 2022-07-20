@@ -17,7 +17,6 @@ package plan
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go/constant"
 	"math"
 	"strconv"
@@ -34,11 +33,11 @@ import (
 )
 
 func appendQueryNode(query *Query, node *Node) int32 {
-	nodeId := int32(len(query.Nodes))
-	node.NodeId = nodeId
+	nodeID := int32(len(query.Nodes))
+	node.NodeId = nodeID
 	query.Nodes = append(query.Nodes, node)
 
-	return nodeId
+	return nodeID
 }
 
 func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
@@ -229,7 +228,7 @@ func convertToPlanValue(value interface{}) *plan.ConstantValue {
 // rangeCheck do range check for value, and do type conversion.
 func rangeCheck(value interface{}, typ *plan.Type, columnName string, rowNumber int) (interface{}, error) {
 	errString := "Out of range value for column '%s' at row %d"
-	logutil.Infof("rangeCheck: %v,type:%T", value, value)
+
 	switch v := value.(type) {
 	case int64:
 		switch typ.GetId() {
@@ -611,7 +610,8 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 	case constant.String:
 		switch typ.GetId() {
 		case plan.Type_JSON:
-			logutil.Infof("Parse:%v", val)
+			bj, err := bytejson.ParseFromString(str)
+			return *bj, err
 		case plan.Type_BOOL:
 			switch strings.ToLower(str) {
 			case "false":
@@ -668,9 +668,9 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 	return nil, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("unsupport value: %v", val))
 }
 
-func getFunctionObjRef(funcId int64, name string) *ObjectRef {
+func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 	return &ObjectRef{
-		Obj:     funcId,
+		Obj:     funcID,
 		ObjName: name,
 	}
 }

@@ -16,15 +16,21 @@ package frontend
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	cvey "github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/require"
 	"math"
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	cvey "github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_PathExists(t *testing.T) {
@@ -97,7 +103,7 @@ func Test_MinMax(t *testing.T) {
 
 func Test_uint64list(t *testing.T) {
 	cvey.Convey("uint64list", t, func() {
-		var l Uint64List = make(Uint64List, 3)
+		var l = make(Uint64List, 3)
 		cvey.So(l.Len(), cvey.ShouldEqual, 3)
 		cvey.So(l.Less(0, 1), cvey.ShouldBeFalse)
 		a, b := l[0], l[1]
@@ -487,5 +493,313 @@ func TestGetSimpleExprValue(t *testing.T) {
 			}
 		}
 
+	})
+}
+
+func Test_AllocateBatchBasedOnEngineAttributeDefinition(t *testing.T) {
+	var attributeDefs []*engine.AttributeDef
+	var rowCount = 1
+	var colNum = 14
+	var tmp = &engine.AttributeDef{}
+	var ret *batch.Batch
+	cvey.Convey("", t, func() {
+		attributeDefs = make([]*engine.AttributeDef, colNum)
+		tmp.Attr.Type.Oid = types.T_bool
+
+		for i := 0; i < colNum; i++ {
+			attributeDefs[i] = tmp
+		}
+
+		ret = AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs, rowCount)
+		cvey.So(ret.Vecs[0].Data, cvey.ShouldResemble, []byte{0})
+		cvey.So(ret.Vecs[0].Data, cvey.ShouldResemble, []byte{0})
+
+		tmp.Attr.Type.Oid = types.T_int8
+		attributeDefs[1] = tmp
+		ret = AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs, rowCount)
+		cvey.So(ret.Vecs[1].Data, cvey.ShouldResemble, []byte{0})
+		cvey.So(ret.Vecs[1].Data, cvey.ShouldResemble, []byte{0})
+
+		tmp.Attr.Type.Oid = types.T_int16
+		attributeDefs[2] = tmp
+		ret = AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs, rowCount)
+		cvey.So(ret.Vecs[2].Data, cvey.ShouldResemble, make([]byte, 2))
+		cvey.So(ret.Vecs[2].Data, cvey.ShouldResemble, make([]byte, 2))
+
+		tmp.Attr.Type.Oid = types.T_int32
+		attributeDefs[3] = tmp
+		ret = AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs, rowCount)
+		cvey.So(ret.Vecs[3].Data, cvey.ShouldResemble, make([]byte, 4))
+		cvey.So(ret.Vecs[3].Data, cvey.ShouldResemble, make([]byte, 4))
+
+		tmp.Attr.Type.Oid = types.T_int64
+		attributeDefs[4] = tmp
+		ret = AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs, rowCount)
+		cvey.So(ret.Vecs[4].Data, cvey.ShouldResemble, make([]byte, 8))
+		cvey.So(ret.Vecs[4].Data, cvey.ShouldResemble, make([]byte, 8))
+
+		tmp.Attr.Type.Oid = types.T_uint8
+		attributeDefs[5] = tmp
+		ret = AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs, rowCount)
+		cvey.So(ret.Vecs[5].Data, cvey.ShouldResemble, []byte{0})
+		cvey.So(ret.Vecs[5].Data, cvey.ShouldResemble, []byte{0})
+
+		tmp.Attr.Type.Oid = types.T_uint16
+		attributeDefs[6] = tmp
+		ret = AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs, rowCount)
+		cvey.So(ret.Vecs[6].Data, cvey.ShouldResemble, make([]byte, 2))
+		cvey.So(ret.Vecs[6].Data, cvey.ShouldResemble, make([]byte, 2))
+
+		tmp.Attr.Type.Oid = types.T_uint32
+		attributeDefs[7] = tmp
+		ret = AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs, rowCount)
+		cvey.So(ret.Vecs[7].Data, cvey.ShouldResemble, make([]byte, 4))
+		cvey.So(ret.Vecs[7].Data, cvey.ShouldResemble, make([]byte, 4))
+
+		tmp.Attr.Type.Oid = types.T_uint64
+		attributeDefs[8] = tmp
+		ret = AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs, rowCount)
+		cvey.So(ret.Vecs[8].Data, cvey.ShouldResemble, make([]byte, 8))
+		cvey.So(ret.Vecs[8].Data, cvey.ShouldResemble, make([]byte, 8))
+
+		tmp.Attr.Type.Oid = types.T_float32
+		attributeDefs[9] = tmp
+		ret = AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs, rowCount)
+		cvey.So(ret.Vecs[9].Data, cvey.ShouldResemble, make([]byte, 4))
+		cvey.So(ret.Vecs[9].Data, cvey.ShouldResemble, make([]byte, 4))
+
+		tmp.Attr.Type.Oid = types.T_float64
+		attributeDefs[10] = tmp
+		ret = AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs, rowCount)
+		cvey.So(ret.Vecs[10].Data, cvey.ShouldResemble, make([]byte, 8))
+		cvey.So(ret.Vecs[10].Data, cvey.ShouldResemble, make([]byte, 8))
+
+		tmp.Attr.Type.Oid = types.T_char
+		attributeDefs[11] = tmp
+		ret = AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs, rowCount)
+		cvey.So(ret.Vecs[11].Data, cvey.ShouldResemble, []byte(nil))
+		cvey.So(ret.Vecs[11].Data, cvey.ShouldResemble, []byte(nil))
+
+		tmp.Attr.Type.Oid = types.T_date
+		attributeDefs[12] = tmp
+		ret = AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs, rowCount)
+		cvey.So(ret.Vecs[12].Data, cvey.ShouldResemble, make([]byte, 4))
+		cvey.So(ret.Vecs[12].Data, cvey.ShouldResemble, make([]byte, 4))
+
+		tmp.Attr.Type.Oid = types.T_datetime
+		attributeDefs[13] = tmp
+		ret = AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs, rowCount)
+		cvey.So(ret.Vecs[13].Data, cvey.ShouldResemble, make([]byte, 8))
+		cvey.So(ret.Vecs[13].Data, cvey.ShouldResemble, make([]byte, 8))
+	})
+}
+
+func Test_FillBatchWithData(t *testing.T) {
+	var data [][]string
+	var batch = &batch.Batch{}
+	var colNum = 14
+	cvey.Convey("FillBatchWithData succ", t, func() {
+		data = make([][]string, 1)
+		data[0] = make([]string, 1)
+		batch.Vecs = make([]*vector.Vector, colNum)
+		batch.Vecs[0] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_bool}}
+		batch.Vecs[0].Col = make([]bool, 1)
+		FillBatchWithData(data, batch)
+
+		data[0][0] = "true"
+		FillBatchWithData(data, batch)
+
+		data[0] = append(data[0], string(""))
+		batch.Vecs[1] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_int8}}
+		batch.Vecs[1].Col = make([]int8, 1)
+		FillBatchWithData(data, batch)
+
+		data[0][1] = "1"
+		FillBatchWithData(data, batch)
+
+		data[0] = append(data[0], string(""))
+		batch.Vecs[2] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_int16}}
+		batch.Vecs[2].Col = make([]int16, 1)
+		FillBatchWithData(data, batch)
+
+		data[0][2] = "2"
+		FillBatchWithData(data, batch)
+
+		data[0] = append(data[0], string(""))
+		batch.Vecs[3] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_int32}}
+		batch.Vecs[3].Col = make([]int32, 1)
+		FillBatchWithData(data, batch)
+
+		data[0][3] = "3"
+		FillBatchWithData(data, batch)
+
+		data[0] = append(data[0], string(""))
+		batch.Vecs[4] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_int64}}
+		batch.Vecs[4].Col = make([]int64, 1)
+		FillBatchWithData(data, batch)
+
+		data[0][4] = "4"
+		FillBatchWithData(data, batch)
+
+		data[0] = append(data[0], string(""))
+		batch.Vecs[5] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_uint8}}
+		batch.Vecs[5].Col = make([]uint8, 1)
+		FillBatchWithData(data, batch)
+
+		data[0][5] = "5"
+		FillBatchWithData(data, batch)
+
+		data[0] = append(data[0], string(""))
+		batch.Vecs[6] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_uint16}}
+		batch.Vecs[6].Col = make([]uint16, 1)
+		FillBatchWithData(data, batch)
+
+		data[0][6] = "5"
+		FillBatchWithData(data, batch)
+
+		data[0] = append(data[0], string(""))
+		batch.Vecs[7] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_uint32}}
+		batch.Vecs[7].Col = make([]uint32, 1)
+		FillBatchWithData(data, batch)
+
+		data[0][7] = "7"
+		FillBatchWithData(data, batch)
+
+		data[0] = append(data[0], string(""))
+		batch.Vecs[8] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_uint64}}
+		batch.Vecs[8].Col = make([]uint64, 1)
+		FillBatchWithData(data, batch)
+
+		data[0][8] = "5"
+		FillBatchWithData(data, batch)
+
+		data[0] = append(data[0], string(""))
+		batch.Vecs[9] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_float32}}
+		batch.Vecs[9].Col = make([]float32, 1)
+		FillBatchWithData(data, batch)
+
+		data[0][9] = "9"
+		FillBatchWithData(data, batch)
+
+		data[0] = append(data[0], string(""))
+		batch.Vecs[10] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_float64}}
+		batch.Vecs[10].Col = make([]float64, 1)
+		FillBatchWithData(data, batch)
+
+		data[0][10] = "10"
+		FillBatchWithData(data, batch)
+
+		data[0] = append(data[0], string(""))
+		batch.Vecs[11] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_date}}
+		batch.Vecs[11].Col = make([]types.Date, 1)
+		FillBatchWithData(data, batch)
+
+		data[0][11] = "2022-07-13"
+		FillBatchWithData(data, batch)
+
+		data[0] = append(data[0], string(""))
+		batch.Vecs[12] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_datetime}}
+		batch.Vecs[12].Col = make([]types.Datetime, 1)
+		FillBatchWithData(data, batch)
+
+		data[0][12] = "2022-07-13 11:11:11.1234"
+		FillBatchWithData(data, batch)
+	})
+}
+
+func Test_FormatLineInBatch(t *testing.T) {
+	var bat = &batch.Batch{}
+	var rowIndex = 0
+	var res []string
+	var colNum = 13
+	var colName = []string{"false", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0001-01-01", "0001-01-01 00:00:00"}
+	cvey.Convey("FormatLineInBatch succ", t, func() {
+		bat.Vecs = make([]*vector.Vector, colNum)
+		bat.Vecs[0] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_bool}}
+		bat.Vecs[0].Col = make([]bool, 1)
+
+		bat.Vecs[1] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_int8}}
+		bat.Vecs[1].Col = make([]int8, 1)
+
+		bat.Vecs[2] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_int16}}
+		bat.Vecs[2].Col = make([]int16, 1)
+
+		bat.Vecs[3] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_int32}}
+		bat.Vecs[3].Col = make([]int32, 1)
+
+		bat.Vecs[4] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_int64}}
+		bat.Vecs[4].Col = make([]int64, 1)
+
+		bat.Vecs[5] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_uint8}}
+		bat.Vecs[5].Col = make([]uint8, 1)
+
+		bat.Vecs[6] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_uint16}}
+		bat.Vecs[6].Col = make([]uint16, 1)
+
+		bat.Vecs[7] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_uint32}}
+		bat.Vecs[7].Col = make([]uint32, 1)
+
+		bat.Vecs[8] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_uint64}}
+		bat.Vecs[8].Col = make([]uint64, 1)
+
+		bat.Vecs[9] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_float32}}
+		bat.Vecs[9].Col = make([]float32, 1)
+
+		bat.Vecs[10] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_float64}}
+		bat.Vecs[10].Col = make([]float64, 1)
+
+		bat.Vecs[11] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_date}}
+		bat.Vecs[11].Col = make([]types.Date, 1)
+
+		bat.Vecs[12] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_datetime}}
+		bat.Vecs[12].Col = make([]types.Datetime, 1)
+
+		res = FormatLineInBatch(bat, rowIndex)
+		cvey.So(res, cvey.ShouldResemble, colName)
+
+		bat.Vecs[0].Col = make([]bool, 2)
+		nulls.Add(bat.Vecs[0].Nsp, 1)
+
+		bat.Vecs[1].Col = make([]int8, 2)
+		nulls.Add(bat.Vecs[1].Nsp, 1)
+
+		bat.Vecs[2].Col = make([]int16, 2)
+		nulls.Add(bat.Vecs[2].Nsp, 1)
+
+		bat.Vecs[3].Col = make([]int32, 2)
+		nulls.Add(bat.Vecs[3].Nsp, 1)
+
+		bat.Vecs[4].Col = make([]int64, 2)
+		nulls.Add(bat.Vecs[4].Nsp, 1)
+
+		bat.Vecs[5].Col = make([]uint8, 2)
+		nulls.Add(bat.Vecs[5].Nsp, 1)
+
+		bat.Vecs[6].Col = make([]uint16, 2)
+		nulls.Add(bat.Vecs[6].Nsp, 1)
+
+		bat.Vecs[7].Col = make([]uint32, 2)
+		nulls.Add(bat.Vecs[7].Nsp, 1)
+
+		bat.Vecs[8].Col = make([]uint64, 2)
+		nulls.Add(bat.Vecs[8].Nsp, 1)
+
+		bat.Vecs[9].Col = make([]float32, 2)
+		nulls.Add(bat.Vecs[9].Nsp, 1)
+
+		bat.Vecs[10].Col = make([]float64, 2)
+		nulls.Add(bat.Vecs[10].Nsp, 1)
+
+		bat.Vecs[11].Col = make([]types.Date, 2)
+		nulls.Add(bat.Vecs[11].Nsp, 1)
+
+		bat.Vecs[12].Col = make([]types.Datetime, 2)
+		nulls.Add(bat.Vecs[12].Nsp, 1)
+
+		res = FormatLineInBatch(bat, rowIndex)
+		cvey.So(res, cvey.ShouldResemble, colName)
+
+		res = FormatLineInBatch(bat, 1)
+		cvey.So(res, cvey.ShouldResemble, []string{"<nil>", "<nil>", "<nil>", "<nil>", "<nil>", "<nil>", "<nil>", "<nil>", "<nil>", "<nil>", "<nil>", "<nil>", "<nil>"})
 	})
 }

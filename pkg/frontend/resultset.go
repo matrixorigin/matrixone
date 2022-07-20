@@ -17,7 +17,6 @@ package frontend
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -491,7 +490,6 @@ func (mrs *MysqlResultSet) GetString(rindex, cindex uint64) (string, error) {
 	case types.Datetime:
 		return v.String(), nil
 	case bytejson.ByteJson:
-		logutil.Infof("GetString: byte_json case: val:%s", v.String())
 		return v.String(), nil
 	default:
 		return "", fmt.Errorf("unsupported type %d ", v)

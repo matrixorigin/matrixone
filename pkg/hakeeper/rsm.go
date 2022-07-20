@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/*
+Package hakeeper implements MO's hakeeper component.
+*/
 package hakeeper
 
 import (
@@ -22,6 +25,7 @@ import (
 
 	"github.com/lni/dragonboat/v4/logger"
 	sm "github.com/lni/dragonboat/v4/statemachine"
+	"github.com/mohae/deepcopy"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -37,6 +41,13 @@ var (
 )
 
 const (
+	// When bootstrapping, k8s will first bootstrap the HAKeeper by starting some
+	// Log stores with command line options specifying that those stores will be hosting
+	// a HAKeeper replicas. It will be k8s' responsibility to assign Replica IDs to those
+	// HAKeeper replicas, and those IDs will have to be assigned from the range
+	// [K8SIDRangeStart, K8SIDRangeEnd)
+	K8SIDRangeStart uint64 = 131072
+	K8SIDRangeEnd   uint64 = 262144
 	// TickDuration defines the frequency of ticks.
 	TickDuration = time.Second
 	// CheckDuration defines how often HAKeeper checks the health state of the cluster
@@ -51,6 +62,7 @@ type StateQuery struct{}
 type logShardIDQuery struct{ name string }
 type logShardIDQueryResult struct{ id uint64 }
 type ScheduleCommandQuery struct{ UUID string }
+type ClusterDetailsQuery struct{}
 
 type stateMachine struct {
 	replicaID uint64
@@ -187,6 +199,7 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	for _, c := range b.Commands {
 		if c.Bootstrapping {
 			if s.state.State != pb.HAKeeperBootstrapping {
+				plog.Errorf("ignored bootstrapping cmd: %s", c.LogString())
 				return sm.Result{}
 			}
 		}
@@ -204,6 +217,7 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 				Commands: make([]pb.ScheduleCommand, 0),
 			}
 		}
+		plog.Infof("adding schedule command to hakeeper rsm: %s", c.LogString())
 		l.Commands = append(l.Commands, c)
 		s.state.ScheduleCommands[c.UUID] = l
 	}
@@ -260,6 +274,9 @@ func (s *stateMachine) handleSetStateCmd(cmd []byte) sm.Result {
 		binaryEnc.PutUint32(data, uint32(s.state.State))
 		return sm.Result{Data: data}
 	}
+	defer func() {
+		plog.Infof("HAKeeper is in %s state", s.state.State)
+	}()
 	state := parseSetStateCmd(cmd)
 	switch s.state.State {
 	case pb.HAKeeperCreated:
@@ -285,6 +302,8 @@ func (s *stateMachine) handleSetStateCmd(cmd []byte) sm.Result {
 	}
 }
 
+// FIXME: NextID should be set to K8SIDRangeEnd once HAKeeper state is
+// set to HAKeeperBootstrapping.
 func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 	result := sm.Result{Value: uint64(s.state.State)}
 	if s.state.State != pb.HAKeeperCreated {
@@ -295,11 +314,16 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 		panic("DN:Log 1:1 mode is the only supported mode")
 	}
 
-	// FIXME: NextID should be initialized to 1, as 0 is already statically
-	// assigned to HAKeeper itself
-	s.state.NextID++
 	dnShards := make([]metadata.DNShardRecord, 0)
 	logShards := make([]metadata.LogShardRecord, 0)
+	// HAKeeper shard is assigned ShardID 0
+	rec := metadata.LogShardRecord{
+		ShardID:          0,
+		NumberOfReplicas: req.NumOfLogReplicas,
+	}
+	logShards = append(logShards, rec)
+
+	s.state.NextID++
 	for i := uint64(0); i < req.NumOfLogShards; i++ {
 		rec := metadata.LogShardRecord{
 			ShardID:          s.state.NextID,
@@ -319,9 +343,22 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 		DNShards:  dnShards,
 		LogShards: logShards,
 	}
-	plog.Infof("HAKeeper set to the BOOTSTRAPPING state")
+
+	// make sure we are not using the ID range assigned to k8s
+	if s.state.NextID > K8SIDRangeStart {
+		panic("too many IDs assigned during initial cluster request")
+	}
+	s.state.NextID = K8SIDRangeEnd
+
+	plog.Infof("initial cluster set, HAKeeper is in BOOTSTRAPPING state")
 	s.state.State = pb.HAKeeperBootstrapping
 	return result
+}
+
+func (s *stateMachine) assertState() {
+	if s.state.State != pb.HAKeeperRunning && s.state.State != pb.HAKeeperBootstrapping {
+		panic("HAKeeper not in the running state")
+	}
 }
 
 func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
@@ -338,6 +375,7 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	case pb.TickUpdate:
 		return s.handleTick(cmd), nil
 	case pb.GetIDUpdate:
+		s.assertState()
 		return s.handleGetIDCmd(cmd), nil
 	case pb.ScheduleCommandUpdate:
 		return s.handleUpdateCommandsCmd(cmd), nil
@@ -351,14 +389,19 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 }
 
 func (s *stateMachine) handleStateQuery() interface{} {
-	// FIXME: pretty sure we need to deepcopy here
-	return &pb.CheckerState{
+	internal := &pb.CheckerState{
 		Tick:        s.state.Tick,
 		ClusterInfo: s.state.ClusterInfo,
 		DNState:     s.state.DNState,
 		LogState:    s.state.LogState,
 		State:       s.state.State,
 	}
+	copied := deepcopy.Copy(internal)
+	result, ok := copied.(*pb.CheckerState)
+	if !ok {
+		panic("deep copy failed")
+	}
+	return result
 }
 
 func (s *stateMachine) handleShardIDQuery(name string) *logShardIDQueryResult {
@@ -376,6 +419,30 @@ func (s *stateMachine) handleScheduleCommandQuery(uuid string) *pb.CommandBatch 
 	return &pb.CommandBatch{}
 }
 
+func (s *stateMachine) handleClusterDetailsQuery() *pb.ClusterDetails {
+	cd := &pb.ClusterDetails{
+		CNNodes: make([]pb.CNNode, 0),
+		DNNodes: make([]pb.DNNode, 0),
+	}
+	for uuid, info := range s.state.CNState.Stores {
+		n := pb.CNNode{
+			UUID:           uuid,
+			Tick:           info.Tick,
+			ServiceAddress: info.ServiceAddress,
+		}
+		cd.CNNodes = append(cd.CNNodes, n)
+	}
+	for uuid, info := range s.state.DNState.Stores {
+		n := pb.DNNode{
+			UUID:           uuid,
+			Tick:           info.Tick,
+			ServiceAddress: info.ServiceAddress,
+		}
+		cd.DNNodes = append(cd.DNNodes, n)
+	}
+	return cd
+}
+
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 	if q, ok := query.(*logShardIDQuery); ok {
 		return s.handleShardIDQuery(q.name), nil
@@ -383,6 +450,8 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 		return s.handleStateQuery(), nil
 	} else if q, ok := query.(*ScheduleCommandQuery); ok {
 		return s.handleScheduleCommandQuery(q.UUID), nil
+	} else if _, ok := query.(*ClusterDetailsQuery); ok {
+		return s.handleClusterDetailsQuery(), nil
 	}
 	panic("unknown query type")
 }

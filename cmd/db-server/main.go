@@ -17,14 +17,13 @@ package main
 import (
 	"flag"
 	"fmt"
-	"os"
-	"os/signal"
-	"syscall"
-
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -35,23 +34,15 @@ import (
 )
 
 const (
-	InitialValuesExit       = 1
-	LoadConfigExit          = 2
-	RecreateDirExit         = 3
-	DecodeAoeConfigExit     = 4
-	CreateAoeExit           = 5
-	DecodeCubeConfigExit    = 6
-	DecodeClusterConfigExit = 7
-	CreateCubeExit          = 8
-	StartCubeExit           = 9
-	CreateRPCExit           = 10
-	WaitCubeStartExit       = 11
-	StartMOExit             = 12
-	CreateTpeExit           = 13
-	RunRPCExit              = 14
-	ShutdownExit            = 15
-	CreateTaeExit           = 16
-	InitCatalogExit         = 17
+	InitialValuesExit = 1
+	LoadConfigExit    = 2
+	RecreateDirExit   = 3
+	CreateRPCExit     = 10
+	StartMOExit       = 12
+	RunRPCExit        = 14
+	ShutdownExit      = 15
+	CreateTaeExit     = 16
+	InitCatalogExit   = 17
 )
 
 var (
@@ -212,8 +203,7 @@ func main() {
 
 	Host := config.GlobalSystemVariables.GetHost()
 	engineName := config.GlobalSystemVariables.GetStorageEngine()
-	var port int64
-	port = config.GlobalSystemVariables.GetPortOfRpcServerInComputationEngine()
+	port := config.GlobalSystemVariables.GetPortOfRpcServerInComputationEngine()
 
 	var tae *taeHandler
 	if engineName == "tae" {

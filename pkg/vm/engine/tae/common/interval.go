@@ -21,8 +21,8 @@ import (
 )
 
 var (
-	IntervalNotContinousErr = errors.New("interval not continuous")
-	IntervalInvalidErr      = errors.New("invalid interval")
+	ErrIntervalNotContinous = errors.New("interval not continuous")
+	ErrIntervalInvalid      = errors.New("invalid interval")
 )
 
 type ClosedInterval struct {
@@ -41,7 +41,7 @@ func (i *ClosedInterval) Append(id uint64) error {
 	}
 	if id != i.End+1 {
 		fmt.Printf("invalid interval %v %v\n", i, id)
-		return IntervalInvalidErr
+		return ErrIntervalInvalid
 	}
 	i.End = id
 	return nil

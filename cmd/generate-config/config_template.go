@@ -187,7 +187,7 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 		}
 
 		if !checkValues(p.DataType, p.DomainType, p.Values) {
-			return fmt.Errorf("Values [%s] is not compatible with data type %s and domain type %s", p.Values, p.DataType, p.DomainType)
+			return fmt.Errorf("values [%s] is not compatible with data type %s and domain type %s", p.Values, p.DataType, p.DomainType)
 		}
 
 		if !isUpdateMode(p.UpdateMode) {
@@ -219,14 +219,14 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 	if _, ok := dedup[params.ConfigurationFileName]; !ok {
 		dedup[params.ConfigurationFileName] = true
 	} else {
-		return fmt.Errorf("has duplicate configuration file name %s.", params.ConfigurationFileName)
+		return fmt.Errorf("has duplicate configuration file name %s", params.ConfigurationFileName)
 	}
 
 	for _, p := range params.Parameter {
 		if _, ok := dedup[p.Name]; !ok {
 			dedup[p.Name] = true
 		} else {
-			return fmt.Errorf("has duplicate parameter name %s.", p.Name)
+			return fmt.Errorf("has duplicate parameter name %s", p.Name)
 		}
 	}
 
@@ -982,10 +982,10 @@ func (config *{{.ConfigurationStructName}}) LoadConfigurationFromFile(fname stri
 	if err != nil {
 		return err
 	}else if failed := metadata.Undecoded() ; len(failed) > 0 {
-		var failedItems []string
-		for _, item := range failed {
-			failedItems = append(failedItems, item.String())
-		}
+		//var failedItems []string
+		//for _, item := range failed {
+		//	failedItems = append(failedItems, item.String())
+		//}
 		//return fmt.Errorf("decode failed %s. error:%v",failedItems,err)
 	}
 
@@ -1233,10 +1233,8 @@ func Test_{{.ConfigurationStructName}}_LoadConfigurationFromString(t *testing.T)
 }
 `
 
-/**
-Analyse the template files.
-Generate configuration file, operation interfaces.
-*/
+// ConfigurationFileGenerator Analyse the template files.
+// Generate configuration file, operation interfaces.
 type ConfigurationFileGenerator interface {
 	/**
 	Input: parameter definition file name
@@ -1269,7 +1267,7 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 
 	defDir, err := filepath.Abs(filepath.Dir(cfgi.parameterDefinitionFileName))
 	if err != nil {
-		return fmt.Errorf("Get the directory of parameter definition file failed.error:%v", err)
+		return fmt.Errorf("get the directory of parameter definition file failed.error:%v", err)
 	}
 
 	if len(cfgi.configurationOutputDirectory) == 0 {
@@ -1285,7 +1283,7 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 
 	parameterTmpl, err := template.New("MakeParameterTemplate").Parse(cfgi.parameterTemplate)
 	if err != nil {
-		return fmt.Errorf("Make parameter template failed. error:%v", err)
+		return fmt.Errorf("make parameter template failed. error:%v", err)
 	}
 
 	f, err := os.Create(outDir + "/" + params.OperationFileName + ".go")

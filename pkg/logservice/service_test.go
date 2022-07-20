@@ -16,6 +16,9 @@ package logservice
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,18 +32,21 @@ import (
 )
 
 const (
-	testServiceAddress = "localhost:9000"
+	testServiceAddress = "127.0.0.1:9000"
 )
 
 func getServiceTestConfig() Config {
-	return Config{
+	c := Config{
 		RTTMillisecond:       10,
 		GossipSeedAddresses:  []string{"127.0.0.1:9000"},
 		DeploymentID:         1,
 		FS:                   vfs.NewStrictMem(),
 		ServiceListenAddress: testServiceAddress,
 		ServiceAddress:       testServiceAddress,
+		DisableWorkers:       true,
 	}
+	c.Fill()
+	return c
 }
 
 func runServiceTest(t *testing.T,
@@ -446,6 +452,33 @@ func TestServiceTsoUpdate(t *testing.T) {
 	runServiceTest(t, false, true, fn)
 }
 
+func TestServiceCheckHAKeeper(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		req := pb.Request{
+			Method:  pb.CHECK_HAKEEPER,
+			Timeout: int64(time.Second),
+		}
+		resp := s.handleCheckHAKeeper(req)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
+		assert.False(t, resp.IsHAKeeper)
+	}
+	runServiceTest(t, false, false, fn)
+
+	fn = func(t *testing.T, s *Service) {
+		init := make(map[uint64]dragonboat.Target)
+		init[1] = s.ID()
+		require.NoError(t, s.store.startHAKeeperReplica(1, init, false))
+		req := pb.Request{
+			Method:  pb.CHECK_HAKEEPER,
+			Timeout: int64(time.Second),
+		}
+		resp := s.handleCheckHAKeeper(req)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
+		assert.True(t, resp.IsHAKeeper)
+	}
+	runServiceTest(t, false, false, fn)
+}
+
 func TestShardInfoCanBeQueried(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg1 := Config{
@@ -457,6 +490,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		RaftAddress:         "127.0.0.1:9000",
 		GossipAddress:       "127.0.0.1:9001",
 		GossipSeedAddresses: []string{"127.0.0.1:9011"},
+		DisableWorkers:      true,
 	}
 	cfg2 := Config{
 		FS:                  vfs.NewStrictMem(),
@@ -467,8 +501,9 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		RaftAddress:         "127.0.0.1:9010",
 		GossipAddress:       "127.0.0.1:9011",
 		GossipSeedAddresses: []string{"127.0.0.1:9001"},
+		DisableWorkers:      true,
 	}
-
+	cfg1.Fill()
 	service1, err := NewService(cfg1)
 	require.NoError(t, err)
 	defer func() {
@@ -477,7 +512,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	peers1 := make(map[uint64]dragonboat.Target)
 	peers1[1] = service1.ID()
 	assert.NoError(t, service1.store.startReplica(1, 1, peers1, false))
-
+	cfg2.Fill()
 	service2, err := NewService(cfg2)
 	require.NoError(t, err)
 	defer func() {
@@ -555,14 +590,10 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	assert.True(t, done)
 }
 
-// TODO: re-enable this test.
-// this test will fail on go1.18 when -race is enabled as it will hit the 8192
-// goroutine. it works fine with go1.19 beta 1 as it has the goroutine limit
-// removed.
-
-/*
 func TestGossipConvergeDelay(t *testing.T) {
 	if os.Getenv("LONG_TEST") == "" {
+		// this test will fail on go1.18 when -race is enabled as it requires more
+		// than 8128 goroutines. it works fine on go1.19 beta1.
 		t.Skip("Skipping long test")
 	}
 	defer leaktest.AfterTest(t)()
@@ -579,6 +610,7 @@ func TestGossipConvergeDelay(t *testing.T) {
 			RaftAddress:         fmt.Sprintf("127.0.0.1:%d", 6000+10*i+1),
 			GossipAddress:       fmt.Sprintf("127.0.0.1:%d", 6000+10*i+2),
 			GossipSeedAddresses: []string{"127.0.0.1:6002", "127.0.0.1:6012"},
+			DisableWorkers:      true,
 		}
 		configs = append(configs, cfg)
 		service, err := NewService(cfg)
@@ -614,9 +646,9 @@ func TestGossipConvergeDelay(t *testing.T) {
 		replicas[r1] = services[i*3].ID()
 		replicas[r2] = services[i*3+1].ID()
 		replicas[r3] = services[i*3+2].ID()
-		require.NoError(t, services[i*3+0].store.StartReplica(shardID, r1, replicas))
-		require.NoError(t, services[i*3+1].store.StartReplica(shardID, r2, replicas))
-		require.NoError(t, services[i*3+2].store.StartReplica(shardID, r3, replicas))
+		require.NoError(t, services[i*3+0].store.startReplica(shardID, r1, replicas, false))
+		require.NoError(t, services[i*3+1].store.startReplica(shardID, r2, replicas, false))
+		require.NoError(t, services[i*3+2].store.startReplica(shardID, r3, replicas, false))
 	}
 	wait := func() {
 		time.Sleep(10 * time.Millisecond)
@@ -690,4 +722,4 @@ func TestGossipConvergeDelay(t *testing.T) {
 		}
 		require.True(t, retry < 499)
 	}
-}*/
+}

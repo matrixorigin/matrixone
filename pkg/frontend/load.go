@@ -319,11 +319,11 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 
 func AtomicAddDuration(v atomic.Value, t interface{}) {
 	var ti time.Duration = 0
-	switch t.(type) {
+	switch t := t.(type) {
 	case time.Duration:
-		ti = t.(time.Duration)
+		ti = t
 	case atomic.Value:
-		tx, _ := t.(atomic.Value)
+		tx := t
 		if tx.Load() != nil {
 			ti = tx.Load().(time.Duration)
 		}
@@ -361,6 +361,8 @@ func makeBatch(handler *ParseLineHandler, id int) *PoolElement {
 	for i := 0; i < len(handler.attrName); i++ {
 		vec := vector.New(handler.cols[i].Attr.Type)
 		switch vec.Typ.Oid {
+		case types.T_bool:
+			vec.Col = make([]bool, batchSize)
 		case types.T_int8:
 			vec.Col = make([]int8, batchSize)
 		case types.T_int16:
@@ -699,6 +701,19 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 				//logutil.Infof("data set col %d : %v ",j,field)
 
 				switch vec.Typ.Oid {
+				case types.T_bool:
+					cols := vec.Col.([]bool)
+					if isNullOrEmpty {
+						nulls.Add(vec.Nsp, uint64(rowIdx))
+					} else {
+						if field == "true" || field == "1" {
+							cols[rowIdx] = true
+						} else if field == "false" || field == "0" {
+							cols[rowIdx] = false
+						} else {
+							return fmt.Errorf("the input value '%s' is not bool type", field)
+						}
+					}
 				case types.T_int8:
 					cols := vec.Col.([]int8)
 					if isNullOrEmpty {
@@ -726,7 +741,6 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 								d = 0
 							}
 							cols[rowIdx] = int8(d)
-
 						}
 					}
 				case types.T_int16:
@@ -1119,6 +1133,23 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 			columnFLags[j] = 1
 
 			switch vec.Typ.Oid {
+			case types.T_bool:
+				cols := vec.Col.([]bool)
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						nulls.Add(vec.Nsp, uint64(i))
+					} else {
+						field := line[j]
+						if field == "true" || field == "1" {
+							cols[i] = true
+						} else if field == "false" || field == "0" {
+							cols[i] = false
+						} else {
+							return fmt.Errorf("the input value '%s' is not bool type", field)
+						}
+					}
+				}
 			case types.T_int8:
 				cols := vec.Col.([]int8)
 				//row
@@ -1593,6 +1624,10 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 	}
 
 	handler.batchFilled = batchBegin + fetchCnt
+	{
+		handler.batchData.InitZsOne(handler.batchSize)
+		handler.batchData.ExpandNulls()
+	}
 
 	//if handler.batchFilled == handler.batchSize {
 	//	minLen := math.MaxInt64
@@ -1663,7 +1698,8 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		wait_a := time.Now()
 		handler.ThreadInfo.SetTime(wait_a)
 		handler.ThreadInfo.SetCnt(1)
-		dbHandler := handler.dbHandler
+		//dbHandler := handler.dbHandler
+		var dbHandler engine.Database
 		txnHandler := handler.txnHandler
 		tableHandler := handler.tableHandler
 		if !handler.skipWriteBatch {
@@ -1745,6 +1781,9 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 					}
 					//remove row
 					switch vec.Typ.Oid {
+					case types.T_bool:
+						cols := vec.Col.([]bool)
+						vec.Col = cols[:needLen]
 					case types.T_int8:
 						cols := vec.Col.([]int8)
 						vec.Col = cols[:needLen]
@@ -1810,7 +1849,8 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				handler.ThreadInfo.SetCnt(1)
 				txnHandler := handler.txnHandler
 				tableHandler := handler.tableHandler
-				dbHandler := handler.dbHandler
+				// dbHandler := handler.dbHandler
+				var dbHandler engine.Database
 				if !handler.skipWriteBatch {
 					if handler.oneTxnPerBatch {
 						txnHandler = InitTxnHandler(config.StorageEngine)
@@ -2161,45 +2201,6 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	statsWg.Wait()
 	close.Close()
 	closechannel.Close()
-
-	//logutil.Infof("-----total row2col %s fillBlank %s toStorage %s",
-	//	handler.row2col,handler.fillBlank,handler.toStorage)
-	//logutil.Infof("-----write batch %s reset batch %s",
-	//	handler.writeBatch,handler.resetBatch)
-	//logutil.Infof("----- simdcsv end %s " +
-	//	"stage1_first_chunk %s stage1_end %s " +
-	//	"stage2_first_chunkinfo - [begin end] [%s %s ] [%s %s ] [%s %s ] " +
-	//	"readLoop_first_records %s ",
-	//	handler.simdCsvReader.End,
-	//	handler.simdCsvReader.Stage1_first_chunk,
-	//	handler.simdCsvReader.Stage1_end,
-	//	handler.simdCsvReader.Stage2_first_chunkinfo[0],
-	//	handler.simdCsvReader.Stage2_end[0],
-	//	handler.simdCsvReader.Stage2_first_chunkinfo[1],
-	//	handler.simdCsvReader.Stage2_end[1],
-	//	handler.simdCsvReader.Stage2_first_chunkinfo[2],
-	//	handler.simdCsvReader.Stage2_end[2],
-	//	handler.simdCsvReader.ReadLoop_first_records,
-	//	)
-	//
-	//logutil.Infof("-----call_back %s " +
-	//	"process_block - callback %s " +
-	//	"asyncChan %s asyncChanLoop %s asyncChan - asyncChanLoop %s " +
-	//	"csvLineArray1 %s csvLineArray2 %s saveParsedLineToBatch %s " +
-	//	"choose_true %s choose_false %s ",
-	//	handler.callback,
-	//	process_block - handler.callback,
-	//	handler.asyncChan,
-	//	handler.asyncChanLoop,
-	//	handler.asyncChan -	handler.asyncChanLoop,
-	//	handler.csvLineArray1,
-	//	handler.csvLineArray2,
-	//	handler.saveParsedLine,
-	//	handler.choose_true,
-	//	handler.choose_false,
-	//	)
-	//
-	//	logutil.Infof("-----process time %s ",time.Since(processTime))
 
 	return result, retErr
 }

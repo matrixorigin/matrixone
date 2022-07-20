@@ -39,6 +39,10 @@ type Packet struct {
 
 func (c *sqlCodec) Decode(in *buf.ByteBuf) (bool, interface{}, error) {
 	readable := in.Readable()
+	if readable < PacketHeaderLength {
+		return false, nil, nil
+	}
+
 	header, err := in.PeekN(0, PacketHeaderLength)
 	if err != nil {
 		return false, "", err

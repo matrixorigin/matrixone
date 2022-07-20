@@ -70,21 +70,25 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	store, err := newLogStore(cfg)
 	assert.NoError(t, err)
+	plog.Infof("1")
 	defer func() {
 		assert.NoError(t, store.close())
 	}()
+	plog.Infof("2")
 }
 
-func getTestStore(cfg Config) (*store, error) {
+func getTestStore(cfg Config, startLogReplica bool) (*store, error) {
 	store, err := newLogStore(cfg)
 	if err != nil {
 		return nil, err
 	}
-	peers := make(map[uint64]dragonboat.Target)
-	peers[2] = store.nh.ID()
-	if err := store.startReplica(1, 2, peers, false); err != nil {
-		store.close()
-		return nil, err
+	if startLogReplica {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[2] = store.nh.ID()
+		if err := store.startReplica(1, 2, peers, false); err != nil {
+			store.close()
+			return nil, err
+		}
 	}
 	return store, nil
 }
@@ -108,7 +112,7 @@ func TestStateMachineCanBeStarted(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg)
+	store, err := getTestStore(cfg, true)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -120,13 +124,13 @@ func TestReplicaCanBeStopped(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg)
+	store, err := getTestStore(cfg, true)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
 	}()
 	mustHaveReplica(t, store, 1, 2)
-	store.stopReplica(1, 2)
+	require.NoError(t, store.stopReplica(1, 2))
 	assert.False(t, hasReplica(store, 1, 2))
 }
 
@@ -134,7 +138,7 @@ func runStoreTest(t *testing.T, fn func(*testing.T, *store)) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg)
+	store, err := getTestStore(cfg, true)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -335,9 +339,15 @@ func TestGetHeartbeatMessage(t *testing.T) {
 		assert.NoError(t, store.startReplica(10, 1, peers, false))
 		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
 
-		m := store.getHeartbeatMessage()
-		// hakeeper shard is included
-		assert.Equal(t, 3, len(m.Replicas))
+		for i := 0; i < 5000; i++ {
+			m := store.getHeartbeatMessage()
+			if len(m.Replicas) != 3 {
+				time.Sleep(time.Millisecond)
+			} else {
+				return
+			}
+		}
+		t.Fatalf("failed to get all replicas details from heartbeat message")
 	}
 	runStoreTest(t, fn)
 }
@@ -483,6 +493,16 @@ func TestRemoveReplica(t *testing.T) {
 		require.NoError(t, store1.removeReplica(1, 2, m.ConfigChangeID))
 		return
 	}
+}
+
+func hasShard(s *store, shardID uint64) bool {
+	hb := s.getHeartbeatMessage()
+	for _, info := range hb.Replicas {
+		if info.ShardID == shardID {
+			return true
+		}
+	}
+	return false
 }
 
 func hasReplica(s *store, shardID uint64, replicaID uint64) bool {

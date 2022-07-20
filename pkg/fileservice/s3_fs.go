@@ -149,6 +149,12 @@ func (m *S3FS) Write(ctx context.Context, vector IOVector) error {
 		return ErrFileExisted
 	}
 
+	return m.write(ctx, vector)
+}
+
+func (m *S3FS) write(ctx context.Context, vector IOVector) error {
+	key := m.pathToKey(vector.FilePath)
+
 	// sort
 	sort.Slice(vector.Entries, func(i, j int) bool {
 		return vector.Entries[i].Offset < vector.Entries[j].Offset
@@ -184,28 +190,51 @@ func (m *S3FS) Write(ctx context.Context, vector IOVector) error {
 
 func (m *S3FS) Read(ctx context.Context, vector *IOVector) error {
 
-	min, max := vector.offsetRange()
-	readLen := max - min
+	min, max, readToEnd := vector.offsetRange()
 
-	rang := fmt.Sprintf("bytes=%d-%d", min, max)
-	output, err := m.client.GetObject(
-		ctx,
-		&s3.GetObjectInput{
-			Bucket: ptrTo(m.bucket),
-			Key:    ptrTo(m.pathToKey(vector.FilePath)),
-			Range:  ptrTo(rang),
-		},
-	)
-	err = m.mapError(err)
-	if err != nil {
-		return err
-	}
-	defer output.Body.Close()
+	var content []byte
 
-	content, err := io.ReadAll(io.LimitReader(output.Body, int64(readLen)))
-	err = m.mapError(err)
-	if err != nil {
-		return err
+	if readToEnd {
+		rang := fmt.Sprintf("bytes=%d-", min)
+		output, err := m.client.GetObject(
+			ctx,
+			&s3.GetObjectInput{
+				Bucket: ptrTo(m.bucket),
+				Key:    ptrTo(m.pathToKey(vector.FilePath)),
+				Range:  ptrTo(rang),
+			},
+		)
+		err = m.mapError(err)
+		if err != nil {
+			return err
+		}
+		defer output.Body.Close()
+		content, err = io.ReadAll(output.Body)
+		err = m.mapError(err)
+		if err != nil {
+			return err
+		}
+
+	} else {
+		rang := fmt.Sprintf("bytes=%d-%d", min, max)
+		output, err := m.client.GetObject(
+			ctx,
+			&s3.GetObjectInput{
+				Bucket: ptrTo(m.bucket),
+				Key:    ptrTo(m.pathToKey(vector.FilePath)),
+				Range:  ptrTo(rang),
+			},
+		)
+		err = m.mapError(err)
+		if err != nil {
+			return err
+		}
+		defer output.Body.Close()
+		content, err = io.ReadAll(io.LimitReader(output.Body, int64(max-min)))
+		err = m.mapError(err)
+		if err != nil {
+			return err
+		}
 	}
 
 	for i, entry := range vector.Entries {
@@ -213,11 +242,18 @@ func (m *S3FS) Read(ctx context.Context, vector *IOVector) error {
 		if start >= len(content) {
 			return ErrEmptyRange
 		}
-		end := start + entry.Size
-		if end > len(content) {
-			return ErrUnexpectedEOF
+
+		var data []byte
+		if entry.Size < 0 {
+			// read to end
+			data = content[start:]
+		} else {
+			end := start + entry.Size
+			if end > len(content) {
+				return ErrUnexpectedEOF
+			}
+			data = content[start:end]
 		}
-		data := content[start:end]
 		if len(data) == 0 {
 			return ErrEmptyRange
 		}
@@ -235,7 +271,7 @@ func (m *S3FS) Read(ctx context.Context, vector *IOVector) error {
 			*ptr = io.NopCloser(bytes.NewReader(data))
 		}
 		if setData {
-			if len(entry.Data) < entry.Size {
+			if len(entry.Data) < entry.Size || entry.Size < 0 {
 				vector.Entries[i].Data = data
 			} else {
 				copy(entry.Data, data)

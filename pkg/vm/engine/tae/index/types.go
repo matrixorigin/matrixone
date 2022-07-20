@@ -19,7 +19,7 @@ type KeysCtx struct {
 	// Select the key where this bitmap indicates.
 	// Nil to select all
 	Selects *roaring.Bitmap
-	// Select a continous interval [Start, Start+Count) from keys
+	// Select a continuous interval [Start, Start+Count) from keys
 	Start, Count int
 
 	// Whether need to verify Keys
@@ -50,7 +50,7 @@ type SecondaryIndex interface {
 
 type MutipleRowsIndex interface {
 	Insert(key any, row uint32) error
-	DeleteOne(key any, row uint32) (int, error)
+	DeleteOne(key any, row uint32) error
 	DeleteAll(key any) error
 	GetRowsNode(key any) (*RowsNode, bool)
 	Contains(key any) bool

@@ -17,13 +17,13 @@ The `IF()` function returns a value if a condition is `TRUE`, or another value i
 
 - The default return type of IF() (which may matter when it is stored into a temporary table) is calculated as follows:
 
-  + If expr2 or expr3 produce a string, the result is a string.
+    + If expr2 or expr3 produce a string, the result is a string.
 
-  + If expr2 and expr3 are both strings, the result is case-sensitive if either string is case-sensitive.
+    + If expr2 and expr3 are both strings, the result is case-sensitive if either string is case-sensitive.
 
-  + If expr2 or expr3 produce a floating-point value, the result is a floating-point value.
+    + If expr2 or expr3 produce a floating-point value, the result is a floating-point value.
 
-  + If expr2 or expr3 produce an integer, the result is an integer.
+    + If expr2 or expr3 produce an integer, the result is an integer.
 
 ## **Examples**
 
