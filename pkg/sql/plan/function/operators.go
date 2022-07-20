@@ -4432,34 +4432,29 @@ var operators = map[int]Functions{
 		Id: COALESCE,
 		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
 			l := len(inputs)
+			if l == 0 {
+				return wrongFunctionParameters, nil
+			}
+
+			for i, o := range overloads {
+				if operator.CoalesceTypeCheckFn(inputs, nil, o.ReturnTyp) {
+					return int32(i), nil
+				}
+			}
+
 			minCost, minIndex := math.MaxInt32, -1
 			convertTypes := make([]types.T, l)
 			targetTypes := make([]types.T, l)
 
 			for i, o := range overloads {
-				if l >= 2 {
-					flag := true
-					for j := 0; j < l-1; j += 2 {
-						if inputs[j] != types.T_bool {
-							flag = false
-							break
-						}
-						targetTypes[j] = types.T_bool
-					}
-					if l%2 == 1 {
-						targetTypes[l-1] = o.ReturnTyp
-					}
-					for j := 1; j < l; j += 2 {
-						targetTypes[j] = o.ReturnTyp
-					}
-					if flag {
-						if code, c := tryToMatch(inputs, targetTypes); code == matchedByConvert {
-							if c < minCost {
-								minCost = c
-								copy(convertTypes, targetTypes)
-								minIndex = i
-							}
-						}
+				for j := 0; j < l; j++ {
+					targetTypes[j] = o.ReturnTyp
+				}
+				if code, c := tryToMatch(inputs, targetTypes); code == matchedByConvert {
+					if c < minCost {
+						minCost = c
+						copy(convertTypes, targetTypes)
+						minIndex = i
 					}
 				}
 			}

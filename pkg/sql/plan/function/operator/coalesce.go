@@ -95,43 +95,81 @@ var (
 	}
 )
 
+// CoalesceTypeCheckFn is type check function for coalesce operator
+func CoalesceTypeCheckFn(inputTypes []types.T, _ []types.T, ret types.T) bool {
+	l := len(inputTypes)
+	for i := 0; i < l; i++ {
+		if inputTypes[i] != ret && inputTypes[i] != types.T_any {
+			return false
+		}
+	}
+	return true
+}
+
 // coalesceGeneral is a general evaluate function for case-when operator
 // whose return type is uint / int / float / bool / date / datetime
 func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types.Type) (*vector.Vector, error) {
+	vecLen := vector.Length(vs[0])
+	returnIsScalar := vs[0].IsScalar()
+
+	rs, err := proc.AllocVector(t, int64(vecLen*t.Oid.TypeLen()))
+	if err != nil {
+		return nil, err
+	}
+	rs.Col = vector.DecodeFixedCol[T](rs, t.Oid.TypeLen())
+	rs.Col = rs.Col.([]T)[:vecLen]
+	rs.Nsp = nulls.NewWithSize(vecLen)
+	rsCols := rs.Col.([]T)
+	nullsIdx := make([]uint64, vecLen)
+	for i := 0; i < vecLen; i++ {
+		nullsIdx[i] = uint64(i)
+	}
+	rs.Nsp.Np.AddMany(nullsIdx)
+
 	for i := 0; i < len(vs); i++ {
 		input := vs[i]
-		col := vector.MustTCols[T](input)
+		cols := vector.MustTCols[T](input)
 		if input.IsScalar() {
 			if input.IsScalarNull() {
 				continue
 			}
-			r := proc.AllocScalarVector(t)
-			r.Typ.Precision = input.Typ.Precision
-			r.Typ.Width = input.Typ.Width
-			r.Typ.Scale = input.Typ.Scale
-			r.Col = make([]T, 1)
-			r.Col.([]T)[0] = col[0]
-			return r, nil
+
+			if returnIsScalar {
+				r := proc.AllocScalarVector(t)
+				r.Typ.Precision = input.Typ.Precision
+				r.Typ.Width = input.Typ.Width
+				r.Typ.Scale = input.Typ.Scale
+				r.Col = make([]T, 1)
+				r.Col.([]T)[0] = cols[0]
+				return r, nil
+			}
+
+			for j := 0; j < vecLen; j++ {
+				if rs.Nsp.Contains(uint64(j)) {
+					rsCols[j] = cols[0]
+				}
+			}
+			rs.Nsp.Np = nil
+			return rs, nil
 		} else {
-			l := vector.Length(vs[0])
-			// all nulls
-			if nulls.Length(input.Nsp) == l {
+			returnIsScalar = false
+			if nulls.Length(input.Nsp) == vecLen {
 				continue
 			}
 
-			rs, err := proc.AllocVector(t, int64(l*t.Oid.TypeLen()))
-			if err != nil {
-				return nil, err
+			for j := 0; j < vecLen; j++ {
+				if rs.Nsp.Contains(uint64(j)) && !input.Nsp.Contains(uint64(j)) {
+					rsCols[j] = cols[j]
+					rs.Nsp.Np.Remove(uint64(j))
+				}
 			}
-			rs.Col = vector.DecodeFixedCol[T](rs, t.Oid.TypeLen())
-			rs.Col = rs.Col.([]T)[:l]
-			rs.Typ.Precision = input.Typ.Precision
-			rs.Typ.Width = input.Typ.Width
-			rs.Typ.Scale = input.Typ.Scale
-			rs.Nsp.Or(input.Nsp)
-			return rs, nil
+
+			if rs.Nsp.Np.IsEmpty() {
+				rs.Nsp.Np = nil
+				return rs, nil
+			}
 		}
 	}
 
-	return proc.AllocScalarNullVector(t), nil
+	return rs, nil
 }
