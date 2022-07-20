@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// pipe connector
+// Argument pipe connector
 type Argument struct {
 	Mmu  *guest.Mmu
 	vecs []*vector.Vector

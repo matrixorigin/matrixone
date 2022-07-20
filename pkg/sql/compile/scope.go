@@ -292,7 +292,7 @@ func planValToExeVal(value *plan.ConstantValue, typ plan.Type_TypeId) interface{
 	return nil
 }
 
-// Print is to format scope list
+// PrintScope Print is to format scope list
 func PrintScope(prefix []byte, ss []*Scope) {
 	for _, s := range ss {
 		if s.Magic == Merge || s.Magic == Remote {
@@ -303,7 +303,7 @@ func PrintScope(prefix []byte, ss []*Scope) {
 	}
 }
 
-// Get the number of cpu's available for the current scope
+// NumCPU Get the number of cpu's available for the current scope
 func (s *Scope) NumCPU() int {
 	return runtime.NumCPU()
 }

@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-// Agg
+// Agg agg interface
 type Agg[T any] interface {
 	// Dup will duplicate a new agg with the same type.
 	Dup() Agg[any]
