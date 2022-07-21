@@ -7,10 +7,10 @@
 select 0.00,1.11,1234567890.1234567890123456789;
 select 1123.2333+1233.3331;
 select cast(9223372.036854775808 as decimal)+1;
--- @bvt:issue#3183
+
 select round(cast(2320310.66666612312 as decimal));
 select floor(cast(2231231.501231 as decimal));
--- @bvt:issue
+
 
 #Test cases of query with single table
 drop table if exists t1;

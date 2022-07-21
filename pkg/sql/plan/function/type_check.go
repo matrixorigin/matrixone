@@ -349,6 +349,7 @@ func initTypeCheckRelated() {
 		types.T_varchar:    {types.T_char},
 		types.T_decimal64:  {types.T_decimal128, types.T_float64},
 		types.T_decimal128: {types.T_float64},
+		types.T_date:       {types.T_datetime},
 	}
 	preferredTypeConvert = make([][]bool, maxTypes)
 	for i := range preferredTypeConvert {

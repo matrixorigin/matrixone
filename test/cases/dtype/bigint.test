@@ -112,11 +112,11 @@ SELECT * from t_bigint WHERE id BETWEEN '1.1e0' AND '1.9e0';
 drop table t1;
 CREATE TABLE t1 (a BIGINT);
 insert INTO t1 VALUES (1);
--- @bvt:issue#3183
+
 SELECT * FROM t1 WHERE coalesce(a) BETWEEN 0 and 0.9;
 SELECT * FROM t1 WHERE coalesce(a)=0.9;
 SELECT * FROM t1 WHERE coalesce(a) in (0.8,0.9);
--- @bvt:issue
+
 SELECT * FROM t1 WHERE a BETWEEN 0 AND 0.9;
 SELECT * FROM t1 WHERE a=0.9;
 SELECT * FROM t1 WHERE a IN (0.8,0.9) order by 1 desc;
