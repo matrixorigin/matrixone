@@ -406,7 +406,7 @@ func (l *store) getCommandBatch(ctx context.Context,
 
 func (l *store) getClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
 	v, err := l.read(ctx,
-		hakeeper.DefaultHAKeeperShardID, &hakeeper.ClusterDetailsQuery{})
+		hakeeper.DefaultHAKeeperShardID, &hakeeper.ClusterDetailsQuery{Cfg: l.cfg.GetHAKeeperConfig()})
 	if err != nil {
 		return pb.ClusterDetails{}, handleNotHAKeeperError(err)
 	}
