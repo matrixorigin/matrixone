@@ -21,11 +21,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -79,10 +77,7 @@ func TestCompile(t *testing.T) {
 }
 
 func newTestCase(sql string, t *testing.T) compileTestCase {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	proc := process.New(mheap.New(gm))
-	proc.Lim.Size = 1 << 20
+	proc := testutil.NewProcess()
 	e := memEngine.NewTestEngine()
 	opt := plan2.NewBaseOptimizer(e.(*memEngine.MemEngine))
 	stmts, err := mysql.Parse(sql)

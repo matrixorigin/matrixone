@@ -24,7 +24,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func NewProcess() *process.Process {
+	hm := host.New(1 << 30)
+	gm := guest.New(1<<30, hm)
+	proc := process.New(mheap.New(gm))
+	proc.Lim.Size = 1 << 20
+	proc.Lim.BatchRows = 1 << 20
+	proc.Lim.BatchSize = 1 << 20
+	proc.Lim.ReaderSize = 1 << 20
+	return proc
+}
 
 func NewBatch(ts []types.Type, random bool, n int, m *mheap.Mheap) *batch.Batch {
 	bat := batch.NewWithSize(len(ts))
