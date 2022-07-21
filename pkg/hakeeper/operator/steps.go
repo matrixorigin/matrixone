@@ -104,6 +104,7 @@ func (a StartLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
 type StopLogService struct {
 	StoreID string
 	ShardID uint64
+	Epoch   uint64
 }
 
 func (a StopLogService) String() string {
