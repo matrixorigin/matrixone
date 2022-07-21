@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/bools"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/decimal128s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/decimal64s"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/numerics"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/varchar"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
@@ -56,7 +57,7 @@ func SortBlockColumns(cols []containers.Vector, pk int) ([]uint32, error) {
 	case types.Type_DATETIME:
 		numerics.Sort[types.Datetime](cols[pk], sortedIdx)
 	case types.Type_DECIMAL64:
-		numerics.Sort[types.Decimal64](cols[pk], sortedIdx)
+		decimal64s.Sort(cols[pk], sortedIdx)
 	case types.Type_DECIMAL128:
 		decimal128s.Sort(cols[pk], sortedIdx)
 	case types.Type_TIMESTAMP:
@@ -105,7 +106,7 @@ func MergeSortedColumn(column []containers.Vector, sortedIdx *[]uint32, fromLayo
 	case types.Type_DATETIME:
 		ret, mapping = numerics.Merge[types.Datetime](column, sortedIdx, fromLayout, toLayout)
 	case types.Type_DECIMAL64:
-		ret, mapping = numerics.Merge[types.Decimal64](column, sortedIdx, fromLayout, toLayout)
+		ret, mapping = decimal64s.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.Type_DECIMAL128:
 		ret, mapping = decimal128s.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.Type_TIMESTAMP:
