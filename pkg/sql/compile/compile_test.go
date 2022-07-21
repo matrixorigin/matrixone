@@ -82,6 +82,7 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	proc := process.New(mheap.New(gm))
+	proc.Lim.Size = 1 << 20
 	e := memEngine.NewTestEngine()
 	opt := plan2.NewBaseOptimizer(e.(*memEngine.MemEngine))
 	stmts, err := mysql.Parse(sql)
