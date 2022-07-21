@@ -168,7 +168,7 @@ func (s *store) Close() error {
 	}
 	s.replicas.Range(func(_, value any) bool {
 		r := value.(*replica)
-		if e := r.close(); e != nil {
+		if e := r.close(false); e != nil {
 			err = multierr.Append(e, err)
 		}
 		return true
@@ -304,7 +304,7 @@ func (s *store) createReplica(shard metadata.DNShard) error {
 
 func (s *store) removeReplica(dnShardID uint64) error {
 	if r := s.getReplica(dnShardID); r != nil {
-		err := r.close()
+		err := r.close(true)
 		s.replicas.Delete(dnShardID)
 		s.removeDNShard(dnShardID)
 		return err
@@ -406,5 +406,6 @@ func (s *store) getClientOptions() []morpc.ClientOption {
 	return []morpc.ClientOption{
 		morpc.WithClientLogger(s.logger),
 		morpc.WithClientMaxBackendPerHost(s.cfg.RPC.MaxConnections),
+		morpc.WithClientMaxBackendMaxIdleDuration(s.cfg.RPC.MaxIdleDuration.Duration),
 	}
 }

@@ -1,6 +1,6 @@
 # **Install standalone MatrixOne**
 
-MatrixOne supports Linux and MacOS. You can install a standalone MatrixOne version by 3 methods: 
+MatrixOne supports Linux and MacOS. You can install a standalone MatrixOne version by 3 methods:
 
 * Building from source.
 * Using binary package.
@@ -74,7 +74,7 @@ $ unzip mo-server-v0.5.0-linux-amd64.zip
 MacOS Environment
 
 ```bash
-$ https://github.com/matrixorigin/matrixone/releases/download/v0.5.0/mo-server-v0.5.0-darwin-x86_64.zip
+$ wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.0/mo-server-v0.5.0-darwin-x86_64.zip
 $ unzip mo-server-v0.5.0-darwin-x86_64.zip
 ```
 
@@ -123,5 +123,3 @@ For the information on the user name and password, see the next step - Connect t
 When you finish installing MatrixOne, you can refer to the section below to connect to the MatrixOne server.
 
 See [Connect to MatrixOne server](connect-to-matrixone-server.md).
-
-Some common issues for installation and deployment can be found in [Deployment FAQs](../FAQs/deployment-faqs.md).

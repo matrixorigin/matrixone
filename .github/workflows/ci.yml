@@ -44,21 +44,18 @@ jobs:
           
       - name: Run golangci-lint for pkg
         id: sca-1
-        continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
-          CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo" golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt -E stylecheck --new-from-rev=HEAD~ ./pkg/... --timeout=3m
+          CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo" golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt  --new-from-rev=HEAD~ ./pkg/... --timeout=3m
 
       - name: Run golangci-lint for cmd
         id: sca-2
-        continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
-          CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo" golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt -E stylecheck --new-from-rev=HEAD~ ./cmd/... --timeout=3m
+          CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo" golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt  --new-from-rev=HEAD~ ./cmd/... --timeout=3m
           
       - name: Run more staticcheck checks
         id: sca-3
-        continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
           CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo" staticcheck -checks SA9001,S1009,S1023,S1002,S1025,ST1017,ST1019,S1019,S1004,SA1030,S1011,S1008,SA1024,SA4003,S1039,S1028,SA6005 ./...

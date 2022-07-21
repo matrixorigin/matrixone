@@ -136,7 +136,8 @@ type remoteBackend struct {
 	}
 
 	atomic struct {
-		id uint64
+		id             uint64
+		lastActiveTime atomic.Value //time.Time
 	}
 
 	pool struct {
@@ -172,7 +173,7 @@ func NewRemoteBackend(
 	rb.pool.streams = &sync.Pool{
 		New: func() any {
 			return newStream(make(chan Message, rb.options.streamBufferSize),
-				rb.doSend, rb.removeActiveStream)
+				rb.doSend, rb.removeActiveStream, rb.active)
 		},
 	}
 	rb.writeC = make(chan backendSendMessage, rb.options.bufferSize)
@@ -192,6 +193,7 @@ func NewRemoteBackend(
 		return nil, err
 	}
 
+	rb.active()
 	return rb, nil
 }
 
@@ -228,6 +230,7 @@ func (rb *remoteBackend) adjust() {
 }
 
 func (rb *remoteBackend) Send(ctx context.Context, request Message, opts SendOptions) (*Future, error) {
+	rb.active()
 	request.SetID(rb.nextID())
 
 	f := rb.newFuture()
@@ -241,6 +244,7 @@ func (rb *remoteBackend) Send(ctx context.Context, request Message, opts SendOpt
 }
 
 func (rb *remoteBackend) NewStream() (Stream, error) {
+	rb.active()
 	rb.stateMu.RLock()
 	defer rb.stateMu.RUnlock()
 
@@ -297,6 +301,15 @@ func (rb *remoteBackend) Close() {
 
 func (rb *remoteBackend) Busy() bool {
 	return len(rb.writeC) >= rb.options.busySize
+}
+
+func (rb *remoteBackend) LastActiveTime() time.Time {
+	return rb.atomic.lastActiveTime.Load().(time.Time)
+}
+
+func (rb *remoteBackend) active() {
+	now := time.Now()
+	rb.atomic.lastActiveTime.Store(now)
 }
 
 func (rb *remoteBackend) writeLoop(ctx context.Context) {
@@ -439,6 +452,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 					return
 				}
 
+				rb.active()
 				rb.requestDone(msg.(Message))
 			}
 		}
@@ -624,6 +638,7 @@ func (bf *goettyBasedBackendFactory) Create(remote string) (Backend, error) {
 type stream struct {
 	c              chan Message
 	sendFunc       func(m backendSendMessage) error
+	activeFunc     func()
 	unregisterFunc func(*stream)
 	ctx            context.Context
 	cancel         context.CancelFunc
@@ -636,7 +651,10 @@ type stream struct {
 	}
 }
 
-func newStream(c chan Message, sendFunc func(m backendSendMessage) error, unregisterFunc func(*stream)) *stream {
+func newStream(c chan Message,
+	sendFunc func(m backendSendMessage) error,
+	unregisterFunc func(*stream),
+	activeFunc func()) *stream {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &stream{
 		c:              c,
@@ -644,6 +662,7 @@ func newStream(c chan Message, sendFunc func(m backendSendMessage) error, unregi
 		cancel:         cancel,
 		sendFunc:       sendFunc,
 		unregisterFunc: unregisterFunc,
+		activeFunc:     activeFunc,
 	}
 	s.setFinalizer()
 	return s
@@ -676,7 +695,7 @@ func (s *stream) Send(request Message, opts SendOptions) error {
 	if s.id != request.GetID() {
 		panic("request.id != stream.id")
 	}
-
+	s.activeFunc()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.mu.closed {
