@@ -75,6 +75,10 @@ func (a *UnaryAgg[T1, T2]) Grows(size int, m *mheap.Mheap) error {
 		if len(a.vs) == 0 {
 			a.es = make([]bool, 0, size)
 			a.vs = make([]T2, 0, size)
+			a.vs = a.vs[:size]
+			for i := 0; i < size; i++ {
+				a.es = append(a.es, true)
+			}
 		} else {
 			var v T2
 			a.es = append(a.es, true)

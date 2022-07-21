@@ -68,8 +68,22 @@ func (m *StrHashMap) InsertValue(val any) bool {
 		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	case uint64:
 		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case int8:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case int16:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case int32:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case int64:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case float32:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case float64:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	case []byte:
 		m.keys[0] = append(m.keys[0], v...)
+	case types.Decimal64:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	case types.Decimal128:
 		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	}
