@@ -1289,7 +1289,7 @@ func CastFloatAsDecimal64[T constraints.Float](lv, rv *vector.Vector, proc *proc
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(resultType)
 		rs := make([]types.Decimal64, 1)
-		rs[0].FromFloat64(float64(vs[0]))
+		rs[0] = types.Decimal64_FromFloat64(float64(vs[0]))
 		nulls.Reset(vec.Nsp)
 		vector.SetCol(vec, rs)
 		return vec, nil
@@ -1305,7 +1305,7 @@ func CastFloatAsDecimal64[T constraints.Float](lv, rv *vector.Vector, proc *proc
 		if nulls.Contains(lv.Nsp, uint64(i)) {
 			continue
 		}
-		rs[i].FromFloat64(float64(vs[i]))
+		rs[i] = types.Decimal64_FromFloat64(float64(vs[i]))
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
 	vector.SetCol(vec, rs)

@@ -589,7 +589,7 @@ func numericSubByScalarSelsSmallBig[TSmall, TBig constraints.Integer | constrain
 }
 */
 
-func decimal64Sub(xs []types.Decimal64, ys []types.Decimal64, xsScale int32, ysScale int32, rs []types.Decimal64) []types.Decimal64 {
+func decimal64Sub(xs []types.Decimal64, ys []types.Decimal64, _ int32, _ int32, rs []types.Decimal64) []types.Decimal64 {
 	for i, x := range xs {
 		rs[i] = types.Decimal64SubAligned(x, ys[i])
 	}
@@ -603,7 +603,7 @@ func decimal64SubSels(xs, ys []types.Decimal64, xsScale, ysScale int32, rs []typ
 	return rs
 }
 
-func decimal64SubScalar(x types.Decimal64, ys []types.Decimal64, xScale, ysScale int32, rs []types.Decimal64) []types.Decimal64 {
+func decimal64SubScalar(x types.Decimal64, ys []types.Decimal64, _, _ int32, rs []types.Decimal64) []types.Decimal64 {
 	for i, y := range ys {
 		rs[i] = types.Decimal64SubAligned(x, y)
 	}
@@ -617,37 +617,37 @@ func decimal64SubScalarSels(x types.Decimal64, ys []types.Decimal64, xScale, ysS
 	return rs
 }
 
-func decimal64SubByScalar(x types.Decimal64, ys []types.Decimal64, xScale, ysScale int32, rs []types.Decimal64) []types.Decimal64 {
+func decimal64SubByScalar(x types.Decimal64, ys []types.Decimal64, _, _ int32, rs []types.Decimal64) []types.Decimal64 {
 	for i, y := range ys {
 		rs[i] = types.Decimal64SubAligned(y, x)
 	}
 	return rs
 }
 
-func decimal64SubByScalarSels(x types.Decimal64, ys []types.Decimal64, xScale, ysScale int32, rs []types.Decimal64, sels []int64) []types.Decimal64 {
+func decimal64SubByScalarSels(x types.Decimal64, ys []types.Decimal64, _, _ int32, rs []types.Decimal64, sels []int64) []types.Decimal64 {
 	for i, sel := range sels {
-		rs[i] = types.Decimal64Sub(ys[sel], x, ysScale, xScale)
+		rs[i] = ys[sel].Sub(x)
 	}
 	return rs
 }
 
-func decimal128Sub(xs []types.Decimal128, ys []types.Decimal128, xsScale int32, ysScale int32, rs []types.Decimal128) []types.Decimal128 {
+func decimal128Sub(xs []types.Decimal128, ys []types.Decimal128, _ int32, _ int32, rs []types.Decimal128) []types.Decimal128 {
 	for i, x := range xs {
-		rs[i] = types.Decimal128SubAligned(x, ys[i])
+		rs[i] = x.Sub(ys[i])
 	}
 	return rs
 }
 
-func decimal128SubSels(xs, ys []types.Decimal128, xsScale, ysScale int32, rs []types.Decimal128, sels []int64) []types.Decimal128 {
+func decimal128SubSels(xs, ys []types.Decimal128, _, _ int32, rs []types.Decimal128, sels []int64) []types.Decimal128 {
 	for i, sel := range sels {
-		rs[i] = types.Decimal128Sub(xs[sel], ys[sel], xsScale, ysScale)
+		rs[i] = xs[sel].Sub(ys[sel])
 	}
 	return rs
 }
 
-func decimal128SubScalar(x types.Decimal128, ys []types.Decimal128, xScale, ysScale int32, rs []types.Decimal128) []types.Decimal128 {
+func decimal128SubScalar(x types.Decimal128, ys []types.Decimal128, _, _ int32, rs []types.Decimal128) []types.Decimal128 {
 	for i, y := range ys {
-		rs[i] = types.Decimal128SubAligned(x, y)
+		rs[i] = x.Sub(y)
 	}
 	return rs
 }
@@ -659,7 +659,7 @@ func decimal128SubScalarSels(x types.Decimal128, ys []types.Decimal128, xScale, 
 	return rs
 }
 
-func decimal128SubByScalar(x types.Decimal128, ys []types.Decimal128, xScale, ysScale int32, rs []types.Decimal128) []types.Decimal128 {
+func decimal128SubByScalar(x types.Decimal128, ys []types.Decimal128, _, _ int32, rs []types.Decimal128) []types.Decimal128 {
 	for i, y := range ys {
 		rs[i] = types.Decimal128SubAligned(y, x)
 	}
