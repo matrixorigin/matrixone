@@ -47,9 +47,9 @@ func (r *replica) start(txnService service.TxnService) error {
 	return r.service.Start()
 }
 
-func (r *replica) close() error {
+func (r *replica) close(destroy bool) error {
 	r.waitStarted()
-	return r.service.Close()
+	return r.service.Close(destroy)
 }
 
 func (r *replica) handleLocalRequest(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
