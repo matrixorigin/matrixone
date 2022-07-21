@@ -1,0 +1,25 @@
+header:
+  license:
+    spdx-id: Apache-2.0
+    copyright-owner: Matrix Origin
+  paths-ignore:
+    - 'docs/'
+    - 'test/'
+    - 'optools/'
+    - 'LICENSES/'
+    - 'cgo/external/'
+    - '**/go.mod'
+    - '**/go.sum'
+    - '**/*.yml'
+    - '**/*.yaml'
+    - '**/*.md'
+    - '**/*.sql'
+    - '**/*.sh'
+    - '**/*.toml'
+    - '**/*.pb.go'
+    - '**/.gitignore'
+    - '**/goyacc.go'
+    - '**/Makefile'
+    - 'CODEOWNERS'
+    - 'LICENSE'
+  comment: on-failure

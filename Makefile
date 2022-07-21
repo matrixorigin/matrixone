@@ -155,7 +155,7 @@ fmt:
 install-static-check-tools:
 	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.47.1
 	@go install github.com/matrixorigin/linter/cmd/molint@latest
-	@go install github.com/google/go-licenses@latest
+	@go install github.com/apache/skywalking-eyes/cmd/license-eye@latest
 	@go install honnef.co/go/tools/cmd/staticcheck@latest
 
 # TODO: tracking https://github.com/golangci/golangci-lint/issues/2649
@@ -171,7 +171,7 @@ STATICCHECK_CHECKS=QF1001,QF1002,QF1003,QF1004,QF1005,QF1006,QF1007,QF1008,QF100
 static-check: config cgo
 	@$(CGO_OPTS) staticcheck -checks $(STATICCHECK_CHECKS) ./...
 	@$(CGO_OPTS) go vet -vettool=$(which molint) ./...
-	@$(CGO_OPTS) go-licenses check ./...
+	@$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	@for p in $(DIRS); do \
     $(CGO_OPTS) golangci-lint run $(EXTRA_LINTERS) $$p ; \
 done;
