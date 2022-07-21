@@ -424,7 +424,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 	cd := &pb.ClusterDetails{
 		CNNodes:  make([]pb.CNNode, 0, len(s.state.CNState.Stores)),
 		DNNodes:  make([]pb.DNNode, 0, len(s.state.DNState.Stores)),
-		LogNodes: make([]pb.LogNode, 0, len(s.state.LogShards)),
+		LogNodes: make([]pb.LogNode, 0, len(s.state.LogState.Stores)),
 	}
 	for uuid, info := range s.state.CNState.Stores {
 		n := pb.CNNode{
