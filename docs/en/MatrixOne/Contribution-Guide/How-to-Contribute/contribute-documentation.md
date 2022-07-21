@@ -52,13 +52,13 @@ If you are just correcting a typo or grammatical error, feel free to go ahead an
 *3*. Clone the [matrixorigin.io](https://github.com/matrixorigin/matrixorigin.io) repo, using `--recursive` to retrieve the submodule of [matrixone](https://github.com/matrixorigin/matrixone) repo.
 
 ```
-$ git clone --recursive git@github.com:yourusername/matrixorigin.io.git
+git clone --recursive git@github.com:yourusername/matrixorigin.io.git
 ```
 
 Clone the [matrixone](https://github.com/matrixorigin/matrixorigin.io) repo to the other folder in local:
 
 ```
-$ git clone git@github.com:yourusername/matrixone.git
+git clone git@github.com:yourusername/matrixone.git
 ```
 
 *4*. Add `matrixone` repo as a remote repository in your local matrixone folder with:  
@@ -76,7 +76,7 @@ git remote add upstream https://github.com/matrixorigin/matrixorigin.io.git
 *5*. As the local repo has the full documentation project code, you can run `mkdocs serve` under `matrixorigin.io` folder, and check `http://localhost:8000` to check if this project runs well.  
 
 ```
-$ mkdocs serve
+mkdocs serve
 ```
 
 *6*. Make your modification. If the modification is about the project settings, updating the sitemap with new pages, or updating the CI&CD workflow code. You can always check `http://localhost:8000` to see if your modification is effective. If your modification is about the markdown contents, after you update the `docs` submodule of `matrixorigin.io`, the same modifcation should be applied to the `matrixone` repo.

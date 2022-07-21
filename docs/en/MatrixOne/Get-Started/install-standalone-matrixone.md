@@ -23,8 +23,8 @@ Depending on your needs, choose whether you want to keep your code up to date, o
 The **main** branch is the default branch, the code on the main branch is always up-to-date but not stable enough.
 
 ```
-$ git clone https://github.com/matrixorigin/matrixone.git
-$ cd matrixone
+git clone https://github.com/matrixorigin/matrixone.git
+cd matrixone
 ```
 
 ##### Option 2: Get the MatrixOne(Stable Version) code
@@ -32,9 +32,9 @@ $ cd matrixone
 If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **0.5.0** first.
 
 ```
-$ git clone https://github.com/matrixorigin/matrixone.git
-$ git checkout 0.5.0
-$ cd matrixone
+git clone https://github.com/matrixorigin/matrixone.git
+git checkout 0.5.0
+cd matrixone
 ```
 
 #### 3. Run make
@@ -42,14 +42,14 @@ $ cd matrixone
 You can run `make debug`, `make clean`, or anything else our Makefile offers.
 
 ```
-$ make config
-$ make build
+make config
+make build
 ```
 
 #### 4. Boot MatrixOne server
 
 ```
-$ ./mo-server system_vars_config.toml
+./mo-server system_vars_config.toml
 ```
 
 #### 5. Connect to MatrixOne Server
@@ -67,15 +67,15 @@ For each release, you can download binary packages directly to run MatrixOne in 
 Linux Environment
 
 ```bash
-$ wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.0/mo-server-v0.5.0-linux-amd64.zip
-$ unzip mo-server-v0.5.0-linux-amd64.zip
+wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.0/mo-server-v0.5.0-linux-amd64.zip
+unzip mo-server-v0.5.0-linux-amd64.zip
 ```
 
 MacOS Environment
 
 ```bash
-$ wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.0/mo-server-v0.5.0-darwin-x86_64.zip
-$ unzip mo-server-v0.5.0-darwin-x86_64.zip
+wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.0/mo-server-v0.5.0-darwin-x86_64.zip
+unzip mo-server-v0.5.0-darwin-x86_64.zip
 ```
 
 #### 2.Launch MatrixOne server
@@ -97,7 +97,7 @@ See [Connect to MatrixOne server](connect-to-matrixone-server.md).
 Please verify that Docker daemon is running in the background:
 
 ```
-$ docker --version
+docker --version
 ```
 
 #### 2. Create and run the container of MatrixOne
@@ -107,13 +107,13 @@ It will pull the image from Docker Hub if not exists. You can choose to pull the
 Latest Image
 
 ```
-$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
 ```
 
 0.5.0 Version Image
 
 ```
-$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
 ```
 
 For the information on the user name and password, see the next step - Connect to MatrixOne Server.
