@@ -53,6 +53,9 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 		return false, err
 	}
 	defer vec.Free(proc.Mp)
+	if proc.OperatorOutofMemory(int64(vec.Size())) {
+		return false, errors.New("", "out of memory")
+	}
 	anal.Alloc(int64(vec.Size()))
 	if !vec.GetType().IsBoolean() {
 		return false, errors.New("", "Only bool expression can be used as filter condition.")
