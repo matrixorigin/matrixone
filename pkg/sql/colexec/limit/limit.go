@@ -32,27 +32,34 @@ func Prepare(_ *process.Process, _ interface{}) error {
 }
 
 // Call returning only the first n tuples from its input
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
-	bat := proc.Reg.InputBatch
+func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
+	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
-	if len(bat.Zs) == 0 {
+	if bat.Length() == 0 {
 		return false, nil
 	}
-	n := arg.(*Argument)
-	if n.Seen >= n.Limit {
+	ap := arg.(*Argument)
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
+	anal.Input(bat)
+	if ap.Seen >= ap.Limit {
 		proc.Reg.InputBatch = nil
 		bat.Clean(proc.Mp)
 		return true, nil
 	}
-	length := len(bat.Zs)
-	newSeen := n.Seen + uint64(length)
-	if newSeen >= n.Limit { // limit - seen
-		batch.SetLength(bat, int(n.Limit-n.Seen))
-		n.Seen = newSeen
+	length := bat.Length()
+	newSeen := ap.Seen + uint64(length)
+	if newSeen >= ap.Limit { // limit - seen
+		batch.SetLength(bat, int(ap.Limit-ap.Seen))
+		ap.Seen = newSeen
+		anal.Output(bat)
+		proc.SetInputBatch(bat)
 		return true, nil
 	}
-	n.Seen = newSeen
+	anal.Output(bat)
+	ap.Seen = newSeen
 	return false, nil
 }

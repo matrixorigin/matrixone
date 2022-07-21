@@ -99,7 +99,7 @@ func TestLimit(t *testing.T) {
 				}
 			}
 		}
-		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
+		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
 	}
 }
 
