@@ -14,13 +14,19 @@
 
 package mergeoffset
 
+const (
+	Eval = iota
+	End
+)
+
 type container struct {
-	seen uint64
+	state int
+	seen  uint64
 }
 
 type Argument struct {
 	// Offset records the offset number of mergeOffset operator
 	Offset uint64
 	// ctr contains the attributes needn't do serialization work
-	ctr container
+	ctr *container
 }
