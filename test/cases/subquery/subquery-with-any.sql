@@ -35,7 +35,7 @@ create table t1 (s1 char(5));
 create table t2 (s1 char(5));
 insert into t1 values ('a1'),('a2'),('a3');
 insert into t2 values ('a1'),('a2');
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select s1, s1 = ANY (SELECT s1 FROM t2) from t1;
 select s1, s1 < ANY (SELECT s1 FROM t2) from t1;
 select s1, s1 = ANY (SELECT s1 FROM t2) from t1;
@@ -283,7 +283,7 @@ create table t1 (a int);
 insert into t1 values (1),(2),(3);
 -- @ignore{
 update t1 set a=NULL where a=2;
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select 1 > ANY (SELECT * from t1);
 select 10 > ANY (SELECT * from t1);
 -- @bvt:issue
@@ -293,7 +293,7 @@ DROP TABLE IF EXISTS t1;
 create table t1 (a varchar(20));
 insert into t1 values ('A'),('BC'),('DEF');
 update t1 set a=NULL where a='BC';
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select 'A' > ANY (SELECT * from t1);
 select 'XYZS' > ANY (SELECT * from t1);
 -- @bvt:issue
@@ -302,7 +302,7 @@ DROP TABLE IF EXISTS t1;
 create table t1 (a float);
 insert into t1 values (1.5),(2.5),(3.5);
 update t1 set a=NULL where a=2.5;
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select 1.5 > ANY (SELECT * from t1);
 select 10.5 > ANY (SELECT * from t1);
 -- @bvt:issue
@@ -311,7 +311,7 @@ DROP TABLE IF EXISTS t1;
 create table t1 (s1 int);
 insert into t1 values (1),(null);
 select * from t1 where s1 < all (select s1 from t1);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select s1, s1 < all (select s1 from t1) from t1;
 -- @bvt:issue
 
