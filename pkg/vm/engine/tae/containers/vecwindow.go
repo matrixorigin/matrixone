@@ -72,10 +72,16 @@ func (win *vectorWindow[T]) Equals(o Vector) bool {
 			if !bytes.Equal(win.Get(i).([]byte), o.Get(i).([]byte)) {
 				return false
 			}
+		} else if _, ok := any(v).(types.Decimal64); ok {
+			d := win.Get(i).(types.Decimal64)
+			od := win.Get(i).(types.Decimal64)
+			if d.Ne(od) {
+				return false
+			}
 		} else if _, ok := any(v).(types.Decimal128); ok {
 			d := win.Get(i).(types.Decimal128)
 			od := win.Get(i).(types.Decimal128)
-			if d.Hi != od.Hi || d.Lo != od.Lo {
+			if d.Ne(od) {
 				return false
 			}
 		} else {

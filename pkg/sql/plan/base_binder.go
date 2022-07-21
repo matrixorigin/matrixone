@@ -957,9 +957,9 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 			Id: plan.Type_DECIMAL128,
 			// Width: int32(len(val)),
 			// Scale: 0,
-			Width:     38,
+			Width:     34,
 			Scale:     scale,
-			Precision: 38,
+			Precision: 34,
 			Nullable:  false,
 		}
 		return appendCastBeforeExpr(getStringExpr(val), typ)

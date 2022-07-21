@@ -47,7 +47,7 @@ var (
 )
 
 type fixedLength interface {
-	constraints.Integer | constraints.Float | types.Decimal128 | bool
+	constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128 | bool
 }
 
 func fixedLengthShuffle[T fixedLength](vs, ws []T, sels []int64) []T {

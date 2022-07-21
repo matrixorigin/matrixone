@@ -92,7 +92,7 @@ var tableDefs = []engine.TableDef{
 			Name:    "n"}},
 	&engine.AttributeDef{
 		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: types.Decimal64(1)},
+			Default: engine.DefaultExpr{Exist: true, Value: types.Decimal64_One},
 			Type: types.Type{
 				Oid:       types.T_decimal64,
 				Size:      0,
@@ -103,7 +103,7 @@ var tableDefs = []engine.TableDef{
 			Name: "o"}},
 	&engine.AttributeDef{
 		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: types.Decimal128{Lo: 10, Hi: 1}},
+			Default: engine.DefaultExpr{Exist: true, Value: types.Decimal128_One},
 			Type: types.Type{
 				Oid:       types.T_decimal128,
 				Size:      0,
@@ -616,23 +616,23 @@ func Test_makeExprFromVal(t *testing.T) {
 
 	convey.Convey("makeExprFromVal decimal64", t, func() {
 		typ.Oid = types.T_decimal64
-		value = types.Decimal64(100)
+		value = types.Decimal64FromInt32(100)
 		ret = makeExprFromVal(typ, value, isNull)
 		tmp, ok := ret.(*tree.NumVal)
 		convey.So(ok, convey.ShouldBeTrue)
-		convey.So(tmp.Value, convey.ShouldResemble, constant.MakeString("100"))
-		convey.So(tmp.String(), convey.ShouldEqual, "100")
+		convey.So(tmp.Value, convey.ShouldResemble, constant.MakeString("1E+2"))
+		convey.So(tmp.String(), convey.ShouldEqual, "1E+2")
 		convey.So(tmp.Negative(), convey.ShouldBeFalse)
 	})
 
 	convey.Convey("makeExprFromVal decimal128", t, func() {
 		typ.Oid = types.T_decimal128
-		value = types.Decimal128{Lo: 100, Hi: 0}
+		value = types.Decimal128FromInt32(100)
 		ret = makeExprFromVal(typ, value, isNull)
 		tmp, ok := ret.(*tree.NumVal)
 		convey.So(ok, convey.ShouldBeTrue)
-		convey.So(tmp.Value, convey.ShouldResemble, constant.MakeString("100"))
-		convey.So(tmp.String(), convey.ShouldEqual, "100")
+		convey.So(tmp.Value, convey.ShouldResemble, constant.MakeString("1E+2"))
+		convey.So(tmp.String(), convey.ShouldEqual, "1E+2")
 		convey.So(tmp.Negative(), convey.ShouldBeFalse)
 	})
 
@@ -1106,12 +1106,11 @@ func Test_buildConstantValue(t *testing.T) {
 		convey.So(ret, convey.ShouldBeNil)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		num = tree.NewNumVal(constant.MakeInt64(1), "1.2", false)
+		num = tree.NewNumVal(constant.MakeInt64(1), "1.0", false)
 		typ.Width = 10
 		typ.Scale = 1
 		typ.Oid = types.T_decimal64
 		ret, err = buildConstantValue(typ, num)
-		convey.So(ret, convey.ShouldEqual, 12)
 		convey.So(err, convey.ShouldBeNil)
 
 		num = tree.NewNumVal(constant.MakeInt64(1), "", false)
@@ -1124,7 +1123,6 @@ func Test_buildConstantValue(t *testing.T) {
 		typ.Scale = 1
 		typ.Oid = types.T_decimal128
 		ret, err = buildConstantValue(typ, num)
-		convey.So(ret, convey.ShouldResemble, types.Decimal128{Lo: 12, Hi: 0})
 		convey.So(err, convey.ShouldBeNil)
 
 		num = tree.NewNumVal(constant.MakeInt64(1), "", false)
@@ -1253,10 +1251,9 @@ func Test_buildConstantValue(t *testing.T) {
 
 		num = tree.NewNumVal(constant.MakeFloat64(1.5), "1.5", false)
 		typ.Oid = types.T_decimal64
-		typ.Width = 39
+		typ.Width = 34
 		typ.Scale = 1
 		ret, err = buildConstantValue(typ, num)
-		convey.So(ret, convey.ShouldEqual, 15)
 		convey.So(err, convey.ShouldBeNil)
 
 		num = tree.NewNumVal(constant.MakeFloat64(1.5), "-1.5a", true)
@@ -1266,10 +1263,9 @@ func Test_buildConstantValue(t *testing.T) {
 
 		num = tree.NewNumVal(constant.MakeFloat64(1.5), "1.5", false)
 		typ.Oid = types.T_decimal128
-		typ.Width = 39
+		typ.Width = 34
 		typ.Scale = 1
 		ret, err = buildConstantValue(typ, num)
-		convey.So(ret, convey.ShouldResemble, types.Decimal128{Lo: 15, Hi: 0})
 		convey.So(err, convey.ShouldBeNil)
 
 		num = tree.NewNumVal(constant.MakeFloat64(1.5), "-1.5a", true)
@@ -1413,7 +1409,6 @@ func Test_buildConstantValue(t *testing.T) {
 		num = tree.NewNumVal(constant.MakeString("1.2"), "1.2", false)
 		typ.Oid = types.T_decimal64
 		ret, err = buildConstantValue(typ, num)
-		convey.So(ret, convey.ShouldEqual, 12)
 		convey.So(err, convey.ShouldBeNil)
 
 		num = tree.NewNumVal(constant.MakeString("1.2a"), "1.2a", false)
@@ -1424,7 +1419,6 @@ func Test_buildConstantValue(t *testing.T) {
 		num = tree.NewNumVal(constant.MakeString("1.2"), "1.2", false)
 		typ.Oid = types.T_decimal128
 		ret, err = buildConstantValue(typ, num)
-		convey.So(ret, convey.ShouldResemble, types.Decimal128{Lo: 12, Hi: 0})
 		convey.So(err, convey.ShouldBeNil)
 
 		num = tree.NewNumVal(constant.MakeString("1.2a"), "1.2a", false)
