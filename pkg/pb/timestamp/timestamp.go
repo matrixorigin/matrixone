@@ -14,6 +14,7 @@
 package timestamp
 
 import (
+	"fmt"
 	"math"
 	"time"
 )
@@ -95,4 +96,9 @@ func (m Timestamp) Prev() Timestamp {
 		PhysicalTime: m.PhysicalTime,
 		LogicalTime:  m.LogicalTime - 1,
 	}
+}
+
+// DebugString returns debug string
+func (m Timestamp) DebugString() string {
+	return fmt.Sprintf("%d-%d", m.PhysicalTime, m.LogicalTime)
 }
