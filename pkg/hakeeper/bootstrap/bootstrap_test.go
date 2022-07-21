@@ -74,6 +74,26 @@ func TestBootstrap(t *testing.T) {
 		err                    error
 	}{
 		{
+			desc: "1 log shard with 1 replicas",
+
+			cluster: pb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          1,
+					NumberOfReplicas: 1,
+				}},
+			},
+			log: pb.LogState{
+				Stores: map[string]pb.LogStoreInfo{
+					"log-a": {Tick: 100},
+				},
+			},
+
+			expectedNum: 1,
+			expectedInitialMembers: map[uint64]string{
+				1: "log-a",
+			},
+		},
+		{
 			desc: "1 log shard with 3 replicas and 1 dn shard",
 
 			cluster: pb.ClusterInfo{
@@ -184,7 +204,35 @@ func TestCheckBootstrap(t *testing.T) {
 		expected bool
 	}{
 		{
-			desc: "successfully started",
+			desc: "failed to start 1 replica",
+			cluster: pb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{
+					{ShardID: 1, NumberOfReplicas: 1},
+				},
+			},
+			log: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
+					1: {ShardID: 1, Replicas: map[uint64]string{}},
+				},
+			},
+			expected: false,
+		},
+		{
+			desc: "successfully started 1 replica",
+			cluster: pb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{
+					{ShardID: 1, NumberOfReplicas: 1},
+				},
+			},
+			log: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
+					1: {ShardID: 1, Replicas: map[uint64]string{1: "a"}},
+				},
+			},
+			expected: true,
+		},
+		{
+			desc: "successfully started 3 replicas",
 			cluster: pb.ClusterInfo{
 				LogShards: []metadata.LogShardRecord{
 					{ShardID: 1, NumberOfReplicas: 3},

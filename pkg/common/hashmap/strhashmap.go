@@ -34,12 +34,14 @@ func NewStrMap(hasNull bool) *StrHashMap {
 	mp := &hashtable.StringHashMap{}
 	mp.Init()
 	return &StrHashMap{
-		hashMap:       mp,
-		hasNull:       hasNull,
-		values:        make([]uint64, UnitLimit),
-		zValues:       make([]int64, UnitLimit),
-		keys:          make([][]byte, UnitLimit),
-		strHashStates: make([][3]uint64, UnitLimit),
+		hashMap:         mp,
+		hasNull:         hasNull,
+		values:          make([]uint64, UnitLimit),
+		zValues:         make([]int64, UnitLimit),
+		keys:            make([][]byte, UnitLimit),
+		strHashStates:   make([][3]uint64, UnitLimit),
+		decimal64Slice:  make([]types.Decimal64, UnitLimit),
+		decimal128Slice: make([]types.Decimal128, UnitLimit),
 	}
 }
 
@@ -87,31 +89,61 @@ func (m *StrHashMap) InsertValue(val any) bool {
 // Insert a row from multiple columns into the hashmap, return true if it is new, otherwise false
 func (m *StrHashMap) Insert(vecs []*vector.Vector, row int) bool {
 	defer func() { m.keys[0] = m.keys[0][:0] }()
-	for _, vec := range vecs {
-		switch typLen := vec.Typ.TypeSize(); typLen {
-		case 1:
-			fillGroupStr[uint8](m, vec, 1, 1, row)
-		case 2:
-			fillGroupStr[uint16](m, vec, 1, 2, row)
-		case 4:
-			fillGroupStr[uint32](m, vec, 1, 4, row)
-		case 8:
-			fillGroupStr[uint64](m, vec, 1, 8, row)
-		case 16:
-			fillGroupStr[types.Decimal128](m, vec, 1, 16, row)
-		default:
-			fillStringGroupStr(m, vec, 1, row)
-		}
-	}
-	if l := len(m.keys[0]); l < 16 {
-		m.keys[0] = append(m.keys[0], hashtable.StrKeyPadding[l:]...)
-	}
+	m.encodeHashKeys(vecs, row, 1)
 	m.hashMap.InsertStringBatch(m.strHashStates, m.keys[:1], m.values[:1])
 	if m.values[0] > m.rows {
 		m.rows++
 		return true
 	}
 	return false
+}
+
+func (m *StrHashMap) encodeHashKeysWithScale(vecs []*vector.Vector, start, count int, scales []int32) {
+	for i, vec := range vecs {
+		switch typLen := vec.Typ.TypeSize(); typLen {
+		case 1:
+			fillGroupStr[uint8](m, vec, count, 1, start, scales[i])
+		case 2:
+			fillGroupStr[uint16](m, vec, count, 2, start, scales[i])
+		case 4:
+			fillGroupStr[uint32](m, vec, count, 4, start, scales[i])
+		case 8:
+			fillGroupStr[uint64](m, vec, count, 8, start, scales[i])
+		case 16:
+			fillGroupStr[types.Decimal128](m, vec, count, 16, start, scales[i])
+		default:
+			fillStringGroupStr(m, vec, count, start)
+		}
+	}
+	for i := 0; i < count; i++ {
+		if l := len(m.keys[i]); l < 16 {
+			m.keys[i] = append(m.keys[i], hashtable.StrKeyPadding[l:]...)
+		}
+	}
+}
+
+func (m *StrHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
+	for _, vec := range vecs {
+		switch typLen := vec.Typ.TypeSize(); typLen {
+		case 1:
+			fillGroupStr[uint8](m, vec, count, 1, start, 0)
+		case 2:
+			fillGroupStr[uint16](m, vec, count, 2, start, 0)
+		case 4:
+			fillGroupStr[uint32](m, vec, count, 4, start, 0)
+		case 8:
+			fillGroupStr[uint64](m, vec, count, 8, start, 0)
+		case 16:
+			fillGroupStr[types.Decimal128](m, vec, count, 16, start, 0)
+		default:
+			fillStringGroupStr(m, vec, count, start)
+		}
+	}
+	for i := 0; i < count; i++ {
+		if l := len(m.keys[i]); l < 16 {
+			m.keys[i] = append(m.keys[i], hashtable.StrKeyPadding[l:]...)
+		}
+	}
 }
 
 func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int) {
@@ -145,9 +177,24 @@ func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int) {
 	}
 }
 
-func fillGroupStr[T any](m *StrHashMap, vec *vector.Vector, n int, sz int, start int) {
-	vs := vector.GetFixedVectorValues[T](vec, int(sz))
-	data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*sz)[:len(vs)*sz]
+func fillGroupStr[T any](m *StrHashMap, vec *vector.Vector, n int, sz int, start int, scale int32) {
+	var data []byte
+
+	if scale > 0 {
+		if vec.Typ.Oid == types.T_decimal64 {
+			src := vector.GetFixedVectorValues[types.Decimal64](vec, sz)
+			vs := types.AlignDecimal64UsingScaleDiffBatch(src[start:start+n], m.decimal64Slice[:n], scale)
+			data = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*sz)[:len(vs)*sz]
+		} else if vec.Typ.Oid == types.T_decimal128 {
+			src := vector.GetFixedVectorValues[types.Decimal128](vec, sz)
+			vs := m.decimal128Slice[:n]
+			types.AlignDecimal128UsingScaleDiffBatch(src[start:start+n], vs, scale)
+			data = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*sz)[:len(vs)*sz]
+		}
+	} else {
+		vs := vector.GetFixedVectorValues[T](vec, int(sz))
+		data = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*sz)[:len(vs)*sz]
+	}
 	if !vec.GetNulls().Any() {
 		for i := 0; i < n; i++ {
 			if m.hasNull {
@@ -158,16 +205,16 @@ func fillGroupStr[T any](m *StrHashMap, vec *vector.Vector, n int, sz int, start
 	} else {
 		nsp := vec.GetNulls()
 		for i := 0; i < n; i++ {
-			hasNull := nsp.Contains(uint64(i + start))
+			isNull := nsp.Contains(uint64(i + start))
 			if m.hasNull {
-				if hasNull {
+				if isNull {
 					m.keys[i] = append(m.keys[i], byte(1))
 				} else {
 					m.keys[i] = append(m.keys[i], byte(0))
 					m.keys[i] = append(m.keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
 				}
 			} else {
-				if hasNull {
+				if isNull {
 					m.zValues[i] = 0
 					continue
 				}
