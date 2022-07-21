@@ -51,12 +51,16 @@ type Decimal128 = types.Decimal128
 type Bytes = types.Bytes
 type Null struct{}
 
-var CompareDecimal128Decimal128Aligned = types.CompareDecimal128Decimal128Aligned
+var CompareDecimal128 = types.CompareDecimal128
 var FromClock = types.FromClock
 var FromCalendar = types.FromCalendar
 
 type OrderedT interface {
-	constraints.Ordered | Date | Datetime | Timestamp | Decimal64
+	constraints.Ordered | Date | Datetime | Timestamp
+}
+
+type DecimalT interface {
+	Decimal64 | Decimal128
 }
 
 type FixedSizeT interface {
