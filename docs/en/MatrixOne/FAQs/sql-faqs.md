@@ -2,7 +2,7 @@
 
 * **Are functions and other keywords case sensitive？**
 
-  No, they are not case sensitive.
+  No, they are not case sensitive. Only in one case case is sensitive in MatrixOne, if user creates table and attributes with ``, the name in`` is case sensitive. To find this table name or attribute name in your query, it needs to be in `` as well.
 
 * **How do I export data from MatrixOne to a file?**
 

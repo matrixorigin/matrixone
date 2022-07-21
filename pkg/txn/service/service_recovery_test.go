@@ -39,7 +39,7 @@ func TestRecoveryFromCommittedWithData(t *testing.T) {
 	s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), mlog).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 
 	checkData(t, wTxn, s, 2, 1, true)
@@ -63,7 +63,7 @@ func TestRecoveryFromMultiCommittedWithData(t *testing.T) {
 	s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), mlog).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 
 	checkData(t, wTxn, s, 2, 1, true)
@@ -89,7 +89,7 @@ func TestRecoveryFromCommittedAfterPrepared(t *testing.T) {
 	s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), mlog).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 
 	checkData(t, wTxn, s, 3, 1, true)
@@ -119,7 +119,7 @@ func TestRecoveryFromMultiCommittedAfterPrepared(t *testing.T) {
 	s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), mlog).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 
 	checkData(t, wTxn, s, 3, 1, true)
@@ -149,12 +149,12 @@ func TestRecoveryFromMultiDNShardWithAllPrepared(t *testing.T) {
 
 	assert.NoError(t, s1.Start())
 	defer func() {
-		assert.NoError(t, s1.Close())
+		assert.NoError(t, s1.Close(false))
 	}()
 
 	assert.NoError(t, s2.Start())
 	defer func() {
-		assert.NoError(t, s2.Close())
+		assert.NoError(t, s2.Close(false))
 	}()
 
 	for e := range s1.storage.(*mem.KVTxnStorage).GetEventC() {
@@ -195,12 +195,12 @@ func TestRecoveryFromMultiDNShardWithAnyNotPrepared(t *testing.T) {
 
 	assert.NoError(t, s1.Start())
 	defer func() {
-		assert.NoError(t, s1.Close())
+		assert.NoError(t, s1.Close(false))
 	}()
 
 	assert.NoError(t, s2.Start())
 	defer func() {
-		assert.NoError(t, s2.Close())
+		assert.NoError(t, s2.Close(false))
 	}()
 
 	for e := range s1.storage.(*mem.KVTxnStorage).GetEventC() {
@@ -240,12 +240,12 @@ func TestRecoveryFromMultiDNShardWithCommitting(t *testing.T) {
 
 	assert.NoError(t, s1.Start())
 	defer func() {
-		assert.NoError(t, s1.Close())
+		assert.NoError(t, s1.Close(false))
 	}()
 
 	assert.NoError(t, s2.Start())
 	defer func() {
-		assert.NoError(t, s2.Close())
+		assert.NoError(t, s2.Close(false))
 	}()
 
 	for e := range s1.storage.(*mem.KVTxnStorage).GetEventC() {

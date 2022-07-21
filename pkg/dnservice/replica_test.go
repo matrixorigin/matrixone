@@ -43,12 +43,12 @@ func TestWaitStarted(t *testing.T) {
 
 	ts := service.NewTestTxnService(t, 1, service.NewTestSender(), service.NewTestClock(1))
 	defer func() {
-		assert.NoError(t, ts.Close())
+		assert.NoError(t, ts.Close(false))
 	}()
 
 	assert.NoError(t, r.start(ts))
 	defer func() {
-		assert.NoError(t, r.close())
+		assert.NoError(t, r.close(false))
 	}()
 	select {
 	case <-c:
@@ -68,12 +68,12 @@ func TestHandleLocalCNRequestsWillPanic(t *testing.T) {
 	r := newReplica(newTestDNShard(1, 2, 3), nil)
 	ts := service.NewTestTxnService(t, 1, service.NewTestSender(), service.NewTestClock(1))
 	defer func() {
-		assert.NoError(t, ts.Close())
+		assert.NoError(t, ts.Close(false))
 	}()
 
 	assert.NoError(t, r.start(ts))
 	defer func() {
-		assert.NoError(t, r.close())
+		assert.NoError(t, r.close(false))
 	}()
 
 	req := service.NewTestReadRequest(1, txn.TxnMeta{}, 1)
