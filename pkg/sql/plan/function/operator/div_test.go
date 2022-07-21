@@ -31,14 +31,14 @@ func TestDiv(t *testing.T) {
 
 	leftType1 := types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 5}
 	rightType1 := types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 5}
-	resType1 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: 5}
-	divDecimal64(t, 33333300, leftType1, -123450000, rightType1, types.Decimal128{Lo: -27001, Hi: -1}, resType1)
+	resType1 := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: 5}
+	divDecimal64(t, types.Decimal64FromInt32(33333300), leftType1, types.Decimal64FromInt32(-123450000), rightType1, types.MustDecimal128FromString("-0.27001"), resType1)
 
 	leftType2 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}
 	rightType2 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}
-	resType2 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: 5}
-	divDecimal128(t, types.Decimal128{Lo: 33333300, Hi: 0}, leftType2, types.Decimal128{Lo: -123450000, Hi: -1}, rightType2,
-		types.Decimal128{Lo: -27001, Hi: -1}, resType2)
+	resType2 := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: 5}
+	divDecimal128(t, types.Decimal128FromInt32(33333300), leftType2, types.Decimal128FromInt32(-123450000), rightType2,
+		types.MustDecimal128FromString("-0.27001"), resType2)
 }
 
 // Unit test input of int and float parameters of div operator
@@ -165,7 +165,10 @@ func divDecimal64(t *testing.T, left types.Decimal64, leftType types.Type, right
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, decimalres.Col)
+
+			a := c.wantBytes.([]types.Decimal128)
+			b := decimalres.Col.([]types.Decimal128)
+			require.Equal(t, a[0].ToStringWithScale(restType.Scale), b[0].ToStringWithScale(decimalres.Typ.Scale))
 			require.Equal(t, c.wantType, decimalres.Typ)
 			require.Equal(t, c.wantScalar, decimalres.IsScalar())
 		})
@@ -224,7 +227,10 @@ func divDecimal128(t *testing.T, left types.Decimal128, leftType types.Type, rig
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, decimalres.Col)
+
+			a := c.wantBytes.([]types.Decimal128)
+			b := decimalres.Col.([]types.Decimal128)
+			require.Equal(t, a[0].ToStringWithScale(restType.Scale), b[0].ToStringWithScale(decimalres.Typ.Scale))
 			require.Equal(t, c.wantType, decimalres.Typ)
 			require.Equal(t, c.wantScalar, decimalres.IsScalar())
 		})

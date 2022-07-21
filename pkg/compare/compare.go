@@ -95,14 +95,14 @@ func New(typ types.Type, desc bool) Compare {
 		return newCompare(genericCompare[types.Timestamp], genericCopy[types.Timestamp])
 	case types.T_decimal64:
 		if desc {
-			return newCompare(genericDescCompare[types.Decimal64], genericCopy[types.Decimal64])
+			return newCompare(decimal64DescCompare, decimal64Copy)
 		}
-		return newCompare(genericCompare[types.Decimal64], genericCopy[types.Decimal64])
+		return newCompare(decimal64Compare, decimal64Copy)
 	case types.T_decimal128:
 		if desc {
-			return newCompare(decimal128DescCompare[types.Decimal128], decimal128Copy[types.Decimal128])
+			return newCompare(decimal128DescCompare, decimal128Copy)
 		}
-		return newCompare(decimal128Compare[types.Decimal128], decimal128Copy[types.Decimal128])
+		return newCompare(decimal128Compare, decimal128Copy)
 	case types.T_char, types.T_varchar:
 		return &strCompare{
 			desc: desc,
@@ -122,8 +122,12 @@ func boolCompare[T bool](x, y T) int {
 	return 1
 }
 
-func decimal128Compare[T types.Decimal128](x, y T) int {
-	return int(types.CompareDecimal128Decimal128Aligned(types.Decimal128(x), types.Decimal128(y)))
+func decimal64Compare(x, y types.Decimal64) int {
+	return x.Compare(y)
+}
+
+func decimal128Compare(x, y types.Decimal128) int {
+	return x.Compare(y)
 }
 
 func genericCompare[T types.Generic](x, y T) int {
@@ -146,8 +150,11 @@ func boolDescCompare[T bool](x, y T) int {
 	return -1
 }
 
-func decimal128DescCompare[T types.Decimal128](x, y T) int {
-	return int(types.CompareDecimal128Decimal128Aligned(types.Decimal128(x), types.Decimal128(y))) * -1
+func decimal64DescCompare(x, y types.Decimal64) int {
+	return -x.Compare(y)
+}
+func decimal128DescCompare(x, y types.Decimal128) int {
+	return -x.Compare(y)
 }
 
 func genericDescCompare[T types.Generic](x, y T) int {
@@ -164,7 +171,11 @@ func boolCopy[T bool](vecDst, vecSrc []T, dst, src int64) {
 	vecDst[dst] = vecSrc[src]
 }
 
-func decimal128Copy[T types.Decimal128](vecDst, vecSrc []T, dst, src int64) {
+func decimal64Copy(vecDst, vecSrc []types.Decimal64, dst, src int64) {
+	vecDst[dst] = vecSrc[src]
+}
+
+func decimal128Copy(vecDst, vecSrc []types.Decimal128, dst, src int64) {
 	vecDst[dst] = vecSrc[src]
 }
 

@@ -983,6 +983,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			Children:    []int32{nodeID},
 			BindingTags: []int32{ctx.resultTag},
 		}, ctx)
+	} else {
+		ctx.results = ctx.projects
 	}
 
 	if isRoot {
