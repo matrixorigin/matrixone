@@ -219,8 +219,8 @@ const (
 	VERSION
 	COLLATION
 
-	TIMESTAMP // TIMESTAMP
-
+	TIMESTAMP   // TIMESTAMP
+	DATE_FORMAT // DATE_FORMAT
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -287,6 +287,7 @@ var functionIdRegister = map[string]int32{
 	"power":       POW,
 	"startswith":  STARTSWITH,
 	"to_date":     TO_DATE,
+	"date_format": DATE_FORMAT,
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// variadic functions
 	"ceil":              CEIL,
