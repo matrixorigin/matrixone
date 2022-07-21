@@ -104,8 +104,8 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 
 	protocol.m.Lock()
 	protocol.sequenceId = uint8(packet.SequenceID + 1)
-	protocol.m.Unlock()
 	var seq = protocol.sequenceId
+	protocol.m.Unlock()
 	if !ok {
 		return errors.New("message is not Packet")
 	}
