@@ -15,15 +15,19 @@
 package plan
 
 import (
+	"fmt"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
 var (
-	_ Rule = &GetParamRule{}
-	_ Rule = &ResetParamOrderRule{}
-	_ Rule = &ResetParamOrderRule{}
+	_ VisitRule = &GetParamRule{}
+	_ VisitRule = &ResetParamOrderRule{}
+	_ VisitRule = &ResetParamRefRule{}
+	_ VisitRule = &ResetParamRefRule{}
 )
 
 type GetParamRule struct {
@@ -31,8 +35,8 @@ type GetParamRule struct {
 	schemas []*plan.ObjectRef
 }
 
-func NewGetParamRule() GetParamRule {
-	return GetParamRule{
+func NewGetParamRule() *GetParamRule {
+	return &GetParamRule{
 		params: make(map[int]int),
 	}
 }
@@ -53,7 +57,7 @@ func (rule *GetParamRule) Match(node *Node) bool {
 	return true
 }
 
-func (rule *GetParamRule) Apply(node *Node, _ *Query) {
+func (rule *GetParamRule) Apply(node *Node, _ *Query) error {
 	if node.Limit != nil {
 		node.Limit = rule.getParam(node.Limit)
 	}
@@ -73,6 +77,8 @@ func (rule *GetParamRule) Apply(node *Node, _ *Query) {
 	for i := range node.ProjectList {
 		node.ProjectList[i] = rule.getParam(node.ProjectList[i])
 	}
+
+	return nil
 }
 
 func (rule *GetParamRule) getParam(e *plan.Expr) *plan.Expr {
@@ -107,8 +113,8 @@ type ResetParamOrderRule struct {
 	params map[int]int
 }
 
-func NewResetParamOrderRule(params map[int]int) ResetParamOrderRule {
-	return ResetParamOrderRule{
+func NewResetParamOrderRule(params map[int]int) *ResetParamOrderRule {
+	return &ResetParamOrderRule{
 		params: params,
 	}
 }
@@ -117,7 +123,7 @@ func (rule *ResetParamOrderRule) Match(_ *Node) bool {
 	return true
 }
 
-func (rule *ResetParamOrderRule) Apply(node *Node, qry *Query) {
+func (rule *ResetParamOrderRule) Apply(node *Node, qry *Query) error {
 
 	if node.Limit != nil {
 		node.Limit = rule.setOrder(node.Limit)
@@ -138,6 +144,8 @@ func (rule *ResetParamOrderRule) Apply(node *Node, qry *Query) {
 	for i := range node.ProjectList {
 		node.ProjectList[i] = rule.setOrder(node.ProjectList[i])
 	}
+
+	return nil
 }
 
 func (rule *ResetParamOrderRule) setOrder(e *plan.Expr) *plan.Expr {
@@ -161,8 +169,8 @@ type ResetParamRefRule struct {
 	params []*Expr
 }
 
-func NewResetParamRefRule(params []*Expr) ResetParamRefRule {
-	return ResetParamRefRule{
+func NewResetParamRefRule(params []*Expr) *ResetParamRefRule {
+	return &ResetParamRefRule{
 		params: params,
 	}
 }
@@ -171,7 +179,7 @@ func (rule *ResetParamRefRule) Match(_ *Node) bool {
 	return true
 }
 
-func (rule *ResetParamRefRule) Apply(node *Node, qry *Query) {
+func (rule *ResetParamRefRule) Apply(node *Node, qry *Query) error {
 	if node.Limit != nil {
 		node.Limit = rule.resetParamRef(node.Limit)
 	}
@@ -191,6 +199,8 @@ func (rule *ResetParamRefRule) Apply(node *Node, qry *Query) {
 	for i := range node.ProjectList {
 		node.ProjectList[i] = rule.resetParamRef(node.ProjectList[i])
 	}
+
+	return nil
 }
 
 func (rule *ResetParamRefRule) resetParamRef(e *plan.Expr) *plan.Expr {
@@ -214,5 +224,128 @@ func (rule *ResetParamRefRule) resetParamRef(e *plan.Expr) *plan.Expr {
 		return rule.params[int(exprImpl.P.Pos)]
 	default:
 		return e
+	}
+}
+
+// ---------------------------
+
+type ResetVarRefRule struct {
+	compCtx CompilerContext
+}
+
+func NewResetVarRefRule(compCtx CompilerContext) *ResetVarRefRule {
+	return &ResetVarRefRule{
+		compCtx: compCtx,
+	}
+}
+
+func (rule *ResetVarRefRule) Match(_ *Node) bool {
+	return true
+}
+
+func (rule *ResetVarRefRule) Apply(node *Node, qry *Query) error {
+	var err error
+	if node.Limit != nil {
+		node.Limit, err = rule.resetVarRef(node.Limit)
+	}
+	if err != nil {
+		return err
+	}
+
+	if node.Offset != nil {
+		node.Offset, err = rule.resetVarRef(node.Offset)
+	}
+	if err != nil {
+		return err
+	}
+
+	for i := range node.OnList {
+		node.OnList[i], err = rule.resetVarRef(node.OnList[i])
+	}
+	if err != nil {
+		return err
+	}
+
+	for i := range node.FilterList {
+		node.FilterList[i], err = rule.resetVarRef(node.FilterList[i])
+	}
+	if err != nil {
+		return err
+	}
+
+	for i := range node.ProjectList {
+		node.ProjectList[i], err = rule.resetVarRef(node.ProjectList[i])
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (rule *ResetVarRefRule) resetVarRef(e *plan.Expr) (*plan.Expr, error) {
+	var err error
+	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_F:
+		needResetFunction := false
+		for i, arg := range exprImpl.F.Args {
+			if _, ok := arg.Expr.(*plan.Expr_V); ok {
+				needResetFunction = true
+			}
+			exprImpl.F.Args[i], err = rule.resetVarRef(arg)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		// reset function
+		if needResetFunction {
+			return bindFuncExprImplByPlanExpr(exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
+		}
+		return e, nil
+	case *plan.Expr_V:
+		var getVal interface{}
+		var expr *plan.Expr
+		getVal, err = rule.compCtx.ResolveVariable(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+		if err != nil {
+			return nil, err
+		}
+
+		switch val := getVal.(type) {
+		case string:
+			expr = makePlan2StringConstExprWithType(val)
+		case int:
+			expr = makePlan2Int64ConstExprWithType(int64(val))
+		case uint8:
+			expr = makePlan2Int64ConstExprWithType(int64(val))
+		case uint16:
+			expr = makePlan2Int64ConstExprWithType(int64(val))
+		case uint32:
+			expr = makePlan2Int64ConstExprWithType(int64(val))
+		case int8:
+			expr = makePlan2Int64ConstExprWithType(int64(val))
+		case int16:
+			expr = makePlan2Int64ConstExprWithType(int64(val))
+		case int32:
+			expr = makePlan2Int64ConstExprWithType(int64(val))
+		case int64:
+			expr = makePlan2Int64ConstExprWithType(val)
+		case uint64:
+			expr = makePlan2Uint64ConstExprWithType(val)
+		case float32:
+			expr = makePlan2Float64ConstExprWithType(float64(val))
+		case float64:
+			expr = makePlan2Float64ConstExprWithType(val)
+		case bool:
+			expr = makePlan2BoolConstExprWithType(val)
+		case nil:
+			expr = makePlan2NullConstExprWithType()
+		case types.Decimal64, types.Decimal128:
+			err = errors.New("", "decimal var not support now")
+		default:
+			err = errors.New("", fmt.Sprintf("type of var %q is not supported now", exprImpl.V.Name))
+		}
+		return expr, err
+	default:
+		return e, nil
 	}
 }

@@ -108,6 +108,8 @@ message ParamRef {
 // Session variable ref, compiler should fold.
 message VarRef {
 	string name = 1;
+	bool system = 2;
+	bool global = 3;
 }
 
 // Reference a column in the proj list of a node.

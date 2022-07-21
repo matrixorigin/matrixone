@@ -1423,12 +1423,13 @@ func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{},
 		// 	}
 		// }
 
-		query := preparePlan.Plan.GetQuery()
+		query := plan2.DeepCopyQuery(preparePlan.Plan.GetQuery())
 
-		// reset params
+		// replace ? and @var with their values
 		resetParamRule := plan2.NewResetParamRefRule(executePlan.Args)
-		VisitQuery := plan2.NewVisitQuery(query, &resetParamRule)
-		query, err = VisitQuery.Visit()
+		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompilerContext())
+		VisitQuery := plan2.NewVisitQuery(query, []plan2.VisitRule{resetParamRule, resetVarRule})
+		err = VisitQuery.Visit()
 		if err != nil {
 			return nil, err
 		}
@@ -1438,6 +1439,17 @@ func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{},
 		cwft.plan = &plan2.Plan{Plan: &plan2.Plan_Query{
 			Query: query,
 		}}
+	} else {
+		// replace @var with their values
+		query := cwft.plan.GetQuery()
+		if query != nil {
+			resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompilerContext())
+			VisitQuery := plan2.NewVisitQuery(query, []plan2.VisitRule{resetVarRule})
+			err = VisitQuery.Visit()
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	cwft.proc.UnixTime = time.Now().UnixNano()

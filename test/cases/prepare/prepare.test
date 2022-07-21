@@ -15,3 +15,10 @@ execute stmt1 using @a_var;
 deallocate prepare stmt1;
 execute stmt1 using @a_var;
 drop table t1;
+
+prepare stmt2 from 'select @var_t1';
+set @var_t1 = 0;
+execute stmt2;
+set @var_t1= 'aa';
+execute stmt2;
+deallocate prepare stmt2;

@@ -21,6 +21,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+func makePlan2NullConstExprWithType() *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_C{
+			C: &Const{
+				Isnull: true,
+			},
+		},
+		Typ: &plan.Type{
+			Id:       plan.Type_ANY,
+			Nullable: true,
+		},
+	}
+}
+
 func makePlan2BoolConstExpr(v bool) *plan.Expr_C {
 	return &plan.Expr_C{C: &plan.Const{
 		Isnull: false,
@@ -28,6 +42,17 @@ func makePlan2BoolConstExpr(v bool) *plan.Expr_C {
 			Bval: v,
 		},
 	}}
+}
+
+func makePlan2BoolConstExprWithType(v bool) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2BoolConstExpr(v),
+		Typ: &plan.Type{
+			Id:       plan.Type_BOOL,
+			Nullable: false,
+			Size:     1,
+		},
+	}
 }
 
 func makePlan2Int64ConstExpr(v int64) *plan.Expr_C {
@@ -39,6 +64,17 @@ func makePlan2Int64ConstExpr(v int64) *plan.Expr_C {
 	}}
 }
 
+func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Int64ConstExpr(v),
+		Typ: &plan.Type{
+			Id:       plan.Type_INT64,
+			Nullable: false,
+			Size:     8,
+		},
+	}
+}
+
 func makePlan2Uint64ConstExpr(v uint64) *plan.Expr_C {
 	return &plan.Expr_C{C: &plan.Const{
 		Isnull: false,
@@ -46,6 +82,17 @@ func makePlan2Uint64ConstExpr(v uint64) *plan.Expr_C {
 			Uval: v,
 		},
 	}}
+}
+
+func makePlan2Uint64ConstExprWithType(v uint64) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Uint64ConstExpr(v),
+		Typ: &plan.Type{
+			Id:       plan.Type_UINT64,
+			Nullable: false,
+			Size:     8,
+		},
+	}
 }
 
 func makePlan2Float32ConstExpr(v float32) *plan.Expr_C {
@@ -66,6 +113,17 @@ func makePlan2Float64ConstExpr(v float64) *plan.Expr_C {
 	}}
 }
 
+func makePlan2Float64ConstExprWithType(v float64) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Float64ConstExpr(v),
+		Typ: &plan.Type{
+			Id:       plan.Type_FLOAT64,
+			Nullable: false,
+			Size:     8,
+		},
+	}
+}
+
 func makePlan2StringConstExpr(v string) *plan.Expr_C {
 	return &plan.Expr_C{C: &plan.Const{
 		Isnull: false,
@@ -73,6 +131,18 @@ func makePlan2StringConstExpr(v string) *plan.Expr_C {
 			Sval: v,
 		},
 	}}
+}
+
+func makePlan2StringConstExprWithType(v string) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2StringConstExpr(v),
+		Typ: &plan.Type{
+			Id:       plan.Type_VARCHAR,
+			Nullable: false,
+			Size:     4,
+			Width:    int32(len(v)),
+		},
+	}
 }
 
 func makePlan2DateConstExpr(v types.Date) *plan.Expr_C {

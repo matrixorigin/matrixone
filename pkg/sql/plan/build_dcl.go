@@ -80,8 +80,8 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
 			getParamRule := NewGetParamRule()
-			VisitQuery := NewVisitQuery(pp.Ddl.Query, &getParamRule)
-			_, err = VisitQuery.Visit()
+			VisitQuery := NewVisitQuery(pp.Ddl.Query, []VisitRule{getParamRule})
+			err = VisitQuery.Visit()
 			if err != nil {
 				return nil, err
 			}
@@ -93,8 +93,8 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	case *plan.Plan_Query:
 		// collect args
 		getParamRule := NewGetParamRule()
-		VisitQuery := NewVisitQuery(pp.Query, &getParamRule)
-		pp.Query, err = VisitQuery.Visit()
+		VisitQuery := NewVisitQuery(pp.Query, []VisitRule{getParamRule})
+		err = VisitQuery.Visit()
 		if err != nil {
 			return nil, err
 		}
@@ -106,8 +106,8 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 
 		// set arg order
 		resetParamRule := NewResetParamOrderRule(args)
-		VisitQuery = NewVisitQuery(pp.Query, &resetParamRule)
-		pp.Query, err = VisitQuery.Visit()
+		VisitQuery = NewVisitQuery(pp.Query, []VisitRule{resetParamRule})
+		err = VisitQuery.Visit()
 		if err != nil {
 			return nil, err
 		}
