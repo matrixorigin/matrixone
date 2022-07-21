@@ -30,10 +30,10 @@ type Iterator interface {
 	// Find vecs[start, start+count) int hashmap
 	// return value is the corresponding the group number,
 	// if it is 0 it means that the corresponding value cannot be found
-	Find(start, end int, vecs []*vector.Vector) []uint64
+	Find(start, count int, vecs []*vector.Vector) []uint64
 	// Insert vecs[start, start+count) into hashmap
 	// 	the return value corresponds to the corresponding group number(start with 1)
-	Insert(start, end int, vecs []*vector.Vector) []uint64
+	Insert(start, count int, vecs []*vector.Vector) []uint64
 }
 
 // StrHashMap key is []byte, value a uint64 value (starting from 1)

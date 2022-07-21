@@ -87,31 +87,37 @@ func (m *StrHashMap) InsertValue(val any) bool {
 // Insert a row from multiple columns into the hashmap, return true if it is new, otherwise false
 func (m *StrHashMap) Insert(vecs []*vector.Vector, row int) bool {
 	defer func() { m.keys[0] = m.keys[0][:0] }()
-	for _, vec := range vecs {
-		switch typLen := vec.Typ.TypeSize(); typLen {
-		case 1:
-			fillGroupStr[uint8](m, vec, 1, 1, row)
-		case 2:
-			fillGroupStr[uint16](m, vec, 1, 2, row)
-		case 4:
-			fillGroupStr[uint32](m, vec, 1, 4, row)
-		case 8:
-			fillGroupStr[uint64](m, vec, 1, 8, row)
-		case 16:
-			fillGroupStr[types.Decimal128](m, vec, 1, 16, row)
-		default:
-			fillStringGroupStr(m, vec, 1, row)
-		}
-	}
-	if l := len(m.keys[0]); l < 16 {
-		m.keys[0] = append(m.keys[0], hashtable.StrKeyPadding[l:]...)
-	}
+	m.encodeHashKeys(vecs, row, 1)
 	m.hashMap.InsertStringBatch(m.strHashStates, m.keys[:1], m.values[:1])
 	if m.values[0] > m.rows {
 		m.rows++
 		return true
 	}
 	return false
+}
+
+func (m *StrHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
+	for _, vec := range vecs {
+		switch typLen := vec.Typ.TypeSize(); typLen {
+		case 1:
+			fillGroupStr[uint8](m, vec, count, 1, start)
+		case 2:
+			fillGroupStr[uint16](m, vec, count, 2, start)
+		case 4:
+			fillGroupStr[uint32](m, vec, count, 4, start)
+		case 8:
+			fillGroupStr[uint64](m, vec, count, 8, start)
+		case 16:
+			fillGroupStr[types.Decimal128](m, vec, count, 16, start)
+		default:
+			fillStringGroupStr(m, vec, count, start)
+		}
+	}
+	for i := 0; i < count; i++ {
+		if l := len(m.keys[i]); l < 16 {
+			m.keys[i] = append(m.keys[i], hashtable.StrKeyPadding[l:]...)
+		}
+	}
 }
 
 func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int) {
@@ -158,16 +164,16 @@ func fillGroupStr[T any](m *StrHashMap, vec *vector.Vector, n int, sz int, start
 	} else {
 		nsp := vec.GetNulls()
 		for i := 0; i < n; i++ {
-			hasNull := nsp.Contains(uint64(i + start))
+			isNull := nsp.Contains(uint64(i + start))
 			if m.hasNull {
-				if hasNull {
+				if isNull {
 					m.keys[i] = append(m.keys[i], byte(1))
 				} else {
 					m.keys[i] = append(m.keys[i], byte(0))
 					m.keys[i] = append(m.keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
 				}
 			} else {
-				if hasNull {
+				if isNull {
 					m.zValues[i] = 0
 					continue
 				}
