@@ -60,7 +60,7 @@ func (s *Decimal64Sum) Eval(vs []types.Decimal64) []types.Decimal64 {
 
 func (s *Decimal64Sum) Fill(_ int64, value types.Decimal64, ov types.Decimal64, z int64, isEmpty bool, isNull bool) (types.Decimal64, bool) {
 	if !isNull {
-		return ov + types.Decimal64Int64Mul(value, z), false
+		return ov.Add(value.MulInt64(z)), false
 	}
 	return ov, isEmpty
 }
@@ -71,7 +71,7 @@ func (s *Decimal64Sum) Merge(_ int64, _ int64, x types.Decimal64, y types.Decima
 	} else if xEmpty && !yEmpty {
 		return y, false
 	} else if !xEmpty && !yEmpty {
-		return x + y, false
+		return x.Add(y), false
 	}
 	return x, true
 }
@@ -89,8 +89,7 @@ func (s *Decimal128Sum) Eval(vs []types.Decimal128) []types.Decimal128 {
 
 func (s *Decimal128Sum) Fill(_ int64, value types.Decimal128, ov types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
 	if !isNull {
-		tmp := types.Decimal128Int64Mul(value, z)
-		return types.Decimal128AddAligned(ov, tmp), false
+		return ov.Add(value.MulInt64(z)), false
 	}
 	return ov, isEmpty
 }
@@ -101,7 +100,7 @@ func (s *Decimal128Sum) Merge(_ int64, _ int64, x types.Decimal128, y types.Deci
 	} else if xEmpty && !yEmpty {
 		return y, false
 	} else if !xEmpty && !yEmpty {
-		return types.Decimal128AddAligned(x, y), false
+		return x.Add(y), false
 	}
 	return x, true
 }

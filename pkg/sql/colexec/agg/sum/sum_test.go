@@ -88,7 +88,7 @@ func TestDecimal128Sum(t *testing.T) {
 	testTyp := types.New(types.T_decimal128, 0, 0, 0)
 	ds := NewD128Sum()
 	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
-	input1 := []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+	input1 := []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
 	vec := testutil.MakeDecimal128Vector(input1, nil, testTyp)
 	{
 		// test single agg with Grow & Fill function
@@ -192,7 +192,7 @@ func TestDistincSum(t *testing.T) {
 func MakeDecimal128Arr(input []int64) []types.Decimal128 {
 	ret := make([]types.Decimal128, len(input))
 	for i, v := range input {
-		ret[i] = types.Decimal64ToDecimal128(types.Decimal64(v))
+		ret[i] = types.InitDecimal128(v)
 	}
 
 	return ret

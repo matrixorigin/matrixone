@@ -56,6 +56,40 @@ func (m *Min[T]) Merge(_ int64, _ int64, x T, y T, xEmpty bool, yEmpty bool, _ a
 	return x, true
 }
 
+func NewD64Min() *Decimal64Min {
+	return &Decimal64Min{}
+}
+
+func (m *Decimal64Min) Grows(_ int) {
+}
+
+func (m *Decimal64Min) Eval(vs []types.Decimal64) []types.Decimal64 {
+	return vs
+}
+
+func (m *Decimal64Min) Fill(_ int64, value types.Decimal64, ov types.Decimal64, _ int64, isEmpty bool, isNull bool) (types.Decimal64, bool) {
+	if !isNull {
+		if value.Lt(ov) || isEmpty {
+			return value, false
+		}
+	}
+	return ov, isEmpty
+
+}
+func (m *Decimal64Min) Merge(_ int64, _ int64, x types.Decimal64, y types.Decimal64, xEmpty bool, yEmpty bool, _ any) (types.Decimal64, bool) {
+	if !xEmpty && yEmpty {
+		return x, false
+	} else if xEmpty && !yEmpty {
+		return y, false
+	} else if !xEmpty && !yEmpty {
+		if x.Lt(y) {
+			return x, false
+		}
+		return y, false
+	}
+	return x, true
+}
+
 func NewD128Min() *Decimal128Min {
 	return &Decimal128Min{}
 }
@@ -69,7 +103,7 @@ func (m *Decimal128Min) Eval(vs []types.Decimal128) []types.Decimal128 {
 
 func (m *Decimal128Min) Fill(_ int64, value types.Decimal128, ov types.Decimal128, _ int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
 	if !isNull {
-		if types.CompareDecimal128Decimal128Aligned(value, ov) == -1 || isEmpty {
+		if value.Lt(ov) || isEmpty {
 			return value, false
 		}
 	}
@@ -82,7 +116,7 @@ func (m *Decimal128Min) Merge(_ int64, _ int64, x types.Decimal128, y types.Deci
 	} else if xEmpty && !yEmpty {
 		return y, false
 	} else if !xEmpty && !yEmpty {
-		if types.CompareDecimal128Decimal128Aligned(x, y) == -1 {
+		if x.Lt(y) {
 			return x, false
 		}
 		return y, false

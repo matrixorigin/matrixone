@@ -76,9 +76,8 @@ func (a *Decimal64Avg) Eval(vs []types.Decimal128) []types.Decimal128 {
 func (a *Decimal64Avg) Fill(_ int64, value types.Decimal64, ov types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
 	if !isNull {
 		a.cnt += z
-		d := types.Decimal64ToDecimal128(value)
-		tmp := types.Decimal128Int64Mul(d, z)
-		return types.Decimal128AddAligned(ov, tmp), false
+		tmp := types.InitDecimal128(value.ToInt64())
+		return ov.Add(tmp.MulInt64(z)), false
 	}
 	return ov, isEmpty
 }
@@ -117,8 +116,7 @@ func (a *Decimal128Avg) Eval(vs []types.Decimal128) []types.Decimal128 {
 func (a *Decimal128Avg) Fill(_ int64, value types.Decimal128, ov types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
 	if !isNull {
 		a.cnt += z
-		tmp := types.Decimal128Int64Mul(value, z)
-		return types.Decimal128AddAligned(ov, tmp), false
+		return ov.Add(value.MulInt64(z)), false
 	}
 	return ov, isEmpty
 }
@@ -133,7 +131,7 @@ func (a *Decimal128Avg) Merge(xIndex int64, yIndex int64, x types.Decimal128, y 
 	} else if !xEmpty && !yEmpty {
 		ya := yAvg.(*Decimal128Avg)
 		a.cnt += ya.cnt
-		return types.Decimal128AddAligned(x, y), false
+		return x.Add(y), false
 	}
 	return x, true
 }

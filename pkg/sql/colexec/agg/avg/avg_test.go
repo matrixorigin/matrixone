@@ -97,8 +97,8 @@ func TestDecimal128Avg(t *testing.T) {
 	a2 := NewD128Avg()
 	a3 := NewD128Avg()
 	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
-	input1 := []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
-	input2 := []uint64{10, 11, 12, 13, 14, 15, 16, 17, 18, 19}
+	input1 := []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+	input2 := []int64{10, 11, 12, 13, 14, 15, 16, 17, 18, 19}
 	vec := testutil.MakeDecimal128Vector(input1, nil, testTyp)
 	vec2 := testutil.MakeDecimal128Vector(input2, nil, testTyp)
 	{
@@ -206,7 +206,7 @@ func TestDistincAvg(t *testing.T) {
 func MakeDecimal128Arr(input []int64) []types.Decimal128 {
 	ret := make([]types.Decimal128, len(input))
 	for i, v := range input {
-		ret[i] = types.Decimal64ToDecimal128(types.Decimal64(v))
+		ret[i] = types.InitDecimal128(v)
 	}
 
 	return ret

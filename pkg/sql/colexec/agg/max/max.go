@@ -56,6 +56,40 @@ func (m *Max[T]) Merge(_ int64, _ int64, x T, y T, xEmpty bool, yEmpty bool, _ a
 	return x, true
 }
 
+func NewD64Max() *Decimal64Max {
+	return &Decimal64Max{}
+}
+
+func (m *Decimal64Max) Grows(_ int) {
+}
+
+func (m *Decimal64Max) Eval(vs []types.Decimal64) []types.Decimal64 {
+	return vs
+}
+
+func (m *Decimal64Max) Fill(_ int64, value types.Decimal64, ov types.Decimal64, _ int64, isEmpty bool, isNull bool) (types.Decimal64, bool) {
+	if !isNull {
+		if value.Gt(ov) || isEmpty {
+			return value, false
+		}
+	}
+	return ov, isEmpty
+
+}
+func (m *Decimal64Max) Merge(_ int64, _ int64, x types.Decimal64, y types.Decimal64, xEmpty bool, yEmpty bool, _ any) (types.Decimal64, bool) {
+	if !xEmpty && yEmpty {
+		return x, false
+	} else if xEmpty && !yEmpty {
+		return y, false
+	} else if !xEmpty && !yEmpty {
+		if x.Gt(y) {
+			return x, false
+		}
+		return y, false
+	}
+	return x, true
+}
+
 func NewD128Max() *Decimal128Max {
 	return &Decimal128Max{}
 }

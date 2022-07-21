@@ -92,8 +92,8 @@ func TestDecimalMin(t *testing.T) {
 	testTyp := types.New(types.T_decimal128, 0, 0, 0)
 	dmn := NewD128Min()
 	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
-	input1 := []uint64{10, 1, 12, 3, 4, 5, 26, 7, 8, 9}
-	input2 := []uint64{0, 1, 2, 3, 14, 5, 6, 7, 8, 29}
+	input1 := []int64{10, 1, 12, 3, 4, 5, 26, 7, 8, 9}
+	input2 := []int64{0, 1, 2, 3, 14, 5, 6, 7, 8, 29}
 	vec := testutil.MakeDecimal128Vector(input1, nil, testTyp)
 	vec2 := testutil.MakeDecimal128Vector(input2, nil, testTyp)
 	{
@@ -415,11 +415,11 @@ func TestDiscincStrlMin(t *testing.T) {
 func MakeDecimal128Arr(input []int64) []types.Decimal128 {
 	ret := make([]types.Decimal128, len(input))
 	for i, v := range input {
-		ret[i] = types.Decimal64ToDecimal128(types.Decimal64(v))
+		ret[i] = types.InitDecimal128(v)
 	}
+
 	return ret
 }
-
 func makeBytes(values []string) *types.Bytes {
 	next := uint32(0)
 	bs := &types.Bytes{

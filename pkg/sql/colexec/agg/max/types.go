@@ -21,9 +21,11 @@ import (
 
 type Compare interface {
 	constraints.Integer | constraints.Float | types.Date |
-		types.Datetime | types.Timestamp | types.Decimal64
+		types.Datetime | types.Timestamp
 }
 type Max[T Compare] struct {
+}
+type Decimal64Max struct {
 }
 
 type Decimal128Max struct {

@@ -94,8 +94,8 @@ func TestDecimalAnyva(t *testing.T) {
 	da2 := NewAnyvalue[types.Decimal128]()
 	da3 := NewAnyvalue[types.Decimal128]()
 	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
-	input1 := []uint64{1, 12, 3, 4, 5, 26, 7, 8, 9, 10}
-	input2 := []uint64{14, 5, 6, 7, 8, 29, 30, 1, 2, 3}
+	input1 := []int64{1, 12, 3, 4, 5, 26, 7, 8, 9, 10}
+	input2 := []int64{14, 5, 6, 7, 8, 29, 30, 1, 2, 3}
 	vec := testutil.MakeDecimal128Vector(input1, nil, testTyp)
 	vec2 := testutil.MakeDecimal128Vector(input2, nil, testTyp)
 	{
@@ -147,7 +147,8 @@ func TestDecimalAnyva(t *testing.T) {
 func MakeDecimal128Arr(input []int64) []types.Decimal128 {
 	ret := make([]types.Decimal128, len(input))
 	for i, v := range input {
-		ret[i] = types.Decimal64ToDecimal128(types.Decimal64(v))
+		ret[i] = types.InitDecimal128(v)
 	}
+
 	return ret
 }
