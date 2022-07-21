@@ -400,16 +400,20 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, errors.New("", fmt.Sprintf("unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL)))
 	}
 
+	rowSize := int32(len(subCtx.results))
+
 	returnExpr := &plan.Expr{
 		Typ: &plan.Type{
 			Id: plan.Type_TUPLE,
 		},
 		Expr: &plan.Expr_Sub{
 			Sub: &plan.SubqueryRef{
-				NodeId: nodeID,
+				NodeId:  nodeID,
+				RowSize: rowSize,
 			},
 		},
 	}
+
 	if astExpr.Exists {
 		returnExpr.Typ = &plan.Type{
 			Id:       plan.Type_BOOL,
@@ -417,12 +421,8 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 			Size:     1,
 		}
 		returnExpr.Expr.(*plan.Expr_Sub).Sub.Typ = plan.SubqueryRef_EXISTS
-	} else {
-		if len(subCtx.projects) > 1 {
-			// TODO: may support row constructor in the future?
-			return nil, errors.New("", "subquery must return only one column")
-		}
-		returnExpr.Typ = subCtx.projects[0].Typ
+	} else if rowSize == 1 {
+		returnExpr.Typ = subCtx.results[0].Typ
 	}
 
 	return returnExpr, nil
@@ -557,8 +557,14 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					return nil, errors.New("", "IN subquery as non-root expression will be supported in future version")
 				}
 
-				if _, ok := leftArg.Expr.(*plan.Expr_List); ok {
-					return nil, errors.New("", "row constructor in IN subquery will be supported in future version")
+				if list, ok := leftArg.Expr.(*plan.Expr_List); ok {
+					if len(list.List.List) != int(subquery.Sub.RowSize) {
+						return nil, errors.New("", fmt.Sprintf("subquery should return %d columns", len(list.List.List)))
+					}
+				} else {
+					if subquery.Sub.RowSize > 1 {
+						return nil, errors.New("", "subquery should return 1 column")
+					}
 				}
 
 				subquery.Sub.Typ = plan.SubqueryRef_IN
@@ -600,8 +606,14 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					return nil, errors.New("", "IN subquery as non-root expression will be supported in future version")
 				}
 
-				if _, ok := leftArg.Expr.(*plan.Expr_List); ok {
-					return nil, errors.New("", "row constructor in IN subquery will be supported in future version")
+				if list, ok := leftArg.Expr.(*plan.Expr_List); ok {
+					if len(list.List.List) != int(subquery.Sub.RowSize) {
+						return nil, errors.New("", fmt.Sprintf("subquery should return %d columns", len(list.List.List)))
+					}
+				} else {
+					if subquery.Sub.RowSize > 1 {
+						return nil, errors.New("", "subquery should return 1 column")
+					}
 				}
 
 				subquery.Sub.Typ = plan.SubqueryRef_NOT_IN
@@ -632,14 +644,20 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			return nil, err
 		}
 
-		if _, ok := child.Expr.(*plan.Expr_List); ok {
-			return nil, errors.New("", "row constructor in ANY subquery will be supported in future version")
-		}
-
 		if subquery, ok := expr.Expr.(*plan.Expr_Sub); ok {
 			if !isRoot {
 				// TODO: implement MARK join to better support non-scalar subqueries
 				return nil, errors.New("", fmt.Sprintf("%q subquery as non-root expression will be supported in future version", strings.ToUpper(astExpr.SubOp.ToString())))
+			}
+
+			if list, ok := child.Expr.(*plan.Expr_List); ok {
+				if len(list.List.List) != int(subquery.Sub.RowSize) {
+					return nil, errors.New("", fmt.Sprintf("subquery should return %d columns", len(list.List.List)))
+				}
+			} else {
+				if subquery.Sub.RowSize > 1 {
+					return nil, errors.New("", "subquery should return 1 column")
+				}
 			}
 
 			subquery.Sub.Op = op
@@ -957,9 +975,9 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 			Id: plan.Type_DECIMAL128,
 			// Width: int32(len(val)),
 			// Scale: 0,
-			Width:     38,
+			Width:     34,
 			Scale:     scale,
-			Precision: 38,
+			Precision: 34,
 			Nullable:  false,
 		}
 		return appendCastBeforeExpr(getStringExpr(val), typ)

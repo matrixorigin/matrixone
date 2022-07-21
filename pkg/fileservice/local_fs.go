@@ -407,6 +407,11 @@ func (l *LocalFS) Mutate(ctx context.Context, vector IOVector) error {
 		}
 	}
 
+	// sync
+	if err := f.Sync(); err != nil {
+		return err
+	}
+
 	return nil
 }
 

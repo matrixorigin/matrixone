@@ -80,11 +80,12 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 				vec.Col = []types.Datetime{types.Datetime(t.C.GetDatetimeval())}
 			case *plan.Const_Decimal64Val:
 				vec = vector.NewConst(constDecimal64Type, length)
-				vec.Col = []types.Decimal64{types.Decimal64(t.C.GetDecimal64Val())}
+				d64 := t.C.GetDecimal64Val()
+				vec.Col = []types.Decimal64{types.Decimal64FromInt64Raw(d64.A)}
 			case *plan.Const_Decimal128Val:
 				vec = vector.NewConst(constDecimal128Type, length)
 				d128 := t.C.GetDecimal128Val()
-				vec.Col = []types.Decimal128{{Lo: d128.Lo, Hi: d128.Hi}}
+				vec.Col = []types.Decimal128{types.Decimal128FromInt64Raw(d128.A, d128.B)}
 			case *plan.Const_Timestampval:
 				vec = vector.NewConst(constTimestampType, length)
 				vec.Col = []types.Timestamp{types.Timestamp(t.C.GetTimestampval())}

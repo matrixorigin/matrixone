@@ -410,6 +410,7 @@ func fillGroupStr[T any](ctr *Container, vec *vector.Vector, n int, sz int, star
 
 func fillGroupStrWithDecimal64(ctr *Container, vec *vector.Vector, n int, start int, scale int32) {
 	src := vector.GetFixedVectorValues[types.Decimal64](vec, 8)
+	copy(ctr.decimal64Slice[:n], src[start:start+n])
 	vs := types.AlignDecimal64UsingScaleDiffBatch(src[start:start+n], ctr.decimal64Slice[:n], scale)
 	data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 	if !nulls.Any(vec.Nsp) {

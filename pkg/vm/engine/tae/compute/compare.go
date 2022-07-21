@@ -17,6 +17,7 @@ package compute
 import (
 	"bytes"
 
+	wtf "github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
@@ -73,9 +74,9 @@ func CompareGeneric(a, b any, t types.Type) int64 {
 	case types.Type_UINT64:
 		return CompareOrdered[uint64](a, b)
 	case types.Type_DECIMAL64:
-		return CompareOrdered[types.Decimal64](a, b)
+		return wtf.CompareDecimal64Decimal64Aligned(a.(types.Decimal64), b.(types.Decimal64))
 	case types.Type_DECIMAL128:
-		return types.CompareDecimal128Decimal128Aligned(a.(types.Decimal128), b.(types.Decimal128))
+		return wtf.CompareDecimal128Decimal128Aligned(a.(types.Decimal128), b.(types.Decimal128))
 	case types.Type_FLOAT32:
 		return CompareOrdered[float32](a, b)
 	case types.Type_FLOAT64:
