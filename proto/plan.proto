@@ -150,6 +150,7 @@ message SubqueryRef {
 	int32 node_id	= 2;
 	string op		= 3;
 	Expr child		= 4;
+	int32 row_size	= 5;
 }
 
 // Object ref, reference a object in database, 4 part name.
