@@ -62,7 +62,7 @@ func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, 
 
 	for _, toStop := range stats.toStop {
 		operators = append(operators, operator.CreateStopReplica("",
-			toStop.uuid, toStop.shardID))
+			toStop.uuid, toStop.shardID, toStop.epoch))
 	}
 
 	return operators
