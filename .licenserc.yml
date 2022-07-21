@@ -16,6 +16,8 @@ header:
     - 'cgo/external/'
     - 'pkg/frontend/test/'
     - 'pkg/vm/engine/tae/mergesort/*/sort.go'
+    - 'pkg/hakeeper/operator/'
+    - '**/*.pb.go'
     - '**/.gitignore'
     - '**/goyacc.go'
   comment: on-failure
