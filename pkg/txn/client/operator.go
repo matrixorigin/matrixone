@@ -609,6 +609,10 @@ func (tc *txnOperator) checkTxnError(txnError *txn.TxnError, possibleErrorMap ma
 		return nil
 	}
 
+	if txnError.Code == txn.ErrorCode_DNShardNotFound {
+		return moerr.NewError(moerr.ErrDNShardNotFound, txnError.Message)
+	}
+
 	if _, ok := possibleErrorMap[txnError.Code]; ok {
 		return moerr.NewError(moerr.ErrTxnError, txnError.Message)
 	}

@@ -16,6 +16,7 @@ package storage
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
@@ -34,6 +35,10 @@ type TxnStorage interface {
 	// StartRecovery start txnStorage recovery process. Use the incoming channel to send the Txn that needs to be
 	// recovered and close the channel when all the logs have been processed.
 	StartRecovery(chan txn.TxnMeta)
+	// Close close the txn storage.
+	Close() error
+	// Destroy is similar to Close, but perform remove all related data and resources.
+	Destroy() error
 
 	// Read execute read requests sent by CN.
 	//
@@ -55,7 +60,7 @@ type TxnStorage interface {
 	//
 	// Note that for a distributed transaction, when all DNShards are Prepared, then the transaction is
 	// considered to have been committed.
-	Prepare(txnMeta txn.TxnMeta) error
+	Prepare(txnMeta txn.TxnMeta) (timestamp.Timestamp, error)
 	// Committing for distributed transactions, all participating DNShards have been PREPARED and the status
 	// of the transaction is logged to the LogService.
 	Committing(txnMeta txn.TxnMeta) error

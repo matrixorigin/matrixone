@@ -131,7 +131,7 @@ func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired util.Stor
 				continue
 			}
 			toStop = append(toStop, replica{uuid: util.StoreID(uuid),
-				shardID: replicaInfo.ShardID})
+				shardID: replicaInfo.ShardID, epoch: replicaInfo.Epoch})
 		}
 		collect.toStop = append(collect.toStop, toStop...)
 	}

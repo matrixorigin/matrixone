@@ -74,7 +74,7 @@ func GetStrColumn(v *Vector) *types.Bytes {
 	return v.Col.(*types.Bytes)
 }
 
-// return the number of rows in the vector
+// Count return the number of rows in the vector
 func (v *Vector) Count() int {
 	return Length(v)
 }
@@ -1884,7 +1884,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 	return nil
 }
 
-// v[vi] = w[wi]
+// Copy v[vi] = w[wi]
 func Copy(v, w *Vector, vi, wi int64, m *mheap.Mheap) error {
 	defer func() {
 		size := v.Typ.Oid.TypeLen()

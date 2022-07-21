@@ -161,7 +161,7 @@ func (a *UnaryAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vector) 
 	}
 }
 
-// a[x] += b[y]
+// Merge a[x] += b[y]
 func (a *UnaryAgg[T1, T2]) Merge(b Agg[any], x, y int64) {
 	b0 := b.(*UnaryAgg[T1, T2])
 	a.vs[x], a.es[x] = a.merge(x, y, a.vs[x], b0.vs[y], a.es[x], b0.es[y], b0.priv)

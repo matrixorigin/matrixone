@@ -92,6 +92,11 @@ func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
 		return ErrFileExisted
 	}
 
+	return m.write(ctx, vector)
+}
+
+func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
+
 	if len(vector.Entries) == 0 {
 		vector.Entries = []IOEntry{
 			{
@@ -204,4 +209,12 @@ var _ btree.Item = new(_MemFSEntry)
 func (m *_MemFSEntry) Less(than btree.Item) bool {
 	m2 := than.(*_MemFSEntry)
 	return m.FilePath < m2.FilePath
+}
+
+var _ ReplaceableFileService = new(MemoryFS)
+
+func (m *MemoryFS) Replace(ctx context.Context, vector IOVector) error {
+	m.Lock()
+	defer m.Unlock()
+	return m.write(ctx, vector)
 }

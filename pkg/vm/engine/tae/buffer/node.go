@@ -95,7 +95,7 @@ func (n *Node) Close() error {
 		return nil
 	}
 	n.closed = true
-	if n.state == base.NODE_LOADED {
+	if n.state == base.NodeLoaded {
 		n.Unload()
 	}
 	n.Unlock()
@@ -117,30 +117,30 @@ func (n *Node) Destroy() {
 
 // Load should be guarded by lock
 func (n *Node) Load() {
-	if n.state == base.NODE_LOADED {
+	if n.state == base.NodeLoaded {
 		return
 	}
 	if n.LoadFunc != nil {
 		n.LoadFunc()
 	}
-	n.state = base.NODE_LOADED
+	n.state = base.NodeLoaded
 }
 
 // Unload should be guarded by lock
 func (n *Node) Unload() {
-	if n.state == base.NODE_UNLOAD {
+	if n.state == base.NodeUnload {
 		return
 	}
 	n.mgr.RetuernQuota(n.size)
 	if n.UnloadFunc != nil {
 		n.UnloadFunc()
 	}
-	n.state = base.NODE_UNLOAD
+	n.state = base.NodeUnload
 }
 
 // Unloadable should be guarded by lock
 func (n *Node) Unloadable() bool {
-	if n.state == base.NODE_UNLOAD {
+	if n.state == base.NodeUnload {
 		return false
 	}
 	if n.RefCount() > 0 {
@@ -195,7 +195,7 @@ func (n *Node) rollbackExpand(delta uint64) {
 }
 
 // IsLoaded should be guarded by lock
-func (n *Node) IsLoaded() bool { return n.state == base.NODE_LOADED }
+func (n *Node) IsLoaded() bool { return n.state == base.NodeLoaded }
 
 func (n *Node) IncIteration() uint64 {
 	return atomic.AddUint64(&n.iter, uint64(1))

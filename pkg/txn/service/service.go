@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
+	"go.uber.org/multierr"
 	"go.uber.org/zap"
 )
 
@@ -105,9 +106,16 @@ func (s *service) Start() error {
 	return nil
 }
 
-func (s *service) Close() error {
+func (s *service) Close(destroy bool) error {
 	s.waitRecoveryCompleted()
 	s.stopper.Stop()
+	closer := s.storage.Close
+	if destroy {
+		closer = s.storage.Destroy
+	}
+	if err := closer(); err != nil {
+		return multierr.Append(err, s.sender.Close())
+	}
 	return s.sender.Close()
 }
 
@@ -124,7 +132,7 @@ func (s *service) gcZombieTxn(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-timer.C:
-			s.transactions.Range(func(key, value any) bool {
+			s.transactions.Range(func(_, value any) bool {
 				txnCtx := value.(*txnContext)
 				if now.Sub(txnCtx.createAt) > s.zombieTimeout {
 					cleanTxns = append(cleanTxns, txnCtx.getTxn())

@@ -17,19 +17,21 @@ package mem
 import (
 	"bytes"
 	"math"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestWrite(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	wTxn := writeTestData(t, s, 1, nil, 1, 2)
 	checkUncommitted(t, s, wTxn, 1, 2)
@@ -38,7 +40,7 @@ func TestWrite(t *testing.T) {
 
 func TestWriteWithConflict(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	wTxn1 := writeTestData(t, s, 1, nil, 1)
 	checkUncommitted(t, s, wTxn1, 1)
@@ -51,7 +53,7 @@ func TestWriteWithConflict(t *testing.T) {
 
 func TestPrepare(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	wTxn := writeTestData(t, s, 1, nil, 1)
 
@@ -64,7 +66,7 @@ func TestPrepare(t *testing.T) {
 
 func TestPrepareWithConflict(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	writeCommittedData(t, s, 1, 2, 1)
 
@@ -74,7 +76,7 @@ func TestPrepareWithConflict(t *testing.T) {
 
 func TestCommit(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	wTxn := writeTestData(t, s, 1, nil, 1)
 	commitTestTxn(t, s, &wTxn, 2, nil)
@@ -86,14 +88,14 @@ func TestCommit(t *testing.T) {
 
 func TestCommitWithTxnNotExist(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	commitTestTxn(t, s, &txn.TxnMeta{}, 2, nil)
 }
 
 func TestCommitWithConflict(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	writeCommittedData(t, s, 1, 2, 1)
 
@@ -103,7 +105,7 @@ func TestCommitWithConflict(t *testing.T) {
 
 func TestCommitAfterPrepared(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	wTxn := writeTestData(t, s, 1, nil, 1)
 	prepareTestTxn(t, s, &wTxn, 2, nil)
@@ -116,7 +118,7 @@ func TestCommitAfterPrepared(t *testing.T) {
 
 func TestRollback(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	wTxn := writeTestData(t, s, 1, nil, 1)
 	checkUncommitted(t, s, wTxn, 1)
@@ -127,7 +129,7 @@ func TestRollback(t *testing.T) {
 
 func TestRollbackWithTxnNotExist(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	assert.NoError(t, s.Rollback(txn.TxnMeta{}))
 	checkRollback(t, s, txn.TxnMeta{})
@@ -135,7 +137,7 @@ func TestRollbackWithTxnNotExist(t *testing.T) {
 
 func TestReadCommittedWithLessVersion(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	writeCommittedData(t, s, 0, 1, 1)
 
@@ -145,7 +147,7 @@ func TestReadCommittedWithLessVersion(t *testing.T) {
 
 func TestReadSelfUncommitted(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	wTxn := writeTestData(t, s, 1, nil, 1)
 	rs := readTestDataWithTxn(t, s, &wTxn, nil, 1)
@@ -154,7 +156,7 @@ func TestReadSelfUncommitted(t *testing.T) {
 
 func TestReadCommittedWithGTVersion(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	writeCommittedData(t, s, 0, 1, 1)
 
@@ -164,7 +166,7 @@ func TestReadCommittedWithGTVersion(t *testing.T) {
 
 func TestWaitReadByPreparedTxn(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	writeCommittedData(t, s, 0, 1, 1)
 
@@ -176,7 +178,7 @@ func TestWaitReadByPreparedTxn(t *testing.T) {
 
 func TestReadByGTPreparedTxnCanNotWait(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	writeCommittedData(t, s, 0, 1, 1)
 
@@ -188,7 +190,7 @@ func TestReadByGTPreparedTxnCanNotWait(t *testing.T) {
 
 func TestWaitReadByCommittingTxn(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	writeCommittedData(t, s, 0, 1, 1)
 
@@ -201,7 +203,7 @@ func TestWaitReadByCommittingTxn(t *testing.T) {
 
 func TestReadByGTCommittingTxnCanNotWait(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	writeCommittedData(t, s, 0, 1, 1)
 
@@ -214,7 +216,7 @@ func TestReadByGTCommittingTxnCanNotWait(t *testing.T) {
 
 func TestReadAfterWaitTxnResloved(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	wTxn1 := writeTestData(t, s, 1, nil, 1)
 	prepareTestTxn(t, s, &wTxn1, 2, nil)
@@ -237,7 +239,7 @@ func TestReadAfterWaitTxnResloved(t *testing.T) {
 
 func TestRecovery(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	prepareTxn := writeTestData(t, s, 1, nil, 1)
 	prepareTestTxn(t, s, &prepareTxn, 2, nil)
@@ -262,7 +264,7 @@ func TestRecovery(t *testing.T) {
 	checkLogCount(t, l, 6)
 
 	c := make(chan txn.TxnMeta, 10)
-	s2 := NewKVTxnStorage(0, l)
+	s2 := NewKVTxnStorage(0, l, newTestClock(1))
 	s2.StartRecovery(c)
 
 	checkUncommitted(t, s2, prepareTxn, 1)
@@ -279,7 +281,7 @@ func TestRecovery(t *testing.T) {
 
 func TestEvent(t *testing.T) {
 	l := NewMemLog()
-	s := NewKVTxnStorage(0, l)
+	s := NewKVTxnStorage(0, l, newTestClock(1))
 
 	wTxn := writeTestData(t, s, 1, nil, 1)
 	prepareTestTxn(t, s, &wTxn, 2, nil)
@@ -303,8 +305,10 @@ func TestEvent(t *testing.T) {
 
 func prepareTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64, err error) {
 	wTxn.PreparedTS = newTimestamp(ts)
-	assert.Equal(t, err, s.Prepare(*wTxn))
+	pts, perr := s.Prepare(*wTxn)
+	assert.Equal(t, err, perr)
 	wTxn.Status = txn.TxnStatus_Prepared
+	wTxn.PreparedTS = pts
 }
 
 func committingTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64) {
@@ -363,7 +367,7 @@ func checkUncommitted(t *testing.T, s *KVTxnStorage, wTxn txn.TxnMeta, keys ...b
 		s.committed.AscendRange(key,
 			newTimestamp(0),
 			newTimestamp(math.MaxInt64),
-			func(b []byte, t timestamp.Timestamp) {
+			func(b []byte, _ timestamp.Timestamp) {
 				if bytes.Equal(b, value) {
 					n++
 				}
@@ -388,7 +392,7 @@ func checkRollback(t *testing.T, s *KVTxnStorage, wTxn txn.TxnMeta, keys ...byte
 		s.committed.AscendRange(key,
 			newTimestamp(0),
 			newTimestamp(math.MaxInt64),
-			func(b []byte, t timestamp.Timestamp) {
+			func(b []byte, _ timestamp.Timestamp) {
 				if bytes.Equal(b, value) {
 					n++
 				}
@@ -426,7 +430,7 @@ func checkCommitted(t *testing.T, s *KVTxnStorage, wTxn txn.TxnMeta, keys ...byt
 		s.committed.AscendRange(key,
 			newTimestamp(0),
 			newTimestamp(math.MaxInt64),
-			func(b []byte, ts timestamp.Timestamp) {
+			func(b []byte, _ timestamp.Timestamp) {
 				if bytes.Equal(value, b) {
 					hasCommitted = true
 				}
@@ -494,4 +498,11 @@ func newTxnMeta(snapshotTS int64) txn.TxnMeta {
 		Status:     txn.TxnStatus_Active,
 		SnapshotTS: newTimestamp(snapshotTS),
 	}
+}
+
+func newTestClock(start int64) clock.Clock {
+	ts := start
+	return clock.NewHLCClock(func() int64 {
+		return atomic.AddInt64(&ts, 1)
+	}, math.MaxInt64)
 }

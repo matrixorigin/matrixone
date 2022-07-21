@@ -194,7 +194,7 @@ func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (
 			state := txn.GetTxnState(true)
 			// logutil.Infof("[%d, %d] -- wait --> %s: %d", startTs, endTs, txn.Repr(), state)
 			// 3.1.1. Rollbacked. Skip it and go to next
-			if state == txnif.TxnStateRollbacked {
+			if state == txnif.TxnStateRollbacked || state == txnif.TxnStateRollbacking {
 				return true
 			} else if state == txnif.TxnStateUnknown {
 				err = txnif.ErrTxnInternal

@@ -14,7 +14,7 @@ type vecImpl[T any] struct {
 
 func newVecImpl[T any](derived *vector[T]) *vecImpl[T] {
 	return &vecImpl[T]{
-		vecBase: newVecBase[T](derived),
+		vecBase: newVecBase(derived),
 	}
 }
 
@@ -24,7 +24,7 @@ type nullableVecImpl[T any] struct {
 
 func newNullableVecImpl[T any](derived *vector[T]) *nullableVecImpl[T] {
 	return &nullableVecImpl[T]{
-		vecBase: newVecBase[T](derived),
+		vecBase: newVecBase(derived),
 	}
 }
 func (impl *nullableVecImpl[T]) Nullable() bool { return true }

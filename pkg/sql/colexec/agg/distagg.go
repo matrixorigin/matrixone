@@ -194,7 +194,7 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vect
 	}
 }
 
-// a[x] += b[y]
+// Merge a[x] += b[y]
 func (a *UnaryDistAgg[T1, T2]) Merge(b Agg[any], x, y int64) {
 	b0 := b.(*UnaryDistAgg[T1, T2])
 	if b0.es[y] {

@@ -268,6 +268,6 @@ func WriteValues(w io.Writer, vals ...any) (n int64, err error) {
 }
 
 func CopyFixValueToBuf[T any](dest []byte, val T) {
-	vbuf := EncodeFixed[T](val)
+	vbuf := EncodeFixed(val)
 	copy(dest[:unsafe.Sizeof(val)], vbuf)
 }

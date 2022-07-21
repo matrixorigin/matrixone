@@ -101,6 +101,12 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 		return ErrFileExisted
 	}
 
+	return l.write(ctx, vector)
+}
+
+func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
+	nativePath := l.toNativeFilePath(vector.FilePath)
+
 	// sort
 	sort.Slice(vector.Entries, func(i, j int) bool {
 		return vector.Entries[i].Offset < vector.Entries[j].Offset
@@ -401,5 +407,16 @@ func (l *LocalFS) Mutate(ctx context.Context, vector IOVector) error {
 		}
 	}
 
+	// sync
+	if err := f.Sync(); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+var _ ReplaceableFileService = new(LocalFS)
+
+func (l *LocalFS) Replace(ctx context.Context, vector IOVector) error {
+	return l.write(ctx, vector)
 }
