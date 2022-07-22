@@ -12,15 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package count
+package Variance
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
 
-type Decimal128AndString interface {
-	types.Decimal128 | []byte
+type Variance[T1 types.Floats | types.Ints | types.UInts] struct {
+	sum   []float64
+	count []float64
 }
 
-type Count[T1 types.Generic | Decimal128AndString] struct {
-	// isStar is true: count(*)
-	isStar bool
+//for decimal64
+type Variance2 struct {
+	inputType types.Type
+	sum       []float64
+	count     []float64
+}
+
+//for deimal128
+type Variance3 struct {
+	inputType types.Type
+	sum       []float64
+	count     []float64
 }

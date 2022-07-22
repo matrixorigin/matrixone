@@ -12,15 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package count
+package stddevpop
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	Variance "github.com/matrixorigin/matrixone/pkg/sql/colexec/agg/variance"
+)
 
-type Decimal128AndString interface {
-	types.Decimal128 | []byte
+type Stddevpop[T1 types.Floats | types.Ints | types.UInts] struct {
+	variance *Variance.Variance[T1]
 }
 
-type Count[T1 types.Generic | Decimal128AndString] struct {
-	// isStar is true: count(*)
-	isStar bool
+type Stddevpop2 struct {
+	variance *Variance.Variance2
+}
+
+type Stddevpop3 struct {
+	variance *Variance.Variance3
 }
