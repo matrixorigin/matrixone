@@ -190,6 +190,7 @@ enum ErrorCode {
   OutOfRange            = 101;
   NotLeaseHolder        = 102;
   NotHAKeeper           = 103;
+  LogShardNotFound      = 104;
 
   OtherSystemError      = 1000;
 };
