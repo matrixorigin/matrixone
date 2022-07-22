@@ -44,7 +44,7 @@ GO_VERSION=$(shell go version)
 BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse HEAD)
 BUILD_TIME=$(shell date)
-MO_VERSION=$(shell git describe --abbrev=0 --tags)
+MO_VERSION=$(shell git describe --tags $(shell git rev-list --tags --max-count=1))
 
 # cross compilation has been disabled for now
 ifneq ($(GOARCH)$(TARGET_ARCH)$(GOOS)$(TARGET_OS),)

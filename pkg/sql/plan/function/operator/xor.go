@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func ScalarXorNotScalar(sv, nsv *vector.Vector, col1, col2 []bool, proc *process.Process) (*vector.Vector, error) {
+func ScalarXorNotScalar(_, nsv *vector.Vector, col1, col2 []bool, proc *process.Process) (*vector.Vector, error) {
 	length := vector.Length(nsv)
 	vec := allocateBoolVector(length, proc)
 	vcols := vec.Col.([]bool)
