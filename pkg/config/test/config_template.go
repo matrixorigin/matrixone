@@ -620,42 +620,6 @@ func isInSlice(x string, arr []string) bool {
 }
 
 /**
-check if x in a slice
-*/
-func isInSliceBool(x bool, arr []bool) bool {
-	for _, y := range arr {
-		if x == y {
-			return true
-		}
-	}
-	return false
-}
-
-/**
-check if x in a slice
-*/
-func isInSliceInt64(x int64, arr []int64) bool {
-	for _, y := range arr {
-		if x == y {
-			return true
-		}
-	}
-	return false
-}
-
-/**
-check if x in a slice
-*/
-func isInSliceFloat64(x float64, arr []float64) bool {
-	for _, y := range arr {
-		if x == y {
-			return true
-		}
-	}
-	return false
-}
-
-/**
 check if x has duplicate values.
 */
 func hasDuplicateValueString(x []string) bool {

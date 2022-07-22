@@ -365,7 +365,8 @@ func (svut SystemVariableUintType) Zero() interface{} {
 }
 
 type SystemVariableDoubleType struct {
-	name    string
+	// Unused
+	// name    string
 	minimum float64
 	maximum float64
 }
@@ -531,7 +532,7 @@ var (
 )
 
 type SystemVariableSetType struct {
-	name                string
+	// name                string
 	normalized2original map[string]string
 	value2BitIndex      map[string]int
 	bitIndex2Value      map[int]string
