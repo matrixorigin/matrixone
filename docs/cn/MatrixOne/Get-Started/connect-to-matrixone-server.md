@@ -19,7 +19,7 @@ MatrixOne支持MySQL连接协议，因此您可以使用各种语言通过MySQL�
 你可以使用MySQL命令行客户端来连接MatrixOne服务。
 
 ```
-$ mysql -h IP -P PORT -uUsername -p
+mysql -h IP -P PORT -uUsername -p
 ```
 
 连接符的格式与MySQL格式相同，您需要提供用户名和密码。
@@ -30,7 +30,7 @@ $ mysql -h IP -P PORT -uUsername -p
 - password: 111
 
 ```
-$ mysql -h 127.0.0.1 -P 6001 -udump -p
+mysql -h 127.0.0.1 -P 6001 -udump -p
 Enter password:
 ```
 
