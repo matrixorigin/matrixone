@@ -9,9 +9,9 @@ Make sure you have already [installed MatrixOne](../install-standalone-matrixone
 ## **1. Compile dbgen**
 
 ```bash
-$ git clone git@github.com:vadimtk/ssb-dbgen.git
-$ cd ssb-dbgen
-$ make
+git clone git@github.com:vadimtk/ssb-dbgen.git
+cd ssb-dbgen
+make
 ```
 
 ## **2. Generate data**
@@ -19,11 +19,11 @@ $ make
 With -s 1 dbgen generates 6 million rows (670MB), while while -s 10 it generates 60 million rows (which takes some time)
 
 ```bash
-$ ./dbgen -s 1 -T c
-$ ./dbgen -s 1 -T l
-$ ./dbgen -s 1 -T p
-$ ./dbgen -s 1 -T s
-$ ./dbgen -s 1 -T d
+./dbgen -s 1 -T c
+./dbgen -s 1 -T l
+./dbgen -s 1 -T p
+./dbgen -s 1 -T s
+./dbgen -s 1 -T d
 ```
 
 We have also prepared a 1GB dataset for downloading.  You can get the data files directly:
