@@ -44,7 +44,7 @@ GO_VERSION=$(shell go version)
 BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse HEAD)
 BUILD_TIME=$(shell date)
-MO_VERSION=$(shell git describe --abbrev=0 --tags)
+MO_VERSION=$(shell git describe --tags $(shell git rev-list --tags --max-count=1))
 
 # cross compilation has been disabled for now
 ifneq ($(GOARCH)$(TARGET_ARCH)$(GOOS)$(TARGET_OS),)
@@ -87,7 +87,7 @@ pb: generate-pb fmt
 ###############################################################################
 
 RACE_OPT := 
-CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo -ldecnumber"
+CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo"
 GO=$(CGO_OPTS) $(GOBIN)
 GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_VERSION)'"
 
@@ -155,7 +155,7 @@ fmt:
 install-static-check-tools:
 	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.47.1
 	@go install github.com/matrixorigin/linter/cmd/molint@latest
-	@go install github.com/google/go-licenses@latest
+	@go install github.com/apache/skywalking-eyes/cmd/license-eye@latest
 	@go install honnef.co/go/tools/cmd/staticcheck@latest
 
 # TODO: tracking https://github.com/golangci/golangci-lint/issues/2649
@@ -171,7 +171,7 @@ STATICCHECK_CHECKS=QF1001,QF1002,QF1003,QF1004,QF1005,QF1006,QF1007,QF1008,QF100
 static-check: config cgo
 	@$(CGO_OPTS) staticcheck -checks $(STATICCHECK_CHECKS) ./...
 	@$(CGO_OPTS) go vet -vettool=$(which molint) ./...
-	@$(CGO_OPTS) go-licenses check ./...
+	@$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	@for p in $(DIRS); do \
     $(CGO_OPTS) golangci-lint run $(EXTRA_LINTERS) $$p ; \
 done;

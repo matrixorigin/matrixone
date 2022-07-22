@@ -16,6 +16,10 @@ package types
 
 /*
 #include "mo.h"
+
+#cgo CFLAGS: -I../../../cgo
+#cgo LDFLAGS: -L../../../cgo -lmo
+
 */
 import "C"
 
@@ -105,91 +109,117 @@ func zstr(s string) []byte {
 }
 
 // Conversions, from go type to decimal64
-func (d *Decimal64) FromInt32(i int32) {
-	C.Decimal64_FromInt32(dec64PtrToC(d), C.int32_t(i))
-}
-func (d *Decimal64) FromUint32(i uint32) {
-	C.Decimal64_FromUint32(dec64PtrToC(d), C.uint32_t(i))
-}
-
-func (d *Decimal64) FromInt64(i int64) {
-	C.Decimal64_FromInt64(dec64PtrToC(d), C.int64_t(i))
-}
-func (d *Decimal64) FromUint64(i uint64) {
-	C.Decimal64_FromUint64(dec64PtrToC(d), C.uint64_t(i))
+func Decimal64_FromInt32(i int32) Decimal64 {
+	var d Decimal64
+	C.Decimal64_FromInt32(dec64PtrToC(&d), C.int32_t(i))
+	return d
 }
 
-func (d *Decimal64) FromFloat64(f float64) {
-	C.Decimal64_FromFloat64(dec64PtrToC(d), C.double(f))
+func Decimal64_FromUint32(i uint32) Decimal64 {
+	var d Decimal64
+	C.Decimal64_FromUint32(dec64PtrToC(&d), C.uint32_t(i))
+	return d
 }
-func (d *Decimal64) FromString(s string) error {
+
+func Decimal64_FromInt64(i int64) Decimal64 {
+	var d Decimal64
+	C.Decimal64_FromInt64(dec64PtrToC(&d), C.int64_t(i))
+	return d
+}
+func Decimal64_FromUint64(i uint64) Decimal64 {
+	var d Decimal64
+	C.Decimal64_FromUint64(dec64PtrToC(&d), C.uint64_t(i))
+	return d
+}
+
+func Decimal64_FromFloat64(f float64) Decimal64 {
+	var d Decimal64
+	C.Decimal64_FromFloat64(dec64PtrToC(&d), C.double(f))
+	return d
+}
+
+func Decimal64_FromString(s string) (Decimal64, error) {
+	var d Decimal64
 	buf := zstr(s)
-	rc := C.Decimal64_FromString(dec64PtrToC(d), bytesPtrToC(buf))
+	rc := C.Decimal64_FromString(dec64PtrToC(&d), bytesPtrToC(buf))
 	if rc == moerr.DATA_TRUNCATED {
-		return moerr.NewError(moerr.DATA_TRUNCATED, "decimal64 data truncated")
+		return d, moerr.NewError(moerr.DATA_TRUNCATED, "decimal64 data truncated")
 	} else if rc != 0 {
-		return moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal64")
+		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal64")
 	}
-	return nil
+	return d, nil
 }
-func (d *Decimal64) FromStringWithScale(s string, scale int32) error {
+func Decimal64_FromStringWithScale(s string, scale int32) (Decimal64, error) {
+	var d Decimal64
 	buf := zstr(s)
-	rc := C.Decimal64_FromStringWithScale(dec64PtrToC(d), bytesPtrToC(buf), C.int32_t(scale))
+	rc := C.Decimal64_FromStringWithScale(dec64PtrToC(&d), bytesPtrToC(buf), C.int32_t(scale))
 	if rc != 0 {
-		return moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal64")
+		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal64")
 	}
-	return nil
+	return d, nil
 }
 
 // Conversions, from go type to decimal128
-func (d *Decimal128) FromInt32(i int32) {
-	C.Decimal128_FromInt32(dec128PtrToC(d), C.int32_t(i))
+func Decimal128_FromInt32(i int32) Decimal128 {
+	var d Decimal128
+	C.Decimal128_FromInt32(dec128PtrToC(&d), C.int32_t(i))
+	return d
 }
-func (d *Decimal128) FromUint32(i uint32) {
-	C.Decimal128_FromUint32(dec128PtrToC(d), C.uint32_t(i))
-}
-
-func (d *Decimal128) FromInt64(i int64) {
-	C.Decimal128_FromInt64(dec128PtrToC(d), C.int64_t(i))
-}
-func (d *Decimal128) FromUint64(i uint64) {
-	C.Decimal128_FromUint64(dec128PtrToC(d), C.uint64_t(i))
+func Decimal128_FromUint32(i uint32) Decimal128 {
+	var d Decimal128
+	C.Decimal128_FromUint32(dec128PtrToC(&d), C.uint32_t(i))
+	return d
 }
 
-func (d *Decimal128) FromFloat64(f float64) {
-	C.Decimal128_FromFloat64(dec128PtrToC(d), C.double(f))
+func Decimal128_FromInt64(i int64) Decimal128 {
+	var d Decimal128
+	C.Decimal128_FromInt64(dec128PtrToC(&d), C.int64_t(i))
+	return d
 }
-func (d *Decimal128) FromString(s string) error {
+func Decimal128_FromUint64(i uint64) Decimal128 {
+	var d Decimal128
+	C.Decimal128_FromUint64(dec128PtrToC(&d), C.uint64_t(i))
+	return d
+}
+
+func Decimal128_FromFloat64(f float64) Decimal128 {
+	var d Decimal128
+	C.Decimal128_FromFloat64(dec128PtrToC(&d), C.double(f))
+	return d
+}
+func Decimal128_FromString(s string) (Decimal128, error) {
+	var d Decimal128
 	buf := zstr(s)
-	rc := C.Decimal128_FromString(dec128PtrToC(d), bytesPtrToC(buf))
+	rc := C.Decimal128_FromString(dec128PtrToC(&d), bytesPtrToC(buf))
 	if rc == moerr.DATA_TRUNCATED {
-		return moerr.NewError(moerr.DATA_TRUNCATED, "decimal128 data truncated")
+		return d, moerr.NewError(moerr.DATA_TRUNCATED, "decimal128 data truncated")
 	} else if rc != 0 {
-		return moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal128")
+		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal128")
 	}
-	return nil
+	return d, nil
 }
-func (d *Decimal128) FromStringWithScale(s string, scale int32) error {
+func Decimal128_FromStringWithScale(s string, scale int32) (Decimal128, error) {
+	var d Decimal128
 	buf := zstr(s)
-	rc := C.Decimal128_FromStringWithScale(dec128PtrToC(d), bytesPtrToC(buf), C.int32_t(scale))
+	rc := C.Decimal128_FromStringWithScale(dec128PtrToC(&d), bytesPtrToC(buf), C.int32_t(scale))
 	if rc != 0 {
-		return moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal128")
+		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal128")
 	}
-	return nil
+	return d, nil
 }
 
 // Conversions. decimal to go types.
-func (d *Decimal64) ToFloat64() float64 {
+func (d Decimal64) ToFloat64() float64 {
 	var ret C.double
-	rc := C.Decimal64_ToFloat64(&ret, dec64PtrToC(d))
+	rc := C.Decimal64_ToFloat64(&ret, dec64PtrToC(&d))
 	if rc == 0 {
 		return float64(ret)
 	}
 	panic(moerr.NewError(int32(rc), "error when converting decimal128 to float64"))
 }
-func (d *Decimal64) ToInt64() int64 {
+func (d Decimal64) ToInt64() int64 {
 	var ret C.int64_t
-	rc := C.Decimal64_ToInt64(&ret, dec64PtrToC(d))
+	rc := C.Decimal64_ToInt64(&ret, dec64PtrToC(&d))
 	if rc == 0 {
 		return int64(ret)
 	}
@@ -199,31 +229,28 @@ func (d *Decimal64) ToInt64() int64 {
 func (d Decimal64) String() string {
 	return d.ToString()
 }
-func (d *Decimal64) ToString() string {
+func (d Decimal64) ToString() string {
 	buf := make([]byte, DECIMAL64_ZSTR_LEN)
-	C.Decimal64_ToString(bytesPtrToC(buf), dec64PtrToC(d))
+	C.Decimal64_ToString(bytesPtrToC(buf), dec64PtrToC(&d))
 	return zstrToString(buf)
 }
-func (d *Decimal64) Decimal64ToString(scale int32) string {
-	return d.ToStringWithScale(scale)
-}
-func (d *Decimal64) ToStringWithScale(scale int32) string {
+func (d Decimal64) ToStringWithScale(scale int32) string {
 	buf := make([]byte, DECIMAL64_ZSTR_LEN)
-	C.Decimal64_ToStringWithScale(bytesPtrToC(buf), dec64PtrToC(d), C.int32_t(scale))
+	C.Decimal64_ToStringWithScale(bytesPtrToC(buf), dec64PtrToC(&d), C.int32_t(scale))
 	return zstrToString(buf)
 }
 
-func (d *Decimal128) ToFloat64() float64 {
+func (d Decimal128) ToFloat64() float64 {
 	var ret C.double
-	rc := C.Decimal128_ToFloat64(&ret, dec128PtrToC(d))
+	rc := C.Decimal128_ToFloat64(&ret, dec128PtrToC(&d))
 	if int32(rc) == 0 {
 		return float64(ret)
 	}
 	panic(moerr.NewError(int32(rc), "error when converting decimal128 to float64"))
 }
-func (d *Decimal128) ToInt64() int64 {
+func (d Decimal128) ToInt64() int64 {
 	var ret C.int64_t
-	rc := C.Decimal128_ToInt64(&ret, dec128PtrToC(d))
+	rc := C.Decimal128_ToInt64(&ret, dec128PtrToC(&d))
 	if rc == 0 {
 		return int64(ret)
 	}
@@ -233,26 +260,25 @@ func (d *Decimal128) ToInt64() int64 {
 func (d Decimal128) String() string {
 	return d.ToString()
 }
-func (d *Decimal128) ToString() string {
+func (d Decimal128) ToString() string {
 	buf := make([]byte, DECIMAL128_ZSTR_LEN)
-	C.Decimal128_ToString(bytesPtrToC(buf), dec128PtrToC(d))
+	C.Decimal128_ToString(bytesPtrToC(buf), dec128PtrToC(&d))
 	return zstrToString(buf)
 }
-func (d *Decimal128) Decimal128ToString(scale int32) string {
-	return d.ToStringWithScale(scale)
-}
-func (d *Decimal128) ToStringWithScale(scale int32) string {
+func (d Decimal128) ToStringWithScale(scale int32) string {
 	buf := make([]byte, DECIMAL128_ZSTR_LEN)
-	C.Decimal128_ToStringWithScale(bytesPtrToC(buf), dec128PtrToC(d), C.int32_t(scale))
+	C.Decimal128_ToStringWithScale(bytesPtrToC(buf), dec128PtrToC(&d), C.int32_t(scale))
 	return zstrToString(buf)
 }
 
-func (d *Decimal128) FromDecimal64(d64 Decimal64) {
-	C.Decimal64_ToDecimal128(dec128PtrToC(d), dec64PtrToC(&d64))
+func Decimal128_FromDecimal64(d64 Decimal64) Decimal128 {
+	var d Decimal128
+	C.Decimal64_ToDecimal128(dec128PtrToC(&d), dec64PtrToC(&d64))
+	return d
 }
-func (d *Decimal128) ToDecimal64() (Decimal64, error) {
+func (d Decimal128) ToDecimal64() (Decimal64, error) {
 	var d64 Decimal64
-	rc := C.Decimal128_ToDecimal64(dec64PtrToC(&d64), dec128PtrToC(d))
+	rc := C.Decimal128_ToDecimal64(dec64PtrToC(&d64), dec128PtrToC(&d))
 	if rc != 0 {
 		return d64, moerr.NewError(moerr.OUT_OF_RANGE, "converting decimal128 to decimal64 out of range")
 	}
@@ -278,218 +304,205 @@ func CompareDecimal128(a, b Decimal128) int {
 	return int(ret)
 }
 
-func (d *Decimal64) Compare(other Decimal64) int {
-	return CompareDecimal64(*d, other)
+func (d Decimal64) Compare(other Decimal64) int {
+	return CompareDecimal64(d, other)
 }
-func (d *Decimal64) Eq(other Decimal64) bool {
+func (d Decimal64) Eq(other Decimal64) bool {
 	return d.Compare(other) == 0
 }
-func (d *Decimal64) Le(other Decimal64) bool {
+func (d Decimal64) Le(other Decimal64) bool {
 	return d.Compare(other) <= 0
 }
-func (d *Decimal64) Lt(other Decimal64) bool {
+func (d Decimal64) Lt(other Decimal64) bool {
 	return d.Compare(other) < 0
 }
-func (d *Decimal64) Ge(other Decimal64) bool {
+func (d Decimal64) Ge(other Decimal64) bool {
 	return d.Compare(other) >= 0
 }
-func (d *Decimal64) Gt(other Decimal64) bool {
+func (d Decimal64) Gt(other Decimal64) bool {
 	return d.Compare(other) > 0
 }
-func (d *Decimal64) Ne(other Decimal64) bool {
+func (d Decimal64) Ne(other Decimal64) bool {
 	return d.Compare(other) != 0
 }
 
-func (d *Decimal128) Compare(other Decimal128) int {
-	return CompareDecimal128(*d, other)
+func (d Decimal128) Compare(other Decimal128) int {
+	return CompareDecimal128(d, other)
 }
-func (d *Decimal128) Eq(other Decimal128) bool {
+func (d Decimal128) Eq(other Decimal128) bool {
 	return d.Compare(other) == 0
 }
-func (d *Decimal128) Le(other Decimal128) bool {
+func (d Decimal128) Le(other Decimal128) bool {
 	return d.Compare(other) <= 0
 }
-func (d *Decimal128) Lt(other Decimal128) bool {
+func (d Decimal128) Lt(other Decimal128) bool {
 	return d.Compare(other) < 0
 }
-func (d *Decimal128) Ge(other Decimal128) bool {
+func (d Decimal128) Ge(other Decimal128) bool {
 	return d.Compare(other) >= 0
 }
-func (d *Decimal128) Gt(other Decimal128) bool {
+func (d Decimal128) Gt(other Decimal128) bool {
 	return d.Compare(other) > 0
 }
-func (d *Decimal128) Ne(other Decimal128) bool {
+func (d Decimal128) Ne(other Decimal128) bool {
 	return d.Compare(other) != 0
 }
 
 // Arithmatics
-func (d *Decimal64) Add(x Decimal64) Decimal64 {
+func (d Decimal64) Add(x Decimal64) Decimal64 {
 	var ret Decimal64
-	rc := C.Decimal64_Add(dec64PtrToC(&ret), dec64PtrToC(d), dec64PtrToC(&x))
+	rc := C.Decimal64_Add(dec64PtrToC(&ret), dec64PtrToC(&d), dec64PtrToC(&x))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
 	}
 	return ret
 }
-func (d *Decimal128) Add(x Decimal128) Decimal128 {
+func (d Decimal128) Add(x Decimal128) Decimal128 {
 	var ret Decimal128
-	rc := C.Decimal128_Add(dec128PtrToC(&ret), dec128PtrToC(d), dec128PtrToC(&x))
+	rc := C.Decimal128_Add(dec128PtrToC(&ret), dec128PtrToC(&d), dec128PtrToC(&x))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal128 addition overflow"))
 	}
 	return ret
 }
 
-func (d *Decimal64) AddToMe(x Decimal64) {
-	rc := C.Decimal64_Add(dec64PtrToC(d), dec64PtrToC(d), dec64PtrToC(&x))
-	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
-	}
-}
-func (d *Decimal128) AddToMe(x Decimal128) {
-	rc := C.Decimal128_Add(dec128PtrToC(d), dec128PtrToC(d), dec128PtrToC(&x))
-	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal128 addition overflow"))
-	}
-}
-
-func (d *Decimal64) AddInt64(i int64) Decimal64 {
+func (d Decimal64) AddInt64(i int64) Decimal64 {
 	var ret Decimal64
-	rc := C.Decimal64_AddInt64(dec64PtrToC(&ret), dec64PtrToC(d), C.int64_t(i))
+	rc := C.Decimal64_AddInt64(dec64PtrToC(&ret), dec64PtrToC(&d), C.int64_t(i))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
 	}
 	return ret
 }
-func (d *Decimal128) AddInt64(i int64) Decimal128 {
+func (d Decimal128) AddInt64(i int64) Decimal128 {
 	var ret Decimal128
-	rc := C.Decimal128_AddInt64(dec128PtrToC(&ret), dec128PtrToC(d), C.int64_t(i))
+	rc := C.Decimal128_AddInt64(dec128PtrToC(&ret), dec128PtrToC(&d), C.int64_t(i))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
 	}
 	return ret
 }
-func (d *Decimal128) AddDecimal64(d64 Decimal64) Decimal128 {
+func (d Decimal128) AddDecimal64(d64 Decimal64) Decimal128 {
 	var ret Decimal128
-	rc := C.Decimal128_AddDecimal64(dec128PtrToC(&ret), dec128PtrToC(d), dec64PtrToC(&d64))
+	rc := C.Decimal128_AddDecimal64(dec128PtrToC(&ret), dec128PtrToC(&d), dec64PtrToC(&d64))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
 	}
 	return ret
 }
 
-func (d *Decimal64) Sub(x Decimal64) Decimal64 {
+func (d Decimal64) Sub(x Decimal64) Decimal64 {
 	var ret Decimal64
-	rc := C.Decimal64_Sub(dec64PtrToC(&ret), dec64PtrToC(d), dec64PtrToC(&x))
+	rc := C.Decimal64_Sub(dec64PtrToC(&ret), dec64PtrToC(&d), dec64PtrToC(&x))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 subtraction overflow"))
 	}
 	return ret
 }
-func (d *Decimal128) Sub(x Decimal128) Decimal128 {
+func (d Decimal128) Sub(x Decimal128) Decimal128 {
 	var ret Decimal128
-	rc := C.Decimal128_Sub(dec128PtrToC(&ret), dec128PtrToC(d), dec128PtrToC(&x))
+	rc := C.Decimal128_Sub(dec128PtrToC(&ret), dec128PtrToC(&d), dec128PtrToC(&x))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal128 subtraction overflow"))
 	}
 	return ret
 }
 
-func (d *Decimal64) SubInt64(i int64) Decimal64 {
+func (d Decimal64) SubInt64(i int64) Decimal64 {
 	var ret Decimal64
-	rc := C.Decimal64_SubInt64(dec64PtrToC(&ret), dec64PtrToC(d), C.int64_t(i))
+	rc := C.Decimal64_SubInt64(dec64PtrToC(&ret), dec64PtrToC(&d), C.int64_t(i))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
 	}
 	return ret
 }
-func (d *Decimal128) SubInt64(i int64) Decimal128 {
+func (d Decimal128) SubInt64(i int64) Decimal128 {
 	var ret Decimal128
-	rc := C.Decimal128_SubInt64(dec128PtrToC(&ret), dec128PtrToC(d), C.int64_t(i))
+	rc := C.Decimal128_SubInt64(dec128PtrToC(&ret), dec128PtrToC(&d), C.int64_t(i))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
 	}
 	return ret
 }
 
-func (d *Decimal64) Mul(x Decimal64) Decimal64 {
+func (d Decimal64) Mul(x Decimal64) Decimal64 {
 	var ret Decimal64
-	rc := C.Decimal64_Mul(dec64PtrToC(&ret), dec64PtrToC(d), dec64PtrToC(&x))
+	rc := C.Decimal64_Mul(dec64PtrToC(&ret), dec64PtrToC(&d), dec64PtrToC(&x))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 multiplication overflow"))
 	}
 	return ret
 }
-func (d *Decimal64) MulWiden(x Decimal64) Decimal128 {
+func (d Decimal64) MulWiden(x Decimal64) Decimal128 {
 	var ret Decimal128
-	rc := C.Decimal64_MulWiden(dec128PtrToC(&ret), dec64PtrToC(d), dec64PtrToC(&x))
+	rc := C.Decimal64_MulWiden(dec128PtrToC(&ret), dec64PtrToC(&d), dec64PtrToC(&x))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 multiplication overflow"))
 	}
 	return ret
 }
-func (d *Decimal128) Mul(x Decimal128) Decimal128 {
+func (d Decimal128) Mul(x Decimal128) Decimal128 {
 	var ret Decimal128
-	rc := C.Decimal128_Mul(dec128PtrToC(&ret), dec128PtrToC(d), dec128PtrToC(&x))
+	rc := C.Decimal128_Mul(dec128PtrToC(&ret), dec128PtrToC(&d), dec128PtrToC(&x))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal128 multiplication overflow"))
 	}
 	return ret
 }
 
-func (d *Decimal64) MulInt64(x int64) Decimal64 {
+func (d Decimal64) MulInt64(x int64) Decimal64 {
 	var ret Decimal64
-	rc := C.Decimal64_MulInt64(dec64PtrToC(&ret), dec64PtrToC(d), C.int64_t(x))
+	rc := C.Decimal64_MulInt64(dec64PtrToC(&ret), dec64PtrToC(&d), C.int64_t(x))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 multiplication overflow"))
 	}
 	return ret
 }
-func (d *Decimal128) MulInt64(x int64) Decimal128 {
+func (d Decimal128) MulInt64(x int64) Decimal128 {
 	var ret Decimal128
-	rc := C.Decimal128_MulInt64(dec128PtrToC(&ret), dec128PtrToC(d), C.int64_t(x))
+	rc := C.Decimal128_MulInt64(dec128PtrToC(&ret), dec128PtrToC(&d), C.int64_t(x))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 multiplication overflow"))
 	}
 	return ret
 }
 
-func (d *Decimal64) Div(x Decimal64) Decimal64 {
+func (d Decimal64) Div(x Decimal64) Decimal64 {
 	var ret Decimal64
-	rc := C.Decimal64_Div(dec64PtrToC(&ret), dec64PtrToC(d), dec64PtrToC(&x))
+	rc := C.Decimal64_Div(dec64PtrToC(&ret), dec64PtrToC(&d), dec64PtrToC(&x))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 division error"))
 	}
 	return ret
 }
-func (d *Decimal64) DivWiden(x Decimal64) Decimal128 {
+func (d Decimal64) DivWiden(x Decimal64) Decimal128 {
 	var ret Decimal128
-	rc := C.Decimal64_DivWiden(dec128PtrToC(&ret), dec64PtrToC(d), dec64PtrToC(&x))
+	rc := C.Decimal64_DivWiden(dec128PtrToC(&ret), dec64PtrToC(&d), dec64PtrToC(&x))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 division error"))
 	}
 	return ret
 }
-func (d *Decimal128) Div(x Decimal128) Decimal128 {
+func (d Decimal128) Div(x Decimal128) Decimal128 {
 	var ret Decimal128
-	rc := C.Decimal128_Div(dec128PtrToC(&ret), dec128PtrToC(d), dec128PtrToC(&x))
+	rc := C.Decimal128_Div(dec128PtrToC(&ret), dec128PtrToC(&d), dec128PtrToC(&x))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal128 division error"))
 	}
 	return ret
 }
 
-func (d *Decimal64) DivInt64(x int64) Decimal64 {
+func (d Decimal64) DivInt64(x int64) Decimal64 {
 	var ret Decimal64
-	rc := C.Decimal64_DivInt64(dec64PtrToC(&ret), dec64PtrToC(d), C.int64_t(x))
+	rc := C.Decimal64_DivInt64(dec64PtrToC(&ret), dec64PtrToC(&d), C.int64_t(x))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 division error"))
 	}
 	return ret
 }
-func (d *Decimal128) DivInt64(x int64) Decimal128 {
+func (d Decimal128) DivInt64(x int64) Decimal128 {
 	var ret Decimal128
-	rc := C.Decimal128_DivInt64(dec128PtrToC(&ret), dec128PtrToC(d), C.int64_t(x))
+	rc := C.Decimal128_DivInt64(dec128PtrToC(&ret), dec128PtrToC(&d), C.int64_t(x))
 	if rc != 0 {
 		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 division error"))
 	}
@@ -498,27 +511,23 @@ func (d *Decimal128) DivInt64(x int64) Decimal128 {
 
 // Wrap old decimal api.   Most likely we should delete them.
 func ParseStringToDecimal64(s string, _ int32, scale int32) (Decimal64, error) {
-	var d Decimal64
-	err := d.FromStringWithScale(s, scale)
-	return d, err
+	return Decimal64_FromStringWithScale(s, scale)
 }
 
 func ParseStringToDecimal128(s string, _ int32, scale int32) (Decimal128, error) {
-	var d Decimal128
-	err := d.FromStringWithScale(s, scale)
-	return d, err
+	return Decimal128_FromStringWithScale(s, scale)
 }
 
 func MustDecimal64FromString(s string) Decimal64 {
-	var d Decimal64
-	if err := d.FromString(s); err != nil {
+	d, err := Decimal64_FromString(s)
+	if err != nil {
 		panic(err)
 	}
 	return d
 }
 func MustDecimal128FromString(s string) Decimal128 {
-	var d Decimal128
-	if err := d.FromString(s); err != nil {
+	d, err := Decimal128_FromString(s)
+	if err != nil {
 		panic(err)
 	}
 	return d
@@ -545,46 +554,30 @@ func Decimal128_NaN() Decimal128 {
 }
 
 func Decimal64FromInt32(i int32) Decimal64 {
-	var d Decimal64
-	d.FromInt32(i)
-	return d
+	return Decimal64_FromInt32(i)
 }
 func Decimal128FromInt32(i int32) Decimal128 {
-	var d Decimal128
-	d.FromInt32(i)
-	return d
+	return Decimal128_FromInt32(i)
 }
 func Decimal64FromFloat64(f float64) Decimal64 {
-	var d Decimal64
-	d.FromFloat64(f)
-	return d
+	return Decimal64_FromFloat64(f)
 }
 func Decimal128FromFloat64(f float64) Decimal128 {
-	var d Decimal128
-	d.FromFloat64(f)
-	return d
+	return Decimal128_FromFloat64(f)
 }
 
 func InitDecimal128(i int64) Decimal128 {
-	var d Decimal128
-	d.FromInt64(i)
-	return d
+	return Decimal128_FromInt64(i)
 }
 func InitDecimal128UsingUint(i uint64) Decimal128 {
-	var d Decimal128
-	d.FromUint64(i)
-	return d
+	return Decimal128_FromUint64(i)
 }
 
 func InitDecimal64(i int64) Decimal64 {
-	var d Decimal64
-	d.FromInt64(i)
-	return d
+	return Decimal64_FromInt64(i)
 }
 func InitDecimal64UsingUint(i uint64, _ int32) Decimal64 {
-	var d Decimal64
-	d.FromUint64(i)
-	return d
+	return Decimal64_FromUint64(i)
 }
 
 func Decimal64Add(a, b Decimal64, s1, s2 int32) Decimal64 {
@@ -651,15 +644,19 @@ func AlignDecimal64UsingScaleDiffBatch(src, dst []Decimal64, _ int32) []Decimal6
 }
 
 func ParseStringToDecimal64WithoutTable(s string) (Decimal64, int32, error) {
-	var d Decimal64
-	err := d.FromString(s)
-	return d, 0, err
+	ss := strings.TrimSpace(s)
+	d, err := Decimal64_FromString(ss)
+	var scale int32
+	idx := int32(strings.LastIndex(ss, "."))
+	if idx >= 0 {
+		scale = int32(len(ss)) - idx - 1
+	}
+	return d, scale, err
 }
 
 func ParseStringToDecimal128WithoutTable(s string) (Decimal128, int32, error) {
-	var d Decimal128
 	ss := strings.TrimSpace(s)
-	err := d.FromString(ss)
+	d, err := Decimal128_FromString(ss)
 	var scale int32
 	idx := int32(strings.LastIndex(ss, "."))
 	if idx >= 0 {

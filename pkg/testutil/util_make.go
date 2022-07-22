@@ -2,7 +2,7 @@
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
-// You may oboolTypeain a copy of the License at
+// You may obtain a copy of the License at
 //
 //      http://www.apache.org/licenses/LICENSE-2.0
 //
@@ -81,12 +81,12 @@ var (
 		return makeStringVector(values, nsp, varcharType)
 	}
 
-	MakeDecimal64Vector = func(values []int64, nsp []uint64, typ types.Type) *vector.Vector {
+	MakeDecimal64Vector = func(values []int64, nsp []uint64, _ types.Type) *vector.Vector {
 		vec := vector.New(decimal64Type)
 		cols := make([]types.Decimal64, len(values))
 		if nsp == nil {
 			for i, v := range values {
-				cols[i].FromInt64(v)
+				cols[i] = types.Decimal64_FromInt64(v)
 			}
 		} else {
 			for _, n := range nsp {
@@ -96,14 +96,14 @@ var (
 				if nulls.Contains(vec.Nsp, uint64(i)) {
 					continue
 				}
-				cols[i].FromInt64(v)
+				cols[i] = types.Decimal64_FromInt64(v)
 			}
 		}
 		vec.Col = cols
 		return vec
 	}
 
-	MakeDecimal128Vector = func(values []int64, nsp []uint64, typ types.Type) *vector.Vector {
+	MakeDecimal128Vector = func(values []int64, nsp []uint64, _ types.Type) *vector.Vector {
 		vec := vector.New(decimal128Type)
 		cols := make([]types.Decimal128, len(values))
 		if nsp == nil {
@@ -284,14 +284,14 @@ var (
 		return vec
 	}
 
-	MakeScalarDecimal64 = func(v int64, length int, typ types.Type) *vector.Vector {
+	MakeScalarDecimal64 = func(v int64, length int, _ types.Type) *vector.Vector {
 		vec := NewProc().AllocScalarVector(decimal64Type)
 		vec.Length = length
 		vec.Col = []types.Decimal64{types.InitDecimal64(v)}
 		return vec
 	}
 
-	MakeScalarDecimal128 = func(v uint64, length int, typ types.Type) *vector.Vector {
+	MakeScalarDecimal128 = func(v uint64, length int, _ types.Type) *vector.Vector {
 		vec := NewProc().AllocScalarVector(decimal128Type)
 		vec.Length = length
 		vec.Col = []types.Decimal128{types.InitDecimal128UsingUint(v)}

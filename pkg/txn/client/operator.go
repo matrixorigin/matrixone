@@ -17,7 +17,6 @@ package client
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -128,17 +127,11 @@ type txnOperator struct {
 func newTxnOperator(sender rpc.TxnSender, txnMeta txn.TxnMeta, options ...TxnOption) *txnOperator {
 	tc := &txnOperator{sender: sender}
 	tc.mu.txn = txnMeta
-
 	for _, opt := range options {
 		opt(tc)
 	}
 	tc.adjust()
-
-	tc.logger.Debug("txn created",
-		zap.String("txn", txnMeta.DebugString()),
-		zap.Bool("read-only", tc.option.readyOnly),
-		zap.Bool("enable-cache-write", tc.option.enableCacheWrite),
-		zap.Bool("disable-1pc", tc.option.disable1PCOpt))
+	util.LogTxnCreated(tc.logger, txnMeta)
 	return tc
 }
 
@@ -156,11 +149,7 @@ func newTxnOperatorWithSnapshot(sender rpc.TxnSender, snapshot []byte, logger *z
 	tc.option.readyOnly = v.ReadyOnly
 
 	tc.adjust()
-	tc.logger.Debug("txn created",
-		zap.String("txn", tc.mu.txn.DebugString()),
-		zap.Bool("read-only", tc.option.readyOnly),
-		zap.Bool("enable-cache-write", tc.option.enableCacheWrite),
-		zap.Bool("disable-1pc", tc.option.disable1PCOpt))
+	util.LogTxnCreated(tc.logger, tc.mu.txn)
 	return tc, nil
 }
 
@@ -177,10 +166,6 @@ func (tc *txnOperator) adjust() {
 	}
 	if tc.option.readyOnly && tc.option.enableCacheWrite {
 		tc.logger.Fatal("readyOnly and delayWrites cannot both be set")
-	}
-
-	if tc.logger.Core().Enabled(zap.DebugLevel) {
-		tc.logger = tc.logger.With(util.TxnIDField(tc.mu.txn))
 	}
 }
 
@@ -235,20 +220,13 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 			tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, dn)
 		}
 	}
+	util.LogTxnUpdated(tc.logger, tc.mu.txn)
 	return nil
 }
 
 func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
 	for idx := range requests {
 		requests[idx].Method = txn.TxnMethod_Read
-	}
-
-	if ce := tc.logger.Check(zap.DebugLevel, "handle read requests"); ce != nil {
-		fields := make([]zap.Field, 0, len(requests))
-		for idx, req := range requests {
-			fields = append(fields, zap.String(fmt.Sprintf("request-%d", idx), req.DebugString()))
-		}
-		ce.Write(fields...)
 	}
 
 	if err := tc.validate(ctx, false); err != nil {
@@ -268,21 +246,14 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
-	tc.logger.Debug("handle commit")
-	defer tc.logger.Debug("txn closed by commit")
-
 	if tc.option.readyOnly {
 		return nil
 	}
 
 	result, err := tc.doWrite(ctx, nil, true)
 	if err != nil {
-		tc.logger.Error("commit txn failed",
-			zap.String("txn", tc.mu.txn.DebugString()),
-			zap.Error(err))
 		return err
 	}
-
 	if result != nil {
 		result.Release()
 	}
@@ -290,18 +261,13 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) error {
-	tc.logger.Debug("handle rollback")
-	defer tc.logger.Debug("txn closed by rollback")
-
 	tc.mu.Lock()
 	defer func() {
 		tc.mu.closed = true
 		tc.mu.Unlock()
 	}()
 
-	// no write request handled
 	if len(tc.mu.txn.DNShards) == 0 {
-		tc.logger.Debug("rollback on 0 partitions")
 		return nil
 	}
 
@@ -310,27 +276,17 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 		RollbackRequest: &txn.TxnRollbackRequest{},
 	}}, true))
 	if err != nil {
-		tc.logger.Error("rollback txn failed",
-			zap.String("txn", tc.mu.txn.DebugString()),
-			zap.Error(err))
 		return err
 	}
-	result.Release()
+	if result != nil {
+		result.Release()
+	}
 	return nil
 }
 
 func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, commit bool) (*rpc.SendResult, error) {
 	for idx := range requests {
 		requests[idx].Method = txn.TxnMethod_Write
-	}
-
-	if ce := tc.logger.Check(zap.DebugLevel, "handle write requests"); ce != nil {
-		fields := make([]zap.Field, 0, len(requests)+1)
-		for idx, req := range requests {
-			fields = append(fields, zap.String(fmt.Sprintf("request-%d", idx), req.DebugString()))
-		}
-		fields = append(fields, zap.Bool("commit", commit))
-		ce.Write(fields...)
 	}
 
 	if tc.option.readyOnly {
@@ -353,17 +309,13 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 
 	// delayWrites enabled, no responses
 	if !commit && tc.maybeCacheWrites(requests, commit) {
-		tc.logger.Debug("add write requests to cache",
-			zap.Int("requests", len(requests)))
 		return nil, nil
 	}
 
 	if commit {
 		if len(tc.mu.txn.DNShards) == 0 { // commit no write handled txn
-			tc.logger.Debug("commit on 0 partitions")
 			return nil, nil
 		}
-
 		requests = tc.maybeInsertCachedWrites(ctx, requests, true)
 		requests = append(requests, txn.TxnRequest{
 			Method: txn.TxnMethod_Commit,
@@ -371,13 +323,6 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 			CommitRequest: &txn.TxnCommitRequest{
 				Disable1PCOpt: tc.option.disable1PCOpt,
 			}})
-		if ce := tc.logger.Check(zap.DebugLevel, "commit on partitions"); ce != nil {
-			fields := make([]zap.Field, 0, len(tc.mu.txn.DNShards))
-			for idx, p := range tc.mu.txn.DNShards {
-				fields = append(fields, zap.String(fmt.Sprintf("partition-%d", idx), p.DebugString()))
-			}
-			ce.Write(fields...)
-		}
 	}
 	return tc.trimResponses(tc.handleError(tc.doSend(ctx, requests, commit)))
 }
@@ -404,9 +349,7 @@ func (tc *txnOperator) addPartitionLocked(dn metadata.DNShard) {
 		}
 	}
 	tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, dn)
-	if ce := tc.logger.Check(zap.DebugLevel, "partition added"); ce != nil {
-		ce.Write(zap.String("dn", dn.DebugString()))
-	}
+	util.LogTxnUpdated(tc.logger, tc.mu.txn)
 }
 
 func (tc *txnOperator) validate(ctx context.Context, locked bool) error {
@@ -426,7 +369,6 @@ func (tc *txnOperator) checkStatus(locked bool) error {
 	if tc.mu.closed {
 		return errTxnClosed
 	}
-
 	return nil
 }
 
@@ -441,7 +383,6 @@ func (tc *txnOperator) maybeCacheWrites(requests []txn.TxnRequest, locked bool) 
 		}
 		return true
 	}
-
 	return false
 }
 
@@ -478,11 +419,6 @@ func (tc *txnOperator) maybeInsertCachedWrites(ctx context.Context, requests []t
 			newRequests = append(newRequests, requests[idx])
 		}
 	}
-
-	if insertCount > 0 {
-		tc.logger.Debug("insert cached write requests",
-			zap.Int("count", insertCount))
-	}
 	return newRequests
 }
 
@@ -496,8 +432,6 @@ func (tc *txnOperator) getCachedWritesLocked(dn uint64) ([]txn.TxnRequest, bool)
 
 func (tc *txnOperator) clearCachedWritesLocked(dn uint64) {
 	delete(tc.mu.cachedWrites, dn)
-	tc.logger.Debug("cached write requests removed",
-		zap.Uint64("dn", dn))
 }
 
 func (tc *txnOperator) getTxnMeta(locked bool) txn.TxnMeta {
@@ -514,32 +448,13 @@ func (tc *txnOperator) doSend(ctx context.Context, requests []txn.TxnRequest, lo
 		requests[idx].Txn = txnMeta
 	}
 
-	if ce := tc.logger.Check(zap.DebugLevel, "send requests"); ce != nil {
-		fields := make([]zap.Field, 0, len(requests)+1)
-		fields = append(fields, zap.Int("count", len(requests)))
-		for idx, req := range requests {
-			fields = append(fields, zap.String(fmt.Sprintf("request-%d", idx), req.DebugString()))
-		}
-		ce.Write(fields...)
-	}
-
+	util.LogTxnSendRequests(tc.logger, requests)
 	result, err := tc.sender.Send(ctx, requests)
 	if err != nil {
-		tc.logger.Error("send requests failed",
-			zap.Int("count", len(requests)),
-			zap.String("txn", txnMeta.DebugString()),
-			zap.Error(err))
+		util.LogTxnSendRequestsFailed(tc.logger, requests, err)
 		return nil, err
 	}
-
-	if ce := tc.logger.Check(zap.DebugLevel, "receive responses"); ce != nil {
-		fields := make([]zap.Field, 0, len(requests)+1)
-		fields = append(fields, zap.Int("count", len(requests)))
-		for idx := range result.Responses {
-			fields = append(fields, zap.String(fmt.Sprintf("response-%d", idx), result.Responses[idx].DebugString()))
-		}
-		ce.Write(fields...)
-	}
+	util.LogTxnReceivedResponses(tc.logger, result.Responses)
 	return result, nil
 }
 

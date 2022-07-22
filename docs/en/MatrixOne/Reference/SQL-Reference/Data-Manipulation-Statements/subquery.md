@@ -26,7 +26,9 @@ A subquery may occur in:
 
 For more information, see the reference below:
 
-- [FROM SUBQUERY](subqueries/from-subquery.md)
-- [SUBQUERY WITH ANY](subqueries/subquery-with-any.md)
+- [Derived Tables](subqueries/derived-tables.md)
+- [Comparisons Using Subqueries](subqueries/comparisons-using-subqueries.md)
+- [SUBQUERY WITH ANY or SOME](subqueries/subquery-with-any-some.md)
+- [SUBQUERY WITH ALL](subqueries/subquery-with-all.md)
 - [SUBQUERY WITH EXISTS](subqueries/subquery-with-exists.md)
 - [SUBQUERY WITH IN](subqueries/subquery-with-in.md)

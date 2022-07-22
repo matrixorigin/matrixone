@@ -77,7 +77,7 @@ func HandleOrNullCol(vs []*vector.Vector, proc *process.Process) (*vector.Vector
 	}
 }
 
-func ScalarOrNotScalar(sv, nsv *vector.Vector, col1, col2 []bool, proc *process.Process) (*vector.Vector, error) {
+func ScalarOrNotScalar(_, nsv *vector.Vector, col1, col2 []bool, proc *process.Process) (*vector.Vector, error) {
 	length := vector.Length(nsv)
 	vec := allocateBoolVector(length, proc)
 	nulls.Or(nsv.Nsp, nil, vec.Nsp)

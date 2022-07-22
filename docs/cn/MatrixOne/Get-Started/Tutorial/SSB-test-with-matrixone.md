@@ -9,9 +9,9 @@ SSB 星型模式基准测试是 OLAP 数据库性能测试的常用场景，通�
 ## **1. 编译dbgen**
 
 ```
-$ git clone git@github.com:vadimtk/ssb-dbgen.git
-$ cd ssb-dbgen
-$ make
+git clone git@github.com:vadimtk/ssb-dbgen.git
+cd ssb-dbgen
+make
 ```
 
 ## **2. 生成数据**
@@ -19,11 +19,11 @@ $ make
 当使用`-s 1`时`dbgen`命令会生产近600万行数据(670MB)，当使用`-s 10`时会生产近6000万行数据，会耗费大量时间。
 
 ```
-$ ./dbgen -s 1 -T c
-$ ./dbgen -s 1 -T l
-$ ./dbgen -s 1 -T p
-$ ./dbgen -s 1 -T s
-$ ./dbgen -s 1 -T d
+./dbgen -s 1 -T c
+./dbgen -s 1 -T l
+./dbgen -s 1 -T p
+./dbgen -s 1 -T s
+./dbgen -s 1 -T d
 ```
 
 我们还准备了 1GB 的数据集供你下载。你可以在下面链接中直接获取数据文件：

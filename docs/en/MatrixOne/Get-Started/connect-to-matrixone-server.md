@@ -15,7 +15,7 @@ Currently, MatrixOne is only compatible with Oracle MySQL client. This means tha
 You can use the MySQL command-line client to connect to MatrixOne server:
 
 ```
-$ mysql -h IP -P PORT -uUsername -p
+mysql -h IP -P PORT -uUsername -p
 ```
 
 The connection string is the same format as MySQL accepts. You need to provide a user name and a password. 
@@ -26,7 +26,7 @@ Use the built-in test account for example:
 - password: 111
 
 ```
-$ mysql -h 127.0.0.1 -P 6001 -udump -p
+mysql -h 127.0.0.1 -P 6001 -udump -p
 Enter password:
 ```
 

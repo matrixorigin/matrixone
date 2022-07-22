@@ -188,7 +188,7 @@ func (r *Decimal64Ring) BatchAdd(a interface{}, start int64, os []uint8, vps []u
 		r.Typ = ar.Typ
 	}
 	for i := range os {
-		r.Vs[vps[i]-1].AddToMe(ar.Vs[int64(i)+start])
+		r.Vs[vps[i]-1] = r.Vs[vps[i]-1].Add(ar.Vs[int64(i)+start])
 		r.Ns[vps[i]-1] += ar.Ns[int64(i)+start]
 	}
 }
@@ -200,7 +200,7 @@ func (r *Decimal64Ring) Mul(a interface{}, x, y, z int64) {
 		r.Typ = ar.Typ
 	}
 	r.Ns[x] += ar.Ns[y] * z
-	r.Vs[x].AddToMe(types.Decimal64Int64Mul(r.Vs[y], z))
+	r.Vs[x] = r.Vs[x].Add(types.Decimal64Int64Mul(r.Vs[y], z))
 }
 
 func (r *Decimal64Ring) Eval(zs []int64) *vector.Vector {
