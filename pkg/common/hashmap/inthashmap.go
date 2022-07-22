@@ -27,8 +27,11 @@ var wrongUseOfIntHashTable = errors.New(errno.InternalError, "wrong use of IntHa
 
 var zeroUint64 []uint64
 
+var zeroUint32 []uint32
+
 func init() {
 	zeroUint64 = make([]uint64, UnitLimit)
+	zeroUint32 = make([]uint32, UnitLimit)
 }
 
 // IntHashMap key is int64, value is an uint64 (start from 1)

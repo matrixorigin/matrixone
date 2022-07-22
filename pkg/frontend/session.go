@@ -94,13 +94,12 @@ func (ts *TxnState) getState() int {
 	return ts.state
 }
 
-func (ts *TxnState) getFromState() int {
-	return ts.fromState
-}
-
-func (ts *TxnState) getError() error {
-	return ts.err
-}
+// func (ts *TxnState) getFromState() int {
+// 	return ts.fromState
+// }
+// func (ts *TxnState) getError() error {
+// 	return ts.err
+// }
 
 func (ts *TxnState) String() string {
 	return fmt.Sprintf("state:%d fromState:%d err:%v", ts.state, ts.fromState, ts.err)
@@ -381,21 +380,23 @@ func (th *TxnHandler) isTxnState(s int) bool {
 	return th.txnState.isState(s)
 }
 
-func (th *TxnHandler) switchToTxnState(s int, err error) {
-	th.txnState.switchToState(s, err)
-}
-
-func (th *TxnHandler) getFromTxnState() int {
-	return th.txnState.getFromState()
-}
-
-func (th *TxnHandler) getTxnStateError() error {
-	return th.txnState.getError()
-}
-
-func (th *TxnHandler) getTxnStateString() string {
-	return th.txnState.String()
-}
+// The following functions are unused.
+//
+// func (th *TxnHandler) switchToTxnState(s int, err error) {
+// 	th.txnState.switchToState(s, err)
+// }
+//
+// func (th *TxnHandler) getFromTxnState() int {
+// 	return th.txnState.getFromState()
+// }
+//
+// func (th *TxnHandler) getTxnStateError() error {
+// 	return th.txnState.getError()
+// }
+//
+// func (th *TxnHandler) getTxnStateString() string {
+// 	return th.txnState.String()
+// }
 
 // IsInTaeTxn checks the session executes a txn
 func (th *TxnHandler) IsInTaeTxn() bool {
