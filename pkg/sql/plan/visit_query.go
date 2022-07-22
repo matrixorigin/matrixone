@@ -33,7 +33,10 @@ func NewVisitQuery(qry *Query, rules []VisitRule) *VisitQuery {
 
 func (vq *VisitQuery) exploreNode(node *Node) error {
 	for i := range node.Children {
-		vq.exploreNode(vq.qry.Nodes[node.Children[i]])
+		err := vq.exploreNode(vq.qry.Nodes[node.Children[i]])
+		if err != nil {
+			return err
+		}
 	}
 
 	for _, rule := range vq.rules {
