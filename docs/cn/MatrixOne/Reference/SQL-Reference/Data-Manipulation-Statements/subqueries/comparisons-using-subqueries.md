@@ -1,8 +1,8 @@
-# **比较子查询**
+# **子查询与比较操作符的使用**
 
 ## **语法描述**
 
-比较子查询最常见的用法如下:
+子查询与比较操作符最常见的用法如下:
 
 ```
 non_subquery_operand comparison_operator (subquery)
