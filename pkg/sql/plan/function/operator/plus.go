@@ -120,7 +120,7 @@ func PlusDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	if lvScale < rvScale {
 		resultScale = rvScale
 	}
-	resultTyp := types.Type{Oid: types.T_decimal64, Size: 8, Width: 18, Scale: resultScale}
+	resultTyp := types.Type{Oid: types.T_decimal64, Size: types.DECIMAL64_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: resultScale}
 	if lv.IsScalarNull() || rv.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultTyp), nil
 	}
@@ -174,7 +174,7 @@ func PlusDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 	if lvScale < rvScale {
 		resultScale = rvScale
 	}
-	resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
+	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: resultScale}
 	if lv.IsScalarNull() || rv.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultTyp), nil
 	}

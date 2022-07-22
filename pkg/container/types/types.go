@@ -91,11 +91,8 @@ type Date int32
 type Datetime int64
 type Timestamp int64
 
-type Decimal64 int64
-type Decimal128 struct {
-	Lo int64
-	Hi int64
-}
+type Decimal64 [8]byte
+type Decimal128 [16]byte
 
 type Ints interface {
 	int8 | int16 | int32 | int64
@@ -122,7 +119,7 @@ type String interface {
 }
 
 type Generic interface {
-	Ints | UInts | Floats | Date | Datetime | Timestamp | Decimal64
+	Ints | UInts | Floats | Date | Datetime | Timestamp
 }
 
 var Types map[string]T = map[string]T{

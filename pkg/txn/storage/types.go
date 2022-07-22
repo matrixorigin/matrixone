@@ -35,8 +35,10 @@ type TxnStorage interface {
 	// StartRecovery start txnStorage recovery process. Use the incoming channel to send the Txn that needs to be
 	// recovered and close the channel when all the logs have been processed.
 	StartRecovery(chan txn.TxnMeta)
-	// Close close the txn storage
+	// Close close the txn storage.
 	Close() error
+	// Destroy is similar to Close, but perform remove all related data and resources.
+	Destroy() error
 
 	// Read execute read requests sent by CN.
 	//

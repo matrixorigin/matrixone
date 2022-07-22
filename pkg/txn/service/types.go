@@ -33,8 +33,8 @@ type TxnService interface {
 	Shard() metadata.DNShard
 	// Start start the txn service
 	Start() error
-	// Close close the txn service
-	Close() error
+	// Close close the txn service. Destroy TxnStorage if destroy is true.
+	Close(destroy bool) error
 
 	// Read handle txn read request from CN. For reuse, the response is provided by the
 	// TODO: only read log tail.

@@ -26,8 +26,8 @@ import (
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
-	n := arg.(*Argument)
-	buf.WriteString(fmt.Sprintf("σ(%s)", n.E))
+	ap := arg.(*Argument)
+	buf.WriteString(fmt.Sprintf("filter(%s)", ap.E))
 }
 
 func Prepare(_ *process.Process, _ interface{}) error {
@@ -35,7 +35,7 @@ func Prepare(_ *process.Process, _ interface{}) error {
 }
 
 func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
-	bat := proc.Reg.InputBatch
+	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
@@ -52,11 +52,15 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 		bat.Clean(proc.Mp)
 		return false, err
 	}
-	defer vector.Clean(vec, proc.Mp)
-	bs, ok := vec.Col.([]bool)
-	if !ok {
+	defer vec.Free(proc.Mp)
+	if proc.OperatorOutofMemory(int64(vec.Size())) {
+		return false, errors.New("", "out of memory")
+	}
+	anal.Alloc(int64(vec.Size()))
+	if !vec.GetType().IsBoolean() {
 		return false, errors.New("", "Only bool expression can be used as filter condition.")
 	}
+	bs := vector.GetColumn[bool](vec)
 	if vec.IsScalar() {
 		if !bs[0] {
 			bat.Shrink(nil)
@@ -72,6 +76,6 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 		proc.PutSels(sels)
 	}
 	anal.Output(bat)
-	proc.Reg.InputBatch = bat
+	proc.SetInputBatch(bat)
 	return false, nil
 }

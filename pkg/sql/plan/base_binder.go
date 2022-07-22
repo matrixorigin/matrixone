@@ -17,7 +17,6 @@ package plan
 import (
 	"fmt"
 	"go/constant"
-	"math"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -180,120 +179,18 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 }
 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
-	var getVal interface{}
-	getVal, err = b.builder.compCtx.ResolveVariable(astExpr.Name, astExpr.System, astExpr.Global)
-	if err != nil {
-		return nil, err
-	}
-	getIntExpr := func(data int64) *plan.Expr {
-		return &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Isnull: false,
-					Value: &plan.Const_Ival{
-						Ival: data,
-					},
-				},
+	return &Expr{
+		Typ: &plan.Type{
+			Id: plan.Type_ANY,
+		},
+		Expr: &plan.Expr_V{
+			V: &plan.VarRef{
+				Name:   astExpr.Name,
+				System: astExpr.System,
+				Global: astExpr.Global,
 			},
-			Typ: &plan.Type{
-				Id:       plan.Type_INT64,
-				Nullable: false,
-				Size:     8,
-			},
-		}
-	}
-	getFloatExpr := func(data float64) *plan.Expr {
-		return &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Isnull: false,
-					Value: &plan.Const_Dval{
-						Dval: data,
-					},
-				},
-			},
-			Typ: &plan.Type{
-				Id:       plan.Type_FLOAT64,
-				Nullable: false,
-				Size:     8,
-			},
-		}
-	}
-
-	switch val := getVal.(type) {
-	case string:
-		expr = &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Isnull: false,
-					Value: &plan.Const_Sval{
-						Sval: val,
-					},
-				},
-			},
-			Typ: &plan.Type{
-				Id:       plan.Type_VARCHAR,
-				Nullable: false,
-				Size:     4,
-				Width:    math.MaxInt32,
-			},
-		}
-	case int:
-		expr = getIntExpr(int64(val))
-	case uint8:
-		expr = getIntExpr(int64(val))
-	case uint16:
-		expr = getIntExpr(int64(val))
-	case uint32:
-		expr = getIntExpr(int64(val))
-	case int8:
-		expr = getIntExpr(int64(val))
-	case int16:
-		expr = getIntExpr(int64(val))
-	case int32:
-		expr = getIntExpr(int64(val))
-	case int64:
-		expr = getIntExpr(val)
-	case uint64:
-		err = errors.New("", "decimal var not support now")
-	case float32:
-		expr = getFloatExpr(float64(val))
-	case float64:
-		expr = getFloatExpr(val)
-	case bool:
-		return &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Isnull: false,
-					Value: &plan.Const_Bval{
-						Bval: val,
-					},
-				},
-			},
-			Typ: &plan.Type{
-				Id:       plan.Type_BOOL,
-				Nullable: false,
-				Size:     1,
-			},
-		}, nil
-	case nil:
-		expr = &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Isnull: true,
-				},
-			},
-			Typ: &plan.Type{
-				Id:       plan.Type_ANY,
-				Nullable: true,
-			},
-		}
-	case types.Decimal64, types.Decimal128:
-		err = errors.New("", "decimal var not support now")
-	default:
-		err = errors.New("", fmt.Sprintf("type of var %q is not supported now", astExpr.Name))
-	}
-	return
+		},
+	}, nil
 }
 
 func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (expr *plan.Expr, err error) {
@@ -400,16 +297,20 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, errors.New("", fmt.Sprintf("unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL)))
 	}
 
+	rowSize := int32(len(subCtx.results))
+
 	returnExpr := &plan.Expr{
 		Typ: &plan.Type{
 			Id: plan.Type_TUPLE,
 		},
 		Expr: &plan.Expr_Sub{
 			Sub: &plan.SubqueryRef{
-				NodeId: nodeID,
+				NodeId:  nodeID,
+				RowSize: rowSize,
 			},
 		},
 	}
+
 	if astExpr.Exists {
 		returnExpr.Typ = &plan.Type{
 			Id:       plan.Type_BOOL,
@@ -417,12 +318,8 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 			Size:     1,
 		}
 		returnExpr.Expr.(*plan.Expr_Sub).Sub.Typ = plan.SubqueryRef_EXISTS
-	} else {
-		if len(subCtx.projects) > 1 {
-			// TODO: may support row constructor in the future?
-			return nil, errors.New("", "subquery must return only one column")
-		}
-		returnExpr.Typ = subCtx.projects[0].Typ
+	} else if rowSize == 1 {
+		returnExpr.Typ = subCtx.results[0].Typ
 	}
 
 	return returnExpr, nil
@@ -557,8 +454,14 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					return nil, errors.New("", "IN subquery as non-root expression will be supported in future version")
 				}
 
-				if _, ok := leftArg.Expr.(*plan.Expr_List); ok {
-					return nil, errors.New("", "row constructor in IN subquery will be supported in future version")
+				if list, ok := leftArg.Expr.(*plan.Expr_List); ok {
+					if len(list.List.List) != int(subquery.Sub.RowSize) {
+						return nil, errors.New("", fmt.Sprintf("subquery should return %d columns", len(list.List.List)))
+					}
+				} else {
+					if subquery.Sub.RowSize > 1 {
+						return nil, errors.New("", "subquery should return 1 column")
+					}
 				}
 
 				subquery.Sub.Typ = plan.SubqueryRef_IN
@@ -600,8 +503,14 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					return nil, errors.New("", "IN subquery as non-root expression will be supported in future version")
 				}
 
-				if _, ok := leftArg.Expr.(*plan.Expr_List); ok {
-					return nil, errors.New("", "row constructor in IN subquery will be supported in future version")
+				if list, ok := leftArg.Expr.(*plan.Expr_List); ok {
+					if len(list.List.List) != int(subquery.Sub.RowSize) {
+						return nil, errors.New("", fmt.Sprintf("subquery should return %d columns", len(list.List.List)))
+					}
+				} else {
+					if subquery.Sub.RowSize > 1 {
+						return nil, errors.New("", "subquery should return 1 column")
+					}
 				}
 
 				subquery.Sub.Typ = plan.SubqueryRef_NOT_IN
@@ -632,14 +541,20 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			return nil, err
 		}
 
-		if _, ok := child.Expr.(*plan.Expr_List); ok {
-			return nil, errors.New("", "row constructor in ANY subquery will be supported in future version")
-		}
-
 		if subquery, ok := expr.Expr.(*plan.Expr_Sub); ok {
 			if !isRoot {
 				// TODO: implement MARK join to better support non-scalar subqueries
 				return nil, errors.New("", fmt.Sprintf("%q subquery as non-root expression will be supported in future version", strings.ToUpper(astExpr.SubOp.ToString())))
+			}
+
+			if list, ok := child.Expr.(*plan.Expr_List); ok {
+				if len(list.List.List) != int(subquery.Sub.RowSize) {
+					return nil, errors.New("", fmt.Sprintf("subquery should return %d columns", len(list.List.List)))
+				}
+			} else {
+				if subquery.Sub.RowSize > 1 {
+					return nil, errors.New("", "subquery should return 1 column")
+				}
 			}
 
 			subquery.Sub.Op = op
@@ -957,9 +872,9 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 			Id: plan.Type_DECIMAL128,
 			// Width: int32(len(val)),
 			// Scale: 0,
-			Width:     38,
+			Width:     34,
 			Scale:     scale,
-			Precision: 38,
+			Precision: 34,
 			Nullable:  false,
 		}
 		return appendCastBeforeExpr(getStringExpr(val), typ)

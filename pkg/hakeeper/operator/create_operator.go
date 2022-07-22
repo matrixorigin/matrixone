@@ -14,7 +14,7 @@
 // Portions of this file are additionally subject to the following
 // copyright.
 //
-// Copyright (C) 2021 MatrixOrigin.
+// Copyright (C) 2021 Matrix Origin.
 //
 // Modified the behavior and the interface of the step.
 
@@ -33,9 +33,9 @@ func CreateRemoveReplica(uuid util.StoreID, shardInfo logservice.LogShardInfo) (
 	return NewBuilder("", shardInfo).RemovePeer(string(uuid)).Build()
 }
 
-func CreateStopReplica(brief string, uuid util.StoreID, shardID uint64) *Operator {
+func CreateStopReplica(brief string, uuid util.StoreID, shardID uint64, epoch uint64) *Operator {
 	return NewOperator(brief, shardID, 0,
-		StopLogService{StoreID: string(uuid), ShardID: shardID})
+		StopLogService{string(uuid), shardID, epoch})
 }
 
 func CreateStartReplica(brief string, uuid util.StoreID, shardID, replicaID uint64) *Operator {

@@ -308,7 +308,6 @@ func maxDepth(n int) int {
 // 		symMerge(data, mid, end, b)
 // 	}
 // }
-
 // rotate rotates two consecutive blocks u = data[a:m] and v = data[m:b] in data:
 // DataSource of the form 'x u v y' is changed to 'x v u y'.
 // rotate performs at most b-a many calls to data.Swap,

@@ -5,25 +5,25 @@ The Star Schema Benchmark（SSB）Test is a popular scenario for OLAP database p
 ## **Before you begin**
 
 Make sure you have already [installed MatrixOne](../install-standalone-matrixone.md) and [connected to MatrixOne Server](../connect-to-matrixone-server.md).
-  
+
 ## **1. Compile dbgen**
 
-```
-$ git clone git@github.com:vadimtk/ssb-dbgen.git
-$ cd ssb-dbgen
-$ make
+```bash
+git clone git@github.com:vadimtk/ssb-dbgen.git
+cd ssb-dbgen
+make
 ```
 
 ## **2. Generate data**
 
 With -s 1 dbgen generates 6 million rows (670MB), while while -s 10 it generates 60 million rows (which takes some time)
 
-```
-$ ./dbgen -s 1 -T c
-$ ./dbgen -s 1 -T l
-$ ./dbgen -s 1 -T p
-$ ./dbgen -s 1 -T s
-$ ./dbgen -s 1 -T d
+```bash
+./dbgen -s 1 -T c
+./dbgen -s 1 -T l
+./dbgen -s 1 -T p
+./dbgen -s 1 -T s
+./dbgen -s 1 -T d
 ```
 
 We have also prepared a 1GB dataset for downloading.  You can get the data files directly:
@@ -175,7 +175,7 @@ load data infile '/ssb-dbgen-path/part.tbl' into table part FIELDS TERMINATED BY
 load data infile '/ssb-dbgen-path/lineorder.tbl' into table lineorder FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
 ```
 
-Then you can query data in MatrixOne with the created table. 
+Then you can query data in MatrixOne with the created table.
 If you want to run a single table SSB query test, there is still one more data files needed for lineorder_flat. You can get the data files directly:
 > <https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/lineorder_flat.tar.bz2>
 

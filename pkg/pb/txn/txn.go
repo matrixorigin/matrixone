@@ -1,13 +1,14 @@
-// Copyright 2022 MatrixOrigin.
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//      http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
@@ -45,58 +46,52 @@ func (m TxnResponse) HasFlag(flag uint32) bool {
 func (m TxnRequest) DebugString() string {
 	var buffer bytes.Buffer
 
-	buffer.WriteString("txn-meta: <")
+	buffer.WriteString("<")
 	buffer.WriteString(m.Txn.DebugString())
-	buffer.WriteString(">, ")
+	buffer.WriteString(">/")
 
-	buffer.WriteString("method: ")
 	buffer.WriteString(m.Method.String())
-	buffer.WriteString(", ")
-
-	buffer.WriteString("flag: ")
-	buffer.WriteString(fmt.Sprintf("%d", m.Flag))
-	buffer.WriteString(", ")
+	buffer.WriteString("/")
+	buffer.WriteString(fmt.Sprintf("F-%d", m.Flag))
 
 	if m.CNRequest != nil {
-		buffer.WriteString("cn-request: <")
+		buffer.WriteString("/<")
 		buffer.WriteString(m.CNRequest.DebugString())
-		buffer.WriteString(">, ")
+		buffer.WriteString(">")
 	}
-
+	buffer.WriteString("/=><")
+	buffer.WriteString(m.GetTargetDN().DebugString())
+	buffer.WriteString(">")
 	return buffer.String()
 }
 
 // DebugString returns debug string
 func (m TxnError) DebugString() string {
-	return fmt.Sprintf("%s: %s", m.Code.String(), m.Message)
+	return fmt.Sprintf("%s-%s", m.Code.String(), m.Message)
 }
 
 // DebugString returns debug string
 func (m TxnResponse) DebugString() string {
 	var buffer bytes.Buffer
 
-	buffer.WriteString("txn-meta: <")
-	buffer.WriteString(m.Txn.DebugString())
-	buffer.WriteString(">, ")
+	if m.Txn != nil {
+		buffer.WriteString("<")
+		buffer.WriteString(m.Txn.DebugString())
+		buffer.WriteString(">/")
+	}
 
-	buffer.WriteString("method: ")
 	buffer.WriteString(m.Method.String())
-	buffer.WriteString(", ")
-
-	buffer.WriteString("flag: ")
-	buffer.WriteString(fmt.Sprintf("%d", m.Flag))
-	buffer.WriteString(", ")
+	buffer.WriteString("/")
+	buffer.WriteString(fmt.Sprintf("F:%d", m.Flag))
 
 	if m.TxnError != nil {
-		buffer.WriteString("error: <")
+		buffer.WriteString("/")
 		buffer.WriteString(m.TxnError.DebugString())
-		buffer.WriteString(">, ")
 	}
 
 	if m.CNOpResponse != nil {
-		buffer.WriteString("cn-response: <")
+		buffer.WriteString("/")
 		buffer.WriteString(m.CNOpResponse.DebugString())
-		buffer.WriteString(">, ")
 	}
 
 	return buffer.String()
@@ -104,58 +99,44 @@ func (m TxnResponse) DebugString() string {
 
 // DebugString returns debug string
 func (m CNOpRequest) DebugString() string {
-	var buffer bytes.Buffer
-
-	buffer.WriteString("op: ")
-	buffer.WriteString(fmt.Sprintf("%d", m.OpCode))
-	buffer.WriteString(", ")
-
-	buffer.WriteString("payload: ")
-	buffer.WriteString(fmt.Sprintf("%d bytes", m.Payload))
-	buffer.WriteString(", ")
-
-	buffer.WriteString("dn: <")
-	buffer.WriteString(m.Target.DebugString())
-	buffer.WriteString(">")
-	return buffer.String()
+	return fmt.Sprintf("O:%d-D:%d", m.OpCode, len(m.Payload))
 }
 
 // DebugString returns debug string
 func (m CNOpResponse) DebugString() string {
-	var buffer bytes.Buffer
-
-	buffer.WriteString("payload: ")
-	buffer.WriteString(fmt.Sprintf("%d bytes", m.Payload))
-	return buffer.String()
+	return fmt.Sprintf("D:%d", len(m.Payload))
 }
 
 // DebugString returns debug string
 func (m TxnMeta) DebugString() string {
 	var buffer bytes.Buffer
 
-	buffer.WriteString("txn-id: ")
 	buffer.WriteString(hex.EncodeToString(m.ID))
-	buffer.WriteString(", ")
-
-	buffer.WriteString("status: ")
+	buffer.WriteString("/")
 	buffer.WriteString(m.Status.String())
-	buffer.WriteString(", ")
-
-	buffer.WriteString("snapshot-ts: ")
-	buffer.WriteString(m.SnapshotTS.String())
-	buffer.WriteString(", ")
+	buffer.WriteString("/S:")
+	buffer.WriteString(m.SnapshotTS.DebugString())
 
 	if !m.PreparedTS.IsEmpty() {
-		buffer.WriteString("prepared-ts: ")
-		buffer.WriteString(m.PreparedTS.String())
-		buffer.WriteString(", ")
+		buffer.WriteString("/P:")
+		buffer.WriteString(m.PreparedTS.DebugString())
 	}
 
 	if !m.CommitTS.IsEmpty() {
-		buffer.WriteString("commit-ts: ")
-		buffer.WriteString(m.CommitTS.String())
-		buffer.WriteString(", ")
+		buffer.WriteString("/C:")
+		buffer.WriteString(m.CommitTS.DebugString())
 	}
+
+	n := len(m.DNShards)
+	var buf bytes.Buffer
+	buf.WriteString("/<")
+	for idx, dn := range m.DNShards {
+		buf.WriteString(dn.DebugString())
+		if idx < n-1 {
+			buf.WriteString(", ")
+		}
+	}
+	buf.WriteString(">")
 	return buffer.String()
 }
 
@@ -214,4 +195,34 @@ func (m *TxnResponse) SetID(id uint64) {
 // GetID implement morpc Messgae
 func (m *TxnResponse) GetID() uint64 {
 	return m.RequestID
+}
+
+// RequestsDebugString returns requests debug string
+func RequestsDebugString(requests []TxnRequest) string {
+	n := len(requests)
+	var buf bytes.Buffer
+	buf.WriteString("[")
+	for idx, req := range requests {
+		buf.WriteString(req.DebugString())
+		if idx < n-1 {
+			buf.WriteString(", ")
+		}
+	}
+	buf.WriteString("]")
+	return buf.String()
+}
+
+// ResponsesDebugString returns responses debug string
+func ResponsesDebugString(responses []TxnResponse) string {
+	n := len(responses)
+	var buf bytes.Buffer
+	buf.WriteString("[")
+	for idx, resp := range responses {
+		buf.WriteString(resp.DebugString())
+		if idx < n-1 {
+			buf.WriteString(", ")
+		}
+	}
+	buf.WriteString("]")
+	return buf.String()
 }

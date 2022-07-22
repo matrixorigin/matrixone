@@ -14,7 +14,7 @@
 // Portions of this file are additionally subject to the following
 // copyright.
 //
-// Copyright (C) 2021 MatrixOrigin.
+// Copyright (C) 2021 Matrix Origin.
 //
 // Modified the behavior and the interface of the step.
 
@@ -104,6 +104,7 @@ func (a StartLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
 type StopLogService struct {
 	StoreID string
 	ShardID uint64
+	Epoch   uint64
 }
 
 func (a StopLogService) String() string {

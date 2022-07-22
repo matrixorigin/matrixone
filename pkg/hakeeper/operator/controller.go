@@ -14,7 +14,7 @@
 // Portions of this file are additionally subject to the following
 // copyright.
 //
-// Copyright (C) 2021 MatrixOrigin.
+// Copyright (C) 2021 Matrix Origin.
 //
 // Modified the behavior of the operator controller.
 
@@ -158,8 +158,9 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 					Replica: pb.Replica{
 						UUID:    st.StoreID,
 						ShardID: st.ShardID,
+						Epoch:   st.Epoch,
 					},
-					ChangeType: pb.StopReplica,
+					ChangeType: pb.RemoveReplica,
 				},
 				ServiceType: pb.LogService,
 			}
@@ -172,7 +173,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: pb.AddReplica,
+					ChangeType: pb.StartReplica,
 				},
 				ServiceType: pb.DnService,
 			}
@@ -185,7 +186,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: pb.RemoveReplica,
+					ChangeType: pb.StopReplica,
 				},
 				ServiceType: pb.DnService,
 			}

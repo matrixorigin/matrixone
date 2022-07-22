@@ -1,3 +1,19 @@
+/* 
+ * Copyright 2021 Matrix Origin
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+ 
 syntax = "proto3";
 package plan;
 
@@ -94,7 +110,7 @@ message Const {
 		float fval		= 7;
 		int32 dateval 		= 8;
 		int64 datetimeval		= 9;
-		int64 decimal64val = 10;
+		decimal64 decimal64val = 10;
 		decimal128 decimal128val = 11;
 		int64 timestampval = 12;
 	}
@@ -108,6 +124,8 @@ message ParamRef {
 // Session variable ref, compiler should fold.
 message VarRef {
 	string name = 1;
+	bool system = 2;
+	bool global = 3;
 }
 
 // Reference a column in the proj list of a node.
@@ -150,6 +168,7 @@ message SubqueryRef {
 	int32 node_id	= 2;
 	string op		= 3;
 	Expr child		= 4;
+	int32 row_size	= 5;
 }
 
 // Object ref, reference a object in database, 4 part name.
@@ -223,7 +242,7 @@ message ConstantValue {
 	oneof constantValue {
 		int32 unknown_v = 1;
 		int64 int64_v = 2;
-		int64 decimal64_v = 3;
+		decimal64 decimal64_v = 3;
 		decimal128 decimal128_v = 4;
 		uint64 uint64_v = 5;
 		float float32_v = 6;
@@ -236,9 +255,13 @@ message ConstantValue {
 	}
 }
 
+message decimal64 {
+	int64 a = 1;
+}
+
 message decimal128 {
-	int64 Lo = 1;
-	int64 Hi = 2;
+	int64 a = 1;
+	int64 b = 2;
 }
 
 message ColDef {
@@ -676,8 +699,9 @@ message SetVariablesItem {
 }
 
 message Prepare {
-	string name		 = 1;
-	Plan   plan		 = 2;
+	string name		 			= 1;
+	repeated ObjectRef schemas 	= 2;
+	Plan   plan		 			= 3;
 }
 
 message Execute {

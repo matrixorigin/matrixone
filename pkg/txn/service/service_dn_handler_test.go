@@ -33,7 +33,7 @@ func TestPrepare(t *testing.T) {
 	s := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 	sender.AddTxnService(s)
 
@@ -56,7 +56,7 @@ func TestPrepareWithAlreadyPreparedTxn(t *testing.T) {
 	s := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 	sender.AddTxnService(s)
 
@@ -80,7 +80,7 @@ func TestPrepareWithTxnNotExist(t *testing.T) {
 	s := NewTestTxnService(t, 1, sender, NewTestClock(1))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 	sender.AddTxnService(s)
 
@@ -97,7 +97,7 @@ func TestGetStatus(t *testing.T) {
 	s := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 	sender.AddTxnService(s)
 

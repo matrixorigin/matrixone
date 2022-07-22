@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package frontend
 
 import (
@@ -106,7 +120,7 @@ func Test_GetInt64(t *testing.T) {
 		convey.So(ret, convey.ShouldEqual, 14)
 		convey.So(err, convey.ShouldBeNil)
 
-		mrs.Data[15][0] = types.Decimal64(15)
+		mrs.Data[15][0] = types.Decimal64FromInt32(15)
 		ret, err = mrs.GetInt64(15, 0)
 		convey.So(ret, convey.ShouldEqual, 0)
 		convey.So(err, convey.ShouldNotBeNil)
@@ -212,7 +226,7 @@ func Test_GetUint64(t *testing.T) {
 		convey.So(ret, convey.ShouldEqual, 14)
 		convey.So(err, convey.ShouldBeNil)
 
-		mrs.Data[15][0] = types.Decimal64(15)
+		mrs.Data[15][0] = types.Decimal64FromInt32(15)
 		ret, err = mrs.GetUint64(15, 0)
 		convey.So(ret, convey.ShouldEqual, 0)
 		convey.So(err, convey.ShouldNotBeNil)
@@ -318,7 +332,7 @@ func Test_GetFloat64(t *testing.T) {
 		convey.So(ret, convey.ShouldEqual, 14)
 		convey.So(err, convey.ShouldBeNil)
 
-		mrs.Data[15][0] = types.Decimal64(15)
+		mrs.Data[15][0] = types.Decimal64FromInt32(15)
 		ret, err = mrs.GetFloat64(15, 0)
 		convey.So(ret, convey.ShouldEqual, 0)
 		convey.So(err, convey.ShouldNotBeNil)
@@ -429,7 +443,7 @@ func Test_GetString(t *testing.T) {
 		convey.So(ret, convey.ShouldEqual, "0001-01-01 00:00:00")
 		convey.So(err, convey.ShouldBeNil)
 
-		mrs.Data[16][0] = types.Decimal64(15)
+		mrs.Data[16][0] = types.Decimal64FromInt32(15)
 		ret, err = mrs.GetString(16, 0)
 		convey.So(ret, convey.ShouldEqual, "")
 		convey.So(err, convey.ShouldNotBeNil)
