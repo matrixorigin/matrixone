@@ -805,18 +805,6 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	}
 
 	/*
-		check file
-	*/
-	exist, isfile, err := PathExists(load.File)
-	if err != nil || !exist {
-		return fmt.Errorf("file %s does exist. err:%v", load.File, err)
-	}
-
-	if !isfile {
-		return fmt.Errorf("file %s is a directory", load.File)
-	}
-
-	/*
 		check database
 	*/
 	loadDb := string(load.Table.Schema())

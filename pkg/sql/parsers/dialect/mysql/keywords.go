@@ -192,6 +192,7 @@ func init() {
 		"int3":                     INT3,
 		"int4":                     INT4,
 		"int8":                     INT8,
+		"s3":                       S3,
 		"integer":                  INTEGER,
 		"interval":                 INTERVAL,
 		"into":                     INTO,

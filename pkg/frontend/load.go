@@ -15,10 +15,15 @@
 package frontend
 
 import (
+	"compress/bzip2"
+	"compress/flate"
+	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"runtime"
@@ -29,6 +34,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -1965,6 +1971,95 @@ func PrintThreadInfo(handler *ParseLineHandler, close *CloseFlag, a time.Duratio
 	}
 }
 
+func ReadFromS3(loadParam *tree.Loadparameter) (io.ReadCloser, error) {
+	var config fileservice.S3Config
+	config.Bucket = loadParam.Config.Bucket
+	config.APIKey = loadParam.Config.APIKey
+	config.Region = loadParam.Config.Region
+	config.APISecret = loadParam.Config.APISecret
+	config.Endpoint = loadParam.Config.Endpoint
+
+	os.Setenv("AWS_REGION", config.Region)
+	os.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
+	os.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
+
+	fs, err := fileservice.NewS3FS(
+		config.Endpoint,
+		config.Bucket,
+		config.KeyPrefix,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	var r io.ReadCloser
+	vec := fileservice.IOVector{
+		FilePath: loadParam.File,
+		Entries: []fileservice.IOEntry{
+			0: {
+				Offset:            0,
+				Size:              -1,
+				ReadCloserForRead: &r,
+			},
+		},
+	}
+	ctx := context.Background()
+	err = fs.Read(ctx, &vec)
+	if err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
+func getLoadDataReader(loadParam *tree.Loadparameter) (io.ReadCloser, error) {
+	switch loadParam.LoadType {
+	case tree.LOCAL:
+		dataFile, err := os.Open(loadParam.File)
+		if err != nil {
+			return nil, err
+		}
+		return dataFile, nil
+	case tree.S3, tree.MinIO:
+		dataFile, err := ReadFromS3(loadParam)
+		if err != nil {
+			return nil, err
+		}
+		return dataFile, nil
+	default:
+		return nil, errors.New("the load file path type is not support now")
+	}
+}
+
+func getUnCompressReader(loadParam *tree.Loadparameter, r io.ReadCloser) (io.ReadCloser, error) {
+	switch strings.ToLower(loadParam.CompressType) {
+	case tree.NOCOMPRESS, tree.LOCALFILE:
+		return r, nil
+	case tree.GZIP:
+		r, err := gzip.NewReader(r)
+		if err != nil {
+			return nil, err
+		}
+		return r, nil
+	case tree.BZIP2:
+		tmp := bzip2.NewReader(r)
+		return io.NopCloser(tmp), nil
+	case tree.FLATE:
+		r = flate.NewReader(r)
+		return r, nil
+	case tree.ZLIB:
+		r, err := zlib.NewReader(r)
+		if err != nil {
+			return nil, err
+		}
+		return r, nil
+	case tree.LZW:
+		return nil, fmt.Errorf("the compress type %s is not support now", loadParam.CompressType)
+	default:
+		return nil, fmt.Errorf("the compress type %s is not support now", loadParam.CompressType)
+	}
+}
+
 /*
 LoadLoop reads data from stream, extracts the fields, and saves into the table
 */
@@ -1982,11 +2077,18 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	/*
 		step1 : read block from file
 	*/
-	dataFile, err := os.Open(load.File)
+
+	var dataFile io.ReadCloser
+	dataFile, err := getLoadDataReader(load.LoadParam)
 	if err != nil {
 		logutil.Errorf("open file failed. err:%v", err)
 		return nil, err
 	}
+	dataFile, err = getUnCompressReader(load.LoadParam, dataFile)
+	if err != nil {
+		return nil, err
+	}
+
 	defer func() {
 		err := dataFile.Close()
 		if err != nil {

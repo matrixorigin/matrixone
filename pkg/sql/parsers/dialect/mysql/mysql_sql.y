@@ -23,6 +23,7 @@ import (
     "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
     "github.com/matrixorigin/matrixone/pkg/sql/parsers/util"
     "github.com/matrixorigin/matrixone/pkg/defines"
+    "github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 %}
 
@@ -148,6 +149,7 @@ import (
     lines *tree.Lines
     varExpr *tree.VarExpr
     varExprs []*tree.VarExpr
+    loadParam  *tree.Loadparameter
     loadColumn tree.LoadColumn
     loadColumns []tree.LoadColumn
     assignments []*tree.Assignment
@@ -216,7 +218,8 @@ import (
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT
 %token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
-%token <str> INT1 INT2 INT3 INT4 INT8
+%token <str> INT1 INT2 INT3 INT4 INT8 S3
+
 
 // Select option
 %token <str> SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT
@@ -326,6 +329,7 @@ import (
 %type <statement> analyze_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt
 %type <exportParm> export_data_param_opt
+%type <loadParam> load_data_param_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -380,7 +384,7 @@ import (
 %type <str> not_keyword func_not_keyword
 %type <str> reserved_keyword non_reserved_keyword
 %type <str> equal_opt reserved_sql_id reserved_table_id
-%type <str> as_name_opt as_opt_id table_id id_or_var name_string ident
+%type <str> as_name_opt as_opt_id table_id id_or_var name_string ident compress_type
 %type <str> database_id table_alias explain_sym prepare_sym deallocate_sym stmt_name
 %type <unresolvedObjectName> unresolved_object_name table_column_name
 %type <unresolvedObjectName> table_name_unresolved
@@ -552,11 +556,11 @@ stmt:
     }
 
 load_data_stmt:
-    LOAD DATA local_opt INFILE STRING duplicate_opt INTO TABLE table_name load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
+    LOAD DATA local_opt INFILE load_data_param_opt duplicate_opt INTO TABLE table_name load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
     {
         $$ = &tree.Load{
             Local: $3,
-            File: $5,
+            LoadParam: $5,
             DuplicateHandling: $6,
             Table: $9,
             Fields: $10,
@@ -565,6 +569,43 @@ load_data_stmt:
             ColumnList: $13,
             Assignments: $14,
         }
+    }
+
+load_data_param_opt:
+    {
+        $$ = nil
+    }
+|   STRING
+    {
+        $$ = &tree.Loadparameter{
+            File: $1,
+            LoadType: tree.LOCAL,
+        }
+    }
+|   S3 '(' STRING ',' '[' STRING ',' STRING ']' ',' '[' STRING ',' STRING ',' STRING compress_type ']' ')'
+    {
+        $$ = &tree.Loadparameter{
+            File: $14,
+            LoadType: tree.S3,
+            Config: fileservice.S3Config{
+                Endpoint: $3,
+                APIKey: $6,
+                APISecret: $8,
+                Bucket: $12,
+                Region: $16,
+            },
+            CompressType: $17,
+        }
+    }
+|   
+
+compress_type:
+    {
+        $$ = "NONE"
+    }
+|   ',' '[' STRING ']'
+    {
+        $$ = $3
     }
 
 load_set_spec_opt:
@@ -6510,6 +6551,7 @@ reserved_keyword:
 |   INT3
 |   INT4
 |   INT8
+|   S3
 |   CHECK
 |	CONSTRAINT
 |   PRIMARY

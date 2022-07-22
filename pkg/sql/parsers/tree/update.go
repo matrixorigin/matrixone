@@ -18,6 +18,8 @@ import (
 	"bufio"
 	"os"
 	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
 //update statement
@@ -110,11 +112,34 @@ func NewUpdateExpr(t bool, n []*UnresolvedName, e Expr) *UpdateExpr {
 	}
 }
 
+const (
+	LOCAL = iota
+	S3
+	MinIO
+)
+
+const (
+	LOCALFILE = ""
+	NOCOMPRESS = "none"
+	GZIP = "gzip"
+	BZIP2 = "bzip2"
+	FLATE = "flate"
+	LZW = "lzw"
+	ZLIB = "zlib"
+)
+
+type Loadparameter struct {
+	File string
+	//s3 parameter
+	Config       fileservice.S3Config
+	LoadType     int
+	CompressType string
+}
+
 //Load data statement
 type Load struct {
 	statementImpl
 	Local             bool
-	File              string
 	DuplicateHandling DuplicateKey
 	Table             *TableName
 	//Partition
@@ -128,6 +153,8 @@ type Load struct {
 	ColumnList []LoadColumn
 	//set col_name
 	Assignments UpdateExprs
+	//load para, include local file, s3 file, minIO file
+	LoadParam *Loadparameter
 }
 
 func (node *Load) Format(ctx *FmtCtx) {
@@ -136,7 +163,7 @@ func (node *Load) Format(ctx *FmtCtx) {
 		ctx.WriteString(" local")
 	}
 	ctx.WriteString(" infile ")
-	ctx.WriteString(node.File)
+	ctx.WriteString(node.LoadParam.File)
 
 	switch node.DuplicateHandling.(type) {
 	case *DuplicateKeyError:
@@ -184,7 +211,7 @@ func NewLoad(l bool, f string, d DuplicateKey, t *TableName,
 	a UpdateExprs) *Load {
 	return &Load{
 		Local:             l,
-		File:              f,
+		LoadParam:         &Loadparameter{File: f},
 		DuplicateHandling: d,
 		Table:             t,
 		Fields:            fie,
