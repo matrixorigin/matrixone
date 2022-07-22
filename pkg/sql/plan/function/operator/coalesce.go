@@ -182,7 +182,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 		return nil, err
 	}
 	rs.Col = &types.Bytes{
-		Data:    make([]byte, 0),
+		Data:    nil,
 		Offsets: make([]uint32, vecLen),
 		Lengths: make([]uint32, vecLen),
 	}
@@ -231,14 +231,12 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 				if rs.Nsp.Contains(uint64(j)) && !input.Nsp.Contains(uint64(j)) {
 					length := cols.Lengths[j]
 					o := cols.Offsets[j]
-					copy(dataVec[j], cols.Data[o:o+length])
+					dataVec[j] = append(dataVec[j], cols.Data[o:o+length]...)
 					rs.Nsp.Np.Remove(uint64(j))
 				}
 			}
-
 			if rs.Nsp.Np.IsEmpty() {
-				rs.Nsp.Np = nil
-				return rs, nil
+				break
 			}
 		}
 	}
@@ -247,12 +245,14 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 	for j := 0; j < vecLen; j++ {
 		length := len(dataVec[j])
 		if length > 0 {
-			rsCols.Data = append(rs.Data, dataVec[j]...)
+			rsCols.Data = append(rsCols.Data, dataVec[j]...)
 			rsCols.Offsets[j] = offset
 			rsCols.Lengths[j] = uint32(length)
 			offset = offset + uint32(length)
 		}
 	}
+
+	rs.Data = rsCols.Data
 
 	return rs, nil
 }

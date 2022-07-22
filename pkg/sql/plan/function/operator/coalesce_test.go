@@ -130,6 +130,17 @@ func TestCoalesceString(t *testing.T) {
 		},
 
 		{
+			info: "coalesce(a, 'a')", proc: testutil.NewProc(),
+			vs: []*vector.Vector{
+				testutil.MakeVarcharVector([]string{"x", "y", "z"}, nil),
+				testutil.MakeScalarVarchar("a", 1),
+			},
+			match:  true,
+			err:    false,
+			expect: testutil.MakeVarcharVector([]string{"x", "y", "z"}, nil),
+		},
+
+		{
 			info: "coalesce(a, 'a', null, 'b')", proc: testutil.NewProc(),
 			vs: []*vector.Vector{
 				testutil.MakeVarcharVector([]string{"kk", "", "ss", ""}, []uint64{1, 3}),
