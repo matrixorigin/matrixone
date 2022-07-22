@@ -157,26 +157,11 @@ Database (%aa%)
 drop database likedb;
 drop database dblike;
 SELECT * FROM t1 where t1.userID<6 OR NOT t1.userID;
-spid	userid	score
-1	1	1
-2	2	2
-2	1	4
-3	3	3
-1	1	5
+Can't cast column from BIGINT type to BOOL type because of one or more values in that column.
 SELECT * FROM t1 where NOT t1.userID OR t1.userID<6;
-spid	userid	score
-1	1	1
-2	2	2
-2	1	4
-3	3	3
-1	1	5
+Can't cast column from BIGINT type to BOOL type because of one or more values in that column.
 SELECT * FROM t1 where NOT t1.userID || t1.userID<6;
-spid	userid	score
-1	1	1
-2	2	2
-2	1	4
-3	3	3
-1	1	5
+Can't cast column from BIGINT type to BOOL type because of one or more values in that column.
 drop table if exists t1;
 create table t1 (a int);
 insert into t1 values (0),(1),(NULL);
