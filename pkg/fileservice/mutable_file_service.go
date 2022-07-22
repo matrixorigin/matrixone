@@ -20,6 +20,16 @@ import "context"
 type MutableFileService interface {
 	FileService
 
+	// NewMutator creates a new mutator
+	NewMutator(filePath string) (Mutator, error)
+}
+
+type Mutator interface {
+
 	// Mutate mutates file contents
-	Mutate(ctx context.Context, vector IOVector) error
+	Mutate(ctx context.Context, entries ...IOEntry) error
+
+	// Close closes the mutator
+	// Must be called after finishing mutation
+	Close() error
 }
