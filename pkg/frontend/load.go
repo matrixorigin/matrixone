@@ -1036,9 +1036,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
-						fs := field
-						var d types.Decimal64
-						err := d.FromString(fs)
+						d, err := types.Decimal64_FromString(field)
 						if err != nil {
 							// we tolerate loss of digits.
 							if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
@@ -1057,9 +1055,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
-						fs := field
-						var d types.Decimal128
-						err := d.FromString(fs)
+						d, err := types.Decimal128_FromString(field)
 						if err != nil {
 							// we tolerate loss of digits.
 							if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
