@@ -281,3 +281,7 @@ func (m *S3FSMinio) _mapS3Error(err error) error {
 	}
 	return err
 }
+
+var _ ETLFileService = new(S3FSMinio)
+
+func (*S3FSMinio) ETLCompatible() {}
