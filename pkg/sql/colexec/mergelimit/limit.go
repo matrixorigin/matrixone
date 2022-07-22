@@ -23,54 +23,75 @@ import (
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
-	n := arg.(*Argument)
-	buf.WriteString(fmt.Sprintf("mergeLimit(%d)", n.Limit))
+	ap := arg.(*Argument)
+	buf.WriteString(fmt.Sprintf("mergeLimit(%d)", ap.Limit))
 }
 
 func Prepare(_ *process.Process, arg interface{}) error {
-	n := arg.(*Argument)
-	n.ctr.seen = 0
+	ap := arg.(*Argument)
+	ap.ctr = new(container)
+	ap.ctr.seen = 0
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
-	n := arg.(*Argument)
+func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
+	ap := arg.(*Argument)
+	for {
+		switch ap.ctr.state {
+		case Eval:
+			anal := proc.GetAnalyze(idx)
+			defer anal.Stop()
+			ok, err := ap.ctr.eval(ap, proc, anal)
+			if err != nil {
+				return ok, err
+			}
+			if ok {
+				ap.ctr.state = End
+			}
+			return ok, err
+		default:
+			proc.SetInputBatch(nil)
+			return true, nil
+		}
+	}
+}
+
+func (ctr *container) eval(ap *Argument, proc *process.Process, anal process.Analyze) (bool, error) {
 	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
 		reg := proc.Reg.MergeReceivers[i]
 		bat := <-reg.Ch
 
-		// deal special case for bat
-		{
-			// 1. the last batch at this receiver
-			if bat == nil {
-				proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:i], proc.Reg.MergeReceivers[i+1:]...)
-				i--
-				continue
-			}
-			// 2. an empty batch
-			if len(bat.Zs) == 0 {
-				i--
-				continue
-			}
+		// 1. the last batch at this receiver
+		if bat == nil {
+			proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:i], proc.Reg.MergeReceivers[i+1:]...)
+			i--
+			continue
 		}
-
-		if n.ctr.seen >= n.Limit {
-			proc.Reg.InputBatch = nil
+		// 2. an empty batch
+		if bat.Length() == 0 {
+			i--
+			continue
+		}
+		anal.Input(bat)
+		if ap.ctr.seen >= ap.Limit {
+			proc.SetInputBatch(nil)
 			bat.Clean(proc.Mp)
 			return true, nil
 		}
-		newSeen := n.ctr.seen + uint64(len(bat.Zs))
-		if newSeen < n.Limit {
-			n.ctr.seen = newSeen
-			proc.Reg.InputBatch = bat
+		newSeen := ap.ctr.seen + uint64(bat.Length())
+		if newSeen < ap.Limit {
+			ap.ctr.seen = newSeen
+			anal.Output(bat)
+			proc.SetInputBatch(bat)
 			return false, nil
 		} else {
-			num := int(newSeen - n.Limit)
-			batch.SetLength(bat, len(bat.Zs)-num)
-			n.ctr.seen = newSeen
+			num := int(newSeen - ap.Limit)
+			batch.SetLength(bat, bat.Length()-num)
+			ap.ctr.seen = newSeen
 			proc.Reg.InputBatch = bat
 			return false, nil
 		}
 	}
 	return true, nil
+
 }
