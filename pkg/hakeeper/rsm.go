@@ -435,11 +435,9 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 		cd.CNNodes = append(cd.CNNodes, n)
 	}
 	for uuid, info := range s.state.DNState.Stores {
-		var state pb.NodeState
+		state := pb.NormalState
 		if cfg.DnStoreExpired(info.Tick, s.state.Tick) {
 			state = pb.TimeoutState
-		} else {
-			state = pb.NormalState
 		}
 		n := pb.DNNode{
 			UUID:           uuid,
@@ -450,17 +448,16 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 		cd.DNNodes = append(cd.DNNodes, n)
 	}
 	for uuid, info := range s.state.LogState.Stores {
-		var state pb.NodeState
+		state := pb.NormalState
 		if cfg.LogStoreExpired(info.Tick, s.state.Tick) {
 			state = pb.TimeoutState
-		} else {
-			state = pb.NormalState
 		}
 		n := pb.LogNode{
 			UUID:           uuid,
 			Tick:           info.Tick,
 			State:          state,
 			ServiceAddress: info.ServiceAddress,
+			Replicas:       info.Replicas,
 		}
 		cd.LogNodes = append(cd.LogNodes, n)
 	}

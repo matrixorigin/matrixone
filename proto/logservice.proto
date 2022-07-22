@@ -54,6 +54,8 @@ message LogNode {
   string    ServiceAddress = 2;
   uint64    Tick           = 3;
   NodeState State          = 4;
+
+  repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
 }
 
 // LogShardInfo contains information a log shard.
