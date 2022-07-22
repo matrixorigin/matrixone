@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -81,7 +80,9 @@ func NewTxnService(logger *zap.Logger,
 		clocker: clocker,
 		pool: sync.Pool{
 			New: func() any {
-				return &txnContext{}
+				return &txnContext{
+					logger: logger,
+				}
 			}},
 		stopper: stopper.NewStopper(fmt.Sprintf("txn-service-%d-%d",
 			shard.ShardID,
@@ -168,6 +169,7 @@ func (s *service) maybeAddTxn(meta txn.TxnMeta) (*txnContext, bool) {
 	// 1. first transaction write request at current DNShard
 	// 2. transaction already committed or aborted, the transcation context will removed by gcZombieTxn.
 	txnCtx.init(meta, acquireNotifier())
+	util.LogTxnCreateOn(s.logger, meta, s.shard)
 	return txnCtx, true
 }
 
@@ -201,35 +203,30 @@ func (s *service) releaseTxnContext(txnCtx *txnContext) {
 	s.pool.Put(txnCtx)
 }
 
-func (s *service) parallelSendWithRetry(ctx context.Context,
-	purpose string,
+func (s *service) parallelSendWithRetry(
+	ctx context.Context,
 	txnMeta txn.TxnMeta,
-	requests []txn.TxnRequest, ignoreTxnErrorCodes map[txn.ErrorCode]struct{}) *rpc.SendResult {
+	requests []txn.TxnRequest,
+	ignoreTxnErrorCodes map[txn.ErrorCode]struct{}) *rpc.SendResult {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		default:
+			util.LogTxnSendRequests(s.logger, requests)
 			result, err := s.sender.Send(ctx, requests)
 			if err != nil {
-				s.logger.Error("send requests failed",
-					zap.String("purpose", purpose),
-					util.TxnIDFieldWithID(txnMeta.ID),
-					zap.Error(err))
+				util.LogTxnSendRequestsFailed(s.logger, requests, err)
 				continue
 			}
+			util.LogTxnReceivedResponses(s.logger, result.Responses)
 			hasError := false
-			for idx, resp := range result.Responses {
+			for _, resp := range result.Responses {
 				if resp.TxnError != nil {
 					_, ok := ignoreTxnErrorCodes[resp.TxnError.Code]
 					if !ok {
 						hasError = true
 					}
-					s.logger.Error("send requests failed, retry later",
-						zap.String("purpose", purpose),
-						util.TxnIDFieldWithID(txnMeta.ID),
-						zap.String("target-dn-shard", txnMeta.DNShards[idx+1].DebugString()),
-						zap.String("error", resp.TxnError.DebugString()))
 				}
 			}
 			if !hasError {
@@ -241,6 +238,7 @@ func (s *service) parallelSendWithRetry(ctx context.Context,
 }
 
 type txnContext struct {
+	logger   *zap.Logger
 	nt       *notifier
 	createAt time.Time
 
@@ -259,6 +257,7 @@ func (c *txnContext) addWaiter(txnID []byte, w *waiter, waitStatus txn.TxnStatus
 		return false
 	}
 
+	util.LogTxnWaiterAdded(c.logger, c.mu.txn, waitStatus)
 	c.nt.addWaiter(w, waitStatus)
 	return true
 }
@@ -291,6 +290,7 @@ func (c *txnContext) getTxnLocked() txn.TxnMeta {
 
 func (c *txnContext) updateTxnLocked(txn txn.TxnMeta) {
 	c.mu.txn = txn
+	util.LogTxnUpdated(c.logger, c.mu.txn)
 }
 
 func (c *txnContext) resetLocked() {
@@ -303,12 +303,9 @@ func (c *txnContext) resetLocked() {
 func (c *txnContext) changeStatusLocked(status txn.TxnStatus) {
 	if c.mu.txn.Status != status {
 		c.mu.txn.Status = status
+		util.LogTxnUpdated(c.logger, c.mu.txn)
 		c.nt.notify(status)
 	}
-}
-
-func (c *txnContext) updateCommitTimestampLocked(ts timestamp.Timestamp) {
-	c.mu.txn.CommitTS = ts
 }
 
 func (s *service) mustGetTimeoutAtFromContext(ctx context.Context) int64 {
