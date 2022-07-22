@@ -67,7 +67,7 @@ func HandleAndNullCol(vs []*vector.Vector, proc *process.Process) (*vector.Vecto
 	}
 }
 
-func ScalarAndNotScalar(sv, nsv *vector.Vector, col1, col2 []bool, proc *process.Process) (*vector.Vector, error) {
+func ScalarAndNotScalar(_, nsv *vector.Vector, col1, col2 []bool, proc *process.Process) (*vector.Vector, error) {
 	length := vector.Length(nsv)
 	vec := allocateBoolVector(length, proc)
 	vcols := vec.Col.([]bool)

@@ -10,7 +10,7 @@ SELECT * FROM (SELECT 1 as id) b WHERE id IN (SELECT * FROM (SELECT 1 as id) c O
 id
 1
 SELECT * FROM (SELECT 1) a  WHERE 1 IN (SELECT 1,1);
-Operand should contain 1 column(s)
+subquery should return 1 column
 SELECT * FROM (SELECT 1) b WHERE 1 IN (SELECT *);
 No tables used
 SELECT ((0,1) NOT IN (SELECT NULL,1)) IS NULL;
@@ -37,9 +37,9 @@ SELECT 0 IN (SELECT 1 FROM t1 a);
 0 IN (SELECT 1 FROM t1 a)
 0
 select * from t3 where a in (select a,b from t2);
-Operand should contain 1 column(s)
+subquery should return 1 column
 select * from t3 where a in (select * from t2);
-Operand should contain 1 column(s)
+subquery should return 1 column
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;

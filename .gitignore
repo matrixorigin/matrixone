@@ -1,4 +1,6 @@
 .idea/
+*.o
+*.a
 *.swp
 bin/
 y.go

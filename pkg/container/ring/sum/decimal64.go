@@ -101,7 +101,7 @@ func (r *Decimal64Ring) Grow(m *mheap.Mheap) error {
 	}
 	r.Vs = r.Vs[:n+1]
 	r.Da = r.Da[:(n+1)*8]
-	r.Vs[n] = 0
+	r.Vs[n] = types.Decimal64_Zero
 	r.Ns = append(r.Ns, 0)
 	return nil
 }
@@ -136,7 +136,8 @@ func (r *Decimal64Ring) Grows(size int, m *mheap.Mheap) error {
 
 // Fill Fixme:what is this z?
 func (r *Decimal64Ring) Fill(i int64, sel, z int64, vec *vector.Vector) {
-	r.Vs[i] += types.Decimal64Int64Mul(vec.Col.([]types.Decimal64)[sel], z)
+	tmp := types.Decimal64Int64Mul(vec.Col.([]types.Decimal64)[sel], z)
+	r.Vs[i].Add(tmp)
 	if nulls.Contains(vec.Nsp, uint64(sel)) {
 		r.Ns[i] += z
 	}
@@ -145,7 +146,8 @@ func (r *Decimal64Ring) Fill(i int64, sel, z int64, vec *vector.Vector) {
 func (r *Decimal64Ring) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vec *vector.Vector) {
 	vs := vec.Col.([]types.Decimal64)
 	for i := range os {
-		r.Vs[vps[i]-1] += types.Decimal64Int64Mul(vs[int64(i)+start], zs[int64(i)+start])
+		tmp := types.Decimal64Int64Mul(vs[int64(i)+start], zs[int64(i)+start])
+		r.Vs[vps[i]-1] = r.Vs[vps[i]-1].Add(tmp)
 	}
 	if nulls.Any(vec.Nsp) {
 		for i := range os {
@@ -176,7 +178,7 @@ func (r *Decimal64Ring) Add(a interface{}, x, y int64) {
 	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
 		r.Typ = ar.Typ
 	}
-	r.Vs[x] += ar.Vs[y]
+	r.Vs[x] = r.Vs[x].Add(ar.Vs[y])
 	r.Ns[x] += ar.Ns[y]
 }
 
@@ -186,7 +188,7 @@ func (r *Decimal64Ring) BatchAdd(a interface{}, start int64, os []uint8, vps []u
 		r.Typ = ar.Typ
 	}
 	for i := range os {
-		r.Vs[vps[i]-1] += ar.Vs[int64(i)+start]
+		r.Vs[vps[i]-1] = r.Vs[vps[i]-1].Add(ar.Vs[int64(i)+start])
 		r.Ns[vps[i]-1] += ar.Ns[int64(i)+start]
 	}
 }
@@ -198,7 +200,7 @@ func (r *Decimal64Ring) Mul(a interface{}, x, y, z int64) {
 		r.Typ = ar.Typ
 	}
 	r.Ns[x] += ar.Ns[y] * z
-	r.Vs[x] += types.Decimal64Int64Mul(r.Vs[y], z)
+	r.Vs[x] = r.Vs[x].Add(types.Decimal64Int64Mul(r.Vs[y], z))
 }
 
 func (r *Decimal64Ring) Eval(zs []int64) *vector.Vector {

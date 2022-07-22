@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package containers
 
 import (
@@ -14,7 +28,7 @@ type vecImpl[T any] struct {
 
 func newVecImpl[T any](derived *vector[T]) *vecImpl[T] {
 	return &vecImpl[T]{
-		vecBase: newVecBase[T](derived),
+		vecBase: newVecBase(derived),
 	}
 }
 
@@ -24,7 +38,7 @@ type nullableVecImpl[T any] struct {
 
 func newNullableVecImpl[T any](derived *vector[T]) *nullableVecImpl[T] {
 	return &nullableVecImpl[T]{
-		vecBase: newVecBase[T](derived),
+		vecBase: newVecBase(derived),
 	}
 }
 func (impl *nullableVecImpl[T]) Nullable() bool { return true }

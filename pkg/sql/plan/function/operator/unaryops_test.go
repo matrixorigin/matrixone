@@ -15,11 +15,12 @@
 package operator
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestUnaryMinusDecimal64(t *testing.T) {
@@ -28,16 +29,20 @@ func TestUnaryMinusDecimal64(t *testing.T) {
 	output, err := UnaryMinusDecimal64([]*vector.Vector{input}, testProc)
 	require.NoError(t, err)
 	outputCol := vector.MustTCols[types.Decimal64](output)
-
-	require.Equal(t, []types.Decimal64{-123, -234, -345, 0}, outputCol)
+	expectedCol := []types.Decimal64{types.Decimal64FromInt32(-123), types.Decimal64FromInt32(-234), types.Decimal64FromInt32(-345), types.Decimal64_Zero}
+	for i, c := range outputCol {
+		require.True(t, c.Eq(expectedCol[i]))
+	}
 }
 
 func TestUnaryMinusDecimal128(t *testing.T) {
-	input := testutil.MakeDecimal128Vector([]uint64{123, 234, 345, 0}, []uint64{3}, testutil.MakeDecimal128Type(38, 10))
+	input := testutil.MakeDecimal128Vector([]int64{123, 234, 345, 0}, []uint64{3}, testutil.MakeDecimal128Type(38, 10))
 	testProc := testutil.NewProc()
 	output, err := UnaryMinusDecimal128([]*vector.Vector{input}, testProc)
 	require.NoError(t, err)
 	outputCol := vector.MustTCols[types.Decimal128](output)
-
-	require.Equal(t, []types.Decimal128{{Lo: -123, Hi: -1}, {Lo: -234, Hi: -1}, {Lo: -345, Hi: -1}, {Lo: 0, Hi: 0}}, outputCol)
+	expectedCol := []types.Decimal128{types.Decimal128FromInt32(-123), types.Decimal128FromInt32(-234), types.Decimal128FromInt32(-345), types.Decimal128_Zero}
+	for i, c := range outputCol {
+		require.True(t, c.Eq(expectedCol[i]))
+	}
 }
