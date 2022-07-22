@@ -38,9 +38,11 @@ select case when 1<0 then "TRUE" else "FALSE" END;
 case when 1<0 then "TRUE" else "FALSE" END
 FALSE
 SELECT CAST(CASE WHEN 0 THEN '2001-01-01' END AS DATE);
-Operator 'case' with parameters [BIGINT VARCHAR ANY] will be implemented in future version.
+cast(case when 0 then 2001-01-01 end as date)
+null
 SELECT CAST(CASE WHEN 0 THEN DATE'2001-01-01' END AS DATE);
-Operator 'case' with parameters [BIGINT DATE ANY] will be implemented in future version.
+cast(case when 0 then 2001-01-01 end as date)
+null
 select case 1.0 when 0.1 then "a" when 1.0 then "b" else "c" END;
 case 1.0 when 0.1 then a when 1.0 then b else c end
 b

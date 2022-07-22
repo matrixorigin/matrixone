@@ -180,6 +180,15 @@ func (t Type) IsString() bool {
 	return t.Oid == T_char || t.Oid == T_varchar
 }
 
+func (t Type) IsIntOrUint() bool {
+	switch t.Oid {
+	case T_uint8, T_uint16, T_uint32, T_uint64, T_int8, T_int16, T_int32, T_int64:
+		return true
+	default:
+		return false
+	}
+}
+
 func (t Type) String() string {
 	return t.Oid.String()
 }

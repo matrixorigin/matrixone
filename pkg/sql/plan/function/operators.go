@@ -4627,7 +4627,7 @@ var operators = map[int]Functions{
 				if l >= 2 {
 					flag := true
 					for j := 0; j < l-1; j += 2 {
-						if inputs[j] != types.T_bool {
+						if inputs[j] != types.T_bool && !inputs[0].ToType().IsIntOrUint() {
 							flag = false
 							break
 						}
@@ -4816,9 +4816,10 @@ var operators = map[int]Functions{
 			targetTypes := make([]types.T, 3)
 			for i, o := range overloads {
 				if len(inputs) == 3 {
-					if inputs[0] != types.T_bool {
+					if inputs[0] != types.T_bool && !inputs[0].ToType().IsIntOrUint() {
 						continue
 					}
+
 					targetTypes[0] = types.T_bool
 					targetTypes[1], targetTypes[2] = o.ReturnTyp, o.ReturnTyp
 					if code, c := tryToMatch(inputs, targetTypes); code == matchedByConvert {
