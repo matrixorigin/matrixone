@@ -810,3 +810,65 @@ func Test_handleShowColumns(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
+
+func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecutor) error) {
+	convey.Convey(fmt.Sprintf("%s succ", funName), t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Database(gomock.Any(), nil).Return(nil, nil).AnyTimes()
+
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, nil, nil, nil, &gSys)
+		ses.Mrs = &MysqlResultSet{}
+		mce := &MysqlCmdExecutor{}
+		mce.PrepareSessionBeforeExecRequest(ses)
+
+		convey.So(handleFun(mce), convey.ShouldBeNil)
+	})
+}
+
+func Test_HandlePrepareStmt(t *testing.T) {
+	stmt, err := parsers.ParseOne(dialect.MYSQL, "prepare stmt1 from select 1, 2")
+	if err != nil {
+		t.Errorf("parser sql error %v", err)
+	}
+	runTestHandle("handlePrepareStmt", t, func(mce *MysqlCmdExecutor) error {
+		stmt := stmt.(*tree.PrepareStmt)
+		return mce.handlePrepareStmt(stmt)
+	})
+}
+
+func Test_HandlePrepareString(t *testing.T) {
+	stmt, err := parsers.ParseOne(dialect.MYSQL, "prepare stmt1 from 'select 1, 2'")
+	if err != nil {
+		t.Errorf("parser sql error %v", err)
+	}
+	runTestHandle("handlePrepareString", t, func(mce *MysqlCmdExecutor) error {
+		stmt := stmt.(*tree.PrepareString)
+		return mce.handlePrepareString(stmt)
+	})
+}
+
+func Test_HandleDeallocate(t *testing.T) {
+	stmt, err := parsers.ParseOne(dialect.MYSQL, "deallocate prepare stmt1")
+	if err != nil {
+		t.Errorf("parser sql error %v", err)
+	}
+	runTestHandle("handleDeallocate", t, func(mce *MysqlCmdExecutor) error {
+		stmt := stmt.(*tree.Deallocate)
+		return mce.handleDeallocate(stmt)
+	})
+}

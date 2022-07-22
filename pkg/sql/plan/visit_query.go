@@ -14,34 +14,49 @@
 
 package plan
 
-type VisitQuery struct {
-	qry  *Query
-	rule Rule
+type VisitRule interface {
+	Match(*Node) bool
+	Apply(*Node, *Query) error
 }
 
-func NewVisitQuery(qry *Query, rule Rule) *VisitQuery {
+type VisitQuery struct {
+	qry   *Query
+	rules []VisitRule
+}
+
+func NewVisitQuery(qry *Query, rules []VisitRule) *VisitQuery {
 	return &VisitQuery{
-		qry:  qry,
-		rule: rule,
+		qry:   qry,
+		rules: rules,
 	}
 }
 
-func (vq *VisitQuery) exploreNode(node *Node) {
+func (vq *VisitQuery) exploreNode(node *Node) error {
 	for i := range node.Children {
 		vq.exploreNode(vq.qry.Nodes[node.Children[i]])
 	}
 
-	if vq.rule.Match(node) {
-		vq.rule.Apply(node, vq.qry)
+	for _, rule := range vq.rules {
+		if rule.Match(node) {
+			err := rule.Apply(node, vq.qry)
+			if err != nil {
+				return err
+			}
+		}
 	}
+
+	return nil
 }
 
-func (vq *VisitQuery) Visit() (*Query, error) {
+func (vq *VisitQuery) Visit() error {
 	if len(vq.qry.Steps) == 0 {
-		return vq.qry, nil
+		return nil
 	}
 	for _, step := range vq.qry.Steps {
-		vq.exploreNode(vq.qry.Nodes[step])
+		err := vq.exploreNode(vq.qry.Nodes[step])
+		if err != nil {
+			return err
+		}
 	}
-	return vq.qry, nil
+	return nil
 }

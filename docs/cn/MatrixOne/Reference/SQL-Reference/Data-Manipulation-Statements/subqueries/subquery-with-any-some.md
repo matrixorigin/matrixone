@@ -1,21 +1,19 @@
-# **Subqueries with ANY**
+# **Subqueries with ANY or SOME**
 
-## **Description**
+## **语法描述**
 
-Comparison operators (=, >, < , etc.) are used only on subqueries that return one row. SQL Subqueries with `ANY`, you can make comparisons on subqueries that return multiple rows. `ANY` evaluate whether any or all of the values returned by a subquery match the left-hand expression.
+由于列子查询返回的结果集是多行一列，因此不能直接使用（=，>，<，>=，<=，<>）这些比较操作符。在列子查询中可以使用 `ANY`、`SOME`操作符与比较操作符联合使用：
 
-Subqueries that use the `ANY` keyword return true when any value retrieved in the subquery matches the value of the left-hand expression.
+- `ANY`：与比较操作符联合使用，表示与子查询返回的任何值比较为 `TRUE`，则返回结果为 `true`。
+- `SOME`：`ANY` 的别名，与 `ANY` 意义相同，但较少使用。
 
-!!! note  "<font size=4>note</font>"
-    <font size=3>The word `SOME` is an alias for `ANY`.</font>
-
-## **Syntax**
+## **语法结构**
 
 ```
 > SELECT column_name(s) FROM table_name WHERE column_name ANY (subquery);
 ```
 
-## **Examples**
+## **示例**
 
 ```sql
 > create table t1 (a int);
