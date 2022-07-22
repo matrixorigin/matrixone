@@ -3,7 +3,7 @@
 -- @case
 -- @desc:test for [in] subquery with constant operand
 -- @label:bvt
--- @bvt:issue#3304
+-- @bvt:issue#3312
 SELECT 1 IN (SELECT 1);
 -- @bvt:issue
 -- @bvt:issue#3307
@@ -37,7 +37,7 @@ insert into t2 values (100, 5);
 select * from t3 where a in (select b from t2);
 select * from t3 where a in (select b from t2 where b > 7);
 select * from t3 where a not in (select b from t2);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 SELECT 0 IN (SELECT 1 FROM t1 a);
 -- @bvt:issue
 select * from t3 where a in (select a,b from t2);
@@ -50,7 +50,7 @@ create table t1 (s1 char(5), index s1(s1));
 create table t2 (s1 char(5), index s1(s1));
 insert into t1 values ('a1'),('a2'),('a3');
 insert into t2 values ('a1'),('a2');
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select s1, s1 NOT IN (SELECT s1 FROM t2) from t1;
 select s1, s1 NOT IN (SELECT s1 FROM t2 WHERE s1 < 'a2') from t1;
 -- @bvt:issue
@@ -85,7 +85,7 @@ INSERT INTO t1 VALUES (1), (3), (5), (7);
 INSERT INTO t1 VALUES (NULL);
 CREATE TABLE t2(a int);
 INSERT INTO t2 VALUES (1),(2),(3);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 SELECT a, a IN (SELECT a FROM t1) FROM t2;
 -- @bvt:issue
 
@@ -171,7 +171,7 @@ CREATE TABLE `t2` (
 INSERT INTO t2 (mot,topic,dt,pseudo) VALUES ('joce','40143','2002-10-22','joce'), ('joce','43506','2002-10-22','joce');
 SELECT * from t2 where topic IN (SELECT topic FROM t2 GROUP BY topic);
 SELECT * from t2 where topic IN (SELECT topic FROM t2 GROUP BY topic HAVING topic < 4100);
--- @bvt:issue#3304
+-- @bvt:issue#3307
 SELECT * from t2 where topic IN (SELECT SUM(topic) FROM t1);
 -- @bvt:issue
 SELECT * from t2 where topic IN (SELECT topic FROM t2 GROUP BY topic HAVING topic < 41000);
@@ -195,7 +195,7 @@ create table t2 (oref int, a int);
 insert into t2 values(1, 1),(2, 2),(3, 3), (4, NULL),(2, NULL);
 create table t3 (a int);
 insert into t3 values (NULL), (NULL);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select a, oref, a in (select max(ie) from t1 where oref=t2.oref group by grp) Z from t2;
 -- @bvt:issue
 select a, oref from t2 where a in (select max(ie) from t1 where oref=t2.oref group by grp);
@@ -203,7 +203,7 @@ select a, oref, a in (
   select max(ie) from t1 where oref=t2.oref group by grp union
   select max(ie) from t1 where oref=t2.oref group by grp
   ) Z from t2;
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select a in (select max(ie) from t1 where oref=4 group by grp) from t3;
 -- @bvt:issue
 
@@ -214,14 +214,14 @@ create table t1 (a int, oref int);
 insert into t1 values(1, 1),(1, NULL),(2, 3),(2, NULL),(3, NULL);
 create table t2 (a int, oref int);
 insert into t2 values (1, 1), (2,2), (NULL, 3), (NULL, 4);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select oref, a, a in (select a from t1 where oref=t2.oref) Z from t2;
 -- @bvt:issue
 select oref, a from t2 where a in (select a from t1 where oref=t2.oref);
 -- @ignore{
 delete from t2;
 insert into t2 values (NULL, 0),(NULL, 0), (NULL, 0), (NULL, 0);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select oref, a, a in (select a from t1 where oref=t2.oref) Z from t2;
 -- @bvt:issue
 drop table if exists t1;
@@ -248,13 +248,13 @@ drop table if exists t1;
 drop table if exists t2;
 create table t1 (a int);
 insert into t1 values (1),(2),(3);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select 1 IN (SELECT * from t1);
 select 10 IN (SELECT * from t1);
 select NULL IN (SELECT * from t1);
 -- @bvt:issue
 update t1 set a=NULL where a=2;
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select 1 IN (SELECT * from t1);
 select 3 IN (SELECT * from t1);
 select 10 IN (SELECT * from t1);
@@ -263,13 +263,13 @@ select 10 IN (SELECT * from t1);
 DROP TABLE IF EXISTS t1;
 create table t1 (a varchar(20));
 insert into t1 values ('A'),('BC'),('DEF');
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select 'A' IN (SELECT * from t1);
 select 'XYZS' IN (SELECT * from t1);
 select NULL IN (SELECT * from t1);
 -- @bvt:issue
 update t1 set a=NULL where a='BC';
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select 'A' IN (SELECT * from t1);
 select 'DEF' IN (SELECT * from t1);
 select 'XYZS' IN (SELECT * from t1);
@@ -278,13 +278,13 @@ select 'XYZS' IN (SELECT * from t1);
 DROP TABLE IF EXISTS t1;
 create table t1 (a float);
 insert into t1 values (1.5),(2.5),(3.5);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select 1.5 IN (SELECT * from t1);
 select 10.5 IN (SELECT * from t1);
 select NULL IN (SELECT * from t1);
 -- @bvt:issue
--- @bvt:issue#3304
 update t1 set a=NULL where a=2.5;
+-- @bvt:issue#3312
 select 1.5 IN (SELECT * from t1);
 select 3.5 IN (SELECT * from t1);
 select 10.5 IN (SELECT * from t1);
@@ -298,7 +298,7 @@ CREATE TABLE t3 (a int(11) default 0);
 INSERT INTO t3 VALUES (1),(2),(3);
 INSERT INTO t1 VALUES (1),(2),(3),(4);
 INSERT INTO t2 VALUES (1),(2),(3);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 SELECT t1.a, t1.a in (select t2.a from t2) FROM t1;
 SELECT t1.a, t1.a in (select t2.a from t2,t3 where t3.a=t2.a) FROM t1;
 -- @bvt:issue
@@ -308,7 +308,7 @@ drop table if exists t3;
 
 create table t1 (a int);
 insert into t1 values (-1), (-4), (-2), (NULL);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select -10 IN (select a from t1);
 -- @bvt:issue
 DROP TABLE IF EXISTS t1;
@@ -317,7 +317,7 @@ DROP TABLE IF EXISTS t1;
 -- @desc:test for [in] subquery with limit
 -- @label:bvt
 create table t1 (a float);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select 10.5 IN (SELECT * from t1 LIMIT 1);
 -- error
 select 10.5 IN (SELECT * from t1 LIMIT 1 UNION SELECT 1.5);
@@ -331,7 +331,7 @@ select 10.5 IN (SELECT * from t1 UNION SELECT 1.5 LIMIT 1);
 DROP TABLE IF EXISTS t1;
 create table t1 (a int, b real, c varchar(10));
 insert into t1 values (1, 1, 'a'), (2,2,'b'), (NULL, 2, 'b');
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select (1, 1, 'a') IN (select a,b,c from t1);
 select (1, 2, 'a') IN (select a,b,c from t1);
 select (1, 1, 'a') IN (select b,a,c from t1);
@@ -672,7 +672,7 @@ CREATE TABLE t1 (a INT);
 INSERT INTO t1 VALUES(1);
 CREATE TABLE t2(a INT);
 INSERT INTO t2 VALUES(1),(1),(1),(1),(1);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 SELECT
 (
   (SELECT 1 IN (SELECT 1 FROM t1 AS x1))
@@ -774,7 +774,7 @@ CREATE TABLE t1 (a INT);
 INSERT INTO t1 VALUES(1);
 CREATE TABLE t2 (placeholder CHAR(11));
 INSERT INTO t2 VALUES("placeholder");
--- @bvt:issue#3304
+-- @bvt:issue#3312
 SELECT (1, 2) IN (SELECT t1.a, 2)         FROM t1 GROUP BY t1.a;
 SELECT (1, 2) IN (SELECT t1.a, 2 FROM t2) FROM t1 GROUP BY t1.a;
 -- @bvt:issue
@@ -829,7 +829,7 @@ insert into t2 values (0,0),(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9
 update t2 set b=1;
 create table t3 (a int, oref int);
 insert into t3 values (1, 1), (NULL,1), (NULL,0);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select a, oref,t3.a in (select t1.a from t1, t2 where t1.b=t2.a and t2.b=t3.oref) Z from t3;
 -- @bvt:issue
 
@@ -843,7 +843,7 @@ insert into t2 values (0,0),(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9
 update t2 set b=1;
 create table t3 (a int, oref int);
 insert into t3 values (1, 1), (NULL,1), (NULL,0);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select a, oref,t3.a in (select t1.a from t1, t2 where t1.b=t2.a and t2.b=t3.oref) Z from t3;
 -- @bvt:issue
 
@@ -863,7 +863,7 @@ insert into t1 values (1,1), (3,1),(100,1);
 create table t2 (a int, b int);
 insert into t2 values (1,1),(2,1),(NULL,1),(NULL,0);
 select a,b, a in (select a from t1 where t1.b = t2.b union select a from t1 where t1.b = t2.b) Z from t2 ;
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select a,b, a in (select a from t1 where t1.b = t2.b) Z from t2 ;
 -- @bvt:issue
 
@@ -907,23 +907,23 @@ create table t1 (oref char(4), grp int, ie int);
 insert into t1 (oref, grp, ie) values ('aa', 10, 2),('aa', 10, 1),('aa', 20, NULL),('bb', 10, 3),('cc', 10, 4),('cc', 20, NULL),('ee', 10, NULL),('ee', 10, NULL),('ff', 20, 2),('ff', 20, 1);
 create table t2 (oref char(4), a int);
 insert into t2 values('ee', NULL),('bb', 2),('ff', 2),('cc', 3),('aa', 1),('dd', NULL),('bb', NULL);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select oref, a, a in (select ie from t1 where oref=t2.oref) Z from t2;
 -- @bvt:issue
 select oref, a from t2 where a in (select ie from t1 where oref=t2.oref);
 select oref, a from t2 where a not in (select ie from t1 where oref=t2.oref);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select oref, a, a in (select min(ie) from t1 where oref=t2.oref group by grp) Z from t2;
 -- @bvt:issue
 select oref, a from t2 where a in (select min(ie) from t1 where oref=t2.oref group by grp);
 select oref, a from t2 where a not in (select min(ie) from t1 where oref=t2.oref group by grp);
 update t1 set ie=3 where oref='ff' and ie=1;
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select oref, a, a in (select min(ie) from t1 where oref=t2.oref group by grp) Z from t2;
 -- @bvt:issue
 select oref, a from t2 where a in (select min(ie) from t1 where oref=t2.oref group by grp);
 select oref, a from t2 where a not in (select min(ie) from t1 where oref=t2.oref group by grp);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select oref, a, a in (select min(ie) from t1 where oref=t2.oref group by grp having min(ie) > 1) Z from t2;
 -- @bvt:issue
 select oref, a from t2 where a in (select min(ie) from t1 where oref=t2.oref group by grp having min(ie) > 1);
@@ -952,12 +952,12 @@ create table t1 (oref char(4), grp int, ie int primary key);
 insert into t1 (oref, grp, ie) values('aa', 10, 2),('aa', 10, 1),('bb', 10, 3),('cc', 10, 4),('cc', 20, 5),('cc', 10, 6);
 create table t2 (oref char(4), a int);
 insert into t2 values  ('ee', NULL),('bb', 2),('cc', 5),('cc', 2),('cc', NULL),('aa', 1),('bb', NULL);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 select oref, a, a in (select ie from t1 where oref=t2.oref) z from t2;
 -- @bvt:issue
 select oref, a from t2 where a in (select ie from t1 where oref=t2.oref);
--- @bvt:issue#3304
 select oref, a from t2 where a not in (select ie from t1 where oref=t2.oref);
+-- @bvt:issue#3312
 select oref, a, a in (select min(ie) from t1 where oref=t2.oref group by grp) z from t2;
 -- @bvt:issue
 
@@ -979,7 +979,7 @@ INSERT INTO t1 VALUES (2), (NULL), (3), (1);
 INSERT INTO t2 VALUES (234), (345), (457);
 INSERT INTO t3 VALUES (222,'bbb'), (333,'ccc'), (111,'aaa');
 SELECT * FROM t1 WHERE t1.id NOT IN (SELECT t2.id FROM t2,t3  WHERE t3.name='xxx' AND t2.id=t3.id);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 SELECT (t1.id IN (SELECT t2.id FROM t2,t3  WHERE t3.name='xxx' AND t2.id=t3.id)) AS x FROM t1;
 -- @bvt:issue
 DROP TABLE IF EXISTS t1;
@@ -1187,7 +1187,7 @@ DROP TABLE IF EXISTS t1xt2;
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1(a int );
 INSERT INTO t1 VALUES(0);
--- @bvt:issue#3304
+-- @bvt:issue#3312
 SELECT NULL IN (SELECT 1 FROM t1);
 -- @bvt:issue
 -- @bvt:issue#3312
@@ -1202,7 +1202,7 @@ SELECT (NULL OR 1) IN (SELECT 1 FROM t1);
 -- @bvt:issue
 SELECT (NULL IS NULL) IN  (SELECT 1 FROM t1);
 DELETE FROM t1;
--- @bvt:issue#3304
+-- @bvt:issue#3312
 SELECT NULL IN (SELECT 1 FROM t1);
 -- @bvt:issue
 SELECT (NULL AND 1) IN (SELECT 1 FROM t1);
