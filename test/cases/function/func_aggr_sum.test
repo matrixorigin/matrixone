@@ -1,4 +1,4 @@
--- @bvt:issue#3183
+-- @bvt:issue#3333
 #ORDER BY
 CREATE TABLE t (i1 INT,
 d1 DOUBLE,
