@@ -26,6 +26,9 @@ import (
 func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
 
+	util.LogTxnHandleRequest(s.logger, request)
+	defer util.LogTxnHandleResult(s.logger, response)
+
 	response.PrepareResponse = &txn.TxnPrepareResponse{}
 	s.validDNShard(request.GetTargetDN())
 
@@ -78,6 +81,9 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 func (s *service) GetStatus(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
 
+	util.LogTxnHandleRequest(s.logger, request)
+	defer util.LogTxnHandleResult(s.logger, response)
+
 	response.GetStatusResponse = &txn.TxnGetStatusResponse{}
 	s.validDNShard(request.GetTargetDN())
 
@@ -100,6 +106,9 @@ func (s *service) GetStatus(ctx context.Context, request *txn.TxnRequest, respon
 
 func (s *service) CommitDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
+
+	util.LogTxnHandleRequest(s.logger, request)
+	defer util.LogTxnHandleResult(s.logger, response)
 
 	response.CommitDNShardResponse = &txn.TxnCommitDNShardResponse{}
 	s.validDNShard(request.GetTargetDN())
@@ -153,6 +162,9 @@ func (s *service) CommitDNShard(ctx context.Context, request *txn.TxnRequest, re
 
 func (s *service) RollbackDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
+
+	util.LogTxnHandleRequest(s.logger, request)
+	defer util.LogTxnHandleResult(s.logger, response)
 
 	response.RollbackDNShardResponse = &txn.TxnRollbackDNShardResponse{}
 	s.validDNShard(request.GetTargetDN())
