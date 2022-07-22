@@ -14,5 +14,7 @@
 
 package bit_or
 
-type BitOr[T1, T2 any] struct {
+import "github.com/matrixorigin/matrixone/pkg/container/types"
+
+type BitOr[T1 types.Ints | types.UInts | types.Floats] struct {
 }

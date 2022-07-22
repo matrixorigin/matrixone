@@ -16,6 +16,10 @@ package bitmap
 
 /*
 #include "mo.h"
+
+#cgo CFLAGS: -I../../../cgo
+#cgo LDFLAGS: -L../../../cgo -lmo
+
 */
 import "C"
 import "unsafe"
