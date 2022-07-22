@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"io/ioutil"
-	"log"
-	"math"
 	"strings"
 	"testing"
 
@@ -29,7 +27,6 @@ import (
 
 //only use in developing
 func TestSingleSQL(t *testing.T) {
-	log.Print(math.MaxInt64)
 	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
