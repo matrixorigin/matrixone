@@ -26,6 +26,9 @@ import (
 func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
 
+	util.LogTxnHandleRequest(s.logger, request)
+	defer util.LogTxnHandleResult(s.logger, response)
+
 	response.PrepareResponse = &txn.TxnPrepareResponse{}
 	s.validDNShard(request.GetTargetDN())
 
@@ -57,8 +60,8 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 	}
 
 	newTxn.DNShards = request.Txn.DNShards
-	newTxn.PreparedTS, _ = s.clocker.Now()
-	if err := s.storage.Prepare(newTxn); err != nil {
+	ts, err := s.storage.Prepare(newTxn)
+	if err != nil {
 		response.TxnError = newTAEPrepareError(err)
 		if err := s.storage.Rollback(newTxn); err != nil {
 			s.logger.Error("rollback failed",
@@ -67,6 +70,7 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 		}
 		return nil
 	}
+	newTxn.PreparedTS = ts
 	txnCtx.updateTxnLocked(newTxn)
 
 	newTxn.Status = txn.TxnStatus_Prepared
@@ -76,6 +80,9 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 
 func (s *service) GetStatus(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
+
+	util.LogTxnHandleRequest(s.logger, request)
+	defer util.LogTxnHandleResult(s.logger, response)
 
 	response.GetStatusResponse = &txn.TxnGetStatusResponse{}
 	s.validDNShard(request.GetTargetDN())
@@ -99,6 +106,9 @@ func (s *service) GetStatus(ctx context.Context, request *txn.TxnRequest, respon
 
 func (s *service) CommitDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
+
+	util.LogTxnHandleRequest(s.logger, request)
+	defer util.LogTxnHandleResult(s.logger, response)
 
 	response.CommitDNShardResponse = &txn.TxnCommitDNShardResponse{}
 	s.validDNShard(request.GetTargetDN())
@@ -152,6 +162,9 @@ func (s *service) CommitDNShard(ctx context.Context, request *txn.TxnRequest, re
 
 func (s *service) RollbackDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
+
+	util.LogTxnHandleRequest(s.logger, request)
+	defer util.LogTxnHandleResult(s.logger, response)
 
 	response.RollbackDNShardResponse = &txn.TxnRollbackDNShardResponse{}
 	s.validDNShard(request.GetTargetDN())

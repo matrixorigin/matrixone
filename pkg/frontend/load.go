@@ -28,6 +28,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -319,11 +320,11 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 
 func AtomicAddDuration(v atomic.Value, t interface{}) {
 	var ti time.Duration = 0
-	switch t.(type) {
+	switch t := t.(type) {
 	case time.Duration:
-		ti = t.(time.Duration)
+		ti = t
 	case atomic.Value:
-		tx, _ := t.(atomic.Value)
+		tx := t
 		if tx.Load() != nil {
 			ti = tx.Load().(time.Duration)
 		}
@@ -1035,15 +1036,17 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
-						fs := field
-						d, err := types.ParseStringToDecimal64(fs, vec.Typ.Width, vec.Typ.Scale)
+						d, err := types.Decimal64_FromString(field)
 						if err != nil {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							// we tolerate loss of digits.
+							if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = types.Decimal64_Zero
 							}
-							result.Warnings++
-							d = types.Decimal64(0)
 						}
 						cols[rowIdx] = d
 					}
@@ -1052,15 +1055,17 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
-						fs := field
-						d, err := types.ParseStringToDecimal128(fs, vec.Typ.Width, vec.Typ.Scale)
+						d, err := types.Decimal128_FromString(field)
 						if err != nil {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							// we tolerate loss of digits.
+							if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = types.Decimal128_Zero
 							}
-							result.Warnings++
-							d = types.InitDecimal128(0)
 						}
 						cols[rowIdx] = d
 					}
@@ -1546,7 +1551,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 								return err
 							}
 							result.Warnings++
-							d = types.Decimal64(0)
+							d = types.Decimal64_Zero
 							//break
 						}
 						cols[i] = d
@@ -1568,7 +1573,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 								return err
 							}
 							result.Warnings++
-							d = types.InitDecimal128(0)
+							d = types.Decimal128_Zero
 							//break
 						}
 						cols[i] = d
@@ -1698,7 +1703,8 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		wait_a := time.Now()
 		handler.ThreadInfo.SetTime(wait_a)
 		handler.ThreadInfo.SetCnt(1)
-		dbHandler := handler.dbHandler
+		//dbHandler := handler.dbHandler
+		var dbHandler engine.Database
 		txnHandler := handler.txnHandler
 		tableHandler := handler.tableHandler
 		if !handler.skipWriteBatch {
@@ -1848,7 +1854,8 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				handler.ThreadInfo.SetCnt(1)
 				txnHandler := handler.txnHandler
 				tableHandler := handler.tableHandler
-				dbHandler := handler.dbHandler
+				// dbHandler := handler.dbHandler
+				var dbHandler engine.Database
 				if !handler.skipWriteBatch {
 					if handler.oneTxnPerBatch {
 						txnHandler = InitTxnHandler(config.StorageEngine)

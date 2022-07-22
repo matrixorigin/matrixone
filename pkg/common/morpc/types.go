@@ -138,6 +138,8 @@ type Backend interface {
 	// Busy the backend receives a lot of requests concurrently during operation, but when the number
 	// of requests waiting to be sent reaches some threshold, the current backend is busy.
 	Busy() bool
+	// LastActiveTime returns last active time
+	LastActiveTime() time.Time
 }
 
 // Stream used to asynchronous stream of sending and receiving messages

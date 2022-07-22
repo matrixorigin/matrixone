@@ -163,7 +163,7 @@ func (r *CountRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uint6
 	}
 }
 
-// r[x] += a[y] * z
+// Mul r[x] += a[y] * z
 func (r *CountRing) Mul(a interface{}, x, y, z int64) {
 	ar := a.(*CountRing)
 	r.Vs[x] += ar.Vs[y] * z

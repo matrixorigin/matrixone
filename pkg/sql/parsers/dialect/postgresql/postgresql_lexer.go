@@ -19,7 +19,6 @@ import (
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/scanner"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -37,19 +36,19 @@ func ParseOne(sql string) (tree.Statement, error) {
 		return nil, lexer.scanner.LastError
 	}
 	if len(lexer.stmts) != 1 {
-		return nil, errors.New("Sytax Error, or too many sql to parse")
+		return nil, errors.New("syntax Error, or too many sql to parse")
 	}
 	return lexer.stmts[0], nil
 }
 
 type Lexer struct {
-	scanner *scanner.Scanner
+	scanner *Scanner
 	stmts   []tree.Statement
 }
 
 func NewLexer(dialectType dialect.DialectType, sql string) *Lexer {
 	return &Lexer{
-		scanner: scanner.NewScanner(dialectType, sql),
+		scanner: NewScanner(dialectType, sql),
 	}
 }
 
@@ -75,7 +74,7 @@ func (l *Lexer) Lex(lval *yySymType) int {
 }
 
 func (l *Lexer) Error(err string) {
-	l.scanner.LastError = scanner.PositionedErr{Err: err, Pos: l.scanner.Pos + 1, Near: l.scanner.LastToken}
+	l.scanner.LastError = PositionedErr{Err: err, Pos: l.scanner.Pos + 1, Near: l.scanner.LastToken}
 }
 
 func (l *Lexer) AppendStmt(stmt tree.Statement) {

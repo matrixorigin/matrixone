@@ -103,7 +103,7 @@ func Test_MinMax(t *testing.T) {
 
 func Test_uint64list(t *testing.T) {
 	cvey.Convey("uint64list", t, func() {
-		var l Uint64List = make(Uint64List, 3)
+		var l = make(Uint64List, 3)
 		cvey.So(l.Len(), cvey.ShouldEqual, 3)
 		cvey.So(l.Less(0, 1), cvey.ShouldBeFalse)
 		a, b := l[0], l[1]
@@ -498,9 +498,9 @@ func TestGetSimpleExprValue(t *testing.T) {
 
 func Test_AllocateBatchBasedOnEngineAttributeDefinition(t *testing.T) {
 	var attributeDefs []*engine.AttributeDef
-	var rowCount int = 1
-	var colNum int = 14
-	var tmp *engine.AttributeDef = &engine.AttributeDef{}
+	var rowCount = 1
+	var colNum = 14
+	var tmp = &engine.AttributeDef{}
 	var ret *batch.Batch
 	cvey.Convey("", t, func() {
 		attributeDefs = make([]*engine.AttributeDef, colNum)
@@ -596,8 +596,8 @@ func Test_AllocateBatchBasedOnEngineAttributeDefinition(t *testing.T) {
 
 func Test_FillBatchWithData(t *testing.T) {
 	var data [][]string
-	var batch *batch.Batch = &batch.Batch{}
-	var colNum int = 14
+	var batch = &batch.Batch{}
+	var colNum = 14
 	cvey.Convey("FillBatchWithData succ", t, func() {
 		data = make([][]string, 1)
 		data[0] = make([]string, 1)
@@ -708,11 +708,11 @@ func Test_FillBatchWithData(t *testing.T) {
 }
 
 func Test_FormatLineInBatch(t *testing.T) {
-	var bat *batch.Batch = &batch.Batch{}
-	var rowIndex int = 0
+	var bat = &batch.Batch{}
+	var rowIndex = 0
 	var res []string
-	var colNum int = 13
-	var colName []string = []string{"false", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0001-01-01", "0001-01-01 00:00:00"}
+	var colNum = 13
+	var colName = []string{"false", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0001-01-01", "0001-01-01 00:00:00"}
 	cvey.Convey("FormatLineInBatch succ", t, func() {
 		bat.Vecs = make([]*vector.Vector, colNum)
 		bat.Vecs[0] = &vector.Vector{Nsp: &nulls.Nulls{}, Typ: types.Type{Oid: types.T_bool}}

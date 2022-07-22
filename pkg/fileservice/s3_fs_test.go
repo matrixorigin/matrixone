@@ -40,18 +40,21 @@ func TestS3FS(t *testing.T) {
 	os.Setenv("AWS_ACCESS_KEY_ID", sharedConfig.APIKey)
 	os.Setenv("AWS_SECRET_ACCESS_KEY", sharedConfig.APISecret)
 
-	testFileService(t, func() FileService {
+	t.Run("file service", func(t *testing.T) {
+		testFileService(t, func() FileService {
 
-		config := sharedConfig
-		config.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
+			config := sharedConfig
+			config.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
 
-		fs, err := NewS3FS(
-			config.Endpoint,
-			config.Bucket,
-			config.KeyPrefix,
-		)
-		assert.Nil(t, err)
+			fs, err := NewS3FS(
+				config.Endpoint,
+				config.Bucket,
+				config.KeyPrefix,
+			)
+			assert.Nil(t, err)
 
-		return fs
+			return fs
+		})
 	})
+
 }

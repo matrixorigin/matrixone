@@ -27,6 +27,7 @@ import (
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 )
 
@@ -87,6 +88,7 @@ type Event struct {
 type KVTxnStorage struct {
 	sync.RWMutex
 	logClient            logservice.Client
+	clock                clock.Clock
 	latest               logservice.Lsn
 	uncommittedTxn       map[string]*txn.TxnMeta
 	uncommittedKeyTxnMap map[string]*txn.TxnMeta
@@ -96,9 +98,10 @@ type KVTxnStorage struct {
 }
 
 // NewKVTxnStorage create KV-based implementation of TxnStorage
-func NewKVTxnStorage(latest logservice.Lsn, logClient logservice.Client) *KVTxnStorage {
+func NewKVTxnStorage(latest logservice.Lsn, logClient logservice.Client, clock clock.Clock) *KVTxnStorage {
 	return &KVTxnStorage{
 		logClient:            logClient,
+		clock:                clock,
 		latest:               latest,
 		uncommittedKeyTxnMap: make(map[string]*txn.TxnMeta),
 		uncommittedTxn:       make(map[string]*txn.TxnMeta),
@@ -183,6 +186,14 @@ func (kv *KVTxnStorage) StartRecovery(c chan txn.TxnMeta) {
 	}
 }
 
+func (kv *KVTxnStorage) Close() error {
+	return nil
+}
+
+func (kv *KVTxnStorage) Destroy() error {
+	return nil
+}
+
 func (kv *KVTxnStorage) GetLatestLsn() logservice.Lsn {
 	return kv.latest
 }
@@ -235,7 +246,7 @@ func (kv *KVTxnStorage) readValue(key []byte, txnMeta txn.TxnMeta) []byte {
 	}
 
 	var value []byte
-	kv.committed.AscendRange(key, timestamp.Timestamp{}, txnMeta.SnapshotTS, func(v []byte, t timestamp.Timestamp) {
+	kv.committed.AscendRange(key, timestamp.Timestamp{}, txnMeta.SnapshotTS, func(v []byte, _ timestamp.Timestamp) {
 		value = v
 	})
 	return value
@@ -267,24 +278,25 @@ func (kv *KVTxnStorage) Write(txnMeta txn.TxnMeta, op uint32, payload []byte) ([
 	return nil, nil
 }
 
-func (kv *KVTxnStorage) Prepare(txnMeta txn.TxnMeta) error {
+func (kv *KVTxnStorage) Prepare(txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
 	kv.Lock()
 	defer kv.Unlock()
 
 	if _, ok := kv.uncommittedTxn[string(txnMeta.ID)]; !ok {
-		return storage.ErrMissingTxn
+		return timestamp.Timestamp{}, storage.ErrMissingTxn
 	}
 
+	txnMeta.PreparedTS, _ = kv.clock.Now()
 	writeKeys := kv.getWriteKeysLocked(txnMeta)
 	if kv.hasConflict(txnMeta.SnapshotTS, txnMeta.PreparedTS.Next(), writeKeys) {
-		return storage.ErrWriteConflict
+		return timestamp.Timestamp{}, storage.ErrWriteConflict
 	}
 
 	log := kv.getLogWithDataLocked(txnMeta)
 	log.Txn.Status = txn.TxnStatus_Prepared
 	lsn, err := kv.saveLog(log)
 	if err != nil {
-		return err
+		return timestamp.Timestamp{}, err
 	}
 
 	newTxn := kv.changeUncommittedTxnStatusLocked(txnMeta.ID, txn.TxnStatus_Prepared)
@@ -292,7 +304,7 @@ func (kv *KVTxnStorage) Prepare(txnMeta txn.TxnMeta) error {
 	newTxn.DNShards = txnMeta.DNShards
 	kv.latest = lsn
 	kv.eventC <- Event{Txn: *newTxn, Type: PrepareType}
-	return nil
+	return txnMeta.PreparedTS, nil
 }
 
 func (kv *KVTxnStorage) Committing(txnMeta txn.TxnMeta) error {
@@ -401,7 +413,7 @@ func (kv *KVTxnStorage) getLogWithDataLocked(txnMeta txn.TxnMeta) *KVLog {
 func (kv *KVTxnStorage) hasConflict(from, to timestamp.Timestamp, writeKeys [][]byte) bool {
 	for _, key := range writeKeys {
 		n := 0
-		kv.committed.AscendRange(key, from, to, func(b []byte, t timestamp.Timestamp) {
+		kv.committed.AscendRange(key, from, to, func(_ []byte, _ timestamp.Timestamp) {
 			n++
 		})
 		if n > 0 {

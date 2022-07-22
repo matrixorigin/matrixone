@@ -26,10 +26,10 @@ func (b *Binding) FindColumn(col string) int32 {
 	return NotFound
 }
 
-func NewBinding(tag, nodeId int32, table string, cols []string, types []*plan.Type) *Binding {
+func NewBinding(tag, nodeID int32, table string, cols []string, types []*plan.Type) *Binding {
 	binding := &Binding{
 		tag:     tag,
-		nodeId:  nodeId,
+		nodeId:  nodeID,
 		table:   table,
 		cols:    cols,
 		types:   types,

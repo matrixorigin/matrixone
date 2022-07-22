@@ -19,10 +19,12 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 )
 
 func getTestConfig() Config {
-	return Config{
+	c := Config{
 		DeploymentID:         100,
 		DataDir:              "/mydata/dir",
 		ServiceAddress:       "localhost:9000",
@@ -33,6 +35,8 @@ func getTestConfig() Config {
 		GossipListenAddress:  "localhost:9002",
 		GossipSeedAddresses:  []string{"localhost:9002"},
 	}
+	c.Fill()
+	return c
 }
 
 func TestConfigCanBeValidated(t *testing.T) {
@@ -73,6 +77,9 @@ func TestFillConfig(t *testing.T) {
 	assert.Equal(t, defaultGossipAddress, c.GossipAddress)
 	assert.Equal(t, defaultGossipAddress, c.GossipListenAddress)
 	assert.Equal(t, 0, len(c.GossipSeedAddresses))
+	assert.Equal(t, hakeeper.DefaultTickPerSecond, c.HAKeeperConfig.TickPerSecond)
+	assert.Equal(t, hakeeper.DefaultLogStoreTimeout, c.HAKeeperConfig.LogStoreTimeout)
+	assert.Equal(t, hakeeper.DefaultDnStoreTimeout, c.HAKeeperConfig.DnStoreTimeout)
 }
 
 func TestListenAddressCanBeFilled(t *testing.T) {

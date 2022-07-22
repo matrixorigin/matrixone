@@ -54,7 +54,7 @@ type col struct {
 	Precision int32
 }
 
-//for test create/drop statement
+// NewEmptyCompilerContext for test create/drop statement
 func NewEmptyCompilerContext() *MockCompilerContext {
 	return &MockCompilerContext{
 		objects: make(map[string]*ObjectRef),

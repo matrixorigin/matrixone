@@ -56,7 +56,7 @@ func (r *ApproxCountDistinctRing) Size() int {
 	return cap(r.Da)
 }
 
-// Create a ring with same type using interface
+// Dup creates a ring with same type using interface
 func (r *ApproxCountDistinctRing) Dup() ring.Ring {
 	return NewApproxCountDistinct(r.Typ)
 }

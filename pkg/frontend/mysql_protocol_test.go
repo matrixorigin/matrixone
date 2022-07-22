@@ -2000,7 +2000,7 @@ func Test_handleHandshake(t *testing.T) {
 		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
 
 		var IO IOPackageImpl
-		var SV *config.SystemVariables = &config.SystemVariables{}
+		var SV = &config.SystemVariables{}
 		mp := &MysqlProtocolImpl{SV: SV}
 		mp.io = &IO
 		mp.tcpConn = ioses
@@ -2030,7 +2030,7 @@ func Test_handleHandshake_Recover(t *testing.T) {
 
 	convey.Convey("handleHandshake succ", t, func() {
 		var IO IOPackageImpl
-		var SV *config.SystemVariables = &config.SystemVariables{}
+		var SV = &config.SystemVariables{}
 		mp := &MysqlProtocolImpl{SV: SV}
 		mp.io = &IO
 		mp.tcpConn = ioses

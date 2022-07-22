@@ -28,7 +28,7 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 	if !blk.meta.IsAppendable() {
 		return
 	}
-	an := updates.NewCommittedAppendNode(blk.ckpTs, blk.node.rows, blk.mvcc)
+	an := updates.NewCommittedAppendNode(blk.ckpTs, 0, blk.node.rows, blk.mvcc)
 	blk.mvcc.OnReplayAppendNode(an)
 	masks, vals := blk.file.LoadUpdates()
 	for colIdx, mask := range masks {

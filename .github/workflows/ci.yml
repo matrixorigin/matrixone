@@ -1,7 +1,6 @@
 # Define workflow name.
 name: MatrixOne CI
 
-# Controls when the workflow will run.
 on:
   pull_request:
     types: [ opened, synchronize, reopened ]
@@ -9,61 +8,19 @@ on:
 
   workflow_dispatch:
 
-
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel.
 jobs:
 
-  tae-sca:
-    # The type of runner that the job will run on.
+  ut-linux-x86:
     runs-on: ubuntu-latest
-    name: SCA Test on CentOS/x64
+    name: UT Test on Ubuntu/x64
 
-    # Steps represent a sequence of tasks that will be executed as part of the job.
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so the job can access it.
       - uses: actions/checkout@v2
         with:
           fetch-depth: '3'
 
       - name: Set up Go
-        uses: actions/setup-go@v2
-        with:
-          go-version: 1.18
-
-      - name: Formats Check
-        run: |
-          cd $GITHUB_WORKSPACE && make clean
-          if [ "$(make fmt | grep -v gofmt | wc -l)" -gt 0 ]; then exit 1; fi
-      - name: Detect non-ascii characters
-        run: |
-          na_characters=$(find ${{ github.workspace }} -type f -name "*.go" -exec grep -P  '[\xE5-\xE9][\x80-\xBF][\x80-\xBF]|\xE4[\xB8-\xBF][\x80-\xBF]' {} + || true)
-          if [[ -n $na_characters ]]; then
-            echo "Detected non-ascii characters in annotation or log info. Please refer to CONTRIBUTING.md."
-            printf '%s\n' "${na_characters[*]}"
-            exit 1
-          fi
-      - name: Static Code Analysis
-        run: |
-          cd $GITHUB_WORKSPACE && make clean && make config && make build
-          make install-static-check-tools
-          make static-check
-
-  tae-ut:
-    # The type of runner that the job will run on.
-    runs-on: ubuntu-latest
-    name: UT Test on CentOS/x64
-
-    # Steps represent a sequence of tasks that will be executed as part of the job.
-    steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so the job can access it.
-      - uses: actions/checkout@v2
-        with:
-          fetch-depth: '3'
-
-      - name: Set up Go
-        uses: actions/setup-go@v2
-        with:
-          go-version: 1.18
+        uses: ./.github/actions/setup_env
 
       - name: Unit Testing
         run: |
@@ -74,20 +31,69 @@ jobs:
         if: ${{ always() }}
         continue-on-error: true
         with:
-          name: ut_reports
+          name: ut_linux_x86_reports
+          path: |
+            ${{ github.workspace }}
+          retention-days: 7
+          
+  ut-mac-x86:
+    runs-on: macos-12
+    name: UT Test on Darwin/x86
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: '3'
+
+      - name: Set up Go
+        uses: ./.github/actions/setup_env
+
+      - name: Unit Testing
+        run: |
+          cd $GITHUB_WORKSPACE && make clean && make config
+          make ut
+
+      - uses: actions/upload-artifact@v2
+        if: ${{ always() }}
+        continue-on-error: true
+        with:
+          name: ut_darwin_x86_reports
+          path: |
+            ${{ github.workspace }}
+          retention-days: 7
+          
+  ut-linux-arm:
+    runs-on: arm64-runner
+    name: UT Test on Linux/Arm
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: '3'
+
+      - name: Set up Go
+        uses: ./.github/actions/setup_env
+
+      - name: Unit Testing
+        run: |
+          cd $GITHUB_WORKSPACE && make clean && make config
+          make ut
+
+      - uses: actions/upload-artifact@v2
+        if: ${{ always() }}
+        continue-on-error: true
+        with:
+          name: ut_linux_arm_reports
           path: |
             ${{ github.workspace }}
           retention-days: 7
 
-  tae-bvt:
-    # The type of runner that the job will run on.
+  bvt-linux-x86:
     runs-on: ubuntu-latest
-    name: BVT Test on CentOS/x64
+    name: BVT Test on Ubuntu/x64
     timeout-minutes: 30
 
-    # Steps represent a sequence of tasks that will be executed as part of the job.
     steps:
-
       - name: checkout head
         uses: actions/checkout@v2
         with:
@@ -95,9 +101,7 @@ jobs:
           path: ./head
 
       - name: Set up Go
-        uses: actions/setup-go@v2
-        with:
-          go-version: 1.18
+        uses: ./head/.github/actions/setup_env
 
       - name: Build MatrixOne
         run: |
@@ -139,21 +143,7 @@ jobs:
         if: ${{ always() }}
         run: |
           if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
-          ps -ef
-
-      - uses: actions/checkout@v2
-        with:
-          fetch-depth: '3'
-          path: ./base
-          ref: ${{ github.event.pull_request.base.sha }}
-
-      - name: BVT Ignore Tag Check
-        run: |
-          if  [ ! -d  "./base/test/"  ]; then echo 'first add, skip check'; exit 0; fi
-          head_tag_count=$(grep -r 'bvt:issue' $GITHUB_WORKSPACE/head/test/cases | wc -l || 0)
-          base_tag_count=$(grep -r 'bvt:issue' $GITHUB_WORKSPACE/base/test/cases | wc -l || 0)
-          if [ $head_tag_count -gt $base_tag_count ]; then echo 'Tagging new case with bvt:issue is not permitted.'; exit 2; fi
-
+        
       - name: remove some files
         if: ${{ always() }}
         continue-on-error: true
@@ -168,20 +158,17 @@ jobs:
         if: ${{ always() }}
         continue-on-error: true
         with:
-          name: ci_reports
+          name: linux_x86_ci_reports
           path: |
             ${{ github.workspace }}
           retention-days: 7
-
-  tae-bvt-race:
-    # The type of runner that the job will run on.
+          
+  bvt-linux-arm:
     runs-on: ubuntu-latest
-    name: BVT RACE Test on CentOS/x64
+    name: BVT Test on Linux/Arm
     timeout-minutes: 30
 
-    # Steps represent a sequence of tasks that will be executed as part of the job.
     steps:
-
       - name: checkout head
         uses: actions/checkout@v2
         with:
@@ -189,13 +176,11 @@ jobs:
           path: ./head
 
       - name: Set up Go
-        uses: actions/setup-go@v2
-        with:
-          go-version: 1.18
+        uses: ./head/.github/actions/setup_env
 
       - name: Build MatrixOne
         run: |
-          cd $GITHUB_WORKSPACE/head && make clean && make config && make debug
+          cd $GITHUB_WORKSPACE/head && make clean && make config && make build
           git rev-parse --short HEAD
           echo "base sha: ${{ github.event.pull_request.base.sha }}"
           echo "head sha: ${{ github.event.pull_request.head.sha }}"
@@ -233,21 +218,7 @@ jobs:
         if: ${{ always() }}
         run: |
           if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
-          ps -ef
-
-      - uses: actions/checkout@v2
-        with:
-          fetch-depth: '3'
-          path: ./base
-          ref: ${{ github.event.pull_request.base.sha }}
-
-      - name: BVT Ignore Tag Check
-        run: |
-          if  [ ! -d  "./base/test/"  ]; then echo 'first add, skip check'; exit 0; fi
-          head_tag_count=$(grep -r 'bvt:issue' $GITHUB_WORKSPACE/head/test/cases | wc -l || 0)
-          base_tag_count=$(grep -r 'bvt:issue' $GITHUB_WORKSPACE/base/test/cases | wc -l || 0)
-          if [ $head_tag_count -gt $base_tag_count ]; then echo 'Tagging new case with bvt:issue is not permitted.'; exit 2; fi
-
+        
       - name: remove some files
         if: ${{ always() }}
         continue-on-error: true
@@ -262,7 +233,158 @@ jobs:
         if: ${{ always() }}
         continue-on-error: true
         with:
-          name: race_ci_reports
+          name: ci_linux_arm_reports
+          path: |
+            ${{ github.workspace }}
+          retention-days: 7
+          
+  bvt-darwin-x86:
+    runs-on: macos-12
+    name: BVT Test on Darwin/x86
+    timeout-minutes: 30
+
+    steps:
+      - name: checkout head
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: '3'
+          path: ./head
+
+      - name: Set up Go
+        uses: ./head/.github/actions/setup_env
+
+      - name: Build MatrixOne
+        run: |
+          cd $GITHUB_WORKSPACE/head && make clean && make config && make build
+          git rev-parse --short HEAD
+          echo "base sha: ${{ github.event.pull_request.base.sha }}"
+          echo "head sha: ${{ github.event.pull_request.head.sha }}"
+
+      - name: Start MO
+        run: |
+          cd $GITHUB_WORKSPACE/head
+          ./mo-server ./system_vars_config.toml &>mo-server.log &
+
+      - name: Clone test-tool repository
+        uses: actions/checkout@v2
+        with:
+          repository: matrixorigin/mo-tester
+          path: ./mo-tester
+          ref: main
+
+      - name: Set up JDK 8 for x64
+        uses: actions/setup-java@v3
+        with:
+          java-version: '8'
+          distribution: 'adopt'
+          architecture: x64
+
+      - name: Start BVT Test
+        id: bvt_on_pr_version
+        run: |
+          sudo systemsetup -settimezone "Asia/Shanghai"
+          sleep 60
+          cd $GITHUB_WORKSPACE/mo-tester
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
+
+      - name: Check MO-Server Status
+        if: ${{ always() }}
+        run: |
+          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
+        
+      - name: remove some files
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          cd $GITHUB_WORKSPACE
+          if  [ -d  "./head/mo-server"  ]; then rm -rf ./head/mo-server; fi
+          if  [ -d  "./base/"  ]; then rm -rf ./base/; fi
+          rm -rf ./mo-tester/.git
+          rm -rf ./mo-tester/lib
+
+      - uses: actions/upload-artifact@v2
+        if: ${{ always() }}
+        continue-on-error: true
+        with:
+          name: ci_darwin_x86_reports
+          path: |
+            ${{ github.workspace }}
+          retention-days: 7
+
+  linux-x86-bvt-race:
+    runs-on: ubuntu-latest
+    name: BVT RACE Test on CentOS/x64
+    timeout-minutes: 30
+
+    steps:
+      - name: checkout head
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: '3'
+          path: ./head
+
+      - name: Set up Go
+        uses: ./head/.github/actions/setup_env
+
+      - name: Build MatrixOne
+        run: |
+          cd $GITHUB_WORKSPACE/head && make clean && make config && make debug
+          git rev-parse --short HEAD
+          echo "base sha: ${{ github.event.pull_request.base.sha }}"
+          echo "head sha: ${{ github.event.pull_request.head.sha }}"
+
+      - name: Start MO
+        run: |
+          cd $GITHUB_WORKSPACE/head
+          ./mo-server ./system_vars_config.toml &>mo-server.log &
+
+      - name: Clone test-tool repository
+        uses: actions/checkout@v2
+        with:
+          repository: matrixorigin/mo-tester
+          path: ./mo-tester
+          ref: main
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v3
+        with:
+          java-version: '8'
+          distribution: 'adopt'
+          architecture: x64
+
+      - name: Start BVT Test
+        id: bvt_on_pr_version
+        run: |
+          timedatectl status
+          sudo timedatectl set-timezone "Asia/Shanghai"
+          timedatectl status
+          sleep 60s
+          cd $GITHUB_WORKSPACE/mo-tester
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
+
+      - name: Check MO-Server Status
+        if: ${{ always() }}
+        run: |
+          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
+          
+      - name: Check race warnings
+        run: |
+          if [ "$(grep 'DATA RACE' $GITHUB_WORKSPACE/head/mo-server.log | wc -l || 0)" -gt 0 ]; then grep -A 5 'DATA RACE' $GITHUB_WORKSPACE/head/mo-server.log; exit 1; fi
+                          
+      - name: remove some files
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          cd $GITHUB_WORKSPACE
+          if  [ -d  "./head/mo-server"  ]; then rm -rf ./head/mo-server; fi
+          rm -rf ./mo-tester/.git
+          rm -rf ./mo-tester/lib
+
+      - uses: actions/upload-artifact@v2
+        if: ${{ always() }}
+        continue-on-error: true
+        with:
+          name: linux_x86_race_ci_reports
           path: |
             ${{ github.workspace }}
           retention-days: 7
@@ -272,3 +394,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: 'echo "No build required" '
+      
+      
+  sca:
+    runs-on: ubuntu-latest
+    name: SCA Test on Ubuntu/x64
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: '3'
+
+      - name: Set up Go
+        uses: ./.github/actions/setup_env
+          
+      - name: Prepare ENV
+        run: |
+          cd $GITHUB_WORKSPACE && make clean && make config && make build
+          make install-static-check-tools
+          
+      - name: Static Code Analysis
+        run: |
+          cd $GITHUB_WORKSPACE
+          make static-check
+          
+      
+          

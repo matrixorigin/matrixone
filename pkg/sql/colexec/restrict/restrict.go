@@ -26,46 +26,56 @@ import (
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
-	n := arg.(*Argument)
-	buf.WriteString(fmt.Sprintf("σ(%s)", n.E))
+	ap := arg.(*Argument)
+	buf.WriteString(fmt.Sprintf("filter(%s)", ap.E))
 }
 
 func Prepare(_ *process.Process, _ interface{}) error {
 	return nil
 }
 
-func Call(proc *process.Process, arg interface{}) (bool, error) {
-	bat := proc.Reg.InputBatch
+func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
+	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
-	if len(bat.Zs) == 0 {
+	if bat.Length() == 0 {
 		return false, nil
 	}
 	ap := arg.(*Argument)
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
+	anal.Input(bat)
 	vec, err := colexec.EvalExpr(bat, proc, ap.E)
 	if err != nil {
 		bat.Clean(proc.Mp)
 		return false, err
 	}
-	defer vector.Clean(vec, proc.Mp)
-	bs, ok := vec.Col.([]bool)
-	if !ok {
+	defer vec.Free(proc.Mp)
+	if proc.OperatorOutofMemory(int64(vec.Size())) {
+		return false, errors.New("", "out of memory")
+	}
+	anal.Alloc(int64(vec.Size()))
+	if !vec.GetType().IsBoolean() {
 		return false, errors.New("", "Only bool expression can be used as filter condition.")
 	}
+	bs := vector.GetColumn[bool](vec)
 	if vec.IsScalar() {
 		if !bs[0] {
 			bat.Shrink(nil)
 		}
 	} else {
-		sels := make([]int64, 0, 8)
+		sels := proc.GetSels()
 		for i, b := range bs {
 			if b {
 				sels = append(sels, int64(i))
 			}
 		}
 		bat.Shrink(sels)
+		proc.PutSels(sels)
 	}
-	proc.Reg.InputBatch = bat
+	anal.Output(bat)
+	proc.SetInputBatch(bat)
 	return false, nil
 }

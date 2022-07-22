@@ -47,7 +47,7 @@ type SuperBlock struct {
 	inodeSize uint32
 	colCnt    uint32
 	lognode   *Inode
-	state     StateType
+	// state     StateType // unused
 }
 
 type Driver struct {

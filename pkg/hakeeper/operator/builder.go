@@ -14,7 +14,7 @@
 // Portions of this file are additionally subject to the following
 // copyright.
 //
-// Copyright (C) 2021 MatrixOrigin.
+// Copyright (C) 2021 Matrix Origin.
 //
 // Modified the behavior of the builder.
 
@@ -164,6 +164,7 @@ func (b *Builder) buildSteps() error {
 			StoreID:   uuid,
 			ShardID:   b.shardID,
 			ReplicaID: replicaID,
+			Epoch:     b.epoch,
 		})
 		delete(b.toRemove, uuid)
 		continue

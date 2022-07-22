@@ -35,8 +35,8 @@ Reference: <https://dev.mysql.com/doc/refman/8.0/en/data-types.html>
 |  Data Type   | Size  | Resolution |  Min Value   | Max Value  | Precision |
 |  ----  | ----  |   ----  |  ----  | ----  |   ----  |
 | Date  | 4 byte | day | 1000-01-01  | 9999-12-31 | YYYY-MM-DD/YYYYMMDD |
-| DateTime  | 4 byte | second | 1970-01-01 00:00:00  | 2105-12-31 23:59:59 | YYYY-MM-DD hh:mm:ss |
-| TIMESTAMP|8 byte||1970-01-01 00:00:01|2038-01-19 03:14:07|YYYY-MM-DD HH:MM:SS|
+| DateTime  | 8 byte | second | 0001-01-01 00:00:00.000000  | 9999-12-31 23:59:59.999999 | YYYY-MM-DD hh:mi:ssssss |
+| TIMESTAMP|8 byte|second|1970-01-01 00:00:01.000000|2038-01-19 03:14:07.999999|YYYYMMDD hh:mi:ss.ssssss|
 
 ## **Bool**
 

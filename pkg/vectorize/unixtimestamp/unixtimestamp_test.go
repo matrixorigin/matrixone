@@ -17,6 +17,7 @@ package unixtimestamp
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -31,15 +32,14 @@ func mustDatetime(s string) types.Datetime {
 
 func TestUnixTimestamp(t *testing.T) {
 
-	xs := []types.Datetime{
-		mustDatetime("2022-01-01 22:23:00"),
-		mustDatetime("2022-01-02 22:23:00"),
-		mustDatetime("2022-01-03 22:23:00"),
-	}
+	xs := make([]types.Datetime, 3)
 	rs := make([]int64, 3)
-
-	// UTC-8
-	want := []int64{1641075780, 1641162180, 1641248580}
+	want := make([]int64, 3)
+	for i, timestr := range []string{"2022-01-01 22:23:00", "2022-01-02 22:23:00", "2022-01-03 22:23:00"} {
+		xs[i] = mustDatetime(timestr)
+		goLcoalTime, _ := time.ParseInLocation("2006-01-02 15:04:05", timestr, time.Local)
+		want[i] = goLcoalTime.Unix()
+	}
 
 	got := unixTimestamp(xs, rs)
 	if !reflect.DeepEqual(got, want) {

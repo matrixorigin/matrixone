@@ -56,3 +56,7 @@ In the statement containing the WITH clause, each CTE name can be referenced to 
 +------+------------------------------------------------------+
 5 rows in set (0.01 sec)
 ```
+
+## **Constraints**
+
+MatrixOne doesn't support recursive CTE yet.

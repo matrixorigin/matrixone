@@ -35,9 +35,7 @@ func NewCodec(maxsize int) (codec.Encoder, codec.Decoder) {
 }
 
 func (c *rpcCodec) Decode(in *buf.ByteBuf) (bool, interface{}, error) {
-	var v protoc.PB
-
-	v = message.Acquire()
+	v := message.Acquire()
 	if err := v.Unmarshal(in.GetMarkedRemindData()); err != nil {
 		return false, nil, err
 	}
@@ -46,9 +44,7 @@ func (c *rpcCodec) Decode(in *buf.ByteBuf) (bool, interface{}, error) {
 }
 
 func (c *rpcCodec) Encode(data interface{}, out *buf.ByteBuf) error {
-	var v protoc.PB
-
-	v = data.(*message.Message)
+	v := data.(*message.Message)
 	size := v.Size()
 	index := out.GetWriteIndex()
 	out.Expansion(size)

@@ -21,36 +21,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
-func (builder *QueryBuilder) flattenSubqueries(nodeId int32, expr *plan.Expr, ctx *BindContext) (int32, *plan.Expr, error) {
+func (builder *QueryBuilder) flattenSubqueries(nodeID int32, expr *plan.Expr, ctx *BindContext) (int32, *plan.Expr, error) {
 	var err error
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for i, arg := range exprImpl.F.Args {
-			nodeId, exprImpl.F.Args[i], err = builder.flattenSubqueries(nodeId, arg, ctx)
+			nodeID, exprImpl.F.Args[i], err = builder.flattenSubqueries(nodeID, arg, ctx)
 			if err != nil {
 				return 0, nil, err
 			}
 		}
 
 	case *plan.Expr_Sub:
-		nodeId, expr, err = builder.flattenSubquery(nodeId, exprImpl.Sub, ctx)
+		nodeID, expr, err = builder.flattenSubquery(nodeID, exprImpl.Sub, ctx)
 	}
 
-	return nodeId, expr, err
+	return nodeID, expr, err
 }
 
-func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.SubqueryRef, ctx *BindContext) (int32, *plan.Expr, error) {
+func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.SubqueryRef, ctx *BindContext) (int32, *plan.Expr, error) {
 	// TODO: use SINGLE JOIN for scalar subquery and MARK JOIN for quantified subquery
 
-	subId := subquery.NodeId
-	subCtx := builder.ctxByNode[subId]
+	subID := subquery.NodeId
+	subCtx := builder.ctxByNode[subID]
 
 	if subquery.Typ == plan.SubqueryRef_SCALAR && !subCtx.hasSingleRow {
 		return 0, nil, errors.New("", "runtime check of scalar subquery will be supported in future version")
 	}
 
-	subId, preds, err := builder.pullupCorrelatedPredicates(subId, subCtx)
+	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -84,23 +84,23 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 			joinPreds = append(joinPreds, alwaysTrue)
 		}
 
-		nodeId = builder.appendNode(&plan.Node{
+		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeId, subId},
+			Children: []int32{nodeID, subID},
 			JoinType: plan.Node_LEFT,
 			OnList:   joinPreds,
 		}, ctx)
 
 		if len(filterPreds) > 0 {
-			nodeId = builder.appendNode(&plan.Node{
+			nodeID = builder.appendNode(&plan.Node{
 				NodeType:   plan.Node_FILTER,
-				Children:   []int32{nodeId},
+				Children:   []int32{nodeID},
 				FilterList: filterPreds,
 			}, ctx)
 		}
 
-		return nodeId, &plan.Expr{
-			Typ: subCtx.projects[0].Typ,
+		return nodeID, &plan.Expr{
+			Typ: subCtx.results[0].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: subCtx.rootTag(),
@@ -115,14 +115,14 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 			joinPreds = append(joinPreds, alwaysTrue)
 		}
 
-		nodeId = builder.appendNode(&plan.Node{
+		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeId, subId},
+			Children: []int32{nodeID, subID},
 			JoinType: plan.Node_SEMI,
 			OnList:   joinPreds,
 		}, ctx)
 
-		return nodeId, nil, nil
+		return nodeID, nil, nil
 
 	case plan.SubqueryRef_NOT_EXISTS:
 		// Uncorrelated subquery
@@ -130,112 +130,68 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 			joinPreds = append(joinPreds, alwaysTrue)
 		}
 
-		nodeId = builder.appendNode(&plan.Node{
+		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeId, subId},
+			Children: []int32{nodeID, subID},
 			JoinType: plan.Node_ANTI,
 			OnList:   joinPreds,
 		}, ctx)
 
-		return nodeId, nil, nil
+		return nodeID, nil, nil
 
 	case plan.SubqueryRef_IN:
-		expr, err := bindFuncExprImplByPlanExpr("=", []*plan.Expr{
-			subquery.Child,
-			{
-				Typ: subCtx.projects[0].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: subCtx.rootTag(),
-						ColPos: 0,
-					},
-				},
-			},
-		})
+		expr, err := builder.generateComparison("=", subquery.Child, subCtx)
 		if err != nil {
 			return 0, nil, err
 		}
 
 		joinPreds = append(joinPreds, expr)
 
-		nodeId = builder.appendNode(&plan.Node{
+		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeId, subId},
+			Children: []int32{nodeID, subID},
 			JoinType: plan.Node_SEMI,
 			OnList:   joinPreds,
 		}, ctx)
 
-		return nodeId, nil, nil
+		return nodeID, nil, nil
 
 	case plan.SubqueryRef_NOT_IN:
-		expr, err := bindFuncExprImplByPlanExpr("=", []*plan.Expr{
-			subquery.Child,
-			{
-				Typ: subCtx.projects[0].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: subCtx.rootTag(),
-						ColPos: 0,
-					},
-				},
-			},
-		})
+		expr, err := builder.generateComparison("=", subquery.Child, subCtx)
 		if err != nil {
 			return 0, nil, err
 		}
 
 		joinPreds = append(joinPreds, expr)
 
-		nodeId = builder.appendNode(&plan.Node{
+		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeId, subId},
+			Children: []int32{nodeID, subID},
 			JoinType: plan.Node_ANTI,
 			OnList:   joinPreds,
 		}, ctx)
 
-		return nodeId, nil, nil
+		return nodeID, nil, nil
 
 	case plan.SubqueryRef_ANY:
-		expr, err := bindFuncExprImplByPlanExpr(subquery.Op, []*plan.Expr{
-			subquery.Child,
-			{
-				Typ: subCtx.projects[0].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: subCtx.rootTag(),
-						ColPos: 0,
-					},
-				},
-			},
-		})
+		expr, err := builder.generateComparison(subquery.Op, subquery.Child, subCtx)
 		if err != nil {
 			return 0, nil, err
 		}
 
 		joinPreds = append(joinPreds, expr)
 
-		nodeId = builder.appendNode(&plan.Node{
+		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeId, subId},
+			Children: []int32{nodeID, subID},
 			JoinType: plan.Node_SEMI,
 			OnList:   joinPreds,
 		}, ctx)
 
-		return nodeId, nil, nil
+		return nodeID, nil, nil
 
 	case plan.SubqueryRef_ALL:
-		expr, err := bindFuncExprImplByPlanExpr(subquery.Op, []*plan.Expr{
-			subquery.Child,
-			{
-				Typ: subCtx.projects[0].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: subCtx.rootTag(),
-						ColPos: 0,
-					},
-				},
-			},
-		})
+		expr, err := builder.generateComparison(subquery.Op, subquery.Child, subCtx)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -247,29 +203,205 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 
 		joinPreds = append(joinPreds, expr)
 
-		nodeId = builder.appendNode(&plan.Node{
+		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeId, subId},
+			Children: []int32{nodeID, subID},
 			JoinType: plan.Node_ANTI,
 			OnList:   joinPreds,
 		}, ctx)
 
-		return nodeId, nil, nil
+		return nodeID, nil, nil
 
 	default:
 		return 0, nil, errors.New("", fmt.Sprintf("%s subquery not supported", subquery.Typ.String()))
 	}
 }
 
-func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeId int32, ctx *BindContext) (int32, []*plan.Expr, error) {
-	node := builder.qry.Nodes[nodeId]
+func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx *BindContext) (*plan.Expr, error) {
+	switch childImpl := child.Expr.(type) {
+	case *plan.Expr_List:
+		childList := childImpl.List.List
+		switch op {
+		case "=":
+			leftExpr, err := bindFuncExprImplByPlanExpr(op, []*plan.Expr{
+				childList[0],
+				{
+					Typ: ctx.results[0].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: ctx.rootTag(),
+							ColPos: 0,
+						},
+					},
+				},
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			for i := 1; i < len(childList); i++ {
+				rightExpr, err := bindFuncExprImplByPlanExpr(op, []*plan.Expr{
+					childList[i],
+					{
+						Typ: ctx.results[i].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: ctx.rootTag(),
+								ColPos: int32(i),
+							},
+						},
+					},
+				})
+				if err != nil {
+					return nil, err
+				}
+
+				leftExpr, err = bindFuncExprImplByPlanExpr("and", []*plan.Expr{leftExpr, rightExpr})
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			return leftExpr, nil
+
+		case "<>":
+			leftExpr, err := bindFuncExprImplByPlanExpr(op, []*plan.Expr{
+				childList[0],
+				{
+					Typ: ctx.results[0].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: ctx.rootTag(),
+							ColPos: 0,
+						},
+					},
+				},
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			for i := 1; i < len(childList); i++ {
+				rightExpr, err := bindFuncExprImplByPlanExpr(op, []*plan.Expr{
+					childList[i],
+					{
+						Typ: ctx.results[i].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: ctx.rootTag(),
+								ColPos: int32(i),
+							},
+						},
+					},
+				})
+				if err != nil {
+					return nil, err
+				}
+
+				leftExpr, err = bindFuncExprImplByPlanExpr("or", []*plan.Expr{leftExpr, rightExpr})
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			return leftExpr, nil
+
+		case "<", "<=":
+			return builder.generateRecursiveComparison("<", op, childList, ctx, 0)
+
+		case ">", ">=":
+			return builder.generateRecursiveComparison(">", op, childList, ctx, 0)
+
+		default:
+			return nil, errors.New("", "row constructor only support comparison operators")
+		}
+
+	default:
+		return bindFuncExprImplByPlanExpr(op, []*plan.Expr{
+			child,
+			{
+				Typ: ctx.results[0].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: ctx.rootTag(),
+						ColPos: 0,
+					},
+				},
+			},
+		})
+	}
+}
+
+func (builder *QueryBuilder) generateRecursiveComparison(op, tailOp string, childList []*plan.Expr, ctx *BindContext, idx int) (*plan.Expr, error) {
+	if idx == len(childList)-1 {
+		return bindFuncExprImplByPlanExpr(tailOp, []*plan.Expr{
+			childList[idx],
+			{
+				Typ: ctx.results[idx].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: ctx.rootTag(),
+						ColPos: int32(idx),
+					},
+				},
+			},
+		})
+	}
+
+	expr, err := bindFuncExprImplByPlanExpr(op, []*plan.Expr{
+		childList[idx],
+		{
+			Typ: ctx.results[idx].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: ctx.rootTag(),
+					ColPos: int32(idx),
+				},
+			},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	eqExpr, err := bindFuncExprImplByPlanExpr("=", []*plan.Expr{
+		childList[idx],
+		{
+			Typ: ctx.results[idx].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: ctx.rootTag(),
+					ColPos: int32(idx),
+				},
+			},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	tailExpr, err := builder.generateRecursiveComparison(op, tailOp, childList, ctx, idx+1)
+	if err != nil {
+		return nil, err
+	}
+
+	tailExpr, err = bindFuncExprImplByPlanExpr("and", []*plan.Expr{eqExpr, tailExpr})
+	if err != nil {
+		return nil, err
+	}
+
+	return bindFuncExprImplByPlanExpr("or", []*plan.Expr{expr, tailExpr})
+}
+
+func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeID int32, ctx *BindContext) (int32, []*plan.Expr, error) {
+	node := builder.qry.Nodes[nodeID]
 
 	var preds []*plan.Expr
 	var err error
 
 	var subPreds []*plan.Expr
-	for i, childId := range node.Children {
-		node.Children[i], subPreds, err = builder.pullupCorrelatedPredicates(childId, ctx)
+	for i, childID := range node.Children {
+		node.Children[i], subPreds, err = builder.pullupCorrelatedPredicates(childID, ctx)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -301,13 +433,13 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeId int32, ctx *BindC
 		}
 
 		if len(newFilterList) == 0 {
-			nodeId = node.Children[0]
+			nodeID = node.Children[0]
 		} else {
 			node.FilterList = newFilterList
 		}
 	}
 
-	return nodeId, preds, err
+	return nodeID, preds, err
 }
 
 func (builder *QueryBuilder) pullupThroughAgg(ctx *BindContext, node *plan.Node, tag int32, expr *plan.Expr) *plan.Expr {

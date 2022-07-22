@@ -66,6 +66,35 @@ func GenericVectorValues[T any](v *Vector) []T {
 	return v.Col.([]T)
 }
 
+func GetColumn[T any](v *Vector) []T {
+	return v.Col.([]T)
+}
+
+func GetStrColumn(v *Vector) *types.Bytes {
+	return v.Col.(*types.Bytes)
+}
+
+// Count return the number of rows in the vector
+func (v *Vector) Count() int {
+	return Length(v)
+}
+
+func (v *Vector) Size() int {
+	return len(v.Data)
+}
+
+func (v *Vector) GetType() types.Type {
+	return v.Typ
+}
+
+func (v *Vector) GetNulls() *nulls.Nulls {
+	return v.Nsp
+}
+
+func (v *Vector) GetString(i int64) []byte {
+	return v.Col.(*types.Bytes).Get(i)
+}
+
 func (v *Vector) FillDefaultValue() {
 	if !nulls.Any(v.Nsp) || len(v.Data) == 0 {
 		return
@@ -302,6 +331,15 @@ func DecodeFixedCol[T any](v *Vector, sz int) []T {
 	return encoding.DecodeFixedSlice[T](v.Data, sz)
 }
 
+func NewWithData(typ types.Type, data []byte, col interface{}, nsp *nulls.Nulls) *Vector {
+	return &Vector{
+		Nsp:  nsp,
+		Col:  col,
+		Typ:  typ,
+		Data: data,
+	}
+}
+
 func New(typ types.Type) *Vector {
 	switch typ.Oid {
 	case types.T_any:
@@ -511,6 +549,7 @@ func (v *Vector) ConstVectorIsNull() bool {
 func (v *Vector) Free(m *mheap.Mheap) {
 	if v.Data != nil {
 		mheap.Free(m, v.Data)
+		v.Data = nil
 	}
 }
 
@@ -1845,7 +1884,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 	return nil
 }
 
-// v[vi] = w[wi]
+// Copy v[vi] = w[wi]
 func Copy(v, w *Vector, vi, wi int64, m *mheap.Mheap) error {
 	defer func() {
 		size := v.Typ.Oid.TypeLen()

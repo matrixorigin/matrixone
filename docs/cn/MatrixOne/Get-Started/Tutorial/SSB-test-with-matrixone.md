@@ -1,17 +1,17 @@
 # **完成SSB测试**
 
-SSB星型模式基准测试是OLAP数据库性能测试的常用场景，通过本篇教程，您可以了解到如何在MatrixOne中实现SSB测试。
+SSB 星型模式基准测试是 OLAP 数据库性能测试的常用场景，通过本篇教程，您可以了解到如何在 MatrixOne 中实现 SSB 测试。
 
 ## **准备工作**
 
 确保你已经安装了[单机版MatrixOne](../install-standalone-matrixone.md)并[连接到MatrixOne服务](../connect-to-matrixone-server.md).
-  
+
 ## **1. 编译dbgen**
 
 ```
-$ git clone git@github.com:vadimtk/ssb-dbgen.git
-$ cd ssb-dbgen
-$ make
+git clone git@github.com:vadimtk/ssb-dbgen.git
+cd ssb-dbgen
+make
 ```
 
 ## **2. 生成数据**
@@ -19,11 +19,17 @@ $ make
 当使用`-s 1`时`dbgen`命令会生产近600万行数据(670MB)，当使用`-s 10`时会生产近6000万行数据，会耗费大量时间。
 
 ```
-$ ./dbgen -s 1 -T c
-$ ./dbgen -s 1 -T l
-$ ./dbgen -s 1 -T p
-$ ./dbgen -s 1 -T s
-$ ./dbgen -s 1 -T d
+./dbgen -s 1 -T c
+./dbgen -s 1 -T l
+./dbgen -s 1 -T p
+./dbgen -s 1 -T s
+./dbgen -s 1 -T d
+```
+
+我们还准备了 1GB 的数据集供你下载。你可以在下面链接中直接获取数据文件：
+
+```
+https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/lineorder_flat.tar.bz2
 ```
 
 ## **3. 在MatrixOne中建表**
@@ -153,12 +159,6 @@ CREATE TABLE lineorder_flat(
 ```
 
 ## **4. 导入数据**
-
-将`system_vars_config.toml`参数增大，例如10GB，然后重新启动MatrixOne服务。
-
-```
-max-entry-bytes = "10GB"
-```
 
 使用如下命令将数据导入相关表：
 

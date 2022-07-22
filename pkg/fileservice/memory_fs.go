@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"io/ioutil"
 	"sort"
 	"strings"
 	"sync"
@@ -43,11 +44,11 @@ func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry
 	m.RLock()
 	defer m.RUnlock()
 
-	pivot := &_MemIOEntry{
+	pivot := &_MemFSEntry{
 		FilePath: dirPath,
 	}
 	m.tree.AscendGreaterOrEqual(pivot, func(v btree.Item) bool {
-		item := v.(*_MemIOEntry)
+		item := v.(*_MemFSEntry)
 		if !strings.HasPrefix(item.FilePath, dirPath) {
 			return false
 		}
@@ -62,7 +63,7 @@ func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry
 			entries = append(entries, DirEntry{
 				IsDir: isDir,
 				Name:  name,
-				Size:  item.Size,
+				Size:  len(item.Data),
 			})
 		}
 
@@ -76,12 +77,12 @@ func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
 	m.Lock()
 	defer m.Unlock()
 
-	pivot := &_MemIOEntry{
+	pivot := &_MemFSEntry{
 		FilePath: vector.FilePath,
 	}
 	existed := false
 	m.tree.AscendGreaterOrEqual(pivot, func(item btree.Item) bool {
-		entry := item.(*_MemIOEntry)
+		entry := item.(*_MemFSEntry)
 		if entry.FilePath == vector.FilePath {
 			existed = true
 		}
@@ -90,6 +91,11 @@ func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
 	if existed {
 		return ErrFileExisted
 	}
+
+	return m.write(ctx, vector)
+}
+
+func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 
 	if len(vector.Entries) == 0 {
 		vector.Entries = []IOEntry{
@@ -104,29 +110,17 @@ func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
 	sort.Slice(vector.Entries, func(i, j int) bool {
 		return vector.Entries[i].Offset < vector.Entries[j].Offset
 	})
-	for _, entry := range vector.Entries {
-		var data []byte
-		if entry.ReaderForWrite != nil {
-			var err error
-			data, err = io.ReadAll(entry.ReaderForWrite)
-			if err != nil {
-				return err
-			}
-		} else {
-			data = make([]byte, len(entry.Data))
-			copy(data, entry.Data)
-		}
-		if len(data) != entry.Size {
-			return ErrSizeNotMatch
-		}
-		item := &_MemIOEntry{
-			FilePath: vector.FilePath,
-			Offset:   entry.Offset,
-			Size:     len(data),
-			Data:     data,
-		}
-		m.tree.ReplaceOrInsert(item)
+
+	r := newIOEntriesReader(vector.Entries)
+	data, err := ioutil.ReadAll(r)
+	if err != nil {
+		return err
 	}
+	entry := &_MemFSEntry{
+		FilePath: vector.FilePath,
+		Data:     data,
+	}
+	m.tree.ReplaceOrInsert(entry)
 
 	return nil
 }
@@ -135,94 +129,48 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 	m.RLock()
 	defer m.RUnlock()
 
-	pivot := &_MemIOEntry{
+	pivot := &_MemFSEntry{
 		FilePath: vector.FilePath,
 	}
 
-	fileFound := false
+	v := m.tree.Get(pivot)
+	if v == nil {
+		return ErrFileNotFound
+	}
+
+	fsEntry := v.(*_MemFSEntry)
+
 	for i, entry := range vector.Entries {
-		pivot.Offset = entry.Offset
-		pivot.Size = entry.Size
-		if len(entry.Data) < entry.Size {
-			pivot.Data = make([]byte, entry.Size)
-		} else {
-			pivot.Data = entry.Data[:entry.Size]
-		}
-
-		m.tree.DescendLessOrEqual(pivot, func(item btree.Item) bool {
-			src := item.(*_MemIOEntry)
-			if src.FilePath != pivot.FilePath {
-				return false
-			}
-			fileFound = true
-			if pivot.Size <= 0 {
-				return false
-			}
-			if pivot.Offset > src.Offset+src.Size {
-				return false
-			}
-			startPos := pivot.Offset - src.Offset
-			endPos := startPos + pivot.Size
-			if endPos > src.Size {
-				endPos = src.Size
-			}
-			copy(pivot.Data[entry.Size-pivot.Size:], src.Data[startPos:endPos])
-			n := endPos - startPos
-			pivot.Offset += n
-			pivot.Size -= n
-			return true
-		})
-
-		m.tree.AscendGreaterOrEqual(pivot, func(item btree.Item) bool {
-			src := item.(*_MemIOEntry)
-			if src.FilePath != pivot.FilePath {
-				return false
-			}
-			fileFound = true
-			if pivot.Size <= 0 {
-				return false
-			}
-			if pivot.Offset+pivot.Size < src.Offset {
-				return false
-			}
-			startPos := pivot.Offset - src.Offset
-			endPos := startPos + pivot.Size
-			if endPos > src.Size {
-				endPos = src.Size
-			}
-			copy(pivot.Data[entry.Size-pivot.Size:], src.Data[startPos:endPos])
-			n := endPos - startPos
-			pivot.Offset += n
-			pivot.Size -= n
-			return true
-		})
-
-		if pivot.Size > 0 {
-			return ErrUnexpectedEOF
-		}
-		if len(pivot.Data) == 0 {
+		if entry.Size == 0 {
 			return ErrEmptyRange
 		}
+		if entry.Size < 0 {
+			entry.Size = len(fsEntry.Data) - entry.Offset
+		}
+		if entry.Size > len(fsEntry.Data) {
+			return ErrUnexpectedEOF
+		}
+		data := fsEntry.Data[entry.Offset : entry.Offset+entry.Size]
 
 		setData := true
 		if w := vector.Entries[i].WriterForRead; w != nil {
 			setData = false
-			_, err := w.Write(pivot.Data)
+			_, err := w.Write(data)
 			if err != nil {
 				return err
 			}
 		}
 		if ptr := vector.Entries[i].ReadCloserForRead; ptr != nil {
 			setData = false
-			*ptr = io.NopCloser(bytes.NewReader(pivot.Data))
+			*ptr = io.NopCloser(bytes.NewReader(data))
 		}
 		if setData {
-			vector.Entries[i].Data = pivot.Data
+			if len(entry.Data) < entry.Size {
+				vector.Entries[i].Data = data
+			} else {
+				copy(entry.Data, data)
+			}
 		}
-	}
-
-	if !fileFound {
-		return ErrFileNotFound
 	}
 
 	return nil
@@ -232,12 +180,12 @@ func (m *MemoryFS) Delete(ctx context.Context, filePath string) error {
 	m.Lock()
 	defer m.Unlock()
 
-	pivot := &_MemIOEntry{
+	pivot := &_MemFSEntry{
 		FilePath: filePath,
 	}
 	var toDelete []btree.Item
 	m.tree.AscendGreaterOrEqual(pivot, func(v btree.Item) bool {
-		item := v.(*_MemIOEntry)
+		item := v.(*_MemFSEntry)
 		if item.FilePath != filePath {
 			return false
 		}
@@ -251,19 +199,22 @@ func (m *MemoryFS) Delete(ctx context.Context, filePath string) error {
 	return nil
 }
 
-type _MemIOEntry struct {
+type _MemFSEntry struct {
 	FilePath string
-	Offset   int
-	Size     int
 	Data     []byte
 }
 
-var _ btree.Item = new(_MemIOEntry)
+var _ btree.Item = new(_MemFSEntry)
 
-func (m *_MemIOEntry) Less(than btree.Item) bool {
-	m2 := than.(*_MemIOEntry)
-	if m.FilePath != m2.FilePath {
-		return m.FilePath < m2.FilePath
-	}
-	return m.Offset < m2.Offset
+func (m *_MemFSEntry) Less(than btree.Item) bool {
+	m2 := than.(*_MemFSEntry)
+	return m.FilePath < m2.FilePath
+}
+
+var _ ReplaceableFileService = new(MemoryFS)
+
+func (m *MemoryFS) Replace(ctx context.Context, vector IOVector) error {
+	m.Lock()
+	defer m.Unlock()
+	return m.write(ctx, vector)
 }

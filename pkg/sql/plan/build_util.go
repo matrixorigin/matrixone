@@ -32,11 +32,11 @@ import (
 )
 
 func appendQueryNode(query *Query, node *Node) int32 {
-	nodeId := int32(len(query.Nodes))
-	node.NodeId = nodeId
+	nodeID := int32(len(query.Nodes))
+	node.NodeId = nodeID
 	query.Nodes = append(query.Nodes, node)
 
-	return nodeId
+	return nodeID
 }
 
 func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
@@ -206,14 +206,18 @@ func convertToPlanValue(value interface{}) *plan.ConstantValue {
 			ConstantValue: &plan.ConstantValue_TimeStampV{TimeStampV: int64(v)},
 		}
 	case types.Decimal64:
+		dA := types.Decimal64ToInt64Raw(v)
 		return &plan.ConstantValue{
-			ConstantValue: &plan.ConstantValue_Decimal64V{Decimal64V: int64(v)},
+			ConstantValue: &plan.ConstantValue_Decimal64V{Decimal64V: &plan.Decimal64{
+				A: dA,
+			}},
 		}
 	case types.Decimal128:
+		dA, dB := types.Decimal128ToInt64Raw(v)
 		return &plan.ConstantValue{
 			ConstantValue: &plan.ConstantValue_Decimal128V{Decimal128V: &plan.Decimal128{
-				Lo: v.Lo,
-				Hi: v.Hi,
+				A: dA,
+				B: dB,
 			}},
 		}
 	}
@@ -660,9 +664,9 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 	return nil, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("unsupport value: %v", val))
 }
 
-func getFunctionObjRef(funcId int64, name string) *ObjectRef {
+func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 	return &ObjectRef{
-		Obj:     funcId,
+		Obj:     funcID,
 		ObjName: name,
 	}
 }

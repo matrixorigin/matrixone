@@ -14,10 +14,6 @@ MO-Tester 相关用例、结果和报告的链接如下：
 
 * *Report*: 运行结束后，本地目录自动生成 `mo-tester/report`。
 
-The Cases and Results are 1-1 correspondence, and they are actually `git submodules` from MatrixOne repository. Adding new cases and results should be in MatrixOne repo: <https://github.com/matrixorigin/matrixone/tree/main/test>
-
-MO-Tester includes testing cases in the following table.
-
 测试用例和测试结果一一对应。如需添加新的测试用例和测试结果请进入右侧所示 MatrixOne 仓库路径中进行添加：<https://github.com/matrixorigin/matrixone/tree/main/test>
 
 MO-Tester 测试用例如下表所示：
@@ -90,7 +86,6 @@ MO-tester 基于 Java 语言进行开发，因此 JDBC 驱动程序需要配置�
 ```
 
 如果你想调整测试范围，你可以修改 `run.yml` 文件中的 `path` 参数。或者，在执行 `run.sh` 命令时，你也可以指定一些参数，参数如下：
-<!--请确认这段描述是否正确-->
 
 ```
 -p  set the path of test cases needed to be executed by mo-tester, the default value is configured by the `path` in `run.yaml`
@@ -112,7 +107,6 @@ bash run.sh -p case -m run -t script -r 100 -i select,subquery -e substring -g
 ```
 
 如果你想测试新的 SQL 用例并自动生成 SQL 结果，你只需要将 `run` 中的 `method` 参数 `yml` 修改为 `genrs`。运行 `run.sh` 后，在`result/` 路径下将直接记录测试结果及其原始文件名。
-<!--记录的是新的SQL用例的测试结果和新用例的文件名吗？-->
 
 注意：每次运行 `run.sh` 都会覆盖 `error.txt`、`report.txt` 和 `success.txt` 报告文件。
 

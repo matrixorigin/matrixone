@@ -119,6 +119,10 @@ func (l *Log) readInode(cache *bytes.Buffer, file *DriverFile) (n int, err error
 
 func (l *Log) Replay(cache *bytes.Buffer) error {
 	var off int64 = LOG_START
+	stat, err := l.logFile.driver.logFile.Stat()
+	if err != nil {
+		return err
+	}
 	for {
 		pos, hole, err := l.replayData(cache, off)
 		if err != nil {
@@ -127,7 +131,7 @@ func (l *Log) Replay(cache *bytes.Buffer) error {
 			}
 			return err
 		}
-		if off >= LOG_SIZE || hole >= HOLE_SIZE {
+		if off >= LOG_SIZE || off >= stat.Size() || hole >= HOLE_SIZE {
 			return nil
 		}
 		off += int64(pos)

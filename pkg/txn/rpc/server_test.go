@@ -67,7 +67,7 @@ func TestHandleMessage(t *testing.T) {
 func TestHandleMessageWithFilter(t *testing.T) {
 	runTestTxnServer(t, testDN1Addr, func(s *server) {
 		n := 0
-		s.RegisterMethodHandler(txn.TxnMethod_Read, func(ctx context.Context, tr1 *txn.TxnRequest, tr2 *txn.TxnResponse) error {
+		s.RegisterMethodHandler(txn.TxnMethod_Read, func(_ context.Context, _ *txn.TxnRequest, _ *txn.TxnResponse) error {
 			n++
 			return nil
 		})
@@ -109,7 +109,7 @@ func TestTimeoutRequestCannotHandled(t *testing.T) {
 	runTestTxnServer(t, testDN1Addr, func(s *server) {
 		n := 0
 		s.RegisterMethodHandler(txn.TxnMethod_Read,
-			func(ctx context.Context, tr1 *txn.TxnRequest, tr2 *txn.TxnResponse) error {
+			func(_ context.Context, _ *txn.TxnRequest, _ *txn.TxnResponse) error {
 				n++
 				return nil
 			})

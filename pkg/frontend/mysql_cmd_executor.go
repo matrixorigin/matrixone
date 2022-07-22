@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -54,7 +55,7 @@ var (
 	errorUnaryMinusForNonNumericTypeIsNotSupported = goErrors.New("unary minus for no numeric type is not supported")
 )
 
-//tableInfos of a database
+// TableInfoCache tableInfos of a database
 type TableInfoCache struct {
 	db         string
 	tableInfos map[string][]ColumnInfo
@@ -123,8 +124,8 @@ type outputQueue struct {
 	flushTime       time.Duration
 }
 
-func (oq *outputQueue) ResetLineStr() {
-	oq.lineStr = oq.lineStr[:0]
+func (o *outputQueue) ResetLineStr() {
+	o.lineStr = o.lineStr[:0]
 }
 
 func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *tree.ExportParam, showStatementType ShowStatementType) *outputQueue {
@@ -197,12 +198,17 @@ func (o *outputQueue) flush() error {
 }
 
 const (
-	tableNamePos  = 1
-	attrNamePos   = 2
-	attrTypPos    = 3
-	charWidthPos  = 5
-	defaultPos    = 7
-	primaryKeyPos = 10
+	tableNamePos    = 0
+	tableCommentPos = 4
+
+	attrNamePos    = 8
+	attrTypPos     = 9
+	charWidthPos   = 11
+	defaultPos     = 13
+	primaryKeyPos  = 16
+	attrCommentPos = 19
+
+	showCreateTableAttrCount = 21
 )
 
 /*
@@ -224,6 +230,13 @@ func handleShowCreateTable(ses *Session) error {
 		} else {
 			nullOrNot = "DEFAULT NULL"
 		}
+
+		var hasAttrComment string
+		attrComment := string(d[attrCommentPos].([]byte))
+		if attrComment != "" {
+			hasAttrComment = " COMMENT '" + attrComment + "'"
+		}
+
 		if rowCount == 0 {
 			createStr += "\n"
 		} else {
@@ -234,7 +247,7 @@ func handleShowCreateTable(ses *Session) error {
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char {
 			typeStr += fmt.Sprintf("(%d)", d[charWidthPos].(int32))
 		}
-		createStr += fmt.Sprintf("`%s` %s %s", colName, typeStr, nullOrNot)
+		createStr += fmt.Sprintf("`%s` %s %s%s", colName, typeStr, nullOrNot, hasAttrComment)
 		rowCount++
 		if string(d[primaryKeyPos].([]byte)) == "p" {
 			pkDefs = append(pkDefs, colName)
@@ -256,6 +269,11 @@ func handleShowCreateTable(ses *Session) error {
 		createStr += "\n"
 	}
 	createStr += ")"
+
+	tableComment := string(ses.Data[0][tableCommentPos].([]byte))
+	if tableComment != "" {
+		createStr += " COMMENT='" + tableComment + "',"
+	}
 
 	row := make([]interface{}, 2)
 	row[0] = tableName
@@ -402,7 +420,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		if err != nil {
 			return err
 		}
-		var rowIndex int64 = int64(j)
+		var rowIndex = int64(j)
 		if len(bat.Sels) != 0 {
 			rowIndex = bat.Sels[j]
 		}
@@ -617,26 +635,26 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				scale := vec.Typ.Scale
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
 					vs := vec.Col.([]types.Decimal64)
-					row[i] = vs[rowIndex].Decimal64ToString(scale)
+					row[i] = vs[rowIndex].ToStringWithScale(scale)
 				} else {
 					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
 						row[i] = nil
 					} else {
 						vs := vec.Col.([]types.Decimal64)
-						row[i] = vs[rowIndex].Decimal64ToString(scale)
+						row[i] = vs[rowIndex].ToStringWithScale(scale)
 					}
 				}
 			case types.T_decimal128:
 				scale := vec.Typ.Scale
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
 					vs := vec.Col.([]types.Decimal128)
-					row[i] = vs[rowIndex].Decimal128ToString(scale)
+					row[i] = vs[rowIndex].ToStringWithScale(scale)
 				} else {
 					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
 						row[i] = nil
 					} else {
 						vs := vec.Col.([]types.Decimal128)
-						row[i] = vs[rowIndex].Decimal128ToString(scale)
+						row[i] = vs[rowIndex].ToStringWithScale(scale)
 					}
 				}
 			default:
@@ -796,7 +814,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	}
 
 	if !isfile {
-		return fmt.Errorf("file %s is a directory.", load.File)
+		return fmt.Errorf("file %s is a directory", load.File)
 	}
 
 	/*
@@ -815,7 +833,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 
 	txnHandler := ses.GetTxnHandler()
 	if txnHandler.isTxnState(TxnBegan) {
-		return fmt.Errorf("Do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
+		return fmt.Errorf("do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
 	}
 	dbHandler, err := ses.Pu.StorageEngine.Database(loadDb, txnHandler.GetTxn().GetCtx())
 	if err != nil {
@@ -897,15 +915,24 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 				if err != nil {
 					return err
 				}
-				defs := table.TableDefs(txnHandler.GetTxn().GetCtx())
-				for _, def := range defs {
-					if attr, ok := def.(*engine.AttributeDef); ok {
-						attrs = append(attrs, &engineColumnInfo{
-							name: attr.Attr.Name,
-							typ:  attr.Attr.Type,
-						})
-					}
-				}
+
+				// XXX FIXME
+				// defs :=
+				table.TableDefs(txnHandler.GetTxn().GetCtx())
+				//
+				// By all means, the error generated by static check is real.
+				// See the Fixme: below.
+				//
+				// defs := table.TableDefs(txnHandler.GetTxn().GetCtx())
+				// for _, def := range defs {
+				// 	if attr, ok := def.(*engine.AttributeDef); ok {
+				// 		// Fixme: attrs here is never used.
+				// 		attrs = append(attrs, &engineColumnInfo{
+				// 			name: attr.Attr.Name,
+				// 			typ:  attr.Attr.Type,
+				// 		})
+				// 	}
+				// }
 			}
 		}
 	}
@@ -1035,8 +1062,8 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 	ses.Mrs.AddColumn(col1)
 	ses.Mrs.AddColumn(col2)
 
-	var hasLike bool = false
-	var likePattern string = ""
+	var hasLike = false
+	var likePattern = ""
 	if sv.Like != nil {
 		hasLike = true
 		likePattern = strings.ToLower(sv.Like.Right.String())
@@ -1235,6 +1262,48 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	return nil
 }
 
+// handlePrepareStmt
+func (mce *MysqlCmdExecutor) handlePrepareStmt(st *tree.PrepareStmt) error {
+	preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
+	if err != nil {
+		return err
+	}
+
+	return mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), &PrepareStmt{
+		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
+		PreparePlan: preparePlan,
+		PrepareStmt: st.Stmt,
+	})
+}
+
+// handlePrepareString
+func (mce *MysqlCmdExecutor) handlePrepareString(st *tree.PrepareString) error {
+	preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
+	if err != nil {
+		return err
+	}
+	stmts, err := mysql.Parse(st.Sql)
+	if err != nil {
+		return err
+	}
+
+	return mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), &PrepareStmt{
+		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
+		PreparePlan: preparePlan,
+		PrepareStmt: stmts[0],
+	})
+}
+
+// handleDeallocate
+func (mce *MysqlCmdExecutor) handleDeallocate(st *tree.Deallocate) error {
+	deallocatePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
+	if err != nil {
+		return err
+	}
+	mce.ses.RemovePrepareStmt(deallocatePlan.GetDcl().GetDeallocate().GetName())
+	return nil
+}
+
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
 	cols := []*plan2.ColDef{
 		{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_varchar)}, Name: explainColName},
@@ -1342,6 +1411,53 @@ func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{},
 	cwft.plan, err = buildPlan(cwft.ses.GetTxnCompilerContext(), cwft.stmt)
 	if err != nil {
 		return nil, err
+	}
+
+	if _, ok := cwft.stmt.(*tree.Execute); ok {
+		executePlan := cwft.plan.GetDcl().GetExecute()
+		stmtName := executePlan.GetName()
+		prepareStmt, err := cwft.ses.GetPrepareStmt(stmtName)
+		if err != nil {
+			return nil, err
+		}
+
+		preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+
+		// TODO check if schema change, obj.Obj is zero all the time in 0.6
+		// for _, obj := range preparePlan.GetSchemas() {
+		// 	newObj, _ := cwft.ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName)
+		// 	if newObj == nil || newObj.Obj != obj.Obj {
+		// 		return nil, errors.New("", fmt.Sprintf("table '%s' has been changed, please reset prepare statement '%s'", obj.ObjName, stmtName))
+		// 	}
+		// }
+
+		query := plan2.DeepCopyQuery(preparePlan.Plan.GetQuery())
+
+		// replace ? and @var with their values
+		resetParamRule := plan2.NewResetParamRefRule(executePlan.Args)
+		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompilerContext())
+		VisitQuery := plan2.NewVisitQuery(query, []plan2.VisitRule{resetParamRule, resetVarRule})
+		err = VisitQuery.Visit()
+		if err != nil {
+			return nil, err
+		}
+
+		// reset plan & stmt
+		cwft.stmt = prepareStmt.PrepareStmt
+		cwft.plan = &plan2.Plan{Plan: &plan2.Plan_Query{
+			Query: query,
+		}}
+	} else {
+		// replace @var with their values
+		query := cwft.plan.GetQuery()
+		if query != nil {
+			resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompilerContext())
+			VisitQuery := plan2.NewVisitQuery(query, []plan2.VisitRule{resetVarRule})
+			err = VisitQuery.Visit()
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	cwft.proc.UnixTime = time.Now().UnixNano()
@@ -1500,7 +1616,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		ses.Mrs = &MysqlResultSet{}
 		stmt := cw.GetAst()
 
-		var fromTxnCommand TxnCommand = TxnNoCommand
+		var fromTxnCommand = TxnNoCommand
 		//check transaction states
 		switch stmt.(type) {
 		case *tree.BeginTransaction:
@@ -1578,6 +1694,26 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			if err != nil {
 				goto handleFailed
 			}
+		case *tree.PrepareStmt:
+			selfHandle = true
+			err = mce.handlePrepareStmt(st)
+			if err != nil {
+				goto handleFailed
+			}
+		case *tree.PrepareString:
+			selfHandle = true
+			err = mce.handlePrepareString(st)
+			if err != nil {
+				goto handleFailed
+			}
+		case *tree.Deallocate:
+			selfHandle = true
+			err = mce.handleDeallocate(st)
+			deallocatePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
+			if err != nil {
+				goto handleFailed
+			}
+			mce.ses.RemovePrepareStmt(deallocatePlan.GetDcl().GetDeallocate().GetName())
 		case *tree.SetVar:
 			selfHandle = true
 			err = mce.handleSetVar(st)
@@ -1785,7 +1921,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
-				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete:
+				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete,
+				*tree.PrepareStmt, *tree.PrepareString, *tree.Deallocate:
 				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 				if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
 					return fmt.Errorf("routine send response failed. error:%v ", err)
@@ -1810,6 +1947,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	return nil
 }
 
+/*
 func (mce *MysqlCmdExecutor) handleDDl(ses *Session, stmt tree.Statement, epoch uint64) error {
 	txnHandler := ses.GetTxnHandler()
 	switch ddl := stmt.(type) {
@@ -1856,6 +1994,7 @@ func (mce *MysqlCmdExecutor) handleDDl(ses *Session, stmt tree.Statement, epoch 
 	}
 	return nil
 }
+*/
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
 func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err error) {
@@ -1944,7 +2083,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 
 		return resp, nil
 	default:
-		err := fmt.Errorf("unsupported command. 0x%x \n", req.GetCmd())
+		err := fmt.Errorf("unsupported command. 0x%x", req.GetCmd())
 		resp = NewGeneralErrorResponse(uint8(req.GetCmd()), err)
 	}
 	return resp, nil
@@ -2013,7 +2152,7 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 	case types.T_decimal128:
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	default:
-		return fmt.Errorf("RunWhileSend : unsupported type %d \n", engineType)
+		return fmt.Errorf("RunWhileSend : unsupported type %d", engineType)
 	}
 	return nil
 }

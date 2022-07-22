@@ -348,7 +348,7 @@ func toTypesType(t types.T) types.Type {
 }
 
 func AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs []*engine.AttributeDef, rowCount int) *batch.Batch {
-	var attributeNames []string = make([]string, len(attributeDefs))
+	var attributeNames = make([]string, len(attributeDefs))
 	for i, def := range attributeDefs {
 		attributeNames[i] = def.Attr.Name
 	}
@@ -793,8 +793,8 @@ func FormatLineInBatch(bat *batch.Batch, rowIndex int) []string {
 // pattern and target are ascii characters
 // TODO: add \_ and \%
 func WildcardMatch(pattern, target string) bool {
-	var p int = 0
-	var t int = 0
+	var p = 0
+	var t = 0
 	var positionOfPercentPlusOne int = -1
 	var positionOfTargetEncounterPercent int = -1
 	plen := len(pattern)

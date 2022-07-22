@@ -22,7 +22,6 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/div"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"golang.org/x/exp/constraints"
@@ -274,7 +273,7 @@ func IntToBytes[T constraints.Integer](xs []T, rs *types.Bytes) (*types.Bytes, e
 func Decimal64ToBytes(xs []types.Decimal64, rs *types.Bytes, scale int32) (*types.Bytes, error) {
 	oldLen := uint32(0)
 	for _, x := range xs {
-		rs.Data = append(rs.Data, x.Decimal64ToString(scale)...)
+		rs.Data = append(rs.Data, x.ToStringWithScale(scale)...)
 		newLen := uint32(len(rs.Data))
 		rs.Offsets = append(rs.Offsets, oldLen)
 		rs.Lengths = append(rs.Lengths, newLen-oldLen)
@@ -286,7 +285,7 @@ func Decimal64ToBytes(xs []types.Decimal64, rs *types.Bytes, scale int32) (*type
 func Decimal128ToBytes(xs []types.Decimal128, rs *types.Bytes, scale int32) (*types.Bytes, error) {
 	oldLen := uint32(0)
 	for _, x := range xs {
-		rs.Data = append(rs.Data, x.Decimal128ToString(scale)...)
+		rs.Data = append(rs.Data, x.ToStringWithScale(scale)...)
 		newLen := uint32(len(rs.Data))
 		rs.Offsets = append(rs.Offsets, oldLen)
 		rs.Lengths = append(rs.Lengths, newLen-oldLen)
@@ -333,7 +332,7 @@ func FloatToBytes[T constraints.Float](xs []T, rs *types.Bytes) (*types.Bytes, e
 
 func decimal64ToDecimal128Pure(xs []types.Decimal64, rs []types.Decimal128) ([]types.Decimal128, error) {
 	for i, x := range xs {
-		rs[i] = types.Decimal64ToDecimal128(x)
+		rs[i] = types.Decimal128_FromDecimal64(x)
 	}
 	return rs, nil
 }
@@ -345,9 +344,9 @@ func IntToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128) ([]ty
 	return rs, nil
 }
 
-func IntToDecimal64[T constraints.Integer](xs []T, rs []types.Decimal64, scale int64) ([]types.Decimal64, error) {
+func IntToDecimal64[T constraints.Integer](xs []T, rs []types.Decimal64) ([]types.Decimal64, error) {
 	for i, x := range xs {
-		rs[i] = types.InitDecimal64(int64(x), scale)
+		rs[i] = types.InitDecimal64(int64(x))
 	}
 	return rs, nil
 }
@@ -442,25 +441,22 @@ func NumericToTimestamp[T constraints.Integer](xs []T, rs []types.Timestamp) ([]
 
 func Decimal64ToTimestamp(xs []types.Decimal64, precision int32, scale int32, rs []types.Timestamp) ([]types.Timestamp, error) {
 	for i, x := range xs {
-		ts := int64(x) / int64(math.Pow10(int(scale)))
+		ts := x.ToInt64()
 		rs[i] = types.Timestamp(ts)
 	}
 	return rs, nil
 }
 
 func Decimal128ToTimestamp(xs []types.Decimal128, precision int32, scale int32, rs []types.Timestamp) ([]types.Timestamp, error) {
-	bydel128 := types.InitDecimal128UsingUint(uint64(math.Pow10(int(scale))))
-	tempdel128 := make([]types.Decimal128, len(xs))
-	div.Decimal128DivByScalar(bydel128, xs, 0, scale, tempdel128)
-	for i, x := range tempdel128 {
-		rs[i] = types.Timestamp(x.Lo)
+	for i, x := range xs {
+		rs[i] = types.Timestamp(x.ToInt64())
 	}
 	return rs, nil
 }
 
 func Decimal64ToFloat32(xs []types.Decimal64, scale int32, rs []float32) ([]float32, error) {
 	for i, x := range xs {
-		xStr := string(x.Decimal64ToString(scale))
+		xStr := string(x.ToStringWithScale(scale))
 		result, err := strconv.ParseFloat(xStr, 32)
 		if err != nil {
 			return []float32{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
@@ -472,7 +468,7 @@ func Decimal64ToFloat32(xs []types.Decimal64, scale int32, rs []float32) ([]floa
 
 func Decimal128ToFloat32(xs []types.Decimal128, scale int32, rs []float32) ([]float32, error) {
 	for i, x := range xs {
-		xStr := string(x.Decimal128ToString(scale))
+		xStr := x.ToStringWithScale(scale)
 		result, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
 			return []float32{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
@@ -484,7 +480,7 @@ func Decimal128ToFloat32(xs []types.Decimal128, scale int32, rs []float32) ([]fl
 
 func Decimal64ToFloat64(xs []types.Decimal64, scale int32, rs []float64) ([]float64, error) {
 	for i, x := range xs {
-		xStr := string(x.Decimal64ToString(scale))
+		xStr := x.ToStringWithScale(scale)
 		result, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
 			return []float64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
@@ -496,7 +492,7 @@ func Decimal64ToFloat64(xs []types.Decimal64, scale int32, rs []float64) ([]floa
 
 func Decimal128ToFloat64(xs []types.Decimal128, scale int32, rs []float64) ([]float64, error) {
 	for i, x := range xs {
-		xStr := string(x.Decimal128ToString(scale))
+		xStr := x.ToStringWithScale(scale)
 		result, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
 			return []float64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
@@ -508,7 +504,7 @@ func Decimal128ToFloat64(xs []types.Decimal128, scale int32, rs []float64) ([]fl
 
 func Decimal64ToInt64(xs []types.Decimal64, scale int32, rs []int64) ([]int64, error) {
 	for i, x := range xs {
-		xStr := string(x.Decimal64ToString(scale))
+		xStr := x.ToStringWithScale(scale)
 		floatRepresentation, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
 			return []int64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT correctly")
@@ -526,7 +522,7 @@ func Decimal64ToInt64(xs []types.Decimal64, scale int32, rs []int64) ([]int64, e
 
 func Decimal128ToInt64(xs []types.Decimal128, scale int32, rs []int64) ([]int64, error) {
 	for i, x := range xs {
-		xStr := string(x.Decimal128ToString(scale))
+		xStr := x.ToStringWithScale(scale)
 		floatRepresentation, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
 			return []int64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT correctly")
@@ -544,7 +540,7 @@ func Decimal128ToInt64(xs []types.Decimal128, scale int32, rs []int64) ([]int64,
 
 func Decimal64ToUint64(xs []types.Decimal64, scale int32, rs []uint64) ([]uint64, error) {
 	for i, x := range xs {
-		xStr := string(x.Decimal64ToString(scale))
+		xStr := x.ToStringWithScale(scale)
 		floatRepresentation, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
 			return []uint64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT UNSIGNED correctly")
@@ -560,7 +556,7 @@ func Decimal64ToUint64(xs []types.Decimal64, scale int32, rs []uint64) ([]uint64
 
 func Decimal128ToUint64(xs []types.Decimal128, scale int32, rs []uint64) ([]uint64, error) {
 	for i, x := range xs {
-		xStr := string(x.Decimal128ToString(scale))
+		xStr := x.ToStringWithScale(scale)
 		floatRepresentation, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
 			return []uint64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT UNSIGNED correctly")
@@ -579,7 +575,7 @@ func Decimal128ToUint64(xs []types.Decimal128, scale int32, rs []uint64) ([]uint
 func Decimal128ToDecimal64(xs []types.Decimal128, xsScale int32, ysPrecision, ysScale int32, rs []types.Decimal64) ([]types.Decimal64, error) {
 	var err error
 	for i, x := range xs {
-		rs[i], err = types.ParseStringToDecimal64(string(x.Decimal128ToString(xsScale)), ysPrecision, ysScale)
+		rs[i], _ = x.ToDecimal64()
 		if err != nil {
 			return []types.Decimal64{}, moerr.NewError(moerr.OUT_OF_RANGE, fmt.Sprintf("cannot convert to Decimal(%d, %d) correctly", ysPrecision, ysScale))
 		}

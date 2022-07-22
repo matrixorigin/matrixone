@@ -34,7 +34,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	return nil
 }
 
-func Call(proc *process.Process, arg interface{}) (bool, error) {
+func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 	for {
@@ -152,7 +152,7 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 		}
 		vector.Clean(vec, proc.Mp)
-		if flg && !nulls.PreciseAny(vec.Nsp) {
+		if flg && !nulls.Any(vec.Nsp) {
 			for k, pos := range ap.Result {
 				if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[pos], int64(i), proc.Mp); err != nil {
 					rbat.Clean(proc.Mp)

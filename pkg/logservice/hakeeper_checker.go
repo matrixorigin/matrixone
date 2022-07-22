@@ -178,6 +178,9 @@ func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
 		return
 	}
 	if len(cmds) > 0 {
+		for _, c := range cmds {
+			plog.Infof("bootstrap cmd: %s", c.LogString())
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 		defer cancel()
 		if err := l.addScheduleCommands(ctx, term, cmds); err != nil {

@@ -17,6 +17,7 @@ package service
 import (
 	"context"
 	"math"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,108 +30,134 @@ import (
 )
 
 func TestReadBasic(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnService(t, 1, sender, newTestClock(0))
+	s := NewTestTxnService(t, 1, sender, NewTestClock(0))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 
-	sender.addTxnService(s)
+	sender.AddTxnService(s)
 
-	rTxn := newTestTxn(1, 1)
+	rTxn := NewTestTxn(1, 1)
 	resp := readTestData(t, sender, 1, rTxn, 1)
 	checkReadResponses(t, resp, "")
 }
 
 func TestReadWithSelfWrite(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnService(t, 1, sender, newTestClock(0))
+	s := NewTestTxnService(t, 1, sender, NewTestClock(0))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
-	sender.addTxnService(s)
+	sender.AddTxnService(s)
 
-	rwTxn := newTestTxn(1, 1)
+	rwTxn := NewTestTxn(1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, rwTxn, 1))
 	checkReadResponses(t, readTestData(t, sender, 1, rwTxn, 1), "1-1-1")
 	checkResponses(t, writeTestData(t, sender, 1, rwTxn, 2))
 	checkReadResponses(t, readTestData(t, sender, 1, rwTxn, 2), "2-1-1")
 }
 
-func TestReadCannotBlockByUncomitted(t *testing.T) {
-	sender := newTestSender()
+func TestReadBlockWithClock(t *testing.T) {
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnService(t, 1, sender, newTestClock(1))
+	ts := int64(0)
+	s := NewTestTxnService(t, 1, sender, NewTestSpecClock(func() int64 {
+		return atomic.AddInt64(&ts, 1)
+	}))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
-	sender.addTxnService(s)
+	sender.AddTxnService(s)
 
-	wTxn := newTestTxn(1, 1)
+	c := make(chan struct{})
+	go func() {
+		rwTxn := NewTestTxn(1, 3)
+		checkReadResponses(t, readTestData(t, sender, 1, rwTxn, 1), "")
+		c <- struct{}{}
+	}()
+	<-c
+	assert.Equal(t, int64(3), ts)
+}
+
+func TestReadCannotBlockByUncomitted(t *testing.T) {
+	sender := NewTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	s := NewTestTxnService(t, 1, sender, NewTestClock(1))
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close(false))
+	}()
+	sender.AddTxnService(s)
+
+	wTxn := NewTestTxn(1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 
-	rTxn := newTestTxn(2, 1)
+	rTxn := NewTestTxn(2, 1)
 	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 1), "")
 }
 
 func TestReadCannotBlockByPreparedIfSnapshotTSIsLEPreparedTS(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnService(t, 1, sender, newTestClock(1))
+	s := NewTestTxnService(t, 1, sender, NewTestClock(1))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
-	sender.addTxnService(s)
+	sender.AddTxnService(s)
 
-	wTxn := newTestTxn(1, 1)
+	wTxn := NewTestTxn(1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 	prepareTestTxn(t, sender, wTxn, 1) // prepare at 2
 
-	rTxn := newTestTxn(2, 1)
+	rTxn := NewTestTxn(2, 1)
 	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 1), "")
 
-	rTxn = newTestTxn(2, 2)
+	rTxn = NewTestTxn(2, 2)
 	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 1), "")
 }
 
 func TestReadWillBlockByPreparedIfSnapshotTSIsGTPreparedTS(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnService(t, 1, sender, newTestClock(1))
+	s := NewTestTxnService(t, 1, sender, NewTestClock(1))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
-	sender.addTxnService(s)
+	sender.AddTxnService(s)
 
-	wTxn := newTestTxn(1, 1)
+	wTxn := NewTestTxn(1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 	prepareTestTxn(t, sender, wTxn, 1) // prepare at 2
 
 	c := make(chan struct{})
 	go func() {
-		rTxn := newTestTxn(2, 3)
+		rTxn := NewTestTxn(2, 3)
 		readTestData(t, sender, 1, rTxn, 1)
 		close(c)
 	}()
@@ -143,31 +170,31 @@ func TestReadWillBlockByPreparedIfSnapshotTSIsGTPreparedTS(t *testing.T) {
 }
 
 func TestReadAfterBlockTxnCommitted(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnService(t, 1, sender, newTestClock(1))
+	s := NewTestTxnService(t, 1, sender, NewTestClock(1))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
-	sender.addTxnService(s)
+	sender.AddTxnService(s)
 
-	wTxn := newTestTxn(1, 1, 1)
+	wTxn := NewTestTxn(1, 1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 	prepareTestTxn(t, sender, wTxn, 1) // prepare at 2
 
 	c := make(chan struct{})
 	go func() {
-		rTxn := newTestTxn(2, 3)
+		rTxn := NewTestTxn(2, 3)
 		checkReadResponses(t, readTestData(t, sender, 1, rTxn, 1), "1-1-1")
 		close(c)
 	}()
 	go func() {
 		time.Sleep(time.Second)
-		wTxn.CommitTS = newTestTimestamp(2) // commit at 2
+		wTxn.CommitTS = NewTestTimestamp(2) // commit at 2
 		checkResponses(t, commitShardWriteData(t, sender, wTxn))
 	}()
 
@@ -179,31 +206,31 @@ func TestReadAfterBlockTxnCommitted(t *testing.T) {
 }
 
 func TestReadAfterBlockTxnCommittedAndCannotReadCommittedValue(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnService(t, 1, sender, newTestClock(1))
+	s := NewTestTxnService(t, 1, sender, NewTestClock(1))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
-	sender.addTxnService(s)
+	sender.AddTxnService(s)
 
-	wTxn := newTestTxn(1, 1, 1)
+	wTxn := NewTestTxn(1, 1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 	prepareTestTxn(t, sender, wTxn, 1) // prepare at 2
 
 	c := make(chan struct{})
 	go func() {
-		rTxn := newTestTxn(2, 3)
+		rTxn := NewTestTxn(2, 3)
 		checkReadResponses(t, readTestData(t, sender, 1, rTxn, 1), "")
 		close(c)
 	}()
 	go func() {
 		time.Sleep(time.Second)
-		wTxn.CommitTS = newTestTimestamp(3) // commit at 3
+		wTxn.CommitTS = NewTestTimestamp(3) // commit at 3
 		checkResponses(t, commitShardWriteData(t, sender, wTxn))
 	}()
 
@@ -215,25 +242,25 @@ func TestReadAfterBlockTxnCommittedAndCannotReadCommittedValue(t *testing.T) {
 }
 
 func TestReadAfterBlockTxnAborted(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnService(t, 1, sender, newTestClock(1))
+	s := NewTestTxnService(t, 1, sender, NewTestClock(1))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
-	sender.addTxnService(s)
+	sender.AddTxnService(s)
 
-	wTxn := newTestTxn(1, 1, 1)
+	wTxn := NewTestTxn(1, 1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 	prepareTestTxn(t, sender, wTxn, 1) // prepare at 2
 
 	c := make(chan struct{})
 	go func() {
-		rTxn := newTestTxn(2, 3)
+		rTxn := NewTestTxn(2, 3)
 		checkReadResponses(t, readTestData(t, sender, 1, rTxn, 1), "")
 		close(c)
 	}()
@@ -250,55 +277,55 @@ func TestReadAfterBlockTxnAborted(t *testing.T) {
 }
 
 func TestReadCannotBlockByCommittingIfSnapshotTSIsLECommitTS(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnService(t, 1, sender, newTestClock(1))
+	s := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
-	sender.addTxnService(s)
+	sender.AddTxnService(s)
 
-	wTxn := newTestTxn(1, 1)
+	wTxn := NewTestTxn(1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 	prepareTestTxn(t, sender, wTxn, 1) // prepare at 2
 
-	wTxn.CommitTS = newTestTimestamp(2)
+	wTxn.CommitTS = NewTestTimestamp(2)
 	assert.NoError(t, s.storage.(*mem.KVTxnStorage).Committing(wTxn))
 
-	rTxn := newTestTxn(2, 1)
+	rTxn := NewTestTxn(2, 1)
 	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 1), "")
 
-	rTxn = newTestTxn(2, 2)
+	rTxn = NewTestTxn(2, 2)
 	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 1), "")
 }
 
 func TestReadWillBlockByCommittingIfSnapshotTSIsGTCommitTS(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnService(t, 1, sender, newTestClock(1))
+	s := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
-	sender.addTxnService(s)
+	sender.AddTxnService(s)
 
-	wTxn := newTestTxn(1, 1)
+	wTxn := NewTestTxn(1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 	prepareTestTxn(t, sender, wTxn, 1) // prepare at 2
 
-	wTxn.CommitTS = newTestTimestamp(2)
+	wTxn.CommitTS = NewTestTimestamp(2)
 	assert.NoError(t, s.storage.(*mem.KVTxnStorage).Committing(wTxn))
 
 	c := make(chan struct{})
 	go func() {
-		rTxn := newTestTxn(2, 3)
+		rTxn := NewTestTxn(2, 3)
 		readTestData(t, sender, 1, rTxn, 1)
 		close(c)
 	}()
@@ -311,100 +338,100 @@ func TestReadWillBlockByCommittingIfSnapshotTSIsGTCommitTS(t *testing.T) {
 }
 
 func TestReadCommitted(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnService(t, 1, sender, newTestClock(1))
+	s := NewTestTxnService(t, 1, sender, NewTestClock(1))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
-	sender.addTxnService(s)
+	sender.AddTxnService(s)
 
-	wTxn1 := newTestTxn(1, 1, 1) // commit at 2
+	wTxn1 := NewTestTxn(1, 1, 1) // commit at 2
 	checkResponses(t, writeTestData(t, sender, 1, wTxn1, 1))
 	checkResponses(t, commitWriteData(t, sender, wTxn1))
 
-	wTxn2 := newTestTxn(2, 1, 1) // commit at 3
+	wTxn2 := NewTestTxn(2, 1, 1) // commit at 3
 	checkResponses(t, writeTestData(t, sender, 1, wTxn2, 2))
 	checkResponses(t, commitWriteData(t, sender, wTxn2))
 
-	rTxn := newTestTxn(3, 2)
+	rTxn := NewTestTxn(3, 2)
 	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 1), "")
 	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 2), "")
 
-	rTxn = newTestTxn(3, 3)
-	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 1), string(getTestValue(1, wTxn1)))
+	rTxn = NewTestTxn(3, 3)
+	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 1), string(GetTestValue(1, wTxn1)))
 	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 2), "")
 
-	rTxn = newTestTxn(3, 4)
-	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 1), string(getTestValue(1, wTxn1)))
-	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 2), string(getTestValue(2, wTxn2)))
+	rTxn = NewTestTxn(3, 4)
+	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 1), string(GetTestValue(1, wTxn1)))
+	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 2), string(GetTestValue(2, wTxn2)))
 }
 
 func TestWriteBasic(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnService(t, 1, sender, newTestClock(0))
+	s := NewTestTxnService(t, 1, sender, NewTestClock(0)).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 
-	sender.addTxnService(s)
+	sender.AddTxnService(s)
 
-	wTxn := newTestTxn(1, 1)
+	wTxn := NewTestTxn(1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 
 	kv := s.storage.(*mem.KVTxnStorage).GetUncommittedKV()
-	v, ok := kv.Get(getTestKey(1))
+	v, ok := kv.Get(GetTestKey(1))
 	assert.True(t, ok)
-	assert.Equal(t, getTestValue(1, wTxn), v)
+	assert.Equal(t, GetTestValue(1, wTxn), v)
 }
 
 func TestWriteWithWWConflict(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnService(t, 1, sender, newTestClock(0))
+	s := NewTestTxnService(t, 1, sender, NewTestClock(0))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 
-	sender.addTxnService(s)
+	sender.AddTxnService(s)
 
-	wTxn := newTestTxn(1, 1)
+	wTxn := NewTestTxn(1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 
-	wTxn2 := newTestTxn(2, 1)
+	wTxn2 := NewTestTxn(2, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn2, 1),
 		newTAEWriteError(storage.ErrWriteConflict))
 }
 
 func TestCommitWithSingleDNShard(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnService(t, 1, sender, newTestClock(1))
+	s := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 
-	sender.addTxnService(s)
+	sender.AddTxnService(s)
 
 	n := byte(10)
-	wTxn := newTestTxn(1, 1, 1)
+	wTxn := NewTestTxn(1, 1, 1)
 	for i := byte(0); i < n; i++ {
 		checkResponses(t, writeTestData(t, sender, 1, wTxn, i))
 	}
@@ -415,36 +442,36 @@ func TestCommitWithSingleDNShard(t *testing.T) {
 		var timestamps []timestamp.Timestamp
 		kv := s.storage.(*mem.KVTxnStorage).GetCommittedKV()
 
-		kv.AscendRange(getTestKey(i), newTestTimestamp(0), newTestTimestamp(math.MaxInt64), func(value []byte, ts timestamp.Timestamp) {
+		kv.AscendRange(GetTestKey(i), NewTestTimestamp(0), NewTestTimestamp(math.MaxInt64), func(value []byte, ts timestamp.Timestamp) {
 			values = append(values, value)
 			timestamps = append(timestamps, ts)
 		})
-		assert.Equal(t, [][]byte{getTestValue(i, wTxn)}, values)
-		assert.Equal(t, []timestamp.Timestamp{newTestTimestamp(2)}, timestamps)
+		assert.Equal(t, [][]byte{GetTestValue(i, wTxn)}, values)
+		assert.Equal(t, []timestamp.Timestamp{NewTestTimestamp(2)}, timestamps)
 	}
 }
 
 func TestCommitWithMultiDNShards(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s1 := newTestTxnService(t, 1, sender, newTestClock(1))
+	s1 := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s1.Start())
 	defer func() {
-		assert.NoError(t, s1.Close())
+		assert.NoError(t, s1.Close(false))
 	}()
-	s2 := newTestTxnService(t, 2, sender, newTestClock(1))
+	s2 := NewTestTxnService(t, 2, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s2.Start())
 	defer func() {
-		assert.NoError(t, s2.Close())
+		assert.NoError(t, s2.Close(false))
 	}()
 
-	sender.addTxnService(s1)
-	sender.addTxnService(s2)
+	sender.AddTxnService(s1)
+	sender.AddTxnService(s2)
 
-	wTxn := newTestTxn(1, 1, 1, 2)
+	wTxn := NewTestTxn(1, 1, 1, 2)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 	checkResponses(t, writeTestData(t, sender, 2, wTxn, 2))
 
@@ -463,30 +490,30 @@ func TestCommitWithMultiDNShards(t *testing.T) {
 }
 
 func TestCommitWithRollbackIfAnyPrepareFailed(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s1 := newTestTxnService(t, 1, sender, newTestClock(1))
+	s1 := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s1.Start())
 	defer func() {
-		assert.NoError(t, s1.Close())
+		assert.NoError(t, s1.Close(false))
 	}()
-	s2 := newTestTxnService(t, 2, sender, newTestClock(1))
+	s2 := NewTestTxnService(t, 2, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s2.Start())
 	defer func() {
-		assert.NoError(t, s2.Close())
+		assert.NoError(t, s2.Close(false))
 	}()
 
-	sender.addTxnService(s1)
-	sender.addTxnService(s2)
+	sender.AddTxnService(s1)
+	sender.AddTxnService(s2)
 
-	wTxn1 := newTestTxn(1, 1, 1)
+	wTxn1 := NewTestTxn(1, 1, 1)
 	writeTestData(t, sender, 1, wTxn1, 1)
 	checkResponses(t, commitWriteData(t, sender, wTxn1)) // commit at 2
 
-	wTxn := newTestTxn(1, 1, 1, 2)
+	wTxn := NewTestTxn(1, 1, 1, 2)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 	checkResponses(t, writeTestData(t, sender, 2, wTxn, 2))
 
@@ -505,28 +532,28 @@ func TestCommitWithRollbackIfAnyPrepareFailed(t *testing.T) {
 }
 
 func TestRollback(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s1 := newTestTxnService(t, 1, sender, newTestClock(1))
+	s1 := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s1.Start())
 	defer func() {
-		assert.NoError(t, s1.Close())
+		assert.NoError(t, s1.Close(false))
 	}()
-	s2 := newTestTxnService(t, 2, sender, newTestClock(1))
+	s2 := NewTestTxnService(t, 2, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s2.Start())
 	defer func() {
-		assert.NoError(t, s2.Close())
+		assert.NoError(t, s2.Close(false))
 	}()
 
-	sender.addTxnService(s1)
-	sender.addTxnService(s2)
+	sender.AddTxnService(s1)
+	sender.AddTxnService(s2)
 
-	wTxn := newTestTxn(1, 1, 1)
+	wTxn := NewTestTxn(1, 1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
-	wTxn.DNShards = append(wTxn.DNShards, newTestDNShard(2))
+	wTxn.DNShards = append(wTxn.DNShards, NewTestDNShard(2))
 	checkResponses(t, writeTestData(t, sender, 2, wTxn, 2))
 
 	w1 := addTestWaiter(t, s1, wTxn, txn.TxnStatus_Aborted)
@@ -546,7 +573,7 @@ func TestRollback(t *testing.T) {
 func writeTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, wTxn txn.TxnMeta, keys ...byte) []txn.TxnResponse {
 	requests := make([]txn.TxnRequest, 0, len(keys))
 	for _, k := range keys {
-		requests = append(requests, newTestWriteRequest(k, wTxn, toShard))
+		requests = append(requests, NewTestWriteRequest(k, wTxn, toShard))
 	}
 	result, err := sender.Send(context.Background(), requests)
 	assert.NoError(t, err)
@@ -556,28 +583,28 @@ func writeTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, wTxn txn.
 }
 
 func commitShardWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []txn.TxnResponse {
-	result, err := sender.Send(context.Background(), []txn.TxnRequest{newTestCommitShardRequest(wTxn)})
+	result, err := sender.Send(context.Background(), []txn.TxnRequest{NewTestCommitShardRequest(wTxn)})
 	assert.NoError(t, err)
 	responses := result.Responses
 	return responses
 }
 
 func rollbackShardWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []txn.TxnResponse {
-	result, err := sender.Send(context.Background(), []txn.TxnRequest{newTestRollbackShardRequest(wTxn)})
+	result, err := sender.Send(context.Background(), []txn.TxnRequest{NewTestRollbackShardRequest(wTxn)})
 	assert.NoError(t, err)
 	responses := result.Responses
 	return responses
 }
 
 func commitWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []txn.TxnResponse {
-	result, err := sender.Send(context.Background(), []txn.TxnRequest{newTestCommitRequest(wTxn)})
+	result, err := sender.Send(context.Background(), []txn.TxnRequest{NewTestCommitRequest(wTxn)})
 	assert.NoError(t, err)
 	responses := result.Responses
 	return responses
 }
 
 func rollbackWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []txn.TxnResponse {
-	result, err := sender.Send(context.Background(), []txn.TxnRequest{newTestRollbackRequest(wTxn)})
+	result, err := sender.Send(context.Background(), []txn.TxnRequest{NewTestRollbackRequest(wTxn)})
 	assert.NoError(t, err)
 	responses := result.Responses
 	return responses
@@ -586,7 +613,7 @@ func rollbackWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []t
 func readTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, rTxn txn.TxnMeta, keys ...byte) []txn.TxnResponse {
 	requests := make([]txn.TxnRequest, 0, len(keys))
 	for _, k := range keys {
-		requests = append(requests, newTestReadRequest(k, rTxn, toShard))
+		requests = append(requests, NewTestReadRequest(k, rTxn, toShard))
 	}
 	result, err := sender.Send(context.Background(), requests)
 	assert.NoError(t, err)
@@ -612,29 +639,36 @@ func checkResponses(t *testing.T, response []txn.TxnResponse, expectErrors ...*t
 }
 
 func checkData(t *testing.T, wTxn txn.TxnMeta, s *service, commitTS int64, k byte, committed bool) {
-	assert.Nil(t, s.getTxnContext(wTxn.ID))
+	for {
+		v := s.getTxnContext(wTxn.ID)
+		if v != nil {
+			time.Sleep(time.Millisecond * 100)
+			continue
+		}
+		break
+	}
 
 	kv := s.storage.(*mem.KVTxnStorage)
 
 	if committed {
 		kv.RLock()
-		v, ok := kv.GetCommittedKV().Get(getTestKey(k), newTestTimestamp(commitTS))
+		v, ok := kv.GetCommittedKV().Get(GetTestKey(k), NewTestTimestamp(commitTS))
 		assert.True(t, ok)
-		assert.Equal(t, getTestValue(k, wTxn), v)
+		assert.Equal(t, GetTestValue(k, wTxn), v)
 		kv.RUnlock()
 	} else {
 		kv.RLock()
 		n := 0
-		kv.GetCommittedKV().AscendRange(getTestKey(k),
-			newTestTimestamp(commitTS).Next(),
-			newTestTimestamp(math.MaxInt64), func(b []byte, t timestamp.Timestamp) {
+		kv.GetCommittedKV().AscendRange(GetTestKey(k),
+			NewTestTimestamp(commitTS).Next(),
+			NewTestTimestamp(math.MaxInt64), func(_ []byte, _ timestamp.Timestamp) {
 				n++
 			})
 		assert.Equal(t, 0, n)
 		kv.RUnlock()
 	}
 
-	v, ok := kv.GetUncommittedKV().Get(getTestKey(k))
+	v, ok := kv.GetUncommittedKV().Get(GetTestKey(k))
 	assert.False(t, ok)
 	assert.Empty(t, v)
 

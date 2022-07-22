@@ -136,7 +136,7 @@ func ParseDate(s string) (Date, error) {
 	return -1, ErrIncorrectDateValue
 }
 
-// ParseDate will parse a string to be a Date (this is used for cast string to date,it's different from above)
+// ParseDateCast will parse a string to be a Date (this is used for cast string to date,it's different from above)
 // Support Format: we exchange '.' with '-' anyway.
 // `yyyy-mm-dd`
 // `yyyymmdd`
@@ -224,7 +224,7 @@ func (d Date) String() string {
 	return fmt.Sprintf("%04d-%02d-%02d", y, m, day)
 }
 
-// Holds number of days since January 1, year 1 in Gregorian calendar
+// Today Holds number of days since January 1, year 1 in Gregorian calendar
 func Today() Date {
 	sec := Now().sec()
 	return Date((sec + localTZ) / secsPerDay)

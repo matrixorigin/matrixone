@@ -25,19 +25,19 @@ import (
 )
 
 func TestPrepare(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnService(t, 1, sender, newTestClock(1))
+	s := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
-	sender.addTxnService(s)
+	sender.AddTxnService(s)
 
-	wTxn := newTestTxn(1, 1, 1, 2)
+	wTxn := NewTestTxn(1, 1, 1, 2)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 	checkResponses(t, prepareTestTxn(t, sender, wTxn, 1))
 
@@ -48,19 +48,19 @@ func TestPrepare(t *testing.T) {
 }
 
 func TestPrepareWithAlreadyPreparedTxn(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnService(t, 1, sender, newTestClock(1))
+	s := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
-	sender.addTxnService(s)
+	sender.AddTxnService(s)
 
-	wTxn := newTestTxn(1, 1, 1, 2)
+	wTxn := NewTestTxn(1, 1, 1, 2)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 	checkResponses(t, prepareTestTxn(t, sender, wTxn, 1))
 	checkResponses(t, prepareTestTxn(t, sender, wTxn, 1))
@@ -72,36 +72,36 @@ func TestPrepareWithAlreadyPreparedTxn(t *testing.T) {
 }
 
 func TestPrepareWithTxnNotExist(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnService(t, 1, sender, newTestClock(1))
+	s := NewTestTxnService(t, 1, sender, NewTestClock(1))
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
-	sender.addTxnService(s)
+	sender.AddTxnService(s)
 
-	wTxn := newTestTxn(1, 1, 1, 2)
+	wTxn := NewTestTxn(1, 1, 1, 2)
 	checkResponses(t, prepareTestTxn(t, sender, wTxn, 1), newTxnNotFoundError())
 }
 
 func TestGetStatus(t *testing.T) {
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnService(t, 1, sender, newTestClock(1))
+	s := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
-	sender.addTxnService(s)
+	sender.AddTxnService(s)
 
-	wTxn := newTestTxn(1, 1, 1, 2)
+	wTxn := NewTestTxn(1, 1, 1, 2)
 	responses := getTestTxnStatus(t, sender, wTxn, 1)
 	assert.Nil(t, responses[0].Txn)
 	assert.Nil(t, responses[0].TxnError)
@@ -118,7 +118,7 @@ func TestGetStatus(t *testing.T) {
 	assert.Equal(t, s.getTxnContext(wTxn.ID).getTxn(), *responses[0].Txn)
 	assert.Nil(t, responses[0].TxnError)
 
-	wTxn2 := newTestTxn(2, 1, 1)
+	wTxn2 := NewTestTxn(2, 1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn2, 2))
 	checkResponses(t, commitWriteData(t, sender, wTxn2))
 	responses = getTestTxnStatus(t, sender, wTxn2, 1)
@@ -127,13 +127,13 @@ func TestGetStatus(t *testing.T) {
 }
 
 func prepareTestTxn(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta, shard uint64) []txn.TxnResponse {
-	result, err := sender.Send(context.Background(), []txn.TxnRequest{newTestPrepareRequest(wTxn, shard)})
+	result, err := sender.Send(context.Background(), []txn.TxnRequest{NewTestPrepareRequest(wTxn, shard)})
 	assert.NoError(t, err)
 	return result.Responses
 }
 
 func getTestTxnStatus(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta, shard uint64) []txn.TxnResponse {
-	result, err := sender.Send(context.Background(), []txn.TxnRequest{newTestGetStatusRequest(wTxn, shard)})
+	result, err := sender.Send(context.Background(), []txn.TxnRequest{NewTestGetStatusRequest(wTxn, shard)})
 	assert.NoError(t, err)
 	return result.Responses
 }

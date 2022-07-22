@@ -95,7 +95,7 @@ func (view *ColumnView) GetValue(key uint32, startTs uint64) (v any, err error) 
 				if state == txnif.TxnStateCommitted {
 					// 3.1 If committed. use this node
 					break
-				} else if state == txnif.TxnStateRollbacked {
+				} else if state == txnif.TxnStateRollbacked || state == txnif.TxnStateRollbacking {
 					// 3.2 If rollbacked. go to prev node
 					err = nil
 					v = nil

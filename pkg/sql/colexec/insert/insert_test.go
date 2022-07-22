@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -66,7 +66,7 @@ func TestInsertOperator(t *testing.T) {
 		},
 	}
 	proc.Reg.InputBatch = batch1
-	_, err := Call(proc, &argument1)
+	_, err := Call(0, proc, &argument1)
 	require.NoError(t, err)
 	println(argument1.TargetTable.(*mockRelation).result.Vecs)
 	{
@@ -104,6 +104,6 @@ func TestInsertOperator(t *testing.T) {
 		},
 	}
 	proc.Reg.InputBatch = batch2
-	_, err2 := Call(proc, &argument2)
+	_, err2 := Call(0, proc, &argument2)
 	require.Errorf(t, err2, "should return error when insert null into primary key column")
 }

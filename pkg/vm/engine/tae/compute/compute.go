@@ -18,8 +18,10 @@ import (
 	"bytes"
 
 	"github.com/RoaringBitmap/roaring"
+	wtf "github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+
 	"golang.org/x/exp/constraints"
 )
 
@@ -172,7 +174,7 @@ func EstimateSize(bat *containers.Batch, offset, length uint32) uint64 {
 func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (offset int, exist bool) {
 	switch data.GetType().Oid {
 	case types.Type_BOOL:
-		return GetOffsetWithFunc[bool](data.Slice().([]bool), v.(bool), CompareBool, skipmask)
+		return GetOffsetWithFunc(data.Slice().([]bool), v.(bool), CompareBool, skipmask)
 	case types.Type_INT8:
 		return GetOffsetOfOrdered[int8](data.Slice(), v, skipmask)
 	case types.Type_INT16:
@@ -200,12 +202,16 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (of
 	case types.Type_TIMESTAMP:
 		return GetOffsetOfOrdered[types.Timestamp](data.Slice(), v, skipmask)
 	case types.Type_DECIMAL64:
-		return GetOffsetOfOrdered[types.Decimal64](data.Slice(), v, skipmask)
+		return GetOffsetWithFunc(
+			data.Slice().([]types.Decimal64),
+			v.(types.Decimal64),
+			wtf.CompareDecimal64Decimal64Aligned,
+			skipmask)
 	case types.Type_DECIMAL128:
-		return GetOffsetWithFunc[types.Decimal128](
+		return GetOffsetWithFunc(
 			data.Slice().([]types.Decimal128),
 			v.(types.Decimal128),
-			types.CompareDecimal128Decimal128Aligned,
+			wtf.CompareDecimal128Decimal128Aligned,
 			skipmask)
 	case types.Type_CHAR, types.Type_VARCHAR:
 		// column := data.Slice().(*containers.Bytes)

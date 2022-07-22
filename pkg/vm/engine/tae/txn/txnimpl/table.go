@@ -680,15 +680,7 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 }
 
 func (tbl *txnTable) PreApplyCommit() (err error) {
-	if err = tbl.ApplyAppend(); err != nil {
-		return
-	}
-	for _, dn := range tbl.deleteNodes {
-		if err = dn.OnApply(); err != nil {
-			return
-		}
-	}
-	return
+	return tbl.ApplyAppend()
 }
 
 func (tbl *txnTable) ApplyCommit() (err error) {

@@ -19,6 +19,5 @@ import (
 )
 
 var (
-	errTxnAborted = moerr.NewError(moerr.ErrTxnAborted, "the transaction has been aborted")
-	errTxnClosed  = moerr.NewError(moerr.ErrTxnClosed, "the transaction has been closed")
+	errTxnClosed = moerr.NewError(moerr.ErrTxnClosed, "the transaction has been committed or aborted")
 )

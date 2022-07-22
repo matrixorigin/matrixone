@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -66,6 +67,15 @@ func WithClientCreateTaskChanSize(size int) ClientOption {
 	}
 }
 
+// WithClientMaxBackendMaxIdleDuration set the maximum idle duration of the backend connection.
+// Backend connection that exceed this time will be automatically closed. 0 means no idle time
+// limit.
+func WithClientMaxBackendMaxIdleDuration(value time.Duration) ClientOption {
+	return func(c *client) {
+		c.options.maxIdleDuration = value
+	}
+}
+
 type client struct {
 	logger  *zap.Logger
 	stopper *stopper.Stopper
@@ -81,6 +91,7 @@ type client struct {
 
 	options struct {
 		maxBackendsPerHost int
+		maxIdleDuration    time.Duration
 		disableCreateTask  bool
 		initBackends       []string
 		initBackendCounts  []int
@@ -108,6 +119,11 @@ func NewClient(factory BackendFactory, options ...ClientOption) (RPCClient, erro
 
 	if !c.options.disableCreateTask {
 		if err := c.stopper.RunTask(c.createTask); err != nil {
+			return nil, err
+		}
+	}
+	if c.options.maxIdleDuration > 0 {
+		if err := c.stopper.RunTask(c.gcIdleTask); err != nil {
 			return nil, err
 		}
 	}
@@ -247,6 +263,44 @@ func (c *client) tryCreate(backend string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func (c *client) gcIdleTask(ctx context.Context) {
+	c.logger.Info("gc idle backends task started")
+	defer c.logger.Error("gc idle backends task stopped")
+
+	ticker := time.NewTicker(c.options.maxIdleDuration)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.closeIdleBackends()
+		}
+	}
+}
+
+func (c *client) closeIdleBackends() {
+	var idleBackends []Backend
+	c.mu.Lock()
+	for k, backends := range c.mu.backends {
+		var newBackends []Backend
+		for _, b := range backends {
+			if time.Since(b.LastActiveTime()) > c.options.maxIdleDuration {
+				idleBackends = append(idleBackends, b)
+				continue
+			}
+			newBackends = append(newBackends, b)
+		}
+		c.mu.backends[k] = newBackends
+	}
+	c.mu.Unlock()
+
+	for _, b := range idleBackends {
+		b.Close()
 	}
 }
 

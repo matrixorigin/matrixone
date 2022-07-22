@@ -39,14 +39,15 @@ func testMutableFileService(
 	})
 	assert.Nil(t, err)
 
-	err = fs.Mutate(ctx, IOVector{
-		FilePath: "foo",
-		Entries: []IOEntry{
-			{
-				Size: 3,
-				Data: []byte("123"),
-			},
-		},
+	mutator, err := fs.NewMutator("foo")
+	assert.Nil(t, err)
+	defer func() {
+		assert.Nil(t, mutator.Close())
+	}()
+
+	err = mutator.Mutate(ctx, IOEntry{
+		Size: 3,
+		Data: []byte("123"),
 	})
 	assert.Nil(t, err)
 
@@ -63,15 +64,10 @@ func testMutableFileService(
 	assert.Nil(t, err)
 	assert.Equal(t, []byte("123d"), vec.Entries[0].Data)
 
-	err = fs.Mutate(ctx, IOVector{
-		FilePath: "foo",
-		Entries: []IOEntry{
-			{
-				Offset: 4,
-				Size:   1,
-				Data:   []byte("q"),
-			},
-		},
+	err = mutator.Mutate(ctx, IOEntry{
+		Offset: 4,
+		Size:   1,
+		Data:   []byte("q"),
 	})
 	assert.Nil(t, err)
 

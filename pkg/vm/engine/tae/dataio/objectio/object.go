@@ -21,7 +21,6 @@ import (
 	"path"
 	// "strconv"
 	// "strings"
-	"sync"
 )
 
 const OBJECT_SIZE = 64 * 1024 * 1024
@@ -40,8 +39,8 @@ const (
 )
 
 type Object struct {
-	id        uint64
-	mutex     sync.Mutex
+	id uint64
+	// mutex     sync.Mutex // unused
 	oFile     *os.File
 	allocator *ObjectAllocator
 	oType     ObjectType

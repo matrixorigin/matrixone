@@ -15,13 +15,13 @@
 package fileservice
 
 type S3Config struct {
-	Endpoint  string
-	Region    string
-	APIKey    string
-	APISecret string
-	Bucket    string
+	Endpoint  string `toml:"endpoint"`
+	Region    string `toml:"region"`
+	APIKey    string `toml:"api-key"`
+	APISecret string `toml:"api-secret"`
+	Bucket    string `toml:"api-bucket"`
 	// KeyPrefix enables multiple fs instances in one bucket
-	KeyPrefix string
+	KeyPrefix string `toml:"key-prefix"`
 }
 
 // key mapping scheme:

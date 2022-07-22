@@ -26,7 +26,7 @@ import (
 func TestExpr_1(t *testing.T) {
 	convey.Convey("selectAndStmt succ", t, func() {
 		mock := NewMockOptimizer()
-		var params []bool = []bool{false, true}
+		params := []bool{false, true}
 		input := []string{"select 0 and 1 from dual;",
 			"select false and 1 from dual;",
 			"select false and true from dual;",
@@ -67,7 +67,7 @@ func TestExpr_1(t *testing.T) {
 func TestExpr_2(t *testing.T) {
 	convey.Convey("selectORStmt succ", t, func() {
 		mock := NewMockOptimizer()
-		var params []bool = []bool{false, true}
+		params := []bool{false, true}
 		input := []string{"select 0 or 1 from dual;",
 			"select false or 1 from dual;",
 			"select false or true from dual;",
@@ -108,7 +108,7 @@ func TestExpr_2(t *testing.T) {
 func TestExpr_3(t *testing.T) {
 	convey.Convey("selectNotStmt succ", t, func() {
 		mock := NewMockOptimizer()
-		var params []bool = []bool{false, false, true, true}
+		params := []bool{false, false, true, true}
 		input := []string{"select not 0 from dual;",
 			"select not false from dual;",
 			"select not 1 from dual;",

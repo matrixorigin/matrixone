@@ -20,7 +20,6 @@ import (
 
 type fileAppender struct {
 	rfile         *rotateFile
-	activeId      uint64
 	capacity      int
 	size          int
 	tempPos       int

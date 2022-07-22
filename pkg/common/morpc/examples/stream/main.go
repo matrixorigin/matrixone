@@ -76,7 +76,7 @@ func startServer() error {
 	if err != nil {
 		return err
 	}
-	s.RegisterRequestHandler(func(request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+	s.RegisterRequestHandler(func(request morpc.Message, _ uint64, cs morpc.ClientSession) error {
 		// send more message back
 		go func() {
 			for i := 0; i < 10; i++ {

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -51,6 +52,8 @@ const (
 	TxnErr               // when the txn operation generates errors
 	TxnNil               // placeholder
 )
+
+const MaxPrepareNumberInOneSession = 64
 
 // TxnState represents for Transaction Machine
 type TxnState struct {
@@ -91,13 +94,12 @@ func (ts *TxnState) getState() int {
 	return ts.state
 }
 
-func (ts *TxnState) getFromState() int {
-	return ts.fromState
-}
-
-func (ts *TxnState) getError() error {
-	return ts.err
-}
+// func (ts *TxnState) getFromState() int {
+// 	return ts.fromState
+// }
+// func (ts *TxnState) getError() error {
+// 	return ts.err
+// }
 
 func (ts *TxnState) String() string {
 	return fmt.Sprintf("state:%d fromState:%d err:%v", ts.state, ts.fromState, ts.err)
@@ -185,6 +187,8 @@ type Session struct {
 	sysVars         map[string]interface{}
 	userDefinedVars map[string]interface{}
 	gSysVars        *GlobalSystemVariables
+
+	prepareStmts map[string]*PrepareStmt
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
@@ -206,9 +210,32 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 		sysVars:         gSysVars.CopySysVarsToSession(),
 		userDefinedVars: make(map[string]interface{}),
 		gSysVars:        gSysVars,
+
+		prepareStmts: make(map[string]*PrepareStmt),
 	}
 	ses.txnCompileCtx.SetSession(ses)
 	return ses
+}
+
+func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error {
+	if _, ok := ses.prepareStmts[name]; !ok {
+		if len(ses.prepareStmts) >= MaxPrepareNumberInOneSession {
+			return errors.New("", fmt.Sprintf("more than '%d' prepare statement in one session", MaxPrepareNumberInOneSession))
+		}
+	}
+	ses.prepareStmts[name] = prepareStmt
+	return nil
+}
+
+func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
+	if prepareStmt, ok := ses.prepareStmts[name]; ok {
+		return prepareStmt, nil
+	}
+	return nil, errors.New("", fmt.Sprintf("prepare statement '%s' does not exist", name))
+}
+
+func (ses *Session) RemovePrepareStmt(name string) {
+	delete(ses.prepareStmts, name)
 }
 
 // SetGlobalVar sets the value of system variable in global.
@@ -353,21 +380,23 @@ func (th *TxnHandler) isTxnState(s int) bool {
 	return th.txnState.isState(s)
 }
 
-func (th *TxnHandler) switchToTxnState(s int, err error) {
-	th.txnState.switchToState(s, err)
-}
-
-func (th *TxnHandler) getFromTxnState() int {
-	return th.txnState.getFromState()
-}
-
-func (th *TxnHandler) getTxnStateError() error {
-	return th.txnState.getError()
-}
-
-func (th *TxnHandler) getTxnStateString() string {
-	return th.txnState.String()
-}
+// The following functions are unused.
+//
+// func (th *TxnHandler) switchToTxnState(s int, err error) {
+// 	th.txnState.switchToState(s, err)
+// }
+//
+// func (th *TxnHandler) getFromTxnState() int {
+// 	return th.txnState.getFromState()
+// }
+//
+// func (th *TxnHandler) getTxnStateError() error {
+// 	return th.txnState.getError()
+// }
+//
+// func (th *TxnHandler) getTxnStateString() string {
+// 	return th.txnState.String()
+// }
 
 // IsInTaeTxn checks the session executes a txn
 func (th *TxnHandler) IsInTaeTxn() bool {
@@ -471,7 +500,7 @@ const (
 
 func (th *TxnHandler) commit(option int) error {
 	var err error
-	var switchTxnState bool = true
+	var switchTxnState = true
 	switch th.getTxnState() {
 	case TxnBegan:
 		switch option {
@@ -518,16 +547,14 @@ func (th *TxnHandler) commit(option int) error {
 // CommitAfterBegin commits the tae txn started by the BEGIN statement
 func (th *TxnHandler) CommitAfterBegin() error {
 	logutil.Infof("commit began")
-	var err error
-	err = th.commit(TxnCommitAfterBegan)
+	err := th.commit(TxnCommitAfterBegan)
 	return err
 }
 
 // CommitAfterAutocommit commits the tae txn started by autocommit
 func (th *TxnHandler) CommitAfterAutocommit() error {
 	logutil.Infof("commit autocommit")
-	var err error
-	err = th.commit(TxnCommitAfterAutocommit)
+	err := th.commit(TxnCommitAfterAutocommit)
 	return err
 }
 
@@ -535,8 +562,7 @@ func (th *TxnHandler) CommitAfterAutocommit() error {
 // Do not check TxnBegan
 func (th *TxnHandler) CommitAfterAutocommitOnly() error {
 	logutil.Infof("commit autocommit only")
-	var err error
-	err = th.commit(TxnCommitAfterAutocommitOnly)
+	err := th.commit(TxnCommitAfterAutocommitOnly)
 	return err
 }
 
@@ -547,7 +573,7 @@ const (
 
 func (th *TxnHandler) rollback(option int) error {
 	var err error
-	var switchTxnState bool = true
+	var switchTxnState = true
 	switch th.getTxnState() {
 	case TxnBegan:
 		switch option {
@@ -590,15 +616,13 @@ func (th *TxnHandler) rollback(option int) error {
 
 func (th *TxnHandler) Rollback() error {
 	logutil.Infof("rollback ")
-	var err error
-	err = th.rollback(TxnRollbackAfterBeganAndAutocommit)
+	err := th.rollback(TxnRollbackAfterBeganAndAutocommit)
 	return err
 }
 
 func (th *TxnHandler) RollbackAfterAutocommitOnly() error {
 	logutil.Infof("rollback autocommit only")
-	var err error
-	err = th.rollback(TxnRollbackAfterAutocommitOnly)
+	err := th.rollback(TxnRollbackAfterAutocommitOnly)
 	return err
 }
 

@@ -52,6 +52,24 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "explain select * from emp",
+		output: "explain select * from emp",
+	}, {
+		input:  "explain verbose select * from emp",
+		output: "explain (verbose) select * from emp",
+	}, {
+		input:  "explain analyze select * from emp",
+		output: "explain (analyze) select * from emp",
+	}, {
+		input:  "explain analyze verbose select * from emp",
+		output: "explain (analyze,verbose) select * from emp",
+	}, {
+		input:  "explain (analyze true,verbose false) select * from emp",
+		output: "explain (analyze true,verbose false) select * from emp",
+	}, {
+		input:  "explain (analyze true,verbose false,format json) select * from emp",
+		output: "explain (analyze true,verbose false,format json) select * from emp",
+	}, {
 		input:  "with t11 as (select * from t1) update t11 join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
 		output: "with t11 as (select * from t1) update t11 inner join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
 	}, {

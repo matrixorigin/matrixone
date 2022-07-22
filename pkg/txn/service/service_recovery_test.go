@@ -26,20 +26,20 @@ import (
 
 func TestRecoveryFromCommittedWithData(t *testing.T) {
 	mlog := mem.NewMemLog()
-	wTxn := newTestTxn(1, 1, 1)
+	wTxn := NewTestTxn(1, 1, 1)
 	wTxn.Status = txn.TxnStatus_Committed
-	wTxn.CommitTS = newTestTimestamp(2)
+	wTxn.CommitTS = NewTestTimestamp(2)
 	addLog(t, mlog, wTxn, 1, 2)
 
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnServiceWithLog(t, 1, sender, newTestClock(0), mlog)
+	s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), mlog).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 
 	checkData(t, wTxn, s, 2, 1, true)
@@ -48,22 +48,22 @@ func TestRecoveryFromCommittedWithData(t *testing.T) {
 
 func TestRecoveryFromMultiCommittedWithData(t *testing.T) {
 	mlog := mem.NewMemLog()
-	wTxn := newTestTxn(1, 1, 1)
+	wTxn := NewTestTxn(1, 1, 1)
 	wTxn.Status = txn.TxnStatus_Committed
-	wTxn.CommitTS = newTestTimestamp(2)
+	wTxn.CommitTS = NewTestTimestamp(2)
 	addLog(t, mlog, wTxn, 1, 2)
 	addLog(t, mlog, wTxn, 1, 2)
 	addLog(t, mlog, wTxn, 1, 2)
 
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnServiceWithLog(t, 1, sender, newTestClock(0), mlog)
+	s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), mlog).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 
 	checkData(t, wTxn, s, 2, 1, true)
@@ -72,24 +72,24 @@ func TestRecoveryFromMultiCommittedWithData(t *testing.T) {
 
 func TestRecoveryFromCommittedAfterPrepared(t *testing.T) {
 	mlog := mem.NewMemLog()
-	wTxn := newTestTxn(1, 1, 1)
+	wTxn := NewTestTxn(1, 1, 1)
 	wTxn.Status = txn.TxnStatus_Prepared
-	wTxn.PreparedTS = newTestTimestamp(2)
+	wTxn.PreparedTS = NewTestTimestamp(2)
 	addLog(t, mlog, wTxn, 1, 2)
 
 	wTxn.Status = txn.TxnStatus_Committed
-	wTxn.CommitTS = newTestTimestamp(3)
+	wTxn.CommitTS = NewTestTimestamp(3)
 	addLog(t, mlog, wTxn)
 
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnServiceWithLog(t, 1, sender, newTestClock(0), mlog)
+	s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), mlog).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 
 	checkData(t, wTxn, s, 3, 1, true)
@@ -98,28 +98,28 @@ func TestRecoveryFromCommittedAfterPrepared(t *testing.T) {
 
 func TestRecoveryFromMultiCommittedAfterPrepared(t *testing.T) {
 	mlog := mem.NewMemLog()
-	wTxn := newTestTxn(1, 1, 1)
+	wTxn := NewTestTxn(1, 1, 1)
 	wTxn.Status = txn.TxnStatus_Prepared
-	wTxn.PreparedTS = newTestTimestamp(2)
+	wTxn.PreparedTS = NewTestTimestamp(2)
 	addLog(t, mlog, wTxn, 1, 2)
 	addLog(t, mlog, wTxn, 1, 2)
 	addLog(t, mlog, wTxn, 1, 2)
 
 	wTxn.Status = txn.TxnStatus_Committed
-	wTxn.CommitTS = newTestTimestamp(3)
+	wTxn.CommitTS = NewTestTimestamp(3)
 	addLog(t, mlog, wTxn)
 	addLog(t, mlog, wTxn)
 	addLog(t, mlog, wTxn)
 
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s := newTestTxnServiceWithLog(t, 1, sender, newTestClock(0), mlog)
+	s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), mlog).(*service)
 	assert.NoError(t, s.Start())
 	defer func() {
-		assert.NoError(t, s.Close())
+		assert.NoError(t, s.Close(false))
 	}()
 
 	checkData(t, wTxn, s, 3, 1, true)
@@ -130,31 +130,31 @@ func TestRecoveryFromMultiDNShardWithAllPrepared(t *testing.T) {
 	mlog1 := mem.NewMemLog()
 	mlog2 := mem.NewMemLog()
 
-	wTxn := newTestTxn(1, 1, 1, 2)
+	wTxn := NewTestTxn(1, 1, 1, 2)
 	wTxn.Status = txn.TxnStatus_Prepared
-	wTxn.PreparedTS = newTestTimestamp(2)
+	wTxn.PreparedTS = NewTestTimestamp(2)
 
 	addLog(t, mlog1, wTxn, 1)
 	addLog(t, mlog2, wTxn, 2)
 
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s1 := newTestTxnServiceWithLog(t, 1, sender, newTestClock(0), mlog1)
-	s2 := newTestTxnServiceWithLog(t, 2, sender, newTestClock(0), mlog2)
-	sender.addTxnService(s1)
-	sender.addTxnService(s2)
+	s1 := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), mlog1).(*service)
+	s2 := NewTestTxnServiceWithLog(t, 2, sender, NewTestClock(0), mlog2).(*service)
+	sender.AddTxnService(s1)
+	sender.AddTxnService(s2)
 
 	assert.NoError(t, s1.Start())
 	defer func() {
-		assert.NoError(t, s1.Close())
+		assert.NoError(t, s1.Close(false))
 	}()
 
 	assert.NoError(t, s2.Start())
 	defer func() {
-		assert.NoError(t, s2.Close())
+		assert.NoError(t, s2.Close(false))
 	}()
 
 	for e := range s1.storage.(*mem.KVTxnStorage).GetEventC() {
@@ -177,30 +177,30 @@ func TestRecoveryFromMultiDNShardWithAnyNotPrepared(t *testing.T) {
 	mlog1 := mem.NewMemLog()
 	mlog2 := mem.NewMemLog()
 
-	wTxn := newTestTxn(1, 1, 1, 2)
+	wTxn := NewTestTxn(1, 1, 1, 2)
 	wTxn.Status = txn.TxnStatus_Prepared
-	wTxn.PreparedTS = newTestTimestamp(2)
+	wTxn.PreparedTS = NewTestTimestamp(2)
 
 	addLog(t, mlog1, wTxn, 1)
 
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s1 := newTestTxnServiceWithLog(t, 1, sender, newTestClock(0), mlog1)
-	s2 := newTestTxnServiceWithLog(t, 2, sender, newTestClock(0), mlog2)
-	sender.addTxnService(s1)
-	sender.addTxnService(s2)
+	s1 := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), mlog1).(*service)
+	s2 := NewTestTxnServiceWithLog(t, 2, sender, NewTestClock(0), mlog2).(*service)
+	sender.AddTxnService(s1)
+	sender.AddTxnService(s2)
 
 	assert.NoError(t, s1.Start())
 	defer func() {
-		assert.NoError(t, s1.Close())
+		assert.NoError(t, s1.Close(false))
 	}()
 
 	assert.NoError(t, s2.Start())
 	defer func() {
-		assert.NoError(t, s2.Close())
+		assert.NoError(t, s2.Close(false))
 	}()
 
 	for e := range s1.storage.(*mem.KVTxnStorage).GetEventC() {
@@ -217,35 +217,35 @@ func TestRecoveryFromMultiDNShardWithCommitting(t *testing.T) {
 	mlog1 := mem.NewMemLog()
 	mlog2 := mem.NewMemLog()
 
-	wTxn := newTestTxn(1, 1, 1, 2)
+	wTxn := NewTestTxn(1, 1, 1, 2)
 	wTxn.Status = txn.TxnStatus_Prepared
-	wTxn.PreparedTS = newTestTimestamp(2)
+	wTxn.PreparedTS = NewTestTimestamp(2)
 
 	addLog(t, mlog1, wTxn, 1)
 	addLog(t, mlog2, wTxn, 2)
 
-	wTxn.CommitTS = newTestTimestamp(2)
+	wTxn.CommitTS = NewTestTimestamp(2)
 	wTxn.Status = txn.TxnStatus_Committing
 	addLog(t, mlog1, wTxn, 1)
 
-	sender := newTestSender()
+	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 
-	s1 := newTestTxnServiceWithLog(t, 1, sender, newTestClock(0), mlog1)
-	s2 := newTestTxnServiceWithLog(t, 2, sender, newTestClock(0), mlog2)
-	sender.addTxnService(s1)
-	sender.addTxnService(s2)
+	s1 := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), mlog1).(*service)
+	s2 := NewTestTxnServiceWithLog(t, 2, sender, NewTestClock(0), mlog2).(*service)
+	sender.AddTxnService(s1)
+	sender.AddTxnService(s2)
 
 	assert.NoError(t, s1.Start())
 	defer func() {
-		assert.NoError(t, s1.Close())
+		assert.NoError(t, s1.Close(false))
 	}()
 
 	assert.NoError(t, s2.Start())
 	defer func() {
-		assert.NoError(t, s2.Close())
+		assert.NoError(t, s2.Close(false))
 	}()
 
 	for e := range s1.storage.(*mem.KVTxnStorage).GetEventC() {
@@ -269,8 +269,8 @@ func addLog(t *testing.T, l logservice.Client, wTxn txn.TxnMeta, keys ...byte) {
 		Txn: wTxn,
 	}
 	for _, k := range keys {
-		klog.Keys = append(klog.Keys, getTestKey(k))
-		klog.Values = append(klog.Values, getTestValue(k, wTxn))
+		klog.Keys = append(klog.Keys, GetTestKey(k))
+		klog.Values = append(klog.Values, GetTestValue(k, wTxn))
 	}
 
 	_, err := l.Append(context.Background(), logservice.LogRecord{

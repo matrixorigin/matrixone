@@ -66,6 +66,14 @@ func (ctx *TxnCtx) Repr() string {
 	return repr
 }
 
+func (ctx *TxnCtx) SameTxn(startTs uint64) bool { return ctx.StartTS == startTs }
+func (ctx *TxnCtx) CommitBefore(startTs uint64) bool {
+	return ctx.GetCommitTS() < startTs
+}
+func (ctx *TxnCtx) CommitAfter(startTs uint64) bool {
+	return ctx.GetCommitTS() > startTs
+}
+
 func (ctx *TxnCtx) String() string     { return ctx.Repr() }
 func (ctx *TxnCtx) GetID() uint64      { return ctx.ID }
 func (ctx *TxnCtx) GetInfo() []byte    { return ctx.Info }

@@ -119,7 +119,7 @@ func MakeOptionElem(name string, value string) OptionElem {
 }
 
 func MakeOptions(elem OptionElem) []OptionElem {
-	var options []OptionElem = make([]OptionElem, 1)
+	var options = make([]OptionElem, 1)
 	options[0] = elem
 	return options
 }

@@ -8,12 +8,8 @@
 
 ```
 > LOAD DATA
-    [LOW_PRIORITY | CONCURRENT] [LOCAL]
     INFILE 'file_name'
-    [REPLACE | IGNORE]
     INTO TABLE tbl_name
-    [PARTITION (partition_name [, partition_name] ...)]
-    [CHARACTER SET charset_name]
     [{FIELDS | COLUMNS}
         [TERMINATED BY 'string']
         [[OPTIONALLY] ENCLOSED BY 'char']
@@ -23,11 +19,6 @@
         [STARTING BY 'string']
         [TERMINATED BY 'string']
     ]
-    [IGNORE number {LINES | ROWS}]
-    [(col_name_or_user_var
-        [, col_name_or_user_var] ...)]
-    [SET col_name={expr | DEFAULT}
-        [, col_name={expr | DEFAULT}] ...]
 ```
 
 * `TERMINATED BY`，`ENCLOSED BY`等分隔符的意义与`SELECT INTO`一致。
@@ -42,3 +33,7 @@
 ```sql
 > LOAD DATA INFILE '/ssb-dbgen-path/lineorder_flat.tbl ' INTO TABLE lineorder_flat;
 ```
+
+## **限制**
+
+当前仅支持 `csv` 格式的文件。

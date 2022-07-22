@@ -25,7 +25,7 @@ type ObjectDir struct {
 	nodes map[string]tfs.File
 	inode *Inode
 	fs    *ObjectFS
-	stat  *objectFileStat
+	// stat  *objectFileStat // unused
 }
 
 func openObjectDir(fs *ObjectFS, name string) *ObjectDir {

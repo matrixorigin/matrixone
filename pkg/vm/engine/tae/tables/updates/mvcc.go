@@ -37,6 +37,7 @@ type MVCCHandle struct {
 	appends         []*AppendNode
 	changes         uint32
 	deletesListener func(uint64, common.RowGen, uint64) error
+	appendListener  func(txnif.AppendNode) error
 }
 
 func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
@@ -55,6 +56,14 @@ func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
 		node.columns[i] = col
 	}
 	return node
+}
+
+func (n *MVCCHandle) SetAppendListener(l func(txnif.AppendNode) error) {
+	n.appendListener = l
+}
+
+func (n *MVCCHandle) GetAppendListener() func(txnif.AppendNode) error {
+	return n.appendListener
 }
 
 func (n *MVCCHandle) SetDeletesListener(l func(uint64, common.RowGen, uint64) error) {
@@ -207,10 +216,39 @@ func (n *MVCCHandle) TrySetMaxVisible(ts uint64) {
 		n.maxVisible = ts
 	}
 }
-func (n *MVCCHandle) AddAppendNodeLocked(txn txnif.AsyncTxn, maxRow uint32) *AppendNode {
-	an := NewAppendNode(txn, maxRow, n)
-	n.appends = append(n.appends, an)
-	return an
+func (n *MVCCHandle) AddAppendNodeLocked(
+	txn txnif.AsyncTxn,
+	startRow uint32,
+	maxRow uint32) (an *AppendNode, created bool) {
+	if len(n.appends) == 0 {
+		an = NewAppendNode(txn, startRow, maxRow, n)
+		n.appends = append(n.appends, an)
+		created = true
+	} else {
+		an = n.appends[len(n.appends)-1]
+		an.RLock()
+		nTxn := an.txn
+		an.RUnlock()
+		if nTxn != txn {
+			an = NewAppendNode(txn, startRow, maxRow, n)
+			n.appends = append(n.appends, an)
+			created = true
+		} else {
+			created = false
+			an.SetMaxRow(maxRow)
+		}
+	}
+	return
+}
+
+func (n *MVCCHandle) DeleteAppendNodeLocked(node *AppendNode) {
+	for i := len(n.appends) - 1; i >= 0; i-- {
+		if n.appends[i].maxRow == node.maxRow {
+			n.appends = append(n.appends[:i], n.appends[i+1:]...)
+		} else if n.appends[i].maxRow < node.maxRow {
+			break
+		}
+	}
 }
 
 func (n *MVCCHandle) IsVisibleLocked(row uint32, ts uint64) (bool, error) {
@@ -304,12 +342,14 @@ func (n *MVCCHandle) getMaxVisibleRowLocked(ts uint64) (int, uint32, bool, error
 		node.RUnlock()
 		// Note: Maybe there is a deadlock risk here
 		if txn != nil && node.GetCommitTS() > n.LoadMaxVisible() {
+			node.mvcc.RUnlock()
 			// Append node should not be rollbacked because apply append is the last step of prepare commit
 			state := txn.GetTxnState(true)
+			node.mvcc.RLock()
 			// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
 			if state == txnif.TxnStateUnknown {
 				err = txnif.ErrTxnInternal
-			} else if state == txnif.TxnStateRollbacked {
+			} else if state == txnif.TxnStateRollbacked || state == txnif.TxnStateCommitting {
 				panic("append node shoul not be rollbacked")
 			}
 		}

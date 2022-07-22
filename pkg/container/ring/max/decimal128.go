@@ -25,8 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-var Decimal128Max = types.Decimal128Max
-var Decimal128Min = types.Decimal128Min
 var Decimal128Size = encoding.Decimal128Size
 
 func NewDecimal128(typ types.Type) *Decimal128Ring {
@@ -110,7 +108,7 @@ func (r *Decimal128Ring) Grow(m *mheap.Mheap) error {
 	}
 	r.Vs = r.Vs[:n+1]
 	r.Da = r.Da[:(n+1)*16]
-	r.Vs[n] = Decimal128Min
+	r.Vs[n] = types.Decimal128Min
 	r.Ns = append(r.Ns, 0)
 	r.Es = append(r.Es, true)
 	return nil
@@ -142,7 +140,7 @@ func (r *Decimal128Ring) Grows(size int, m *mheap.Mheap) error {
 	for i := 0; i < size; i++ {
 		r.Ns = append(r.Ns, 0)
 		r.Es = append(r.Es, true)
-		r.Vs[i+n] = Decimal128Min
+		r.Vs[i+n] = types.Decimal128Min
 	}
 	return nil
 }

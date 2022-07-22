@@ -14,7 +14,7 @@
 
 package nulls
 
-import "github.com/matrixorigin/matrixone/pkg/container/bitmap"
+import "github.com/matrixorigin/matrixone/pkg/common/bitmap"
 
 /*
 type Nulls interface{

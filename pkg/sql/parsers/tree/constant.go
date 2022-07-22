@@ -56,14 +56,14 @@ type NumVal struct {
 	ValType  P_TYPE
 }
 
-func (node *NumVal) Format(ctx *FmtCtx) {
-	if node.origString != "" {
-		ctx.WriteString(FormatString(node.origString))
+func (n *NumVal) Format(ctx *FmtCtx) {
+	if n.origString != "" {
+		ctx.WriteString(FormatString(n.origString))
 		return
 	}
-	switch node.Value.Kind() {
+	switch n.Value.Kind() {
 	case constant.Bool:
-		ctx.WriteString(strings.ToLower(node.Value.String()))
+		ctx.WriteString(strings.ToLower(n.Value.String()))
 	case constant.Unknown:
 		ctx.WriteString("null")
 	}

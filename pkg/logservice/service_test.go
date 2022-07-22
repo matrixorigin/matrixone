@@ -32,18 +32,21 @@ import (
 )
 
 const (
-	testServiceAddress = "localhost:9000"
+	testServiceAddress = "127.0.0.1:9000"
 )
 
 func getServiceTestConfig() Config {
-	return Config{
+	c := Config{
 		RTTMillisecond:       10,
 		GossipSeedAddresses:  []string{"127.0.0.1:9000"},
 		DeploymentID:         1,
 		FS:                   vfs.NewStrictMem(),
 		ServiceListenAddress: testServiceAddress,
 		ServiceAddress:       testServiceAddress,
+		DisableWorkers:       true,
 	}
+	c.Fill()
+	return c
 }
 
 func runServiceTest(t *testing.T,
@@ -487,6 +490,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		RaftAddress:         "127.0.0.1:9000",
 		GossipAddress:       "127.0.0.1:9001",
 		GossipSeedAddresses: []string{"127.0.0.1:9011"},
+		DisableWorkers:      true,
 	}
 	cfg2 := Config{
 		FS:                  vfs.NewStrictMem(),
@@ -497,8 +501,9 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		RaftAddress:         "127.0.0.1:9010",
 		GossipAddress:       "127.0.0.1:9011",
 		GossipSeedAddresses: []string{"127.0.0.1:9001"},
+		DisableWorkers:      true,
 	}
-
+	cfg1.Fill()
 	service1, err := NewService(cfg1)
 	require.NoError(t, err)
 	defer func() {
@@ -507,7 +512,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	peers1 := make(map[uint64]dragonboat.Target)
 	peers1[1] = service1.ID()
 	assert.NoError(t, service1.store.startReplica(1, 1, peers1, false))
-
+	cfg2.Fill()
 	service2, err := NewService(cfg2)
 	require.NoError(t, err)
 	defer func() {
@@ -605,6 +610,7 @@ func TestGossipConvergeDelay(t *testing.T) {
 			RaftAddress:         fmt.Sprintf("127.0.0.1:%d", 6000+10*i+1),
 			GossipAddress:       fmt.Sprintf("127.0.0.1:%d", 6000+10*i+2),
 			GossipSeedAddresses: []string{"127.0.0.1:6002", "127.0.0.1:6012"},
+			DisableWorkers:      true,
 		}
 		configs = append(configs, cfg)
 		service, err := NewService(cfg)

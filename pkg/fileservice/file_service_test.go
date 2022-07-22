@@ -90,6 +90,10 @@ func testFileService(t *testing.T, newFS func() FileService) {
 					Size:          2,
 					WriterForRead: buf1,
 				},
+				6: {
+					Offset: 0,
+					Size:   -1,
+				},
 			},
 		}
 		err = fs.Read(ctx, &vec)
@@ -104,6 +108,7 @@ func testFileService(t *testing.T, newFS func() FileService) {
 		assert.Nil(t, r.Close())
 		assert.Equal(t, []byte("1234567"), content)
 		assert.Equal(t, []byte("56"), buf1.Bytes())
+		assert.Equal(t, []byte("123456789ab"), vec.Entries[6].Data)
 
 		// read from non-zero offset
 		vec = IOVector{

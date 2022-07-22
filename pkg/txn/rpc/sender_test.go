@@ -153,7 +153,7 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 			return nil
 		}
 		sequence := uint64(0)
-		return func(ctx context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
+		return func(_ context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
 			v := atomic.AddUint64(&sequence, 1)
 			resp.RequestID = req.RequestID
 			resp.CNOpResponse = &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", req.GetTargetDN().Address, v))}
@@ -212,7 +212,7 @@ func TestLocalStreamDestroy(t *testing.T) {
 
 func BenchmarkLocalSend(b *testing.B) {
 	sd, err := NewSender(nil, WithSenderLocalDispatch(func(d metadata.DNShard) TxnRequestHandleFunc {
-		return func(ctx context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
+		return func(_ context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
 			resp.RequestID = req.RequestID
 			return nil
 		}

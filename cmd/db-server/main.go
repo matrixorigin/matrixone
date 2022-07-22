@@ -203,8 +203,7 @@ func main() {
 
 	Host := config.GlobalSystemVariables.GetHost()
 	engineName := config.GlobalSystemVariables.GetStorageEngine()
-	var port int64
-	port = config.GlobalSystemVariables.GetPortOfRpcServerInComputationEngine()
+	port := config.GlobalSystemVariables.GetPortOfRpcServerInComputationEngine()
 
 	var tae *taeHandler
 	if engineName == "tae" {

@@ -339,9 +339,15 @@ func TestGetHeartbeatMessage(t *testing.T) {
 		assert.NoError(t, store.startReplica(10, 1, peers, false))
 		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
 
-		m := store.getHeartbeatMessage()
-		// hakeeper shard is included
-		assert.Equal(t, 3, len(m.Replicas))
+		for i := 0; i < 5000; i++ {
+			m := store.getHeartbeatMessage()
+			if len(m.Replicas) != 3 {
+				time.Sleep(time.Millisecond)
+			} else {
+				return
+			}
+		}
+		t.Fatalf("failed to get all replicas details from heartbeat message")
 	}
 	runStoreTest(t, fn)
 }
@@ -487,6 +493,16 @@ func TestRemoveReplica(t *testing.T) {
 		require.NoError(t, store1.removeReplica(1, 2, m.ConfigChangeID))
 		return
 	}
+}
+
+func hasShard(s *store, shardID uint64) bool {
+	hb := s.getHeartbeatMessage()
+	for _, info := range hb.Replicas {
+		if info.ShardID == shardID {
+			return true
+		}
+	}
+	return false
 }
 
 func hasReplica(s *store, shardID uint64, replicaID uint64) bool {
