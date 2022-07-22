@@ -37,14 +37,14 @@ func (s *Sum[T1, T2]) Fill(_ int64, value T1, ov T2, z int64, isEmpty bool, isNu
 }
 
 func (s *Sum[T1, T2]) Merge(_ int64, _ int64, x T2, y T2, xEmpty bool, yEmpty bool, _ any) (T2, bool) {
-	if !xEmpty && yEmpty {
-		return x, false
-	} else if xEmpty && !yEmpty {
+	if !yEmpty {
+		if !xEmpty {
+			return x + y, false
+		}
 		return y, false
-	} else if !xEmpty && !yEmpty {
-		return x + y, false
 	}
-	return x, true
+	return x, xEmpty
+
 }
 
 func NewD64Sum() *Decimal64Sum {
@@ -66,14 +66,13 @@ func (s *Decimal64Sum) Fill(_ int64, value types.Decimal64, ov types.Decimal64, 
 }
 
 func (s *Decimal64Sum) Merge(_ int64, _ int64, x types.Decimal64, y types.Decimal64, xEmpty bool, yEmpty bool, _ any) (types.Decimal64, bool) {
-	if !xEmpty && yEmpty {
-		return x, false
-	} else if xEmpty && !yEmpty {
+	if !yEmpty {
+		if !xEmpty {
+			return x.Add(y), false
+		}
 		return y, false
-	} else if !xEmpty && !yEmpty {
-		return x.Add(y), false
 	}
-	return x, true
+	return x, xEmpty
 }
 
 func NewD128Sum() *Decimal128Sum {
@@ -95,12 +94,11 @@ func (s *Decimal128Sum) Fill(_ int64, value types.Decimal128, ov types.Decimal12
 }
 
 func (s *Decimal128Sum) Merge(_ int64, _ int64, x types.Decimal128, y types.Decimal128, xEmpty bool, yEmpty bool, _ any) (types.Decimal128, bool) {
-	if !xEmpty && yEmpty {
-		return x, false
-	} else if xEmpty && !yEmpty {
+	if !yEmpty {
+		if !xEmpty {
+			return x.Add(y), false
+		}
 		return y, false
-	} else if !xEmpty && !yEmpty {
-		return x.Add(y), false
 	}
-	return x, true
+	return x, xEmpty
 }

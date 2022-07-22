@@ -41,19 +41,13 @@ func (m *Max[T]) Fill(_ int64, value T, ov T, _ int64, isEmpty bool, isNull bool
 }
 
 func (m *Max[T]) Merge(_ int64, _ int64, x T, y T, xEmpty bool, yEmpty bool, _ any) (T, bool) {
-	if !xEmpty && yEmpty {
-		return x, false
-	} else if xEmpty && !yEmpty {
-		return y, false
-	} else if !xEmpty && !yEmpty {
-		if y > x {
-			return y, false
-		} else {
+	if !yEmpty {
+		if !xEmpty && x > y {
 			return x, false
 		}
+		return y, false
 	}
-
-	return x, true
+	return x, xEmpty
 }
 
 func NewD64Max() *Decimal64Max {
@@ -77,17 +71,13 @@ func (m *Decimal64Max) Fill(_ int64, value types.Decimal64, ov types.Decimal64, 
 
 }
 func (m *Decimal64Max) Merge(_ int64, _ int64, x types.Decimal64, y types.Decimal64, xEmpty bool, yEmpty bool, _ any) (types.Decimal64, bool) {
-	if !xEmpty && yEmpty {
-		return x, false
-	} else if xEmpty && !yEmpty {
-		return y, false
-	} else if !xEmpty && !yEmpty {
-		if x.Gt(y) {
+	if !yEmpty {
+		if !xEmpty && x.Gt(y) {
 			return x, false
 		}
 		return y, false
 	}
-	return x, true
+	return x, xEmpty
 }
 
 func NewD128Max() *Decimal128Max {
@@ -103,7 +93,7 @@ func (m *Decimal128Max) Eval(vs []types.Decimal128) []types.Decimal128 {
 
 func (m *Decimal128Max) Fill(_ int64, value types.Decimal128, ov types.Decimal128, _ int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
 	if !isNull {
-		if types.CompareDecimal128Decimal128Aligned(value, ov) == 1 || isEmpty {
+		if ov.Le(value) || isEmpty {
 			return value, false
 		}
 	}
@@ -111,17 +101,13 @@ func (m *Decimal128Max) Fill(_ int64, value types.Decimal128, ov types.Decimal12
 
 }
 func (m *Decimal128Max) Merge(_ int64, _ int64, x types.Decimal128, y types.Decimal128, xEmpty bool, yEmpty bool, _ any) (types.Decimal128, bool) {
-	if !xEmpty && yEmpty {
-		return x, false
-	} else if xEmpty && !yEmpty {
-		return y, false
-	} else if !xEmpty && !yEmpty {
-		if types.CompareDecimal128Decimal128Aligned(x, y) == 1 {
+	if !yEmpty {
+		if !xEmpty && x.Gt(y) {
 			return x, false
 		}
 		return y, false
 	}
-	return x, true
+	return x, xEmpty
 }
 
 func NewBoolMax() *BoolMax {
@@ -140,20 +126,19 @@ func (m *BoolMax) Fill(_ int64, value bool, ov bool, _ int64, isEmpty bool, isNu
 		if isEmpty {
 			return value, false
 		}
-		return (value || ov), false
+		return value || ov, false
 	}
 	return ov, isEmpty
 
 }
 func (m *BoolMax) Merge(_ int64, _ int64, x bool, y bool, xEmpty bool, yEmpty bool, _ any) (bool, bool) {
-	if !xEmpty && yEmpty {
-		return x, false
-	} else if xEmpty && !yEmpty {
+	if !yEmpty {
+		if !xEmpty {
+			return x || y, false
+		}
 		return y, false
-	} else if !xEmpty && !yEmpty {
-		return x || y, false
 	}
-	return x, true
+	return x, xEmpty
 }
 
 func NewStrMax() *StrMax {
@@ -177,16 +162,11 @@ func (m *StrMax) Fill(_ int64, value []byte, ov []byte, _ int64, isEmpty bool, i
 
 }
 func (m *StrMax) Merge(_ int64, _ int64, x []byte, y []byte, xEmpty bool, yEmpty bool, _ any) ([]byte, bool) {
-	if !xEmpty && yEmpty {
-		return x, false
-	} else if xEmpty && !yEmpty {
-		return y, false
-	} else if !xEmpty && !yEmpty {
-		if bytes.Compare(x, y) > 0 {
+	if !yEmpty {
+		if !xEmpty && bytes.Compare(x, y) > 0 {
 			return x, false
-		} else {
-			return y, false
 		}
+		return y, false
 	}
-	return x, true
+	return x, xEmpty
 }

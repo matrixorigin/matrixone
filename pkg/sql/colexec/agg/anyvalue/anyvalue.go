@@ -37,7 +37,7 @@ func (a *Anyvalue[T]) Fill(i int64, value T, ov T, z int64, isEmpty bool, isNull
 }
 
 func (a *Anyvalue[T]) Merge(xIndex int64, yIndex int64, x T, y T, xEmpty bool, yEmpty bool, yAnyValue any) (T, bool) {
-	if (xEmpty && !yEmpty) || (!xEmpty && !yEmpty) {
+	if !yEmpty {
 		ya := yAnyValue.(*Anyvalue[T])
 		if ya.NotSet[yIndex] && !a.NotSet[xIndex] {
 			a.NotSet[xIndex] = true

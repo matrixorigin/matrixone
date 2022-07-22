@@ -17,7 +17,6 @@ package anyvalue
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 type Anyvalue[T any] struct {
-	// the len of NotSet should as same as agg's size
 	NotSet []bool
 	Typ    types.Type
 }

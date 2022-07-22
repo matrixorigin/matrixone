@@ -111,7 +111,7 @@ func TestDecimal128Avg(t *testing.T) {
 		}
 		v, err := agg.Eval(m)
 		require.NoError(t, err)
-		require.Equal(t, MakeDecimal128Arr([]int64{4}), vector.GetColumn[types.Decimal128](v))
+		require.Equal(t, MakeDecimal128Arr([]float64{4.5}), vector.GetColumn[types.Decimal128](v))
 		v.Free(m)
 	}
 	{
@@ -132,13 +132,13 @@ func TestDecimal128Avg(t *testing.T) {
 		{
 			v, err := agg0.Eval(m)
 			require.NoError(t, err)
-			require.Equal(t, MakeDecimal128Arr([]int64{9}), vector.GetColumn[types.Decimal128](v))
+			require.Equal(t, MakeDecimal128Arr([]float64{9.5}), vector.GetColumn[types.Decimal128](v))
 			v.Free(m)
 		}
 		{
 			v, err := agg1.Eval(m)
 			require.NoError(t, err)
-			require.Equal(t, MakeDecimal128Arr([]int64{14}), vector.GetColumn[types.Decimal128](v))
+			require.Equal(t, MakeDecimal128Arr([]float64{14.5}), vector.GetColumn[types.Decimal128](v))
 			v.Free(m)
 		}
 	}
@@ -203,10 +203,10 @@ func TestDistincAvg(t *testing.T) {
 	require.Equal(t, int64(0), m.Size())
 }
 
-func MakeDecimal128Arr(input []int64) []types.Decimal128 {
+func MakeDecimal128Arr(input []float64) []types.Decimal128 {
 	ret := make([]types.Decimal128, len(input))
 	for i, v := range input {
-		ret[i] = types.InitDecimal128(v)
+		ret[i] = types.Decimal128FromFloat64(v)
 	}
 
 	return ret
