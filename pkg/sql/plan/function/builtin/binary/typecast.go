@@ -420,10 +420,10 @@ func datetimeToDate(xs []types.Datetime, rs []types.Date) ([]types.Date, error) 
 	return rs, nil
 }
 
-func datetimeToBytes(xs []types.Datetime, rs *types.Bytes) (*types.Bytes, error) {
+func datetimeToBytes(xs []types.Datetime, rs *types.Bytes, precision int32) (*types.Bytes, error) {
 	oldLen := uint32(0)
 	for _, x := range xs {
-		rs.Data = append(rs.Data, []byte(x.String())...)
+		rs.Data = append(rs.Data, []byte(x.String2(precision))...)
 		newLen := uint32(len(rs.Data))
 		rs.Offsets = append(rs.Offsets, oldLen)
 		rs.Lengths = append(rs.Lengths, newLen-oldLen)
