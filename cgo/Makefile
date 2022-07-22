@@ -5,11 +5,11 @@ LIBS=libdecnumber.a
 %.o: %.c mo.h mo_impl.h
 	$(CC) $(CFLAGS) -c -o $@ $< 
 
-all: $(LIBS) libmo.a
-
-libmo.a: $(OBJS) 
-	ar -rcs libmo.a $(OBJS)
+all: $(LIBS) $(OBJS)
+	ar -x libdecnumber.a
+	ar -rcs libmo.a *.o
 	ranlib libmo.a
+	rm -f *.o
 
 libdecnumber.a:
 	(cd external; bash ./build.sh)
