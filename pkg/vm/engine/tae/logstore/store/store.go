@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
 
 var (
@@ -80,10 +81,10 @@ type baseStore struct {
 	flushWgMu       *sync.RWMutex
 	flushCtx        context.Context
 	flushCancel     context.CancelFunc
-	flushQueue      chan entry.Entry
-	syncQueue       chan []*batch
-	commitQueue     chan []*batch
-	postCommitQueue chan []*batch
+	flushQueue      sm.Queue
+	syncQueue       sm.Queue
+	commitQueue     sm.Queue
+	postCommitQueue sm.Queue
 	wg              sync.WaitGroup
 	file            File
 	mu              *sync.RWMutex
@@ -92,16 +93,16 @@ type baseStore struct {
 func NewBaseStore(dir, name string, cfg *StoreCfg) (*baseStore, error) {
 	var err error
 	bs := &baseStore{
-		syncBase:        *newSyncBase(),
-		dir:             dir,
-		name:            name,
-		flushQueue:      make(chan entry.Entry, DefaultMaxBatchSize*100),
-		syncQueue:       make(chan []*batch, DefaultMaxSyncSize*100),
-		commitQueue:     make(chan []*batch, DefaultMaxCommitSize*100),
-		postCommitQueue: make(chan []*batch, DefaultMaxCommitSize*100),
-		mu:              &sync.RWMutex{},
-		flushWgMu:       &sync.RWMutex{},
+		syncBase:  *newSyncBase(),
+		dir:       dir,
+		name:      name,
+		mu:        &sync.RWMutex{},
+		flushWgMu: &sync.RWMutex{},
 	}
+	bs.flushQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onEntries)
+	bs.syncQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onSyncs)
+	bs.commitQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onCommits)
+	bs.postCommitQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onPostCommits)
 	if cfg == nil {
 		cfg = &StoreCfg{}
 	}
@@ -115,153 +116,15 @@ func NewBaseStore(dir, name string, cfg *StoreCfg) (*baseStore, error) {
 }
 
 func (bs *baseStore) start() {
-	bs.wg.Add(3)
-	go bs.flushLoop()
-	go bs.syncLoop()
-	go bs.commitLoop()
-	go bs.postCommitLoop()
+	bs.flushQueue.Start()
+	bs.syncQueue.Start()
+	bs.commitQueue.Start()
+	bs.postCommitQueue.Start()
 }
 
-func (bs *baseStore) flushLoop() {
-	t0 := time.Now()
-	defer bs.wg.Done()
-	entries := make([]entry.Entry, 0, DefaultMaxBatchSize)
-	bats := make([]*batch, 0, DefaultBatchPerSync)
-	ticker := time.NewTicker(DefaultSyncDuration)
-	for {
-		t1 := time.Now()
-		select {
-		case <-bs.flushCtx.Done():
-			return
-		case e := <-bs.flushQueue:
-			entries = append(entries, e)
-			bs.flushQueueDuration += time.Since(t1)
-			atomic.StoreInt32(&bs.enqueueEntries, 0)
-			t1 = time.Now()
-		Left:
-			for i := 0; i < DefaultMaxBatchSize-1; i++ {
-				select {
-				case e = <-bs.flushQueue:
-					entries = append(entries, e)
-					atomic.StoreInt32(&bs.enqueueEntries, 0)
-				default:
-					// case <-ticker.C:
-					break Left
-				}
-			}
-			bs.flushLoop1Duration += time.Since(t1)
-			t1 = time.Now()
-			bat := bs.onEntries(entries)
-			bs.onEntriesDuration += time.Since(t1)
-			t1 = time.Now()
-			bats = append(bats, bat)
-			if len(bats) >= DefaultBatchPerSync || time.Since(t0) > DefaultSyncDuration {
-				if len(bats) >= DefaultBatchPerSync {
-					bs.bySize++
-				} else {
-					bs.byDuration++
-				}
-				t0 = time.Now()
-				syncBatch := make([]*batch, len(bats))
-				copy(syncBatch, bats)
-				bs.syncQueue <- syncBatch
-				bats = bats[:0]
-			}
-			entries = entries[:0]
-			bs.flushLoop2Duration += time.Since(t1)
-		case <-ticker.C:
-			bs.tickerTimes++
-			bs.flushQueueDuration += time.Since(t1)
-			t1 = time.Now()
-			if len(bats) != 0 {
-				bs.byDuration++
-				t0 = time.Now()
-				syncBatch := make([]*batch, len(bats))
-				copy(syncBatch, bats)
-				bs.syncQueue <- syncBatch
-				bats = bats[:0]
-			}
-			bs.flushLoop2Duration += time.Since(t1)
-		}
-	}
-}
-
-func (bs *baseStore) syncLoop() {
-	defer bs.wg.Done()
-	batches := make([]*batch, 0, DefaultMaxSyncSize)
-	for {
-		t0 := time.Now()
-		select {
-		case <-bs.flushCtx.Done():
-			return
-		case e := <-bs.syncQueue:
-			bs.syncQueueDuration += time.Since(t0)
-			t0 = time.Now()
-			batches = append(batches, e...)
-		Left:
-			for i := 0; i < DefaultMaxBatchSize-1; i++ {
-				select {
-				case e = <-bs.syncQueue:
-					batches = append(batches, e...)
-				default:
-					break Left
-				}
-			}
-			bs.syncLoopDuration += time.Since(t0)
-			bs.onSyncs(batches)
-			batches = batches[:0]
-		}
-	}
-}
-
-func (bs *baseStore) commitLoop() {
-	defer bs.wg.Done()
-	batches := make([]*batch, 0, DefaultMaxCommitSize)
-	for {
-		select {
-		case <-bs.flushCtx.Done():
-			return
-		case e := <-bs.commitQueue:
-			batches = append(batches, e...)
-		Left:
-			for i := 0; i < DefaultMaxCommitSize-1; i++ {
-				select {
-				case e = <-bs.commitQueue:
-					batches = append(batches, e...)
-				default:
-					break Left
-				}
-			}
-			bs.onCommits(batches)
-			batches = batches[:0]
-		}
-	}
-}
-func (bs *baseStore) postCommitLoop() {
-	batches := make([]*batch, 0, DefaultMaxCommitSize)
-	for {
-		select {
-		case <-bs.flushCtx.Done():
-			return
-		case e := <-bs.postCommitQueue:
-			batches = append(batches, e...)
-		Left:
-			for i := 0; i < DefaultMaxCommitSize-1; i++ {
-				select {
-				case e = <-bs.postCommitQueue:
-					batches = append(batches, e...)
-				default:
-					break Left
-				}
-			}
-			bs.onPostCommits(batches)
-			batches = batches[:0]
-		}
-	}
-}
-
-func (bs *baseStore) onPostCommits(batches []*batch) {
-	for _, bat := range batches {
+func (bs *baseStore) onPostCommits(batches ...any) {
+	for _, item := range batches {
+		bat := item.(*batch)
 		for _, info := range bat.infos {
 			err := bs.syncBase.OnEntryReceived(info)
 			if err != nil {
@@ -272,8 +135,9 @@ func (bs *baseStore) onPostCommits(batches []*batch) {
 	}
 }
 
-func (bs *baseStore) onCommits(batches []*batch) {
-	for _, bat := range batches {
+func (bs *baseStore) onCommits(batches ...any) {
+	for _, item := range batches {
+		bat := item.(*batch)
 		bat.infos = make([]*entry.Info, 0)
 		for _, e := range bat.entrys {
 			info := e.GetInfo()
@@ -289,19 +153,15 @@ func (bs *baseStore) onCommits(batches []*batch) {
 		cnt := len(bat.entrys)
 		bs.flushWg.Add(-1 * cnt)
 	}
-	bats := make([]*batch, len(batches))
-	copy(bats, batches)
-	bs.postCommitQueue <- bats
+	bs.postCommitQueue.Enqueue(batches)
 }
 
-func (bs *baseStore) onSyncs(batches []*batch) {
+func (bs *baseStore) onSyncs(batches ...any) {
 	var err error
 	if err = bs.file.Sync(); err != nil {
 		panic(err)
 	}
-	bats := make([]*batch, len(batches))
-	copy(bats, batches)
-	bs.commitQueue <- bats
+	bs.commitQueue.Enqueue(batches)
 }
 
 func (bs *baseStore) PrepareEntry(e entry.Entry) (entry.Entry, error) {
@@ -311,36 +171,16 @@ func (bs *baseStore) PrepareEntry(e entry.Entry) (entry.Entry, error) {
 	}
 	v := v1.(*entry.Info)
 	v.Info = &VFileAddress{}
-	switch v.Group {
-	// case entry.GTUncommit:
-	// 	addrs := make([]*VFileAddress, 0)
-	// 	for _, tids := range v.Uncommits {
-	// 		addr := bs.GetLastAddr(tids.Group, tids.Tid)
-	// 		if addr == nil {
-	// 			addr = &VFileAddress{}
-	// 		}
-	// 		addr.Group = tids.Group
-	// 		addr.LSN = tids.Tid
-	// 		addrs = append(addrs, addr)
-	// 	}
-	// 	buf, err := json.Marshal(addrs)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	e.SetInfoSize(len(buf))
-	// 	e.SetInfoBuf(buf)
-	// 	return e, nil
-	default:
-		buf := v.Marshal()
-		size := len(buf)
-		e.SetInfoSize(size)
-		e.SetInfoBuf(buf)
-		return e, nil
-	}
+	buf := v.Marshal()
+	size := len(buf)
+	e.SetInfoSize(size)
+	e.SetInfoBuf(buf)
+	return e, nil
 }
 
-func (bs *baseStore) onEntries(entries []entry.Entry) *batch {
-	for _, e := range entries {
+func (bs *baseStore) onEntries(entries ...any) {
+	for _, item := range entries {
+		e := item.(entry.Entry)
 		if e.IsPrintTime() {
 			logutil.Infof("flush queue takes %dms", e.Duration().Milliseconds())
 			e.StartTime()
@@ -374,23 +214,12 @@ func (bs *baseStore) onEntries(entries []entry.Entry) *batch {
 			logutil.Infof("onEntries2 takes %dms", e.Duration().Milliseconds())
 			e.StartTime()
 		}
-		// bs.OnEntryReceived(e)
-		// if e.IsPrintTime() {
-		// 	logutil.Infof("onEntries3 takes %dms", e.Duration().Milliseconds())
-		// 	e.StartTime()
-		// }
 	}
-	bat := &batch{
-		// preparecommit: bs.PrepareCommit(),
-		entrys: make([]entry.Entry, len(entries)),
-	}
-	copy(bat.entrys, entries)
-	return bat
+	bs.syncQueue.Enqueue(entries)
 }
 
 type batch struct {
 	entrys []entry.Entry
-	// preparecommit *prepareCommit
 	infos []*entry.Info
 }
 
@@ -485,7 +314,7 @@ func (bs *baseStore) AppendEntry(groupId uint32, e entry.Entry) (id uint64, err 
 		logutil.Infof("append entry takes %dms", e.Duration().Milliseconds())
 		e.StartTime()
 	}
-	bs.flushQueue <- e
+	bs.flushQueue.Enqueue(e)
 	bs.mu.Unlock()
 	// globalTime = time.Now()
 	atomic.AddInt32(&bs.enqueueEntries, 1)

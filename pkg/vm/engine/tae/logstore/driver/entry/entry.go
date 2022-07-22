@@ -2,6 +2,7 @@ package entry
 
 import (
 	"io"
+	"os"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -9,33 +10,42 @@ import (
 
 type Entry struct {
 	Entry entry.Entry
-	Info  *entry.Info
+	Info  *entry.Info //for wal in post append
 	Lsn   uint64
+	Ctx   any //for addr in batchstore
 	err   error
-	wg    sync.WaitGroup
+	wg    *sync.WaitGroup
 }
 
 func NewEntry(e entry.Entry) *Entry {
 	en := &Entry{
 		Entry: e,
-		wg:    sync.WaitGroup{},
+		wg:    &sync.WaitGroup{},
 	}
 	en.wg.Add(1)
 	return en
 }
-func NewEmptyEntry() *Entry{
-	en:=&Entry{
+func NewEmptyEntry() *Entry {
+	en := &Entry{
 		Entry: entry.GetBase(),
-		wg: sync.WaitGroup{},
+		wg:    &sync.WaitGroup{},
 	}
 	en.wg.Add(1)
 	return en
 }
-
-func (e *Entry) ReadFrom(r io.Reader){
+func (e *Entry) SetInfo(){
+	info:=e.Entry.GetInfo()
+	if info!=nil{
+		e.Info=info.(*entry.Info)
+	}
+}
+func (e *Entry) ReadFrom(r io.Reader) {
 	e.Entry.ReadFrom(r)
 }
 
+func (e *Entry) ReadAt(r *os.File,offset int)(int,error) {
+	return e.Entry.ReadAt(r,offset)
+}
 func (e *Entry) WaitDone() error {
 	e.wg.Wait()
 	return e.err
@@ -43,6 +53,10 @@ func (e *Entry) WaitDone() error {
 
 func (e *Entry) DoneWithErr(err error) {
 	e.err = err
+	info := e.Entry.GetInfo()
+	if info != nil {
+		e.Info = info.(*entry.Info)
+	}
 	e.wg.Done()
 }
 

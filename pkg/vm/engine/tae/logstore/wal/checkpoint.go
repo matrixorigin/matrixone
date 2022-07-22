@@ -5,16 +5,18 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-func (w *WalImpl) Checkpoint(indexes []*wal.Index) (ckpEntry entry.Entry) {
-	ckpEntry = w.makeCheckpointEntry(indexes)
-	w.Append(GroupCKP, ckpEntry)
+func (w *WalImpl) FuzzyCheckpoint(gid uint32,indexes []*wal.Index) (ckpEntry entry.Entry) {
+	ckpEntry = w.makeCheckpointEntry(gid,indexes)
+	drentry,_,_:=w.doAppend(GroupCKP, ckpEntry)
+	w.checkpointQueue.Enqueue(drentry)
 	return
 }
 
-func (w *WalImpl) makeCheckpointEntry(indexes []*wal.Index) (ckpEntry entry.Entry) {
+func (w *WalImpl) makeCheckpointEntry(gid uint32,indexes []*wal.Index) (ckpEntry entry.Entry) {
 	for _, index := range indexes {
 		if index.LSN > 100000000 {
 			logutil.Infof("IndexErr: Checkpoint Index: %s", index.String())
@@ -56,7 +58,7 @@ func (w *WalImpl) makeCheckpointEntry(indexes []*wal.Index) (ckpEntry entry.Entr
 	info := &entry.Info{
 		Group: entry.GTCKp,
 		Checkpoints: []entry.CkpRanges{{
-			Group:   GroupC,
+			Group:   gid,
 			Command: commands,
 		}},
 	}
@@ -66,21 +68,18 @@ func (w *WalImpl) makeCheckpointEntry(indexes []*wal.Index) (ckpEntry entry.Entr
 	return
 }
 
-func (w *WalImpl) onLogCKPInfoQueue(items []any) any {
+func (w *WalImpl) onLogCKPInfoQueue(items ...any) {
 	for _, item := range items {
-		e := item.(entry.Entry)
-		info := e.GetInfo().(*entry.Info)
+		e := item.(*driverEntry.Entry)
 		e.WaitDone()
-		e.Free()
-		w.logCheckpointInfo(info)
+		w.logCheckpointInfo(e.Info)
 	}
 	w.onCheckpoint()
-	return nil
 }
 
 func (w *WalImpl) onCheckpoint() {
 	w.WalInfo.onCheckpoint()
-	w.truncateQueue <- struct{}{}
+	w.truncatingQueue.Enqueue(struct{}{})
 }
 
 func (w *WalImpl) CkpCkp() {
@@ -92,21 +91,20 @@ func (w *WalImpl) CkpCkp() {
 	e.WaitDone()
 }
 
-func (w *WalImpl) Truncate(driverLsn uint64) {
-	w.driver.Truncate(driverLsn)
-}
-
-func (w *WalImpl) onTruncatingQueue(items []any) any {
+func (w *WalImpl) onTruncatingQueue(items ...any)  {
 	gid, driverLsn := w.getDriverCheckpointed()
+	if driverLsn==0 && gid ==0{
+		return
+	}
 	if gid == GroupCKP {
 		w.CkpCkp()
 		_, driverLsn = w.getDriverCheckpointed()
 	}
 	atomic.StoreUint64(&w.driverCheckpointing, driverLsn)
-	return struct{}{}
+	w.truncateQueue.Enqueue(struct{}{})
 }
 
-func (w *WalImpl) onTruncateQueue(items []any) any {
+func (w *WalImpl) onTruncateQueue(items ...any) {
 	lsn := atomic.LoadUint64(&w.driverCheckpointing)
 	if lsn != w.driverCheckpointed {
 		err := w.driver.Truncate(lsn)
@@ -116,5 +114,4 @@ func (w *WalImpl) onTruncateQueue(items []any) any {
 		}
 		w.driverCheckpointed = lsn
 	}
-	return struct{}{}
 }

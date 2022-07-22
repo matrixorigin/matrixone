@@ -5,10 +5,10 @@ import (
 )
 
 func (w *WalImpl) Load(gid uint32, lsn uint64) (entry.Entry, error) {
-	driverLsn, err := w.getDriverLsn(gid, lsn)
+	driverLsn, err := w.retryGetDriverLsn(gid, lsn)
 	if err != nil {
 		return nil, err
 	}
-	driverEntry := w.driver.Read(driverLsn)
-	return driverEntry.Entry, nil
+	driverEntry ,err:= w.driver.Read(driverLsn)
+	return driverEntry.Entry, err
 }

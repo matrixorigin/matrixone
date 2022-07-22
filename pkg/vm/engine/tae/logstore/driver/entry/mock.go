@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"math/rand"
 
-	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
@@ -22,10 +21,11 @@ func MockEntry() *Entry {
 	payloadSize := 100
 
 	e := entry.GetBase()
-	info := &entry.Info{GroupLSN: uint64(rand.Intn(10))}
+	info := &entry.Info{GroupLSN: uint64(rand.Intn(1000))}
 	e.SetInfo(info)
 	payload := make([]byte, payloadSize)
 	copy(payload, buf)
 	e.SetPayload(payload)
+	e.PrepareWrite()
 	return NewEntry(e)
 }

@@ -268,36 +268,6 @@ type CommandInfo struct {
 	Size       uint32
 }
 
-// type CommitInfo struct {
-// 	Group    uint32
-// 	CommitId uint64
-// 	Addr interface{}
-// }
-
-// func (info *CommitInfo) ToString() string {
-// 	return fmt.Sprintf("commit entry <%d>-%d\n", info.Group, info.CommitId)
-// }
-
-// type UncommitInfo struct {
-// 	Tids map[uint32][]uint64
-// 	Addr interface{}
-// }
-
-// func (info *UncommitInfo) ToString() string {
-// 	return fmt.Sprintf("uncommit entry %v\n", info.Tids)
-// }
-
-// type TxnInfo struct {
-// 	Group    uint32
-// 	Tid      uint64
-// 	CommitId uint64
-// 	Addr     interface{}
-// }
-
-// func (info *TxnInfo) ToString() string {
-// 	return fmt.Sprintf("txn entry <%d> %d-%d\n", info.Group, info.Tid, info.CommitId)
-// }
-
 func GetBase() *Base {
 	b := _basePool.Get().(*Base)
 	if b.GetPayloadSize() != 0 {
@@ -337,6 +307,7 @@ func (b *Base) GetInfoBuf() []byte {
 	return b.infobuf
 }
 func (b *Base) SetInfoBuf(buf []byte) {
+	b.SetInfoSize(len(buf))
 	b.infobuf = buf
 }
 func (b *Base) GetError() error {
@@ -392,7 +363,6 @@ func (b *Base) UnmarshalFromNode(n *common.MemNode, own bool) error {
 	return nil
 }
 
-//TODO Unmarshal->SetPayload
 func (b *Base) SetPayload(buf []byte) error {
 	if b.node != nil {
 		common.GPool.Free(b.node)
@@ -408,7 +378,16 @@ func (b *Base) Unmarshal(buf []byte) error {
 	_, err := b.ReadFrom(bbuf)
 	return err
 }
-
+func (b *Base) GetLsn()(gid uint32,lsn uint64){
+	v:=b.GetInfo()
+	if v==nil{
+		return
+	}
+	info:=v.(*Info)
+	gid=info.Group
+	lsn=info.GroupLSN
+	return
+} 
 func (b *Base) Marshal() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = b.WriteTo(&bbuf); err != nil {
@@ -437,15 +416,12 @@ func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 	if b.GetInfoSize() != 0 {
 		infoBuf := make([]byte, b.GetInfoSize())
 		n, err := r.Read(infoBuf)
-		n1 = n
+		n1 += n
 		if err != nil {
 			return int64(n1), err
 		}
-		b.SetInfoBuf(infoBuf)
-		if len(infoBuf) != 0 {
-			info := Unmarshal(infoBuf)
-			b.SetInfo(info)
-		}
+		info := Unmarshal(infoBuf)
+		b.SetInfo(info)
 	}
 	n2, err := r.Read(b.payload)
 	if err != nil {
@@ -455,16 +431,23 @@ func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 }
 
 func (b *Base) ReadAt(r *os.File, offset int) (int, error) {
+	metaBuf := b.GetMetaBuf()
+	n, err := r.ReadAt(metaBuf,int64(offset))
+	if err != nil {
+		return n, err
+	}
 	if b.node == nil {
 		b.node = common.GPool.Alloc(uint64(b.GetPayloadSize()))
 		b.payload = b.node.Buf[:b.GetPayloadSize()]
 	}
+
 	offset += len(b.GetMetaBuf())
 	infoBuf := make([]byte, b.GetInfoSize())
 	n1, err := r.ReadAt(infoBuf, int64(offset))
 	if err != nil {
-		return n1, err
+		return n + n1, err
 	}
+
 	offset += n1
 	b.SetInfoBuf(infoBuf)
 	info := Unmarshal(infoBuf)
@@ -473,7 +456,15 @@ func (b *Base) ReadAt(r *os.File, offset int) (int, error) {
 	if err != nil {
 		return n2, err
 	}
-	return n1 + n2, nil
+	return n + n1 + n2, nil
+}
+
+func (b *Base) PrepareWrite(){
+	if b.info== nil{
+		return
+	}
+	buf:=b.info.(*Info).Marshal()
+	b.SetInfoBuf(buf)
 }
 
 func (b *Base) WriteTo(w io.Writer) (int64, error) {

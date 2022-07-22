@@ -8,6 +8,7 @@ import (
 	"math"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
@@ -15,6 +16,7 @@ import (
 var (
 	ErrGroupNotFount = errors.New("group not found")
 	ErrLsnNotFount   = errors.New("lsn not found")
+	ErrTimeOut       = errors.New("retry time our")
 )
 
 type WalInfo struct {
@@ -29,18 +31,63 @@ type WalInfo struct {
 	lsnmu               sync.RWMutex
 	syncing             map[uint32]uint64
 
+	synced     map[uint32]uint64
+	syncedMu   sync.RWMutex
+	commitCond sync.Cond
+
 	checkpointed   map[uint32]uint64
 	checkpointedMu sync.RWMutex
-	synced         map[uint32]uint64
-	syncedMu       sync.RWMutex
 	ckpcnt         map[uint32]uint64
 	ckpcntMu       sync.RWMutex
 }
 
-func (w *WalInfo) GetCurrSeqNum(gid uint32) (lsn uint64)
-func (w *WalInfo) GetSynced(gid uint32) (lsn uint64)
-func (w *WalInfo) GetPendding(gid uint32) (cnt uint64)
-func (w *WalInfo) GetCheckpointed(gid uint32) (lsn uint64)
+func newWalInfo() *WalInfo {
+	return &WalInfo{
+		checkpointInfo:  make(map[uint32]*checkpointInfo),
+		ckpMu:           sync.RWMutex{},
+		walDriverLsnMap: make(map[uint32]map[uint64]uint64),
+		lsnMu:           sync.RWMutex{},
+		walLsnTidMap:    make(map[uint64]uint64),
+		walCurrentLsn:   make(map[uint32]uint64),
+		lsnmu:           sync.RWMutex{},
+		syncing:         make(map[uint32]uint64),
+		commitCond:      *sync.NewCond(&sync.Mutex{}),
+
+		checkpointed:   make(map[uint32]uint64),
+		checkpointedMu: sync.RWMutex{},
+		synced:         make(map[uint32]uint64),
+		syncedMu:       sync.RWMutex{},
+		ckpcnt:         make(map[uint32]uint64),
+		ckpcntMu:       sync.RWMutex{},
+	}
+}
+func (w *WalInfo) GetCurrSeqNum(gid uint32) (lsn uint64) {
+	w.lsnmu.RLock()
+	defer w.lsnmu.RUnlock()
+	lsn = w.walCurrentLsn[gid]
+	return
+}
+func (w *WalInfo) GetSynced(gid uint32) (lsn uint64) {
+	w.syncedMu.RLock()
+	defer w.syncedMu.RUnlock()
+	lsn = w.synced[gid]
+	return
+}
+
+func (w *WalInfo) GetPendding(gid uint32) (cnt uint64) {
+	lsn := w.GetSynced(gid)
+	w.ckpcntMu.RLock()
+	ckpcnt := w.ckpcnt[gid]
+	w.ckpcntMu.RUnlock()
+	cnt = lsn - ckpcnt
+	return
+}
+func (w *WalInfo) GetCheckpointed(gid uint32) (lsn uint64) {
+	w.checkpointedMu.RLock()
+	lsn = w.checkpointed[gid]
+	w.checkpointedMu.RUnlock()
+	return
+}
 
 func (w *WalInfo) allocateLsn(gid uint32) uint64 {
 	w.lsnmu.Lock()
@@ -57,9 +104,6 @@ func (w *WalInfo) allocateLsn(gid uint32) uint64 {
 
 func (w *WalInfo) logDriverLsn(driverEntry *driverEntry.Entry) {
 	info := driverEntry.Entry.GetInfo().(*entry.Info)
-	if info.Group == GroupCKP {
-		w.logCheckpointInfo(info)
-	}
 
 	if info.Group == GroupInternal {
 		w.checkpointedMu.Lock()
@@ -86,11 +130,41 @@ func (w *WalInfo) logDriverLsn(driverEntry *driverEntry.Entry) {
 }
 
 func (w *WalInfo) onAppend() {
+	w.commitCond.L.Lock()
+	w.commitCond.Broadcast()
+	w.commitCond.L.Unlock()
 	w.syncedMu.Lock()
 	for gid, lsn := range w.syncing {
 		w.synced[gid] = lsn
 	}
 	w.syncedMu.Unlock()
+}
+
+func (w *WalInfo) retryGetDriverLsn(gid uint32, lsn uint64) (driverLsn uint64, err error) {
+	driverLsn, err = w.getDriverLsn(gid, lsn)
+	if err == ErrGroupNotFount || err == ErrLsnNotFount {
+		currLsn := w.GetCurrSeqNum(gid)
+		if lsn <= currLsn {
+			for i := 0; i < 10; i++ {
+				logutil.Infof("retry %d-%d", gid, lsn)
+				w.commitCond.L.Lock()
+				driverLsn, err = w.getDriverLsn(gid, lsn)
+				if err != ErrGroupNotFount && err != ErrLsnNotFount {
+					w.commitCond.L.Unlock()
+					return
+				}
+				w.commitCond.Wait()
+				w.commitCond.L.Unlock()
+				driverLsn, err = w.getDriverLsn(gid, lsn)
+				if err != ErrGroupNotFount && err != ErrLsnNotFount {
+					return
+				}
+			}
+			return 0, ErrTimeOut
+		}
+		return
+	}
+	return
 }
 
 func (w *WalInfo) getDriverLsn(gid uint32, lsn uint64) (driverLsn uint64, err error) {
@@ -130,6 +204,9 @@ func (w *WalInfo) onCheckpoint() {
 	w.checkpointedMu.Lock()
 	for gid, ckp := range w.checkpointInfo {
 		ckped := ckp.GetCheckpointed()
+		if ckped == 0 {
+			continue
+		}
 		w.checkpointed[gid] = ckped
 	}
 	w.checkpointedMu.Unlock()
@@ -141,11 +218,16 @@ func (w *WalInfo) onCheckpoint() {
 }
 
 func (w *WalInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
-	driverLsn = math.MaxInt64
 	w.checkpointedMu.RLock()
+	if len(w.checkpointed) == 0 {
+		w.checkpointedMu.RUnlock()
+		return
+	}
+	driverLsn = math.MaxInt64
 	for g, lsn := range w.checkpointed {
-		drLsn, err := w.getDriverLsn(g, lsn)
+		drLsn, err := w.retryGetDriverLsn(g, lsn)
 		if err != nil {
+			logutil.Infof("%d-%d", g, lsn)
 			panic(err)
 		}
 		if drLsn < driverLsn {
