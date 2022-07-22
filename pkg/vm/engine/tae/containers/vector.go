@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package containers
 
 import (
@@ -34,9 +48,9 @@ func NewVector[T any](typ types.Type, nullable bool, opts ...*Options) *vector[T
 		typ:    typ,
 	}
 	if nullable {
-		vec.impl = newNullableVecImpl[T](vec)
+		vec.impl = newNullableVecImpl(vec)
 	} else {
-		vec.impl = newVecImpl[T](vec)
+		vec.impl = newVecImpl(vec)
 	}
 	return vec
 }
@@ -76,10 +90,16 @@ func (vec *vector[T]) Equals(o Vector) bool {
 			if !bytes.Equal(vec.Get(i).([]byte), o.Get(i).([]byte)) {
 				return false
 			}
+		} else if _, ok := any(v).(types.Decimal64); ok {
+			d := vec.Get(i).(types.Decimal64)
+			od := vec.Get(i).(types.Decimal64)
+			if d.Ne(od) {
+				return false
+			}
 		} else if _, ok := any(v).(types.Decimal128); ok {
 			d := vec.Get(i).(types.Decimal128)
 			od := vec.Get(i).(types.Decimal128)
-			if d.Hi != od.Hi || d.Lo != od.Lo {
+			if d.Ne(od) {
 				return false
 			}
 		} else {

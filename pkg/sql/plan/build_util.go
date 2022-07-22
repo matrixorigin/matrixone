@@ -206,14 +206,18 @@ func convertToPlanValue(value interface{}) *plan.ConstantValue {
 			ConstantValue: &plan.ConstantValue_TimeStampV{TimeStampV: int64(v)},
 		}
 	case types.Decimal64:
+		dA := types.Decimal64ToInt64Raw(v)
 		return &plan.ConstantValue{
-			ConstantValue: &plan.ConstantValue_Decimal64V{Decimal64V: int64(v)},
+			ConstantValue: &plan.ConstantValue_Decimal64V{Decimal64V: &plan.Decimal64{
+				A: dA,
+			}},
 		}
 	case types.Decimal128:
+		dA, dB := types.Decimal128ToInt64Raw(v)
 		return &plan.ConstantValue{
 			ConstantValue: &plan.ConstantValue_Decimal128V{Decimal128V: &plan.Decimal128{
-				Lo: v.Lo,
-				Hi: v.Hi,
+				A: dA,
+				B: dB,
 			}},
 		}
 	}

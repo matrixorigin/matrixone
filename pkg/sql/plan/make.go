@@ -94,19 +94,21 @@ func makePlan2DatetimeConstExpr(v types.Datetime) *plan.Expr_C {
 }
 
 func makePlan2Decimal64ConstExpr(v types.Decimal64) *plan.Expr_C {
+	dA := types.Decimal64ToInt64Raw(v)
 	return &plan.Expr_C{C: &plan.Const{
 		Isnull: false,
 		Value: &plan.Const_Decimal64Val{
-			Decimal64Val: int64(v),
+			Decimal64Val: &plan.Decimal64{A: dA},
 		},
 	}}
 }
 
 func makePlan2Decimal128ConstExpr(v types.Decimal128) *plan.Expr_C {
+	dA, dB := types.Decimal128ToInt64Raw(v)
 	return &plan.Expr_C{C: &plan.Const{
 		Isnull: false,
 		Value: &plan.Const_Decimal128Val{
-			Decimal128Val: &plan.Decimal128{Lo: v.Lo, Hi: v.Hi},
+			Decimal128Val: &plan.Decimal128{A: dA, B: dB},
 		},
 	}}
 }
@@ -199,11 +201,12 @@ func MakePlan2DefaultExpr(expr engine.DefaultExpr) *plan.DefaultExpr {
 	case types.Datetime:
 		ret.Value.ConstantValue = &plan.ConstantValue_DateTimeV{DateTimeV: int64(t)}
 	case types.Decimal64:
-		ret.Value.ConstantValue = &plan.ConstantValue_Decimal64V{Decimal64V: int64(t)}
+		da := types.Decimal64ToInt64Raw(t)
+		ret.Value.ConstantValue = &plan.ConstantValue_Decimal64V{Decimal64V: &plan.Decimal64{A: da}}
 	case types.Decimal128:
+		da, db := types.Decimal128ToInt64Raw(t)
 		ret.Value.ConstantValue = &plan.ConstantValue_Decimal128V{Decimal128V: &plan.Decimal128{
-			Lo: t.Lo,
-			Hi: t.Hi,
+			A: da, B: db,
 		}}
 	case types.Timestamp:
 		ret.Value.ConstantValue = &plan.ConstantValue_TimeStampV{TimeStampV: int64(t)}

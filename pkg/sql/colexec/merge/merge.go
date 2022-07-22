@@ -25,32 +25,32 @@ func String(_ interface{}, buf *bytes.Buffer) {
 }
 
 func Prepare(_ *process.Process, arg interface{}) error {
-	n := arg.(*Argument)
-	n.ctr = new(Container)
+	ap := arg.(*Argument)
+	ap.ctr = new(Container)
 	return nil
 }
 
 func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
-	n := arg.(*Argument)
+	ap := arg.(*Argument)
 	for {
 		if len(proc.Reg.MergeReceivers) == 0 {
 			return true, nil
 		}
-		reg := proc.Reg.MergeReceivers[n.ctr.i]
+		reg := proc.Reg.MergeReceivers[ap.ctr.i]
 		bat := <-reg.Ch
 		if bat == nil {
-			proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:n.ctr.i], proc.Reg.MergeReceivers[n.ctr.i+1:]...)
-			if n.ctr.i >= len(proc.Reg.MergeReceivers) {
-				n.ctr.i = 0
+			proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:ap.ctr.i], proc.Reg.MergeReceivers[ap.ctr.i+1:]...)
+			if ap.ctr.i >= len(proc.Reg.MergeReceivers) {
+				ap.ctr.i = 0
 			}
 			continue
 		}
-		if len(bat.Zs) == 0 {
+		if bat.Length() == 0 {
 			continue
 		}
-		proc.Reg.InputBatch = bat
-		if n.ctr.i = n.ctr.i + 1; n.ctr.i >= len(proc.Reg.MergeReceivers) {
-			n.ctr.i = 0
+		proc.SetInputBatch(bat)
+		if ap.ctr.i = ap.ctr.i + 1; ap.ctr.i >= len(proc.Reg.MergeReceivers) {
+			ap.ctr.i = 0
 		}
 		return false, nil
 	}

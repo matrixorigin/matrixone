@@ -77,6 +77,13 @@ func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mheap.Mheap) error {
 			a.vs = make([]T2, 0, size)
 			a.srcs = make([][]T1, 0, size)
 			a.maps = make([]*hashmap.StrHashMap, 0, size)
+
+			a.vs = a.vs[:size]
+			for i := 0; i < size; i++ {
+				a.es = append(a.es, true)
+				a.srcs = append(a.srcs, make([]T1, 0, 1))
+				a.maps = append(a.maps, hashmap.NewStrMap(true))
+			}
 		} else {
 			var v T2
 
