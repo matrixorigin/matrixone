@@ -1,0 +1,37 @@
+drop table if exists t1;
+create table t1 (a int, b int);
+prepare stmt1 from 'select * from t1 where a > ?';
+insert into t1 values (1, 11), (2, 22), (3, 33);
+set @a_var = 1;
+execute stmt1 using @a_var;
+a	b
+2	22
+3	33
+set @a_var = 2;
+execute stmt1 using @a_var;
+a	b
+3	33
+insert into t1 values (4, 44);
+execute stmt1 using @a_var;
+a	b
+3	33
+4	44
+delete from t1 where a > 3;
+execute stmt1 using @a_var;
+a	b
+3	33
+deallocate prepare stmt1;
+execute stmt1 using @a_var;
+prepare statement 'stmt1' does not exist
+drop table t1;
+
+prepare stmt2 from 'select @var_t1';
+set @var_t1 = 0;
+execute stmt2;
+ @var_t1
+ 0
+set @var_t1= 'aa';
+execute stmt2;
+ @var_t1
+ aa
+deallocate prepare stmt2;
