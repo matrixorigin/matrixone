@@ -28,6 +28,7 @@ type Bitmap struct {
 }
 
 type BitmapIterator struct {
-	i  uint64
-	bm *Bitmap
+	i        uint64
+	bm       *Bitmap
+	has_next bool
 }
