@@ -71,6 +71,8 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	}
 
 	// dcl tcl is not support
+	var schemas []*plan.ObjectRef
+
 	switch pp := preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
 		return nil, errors.New("", "can't prepare from TCL and DCL statement")
@@ -78,41 +80,43 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
 			getParamRule := NewGetParamRule()
-			VisitQuery := NewVisitQuery(pp.Ddl.Query, &getParamRule)
-			_, err = VisitQuery.Visit()
+			VisitQuery := NewVisitQuery(pp.Ddl.Query, []VisitRule{getParamRule})
+			err = VisitQuery.Visit()
 			if err != nil {
 				return nil, err
 			}
 			// TODO : need confirm
-			if len(getParamRule.args) > 0 {
+			if len(getParamRule.params) > 0 {
 				return nil, errors.New("", "ArgExpr is not support in DDL statement")
 			}
 		}
 	case *plan.Plan_Query:
 		// collect args
 		getParamRule := NewGetParamRule()
-		VisitQuery := NewVisitQuery(pp.Query, &getParamRule)
-		pp.Query, err = VisitQuery.Visit()
+		VisitQuery := NewVisitQuery(pp.Query, []VisitRule{getParamRule})
+		err = VisitQuery.Visit()
 		if err != nil {
 			return nil, err
 		}
 
 		// set arg order
 		getParamRule.SetParamOrder()
-		args := getParamRule.args
+		args := getParamRule.params
+		schemas = getParamRule.schemas
 
 		// set arg order
-		resetParamRule := NewResetParamRule(args)
-		VisitQuery = NewVisitQuery(pp.Query, &resetParamRule)
-		pp.Query, err = VisitQuery.Visit()
+		resetParamRule := NewResetParamOrderRule(args)
+		VisitQuery = NewVisitQuery(pp.Query, []VisitRule{resetParamRule})
+		err = VisitQuery.Visit()
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	prepare := &plan.Prepare{
-		Name: stmtName,
-		Plan: preparePlan,
+		Name:    stmtName,
+		Schemas: schemas,
+		Plan:    preparePlan,
 	}
 
 	return &Plan{
@@ -157,7 +161,7 @@ func buildExecute(stmt *tree.Execute, ctx CompilerContext) (*Plan, error) {
 	}, nil
 }
 
-func buildDeallocate(stmt *tree.Deallocate, ctx CompilerContext) (*Plan, error) {
+func buildDeallocate(stmt *tree.Deallocate, _ CompilerContext) (*Plan, error) {
 	deallocate := &plan.Deallocate{
 		Name: string(stmt.Name),
 	}
