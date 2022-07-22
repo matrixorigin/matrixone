@@ -455,7 +455,6 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"SELECT N_NAME FROM NATION WHERE ffff(N_REGIONKEY) > 0",             //function name not exist
 		"SELECT NATION.N_NAME FROM NATION a",                                // mysql should error, but i don't think it is necesssary
 		"select n_nationkey, sum(n_nationkey) from nation",
-		"select n_name from nation where n_name != @not_exist_var",
 		"SET @var = abs(a)", // can't use column
 		"SET @var = avg(2)", // can't use agg function
 
@@ -463,7 +462,7 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_REGIONKEY", //test distinct with order by
 		//"select 18446744073709551500",                             //over int64
 		//"select 0xffffffffffffffff",                               //over int64
-		"execute stmt1 using @not_exist_var", //var not exist
+
 	}
 	runTestShouldError(mock, t, sqls)
 }

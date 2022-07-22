@@ -124,6 +124,8 @@ message ParamRef {
 // Session variable ref, compiler should fold.
 message VarRef {
 	string name = 1;
+	bool system = 2;
+	bool global = 3;
 }
 
 // Reference a column in the proj list of a node.
@@ -697,8 +699,9 @@ message SetVariablesItem {
 }
 
 message Prepare {
-	string name		 = 1;
-	Plan   plan		 = 2;
+	string name		 			= 1;
+	repeated ObjectRef schemas 	= 2;
+	Plan   plan		 			= 3;
 }
 
 message Execute {
