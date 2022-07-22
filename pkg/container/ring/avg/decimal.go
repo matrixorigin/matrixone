@@ -144,9 +144,8 @@ func (r *DecimalRing) Grows(size int, m *mheap.Mheap) error {
 func (r *DecimalRing) Fill(i int64, sel, z int64, vec *vector.Vector) {
 	switch vec.Typ.Oid {
 	case types.T_decimal64:
-		var tmp128 types.Decimal128
 		tmp64 := types.Decimal64Int64Mul(vec.Col.([]types.Decimal64)[sel], z)
-		tmp128.FromDecimal64(tmp64)
+		tmp128 := types.Decimal128_FromDecimal64(tmp64)
 		r.Vs[i] = types.Decimal128AddAligned(r.Vs[i], tmp128)
 	case types.T_decimal128:
 		tmp := types.Decimal128Int64Mul(vec.Col.([]types.Decimal128)[sel], z)
@@ -162,9 +161,8 @@ func (r *DecimalRing) BatchFill(start int64, os []uint8, vps []uint64, zs []int6
 	case types.T_decimal64:
 		vs := vec.Col.([]types.Decimal64)
 		for i := range os {
-			var tmp128 types.Decimal128
 			tmp := vs[int64(i)+start].MulInt64(zs[int64(i)+start])
-			tmp128.FromDecimal64(tmp)
+			tmp128 := types.Decimal128_FromDecimal64(tmp)
 			r.Vs[vps[i]-1] = types.Decimal128AddAligned(r.Vs[vps[i]-1], tmp128)
 		}
 	case types.T_decimal128:

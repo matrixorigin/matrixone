@@ -17,13 +17,14 @@ package frontend
 import (
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"math"
 	bits2 "math/bits"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 var (

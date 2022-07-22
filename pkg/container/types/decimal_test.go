@@ -40,31 +40,26 @@ func TestBasic(t *testing.T) {
 }
 
 func TestParse(t *testing.T) {
-	var err error
-	var d64 Decimal64
-	var d128 Decimal128
-	var dd Decimal64
-
-	err = d64.FromString("1.23456789")
+	d64, err := Decimal64_FromString("1.23456789")
 	require.True(t, err == nil)
 	require.True(t, d64.Gt(Decimal64_One))
 	require.True(t, d64.Lt(Decimal64_Ten))
 
-	err = d128.FromString("1.23456789")
+	d128, err := Decimal128_FromString("1.23456789")
 	require.True(t, err == nil)
-	dd, err = d128.ToDecimal64()
+	dd, err := d128.ToDecimal64()
 	require.True(t, d64.Eq(dd))
 	require.True(t, err == nil)
 
 	longstr := "1.23456789999999999999999"
 
-	err = d64.FromString(longstr)
+	d64, err = Decimal64_FromString(longstr)
 	require.True(t, err != nil)
 	require.True(t, moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED))
 	require.True(t, d64.Gt(Decimal64_One))
 	require.True(t, d64.Lt(Decimal64_Ten))
 
-	err = d128.FromString(longstr)
+	d128, err = Decimal128_FromString(longstr)
 	require.True(t, err == nil)
 	dd, err = d128.ToDecimal64()
 	require.True(t, d64.Eq(dd))
@@ -95,11 +90,9 @@ func TestAdd(t *testing.T) {
 }
 
 func TestBits(t *testing.T) {
-	var d1, d2 Decimal64
-	var err error
-	err = d1.FromStringWithScale("9.2234", 5)
+	d1, err := Decimal64_FromStringWithScale("9.2234", 5)
 	require.True(t, err == nil)
-	err = d2.FromStringWithScale("9.22337777675788773437747747747347377", 4)
+	d2, err := Decimal64_FromStringWithScale("9.22337777675788773437747747747347377", 4)
 	require.True(t, err == nil)
 
 	require.Equal(t, d1.ToInt64(), d2.ToInt64())

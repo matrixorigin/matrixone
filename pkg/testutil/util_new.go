@@ -142,7 +142,7 @@ func NewVector(n int, typ types.Type, m *mheap.Mheap, random bool, Values interf
 	}
 }
 
-func NewBoolVector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []bool) *vector.Vector {
+func NewBoolVector(n int, typ types.Type, m *mheap.Mheap, _ bool, vs []bool) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
