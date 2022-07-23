@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -152,6 +153,7 @@ func (l *store) close() error {
 }
 
 func (l *store) id() string {
+	os.Create("test.data")
 	return l.nh.ID()
 }
 
