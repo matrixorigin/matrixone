@@ -15,13 +15,17 @@
 #
 # Examples
 #
-# To build MO -
+# By default, make builds the mo-server
+#
+# make
+#
+# To re-build MO -
 #	
 #	make clean
 #	make config
 #	make build
 #
-# To build MO in debug mode also with race detector enabled -
+# To re-build MO in debug mode also with race detector enabled -
 #
 # make clean
 # make config
@@ -50,6 +54,11 @@ MO_VERSION=$(shell git describe --tags $(shell git rev-list --tags --max-count=1
 ifneq ($(GOARCH)$(TARGET_ARCH)$(GOOS)$(TARGET_OS),)
 $(error cross compilation has been disabled)
 endif
+
+###############################################################################
+# default target
+###############################################################################
+all: build
 
 ###############################################################################
 # code generation
