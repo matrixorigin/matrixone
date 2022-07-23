@@ -48,7 +48,6 @@
 | **sql/** | MPP SQL Execution  |
 | **sql/vectorize** | SQL的向量化执行   |
 | **catalog/** | 存储元数据的Catalog |
-| **github.com/matrixorigin/matrixcube** | MatrixCube  |
 | **vm/engine** |存储引擎 |
 | **vm/engine/aoe** |  AOE引擎（分析优化引擎） |
 | **vm/engine/tpe** |  TPE引擎（事务处理引擎）  |

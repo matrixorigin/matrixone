@@ -8,7 +8,7 @@ Thanks for understanding that English is used as a shared language in this repos
 
 ### Basic Information
 
-You can see [MatrixOne Introduction](../../Overview/matrixone-introduction.md) for key features of MatrixOne, [MatrixOne Architecture](../../Overview/matrixone-architecture.md) for MatrixOne architecture and operational logic.  For our distributed framework, see [MatrixCube Tech Design](./../../Overview/matrixcube/matrixcube-introduction.md).
+You can see [MatrixOne Introduction](../../Overview/matrixone-introduction.md) for key features of MatrixOne, [MatrixOne Architecture](../../Overview/matrixone-architecture.md) for MatrixOne architecture and operational logic.
 
 Besides, you can browse [SQL Reference](../../Reference/SQL-Reference/Data-Definition-Statements/create-database.md) and [Custom Functions](../../Reference/Builtin-Functions/Datetime/year.md) to know more about our interactive details.
 
@@ -50,7 +50,6 @@ For different technical modules, a code structure under `/pkg` is as following t
 | **sql/** | MPP SQL Execution  |
 | **sql/vectorize** | Vectorization of SQL Execution   |
 | **catalog/** | Catalog for storing metadata  |
-| **github.com/matrixorigin/matrixcube** | MatrixCube  |
 | **vm/engine** | Storage engine  |
 | **vm/engine/aoe** |  Analytics Optimized Engine  |
 | **vm/engine/tpe** |  Transaction Processing Engine  |
