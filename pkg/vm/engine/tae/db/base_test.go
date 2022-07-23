@@ -16,7 +16,7 @@ package db
 
 import (
 	"errors"
-	"io/ioutil"
+	"os"
 	"sync"
 	"testing"
 
@@ -191,7 +191,7 @@ func withTestAllPKType(t *testing.T, tae *DB, test func(*testing.T, *DB, *catalo
 
 func getSegmentFileNames(e *DB) (names map[uint64]string) {
 	names = make(map[uint64]string)
-	files, err := ioutil.ReadDir(e.Dir)
+	files, err := os.ReadDir(e.Dir)
 	if err != nil {
 		panic(err)
 	}
