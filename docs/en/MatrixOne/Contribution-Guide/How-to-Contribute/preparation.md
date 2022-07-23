@@ -41,7 +41,7 @@ For contributing code, [matrixone](https://github.com/matrixorigin/matrixone) is
 | **optools** | The test and deployment utilities  |
 | **pkg** | The main codebase of MatrixOne project  |
 
-For different technical modules, a code structure under `/pkg` is as following table. Please refer to [MatrixOne tech design](../../Overview/MatrixOne-Tech-Design/matrixone-techdesign.md) for a better overview.  
+For different technical modules, a code structure under `/pkg` is as following table.  
 
 | Directory              | Modules                                                 |
 | ------------------------------ | ------------------------------------------------------------ |
