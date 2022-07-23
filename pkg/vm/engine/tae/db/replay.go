@@ -17,7 +17,6 @@ package db
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path"
 	"sync"
@@ -82,7 +81,7 @@ func (replayer *Replayer) PreReplayWal() {
 
 func (replayer *Replayer) scanFiles() map[uint64]string {
 	files := make(map[uint64]string)
-	infos, err := ioutil.ReadDir(replayer.db.Dir)
+	infos, err := os.ReadDir(replayer.db.Dir)
 	if err != nil {
 		panic(err)
 	}
