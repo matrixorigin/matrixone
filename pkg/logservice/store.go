@@ -122,6 +122,9 @@ type store struct {
 }
 
 func newLogStore(cfg Config) (*store, error) {
+	if r := recover(); r != nil {
+		panic("too bad")
+	}
 	nh, err := dragonboat.NewNodeHost(getNodeHostConfig(cfg))
 	if err != nil {
 		return nil, err
