@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/invariants"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -592,10 +593,15 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 
 func TestGossipConvergeDelay(t *testing.T) {
 	if os.Getenv("LONG_TEST") == "" {
-		// this test will fail on go1.18 when -race is enabled as it requires more
-		// than 8128 goroutines. it works fine on go1.19 beta1.
+		// this tests takes half minute
 		t.Skip("Skipping long test")
 	}
+	if invariants.RaceEnabled {
+		// this test will fail on go1.18 when -race is enabled as it requires more
+		// than 8128 goroutines. it works fine on go1.19 beta/rc.
+		t.Skip("Skipped when running in race mode")
+	}
+
 	defer leaktest.AfterTest(t)()
 	// start all services
 	configs := make([]Config, 0)
@@ -612,6 +618,7 @@ func TestGossipConvergeDelay(t *testing.T) {
 			GossipSeedAddresses: []string{"127.0.0.1:6002", "127.0.0.1:6012"},
 			DisableWorkers:      true,
 		}
+		cfg.Fill()
 		configs = append(configs, cfg)
 		service, err := NewService(cfg)
 		require.NoError(t, err)
