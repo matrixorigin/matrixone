@@ -114,23 +114,27 @@ a
 1
 3
 SELECT a FROM t1 WHERE (1,2) > ANY (SELECT a FROM t1 WHERE b = 2);
-Operand should contain 1 column(s)
+subquery should return 2 columns
 SELECT a FROM t1 WHERE a > ANY (SELECT a,2 FROM t1 WHERE b = 2);
-subquery must return only one column
+subquery should return 1 column
 SELECT a FROM t1 WHERE (1,2) > ANY (SELECT a,2 FROM t1 WHERE b = 2);
-subquery must return only one column
+a
 SELECT a FROM t1 WHERE (1,2) <> ANY (SELECT a,2 FROM t1 WHERE b = 2);
-subquery must return only one column
+a
+1
+2
+3
 SELECT a FROM t1 WHERE (1,2) = ANY (SELECT a FROM t1 WHERE b = 2);
-Operand should contain 2 column(s)
+subquery should return 2 columns
 SELECT a FROM t1 WHERE a = ANY (SELECT a,2 FROM t1 WHERE b = 2);
-subquery must return only one column
+subquery should return 1 column
 SELECT a FROM t1 WHERE (1,2) = ANY (SELECT a,2 FROM t1 WHERE b = 2);
-subquery must return only one column
+a
 SELECT a FROM t1 WHERE (1,2) <> ALL (SELECT a FROM t1 WHERE b = 2);
-Operand should contain 2 column(s)
+subquery should return 2 columns
 SELECT a FROM t1 WHERE (a,1) = ANY (SELECT a,1 FROM t1 WHERE b = 2);
-column "a" must appear in the GROUP BY clause or be used in an aggregate function
+a
+2
 SELECT a FROM t1 WHERE (a,1) = ANY (SELECT a,1 FROM t1 HAVING a = 2);
 column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE (a,1) = ANY (SELECT a,1 FROM t1 WHERE b = 2 UNION SELECT a,1 FROM t1 WHERE b = 2);

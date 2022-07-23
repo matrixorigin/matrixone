@@ -282,12 +282,9 @@ func planValToExeVal(value *plan.ConstantValue, typ plan.Type_TypeId) interface{
 	case *plan.ConstantValue_TimeStampV:
 		return types.Timestamp(v.TimeStampV)
 	case *plan.ConstantValue_Decimal64V:
-		return types.Decimal64(v.Decimal64V)
+		return types.Decimal64FromInt64Raw(v.Decimal64V.A)
 	case *plan.ConstantValue_Decimal128V:
-		return types.Decimal128{
-			Lo: v.Decimal128V.Lo,
-			Hi: v.Decimal128V.Hi,
-		}
+		return types.Decimal128FromInt64Raw(v.Decimal128V.A, v.Decimal128V.B)
 	}
 	return nil
 }

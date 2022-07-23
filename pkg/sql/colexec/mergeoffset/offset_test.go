@@ -51,8 +51,8 @@ func init() {
 	gm := guest.New(1<<30, hm)
 	tcs = []offsetTestCase{
 		newTestCase(mheap.New(gm), 8),
-		newTestCase(mheap.New(gm), 10),
-		newTestCase(mheap.New(gm), 12),
+		//		newTestCase(mheap.New(gm), 10),
+		//		newTestCase(mheap.New(gm), 12),
 	}
 }
 
@@ -99,7 +99,7 @@ func TestOffset(t *testing.T) {
 				}
 			}
 		}
-		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
+		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
 	}
 }
 

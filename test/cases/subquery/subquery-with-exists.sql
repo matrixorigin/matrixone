@@ -3,7 +3,7 @@
 -- @case
 -- @desc:test for  subquery with  exists
 -- @label:bvt
--- @bvt:issue#3304
+-- @bvt:issue#3312
 SELECT EXISTS(SELECT 1+1);
 -- @bvt:issue
 drop table if exists t1;

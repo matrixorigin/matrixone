@@ -12,811 +12,679 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// MatrixOne's decimal(fixed point numeric) data type
-// https://github.com/matrixorigin/matrixone/issues/1867
-// in many database management systems, the DECIMAL type may also referred as NUMERIC.
-//
-// Usage: Decimal(precision, scale), Decimal(precision), Decimal
-// creat table t1 (a decimal);       the default precision 10, default scale 0 is applied, this is the same as "create table t1 (a decimal(10, 0))";
-// create table t1(a decimal(20);	 the default scale 0 is applied, this is the same as create table t1 (a decimal(20, 0);
-// create table t1(a decimal(20, 5);
-//
-// MatrixOne supports decimal data type with precision range (0, 38], scale range (0, 38], and scale <= precision.
-// internally, precision in range (0, 18] is represented as Decimal64, precision in range [19, 38] is represented as Decimal128
-//
-// we support addition, subtraction, multiplication, division between decimal data types, and between decimal and integers
-// for decimal64, addition and subtraction operation
-// have result of type decimal64, the result's scale is the maximum of its two operands, overflow may happen in these two operations and no precaution is implemented,
-// nor does any indication. for multiplication and division on decimal64, the result is of type Decimal128 and therefore these two operations are safe on Decimal64, that is,
-// overflow is guaranteed IMPOSSIBLE.
-//
-// For Decimal128, operations on this data type may overflow and no precautions nor indications are implemented, but these will only happen in extreme use cases, that is, when the result can not fit into a 128 bit representation
-//
-// Comparison operations <, >, =, !=, <=, >= are also supported between decimal types, and between decimals and integers.
-//
-// in cases where a literal string needs to be interpreted as decimal, for example, "select * from decimal_table where a = 1.23",
-// the string literal "1.23" will be interpreted as a decimal128
-// for operations between decimals and integers, the integer type will be cast to a decimal128 before operation, and the result is of type decimal128
-// operations between decimals and floats are not defined.
-
 package types
 
-import (
-	"errors"
-	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"math"
-	"strconv"
-	"strings"
-	"unsafe"
-)
+/*
+#include "mo.h"
 
-// #include <stdint.h>
-// #include <stdbool.h>
-// void add_int128_int64(void* a, void* b, void* result) {
-//      *(__int128*)result = *(__int128*)a + (*(int64_t*)b);
-//      return ;
-// }
-// void add_int128_int128(void* a, void* b, void* result) {
-//      *(__int128*)result = (*(__int128*)a) + (*(__int128*)b);
-//      return ;
-// }
-// void sub_int128_int64(void* a, void* b, void* result) {
-//      *(__int128*)result = *(__int128*)a - (*(int64_t*)b);
-//      return ;
-// }
-// void sub_int128_int128(void* a, void* b, void* result) {
-//      *(__int128*)result = (*(__int128*)a) - (*(__int128*)b);
-//      return ;
-// }
-// void mul_int128_int64(void* a, void* b, void* result) {
-//      *(__int128*)result = *(__int128*)a * (*(int64_t*)b);
-//      return ;
-// }
-// void mul_int128_uint64(void* a, void* b, void* result) {
-//      *(__int128*)result = *(__int128*)a * (*(uint64_t*)b);
-//      return ;
-// }
-// void mul_int128_int128(void* a, void* b, void* result) {
-//      *(__int128*)result = (*(__int128*)a) * (*(__int128*)b);
-//      return ;
-// }
-// void mul_int64_int64_ret_int128(void* a, void* b, void* result) {
-// 		__int128 aInInt128 = *(int64_t*)a;
-// 		__int128 bInInt128 = *(int64_t*)b;
-//      *(__int128*)result = aInInt128 * bInInt128;
-//      return ;
-// }
-// void div_int128_int64(void* a, void* b, void* result) {
-//      *(__int128*)result = *(__int128*)a / (*(int64_t*)b);
-//      return ;
-// }
-// void div_int128_int128(void* a, void* b, void* result) {
-//      *(__int128*)result = (*(__int128*)a) / (*(__int128*)b);
-//      return ;
-// }
-// void mod_int128_int64(void* a, void* b, void* result) {
-//      *(int64_t*)result = (*(__int128*)a) % (*(int64_t*)b);
-// }
-// // The result will be 0 if a==b, -1 if a < b, and +1 if a > b.
-// void cmp_int128_int64(void* a, void* b, void* result) {
-//      if ((*(__int128*)a) < (*(int64_t*)b)) {
-//          *(int*)result = -1;
-//      } else if ((*(__int128*)a) == (*(int64_t*)b)) {
-//          *(int*)result = 0;
-//      } else {
-//          *(int*)result = 1;
-//      }
-//      return;
-// }
-// // The result will be 0 if a==b, -1 if a < b, and +1 if a > b.
-// void cmp_int128_int128(void* a, void* b, void* result) {
-//      if ((*(__int128*)a) < (*(__int128*)b)) {
-//          *(int64_t*)result = -1;
-//      } else if ((*(__int128*)a) == (*(__int128*)b)) {
-//          *(int64_t*)result = 0;
-//      } else {
-//          *(int64_t*)result = 1;
-//      }
-//      return;
-// }
-// void scale_int128_by_10(void* a, void* result) {
-//      *(__int128*)result = (*(__int128*)a) * 10;
-// }
-// void align_int128_using_scale_diff(void* src, void* dst, void* length, void* scale_diff) {
-//		__int128 scale = 1;
-// 		__int128* src_int128_p = (__int128*)src;
-// 		__int128* dst_int128_p = (__int128*)dst;
-// // the maximum scale_diff is 38, so this loop cost constant time
-//		for (int i = 0; i < *(int32_t*)scale_diff; i++) {
-//			scale *= 10;
-// 		}
-// 		for (int i = 0; i < *(int64_t*)length; i++) {
-//      	*dst_int128_p = (*src_int128_p) * scale;
-// 			src_int128_p++;
-// 			dst_int128_p++;
-// 		}
-// 		return;
-// }
-// void div_int128_by_10(void* a, void* result) {
-//      *(__int128*)result = (*(__int128*)a) / 10;
-// }
-// void mod_int128_by_10_abs(void* a, void* result) {
-//      *(int64_t*)result = (*(__int128*)a) % 10;
-// 		if (*(int64_t*)result < 0) {
-// 			*(int64_t*)result = - *(int64_t*)result;
-// 		}
-// }
-// void int128_is_negative(void* a, void* result) {
-//      *(bool*)result = (*(__int128*)a) < 0;
-// }
-// void int128_is_positive(void* a, void* result) {
-//      *(bool*)result = (*(__int128*)a) > 0;
-// }
-// void int128_is_zero(void* a, void* result) {
-//      *(bool*)result = (*(__int128*)a) == 0;
-// }
-// void int128_is_not_zero(void* a, void* result) {
-//      *(bool*)result = (*(__int128*)a) != 0;
-// }
-// void init_int128_as_1(void* a) {
-//      *(__int128*)a = 1;
-// }
-// void init_int128_as_minus_1(void* a) {
-//      *(__int128*)a = -1;
-// }
-// void neg_int128(void* a, void* result) {
-//      *(__int128*)result = - *(__int128*)a;
-// }
-// void int64_to_int128(void*a, void* result) {
-// 		*(__int128*)result = *(int64_t*)a;
-// }
+#cgo CFLAGS: -I../../../cgo
+#cgo LDFLAGS: -L../../../cgo -lmo
+
+*/
 import "C"
 
-var Decimal128Max = Decimal128{}
-var Decimal128Min = Decimal128{}
+import (
+	"strings"
+	"unsafe"
 
-func init() {
-	Decimal128Max, _ = ParseStringToDecimal128("99999999999999999999999999999999999999", 38, 0)
-	Decimal128Min, _ = ParseStringToDecimal128("-99999999999999999999999999999999999999", 38, 0)
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
+
+const (
+	// Max string buf + 1 (\0) needed by decimal64
+	DECIMAL64_ZSTR_LEN = 25
+	DECIMAL64_WIDTH    = 16
+	DECIMAL64_NBYTES   = 8
+	// Max string buf + 1 (\0) needed by decimal128
+	DECIMAL128_ZSTR_LEN = 43
+	DECIMAL128_WIDTH    = 34
+	DECIMAL128_NBYTES   = 16
+)
+
+func dec64PtrToC(p *Decimal64) *C.int64_t {
+	return (*C.int64_t)(unsafe.Pointer(p))
 }
-
-func ScaleDecimal64(a Decimal64, b int64) (result Decimal64) {
-	return Decimal64(int64(a) * b)
+func dec128PtrToC(p *Decimal128) *C.int64_t {
+	return (*C.int64_t)(unsafe.Pointer(p))
 }
-
-func AlignDecimal64UsingScaleDiffBatch(src, dst []Decimal64, scaleDiff int32) []Decimal64 {
-	scale := int64(math.Pow10(int(scaleDiff)))
-	length := len(src)
-	for i := 0; i < length; i++ {
-		dst[i] = Decimal64(int64(src[i]) * scale)
+func bytesPtrToC(bs []byte) *C.char {
+	return (*C.char)(unsafe.Pointer(&bs[0]))
+}
+func zstrToString(p []byte) string {
+	str := string(p)
+	zidx := strings.IndexByte(str, 0)
+	if zidx > 0 {
+		str = str[:zidx]
 	}
+	return str
+}
+
+func Decimal64FromInt64Raw(a int64) Decimal64 {
+	var d Decimal64
+	var pd = unsafe.Pointer(&d)
+	var pda = (*int64)(pd)
+	*pda = a
+	return d
+}
+func Decimal128FromInt64Raw(a, b int64) Decimal128 {
+	var d Decimal128
+	var pd = unsafe.Pointer(&d)
+	var pda = (*int64)(pd)
+	var pdb = (*int64)(unsafe.Add(pd, 8))
+	*pda = a
+	*pdb = b
+	return d
+}
+
+func Decimal64ToInt64Raw(d Decimal64) int64 {
+	var pd = unsafe.Pointer(&d)
+	var pda = (*int64)(pd)
+	return *pda
+}
+
+func Decimal128ToInt64Raw(d Decimal128) (int64, int64) {
+	var pd = unsafe.Pointer(&d)
+	var pda = (*int64)(pd)
+	var pdb = (*int64)(unsafe.Add(pd, 8))
+	return *pda, *pdb
+}
+
+var Decimal64_Zero Decimal64 = Decimal64FromInt32(0)
+var Decimal64_One Decimal64 = Decimal64FromInt32(1)
+var Decimal64_Ten Decimal64 = Decimal64FromInt32(10)
+var Decimal64Min = Decimal64_NegInf()
+var Decimal64Max = Decimal64_Inf()
+var Decimal128_Zero Decimal128 = Decimal128FromInt32(0)
+var Decimal128_One Decimal128 = Decimal128FromInt32(1)
+var Decimal128_Ten Decimal128 = Decimal128FromInt32(10)
+var Decimal128Min = Decimal128_NegInf()
+var Decimal128Max = Decimal128_Inf()
+
+// Return a null terminated copy of the string.
+func zstr(s string) []byte {
+	trims := strings.TrimSpace(s)
+	buf := make([]byte, len(trims)+1)
+	copy(buf, []byte(trims))
+	return buf
+}
+
+// Conversions, from go type to decimal64
+func Decimal64_FromInt32(i int32) Decimal64 {
+	var d Decimal64
+	C.Decimal64_FromInt32(dec64PtrToC(&d), C.int32_t(i))
+	return d
+}
+
+func Decimal64_FromUint32(i uint32) Decimal64 {
+	var d Decimal64
+	C.Decimal64_FromUint32(dec64PtrToC(&d), C.uint32_t(i))
+	return d
+}
+
+func Decimal64_FromInt64(i int64) Decimal64 {
+	var d Decimal64
+	C.Decimal64_FromInt64(dec64PtrToC(&d), C.int64_t(i))
+	return d
+}
+func Decimal64_FromUint64(i uint64) Decimal64 {
+	var d Decimal64
+	C.Decimal64_FromUint64(dec64PtrToC(&d), C.uint64_t(i))
+	return d
+}
+
+func Decimal64_FromFloat64(f float64) Decimal64 {
+	var d Decimal64
+	C.Decimal64_FromFloat64(dec64PtrToC(&d), C.double(f))
+	return d
+}
+
+func Decimal64_FromString(s string) (Decimal64, error) {
+	var d Decimal64
+	buf := zstr(s)
+	rc := C.Decimal64_FromString(dec64PtrToC(&d), bytesPtrToC(buf))
+	if rc == moerr.DATA_TRUNCATED {
+		return d, moerr.NewError(moerr.DATA_TRUNCATED, "decimal64 data truncated")
+	} else if rc != 0 {
+		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal64")
+	}
+	return d, nil
+}
+func Decimal64_FromStringWithScale(s string, scale int32) (Decimal64, error) {
+	var d Decimal64
+	buf := zstr(s)
+	rc := C.Decimal64_FromStringWithScale(dec64PtrToC(&d), bytesPtrToC(buf), C.int32_t(scale))
+	if rc != 0 {
+		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal64")
+	}
+	return d, nil
+}
+
+// Conversions, from go type to decimal128
+func Decimal128_FromInt32(i int32) Decimal128 {
+	var d Decimal128
+	C.Decimal128_FromInt32(dec128PtrToC(&d), C.int32_t(i))
+	return d
+}
+func Decimal128_FromUint32(i uint32) Decimal128 {
+	var d Decimal128
+	C.Decimal128_FromUint32(dec128PtrToC(&d), C.uint32_t(i))
+	return d
+}
+
+func Decimal128_FromInt64(i int64) Decimal128 {
+	var d Decimal128
+	C.Decimal128_FromInt64(dec128PtrToC(&d), C.int64_t(i))
+	return d
+}
+func Decimal128_FromUint64(i uint64) Decimal128 {
+	var d Decimal128
+	C.Decimal128_FromUint64(dec128PtrToC(&d), C.uint64_t(i))
+	return d
+}
+
+func Decimal128_FromFloat64(f float64) Decimal128 {
+	var d Decimal128
+	C.Decimal128_FromFloat64(dec128PtrToC(&d), C.double(f))
+	return d
+}
+func Decimal128_FromString(s string) (Decimal128, error) {
+	var d Decimal128
+	buf := zstr(s)
+	rc := C.Decimal128_FromString(dec128PtrToC(&d), bytesPtrToC(buf))
+	if rc == moerr.DATA_TRUNCATED {
+		return d, moerr.NewError(moerr.DATA_TRUNCATED, "decimal128 data truncated")
+	} else if rc != 0 {
+		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal128")
+	}
+	return d, nil
+}
+func Decimal128_FromStringWithScale(s string, scale int32) (Decimal128, error) {
+	var d Decimal128
+	buf := zstr(s)
+	rc := C.Decimal128_FromStringWithScale(dec128PtrToC(&d), bytesPtrToC(buf), C.int32_t(scale))
+	if rc != 0 {
+		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal128")
+	}
+	return d, nil
+}
+
+// Conversions. decimal to go types.
+func (d Decimal64) ToFloat64() float64 {
+	var ret C.double
+	rc := C.Decimal64_ToFloat64(&ret, dec64PtrToC(&d))
+	if rc == 0 {
+		return float64(ret)
+	}
+	panic(moerr.NewError(int32(rc), "error when converting decimal128 to float64"))
+}
+func (d Decimal64) ToInt64() int64 {
+	var ret C.int64_t
+	rc := C.Decimal64_ToInt64(&ret, dec64PtrToC(&d))
+	if rc == 0 {
+		return int64(ret)
+	}
+	panic(moerr.NewError(int32(rc), "error when converting decimal128 to float64"))
+}
+
+func (d Decimal64) String() string {
+	return d.ToString()
+}
+func (d Decimal64) ToString() string {
+	buf := make([]byte, DECIMAL64_ZSTR_LEN)
+	C.Decimal64_ToString(bytesPtrToC(buf), dec64PtrToC(&d))
+	return zstrToString(buf)
+}
+func (d Decimal64) ToStringWithScale(scale int32) string {
+	buf := make([]byte, DECIMAL64_ZSTR_LEN)
+	C.Decimal64_ToStringWithScale(bytesPtrToC(buf), dec64PtrToC(&d), C.int32_t(scale))
+	return zstrToString(buf)
+}
+
+func (d Decimal128) ToFloat64() float64 {
+	var ret C.double
+	rc := C.Decimal128_ToFloat64(&ret, dec128PtrToC(&d))
+	if int32(rc) == 0 {
+		return float64(ret)
+	}
+	panic(moerr.NewError(int32(rc), "error when converting decimal128 to float64"))
+}
+func (d Decimal128) ToInt64() int64 {
+	var ret C.int64_t
+	rc := C.Decimal128_ToInt64(&ret, dec128PtrToC(&d))
+	if rc == 0 {
+		return int64(ret)
+	}
+	panic(moerr.NewError(int32(rc), "error when converting decimal128 to float64"))
+}
+
+func (d Decimal128) String() string {
+	return d.ToString()
+}
+func (d Decimal128) ToString() string {
+	buf := make([]byte, DECIMAL128_ZSTR_LEN)
+	C.Decimal128_ToString(bytesPtrToC(buf), dec128PtrToC(&d))
+	return zstrToString(buf)
+}
+func (d Decimal128) ToStringWithScale(scale int32) string {
+	buf := make([]byte, DECIMAL128_ZSTR_LEN)
+	C.Decimal128_ToStringWithScale(bytesPtrToC(buf), dec128PtrToC(&d), C.int32_t(scale))
+	return zstrToString(buf)
+}
+
+func Decimal128_FromDecimal64(d64 Decimal64) Decimal128 {
+	var d Decimal128
+	C.Decimal64_ToDecimal128(dec128PtrToC(&d), dec64PtrToC(&d64))
+	return d
+}
+func (d Decimal128) ToDecimal64() (Decimal64, error) {
+	var d64 Decimal64
+	rc := C.Decimal128_ToDecimal64(dec64PtrToC(&d64), dec128PtrToC(&d))
+	if rc != 0 {
+		return d64, moerr.NewError(moerr.OUT_OF_RANGE, "converting decimal128 to decimal64 out of range")
+	}
+	return d64, nil
+}
+
+// Comapres
+func CompareDecimal64(a, b Decimal64) int {
+	var rc, ret C.int32_t
+	rc = C.Decimal64_Compare(&ret, dec64PtrToC(&a), dec64PtrToC(&b))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.INVALID_ARGUMENT, "invalid decimal64 argument"))
+	}
+	return int(ret)
+}
+
+func CompareDecimal128(a, b Decimal128) int {
+	var rc, ret C.int32_t
+	rc = C.Decimal128_Compare(&ret, dec128PtrToC(&a), dec128PtrToC(&b))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.INVALID_ARGUMENT, "invalid decimal128 argument"))
+	}
+	return int(ret)
+}
+
+func (d Decimal64) Compare(other Decimal64) int {
+	return CompareDecimal64(d, other)
+}
+func (d Decimal64) Eq(other Decimal64) bool {
+	return d.Compare(other) == 0
+}
+func (d Decimal64) Le(other Decimal64) bool {
+	return d.Compare(other) <= 0
+}
+func (d Decimal64) Lt(other Decimal64) bool {
+	return d.Compare(other) < 0
+}
+func (d Decimal64) Ge(other Decimal64) bool {
+	return d.Compare(other) >= 0
+}
+func (d Decimal64) Gt(other Decimal64) bool {
+	return d.Compare(other) > 0
+}
+func (d Decimal64) Ne(other Decimal64) bool {
+	return d.Compare(other) != 0
+}
+
+func (d Decimal128) Compare(other Decimal128) int {
+	return CompareDecimal128(d, other)
+}
+func (d Decimal128) Eq(other Decimal128) bool {
+	return d.Compare(other) == 0
+}
+func (d Decimal128) Le(other Decimal128) bool {
+	return d.Compare(other) <= 0
+}
+func (d Decimal128) Lt(other Decimal128) bool {
+	return d.Compare(other) < 0
+}
+func (d Decimal128) Ge(other Decimal128) bool {
+	return d.Compare(other) >= 0
+}
+func (d Decimal128) Gt(other Decimal128) bool {
+	return d.Compare(other) > 0
+}
+func (d Decimal128) Ne(other Decimal128) bool {
+	return d.Compare(other) != 0
+}
+
+// Arithmatics
+func (d Decimal64) Add(x Decimal64) Decimal64 {
+	var ret Decimal64
+	rc := C.Decimal64_Add(dec64PtrToC(&ret), dec64PtrToC(&d), dec64PtrToC(&x))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
+	}
+	return ret
+}
+func (d Decimal128) Add(x Decimal128) Decimal128 {
+	var ret Decimal128
+	rc := C.Decimal128_Add(dec128PtrToC(&ret), dec128PtrToC(&d), dec128PtrToC(&x))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal128 addition overflow"))
+	}
+	return ret
+}
+
+func (d Decimal64) AddInt64(i int64) Decimal64 {
+	var ret Decimal64
+	rc := C.Decimal64_AddInt64(dec64PtrToC(&ret), dec64PtrToC(&d), C.int64_t(i))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
+	}
+	return ret
+}
+func (d Decimal128) AddInt64(i int64) Decimal128 {
+	var ret Decimal128
+	rc := C.Decimal128_AddInt64(dec128PtrToC(&ret), dec128PtrToC(&d), C.int64_t(i))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
+	}
+	return ret
+}
+func (d Decimal128) AddDecimal64(d64 Decimal64) Decimal128 {
+	var ret Decimal128
+	rc := C.Decimal128_AddDecimal64(dec128PtrToC(&ret), dec128PtrToC(&d), dec64PtrToC(&d64))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
+	}
+	return ret
+}
+
+func (d Decimal64) Sub(x Decimal64) Decimal64 {
+	var ret Decimal64
+	rc := C.Decimal64_Sub(dec64PtrToC(&ret), dec64PtrToC(&d), dec64PtrToC(&x))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 subtraction overflow"))
+	}
+	return ret
+}
+func (d Decimal128) Sub(x Decimal128) Decimal128 {
+	var ret Decimal128
+	rc := C.Decimal128_Sub(dec128PtrToC(&ret), dec128PtrToC(&d), dec128PtrToC(&x))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal128 subtraction overflow"))
+	}
+	return ret
+}
+
+func (d Decimal64) SubInt64(i int64) Decimal64 {
+	var ret Decimal64
+	rc := C.Decimal64_SubInt64(dec64PtrToC(&ret), dec64PtrToC(&d), C.int64_t(i))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
+	}
+	return ret
+}
+func (d Decimal128) SubInt64(i int64) Decimal128 {
+	var ret Decimal128
+	rc := C.Decimal128_SubInt64(dec128PtrToC(&ret), dec128PtrToC(&d), C.int64_t(i))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
+	}
+	return ret
+}
+
+func (d Decimal64) Mul(x Decimal64) Decimal64 {
+	var ret Decimal64
+	rc := C.Decimal64_Mul(dec64PtrToC(&ret), dec64PtrToC(&d), dec64PtrToC(&x))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 multiplication overflow"))
+	}
+	return ret
+}
+func (d Decimal64) MulWiden(x Decimal64) Decimal128 {
+	var ret Decimal128
+	rc := C.Decimal64_MulWiden(dec128PtrToC(&ret), dec64PtrToC(&d), dec64PtrToC(&x))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 multiplication overflow"))
+	}
+	return ret
+}
+func (d Decimal128) Mul(x Decimal128) Decimal128 {
+	var ret Decimal128
+	rc := C.Decimal128_Mul(dec128PtrToC(&ret), dec128PtrToC(&d), dec128PtrToC(&x))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal128 multiplication overflow"))
+	}
+	return ret
+}
+
+func (d Decimal64) MulInt64(x int64) Decimal64 {
+	var ret Decimal64
+	rc := C.Decimal64_MulInt64(dec64PtrToC(&ret), dec64PtrToC(&d), C.int64_t(x))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 multiplication overflow"))
+	}
+	return ret
+}
+func (d Decimal128) MulInt64(x int64) Decimal128 {
+	var ret Decimal128
+	rc := C.Decimal128_MulInt64(dec128PtrToC(&ret), dec128PtrToC(&d), C.int64_t(x))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 multiplication overflow"))
+	}
+	return ret
+}
+
+func (d Decimal64) Div(x Decimal64) Decimal64 {
+	var ret Decimal64
+	rc := C.Decimal64_Div(dec64PtrToC(&ret), dec64PtrToC(&d), dec64PtrToC(&x))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 division error"))
+	}
+	return ret
+}
+func (d Decimal64) DivWiden(x Decimal64) Decimal128 {
+	var ret Decimal128
+	rc := C.Decimal64_DivWiden(dec128PtrToC(&ret), dec64PtrToC(&d), dec64PtrToC(&x))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 division error"))
+	}
+	return ret
+}
+func (d Decimal128) Div(x Decimal128) Decimal128 {
+	var ret Decimal128
+	rc := C.Decimal128_Div(dec128PtrToC(&ret), dec128PtrToC(&d), dec128PtrToC(&x))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal128 division error"))
+	}
+	return ret
+}
+
+func (d Decimal64) DivInt64(x int64) Decimal64 {
+	var ret Decimal64
+	rc := C.Decimal64_DivInt64(dec64PtrToC(&ret), dec64PtrToC(&d), C.int64_t(x))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 division error"))
+	}
+	return ret
+}
+func (d Decimal128) DivInt64(x int64) Decimal128 {
+	var ret Decimal128
+	rc := C.Decimal128_DivInt64(dec128PtrToC(&ret), dec128PtrToC(&d), C.int64_t(x))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 division error"))
+	}
+	return ret
+}
+
+// Wrap old decimal api.   Most likely we should delete them.
+func ParseStringToDecimal64(s string, _ int32, scale int32) (Decimal64, error) {
+	return Decimal64_FromStringWithScale(s, scale)
+}
+
+func ParseStringToDecimal128(s string, _ int32, scale int32) (Decimal128, error) {
+	return Decimal128_FromStringWithScale(s, scale)
+}
+
+func MustDecimal64FromString(s string) Decimal64 {
+	d, err := Decimal64_FromString(s)
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+func MustDecimal128FromString(s string) Decimal128 {
+	d, err := Decimal128_FromString(s)
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+
+func Decimal64_Inf() Decimal64 {
+	return MustDecimal64FromString("inf")
+}
+func Decimal64_NegInf() Decimal64 {
+	return MustDecimal64FromString("-inf")
+}
+func Decimal64_NaN() Decimal64 {
+	return MustDecimal64FromString("NaN")
+}
+
+func Decimal128_Inf() Decimal128 {
+	return MustDecimal128FromString("inf")
+}
+func Decimal128_NegInf() Decimal128 {
+	return MustDecimal128FromString("-inf")
+}
+func Decimal128_NaN() Decimal128 {
+	return MustDecimal128FromString("NaN")
+}
+
+func Decimal64FromInt32(i int32) Decimal64 {
+	return Decimal64_FromInt32(i)
+}
+func Decimal128FromInt32(i int32) Decimal128 {
+	return Decimal128_FromInt32(i)
+}
+func Decimal64FromFloat64(f float64) Decimal64 {
+	return Decimal64_FromFloat64(f)
+}
+func Decimal128FromFloat64(f float64) Decimal128 {
+	return Decimal128_FromFloat64(f)
+}
+
+func InitDecimal128(i int64) Decimal128 {
+	return Decimal128_FromInt64(i)
+}
+func InitDecimal128UsingUint(i uint64) Decimal128 {
+	return Decimal128_FromUint64(i)
+}
+
+func InitDecimal64(i int64) Decimal64 {
+	return Decimal64_FromInt64(i)
+}
+func InitDecimal64UsingUint(i uint64, _ int32) Decimal64 {
+	return Decimal64_FromUint64(i)
+}
+
+func Decimal64Add(a, b Decimal64, s1, s2 int32) Decimal64 {
+	return a.Add(b)
+}
+func Decimal128Add(a, b Decimal128, s1, s2 int32) Decimal128 {
+	return a.Add(b)
+}
+
+func Decimal64AddAligned(a, b Decimal64) Decimal64 {
+	return a.Add(b)
+}
+func Decimal128AddAligned(a, b Decimal128) Decimal128 {
+	return a.Add(b)
+}
+
+func Decimal64Sub(a, b Decimal64, s1, s2 int32) Decimal64 {
+	return a.Sub(b)
+}
+func Decimal128Sub(a, b Decimal128, s1, s2 int32) Decimal128 {
+	return a.Sub(b)
+}
+
+func Decimal64SubAligned(a, b Decimal64) Decimal64 {
+	return a.Sub(b)
+}
+func Decimal128SubAligned(a, b Decimal128) Decimal128 {
+	return a.Sub(b)
+}
+
+func Decimal64Decimal64Mul(a, b Decimal64) Decimal128 {
+	return a.MulWiden(b)
+}
+func Decimal128Decimal128Mul(a, b Decimal128) Decimal128 {
+	return a.Mul(b)
+}
+
+func Decimal64Int64Mul(a Decimal64, b int64) Decimal64 {
+	return a.MulInt64(b)
+}
+func Decimal128Int64Mul(a Decimal128, b int64) Decimal128 {
+	return a.MulInt64(b)
+}
+
+func Decimal64Decimal64Div(a, b Decimal64) Decimal128 {
+	return a.DivWiden(b)
+}
+func Decimal128Decimal128Div(a, b Decimal128) Decimal128 {
+	return a.Div(b)
+}
+
+func Decimal128Int64Div(a Decimal128, b int64) Decimal128 {
+	return a.DivInt64(b)
+}
+
+func AlignDecimal128UsingScaleDiffBatch(src, dst []Decimal128, _ int32) []Decimal128 {
+	copy(dst, src)
 	return dst
 }
 
-func ScaleDecimal64By10(a Decimal64) (result Decimal64) {
-	return Decimal64(int64(a) * 10)
+func AlignDecimal64UsingScaleDiffBatch(src, dst []Decimal64, _ int32) []Decimal64 {
+	copy(dst, src)
+	return dst
 }
 
-func CompareDecimal64Decimal64Aligned(a, b Decimal64) (result int64) {
-	if int64(a) < int64(b) {
-		return -1
-	} else if int64(a) == int64(b) {
-		return 0
-	} else {
-		return 1
+func ParseStringToDecimal64WithoutTable(s string) (Decimal64, int32, error) {
+	ss := strings.TrimSpace(s)
+	d, err := Decimal64_FromString(ss)
+	var scale int32
+	idx := int32(strings.LastIndex(ss, "."))
+	if idx >= 0 {
+		scale = int32(len(ss)) - idx - 1
 	}
+	return d, scale, err
 }
 
-// CompareDecimal64Decimal64 returns -1 if a < b, returns 1 if a > b, returns 0 if a == b
-func CompareDecimal64Decimal64(a, b Decimal64, aScale, bScale int32) (result int64) {
-	if aScale > bScale {
-		scaleDiff := aScale - bScale
-		scale := int64(math.Pow10(int(scaleDiff)))
-		bScaled := ScaleDecimal64(b, scale)
-		result = CompareDecimal64Decimal64Aligned(a, bScaled)
-	} else if aScale < bScale {
-		scaleDiff := bScale - aScale
-		scale := int64(math.Pow10(int(scaleDiff)))
-		aScaled := ScaleDecimal64(a, scale)
-		result = CompareDecimal64Decimal64Aligned(aScaled, b)
-	} else {
-		result = CompareDecimal64Decimal64Aligned(a, b)
+func ParseStringToDecimal128WithoutTable(s string) (Decimal128, int32, error) {
+	ss := strings.TrimSpace(s)
+	d, err := Decimal128_FromString(ss)
+	var scale int32
+	idx := int32(strings.LastIndex(ss, "."))
+	if idx >= 0 {
+		scale = int32(len(ss)) - idx - 1
 	}
-	return result
+	return d, scale, err
 }
 
-func CompareDecimal128Decimal128Aligned(a, b Decimal128) (result int64) {
-	C.cmp_int128_int128(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
-	return result
+func CompareDecimal64Decimal64(a, b Decimal64, s1, s2 int32) int64 {
+	return int64(a.Compare(b))
+}
+func CompareDecimal128Decimal128(a, b Decimal128, s1, s2 int32) int64 {
+	return int64(a.Compare(b))
+}
+func CompareDecimal64Decimal64Aligned(a, b Decimal64) int64 {
+	return int64(a.Compare(b))
+}
+func CompareDecimal128Decimal128Aligned(a, b Decimal128) int64 {
+	return int64(a.Compare(b))
 }
 
-func CompareDecimal128Decimal128(a, b Decimal128, aScale, bScale int32) (result int64) {
-	if aScale > bScale {
-		scaleDiff := aScale - bScale
-		bScaled := b
-		for i := 0; i < int(scaleDiff); i++ {
-			bScaled = ScaleDecimal128By10(bScaled)
-		}
-		result = CompareDecimal128Decimal128Aligned(a, bScaled)
-	} else if aScale < bScale {
-		scaleDiff := bScale - aScale
-		aScaled := a
-		for i := 0; i < int(scaleDiff); i++ {
-			aScaled = ScaleDecimal128By10(aScaled)
-		}
-		result = CompareDecimal128Decimal128Aligned(aScaled, b)
-	} else {
-		result = CompareDecimal128Decimal128Aligned(a, b)
-	}
-	return result
+func Decimal64IsZero(d Decimal64) bool {
+	return d.Compare(Decimal64_Zero) == 0
+}
+func Decimal128IsZero(d Decimal128) bool {
+	return d.Compare(Decimal128_Zero) == 0
 }
 
-// AlignDecimal128UsingScaleDiffBatch void align_int128_using_scale_diff(void* src, void* dst, void* length, void* scale_diff) {
-func AlignDecimal128UsingScaleDiffBatch(src, dst []Decimal128, scaleDiff int32) {
-	length := int64(len(src))
-	C.align_int128_using_scale_diff(unsafe.Pointer(&src[0]), unsafe.Pointer(&dst[0]), unsafe.Pointer(&length), unsafe.Pointer(&scaleDiff))
-}
-
-func ScaleDecimal128By10(a Decimal128) (result Decimal128) {
-	C.scale_int128_by_10(unsafe.Pointer(&a), unsafe.Pointer(&result))
-	return result
-}
-
-func DivideDecimal128By10(a Decimal128) (result Decimal128) {
-	C.div_int128_by_10(unsafe.Pointer(&a), unsafe.Pointer(&result))
-	return result
-}
-
-func Decimal64Decimal64Mul(a Decimal64, b Decimal64) (result Decimal128) {
-	C.mul_int64_int64_ret_int128(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
-	return result
-}
-
-func Decimal64Int64Mul(a Decimal64, b int64) (result Decimal64) {
-	result = Decimal64(int64(a) * b)
-	return result
-}
-
-func Decimal128Decimal128Mul(a Decimal128, b Decimal128) (result Decimal128) {
-	C.mul_int128_int128(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
-
-	if Decimal128IsNotZero(a) && Decimal128Decimal128DivAligned(result, a) != b {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal multiply overflow"))
-	}
-	return result
-}
-
-func Decimal128Int64Mul(a Decimal128, b int64) (result Decimal128) {
-	C.mul_int128_int64(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
-	return result
-}
-func InitDecimal128(value int64) (result Decimal128) {
-	if value == 1 {
-		C.init_int128_as_1(unsafe.Pointer(&result))
-	} else if value == -1 {
-		C.init_int128_as_minus_1(unsafe.Pointer(&result))
-	} else {
-		C.init_int128_as_1(unsafe.Pointer(&result))
-		C.mul_int128_int64(unsafe.Pointer(&result), unsafe.Pointer(&value), unsafe.Pointer(&result))
-	}
-	return result
-}
-
-func InitDecimal64(value int64, scale int64) (result Decimal64) {
-	return Decimal64(int64(math.Pow10(int(scale))) * value)
-}
-
-func InitDecimal128UsingUint(value uint64) (result Decimal128) {
-	if value == 1 {
-		C.init_int128_as_1(unsafe.Pointer(&result))
-	} else {
-		C.init_int128_as_1(unsafe.Pointer(&result))
-		C.mul_int128_uint64(unsafe.Pointer(&result), unsafe.Pointer(&value), unsafe.Pointer(&result))
-	}
-	return result
-}
-
-func Decimal128IsNegative(a Decimal128) (result bool) {
-	C.int128_is_negative(unsafe.Pointer(&a), unsafe.Pointer(&result))
-	return result
-}
-
-func Decimal128IsPositive(a Decimal128) (result bool) {
-	C.int128_is_positive(unsafe.Pointer(&a), unsafe.Pointer(&result))
-	return result
-}
-
-func Decimal128IsZero(a Decimal128) (result bool) {
-	C.int128_is_zero(unsafe.Pointer(&a), unsafe.Pointer(&result)) // I think we are safe here because boolean type is of size 1 in both c and go
-	return result
-}
-
-func Decimal128IsNotZero(a Decimal128) (result bool) {
-	C.int128_is_not_zero(unsafe.Pointer(&a), unsafe.Pointer(&result))
-	return result
-}
-
-func ModDecimal128By10Abs(a Decimal128) (result int64) {
-	C.mod_int128_by_10_abs(unsafe.Pointer(&a), unsafe.Pointer(&result))
-	return result
-}
-
-func AddDecimal128ByInt64(a Decimal128, value int64) (result Decimal128) {
-	C.add_int128_int64(unsafe.Pointer(&a), unsafe.Pointer(&value), unsafe.Pointer(&result))
-	return result
-}
-
-func NegDecimal128(a Decimal128) (result Decimal128) {
-	C.neg_int128(unsafe.Pointer(&a), unsafe.Pointer(&result))
-	return result
-}
-
-// this implementation is bad, tangling, but it works,
-// wrote 50+ test cases, hoping to mitigate the pain of  my conscience, it didn't
-// I failed to find an elegant approach to support scientific notation, what a pathetic loser...
-// decimalStringPreprocess convert input decimal string to its internal representation form,
-// for example:  			Decimal(10, 5)    --------> 	converted result
-// 			input:			"12345.6789" 						"1234567890"
-// 							"12345.67"							"1234567000"
-// 							"-12345.67"							"1234567000" neg == true
-// 							"12345.123451"  					"1234512345"
-//							"12345.123456"						"1234512345" carry == true, the result is rounded(round away from zero)
-// 							"0.12345e5"							"1234500000"
-//							"0.12345e6"							err == "out of range"
-// 							"0.12345e-3"						"12"
-// 							"0.12345E-3"						"12"
-//							"0.126"								"12" carry == true
-func decimalStringPreprocess(s string, precision, scale int32) (result []byte, carry bool, neg bool, err error) {
-	if s == "" {
-		return []byte("0"), false, false, errors.New("invalid decimal string")
-	}
-	if len(s) >= 50 {
-		s = s[:50] // to prevent attack,
-	}
-	s = strings.TrimSpace(s)
-	exponent := 0
-	if strings.Contains(s, "e") {
-		s2 := strings.Split(s, "e")
-		if len(s2) > 2 {
-			return []byte(""), false, false, errors.New("invalid decimal string")
-		}
-		exponent, err = strconv.Atoi(s2[1])
-		if err != nil {
-			return []byte(""), false, false, errors.New("invalid decimal string")
-		}
-		s = s2[0]
-	}
-	if strings.Contains(s, "E") {
-		s2 := strings.Split(s, "E")
-		if len(s2) > 2 {
-			return []byte(""), false, false, errors.New("invalid decimal string")
-		}
-		exponent, err = strconv.Atoi(s2[1])
-		if err != nil {
-			return []byte(""), false, false, errors.New("invalid decimal string")
-		}
-		s = s2[0]
-	}
-	parts := strings.Split(s, ".")
-	partsNumber := len(parts)
-	if partsNumber == 2 { // this means the input string is of the form "123.456"
-		part0Bytes := []byte(parts[0])
-		part1Bytes := []byte(parts[1])
-		if len(parts[0]) > 0 {
-			if part0Bytes[0] == '+' {
-				part0Bytes = part0Bytes[1:]
-			}
-			if part0Bytes[0] == '-' {
-				neg = true
-				part0Bytes = part0Bytes[1:]
-			}
-		}
-		part0Bytes = []byte(strings.TrimLeft(string(part0Bytes), "0"))
-		if exponent > 0 {
-			lengthOfPart1Bytes := len(part1Bytes)
-			if lengthOfPart1Bytes > exponent {
-				part0Bytes = append(part0Bytes, part1Bytes[:exponent]...)
-				part1Bytes = part1Bytes[exponent:]
-			} else if lengthOfPart1Bytes == exponent {
-				part0Bytes = append(part0Bytes, part1Bytes...)
-				part1Bytes = []byte("")
-			} else {
-				paddingZeros := exponent - lengthOfPart1Bytes
-				part0Bytes = append(part0Bytes, part1Bytes...)
-				for i := 0; i < paddingZeros; i++ {
-					part0Bytes = append(part0Bytes, '0')
-				}
-				part1Bytes = []byte("")
-			}
-		}
-		if exponent < 0 {
-			exponentAbs := -exponent
-			lengthOfPart0Bytes := len(part0Bytes)
-			if lengthOfPart0Bytes > exponentAbs {
-				part1Bytes = append(part0Bytes[lengthOfPart0Bytes-exponentAbs:], part1Bytes...)
-				part0Bytes = part0Bytes[:lengthOfPart0Bytes-exponentAbs]
-			} else if lengthOfPart0Bytes == exponentAbs {
-				part1Bytes = append(part0Bytes, part1Bytes...)
-				part0Bytes = []byte("")
-			} else {
-				paddingZeros := exponentAbs - lengthOfPart0Bytes
-				part1Bytes = append(part0Bytes, part1Bytes...)
-				for i := 0; i < paddingZeros; i++ {
-					part1Bytes = append([]byte("0"), part1Bytes...)
-				}
-				part0Bytes = []byte("")
-			}
-		}
-		if len(part0Bytes) > int(precision-scale) { // for example, input "123.45" is invalid for Decimal(5, 3)
-			return []byte(""), false, false, fmt.Errorf("input decimal value out of range for Decimal(%d, %d)", precision, scale)
-		}
-		if len(part1Bytes) > int(scale) {
-			for i := int(scale); i < len(part1Bytes); i++ {
-				if part1Bytes[i] < '0' || part1Bytes[i] > '9' {
-					return result, carry, neg, errors.New("invalid decimal string")
-				}
-			}
-			if part1Bytes[scale] >= '5' {
-				carry = true
-			}
-			part1Bytes = part1Bytes[:scale]
-		} else {
-			scaleDiff := int(scale) - len(part1Bytes)
-			for i := 0; i < scaleDiff; i++ {
-				part1Bytes = append(part1Bytes, '0')
-			}
-		}
-		result = append(part0Bytes, part1Bytes...)
-		return result, carry, neg, nil
-	} else if partsNumber == 1 { // this means the input string is of the form "123", or "123e3", "123e-3"
-		part0Bytes := []byte(parts[0])
-		if part0Bytes[0] == '+' {
-			part0Bytes = part0Bytes[1:]
-		}
-		if part0Bytes[0] == '-' {
-			neg = true
-			part0Bytes = part0Bytes[1:]
-		}
-		part0Bytes = []byte(strings.TrimLeft(string(part0Bytes), "0"))
-		if exponent > 0 {
-			for i := 0; i < int(scale)+exponent; i++ {
-				part0Bytes = append(part0Bytes, '0')
-			}
-			if len(part0Bytes) > int(precision) { // for example, input "52345e3" is invalid for Decimal(10, 3)
-				return []byte("0"), false, false, fmt.Errorf("input decimal value out of range for Decimal(%d, %d)", precision, scale)
-			}
-			return part0Bytes, carry, neg, nil
-		} else if exponent < 0 {
-			exponentAbs := -exponent
-			lengthOfPart0Bytes := len(part0Bytes)
-			if lengthOfPart0Bytes < exponentAbs {
-				lengthOfPart0BytesPlusScale := lengthOfPart0Bytes + int(scale)
-				if lengthOfPart0BytesPlusScale < exponentAbs {
-					return []byte("0"), false, false, nil
-				} else {
-					for i := 0; i < int(scale); i++ {
-						part0Bytes = append(part0Bytes, '0')
-					}
-					remaining := part0Bytes[:lengthOfPart0BytesPlusScale-exponentAbs]
-					if len(part0Bytes) > lengthOfPart0BytesPlusScale-exponentAbs {
-						if part0Bytes[lengthOfPart0BytesPlusScale-exponentAbs] >= '5' && part0Bytes[lengthOfPart0BytesPlusScale-exponentAbs] <= '9' {
-							carry = true
-						}
-					}
-					return remaining, carry, neg, nil
-				}
-			} else {
-				paddingZeros := int(scale) - lengthOfPart0Bytes
-				if paddingZeros >= 0 {
-					for i := 0; i < paddingZeros; i++ {
-						part0Bytes = append(part0Bytes, '0')
-					}
-				} else {
-					if part0Bytes[scale] >= '5' && part0Bytes[scale] <= '9' {
-						carry = true
-					}
-					part0Bytes = part0Bytes[:scale]
-				}
-				return part0Bytes, carry, neg, nil
-			}
-		} else {
-			for i := 0; i < int(scale); i++ {
-				part0Bytes = append(part0Bytes, '0')
-			}
-			if len(part0Bytes) > int(precision) { // for example, input "12345678" is invalid for Decimal(10, 3)
-				return []byte("0"), false, false, fmt.Errorf("input decimal value out of range for Decimal(%d, %d)", precision, scale)
-			}
-			return part0Bytes, carry, neg, nil
-		}
-	} else {
-		return []byte(""), false, false, errors.New("invalid decimal string")
-	}
-}
-
-// ParseStringToDecimal64 todo: use strconv to simplify this code
-func ParseStringToDecimal64(s string, precision, scale int32) (result Decimal64, err error) {
-	sInBytes, carry, neg, err := decimalStringPreprocess(s, precision, scale)
-	if err != nil {
-		return result, err
-	}
-	resultInInt64 := int64(result)
-	for _, ch := range sInBytes {
-		ch -= '0'
-		if ch > 9 {
-			return result, errors.New("invalid decimal string")
-		}
-		digit := int64(ch)
-		resultInInt64 = resultInInt64 * 10
-		resultInInt64 = resultInInt64 + digit
-	}
-	if carry {
-		resultInInt64 += 1
-	}
-	if neg {
-		resultInInt64 = -resultInInt64
-	}
-	result = Decimal64(resultInInt64)
-	return result, nil
-}
-
-func ParseStringToDecimal128WithoutTable(s string) (result Decimal128, scale int32, err error) {
-	precision := int32(38)
-	parts := strings.Split(s, ".")
-	scale = int32(0)
-	if len(parts) == 1 || len(parts[1]) == 0 { // this means the input string is of the form "123", "123."
-		scale = 0
-	} else {
-		scale = int32(len(parts[1]))
-	}
-	result, err = ParseStringToDecimal128(s, precision, scale)
-	return result, scale, err
-}
-
-func ParseStringToDecimal128(s string, precision, scale int32) (result Decimal128, err error) {
-	sInBytes, carry, neg, err := decimalStringPreprocess(s, precision, scale)
-	if err != nil {
-		return result, err
-	}
-
-	for _, ch := range sInBytes {
-		ch -= '0'
-		if ch > 9 {
-			return result, errors.New("invalid decimal string")
-		}
-		digit := int64(ch)
-		result = ScaleDecimal128By10(result)
-		result = AddDecimal128ByInt64(result, digit)
-	}
-	if carry {
-		result = AddDecimal128ByInt64(result, int64(1))
-	}
-	if neg {
-		result = NegDecimal128(result)
-	}
-	return result, nil
-}
-
-func (a Decimal64) Decimal64ToString(scale int32) []byte {
-	aInInt64 := int64(a)
-	if scale == 0 {
-		result := strconv.FormatInt(aInInt64, 10)
-		return []byte(result)
-	}
-	if aInInt64 == 0 {
-		return []byte("0")
-	}
-	result := strconv.FormatInt(aInInt64, 10)
-	neg := false
-	if aInInt64 < 0 {
-		neg = true
-		result = result[1:]
-	}
-
-	length := len(result)
-	if length < int(scale) {
-		for i := 0; i < int(scale)-length; i++ {
-			result = "0" + result
-		}
-		result = "0." + result
-	} else if length == int(scale) {
-		result = "0." + result
-	} else {
-		result = result[:length-int(scale)] + "." + result[length-int(scale):]
-	}
-	if neg {
-		result = "-" + result
-	}
-
-	return []byte(result)
-}
-
-func (a Decimal128) Decimal128ToString(scale int32) []byte {
-	result := ""
-	neg := Decimal128IsNegative(a)
-	notZero := Decimal128IsNotZero(a)
-	if !notZero {
-		return []byte("0")
-	}
-	tmp := a
-	digits := "0123456789"
-	digit := int64(0)
-	for notZero {
-		digit = ModDecimal128By10Abs(tmp)
-		result = string(digits[digit]) + result
-		tmp = DivideDecimal128By10(tmp)
-		notZero = Decimal128IsNotZero(tmp)
-	}
-	length := len(result)
-	if length < int(scale) {
-		for i := 0; i < int(scale)-length; i++ {
-			result = "0" + result
-		}
-		result = "0." + result
-	} else if length == int(scale) {
-		result = "0." + result
-	} else {
-		if scale != 0 {
-			result = result[:length-int(scale)] + "." + result[length-int(scale):]
-		}
-	}
-	if neg {
-		result = "-" + result
-	}
-	return []byte(result)
-}
-
-func Decimal64Add(a, b Decimal64, aScale, bScale int32) (result Decimal64) {
-	if aScale > bScale {
-		scaleDiff := aScale - bScale
-		scale := int64(math.Pow10(int(scaleDiff)))
-		bScaled := ScaleDecimal64(b, scale)
-		result = Decimal64AddAligned(a, bScaled)
-	} else if aScale < bScale {
-		scaleDiff := bScale - aScale
-		scale := int64(math.Pow10(int(scaleDiff)))
-		aScaled := ScaleDecimal64(a, scale)
-		result = Decimal64AddAligned(aScaled, b)
-	} else {
-		result = Decimal64AddAligned(a, b)
-	}
-	return result
-}
-
-func Decimal64AddAligned(a, b Decimal64) (result Decimal64) {
-	result = Decimal64(int64(a) + int64(b))
-
-	if a > 0 && b > 0 && result <= 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal add overflow"))
-	}
-	if a < 0 && b < 0 && result >= 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal add overflow"))
-	}
-	return result
-}
-
-func Decimal64Sub(a, b Decimal64, aScale, bScale int32) (result Decimal64) {
-	if aScale > bScale {
-		scaleDiff := aScale - bScale
-		scale := int64(math.Pow10(int(scaleDiff)))
-		bScaled := ScaleDecimal64(b, scale)
-		result = Decimal64SubAligned(a, bScaled)
-	} else if aScale < bScale {
-		scaleDiff := bScale - aScale
-		scale := int64(math.Pow10(int(scaleDiff)))
-		aScaled := ScaleDecimal64(a, scale)
-		result = Decimal64SubAligned(aScaled, b)
-	} else {
-		result = Decimal64SubAligned(a, b)
-	}
-	return result
-}
-
-func Decimal64SubAligned(a, b Decimal64) (result Decimal64) {
-	result = Decimal64(int64(a) - int64(b))
-	if a < 0 && b > 0 && result >= 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal subtraction overflow"))
-	}
-	if a > 0 && b < 0 && result <= 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal subtraction overflow"))
-	}
-	return result
-}
-
-func Decimal128Add(a, b Decimal128, aScale, bScale int32) (result Decimal128) {
-	if aScale > bScale {
-		bScaled := b
-		scaleDiff := aScale - bScale
-		for i := 0; i < int(scaleDiff); i++ {
-			bScaled = ScaleDecimal128By10(bScaled)
-		}
-		result = Decimal128AddAligned(a, bScaled)
-	} else if aScale < bScale {
-		aScaled := a
-		scaleDiff := bScale - aScale
-		for i := 0; i < int(scaleDiff); i++ {
-			aScaled = ScaleDecimal128By10(aScaled)
-		}
-		result = Decimal128AddAligned(aScaled, b)
-	} else {
-		result = Decimal128AddAligned(a, b)
-	}
-	return result
-}
-
-func Decimal128AddAligned(a, b Decimal128) (result Decimal128) {
-	C.add_int128_int128(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
-	if Decimal128IsPositive(a) && Decimal128IsPositive(b) && (Decimal128IsNegative(result) || Decimal128IsZero(result)) {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal add overflow"))
-	}
-	if Decimal128IsNegative(a) && Decimal128IsNegative(b) && (Decimal128IsPositive(result) || Decimal128IsZero(result)) {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal add overflow"))
-	}
-	return result
-}
-
-func Decimal128Sub(a, b Decimal128, aScale, bScale int32) (result Decimal128) {
-	if aScale > bScale {
-		bScaled := b
-		scaleDiff := aScale - bScale
-		for i := 0; i < int(scaleDiff); i++ {
-			bScaled = ScaleDecimal128By10(bScaled)
-		}
-		result = Decimal128SubAligned(a, bScaled)
-	} else if aScale < bScale {
-		aScaled := a
-		scaleDiff := bScale - aScale
-		for i := 0; i < int(scaleDiff); i++ {
-			aScaled = ScaleDecimal128By10(aScaled)
-		}
-		result = Decimal128SubAligned(aScaled, b)
-	} else {
-		result = Decimal128SubAligned(a, b)
-	}
-	return result
-}
-
-func Decimal128SubAligned(a, b Decimal128) (result Decimal128) {
-	C.sub_int128_int128(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
-	if Decimal128IsNegative(a) && Decimal128IsPositive(b) && (Decimal128IsPositive(result) || Decimal128IsZero(result)) {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal subtraction overflow"))
-	}
-	if Decimal128IsPositive(a) && Decimal128IsNegative(b) && (Decimal128IsNegative(result) || Decimal128IsZero(result)) {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal subtraction overflow"))
-	}
-	return result
-}
-
-func Decimal64Decimal64Div(a, b Decimal64, aScale, bScale int32) (result Decimal128) {
-	aScaled := InitDecimal128(int64(a))
-	for i := 0; i < int(bScale); i++ {
-		aScaled = ScaleDecimal128By10(aScaled)
-	}
-	C.div_int128_int64(unsafe.Pointer(&aScaled), unsafe.Pointer(&b), unsafe.Pointer(&result))
-	return result
-}
-
-func Decimal128Int64Div(a Decimal128, b int64) (result Decimal128) {
-	aScaled := a
-	C.div_int128_int64(unsafe.Pointer(&aScaled), unsafe.Pointer(&b), unsafe.Pointer(&result))
-	return result
-}
-
-func Decimal128Decimal128Div(a, b Decimal128, aScale, bScale int32) (result Decimal128) {
-	aScaled := a
-	for i := 0; i < int(bScale); i++ {
-		aScaled = ScaleDecimal128By10(aScaled)
-	}
-	C.div_int128_int128(unsafe.Pointer(&aScaled), unsafe.Pointer(&b), unsafe.Pointer(&result))
-	return result
-}
-
-func Decimal128Decimal128DivAligned(a, b Decimal128) (result Decimal128) {
-	C.div_int128_int128(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
-	return result
-}
-
-func Decimal64ToDecimal128(a Decimal64) (result Decimal128) {
-	C.int64_to_int128(unsafe.Pointer(&a), unsafe.Pointer(&result))
-	return result
+func NegDecimal128(d Decimal128) Decimal128 {
+	return Decimal128_Zero.Sub(d)
 }

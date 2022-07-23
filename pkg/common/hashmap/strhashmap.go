@@ -74,6 +74,8 @@ func (m *StrHashMap) InsertValue(val any) bool {
 		m.keys[0] = append(m.keys[0], v...)
 	case types.Decimal128:
 		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case types.Decimal64:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	}
 	if l := len(m.keys[0]); l < 16 {
 		m.keys[0] = append(m.keys[0], hashtable.StrKeyPadding[l:]...)

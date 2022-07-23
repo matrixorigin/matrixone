@@ -31,36 +31,41 @@ func Prepare(_ *process.Process, _ interface{}) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
-	bat := proc.Reg.InputBatch
+func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
+	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
-	if len(bat.Zs) == 0 {
+	if bat.Length() == 0 {
 		return false, nil
 	}
-	n := arg.(*Argument)
-	if n.Seen > n.Offset {
+	ap := arg.(*Argument)
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
+	anal.Input(bat)
+	if ap.Seen > ap.Offset {
 		return false, nil
 	}
-	length := len(bat.Zs)
-	if n.Seen+uint64(length) > n.Offset {
-		sels := newSels(int64(n.Offset-n.Seen), int64(length)-int64(n.Offset-n.Seen))
-		n.Seen += uint64(length)
+	length := bat.Length()
+	if ap.Seen+uint64(length) > ap.Offset {
+		sels := newSels(int64(ap.Offset-ap.Seen), int64(length)-int64(ap.Offset-ap.Seen), proc)
+		ap.Seen += uint64(length)
 		bat.Shrink(sels)
-		proc.Reg.InputBatch = bat
+		proc.PutSels(sels)
+		proc.SetInputBatch(bat)
 		return false, nil
 	}
-	n.Seen += uint64(length)
+	ap.Seen += uint64(length)
 	bat.Clean(proc.Mp)
-	proc.Reg.InputBatch = &batch.Batch{}
+	proc.SetInputBatch(&batch.Batch{})
 	return false, nil
 }
 
-func newSels(start, count int64) []int64 {
-	sels := make([]int64, count)
+func newSels(start, count int64, proc *process.Process) []int64 {
+	sels := proc.GetSels()
 	for i := int64(0); i < count; i++ {
-		sels[i] = start + i
+		sels = append(sels, start+i)
 	}
 	return sels[:count]
 }

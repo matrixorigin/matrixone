@@ -9,60 +9,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  sca:
-    runs-on: ubuntu-latest
-    name: SCA Test on Ubuntu/x64
-
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          fetch-depth: '3'
-
-      - name: Set up Go
-        uses: ./.github/actions/setup_env
-        with:
-          go-version: 1.18
-          
-      - name: Formats Check
-        run: |
-          cd $GITHUB_WORKSPACE && make clean
-          if [ "$(make fmt | grep -v gofmt | wc -l)" -gt 0 ]; then exit 1; fi
-          
-      - name: Detect non-ascii characters
-        run: |
-          na_characters=$(find ${{ github.workspace }} -type f -name "*.go" -exec grep -P  '[\xE5-\xE9][\x80-\xBF][\x80-\xBF]|\xE4[\xB8-\xBF][\x80-\xBF]' {} + || true)
-          if [[ -n $na_characters ]]; then
-            echo "Detected non-ascii characters in annotation or log info. Please refer to CONTRIBUTING.md."
-            printf '%s\n' "${na_characters[*]}"
-            exit 1
-          fi
-          
-      - name: Prepare Dependency
-        run: |
-          cd $GITHUB_WORKSPACE && make clean && make config && make build
-          make install-static-check-tools
-          
-      - name: Run golangci-lint for pkg
-        id: sca-1
-        run: |
-          cd $GITHUB_WORKSPACE
-          CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo" golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt  --new-from-rev=HEAD~ ./pkg/... --timeout=3m
-
-      - name: Run golangci-lint for cmd
-        id: sca-2
-        run: |
-          cd $GITHUB_WORKSPACE
-          CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo" golangci-lint run -E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert   -E prealloc -E gofmt  --new-from-rev=HEAD~ ./cmd/... --timeout=3m
-          
-      - name: Run more staticcheck checks
-        id: sca-3
-        run: |
-          cd $GITHUB_WORKSPACE
-          CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo" staticcheck -checks SA9001,S1009,S1023,S1002,S1025,ST1017,ST1019,S1019,S1004,SA1030,S1011,S1008,SA1024,SA4003,S1039,S1028,SA6005 ./...
-      
-      - name: Check on failures
-        if: steps.sca-3.outcome != 'success' || steps.sca-2.outcome != 'success' || steps.sca-1.outcome != 'success'
-        run: exit 1
 
   ut-linux-x86:
     runs-on: ubuntu-latest
@@ -450,9 +396,9 @@ jobs:
       - run: 'echo "No build required" '
       
       
-  more-sca:
+  sca:
     runs-on: ubuntu-latest
-    name: More SCA Test on Ubuntu/x64
+    name: SCA Test on Ubuntu/x64
 
     steps:
       - uses: actions/checkout@v2

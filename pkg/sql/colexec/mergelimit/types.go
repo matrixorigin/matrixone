@@ -14,13 +14,19 @@
 
 package mergelimit
 
+const (
+	Eval = iota
+	End
+)
+
 type container struct {
-	seen uint64
+	state int
+	seen  uint64
 }
 
 type Argument struct {
 	// Limit records the limit number of this operator
 	Limit uint64
 	// ctr stores the attributes needn't do Serialization work
-	ctr container
+	ctr *container
 }

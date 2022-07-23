@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	wtf "github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -112,13 +113,13 @@ func MockVec(typ types.Type, rows int, offset int) *vector.Vector {
 	case types.Type_DECIMAL64:
 		data := make([]types.Decimal64, 0)
 		for i := 0; i < rows; i++ {
-			data = append(data, types.Decimal64(i+offset))
+			data = append(data, wtf.InitDecimal64(int64(i+offset)))
 		}
 		_ = vector.Append(vec, data)
 	case types.Type_DECIMAL128:
 		data := make([]types.Decimal128, 0)
 		for i := 0; i < rows; i++ {
-			data = append(data, types.Decimal128{Lo: int64(i + offset)})
+			data = append(data, wtf.InitDecimal128(int64(i+offset)))
 		}
 		_ = vector.Append(vec, data)
 	case types.Type_TIMESTAMP:

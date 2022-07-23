@@ -22,24 +22,24 @@ func ReturnType(_ []types.Type) types.Type {
 	return types.New(types.T_int64, 0, 0, 0)
 }
 
-func New[T1, T2 any](isStar bool) *Count[T1, T2] {
-	return &Count[T1, T2]{isStar: isStar}
+func New[T1 types.Generic | Decimal128AndString](isStar bool) *Count[T1] {
+	return &Count[T1]{isStar: isStar}
 }
 
-func (c *Count[T1, T2]) Grows(_ int) {
+func (c *Count[T1]) Grows(_ int) {
 }
 
-func (c *Count[T1, T2]) Eval(vs []T2) []T2 {
+func (c *Count[T1]) Eval(vs []int64) []int64 {
 	return vs
 }
 
-func (c *Count[T1, T2]) Merge(_, _ int64, x, y T2, _ bool, _ bool, _ any) (T2, bool) {
-	return any((any)(x).(int64) + (any)(y).(int64)).(T2), false
+func (c *Count[T1]) Merge(_, _ int64, x, y int64, _ bool, _ bool, _ any) (int64, bool) {
+	return x + y, false
 }
 
-func (c *Count[T1, T2]) Fill(_ int64, _ T1, v T2, z int64, _ bool, hasNull bool) (T2, bool) {
+func (c *Count[T1]) Fill(_ int64, _ T1, v int64, z int64, _ bool, hasNull bool) (int64, bool) {
 	if hasNull && !c.isStar {
 		return v, false
 	}
-	return any((any)(v).(int64) + z).(T2), false
+	return v + z, false
 }
