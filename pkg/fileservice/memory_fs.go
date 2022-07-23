@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"io/ioutil"
 	"sort"
 	"strings"
 	"sync"
@@ -112,7 +111,7 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 	})
 
 	r := newIOEntriesReader(vector.Entries)
-	data, err := ioutil.ReadAll(r)
+	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
