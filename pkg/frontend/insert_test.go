@@ -182,12 +182,12 @@ func Test_buildInsertValues(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(db, nil).AnyTimes()
-		db.EXPECT().Relation(gomock.Any(), nil).Return(nil, errors.New("1")).Times(1)
+		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(nil, errors.New("1")).Times(1)
 		err = buildInsertValues(stmt, plan, eng, snapshot)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		db.EXPECT().Relation(gomock.Any(), nil).Return(rel, nil).AnyTimes()
-		rel.EXPECT().TableDefs(nil).Return(tableDefs).AnyTimes()
+		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(rel, nil).AnyTimes()
+		rel.EXPECT().TableDefs(gomock.Any()).Return(tableDefs, nil).AnyTimes()
 		err = buildInsertValues(stmt, plan, eng, snapshot)
 		convey.So(err, convey.ShouldBeNil)
 

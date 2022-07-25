@@ -250,8 +250,8 @@ func Test_mce_selfhandle(t *testing.T) {
 		eng := mock_frontend.NewMockEngine(ctrl)
 
 		cnt := 0
-		eng.EXPECT().Database(ctx, gomock.Any(), nil).DoAndReturn(
-			func(db string, dump interface{}) (engine.Database, error) {
+		eng.EXPECT().Database(ctx, gomock.Any(), gomock.Any()).DoAndReturn(
+			func(ctx2 context.Context, db string, dump interface{}) (engine.Database, error) {
 				cnt++
 				if cnt == 1 {
 					return nil, nil

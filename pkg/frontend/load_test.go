@@ -145,10 +145,10 @@ func Test_load(t *testing.T) {
 					Name: "r"}},
 		}
 		ctx := context.TODO()
-		rel.EXPECT().TableDefs(nil).Return(tableDefs).AnyTimes()
+		rel.EXPECT().TableDefs(gomock.Any()).Return(tableDefs, nil).AnyTimes()
 		cnt := 0
 		rel.EXPECT().Write(ctx, gomock.Any()).DoAndReturn(
-			func(a, b, c interface{}) error {
+			func(a, b interface{}) error {
 				cnt++
 				if cnt == 1 {
 					return nil
@@ -320,10 +320,10 @@ func Test_load(t *testing.T) {
 					Name: "r"}},
 		}
 		ctx := context.TODO()
-		rel.EXPECT().TableDefs(nil).Return(tableDefs).AnyTimes()
+		rel.EXPECT().TableDefs(ctx).Return(tableDefs, nil).AnyTimes()
 		cnt := 0
 		rel.EXPECT().Write(ctx, gomock.Any()).DoAndReturn(
-			func(a, b, c interface{}) error {
+			func(a, b interface{}) error {
 				cnt++
 				if cnt == 1 {
 					return fmt.Errorf("fake error")
@@ -334,7 +334,7 @@ func Test_load(t *testing.T) {
 				return nil
 			},
 		).AnyTimes()
-		db.EXPECT().Relation(gomock.Any(), nil).Return(rel, nil).AnyTimes()
+		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(rel, nil).AnyTimes()
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(db, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
