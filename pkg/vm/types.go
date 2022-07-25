@@ -48,6 +48,14 @@ const (
 	Update
 )
 
+type Mheap interface {
+	Free([]byte)
+	Alloc(int64) ([]byte, error)
+	Grow([]byte, int64) ([]byte, error)
+	PutSels([]int64)
+	GetSels() ([]int64, error)
+}
+
 // Instruction contains relational algebra
 type Instruction struct {
 	// Op specified the operator code of an instruction.

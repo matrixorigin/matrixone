@@ -17,6 +17,7 @@ package moengine
 import (
 	"bytes"
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"

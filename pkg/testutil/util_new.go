@@ -29,6 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func NewMheap() *mheap.Mheap {
+	hm := host.New(1 << 30)
+	gm := guest.New(1<<30, hm)
+	return mheap.New(gm)
+}
+
 func NewProcess() *process.Process {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)

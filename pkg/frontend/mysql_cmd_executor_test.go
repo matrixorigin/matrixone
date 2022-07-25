@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -38,12 +39,13 @@ import (
 )
 
 func Test_mce(t *testing.T) {
+	ctx := context.TODO()
 	convey.Convey("boot mce succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().Database(gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
@@ -240,6 +242,7 @@ func Test_mce(t *testing.T) {
 }
 
 func Test_mce_selfhandle(t *testing.T) {
+	ctx := context.TODO()
 	convey.Convey("handleChangeDB", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -247,7 +250,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		eng := mock_frontend.NewMockEngine(ctrl)
 
 		cnt := 0
-		eng.EXPECT().Database(gomock.Any(), nil).DoAndReturn(
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).DoAndReturn(
 			func(db string, dump interface{}) (engine.Database, error) {
 				cnt++
 				if cnt == 1 {
@@ -290,7 +293,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 
-		eng.EXPECT().Database(gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
@@ -366,13 +369,14 @@ func Test_mce_selfhandle(t *testing.T) {
 }
 
 func Test_getDataFromPipeline(t *testing.T) {
+	ctx := context.TODO()
 	convey.Convey("getDataFromPipeline", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 
-		eng.EXPECT().Database(gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
@@ -626,12 +630,13 @@ func Test_mysqlerror(t *testing.T) {
 }
 
 func Test_handleSelectVariables(t *testing.T) {
+	ctx := context.TODO()
 	convey.Convey("handleSelectVariables succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().Database(gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
@@ -663,12 +668,13 @@ func Test_handleSelectVariables(t *testing.T) {
 }
 
 func Test_handleShowVariables(t *testing.T) {
+	ctx := context.TODO()
 	convey.Convey("handleShowVariables succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().Database(gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
@@ -812,12 +818,13 @@ func Test_handleShowColumns(t *testing.T) {
 }
 
 func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecutor) error) {
+	ctx := context.TODO()
 	convey.Convey(fmt.Sprintf("%s succ", funName), t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().Database(gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()

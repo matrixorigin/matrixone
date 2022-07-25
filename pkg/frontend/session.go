@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	goErrors "errors"
 	"fmt"
 
@@ -681,7 +682,8 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	var err error
 	//open database
-	_, err = tcc.txnHandler.GetStorage().Database(name, tcc.txnHandler.GetTxn().GetCtx())
+	ctx := context.TODO()
+	_, err = tcc.txnHandler.GetStorage().Database(ctx, name, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
 	if err != nil {
 		logutil.Errorf("get database %v failed. error %v", name, err)
 		return false
@@ -696,18 +698,22 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 		return nil, err
 	}
 
+	ctx := context.TODO()
 	//open database
-	db, err := tcc.txnHandler.GetStorage().Database(dbName, tcc.txnHandler.GetTxn().GetCtx())
+	db, err := tcc.txnHandler.GetStorage().Database(ctx, dbName, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
 	if err != nil {
 		logutil.Errorf("get database %v error %v", dbName, err)
 		return nil, err
 	}
 
-	tableNames := db.Relations(tcc.txnHandler.GetTxn().GetCtx())
+	tableNames, err := db.Relations(ctx)
+	if err != nil {
+		return nil, err
+	}
 	logutil.Infof("dbName %v tableNames %v", dbName, tableNames)
 
 	//open table
-	table, err := db.Relation(tableName, tcc.txnHandler.GetTxn().GetCtx())
+	table, err := db.Relation(ctx, tableName)
 	if err != nil {
 		logutil.Errorf("get table %v error %v", tableName, err)
 		return nil, err
@@ -734,7 +740,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	if err != nil {
 		return nil, nil
 	}
-	engineDefs := table.TableDefs(tcc.txnHandler.GetTxn().GetCtx())
+	ctx := context.TODO()
+	engineDefs, err := table.TableDefs(ctx)
+	if err != nil {
+		return nil, nil
+	}
 
 	var defs []*plan2.ColDef
 	for _, def := range engineDefs {
@@ -753,7 +763,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		}
 	}
 	if tcc.QryTyp != TXN_DEFAULT {
-		hideKey := table.GetHideKey(tcc.txnHandler.GetTxn().GetCtx())
+		hideKeys, err := table.GetHideKeys(ctx)
+		if err != nil {
+			return nil, nil
+		}
+		hideKey := hideKeys[0]
 		defs = append(defs, &plan2.ColDef{
 			Name: hideKey.Name,
 			Typ: &plan2.Type{
@@ -793,6 +807,7 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 }
 
 func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*plan2.ColDef {
+	ctx := context.TODO()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
@@ -802,7 +817,10 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 		return nil
 	}
 
-	priKeys := relation.GetPrimaryKeys(tcc.txnHandler.GetTxn().GetCtx())
+	priKeys, err := relation.GetPrimaryKeys(ctx)
+	if err != nil {
+		return nil
+	}
 	if len(priKeys) == 0 {
 		return nil
 	}
@@ -825,6 +843,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 }
 
 func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *plan2.ColDef {
+	ctx := context.TODO()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
@@ -834,10 +853,14 @@ func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *p
 		return nil
 	}
 
-	hideKey := relation.GetHideKey(tcc.txnHandler.GetTxn().GetCtx())
-	if hideKey == nil {
+	hideKeys, err := relation.GetHideKeys(ctx)
+	if err != nil {
 		return nil
 	}
+	if len(hideKeys) == 0 {
+		return nil
+	}
+	hideKey := hideKeys[0]
 
 	hideDef := &plan2.ColDef{
 		Name: hideKey.Name,
