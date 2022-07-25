@@ -116,7 +116,7 @@ func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.Clust
 		if err != nil {
 			c.resetClient()
 		}
-		if c.isInternalError(err) {
+		if c.isRetryableError(err) {
 			continue
 		}
 		return cd, err
@@ -133,7 +133,7 @@ func (c *managedHAKeeperClient) SendCNHeartbeat(ctx context.Context,
 		if err != nil {
 			c.resetClient()
 		}
-		if c.isInternalError(err) {
+		if c.isRetryableError(err) {
 			continue
 		}
 		return err
@@ -150,7 +150,7 @@ func (c *managedHAKeeperClient) SendDNHeartbeat(ctx context.Context,
 		if err != nil {
 			c.resetClient()
 		}
-		if c.isInternalError(err) {
+		if c.isRetryableError(err) {
 			continue
 		}
 		return cb, err
@@ -167,14 +167,14 @@ func (c *managedHAKeeperClient) SendLogHeartbeat(ctx context.Context,
 		if err != nil {
 			c.resetClient()
 		}
-		if c.isInternalError(err) {
+		if c.isRetryableError(err) {
 			continue
 		}
 		return cb, err
 	}
 }
 
-func (c *managedHAKeeperClient) isInternalError(err error) bool {
+func (c *managedHAKeeperClient) isRetryableError(err error) bool {
 	return errors.Is(err, ErrNotHAKeeper)
 }
 
