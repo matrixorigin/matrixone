@@ -61,6 +61,9 @@ func (m *StrHashMap) AddGroup() {
 // never handle null
 func (m *StrHashMap) InsertValue(val any) bool {
 	defer func() { m.keys[0] = m.keys[0][:0] }()
+	if m.hasNull {
+		m.keys[0] = append(m.keys[0], byte(0))
+	}
 	switch v := val.(type) {
 	case uint8:
 		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
@@ -70,11 +73,23 @@ func (m *StrHashMap) InsertValue(val any) bool {
 		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	case uint64:
 		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case int8:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case int16:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case int32:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case int64:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case float32:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case float64:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	case []byte:
 		m.keys[0] = append(m.keys[0], v...)
-	case types.Decimal128:
-		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	case types.Decimal64:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case types.Decimal128:
 		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	}
 	if l := len(m.keys[0]); l < 16 {
