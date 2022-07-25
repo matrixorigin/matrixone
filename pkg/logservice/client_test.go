@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +31,7 @@ import (
 )
 
 func runClientTest(t *testing.T,
-	readOnly bool, fn func(*testing.T, ClientConfig, Client)) {
+	readOnly bool, fn func(*testing.T, *Service, ClientConfig, Client)) {
 	defer leaktest.AfterTest(t)()
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
@@ -59,18 +60,30 @@ func runClientTest(t *testing.T,
 		assert.NoError(t, c.Close())
 	}()
 
-	fn(t, scfg, c)
+	fn(t, service, scfg, c)
+}
+
+func TestLogShardNotFoundErrorIsConsideredAsTempError(t *testing.T) {
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
+		require.NoError(t, s.store.stopReplica(1, 2))
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, err := c.GetTSOTimestamp(ctx, 100)
+		require.Equal(t, dragonboat.ErrShardNotFound, err)
+		assert.True(t, isTempError(err))
+	}
+	runClientTest(t, false, fn)
 }
 
 func TestClientCanBeCreated(t *testing.T) {
-	fn := func(t *testing.T, cfg ClientConfig, c Client) {
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 	}
 	runClientTest(t, false, fn)
 	runClientTest(t, true, fn)
 }
 
 func TestClientGetTSOTimestamp(t *testing.T) {
-	fn := func(t *testing.T, cfg ClientConfig, c Client) {
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		v, err := c.GetTSOTimestamp(ctx, 100)
@@ -89,7 +102,7 @@ func TestClientGetTSOTimestamp(t *testing.T) {
 }
 
 func TestClientAppend(t *testing.T) {
-	fn := func(t *testing.T, cfg ClientConfig, c Client) {
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 		rec := c.GetLogRecord(16)
 		rand.Read(rec.Payload())
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -112,7 +125,7 @@ func TestClientAppend(t *testing.T) {
 
 // FIXME: actually enforce allowed allocation
 func TestClientAppendAlloc(t *testing.T) {
-	fn := func(t *testing.T, cfg ClientConfig, c Client) {
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 		rec := c.GetLogRecord(16)
 		rand.Read(rec.Payload())
 		ac := testing.AllocsPerRun(1000, func() {
@@ -127,7 +140,7 @@ func TestClientAppendAlloc(t *testing.T) {
 }
 
 func TestClientRead(t *testing.T) {
-	fn := func(t *testing.T, cfg ClientConfig, c Client) {
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 		rec := c.GetLogRecord(16)
 		rand.Read(rec.Payload())
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -157,7 +170,7 @@ func TestClientRead(t *testing.T) {
 }
 
 func TestClientTruncate(t *testing.T) {
-	fn := func(t *testing.T, cfg ClientConfig, c Client) {
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 		rec := c.GetLogRecord(16)
 		rand.Read(rec.Payload())
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -177,7 +190,7 @@ func TestClientTruncate(t *testing.T) {
 }
 
 func TestReadOnlyClientRejectWriteRequests(t *testing.T) {
-	fn := func(t *testing.T, cfg ClientConfig, c Client) {
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 		rec := c.GetLogRecord(16)
 		rand.Read(rec.Payload())
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
