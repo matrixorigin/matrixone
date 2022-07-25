@@ -41,7 +41,7 @@ type Node struct {
 // Attribute is a column
 type Attribute struct {
 	// IsHide whether the attribute is hidden or not
-	IsHide bool
+	IsHidden bool
 	// IsRowId whether the attribute is rowid or not
 	IsRowId bool
 	// Name name of attribute
