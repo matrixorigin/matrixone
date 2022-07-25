@@ -41,7 +41,7 @@ type Config struct {
 	DnStoreTimeout time.Duration
 }
 
-func (cfg *Config) Validate() error {
+func (cfg Config) Validate() error {
 	return nil
 }
 
@@ -57,7 +57,7 @@ func (cfg *Config) Fill() {
 	}
 }
 
-func (cfg *Config) LogStoreExpired(start, current uint64) bool {
+func (cfg Config) LogStoreExpired(start, current uint64) bool {
 	return uint64(int(cfg.LogStoreTimeout/time.Second)*cfg.TickPerSecond)+start < current
 }
 
