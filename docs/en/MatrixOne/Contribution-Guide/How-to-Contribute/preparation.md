@@ -1,14 +1,14 @@
 # **Preparation**
 
-Before contributing, it's necessary to make some preparations to learn more about MatrixOne and other revalant information which can improve developing and reviewing efficiency.
+Before contributing, it's necessary to make some preparations to learn more about MatrixOne and other prerevalant information which can improve developing and reviewing efficiency.
 
-Thanks for understanding that English is used as a shared language in this repository. Maintainers do not use machine translation to avoid miscommunication due to errors in translation. If the description of an issue / PR are written in non-English languages, those may be closed. If English is not your native language and you aren't sure about any of these, don't hesitate to ask for help in your pull request!
+Thanks for understanding that this repository uses English as a shared language. Maintainers do not use machine translation to avoid miscommunication due to errors in translation. If the description of an issue / PR is written in non-English languages, it may be closed. If English is not your native language and you aren't sure about any of these, don't hesitate to ask for help in your pull request!
 
 ## **What is MatrixOne**
 
 ### Basic Information
 
-You can see [MatrixOne Introduction](../../Overview/matrixone-introduction.md) for key features of MatrixOne, [MatrixOne Architecture](../../Overview/matrixone-architecture.md) for MatrixOne architecture and operational logic.  For our distributed framework, see [MatrixCube Tech Design](./../../Overview/matrixcube/matrixcube-introduction.md).
+You can see [MatrixOne Introduction](../../Overview/matrixone-introduction.md) for key features of MatrixOne, [MatrixOne Architecture](../../Overview/matrixone-architecture.md) for MatrixOne architecture, and operational logic.
 
 Besides, you can browse [SQL Reference](../../Reference/SQL-Reference/Data-Definition-Statements/create-database.md) and [Custom Functions](../../Reference/Builtin-Functions/Datetime/year.md) to know more about our interactive details.
 
@@ -16,9 +16,9 @@ These introductions will help you go through you the key concepts and user detai
 
 ### Roadmap
 
-MatrixOne v0.3.0 has been released, you can see [Release Notes](../../Release-Notes/v0.4.0.md) to know more information.
+MatrixOne v0.3.0 has been released, you can see [Release Notes](../../Release-Notes/v0.4.0.md) know more information.
 
-Currently, we are working at v0.4.0 and v0.5.0 releases, the job tasks of these releases are listed in the Github milestones [0.4.0](https://github.com/matrixorigin/matrixone/milestone/5).
+Currently, we are working on v0.4.0 and v0.5.0 releases, the job tasks of these releases are listed in the Github milestones [0.4.0](https://github.com/matrixorigin/matrixone/milestone/5).
 
 For the long-term project roadmap, please refer to [MatrixOne roadmap](https://github.com/matrixorigin/matrixone/issues/613) for a more general overview.
 
@@ -26,7 +26,7 @@ For the long-term project roadmap, please refer to [MatrixOne roadmap](https://g
 
 Contributions to MatrixOne are not limited to writing code. What follows are different ways to participate in the MatrixOne project and engage with our vibrant open-source community. See [Types of Contributions](types-of-contributions.md) for more details.  
 
-* To report a bug or a problem with documentation, please file an [issue](https://github.com/matrixorigin/matrixone/issues/new/choose) providing the details of the problem. Don't forget to add a proper label for your issue, and follow the [issue templates](report-an-issue.md#issue-templates).  
+* To report a bug or a problem with the documentation, please file an [issue](https://github.com/matrixorigin/matrixone/issues/new/choose) providing the details of the problem. Don't forget to add a proper label for your issue, and follow the [issue templates](report-an-issue.md#issue-templates).  
 * To propose a new feature, please file a [new feature request](https://github.com/matrixorigin/matrixone/issues/new/choose). Describe the intended feature and discuss the design and implementation with the team and community. Once the team agrees on the plan, you can follow the [Contribution Workflow](contribute-code.md#workflow) to implement it.  
 * To implement a feature or bug-fix for an existing outstanding issue, follow the [Contribution workflow](contribute-code.md#workflow). If you need more context on a particular issue, comment on the issue to let people know.
 
@@ -41,7 +41,7 @@ For contributing code, [matrixone](https://github.com/matrixorigin/matrixone) is
 | **optools** | The test and deployment utilities  |
 | **pkg** | The main codebase of MatrixOne project  |
 
-For different technical modules, a code structure under `/pkg` is as following table. Please refer to [MatrixOne tech design](../../Overview/MatrixOne-Tech-Design/matrixone-techdesign.md) for a better overview.  
+For different technical modules, a code structure under `/pkg` is as shown in the following table.  
 
 | Directory              | Modules                                                 |
 | ------------------------------ | ------------------------------------------------------------ |
@@ -50,7 +50,6 @@ For different technical modules, a code structure under `/pkg` is as following t
 | **sql/** | MPP SQL Execution  |
 | **sql/vectorize** | Vectorization of SQL Execution   |
 | **catalog/** | Catalog for storing metadata  |
-| **github.com/matrixorigin/matrixcube** | MatrixCube  |
 | **vm/engine** | Storage engine  |
 | **vm/engine/aoe** |  Analytics Optimized Engine  |
 | **vm/engine/tpe** |  Transaction Processing Engine  |
@@ -62,7 +61,7 @@ For contributing documentation, [matrixone](https://github.com/matrixorigin/matr
 | ------------------------------ | ------------------------------------------------------------ |
 | **matrixone/docs/en/MatrixOne** | The content files of MatrixOne documentation website  |
 | **matrixone/docs/rfcs** | The design docs of MatrixOne project |
-| **matrixorigin.io/mkdocs.yml** | The configuration file of documentation website |
+| **matrixorigin.io/mkdocs.yml** | The configuration file of the documentation website |
 | **artwork/docs** | The images, screenshots and diagrams of documentation webstie |
 
 ## **Set up your Development Environment**  

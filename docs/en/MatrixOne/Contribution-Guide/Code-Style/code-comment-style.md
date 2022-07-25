@@ -26,7 +26,7 @@ A comment is generally required for:
 - Package (Go)
 - File
 - Type
-- Constant 
+- Constant
 - Function
 - Method
 - Variable
@@ -41,7 +41,7 @@ A comment is generally required for:
 ### Format of a good comment
 
 - Go
-    
+
     - Use `//` for a single-line comment and trailing comment
     - Use `/* ... */` for a block comment (used only when needed)
     - Use **gofmt** to format your code
@@ -57,23 +57,23 @@ A comment is generally required for:
 ### Language for a good comment
 
 - Word
-    
+
     - Use **American English** rather than British English
-        
+
         - color, canceling, synchronize     (Recommended)
         - colour, cancelling, synchronise   (Not recommended)
-    
+
     - Use correct spelling
 
     - Use **standard or official capitalization**
-        
-        - MatrixOne, MatrixCube, Raft, SQL  (Right)
-        - matrixone, matrixcube, RAFT, sql  (Wrong)
+
+        - MatrixOne, Raft, SQL  (Right)
+        - matrixone, RAFT, sql  (Wrong)
 
     - Use words and expressions consistently
-        
+
         - "dead link" vs. "broken link" (Only one of them can appear in a single document)
-    
+
     - Do not use lengthy compound words
 
     - Do not abbreviate unless it is absolutely necessary
@@ -86,11 +86,11 @@ A comment is generally required for:
     - Use relatively short sentences
 
 - Capitalize the first letter of sentences and end them with periods
-    
+
     - If a lower-case identifier comes at the beginning of a sentence, don't capitalize it
 
         ```
-        // enterGame causes Players to enter the 
+        // enterGame causes Players to enter the
         // video game, which is about a romantic
         // story in ancient China.
         func enterGame() os.Error {
@@ -104,12 +104,12 @@ A comment is generally required for:
     - Open the file    (Wrong)       
 
 - Use "this" instead of "the" to refer to the current thing
-    
+
     - Gets the toolkit for this component   (Recommended)
     - Gets the toolkit for the component    (Not recommended)
 
 - The Markdown format is allowed
-    
+
     - Opens the `log` file  
 
 ### Tips for a good comment

@@ -1,6 +1,6 @@
 # Commit Message and Pull Request Style
 
-This document describes the commit message and Pull Request style applied to all MatrixOrigin repositories. When you are ready to commit, be sure to follow the style guide to write a good commit message, a good Pull Request title, and description.
+This document describes the commit message and Pull Request style applied to all MatrixOrigin repositories. When you are ready to commit, be sure to follow the style guide to write a good commit message, a good Pull Request title, and a description.
 
 ## Why a good commit message matters
 
@@ -17,7 +17,7 @@ Elements of a good commit message:
 
 1. **What is your change? (mandatory)**
 
-    It can be fixing a specific bug, adding a feature, improving performance, reliability and stability, or just be a change for the sake of correctness.
+    It can be fixing a specific bug, adding a feature, improving performance, reliability, and stability, or just being a change for the sake of correctness.
 
 2. **Why was this change made? (mandatory)**
 
@@ -29,7 +29,7 @@ Elements of a good commit message:
 
 ## How to write a good commit message
 
-To write a good commit message, we suggest following good format, cultivating good habits, and using good language.
+To write a good commitment message, we suggest following a good format, cultivating good habits, and using good language.
 
 ### Format of a good commit message
 
@@ -45,7 +45,7 @@ Please follow the following style for **all your commits**:
 
 + For the first subject line:
     - Use no more than 70 characters.
-    - If the changes affect two subsystems, use a comma (and a whitespace) to separate them like `util/codec, util/types:`.
+    - If the changes affect two subsystems, use a comma (and whitespace) to separate them like `util/codec, util/types:`.
     - If the changes affect three or more subsystems, you can use `*` instead, like `*:`.
     - Use a lowercase letter on the text that immediately follows the colon. For example: "media: **update** the DM architecture image"
     - Do not add a period at the end of a commit message.
@@ -75,7 +75,7 @@ Please follow the following style for **all your commits**:
 
 ## Pull Request description style
 
-For Pull Request description in the `Conversation` box, please refer to the following Pull Request description template and include necessary information:
+For the Pull Request description in the `Conversation` box, please refer to the following Pull Request description template and include the necessary information:
 
 ```
 **What type of PR is this?**
