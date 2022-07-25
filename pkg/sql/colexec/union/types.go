@@ -12,53 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package vm
+package union
 
-const (
-	Top = iota
-	Join
-	Semi
-	Left
-	Limit
-	Merge
-	Order
-	Group
-	Output
-	Offset
-	Product
-	Restrict
-	Dispatch
-	Connector
-	Projection
-	Complement
-
-	LoopJoin
-	LoopLeft
-	LoopSemi
-	LoopComplement
-
-	MergeTop
-	MergeLimit
-	MergeOrder
-	MergeGroup
-	MergeOffset
-
-	Deletion
-	Insert
-	Update
-
-	Union
-	Minus
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
-var _ = Minus
-
-// Instruction contains relational algebra
-type Instruction struct {
-	// Op specified the operator code of an instruction.
-	Op int
-	// Arg contains the operand of this instruction.
-	Arg interface{}
+type Argument struct {
+	//  attribute which need not do serialization work
+	ctr Container
 }
 
-type Instructions []Instruction
+type Container struct {
+	// hash table related.
+	hashTable *hashmap.StrHashMap
+
+	// bat records the final result of union operator.
+	bat *batch.Batch
+}
