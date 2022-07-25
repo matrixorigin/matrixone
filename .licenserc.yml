@@ -1,0 +1,35 @@
+header:
+  license:
+    spdx-id: Apache-2.0
+    copyright-owner: Matrix Origin
+  paths:
+    - '**/*.go'
+    - '**/*.c'
+    - '**/*.s'
+    - '**/*.h'
+    - '**/*.cpp'
+    - '**/*.proto'
+  paths-ignore:
+    - 'docs/'
+    - 'test/'
+    - 'optools/'
+    - 'cgo/external/'
+    - 'pkg/frontend/test/'
+    - 'pkg/vm/engine/tae/mergesort/*/sort.go'
+    - 'pkg/vm/engine/tae/mergesort/*/heap.go'
+    - 'pkg/hakeeper/operator/'
+    - '**/*.pb.go'
+    - '**/.gitignore'
+    - '**/goyacc.go'
+    - 'pkg/sql/parsers/dialect/postgresql/postgresql_sql.go'
+    - 'pkg/sql/parsers/dialect/mysql/mysql_sql.go'
+  comment: on-failure
+dependency:
+  files:
+    - go.mod
+  licenses:
+    # assuming go-queue is apache-2.0 licensed
+    # https://github.com/yireyun/go-queue/issues/16
+    - name: github.com/yireyun/go-queue
+      version: v0.0.0-20210520035143-72b190eafcba
+      license: Apache-2.0

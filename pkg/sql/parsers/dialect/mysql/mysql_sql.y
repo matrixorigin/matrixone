@@ -23,7 +23,6 @@ import (
     "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
     "github.com/matrixorigin/matrixone/pkg/sql/parsers/util"
     "github.com/matrixorigin/matrixone/pkg/defines"
-    "github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 %}
 
@@ -218,7 +217,7 @@ import (
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT
 %token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
-%token <str> INT1 INT2 INT3 INT4 INT8 S3
+%token <str> INT1 INT2 INT3 INT4 INT8 URL S3OPTION
 
 
 // Select option
@@ -379,12 +378,12 @@ import (
 %type <funcExpr> function_call_aggregate
 
 %type <unresolvedName> column_name column_name_unresolved
-%type <strs> enum_values force_quote_opt force_quote_list
+%type <strs> enum_values force_quote_opt force_quote_list s3param s3params
 %type <str> sql_id charset_keyword db_name
 %type <str> not_keyword func_not_keyword
 %type <str> reserved_keyword non_reserved_keyword
 %type <str> equal_opt reserved_sql_id reserved_table_id
-%type <str> as_name_opt as_opt_id table_id id_or_var name_string ident compress_type
+%type <str> as_name_opt as_opt_id table_id id_or_var name_string ident
 %type <str> database_id table_alias explain_sym prepare_sym deallocate_sym stmt_name
 %type <unresolvedObjectName> unresolved_object_name table_column_name
 %type <unresolvedObjectName> table_name_unresolved
@@ -582,30 +581,32 @@ load_data_param_opt:
             LoadType: tree.LOCAL,
         }
     }
-|   S3 '(' STRING ',' '[' STRING ',' STRING ']' ',' '[' STRING ',' STRING ',' STRING compress_type ']' ')'
+|   URL S3OPTION '{' s3params '}'
     {
         $$ = &tree.Loadparameter{
-            File: $14,
-            LoadType: tree.S3,
-            Config: fileservice.S3Config{
-                Endpoint: $3,
-                APIKey: $6,
-                APISecret: $8,
-                Bucket: $12,
-                Region: $16,
-            },
-            CompressType: $17,
+            S3options: $4,
         }
     }
-|   
 
-compress_type:
+s3params:
+    s3param
     {
-        $$ = "NONE"
+        $$ = $1
     }
-|   ',' '[' STRING ']'
+|   s3params ',' s3param
     {
-        $$ = $3
+        $$ = append($1, $3...)
+        fmt.Println("wangjian test1 is", $$)
+    }
+
+s3param:
+    {
+        $$ = []string{}
+    }
+|   STRING '=' STRING
+    {
+        $$ = append($$, $1)
+        $$ = append($$, $3)
     }
 
 load_set_spec_opt:
@@ -6551,7 +6552,6 @@ reserved_keyword:
 |   INT3
 |   INT4
 |   INT8
-|   S3
 |   CHECK
 |	CONSTRAINT
 |   PRIMARY
@@ -6733,6 +6733,8 @@ non_reserved_keyword:
 |	SOME
 |   TIMESTAMP %prec LOWER_THAN_STRING
 |   DATE %prec LOWER_THAN_STRING
+|   URL
+|   S3OPTION
 
 func_not_keyword:
 	DATE_ADD

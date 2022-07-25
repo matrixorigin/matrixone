@@ -14,7 +14,7 @@
 // Portions of this file are additionally subject to the following
 // copyright.
 //
-// Copyright (C) 2021 MatrixOrigin.
+// Copyright (C) 2021 Matrix Origin.
 //
 // Simplified the behavior and the interface of the status.
 

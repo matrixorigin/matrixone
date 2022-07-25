@@ -562,3 +562,31 @@ func Test_PrintThreadInfo(t *testing.T) {
 
 	})
 }
+
+func Test_getLoadDataReader(t *testing.T) {
+	convey.Convey("getLoadDataReader succ", t, func() {
+		loadParam := &tree.Loadparameter{
+			LoadType: tree.LOCAL,
+			File:     "a.txt",
+		}
+
+		dataFile, err := getLoadDataReader(loadParam)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(dataFile, convey.ShouldBeNil)
+
+		loadParam.File = "/Users/a.txt"
+		dataFile, err = getLoadDataReader(loadParam)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(dataFile, convey.ShouldBeNil)
+
+		loadParam.LoadType = tree.S3
+		dataFile, err = getLoadDataReader(loadParam)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(dataFile, convey.ShouldBeNil)
+
+		loadParam.LoadType = 4
+		dataFile, err = getLoadDataReader(loadParam)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(dataFile, convey.ShouldBeNil)
+	})
+}

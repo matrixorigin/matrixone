@@ -26,6 +26,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -33,6 +34,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
@@ -47,6 +49,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/simdcsv"
+	"github.com/pierrec/lz4"
 )
 
 type LoadResult struct {
@@ -1041,15 +1044,17 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
-						fs := field
-						d, err := types.ParseStringToDecimal64(fs, vec.Typ.Width, vec.Typ.Scale)
+						d, err := types.Decimal64_FromString(field)
 						if err != nil {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							// we tolerate loss of digits.
+							if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = types.Decimal64_Zero
 							}
-							result.Warnings++
-							d = types.Decimal64(0)
 						}
 						cols[rowIdx] = d
 					}
@@ -1058,15 +1063,17 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
-						fs := field
-						d, err := types.ParseStringToDecimal128(fs, vec.Typ.Width, vec.Typ.Scale)
+						d, err := types.Decimal128_FromString(field)
 						if err != nil {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							// we tolerate loss of digits.
+							if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = types.Decimal128_Zero
 							}
-							result.Warnings++
-							d = types.InitDecimal128(0)
 						}
 						cols[rowIdx] = d
 					}
@@ -1552,7 +1559,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 								return err
 							}
 							result.Warnings++
-							d = types.Decimal64(0)
+							d = types.Decimal64_Zero
 							//break
 						}
 						cols[i] = d
@@ -1574,7 +1581,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 								return err
 							}
 							result.Warnings++
-							d = types.InitDecimal128(0)
+							d = types.Decimal128_Zero
 							//break
 						}
 						cols[i] = d
@@ -1973,11 +1980,11 @@ func PrintThreadInfo(handler *ParseLineHandler, close *CloseFlag, a time.Duratio
 
 func ReadFromS3(loadParam *tree.Loadparameter) (io.ReadCloser, error) {
 	var config fileservice.S3Config
-	config.Bucket = loadParam.Config.Bucket
-	config.APIKey = loadParam.Config.APIKey
-	config.Region = loadParam.Config.Region
-	config.APISecret = loadParam.Config.APISecret
-	config.Endpoint = loadParam.Config.Endpoint
+	config.Bucket = "wangjian-test"  //loadParam.Config.Bucket
+	config.Region = "us-west-2"		//loadParam.Config.Region
+	config.APIKey = "AKIAW2D4ZBGT5LF74CXS" //loadParam.Config.APIKey
+	config.APISecret = "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"//loadParam.Config.APISecret
+	config.Endpoint = "s3.us-west-2.amazonaws.com"//loadParam.Config.Endpoint
 
 	os.Setenv("AWS_REGION", config.Region)
 	os.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
@@ -1992,6 +1999,15 @@ func ReadFromS3(loadParam *tree.Loadparameter) (io.ReadCloser, error) {
 		return nil, err
 	}
 
+	loadParam.File = "a.txt"
+	index := strings.LastIndex(loadParam.File, "/")
+	var dir, file string = "", loadParam.File
+	if index != -1 {
+		dir = string([]byte(loadParam.File)[0:index])
+		file = string([]byte(loadParam.File)[index+1:])
+	}
+
+
 	var r io.ReadCloser
 	vec := fileservice.IOVector{
 		FilePath: loadParam.File,
@@ -2004,18 +2020,75 @@ func ReadFromS3(loadParam *tree.Loadparameter) (io.ReadCloser, error) {
 		},
 	}
 	ctx := context.Background()
-	err = fs.Read(ctx, &vec)
+	DirEntry, err := fs.List(ctx, dir)
 	if err != nil {
 		return nil, err
 	}
 
+	for _, entry := range DirEntry {
+		matched, _ := regexp.Match(file, []byte(entry.Name))
+		if matched {
+			vec.FilePath = entry.Name
+			break
+		}
+	}
+
+	err = fs.Read(ctx, &vec)
+	if err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+func ReadFromLocal(loadParam *tree.Loadparameter) (io.ReadCloser, error) {
+	index := strings.LastIndex(loadParam.File, "/")
+	var dir, file string = "", loadParam.File
+	if index != -1 {
+		dir = string([]byte(loadParam.File)[0:index])
+		file = string([]byte(loadParam.File)[index+1:])
+	}
+
+	fs, err := fileservice.NewLocalETLFS(dir)
+	if err != nil {
+		return nil, err
+	}
+	var r io.ReadCloser
+	vec := fileservice.IOVector{
+		FilePath: file,
+		Entries: []fileservice.IOEntry{
+			0: {
+				Offset:            0,
+				Size:              -1,
+				ReadCloserForRead: &r,
+			},
+		},
+	}
+
+	ctx := context.Background()
+	DirEntry, err := fs.List(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range DirEntry {
+		matched, _ := regexp.Match(file, []byte(entry.Name))
+		if matched {
+			vec.FilePath = entry.Name
+			break
+		}
+	}
+
+	err = fs.Read(ctx, &vec)
+	if err != nil {
+		return nil, err
+	}
 	return r, nil
 }
 
 func getLoadDataReader(loadParam *tree.Loadparameter) (io.ReadCloser, error) {
 	switch loadParam.LoadType {
 	case tree.LOCAL:
-		dataFile, err := os.Open(loadParam.File)
+		dataFile, err := ReadFromLocal(loadParam)
 		if err != nil {
 			return nil, err
 		}
@@ -2031,9 +2104,30 @@ func getLoadDataReader(loadParam *tree.Loadparameter) (io.ReadCloser, error) {
 	}
 }
 
+func getCompressType(loadParam *tree.Loadparameter) string {
+	if loadParam.CompressType != "" {
+		return loadParam.CompressType
+	}
+	index := strings.LastIndex(loadParam.File, ".")
+	if index == -1 {
+		return tree.NOCOMPRESS
+	}
+	tail := string([]byte(loadParam.File)[index+1:])
+	switch tail {
+	case "gz":
+		return tree.GZIP
+	case "bz2":
+		return tree.BZIP2
+	case "lz4":
+		return tree.LZ4
+	default:
+		return tree.NOCOMPRESS
+	}
+}
+
 func getUnCompressReader(loadParam *tree.Loadparameter, r io.ReadCloser) (io.ReadCloser, error) {
-	switch strings.ToLower(loadParam.CompressType) {
-	case tree.NOCOMPRESS, tree.LOCALFILE:
+	switch strings.ToLower(getCompressType(loadParam)) {
+	case tree.NOCOMPRESS:
 		return r, nil
 	case tree.GZIP:
 		r, err := gzip.NewReader(r)
@@ -2042,8 +2136,7 @@ func getUnCompressReader(loadParam *tree.Loadparameter, r io.ReadCloser) (io.Rea
 		}
 		return r, nil
 	case tree.BZIP2:
-		tmp := bzip2.NewReader(r)
-		return io.NopCloser(tmp), nil
+		return io.NopCloser(bzip2.NewReader(r)), nil
 	case tree.FLATE:
 		r = flate.NewReader(r)
 		return r, nil
@@ -2053,6 +2146,8 @@ func getUnCompressReader(loadParam *tree.Loadparameter, r io.ReadCloser) (io.Rea
 			return nil, err
 		}
 		return r, nil
+	case tree.LZ4:
+		return io.NopCloser(lz4.NewReader(r)), nil
 	case tree.LZW:
 		return nil, fmt.Errorf("the compress type %s is not support now", loadParam.CompressType)
 	default:
@@ -2208,9 +2303,9 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	go func() {
 		defer wg.Done()
 		wait_b := time.Now()
-
 		m.Lock()
 		defer m.Unlock()
+
 		err := handler.simdCsvReader.ReadLoop(getLineOutChan(handler.simdCsvGetParsedLinesChan))
 		if err != nil {
 			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_READ_SIMDCSV_ERROR, err, nil)

@@ -24,7 +24,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func NewProcess() *process.Process {
+	hm := host.New(1 << 30)
+	gm := guest.New(1<<30, hm)
+	proc := process.New(mheap.New(gm))
+	proc.Lim.Size = 1 << 20
+	proc.Lim.BatchRows = 1 << 20
+	proc.Lim.BatchSize = 1 << 20
+	proc.Lim.ReaderSize = 1 << 20
+	return proc
+}
 
 func NewBatch(ts []types.Type, random bool, n int, m *mheap.Mheap) *batch.Batch {
 	bat := batch.NewWithSize(len(ts))
@@ -128,7 +142,7 @@ func NewVector(n int, typ types.Type, m *mheap.Mheap, random bool, Values interf
 	}
 }
 
-func NewBoolVector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []bool) *vector.Vector {
+func NewBoolVector(n int, typ types.Type, m *mheap.Mheap, _ bool, vs []bool) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -404,7 +418,7 @@ func NewDecimal64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs [
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append(types.Decimal64(v), m); err != nil {
+		if err := vec.Append(types.InitDecimal64(int64(v)), m); err != nil {
 
 			vec.Free(m)
 			return nil
@@ -429,7 +443,7 @@ func NewDecimal128Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs 
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append(types.Decimal128{Lo: int64(v), Hi: int64(v)}, m); err != nil {
+		if err := vec.Append(types.InitDecimal128(int64(v)), m); err != nil {
 			vec.Free(m)
 			return nil
 		}

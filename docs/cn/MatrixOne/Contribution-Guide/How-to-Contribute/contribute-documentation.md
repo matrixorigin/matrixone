@@ -59,13 +59,13 @@ MatrixOne文档内容可以分为如下几个模块：
 **3.** 克隆[matrixorigin.io](https://github.com/matrixorigin/matrixorigin.io)仓库，使用`--repository`来引用`matrixone`中的内容。
 
 ```
-$ git clone --recursive git@github.com:yourusername/matrixorigin.io.git
+git clone --recursive git@github.com:yourusername/matrixorigin.io.git
 ```
 
 克隆[matrixone](https://github.com/matrixorigin/matrixorigin.io)仓库。
 
 ```
-$ git clone git@github.com:yourusername/matrixone.git
+git clone git@github.com:yourusername/matrixone.git
 ```
 
 **4.** 在您的本地matrixone文件夹中将`matrixone`仓库添加为远程仓库。
@@ -83,7 +83,7 @@ git remote add upstream https://github.com/matrixorigin/matrixorigin.io.git
 **5.** 本地的matrixorigin.io文件夹中将包含文档所需要的全部文件，因此您可以运行 `mkdocs serve` 命令, 然后在`http://localhost:8000`网址中预览文档，检查整个项目文件是否可以正常运行，并且后续也可以检查您所做的修改是否正确。
 
 ```
-$ mkdocs serve
+mkdocs serve
 ```
 
 **6.** 进行文档的修改和完善，如果您想对项目的设置进行改动，或者添加新的page来更新sitemap，或更新 CI&CD 工作流代码，您也可以通过`http://localhost:8000`来查看您的修改是否有效。  

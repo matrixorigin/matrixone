@@ -14,5 +14,7 @@
 
 package bit_and
 
-type BitAnd[T1, T2 any] struct {
+import "github.com/matrixorigin/matrixone/pkg/container/types"
+
+type BitAnd[T1 types.Ints | types.UInts | types.Floats] struct {
 }

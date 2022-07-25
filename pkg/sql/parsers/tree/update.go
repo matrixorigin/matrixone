@@ -119,13 +119,14 @@ const (
 )
 
 const (
-	LOCALFILE = ""
+	AUTOTYPE   = "auto"
 	NOCOMPRESS = "none"
-	GZIP = "gzip"
-	BZIP2 = "bzip2"
-	FLATE = "flate"
-	LZW = "lzw"
-	ZLIB = "zlib"
+	GZIP       = "gzip"
+	BZIP2      = "bz2"
+	FLATE      = "flate"
+	LZW        = "lzw"
+	ZLIB       = "zlib"
+	LZ4        = "lz4"
 )
 
 type Loadparameter struct {
@@ -134,6 +135,7 @@ type Loadparameter struct {
 	Config       fileservice.S3Config
 	LoadType     int
 	CompressType string
+	S3options    []string
 }
 
 //Load data statement
@@ -157,13 +159,29 @@ type Load struct {
 	LoadParam *Loadparameter
 }
 
+func getLoadParamStr(load *Loadparameter) string {
+	if load.Config.Bucket == "" {
+		return load.File
+	} else {
+		str := "s3option("
+		str += "'" + load.Config.Endpoint + "',"
+		str += " ['" + load.Config.APIKey + "',"
+		str += " '" + load.Config.APISecret + "'],"
+		str += " ['" + load.Config.Bucket + "',"
+		str += " '" + load.File + "',"
+		str += " '" + load.Config.Region + "',"
+		str += " ['" + load.CompressType + "']])"
+		return str
+	}
+}
+
 func (node *Load) Format(ctx *FmtCtx) {
 	ctx.WriteString("load data")
 	if node.Local {
 		ctx.WriteString(" local")
 	}
 	ctx.WriteString(" infile ")
-	ctx.WriteString(node.LoadParam.File)
+	ctx.WriteString(getLoadParamStr(node.LoadParam))
 
 	switch node.DuplicateHandling.(type) {
 	case *DuplicateKeyError:

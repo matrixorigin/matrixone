@@ -485,6 +485,12 @@ var (
 		input:  "load data infile 'data.txt' into table db.a",
 		output: "load data infile data.txt into table db.a",
 	}, {
+		input:  "load data infile s3option('s3.us-west-2.amazonaws.com', ['YOUR-ACCESS-KEY-HERE', 'YOUR-SECRET-KEY-HERE'], ['wangjian-test', 'a.txt', 'us-west-2']) into table t1 fields terminated by '\t' enclosed by '\t' escaped by '\t'",
+		output: "load data infile s3option('s3.us-west-2.amazonaws.com', ['YOUR-ACCESS-KEY-HERE', 'YOUR-SECRET-KEY-HERE'], ['wangjian-test', 'a.txt', 'us-west-2', ['none']]) into table t1 fields terminated by \t enclosed by \t escaped by \t",
+	}, {
+		input:  "load data infile s3option('s3.us-west-2.amazonaws.com', ['YOUR-ACCESS-KEY-HERE', 'YOUR-SECRET-KEY-HERE'], ['wangjian-test', 'a.txt.gz', 'us-west-2', ['gzip']]) into table t1 fields terminated by '\t' enclosed by '\t' escaped by '\t'",
+		output: "load data infile s3option('s3.us-west-2.amazonaws.com', ['YOUR-ACCESS-KEY-HERE', 'YOUR-SECRET-KEY-HERE'], ['wangjian-test', 'a.txt.gz', 'us-west-2', ['gzip']]) into table t1 fields terminated by \t enclosed by \t escaped by \t",
+	}, {
 		input:  "show tables from test01 where tables_in_test01 like '%t2%'",
 		output: "show tables from test01 where tables_in_test01 like %t2%",
 	}, {

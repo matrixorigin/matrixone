@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
@@ -108,7 +107,7 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 		postCommitFunc:  postCommitFunc,
 	}
 	if !newDir {
-		files, err := ioutil.ReadDir(dir)
+		files, err := os.ReadDir(dir)
 		if err != nil {
 			return nil, err
 		}
@@ -123,14 +122,18 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 			if err != nil {
 				return nil, err
 			}
+			info, err := f.Info()
+			if err != nil {
+				return nil, err
+			}
 			vf := &vFile{
 				RWMutex:    &sync.RWMutex{},
 				File:       file,
 				version:    version,
 				commitCond: *sync.NewCond(new(sync.Mutex)),
 				history:    rf.history,
-				size:       int(f.Size()),
-				syncpos:    int(f.Size()),
+				size:       int(info.Size()),
+				syncpos:    int(info.Size()),
 			}
 			vf.vInfo = newVInfo(vf)
 			// vf.ReadMeta()

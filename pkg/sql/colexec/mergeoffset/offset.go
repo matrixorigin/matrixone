@@ -23,61 +23,83 @@ import (
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
-	n := arg.(*Argument)
-	buf.WriteString(fmt.Sprintf("mergeOffset(%d)", n.Offset))
+	ap := arg.(*Argument)
+	buf.WriteString(fmt.Sprintf("mergeOffset(%d)", ap.Offset))
 }
 
 func Prepare(_ *process.Process, arg interface{}) error {
-	n := arg.(*Argument)
-	n.ctr.seen = 0
+	ap := arg.(*Argument)
+	ap.ctr = new(container)
+	ap.ctr.seen = 0
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
-	n := arg.(*Argument)
+func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
+	ap := arg.(*Argument)
+	for {
+		switch ap.ctr.state {
+		case Eval:
+			anal := proc.GetAnalyze(idx)
+			defer anal.Stop()
+			ok, err := ap.ctr.eval(ap, proc, anal)
+			if err != nil {
+				return ok, err
+			}
+			if ok {
+				ap.ctr.state = End
+			}
+			return ok, err
+		default:
+			proc.SetInputBatch(nil)
+			return true, nil
+		}
+	}
+}
+
+func (ctr *container) eval(ap *Argument, proc *process.Process, anal process.Analyze) (bool, error) {
 	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
 		reg := proc.Reg.MergeReceivers[i]
 		bat := <-reg.Ch
-		// deal special case for bat
-		{
-			// 1. the last batch at this receiver
-			if bat == nil {
-				proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:i], proc.Reg.MergeReceivers[i+1:]...)
-				i--
-				continue
-			}
-			// 2. an empty batch
-			if len(bat.Zs) == 0 {
-				i--
-				continue
-			}
+		// 1. the last batch at this receiver
+		if bat == nil {
+			proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:i], proc.Reg.MergeReceivers[i+1:]...)
+			i--
+			continue
 		}
-
-		if n.ctr.seen > n.Offset {
-			bat.Clean(proc.Mp)
+		// 2. an empty batch
+		if bat.Length() == 0 {
+			i--
+			continue
+		}
+		anal.Input(bat)
+		if ap.ctr.seen > ap.Offset {
+			anal.Output(bat)
+			proc.SetInputBatch(bat)
 			return false, nil
 		}
 		length := len(bat.Zs)
 		// bat = PartOne + PartTwo, and PartTwo is required.
-		if n.ctr.seen+uint64(length) > n.Offset {
-			sels := newSels(int64(n.Offset-n.ctr.seen), int64(length)-int64(n.Offset-n.ctr.seen))
-			n.ctr.seen += uint64(length)
+		if ap.ctr.seen+uint64(length) > ap.Offset {
+			sels := newSels(int64(ap.Offset-ap.ctr.seen), int64(length)-int64(ap.Offset-ap.ctr.seen), proc)
+			ap.ctr.seen += uint64(length)
 			batch.Shrink(bat, sels)
-			proc.Reg.InputBatch = bat
+			proc.PutSels(sels)
+			anal.Output(bat)
+			proc.SetInputBatch(bat)
 			return false, nil
 		}
-		n.ctr.seen += uint64(length)
+		ap.ctr.seen += uint64(length)
 		bat.Clean(proc.Mp)
-		proc.Reg.InputBatch = nil
+		proc.SetInputBatch(nil)
 		i--
 	}
 	return true, nil
 }
 
-func newSels(start, count int64) []int64 {
-	sels := make([]int64, count)
+func newSels(start, count int64, proc *process.Process) []int64 {
+	sels := proc.GetSels()
 	for i := int64(0); i < count; i++ {
-		sels[i] = start + i
+		sels = append(sels, start+i)
 	}
 	return sels[:count]
 }
