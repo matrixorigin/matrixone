@@ -50,6 +50,19 @@ func NewBatch(ts []types.Type, random bool, n int, m *mheap.Mheap) *batch.Batch 
 	return bat
 }
 
+func NewBatchWithVectors(vs []*vector.Vector, zs []int64) *batch.Batch {
+	bat := batch.NewWithSize(len(vs))
+	if len(vs) > 0 {
+		l := vector.Length(vs[0])
+		if zs == nil {
+			zs = MakeBatchZs(l, false)
+		}
+		bat.Zs = zs
+		bat.Vecs = vs
+	}
+	return bat
+}
+
 func NewVector(n int, typ types.Type, m *mheap.Mheap, random bool, Values interface{}) *vector.Vector {
 	switch typ.Oid {
 	case types.T_bool:
