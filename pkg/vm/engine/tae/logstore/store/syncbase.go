@@ -415,7 +415,7 @@ func (base *syncBase) MakePostCommitEntry(id int) entry.Entry {
 		panic(err)
 	}
 	info := &entry.Info{}
-	info.PostCommitVersion = id
+	// info.PostCommitVersion = id
 	info.Group = entry.GTInternal
 	e.SetInfo(info)
 	return e
@@ -495,7 +495,7 @@ func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 		}
 	case entry.GTUncommit:
 	case entry.GTInternal:
-		atomic.StoreUint64(&base.syncedVersion, uint64(v.PostCommitVersion))
+		// atomic.StoreUint64(&base.syncedVersion, uint64(v.PostCommitVersion))
 	default:
 		base.tidLsnMapmu.Lock()
 		if v.Group >= entry.GTCustomizedStart {

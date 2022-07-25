@@ -57,7 +57,7 @@ func (w *WalImpl) makeCheckpointEntry(gid uint32, indexes []*wal.Index) (ckpEntr
 	}
 	info := &entry.Info{
 		Group: entry.GTCKp,
-		Checkpoints: []entry.CkpRanges{{
+		Checkpoints: []*entry.CkpRanges{{
 			Group:   gid,
 			Command: commands,
 		}},

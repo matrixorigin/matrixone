@@ -114,7 +114,7 @@ func TestAppender(t *testing.T) {
 		if i%4 == 0 && i > 0 {
 			checkpointInfo := &entry.Info{
 				Group: entry.GTCKp,
-				Checkpoints: []entry.CkpRanges{{
+				Checkpoints: []*entry.CkpRanges{{
 					Group: entry.GTCustomizedStart,
 					Ranges: common.NewClosedIntervalsByInterval(
 						&common.ClosedInterval{
@@ -172,7 +172,7 @@ func TestVInfo(t *testing.T) {
 	assert.Nil(t, err)
 	checkpointInfo := &entry.Info{
 		Group: entry.GTCKp,
-		Checkpoints: []entry.CkpRanges{{
+		Checkpoints: []*entry.CkpRanges{{
 			Group: 1,
 			Ranges: common.NewClosedIntervalsByInterval(
 				&common.ClosedInterval{
@@ -212,7 +212,7 @@ func TestReadVInfo(t *testing.T) {
 		if i%4 == 0 && i > 0 {
 			checkpointInfo := &entry.Info{
 				Group: entry.GTCKp,
-				Checkpoints: []entry.CkpRanges{{
+				Checkpoints: []*entry.CkpRanges{{
 					Group: 1,
 					Ranges: common.NewClosedIntervalsByInterval(
 						&common.ClosedInterval{

@@ -123,14 +123,14 @@ func (info *vInfo) MetaReadFrom(r io.Reader) (n int64, err error) {
 	}
 	return
 }
-func (info *vInfo) GetUncommitGidTid(lsn uint64) *entry.Tid {
+func (info *vInfo) GetUncommitGidTid(lsn uint64)  {
 	g := info.groups[entry.GTUncommit]
 	if g == nil {
-		return nil
+		return 
 	}
 	// uncommit := g.(*uncommitGroup)
 	// return uncommit.UncommitTxn[lsn]
-	return nil
+	return 
 }
 func (info *vInfo) UncommitWriteTo(w io.Writer) (n int64, err error) {
 	info.groupmu.RLock()
@@ -484,10 +484,10 @@ func (info *vInfo) Log(v any) error {
 	return nil
 }
 func (info *vInfo) LogInternalInfo(entryInfo *entry.Info) error {
-	id := entryInfo.PostCommitVersion
-	if info.ckpInfoVersion < id {
-		info.ckpInfoVersion = id
-	}
+	// id := entryInfo.PostCommitVersion
+	// if info.ckpInfoVersion < id {
+	// 	info.ckpInfoVersion = id
+	// }
 	return nil
 }
 func (info *vInfo) LogUncommitInfo(entryInfo *entry.Info) error {

@@ -86,7 +86,7 @@ func appendAnotherEntry(t *testing.T, s *baseStore, buf []byte) {
 func appendCkpEntry(t *testing.T, s *baseStore, lsn uint64) entry.Entry {
 	info := &entry.Info{
 		Group: entry.GTCKp,
-		Checkpoints: []entry.CkpRanges{{
+		Checkpoints: []*entry.CkpRanges{{
 			Group:  11,
 			Ranges: common.NewClosedIntervalsByInterval(&common.ClosedInterval{Start: 0, End: lsn}),
 		}},
@@ -108,7 +108,7 @@ func appendPartialCkpEntry(t *testing.T, s *baseStore, lsn uint64, csns []uint32
 	cmds[lsn] = cmd
 	info := &entry.Info{
 		Group: entry.GTCKp,
-		Checkpoints: []entry.CkpRanges{{
+		Checkpoints: []*entry.CkpRanges{{
 			Group:   11,
 			Command: cmds,
 		}},
@@ -164,7 +164,7 @@ func appendEntries(t *testing.T, s *baseStore, buf []byte, tid uint64) {
 	cmds[cmtLsn] = cmd
 	info := &entry.Info{
 		Group: entry.GTCKp,
-		Checkpoints: []entry.CkpRanges{{
+		Checkpoints: []*entry.CkpRanges{{
 			Group:   11,
 			Command: cmds,
 		}},
@@ -706,7 +706,7 @@ func TestStore(t *testing.T) {
 					end := ckp - 1
 					checkpointInfo := &entry.Info{
 						Group: entry.GTCKp,
-						Checkpoints: []entry.CkpRanges{{
+						Checkpoints: []*entry.CkpRanges{{
 							Group: groupNo,
 							Ranges: common.NewClosedIntervalsByInterval(
 								&common.ClosedInterval{
@@ -831,7 +831,7 @@ func TestPartialCkp(t *testing.T) {
 	ckp1 := entry.GetBase()
 	checkpointInfo := &entry.Info{
 		Group: entry.GTCKp,
-		Checkpoints: []entry.CkpRanges{{
+		Checkpoints: []*entry.CkpRanges{{
 			Group: entry.GTCustomizedStart,
 			Command: map[uint64]entry.CommandInfo{commitLsn: {
 				CommandIds: []uint32{0},
@@ -850,7 +850,7 @@ func TestPartialCkp(t *testing.T) {
 	ckp2 := entry.GetBase()
 	checkpointInfo2 := &entry.Info{
 		Group: entry.GTCKp,
-		Checkpoints: []entry.CkpRanges{{
+		Checkpoints: []*entry.CkpRanges{{
 			Group: entry.GTCustomizedStart,
 			Command: map[uint64]entry.CommandInfo{commitLsn: {
 				CommandIds: []uint32{1},
@@ -967,7 +967,7 @@ func TestReplay1(t *testing.T) {
 					end := ckp
 					checkpointInfo := &entry.Info{
 						Group: entry.GTCKp,
-						Checkpoints: []entry.CkpRanges{{
+						Checkpoints: []*entry.CkpRanges{{
 							Group: groupNo,
 							Ranges: common.NewClosedIntervalsByInterval(
 								&common.ClosedInterval{
@@ -1139,7 +1139,7 @@ func TestLoad(t *testing.T) {
 				case 49: //ckp entry
 					e.SetType(entry.ETCheckpoint)
 					checkpointInfo := &entry.Info{
-						Checkpoints: []entry.CkpRanges{{
+						Checkpoints: []*entry.CkpRanges{{
 							Group: groupNo,
 							Ranges: common.NewClosedIntervalsByInterval(
 								&common.ClosedInterval{

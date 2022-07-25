@@ -89,7 +89,7 @@ func main() {
 		cmds[cmtLsn] = cmd
 		info := &entry.Info{
 			Group: entry.GTCKp,
-			Checkpoints: []entry.CkpRanges{{
+			Checkpoints: []*entry.CkpRanges{{
 				Group:   11,
 				Command: cmds,
 			}},

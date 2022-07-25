@@ -193,14 +193,14 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver, addrInMeta bo
 		// 	r.uncommit[tinfo.Group] = tidMap
 		// }
 	case entry.GTInternal:
-		if info.PostCommitVersion >= r.ckpVersion {
-			r.ckpVersion = info.PostCommitVersion
-			replayEty := &replayEntry{
-				payload: make([]byte, e.GetPayloadSize()),
-			}
-			copy(replayEty.payload, e.GetPayload())
-			r.ckpEntry = replayEty
-		}
+		// if info.PostCommitVersion >= r.ckpVersion {
+		// 	r.ckpVersion = info.PostCommitVersion
+		// 	replayEty := &replayEntry{
+		// 		payload: make([]byte, e.GetPayloadSize()),
+		// 	}
+		// 	copy(replayEty.payload, e.GetPayload())
+		// 	r.ckpEntry = replayEty
+		// }
 	default:
 		replayEty := &replayEntry{
 			entryType: e.GetType(),
@@ -382,16 +382,16 @@ func (r *replayer) replayHandlerWithCkpForUCGroups(vf VFile, o ReplayObserver) e
 	}
 	for lsn, offset := range addrs {
 		r.updateGroupLSN(gid, lsn)
-		gidtid := vf.GetUncommitGidTid(lsn)
-		tidLsn, ok := r.tidlsnMap[gidtid.Group]
-		if ok {
-			commitLsn, ok := tidLsn[gidtid.Tid]
-			if ok {
-				if IsCheckpointed(gidtid.Group, commitLsn, r.checkpointrange) {
-					continue
-				}
-			}
-		}
+		// gidtid := vf.GetUncommitGidTid(lsn)
+		// tidLsn, ok := r.tidlsnMap[gidtid.Group]
+		// if ok {
+		// 	commitLsn, ok := tidLsn[gidtid.Tid]
+		// 	if ok {
+		// 		if IsCheckpointed(gidtid.Group, commitLsn, r.checkpointrange) {
+		// 			continue
+		// 		}
+		// 	}
+		// }
 		e, err := vf.LoadByOffset(offset)
 		if err != nil {
 			panic(err)

@@ -113,7 +113,7 @@ func TestWal(t *testing.T) {
 	wal := NewLogStore(driver)
 	defer wal.Close()
 
-	entryCount := 50000
+	entryCount := 5
 	entries := make([]entry.Entry, 0)
 	wg := sync.WaitGroup{}
 	worker, _ := ants.NewPool(100)

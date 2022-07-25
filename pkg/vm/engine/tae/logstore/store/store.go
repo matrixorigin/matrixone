@@ -171,7 +171,10 @@ func (bs *baseStore) PrepareEntry(e entry.Entry) (entry.Entry, error) {
 	}
 	v := v1.(*entry.Info)
 	v.Info = &VFileAddress{}
-	buf := v.Marshal()
+	buf,err := v.Marshal()
+	if err!=nil{
+		panic(err)
+	}
 	size := len(buf)
 	e.SetInfoSize(size)
 	e.SetInfoBuf(buf)

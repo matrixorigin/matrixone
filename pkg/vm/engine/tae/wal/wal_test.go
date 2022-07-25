@@ -148,10 +148,7 @@ func TestCheckpoint2(t *testing.T) {
 	uncommit.SetType(entry.ETCustomizedStart)
 	info := &entry.Info{
 		Group: entry.GTUncommit,
-		Uncommits: []entry.Tid{{
-			Group: GroupC,
-			Tid:   1,
-		}},
+		Uncommits: 1,
 	}
 	uncommit.SetInfo(info)
 	buf1 := make([]byte, common.K)

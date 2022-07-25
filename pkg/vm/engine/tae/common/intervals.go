@@ -134,6 +134,13 @@ func (intervals *ClosedIntervals) GetCardinality() int {
 	return cardinality
 }
 func (intervals *ClosedIntervals) WriteTo(w io.Writer) (n int64, err error) {
+	if intervals == nil {
+		if err = binary.Write(w, binary.BigEndian, uint64(0)); err != nil {
+			return
+		}
+		n += 8
+		return n, nil
+	}
 	if err = binary.Write(w, binary.BigEndian, uint64(len(intervals.Intervals))); err != nil {
 		return
 	}

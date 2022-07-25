@@ -52,7 +52,7 @@ type VFile interface {
 	ReplayUCWithCkp(*replayer, ReplayObserver) error
 	GetAddrs() (map[uint32]map[uint64]int, *sync.RWMutex)
 	OnReplayCommitted()
-	GetUncommitGidTid(lsn uint64) *entry.Tid
+	// GetUncommitGidTid(lsn uint64) *entry.Tid
 
 	Load(groupId uint32, lsn uint64) (entry.Entry, error)
 	LoadByOffset(offset int) (entry.Entry, error)
