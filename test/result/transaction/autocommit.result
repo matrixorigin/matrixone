@@ -64,10 +64,6 @@ rollback;
 select * from t2;
 a
 insert into t1 values(3);
-a
-1
-2
-3
 explain select * from t1;
 QUERY PLAN
 Project(cost=0.00..0.00 card=3.00 ndv=0.00 rowsize=0
