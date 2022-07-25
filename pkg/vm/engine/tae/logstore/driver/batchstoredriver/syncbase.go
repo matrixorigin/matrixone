@@ -33,18 +33,18 @@ var (
 
 type syncBase struct {
 	*sync.RWMutex
-	Lsn              uint64
+	Lsn              uint64 //r
 	lsnmu            sync.RWMutex
-	checkpointing    uint64
+	checkpointing    uint64 //r/(i first entry)
 	ckpmu            *sync.RWMutex
-	truncatedVersion int
-	syncing          uint64
-	synced           uint64
-	addrs            map[int]*common.ClosedIntervals //group-version-glsn range
+	truncatedVersion int //i
+	syncing          uint64 //r
+	synced           uint64//r
+	addrs            map[int]*common.ClosedIntervals //group-version-glsn range //r
 	addrmu           sync.RWMutex
 	commitCond       sync.Cond
 
-	calculatedCond sync.Cond
+	// calculatedCond sync.Cond
 }
 
 func newSyncBase() *syncBase {
@@ -54,7 +54,7 @@ func newSyncBase() *syncBase {
 		addrmu:         sync.RWMutex{},
 		ckpmu:          &sync.RWMutex{},
 		commitCond:     *sync.NewCond(new(sync.Mutex)),
-		calculatedCond: *sync.NewCond(new(sync.Mutex)),
+		// calculatedCond: *sync.NewCond(new(sync.Mutex)),
 	}
 }
 

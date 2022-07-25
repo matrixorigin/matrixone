@@ -20,7 +20,7 @@ import (
 	"sync"
 
 	// "github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 )
@@ -35,15 +35,15 @@ var (
 type vInfo struct {
 	vf *vFile
 
-	ckpInfoVersion int
+	// ckpInfoVersion int
 
-	Addrs    map[uint64]int //lsn-offset
+	Addrs    map[uint64]int //lsn-offset //r
 	addrmu   *sync.RWMutex
 	addrCond sync.Cond
 
-	unloaded    bool
-	inited      bool
-	loadmu      sync.Mutex
+	// unloaded    bool
+	// inited      bool
+	// loadmu      sync.Mutex
 	logQueue    chan any
 	flushWg     sync.WaitGroup
 	flushCtx    context.Context
@@ -216,13 +216,13 @@ func (info *vInfo) Log(v any) error {
 	// fmt.Printf("%p|addrs are %v\n", info, info.Addrs)
 	return nil
 }
-func (info *vInfo) LogInternalInfo(entryInfo *entry.Info) error {
-	id := entryInfo.PostCommitVersion
-	if info.ckpInfoVersion < id {
-		info.ckpInfoVersion = id
-	}
-	return nil
-}
+// func (info *vInfo) LogInternalInfo(entryInfo *entry.Info) error {
+// 	id := entryInfo.PostCommitVersion
+// 	if info.ckpInfoVersion < id {
+// 		info.ckpInfoVersion = id
+// 	}
+// 	return nil
+// }
 
 // func (info *vInfo) LogCommit(entryInfo *entry.Info) error {
 // 	g, ok := info.groups[entryInfo.Group]

@@ -70,7 +70,7 @@ func NewBaseStore(dir, name string, cfg *StoreCfg) (*baseStore, error) {
 	bs.syncQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onSyncs)
 	bs.commitQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onCommits)
 	bs.postCommitQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onPostCommits)
-	bs.truncateQueue = sm.NewSafeQueue(DefaultMaxBatchSize,DefaultMaxBatchSize,bs.onTruncate)
+	bs.truncateQueue = sm.NewSafeQueue(DefaultMaxBatchSize, DefaultMaxBatchSize, bs.onTruncate)
 	if cfg == nil {
 		cfg = &StoreCfg{}
 	}
@@ -93,18 +93,18 @@ func (bs *baseStore) start() {
 
 func (bs *baseStore) onTruncate(batch ...any) {
 	lsn := atomic.LoadUint64(&bs.checkpointing)
-	if lsn==0{
+	if lsn == 0 {
 		return
 	}
 	version, err := bs.GetVersionByGLSN(lsn)
 	if err != nil {
-		logutil.Infof("get %d",lsn)
+		logutil.Infof("get %d", lsn)
 		panic(err)
 	}
 	if version-1 <= bs.truncatedVersion {
 		return
 	}
-	for i := bs.truncatedVersion+1; i < version; i++ {
+	for i := bs.truncatedVersion + 1; i < version; i++ {
 		e := bs.file.GetHistory().GetEntry(i)
 		err := e.Destroy()
 		if err != nil {
@@ -129,18 +129,21 @@ func (bs *baseStore) onPostCommits(batches ...any) {
 }
 
 func (bs *baseStore) onCommits(batches ...any) {
-	for _, item := range batches {
-		e := item.(*entry.Entry)
-		e.SetInfo()
-		// if e.IsPrintTime() {
-		// 	logutil.Infof("sync and queues takes %dms", e.Duration().Milliseconds())
-		// 	e.StartTime()
-		// }
-		e.DoneWithErr(nil)
-		bs.postCommitQueue.Enqueue(e)
-	}
-	cnt := len(batches)
+	for _, v := range batches {
+		bat := v.([]any)
+		for _, item := range bat {
+			e := item.(*entry.Entry)
+			e.SetInfo()
+			// if e.IsPrintTime() {
+			// 	logutil.Infof("sync and queues takes %dms", e.Duration().Milliseconds())
+			// 	e.StartTime()
+			// }
+			e.DoneWithErr(nil)
+			bs.postCommitQueue.Enqueue(e)
+		}
+	cnt := len(bat)
 	bs.flushWg.Add(-1 * cnt)
+	}
 }
 
 func (bs *baseStore) onSyncs(batches ...any) {
@@ -180,8 +183,10 @@ func (bs *baseStore) onEntries(entries ...any) {
 		// 	logutil.Infof("onEntries2 takes %dms", e.Duration().Milliseconds())
 		// 	e.StartTime()
 		// }
-		bs.syncQueue.Enqueue(e)
 	}
+	bat:=make([]any,len(entries))
+	copy(bat,entries)
+	bs.syncQueue.Enqueue(bat)
 }
 
 //TODO: commented due to static check
@@ -221,7 +226,6 @@ func (bs *baseStore) Truncate(lsn uint64) (err error) {
 	bs.truncateQueue.Enqueue(lsn)
 	return nil
 }
-
 
 func (bs *baseStore) Append(e *entry.Entry) error {
 	// if e.IsPrintTime() {

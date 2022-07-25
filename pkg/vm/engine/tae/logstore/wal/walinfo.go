@@ -43,9 +43,9 @@ type WalInfo struct {
 
 func newWalInfo() *WalInfo {
 	return &WalInfo{
-		checkpointInfo:  make(map[uint32]*checkpointInfo),
+		checkpointInfo:  make(map[uint32]*checkpointInfo),//r
 		ckpMu:           sync.RWMutex{},
-		walDriverLsnMap: make(map[uint32]map[uint64]uint64),
+		walDriverLsnMap: make(map[uint32]map[uint64]uint64),//r
 		lsnMu:           sync.RWMutex{},
 		walLsnTidMap:    make(map[uint64]uint64),
 		walCurrentLsn:   make(map[uint32]uint64),
@@ -53,7 +53,7 @@ func newWalInfo() *WalInfo {
 		syncing:         make(map[uint32]uint64),
 		commitCond:      *sync.NewCond(&sync.Mutex{}),
 
-		checkpointed:   make(map[uint32]uint64),
+		checkpointed:   make(map[uint32]uint64),//r
 		checkpointedMu: sync.RWMutex{},
 		synced:         make(map[uint32]uint64),
 		syncedMu:       sync.RWMutex{},
@@ -103,7 +103,7 @@ func (w *WalInfo) allocateLsn(gid uint32) uint64 {
 }
 
 func (w *WalInfo) logDriverLsn(driverEntry *driverEntry.Entry) {
-	info := driverEntry.Entry.GetInfo().(*entry.Info)
+	info := driverEntry.Info
 
 	if info.Group == GroupInternal {
 		w.checkpointedMu.Lock()
