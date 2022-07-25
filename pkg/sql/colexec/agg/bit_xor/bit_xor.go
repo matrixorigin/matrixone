@@ -44,13 +44,13 @@ func (bx *BitXor[T1]) Fill(_ int64, v1 T1, v2 int64, z int64, IsEmpty bool, hasN
 		return v2, IsEmpty
 	} else if IsEmpty {
 		if z%2 == 0 {
-			return (any)(0).(int64), false
+			return int64(0), false
 		} else {
 			return int64(v1), false
 		}
 	}
 	if z%2 == 0 {
-		return int64(v1), false
+		return int64(v2), false
 	} else {
 		return int64(v1) ^ v2, false
 	}
