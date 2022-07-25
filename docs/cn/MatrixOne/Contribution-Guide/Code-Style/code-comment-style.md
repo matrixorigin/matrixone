@@ -25,7 +25,7 @@
 - Package (Go)
 - File
 - Type
-- Constant 
+- Constant
 - Function
 - Method
 - Variable
@@ -58,18 +58,18 @@
     - 请统一使用 **美式英语**       
         - color, canceling, synchronize     (推荐)
         - colour, cancelling, synchronise   (不推荐)
- 
+
     - 注意拼写正确
 
     - 使用**标准或官方的大写**
-        
-        - MatrixOne, MatrixCube, Raft, SQL  (正确)
-        - matrixone, matrixcube, RAFT, sql  (错误)
+
+        - MatrixOne, Raft, SQL  (正确)
+        - matrixone, RAFT, sql  (错误)
 
     - 使用一致性的短语和词汇
-        
+
         - "dead link" vs. "broken link" （在一篇文章或文件中只能出现其中一个）
-    
+
     - 不要使用冗长的复合词
 
     - 尽量不使用缩写
@@ -82,11 +82,11 @@
     - 尽量使用短句
 
 - 句子首字母大写，并以句号结尾
-    
+
     - 如果一个小写的标识符位于句子开头，可以不用大写
 
         ```
-        // enterGame causes Players to enter the 
+        // enterGame causes Players to enter the
         // video game, which is about a romantic
         // story in ancient China.
         func enterGame() os.Error {
@@ -99,13 +99,13 @@
     - Opens the file   (正确)
     - Open the file    (错误)       
 
-- 使用 "this" 而非"the"来指代当前事物 
-    
+- 使用 "this" 而非"the"来指代当前事物
+
     - Gets the toolkit for this component   (推荐)
     - Gets the toolkit for the component    (不推荐)
 
 - 允许使用Markdown语法格式
-    
+
     - Opens the `log` file  
 
 ### Tips
