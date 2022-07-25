@@ -70,7 +70,7 @@ func mockEntry() entry.Entry {
 	// e.SetPayload(payload)
 	return e
 }
-func TestPerformance(t *testing.T){
+func TestPerformance(t *testing.T) {
 	driver := newTestDriver(t)
 	wal := NewLogStore(driver)
 	defer wal.Close()
@@ -94,14 +94,14 @@ func TestPerformance(t *testing.T){
 		e := mockEntry()
 		entries = append(entries, e)
 	}
-	t0:= time.Now()
+	t0 := time.Now()
 	for i := 0; i < entryCount; i++ {
-		group:=uint32(10+rand.Intn(3))
+		group := uint32(10 + rand.Intn(3))
 		wg.Add(1)
 		worker.Submit(appendfn(i, group))
 	}
 	wg.Wait()
-	logutil.Infof("%d entries takes %v",entryCount,time.Since(t0))
+	logutil.Infof("%d entries takes %v", entryCount, time.Since(t0))
 	for i := 0; i < entryCount; i++ {
 		e := entries[i]
 		e.Free()
@@ -143,7 +143,7 @@ func TestWal(t *testing.T) {
 			ckpEntry.WaitDone()
 			ckpGroup, ckpLsn := ckpEntry.GetLsn()
 			_, err := wal.Load(ckpGroup, ckpLsn)
-			assert.Equal(t,GroupCKP,ckpGroup)
+			assert.Equal(t, GroupCKP, ckpGroup)
 			assert.NoError(t, err)
 			ckpEntry.Free()
 			wg.Done()
@@ -171,14 +171,13 @@ func TestWal(t *testing.T) {
 		}
 	}
 
-
 	for i := 0; i < entryCount; i++ {
 		e := mockEntry()
 		entries = append(entries, e)
 	}
 	// t0:= time.Now()
 	for i := 0; i < entryCount; i++ {
-		group:=uint32(10+rand.Intn(3))
+		group := uint32(10 + rand.Intn(3))
 		// group := uint32(5)
 		wg.Add(1)
 		worker.Submit(appendfn(i, group))

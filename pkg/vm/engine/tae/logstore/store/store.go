@@ -220,7 +220,7 @@ func (bs *baseStore) onEntries(entries ...any) {
 
 type batch struct {
 	entrys []entry.Entry
-	infos []*entry.Info
+	infos  []*entry.Info
 }
 
 //TODO: commented due to static check

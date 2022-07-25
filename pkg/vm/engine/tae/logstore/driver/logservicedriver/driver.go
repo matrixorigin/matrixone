@@ -18,6 +18,7 @@ type clientWithRecord struct {
 func (c *clientWithRecord) Close() {
 	c.c.Close()
 }
+
 var DefaultReadMaxSize = uint64(10)
 
 type Config struct {

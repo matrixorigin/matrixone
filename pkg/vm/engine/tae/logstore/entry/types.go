@@ -73,11 +73,11 @@ type Entry interface {
 	Unmarshal(buf []byte) error
 	Marshal() (buf []byte, err error)
 	ReadFrom(io.Reader) (int64, error)
-	ReadAt(r *os.File,offset int) (int, error)
+	ReadAt(r *os.File, offset int) (int, error)
 	WriteTo(io.Writer) (int64, error)
 	PrepareWrite()
 
-	GetLsn()(gid uint32,lsn uint64)
+	GetLsn() (gid uint32, lsn uint64)
 	WaitDone() error
 	DoneWithErr(error)
 	GetError() error

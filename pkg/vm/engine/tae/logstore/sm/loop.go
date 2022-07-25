@@ -50,7 +50,7 @@ func (l *Loop) loop() {
 				}
 			}
 		}
-		l.fn(batch,l.nextQueue)
+		l.fn(batch, l.nextQueue)
 	}
 }
 

@@ -22,3 +22,6 @@ type Wal interface {
 	GetPendding(gid uint32) (cnt uint64)
 	GetCheckpointed(gid uint32) (lsn uint64)
 }
+
+//wal commit uncommit
+//store fuzzy ckp

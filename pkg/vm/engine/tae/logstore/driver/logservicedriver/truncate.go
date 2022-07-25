@@ -3,7 +3,6 @@ package logservicedriver
 import (
 	"context"
 	"time"
-
 )
 
 func (d *LogServiceDriver) Truncate(lsn uint64) error {
@@ -18,7 +17,7 @@ func (d *LogServiceDriver) Truncate(lsn uint64) error {
 	return nil
 }
 
-func (d *LogServiceDriver) GetTruncated() (lsn uint64,err error) {
+func (d *LogServiceDriver) GetTruncated() (lsn uint64, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	client := d.clientPool.Get().(*clientWithRecord)
@@ -27,5 +26,5 @@ func (d *LogServiceDriver) GetTruncated() (lsn uint64,err error) {
 		panic(err)
 	}
 	d.clientPool.Put(client)
-	return lsn,nil
+	return lsn, nil
 }

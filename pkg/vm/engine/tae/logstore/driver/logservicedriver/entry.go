@@ -18,8 +18,8 @@ type meta struct {
 	payloadSize uint64
 }
 
-func newMeta()*meta{
-	return &meta{addr:make(map[uint64]uint64)}
+func newMeta() *meta {
+	return &meta{addr: make(map[uint64]uint64)}
 }
 
 func (m *meta) SetAppended(appended uint64) {
@@ -105,24 +105,24 @@ type recordEntry struct {
 	*meta
 	entries []*entry.Entry
 
-	payload   []byte
+	payload     []byte
 	unmarshaled uint32
-	mashalMu sync.RWMutex
+	mashalMu    sync.RWMutex
 }
 
-func newRecordEntry()*recordEntry{
-	return &recordEntry{entries: make([]*entry.Entry, 0),meta: newMeta()}
+func newRecordEntry() *recordEntry {
+	return &recordEntry{entries: make([]*entry.Entry, 0), meta: newMeta()}
 }
 
-func newEmptyRecordEntry(r logservice.LogRecord)*recordEntry{
-	payload:=make([]byte,len(r.Payload()))
-	copy(payload,r.Payload())
-	return &recordEntry{payload: payload,meta: newMeta(),mashalMu: sync.RWMutex{}}
+func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
+	payload := make([]byte, len(r.Payload()))
+	copy(payload, r.Payload())
+	return &recordEntry{payload: payload, meta: newMeta(), mashalMu: sync.RWMutex{}}
 }
 
 func (r *recordEntry) append(e *entry.Entry) {
 	r.entries = append(r.entries, e)
-	r.meta.addr[e.Lsn]=uint64(r.payloadSize)
+	r.meta.addr[e.Lsn] = uint64(r.payloadSize)
 	r.payloadSize += uint64(e.GetSize())
 }
 
@@ -156,7 +156,7 @@ func (r *recordEntry) ReadFrom(reader io.Reader) (n int64, err error) {
 	if n2 != int(r.meta.payloadSize) {
 		panic(fmt.Errorf("logic err: err is %v, expect %d, get %d", err, r.meta.payloadSize, n2))
 	}
-	r.payload=payload
+	r.payload = payload
 	return
 }
 
@@ -174,38 +174,38 @@ func (r *recordEntry) Marshal() (buf []byte, err error) {
 	buf = bbuf.Bytes()
 	return
 }
-func (r *recordEntry) prepareRecord()(size int){
+func (r *recordEntry) prepareRecord() (size int) {
 	var err error
-	r.payload,err=r.Marshal()
-	if err != nil{
+	r.payload, err = r.Marshal()
+	if err != nil {
 		panic(err)
 	}
 	return len(r.payload)
 }
 
-func (r *recordEntry) unmarshal(){
-	marshaled:=atomic.LoadUint32(&r.unmarshaled)
-	if marshaled==1{
+func (r *recordEntry) unmarshal() {
+	marshaled := atomic.LoadUint32(&r.unmarshaled)
+	if marshaled == 1 {
 		return
 	}
 	r.mashalMu.Lock()
 	defer r.mashalMu.Unlock()
-	marshaled=atomic.LoadUint32(&r.unmarshaled)
-	if marshaled==1{
+	marshaled = atomic.LoadUint32(&r.unmarshaled)
+	if marshaled == 1 {
 		return
 	}
-	buf:=r.payload
-	r.payload=nil
+	buf := r.payload
+	r.payload = nil
 	r.Unmarshal(buf)
-	atomic.StoreUint32(&r.unmarshaled,1)
+	atomic.StoreUint32(&r.unmarshaled, 1)
 }
 
 func (r *recordEntry) readEntry(lsn uint64) *entry.Entry {
 	r.unmarshal()
-	offset:=r.meta.addr[lsn]
-	bbuf:=bytes.NewBuffer(r.payload[offset:])
-	e:=entry.NewEmptyEntry()
+	offset := r.meta.addr[lsn]
+	bbuf := bytes.NewBuffer(r.payload[offset:])
+	e := entry.NewEmptyEntry()
 	e.ReadFrom(bbuf)
-	e.Lsn=lsn
+	e.Lsn = lsn
 	return e
 }

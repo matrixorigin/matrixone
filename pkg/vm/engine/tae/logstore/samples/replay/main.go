@@ -47,11 +47,8 @@ func main() {
 		tid := uint64(i)
 		e1 := entry.GetBase()
 		uncommitInfo := &entry.Info{
-			Group: entry.GTUncommit,
-			Uncommits: []entry.Tid{{
-				Group: 11,
-				Tid:   tid,
-			}},
+			Group:     entry.GTUncommit,
+			Uncommits: tid,
 		}
 		e1.SetType(entry.ETUncommitted)
 		e1.SetInfo(uncommitInfo)

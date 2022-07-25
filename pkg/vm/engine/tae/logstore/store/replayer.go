@@ -175,23 +175,23 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver, addrInMeta bo
 			}
 		}
 	case entry.GTUncommit:
-		for _, tinfo := range info.Uncommits {
-			tidMap, ok := r.uncommit[tinfo.Group]
-			if !ok {
-				tidMap = make(map[uint64][]*replayEntry)
-			}
-			entries, ok := tidMap[info.TxnId]
-			if !ok {
-				entries = make([]*replayEntry, 0)
-			}
-			replayEty := &replayEntry{
-				payload: make([]byte, e.GetPayloadSize()),
-			}
-			copy(replayEty.payload, e.GetPayload())
-			entries = append(entries, replayEty)
-			tidMap[info.TxnId] = entries
-			r.uncommit[tinfo.Group] = tidMap
-		}
+		// for _, tinfo := range info.Uncommits {
+		// 	tidMap, ok := r.uncommit[tinfo.Group]
+		// 	if !ok {
+		// 		tidMap = make(map[uint64][]*replayEntry)
+		// 	}
+		// 	entries, ok := tidMap[info.TxnId]
+		// 	if !ok {
+		// 		entries = make([]*replayEntry, 0)
+		// 	}
+		// 	replayEty := &replayEntry{
+		// 		payload: make([]byte, e.GetPayloadSize()),
+		// 	}
+		// 	copy(replayEty.payload, e.GetPayload())
+		// 	entries = append(entries, replayEty)
+		// 	tidMap[info.TxnId] = entries
+		// 	r.uncommit[tinfo.Group] = tidMap
+		// }
 	case entry.GTInternal:
 		if info.PostCommitVersion >= r.ckpVersion {
 			r.ckpVersion = info.PostCommitVersion

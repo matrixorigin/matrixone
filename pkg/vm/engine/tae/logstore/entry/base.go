@@ -52,7 +52,7 @@ type Info struct {
 	// CommitId    uint64 //0 for RollBack
 	TxnId       uint64 //0 for entrys not in txn
 	Checkpoints []CkpRanges
-	Uncommits   []Tid
+	Uncommits   uint64
 
 	GroupLSN uint64
 
@@ -129,21 +129,8 @@ func (info *Info) Marshal() []byte {
 		}
 	}
 
-	length = uint64(len(info.Uncommits))
-	if len(buf) < pos+8 {
-		buf = append(buf, make([]byte, 128)...)
-	}
-	binary.BigEndian.PutUint64(buf[pos:pos+8], length)
+	binary.BigEndian.PutUint64(buf[pos:pos+8], info.Uncommits)
 	pos += 8
-	for _, tidInfo := range info.Uncommits {
-		if len(buf) < pos+12 {
-			buf = append(buf, make([]byte, 128)...)
-		}
-		binary.BigEndian.PutUint32(buf[pos:pos+4], tidInfo.Group)
-		pos += 4
-		binary.BigEndian.PutUint64(buf[pos:pos+8], tidInfo.Tid)
-		pos += 8
-	}
 
 	if len(buf) < pos+8 {
 		buf = append(buf, make([]byte, 128)...)
@@ -208,15 +195,8 @@ func Unmarshal(buf []byte) *Info {
 
 	length = binary.BigEndian.Uint64(buf[pos : pos+8])
 	pos += 8
-	info.Uncommits = make([]Tid, 0, length)
-	for i := 0; i < int(length); i++ {
-		tidInfo := Tid{}
-		tidInfo.Group = binary.BigEndian.Uint32(buf[pos : pos+4])
-		pos += 4
-		tidInfo.Tid = binary.BigEndian.Uint64(buf[pos : pos+8])
-		pos += 8
-		info.Uncommits = append(info.Uncommits, tidInfo)
-	}
+	info.Uncommits = binary.BigEndian.Uint64(buf[pos : pos+8])
+	pos += 8
 	info.GroupLSN = binary.BigEndian.Uint64(buf[pos : pos+8])
 	return info
 }
@@ -232,9 +212,7 @@ func (info *Info) ToString() string {
 		return s
 	case GTUncommit:
 		s := "uncommit entry"
-		for _, tid := range info.Uncommits {
-			s = fmt.Sprintf("%s G%d-%d", s, tid.Group, tid.Tid)
-		}
+		s = fmt.Sprintf("%s %d", s, info.Uncommits)
 		s = fmt.Sprintf("%s\n", s)
 		return s
 	default:
@@ -378,16 +356,16 @@ func (b *Base) Unmarshal(buf []byte) error {
 	_, err := b.ReadFrom(bbuf)
 	return err
 }
-func (b *Base) GetLsn()(gid uint32,lsn uint64){
-	v:=b.GetInfo()
-	if v==nil{
+func (b *Base) GetLsn() (gid uint32, lsn uint64) {
+	v := b.GetInfo()
+	if v == nil {
 		return
 	}
-	info:=v.(*Info)
-	gid=info.Group
-	lsn=info.GroupLSN
+	info := v.(*Info)
+	gid = info.Group
+	lsn = info.GroupLSN
 	return
-} 
+}
 func (b *Base) Marshal() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = b.WriteTo(&bbuf); err != nil {
@@ -432,7 +410,7 @@ func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 
 func (b *Base) ReadAt(r *os.File, offset int) (int, error) {
 	metaBuf := b.GetMetaBuf()
-	n, err := r.ReadAt(metaBuf,int64(offset))
+	n, err := r.ReadAt(metaBuf, int64(offset))
 	if err != nil {
 		return n, err
 	}
@@ -459,11 +437,11 @@ func (b *Base) ReadAt(r *os.File, offset int) (int, error) {
 	return n + n1 + n2, nil
 }
 
-func (b *Base) PrepareWrite(){
-	if b.info== nil{
+func (b *Base) PrepareWrite() {
+	if b.info == nil {
 		return
 	}
-	buf:=b.info.(*Info).Marshal()
+	buf := b.info.(*Info).Marshal()
 	b.SetInfoBuf(buf)
 }
 

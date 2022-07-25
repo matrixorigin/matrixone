@@ -9,6 +9,6 @@ func (w *WalImpl) Load(gid uint32, lsn uint64) (entry.Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	driverEntry ,err:= w.driver.Read(driverLsn)
+	driverEntry, err := w.driver.Read(driverLsn)
 	return driverEntry.Entry, err
 }

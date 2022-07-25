@@ -128,8 +128,9 @@ func (info *vInfo) GetUncommitGidTid(lsn uint64) *entry.Tid {
 	if g == nil {
 		return nil
 	}
-	uncommit := g.(*uncommitGroup)
-	return uncommit.UncommitTxn[lsn]
+	// uncommit := g.(*uncommitGroup)
+	// return uncommit.UncommitTxn[lsn]
+	return nil
 }
 func (info *vInfo) UncommitWriteTo(w io.Writer) (n int64, err error) {
 	info.groupmu.RLock()
@@ -149,20 +150,20 @@ func (info *vInfo) UncommitWriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += 8
-	for lsn, gidtid := range uncommit.UncommitTxn {
-		if err = binary.Write(w, binary.BigEndian, lsn); err != nil {
-			return
-		}
-		n += 8
-		if err = binary.Write(w, binary.BigEndian, gidtid.Group); err != nil {
-			return
-		}
-		n += 4
-		if err = binary.Write(w, binary.BigEndian, gidtid.Tid); err != nil {
-			return
-		}
-		n += 8
-	}
+	// for lsn, gidtid := range uncommit.UncommitTxn {
+	// 	if err = binary.Write(w, binary.BigEndian, lsn); err != nil {
+	// 		return
+	// 	}
+	// 	n += 8
+	// if err = binary.Write(w, binary.BigEndian, gidtid.Group); err != nil {
+	// 	return
+	// }
+	// n += 4
+	// if err = binary.Write(w, binary.BigEndian, gidtid.Tid); err != nil {
+	// 	return
+	// }
+	// n += 8
+	// }
 	return
 }
 func (info *vInfo) UncommitReadFrom(r io.Reader) (n int64, err error) {
@@ -191,7 +192,7 @@ func (info *vInfo) UncommitReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += 4
-		g.UncommitTxn[lsn] = &entry.Tid{Group: gid, Tid: tid}
+		// g.UncommitTxn[lsn] = &entry.Tid{Group: gid, Tid: tid}
 	}
 	info.groups[entry.GTUncommit] = g
 	return

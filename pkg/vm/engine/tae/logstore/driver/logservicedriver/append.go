@@ -8,10 +8,10 @@ import (
 
 var ErrTooMuchPenddings = errors.New("too much penddings")
 
-type flushEntry struct {}
+type flushEntry struct{}
 
 func (d *LogServiceDriver) Append(e *entry.Entry) {
-	e.Lsn=d.allocateDriverLsn()
+	e.Lsn = d.allocateDriverLsn()
 	d.preAppendQueue <- e
 }
 
@@ -73,7 +73,7 @@ func (d *LogServiceDriver) getClient() (client *clientWithRecord, lsn uint64) {
 }
 
 func (d *LogServiceDriver) onAppendedQueue(items []any, q chan any) {
-	appenders:=make([]*driverAppender,0)
+	appenders := make([]*driverAppender, 0)
 	for _, v := range items {
 		batch := v.([]any)
 		for _, item := range batch {
@@ -81,7 +81,7 @@ func (d *LogServiceDriver) onAppendedQueue(items []any, q chan any) {
 			appender.waitDone()
 			d.clientPool.Put(appender.client)
 			appender.freeEntries()
-			appenders=append(appenders, appender)
+			appenders = append(appenders, appender)
 		}
 	}
 	q <- appenders

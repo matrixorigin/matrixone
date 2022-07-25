@@ -4,19 +4,19 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-func (w *WalImpl) FuzzyCheckpoint(gid uint32,indexes []*wal.Index) (ckpEntry entry.Entry) {
-	ckpEntry = w.makeCheckpointEntry(gid,indexes)
-	drentry,_,_:=w.doAppend(GroupCKP, ckpEntry)
+func (w *WalImpl) FuzzyCheckpoint(gid uint32, indexes []*wal.Index) (ckpEntry entry.Entry) {
+	ckpEntry = w.makeCheckpointEntry(gid, indexes)
+	drentry, _, _ := w.doAppend(GroupCKP, ckpEntry)
 	w.checkpointQueue.Enqueue(drentry)
 	return
 }
 
-func (w *WalImpl) makeCheckpointEntry(gid uint32,indexes []*wal.Index) (ckpEntry entry.Entry) {
+func (w *WalImpl) makeCheckpointEntry(gid uint32, indexes []*wal.Index) (ckpEntry entry.Entry) {
 	for _, index := range indexes {
 		if index.LSN > 100000000 {
 			logutil.Infof("IndexErr: Checkpoint Index: %s", index.String())
@@ -91,10 +91,36 @@ func (w *WalImpl) CkpCkp() {
 	e.WaitDone()
 }
 
-func (w *WalImpl) onTruncatingQueue(items ...any)  {
+//tid-lsn-ckped uclsn-tid,tid-clsn,cckped
+func (w *WalImpl) CkpUC() {
+	ckpedlsn := w.GetCheckpointed(GroupC)
+	ucLsn := w.GetCheckpointed(GroupUC)
+	maxLsn := w.GetSynced(GroupUC)
+	ckpedUC := ucLsn
+	for i := ucLsn + 1; i <= maxLsn; i++ {
+		tid, ok := w.ucLsnTidMap[i]
+		if !ok {
+			panic("logic error")
+		}
+		lsn, ok := w.cTidLsnMap[tid]
+		if !ok {
+			break
+		}
+		if lsn > ckpedlsn {
+			break
+		}
+		ckpedUC = i
+	}
+	w.SetCheckpointed(GroupUC, ckpedUC)
+}
+
+func (w *WalImpl) onTruncatingQueue(items ...any) {
 	gid, driverLsn := w.getDriverCheckpointed()
-	if driverLsn==0 && gid ==0{
+	if driverLsn == 0 && gid == 0 {
 		return
+	}
+	if gid == GroupUC {
+		w.CkpUC()
 	}
 	if gid == GroupCKP {
 		w.CkpCkp()

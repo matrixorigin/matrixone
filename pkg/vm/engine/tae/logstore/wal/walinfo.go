@@ -28,9 +28,10 @@ type WalInfo struct {
 	ckpMu               sync.RWMutex
 	walDriverLsnMap     map[uint32]map[uint64]uint64 //gid-walLsn-driverLsn //r
 	lsnMu               sync.RWMutex
-	walLsnTidMap        map[uint64]uint64 //tid-lsn //r
-	driverCheckpointing uint64 //r
-	driverCheckpointed  uint64 //r
+	ucLsnTidMap         map[uint64]uint64
+	cTidLsnMap          map[uint64]uint64 //tid-lsn //r
+	driverCheckpointing uint64            //r
+	driverCheckpointed  uint64            //r
 	walCurrentLsn       map[uint32]uint64 //r
 	lsnmu               sync.RWMutex
 	syncing             map[uint32]uint64 //r
@@ -47,17 +48,18 @@ type WalInfo struct {
 
 func newWalInfo() *WalInfo {
 	return &WalInfo{
-		checkpointInfo:  make(map[uint32]*checkpointInfo),//r
+		checkpointInfo:  make(map[uint32]*checkpointInfo), //r
 		ckpMu:           sync.RWMutex{},
-		walDriverLsnMap: make(map[uint32]map[uint64]uint64),//r
+		walDriverLsnMap: make(map[uint32]map[uint64]uint64), //r
 		lsnMu:           sync.RWMutex{},
-		walLsnTidMap:    make(map[uint64]uint64),
+		ucLsnTidMap:     make(map[uint64]uint64),
+		cTidLsnMap:      make(map[uint64]uint64),
 		walCurrentLsn:   make(map[uint32]uint64),
 		lsnmu:           sync.RWMutex{},
 		syncing:         make(map[uint32]uint64),
 		commitCond:      *sync.NewCond(&sync.Mutex{}),
 
-		checkpointed:   make(map[uint32]uint64),//r
+		checkpointed:   make(map[uint32]uint64), //r
 		checkpointedMu: sync.RWMutex{},
 		synced:         make(map[uint32]uint64),
 		syncedMu:       sync.RWMutex{},
@@ -93,6 +95,11 @@ func (w *WalInfo) GetCheckpointed(gid uint32) (lsn uint64) {
 	return
 }
 
+func (w *WalInfo) SetCheckpointed(gid uint32, lsn uint64) {
+	w.checkpointedMu.Lock()
+	w.checkpointed[gid] = lsn
+	w.checkpointedMu.Unlock()
+}
 func (w *WalInfo) allocateLsn(gid uint32) uint64 {
 	w.lsnmu.Lock()
 	defer w.lsnmu.Unlock()
@@ -129,7 +136,10 @@ func (w *WalInfo) logDriverLsn(driverEntry *driverEntry.Entry) {
 	w.lsnMu.Unlock()
 
 	if info.Group == GroupC {
-		w.walLsnTidMap[info.TxnId] = info.GroupLSN
+		w.cTidLsnMap[info.TxnId] = info.GroupLSN
+	}
+	if info.Group == GroupUC {
+		w.ucLsnTidMap[info.GroupLSN] = info.Uncommits
 	}
 }
 

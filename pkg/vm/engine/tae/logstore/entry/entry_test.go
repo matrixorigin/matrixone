@@ -61,14 +61,8 @@ func TestInfoMarshal1(t *testing.T) {
 					Size:       5,
 				}},
 			}},
-		Uncommits: []Tid{{
-			Group: GTCKp,
-			Tid:   12,
-		}, {
-			Group: GTInvalid,
-			Tid:   25,
-		}},
-		GroupLSN: 1,
+		Uncommits: 5,
+		GroupLSN:  1,
 	}
 	buf := info.Marshal()
 	info2 := Unmarshal(buf)
@@ -93,14 +87,8 @@ func TestInfoMarshal3(t *testing.T) {
 			{
 				Group: GTUncommit}},
 		// Ranges: &common.ClosedIntervals{}}},
-		Uncommits: []Tid{{
-			Group: GTCKp,
-			Tid:   12,
-		}, {
-			Group: GTInvalid,
-			Tid:   25,
-		}},
-		GroupLSN: 1,
+		Uncommits: 5,
+		GroupLSN:  1,
 	}
 	buf := info.Marshal()
 	info2 := Unmarshal(buf)
@@ -134,11 +122,6 @@ func checkInfoEqual(t *testing.T, info, info2 *Info) {
 			assert.Equal(t, cmdInfo.Size, cmdInfo2.Size)
 		}
 	}
-	assert.Equal(t, len(info.Uncommits), len(info2.Uncommits))
-	for i, tid1 := range info.Uncommits {
-		tid2 := info2.Uncommits[i]
-		assert.Equal(t, tid1.Group, tid2.Group)
-		assert.Equal(t, tid1.Tid, tid2.Tid)
-	}
+	assert.Equal(t, info.Uncommits, info2.Uncommits)
 	assert.Equal(t, info.GroupLSN, info2.GroupLSN)
 }

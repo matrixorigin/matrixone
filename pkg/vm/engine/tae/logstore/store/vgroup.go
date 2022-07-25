@@ -279,13 +279,13 @@ type uncommitGroup struct {
 	*baseGroup
 	//uncheckpointed gid-tids//-commands
 	//Only support single txn
-	UncommitTxn map[uint64]*entry.Tid
+	UncommitTxn map[uint64]uint64
 }
 
 func newuncommitGroup(v *vInfo, gid uint32) *uncommitGroup {
 	return &uncommitGroup{
 		baseGroup:   newbaseGroup(v, gid),
-		UncommitTxn: make(map[uint64]*entry.Tid),
+		UncommitTxn: make(map[uint64]uint64),
 	}
 }
 func (g *uncommitGroup) String() string {
@@ -300,23 +300,19 @@ func (g *uncommitGroup) OnCheckpoint(any) {} //calculate ckp when compact
 func (g *uncommitGroup) IsCovered(c *compactor) bool {
 	c.tidCidMapMu.RLock()
 	defer c.tidCidMapMu.RUnlock()
-	for _, gidTid := range g.UncommitTxn {
-		tidMap, ok := c.tidCidMap[gidTid.Group]
-		if !ok {
-			return false
-		}
-		ckp, ok := c.checkpointed[gidTid.Group]
-		if !ok {
-			return false
-		}
-		lsn, ok := tidMap[gidTid.Tid]
-		if !ok {
-			return false
-		}
-		if lsn > ckp {
-			return false
-		}
-	}
+	// for _, tid := range g.UncommitTxn {
+	// 	ckp, ok := c.checkpointed[gidTid.Group]
+	// 	if !ok {
+	// 		return false
+	// 	}
+	// 	lsn, ok := tidMap[gidTid.Tid]
+	// 	if !ok {
+	// 		return false
+	// 	}
+	// 	if lsn > ckp {
+	// 		return false
+	// 	}
+	// }
 	return true
 }
 
@@ -334,7 +330,7 @@ func (g *uncommitGroup) IsCommitGroup() bool {
 }
 func (g *uncommitGroup) Log(info any) error {
 	uncommitInfo := info.(*entry.Info)
-	g.UncommitTxn[uncommitInfo.GroupLSN] = &uncommitInfo.Uncommits[0]
+	g.UncommitTxn[uncommitInfo.GroupLSN] = uncommitInfo.Uncommits
 	return nil
 }
 

@@ -35,11 +35,8 @@ import (
 func appendUncommitEntry(t *testing.T, s *baseStore, buf []byte, tid uint64) entry.Entry {
 	e := entry.GetBase()
 	uncommitInfo := &entry.Info{
-		Group: entry.GTUncommit,
-		Uncommits: []entry.Tid{{
-			Group: 11,
-			Tid:   tid,
-		}},
+		Group:     entry.GTUncommit,
+		Uncommits: tid,
 	}
 	e.SetType(entry.ETUncommitted)
 	e.SetInfo(uncommitInfo)
@@ -128,11 +125,8 @@ func appendPartialCkpEntry(t *testing.T, s *baseStore, lsn uint64, csns []uint32
 func appendEntries(t *testing.T, s *baseStore, buf []byte, tid uint64) {
 	e := entry.GetBase()
 	uncommitInfo := &entry.Info{
-		Group: entry.GTUncommit,
-		Uncommits: []entry.Tid{{
-			Group: 11,
-			Tid:   tid,
-		}},
+		Group:     entry.GTUncommit,
+		Uncommits: tid,
 	}
 	e.SetType(entry.ETUncommitted)
 	e.SetInfo(uncommitInfo)
@@ -587,11 +581,8 @@ func TestAddrVersion(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		e := entry.GetBase()
 		uncommitInfo := &entry.Info{
-			Group: entry.GTUncommit,
-			Uncommits: []entry.Tid{{
-				Group: 11,
-				Tid:   1,
-			}},
+			Group:     entry.GTUncommit,
+			Uncommits: 1,
 		}
 		e.SetType(entry.ETUncommitted)
 		e.SetInfo(uncommitInfo)
@@ -624,11 +615,8 @@ func TestLargeEntry(t *testing.T) {
 	s, buf := initEnv(t)
 	e := entry.GetBase()
 	uncommitInfo := &entry.Info{
-		Group: entry.GTUncommit,
-		Uncommits: []entry.Tid{{
-			Group: 11,
-			Tid:   1,
-		}},
+		Group:     entry.GTUncommit,
+		Uncommits: 1,
 	}
 	e.SetType(entry.ETUncommitted)
 	e.SetInfo(uncommitInfo)
@@ -702,11 +690,8 @@ func TestStore(t *testing.T) {
 				switch i % 100 {
 				case 1, 2, 3, 4, 5:
 					uncommitInfo := &entry.Info{
-						Group: entry.GTUncommit,
-						Uncommits: []entry.Tid{{
-							Group: groupNo,
-							Tid:   tidAlloc.Get() + 1 + uint64(rand.Intn(3)),
-						}},
+						Group:     entry.GTUncommit,
+						Uncommits: tidAlloc.Get() + 1 + uint64(rand.Intn(3)),
 					}
 					e.SetType(entry.ETUncommitted)
 					e.SetInfo(uncommitInfo)
@@ -810,11 +795,8 @@ func TestPartialCkp(t *testing.T) {
 
 	uncommit := entry.GetBase()
 	uncommitInfo := &entry.Info{
-		Group: entry.GTUncommit,
-		Uncommits: []entry.Tid{{
-			Group: entry.GTCustomizedStart,
-			Tid:   1,
-		}},
+		Group:     entry.GTUncommit,
+		Uncommits: 1,
 	}
 	uncommit.SetInfo(uncommitInfo)
 	buf2 := make([]byte, common.K)
@@ -967,11 +949,8 @@ func TestReplay1(t *testing.T) {
 				case 1, 2, 3, 4, 5: //uncommit entry
 					e.SetType(entry.ETUncommitted)
 					uncommitInfo := &entry.Info{
-						Group: entry.GTUncommit,
-						Uncommits: []entry.Tid{{
-							Group: groupNo,
-							Tid:   tidAlloc.Get() + 1 + uint64(rand.Intn(3)),
-						}},
+						Group:     entry.GTUncommit,
+						Uncommits: tidAlloc.Get() + 1 + uint64(rand.Intn(3)),
 					}
 					e.SetInfo(uncommitInfo)
 					str := uncommitInfo.ToString()
@@ -1141,10 +1120,7 @@ func TestLoad(t *testing.T) {
 				case 1, 2, 3, 4, 5: //uncommit entry
 					e.SetType(entry.ETUncommitted)
 					uncommitInfo := &entry.Info{
-						Uncommits: []entry.Tid{{
-							Group: groupNo,
-							Tid:   tidAlloc.Get() + 1 + uint64(rand.Intn(3)),
-						}},
+						Uncommits: tidAlloc.Get() + 1 + uint64(rand.Intn(3)),
 					}
 					e.SetInfo(uncommitInfo)
 					str := uncommitInfo.ToString()

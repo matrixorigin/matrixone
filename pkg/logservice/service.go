@@ -125,7 +125,7 @@ func NewService(cfg Config) (*Service, error) {
 	return service, nil
 }
 
-func (s *Service) GetStore()*store{
+func (s *Service) GetStore() *store {
 	return s.store
 }
 
