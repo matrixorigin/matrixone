@@ -35,15 +35,10 @@ var (
 type vInfo struct {
 	vf *vFile
 
-	// ckpInfoVersion int
-
 	Addrs    map[uint64]int //lsn-offset //r
 	addrmu   *sync.RWMutex
 	addrCond sync.Cond
 
-	// unloaded    bool
-	// inited      bool
-	// loadmu      sync.Mutex
 	logQueue    chan any
 	flushWg     sync.WaitGroup
 	flushCtx    context.Context
@@ -75,73 +70,6 @@ func newVInfo(vf *vFile) *vInfo {
 	return info
 }
 
-// func (info *vInfo) OnReplay(r *replayer) {
-// 	if info.unloaded && info.vf.committed == int32(1) {
-// 		info.vf.WriteMeta()
-// 		err := info.vf.Sync()
-// 		if err != nil {
-// 			panic(err)
-// 		}
-// 	}
-// 	info.inited = true
-// 	info.flushWg.Wait()
-// }
-
-// func (info *vInfo) LoadMeta() error {
-// 	info.loadmu.Lock()
-// 	defer info.loadmu.Unlock()
-// 	if info.inited && !info.unloaded {
-// 		return nil
-// 	}
-// 	err := info.vf.readMeta()
-// 	if err != nil {
-// 		return err
-// 	}
-// 	info.inited = true
-// 	info.unloaded = false
-// 	return nil
-// }
-
-// func (info *vInfo) FreeMeta() {
-// 	info.loadmu.Lock()
-// 	defer info.loadmu.Unlock()
-// 	info.groups = nil
-// 	info.Addrs = nil
-// 	info.unloaded = true
-// }
-
-// func (info *vInfo) ReadMeta(vf *vFile) error {
-// 	buf := make([]byte, Metasize)
-// 	vf.ReadAt(buf, int64(vf.size)-int64(Metasize))
-// 	size := binary.BigEndian.Uint16(buf)
-// 	buf = make([]byte, int(size))
-// 	vf.ReadAt(buf, int64(vf.size)-int64(Metasize)-int64(size))
-// 	json.Unmarshal(buf, info)
-// 	if info == nil {
-// 		return errors.New("read vfile meta failed")
-// 	}
-// 	return nil
-// }
-
-
-// TODO: for ckp with payload, merge ckp after IsCovered()
-// func (info *vInfo) IsToDelete(c *compactor) (toDelete bool) {
-// 	toDelete = true
-// 	// for _, g := range info.groups {
-// 	// 	g.MergeCheckpointInfo(c)
-// 	// }
-// 	for _, g := range info.groups {
-// 		if !g.IsCovered(c) {
-// 			// logutil.Infof("%p not covered %d\ntcmap:%v\nckp%v\nckpver %d\ng:%v\n",info, info.vf.Id(), c.tidCidMap, c.checkpointed, c.ckpInfoVersion, g)
-// 			toDelete = false
-// 		}
-// 	}
-// 	// if c.ckpInfoVersion < info.ckpInfoVersion {
-// 	// 	c.ckpInfoVersion = info.ckpInfoVersion
-// 	// }
-// 	return
-// }
-
 func (info *vInfo) String() string {
 	s := ""
 	// info.groupmu.RLock()
@@ -151,7 +79,9 @@ func (info *vInfo) String() string {
 	// info.groupmu.RUnlock()
 	return s
 }
-
+func (info *vInfo) onReplay(offset int, lsn uint64) {
+	info.Addrs[lsn] = offset
+}
 func (info *vInfo) logLoop() {
 	infos := make([]any, 0, DefaultMaxCommitSize)
 	for {
@@ -177,20 +107,6 @@ func (info *vInfo) logLoop() {
 
 func (info *vInfo) onLog(infos []any) {
 	for _, vi := range infos {
-		// var err error
-		// switch vi.Group {
-		// default:
-		// 	err = info.LogCommit(vi)
-		// 	if err != nil {
-		// 		panic(err)
-		// 	}
-		// }
-		// if err != nil {
-		// 	panic(err)
-		// }
-		// if vi.Info == nil {
-		// 	continue
-		// }
 		info.addrmu.Lock()
 		addr := vi.(*VFileAddress)
 		info.Addrs[addr.LSN] = addr.Offset
@@ -216,28 +132,6 @@ func (info *vInfo) Log(v any) error {
 	// fmt.Printf("%p|addrs are %v\n", info, info.Addrs)
 	return nil
 }
-// func (info *vInfo) LogInternalInfo(entryInfo *entry.Info) error {
-// 	id := entryInfo.PostCommitVersion
-// 	if info.ckpInfoVersion < id {
-// 		info.ckpInfoVersion = id
-// 	}
-// 	return nil
-// }
-
-// func (info *vInfo) LogCommit(entryInfo *entry.Info) error {
-// 	g, ok := info.groups[entryInfo.Group]
-// 	if !ok {
-// 		g = newcommitGroup(info, entryInfo.Group)
-// 	}
-// 	err := g.Log(entryInfo)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	info.groupmu.Lock()
-// 	info.groups[entryInfo.Group] = g
-// 	info.groupmu.Unlock()
-// 	return nil
-// }
 
 func (info *vInfo) GetOffsetByLSN(lsn uint64) (int, error) {
 	info.addrmu.RLock()

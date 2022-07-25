@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
@@ -74,7 +75,7 @@ func NewBaseStore(dir, name string, cfg *StoreCfg) (*baseStore, error) {
 	if cfg == nil {
 		cfg = &StoreCfg{}
 	}
-	bs.file, err = OpenRotateFile(dir, name, nil, cfg.RotateChecker, cfg.HistoryFactory)
+	bs.file, err = OpenRotateFile(dir, name, nil, cfg.RotateChecker, cfg.HistoryFactory, bs)
 	if err != nil {
 		return nil, err
 	}
@@ -141,8 +142,8 @@ func (bs *baseStore) onCommits(batches ...any) {
 			e.DoneWithErr(nil)
 			bs.postCommitQueue.Enqueue(e)
 		}
-	cnt := len(bat)
-	bs.flushWg.Add(-1 * cnt)
+		cnt := len(bat)
+		bs.flushWg.Add(-1 * cnt)
 	}
 }
 
@@ -169,7 +170,7 @@ func (bs *baseStore) onEntries(entries ...any) {
 		if err != nil {
 			panic(err)
 		}
-		if _, err = e.Entry.WriteTo(appender); err != nil {
+		if _, err = e.WriteTo(appender); err != nil {
 			panic(err)
 		}
 		// if e.IsPrintTime() {
@@ -184,8 +185,8 @@ func (bs *baseStore) onEntries(entries ...any) {
 		// 	e.StartTime()
 		// }
 	}
-	bat:=make([]any,len(entries))
-	copy(bat,entries)
+	bat := make([]any, len(entries))
+	copy(bat, entries)
 	bs.syncQueue.Enqueue(bat)
 }
 
@@ -253,17 +254,16 @@ func (bs *baseStore) Append(e *entry.Entry) error {
 	return nil
 }
 
-// func (bs *baseStore) Replay(h ApplyHandle) error {
-// 	r := newReplayer(h)
-// 	o := &noopObserver{}
-// 	err := bs.file.Replay(r, o)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	bs.OnReplay(r)
-// 	r.Apply()
-// 	return nil
-// }
+func (bs *baseStore) Replay(h driver.ApplyHandle) error {
+	r := newReplayer(h)
+	bs.addrs = r.addrs
+	err := bs.file.Replay(r)
+	if err != nil {
+		return err
+	}
+	bs.onReplay(r)
+	return nil
+}
 
 func (bs *baseStore) Read(lsn uint64) (*entry.Entry, error) {
 	ver, err := bs.GetVersionByGLSN(lsn)

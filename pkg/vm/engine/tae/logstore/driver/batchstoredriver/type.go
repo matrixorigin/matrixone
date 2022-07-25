@@ -4,6 +4,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
@@ -20,7 +21,7 @@ type VFile interface {
 	Name() string
 	String() string
 
-	// Replay(*replayer, ReplayObserver) error
+	Replay(*replayer) error
 	OnReplayCommitted()
 
 	Load(lsn uint64) (*entry.Entry, error)
@@ -28,22 +29,16 @@ type VFile interface {
 }
 
 type FileAppender interface {
-	Prepare(int,uint64) (any,error)
+	Prepare(int, uint64) (any, error)
 	Write([]byte) (int, error)
 	Commit() error
 }
 
 type FileReader any
 
-// io.Reader
-// ReadAt([]byte, FileAppender) (int, error)
-
-// type ReplayObserver interface {
-// 	OnNewEntry(int)
-// 	OnLogInfo(*entry.Info)
-// }
-
-// type ReplayHandle = func(VFile, ReplayObserver) error
+type ReplayObserver interface {
+	onTruncatedFile(id int)
+}
 
 type History interface {
 	String() string
@@ -55,11 +50,7 @@ type History interface {
 	DropEntry(int) (VFile, error)
 	OldestEntry() VFile
 	Empty() bool
-	// Replay(*replayer, ReplayObserver) error
-	// TryTruncate(*compactor) error
 }
-
-type ApplyHandle = func(group uint32, commitId uint64, payload []byte, typ uint16, info any)
 
 type File interface {
 	io.Closer
@@ -71,7 +62,7 @@ type File interface {
 	GetEntryByVersion(version int) (VFile, error)
 	Sync() error
 	GetAppender() FileAppender
-	// Replay(*replayer, ReplayObserver) error
+	Replay(*replayer) error
 	GetHistory() History
 	Load(ver int, groupId uint32, lsn uint64) (*entry.Entry, error)
 }
@@ -83,7 +74,7 @@ type Store interface {
 	GetTruncated() (lsn uint64, err error)
 	Read(lsn uint64) (*entry.Entry, error)
 	Close() error
-	// Replay(ApplyHandle) error
+	Replay(driver.ApplyHandle) error
 	GetSynced(uint32) uint64
 	GetCurrSeqNum(uint32) uint64
 }

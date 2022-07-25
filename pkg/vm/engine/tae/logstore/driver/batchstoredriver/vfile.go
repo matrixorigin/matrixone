@@ -16,7 +16,9 @@ package batchstoredriver
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -28,10 +30,9 @@ import (
 var Metasize = 2
 
 type vFileState struct {
-	bufPos  int
-	bufSize int
-	pos     int
-	file    *vFile
+	bufPos int
+	pos    int
+	file   *vFile
 }
 
 type vFile struct {
@@ -69,19 +70,6 @@ func newVFile(mu *sync.RWMutex, name string, version int, history History) (*vFi
 	vf.vInfo = newVInfo(vf)
 	return vf, nil
 }
-
-// func (vf *vFile) InCommits(intervals map[uint32]*common.ClosedIntervals) bool {
-// 	for group, commits := range vf.Commits {
-// 		interval, ok := intervals[group]
-// 		if !ok {
-// 			return false
-// 		}
-// 		if !interval.ContainsInterval(*commits) {
-// 			return false
-// 		}
-// 	}
-// 	return true
-// }
 
 func (vf *vFile) String() string {
 	var w bytes.Buffer
@@ -126,6 +114,7 @@ func (vf *vFile) FinishWrite() {
 }
 
 func (vf *vFile) Close() error {
+	// logutil.Infof("v%d addr is %v",vf.Id(),vf.Addrs)
 	err := vf.File.Close()
 	if err != nil {
 		return err
@@ -253,37 +242,19 @@ func (vf *vFile) Destroy() error {
 	return err
 }
 
-// func (vf *vFile) Replay(r *replayer, observer ReplayObserver) error {
-// 	observer.OnNewEntry(vf.Id())
-// 	for {
-// 		if err := r.replayHandler(vf, vf); err != nil {
-// 			if errors.Is(err, io.EOF) {
-// 				break
-// 			}
-// 			return err
-// 		}
-// 	}
-// 	vf.OnReplay(r)
-// 	return nil
-// }
+func (vf *vFile) Replay(r *replayer) error {
+	for {
+		if err := r.replayHandler(vf); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return err
+		}
+	}
+	// logutil.Infof("v%d addr is %v",vf.Id(),vf.Addrs)
+	return nil
+}
 
-// func (vf *vFile) ReplayCWithCkp(r *replayer, observer ReplayObserver) error {
-// 	observer.OnNewEntry(vf.Id())
-// 	if err := r.replayHandlerWithCkpForCommitGroups(vf, vf); err != nil {
-// 		return err
-// 	}
-// 	vf.OnReplay(r)
-// 	return nil
-// }
-
-// func (vf *vFile) ReplayUCWithCkp(r *replayer, observer ReplayObserver) error {
-// 	observer.OnNewEntry(vf.Id())
-// 	if err := r.replayHandlerWithCkpForUCGroups(vf, vf); err != nil {
-// 		return err
-// 	}
-// 	vf.OnReplay(r)
-// 	return nil
-// }
 func (vf *vFile) OnLogInfo(info any) {
 	err := vf.Log(info)
 	if err != nil {
@@ -291,13 +262,6 @@ func (vf *vFile) OnLogInfo(info any) {
 	}
 }
 func (vf *vFile) Load(lsn uint64) (*entry.Entry, error) {
-	// if vf.HasCommitted() {
-	// err := vf.LoadMeta()
-	// defer vf.FreeMeta()
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// }
 	offset, err := vf.GetOffsetByLSN(lsn)
 	if err == ErrVFileGroupNotExist || err == ErrVFileLsnNotExist {
 		for i := 0; i < 10; i++ {

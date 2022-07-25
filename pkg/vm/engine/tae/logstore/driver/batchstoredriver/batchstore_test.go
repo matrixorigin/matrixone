@@ -1,10 +1,12 @@
 package batchstoredriver
 
 import (
+	"fmt"
 	"os"
 	"sync"
 	"testing"
 
+	// "github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	storeEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -12,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestDriver(t *testing.T) {
+func initEnv(t *testing.T) *baseStore {
 	dir := "/tmp/logstore/teststore"
 	name := "mock"
 	os.RemoveAll(dir)
@@ -21,8 +23,38 @@ func TestDriver(t *testing.T) {
 	}
 	s, err := NewBaseStore(dir, name, cfg)
 	assert.NoError(t, err)
-	defer s.Close()
+	return s
+}
 
+func restartStore(s *baseStore, t *testing.T) *baseStore {
+	maxlsn := s.GetCurrSeqNum()
+	// for ver,lsns:=range s.addrs{
+	// 	logutil.Infof("v%d lsn%v",ver,lsns.Intervals)
+	// }
+	cfg := &StoreCfg{
+		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 3),
+	}
+	s, err := NewBaseStore(s.dir, s.name, cfg)
+	assert.NoError(t, err)
+	tempLsn := uint64(0)
+	s.Replay(func(e *entry.Entry) {
+		if e.Lsn < tempLsn {
+			panic(fmt.Errorf("logic error %d<%d", e.Lsn, tempLsn))
+		}
+		tempLsn = e.Lsn
+		s.Read(e.Lsn)
+		// logutil.Infof("lsn is %d",e.Lsn)
+	})
+	assert.Equal(t, maxlsn, s.GetCurrSeqNum())
+	assert.Equal(t, maxlsn, s.synced)
+	assert.Equal(t, maxlsn, s.syncing)
+	// for ver,lsns:=range s.addrs{
+	// 	logutil.Infof("v%d lsn%v",ver,lsns.Intervals)
+	// }
+	return s
+}
+
+func concurrentAppendReadCheckpoint(s *baseStore, t *testing.T) {
 	entryCnt := 100
 	entries := make([]*entry.Entry, 0)
 	for i := 0; i < entryCnt; i++ {
@@ -38,7 +70,7 @@ func TestDriver(t *testing.T) {
 			err := s.Append(e)
 			assert.NoError(t, err)
 			lsn := s.GetCurrSeqNum()
-			assert.GreaterOrEqual(t,lsn,e.Lsn)
+			assert.GreaterOrEqual(t, lsn, e.Lsn)
 			wg.Done()
 		}
 	}
@@ -61,9 +93,9 @@ func TestDriver(t *testing.T) {
 			err := s.Truncate(e.Lsn)
 			assert.NoError(t, err)
 			e.Entry.Free()
-			lsn,err:=s.GetTruncated()
+			lsn, err := s.GetTruncated()
 			assert.NoError(t, err)
-			assert.GreaterOrEqual(t,lsn,e.Lsn)
+			assert.GreaterOrEqual(t, lsn, e.Lsn)
 			wg.Done()
 		}
 	}
@@ -80,7 +112,12 @@ func TestDriver(t *testing.T) {
 		worker.Submit(truncatefn(i))
 	}
 	wg.Wait()
+}
 
-	cnt := s.GetPenddingCnt()
-	assert.Equal(t,uint64(0),cnt)
+func TestDriver(t *testing.T) {
+	s := initEnv(t)
+	concurrentAppendReadCheckpoint(s, t)
+	s = restartStore(s, t)
+	concurrentAppendReadCheckpoint(s, t)
+	s.Close()
 }

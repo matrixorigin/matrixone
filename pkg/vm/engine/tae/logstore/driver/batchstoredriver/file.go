@@ -58,10 +58,10 @@ type rotateFile struct {
 	uncommitted []*vFile
 	history     History
 
-	commitWg        sync.WaitGroup
-	commitCtx       context.Context
-	commitCancel    context.CancelFunc
-	commitQueue     chan *vFile
+	commitWg     sync.WaitGroup
+	commitCtx    context.Context
+	commitCancel context.CancelFunc
+	commitQueue  chan *vFile
 
 	nextVer uint64
 
@@ -69,7 +69,7 @@ type rotateFile struct {
 }
 
 func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChecker,
-	historyFactory HistoryFactory) (*rotateFile, error) {
+	historyFactory HistoryFactory, observer ReplayObserver) (*rotateFile, error) {
 	var err error
 	if mu == nil {
 		mu = new(sync.RWMutex)
@@ -91,13 +91,13 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 	}
 
 	rf := &rotateFile{
-		RWMutex:         mu,
-		dir:             dir,
-		name:            name,
-		uncommitted:     make([]*vFile, 0),
-		checker:         rotateChecker,
-		commitQueue:     make(chan *vFile, 10000),
-		history:         historyFactory(),
+		RWMutex:     mu,
+		dir:         dir,
+		name:        name,
+		uncommitted: make([]*vFile, 0),
+		checker:     rotateChecker,
+		commitQueue: make(chan *vFile, 10000),
+		history:     historyFactory(),
 	}
 	if !newDir {
 		files, err := ioutil.ReadDir(dir)
@@ -131,6 +131,7 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 		sort.Slice(vfiles, func(i, j int) bool {
 			return vfiles[i].(*vFile).version < vfiles[j].(*vFile).version
 		})
+		observer.onTruncatedFile(vfiles[0].Id() - 1)
 		if len(vfiles) == 0 {
 			err = rf.scheduleNew()
 			if err != nil {
@@ -154,58 +155,36 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 	return rf, err
 }
 
-// func (rf *rotateFile) Replay(r *replayer, o ReplayObserver) error {
-// 	entryIDs := rf.history.EntryIds()
-// 	for _, vf := range rf.uncommitted {
-// 		entryIDs = append(entryIDs, vf.Id())
-// 	}
-// 	entries := make([]VFile, 0)
-// 	failedIDs := make([]int, 0)
-// 	for _, id := range entryIDs {
-// 		entry := rf.history.GetEntry(id)
-// 		if entry == nil {
-// 			vf := rf.getEntryFromUncommitted(id)
-// 			if vf == nil {
-// 				panic("wrong id")
-// 			}
-// 			entry = vf
-// 		}
+func (rf *rotateFile) getEntryFromUncommitted(id int) (e *vFile) {
+	for _, vf := range rf.uncommitted {
+		if vf.version == id {
+			return vf
+		}
+	}
+	return nil
+}
+func (rf *rotateFile) Replay(r *replayer) error {
+	entryIDs := rf.history.EntryIds()
+	for _, vf := range rf.uncommitted {
+		entryIDs = append(entryIDs, vf.Id())
+	}
+	for _, id := range entryIDs {
+		entry := rf.history.GetEntry(id)
+		if entry == nil {
+			vf := rf.getEntryFromUncommitted(id)
+			if vf == nil {
+				panic("wrong id")
+			}
+			entry = vf
+		}
 
-// 		err := entry.LoadMeta()
-// 		if err != nil {
-// 			err := entry.Replay(r, o)
-// 			if err != nil {
-// 				panic(err)
-// 			}
-// 			failedIDs = append(failedIDs, id)
-// 			continue
-// 		}
-// 		entries = append(entries, entry)
-// 	}
-// 	r.MergeCkps(entries)
-// 	for _, vf := range entries {
-// 		for _, id := range failedIDs {
-// 			if vf.Id() == id {
-// 				continue
-// 			}
-// 		}
-// 		err := vf.ReplayCWithCkp(r, o)
-// 		if err != nil {
-// 			panic(err)
-// 		}
-// 	}
-// 	return nil
-// }
-
-// for replay
-// func (rf *rotateFile) getEntryFromUncommitted(id int) (e *vFile) {
-// 	for _, vf := range rf.uncommitted {
-// 		if vf.version == id {
-// 			return vf
-// 		}
-// 	}
-// 	return nil
-// }
+		err := entry.Replay(r)
+		if err != nil {
+			panic(err)
+		}
+	}
+	return nil
+}
 
 func (rf *rotateFile) commitLoop() {
 	defer rf.wg.Done()

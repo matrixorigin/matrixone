@@ -19,25 +19,29 @@ var (
 	ErrTimeOut       = errors.New("retry time our")
 )
 
+// checkpointInfo,checkpointed,ckpcnt internal,ckp
+// walDriverLsnMap,walCurrentLsn,syncing each entry
+// walLsnTidMap commit
+// driverCheckpointing driverCheckpointed init
 type WalInfo struct {
-	checkpointInfo      map[uint32]*checkpointInfo //gid-ckp
+	checkpointInfo      map[uint32]*checkpointInfo //gid-ckp //r
 	ckpMu               sync.RWMutex
-	walDriverLsnMap     map[uint32]map[uint64]uint64 //gid-walLsn-driverLsn
+	walDriverLsnMap     map[uint32]map[uint64]uint64 //gid-walLsn-driverLsn //r
 	lsnMu               sync.RWMutex
-	walLsnTidMap        map[uint64]uint64 //tid-lsn
-	driverCheckpointing uint64
-	driverCheckpointed  uint64
-	walCurrentLsn       map[uint32]uint64
+	walLsnTidMap        map[uint64]uint64 //tid-lsn //r
+	driverCheckpointing uint64 //r
+	driverCheckpointed  uint64 //r
+	walCurrentLsn       map[uint32]uint64 //r
 	lsnmu               sync.RWMutex
-	syncing             map[uint32]uint64
+	syncing             map[uint32]uint64 //r
 
-	synced     map[uint32]uint64
+	synced     map[uint32]uint64 //r
 	syncedMu   sync.RWMutex
 	commitCond sync.Cond
 
-	checkpointed   map[uint32]uint64
+	checkpointed   map[uint32]uint64 //r
 	checkpointedMu sync.RWMutex
-	ckpcnt         map[uint32]uint64
+	ckpcnt         map[uint32]uint64 //r
 	ckpcntMu       sync.RWMutex
 }
 

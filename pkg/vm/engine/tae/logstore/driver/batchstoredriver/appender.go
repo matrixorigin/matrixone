@@ -31,7 +31,7 @@ func newFileAppender(rfile *rotateFile) *fileAppender {
 	return appender
 }
 
-func (appender *fileAppender) Prepare(size int,lsn uint64) (any, error) {
+func (appender *fileAppender) Prepare(size int, lsn uint64) (any, error) {
 	var err error
 	appender.capacity = size
 	appender.rfile.Lock()
@@ -41,7 +41,7 @@ func (appender *fileAppender) Prepare(size int,lsn uint64) (any, error) {
 	}
 	appender.tempPos = appender.rollbackState.bufPos
 	addr := &VFileAddress{
-		LSN: lsn,
+		LSN:     lsn,
 		Version: appender.rollbackState.file.version,
 		Offset:  appender.rollbackState.pos,
 	}
@@ -78,4 +78,3 @@ func (appender *fileAppender) Commit() error {
 	appender.rollbackState.file.FinishWrite()
 	return nil
 }
-
