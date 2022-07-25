@@ -16,7 +16,7 @@ package config
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -145,7 +145,7 @@ func (params *parameters) LoadParametersDefinitionFromFile(filename string) erro
 	}
 	defer pfile.Close()
 
-	fbytes, err := ioutil.ReadAll(pfile)
+	fbytes, err := io.ReadAll(pfile)
 	if err != nil {
 		return err
 	}

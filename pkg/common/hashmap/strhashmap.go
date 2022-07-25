@@ -61,6 +61,9 @@ func (m *StrHashMap) AddGroup() {
 // never handle null
 func (m *StrHashMap) InsertValue(val any) bool {
 	defer func() { m.keys[0] = m.keys[0][:0] }()
+	if m.hasNull {
+		m.keys[0] = append(m.keys[0], byte(0))
+	}
 	switch v := val.(type) {
 	case uint8:
 		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
