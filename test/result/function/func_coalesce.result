@@ -32,7 +32,7 @@ Can't cast column from BIGINT type to BIGINT UNSIGNED type because of one or mor
 SELECT * FROM t0 WHERE CAST(IFNULL(t0.c0, -1) AS UNSIGNED);
 Can't cast column from BIGINT type to BIGINT UNSIGNED type because of one or more values in that column. Reason: overflow
 SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) IS TRUE FROM t0;
-Can't cast column from BIGINT type to BIGINT UNSIGNED type because of one or more values in that column. Reason: overflow
+Operator '=' with parameters [BIGINT UNSIGNED BOOL] will be implemented in future version.
 SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) FROM t0;
 Can't cast column from BIGINT type to BIGINT UNSIGNED type because of one or more values in that column. Reason: overflow
 DROP TABLE t0;
@@ -69,13 +69,13 @@ x
 DROP TABLE t1;
 create table t1 (a bigint unsigned);
 insert into t1 select (if(1, 9223372036854775808, 1));
+Can't cast '9223372036854775808' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 insert into t1 select (case when 1 then 9223372036854775808 else 1 end);
+Can't cast '9223372036854775808' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 insert into t1 select (coalesce(9223372036854775808, 1));
+Can't cast '9223372036854775808' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 select * from t1;
 a
-9223372036854775808
-9223372036854775808
-9223372036854775808
 drop table t1;
 select if(1, cast(1111111111111111111 as unsigned), 1) i,case when 1 then cast(1111111111111111111 as unsigned) else 1 end c, coalesce(cast(1111111111111111111 as unsigned), 1) co;
 i	c	co
