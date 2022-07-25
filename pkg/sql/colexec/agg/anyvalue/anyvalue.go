@@ -19,6 +19,10 @@ func NewAnyvalue[T any]() *Anyvalue[T] {
 }
 
 func (a *Anyvalue[T]) Grows(size int) {
+	if len(a.NotSet) == 0 {
+		a.NotSet = make([]bool, 0)
+	}
+
 	for i := 0; i < size; i++ {
 		a.NotSet = append(a.NotSet, false)
 	}

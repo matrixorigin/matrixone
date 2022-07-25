@@ -14,9 +14,6 @@
 
 package anyvalue
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
-
 type Anyvalue[T any] struct {
 	NotSet []bool
-	Typ    types.Type
 }
