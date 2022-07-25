@@ -61,6 +61,9 @@ func (m *StrHashMap) AddGroup() {
 // never handle null
 func (m *StrHashMap) InsertValue(val any) bool {
 	defer func() { m.keys[0] = m.keys[0][:0] }()
+	if m.hasNull {
+		m.keys[0] = append(m.keys[0], byte(0))
+	}
 	switch v := val.(type) {
 	case uint8:
 		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
@@ -70,11 +73,23 @@ func (m *StrHashMap) InsertValue(val any) bool {
 		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	case uint64:
 		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case int8:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case int16:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case int32:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case int64:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case float32:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case float64:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	case []byte:
 		m.keys[0] = append(m.keys[0], v...)
-	case types.Decimal128:
-		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	case types.Decimal64:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case types.Decimal128:
 		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	}
 	if l := len(m.keys[0]); l < 16 {
@@ -102,21 +117,36 @@ func (m *StrHashMap) Insert(vecs []*vector.Vector, row int) bool {
 
 func (m *StrHashMap) encodeHashKeysWithScale(vecs []*vector.Vector, start, count int, scales []int32) {
 	for i, vec := range vecs {
-		switch typLen := vec.Typ.TypeSize(); typLen {
-		case 1:
+		switch t := vec.Typ.Oid; t {
+		case types.T_uint8:
 			fillGroupStr[uint8](m, vec, count, 1, start, scales[i])
-		case 2:
+		case types.T_uint16:
 			fillGroupStr[uint16](m, vec, count, 2, start, scales[i])
-		case 4:
+		case types.T_uint32:
 			fillGroupStr[uint32](m, vec, count, 4, start, scales[i])
-		case 8:
+		case types.T_uint64:
 			fillGroupStr[uint64](m, vec, count, 8, start, scales[i])
-		case 16:
+		case types.T_int8:
+			fillGroupStr[int8](m, vec, count, 1, start, scales[i])
+		case types.T_int16:
+			fillGroupStr[int16](m, vec, count, 2, start, scales[i])
+		case types.T_int32:
+			fillGroupStr[int32](m, vec, count, 4, start, scales[i])
+		case types.T_int64:
+			fillGroupStr[int64](m, vec, count, 8, start, scales[i])
+		case types.T_float32:
+			fillGroupStr[float32](m, vec, count, 4, start, scales[i])
+		case types.T_float64:
+			fillGroupStr[float64](m, vec, count, 8, start, scales[i])
+		case types.T_decimal64:
+			fillGroupStr[types.Decimal64](m, vec, count, 8, start, scales[i])
+		case types.T_decimal128:
 			fillGroupStr[types.Decimal128](m, vec, count, 16, start, scales[i])
 		default:
 			fillStringGroupStr(m, vec, count, start)
 		}
 	}
+
 	for i := 0; i < count; i++ {
 		if l := len(m.keys[i]); l < 16 {
 			m.keys[i] = append(m.keys[i], hashtable.StrKeyPadding[l:]...)
@@ -126,17 +156,31 @@ func (m *StrHashMap) encodeHashKeysWithScale(vecs []*vector.Vector, start, count
 
 func (m *StrHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	for _, vec := range vecs {
-		switch typLen := vec.Typ.TypeSize(); typLen {
-		case 1:
+		switch t := vec.Typ.Oid; t {
+		case types.T_uint8:
 			fillGroupStr[uint8](m, vec, count, 1, start, 0)
-		case 2:
+		case types.T_uint16:
 			fillGroupStr[uint16](m, vec, count, 2, start, 0)
-		case 4:
+		case types.T_uint32:
 			fillGroupStr[uint32](m, vec, count, 4, start, 0)
-		case 8:
+		case types.T_uint64:
 			fillGroupStr[uint64](m, vec, count, 8, start, 0)
-		case 16:
-			fillGroupStr[types.Decimal128](m, vec, count, 16, start, 0)
+		case types.T_int8:
+			fillGroupStr[int8](m, vec, count, 1, start, 0)
+		case types.T_int16:
+			fillGroupStr[int16](m, vec, count, 2, start, 0)
+		case types.T_int32:
+			fillGroupStr[int32](m, vec, count, 4, start, 0)
+		case types.T_int64:
+			fillGroupStr[int64](m, vec, count, 8, start, 0)
+		case types.T_float32:
+			fillGroupStr[float32](m, vec, count, 4, start, 0)
+		case types.T_float64:
+			fillGroupStr[float64](m, vec, count, 8, start, 0)
+		case types.T_decimal64:
+			fillGroupStr[types.Decimal64](m, vec, count, 8, start, 0)
+		case types.T_decimal128:
+			fillGroupStr[types.Decimal128](m, vec, count, 46, start, 0)
 		default:
 			fillStringGroupStr(m, vec, count, start)
 		}
