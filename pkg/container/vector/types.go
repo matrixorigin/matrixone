@@ -45,7 +45,7 @@ type Vector interface {
 }
 */
 
-/*
+/* Vector vector
  * origin true:
  * 				count || type || bitmap size || bitmap || vector
  * origin false:

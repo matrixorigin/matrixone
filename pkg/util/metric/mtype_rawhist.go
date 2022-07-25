@@ -225,18 +225,18 @@ func NewRawHistVec(opts prom.HistogramOpts, labelNames []string) *RawHistVec {
 	return r
 }
 
-func (r *RawHistVec) CancelToProm() {
-	r.compat = nil
+func (v *RawHistVec) CancelToProm() {
+	v.compat = nil
 
 	ch := make(chan prom.Metric, 100)
-	go func() { r.Collect(ch); close(ch) }()
+	go func() { v.Collect(ch); close(ch) }()
 	for m := range ch {
 		m.(*rawHist).CancelToProm()
 	}
 }
 
-func (r *RawHistVec) CollectorToProm() prom.Collector {
-	return r.compat
+func (v *RawHistVec) CollectorToProm() prom.Collector {
+	return v.compat
 }
 
 func (v *RawHistVec) Collect(ch chan<- prom.Metric) {

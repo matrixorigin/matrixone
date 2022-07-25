@@ -79,8 +79,8 @@ func (opt *BaseOptimizer) exploreNode(n *Node) {
 }
 
 func (opt *BaseOptimizer) pruneUsedNodes(qry *plan.Query) {
-	var newSteps []int32
-	var newNodes []*plan.Node
+	newSteps := make([]int32, 0, len(qry.Steps))
+	newNodes := make([]*plan.Node, 0, len(qry.Nodes))
 
 	for _, step := range qry.Steps {
 		newSteps = append(newSteps, opt.compactPlanTree(qry, step, &newNodes))
@@ -90,11 +90,11 @@ func (opt *BaseOptimizer) pruneUsedNodes(qry *plan.Query) {
 	qry.Nodes = newNodes
 }
 
-func (opt *BaseOptimizer) compactPlanTree(qry *plan.Query, nodeId int32, nodes *[]*plan.Node) int32 {
-	node := qry.Nodes[nodeId]
+func (opt *BaseOptimizer) compactPlanTree(qry *plan.Query, nodeID int32, nodes *[]*plan.Node) int32 {
+	node := qry.Nodes[nodeID]
 
-	for i, childId := range node.Children {
-		node.Children[i] = opt.compactPlanTree(qry, childId, nodes)
+	for i, childID := range node.Children {
+		node.Children[i] = opt.compactPlanTree(qry, childID, nodes)
 	}
 
 	node.NodeId = int32(len(*nodes))

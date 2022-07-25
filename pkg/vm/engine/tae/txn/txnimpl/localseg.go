@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package txnimpl
 
 import (
@@ -13,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -81,38 +94,17 @@ func (seg *localSegment) registerInsertNode() {
 }
 
 func (seg *localSegment) ApplyAppend() (err error) {
-	var (
-		destOff      int
-		anode        txnif.AppendNode
-		prev         txnif.AppendNode
-		prevAppender data.BlockAppender
-	)
+	var destOff int
 	for _, ctx := range seg.appends {
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count)
 		defer bat.Close()
-		if prevAppender != nil && prevAppender.GetID().BlockID == ctx.driver.GetID().BlockID {
-			prev = anode
-		} else {
-			if anode != nil {
-				seg.table.store.IncreateWriteCnt()
-				seg.table.txnEntries = append(seg.table.txnEntries, anode)
-			}
-			anode = nil
-			prev = nil
-		}
-		prevAppender = ctx.driver
-		if anode, destOff, err = ctx.driver.ApplyAppend(
+		if destOff, err = ctx.driver.ApplyAppend(
 			bat,
-			seg.table.store.txn,
-			prev); err != nil {
+			seg.table.store.txn); err != nil {
 			return
 		}
 		id := ctx.driver.GetID()
 		ctx.node.AddApplyInfo(ctx.start, ctx.count, uint32(destOff), ctx.count, seg.table.entry.GetDB().ID, id)
-	}
-	if anode != nil {
-		seg.table.store.IncreateWriteCnt()
-		seg.table.txnEntries = append(seg.table.txnEntries, anode)
 	}
 	if seg.tableHandle != nil {
 		seg.table.entry.GetTableData().ApplyHandle(seg.tableHandle)
@@ -155,13 +147,23 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			}
 			appender = seg.tableHandle.SetAppender(blk.Fingerprint())
 		}
-		toAppend, err := appender.PrepareAppend(node.RowsWithoutDeletes() - appended)
+		anode, created, toAppend, err := appender.PrepareAppend(
+			node.RowsWithoutDeletes()-appended,
+			seg.table.store.txn)
+		if err != nil {
+			return err
+		}
 		toAppendWithDeletes := node.LengthWithDeletes(appended, toAppend)
 		ctx := &appendCtx{
 			driver: appender,
 			node:   node,
+			anode:  anode,
 			start:  node.OffsetWithDeletes(appended),
 			count:  toAppendWithDeletes,
+		}
+		if created {
+			seg.table.store.IncreateWriteCnt()
+			seg.table.txnEntries = append(seg.table.txnEntries, anode)
 		}
 		id := appender.GetID()
 		seg.table.store.warChecker.ReadBlock(seg.table.entry.GetDB().ID, id)

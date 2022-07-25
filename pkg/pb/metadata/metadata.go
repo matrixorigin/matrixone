@@ -15,7 +15,6 @@
 package metadata
 
 import (
-	"bytes"
 	"fmt"
 )
 
@@ -24,19 +23,12 @@ func (m DNShard) IsEmpty() bool {
 	return m.ShardID == 0
 }
 
+// Equal returns true if DNShard is same
+func (m DNShard) Equal(dn DNShard) bool {
+	return m.ShardID == dn.ShardID && m.ReplicaID == dn.ReplicaID
+}
+
 // DebugString returns debug string
 func (m DNShard) DebugString() string {
-	var buffer bytes.Buffer
-
-	buffer.WriteString("shard-id: ")
-	buffer.WriteString(fmt.Sprintf("%d", m.ShardID))
-	buffer.WriteString(", ")
-
-	buffer.WriteString("replica-id: ")
-	buffer.WriteString(fmt.Sprintf("%d", m.ReplicaID))
-	buffer.WriteString(", ")
-
-	buffer.WriteString("address: ")
-	buffer.WriteString(m.Address)
-	return buffer.String()
+	return fmt.Sprintf("%d-%d-%d-%s", m.ShardID, m.ReplicaID, m.LogShardID, m.Address)
 }

@@ -36,6 +36,4 @@ The YEAR() or TOYEAR() function returns the year part for a given date (a number
 
 ## **Constraints**
 
-The date type supports only `yyyy-mm-dd` and `yyyymmdd` for now. 
-
-Currently, MatrixOne doesn't support select function() without from tables.
+The date type supports only `yyyy-mm-dd` and `yyyymmdd` for now.

@@ -234,7 +234,7 @@ func (r *IntRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 	}
 }
 
-// r[x] += a[y]
+// Add r[x] += a[y]
 func (r *IntRing) Add(a interface{}, x, y int64) {
 	ar := a.(*IntRing)
 	r.Vs[x] += ar.Vs[y]
@@ -249,7 +249,7 @@ func (r *IntRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64)
 	}
 }
 
-// r[x] += a[y] * z
+// Mul r[x] += a[y] * z
 func (r *IntRing) Mul(a interface{}, x, y, z int64) {
 	ar := a.(*IntRing)
 	r.Vs[x] += ar.Vs[y] * z

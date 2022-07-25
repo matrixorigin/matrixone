@@ -66,6 +66,11 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			})
 		// todo confirm: option data store like this?
 		case *tree.TableOptionComment:
+			if getNumOfCharacters(opt.Comment) > maxLengthOfTableComment {
+				errmsg := fmt.Sprintf("Comment for table '%s' is too long (max = %d)", createTable.TableDef.Name, maxLengthOfTableComment)
+				return nil, errors.New(errno.InvalidOptionValue, errmsg)
+			}
+
 			properties := []*plan.Property{
 				{
 					Key:   "Comment",
@@ -125,18 +130,20 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			if err != nil {
 				return err
 			}
-			col := &ColDef{
-				Name:    def.Name.Parts[0],
-				Alg:     plan.CompressType_Lz4,
-				Typ:     colType,
-				Default: defultValue,
-			}
-			tableDef.Cols = append(tableDef.Cols, col)
 
 			var pks []string
+			var comment string
 			for _, attr := range def.Attributes {
 				if _, ok := attr.(*tree.AttributePrimaryKey); ok {
 					pks = append(pks, def.Name.Parts[0])
+				}
+
+				if attrComment, ok := attr.(*tree.AttributeComment); ok {
+					comment = attrComment.CMT.String()
+					if getNumOfCharacters(comment) > maxLengthOfColumnComment {
+						errmsg := fmt.Sprintf("Comment for field '%s' is too long (max = %d)", def.Name.Parts[0], maxLengthOfColumnComment)
+						return errors.New(errno.InvalidOptionValue, errmsg)
+					}
 				}
 			}
 			if len(pks) > 0 {
@@ -145,6 +152,14 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 				}
 				primaryKeys = pks
 			}
+			col := &ColDef{
+				Name:    def.Name.Parts[0],
+				Alg:     plan.CompressType_Lz4,
+				Typ:     colType,
+				Default: defultValue,
+				Comment: comment,
+			}
+			tableDef.Cols = append(tableDef.Cols, col)
 		case *tree.PrimaryKeyIndex:
 			if len(primaryKeys) > 0 {
 				return errors.New(errno.SyntaxErrororAccessRuleViolation, "Multiple primary key defined")
@@ -239,7 +254,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 }
 
 func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan, error) {
-	createDb := &plan.CreateDatabase{
+	createDB := &plan.CreateDatabase{
 		IfNotExists: stmt.IfNotExists,
 		Database:    string(stmt.Name),
 	}
@@ -249,7 +264,7 @@ func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan,
 			Ddl: &plan.DataDefinition{
 				DdlType: plan.DataDefinition_CREATE_DATABASE,
 				Definition: &plan.DataDefinition_CreateDatabase{
-					CreateDatabase: createDb,
+					CreateDatabase: createDB,
 				},
 			},
 		},
@@ -257,7 +272,7 @@ func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan,
 }
 
 func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, error) {
-	dropDb := &plan.DropDatabase{
+	dropDB := &plan.DropDatabase{
 		IfExists: stmt.IfExists,
 		Database: string(stmt.Name),
 	}
@@ -267,7 +282,7 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 			Ddl: &plan.DataDefinition{
 				DdlType: plan.DataDefinition_DROP_DATABASE,
 				Definition: &plan.DataDefinition_DropDatabase{
-					DropDatabase: dropDb,
+					DropDatabase: dropDB,
 				},
 			},
 		},

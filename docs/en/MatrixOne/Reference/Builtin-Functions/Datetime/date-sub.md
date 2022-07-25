@@ -34,5 +34,3 @@ DATE_SUB(date,INTERVAL expr unit)
 ## **Constraints**
 
 The date type supports only `yyyy-mm-dd` and `yyyymmdd` for now.
-
-Currently, MatrixOne doesn't support select function() without from tables.

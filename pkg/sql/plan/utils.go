@@ -68,7 +68,9 @@ func hasCorrCol(expr *plan.Expr) bool {
 }
 
 func decreaseDepthAndDispatch(preds []*plan.Expr) ([]*plan.Expr, []*plan.Expr) {
-	var filterPreds, joinPreds []*plan.Expr
+	filterPreds := make([]*plan.Expr, 0, len(preds))
+	joinPreds := make([]*plan.Expr, 0, len(preds))
+
 	for _, pred := range preds {
 		newPred, correlated := decreaseDepth(pred)
 		if !correlated {
@@ -110,7 +112,10 @@ func decreaseDepth(expr *plan.Expr) (*plan.Expr, bool) {
 }
 
 func DeepCopyExpr(expr *Expr) *Expr {
-	new_expr := &Expr{
+	if expr == nil {
+		return nil
+	}
+	newExpr := &Expr{
 		Typ: &plan.Type{
 			Id:        expr.Typ.GetId(),
 			Nullable:  expr.Typ.GetNullable(),
@@ -123,7 +128,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 
 	switch item := expr.Expr.(type) {
 	case *plan.Expr_C:
-		new_expr.Expr = &plan.Expr_C{
+		newExpr.Expr = &plan.Expr_C{
 			C: &plan.Const{
 				Isnull: item.C.GetIsnull(),
 				Value:  item.C.GetValue(),
@@ -131,21 +136,21 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		}
 
 	case *plan.Expr_P:
-		new_expr.Expr = &plan.Expr_P{
+		newExpr.Expr = &plan.Expr_P{
 			P: &plan.ParamRef{
 				Pos: item.P.GetPos(),
 			},
 		}
 
 	case *plan.Expr_V:
-		new_expr.Expr = &plan.Expr_V{
+		newExpr.Expr = &plan.Expr_V{
 			V: &plan.VarRef{
 				Name: item.V.GetName(),
 			},
 		}
 
 	case *plan.Expr_Col:
-		new_expr.Expr = &plan.Expr_Col{
+		newExpr.Expr = &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: item.Col.GetRelPos(),
 				ColPos: item.Col.GetColPos(),
@@ -153,11 +158,11 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		}
 
 	case *plan.Expr_F:
-		new_args := make([]*Expr, len(item.F.Args))
+		newArgs := make([]*Expr, len(item.F.Args))
 		for idx, arg := range item.F.Args {
-			new_args[idx] = DeepCopyExpr(arg)
+			newArgs[idx] = DeepCopyExpr(arg)
 		}
-		new_expr.Expr = &plan.Expr_F{
+		newExpr.Expr = &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
 					Server:     item.F.Func.GetServer(),
@@ -169,19 +174,19 @@ func DeepCopyExpr(expr *Expr) *Expr {
 					SchemaName: item.F.Func.GetSchemaName(),
 					ObjName:    item.F.Func.GetObjName(),
 				},
-				Args: new_args,
+				Args: newArgs,
 			},
 		}
 
 	case *plan.Expr_Sub:
-		new_expr.Expr = &plan.Expr_Sub{
+		newExpr.Expr = &plan.Expr_Sub{
 			Sub: &plan.SubqueryRef{
 				NodeId: item.Sub.GetNodeId(),
 			},
 		}
 
 	case *plan.Expr_Corr:
-		new_expr.Expr = &plan.Expr_Corr{
+		newExpr.Expr = &plan.Expr_Corr{
 			Corr: &plan.CorrColRef{
 				ColPos: item.Corr.GetColPos(),
 				RelPos: item.Corr.GetRelPos(),
@@ -190,7 +195,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		}
 
 	case *plan.Expr_T:
-		new_expr.Expr = &plan.Expr_T{
+		newExpr.Expr = &plan.Expr_T{
 			T: &plan.TargetType{
 				Typ: &plan.Type{
 					Id:        item.T.Typ.GetId(),
@@ -204,7 +209,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		}
 	}
 
-	return new_expr
+	return newExpr
 }
 
 func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding) (side int8) {
@@ -409,7 +414,6 @@ func rejectsNull(filter *plan.Expr) bool {
 	if err != nil {
 		return false
 	}
-
 	if nulls.Any(vec.Nsp) {
 		return true
 	}
@@ -478,4 +482,9 @@ func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge 
 			getHyperEdgeFromExpr(arg, leafByTag, hyperEdge)
 		}
 	}
+}
+
+func getNumOfCharacters(str string) int {
+	strRune := []rune(str)
+	return len(strRune)
 }

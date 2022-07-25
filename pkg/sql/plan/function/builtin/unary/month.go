@@ -32,7 +32,7 @@ func DateToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint8, 1)
 		vector.SetCol(resultVector, month.DateToMonth(inputValues, resultValues))
 		return resultVector, nil
@@ -58,7 +58,7 @@ func DatetimeToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint8, 1)
 		vector.SetCol(resultVector, month.DatetimeToMonth(inputValues, resultValues))
 		return resultVector, nil
@@ -84,7 +84,7 @@ func DateStringToMonth(vectors []*vector.Vector, proc *process.Process) (*vector
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint8, 1)
 		vector.SetCol(resultVector, month.DateStringToMonth(inputValues, resultVector.Nsp, resultValues))
 		return resultVector, nil

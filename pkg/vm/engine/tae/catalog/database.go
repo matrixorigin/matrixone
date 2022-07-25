@@ -327,21 +327,21 @@ func (e *DBEntry) PrepareRollback() (err error) {
 	return
 }
 
-func (entry *DBEntry) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = entry.BaseEntry.WriteTo(w); err != nil {
+func (e *DBEntry) WriteTo(w io.Writer) (n int64, err error) {
+	if n, err = e.BaseEntry.WriteTo(w); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, uint16(len(entry.name))); err != nil {
+	if err = binary.Write(w, binary.BigEndian, uint16(len(e.name))); err != nil {
 		return
 	}
 	var sn int
-	sn, err = w.Write([]byte(entry.name))
+	sn, err = w.Write([]byte(e.name))
 	n += int64(sn) + 2
 	return
 }
 
-func (entry *DBEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = entry.BaseEntry.ReadFrom(r); err != nil {
+func (e *DBEntry) ReadFrom(r io.Reader) (n int64, err error) {
+	if n, err = e.BaseEntry.ReadFrom(r); err != nil {
 		return
 	}
 	size := uint16(0)
@@ -354,44 +354,44 @@ func (entry *DBEntry) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += int64(size)
-	entry.name = string(buf)
+	e.name = string(buf)
 	return
 }
 
-func (entry *DBEntry) MakeLogEntry() *EntryCommand {
-	return newDBCmd(0, CmdLogDatabase, entry)
+func (e *DBEntry) MakeLogEntry() *EntryCommand {
+	return newDBCmd(0, CmdLogDatabase, e)
 }
 
-func (entry *DBEntry) Clone() CheckpointItem {
+func (e *DBEntry) Clone() CheckpointItem {
 	cloned := &DBEntry{
-		BaseEntry: entry.BaseEntry.Clone(),
-		name:      entry.name,
+		BaseEntry: e.BaseEntry.Clone(),
+		name:      e.name,
 	}
 	return cloned
 }
 
-func (entry *DBEntry) CloneCreate() CheckpointItem {
+func (e *DBEntry) CloneCreate() CheckpointItem {
 	cloned := &DBEntry{
-		BaseEntry: entry.BaseEntry.CloneCreate(),
-		name:      entry.name,
+		BaseEntry: e.BaseEntry.CloneCreate(),
+		name:      e.name,
 	}
 	return cloned
 }
 
-func (entry *DBEntry) CloneCreateEntry() *DBEntry {
+func (e *DBEntry) CloneCreateEntry() *DBEntry {
 	cloned := &DBEntry{
-		BaseEntry: entry.BaseEntry.Clone(),
-		name:      entry.name,
+		BaseEntry: e.BaseEntry.Clone(),
+		name:      e.name,
 	}
 	cloned.RWMutex = &sync.RWMutex{}
 	cloned.CurrOp = OpCreate
 	return cloned
 }
 
-// Coarse API: no consistency check
-func (entry *DBEntry) IsActive() bool {
-	entry.RLock()
-	dropped := entry.IsDroppedCommitted()
-	entry.RUnlock()
+// IsActive is coarse API: no consistency check
+func (e *DBEntry) IsActive() bool {
+	e.RLock()
+	dropped := e.IsDroppedCommitted()
+	e.RUnlock()
 	return !dropped
 }

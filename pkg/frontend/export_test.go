@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package frontend
 
 import (
@@ -13,10 +27,10 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 )
 
-var colName1, colName2 string = "DATABASE()", "VARIABLE_VALUE"
+var colName1, colName2 = "DATABASE()", "VARIABLE_VALUE"
 
 func Test_initExportFileParam(t *testing.T) {
-	var oq *outputQueue = &outputQueue{
+	var oq = &outputQueue{
 		mrs: &MysqlResultSet{},
 		ep: &tree.ExportParam{
 			Lines:  &tree.Lines{},
@@ -39,7 +53,7 @@ func Test_initExportFileParam(t *testing.T) {
 
 func Test_openNewFile(t *testing.T) {
 	convey.Convey("openNewFile failed", t, func() {
-		var oq *outputQueue = &outputQueue{
+		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
 			ep: &tree.ExportParam{
 				Lines:    &tree.Lines{},
@@ -54,7 +68,7 @@ func Test_openNewFile(t *testing.T) {
 	})
 
 	convey.Convey("openNewFile succ", t, func() {
-		var oq *outputQueue = &outputQueue{
+		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
 			ep: &tree.ExportParam{
 				Lines:    &tree.Lines{},
@@ -71,7 +85,7 @@ func Test_openNewFile(t *testing.T) {
 		oq.mrs.AddColumn(col1)
 		oq.mrs.AddColumn(col2)
 
-		var file *os.File = &os.File{}
+		var file = &os.File{}
 		stubs := gostub.StubFunc(&OpenFile, file, nil)
 		defer stubs.Reset()
 
@@ -84,7 +98,7 @@ func Test_openNewFile(t *testing.T) {
 
 func Test_formatOutputString(t *testing.T) {
 	convey.Convey("openNewFile failed", t, func() {
-		var oq *outputQueue = &outputQueue{
+		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
 			ep: &tree.ExportParam{
 				Lines:    &tree.Lines{},
@@ -106,7 +120,7 @@ func Test_formatOutputString(t *testing.T) {
 
 func Test_writeToCSVFile(t *testing.T) {
 	convey.Convey("writeToCSVFile case", t, func() {
-		var oq *outputQueue = &outputQueue{
+		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
 			ep: &tree.ExportParam{
 				Lines:    &tree.Lines{},
@@ -117,7 +131,7 @@ func Test_writeToCSVFile(t *testing.T) {
 				Writer:   &bufio.Writer{},
 			},
 		}
-		var output []byte = []byte{'1', '2'}
+		var output = []byte{'1', '2'}
 		oq.ep.MaxFileSize = 1
 
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
@@ -174,7 +188,7 @@ func Test_writeToCSVFile(t *testing.T) {
 
 func Test_writeDataToCSVFile(t *testing.T) {
 	convey.Convey("writeDataToCSVFile case", t, func() {
-		var oq *outputQueue = &outputQueue{
+		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
 			ep: &tree.ExportParam{
 				Lines:    &tree.Lines{},
@@ -185,7 +199,7 @@ func Test_writeDataToCSVFile(t *testing.T) {
 				Writer:   &bufio.Writer{},
 			},
 		}
-		var output []byte = []byte{'1', '2'}
+		var output = []byte{'1', '2'}
 		stubs := gostub.StubFunc(&Write, 0, errors.New("writeDataToCSVFile error"))
 		defer stubs.Reset()
 
@@ -200,7 +214,7 @@ func Test_writeDataToCSVFile(t *testing.T) {
 
 func Test_exportDataToCSVFile(t *testing.T) {
 	convey.Convey("exportDataToCSVFile succ", t, func() {
-		var oq *outputQueue = &outputQueue{
+		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
 			ep: &tree.ExportParam{
 				Lines:    &tree.Lines{},
@@ -212,11 +226,12 @@ func Test_exportDataToCSVFile(t *testing.T) {
 			},
 		}
 
-		var col []MysqlColumn = make([]MysqlColumn, 10)
+		var col = make([]MysqlColumn, 12)
 		col[5].flag = 0
 		col[6].flag = 1 << 5
 		var colType = []uint8{defines.MYSQL_TYPE_YEAR, defines.MYSQL_TYPE_YEAR, defines.MYSQL_TYPE_YEAR, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_DOUBLE,
-			defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_DATETIME}
+			defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_DATETIME,
+			defines.MYSQL_TYPE_BOOL, defines.MYSQL_TYPE_DECIMAL}
 		for i := 0; i < len(col); i++ {
 			col[i].SetColumnType(colType[i])
 			oq.mrs.AddColumn(&col[i])
@@ -231,6 +246,9 @@ func Test_exportDataToCSVFile(t *testing.T) {
 		data[7] = []byte{1}
 		data[8] = types.Date(1)
 		data[9] = "2022-02-28 23:59:59.9999"
+		data[10] = true
+		data[11] = 1.2
+
 		oq.mrs.AddRow(data)
 
 		oq.ep.Symbol = make([][]byte, len(col))
@@ -243,7 +261,7 @@ func Test_exportDataToCSVFile(t *testing.T) {
 	})
 
 	convey.Convey("exportDataToCSVFile fail", t, func() {
-		var oq *outputQueue = &outputQueue{
+		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
 			ep: &tree.ExportParam{
 				Lines:    &tree.Lines{},
@@ -254,7 +272,7 @@ func Test_exportDataToCSVFile(t *testing.T) {
 				Writer:   &bufio.Writer{},
 			},
 		}
-		var col []MysqlColumn = make([]MysqlColumn, 1)
+		var col = make([]MysqlColumn, 1)
 		var colType = []uint8{defines.MYSQL_TYPE_TIMESTAMP}
 		for i := 0; i < len(col); i++ {
 			col[i].SetColumnType(colType[i])

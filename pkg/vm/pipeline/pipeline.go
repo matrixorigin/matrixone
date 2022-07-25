@@ -99,7 +99,7 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, erro
 	proc.Reg.InputBatch = bat
 	end, err = vm.Run(p.instructions, proc)
 	proc.Reg.InputBatch = nil
-	vm.Run(p.instructions, proc)
+	_, _ = vm.Run(p.instructions, proc)
 	return end, err
 }
 
@@ -138,7 +138,7 @@ func (p *Pipeline) MergeRun(proc *process.Process) (bool, error) {
 
 func cleanup(p *Pipeline, proc *process.Process) {
 	proc.Reg.InputBatch = nil
-	vm.Run(p.instructions, proc)
+	_, _ = vm.Run(p.instructions, proc)
 	for i, in := range p.instructions {
 		if in.Op == vm.Connector {
 			arg := p.instructions[i].Arg.(*connector.Argument)

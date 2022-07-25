@@ -36,14 +36,17 @@ func TestS3FSMinio(t *testing.T) {
 	err = json.Unmarshal(content, &sharedConfig)
 	assert.Nil(t, err)
 
-	testFileService(t, func() FileService {
+	t.Run("file service", func(t *testing.T) {
+		testFileService(t, func() FileService {
 
-		config := sharedConfig
-		config.KeyPrefix = time.Now().Format("2006-01-02T15:04:05")
+			config := sharedConfig
+			config.KeyPrefix = time.Now().Format("2006-01-02T15:04:05")
 
-		fs, err := NewS3FSMinio(config)
-		assert.Nil(t, err)
+			fs, err := NewS3FSMinio(config)
+			assert.Nil(t, err)
 
-		return fs
+			return fs
+		})
 	})
+
 }

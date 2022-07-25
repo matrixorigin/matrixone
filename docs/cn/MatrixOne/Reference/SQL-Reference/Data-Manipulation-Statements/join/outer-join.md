@@ -4,9 +4,9 @@
 
 在 ``OUTER JOIN`` 中，可以返回一个或两个表中的不匹配行。``OUT JOIN``  请参考：
 
-- ``LEFT JOIN`` 关键字从左表（table1）返回所有的行。参见[LEFT JOIN](left-jion.md).
-- ``RIGHT JOIN`` 关键字从右表（table2）返回所有的行。参见[LEFT JOIN](right-jion.md).
-- ``FULL OUTER JOIN`` 关键字只要左表（table1）和右表（table2）其中一个表中存在匹配，则返回行。参见[LEFT JOIN](full-jion.md).
+- ``LEFT JOIN`` 关键字从左表（table1）返回所有的行。参见[LEFT JOIN](left-join.md).
+- ``RIGHT JOIN`` 关键字从右表（table2）返回所有的行。参见[RIGHT JOIN](right-join.md).
+- ``FULL OUTER JOIN`` 关键字只要左表（table1）和右表（table2）其中一个表中存在匹配，则返回行。参见[FULL JOIN](full-join.md).
 
 # **示例**
 

@@ -325,3 +325,8 @@ func (cs *clientSession) Write(message Message, opts SendOptions) error {
 	cs.c <- sendMessage{message: message, opts: opts}
 	return nil
 }
+
+type sendMessage struct {
+	message Message
+	opts    SendOptions
+}

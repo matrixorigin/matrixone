@@ -60,7 +60,3 @@ For exact-value numeric arguments, the return value has an exact-value numeric t
 +--------------+
 
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.

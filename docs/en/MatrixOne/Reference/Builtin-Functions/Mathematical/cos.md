@@ -31,7 +31,3 @@ The COS() function returns the cosine of input number(given in radians).
 | 0.5403 |  0.0008 |
 +--------+---------+
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.

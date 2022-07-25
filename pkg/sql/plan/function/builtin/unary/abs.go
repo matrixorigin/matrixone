@@ -33,7 +33,7 @@ func AbsUInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint64, 1)
 		vector.SetCol(resultVector, abs.AbsUint64(inputValues, resultValues))
 		return resultVector, nil
@@ -60,7 +60,7 @@ func AbsInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]int64, 1)
 		vector.SetCol(resultVector, abs.AbsInt64(inputValues, resultValues))
 		return resultVector, nil
@@ -87,7 +87,7 @@ func AbsFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]float64, 1)
 		vector.SetCol(resultVector, abs.AbsFloat64(inputValues, resultValues))
 		return resultVector, nil

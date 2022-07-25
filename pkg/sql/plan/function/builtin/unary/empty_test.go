@@ -18,7 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -79,7 +79,7 @@ func TestEmpty(t *testing.T) {
 		{
 			name:     "Null",
 			proc:     procs,
-			expected: []uint8{},
+			expected: []uint8{0},
 			isScalar: true,
 		},
 	}

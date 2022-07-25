@@ -25,4 +25,4 @@ These rules are applied for each operation, such that nested calculations imply 
 ## **Constraints**
 
 - Arithmetic operators only apply to numbers.
-- To ensure that components and subcomponents of a calculation use the appropriate level of precision. See [Cast Functions and Operators](cast-functions-and-operators-overview.md).
+- To ensure that components and subcomponents of a calculation use the appropriate level of precision. See [Cast Functions and Operators](../cast-functions-and-operators/cast-functions-and-operators-overview.md).

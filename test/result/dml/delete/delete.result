@@ -1,0 +1,46 @@
+drop database if exists db1;
+drop database if exists db2;
+create database db1;
+create database db2;
+use db2;
+drop table if exists t1;
+create table t1 (a int);
+insert into t1 values (1),(2),(4);
+use db1;
+drop table if exists t2;
+create table t2 (b int);
+insert into t2 values(1),(2),(3);
+delete from db1.t2, db2.t1 using db1.t2 join db2.t1 on db1.t2.b = db2.t1.a where 2 > 1;
+select * from db1.t2;
+b
+3
+select * from db2.t1;
+a
+4
+drop table if exists t1;
+drop table if exists t2;
+drop database if exists db1;
+drop database if exists db2;
+create database db1;
+create database db2;
+use db1;
+drop table if exists t1;
+create table t1 (a char(20));
+insert into t1 values ('a'), ('b'), ('c');
+use db2;
+drop table if exists t2;
+create table t2 (b char(20));
+insert into t2 values('a'),('b'),('d');
+delete from db1.t1, db2.t2 using db1.t1 join db2.t2 on db1.t1.a = db2.t2.b where db1.t1.a = 'a';
+select * from db1.t1;
+a
+b
+c
+select * from db2.t2;
+b
+b
+d
+drop table if exists t1;
+drop table if exists t2;
+drop database if exists db1;
+drop database if exists db2;

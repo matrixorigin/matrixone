@@ -47,7 +47,7 @@ func Prepare(_ *process.Process, arg interface{}) error {
 	return nil
 }
 
-func Call(proc *process.Process, arg interface{}) (bool, error) {
+func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 	for {
@@ -201,6 +201,7 @@ func (ctr *Container) eval(limit int64, proc *process.Process) error {
 		vector.Clean(ctr.bat.Vecs[i], proc.Mp)
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
+	ctr.bat.ExpandNulls()
 	proc.Reg.InputBatch = ctr.bat
 	ctr.bat = nil
 	return nil

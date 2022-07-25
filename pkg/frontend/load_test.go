@@ -428,7 +428,7 @@ func Test_load(t *testing.T) {
 }
 
 func getParsedLinesChan(simdCsvGetParsedLinesChan chan simdcsv.LineOut) {
-	var str [][]string = [][]string{{"123"}, {"456"}, {"789"}, {"78910"}}
+	var str = [][]string{{"123"}, {"456"}, {"789"}, {"78910"}}
 	for i := 0; i < len(str); i++ {
 		simdCsvGetParsedLinesChan <- simdcsv.LineOut{Lines: nil, Line: str[i]}
 	}
@@ -469,7 +469,7 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 		rel := mock_frontend.NewMockRelation(ctrl)
 		rel.EXPECT().Write(gomock.Any(), gomock.Any(), nil).Return(nil).AnyTimes()
 
-		var curBatchSize int = 13
+		var curBatchSize = 13
 		handler := &WriteBatchHandler{
 			SharePart: SharePart{
 				tableHandler:               rel,
@@ -503,7 +503,7 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 				Col: Col[i],
 			}
 		}
-		var force bool = false
+		var force = false
 		convey.So(rowToColumnAndSaveToStorage(handler, force, row2colChoose), convey.ShouldBeNil)
 
 		row2colChoose = false

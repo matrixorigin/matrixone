@@ -78,7 +78,7 @@ func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 		resultVector := proc.AllocScalarVector(typ)
 		resultValues := make([]T, 1)
 		nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, add.NumericAdd[T](leftValues, rightValues, resultValues))
+		vector.SetCol(resultVector, add.NumericAdd(leftValues, rightValues, resultValues))
 		return resultVector, nil
 	case left.IsScalar() && !right.IsScalar():
 		resultVector, err := proc.AllocVector(typ, int64(resultElementSize*len(rightValues)))
@@ -87,7 +87,7 @@ func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 		}
 		resultValues := encoding.DecodeFixedSlice[T](resultVector.Data, resultElementSize)
 		nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, add.NumericAddScalar[T](leftValues[0], rightValues, resultValues))
+		vector.SetCol(resultVector, add.NumericAddScalar(leftValues[0], rightValues, resultValues))
 		return resultVector, nil
 	case !left.IsScalar() && right.IsScalar():
 		resultVector, err := proc.AllocVector(typ, int64(resultElementSize*len(leftValues)))
@@ -96,7 +96,7 @@ func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 		}
 		resultValues := encoding.DecodeFixedSlice[T](resultVector.Data, resultElementSize)
 		nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, add.NumericAddScalar[T](rightValues[0], leftValues, resultValues))
+		vector.SetCol(resultVector, add.NumericAddScalar(rightValues[0], leftValues, resultValues))
 		return resultVector, nil
 	}
 	resultVector, err := proc.AllocVector(typ, int64(resultElementSize*len(leftValues)))
@@ -105,7 +105,7 @@ func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 	}
 	resultValues := encoding.DecodeFixedSlice[T](resultVector.Data, resultElementSize)
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-	vector.SetCol(resultVector, add.NumericAdd[T](leftValues, rightValues, resultValues))
+	vector.SetCol(resultVector, add.NumericAdd(leftValues, rightValues, resultValues))
 	return resultVector, nil
 }
 
@@ -120,7 +120,7 @@ func PlusDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	if lvScale < rvScale {
 		resultScale = rvScale
 	}
-	resultTyp := types.Type{Oid: types.T_decimal64, Size: 8, Width: 18, Scale: resultScale}
+	resultTyp := types.Type{Oid: types.T_decimal64, Size: types.DECIMAL64_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: resultScale}
 	if lv.IsScalarNull() || rv.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultTyp), nil
 	}
@@ -174,7 +174,7 @@ func PlusDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 	if lvScale < rvScale {
 		resultScale = rvScale
 	}
-	resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
+	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: resultScale}
 	if lv.IsScalarNull() || rv.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultTyp), nil
 	}

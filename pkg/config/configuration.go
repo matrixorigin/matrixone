@@ -22,16 +22,16 @@ import (
 
 var GlobalSystemVariables SystemVariables
 
-//host memory
+// HostMmu host memory
 var HostMmu *host.Mmu = nil
 
-//mempool
+// Mempool memory pool
 var Mempool *mempool.Mempool = nil
 
-//Storage Engine
+// StorageEngine Storage Engine
 var StorageEngine engine.Engine
 
-//Cluster Nodes
+// ClusterNodes Cluster Nodes
 var ClusterNodes engine.Nodes
 
 /**

@@ -4,9 +4,9 @@
 
 When performing an ``INNER JOIN``, rows from either table that are unmatched in the other table are not returned. In an ``OUTER JOIN``, unmatched rows in one or both tables can be returned. There are a few types of outer joins:
 
-- ``LEFT JOIN`` returns only unmatched rows from the left table. For more information, see [LEFT JOIN](left-jion.md).
-- ``RIGHT JOIN`` returns only unmatched rows from the right table.For more information, see [LEFT JOIN](right-jion.md).
-- ``FULL OUTER JOIN`` returns unmatched rows from both tables.For more information, see [LEFT JOIN](full-jion.md).
+- ``LEFT JOIN`` returns only unmatched rows from the left table. For more information, see [LEFT JOIN](left-join.md).
+- ``RIGHT JOIN`` returns only unmatched rows from the right table.For more information, see [RIGHT JOIN](right-join.md).
+- ``FULL OUTER JOIN`` returns unmatched rows from both tables.For more information, see [FULL JOIN](full-join.md).
 
 # **Examples**
 

@@ -234,6 +234,6 @@ func (mgr *TxnManager) OnException(new error) {
 
 func (mgr *TxnManager) Stop() {
 	mgr.StateMachine.Stop()
-	mgr.OnException(common.ClosedErr)
+	mgr.OnException(common.ErrClose)
 	logutil.Info("[Stop]", TxnMgrField(mgr))
 }

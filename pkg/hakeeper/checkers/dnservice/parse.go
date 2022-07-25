@@ -15,6 +15,7 @@
 package dnservice
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -24,7 +25,7 @@ const (
 )
 
 // parseDnState parses cluster dn state.
-func parseDnState(
+func parseDnState(cfg hakeeper.Config,
 	dnState pb.DNState, currTick uint64,
 ) (*util.ClusterStores, *clusterShards) {
 	stores := util.NewClusterStores()
@@ -32,7 +33,7 @@ func parseDnState(
 
 	for storeID, storeInfo := range dnState.Stores {
 		expired := false
-		if util.ExpiredTick(storeInfo.Tick, util.DnStoreTimeout) < currTick {
+		if cfg.DnStoreExpired(storeInfo.Tick, currTick) {
 			expired = true
 		}
 

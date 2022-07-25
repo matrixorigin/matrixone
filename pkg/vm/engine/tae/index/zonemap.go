@@ -255,31 +255,26 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 		zm.min = types.DecodeFixed[types.Date](buf[:4])
 		buf = buf[4:]
 		zm.max = types.DecodeFixed[types.Date](buf[:4])
-		buf = buf[4:]
 		return nil
 	case types.Type_DATETIME:
 		zm.min = types.DecodeFixed[types.Datetime](buf[:8])
 		buf = buf[8:]
 		zm.max = types.DecodeFixed[types.Datetime](buf[:8])
-		buf = buf[8:]
 		return nil
 	case types.Type_TIMESTAMP:
 		zm.min = types.DecodeFixed[types.Timestamp](buf[:8])
 		buf = buf[8:]
 		zm.max = types.DecodeFixed[types.Timestamp](buf[:8])
-		buf = buf[8:]
 		return nil
 	case types.Type_DECIMAL64:
 		zm.min = types.DecodeFixed[types.Decimal64](buf[:8])
 		buf = buf[8:]
 		zm.max = types.DecodeFixed[types.Decimal64](buf[:8])
-		buf = buf[8:]
 		return nil
 	case types.Type_DECIMAL128:
 		zm.min = types.DecodeFixed[types.Decimal128](buf[:16])
 		buf = buf[16:]
 		zm.max = types.DecodeFixed[types.Decimal128](buf[:16])
-		buf = buf[16:]
 		return nil
 	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		lenminv := types.DecodeFixed[int16](buf[:2])

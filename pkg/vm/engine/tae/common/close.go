@@ -20,7 +20,7 @@ import (
 )
 
 var (
-	ClosedErr = errors.New("closed")
+	ErrClose = errors.New("closed")
 )
 
 type Closable interface {

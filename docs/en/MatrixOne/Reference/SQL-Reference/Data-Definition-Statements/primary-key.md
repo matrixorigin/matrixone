@@ -6,7 +6,7 @@ The PRIMARY KEY constraint uniquely identifies each record in a table.
 
 Primary keys must contain UNIQUE values, and cannot contain NULL values.
 
-A table can have only ONE primary key; and in the table, this primary key can consist of single or multiple columns (fields).
+A table can have only ONE primary key; and in the table, this primary key can consist of single column (field).
 
 ## **SQL PRIMARY KEY on CREATE TABLE**
 
@@ -22,21 +22,7 @@ The following SQL creates a PRIMARY KEY on the "ID" column when the "Persons" ta
 );
 ```
 
-To allow naming of a PRIMARY KEY constraint, and for defining a PRIMARY KEY constraint on multiple columns, use the following SQL syntax:
-
-```
-> CREATE TABLE Persons (
-    ID int NOT NULL,
-    LastName varchar(255) NOT NULL,
-    FirstName varchar(255),
-    Age int,
-    CONSTRAINT PK_Person PRIMARY KEY (ID,LastName)
-);
-```
-
-!!! note  "<font size=4>note</font>"
-    <font size=3>In the example above there is only ONE PRIMARY KEY (PK_Person). However, the VALUE of the primary key is made up of TWO COLUMNS (ID + LastName).</font>  
-
 ## **Constraints**
 
-`DROP PRIMARY KEY` is not supported yet.
+1. `DROP PRIMARY KEY` with `ALTER TABLE` is not supported yet.
+2. Composite primary key(the primary key consists of multiple columns) is not supported yet.

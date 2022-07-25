@@ -14,7 +14,7 @@
 // Portions of this file are additionally subject to the following
 // copyright.
 //
-// Copyright (C) 2021 MatrixOrigin.
+// Copyright (C) 2021 Matrix Origin.
 //
 // Modified the behavior of the operator.
 
@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	ExpireTime         = 5 * time.Minute
+	ExpireTime         = 15 * time.Second
 	NoopEpoch   uint64 = 0
 	NoopShardID uint64 = 0
 )
@@ -70,6 +70,11 @@ func (o *Operator) OpSteps() []OpStep {
 // Status returns operator status.
 func (o *Operator) Status() OpStatus {
 	return o.status.Status()
+}
+
+// SetStatus only used for tests.
+func (o *Operator) SetStatus(status OpStatus) {
+	o.status.setStatus(status)
 }
 
 // Cancel marks the operator canceled.

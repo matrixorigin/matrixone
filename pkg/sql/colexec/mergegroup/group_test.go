@@ -17,15 +17,11 @@ package mergegroup
 import (
 	"bytes"
 	"context"
-	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregate"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -106,13 +102,15 @@ func TestString(t *testing.T) {
 
 func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
-		Prepare(tc.proc, tc.arg)
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
 	}
 }
 
 func TestGroup(t *testing.T) {
 	for _, tc := range tcs {
-		Prepare(tc.proc, tc.arg)
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
@@ -120,7 +118,7 @@ func TestGroup(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
-			if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
+			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 				if tc.proc.Reg.InputBatch != nil {
 					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 				}
@@ -149,7 +147,8 @@ func BenchmarkGroup(b *testing.B) {
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
-			Prepare(tc.proc, tc.arg)
+			err := Prepare(tc.proc, tc.arg)
+			require.NoError(t, err)
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
@@ -157,7 +156,7 @@ func BenchmarkGroup(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 			for {
-				if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
+				if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 					if tc.proc.Reg.InputBatch != nil {
 						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 					}
@@ -199,119 +198,5 @@ func newTestCase(m *mheap.Mheap, flgs []bool, needEval bool, ts []types.Type) gr
 
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	bat := batch.NewWithSize(len(ts))
-	bat.InitZsOne(int(rows))
-	for i := range bat.Vecs {
-		vec := vector.New(ts[i])
-		switch vec.Typ.Oid {
-		case types.T_int8:
-			data, err := mheap.Alloc(proc.Mp, rows*1)
-			require.NoError(t, err)
-			vec.Data = data
-			vs := encoding.DecodeInt8Slice(vec.Data)[:rows]
-			for i := range vs {
-				vs[i] = int8(i)
-			}
-			if flgs[i] {
-				nulls.Add(vec.Nsp, uint64(0))
-			}
-			vec.Col = vs
-		case types.T_int16:
-			data, err := mheap.Alloc(proc.Mp, rows*2)
-			require.NoError(t, err)
-			vec.Data = data
-			vs := encoding.DecodeInt16Slice(vec.Data)[:rows]
-			for i := range vs {
-				vs[i] = int16(i)
-			}
-			if flgs[i] {
-				nulls.Add(vec.Nsp, uint64(0))
-			}
-			vec.Col = vs
-		case types.T_int32:
-			data, err := mheap.Alloc(proc.Mp, rows*4)
-			require.NoError(t, err)
-			vec.Data = data
-			vs := encoding.DecodeInt32Slice(vec.Data)[:rows]
-			for i := range vs {
-				vs[i] = int32(i)
-			}
-			if flgs[i] {
-				nulls.Add(vec.Nsp, uint64(0))
-			}
-			vec.Col = vs
-		case types.T_int64:
-			data, err := mheap.Alloc(proc.Mp, rows*8)
-			require.NoError(t, err)
-			vec.Data = data
-			vs := encoding.DecodeInt64Slice(vec.Data)[:rows]
-			for i := range vs {
-				vs[i] = int64(i)
-			}
-			if flgs[i] {
-				nulls.Add(vec.Nsp, uint64(0))
-			}
-			vec.Col = vs
-		case types.T_decimal64:
-			data, err := mheap.Alloc(proc.Mp, rows*8)
-			require.NoError(t, err)
-			vec.Data = data
-			vs := encoding.DecodeDecimal64Slice(vec.Data)[:rows]
-			for i := range vs {
-				vs[i] = types.Decimal64(i)
-			}
-			if flgs[i] {
-				nulls.Add(vec.Nsp, uint64(0))
-			}
-			vec.Col = vs
-		case types.T_decimal128:
-			data, err := mheap.Alloc(proc.Mp, rows*16)
-			require.NoError(t, err)
-			vec.Data = data
-			vs := encoding.DecodeDecimal128Slice(vec.Data)[:rows]
-			for i := range vs {
-				vs[i].Lo = int64(i)
-				vs[i].Hi = int64(i)
-			}
-			if flgs[i] {
-				nulls.Add(vec.Nsp, uint64(0))
-			}
-			vec.Col = vs
-
-		case types.T_char, types.T_varchar:
-			size := 0
-			vs := make([][]byte, rows)
-			for i := range vs {
-				vs[i] = []byte(strconv.Itoa(i))
-				size += len(vs[i])
-			}
-			data, err := mheap.Alloc(proc.Mp, int64(size))
-			require.NoError(t, err)
-			data = data[:0]
-			col := new(types.Bytes)
-			o := uint32(0)
-			for _, v := range vs {
-				data = append(data, v...)
-				col.Offsets = append(col.Offsets, o)
-				o += uint32(len(v))
-				col.Lengths = append(col.Lengths, uint32(len(v)))
-			}
-			if flgs[i] {
-				nulls.Add(vec.Nsp, uint64(0))
-			}
-			col.Data = data
-			vec.Col = col
-			vec.Data = data
-		}
-		bat.Vecs[i] = vec
-	}
-	{
-		r, _ := aggregate.New(aggregate.Max, false, ts[0])
-		r.Grows(int(rows), proc.Mp)
-		for i := int64(0); i < rows; i++ {
-			r.Fill(i, i, 1, bat.Vecs[0])
-		}
-		bat.Rs = append(bat.Rs, r)
-	}
-	return bat
+	return testutil.NewBatch(ts, false, int(rows), proc.Mp)
 }

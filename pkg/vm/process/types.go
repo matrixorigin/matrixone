@@ -16,11 +16,20 @@ package process
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
+
+// Analyze analyze information for operator
+type Analyze interface {
+	Stop()
+	Start()
+	Alloc(int64)
+	Input(*batch.Batch)
+	Output(*batch.Batch)
+}
 
 // WaitRegister channel
 type WaitRegister struct {
@@ -35,9 +44,6 @@ type Register struct {
 	Ss [][]int64
 	// InputBatch, stores the result of the previous operator.
 	InputBatch *batch.Batch
-	// Vecs, temporarily stores the column data in the execution of operators
-	// and it can be reused in the future execution to avoid mem alloc and type casting overhead.
-	Vecs []*vector.Vector
 	// MergeReceivers, receives result of multi previous operators from other pipelines
 	// e.g. merge operator.
 	MergeReceivers []*WaitRegister
@@ -45,7 +51,7 @@ type Register struct {
 
 //Limitation specifies the maximum resources that can be used in one query.
 type Limitation struct {
-	// Size, memory threshold.
+	// Size, memory threshold for operator.
 	Size int64
 	// BatchRows, max rows for batch.
 	BatchRows int64
@@ -53,9 +59,11 @@ type Limitation struct {
 	BatchSize int64
 	// PartitionRows, max rows for partition.
 	PartitionRows int64
+	// ReaderSize, memory threshold for storage's reader
+	ReaderSize int64
 }
 
-// session information
+// SessionInfo session information
 type SessionInfo struct {
 	User         string
 	Host         string
@@ -63,6 +71,53 @@ type SessionInfo struct {
 	ConnectionID uint64
 	Database     string
 	Version      string
+}
+
+// AnalyzeInfo  analyze information for query
+type AnalyzeInfo struct {
+	// NodeId, index of query's node list
+	NodeId int32
+	// InputRows, number of rows accepted by node
+	InputRows int64
+	// OutputRows, number of rows output by node
+	OutputRows int64
+	// TimeConsumed, time taken by the node in milliseconds
+	TimeConsumed int64
+	// InputSize, data size accepted by node
+	InputSize int64
+	// OutputSize, data size output by node
+	OutputSize int64
+	// MemorySize, memory alloc by node
+	MemorySize int64
+}
+
+// Process contains context used in query execution
+// one or more pipeline will be generated for one query,
+// and one pipeline has one process instance.
+type Process struct {
+	// Id, query id.
+	Id  string
+	Reg Register
+	Lim Limitation
+	Mp  *mheap.Mheap
+
+	// unix timestamp
+	UnixTime int64
+
+	// snapshot is transaction context
+	Snapshot []byte
+
+	AnalInfos []*AnalyzeInfo
+
+	SessionInfo SessionInfo
+
+	// snapshot is transaction context
+	Cancel context.CancelFunc
+}
+
+type analyze struct {
+	start    time.Time
+	analInfo *AnalyzeInfo
 }
 
 func (si *SessionInfo) GetUser() string {
@@ -99,26 +154,4 @@ func (si *SessionInfo) GetDatabase() string {
 
 func (si *SessionInfo) GetVersion() string {
 	return si.Version
-}
-
-// Process contains context used in query execution
-// one or more pipeline will be generated for one query,
-// and one pipeline has one process instance.
-type Process struct {
-	// Id, query id.
-	Id  string
-	Reg Register
-	Lim Limitation
-	Mp  *mheap.Mheap
-
-	// unix timestamp
-	UnixTime int64
-
-	// snapshot is transaction context
-	Snapshot []byte
-
-	SessionInfo SessionInfo
-
-	// snapshot is transaction context
-	Cancel context.CancelFunc
 }

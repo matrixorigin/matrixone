@@ -2,7 +2,7 @@
 
 ## **Description**
 
-The `ANY_VALUE` function is useful for `GROUP BY` queries when the `ONLY_FULL_GROUP_BY` mode is enabled.
+The `ANY_VALUE` function is useful for `GROUP BY` queries.
 
 ## **Syntax**
 
@@ -14,11 +14,11 @@ The `ANY_VALUE` function is useful for `GROUP BY` queries when the `ONLY_FULL_GR
 
 |  Arguments   | Description  |
 |  ----  | ----  |
-| arg  | CAny type. When arg is NULL, the line does not participate in the calculation. |
+| arg  | Any type. When arg is NULL, the line does not participate in the calculation. |
 
 ## **Returned Value**
 
-The function return value and type are the same as the return value and type of its argument, but the function result is not checked for the `ONLY_FULL_GROUP_BY` SQL mode.
+The function return value and type are the same as the return value and type of its argument.
 
 !!! note  "<font size=4>note</font>"
     <font size=3>The execution result of `ANY_VALUE` is uncertain. The same input may produce different execution results.</font>

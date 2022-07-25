@@ -34,4 +34,5 @@ Create a database.
 
 ## **Constraints**
 
-Only `UTF-8` CHARACTER SET is supported for now. 
+- Only `UTF-8` CHARACTER SET is supported for now.
+- `CHARACTER SET`, `COLLATE`, `ENCRYPTION` can be used but don't work.

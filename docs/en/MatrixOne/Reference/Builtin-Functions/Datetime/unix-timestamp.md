@@ -36,5 +36,3 @@ The return value is an integer if no argument is given or the argument does not 
 ## **Constraints**
 
 The date type supports only `yyyy-mm-dd` and `yyyymmdd` for now.
-
-Currently, MatrixOne doesn't support select function() without from tables.

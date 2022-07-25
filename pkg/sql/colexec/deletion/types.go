@@ -16,14 +16,16 @@ package deletion
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"sync"
 )
 
 type Argument struct {
 	Ts           uint64
+	DeleteCtxs   []*DeleteCtx
+	AffectedRows uint64
+}
+
+type DeleteCtx struct {
 	TableSource  engine.Relation
-	M            sync.Mutex
 	UseDeleteKey string
 	CanTruncate  bool
-	AffectedRows uint64
 }

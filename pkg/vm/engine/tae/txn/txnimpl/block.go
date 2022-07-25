@@ -89,7 +89,7 @@ func (it *blockIt) Valid() bool {
 
 func (it *blockIt) Next() {
 	var err error
-	valid := true
+	var valid bool
 	for {
 		it.linkIt.Next()
 		node := it.linkIt.Get()

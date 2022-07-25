@@ -16,10 +16,10 @@ package rpc
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
-	"sync"
+	"runtime/debug"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -65,10 +65,11 @@ func TestSendWithSingleRequest(t *testing.T) {
 			},
 		},
 	}
-	resps, err := sd.Send(ctx, []txn.TxnRequest{req})
+	result, err := sd.Send(ctx, []txn.TxnRequest{req})
 	assert.NoError(t, err)
-	assert.Equal(t, 1, len(resps))
-	assert.Equal(t, txn.TxnMethod_Write, resps[0].Method)
+	defer result.Release()
+	assert.Equal(t, 1, len(result.Responses))
+	assert.Equal(t, txn.TxnMethod_Write, result.Responses[0].Method)
 }
 
 func TestSendWithMultiDN(t *testing.T) {
@@ -104,15 +105,19 @@ func TestSendWithMultiDN(t *testing.T) {
 			Method: txn.TxnMethod_Read,
 			CNRequest: &txn.CNOpRequest{
 				Target: metadata.DNShard{
+					DNShardRecord: metadata.DNShardRecord{
+						ShardID: uint64(i % len(addrs)),
+					},
 					Address: addrs[i%len(addrs)],
 				},
 			},
 		})
 	}
 
-	resps, err := sd.Send(ctx, requests)
+	result, err := sd.Send(ctx, requests)
 	assert.NoError(t, err)
-	assert.Equal(t, n, len(resps))
+	defer result.Release()
+	assert.Equal(t, n, len(result.Responses))
 
 	counts := make(map[string]int)
 	for i := 0; i < n; i++ {
@@ -122,7 +127,7 @@ func TestSendWithMultiDN(t *testing.T) {
 			seq = v + 1
 		}
 		counts[addr] = seq
-		assert.Equal(t, []byte(fmt.Sprintf("%s-%d", addr, seq)), resps[i].CNOpResponse.Payload)
+		assert.Equal(t, []byte(fmt.Sprintf("%s-%d", addr, seq)), result.Responses[i].CNOpResponse.Payload)
 	}
 }
 
@@ -147,11 +152,11 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 		if d.Address != testDN1Addr {
 			return nil
 		}
-		sequence := 0
-		return func(ctx context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
-			sequence++
+		sequence := uint64(0)
+		return func(_ context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
+			v := atomic.AddUint64(&sequence, 1)
 			resp.RequestID = req.RequestID
-			resp.CNOpResponse = &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", req.GetTargetDN().Address, sequence))}
+			resp.CNOpResponse = &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", req.GetTargetDN().Address, v))}
 			return nil
 		}
 	}))
@@ -170,15 +175,19 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 			Method: txn.TxnMethod_Read,
 			CNRequest: &txn.CNOpRequest{
 				Target: metadata.DNShard{
+					DNShardRecord: metadata.DNShardRecord{
+						ShardID: uint64(i % len(addrs)),
+					},
 					Address: addrs[i%len(addrs)],
 				},
 			},
 		})
 	}
 
-	resps, err := sd.Send(ctx, requests)
+	result, err := sd.Send(ctx, requests)
 	assert.NoError(t, err)
-	assert.Equal(t, n, len(resps))
+	defer result.Release()
+	assert.Equal(t, n, len(result.Responses))
 
 	counts := make(map[string]int)
 	for i := 0; i < n; i++ {
@@ -188,174 +197,52 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 			seq = v + 1
 		}
 		counts[addr] = seq
-		assert.Equal(t, []byte(fmt.Sprintf("%s-%d", addr, seq)), resps[i].CNOpResponse.Payload)
+		assert.Equal(t, []byte(fmt.Sprintf("%s-%d", addr, seq)), result.Responses[i].CNOpResponse.Payload)
 	}
 }
 
-func TestNewExecutor(t *testing.T) {
-	ts := newTestStream(1, nil)
+func TestLocalStreamDestroy(t *testing.T) {
+	ls := newLocalStream(func(ls *localStream) {}, func() *txn.TxnResponse { return &txn.TxnResponse{} })
+	c := ls.in
+	ls = nil
+	debug.FreeOSMemory()
+	_, ok := <-c
+	assert.False(t, ok)
+}
+
+func BenchmarkLocalSend(b *testing.B) {
+	sd, err := NewSender(nil, WithSenderLocalDispatch(func(d metadata.DNShard) TxnRequestHandleFunc {
+		return func(_ context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
+			resp.RequestID = req.RequestID
+			return nil
+		}
+	}))
+	assert.NoError(b, err)
 	defer func() {
-		assert.NoError(t, ts.Close())
+		assert.NoError(b, sd.Close())
 	}()
 
-	_, err := newExecutor(context.Background(), nil, ts, false)
-	assert.NoError(t, err)
-}
-
-func TestNewExectorWithClosedStream(t *testing.T) {
-	ts := newTestStream(1, nil)
-	assert.NoError(t, ts.Close())
-	_, err := newExecutor(context.Background(), nil, ts, false)
-	assert.Error(t, err)
-}
-
-func TestExecute(t *testing.T) {
-	var requests []morpc.Message
-	ts := newTestStream(1, func(m morpc.Message) (morpc.Message, error) {
-		requests = append(requests, m)
-		return m, nil
-	})
-	defer func() {
-		assert.NoError(t, ts.Close())
-	}()
-
-	exec, err := newExecutor(context.Background(), nil, ts, false)
-	assert.NoError(t, err)
-
-	n := 10
-	for i := 0; i < n; i++ {
-		assert.NoError(t, exec.execute(txn.NewTxnRequest(nil), i))
-	}
-
-	assert.Equal(t, n, len(requests))
-	for i := 0; i < n; i++ {
-		assert.Equal(t, ts.id, requests[i].GetID())
-	}
-
-	assert.Equal(t, n, len(exec.indexes))
-	for i := 0; i < n; i++ {
-		assert.Equal(t, i, exec.indexes[i])
-	}
-}
-
-func TestExecuteWithLocalStream(t *testing.T) {
-	localHandle := func(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-		return nil
-	}
-
-	ts := newLocalStream(nil)
-	defer func() {
-		assert.NoError(t, ts.Close())
-	}()
-
-	exec, err := newExecutor(context.Background(), nil, ts, true)
-	assert.NoError(t, err)
-
-	n := 10
-	ts.setup(exec.ctx, make([]txn.TxnResponse, n), localHandle)
-	for i := 0; i < n; i++ {
-		assert.NoError(t, exec.execute(txn.NewTxnRequest(nil), i))
-	}
-	assert.Equal(t, n, len(exec.indexes))
-	for i := 0; i < n; i++ {
-		assert.Equal(t, i, exec.indexes[i])
-	}
-}
-
-func TestExecuteWithClosedStream(t *testing.T) {
-	ts := newTestStream(1, nil)
-
-	exec, err := newExecutor(context.Background(), nil, ts, false)
-	assert.NoError(t, err)
-
-	assert.NoError(t, ts.Close())
-	assert.Error(t, exec.execute(txn.NewTxnRequest(nil), 0))
-}
-
-func TestWaitCompleted(t *testing.T) {
-	ts := newTestStream(1, func(m morpc.Message) (morpc.Message, error) {
-		req := m.(*txn.TxnRequest)
-		return &txn.TxnResponse{RequestID: m.GetID(), CNOpResponse: &txn.CNOpResponse{Payload: req.CNRequest.Payload}}, nil
-	})
-	defer func() {
-		assert.NoError(t, ts.Close())
-	}()
-
-	n := 10
-	exec, err := newExecutor(context.Background(), make([]txn.TxnResponse, n), ts, false)
-	assert.NoError(t, err)
-
-	for i := 0; i < n; i++ {
-		assert.NoError(t, exec.execute(txn.NewTxnRequest(&txn.CNOpRequest{Payload: []byte{byte(n - i - 1)}}), n-i-1))
-	}
-
-	assert.NoError(t, exec.waitCompleted())
-	for i := 0; i < n; i++ {
-		assert.Equal(t, []byte{byte(i)}, exec.responses[i].CNOpResponse.Payload)
-	}
-}
-
-func TestWaitCompletedWithLocal(t *testing.T) {
-	localHandle := func(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-		response.RequestID = request.RequestID
-		response.CNOpResponse = &txn.CNOpResponse{Payload: request.CNRequest.Payload}
-		return nil
-	}
-
-	ts := newLocalStream(nil)
-	defer func() {
-		assert.NoError(t, ts.Close())
-	}()
-
-	n := 10
-	exec, err := newExecutor(context.Background(), make([]txn.TxnResponse, n), ts, true)
-	assert.NoError(t, err)
-
-	ts.setup(exec.ctx, exec.responses, localHandle)
-	for i := 0; i < n; i++ {
-		assert.NoError(t, exec.execute(txn.NewTxnRequest(&txn.CNOpRequest{Payload: []byte{byte(n - i - 1)}}), n-i-1))
-	}
-
-	assert.NoError(t, exec.waitCompleted())
-	for i := 0; i < n; i++ {
-		assert.Equal(t, []byte{byte(i)}, exec.responses[i].CNOpResponse.Payload)
-	}
-}
-
-func TestWaitCompletedWithContextDone(t *testing.T) {
-	ts := newTestStream(1, func(m morpc.Message) (morpc.Message, error) {
-		req := m.(*txn.TxnRequest)
-		return &txn.TxnResponse{RequestID: m.GetID(), CNOpResponse: &txn.CNOpResponse{Payload: req.CNRequest.Payload}}, nil
-	})
-	defer func() {
-		assert.NoError(t, ts.Close())
-	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 1)
-	exec, err := newExecutor(ctx, make([]txn.TxnResponse, 1), ts, false)
-	assert.NoError(t, err)
-
-	assert.NoError(t, exec.execute(txn.NewTxnRequest(&txn.CNOpRequest{Payload: []byte{byte(0)}}), 0))
-	<-ts.c
-	cancel()
-	assert.Error(t, exec.waitCompleted())
-}
-
-func TestWaitCompletedWithStreamClosed(t *testing.T) {
-	ts := newTestStream(1, func(m morpc.Message) (morpc.Message, error) {
-		req := m.(*txn.TxnRequest)
-		return &txn.TxnResponse{RequestID: m.GetID(), CNOpResponse: &txn.CNOpResponse{Payload: req.CNRequest.Payload}}, nil
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
-	exec, err := newExecutor(ctx, make([]txn.TxnResponse, 1), ts, false)
-	assert.NoError(t, err)
-	assert.NoError(t, exec.execute(txn.NewTxnRequest(&txn.CNOpRequest{Payload: []byte{byte(0)}}), 0))
-	<-ts.c
-	assert.NoError(t, ts.Close())
-	assert.Error(t, exec.waitCompleted())
+	var requests []txn.TxnRequest
+	n := 10
+	for i := 0; i < n; i++ {
+		requests = append(requests, txn.TxnRequest{
+			Method: txn.TxnMethod_Read,
+			CNRequest: &txn.CNOpRequest{
+				Target: metadata.DNShard{},
+			},
+		})
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := sd.Send(ctx, requests)
+		assert.NoError(b, err)
+		assert.Equal(b, n, len(result.Responses))
+		result.Release()
+	}
 }
 
 func TestNewSenderWithOptions(t *testing.T) {
@@ -368,71 +255,7 @@ func TestNewSenderWithOptions(t *testing.T) {
 	assert.True(t, len(s.(*sender).options.clientOptions) >= 1)
 }
 
-type testStream struct {
-	id     uint64
-	c      chan morpc.Message
-	handle func(morpc.Message) (morpc.Message, error)
-
-	mu struct {
-		sync.RWMutex
-		closed bool
-	}
-}
-
-func newTestStream(id uint64, handle func(morpc.Message) (morpc.Message, error)) *testStream {
-	return &testStream{
-		id:     id,
-		c:      make(chan morpc.Message, 1024),
-		handle: handle,
-	}
-}
-
-func (s *testStream) Send(request morpc.Message, opts morpc.SendOptions) error {
-	if s.id != request.GetID() {
-		panic("request.id != stream.id")
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.mu.closed {
-		return errors.New("closed")
-	}
-
-	resp, err := s.handle(request)
-	if err != nil {
-		return err
-	}
-	s.c <- resp
-	return nil
-}
-
-func (s *testStream) Receive() (chan morpc.Message, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.mu.closed {
-		return nil, errors.New("closed")
-	}
-	return s.c, nil
-}
-
-func (s *testStream) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.mu.closed {
-		return nil
-	}
-
-	s.mu.closed = true
-	close(s.c)
-	return nil
-}
-
-func (s *testStream) ID() uint64 {
-	return s.id
-}
-
-func newTestTxnServer(t *testing.T, addr string) morpc.RPCServer {
+func newTestTxnServer(t assert.TestingT, addr string) morpc.RPCServer {
 	assert.NoError(t, os.RemoveAll(addr[7:]))
 	codec := morpc.NewMessageCodec(func() morpc.Message { return &txn.TxnRequest{} }, 0)
 	s, err := morpc.NewRPCServer("test-txn-server", addr, codec)

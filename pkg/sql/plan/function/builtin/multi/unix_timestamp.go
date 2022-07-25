@@ -14,7 +14,6 @@
 package multi
 
 import (
-	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -45,11 +44,8 @@ func UnixTimestamp(lv []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	}
 	rs := make([]int64, len(times))
 	for i := 0; i < len(times); i++ {
-		if inVec.Nsp.Np == nil {
-			inVec.Nsp.Np = &roaring64.Bitmap{}
-		}
 		if times[i] < 0 {
-			inVec.Nsp.Np.AddInt(i)
+			nulls.Add(inVec.Nsp, uint64(i))
 		}
 	}
 	nulls.Set(vec.Nsp, inVec.Nsp)

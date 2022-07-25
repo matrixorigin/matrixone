@@ -54,7 +54,7 @@ type txnClient struct {
 	generator TxnIDGenerator
 }
 
-// NewTxnClient
+// NewTxnClient create a txn client with TxnSender and Options
 func NewTxnClient(sender rpc.TxnSender, options ...TxnClientCreateOption) TxnClient {
 	c := &txnClient{sender: sender}
 	for _, opt := range options {

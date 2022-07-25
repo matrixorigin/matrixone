@@ -37,7 +37,7 @@ func init() {
 	DateSize = int(unsafe.Sizeof(types.Date(0)))
 	DatetimeSize = int(unsafe.Sizeof(types.Datetime(0)))
 	TimestampSize = int(unsafe.Sizeof(types.Timestamp(0)))
-	Decimal64Size = int(unsafe.Sizeof(types.Decimal64(0)))
+	Decimal64Size = int(unsafe.Sizeof(types.Decimal64{}))
 	Decimal128Size = int(unsafe.Sizeof(types.Decimal128{}))
 }
 

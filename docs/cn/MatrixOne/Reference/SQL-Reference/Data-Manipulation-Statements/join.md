@@ -31,7 +31,9 @@
 
 更多信息，参考：
 
-- [LEFT JOIN](join/left_join.md)
-- [RIGHT JOIN](join/right_join.md)
-- [INNER JOIN](join/inner_join.md)
-- [FULL JOIN](join/full_join.md)
+- [LEFT JOIN](join/left-join.md)
+- [RIGHT JOIN](join/right-join.md)
+- [INNER JOIN](join/inner-join.md)
+- [FULL JOIN](join/full-join.md)
+- [OUTER JOIN](join/outer-join.md)
+- [NATURAL JOIN](join/natural-join.md)

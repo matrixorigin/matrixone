@@ -653,7 +653,7 @@ func TestTransaction2(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(dropped.String())
 
-	get, err = txn2.GetDatabase(name)
+	_, err = txn2.GetDatabase(name)
 	assert.Equal(t, catalog.ErrNotFound, err)
 	t.Log(err)
 

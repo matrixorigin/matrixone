@@ -4,20 +4,21 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either acosress or implied.
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package binary
 
 import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -91,7 +92,7 @@ func TestFindInSetLength(t *testing.T) {
 			name:      "left null test",
 			proc:      procs,
 			right:     []string{"abc"},
-			expected:  []uint64{},
+			expected:  []uint64{0},
 			isScalarL: true,
 			isScalarR: true,
 		},
@@ -99,7 +100,7 @@ func TestFindInSetLength(t *testing.T) {
 			name:      "right null test",
 			proc:      procs,
 			left:      []string{"abc"},
-			expected:  []uint64{},
+			expected:  []uint64{0},
 			isScalarL: true,
 			isScalarR: true,
 		},

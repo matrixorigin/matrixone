@@ -14,7 +14,7 @@
 // Portions of this file are additionally subject to the following
 // copyright.
 //
-// Copyright (C) 2021 MatrixOrigin.
+// Copyright (C) 2021 Matrix Origin.
 //
 // Modified the behavior of the status tracker.
 
@@ -48,6 +48,13 @@ func (trk *OpStatusTracker) Status() OpStatus {
 	trk.rw.RLock()
 	defer trk.rw.RUnlock()
 	return trk.current
+}
+
+// SetStatus only used for tests.
+func (trk *OpStatusTracker) setStatus(status OpStatus) {
+	trk.rw.Lock()
+	defer trk.rw.Unlock()
+	trk.current = status
 }
 
 // ReachTime returns the reach time of current status.

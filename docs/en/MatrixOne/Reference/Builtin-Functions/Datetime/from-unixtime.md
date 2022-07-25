@@ -27,7 +27,3 @@ The ``FROM_UNIXTIME()`` function returns a representation of ``unix_timestamp`` 
 | 2016-03-30 11:53:06       |
 +---------------------------+
 ```
-
-## **Constraints**
-
-Currently, MatrixOne doesn't support select function() without from tables.

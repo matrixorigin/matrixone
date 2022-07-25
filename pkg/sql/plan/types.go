@@ -85,8 +85,10 @@ type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
-	ctxByNode []*BindContext
-	nextTag   int32
+	ctxByNode    []*BindContext
+	nameByColRef map[[2]int32]string
+
+	nextTag int32
 }
 
 type CTERef struct {
@@ -217,3 +219,8 @@ type Binding struct {
 	refCnts     []uint
 	colIdByName map[string]int32
 }
+
+const (
+	maxLengthOfTableComment  int = 2048
+	maxLengthOfColumnComment int = 1024
+)

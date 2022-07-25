@@ -33,5 +33,6 @@
 ```
 
 ## **限制**
- 
-目前只支持 `UTF-8` 字符集。
+
+- 目前只支持 `UTF-8` 字符集。
+- `CHARACTER SET`，`COLLATE`，`ENCRYPTION` 目前可以使用但无法生效

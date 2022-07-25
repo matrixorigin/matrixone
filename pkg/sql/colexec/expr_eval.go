@@ -46,49 +46,51 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	var vec *vector.Vector
 
 	if len(bat.Zs) == 0 {
-		return vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}), nil
+		return vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, 1), nil
 	}
 
+	var length = len(bat.Zs)
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
 		if t.C.GetIsnull() {
-			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())})
+			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:
-				vec = vector.NewConst(constBType)
+				vec = vector.NewConst(constBType, length)
 				vec.Col = []bool{t.C.GetBval()}
 			case *plan.Const_Ival:
-				vec = vector.NewConst(constIType)
+				vec = vector.NewConst(constIType, length)
 				vec.Col = []int64{t.C.GetIval()}
 			case *plan.Const_Fval:
-				vec = vector.NewConst(constFType)
+				vec = vector.NewConst(constFType, length)
 				vec.Col = []float32{t.C.GetFval()}
 			case *plan.Const_Uval:
-				vec = vector.NewConst(constUType)
+				vec = vector.NewConst(constUType, length)
 				vec.Col = []uint64{t.C.GetUval()}
 			case *plan.Const_Dval:
-				vec = vector.NewConst(constDType)
+				vec = vector.NewConst(constDType, length)
 				vec.Col = []float64{t.C.GetDval()}
 			case *plan.Const_Dateval:
-				vec = vector.NewConst(constDateType)
+				vec = vector.NewConst(constDateType, length)
 				vec.Col = []types.Date{types.Date(t.C.GetDateval())}
 			case *plan.Const_Datetimeval:
-				vec = vector.NewConst(constDatetimeType)
+				vec = vector.NewConst(constDatetimeType, length)
 				vec.Col = []types.Datetime{types.Datetime(t.C.GetDatetimeval())}
 			case *plan.Const_Decimal64Val:
-				vec = vector.NewConst(constDecimal64Type)
-				vec.Col = []types.Decimal64{types.Decimal64(t.C.GetDecimal64Val())}
+				vec = vector.NewConst(constDecimal64Type, length)
+				d64 := t.C.GetDecimal64Val()
+				vec.Col = []types.Decimal64{types.Decimal64FromInt64Raw(d64.A)}
 			case *plan.Const_Decimal128Val:
-				vec = vector.NewConst(constDecimal128Type)
+				vec = vector.NewConst(constDecimal128Type, length)
 				d128 := t.C.GetDecimal128Val()
-				vec.Col = []types.Decimal128{{Lo: d128.Lo, Hi: d128.Hi}}
+				vec.Col = []types.Decimal128{types.Decimal128FromInt64Raw(d128.A, d128.B)}
 			case *plan.Const_Timestampval:
-				vec = vector.NewConst(constTimestampType)
+				vec = vector.NewConst(constTimestampType, length)
 				vec.Col = []types.Timestamp{types.Timestamp(t.C.GetTimestampval())}
 			case *plan.Const_Sval:
-				vec = vector.NewConst(constSType)
+				vec = vector.NewConst(constSType, length)
 				sval := t.C.GetSval()
 				vec.Col = &types.Bytes{
 					Data:    []byte(sval),
@@ -99,7 +101,6 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 				return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unimplemented const expression %v", t.C.GetValue()))
 			}
 		}
-		vec.Length = len(bat.Zs)
 		return vec, nil
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
@@ -172,21 +173,21 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
 		if t.C.GetIsnull() {
-			vec = vector.NewConst(types.Type{Oid: types.T(expr.Typ.GetId())})
+			vec = vector.NewConst(types.Type{Oid: types.T(expr.Typ.GetId())}, 1)
 			nulls.Add(vec.Nsp, 0)
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:
-				vec = vector.NewConst(constBType)
+				vec = vector.NewConst(constBType, 1)
 				vec.Col = []bool{t.C.GetBval()}
 			case *plan.Const_Ival:
-				vec = vector.NewConst(constIType)
+				vec = vector.NewConst(constIType, 1)
 				vec.Col = []int64{t.C.GetIval()}
 			case *plan.Const_Dval:
-				vec = vector.NewConst(constDType)
+				vec = vector.NewConst(constDType, 1)
 				vec.Col = []float64{t.C.GetDval()}
 			case *plan.Const_Sval:
-				vec = vector.NewConst(constSType)
+				vec = vector.NewConst(constSType, 1)
 				sval := t.C.GetSval()
 				vec.Col = &types.Bytes{
 					Data:    []byte(sval),
@@ -197,7 +198,6 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 				return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unimplemented const expression %v", t.C.GetValue()))
 			}
 		}
-		vec.Length = 1
 		return vec, nil
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data

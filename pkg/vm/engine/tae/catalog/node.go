@@ -207,7 +207,7 @@ func (n *nodeList) TxnGetNodeLocked(
 				if state == txnif.TxnStateRollbacked {
 					dn = dlNode
 				} else if state == txnif.TxnStateUnknown {
-					err = txnif.TxnInternalErr
+					err = txnif.ErrTxnInternal
 				}
 				goNext = false
 				return

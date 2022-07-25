@@ -32,7 +32,7 @@ func LengthUTF8(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint64, 1)
 		vector.SetCol(resultVector, lengthutf8.StrLengthUTF8(inputValues, resultValues))
 		return resultVector, nil

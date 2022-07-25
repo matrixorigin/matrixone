@@ -14,7 +14,6 @@
 package multi
 
 import (
-	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -33,10 +32,7 @@ func FromUnixTime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_datetime, Size: int32(size)})
 		rs := make([]types.Datetime, 1)
 		if times[0] < 0 || times[0] > 32536771199 {
-			if inVec.Nsp.Np == nil {
-				inVec.Nsp.Np = &roaring64.Bitmap{}
-			}
-			inVec.Nsp.Np.AddInt(0)
+			nulls.Add(inVec.Nsp, 0)
 		}
 		nulls.Set(vec.Nsp, inVec.Nsp)
 		vector.SetCol(vec, fromunixtime.UnixToDatetime(times, rs))
@@ -48,11 +44,8 @@ func FromUnixTime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	}
 	rs := make([]types.Datetime, len(times))
 	for i := 0; i < len(times); i++ {
-		if inVec.Nsp.Np == nil {
-			inVec.Nsp.Np = &roaring64.Bitmap{}
-		}
 		if times[i] < 0 || times[i] > 32536771199 {
-			inVec.Nsp.Np.AddInt(i)
+			nulls.Add(inVec.Nsp, uint64(i))
 		}
 	}
 	nulls.Set(vec.Nsp, inVec.Nsp)
@@ -78,10 +71,7 @@ func FromUnixTimeUint64(lv []*vector.Vector, proc *process.Process) (*vector.Vec
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_datetime, Size: int32(size)})
 		rs := make([]types.Datetime, 1)
 		if times[0] > 32536771199 {
-			if inVec.Nsp.Np == nil {
-				inVec.Nsp.Np = &roaring64.Bitmap{}
-			}
-			inVec.Nsp.Np.AddInt(0)
+			nulls.Add(inVec.Nsp, 0)
 		}
 		nulls.Set(vec.Nsp, inVec.Nsp)
 		vector.SetCol(vec, fromunixtime.UnixToDatetime(uint64ToInt64(times), rs))
@@ -93,11 +83,8 @@ func FromUnixTimeUint64(lv []*vector.Vector, proc *process.Process) (*vector.Vec
 	}
 	rs := make([]types.Datetime, len(times))
 	for i := 0; i < len(times); i++ {
-		if inVec.Nsp.Np == nil {
-			inVec.Nsp.Np = &roaring64.Bitmap{}
-		}
 		if times[i] > 32536771199 {
-			inVec.Nsp.Np.AddInt(i)
+			nulls.Add(inVec.Nsp, uint64(i))
 		}
 	}
 	nulls.Set(vec.Nsp, inVec.Nsp)
@@ -123,10 +110,7 @@ func FromUnixTimeFloat64(lv []*vector.Vector, proc *process.Process) (*vector.Ve
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_datetime, Size: int32(size)})
 		rs := make([]types.Datetime, 1)
 		if times[0] < 0 || times[0] > 32536771199 {
-			if inVec.Nsp.Np == nil {
-				inVec.Nsp.Np = &roaring64.Bitmap{}
-			}
-			inVec.Nsp.Np.AddInt(0)
+			nulls.Add(inVec.Nsp, 0)
 		}
 		nulls.Set(vec.Nsp, inVec.Nsp)
 		vector.SetCol(vec, fromunixtime.UnixToDatetime(float64Toint64(times), rs))
@@ -138,11 +122,8 @@ func FromUnixTimeFloat64(lv []*vector.Vector, proc *process.Process) (*vector.Ve
 	}
 	rs := make([]types.Datetime, len(times))
 	for i := 0; i < len(times); i++ {
-		if inVec.Nsp.Np == nil {
-			inVec.Nsp.Np = &roaring64.Bitmap{}
-		}
 		if times[i] < 0 || times[i] > 32536771199 {
-			inVec.Nsp.Np.AddInt(i)
+			nulls.Add(inVec.Nsp, uint64(i))
 		}
 	}
 	nulls.Set(vec.Nsp, inVec.Nsp)

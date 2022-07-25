@@ -19,16 +19,16 @@ type TableName struct {
 	objName
 }
 
-func (node TableName) Format(ctx *FmtCtx) {
-	if node.ExplicitCatalog {
-		ctx.WriteString(string(node.CatalogName))
+func (tn TableName) Format(ctx *FmtCtx) {
+	if tn.ExplicitCatalog {
+		ctx.WriteString(string(tn.CatalogName))
 		ctx.WriteByte('.')
 	}
-	if node.ExplicitSchema {
-		ctx.WriteString(string(node.SchemaName))
+	if tn.ExplicitSchema {
+		ctx.WriteString(string(tn.SchemaName))
 		ctx.WriteByte('.')
 	}
-	ctx.WriteString(string(node.ObjectName))
+	ctx.WriteString(string(tn.ObjectName))
 }
 
 func (tn *TableName) Name() Identifier {

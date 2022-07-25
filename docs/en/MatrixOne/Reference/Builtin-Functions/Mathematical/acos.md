@@ -32,7 +32,3 @@ The ACOS() function returns the arccosine(given in radians) of the input number.
 +---------+---------+
 
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.

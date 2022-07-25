@@ -2,7 +2,7 @@
 
 ## **函数说明**
 
-`ANY_VALUE` 在范围内任选一个值返回。通过 `ANY_VALUE` 函数来抑制 `ONLY_FULL_GROUP_BY` 值拒绝。
+`ANY_VALUE` 在范围内任选一个值返回。
 
 ## **函数语法**
 

@@ -32,7 +32,7 @@ func SpaceInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		bytesNeed, err := space.CountSpacesSigned(inputValues)
 		if err != nil {
 			return nil, err
@@ -74,7 +74,7 @@ func SpaceUint64(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		bytesNeed, err := space.CountSpacesUnsigned(inputValues)
 		if err != nil {
 			return nil, err
@@ -116,7 +116,7 @@ func SpaceFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		bytesNeed, err := space.CountSpacesFloat(inputValues)
 		if err != nil {
 			return nil, err

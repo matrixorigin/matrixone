@@ -119,7 +119,7 @@ func BenchmarkSortInt(b *testing.B) {
 
 func BenchmarkSortIntVector(b *testing.B) {
 	m := mheap.New(guest.New(1<<30, hm))
-	vec := testutil.NewInt32Vector(BenchmarkRows, types.New(types.T_int32, 0, 0, 0), m, true)
+	vec := testutil.NewInt32Vector(BenchmarkRows, types.New(types.T_int32, 0, 0, 0), m, true, nil)
 	os := make([]int64, vector.Length(vec))
 	for i := range os {
 		os[i] = int64(i)
@@ -210,6 +210,6 @@ func newTestCase(desc bool, m *mheap.Mheap, typ types.Type) testCase {
 	return testCase{
 		desc: desc,
 		proc: process.New(m),
-		vec:  testutil.NewVector(Rows, typ, m, true),
+		vec:  testutil.NewVector(Rows, typ, m, true, nil),
 	}
 }

@@ -53,7 +53,7 @@ func reverse(xs *types.Bytes, rs *types.Bytes) *types.Bytes {
 			//reverse
 			input := xs.Data[cursor : cursor+curLen]
 			var output []byte
-			target := curLen
+			var target uint32
 			if isSame {
 				output = tmp
 				target = uint32(len(tmp))

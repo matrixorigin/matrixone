@@ -16,6 +16,7 @@ package unary
 
 import (
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -62,7 +63,7 @@ func adapter(vectors []*vector.Vector,
 			return nil, err
 		}
 		//step 4: fill the result vector
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		if result == nil {
 			nulls.Add(resultVector.Nsp, 0)
 		} else {

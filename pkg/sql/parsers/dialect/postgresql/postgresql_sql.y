@@ -31,8 +31,44 @@ import (
     statements []tree.Statement
 }
 
-%token <str> USE ID
-%token <str> INTEGRAL FLOAT HEX HEXNUM BIT_LITERAL
+%token LEX_ERROR
+%nonassoc EMPTY
+%left <str> UNION
+%token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR
+%nonassoc LOWER_THAN_SET
+%nonassoc <str> SET
+%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS
+%token <str> VALUES
+%token <str> NEXT VALUE SHARE MODE
+%token <str> SQL_NO_CACHE SQL_CACHE
+%left <str> JOIN STRAIGHT_JOIN LEFT RIGHT INNER OUTER CROSS NATURAL USE FORCE
+%left <str> ON USING
+%left <str> SUBQUERY_AS_EXPR
+%left <str> '(' ',' ')'
+%nonassoc LOWER_THAN_STRING
+%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD
+%token <item> INTEGRAL HEX BIT_LITERAL FLOAT HEXNUM
+%token <str> NULL TRUE FALSE
+%nonassoc LOWER_THAN_CHARSET
+%nonassoc <str> CHARSET
+%right <str> UNIQUE KEY
+%left <str> OR PIPE_CONCAT
+%left <str> XOR
+%left <str> AND
+%right <str> NOT '!'
+%left <str> BETWEEN CASE WHEN THEN ELSE END
+%left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT
+%left <str> '|'
+%left <str> '&'
+%left <str> SHIFT_LEFT SHIFT_RIGHT
+%left <str> '+' '-'
+%left <str> '*' '/' DIV '%' MOD
+%left <str> '^'
+%right <str> '~' UNARY
+%left <str> COLLATE
+%right <str> BINARY UNDERSCORE_BINARY
+%right <str> INTERVAL
+%nonassoc <str> '.'
 
 %type <statement> stmt
 %type <statements> stmt_list

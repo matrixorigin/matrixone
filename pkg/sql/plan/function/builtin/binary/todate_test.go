@@ -15,12 +15,13 @@
 package binary
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestToDate(t *testing.T) {
@@ -78,27 +79,27 @@ func TestToDate(t *testing.T) {
 	inputVec1 = testutil.MakeScalarVarchar("DD-MM-YYYY", 3)
 	inputVecs = []*vector.Vector{inputVec0, inputVec1}
 	proc = testutil.NewProc()
-	outputVec, err = ToDate(inputVecs, proc)
+	_, err = ToDate(inputVecs, proc)
 	require.Error(t, err)
 
 	inputVec0 = testutil.MakeVarcharVector([]string{"03-01-2020", "02-01-2019", ""}, []uint64{2})
 	inputVec1 = testutil.MakeScalarVarchar("DD-DD-YYYY", 3)
 	inputVecs = []*vector.Vector{inputVec0, inputVec1}
 	proc = testutil.NewProc()
-	outputVec, err = ToDate(inputVecs, proc)
+	_, err = ToDate(inputVecs, proc)
 	require.Error(t, err)
 
 	inputVec0 = testutil.MakeVarcharVector([]string{"03-01-2020", "02-01-2019", ""}, []uint64{2})
 	inputVec1 = testutil.MakeScalarVarchar("YYYY", 3)
 	inputVecs = []*vector.Vector{inputVec0, inputVec1}
 	proc = testutil.NewProc()
-	outputVec, err = ToDate(inputVecs, proc)
+	_, err = ToDate(inputVecs, proc)
 	require.Error(t, err)
 
 	inputVec0 = testutil.MakeVarcharVector([]string{"03-01-2020", "02-01-2019", ""}, []uint64{2})
 	inputVec1 = testutil.MakeScalarVarchar("YYYY", 3)
 	inputVecs = []*vector.Vector{inputVec0, inputVec1}
 	proc = testutil.NewProc()
-	outputVec, err = ToDate(inputVecs, proc)
+	_, err = ToDate(inputVecs, proc)
 	require.Error(t, err)
 }

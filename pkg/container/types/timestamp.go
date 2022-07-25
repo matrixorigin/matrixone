@@ -43,7 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
-const microSecondsDigits = 6
+//const microSecondsDigits = 6
 
 var TimestampMinValue Timestamp
 var TimestampMaxValue Timestamp

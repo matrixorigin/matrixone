@@ -39,27 +39,27 @@ func (rel *baseRelation) Nodes(_ engine.Snapshot) (nodes engine.Nodes) {
 	return rel.nodes
 }
 
-func (_ *baseRelation) Size(_ string) int64 {
+func (*baseRelation) Size(string) int64 {
 	return 0
 }
 
-func (_ *baseRelation) CardinalNumber(_ string) int64 {
+func (*baseRelation) CardinalNumber(string) int64 {
 	return 0
 }
 
-func (_ *baseRelation) CreateIndex(_ uint64, _ []engine.TableDef) error {
+func (*baseRelation) CreateIndex(uint64, []engine.TableDef) error {
 	panic(any("implement me"))
 }
 
-func (_ *baseRelation) DropIndex(_ uint64, _ string) error {
+func (*baseRelation) DropIndex(uint64, string) error {
 	panic(any("implement me"))
 }
 
-func (_ *baseRelation) AddTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
+func (*baseRelation) AddTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
 	panic(any("implement me"))
 }
 
-func (_ *baseRelation) DelTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
+func (*baseRelation) DelTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
 	panic(any("implement me"))
 }
 

@@ -1,15 +1,18 @@
-// Copyright 2022 MatrixOrigin.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/* 
+ * Copyright 2021 Matrix Origin
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 syntax = "proto3";
 package logservice;
@@ -25,6 +28,18 @@ enum UpdateType {
   TruncateLSNUpdate   = 1;
   UserEntryUpdate     = 2;
   TSOUpdate           = 3;
+}
+
+message CNNode {
+  string UUID           = 1;
+  string ServiceAddress = 2;
+  uint64 Tick           = 3;
+}
+
+message DNNode {
+  string UUID           = 1;
+  string ServiceAddress = 2;
+  uint64 Tick           = 3;
 }
 
 // LogShardInfo contains information a log shard.
@@ -49,20 +64,21 @@ message LogShardInfo {
 // LogReplicaInfo contains information of a log replica.
 message LogReplicaInfo {
   LogShardInfo LogShardInfo = 1 [(gogoproto.nullable) = false, (gogoproto.embed) = true];
-  // ReplciaID is the ID of a replica within the Log shard. 
+  // ReplicaID is the ID of a replica within the Log shard.
   uint64 ReplicaID = 2;
 }
 
 // CNStoreHeartbeat is the periodic message sent tp the HAKeeper by CN stores.
 message CNStoreHeartbeat {
-  string UUID = 1;
+  string UUID           = 1;
+  string ServiceAddress = 2;
 }
 
 // LogStoreHeartbeat is the periodic message sent to the HAKeeper by Log Stores.
 message LogStoreHeartbeat {
   // UUID is the uuid of the Log Store.
   string UUID = 1;
-  
+
   string RaftAddress    = 2;
   string ServiceAddress = 3;
   string GossipAddress  = 4;
@@ -90,10 +106,11 @@ message DNShardInfo {
 // DNStoreHeartbeat is the periodic message sent to the HAKeeper by DN stores.
 message DNStoreHeartbeat {
   // UUID is the uuid of the DN Store.
-  string UUID = 1;
+  string UUID                 = 1; 
+  string ServiceAddress       = 2;
   // Shards is a list of DNShardInfo instances collected on the specified
   // DN store. 
-  repeated DNShardInfo Shards = 2 [(gogoproto.nullable) = false];
+  repeated DNShardInfo Shards = 3 [(gogoproto.nullable) = false];
 };
 
 message RSMState {
@@ -105,16 +122,18 @@ message RSMState {
 }
 
 enum MethodType {
-  TSO_UPDATE    = 0;
-  APPEND        = 1;
-  READ          = 2;
-  TRUNCATE      = 3;
-  GET_TRUNCATE  = 4;
-  CONNECT       = 5;
-  CONNECT_RO    = 6;
-  LOG_HEARTBEAT = 7;
-  CN_HEARTBEAT  = 8;
-  DN_HEARTBEAT  = 9;
+  TSO_UPDATE     = 0;
+  APPEND         = 1;
+  READ           = 2;
+  TRUNCATE       = 3;
+  GET_TRUNCATE   = 4;
+  CONNECT        = 5;
+  CONNECT_RO     = 6;
+  LOG_HEARTBEAT  = 7;
+  CN_HEARTBEAT   = 8;
+  DN_HEARTBEAT   = 9;
+  CHECK_HAKEEPER = 10;
+  GET_CLUSTER_DETAILS = 11;
 };
 
 enum RecordType {
@@ -167,9 +186,11 @@ enum ErrorCode {
   ShardNotReady         = 8;
   SystemClosed          = 9;
 
-  LsnAlreadyTruncated = 100;
+  LsnAlreadyTruncated   = 100;
   OutOfRange            = 101;
   NotLeaseHolder        = 102;
+  NotHAKeeper           = 103;
+  LogShardNotFound      = 104;
 
   OtherSystemError      = 1000;
 };
@@ -181,13 +202,15 @@ message LogResponse {
 }
 
 message Response {
-  uint64 RequestID        = 1;
-  MethodType Method       = 2;
-  ErrorCode ErrorCode     = 3;
-  string ErrorMessage     = 4;
-  LogResponse LogResponse = 5 [(gogoproto.nullable) = false];
-  CommandBatch CommandBatch = 6 [(gogoproto.nullable) = false];
-  TsoResponse TsoResponse = 7 [(gogoproto.nullable) = false];
+  uint64 RequestID          = 1;
+  MethodType Method         = 2;
+  ErrorCode ErrorCode       = 3;
+  string ErrorMessage       = 4;
+  bool IsHAKeeper           = 5;
+  LogResponse LogResponse   = 6 [(gogoproto.nullable) = false];
+  CommandBatch CommandBatch = 7 [(gogoproto.nullable) = false];
+  TsoResponse TsoResponse   = 8 [(gogoproto.nullable) = false];
+  ClusterDetails ClusterDetails = 9 [(gogoproto.nullable) = false];
 };
 
 message LogRecordResponse {
@@ -229,6 +252,9 @@ message Replica {
   uint64 ShardID   = 2;
   uint64 ReplicaID = 3;
   uint64 Epoch     = 4;
+
+  // LogShardID only used for DNShard.
+  uint64 LogShardID = 5;
 }
 
 // ConfigChangeType indicates config change command type.
@@ -275,9 +301,10 @@ message CommandBatch {
   repeated ScheduleCommand Commands = 2 [(gogoproto.nullable) = false];
 }
 
-// CNStoreInfo contains infroamtion on a CN store.
+// CNStoreInfo contains information on a CN store.
 message CNStoreInfo {
   uint64 Tick                 = 1;
+  string ServiceAddress       = 2;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -287,16 +314,22 @@ message CNState {
 }
 
 
-// DNStoreInfo contins information on a DN store.
+// DNStoreInfo contains information on a DN store.
 message DNStoreInfo {
   uint64 Tick                 = 1;
-  repeated DNShardInfo Shards = 2 [(gogoproto.nullable) = false];
+  string ServiceAddress       = 2;
+  repeated DNShardInfo Shards = 3 [(gogoproto.nullable) = false];
 }
 
 // DNState contains all DN details known to the HAKeeper.
 message DNState {
   // Stores is keyed by DN store UUID.
   map<string, DNStoreInfo> Stores = 1 [(gogoproto.nullable) = false];
+}
+
+message ClusterDetails {
+  repeated DNNode DNNodes = 1 [(gogoproto.nullable) = false];
+  repeated CNNode CNNodes = 2 [(gogoproto.nullable) = false]; 
 }
 
 // ClusterInfo provides a global view of all shards in the cluster. It

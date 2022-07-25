@@ -14,7 +14,7 @@
 // Portions of this file are additionally subject to the following
 // copyright.
 //
-// Copyright (C) 2021 MatrixOrigin.
+// Copyright (C) 2021 Matrix Origin.
 //
 // Modified the behavior of the operator controller.
 
@@ -62,32 +62,34 @@ func (c *Controller) GetOperators(shardID uint64) []*Operator {
 	return c.operators[shardID]
 }
 
-func (c *Controller) GetRemovingReplicas() (removing map[uint64][]uint64) {
+func (c *Controller) GetRemovingReplicas() map[uint64][]uint64 {
+	removing := make(map[uint64][]uint64)
 	for shardID, operators := range c.operators {
 		for _, op := range operators {
 			for _, step := range op.steps {
-				switch step.(type) {
+				switch step := step.(type) {
 				case RemoveLogService:
-					removing[shardID] = append(removing[shardID], step.(RemoveLogService).ReplicaID)
+					removing[shardID] = append(removing[shardID], step.ReplicaID)
 				}
 			}
 		}
 	}
-	return
+	return removing
 }
 
-func (c *Controller) GetAddingReplicas() (adding map[uint64][]uint64) {
+func (c *Controller) GetAddingReplicas() map[uint64][]uint64 {
+	adding := make(map[uint64][]uint64)
 	for shardID, operators := range c.operators {
 		for _, op := range operators {
 			for _, step := range op.steps {
-				switch step.(type) {
+				switch step := step.(type) {
 				case AddLogService:
-					adding[shardID] = append(adding[shardID], step.(AddLogService).ReplicaID)
+					adding[shardID] = append(adding[shardID], step.ReplicaID)
 				}
 			}
 		}
 	}
-	return
+	return adding
 }
 
 func (c *Controller) RemoveFinishedOperator(logState pb.LogState, dnState pb.DNState) {
@@ -130,6 +132,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 						UUID:      st.StoreID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
+						Epoch:     st.Epoch,
 					},
 					ChangeType: pb.RemoveReplica,
 				},
@@ -155,8 +158,9 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 					Replica: pb.Replica{
 						UUID:    st.StoreID,
 						ShardID: st.ShardID,
+						Epoch:   st.Epoch,
 					},
-					ChangeType: pb.StopReplica,
+					ChangeType: pb.RemoveReplica,
 				},
 				ServiceType: pb.LogService,
 			}
@@ -169,7 +173,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: pb.AddReplica,
+					ChangeType: pb.StartReplica,
 				},
 				ServiceType: pb.DnService,
 			}
@@ -182,7 +186,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: pb.RemoveReplica,
+					ChangeType: pb.StopReplica,
 				},
 				ServiceType: pb.DnService,
 			}

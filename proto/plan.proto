@@ -1,3 +1,19 @@
+/* 
+ * Copyright 2021 Matrix Origin
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+ 
 syntax = "proto3";
 package plan;
 
@@ -94,7 +110,7 @@ message Const {
 		float fval		= 7;
 		int32 dateval 		= 8;
 		int64 datetimeval		= 9;
-		int64 decimal64val = 10;
+		decimal64 decimal64val = 10;
 		decimal128 decimal128val = 11;
 		int64 timestampval = 12;
 	}
@@ -108,12 +124,15 @@ message ParamRef {
 // Session variable ref, compiler should fold.
 message VarRef {
 	string name = 1;
+	bool system = 2;
+	bool global = 3;
 }
 
 // Reference a column in the proj list of a node.
 message ColRef {
-	int32 rel_pos	= 1;
-	int32 col_pos	= 2;
+	int32	rel_pos	= 1;
+	int32	col_pos	= 2;
+	string	name	= 3;
 }
 
 // Reference a correlated column in the proj list of a node.
@@ -149,6 +168,7 @@ message SubqueryRef {
 	int32 node_id	= 2;
 	string op		= 3;
 	Expr child		= 4;
+	int32 row_size	= 5;
 }
 
 // Object ref, reference a object in database, 4 part name.
@@ -193,7 +213,7 @@ message Function {
 }
 
 message Expr {
-	Type	typ			= 1;
+	Type typ = 1;
 	oneof expr {
 		Const		c		= 2;
 		ParamRef	p		= 3;
@@ -205,8 +225,6 @@ message Expr {
 		TargetType  t		= 9;
 		ExprList	list	= 10;
 	}
-	string	table_name	= 11;
-	string	col_name	= 12;
 }
 
 enum CompressType {
@@ -224,7 +242,7 @@ message ConstantValue {
 	oneof constantValue {
 		int32 unknown_v = 1;
 		int64 int64_v = 2;
-		int64 decimal64_v = 3;
+		decimal64 decimal64_v = 3;
 		decimal128 decimal128_v = 4;
 		uint64 uint64_v = 5;
 		float float32_v = 6;
@@ -237,9 +255,13 @@ message ConstantValue {
 	}
 }
 
+message decimal64 {
+	int64 a = 1;
+}
+
 message decimal128 {
-	int64 Lo = 1;
-	int64 Hi = 2;
+	int64 a = 1;
+	int64 b = 2;
 }
 
 message ColDef {
@@ -249,6 +271,7 @@ message ColDef {
 	DefaultExpr default = 4;
 	bool primary        = 5;
 	int32 pkidx 		= 6;
+	string comment	=7;
 }
 
 message IndexDef {
@@ -341,6 +364,15 @@ message UpdateInfo {
 	repeated string update_attrs = 4;
 	repeated string other_attrs = 5;
 	repeated string attr_orders = 6;
+}
+
+message AnalyzeInfo {
+    int64 input_rows = 1;
+    int64 output_rows = 2;
+    int64 input_size = 3;
+    int64 output_size = 4;
+    int64 time_consumed = 5;
+    int64 memory_size = 6;
 }
 
 message Node {
@@ -439,14 +471,18 @@ message Node {
 	ObjectRef obj_ref = 18;
 	RowsetData rowset_data = 19;
 	string extra_options = 20;
-	DeleteInfo delete_info = 21;
+	repeated DeleteTableCtx deleteTablesCtx = 21;
 
 	repeated int32 binding_tags = 22;
+
+    AnalyzeInfo analyze_info = 23;
 }
 
-message DeleteInfo {
-	string useDeleteKey = 1;
-	bool canTruncate = 2;
+message DeleteTableCtx {
+	string dbName = 1;
+	string tblName = 2;
+	string useDeleteKey = 3;
+	bool canTruncate = 4;
 }
 
 message Query {
@@ -533,11 +569,17 @@ message DataControl {
 		GRANT			= 1;
 		REVOKE			= 2;
 		DENY			= 3;
+		PREPARE			= 4;
+		EXECUTE			= 5;
+		DEALLOCATE		= 6;
 	}
 	//DataDefinition type
 	DclType dcl_type = 1;
 	oneof control {
-		SetVariables set_variables = 2;
+		SetVariables set_variables  = 2;
+		Prepare prepare 			= 3;
+		Execute execute				= 4;
+		Deallocate deallocate 		= 5;
 	}
 }
 
@@ -654,4 +696,19 @@ message SetVariablesItem {
 	string name     = 3;
 	Expr   value    = 4;
 	Expr   reserved = 5;
+}
+
+message Prepare {
+	string name		 			= 1;
+	repeated ObjectRef schemas 	= 2;
+	Plan   plan		 			= 3;
+}
+
+message Execute {
+	string name 		= 1;
+	repeated Expr args 	= 2;
+}
+
+message Deallocate {
+	string name			= 1;
 }

@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package indexwrapper
 
 import (
@@ -22,7 +36,7 @@ func NewMutableIndex(keyT types.Type) *mutableIndex {
 	}
 }
 
-func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int, ts uint64) (err error) {
+func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int, ts uint64) (resp *index.BatchResp, err error) {
 	defer func() {
 		err = TranslateError(err)
 	}()
@@ -31,7 +45,7 @@ func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int, ts uint
 	}
 	// logutil.Infof("Pre: %s", idx.art.String())
 	// logutil.Infof("Post: %s", idx.art.String())
-	resp, err := idx.art.BatchInsert(keysCtx, uint32(offset), true)
+	resp, err = idx.art.BatchInsert(keysCtx, uint32(offset), true)
 	if resp != nil {
 		posArr := resp.UpdatedKeys.ToArray()
 		rowArr := resp.UpdatedRows.ToArray()
@@ -49,11 +63,40 @@ func (idx *mutableIndex) HasDeleteFrom(key any, fromTs uint64) bool {
 	return idx.deletes.HasDeleteFrom(key, fromTs)
 }
 
-func (idx *mutableIndex) IsKeyDeleted(key any, ts uint64) (deleted, existed bool) {
+func (idx *mutableIndex) IsKeyDeleted(key any, ts uint64) (deleted bool, existed bool) {
 	return idx.deletes.IsKeyDeleted(key, ts)
 }
 
 func (idx *mutableIndex) GetMaxDeleteTS() uint64 { return idx.deletes.GetMaxTS() }
+
+func (idx *mutableIndex) RevertUpsert(keys containers.Vector, updatePositions, updateRows *roaring.Bitmap, ts uint64) (err error) {
+	defer func() {
+		err = TranslateError(err)
+	}()
+
+	delOp := func(key any, _ int) error {
+		_, err := idx.art.Delete(key)
+		return err
+	}
+	if err = keys.Foreach(delOp, nil); err != nil {
+		return
+	}
+	if updatePositions != nil {
+		posArr := updatePositions.ToArray()
+		rowArr := updateRows.ToArray()
+		for i := 0; i < len(posArr); i++ {
+			key := keys.Get(int(posArr[i]))
+			idx.deletes.RemoveOne(key, rowArr[i])
+			if err = idx.art.Insert(key, rowArr[i]); err != nil {
+				return
+			}
+		}
+		idx.deletes.RemoveTs(ts)
+	}
+
+	return
+}
+
 func (idx *mutableIndex) Delete(key any, ts uint64) (err error) {
 	defer func() {
 		err = TranslateError(err)

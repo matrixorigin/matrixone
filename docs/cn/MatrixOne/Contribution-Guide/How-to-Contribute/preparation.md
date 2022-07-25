@@ -11,7 +11,7 @@
 在[MatrixOne简介](./../../Overview/matrixone-introduction.md)中您可以了解到MO的超融合、云边协同特性以及其所创造的优异表现与独特价值。
 此外，在[MatrixOne框架](./../../Overview/matrixone-architecture.md)中您可以详细地了解MO的整体架构，以及存储层、计算层、负责分布式管理的MatrixCube的具体组成情况。
 同时，你也可以查阅[MatrixOne术语表](../../Glossary/glossary.md)来了解一些复杂的词汇。
-在技术层面，[SQL参考指南](./../../Reference/SQL-Reference/Data-Definition-Statements/create-database.md) 为您提供了详细的SQL语言的参考，其中对语法和示例都有详细解释；同样，[自定义函数](./../../Reference/Customer-Functions/year.md)提供了MO中自定义函数的相关解释。
+在技术层面，[SQL参考指南](./../../Reference/SQL-Reference/Data-Definition-Statements/create-database.md) 为您提供了详细的SQL语言的参考，其中对语法和示例都有详细解释；同样，[自定义函数](./../../Reference/Builtin-Functions/Datetime/year.md)提供了MO中自定义函数的相关解释。
 
 ### 建设情况
 
@@ -24,13 +24,13 @@
 对MatrixOne的贡献可分为以下几类：
 
 * 报告代码中的bug或文档中的谬误。请在GitHub上提出[issue](https://github.com/matrixorigin/matrixone/issues/new/choose)，并提供问题的详细信息。请记得选取合适的[issue模板](./Report-Issues.md#issue-templates)，并打上标签。
-* 提议新的功能。请在[Feature Request](https://github.com/matrixorigin/matrixone/issues/new/choose)中描述详情并与社区中的开发人员商议。一旦我们的团队认可了您的计划，您就可以按照[工作流程](Contribute-Code.md#workflow)进行具体开发。
-* 实现某个功能或修复既有问题，请按照[工作流程](./contribute-code.md#workflow)完成开发。如果你需要关于某一特定问题的更多背景信息，请就该问题发表评论。
+* 提议新的功能。请在[Feature Request](https://github.com/matrixorigin/matrixone/issues/new/choose)中描述详情并与社区中的开发人员商议。一旦我们的团队认可了您的计划，您就可以按照[工作流程](contribute-code.md#workflow)进行具体开发。
+* 实现某个功能或修复既有问题，请按照[工作流程](contribute-code.md#workflow)完成开发。如果你需要关于某一特定问题的更多背景信息，请就该问题发表评论。
 
-## **工作目录与文件介绍** 
+## **工作目录与文件介绍**
 
-我们将为Github上matrixorigin/matrixone的项目目录及其中关键文件进行简单介绍，以期为您的深入了解和开发提供指导性帮助。 
-[matrixone](https://github.com/matrixorigin/matrixone)是MatrixOne代码所在的主库，我们将介绍其中的项目目录以及关键文件，以期为您的深入了解和开发提供指导性帮助。 
+我们将为Github上matrixorigin/matrixone的项目目录及其中关键文件进行简单介绍，以期为您的深入了解和开发提供指导性帮助。
+[matrixone](https://github.com/matrixorigin/matrixone)是MatrixOne代码所在的主库，我们将介绍其中的项目目录以及关键文件，以期为您的深入了解和开发提供指导性帮助。
 
 | 目录              | 内容                                                  |
 | ------------------------------ | ------------------------------------------------------------ |

@@ -89,3 +89,11 @@ func TestAppendNull(t *testing.T) {
 		check(typ)
 	}
 }
+
+func TestBinarySearch(t *testing.T) {
+	slice := []int{1, 2, 6, 9, 12}
+	pos := BinarySearch(slice, 3)
+	assert.Equal(t, -1, pos)
+	pos = BinarySearch(slice, 6)
+	assert.Equal(t, 2, pos)
+}

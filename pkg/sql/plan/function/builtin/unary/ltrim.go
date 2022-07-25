@@ -33,7 +33,7 @@ func Ltrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		}
 		spaceCount := ltrim.CountSpacesFromLeft(inputValues)
 		totalCount := int32(len(inputValues.Data))
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := &types.Bytes{
 			Data:    make([]byte, totalCount-spaceCount),
 			Offsets: make([]uint32, 1),

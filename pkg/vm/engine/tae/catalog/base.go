@@ -306,7 +306,7 @@ func (be *BaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
 		be.CurrOp = OpSoftDelete
 		return nil
 	}
-	return txnif.TxnWWConflictErr
+	return txnif.ErrTxnWWConflict
 }
 
 func (be *BaseEntry) SameTxn(o *BaseEntry) bool {
@@ -423,7 +423,7 @@ func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) (ok 
 		rwlocker.RLock()
 	}
 	if state == txnif.TxnStateUnknown {
-		ok, err = false, txnif.TxnInternalErr
+		ok, err = false, txnif.ErrTxnInternal
 		return
 	}
 	if be.CreateAfter(txn.GetStartTS()) || be.DeleteBefore(txn.GetStartTS()) || be.InTxnOrRollbacked() {
@@ -464,7 +464,7 @@ func (be *BaseEntry) PrepareWrite(txn txnif.TxnReader, rwlocker *sync.RWMutex) (
 	commitTS := be.Txn.GetCommitTS()
 	// Another active txn is on this entry
 	if commitTS == txnif.UncommitTS {
-		err = txnif.TxnWWConflictErr
+		err = txnif.ErrTxnWWConflict
 		return
 	}
 	// Another committing|rollbacking|committed|rollbacked txn commits|rollbacks after txn starts
@@ -479,7 +479,7 @@ func (be *BaseEntry) PrepareWrite(txn txnif.TxnReader, rwlocker *sync.RWMutex) (
 		rwlocker.RLock()
 	}
 	if state == txnif.TxnStateUnknown {
-		err = txnif.TxnInternalErr
+		err = txnif.ErrTxnInternal
 	}
 	return
 }

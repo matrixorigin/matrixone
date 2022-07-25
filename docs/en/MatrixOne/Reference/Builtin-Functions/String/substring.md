@@ -8,8 +8,8 @@ The forms without a len argument return a substring from string str starting at 
 ## **Syntax**
 
 ```
-> SUBSTRING(str,pos) 
-> SUBSTR(str,pos,len) 
+> SUBSTRING(str,pos)
+> SUBSTR(str,pos,len)
 ```
 
 ## **Arguments**
@@ -66,5 +66,4 @@ estd date NOT NULL DEFAULT '2000-01-01'
 
 ## Constraints
 
-* Currently, MatrixOne doesn't support select function() without from tables.
 * Currently, Substring() doesn't support FROM and FOR clauses.

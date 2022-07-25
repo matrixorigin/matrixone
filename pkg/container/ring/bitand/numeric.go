@@ -82,7 +82,7 @@ func (r *NumericRing) Shrink(selectedIndexes []int64) {
 	r.NullCnt = r.NullCnt[:len(selectedIndexes)]
 }
 
-func (v *NumericRing) Shuffle(_ []int64, _ *mheap.Mheap) error {
+func (r *NumericRing) Shuffle(_ []int64, _ *mheap.Mheap) error {
 	return nil
 }
 

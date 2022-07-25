@@ -17,6 +17,7 @@ package logservice
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/errors"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -67,7 +69,7 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 	}
 	return config.NodeHostConfig{
 		DeploymentID:        cfg.DeploymentID,
-		NodeHostID:          cfg.NodeHostID,
+		NodeHostID:          cfg.UUID,
 		NodeHostDir:         cfg.DataDir,
 		RTTMillisecond:      cfg.RTTMillisecond,
 		AddressByNodeHostID: true,
@@ -127,14 +129,17 @@ func newLogStore(cfg Config) (*store, error) {
 	ls := &store{
 		cfg:     cfg,
 		nh:      nh,
+		checker: checkers.NewCoordinator(cfg.GetHAKeeperConfig()),
 		alloc:   newIDAllocator(),
 		stopper: stopper.NewStopper("log-store"),
 	}
 	ls.mu.truncateCh = make(chan struct{})
 	ls.mu.pendingTruncate = make(map[uint64]struct{})
-	ls.stopper.RunTask(func(ctx context.Context) {
+	if err := ls.stopper.RunTask(func(ctx context.Context) {
 		ls.truncationWorker(ctx)
-	})
+	}); err != nil {
+		return nil, err
+	}
 	return ls, nil
 }
 
@@ -152,15 +157,20 @@ func (l *store) id() string {
 
 func (l *store) startHAKeeperReplica(replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target, join bool) error {
-	l.haKeeperReplicaID = replicaID
 	raftConfig := getRaftConfig(hakeeper.DefaultHAKeeperShardID, replicaID)
 	if err := l.nh.StartReplica(initialReplicas,
 		join, hakeeper.NewStateMachine, raftConfig); err != nil {
 		return err
 	}
-	l.stopper.RunTask(func(ctx context.Context) {
-		l.ticker(ctx)
-	})
+	atomic.StoreUint64(&l.haKeeperReplicaID, replicaID)
+	if !l.cfg.DisableWorkers {
+		if err := l.stopper.RunTask(func(ctx context.Context) {
+			l.ticker(ctx)
+		}); err != nil {
+			return err
+		}
+		plog.Infof("HAKeeper ticker restarted")
+	}
 	return nil
 }
 
@@ -338,6 +348,16 @@ func (l *store) tsoUpdate(ctx context.Context, count uint64) (uint64, error) {
 	return result.Value, nil
 }
 
+func handleNotHAKeeperError(err error) error {
+	if err == nil {
+		return err
+	}
+	if errors.Is(err, dragonboat.ErrShardNotFound) {
+		return ErrNotHAKeeper
+	}
+	return err
+}
+
 func (l *store) addLogStoreHeartbeat(ctx context.Context,
 	hb pb.LogStoreHeartbeat) error {
 	data := MustMarshal(&hb)
@@ -345,7 +365,7 @@ func (l *store) addLogStoreHeartbeat(ctx context.Context,
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if _, err := l.propose(ctx, session, cmd); err != nil {
 		plog.Errorf("propose failed, %v", err)
-		return err
+		return handleNotHAKeeperError(err)
 	}
 	return nil
 }
@@ -357,7 +377,7 @@ func (l *store) addCNStoreHeartbeat(ctx context.Context,
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if _, err := l.propose(ctx, session, cmd); err != nil {
 		plog.Errorf("propose failed, %v", err)
-		return err
+		return handleNotHAKeeperError(err)
 	}
 	return nil
 }
@@ -369,7 +389,7 @@ func (l *store) addDNStoreHeartbeat(ctx context.Context,
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if _, err := l.propose(ctx, session, cmd); err != nil {
 		plog.Errorf("propose failed, %v", err)
-		return err
+		return handleNotHAKeeperError(err)
 	}
 	return nil
 }
@@ -379,9 +399,18 @@ func (l *store) getCommandBatch(ctx context.Context,
 	v, err := l.read(ctx,
 		hakeeper.DefaultHAKeeperShardID, &hakeeper.ScheduleCommandQuery{UUID: uuid})
 	if err != nil {
-		return pb.CommandBatch{}, err
+		return pb.CommandBatch{}, handleNotHAKeeperError(err)
 	}
 	return *(v.(*pb.CommandBatch)), nil
+}
+
+func (l *store) getClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
+	v, err := l.read(ctx,
+		hakeeper.DefaultHAKeeperShardID, &hakeeper.ClusterDetailsQuery{})
+	if err != nil {
+		return pb.ClusterDetails{}, handleNotHAKeeperError(err)
+	}
+	return *(v.(*pb.ClusterDetails)), nil
 }
 
 func (l *store) addScheduleCommands(ctx context.Context,
@@ -389,9 +418,8 @@ func (l *store) addScheduleCommands(ctx context.Context,
 	cmd := hakeeper.GetUpdateCommandsCmd(term, cmds)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if _, err := l.propose(ctx, session, cmd); err != nil {
-		return err
+		return handleNotHAKeeperError(err)
 	}
-
 	return nil
 }
 
@@ -509,7 +537,7 @@ func (l *store) queryLog(ctx context.Context, shardID uint64,
 		return nil, 0, err
 	}
 	select {
-	case v := <-rs.CompletedC:
+	case v := <-rs.ResultC():
 		if v.Completed() {
 			entries, logRange := v.RaftLogs()
 			next := getNextIndex(entries, firstIndex, logRange.LastIndex)
@@ -530,9 +558,15 @@ func (l *store) queryLog(ctx context.Context, shardID uint64,
 }
 
 func (l *store) ticker(ctx context.Context) {
-	ticker := time.NewTicker(hakeeper.TickDuration)
+	if l.cfg.HAKeeperTickInterval == 0 {
+		panic("invalid HAKeeperTickInterval")
+	}
+	ticker := time.NewTicker(l.cfg.HAKeeperTickInterval)
 	defer ticker.Stop()
-	haTicker := time.NewTicker(hakeeper.CheckDuration)
+	if l.cfg.HAKeeperCheckInterval == 0 {
+		panic("invalid HAKeeperCheckInterval")
+	}
+	haTicker := time.NewTicker(l.cfg.HAKeeperCheckInterval)
 	defer haTicker.Stop()
 
 	for {
@@ -645,6 +679,14 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 	}
 	nhi := l.nh.GetNodeHostInfo(opts)
 	for _, ci := range nhi.ShardInfoList {
+		if ci.Pending {
+			plog.Infof("shard %d is pending, not included into the heartbeat",
+				ci.ShardID)
+			continue
+		}
+		if ci.ConfigChangeIndex == 0 {
+			panic("ci.ConfigChangeIndex is 0")
+		}
 		replicaInfo := pb.LogReplicaInfo{
 			LogShardInfo: pb.LogShardInfo{
 				ShardID:  ci.ShardID,
@@ -655,6 +697,7 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 			},
 			ReplicaID: ci.ReplicaID,
 		}
+		// FIXME: why we need this?
 		if replicaInfo.Replicas == nil {
 			replicaInfo.Replicas = make(map[uint64]dragonboat.Target)
 		}

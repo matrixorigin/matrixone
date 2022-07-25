@@ -35,7 +35,3 @@ The BIT_OR(expr) function returns the bitwise OR of all bits in expr.
 | b    |             11 |
 +------+----------------+
 ```
-
-## **Constraints**
-
-Currently, MatrixOne doesn't support select function() without from tables.

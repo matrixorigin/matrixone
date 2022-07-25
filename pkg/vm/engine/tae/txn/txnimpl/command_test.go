@@ -82,8 +82,8 @@ func TestComposedCmd(t *testing.T) {
 
 	r := bytes.NewBuffer(buf)
 	composed2, _, err := txnbase.BuildCommandFrom(r)
-	defer composed2.Close()
 	assert.Nil(t, err)
+	defer composed2.Close()
 	cmd1 := composed.Cmds
 	cmd2 := composed2.(*txnbase.ComposedCmd).Cmds
 
@@ -115,21 +115,4 @@ func TestComposedCmd(t *testing.T) {
 			}
 		}
 	}
-}
-
-func checkAppendCmdIsEqual(t *testing.T, cmd1, cmd2 *AppendCmd) {
-	assert.Equal(t, cmd1.ID, cmd2.ID)
-	assert.Equal(t, len(cmd1.Cmds), len(cmd2.Cmds))
-	for i, subcmd1 := range cmd1.Cmds {
-		assert.Equal(t, subcmd1.GetType(), cmd2.Cmds[i].GetType())
-	}
-	assert.Equal(t, len(cmd1.Infos), len(cmd2.Infos))
-	for i, info1 := range cmd1.Infos {
-		checkAppendInfoIsEqual(t, info1, cmd2.Infos[i])
-	}
-}
-
-func checkAppendInfoIsEqual(t *testing.T, info1, info2 *appendInfo) {
-	assert.Equal(t, info1.seq, info2.seq)
-	assert.Equal(t, info1.destLen, info2.destLen)
 }

@@ -32,7 +32,7 @@ func DateToDay(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if inputVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint8, 1)
 		vector.SetCol(resultVector, day.DateToDay(inputValues, resultValues))
 		return resultVector, nil
@@ -58,7 +58,7 @@ func DatetimeToDay(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		if inputVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint8, 1)
 		vector.SetCol(resultVector, day.DatetimeToDay(inputValues, resultValues))
 		return resultVector, nil

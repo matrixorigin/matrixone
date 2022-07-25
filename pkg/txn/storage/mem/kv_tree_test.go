@@ -71,7 +71,7 @@ func TestAscendRange(t *testing.T) {
 
 	for idx, c := range cases {
 		var keys [][]byte
-		kv.AscendRange(c.from, c.to, func(key, value []byte) bool {
+		kv.AscendRange(c.from, c.to, func(key, _ []byte) bool {
 			keys = append(keys, key)
 			return true
 		})

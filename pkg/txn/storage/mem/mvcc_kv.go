@@ -26,7 +26,7 @@ type MVCCKV struct {
 	kv *KV
 }
 
-// NewMVCCKV
+// NewMVCCKV create a mvcc based kv
 func NewMVCCKV() *MVCCKV {
 	return &MVCCKV{kv: NewKV()}
 }

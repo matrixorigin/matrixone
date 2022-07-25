@@ -46,7 +46,3 @@ VALUES
 |               | 2014-12-01   |
 +---------------+--------------+
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.

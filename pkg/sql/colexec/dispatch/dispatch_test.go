@@ -17,13 +17,11 @@ package dispatch
 import (
 	"bytes"
 	"context"
-	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -65,13 +63,15 @@ func TestString(t *testing.T) {
 
 func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
-		Prepare(tc.proc, tc.arg)
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
 	}
 }
 
 func TestDispatch(t *testing.T) {
 	for _, tc := range tcs {
-		Prepare(tc.proc, tc.arg)
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
 		bat := newBatch(t, tc.types, tc.proc, Rows)
 		tc.proc.Reg.InputBatch = bat
 		{
@@ -81,11 +81,11 @@ func TestDispatch(t *testing.T) {
 				}
 			}
 		}
-		Call(tc.proc, tc.arg)
+		_, _ = Call(0, tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = &batch.Batch{}
-		Call(tc.proc, tc.arg)
+		_, _ = Call(0, tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = nil
-		Call(tc.proc, tc.arg)
+		_, _ = Call(0, tc.proc, tc.arg)
 		for {
 			bat := <-tc.arg.Regs[0].Ch
 			if bat == nil {
@@ -122,71 +122,5 @@ func newTestCase(gm *guest.Mmu, all bool) dispatchTestCase {
 
 // create a new block based on the type information
 func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	bat := batch.NewWithSize(len(ts))
-	bat.InitZsOne(int(rows))
-	for i := range bat.Vecs {
-		vec := vector.New(ts[i])
-		vec.Or = true
-		switch vec.Typ.Oid {
-		case types.T_int8:
-			data, err := mheap.Alloc(proc.Mp, rows*1)
-			require.NoError(t, err)
-			vec.Data = data
-			vs := encoding.DecodeInt8Slice(vec.Data)[:rows]
-			for i := range vs {
-				vs[i] = int8(i)
-			}
-			vec.Col = vs
-		case types.T_int64:
-			data, err := mheap.Alloc(proc.Mp, rows*8)
-			require.NoError(t, err)
-			vec.Data = data
-			vs := encoding.DecodeInt64Slice(vec.Data)[:rows]
-			for i := range vs {
-				vs[i] = int64(i)
-			}
-			vec.Col = vs
-		case types.T_float64:
-			data, err := mheap.Alloc(proc.Mp, rows*8)
-			require.NoError(t, err)
-			vec.Data = data
-			vs := encoding.DecodeFloat64Slice(vec.Data)[:rows]
-			for i := range vs {
-				vs[i] = float64(i)
-			}
-			vec.Col = vs
-		case types.T_date:
-			data, err := mheap.Alloc(proc.Mp, rows*4)
-			require.NoError(t, err)
-			vec.Data = data
-			vs := encoding.DecodeDateSlice(vec.Data)[:rows]
-			for i := range vs {
-				vs[i] = types.Date(i)
-			}
-			vec.Col = vs
-		case types.T_char, types.T_varchar:
-			size := 0
-			vs := make([][]byte, rows)
-			for i := range vs {
-				vs[i] = []byte(strconv.Itoa(i))
-				size += len(vs[i])
-			}
-			data, err := mheap.Alloc(proc.Mp, int64(size))
-			require.NoError(t, err)
-			data = data[:0]
-			col := new(types.Bytes)
-			o := uint32(0)
-			for _, v := range vs {
-				data = append(data, v...)
-				col.Offsets = append(col.Offsets, o)
-				o += uint32(len(v))
-				col.Lengths = append(col.Lengths, uint32(len(v)))
-			}
-			col.Data = data
-			vec.Col = col
-			vec.Data = data
-		}
-		bat.Vecs[i] = vec
-	}
-	return bat
+	return testutil.NewBatch(ts, false, int(rows), proc.Mp)
 }

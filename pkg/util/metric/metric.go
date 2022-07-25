@@ -59,7 +59,7 @@ type selfAsPromCollector struct {
 	self prom.Collector
 }
 
-func (c *selfAsPromCollector) init(self prom.Collector)        { c.self = self }
+func (s *selfAsPromCollector) init(self prom.Collector)        { s.self = self }
 func (s *selfAsPromCollector) CancelToProm()                   {}
 func (s *selfAsPromCollector) CollectorToProm() prom.Collector { return s.self }
 

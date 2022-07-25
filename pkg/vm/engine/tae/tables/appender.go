@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 )
 
 type blockAppender struct {
@@ -48,7 +47,9 @@ func (appender *blockAppender) IsAppendable() bool {
 	return appender.rows+appender.placeholder < appender.node.block.meta.GetSchema().BlockMaxRows
 }
 
-func (appender *blockAppender) PrepareAppend(rows uint32) (n uint32, err error) {
+func (appender *blockAppender) PrepareAppend(
+	rows uint32,
+	txn txnif.AsyncTxn) (node txnif.AppendNode, created bool, n uint32, err error) {
 	left := appender.node.block.meta.GetSchema().BlockMaxRows - appender.rows - appender.placeholder
 	if left == 0 {
 		// n = rows
@@ -60,6 +61,12 @@ func (appender *blockAppender) PrepareAppend(rows uint32) (n uint32, err error) 
 		n = rows
 	}
 	appender.placeholder += n
+	appender.node.block.mvcc.Lock()
+	defer appender.node.block.mvcc.Unlock()
+	node, created = appender.node.block.mvcc.AddAppendNodeLocked(
+		txn,
+		appender.rows,
+		appender.placeholder+appender.rows)
 	return
 }
 func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (err error) {
@@ -83,7 +90,7 @@ func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (err error) {
 			keysCtx.Start = 0
 			keysCtx.Count = bat.Length()
 			// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
-			err = appender.node.block.index.BatchUpsert(keysCtx, from, 0)
+			_, err = appender.node.block.index.BatchUpsert(keysCtx, from, 0)
 			if err != nil {
 				panic(err)
 			}
@@ -96,8 +103,7 @@ func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (err error) {
 }
 func (appender *blockAppender) ApplyAppend(
 	bat *containers.Batch,
-	txn txnif.AsyncTxn,
-	anode txnif.AppendNode) (node txnif.AppendNode, from int, err error) {
+	txn txnif.AsyncTxn) (from int, err error) {
 	err = appender.node.DoWithPin(func() (err error) {
 		appender.node.block.mvcc.Lock()
 		defer appender.node.block.mvcc.Unlock()
@@ -121,17 +127,10 @@ func (appender *blockAppender) ApplyAppend(
 			keysCtx.Start = 0
 			keysCtx.Count = bat.Length()
 			// logutil.Infof("Append into %s: %s", appender.node.block.meta.Repr(), keysCtx.Keys.String())
-			err = appender.node.block.index.BatchUpsert(keysCtx, from, txn.GetStartTS())
+			_, err = appender.node.block.index.BatchUpsert(keysCtx, from, txn.GetStartTS())
 			if err != nil {
 				panic(err)
 			}
-		}
-		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(bat.Length()))
-		if anode != nil {
-			anode.(*updates.AppendNode).SetMaxRow(appender.node.rows)
-			node = anode
-		} else {
-			node = appender.node.block.mvcc.AddAppendNodeLocked(txn, appender.node.rows)
 		}
 		return
 	})

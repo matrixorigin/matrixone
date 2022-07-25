@@ -19,33 +19,28 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/mohae/deepcopy"
+	"go.uber.org/zap"
 )
 
 type Manager struct {
 	cluster pb.ClusterInfo
+
+	logger *zap.Logger
 }
 
-func NewBootstrapManager(cluster pb.ClusterInfo) *Manager {
-	var dnShard []metadata.DNShardRecord
-	var logShard []metadata.LogShardRecord
-
-	if cluster.DNShards != nil {
-		dnShard = make([]metadata.DNShardRecord, len(cluster.DNShards))
-		copy(dnShard, cluster.DNShards)
-	}
-
-	if cluster.LogShards != nil {
-		logShard = make([]metadata.LogShardRecord, len(cluster.LogShards))
-		copy(logShard, cluster.LogShards)
+func NewBootstrapManager(cluster pb.ClusterInfo, logger *zap.Logger) *Manager {
+	copied := deepcopy.Copy(cluster)
+	nc, ok := copied.(pb.ClusterInfo)
+	if !ok {
+		panic("deep copy failed")
 	}
 
 	manager := &Manager{
-		cluster: pb.ClusterInfo{
-			DNShards:  dnShard,
-			LogShards: logShard,
-		},
+		cluster: nc,
+		logger:  logutil.Adjust(logger).Named("hakeeper"),
 	}
 
 	return manager
@@ -59,7 +54,14 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 		return nil, err
 	}
 
-	return append(logCommands, dnCommands...), nil
+	commands := append(logCommands, dnCommands...)
+	for _, command := range commands {
+		bm.logger.Info("schedule command generated", zap.String("command", command.LogString()))
+	}
+	if len(commands) != 0 {
+		bm.logger.Info("bootstrap commands generated")
+	}
+	return commands, nil
 }
 
 func (bm *Manager) bootstrapLogService(alloc util.IDAllocator,
@@ -97,7 +99,7 @@ func (bm *Manager) bootstrapLogService(alloc util.IDAllocator,
 							ShardID:   shardRecord.ShardID,
 							ReplicaID: replicaID,
 						},
-						ChangeType:     pb.AddReplica,
+						ChangeType:     pb.StartReplica,
 						InitialMembers: initialMembers,
 					},
 					ServiceType: pb.LogService,
@@ -123,14 +125,15 @@ func (bm *Manager) bootstrapDN(alloc util.IDAllocator, dn pb.DNState) (commands 
 		}
 
 		commands = append(commands, pb.ScheduleCommand{
-			UUID: dnStores[i],
+			UUID:          dnStores[i],
+			Bootstrapping: true,
 			ConfigChange: &pb.ConfigChange{
 				Replica: pb.Replica{
 					UUID:      dnStores[i],
 					ShardID:   dnRecord.ShardID,
 					ReplicaID: replicaID,
 				},
-				ChangeType: pb.AddReplica,
+				ChangeType: pb.StartReplica,
 			},
 			ServiceType: pb.DnService,
 		})

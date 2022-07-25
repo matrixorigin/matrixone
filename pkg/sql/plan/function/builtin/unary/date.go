@@ -32,7 +32,7 @@ func DateToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]types.Date, 1)
 		copy(resultValues, inputValues)
 		vector.SetCol(resultVector, resultValues)
@@ -60,7 +60,7 @@ func DatetimeToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]types.Date, 1)
 		vector.SetCol(resultVector, date.DatetimeToDate(inputValues, resultValues))
 		return resultVector, nil
@@ -87,7 +87,7 @@ func DateStringToDate(vectors []*vector.Vector, proc *process.Process) (*vector.
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]types.Date, 1)
 		result, err := date.DateStringToDate(inputValues, resultValues)
 		vector.SetCol(resultVector, result)

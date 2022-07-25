@@ -15,14 +15,15 @@
 package operator
 
 import (
+	"math"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/constraints"
-	"math"
-	"testing"
 )
 
 func TestMod(t *testing.T) {
@@ -36,8 +37,8 @@ func TestMod(t *testing.T) {
 	modInteger[uint32](t, types.T_uint32, 28, 5, 3)
 	modInteger[uint64](t, types.T_uint64, 28, 5, 3)
 
-	modFloater[float32](t, types.T_float32, 24.45, 12.4, float32(math.Mod(float64(float32(24.45)), float64(float32(12.4)))))
-	modFloater[float64](t, types.T_float64, 24.45, 12.4, math.Mod(24.45, 12.4))
+	modFloater(t, types.T_float32, 24.45, 12.4, float32(math.Mod(float64(float32(24.45)), float64(float32(12.4)))))
+	modFloater(t, types.T_float64, 24.45, 12.4, math.Mod(24.45, 12.4))
 }
 
 // Integer unit test entry for mod operator
@@ -52,28 +53,28 @@ func modInteger[T constraints.Integer](t *testing.T, typ types.T, left T, right 
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makeModVectors[T](left, true, right, true, typ),
+			vecs:       makeModVectors(left, true, right, true, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: true,
 		},
 		{
 			name:       "TEST02",
-			vecs:       makeModVectors[T](left, false, right, true, typ),
+			vecs:       makeModVectors(left, false, right, true, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: false,
 		},
 		{
 			name:       "TEST03",
-			vecs:       makeModVectors[T](left, true, right, false, typ),
+			vecs:       makeModVectors(left, true, right, false, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: false,
 		},
 		{
 			name:       "TEST04",
-			vecs:       makeModVectors[T](left, false, right, false, typ),
+			vecs:       makeModVectors(left, false, right, false, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: false,
@@ -104,28 +105,28 @@ func modFloater[T constraints.Float](t *testing.T, typ types.T, left T, right T,
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makeModVectors[T](left, true, right, true, typ),
+			vecs:       makeModVectors(left, true, right, true, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: true,
 		},
 		{
 			name:       "TEST02",
-			vecs:       makeModVectors[T](left, false, right, true, typ),
+			vecs:       makeModVectors(left, false, right, true, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: false,
 		},
 		{
 			name:       "TEST03",
-			vecs:       makeModVectors[T](left, true, right, false, typ),
+			vecs:       makeModVectors(left, true, right, false, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: false,
 		},
 		{
 			name:       "TEST04",
-			vecs:       makeModVectors[T](left, false, right, false, typ),
+			vecs:       makeModVectors(left, false, right, false, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: false,

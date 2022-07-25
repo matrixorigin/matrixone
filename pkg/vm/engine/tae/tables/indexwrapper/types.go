@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package indexwrapper
 
 import (
@@ -40,7 +54,7 @@ type Index interface {
 	// BatchUpsert batch insert the specific keys
 	// If any deduplication, it will fetch the old value first, fill the active map with new value, insert the old value into delete map
 	// If any other unknown error hanppens, return error
-	BatchUpsert(keysCtx *index.KeysCtx, offset int, ts uint64) error
+	BatchUpsert(keysCtx *index.KeysCtx, offset int, ts uint64) (*index.BatchResp, error)
 
 	// Delete delete the specific key
 	// If the specified key not found in active map, return ErrNotFound
@@ -48,9 +62,14 @@ type Index interface {
 	// Delete the specific key from active map and then insert it into delete map
 	Delete(key any, ts uint64) error
 	GetActiveRow(key any) (row uint32, err error)
-	IsKeyDeleted(key any, ts uint64) (deleted, existed bool)
+	// Check deletes map for specified key @ts
+	// If deleted is true, the specified key was deleted @ts
+	// If existed is false, the specified key was not found in deletes map
+	IsKeyDeleted(key any, ts uint64) (deleted bool, existed bool)
 	HasDeleteFrom(key any, fromTs uint64) bool
 	GetMaxDeleteTS() uint64
+
+	// RevertUpsert(keys containers.Vector, ts uint64) error
 
 	String() string
 

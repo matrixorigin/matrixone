@@ -30,6 +30,14 @@ func TestMemoryFS(t *testing.T) {
 		})
 	})
 
+	t.Run("replaceable file service", func(t *testing.T) {
+		testReplaceableFileService(t, func() ReplaceableFileService {
+			fs, err := NewMemoryFS()
+			assert.Nil(t, err)
+			return fs
+		})
+	})
+
 }
 
 func BenchmarkMemoryFS(b *testing.B) {

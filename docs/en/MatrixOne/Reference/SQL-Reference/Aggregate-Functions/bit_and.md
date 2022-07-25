@@ -35,7 +35,3 @@ The BIT_AND(expr) function returns the bitwise AND of all bits in expr.
 | b    |               1 |
 +------+-----------------+
 ```
-
-## **Constraints**
-
-Currently, MatrixOne doesn't support select function() without from tables.

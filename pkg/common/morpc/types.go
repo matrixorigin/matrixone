@@ -84,7 +84,7 @@ type RPCClient interface {
 	// NewStream create a stream used to asynchronous stream of sending and receiving messages.
 	// If the underlying connection is reset during the duration of the stream, then the stream will
 	// be closed.
-	NewStream(backend string, receiveChanBuffer int) (Stream, error)
+	NewStream(backend string) (Stream, error)
 	// Close close the client
 	Close() error
 }
@@ -132,12 +132,14 @@ type Backend interface {
 	// NewStream create a stream used to asynchronous stream of sending and receiving messages.
 	// If the underlying connection is reset during the duration of the stream, then the stream will
 	// be closed.
-	NewStream(receiveChanBuffer int) (Stream, error)
+	NewStream() (Stream, error)
 	// Close close the backend.
 	Close()
 	// Busy the backend receives a lot of requests concurrently during operation, but when the number
 	// of requests waiting to be sent reaches some threshold, the current backend is busy.
 	Busy() bool
+	// LastActiveTime returns last active time
+	LastActiveTime() time.Time
 }
 
 // Stream used to asynchronous stream of sending and receiving messages
@@ -147,8 +149,8 @@ type Stream interface {
 	ID() uint64
 	// Send send message to stream
 	Send(request Message, opts SendOptions) error
-	// Receive returns a channel to read message from server. The channel will be closed after stream
-	// closed.
+	// Receive returns a channel to read stream message from server. If nil is received, the receive
+	// loop needs to exit. In any case, Stream.Close needs to be called.
 	Receive() (chan Message, error)
 	// Close close the stream.
 	Close() error
@@ -162,8 +164,3 @@ type ServerOption func(*server)
 
 // BackendOption options for create remote backend
 type BackendOption func(*remoteBackend)
-
-type sendMessage struct {
-	message Message
-	opts    SendOptions
-}

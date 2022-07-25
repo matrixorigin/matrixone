@@ -335,7 +335,7 @@ func TestIOPackageImpl_ReadPacket(t *testing.T) {
 func Test_AppendUint(t *testing.T) {
 	convey.Convey("AppendUint succ", t, func() {
 		var io IOPackageImpl
-		var data, data2 []byte = []byte{'a'}, []byte{'a', 'b'}
+		var data, data2 = []byte{'a'}, []byte{'a', 'b'}
 		var value uint8 = 'b'
 		data = io.AppendUint8(data, value)
 		convey.So(data, convey.ShouldResemble, data2)
@@ -355,7 +355,7 @@ func Test_AppendUint(t *testing.T) {
 		data2 = append(data2, []byte{0, 0, 0, 0, 0, 0, 0, 'e'}...)
 		convey.So(data, convey.ShouldResemble, data2)
 
-		var pos int = 9
+		var pos = 9
 		u, i, b := io.ReadUint64(data, pos)
 		convey.So(u, convey.ShouldEqual, 0)
 		convey.So(i, convey.ShouldEqual, 0)

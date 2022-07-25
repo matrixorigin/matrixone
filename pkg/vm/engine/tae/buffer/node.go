@@ -1,15 +1,16 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
+// limitations under the License.
 
 package buffer
 
@@ -95,7 +96,7 @@ func (n *Node) Close() error {
 		return nil
 	}
 	n.closed = true
-	if n.state == base.NODE_LOADED {
+	if n.state == base.NodeLoaded {
 		n.Unload()
 	}
 	n.Unlock()
@@ -115,32 +116,32 @@ func (n *Node) Destroy() {
 	}
 }
 
-// Should be guarded by lock
+// Load should be guarded by lock
 func (n *Node) Load() {
-	if n.state == base.NODE_LOADED {
+	if n.state == base.NodeLoaded {
 		return
 	}
 	if n.LoadFunc != nil {
 		n.LoadFunc()
 	}
-	n.state = base.NODE_LOADED
+	n.state = base.NodeLoaded
 }
 
-// Should be guarded by lock
+// Unload should be guarded by lock
 func (n *Node) Unload() {
-	if n.state == base.NODE_UNLOAD {
+	if n.state == base.NodeUnload {
 		return
 	}
 	n.mgr.RetuernQuota(n.size)
 	if n.UnloadFunc != nil {
 		n.UnloadFunc()
 	}
-	n.state = base.NODE_UNLOAD
+	n.state = base.NodeUnload
 }
 
-// Should be guarded by lock
+// Unloadable should be guarded by lock
 func (n *Node) Unloadable() bool {
-	if n.state == base.NODE_UNLOAD {
+	if n.state == base.NodeUnload {
 		return false
 	}
 	if n.RefCount() > 0 {
@@ -153,7 +154,7 @@ func (n *Node) Unloadable() bool {
 	return ret
 }
 
-// Should be guarded by lock
+// GetState should be guarded by lock
 func (n *Node) GetState() base.NodeState {
 	return n.state
 }
@@ -194,8 +195,8 @@ func (n *Node) rollbackExpand(delta uint64) {
 	n.mgr.RetuernQuota(delta)
 }
 
-// Should be guarded by lock
-func (n *Node) IsLoaded() bool { return n.state == base.NODE_LOADED }
+// IsLoaded should be guarded by lock
+func (n *Node) IsLoaded() bool { return n.state == base.NodeLoaded }
 
 func (n *Node) IncIteration() uint64 {
 	return atomic.AddUint64(&n.iter, uint64(1))

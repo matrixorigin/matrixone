@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package containers
 
 import (
@@ -22,6 +36,7 @@ func withAllocator(opts *Options) *Options {
 func TestVector1(t *testing.T) {
 	opts := new(Options)
 	opts.Capacity = 1
+	opts.Allocator = stl.NewSimpleAllocator()
 	vec := NewVector[int64](opts)
 	now := time.Now()
 
@@ -75,7 +90,9 @@ func TestVector2(t *testing.T) {
 }
 
 func TestVector3(t *testing.T) {
-	vec := NewVector[[]byte]()
+	opts := new(Options)
+	opts.Allocator = stl.NewSimpleAllocator()
+	vec := NewVector[[]byte](opts)
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("h2"))
 	vec.Append([]byte("h3"))
@@ -98,7 +115,10 @@ func TestVector3(t *testing.T) {
 }
 
 func TestVector4(t *testing.T) {
-	vec := NewVector[[]byte]()
+	opts := &Options{
+		Allocator: stl.NewSimpleAllocator(),
+	}
+	vec := NewVector[[]byte](opts)
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("h2"))
 	vec.Append([]byte("h3"))
@@ -123,7 +143,7 @@ func TestVector5(t *testing.T) {
 	opts := &Options{
 		Allocator: stl.NewSimpleAllocator(),
 	}
-	vec := NewVector[[]byte]()
+	vec := NewVector[[]byte](opts)
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("hh2"))
 	vec.Append([]byte("hhh3"))

@@ -37,7 +37,9 @@ func (blk *txnBlock) Read(cs []uint64, attrs []string, compressed []*bytes.Buffe
 	for i, attr := range attrs {
 		view, err = blk.handle.GetColumnDataByName(attr, deCompressed[i])
 		if err != nil {
-			view.Close()
+			if view != nil {
+				view.Close()
+			}
 			return nil, err
 		}
 		view.ApplyDeletes()
@@ -46,7 +48,6 @@ func (blk *txnBlock) Read(cs []uint64, attrs []string, compressed []*bytes.Buffe
 		} else {
 			bat.Vecs[i] = VectorsToMO(view.GetData())
 		}
-		bat.Attrs[i] = attr
 		view.Close()
 	}
 	return bat, nil

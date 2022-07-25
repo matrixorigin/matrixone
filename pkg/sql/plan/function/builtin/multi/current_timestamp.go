@@ -27,7 +27,7 @@ func CurrentTimestamp(vectors []*vector.Vector, _ *process.Process) (*vector.Vec
 		resultPrecision = int32(vector.MustTCols[int64](vectors[0])[0])
 	}
 	resultType := types.Type{Oid: types.T_timestamp, Size: 8, Precision: resultPrecision}
-	resultVector := vector.NewConst(resultType)
+	resultVector := vector.NewConst(resultType, 1)
 	result := make([]types.Timestamp, 1)
 	result[0] = types.NowUTC()
 	vector.SetCol(resultVector, result)

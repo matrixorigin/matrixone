@@ -1,9 +1,24 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package frontend
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/fagongzi/goetty/buf"
 	"github.com/golang/mock/gomock"
@@ -198,7 +213,7 @@ func Test_mce(t *testing.T) {
 			data: []byte("test anywhere"),
 		}
 
-		resp, err = mce.ExecRequest(req)
+		_, err = mce.ExecRequest(req)
 		convey.So(err, convey.ShouldBeNil)
 		//COM_INIT_DB replaced by changeDB()
 		//convey.So(resp.category, convey.ShouldEqual, OkResponse)
@@ -695,5 +710,165 @@ func Test_GetComputationWrapper(t *testing.T) {
 		cw, err := GetComputationWrapper(db, sql, user, eng, proc, ses)
 		convey.So(cw, convey.ShouldNotBeEmpty)
 		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func Test_handleShowCreateTable(t *testing.T) {
+	convey.Convey("handleShowCreateTable succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		if err != nil {
+			t.Error(err)
+		}
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses.Data = make([][]interface{}, 1)
+		ses.Data[0] = make([]interface{}, showCreateTableAttrCount)
+		ses.Data[0][tableNamePos] = []byte("tableName")
+		ses.Data[0][tableCommentPos] = []byte("table comment")
+		ses.Data[0][attrNamePos] = []byte("col1")
+		ses.Data[0][attrTypPos] = int32(1)
+		ses.Data[0][charWidthPos] = int32(1)
+		ses.Data[0][defaultPos] = int8(1)
+		ses.Data[0][primaryKeyPos] = []byte("p")
+		ses.Data[0][attrCommentPos] = []byte("column comment")
+
+		ses.Mrs = &MysqlResultSet{}
+		err = handleShowCreateTable(ses)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func Test_handleShowCreateDatabase(t *testing.T) {
+	convey.Convey("handleShowCreateDatabase succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		if err != nil {
+			t.Error(err)
+		}
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+
+		ses.Mrs = &MysqlResultSet{}
+		ses.Mrs.Name2Index = make(map[string]uint64)
+		ses.Mrs.Name2Index["Database"] = 1
+		ses.Mrs.Name2Index["Create Database"] = 2
+		ses.Data = make([][]interface{}, 1)
+		ses.Data[0] = make([]interface{}, 3)
+
+		err = handleShowCreateDatabase(ses)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func Test_handleShowColumns(t *testing.T) {
+	convey.Convey("handleShowColumns succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		if err != nil {
+			t.Error(err)
+		}
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses.Data = make([][]interface{}, 1)
+		ses.Data[0] = make([]interface{}, primaryKeyPos+1)
+		ses.Data[0][0] = []byte("col1")
+		ses.Data[0][1] = int32(1)
+		ses.Data[0][2] = int8(2)
+		ses.Data[0][primaryKeyPos] = []byte("p")
+
+		ses.Mrs = &MysqlResultSet{}
+		err = handleShowColumns(ses)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecutor) error) {
+	convey.Convey(fmt.Sprintf("%s succ", funName), t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Database(gomock.Any(), nil).Return(nil, nil).AnyTimes()
+
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, nil, nil, nil, &gSys)
+		ses.Mrs = &MysqlResultSet{}
+		mce := &MysqlCmdExecutor{}
+		mce.PrepareSessionBeforeExecRequest(ses)
+
+		convey.So(handleFun(mce), convey.ShouldBeNil)
+	})
+}
+
+func Test_HandlePrepareStmt(t *testing.T) {
+	stmt, err := parsers.ParseOne(dialect.MYSQL, "prepare stmt1 from select 1, 2")
+	if err != nil {
+		t.Errorf("parser sql error %v", err)
+	}
+	runTestHandle("handlePrepareStmt", t, func(mce *MysqlCmdExecutor) error {
+		stmt := stmt.(*tree.PrepareStmt)
+		return mce.handlePrepareStmt(stmt)
+	})
+}
+
+func Test_HandlePrepareString(t *testing.T) {
+	stmt, err := parsers.ParseOne(dialect.MYSQL, "prepare stmt1 from 'select 1, 2'")
+	if err != nil {
+		t.Errorf("parser sql error %v", err)
+	}
+	runTestHandle("handlePrepareString", t, func(mce *MysqlCmdExecutor) error {
+		stmt := stmt.(*tree.PrepareString)
+		return mce.handlePrepareString(stmt)
+	})
+}
+
+func Test_HandleDeallocate(t *testing.T) {
+	stmt, err := parsers.ParseOne(dialect.MYSQL, "deallocate prepare stmt1")
+	if err != nil {
+		t.Errorf("parser sql error %v", err)
+	}
+	runTestHandle("handleDeallocate", t, func(mce *MysqlCmdExecutor) error {
+		stmt := stmt.(*tree.Deallocate)
+		return mce.handleDeallocate(stmt)
 	})
 }

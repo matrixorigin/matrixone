@@ -386,7 +386,7 @@ func TestWindow(t *testing.T) {
 	v11Window = Window(v11, start, end, v11Window)
 	require.Equal(t, v11.Col.(*types.Bytes).Offsets[start:end], v11Window.Col.(*types.Bytes).Offsets)
 	require.Equal(t, v11.Col.(*types.Bytes).Lengths[start:end], v11Window.Col.(*types.Bytes).Lengths)
-	v11Window = Window(v11, start, end, v11Window)
+	// v11Window = Window(v11, start, end, v11Window)
 
 	v12 := New(types.Type{Oid: types.T(types.T_date)})
 	v12.Data = encoding.EncodeDateSlice([]types.Date{1, 2, 3, 4, 5, 6, 7, 8})

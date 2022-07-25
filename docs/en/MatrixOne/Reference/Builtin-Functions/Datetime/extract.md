@@ -33,5 +33,3 @@ The ``EXTRACT()`` function uses the same kinds of unit specifiers as ``DATE_ADD(
 ## **Constraints**
 
 The date type supports only `yyyy-mm-dd` and `yyyymmdd` for now.
-
-Currently, MatrixOne doesn't support select function() without from tables.

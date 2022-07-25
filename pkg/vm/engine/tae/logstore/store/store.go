@@ -164,17 +164,11 @@ func (bs *baseStore) flushLoop() {
 				t0 = time.Now()
 				syncBatch := make([]*batch, len(bats))
 				copy(syncBatch, bats)
-				// for _, b := range syncBatch {
-				// 	for _, e := range b.entrys {
-				// 		e.StartTime()
-				// 	}
-				// }
 				bs.syncQueue <- syncBatch
 				bats = bats[:0]
 			}
 			entries = entries[:0]
 			bs.flushLoop2Duration += time.Since(t1)
-			t1 = time.Now()
 		case <-ticker.C:
 			bs.tickerTimes++
 			bs.flushQueueDuration += time.Since(t1)
@@ -188,7 +182,6 @@ func (bs *baseStore) flushLoop() {
 				bats = bats[:0]
 			}
 			bs.flushLoop2Duration += time.Since(t1)
-			t1 = time.Now()
 		}
 	}
 }
@@ -464,13 +457,13 @@ func (bs *baseStore) AppendEntry(groupId uint32, e entry.Entry) (id uint64, err 
 		e.StartTime()
 	}
 	if bs.IsClosed() {
-		return 0, common.ClosedErr
+		return 0, common.ErrClose
 	}
 	bs.flushWgMu.Lock()
 	bs.flushWg.Add(1)
 	if bs.IsClosed() {
 		bs.flushWg.Done()
-		return 0, common.ClosedErr
+		return 0, common.ErrClose
 	}
 	bs.flushWgMu.Unlock()
 	bs.mu.Lock()
@@ -499,44 +492,44 @@ func (bs *baseStore) AppendEntry(groupId uint32, e entry.Entry) (id uint64, err 
 	return lsn, nil
 }
 
-func (s *baseStore) Sync() error {
-	if _, err := s.AppendEntry(entry.GTNoop, FlushEntry); err != nil {
+func (bs *baseStore) Sync() error {
+	if _, err := bs.AppendEntry(entry.GTNoop, FlushEntry); err != nil {
 		return err
 	}
 	// if err := s.writer.Flush(); err != nil {
 	// 	return err
 	// }
-	err := s.file.Sync()
+	err := bs.file.Sync()
 	return err
 }
 
-func (s *baseStore) Replay(h ApplyHandle) error {
+func (bs *baseStore) Replay(h ApplyHandle) error {
 	r := newReplayer(h)
 	o := &noopObserver{}
-	err := s.file.Replay(r, o)
+	err := bs.file.Replay(r, o)
 	if err != nil {
 		return err
 	}
-	s.OnReplay(r)
+	bs.OnReplay(r)
 	r.Apply()
 	return nil
 }
 
-func (s *baseStore) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
-	ver, err := s.GetVersionByGLSN(groupId, lsn)
+func (bs *baseStore) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
+	ver, err := bs.GetVersionByGLSN(groupId, lsn)
 	if err == ErrGroupNotExist || err == ErrLsnNotExist {
-		syncedLsn := s.GetCurrSeqNum(groupId)
+		syncedLsn := bs.GetCurrSeqNum(groupId)
 		if lsn <= syncedLsn {
 			for i := 0; i < 10; i++ {
 				logutil.Infof("load retry %d-%d", groupId, lsn)
-				s.syncBase.commitCond.L.Lock()
-				ver, err = s.GetVersionByGLSN(groupId, lsn)
+				bs.syncBase.commitCond.L.Lock()
+				ver, err = bs.GetVersionByGLSN(groupId, lsn)
 				if err == nil {
-					s.syncBase.commitCond.L.Unlock()
+					bs.syncBase.commitCond.L.Unlock()
 					break
 				}
-				s.syncBase.commitCond.Wait()
-				s.syncBase.commitCond.L.Unlock()
+				bs.syncBase.commitCond.Wait()
+				bs.syncBase.commitCond.L.Unlock()
 				if err == nil {
 					break
 				}
@@ -549,7 +542,7 @@ func (s *baseStore) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	vf, err := s.file.GetEntryByVersion(ver)
+	vf, err := bs.file.GetEntryByVersion(ver)
 	if err != nil {
 		return nil, err
 	}
@@ -557,10 +550,10 @@ func (s *baseStore) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 	return e, err
 }
 
-func (s *baseStore) OnCommitVFile(vf VFile) {
-	e := s.MakePostCommitEntry(vf.Id())
-	_, err := s.AppendEntry(entry.GTInternal, e)
-	if err != nil && err != common.ClosedErr {
+func (bs *baseStore) OnCommitVFile(vf VFile) {
+	e := bs.MakePostCommitEntry(vf.Id())
+	_, err := bs.AppendEntry(entry.GTInternal, e)
+	if err != nil && err != common.ErrClose {
 		panic(err)
 	}
 	err = e.WaitDone()

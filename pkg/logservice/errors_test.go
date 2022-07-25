@@ -66,6 +66,9 @@ func TestIsTempError(t *testing.T) {
 		{dragonboat.ErrShardNotReady, true},
 		{dragonboat.ErrInvalidTarget, false},
 		{dragonboat.ErrInvalidRange, false},
+		{dragonboat.ErrShardNotFound, true},
+
+		{ErrNotHAKeeper, true},
 
 		{ErrDeadlineNotSet, false},
 		{ErrInvalidDeadline, false},

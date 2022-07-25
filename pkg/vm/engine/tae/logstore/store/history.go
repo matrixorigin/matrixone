@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	HistoryEntryNotFoundErr = errors.New("tae: history not found")
+	ErrHistoryEntryNotFound = errors.New("tae: history not found")
 )
 
 type HistoryFactory func() History
@@ -96,7 +96,7 @@ func (h *history) DropEntry(id int) (VFile, error) {
 	defer h.mu.Unlock()
 	idx, entry := h.findEntry(id)
 	if entry == nil {
-		return nil, HistoryEntryNotFoundErr
+		return nil, ErrHistoryEntryNotFound
 	}
 	h.entries = append(h.entries[:idx], h.entries[idx+1:]...)
 	return entry, entry.Destroy()

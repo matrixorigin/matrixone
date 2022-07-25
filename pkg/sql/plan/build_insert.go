@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -185,12 +186,11 @@ func generateDefaultExpr(e *plan.DefaultExpr, t *plan.Type) (*Expr, error) {
 	case *plan.ConstantValue_DateTimeV:
 		ret.Expr = makePlan2DatetimeConstExpr(types.Datetime(d.DateTimeV))
 	case *plan.ConstantValue_Decimal64V:
-		ret.Expr = makePlan2Decimal64ConstExpr(types.Decimal64(d.Decimal64V))
+		d64 := types.Decimal64FromInt64Raw(d.Decimal64V.A)
+		ret.Expr = makePlan2Decimal64ConstExpr(d64)
 	case *plan.ConstantValue_Decimal128V:
-		ret.Expr = makePlan2Decimal128ConstExpr(types.Decimal128{
-			Lo: d.Decimal128V.Lo,
-			Hi: d.Decimal128V.Hi,
-		})
+		d128 := types.Decimal128FromInt64Raw(d.Decimal128V.A, d.Decimal128V.B)
+		ret.Expr = makePlan2Decimal128ConstExpr(d128)
 	case *plan.ConstantValue_TimeStampV:
 		ret.Expr = makePlan2TimestampConstExpr(types.Timestamp(d.TimeStampV))
 	default:

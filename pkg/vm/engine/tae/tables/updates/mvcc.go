@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -30,11 +31,13 @@ type MVCCHandle struct {
 	*sync.RWMutex
 	columns         map[uint16]*ColumnChain
 	deletes         *DeleteChain
+	holes           *roaring.Bitmap
 	meta            *catalog.BlockEntry
 	maxVisible      uint64
 	appends         []*AppendNode
 	changes         uint32
 	deletesListener func(uint64, common.RowGen, uint64) error
+	appendListener  func(txnif.AppendNode) error
 }
 
 func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
@@ -53,6 +56,14 @@ func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
 		node.columns[i] = col
 	}
 	return node
+}
+
+func (n *MVCCHandle) SetAppendListener(l func(txnif.AppendNode) error) {
+	n.appendListener = l
+}
+
+func (n *MVCCHandle) GetAppendListener() func(txnif.AppendNode) error {
+	return n.appendListener
 }
 
 func (n *MVCCHandle) SetDeletesListener(l func(uint64, common.RowGen, uint64) error) {
@@ -74,6 +85,24 @@ func (n *MVCCHandle) HasActiveAppendNode() bool {
 	txn := node.txn
 	node.RUnlock()
 	return txn != nil
+}
+
+func (n *MVCCHandle) AddHoles(start, end int) {
+	if n.holes != nil {
+		n.holes = roaring.New()
+	}
+	n.holes.AddRange(uint64(start), uint64(end))
+}
+
+func (n *MVCCHandle) HasHole() bool {
+	return n.holes != nil && !n.holes.IsEmpty()
+}
+
+func (n *MVCCHandle) HoleCnt() int {
+	if !n.HasHole() {
+		return 0
+	}
+	return int(n.holes.GetCardinality())
 }
 
 func (n *MVCCHandle) IncChangeNodeCnt() {
@@ -187,10 +216,39 @@ func (n *MVCCHandle) TrySetMaxVisible(ts uint64) {
 		n.maxVisible = ts
 	}
 }
-func (n *MVCCHandle) AddAppendNodeLocked(txn txnif.AsyncTxn, maxRow uint32) *AppendNode {
-	an := NewAppendNode(txn, maxRow, n)
-	n.appends = append(n.appends, an)
-	return an
+func (n *MVCCHandle) AddAppendNodeLocked(
+	txn txnif.AsyncTxn,
+	startRow uint32,
+	maxRow uint32) (an *AppendNode, created bool) {
+	if len(n.appends) == 0 {
+		an = NewAppendNode(txn, startRow, maxRow, n)
+		n.appends = append(n.appends, an)
+		created = true
+	} else {
+		an = n.appends[len(n.appends)-1]
+		an.RLock()
+		nTxn := an.txn
+		an.RUnlock()
+		if nTxn != txn {
+			an = NewAppendNode(txn, startRow, maxRow, n)
+			n.appends = append(n.appends, an)
+			created = true
+		} else {
+			created = false
+			an.SetMaxRow(maxRow)
+		}
+	}
+	return
+}
+
+func (n *MVCCHandle) DeleteAppendNodeLocked(node *AppendNode) {
+	for i := len(n.appends) - 1; i >= 0; i-- {
+		if n.appends[i].maxRow == node.maxRow {
+			n.appends = append(n.appends[:i], n.appends[i+1:]...)
+		} else if n.appends[i].maxRow < node.maxRow {
+			break
+		}
+	}
 }
 
 func (n *MVCCHandle) IsVisibleLocked(row uint32, ts uint64) (bool, error) {
@@ -237,7 +295,7 @@ func (n *MVCCHandle) GetMaxVisibleRowLocked(ts uint64) (row uint32, visible bool
 	return
 }
 
-//for replay
+// GetTotalRow is only for replay
 func (n *MVCCHandle) GetTotalRow() uint32 {
 	if len(n.appends) == 0 {
 		return 0
@@ -284,12 +342,14 @@ func (n *MVCCHandle) getMaxVisibleRowLocked(ts uint64) (int, uint32, bool, error
 		node.RUnlock()
 		// Note: Maybe there is a deadlock risk here
 		if txn != nil && node.GetCommitTS() > n.LoadMaxVisible() {
+			node.mvcc.RUnlock()
 			// Append node should not be rollbacked because apply append is the last step of prepare commit
 			state := txn.GetTxnState(true)
+			node.mvcc.RLock()
 			// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
 			if state == txnif.TxnStateUnknown {
-				err = txnif.TxnInternalErr
-			} else if state == txnif.TxnStateRollbacked {
+				err = txnif.ErrTxnInternal
+			} else if state == txnif.TxnStateRollbacked || state == txnif.TxnStateCommitting {
 				panic("append node shoul not be rollbacked")
 			}
 		}

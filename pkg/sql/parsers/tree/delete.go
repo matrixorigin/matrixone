@@ -17,15 +17,40 @@ package tree
 //Delete statement
 type Delete struct {
 	statementImpl
-	Table   TableExpr
-	Where   *Where
-	OrderBy OrderBy
-	Limit   *Limit
+	Tables         TableExprs
+	TableRefs      TableExprs
+	PartitionNames IdentifierList
+	Where          *Where
+	OrderBy        OrderBy
+	Limit          *Limit
+	With           *With
 }
 
 func (node *Delete) Format(ctx *FmtCtx) {
+	if node.With != nil {
+		node.With.Format(ctx)
+		ctx.WriteByte(' ')
+	}
 	ctx.WriteString("delete from ")
-	node.Table.Format(ctx)
+
+	prefix := ""
+	for _, a := range node.Tables {
+		ctx.WriteString(prefix)
+		a.Format(ctx)
+		prefix = ", "
+	}
+
+	if node.PartitionNames != nil {
+		ctx.WriteString(" partition(")
+		node.PartitionNames.Format(ctx)
+		ctx.WriteByte(')')
+	}
+
+	if node.TableRefs != nil {
+		ctx.WriteString(" using ")
+		node.TableRefs.Format(ctx)
+	}
+
 	if node.Where != nil {
 		ctx.WriteByte(' ')
 		node.Where.Format(ctx)
@@ -40,9 +65,9 @@ func (node *Delete) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewDelete(t TableExpr, w *Where, o OrderBy, l *Limit) *Delete {
+func NewDelete(ts TableExprs, w *Where, o OrderBy, l *Limit) *Delete {
 	return &Delete{
-		Table:   t,
+		Tables:  ts,
 		Where:   w,
 		OrderBy: o,
 		Limit:   l,

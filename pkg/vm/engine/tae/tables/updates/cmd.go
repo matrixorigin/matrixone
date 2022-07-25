@@ -56,7 +56,7 @@ func NewEmptyCmd(cmdType int16) *UpdateCmd {
 	} else if cmdType == txnbase.CmdDelete {
 		cmd.delete = NewDeleteNode(nil, 0)
 	} else if cmdType == txnbase.CmdAppend {
-		cmd.append = NewAppendNode(nil, 0, nil)
+		cmd.append = NewAppendNode(nil, 0, 0, nil)
 	}
 	return cmd
 }

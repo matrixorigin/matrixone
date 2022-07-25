@@ -15,13 +15,14 @@
 package operator
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/constraints"
-	"testing"
 )
 
 func TestPlus(t *testing.T) {
@@ -40,13 +41,13 @@ func TestPlus(t *testing.T) {
 
 	leftType1 := types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 5}
 	rightType1 := types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 5}
-	resType1 := types.Type{Oid: types.T_decimal64, Size: 8, Width: 18, Scale: 5}
-	plusDecimal64(t, 33333300, leftType1, -123450000, rightType1, -90116700, resType1)
+	resType1 := types.Type{Oid: types.T_decimal64, Size: types.DECIMAL64_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: 5}
+	plusDecimal64(t, types.Decimal64FromInt32(33333300), leftType1, types.Decimal64FromInt32(-123450000), rightType1, types.Decimal64FromInt32(-90116700), resType1)
 
 	leftType2 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}
 	rightType2 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}
-	resType2 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: 5}
-	plusDecimal128(t, types.Decimal128{Lo: 33333300, Hi: 0}, leftType2, types.Decimal128{Lo: -123450000, Hi: -1}, rightType2, types.Decimal128{Lo: -90116700, Hi: -1}, resType2)
+	resType2 := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: 5}
+	plusDecimal128(t, types.Decimal128FromInt32(33333300), leftType2, types.Decimal128FromInt32(-123450000), rightType2, types.Decimal128FromInt32(-90116700), resType2)
 }
 
 // Unit test input for int and float type parameters of the plus operator
@@ -61,28 +62,28 @@ func plusIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, ty
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makePlusVectors[T](left, true, right, true, typ),
+			vecs:       makePlusVectors(left, true, right, true, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: true,
 		},
 		{
 			name:       "TEST02",
-			vecs:       makePlusVectors[T](left, false, right, true, typ),
+			vecs:       makePlusVectors(left, false, right, true, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: false,
 		},
 		{
 			name:       "TEST03",
-			vecs:       makePlusVectors[T](left, true, right, false, typ),
+			vecs:       makePlusVectors(left, true, right, false, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: false,
 		},
 		{
 			name:       "TEST04",
-			vecs:       makePlusVectors[T](left, false, right, false, typ),
+			vecs:       makePlusVectors(left, false, right, false, typ),
 			proc:       procs,
 			wantBytes:  []T{res},
 			wantScalar: false,
@@ -173,6 +174,10 @@ func plusDecimal64(t *testing.T, left types.Decimal64, leftType types.Type, righ
 			if err != nil {
 				t.Fatal(err)
 			}
+
+			a := c.wantBytes.([]types.Decimal64)
+			b := decimalres.Col.([]types.Decimal64)
+			require.Equal(t, a[0].ToStringWithScale(restType.Scale), b[0].ToStringWithScale(decimalres.Typ.Scale))
 			require.Equal(t, c.wantBytes, decimalres.Col)
 			require.Equal(t, c.wantType, decimalres.Typ)
 			require.Equal(t, c.wantScalar, decimalres.IsScalar())
@@ -235,7 +240,10 @@ func plusDecimal128(t *testing.T, left types.Decimal128, leftType types.Type, ri
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, decimalres.Col)
+
+			a := c.wantBytes.([]types.Decimal128)
+			b := decimalres.Col.([]types.Decimal128)
+			require.Equal(t, a[0].ToStringWithScale(c.wantType.Scale), b[0].ToStringWithScale(decimalres.Typ.Scale))
 			require.Equal(t, c.wantType, decimalres.Typ)
 			require.Equal(t, c.wantScalar, decimalres.IsScalar())
 		})

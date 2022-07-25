@@ -32,7 +32,7 @@ func DayOfYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint16, 1)
 		vector.SetCol(resultVector, dayofyear.GetDayOfYear(inputValues, resultValues))
 		return resultVector, nil

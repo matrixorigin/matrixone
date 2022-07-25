@@ -54,7 +54,7 @@ type col struct {
 	Precision int32
 }
 
-//for test create/drop statement
+// NewEmptyCompilerContext for test create/drop statement
 func NewEmptyCompilerContext() *MockCompilerContext {
 	return &MockCompilerContext{
 		objects: make(map[string]*ObjectRef),
@@ -284,11 +284,11 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectR
 }
 
 func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*ColDef {
-	return nil
+	return []*ColDef{m.tables[tableName].Cols[0]}
 }
 
 func (m *MockCompilerContext) GetHideKeyDef(dbName string, tableName string) *ColDef {
-	return nil
+	return m.tables[tableName].Cols[0]
 }
 
 func (m *MockCompilerContext) Cost(obj *ObjectRef, e *Expr) *Cost {

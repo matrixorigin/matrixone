@@ -14,7 +14,7 @@
 // Portions of this file are additionally subject to the following
 // copyright.
 //
-// Copyright (C) 2021 MatrixOrigin.
+// Copyright (C) 2021 Matrix Origin.
 //
 // Modified the behavior of the builder.
 
@@ -86,5 +86,6 @@ func TestRemoveBuild(t *testing.T) {
 		StoreID:   "c",
 		ShardID:   1,
 		ReplicaID: 3,
+		Epoch:     1,
 	}, build.steps[0])
 }

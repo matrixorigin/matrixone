@@ -24,9 +24,9 @@ func HandleAndNullCol(vs []*vector.Vector, proc *process.Process) (*vector.Vecto
 	v1, v2 := vs[0], vs[1]
 	if v1.IsScalarNull() {
 		if v2.IsScalarNull() {
-			return proc.AllocScalarNullVector(retType), nil
+			return proc.AllocScalarNullVector(boolType), nil
 		} else if v2.IsScalar() {
-			vec := proc.AllocScalarVector(retType)
+			vec := proc.AllocScalarVector(boolType)
 			vec.Col = make([]bool, 1)
 			value := v2.Col.([]bool)[0]
 			if value {
@@ -34,11 +34,8 @@ func HandleAndNullCol(vs []*vector.Vector, proc *process.Process) (*vector.Vecto
 			}
 			return vec, nil
 		} else {
-			length := int64(vector.Length(v2))
-			vec, err := allocateBoolVector(length, proc)
-			if err != nil {
-				return nil, err
-			}
+			length := vector.Length(v2)
+			vec := allocateBoolVector(length, proc)
 			value := v2.Col.([]bool)
 			for i := 0; i < int(length); i++ {
 				if value[i] || nulls.Contains(v2.Nsp, uint64(i)) {
@@ -49,7 +46,7 @@ func HandleAndNullCol(vs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		}
 	} else {
 		if v1.IsScalar() {
-			vec := proc.AllocScalarVector(retType)
+			vec := proc.AllocScalarVector(boolType)
 			vec.Col = make([]bool, 1)
 			value := v1.Col.([]bool)[0]
 			if value {
@@ -57,11 +54,8 @@ func HandleAndNullCol(vs []*vector.Vector, proc *process.Process) (*vector.Vecto
 			}
 			return vec, nil
 		} else {
-			length := int64(vector.Length(v1))
-			vec, err := allocateBoolVector(length, proc)
-			if err != nil {
-				return nil, err
-			}
+			length := vector.Length(v1)
+			vec := allocateBoolVector(length, proc)
 			value := v1.Col.([]bool)
 			for i := 0; i < int(length); i++ {
 				if value[i] || nulls.Contains(v1.Nsp, uint64(i)) {
@@ -73,12 +67,9 @@ func HandleAndNullCol(vs []*vector.Vector, proc *process.Process) (*vector.Vecto
 	}
 }
 
-func ScalarAndNotScalar(sv, nsv *vector.Vector, col1, col2 []bool, proc *process.Process) (*vector.Vector, error) {
-	length := int64(vector.Length(nsv))
-	vec, err := allocateBoolVector(length, proc)
-	if err != nil {
-		return nil, err
-	}
+func ScalarAndNotScalar(_, nsv *vector.Vector, col1, col2 []bool, proc *process.Process) (*vector.Vector, error) {
+	length := vector.Length(nsv)
+	vec := allocateBoolVector(length, proc)
 	vcols := vec.Col.([]bool)
 	value := col1[0]
 	for i := range vcols {
@@ -87,7 +78,6 @@ func ScalarAndNotScalar(sv, nsv *vector.Vector, col1, col2 []bool, proc *process
 	if value {
 		nulls.Or(nsv.Nsp, nil, vec.Nsp)
 	}
-	FillNullPos(vec)
 	return vec, nil
 }
 
@@ -101,7 +91,7 @@ func And(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	c1, c2 := v1.IsScalar(), v2.IsScalar()
 	switch {
 	case c1 && c2:
-		vec := proc.AllocScalarVector(retType)
+		vec := proc.AllocScalarVector(boolType)
 		vec.Col = make([]bool, 1)
 		vec.Col.([]bool)[0] = col1[0] && col2[0]
 		return vec, nil
@@ -111,11 +101,8 @@ func And(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return ScalarAndNotScalar(v2, v1, col2, col1, proc)
 	}
 	// case !c1 && !c2
-	length := int64(vector.Length(v1))
-	vec, err := allocateBoolVector(length, proc)
-	if err != nil {
-		return nil, err
-	}
+	length := vector.Length(v1)
+	vec := allocateBoolVector(length, proc)
 	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
 	vcols := vec.Col.([]bool)
 	for i := range vcols {

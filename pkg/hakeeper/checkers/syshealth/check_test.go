@@ -5,7 +5,8 @@
 // You may obtain a copy of the License at
 //
 //      http://www.apache.org/licenses/LICENSE-2.0
-// // Unless required by applicable law or agreed to in writing, software
+//
+// Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
@@ -16,6 +17,7 @@ package syshealth
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -64,8 +66,10 @@ func TestShutdownStores(t *testing.T) {
 
 func TestParseLogStores(t *testing.T) {
 	expiredTick := uint64(10)
-	// construct current tick in order to make hearbeat tick expired
-	currTick := util.ExpiredTick(expiredTick, util.LogStoreTimeout) + 1
+	// construct current tick in order to make heartbeat tick expired
+	cfg := hakeeper.Config{}
+	cfg.Fill()
+	currTick := cfg.ExpiredTick(expiredTick, cfg.LogStoreTimeout) + 1
 
 	logState := pb.LogState{
 		Stores: map[string]pb.LogStoreInfo{
@@ -87,7 +91,7 @@ func TestParseLogStores(t *testing.T) {
 		},
 	}
 
-	logStores := parseLogStores(logState, currTick)
+	logStores := parseLogStores(cfg, logState, currTick)
 	require.Equal(t, len(logState.Stores), logStores.length())
 	require.Equal(t, pb.LogService, logStores.serviceType)
 	require.Equal(t, 1, len(logStores.expired))
@@ -99,7 +103,9 @@ func TestParseLogStores(t *testing.T) {
 func TestParseDnStores(t *testing.T) {
 	expiredTick := uint64(10)
 	// construct current tick in order to make hearbeat tick expired
-	currTick := util.ExpiredTick(expiredTick, util.LogStoreTimeout) + 1
+	cfg := hakeeper.Config{}
+	cfg.Fill()
+	currTick := cfg.ExpiredTick(expiredTick, cfg.DnStoreTimeout) + 1
 
 	dnState := pb.DNState{
 		Stores: map[string]pb.DNStoreInfo{
@@ -125,7 +131,7 @@ func TestParseDnStores(t *testing.T) {
 		},
 	}
 
-	dnStores := parseDnStores(dnState, currTick)
+	dnStores := parseDnStores(cfg, dnState, currTick)
 	require.Equal(t, len(dnState.Stores), dnStores.length())
 	require.Equal(t, pb.DnService, dnStores.serviceType)
 	require.Equal(t, 1, len(dnStores.expired))
@@ -197,8 +203,10 @@ func TestLogShardMap(t *testing.T) {
 
 func TestCheck(t *testing.T) {
 	expiredTick := uint64(10)
-	// construct current tick in order to make hearbeat tick expired
-	currTick := util.ExpiredTick(expiredTick, util.LogStoreTimeout) + 1
+	// construct current tick in order to make heartbeat tick expired
+	cfg := hakeeper.Config{}
+	cfg.Fill()
+	currTick := cfg.ExpiredTick(expiredTick, cfg.LogStoreTimeout) + 1
 
 	// system healthy
 	{
@@ -246,7 +254,7 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		ops, healthy := Check(pb.ClusterInfo{}, dnState, logState, currTick)
+		ops, healthy := Check(cfg, pb.ClusterInfo{}, dnState, logState, currTick)
 		require.True(t, healthy)
 		require.Equal(t, 0, len(ops))
 	}
@@ -297,7 +305,7 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		ops, healthy := Check(pb.ClusterInfo{}, dnState, logState, currTick)
+		ops, healthy := Check(cfg, pb.ClusterInfo{}, dnState, logState, currTick)
 		require.False(t, healthy)
 		require.Equal(t, 6, len(ops))
 	}

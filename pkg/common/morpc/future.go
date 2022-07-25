@@ -29,41 +29,26 @@ func newFuture(releaseFunc func(f *Future)) *Future {
 	return f
 }
 
-func newFutureWithChan(c chan Message) *Future {
-	return &Future{c: c}
-}
-
 // Future is used to obtain response data synchronously.
 type Future struct {
 	id          uint64
 	c           chan Message
 	releaseFunc func(*Future)
-	stream      bool
-
-	// for request-response mode
-	ctx     context.Context
-	opts    SendOptions
-	request Message
-
-	mu struct {
+	ctx         context.Context
+	mu          struct {
 		sync.Mutex
 		closed bool
 		ref    int
 	}
 }
 
-func (f *Future) init(ctx context.Context, request Message, opts SendOptions, stream bool) {
-	if !stream {
-		if _, ok := ctx.Deadline(); !ok {
-			panic("context deadline not set")
-		}
+func (f *Future) init(id uint64, ctx context.Context) {
+	if _, ok := ctx.Deadline(); !ok {
+		panic("context deadline not set")
 	}
 
-	f.id = request.GetID()
+	f.id = id
 	f.ctx = ctx
-	f.request = request
-	f.opts = opts
-	f.stream = stream
 
 	f.mu.Lock()
 	f.mu.closed = false
@@ -129,11 +114,8 @@ func (f *Future) unRef() {
 }
 
 func (f *Future) reset() {
-	f.request = nil
 	f.id = 0
 	f.ctx = nil
-	f.opts = SendOptions{}
-	f.stream = false
 	select {
 	case <-f.c:
 	default:

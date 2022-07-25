@@ -135,10 +135,17 @@ func (s *Scope) Delete(ts uint64, snapshot engine.Snapshot, engine engine.Engine
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 	arg.Ts = ts
-	if arg.CanTruncate {
-		return arg.TableSource.Truncate(snapshot)
+
+	if arg.DeleteCtxs[0].CanTruncate {
+		return arg.DeleteCtxs[0].TableSource.Truncate(snapshot)
 	}
-	defer arg.TableSource.Close(snapshot)
+
+	defer func() {
+		for i := range arg.DeleteCtxs {
+			arg.DeleteCtxs[i].TableSource.Close(snapshot)
+		}
+	}()
+
 	if err := s.MergeRun(engine); err != nil {
 		return 0, err
 	}
@@ -224,6 +231,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 					IsNull: col.GetDefault().GetIsNull(),
 				},
 				Primary: col.GetPrimary(),
+				Comment: col.GetComment(),
 			},
 		}
 	}
@@ -274,17 +282,14 @@ func planValToExeVal(value *plan.ConstantValue, typ plan.Type_TypeId) interface{
 	case *plan.ConstantValue_TimeStampV:
 		return types.Timestamp(v.TimeStampV)
 	case *plan.ConstantValue_Decimal64V:
-		return types.Decimal64(v.Decimal64V)
+		return types.Decimal64FromInt64Raw(v.Decimal64V.A)
 	case *plan.ConstantValue_Decimal128V:
-		return types.Decimal128{
-			Lo: v.Decimal128V.Lo,
-			Hi: v.Decimal128V.Hi,
-		}
+		return types.Decimal128FromInt64Raw(v.Decimal128V.A, v.Decimal128V.B)
 	}
 	return nil
 }
 
-// Print is to format scope list
+// PrintScope Print is to format scope list
 func PrintScope(prefix []byte, ss []*Scope) {
 	for _, s := range ss {
 		if s.Magic == Merge || s.Magic == Remote {
@@ -295,7 +300,7 @@ func PrintScope(prefix []byte, ss []*Scope) {
 	}
 }
 
-// Get the number of cpu's available for the current scope
+// NumCPU Get the number of cpu's available for the current scope
 func (s *Scope) NumCPU() int {
 	return runtime.NumCPU()
 }

@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package clock
 
 import (
@@ -6,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
@@ -86,6 +101,19 @@ func NewUnixNanoHLCClock(ctx context.Context, maxOffset time.Duration) *HLCClock
 		clock.offsetMonitor(ctx)
 	}()
 
+	return clock
+}
+
+// NewUnixNanoHLCClockWithStopper is similar to NewUnixNanoHLCClock, but perform
+// clock check use stopper
+func NewUnixNanoHLCClockWithStopper(stopper *stopper.Stopper, maxOffset time.Duration) *HLCClock {
+	clock := &HLCClock{
+		physicalClock: physicalClock,
+		maxOffset:     maxOffset,
+	}
+	if err := stopper.RunTask(clock.offsetMonitor); err != nil {
+		panic(err)
+	}
 	return clock
 }
 

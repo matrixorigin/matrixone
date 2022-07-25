@@ -8,8 +8,8 @@ SUBSTR()是SUBSTRING()的同义词.
 ## **语法**
 
 ```
-> SUBSTRING(str,pos) 
-> SUBSTR(str,pos,len) 
+> SUBSTRING(str,pos)
+> SUBSTR(str,pos,len)
 ```
 
 ## **参数释义**
@@ -66,5 +66,4 @@ estd date NOT NULL DEFAULT '2000-01-01'
 
 ## **限制**
 
-* MatrixOne目前只支持在查询表的时候使用函数，不支持单独使用函数。
-* Substring函数目前不支持在函数中使用FROM与FOR操作符。
+Substring函数目前不支持在函数中使用FROM与FOR操作符。

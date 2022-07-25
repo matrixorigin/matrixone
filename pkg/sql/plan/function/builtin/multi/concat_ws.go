@@ -193,7 +193,7 @@ func concatWsAllConst(inputCleaned []*vector.Vector, separator *vector.Vector, p
 // the inputs are guaranteed to be scalar non-NULL
 func concatWsWithConstSeparatorAllConst(inputCleaned []*vector.Vector, separator []byte) (*vector.Vector, error) {
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
-	resultVector := vector.NewConst(resultType)
+	resultVector := vector.NewConst(resultType, 1)
 	resultValues := &types.Bytes{
 		Data:    make([]byte, 0),
 		Offsets: make([]uint32, 1),

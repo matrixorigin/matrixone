@@ -147,6 +147,7 @@ import (
     fieldsList []*tree.Fields
     lines *tree.Lines
     varExpr *tree.VarExpr
+    varExprs []*tree.VarExpr
     loadColumn tree.LoadColumn
     loadColumns []tree.LoadColumn
     assignments []*tree.Assignment
@@ -165,9 +166,12 @@ import (
 }
 
 %token LEX_ERROR
+%nonassoc EMPTY
 %left <str> UNION
 %token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR
-%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT SET LOCK KEYS
+%nonassoc LOWER_THAN_SET
+%nonassoc <str> SET
+%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
@@ -202,7 +206,7 @@ import (
 
 // Transaction
 %token <str> BEGIN START TRANSACTION COMMIT ROLLBACK WORK CONSISTENT SNAPSHOT
-%token <str> CHAIN NO RELEASE
+%token <str> CHAIN NO RELEASE PRIORITY QUICK
 
 // Type
 %token <str> BIT TINYINT SMALLINT MEDIUMINT INT INTEGER BIGINT INTNUM
@@ -216,6 +220,7 @@ import (
 
 // Select option
 %token <str> SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT
+%token <str> LOW_PRIORITY HIGH_PRIORITY DELAYED
 
 // Create Table
 %token <str> CREATE ALTER DROP RENAME ANALYZE ADD
@@ -229,6 +234,7 @@ import (
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS
 %token <str> TYPE ANY SOME
+%token <str> PREPARE DEALLOCATE
 
 // MO table option
 %token <str> PROPERTIES
@@ -303,28 +309,30 @@ import (
 %type <statement> stmt
 %type <statements> stmt_list
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt
-%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt
+%type <statement> delete_without_using_stmt delete_with_using_stmt
+%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt
 %type <statement> drop_role_stmt drop_user_stmt
 %type <statement> create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> alter_user_stmt update_stmt use_stmt
+%type <statement> alter_user_stmt update_stmt use_stmt update_no_with_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt
 %type <statement> analyze_stmt
+%type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt
 %type <exportParm> export_data_param_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
 %type <selectExprs> select_expression_list
 %type <selectExpr> select_expression
-%type <tableExprs> table_references
-%type <tableExpr> table_reference table_factor join_table into_table_name
+%type <tableExprs> table_references table_name_wild_list
+%type <tableExpr> table_reference table_factor join_table into_table_name escaped_table_reference
 %type <direction> asc_desc_opt
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt
@@ -335,10 +343,10 @@ import (
 
 %type <tableDefs> table_elem_list_opt table_elem_list
 %type <tableDef> table_elem constaint_def constraint_elem
-%type <tableName> table_name
+%type <tableName> table_name table_name_opt_wild
 %type <tableNames> table_name_list
 %type <columnTableDef> column_def
-%type <columnType> cast_type
+%type <columnType> mo_cast_type mysql_cast_type
 %type <columnType> column_type char_type spatial_type time_type numeric_type decimal_type int_type
 %type <str> integer_opt
 %type <columnAttribute> column_attribute_elem keys
@@ -373,7 +381,7 @@ import (
 %type <str> reserved_keyword non_reserved_keyword
 %type <str> equal_opt reserved_sql_id reserved_table_id
 %type <str> as_name_opt as_opt_id table_id id_or_var name_string ident
-%type <str> database_id table_alias explain_sym
+%type <str> database_id table_alias explain_sym prepare_sym deallocate_sym stmt_name
 %type <unresolvedObjectName> unresolved_object_name table_column_name
 %type <unresolvedObjectName> table_name_unresolved
 %type <comparisionExpr> like_opt
@@ -466,6 +474,7 @@ import (
 %type <lines> load_lines export_lines_opt
 %type <int64Val> ignore_lines
 %type <varExpr> user_variable variable system_variable
+%type <varExprs> variable_list
 %type <loadColumn> columns_or_variable
 %type <loadColumns> columns_or_variable_list columns_or_variable_list_opt
 %type <unresolvedName> normal_ident
@@ -491,6 +500,7 @@ import (
 %type <str> utility_option_name utility_option_arg
 %type <str> explain_option_key select_option_opt
 %type <str> explain_foramt_value view_recursive_opt trim_direction
+%type <str> priority_opt priority quick_opt ignore_opt wild_opt
 
 %start start_command
 
@@ -519,6 +529,9 @@ stmt:
 |   delete_stmt
 |   drop_stmt
 |   explain_stmt
+|   prepare_stmt
+|   deallocate_stmt
+|   execute_stmt
 |   show_stmt
 |   alter_stmt
 |   analyze_stmt
@@ -644,6 +657,16 @@ columns_or_variable:
 |   user_variable
     {
         $$ = $1
+    }
+
+variable_list:
+    variable
+    {
+        $$ = []*tree.VarExpr{$1}
+    }
+|   variable_list ',' variable
+    {
+        $$ = append($1, $3)
     }
 
 variable:
@@ -1481,17 +1504,34 @@ use_stmt:
     }
 
 update_stmt:
-    UPDATE table_reference SET update_list where_expression_opt order_by_opt limit_opt
+	update_no_with_stmt
+|	with_clause update_no_with_stmt
+	{
+		$2.(*tree.Update).With = $1
+		$$ = $2
+	}
+
+update_no_with_stmt:
+    UPDATE priority_opt ignore_opt table_reference SET update_list where_expression_opt order_by_opt limit_opt
     {
+    	// Single-table syntax
         $$ = &tree.Update{
-            Table: $2,
-            Exprs: $4,
-            Where: $5,
-            OrderBy: $6,
-            Limit: $7,
+            Tables: tree.TableExprs{$4},
+            Exprs: $6,
+            Where: $7,
+            OrderBy: $8,
+            Limit: $9,
         }
     }
-// |   UPDATE comment_opt ignore_opt table_references SET update_list where_expression_opt order_by_opt limit_opt 
+|	UPDATE priority_opt ignore_opt table_references SET update_list where_expression_opt
+	{
+		// Multiple-table syntax
+		$$ = &tree.Update{
+			Tables: $4,
+			Exprs: $6,
+			Where: $7,
+		}
+	}
 
 update_list:
     update_expression
@@ -1507,6 +1547,44 @@ update_expression:
     column_name '=' expression
     {
         $$ = &tree.UpdateExpr{Names: []*tree.UnresolvedName{$1}, Expr: $3}
+    }
+
+prepareable_stmt:
+    create_stmt
+|   insert_stmt
+|   delete_stmt
+|   drop_stmt
+|   show_stmt
+|   update_stmt
+|   select_stmt
+    {
+        $$ = $1
+    }
+
+prepare_stmt:
+    prepare_sym stmt_name FROM prepareable_stmt
+    {
+        $$ = tree.NewPrepareStmt(tree.Identifier($2), $4)
+    }
+|   prepare_sym stmt_name FROM STRING
+    {
+        $$ = tree.NewPrepareString(tree.Identifier($2), $4) 
+    }
+
+execute_stmt:
+    execute_sym stmt_name
+    {
+        $$ = tree.NewExecute(tree.Identifier($2))
+    }
+|   execute_sym stmt_name USING variable_list
+    {
+        $$ = tree.NewExecuteWithVariables(tree.Identifier($2), $4)
+    }
+
+deallocate_stmt:
+    deallocate_sym PREPARE stmt_name
+    {
+        $$ = tree.NewDeallocate(tree.Identifier($3), false)
     }
 
 explainable_stmt:
@@ -1583,6 +1661,15 @@ explain_foramt_value:
     JSON
 |   TEXT
 
+
+prepare_sym:
+    PREPARE
+
+deallocate_sym:
+    DEALLOCATE
+
+execute_sym:
+    EXECUTE
 
 explain_sym:
     EXPLAIN
@@ -1949,6 +2036,7 @@ drop_stmt:
 
 drop_ddl_stmt:
     drop_database_stmt
+|   drop_prepare_stmt
 |   drop_table_stmt
 |   drop_index_stmt
 |   drop_role_stmt
@@ -1994,20 +2082,110 @@ drop_database_stmt:
         $$ = &tree.DropDatabase{Name: tree.Identifier($4), IfExists: $3}
     }
 
-delete_stmt:
-    DELETE FROM table_reference where_expression_opt order_by_opt limit_opt
+drop_prepare_stmt:
+    DROP PREPARE stmt_name
     {
+        $$ = tree.NewDeallocate(tree.Identifier($3), true)
+    }
+
+delete_stmt:
+	delete_without_using_stmt
+|	delete_with_using_stmt
+|	with_clause delete_with_using_stmt
+	{
+		$2.(*tree.Delete).With = $1
+		$$ = $2
+	}
+|	with_clause delete_without_using_stmt
+	{
+    	$2.(*tree.Delete).With = $1
+        $$ = $2
+    }
+
+delete_without_using_stmt:
+    DELETE priority_opt quick_opt ignore_opt FROM table_name partition_clause_opt as_opt_id where_expression_opt order_by_opt limit_opt
+    {
+    	// Single-Table Syntax
+    	t := &tree.AliasedTableExpr {
+    		Expr: $6,
+    		As: tree.AliasClause{
+    			Alias: tree.Identifier($8),
+    		},
+    	}
         $$ = &tree.Delete{
-            Table: $3,
-            Where: $4,
-            OrderBy: $5,
-            Limit: $6,
+            Tables: tree.TableExprs{t},
+            Where: $9,
+            OrderBy: $10,
+            Limit: $11,
         }
     }
-//     DELETE comment_opt ignore_opt FROM table_name partition_clause_opt where_expression_opt order_by_opt limit_opt
-// |   DELETE comment_opt ignore_opt FROM table_name_list USING table_references where_expression_opt
-// |   DELETE comment_opt ignore_opt table_name_list from_or_using table_references where_expression_opt
-// |   DELETE comment_opt ignore_opt delete_table_list from_or_using table_references where_expression_opt
+|	DELETE priority_opt quick_opt ignore_opt table_name_wild_list FROM table_references where_expression_opt
+	{
+		// Multiple-Table Syntax
+		$$ = &tree.Delete{
+			Tables: $5,
+			Where: $8,
+			TableRefs: $7,
+		}
+	}
+
+
+
+delete_with_using_stmt:
+	DELETE priority_opt quick_opt ignore_opt FROM table_name_wild_list USING table_references where_expression_opt
+	{
+		// Multiple-Table Syntax
+		$$ = &tree.Delete{
+			Tables: $6,
+			Where: $9,
+			TableRefs: $8,
+		}
+	}
+
+table_name_wild_list:
+	table_name_opt_wild
+	{
+		$$ = tree.TableExprs{$1}
+	}
+|	table_name_wild_list ',' table_name_opt_wild
+	{
+		$$ = append($1, $3)
+	}
+
+table_name_opt_wild:
+	ident wild_opt
+	{
+		prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        $$ = tree.NewTableName(tree.Identifier($1), prefix)
+	}
+|	ident '.' ident wild_opt
+	{
+		prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier($3), prefix)
+	}
+
+wild_opt:
+	%prec EMPTY
+	{}
+|	'.' '*'
+	{}
+
+priority_opt:
+	{}
+|	priority
+
+priority:
+	LOW_PRIORITY
+|	HIGH_PRIORITY
+|	DELAYED
+
+quick_opt:
+	{}
+|	QUICK
+
+ignore_opt:
+	{}
+|	IGNORE
 
 insert_stmt:
     INSERT into_table_name partition_clause_opt insert_data
@@ -2666,14 +2844,17 @@ from_clause:
     }
 
 table_references:
-    table_reference
+    escaped_table_reference
     {
         $$ = tree.TableExprs{$1}
     }
-|   table_references ',' table_reference
+|   table_references ',' escaped_table_reference
     {
         $$ = append($1, $3)
     }
+
+escaped_table_reference:
+	table_reference %prec LOWER_THAN_SET
 
 table_reference:
     table_factor
@@ -2886,6 +3067,9 @@ as_name_opt:
 	{
 		$$ = $2
 	}
+
+stmt_name:
+    ident
 
 database_id:
     id_or_var
@@ -4387,11 +4571,11 @@ simple_expr:
 			Else: $4,
 		}
 	}
-|   CAST '(' expression AS cast_type ')' 
+|   CAST '(' expression AS mo_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
     }
-|   CONVERT '(' expression ',' cast_type ')' 
+|   CONVERT '(' expression ',' mysql_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
     }
@@ -4458,7 +4642,41 @@ when_clause:
 		}
 	}
 
-cast_type:
+mo_cast_type:
+	column_type
+|   SIGNED integer_opt
+    {
+    	name := $1
+    	if $2 != "" {
+    		name = $2
+    	}
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+		        Family: tree.IntFamily,
+                FamilyString: name,
+		        Width:  64,
+		        Locale: &locale,
+		        Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
+	        },
+        }
+    }
+|   UNSIGNED integer_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+		        Family: tree.IntFamily,
+                FamilyString: $2,
+		        Width:  64,
+		        Locale: &locale,
+                Unsigned: true,
+		        Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
+	        },
+        }
+    }
+
+mysql_cast_type:
     decimal_type
 |   BINARY length_opt
     {
@@ -5394,6 +5612,10 @@ literal:
             return 1
         }
 	}
+|   VALUE_ARG
+    {
+        $$ = tree.NewParamExpr(yyp)
+    }
 
 column_type:
     numeric_type unsigned_opt zero_fill_opt
@@ -6300,6 +6522,11 @@ reserved_keyword:
 |	LEADING
 |	TRAILING
 |   CHARACTER
+|	LOW_PRIORITY
+|	HIGH_PRIORITY
+|	DELAYED
+|   PARTITION
+|	QUICK
 
 non_reserved_keyword:
     AGAINST
@@ -6396,7 +6623,6 @@ non_reserved_keyword:
 |   OPTION
 |   PACK_KEYS
 |   PARTIAL
-|   PARTITION
 |   PARTITIONS
 |   POINT
 |   POLYGON

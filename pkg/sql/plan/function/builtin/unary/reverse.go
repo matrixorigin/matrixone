@@ -16,6 +16,7 @@ package unary
 
 import (
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -35,7 +36,7 @@ func Reverse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := &types.Bytes{
 			Data:    make([]byte, len(inputValues.Data)),
 			Offsets: make([]uint32, len(inputValues.Offsets)),

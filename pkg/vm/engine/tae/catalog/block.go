@@ -226,7 +226,7 @@ func (entry *BlockEntry) MakeKey() []byte {
 	return model.EncodeBlockKeyPrefix(entry.segment.ID, entry.ID)
 }
 
-// Coarse API: no consistency check
+// IsActive is coarse API: no consistency check
 func (entry *BlockEntry) IsActive() bool {
 	segment := entry.GetSegment()
 	if !segment.IsActive() {
@@ -238,7 +238,7 @@ func (entry *BlockEntry) IsActive() bool {
 	return !dropped
 }
 
-// Coarse API: no consistency check
+// GetTerminationTS is coarse API: no consistency check
 func (entry *BlockEntry) GetTerminationTS() (ts uint64, terminated bool) {
 	segmentEntry := entry.GetSegment()
 	tableEntry := segmentEntry.GetTable()

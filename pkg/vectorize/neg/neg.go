@@ -37,7 +37,7 @@ func NumericNeg[T constraints.Signed | constraints.Float](xs, rs []T) []T {
 
 func Decimal64Neg(xs, rs []types.Decimal64) []types.Decimal64 {
 	for i, x := range xs {
-		rs[i] = -x
+		rs[i] = types.Decimal64_Zero.Sub(x)
 	}
 	return rs
 }

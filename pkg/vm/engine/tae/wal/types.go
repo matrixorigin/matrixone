@@ -46,7 +46,7 @@ type Driver interface {
 	GetCheckpointed() uint64
 	Checkpoint(indexes []*Index) (LogEntry, error)
 	AppendEntry(uint32, LogEntry) (uint64, error)
-	LoadEntry(groupId uint32, lsn uint64) (LogEntry, error)
+	LoadEntry(groupID uint32, lsn uint64) (LogEntry, error)
 	GetCurrSeqNum() uint64
 	GetPenddingCnt() uint64
 	Compact() error

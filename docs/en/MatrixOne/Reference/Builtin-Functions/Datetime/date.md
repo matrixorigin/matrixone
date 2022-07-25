@@ -53,6 +53,4 @@ Extracts the date part of the date or datetime expression expr.
 
 ## **Constraints**
 
-The date type supports only `yyyy-mm-dd` and `yyyymmdd` for now. 
-
-Currently, MatrixOne doesn't support select function() without from tables.
+The date type supports only `yyyy-mm-dd` and `yyyymmdd` for now.

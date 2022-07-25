@@ -173,9 +173,7 @@ func Reduce(bat *Batch, attrs []string, m *mheap.Mheap) {
 
 func Cow(bat *Batch) {
 	attrs := make([]string, len(bat.Attrs))
-	for i, attr := range bat.Attrs {
-		attrs[i] = attr
-	}
+	copy(attrs, bat.Attrs)
 	bat.Ro = false
 	bat.Attrs = attrs
 }
@@ -184,6 +182,14 @@ func NewWithSize(n int) *Batch {
 	return &Batch{
 		Cnt:  1,
 		Vecs: make([]*vector.Vector, n),
+	}
+}
+
+func (bat *Batch) ExpandNulls() {
+	if len(bat.Zs) > 0 {
+		for i := range bat.Vecs {
+			bat.Vecs[i].TryExpandNulls(len(bat.Zs))
+		}
 	}
 }
 
@@ -224,6 +230,15 @@ func (bat *Batch) Shuffle(sels []int64, m *mheap.Mheap) error {
 		mheap.Free(m, data)
 	}
 	return nil
+}
+
+func (bat *Batch) Size() int {
+	var size int
+
+	for _, vec := range bat.Vecs {
+		size += len(vec.Data)
+	}
+	return size
 }
 
 func (bat *Batch) Length() int {

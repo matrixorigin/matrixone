@@ -24,16 +24,24 @@ type IOVector struct {
 	Entries []IOEntry
 }
 
-func (i IOVector) offsetRange() (int, int) {
-	min := math.MaxInt
-	max := 0
+func (i IOVector) offsetRange() (
+	min int,
+	max int,
+	readToEnd bool,
+) {
+	min = math.MaxInt
+	max = 0
 	for _, entry := range i.Entries {
 		if entry.Offset < min {
 			min = entry.Offset
+		}
+		if entry.Size < 0 {
+			entry.Size = 0
+			readToEnd = true
 		}
 		if end := entry.Offset + entry.Size; end > max {
 			max = end
 		}
 	}
-	return min, max
+	return
 }

@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/*
+Package hakeeper implements MO's hakeeper component.
+*/
 package hakeeper
 
 import (
@@ -22,6 +25,7 @@ import (
 
 	"github.com/lni/dragonboat/v4/logger"
 	sm "github.com/lni/dragonboat/v4/statemachine"
+	"github.com/mohae/deepcopy"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -58,6 +62,7 @@ type StateQuery struct{}
 type logShardIDQuery struct{ name string }
 type logShardIDQueryResult struct{ id uint64 }
 type ScheduleCommandQuery struct{ UUID string }
+type ClusterDetailsQuery struct{}
 
 type stateMachine struct {
 	replicaID uint64
@@ -194,6 +199,7 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	for _, c := range b.Commands {
 		if c.Bootstrapping {
 			if s.state.State != pb.HAKeeperBootstrapping {
+				plog.Errorf("ignored bootstrapping cmd: %s", c.LogString())
 				return sm.Result{}
 			}
 		}
@@ -211,6 +217,7 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 				Commands: make([]pb.ScheduleCommand, 0),
 			}
 		}
+		plog.Infof("adding schedule command to hakeeper rsm: %s", c.LogString())
 		l.Commands = append(l.Commands, c)
 		s.state.ScheduleCommands[c.UUID] = l
 	}
@@ -382,14 +389,19 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 }
 
 func (s *stateMachine) handleStateQuery() interface{} {
-	// FIXME: pretty sure we need to deepcopy here
-	return &pb.CheckerState{
+	internal := &pb.CheckerState{
 		Tick:        s.state.Tick,
 		ClusterInfo: s.state.ClusterInfo,
 		DNState:     s.state.DNState,
 		LogState:    s.state.LogState,
 		State:       s.state.State,
 	}
+	copied := deepcopy.Copy(internal)
+	result, ok := copied.(*pb.CheckerState)
+	if !ok {
+		panic("deep copy failed")
+	}
+	return result
 }
 
 func (s *stateMachine) handleShardIDQuery(name string) *logShardIDQueryResult {
@@ -407,6 +419,30 @@ func (s *stateMachine) handleScheduleCommandQuery(uuid string) *pb.CommandBatch 
 	return &pb.CommandBatch{}
 }
 
+func (s *stateMachine) handleClusterDetailsQuery() *pb.ClusterDetails {
+	cd := &pb.ClusterDetails{
+		CNNodes: make([]pb.CNNode, 0),
+		DNNodes: make([]pb.DNNode, 0),
+	}
+	for uuid, info := range s.state.CNState.Stores {
+		n := pb.CNNode{
+			UUID:           uuid,
+			Tick:           info.Tick,
+			ServiceAddress: info.ServiceAddress,
+		}
+		cd.CNNodes = append(cd.CNNodes, n)
+	}
+	for uuid, info := range s.state.DNState.Stores {
+		n := pb.DNNode{
+			UUID:           uuid,
+			Tick:           info.Tick,
+			ServiceAddress: info.ServiceAddress,
+		}
+		cd.DNNodes = append(cd.DNNodes, n)
+	}
+	return cd
+}
+
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 	if q, ok := query.(*logShardIDQuery); ok {
 		return s.handleShardIDQuery(q.name), nil
@@ -414,6 +450,8 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 		return s.handleStateQuery(), nil
 	} else if q, ok := query.(*ScheduleCommandQuery); ok {
 		return s.handleScheduleCommandQuery(q.UUID), nil
+	} else if _, ok := query.(*ClusterDetailsQuery); ok {
+		return s.handleClusterDetailsQuery(), nil
 	}
 	panic("unknown query type")
 }

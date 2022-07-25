@@ -9,7 +9,7 @@
 ### **单表语法结构**
 
 ```
-DELETE [LOW_PRIORITY] [QUICK] [IGNORE] FROM tbl_name [[AS] tbl_alias]
+DELETE FROM tbl_name [[AS] tbl_alias]
     [PARTITION (partition_name [, partition_name] ...)]
     [WHERE where_condition]
     [ORDER BY ...]

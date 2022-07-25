@@ -36,5 +36,3 @@ The MONTH() function returns the month part for a given date (a number from 1 to
 ## **Constraints**
 
 The date type supports only `yyyy-mm-dd` and `yyyymmdd` for now. 
-
-Currently, MatrixOne doesn't support select function() without from tables.

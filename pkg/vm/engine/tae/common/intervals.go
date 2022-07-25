@@ -171,7 +171,7 @@ func (intervals *ClosedIntervals) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-//for test
+// Equal is for test
 func (intervals *ClosedIntervals) Equal(o *ClosedIntervals) bool {
 	if len(intervals.Intervals) != len(o.Intervals) {
 		fmt.Printf("%v\n%v\n", intervals.Intervals, o.Intervals)

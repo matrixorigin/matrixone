@@ -52,7 +52,7 @@ func (segment *dataSegment) GetSegmentFile() file.Segment {
 	return segment.file
 }
 
-func (segment *dataSegment) Destory() (err error) {
+func (segment *dataSegment) Destroy() (err error) {
 	if !segment.TryClose() {
 		return
 	}

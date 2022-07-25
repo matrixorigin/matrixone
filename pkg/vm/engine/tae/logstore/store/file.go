@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
@@ -27,7 +26,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
@@ -59,7 +57,6 @@ type rotateFile struct {
 	checker     RotateChecker
 	uncommitted []*vFile
 	history     History
-	commitMu    sync.RWMutex
 
 	commitWg        sync.WaitGroup
 	commitCtx       context.Context
@@ -68,7 +65,6 @@ type rotateFile struct {
 	postCommitQueue chan *vFile
 
 	nextVer uint64
-	idAlloc common.IdAllocator
 
 	wg sync.WaitGroup
 
@@ -111,7 +107,7 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 		postCommitFunc:  postCommitFunc,
 	}
 	if !newDir {
-		files, err := ioutil.ReadDir(dir)
+		files, err := os.ReadDir(dir)
 		if err != nil {
 			return nil, err
 		}
@@ -126,14 +122,18 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 			if err != nil {
 				return nil, err
 			}
+			info, err := f.Info()
+			if err != nil {
+				return nil, err
+			}
 			vf := &vFile{
 				RWMutex:    &sync.RWMutex{},
 				File:       file,
 				version:    version,
 				commitCond: *sync.NewCond(new(sync.Mutex)),
 				history:    rf.history,
-				size:       int(f.Size()),
-				syncpos:    int(f.Size()),
+				size:       int(info.Size()),
+				syncpos:    int(info.Size()),
 			}
 			vf.vInfo = newVInfo(vf)
 			// vf.ReadMeta()
@@ -372,12 +372,12 @@ func (rf *rotateFile) Sync() error {
 	return lastFile.Sync()
 }
 
-func (rf *rotateFile) Load(ver int, groupId uint32, lsn uint64) (entry.Entry, error) {
+func (rf *rotateFile) Load(ver int, groupID uint32, lsn uint64) (entry.Entry, error) {
 	vf, err := rf.GetEntryByVersion(ver)
 	if err != nil {
 		return nil, err
 	}
-	return vf.Load(groupId, lsn)
+	return vf.Load(groupID, lsn)
 }
 
 func (rf *rotateFile) GetEntryByVersion(version int) (VFile, error) {

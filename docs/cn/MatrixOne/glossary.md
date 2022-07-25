@@ -1,4 +1,4 @@
-# **术语表** 
+# **术语表**
 
 ### **术语**
 
@@ -14,12 +14,16 @@
  | Data Storage  | DataStorage接口实现了分布式存储服务，必须在使用MatrixCube之前就预先定义。并且，DataStorage的实现依赖于存储引擎的具体特性 |
 | E  |  |
   | Event Notify | 将心跳(Hearbeat)信息同步到所有节点的机制称为Event Notify。|
+  | Explicit Transactions| 显式事务，即是一种指定的事务，这种事务需要由你自己决定哪批工作必须成功完成，否则所有部分都不完成。可以使用 `BEGIN TRANSACTION` 和
+`ROLLBACK TRANSACTION` 或 `COMMIT TRANSACTION` 关键字进行控制。|
   | F  |  |
   | Factorization | Factorization因子化方法使用了基本的因式分解公式把代数式或二次方程简化为更简洁的形式。MatrixOne使用因子化技术来减少数据冗余并提高查询性能 |
   | H  |  |
   | Heartbeat | 在MatrixOne集群中的每个节点都将周期性地发送自身的状态信息，而这些信息被称作heartbeat。 |
+  |I|  |
+  | Implicit transactions| 隐式事务，即自动提交事务。 |
  | M  |  |
-  | MatrixCube | MatrixCube是一个构建分布式系统的框架，保证了集群的可用性、一致性以及可扩展性。MatrixCube的设计目标是让开发人员只需要关注一个节点上的业务逻辑但却能够轻松实现各种强一致的分布式存储服务。| 
+  | MatrixCube | MatrixCube是一个构建分布式系统的框架，保证了集群的可用性、一致性以及可扩展性。MatrixCube的设计目标是让开发人员只需要关注一个节点上的业务逻辑但却能够轻松实现各种强一致的分布式存储服务。|
  | P  |  |
   | Prophet | Prophet是MatrixCube中的调度模块，执行Auto-Rebalance操作来维持集群中各个节点的存储量、读写负载均衡。集群中最初的三个节点将作为Prophet节点。|
    | Pure Storage | 与Prophet相对, pure storage是另一种类型的节点，并不执行调度工作，只进行普通的存储工作。|
@@ -58,6 +62,6 @@
 | S  |  |
 | SIMD instruction | SIMD是Single Instruction/Multiple Data的简写，即单指令多数据流，SIMD操作一般指一种使用一条指令即可处理多条数据的计算方法。 |
 | T  |  |
-| Transaction |  在数据库中执行的一系列满足ACID基本要求的操作。| 
+| Transaction |  在数据库中执行的一系列满足ACID基本要求的操作。|
 | V  |  |
 | Vectorized Execution  |通过有效利用CPU的缓存，向量化执行提高了分析查询引擎的速度。Arrow 的列式格式可以使用轻量级的架构，如dictionary encoding，bit packing以及run length encoding,这都进一步了提升了查询效率.|

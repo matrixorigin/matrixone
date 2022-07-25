@@ -50,7 +50,7 @@ func (r *BitXorRing) Size() int {
 	return cap(r.Data)
 }
 
-// the error is because that BitXorRing hasn't implement the Ring interface
+// Dup the error is because that BitXorRing hasn't implemented the Ring interface
 func (r *BitXorRing) Dup() ring.Ring {
 	return &BitXorRing{
 		Typ: r.Typ,
@@ -66,7 +66,7 @@ func (r *BitXorRing) SetLength(len int) {
 	r.NullCounts = r.NullCounts[:len]
 }
 
-// The sels must be sorted,otherwise the implement below is wrong
+// Shrink The sels must be sorted,otherwise the implement below is wrong
 func (r *BitXorRing) Shrink(sels []int64) {
 	for i, sel := range sels {
 		r.Values[i] = r.Values[sel]
@@ -481,7 +481,7 @@ func (r *BitXorRing) Eval(zs []int64) *vector.Vector {
 	}
 }
 
-// not used now.
+// Shuffle not used now.
 func (r *BitXorRing) Shuffle(_ []int64, _ *mheap.Mheap) error {
 	return nil
 }

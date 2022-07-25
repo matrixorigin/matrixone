@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/joincondition"
 )
 
 const (
@@ -40,18 +40,18 @@ type evalVector struct {
 }
 
 type Container struct {
-	state         int
-	rows          uint64
-	keys          [][]byte
-	values        []uint64
-	zValues       []int64
-	hashes        []uint64
+	state   int
+	rows    uint64
+	keys    [][]byte
+	values  []uint64
+	zValues []int64
+	//	hashes        []uint64
 	inserted      []uint8
 	zInserted     []uint8
 	strHashStates [][3]uint64
 	strHashMap    *hashtable.StringHashMap
 
-	poses []int32 // pos of vectors need to be copied
+	//poses []int32 // pos of vectors need to be copied
 
 	sels [][]int64
 
@@ -63,14 +63,9 @@ type Container struct {
 	decimal128Slice []types.Decimal128
 }
 
-type Condition struct {
-	Scale int32
-	Expr  *plan.Expr
-}
-
 type Argument struct {
 	ctr        *Container
 	IsPreBuild bool // hashtable is pre-build
 	Result     []int32
-	Conditions [][]Condition
+	Conditions [][]joincondition.Condition
 }

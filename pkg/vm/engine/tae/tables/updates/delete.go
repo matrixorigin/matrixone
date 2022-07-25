@@ -176,7 +176,6 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 
 func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	node.Lock()
-	defer node.Unlock()
 	if node.txn == nil {
 		panic("DeleteNode | ApplyCommit | LogicErr")
 	}
@@ -187,7 +186,8 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	}
 	node.chain.AddDeleteCnt(uint32(node.mask.GetCardinality()))
 	node.chain.mvcc.IncChangeNodeCnt()
-	return
+	node.Unlock()
+	return node.OnApply()
 }
 
 func (node *DeleteNode) GeneralString() string {

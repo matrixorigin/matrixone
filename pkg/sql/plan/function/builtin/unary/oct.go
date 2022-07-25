@@ -34,7 +34,7 @@ func Oct[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, 
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := &types.Bytes{
 			Data:    []byte{},
 			Offsets: make([]uint32, 1),
@@ -67,7 +67,7 @@ func OctFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType)
+		resultVector := vector.NewConst(resultType, 1)
 		resultValues := &types.Bytes{
 			Data:    []byte{},
 			Offsets: make([]uint32, 1),

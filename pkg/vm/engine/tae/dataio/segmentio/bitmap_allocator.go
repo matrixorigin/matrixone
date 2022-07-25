@@ -304,8 +304,7 @@ func (b *BitmapAllocator) Allocate(needLen uint64) (uint64, uint64) {
 				}
 				allocatedPage++
 				if allocatedPage < needPage {
-					l0freePos = 0
-					nextPos = l0freePos + 1
+					// l0freePos = 0
 					continue
 				}
 				allocated += uint64(needPage * b.pageSize)

@@ -148,15 +148,15 @@ type UnaryExpr struct {
 	Expr Expr
 }
 
-func (node *UnaryExpr) Format(ctx *FmtCtx) {
-	if _, unary := node.Expr.(*UnaryExpr); unary {
-		ctx.WriteString(node.Op.ToString())
+func (e *UnaryExpr) Format(ctx *FmtCtx) {
+	if _, unary := e.Expr.(*UnaryExpr); unary {
+		ctx.WriteString(e.Op.ToString())
 		ctx.WriteByte(' ')
-		ctx.PrintExpr(node, node.Expr, true)
+		ctx.PrintExpr(e, e.Expr, true)
 		return
 	}
-	ctx.WriteString(node.Op.ToString())
-	ctx.PrintExpr(node, node.Expr, true)
+	ctx.WriteString(e.Op.ToString())
+	ctx.PrintExpr(e, e.Expr, true)
 }
 
 func (e *UnaryExpr) String() string {
@@ -847,5 +847,21 @@ func NewVarExpr(n string, s bool, g bool, e Expr) *VarExpr {
 		System: s,
 		Global: g,
 		Expr:   e,
+	}
+}
+
+// select a from t1 where a > ?
+type ParamExpr struct {
+	exprImpl
+	Offset int
+}
+
+func (node *ParamExpr) Format(ctx *FmtCtx) {
+	ctx.WriteByte('?')
+}
+
+func NewParamExpr(offset int) *ParamExpr {
+	return &ParamExpr{
+		Offset: offset,
 	}
 }

@@ -97,7 +97,8 @@ func TestCompare(t *testing.T) {
 		c := New(tc.vecs[0].Typ, tc.desc)
 		c.Set(0, tc.vecs[0])
 		c.Set(1, tc.vecs[1])
-		c.Copy(0, 1, 0, 0, tc.proc)
+		err := c.Copy(0, 1, 0, 0, tc.proc)
+		require.NoError(t, err)
 		c.Compare(0, 1, 0, 0)
 		tc.vecs[0].Free(tc.proc.Mp)
 		tc.vecs[1].Free(tc.proc.Mp)
@@ -107,8 +108,8 @@ func TestCompare(t *testing.T) {
 
 func newTestCase(desc bool, m *mheap.Mheap, typ types.Type) testCase {
 	vecs := make([]*vector.Vector, 2)
-	vecs[0] = testutil.NewVector(Rows, typ, m, true)
-	vecs[1] = testutil.NewVector(Rows, typ, m, true)
+	vecs[0] = testutil.NewVector(Rows, typ, m, true, nil)
+	vecs[1] = testutil.NewVector(Rows, typ, m, true, nil)
 	return testCase{
 		desc: desc,
 		vecs: vecs,

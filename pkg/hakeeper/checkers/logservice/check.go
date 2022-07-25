@@ -1,27 +1,29 @@
-// Copyright 2022 MatrixOrigin.
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//      http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
 package logservice
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-func Check(alloc util.IDAllocator, cluster pb.ClusterInfo, infos pb.LogState,
+func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, infos pb.LogState,
 	removing map[uint64][]uint64, adding map[uint64][]uint64, currentTick uint64) (operators []*operator.Operator) {
-	stores := parseLogStores(infos, currentTick)
+	stores := parseLogStores(cfg, infos, currentTick)
 	stats := parseLogShards(cluster, infos, stores.ExpiredStores())
 
 	for shardID, toAdd := range stats.toAdd {
@@ -61,7 +63,7 @@ func Check(alloc util.IDAllocator, cluster pb.ClusterInfo, infos pb.LogState,
 
 	for _, toStop := range stats.toStop {
 		operators = append(operators, operator.CreateStopReplica("",
-			toStop.uuid, toStop.shardID))
+			toStop.uuid, toStop.shardID, toStop.epoch))
 	}
 
 	return operators

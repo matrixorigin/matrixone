@@ -55,6 +55,8 @@ type ClientConfig struct {
 	LogShardID uint64
 	// DNReplicaID is the replica ID of the DN that owns the created client.
 	DNReplicaID uint64
+	// DiscoveryAddress is the Log Service discovery address provided by k8s.
+	DiscoveryAddress string
 	// LogService nodes service addresses. This field is provided for testing
 	// purposes only.
 	ServiceAddresses []string
@@ -144,6 +146,8 @@ func NewClient(ctx context.Context,
 				e = err
 			}
 		} else {
+			// TODO: add a test to check whether it works when there is no truncated
+			// LSN known to the logservice.
 			if err := c.connectReadWrite(ctx); err == nil {
 				return c, nil
 			} else {

@@ -72,7 +72,7 @@ func (it *txnDBIt) Valid() bool {
 
 func (it *txnDBIt) Next() {
 	var err error
-	valid := true
+	var valid bool
 	for {
 		it.linkIt.Next()
 		node := it.linkIt.Get()

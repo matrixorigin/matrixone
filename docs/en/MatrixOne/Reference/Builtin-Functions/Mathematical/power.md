@@ -44,7 +44,3 @@ POWER(X, Y) returns the value of X raised to the power of Y.
 | 10000.0000 | 0.0000 |
 +------------+--------+
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.

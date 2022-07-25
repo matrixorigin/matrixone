@@ -17,6 +17,7 @@ package morpc
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -57,7 +58,7 @@ func WithBackendBusyBufferSize(size int) BackendOption {
 
 // WithBackendFilter set send fiter func. Input ready to send futures, output
 // is really need to be send futures.
-func WithBackendFilter(filter func([]*Future) []*Future) BackendOption {
+func WithBackendFilter(filter func(Message) bool) BackendOption {
 	return func(rb *remoteBackend) {
 		rb.options.filter = filter
 	}
@@ -86,6 +87,13 @@ func WithBackendConnectTimeout(timeout time.Duration) BackendOption {
 	}
 }
 
+// WithBackendStreamBufferSize set buffer size for stream receive message chan
+func WithBackendStreamBufferSize(value int) BackendOption {
+	return func(rb *remoteBackend) {
+		rb.options.streamBufferSize = value
+	}
+}
+
 // WithBackendGoettyOptions set goetty connection options. e.g. set read/write buffer
 // size, adjust net.Conn attribute etc.
 func WithBackendGoettyOptions(options ...goetty.Option) BackendOption {
@@ -99,20 +107,20 @@ type remoteBackend struct {
 	logger     *zap.Logger
 	codec      Codec
 	conn       goetty.IOSession
-	writeC     chan *Future
+	writeC     chan backendSendMessage
 	resetConnC chan struct{}
 	stopper    *stopper.Stopper
 	closeOnce  sync.Once
-	futurePool sync.Pool
 
 	options struct {
-		connect        bool
-		goettyOptions  []goetty.Option
-		connectTimeout time.Duration
-		bufferSize     int
-		busySize       int
-		batchSendSize  int
-		filter         func([]*Future) []*Future
+		connect          bool
+		goettyOptions    []goetty.Option
+		connectTimeout   time.Duration
+		bufferSize       int
+		busySize         int
+		batchSendSize    int
+		streamBufferSize int
+		filter           func(Message) bool
 	}
 
 	stateMu struct {
@@ -123,12 +131,18 @@ type remoteBackend struct {
 
 	mu struct {
 		sync.RWMutex
-		futures map[uint64]*Future
-		streams map[uint64]*stream
+		futures       map[uint64]*Future
+		activeStreams map[uint64]*stream
 	}
 
 	atomic struct {
-		id uint64
+		id             uint64
+		lastActiveTime atomic.Value //time.Time
+	}
+
+	pool struct {
+		streams *sync.Pool
+		futures *sync.Pool
 	}
 }
 
@@ -151,14 +165,20 @@ func NewRemoteBackend(
 	}
 	rb.adjust()
 
-	rb.futurePool = sync.Pool{
+	rb.pool.futures = &sync.Pool{
 		New: func() interface{} {
 			return newFuture(rb.releaseFuture)
 		},
 	}
-	rb.writeC = make(chan *Future, rb.options.bufferSize)
+	rb.pool.streams = &sync.Pool{
+		New: func() any {
+			return newStream(make(chan Message, rb.options.streamBufferSize),
+				rb.doSend, rb.removeActiveStream, rb.active)
+		},
+	}
+	rb.writeC = make(chan backendSendMessage, rb.options.bufferSize)
 	rb.mu.futures = make(map[uint64]*Future, rb.options.bufferSize)
-	rb.mu.streams = make(map[uint64]*stream, rb.options.bufferSize)
+	rb.mu.activeStreams = make(map[uint64]*stream, rb.options.bufferSize)
 	rb.conn = goetty.NewIOSession(rb.options.goettyOptions...)
 
 	if rb.options.connect {
@@ -172,10 +192,8 @@ func NewRemoteBackend(
 	if err := rb.stopper.RunTask(rb.writeLoop); err != nil {
 		return nil, err
 	}
-	if err := rb.stopper.RunTask(rb.cleanStreams); err != nil {
-		return nil, err
-	}
 
+	rb.active()
 	return rb, nil
 }
 
@@ -195,31 +213,38 @@ func (rb *remoteBackend) adjust() {
 	if rb.options.connectTimeout == 0 {
 		rb.options.connectTimeout = time.Second * 10
 	}
+	if rb.options.streamBufferSize == 0 {
+		rb.options.streamBufferSize = 16
+	}
 	if rb.options.filter == nil {
-		rb.options.filter = func(futures []*Future) []*Future {
-			return futures
+		rb.options.filter = func(Message) bool {
+			return true
 		}
 	}
 
 	rb.logger = logutil.Adjust(rb.logger).With(zap.String("remote", rb.remote))
 	rb.options.goettyOptions = append(rb.options.goettyOptions,
 		goetty.WithCodec(rb.codec, rb.codec),
+		goetty.WithDisableReleaseOutBuf(),
 		goetty.WithLogger(rb.logger))
 }
 
 func (rb *remoteBackend) Send(ctx context.Context, request Message, opts SendOptions) (*Future, error) {
+	rb.active()
 	request.SetID(rb.nextID())
 
 	f := rb.newFuture()
-	f.init(ctx, request, opts, false)
-	if err := rb.doSend(f); err != nil {
+	f.init(request.GetID(), ctx)
+	rb.addFuture(f)
+	if err := rb.doSend(backendSendMessage{ctx: f.ctx, request: request, opts: opts, completed: f.unRef}); err != nil {
 		f.Close()
 		return nil, err
 	}
 	return f, nil
 }
 
-func (rb *remoteBackend) NewStream(receiveChanBuffer int) (Stream, error) {
+func (rb *remoteBackend) NewStream() (Stream, error) {
+	rb.active()
 	rb.stateMu.RLock()
 	defer rb.stateMu.RUnlock()
 
@@ -229,13 +254,14 @@ func (rb *remoteBackend) NewStream(receiveChanBuffer int) (Stream, error) {
 
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
-	st := newStream(rb.nextID(), make(chan Message, receiveChanBuffer), rb.doSend)
-	rb.mu.streams[st.ID()] = st
+
+	st := rb.acquireStream()
+	st.init(rb.nextID())
+	rb.mu.activeStreams[st.ID()] = st
 	return st, nil
 }
 
-func (rb *remoteBackend) doSend(f *Future) error {
-	added := false
+func (rb *remoteBackend) doSend(m backendSendMessage) error {
 	for {
 		rb.stateMu.RLock()
 		if rb.stateMu.state == stateStopped {
@@ -243,21 +269,16 @@ func (rb *remoteBackend) doSend(f *Future) error {
 			return errBackendClosed
 		}
 
-		if !added {
-			rb.addFuture(f)
-			added = true
-		}
-
 		// The close method need acquire the write lock, so we cannot block at here.
 		// The write loop may reset the backend's network link and may not be able to
 		// process writeC for a long time, causing the writeC buffer to reach its limit.
 		select {
-		case rb.writeC <- f:
+		case rb.writeC <- m:
 			rb.stateMu.RUnlock()
 			return nil
-		case <-f.ctx.Done():
+		case <-m.ctx.Done():
 			rb.stateMu.RUnlock()
-			return f.ctx.Err()
+			return m.ctx.Err()
 		default:
 			rb.stateMu.RUnlock()
 		}
@@ -282,15 +303,25 @@ func (rb *remoteBackend) Busy() bool {
 	return len(rb.writeC) >= rb.options.busySize
 }
 
+func (rb *remoteBackend) LastActiveTime() time.Time {
+	return rb.atomic.lastActiveTime.Load().(time.Time)
+}
+
+func (rb *remoteBackend) active() {
+	now := time.Now()
+	rb.atomic.lastActiveTime.Store(now)
+}
+
 func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	rb.logger.Info("write loop started")
 	defer func() {
 		rb.closeConn()
+		rb.conn.OutBuf().Release()
 		rb.logger.Info("write loop stopped")
 	}()
 
 	retry := false
-	futures := make([]*Future, 0, rb.options.batchSendSize)
+	futures := make([]backendSendMessage, 0, rb.options.batchSendSize)
 
 	handleResetConn := func() {
 		if err := rb.resetConn(); err != nil {
@@ -301,7 +332,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 
 	fetch := func() {
 		for i := 0; i < len(futures); i++ {
-			futures[i] = nil
+			futures[i] = backendSendMessage{}
 		}
 		futures = futures[:0]
 
@@ -360,10 +391,8 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 				retry = false
 				written := 0
 				writeTimeout := time.Duration(0)
-				sendFutures := rb.options.filter(futures)
-				for _, f := range sendFutures {
-					f.mu.Lock()
-					if !f.mu.closed && !f.timeout() {
+				for _, f := range futures {
+					if rb.options.filter(f.request) && !f.timeout() {
 						writeTimeout += f.opts.Timeout
 						if err := rb.conn.Write(f.request, goetty.WriteOptions{}); err != nil {
 							rb.logger.Error("write request failed",
@@ -371,20 +400,20 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 								zap.Error(err))
 							retry = true
 							written = 0
-							f.mu.Unlock()
 							break
 						}
 						written++
 					}
-					f.mu.Unlock()
 				}
 
 				if written > 0 {
 					if err := rb.conn.Flush(writeTimeout); err != nil {
-						for _, f := range sendFutures {
-							rb.logger.Error("write request failed",
-								zap.Uint64("request-id", f.request.GetID()),
-								zap.Error(err))
+						for _, f := range futures {
+							if rb.options.filter(f.request) {
+								rb.logger.Error("write request failed",
+									zap.Uint64("request-id", f.request.GetID()),
+									zap.Error(err))
+							}
 						}
 						retry = true
 					}
@@ -392,28 +421,12 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 
 				if !retry {
 					for _, f := range futures {
-						f.unRef()
+						if f.completed != nil {
+							f.completed()
+						}
 					}
 				}
 			}
-		}
-	}
-}
-
-func (rb *remoteBackend) cleanStreams(ctx context.Context) {
-	rb.logger.Info("clean closed streams loop started")
-	defer rb.logger.Error("clean closed streams loop stopped")
-
-	ticker := time.NewTicker(time.Second * 10)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			rb.clean()
-			return
-		case <-ticker.C:
-			rb.cleanClosedStreams()
 		}
 	}
 }
@@ -434,24 +447,14 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 					rb.logger.Error("read from backend failed",
 						zap.Error(err))
 					rb.inactiveReadLoop()
-					rb.closeStreams()
+					rb.cancelActiveStreams()
 					rb.scheduleResetConn()
 					return
 				}
 
+				rb.active()
 				rb.requestDone(msg.(Message))
 			}
-		}
-	}
-}
-
-func (rb *remoteBackend) cleanClosedStreams() {
-	rb.mu.Lock()
-	defer rb.mu.Unlock()
-	for id, st := range rb.mu.streams {
-		if st.closed() {
-			delete(rb.mu.streams, id)
-			delete(rb.mu.futures, id)
 		}
 	}
 }
@@ -472,16 +475,26 @@ func (rb *remoteBackend) clean() {
 	}
 }
 
-func (rb *remoteBackend) closeStreams() {
+func (rb *remoteBackend) acquireStream() *stream {
+	return rb.pool.streams.Get().(*stream)
+}
+
+func (rb *remoteBackend) cancelActiveStreams() {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
-	for id, st := range rb.mu.streams {
-		if err := st.Close(); err != nil {
-			rb.logger.Error("close stream failed",
-				zap.Error(err))
-		}
-		delete(rb.mu.streams, id)
+
+	for _, st := range rb.mu.activeStreams {
+		st.done(nil)
 	}
+}
+
+func (rb *remoteBackend) removeActiveStream(s *stream) {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+
+	delete(rb.mu.activeStreams, s.id)
+	delete(rb.mu.futures, s.id)
+	rb.pool.streams.Put(s)
 }
 
 func (rb *remoteBackend) stopWriteLoop() {
@@ -495,10 +508,10 @@ func (rb *remoteBackend) requestDone(response Message) {
 
 	id := response.GetID()
 	if f, ok := rb.mu.futures[id]; ok {
-		if !f.stream {
-			delete(rb.mu.futures, id)
-		}
+		delete(rb.mu.futures, id)
 		f.done(response)
+	} else if st, ok := rb.mu.activeStreams[id]; ok {
+		st.done(response)
 	}
 }
 
@@ -507,7 +520,7 @@ func (rb *remoteBackend) addFuture(f *Future) {
 	defer rb.mu.Unlock()
 
 	f.ref()
-	rb.mu.futures[f.request.GetID()] = f
+	rb.mu.futures[f.id] = f
 }
 
 func (rb *remoteBackend) releaseFuture(f *Future) {
@@ -515,10 +528,8 @@ func (rb *remoteBackend) releaseFuture(f *Future) {
 	defer rb.mu.Unlock()
 
 	delete(rb.mu.futures, f.id)
-	if !f.stream {
-		f.reset()
-		rb.futurePool.Put(f)
-	}
+	f.reset()
+	rb.pool.futures.Put(f)
 }
 
 func (rb *remoteBackend) resetConn() error {
@@ -601,7 +612,7 @@ func (rb *remoteBackend) closeConn() {
 }
 
 func (rb *remoteBackend) newFuture() *Future {
-	return rb.futurePool.Get().(*Future)
+	return rb.pool.futures.Get().(*Future)
 }
 
 func (rb *remoteBackend) nextID() uint64 {
@@ -625,43 +636,73 @@ func (bf *goettyBasedBackendFactory) Create(remote string) (Backend, error) {
 }
 
 type stream struct {
-	id       uint64
-	ctx      context.Context
-	cancel   context.CancelFunc
-	c        chan Message
-	sendFunc func(f *Future) error
+	c              chan Message
+	sendFunc       func(m backendSendMessage) error
+	activeFunc     func()
+	unregisterFunc func(*stream)
+	ctx            context.Context
+	cancel         context.CancelFunc
 
+	// reset fields
+	id uint64
 	mu struct {
 		sync.RWMutex
 		closed bool
 	}
 }
 
-func newStream(id uint64, c chan Message, sendFunc func(f *Future) error) *stream {
+func newStream(c chan Message,
+	sendFunc func(m backendSendMessage) error,
+	unregisterFunc func(*stream),
+	activeFunc func()) *stream {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &stream{
-		id:       id,
-		c:        c,
-		sendFunc: sendFunc,
-		ctx:      ctx,
-		cancel:   cancel,
+	s := &stream{
+		c:              c,
+		ctx:            ctx,
+		cancel:         cancel,
+		sendFunc:       sendFunc,
+		unregisterFunc: unregisterFunc,
+		activeFunc:     activeFunc,
 	}
+	s.setFinalizer()
+	return s
+}
+
+func (s *stream) init(id uint64) {
+	s.id = id
+	s.mu.closed = false
+	for {
+		select {
+		case <-s.c:
+		default:
+			return
+		}
+	}
+}
+
+func (s *stream) setFinalizer() {
+	runtime.SetFinalizer(s, func(s *stream) {
+		s.destroy()
+	})
+}
+
+func (s *stream) destroy() {
+	close(s.c)
+	s.cancel()
 }
 
 func (s *stream) Send(request Message, opts SendOptions) error {
 	if s.id != request.GetID() {
 		panic("request.id != stream.id")
 	}
-
+	s.activeFunc()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.mu.closed {
 		return errStreamClosed
 	}
 
-	f := newFutureWithChan(s.c)
-	f.init(s.ctx, request, opts, true)
-	return s.sendFunc(f)
+	return s.sendFunc(backendSendMessage{ctx: s.ctx, request: request, opts: opts})
 }
 
 func (s *stream) Receive() (chan Message, error) {
@@ -673,13 +714,6 @@ func (s *stream) Receive() (chan Message, error) {
 	return s.c, nil
 }
 
-func (s *stream) closed() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	return s.mu.closed
-}
-
 func (s *stream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -688,14 +722,39 @@ func (s *stream) Close() error {
 		return nil
 	}
 
+	s.c <- nil
 	s.mu.closed = true
-	s.cancel()
-
-	// all futures will not write s.c
-	close(s.c)
+	s.unregisterFunc(s)
 	return nil
 }
 
 func (s *stream) ID() uint64 {
 	return s.id
+}
+
+func (s *stream) done(message Message) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.mu.closed {
+		return
+	}
+
+	s.c <- message
+}
+
+type backendSendMessage struct {
+	ctx       context.Context
+	request   Message
+	opts      SendOptions
+	completed func()
+}
+
+func (m backendSendMessage) timeout() bool {
+	select {
+	case <-m.ctx.Done():
+		return true
+	default:
+		return false
+	}
 }

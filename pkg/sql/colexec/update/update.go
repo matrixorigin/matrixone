@@ -30,7 +30,7 @@ func Prepare(_ *process.Process, _ interface{}) error {
 	return nil
 }
 
-func Call(proc *process.Process, arg interface{}) (bool, error) {
+func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 	p := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 	if bat == nil || len(bat.Zs) == 0 {

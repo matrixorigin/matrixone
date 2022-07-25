@@ -17,7 +17,7 @@ package plan
 import (
 	"bytes"
 	"encoding/json"
-	"io/ioutil"
+	"os"
 	"strings"
 	"testing"
 
@@ -26,12 +26,13 @@ import (
 )
 
 //only use in developing
-func TestSingleSql(t *testing.T) {
+func TestSingleSQL(t *testing.T) {
 	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
 	// sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
-	sql := "select @str_var, @int_var, @bool_var, @@global.float_var, @@session.null_var"
+	sql := "prepare stmt1 from 'select current_timestamp() + 1'"
+	// sql := "explain a"
 	// sql := "select 18446744073709551500"
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
@@ -380,7 +381,7 @@ func TestSingleSql(t *testing.T) {
 // }
 
 //test single table plan building
-func TestSingleTableSqlBuilder(t *testing.T) {
+func TestSingleTableSQLBuilder(t *testing.T) {
 	mock := NewMockOptimizer()
 
 	// should pass
@@ -427,6 +428,21 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SET @var = abs(-1), @@session.string_var = 'aaa'",
 		"SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'",
 		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_NAME", //test distinct with order by
+
+		"prepare stmt1 from select * from nation",
+		"prepare stmt1 from select * from nation where n_name = ?",
+		"prepare stmt1 from 'select * from nation where n_name = ?'",
+		"prepare stmt1 from 'update nation set n_name = ? where n_nationkey > ?'",
+		"prepare stmt1 from 'delete from nation where n_nationkey > ?'",
+		"prepare stmt1 from 'insert into nation select * from nation2 where n_name = ?'",
+		"prepare stmt1 from 'select * from nation where n_name = ?'",
+		"prepare stmt1 from 'drop table t1'",
+		"prepare stmt1 from 'create table t1 (a int)'",
+		"prepare stmt1 from select N_REGIONKEY from nation group by N_REGIONKEY having abs(nation.N_REGIONKEY - ?) > ?",
+		"execute stmt1",
+		"execute stmt1 using @str_var, @@global.int_var",
+		"deallocate prepare stmt1",
+		"drop prepare stmt1",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -439,7 +455,6 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT N_NAME FROM NATION WHERE ffff(N_REGIONKEY) > 0",             //function name not exist
 		"SELECT NATION.N_NAME FROM NATION a",                                // mysql should error, but i don't think it is necesssary
 		"select n_nationkey, sum(n_nationkey) from nation",
-		"select n_name from nation where n_name != @not_exist_var",
 		"SET @var = abs(a)", // can't use column
 		"SET @var = avg(2)", // can't use agg function
 
@@ -447,6 +462,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_REGIONKEY", //test distinct with order by
 		//"select 18446744073709551500",                             //over int64
 		//"select 0xffffffffffffffff",                               //over int64
+
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -748,7 +764,7 @@ func TestResultColumns(t *testing.T) {
 		return GetResultColumnsFromPlan(logicPlan)
 	}
 
-	returnNilSql := []string{
+	returnNilSQL := []string{
 		"begin",
 		"commit",
 		"rollback",
@@ -760,14 +776,14 @@ func TestResultColumns(t *testing.T) {
 		"create table tbl_name (b int unsigned, c char(20))",
 		"drop table nation",
 	}
-	for _, sql := range returnNilSql {
+	for _, sql := range returnNilSQL {
 		columns := getColumns(sql)
 		if columns != nil {
 			t.Fatalf("sql:%+v, return columns should be nil", sql)
 		}
 	}
 
-	returnColumnsSql := map[string]string{
+	returnColumnsSQL := map[string]string{
 		"SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_REGIONKEY > 0 ORDER BY a DESC":            "N_NAME,a",
 		"select n_nationkey, sum(n_regionkey) from (select * from nation) sub group by n_nationkey": "n_nationkey,sum(n_regionkey)",
 		"show variables": "Variable_name,Value",
@@ -777,7 +793,7 @@ func TestResultColumns(t *testing.T) {
 		"show tables":              "Tables_in_tpch",
 		"show columns from nation": "Field,Type,Null,Key,Default,Comment",
 	}
-	for sql, colsStr := range returnColumnsSql {
+	for sql, colsStr := range returnColumnsSQL {
 		cols := strings.Split(colsStr, ",")
 		columns := getColumns(sql)
 		if len(columns) != len(cols) {
@@ -792,7 +808,7 @@ func TestResultColumns(t *testing.T) {
 	}
 }
 
-func getJson(v any, t *testing.T) []byte {
+func getJSON(v any, t *testing.T) []byte {
 	b, err := json.Marshal(v)
 	if err != nil {
 		t.Logf("%+v", v)
@@ -809,14 +825,16 @@ func outPutPlan(logicPlan *Plan, toFile bool, t *testing.T) {
 	var json []byte
 	switch logicPlan.Plan.(type) {
 	case *plan.Plan_Query:
-		json = getJson(logicPlan.GetQuery(), t)
+		json = getJSON(logicPlan.GetQuery(), t)
 	case *plan.Plan_Tcl:
-		json = getJson(logicPlan.GetTcl(), t)
+		json = getJSON(logicPlan.GetTcl(), t)
 	case *plan.Plan_Ddl:
-		json = getJson(logicPlan.GetDdl(), t)
+		json = getJSON(logicPlan.GetDdl(), t)
+	case *plan.Plan_Dcl:
+		json = getJSON(logicPlan.GetDcl(), t)
 	}
 	if toFile {
-		err := ioutil.WriteFile("/tmp/mo_plan_test.json", json, 0777)
+		err := os.WriteFile("/tmp/mo_plan_test.json", json, 0777)
 		if err != nil {
 			t.Logf("%+v", err)
 		}
@@ -835,13 +853,13 @@ func runOneStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 	return BuildPlan(ctx, stmts[0])
 }
 
-func runTestShouldPass(opt Optimizer, t *testing.T, sqls []string, printJson bool, toFile bool) {
+func runTestShouldPass(opt Optimizer, t *testing.T, sqls []string, printJSON bool, toFile bool) {
 	for _, sql := range sqls {
 		logicPlan, err := runOneStmt(opt, t, sql)
 		if err != nil {
 			t.Fatalf("%+v, sql=%v", err, sql)
 		}
-		if printJson {
+		if printJSON {
 			outPutPlan(logicPlan, toFile, t)
 		}
 	}

@@ -89,7 +89,3 @@ The function returns the nearest number of the specified order. In case when giv
 +--------------+
 
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.

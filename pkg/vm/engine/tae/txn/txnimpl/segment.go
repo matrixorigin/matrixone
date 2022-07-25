@@ -89,7 +89,7 @@ func (it *segmentIt) Valid() bool {
 
 func (it *segmentIt) Next() {
 	var err error
-	valid := true
+	var valid bool
 	for {
 		it.linkIt.Next()
 		node := it.linkIt.Get()

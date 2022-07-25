@@ -25,4 +25,4 @@
 ## **限制**
 
 - 算数运算符只适用于数字之间的计算。
-- 确保各个组件和子组件的计算的精度标准，参见[强制转换函数和运算符概述](cast-functions-and-operators-overview.md)。
+- 确保各个组件和子组件的计算的精度标准，参见[强制转换函数和运算符概述](../cast-functions-and-operators/cast-functions-and-operators-overview.md)。

@@ -106,9 +106,10 @@ func (seg *TxnSegment) SoftDeleteBlock(id uint64) (err error)                   
 func (seg *TxnSegment) GetBlock(id uint64) (blk handle.Block, err error)        { return }
 func (seg *TxnSegment) CreateBlock() (blk handle.Block, err error)              { return }
 func (seg *TxnSegment) CreateNonAppendableBlock() (blk handle.Block, err error) { return }
-func (blk *TxnSegment) BatchDedup(containers.Vector) (err error)                { return }
+func (seg *TxnSegment) BatchDedup(containers.Vector) (err error)                { return }
 
 // func (blk *TxnBlock) IsAppendable() bool                                   { return true }
+
 func (blk *TxnBlock) GetTotalChanges() int                                  { return 0 }
 func (blk *TxnBlock) IsAppendableBlock() bool                               { return true }
 func (blk *TxnBlock) Fingerprint() *common.ID                               { return &common.ID{} }

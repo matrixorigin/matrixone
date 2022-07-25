@@ -29,8 +29,8 @@ type ColumnView struct {
 	mask  *roaring.Bitmap
 }
 
-// func NewColumnView(chain *ColumnChain) *ColumnView {
 func NewColumnView() *ColumnView {
+	// func NewColumnView(chain *ColumnChain) *ColumnView {
 	return &ColumnView{
 		links: make(map[uint32]*common.Link),
 		mask:  roaring.New(),
@@ -51,7 +51,7 @@ func (view *ColumnView) CollectUpdates(ts uint64) (mask *roaring.Bitmap, vals ma
 		if err == nil {
 			vals[row] = v
 			mask.Add(row)
-		} else if err == txnif.TxnInternalErr {
+		} else if err == txnif.ErrTxnInternal {
 			break
 		}
 		err = nil
@@ -95,7 +95,7 @@ func (view *ColumnView) GetValue(key uint32, startTs uint64) (v any, err error) 
 				if state == txnif.TxnStateCommitted {
 					// 3.1 If committed. use this node
 					break
-				} else if state == txnif.TxnStateRollbacked {
+				} else if state == txnif.TxnStateRollbacked || state == txnif.TxnStateRollbacking {
 					// 3.2 If rollbacked. go to prev node
 					err = nil
 					v = nil
@@ -104,7 +104,7 @@ func (view *ColumnView) GetValue(key uint32, startTs uint64) (v any, err error) 
 				} else if state == txnif.TxnStateCommitting {
 					logutil.Fatal("txn state error")
 				} else if state == txnif.TxnStateUnknown {
-					err = txnif.TxnInternalErr
+					err = txnif.ErrTxnInternal
 					v = nil
 					break
 				}
@@ -139,7 +139,7 @@ func (view *ColumnView) PrepapreInsert(key uint32, ts uint64) (err error) {
 	if node.txn == nil {
 		// 1.1 The update was committed after txn start. w-w conflict
 		if node.GetCommitTSLocked() > ts {
-			err = txnif.TxnWWConflictErr
+			err = txnif.ErrTxnWWConflict
 			node.RUnlock()
 			return
 		}
@@ -155,7 +155,7 @@ func (view *ColumnView) PrepapreInsert(key uint32, ts uint64) (err error) {
 	// 3. The specified row has other uncommitted change
 	// Note: Here we have some overkill to proactivelly w-w with committing txn
 	node.RUnlock()
-	err = txnif.TxnWWConflictErr
+	err = txnif.ErrTxnWWConflict
 	return
 }
 
@@ -177,7 +177,7 @@ func (view *ColumnView) Insert(key uint32, un txnif.UpdateNode) (err error) {
 	if node.txn == nil {
 		// 1.1 The update was committed after txn start. w-w conflict
 		if node.GetCommitTSLocked() > n.GetStartTS() {
-			err = txnif.TxnWWConflictErr
+			err = txnif.ErrTxnWWConflict
 			node.RUnlock()
 			return
 		}
@@ -195,7 +195,7 @@ func (view *ColumnView) Insert(key uint32, un txnif.UpdateNode) (err error) {
 	// 3. The specified row has other uncommitted change
 	// Note: Here we have some overkill to proactivelly w-w with committing txn
 	node.RUnlock()
-	err = txnif.TxnWWConflictErr
+	err = txnif.ErrTxnWWConflict
 	return
 }
 

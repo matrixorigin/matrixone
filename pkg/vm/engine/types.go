@@ -39,6 +39,7 @@ type Attribute struct {
 	Type    types.Type  // type of attribute
 	Default DefaultExpr // default value of this attribute.
 	Primary bool        // if true, it is primary key
+	Comment string      // comment of attribute
 }
 
 type DefaultExpr struct {

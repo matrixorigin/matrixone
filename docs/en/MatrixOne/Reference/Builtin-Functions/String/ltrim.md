@@ -30,7 +30,3 @@ This function LTRIM() returns the string with leading space characters removed.
 | matrix   | matrixone |
 +----------+-----------+
 ```
-
-## Constraints
-
-Currently, MatrixOne doesn't support select function() without from tables.
