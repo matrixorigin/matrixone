@@ -1,0 +1,42 @@
+create table t_dates(
+a_date date,
+b_datetime datetime,
+c_timestamp timestamp
+);
+
+insert into t_dates values('1999-04-05','1999-04-05 11:01:02','1999-04-05 11:01:02');
+insert into t_dates values('2004-04-03','2004-04-03 13:11:10','2004-04-03 13:11:10');
+insert into t_dates values('1999-04-05','1999-04-05 11:01:02','1999-04-05 11:01:02.123456');
+insert into t_dates values('2004-04-03','2004-04-03 13:11:10','2004-04-03 13:11:10.123456');
+insert into t_dates values('1999-04-05','1999-04-05 11:01:02.123456','1999-04-05 11:01:02.123456');
+insert into t_dates values('1999-04-05','2004-04-03 13:11:10.123456','2004-04-03 13:11:10.123456');
+
+
+#1.各种参数类型测试
+#date入参类型为date、datetime,timestamp
+select date_format(a_date, '%W %M %Y'),date_format(b_datetime, '%W %M %Y'),date_format(c_timestamp, '%W %M %Y') from t_dates;
+
+#date入参类型为NULL，或format入参类型为NULL
+select date_format(NULL, '%W %M %Y'),date_format('1999-04-05 11:01:02', NULL),date_format(NULL, NULL);
+
+
+#date入参类型为string的测试
+SELECT DATE_FORMAT('2012-12-21 23:12:34.123456', '%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%');
+
+#2.date_format的第一个参数为常量测试
+#format包含所有格式匹配符
+SELECT DATE_FORMAT('2010-01-07 23:12:34.12345', '%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%');
+
+#format包含所有格式匹配符
+SELECT DATE_FORMAT('0001-01-01 00:00:00.123456', '%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%');
+
+#format包含所有格式匹配符于其他字符混合
+SELECT DATE_FORMAT('2012-12-21 23:12:34.123456', 'abc%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y!123 %%xyz %z');
+
+#3.date_format的第一个参数为表字段批量测试
+select date_format(a_date,'%Y-%m-%d %H:%i:%s'),date_format(b_datetime,'%Y-%m-%d %H:%i:%s'),date_format(c_timestamp,'%Y-%m-%d %H:%i:%s') from t_dates;
+
+#4.date_format的第一个参数为表达式批量测试
+select date_format(date('2004-04-03 13:11:10'),'%Y-%m-%d %H:%i:%s'),date_format(from_unixtime(123456),'%Y-%m-%d %H:%i:%s'),date_format(cast('2004-04-03 13:11:10' as datetime),'%Y-%m-%d %H:%i:%s') from t_dates;
+
+drop table t_dates;
