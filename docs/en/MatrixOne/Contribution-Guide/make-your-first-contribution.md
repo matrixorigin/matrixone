@@ -6,7 +6,7 @@ This document will help you get started on your first contribution to MatrixOne.
 
 ## **How to Contribute?**
 
-Before setting about contribution, you need figure out what area you are trying to help us in. You can see [Types of contributions](How-to-Contribute/types-of-contributions.md) for more details.
+Before setting out contributions, you need to figure out what area you are trying to help us in. You can see [Types of contributions](How-to-Contribute/types-of-contributions.md) for more details.
 
 As your first-ever contribution, it can be selected from the following categories which require little technical background of the contributor:
 
@@ -14,16 +14,16 @@ As your first-ever contribution, it can be selected from the following categorie
 
 * To improve the MatrixOne documentation
 
-File an issue to describe the problem before working on it. In addition, you will also find issues labelled with `good-first-issue`, which represents issues suitable for new contributors. Such Issues contain clear steps and expected output. You may start your first contribution based on these issues.
+File an issue to describe the problem before working on it. In addition, you will also find issues labeled with `good-first-issue`, which represents issues suitable for new contributors. Such Issues contain clear steps and expected output. You may start your first contribution based on these issues.
 
 ## **Assign Your Issue**
 
 It's difficult to report an issue when you are just a newcomer on account of little knowledge of MatrixOne or relative contents, so we list [`good-first-issues`](https://github.com/matrixorigin/matrixone/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22) suitable for new contributors to work with and be easy to fix.
-After deciding a suitable issue to work on, you can comment `/assign` on the issue you would like to work on, you will be automatically assigned to the issue. You can then find yourself listed under Assignees section.
+After deciding on a suitable issue to work on, you can comment `/assign` on the issue you would like to work on, and you will be automatically assigned to the issue. You can then find yourself listed under the Assignees section.
 
 ## **Prerequisite**
 
-Before working on the issue you are assigned, please make sure you have set up development environment and installed MatrixOne.  
+Before working on the issue you are assigned, please make sure you have set up a development environment and installed MatrixOne.  
 You can see [Preparation](How-to-Contribute/preparation.md) for more details.
 
 ## **Workflow**
@@ -83,7 +83,7 @@ git add <filename>
 ```
 
 `<filename>` is the name of the file you just modified.
-And you can use following command to add all the files in the current folder:
+And you can use the following command to add all the files in the current folder:
 
 ```
 git add .
@@ -106,11 +106,11 @@ After committing your modification, you should push your local branch to GitHub 
 git push origin main:NEW_BRANCH
 ```
 
-`NEW_BRANCH` is the name of new branch you created and push to. Also, you can replace it with another name you want.
+`NEW_BRANCH` is the name of the new branch you created and push to. Also, you can replace it with another name you want.
 
 ### **Step 7 Create a pull request**
 
-Having pushed your changes, you can visit your folk at `https://github.com/$user/matrixone`, and click the **Compare & Pull Request** button to create a pull request in `NEW_BRANCH` for your modification to the MatrixOne repository. 
+Having pushed your changes, you can visit your folk at `https://github.com/$user/matrixone`, and click the **Compare & Pull Request** button to create a pull request in `NEW_BRANCH` for your modification to the MatrixOne repository.
 
 !!! Note
     You should fill in the required information based on the PR template.
@@ -118,13 +118,13 @@ Having pushed your changes, you can visit your folk at `https://github.com/$user
 ![Pull Request](https://github.com/matrixorigin/artwork/blob/main/docs/contribution-guide/contribution-guide-pr.png?raw=true)
 ![Pull Request Template](https://github.com/matrixorigin/artwork/blob/main/docs/contribution-guide/contribution-guide-pr-template.png?raw=true)
 
-Once your PR is opened, it will be assigned to reviewers. These reviewers will check your contribution and make a detail review according to correctness, bugs, style and so on.
+Once your PR is opened, it will be assigned to reviewers. These reviewers will check your contribution and do a detailed review according to the correctness, bugs, style, sand so on.
 
 ### **Step 8 After merging, Keep your repo in sync**
 
-Congratulations on that your contributions are accepted and merged to the project!  
-And there are some operations left to do, which helps keep project committing history clean and keep your local and remote repo synchronized with MatrixOne repo.  
-Overrides local commiting history with following command:  
+Congratulations that your contributions are accepted and merged into the project!  
+And there are some operations left to do, which help keep project committing history clean and keep your local and remote repo synchronized with MatrixOne repo.  
+Overrides local committing history with the following command:  
 
 ```
 git pull --force upstream main:main

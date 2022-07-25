@@ -11,7 +11,7 @@ It's helpful to understand a few terms before reading our architecture documenta
 | C  |  |
 | Cluster  | A distributed MatrixOne deployment, which acts as a single logical application.|
 | D  |  |
- | Data Storage  | A DataStorage is an interface for implementing distributed storage service. It must be defined in prior to using MatrixCube. DataStorage needs to be implemented based on the characteristics of storage engine.|
+ | Data Storage  | A DataStorage is an interface for implementing distributed storage service. <!--It must be defined in prior to using MatrixCube.--> DataStorage needs to be implemented based on the characteristics of storage engine.|
 | E  |  |
   | Event Notify | The machanism of synchronizing heartbeat information to all nodes is called an event notify. |
   | Explicit Transactions| Explicit Transaction has the beginning, ending and rollback of transactions with the command Begin Transaction, Commit Transaction and Rollback Transaction. |
@@ -22,17 +22,16 @@ It's helpful to understand a few terms before reading our architecture documenta
   |I|  |
   | Implicit Transactions| Implicit Transaction is the auto commit. There is no beginning or ending of the transaction. |
  | M  |  |
-  | MatrixCube | MatrixCube is a framework for building distributed systems, which offers guarantees about reliability, consistency, and scalability. It is designed to facilitate distributed, stateful application building to allow developers only need to focus on the business logic on a single node. |
  | P  |  |
-  | Prophet | Prophet is a scheduling module in MatrixCube. It takes charge of Auto-Rebalance, which keeps the system storage level and read/write throughput level balanced across Stores. The initial 3 Stores of a MatrixCube cluster are all Prophet Nodes. |
+  | Prophet | Prophet is a scheduling module<!-- in MatrixCube-->. It takes charge of Auto-Rebalance, which keeps the system storage level and read/write throughput level balanced across Stores. The initial 3 Stores of a MatrixCube cluster are all Prophet Nodes. |
    | Pure Storage | In contrast to Prophet, pure storage is another type of node, which doesn't handle any scheduling job and works as simple storage. |
 | R  |  |
   | Replica | To provide reliable service, each shard is stored not only once, it will have several copy stored in different stores. Every copy of a shard is called a Replica. |
   | S  |  |
   | Snapshot Isolation (SI) | Snapshot Isolation is a multi-version concurrency control approach that is widely used in practice. MatrixOne supports distributed transaction of snapshot isolation level. |
- | Store | A MatrixCube distributed system consists of several physical servers, our data are stored across these physical server. We call each server inside this cluster a Store. |
+ | Store | A <!--MatrixCube-->distributed system consists of several physical servers, our data are stored across these physical server. We call each server inside this cluster a Store. |
   | Shard | In MatrixOne, the data are split into different partitions to store in order to get better scalability. Each partition is called a Shard. In our design, a new created table is initially a Shard. When the size of the table exceeds the Shard size limit, the Shard will split. |
- | Shard Splitting | There is a certain limit to a Shard size. Whenever a Shard exceeds its storage limit, MatrixCube splits a Shard into two Shards and keep each Shard with the same storage level. |
+ | Shard Splitting | There is a certain limit to a Shard size. Whenever a Shard exceeds its storage limit,<!--MatrixCube-->Distributed system splits a Shard into two Shards and keep each Shard with the same storage level. |
   | Shard Proxy | The Shard Proxy is a central module to accept all user read/write requests and route requests to corresponding nodes.|
 
 ### **Concepts**

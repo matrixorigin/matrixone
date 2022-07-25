@@ -42,7 +42,7 @@ MatrixOne is a future-oriented hyperconverged cloud & edge native DBMS that supp
 
 * **Simplify Database Management and Maintenance**
 
-     To solve the problem of high and unpredictable costs of the database selection process, management & maintenance due to database overabundance, MatrixOne's all-in-one architecture will significantly simplify database management and maintenance, a single database can serve multiple data applications.
+     To solve the problem of high and unpredictable costs of the database selection process, management & maintenance due to database overabundance, MatrixOne's all-in-one architecture will significantly simplify database management and maintenance. A single database can serve multiple data applications.
 
 * **Reduce Data Fragmentation and Inconsistency**
 
@@ -69,4 +69,3 @@ MatrixOne is a future-oriented hyperconverged cloud & edge native DBMS that supp
 This page outlines the overall introduction of MatrixOne. For information on other options that are available when you what to know more about MatrixOne product design, see the following:
 
 * [MatrixOne Architecture](matrixone-architecture.md)
-* [MatrixOne Tech Design](MatrixOne-Tech-Design/matrixone-techdesign.md)
