@@ -58,10 +58,7 @@ func NewBatchWithVectors(vs []*vector.Vector, zs []int64) *batch.Batch {
 			zs = MakeBatchZs(l, false)
 		}
 		bat.Zs = zs
-
-		for i := range vs {
-			bat.Vecs[i] = vs[i]
-		}
+		bat.Vecs = vs
 	}
 	return bat
 }
