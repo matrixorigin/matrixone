@@ -27,6 +27,8 @@ import (
 	"sync"
 )
 
+//TODO parallel read and write
+
 // LocalFS is a FileService implementation backed by local file system
 type LocalFS struct {
 	rootPath string
@@ -371,40 +373,66 @@ func (l *LocalFS) toNativeFilePath(filePath string) string {
 
 var _ MutableFileService = new(LocalFS)
 
-func (l *LocalFS) Mutate(ctx context.Context, vector IOVector) error {
-
-	// sort
-	sort.Slice(vector.Entries, func(i, j int) bool {
-		return vector.Entries[i].Offset < vector.Entries[j].Offset
-	})
-
+func (l *LocalFS) NewMutator(filePath string) (Mutator, error) {
 	// open
-	nativePath := l.toNativeFilePath(vector.FilePath)
+	nativePath := l.toNativeFilePath(filePath)
 	f, err := os.OpenFile(nativePath, os.O_RDWR, 0644)
 	if os.IsNotExist(err) {
-		return ErrFileNotFound
+		return nil, ErrFileNotFound
 	}
-	defer f.Close()
+	return &_LocalFSMutator{
+		file: f,
+	}, nil
+}
+
+type _LocalFSMutator struct {
+	file *os.File
+}
+
+func (l *_LocalFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error {
 
 	// write
-	for _, entry := range vector.Entries {
-		_, err := f.Seek(int64(entry.Offset), 0)
-		if err != nil {
-			return err
-		}
-		var src io.Reader
+	for _, entry := range entries {
+
 		if entry.ReaderForWrite != nil {
-			src = entry.ReaderForWrite
+			// seek and copy
+			_, err := l.file.Seek(int64(entry.Offset), 0)
+			if err != nil {
+				return err
+			}
+			n, err := io.Copy(l.file, entry.ReaderForWrite)
+			if err != nil {
+				return err
+			}
+			if int(n) != entry.Size {
+				return ErrSizeNotMatch
+			}
+
 		} else {
-			src = bytes.NewReader(entry.Data)
+			// WriteAt
+			n, err := l.file.WriteAt(entry.Data, int64(entry.Offset))
+			if err != nil {
+				return err
+			}
+			if int(n) != entry.Size {
+				return ErrSizeNotMatch
+			}
 		}
-		n, err := io.Copy(f, src)
-		if err != nil {
-			return err
-		}
-		if int(n) != entry.Size {
-			return ErrSizeNotMatch
-		}
+
+	}
+
+	return nil
+}
+
+func (l *_LocalFSMutator) Close() error {
+	// sync
+	if err := l.file.Sync(); err != nil {
+		return err
+	}
+
+	// close
+	if err := l.file.Close(); err != nil {
+		return err
 	}
 
 	return nil

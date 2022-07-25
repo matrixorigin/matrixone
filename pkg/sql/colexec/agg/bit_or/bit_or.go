@@ -14,53 +14,20 @@
 
 package bit_or
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-)
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
-func TransInt(a any) int64 {
-	switch v := a.(type) {
-	case int8:
-		return int64(v)
-	case int16:
-		return int64(v)
-	case int32:
-		return int64(v)
-	case int64:
-		return int64(v)
-	case uint8:
-		return int64(v)
-	case uint16:
-		return int64(v)
-	case uint32:
-		return int64(v)
-	case uint64:
-		return int64(v)
-	case float32:
-		return int64(v)
-	case float64:
-		return int64(v)
-	default:
-		return 0 //can't reach
-	}
+func New[T1 types.Ints | types.UInts | types.Floats]() *BitOr[T1] {
+	return &BitOr[T1]{}
 }
 
-func ReturnType(_ []types.Type) types.Type {
-	return types.New(types.T_int64, 0, 0, 0)
+func (bo *BitOr[T1]) Grows(_ int) {
 }
 
-func New[T1, T2 any]() *BitOr[T1, T2] {
-	return &BitOr[T1, T2]{}
-}
-
-func (c *BitOr[T1, T2]) Grows(_ int) {
-}
-
-func (c *BitOr[T1, T2]) Eval(vs []T2) []T2 {
+func (bo *BitOr[T1]) Eval(vs []int64) []int64 {
 	return vs
 }
 
-func (c *BitOr[T1, T2]) Merge(_, _ int64, x, y T2, IsEmpty1 bool, IsEmpty2 bool, _ any) (T2, bool) {
+func (bo *BitOr[T1]) Merge(_, _ int64, x, y int64, IsEmpty1 bool, IsEmpty2 bool, _ any) (int64, bool) {
 	if IsEmpty1 && !IsEmpty2 {
 		return y, false
 	} else if IsEmpty2 && !IsEmpty1 {
@@ -68,15 +35,16 @@ func (c *BitOr[T1, T2]) Merge(_, _ int64, x, y T2, IsEmpty1 bool, IsEmpty2 bool,
 	} else if IsEmpty1 && IsEmpty2 {
 		return x, true
 	} else {
-		return any(TransInt(x) | TransInt(y)).(T2), false
+		return x | y, false
 	}
 }
 
-func (c *BitOr[T1, T2]) Fill(_ int64, v1 T1, v2 T2, z int64, IsEmpty bool, hasNull bool) (T2, bool) {
+func (bo *BitOr[T1]) Fill(_ int64, v1 T1, v2 int64, z int64, IsEmpty bool, hasNull bool) (int64, bool) {
 	if hasNull {
 		return v2, IsEmpty
 	} else if IsEmpty {
-		return (any)(TransInt(v1)).(T2), false
+		return int64(v1), false
+	} else {
+		return int64(v1) | v2, false
 	}
-	return any(TransInt(v1) | TransInt(v2)).(T2), false
 }

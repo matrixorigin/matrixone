@@ -14,7 +14,13 @@
 
 package count
 
-type Count[T1, T2 any] struct {
+import "github.com/matrixorigin/matrixone/pkg/container/types"
+
+type Decimal128AndString interface {
+	types.Decimal128 | []byte
+}
+
+type Count[T1 types.Generic | Decimal128AndString] struct {
 	// isStar is true: count(*)
 	isStar bool
 }

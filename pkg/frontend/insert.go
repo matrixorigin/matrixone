@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -682,10 +683,12 @@ func makeExprFromVal(typ types.Type, value interface{}, isNull bool) tree.Expr {
 		res := value.(types.Timestamp).String2(typ.Precision)
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	case types.T_decimal64:
-		res := string(value.(types.Decimal64).Decimal64ToString(typ.Scale))
+		val, _ := value.(types.Decimal64)
+		res := val.ToString()
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	case types.T_decimal128:
-		res := string(value.(types.Decimal128).Decimal128ToString(typ.Scale))
+		val, _ := value.(types.Decimal128)
+		res := val.ToString()
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	}
 	return tree.NewNumVal(constant.MakeUnknown(), "NULL", false)
@@ -997,13 +1000,17 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 		case types.T_decimal64:
 			res, err := types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
 			if err != nil {
-				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
+				if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
+					return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
+				}
 			}
 			return res, nil
 		case types.T_decimal128:
 			res, err := types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
 			if err != nil {
-				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
+				if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
+					return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
+				}
 			}
 			return res, nil
 		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
@@ -1093,13 +1100,17 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 		case types.T_decimal64:
 			res, err := types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
 			if err != nil {
-				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
+				if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
+					return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
+				}
 			}
 			return res, nil
 		case types.T_decimal128:
 			res, err := types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
 			if err != nil {
-				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
+				if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
+					return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
+				}
 			}
 			return res, nil
 		}
@@ -1183,13 +1194,17 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 		case types.T_decimal64:
 			res, err := types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
 			if err != nil {
-				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
+				if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
+					return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
+				}
 			}
 			return res, nil
 		case types.T_decimal128:
 			res, err := types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
 			if err != nil {
-				return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
+				if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
+					return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
+				}
 			}
 			return res, nil
 		}

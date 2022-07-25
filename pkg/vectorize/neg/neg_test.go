@@ -16,9 +16,10 @@ package neg
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func makeIbuffer(l int) []int64 {
@@ -52,30 +53,39 @@ func TestI64Sum(t *testing.T) {
 }
 
 func TestDecimal64Neg(t *testing.T) {
-	xs := []types.Decimal64{123, 234, 345, 0, -234}
+	xs := []types.Decimal64{types.InitDecimal64(123), types.InitDecimal64(234), types.InitDecimal64(345), types.Decimal64_Zero, types.InitDecimal64(-234)}
 	rs := make([]types.Decimal64, len(xs))
 	rs = Decimal64Neg(xs, rs)
-	expectedResult := []types.Decimal64{-123, -234, -345, 0, 234}
-	require.Equal(t, expectedResult, rs)
+	expectedResult := []types.Decimal64{types.InitDecimal64(-123), types.InitDecimal64(-234), types.InitDecimal64(-345), types.Decimal64_Zero, types.InitDecimal64(234)}
+	for i, r := range rs {
+		require.True(t, r.Eq(expectedResult[i]))
+	}
 }
 
 func TestDecimal128Neg(t *testing.T) {
-	xs := make([]types.Decimal128, 5)
+	xs := make([]types.Decimal128, 6)
 	xs[0], _ = types.ParseStringToDecimal128("123456.789", 20, 5)
 	xs[1], _ = types.ParseStringToDecimal128("120000.789", 20, 5)
 	xs[2], _ = types.ParseStringToDecimal128("-123456.789", 20, 5)
 	xs[3], _ = types.ParseStringToDecimal128("0", 20, 5)
 	xs[4], _ = types.ParseStringToDecimal128("-123", 20, 5)
-	rs := make([]types.Decimal128, 5)
+	xs[5], _ = types.ParseStringToDecimal128("-123.456789", 20, 5)
+	rs := make([]types.Decimal128, 6)
 	rs = Decimal128Neg(xs, rs)
 
-	require.Equal(t, "-123456.78900", string(rs[0].Decimal128ToString(5)))
+	require.Equal(t, "-123456.789", string(rs[0].ToString()))
 
-	require.Equal(t, "-120000.78900", string(rs[1].Decimal128ToString(5)))
+	require.Equal(t, "-123456.79", string(rs[0].ToStringWithScale(2)))
 
-	require.Equal(t, "123456.78900", string(rs[2].Decimal128ToString(5)))
+	require.Equal(t, "-120000.79", string(rs[1].ToStringWithScale(2)))
 
-	require.Equal(t, "0", string(rs[3].Decimal128ToString(5)))
+	require.Equal(t, "123456.79", string(rs[2].ToStringWithScale(2)))
 
-	require.Equal(t, "123.00000", string(rs[4].Decimal128ToString(5)))
+	require.Equal(t, "0", string(rs[3].ToStringWithScale(0)))
+
+	require.Equal(t, "123", string(rs[4].ToStringWithScale(0)))
+
+	require.Equal(t, "123.45679", string(rs[5].ToStringWithScale(5)))
+
+	require.Equal(t, "123", string(rs[5].ToStringWithScale(0)))
 }

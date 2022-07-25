@@ -38,13 +38,22 @@ This `CASE` syntax returns the result for the first condition that is true. If n
 | true                                     |
 +------------------------------------------+
 1 row in set (0.00 sec)
+```
 
-> SELECT CASE 1 WHEN 1 THEN 'one'
-    -> WHEN 2 THEN 'two' ELSE 'more' END;
-+------------------------------------------------------+
-| case 1 when 1 then one when 2 then two else more end |
-+------------------------------------------------------+
-| one                                                  |
-+------------------------------------------------------+
-1 row in set (0.00 sec)
+```sql
+> CREATE TABLE t1 (a INT, b INT);
+Query OK, 0 rows affected (0.01 sec)
+
+> INSERT INTO t1 VALUES (1,1),(2,1),(3,2),(4,2),(5,3),(6,3);
+Query OK, 6 rows affected (0.01 sec)
+
+> SELECT CASE WHEN AVG(a)>=0 THEN 'Positive' ELSE 'Negative' END FROM t1 GROUP BY b;
++-------------------------------------------------------+
+| case when avg(a) >= 0 then Positive else Negative end |
++-------------------------------------------------------+
+| Positive                                              |
+| Positive                                              |
+| Positive                                              |
++-------------------------------------------------------+
+3 rows in set (0.00 sec)
 ```

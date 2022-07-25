@@ -67,8 +67,8 @@ func PutSels(sels []int64, proc *Process) {
 	proc.Reg.Ss = append(proc.Reg.Ss, sels)
 }
 
-func (proc *Process) OperatorMemoryLimit() int64 {
-	return proc.Lim.Size
+func (proc *Process) OperatorOutofMemory(size int64) bool {
+	return proc.Lim.Size < size
 }
 
 func (proc *Process) SetInputBatch(bat *batch.Batch) {

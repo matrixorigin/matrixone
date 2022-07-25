@@ -391,7 +391,7 @@ user: dump
 password: 111
 
 ```
-$ mysql -h 127.0.0.1 -P 6001 -udump -p
+mysql -h 127.0.0.1 -P 6001 -udump -p
 Enter password:
 ```
 
