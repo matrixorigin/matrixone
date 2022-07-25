@@ -35,10 +35,6 @@ start transactions;
 show tables;
 tables_in_autocommit
 t1
-explain select * from t1;
-QUERY PLAN
-Project(cost=0.00..0.00 card=1.00 ndv=0.00 rowsize=0
-  ->  Table Scan on explain.t1(cost=0.00..0.00 card=1.00 ndv=0.00 rowsize=0
 commit;
 set autocommit=0;
 drop table if exists t1;
@@ -65,9 +61,6 @@ select * from t2;
 a
 insert into t1 values(3);
 explain select * from t1;
-QUERY PLAN
-Project(cost=0.00..0.00 card=3.00 ndv=0.00 rowsize=0
-  ->  Table Scan on explain.t1(cost=0.00..0.00 card=3.00 ndv=0.00 rowsize=0
 use autocommit;
 show tables;
 commit;
