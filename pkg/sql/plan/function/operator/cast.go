@@ -633,6 +633,10 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		return CastStringToBool(lv, rv, proc)
 	}
 
+	if isString(lv.Typ.Oid) && rv.Typ.Oid == types.T_json {
+		return CastStringToJson(lv, rv, proc)
+	}
+
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("parameter types [%s, %s] of cast function do not match", lv.Typ.Oid, rv.Typ.Oid))
 }
 
@@ -2243,6 +2247,56 @@ func CastNumValToBool[T constraints.Integer | constraints.Float](lv, rv *vector.
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
 	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastStringToJson(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	resultType := rv.Typ
+	vs := vector.MustBytesCols(lv)
+	if lv.IsScalar() {
+		srcStr := vs.Get(0)
+		vec := proc.AllocScalarVector(resultType)
+		rs := make([][]byte, 1)
+		json, err := types.ParseSliceToByteJson(srcStr)
+		if err != nil {
+			return nil, err
+		}
+		val, err := encoding.EncodeJson(json)
+		if err != nil {
+			return nil, err
+		}
+		rs[0] = val
+		nulls.Set(vec.Nsp, lv.Nsp)
+		err = vector.Append(vec, rs)
+		if err != nil {
+			return nil, err
+		}
+		return vec, nil
+	}
+	rs := make([][]byte, len(vs.Lengths))
+	mem := int64(0)
+	for i := range vs.Lengths {
+		if nulls.Contains(lv.Nsp, uint64(i)) {
+			continue
+		}
+		srcStr := vs.Get(int64(i))
+		json, err := types.ParseSliceToByteJson(srcStr)
+		if err != nil {
+			return nil, err
+		}
+		val, err := encoding.EncodeJson(json)
+		mem += int64(cap(val))
+		rs[i] = val
+	}
+	vec, err := proc.AllocVector(resultType, mem)
+	if err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	err = vector.Append(vec, rs)
+	if err != nil {
+		return nil, err
+	}
 	return vec, nil
 }
 
