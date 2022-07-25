@@ -245,9 +245,6 @@ func (s *Stopper) shutdownTask(id uint64) {
 func (s *Stopper) doRunCancelableTask(ctx context.Context, taskID uint64, name string, task func(context.Context)) {
 	s.setupTask(taskID, name)
 	go func() {
-		if err := recover(); err != nil {
-			panic(err)
-		}
 		defer func() {
 			s.shutdownTask(taskID)
 		}()
