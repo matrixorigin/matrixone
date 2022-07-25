@@ -16,7 +16,7 @@ package config
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -145,7 +145,7 @@ func (params *parameters) LoadParametersDefinitionFromFile(filename string) erro
 	}
 	defer pfile.Close()
 
-	fbytes, err := ioutil.ReadAll(pfile)
+	fbytes, err := io.ReadAll(pfile)
 	if err != nil {
 		return err
 	}
@@ -611,42 +611,6 @@ func isSubset(A []string, B []string) bool {
 check if x in a slice
 */
 func isInSlice(x string, arr []string) bool {
-	for _, y := range arr {
-		if x == y {
-			return true
-		}
-	}
-	return false
-}
-
-/**
-check if x in a slice
-*/
-func isInSliceBool(x bool, arr []bool) bool {
-	for _, y := range arr {
-		if x == y {
-			return true
-		}
-	}
-	return false
-}
-
-/**
-check if x in a slice
-*/
-func isInSliceInt64(x int64, arr []int64) bool {
-	for _, y := range arr {
-		if x == y {
-			return true
-		}
-	}
-	return false
-}
-
-/**
-check if x in a slice
-*/
-func isInSliceFloat64(x float64, arr []float64) bool {
 	for _, y := range arr {
 		if x == y {
 			return true

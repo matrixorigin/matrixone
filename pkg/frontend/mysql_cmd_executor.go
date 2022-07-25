@@ -924,6 +924,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 					return err
 				}
 
+				// XXX FIXME
 				// defs :=
 				table.TableDefs(ctx)
 				//
@@ -1954,6 +1955,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	return nil
 }
 
+/*
 func (mce *MysqlCmdExecutor) handleDDl(ses *Session, stmt tree.Statement, epoch uint64) error {
 	ctx := context.TODO()
 	txnHandler := ses.GetTxnHandler()
@@ -2001,6 +2003,7 @@ func (mce *MysqlCmdExecutor) handleDDl(ses *Session, stmt tree.Statement, epoch 
 	}
 	return nil
 }
+*/
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
 func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err error) {

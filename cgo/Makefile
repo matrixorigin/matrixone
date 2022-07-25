@@ -10,6 +10,7 @@ all: $(LIBS) $(OBJS)
 	ar -rcs libmo.a *.o
 	ranlib libmo.a
 	rm -f *.o
+	rm -f $(LIBS)
 
 libdecnumber.a:
 	(cd external; bash ./build.sh)

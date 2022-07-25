@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package count
+package fileservice
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"testing"
 
-type Decimal128AndString interface {
-	types.Decimal128 | []byte
-}
+	"github.com/stretchr/testify/assert"
+)
 
-type Count[T1 types.Generic | Decimal128AndString] struct {
-	// isStar is true: count(*)
-	isStar bool
+func TestLocalETLFS(t *testing.T) {
+
+	t.Run("file service", func(t *testing.T) {
+		testFileService(t, func() FileService {
+			dir := t.TempDir()
+			fs, err := NewLocalETLFS(dir)
+			assert.Nil(t, err)
+			return fs
+		})
+	})
+
 }

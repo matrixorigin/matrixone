@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package count
+package fileservice
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+// ETLFileService is an extension to the FileService
+type ETLFileService interface {
+	FileService
 
-type Decimal128AndString interface {
-	types.Decimal128 | []byte
-}
-
-type Count[T1 types.Generic | Decimal128AndString] struct {
-	// isStar is true: count(*)
-	isStar bool
+	// ETLCompatible marks the implementation to be compatible to ETL operations
+	// implementations must save file contents as-is
+	ETLCompatible()
 }

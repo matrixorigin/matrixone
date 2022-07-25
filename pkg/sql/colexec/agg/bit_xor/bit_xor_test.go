@@ -32,11 +32,11 @@ const (
 )
 
 func TestBitXor(t *testing.T) {
-	c := New[int8, int64]()
+	bx := New[int8]()
 	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
 	vec := testutil.NewVector(Rows, types.New(types.T_int8, 0, 0, 0), m, false, nil)
 	{
-		agg := agg.NewUnaryAgg(c, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill)
+		agg := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), bx.Grows, bx.Eval, bx.Merge, bx.Fill)
 		err := agg.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -48,13 +48,40 @@ func TestBitXor(t *testing.T) {
 		v.Free(m)
 	}
 	{
-		agg0 := agg.NewUnaryAgg(c, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill)
+		vec0 := testutil.NewVector(2, types.New(types.T_int8, 0, 0, 0), m, false, []int8{2, 2})
+		agg := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), bx.Grows, bx.Eval, bx.Merge, bx.Fill)
+		err := agg.Grows(1, m)
+		require.NoError(t, err)
+		agg.Fill(0, int64(0), 2, []*vector.Vector{vec0})
+		v, err := agg.Eval(m)
+		require.NoError(t, err)
+		// 2 XOR 2 --> 0
+		require.Equal(t, []int64{0}, vector.GetColumn[int64](v))
+		v.Free(m)
+		vec0.Free(m)
+	}
+	{
+		vec0 := testutil.NewVector(3, types.New(types.T_int8, 0, 0, 0), m, false, []int8{1, 2, 2})
+		agg := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), bx.Grows, bx.Eval, bx.Merge, bx.Fill)
+		err := agg.Grows(1, m)
+		require.NoError(t, err)
+		agg.Fill(0, int64(0), 1, []*vector.Vector{vec0})
+		agg.Fill(0, int64(1), 2, []*vector.Vector{vec0})
+		v, err := agg.Eval(m)
+		require.NoError(t, err)
+		// 1 XOR 2 XOR 2 --> 1
+		require.Equal(t, []int64{1}, vector.GetColumn[int64](v))
+		v.Free(m)
+		vec0.Free(m)
+	}
+	{
+		agg0 := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), bx.Grows, bx.Eval, bx.Merge, bx.Fill)
 		err := agg0.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
 			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
 		}
-		agg1 := agg.NewUnaryAgg(c, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill)
+		agg1 := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), bx.Grows, bx.Eval, bx.Merge, bx.Fill)
 		err = agg1.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -79,11 +106,11 @@ func TestBitXor(t *testing.T) {
 }
 
 func TestDist(t *testing.T) {
-	c := New[int8, int64]()
+	bx := New[int8]()
 	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
 	vec := testutil.NewVector(Rows, types.New(types.T_int8, 0, 0, 0), m, false, nil)
 	{
-		agg := agg.NewUnaryDistAgg(true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill)
+		agg := agg.NewUnaryDistAgg(true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), bx.Grows, bx.Eval, bx.Merge, bx.Fill)
 		err := agg.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -95,13 +122,13 @@ func TestDist(t *testing.T) {
 		v.Free(m)
 	}
 	{
-		agg0 := agg.NewUnaryDistAgg(true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill)
+		agg0 := agg.NewUnaryDistAgg(true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), bx.Grows, bx.Eval, bx.Merge, bx.Fill)
 		err := agg0.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
 			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
 		}
-		agg1 := agg.NewUnaryDistAgg(true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill)
+		agg1 := agg.NewUnaryDistAgg(true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), bx.Grows, bx.Eval, bx.Merge, bx.Fill)
 		err = agg1.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {

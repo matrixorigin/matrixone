@@ -320,3 +320,7 @@ func (m *S3FS) mapError(err error) error {
 	}
 	return err
 }
+
+var _ ETLFileService = new(S3FS)
+
+func (*S3FS) ETLCompatible() {}

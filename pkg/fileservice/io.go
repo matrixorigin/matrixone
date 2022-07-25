@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package count
+package fileservice
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import "io"
 
-type Decimal128AndString interface {
-	types.Decimal128 | []byte
+type readCloser struct {
+	r         io.Reader
+	closeFunc func() error
 }
 
-type Count[T1 types.Generic | Decimal128AndString] struct {
-	// isStar is true: count(*)
-	isStar bool
+var _ io.ReadCloser = new(readCloser)
+
+func (r *readCloser) Read(data []byte) (int, error) {
+	return r.r.Read(data)
+}
+
+func (r *readCloser) Close() error {
+	return r.closeFunc()
 }

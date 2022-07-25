@@ -52,6 +52,7 @@ func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector, _ [
 		for i := 0; i < count; i++ {
 			itr.mp.keys[i] = 0
 		}
+		copy(itr.mp.keyOffs[:count], zeroUint32)
 	}()
 	if err := itr.mp.encodeHashKeys(vecs, start, count); err != nil {
 		panic(err)
@@ -66,9 +67,10 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector, _
 		for i := 0; i < count; i++ {
 			itr.mp.keys[i] = 0
 		}
+		copy(itr.mp.keyOffs[:count], zeroUint32)
 	}()
 
-	if itr.mp.hasNull {
+	if !itr.mp.hasNull {
 		copy(itr.mp.zValues[:count], OneInt64s[:count])
 	}
 	if err := itr.mp.encodeHashKeys(vecs, start, count); err != nil {
