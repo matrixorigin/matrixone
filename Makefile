@@ -15,13 +15,17 @@
 #
 # Examples
 #
-# To build MO -
+# By default, make builds the mo-server
+#
+# make
+#
+# To re-build MO -
 #	
 #	make clean
 #	make config
 #	make build
 #
-# To build MO in debug mode also with race detector enabled -
+# To re-build MO in debug mode also with race detector enabled -
 #
 # make clean
 # make config
@@ -50,6 +54,11 @@ MO_VERSION=$(shell git describe --tags $(shell git rev-list --tags --max-count=1
 ifneq ($(GOARCH)$(TARGET_ARCH)$(GOOS)$(TARGET_OS),)
 $(error cross compilation has been disabled)
 endif
+
+###############################################################################
+# default target
+###############################################################################
+all: build
 
 ###############################################################################
 # code generation
@@ -158,10 +167,6 @@ install-static-check-tools:
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@latest
 	@go install honnef.co/go/tools/cmd/staticcheck@latest
 
-# TODO: tracking https://github.com/golangci/golangci-lint/issues/2649
-DIRS=pkg/... \
-	 cmd/...
-
 EXTRA_LINTERS=-E exportloopref -E rowserrcheck -E depguard -D unconvert \
 	-E prealloc -E gofmt
 
@@ -169,9 +174,8 @@ STATICCHECK_CHECKS=QF1001,QF1002,QF1003,QF1004,QF1005,QF1006,QF1007,QF1008,QF100
 
 .PHONY: static-check
 static-check: config cgo
-	@$(CGO_OPTS) staticcheck -checks $(STATICCHECK_CHECKS) ./...
-	@$(CGO_OPTS) go vet -vettool=$(which molint) ./...
-	@$(CGO_OPTS) license-eye -c .licenserc.yml header check
-	@for p in $(DIRS); do \
-    $(CGO_OPTS) golangci-lint run $(EXTRA_LINTERS) $$p ; \
-done;
+	$(CGO_OPTS) staticcheck -checks $(STATICCHECK_CHECKS) ./...
+	$(CGO_OPTS) go vet -vettool=`which molint` ./...
+	$(CGO_OPTS) license-eye -c .licenserc.yml header check
+	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
+	$(CGO_OPTS) golangci-lint run $(EXTRA_LINTERS) ./...

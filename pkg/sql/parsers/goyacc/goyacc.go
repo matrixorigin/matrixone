@@ -52,7 +52,6 @@ import (
 	"flag"
 	"fmt"
 	"go/format"
-	"io/ioutil"
 	"os"
 	"regexp"
 	"sort"
@@ -3459,7 +3458,7 @@ func exit(status int) {
 }
 
 func gofmt() {
-	src, err := ioutil.ReadFile(oflag)
+	src, err := os.ReadFile(oflag)
 	if err != nil {
 		return
 	}
@@ -3467,9 +3466,9 @@ func gofmt() {
 	if err != nil {
 		return
 	}
-	err = ioutil.WriteFile(oflag, src, 0666)
+	err = os.WriteFile(oflag, src, 0666)
 	if err != nil {
-		panic("ioutil write file failed")
+		panic("write file failed")
 	}
 }
 
