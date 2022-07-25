@@ -117,36 +117,21 @@ func (m *StrHashMap) Insert(vecs []*vector.Vector, row int) bool {
 
 func (m *StrHashMap) encodeHashKeysWithScale(vecs []*vector.Vector, start, count int, scales []int32) {
 	for i, vec := range vecs {
-		switch t := vec.Typ.Oid; t {
-		case types.T_uint8:
+		switch typLen := vec.Typ.TypeSize(); typLen {
+		case 1:
 			fillGroupStr[uint8](m, vec, count, 1, start, scales[i])
-		case types.T_uint16:
+		case 2:
 			fillGroupStr[uint16](m, vec, count, 2, start, scales[i])
-		case types.T_uint32:
+		case 4:
 			fillGroupStr[uint32](m, vec, count, 4, start, scales[i])
-		case types.T_uint64:
+		case 8:
 			fillGroupStr[uint64](m, vec, count, 8, start, scales[i])
-		case types.T_int8:
-			fillGroupStr[int8](m, vec, count, 1, start, scales[i])
-		case types.T_int16:
-			fillGroupStr[int16](m, vec, count, 2, start, scales[i])
-		case types.T_int32:
-			fillGroupStr[int32](m, vec, count, 4, start, scales[i])
-		case types.T_int64:
-			fillGroupStr[int64](m, vec, count, 8, start, scales[i])
-		case types.T_float32:
-			fillGroupStr[float32](m, vec, count, 4, start, scales[i])
-		case types.T_float64:
-			fillGroupStr[float64](m, vec, count, 8, start, scales[i])
-		case types.T_decimal64:
-			fillGroupStr[types.Decimal64](m, vec, count, 8, start, scales[i])
-		case types.T_decimal128:
+		case 16:
 			fillGroupStr[types.Decimal128](m, vec, count, 16, start, scales[i])
 		default:
 			fillStringGroupStr(m, vec, count, start)
 		}
 	}
-
 	for i := 0; i < count; i++ {
 		if l := len(m.keys[i]); l < 16 {
 			m.keys[i] = append(m.keys[i], hashtable.StrKeyPadding[l:]...)
@@ -156,31 +141,17 @@ func (m *StrHashMap) encodeHashKeysWithScale(vecs []*vector.Vector, start, count
 
 func (m *StrHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	for _, vec := range vecs {
-		switch t := vec.Typ.Oid; t {
-		case types.T_uint8:
+		switch typLen := vec.Typ.TypeSize(); typLen {
+		case 1:
 			fillGroupStr[uint8](m, vec, count, 1, start, 0)
-		case types.T_uint16:
+		case 2:
 			fillGroupStr[uint16](m, vec, count, 2, start, 0)
-		case types.T_uint32:
+		case 4:
 			fillGroupStr[uint32](m, vec, count, 4, start, 0)
-		case types.T_uint64:
+		case 8:
 			fillGroupStr[uint64](m, vec, count, 8, start, 0)
-		case types.T_int8:
-			fillGroupStr[int8](m, vec, count, 1, start, 0)
-		case types.T_int16:
-			fillGroupStr[int16](m, vec, count, 2, start, 0)
-		case types.T_int32:
-			fillGroupStr[int32](m, vec, count, 4, start, 0)
-		case types.T_int64:
-			fillGroupStr[int64](m, vec, count, 8, start, 0)
-		case types.T_float32:
-			fillGroupStr[float32](m, vec, count, 4, start, 0)
-		case types.T_float64:
-			fillGroupStr[float64](m, vec, count, 8, start, 0)
-		case types.T_decimal64:
-			fillGroupStr[types.Decimal64](m, vec, count, 8, start, 0)
-		case types.T_decimal128:
-			fillGroupStr[types.Decimal128](m, vec, count, 46, start, 0)
+		case 16:
+			fillGroupStr[types.Decimal128](m, vec, count, 16, start, 0)
 		default:
 			fillStringGroupStr(m, vec, count, start)
 		}
