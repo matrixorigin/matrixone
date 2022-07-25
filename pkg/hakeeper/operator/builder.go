@@ -160,11 +160,8 @@ func (b *Builder) buildSteps() error {
 
 		uuid, replicaID := b.toRemove.Get()
 		b.steps = append(b.steps, RemoveLogService{
-			Target:    targets[0],
-			StoreID:   uuid,
-			ShardID:   b.shardID,
-			ReplicaID: replicaID,
-			Epoch:     b.epoch,
+			Target:  targets[0],
+			Replica: Replica{uuid, b.shardID, replicaID, b.epoch},
 		})
 		delete(b.toRemove, uuid)
 		continue
@@ -179,11 +176,13 @@ func (b *Builder) buildSteps() error {
 
 		uuid, replicaID := b.toAdd.Get()
 		b.steps = append(b.steps, AddLogService{
-			Target:    targets[0],
-			StoreID:   uuid,
-			ShardID:   b.shardID,
-			ReplicaID: replicaID,
-			Epoch:     b.epoch,
+			Target: targets[0],
+			Replica: Replica{
+				UUID:      uuid,
+				ShardID:   b.shardID,
+				ReplicaID: replicaID,
+				Epoch:     b.epoch,
+			},
 		})
 		delete(b.toAdd, uuid)
 	}
