@@ -343,7 +343,7 @@ func initTypeCheckRelated() {
 		types.T_uint8:      {types.T_uint64, types.T_uint32, types.T_uint16, types.T_float64},
 		types.T_uint16:     {types.T_uint64, types.T_uint32, types.T_float64},
 		types.T_uint32:     {types.T_uint64, types.T_float64},
-		types.T_uint64:     {types.T_float64},
+		types.T_uint64:     {types.T_int64, types.T_float64},
 		types.T_float32:    {types.T_float64},
 		types.T_char:       {types.T_varchar},
 		types.T_varchar:    {types.T_char},

@@ -585,7 +585,13 @@ func Decimal128ToDecimal64(xs []types.Decimal128, xsScale int32, ysPrecision, ys
 
 func NumericToBool[T constraints.Integer | constraints.Float](xs []T, rs []bool) ([]bool, error) {
 	for i, x := range xs {
-		rs[i] = (x != 0)
+		if x == 0 {
+			rs[i] = false
+		} else if x == 1 {
+			rs[i] = true
+		} else {
+			return nil, moerr.NewError(moerr.INVALID_ARGUMENT, fmt.Sprintf("Can't cast '%v' as boolean type.", x))
+		}
 	}
 	return rs, nil
 }
