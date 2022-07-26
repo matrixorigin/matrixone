@@ -215,6 +215,7 @@ const (
 handle show create table in plan2 and tae
 */
 func handleShowCreateTable(ses *Session) error {
+	fmt.Printf("+++++test\n")
 	tableName := string(ses.Data[0][tableNamePos].([]byte))
 	createStr := fmt.Sprintf("CREATE TABLE `%s` (", tableName)
 	rowCount := 0
