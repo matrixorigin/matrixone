@@ -29,7 +29,9 @@ var OneInt64s []int64
 // Iterator allows you to batch insert/find values
 type Iterator interface {
 	// Insert vecs[start, start+count) into hashmap
-	// 	the return value corresponds to the corresponding group number(start with 1)
+	// the return value corresponds to the corresponding group number(start with 1)
+	// WATCH THAT: we do not update the rows of Hash Map at Insert Method because of Speed Performance,
+	// If need it, you should call the hash map's AddGroup function by yourself.
 	Insert(start, count int, vecs []*vector.Vector, scales []int32) ([]uint64, []int64)
 	// Find vecs[start, start+count) int hashmap
 	// return value is the corresponding the group number,

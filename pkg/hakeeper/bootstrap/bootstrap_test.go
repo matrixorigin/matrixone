@@ -345,7 +345,6 @@ func TestIssue3814(t *testing.T) {
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
-					Name:             "",
 				}},
 			},
 			log:      pb.LogState{},

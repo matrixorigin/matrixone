@@ -137,6 +137,10 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 			return ErrEmptyRange
 		}
 
+		if entry.ignore {
+			continue
+		}
+
 		if entry.WriterForRead != nil {
 			f, err := os.Open(nativePath)
 			if os.IsNotExist(err) {
@@ -161,11 +165,12 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				cr := &countingReader{
 					R: r,
 				}
-				obj, _, err := entry.ToObject(cr)
+				obj, size, err := entry.ToObject(cr)
 				if err != nil {
 					return err
 				}
 				vector.Entries[i].Object = obj
+				vector.Entries[i].ObjectSize = size
 				if cr.N != entry.Size {
 					return ErrUnexpectedEOF
 				}
@@ -208,11 +213,12 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 					r: io.TeeReader(r, buf),
 					closeFunc: func() error {
 						defer f.Close()
-						obj, _, err := entry.ToObject(buf)
+						obj, size, err := entry.ToObject(buf)
 						if err != nil {
 							return err
 						}
 						vector.Entries[i].Object = obj
+						vector.Entries[i].ObjectSize = size
 						return nil
 					},
 				}

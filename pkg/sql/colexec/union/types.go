@@ -17,17 +17,31 @@ package union
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/joincondition"
 )
 
-type Argument struct {
-	//  attribute which need not do serialization work
-	ctr Container
-}
+const (
+	Build = iota
+	Probe
+	End
+)
 
-type Container struct {
+type container struct {
+	state int
+
 	// hash table related.
 	hashTable *hashmap.StrHashMap
 
+	scales [2][]int32
+
 	// bat records the final result of union operator.
 	bat *batch.Batch
+}
+
+type Argument struct {
+	//  attribute which need not do serialization work
+	ctr        *container
+	Ibucket    uint64 // index in buckets
+	Nbucket    uint64 // buckets count
+	Conditions [2][]joincondition.Condition
 }

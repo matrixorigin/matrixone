@@ -18,17 +18,16 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/require"
 )
 
 func TestShutdownStores(t *testing.T) {
-	stores := map[util.StoreID]struct{}{
-		util.StoreID("11"): {},
-		util.StoreID("12"): {},
-		util.StoreID("13"): {},
+	stores := map[string]struct{}{
+		"11": {},
+		"12": {},
+		"13": {},
 	}
 
 	// operator for log service
@@ -102,7 +101,7 @@ func TestParseLogStores(t *testing.T) {
 
 func TestParseDnStores(t *testing.T) {
 	expiredTick := uint64(10)
-	// construct current tick in order to make hearbeat tick expired
+	// construct current tick in order to make heartbeat tick expired
 	cfg := hakeeper.Config{}
 	cfg.Fill()
 	currTick := cfg.ExpiredTick(expiredTick, cfg.DnStoreTimeout) + 1
@@ -164,7 +163,7 @@ func TestLogShard(t *testing.T) {
 }
 
 func TestLogShardMap(t *testing.T) {
-	expiredStores := map[util.StoreID]struct{}{
+	expiredStores := map[string]struct{}{
 		"expired1": {},
 		"expired2": {},
 		"expired3": {},

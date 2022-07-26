@@ -39,10 +39,10 @@ func TestIsFinish(t *testing.T) {
 
 	dnState := pb.DNState{}
 
-	assert.False(t, AddLogService{StoreID: "d", ShardID: 1, ReplicaID: 4}.IsFinish(logState, dnState))
-	assert.True(t, AddLogService{StoreID: "c", ShardID: 1, ReplicaID: 3}.IsFinish(logState, dnState))
-	assert.False(t, RemoveLogService{StoreID: "c", ShardID: 1, ReplicaID: 3}.IsFinish(logState, dnState))
-	assert.True(t, RemoveLogService{StoreID: "d", ShardID: 1, ReplicaID: 4}.IsFinish(logState, dnState))
+	assert.False(t, AddLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.IsFinish(logState, dnState))
+	assert.True(t, AddLogService{Replica: Replica{UUID: "c", ShardID: 1, ReplicaID: 3}}.IsFinish(logState, dnState))
+	assert.False(t, RemoveLogService{Replica: Replica{UUID: "c", ShardID: 1, ReplicaID: 3}}.IsFinish(logState, dnState))
+	assert.True(t, RemoveLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.IsFinish(logState, dnState))
 }
 
 func TestAddLogService(t *testing.T) {
@@ -55,9 +55,10 @@ func TestAddLogService(t *testing.T) {
 		{
 			desc: "add log service completed",
 			command: AddLogService{
-				StoreID:   "a",
-				ShardID:   1,
-				ReplicaID: 1,
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 1},
 			},
 			state: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
@@ -69,9 +70,10 @@ func TestAddLogService(t *testing.T) {
 		{
 			desc: "add log service not completed",
 			command: AddLogService{
-				StoreID:   "a",
-				ShardID:   1,
-				ReplicaID: 1,
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 1},
 			},
 			state: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
@@ -98,9 +100,10 @@ func TestRemoveLogService(t *testing.T) {
 		{
 			desc: "remove log service not completed",
 			command: RemoveLogService{
-				StoreID:   "a",
-				ShardID:   1,
-				ReplicaID: 1,
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 1},
 			},
 			state: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
@@ -112,9 +115,11 @@ func TestRemoveLogService(t *testing.T) {
 		{
 			desc: "remove log service completed",
 			command: RemoveLogService{
-				StoreID:   "a",
-				ShardID:   1,
-				ReplicaID: 1,
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 1,
+				},
 			},
 			state: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
@@ -141,9 +146,11 @@ func TestStartLogService(t *testing.T) {
 		{
 			desc: "start log service not completed",
 			command: StartLogService{
-				StoreID:   "a",
-				ShardID:   1,
-				ReplicaID: 1,
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 1,
+				},
 			},
 			state: pb.LogState{
 				Stores: map[string]pb.LogStoreInfo{"a": {
@@ -155,9 +162,11 @@ func TestStartLogService(t *testing.T) {
 		{
 			desc: "start log service completed",
 			command: StartLogService{
-				StoreID:   "a",
-				ShardID:   1,
-				ReplicaID: 1,
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 1,
+				},
 			},
 			state: pb.LogState{
 				Stores: map[string]pb.LogStoreInfo{"a": {
@@ -190,8 +199,10 @@ func TestStopLogService(t *testing.T) {
 		{
 			desc: "stop log service completed",
 			command: StopLogService{
-				StoreID: "a",
-				ShardID: 1,
+				Replica: Replica{
+					UUID:    "a",
+					ShardID: 1,
+				},
 			},
 			state: pb.LogState{
 				Stores: map[string]pb.LogStoreInfo{"a": {
@@ -203,8 +214,10 @@ func TestStopLogService(t *testing.T) {
 		{
 			desc: "stop log service not completed",
 			command: StopLogService{
-				StoreID: "a",
-				ShardID: 1,
+				Replica: Replica{
+					UUID:    "a",
+					ShardID: 1,
+				},
 			},
 			state: pb.LogState{
 				Stores: map[string]pb.LogStoreInfo{"a": {

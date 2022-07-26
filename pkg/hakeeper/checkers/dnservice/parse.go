@@ -127,7 +127,7 @@ func (s *dnShard) expiredReplicas() []*dnReplica {
 type dnReplica struct {
 	replicaID uint64
 	shardID   uint64
-	storeID   util.StoreID
+	storeID   string
 }
 
 func newReplica(
@@ -136,6 +136,6 @@ func newReplica(
 	return &dnReplica{
 		replicaID: replicaID,
 		shardID:   shardID,
-		storeID:   util.StoreID(storeID),
+		storeID:   storeID,
 	}
 }
