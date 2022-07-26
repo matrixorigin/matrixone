@@ -34,34 +34,43 @@ type unionTestCase struct {
 
 func TestUnion(t *testing.T) {
 	proc := testutil.NewProcess()
-	// [4 rows + 3 rows, 2 columns] union [5 rows + 5 rows, 2 columns]
+	// [4 rows + 3 rows, 2 columns] union [3 rows + 4 rows, 2 columns]
+	/*
+		{1, 1}			{1, 1}
+		{2, 2}			{2, 2}
+		{3, 3}			{3, 3}
+		{4, 4}	union	{1, 1}
+		{1, 1}			{2, 2}
+		{2, 2}			{3, 3}
+		{3, 3}			{4, 4}
+	*/
 	c := newUnionTestCase(
 		proc,
 		[]*batch.Batch{
 			testutil.NewBatchWithVectors(
 				[]*vector.Vector{
-					testutil.NewVector(4, types.T_int64.ToType(), proc.Mp, true, nil),
-					testutil.NewVector(4, types.T_int64.ToType(), proc.Mp, true, nil),
+					testutil.NewVector(4, types.T_int64.ToType(), proc.Mp, false, []int64{1, 2, 3, 4}),
+					testutil.NewVector(4, types.T_int64.ToType(), proc.Mp, false, []int64{1, 2, 3, 4}),
 				}, nil),
 
 			testutil.NewBatchWithVectors(
 				[]*vector.Vector{
-					testutil.NewVector(3, types.T_int64.ToType(), proc.Mp, true, nil),
-					testutil.NewVector(3, types.T_int64.ToType(), proc.Mp, true, nil),
+					testutil.NewVector(3, types.T_int64.ToType(), proc.Mp, false, []int64{1, 2, 3}),
+					testutil.NewVector(3, types.T_int64.ToType(), proc.Mp, false, []int64{1, 2, 3}),
 				}, nil),
 		},
 
 		[]*batch.Batch{
 			testutil.NewBatchWithVectors(
 				[]*vector.Vector{
-					testutil.NewVector(5, types.T_int64.ToType(), proc.Mp, true, nil),
-					testutil.NewVector(5, types.T_int64.ToType(), proc.Mp, true, nil),
+					testutil.NewVector(3, types.T_int64.ToType(), proc.Mp, false, []int64{1, 2, 3}),
+					testutil.NewVector(3, types.T_int64.ToType(), proc.Mp, false, []int64{1, 2, 3}),
 				}, nil),
 
 			testutil.NewBatchWithVectors(
 				[]*vector.Vector{
-					testutil.NewVector(5, types.T_int64.ToType(), proc.Mp, true, nil),
-					testutil.NewVector(5, types.T_int64.ToType(), proc.Mp, true, nil),
+					testutil.NewVector(4, types.T_int64.ToType(), proc.Mp, false, []int64{1, 2, 3, 4}),
+					testutil.NewVector(4, types.T_int64.ToType(), proc.Mp, false, []int64{1, 2, 3, 4}),
 				}, nil),
 		},
 	)
@@ -72,8 +81,8 @@ func TestUnion(t *testing.T) {
 	{
 		result := c.arg.ctr.bat
 		require.NoError(t, err)
-		require.Equal(t, 2, len(result.Vecs))               // 2 columns
-		require.Equal(t, 17, vector.Length(result.Vecs[0])) // 17 = (4+3+5+5) rows
+		require.Equal(t, 2, len(result.Vecs))              // 2 columns
+		require.Equal(t, 4, vector.Length(result.Vecs[0])) // 4 rows
 	}
 	c.proc.Reg.InputBatch.Clean(c.proc.Mp) // clean the final result
 	require.Equal(t, int64(0), mheap.Size(c.proc.Mp))

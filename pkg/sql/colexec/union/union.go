@@ -38,7 +38,7 @@ func Prepare(_ *process.Process, argument interface{}) error {
 func Call(idx int, proc *process.Process, argument interface{}) (bool, error) {
 	var err error
 	arg := argument.(*Argument)
-	// we make this assertion here for now, the real situation of table size
+	// we make an assertion here for now, the real situation of table size
 	// should be noted by the execution plan
 	smallTableIndex, bigTableIndex := 1, 0
 
@@ -47,11 +47,11 @@ func Call(idx int, proc *process.Process, argument interface{}) (bool, error) {
 	analyze.Start()
 	defer analyze.Stop()
 
-	// step1: deal the small table. if new row, put into bat.
+	// step1: deal the small table. if new row, put it into bat.
 	if err = arg.ctr.insert(proc, analyze, smallTableIndex); err != nil {
 		return false, err
 	}
-	// step2: deal the big table. if new row, put into bat.
+	// step2: deal the big table. if new row, put it into bat.
 	if err = arg.ctr.insert(proc, analyze, bigTableIndex); err != nil {
 		return false, err
 	}
@@ -91,7 +91,7 @@ func (ctr *Container) insert(proc *process.Process, analyze process.Analyze, ind
 			scales[i] = bat.Vecs[i].Typ.Scale
 		}
 		for i := 0; i < count; i += hashmap.UnitLimit {
-			insertCount := 0
+			oldHashGroup := ctr.hashTable.GroupCount()
 			iterator := ctr.hashTable.NewIterator()
 
 			n := count - i
@@ -103,12 +103,14 @@ func (ctr *Container) insert(proc *process.Process, analyze process.Analyze, ind
 			copy(inserted[:n], restoreInserted[:n])
 			for j, v := range vs {
 				if v > ctr.hashTable.GroupCount() {
-					insertCount++
+					ctr.hashTable.AddGroup()
 					inserted[j] = 1
 					ctr.bat.Zs = append(ctr.bat.Zs, 1)
 				}
 			}
 
+			newHashGroup := ctr.hashTable.GroupCount()
+			insertCount := int(newHashGroup - oldHashGroup)
 			if insertCount > 0 {
 				for pos := range bat.Vecs {
 					if err = vector.UnionBatch(ctr.bat.Vecs[pos], bat.Vecs[pos], int64(i), insertCount, inserted[:n], proc.Mp); err != nil {
