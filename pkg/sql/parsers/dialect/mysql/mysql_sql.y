@@ -6260,7 +6260,7 @@ length_opt:
 timestamp_option_opt:
     /* EMPTY */
     	{
-    	    $$ = 6
+    	    $$ = 0
     	}
 |	'(' INTEGRAL ')'
     {
