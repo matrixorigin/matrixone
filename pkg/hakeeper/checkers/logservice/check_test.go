@@ -147,11 +147,12 @@ func TestCheck(t *testing.T) {
 			expected: []*operator.Operator{
 				operator.NewOperator("", 1, 1,
 					operator.RemoveLogService{
-						Target:    "b",
-						StoreID:   "a",
-						ShardID:   1,
-						ReplicaID: 1,
-						Epoch:     1,
+						Target: "b",
+						Replica: operator.Replica{
+							UUID:      "a",
+							ShardID:   1,
+							ReplicaID: 1,
+							Epoch:     1},
 					}),
 			},
 		},
@@ -201,11 +202,13 @@ func TestCheck(t *testing.T) {
 			currentTick: uint64(15 * hakeeper.DefaultTickPerSecond * 60),
 			expected: []*operator.Operator{operator.NewOperator("adding 1:4(at epoch 1) to c", 1,
 				1, operator.AddLogService{
-					Target:    "a",
-					StoreID:   "c",
-					ShardID:   1,
-					ReplicaID: 4,
-					Epoch:     1,
+					Target: "a",
+					Replica: operator.Replica{
+						UUID:      "c",
+						ShardID:   1,
+						ReplicaID: 4,
+						Epoch:     1,
+					},
 				})},
 		},
 		{
@@ -254,9 +257,10 @@ func TestCheck(t *testing.T) {
 			currentTick: uint64(15 * hakeeper.DefaultTickPerSecond * 60),
 			expected: []*operator.Operator{operator.NewOperator("", 1,
 				1, operator.StartLogService{
-					StoreID:   "c",
-					ShardID:   1,
-					ReplicaID: 3,
+					Replica: operator.Replica{
+						UUID:      "c",
+						ShardID:   1,
+						ReplicaID: 3},
 				})},
 		},
 		{
@@ -319,7 +323,11 @@ func TestCheck(t *testing.T) {
 		alloc := util.NewTestIDAllocator(3)
 		cfg := hakeeper.Config{}
 		cfg.Fill()
-		operators := Check(alloc, cfg, c.cluster, c.infos, c.removing, c.adding, c.currentTick)
+		executing := operator.ExecutingReplicas{
+			Adding:   c.adding,
+			Removing: c.removing,
+		}
+		operators := Check(alloc, cfg, c.cluster, c.infos, executing, c.currentTick)
 
 		assert.Equal(t, len(c.expected), len(operators))
 		for j, op := range operators {

@@ -44,11 +44,12 @@ func NewCoordinator(cfg hakeeper.Config) *Coordinator {
 	}
 }
 
-func (c *Coordinator) Check(alloc util.IDAllocator, cluster pb.ClusterInfo, dnState pb.DNState, logState pb.LogState, currentTick uint64) []pb.ScheduleCommand {
+func (c *Coordinator) Check(alloc util.IDAllocator, cluster pb.ClusterInfo,
+	dnState pb.DNState, logState pb.LogState, currentTick uint64) []pb.ScheduleCommand {
 
 	c.OperatorController.RemoveFinishedOperator(logState, dnState)
 
-	// if we've discovered unhealth already, no need to keep alive anymore.
+	// if we've discovered unhealthy already, no need to keep alive anymore.
 	if c.teardown {
 		return c.OperatorController.Dispatch(c.teardownOps, logState, dnState)
 	}
@@ -61,11 +62,10 @@ func (c *Coordinator) Check(alloc util.IDAllocator, cluster pb.ClusterInfo, dnSt
 	}
 
 	// system health, try to keep alive.
-	removing := c.OperatorController.GetRemovingReplicas()
-	adding := c.OperatorController.GetAddingReplicas()
+	executing := c.OperatorController.GetExecutingReplicas()
 
 	operators := make([]*operator.Operator, 0)
-	operators = append(operators, logservice.Check(alloc, c.cfg, cluster, logState, removing, adding, currentTick)...)
+	operators = append(operators, logservice.Check(alloc, c.cfg, cluster, logState, executing, currentTick)...)
 	operators = append(operators, dnservice.Check(alloc, c.cfg, dnState, currentTick)...)
 
 	return c.OperatorController.Dispatch(operators, logState, dnState)

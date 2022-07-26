@@ -21,8 +21,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-func selectStore(shardInfo logservice.LogShardInfo, stores *util.ClusterStores) util.StoreID {
-	workingStores := stores.WorkingStores()
+func selectStore(shardInfo logservice.LogShardInfo, workingIDs []string) string {
+	workingStores := make([]*util.Store, 0, len(workingIDs))
+	for _, id := range workingIDs {
+		workingStores = append(workingStores, &util.Store{ID: id})
+	}
+
 	excluded := make([]string, 0, len(shardInfo.Replicas))
 	for _, storeID := range shardInfo.Replicas {
 		excluded = append(excluded, storeID)
