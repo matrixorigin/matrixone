@@ -70,7 +70,7 @@ func checkShard(
 	case 0: // need add replica
 		newReplicaID, ok := idAlloc.Next()
 		if !ok {
-			// temproray failure when allocate replica ID
+			// temporary failure when allocate replica ID
 			return nil
 		}
 
@@ -98,18 +98,18 @@ func checkShard(
 }
 
 // newAddStep constructs operator to launch a dn shard replica
-func newAddStep(target util.StoreID, shardID, replicaID uint64) operator.OpStep {
+func newAddStep(target string, shardID, replicaID uint64) operator.OpStep {
 	return operator.AddDnReplica{
-		StoreID:   string(target),
+		StoreID:   target,
 		ShardID:   shardID,
 		ReplicaID: replicaID,
 	}
 }
 
 // newRemoveStep constructs operator to remove a dn shard replica
-func newRemoveStep(target util.StoreID, shardID, replicaID uint64) operator.OpStep {
+func newRemoveStep(target string, shardID, replicaID uint64) operator.OpStep {
 	return operator.RemoveDnReplica{
-		StoreID:   string(target),
+		StoreID:   target,
 		ShardID:   shardID,
 		ReplicaID: replicaID,
 	}
@@ -146,9 +146,9 @@ func extraWorkingReplicas(shard *dnShard) []*dnReplica {
 // If there are multiple dn store with the same least slots,
 // the store with less ID would be chosen.
 // NB: the returned result should be deterministic.
-func consumeLeastSpareStore(working []*util.Store) (util.StoreID, error) {
+func consumeLeastSpareStore(working []*util.Store) (string, error) {
 	if len(working) == 0 {
-		return util.NullStoreID, errNoWorkingStore
+		return "", errNoWorkingStore
 	}
 
 	// the least shards, the higher priority

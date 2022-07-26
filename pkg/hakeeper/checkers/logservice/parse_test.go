@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
@@ -33,7 +32,7 @@ func TestFixedLogShardInfo(t *testing.T) {
 
 		record        metadata.LogShardRecord
 		info          pb.LogShardInfo
-		expiredStores util.StoreSlice
+		expiredStores []string
 
 		expected *fixingShard
 	}{
@@ -42,7 +41,6 @@ func TestFixedLogShardInfo(t *testing.T) {
 			record: metadata.LogShardRecord{
 				ShardID:          1,
 				NumberOfReplicas: 3,
-				Name:             "shard-1",
 			},
 			info: pb.LogShardInfo{
 				ShardID:  1,
@@ -59,7 +57,6 @@ func TestFixedLogShardInfo(t *testing.T) {
 			record: metadata.LogShardRecord{
 				ShardID:          1,
 				NumberOfReplicas: 3,
-				Name:             "shard-1",
 			},
 			info: pb.LogShardInfo{
 				ShardID:  1,
@@ -76,7 +73,6 @@ func TestFixedLogShardInfo(t *testing.T) {
 			record: metadata.LogShardRecord{
 				ShardID:          1,
 				NumberOfReplicas: 3,
-				Name:             "shard-1",
 			},
 			info: pb.LogShardInfo{
 				ShardID:  1,
@@ -101,7 +97,7 @@ func TestCollectStats(t *testing.T) {
 		desc     string
 		cluster  pb.ClusterInfo
 		infos    pb.LogState
-		expired  util.StoreSlice
+		expired  []string
 		expected *stats
 	}{
 		{
@@ -110,8 +106,7 @@ func TestCollectStats(t *testing.T) {
 				DNShards: nil,
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
-					NumberOfReplicas: 3,
-					Name:             ""}}},
+					NumberOfReplicas: 3}}},
 			infos: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
 					1: {
@@ -150,7 +145,7 @@ func TestCollectStats(t *testing.T) {
 								Term:     0}}}},
 				},
 			},
-			expired:  []*util.Store{},
+			expired:  []string{},
 			expected: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}}},
 		{
 			desc: "Shard 1 has only 2 replicas, which is expected as 3.",
@@ -158,8 +153,7 @@ func TestCollectStats(t *testing.T) {
 				DNShards: nil,
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
-					NumberOfReplicas: 3,
-					Name:             ""}}},
+					NumberOfReplicas: 3}}},
 			infos: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:  1,
@@ -186,7 +180,7 @@ func TestCollectStats(t *testing.T) {
 								Term:     0}}}},
 				},
 			},
-			expired:  []*util.Store{},
+			expired:  []string{},
 			expected: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{1: 1}}},
 		{
 			desc: "replica on Store c is not started.",
@@ -327,8 +321,7 @@ func TestCollectStats(t *testing.T) {
 				DNShards: nil,
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
-					NumberOfReplicas: 3,
-					Name:             ""}}},
+					NumberOfReplicas: 3}}},
 			infos: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
 					1: {
@@ -416,7 +409,7 @@ func TestCollectStats(t *testing.T) {
 								LeaderID: 0,
 								Term:     0}}}}},
 			},
-			expired: []*util.Store{{ID: "a"}},
+			expired: []string{"a"},
 			expected: &stats{
 				toRemove: map[uint64][]replica{1: {{uuid: "a", shardID: 1, replicaID: 1}}},
 				toAdd:    map[uint64]uint32{},
@@ -437,7 +430,7 @@ func TestCollectStore(t *testing.T) {
 		cluster  pb.ClusterInfo
 		infos    pb.LogState
 		tick     uint64
-		expected util.ClusterStores
+		expected []string
 	}{
 		{
 			desc: "no expired stores",
@@ -463,14 +456,8 @@ func TestCollectStore(t *testing.T) {
 					},
 				},
 			},
-			tick: uint64(10 * hakeeper.DefaultTickPerSecond * 60),
-			expected: util.ClusterStores{
-				Working: []*util.Store{
-					{ID: "a", Capacity: 32},
-					{ID: "b", Capacity: 32},
-					{ID: "c", Capacity: 32},
-				},
-			},
+			tick:     uint64(10 * hakeeper.DefaultTickPerSecond * 60),
+			expected: []string{},
 		},
 		{
 			desc: "store b expired",
@@ -490,31 +477,25 @@ func TestCollectStore(t *testing.T) {
 					"c": {Tick: uint64(12 * hakeeper.DefaultTickPerSecond * 60)},
 				},
 			},
-			tick: uint64(15 * hakeeper.DefaultTickPerSecond * 60),
-			expected: util.ClusterStores{
-				Working: []*util.Store{
-					{ID: "a", Capacity: 32},
-					{ID: "c", Capacity: 32},
-				},
-				Expired: []*util.Store{{ID: "b", Capacity: 32}},
-			},
+			tick:     uint64(15 * hakeeper.DefaultTickPerSecond * 60),
+			expected: []string{"b"},
 		},
 	}
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
 		cfg := hakeeper.Config{}
 		cfg.Fill()
-		stores := parseLogStores(cfg, c.infos, c.tick)
-		sort.Slice(stores.Working, func(i, j int) bool {
-			return stores.Working[i].ID < stores.Working[j].ID
+		working, expired := parseLogStores(cfg, c.infos, c.tick)
+		sort.Slice(working, func(i, j int) bool {
+			return working[i] < working[j]
 		})
-		sort.Slice(stores.Expired, func(i, j int) bool {
-			return stores.Expired[i].ID < stores.Expired[j].ID
+		sort.Slice(expired, func(i, j int) bool {
+			return expired[i] < expired[j]
 		})
-		assert.Equal(t, c.expected, *stores)
+		assert.Equal(t, c.expected, expired)
 		cfg1 := hakeeper.Config{LogStoreTimeout: time.Hour}
 		cfg1.Fill()
-		stores = parseLogStores(cfg1, c.infos, c.tick)
-		assert.Nil(t, stores.ExpiredStores())
+		working, expired = parseLogStores(cfg1, c.infos, c.tick)
+		assert.Equal(t, []string{}, expired)
 	}
 }

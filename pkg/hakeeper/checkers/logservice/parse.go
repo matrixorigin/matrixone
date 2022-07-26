@@ -18,7 +18,6 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
@@ -46,7 +45,7 @@ func newFixingShard(origin pb.LogShardInfo) *fixingShard {
 }
 
 func fixedLogShardInfo(record metadata.LogShardRecord, info pb.LogShardInfo,
-	expiredStores util.StoreSlice) *fixingShard {
+	expiredStores []string) *fixingShard {
 	fixing := newFixingShard(info)
 	diff := len(fixing.replicas) - int(record.NumberOfReplicas)
 
@@ -57,7 +56,7 @@ func fixedLogShardInfo(record metadata.LogShardRecord, info pb.LogShardInfo,
 	}
 
 	for replicaID, uuid := range info.Replicas {
-		if expiredStores.Contains(uuid) {
+		if contains(expiredStores, uuid) {
 			delete(fixing.replicas, replicaID)
 			// do not remove replicas more than expected.
 			if diff > 0 {
@@ -80,7 +79,7 @@ func fixedLogShardInfo(record metadata.LogShardRecord, info pb.LogShardInfo,
 }
 
 // parseLogShards collects stats for further use.
-func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired util.StoreSlice) *stats {
+func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired []string) *stats {
 	collect := newStats()
 
 	for _, shardInfo := range infos.Shards {
@@ -94,7 +93,7 @@ func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired util.Stor
 				continue
 			}
 			rep := replica{
-				uuid:      util.StoreID(uuid),
+				uuid:      uuid,
 				shardID:   shardID,
 				replicaID: id,
 			}
@@ -107,7 +106,7 @@ func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired util.Stor
 			// Check dangling
 			if !replicaStarted(shardID, store.Replicas) {
 				rep := replica{
-					uuid:      util.StoreID(uuid),
+					uuid:      uuid,
 					shardID:   shardID,
 					replicaID: id,
 				}
@@ -131,7 +130,7 @@ func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired util.Stor
 			if ok || replicaInfo.Epoch >= infos.Shards[replicaInfo.ShardID].Epoch {
 				continue
 			}
-			toStop = append(toStop, replica{uuid: util.StoreID(uuid),
+			toStop = append(toStop, replica{uuid: uuid,
 				shardID: replicaInfo.ShardID, epoch: replicaInfo.Epoch})
 		}
 		collect.toStop = append(collect.toStop, toStop...)
@@ -140,18 +139,19 @@ func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired util.Stor
 	return collect
 }
 
-func parseLogStores(cfg hakeeper.Config, infos pb.LogState, currentTick uint64) *util.ClusterStores {
-	stores := util.NewClusterStores()
+// parseLogStores returns all expired stores' ids.
+func parseLogStores(cfg hakeeper.Config, infos pb.LogState, currentTick uint64) ([]string, []string) {
+	working := make([]string, 0)
+	expired := make([]string, 0)
 	for uuid, storeInfo := range infos.Stores {
-		store := util.NewStore(uuid, len(storeInfo.Replicas), LogStoreCapacity)
 		if cfg.LogStoreExpired(storeInfo.Tick, currentTick) {
-			stores.RegisterExpired(store)
+			expired = append(expired, uuid)
 		} else {
-			stores.RegisterWorking(store)
+			working = append(working, uuid)
 		}
 	}
 
-	return stores
+	return working, expired
 }
 
 // getRecord returns the LogShardRecord with the given shardID.
