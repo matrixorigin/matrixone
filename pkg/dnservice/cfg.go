@@ -25,7 +25,8 @@ import (
 )
 
 var (
-	defaultListenAddress    = "unix:///tmp/dn.sock"
+	defaultListenAddress    = "0.0.0.0:22000"
+	defaultServiceAddress   = "127.0.0.1:22000"
 	defaultMaxConnections   = 400
 	defaultMaxIdleDuration  = time.Minute
 	defaultSendQueueSize    = 10240
@@ -138,6 +139,7 @@ func (c *Config) validate() error {
 	}
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress
+		c.ServiceAddress = defaultServiceAddress
 	}
 	if c.ServiceAddress == "" {
 		c.ServiceAddress = c.ListenAddress

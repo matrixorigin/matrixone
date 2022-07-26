@@ -340,6 +340,48 @@ func TestClusterDetailsQuery(t *testing.T) {
 		Tick:           3,
 		ServiceAddress: "addr3",
 	}
+	tsm.state.LogState.Shards[1] = pb.LogShardInfo{
+		ShardID:  1,
+		Replicas: map[uint64]string{1: "store-1", 2: "store-2", 3: "store-3"},
+		Epoch:    1, LeaderID: 1, Term: 1,
+	}
+
+	tsm.state.LogState.Stores["store-1"] = pb.LogStoreInfo{
+		Tick:           100,
+		ServiceAddress: "addr-log-1",
+		Replicas: []pb.LogReplicaInfo{{
+			LogShardInfo: pb.LogShardInfo{
+				ShardID:  1,
+				Replicas: map[uint64]string{1: "store-1", 2: "store-2", 3: "store-3"},
+				Epoch:    1, LeaderID: 1, Term: 1,
+			}, ReplicaID: 1,
+		}},
+	}
+
+	tsm.state.LogState.Stores["store-2"] = pb.LogStoreInfo{
+		Tick:           100,
+		ServiceAddress: "addr-log-2",
+		Replicas: []pb.LogReplicaInfo{{
+			LogShardInfo: pb.LogShardInfo{
+				ShardID:  1,
+				Replicas: map[uint64]string{1: "store-1", 2: "store-2", 3: "store-3"},
+				Epoch:    1, LeaderID: 1, Term: 1,
+			}, ReplicaID: 2,
+		}},
+	}
+
+	tsm.state.LogState.Stores["store-3"] = pb.LogStoreInfo{
+		Tick:           100,
+		ServiceAddress: "addr-log-3",
+		Replicas: []pb.LogReplicaInfo{{
+			LogShardInfo: pb.LogShardInfo{
+				ShardID:  1,
+				Replicas: map[uint64]string{1: "store-1", 2: "store-2", 3: "store-3"},
+				Epoch:    1, LeaderID: 1, Term: 1,
+			}, ReplicaID: 3,
+		}},
+	}
+
 	v, err := tsm.Lookup(&ClusterDetailsQuery{})
 	require.NoError(t, err)
 	expected := &pb.ClusterDetails{
@@ -362,11 +404,54 @@ func TestClusterDetailsQuery(t *testing.T) {
 				ServiceAddress: "addr2",
 			},
 		},
-		LogNodes: []pb.LogNode{},
+		LogNodes: []pb.LogNode{
+			{
+				UUID:           "store-1",
+				ServiceAddress: "addr-log-1",
+				Tick:           100,
+				State:          0,
+				Replicas: []pb.LogReplicaInfo{{
+					LogShardInfo: pb.LogShardInfo{
+						ShardID:  1,
+						Replicas: map[uint64]string{1: "store-1", 2: "store-2", 3: "store-3"},
+						Epoch:    1, LeaderID: 1, Term: 1,
+					}, ReplicaID: 1,
+				}},
+			},
+			{
+				UUID:           "store-2",
+				ServiceAddress: "addr-log-2",
+				Tick:           100,
+				State:          0,
+				Replicas: []pb.LogReplicaInfo{{
+					LogShardInfo: pb.LogShardInfo{
+						ShardID:  1,
+						Replicas: map[uint64]string{1: "store-1", 2: "store-2", 3: "store-3"},
+						Epoch:    1, LeaderID: 1, Term: 1,
+					}, ReplicaID: 2,
+				}},
+			},
+			{
+				UUID:           "store-3",
+				ServiceAddress: "addr-log-3",
+				Tick:           100,
+				State:          0,
+				Replicas: []pb.LogReplicaInfo{{
+					LogShardInfo: pb.LogShardInfo{
+						ShardID:  1,
+						Replicas: map[uint64]string{1: "store-1", 2: "store-2", 3: "store-3"},
+						Epoch:    1, LeaderID: 1, Term: 1,
+					}, ReplicaID: 3,
+				}},
+			},
+		},
 	}
 	result := v.(*pb.ClusterDetails)
 	sort.Slice(result.CNNodes, func(i, j int) bool {
 		return result.CNNodes[i].UUID < result.CNNodes[j].UUID
+	})
+	sort.Slice(result.LogNodes, func(i, j int) bool {
+		return result.LogNodes[i].UUID < result.LogNodes[j].UUID
 	})
 	assert.Equal(t, expected, result)
 }

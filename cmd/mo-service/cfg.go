@@ -58,13 +58,16 @@ func parseConfigFromFile(file string) (*Config, error) {
 	if file == "" {
 		return nil, fmt.Errorf("toml config file not set")
 	}
-
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err
 	}
+	return parseFromString(string(data))
+}
+
+func parseFromString(data string) (*Config, error) {
 	cfg := &Config{}
-	if _, err = toml.Decode(string(data), cfg); err != nil {
+	if _, err := toml.Decode(data, cfg); err != nil {
 		return nil, err
 	}
 
