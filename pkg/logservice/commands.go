@@ -137,10 +137,6 @@ func (s *Service) heartbeat(ctx context.Context) {
 	cb, err := s.haClient.SendLogHeartbeat(ctx2, hb)
 	if err != nil {
 		plog.Errorf("failed to send log service heartbeat, %v", err)
-		if err := s.haClient.Close(); err != nil {
-			plog.Errorf("failed to close hakeeper client %v", err)
-		}
-		s.haClient = nil
 		return
 	}
 	s.handleCommands(cb.Commands)
