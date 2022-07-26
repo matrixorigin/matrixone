@@ -59,9 +59,28 @@ func TestS3FS(t *testing.T) {
 		})
 	})
 
+	t.Run("cache", func(t *testing.T) {
+		testCache(t, func() FileService {
+
+			config := sharedConfig
+			config.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
+
+			fs, err := NewS3FS(
+				config.Endpoint,
+				config.Bucket,
+				config.KeyPrefix,
+			)
+			assert.Nil(t, err)
+
+			return fs
+		})
+	})
+
 }
 
 func TestS3FSMinioServer(t *testing.T) {
+	t.Skip() //TODO
+
 	exePath, err := exec.LookPath("minio")
 	if errors.Is(err, exec.ErrNotFound) {
 		// minio not found in machine
@@ -84,7 +103,7 @@ func TestS3FSMinioServer(t *testing.T) {
 	err = cmd.Start()
 	assert.Nil(t, err)
 	defer func() {
-		cmd.Process.Kill()
+		_ = cmd.Process.Kill()
 	}()
 
 	// run test
