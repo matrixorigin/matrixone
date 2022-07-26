@@ -15,7 +15,6 @@
 package types
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -121,14 +120,4 @@ func TestParseDate(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestDate_String(t *testing.T) {
-
-	for i := 0; i < 299; i++ {
-		var wday Weekday = Weekday(i)
-		str := wday.String()
-		fmt.Printf("%+v\n", str)
-	}
-
 }
