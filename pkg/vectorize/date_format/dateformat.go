@@ -26,7 +26,7 @@ import (
 )
 
 var (
-	// WeekdayNames lists names of weekdays, which are used in builtin time function `date_format`.
+	// WeekdayNames lists names of weekdays, which are used in builtin function `date_format`.
 	WeekdayNames = []string{
 		"Monday",
 		"Tuesday",
@@ -37,27 +37,36 @@ var (
 		"Sunday",
 	}
 
-	// MonthNames lists names of months, which are used in builtin time function `date_format`.
+	// MonthNames lists names of months, which are used in builtin function `date_format`.
 	MonthNames = []string{
-		"January", "February",
-		"March", "April",
-		"May", "June",
-		"July", "August",
-		"September", "October",
-		"November", "December",
+		"January",
+		"February",
+		"March",
+		"April",
+		"May",
+		"June",
+		"July",
+		"August",
+		"September",
+		"October",
+		"November",
+		"December",
 	}
 
-	// AbbrevWeekdayName lists Abbreviation of week names, which are used int builtin time function 'date_format'
+	// AbbrevWeekdayName lists Abbreviation of week names, which are used int builtin function 'date_format'
 	AbbrevWeekdayName = []string{
-		"Sun", "Mon", "Tue",
-		"Wed", "Thu", "Fri", "Sat",
+		"Sun",
+		"Mon",
+		"Tue",
+		"Wed",
+		"Thu",
+		"Fri",
+		"Sat",
 	}
 )
 
-//  DateFromat
-//  @Description: DateFromat is used to formating the datetime values according to the format string.
+//  DateFromat: DateFromat is used to formating the datetime values according to the format string.
 func DateFromat(datetimes []types.Datetime, format string, ns *nulls.Nulls, res *types.Bytes) error {
-	//for i, offset := range res.Offsets {
 	for idx, datetime := range datetimes {
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
@@ -81,14 +90,13 @@ func DateFromat(datetimes []types.Datetime, format string, ns *nulls.Nulls, res 
 	return nil
 }
 
-//  datetimeFormat
-//  @Description: format the datetime value according to the format string.
+//  datetimeFormat: format the datetime value according to the format string.
 func datetimeFormat(datetime types.Datetime, format string) (string, error) {
 	var buf bytes.Buffer
 	inPatternMatch := false
 	for _, b := range format {
 		if inPatternMatch {
-			if err := convertDateFormat(datetime, b, &buf); err != nil {
+			if err := makeDateFormat(datetime, b, &buf); err != nil {
 				return "", err
 			}
 			inPatternMatch = false
@@ -105,9 +113,8 @@ func datetimeFormat(datetime types.Datetime, format string) (string, error) {
 	return buf.String(), nil
 }
 
-//  convertDateFormat
-//  @Description: Get the format string corresponding to the date according to a single format character
-func convertDateFormat(t types.Datetime, b rune, buf *bytes.Buffer) error {
+// makeDateFormat: Get the format string corresponding to the date according to a single format character
+func makeDateFormat(t types.Datetime, b rune, buf *bytes.Buffer) error {
 	switch b {
 	case 'b':
 		m := t.Month()
@@ -122,20 +129,22 @@ func convertDateFormat(t types.Datetime, b rune, buf *bytes.Buffer) error {
 		}
 		buf.WriteString(MonthNames[m-1])
 	case 'm':
-		buf.WriteString(FormatIntWidthN(int(t.Month()), 2))
+		buf.WriteString(FormatIntByWidth(int(t.Month()), 2))
 	case 'c':
 		buf.WriteString(strconv.FormatInt(int64(t.Month()), 10))
 	case 'D':
 		buf.WriteString(strconv.FormatInt(int64(t.Day()), 10))
 		buf.WriteString(AbbrDayOfMonth(int(t.Day())))
 	case 'd':
-		buf.WriteString(FormatIntWidthN(int(t.Day()), 2))
+		buf.WriteString(FormatIntByWidth(int(t.Day()), 2))
 	case 'e':
 		buf.WriteString(strconv.FormatInt(int64(t.Day()), 10))
+	case 'f':
+		fmt.Fprintf(buf, "%06d", t.MicroSec())
 	case 'j':
 		fmt.Fprintf(buf, "%03d", t.DayOfYear())
 	case 'H':
-		buf.WriteString(FormatIntWidthN(int(t.Hour()), 2))
+		buf.WriteString(FormatIntByWidth(int(t.Hour()), 2))
 	case 'k':
 		buf.WriteString(strconv.FormatInt(int64(t.Hour()), 10))
 	case 'h', 'I':
@@ -143,8 +152,10 @@ func convertDateFormat(t types.Datetime, b rune, buf *bytes.Buffer) error {
 		if tt%12 == 0 {
 			buf.WriteString("12")
 		} else {
-			buf.WriteString(FormatIntWidthN(int(tt%12), 2))
+			buf.WriteString(FormatIntByWidth(int(tt%12), 2))
 		}
+	case 'i':
+		buf.WriteString(FormatIntByWidth(int(t.Minute()), 2))
 	case 'l':
 		tt := t.Hour()
 		if tt%12 == 0 {
@@ -152,8 +163,6 @@ func convertDateFormat(t types.Datetime, b rune, buf *bytes.Buffer) error {
 		} else {
 			buf.WriteString(strconv.FormatInt(int64(tt%12), 10))
 		}
-	case 'i':
-		buf.WriteString(FormatIntWidthN(int(t.Minute()), 2))
 	case 'p':
 		hour := t.Hour()
 		if hour/12%2 == 0 {
@@ -174,24 +183,22 @@ func convertDateFormat(t types.Datetime, b rune, buf *bytes.Buffer) error {
 		default:
 			fmt.Fprintf(buf, "%02d:%02d:%02d PM", h-12, t.Minute(), t.Sec())
 		}
+	case 'S', 's':
+		buf.WriteString(FormatIntByWidth(int(t.Sec()), 2))
 	case 'T':
 		fmt.Fprintf(buf, "%02d:%02d:%02d", t.Hour(), t.Minute(), t.Sec())
-	case 'S', 's':
-		buf.WriteString(FormatIntWidthN(int(t.Sec()), 2))
-	case 'f':
-		fmt.Fprintf(buf, "%06d", t.MicroSec())
 	case 'U':
 		w := t.Week(0)
-		buf.WriteString(FormatIntWidthN(w, 2))
+		buf.WriteString(FormatIntByWidth(w, 2))
 	case 'u':
 		w := t.Week(1)
-		buf.WriteString(FormatIntWidthN(w, 2))
+		buf.WriteString(FormatIntByWidth(w, 2))
 	case 'V':
 		w := t.Week(2)
-		buf.WriteString(FormatIntWidthN(w, 2))
+		buf.WriteString(FormatIntByWidth(w, 2))
 	case 'v':
 		_, w := t.YearWeek(3)
-		buf.WriteString(FormatIntWidthN(w, 2))
+		buf.WriteString(FormatIntByWidth(w, 2))
 	case 'a':
 		weekday := t.DayOfWeek()
 		buf.WriteString(AbbrevWeekdayName[weekday])
@@ -204,19 +211,19 @@ func convertDateFormat(t types.Datetime, b rune, buf *bytes.Buffer) error {
 		if year < 0 {
 			buf.WriteString(strconv.FormatUint(uint64(math.MaxUint32), 10))
 		} else {
-			buf.WriteString(FormatIntWidthN(year, 4))
+			buf.WriteString(FormatIntByWidth(year, 4))
 		}
 	case 'x':
 		year, _ := t.YearWeek(3)
 		if year < 0 {
 			buf.WriteString(strconv.FormatUint(uint64(math.MaxUint32), 10))
 		} else {
-			buf.WriteString(FormatIntWidthN(year, 4))
+			buf.WriteString(FormatIntByWidth(year, 4))
 		}
 	case 'Y':
-		buf.WriteString(FormatIntWidthN(int(t.Year()), 4))
+		buf.WriteString(FormatIntByWidth(int(t.Year()), 4))
 	case 'y':
-		str := FormatIntWidthN(int(t.Year()), 4)
+		str := FormatIntByWidth(int(t.Year()), 4)
 		buf.WriteString(str[2:])
 	default:
 		buf.WriteRune(b)
