@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,34 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package union
 
-import "io"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+)
 
-type readCloser struct {
-	r         io.Reader
-	closeFunc func() error
+type Argument struct {
+	//  attribute which need not do serialization work
+	ctr Container
 }
 
-var _ io.ReadCloser = new(readCloser)
+type Container struct {
+	// hash table related.
+	hashTable *hashmap.StrHashMap
 
-func (r *readCloser) Read(data []byte) (int, error) {
-	return r.r.Read(data)
-}
-
-func (r *readCloser) Close() error {
-	return r.closeFunc()
-}
-
-type countingReader struct {
-	R io.Reader
-	N int
-}
-
-var _ io.Reader = new(countingReader)
-
-func (c *countingReader) Read(data []byte) (int, error) {
-	n, err := c.R.Read(data)
-	c.N += n
-	return n, err
+	// bat records the final result of union operator.
+	bat *batch.Batch
 }
