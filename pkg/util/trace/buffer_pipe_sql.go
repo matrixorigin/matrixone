@@ -123,9 +123,20 @@ func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 
 // NewItemBatchHandler implement batchpipe.PipeImpl
 func (t batchSqlHandler) NewItemBatchHandler() func(batch any) {
+	var f = func(b any) {}
+	if gTracerProvider.sqlExecutor == nil {
+		// fixme: handle error situation, should panic
+		logutil.Errorf("[Trace] no SQL Executor.")
+		return f
+	}
 	exec := gTracerProvider.sqlExecutor()
+	if exec == nil {
+		// fixme: handle error situation, should panic
+		logutil.Errorf("[Trace] no SQL Executor.")
+		return f
+	}
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(statsDatabase).Internal(true).Finish())
-	return func(b any) {
+	f = func(b any) {
 		_, span := Start(DefaultContext(), "BatchHandle")
 		defer span.End()
 		batch := b.(string)
@@ -135,6 +146,7 @@ func (t batchSqlHandler) NewItemBatchHandler() func(batch any) {
 			logutil.Errorf("[Metric] insert error. sql: %s; err: %v", batch, err)
 		}
 	}
+	return f
 }
 
 func quote(value string) string {

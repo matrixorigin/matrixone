@@ -44,13 +44,16 @@ func (r *Resource) String() string {
 type SpanKind int
 
 const (
-	SpanKindCN SpanKind = iota
+	SpanKindNode SpanKind = iota
+	SpanKindCN
 	SpanKindDN
 	SpanKindLogService
 )
 
 func (t SpanKind) String() string {
 	switch t {
+	case SpanKindNode:
+		return "Node"
 	case SpanKindCN:
 		return "CN"
 	case SpanKindDN:

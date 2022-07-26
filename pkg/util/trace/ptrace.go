@@ -16,6 +16,7 @@ package trace
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"sync"
 )
@@ -117,10 +118,28 @@ func WithNode(id int64, t SpanKind) tracerProviderOptionFunc {
 	}
 }
 
-func WithSQLExecuter(f func() ie.InternalExecutor) tracerProviderOptionFunc {
+func EnableTracer(enable bool) tracerProviderOptionFunc {
+	return func(cfg *tracerProviderConfig) {
+		cfg.enableTracer = enable
+	}
+}
+
+func WithSQLExecutor(f func() ie.InternalExecutor) tracerProviderOptionFunc {
 	return func(cfg *tracerProviderConfig) {
 		cfg.sqlExecutor = f
 	}
+}
+
+var _ IDGenerator = &MOTraceIdGenerator{}
+
+type MOTraceIdGenerator struct{}
+
+func (M MOTraceIdGenerator) NewIDs() (TraceID, SpanID) {
+	return TraceID(util.Fastrand64()), SpanID(util.Fastrand64())
+}
+
+func (M MOTraceIdGenerator) NewSpanID() SpanID {
+	return SpanID(util.Fastrand64())
 }
 
 var _ TracerProvider = &MOTracerProvider{}
@@ -132,6 +151,7 @@ type MOTracerProvider struct {
 func newMOTracerProvider(opts ...TracerProviderOption) *MOTracerProvider {
 	pTracer := &MOTracerProvider{}
 	pTracer.resource = newResource()
+	pTracer.idGenerator = &MOTraceIdGenerator{}
 	for _, opt := range opts {
 		opt.apply(&pTracer.tracerProviderConfig)
 	}

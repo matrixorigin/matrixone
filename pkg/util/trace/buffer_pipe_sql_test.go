@@ -2,13 +2,17 @@ package trace
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -23,6 +27,27 @@ func (s Size) Size() int64 {
 
 func (s Size) GetName() string {
 	return "size"
+}
+func init() {
+	setup()
+}
+func setup() {
+	if _, err := Init(
+		context.Background(),
+		EnableTracer(false),
+		WithMOVersion("v0.test.0"),
+		WithNode(config.GlobalSystemVariables.GetNodeID(), SpanKindNode),
+		WithSQLExecutor(func() ie.InternalExecutor {
+			return nil
+		}),
+	); err != nil {
+		panic(err)
+	}
+	fmt.Println("Finish tests init.")
+}
+
+func teardown() {
+	fmt.Println("After all tests")
 }
 
 func TestStructIndexes(t *testing.T) {
@@ -60,6 +85,7 @@ func TestNewSpanBufferPipeWorker(t *testing.T) {
 	}
 }
 
+/*
 func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 	type fields struct {
 		opt []buffer2SqlOption
@@ -69,7 +95,6 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 		fields fields
 		want   func(batch string)
 	}{
-		// TODO: Add test cases.
 	}
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
@@ -81,7 +106,7 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 			}
 		})
 	}
-}
+}*/
 
 func Test_batchSqlHandler_NewItemBuffer(t1 *testing.T) {
 	type fields struct {

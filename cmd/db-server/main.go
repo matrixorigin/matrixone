@@ -70,11 +70,14 @@ func createMOServer() {
 		metric.InitMetric(ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
 	}
 	frontend.InitServerVersion(MoVersion)
-	if config.GlobalSystemVariables.GetEnableTrace() {
-		if _, err := trace.Init(context.Background(),
+	{
+		// init trace/log/error framework
+		if _, err := trace.Init(
+			context.Background(),
+			trace.EnableTracer(config.GlobalSystemVariables.GetEnableTrace()),
 			trace.WithMOVersion(MoVersion),
 			trace.WithNode(config.GlobalSystemVariables.GetNodeID(), trace.SpanKindDN),
-			trace.WithSQLExecuter(func() ie.InternalExecutor {
+			trace.WithSQLExecutor(func() ie.InternalExecutor {
 				return frontend.NewIternalExecutor(pu)
 			}),
 		); err != nil {
