@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
@@ -67,10 +68,17 @@ func waitSignalToStop(stopper *stopper.Stopper) {
 func startService(cfg *Config, stopper *stopper.Stopper) error {
 	// TODO: start other service
 	switch strings.ToUpper(cfg.ServiceType) {
+	case cnServiceType:
+		panic("not implemented")
 	case dnServiceType:
 		return startDNService(cfg, stopper)
+	case logServiceType:
+		return startLogService(cfg, stopper)
+	case standaloneServiceType:
+		panic("not implemented")
+	default:
+		panic("unknown service type")
 	}
-	return nil
 }
 
 func startDNService(cfg *Config, stopper *stopper.Stopper) error {
@@ -80,6 +88,23 @@ func startDNService(cfg *Config, stopper *stopper.Stopper) error {
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
 		s, err := dnservice.NewService(&cfg.DN,
 			dnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service")))
+		if err != nil {
+			panic(err)
+		}
+		if err := s.Start(); err != nil {
+			panic(err)
+		}
+
+		<-ctx.Done()
+		if err := s.Close(); err != nil {
+			panic(err)
+		}
+	})
+}
+
+func startLogService(cfg *Config, stopper *stopper.Stopper) error {
+	return stopper.RunNamedTask("log-service", func(ctx context.Context) {
+		s, err := logservice.NewService(cfg.LogService)
 		if err != nil {
 			panic(err)
 		}
