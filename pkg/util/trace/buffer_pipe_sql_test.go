@@ -27,7 +27,7 @@ func (s Size) GetName() string {
 
 func TestStructIndexes(t *testing.T) {
 
-	_ = NewBufferPipe2SqlWorker().(batchpipe.PipeImpl[batchpipe.HasName, string])
+	_ = NewBufferPipe2SqlWorker().(batchpipe.PipeImpl[batchpipe.HasName, any])
 
 	buf := newBuffer2Sql()
 	byteBuf := new(bytes.Buffer)

@@ -90,18 +90,18 @@ type HasItemSize interface {
 	Size() int64
 }
 
-var _ bp.PipeImpl[HasItemSize, string] = &batchSqlHandler{}
+var _ bp.PipeImpl[bp.HasName, any] = &batchSqlHandler{}
 
 type batchSqlHandler struct {
 	opt []buffer2SqlOption
 }
 
-func NewBufferPipe2SqlWorker(opt ...buffer2SqlOption) bp.PipeImpl[HasItemSize, string] {
+func NewBufferPipe2SqlWorker(opt ...buffer2SqlOption) bp.PipeImpl[bp.HasName, any] {
 	return &batchSqlHandler{opt}
 }
 
 // NewItemBuffer implement batchpipe.PipeImpl
-func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[HasItemSize, string] {
+func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, any] {
 	var f genBatchFunc
 	switch name {
 	case MOSpanType:
@@ -122,12 +122,13 @@ func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[HasItemSize, s
 }
 
 // NewItemBatchHandler implement batchpipe.PipeImpl
-func (t batchSqlHandler) NewItemBatchHandler() func(batch string) {
+func (t batchSqlHandler) NewItemBatchHandler() func(batch any) {
 	exec := gTracerProvider.sqlExecutor()
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(statsDatabase).Internal(true).Finish())
-	return func(batch string) {
+	return func(b any) {
 		_, span := Start(DefaultContext(), "BatchHandle")
 		defer span.End()
+		batch := b.(string)
 		if err := exec.Exec(batch, ie.NewOptsBuilder().Finish()); err != nil {
 			// fixme: catch panic error
 			// fixme: handle error situation re-try
@@ -152,7 +153,7 @@ func quote(value string) string {
 	return value
 }
 
-func (t batchSqlHandler) genSpanBatchSql(in []HasItemSize, buf *bytes.Buffer) string {
+func (t batchSqlHandler) genSpanBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
 		return ""
@@ -192,7 +193,7 @@ func (t batchSqlHandler) genSpanBatchSql(in []HasItemSize, buf *bytes.Buffer) st
 	return buf.String()
 }
 
-func (t batchSqlHandler) genLogBatchSql(in []HasItemSize, buf *bytes.Buffer) string {
+func (t batchSqlHandler) genLogBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
 		return ""
@@ -228,7 +229,7 @@ func (t batchSqlHandler) genLogBatchSql(in []HasItemSize, buf *bytes.Buffer) str
 	return buf.String()
 }
 
-func (t batchSqlHandler) genStatementBatchSql(in []HasItemSize, buf *bytes.Buffer) string {
+func (t batchSqlHandler) genStatementBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
 		return ""
@@ -274,7 +275,7 @@ func (t batchSqlHandler) genStatementBatchSql(in []HasItemSize, buf *bytes.Buffe
 	return buf.String()
 }
 
-func (t batchSqlHandler) genErrorBatchSql(in []HasItemSize, buf *bytes.Buffer) string {
+func (t batchSqlHandler) genErrorBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
 		return ""
@@ -300,7 +301,7 @@ func (t batchSqlHandler) genErrorBatchSql(in []HasItemSize, buf *bytes.Buffer) s
 	return buf.String()
 }
 
-var _ bp.ItemBuffer[HasItemSize, string] = &buffer2Sql{}
+var _ bp.ItemBuffer[bp.HasName, any] = &buffer2Sql{}
 
 // buffer2Sql catch item, like trace/log/error, buffer
 type buffer2Sql struct {
@@ -313,9 +314,9 @@ type buffer2Sql struct {
 	batchFunc genBatchFunc
 }
 
-type genBatchFunc func([]HasItemSize, *bytes.Buffer) string
+type genBatchFunc func([]HasItemSize, *bytes.Buffer) any
 
-var genBatchEmptySQL = genBatchFunc(func([]HasItemSize, *bytes.Buffer) string { return "" })
+var genBatchEmptySQL = genBatchFunc(func([]HasItemSize, *bytes.Buffer) any { return "" })
 
 func newBuffer2Sql(opts ...buffer2SqlOption) *buffer2Sql {
 	b := &buffer2Sql{
@@ -329,11 +330,15 @@ func newBuffer2Sql(opts ...buffer2SqlOption) *buffer2Sql {
 	return b
 }
 
-func (b *buffer2Sql) Add(item HasItemSize) {
+func (b *buffer2Sql) Add(i bp.HasName) {
 	b.mux.Lock()
 	defer b.mux.Unlock()
-	b.buf = append(b.buf, item)
-	b.size += item.Size()
+	if item, ok := i.(HasItemSize); !ok {
+		panic("not implement interface HasItemSize")
+	} else {
+		b.buf = append(b.buf, item)
+		b.size += item.Size()
+	}
 }
 
 func (b *buffer2Sql) Reset() {
@@ -353,7 +358,7 @@ func (b *buffer2Sql) ShouldFlush() bool {
 	return atomic.LoadInt64(&b.size) > b.sizeThreshold
 }
 
-func (b *buffer2Sql) GetBatch(buf *bytes.Buffer) string {
+func (b *buffer2Sql) GetBatch(buf *bytes.Buffer) any {
 	_, span := Start(DefaultContext(), "GenBatch")
 	defer span.End()
 	b.mux.Lock()
