@@ -15,7 +15,6 @@
 package logservice
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
 	"testing"
@@ -24,35 +23,30 @@ import (
 func TestSelector(t *testing.T) {
 	cases := []struct {
 		shardInfo logservice.LogShardInfo
-		stores    *util.ClusterStores
-		expected  util.StoreID
+		stores    []string
+		expected  string
 	}{
 		{
 			shardInfo: logservice.LogShardInfo{
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 			},
-			stores: &util.ClusterStores{
-				Working: []*util.Store{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"}},
-			},
+			stores: []string{"a", "b", "c", "d"},
+
 			expected: "d",
 		},
 		{
 			shardInfo: logservice.LogShardInfo{
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 			},
-			stores: &util.ClusterStores{
-				Working: []*util.Store{{ID: "a"}, {ID: "b"}, {ID: "c"}},
-				Expired: []*util.Store{{ID: "d"}},
-			},
+			stores: []string{"a", "b", "c"},
+
 			expected: "",
 		},
 		{
 			shardInfo: logservice.LogShardInfo{
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 			},
-			stores: &util.ClusterStores{
-				Working: []*util.Store{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "e"}, {ID: "hello"}, {ID: "d"}},
-			},
+			stores:   []string{"a", "b", "c", "e", "hello", "d"},
 			expected: "d",
 		},
 	}
