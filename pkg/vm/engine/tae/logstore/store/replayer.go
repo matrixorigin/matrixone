@@ -162,16 +162,13 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver, addrInMeta bo
 			ckpInfo, ok := r.checkpointrange[ckp.Group]
 			if !ok {
 				ckpInfo = newCheckpointInfo()
-
 				r.checkpointrange[ckp.Group] = ckpInfo
 			}
 			if ckp.Ranges != nil && len(ckp.Ranges.Intervals) > 0 {
 				ckpInfo.UpdateWtihRanges(ckp.Ranges)
 			}
 			if ckp.Command != nil {
-				for lsn, cmds := range ckp.Command {
-					ckpInfo.UpdateWithCommandInfo(lsn, &cmds)
-				}
+				ckpInfo.MergeCommandMap(ckp.Command)
 			}
 		}
 	case entry.GTUncommit:

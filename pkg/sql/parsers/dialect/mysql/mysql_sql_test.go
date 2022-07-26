@@ -94,13 +94,13 @@ var (
 		input: "select cast(false as varchar)",
 	}, {
 		input:  "select cast(a as timestamp)",
-		output: "select cast(a as timestamp(26, 6))",
+		output: "select cast(a as timestamp(26))",
 	}, {
 		input:  "select cast(\"2022-01-30\" as varchar);",
 		output: "select cast(2022-01-30 as varchar)",
 	}, {
 		input:  "select cast(b as timestamp) from t2",
-		output: "select cast(b as timestamp(26, 6)) from t2",
+		output: "select cast(b as timestamp(26)) from t2",
 	}, {
 		input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
 		output: "select cast(2022-01-01 01:23:34 as varchar)",
@@ -173,7 +173,7 @@ var (
 		output: "set a = b",
 	}, {
 		input:  "CREATE TABLE t1 (datetime datetime, timestamp timestamp, date date)",
-		output: "create table t1 (datetime datetime(26, 6), timestamp timestamp(26, 6), date date)",
+		output: "create table t1 (datetime datetime(26), timestamp timestamp(26), date date)",
 	}, {
 		input:  "SET timestamp=DEFAULT;",
 		output: "set timestamp = default",
