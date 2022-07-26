@@ -192,6 +192,10 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) error {
 	}
 
 	for i, entry := range vector.Entries {
+		if entry.ignore {
+			continue
+		}
+
 		start := entry.Offset - min
 		if start >= len(content) {
 			return ErrEmptyRange
