@@ -32,17 +32,20 @@ type OpStep interface {
 	IsFinish(state pb.LogState, dnState pb.DNState) bool
 }
 
-type AddLogService struct {
-	Target string
-
-	StoreID   string
+type Replica struct {
+	UUID      string
 	ShardID   uint64
 	ReplicaID uint64
 	Epoch     uint64
 }
 
+type AddLogService struct {
+	Target string
+	Replica
+}
+
 func (a AddLogService) String() string {
-	return fmt.Sprintf("adding %v:%v(at epoch %v) to %s", a.ShardID, a.ReplicaID, a.Epoch, a.StoreID)
+	return fmt.Sprintf("adding %v:%v(at epoch %v) to %s", a.ShardID, a.ReplicaID, a.Epoch, a.UUID)
 }
 
 func (a AddLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
@@ -58,15 +61,11 @@ func (a AddLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
 
 type RemoveLogService struct {
 	Target string
-
-	StoreID   string
-	ShardID   uint64
-	ReplicaID uint64
-	Epoch     uint64
+	Replica
 }
 
 func (a RemoveLogService) String() string {
-	return fmt.Sprintf("removing %v:%v(at epoch %v) on log store %s", a.ShardID, a.ReplicaID, a.Epoch, a.StoreID)
+	return fmt.Sprintf("removing %v:%v(at epoch %v) on log store %s", a.ShardID, a.ReplicaID, a.Epoch, a.UUID)
 }
 
 func (a RemoveLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
@@ -80,19 +79,18 @@ func (a RemoveLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
 }
 
 type StartLogService struct {
-	StoreID            string
-	ShardID, ReplicaID uint64
+	Replica
 }
 
 func (a StartLogService) String() string {
-	return fmt.Sprintf("starting %v:%v on %s", a.ShardID, a.ReplicaID, a.StoreID)
+	return fmt.Sprintf("starting %v:%v on %s", a.ShardID, a.ReplicaID, a.UUID)
 }
 
 func (a StartLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
-	if _, ok := state.Stores[a.StoreID]; !ok {
+	if _, ok := state.Stores[a.UUID]; !ok {
 		return true
 	}
-	for _, replicaInfo := range state.Stores[a.StoreID].Replicas {
+	for _, replicaInfo := range state.Stores[a.UUID].Replicas {
 		if replicaInfo.ShardID == a.ShardID {
 			return true
 		}
@@ -102,17 +100,15 @@ func (a StartLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
 }
 
 type StopLogService struct {
-	StoreID string
-	ShardID uint64
-	Epoch   uint64
+	Replica
 }
 
 func (a StopLogService) String() string {
-	return fmt.Sprintf("stoping %v on %s", a.ShardID, a.StoreID)
+	return fmt.Sprintf("stoping %v on %s", a.ShardID, a.UUID)
 }
 
 func (a StopLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
-	if store, ok := state.Stores[a.StoreID]; ok {
+	if store, ok := state.Stores[a.UUID]; ok {
 		for _, replicaInfo := range store.Replicas {
 			if replicaInfo.ShardID == a.ShardID {
 				return false
