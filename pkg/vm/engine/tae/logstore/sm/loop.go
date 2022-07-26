@@ -13,6 +13,9 @@ type Loop struct {
 	cancelFn     context.CancelFunc
 	wg           *sync.WaitGroup
 	maxBatchSize int
+
+	Itemcount int
+	Itemtimes int
 }
 
 func NewLoop(queue, nextQueue chan any, fn func([]any, chan any), maxBatchSize int) *Loop {
@@ -50,6 +53,8 @@ func (l *Loop) loop() {
 				}
 			}
 		}
+		l.Itemcount+=len(batch)
+		l.Itemtimes++
 		l.fn(batch, l.nextQueue)
 	}
 }

@@ -8,11 +8,10 @@ import (
 
 var ErrTooMuchPenddings = errors.New("too much penddings")
 
-type flushEntry struct{}
-
-func (d *LogServiceDriver) Append(e *entry.Entry) {
+func (d *LogServiceDriver) Append(e *entry.Entry) error {
 	e.Lsn = d.allocateDriverLsn()
-	d.preAppendQueue <- e
+	d.preAppendLoop.Enqueue(e)
+	return nil
 }
 
 func (d *LogServiceDriver) getAppender(size int) *driverAppender {
@@ -23,44 +22,27 @@ func (d *LogServiceDriver) getAppender(size int) *driverAppender {
 }
 
 func (d *LogServiceDriver) appendAppender() {
-	d.appendQueue <- d.appendable
+	d.appendtimes++
+	d.onAppendQueue(d.appendable)
+	d.appendedQueue<-d.appendable
 	d.appendable = newDriverAppender()
 }
 
-func (d *LogServiceDriver) flushAppend() {
-	d.preAppendQueue <- &flushEntry{}
-}
-
-func (d *LogServiceDriver) doFlush() {
-	if d.appendable.flushed && d.appendable.entry.payloadSize != 0 {
-		d.appendAppender()
-	} else {
-		d.appendable.flushed = true
-	}
-}
-
-func (d *LogServiceDriver) onPreAppend(items []any, _ chan any) {
+func (d *LogServiceDriver) onPreAppend(items ...any) {
 	for _, item := range items {
-		switch v := item.(type) {
-		case *entry.Entry:
-			appender := d.getAppender(v.GetSize())
-			appender.appendEntry(v)
-		case *flushEntry:
-			d.doFlush()
-		}
+		e := item.(*entry.Entry)
+		appender := d.getAppender(e.GetSize())
+		appender.appendEntry(e)
 	}
+	d.appendAppender()
 }
 
-func (d *LogServiceDriver) onAppendQueue(items []any, q chan any) {
-	for _, item := range items {
-		appender := item.(*driverAppender)
+func (d *LogServiceDriver) onAppendQueue(appender *driverAppender) {
 		appender.client, appender.appendlsn = d.getClient()
 		appender.entry.SetAppended(d.getAppended())
 		appender.contextDuration = d.config.NewClientDuration
 		appender.wg.Add(1)
-		go appender.append()
-	}
-	q <- items
+		appender.append()
 }
 
 func (d *LogServiceDriver) getClient() (client *clientWithRecord, lsn uint64) {
@@ -68,21 +50,18 @@ func (d *LogServiceDriver) getClient() (client *clientWithRecord, lsn uint64) {
 	if err != nil {
 		panic(err) //TODO retry
 	}
-	client = d.clientPool.Get().(*clientWithRecord)
+	client = d.appendClient
 	return
 }
 
 func (d *LogServiceDriver) onAppendedQueue(items []any, q chan any) {
 	appenders := make([]*driverAppender, 0)
-	for _, v := range items {
-		batch := v.([]any)
-		for _, item := range batch {
+
+	for _, item := range items {
 			appender := item.(*driverAppender)
 			appender.waitDone()
-			d.clientPool.Put(appender.client)
 			appender.freeEntries()
 			appenders = append(appenders, appender)
-		}
 	}
 	q <- appenders
 }
@@ -93,7 +72,7 @@ func (d *LogServiceDriver) onPostAppendQueue(items []any, _ chan any) {
 	for _, v := range items {
 		batch := v.([]*driverAppender)
 		for _, appender := range batch {
-			d.logAppend(appender)
+			d.logAppend(appender) 
 			appended = append(appended, appender.appendlsn)
 			logserviceAppended = append(logserviceAppended, appender.logserviceLsn)
 		}

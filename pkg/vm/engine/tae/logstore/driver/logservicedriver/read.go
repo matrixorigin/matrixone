@@ -52,13 +52,12 @@ func (d *LogServiceDriver) tryRead(lsn uint64) (*recordEntry, error) {
 func (d *LogServiceDriver) readFromLogService(lsn uint64) {
 	ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
 	defer cancel()
-	client := d.clientPool.Get().(*clientWithRecord)
+	client := d.readClient
 	records, _, err := client.c.Read(ctx, lsn, d.config.ReadMaxSize)
 	if err != nil { //TODO
 		panic(err)
 	}
 	d.appendRecords(records, lsn)
-	d.clientPool.Put(client)
 }
 
 func (d *LogServiceDriver) appendRecords(records []logservice.LogRecord, firstlsn uint64) {

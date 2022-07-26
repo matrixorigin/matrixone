@@ -28,7 +28,7 @@ func TestAppendRead(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
-	cfg := newTestConfig(ccfg)
+	cfg := NewTestConfig(ccfg)
 	driver := NewLogServiceDriver(cfg)
 	defer func() {
 		assert.NoError(t, driver.Close())
@@ -58,7 +58,7 @@ func TestTruncate(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
-	cfg := newTestConfig(ccfg)
+	cfg := NewTestConfig(ccfg)
 	driver := NewLogServiceDriver(cfg)
 	defer func() {
 		assert.NoError(t, driver.Close())

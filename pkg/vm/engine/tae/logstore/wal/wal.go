@@ -10,7 +10,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
 
-var DefaultMaxBatchSize = 100
+var DefaultMaxBatchSize = 10000
 
 type WalImpl struct {
 	*WalInfo
@@ -37,12 +37,12 @@ func NewLogStore(driver driver.Driver) *WalImpl {
 		appendWg: sync.WaitGroup{},
 		appendMu: sync.RWMutex{},
 	}
-	w.driverAppendQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, w.onDriverAppendQueue)
-	w.doneWithErrQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, w.onDoneWithErrQueue)
-	w.logInfoQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, w.onLogInfoQueue)
-	w.checkpointQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, w.onLogCKPInfoQueue)
-	w.truncatingQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, w.onTruncatingQueue)
-	w.truncateQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, w.onTruncateQueue)
+	w.driverAppendQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onDriverAppendQueue)
+	w.doneWithErrQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onDoneWithErrQueue)
+	w.logInfoQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onLogInfoQueue)
+	w.checkpointQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onLogCKPInfoQueue)
+	w.truncatingQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onTruncatingQueue)
+	w.truncateQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onTruncateQueue)
 	w.Start()
 	return w
 }
@@ -71,6 +71,7 @@ func (w *WalImpl) Close() error {
 	w.checkpointQueue.Stop()
 	w.truncatingQueue.Stop()
 	w.truncateQueue.Stop()
+	w.driver.Close()
 	return nil
 }
 func (w *WalImpl) Append(gid uint32, e entry.Entry) (lsn uint64, err error) {
@@ -101,6 +102,8 @@ func (w *WalImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.Entr
 	info.Group = gid
 	info.GroupLSN = lsn
 	drEntry = driverEntry.NewEntry(e)
+	// e.DoneWithErr(nil)
+	// return
 	w.driverAppendQueue.Enqueue(drEntry)
 	return
 }
@@ -110,6 +113,7 @@ func (w *WalImpl) onDriverAppendQueue(items ...any) {
 		driverEntry := item.(*driverEntry.Entry)
 		driverEntry.Entry.PrepareWrite()
 		w.driver.Append(driverEntry)
+		// driverEntry.Entry.DoneWithErr(nil)
 		w.doneWithErrQueue.Enqueue(driverEntry)
 	}
 }

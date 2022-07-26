@@ -8,13 +8,16 @@ import (
 	"testing"
 	"time"
 
-	// "net/http"
-	// _ "net/http/pprof"
+	"net/http"
+	_ "net/http/pprof"
 
+	"github.com/lni/vfs"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	taeWal "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -23,14 +26,14 @@ import (
 )
 
 // var buf []byte
-// func init() {
-//     go http.ListenAndServe("0.0.0.0:6060", nil)
+func init() {
+    go http.ListenAndServe("0.0.0.0:6060", nil)
 // 	var bs bytes.Buffer
 // 	for i := 0; i < 3000; i++ {
 // 		bs.WriteString("helloyou")
 // 	}
 // 	buf = bs.Bytes()
-// }
+}
 
 func newTestDriver(t *testing.T) driver.Driver {
 	dir := "/tmp/logstore/teststore"
@@ -42,6 +45,14 @@ func newTestDriver(t *testing.T) driver.Driver {
 	s, err := batchstoredriver.NewBaseStore(dir, name, cfg)
 	assert.NoError(t, err)
 	return s
+}
+func newTestLogserviceDriver(t *testing.T) (driver.Driver,*logservice.Service) {
+	fs := vfs.NewStrictMem()
+	service, ccfg, err := logservice.NewTestService(fs)
+	assert.NoError(t, err)
+	cfg := logservicedriver.NewTestConfig(&ccfg)
+	driver := logservicedriver.NewLogServiceDriver(cfg)
+	return driver,service
 }
 func TestAppendRead(t *testing.T) {
 	driver := newTestDriver(t)
@@ -71,41 +82,47 @@ func mockEntry() entry.Entry {
 	return e
 }
 func TestPerformance(t *testing.T) {
-	driver := newTestDriver(t)
+	// driver := newTestDriver(t)
+	driver,server:=newTestLogserviceDriver(t)
+	defer server.Close()
 	wal := NewLogStore(driver)
 	defer wal.Close()
 
-	entryCount := 5
-	entries := make([]entry.Entry, 0)
+	entryCount := 50000
+	// entries := make([]entry.Entry, 0)
 	wg := sync.WaitGroup{}
 	worker, _ := ants.NewPool(100)
 	appendfn := func(i int, group uint32) func() {
 		return func() {
-			e := entries[i]
-			_, err := wal.Append(group, e)
-			assert.NoError(t, err)
-			assert.NoError(t, e.WaitDone())
+			// e := entries[i]
+			e := mockEntry()
+			wal.Append(group, e)
+			// assert.NoError(t, err)
+			e.WaitDone()
+			// assert.NoError(t, e.WaitDone())
 			e.Free()
 			wg.Done()
 		}
 	}
 
-	for i := 0; i < entryCount; i++ {
-		e := mockEntry()
-		entries = append(entries, e)
-	}
+	// t0:=time.Now()
+	// for i := 0; i < entryCount; i++ {
+	// 	e := mockEntry()
+	// 	entries = append(entries, e)
+	// }
+	// logutil.Infof("make %d entries takes %v", entryCount, time.Since(t0))
 	t0 := time.Now()
 	for i := 0; i < entryCount; i++ {
 		group := uint32(10 + rand.Intn(3))
 		wg.Add(1)
 		worker.Submit(appendfn(i, group))
 	}
-	wg.Wait()
+	// wg.Wait()
 	logutil.Infof("%d entries takes %v", entryCount, time.Since(t0))
-	for i := 0; i < entryCount; i++ {
-		e := entries[i]
-		e.Free()
-	}
+	// for i := 0; i < entryCount; i++ {
+	// 	e := entries[i]
+	// 	e.Free()
+	// }
 
 }
 func TestWal(t *testing.T) {
@@ -116,7 +133,7 @@ func TestWal(t *testing.T) {
 	entryCount := 5
 	entries := make([]entry.Entry, 0)
 	wg := sync.WaitGroup{}
-	worker, _ := ants.NewPool(100)
+	worker, _ := ants.NewPool(10000)
 	appendfn := func(i int, group uint32) func() {
 		return func() {
 			e := entries[i]

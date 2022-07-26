@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -174,6 +175,9 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver, addrInMeta bo
 				}
 			}
 		}
+		var t time.Duration
+		t=0
+		t++
 	case entry.GTUncommit:
 		// for _, tinfo := range info.Uncommits {
 		// 	tidMap, ok := r.uncommit[tinfo.Group]

@@ -133,7 +133,7 @@ func (r *recordEntry) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += n1
 	for _, e := range r.entries {
-		n1, err = e.Entry.WriteTo(w)
+		n1, err = e.WriteTo(w)
 		if err != nil {
 			return
 		}

@@ -2,16 +2,13 @@ package logservicedriver
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
 type driverAppender struct {
-	flushed         bool
 	client          *clientWithRecord
 	appendlsn       uint64
 	logserviceLsn   uint64
@@ -35,9 +32,9 @@ func (a *driverAppender) append() {
 	ctx, cancel := context.WithTimeout(context.Background(), a.contextDuration)
 	defer cancel()
 	size := a.entry.prepareRecord()
-	if size > int(common.K)*20 { //todo
-		panic(fmt.Errorf("record size %d, larger than max size 20K", size))
-	}
+	// if size > int(common.K)*20 { //todo
+	// 	panic(fmt.Errorf("record size %d, larger than max size 20K", size))
+	// }
 	record := a.client.record
 	copy(record.Payload(), a.entry.payload)
 	record.ResizePayload(size)
