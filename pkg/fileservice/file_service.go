@@ -68,7 +68,18 @@ type IOEntry struct {
 	Object any
 
 	// ToObject constructs an object from entry contents
-	ToObject func(r io.Reader) (object any, objectSize int64, err error)
+	// the io.Reader must be fully read before returning nil error
+	ToObject func(r io.Reader) (object any, objectSize int, err error)
+
+	// ObjectSize indicates the memory bytes to hold the object
+	// set from ToObject returning value
+	// used in capacity limited caches
+	ObjectSize int
+
+	// ignore indicates the entry should be ignored
+	// if true, implementations must not change any field
+	// for caches to skip individual IOEntry without using another IOVector
+	ignore bool
 }
 
 // DirEntry is a file or dir

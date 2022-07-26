@@ -16,8 +16,10 @@ package fileservice
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -50,6 +52,68 @@ func TestS3FS(t *testing.T) {
 				config.Endpoint,
 				config.Bucket,
 				config.KeyPrefix,
+			)
+			assert.Nil(t, err)
+
+			return fs
+		})
+	})
+
+	t.Run("cache", func(t *testing.T) {
+		testCache(t, func() FileService {
+
+			config := sharedConfig
+			config.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
+
+			fs, err := NewS3FS(
+				config.Endpoint,
+				config.Bucket,
+				config.KeyPrefix,
+			)
+			assert.Nil(t, err)
+
+			return fs
+		})
+	})
+
+}
+
+func TestS3FSMinioServer(t *testing.T) {
+	t.Skip() //TODO
+
+	exePath, err := exec.LookPath("minio")
+	if errors.Is(err, exec.ErrNotFound) {
+		// minio not found in machine
+		return
+	}
+
+	// start minio
+	cmd := exec.Command(exePath,
+		"server",
+		t.TempDir(),
+	)
+	cmd.Env = append(os.Environ(),
+		"MINIO_ROOT_USER=test",
+		"MINIO_ROOT_PASSWORD=test",
+		"MINIO_SITE_NAME=test",
+		"MINIO_SITE_REGION=test",
+	)
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
+	err = cmd.Start()
+	assert.Nil(t, err)
+	defer func() {
+		_ = cmd.Process.Kill()
+	}()
+
+	// run test
+	t.Run("file service", func(t *testing.T) {
+		testFileService(t, func() FileService {
+
+			fs, err := NewS3FSOnMinio(
+				"http://localhost:9000",
+				"test",
+				"",
 			)
 			assert.Nil(t, err)
 
