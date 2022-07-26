@@ -93,7 +93,7 @@ type HasItemSize interface {
 var _ bp.PipeImpl[bp.HasName, any] = &batchSqlHandler{}
 
 type batchSqlHandler struct {
-	opt []buffer2SqlOption
+	opts []buffer2SqlOption
 }
 
 func NewBufferPipe2SqlWorker(opt ...buffer2SqlOption) bp.PipeImpl[bp.HasName, any] {
@@ -105,19 +105,19 @@ func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	var f genBatchFunc
 	switch name {
 	case MOSpanType:
-		f = t.genSpanBatchSql
+		f = genSpanBatchSql
 	case MOLogType:
-		f = t.genLogBatchSql
+		f = genLogBatchSql
 	case MOStatementType:
-		f = t.genStatementBatchSql
+		f = genStatementBatchSql
 	case MOErrorType:
-		f = t.genErrorBatchSql
+		f = genErrorBatchSql
 	default:
 		// fixme: catch Panic Error
 		panic(fmt.Sprintf("unknown type %s", name))
 	}
-	opt := t.opt[:]
-	opt = append(opt, withGenBatchFunc(f))
+	opt := t.opts[:]
+	opt = append(opt, bufferWithGenBatchFunc(f))
 	return newBuffer2Sql(opt...)
 }
 
@@ -165,7 +165,7 @@ func quote(value string) string {
 	return value
 }
 
-func (t batchSqlHandler) genSpanBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
+func genSpanBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
 		return ""
@@ -205,7 +205,7 @@ func (t batchSqlHandler) genSpanBatchSql(in []HasItemSize, buf *bytes.Buffer) an
 	return buf.String()
 }
 
-func (t batchSqlHandler) genLogBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
+func genLogBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
 		return ""
@@ -241,7 +241,7 @@ func (t batchSqlHandler) genLogBatchSql(in []HasItemSize, buf *bytes.Buffer) any
 	return buf.String()
 }
 
-func (t batchSqlHandler) genStatementBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
+func genStatementBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
 		return ""
@@ -287,7 +287,7 @@ func (t batchSqlHandler) genStatementBatchSql(in []HasItemSize, buf *bytes.Buffe
 	return buf.String()
 }
 
-func (t batchSqlHandler) genErrorBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
+func genErrorBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
 		return ""
@@ -323,7 +323,7 @@ type buffer2Sql struct {
 	size          int64 // default: 1 MB
 	sizeThreshold int64 // const
 
-	batchFunc genBatchFunc
+	genBatchFunc genBatchFunc
 }
 
 type genBatchFunc func([]HasItemSize, *bytes.Buffer) any
@@ -334,7 +334,7 @@ func newBuffer2Sql(opts ...buffer2SqlOption) *buffer2Sql {
 	b := &buffer2Sql{
 		Reminder:      bp.NewConstantClock(5 * time.Second),
 		sizeThreshold: 1 * MB,
-		batchFunc:     genBatchEmptySQL,
+		genBatchFunc:  genBatchEmptySQL,
 	}
 	for _, opt := range opts {
 		opt.apply(b)
@@ -363,6 +363,10 @@ func (b *buffer2Sql) Reset() {
 func (b *buffer2Sql) IsEmpty() bool {
 	b.mux.Lock()
 	defer b.mux.Unlock()
+	return b.isEmpty()
+}
+
+func (b *buffer2Sql) isEmpty() bool {
 	return len(b.buf) == 0
 }
 
@@ -376,10 +380,10 @@ func (b *buffer2Sql) GetBatch(buf *bytes.Buffer) any {
 	b.mux.Lock()
 	defer b.mux.Unlock()
 
-	if b.IsEmpty() {
+	if b.isEmpty() {
 		return ""
 	}
-	b.batchFunc(b.buf, buf)
+	b.genBatchFunc(b.buf, buf)
 	return buf.String()
 }
 
@@ -393,15 +397,15 @@ func (f buffer2SqlOptionFunc) apply(b *buffer2Sql) {
 	f(b)
 }
 
-func withSizeThreshold(size int64) buffer2SqlOption {
+func bufferWithSizeThreshold(size int64) buffer2SqlOption {
 	return buffer2SqlOptionFunc(func(b *buffer2Sql) {
 		b.sizeThreshold = size
 	})
 }
 
-func withGenBatchFunc(f genBatchFunc) buffer2SqlOption {
+func bufferWithGenBatchFunc(f genBatchFunc) buffer2SqlOption {
 	return buffer2SqlOptionFunc(func(b *buffer2Sql) {
-		b.batchFunc = f
+		b.genBatchFunc = f
 	})
 }
 

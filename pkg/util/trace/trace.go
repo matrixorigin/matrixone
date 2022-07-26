@@ -134,7 +134,7 @@ func Init(ctx context.Context, opt ...TracerProviderOption) (context.Context, er
 	switch {
 	case config.batchProcessMode == "singleton":
 		/*export.Register(&MOSpan{}, NewBufferPipe2SqlWorker(
-			withSizeThreshold(MB),
+			bufferWithSizeThreshold(MB),
 		).(batchpipe.PipeImpl[batchpipe.HasName, any]))
 		export.Register(&MOLog{}, NewBufferPipe2SqlWorker().(batchpipe.PipeImpl[batchpipe.HasName, any]))*/
 	case config.batchProcessMode == "distributed":

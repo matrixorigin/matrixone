@@ -14,7 +14,15 @@
 
 package trace
 
-import "github.com/matrixorigin/matrixone/pkg/util"
+import (
+	"context"
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
+
+	"github.com/cockroachdb/errors/errbase"
+)
 
 var _ HasItemSize = &MOErrorHolder{}
 
@@ -23,19 +31,21 @@ type MOErrorHolder struct {
 	Timestamp util.TimeNano `json:"timestamp"`
 }
 
-func (s MOErrorHolder) GetName() string {
+func (h MOErrorHolder) GetName() string {
 	return MOErrorType
 }
 
-func (s MOErrorHolder) Size() int64 {
+func (h MOErrorHolder) Size() int64 {
 	return int64(32 * 8)
 }
 
-func ReportError(err error) *MOErrorHolder {
-	e := &MOErrorHolder{Error: err}
+func (h *MOErrorHolder) Format(s fmt.State, verb rune) { errbase.FormatError(h.Error, s, verb) }
+
+func ReportError(ctx context.Context, err error) {
+	e := &MOErrorHolder{Error: err, Timestamp: util.NowNS()}
 	/*var has bool
 	if e.Timestamp, has = GetTimestamp(err); !has {
 		e.Timestamp = util.NowNS()
 	}*/
-	return e
+	export.GetGlobalBatchProcessor().Collect(ctx, e)
 }

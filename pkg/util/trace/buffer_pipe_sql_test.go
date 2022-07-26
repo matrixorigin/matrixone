@@ -4,16 +4,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"reflect"
-	"sync"
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"reflect"
+	"sync"
+	"testing"
 
+	"github.com/google/gops/agent"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,9 +28,13 @@ func (s Size) Size() int64 {
 func (s Size) GetName() string {
 	return "size"
 }
+
 func init() {
 	setup()
 }
+
+var testBaseBuffer2SqlOption = []buffer2SqlOption{bufferWithSizeThreshold(1 * KB)}
+
 func setup() {
 	if _, err := Init(
 		context.Background(),
@@ -43,16 +47,19 @@ func setup() {
 	); err != nil {
 		panic(err)
 	}
+	if err := agent.Listen(agent.Options{}); err != nil {
+		fmt.Errorf("listen gops agent failed: %s", err)
+		panic(err)
+	}
 	fmt.Println("Finish tests init.")
 }
 
 func teardown() {
+	agent.Close()
 	fmt.Println("After all tests")
 }
 
-func TestStructIndexes(t *testing.T) {
-
-	_ = NewBufferPipe2SqlWorker().(batchpipe.PipeImpl[batchpipe.HasName, any])
+func Test_newBuffer2Sql_base(t *testing.T) {
 
 	buf := newBuffer2Sql()
 	byteBuf := new(bytes.Buffer)
@@ -69,12 +76,19 @@ func TestNewSpanBufferPipeWorker(t *testing.T) {
 	type args struct {
 		opt []buffer2SqlOption
 	}
+	opts := testBaseBuffer2SqlOption[:]
 	tests := []struct {
 		name string
 		args args
 		want batchpipe.PipeImpl[batchpipe.HasName, any]
 	}{
-		// TODO: Add test cases.
+		{
+			name: "basic",
+			args: args{
+				opt: opts,
+			},
+			want: &batchSqlHandler{opts: opts},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -88,7 +102,7 @@ func TestNewSpanBufferPipeWorker(t *testing.T) {
 /*
 func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 	type fields struct {
-		opt []buffer2SqlOption
+		opts []buffer2SqlOption
 	}
 	tests := []struct {
 		name   string
@@ -99,7 +113,7 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
 			t := batchSqlHandler{
-				opt: tt.fields.opt,
+				opts: tt.fields.opts,
 			}
 			if got := t.NewItemBatchHandler(); !reflect.DeepEqual(got, tt.want) {
 				t1.Errorf("NewItemBatchHandler() = %v, want %v", got, tt.want)
@@ -108,55 +122,51 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 	}
 }*/
 
-func Test_batchSqlHandler_NewItemBuffer(t1 *testing.T) {
-	type fields struct {
-		opt []buffer2SqlOption
-	}
+func Test_batchSqlHandler_NewItemBuffer_Check_genBatchFunc(t1 *testing.T) {
 	type args struct {
+		opt  []buffer2SqlOption
 		name string
 	}
+	opts := testBaseBuffer2SqlOption[:]
 	tests := []struct {
-		name   string
-		fields fields
-		args   args
-		want   batchpipe.ItemBuffer[HasItemSize, any]
+		name string
+		args args
+		want genBatchFunc
 	}{
-		// TODO: Add test cases.
+		{name: "span_type", args: args{opt: opts, name: MOSpanType}, want: genSpanBatchSql},
+		{name: "log_type", args: args{opt: opts, name: MOLogType}, want: genLogBatchSql},
+		{name: "statement_type", args: args{opt: opts, name: MOStatementType},
+			want: genStatementBatchSql},
+		{name: "error_type", args: args{opt: opts, name: MOErrorType},
+			want: genErrorBatchSql},
 	}
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
 			t := batchSqlHandler{
-				opt: tt.fields.opt,
+				opts: opts,
 			}
-			if got := t.NewItemBuffer(tt.args.name); !reflect.DeepEqual(got, tt.want) {
-				t1.Errorf("NewItemBuffer() = %v, want %v", got, tt.want)
+			if got := t.NewItemBuffer(tt.args.name); reflect.ValueOf(got.(*buffer2Sql).genBatchFunc).Pointer() != reflect.ValueOf(tt.want).Pointer() {
+				t1.Errorf("NewItemBuffer()'s genBatchFunc = %v, want %v", got.(*buffer2Sql).genBatchFunc, tt.want)
 			}
 		})
 	}
 }
 
 func Test_batchSqlHandler_genErrorBatchSql(t1 *testing.T) {
-	type fields struct {
-		opt []buffer2SqlOption
-	}
 	type args struct {
 		in  []HasItemSize
 		buf *bytes.Buffer
 	}
 	tests := []struct {
-		name   string
-		fields fields
-		args   args
-		want   string
+		name string
+		args args
+		want string
 	}{
 		// TODO: Add test cases.
 	}
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
-			t := batchSqlHandler{
-				opt: tt.fields.opt,
-			}
-			if got := t.genErrorBatchSql(tt.args.in, tt.args.buf); got != tt.want {
+			if got := genErrorBatchSql(tt.args.in, tt.args.buf); got != tt.want {
 				t1.Errorf("genErrorBatchSql() = %v, want %v", got, tt.want)
 			}
 		})
@@ -181,10 +191,7 @@ func Test_batchSqlHandler_genLogBatchSql(t1 *testing.T) {
 	}
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
-			t := batchSqlHandler{
-				opt: tt.fields.opt,
-			}
-			if got := t.genLogBatchSql(tt.args.in, tt.args.buf); got != tt.want {
+			if got := genLogBatchSql(tt.args.in, tt.args.buf); got != tt.want {
 				t1.Errorf("genLogBatchSql() = %v, want %v", got, tt.want)
 			}
 		})
@@ -209,10 +216,7 @@ func Test_batchSqlHandler_genSpanBatchSql(t1 *testing.T) {
 	}
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
-			t := batchSqlHandler{
-				opt: tt.fields.opt,
-			}
-			if got := t.genSpanBatchSql(tt.args.in, tt.args.buf); got != tt.want {
+			if got := genSpanBatchSql(tt.args.in, tt.args.buf); got != tt.want {
 				t1.Errorf("genSpanBatchSql() = %v, want %v", got, tt.want)
 			}
 		})
@@ -237,10 +241,7 @@ func Test_batchSqlHandler_genStatementBatchSql(t1 *testing.T) {
 	}
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
-			t := batchSqlHandler{
-				opt: tt.fields.opt,
-			}
-			if got := t.genStatementBatchSql(tt.args.in, tt.args.buf); got != tt.want {
+			if got := genStatementBatchSql(tt.args.in, tt.args.buf); got != tt.want {
 				t1.Errorf("genStatementBatchSql() = %v, want %v", got, tt.want)
 			}
 		})
@@ -290,7 +291,7 @@ func Test_buffer2Sql_Add(t *testing.T) {
 				buf:           tt.fields.buf,
 				mux:           tt.fields.mux,
 				sizeThreshold: tt.fields.sizeThreshold,
-				batchFunc:     tt.fields.batchFunc,
+				genBatchFunc:  tt.fields.batchFunc,
 			}
 			b.Add(tt.args.item)
 		})
@@ -323,7 +324,7 @@ func Test_buffer2Sql_GetBatch(t *testing.T) {
 				buf:           tt.fields.buf,
 				mux:           tt.fields.mux,
 				sizeThreshold: tt.fields.sizeThreshold,
-				batchFunc:     tt.fields.batchFunc,
+				genBatchFunc:  tt.fields.batchFunc,
 			}
 			if got := b.GetBatch(tt.args.buf); got != tt.want {
 				t.Errorf("GetBatch() = %v, want %v", got, tt.want)
@@ -354,7 +355,7 @@ func Test_buffer2Sql_IsEmpty(t *testing.T) {
 				buf:           tt.fields.buf,
 				mux:           tt.fields.mux,
 				sizeThreshold: tt.fields.sizeThreshold,
-				batchFunc:     tt.fields.batchFunc,
+				genBatchFunc:  tt.fields.batchFunc,
 			}
 			if got := b.IsEmpty(); got != tt.want {
 				t.Errorf("IsEmpty() = %v, want %v", got, tt.want)
@@ -384,7 +385,7 @@ func Test_buffer2Sql_Reset(t *testing.T) {
 				buf:           tt.fields.buf,
 				mux:           tt.fields.mux,
 				sizeThreshold: tt.fields.sizeThreshold,
-				batchFunc:     tt.fields.batchFunc,
+				genBatchFunc:  tt.fields.batchFunc,
 			}
 			b.Reset()
 		})
@@ -413,7 +414,7 @@ func Test_buffer2Sql_ShouldFlush(t *testing.T) {
 				buf:           tt.fields.buf,
 				mux:           tt.fields.mux,
 				sizeThreshold: tt.fields.sizeThreshold,
-				batchFunc:     tt.fields.batchFunc,
+				genBatchFunc:  tt.fields.batchFunc,
 			}
 			if got := b.ShouldFlush(); got != tt.want {
 				t.Errorf("ShouldFlush() = %v, want %v", got, tt.want)
@@ -495,8 +496,8 @@ func Test_withGenBatchFunc(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := withGenBatchFunc(tt.args.f); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("withGenBatchFunc() = %v, want %v", got, tt.want)
+			if got := bufferWithGenBatchFunc(tt.args.f); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("bufferWithGenBatchFunc() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -515,8 +516,8 @@ func Test_withSizeThreshold(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := withSizeThreshold(tt.args.size); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("withSizeThreshold() = %v, want %v", got, tt.want)
+			if got := bufferWithSizeThreshold(tt.args.size); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("bufferWithSizeThreshold() = %v, want %v", got, tt.want)
 			}
 		})
 	}

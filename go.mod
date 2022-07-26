@@ -20,6 +20,7 @@ require (
 	github.com/golang/mock v1.6.0
 	github.com/google/btree v1.0.1
 	github.com/google/gofuzz v1.2.0
+	github.com/google/gops v0.3.25
 	github.com/google/uuid v1.3.0
 	github.com/lni/dragonboat/v4 v4.0.0-20220803152440-a83f853de8b1
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
@@ -107,7 +108,7 @@ require (
 	github.com/prometheus/common v0.26.0 // indirect
 	github.com/prometheus/procfs v0.6.0 // indirect
 	github.com/rogpeppe/go-internal v1.8.1 // indirect
-	github.com/shirou/gopsutil/v3 v3.22.3
+	github.com/shirou/gopsutil/v3 v3.22.4
 	github.com/tklauser/go-sysconf v0.3.10 // indirect
 	github.com/tklauser/numcpus v0.4.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.2 // indirect
