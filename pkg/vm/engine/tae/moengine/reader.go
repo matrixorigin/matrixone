@@ -19,8 +19,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 var (
@@ -34,7 +36,7 @@ func newReader(rel handle.Relation, it handle.BlockIt) *txnReader {
 	}
 }
 
-func (r *txnReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error) {
+func (r *txnReader) Read(attrs []string, _ *plan.Expr, m *mheap.Mheap) (*batch.Batch, error) {
 	r.it.Lock()
 	if !r.it.Valid() {
 		r.it.Unlock()
@@ -50,29 +52,23 @@ func (r *txnReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error
 	r.it.Next()
 	r.it.Unlock()
 	block := newBlock(h)
-	bat, err := block.Read(refCount, attrs, nil, r.buffer)
+	bat, err := block.Read(attrs, nil, r.buffer)
 	if err != nil {
 		return nil, err
 	}
 	n := vector.Length(bat.Vecs[0])
-	if n > cap(r.zs) {
-		r.zs = make([]int64, n)
+	sels := m.GetSels()
+	if n > cap(sels) {
+		m.PutSels(sels)
+		sels = make([]int64, n)
 	}
-	bat.Zs = r.zs[:n]
+	bat.Zs = sels[:n]
 	for i := 0; i < n; i++ {
 		bat.Zs[i] = 1
 	}
 	return bat, nil
 }
 
-func (r *txnReader) NewFilter() engine.Filter {
-	return nil
-}
-
-func (r *txnReader) NewSummarizer() engine.Summarizer {
-	return nil
-}
-
-func (r *txnReader) NewSparseFilter() engine.SparseFilter {
+func (r *txnReader) Close() error {
 	return nil
 }

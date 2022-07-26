@@ -16,6 +16,7 @@ package update
 
 import (
 	"bytes"
+	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -46,9 +47,10 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 		bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp)
 	}
 
+	ctx := context.TODO()
 	if p.PriKeyIdx != -1 {
 		// Delete old data because update primary key
-		err := p.TableSource.Delete(p.Ts, bat.GetVector(p.PriKeyIdx), p.PriKey, proc.Snapshot)
+		err := p.TableSource.Delete(ctx, bat.GetVector(p.PriKeyIdx), p.PriKey)
 		if err != nil {
 			return false, err
 		}
@@ -60,7 +62,7 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 		bat.Attrs = append(bat.Attrs, p.OtherAttrs...)
 
 		// Write new data after update
-		err = p.TableSource.Write(p.Ts, bat, proc.Snapshot)
+		err = p.TableSource.Write(ctx, bat)
 		if err != nil {
 			return false, err
 		}
@@ -70,7 +72,7 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 		bat.Attrs = append(bat.Attrs, p.UpdateAttrs...)
 
 		// Write new data after update
-		err := p.TableSource.Update(p.Ts, bat, proc.Snapshot)
+		err := p.TableSource.Update(ctx, bat)
 		if err != nil {
 			return false, err
 		}

@@ -30,16 +30,32 @@ enum UpdateType {
   TSOUpdate           = 3;
 }
 
+enum NodeState {
+  NormalState  = 0;
+  TimeoutState = 1;
+}
+
 message CNNode {
-  string UUID           = 1;
-  string ServiceAddress = 2;
-  uint64 Tick           = 3;
+  string    UUID           = 1;
+  string    ServiceAddress = 2;
+  uint64    Tick           = 3;
+  NodeState State          = 4;
 }
 
 message DNNode {
-  string UUID           = 1;
-  string ServiceAddress = 2;
-  uint64 Tick           = 3;
+  string    UUID           = 1;
+  string    ServiceAddress = 2;
+  uint64    Tick           = 3;
+  NodeState State          = 4;
+}
+
+message LogNode {
+  string    UUID           = 1;
+  string    ServiceAddress = 2;
+  uint64    Tick           = 3;
+  NodeState State          = 4;
+
+  repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
 }
 
 // LogShardInfo contains information a log shard.
@@ -328,8 +344,9 @@ message DNState {
 }
 
 message ClusterDetails {
-  repeated DNNode DNNodes = 1 [(gogoproto.nullable) = false];
-  repeated CNNode CNNodes = 2 [(gogoproto.nullable) = false]; 
+  repeated DNNode  DNNodes  = 1 [(gogoproto.nullable) = false];
+  repeated CNNode  CNNodes  = 2 [(gogoproto.nullable) = false];
+  repeated LogNode LogNodes = 3 [(gogoproto.nullable) = false];
 }
 
 // ClusterInfo provides a global view of all shards in the cluster. It

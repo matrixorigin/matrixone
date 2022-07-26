@@ -362,6 +362,7 @@ func TestClusterDetailsQuery(t *testing.T) {
 				ServiceAddress: "addr2",
 			},
 		},
+		LogNodes: []pb.LogNode{},
 	}
 	result := v.(*pb.ClusterDetails)
 	sort.Slice(result.CNNodes, func(i, j int) bool {

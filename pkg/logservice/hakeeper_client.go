@@ -109,12 +109,14 @@ func (c *managedHAKeeperClient) Close() error {
 
 func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
 	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return pb.ClusterDetails{}, err
+		}
 		cd, err := c.client.getClusterDetails(ctx)
-		if c.isInternalError(err) {
-			if cerr := c.prepareClient(ctx); cerr != nil {
-				plog.Errorf("failed to prepare HAKeeper client %v", cerr)
-				return pb.ClusterDetails{}, cerr
-			}
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
 			continue
 		}
 		return cd, err
@@ -124,12 +126,14 @@ func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.Clust
 func (c *managedHAKeeperClient) SendCNHeartbeat(ctx context.Context,
 	hb pb.CNStoreHeartbeat) error {
 	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return err
+		}
 		err := c.client.sendCNHeartbeat(ctx, hb)
-		if c.isInternalError(err) {
-			if cerr := c.prepareClient(ctx); cerr != nil {
-				plog.Errorf("failed to prepare HAKeeper client %v", cerr)
-				return cerr
-			}
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
 			continue
 		}
 		return err
@@ -139,12 +143,14 @@ func (c *managedHAKeeperClient) SendCNHeartbeat(ctx context.Context,
 func (c *managedHAKeeperClient) SendDNHeartbeat(ctx context.Context,
 	hb pb.DNStoreHeartbeat) (pb.CommandBatch, error) {
 	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return pb.CommandBatch{}, err
+		}
 		cb, err := c.client.sendDNHeartbeat(ctx, hb)
-		if c.isInternalError(err) {
-			if cerr := c.prepareClient(ctx); cerr != nil {
-				plog.Errorf("failed to prepare HAKeeper client %v", cerr)
-				return pb.CommandBatch{}, cerr
-			}
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
 			continue
 		}
 		return cb, err
@@ -154,29 +160,41 @@ func (c *managedHAKeeperClient) SendDNHeartbeat(ctx context.Context,
 func (c *managedHAKeeperClient) SendLogHeartbeat(ctx context.Context,
 	hb pb.LogStoreHeartbeat) (pb.CommandBatch, error) {
 	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return pb.CommandBatch{}, err
+		}
 		cb, err := c.client.sendLogHeartbeat(ctx, hb)
-		if c.isInternalError(err) {
-			if cerr := c.prepareClient(ctx); cerr != nil {
-				plog.Errorf("failed to prepare HAKeeper client %v", cerr)
-				return pb.CommandBatch{}, cerr
-			}
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
 			continue
 		}
 		return cb, err
 	}
 }
 
-func (c *managedHAKeeperClient) isInternalError(err error) bool {
+func (c *managedHAKeeperClient) isRetryableError(err error) bool {
 	return errors.Is(err, ErrNotHAKeeper)
 }
 
+func (c *managedHAKeeperClient) resetClient() {
+	if c.client != nil {
+		cc := c.client
+		c.client = nil
+		if err := cc.close(); err != nil {
+			plog.Errorf("failed to close client %v", err)
+		}
+	}
+}
+
 func (c *managedHAKeeperClient) prepareClient(ctx context.Context) error {
+	if c.client != nil {
+		return nil
+	}
 	cc, err := newHAKeeperClient(ctx, c.cfg)
 	if err != nil {
 		return err
-	}
-	if err := c.client.close(); err != nil {
-		plog.Errorf("failed to close the client %v", err)
 	}
 	c.client = cc
 	return nil
@@ -233,7 +251,14 @@ func newHAKeeperClient(ctx context.Context,
 }
 
 func (c *hakeeperClient) close() error {
-	return c.client.Close()
+	if c == nil {
+		panic("!!!")
+	}
+
+	if c.client != nil {
+		return c.client.Close()
+	}
+	return nil
 }
 
 func (c *hakeeperClient) getClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {

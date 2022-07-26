@@ -40,10 +40,7 @@ Serverless 层是一系列无状态节点的总称，整体上包含三类：
 
 ## **相关信息**
 
-本节介绍了MatrixOne的整体架构概览。若您想了解更详细的模块技术设计问题，可阅读：
-[MatrixOne模块概览](MatrixOne-Tech-Design/matrixone-techdesign.md)  
-
-其他信息可参见：
+本节介绍了MatrixOne的整体架构概览。其他信息可参见：
 
 * [安装MatrixOne](../Get-Started/install-standalone-matrixone.md)
 * [MySQL兼容性](mysql-compatibility.md)
