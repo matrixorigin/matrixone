@@ -16,6 +16,7 @@ package deletion
 
 import (
 	"bytes"
+	"context"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,8 +39,9 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 	}
 	defer bat.Clean(proc.Mp)
 
+	ctx := context.TODO()
 	for i := range p.DeleteCtxs {
-		err := p.DeleteCtxs[i].TableSource.Delete(p.Ts, bat.GetVector(int32(i)), p.DeleteCtxs[i].UseDeleteKey, proc.Snapshot)
+		err := p.DeleteCtxs[i].TableSource.Delete(ctx, bat.GetVector(int32(i)), p.DeleteCtxs[i].UseDeleteKey)
 		if err != nil {
 			return false, err
 		}

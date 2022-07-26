@@ -51,28 +51,31 @@ import (
 )
 
 func (s *Scope) CreateDatabase(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
+	ctx := context.TODO()
 	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
-	if _, err := engine.Database(dbName, snapshot); err == nil {
+	if _, err := engine.Database(ctx, dbName, snapshot); err == nil {
 		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
 			return nil
 		}
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("database %s already exists", dbName))
 	}
-	return engine.Create(ts, dbName, 0, snapshot)
+	return engine.Create(ctx, dbName, snapshot)
 }
 
 func (s *Scope) DropDatabase(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
+	ctx := context.TODO()
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
-	if _, err := engine.Database(dbName, snapshot); err != nil {
+	if _, err := engine.Database(ctx, dbName, snapshot); err != nil {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
 			return nil
 		}
 		return err
 	}
-	return engine.Delete(ts, dbName, snapshot)
+	return engine.Delete(ctx, dbName, snapshot)
 }
 
 func (s *Scope) CreateTable(ts uint64, snapshot engine.Snapshot, engine engine.Engine, dbName string) error {
+	ctx := context.TODO()
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -85,26 +88,26 @@ func (s *Scope) CreateTable(ts uint64, snapshot engine.Snapshot, engine engine.E
 	if qry.GetDatabase() != "" {
 		dbName = qry.GetDatabase()
 	}
-	dbSource, err := engine.Database(dbName, snapshot)
+	dbSource, err := engine.Database(ctx, dbName, snapshot)
 	if err != nil {
 		return err
 	}
 	tblName := qry.GetTableDef().GetName()
-	if relation, err := dbSource.Relation(tblName, snapshot); err == nil {
-		relation.Close(snapshot)
+	if _, err := dbSource.Relation(ctx, tblName); err == nil {
 		if qry.GetIfNotExists() {
 			return nil
 		}
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("table '%s' already exists", tblName))
 	}
-	return dbSource.Create(ts, tblName, append(exeCols, exeDefs...), snapshot)
+	return dbSource.Create(ctx, tblName, append(exeCols, exeDefs...))
 }
 
 func (s *Scope) DropTable(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
+	ctx := context.TODO()
 	qry := s.Plan.GetDdl().GetDropTable()
 
 	dbName := qry.GetDatabase()
-	dbSource, err := engine.Database(dbName, snapshot)
+	dbSource, err := engine.Database(ctx, dbName, snapshot)
 	if err != nil {
 		if qry.GetIfExists() {
 			return nil
@@ -112,15 +115,13 @@ func (s *Scope) DropTable(ts uint64, snapshot engine.Snapshot, engine engine.Eng
 		return err
 	}
 	tblName := qry.GetTable()
-	if relation, err := dbSource.Relation(tblName, snapshot); err != nil {
+	if _, err := dbSource.Relation(ctx, tblName); err != nil {
 		if qry.GetIfExists() {
 			return nil
 		}
 		return err
-	} else {
-		relation.Close(snapshot)
 	}
-	return dbSource.Delete(ts, tblName, snapshot)
+	return dbSource.Delete(ctx, tblName)
 }
 
 func (s *Scope) CreateIndex(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
@@ -136,15 +137,10 @@ func (s *Scope) Delete(ts uint64, snapshot engine.Snapshot, engine engine.Engine
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 	arg.Ts = ts
 
+	ctx := context.TODO()
 	if arg.DeleteCtxs[0].CanTruncate {
-		return arg.DeleteCtxs[0].TableSource.Truncate(snapshot)
+		return arg.DeleteCtxs[0].TableSource.Truncate(ctx)
 	}
-
-	defer func() {
-		for i := range arg.DeleteCtxs {
-			arg.DeleteCtxs[i].TableSource.Close(snapshot)
-		}
-	}()
 
 	if err := s.MergeRun(engine); err != nil {
 		return 0, err
@@ -156,7 +152,6 @@ func (s *Scope) Insert(ts uint64, snapshot engine.Snapshot, engine engine.Engine
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*insert.Argument)
 	arg.Ts = ts
-	defer arg.TargetTable.Close(snapshot)
 	if err := s.MergeRun(engine); err != nil {
 		return 0, err
 	}
@@ -167,7 +162,6 @@ func (s *Scope) Update(ts uint64, snapshot engine.Snapshot, engine engine.Engine
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*update.Argument)
 	arg.Ts = ts
-	defer arg.TableSource.Close(snapshot)
 	if err := s.MergeRun(engine); err != nil {
 		return 0, err
 	}
@@ -440,15 +434,16 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 	mcpu := s.NumCPU()
 	snap := engine.Snapshot(s.Proc.Snapshot)
 	{
-		db, err := e.Database(s.DataSource.SchemaName, snap)
+		ctx := context.TODO()
+		db, err := e.Database(ctx, s.DataSource.SchemaName, snap)
 		if err != nil {
 			return err
 		}
-		rel, err := db.Relation(s.DataSource.RelationName, snap)
+		rel, err := db.Relation(ctx, s.DataSource.RelationName)
 		if err != nil {
 			return err
 		}
-		rds = rel.NewReader(mcpu, nil, s.NodeInfo.Data, snap)
+		rds, _ = rel.NewReader(ctx, mcpu, nil, s.NodeInfo.Data)
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {

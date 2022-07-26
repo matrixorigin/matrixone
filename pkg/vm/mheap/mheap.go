@@ -85,3 +85,16 @@ func (m *Mheap) Grow(old []byte, size int64) ([]byte, error) {
 	copy(data, old)
 	return data[:size], nil
 }
+
+func (m *Mheap) PutSels(sels []int64) {
+	m.Ss = append(m.Ss, sels)
+}
+
+func (m *Mheap) GetSels() []int64 {
+	if len(m.Ss) == 0 {
+		return make([]int64, 0, 16)
+	}
+	sels := m.Ss[0]
+	m.Ss = m.Ss[1:]
+	return sels[:0]
+}

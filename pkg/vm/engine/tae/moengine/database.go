@@ -15,6 +15,8 @@
 package moengine
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -30,29 +32,34 @@ func newDatabase(h handle.Database) *txnDatabase {
 	}
 }
 
-func (db *txnDatabase) Relations(_ engine.Snapshot) (names []string) {
+func (db *txnDatabase) Relations(_ context.Context) ([]string, error) {
+	var names []string
+
 	it := db.handle.MakeRelationIt()
 	for it.Valid() {
 		names = append(names, it.GetRelation().GetMeta().(*catalog.TableEntry).GetSchema().Name)
 		it.Next()
 	}
-	return
+	return names, nil
 }
 
-func (db *txnDatabase) Relation(name string, _ engine.Snapshot) (rel engine.Relation, err error) {
+func (db *txnDatabase) Relation(_ context.Context, name string) (engine.Relation, error) {
+	var err error
+	var rel engine.Relation
+
 	h, err := db.handle.GetRelationByName(name)
 	if err != nil {
-		return
+		return nil, err
 	}
 	if isSysRelation(name) {
 		rel = newSysRelation(h)
-		return
+		return rel, nil
 	}
 	rel = newRelation(h)
-	return
+	return rel, nil
 }
 
-func (db *txnDatabase) Create(_ uint64, name string, defs []engine.TableDef, _ engine.Snapshot) error {
+func (db *txnDatabase) Create(_ context.Context, name string, defs []engine.TableDef) error {
 	schema, err := DefsToSchema(name, defs)
 	if err != nil {
 		return err
@@ -63,7 +70,7 @@ func (db *txnDatabase) Create(_ uint64, name string, defs []engine.TableDef, _ e
 	return err
 }
 
-func (db *txnDatabase) Delete(_ uint64, name string, _ engine.Snapshot) error {
+func (db *txnDatabase) Delete(_ context.Context, name string) error {
 	_, err := db.handle.DropRelationByName(name)
 	return err
 }

@@ -15,6 +15,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"runtime/pprof"
 	"sync"
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -59,19 +61,20 @@ func main() {
 	defer tae.Close()
 	eng := moengine.NewEngine(tae)
 
+	ctx := context.TODO()
 	schema := catalog.MockSchema(13, 12)
 	{
 		txn, _ := eng.StartTxn(nil)
-		err := eng.Create(0, dbName, 0, txn.GetCtx())
+		err := eng.Create(ctx, dbName, engine.Snapshot(txn.GetCtx()))
 		if err != nil {
 			panic(err)
 		}
-		db, err := eng.Database(dbName, txn.GetCtx())
+		db, err := eng.Database(ctx, dbName, engine.Snapshot(txn.GetCtx()))
 		if err != nil {
 			panic(err)
 		}
 		defs, _ := moengine.SchemaToDefs(schema)
-		err = db.Create(0, schema.Name, defs, txn.GetCtx())
+		err = db.Create(ctx, schema.Name, defs)
 		if err != nil {
 			panic(err)
 		}
@@ -95,15 +98,15 @@ func main() {
 			// 	db, _ := txn.GetDatabase(dbName)
 			// 	rel, _ := db.GetRelationByName(schema.Name)
 			// }
-			db, err := eng.Database(dbName, txn.GetCtx())
+			db, err := eng.Database(ctx, dbName, engine.Snapshot(txn.GetCtx()))
 			if err != nil {
 				panic(err)
 			}
-			rel, err := db.Relation(schema.Name, txn.GetCtx())
+			rel, err := db.Relation(ctx, schema.Name)
 			if err != nil {
 				panic(err)
 			}
-			if err := rel.Write(0, b, txn.GetCtx()); err != nil {
+			if err := rel.Write(ctx, b); err != nil {
 				panic(err)
 			}
 			if err := txn.Commit(); err != nil {
@@ -123,18 +126,19 @@ func main() {
 	logutil.Infof("Append takes: %s", time.Since(now))
 	{
 		txn, _ := eng.StartTxn(nil)
-		db, err := eng.Database(dbName, txn.GetCtx())
+		db, err := eng.Database(ctx, dbName, engine.Snapshot(txn.GetCtx()))
 		if err != nil {
 			panic(err)
 		}
-		rel, err := db.Relation(schema.Name, txn.GetCtx())
+		rel, err := db.Relation(ctx, schema.Name)
 		if err != nil {
 			panic(err)
 		}
+		m := testutil.NewMheap()
 		readProc := func(reader engine.Reader) {
 			defer wg.Done()
 			for {
-				bat, err := reader.Read([]uint64{uint64(1)}, []string{schema.ColDefs[0].Name})
+				bat, err := reader.Read([]string{schema.ColDefs[0].Name}, nil, m)
 				if err != nil {
 					panic(err)
 				}
@@ -146,7 +150,10 @@ func main() {
 		}
 
 		parallel := 10
-		readers := rel.NewReader(parallel, nil, nil, txn.GetCtx())
+		readers, err := rel.NewReader(ctx, parallel, nil, nil)
+		if err != nil {
+			panic(err)
+		}
 		for _, reader := range readers {
 			wg.Add(1)
 			go readProc(reader)

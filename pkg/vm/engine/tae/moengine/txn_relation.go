@@ -15,6 +15,8 @@
 package moengine
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -39,7 +41,7 @@ func newRelation(h handle.Relation) *txnRelation {
 	return r
 }
 
-func (rel *txnRelation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
+func (rel *txnRelation) Write(_ context.Context, bat *batch.Batch) error {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	allNullables := schema.AllNullables()
 	taeBatch := containers.NewEmptyBatch()
@@ -52,7 +54,7 @@ func (rel *txnRelation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) err
 	return rel.handle.Append(taeBatch)
 }
 
-func (rel *txnRelation) Update(_ uint64, data *batch.Batch, _ engine.Snapshot) error {
+func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	allNullables := schema.AllNullables()
 	bat := containers.NewEmptyBatch()
@@ -84,7 +86,7 @@ func (rel *txnRelation) Update(_ uint64, data *batch.Batch, _ engine.Snapshot) e
 	return nil
 }
 
-func (rel *txnRelation) Delete(_ uint64, data *vector.Vector, col string, _ engine.Snapshot) error {
+func (rel *txnRelation) Delete(_ context.Context, data *vector.Vector, col string) error {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	logutil.Debugf("Delete col: %v", col)
 	allNullables := schema.AllNullables()
@@ -115,7 +117,7 @@ func (rel *txnRelation) Delete(_ uint64, data *vector.Vector, col string, _ engi
 	panic(any("Key not found"))
 }
 
-func (rel *txnRelation) Truncate(_ engine.Snapshot) (uint64, error) {
+func (rel *txnRelation) Truncate(_ context.Context) (uint64, error) {
 	rows := uint64(rel.Rows())
 	name := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema().Name
 	db, err := rel.handle.GetDB()
