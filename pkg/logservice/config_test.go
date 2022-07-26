@@ -25,6 +25,7 @@ import (
 
 func getTestConfig() Config {
 	c := Config{
+		UUID:                 "uuid",
 		DeploymentID:         100,
 		DataDir:              "/mydata/dir",
 		ServiceAddress:       "localhost:9000",
@@ -33,10 +34,18 @@ func getTestConfig() Config {
 		RaftListenAddress:    "localhost:9001",
 		GossipAddress:        "localhost:9002",
 		GossipListenAddress:  "localhost:9002",
-		GossipSeedAddresses:  []string{"localhost:9002"},
+		GossipSeedAddresses:  "localhost:9002",
 	}
 	c.Fill()
 	return c
+}
+
+func TestGetGossipSeedAddresses(t *testing.T) {
+	cfg := Config{
+		GossipSeedAddresses: "localhost:9000;localhost:9001 ; localhost:9002 ",
+	}
+	values := cfg.GetGossipSeedAddresses()
+	assert.Equal(t, []string{"localhost:9000", "localhost:9001", "localhost:9002"}, values)
 }
 
 func TestConfigCanBeValidated(t *testing.T) {
@@ -60,7 +69,7 @@ func TestConfigCanBeValidated(t *testing.T) {
 	assert.True(t, errors.Is(c4.Validate(), ErrInvalidConfig))
 
 	c5 := c
-	c5.GossipSeedAddresses = []string{}
+	c5.GossipSeedAddresses = ""
 	assert.True(t, errors.Is(c5.Validate(), ErrInvalidConfig))
 }
 
@@ -78,8 +87,8 @@ func TestFillConfig(t *testing.T) {
 	assert.Equal(t, defaultGossipAddress, c.GossipListenAddress)
 	assert.Equal(t, 0, len(c.GossipSeedAddresses))
 	assert.Equal(t, hakeeper.DefaultTickPerSecond, c.HAKeeperConfig.TickPerSecond)
-	assert.Equal(t, hakeeper.DefaultLogStoreTimeout, c.HAKeeperConfig.LogStoreTimeout)
-	assert.Equal(t, hakeeper.DefaultDnStoreTimeout, c.HAKeeperConfig.DnStoreTimeout)
+	assert.Equal(t, hakeeper.DefaultLogStoreTimeout, c.HAKeeperConfig.LogStoreTimeout.Duration)
+	assert.Equal(t, hakeeper.DefaultDnStoreTimeout, c.HAKeeperConfig.DnStoreTimeout.Duration)
 }
 
 func TestListenAddressCanBeFilled(t *testing.T) {
@@ -90,7 +99,7 @@ func TestListenAddressCanBeFilled(t *testing.T) {
 		ServiceAddress:      "127.0.0.1:9002",
 		RaftAddress:         "127.0.0.1:9000",
 		GossipAddress:       "127.0.0.1:9001",
-		GossipSeedAddresses: []string{"127.0.0.1:9011"},
+		GossipSeedAddresses: "127.0.0.1:9011",
 	}
 	cfg.Fill()
 	assert.Equal(t, cfg.ServiceAddress, cfg.ServiceListenAddress)
