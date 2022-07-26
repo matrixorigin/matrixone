@@ -79,7 +79,6 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 	default:
 		panic("unknown service type")
 	}
-	return nil
 }
 
 func startDNService(cfg *Config, stopper *stopper.Stopper) error {
