@@ -16,6 +16,7 @@ package insert
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -89,7 +90,8 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp)
 		}
 	}
-	err := n.TargetTable.Write(n.Ts, bat, proc.Snapshot)
+	ctx := context.TODO()
+	err := n.TargetTable.Write(ctx, bat)
 	n.Affected += uint64(len(bat.Zs))
 	return false, err
 }

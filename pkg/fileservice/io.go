@@ -30,3 +30,16 @@ func (r *readCloser) Read(data []byte) (int, error) {
 func (r *readCloser) Close() error {
 	return r.closeFunc()
 }
+
+type countingReader struct {
+	R io.Reader
+	N int
+}
+
+var _ io.Reader = new(countingReader)
+
+func (c *countingReader) Read(data []byte) (int, error) {
+	n, err := c.R.Read(data)
+	c.N += n
+	return n, err
+}

@@ -15,8 +15,9 @@
 package moengine
 
 import (
-	"runtime"
+	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -32,48 +33,51 @@ func NewEngine(impl *db.DB) *txnEngine {
 	}
 }
 
-func (e *txnEngine) Delete(_ uint64, name string, ctx engine.Snapshot) (err error) {
+func (e *txnEngine) Delete(_ context.Context, name string, ctx client.TxnOperator) (err error) {
 	var txn txnif.AsyncTxn
-	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
+	if txn, err = e.impl.GetTxnByCtx(ctx.(engine.Snapshot)); err != nil {
 		panic(err)
 	}
 	_, err = txn.DropDatabase(name)
 	return
 }
 
-func (e *txnEngine) Create(_ uint64, name string, _ int, ctx engine.Snapshot) (err error) {
+func (e *txnEngine) Create(_ context.Context, name string, ctx client.TxnOperator) (err error) {
 	var txn txnif.AsyncTxn
-	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
+	if txn, err = e.impl.GetTxnByCtx(ctx.(engine.Snapshot)); err != nil {
 		panic(err)
 	}
 	_, err = txn.CreateDatabase(name)
 	return
 }
 
-func (e *txnEngine) Databases(ctx engine.Snapshot) (dbs []string) {
+func (e *txnEngine) Databases(_ context.Context, ctx client.TxnOperator) ([]string, error) {
 	var err error
 	var txn txnif.AsyncTxn
-	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
+
+	if txn, err = e.impl.GetTxnByCtx(ctx.(engine.Snapshot)); err != nil {
 		panic(err)
 	}
-	return txn.DatabaseNames()
+	return txn.DatabaseNames(), nil
 }
 
-func (e *txnEngine) Database(name string, ctx engine.Snapshot) (db engine.Database, err error) {
+func (e *txnEngine) Database(_ context.Context, name string, ctx client.TxnOperator) (engine.Database, error) {
+	var err error
 	var txn txnif.AsyncTxn
-	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
+
+	if txn, err = e.impl.GetTxnByCtx(ctx.(engine.Snapshot)); err != nil {
 		panic(err)
 	}
 	h, err := txn.GetDatabase(name)
 	if err != nil {
 		return nil, err
 	}
-	db = newDatabase(h)
-	return db, err
+	db := newDatabase(h)
+	return db, nil
 }
 
-func (e *txnEngine) Node(ip string, _ engine.Snapshot) *engine.NodeInfo {
-	return &engine.NodeInfo{Mcpu: runtime.NumCPU()}
+func (e *txnEngine) Nodes() engine.Nodes {
+	return nil
 }
 
 func (e *txnEngine) StartTxn(info []byte) (txn Txn, err error) {

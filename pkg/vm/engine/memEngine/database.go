@@ -16,18 +16,19 @@ package memEngine
 
 import (
 	"bytes"
+	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/meta"
 )
 
-func (d *database) Relations(_ engine.Snapshot) []string {
+func (d *database) Relations(_ context.Context) ([]string, error) {
 	names, _ := d.db.Range()
-	return names
+	return names, nil
 }
 
-func (d *database) Relation(name string, _ engine.Snapshot) (engine.Relation, error) {
+func (d *database) Relation(_ context.Context, name string) (engine.Relation, error) {
 	var md meta.Metadata
 	var buf bytes.Buffer
 
@@ -41,11 +42,11 @@ func (d *database) Relation(name string, _ engine.Snapshot) (engine.Relation, er
 	return &relation{id: name, db: d.db, n: d.n, md: md}, nil
 }
 
-func (d *database) Delete(_ uint64, _ string, _ engine.Snapshot) error {
+func (d *database) Delete(_ context.Context, _ string) error {
 	return nil
 }
 
-func (d *database) Create(_ uint64, name string, defs []engine.TableDef, _ engine.Snapshot) error {
+func (d *database) Create(_ context.Context, name string, defs []engine.TableDef) error {
 	var md meta.Metadata
 
 	for _, def := range defs {
