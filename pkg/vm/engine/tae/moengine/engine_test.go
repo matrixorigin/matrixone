@@ -116,7 +116,7 @@ func TestEngine(t *testing.T) {
 	readers, _ := rel.NewReader(ctx, 10, nil, nil)
 	m := mheap.New(guest.New(1<<20, host.New(1<<20)))
 	for _, reader := range readers {
-		bat, err := reader.Read([]string{schema.ColDefs[1].Name}, m)
+		bat, err := reader.Read([]string{schema.ColDefs[1].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 80, vector.Length(bat.Vecs[0]))
@@ -192,7 +192,7 @@ func TestEngineAllType(t *testing.T) {
 	readers, _ := rel.NewReader(ctx, 10, nil, nil)
 	m := mheap.New(guest.New(1<<20, host.New(1<<20)))
 	for _, reader := range readers {
-		bat, err := reader.Read(schema.Attrs(), m)
+		bat, err := reader.Read(schema.Attrs(), nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 80, vector.Length(bat.Vecs[0]))
@@ -259,7 +259,7 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	delete := mobat.New(true, bat.Attrs)
 	m := mheap.New(guest.New(1<<20, host.New(1<<20)))
 	for _, reader := range readers {
-		bat, err := reader.Read([]string{schema.ColDefs[13].Name}, m)
+		bat, err := reader.Read([]string{schema.ColDefs[13].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 100, vector.Length(bat.Vecs[0]))
@@ -289,7 +289,7 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	readers, _ = rel.NewReader(ctx, 1, nil, nil)
 	m = mheap.New(guest.New(1<<20, host.New(1<<20)))
 	for _, reader := range readers {
-		bat, err := reader.Read([]string{schema.ColDefs[13].Name}, m)
+		bat, err := reader.Read([]string{schema.ColDefs[13].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 0, vector.Length(bat.Vecs[0]))
@@ -341,7 +341,7 @@ func TestTxnRelation_Update(t *testing.T) {
 	update := newbat
 	m := mheap.New(guest.New(1<<20, host.New(1<<20)))
 	for _, reader := range readers {
-		bat1, err := reader.Read([]string{schema.ColDefs[13].Name, schema.ColDefs[0].Name, schema.ColDefs[1].Name}, m)
+		bat1, err := reader.Read([]string{schema.ColDefs[13].Name, schema.ColDefs[0].Name, schema.ColDefs[1].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat1 != nil {
 			assert.Equal(t, 4, vector.Length(bat1.Vecs[0]))
@@ -377,7 +377,7 @@ func TestTxnRelation_Update(t *testing.T) {
 	readers, _ = rel.NewReader(ctx, 10, nil, nil)
 	m = mheap.New(guest.New(1<<20, host.New(1<<20)))
 	for _, reader := range readers {
-		bat, err := reader.Read([]string{schema.ColDefs[0].Name, schema.ColDefs[1].Name}, m)
+		bat, err := reader.Read([]string{schema.ColDefs[0].Name, schema.ColDefs[1].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, int32(5), bat.Vecs[0].Col.([]int32)[0])
@@ -408,7 +408,7 @@ func TestTxnRelation_Update(t *testing.T) {
 	for _, reader := range readers {
 		bat, err := reader.Read([]string{schema.ColDefs[0].Name,
 			schema.ColDefs[1].Name, schema.ColDefs[2].Name,
-			schema.ColDefs[13].Name}, m)
+			schema.ColDefs[13].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, int32(5), bat.Vecs[0].Col.([]int32)[0])

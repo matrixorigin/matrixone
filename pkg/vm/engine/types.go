@@ -154,7 +154,7 @@ type Relation interface {
 
 type Reader interface {
 	Close() error
-	Read([]string, *mheap.Mheap) (*batch.Batch, error)
+	Read([]string, *plan.Expr, *mheap.Mheap) (*batch.Batch, error)
 }
 
 type Database interface {

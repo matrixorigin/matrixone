@@ -925,7 +925,7 @@ func isWantedTable(db engine.Database, txnCtx moengine.Txn,
 	}
 	fmt.Printf("\nTable:%s \n\nAttributes:\n%v \n\n", tableName, fieldNames)
 	fmt.Printf("Datas:\n\n")
-	result, err := readers[0].Read(fieldNames, mheap.New(guest.New(1<<20, host.New(1<<20))))
+	result, err := readers[0].Read(fieldNames, nil, mheap.New(guest.New(1<<20, host.New(1<<20))))
 	if err != nil {
 		return err
 	}

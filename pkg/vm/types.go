@@ -46,15 +46,12 @@ const (
 	Deletion
 	Insert
 	Update
+
+	Union
+	Minus
 )
 
-type Mheap interface {
-	Free([]byte)
-	Alloc(int64) ([]byte, error)
-	Grow([]byte, int64) ([]byte, error)
-	PutSels([]int64)
-	GetSels() ([]int64, error)
-}
+var _ = Minus
 
 // Instruction contains relational algebra
 type Instruction struct {
