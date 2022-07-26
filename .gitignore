@@ -16,8 +16,10 @@ vendor/
 gen_config
 main
 mo-server
+mo-service
 cube*/
 store/
+mo-data/
 pkg/catalog/test/
 pkg/config/system_vars.go
 pkg/config/system_vars_test.go
