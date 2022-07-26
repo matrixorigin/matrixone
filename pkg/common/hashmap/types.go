@@ -32,8 +32,11 @@ type Iterator interface {
 	// return value is the corresponding the group number,
 	// if it is 0 it means that the corresponding value cannot be found
 	Find(start, count int, vecs []*vector.Vector, scales []int32) ([]uint64, []int64)
+
 	// Insert vecs[start, start+count) into hashmap
-	// 	the return value corresponds to the corresponding group number(start with 1)
+	// the return value corresponds to the corresponding group number(start with 1)
+	// WATCH THAT: we do not update the rows of Hash Map at Insert Method because of Speed Performance,
+	// If need it, you should call the hash map's AddGroup function by yourself.
 	Insert(start, count int, vecs []*vector.Vector, scales []int32) ([]uint64, []int64)
 }
 
