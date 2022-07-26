@@ -16,7 +16,7 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
+	"os"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -56,7 +56,7 @@ func parseConfigFromFile(file string) (*Config, error) {
 		return nil, fmt.Errorf("toml config file not set")
 	}
 
-	data, err := ioutil.ReadFile(file)
+	data, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err
 	}
