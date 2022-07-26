@@ -61,6 +61,14 @@ type IOEntry struct {
 
 	// when writing, if Reader is not nil, read data from it instead of reading Data field
 	ReaderForWrite io.Reader
+
+	// when reading, if the ToObject field is not nil, the returning object will be set to this field
+	// caches may choose to cache this object instead of caching []byte
+	// Data, WriterForRead, ReadCloserForRead may be empty if Object is not null
+	Object any
+
+	// ToObject constructs an object from entry contents
+	ToObject func(r io.Reader) (object any, objectSize int64, err error)
 }
 
 // DirEntry is a file or dir
