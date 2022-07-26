@@ -17,7 +17,6 @@ package fileservice
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"testing"
@@ -28,11 +27,18 @@ import (
 
 func TestS3FS(t *testing.T) {
 
-	var sharedConfig S3Config
+	var sharedConfig struct {
+		Endpoint  string
+		Region    string
+		APIKey    string
+		APISecret string
+		Bucket    string
+		KeyPrefix string
+	}
 	content, err := os.ReadFile("s3.json")
 	if os.IsNotExist(err) {
-		fmt.Printf("s3.json not found, skip s3 test\n")
-		return // not using t.Skip because the CI does not know SKIP cases
+		// no s3.json, skip tests
+		return
 	}
 	assert.Nil(t, err)
 	err = json.Unmarshal(content, &sharedConfig)
