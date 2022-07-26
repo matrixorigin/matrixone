@@ -12,41 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"os"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func TestS3FSMinio(t *testing.T) {
+func TestParseDNConfig(t *testing.T) {
+	data := `
+		service-type = "DN"
 
-	var sharedConfig S3Config
-	content, err := os.ReadFile("s3.json")
-	if os.IsNotExist(err) {
-		fmt.Printf("s3.json not found, skip s3 test\n")
-		return // not using t.Skip because the CI does not know SKIP cases
-	}
-	assert.Nil(t, err)
-	err = json.Unmarshal(content, &sharedConfig)
-	assert.Nil(t, err)
-
-	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func() FileService {
-
-			config := sharedConfig
-			config.KeyPrefix = time.Now().Format("2006-01-02T15:04:05")
-
-			fs, err := NewS3FSMinio(config)
-			assert.Nil(t, err)
-
-			return fs
-		})
-	})
-
+		[log]
+		level = "debug"
+		format = "json"
+		max-size = 512
+		
+		[dn]
+		# storage directory for local data. Include DNShard metadata and TAE data.
+		data-dir = ""
+		
+		[dn.Txn.Storage]
+		# txn storage backend implementation. [TAE|MEM]
+		backend = "MEM"
+	`
+	cfg, err := parseFromString(data)
+	assert.NoError(t, err)
+	assert.Equal(t, "MEM", cfg.DN.Txn.Storage.Backend)
 }

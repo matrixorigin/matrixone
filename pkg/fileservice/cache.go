@@ -14,30 +14,8 @@
 
 package fileservice
 
-import (
-	"testing"
-
-	"github.com/stretchr/testify/assert"
-)
-
-func TestLocalETLFS(t *testing.T) {
-
-	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func() FileService {
-			dir := t.TempDir()
-			fs, err := NewLocalETLFS(dir)
-			assert.Nil(t, err)
-			return fs
-		})
-	})
-
-	t.Run("cache", func(t *testing.T) {
-		testCache(t, func() FileService {
-			dir := t.TempDir()
-			fs, err := NewLocalETLFS(dir)
-			assert.Nil(t, err)
-			return fs
-		})
-	})
-
+type CacheKey struct {
+	Path   string
+	Offset int
+	Size   int
 }
