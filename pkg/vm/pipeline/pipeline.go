@@ -63,10 +63,9 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 	if err = vm.Prepare(p.instructions, proc); err != nil {
 		return false, err
 	}
-	refCnts := make([]uint64, len(p.attrs))
 	for {
 		// read data from storage engine
-		if bat, err = r.Read(refCnts, p.attrs); err != nil {
+		if bat, err = r.Read(p.attrs, nil, proc.Mp); err != nil {
 			return false, err
 		}
 		if bat != nil {

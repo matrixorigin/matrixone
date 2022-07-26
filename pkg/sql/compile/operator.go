@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/joincondition"
@@ -165,15 +166,16 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 }
 
 func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*deletion.Argument, error) {
+	ctx := context.TODO()
 	count := len(n.DeleteTablesCtx)
 	ds := make([]*deletion.DeleteCtx, count)
 	for i := 0; i < count; i++ {
 
-		dbSource, err := eg.Database(n.DeleteTablesCtx[i].DbName, snapshot)
+		dbSource, err := eg.Database(ctx, n.DeleteTablesCtx[i].DbName, snapshot)
 		if err != nil {
 			return nil, err
 		}
-		relation, err := dbSource.Relation(n.DeleteTablesCtx[i].TblName, snapshot)
+		relation, err := dbSource.Relation(ctx, n.DeleteTablesCtx[i].TblName)
 		if err != nil {
 			return nil, err
 		}
@@ -191,11 +193,12 @@ func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot)
 }
 
 func constructInsert(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*insert.Argument, error) {
-	db, err := eg.Database(n.ObjRef.SchemaName, snapshot)
+	ctx := context.TODO()
+	db, err := eg.Database(ctx, n.ObjRef.SchemaName, snapshot)
 	if err != nil {
 		return nil, err
 	}
-	relation, err := db.Relation(n.TableDef.Name, snapshot)
+	relation, err := db.Relation(ctx, n.TableDef.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -206,11 +209,12 @@ func constructInsert(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (
 }
 
 func constructUpdate(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*update.Argument, error) {
-	dbSource, err := eg.Database(n.ObjRef.SchemaName, snapshot)
+	ctx := context.TODO()
+	dbSource, err := eg.Database(ctx, n.ObjRef.SchemaName, snapshot)
 	if err != nil {
 		return nil, err
 	}
-	relation, err := dbSource.Relation(n.TableDef.Name, snapshot)
+	relation, err := dbSource.Relation(ctx, n.TableDef.Name)
 	if err != nil {
 		return nil, err
 	}
