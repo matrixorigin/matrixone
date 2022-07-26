@@ -25,6 +25,7 @@ var longDayNames = []string{
 	"Saturday",
 }
 
+/*
 // Short name for day of week
 var shortDayNames = []string{
 	"Sun",
@@ -67,3 +68,4 @@ var longMonthNames = []string{
 	"November",
 	"December",
 }
+*/

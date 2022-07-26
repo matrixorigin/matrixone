@@ -576,7 +576,6 @@ func (d Date) Week(mode int) int {
 	}
 	_, week := calcWeek(d, weekMode(mode))
 	return week
-	return 0
 }
 
 // YearWeek returns year and week.
