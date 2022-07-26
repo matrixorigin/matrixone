@@ -140,6 +140,10 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 	fsEntry := v.(*_MemFSEntry)
 
 	for i, entry := range vector.Entries {
+		if entry.ignore {
+			continue
+		}
+
 		if entry.Size == 0 {
 			return ErrEmptyRange
 		}
@@ -152,6 +156,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 		data := fsEntry.Data[entry.Offset : entry.Offset+entry.Size]
 
 		setData := true
+
 		if w := vector.Entries[i].WriterForRead; w != nil {
 			setData = false
 			_, err := w.Write(data)
@@ -159,17 +164,25 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 				return err
 			}
 		}
+
 		if ptr := vector.Entries[i].ReadCloserForRead; ptr != nil {
 			setData = false
 			*ptr = io.NopCloser(bytes.NewReader(data))
 		}
+
 		if setData {
 			if len(entry.Data) < entry.Size {
-				vector.Entries[i].Data = data
+				entry.Data = data
 			} else {
 				copy(entry.Data, data)
 			}
 		}
+
+		if err := entry.setObjectFromData(); err != nil {
+			return err
+		}
+
+		vector.Entries[i] = entry
 	}
 
 	return nil

@@ -76,6 +76,12 @@ func NewService(cfg Config) (*Service, error) {
 		plog.Errorf("failed to create log store %v", err)
 		return nil, err
 	}
+	if err := store.loadMetadata(); err != nil {
+		return nil, err
+	}
+	if err := store.startReplicas(); err != nil {
+		return nil, err
+	}
 	pool := &sync.Pool{}
 	pool.New = func() interface{} {
 		return &RPCRequest{pool: pool}
@@ -123,6 +129,10 @@ func NewService(cfg Config) (*Service, error) {
 		}
 	}
 	return service, nil
+}
+
+func (s *Service) Start() error {
+	return nil
 }
 
 func (s *Service) Close() (err error) {

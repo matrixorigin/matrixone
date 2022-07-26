@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"io"
 )
 
@@ -94,4 +95,20 @@ func (i *ioEntriesReader) Read(buf []byte) (n int, err error) {
 		n += numBytes
 
 	}
+}
+
+func (e *IOEntry) setObjectFromData() error {
+	if e.ToObject == nil {
+		return nil
+	}
+	if len(e.Data) == 0 {
+		return nil
+	}
+	obj, size, err := e.ToObject(bytes.NewReader(e.Data))
+	if err != nil {
+		return err
+	}
+	e.Object = obj
+	e.ObjectSize = size
+	return nil
 }

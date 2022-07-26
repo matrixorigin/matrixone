@@ -15,33 +15,50 @@
 package engine
 
 import (
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
+// Snapshot a tricky approach
 type Snapshot []byte
 
 type Nodes []Node
 
 type Node struct {
-	Id   string `json:"id"`
-	Addr string `json:"address"`
-	Data []byte `json:"payload"`
+	Mcpu int
+	Id   string   `json:"id"`
+	Addr string   `json:"address"`
+	Data [][]byte `json:"payload"`
 }
 
+// Attribute is a column
 type Attribute struct {
-	Name    string      // name of attribute
-	Alg     compress.T  // compression algorithm
-	Type    types.Type  // type of attribute
-	Default DefaultExpr // default value of this attribute.
-	Primary bool        // if true, it is primary key
-	Comment string      // comment of attribute
+	// IsHide whether the attribute is hidden or not
+	IsHidden bool
+	// IsRowId whether the attribute is rowid or not
+	IsRowId bool
+	// Name name of attribute
+	Name string
+	// Alg compression algorithm
+	Alg compress.T
+	// Type attribute's type
+	Type types.Type
+	// DefaultExpr default value of this attribute
+	Default DefaultExpr
+	// Primary is primary key or not
+	Primary bool
+	// Comment of attribute
+	Comment string
 }
 
+// DefaultExpr default value of this attribute
 type DefaultExpr struct {
 	Exist  bool
 	Value  interface{} // int64, float32, float64, string, types.Date, types.Datetime
@@ -49,22 +66,16 @@ type DefaultExpr struct {
 }
 
 type PrimaryIndexDef struct {
-	TableDef
 	Names []string
 }
 
 type PropertiesDef struct {
-	TableDef
 	Properties []Property
 }
 
 type Property struct {
 	Key   string
 	Value string
-}
-
-type NodeInfo struct {
-	Mcpu int
 }
 
 type Statistics interface {
@@ -109,91 +120,60 @@ type TableDef interface {
 	tableDef()
 }
 
-func (*CommentDef) tableDef()    {}
-func (*AttributeDef) tableDef()  {}
-func (*IndexTableDef) tableDef() {}
-func (*PropertiesDef) tableDef() {}
+func (*CommentDef) tableDef()      {}
+func (*AttributeDef) tableDef()    {}
+func (*IndexTableDef) tableDef()   {}
+func (*PropertiesDef) tableDef()   {}
+func (*PrimaryIndexDef) tableDef() {}
 
 type Relation interface {
 	Statistics
 
-	Close(Snapshot)
+	Ranges(context.Context) ([][]byte, error)
 
-	ID(Snapshot) string
+	TableDefs(context.Context) ([]TableDef, error)
 
-	Nodes(Snapshot) Nodes
+	GetPrimaryKeys(context.Context) ([]*Attribute, error)
 
-	TableDefs(Snapshot) []TableDef
+	GetHideKeys(context.Context) ([]*Attribute, error)
 
-	GetPrimaryKeys(Snapshot) []*Attribute
+	Write(context.Context, *batch.Batch) error
 
-	GetHideKey(Snapshot) *Attribute
-	// true: primary key, false: hide key
-	GetPriKeyOrHideKey(Snapshot) ([]Attribute, bool)
+	Update(context.Context, *batch.Batch) error
 
-	Write(uint64, *batch.Batch, Snapshot) error
+	Delete(context.Context, *vector.Vector, string) error
 
-	Update(uint64, *batch.Batch, Snapshot) error
+	Truncate(context.Context) (uint64, error)
 
-	Delete(uint64, *vector.Vector, string, Snapshot) error
+	AddTableDef(context.Context, TableDef) error
+	DelTableDef(context.Context, TableDef) error
 
-	Truncate(Snapshot) (uint64, error)
-
-	AddTableDef(uint64, TableDef, Snapshot) error
-	DelTableDef(uint64, TableDef, Snapshot) error
-
-	// first argument is the number of reader, second argument is the filter extend,  third parameter is the payload required by the engine
-	NewReader(int, *plan.Expr, []byte, Snapshot) []Reader
+	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
+	NewReader(context.Context, int, *plan.Expr, [][]byte) ([]Reader, error)
 }
 
 type Reader interface {
-	Read([]uint64, []string) (*batch.Batch, error)
-}
-
-type Filter interface {
-	Eq(string, interface{}) (*roaring.Bitmap, error)
-	Ne(string, interface{}) (*roaring.Bitmap, error)
-	Lt(string, interface{}) (*roaring.Bitmap, error)
-	Le(string, interface{}) (*roaring.Bitmap, error)
-	Gt(string, interface{}) (*roaring.Bitmap, error)
-	Ge(string, interface{}) (*roaring.Bitmap, error)
-	Btw(string, interface{}, interface{}) (*roaring.Bitmap, error)
-}
-
-type Summarizer interface {
-	Count(string, *roaring.Bitmap) (uint64, error)
-	NullCount(string, *roaring.Bitmap) (uint64, error)
-	Max(string, *roaring.Bitmap) (interface{}, error)
-	Min(string, *roaring.Bitmap) (interface{}, error)
-	Sum(string, *roaring.Bitmap) (int64, uint64, error)
-}
-
-type SparseFilter interface {
-	Eq(string, interface{}) (Reader, error)
-	Ne(string, interface{}) (Reader, error)
-	Lt(string, interface{}) (Reader, error)
-	Le(string, interface{}) (Reader, error)
-	Gt(string, interface{}) (Reader, error)
-	Ge(string, interface{}) (Reader, error)
-	Btw(string, interface{}, interface{}) (Reader, error)
+	Close() error
+	Read([]string, *plan.Expr, *mheap.Mheap) (*batch.Batch, error)
 }
 
 type Database interface {
-	Relations(Snapshot) []string
-	Relation(string, Snapshot) (Relation, error)
+	Relations(context.Context) ([]string, error)
+	Relation(context.Context, string) (Relation, error)
 
-	Delete(uint64, string, Snapshot) error
-	Create(uint64, string, []TableDef, Snapshot) error // Create Table - (name, table define)
+	Delete(context.Context, string) error
+	Create(context.Context, string, []TableDef) error // Create Table - (name, table define)
 }
 
 type Engine interface {
-	Delete(uint64, string, Snapshot) error
-	Create(uint64, string, int, Snapshot) error // Create Database - (name, engine type)
+	Delete(context.Context, string, client.TxnOperator) error
 
-	Databases(Snapshot) []string
-	Database(string, Snapshot) (Database, error)
+	Create(context.Context, string, client.TxnOperator) error // Create Database - (name, engine type)
 
-	Node(string, Snapshot) *NodeInfo
+	Databases(context.Context, client.TxnOperator) ([]string, error)
+	Database(context.Context, string, client.TxnOperator) (Database, error)
+
+	Nodes() Nodes
 }
 
 // MakeDefaultExpr returns a new DefaultExpr

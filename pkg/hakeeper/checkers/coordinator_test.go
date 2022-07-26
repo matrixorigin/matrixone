@@ -43,7 +43,6 @@ func TestFixExpiredStore(t *testing.T) {
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
-					Name:             "shard1",
 				}},
 			},
 			log: pb.LogState{
@@ -97,7 +96,6 @@ func TestFixExpiredStore(t *testing.T) {
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
-					Name:             "shard1",
 				}},
 			},
 			log: pb.LogState{
@@ -163,7 +161,6 @@ func TestFixExpiredStore(t *testing.T) {
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
-					Name:             "shard1",
 				}},
 			},
 			log: pb.LogState{
@@ -224,7 +221,6 @@ func TestFixExpiredStore(t *testing.T) {
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
-					Name:             "shard1",
 				}},
 			},
 			log: pb.LogState{
@@ -306,7 +302,6 @@ func TestFixZombie(t *testing.T) {
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
-					Name:             "shard1",
 				}},
 			},
 			log: pb.LogState{

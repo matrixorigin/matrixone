@@ -31,4 +31,13 @@ func TestLocalETLFS(t *testing.T) {
 		})
 	})
 
+	t.Run("cache", func(t *testing.T) {
+		testCache(t, func() FileService {
+			dir := t.TempDir()
+			fs, err := NewLocalETLFS(dir)
+			assert.Nil(t, err)
+			return fs
+		})
+	})
+
 }

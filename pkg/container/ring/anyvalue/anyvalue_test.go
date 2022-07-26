@@ -16,9 +16,10 @@ package anyvalue
 
 import (
 	"bytes"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestSerializationForAnyValueRing1(t *testing.T) {
@@ -49,7 +50,7 @@ func TestSerializationForAnyValueRing1(t *testing.T) {
 		b := make([]byte, 0, 10000)
 		buf := bytes.NewBuffer(b)
 		t.Run(tt.info, func(t *testing.T) {
-			EncodeAnyValueRing1[int64](tt.ring, buf)
+			EncodeAnyValueRing1(tt.ring, buf)
 			finalRing, _, _ := DecodeAnyValueRing1[int64](buf.Bytes(), types.Type{Oid: types.T_int64})
 			require.Equal(t, tt.ring.Vs, finalRing.Vs)
 			require.Equal(t, tt.ring.Ns, finalRing.Ns)

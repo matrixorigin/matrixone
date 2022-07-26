@@ -32,6 +32,8 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 			case pb.AddReplica:
 				s.handleAddReplica(cmd)
 			case pb.RemoveReplica:
+				// FIXME: when remove replica cmd is received, we need to stop the zombie
+				// replica running on the local store.
 				s.handleRemoveReplica(cmd)
 			case pb.StartReplica:
 				s.handleStartReplica(cmd)
