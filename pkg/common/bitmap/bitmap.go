@@ -81,6 +81,13 @@ func (n *Bitmap) Size() int {
 	return len(n.data) * 8
 }
 
+func (n *Bitmap) Ptr() *uint64 {
+	if n == nil {
+		return nil
+	}
+	return &n.data[0]
+}
+
 // IsEmpty returns true if no bit in the Bitmap is set, otherwise it will return false.
 func (n *Bitmap) IsEmpty() bool {
 	for i := 0; i < len(n.data); i++ {

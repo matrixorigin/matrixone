@@ -582,4 +582,92 @@ int32_t Decimal128_DivInt64(int64_t *r, int64_t *a, int64_t b)
 	return Decimal128_Div(r, a, (int64_t *) &db);
 }
 
-
+int32_t Decimal64_Add_SV(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls) {
+	if (nulls != NULL) {
+		for (uint64_t i = 0; i < n; i++) {
+			if (!bitmap_test(nulls, i)) {
+				int ret = Decimal64_Add(r+i, a, b+i);
+				if (ret != RC_SUCCESS) {
+					return ret;
+				}
+			}
+		}
+		return RC_SUCCESS;
+	} else {
+		for (uint64_t i = 0; i < n; i++) {
+			int ret = Decimal64_Add(r+i, a, b+i);
+			if (ret != RC_SUCCESS) {
+				return ret;
+			}
+		}
+		return RC_SUCCESS;
+	}
+}
+	
+int32_t Decimal64_Add_VV(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls) {
+	if (nulls != NULL) {
+		for (uint64_t i = 0; i < n; i++) {
+			if (!bitmap_test(nulls, i)) {
+				int ret = Decimal64_Add(r+i, a+i, b+i);
+				if (ret != RC_SUCCESS) {
+					return ret;
+				}
+			}
+		}
+		return RC_SUCCESS;
+	} else {
+		for (uint64_t i = 0; i < n; i++) {
+			int ret = Decimal64_Add(r+i, a+i, b+i);
+			if (ret != RC_SUCCESS) {
+				return ret;
+			}
+		}
+		return RC_SUCCESS;
+	}
+}
+	
+int32_t Decimal128_Add_SV(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls) {
+	if (nulls != NULL) {
+		for (uint64_t i = 0; i < n; i++) {
+			if (!bitmap_test(nulls, i)) {
+				int ret = Decimal128_Add(r+i+i, a, b+i+i);
+				if (ret != RC_SUCCESS) {
+					return ret;
+				}
+			}
+		}
+		return RC_SUCCESS;
+	} else {
+		for (uint64_t i = 0; i < n; i++) {
+			int ret = Decimal128_Add(r+i+i, a, b+i+i);
+			if (ret != RC_SUCCESS) {
+				return ret;
+			}
+		}
+		return RC_SUCCESS;
+	}
+}
+	
+int32_t Decimal128_Add_VV(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls) {
+	if (nulls != NULL) {
+		for (uint64_t i = 0; i < n; i++) {
+			uint64_t ii = i+i;
+			if (!bitmap_test(nulls, i)) {
+				int ret = Decimal128_Add(r+ii, a+ii, b+ii);
+				if (ret != RC_SUCCESS) {
+					return ret;
+				}
+			}
+		}
+		return RC_SUCCESS;
+	} else {
+		for (uint64_t i = 0; i < n; i++) {
+			uint64_t ii = i+i;
+			int ret = Decimal128_Add(r+ii, a+ii, b+ii);
+			if (ret != RC_SUCCESS) {
+				return ret;
+			}
+		}
+		return RC_SUCCESS;
+	}
+}
