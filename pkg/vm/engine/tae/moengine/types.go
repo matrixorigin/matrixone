@@ -72,5 +72,4 @@ type txnReader struct {
 	handle handle.Relation
 	it     handle.BlockIt
 	buffer []*bytes.Buffer
-	zs     []int64
 }
