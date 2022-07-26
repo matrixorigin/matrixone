@@ -22,13 +22,17 @@ import (
 )
 
 func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, infos pb.LogState,
-	removing map[uint64][]uint64, adding map[uint64][]uint64, currentTick uint64) (operators []*operator.Operator) {
-	stores := parseLogStores(cfg, infos, currentTick)
-	stats := parseLogShards(cluster, infos, stores.ExpiredStores())
+	executing operator.ExecutingReplicas, currentTick uint64) (operators []*operator.Operator) {
+	working, expired := parseLogStores(cfg, infos, currentTick)
+	stats := parseLogShards(cluster, infos, expired)
+
+	removing := executing.Removing
+	adding := executing.Adding
+	starting := executing.Starting
 
 	for shardID, toAdd := range stats.toAdd {
 		for toAdd > uint32(len(adding[shardID])) {
-			bestStore := selectStore(infos.Shards[shardID], stores)
+			bestStore := selectStore(infos.Shards[shardID], working)
 			newReplicaID, ok := alloc.Next()
 			if !ok {
 				return nil
@@ -44,7 +48,7 @@ func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, 
 
 	for shardID, toRemove := range stats.toRemove {
 		for _, toRemoveReplica := range toRemove {
-			if isRemoving(toRemoveReplica, removing[shardID]) {
+			if contains(removing[shardID], toRemoveReplica.replicaID) {
 				continue
 			}
 			if op, err := operator.CreateRemoveReplica(toRemoveReplica.uuid,
@@ -57,6 +61,10 @@ func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, 
 	}
 
 	for _, toStart := range stats.toStart {
+		if contains(starting[toStart.shardID], toStart.replicaID) {
+			continue
+		}
+
 		operators = append(operators, operator.CreateStartReplica("",
 			toStart.uuid, toStart.shardID, toStart.replicaID))
 	}
@@ -69,12 +77,9 @@ func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, 
 	return operators
 }
 
-func isRemoving(replica replica, removingReplicas []uint64) bool {
-	if removingReplicas == nil {
-		return false
-	}
-	for _, removingID := range removingReplicas {
-		if replica.replicaID == removingID {
+func contains[T comparable](slice []T, v T) bool {
+	for i := range slice {
+		if slice[i] == v {
 			return true
 		}
 	}

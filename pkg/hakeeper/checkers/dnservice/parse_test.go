@@ -24,7 +24,7 @@ import (
 
 func TestParseDNState(t *testing.T) {
 	expiredTick := uint64(10)
-	// construct current tick in order to make hearbeat tick expired
+	// construct current tick in order to make heartbeat tick expired
 	cfg := hakeeper.Config{}
 	cfg.Fill()
 	currTick := cfg.ExpiredTick(expiredTick, cfg.DnStoreTimeout) + 1
