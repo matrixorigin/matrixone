@@ -94,9 +94,9 @@ type Config struct {
 		// Default is 3/4 of SendQueueSize.
 		BusyQueueSize int `toml:"busy-queue-size"`
 		// WriteBufferSize buffer size for write messages per connection. Default is 1kb
-		WriteBufferSize toml.ByteSize `toml:"send-buffer-size"`
+		WriteBufferSize toml.ByteSize `toml:"write-buffer-size"`
 		// ReadBufferSize buffer size for read messages per connection. Default is 1kb
-		ReadBufferSize toml.ByteSize `toml:"send-buffer-size"`
+		ReadBufferSize toml.ByteSize `toml:"read-buffer-size"`
 	}
 
 	// Txn transactions configuration
