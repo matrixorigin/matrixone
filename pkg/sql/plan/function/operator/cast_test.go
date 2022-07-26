@@ -15,6 +15,7 @@
 package operator
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"testing"
 	"time"
 
@@ -27,6 +28,46 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCastStringToJson(t *testing.T) {
+	makeTempVectors := func(src string, srcIsConst bool, destType types.T) []*vector.Vector {
+		vectors := make([]*vector.Vector, 2)
+		vectors[0] = makeStringVector(src, types.T_varchar, srcIsConst)
+		vectors[1] = makeTypeVector(destType)
+		return vectors
+	}
+	type caseStruct struct {
+		name       string
+		vecs       []*vector.Vector
+		proc       *process.Process
+		wantValues interface{}
+		wantScalar bool
+	}
+	makeCase := func(name string, src string, srcIsConst bool, procs *process.Process, destType types.T, wantScalar bool) caseStruct {
+		return caseStruct{
+			name:       name,
+			vecs:       makeTempVectors(src, srcIsConst, destType),
+			proc:       procs,
+			wantValues: src,
+			wantScalar: wantScalar,
+		}
+	}
+	procs := makeProcess()
+	cases := []caseStruct{
+		makeCase("Test01", `{"a":1,"b":2}`, true, procs, types.T_json, true),
+		makeCase("Test02", `{"a":1,"b":2}`, false, procs, types.T_json, false),
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			castRes, err := Cast(c.vecs, c.proc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			require.JSONEq(t, c.wantValues.(string), encoding.DecodeJson(castRes.Col.(*types.Bytes).Data).String())
+			require.Equal(t, c.wantScalar, castRes.IsScalar())
+		})
+	}
+}
 
 func TestCastSameType(t *testing.T) {
 	makeTempVectors := func(src interface{}, destType types.T, srcIsConst bool) []*vector.Vector {

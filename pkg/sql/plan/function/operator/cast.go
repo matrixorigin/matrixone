@@ -2256,8 +2256,7 @@ func CastStringToJson(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 	if lv.IsScalar() {
 		srcStr := vs.Get(0)
 		vec := proc.AllocScalarVector(resultType)
-		rs := make([][]byte, 1)
-		json, err := types.ParseSliceToByteJson(srcStr)
+		json, err := types.ParseStringToByteJson(string(srcStr))
 		if err != nil {
 			return nil, err
 		}
@@ -2265,16 +2264,22 @@ func CastStringToJson(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 		if err != nil {
 			return nil, err
 		}
-		rs[0] = val
 		nulls.Set(vec.Nsp, lv.Nsp)
-		err = vector.Append(vec, rs)
-		if err != nil {
-			return nil, err
+		col := &types.Bytes{
+			Data:    val,
+			Offsets: []uint32{0},
+			Lengths: []uint32{uint32(len(val))},
 		}
+		nulls.Reset(vec.Nsp)
+		vector.SetCol(vec, col)
 		return vec, nil
 	}
-	rs := make([][]byte, len(vs.Lengths))
 	mem := int64(0)
+	col := &types.Bytes{
+		Data:    make([]byte, 0),
+		Offsets: make([]uint32, 0),
+		Lengths: make([]uint32, 0),
+	}
 	for i := range vs.Lengths {
 		if nulls.Contains(lv.Nsp, uint64(i)) {
 			continue
@@ -2289,17 +2294,14 @@ func CastStringToJson(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 			return nil, err
 		}
 		mem += int64(cap(val))
-		rs[i] = val
+		col.AppendOnce(val)
 	}
 	vec, err := proc.AllocVector(resultType, mem)
 	if err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
-	err = vector.Append(vec, rs)
-	if err != nil {
-		return nil, err
-	}
+	vector.SetCol(vec, col)
 	return vec, nil
 }
 

@@ -518,10 +518,16 @@ func (v *Vector) initConst(typ types.Type) {
 		v.Col = make([]types.Decimal64, 1)
 	case types.T_decimal128:
 		v.Col = make([]types.Decimal128, 1)
-	case types.T_char, types.T_varchar, types.T_json:
+	case types.T_char, types.T_varchar:
 		v.Col = &types.Bytes{
 			Offsets: []uint32{0},
 			Lengths: []uint32{0},
+			Data:    []byte{},
+		}
+	case types.T_json:
+		v.Col = &types.Bytes{
+			Offsets: []uint32{},
+			Lengths: []uint32{},
 			Data:    []byte{},
 		}
 	}
