@@ -30,7 +30,8 @@ func TestValidate(t *testing.T) {
 	assert.NoError(t, c.validate())
 
 	assert.Equal(t, defaultListenAddress, c.ListenAddress)
-	assert.Equal(t, c.ListenAddress, c.ServiceAddress)
+	assert.Equal(t, c.ListenAddress, defaultListenAddress)
+	assert.Equal(t, c.ServiceAddress, defaultServiceAddress)
 	assert.Equal(t, defaultMaxConnections, c.RPC.MaxConnections)
 	assert.Equal(t, defaultSendQueueSize, c.RPC.SendQueueSize)
 	assert.Equal(t, defaultMaxIdleDuration, c.RPC.MaxIdleDuration.Duration)
