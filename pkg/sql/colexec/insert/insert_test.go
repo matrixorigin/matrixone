@@ -15,6 +15,7 @@
 package insert
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"testing"
@@ -33,7 +34,7 @@ type mockRelation struct {
 	result *batch.Batch
 }
 
-func (e *mockRelation) Write(_ uint64, b *batch.Batch, _ engine.Snapshot) error {
+func (e *mockRelation) Write(_ context.Context, b *batch.Batch) error {
 	e.result = b
 	return nil
 }

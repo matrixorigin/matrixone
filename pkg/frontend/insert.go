@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"fmt"
 	"go/constant"
 	"math"
@@ -48,8 +49,8 @@ func (mce *MysqlCmdExecutor) handleInsertValues(stmt *tree.Insert, ts uint64) (u
 	if err := buildInsertValues(stmt, plan, mce.GetSession().GetStorage(), snapshot); err != nil {
 		return 0, err
 	}
-	defer plan.relation.Close(snapshot)
-	if err := plan.relation.Write(ts, plan.dataBatch, snapshot); err != nil {
+	ctx := context.TODO()
+	if err := plan.relation.Write(ctx, plan.dataBatch); err != nil {
 		return 0, err
 	}
 
@@ -61,11 +62,12 @@ func getTableRef(tbl *tree.TableName, currentDB string, eg engine.Engine, snapsh
 		tbl.SchemaName = tree.Identifier(currentDB)
 	}
 
-	db, err := eg.Database(string(tbl.SchemaName), snapshot)
+	ctx := context.TODO()
+	db, err := eg.Database(ctx, string(tbl.SchemaName), snapshot)
 	if err != nil {
 		return "", "", nil, errors.New(errno.InvalidSchemaName, err.Error())
 	}
-	r, err := db.Relation(string(tbl.ObjectName), snapshot)
+	r, err := db.Relation(ctx, string(tbl.ObjectName))
 	if err != nil {
 		return "", "", nil, errors.New(errno.UndefinedTable, err.Error())
 	}
@@ -97,7 +99,12 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 	orderAttr := make([]string, 0, 32)        // order relation's attribute names
 	{
 		count := 0
-		for _, def := range relation.TableDefs(snapshot) {
+		ctx := context.TODO()
+		defs, err := relation.TableDefs(ctx)
+		if err != nil {
+			return err
+		}
+		for _, def := range defs {
 			if v, ok := def.(*engine.AttributeDef); ok {
 				attrType[v.Attr.Name] = v.Attr.Type
 				orderAttr = append(orderAttr, v.Attr.Name)

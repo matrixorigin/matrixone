@@ -41,7 +41,6 @@ type relation struct {
 }
 
 type reader struct {
-	zs    []int64
 	db    *kv.KV
 	segs  []string
 	cds   []*bytes.Buffer
