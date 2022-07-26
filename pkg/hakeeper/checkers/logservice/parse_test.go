@@ -42,7 +42,6 @@ func TestFixedLogShardInfo(t *testing.T) {
 			record: metadata.LogShardRecord{
 				ShardID:          1,
 				NumberOfReplicas: 3,
-				Name:             "shard-1",
 			},
 			info: pb.LogShardInfo{
 				ShardID:  1,
@@ -59,7 +58,6 @@ func TestFixedLogShardInfo(t *testing.T) {
 			record: metadata.LogShardRecord{
 				ShardID:          1,
 				NumberOfReplicas: 3,
-				Name:             "shard-1",
 			},
 			info: pb.LogShardInfo{
 				ShardID:  1,
@@ -76,7 +74,6 @@ func TestFixedLogShardInfo(t *testing.T) {
 			record: metadata.LogShardRecord{
 				ShardID:          1,
 				NumberOfReplicas: 3,
-				Name:             "shard-1",
 			},
 			info: pb.LogShardInfo{
 				ShardID:  1,
@@ -110,8 +107,7 @@ func TestCollectStats(t *testing.T) {
 				DNShards: nil,
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
-					NumberOfReplicas: 3,
-					Name:             ""}}},
+					NumberOfReplicas: 3}}},
 			infos: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
 					1: {
@@ -158,8 +154,7 @@ func TestCollectStats(t *testing.T) {
 				DNShards: nil,
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
-					NumberOfReplicas: 3,
-					Name:             ""}}},
+					NumberOfReplicas: 3}}},
 			infos: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:  1,
@@ -327,8 +322,7 @@ func TestCollectStats(t *testing.T) {
 				DNShards: nil,
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
-					NumberOfReplicas: 3,
-					Name:             ""}}},
+					NumberOfReplicas: 3}}},
 			infos: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
 					1: {

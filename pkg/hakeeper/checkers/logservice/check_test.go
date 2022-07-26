@@ -42,7 +42,6 @@ func TestCheck(t *testing.T) {
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
-					Name:             "shard 1",
 				}},
 			},
 			infos: pb.LogState{
@@ -96,7 +95,6 @@ func TestCheck(t *testing.T) {
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
-					Name:             "shard 1",
 				}},
 			},
 			infos: pb.LogState{
@@ -163,7 +161,6 @@ func TestCheck(t *testing.T) {
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
-					Name:             "shard 1",
 				}},
 			},
 			infos: pb.LogState{
@@ -217,7 +214,6 @@ func TestCheck(t *testing.T) {
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
-					Name:             "shard 1",
 				}},
 			},
 			infos: pb.LogState{
@@ -269,7 +265,6 @@ func TestCheck(t *testing.T) {
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
-					Name:             "shard 1",
 				}},
 			},
 			infos: pb.LogState{
