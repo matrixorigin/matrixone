@@ -48,26 +48,7 @@ func (d Weekday) String() string {
 	if Sunday <= d && d <= Saturday {
 		return longDayNames[d]
 	}
-	buf := make([]byte, 20)
-	n := fmtInt(buf, uint64(d))
-	return "%!Weekday(" + string(buf[n:]) + ")"
-}
-
-// fmtInt formats v into the tail of buf.
-// It returns the index where the output begins.
-func fmtInt(buf []byte, v uint64) int {
-	w := len(buf)
-	if v == 0 {
-		w--
-		buf[w] = '0'
-	} else {
-		for v > 0 {
-			w--
-			buf[w] = byte(v%10) + '0'
-			v /= 10
-		}
-	}
-	return w
+	return "%Weekday(" + strconv.FormatUint(uint64(d), 10) + ")"
 }
 
 var startupTime time.Time
@@ -553,28 +534,36 @@ func (d Date) WeekOfYear2() uint8 {
 	return uint8((yday-1)/7 + 1)
 }
 
-//---------------------------------------------------------------------------------------
 type weekBehaviour uint
 
 const (
-	// weekBehaviourMondayFirst set Monday as first day of week; otherwise Sunday is first day of week
-	weekBehaviourMondayFirst weekBehaviour = 1 << iota
-	// If set, Week is in range 1-53, otherwise Week is in range 0-53.
-	// Note that this flag is only relevant if WEEK_JANUARY is not set.
-	weekBehaviourYear
-	// If not set, Weeks are numbered according to ISO 8601:1988.
+	// WeekMondayFirst: set Monday as first day of week; otherwise Sunday is first day of week
+	WeekMondayFirst weekBehaviour = 1
+
+	// WeekYear: If set, Week is in range 1-53, otherwise Week is in range 0-53.
+	//	Week 0 is returned for the the last week of the previous year (for
+	// a date at start of january) In this case one can get 53 for the
+	// first week of next year.  This flag ensures that the week is
+	// relevant for the given year. Note that this flag is only
+	// releveant if WEEK_JANUARY is not set.
+	WeekYear = 2
+
+	//WeekFirstWeekday: If not set, Weeks are numbered according to ISO 8601:1988.
 	// If set, the week that contains the first 'first-day-of-week' is week 1.
-	weekBehaviourFirstWeekday
+	// ISO 8601:1988 means that if the week containing January 1 has
+	// four or more days in the new year, then it is week 1;
+	// Otherwise it is the last week of the previous year, and the next week is week 1.
+	WeekFirstWeekday = 4
 )
 
-func (v weekBehaviour) test(flag weekBehaviour) bool {
+func (v weekBehaviour) bitAnd(flag weekBehaviour) bool {
 	return (v & flag) != 0
 }
 
 func weekMode(mode int) weekBehaviour {
 	weekFormat := weekBehaviour(mode & 7)
-	if (weekFormat & weekBehaviourMondayFirst) == 0 {
-		weekFormat ^= weekBehaviourFirstWeekday
+	if (weekFormat & WeekMondayFirst) == 0 {
+		weekFormat ^= WeekFirstWeekday
 	}
 	return weekFormat
 }
@@ -592,19 +581,19 @@ func (d Date) Week(mode int) int {
 
 // YearWeek returns year and week.
 func (d Date) YearWeek(mode int) (year int, week int) {
-	behavior := weekMode(mode) | weekBehaviourYear
+	behavior := weekMode(mode) | WeekYear
 	return calcWeek(d, behavior)
 }
 
-// calcWeek calculates week and year for the time.
+// calcWeek calculates week and year for the date.
 func calcWeek(d Date, wb weekBehaviour) (year int, week int) {
 	var days int
 	ty, tm, td := int(d.Year()), int(d.Month()), int(d.Day())
 	daynr := calcDaynr(ty, tm, td)
 	firstDaynr := calcDaynr(ty, 1, 1)
-	mondayFirst := wb.test(weekBehaviourMondayFirst)
-	weekYear := wb.test(weekBehaviourYear)
-	firstWeekday := wb.test(weekBehaviourFirstWeekday)
+	mondayFirst := wb.bitAnd(WeekMondayFirst)
+	weekYear := wb.bitAnd(WeekYear)
+	firstWeekday := wb.bitAnd(WeekFirstWeekday)
 
 	weekday := calcWeekday(firstDaynr, !mondayFirst)
 
@@ -643,7 +632,7 @@ func calcWeek(d Date, wb weekBehaviour) (year int, week int) {
 	return
 }
 
-// calcWeekday calculates weekday from daynr, returns 0 for Monday, 1 for Tuesday ...
+// calcWeekday calculates weekday from daynr, returns 0 for Monday, 1 for Tuesday
 func calcWeekday(daynr int, sundayFirstDayOfWeek bool) int {
 	daynr += 5
 	if sundayFirstDayOfWeek {
@@ -652,7 +641,7 @@ func calcWeekday(daynr int, sundayFirstDayOfWeek bool) int {
 	return daynr % 7
 }
 
-// calcDaynr calculates days since 0000-00-00.
+//  Calculate nr of day since year 0 in new date-system (from 1615).
 func calcDaynr(year, month, day int) int {
 	if year == 0 && month == 0 {
 		return 0
@@ -675,8 +664,6 @@ func calcDaysInYear(year int) int {
 	}
 	return 365
 }
-
-//---------------------------------------------------------------------------------
 
 func isLeap(year int32) bool {
 	return year%4 == 0 && (year%100 != 0 || year%400 == 0)
