@@ -7,6 +7,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
 
@@ -146,3 +147,5 @@ func (d *LogServiceDriver) Close() error {
 	d.postAppendLoop.Stop()
 	return nil
 }
+
+func (d *LogServiceDriver) Replay(h driver.ApplyHandle) error {panic("TODO")}

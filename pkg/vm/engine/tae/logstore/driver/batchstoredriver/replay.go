@@ -1,6 +1,8 @@
 package batchstoredriver
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
@@ -17,12 +19,14 @@ type replayer struct {
 	//syncbase
 	addrs  map[int]*common.ClosedIntervals
 	maxlsn uint64
+	minlsn uint64
 }
 
 func newReplayer(h driver.ApplyHandle) *replayer {
 	return &replayer{
 		addrs:      make(map[int]*common.ClosedIntervals),
 		applyEntry: h,
+		minlsn: math.MaxUint64,
 	}
 }
 
@@ -38,6 +42,9 @@ func (r *replayer) updateaddrs(version int, lsn uint64) {
 func (r *replayer) updateGroupLSN(lsn uint64) {
 	if lsn > r.maxlsn {
 		r.maxlsn = lsn
+	}
+	if lsn< r.minlsn{
+		r.minlsn=lsn
 	}
 }
 

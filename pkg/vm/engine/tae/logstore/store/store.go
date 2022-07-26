@@ -1,396 +1,144 @@
-// Copyright 2021 Matrix Origin
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package store
 
 import (
-	"context"
-	"errors"
-	"fmt"
-	"os"
-	"strings"
 	"sync"
-	"sync/atomic"
-	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
+	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
 
-var (
-	DefaultMaxBatchSize  = 500
-	DefaultMaxSyncSize   = 10
-	DefaultMaxCommitSize = 10
-	DefaultBatchPerSync  = 100
-	DefaultSyncDuration  = time.Millisecond * 2
-	FlushEntry           entry.Entry
-)
+var DefaultMaxBatchSize = 10000
 
-func init() {
-	FlushEntry = entry.GetBase()
-	FlushEntry.SetType(entry.ETFlush)
-	payload := make([]byte, 0)
-	err := FlushEntry.SetPayload(payload)
-	if err != nil {
-		panic(err)
-	}
-}
-
-type storeInfo struct {
-	syncTimes          int
-	bySize             int
-	byDuration         int
-	syncDuration       time.Duration
-	writeDuration      time.Duration
-	syncQueueDuration  time.Duration
-	syncLoopDuration   time.Duration
-	flushQueueDuration time.Duration
-	flushLoop1Duration time.Duration
-	flushLoop2Duration time.Duration
-	onEntriesDuration  time.Duration
-	tickerTimes        int
-	enqueueEntries     int32
-	// appendInterval       = time.Second * 0
-	append10µs  int
-	append1ms   int
-	append2ms   int
-	append3ms   int
-	appendgt3ms int
-	// globalTime  = time.Now().Unix()
-}
-
-type baseStore struct {
-	storeInfo
-	syncBase
+type StoreImpl struct {
+	*StoreInfo
 	common.ClosedState
-	dir, name       string
-	flushWg         sync.WaitGroup
-	flushWgMu       *sync.RWMutex
-	flushCtx        context.Context
-	flushCancel     context.CancelFunc
-	flushQueue      sm.Queue
-	syncQueue       sm.Queue
-	commitQueue     sm.Queue
-	postCommitQueue sm.Queue
-	wg              sync.WaitGroup
-	file            File
-	mu              *sync.RWMutex
-}
 
-func NewBaseStore(dir, name string, cfg *StoreCfg) (*baseStore, error) {
-	var err error
-	bs := &baseStore{
-		syncBase:  *newSyncBase(),
-		dir:       dir,
-		name:      name,
-		mu:        &sync.RWMutex{},
-		flushWgMu: &sync.RWMutex{},
-	}
-	bs.flushQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onEntries)
-	bs.syncQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onSyncs)
-	bs.commitQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onCommits)
-	bs.postCommitQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onPostCommits)
-	if cfg == nil {
-		cfg = &StoreCfg{}
-	}
-	bs.file, err = OpenRotateFile(dir, name, nil, cfg.RotateChecker, cfg.HistoryFactory, &bs.storeInfo, bs.OnCommitVFile)
-	if err != nil {
-		return nil, err
-	}
-	bs.flushCtx, bs.flushCancel = context.WithCancel(context.Background())
-	bs.start()
-	return bs, nil
-}
+	driver driver.Driver
 
-func (bs *baseStore) start() {
-	bs.flushQueue.Start()
-	bs.syncQueue.Start()
-	bs.commitQueue.Start()
-	bs.postCommitQueue.Start()
-}
+	appendWg          sync.WaitGroup
+	appendMu          sync.RWMutex
+	driverAppendQueue sm.Queue
+	doneWithErrQueue  sm.Queue
+	logInfoQueue      sm.Queue
 
-func (bs *baseStore) onPostCommits(batches ...any) {
-	for _, item := range batches {
-		bat := item.(*batch)
-		for _, info := range bat.infos {
-			err := bs.syncBase.OnEntryReceived(info)
-			if err != nil {
-				panic(err)
-			}
-		}
-		bs.syncBase.OnCommit()
-	}
-}
+	checkpointQueue sm.Queue
 
-func (bs *baseStore) onCommits(batches ...any) {
-	for _, item := range batches {
-		bat := item.(*batch)
-		bat.infos = make([]*entry.Info, 0)
-		for _, e := range bat.entrys {
-			info := e.GetInfo()
-			if info != nil {
-				bat.infos = append(bat.infos, info.(*entry.Info))
-			}
-			if e.IsPrintTime() {
-				logutil.Infof("sync and queues takes %dms", e.Duration().Milliseconds())
-				e.StartTime()
-			}
-			e.DoneWithErr(nil)
-		}
-		cnt := len(bat.entrys)
-		bs.flushWg.Add(-1 * cnt)
-	}
-	bs.postCommitQueue.Enqueue(batches)
+	truncatingQueue sm.Queue
+	truncateQueue   sm.Queue
 }
-
-func (bs *baseStore) onSyncs(batches ...any) {
-	var err error
-	if err = bs.file.Sync(); err != nil {
+func NewStoreWithBatchStoreDriver(dir,name string,cfg *batchstoredriver.StoreCfg) Store {
+	driver,err:=batchstoredriver.NewBaseStore(dir,name,cfg)
+	if err !=nil{
 		panic(err)
 	}
-	bs.commitQueue.Enqueue(batches)
+	return NewStore(driver)
 }
-
-func (bs *baseStore) PrepareEntry(e entry.Entry) (entry.Entry, error) {
-	v1 := e.GetInfo()
-	if v1 == nil {
-		return e, nil
+func NewStore(driver driver.Driver) *StoreImpl {
+	w := &StoreImpl{
+		StoreInfo:  newWalInfo(),
+		driver:   driver,
+		appendWg: sync.WaitGroup{},
+		appendMu: sync.RWMutex{},
 	}
-	v := v1.(*entry.Info)
-	v.Info = &VFileAddress{}
-	buf,err := v.Marshal()
-	if err!=nil{
-		panic(err)
-	}
-	size := len(buf)
-	e.SetInfoSize(size)
-	e.SetInfoBuf(buf)
-	return e, nil
+	w.driverAppendQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onDriverAppendQueue)
+	w.doneWithErrQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onDoneWithErrQueue)
+	w.logInfoQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onLogInfoQueue)
+	w.checkpointQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onLogCKPInfoQueue)
+	w.truncatingQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onTruncatingQueue)
+	w.truncateQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onTruncateQueue)
+	w.Start()
+	return w
 }
-
-func (bs *baseStore) onEntries(entries ...any) {
-	for _, item := range entries {
-		e := item.(entry.Entry)
-		if e.IsPrintTime() {
-			logutil.Infof("flush queue takes %dms", e.Duration().Milliseconds())
-			e.StartTime()
-		}
-		appender := bs.file.GetAppender()
-		e, err := bs.PrepareEntry(e)
-		if err != nil {
-			panic(err)
-		}
-		if err = appender.Prepare(e.TotalSize(), e.GetInfo()); err != nil {
-			if strings.Contains(err.Error(), "MaxSize") {
-				logutil.Infof("entry larger than 64M: e%d", e.GetType())
-				logutil.Infof("write into file /tmp/largeEntry")
-				file, _ := os.Create("/tmp/largeEntry")
-				n, _ := e.WriteTo(file)
-				logutil.Infof("total %d bytes", n)
-			}
-			panic(err)
-		}
-		if _, err = e.WriteTo(appender); err != nil {
-			panic(err)
-		}
-		if e.IsPrintTime() {
-			logutil.Infof("onentry1 takes %dms", e.Duration().Milliseconds())
-			e.StartTime()
-		}
-		if err = appender.Commit(); err != nil {
-			panic(err)
-		}
-		if e.IsPrintTime() {
-			logutil.Infof("onEntries2 takes %dms", e.Duration().Milliseconds())
-			e.StartTime()
-		}
-	}
-	bs.syncQueue.Enqueue(entries)
+func (w *StoreImpl) Start() {
+	w.driverAppendQueue.Start()
+	w.doneWithErrQueue.Start()
+	w.logInfoQueue.Start()
+	w.checkpointQueue.Start()
+	w.truncatingQueue.Start()
+	w.truncateQueue.Start()
 }
-
-type batch struct {
-	entrys []entry.Entry
-	infos  []*entry.Info
-}
-
-//TODO: commented due to static check
-//type prepareCommit struct {
-//	checkpointing, syncing map[uint32]uint64
-//}
-
-func (bs *baseStore) Close() error {
-	if !bs.TryClose() {
+func (w *StoreImpl) Close() error {
+	if !w.TryClose() {
 		return nil
 	}
-	bs.flushWgMu.RLock()
-	bs.flushWg.Wait()
-	bs.flushWgMu.RUnlock()
-	bs.flushCancel()
-	bs.wg.Wait()
-	fmt.Printf("***********************\n")
-	fmt.Printf("%d|10µs|%d|1ms|%d|5ms|%d|10ms|%d\n",
-		bs.append10µs, bs.append1ms, bs.append2ms, bs.append3ms, bs.appendgt3ms)
-	fmt.Printf("***********************\n")
-	fmt.Printf("flush queue duration %v\nflush loop duration 1 %v\nonEntry duration %v\nflush loop duration 2 %v\nticker %d times\n",
-		bs.flushQueueDuration, bs.flushLoop1Duration, bs.onEntriesDuration, bs.flushLoop2Duration, bs.tickerTimes)
-	fmt.Printf("***********************\n")
-	fmt.Printf("sync %d times(S%dD%d)\n", bs.syncTimes, bs.bySize, bs.byDuration)
-	if bs.syncTimes != 0 {
-		fmt.Printf("sync duration %v(avg%v)\nwrite durtion %v\nsync queue duration %v\nsync loop duration %v\n",
-			bs.syncDuration, time.Duration(int(bs.syncDuration)/bs.syncTimes), bs.writeDuration, bs.syncQueueDuration, bs.syncLoopDuration)
+	err := w.driver.Close()
+	if err != nil {
+		return err
 	}
-	return bs.file.Close()
+	w.appendMu.RLock()
+	w.appendWg.Wait()
+	w.appendMu.RUnlock()
+	w.driverAppendQueue.Stop()
+	w.doneWithErrQueue.Stop()
+	w.logInfoQueue.Stop()
+	w.checkpointQueue.Stop()
+	w.truncatingQueue.Stop()
+	w.truncateQueue.Stop()
+	w.driver.Close()
+	return nil
 }
-
-func (bs *baseStore) Checkpoint(e entry.Entry) (err error) {
-	if !e.IsCheckpoint() {
-		return errors.New("wrong entry type")
-	}
-	_, err = bs.AppendEntry(entry.GTCKp, e)
+func (w *StoreImpl) Append(gid uint32, e entry.Entry) (lsn uint64, err error) {
+	_, lsn, err = w.doAppend(gid, e)
 	return
 }
 
-func (bs *baseStore) TryCompact() error {
-	c := newCompactor(&bs.syncBase)
-	return bs.file.GetHistory().TryTruncate(c)
-}
-
-func (bs *baseStore) TryTruncate(size int64) error {
-	return bs.file.TryTruncate(size)
-}
-
-func (bs *baseStore) AppendEntry(groupId uint32, e entry.Entry) (id uint64, err error) {
-	// duration := time.Since(globalTime)
-	// if duration < time.Microsecond*10 {
-	// 	append10µs++
-	// } else if duration < time.Millisecond {
-	// 	append1ms++
-	// } else if duration < time.Millisecond*5 {
-	// 	append2ms++
-	// } else if duration < time.Millisecond*10 {
-	// 	append3ms++
-	// } else {
-	// 	appendgt3ms++
-	// }
-	if e.IsPrintTime() {
-		e.StartTime()
+func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.Entry, lsn uint64, err error) {
+	if w.IsClosed() {
+		return nil, 0, common.ErrClose
 	}
-	if bs.IsClosed() {
-		return 0, common.ErrClose
+	w.appendMu.Lock()
+	defer w.appendMu.Unlock()
+	w.appendWg.Add(1)
+	if w.IsClosed() {
+		w.appendWg.Done()
+		return nil, 0, common.ErrClose
 	}
-	bs.flushWgMu.Lock()
-	bs.flushWg.Add(1)
-	if bs.IsClosed() {
-		bs.flushWg.Done()
-		return 0, common.ErrClose
-	}
-	bs.flushWgMu.Unlock()
-	bs.mu.Lock()
-	lsn := bs.AllocateLsn(groupId)
+	lsn = w.allocateLsn(gid)
 	v1 := e.GetInfo()
 	var info *entry.Info
-	if v1 != nil {
-		info = v1.(*entry.Info)
-		info.Group = groupId
-		info.GroupLSN = lsn
+	if v1 == nil {
+		info = &entry.Info{}
+		e.SetInfo(info)
 	} else {
-		info = &entry.Info{
-			Group:    groupId,
-			GroupLSN: lsn,
-		}
+		info = v1.(*entry.Info)
 	}
-	e.SetInfo(info)
-	if e.IsPrintTime() {
-		logutil.Infof("append entry takes %dms", e.Duration().Milliseconds())
-		e.StartTime()
-	}
-	bs.flushQueue.Enqueue(e)
-	bs.mu.Unlock()
-	// globalTime = time.Now()
-	atomic.AddInt32(&bs.enqueueEntries, 1)
-	return lsn, nil
+	info.Group = gid
+	info.GroupLSN = lsn
+	drEntry = driverEntry.NewEntry(e)
+	// e.DoneWithErr(nil)
+	// return
+	w.driverAppendQueue.Enqueue(drEntry)
+	return
 }
 
-func (bs *baseStore) Sync() error {
-	if _, err := bs.AppendEntry(entry.GTNoop, FlushEntry); err != nil {
-		return err
+func (w *StoreImpl) onDriverAppendQueue(items ...any) {
+	for _, item := range items {
+		driverEntry := item.(*driverEntry.Entry)
+		driverEntry.Entry.PrepareWrite()
+		w.driver.Append(driverEntry)
+		// driverEntry.Entry.DoneWithErr(nil)
+		w.doneWithErrQueue.Enqueue(driverEntry)
 	}
-	// if err := s.writer.Flush(); err != nil {
-	// 	return err
-	// }
-	err := bs.file.Sync()
-	return err
 }
 
-func (bs *baseStore) Replay(h ApplyHandle) error {
-	r := newReplayer(h)
-	o := &noopObserver{}
-	err := bs.file.Replay(r, o)
-	if err != nil {
-		return err
+func (w *StoreImpl) onDoneWithErrQueue(items ...any) {
+	for _, item := range items {
+		e := item.(*driverEntry.Entry)
+		e.WaitDone()
+		e.Entry.DoneWithErr(nil)
+		w.logInfoQueue.Enqueue(e)
 	}
-	bs.OnReplay(r)
-	r.Apply()
-	return nil
+	w.appendWg.Add(-len(items))
 }
 
-func (bs *baseStore) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
-	ver, err := bs.GetVersionByGLSN(groupId, lsn)
-	if err == ErrGroupNotExist || err == ErrLsnNotExist {
-		syncedLsn := bs.GetCurrSeqNum(groupId)
-		if lsn <= syncedLsn {
-			for i := 0; i < 10; i++ {
-				logutil.Infof("load retry %d-%d", groupId, lsn)
-				bs.syncBase.commitCond.L.Lock()
-				ver, err = bs.GetVersionByGLSN(groupId, lsn)
-				if err == nil {
-					bs.syncBase.commitCond.L.Unlock()
-					break
-				}
-				bs.syncBase.commitCond.Wait()
-				bs.syncBase.commitCond.L.Unlock()
-				if err == nil {
-					break
-				}
-			}
-			if err != nil {
-				return nil, ErrVFileVersionTimeOut
-			}
-		}
+func (w *StoreImpl) onLogInfoQueue(items ...any) {
+	for _, item := range items {
+		e := item.(*driverEntry.Entry)
+		w.logDriverLsn(e)
 	}
-	if err != nil {
-		return nil, err
-	}
-	vf, err := bs.file.GetEntryByVersion(ver)
-	if err != nil {
-		return nil, err
-	}
-	e, err := vf.Load(groupId, lsn)
-	return e, err
-}
-
-func (bs *baseStore) OnCommitVFile(vf VFile) {
-	e := bs.MakePostCommitEntry(vf.Id())
-	_, err := bs.AppendEntry(entry.GTInternal, e)
-	if err != nil && err != common.ErrClose {
-		panic(err)
-	}
-	err = e.WaitDone()
-	if err != nil {
-		panic(err)
-	}
-	e.Free()
+	w.onAppend()
 }

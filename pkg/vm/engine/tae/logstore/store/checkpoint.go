@@ -1,22 +1,22 @@
-package wal
+package store
 
 import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-func (w *WalImpl) FuzzyCheckpoint(gid uint32, indexes []*wal.Index) (ckpEntry entry.Entry) {
-	ckpEntry = w.makeCheckpointEntry(gid, indexes)
+func (w *StoreImpl) FuzzyCheckpoint(gid uint32, indexes []*Index) (ckpEntry entry.Entry,err error) {
+	ckpEntry = w.makeFuzzyCheckpointEntry(gid, indexes)
 	drentry, _, _ := w.doAppend(GroupCKP, ckpEntry)
 	w.checkpointQueue.Enqueue(drentry)
 	return
 }
 
-func (w *WalImpl) makeCheckpointEntry(gid uint32, indexes []*wal.Index) (ckpEntry entry.Entry) {
+func (w *StoreImpl) makeFuzzyCheckpointEntry(gid uint32, indexes []*Index) (ckpEntry entry.Entry) {
 	for _, index := range indexes {
 		if index.LSN > 100000000 {
 			logutil.Infof("IndexErr: Checkpoint Index: %s", index.String())
@@ -68,7 +68,28 @@ func (w *WalImpl) makeCheckpointEntry(gid uint32, indexes []*wal.Index) (ckpEntr
 	return
 }
 
-func (w *WalImpl) onLogCKPInfoQueue(items ...any) {
+func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64) (ckpEntry entry.Entry, err error) {
+	ckpEntry = w.makeRangeCheckpointEntry(gid, start,end)
+	drentry, _, _ := w.doAppend(GroupCKP, ckpEntry)
+	w.checkpointQueue.Enqueue(drentry)
+	return
+}
+
+func (w *StoreImpl) makeRangeCheckpointEntry(gid uint32,  start, end uint64) (ckpEntry entry.Entry) {
+	info := &entry.Info{
+		Group: entry.GTCKp,
+		Checkpoints: []*entry.CkpRanges{{
+			Group:   gid,
+			Ranges: common.NewClosedIntervalsByInterval(&common.ClosedInterval{Start: start,End: end}),
+		}},
+	}
+	ckpEntry = entry.GetBase()
+	ckpEntry.SetType(entry.ETCheckpoint)
+	ckpEntry.SetInfo(info)
+	return
+}
+
+func (w *StoreImpl) onLogCKPInfoQueue(items ...any) {
 	for _, item := range items {
 		e := item.(*driverEntry.Entry)
 		e.WaitDone()
@@ -77,12 +98,12 @@ func (w *WalImpl) onLogCKPInfoQueue(items ...any) {
 	w.onCheckpoint()
 }
 
-func (w *WalImpl) onCheckpoint() {
-	w.WalInfo.onCheckpoint()
+func (w *StoreImpl) onCheckpoint() {
+	w.StoreInfo.onCheckpoint()
 	w.truncatingQueue.Enqueue(struct{}{})
 }
 
-func (w *WalImpl) CkpCkp() {
+func (w *StoreImpl) CkpCkp() {
 	e := w.makeInternalCheckpointEntry()
 	_, err := w.Append(GroupInternal, e)
 	if err != nil {
@@ -92,7 +113,7 @@ func (w *WalImpl) CkpCkp() {
 }
 
 //tid-lsn-ckped uclsn-tid,tid-clsn,cckped
-func (w *WalImpl) CkpUC() {
+func (w *StoreImpl) CkpUC() {
 	ckpedlsn := w.GetCheckpointed(GroupC)
 	ucLsn := w.GetCheckpointed(GroupUC)
 	maxLsn := w.GetSynced(GroupUC)
@@ -114,7 +135,7 @@ func (w *WalImpl) CkpUC() {
 	w.SetCheckpointed(GroupUC, ckpedUC)
 }
 
-func (w *WalImpl) onTruncatingQueue(items ...any) {
+func (w *StoreImpl) onTruncatingQueue(items ...any) {
 	gid, driverLsn := w.getDriverCheckpointed()
 	if driverLsn == 0 && gid == 0 {
 		return
@@ -130,7 +151,7 @@ func (w *WalImpl) onTruncatingQueue(items ...any) {
 	w.truncateQueue.Enqueue(struct{}{})
 }
 
-func (w *WalImpl) onTruncateQueue(items ...any) {
+func (w *StoreImpl) onTruncateQueue(items ...any) {
 	lsn := atomic.LoadUint64(&w.driverCheckpointing)
 	if lsn != w.driverCheckpointed {
 		err := w.driver.Truncate(lsn)

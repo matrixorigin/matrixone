@@ -1,4 +1,4 @@
-package wal
+package store
 
 import (
 	"encoding/binary"

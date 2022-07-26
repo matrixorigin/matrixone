@@ -1,4 +1,4 @@
-package wal
+package store
 
 import (
 	"bytes"
@@ -23,7 +23,7 @@ var (
 // walDriverLsnMap,walCurrentLsn,syncing each entry
 // walLsnTidMap commit
 // driverCheckpointing driverCheckpointed init
-type WalInfo struct {
+type StoreInfo struct {
 	checkpointInfo      map[uint32]*checkpointInfo //gid-ckp //r
 	ckpMu               sync.RWMutex
 	walDriverLsnMap     map[uint32]map[uint64]uint64 //gid-walLsn-driverLsn //r
@@ -46,8 +46,8 @@ type WalInfo struct {
 	ckpcntMu       sync.RWMutex
 }
 
-func newWalInfo() *WalInfo {
-	return &WalInfo{
+func newWalInfo() *StoreInfo {
+	return &StoreInfo{
 		checkpointInfo:  make(map[uint32]*checkpointInfo), //r
 		ckpMu:           sync.RWMutex{},
 		walDriverLsnMap: make(map[uint32]map[uint64]uint64), //r
@@ -67,20 +67,20 @@ func newWalInfo() *WalInfo {
 		ckpcntMu:       sync.RWMutex{},
 	}
 }
-func (w *WalInfo) GetCurrSeqNum(gid uint32) (lsn uint64) {
+func (w *StoreInfo) GetCurrSeqNum(gid uint32) (lsn uint64) {
 	w.lsnmu.RLock()
 	defer w.lsnmu.RUnlock()
 	lsn = w.walCurrentLsn[gid]
 	return
 }
-func (w *WalInfo) GetSynced(gid uint32) (lsn uint64) {
+func (w *StoreInfo) GetSynced(gid uint32) (lsn uint64) {
 	w.syncedMu.RLock()
 	defer w.syncedMu.RUnlock()
 	lsn = w.synced[gid]
 	return
 }
 
-func (w *WalInfo) GetPendding(gid uint32) (cnt uint64) {
+func (w *StoreInfo) GetPendding(gid uint32) (cnt uint64) {
 	lsn := w.GetSynced(gid)
 	w.ckpcntMu.RLock()
 	ckpcnt := w.ckpcnt[gid]
@@ -88,19 +88,19 @@ func (w *WalInfo) GetPendding(gid uint32) (cnt uint64) {
 	cnt = lsn - ckpcnt
 	return
 }
-func (w *WalInfo) GetCheckpointed(gid uint32) (lsn uint64) {
+func (w *StoreInfo) GetCheckpointed(gid uint32) (lsn uint64) {
 	w.checkpointedMu.RLock()
 	lsn = w.checkpointed[gid]
 	w.checkpointedMu.RUnlock()
 	return
 }
 
-func (w *WalInfo) SetCheckpointed(gid uint32, lsn uint64) {
+func (w *StoreInfo) SetCheckpointed(gid uint32, lsn uint64) {
 	w.checkpointedMu.Lock()
 	w.checkpointed[gid] = lsn
 	w.checkpointedMu.Unlock()
 }
-func (w *WalInfo) allocateLsn(gid uint32) uint64 {
+func (w *StoreInfo) allocateLsn(gid uint32) uint64 {
 	w.lsnmu.Lock()
 	defer w.lsnmu.Unlock()
 	lsn, ok := w.walCurrentLsn[gid]
@@ -113,7 +113,7 @@ func (w *WalInfo) allocateLsn(gid uint32) uint64 {
 	return lsn
 }
 
-func (w *WalInfo) logDriverLsn(driverEntry *driverEntry.Entry) {
+func (w *StoreInfo) logDriverLsn(driverEntry *driverEntry.Entry) {
 	info := driverEntry.Info
 
 	if info.Group == GroupInternal {
@@ -134,16 +134,9 @@ func (w *WalInfo) logDriverLsn(driverEntry *driverEntry.Entry) {
 	}
 	lsnMap[info.GroupLSN] = driverEntry.Lsn
 	w.lsnMu.Unlock()
-
-	if info.Group == GroupC {
-		w.cTidLsnMap[info.TxnId] = info.GroupLSN
-	}
-	if info.Group == GroupUC {
-		w.ucLsnTidMap[info.GroupLSN] = info.Uncommits
-	}
 }
 
-func (w *WalInfo) onAppend() {
+func (w *StoreInfo) onAppend() {
 	w.commitCond.L.Lock()
 	w.commitCond.Broadcast()
 	w.commitCond.L.Unlock()
@@ -154,7 +147,7 @@ func (w *WalInfo) onAppend() {
 	w.syncedMu.Unlock()
 }
 
-func (w *WalInfo) retryGetDriverLsn(gid uint32, lsn uint64) (driverLsn uint64, err error) {
+func (w *StoreInfo) retryGetDriverLsn(gid uint32, lsn uint64) (driverLsn uint64, err error) {
 	driverLsn, err = w.getDriverLsn(gid, lsn)
 	if err == ErrGroupNotFount || err == ErrLsnNotFount {
 		currLsn := w.GetCurrSeqNum(gid)
@@ -181,7 +174,7 @@ func (w *WalInfo) retryGetDriverLsn(gid uint32, lsn uint64) (driverLsn uint64, e
 	return
 }
 
-func (w *WalInfo) getDriverLsn(gid uint32, lsn uint64) (driverLsn uint64, err error) {
+func (w *StoreInfo) getDriverLsn(gid uint32, lsn uint64) (driverLsn uint64, err error) {
 	w.lsnMu.RLock()
 	defer w.lsnMu.RUnlock()
 	lsnMap, ok := w.walDriverLsnMap[gid]
@@ -195,7 +188,7 @@ func (w *WalInfo) getDriverLsn(gid uint32, lsn uint64) (driverLsn uint64, err er
 	return
 }
 
-func (w *WalInfo) logCheckpointInfo(info *entry.Info) any {
+func (w *StoreInfo) logCheckpointInfo(info *entry.Info) any {
 	for _, intervals := range info.Checkpoints {
 		w.ckpMu.Lock()
 		ckpInfo, ok := w.checkpointInfo[intervals.Group]
@@ -214,7 +207,7 @@ func (w *WalInfo) logCheckpointInfo(info *entry.Info) any {
 	return nil
 }
 
-func (w *WalInfo) onCheckpoint() {
+func (w *StoreInfo) onCheckpoint() {
 	w.checkpointedMu.Lock()
 	for gid, ckp := range w.checkpointInfo {
 		ckped := ckp.GetCheckpointed()
@@ -231,7 +224,7 @@ func (w *WalInfo) onCheckpoint() {
 	w.ckpcntMu.Unlock()
 }
 
-func (w *WalInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
+func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
 	w.checkpointedMu.RLock()
 	if len(w.checkpointed) == 0 {
 		w.checkpointedMu.RUnlock()
@@ -253,7 +246,7 @@ func (w *WalInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
 	return
 }
 
-func (w *WalInfo) makeInternalCheckpointEntry() (e entry.Entry) {
+func (w *StoreInfo) makeInternalCheckpointEntry() (e entry.Entry) {
 	e = entry.GetBase()
 	lsn := w.GetSynced(GroupCKP)
 	e.SetType(entry.ETPostCommit)
@@ -272,7 +265,7 @@ func (w *WalInfo) makeInternalCheckpointEntry() (e entry.Entry) {
 	return
 }
 
-func (w *WalInfo) marshalPostCommitEntry() (buf []byte, err error) {
+func (w *StoreInfo) marshalPostCommitEntry() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = w.writePostCommitEntry(&bbuf); err != nil {
 		return
@@ -281,7 +274,7 @@ func (w *WalInfo) marshalPostCommitEntry() (buf []byte, err error) {
 	return
 }
 
-func (w *WalInfo) writePostCommitEntry(writer io.Writer) (n int64, err error) {
+func (w *StoreInfo) writePostCommitEntry(writer io.Writer) (n int64, err error) {
 	w.ckpMu.RLock()
 	defer w.ckpMu.RUnlock()
 	//checkpointing

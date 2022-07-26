@@ -8,7 +8,7 @@ type Driver interface {
 	GetTruncated() (lsn uint64, err error)
 	Read(lsn uint64) (*entry.Entry, error)
 	Close() error
-	// Replay(h ApplyHandle) error
+	Replay(h ApplyHandle) error
 }
 
 type ApplyHandle = func(*entry.Entry)

@@ -19,8 +19,8 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
@@ -31,8 +31,8 @@ const (
 
 func TestCheckpoint1(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
-	cfg := &store.StoreCfg{
-		RotateChecker: store.NewMaxSizeRotateChecker(int(common.K) * 2),
+	cfg := &batchstoredriver.StoreCfg{
+		RotateChecker: batchstoredriver.NewMaxSizeRotateChecker(int(common.K) * 2),
 	}
 	driver := NewDriver(dir, "store", cfg)
 	defer driver.Close()
@@ -91,7 +91,6 @@ func TestCheckpoint1(t *testing.T) {
 	err = flush2.WaitDone()
 	assert.Nil(t, err)
 
-	err = driver.Compact()
 	assert.Nil(t, err)
 	_, err = driver.LoadEntry(GroupC, lsn)
 	assert.Nil(t, err)
@@ -132,8 +131,8 @@ func TestCheckpoint1(t *testing.T) {
 
 func TestCheckpoint2(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
-	cfg := &store.StoreCfg{
-		RotateChecker: store.NewMaxSizeRotateChecker(int(common.K) * 2),
+	cfg := &batchstoredriver.StoreCfg{
+		RotateChecker: batchstoredriver.NewMaxSizeRotateChecker(int(common.K) * 2),
 	}
 	driver := NewDriver(dir, "store", cfg)
 	defer driver.Close()
@@ -224,7 +223,6 @@ func TestCheckpoint2(t *testing.T) {
 	err = flush2.WaitDone()
 	assert.Nil(t, err)
 
-	err = driver.Compact()
 	assert.Nil(t, err)
 	_, err = driver.LoadEntry(GroupC, lsn)
 	assert.NotNil(t, err)

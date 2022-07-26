@@ -50,6 +50,8 @@ func (d *LogServiceDriver) tryRead(lsn uint64) (*recordEntry, error) {
 	return record, nil
 }
 func (d *LogServiceDriver) readFromLogService(lsn uint64) {
+	d.readMu.Lock()
+	defer d.readMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
 	defer cancel()
 	client := d.readClient
@@ -61,8 +63,6 @@ func (d *LogServiceDriver) readFromLogService(lsn uint64) {
 }
 
 func (d *LogServiceDriver) appendRecords(records []logservice.LogRecord, firstlsn uint64) {
-	d.readMu.Lock()
-	defer d.readMu.Unlock()
 	lsns := make([]uint64, 0)
 	for i, record := range records {
 		if record.GetType() != pb.UserRecord {

@@ -16,6 +16,7 @@ package batchstoredriver
 
 import (
 	"errors"
+	"math"
 	"sync"
 	"sync/atomic"
 
@@ -119,5 +120,7 @@ func (base *syncBase) onReplay(r *replayer) {
 	base.Lsn = r.maxlsn
 	base.synced = r.maxlsn
 	base.syncing = r.maxlsn
-	// base.checkpointing = r.maxlsn
+	if r.minlsn != math.MaxUint64 {
+		base.checkpointing = r.minlsn
+	}
 }

@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
@@ -29,7 +30,7 @@ func (a *driverAppender) appendEntry(e *entry.Entry) {
 }
 
 func (a *driverAppender) append() {
-	ctx, cancel := context.WithTimeout(context.Background(), a.contextDuration)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 	size := a.entry.prepareRecord()
 	// if size > int(common.K)*20 { //todo
@@ -39,7 +40,9 @@ func (a *driverAppender) append() {
 	copy(record.Payload(), a.entry.payload)
 	record.ResizePayload(size)
 	lsn, err := a.client.c.Append(ctx, record)
+	// for err ==
 	if err != nil {
+		logutil.Infof("size is %d",size)
 		panic(err)
 	}
 	a.logserviceLsn = lsn

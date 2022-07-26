@@ -33,10 +33,7 @@ func init() {
 }
 
 func main() {
-	s, err := store.NewBaseStore(sampleDir, name, nil)
-	if err != nil {
-		panic(err)
-	}
+	s := store.NewStoreWithBatchStoreDriver(sampleDir, name, nil)
 	var bs bytes.Buffer
 	for i := 0; i < 3000; i++ {
 		bs.WriteString("helloyou")
@@ -58,7 +55,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		_, err = s.AppendEntry(entry.GTUncommit, e1)
+		_, err = s.Append(entry.GTUncommit, e1)
 		if err != nil {
 			panic(err)
 		}
@@ -76,7 +73,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		cmtLsn, err := s.AppendEntry(11, e2)
+		cmtLsn, err := s.Append(11, e2)
 		if err != nil {
 			panic(err)
 		}
@@ -97,7 +94,7 @@ func main() {
 		e3 := entry.GetBase()
 		e3.SetType(entry.ETCheckpoint)
 		e3.SetInfo(info)
-		_, err = s.AppendEntry(entry.GTCKp, e3)
+		_, err = s.Append(entry.GTCKp, e3)
 		if err != nil {
 			panic(err)
 		}
@@ -114,17 +111,14 @@ func main() {
 		e3.Free()
 	}
 
-	err = s.Close()
+	err := s.Close()
 	if err != nil {
 		panic(err)
 	}
 
 	t0 := time.Now()
 
-	s, err = store.NewBaseStore(sampleDir, name, nil)
-	if err != nil {
-		panic(err)
-	}
+	s= store.NewStoreWithBatchStoreDriver(sampleDir, name, nil)
 	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
 		// fmt.Printf("%s", payload)
 	}
