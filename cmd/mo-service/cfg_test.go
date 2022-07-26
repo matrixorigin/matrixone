@@ -12,14 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package main
 
-type S3Config struct {
-	Endpoint string `toml:"endpoint"`
-	Bucket   string `toml:"bucket"`
-	// KeyPrefix enables multiple fs instances in one bucket
-	KeyPrefix string `toml:"key-prefix"`
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestParseDNConfig(t *testing.T) {
+	data := `
+		service-type = "DN"
+
+		[log]
+		level = "debug"
+		format = "json"
+		max-size = 512
+		
+		[dn]
+		# storage directory for local data. Include DNShard metadata and TAE data.
+		data-dir = ""
+		
+		[dn.Txn.Storage]
+		# txn storage backend implementation. [TAE|MEM]
+		backend = "MEM"
+	`
+	cfg, err := parseFromString(data)
+	assert.NoError(t, err)
+	assert.Equal(t, "MEM", cfg.DN.Txn.Storage.Backend)
 }
-
-// key mapping scheme:
-// <KeyPrefix>/<file path> -> file content
