@@ -2285,6 +2285,9 @@ func CastStringToJson(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 			return nil, err
 		}
 		val, err := encoding.EncodeJson(json)
+		if err != nil {
+			return nil, err
+		}
 		mem += int64(cap(val))
 		rs[i] = val
 	}
