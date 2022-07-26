@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -49,12 +50,32 @@ func NewS3FS(
 	keyPrefix string,
 ) (*S3FS, error) {
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*7)
-	defer cancel()
-	cfg, err := config.LoadDefaultConfig(ctx)
+	u, err := url.Parse(endpoint)
 	if err != nil {
 		return nil, err
 	}
+	if u.Scheme == "" {
+		u.Scheme = "https"
+	}
+	endpoint = u.String()
+
+	return newS3FS(
+		endpoint,
+		bucket,
+		keyPrefix,
+		s3.WithEndpointResolver(
+			s3.EndpointResolverFromURL(endpoint),
+		),
+	)
+}
+
+// NewS3FSOnMinio creates S3FS on minio server
+// this is needed because the URL scheme of minio server does not compatible with AWS'
+func NewS3FSOnMinio(
+	endpoint string,
+	bucket string,
+	keyPrefix string,
+) (*S3FS, error) {
 
 	u, err := url.Parse(endpoint)
 	if err != nil {
@@ -65,9 +86,47 @@ func NewS3FS(
 	}
 	endpoint = u.String()
 
+	return newS3FS(
+		endpoint,
+		bucket,
+		keyPrefix,
+		s3.WithEndpointResolver(
+			s3.EndpointResolverFunc(
+				func(
+					region string,
+					options s3.EndpointResolverOptions,
+				) (
+					ep aws.Endpoint,
+					err error,
+				) {
+					ep.URL = endpoint
+					ep.Source = aws.EndpointSourceCustom
+					ep.HostnameImmutable = true
+					ep.SigningRegion = region
+					return
+				},
+			),
+		),
+	)
+}
+
+func newS3FS(
+	endpoint string,
+	bucket string,
+	keyPrefix string,
+	options ...func(*s3.Options),
+) (*S3FS, error) {
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*7)
+	defer cancel()
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	client := s3.NewFromConfig(
 		cfg,
-		s3.WithEndpointResolver(s3.EndpointResolverFromURL(endpoint)),
+		options...,
 	)
 
 	return &S3FS{
