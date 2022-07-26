@@ -15,6 +15,8 @@
 package moengine
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -44,18 +46,18 @@ func isSysRelation(name string) bool {
 	return false
 }
 
-func (s *sysRelation) Write(_ uint64, _ *batch.Batch, _ engine.Snapshot) error {
+func (s *sysRelation) Write(_ context.Context, _ *batch.Batch) error {
 	return ErrReadOnly
 }
 
-func (s *sysRelation) Update(_ uint64, _ *batch.Batch, _ engine.Snapshot) error {
+func (s *sysRelation) Update(_ context.Context, _ *batch.Batch) error {
 	return ErrReadOnly
 }
 
-func (s *sysRelation) Delete(_ uint64, _ *vector.Vector, _ string, _ engine.Snapshot) error {
+func (s *sysRelation) Delete(_ context.Context, _ *vector.Vector, _ string) error {
 	return ErrReadOnly
 }
 
-func (s *sysRelation) Truncate(_ engine.Snapshot) (uint64, error) {
+func (s *sysRelation) Truncate(_ context.Context) (uint64, error) {
 	return 0, ErrReadOnly
 }

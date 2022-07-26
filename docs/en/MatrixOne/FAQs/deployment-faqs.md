@@ -32,7 +32,7 @@ For standalone installation, MatrixOne 0.5.0 can be running on the 64-bit generi
 | :------ | :----- | :-------------- |
 | 4 core+ | 16 GB+ | SSD/HDD 200 GB+ |
 
-The Macbook M1/M2 with ARM architecture is also a good fit for development environment.
+The Macbook M1/M2 with ARM architecture is also a good fit for a development environment.
 
 ##### Production environment
 
@@ -60,7 +60,7 @@ Then the `make build` should be fast enough to finish.
 
 ##### When I was testing MatrixOne with MO-tester, I got an error of `too many open files`?
 
-MO-tester will open and close many SQL files in a high speed to test MatrixOne, this kind of usage will easily reach the maximum open file limit of Linux and MacOS, which is the reason for the `too many open files` error.
+MO-tester will open and close many SQL files in a high speed to test MatrixOne, this kind of usage will easily reach the maximum open file limit of Linux and macOS, which is the reason for the `too many open files` error.
 
 * For MacOS, you can just set the open file limit by a simple command:
 

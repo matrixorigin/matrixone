@@ -422,7 +422,11 @@ func initParseLineHandler(handler *ParseLineHandler) error {
 	load := handler.load
 
 	var cols []*engine.AttributeDef = nil
-	defs := relation.TableDefs(handler.txnHandler.GetTxn().GetCtx())
+	ctx := context.TODO()
+	defs, err := relation.TableDefs(ctx)
+	if err != nil {
+		return err
+	}
 	for _, def := range defs {
 		attr, ok := def.(*engine.AttributeDef)
 		if ok {
@@ -1685,6 +1689,8 @@ when force is true, batchsize will be changed.
 */
 func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 	var err error = nil
+
+	ctx := context.TODO()
 	if handler.batchFilled == handler.batchSize {
 		//batchBytes := 0
 		//for _, vec := range handler.batchData.Vecs {
@@ -1714,16 +1720,16 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				if err != nil {
 					goto handleError
 				}
-				dbHandler, err = handler.storage.Database(handler.dbName, txnHandler.GetTxn().GetCtx())
+				dbHandler, err = handler.storage.Database(ctx, handler.dbName, engine.Snapshot(txnHandler.GetTxn().GetCtx()))
 				if err != nil {
 					goto handleError
 				}
-				tableHandler, err = dbHandler.Relation(handler.tableName, txnHandler.GetTxn().GetCtx())
+				tableHandler, err = dbHandler.Relation(ctx, handler.tableName)
 				if err != nil {
 					goto handleError
 				}
 			}
-			err = tableHandler.Write(handler.timestamp, handler.batchData, txnHandler.GetTxn().GetCtx())
+			err = tableHandler.Write(ctx, handler.batchData)
 			if handler.oneTxnPerBatch {
 				if err != nil {
 					goto handleError
@@ -1863,17 +1869,17 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 						if err != nil {
 							goto handleError2
 						}
-						dbHandler, err = handler.storage.Database(handler.dbName, txnHandler.GetTxn().GetCtx())
+						dbHandler, err = handler.storage.Database(ctx, handler.dbName, engine.Snapshot(txnHandler.GetTxn().GetCtx()))
 						if err != nil {
 							goto handleError2
 						}
 						//new relation
-						tableHandler, err = dbHandler.Relation(handler.tableName, txnHandler.GetTxn().GetCtx())
+						tableHandler, err = dbHandler.Relation(ctx, handler.tableName)
 						if err != nil {
 							goto handleError2
 						}
 					}
-					err = tableHandler.Write(handler.timestamp, handler.batchData, txnHandler.GetTxn().GetCtx())
+					err = tableHandler.Write(ctx, handler.batchData)
 					if handler.oneTxnPerBatch {
 						if err != nil {
 							goto handleError2

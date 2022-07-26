@@ -63,6 +63,29 @@ func runClientTest(t *testing.T,
 	fn(t, service, scfg, c)
 }
 
+func TestClientCanBeReset(t *testing.T) {
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
+		client := c.(*managedClient)
+		client.resetClient()
+		assert.Nil(t, client.client)
+	}
+	runClientTest(t, false, fn)
+}
+
+func TestPrepareClient(t *testing.T) {
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		client := c.(*managedClient)
+		assert.NoError(t, client.prepareClient(ctx))
+		client.resetClient()
+		assert.Nil(t, client.client)
+		assert.NoError(t, client.prepareClient(ctx))
+		assert.NotNil(t, client.client)
+	}
+	runClientTest(t, false, fn)
+}
+
 func TestLogShardNotFoundErrorIsConsideredAsTempError(t *testing.T) {
 	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 		require.NoError(t, s.store.stopReplica(1, 2))
@@ -71,6 +94,8 @@ func TestLogShardNotFoundErrorIsConsideredAsTempError(t *testing.T) {
 		_, err := c.GetTSOTimestamp(ctx, 100)
 		require.Equal(t, dragonboat.ErrShardNotFound, err)
 		assert.True(t, isTempError(err))
+		client := c.(*managedClient)
+		assert.True(t, client.isRetryableError(err))
 	}
 	runClientTest(t, false, fn)
 }
