@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -24,6 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 )
 
 var (
@@ -627,7 +631,8 @@ func InitDB(tae engine.Engine) error {
 	//	return err
 	//}
 
-	catalogDB, err := tae.Database(catalogDbName, txnCtx.GetCtx())
+	ctx := context.TODO()
+	catalogDB, err := tae.Database(ctx, catalogDbName, engine.Snapshot(txnCtx.GetCtx()))
 	if err != nil {
 		logutil.Infof("get database %v failed.error:%v", catalogDbName, err)
 		err2 := txnCtx.Rollback()
@@ -641,10 +646,10 @@ func InitDB(tae engine.Engine) error {
 	//2. create table mo_global_variables
 	gvSch := DefineSchemaForMoGlobalVariables()
 	gvDefs := convertCatalogSchemaToTableDef(gvSch)
-	rel, _ := catalogDB.Relation(gvSch.GetName(), txnCtx.GetCtx())
+	rel, _ := catalogDB.Relation(ctx, gvSch.GetName())
 
 	if rel == nil {
-		err = catalogDB.Create(0, gvSch.GetName(), gvDefs, txnCtx.GetCtx())
+		err = catalogDB.Create(ctx, gvSch.GetName(), gvDefs)
 		if err != nil {
 			logutil.Infof("create table %v failed.error:%v", gvSch.GetName(), err)
 			err2 := txnCtx.Rollback()
@@ -658,7 +663,7 @@ func InitDB(tae engine.Engine) error {
 
 	if rel == nil {
 		//write initial data into mo_global_variables
-		gvTable, err := catalogDB.Relation(gvSch.GetName(), txnCtx.GetCtx())
+		gvTable, err := catalogDB.Relation(ctx, gvSch.GetName())
 		if err != nil {
 			logutil.Infof("get table %v failed.error:%v", gvSch.GetName(), err)
 			err2 := txnCtx.Rollback()
@@ -670,7 +675,7 @@ func InitDB(tae engine.Engine) error {
 		}
 
 		gvBatch := FillInitialDataForMoGlobalVariables()
-		err = gvTable.Write(0, gvBatch, txnCtx.GetCtx())
+		err = gvTable.Write(ctx, gvBatch)
 		if err != nil {
 			logutil.Infof("write into table %v failed.error:%v", gvSch.GetName(), err)
 			err2 := txnCtx.Rollback()
@@ -683,10 +688,10 @@ func InitDB(tae engine.Engine) error {
 	}
 	userSch := DefineSchemaForMoUser()
 	userDefs := convertCatalogSchemaToTableDef(userSch)
-	rel, _ = catalogDB.Relation(userSch.GetName(), txnCtx.GetCtx())
+	rel, _ = catalogDB.Relation(ctx, userSch.GetName())
 	if rel == nil {
 		//3. create table mo_user
-		err = catalogDB.Create(0, userSch.GetName(), userDefs, txnCtx.GetCtx())
+		err = catalogDB.Create(ctx, userSch.GetName(), userDefs)
 		if err != nil {
 			logutil.Infof("create table %v failed.error:%v", userSch.GetName(), err)
 			err2 := txnCtx.Rollback()
@@ -698,7 +703,7 @@ func InitDB(tae engine.Engine) error {
 		}
 
 		//write initial data into mo_user
-		userTable, err := catalogDB.Relation(userSch.GetName(), txnCtx.GetCtx())
+		userTable, err := catalogDB.Relation(ctx, userSch.GetName())
 		if err != nil {
 			logutil.Infof("get table %v failed.error:%v", userSch.GetName(), err)
 			err2 := txnCtx.Rollback()
@@ -710,7 +715,7 @@ func InitDB(tae engine.Engine) error {
 		}
 
 		userBatch := FillInitialDataForMoUser()
-		err = userTable.Write(0, userBatch, txnCtx.GetCtx())
+		err = userTable.Write(ctx, userBatch)
 		if err != nil {
 			logutil.Infof("write into table %v failed.error:%v", userSch.GetName(), err)
 			err2 := txnCtx.Rollback()
@@ -728,10 +733,10 @@ func InitDB(tae engine.Engine) error {
 	*/
 	//1. create database information_schema
 	infoSchemaName := "information_schema"
-	db, _ := tae.Database(infoSchemaName, txnCtx.GetCtx())
+	db, _ := tae.Database(ctx, infoSchemaName, engine.Snapshot(txnCtx.GetCtx()))
 
 	if db == nil {
-		err = tae.Create(0, infoSchemaName, 0, txnCtx.GetCtx())
+		err = tae.Create(ctx, infoSchemaName, engine.Snapshot(txnCtx.GetCtx()))
 		if err != nil {
 			logutil.Infof("create database %v failed.error:%v", infoSchemaName, err)
 			err2 := txnCtx.Rollback()
@@ -764,8 +769,12 @@ func sanityCheck(tae engine.Engine) error {
 	if err != nil {
 		return err
 	}
+	ctx := context.TODO()
 	// databases: mo_catalog,information_schema
-	dbs := tae.Databases(txnCtx.GetCtx())
+	dbs, err := tae.Databases(ctx, engine.Snapshot(txnCtx.GetCtx()))
+	if err != nil {
+		return err
+	}
 	wantDbs := []string{"mo_catalog", "information_schema"}
 	if !isWanted(wantDbs, dbs) {
 		logutil.Infof("wantDbs %v,dbs %v", wantDbs, dbs)
@@ -813,7 +822,8 @@ func isWanted(want, actual []string) bool {
 // isWantedDatabase checks the database has the right tables
 func isWantedDatabase(taeEngine moengine.TxnEngine, txnCtx moengine.Txn,
 	dbName string, tables []string, schemas []*CatalogSchema) error {
-	db, err := taeEngine.Database(dbName, txnCtx.GetCtx())
+	ctx := context.TODO()
+	db, err := taeEngine.Database(ctx, dbName, engine.Snapshot(txnCtx.GetCtx()))
 	if err != nil {
 		logutil.Infof("get database %v failed.error:%v", dbName, err)
 		err2 := txnCtx.Rollback()
@@ -823,7 +833,10 @@ func isWantedDatabase(taeEngine moengine.TxnEngine, txnCtx moengine.Txn,
 		}
 		return err
 	}
-	tablesOfMoCatalog := db.Relations(txnCtx.GetCtx())
+	tablesOfMoCatalog, err := db.Relations(ctx)
+	if err != nil {
+		return err
+	}
 	if !isWanted(tables, tablesOfMoCatalog) {
 		logutil.Infof("wantTables %v, tables %v", tables, tablesOfMoCatalog)
 		return errorMissingCatalogTables
@@ -844,7 +857,8 @@ func isWantedDatabase(taeEngine moengine.TxnEngine, txnCtx moengine.Txn,
 //isWantedTable checks the table has the right attributes
 func isWantedTable(db engine.Database, txnCtx moengine.Txn,
 	tableName string, schema *CatalogSchema) error {
-	table, err := db.Relation(tableName, txnCtx.GetCtx())
+	ctx := context.TODO()
+	table, err := db.Relation(ctx, tableName)
 	if err != nil {
 		logutil.Infof("get table %v failed.error:%v", tableName, err)
 		err2 := txnCtx.Rollback()
@@ -901,16 +915,17 @@ func isWantedTable(db engine.Database, txnCtx moengine.Txn,
 			}
 	*/
 	//read data from table
-	readers := table.NewReader(1, nil, nil, txnCtx.GetCtx())
-	x := make([]uint64, schema.Length())
+	readers, err := table.NewReader(ctx, 1, nil, nil)
+	if err != nil {
+		return err
+	}
 	fieldNames := make([]string, schema.Length())
 	for i := 0; i < schema.Length(); i++ {
-		x[i] = 1
 		fieldNames[i] = schema.GetAttribute(i).GetName()
 	}
 	fmt.Printf("\nTable:%s \n\nAttributes:\n%v \n\n", tableName, fieldNames)
 	fmt.Printf("Datas:\n\n")
-	result, err := readers[0].Read(x, fieldNames)
+	result, err := readers[0].Read(fieldNames, nil, mheap.New(guest.New(1<<20, host.New(1<<20))))
 	if err != nil {
 		return err
 	}

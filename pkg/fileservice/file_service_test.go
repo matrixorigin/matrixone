@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/gob"
 	"fmt"
 	"io"
 	mrand "math/rand"
@@ -341,6 +342,52 @@ func testFileService(t *testing.T, newFS func() FileService) {
 			},
 		})
 		assert.ErrorIs(t, err, ErrSizeNotMatch)
+
+	})
+
+	t.Run("object", func(t *testing.T) {
+		fs := newFS()
+		ctx := context.Background()
+
+		buf := new(bytes.Buffer)
+		err := gob.NewEncoder(buf).Encode(map[int]int{
+			42: 42,
+		})
+		assert.Nil(t, err)
+		data := buf.Bytes()
+		err = fs.Write(ctx, IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size: len(data),
+					Data: data,
+				},
+			},
+		})
+		assert.Nil(t, err)
+
+		vec := &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size: len(data),
+					ToObject: func(r io.Reader) (any, int64, error) {
+						var m map[int]int
+						if err := gob.NewDecoder(r).Decode(&m); err != nil {
+							return nil, 0, err
+						}
+						return m, 1, nil
+					},
+				},
+			},
+		}
+		err = fs.Read(ctx, vec)
+		assert.Nil(t, err)
+
+		m, ok := vec.Entries[0].Object.(map[int]int)
+		assert.True(t, ok)
+		assert.Equal(t, 1, len(m))
+		assert.Equal(t, 42, m[42])
 
 	})
 
