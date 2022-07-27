@@ -506,18 +506,25 @@ c	d
 2	2
 begin;
 drop table test_11;
+Only CREATE of DDL is supported in transactions
 select * from test_11;
-table "test_11" does not exist
+c	d
+1	1
+2	2
 select * from test_11;
 c	d
 1	1
 2	2
 commit;
 select * from test_11;
-table "test_11" does not exist
+c	d
+1	1
+2	2
 commit;
 select * from test_11;
-table "test_11" does not exist
+c	d
+1	1
+2	2
 drop table if exists test_11;
 begin;
 create table test_11 (c int primary key,d int);
