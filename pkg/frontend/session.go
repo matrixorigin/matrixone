@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	goErrors "errors"
 	"fmt"
 
 	"strings"
@@ -31,18 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-)
-
-var (
-	errorTaeTxnBeginInBegan = goErrors.New("begin txn in the began txn")
-	//used in future
-	//errorTaeTxnHasNotBeenBegan        = goErrors.New("the txn has not been began")
-	errorTaeTxnAutocommitInAutocommit = goErrors.New("start autocommit txn in the autocommit txn")
-	errorTaeTxnBeginInAutocommit      = goErrors.New("begin txn in the autocommit txn")
-	errorTaeTxnAutocommitInBegan      = goErrors.New("start autocommit txn in the txn has been began")
-	errorIsNotAutocommitTxn           = goErrors.New("it is not autocommit txn")
-	errorIsNotBeginCommitTxn          = goErrors.New("it is not the begin/commit txn ")
-	errorTaeTxnInIllegalState         = goErrors.New("the txn is in the illegal state and needed to be cleaned before using again")
 )
 
 const MaxPrepareNumberInOneSession = 64
