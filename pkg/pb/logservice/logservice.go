@@ -67,14 +67,14 @@ func NewCNState() CNState {
 
 // Update applies the incoming CNStoreHeartbeat into HAKeeper. Tick is the
 // current tick of the HAKeeper which is used as the timestamp of the heartbeat.
-func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
-	storeInfo, ok := s.Stores[hb.UUID]
+func (m *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
+	storeInfo, ok := m.Stores[hb.UUID]
 	if !ok {
 		storeInfo = CNStoreInfo{}
 	}
 	storeInfo.Tick = tick
 	storeInfo.ServiceAddress = hb.ServiceAddress
-	s.Stores[hb.UUID] = storeInfo
+	m.Stores[hb.UUID] = storeInfo
 }
 
 // NewDNState creates a new DNState.
@@ -86,15 +86,15 @@ func NewDNState() DNState {
 
 // Update applies the incoming DNStoreHeartbeat into HAKeeper. Tick is the
 // current tick of the HAKeeper which is used as the timestamp of the heartbeat.
-func (s *DNState) Update(hb DNStoreHeartbeat, tick uint64) {
-	storeInfo, ok := s.Stores[hb.UUID]
+func (m *DNState) Update(hb DNStoreHeartbeat, tick uint64) {
+	storeInfo, ok := m.Stores[hb.UUID]
 	if !ok {
 		storeInfo = DNStoreInfo{}
 	}
 	storeInfo.Tick = tick
 	storeInfo.Shards = hb.Shards
 	storeInfo.ServiceAddress = hb.ServiceAddress
-	s.Stores[hb.UUID] = storeInfo
+	m.Stores[hb.UUID] = storeInfo
 }
 
 // NewLogState creates a new LogState.
@@ -107,13 +107,13 @@ func NewLogState() LogState {
 
 // Update applies the incoming heartbeat message to the LogState with the
 // specified tick used as the timestamp.
-func (s *LogState) Update(hb LogStoreHeartbeat, tick uint64) {
-	s.updateStores(hb, tick)
-	s.updateShards(hb)
+func (m *LogState) Update(hb LogStoreHeartbeat, tick uint64) {
+	m.updateStores(hb, tick)
+	m.updateShards(hb)
 }
 
-func (s *LogState) updateStores(hb LogStoreHeartbeat, tick uint64) {
-	storeInfo, ok := s.Stores[hb.UUID]
+func (m *LogState) updateStores(hb LogStoreHeartbeat, tick uint64) {
+	storeInfo, ok := m.Stores[hb.UUID]
 	if !ok {
 		storeInfo = LogStoreInfo{}
 	}
@@ -122,12 +122,12 @@ func (s *LogState) updateStores(hb LogStoreHeartbeat, tick uint64) {
 	storeInfo.ServiceAddress = hb.ServiceAddress
 	storeInfo.GossipAddress = hb.GossipAddress
 	storeInfo.Replicas = hb.Replicas
-	s.Stores[hb.UUID] = storeInfo
+	m.Stores[hb.UUID] = storeInfo
 }
 
-func (s *LogState) updateShards(hb LogStoreHeartbeat) {
+func (m *LogState) updateShards(hb LogStoreHeartbeat) {
 	for _, incoming := range hb.Replicas {
-		recorded, ok := s.Shards[incoming.ShardID]
+		recorded, ok := m.Shards[incoming.ShardID]
 		if !ok {
 			recorded = LogShardInfo{
 				ShardID:  incoming.ShardID,
@@ -149,7 +149,7 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 			recorded.LeaderID = incoming.LeaderID
 		}
 
-		s.Shards[incoming.ShardID] = recorded
+		m.Shards[incoming.ShardID] = recorded
 	}
 }
 
@@ -180,19 +180,28 @@ func (m *ScheduleCommand) LogString() string {
 		repUuid = repUuid[:6]
 	}
 
-	initMems := make(map[uint64]string)
-	for repId, uuid := range m.ConfigChange.InitialMembers {
-		if len(uuid) > 6 {
-			initMems[repId] = uuid[:6]
-		} else {
-			initMems[repId] = uuid
+	var initMembers map[uint64]string
+	if len(m.ConfigChange.InitialMembers) == 0 {
+		initMembers = nil
+	} else {
+		initMembers = make(map[uint64]string)
+		for repId, uuid := range m.ConfigChange.InitialMembers {
+			if len(uuid) > 6 {
+				initMembers[repId] = uuid[:6]
+			} else {
+				initMembers[repId] = uuid
+			}
 		}
 	}
 
-	s := fmt.Sprintf("%s/%s %s %s:%d:%d:%d %v", serviceType[m.ServiceType],
+	s := fmt.Sprintf("%s/%s %s %s:%d:%d:%d", serviceType[m.ServiceType],
 		configChangeType[m.ConfigChange.ChangeType], scheUuid,
 		repUuid, m.ConfigChange.Replica.ShardID,
-		m.ConfigChange.Replica.ReplicaID, m.ConfigChange.Replica.Epoch, initMems)
+		m.ConfigChange.Replica.ReplicaID, m.ConfigChange.Replica.Epoch)
+
+	if initMembers != nil {
+		s += fmt.Sprintf(" %v", initMembers)
+	}
 
 	return s
 }
