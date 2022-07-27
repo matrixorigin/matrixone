@@ -31,8 +31,9 @@ import (
 )
 
 var (
-	testAddr     = "unix:///tmp/goetty.sock"
-	testUnixFile = "/tmp/goetty.sock"
+	testProxyAddr = "unix:///tmp/proxy.sock"
+	testAddr      = "unix:///tmp/goetty.sock"
+	testUnixFile  = "/tmp/goetty.sock"
 )
 
 func TestSend(t *testing.T) {
@@ -390,7 +391,44 @@ func TestLastActiveWithStream(t *testing.T) {
 		WithBackendConnectWhenCreate())
 }
 
+func TestTCPProxyExample(t *testing.T) {
+	assert.NoError(t, os.RemoveAll(testProxyAddr[7:]))
+	p := goetty.NewProxy(testProxyAddr, nil)
+	assert.NoError(t, p.Start())
+	defer func() {
+		assert.NoError(t, p.Stop())
+	}()
+
+	testBackendSendWithAddr(t,
+		testProxyAddr,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			p.AddUpStream(testAddr, b.options.connectTimeout)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			req := newTestMessage(1)
+			f, err := b.Send(ctx, req, SendOptions{})
+			assert.NoError(t, err)
+			defer f.Close()
+
+			resp, err := f.Get()
+			assert.NoError(t, err)
+			assert.Equal(t, req, resp)
+		},
+		WithBackendConnectWhenCreate())
+}
+
 func testBackendSend(t *testing.T,
+	handleFunc func(goetty.IOSession, interface{}, uint64) error,
+	testFunc func(b *remoteBackend),
+	options ...BackendOption) {
+	testBackendSendWithAddr(t, testAddr, handleFunc, testFunc, options...)
+}
+
+func testBackendSendWithAddr(t *testing.T, addr string,
 	handleFunc func(goetty.IOSession, interface{}, uint64) error,
 	testFunc func(b *remoteBackend),
 	options ...BackendOption) {
@@ -403,7 +441,7 @@ func testBackendSend(t *testing.T,
 	options = append(options,
 		WithBackendBufferSize(1),
 		WithBackendLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel).With(zap.String("testcase", t.Name()))))
-	rb, err := NewRemoteBackend(testAddr, newTestCodec(), options...)
+	rb, err := NewRemoteBackend(addr, newTestCodec(), options...)
 	assert.NoError(t, err)
 
 	b := rb.(*remoteBackend)
