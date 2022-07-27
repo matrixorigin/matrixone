@@ -21,6 +21,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
@@ -49,6 +50,8 @@ type Config struct {
 	ServiceType string `toml:"service-type"`
 	// DN dn service config
 	DN dnservice.Config `toml:"dn"`
+	// LogService is the config for log service
+	LogService logservice.Config `toml:"logservice"`
 }
 
 func parseConfigFromFile(file string) (*Config, error) {
