@@ -51,14 +51,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func onlyCreateStatementErrorInfo() string {
+	return "Only CREATE of DDL is supported in transactions"
+}
+
+func parameterModificationInTxnErrorInfo() string {
+	return "Uncommitted transaction exists. Please commit or rollback first."
+}
+
 var (
 	errorComplicateExprIsNotSupported              = goErrors.New("the complicate expression is not supported")
 	errorNumericTypeIsNotSupported                 = goErrors.New("the numeric type is not supported")
 	errorUnaryMinusForNonNumericTypeIsNotSupported = goErrors.New("unary minus for no numeric type is not supported")
-	errorOnlyCreateStatement                       = goErrors.New("Only CREATE of DDL is supported in transactions")
-	errorAdministrativeStatement                   = goErrors.New("Administrative command is unsupported in transactions")
-	errorParameterModificationInTxn                = goErrors.New("Uncommmited transaction exists. Please commit or rollback first.")
-	errorUnclassifiedStatement                     = goErrors.New("Unclassified statement appears in uncommitted transaction")
+	errorOnlyCreateStatement                       = goErrors.New(onlyCreateStatementErrorInfo())
+	errorAdministrativeStatement                   = goErrors.New("administrative command is unsupported in transactions")
+	errorParameterModificationInTxn                = goErrors.New(parameterModificationInTxnErrorInfo())
+	errorUnclassifiedStatement                     = goErrors.New("unclassified statement appears in uncommitted transaction")
 )
 
 // TableInfoCache tableInfos of a database

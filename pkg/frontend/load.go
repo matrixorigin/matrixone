@@ -1709,7 +1709,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		handler.ThreadInfo.SetCnt(1)
 		//dbHandler := handler.dbHandler
 		var dbHandler engine.Database
-		txnHandler := handler.txnHandler
+		var txnHandler *TxnHandler
 		tableHandler := handler.tableHandler
 		initSes := handler.ses
 		tmpSes := NewSession(initSes.GetMysqlProtocol(), initSes.GuestMmu, initSes.Mempool, initSes.Pu, gSysVariables)
@@ -1854,7 +1854,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				wait_a := time.Now()
 				handler.ThreadInfo.SetTime(wait_a)
 				handler.ThreadInfo.SetCnt(1)
-				txnHandler := handler.txnHandler
+				var txnHandler *TxnHandler
 				tableHandler := handler.tableHandler
 				// dbHandler := handler.dbHandler
 				initSes := handler.ses
