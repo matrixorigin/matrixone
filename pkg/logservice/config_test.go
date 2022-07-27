@@ -19,6 +19,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 )
@@ -62,6 +63,45 @@ func TestSplitAddress(t *testing.T) {
 	}
 }
 
+func TestGetInitHAKeeperMembers(t *testing.T) {
+	cfg1 := Config{}
+	cfg1.BootstrapConfig.InitHAKeeperMembers = " 131072 :9c4dccb4-4d3c-41f8-b482-5251dc7a41bf "
+	result, err := cfg1.GetInitHAKeeperMembers()
+	require.NoError(t, err)
+	assert.Equal(t, 1, len(result))
+	v, ok := result[131072]
+	assert.True(t, ok)
+	assert.Equal(t, "9c4dccb4-4d3c-41f8-b482-5251dc7a41bf", v)
+
+	cfg2 := Config{}
+	cfg2.BootstrapConfig.InitHAKeeperMembers = "131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf;131073:9c4dccb4-4d3c-41f8-b482-5251dc7a41be"
+	result, err = cfg2.GetInitHAKeeperMembers()
+	require.NoError(t, err)
+	assert.Equal(t, 2, len(result))
+	v1, ok1 := result[131072]
+	v2, ok2 := result[131073]
+	assert.True(t, ok1)
+	assert.True(t, ok2)
+	assert.Equal(t, "9c4dccb4-4d3c-41f8-b482-5251dc7a41bf", v1)
+	assert.Equal(t, "9c4dccb4-4d3c-41f8-b482-5251dc7a41be", v2)
+
+	tests := []string{
+		"131071:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf",
+		"262144:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf",
+		"262145:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf",
+		"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41b",
+		"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf;",
+		"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf;1:1",
+	}
+
+	for _, v := range tests {
+		cfg := Config{}
+		cfg.BootstrapConfig.InitHAKeeperMembers = v
+		_, err := cfg.GetInitHAKeeperMembers()
+		assert.Equal(t, ErrInvalidBootstrapConfig, err)
+	}
+}
+
 func TestGetGossipSeedAddresses(t *testing.T) {
 	cfg := Config{
 		GossipSeedAddresses: "localhost:9000;localhost:9001 ; localhost:9002 ",
@@ -72,7 +112,7 @@ func TestGetGossipSeedAddresses(t *testing.T) {
 
 func TestConfigCanBeValidated(t *testing.T) {
 	c := getTestConfig()
-	assert.Nil(t, c.Validate())
+	assert.NoError(t, c.Validate())
 
 	c1 := c
 	c1.DeploymentID = 0
@@ -92,6 +132,39 @@ func TestConfigCanBeValidated(t *testing.T) {
 
 	c5 := c
 	c5.GossipSeedAddresses = ""
+	assert.True(t, errors.Is(c5.Validate(), ErrInvalidConfig))
+}
+
+func TestBootstrapConfigCanBeValidated(t *testing.T) {
+	c := getTestConfig()
+	assert.NoError(t, c.Validate())
+
+	c.BootstrapConfig.BootstrapCluster = true
+	c.BootstrapConfig.NumOfLogShards = 3
+	c.BootstrapConfig.NumOfDNShards = 3
+	c.BootstrapConfig.NumOfLogShardReplicas = 1
+	c.BootstrapConfig.InitHAKeeperMembers = "131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
+	c.BootstrapConfig.HAKeeperReplicaID = 131072
+	assert.NoError(t, c.Validate())
+
+	c1 := c
+	c1.BootstrapConfig.NumOfLogShards = 0
+	assert.True(t, errors.Is(c1.Validate(), ErrInvalidConfig))
+
+	c2 := c
+	c2.BootstrapConfig.NumOfDNShards = 0
+	assert.True(t, errors.Is(c2.Validate(), ErrInvalidConfig))
+
+	c3 := c
+	c3.BootstrapConfig.NumOfDNShards = 2
+	assert.True(t, errors.Is(c3.Validate(), ErrInvalidConfig))
+
+	c4 := c
+	c4.BootstrapConfig.NumOfLogShardReplicas = 2
+	assert.True(t, errors.Is(c4.Validate(), ErrInvalidConfig))
+
+	c5 := c
+	c5.BootstrapConfig.HAKeeperReplicaID = 2
 	assert.True(t, errors.Is(c5.Validate(), ErrInvalidConfig))
 }
 

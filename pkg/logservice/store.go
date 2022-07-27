@@ -112,8 +112,8 @@ type store struct {
 	alloc             hakeeper.IDAllocator
 	stopper           *stopper.Stopper
 
-	bootstrapCheckInterval uint64
-	bootstrapMgr           *bootstrap.Manager
+	bootstrapCheckCycles uint64
+	bootstrapMgr         *bootstrap.Manager
 
 	mu struct {
 		sync.Mutex
