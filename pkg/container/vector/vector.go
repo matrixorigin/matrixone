@@ -810,7 +810,7 @@ func (v *Vector) Append(w any, m *mheap.Mheap) error {
 		col = append(col, wv)
 		v.Col = col
 		v.Data = v.Data[:(n+1)*16]
-	case types.T_char, types.T_varchar,types.T_json:
+	case types.T_char, types.T_varchar, types.T_json:
 		wv := w.([]byte)
 		n := len(v.Data)
 		if n+len(wv) >= cap(v.Data) {
