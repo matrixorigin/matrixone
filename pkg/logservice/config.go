@@ -180,6 +180,9 @@ func (c *Config) Validate() error {
 }
 
 func (c *Config) Fill() {
+	if c.FS == nil {
+		c.FS = vfs.Default
+	}
 	if c.HeartbeatInterval.Duration == 0 {
 		c.HeartbeatInterval.Duration = defaultHeartbeatInterval
 	}
@@ -228,7 +231,10 @@ func splitAddresses(v string) []string {
 	results := make([]string, 0)
 	parts := strings.Split(v, ";")
 	for _, v := range parts {
-		results = append(results, strings.TrimSpace(v))
+		t := strings.TrimSpace(v)
+		if len(t) > 0 {
+			results = append(results, t)
+		}
 	}
 	return results
 }
