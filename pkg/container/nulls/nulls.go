@@ -73,6 +73,13 @@ func Any(n *Nulls) bool {
 	return !n.Np.IsEmpty()
 }
 
+func Ptr(n *Nulls) *uint64 {
+	if n == nil {
+		return nil
+	}
+	return n.Np.Ptr()
+}
+
 // Size estimates the memory usage of the Nulls.
 func Size(n *Nulls) int {
 	if n.Np == nil {
