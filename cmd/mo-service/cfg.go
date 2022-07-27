@@ -21,6 +21,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
@@ -49,19 +50,24 @@ type Config struct {
 	ServiceType string `toml:"service-type"`
 	// DN dn service config
 	DN dnservice.Config `toml:"dn"`
+	// LogService is the config for log service
+	LogService logservice.Config `toml:"logservice"`
 }
 
 func parseConfigFromFile(file string) (*Config, error) {
 	if file == "" {
 		return nil, fmt.Errorf("toml config file not set")
 	}
-
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err
 	}
+	return parseFromString(string(data))
+}
+
+func parseFromString(data string) (*Config, error) {
 	cfg := &Config{}
-	if _, err = toml.Decode(string(data), cfg); err != nil {
+	if _, err := toml.Decode(data, cfg); err != nil {
 		return nil, err
 	}
 

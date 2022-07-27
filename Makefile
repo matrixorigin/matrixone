@@ -41,6 +41,7 @@
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 GOBIN := go
 BIN_NAME := mo-server
+SERVICE_BIN_NAME := mo-service
 BUILD_CFG := gen_config
 UNAME_S := $(shell uname -s)
 GOPATH := $(shell go env GOPATH)
@@ -92,7 +93,7 @@ pb: generate-pb fmt
 	$(info all protos are generated) 
 
 ###############################################################################
-# build MatrixOne
+# build mo-server
 ###############################################################################
 
 RACE_OPT := 
@@ -109,7 +110,7 @@ BUILD_NAME=binary
 .PHONY: build
 build: config cgo cmd/db-server/$(wildcard *.go)
 	$(info [Build $(BUILD_NAME)])
-	$(GO) build $(RACE_OPT) $(GOLDFLAGS) -o $(BIN_NAME) ./cmd/db-server/
+	$(GO) build $(RACE_OPT) $(GOLDFLAGS) -o $(BIN_NAME) ./cmd/db-server
 
 # build mo-server binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
@@ -117,6 +118,22 @@ build: config cgo cmd/db-server/$(wildcard *.go)
 debug: override BUILD_NAME := debug-binary
 debug: override RACE_OPT := -race
 debug: build
+
+###############################################################################
+# build mo-service
+###############################################################################
+
+# build mo-service binary
+.PHONY: service
+service: config cgo cmd/mo-service/$(wildcard *.go)
+	$(info [Build $(BUILD_NAME)])
+	$(GO) build $(RACE_OPT) $(GOLDFLAGS) -o $(SERVICE_BIN_NAME) ./cmd/mo-service
+
+.PHONY: debug-service
+debug-service: override BUILD_NAME := debug-binary
+debug-service: override RACE_OPT := -race
+debug-service: service
+
 
 ###############################################################################
 # run unit tests
@@ -141,15 +158,7 @@ clean:
 	$(info [Clean up])
 	$(info Clean go test cache)
 	@go clean -testcache
-	@rm -f $(CONFIG_CODE_GENERATED)
-ifneq ($(wildcard $(BIN_NAME)),)
-	$(info Remove file $(BIN_NAME))
-	@rm -f $(BIN_NAME)
-endif
-ifneq ($(wildcard $(BUILD_CFG)),)
-	$(info Remove file $(BUILD_CFG))
-	@rm -f $(BUILD_CFG)
-endif
+	rm -f $(CONFIG_CODE_GENERATED) $(BIN_NAME) $(SERVICE_BIN_NAME) $(BUILD_CFG)
 	$(MAKE) -C cgo clean
 
 ###############################################################################
