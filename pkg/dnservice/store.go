@@ -398,7 +398,8 @@ func (s *store) getBackendOptions() []morpc.BackendOption {
 		}),
 		morpc.WithBackendBusyBufferSize(s.cfg.RPC.BusyQueueSize),
 		morpc.WithBackendBufferSize(s.cfg.RPC.SendQueueSize),
-		morpc.WithBackendGoettyOptions(goetty.WithBufSize(int(s.cfg.RPC.ReadBufferSize), int(s.cfg.RPC.WriteBufferSize))),
+		morpc.WithBackendGoettyOptions(goetty.WithSessionRWBUfferSize(int(s.cfg.RPC.ReadBufferSize),
+			int(s.cfg.RPC.WriteBufferSize))),
 	}
 }
 

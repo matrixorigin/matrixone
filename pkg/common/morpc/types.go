@@ -113,8 +113,7 @@ type RPCServer interface {
 
 // Codec codec
 type Codec interface {
-	codec.Encoder
-	codec.Decoder
+	codec.Codec
 }
 
 // BackendFactory backend factory
