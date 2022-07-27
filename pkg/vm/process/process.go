@@ -67,6 +67,10 @@ func PutSels(sels []int64, proc *Process) {
 	proc.Reg.Ss = append(proc.Reg.Ss, sels)
 }
 
+func (proc *Process) GetMheap() *mheap.Mheap {
+	return proc.Mp
+}
+
 func (proc *Process) OperatorOutofMemory(size int64) bool {
 	return proc.Lim.Size < size
 }
