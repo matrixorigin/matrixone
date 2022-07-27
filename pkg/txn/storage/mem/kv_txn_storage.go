@@ -288,7 +288,9 @@ func (kv *KVTxnStorage) Prepare(txnMeta txn.TxnMeta) (timestamp.Timestamp, error
 
 	txnMeta.PreparedTS, _ = kv.clock.Now()
 	writeKeys := kv.getWriteKeysLocked(txnMeta)
-	if kv.hasConflict(txnMeta.SnapshotTS, txnMeta.PreparedTS.Next(), writeKeys) {
+	if kv.hasConflict(txnMeta.SnapshotTS,
+		timestamp.Timestamp{PhysicalTime: math.MaxInt64, LogicalTime: math.MaxUint32},
+		writeKeys) {
 		return timestamp.Timestamp{}, storage.ErrWriteConflict
 	}
 
