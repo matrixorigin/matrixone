@@ -17,6 +17,7 @@ package cnservice
 import (
 	"sync"
 
+	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -30,8 +31,9 @@ func NewService(cfg *Config) (Service, error) {
 			return &pipeline.Message{}
 		},
 	}
-	codec := morpc.NewMessageCodec(srv.acquireMessage, 16<<20)
-	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress, codec)
+	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
+		morpc.NewMessageCodec(srv.acquireMessage, 16<<20),
+		morpc.WithServerGoettyOptions(goetty.WithBufSize(1<<20, 1<<20)))
 	if err != nil {
 		return nil, err
 	}
