@@ -14,21 +14,21 @@
 
 package update
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"sync"
-)
+import "github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 type Argument struct {
 	Ts           uint64
-	TableSource  engine.Relation
-	M            sync.Mutex
 	AffectedRows uint64
+	UpdateCtxs   []*UpdateCtx
+}
 
+type UpdateCtx struct {
 	PriKey      string
 	PriKeyIdx   int32 // delete if -1
 	HideKey     string
+	HideKeyIdx  int32
 	UpdateAttrs []string
 	OtherAttrs  []string
-	AttrOrders  []string
+	OrderAttrs  []string
+	TableSource engine.Relation
 }
