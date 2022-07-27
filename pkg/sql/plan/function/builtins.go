@@ -630,6 +630,27 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	DATE_FORMAT: {
+		Id: DATE_FORMAT,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_datetime, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.DateFormat,
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_datetime, types.T_char},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.DateFormat,
+			},
+		},
+	},
 	// variadic functions
 	CEIL: {
 		Id: CEIL,

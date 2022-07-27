@@ -140,6 +140,10 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 	fsEntry := v.(*_MemFSEntry)
 
 	for i, entry := range vector.Entries {
+		if entry.ignore {
+			continue
+		}
+
 		if entry.Size == 0 {
 			return ErrEmptyRange
 		}

@@ -28,6 +28,10 @@ func init() {
 	for i := range OneInt64s {
 		OneInt64s[i] = 1
 	}
+	OneUInt8s = make([]uint8, UnitLimit)
+	for i := range OneUInt8s {
+		OneUInt8s[i] = 1
+	}
 }
 
 func NewStrMap(hasNull bool) *StrHashMap {
@@ -45,8 +49,12 @@ func NewStrMap(hasNull bool) *StrHashMap {
 	}
 }
 
-func (m *StrHashMap) NewIterator() Iterator {
-	return &strHashmapIterator{mp: m}
+func (m *StrHashMap) NewIterator(ibucket, nbucket uint64) Iterator {
+	return &strHashmapIterator{
+		mp:      m,
+		ibucket: ibucket,
+		nbucket: nbucket,
+	}
 }
 
 func (m *StrHashMap) GroupCount() uint64 {
@@ -87,6 +95,12 @@ func (m *StrHashMap) InsertValue(val any) bool {
 		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	case []byte:
 		m.keys[0] = append(m.keys[0], v...)
+	case types.Date:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case types.Datetime:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case types.Timestamp:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	case types.Decimal64:
 		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	case types.Decimal128:

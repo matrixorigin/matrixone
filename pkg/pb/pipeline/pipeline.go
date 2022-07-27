@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,19 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package rpcserver
+package pipeline
 
-import (
-	"github.com/fagongzi/goetty"
-)
+import fmt "fmt"
 
-type Server interface {
-	Stop()
-	Run() error
-	Register(func(uint64, interface{}, goetty.IOSession) error) int
+func (m *Message) GetID() uint64 {
+	return m.Sid
 }
 
-type server struct {
-	app goetty.NetApplication
-	fs  []func(uint64, interface{}, goetty.IOSession) error
+func (m *Message) SetID(id uint64) {
+	m.Sid = id
+}
+
+func (m *Message) DebugString() string {
+	return fmt.Sprintf("sid: %v, cmd: %v, code: %s", m.Sid, m.Cmd, m.Code)
 }

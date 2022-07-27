@@ -16,8 +16,10 @@ package union
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -28,95 +30,126 @@ func String(_ interface{}, buf *bytes.Buffer) {
 
 func Prepare(_ *process.Process, argument interface{}) error {
 	arg := argument.(*Argument)
-	{
-		arg.ctr.bat = nil
-		arg.ctr.hashTable = hashmap.NewStrMap(true)
+	arg.ctr = new(container)
+	arg.ctr.hashTable = hashmap.NewStrMap(true)
+	arg.ctr.scales[0] = make([]int32, len(arg.Conditions[0]))
+	arg.ctr.scales[1] = make([]int32, len(arg.Conditions[0]))
+	for i, cond := range arg.Conditions[0] { // aligning the precision of decimal
+		switch types.T(cond.Expr.Typ.Id) {
+		case types.T_decimal64:
+			typ := arg.Conditions[1][i].Expr.Typ
+			if typ.Scale > cond.Expr.Typ.Scale {
+				cond.Scale = typ.Scale - cond.Expr.Typ.Scale
+			} else if typ.Scale < cond.Expr.Typ.Scale {
+				arg.Conditions[1][i].Scale = cond.Expr.Typ.Scale - typ.Scale
+			}
+		case types.T_decimal128:
+			typ := arg.Conditions[1][i].Expr.Typ
+			if typ.Scale > cond.Expr.Typ.Scale {
+				cond.Scale = typ.Scale - cond.Expr.Typ.Scale
+			} else if typ.Scale < cond.Expr.Typ.Scale {
+				arg.Conditions[1][i].Scale = cond.Expr.Typ.Scale - typ.Scale
+			}
+		}
+		arg.ctr.scales[0][i] = cond.Scale
+		arg.ctr.scales[1][i] = arg.Conditions[1][i].Scale
 	}
 	return nil
 }
 
 func Call(idx int, proc *process.Process, argument interface{}) (bool, error) {
-	var err error
-	arg := argument.(*Argument)
-	// we make this assertion here for now, the real situation of table size
-	// should be noted by the execution plan
-	smallTableIndex, bigTableIndex := 1, 0
-
-	// prepare the analysis work
+	ap := argument.(*Argument)
+	ctr := ap.ctr
 	analyze := proc.GetAnalyze(idx)
 	analyze.Start()
 	defer analyze.Stop()
-
-	// step1: deal the small table. if new row, put into bat.
-	if err = arg.ctr.insert(proc, analyze, smallTableIndex); err != nil {
-		return false, err
+	for {
+		switch ctr.state {
+		case Build:
+			end, err := ctr.insert(ap, proc, analyze, 1)
+			if err != nil {
+				ctr.state = End
+				return true, err
+			}
+			if end {
+				ctr.state = Probe
+				continue
+			}
+			return false, nil
+		case Probe:
+			end, err := ctr.insert(ap, proc, analyze, 0)
+			if err != nil {
+				ctr.state = End
+				return true, err
+			}
+			if end {
+				ctr.state = End
+			}
+			return end, nil
+		default:
+			proc.SetInputBatch(nil)
+			return true, nil
+		}
 	}
-	// step2: deal the big table. if new row, put into bat.
-	if err = arg.ctr.insert(proc, analyze, bigTableIndex); err != nil {
-		return false, err
-	}
-	// step3: return
-	analyze.Output(arg.ctr.bat)
-	proc.Reg.InputBatch = arg.ctr.bat
-	return true, nil
 }
 
 // insert function use Table[index] to probe the HashTable.
 // if row data doesn't in HashTable, append it to bat and update the HashTable.
-func (ctr *Container) insert(proc *process.Process, analyze process.Analyze, index int) error {
+func (ctr *container) insert(ap *Argument, proc *process.Process, analyze process.Analyze, index int) (bool, error) {
 	var err error
+
 	inserted := make([]uint8, hashmap.UnitLimit)
 	restoreInserted := make([]uint8, hashmap.UnitLimit)
 
 	for {
 		bat := <-proc.Reg.MergeReceivers[index].Ch
 		if bat == nil {
-			return nil
+			return true, nil
 		}
-		if len(bat.Zs) == 0 {
+		if bat.Length() == 0 {
 			continue
 		}
-		if ctr.bat == nil {
-			ctr.bat = batch.NewWithSize(len(bat.Vecs))
-			for i := range bat.Vecs {
-				ctr.bat.Vecs[i] = vector.New(bat.Vecs[i].Typ)
-			}
+		defer bat.Clean(proc.Mp)
+		ctr.bat = batch.NewWithSize(len(bat.Vecs))
+		for i := range bat.Vecs {
+			ctr.bat.Vecs[i] = vector.New(bat.Vecs[i].Typ)
 		}
 
 		analyze.Input(bat)
 		count := len(bat.Zs)
 
-		scales := make([]int32, len(bat.Vecs))
-		for i := range scales {
-			scales[i] = bat.Vecs[i].Typ.Scale
-		}
 		for i := 0; i < count; i += hashmap.UnitLimit {
-			insertCount := 0
-			iterator := ctr.hashTable.NewIterator()
+			oldHashGroup := ctr.hashTable.GroupCount()
+			iterator := ctr.hashTable.NewIterator(ap.Ibucket, ap.Nbucket)
 
 			n := count - i
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
 
-			vs, _ := iterator.Insert(i, n, bat.Vecs, scales)
+			vs, _ := iterator.Insert(i, n, bat.Vecs, ctr.scales[index])
 			copy(inserted[:n], restoreInserted[:n])
 			for j, v := range vs {
 				if v > ctr.hashTable.GroupCount() {
-					insertCount++
+					ctr.hashTable.AddGroup()
 					inserted[j] = 1
 					ctr.bat.Zs = append(ctr.bat.Zs, 1)
 				}
 			}
 
+			newHashGroup := ctr.hashTable.GroupCount()
+			insertCount := int(newHashGroup - oldHashGroup)
 			if insertCount > 0 {
 				for pos := range bat.Vecs {
 					if err = vector.UnionBatch(ctr.bat.Vecs[pos], bat.Vecs[pos], int64(i), insertCount, inserted[:n], proc.Mp); err != nil {
-						return err
+						ctr.bat.Clean(proc.Mp)
+						return false, err
 					}
 				}
 			}
 		}
-		bat.Clean(proc.Mp)
+		analyze.Output(ctr.bat)
+		proc.SetInputBatch(ctr.bat)
+		return false, nil
 	}
 }

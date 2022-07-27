@@ -14,10 +14,8 @@
 
 package logservice
 
-import "github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
-
 type replica struct {
-	uuid    util.StoreID
+	uuid    string
 	shardID uint64
 	epoch   uint64
 

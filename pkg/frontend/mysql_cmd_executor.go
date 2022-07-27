@@ -1692,6 +1692,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 
 		selfHandle = false
 
+		ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
+
 		switch st := stmt.(type) {
 		case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 			selfHandle = true
@@ -1789,8 +1791,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 		case *tree.Update:
 			ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
-		default:
-			ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
 		}
 
 		if selfHandle {

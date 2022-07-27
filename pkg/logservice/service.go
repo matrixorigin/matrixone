@@ -67,13 +67,19 @@ type Service struct {
 }
 
 func NewService(cfg Config) (*Service, error) {
+	cfg.Fill()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	cfg.Fill()
 	store, err := newLogStore(cfg)
 	if err != nil {
 		plog.Errorf("failed to create log store %v", err)
+		return nil, err
+	}
+	if err := store.loadMetadata(); err != nil {
+		return nil, err
+	}
+	if err := store.startReplicas(); err != nil {
 		return nil, err
 	}
 	pool := &sync.Pool{}
@@ -90,7 +96,7 @@ func NewService(cfg Config) (*Service, error) {
 	// TODO: check and fix all these magic numbers
 	codec := morpc.NewMessageCodec(mf, 16*1024)
 	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.ServiceListenAddress, codec,
-		morpc.WithServerGoettyOptions(goetty.WithReleaseMsgFunc(func(i interface{}) {
+		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
 			respPool.Put(i)
 		})))
 	if err != nil {
@@ -123,6 +129,10 @@ func NewService(cfg Config) (*Service, error) {
 		}
 	}
 	return service, nil
+}
+
+func (s *Service) Start() error {
+	return nil
 }
 
 func (s *Service) Close() (err error) {

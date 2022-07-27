@@ -25,7 +25,8 @@ import (
 )
 
 var (
-	defaultListenAddress    = "unix:///tmp/dn.sock"
+	defaultListenAddress    = "0.0.0.0:22000"
+	defaultServiceAddress   = "127.0.0.1:22000"
 	defaultMaxConnections   = 400
 	defaultMaxIdleDuration  = time.Minute
 	defaultSendQueueSize    = 10240
@@ -93,9 +94,9 @@ type Config struct {
 		// Default is 3/4 of SendQueueSize.
 		BusyQueueSize int `toml:"busy-queue-size"`
 		// WriteBufferSize buffer size for write messages per connection. Default is 1kb
-		WriteBufferSize toml.ByteSize `toml:"send-buffer-size"`
+		WriteBufferSize toml.ByteSize `toml:"write-buffer-size"`
 		// ReadBufferSize buffer size for read messages per connection. Default is 1kb
-		ReadBufferSize toml.ByteSize `toml:"send-buffer-size"`
+		ReadBufferSize toml.ByteSize `toml:"read-buffer-size"`
 	}
 
 	// Txn transactions configuration
@@ -138,6 +139,7 @@ func (c *Config) validate() error {
 	}
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress
+		c.ServiceAddress = defaultServiceAddress
 	}
 	if c.ServiceAddress == "" {
 		c.ServiceAddress = c.ListenAddress

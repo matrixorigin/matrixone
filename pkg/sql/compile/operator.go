@@ -84,7 +84,6 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		}
 	case *join.Argument:
 		rin.Arg = &join.Argument{
-			IsPreBuild: arg.IsPreBuild,
 			Result:     arg.Result,
 			Conditions: copyCondition(arg.Conditions),
 		}
@@ -184,6 +183,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot)
 			TableSource:  relation,
 			UseDeleteKey: n.DeleteTablesCtx[i].UseDeleteKey,
 			CanTruncate:  n.DeleteTablesCtx[i].CanTruncate,
+			IsHideKey:    n.DeleteTablesCtx[i].IsHideKey,
 		}
 	}
 
@@ -210,22 +210,36 @@ func constructInsert(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (
 
 func constructUpdate(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*update.Argument, error) {
 	ctx := context.TODO()
-	dbSource, err := eg.Database(ctx, n.ObjRef.SchemaName, snapshot)
-	if err != nil {
-		return nil, err
-	}
-	relation, err := dbSource.Relation(ctx, n.TableDef.Name)
-	if err != nil {
-		return nil, err
+	us := make([]*update.UpdateCtx, len(n.UpdateCtxs))
+	for i, updateCtx := range n.UpdateCtxs {
+
+		dbSource, err := eg.Database(ctx, updateCtx.DbName, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		relation, err := dbSource.Relation(ctx, updateCtx.TblName)
+		if err != nil {
+			return nil, err
+		}
+
+		colNames := make([]string, 0, len(updateCtx.UpdateCols))
+		for _, col := range updateCtx.UpdateCols {
+			colNames = append(colNames, col.Name)
+		}
+
+		us[i] = &update.UpdateCtx{
+			PriKey:      updateCtx.PriKey,
+			PriKeyIdx:   updateCtx.PriKeyIdx,
+			HideKey:     updateCtx.HideKey,
+			HideKeyIdx:  updateCtx.HideKeyIdx,
+			UpdateAttrs: colNames,
+			OtherAttrs:  updateCtx.OtherAttrs,
+			OrderAttrs:  updateCtx.OrderAttrs,
+			TableSource: relation,
+		}
 	}
 	return &update.Argument{
-		TableSource: relation,
-		PriKey:      n.UpdateInfo.PriKey,
-		PriKeyIdx:   n.UpdateInfo.PriKeyIdx,
-		HideKey:     n.UpdateInfo.HideKey,
-		UpdateAttrs: n.UpdateInfo.UpdateAttrs,
-		OtherAttrs:  n.UpdateInfo.OtherAttrs,
-		AttrOrders:  n.UpdateInfo.AttrOrders,
+		UpdateCtxs: us,
 	}, nil
 }
 
@@ -267,7 +281,6 @@ func constructJoin(n *plan.Node, proc *process.Process) *join.Argument {
 		conds[0][i].Expr, conds[1][i].Expr = constructJoinCondition(expr)
 	}
 	return &join.Argument{
-		IsPreBuild: false,
 		Conditions: conds,
 		Result:     result,
 	}

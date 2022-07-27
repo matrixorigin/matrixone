@@ -16,7 +16,7 @@ package util
 
 // IDAllocator is used to fetch new replica ID.
 type IDAllocator interface {
-	// When IDAllocator was exhaused temporarily, return `false`.
+	// Next returns `false` when IDAllocator was exhausted temporarily.
 	Next() (uint64, bool)
 }
 
@@ -33,22 +33,16 @@ func (a *TestIDAllocator) Next() (uint64, bool) {
 	return a.id, true
 }
 
-type StoreID string
-
-const (
-	NullStoreID = StoreID("")
-)
-
 // Store records metadata for dn store.
 type Store struct {
-	ID       StoreID
+	ID       string
 	Length   int
 	Capacity int
 }
 
 func NewStore(storeID string, length int, capacity int) *Store {
 	return &Store{
-		ID:       StoreID(storeID),
+		ID:       storeID,
 		Length:   length,
 		Capacity: capacity,
 	}
@@ -58,7 +52,7 @@ type StoreSlice []*Store
 
 func (ss StoreSlice) Contains(storeID string) bool {
 	for _, s := range ss {
-		if StoreID(storeID) == s.ID {
+		if storeID == s.ID {
 			return true
 		}
 	}

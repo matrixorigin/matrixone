@@ -25,6 +25,7 @@ type Argument struct {
 }
 
 type DeleteCtx struct {
+	IsHideKey    bool
 	TableSource  engine.Relation
 	UseDeleteKey string
 	CanTruncate  bool

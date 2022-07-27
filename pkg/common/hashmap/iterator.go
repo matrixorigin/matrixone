@@ -20,14 +20,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector, scales []int32) ([]uint64, []int64) {
+func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector, inBuckets []uint8, scales []int32) ([]uint64, []int64) {
 	defer func() {
 		for i := 0; i < count; i++ {
 			itr.mp.keys[i] = itr.mp.keys[i][:0]
 		}
 	}()
+	copy(itr.mp.zValues[:count], OneInt64s[:count])
 	itr.mp.encodeHashKeysWithScale(vecs, start, count, scales)
-	itr.mp.hashMap.FindStringBatch(itr.mp.strHashStates, itr.mp.keys[:count], itr.mp.values)
+	if itr.nbucket != 0 {
+		itr.mp.hashMap.FindStringBatchInBucket(itr.mp.strHashStates, itr.mp.keys[:count], itr.mp.values, inBuckets, itr.ibucket, itr.nbucket)
+	} else {
+		itr.mp.hashMap.FindStringBatch(itr.mp.strHashStates, itr.mp.keys[:count], itr.mp.values)
+	}
 	return itr.mp.values[:count], itr.mp.zValues[:count]
 }
 
@@ -39,26 +44,37 @@ func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector, s
 	}()
 	copy(itr.mp.zValues[:count], OneInt64s[:count])
 	itr.mp.encodeHashKeysWithScale(vecs, start, count, scales)
-	if itr.mp.hasNull {
-		itr.mp.hashMap.InsertStringBatch(itr.mp.strHashStates, itr.mp.keys[:count], itr.mp.values)
+	if itr.nbucket != 0 {
+		if itr.mp.hasNull {
+			itr.mp.hashMap.InsertStringBatchInBucket(itr.mp.strHashStates, itr.mp.keys[:count], itr.mp.values, itr.ibucket, itr.nbucket)
+		} else {
+			itr.mp.hashMap.InsertStringBatchWithRingInBucket(itr.mp.zValues, itr.mp.strHashStates, itr.mp.keys[:count], itr.mp.values, itr.ibucket, itr.nbucket)
+		}
 	} else {
-		itr.mp.hashMap.InsertStringBatchWithRing(itr.mp.zValues, itr.mp.strHashStates, itr.mp.keys[:count], itr.mp.values)
+		if itr.mp.hasNull {
+			itr.mp.hashMap.InsertStringBatch(itr.mp.strHashStates, itr.mp.keys[:count], itr.mp.values)
+		} else {
+			itr.mp.hashMap.InsertStringBatchWithRing(itr.mp.zValues, itr.mp.strHashStates, itr.mp.keys[:count], itr.mp.values)
+		}
 	}
 	return itr.mp.values[:count], itr.mp.zValues[:count]
 }
 
-func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector, _ []int32) ([]uint64, []int64) {
+func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector, inBuckets []uint8, _ []int32) ([]uint64, []int64) {
 	defer func() {
 		for i := 0; i < count; i++ {
 			itr.mp.keys[i] = 0
 		}
 		copy(itr.mp.keyOffs[:count], zeroUint32)
 	}()
-	if err := itr.mp.encodeHashKeys(vecs, start, count); err != nil {
-		panic(err)
-	}
+	copy(itr.mp.zValues[:count], OneInt64s[:count])
+	itr.mp.encodeHashKeys(vecs, start, count)
 	copy(itr.mp.hashes[:count], zeroUint64[:count])
-	itr.mp.hashMap.FindBatch(count, itr.mp.hashes[:count], unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values[:count])
+	if itr.nbucket != 0 {
+		itr.mp.hashMap.FindBatchInBucket(count, itr.mp.hashes[:count], unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values[:count], inBuckets, itr.ibucket, itr.nbucket)
+	} else {
+		itr.mp.hashMap.FindBatch(count, itr.mp.hashes[:count], unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values[:count])
+	}
 	return itr.mp.values[:count], itr.mp.zValues[:count]
 }
 
@@ -73,15 +89,21 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector, _
 	if !itr.mp.hasNull {
 		copy(itr.mp.zValues[:count], OneInt64s[:count])
 	}
-	if err := itr.mp.encodeHashKeys(vecs, start, count); err != nil {
-		panic(err)
-	}
+	copy(itr.mp.zValues[:count], OneInt64s[:count])
+	itr.mp.encodeHashKeys(vecs, start, count)
 	copy(itr.mp.hashes[:count], zeroUint64[:count])
-
-	if itr.mp.hasNull {
-		itr.mp.hashMap.InsertBatch(count, itr.mp.hashes, unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values)
+	if itr.nbucket != 0 {
+		if itr.mp.hasNull {
+			itr.mp.hashMap.InsertBatchInBucket(count, itr.mp.hashes, unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values, itr.ibucket, itr.nbucket)
+		} else {
+			itr.mp.hashMap.InsertBatchWithRingInBucket(count, itr.mp.zValues, itr.mp.hashes, unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values, itr.ibucket, itr.nbucket)
+		}
 	} else {
-		itr.mp.hashMap.InsertBatchWithRing(count, itr.mp.zValues, itr.mp.hashes, unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values)
+		if itr.mp.hasNull {
+			itr.mp.hashMap.InsertBatch(count, itr.mp.hashes, unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values)
+		} else {
+			itr.mp.hashMap.InsertBatchWithRing(count, itr.mp.zValues, itr.mp.hashes, unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values)
+		}
 	}
 	return itr.mp.values[:count], itr.mp.zValues[:count]
 }

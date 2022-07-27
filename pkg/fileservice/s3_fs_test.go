@@ -15,9 +15,11 @@
 package fileservice
 
 import (
+	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -26,11 +28,18 @@ import (
 
 func TestS3FS(t *testing.T) {
 
-	var sharedConfig S3Config
+	var sharedConfig struct {
+		Endpoint  string
+		Region    string
+		APIKey    string
+		APISecret string
+		Bucket    string
+		KeyPrefix string
+	}
 	content, err := os.ReadFile("s3.json")
 	if os.IsNotExist(err) {
-		fmt.Printf("s3.json not found, skip s3 test\n")
-		return // not using t.Skip because the CI does not know SKIP cases
+		// no s3.json, skip tests
+		return
 	}
 	assert.Nil(t, err)
 	err = json.Unmarshal(content, &sharedConfig)
@@ -50,6 +59,81 @@ func TestS3FS(t *testing.T) {
 				config.Endpoint,
 				config.Bucket,
 				config.KeyPrefix,
+			)
+			assert.Nil(t, err)
+
+			return fs
+		})
+	})
+
+	t.Run("cache", func(t *testing.T) {
+		testCache(t, func() FileService {
+
+			config := sharedConfig
+			config.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
+
+			fs, err := NewS3FS(
+				config.Endpoint,
+				config.Bucket,
+				config.KeyPrefix,
+			)
+			assert.Nil(t, err)
+
+			return fs
+		})
+	})
+
+	t.Run("list root", func(t *testing.T) {
+		fs, err := NewS3FS(
+			sharedConfig.Endpoint,
+			sharedConfig.Bucket,
+			"",
+		)
+		assert.Nil(t, err)
+		ctx := context.Background()
+		entries, err := fs.List(ctx, "")
+		assert.Nil(t, err)
+		assert.True(t, len(entries) > 0)
+	})
+
+}
+
+func TestS3FSMinioServer(t *testing.T) {
+	t.Skip() //TODO
+
+	exePath, err := exec.LookPath("minio")
+	if errors.Is(err, exec.ErrNotFound) {
+		// minio not found in machine
+		return
+	}
+
+	// start minio
+	cmd := exec.Command(exePath,
+		"server",
+		t.TempDir(),
+	)
+	cmd.Env = append(os.Environ(),
+		"MINIO_ROOT_USER=test",
+		"MINIO_ROOT_PASSWORD=test",
+		"MINIO_SITE_NAME=test",
+		"MINIO_SITE_REGION=test",
+	)
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
+	err = cmd.Start()
+	assert.Nil(t, err)
+	defer func() {
+		_ = cmd.Process.Kill()
+	}()
+
+	// run test
+	t.Run("file service", func(t *testing.T) {
+		testFileService(t, func() FileService {
+
+			fs, err := NewS3FSOnMinio(
+				"http://localhost:9000",
+				"test",
+				"",
 			)
 			assert.Nil(t, err)
 

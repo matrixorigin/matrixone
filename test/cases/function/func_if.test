@@ -11,7 +11,6 @@ drop table t1;
 
 
 -- @bvt:issue#3333
--- @bvt:issue#3183
 CREATE TABLE t (i1 INT,
 d1 DOUBLE,
 e2 DECIMAL(5,2));
@@ -21,7 +20,6 @@ INSERT INTO t VALUES ( 6,    6.0,  10.0/3),
 ( 2,    2.0,  null  );
 SELECT coalesce(e2,i1) nullif_c, IF(e2 IS NULL,i1,e2) if_c, SUM(d1) FROM t GROUP BY e2,i1 ORDER BY nullif_c, SUM(d1);
 DROP TABLE t;
--- @bvt:issue
 -- @bvt:issue
 
 -- @bvt:issue#3588
@@ -42,14 +40,12 @@ drop table t1;
 select if(1, cast(1111111111111111111 as unsigned), 1) i, case when 1 then cast(1111111111111111111 as unsigned) else 1 end c, coalesce(cast(1111111111111111111 as unsigned), 1) co;
 -- @bvt:issue
 
--- @bvt:issue#3183
 create table t1 (a bigint unsigned);
 insert into t1 select (if(1, 9223372036854775808, 1));
 insert into t1 select (case when 1 then 9223372036854775808 else 1 end);
 insert into t1 select (coalesce(9223372036854775808, 1));
 select * from t1;
 drop table t1;
--- @bvt:issue
 
 
 CREATE TABLE t (i1 INT,

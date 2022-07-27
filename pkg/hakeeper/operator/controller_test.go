@@ -54,10 +54,11 @@ func TestDispatchAndRemoveOperator(t *testing.T) {
 func TestRemoveFinishedOperator(t *testing.T) {
 	c := NewController()
 	op1 := NewOperator("", 1, 1, AddLogService{
-		Target:    "a",
-		StoreID:   "d",
-		ShardID:   1,
-		ReplicaID: 4,
+		Target: "a",
+		Replica: Replica{
+			UUID:      "d",
+			ShardID:   1,
+			ReplicaID: 4},
 	})
 	logState := pb.LogState{
 		Shards: map[uint64]pb.LogShardInfo{1: {

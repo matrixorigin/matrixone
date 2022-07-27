@@ -31,18 +31,19 @@ import (
 func TestBackgroundTickAndHeartbeat(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := Config{
-		FS:                   vfs.NewStrictMem(),
-		DeploymentID:         1,
-		RTTMillisecond:       5,
-		DataDir:              "data-1",
-		ServiceAddress:       "127.0.0.1:9002",
-		RaftAddress:          "127.0.0.1:9000",
-		GossipAddress:        "127.0.0.1:9001",
-		GossipSeedAddresses:  []string{"127.0.0.1:9010"},
-		HeartbeatInterval:    5 * time.Millisecond,
-		HAKeeperTickInterval: 5 * time.Millisecond,
+		UUID:                uuid.New().String(),
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-1",
+		ServiceAddress:      "127.0.0.1:9002",
+		RaftAddress:         "127.0.0.1:9000",
+		GossipAddress:       "127.0.0.1:9001",
+		GossipSeedAddresses: "127.0.0.1:9010",
 	}
-	cfg.HAKeeperClientConfig.ServiceAddresses = []string{"127.0.0.1:9002"}
+	cfg.HeartbeatInterval.Duration = 5 * time.Millisecond
+	cfg.HAKeeperTickInterval.Duration = 5 * time.Millisecond
+	cfg.HAKeeperClientConfig.ServiceAddresses = "127.0.0.1:9002"
 	cfg.Fill()
 	service, err := NewService(cfg)
 	require.NoError(t, err)
