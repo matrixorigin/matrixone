@@ -33,7 +33,7 @@ func NewService(cfg *Config) (Service, error) {
 	}
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
 		morpc.NewMessageCodec(srv.acquireMessage, 16<<20),
-		morpc.WithServerGoettyOptions(goetty.WithBufSize(1<<20, 1<<20)))
+		morpc.WithServerGoettyOptions(goetty.WithSessionRWBUfferSize(1<<20, 1<<20)))
 	if err != nil {
 		return nil, err
 	}
