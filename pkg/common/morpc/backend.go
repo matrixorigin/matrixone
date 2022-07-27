@@ -187,7 +187,7 @@ func NewRemoteBackend(
 			return nil, err
 		}
 	}
-	rb.activeReadLoop()
+	rb.activeReadLoop(false)
 
 	if err := rb.stopper.RunTask(rb.writeLoop); err != nil {
 		return nil, err
@@ -224,9 +224,8 @@ func (rb *remoteBackend) adjust() {
 
 	rb.logger = logutil.Adjust(rb.logger).With(zap.String("remote", rb.remote))
 	rb.options.goettyOptions = append(rb.options.goettyOptions,
-		goetty.WithCodec(rb.codec, rb.codec),
-		goetty.WithDisableReleaseOutBuf(),
-		goetty.WithLogger(rb.logger))
+		goetty.WithSessionCodec(rb.codec),
+		goetty.WithSessionLogger(rb.logger))
 }
 
 func (rb *remoteBackend) Send(ctx context.Context, request Message, opts SendOptions) (*Future, error) {
@@ -292,9 +291,9 @@ func (rb *remoteBackend) Close() {
 		return
 	}
 	rb.stateMu.state = stateStopped
+	rb.stopWriteLoop()
 	rb.stateMu.Unlock()
 
-	rb.stopWriteLoop()
 	rb.stopper.Stop()
 	rb.doClose()
 }
@@ -315,8 +314,7 @@ func (rb *remoteBackend) active() {
 func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	rb.logger.Info("write loop started")
 	defer func() {
-		rb.closeConn()
-		rb.conn.OutBuf().Release()
+		rb.closeConn(true)
 		rb.logger.Info("write loop stopped")
 	}()
 
@@ -462,7 +460,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 func (rb *remoteBackend) doClose() {
 	rb.closeOnce.Do(func() {
 		close(rb.resetConnC)
-		rb.closeConn()
+		rb.closeConn(false)
 	})
 }
 
@@ -498,7 +496,7 @@ func (rb *remoteBackend) removeActiveStream(s *stream) {
 }
 
 func (rb *remoteBackend) stopWriteLoop() {
-	rb.closeConn()
+	rb.closeConn(false)
 	close(rb.writeC)
 }
 
@@ -533,18 +531,21 @@ func (rb *remoteBackend) releaseFuture(f *Future) {
 }
 
 func (rb *remoteBackend) resetConn() error {
+	rb.stateMu.Lock()
+	defer rb.stateMu.Unlock()
+
 	wait := time.Second
 	for {
-		if !rb.running() {
+		if !rb.runningLocked() {
 			return errBackendClosed
 		}
 
 		rb.logger.Info("start connect to remote")
-		rb.closeConn()
-		ok, err := rb.conn.Connect(rb.remote, rb.options.connectTimeout)
-		if err == nil && ok {
+		rb.closeConn(false)
+		err := rb.conn.Connect(rb.remote, rb.options.connectTimeout)
+		if err == nil {
 			rb.logger.Info("connect to remote succeed")
-			rb.activeReadLoop()
+			rb.activeReadLoop(true)
 			return nil
 		}
 		rb.logger.Error("init remote connection failed, retry later",
@@ -554,9 +555,11 @@ func (rb *remoteBackend) resetConn() error {
 	}
 }
 
-func (rb *remoteBackend) activeReadLoop() {
-	rb.stateMu.Lock()
-	defer rb.stateMu.Unlock()
+func (rb *remoteBackend) activeReadLoop(locked bool) {
+	if !locked {
+		rb.stateMu.Lock()
+		defer rb.stateMu.Unlock()
+	}
 
 	if rb.stateMu.readLoopActive {
 		return
@@ -575,13 +578,6 @@ func (rb *remoteBackend) inactiveReadLoop() {
 	defer rb.stateMu.Unlock()
 
 	rb.stateMu.readLoopActive = false
-}
-
-func (rb *remoteBackend) running() bool {
-	rb.stateMu.RLock()
-	defer rb.stateMu.RUnlock()
-
-	return rb.runningLocked()
 }
 
 func (rb *remoteBackend) runningLocked() bool {
@@ -604,8 +600,13 @@ func (rb *remoteBackend) scheduleResetConn() {
 	}
 }
 
-func (rb *remoteBackend) closeConn() {
-	if err := rb.conn.Close(); err != nil {
+func (rb *remoteBackend) closeConn(close bool) {
+	fn := rb.conn.Disconnect
+	if close {
+		fn = rb.conn.Close
+	}
+
+	if err := fn(); err != nil {
 		rb.logger.Error("close remote conn failed",
 			zap.Error(err))
 	}

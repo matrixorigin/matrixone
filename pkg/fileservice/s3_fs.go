@@ -139,13 +139,17 @@ func newS3FS(
 func (m *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
 
 	var cont *string
+	prefix := m.pathToKey(dirPath)
+	if prefix != "" {
+		prefix += "/"
+	}
 	for {
 		output, err := m.client.ListObjectsV2(
 			ctx,
 			&s3.ListObjectsV2Input{
 				Bucket:            ptrTo(m.bucket),
 				Delimiter:         ptrTo("/"),
-				Prefix:            ptrTo(m.pathToKey(dirPath) + "/"),
+				Prefix:            ptrTo(prefix),
 				ContinuationToken: cont,
 			},
 		)
