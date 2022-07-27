@@ -16,14 +16,17 @@ package union
 
 import (
 	"context"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/joincondition"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 type unionTestCase struct {
@@ -36,13 +39,13 @@ func TestUnion(t *testing.T) {
 	proc := testutil.NewProcess()
 	// [4 rows + 3 rows, 2 columns] union [3 rows + 4 rows, 2 columns]
 	/*
-		{1, 1}			{1, 1}
-		{2, 2}			{2, 2}
-		{3, 3}			{3, 3}
-		{4, 4}      union       {1, 1}
-		{1, 1}			{2, 2}
-		{2, 2}			{3, 3}
-		{3, 3}			{4, 4}
+		{1, 1}				{1, 1}
+		{2, 2}				{2, 2}
+		{3, 3}				{3, 3}
+		{4, 4}   union  	{1, 1}
+		{1, 1}				{2, 2}
+		{2, 2}				{3, 3}
+		{3, 3}				{4, 4}
 	*/
 	c := newUnionTestCase(
 		proc,
@@ -77,14 +80,21 @@ func TestUnion(t *testing.T) {
 
 	err := Prepare(c.proc, c.arg)
 	require.NoError(t, err)
-	_, err = Call(0, c.proc, c.arg)
-	{
-		result := c.arg.ctr.bat
+	cnt := 0
+	for {
+		end, err := Call(0, c.proc, c.arg)
+		if end {
+			break
+		}
+		result := c.proc.InputBatch()
 		require.NoError(t, err)
-		require.Equal(t, 2, len(result.Vecs))              // 2 columns
-		require.Equal(t, 4, vector.Length(result.Vecs[0])) // 4 rows
+		if result != nil {
+			cnt += result.Length()
+			require.Equal(t, 2, len(result.Vecs)) // 2 columns
+			c.proc.InputBatch().Clean(c.proc.Mp)  // clean the final result
+		}
 	}
-	c.proc.Reg.InputBatch.Clean(c.proc.Mp) // clean the final result
+	require.Equal(t, 4, cnt) // 4 rows
 	require.Equal(t, int64(0), mheap.Size(c.proc.Mp))
 }
 
@@ -113,7 +123,19 @@ func newUnionTestCase(proc *process.Process, leftBatches, rightBatches []*batch.
 			Ch:  c,
 		}
 	}
-	arg := &Argument{}
+	arg := new(Argument)
+	{
+		arg.Conditions[0] = make([]joincondition.Condition, len(leftBatches[0].Vecs))
+		arg.Conditions[1] = make([]joincondition.Condition, len(rightBatches[0].Vecs))
+		for i := 0; i < len(arg.Conditions[0]); i++ {
+			arg.Conditions[0][i].Expr = &plan.Expr{
+				Typ: new(plan.Type),
+			}
+			arg.Conditions[1][i].Expr = &plan.Expr{
+				Typ: new(plan.Type),
+			}
+		}
+	}
 	return unionTestCase{
 		proc:   proc,
 		arg:    arg,
