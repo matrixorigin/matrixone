@@ -36,11 +36,11 @@ type updateCol struct {
 }
 
 func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
-	// find map between base table and alias table
+	// build map between base table and alias table
 	tf := &tableInfo{baseNameMap: make(map[string]string)}
 	extractWithTable(stmt.With, tf, ctx)
 	for _, expr := range stmt.Tables {
-		if err := extractUpdateTable(expr, tf, ctx); err != nil {
+		if err := extractExprTable(expr, tf, ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -67,7 +67,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	updateColsArray, updateExprsArray := groupUpdateAttrs(updateCols, stmt.Exprs)
 
 	// build update ctx and projection
-	updateCtxs, useProjectExprs, err := buildCtxAndProjection(updateColsArray, updateExprsArray, tblRefs, ctx)
+	updateCtxs, useProjectExprs, err := buildCtxAndProjection(updateColsArray, updateExprsArray, tf.baseNameMap, tblRefs, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +86,6 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		Limit:   stmt.Limit,
 		With:    stmt.With,
 	}
-
 	usePlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
 	if err != nil {
 		return nil, err
@@ -190,7 +189,7 @@ func extractWithTable(with *tree.With, tf *tableInfo, ctx CompilerContext) {
 	}
 }
 
-func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tree.Exprs, tblRefs []*TableDef, ctx CompilerContext) ([]*plan.UpdateCtx, tree.SelectExprs, error) {
+func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tree.Exprs, baseNameMap map[string]string, tblRefs []*TableDef, ctx CompilerContext) ([]*plan.UpdateCtx, tree.SelectExprs, error) {
 	var useProjectExprs tree.SelectExprs
 	updateCtxs := make([]*plan.UpdateCtx, 0, len(updateColsArray))
 	var offset int32 = 0
@@ -201,9 +200,9 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 		var priKeyIdx int32 = -1
 		priKeys := ctx.GetPrimaryKeyDef(updateCols[0].dbName, updateCols[0].tblName)
 		for _, key := range priKeys {
-			for _, col := range updateCols {
-				if key.Name == col.colDef.Name {
-					e, _ := tree.NewUnresolvedName(col.dbName, col.aliasTblName, key.Name)
+			for _, updateCol := range updateCols {
+				if key.Name == updateCol.colDef.Name {
+					e, _ := tree.NewUnresolvedName(updateCol.dbName, updateCol.aliasTblName, key.Name)
 					useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 					priKey = key.Name
 					priKeyIdx = offset
@@ -218,13 +217,7 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 			if hideKey == "" {
 				return nil, nil, errors.New("internal error: cannot find hide key")
 			}
-			var name string
-			if updateCols[0].aliasTblName != "" {
-				name = updateCols[0].aliasTblName
-			} else {
-				name = updateCols[0].tblName
-			}
-			e, _ := tree.NewUnresolvedName(updateCols[0].dbName, name, hideKey)
+			e, _ := tree.NewUnresolvedName(updateCols[0].dbName, updateCols[0].aliasTblName, hideKey)
 			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 			hideKeyIdx = offset
 		}
@@ -259,7 +252,7 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 			}
 			if !isUpdateCol {
 				otherAttrs = append(otherAttrs, col.Name)
-				e, _ := tree.NewUnresolvedName(tblRefs[k].Name, col.Name)
+				e, _ := tree.NewUnresolvedName(updateCols[0].aliasTblName, col.Name)
 				useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 			}
 		}
@@ -316,7 +309,7 @@ func groupUpdateAttrs(updateCols []updateCol, updateExprs tree.UpdateExprs) ([][
 	return updateColsArray, updateExprsArray
 }
 
-func extractUpdateTable(expr tree.TableExpr, tf *tableInfo, ctx CompilerContext) error {
+func extractExprTable(expr tree.TableExpr, tf *tableInfo, ctx CompilerContext) error {
 	switch t := expr.(type) {
 	case *tree.TableName:
 		tblName := string(t.ObjectName)
@@ -355,12 +348,12 @@ func extractUpdateTable(expr tree.TableExpr, tf *tableInfo, ctx CompilerContext)
 		} else {
 			tf.baseNameMap[tblName] = tblName
 		}
-		return extractUpdateTable(t.Expr, tf, ctx)
+		return nil
 	case *tree.JoinTableExpr:
-		if err := extractUpdateTable(t.Left, tf, ctx); err != nil {
+		if err := extractExprTable(t.Left, tf, ctx); err != nil {
 			return err
 		}
-		return extractUpdateTable(t.Right, tf, ctx)
+		return extractExprTable(t.Right, tf, ctx)
 	default:
 		return nil
 	}
@@ -442,6 +435,7 @@ func buildUpdateColumns(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblRefs []
 
 						ctx.dbName = objRefs[i].SchemaName
 						ctx.tblName = tblRefs[i].Name
+						ctx.aliasTblName = tblRefs[i].Name
 						ctx.colDef = col
 
 						break
