@@ -66,6 +66,7 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 		}
 	}
 	rbat.Zs = bat.Zs
+	bat.Zs = nil
 	bat.Clean(proc.Mp)
 	proc.Reg.InputBatch = rbat
 	return false, nil

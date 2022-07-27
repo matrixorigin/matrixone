@@ -24,6 +24,7 @@ const (
 	UnitLimit = 256
 )
 
+var OneUInt8s []uint8
 var OneInt64s []int64
 
 // Iterator allows you to batch insert/find values
