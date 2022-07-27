@@ -130,11 +130,17 @@ func (s *store) newDiskFileService() (fileservice.FileService, error) {
 }
 
 func (s *store) newMinioFileService() (fileservice.FileService, error) {
-	return fileservice.NewS3FSMinio(s.cfg.FileService.S3)
+	return fileservice.NewS3FSOnMinio(
+		s.cfg.FileService.S3.Endpoint,
+		s.cfg.FileService.S3.Bucket,
+		s.cfg.FileService.S3.KeyPrefix,
+	)
 }
 
 func (s *store) newS3FileService() (fileservice.FileService, error) {
-	return fileservice.NewS3FS(s.cfg.FileService.S3.Endpoint,
+	return fileservice.NewS3FS(
+		s.cfg.FileService.S3.Endpoint,
 		s.cfg.FileService.S3.Bucket,
-		s.cfg.FileService.S3.KeyPrefix)
+		s.cfg.FileService.S3.KeyPrefix,
+	)
 }

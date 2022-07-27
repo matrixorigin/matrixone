@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"errors"
 	"go/constant"
 	"math"
@@ -161,6 +162,7 @@ func Test_buildInsertValues(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
+	ctx := context.TODO()
 	convey.Convey("buildInsertValues succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -168,7 +170,7 @@ func Test_buildInsertValues(t *testing.T) {
 		eng := mock_frontend.NewMockEngine(ctrl)
 		db := mock_frontend.NewMockDatabase(ctrl)
 		rel := mock_frontend.NewMockRelation(ctrl)
-		eng.EXPECT().Database(gomock.Any(), nil).Return(nil, errors.New("1")).Times(1)
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, errors.New("1")).Times(1)
 
 		table := &tree.TableName{}
 		clause := &tree.ValuesClause{}
@@ -179,13 +181,13 @@ func Test_buildInsertValues(t *testing.T) {
 		err = buildInsertValues(stmt, plan, eng, snapshot)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		eng.EXPECT().Database(gomock.Any(), nil).Return(db, nil).AnyTimes()
-		db.EXPECT().Relation(gomock.Any(), nil).Return(nil, errors.New("1")).Times(1)
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(db, nil).AnyTimes()
+		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(nil, errors.New("1")).Times(1)
 		err = buildInsertValues(stmt, plan, eng, snapshot)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		db.EXPECT().Relation(gomock.Any(), nil).Return(rel, nil).AnyTimes()
-		rel.EXPECT().TableDefs(nil).Return(tableDefs).AnyTimes()
+		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(rel, nil).AnyTimes()
+		rel.EXPECT().TableDefs(gomock.Any()).Return(tableDefs, nil).AnyTimes()
 		err = buildInsertValues(stmt, plan, eng, snapshot)
 		convey.So(err, convey.ShouldBeNil)
 

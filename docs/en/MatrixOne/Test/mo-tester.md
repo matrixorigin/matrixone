@@ -12,7 +12,7 @@ MO-Tester content locations:
 
 * *Result*: <https://github.com/matrixorigin/mo-tester/tree/main/result>
 
-* *Report*: once finished running, a `mo-tester/report` will be generated in local directory.
+* *Report*: once finished running, a `mo-tester/report` will be generated in the local directory.
 
 The Cases and Results are 1-1 correspondence, and they are actually `git submodules` from MatrixOne repository. Adding new cases and results should be in MatrixOne repo: <https://github.com/matrixorigin/matrixone/tree/main/test>
 
@@ -35,7 +35,7 @@ MO-Tester includes testing cases in the following table.
 
 # How to use MO-Tester?
 
-## 1. Prepare testing environment
+## 1. Prepare the testing environment
 
 * Make sure you have installed jdk8.
 
@@ -114,7 +114,8 @@ Note: every time running `run.sh` will overwrite the `error`, `report`, and `suc
 
 * An example of `report.txt`  looks like this:
 
-```[SUMMARY] TOTAL : 486, SUCCESS : 486, ERROR :0, NOEXE :0, SUCCESS RATE : 100%
+```
+[SUMMARY] TOTAL : 486, SUCCESS : 486, ERROR :0, NOEXE :0, SUCCESS RATE : 100%
 [SUMMARY] TOTAL : 486, SUCCESS : 485, ERROR :1, NOEXE :0, SUCCESS RATE : 99%
 [cases/transaction/atomicity.sql] TOTAL : 67, SUCCESS : 66, ERROR :1, NOEXE :0, SUCCESS RATE : 98%
 [cases/transaction/isolation.sql] TOTAL : 202, SUCCESS : 202, ERROR :0, NOEXE :0, SUCCESS RATE : 100%

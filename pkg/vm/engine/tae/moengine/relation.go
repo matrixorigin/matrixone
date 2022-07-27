@@ -15,6 +15,8 @@
 package moengine
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -29,16 +31,6 @@ var (
 
 const ADDR = "localhost:20000"
 
-func (rel *baseRelation) ID(_ engine.Snapshot) string {
-	return rel.handle.GetMeta().(*catalog.TableEntry).GetSchema().Name
-}
-
-func (rel *baseRelation) Close(_ engine.Snapshot) {}
-
-func (rel *baseRelation) Nodes(_ engine.Snapshot) (nodes engine.Nodes) {
-	return rel.nodes
-}
-
 func (*baseRelation) Size(string) int64 {
 	return 0
 }
@@ -47,41 +39,34 @@ func (*baseRelation) CardinalNumber(string) int64 {
 	return 0
 }
 
-func (*baseRelation) CreateIndex(uint64, []engine.TableDef) error {
+func (*baseRelation) Ranges(_ context.Context) ([][]byte, error) {
+	return nil, nil
+}
+
+func (*baseRelation) AddTableDef(_ context.Context, def engine.TableDef) error {
 	panic(any("implement me"))
 }
 
-func (*baseRelation) DropIndex(uint64, string) error {
+func (*baseRelation) DelTableDef(_ context.Context, def engine.TableDef) error {
 	panic(any("implement me"))
 }
 
-func (*baseRelation) AddTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
-	panic(any("implement me"))
-}
-
-func (*baseRelation) DelTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
-	panic(any("implement me"))
-}
-
-func (rel *baseRelation) TableDefs(_ engine.Snapshot) []engine.TableDef {
+func (rel *baseRelation) TableDefs(_ context.Context) ([]engine.TableDef, error) {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	defs, _ := SchemaToDefs(schema)
-	return defs
+	return defs, nil
 }
 
 func (rel *baseRelation) Rows() int64 {
 	return rel.handle.Rows()
 }
 
-func (rel *baseRelation) Index() []*engine.IndexTableDef {
-	panic(any("implement me"))
-}
-
-func (rel *baseRelation) GetPrimaryKeys(_ engine.Snapshot) (attrs []*engine.Attribute) {
+func (rel *baseRelation) GetPrimaryKeys(_ context.Context) ([]*engine.Attribute, error) {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	if !schema.HasPK() {
-		return
+		return nil, nil
 	}
+	attrs := make([]*engine.Attribute, 0, len(schema.SortKey.Defs))
 	for _, def := range schema.SortKey.Defs {
 		attr := new(engine.Attribute)
 		attr.Name = def.Name
@@ -89,58 +74,41 @@ func (rel *baseRelation) GetPrimaryKeys(_ engine.Snapshot) (attrs []*engine.Attr
 		attrs = append(attrs, attr)
 	}
 	logutil.Debugf("GetPrimaryKeys: %v", attrs[0])
-	return
+	return attrs, nil
 }
 
-func (rel *baseRelation) Truncate(_ engine.Snapshot) (uint64, error) {
-	return 0, nil
-}
-
-func (rel *baseRelation) GetHideKey(_ engine.Snapshot) *engine.Attribute {
+func (rel *baseRelation) GetHideKeys(_ context.Context) ([]*engine.Attribute, error) {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	key := new(engine.Attribute)
 	key.Name = schema.HiddenKey.Name
 	key.Type = schema.HiddenKey.Type
 	logutil.Debugf("GetHideKey: %v", key)
-	return key
+	return []*engine.Attribute{key}, nil
 }
 
-func (rel *baseRelation) GetPriKeyOrHideKey(_ engine.Snapshot) ([]engine.Attribute, bool) {
-	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
-	attrs := make([]engine.Attribute, 1)
-	attrs[0].Name = schema.HiddenKey.Name
-	attrs[0].Type = schema.HiddenKey.Type
-	return attrs, false
-}
-
-func (rel *baseRelation) Attribute() []engine.Attribute {
-	meta := rel.handle.GetMeta().(*catalog.TableEntry)
-	attrs := make([]engine.Attribute, len(meta.GetSchema().ColDefs))
-	for idx, attr := range attrs {
-		attr.Name = meta.GetSchema().ColDefs[idx].Name
-		attr.Type = meta.GetSchema().ColDefs[idx].Type
-		attrs[idx] = attr
-	}
-	return attrs
-}
-
-func (rel *baseRelation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
+func (rel *baseRelation) Write(_ context.Context, _ *batch.Batch) error {
 	return nil
 }
 
-func (rel *baseRelation) Update(_ uint64, data *batch.Batch, _ engine.Snapshot) error {
+func (rel *baseRelation) Update(_ context.Context, _ *batch.Batch) error {
 	return nil
 }
 
-func (rel *baseRelation) Delete(_ uint64, data *vector.Vector, col string, _ engine.Snapshot) error {
+func (rel *baseRelation) Delete(_ context.Context, _ *vector.Vector, _ string) error {
 	return nil
 }
 
-func (rel *baseRelation) NewReader(num int, _ *plan.Expr, _ []byte, _ engine.Snapshot) (rds []engine.Reader) {
+func (rel *baseRelation) Truncate(_ context.Context) (uint64, error) {
+	return 0, nil
+}
+
+func (rel *baseRelation) NewReader(_ context.Context, num int, _ *plan.Expr, _ [][]byte) ([]engine.Reader, error) {
+	var rds []engine.Reader
+
 	it := rel.handle.MakeBlockIt()
 	for i := 0; i < num; i++ {
 		reader := newReader(rel.handle, it)
 		rds = append(rds, reader)
 	}
-	return
+	return rds, nil
 }

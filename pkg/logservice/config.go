@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"strings"
 	"time"
 
 	"github.com/cockroachdb/errors"
@@ -22,17 +23,18 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
 const (
-	defaultDataDir        = "mo-logservice-data"
+	defaultDataDir        = "mo-data/logservice"
 	defaultServiceAddress = "0.0.0.0:32000"
 	defaultRaftAddress    = "0.0.0.0:32001"
 	defaultGossipAddress  = "0.0.0.0:32002"
 )
 
 var (
-	ErrInvalidConfig = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid log service configuration")
+	ErrInvalidConfig = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid log configuration")
 )
 
 const (
@@ -49,22 +51,46 @@ type HAKeeperClientConfig struct {
 
 // Config defines the Configurations supported by the Log Service.
 type Config struct {
-	FS                   vfs.FS
-	DeploymentID         uint64   `toml:"deployment-id"`
-	UUID                 string   `toml:"uuid"`
-	RTTMillisecond       uint64   `toml:"rttmillisecond"`
-	DataDir              string   `toml:"data-dir"`
-	ServiceAddress       string   `toml:"service-address"`
-	ServiceListenAddress string   `toml:"serfice-listen-address"`
-	RaftAddress          string   `toml:"raft-address"`
-	RaftListenAddress    string   `toml:"raft-listen-address"`
-	GossipAddress        string   `toml:"gossip-address"`
-	GossipListenAddress  string   `toml:"gossip-listen-address"`
-	GossipSeedAddresses  []string `toml:"uuid"`
-
-	HeartbeatInterval     time.Duration `toml:"heartbeat-interval"`
-	HAKeeperTickInterval  time.Duration `toml:"tick-interval"`
-	HAKeeperCheckInterval time.Duration `toml:"check-interval"`
+	// FS is the underlying virtual FS used by the log service. Leave it as empty
+	// in production.
+	FS vfs.FS
+	// DeploymentID is basically the Cluster ID, nodes with different DeploymentID
+	// will not be able to communicate via raft.
+	DeploymentID uint64 `toml:"deployment-id"`
+	// UUID is the UUID of the log service node. UUID value must be set.
+	UUID string `toml:"uuid"`
+	// RTTMillisecond is the average round trip time between log service nodes in
+	// milliseconds.
+	RTTMillisecond uint64 `toml:"rttmillisecond"`
+	// DataDir is the name of the directory for storing all log service data. It
+	// should a locally mount partition with good write and fsync performance.
+	DataDir string `toml:"data-dir"`
+	// ServiceAddress is log service's service address that can be reached by
+	// other nodes such as DN nodes.
+	ServiceAddress string `toml:"logservice-address"`
+	// ServiceListenAddress is the local listen address of the ServiceAddress.
+	ServiceListenAddress string `toml:"logservice-listen-address"`
+	// RaftAddress is the address that can be reached by other log service nodes
+	// via their raft layer.
+	RaftAddress string `toml:"raft-address"`
+	// RaftListenAddress is the local listen address of the RaftAddress.
+	RaftListenAddress string `toml:"raft-listen-address"`
+	// GossipAddress is the address used for accepting gossip communication.
+	GossipAddress string `toml:"gossip-address"`
+	// GossipListenAddress is the local listen address of the GossipAddress
+	GossipListenAddress string `toml:"gossip-listen-address"`
+	// GossipSeedAddresses is list of semicolon separated seed addresses that
+	// are used for introducing the local node into the gossip network.
+	GossipSeedAddresses string `toml:"gossip-seed-addresses"`
+	// HeartbeatInterval is the interval of how often log service node should be
+	// sending heartbeat message to the HAKeeper.
+	HeartbeatInterval toml.Duration `toml:"logservice-heartbeat-interval"`
+	// HAKeeperTickInterval is the interval of how often log service node should
+	// tick the HAKeeper.
+	HAKeeperTickInterval toml.Duration `toml:"hakeeper-tick-interval"`
+	// HAKeeperCheckInterval is the internval of how often HAKeeper should run
+	// cluster health checks.
+	HAKeeperCheckInterval toml.Duration `toml:"hakeeper-check-interval"`
 
 	HAKeeperConfig struct {
 		// TickPerSecond indicates how many ticks every second.
@@ -74,18 +100,19 @@ type Config struct {
 		// LogStoreTimeout is the actual time limit between a log store's heartbeat.
 		// If HAKeeper does not receive two heartbeat within LogStoreTimeout,
 		// it regards the log store as down.
-		LogStoreTimeout time.Duration `toml:"log-store-timeout"`
+		LogStoreTimeout toml.Duration `toml:"log-store-timeout"`
 		// DnStoreTimeout is the actual time limit between a dn store's heartbeat.
 		// If HAKeeper does not receive two heartbeat within DnStoreTimeout,
 		// it regards the dn store as down.
-		DnStoreTimeout time.Duration `toml:"dn-store-timeout"`
+		DnStoreTimeout toml.Duration `toml:"dn-store-timeout"`
 	}
 
 	HAKeeperClientConfig struct {
 		// DiscoveryAddress is the Log Service discovery address provided by k8s.
 		DiscoveryAddress string `toml:"hakeeper-discovery-address"`
-		// ServiceAddresses is a list of well known Log Services' service addresses.
-		ServiceAddresses []string `toml:"hakeeper-service-addresses"`
+		// ServiceAddresses is a list of semicolon separated well known Log Services'
+		// service addresses.
+		ServiceAddresses string `toml:"hakeeper-service-addresses"`
 	}
 
 	// DisableWorkers disables the HAKeeper ticker and HAKeeper client in tests.
@@ -93,25 +120,36 @@ type Config struct {
 	DisableWorkers bool
 }
 
+// GetGossipSeedAddresses returns a slice of gossip seed addresses split from
+// the GossipSeedAddresses field.
+func (c *Config) GetGossipSeedAddresses() []string {
+	return splitAddresses(c.GossipSeedAddresses)
+}
+
+func (c *Config) GetHAKeeperServiceAddresses() []string {
+	return splitAddresses(c.HAKeeperClientConfig.ServiceAddresses)
+}
+
 func (c *Config) GetHAKeeperConfig() hakeeper.Config {
 	return hakeeper.Config{
 		TickPerSecond:   c.HAKeeperConfig.TickPerSecond,
-		LogStoreTimeout: c.HAKeeperConfig.LogStoreTimeout,
-		DnStoreTimeout:  c.HAKeeperConfig.DnStoreTimeout,
+		LogStoreTimeout: c.HAKeeperConfig.LogStoreTimeout.Duration,
+		DnStoreTimeout:  c.HAKeeperConfig.DnStoreTimeout.Duration,
 	}
 }
 
 func (c *Config) GetHAKeeperClientConfig() HAKeeperClientConfig {
-	addrs := make([]string, 0)
-	addrs = append(addrs, c.HAKeeperClientConfig.ServiceAddresses...)
 	return HAKeeperClientConfig{
 		DiscoveryAddress: c.HAKeeperClientConfig.DiscoveryAddress,
-		ServiceAddresses: addrs,
+		ServiceAddresses: c.GetHAKeeperServiceAddresses(),
 	}
 }
 
 // Validate validates the configuration.
 func (c *Config) Validate() error {
+	if len(c.UUID) == 0 {
+		return errors.Wrapf(ErrInvalidConfig, "UUID not set")
+	}
 	if c.DeploymentID == 0 {
 		return errors.Wrapf(ErrInvalidConfig, "DeploymentID not set")
 	}
@@ -132,24 +170,27 @@ func (c *Config) Validate() error {
 	if c.HAKeeperConfig.TickPerSecond == 0 {
 		return errors.Wrapf(ErrInvalidConfig, "TickPerSecond not set")
 	}
-	if c.HAKeeperConfig.LogStoreTimeout == 0 {
+	if c.HAKeeperConfig.LogStoreTimeout.Duration == 0 {
 		return errors.Wrapf(ErrInvalidConfig, "LogStoreTimeout not set")
 	}
-	if c.HAKeeperConfig.DnStoreTimeout == 0 {
+	if c.HAKeeperConfig.DnStoreTimeout.Duration == 0 {
 		return errors.Wrapf(ErrInvalidConfig, "DnStoreTimeout not set")
 	}
 	return nil
 }
 
 func (c *Config) Fill() {
-	if c.HeartbeatInterval == 0 {
-		c.HeartbeatInterval = defaultHeartbeatInterval
+	if c.FS == nil {
+		c.FS = vfs.Default
 	}
-	if c.HAKeeperTickInterval == 0 {
-		c.HAKeeperTickInterval = hakeeper.TickDuration
+	if c.HeartbeatInterval.Duration == 0 {
+		c.HeartbeatInterval.Duration = defaultHeartbeatInterval
 	}
-	if c.HAKeeperCheckInterval == 0 {
-		c.HAKeeperCheckInterval = hakeeper.CheckDuration
+	if c.HAKeeperTickInterval.Duration == 0 {
+		c.HAKeeperTickInterval.Duration = hakeeper.TickDuration
+	}
+	if c.HAKeeperCheckInterval.Duration == 0 {
+		c.HAKeeperCheckInterval.Duration = hakeeper.CheckDuration
 	}
 	if c.RTTMillisecond == 0 {
 		c.RTTMillisecond = 200
@@ -178,10 +219,22 @@ func (c *Config) Fill() {
 	if c.HAKeeperConfig.TickPerSecond == 0 {
 		c.HAKeeperConfig.TickPerSecond = hakeeper.DefaultTickPerSecond
 	}
-	if c.HAKeeperConfig.LogStoreTimeout == 0 {
-		c.HAKeeperConfig.LogStoreTimeout = hakeeper.DefaultLogStoreTimeout
+	if c.HAKeeperConfig.LogStoreTimeout.Duration == 0 {
+		c.HAKeeperConfig.LogStoreTimeout.Duration = hakeeper.DefaultLogStoreTimeout
 	}
-	if c.HAKeeperConfig.DnStoreTimeout == 0 {
-		c.HAKeeperConfig.DnStoreTimeout = hakeeper.DefaultDnStoreTimeout
+	if c.HAKeeperConfig.DnStoreTimeout.Duration == 0 {
+		c.HAKeeperConfig.DnStoreTimeout.Duration = hakeeper.DefaultDnStoreTimeout
 	}
+}
+
+func splitAddresses(v string) []string {
+	results := make([]string, 0)
+	parts := strings.Split(v, ";")
+	for _, v := range parts {
+		t := strings.TrimSpace(v)
+		if len(t) > 0 {
+			results = append(results, t)
+		}
+	}
+	return results
 }

@@ -39,7 +39,6 @@ var errorToCodeMappings = getErrorToCodeMapping()
 func getErrorToCodeMapping() []errorToCode {
 	return []errorToCode{
 		{dragonboat.ErrTimeout, pb.Timeout, true},
-		{dragonboat.ErrShardNotFound, pb.InvalidShard, true},
 		// TODO: why ErrTimeoutTooSmall is possible
 		{dragonboat.ErrTimeoutTooSmall, pb.Timeout, false},
 		{dragonboat.ErrPayloadTooBig, pb.InvalidPayloadSize, true},
@@ -48,6 +47,7 @@ func getErrorToCodeMapping() []errorToCode {
 		{dragonboat.ErrSystemBusy, pb.ShardNotReady, false},
 		{dragonboat.ErrClosed, pb.SystemClosed, true},
 		{dragonboat.ErrInvalidRange, pb.OutOfRange, true},
+		{dragonboat.ErrShardNotFound, pb.LogShardNotFound, true},
 
 		{ErrNotHAKeeper, pb.NotHAKeeper, true},
 		{ErrInvalidTruncateLsn, pb.LsnAlreadyTruncated, true},
@@ -88,7 +88,8 @@ func toError(resp pb.Response) error {
 }
 
 func isTempError(err error) bool {
-	if errors.Is(err, ErrNotHAKeeper) {
+	if errors.Is(err, ErrNotHAKeeper) ||
+		errors.Is(err, dragonboat.ErrShardNotFound) {
 		return true
 	}
 	if dragonboat.IsTempError(err) {

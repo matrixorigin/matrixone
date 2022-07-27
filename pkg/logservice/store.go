@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 var (
@@ -84,7 +85,7 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 		Gossip: config.GossipConfig{
 			BindAddress:      cfg.GossipListenAddress,
 			AdvertiseAddress: cfg.GossipAddress,
-			Seed:             cfg.GossipSeedAddresses,
+			Seed:             cfg.GetGossipSeedAddresses(),
 			Meta:             meta.marshal(),
 		},
 	}
@@ -118,6 +119,7 @@ type store struct {
 		sync.Mutex
 		truncateCh      chan struct{}
 		pendingTruncate map[uint64]struct{}
+		metadata        metadata.LogStore
 	}
 }
 
@@ -135,6 +137,7 @@ func newLogStore(cfg Config) (*store, error) {
 	}
 	ls.mu.truncateCh = make(chan struct{})
 	ls.mu.pendingTruncate = make(map[uint64]struct{})
+	ls.mu.metadata = metadata.LogStore{UUID: cfg.UUID}
 	if err := ls.stopper.RunTask(func(ctx context.Context) {
 		ls.truncationWorker(ctx)
 	}); err != nil {
@@ -155,6 +158,26 @@ func (l *store) id() string {
 	return l.nh.ID()
 }
 
+func (l *store) startReplicas() error {
+	l.mu.Lock()
+	shards := make([]metadata.LogShard, 0)
+	shards = append(shards, l.mu.metadata.Shards...)
+	l.mu.Unlock()
+
+	for _, rec := range shards {
+		if rec.ShardID == hakeeper.DefaultHAKeeperShardID {
+			if err := l.startHAKeeperReplica(rec.ReplicaID, nil, false); err != nil {
+				return err
+			}
+		} else {
+			if err := l.startReplica(rec.ShardID, rec.ReplicaID, nil, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (l *store) startHAKeeperReplica(replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target, join bool) error {
 	raftConfig := getRaftConfig(hakeeper.DefaultHAKeeperShardID, replicaID)
@@ -162,6 +185,7 @@ func (l *store) startHAKeeperReplica(replicaID uint64,
 		join, hakeeper.NewStateMachine, raftConfig); err != nil {
 		return err
 	}
+	l.addMetadata(hakeeper.DefaultHAKeeperShardID, replicaID)
 	atomic.StoreUint64(&l.haKeeperReplicaID, replicaID)
 	if !l.cfg.DisableWorkers {
 		if err := l.stopper.RunTask(func(ctx context.Context) {
@@ -179,8 +203,12 @@ func (l *store) startReplica(shardID uint64, replicaID uint64,
 	if shardID == hakeeper.DefaultHAKeeperShardID {
 		return ErrInvalidShardID
 	}
-	raftConfig := getRaftConfig(shardID, replicaID)
-	return l.nh.StartReplica(initialReplicas, join, newStateMachine, raftConfig)
+	cfg := getRaftConfig(shardID, replicaID)
+	if err := l.nh.StartReplica(initialReplicas, join, newStateMachine, cfg); err != nil {
+		return err
+	}
+	l.addMetadata(shardID, replicaID)
+	return nil
 }
 
 func (l *store) stopReplica(shardID uint64, replicaID uint64) error {
@@ -225,11 +253,13 @@ func (l *store) removeReplica(shardID uint64, replicaID uint64, cci uint64) erro
 				l.retryWait()
 				continue
 			}
+			// FIXME: internally handle dragonboat.ErrTimeoutTooSmall
 			if errors.Is(err, dragonboat.ErrTimeoutTooSmall) && count > 1 {
 				return dragonboat.ErrTimeout
 			}
 			return err
 		}
+		l.removeMetadata(shardID, replicaID)
 		return nil
 	}
 }
@@ -406,7 +436,7 @@ func (l *store) getCommandBatch(ctx context.Context,
 
 func (l *store) getClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
 	v, err := l.read(ctx,
-		hakeeper.DefaultHAKeeperShardID, &hakeeper.ClusterDetailsQuery{})
+		hakeeper.DefaultHAKeeperShardID, &hakeeper.ClusterDetailsQuery{Cfg: l.cfg.GetHAKeeperConfig()})
 	if err != nil {
 		return pb.ClusterDetails{}, handleNotHAKeeperError(err)
 	}
@@ -558,15 +588,15 @@ func (l *store) queryLog(ctx context.Context, shardID uint64,
 }
 
 func (l *store) ticker(ctx context.Context) {
-	if l.cfg.HAKeeperTickInterval == 0 {
+	if l.cfg.HAKeeperTickInterval.Duration == 0 {
 		panic("invalid HAKeeperTickInterval")
 	}
-	ticker := time.NewTicker(l.cfg.HAKeeperTickInterval)
+	ticker := time.NewTicker(l.cfg.HAKeeperTickInterval.Duration)
 	defer ticker.Stop()
-	if l.cfg.HAKeeperCheckInterval == 0 {
+	if l.cfg.HAKeeperCheckInterval.Duration == 0 {
 		panic("invalid HAKeeperCheckInterval")
 	}
-	haTicker := time.NewTicker(l.cfg.HAKeeperCheckInterval)
+	haTicker := time.NewTicker(l.cfg.HAKeeperCheckInterval.Duration)
 	defer haTicker.Stop()
 
 	for {

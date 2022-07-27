@@ -46,7 +46,12 @@ const (
 	Deletion
 	Insert
 	Update
+
+	Union
+	Minus
 )
+
+var _ = Minus
 
 // Instruction contains relational algebra
 type Instruction struct {

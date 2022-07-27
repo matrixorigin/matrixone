@@ -382,6 +382,23 @@ func (dt Datetime) WeekOfYear() (int32, uint8) {
 	return dt.ToDate().WeekOfYear()
 }
 
+func (dt Datetime) DayOfYear() uint16 {
+	return dt.ToDate().DayOfYear()
+}
+
+func (dt Datetime) DayOfWeek() Weekday {
+	return dt.ToDate().DayOfWeek()
+}
+
+func (dt Datetime) Week(mode int) int {
+	return dt.ToDate().Week(mode)
+}
+
+// YearWeek returns year and week.
+func (dt Datetime) YearWeek(mode int) (year int, week int) {
+	return dt.ToDate().YearWeek(mode)
+}
+
 func (dt Datetime) SecondMicrosecondStr() string {
 	result := fmt.Sprintf("%02d", dt.Sec()) + "." + fmt.Sprintf("%06d", dt.MicroSec())
 	return result

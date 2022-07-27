@@ -67,13 +67,19 @@ type Service struct {
 }
 
 func NewService(cfg Config) (*Service, error) {
+	cfg.Fill()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	cfg.Fill()
 	store, err := newLogStore(cfg)
 	if err != nil {
 		plog.Errorf("failed to create log store %v", err)
+		return nil, err
+	}
+	if err := store.loadMetadata(); err != nil {
+		return nil, err
+	}
+	if err := store.startReplicas(); err != nil {
 		return nil, err
 	}
 	pool := &sync.Pool{}
@@ -125,8 +131,8 @@ func NewService(cfg Config) (*Service, error) {
 	return service, nil
 }
 
-func (s *Service) GetStore() *store {
-	return s.store
+func (s *Service) Start() error {
+	return nil
 }
 
 func (s *Service) Close() (err error) {

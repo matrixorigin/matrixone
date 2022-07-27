@@ -279,20 +279,8 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			bat.InitZsOne(1)
 		}
 		ds.DataSource = &Source{Bat: bat}
-		//if n.RowsetData != nil {
-		//	init bat from n.RowsetData
-		//}
 		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
 	case plan.Node_TABLE_SCAN:
-		snap := engine.Snapshot(c.proc.Snapshot)
-		db, err := c.e.Database(n.ObjRef.SchemaName, snap)
-		if err != nil {
-			return nil, err
-		}
-		rel, err := db.Relation(n.TableDef.Name, snap)
-		if err != nil {
-			return nil, err
-		}
 		src := &Source{
 			RelationName: n.TableDef.Name,
 			SchemaName:   n.ObjRef.SchemaName,
@@ -301,10 +289,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		for i, col := range n.TableDef.Cols {
 			src.Attributes[i] = col.Name
 		}
-		nodes := rel.Nodes(snap)
-		if len(nodes) == 0 {
-			nodes = make([]engine.Node, 1)
-		}
+		nodes := make([]engine.Node, 1)
 		ss := make([]*Scope, len(nodes))
 		for i := range nodes {
 			ss[i] = &Scope{

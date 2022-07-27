@@ -17,14 +17,17 @@ package logservice
 import (
 	"github.com/lni/vfs"
 
+	"github.com/google/uuid"
+
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 	addr := "localhost:9000"
 	cfg := Config{
+		UUID:                 uuid.New().String(),
 		RTTMillisecond:       10,
-		GossipSeedAddresses:  []string{addr},
+		GossipSeedAddresses:  addr,
 		DeploymentID:         1,
 		FS:                   fs,
 		ServiceListenAddress: addr,

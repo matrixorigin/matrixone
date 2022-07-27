@@ -62,7 +62,7 @@ type StateQuery struct{}
 type logShardIDQuery struct{ name string }
 type logShardIDQueryResult struct{ id uint64 }
 type ScheduleCommandQuery struct{ UUID string }
-type ClusterDetailsQuery struct{}
+type ClusterDetailsQuery struct{ Cfg Config }
 
 type stateMachine struct {
 	replicaID uint64
@@ -419,10 +419,12 @@ func (s *stateMachine) handleScheduleCommandQuery(uuid string) *pb.CommandBatch 
 	return &pb.CommandBatch{}
 }
 
-func (s *stateMachine) handleClusterDetailsQuery() *pb.ClusterDetails {
+func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails {
+	cfg.Fill()
 	cd := &pb.ClusterDetails{
-		CNNodes: make([]pb.CNNode, 0),
-		DNNodes: make([]pb.DNNode, 0),
+		CNNodes:  make([]pb.CNNode, 0, len(s.state.CNState.Stores)),
+		DNNodes:  make([]pb.DNNode, 0, len(s.state.DNState.Stores)),
+		LogNodes: make([]pb.LogNode, 0, len(s.state.LogState.Stores)),
 	}
 	for uuid, info := range s.state.CNState.Stores {
 		n := pb.CNNode{
@@ -433,12 +435,31 @@ func (s *stateMachine) handleClusterDetailsQuery() *pb.ClusterDetails {
 		cd.CNNodes = append(cd.CNNodes, n)
 	}
 	for uuid, info := range s.state.DNState.Stores {
+		state := pb.NormalState
+		if cfg.DnStoreExpired(info.Tick, s.state.Tick) {
+			state = pb.TimeoutState
+		}
 		n := pb.DNNode{
 			UUID:           uuid,
 			Tick:           info.Tick,
+			State:          state,
 			ServiceAddress: info.ServiceAddress,
 		}
 		cd.DNNodes = append(cd.DNNodes, n)
+	}
+	for uuid, info := range s.state.LogState.Stores {
+		state := pb.NormalState
+		if cfg.LogStoreExpired(info.Tick, s.state.Tick) {
+			state = pb.TimeoutState
+		}
+		n := pb.LogNode{
+			UUID:           uuid,
+			Tick:           info.Tick,
+			State:          state,
+			ServiceAddress: info.ServiceAddress,
+			Replicas:       info.Replicas,
+		}
+		cd.LogNodes = append(cd.LogNodes, n)
 	}
 	return cd
 }
@@ -450,8 +471,8 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 		return s.handleStateQuery(), nil
 	} else if q, ok := query.(*ScheduleCommandQuery); ok {
 		return s.handleScheduleCommandQuery(q.UUID), nil
-	} else if _, ok := query.(*ClusterDetailsQuery); ok {
-		return s.handleClusterDetailsQuery(), nil
+	} else if q, ok := query.(*ClusterDetailsQuery); ok {
+		return s.handleClusterDetailsQuery(q.Cfg), nil
 	}
 	panic("unknown query type")
 }

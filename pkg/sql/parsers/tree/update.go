@@ -25,7 +25,6 @@ type Update struct {
 	statementImpl
 	Tables  TableExprs
 	Exprs   UpdateExprs
-	From    TableExprs
 	Where   *Where
 	OrderBy OrderBy
 	Limit   *Limit
@@ -58,17 +57,6 @@ func (node *Update) Format(ctx *FmtCtx) {
 	if node.Limit != nil {
 		ctx.WriteByte(' ')
 		node.Limit.Format(ctx)
-	}
-}
-
-func NewUpdate(ts TableExprs, e UpdateExprs, f TableExprs, w *Where, o OrderBy, l *Limit) *Update {
-	return &Update{
-		Tables:  ts,
-		Exprs:   e,
-		From:    f,
-		Where:   w,
-		OrderBy: o,
-		Limit:   l,
 	}
 }
 

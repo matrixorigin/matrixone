@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/gob"
 	"fmt"
 	"io"
 	mrand "math/rand"
@@ -29,7 +30,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func testFileService(t *testing.T, newFS func() FileService) {
+func testFileService(
+	t *testing.T,
+	newFS func() FileService,
+) {
 
 	t.Run("basic", func(t *testing.T) {
 		ctx := context.Background()
@@ -341,6 +345,89 @@ func testFileService(t *testing.T, newFS func() FileService) {
 			},
 		})
 		assert.ErrorIs(t, err, ErrSizeNotMatch)
+
+	})
+
+	t.Run("object", func(t *testing.T) {
+		fs := newFS()
+		ctx := context.Background()
+
+		buf := new(bytes.Buffer)
+		err := gob.NewEncoder(buf).Encode(map[int]int{
+			42: 42,
+		})
+		assert.Nil(t, err)
+		data := buf.Bytes()
+		err = fs.Write(ctx, IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size: len(data),
+					Data: data,
+				},
+			},
+		})
+		assert.Nil(t, err)
+
+		vec := &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size: len(data),
+					ToObject: func(r io.Reader) (any, int, error) {
+						var m map[int]int
+						if err := gob.NewDecoder(r).Decode(&m); err != nil {
+							return nil, 0, err
+						}
+						return m, 1, nil
+					},
+				},
+			},
+		}
+		err = fs.Read(ctx, vec)
+		assert.Nil(t, err)
+
+		m, ok := vec.Entries[0].Object.(map[int]int)
+		assert.True(t, ok)
+		assert.Equal(t, 1, len(m))
+		assert.Equal(t, 42, m[42])
+		assert.Equal(t, 1, vec.Entries[0].ObjectSize)
+
+	})
+
+	t.Run("ignore", func(t *testing.T) {
+		fs := newFS()
+		ctx := context.Background()
+
+		data := []byte("foo")
+		err := fs.Write(ctx, IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size: len(data),
+					Data: data,
+				},
+			},
+		})
+		assert.Nil(t, err)
+
+		vec := &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size:   len(data),
+					ignore: true,
+				},
+				{
+					Size: len(data),
+				},
+			},
+		}
+		err = fs.Read(ctx, vec)
+		assert.Nil(t, err)
+
+		assert.Nil(t, vec.Entries[0].Data)
+		assert.Equal(t, []byte("foo"), vec.Entries[1].Data)
 
 	})
 

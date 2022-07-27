@@ -17,18 +17,18 @@ package main
 import (
 	"flag"
 	"fmt"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"os"
 	"os/signal"
 	"syscall"
 
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/rpcserver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 )
@@ -37,12 +37,12 @@ const (
 	InitialValuesExit = 1
 	LoadConfigExit    = 2
 	RecreateDirExit   = 3
-	CreateRPCExit     = 10
-	StartMOExit       = 12
-	RunRPCExit        = 14
-	ShutdownExit      = 15
-	CreateTaeExit     = 16
-	InitCatalogExit   = 17
+	//	CreateRPCExit     = 10
+	StartMOExit = 12
+	//	RunRPCExit        = 14
+	ShutdownExit    = 15
+	CreateTaeExit   = 16
+	InitCatalogExit = 17
 )
 
 var (
@@ -201,9 +201,9 @@ func main() {
 
 	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
 
-	Host := config.GlobalSystemVariables.GetHost()
+	//	Host := config.GlobalSystemVariables.GetHost()
 	engineName := config.GlobalSystemVariables.GetStorageEngine()
-	port := config.GlobalSystemVariables.GetPortOfRpcServerInComputationEngine()
+	//	port := config.GlobalSystemVariables.GetPortOfRpcServerInComputationEngine()
 
 	var tae *taeHandler
 	if engineName == "tae" {
@@ -220,22 +220,9 @@ func main() {
 		os.Exit(LoadConfigExit)
 	}
 
-	srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, port+100), 1<<30, logutil.GetGlobalLogger())
-	if err != nil {
-		logutil.Infof("Create rpcserver failed, %v", err)
-		os.Exit(CreateRPCExit)
-	}
-
-	go func() {
-		if err := srv.Run(); err != nil {
-			logutil.Infof("Start rpcserver failed, %v", err)
-			os.Exit(RunRPCExit)
-		}
-	}()
-
 	createMOServer()
 
-	err = runMOServer()
+	err := runMOServer()
 	if err != nil {
 		logutil.Infof("Start MOServer failed, %v", err)
 		os.Exit(StartMOExit)

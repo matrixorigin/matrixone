@@ -2,7 +2,7 @@
 
 * **Are functions and other keywords case sensitive？**
 
-  No, they are not case sensitive. Only in one case case is sensitive in MatrixOne, if user creates table and attributes with ``, the name in`` is case sensitive. To find this table name or attribute name in your query, it needs to be in `` as well.
+  No, they are not case sensitive. Only in one case case is sensitive in MatrixOne, if user creates table and attributes with \`\`, the name in\`\` is case sensitive. To find this table name or attribute name in your query, it needs to be in \`\` as well.
 
 * **How do I export data from MatrixOne to a file?**
 
@@ -11,7 +11,7 @@
 
 * **What is the size limit of a transaction in MatrixOne?**
 
-  The transaction size is limited to the memory size you have for hardware environment. 
+  The transaction size is limited to the memory size you have for hardware environment.
 
 * **What kind of character set does MatrixOne support?**
 
@@ -23,7 +23,7 @@
 
 * **How do I bulk load data into MatrixOne?**
 
-  MatrixOne provides two methods of bulk load data: 1. Using `source filename` command from shell, user can load the SQL file with all DDL and insert data statements. 2. Using `load data infile...into table...` command from shell, user can load an existing .csv file to MatrixOne. 
+  MatrixOne provides two methods of bulk load data: 1. Using `source filename` command from shell, user can load the SQL file with all DDL and insert data statements. 2. Using `load data infile...into table...` command from shell, user can load an existing .csv file to MatrixOne.
 
 * **How do I know how my query is executed?**
 

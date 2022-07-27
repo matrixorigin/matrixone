@@ -21,24 +21,23 @@
 package operator
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-func CreateAddReplica(uuid util.StoreID, shardInfo logservice.LogShardInfo, replicaID uint64) (*Operator, error) {
+func CreateAddReplica(uuid string, shardInfo pb.LogShardInfo, replicaID uint64) (*Operator, error) {
 	return NewBuilder("", shardInfo).AddPeer(string(uuid), replicaID).Build()
 }
 
-func CreateRemoveReplica(uuid util.StoreID, shardInfo logservice.LogShardInfo) (*Operator, error) {
+func CreateRemoveReplica(uuid string, shardInfo pb.LogShardInfo) (*Operator, error) {
 	return NewBuilder("", shardInfo).RemovePeer(string(uuid)).Build()
 }
 
-func CreateStopReplica(brief string, uuid util.StoreID, shardID uint64, epoch uint64) *Operator {
+func CreateStopReplica(brief string, uuid string, shardID uint64, epoch uint64) *Operator {
 	return NewOperator(brief, shardID, 0,
-		StopLogService{string(uuid), shardID, epoch})
+		StopLogService{Replica{uuid, shardID, 0, epoch}})
 }
 
-func CreateStartReplica(brief string, uuid util.StoreID, shardID, replicaID uint64) *Operator {
+func CreateStartReplica(brief string, uuid string, shardID, replicaID uint64) *Operator {
 	return NewOperator(brief, shardID, 0,
-		StartLogService{StoreID: string(uuid), ShardID: shardID, ReplicaID: replicaID})
+		StartLogService{Replica{UUID: uuid, ShardID: shardID, ReplicaID: replicaID}})
 }
