@@ -34,6 +34,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		AggList:         make([]*plan.Expr, len(node.AggList)),
 		OrderBy:         make([]*plan.OrderBySpec, len(node.OrderBy)),
 		DeleteTablesCtx: make([]*plan.DeleteTableCtx, len(node.DeleteTablesCtx)),
+		UpdateCtxs:      make([]*plan.UpdateCtx, len(node.UpdateCtxs)),
 	}
 
 	copy(newNode.Children, node.Children)
@@ -80,18 +81,38 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		}
 	}
 
-	if node.UpdateInfo != nil {
-		newNode.UpdateInfo = &plan.UpdateInfo{
-			PriKey:      node.UpdateInfo.PriKey,
-			PriKeyIdx:   node.UpdateInfo.PriKeyIdx,
-			HideKey:     node.UpdateInfo.HideKey,
-			UpdateAttrs: make([]string, len(node.UpdateInfo.UpdateAttrs)),
-			OtherAttrs:  make([]string, len(node.UpdateInfo.OtherAttrs)),
-			AttrOrders:  make([]string, len(node.UpdateInfo.AttrOrders)),
+	for i, updateCtx := range node.UpdateCtxs {
+		newNode.UpdateCtxs[i] = &plan.UpdateCtx{
+			DbName:     updateCtx.DbName,
+			TblName:    updateCtx.TblName,
+			PriKey:     updateCtx.PriKey,
+			PriKeyIdx:  updateCtx.PriKeyIdx,
+			HideKey:    updateCtx.HideKey,
+			HideKeyIdx: updateCtx.HideKeyIdx,
+			OrderAttrs: make([]string, len(updateCtx.OrderAttrs)),
+			UpdateCols: make([]*ColDef, len(updateCtx.UpdateCols)),
+			OtherAttrs: make([]string, len(updateCtx.OtherAttrs)),
 		}
-		copy(newNode.UpdateInfo.UpdateAttrs, node.UpdateInfo.UpdateAttrs)
-		copy(newNode.UpdateInfo.OtherAttrs, node.UpdateInfo.OtherAttrs)
-		copy(newNode.UpdateInfo.AttrOrders, node.UpdateInfo.AttrOrders)
+		for j, col := range updateCtx.UpdateCols {
+			newNode.UpdateCtxs[i].UpdateCols[j] = &plan.ColDef{
+				Name: col.Name,
+				Alg:  col.Alg,
+				Typ: &plan.Type{
+					Id:        col.Typ.Id,
+					Nullable:  col.Typ.Nullable,
+					Width:     col.Typ.Width,
+					Precision: col.Typ.Precision,
+					Size:      col.Typ.Size,
+					Scale:     col.Typ.Scale,
+				},
+				// FIX ME: Default should change to Expr
+				Default: &plan.DefaultExpr{},
+				Primary: col.Primary,
+				Pkidx:   col.Pkidx,
+			}
+		}
+		copy(newNode.UpdateCtxs[i].OtherAttrs, updateCtx.OtherAttrs)
+		copy(newNode.UpdateCtxs[i].OrderAttrs, updateCtx.OrderAttrs)
 	}
 
 	if node.Cost != nil {
