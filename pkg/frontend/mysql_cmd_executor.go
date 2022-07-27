@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -83,10 +84,14 @@ type MysqlCmdExecutor struct {
 
 	ses *Session
 
+	sessionRWLock sync.RWMutex
+
 	routineMgr *RoutineManager
 }
 
 func (mce *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session) {
+	mce.sessionRWLock.Lock()
+	defer mce.sessionRWLock.Unlock()
 	mce.ses = ses
 }
 
@@ -2069,6 +2074,8 @@ func (mce *MysqlCmdExecutor) Close() {
 	if mce.exportDataClose != nil {
 		mce.exportDataClose.Close()
 	}
+	mce.sessionRWLock.Lock()
+	defer mce.sessionRWLock.Unlock()
 	err := mce.ses.TxnRollback()
 	if err != nil {
 		logutil.Errorf("rollback txn in mce.Close failed.error:%v", err)
