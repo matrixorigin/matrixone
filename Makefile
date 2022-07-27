@@ -97,26 +97,28 @@ pb: generate-pb fmt
 ###############################################################################
 
 RACE_OPT := 
+DEBUG_OPT := 
 CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo"
 GO=$(CGO_OPTS) $(GOBIN)
 GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_VERSION)'"
 
 .PHONY: cgo
-cgo:
+cgo/libmo.a: cgo/*.c cgo/*.h
 	@(cd cgo; make)
 
 BUILD_NAME=binary
 # build mo-server binary
 .PHONY: build
-build: config cgo cmd/db-server/$(wildcard *.go)
+build: config cgo/libmo.a cmd/db-server/$(wildcard *.go)
 	$(info [Build $(BUILD_NAME)])
-	$(GO) build $(RACE_OPT) $(GOLDFLAGS) -o $(BIN_NAME) ./cmd/db-server
+	$(GO) build $(DEBUG_OPT) $(RACE_OPT) $(GOLDFLAGS) -o $(BIN_NAME) ./cmd/db-server
 
 # build mo-server binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
 .PHONY: debug
 debug: override BUILD_NAME := debug-binary
 debug: override RACE_OPT := -race
+debug: override DEBUG_OPT := -gcflags=all="-N -l"
 debug: build
 
 ###############################################################################
