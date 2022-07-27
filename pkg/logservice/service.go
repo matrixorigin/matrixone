@@ -67,10 +67,10 @@ type Service struct {
 }
 
 func NewService(cfg Config) (*Service, error) {
+	cfg.Fill()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	cfg.Fill()
 	store, err := newLogStore(cfg)
 	if err != nil {
 		plog.Errorf("failed to create log store %v", err)
