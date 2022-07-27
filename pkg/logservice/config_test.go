@@ -40,6 +40,28 @@ func getTestConfig() Config {
 	return c
 }
 
+func TestSplitAddress(t *testing.T) {
+	tests := []struct {
+		input  string
+		output []string
+	}{
+		{"", []string{}},
+		{" ; ", []string{}},
+		{" ;; ", []string{}},
+		{";", []string{}},
+		{"localhost:1000;localhost:1001", []string{"localhost:1000", "localhost:1001"}},
+		{" localhost:1000 ; localhost:1001\t\n", []string{"localhost:1000", "localhost:1001"}},
+		{"localhost:1000 \n", []string{"localhost:1000"}},
+		{"localhost:1000;", []string{"localhost:1000"}},
+		{";localhost:1000", []string{"localhost:1000"}},
+	}
+
+	for _, tt := range tests {
+		v := splitAddresses(tt.input)
+		assert.Equal(t, tt.output, v)
+	}
+}
+
 func TestGetGossipSeedAddresses(t *testing.T) {
 	cfg := Config{
 		GossipSeedAddresses: "localhost:9000;localhost:9001 ; localhost:9002 ",

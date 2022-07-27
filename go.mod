@@ -13,7 +13,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.1.2
 	github.com/docker/go-units v0.4.0
 	github.com/fagongzi/goetty v1.13.0
-	github.com/fagongzi/goetty/v2 v2.0.3-0.20220629100032-f8e8c3c38772
+	github.com/fagongzi/goetty/v2 v2.0.3-0.20220727012003-22a431a7db0c
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/gogo/protobuf v1.3.2
@@ -21,7 +21,7 @@ require (
 	github.com/google/btree v1.0.1
 	github.com/google/gofuzz v1.2.0
 	github.com/google/uuid v1.3.0
-	github.com/lni/dragonboat/v4 v4.0.0-20220724134658-ed44d312daa2
+	github.com/lni/dragonboat/v4 v4.0.0-20220726132939-e3950119af4e
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/matrixorigin/matrixcube v0.3.1-0.20220606032431-c944d801f1e5
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
