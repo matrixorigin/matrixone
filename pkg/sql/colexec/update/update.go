@@ -88,7 +88,7 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 
 			// need to de duplicate
 			var cnt uint64
-			tmpBat, cnt = filterBatch(tmpBat, batLen, proc)
+			tmpBat, cnt = FilterBatch(tmpBat, batLen, proc)
 			if tmpBat == nil {
 				panic(any("internal error when filter Batch"))
 			}
@@ -121,7 +121,7 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 	return false, nil
 }
 
-func filterBatch(bat *batch.Batch, batLen int, proc *process.Process) (*batch.Batch, uint64) {
+func FilterBatch(bat *batch.Batch, batLen int, proc *process.Process) (*batch.Batch, uint64) {
 	var cnt uint64 = 0
 	newBat := &batch.Batch{}
 	m := make(map[[16]byte]int, batLen)
