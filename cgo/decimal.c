@@ -582,6 +582,22 @@ int32_t Decimal128_DivInt64(int64_t *r, int64_t *a, int64_t b)
 	return Decimal128_Div(r, a, (int64_t *) &db);
 }
 
+static inline int32_t Decimal64_AddNoCheck(int64_t *r, int64_t *a, int64_t *b) 
+{
+	decDouble tmp;
+	decDoubleAdd(&tmp, DecDoublePtr(a), DecDoublePtr(b), NULL);
+	decDoubleReduce(DecDoublePtr(r), &tmp, NULL);
+	return RC_SUCCESS;
+}
+
+static inline int32_t Decimal128_AddNoCheck(int64_t *r, int64_t *a, int64_t *b) 
+{
+	decQuad tmp;
+	decQuadAdd(&tmp, DecQuadPtr(a), DecQuadPtr(b), NULL);
+	decQuadReduce(DecQuadPtr(r), &tmp, NULL);
+	return RC_SUCCESS;
+}
+
 #define DEF_DECIMAL_ARITH(NBITS, OP)								\
 int32_t Decimal ## NBITS ## _VecAdd(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag) { \
 	if ((flag & 1) != 0) {											\
@@ -651,6 +667,6 @@ int32_t Decimal ## NBITS ## _VecAdd(int64_t *r, int64_t *a, int64_t *b, uint64_t
 }
 
 
-DEF_DECIMAL_ARITH(64, Add)
+DEF_DECIMAL_ARITH(64, AddNoCheck)
 
-DEF_DECIMAL_ARITH(128, Add)
+DEF_DECIMAL_ARITH(128, AddNoCheck)
