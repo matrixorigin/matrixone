@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -80,6 +81,19 @@ func TestS3FS(t *testing.T) {
 
 			return fs
 		})
+	})
+
+	t.Run("list root", func(t *testing.T) {
+		fs, err := NewS3FS(
+			sharedConfig.Endpoint,
+			sharedConfig.Bucket,
+			"",
+		)
+		assert.Nil(t, err)
+		ctx := context.Background()
+		entries, err := fs.List(ctx, "")
+		assert.Nil(t, err)
+		assert.True(t, len(entries) > 0)
 	})
 
 }
