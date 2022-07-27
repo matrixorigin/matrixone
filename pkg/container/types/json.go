@@ -24,9 +24,9 @@ func ParseNumValToByteJson(num *tree.NumVal) (bytejson.ByteJson, error) {
 	return ParseStringToByteJson(val)
 }
 
-func ParseStringToByteJson(str string)(bytejson.ByteJson, error) {
+func ParseStringToByteJson(str string) (bytejson.ByteJson, error) {
 	return bytejson.ParseFromString(str)
 }
-func ParseSliceToByteJson(dt []byte)(bytejson.ByteJson, error) {
+func ParseSliceToByteJson(dt []byte) (bytejson.ByteJson, error) {
 	return bytejson.ParseFromByteSlice(dt)
 }
