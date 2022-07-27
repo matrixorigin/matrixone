@@ -184,6 +184,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot)
 			TableSource:  relation,
 			UseDeleteKey: n.DeleteTablesCtx[i].UseDeleteKey,
 			CanTruncate:  n.DeleteTablesCtx[i].CanTruncate,
+			IsHideKey:    n.DeleteTablesCtx[i].IsHideKey,
 		}
 	}
 
