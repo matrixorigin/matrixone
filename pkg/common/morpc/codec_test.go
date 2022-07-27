@@ -26,10 +26,10 @@ func TestEncodeAndDecode(t *testing.T) {
 	buf := buf.NewByteBuf(32)
 
 	msg := newTestMessage(1)
-	err := codec.Encode(msg, buf)
+	err := codec.Encode(msg, buf, nil)
 	assert.NoError(t, err)
 
-	ok, v, err := codec.Decode(buf)
+	v, ok, err := codec.Decode(buf)
 	assert.True(t, ok)
 	assert.Equal(t, msg, v)
 	assert.NoError(t, err)
@@ -39,14 +39,13 @@ func TestEncodeAndDecodeWithPayload(t *testing.T) {
 	codec := newTestCodec()
 	buf1 := buf.NewByteBuf(32)
 	buf2 := buf.NewByteBuf(32)
-	buf1.SetSinkTo(buf2)
 
 	msg := newTestMessage(1)
 	msg.payload = []byte("payload")
-	err := codec.Encode(msg, buf1)
+	err := codec.Encode(msg, buf1, buf2)
 	assert.NoError(t, err)
 
-	ok, v, err := codec.Decode(buf2)
+	v, ok, err := codec.Decode(buf2)
 	assert.True(t, ok)
 	assert.Equal(t, msg, v)
 	assert.NoError(t, err)
