@@ -52,10 +52,12 @@ func (s *service) acquireMessage() morpc.Message {
 	return s.pool.Get().(*pipeline.Message)
 }
 
+/*
 func (s *service) releaseMessage(msg *pipeline.Message) {
 	msg.Reset()
 	s.pool.Put(msg)
 }
+*/
 
 func (s *service) handleRequest(req morpc.Message, _ uint64, cs morpc.ClientSession) error {
 	return nil

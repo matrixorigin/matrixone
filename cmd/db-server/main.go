@@ -37,12 +37,12 @@ const (
 	InitialValuesExit = 1
 	LoadConfigExit    = 2
 	RecreateDirExit   = 3
-	CreateRPCExit     = 10
-	StartMOExit       = 12
-	RunRPCExit        = 14
-	ShutdownExit      = 15
-	CreateTaeExit     = 16
-	InitCatalogExit   = 17
+	//	CreateRPCExit     = 10
+	StartMOExit = 12
+	//	RunRPCExit        = 14
+	ShutdownExit    = 15
+	CreateTaeExit   = 16
+	InitCatalogExit = 17
 )
 
 var (

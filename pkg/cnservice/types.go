@@ -18,7 +18,6 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"go.uber.org/zap"
 )
@@ -55,9 +54,8 @@ type Config struct {
 }
 
 type service struct {
-	cfg     *Config
-	pool    *sync.Pool
-	logger  *zap.Logger
-	server  morpc.RPCServer
-	stopper *stopper.Stopper
+	cfg    *Config
+	pool   *sync.Pool
+	logger *zap.Logger
+	server morpc.RPCServer
 }
