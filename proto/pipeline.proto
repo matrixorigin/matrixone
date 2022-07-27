@@ -13,13 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
- 
+
 syntax = "proto3";
-package message;
+package pipeline; 
+option go_package = "github.com/matrixorigin/matrixone/pkg/pb/pipeline";
 
 message Message {
-    uint64   sid = 1;
+    uint64  sid = 1;
     uint64  cmd = 2;
     bytes   code = 3;
     bytes   data = 4;
 }
+
