@@ -77,6 +77,11 @@ func (node *UnresolvedName) Format(ctx *FmtCtx) {
 	}
 }
 
+// GetNames dbName, tableName, colName
+func (node *UnresolvedName) GetNames() (string, string, string) {
+	return node.Parts[2], node.Parts[1], node.Parts[0]
+}
+
 //the path in an UnresolvedName.
 type NameParts = [4]string
 
