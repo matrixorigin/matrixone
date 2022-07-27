@@ -1,0 +1,138 @@
+package logservicedriver
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+)
+
+var ErrNoClientAvailable=errors.New("no client available")
+var ErrClientPoolClosed=errors.New("client pool closed")
+
+type clientConfig struct {
+	cancelDuration         time.Duration
+	recordSize             int
+	logserviceClientConfig *logservice.ClientConfig
+}
+
+type clientWithRecord struct {
+	c      logservice.Client
+	record logservice.LogRecord
+}
+
+func newClient(cancelDuration time.Duration, recordsize int, cfg *logservice.ClientConfig) *clientWithRecord {
+	ctx, cancel := context.WithTimeout(context.Background(), cancelDuration)
+	defer cancel()
+	logserviceClient, err := logservice.NewClient(ctx, *cfg)
+	if err != nil {
+		panic(err) //TODO retry
+	}
+	c := &clientWithRecord{
+		c:      logserviceClient,
+		record: logserviceClient.GetLogRecord(recordsize),
+	}
+	return c
+}
+
+func (c *clientWithRecord) Close() {
+	c.c.Close()
+}
+
+type clientpool struct {
+	maxCount int
+	count    int
+
+	closed int32
+
+	freeClients   []*clientWithRecord
+	clientFactory func() *clientWithRecord
+	closefn func(*clientWithRecord)
+	mu            sync.Mutex
+}
+
+func newClientPool(maxsize, initsize int, cfg *clientConfig) *clientpool {
+	pool := &clientpool{
+		maxCount:    maxsize,
+		freeClients: make([]*clientWithRecord, initsize),
+		mu: sync.Mutex{},
+	}
+	pool.clientFactory=pool.newClientFactory(cfg)
+	pool.closefn=pool.onClose
+
+	for i := 0; i < initsize; i++ {
+		pool.freeClients[i] = pool.clientFactory()
+	}
+	return pool
+}
+
+func (c *clientpool) newClientFactory(cfg *clientConfig) func() *clientWithRecord {
+	return func() *clientWithRecord {
+		return newClient(cfg.cancelDuration, cfg.recordSize, cfg.logserviceClientConfig)
+	}
+}
+
+func (c *clientpool) Close(){
+	if c.IsClosed(){
+		return
+	}
+	c.mu.Lock()
+	if c.IsClosed(){
+		c.mu.Unlock()
+		return
+	}
+	for _,client:=range c.freeClients{
+		c.closefn(client)
+	}
+	atomic.StoreInt32(&c.closed,1)
+	c.mu.Unlock()
+}
+
+func (c *clientpool) onClose(client *clientWithRecord){
+	client.Close()
+}
+
+func (c *clientpool) Get() (*clientWithRecord,error) {
+	if c.IsClosed(){
+		return nil,ErrClientPoolClosed
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.IsClosed(){
+		return nil,ErrClientPoolClosed
+	}
+	if c.count==c.maxCount{
+		return nil,ErrNoClientAvailable
+	}
+	if len(c.freeClients)==0{
+		c.count++
+		return c.clientFactory(),nil
+	}
+	client:=c.freeClients[len(c.freeClients)-1]
+	c.freeClients=c.freeClients[:len(c.freeClients)-1]
+	return client,nil
+}
+
+func (c *clientpool) IsClosed()bool{
+	closed:=atomic.LoadInt32(&c.closed)
+	return closed==1
+}
+
+func (c *clientpool) Put(client *clientWithRecord){
+	if c.IsClosed(){
+		c.closefn(client)
+		return
+	}
+	c.mu.Lock()
+	if c.IsClosed(){
+		c.closefn(client)
+		c.mu.Unlock()
+		return
+	}
+	c.count--
+	c.freeClients = append(c.freeClients, client)
+	defer c.mu.Unlock()
+}

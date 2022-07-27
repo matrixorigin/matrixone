@@ -1,22 +1,25 @@
 package wal
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"time"
 )
 
 func (driver *walDriver) Checkpoint(indexes []*Index) (e LogEntry, err error) {
-	return driver.impl.FuzzyCheckpoint(GroupC,indexes)
+	e,err= driver.impl.FuzzyCheckpoint(GroupC,indexes)
+	return
 }
-func (driver *walDriver) onCheckpoint(items ...any) {
-	for _, item := range items {
-		e := item.(entry.Entry)
-		err := e.WaitDone()
-		if err != nil {
-			panic(err)
+
+func (driver *walDriver) checkpointTicker(){
+	defer driver.wg.Done()
+	ticker:=time.NewTicker(driver.ckpDuration)
+	for{
+		select{
+		case <-driver.cancelContext.Done():
+			return
+		case <-ticker.C:
+			driver.CkpUC()
 		}
 	}
-	driver.CkpUC()
 }
 
 //tid-lsn-ckped uclsn-tid,tid-clsn,cckped
@@ -25,10 +28,12 @@ func (driver *walDriver) CkpUC() {
 	ucLsn := driver.impl.GetCheckpointed(GroupUC)
 	maxLsn := driver.impl.GetSynced(GroupUC)
 	ckpedUC := ucLsn
+	driver.cmu.RLock()
+	driver.ucmu.RLock()
 	for i := ucLsn + 1; i <= maxLsn; i++ {
 		tid, ok := driver.ucLsnTidMap[i]
 		if !ok {
-			panic("logic error")
+			break
 		}
 		lsn, ok := driver.cTidLsnMap[tid]
 		if !ok {
@@ -39,6 +44,10 @@ func (driver *walDriver) CkpUC() {
 		}
 		ckpedUC = i
 	}
-	logutil.Infof("checkpoint UC %d", ckpedUC)
-	// w.impl.RangeCheckpoint(GroupUC, ckpedUC)
+	driver.cmu.RUnlock()
+	driver.ucmu.RUnlock()
+	if ckpedUC== ucLsn{
+		return
+	}
+	driver.impl.RangeCheckpoint(GroupUC,0, ckpedUC)
 }

@@ -29,6 +29,13 @@ type ClosedIntervals struct {
 	Intervals []*ClosedInterval
 }
 
+func (intervals *ClosedIntervals) GetMax() uint64{
+	if intervals==nil||len(intervals.Intervals)==0{
+		return 0
+	}
+	return intervals.Intervals[len(intervals.Intervals)-1].End
+}
+
 func (intervals *ClosedIntervals) TryMerge(o ClosedIntervals) {
 	intervals.Intervals = append(intervals.Intervals, o.Intervals...)
 	sort.Slice(intervals.Intervals, func(i, j int) bool {

@@ -243,7 +243,7 @@ func (n *insertNode) makeLogEntry() wal.LogEntry {
 	if err != nil {
 		panic(err)
 	}
-	if err = e.Unmarshal(buf); err != nil {
+	if err = e.SetPayload(buf); err != nil {
 		panic(err)
 	}
 	return e

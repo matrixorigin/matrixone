@@ -15,13 +15,18 @@
 package wal
 
 import (
-	"bytes"
+	"math/rand"
+	"strconv"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -29,201 +34,139 @@ const (
 	ModuleName = "TAEWAL"
 )
 
-func TestCheckpoint1(t *testing.T) {
+func initWal(t *testing.T) (Driver,string) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	cfg := &batchstoredriver.StoreCfg{
 		RotateChecker: batchstoredriver.NewMaxSizeRotateChecker(int(common.K) * 2),
 	}
-	driver := NewDriver(dir, "store", cfg)
-	defer driver.Close()
-
-	var bs bytes.Buffer
-	for i := 0; i < 300; i++ {
-		bs.WriteString("helloyou")
+	dcfg := &DriverConfig{
+		BatchStoreConfig:   cfg,
+		CheckpointDuration: time.Millisecond * 10,
 	}
-	buf := bs.Bytes()
-
-	e := entry.GetBase()
-	e.SetType(entry.ETCustomizedStart)
-	buf2 := make([]byte, common.K)
-	copy(buf2, buf)
-	err := e.Unmarshal(buf2)
-	assert.Nil(t, err)
-	lsn, err := driver.AppendEntry(GroupC, e)
-	assert.Nil(t, err)
-	err = e.WaitDone()
-	assert.Nil(t, err)
-	_, err = driver.LoadEntry(GroupC, lsn)
-	assert.Nil(t, err)
-	assert.Equal(t, lsn, driver.GetCurrSeqNum())
-	testutils.WaitExpect(400, func() bool {
-		return driver.GetPenddingCnt() == 1
-	})
-	assert.Equal(t, uint64(1), driver.GetPenddingCnt())
-
-	flush := entry.GetBase()
-	flush.SetType(entry.ETCustomizedStart)
-	buf3 := make([]byte, common.K*3/2)
-	copy(buf3, buf)
-	err = flush.Unmarshal(buf3)
-	assert.Nil(t, err)
-	l, err := driver.AppendEntry(GroupC+1, flush)
-	assert.Nil(t, err)
-	assert.Equal(t, uint64(1), l)
-	assert.Nil(t, err)
-
-	index := []*Index{{
-		LSN:  lsn,
-		CSN:  0,
-		Size: 2,
-	}}
-	_, err = driver.Checkpoint(index)
-	assert.Nil(t, err)
-
-	flush2 := entry.GetBase()
-	flush2.SetType(entry.ETCustomizedStart)
-	buf4 := make([]byte, common.K*3/2)
-	copy(buf4, buf)
-	err = flush2.Unmarshal(buf4)
-	assert.Nil(t, err)
-	_, err = driver.AppendEntry(GroupC+1, flush2)
-	assert.Nil(t, err)
-	err = flush2.WaitDone()
-	assert.Nil(t, err)
-
-	assert.Nil(t, err)
-	_, err = driver.LoadEntry(GroupC, lsn)
-	assert.Nil(t, err)
-
-	index = []*Index{{
-		LSN:  lsn,
-		CSN:  1,
-		Size: 2,
-	}}
-	_, err = driver.Checkpoint(index)
-	assert.Nil(t, err)
-	testutils.WaitExpect(400, func() bool {
-		return lsn == driver.GetCheckpointed()
-	})
-	assert.Equal(t, lsn, driver.GetCheckpointed())
-	assert.Equal(t, lsn, driver.GetCurrSeqNum())
-	testutils.WaitExpect(400, func() bool {
-		return driver.GetPenddingCnt() == 0
-	})
-	assert.Equal(t, uint64(0), driver.GetPenddingCnt())
-
-	flush3 := entry.GetBase()
-	flush3.SetType(entry.ETCustomizedStart)
-	buf5 := make([]byte, common.K*3/2)
-	copy(buf5, buf)
-	err = flush3.Unmarshal(buf5)
-	assert.Nil(t, err)
-	_, err = driver.AppendEntry(GroupC+1, flush3)
-	assert.Nil(t, err)
-	err = flush3.WaitDone()
-	assert.Nil(t, err)
-
-	// err = driver.Compact()
-	// assert.Nil(t, err)
-	// _, err = driver.LoadEntry(GroupC, lsn)
-	// assert.NotNil(t, err)
+	driver := NewDriver(dir, "store", dcfg)
+	return driver,dir
 }
 
-func TestCheckpoint2(t *testing.T) {
-	dir := testutils.InitTestEnv(ModuleName, t)
+func restart(t *testing.T, driver Driver,dir string)Driver{
+	assert.NoError(t,driver.Close())
 	cfg := &batchstoredriver.StoreCfg{
 		RotateChecker: batchstoredriver.NewMaxSizeRotateChecker(int(common.K) * 2),
 	}
-	driver := NewDriver(dir, "store", cfg)
-	defer driver.Close()
-
-	var bs bytes.Buffer
-	for i := 0; i < 300; i++ {
-		bs.WriteString("helloyou")
+	dcfg := &DriverConfig{
+		BatchStoreConfig:   cfg,
+		CheckpointDuration: time.Millisecond * 10,
 	}
-	buf := bs.Bytes()
+	driver = NewDriver(dir, "store", dcfg)
+	return driver
+}
 
-	uncommit := entry.GetBase()
-	uncommit.SetType(entry.ETCustomizedStart)
+func appendGroupC(t *testing.T, driver Driver, tid uint64) entry.Entry {
+	e := entry.GetBase()
 	info := &entry.Info{
-		Group: entry.GTUncommit,
-		Uncommits: 1,
+		TxnId: tid,
 	}
-	uncommit.SetInfo(info)
-	buf1 := make([]byte, common.K)
-	copy(buf1, buf)
-	err := uncommit.Unmarshal(buf1)
-	assert.Nil(t, err)
-	lsn, err := driver.AppendEntry(entry.GTUncommit, uncommit)
-	assert.Nil(t, err)
-	err = uncommit.WaitDone()
-	assert.Nil(t, err)
-	_, err = driver.LoadEntry(entry.GTUncommit, lsn)
-	assert.Nil(t, err)
+	e.SetPayload([]byte(strconv.Itoa(rand.Intn(10))))
+	e.SetInfo(info)
+	_, err := driver.AppendEntry(GroupC, e)
+	assert.NoError(t, err)
+	return e
+}
 
-	commit := entry.GetBase()
-	commit.SetType(entry.ETCustomizedStart)
-	buf2 := make([]byte, common.K)
-	copy(buf2, buf)
-	err = commit.Unmarshal(buf2)
-	assert.Nil(t, err)
-	commitInfo := &entry.Info{
-		Group: GroupC,
-		TxnId: 1,
+func appendGroupUC(t *testing.T, driver Driver, tid uint64) entry.Entry {
+	e := entry.GetBase()
+	info := &entry.Info{
+		Uncommits: tid,
 	}
-	commit.SetInfo(commitInfo)
-	lsn, err = driver.AppendEntry(GroupC, commit)
-	assert.Nil(t, err)
-	err = commit.WaitDone()
-	assert.Nil(t, err)
-	_, err = driver.LoadEntry(GroupC, lsn)
-	assert.Nil(t, err)
-	assert.Equal(t, lsn, driver.GetCurrSeqNum())
-	testutils.WaitExpect(400, func() bool {
-		return driver.GetPenddingCnt() == 1
+	e.SetPayload([]byte(strconv.Itoa(rand.Intn(10))))
+	e.SetInfo(info)
+	_, err := driver.AppendEntry(GroupUC, e)
+	assert.NoError(t, err)
+	return e
+}
+
+func fuzzyCheckpointGroupC(t *testing.T, driver Driver, lsn uint64, offset, length, size uint32) entry.Entry {
+	if length == 0 {
+		panic("invalid length")
+	}
+	if offset+length > size {
+		panic("invalid size")
+	}
+	index := make([]*store.Index, 0)
+	for i := uint32(0); i < length; i++ {
+		idx := &store.Index{LSN: lsn, CSN: offset + i, Size: size}
+		index = append(index, idx)
+	}
+	e, err := driver.Checkpoint(index)
+	assert.NoError(t, err)
+	return e
+}
+
+func getCheckpointed(driver Driver, group uint32) (lsn uint64) {
+	dr := driver.(*walDriver)
+	lsn = dr.impl.GetCheckpointed(group)
+	return
+}
+
+func getCurrSeqNum(driver Driver, group uint32) (lsn uint64) {
+	dr := driver.(*walDriver)
+	lsn = dr.impl.GetCurrSeqNum(group)
+	return
+}
+
+func getLsn(e entry.Entry) (group uint32, lsn uint64) {
+	v := e.GetInfo()
+	if v == nil {
+		return
+	}
+	info := v.(*entry.Info)
+	return info.Group, info.GroupLSN
+}
+
+//append C, append UC
+//ckp C
+//check UC is checkpointed
+func TestCheckpointUC(t *testing.T) {
+	driver,dir := initWal(t)
+
+	wg:=&sync.WaitGroup{}
+	appendworker,_:=ants.NewPool(100)
+	ckpworker,_:=ants.NewPool(100)
+
+	ckpfn:= func(lsn uint64) func ()  {
+		return func() {
+			ckpEntry := fuzzyCheckpointGroupC(t, driver, lsn, 0, 2, 2)
+			assert.NoError(t, ckpEntry.WaitDone())
+			ckpEntry.Free()
+			wg.Done()
+		}
+	}
+	appendfn := func(i int) func() {
+		return func() {
+			uncommitEntry := appendGroupUC(t, driver, uint64(i))
+			commitEntry := appendGroupC(t, driver, uint64(i))
+			_, commitLsn := getLsn(commitEntry)
+			assert.NoError(t, uncommitEntry.WaitDone())
+			assert.NoError(t, commitEntry.WaitDone())
+			wg.Add(1)
+			ckpworker.Submit(ckpfn(commitLsn))
+			commitEntry.Free()
+			uncommitEntry.Free()
+			wg.Done()
+		}
+	}
+
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		appendworker.Submit(appendfn(i))
+	}
+	wg.Wait()
+
+	driver=restart(t,driver,dir)
+
+	testutils.WaitExpect(4000, func() bool {
+		return getCurrSeqNum(driver, GroupUC) == getCheckpointed(driver, GroupUC)
 	})
-	assert.Equal(t, uint64(1), driver.GetPenddingCnt())
+	assert.Equal(t, getCurrSeqNum(driver, GroupUC), getCheckpointed(driver, GroupUC))
 
-	flush := entry.GetBase()
-	flush.SetType(entry.ETCustomizedStart)
-	buf3 := make([]byte, common.K*3/2)
-	copy(buf3, buf)
-	err = flush.Unmarshal(buf3)
-	assert.Nil(t, err)
-	l, err := driver.AppendEntry(GroupC+1, flush)
-	assert.Nil(t, err)
-	assert.Equal(t, uint64(1), l)
-	assert.Nil(t, err)
-
-	index := []*Index{{
-		LSN:  lsn,
-		CSN:  0,
-		Size: 1,
-	}}
-	_, err = driver.Checkpoint(index)
-	assert.Nil(t, err)
-	testutils.WaitExpect(400, func() bool {
-		return lsn == driver.GetCheckpointed()
-	})
-	assert.Equal(t, lsn, driver.GetCheckpointed())
-	assert.Equal(t, lsn, driver.GetCurrSeqNum())
-	testutils.WaitExpect(400, func() bool {
-		return driver.GetPenddingCnt() == 0
-	})
-	assert.Equal(t, uint64(0), driver.GetPenddingCnt())
-
-	flush2 := entry.GetBase()
-	flush2.SetType(entry.ETCustomizedStart)
-	buf4 := make([]byte, common.K*3/2)
-	copy(buf4, buf)
-	err = flush2.Unmarshal(buf4)
-	assert.Nil(t, err)
-	_, err = driver.AppendEntry(GroupC+1, flush2)
-	assert.Nil(t, err)
-	err = flush2.WaitDone()
-	assert.Nil(t, err)
-
-	assert.Nil(t, err)
-	_, err = driver.LoadEntry(GroupC, lsn)
-	assert.NotNil(t, err)
+	assert.NoError(t, driver.Close())
 }

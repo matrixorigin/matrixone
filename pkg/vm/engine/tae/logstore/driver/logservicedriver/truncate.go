@@ -5,6 +5,9 @@ import (
 	// "time"
 )
 
+// driver lsn -> entry lsn
+// 
+//
 func (d *LogServiceDriver) Truncate(lsn uint64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), d.config.TruncateDuration)
 	defer cancel()

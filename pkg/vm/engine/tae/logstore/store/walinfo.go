@@ -19,47 +19,39 @@ var (
 	ErrTimeOut       = errors.New("retry time our")
 )
 
-// checkpointInfo,checkpointed,ckpcnt internal,ckp
-// walDriverLsnMap,walCurrentLsn,syncing each entry
-// walLsnTidMap commit
-// driverCheckpointing driverCheckpointed init
 type StoreInfo struct {
-	checkpointInfo      map[uint32]*checkpointInfo //gid-ckp //r
+	checkpointInfo      map[uint32]*checkpointInfo
 	ckpMu               sync.RWMutex
-	walDriverLsnMap     map[uint32]map[uint64]uint64 //gid-walLsn-driverLsn //r
+	walDriverLsnMap     map[uint32]map[uint64]uint64 
 	lsnMu               sync.RWMutex
-	ucLsnTidMap         map[uint64]uint64
-	cTidLsnMap          map[uint64]uint64 //tid-lsn //r
-	driverCheckpointing uint64            //r
-	driverCheckpointed  uint64            //r
-	walCurrentLsn       map[uint32]uint64 //r
+	driverCheckpointing uint64            
+	driverCheckpointed  uint64            
+	walCurrentLsn       map[uint32]uint64 
 	lsnmu               sync.RWMutex
-	syncing             map[uint32]uint64 //r
+	syncing             map[uint32]uint64 
 
-	synced     map[uint32]uint64 //r
+	synced     map[uint32]uint64 
 	syncedMu   sync.RWMutex
 	commitCond sync.Cond
 
-	checkpointed   map[uint32]uint64 //r
+	checkpointed   map[uint32]uint64 
 	checkpointedMu sync.RWMutex
-	ckpcnt         map[uint32]uint64 //r
+	ckpcnt         map[uint32]uint64 
 	ckpcntMu       sync.RWMutex
 }
 
 func newWalInfo() *StoreInfo {
 	return &StoreInfo{
-		checkpointInfo:  make(map[uint32]*checkpointInfo), //r
+		checkpointInfo:  make(map[uint32]*checkpointInfo), 
 		ckpMu:           sync.RWMutex{},
-		walDriverLsnMap: make(map[uint32]map[uint64]uint64), //r
+		walDriverLsnMap: make(map[uint32]map[uint64]uint64), 
 		lsnMu:           sync.RWMutex{},
-		ucLsnTidMap:     make(map[uint64]uint64),
-		cTidLsnMap:      make(map[uint64]uint64),
 		walCurrentLsn:   make(map[uint32]uint64),
 		lsnmu:           sync.RWMutex{},
 		syncing:         make(map[uint32]uint64),
 		commitCond:      *sync.NewCond(&sync.Mutex{}),
 
-		checkpointed:   make(map[uint32]uint64), //r
+		checkpointed:   make(map[uint32]uint64), 
 		checkpointedMu: sync.RWMutex{},
 		synced:         make(map[uint32]uint64),
 		syncedMu:       sync.RWMutex{},

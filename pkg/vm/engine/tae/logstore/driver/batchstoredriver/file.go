@@ -131,16 +131,16 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 			// vf.ReadMeta()
 			vfiles = append(vfiles, vf)
 		}
-		sort.Slice(vfiles, func(i, j int) bool {
-			return vfiles[i].(*vFile).version < vfiles[j].(*vFile).version
-		})
-		observer.onTruncatedFile(vfiles[0].Id() - 1)
 		if len(vfiles) == 0 {
 			err = rf.scheduleNew()
 			if err != nil {
 				return nil, err
 			}
 		} else {
+			sort.Slice(vfiles, func(i, j int) bool {
+				return vfiles[i].(*vFile).version < vfiles[j].(*vFile).version
+			})
+			observer.onTruncatedFile(vfiles[0].Id() - 1)
 			rf.history.Extend(vfiles[:len(vfiles)-1]...)
 			for _, vf := range vfiles[:len(vfiles)-1] {
 				vf.OnReplayCommitted()

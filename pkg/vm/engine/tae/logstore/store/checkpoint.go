@@ -112,36 +112,10 @@ func (w *StoreImpl) CkpCkp() {
 	e.WaitDone()
 }
 
-//tid-lsn-ckped uclsn-tid,tid-clsn,cckped
-func (w *StoreImpl) CkpUC() {
-	ckpedlsn := w.GetCheckpointed(GroupC)
-	ucLsn := w.GetCheckpointed(GroupUC)
-	maxLsn := w.GetSynced(GroupUC)
-	ckpedUC := ucLsn
-	for i := ucLsn + 1; i <= maxLsn; i++ {
-		tid, ok := w.ucLsnTidMap[i]
-		if !ok {
-			panic("logic error")
-		}
-		lsn, ok := w.cTidLsnMap[tid]
-		if !ok {
-			break
-		}
-		if lsn > ckpedlsn {
-			break
-		}
-		ckpedUC = i
-	}
-	w.SetCheckpointed(GroupUC, ckpedUC)
-}
-
 func (w *StoreImpl) onTruncatingQueue(items ...any) {
 	gid, driverLsn := w.getDriverCheckpointed()
 	if driverLsn == 0 && gid == 0 {
 		return
-	}
-	if gid == GroupUC {
-		w.CkpUC()
 	}
 	if gid == GroupCKP {
 		w.CkpCkp()

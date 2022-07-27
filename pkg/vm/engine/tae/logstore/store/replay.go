@@ -12,7 +12,7 @@ func (w *StoreImpl) Replay(h ApplyHandle)error {
 	if err!= nil{
 		panic(err)
 	}
-	w.onCheckpoint()
+	w.StoreInfo.onCheckpoint()
 	w.driverCheckpointed=lsn
 	w.driverCheckpointing=lsn
 	for g,lsn:=range w.syncing{
@@ -32,6 +32,6 @@ func (w *StoreImpl) replayEntry(e *entry.Entry, h ApplyHandle)error {
 	case GroupC:
 	}
 	w.logDriverLsn(e)
-	h(info.Group, info.GroupLSN, walEntry.GetPayload(), walEntry.GetType(), nil)
+	h(info.Group, info.GroupLSN, walEntry.GetPayload(), walEntry.GetType(), walEntry.GetInfo())
 	return nil
 }
