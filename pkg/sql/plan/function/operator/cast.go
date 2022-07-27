@@ -1803,7 +1803,7 @@ func CastDatetimeAsString(lv, rv *vector.Vector, proc *process.Process) (*vector
 		Offsets: make([]uint32, 0, len(lvs)),
 		Lengths: make([]uint32, 0, len(lvs)),
 	}
-	if col, err = binary.DateTimeToBytes(lvs, col); err != nil {
+	if col, err = binary.DateTimeToBytes(lvs, col, lv.Typ.Precision); err != nil {
 		return nil, err
 	}
 	if err = proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {

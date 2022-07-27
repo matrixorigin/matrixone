@@ -254,6 +254,7 @@ var functionIdRegister = map[string]int32{
 	"unary_plus":  UNARY_PLUS,
 	"unary_minus": UNARY_MINUS,
 	"case":        CASE,
+	"coalesce":    COALESCE,
 	"cast":        CAST,
 	"is":          IS,
 	"is_not":      ISNOT,
