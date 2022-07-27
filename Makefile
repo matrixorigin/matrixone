@@ -15,13 +15,17 @@
 #
 # Examples
 #
-# To build MO -
+# By default, make builds the mo-server
+#
+# make
+#
+# To re-build MO -
 #	
 #	make clean
 #	make config
 #	make build
 #
-# To build MO in debug mode also with race detector enabled -
+# To re-build MO in debug mode also with race detector enabled -
 #
 # make clean
 # make config
@@ -37,6 +41,7 @@
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 GOBIN := go
 BIN_NAME := mo-server
+SERVICE_BIN_NAME := mo-service
 BUILD_CFG := gen_config
 UNAME_S := $(shell uname -s)
 GOPATH := $(shell go env GOPATH)
@@ -50,6 +55,11 @@ MO_VERSION=$(shell git describe --tags $(shell git rev-list --tags --max-count=1
 ifneq ($(GOARCH)$(TARGET_ARCH)$(GOOS)$(TARGET_OS),)
 $(error cross compilation has been disabled)
 endif
+
+###############################################################################
+# default target
+###############################################################################
+all: build
 
 ###############################################################################
 # code generation
@@ -83,7 +93,7 @@ pb: generate-pb fmt
 	$(info all protos are generated) 
 
 ###############################################################################
-# build MatrixOne
+# build mo-server
 ###############################################################################
 
 RACE_OPT := 
@@ -100,7 +110,7 @@ BUILD_NAME=binary
 .PHONY: build
 build: config cgo cmd/db-server/$(wildcard *.go)
 	$(info [Build $(BUILD_NAME)])
-	$(GO) build $(RACE_OPT) $(GOLDFLAGS) -o $(BIN_NAME) ./cmd/db-server/
+	$(GO) build $(RACE_OPT) $(GOLDFLAGS) -o $(BIN_NAME) ./cmd/db-server
 
 # build mo-server binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
@@ -108,6 +118,22 @@ build: config cgo cmd/db-server/$(wildcard *.go)
 debug: override BUILD_NAME := debug-binary
 debug: override RACE_OPT := -race
 debug: build
+
+###############################################################################
+# build mo-service
+###############################################################################
+
+# build mo-service binary
+.PHONY: service
+service: config cgo cmd/mo-service/$(wildcard *.go)
+	$(info [Build $(BUILD_NAME)])
+	$(GO) build $(RACE_OPT) $(GOLDFLAGS) -o $(SERVICE_BIN_NAME) ./cmd/mo-service
+
+.PHONY: debug-service
+debug-service: override BUILD_NAME := debug-binary
+debug-service: override RACE_OPT := -race
+debug-service: service
+
 
 ###############################################################################
 # run unit tests
@@ -132,15 +158,7 @@ clean:
 	$(info [Clean up])
 	$(info Clean go test cache)
 	@go clean -testcache
-	@rm -f $(CONFIG_CODE_GENERATED)
-ifneq ($(wildcard $(BIN_NAME)),)
-	$(info Remove file $(BIN_NAME))
-	@rm -f $(BIN_NAME)
-endif
-ifneq ($(wildcard $(BUILD_CFG)),)
-	$(info Remove file $(BUILD_CFG))
-	@rm -f $(BUILD_CFG)
-endif
+	rm -f $(CONFIG_CODE_GENERATED) $(BIN_NAME) $(SERVICE_BIN_NAME) $(BUILD_CFG)
 	$(MAKE) -C cgo clean
 
 ###############################################################################
@@ -158,10 +176,6 @@ install-static-check-tools:
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@latest
 	@go install honnef.co/go/tools/cmd/staticcheck@latest
 
-# TODO: tracking https://github.com/golangci/golangci-lint/issues/2649
-DIRS=pkg/... \
-	 cmd/...
-
 EXTRA_LINTERS=-E exportloopref -E rowserrcheck -E depguard -D unconvert \
 	-E prealloc -E gofmt
 
@@ -169,9 +183,8 @@ STATICCHECK_CHECKS=QF1001,QF1002,QF1003,QF1004,QF1005,QF1006,QF1007,QF1008,QF100
 
 .PHONY: static-check
 static-check: config cgo
-	@$(CGO_OPTS) staticcheck -checks $(STATICCHECK_CHECKS) ./...
-	@$(CGO_OPTS) go vet -vettool=$(which molint) ./...
-	@$(CGO_OPTS) license-eye -c .licenserc.yml header check
-	@for p in $(DIRS); do \
-    $(CGO_OPTS) golangci-lint run $(EXTRA_LINTERS) $$p ; \
-done;
+	$(CGO_OPTS) staticcheck -checks $(STATICCHECK_CHECKS) ./...
+	$(CGO_OPTS) go vet -vettool=`which molint` ./...
+	$(CGO_OPTS) license-eye -c .licenserc.yml header check
+	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
+	$(CGO_OPTS) golangci-lint run $(EXTRA_LINTERS) ./...

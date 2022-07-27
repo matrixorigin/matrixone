@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "with t11 as (select * from t1) update t11 join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
-		output: "with t11 as (select * from t1) update t11 inner join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
+		input:  "DELETE a1, a2 FROM t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.a = a2.b;",
+		output: "delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.a = a2.b",
 	}
 )
 
@@ -94,13 +94,13 @@ var (
 		input: "select cast(false as varchar)",
 	}, {
 		input:  "select cast(a as timestamp)",
-		output: "select cast(a as timestamp(26, 6))",
+		output: "select cast(a as timestamp(26))",
 	}, {
 		input:  "select cast(\"2022-01-30\" as varchar);",
 		output: "select cast(2022-01-30 as varchar)",
 	}, {
 		input:  "select cast(b as timestamp) from t2",
-		output: "select cast(b as timestamp(26, 6)) from t2",
+		output: "select cast(b as timestamp(26)) from t2",
 	}, {
 		input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
 		output: "select cast(2022-01-01 01:23:34 as varchar)",
@@ -173,7 +173,7 @@ var (
 		output: "set a = b",
 	}, {
 		input:  "CREATE TABLE t1 (datetime datetime, timestamp timestamp, date date)",
-		output: "create table t1 (datetime datetime(26, 6), timestamp timestamp(26, 6), date date)",
+		output: "create table t1 (datetime datetime(26), timestamp timestamp(26), date date)",
 	}, {
 		input:  "SET timestamp=DEFAULT;",
 		output: "set timestamp = default",

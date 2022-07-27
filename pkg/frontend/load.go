@@ -19,6 +19,11 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/simdcsv"
 	"math"
 	"os"
 	"runtime"
@@ -29,19 +34,10 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/config"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
 	"unicode/utf8"
-
-	"github.com/matrixorigin/simdcsv"
 )
 
 type LoadResult struct {
@@ -116,6 +112,7 @@ type SharePart struct {
 	tableName      string
 	txnHandler     *TxnHandler
 	oneTxnPerBatch bool
+	ses            *Session
 
 	//result of load
 	result *LoadResult
@@ -422,7 +419,11 @@ func initParseLineHandler(handler *ParseLineHandler) error {
 	load := handler.load
 
 	var cols []*engine.AttributeDef = nil
-	defs := relation.TableDefs(handler.txnHandler.GetTxn().GetCtx())
+	ctx := context.TODO()
+	defs, err := relation.TableDefs(ctx)
+	if err != nil {
+		return err
+	}
 	for _, def := range defs {
 		attr, ok := def.(*engine.AttributeDef)
 		if ok {
@@ -516,6 +517,7 @@ func initWriteBatchHandler(handler *ParseLineHandler, wHandler *WriteBatchHandle
 	wHandler.tableHandler = handler.tableHandler
 	wHandler.tableName = handler.tableName
 	wHandler.txnHandler = handler.txnHandler
+	wHandler.ses = handler.ses
 	wHandler.oneTxnPerBatch = handler.oneTxnPerBatch
 	wHandler.timestamp = handler.timestamp
 	wHandler.result = &LoadResult{}
@@ -1685,6 +1687,8 @@ when force is true, batchsize will be changed.
 */
 func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 	var err error = nil
+
+	ctx := context.TODO()
 	if handler.batchFilled == handler.batchSize {
 		//batchBytes := 0
 		//for _, vec := range handler.batchData.Vecs {
@@ -1705,30 +1709,28 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		handler.ThreadInfo.SetCnt(1)
 		//dbHandler := handler.dbHandler
 		var dbHandler engine.Database
-		txnHandler := handler.txnHandler
+		var txnHandler *TxnHandler
 		tableHandler := handler.tableHandler
+		initSes := handler.ses
+		tmpSes := NewSession(initSes.GetMysqlProtocol(), initSes.GuestMmu, initSes.Mempool, initSes.Pu, gSysVariables)
 		if !handler.skipWriteBatch {
 			if handler.oneTxnPerBatch {
-				txnHandler = InitTxnHandler(config.StorageEngine)
-				_, err = txnHandler.StartByAutocommitIfNeeded()
+				txnHandler = tmpSes.GetTxnHandler()
+				dbHandler, err = tmpSes.GetStorage().Database(ctx, handler.dbName, engine.Snapshot(txnHandler.GetTxn().GetCtx()))
 				if err != nil {
 					goto handleError
 				}
-				dbHandler, err = handler.storage.Database(handler.dbName, txnHandler.GetTxn().GetCtx())
-				if err != nil {
-					goto handleError
-				}
-				tableHandler, err = dbHandler.Relation(handler.tableName, txnHandler.GetTxn().GetCtx())
+				tableHandler, err = dbHandler.Relation(ctx, handler.tableName)
 				if err != nil {
 					goto handleError
 				}
 			}
-			err = tableHandler.Write(handler.timestamp, handler.batchData, txnHandler.GetTxn().GetCtx())
+			err = tableHandler.Write(ctx, handler.batchData)
 			if handler.oneTxnPerBatch {
 				if err != nil {
 					goto handleError
 				}
-				err = txnHandler.CommitAfterAutocommitOnly()
+				err = tmpSes.TxnCommitSingleStatement(nil)
 				if err != nil {
 					goto handleError
 				}
@@ -1750,7 +1752,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		}
 
 		if handler.oneTxnPerBatch && err != nil {
-			err2 := txnHandler.RollbackAfterAutocommitOnly()
+			err2 := tmpSes.TxnRollbackSingleStatement(nil)
 			if err2 != nil {
 				logutil.Errorf("rollback failed.error:%v", err2)
 			}
@@ -1852,33 +1854,31 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				wait_a := time.Now()
 				handler.ThreadInfo.SetTime(wait_a)
 				handler.ThreadInfo.SetCnt(1)
-				txnHandler := handler.txnHandler
+				var txnHandler *TxnHandler
 				tableHandler := handler.tableHandler
 				// dbHandler := handler.dbHandler
+				initSes := handler.ses
+				tmpSes := NewSession(initSes.GetMysqlProtocol(), initSes.GuestMmu, initSes.Mempool, initSes.Pu, gSysVariables)
 				var dbHandler engine.Database
 				if !handler.skipWriteBatch {
 					if handler.oneTxnPerBatch {
-						txnHandler = InitTxnHandler(config.StorageEngine)
-						_, err = txnHandler.StartByAutocommitIfNeeded()
-						if err != nil {
-							goto handleError2
-						}
-						dbHandler, err = handler.storage.Database(handler.dbName, txnHandler.GetTxn().GetCtx())
+						txnHandler = tmpSes.GetTxnHandler()
+						dbHandler, err = tmpSes.GetStorage().Database(ctx, handler.dbName, engine.Snapshot(txnHandler.GetTxn().GetCtx()))
 						if err != nil {
 							goto handleError2
 						}
 						//new relation
-						tableHandler, err = dbHandler.Relation(handler.tableName, txnHandler.GetTxn().GetCtx())
+						tableHandler, err = dbHandler.Relation(ctx, handler.tableName)
 						if err != nil {
 							goto handleError2
 						}
 					}
-					err = tableHandler.Write(handler.timestamp, handler.batchData, txnHandler.GetTxn().GetCtx())
+					err = tableHandler.Write(ctx, handler.batchData)
 					if handler.oneTxnPerBatch {
 						if err != nil {
 							goto handleError2
 						}
-						err = txnHandler.CommitAfterAutocommitOnly()
+						err = tmpSes.TxnCommitSingleStatement(nil)
 						if err != nil {
 							goto handleError2
 						}
@@ -1899,7 +1899,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				}
 
 				if handler.oneTxnPerBatch && err != nil {
-					err2 := txnHandler.RollbackAfterAutocommitOnly()
+					err2 := tmpSes.TxnRollbackSingleStatement(nil)
 					if err2 != nil {
 						logutil.Errorf("rollback failed.error:%v", err2)
 					}
@@ -2016,6 +2016,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			tableName:            string(load.Table.Name()),
 			dbName:               dbName,
 			txnHandler:           ses.GetTxnHandler(),
+			ses:                  ses,
 			oneTxnPerBatch:       ses.Pu.SV.GetOneTxnPerBatchDuringLoad(),
 			lineCount:            0,
 			batchSize:            curBatchSize,
@@ -2081,8 +2082,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 
 	//TODO: remove it after tae is ready
 	if handler.oneTxnPerBatch {
-		txnHandler := ses.GetTxnHandler()
-		err = txnHandler.CommitAfterAutocommitOnly()
+		err = ses.TxnCommitSingleStatement(nil)
 		if err != nil {
 			return nil, err
 		}

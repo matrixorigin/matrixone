@@ -26,6 +26,7 @@ import (
 
 // Controller is used to manage operators.
 type Controller struct {
+	// operators is a map from shardID to its operators.
 	operators map[uint64][]*Operator
 }
 
@@ -62,34 +63,33 @@ func (c *Controller) GetOperators(shardID uint64) []*Operator {
 	return c.operators[shardID]
 }
 
-func (c *Controller) GetRemovingReplicas() map[uint64][]uint64 {
-	removing := make(map[uint64][]uint64)
+type ExecutingReplicas struct {
+	Adding   map[uint64][]uint64
+	Removing map[uint64][]uint64
+	Starting map[uint64][]uint64
+}
+
+func (c *Controller) GetExecutingReplicas() ExecutingReplicas {
+	executing := ExecutingReplicas{
+		Adding:   make(map[uint64][]uint64),
+		Removing: make(map[uint64][]uint64),
+		Starting: make(map[uint64][]uint64),
+	}
 	for shardID, operators := range c.operators {
 		for _, op := range operators {
 			for _, step := range op.steps {
 				switch step := step.(type) {
 				case RemoveLogService:
-					removing[shardID] = append(removing[shardID], step.ReplicaID)
-				}
-			}
-		}
-	}
-	return removing
-}
-
-func (c *Controller) GetAddingReplicas() map[uint64][]uint64 {
-	adding := make(map[uint64][]uint64)
-	for shardID, operators := range c.operators {
-		for _, op := range operators {
-			for _, step := range op.steps {
-				switch step := step.(type) {
+					executing.Removing[shardID] = append(executing.Removing[shardID], step.ReplicaID)
 				case AddLogService:
-					adding[shardID] = append(adding[shardID], step.ReplicaID)
+					executing.Adding[shardID] = append(executing.Adding[shardID], step.ReplicaID)
+				case StartLogService:
+					executing.Starting[shardID] = append(executing.Starting[shardID], step.ReplicaID)
 				}
 			}
 		}
 	}
-	return adding
+	return executing
 }
 
 func (c *Controller) RemoveFinishedOperator(logState pb.LogState, dnState pb.DNState) {
@@ -104,7 +104,8 @@ func (c *Controller) RemoveFinishedOperator(logState pb.LogState, dnState pb.DNS
 	}
 }
 
-func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.DNState) (commands []pb.ScheduleCommand) {
+func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
+	dnState pb.DNState) (commands []pb.ScheduleCommand) {
 	for _, op := range ops {
 		c.operators[op.shardID] = append(c.operators[op.shardID], op)
 		step := op.Check(logState, dnState)
@@ -115,7 +116,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 				UUID: st.Target,
 				ConfigChange: &pb.ConfigChange{
 					Replica: pb.Replica{
-						UUID:      st.StoreID,
+						UUID:      st.UUID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 						Epoch:     st.Epoch,
@@ -129,7 +130,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 				UUID: st.Target,
 				ConfigChange: &pb.ConfigChange{
 					Replica: pb.Replica{
-						UUID:      st.StoreID,
+						UUID:      st.UUID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 						Epoch:     st.Epoch,
@@ -140,10 +141,10 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 			}
 		case StartLogService:
 			cmd = pb.ScheduleCommand{
-				UUID: st.StoreID,
+				UUID: st.UUID,
 				ConfigChange: &pb.ConfigChange{
 					Replica: pb.Replica{
-						UUID:      st.StoreID,
+						UUID:      st.UUID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
@@ -153,10 +154,10 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 			}
 		case StopLogService:
 			cmd = pb.ScheduleCommand{
-				UUID: st.StoreID,
+				UUID: st.UUID,
 				ConfigChange: &pb.ConfigChange{
 					Replica: pb.Replica{
-						UUID:    st.StoreID,
+						UUID:    st.UUID,
 						ShardID: st.ShardID,
 						Epoch:   st.Epoch,
 					},

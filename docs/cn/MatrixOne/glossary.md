@@ -11,7 +11,7 @@
 | C  |  |
 | Cluster  | MatrixOne的分布式部署形式，由多台主机组成，在逻辑上构成一个整体。|
 | D  |  |
- | Data Storage  | DataStorage接口实现了分布式存储服务，必须在使用MatrixCube之前就预先定义。并且，DataStorage的实现依赖于存储引擎的具体特性 |
+ | Data Storage  | DataStorage接口实现了分布式存储服务<!--，必须在使用MatrixCube之前就预先定义-->。并且，DataStorage的实现依赖于存储引擎的具体特性 |
 | E  |  |
   | Event Notify | 将心跳(Hearbeat)信息同步到所有节点的机制称为Event Notify。|
   | Explicit Transactions| 显式事务，即是一种指定的事务，这种事务需要由你自己决定哪批工作必须成功完成，否则所有部分都不完成。可以使用 `BEGIN TRANSACTION` 和
@@ -23,17 +23,16 @@
   |I|  |
   | Implicit transactions| 隐式事务，即自动提交事务。 |
  | M  |  |
-  | MatrixCube | MatrixCube是一个构建分布式系统的框架，保证了集群的可用性、一致性以及可扩展性。MatrixCube的设计目标是让开发人员只需要关注一个节点上的业务逻辑但却能够轻松实现各种强一致的分布式存储服务。|
  | P  |  |
-  | Prophet | Prophet是MatrixCube中的调度模块，执行Auto-Rebalance操作来维持集群中各个节点的存储量、读写负载均衡。集群中最初的三个节点将作为Prophet节点。|
+  | Prophet | Prophet是<!--MatrixCube中的-->调度模块，执行Auto-Rebalance操作来维持集群中各个节点的存储量、读写负载均衡。集群中最初的三个节点将作为Prophet节点。|
    | Pure Storage | 与Prophet相对, pure storage是另一种类型的节点，并不执行调度工作，只进行普通的存储工作。|
 | R  |  |
   | Replica | 为了保证存储服务的高可用性，每部分数据需要存储多份，并且分布在不同的节点上，因此将一个数据副本称之为一个Replica。同一部分的数据会包含多个Replica，并且每个Replica中的数据都是相同的。 |
   | S  |  |
   | Snapshot Isolation (SI) | Snapshot Isolation是一种在实践中广泛应用的多版本并发控制技术，MatrixOne支持Snapshot隔离级别的分布式事务。|
- | Store |MatrixCube分布式系统包括一定数量的主机，数据正是存放在这些机器中，而我们把集群中的每台主机称之为Store。|
-  | Shard | 数据库中的数据按逻辑组织成表，而数据又可以按照不同的分区进行存储，如此可以得到更好的扩展性。因此，数据在MatrixCube集群中分片存储，每个数据分片我们称之为一个Shard，而一个Store中可以管理多个Shard；当Shard的存储容量超过限制时，会进行分裂(Split)。 |
- | Shard Splitting | 当一个Shard超过了规定的存储容量限制时，MatrixCube将会把该Shard分裂（Split）为两个存储量相当的Shard。 |
+ | Store |<!--MatrixCube-->分布式系统包括一定数量的主机，数据正是存放在这些机器中，而我们把集群中的每台主机称之为Store。|
+  | Shard | 数据库中的数据按逻辑组织成表，而数据又可以按照不同的分区进行存储，如此可以得到更好的扩展性。因此，数据在<!--MatrixCube-->集群中分片存储，每个数据分片我们称之为一个Shard，而一个Store中可以管理多个Shard；当Shard的存储容量超过限制时，会进行分裂(Split)。 |
+ | Shard Splitting | 当一个Shard超过了规定的存储容量限制时，<!--MatrixCube-->集群将会把该Shard分裂（Split）为两个存储量相当的Shard。 |
   | Shard Proxy | Shard Proxy是接受用户读写请求的中心模块，在收到请求后将其发送到相应的节点以做出回应|
 
 ### **重要概念**

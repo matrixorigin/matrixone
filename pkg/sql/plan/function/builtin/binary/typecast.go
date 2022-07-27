@@ -420,10 +420,10 @@ func datetimeToDate(xs []types.Datetime, rs []types.Date) ([]types.Date, error) 
 	return rs, nil
 }
 
-func datetimeToBytes(xs []types.Datetime, rs *types.Bytes) (*types.Bytes, error) {
+func datetimeToBytes(xs []types.Datetime, rs *types.Bytes, precision int32) (*types.Bytes, error) {
 	oldLen := uint32(0)
 	for _, x := range xs {
-		rs.Data = append(rs.Data, []byte(x.String())...)
+		rs.Data = append(rs.Data, []byte(x.String2(precision))...)
 		newLen := uint32(len(rs.Data))
 		rs.Offsets = append(rs.Offsets, oldLen)
 		rs.Lengths = append(rs.Lengths, newLen-oldLen)
@@ -585,7 +585,13 @@ func Decimal128ToDecimal64(xs []types.Decimal128, xsScale int32, ysPrecision, ys
 
 func NumericToBool[T constraints.Integer | constraints.Float](xs []T, rs []bool) ([]bool, error) {
 	for i, x := range xs {
-		rs[i] = (x != 0)
+		if x == 0 {
+			rs[i] = false
+		} else if x == 1 {
+			rs[i] = true
+		} else {
+			return nil, moerr.NewError(moerr.INVALID_ARGUMENT, fmt.Sprintf("Can't cast '%v' as boolean type.", x))
+		}
 	}
 	return rs, nil
 }

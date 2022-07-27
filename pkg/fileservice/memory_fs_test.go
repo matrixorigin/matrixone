@@ -38,6 +38,14 @@ func TestMemoryFS(t *testing.T) {
 		})
 	})
 
+	t.Run("cache", func(t *testing.T) {
+		testCache(t, func() FileService {
+			fs, err := NewMemoryFS()
+			assert.Nil(t, err)
+			return fs
+		})
+	})
+
 }
 
 func BenchmarkMemoryFS(b *testing.B) {

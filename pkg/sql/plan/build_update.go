@@ -15,117 +15,61 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/errno"
+	"errors"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+type tableInfo struct {
+	dbNames     []string
+	tableNames  []string
+	baseNameMap map[string]string // key: alias name, value: base name
+}
+
+type updateCol struct {
+	dbName       string
+	tblName      string
+	aliasTblName string
+	colDef       *ColDef
+}
+
 func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
-	// Check length of update list
-	updateColLen := len(stmt.Exprs)
-	if updateColLen == 0 {
-		return nil, errors.New(errno.CaseNotFound, "no column will be update")
-	}
-	// Check database's name and table's name
-	if len(stmt.Tables) != 1 {
-		return nil, errors.New(errno.FeatureNotSupported, "cannot update from multiple tables")
-	}
-	alsTbl, ok := stmt.Tables[0].(*tree.AliasedTableExpr)
-	if !ok {
-		return nil, errors.New(errno.FeatureNotSupported, "cannot update from multiple tables")
-	}
-	tbl, ok := alsTbl.Expr.(*tree.TableName)
-	if !ok {
-		return nil, errors.New(errno.FeatureNotSupported, "cannot update from multiple tables")
-	}
-	var dbName string
-	if tbl.SchemaName == "" {
-		dbName = ctx.DefaultDatabase()
-	}
-	objRef, tableDef := ctx.Resolve(dbName, string(tbl.ObjectName))
-	if tableDef == nil {
-		return nil, errors.New(errno.FeatureNotSupported, "cannot find update table")
-	}
-
-	// Function of getting def of col from col name
-	getColTyp := func(name string) *plan.Type {
-		for _, col := range tableDef.Cols {
-			if col.Name == name {
-				return col.Typ
-			}
-		}
-		return nil
-	}
-
-	// Check if update primary key
-	updateAttrs := make([]string, 0, len(stmt.Exprs))
-	for _, expr := range stmt.Exprs {
-		if len(expr.Names) != 1 {
-			return nil, errors.New(errno.CaseNotFound, "the set list of update must be one")
-		}
-		updateColName := expr.Names[0].Parts[0]
-		for _, name := range updateAttrs {
-			if updateColName == name {
-				return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "update's column name is duplicate")
-			}
-		}
-		updateAttrs = append(updateAttrs, updateColName)
-	}
-
-	var useProjectExprs tree.SelectExprs
-	// Build projection of primary key
-	var priKey string
-	var priKeyIdx int32 = -1
-	priKeys := ctx.GetPrimaryKeyDef(objRef.SchemaName, tableDef.Name)
-	for _, key := range priKeys {
-		for _, updateName := range updateAttrs {
-			if key.Name == updateName {
-				e, _ := tree.NewUnresolvedName(key.Name)
-				useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
-				priKey = key.Name
-				priKeyIdx = 0
-				break
-			}
+	// build map between base table and alias table
+	tf := &tableInfo{baseNameMap: make(map[string]string)}
+	extractWithTable(stmt.With, tf, ctx)
+	for _, expr := range stmt.Tables {
+		if err := extractExprTable(expr, tf, ctx); err != nil {
+			return nil, err
 		}
 	}
 
-	// Build projection of hide key
-	hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name).GetName()
-	if priKeyIdx == -1 {
-		if hideKey == "" {
-			return nil, errors.New(errno.InternalError, "cannot find hide key now")
+	// build reference
+	objRefs := make([]*ObjectRef, 0, len(tf.dbNames))
+	tblRefs := make([]*TableDef, 0, len(tf.tableNames))
+	for i := range tf.dbNames {
+		objRef, tblRef := ctx.Resolve(tf.dbNames[i], tf.tableNames[i])
+		if tblRef == nil {
+			return nil, fmt.Errorf("cannot find update table: %s.%s", tf.dbNames[i], tf.tableNames[i])
 		}
-		e, _ := tree.NewUnresolvedName(hideKey)
-		useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+		objRefs = append(objRefs, objRef)
+		tblRefs = append(tblRefs, tblRef)
 	}
 
-	// Build projection for select
-	for _, expr := range stmt.Exprs {
-		useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: expr.Expr})
+	// check and build update's columns
+	updateCols, err := buildUpdateColumns(stmt.Exprs, objRefs, tblRefs, tf.baseNameMap)
+	if err != nil {
+		return nil, err
 	}
 
-	// build other column which doesn't update
-	var otherAttrs []string = nil
-	var attrOrders []string = nil
-	if priKeyIdx == 0 {
-		for _, col := range tableDef.Cols {
-			if col.Name == hideKey {
-				continue
-			}
-			attrOrders = append(attrOrders, col.Name)
-			find := false
-			for _, attr := range updateAttrs {
-				if attr == col.Name {
-					find = true
-				}
-			}
-			if !find {
-				otherAttrs = append(otherAttrs, col.Name)
-				e, _ := tree.NewUnresolvedName(col.Name)
-				useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
-			}
-		}
+	// group update columns
+	updateColsArray, updateExprsArray := groupUpdateAttrs(updateCols, stmt.Exprs)
+
+	// build update ctx and projection
+	updateCtxs, useProjectExprs, err := buildCtxAndProjection(updateColsArray, updateExprsArray, tf.baseNameMap, tblRefs, ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	// build the stmt of select and append select node
@@ -140,6 +84,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		},
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,
+		With:    stmt.With,
 	}
 	usePlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
 	if err != nil {
@@ -148,38 +93,359 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	usePlan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_UPDATE
 	qry := usePlan.Plan.(*plan.Plan_Query).Query
 
-	// Build projection for update expr
+	// rebuild projection for update cols to get right type
 	lastNode := qry.Nodes[qry.Steps[len(qry.Steps)-1]]
-	idx := 1
-	for _, colName := range updateAttrs {
-		origTyp := getColTyp(colName)
-		lastNode.ProjectList[idx], err = makePlan2CastExpr(lastNode.ProjectList[idx], origTyp)
-		if err != nil {
-			return nil, err
+	for _, ct := range updateCtxs {
+		var idx int
+		if ct.PriKeyIdx != -1 {
+			idx = int(ct.PriKeyIdx) + 1
+		} else {
+			idx = int(ct.HideKeyIdx) + 1
 		}
-		idx++
+
+		for _, col := range ct.UpdateCols {
+			lastNode.ProjectList[idx], err = makePlan2CastExpr(lastNode.ProjectList[idx], col.Typ)
+			if err != nil {
+				return nil, err
+			}
+			idx++
+		}
 	}
 
-	// Build update node
+	// build update node
 	node := &Node{
-		NodeType: plan.Node_UPDATE,
-		ObjRef:   objRef,
-		TableDef: tableDef,
-		Children: []int32{qry.Steps[len(qry.Steps)-1]},
-		NodeId:   int32(len(qry.Nodes)),
-		UpdateInfo: &plan.UpdateInfo{
-			PriKey:      priKey,
-			PriKeyIdx:   priKeyIdx,
-			HideKey:     hideKey,
-			UpdateAttrs: updateAttrs,
-			OtherAttrs:  otherAttrs,
-			AttrOrders:  attrOrders,
-		},
+		NodeType:   plan.Node_UPDATE,
+		ObjRef:     nil,
+		TableDef:   nil,
+		Children:   []int32{qry.Steps[len(qry.Steps)-1]},
+		NodeId:     int32(len(qry.Nodes)),
+		UpdateCtxs: updateCtxs,
 	}
 	qry.Nodes = append(qry.Nodes, node)
 	qry.Steps[len(qry.Steps)-1] = node.NodeId
 
 	return usePlan, nil
+}
+
+func extractSelectTable(stmt tree.TableExpr, tblName, dbName *string, ctx CompilerContext) {
+	switch s := stmt.(type) {
+	case *tree.Select:
+		if clause, ok := s.Select.(*tree.SelectClause); ok {
+			if len(clause.From.Tables) == 1 {
+				extractSelectTable(clause.From.Tables[0], tblName, dbName, ctx)
+			}
+		}
+	case *tree.ParenSelect:
+		if clause, ok := s.Select.Select.(*tree.SelectClause); ok {
+			if len(clause.From.Tables) == 1 {
+				extractSelectTable(clause.From.Tables[0], tblName, dbName, ctx)
+			}
+		}
+	case *tree.ParenTableExpr:
+		extractSelectTable(s.Expr, tblName, dbName, ctx)
+	case *tree.AliasedTableExpr:
+		if s.As.Cols != nil {
+			return
+		}
+		extractSelectTable(s.Expr, tblName, dbName, ctx)
+	case *tree.TableName:
+		*dbName = string(s.SchemaName)
+		*tblName = string(s.ObjectName)
+		if *dbName == "" {
+			*dbName = ctx.DefaultDatabase()
+		}
+	}
+}
+
+func extractWithTable(with *tree.With, tf *tableInfo, ctx CompilerContext) {
+	if with == nil {
+		return
+	}
+	for _, cte := range with.CTEs {
+		if cte.Name.Cols != nil {
+			continue
+		}
+		tblName := new(string)
+		dbName := new(string)
+		switch s := cte.Stmt.(type) {
+		case *tree.Select:
+			if clause, ok := s.Select.(*tree.SelectClause); ok {
+				if len(clause.From.Tables) == 1 {
+					extractSelectTable(clause.From.Tables[0], tblName, dbName, ctx)
+				}
+			}
+		case *tree.ParenSelect:
+			if clause, ok := s.Select.Select.(*tree.SelectClause); ok {
+				if len(clause.From.Tables) == 1 {
+					extractSelectTable(clause.From.Tables[0], tblName, dbName, ctx)
+				}
+			}
+		}
+		if *tblName != "" {
+			tf.tableNames = append(tf.tableNames, *tblName)
+			tf.dbNames = append(tf.dbNames, *dbName)
+			tf.baseNameMap[string(cte.Name.Alias)] = *tblName
+		}
+	}
+}
+
+func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tree.Exprs, baseNameMap map[string]string, tblRefs []*TableDef, ctx CompilerContext) ([]*plan.UpdateCtx, tree.SelectExprs, error) {
+	var useProjectExprs tree.SelectExprs
+	updateCtxs := make([]*plan.UpdateCtx, 0, len(updateColsArray))
+	var offset int32 = 0
+
+	for i, updateCols := range updateColsArray {
+		// figure out if primary key update
+		var priKey string
+		var priKeyIdx int32 = -1
+		priKeys := ctx.GetPrimaryKeyDef(updateCols[0].dbName, updateCols[0].tblName)
+		for _, key := range priKeys {
+			for _, updateCol := range updateCols {
+				if key.Name == updateCol.colDef.Name {
+					e, _ := tree.NewUnresolvedName(updateCol.dbName, updateCol.aliasTblName, key.Name)
+					useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+					priKey = key.Name
+					priKeyIdx = offset
+					break
+				}
+			}
+		}
+		// use hide key to update if primary key will not be updated
+		var hideKeyIdx int32 = -1
+		hideKey := ctx.GetHideKeyDef(updateCols[0].dbName, updateCols[0].tblName).GetName()
+		if priKeyIdx == -1 {
+			if hideKey == "" {
+				return nil, nil, errors.New("internal error: cannot find hide key")
+			}
+			e, _ := tree.NewUnresolvedName(updateCols[0].dbName, updateCols[0].aliasTblName, hideKey)
+			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+			hideKeyIdx = offset
+		}
+		// construct projection for list of update expr
+		for _, expr := range updateExprsArray[i] {
+			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: expr})
+		}
+
+		// construct other cols and table offset
+		var otherAttrs []string = nil
+		var k int
+		// get table reference index
+		for k = 0; k < len(tblRefs); k++ {
+			if updateCols[0].tblName == tblRefs[k].Name {
+				break
+			}
+		}
+		orderAttrs := make([]string, 0, len(tblRefs[k].Cols)-1)
+		// figure out other cols that will not be updated
+		for _, col := range tblRefs[k].Cols {
+			if col.Name == hideKey {
+				continue
+			}
+
+			orderAttrs = append(orderAttrs, col.Name)
+
+			isUpdateCol := false
+			for _, updateCol := range updateCols {
+				if updateCol.colDef.Name == col.Name {
+					isUpdateCol = true
+				}
+			}
+			if !isUpdateCol {
+				otherAttrs = append(otherAttrs, col.Name)
+				e, _ := tree.NewUnresolvedName(updateCols[0].aliasTblName, col.Name)
+				useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+			}
+		}
+		offset += int32(len(orderAttrs)) + 1
+
+		ct := &plan.UpdateCtx{
+			DbName:     updateCols[0].dbName,
+			TblName:    updateCols[0].tblName,
+			PriKey:     priKey,
+			PriKeyIdx:  priKeyIdx,
+			HideKey:    hideKey,
+			HideKeyIdx: hideKeyIdx,
+			OtherAttrs: otherAttrs,
+			OrderAttrs: orderAttrs,
+		}
+		for _, u := range updateCols {
+			ct.UpdateCols = append(ct.UpdateCols, u.colDef)
+		}
+		updateCtxs = append(updateCtxs, ct)
+
+	}
+	return updateCtxs, useProjectExprs, nil
+}
+
+func groupUpdateAttrs(updateCols []updateCol, updateExprs tree.UpdateExprs) ([][]updateCol, []tree.Exprs) {
+	var updateColsArray [][]updateCol
+	var updateExprsArray []tree.Exprs
+
+	groupMap := make(map[string]int)
+	for i := 0; i < len(updateCols); i++ {
+		// check if it has dealt with same table name
+		if _, ok := groupMap[updateCols[i].tblName]; ok {
+			continue
+		}
+		groupMap[updateCols[i].tblName] = 1
+
+		var cols []updateCol
+		cols = append(cols, updateCols[i])
+
+		var exprs tree.Exprs
+		exprs = append(exprs, updateExprs[i].Expr)
+
+		// group same table name
+		for j := i + 1; j < len(updateCols); j++ {
+			if updateCols[j].tblName == updateCols[i].tblName {
+				cols = append(cols, updateCols[j])
+				exprs = append(exprs, updateExprs[j].Expr)
+			}
+		}
+
+		updateColsArray = append(updateColsArray, cols)
+		updateExprsArray = append(updateExprsArray, exprs)
+	}
+	return updateColsArray, updateExprsArray
+}
+
+func extractExprTable(expr tree.TableExpr, tf *tableInfo, ctx CompilerContext) error {
+	switch t := expr.(type) {
+	case *tree.TableName:
+		tblName := string(t.ObjectName)
+		if _, ok := tf.baseNameMap[tblName]; ok {
+			return nil
+		}
+		dbName := string(t.SchemaName)
+		if dbName == "" {
+			dbName = ctx.DefaultDatabase()
+		}
+		tf.tableNames = append(tf.tableNames, tblName)
+		tf.dbNames = append(tf.dbNames, dbName)
+		tf.baseNameMap[tblName] = tblName
+		return nil
+	case *tree.AliasedTableExpr:
+		tn, ok := t.Expr.(*tree.TableName)
+		if !ok {
+			return nil
+		}
+		if t.As.Cols != nil {
+			return fmt.Errorf("syntax error at %s", tree.String(t, dialect.MYSQL))
+		}
+		tblName := string(tn.ObjectName)
+		if _, ok := tf.baseNameMap[tblName]; ok {
+			return nil
+		}
+		dbName := string(tn.SchemaName)
+		if dbName == "" {
+			dbName = ctx.DefaultDatabase()
+		}
+		tf.tableNames = append(tf.tableNames, tblName)
+		tf.dbNames = append(tf.dbNames, dbName)
+		asName := string(t.As.Alias)
+		if asName != "" {
+			tf.baseNameMap[asName] = tblName
+		} else {
+			tf.baseNameMap[tblName] = tblName
+		}
+		return nil
+	case *tree.JoinTableExpr:
+		if err := extractExprTable(t.Left, tf, ctx); err != nil {
+			return err
+		}
+		return extractExprTable(t.Right, tf, ctx)
+	default:
+		return nil
+	}
+}
+
+func buildUpdateColumns(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblRefs []*TableDef, baseNameMap map[string]string) ([]updateCol, error) {
+	updateCols := make([]updateCol, 0, len(objRefs))
+	colCountMap := make(map[string]int)
+	for _, expr := range exprs {
+		var ctx updateCol
+		dbName, tableName, columnName := expr.Names[0].GetNames()
+		// check dbName
+		if dbName != "" {
+			hasFindDbName := false
+			for i := range objRefs {
+				if objRefs[i].SchemaName == dbName {
+					hasFindDbName = true
+					if tableName != tblRefs[i].Name {
+						return nil, fmt.Errorf("cannot find update table of %s in database of %s", tableName, dbName)
+					}
+				}
+			}
+			if !hasFindDbName {
+				return nil, fmt.Errorf("cannot find update database of %s", dbName)
+			}
+			ctx.dbName = dbName
+		}
+		// check tableName
+		if tableName != "" {
+			realTableName, ok := baseNameMap[tableName]
+			if !ok {
+				return nil, fmt.Errorf("the target table %s of the UPDATE is not updatable", tableName)
+			}
+			hasFindTableName := false
+			for i := range tblRefs {
+				// table reference
+				if tblRefs[i].Name == realTableName {
+					hasFindColumnName := false
+
+					for _, col := range tblRefs[i].Cols {
+						if col.Name == columnName {
+							colName := fmt.Sprintf("%s.%s", realTableName, columnName)
+							if cnt, ok := colCountMap[colName]; ok && cnt > 0 {
+								return nil, fmt.Errorf("the target column %s.%s of the UPDATE is duplicate", tableName, columnName)
+							} else {
+								colCountMap[colName]++
+							}
+
+							hasFindColumnName = true
+							ctx.colDef = col
+							break
+						}
+					}
+					if !hasFindColumnName {
+						return nil, fmt.Errorf("the target column %s.%s of the UPDATE is ambiguous", tableName, columnName)
+					}
+
+					hasFindTableName = true
+					ctx.dbName = objRefs[i].SchemaName
+
+					break
+				}
+			}
+			if !hasFindTableName {
+				return nil, fmt.Errorf("the target table %s of the UPDATE is not updatable", tableName)
+			}
+			ctx.tblName = realTableName
+			ctx.aliasTblName = tableName
+		} else {
+			for i := range tblRefs {
+				for _, col := range tblRefs[i].Cols {
+					if col.Name == columnName {
+						colName := fmt.Sprintf("%s.%s", tblRefs[i].Name, columnName)
+						if cnt, ok := colCountMap[colName]; ok && cnt > 0 {
+							return nil, fmt.Errorf("the target column %s of the UPDATE is ambiguous", columnName)
+						} else {
+							colCountMap[colName]++
+						}
+
+						ctx.dbName = objRefs[i].SchemaName
+						ctx.tblName = tblRefs[i].Name
+						ctx.aliasTblName = tblRefs[i].Name
+						ctx.colDef = col
+
+						break
+					}
+				}
+			}
+		}
+		updateCols = append(updateCols, ctx)
+	}
+	return updateCols, nil
 }
 
 func isSameColumnType(t1 *Type, t2 *Type) bool {

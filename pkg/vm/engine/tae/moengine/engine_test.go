@@ -15,12 +15,17 @@
 package moengine
 
 import (
+	"context"
+	"testing"
+
 	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
-	"testing"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -44,17 +49,18 @@ func initDB(t *testing.T, opts *options.Options) *db.DB {
 }
 
 func TestEngine(t *testing.T) {
+	ctx := context.TODO()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	e := NewEngine(tae)
 	txn, err := e.StartTxn(nil)
 	assert.Nil(t, err)
-	err = e.Create(0, "db", 0, txn.GetCtx())
+	err = e.Create(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	names := e.Databases(txn.GetCtx())
+	names, _ := e.Databases(ctx, engine.Snapshot(txn.GetCtx()))
 	assert.Equal(t, 2, len(names))
-	dbase, err := e.Database("db", txn.GetCtx())
+	dbase, err := e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
 
 	schema := catalog.MockSchema(13, 12)
@@ -62,14 +68,14 @@ func TestEngine(t *testing.T) {
 	defs[5].(*engine.AttributeDef).Attr.Default = engine.MakeDefaultExpr(true, int32(3), false)
 	defs[6].(*engine.AttributeDef).Attr.Default = engine.MakeDefaultExpr(true, nil, true)
 	assert.NoError(t, err)
-	err = dbase.Create(0, schema.Name, defs, txn.GetCtx())
+	err = dbase.Create(ctx, schema.Name, defs)
 	assert.Nil(t, err)
-	names = dbase.Relations(txn.GetCtx())
+	names, _ = dbase.Relations(ctx)
 	assert.Equal(t, 1, len(names))
 
-	rel, err := dbase.Relation(schema.Name, txn.GetCtx())
+	rel, err := dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
-	rDefs := rel.TableDefs(nil)
+	rDefs, _ := rel.TableDefs(ctx)
 	assert.Equal(t, 14, len(rDefs))
 	rAttr := rDefs[5].(*engine.AttributeDef).Attr
 	assert.Equal(t, int32(3), rAttr.Default.Value.(int32))
@@ -77,41 +83,40 @@ func TestEngine(t *testing.T) {
 	assert.Equal(t, true, rAttr.Default.IsNull)
 	rAttr = rDefs[7].(*engine.AttributeDef).Attr
 	assert.Equal(t, false, rAttr.Default.Exist)
-	assert.Equal(t, 1, len(rel.Nodes(nil)))
-	assert.Equal(t, ADDR, rel.Nodes(nil)[0].Addr)
 	bat := catalog.MockBatch(schema, 100)
 	defer bat.Close()
 
 	newbat := mobat.New(true, bat.Attrs)
 	newbat.Vecs = CopyToMoVectors(bat.Vecs)
-	err = rel.Write(0, newbat, txn.GetCtx())
+	err = rel.Write(ctx, newbat)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database("db", txn.GetCtx())
+	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	rel, err = dbase.Relation(schema.Name, txn.GetCtx())
+	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
-	attr := rel.GetPrimaryKeys(nil)
+	attr, _ := rel.GetPrimaryKeys(ctx)
 	key := attr[0]
 	bat = catalog.MockBatch(schema, 20)
 	defer bat.Close()
 	newbat = mobat.New(true, bat.Attrs)
 	newbat.Vecs = CopyToMoVectors(bat.Vecs)
-	err = rel.Delete(0, newbat.Vecs[12], key.Name, nil)
+	err = rel.Delete(ctx, newbat.Vecs[12], key.Name)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database("db", txn.GetCtx())
+	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	rel, err = dbase.Relation(schema.Name, txn.GetCtx())
+	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
-	readers := rel.NewReader(10, nil, nil, nil)
+	readers, _ := rel.NewReader(ctx, 10, nil, nil)
+	m := mheap.New(guest.New(1<<20, host.New(1<<20)))
 	for _, reader := range readers {
-		bat, err := reader.Read([]uint64{uint64(1)}, []string{schema.ColDefs[1].Name})
+		bat, err := reader.Read([]string{schema.ColDefs[1].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 80, vector.Length(bat.Vecs[0]))
@@ -121,17 +126,18 @@ func TestEngine(t *testing.T) {
 }
 
 func TestEngineAllType(t *testing.T) {
+	ctx := context.TODO()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	e := NewEngine(tae)
 	txn, err := e.StartTxn(nil)
 	assert.Nil(t, err)
-	err = e.Create(0, "db", 0, txn.GetCtx())
+	err = e.Create(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	names := e.Databases(txn.GetCtx())
+	names, _ := e.Databases(ctx, engine.Snapshot(txn.GetCtx()))
 	assert.Equal(t, 2, len(names))
-	dbase, err := e.Database("db", txn.GetCtx())
+	dbase, err := e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
 
 	schema := catalog.MockSchemaAll(18, 12)
@@ -139,14 +145,14 @@ func TestEngineAllType(t *testing.T) {
 	defs[5].(*engine.AttributeDef).Attr.Default = engine.MakeDefaultExpr(true, uint16(3), false)
 	defs[6].(*engine.AttributeDef).Attr.Default = engine.MakeDefaultExpr(true, nil, true)
 	assert.NoError(t, err)
-	err = dbase.Create(0, schema.Name, defs, txn.GetCtx())
+	err = dbase.Create(ctx, schema.Name, defs)
 	assert.Nil(t, err)
-	names = dbase.Relations(txn.GetCtx())
+	names, _ = dbase.Relations(ctx)
 	assert.Equal(t, 1, len(names))
 
-	rel, err := dbase.Relation(schema.Name, txn.GetCtx())
+	rel, err := dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
-	rDefs := rel.TableDefs(nil)
+	rDefs, _ := rel.TableDefs(ctx)
 	assert.Equal(t, 19, len(rDefs))
 	rAttr := rDefs[5].(*engine.AttributeDef).Attr
 	assert.Equal(t, uint16(3), rAttr.Default.Value.(uint16))
@@ -157,36 +163,36 @@ func TestEngineAllType(t *testing.T) {
 
 	newbat := mobat.New(true, basebat.Attrs)
 	newbat.Vecs = CopyToMoVectors(basebat.Vecs)
-	err = rel.Write(0, newbat, txn.GetCtx())
+	err = rel.Write(ctx, newbat)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database("db", txn.GetCtx())
+	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	rel, err = dbase.Relation(schema.Name, txn.GetCtx())
+	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
-	attr := rel.GetPrimaryKeys(nil)
+	attr, _ := rel.GetPrimaryKeys(ctx)
 	key := attr[0]
 	bat := catalog.MockBatch(schema, 20)
 	defer bat.Close()
 	newbat1 := mobat.New(true, bat.Attrs)
 	newbat1.Vecs = CopyToMoVectors(bat.Vecs)
-	err = rel.Delete(0, newbat1.Vecs[12], key.Name, nil)
+	err = rel.Delete(ctx, newbat1.Vecs[12], key.Name)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database("db", txn.GetCtx())
+	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	rel, err = dbase.Relation(schema.Name, txn.GetCtx())
+	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
 	rows := rel.Rows()
-	refs := make([]uint64, len(schema.Attrs()))
-	readers := rel.NewReader(10, nil, nil, nil)
+	readers, _ := rel.NewReader(ctx, 10, nil, nil)
+	m := mheap.New(guest.New(1<<20, host.New(1<<20)))
 	for _, reader := range readers {
-		bat, err := reader.Read(refs, schema.Attrs())
+		bat, err := reader.Read(schema.Attrs(), nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 80, vector.Length(bat.Vecs[0]))
@@ -194,15 +200,15 @@ func TestEngineAllType(t *testing.T) {
 			assert.Equal(t, vec.Get(0), basebat.Vecs[12].Get(20))
 		}
 	}
-	delRows, err := rel.Truncate(nil)
+	delRows, err := rel.Truncate(ctx)
 	assert.Nil(t, err)
 	assert.Equal(t, rows, int64(delRows))
 	assert.Nil(t, txn.Commit())
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database("db", txn.GetCtx())
+	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	rel, err = dbase.Relation(schema.Name, txn.GetCtx())
+	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
 	assert.Zero(t, rel.Rows())
 	assert.Nil(t, txn.Commit())
@@ -210,50 +216,50 @@ func TestEngineAllType(t *testing.T) {
 }
 
 func TestTxnRelation_GetHideKey(t *testing.T) {
+	ctx := context.TODO()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	e := NewEngine(tae)
 	txn, err := e.StartTxn(nil)
 	assert.Nil(t, err)
-	err = e.Create(0, "db", 0, txn.GetCtx())
+	err = e.Create(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	names := e.Databases(txn.GetCtx())
+	names, _ := e.Databases(ctx, engine.Snapshot(txn.GetCtx()))
 	assert.Equal(t, 2, len(names))
-	dbase, err := e.Database("db", txn.GetCtx())
+	dbase, err := e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
 
 	schema := catalog.MockSchema(13, 15)
 	defs, err := SchemaToDefs(schema)
 	assert.NoError(t, err)
-	err = dbase.Create(0, schema.Name, defs, txn.GetCtx())
+	err = dbase.Create(ctx, schema.Name, defs)
 	assert.Nil(t, err)
-	names = dbase.Relations(txn.GetCtx())
+	names, _ = dbase.Relations(ctx)
 	assert.Equal(t, 1, len(names))
 
-	rel, err := dbase.Relation(schema.Name, txn.GetCtx())
+	rel, err := dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
-	assert.Equal(t, 1, len(rel.Nodes(nil)))
-	assert.Equal(t, ADDR, rel.Nodes(nil)[0].Addr)
 	bat := catalog.MockBatch(schema, 100)
 	defer bat.Close()
 
 	newbat := mobat.New(true, bat.Attrs)
 	newbat.Vecs = CopyToMoVectors(bat.Vecs)
-	err = rel.Write(0, newbat, txn.GetCtx())
+	err = rel.Write(ctx, newbat)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database("db", txn.GetCtx())
+	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	rel, err = dbase.Relation(schema.Name, txn.GetCtx())
+	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
-	readers := rel.NewReader(10, nil, nil, nil)
+	readers, _ := rel.NewReader(ctx, 10, nil, nil)
 	delete := mobat.New(true, bat.Attrs)
+	m := mheap.New(guest.New(1<<20, host.New(1<<20)))
 	for _, reader := range readers {
-		bat, err := reader.Read([]uint64{uint64(1)}, []string{schema.ColDefs[13].Name})
+		bat, err := reader.Read([]string{schema.ColDefs[13].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 100, vector.Length(bat.Vecs[0]))
@@ -262,26 +268,28 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	}
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database("db", txn.GetCtx())
+	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	rel, err = dbase.Relation(schema.Name, txn.GetCtx())
+	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
-	attr := rel.GetPrimaryKeys(nil)
+	attr, _ := rel.GetPrimaryKeys(ctx)
 	assert.Nil(t, attr)
-	key := rel.GetHideKey(nil)
-	err = rel.Delete(0, delete.Vecs[0], key.Name, nil)
+	keys, _ := rel.GetHideKeys(ctx)
+	key := keys[0]
+	err = rel.Delete(ctx, delete.Vecs[0], key.Name)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database("db", txn.GetCtx())
+	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	rel, err = dbase.Relation(schema.Name, txn.GetCtx())
+	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
-	readers = rel.NewReader(1, nil, nil, nil)
+	readers, _ = rel.NewReader(ctx, 1, nil, nil)
+	m = mheap.New(guest.New(1<<20, host.New(1<<20)))
 	for _, reader := range readers {
-		bat, err := reader.Read([]uint64{uint64(1)}, []string{schema.ColDefs[13].Name})
+		bat, err := reader.Read([]string{schema.ColDefs[13].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 0, vector.Length(bat.Vecs[0]))
@@ -292,46 +300,48 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 }
 
 func TestTxnRelation_Update(t *testing.T) {
+	ctx := context.TODO()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	e := NewEngine(tae)
 	txn, err := e.StartTxn(nil)
 	assert.Nil(t, err)
-	err = e.Create(0, "db", 0, txn.GetCtx())
+	err = e.Create(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	names := e.Databases(txn.GetCtx())
+	names, _ := e.Databases(ctx, engine.Snapshot(txn.GetCtx()))
 	assert.Equal(t, 2, len(names))
-	dbase, err := e.Database("db", txn.GetCtx())
+	dbase, err := e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
 
 	schema := catalog.MockSchema(13, 2)
 	defs, err := SchemaToDefs(schema)
 	assert.NoError(t, err)
-	err = dbase.Create(0, schema.Name, defs, txn.GetCtx())
+	err = dbase.Create(ctx, schema.Name, defs)
 	assert.Nil(t, err)
-	dbase, err = e.Database("db", txn.GetCtx())
+	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	rel, err := dbase.Relation(schema.Name, txn.GetCtx())
+	rel, err := dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
 	bat := catalog.MockBatch(schema, 4)
 	defer bat.Close()
 
 	newbat := mobat.New(true, bat.Attrs)
 	newbat.Vecs = CopyToMoVectors(bat.Vecs)
-	err = rel.Write(0, newbat, txn.GetCtx())
+	err = rel.Write(ctx, newbat)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database("db", txn.GetCtx())
+	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	rel, err = dbase.Relation(schema.Name, txn.GetCtx())
+	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
-	readers := rel.NewReader(10, nil, nil, nil)
+	readers, _ := rel.NewReader(ctx, 10, nil, nil)
 	update := newbat
+	m := mheap.New(guest.New(1<<20, host.New(1<<20)))
 	for _, reader := range readers {
-		bat1, err := reader.Read([]uint64{uint64(1), uint64(1), uint64(1)}, []string{schema.ColDefs[13].Name, schema.ColDefs[0].Name, schema.ColDefs[1].Name})
+		bat1, err := reader.Read([]string{schema.ColDefs[13].Name, schema.ColDefs[0].Name, schema.ColDefs[1].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat1 != nil {
 			assert.Equal(t, 4, vector.Length(bat1.Vecs[0]))
@@ -349,24 +359,25 @@ func TestTxnRelation_Update(t *testing.T) {
 	update.Vecs[2].Col.([]int32)[1] = 10
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database("db", txn.GetCtx())
+	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	rel, err = dbase.Relation(schema.Name, txn.GetCtx())
+	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
-	err = rel.Update(0, update, nil)
+	err = rel.Update(ctx, update)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database("db", txn.GetCtx())
+	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	rel, err = dbase.Relation(schema.Name, txn.GetCtx())
+	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
-	readers = rel.NewReader(10, nil, nil, nil)
+	readers, _ = rel.NewReader(ctx, 10, nil, nil)
+	m = mheap.New(guest.New(1<<20, host.New(1<<20)))
 	for _, reader := range readers {
-		bat, err := reader.Read([]uint64{uint64(1), uint64(1)}, []string{schema.ColDefs[0].Name, schema.ColDefs[1].Name})
+		bat, err := reader.Read([]string{schema.ColDefs[0].Name, schema.ColDefs[1].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, int32(5), bat.Vecs[0].Col.([]int32)[0])
@@ -386,18 +397,18 @@ func TestTxnRelation_Update(t *testing.T) {
 	e = NewEngine(tae)
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database("db", txn.GetCtx())
+	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	rel, err = dbase.Relation(schema.Name, txn.GetCtx())
+	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
-	readers = rel.NewReader(10, nil, nil, nil)
+	readers, _ = rel.NewReader(ctx, 10, nil, nil)
 	updatePK := newbat
+	m = mheap.New(guest.New(1<<20, host.New(1<<20)))
 	for _, reader := range readers {
-		bat, err := reader.Read([]uint64{uint64(1), uint64(1), uint64(1), uint64(1)},
-			[]string{schema.ColDefs[0].Name,
-				schema.ColDefs[1].Name, schema.ColDefs[2].Name,
-				schema.ColDefs[13].Name})
+		bat, err := reader.Read([]string{schema.ColDefs[0].Name,
+			schema.ColDefs[1].Name, schema.ColDefs[2].Name,
+			schema.ColDefs[13].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, int32(5), bat.Vecs[0].Col.([]int32)[0])
@@ -413,11 +424,11 @@ func TestTxnRelation_Update(t *testing.T) {
 	updatePK.Vecs[2].Col.([]int32)[0] = 20
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database("db", txn.GetCtx())
+	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	rel, err = dbase.Relation(schema.Name, txn.GetCtx())
+	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
-	err = rel.Update(0, updatePK, nil)
+	err = rel.Update(ctx, updatePK)
 	assert.NotNil(t, err)
 	assert.Equal(t, data.ErrUpdateUniqueKey, err)
 }
@@ -450,17 +461,18 @@ func TestCopy1(t *testing.T) {
 }
 
 func checkSysTable(t *testing.T, name string, dbase engine.Database, txn Txn, relcnt int, schema *catalog.Schema) {
+	ctx := context.TODO()
 	defs, err := SchemaToDefs(schema)
 	defs[5].(*engine.AttributeDef).Attr.Default = engine.MakeDefaultExpr(true, int32(3), false)
 	defs[6].(*engine.AttributeDef).Attr.Default = engine.MakeDefaultExpr(true, nil, true)
 	assert.NoError(t, err)
-	err = dbase.Create(0, name, defs, txn.GetCtx())
+	err = dbase.Create(ctx, name, defs)
 	assert.Nil(t, err)
-	names := dbase.Relations(txn.GetCtx())
+	names, _ := dbase.Relations(ctx)
 	assert.Equal(t, relcnt, len(names))
-	rel, err := dbase.Relation(name, txn.GetCtx())
+	rel, err := dbase.Relation(ctx, name)
 	assert.Nil(t, err)
-	rDefs := rel.TableDefs(nil)
+	rDefs, _ := rel.TableDefs(ctx)
 	rDefs = rDefs[:len(rDefs)-1]
 	for i, def := range rDefs {
 		assert.Equal(t, defs[i], def)
@@ -471,34 +483,34 @@ func checkSysTable(t *testing.T, name string, dbase engine.Database, txn Txn, re
 	assert.Equal(t, true, rAttr.Default.IsNull)
 	rAttr = rDefs[7].(*engine.AttributeDef).Attr
 	assert.Equal(t, false, rAttr.Default.Exist)
-	assert.Equal(t, 1, len(rel.Nodes(nil)))
-	assert.Equal(t, ADDR, rel.Nodes(nil)[0].Addr)
 	bat := catalog.MockBatch(schema, 100)
 	defer bat.Close()
 
 	newbat := mobat.New(true, bat.Attrs)
 	newbat.Vecs = CopyToMoVectors(bat.Vecs)
-	err = rel.Write(0, newbat, txn.GetCtx())
+	err = rel.Write(ctx, newbat)
 	assert.Equal(t, ErrReadOnly, err)
-	attrs := rel.GetPrimaryKeys(nil)
+	attrs, _ := rel.GetPrimaryKeys(ctx)
 	assert.NotNil(t, attrs)
 	assert.Equal(t, schema.SortKey.Defs[0].Name, attrs[0].Name)
-	attr := rel.GetHideKey(nil)
+	attrs, _ = rel.GetHideKeys(ctx)
+	attr := attrs[0]
 	assert.NotNil(t, attr.Name, catalog.HiddenColumnName)
 }
 
 func TestSysRelation(t *testing.T) {
+	ctx := context.TODO()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	e := NewEngine(tae)
 	txn, err := e.StartTxn(nil)
 	assert.Nil(t, err)
-	err = e.Create(0, catalog.SystemTable_DB_Name, 0, txn.GetCtx())
+	err = e.Create(ctx, catalog.SystemTable_DB_Name, engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
-	names := e.Databases(txn.GetCtx())
+	names, _ := e.Databases(ctx, engine.Snapshot(txn.GetCtx()))
 	assert.Equal(t, 2, len(names))
-	dbase, err := e.Database(catalog.SystemTable_DB_Name, txn.GetCtx())
+	dbase, err := e.Database(ctx, catalog.SystemTable_DB_Name, engine.Snapshot(txn.GetCtx()))
 	assert.Nil(t, err)
 	schema := catalog.MockSchema(13, 12)
 	checkSysTable(t, catalog.SystemTable_DB_Name, dbase, txn, 1, schema)

@@ -32,6 +32,8 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 			case pb.AddReplica:
 				s.handleAddReplica(cmd)
 			case pb.RemoveReplica:
+				// FIXME: when remove replica cmd is received, we need to stop the zombie
+				// replica running on the local store.
 				s.handleRemoveReplica(cmd)
 			case pb.StartReplica:
 				s.handleStartReplica(cmd)
@@ -98,10 +100,10 @@ func (s *Service) handleShutdownStore(cmd pb.ScheduleCommand) {
 
 func (s *Service) heartbeatWorker(ctx context.Context) {
 	// TODO: check tick interval
-	if s.cfg.HeartbeatInterval == 0 {
+	if s.cfg.HeartbeatInterval.Duration == 0 {
 		panic("invalid heartbeat interval")
 	}
-	ticker := time.NewTicker(s.cfg.HeartbeatInterval)
+	ticker := time.NewTicker(s.cfg.HeartbeatInterval.Duration)
 	defer ticker.Stop()
 
 	for {
@@ -135,10 +137,6 @@ func (s *Service) heartbeat(ctx context.Context) {
 	cb, err := s.haClient.SendLogHeartbeat(ctx2, hb)
 	if err != nil {
 		plog.Errorf("failed to send log service heartbeat, %v", err)
-		if err := s.haClient.Close(); err != nil {
-			plog.Errorf("failed to close hakeeper client %v", err)
-		}
-		s.haClient = nil
 		return
 	}
 	s.handleCommands(cb.Commands)

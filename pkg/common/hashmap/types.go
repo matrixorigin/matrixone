@@ -24,17 +24,20 @@ const (
 	UnitLimit = 256
 )
 
+var OneUInt8s []uint8
 var OneInt64s []int64
 
 // Iterator allows you to batch insert/find values
 type Iterator interface {
+	// Insert vecs[start, start+count) into hashmap
+	// the return value corresponds to the corresponding group number(start with 1)
+	// WATCH THAT: we do not update the rows of Hash Map at Insert Method because of Speed Performance,
+	// If need it, you should call the hash map's AddGroup function by yourself.
+	Insert(start, count int, vecs []*vector.Vector, scales []int32) ([]uint64, []int64)
 	// Find vecs[start, start+count) int hashmap
 	// return value is the corresponding the group number,
 	// if it is 0 it means that the corresponding value cannot be found
-	Find(start, count int, vecs []*vector.Vector, scales []int32) ([]uint64, []int64)
-	// Insert vecs[start, start+count) into hashmap
-	// 	the return value corresponds to the corresponding group number(start with 1)
-	Insert(start, count int, vecs []*vector.Vector, scales []int32) ([]uint64, []int64)
+	Find(start, count int, vecs []*vector.Vector, inBuckets []uint8, scales []int32) ([]uint64, []int64)
 }
 
 // StrHashMap key is []byte, value a uint64 value (starting from 1)
@@ -54,5 +57,6 @@ type StrHashMap struct {
 }
 
 type strHashmapIterator struct {
-	mp *StrHashMap
+	ibucket, nbucket uint64
+	mp               *StrHashMap
 }

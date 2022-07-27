@@ -16,6 +16,9 @@ package deletion
 
 import (
 	"bytes"
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -37,15 +40,36 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 		return false, nil
 	}
 	defer bat.Clean(proc.Mp)
+	batLen := batch.Length(bat)
+	var affectedRows uint64
+
+	ctx := context.TODO()
 
 	for i := range p.DeleteCtxs {
-		err := p.DeleteCtxs[i].TableSource.Delete(p.Ts, bat.GetVector(int32(i)), p.DeleteCtxs[i].UseDeleteKey, proc.Snapshot)
-		if err != nil {
-			return false, err
+
+		if p.DeleteCtxs[i].IsHideKey {
+			var cnt uint64
+			tmpBat := &batch.Batch{}
+			tmpBat.Vecs = []*vector.Vector{bat.Vecs[i]}
+			tmpBat, cnt = update.FilterBatch(tmpBat, batLen, proc)
+
+			err := p.DeleteCtxs[i].TableSource.Delete(ctx, tmpBat.GetVector(0), p.DeleteCtxs[i].UseDeleteKey)
+			if err != nil {
+				return false, err
+			}
+			affectedRows += cnt
+
+			tmpBat.Clean(proc.Mp)
+		} else {
+			err := p.DeleteCtxs[i].TableSource.Delete(ctx, bat.GetVector(int32(i)), p.DeleteCtxs[i].UseDeleteKey)
+			if err != nil {
+				return false, err
+			}
+			affectedRows += uint64(batLen)
 		}
+
 	}
 
-	affectedRows := uint64(batch.Length(bat))
 	atomic.AddUint64(&p.AffectedRows, affectedRows)
 
 	return false, nil

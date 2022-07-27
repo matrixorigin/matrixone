@@ -38,9 +38,11 @@ select case when 1<0 then "TRUE" else "FALSE" END;
 case when 1<0 then "TRUE" else "FALSE" END
 FALSE
 SELECT CAST(CASE WHEN 0 THEN '2001-01-01' END AS DATE);
-Operator 'case' with parameters [BIGINT VARCHAR ANY] will be implemented in future version.
+cast(case when 0 then 2001-01-01 end as date)
+null
 SELECT CAST(CASE WHEN 0 THEN DATE'2001-01-01' END AS DATE);
-Operator 'case' with parameters [BIGINT DATE ANY] will be implemented in future version.
+cast(case when 0 then 2001-01-01 end as date)
+null
 select case 1.0 when 0.1 then "a" when 1.0 then "b" else "c" END;
 case 1.0 when 0.1 then a when 1.0 then b else c end
 b
@@ -112,14 +114,10 @@ insert into t1 (a, b) values (1,4572794622775114594), (2,18196094287899841997),
 insert into t2 (c) values (1), (2), (3);
 select t1.a, (case t1.a when 0 then 0 else t1.b end) d from t1
 join t2 on t1.a=t2.c order by d;
-a	d
-1	4572794622775114594
-3	11120436154190595086
-2	18196094287899841997
+Can't cast column from BIGINT UNSIGNED type to BIGINT type because of one or more values in that column. Reason: overflow
 select t1.a, (case t1.a when 0 then 0 else t1.b end) d from t1
 join t2 on t1.a=t2.c where b=11120436154190595086 order by d;
-a	d
-3	11120436154190595086
+Can't cast column from BIGINT UNSIGNED type to BIGINT type because of one or more values in that column. Reason: overflow
 drop table if exists small;
 drop table if exists big;
 CREATE TABLE small (id int not null,PRIMARY KEY (id));

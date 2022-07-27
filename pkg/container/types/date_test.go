@@ -14,7 +14,9 @@
 
 package types
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestParseDate(t *testing.T) {
 	type args struct {

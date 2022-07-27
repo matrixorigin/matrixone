@@ -134,6 +134,7 @@ func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T
 func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	defer leaktest.AfterTest(t)()
 	cfg1 := Config{
+		UUID:                uuid.New().String(),
 		FS:                  vfs.NewStrictMem(),
 		DeploymentID:        1,
 		RTTMillisecond:      5,
@@ -141,13 +142,14 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 		ServiceAddress:      "127.0.0.1:9002",
 		RaftAddress:         "127.0.0.1:9000",
 		GossipAddress:       "127.0.0.1:9001",
-		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9021", "127.0.0.1:9031"},
+		GossipSeedAddresses: "127.0.0.1:9011;127.0.0.1:9021;127.0.0.1:9031",
 		DisableWorkers:      true,
 	}
 	cfg1.HAKeeperConfig.TickPerSecond = 10
-	cfg1.HAKeeperConfig.LogStoreTimeout = 5 * time.Second
-	cfg1.HAKeeperConfig.DnStoreTimeout = 10 * time.Second
+	cfg1.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
+	cfg1.HAKeeperConfig.DnStoreTimeout.Duration = 10 * time.Second
 	cfg2 := Config{
+		UUID:                uuid.New().String(),
 		FS:                  vfs.NewStrictMem(),
 		DeploymentID:        1,
 		RTTMillisecond:      5,
@@ -155,13 +157,14 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 		ServiceAddress:      "127.0.0.1:9012",
 		RaftAddress:         "127.0.0.1:9010",
 		GossipAddress:       "127.0.0.1:9011",
-		GossipSeedAddresses: []string{"127.0.0.1:9001", "127.0.0.1:9021", "127.0.0.1:9031"},
+		GossipSeedAddresses: "127.0.0.1:9001;127.0.0.1:9021;127.0.0.1:9031",
 		DisableWorkers:      true,
 	}
 	cfg2.HAKeeperConfig.TickPerSecond = 10
-	cfg2.HAKeeperConfig.LogStoreTimeout = 5 * time.Second
-	cfg2.HAKeeperConfig.DnStoreTimeout = 10 * time.Second
+	cfg2.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
+	cfg2.HAKeeperConfig.DnStoreTimeout.Duration = 10 * time.Second
 	cfg3 := Config{
+		UUID:                uuid.New().String(),
 		FS:                  vfs.NewStrictMem(),
 		DeploymentID:        1,
 		RTTMillisecond:      5,
@@ -169,13 +172,14 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 		ServiceAddress:      "127.0.0.1:9022",
 		RaftAddress:         "127.0.0.1:9020",
 		GossipAddress:       "127.0.0.1:9021",
-		GossipSeedAddresses: []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9031"},
+		GossipSeedAddresses: "127.0.0.1:9001;127.0.0.1:9011;127.0.0.1:9031",
 		DisableWorkers:      true,
 	}
 	cfg3.HAKeeperConfig.TickPerSecond = 10
-	cfg3.HAKeeperConfig.LogStoreTimeout = 5 * time.Second
-	cfg3.HAKeeperConfig.DnStoreTimeout = 10 * time.Second
+	cfg3.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
+	cfg3.HAKeeperConfig.DnStoreTimeout.Duration = 10 * time.Second
 	cfg4 := Config{
+		UUID:                uuid.New().String(),
 		FS:                  vfs.NewStrictMem(),
 		DeploymentID:        1,
 		RTTMillisecond:      5,
@@ -183,12 +187,12 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 		ServiceAddress:      "127.0.0.1:9032",
 		RaftAddress:         "127.0.0.1:9030",
 		GossipAddress:       "127.0.0.1:9031",
-		GossipSeedAddresses: []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9021"},
+		GossipSeedAddresses: "127.0.0.1:9001;127.0.0.1:9011;127.0.0.1:9021",
 		DisableWorkers:      true,
 	}
 	cfg4.HAKeeperConfig.TickPerSecond = 10
-	cfg4.HAKeeperConfig.LogStoreTimeout = 5 * time.Second
-	cfg4.HAKeeperConfig.DnStoreTimeout = 10 * time.Second
+	cfg4.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
+	cfg4.HAKeeperConfig.DnStoreTimeout.Duration = 10 * time.Second
 	cfg1.Fill()
 	service1, err := NewService(cfg1)
 	require.NoError(t, err)
@@ -279,7 +283,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		state, err = leaderStore.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
-		assert.Equal(t, uint64(checkBootstrapInterval), leaderStore.bootstrapCheckInterval)
+		assert.Equal(t, uint64(checkBootstrapCycles), leaderStore.bootstrapCheckCycles)
 		require.NotNil(t, leaderStore.bootstrapMgr)
 		assert.False(t, leaderStore.bootstrapMgr.CheckBootstrap(state.LogState))
 
@@ -480,13 +484,13 @@ func testBootstrap(t *testing.T, fail bool) {
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
-		assert.Equal(t, uint64(checkBootstrapInterval), store.bootstrapCheckInterval)
+		assert.Equal(t, uint64(checkBootstrapCycles), store.bootstrapCheckCycles)
 		require.NotNil(t, store.bootstrapMgr)
 		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
 
 		if fail {
 			// keep checking, bootstrap will eventually be set as failed
-			for i := 0; i <= checkBootstrapInterval; i++ {
+			for i := 0; i <= checkBootstrapCycles; i++ {
 				store.checkBootstrap(state)
 			}
 

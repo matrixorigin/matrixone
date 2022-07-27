@@ -15,10 +15,11 @@
 package memEngine
 
 import (
+	"context"
 	"fmt"
-	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/kv"
 )
@@ -30,27 +31,27 @@ func New(db *kv.KV, n engine.Node) *MemEngine {
 	}
 }
 
-func (e *MemEngine) Delete(_ uint64, _ string, _ engine.Snapshot) error {
+func (e *MemEngine) Delete(_ context.Context, _ string, _ client.TxnOperator) error {
 	return nil
 }
 
-func (e *MemEngine) Create(_ uint64, _ string, _ int, _ engine.Snapshot) error {
+func (e *MemEngine) Create(_ context.Context, _ string, _ client.TxnOperator) error {
 	return nil
 }
 
-func (e *MemEngine) Databases(_ engine.Snapshot) []string {
-	return []string{"test"}
+func (e *MemEngine) Databases(_ context.Context, _ client.TxnOperator) ([]string, error) {
+	return []string{"test"}, nil
 }
 
-func (e *MemEngine) Database(name string, _ engine.Snapshot) (engine.Database, error) {
+func (e *MemEngine) Database(_ context.Context, name string, _ client.TxnOperator) (engine.Database, error) {
 	if name != "test" {
 		return nil, fmt.Errorf("database '%s' not exist", name)
 	}
 	return &database{db: e.db, n: e.n}, nil
 }
 
-func (e *MemEngine) Node(_ string, _ engine.Snapshot) *engine.NodeInfo {
-	return &engine.NodeInfo{Mcpu: runtime.NumCPU()}
+func (e *MemEngine) Nodes() engine.Nodes {
+	return nil
 }
 
 func (e *MemEngine) DefaultDatabase() string {
@@ -63,15 +64,16 @@ func (e *MemEngine) DatabaseExists(name string) bool {
 
 func (e *MemEngine) Resolve(_ string, tableName string) (*plan.ObjectRef, *plan.TableDef) {
 	schemaName := "test"
-	db, err := e.Database(schemaName, nil)
+	ctx := context.TODO()
+	db, err := e.Database(ctx, schemaName, nil)
 	if err != nil {
 		panic(err)
 	}
-	rel, err := db.Relation(tableName, nil)
+	rel, err := db.Relation(ctx, tableName)
 	if err != nil {
 		panic(err)
 	}
-	defs := rel.TableDefs(nil)
+	defs, _ := rel.TableDefs(ctx)
 	cols := make([]*plan.ColDef, 0, len(defs))
 	for _, def := range defs {
 		attr, ok := def.(*engine.AttributeDef)

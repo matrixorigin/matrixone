@@ -83,15 +83,15 @@ func TestConsumeLeastSpareStore(t *testing.T) {
 
 	id, err := consumeLeastSpareStore(working)
 	require.NoError(t, err)
-	require.Equal(t, util.StoreID("store12"), id)
+	require.Equal(t, "store12", id)
 
 	id, err = consumeLeastSpareStore(working)
 	require.NoError(t, err)
-	require.Equal(t, util.StoreID("store13"), id)
+	require.Equal(t, "store13", id)
 
 	id, err = consumeLeastSpareStore(working)
 	require.NoError(t, err)
-	require.Equal(t, util.StoreID("store11"), id)
+	require.Equal(t, "store11", id)
 }
 
 func TestCheckShard(t *testing.T) {
@@ -110,7 +110,7 @@ func TestCheckShard(t *testing.T) {
 		shardID := uint64(10)
 		shard := newDnShard(10)
 
-		// register a expired replica => should add a new replica
+		// register an expired replica => should add a new replica
 		shard.register(newReplica(11, shardID, "store11"), true)
 		steps := checkShard(shard, workingStores, idAlloc)
 		require.Equal(t, 1, len(steps))
@@ -183,7 +183,7 @@ func mockDnShard(
 
 func TestCheck(t *testing.T) {
 	expiredTick := uint64(10)
-	// construct current tick in order to make hearbeat tick expired
+	// construct current tick in order to make heartbeat tick expired
 	config := hakeeper.Config{}
 	config.Fill()
 	currTick := config.ExpiredTick(expiredTick, config.DnStoreTimeout) + 1

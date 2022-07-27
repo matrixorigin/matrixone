@@ -180,19 +180,28 @@ func (m *ScheduleCommand) LogString() string {
 		repUuid = repUuid[:6]
 	}
 
-	initMems := make(map[uint64]string)
-	for repId, uuid := range m.ConfigChange.InitialMembers {
-		if len(uuid) > 6 {
-			initMems[repId] = uuid[:6]
-		} else {
-			initMems[repId] = uuid
+	var initMembers map[uint64]string
+	if len(m.ConfigChange.InitialMembers) == 0 {
+		initMembers = nil
+	} else {
+		initMembers = make(map[uint64]string)
+		for repId, uuid := range m.ConfigChange.InitialMembers {
+			if len(uuid) > 6 {
+				initMembers[repId] = uuid[:6]
+			} else {
+				initMembers[repId] = uuid
+			}
 		}
 	}
 
-	s := fmt.Sprintf("%s/%s %s %s:%d:%d:%d %v", serviceType[m.ServiceType],
+	s := fmt.Sprintf("%s/%s %s %s:%d:%d:%d", serviceType[m.ServiceType],
 		configChangeType[m.ConfigChange.ChangeType], scheUuid,
 		repUuid, m.ConfigChange.Replica.ShardID,
-		m.ConfigChange.Replica.ReplicaID, m.ConfigChange.Replica.Epoch, initMems)
+		m.ConfigChange.Replica.ReplicaID, m.ConfigChange.Replica.Epoch)
+
+	if initMembers != nil {
+		s += fmt.Sprintf(" %v", initMembers)
+	}
 
 	return s
 }

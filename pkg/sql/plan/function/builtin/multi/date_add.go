@@ -67,7 +67,13 @@ func DatetimeAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 	secondValues := vector.MustTCols[int64](vectors[1])
 	thirdValues := vector.MustTCols[int64](vectors[2])
 
-	resultType := types.Type{Oid: types.T_datetime, Precision: firstVector.Typ.Precision, Size: 8}
+	precision := firstVector.Typ.Precision
+	switch types.IntervalType(thirdValues[0]) {
+	case types.MicroSecond:
+		precision = 6
+	}
+
+	resultType := types.Type{Oid: types.T_datetime, Precision: precision, Size: 8}
 	resultElementSize := int(resultType.Size)
 
 	if firstVector.IsScalar() && secondVector.IsScalar() {
@@ -142,7 +148,13 @@ func TimeStampAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	secondValues := vector.MustTCols[int64](vectors[1])
 	thirdValues := vector.MustTCols[int64](vectors[2])
 
-	resultType := types.Type{Oid: types.T_timestamp, Precision: firstVector.Typ.Precision, Size: 8}
+	precision := firstVector.Typ.Precision
+	switch types.IntervalType(thirdValues[0]) {
+	case types.MicroSecond:
+		precision = 6
+	}
+
+	resultType := types.Type{Oid: types.T_timestamp, Precision: precision, Size: 8}
 	resultElementSize := int(resultType.Size)
 
 	if firstVector.IsScalar() && secondVector.IsScalar() {

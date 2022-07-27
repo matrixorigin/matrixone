@@ -51,7 +51,7 @@ func NewExcludedFilter(stores ...string) *ExcludedFilter {
 }
 
 func (e *ExcludedFilter) Filter(store *Store) bool {
-	if _, ok := e.excluded[string(store.ID)]; ok {
+	if _, ok := e.excluded[store.ID]; ok {
 		return true
 	}
 	return false

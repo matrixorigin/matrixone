@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -49,12 +50,32 @@ func NewS3FS(
 	keyPrefix string,
 ) (*S3FS, error) {
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*7)
-	defer cancel()
-	cfg, err := config.LoadDefaultConfig(ctx)
+	u, err := url.Parse(endpoint)
 	if err != nil {
 		return nil, err
 	}
+	if u.Scheme == "" {
+		u.Scheme = "https"
+	}
+	endpoint = u.String()
+
+	return newS3FS(
+		endpoint,
+		bucket,
+		keyPrefix,
+		s3.WithEndpointResolver(
+			s3.EndpointResolverFromURL(endpoint),
+		),
+	)
+}
+
+// NewS3FSOnMinio creates S3FS on minio server
+// this is needed because the URL scheme of minio server does not compatible with AWS'
+func NewS3FSOnMinio(
+	endpoint string,
+	bucket string,
+	keyPrefix string,
+) (*S3FS, error) {
 
 	u, err := url.Parse(endpoint)
 	if err != nil {
@@ -65,9 +86,47 @@ func NewS3FS(
 	}
 	endpoint = u.String()
 
+	return newS3FS(
+		endpoint,
+		bucket,
+		keyPrefix,
+		s3.WithEndpointResolver(
+			s3.EndpointResolverFunc(
+				func(
+					region string,
+					options s3.EndpointResolverOptions,
+				) (
+					ep aws.Endpoint,
+					err error,
+				) {
+					ep.URL = endpoint
+					ep.Source = aws.EndpointSourceCustom
+					ep.HostnameImmutable = true
+					ep.SigningRegion = region
+					return
+				},
+			),
+		),
+	)
+}
+
+func newS3FS(
+	endpoint string,
+	bucket string,
+	keyPrefix string,
+	options ...func(*s3.Options),
+) (*S3FS, error) {
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*7)
+	defer cancel()
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	client := s3.NewFromConfig(
 		cfg,
-		s3.WithEndpointResolver(s3.EndpointResolverFromURL(endpoint)),
+		options...,
 	)
 
 	return &S3FS{
@@ -80,13 +139,17 @@ func NewS3FS(
 func (m *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
 
 	var cont *string
+	prefix := m.pathToKey(dirPath)
+	if prefix != "" {
+		prefix += "/"
+	}
 	for {
 		output, err := m.client.ListObjectsV2(
 			ctx,
 			&s3.ListObjectsV2Input{
 				Bucket:            ptrTo(m.bucket),
 				Delimiter:         ptrTo("/"),
-				Prefix:            ptrTo(m.pathToKey(dirPath) + "/"),
+				Prefix:            ptrTo(prefix),
 				ContinuationToken: cont,
 			},
 		)
@@ -238,6 +301,10 @@ func (m *S3FS) Read(ctx context.Context, vector *IOVector) error {
 	}
 
 	for i, entry := range vector.Entries {
+		if entry.ignore {
+			continue
+		}
+
 		start := entry.Offset - min
 		if start >= len(content) {
 			return ErrEmptyRange
@@ -259,6 +326,7 @@ func (m *S3FS) Read(ctx context.Context, vector *IOVector) error {
 		}
 
 		setData := true
+
 		if w := vector.Entries[i].WriterForRead; w != nil {
 			setData = false
 			_, err := w.Write(data)
@@ -266,17 +334,25 @@ func (m *S3FS) Read(ctx context.Context, vector *IOVector) error {
 				return err
 			}
 		}
+
 		if ptr := vector.Entries[i].ReadCloserForRead; ptr != nil {
 			setData = false
 			*ptr = io.NopCloser(bytes.NewReader(data))
 		}
+
 		if setData {
 			if len(entry.Data) < entry.Size || entry.Size < 0 {
-				vector.Entries[i].Data = data
+				entry.Data = data
 			} else {
 				copy(entry.Data, data)
 			}
 		}
+
+		if err := entry.setObjectFromData(); err != nil {
+			return err
+		}
+
+		vector.Entries[i] = entry
 	}
 
 	return nil
@@ -320,3 +396,7 @@ func (m *S3FS) mapError(err error) error {
 	}
 	return err
 }
+
+var _ ETLFileService = new(S3FS)
+
+func (*S3FS) ETLCompatible() {}

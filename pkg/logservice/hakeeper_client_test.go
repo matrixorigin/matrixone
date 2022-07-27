@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
@@ -78,6 +79,12 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 		defer func() {
 			assert.NoError(t, c1.Close())
 		}()
+
+		// should be transparently handled
+		cc := c1.(*managedHAKeeperClient)
+		assert.NoError(t, cc.client.close())
+		cc.client = nil
+
 		hb := pb.CNStoreHeartbeat{
 			UUID:           s.ID(),
 			ServiceAddress: "addr1",
@@ -89,6 +96,12 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 		defer func() {
 			assert.NoError(t, c2.Close())
 		}()
+
+		// should be transparently handled
+		cc = c2.(*managedHAKeeperClient)
+		assert.NoError(t, cc.client.close())
+		cc.client = nil
+
 		hb2 := pb.DNStoreHeartbeat{
 			UUID:           s.ID(),
 			ServiceAddress: "addr2",
@@ -96,6 +109,11 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 		cb, err := c2.SendDNHeartbeat(ctx, hb2)
 		require.NoError(t, err)
 		assert.Equal(t, 0, len(cb.Commands))
+
+		// should be transparently handled
+		cc = c1.(*managedHAKeeperClient)
+		assert.NoError(t, cc.client.close())
+		cc.client = nil
 
 		cd, err := c1.GetClusterDetails(ctx)
 		require.NoError(t, err)
@@ -160,6 +178,12 @@ func TestHAKeeperClientSendLogHeartbeat(t *testing.T) {
 		defer func() {
 			assert.NoError(t, c.Close())
 		}()
+
+		// should be transparently handled
+		cc := c.(*managedHAKeeperClient)
+		assert.NoError(t, cc.client.close())
+		cc.client = nil
+
 		hb := s.store.getHeartbeatMessage()
 		cb, err := c.SendLogHeartbeat(ctx, hb)
 		require.NoError(t, err)
@@ -184,6 +208,7 @@ func TestHAKeeperClientSendLogHeartbeat(t *testing.T) {
 func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAKeeperClient)) {
 	defer leaktest.AfterTest(t)()
 	cfg1 := Config{
+		UUID:                uuid.New().String(),
 		FS:                  vfs.NewStrictMem(),
 		DeploymentID:        1,
 		RTTMillisecond:      5,
@@ -191,10 +216,11 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 		ServiceAddress:      "127.0.0.1:9002",
 		RaftAddress:         "127.0.0.1:9000",
 		GossipAddress:       "127.0.0.1:9001",
-		GossipSeedAddresses: []string{"127.0.0.1:9011"},
+		GossipSeedAddresses: "127.0.0.1:9011",
 		DisableWorkers:      true,
 	}
 	cfg2 := Config{
+		UUID:                uuid.New().String(),
 		FS:                  vfs.NewStrictMem(),
 		DeploymentID:        1,
 		RTTMillisecond:      5,
@@ -202,7 +228,7 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 		ServiceAddress:      "127.0.0.1:9012",
 		RaftAddress:         "127.0.0.1:9010",
 		GossipAddress:       "127.0.0.1:9011",
-		GossipSeedAddresses: []string{"127.0.0.1:9001"},
+		GossipSeedAddresses: "127.0.0.1:9001",
 		DisableWorkers:      true,
 	}
 	cfg1.Fill()
