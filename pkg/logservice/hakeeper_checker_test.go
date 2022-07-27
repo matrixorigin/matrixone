@@ -411,7 +411,8 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 				}
 			}
 			completed, err := tn()
-			if err != nil && err != dragonboat.ErrTimeout {
+			if err != nil && err != dragonboat.ErrTimeout &&
+				err != dragonboat.ErrInvalidDeadline && err != dragonboat.ErrTimeoutTooSmall {
 				t.Fatalf("unexpected error %v", err)
 			}
 			if completed {
