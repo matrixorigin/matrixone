@@ -56,6 +56,22 @@ func NewBatch(ts []types.Type, random bool, n int, m *mheap.Mheap) *batch.Batch 
 	return bat
 }
 
+func NewBatchWithNulls(ts []types.Type, random bool, n int, m *mheap.Mheap) *batch.Batch {
+	bat := batch.NewWithSize(len(ts))
+	bat.InitZsOne(n)
+	for i := range bat.Vecs {
+		bat.Vecs[i] = NewVector(n, ts[i], m, random, nil)
+		nulls.New(bat.Vecs[i].Nsp, n)
+		nsp := bat.Vecs[i].GetNulls()
+		for j := 0; j < n; j++ {
+			if j%2 == 0 {
+				nsp.Set(uint64(j))
+			}
+		}
+	}
+	return bat
+}
+
 func NewBatchWithVectors(vs []*vector.Vector, zs []int64) *batch.Batch {
 	bat := batch.NewWithSize(len(vs))
 	if len(vs) > 0 {
