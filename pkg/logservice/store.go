@@ -85,7 +85,7 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 		Gossip: config.GossipConfig{
 			BindAddress:      cfg.GossipListenAddress,
 			AdvertiseAddress: cfg.GossipAddress,
-			Seed:             cfg.GossipSeedAddresses,
+			Seed:             cfg.GetGossipSeedAddresses(),
 			Meta:             meta.marshal(),
 		},
 	}
@@ -588,15 +588,15 @@ func (l *store) queryLog(ctx context.Context, shardID uint64,
 }
 
 func (l *store) ticker(ctx context.Context) {
-	if l.cfg.HAKeeperTickInterval == 0 {
+	if l.cfg.HAKeeperTickInterval.Duration == 0 {
 		panic("invalid HAKeeperTickInterval")
 	}
-	ticker := time.NewTicker(l.cfg.HAKeeperTickInterval)
+	ticker := time.NewTicker(l.cfg.HAKeeperTickInterval.Duration)
 	defer ticker.Stop()
-	if l.cfg.HAKeeperCheckInterval == 0 {
+	if l.cfg.HAKeeperCheckInterval.Duration == 0 {
 		panic("invalid HAKeeperCheckInterval")
 	}
-	haTicker := time.NewTicker(l.cfg.HAKeeperCheckInterval)
+	haTicker := time.NewTicker(l.cfg.HAKeeperCheckInterval.Duration)
 	defer haTicker.Stop()
 
 	for {

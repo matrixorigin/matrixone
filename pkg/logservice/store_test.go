@@ -55,8 +55,9 @@ func TestRaftConfig(t *testing.T) {
 
 func getStoreTestConfig() Config {
 	cfg := Config{
+		UUID:                uuid.New().String(),
 		RTTMillisecond:      10,
-		GossipSeedAddresses: []string{"127.0.0.1:9000"},
+		GossipSeedAddresses: "127.0.0.1:9000",
 		DeploymentID:        1,
 		FS:                  vfs.NewStrictMem(),
 	}
@@ -417,7 +418,7 @@ func getTestStores() (*store, *store, error) {
 		ServiceAddress:      "127.0.0.1:9001",
 		RaftAddress:         "127.0.0.1:9002",
 		GossipAddress:       "127.0.0.1:9011",
-		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9012"},
+		GossipSeedAddresses: "127.0.0.1:9011;127.0.0.1:9012",
 	}
 	cfg1.Fill()
 	store1, err := newLogStore(cfg1)
@@ -432,7 +433,7 @@ func getTestStores() (*store, *store, error) {
 		ServiceAddress:      "127.0.0.1:9006",
 		RaftAddress:         "127.0.0.1:9007",
 		GossipAddress:       "127.0.0.1:9012",
-		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9012"},
+		GossipSeedAddresses: "127.0.0.1:9011;127.0.0.1:9012",
 	}
 	cfg2.Fill()
 	store2, err := newLogStore(cfg2)
