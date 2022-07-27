@@ -181,8 +181,7 @@ func TestSendWithReconnect(t *testing.T) {
 				resp, err := f.Get()
 				assert.NoError(t, err)
 				assert.Equal(t, req, resp)
-
-				b.closeConn()
+				b.closeConn(false)
 			}
 		},
 		WithBackendConnectWhenCreate())
@@ -223,7 +222,7 @@ func TestStream(t *testing.T) {
 func TestStreamClosedByConnReset(t *testing.T) {
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
-			return conn.Close()
+			return conn.Disconnect()
 		},
 		func(b *remoteBackend) {
 			st, err := b.NewStream()
@@ -410,7 +409,7 @@ func newTestApp(t *testing.T,
 	opts ...goetty.AppOption) goetty.NetApplication {
 	assert.NoError(t, os.RemoveAll(testUnixFile))
 	codec := newTestCodec().(*messageCodec)
-	opts = append(opts, goetty.WithAppSessionOptions(goetty.WithCodec(codec.encoder, codec.deocder)))
+	opts = append(opts, goetty.WithAppSessionOptions(goetty.WithSessionCodec(codec)))
 	app, err := goetty.NewApplication(testAddr, handleFunc, opts...)
 	assert.NoError(t, err)
 

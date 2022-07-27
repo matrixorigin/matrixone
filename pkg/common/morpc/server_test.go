@@ -185,7 +185,7 @@ func BenchmarkSend(b *testing.B) {
 				f.Close()
 			}
 		}
-	}, WithServerGoettyOptions(goetty.WithReleaseMsgFunc(func(i interface{}) {
+	}, WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
 		messagePool.Put(i)
 	})))
 }
