@@ -15,10 +15,13 @@
 package logservice
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/cockroachdb/errors"
+	"github.com/google/uuid"
+	"github.com/lni/dragonboat/v4"
 	"github.com/lni/vfs"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,7 +37,8 @@ const (
 )
 
 var (
-	ErrInvalidConfig = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid log configuration")
+	ErrInvalidBootstrapConfig = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid bootstrap configuration")
+	ErrInvalidConfig          = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid log configuration")
 )
 
 const (
@@ -92,6 +96,40 @@ type Config struct {
 	// cluster health checks.
 	HAKeeperCheckInterval toml.Duration `toml:"hakeeper-check-interval"`
 
+	// BootstrapConfig is the configuration specified for the bootstrapping
+	// procedure. It only need to be specified for Log Stores selected to host
+	// initial HAKeeper replicas during bootstrapping.
+	BootstrapConfig struct {
+		// BootstrapCluster indicates whether the cluster should be bootstrapped.
+		BootstrapCluster bool `toml:"bootstrap-cluster"`
+		// NumOfLogShards defines the number of Log shards in the initial deployment.
+		NumOfLogShards uint64 `toml:"num-of-log-shards"`
+		// NumOfDNShards defines the number of DN shards in the initial deployment.
+		// The count must be the same as NumOfLogShards in the current implementation.
+		NumOfDNShards uint64 `toml:"num-of-dn-shards"`
+		// NumOfLogShardReplicas is the number of replicas for each shard managed by
+		// Log Stores, including Log Service shards and the HAKeeper.
+		NumOfLogShardReplicas uint64 `toml:"num-of-log-shard-replicas"`
+		// InitHAKeeperMembers defines the initial members of the HAKeeper as a list
+		// of semicolon separated HAKeeper replicaID and UUID pairs. For example,
+		// when the initial HAKeeper members are
+		// replica with replica ID 101 running on Log Store uuid1
+		// replica with replica ID 102 running on Log Store uuid2
+		// replica with replica ID 103 running on Log Store uuid3
+		// the InitHAKeeperMembers string value should be
+		// "101:uuid1;102:uuid2;103:uuid3"
+		// Note that these initial HAKeeper replica IDs must be assigned by k8s
+		// from the range [K8SIDRangeStart, K8SIDRangeEnd) as defined in pkg/hakeeper.
+		// All uuid values are assigned by k8s, they are used to uniquely identify
+		// CN/DN/Log stores.
+		InitHAKeeperMembers string `toml:"init-hakeeper-members"`
+		// HAKeeperReplicaID is the replica ID of the HAKeeper replica to be started
+		// on the local Log Store during bootstrapping. Note that this replica is an
+		// initial member of the HAKeeper so the replicaID should exist in
+		// InitHAKeeperMembers.
+		HAKeeperReplicaID uint64 `toml:"hakeeper-replica-id"`
+	}
+
 	HAKeeperConfig struct {
 		// TickPerSecond indicates how many ticks every second.
 		// In HAKeeper, we do not use actual time to measure time elapse.
@@ -145,6 +183,38 @@ func (c *Config) GetHAKeeperClientConfig() HAKeeperClientConfig {
 	}
 }
 
+func (c *Config) GetInitHAKeeperMembers() (map[uint64]dragonboat.Target, error) {
+	v := strings.TrimSpace(c.BootstrapConfig.InitHAKeeperMembers)
+	replicas := strings.Split(v, ";")
+	result := make(map[uint64]dragonboat.Target)
+	for _, pair := range replicas {
+		pair = strings.TrimSpace(pair)
+		parts := strings.Split(pair, ":")
+		if len(parts) == 2 {
+			id := strings.TrimSpace(parts[0])
+			target := strings.TrimSpace(parts[1])
+			if _, err := uuid.Parse(target); err != nil {
+				plog.Errorf("invalid uuid %s", target)
+				return nil, ErrInvalidBootstrapConfig
+			}
+			idn, err := strconv.ParseUint(id, 10, 64)
+			if err != nil {
+				plog.Errorf("invalid replicaID %s", id)
+				return nil, ErrInvalidBootstrapConfig
+			}
+			if idn >= hakeeper.K8SIDRangeEnd || idn < hakeeper.K8SIDRangeStart {
+				plog.Errorf("out of range hakeeper replica id")
+				return nil, ErrInvalidBootstrapConfig
+			}
+			result[idn] = target
+		} else {
+			plog.Errorf("invalid replicaID:target uuid pair, %s", pair)
+			return nil, ErrInvalidBootstrapConfig
+		}
+	}
+	return result, nil
+}
+
 // Validate validates the configuration.
 func (c *Config) Validate() error {
 	if len(c.UUID) == 0 {
@@ -176,6 +246,35 @@ func (c *Config) Validate() error {
 	if c.HAKeeperConfig.DnStoreTimeout.Duration == 0 {
 		return errors.Wrapf(ErrInvalidConfig, "DnStoreTimeout not set")
 	}
+	// validate BootstrapConfig
+	if c.BootstrapConfig.BootstrapCluster {
+		if c.BootstrapConfig.NumOfLogShards == 0 {
+			return errors.Wrapf(ErrInvalidConfig, "NumOfLogShards not set")
+		}
+		if c.BootstrapConfig.NumOfDNShards == 0 {
+			return errors.Wrapf(ErrInvalidConfig, "NumOfDNShards not set")
+		}
+		if c.BootstrapConfig.NumOfLogShardReplicas == 0 {
+			return errors.Wrapf(ErrInvalidConfig, "NumOfLogShardReplica not set")
+		}
+		if c.BootstrapConfig.NumOfDNShards != c.BootstrapConfig.NumOfLogShards {
+			return errors.Wrapf(ErrInvalidConfig, "NumOfDNShards != NumOfLogShards")
+		}
+		members, err := c.GetInitHAKeeperMembers()
+		if err != nil {
+			return err
+		}
+		if len(members) == 0 {
+			return errors.Wrapf(ErrInvalidConfig, "InitHAKeeperMembers not set")
+		}
+		if uint64(len(members)) != c.BootstrapConfig.NumOfLogShardReplicas {
+			return errors.Wrapf(ErrInvalidConfig, "InitHAKeeperMembers and NumOfLogShardReplicas not match")
+		}
+		if _, ok := members[c.BootstrapConfig.HAKeeperReplicaID]; !ok {
+			return errors.Wrapf(ErrInvalidConfig, "HAKeeperReplicaID not a part of InitHAKeeperMembers")
+		}
+	}
+
 	return nil
 }
 
