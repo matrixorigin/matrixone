@@ -547,7 +547,7 @@ func (v *Vector) ConstVectorIsNull() bool {
 }
 
 func (v *Vector) Free(m *mheap.Mheap) {
-	if v.Data != nil {
+	if !v.Or && v.Data != nil {
 		mheap.Free(m, v.Data)
 		v.Data = nil
 	}

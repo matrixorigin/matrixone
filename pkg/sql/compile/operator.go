@@ -84,7 +84,6 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		}
 	case *join.Argument:
 		rin.Arg = &join.Argument{
-			IsPreBuild: arg.IsPreBuild,
 			Result:     arg.Result,
 			Conditions: copyCondition(arg.Conditions),
 		}
@@ -184,6 +183,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot)
 			TableSource:  relation,
 			UseDeleteKey: n.DeleteTablesCtx[i].UseDeleteKey,
 			CanTruncate:  n.DeleteTablesCtx[i].CanTruncate,
+			IsHideKey:    n.DeleteTablesCtx[i].IsHideKey,
 		}
 	}
 
@@ -281,7 +281,6 @@ func constructJoin(n *plan.Node, proc *process.Process) *join.Argument {
 		conds[0][i].Expr, conds[1][i].Expr = constructJoinCondition(expr)
 	}
 	return &join.Argument{
-		IsPreBuild: false,
 		Conditions: conds,
 		Result:     result,
 	}
