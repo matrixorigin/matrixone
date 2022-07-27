@@ -110,7 +110,25 @@ func CoalesceTypeCheckFn(inputTypes []types.T, _ []types.T, ret types.T) bool {
 // when return type is uint / int / float / bool / date / datetime
 func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types.Type) (*vector.Vector, error) {
 	vecLen := vector.Length(vs[0])
-	returnIsScalar := vs[0].IsScalar()
+	startIdx := 0
+	for i := 0; i < len(vs); i++ {
+		input := vs[i]
+		if input.IsScalar() {
+			if !input.IsScalarNull() {
+				cols := vector.MustTCols[T](input)
+				r := proc.AllocScalarVector(t)
+				r.Typ.Precision = input.Typ.Precision
+				r.Typ.Width = input.Typ.Width
+				r.Typ.Scale = input.Typ.Scale
+				r.Col = make([]T, 1)
+				r.Col.([]T)[0] = cols[0]
+				return r, nil
+			}
+		} else {
+			startIdx = i
+			break
+		}
+	}
 
 	rs, err := proc.AllocVector(t, int64(vecLen*t.Oid.TypeLen()))
 	if err != nil {
@@ -123,22 +141,12 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 	rs.Nsp = nulls.NewWithSize(vecLen)
 	rs.Nsp.Np.AddRange(0, uint64(vecLen))
 
-	for i := 0; i < len(vs); i++ {
+	for i := startIdx; i < len(vs); i++ {
 		input := vs[i]
 		cols := vector.MustTCols[T](input)
 		if input.IsScalar() {
 			if input.IsScalarNull() {
 				continue
-			}
-
-			if returnIsScalar {
-				r := proc.AllocScalarVector(t)
-				r.Typ.Precision = input.Typ.Precision
-				r.Typ.Width = input.Typ.Width
-				r.Typ.Scale = input.Typ.Scale
-				r.Col = make([]T, 1)
-				r.Col.([]T)[0] = cols[0]
-				return r, nil
 			}
 
 			for j := 0; j < vecLen; j++ {
@@ -149,7 +157,6 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 			rs.Nsp.Np = nil
 			return rs, nil
 		} else {
-			returnIsScalar = false
 			nullsLength := nulls.Length(input.Nsp)
 			if nullsLength == vecLen {
 				// all null do nothing
@@ -187,7 +194,27 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 // when return type is char / varchar
 func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vector.Vector, error) {
 	vecLen := vector.Length(vs[0])
-	returnIsScalar := vs[0].IsScalar()
+	startIdx := 0
+	for i := 0; i < len(vs); i++ {
+		input := vs[i]
+		if input.IsScalar() {
+			if !input.IsScalarNull() {
+				cols := vector.MustBytesCols(input)
+				r := proc.AllocScalarVector(typ)
+				r.Col = &types.Bytes{
+					Data:    make([]byte, cols.Lengths[0]),
+					Offsets: make([]uint32, 1),
+					Lengths: make([]uint32, 1),
+				}
+				copy(r.Col.(*types.Bytes).Data, cols.Data)
+				r.Col.(*types.Bytes).Lengths[0] = cols.Lengths[0]
+				return r, nil
+			}
+		} else {
+			startIdx = i
+			break
+		}
+	}
 
 	rs, err := proc.AllocVector(typ, 0)
 	if err != nil {
@@ -205,25 +232,12 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 	rs.Nsp = nulls.NewWithSize(vecLen)
 	rs.Nsp.Np.AddRange(0, uint64(vecLen))
 
-	for i := 0; i < len(vs); i++ {
+	for i := startIdx; i < len(vs); i++ {
 		input := vs[i]
 		cols := vector.MustBytesCols(input)
 		if input.IsScalar() {
 			if input.IsScalarNull() {
 				continue
-			}
-
-			if returnIsScalar {
-				r := proc.AllocScalarVector(typ)
-				r.Col = &types.Bytes{
-					Data:    make([]byte, cols.Lengths[0]),
-					Offsets: make([]uint32, 1),
-					Lengths: make([]uint32, 1),
-				}
-				copy(r.Col.(*types.Bytes).Data, cols.Data)
-				r.Col.(*types.Bytes).Lengths[0] = cols.Lengths[0]
-
-				return r, nil
 			}
 
 			for j := 0; j < vecLen; j++ {
@@ -234,7 +248,6 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 			rs.Nsp.Np = nil
 			break
 		} else {
-			returnIsScalar = false
 			nullsLength := nulls.Length(input.Nsp)
 			if nullsLength == vecLen {
 				// all null do nothing
