@@ -64,13 +64,10 @@ func (mkv *MVCCKV) AscendRange(rawKey []byte, from timestamp.Timestamp, to times
 
 func encodeMVCCKey(rawKey []byte, ts timestamp.Timestamp) []byte {
 	buffer := buf.NewByteBuf(len(rawKey) + 12)
-	buf.MustWrite(buffer, rawKey)
-	buf.MustWriteInt64(buffer, ts.PhysicalTime)
-	buf.MustWriteUint32(buffer, ts.LogicalTime)
-	_, v, err := buffer.ReadAll()
-	if err != nil {
-		panic(err)
-	}
+	buffer.MustWrite(rawKey)
+	buffer.WriteInt64(ts.PhysicalTime)
+	buffer.WriteUint32(ts.LogicalTime)
+	_, v := buffer.ReadAll()
 	return v
 }
 

@@ -162,8 +162,8 @@ github.com/envoyproxy/protoc-gen-validate v0.1.0/go.mod h1:iSmxcyjqTsJpI2R4NaDN7
 github.com/etcd-io/bbolt v1.3.3/go.mod h1:ZF2nL25h33cCyBtcyWeZ2/I3HQOfTP+0PIEvHjkjCrw=
 github.com/fagongzi/goetty v1.13.0 h1:k1RT+32/O97zu370BhHk8sL/kSAqF2ebSY1Nj+x/dBg=
 github.com/fagongzi/goetty v1.13.0/go.mod h1:M1HA6OyQA3/4bV70W588Uek6sF7NxgxT/3gGhlf0yj0=
-github.com/fagongzi/goetty/v2 v2.0.3-0.20220629100032-f8e8c3c38772 h1:J0QvYEFfz8rIwqvJTNphrHj+bdCPMdoPRj9SNAWFxjM=
-github.com/fagongzi/goetty/v2 v2.0.3-0.20220629100032-f8e8c3c38772/go.mod h1:OwIBpVwRW1HjF/Jhc2Av3UvG2NygMg+bdqGxZaqwhU0=
+github.com/fagongzi/goetty/v2 v2.0.3-0.20220727012003-22a431a7db0c h1:9pmM/a6en56iNU/wuQwHHZ7jKqM+CKzqg2QPKKooBdM=
+github.com/fagongzi/goetty/v2 v2.0.3-0.20220727012003-22a431a7db0c/go.mod h1:OwIBpVwRW1HjF/Jhc2Av3UvG2NygMg+bdqGxZaqwhU0=
 github.com/fagongzi/util v0.0.0-20201116094402-221cc40c4593/go.mod h1:jYDIbpaqHXCCQ7QIDXRVfsQYAGKSNNb6N8BPTgdpcdE=
 github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d h1:1pILVCatHj3eVo9i52dZyY4BwjTmSIeN+/hoJh8rD0Y=
 github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d/go.mod h1:5cqSns2zMRcJeVGvAqeTrbXFqh5AqBFr5uVKP9T2kiE=
