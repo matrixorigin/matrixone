@@ -150,20 +150,32 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 			return rs, nil
 		} else {
 			returnIsScalar = false
-			if nulls.Length(input.Nsp) == vecLen {
+			nullsLength := nulls.Length(input.Nsp)
+			if nullsLength == vecLen {
+				// all null do nothing
 				continue
-			}
-
-			for j := 0; j < vecLen; j++ {
-				if rs.Nsp.Contains(uint64(j)) && !input.Nsp.Contains(uint64(j)) {
-					rsCols[j] = cols[j]
-					rs.Nsp.Np.Remove(uint64(j))
+			} else if nullsLength == 0 {
+				// all not null
+				for j := 0; j < vecLen; j++ {
+					if rs.Nsp.Contains(uint64(j)) {
+						rsCols[j] = cols[j]
+					}
 				}
-			}
-
-			if rs.Nsp.Np.IsEmpty() {
 				rs.Nsp.Np = nil
 				return rs, nil
+			} else {
+				// some nulls
+				for j := 0; j < vecLen; j++ {
+					if rs.Nsp.Contains(uint64(j)) && !input.Nsp.Contains(uint64(j)) {
+						rsCols[j] = cols[j]
+						rs.Nsp.Np.Remove(uint64(j))
+					}
+				}
+
+				if rs.Nsp.Np.IsEmpty() {
+					rs.Nsp.Np = nil
+					return rs, nil
+				}
 			}
 		}
 	}
@@ -223,20 +235,36 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 			break
 		} else {
 			returnIsScalar = false
-			if nulls.Length(input.Nsp) == vecLen {
+			nullsLength := nulls.Length(input.Nsp)
+			if nullsLength == vecLen {
+				// all null do nothing
 				continue
-			}
-
-			for j := 0; j < vecLen; j++ {
-				if rs.Nsp.Contains(uint64(j)) && !input.Nsp.Contains(uint64(j)) {
-					length := cols.Lengths[j]
-					o := cols.Offsets[j]
-					dataVec[j] = append(dataVec[j], cols.Data[o:o+length]...)
-					rs.Nsp.Np.Remove(uint64(j))
+			} else if nullsLength == 0 {
+				// all not null
+				for j := 0; j < vecLen; j++ {
+					if rs.Nsp.Contains(uint64(j)) {
+						length := cols.Lengths[j]
+						o := cols.Offsets[j]
+						dataVec[j] = append(dataVec[j], cols.Data[o:o+length]...)
+					}
 				}
-			}
-			if rs.Nsp.Np.IsEmpty() {
+				rs.Nsp.Np = nil
 				break
+			} else {
+				// some nulls
+				for j := 0; j < vecLen; j++ {
+					if rs.Nsp.Contains(uint64(j)) && !input.Nsp.Contains(uint64(j)) {
+						length := cols.Lengths[j]
+						o := cols.Offsets[j]
+						dataVec[j] = append(dataVec[j], cols.Data[o:o+length]...)
+						rs.Nsp.Np.Remove(uint64(j))
+					}
+				}
+				// now if is empty, break
+				if rs.Nsp.Np.IsEmpty() {
+					rs.Nsp.Np = nil
+					break
+				}
 			}
 		}
 	}
