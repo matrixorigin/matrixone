@@ -663,6 +663,7 @@ import (
 	"fmt"
 	"sync"
 	"github.com/BurntSushi/toml"
+	"math"
 )
 
 // all parameters in the system
@@ -696,6 +697,54 @@ type {{.ConfigurationStructName}} struct{
 	//parameter name -> updated flag
 	name2updatedFlags map[string]bool
 }//end {{.ConfigurationStructName}}
+
+/**
+check if x in a slice
+*/
+func (ap *{{.ParameterStructName}}) isInSlice(x string, arr []string) bool{
+	for _, y := range arr {
+		if x == y {
+			return true
+		}
+	}
+	return false
+}
+
+/**
+check if x in a slice
+*/
+func (ap *{{.ParameterStructName}}) isInSliceBool(x bool, arr []bool) bool {
+	for _, y := range arr {
+		if x == y {
+			return true
+		}
+	}
+	return false
+}
+
+/**
+check if x in a slice
+*/
+func (ap *{{.ParameterStructName}}) isInSliceInt64(x int64, arr []int64) bool {
+	for _, y := range arr {
+		if x == y {
+			return true
+		}
+	}
+	return false
+}
+
+/**
+check if x in a slice
+*/
+func (ap *{{.ParameterStructName}}) isInSliceFloat64(x float64, arr []float64) bool {
+	for _, y := range arr {
+		if math.Abs(x-y) < 0.000001 {
+			return true
+		}
+	}
+	return false
+}
 
 /**
 prepare something before anything else.
@@ -841,7 +890,7 @@ func (ap * {{$Params.ParameterStructName}} ) set{{.CapitalName}}(value {{.DataTy
 			{{- end}}	
 		}
 		if len( choices ) != 0{
-			if !isInSliceBool(value, choices){
+			if !ap.isInSliceBool(value, choices){
 				return fmt.Errorf("set{{.CapitalName}},the value %t is not in set %v",value,choices)
 			}
 		}//else means any bool value: true or false
@@ -856,7 +905,7 @@ func (ap * {{$Params.ParameterStructName}} ) set{{.CapitalName}}(value {{.DataTy
 			{{- end}}	
 		}
 		if len( choices ) != 0{
-			if !isInSlice(value, choices){
+			if !ap.isInSlice(value, choices){
 				return fmt.Errorf("set{{.CapitalName}},the value %s is not in set %v",value,choices)
 			}
 		}//else means any string
@@ -871,7 +920,7 @@ func (ap * {{$Params.ParameterStructName}} ) set{{.CapitalName}}(value {{.DataTy
 			{{- end}}	
 		}
 		if len( choices ) != 0{
-			if !isInSliceInt64(value, choices){
+			if !ap.isInSliceInt64(value, choices){
 				return fmt.Errorf("set{{.CapitalName}},the value %d is not in set %v",value,choices)
 			}
 		}//else means any int64
@@ -895,7 +944,7 @@ func (ap * {{$Params.ParameterStructName}} ) set{{.CapitalName}}(value {{.DataTy
 				{{- end}}	
 			}
 			if len( choices ) != 0{
-				if !isInSliceFloat64(value, choices){
+				if !ap.isInSliceFloat64(value, choices){
 					return fmt.Errorf("set{{.CapitalName}},the value %f is not in set %v",value,choices)
 				}
 			}//else means any float64
@@ -1044,54 +1093,7 @@ func Load{{.ConfigurationStructName}}FromFile(filename string,params *{{.Paramet
 }
 `
 
-var defaultConfigurationTemplate = `# Change this config file according to your usage.
-#
-# These values must be different from each other:
-# port
-# nodeID
-# prophetEmbedEtcdJoinAddr
-#
-# addr-raft
-# addr-client
-# dir-data
-#[prophet]
-#   name
-#   rpc-addr
-#   external-etcd
-#   [prophet.embed-etcd]
-#       client-urls
-#       peer-urls
-#
-#To set up matrixone on a single node, there is no need to change this config file
-#
-#To set up matrixone on a distributed cluster, change this config file according to the following instruction
-#    1. Requirements: at least three nodes
-#
-#    2. set up the prophet genesis node
-#        2.1. make sure the nodeID is unique
-#        2.2. change the addr-raft ip to the machine ip
-#        2.3. change the addr-client ip to the machine ip
-#        2.4. make sure the prophet name is different from the names of other two prophet node
-#        2.5. change the rpc-addr ip to the machine ip
-#        2.6. change the client-urls ip to the machine ip
-#        2.7. change the peer-urls ip to the machine ip
-#        2.8. make sure the dir-data is different from the other nodes in the cluster
-#
-#    3. set up the other two prophet nodes
-#        3.1. apply the above 8 steps of prophet genesis node setting
-#        3.2. change the prophet join address from empty string to the prophet genesis node's peer-urls
-#   
-#    4. set up pure prophet node
-#        4.1. make sure the nodeID is unique
-#        4.2. change prophet-node to false
-#        4.3. change the addr-raft ip to the machine ip
-#        4.4. change the addr-client ip to the machine ip
-#        4.5. In the external-etcd attribute, fill the three empty string with the three client-urls of the three prophet node
-#        4.6. make sure the dir-data is different from the other nodes in the cluster
-#
-#Start MatrixOne cluster on docker or kubernetes, please refer to this repo [matrixorigin/matrixone-operator](https://github.com/matrixorigin/matrixone-operator)
-
-
+var defaultConfigurationTemplate = `#Start MatrixOne cluster on docker or kubernetes, please refer to this repo [matrixorigin/matrixone-operator](https://github.com/matrixorigin/matrixone-operator)
 
 {{range $index, $param := .Parameter -}}
 {{ if ne .UpdateMode "fix" -}}
@@ -1257,6 +1259,11 @@ type ConfigurationFileGenerator interface {
 		2. configuraion file for parameters
 	*/
 	Generate() error
+
+	/**
+	Remove all generated files
+	*/
+	DeleteGeneratedFiles() error
 }
 
 type ConfigurationFileGeneratorImpl struct {
@@ -1274,14 +1281,19 @@ type ConfigurationFileGeneratorImpl struct {
 
 	//the template string for the auto generated parameter operation interfaces test cases.
 	parameterTestCasesTemplate string
+
+	//path to generated files
+	pathOfCodeFile     string
+	pathOfCodeTestFile string
+	pathOfConfigFile   string
 }
 
-func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
+func (cfgi *ConfigurationFileGeneratorImpl) getOutDirectory() (string, error) {
 	var outDir string
 
 	defDir, err := filepath.Abs(filepath.Dir(cfgi.parameterDefinitionFileName))
 	if err != nil {
-		return fmt.Errorf("get the directory of parameter definition file failed.error:%v", err)
+		return "", fmt.Errorf("get the directory of parameter definition file failed.error:%v", err)
 	}
 
 	if len(cfgi.configurationOutputDirectory) == 0 {
@@ -1289,7 +1301,23 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 	} else {
 		outDir = cfgi.configurationOutputDirectory
 	}
+	return outDir, nil
+}
 
+func (cfgi *ConfigurationFileGeneratorImpl) getConfigurationFileNameAndCodeFileName(operationFileName, configurationFileName string) error {
+	var outDir string
+	var err error
+	outDir, err = cfgi.getOutDirectory()
+	if err != nil {
+		return err
+	}
+	cfgi.pathOfCodeFile = outDir + "/" + operationFileName + ".go"
+	cfgi.pathOfConfigFile = outDir + "/" + configurationFileName + ".toml"
+	cfgi.pathOfCodeTestFile = outDir + "/" + operationFileName + "_test.go"
+	return err
+}
+
+func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 	params := &parameters{}
 	if err := params.LoadParametersDefinitionFromFile(cfgi.parameterDefinitionFileName); err != nil {
 		return fmt.Errorf("LoadParametersDefinitionFromFile failed.error:%v", err)
@@ -1300,7 +1328,12 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 		return fmt.Errorf("make parameter template failed. error:%v", err)
 	}
 
-	f, err := os.Create(outDir + "/" + params.OperationFileName + ".go")
+	err = cfgi.getConfigurationFileNameAndCodeFileName(params.OperationFileName, params.ConfigurationFileName)
+	if err != nil {
+		return err
+	}
+
+	f, err := os.Create(cfgi.pathOfCodeFile)
 	if err != nil {
 		return err
 	}
@@ -1316,7 +1349,7 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 		return err
 	}
 
-	tomlf, err := os.Create(outDir + "/" + params.ConfigurationFileName + ".toml")
+	tomlf, err := os.Create(cfgi.pathOfConfigFile)
 	if err != nil {
 		return err
 	}
@@ -1332,7 +1365,7 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 		return err
 	}
 
-	testCasesf, err := os.Create(outDir + "/" + params.OperationFileName + "_test.go")
+	testCasesf, err := os.Create(cfgi.pathOfCodeTestFile)
 	if err != nil {
 		return err
 	}
@@ -1346,6 +1379,19 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 	return nil
 }
 
+func (cfgi *ConfigurationFileGeneratorImpl) DeleteGeneratedFiles() error {
+	if len(cfgi.pathOfCodeFile) != 0 {
+		_ = os.Remove(cfgi.pathOfCodeFile)
+	}
+	if len(cfgi.pathOfConfigFile) != 0 {
+		_ = os.Remove(cfgi.pathOfConfigFile)
+	}
+	if len(cfgi.pathOfCodeTestFile) != 0 {
+		_ = os.Remove(cfgi.pathOfCodeTestFile)
+	}
+	return nil
+}
+
 func NewConfigurationFileGenerator(defFileName string) ConfigurationFileGenerator {
 	return &ConfigurationFileGeneratorImpl{
 		parameterDefinitionFileName:  defFileName,
@@ -1353,6 +1399,9 @@ func NewConfigurationFileGenerator(defFileName string) ConfigurationFileGenerato
 		parameterTemplate:            defaultParameterTempate,
 		configurationTemplate:        defaultConfigurationTemplate,
 		parameterTestCasesTemplate:   defaultOperationTestTemplate,
+		pathOfConfigFile:             "",
+		pathOfCodeFile:               "",
+		pathOfCodeTestFile:           "",
 	}
 }
 
@@ -1363,5 +1412,8 @@ func NewConfigurationFileGeneratorWithOutputDirectory(defFileName, outputDirecto
 		parameterTemplate:            defaultParameterTempate,
 		configurationTemplate:        defaultConfigurationTemplate,
 		parameterTestCasesTemplate:   defaultOperationTestTemplate,
+		pathOfConfigFile:             "",
+		pathOfCodeFile:               "",
+		pathOfCodeTestFile:           "",
 	}
 }

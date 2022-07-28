@@ -38,8 +38,12 @@ func (c *Count[T1]) Merge(_, _ int64, x, y int64, _ bool, _ bool, _ any) (int64,
 }
 
 func (c *Count[T1]) Fill(_ int64, _ T1, v int64, z int64, _ bool, hasNull bool) (int64, bool) {
-	if hasNull && !c.isStar {
-		return v, false
+	if hasNull {
+		if !c.isStar {
+			return v, false
+		} else {
+			return v + z, false
+		}
 	}
 	return v + z, false
 }

@@ -389,15 +389,18 @@ func handleNotHAKeeperError(err error) error {
 }
 
 func (l *store) addLogStoreHeartbeat(ctx context.Context,
-	hb pb.LogStoreHeartbeat) error {
+	hb pb.LogStoreHeartbeat) (pb.CommandBatch, error) {
 	data := MustMarshal(&hb)
 	cmd := hakeeper.GetLogStoreHeartbeatCmd(data)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
-	if _, err := l.propose(ctx, session, cmd); err != nil {
+	if result, err := l.propose(ctx, session, cmd); err != nil {
 		plog.Errorf("propose failed, %v", err)
-		return handleNotHAKeeperError(err)
+		return pb.CommandBatch{}, handleNotHAKeeperError(err)
+	} else {
+		var cb pb.CommandBatch
+		MustUnmarshal(&cb, result.Data)
+		return cb, nil
 	}
-	return nil
 }
 
 func (l *store) addCNStoreHeartbeat(ctx context.Context,
@@ -413,15 +416,18 @@ func (l *store) addCNStoreHeartbeat(ctx context.Context,
 }
 
 func (l *store) addDNStoreHeartbeat(ctx context.Context,
-	hb pb.DNStoreHeartbeat) error {
+	hb pb.DNStoreHeartbeat) (pb.CommandBatch, error) {
 	data := MustMarshal(&hb)
 	cmd := hakeeper.GetDNStoreHeartbeatCmd(data)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
-	if _, err := l.propose(ctx, session, cmd); err != nil {
+	if result, err := l.propose(ctx, session, cmd); err != nil {
 		plog.Errorf("propose failed, %v", err)
-		return handleNotHAKeeperError(err)
+		return pb.CommandBatch{}, handleNotHAKeeperError(err)
+	} else {
+		var cb pb.CommandBatch
+		MustUnmarshal(&cb, result.Data)
+		return cb, nil
 	}
-	return nil
 }
 
 func (l *store) getCommandBatch(ctx context.Context,

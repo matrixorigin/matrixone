@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"unicode/utf8"
 )
 
 type LoadResult struct {
@@ -90,9 +89,8 @@ type SharePart struct {
 	lineCount uint64
 
 	//batch
-	batchSize            int
-	maxEntryBytesForCube int64
-	skipWriteBatch       bool
+	batchSize      int
+	skipWriteBatch bool
 
 	//map column id in from data to column id in table
 	dataColumnId2TableColumnId []int
@@ -260,35 +258,11 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 
 			wait_b := time.Now()
 
-			//bytes for the line
-			bytes := uint64(0)
-			for _, ll := range lineOut.Line {
-				bytes += uint64(utf8.RuneCount([]byte(ll)))
-			}
-
-			//max entries for the cube
-			if bytes > uint64(plh.maxEntryBytesForCube) {
-				return fmt.Errorf("bytes of line %d > maxEntryBytesForCube %d", bytes, plh.maxEntryBytesForCube)
-			}
-
-			if plh.bytes+bytes > uint64(plh.maxEntryBytesForCube) {
-				//logutil.Infof("+++++ batch bytes %v B %v MB",plh.bytes,plh.bytes / 1024.0 / 1024.0)
-				err := saveLinesToStorage(plh, true)
-				if err != nil {
-					return err
-				}
-
-				plh.lineIdx = 0
-				plh.maxFieldCnt = 0
-				plh.bytes = 0
-			}
-
 			//step 2 : append line into line array
 			plh.simdCsvLineArray[plh.lineIdx] = lineOut.Line
 			plh.lineIdx++
 			plh.lineCount++
 			plh.maxFieldCnt = Max(plh.maxFieldCnt, len(lineOut.Line))
-			plh.bytes += bytes
 
 			AtomicAddDuration(plh.csvLineArray1, time.Since(wait_b))
 
@@ -523,7 +497,6 @@ func initWriteBatchHandler(handler *ParseLineHandler, wHandler *WriteBatchHandle
 	wHandler.result = &LoadResult{}
 	wHandler.closeRef = handler.closeRef
 	wHandler.lineCount = handler.lineCount
-	wHandler.maxEntryBytesForCube = handler.maxEntryBytesForCube
 	wHandler.skipWriteBatch = handler.skipWriteBatch
 
 	wHandler.pl = allocBatch(handler)
@@ -2007,22 +1980,21 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	//simdcsv
 	handler := &ParseLineHandler{
 		SharePart: SharePart{
-			load:                 load,
-			lineIdx:              0,
-			simdCsvLineArray:     make([][]string, curBatchSize),
-			storage:              ses.Pu.StorageEngine,
-			dbHandler:            dbHandler,
-			tableHandler:         tableHandler,
-			tableName:            string(load.Table.Name()),
-			dbName:               dbName,
-			txnHandler:           ses.GetTxnHandler(),
-			ses:                  ses,
-			oneTxnPerBatch:       ses.Pu.SV.GetOneTxnPerBatchDuringLoad(),
-			lineCount:            0,
-			batchSize:            curBatchSize,
-			result:               result,
-			maxEntryBytesForCube: ses.Pu.SV.GetCubeMaxEntriesBytes(),
-			skipWriteBatch:       ses.Pu.SV.GetLoadDataSkipWritingBatch(),
+			load:             load,
+			lineIdx:          0,
+			simdCsvLineArray: make([][]string, curBatchSize),
+			storage:          ses.Pu.StorageEngine,
+			dbHandler:        dbHandler,
+			tableHandler:     tableHandler,
+			tableName:        string(load.Table.Name()),
+			dbName:           dbName,
+			txnHandler:       ses.GetTxnHandler(),
+			ses:              ses,
+			oneTxnPerBatch:   ses.Pu.SV.GetOneTxnPerBatchDuringLoad(),
+			lineCount:        0,
+			batchSize:        curBatchSize,
+			result:           result,
+			skipWriteBatch:   ses.Pu.SV.GetLoadDataSkipWritingBatch(),
 		},
 		threadInfo:                    make(map[int]*ThreadInfo),
 		simdCsvGetParsedLinesChan:     atomic.Value{},

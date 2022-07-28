@@ -98,7 +98,7 @@ func (a *UnaryAgg[T1, T2]) Grows(size int, m *mheap.Mheap) error {
 		a.es = make([]bool, 0, size)
 		a.vs = encoding.DecodeSlice[T2](a.da, sz)
 	} else if n+size >= cap(a.vs) {
-		a.da = a.da[:n*8]
+		a.da = a.da[:n*sz]
 		data, err := m.Grow(a.da, int64(n+size)*int64(sz))
 		if err != nil {
 			return err
@@ -164,6 +164,9 @@ func (a *UnaryAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vector) 
 // Merge a[x] += b[y]
 func (a *UnaryAgg[T1, T2]) Merge(b Agg[any], x, y int64) {
 	b0 := b.(*UnaryAgg[T1, T2])
+	if a.es[x] && !b0.es[y] {
+		a.otyp = b0.otyp
+	}
 	a.vs[x], a.es[x] = a.merge(x, y, a.vs[x], b0.vs[y], a.es[x], b0.es[y], b0.priv)
 }
 
@@ -171,6 +174,9 @@ func (a *UnaryAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, vps [
 	b0 := b.(*UnaryAgg[T1, T2])
 	for i := range os {
 		j := vps[i] - 1
+		if a.es[j] && !b0.es[int64(i)+start] {
+			a.otyp = b0.otyp
+		}
 		a.vs[j], a.es[j] = a.merge(int64(j), int64(i)+start, a.vs[j], b0.vs[int64(i)+start], a.es[j], b0.es[int64(i)+start], b0.priv)
 	}
 }
@@ -191,6 +197,7 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mheap.Mheap) (*vector.Vector, error) {
 	}
 	if a.otyp.IsString() {
 		vec := vector.New(a.otyp)
+		vec.Nsp = nsp
 		a.vs = a.eval(a.vs)
 		vs := (any)(a.vs).([][]byte)
 		for _, v := range vs {
