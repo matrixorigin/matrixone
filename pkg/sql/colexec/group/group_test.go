@@ -175,6 +175,7 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, exprs []*plan.Exp
 
 func newExpression(pos int32) *plan.Expr {
 	return &plan.Expr{
+		Typ: new(plan.Type),
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				ColPos: pos,

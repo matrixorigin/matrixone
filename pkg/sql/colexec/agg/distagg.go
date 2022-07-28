@@ -107,7 +107,7 @@ func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mheap.Mheap) error {
 		a.maps = make([]*hashmap.StrHashMap, 0, size)
 		a.vs = encoding.DecodeSlice[T2](a.da, sz)
 	} else if n+size >= cap(a.vs) {
-		a.da = a.da[:n*8]
+		a.da = a.da[:n*sz]
 		data, err := m.Grow(a.da, int64(n+size)*int64(sz))
 		if err != nil {
 			return err
@@ -135,6 +135,9 @@ func (a *UnaryDistAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector
 
 	vec := vecs[0]
 	hasNull := vec.GetNulls().Contains(uint64(sel))
+	if hasNull {
+		return
+	}
 	if vec.Typ.IsString() {
 		v = (any)(vec.GetString(sel)).(T1)
 	} else {
@@ -151,6 +154,9 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 			j := vps[i] - 1
 			if a.maps[j].Insert(vecs, i+int(start)) {
 				hasNull := vec.GetNulls().Contains(uint64(i) + uint64(start))
+				if hasNull {
+					continue
+				}
 				v := (any)(vec.GetString(int64(i) + start)).(T1)
 				a.srcs[j] = append(a.srcs[j], v)
 				a.vs[j], a.es[j] = a.fill(int64(j), v, a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
@@ -163,6 +169,9 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 		j := vps[i] - 1
 		if a.maps[j].Insert(vecs, i+int(start)) {
 			hasNull := vec.GetNulls().Contains(uint64(i) + uint64(start))
+			if hasNull {
+				continue
+			}
 			v := vs[int64(i)+start]
 			a.srcs[j] = append(a.srcs[j], v)
 			a.vs[j], a.es[j] = a.fill(int64(j), v, a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
@@ -177,6 +186,9 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vect
 		for j := 0; j < len; j++ {
 			if a.maps[i].Insert(vecs, j) {
 				hasNull := vec.GetNulls().Contains(uint64(j))
+				if hasNull {
+					continue
+				}
 				v := (any)(vec.GetString(int64(j))).(T1)
 				a.srcs[i] = append(a.srcs[i], v)
 				a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
@@ -188,6 +200,9 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vect
 	for j, v := range vs {
 		if a.maps[i].Insert(vecs, j) {
 			hasNull := vec.GetNulls().Contains(uint64(j))
+			if hasNull {
+				continue
+			}
 			a.srcs[i] = append(a.srcs[i], v)
 			a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
 		}
@@ -199,6 +214,9 @@ func (a *UnaryDistAgg[T1, T2]) Merge(b Agg[any], x, y int64) {
 	b0 := b.(*UnaryDistAgg[T1, T2])
 	if b0.es[y] {
 		return
+	}
+	if a.es[x] && !b0.es[y] {
+		a.otyp = b0.otyp
 	}
 	for _, v := range b0.srcs[y] {
 		if a.maps[x].InsertValue(v) {
@@ -214,6 +232,9 @@ func (a *UnaryDistAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, v
 		k := int64(i) + start
 		if b0.es[k] {
 			continue
+		}
+		if a.es[j] && !b0.es[int64(i)+start] {
+			a.otyp = b0.otyp
 		}
 		for _, v := range b0.srcs[k] {
 			if a.maps[j].InsertValue(v) {
@@ -239,6 +260,7 @@ func (a *UnaryDistAgg[T1, T2]) Eval(m *mheap.Mheap) (*vector.Vector, error) {
 	}
 	if a.otyp.IsString() {
 		vec := vector.New(a.otyp)
+		vec.Nsp = nsp
 		a.vs = a.eval(a.vs)
 		vs := (any)(a.vs).([][]byte)
 		for _, v := range vs {
