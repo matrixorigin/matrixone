@@ -91,4 +91,11 @@ int32_t Decimal128_MulInt64(int64_t *r, int64_t *a, int64_t b);
 int32_t Decimal128_Div(int64_t *r, int64_t *a, int64_t *b);
 int32_t Decimal128_DivInt64(int64_t *r, int64_t *a, int64_t b);
 
+int32_t Decimal64_Add_SV(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls);
+int32_t Decimal128_Add_SV(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls);
+
+int32_t Decimal64_Add_VV(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls);
+int32_t Decimal128_Add_VV(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls);
+
+
 #endif /* _MO_H_ */

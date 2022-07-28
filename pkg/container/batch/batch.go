@@ -261,7 +261,7 @@ func (bat *Batch) Clean(m *mheap.Mheap) {
 	}
 	for _, vec := range bat.Vecs {
 		if vec != nil {
-			vector.Clean(vec, m)
+			vec.Free(m)
 		}
 	}
 	for _, r := range bat.Rs {
@@ -269,8 +269,10 @@ func (bat *Batch) Clean(m *mheap.Mheap) {
 			r.Free(m)
 		}
 	}
+	if len(bat.Zs) != 0 {
+		m.PutSels(bat.Zs)
+	}
 	bat.Vecs = nil
-	bat.Zs = nil
 }
 
 func (bat *Batch) String() string {
