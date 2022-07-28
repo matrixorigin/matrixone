@@ -17,27 +17,62 @@ package main
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestParseDNConfig(t *testing.T) {
 	data := `
-		service-type = "DN"
-
-		[log]
-		level = "debug"
-		format = "json"
-		max-size = 512
-		
-		[dn]
-		# storage directory for local data. Include DNShard metadata and TAE data.
-		data-dir = ""
-		
-		[dn.Txn.Storage]
-		# txn storage backend implementation. [TAE|MEM]
-		backend = "MEM"
+	# service node type, [DN|CN|LOG]
+	service-type = "DN"
+	
+	[log]
+	level = "debug"
+	format = "json"
+	max-size = 512
+	
+	[[fileservice]]
+	# local fileservice instance, used to store TAE Data and DNStore metadata.
+	name = "local"
+	# use disk as fileservice backend
+	backend = "DISK"
+	# set the directory used by DISK backend. There must has a file named "thisisalocalfileservicedir"
+	# in the data dir
+	data-dir = "data dir"
+	
+	[[fileservice]]
+	# s3 fileservice instance, used to store data.
+	name = "s3"
+	# use disk as fileservice backend.
+	backend = "DISK"
+	# set the directory used by DISK backend. There must has a file named "thisisalocalfileservicedir"
+	# in the data dir
+	data-dir = "data dir"
+	
+	[dn.Txn.Storage]
+	# txn storage backend implementation. [TAE|MEM]
+	backend = "MEM"
 	`
 	cfg, err := parseFromString(data)
 	assert.NoError(t, err)
 	assert.Equal(t, "MEM", cfg.DN.Txn.Storage.Backend)
+	assert.Equal(t, 2, len(cfg.FileServices))
+	assert.Equal(t, "local", cfg.FileServices[0].Name)
+	assert.Equal(t, "s3", cfg.FileServices[1].Name)
+}
+
+func TestFileServiceFactory(t *testing.T) {
+	c := &Config{}
+	c.FileServices = append(c.FileServices, fileservice.Config{
+		Name:    "a",
+		Backend: "MEM",
+	})
+
+	fs, err := c.createFileService("A")
+	assert.NoError(t, err)
+	assert.NotNil(t, fs)
+
+	fs, err = c.createFileService("B")
+	assert.Error(t, err)
+	assert.Nil(t, fs)
 }
