@@ -16,8 +16,6 @@ package plan
 
 import (
 	"fmt"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -92,7 +90,6 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 
 func getInsertExprs(stmt *tree.Insert, cols []*ColDef, tableDef *TableDef) ([]*Expr, error) {
 	var exprs []*Expr
-	var err error
 
 	if len(stmt.Columns) == 0 {
 		exprs = make([]*Expr, len(cols))
@@ -133,72 +130,15 @@ func getInsertExprs(stmt *tree.Insert, cols []*ColDef, tableDef *TableDef) ([]*E
 					},
 				}
 			} else {
-				// get default value, and init constant expr.
-				exprs[i], err = generateDefaultExpr(tableDef.Cols[i].Default, tableDef.Cols[i].Typ)
-				if err != nil {
-					return nil, err
-				}
+				exprs[i] = nil
+				//exprs[i], err = generateDefaultExpr(tableDef.Cols[i].Default, tableDef.Cols[i].Typ)
+				//if err != nil {
+				//	return nil, err
+				//}
 			}
 		}
 	}
 	return exprs, nil
-}
-
-func generateDefaultExpr(e *plan.DefaultExpr, t *plan.Type) (*Expr, error) {
-	if e == nil || !e.Exist || e.IsNull {
-		return &plan.Expr{
-			Typ: t,
-			Expr: &plan.Expr_C{
-				C: &Const{Isnull: true},
-			},
-		}, nil
-	}
-	var ret = plan.Expr{Typ: &plan.Type{
-		Id:        t.Id,
-		Nullable:  t.Nullable,
-		Width:     t.Width,
-		Precision: t.Precision,
-		Size:      t.Size,
-		Scale:     t.Scale,
-	}}
-	switch d := e.Value.ConstantValue.(type) {
-	case *plan.ConstantValue_JsonV:
-		ret.Expr = makePlan2JsonConstExpr(d.JsonV)
-	case *plan.ConstantValue_BoolV:
-		ret.Expr = makePlan2BoolConstExpr(d.BoolV)
-	case *plan.ConstantValue_Int64V:
-		ret.Expr = makePlan2Int64ConstExpr(d.Int64V)
-		ret.Typ.Id = plan.Type_INT64
-		ret.Typ.Size = 8
-		ret.Typ.Width = 64
-	case *plan.ConstantValue_Uint64V:
-		ret.Expr = makePlan2Uint64ConstExpr(d.Uint64V)
-		ret.Typ.Id = plan.Type_UINT64
-		ret.Typ.Size = 8
-		ret.Typ.Width = 64
-	case *plan.ConstantValue_Float32V:
-		ret.Expr = makePlan2Float32ConstExpr(d.Float32V)
-	case *plan.ConstantValue_Float64V:
-		ret.Expr = makePlan2Float64ConstExpr(d.Float64V)
-	case *plan.ConstantValue_StringV:
-		ret.Expr = makePlan2StringConstExpr(d.StringV)
-		ret.Typ.Id = plan.Type_VARCHAR
-	case *plan.ConstantValue_DateV:
-		ret.Expr = makePlan2DateConstExpr(types.Date(d.DateV))
-	case *plan.ConstantValue_DateTimeV:
-		ret.Expr = makePlan2DatetimeConstExpr(types.Datetime(d.DateTimeV))
-	case *plan.ConstantValue_Decimal64V:
-		d64 := types.Decimal64FromInt64Raw(d.Decimal64V.A)
-		ret.Expr = makePlan2Decimal64ConstExpr(d64)
-	case *plan.ConstantValue_Decimal128V:
-		d128 := types.Decimal128FromInt64Raw(d.Decimal128V.A, d.Decimal128V.B)
-		ret.Expr = makePlan2Decimal128ConstExpr(d128)
-	case *plan.ConstantValue_TimeStampV:
-		ret.Expr = makePlan2TimestampConstExpr(types.Timestamp(d.TimeStampV))
-	default:
-		return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("default type '%s' is not support now", t))
-	}
-	return &ret, nil
 }
 
 func getInsertTable(stmt tree.TableExpr, ctx CompilerContext) (*ObjectRef, *TableDef, error) {

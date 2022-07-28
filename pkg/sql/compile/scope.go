@@ -219,68 +219,13 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 					Scale:     colTyp.GetScale(),
 					Size:      colTyp.GetSize(),
 				},
-				Default: engine.DefaultExpr{
-					Exist:  col.GetDefault().GetExist(),
-					Value:  planValToExeVal(col.GetDefault().GetValue(), colTyp.GetId()),
-					IsNull: col.GetDefault().GetIsNull(),
-				},
+				Default: planCols[i].GetDefault(),
 				Primary: col.GetPrimary(),
 				Comment: col.GetComment(),
 			},
 		}
 	}
 	return exeCols
-}
-
-func planValToExeVal(value *plan.ConstantValue, typ plan.Type_TypeId) interface{} {
-	switch v := value.GetConstantValue().(type) {
-	case *plan.ConstantValue_BoolV:
-		return v.BoolV
-	case *plan.ConstantValue_Int64V:
-		switch typ {
-		case plan.Type_INT8:
-			return int8(v.Int64V)
-		case plan.Type_INT16:
-			return int16(v.Int64V)
-		case plan.Type_INT32:
-			return int32(v.Int64V)
-		case plan.Type_INT64:
-			return v.Int64V
-		}
-	case *plan.ConstantValue_Uint64V:
-		switch typ {
-		case plan.Type_UINT8:
-			return uint8(v.Uint64V)
-		case plan.Type_UINT16:
-			return uint16(v.Uint64V)
-		case plan.Type_UINT32:
-			return uint32(v.Uint64V)
-		case plan.Type_UINT64:
-			return v.Uint64V
-		}
-	case *plan.ConstantValue_Float32V:
-		return v.Float32V
-	case *plan.ConstantValue_Float64V:
-		switch typ {
-		case plan.Type_FLOAT32:
-			return float32(v.Float64V)
-		case plan.Type_FLOAT64:
-			return v.Float64V
-		}
-	case *plan.ConstantValue_StringV:
-		return []byte(v.StringV)
-	case *plan.ConstantValue_DateV:
-		return types.Date(v.DateV)
-	case *plan.ConstantValue_DateTimeV:
-		return types.Datetime(v.DateTimeV)
-	case *plan.ConstantValue_TimeStampV:
-		return types.Timestamp(v.TimeStampV)
-	case *plan.ConstantValue_Decimal64V:
-		return types.Decimal64FromInt64Raw(v.Decimal64V.A)
-	case *plan.ConstantValue_Decimal128V:
-		return types.Decimal128FromInt64Raw(v.Decimal128V.A, v.Decimal128V.B)
-	}
-	return nil
 }
 
 // PrintScope Print is to format scope list

@@ -16,7 +16,6 @@ package plan
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"go/constant"
 	"math"
 	"strconv"
@@ -112,210 +111,60 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 	return nil, errors.New(errno.IndeterminateDatatype, "Unknown data type.")
 }
 
-func getDefaultExprFromColumn(column *tree.ColumnTableDef, typ *plan.Type) (*plan.DefaultExpr, error) {
-	allowNull := true // be false when column has not null constraint
-	isNullExpr := func(expr tree.Expr) bool {
-		v, ok := expr.(*tree.NumVal)
-		return ok && v.Value.Kind() == constant.Unknown
-	}
+func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, error) {
+	var nullAbility bool
+	var expr tree.Expr = nil
 
-	// get isAllowNull setting
-	{
-		for _, attr := range column.Attributes {
-			if nullAttr, ok := attr.(*tree.AttributeNull); ok && !nullAttr.Is {
-				allowNull = false
-				break
-			}
+	for _, attr := range col.Attributes {
+		if s, ok := attr.(*tree.AttributeNull); ok {
+			nullAbility = s.Is
+			break
 		}
 	}
 
-	for _, attr := range column.Attributes {
-		if d, ok := attr.(*tree.AttributeDefault); ok {
-			if typ.GetId() == plan.Type_BLOB {
-				return nil, errors.New(errno.InvalidColumnDefinition, "Type text don't support default value")
-			}
-			defaultExpr := d.Expr
-			// check allowNull
-			if isNullExpr(defaultExpr) {
-				if !allowNull {
-					return nil, errors.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
-				}
-				return &plan.DefaultExpr{
-					Exist:  true,
-					Value:  nil,
-					IsNull: true,
-				}, nil
-			}
-
-			value, err := buildConstant(typ, d.Expr)
-			if err != nil {
-				return nil, errors.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
-			}
-			_, err = rangeCheck(value, typ, "", 0)
-			if err != nil {
-				return nil, errors.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
-			}
-			constantValue := convertToPlanValue(value)
-			return &plan.DefaultExpr{
-				Exist:  true,
-				Value:  constantValue,
-				IsNull: false,
-			}, nil
+	for _, attr := range col.Attributes {
+		if s, ok := attr.(*tree.AttributeDefault); ok {
+			expr = s.Expr
+			break
 		}
 	}
-	if allowNull {
-		return &plan.DefaultExpr{
-			Exist:  true,
-			Value:  nil,
-			IsNull: true,
+
+	if !nullAbility && isNullExpr(expr) {
+		return nil, errors.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", col.Name.Parts[0]))
+	}
+
+	if expr == nil {
+		return &plan.Default{
+			NullAbility:  nullAbility,
+			Expr:         nil,
+			OriginString: "",
 		}, nil
 	}
-	return &plan.DefaultExpr{
-		Exist: false,
+
+	binder := NewDefaultBinder(nil, nil)
+	planExpr, err := binder.BindExpr(expr, 0, false)
+	if err != nil {
+		return nil, err
+	}
+
+	defaultExpr, err := makePlan2CastExpr(planExpr, typ)
+	if err != nil {
+		return nil, err
+	}
+
+	return &plan.Default{
+		NullAbility:  nullAbility,
+		Expr:         defaultExpr,
+		OriginString: tree.String(expr, dialect.MYSQL),
 	}, nil
 }
 
-func convertToPlanValue(value interface{}) *plan.ConstantValue {
-	switch v := value.(type) {
-	case bool:
-		return &plan.ConstantValue{
-			ConstantValue: &plan.ConstantValue_BoolV{BoolV: v},
-		}
-	case int64:
-		return &plan.ConstantValue{
-			ConstantValue: &plan.ConstantValue_Int64V{Int64V: v},
-		}
-	case uint64:
-		return &plan.ConstantValue{
-			ConstantValue: &plan.ConstantValue_Uint64V{Uint64V: v},
-		}
-	case float32:
-		return &plan.ConstantValue{
-			ConstantValue: &plan.ConstantValue_Float32V{Float32V: v},
-		}
-	case float64:
-		return &plan.ConstantValue{
-			ConstantValue: &plan.ConstantValue_Float64V{Float64V: v},
-		}
-	case string:
-		return &plan.ConstantValue{
-			ConstantValue: &plan.ConstantValue_StringV{StringV: v},
-		}
-	case types.Date:
-		return &plan.ConstantValue{
-			ConstantValue: &plan.ConstantValue_DateV{DateV: int32(v)},
-		}
-	case types.Datetime:
-		return &plan.ConstantValue{
-			ConstantValue: &plan.ConstantValue_DateTimeV{DateTimeV: int64(v)},
-		}
-	case types.Timestamp:
-		return &plan.ConstantValue{
-			ConstantValue: &plan.ConstantValue_TimeStampV{TimeStampV: int64(v)},
-		}
-	case types.Decimal64:
-		dA := types.Decimal64ToInt64Raw(v)
-		return &plan.ConstantValue{
-			ConstantValue: &plan.ConstantValue_Decimal64V{Decimal64V: &plan.Decimal64{
-				A: dA,
-			}},
-		}
-	case types.Decimal128:
-		dA, dB := types.Decimal128ToInt64Raw(v)
-		return &plan.ConstantValue{
-			ConstantValue: &plan.ConstantValue_Decimal128V{Decimal128V: &plan.Decimal128{
-				A: dA,
-				B: dB,
-			}},
-		}
+func isNullExpr(expr tree.Expr) bool {
+	if expr == nil {
+		return false
 	}
-	return &plan.ConstantValue{
-		ConstantValue: &plan.ConstantValue_UnknownV{UnknownV: 1},
-	}
-}
-
-// rangeCheck do range check for value, and do type conversion.
-func rangeCheck(value interface{}, typ *plan.Type, columnName string, rowNumber int) (interface{}, error) {
-	errString := "Out of range value for column '%s' at row %d"
-
-	switch v := value.(type) {
-	case int64:
-		switch typ.GetId() {
-		case plan.Type_INT8:
-			if v <= math.MaxInt8 && v >= math.MinInt8 {
-				return v, nil
-			}
-		case plan.Type_INT16:
-			if v <= math.MaxInt16 && v >= math.MinInt16 {
-				return v, nil
-			}
-		case plan.Type_INT32:
-			if v <= math.MaxInt32 && v >= math.MinInt32 {
-				return v, nil
-			}
-		case plan.Type_INT64:
-			return v, nil
-		default:
-			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
-		}
-		return nil, errors.New(errno.DataException, fmt.Sprintf(errString, columnName, rowNumber))
-	case uint64:
-		switch typ.GetId() {
-		case plan.Type_UINT8:
-			if v <= math.MaxUint8 {
-				return v, nil
-			}
-		case plan.Type_UINT16:
-			if v <= math.MaxUint16 {
-				return v, nil
-			}
-		case plan.Type_UINT32:
-			if v <= math.MaxUint32 {
-				return v, nil
-			}
-		case plan.Type_UINT64:
-			return v, nil
-		default:
-			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
-		}
-		return nil, errors.New(errno.DataException, fmt.Sprintf(errString, columnName, rowNumber))
-	case float32:
-		if typ.GetId() == plan.Type_FLOAT32 {
-			return v, nil
-		}
-		return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
-	case float64:
-		switch typ.GetId() {
-		case plan.Type_FLOAT32:
-			if v <= math.MaxFloat32 && v >= -math.MaxFloat32 {
-				return v, nil
-			}
-		case plan.Type_FLOAT64:
-			return v, nil
-		default:
-			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
-		}
-		return nil, errors.New(errno.DataException, fmt.Sprintf(errString, columnName, rowNumber))
-	case string:
-		switch typ.GetId() {
-		case plan.Type_CHAR, plan.Type_VARCHAR: // string family should compare the length but not value
-			if len(v) > types.MaxStringSize {
-				return nil, errors.New(errno.DataException, "length out of 1GB is unexpected for char/varchar value")
-			}
-			if len(v) <= int(typ.Width) {
-				return v, nil
-			}
-		default:
-			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
-		}
-		return nil, errors.New(errno.DataException, fmt.Sprintf("Data too long for column '%s' at row %d", columnName, rowNumber))
-	case bytejson.ByteJson:
-		return v, nil
-	case bool, types.Date, types.Datetime, types.Timestamp, types.Decimal64, types.Decimal128:
-		return v, nil
-	default:
-		return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
-	}
+	v, ok := expr.(*tree.NumVal)
+	return ok && v.ValType == tree.P_null
 }
 
 var (
@@ -707,4 +556,24 @@ func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
 		}
 	}
 	return nil
+}
+
+func getDefaultExpr(d *plan.Default) (*Expr, error) {
+	if !d.NullAbility && d.Expr == nil {
+		return nil, errors.New("", "invalid default value")
+	}
+	if d.NullAbility && d.Expr == nil {
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: true,
+				},
+			},
+			Typ: &plan.Type{
+				Id:       plan.Type_ANY,
+				Nullable: true,
+			},
+		}, nil
+	}
+	return d.Expr, nil
 }

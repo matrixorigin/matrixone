@@ -1764,15 +1764,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			if err != nil {
 				goto handleFailed
 			}
-		case *tree.Insert:
-			_, ok := st.Rows.Select.(*tree.ValuesClause)
-			if ok {
-				selfHandle = true
-				rspLen, err = mce.handleInsertValues(st, 0)
-				if err != nil {
-					goto handleFailed
-				}
-			}
 		case *tree.DropDatabase:
 			// if the droped database is the same as the one in use, database must be reseted to empty.
 			if string(st.Name) == ses.GetDatabaseName() {

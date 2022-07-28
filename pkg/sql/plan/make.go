@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func makePlan2JsonConstExpr(v string) *plan.Expr_C {
@@ -237,60 +236,6 @@ func copyType(t *Type) *Type {
 		Size:      t.Size,
 		Scale:     t.Scale,
 	}
-}
-
-func MakePlan2DefaultExpr(expr engine.DefaultExpr) *plan.DefaultExpr {
-	ret := &plan.DefaultExpr{}
-	ret.Exist = expr.Exist
-	if !ret.Exist {
-		return ret
-	}
-	ret.IsNull = expr.IsNull
-	if ret.IsNull {
-		return ret
-	}
-	ret.Value = &plan.ConstantValue{}
-	switch t := expr.Value.(type) {
-	case bool:
-		ret.Value.ConstantValue = &plan.ConstantValue_BoolV{BoolV: t}
-	case float32:
-		ret.Value.ConstantValue = &plan.ConstantValue_Float32V{Float32V: t}
-	case float64:
-		ret.Value.ConstantValue = &plan.ConstantValue_Float64V{Float64V: t}
-	case string:
-		ret.Value.ConstantValue = &plan.ConstantValue_StringV{StringV: t}
-	case int8:
-		ret.Value.ConstantValue = &plan.ConstantValue_Int64V{Int64V: int64(t)}
-	case int16:
-		ret.Value.ConstantValue = &plan.ConstantValue_Int64V{Int64V: int64(t)}
-	case int32:
-		ret.Value.ConstantValue = &plan.ConstantValue_Int64V{Int64V: int64(t)}
-	case int64:
-		ret.Value.ConstantValue = &plan.ConstantValue_Int64V{Int64V: t}
-	case uint8:
-		ret.Value.ConstantValue = &plan.ConstantValue_Uint64V{Uint64V: uint64(t)}
-	case uint16:
-		ret.Value.ConstantValue = &plan.ConstantValue_Uint64V{Uint64V: uint64(t)}
-	case uint32:
-		ret.Value.ConstantValue = &plan.ConstantValue_Uint64V{Uint64V: uint64(t)}
-	case uint64:
-		ret.Value.ConstantValue = &plan.ConstantValue_Uint64V{Uint64V: t}
-	case types.Date:
-		ret.Value.ConstantValue = &plan.ConstantValue_DateV{DateV: int32(t)}
-	case types.Datetime:
-		ret.Value.ConstantValue = &plan.ConstantValue_DateTimeV{DateTimeV: int64(t)}
-	case types.Decimal64:
-		da := types.Decimal64ToInt64Raw(t)
-		ret.Value.ConstantValue = &plan.ConstantValue_Decimal64V{Decimal64V: &plan.Decimal64{A: da}}
-	case types.Decimal128:
-		da, db := types.Decimal128ToInt64Raw(t)
-		ret.Value.ConstantValue = &plan.ConstantValue_Decimal128V{Decimal128V: &plan.Decimal128{
-			A: da, B: db,
-		}}
-	case types.Timestamp:
-		ret.Value.ConstantValue = &plan.ConstantValue_TimeStampV{TimeStampV: int64(t)}
-	}
-	return ret
 }
 
 // if typ is decimal128 and decimal64 without scalar and precision
