@@ -16,54 +16,84 @@ package fileservice
 
 import (
 	"fmt"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
-var (
-	s3Backend    = "S3"
-	minioBackend = "MINIO"
-)
-
-// Config config to create fileservice
-type Config struct {
+// FileServiceConfig fileService config
+type FileServiceConfig struct {
+	// Name name of fileservice, describe what an instance of fileservice is used for
+	Name string `toml:"name"`
+	// Backend fileservice backend. [MEM|DISK|S3|MINIO]
+	Backend string `toml:"backend"`
+	// CacheMemCapacityBytes cache memory capacity bytes
+	CacheMemCapacityBytes toml.ByteSize `toml:"cache-mem-capacity-bytes"`
 	// S3 used to create fileservice using s3 as the backend
 	S3 S3Config `toml:"s3"`
 	// DataDir used to create fileservice using DISK as the backend
 	DataDir string `toml:"data-dir"`
 }
 
-// NewService create DN used fileservice
-func NewServiceForDN(cfg Config) (FileService, error) {
-	return newS3BasedService(cfg.S3)
-}
+const (
+	memFileServiceBackend   = "MEM"
+	diskFileServiceBackend  = "DISK"
+	s3FileServiceBackend    = "S3"
+	minioFileServiceBackend = "MINIO"
+)
 
-// NewService create CN used fileservice
-func NewServiceForCN(cfg Config) (FileService, error) {
-	return newS3BasedService(cfg.S3)
-}
-
-func newS3BasedService(s3 S3Config) (FileService, error) {
-	switch s3.Backend {
-	case minioBackend:
-		return newMinioFileService(s3)
-	case s3Backend:
-		return newS3FileService(s3)
+// NewFileService create file service from config
+func NewFileService(cfg FileServiceConfig) (FileService, error) {
+	switch strings.ToUpper(cfg.Backend) {
+	case memFileServiceBackend:
+		return newMemFileService(cfg)
+	case diskFileServiceBackend:
+		return newDiskFileService(cfg)
+	case minioFileServiceBackend:
+		return newMinioFileService(cfg)
+	case s3FileServiceBackend:
+		return newS3FileService(cfg)
 	default:
-		return nil, fmt.Errorf("not implment for %s", s3.Backend)
+		return nil, fmt.Errorf("file service backend %s not implemented", cfg.Backend)
 	}
 }
 
-func newMinioFileService(s3 S3Config) (FileService, error) {
-	return NewS3FSOnMinio(
-		s3.Endpoint,
-		s3.Bucket,
-		s3.KeyPrefix,
-	)
+func newMemFileService(cfg FileServiceConfig) (FileService, error) {
+	fs, err := NewMemoryFS()
+	if err != nil {
+		return nil, err
+	}
+	return NewCacheFS(fs, int(cfg.CacheMemCapacityBytes))
 }
 
-func newS3FileService(s3 S3Config) (FileService, error) {
-	return NewS3FS(
-		s3.Endpoint,
-		s3.Bucket,
-		s3.KeyPrefix,
+func newDiskFileService(cfg FileServiceConfig) (FileService, error) {
+	fs, err := NewLocalFS(cfg.DataDir)
+	if err != nil {
+		return nil, err
+	}
+	return NewCacheFS(fs, int(cfg.CacheMemCapacityBytes))
+}
+
+func newMinioFileService(cfg FileServiceConfig) (FileService, error) {
+	fs, err := NewS3FSOnMinio(
+		cfg.S3.Endpoint,
+		cfg.S3.Bucket,
+		cfg.S3.KeyPrefix,
 	)
+	if err != nil {
+		return nil, err
+	}
+	return NewCacheFS(fs, int(cfg.CacheMemCapacityBytes))
+}
+
+func newS3FileService(cfg FileServiceConfig) (FileService, error) {
+	fs, err := NewS3FS(
+		cfg.S3.Endpoint,
+		cfg.S3.Bucket,
+		cfg.S3.KeyPrefix,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return NewCacheFS(fs, int(cfg.CacheMemCapacityBytes))
 }
