@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -296,7 +295,8 @@ func PrintScope(prefix []byte, ss []*Scope) {
 
 // NumCPU Get the number of cpu's available for the current scope
 func (s *Scope) NumCPU() int {
-	return runtime.NumCPU()
+	//	return runtime.NumCPU()
+	return 1
 }
 
 // Run read data from storage engine and run the instructions of scope.

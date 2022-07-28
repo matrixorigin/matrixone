@@ -439,9 +439,11 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			return err
 		}
 		var rowIndex = int64(j)
-		if len(bat.Sels) != 0 {
-			rowIndex = bat.Sels[j]
-		}
+		/*
+			if len(bat.Sels) != 0 {
+				rowIndex = bat.Sels[j]
+			}
+		*/
 
 		//begin1 := time.Now()
 		for i, vec := range bat.Vecs { //col index

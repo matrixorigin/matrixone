@@ -18,6 +18,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+func ReturnType(typs []types.Type) types.Type {
+	switch typs[0].Oid {
+	case types.T_decimal64:
+		return types.New(types.T_decimal64, 0, typs[0].Scale, typs[0].Precision)
+	case types.T_decimal128:
+		return types.New(types.T_decimal128, 0, typs[0].Scale, typs[0].Precision)
+	default:
+		return types.New(types.T_float64, 0, 0, 0)
+	}
+}
+
 func NewAvg[T Numeric]() *Avg[T] {
 	return &Avg[T]{
 		cnt: int64(0),

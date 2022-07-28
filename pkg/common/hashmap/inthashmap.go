@@ -83,6 +83,14 @@ func (m *IntHashMap) AddGroup() {
 	m.rows++
 }
 
+func (m *IntHashMap) AddGroups(rows uint64) {
+	m.rows += rows
+}
+
+func (m *IntHashMap) Cardinality() uint64 {
+	return m.hashMap.Cardinality()
+}
+
 func (m *IntHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	for _, vec := range vecs {
 		switch vec.Typ.TypeSize() {

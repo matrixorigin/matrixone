@@ -15,8 +15,6 @@
 package function
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/ring/stddevpop"
-	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregate"
@@ -602,7 +600,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				_, err := aggregate.NewBitAnd(types.Type{Oid: inputs[0]})
+				_, err := aggregate.ReturnType(aggregate.BitAnd, types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
 				}
@@ -626,7 +624,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				_, err := aggregate.NewBitOr(types.Type{Oid: inputs[0]})
+				_, err := aggregate.ReturnType(aggregate.BitOr, types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
 				}
@@ -650,7 +648,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				_, err := aggregate.NewBitXor(types.Type{Oid: inputs[0]})
+				_, err := aggregate.ReturnType(aggregate.BitXor, types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
 				}
@@ -674,7 +672,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				_, err := variance.NewVarianceRingWithTypeCheck(types.Type{Oid: inputs[0]})
+				_, err := aggregate.ReturnType(aggregate.Variance, types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
 				}
@@ -698,7 +696,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				_, err := stddevpop.NewStdDevPopRingWithTypeCheck(types.Type{Oid: inputs[0]})
+				_, err := aggregate.ReturnType(aggregate.StdDevPop, types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
 				}

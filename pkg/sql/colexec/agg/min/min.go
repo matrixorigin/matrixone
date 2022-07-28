@@ -20,6 +20,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+func ReturnType(typs []types.Type) types.Type {
+	return typs[0]
+}
+
 func NewMin[T Compare]() *Min[T] {
 	return &Min[T]{}
 }

@@ -16,6 +16,10 @@ package bit_xor
 
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
+func ReturnType(_ []types.Type) types.Type {
+	return types.New(types.T_uint64, 0, 0, 0)
+}
+
 func New[T1 types.Ints | types.UInts | types.Floats]() *BitXor[T1] {
 	return &BitXor[T1]{}
 }

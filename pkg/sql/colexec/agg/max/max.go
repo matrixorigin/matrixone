@@ -20,6 +20,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+func ReturnType(typs []types.Type) types.Type {
+	return typs[0]
+}
+
 func NewMax[T Compare]() *Max[T] {
 	return &Max[T]{}
 }
