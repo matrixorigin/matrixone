@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -34,10 +33,8 @@ const (
 	localClockBackend = "LOCAL"
 	hlcClockBackend   = "HLC"
 
-	memFileServiceBackend   = "MEM"
-	diskFileServiceBackend  = "DISK"
-	s3FileServiceBackend    = "S3"
-	minioFileServiceBackend = "MINIO"
+	s3FileServiceName    = "S3"
+	localFileServiceName = "LOCAL"
 )
 
 var (
@@ -49,13 +46,6 @@ var (
 	supportTxnClockBackends = map[string]struct{}{
 		localClockBackend: {},
 		hlcClockBackend:   {},
-	}
-
-	supportFileServiceBackends = map[string]struct{}{
-		memFileServiceBackend:   {},
-		diskFileServiceBackend:  {},
-		s3FileServiceBackend:    {},
-		minioFileServiceBackend: {},
 	}
 )
 
@@ -94,21 +84,6 @@ func (s *store) createLogServiceClient(shard metadata.DNShard) (logservice.Clien
 	return s.newLogServiceClient(shard)
 }
 
-func (s *store) createFileService() (fileservice.FileService, error) {
-	switch s.cfg.FileService.Backend {
-	case memFileServiceBackend:
-		return s.newMemFileService()
-	case diskFileServiceBackend:
-		return s.newDiskFileService()
-	case minioFileServiceBackend:
-		return s.newMinioFileService()
-	case s3FileServiceBackend:
-		return s.newS3FileService()
-	default:
-		return nil, fmt.Errorf("not implment for %s", s.cfg.FileService.Backend)
-	}
-}
-
 func (s *store) newLogServiceClient(shard metadata.DNShard) (logservice.Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.LogService.ConnectTimeout.Duration)
 	defer cancel()
@@ -127,56 +102,6 @@ func (s *store) newMemTxnStorage(shard metadata.DNShard, logClient logservice.Cl
 	return mem.NewKVTxnStorage(0, logClient, s.clock), nil
 }
 
-func (s *store) newMemFileService() (fileservice.FileService, error) {
-	return fileservice.NewMemoryFS()
-}
-
-func (s *store) newDiskFileService() (fileservice.FileService, error) {
-	return fileservice.NewLocalFS(s.cfg.getDataDir())
-}
-
-func (s *store) newMinioFileService() (fileservice.FileService, error) {
-	return fileservice.NewS3FSOnMinio(
-		s.cfg.FileService.S3.Endpoint,
-		s.cfg.FileService.S3.Bucket,
-		s.cfg.FileService.S3.KeyPrefix,
-	)
-}
-
-func (s *store) newS3FileService() (fileservice.FileService, error) {
-	return fileservice.NewS3FS(
-		s.cfg.FileService.S3.Endpoint,
-		s.cfg.FileService.S3.Bucket,
-		s.cfg.FileService.S3.KeyPrefix,
-	)
-}
-
 func (s *store) newTAEStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
-
-	// file service for s3
-	s3FS, err := fileservice.NewS3FS(
-		s.cfg.FileService.S3.Endpoint,
-		s.cfg.FileService.S3.Bucket,
-		s.cfg.FileService.S3.KeyPrefix,
-	)
-	if err != nil {
-		return nil, err
-	}
-	cachedS3FS, err := fileservice.NewCacheFS(
-		s3FS,
-		128*1024*1024, //TODO load from config
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	// file service for local
-	localFS, err := fileservice.NewLocalFS(
-		s.cfg.FileService.DataDir,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return taestorage.New(shard, logClient, cachedS3FS, localFS)
+	return taestorage.New(shard, logClient, s.s3FS, s.localFS)
 }

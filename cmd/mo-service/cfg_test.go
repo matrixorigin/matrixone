@@ -17,6 +17,7 @@ package main
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -40,4 +41,20 @@ func TestParseDNConfig(t *testing.T) {
 	cfg, err := parseFromString(data)
 	assert.NoError(t, err)
 	assert.Equal(t, "MEM", cfg.DN.Txn.Storage.Backend)
+}
+
+func TestFileServiceFactory(t *testing.T) {
+	c := &Config{}
+	c.FileServices = append(c.FileServices, fileservice.Config{
+		Name:    "a",
+		Backend: "MEM",
+	})
+
+	fs, err := c.createFileService("A")
+	assert.NoError(t, err)
+	assert.NotNil(t, fs)
+
+	fs, err = c.createFileService("B")
+	assert.Error(t, err)
+	assert.Nil(t, fs)
 }
