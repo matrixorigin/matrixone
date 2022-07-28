@@ -191,7 +191,6 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	if err := b.Unmarshal(data); err != nil {
 		panic(err)
 	}
-	plog.Infof("incoming term: %d, rsm term: %d", b.Term, s.state.Term)
 	if s.state.Term > b.Term {
 		return sm.Result{}
 	}
