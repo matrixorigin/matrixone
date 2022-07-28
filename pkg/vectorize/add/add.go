@@ -14,12 +14,26 @@
 
 package add
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+/*
+#include "mo.h"
 
+#cgo CFLAGS: -I../../../cgo
+#cgo LDFLAGS: -L../../../cgo -lmo
+*/
+import "C"
+
+import (
+	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"golang.org/x/exp/constraints"
+)
+
+const (
+	LEFT_IS_SCALAR  = 1
+	RIGHT_IS_SCALAR = 2
 )
 
 func signedOverflow[T constraints.Signed](a, b, c T) bool {
@@ -31,6 +45,28 @@ func unsignedOverflow[T constraints.Unsigned](a, b, c T) bool {
 }
 
 func NumericAddSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
+	return cNumericAddSigned[T](xs, ys, rs)
+}
+
+func cNumericAddSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
+	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	flag := 0
+	if xs.IsScalar() {
+		flag |= LEFT_IS_SCALAR
+	}
+	if ys.IsScalar() {
+		flag |= RIGHT_IS_SCALAR
+	}
+
+	rc := C.SignedInt_VecAdd(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
+	if rc != 0 {
+		return moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow")
+	}
+	return nil
+}
+
+func goNumericAddSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
 	if xs.IsScalar() {
 		for i, y := range yt {
@@ -66,6 +102,28 @@ func NumericAddSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 }
 
 func NumericAddUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error {
+	return cNumericAddUnsigned[T](xs, ys, rs)
+}
+
+func cNumericAddUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error {
+	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	flag := 0
+	if xs.IsScalar() {
+		flag |= LEFT_IS_SCALAR
+	}
+	if ys.IsScalar() {
+		flag |= RIGHT_IS_SCALAR
+	}
+
+	rc := C.UnsignedInt_VecAdd(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
+	if rc != 0 {
+		return moerr.NewError(moerr.OUT_OF_RANGE, "unsigned int add overflow")
+	}
+	return nil
+}
+
+func goNumericAddUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error {
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
 	if xs.IsScalar() {
 		for i, y := range yt {
@@ -101,6 +159,28 @@ func NumericAddUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error
 }
 
 func NumericAddFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
+	return cNumericAddFloat[T](xs, ys, rs)
+}
+
+func cNumericAddFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
+	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	flag := 0
+	if xs.IsScalar() {
+		flag |= LEFT_IS_SCALAR
+	}
+	if ys.IsScalar() {
+		flag |= RIGHT_IS_SCALAR
+	}
+
+	rc := C.Float_VecAdd(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
+	if rc != 0 {
+		return moerr.NewError(moerr.OUT_OF_RANGE, "float add overflow")
+	}
+	return nil
+}
+
+func goNumericAddFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
 	if xs.IsScalar() {
 		for i, y := range yt {
@@ -127,10 +207,9 @@ func NumericAddFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 }
 
 func Uint32AddScalar(x uint32, ys []uint32, zs []uint32) {
-	for i, y := range ys {
-		zs[i] = x + y
-		if unsignedOverflow(x, y, zs[i]) {
-			panic(moerr.NewError(moerr.OUT_OF_RANGE, "uint32 add overflow"))
-		}
+	rc := C.UnsignedInt_VecAdd(unsafe.Pointer(&zs[0]), unsafe.Pointer(&x), unsafe.Pointer(&ys[0]),
+		C.uint64_t(len(zs)), nil, C.int32_t(1), C.int32_t(4))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "uint32 add overflow"))
 	}
 }
