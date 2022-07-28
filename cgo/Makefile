@@ -8,7 +8,7 @@ all: $(OBJS)
 decNumberCFLAGS=-g -O2
 decNumberSRC=external/decNumber
 %.o: $(decNumberSRC)/%.c
-	$(CC) -M $(decNumberCFLAGS) -c -o $@ $<
+	$(CC) $(decNumberCFLAGS) -c -o $@ $<
 
 .PHONY: clean
 clean:
