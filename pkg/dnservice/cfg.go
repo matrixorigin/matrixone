@@ -42,8 +42,6 @@ var (
 type Config struct {
 	// UUID dn store uuid
 	UUID string `toml:"uuid"`
-	// DataDir storage directory for local data. Include DNShard metadata and TAE data.
-	DataDir string `toml:"data-dir"`
 	// ListenAddress listening address for receiving external requests.
 	ListenAddress string `toml:"listen-address"`
 	// ServiceAddress service address for communication, if this address is not set, use
@@ -124,9 +122,6 @@ type Config struct {
 func (c *Config) validate() error {
 	if c.UUID == "" {
 		return fmt.Errorf("Config.UUID not set")
-	}
-	if c.DataDir == "" {
-		return fmt.Errorf("Config.DataDir not set")
 	}
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress
