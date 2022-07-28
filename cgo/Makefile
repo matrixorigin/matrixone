@@ -1,19 +1,14 @@
-CFLAGS=-I. -I./external/include -g -O3 -Wall -Werror
-OBJS=mo.o arith.o decimal.o
-LIBS=libdecnumber.a
+CFLAGS=-I./external/decNumber -g -O3 -Wall -Werror
+OBJS=mo.o arith.o decimal.o decSingle.o decDouble.o decQuad.o decNumber.o decContext.o
 
-%.o: %.c mo.h mo_impl.h
-	$(CC) $(CFLAGS) -c -o $@ $< 
-
-all: $(LIBS) $(OBJS)
-	ar -x libdecnumber.a
+all: $(OBJS)
 	ar -rcs libmo.a *.o
-	ranlib libmo.a
 	rm -f *.o
-	rm -f $(LIBS)
 
-libdecnumber.a:
-	(cd external; bash ./build.sh)
+decNumberCFLAGS=-g -O2
+decNumberSRC=external/decNumber
+%.o: $(decNumberSRC)/%.c
+	$(CC) -M $(decNumberCFLAGS) -c -o $@ $<
 
 .PHONY: clean
 clean:
