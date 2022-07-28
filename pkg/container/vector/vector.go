@@ -3209,7 +3209,7 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 	}
 	defer func() {
 		size := v.Typ.Oid.TypeLen()
-		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar {
+		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar && v.Typ.Oid != types.T_json {
 			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
 		}
 	}()
@@ -4962,7 +4962,7 @@ func (v *Vector) GetColumnData(selectIndexs []int64, occurCounts []int64, rs []s
 				rs[i] = rs[i-1]
 			}
 		}
-	case types.T_char, types.T_varchar:
+	case types.T_char, types.T_varchar, types.T_json:
 		vs := v.Col.(*types.Bytes)
 		var i int64
 		for i = 0; i < int64(rows); i++ {

@@ -29,11 +29,29 @@ func (bj ByteJson) String() string {
 	return string(ret)
 }
 
+// MarshalJSON transform bytejson to []byte,for visible
 func (bj ByteJson) MarshalJSON() ([]byte, error) {
 	ret := make([]byte, 0, len(bj.Data)*3/2)
 	return bj.to(ret)
 }
 
+// Marshal transform bytejson to []byte,for storage
+func (bj ByteJson) Marshal() ([]byte, error) {
+	buf := make([]byte, len(bj.Data)+1)
+	buf[0] = byte(bj.Type)
+	copy(buf[1:], bj.Data)
+	return buf, nil
+}
+
+// Unmarshal transform storage []byte  to bytejson
+func (bj *ByteJson) Unmarshal(buf []byte) error {
+	//TODO add validate checker
+	bj.Type = TpCode(buf[0])
+	bj.Data = buf[1:]
+	return nil
+}
+
+// UnmarshalJSON transform visible []byte to bytejson
 func (bj *ByteJson) UnmarshalJSON(data []byte) error {
 	var decoder = json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()

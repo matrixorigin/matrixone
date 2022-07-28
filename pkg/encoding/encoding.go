@@ -70,11 +70,15 @@ func Decode(data []byte, v interface{}) error {
 }
 
 func EncodeJson(v bytejson.ByteJson) ([]byte, error) {
-	return EncodeFixed(v), nil
+	//TODO handle error
+	buf, _ := v.Marshal()
+	return buf, nil
 }
 
 func DecodeJson(buf []byte) bytejson.ByteJson {
-	bj := *(*bytejson.ByteJson)(unsafe.Pointer(&buf[0]))
+	bj := bytejson.ByteJson{}
+	//TODO handle error
+	_ = bj.Unmarshal(buf)
 	return bj
 }
 
