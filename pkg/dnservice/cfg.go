@@ -75,6 +75,8 @@ type Config struct {
 		Backend string `toml:"backend"`
 		// S3 s3 configuration
 		S3 fileservice.S3Config `toml:"s3"`
+		// DataDir
+		DataDir string `toml:"data-dir"`
 	}
 
 	// RPC configuration
