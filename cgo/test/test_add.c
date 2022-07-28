@@ -18,18 +18,18 @@
 #include "../mo.h"
 
 int test_addi32() {
-	int32_t r[8192];
-	int32_t a[8192];
-	int32_t b[8192];
-	for (int i = 0; i < 8192; i++) {
-		a[i] = i;
-		b[i] = 1;
-	}
+    int32_t r[8192];
+    int32_t a[8192];
+    int32_t b[8192];
+    for (int i = 0; i < 8192; i++) {
+        a[i] = i;
+        b[i] = 1;
+    }
 
-	int32_t rc = SignedInt_VecAdd(r, a, b, 8192, NULL, 0, 4);
-	return rc;
+    int32_t rc = SignedInt_VecAdd(r, a, b, 8192, NULL, 0, 4);
+    return rc;
 }
 
 int main() {
-	test_addi32();
+    test_addi32();
 }
