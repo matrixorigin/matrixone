@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/add"
 )
 
 var zeroUint64 []uint64
@@ -118,12 +117,12 @@ func fillKeys[T any](m *IntHashMap, vec *vector.Vector, size uint32, start int, 
 				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
 				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = vs[i+start]
 			}
-			add.Uint32AddScalar(1+size, keyOffs[:n], keyOffs[:n])
+			uint32AddScalar(1+size, keyOffs[:n], keyOffs[:n])
 		} else {
 			for i := 0; i < n; i++ {
 				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = vs[i+start]
 			}
-			add.Uint32AddScalar(size, keyOffs[:n], keyOffs[:n])
+			uint32AddScalar(size, keyOffs[:n], keyOffs[:n])
 		}
 	} else {
 		nsp := vec.GetNulls()
@@ -192,4 +191,11 @@ func fillStrKey(m *IntHashMap, vec *vector.Vector, start int, n int) {
 			}
 		}
 	}
+}
+
+func uint32AddScalar(x uint32, ys, rs []uint32) []uint32 {
+	for i, y := range ys {
+		rs[i] = x + y
+	}
+	return rs
 }
