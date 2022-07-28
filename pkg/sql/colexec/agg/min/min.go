@@ -49,7 +49,7 @@ func (m *Min[T]) Merge(_ int64, _ int64, x T, y T, xEmpty bool, yEmpty bool, _ a
 		if !xEmpty && x < y {
 			return x, false
 		}
-		return y, true
+		return y, false
 	}
 	return x, xEmpty
 }

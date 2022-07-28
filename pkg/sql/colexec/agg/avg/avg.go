@@ -101,7 +101,7 @@ func (a *Decimal64Avg) Fill(i int64, value types.Decimal64, ov types.Decimal128,
 
 func (a *Decimal64Avg) Merge(xIndex int64, yIndex int64, x types.Decimal128, y types.Decimal128, xEmpty bool, yEmpty bool, yAvg any) (types.Decimal128, bool) {
 	if !yEmpty {
-		ya := yAvg.(*Decimal128Avg)
+		ya := yAvg.(*Decimal64Avg)
 		a.cnts[xIndex] += ya.cnts[yIndex]
 		if !xEmpty {
 			return x.Add(y), false

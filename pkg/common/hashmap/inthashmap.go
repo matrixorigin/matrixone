@@ -15,7 +15,6 @@
 package hashmap
 
 import (
-	"fmt"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -94,9 +93,6 @@ func (m *IntHashMap) Cardinality() uint64 {
 
 func (m *IntHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	for _, vec := range vecs {
-		{
-			fmt.Printf("typ: %v: %v\n", vec.Typ.TypeSize(), vec.Col)
-		}
 		switch vec.Typ.TypeSize() {
 		case 1:
 			fillKeys[uint8](m, vec, 1, start, count)
