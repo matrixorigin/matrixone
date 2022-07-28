@@ -283,7 +283,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		state, err = leaderStore.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
-		assert.Equal(t, uint64(checkBootstrapInterval), leaderStore.bootstrapCheckInterval)
+		assert.Equal(t, uint64(checkBootstrapCycles), leaderStore.bootstrapCheckCycles)
 		require.NotNil(t, leaderStore.bootstrapMgr)
 		assert.False(t, leaderStore.bootstrapMgr.CheckBootstrap(state.LogState))
 
@@ -484,13 +484,13 @@ func testBootstrap(t *testing.T, fail bool) {
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
-		assert.Equal(t, uint64(checkBootstrapInterval), store.bootstrapCheckInterval)
+		assert.Equal(t, uint64(checkBootstrapCycles), store.bootstrapCheckCycles)
 		require.NotNil(t, store.bootstrapMgr)
 		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
 
 		if fail {
 			// keep checking, bootstrap will eventually be set as failed
-			for i := 0; i <= checkBootstrapInterval; i++ {
+			for i := 0; i <= checkBootstrapCycles; i++ {
 				store.checkBootstrap(state)
 			}
 

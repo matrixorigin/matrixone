@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -44,8 +45,15 @@ func Test_mce(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		eng := mock_frontend.NewMockEngine(ctrl)
+		eng := mock_frontend.NewMockTxnEngine(ctrl)
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
+
+		txn := mock_frontend.NewMockTxn(ctrl)
+		txn.EXPECT().GetCtx().Return(nil).AnyTimes()
+		txn.EXPECT().Commit().Return(nil).AnyTimes()
+		txn.EXPECT().Rollback().Return(nil).AnyTimes()
+		txn.EXPECT().String().Return("txn0").AnyTimes()
+		eng.EXPECT().StartTxn(nil).Return(txn, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
@@ -178,6 +186,11 @@ func Test_mce(t *testing.T) {
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 
+		config.StorageEngine = eng
+		defer func() {
+			config.StorageEngine = nil
+		}()
+
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
 
 		mce := NewMysqlCmdExecutor()
@@ -247,7 +260,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		eng := mock_frontend.NewMockEngine(ctrl)
+		eng := mock_frontend.NewMockTxnEngine(ctrl)
 
 		cnt := 0
 		eng.EXPECT().Database(ctx, gomock.Any(), gomock.Any()).DoAndReturn(
@@ -259,6 +272,13 @@ func Test_mce_selfhandle(t *testing.T) {
 				return nil, fmt.Errorf("fake error")
 			},
 		).AnyTimes()
+
+		txn := mock_frontend.NewMockTxn(ctrl)
+		txn.EXPECT().GetCtx().Return(nil).AnyTimes()
+		txn.EXPECT().Commit().Return(nil).AnyTimes()
+		txn.EXPECT().Rollback().Return(nil).AnyTimes()
+		txn.EXPECT().String().Return("txn0").AnyTimes()
+		eng.EXPECT().StartTxn(nil).Return(txn, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
@@ -274,6 +294,11 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
+
+		config.StorageEngine = eng
+		defer func() {
+			config.StorageEngine = nil
+		}()
 
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
 

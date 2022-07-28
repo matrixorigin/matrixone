@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "with t11 as (select * from (select * from t1) as t22) update t11 join t2 on t11.a = t2.a set t2.b = 666;",
-		output: "with t11 as (select * from (select * from t1) as t22) update t11 inner join t2 on t11.a = t2.a set t2.b = 666",
+		input:  "DELETE a1, a2 FROM t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.a = a2.b;",
+		output: "delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.a = a2.b",
 	}
 )
 

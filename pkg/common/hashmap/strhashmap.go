@@ -28,6 +28,10 @@ func init() {
 	for i := range OneInt64s {
 		OneInt64s[i] = 1
 	}
+	OneUInt8s = make([]uint8, UnitLimit)
+	for i := range OneUInt8s {
+		OneUInt8s[i] = 1
+	}
 }
 
 func NewStrMap(hasNull bool) *StrHashMap {

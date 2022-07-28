@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/fagongzi/goetty/v2/codec"
@@ -27,24 +28,23 @@ var (
 )
 
 type messageCodec struct {
-	encoder codec.Encoder
-	deocder codec.Decoder
+	codec codec.Codec
+	bc    codec.Codec
 }
 
 // NewMessageCodec create a message codec. If the message is a PayloadMessage, payloadCopyBufSize
 // determines how much data is copied from the payload to the socket each time.
 func NewMessageCodec(messageFactory func() Message, payloadCopyBufSize int) Codec {
 	bc := &baseCodec{messageFactory: messageFactory, payloadBufSize: payloadCopyBufSize}
-	_, decoder := length.New(bc, bc)
-	return &messageCodec{encoder: bc, deocder: decoder}
+	return &messageCodec{codec: length.New(bc), bc: bc}
 }
 
-func (c *messageCodec) Decode(in *buf.ByteBuf) (bool, interface{}, error) {
-	return c.deocder.Decode(in)
+func (c *messageCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
+	return c.codec.Decode(in)
 }
 
-func (c *messageCodec) Encode(data interface{}, out *buf.ByteBuf) error {
-	return c.encoder.Encode(data, out)
+func (c *messageCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) error {
+	return c.bc.Encode(data, out, conn)
 }
 
 type baseCodec struct {
@@ -52,10 +52,9 @@ type baseCodec struct {
 	messageFactory func() Message
 }
 
-func (c *baseCodec) Decode(in *buf.ByteBuf) (bool, interface{}, error) {
+func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 	message := c.messageFactory()
-
-	data := in.GetMarkedRemindData()
+	data := in.RawSlice(in.GetReadIndex(), in.GetMarkIndex())
 	flag := data[0]
 	data = data[1:]
 	var payloadData []byte
@@ -68,18 +67,19 @@ func (c *baseCodec) Decode(in *buf.ByteBuf) (bool, interface{}, error) {
 
 	err := message.Unmarshal(data)
 	if err != nil {
-		return false, nil, err
+		return nil, false, err
 	}
 
 	if len(payloadData) > 0 {
 		message.(PayloadMessage).SetPayloadField(payloadData)
 	}
 
-	in.MarkedBytesReaded()
-	return true, message, nil
+	in.SetReadIndex(in.GetMarkIndex())
+	in.ClearMark()
+	return message, true, nil
 }
 
-func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf) error {
+func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) error {
 	if message, ok := data.(Message); ok {
 		flag := byte(0)
 		size := 1 // 1 bytes flag
@@ -101,33 +101,29 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf) error {
 		size += msize
 
 		// 4 bytes message size
-		buf.MustWriteInt(out, size)
+		out.WriteInt(size)
 		// 1 byte flag
-		buf.MustWriteByte(out, flag)
+		out.MustWriteByte(flag)
 		// 4 bytes message size
 		if hasPayload {
-			buf.MustWriteInt(out, msize)
+			out.WriteInt(msize)
 		}
 		// message
 		index := out.GetWriteIndex()
-		out.Expansion(msize)
-		if _, err := message.MarshalTo(out.RawBuf()[index : index+msize]); err != nil {
+		out.Grow(msize)
+		out.SetWriteIndex(index + msize)
+		if _, err := message.MarshalTo(out.RawSlice(index, index+msize)); err != nil {
 			return err
-		}
-		if err := out.SetWriterIndex(index + msize); err != nil {
-			panic(err)
 		}
 
 		// payload
 		if hasPayload {
 			// recover payload
 			payload.SetPayloadField(payloadData)
-
-			if _, err := out.FlushToSink(); err != nil {
+			if _, err := out.WriteTo(conn); err != nil {
 				return err
 			}
-
-			if _, err := out.WriteToSink(payloadData, c.payloadBufSize); err != nil {
+			if err := buf.WriteTo(payloadData, conn, c.payloadBufSize); err != nil {
 				return err
 			}
 		}
