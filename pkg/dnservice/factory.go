@@ -18,12 +18,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
+	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
 )
 
 const (
@@ -33,10 +33,8 @@ const (
 	localClockBackend = "LOCAL"
 	hlcClockBackend   = "HLC"
 
-	memFileServiceBackend   = "MEM"
-	diskFileServiceBackend  = "DISK"
-	s3FileServiceBackend    = "S3"
-	minioFileServiceBackend = "MINIO"
+	s3FileServiceName    = "S3"
+	localFileServiceName = "LOCAL"
 )
 
 var (
@@ -48,13 +46,6 @@ var (
 	supportTxnClockBackends = map[string]struct{}{
 		localClockBackend: {},
 		hlcClockBackend:   {},
-	}
-
-	supportFileServiceBackends = map[string]struct{}{
-		memFileServiceBackend:   {},
-		diskFileServiceBackend:  {},
-		s3FileServiceBackend:    {},
-		minioFileServiceBackend: {},
 	}
 )
 
@@ -74,8 +65,13 @@ func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, er
 	}
 
 	switch s.cfg.Txn.Storage.Backend {
+
 	case memStorageBackend:
 		return s.newMemTxnStorage(shard, logClient)
+
+	case taeStorageBackend:
+		return s.newTAEStorage(shard, logClient)
+
 	default:
 		return nil, fmt.Errorf("not implment for %s", s.cfg.Txn.Storage.Backend)
 	}
@@ -86,21 +82,6 @@ func (s *store) createLogServiceClient(shard metadata.DNShard) (logservice.Clien
 		return s.options.logServiceClientFactory(shard)
 	}
 	return s.newLogServiceClient(shard)
-}
-
-func (s *store) createFileService() (fileservice.FileService, error) {
-	switch s.cfg.FileService.Backend {
-	case memFileServiceBackend:
-		return s.newMemFileService()
-	case diskFileServiceBackend:
-		return s.newDiskFileService()
-	case minioFileServiceBackend:
-		return s.newMinioFileService()
-	case s3FileServiceBackend:
-		return s.newS3FileService()
-	default:
-		return nil, fmt.Errorf("not implment for %s", s.cfg.FileService.Backend)
-	}
 }
 
 func (s *store) newLogServiceClient(shard metadata.DNShard) (logservice.Client, error) {
@@ -121,26 +102,6 @@ func (s *store) newMemTxnStorage(shard metadata.DNShard, logClient logservice.Cl
 	return mem.NewKVTxnStorage(0, logClient, s.clock), nil
 }
 
-func (s *store) newMemFileService() (fileservice.FileService, error) {
-	return fileservice.NewMemoryFS()
-}
-
-func (s *store) newDiskFileService() (fileservice.FileService, error) {
-	return fileservice.NewLocalFS(s.cfg.getDataDir())
-}
-
-func (s *store) newMinioFileService() (fileservice.FileService, error) {
-	return fileservice.NewS3FSOnMinio(
-		s.cfg.FileService.S3.Endpoint,
-		s.cfg.FileService.S3.Bucket,
-		s.cfg.FileService.S3.KeyPrefix,
-	)
-}
-
-func (s *store) newS3FileService() (fileservice.FileService, error) {
-	return fileservice.NewS3FS(
-		s.cfg.FileService.S3.Endpoint,
-		s.cfg.FileService.S3.Bucket,
-		s.cfg.FileService.S3.KeyPrefix,
-	)
+func (s *store) newTAEStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
+	return taestorage.New(shard, logClient, s.s3FS, s.localFS)
 }
