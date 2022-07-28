@@ -2,6 +2,7 @@ package logservicedriver
 
 import (
 	"errors"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
@@ -42,15 +43,18 @@ func (d *LogServiceDriver) onAppendQueue(appender *driverAppender) {
 		appender.entry.SetAppended(d.getAppended())
 		appender.contextDuration = d.config.NewClientDuration
 		appender.wg.Add(1)
-		appender.append()
+		go appender.append()
 }
 
 func (d *LogServiceDriver) getClient() (client *clientWithRecord, lsn uint64) {
-	lsn, err := d.tryAllocate(uint64(d.config.ClientAppendDuration))
+	lsn, err := d.retryAllocateAppendLsnWithTimeout(uint64(d.config.AppenderMaxCount),time.Second)
 	if err != nil {
 		panic(err) //TODO retry
 	}
-	client = d.appendClient
+	client,err = d.clientPool.Get()
+	if err != nil {
+		panic(err) //TODO retry
+	}
 	return
 }
 
@@ -60,6 +64,7 @@ func (d *LogServiceDriver) onAppendedQueue(items []any, q chan any) {
 	for _, item := range items {
 			appender := item.(*driverAppender)
 			appender.waitDone()
+			d.clientPool.Put(appender.client)
 			appender.freeEntries()
 			appenders = append(appenders, appender)
 	}

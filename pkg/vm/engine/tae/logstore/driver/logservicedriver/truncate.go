@@ -2,17 +2,22 @@ package logservicedriver
 
 import (
 	"context"
+
 	// "time"
 )
 
 // driver lsn -> entry lsn
-// 
+//
 //
 func (d *LogServiceDriver) Truncate(lsn uint64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), d.config.TruncateDuration)
 	defer cancel()
-	client := d.truncateClient
-	err := client.c.Truncate(ctx, lsn)
+	client,err := d.clientPool.Get()
+	defer d.clientPool.Put(client)
+	if err != nil { //TODO
+		panic(err)
+	}
+	err = client.c.Truncate(ctx, lsn)
 	if err != nil { //TODO
 		panic(err)
 	}

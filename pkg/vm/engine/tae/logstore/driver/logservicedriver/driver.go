@@ -2,10 +2,28 @@ package logservicedriver
 
 import (
 	"context"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
+
+
+func RetryWithTimeout(timeoutDuration time.Duration, fn func()(shouldReturn bool)) error{
+	ctx,cancel:=context.WithTimeout(context.Background(),timeoutDuration)
+	defer cancel()
+	for{
+		select{
+		case <-ctx.Done():
+			return ErrRetryTimeOut
+		default:
+			if fn(){
+				return nil
+			}
+		}
+	}
+}
 
 type LogServiceDriver struct {
 	clientPool *clientpool
@@ -13,10 +31,6 @@ type LogServiceDriver struct {
 	appendable *driverAppender
 	*driverInfo
 	*readCache
-
-	appendClient *clientWithRecord
-	readClient *clientWithRecord
-	truncateClient *clientWithRecord
 
 	closeCtx        context.Context
 	closeCancel     context.CancelFunc
@@ -36,9 +50,10 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		cancelDuration: cfg.NewClientDuration,
 		recordSize: cfg.NewRecordSize,
 		logserviceClientConfig: cfg.ClientConfig,
+		GetClientRetryTimeOut: cfg.GetClientRetryTimeOut,
 	}
 	d := &LogServiceDriver{
-		clientPool: newClientPool(100,50,clientpoolConfig),
+		clientPool: newClientPool(cfg.ClientPoolMaxSize,cfg.ClientPoolMaxSize,clientpoolConfig),
 		config:          cfg,
 		appendable:      newDriverAppender(),
 		driverInfo:      newDriverInfo(),
@@ -59,6 +74,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 
 func (d *LogServiceDriver) Close() error {
 	logutil.Infof("append%d,flush%d",d.appendtimes,d.flushtimes)
+	d.clientPool.Close()
 	d.closeCancel()
 	d.preAppendLoop.Stop()
 	d.appendedLoop.Stop()

@@ -10,18 +10,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 )
 
-var ErrNoClientAvailable=errors.New("no client available")
-var ErrClientPoolClosed=errors.New("client pool closed")
+var ErrNoClientAvailable = errors.New("no client available")
+var ErrClientPoolClosed = errors.New("client pool closed")
 
 type clientConfig struct {
 	cancelDuration         time.Duration
 	recordSize             int
 	logserviceClientConfig *logservice.ClientConfig
+	GetClientRetryTimeOut  time.Duration
 }
 
 type clientWithRecord struct {
 	c      logservice.Client
 	record logservice.LogRecord
+	id     int
 }
 
 func newClient(cancelDuration time.Duration, recordsize int, cfg *logservice.ClientConfig) *clientWithRecord {
@@ -43,25 +45,27 @@ func (c *clientWithRecord) Close() {
 }
 
 type clientpool struct {
-	maxCount int
-	count    int
+	maxCount   int
+	count      int
+	getTimeout time.Duration
 
 	closed int32
 
 	freeClients   []*clientWithRecord
 	clientFactory func() *clientWithRecord
-	closefn func(*clientWithRecord)
+	closefn       func(*clientWithRecord)
 	mu            sync.Mutex
 }
 
 func newClientPool(maxsize, initsize int, cfg *clientConfig) *clientpool {
 	pool := &clientpool{
 		maxCount:    maxsize,
+		getTimeout:  cfg.GetClientRetryTimeOut,
 		freeClients: make([]*clientWithRecord, initsize),
-		mu: sync.Mutex{},
+		mu:          sync.Mutex{},
 	}
-	pool.clientFactory=pool.newClientFactory(cfg)
-	pool.closefn=pool.onClose
+	pool.clientFactory = pool.newClientFactory(cfg)
+	pool.closefn = pool.onClose
 
 	for i := 0; i < initsize; i++ {
 		pool.freeClients[i] = pool.clientFactory()
@@ -71,63 +75,76 @@ func newClientPool(maxsize, initsize int, cfg *clientConfig) *clientpool {
 
 func (c *clientpool) newClientFactory(cfg *clientConfig) func() *clientWithRecord {
 	return func() *clientWithRecord {
-		return newClient(cfg.cancelDuration, cfg.recordSize, cfg.logserviceClientConfig)
+		c.count++
+		client := newClient(cfg.cancelDuration, cfg.recordSize, cfg.logserviceClientConfig)
+		client.id = c.count
+		return client
 	}
 }
 
-func (c *clientpool) Close(){
-	if c.IsClosed(){
+func (c *clientpool) Close() {
+	if c.IsClosed() {
 		return
 	}
 	c.mu.Lock()
-	if c.IsClosed(){
+	if c.IsClosed() {
 		c.mu.Unlock()
 		return
 	}
-	for _,client:=range c.freeClients{
+	for _, client := range c.freeClients {
 		c.closefn(client)
 	}
-	atomic.StoreInt32(&c.closed,1)
+	atomic.StoreInt32(&c.closed, 1)
 	c.mu.Unlock()
 }
 
-func (c *clientpool) onClose(client *clientWithRecord){
+func (c *clientpool) onClose(client *clientWithRecord) {
 	client.Close()
 }
 
-func (c *clientpool) Get() (*clientWithRecord,error) {
-	if c.IsClosed(){
-		return nil,ErrClientPoolClosed
+// func (c *clientpool) GetAndWait() (*clientWithRecord, error) {
+// 	client, err := c.Get()
+// 	if err == ErrNoClientAvailable {
+// 		retryWithTimeout(c.getTimeout, func() (shouldReturn bool) {
+// 			client, err = c.Get()
+// 			return err != ErrNoClientAvailable
+// 		})
+// 	}
+// 	return client, nil
+// }
+
+func (c *clientpool) Get() (*clientWithRecord, error) {
+	if c.IsClosed() {
+		return nil, ErrClientPoolClosed
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.IsClosed(){
-		return nil,ErrClientPoolClosed
+	if c.IsClosed() {
+		return nil, ErrClientPoolClosed
 	}
-	if c.count==c.maxCount{
-		return nil,ErrNoClientAvailable
+	if len(c.freeClients) == 0 {
+		if c.count == c.maxCount {
+			return nil, ErrNoClientAvailable
+		}
+		return c.clientFactory(), nil
 	}
-	if len(c.freeClients)==0{
-		c.count++
-		return c.clientFactory(),nil
-	}
-	client:=c.freeClients[len(c.freeClients)-1]
-	c.freeClients=c.freeClients[:len(c.freeClients)-1]
-	return client,nil
+	client := c.freeClients[len(c.freeClients)-1]
+	c.freeClients = c.freeClients[:len(c.freeClients)-1]
+	return client, nil
 }
 
-func (c *clientpool) IsClosed()bool{
-	closed:=atomic.LoadInt32(&c.closed)
-	return closed==1
+func (c *clientpool) IsClosed() bool {
+	closed := atomic.LoadInt32(&c.closed)
+	return closed == 1
 }
 
-func (c *clientpool) Put(client *clientWithRecord){
-	if c.IsClosed(){
+func (c *clientpool) Put(client *clientWithRecord) {
+	if c.IsClosed() {
 		c.closefn(client)
 		return
 	}
 	c.mu.Lock()
-	if c.IsClosed(){
+	if c.IsClosed() {
 		c.closefn(client)
 		c.mu.Unlock()
 		return

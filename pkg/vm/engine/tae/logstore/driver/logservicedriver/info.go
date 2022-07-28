@@ -3,6 +3,7 @@ package logservicedriver
 import (
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -62,6 +63,25 @@ func (info *driverInfo) getAppended() uint64 {
 	return info.appended.Intervals[0].End
 }
 
+func (info *driverInfo) retryAllocateAppendLsnWithTimeout(maxPendding uint64, timeout time.Duration) (lsn uint64, err error) {
+	lsn, err = info.tryAllocate(maxPendding)
+	if err == ErrTooMuchPenddings {
+		RetryWithTimeout(timeout, func() (shouldReturn bool) {
+			info.commitCond.L.Lock()
+			lsn, err = info.tryAllocate(maxPendding)
+			if err != ErrTooMuchPenddings {
+				info.commitCond.L.Unlock()
+				return true
+			}
+			info.commitCond.Wait()
+			info.commitCond.L.Unlock()
+			lsn, err = info.tryAllocate(maxPendding)
+			return err != ErrTooMuchPenddings
+		})
+	}
+	return
+}
+
 func (info *driverInfo) tryAllocate(maxPendding uint64) (lsn uint64, err error) {
 	appended := info.getAppended()
 	if info.appending-appended >= maxPendding {
@@ -82,9 +102,6 @@ func (info *driverInfo) logAppend(appender *driverAppender) {
 }
 
 func (info *driverInfo) onAppend(appended, logserviceAppended []uint64) {
-	info.commitCond.L.Lock()
-	info.commitCond.Broadcast()
-	info.commitCond.L.Unlock()
 	appendedArray := common.NewClosedIntervalsBySlice(appended)
 	info.appendedMu.Lock()
 	info.appended.TryMerge(*appendedArray)
@@ -94,6 +111,9 @@ func (info *driverInfo) onAppend(appended, logserviceAppended []uint64) {
 	info.logserviceAppendedMu.Lock()
 	info.logserviceAppended.TryMerge(*logserviceAppendedArray)
 	info.logserviceAppendedMu.Unlock()
+	info.commitCond.L.Lock()
+	info.commitCond.Broadcast()
+	info.commitCond.L.Unlock()
 }
 
 func (info *driverInfo) tryGetLogServiceLsnByDriverLsn(driverLsn uint64) (uint64, error) {

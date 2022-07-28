@@ -43,6 +43,8 @@ func (d *LogServiceDriver) Read(drlsn uint64) (*entry.Entry, error) {
 }
 
 func (d *LogServiceDriver) tryRead(lsn uint64) (*recordEntry, error) {
+	d.readMu.RLock()
+	defer d.readMu.RUnlock()
 	record, ok := d.records[lsn]
 	if !ok {
 		return nil, ErrRecordNotFound
@@ -54,7 +56,11 @@ func (d *LogServiceDriver) readFromLogService(lsn uint64) {
 	defer d.readMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
 	defer cancel()
-	client := d.readClient
+	client,err := d.clientPool.Get()
+	defer d.clientPool.Put(client)
+	if err != nil{
+		panic(err)
+	}
 	records, _, err := client.c.Read(ctx, lsn, d.config.ReadMaxSize)
 	if err != nil { //TODO
 		panic(err)

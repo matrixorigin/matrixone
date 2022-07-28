@@ -40,7 +40,6 @@ func (a *driverAppender) append() {
 	copy(record.Payload(), a.entry.payload)
 	record.ResizePayload(size)
 	lsn, err := a.client.c.Append(ctx, record)
-	// for err ==
 	if err != nil {
 		logutil.Infof("size is %d",size)
 		panic(err)

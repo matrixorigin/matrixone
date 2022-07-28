@@ -1,12 +1,14 @@
 package logservicedriver
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"github.com/panjf2000/ants/v2"
 
 	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/stretchr/testify/assert"
@@ -30,28 +32,61 @@ func TestAppendRead(t *testing.T) {
 
 	cfg := NewTestConfig(ccfg)
 	driver := NewLogServiceDriver(cfg)
-	defer func() {
-		assert.NoError(t, driver.Close())
-	}()
 
-	entries := make([]*entry.Entry, 0)
-	for i := 0; i < 10; i++ {
-		e := entry.MockEntry()
-		driver.Append(e)
-		entries = append(entries, e)
+	entryCount := 100
+	wg:=&sync.WaitGroup{}
+	worker, _ := ants.NewPool(100)
+	entries := make([]*entry.Entry, entryCount)
+	appendfn := func(i int) func() {
+		return func() {
+			e := entry.MockEntry()
+			driver.Append(e)
+			entries[i] = e
+			wg.Done()
+		}
 	}
 
-	for _, e := range entries {
-		e.WaitDone()
+	reanfn := func(i int) func() {
+		return func() {
+			e := entries[i]
+			e.WaitDone()
+			e2, err := driver.Read(e.Lsn)
+			assert.NoError(t, err)
+			assert.Equal(t, e2.Lsn, e.Lsn)
+			_,lsn1:=e.Entry.GetLsn()
+			_,lsn2:=e2.Entry.GetLsn()
+			assert.Equal(t, lsn1, lsn2)
+			wg.Done()
+			e2.Entry.Free()
+		}
 	}
 
-	for _, e := range entries {
-		e2, err := driver.Read(e.Lsn)
-		assert.NoError(t, err)
-		assert.Equal(t, e2.Lsn, e.Lsn)
+	for i := 0; i < entryCount; i++ {
+		wg.Add(1)
+		worker.Submit(appendfn(i))
+	}
+	wg.Wait()
+
+
+	for i := 0; i < entryCount; i++ {
+		wg.Add(1)
+		worker.Submit(reanfn(i))
+	}
+	wg.Wait()
+
+	// driver = restartDriver(t, driver)
+
+	// for i := 0; i < entryCount; i++ {
+	// 	wg.Add(1)
+	// 	worker.Submit(reanfn(i))
+	// }
+	// wg.Wait()
+
+	for _,e:=range entries{
+		e.Entry.Free()
 	}
 
-	driver = restartDriver(t, driver)
+	driver.Close()
 }
 
 func TestTruncate(t *testing.T) {
