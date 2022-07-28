@@ -19,44 +19,37 @@ import (
 )
 
 var (
-	memFileServiceBackend   = "MEM"
-	diskFileServiceBackend  = "DISK"
-	s3FileServiceBackend    = "S3"
-	minioFileServiceBackend = "MINIO"
+	s3Backend    = "S3"
+	minioBackend = "MINIO"
 )
 
 // Config config to create fileservice
 type Config struct {
-	// Backend file service backend implementation. [Mem|DISK|S3|MINIO]. Default is DISK.
-	Backend string `toml:"backend"`
 	// S3 used to create fileservice using s3 as the backend
 	S3 S3Config `toml:"s3"`
 	// DataDir used to create fileservice using DISK as the backend
 	DataDir string `toml:"data-dir"`
 }
 
-// NewService create fileservice by config
-func NewService(cfg Config) (FileService, error) {
-	switch cfg.Backend {
-	case memFileServiceBackend:
-		return newMemFileService()
-	case diskFileServiceBackend:
-		return newDiskFileService(cfg.Backend)
-	case minioFileServiceBackend:
-		return newMinioFileService(cfg.S3)
-	case s3FileServiceBackend:
-		return newS3FileService(cfg.S3)
+// NewService create DN used fileservice
+func NewServiceForDN(cfg Config) (FileService, error) {
+	return newS3BasedService(cfg.S3)
+}
+
+// NewService create CN used fileservice
+func NewServiceForCN(cfg Config) (FileService, error) {
+	return newS3BasedService(cfg.S3)
+}
+
+func newS3BasedService(s3 S3Config) (FileService, error) {
+	switch s3.Backend {
+	case minioBackend:
+		return newMinioFileService(s3)
+	case s3Backend:
+		return newS3FileService(s3)
 	default:
-		return nil, fmt.Errorf("not implment for %s", cfg.Backend)
+		return nil, fmt.Errorf("not implment for %s", s3.Backend)
 	}
-}
-
-func newMemFileService() (FileService, error) {
-	return NewMemoryFS()
-}
-
-func newDiskFileService(dir string) (FileService, error) {
-	return NewLocalFS(dir)
 }
 
 func newMinioFileService(s3 S3Config) (FileService, error) {
