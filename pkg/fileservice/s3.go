@@ -15,8 +15,6 @@
 package fileservice
 
 type S3Config struct {
-	// Backend s3 backend aws s3 or minio. [S3|MINIO]
-	Backend  string `toml:"backend"`
 	Endpoint string `toml:"endpoint"`
 	Bucket   string `toml:"bucket"`
 	// KeyPrefix enables multiple fs instances in one bucket
