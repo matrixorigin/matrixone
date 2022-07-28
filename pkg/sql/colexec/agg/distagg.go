@@ -107,7 +107,7 @@ func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mheap.Mheap) error {
 		a.maps = make([]*hashmap.StrHashMap, 0, size)
 		a.vs = encoding.DecodeSlice[T2](a.da, sz)
 	} else if n+size >= cap(a.vs) {
-		a.da = a.da[:n*8]
+		a.da = a.da[:n*sz]
 		data, err := m.Grow(a.da, int64(n+size)*int64(sz))
 		if err != nil {
 			return err
@@ -239,6 +239,7 @@ func (a *UnaryDistAgg[T1, T2]) Eval(m *mheap.Mheap) (*vector.Vector, error) {
 	}
 	if a.otyp.IsString() {
 		vec := vector.New(a.otyp)
+		vec.Nsp = nsp
 		a.vs = a.eval(a.vs)
 		vs := (any)(a.vs).([][]byte)
 		for _, v := range vs {

@@ -44,7 +44,7 @@ func TestBitOr(t *testing.T) {
 		}
 		v, err := agg.Eval(m)
 		require.NoError(t, err)
-		require.Equal(t, []int64{15}, vector.GetColumn[int64](v))
+		require.Equal(t, []uint64{15}, vector.GetColumn[uint64](v))
 		v.Free(m)
 	}
 	{
@@ -56,7 +56,7 @@ func TestBitOr(t *testing.T) {
 		v, err := agg.Eval(m)
 		require.NoError(t, err)
 		// 2 BIT_OR 2 --> 2
-		require.Equal(t, []int64{2}, vector.GetColumn[int64](v))
+		require.Equal(t, []uint64{2}, vector.GetColumn[uint64](v))
 		v.Free(m)
 		vec0.Free(m)
 	}
@@ -77,13 +77,13 @@ func TestBitOr(t *testing.T) {
 		{
 			v, err := agg0.Eval(m)
 			require.NoError(t, err)
-			require.Equal(t, []int64{15}, vector.GetColumn[int64](v))
+			require.Equal(t, []uint64{15}, vector.GetColumn[uint64](v))
 			v.Free(m)
 		}
 		{
 			v, err := agg1.Eval(m)
 			require.NoError(t, err)
-			require.Equal(t, []int64{15}, vector.GetColumn[int64](v))
+			require.Equal(t, []uint64{15}, vector.GetColumn[uint64](v))
 			v.Free(m)
 		}
 	}
@@ -104,7 +104,7 @@ func TestDist(t *testing.T) {
 		}
 		v, err := agg.Eval(m)
 		require.NoError(t, err)
-		require.Equal(t, []int64{15}, vector.GetColumn[int64](v))
+		require.Equal(t, []uint64{15}, vector.GetColumn[uint64](v))
 		v.Free(m)
 	}
 	{
@@ -124,13 +124,13 @@ func TestDist(t *testing.T) {
 		{
 			v, err := agg0.Eval(m)
 			require.NoError(t, err)
-			require.Equal(t, []int64{15}, vector.GetColumn[int64](v))
+			require.Equal(t, []uint64{15}, vector.GetColumn[uint64](v))
 			v.Free(m)
 		}
 		{
 			v, err := agg1.Eval(m)
 			require.NoError(t, err)
-			require.Equal(t, []int64{15}, vector.GetColumn[int64](v))
+			require.Equal(t, []uint64{15}, vector.GetColumn[uint64](v))
 			v.Free(m)
 		}
 	}

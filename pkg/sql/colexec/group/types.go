@@ -45,6 +45,8 @@ type container struct {
 	aggVecs   []evalVector
 	groupVecs []evalVector
 
+	vecs []*vector.Vector
+
 	bat *batch.Batch
 }
 

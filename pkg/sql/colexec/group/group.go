@@ -167,6 +167,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	}
 	defer ctr.freeAggVector(proc)
 	if len(ctr.groupVecs) == 0 {
+		ctr.vecs = make([]*vector.Vector, len(ap.Exprs))
 		ctr.groupVecs = make([]evalVector, len(ap.Exprs))
 	}
 	for i, expr := range ap.Exprs {
@@ -187,6 +188,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 				break
 			}
 		}
+		ctr.vecs[i] = vec
 	}
 	defer func() {
 		for i := range ctr.groupVecs {
@@ -204,20 +206,17 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			ctr.bat.Vecs[i] = vector.New(vec.Typ)
 			switch vec.Typ.TypeSize() {
 			case 1:
-				size += 1
+				size += 1 + 1
 			case 2:
-				size += 2
+				size += 2 + 1
 			case 4:
-				size += 4
+				size += 4 + 1
 			case 8:
-				size += 8
+				size += 8 + 1
 			case 16:
-				size += 16
+				size += 16 + 1
 			default:
 				size = 128
-			}
-			if ap.Exprs[i].Typ.Nullable {
-				size++
 			}
 		}
 		ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
@@ -268,7 +267,7 @@ func (ctr *container) processH8(bat *batch.Batch, ap *Argument, proc *process.Pr
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		vals, _ := itr.Insert(i, n, bat.Vecs, ctr.scales)
+		vals, _ := itr.Insert(i, n, ctr.vecs, ctr.scales)
 		if err := ctr.batchFill(i, n, bat, vals, ap, ctr.intHashMap, proc); err != nil {
 			return err
 		}
@@ -277,14 +276,14 @@ func (ctr *container) processH8(bat *batch.Batch, ap *Argument, proc *process.Pr
 }
 
 func (ctr *container) processHStr(bat *batch.Batch, ap *Argument, proc *process.Process) error {
-	count := len(bat.Zs)
+	count := bat.Length()
 	itr := ctr.strHashMap.NewIterator(ap.Ibucket, ap.Nbucket)
 	for i := 0; i < count; i += hashmap.UnitLimit { // batch
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		vals, _ := itr.Insert(i, n, bat.Vecs, ctr.scales)
+		vals, _ := itr.Insert(i, n, ctr.vecs, ctr.scales)
 		if err := ctr.batchFill(i, n, bat, vals, ap, ctr.strHashMap, proc); err != nil {
 			return err
 		}

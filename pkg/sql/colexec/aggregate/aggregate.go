@@ -34,31 +34,36 @@ import (
 )
 
 func ReturnType(op int, typ types.Type) (types.Type, error) {
+	var otyp types.Type
+
 	switch op {
 	case Avg:
-		return avg.ReturnType([]types.Type{typ}), nil
+		otyp = avg.ReturnType([]types.Type{typ})
 	case Max:
-		return max.ReturnType([]types.Type{typ}), nil
+		otyp = max.ReturnType([]types.Type{typ})
 	case Min:
-		return min.ReturnType([]types.Type{typ}), nil
+		otyp = min.ReturnType([]types.Type{typ})
 	case Sum:
-		return sum.ReturnType([]types.Type{typ}), nil
+		otyp = sum.ReturnType([]types.Type{typ})
 	case Count, StarCount:
-		return count.ReturnType([]types.Type{typ}), nil
+		otyp = count.ReturnType([]types.Type{typ})
 	case ApproxCountDistinct:
-		return approxcd.ReturnType([]types.Type{typ}), nil
+		otyp = approxcd.ReturnType([]types.Type{typ})
 	case Variance:
-		return variance.ReturnType([]types.Type{typ}), nil
+		otyp = variance.ReturnType([]types.Type{typ})
 	case BitAnd:
-		return bit_and.ReturnType([]types.Type{typ}), nil
+		otyp = bit_and.ReturnType([]types.Type{typ})
 	case BitXor:
-		return bit_or.ReturnType([]types.Type{typ}), nil
+		otyp = bit_or.ReturnType([]types.Type{typ})
 	case BitOr:
-		return bit_xor.ReturnType([]types.Type{typ}), nil
+		otyp = bit_xor.ReturnType([]types.Type{typ})
 	case StdDevPop:
-		return stddevpop.ReturnType([]types.Type{typ}), nil
+		otyp = stddevpop.ReturnType([]types.Type{typ})
 	}
-	return typ, fmt.Errorf("'%v' not support %s", typ, Names[op])
+	if otyp.Oid == types.T_any {
+		return typ, fmt.Errorf("'%v' not support %s", typ, Names[op])
+	}
+	return otyp, nil
 }
 
 func New(op int, dist bool, typ types.Type) (agg.Agg[any], error) {
@@ -608,7 +613,7 @@ func newGenericMax[T max.Compare](typ types.Type, dist bool) agg.Agg[any] {
 }
 
 func newGenericMin[T max.Compare](typ types.Type, dist bool) agg.Agg[any] {
-	aggPriv := max.NewMax[T]()
+	aggPriv := min.NewMin[T]()
 	if dist {
 		return agg.NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
@@ -618,9 +623,9 @@ func newGenericMin[T max.Compare](typ types.Type, dist bool) agg.Agg[any] {
 func newGenericCount[T types.Generic | count.Decimal128AndString](typ types.Type, dist bool, isStar bool) agg.Agg[any] {
 	aggPriv := count.New[T](isStar)
 	if dist {
-		return agg.NewUnaryDistAgg(false, typ, count.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return agg.NewUnaryDistAgg(true, typ, count.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return agg.NewUnaryAgg(aggPriv, false, typ, count.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+	return agg.NewUnaryAgg(aggPriv, true, typ, count.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 }
 
 func newGenericApproxcd[T any](typ types.Type, dist bool) agg.Agg[any] {

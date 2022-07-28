@@ -94,7 +94,7 @@ func (variance *Variance[T1]) Fill(groupIndex int64, v1 T1, v2 float64, z int64,
 		return v2, IsEmpty
 	} else if IsEmpty {
 		f1 := float64(v1)
-		variance.sum[groupIndex] = any(f1 * float64(z)).(float64)
+		variance.sum[groupIndex] = f1 * float64(z)
 		variance.count[groupIndex] += float64(z)
 		return math.Pow(f1, 2) * float64(z), false
 	}
