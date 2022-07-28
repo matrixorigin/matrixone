@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
+	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
 )
 
 const (
@@ -74,8 +75,13 @@ func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, er
 	}
 
 	switch s.cfg.Txn.Storage.Backend {
+
 	case memStorageBackend:
 		return s.newMemTxnStorage(shard, logClient)
+
+	case taeStorageBackend:
+		return s.newTAEStorage(shard, logClient)
+
 	default:
 		return nil, fmt.Errorf("not implment for %s", s.cfg.Txn.Storage.Backend)
 	}
@@ -143,4 +149,34 @@ func (s *store) newS3FileService() (fileservice.FileService, error) {
 		s.cfg.FileService.S3.Bucket,
 		s.cfg.FileService.S3.KeyPrefix,
 	)
+}
+
+func (s *store) newTAEStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
+
+	// file service for s3
+	s3FS, err := fileservice.NewS3FS(
+		s.cfg.FileService.S3.Endpoint,
+		s.cfg.FileService.S3.Bucket,
+		s.cfg.FileService.S3.KeyPrefix,
+	)
+	if err != nil {
+		return nil, err
+	}
+	cachedS3FS, err := fileservice.NewCacheFS(
+		s3FS,
+		128*1024*1024, //TODO load from config
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// file service for local
+	localFS, err := fileservice.NewLocalFS(
+		s.cfg.FileService.DataDir,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return taestorage.New(shard, logClient, cachedS3FS, localFS)
 }
