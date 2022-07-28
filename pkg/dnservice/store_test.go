@@ -163,7 +163,6 @@ func newTestStore(t *testing.T, uuid string, options ...Option) *store {
 	assert.NoError(t, os.MkdirAll(testDataDir, 0755))
 	c := &Config{
 		UUID:          uuid,
-		DataDir:       testDataDir,
 		ListenAddress: testDNStoreAddr,
 	}
 	c.Txn.Clock.MaxClockOffset.Duration = time.Duration(math.MaxInt64)
