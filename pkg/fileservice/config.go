@@ -21,8 +21,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
-// FileServiceConfig fileService config
-type FileServiceConfig struct {
+const (
+	memFileServiceBackend   = "MEM"
+	diskFileServiceBackend  = "DISK"
+	s3FileServiceBackend    = "S3"
+	minioFileServiceBackend = "MINIO"
+)
+
+// Config fileService config
+type Config struct {
 	// Name name of fileservice, describe what an instance of fileservice is used for
 	Name string `toml:"name"`
 	// Backend fileservice backend. [MEM|DISK|S3|MINIO]
@@ -35,15 +42,13 @@ type FileServiceConfig struct {
 	DataDir string `toml:"data-dir"`
 }
 
-const (
-	memFileServiceBackend   = "MEM"
-	diskFileServiceBackend  = "DISK"
-	s3FileServiceBackend    = "S3"
-	minioFileServiceBackend = "MINIO"
-)
+// FileServiceFactory returns an instance of fileservice by name. When starting a MO node, multiple
+// FileServiceConfig configurations are specified in the configuration file for use in specific scenarios.
+// The corresponding instance is obtained according to Name.
+type FileServiceFactory func(name string) (FileService, error)
 
 // NewFileService create file service from config
-func NewFileService(cfg FileServiceConfig) (FileService, error) {
+func NewFileService(cfg Config) (FileService, error) {
 	switch strings.ToUpper(cfg.Backend) {
 	case memFileServiceBackend:
 		return newMemFileService(cfg)
@@ -58,7 +63,7 @@ func NewFileService(cfg FileServiceConfig) (FileService, error) {
 	}
 }
 
-func newMemFileService(cfg FileServiceConfig) (FileService, error) {
+func newMemFileService(cfg Config) (FileService, error) {
 	fs, err := NewMemoryFS()
 	if err != nil {
 		return nil, err
@@ -66,7 +71,7 @@ func newMemFileService(cfg FileServiceConfig) (FileService, error) {
 	return NewCacheFS(fs, int(cfg.CacheMemCapacityBytes))
 }
 
-func newDiskFileService(cfg FileServiceConfig) (FileService, error) {
+func newDiskFileService(cfg Config) (FileService, error) {
 	fs, err := NewLocalFS(cfg.DataDir)
 	if err != nil {
 		return nil, err
@@ -74,7 +79,7 @@ func newDiskFileService(cfg FileServiceConfig) (FileService, error) {
 	return NewCacheFS(fs, int(cfg.CacheMemCapacityBytes))
 }
 
-func newMinioFileService(cfg FileServiceConfig) (FileService, error) {
+func newMinioFileService(cfg Config) (FileService, error) {
 	fs, err := NewS3FSOnMinio(
 		cfg.S3.Endpoint,
 		cfg.S3.Bucket,
@@ -86,7 +91,7 @@ func newMinioFileService(cfg FileServiceConfig) (FileService, error) {
 	return NewCacheFS(fs, int(cfg.CacheMemCapacityBytes))
 }
 
-func newS3FileService(cfg FileServiceConfig) (FileService, error) {
+func newS3FileService(cfg Config) (FileService, error) {
 	fs, err := NewS3FS(
 		cfg.S3.Endpoint,
 		cfg.S3.Bucket,
