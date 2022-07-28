@@ -41,6 +41,18 @@ func TestAddMetadata(t *testing.T) {
 	assert.Equal(t, uint64(1), ss.mu.metadata.Shards[0].ReplicaID)
 }
 
+func TestAddMetadataRejectDupl(t *testing.T) {
+	cfg := getStoreTestConfig()
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	cfg.Fill()
+	s := store{cfg: cfg}
+	require.NoError(t, mkdirAll(s.cfg.DataDir, cfg.FS))
+	s.addMetadata(10, 1)
+	s.addMetadata(10, 1)
+	s.addMetadata(10, 1)
+	require.Equal(t, 1, len(s.mu.metadata.Shards))
+}
+
 func TestRemoveMetadata(t *testing.T) {
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
