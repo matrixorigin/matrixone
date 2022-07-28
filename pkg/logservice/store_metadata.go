@@ -258,6 +258,13 @@ func (l *store) addMetadata(shardID uint64, replicaID uint64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	for _, rec := range l.mu.metadata.Shards {
+		if rec.ShardID == shardID && rec.ReplicaID == replicaID {
+			plog.Infof("addMetadata for shardID %d skipped, dupl shard", shardID)
+			return
+		}
+	}
+
 	l.mu.metadata.Shards = append(l.mu.metadata.Shards, rec)
 	l.mustSaveMetadata()
 }
