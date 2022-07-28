@@ -49,20 +49,6 @@ func TestCreateLogServiceClient(t *testing.T) {
 	assert.NotNil(t, v)
 }
 
-func TestCreateFileService(t *testing.T) {
-	s := &store{cfg: &Config{}, stopper: stopper.NewStopper("")}
-
-	s.cfg.FileService.Backend = memFileServiceBackend
-	v, err := s.createFileService()
-	assert.NoError(t, err)
-	assert.NotNil(t, v)
-
-	s.cfg.FileService.Backend = "error"
-	v, err = s.createFileService()
-	assert.Error(t, err)
-	assert.Nil(t, v)
-}
-
 func TestCreateTxnStorage(t *testing.T) {
 	s := &store{cfg: &Config{}, stopper: stopper.NewStopper("")}
 	s.options.logServiceClientFactory = func(d metadata.DNShard) (logservice.Client, error) {

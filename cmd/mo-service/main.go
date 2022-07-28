@@ -87,6 +87,7 @@ func startDNService(cfg *Config, stopper *stopper.Stopper) error {
 	}
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
 		s, err := dnservice.NewService(&cfg.DN,
+			cfg.createFileService,
 			dnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service")))
 		if err != nil {
 			panic(err)
