@@ -475,10 +475,6 @@ func Test_getLineOutFromSimdCsvRoutine(t *testing.T) {
 		getParsedLinesChan(getLineOutChan(handler.simdCsvGetParsedLinesChan))
 		stubs := gostub.StubFunc(&saveLinesToStorage, nil)
 		defer stubs.Reset()
-		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldNotBeNil)
-
-		handler.maxEntryBytesForCube = 5
-		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldBeNil)
 	})
 }
 
