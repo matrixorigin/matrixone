@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package add
+package sub
 
 import (
-	"math"
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"math"
+	"testing"
 )
 
 func TestI32Of(t *testing.T) {
@@ -28,14 +27,14 @@ func TestI32Of(t *testing.T) {
 	bs := make([]int32, 2)
 	for i := 0; i < 2; i++ {
 		as[i] = math.MaxInt32
-		bs[i] = int32(i)
+		bs[i] = int32(-i)
 	}
 	cs := make([]int32, 2)
 	av := testutil.MakeInt32Vector(as, nil)
 	bv := testutil.MakeInt32Vector(bs, nil)
 	cv := testutil.MakeInt32Vector(cs, nil)
 
-	err := NumericAddSigned[int32](av, bv, cv)
+	err := NumericSubSigned[int32](av, bv, cv)
 	if err == nil {
 		t.Fatalf("should have overflowed.")
 	}
@@ -45,15 +44,15 @@ func TestU32Of(t *testing.T) {
 	as := make([]uint32, 2)
 	bs := make([]uint32, 2)
 	for i := 0; i < 2; i++ {
-		as[i] = math.MaxUint32
-		bs[i] = uint32(i)
+		as[i] = uint32(i)
+		bs[i] = math.MaxUint32
 	}
 	cs := make([]uint32, 2)
 	av := testutil.MakeUint32Vector(as, nil)
 	bv := testutil.MakeUint32Vector(bs, nil)
 	cv := testutil.MakeUint32Vector(cs, nil)
 
-	err := NumericAddUnsigned[uint32](av, bv, cv)
+	err := NumericSubUnsigned[uint32](av, bv, cv)
 	if err == nil {
 		t.Fatalf("should have overflowed.")
 	}
@@ -72,14 +71,17 @@ func TestDec64(t *testing.T) {
 	bv := testutil.MakeDecimal64Vector(bs, nil, types.T_decimal64.ToType())
 	cv := testutil.MakeDecimal64Vector(cs, nil, types.T_decimal64.ToType())
 
-	err := Decimal64VecAdd(av, bv, cv)
+	err := Decimal64VecSub(av, bv, cv)
 	if err != nil {
-		t.Fatalf("decimal64 add failed")
+		t.Fatalf("decimal64 sub failed")
 	}
 
 	res := vector.MustTCols[types.Decimal64](cv)
 	for i := 0; i < 10; i++ {
-		if !res[i].Eq(types.Decimal64_FromInt64(as[i] + bs[i])) {
+		//fmt.Printf("%+v - %+v \n", as[i], bs[i])
+		//fmt.Printf("actual res:%+v\n", res[i].String())
+		//fmt.Printf("expect res:%+v\n", as[i]-bs[i])
+		if !res[i].Eq(types.Decimal64_FromInt64(as[i] - bs[i])) {
 			t.Fatalf("decimal64 add wrong result")
 		}
 	}
@@ -98,20 +100,23 @@ func TestDec128(t *testing.T) {
 	bv := testutil.MakeDecimal128Vector(bs, nil, types.T_decimal128.ToType())
 	cv := testutil.MakeDecimal128Vector(cs, nil, types.T_decimal128.ToType())
 
-	err := Decimal128VecAdd(av, bv, cv)
+	err := Decimal128VecSub(av, bv, cv)
 	if err != nil {
-		t.Fatalf("decimal128 add failed")
+		t.Fatalf("decimal128 sub failed")
 	}
 
 	res := vector.MustTCols[types.Decimal128](cv)
 	for i := 0; i < 10; i++ {
-		if !res[i].Eq(types.Decimal128_FromInt64(as[i] + bs[i])) {
-			t.Fatalf("decimal128 add wrong result")
+		//fmt.Printf("%+v - %+v \n", as[i], bs[i])
+		//fmt.Printf("actual res:%+v\n", res[i].String())
+		//fmt.Printf("expect res:%+v\n", as[i]-bs[i])
+		if !res[i].Eq(types.Decimal128_FromInt64(as[i] - bs[i])) {
+			t.Fatalf("decimal128 sub wrong result")
 		}
 	}
 }
 
-func BenchmarkAddI32(b *testing.B) {
+func BenchmarkSubI32(b *testing.B) {
 	as := make([]int32, 8192)
 	bs := make([]int32, 8192)
 	for i := 0; i < 8192; i++ {
@@ -126,13 +131,13 @@ func BenchmarkAddI32(b *testing.B) {
 	cv := testutil.MakeInt32Vector(cs, nil)
 
 	for i := 0; i < b.N; i++ {
-		if err := NumericAddSigned[int32](av, bv, cv); err != nil {
+		if err := NumericSubSigned[int32](av, bv, cv); err != nil {
 			b.Fail()
 		}
 	}
 }
 
-func BenchmarkAddF64(b *testing.B) {
+func BenchmarkSubF64(b *testing.B) {
 	as := make([]float64, 8192)
 	bs := make([]float64, 8192)
 	for i := 0; i < 8192; i++ {
@@ -147,7 +152,7 @@ func BenchmarkAddF64(b *testing.B) {
 	cv := testutil.MakeFloat64Vector(cs, nil)
 
 	for i := 0; i < b.N; i++ {
-		if err := NumericAddFloat[float64](av, bv, cv); err != nil {
+		if err := NumericSubFloat[float64](av, bv, cv); err != nil {
 			b.Fail()
 		}
 	}

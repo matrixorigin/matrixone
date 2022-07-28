@@ -15,6 +15,7 @@
 package operator
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vectorize/sub"
 	"golang.org/x/exp/constraints"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -86,4 +87,21 @@ func PlusDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector
 }
 func PlusDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return Arith[types.Decimal128](args, proc, args[0].GetType(), add.Decimal128VecAdd)
+}
+
+func MinusUint[T constraints.Unsigned](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[T](args, proc, args[0].GetType(), sub.NumericSubUnsigned[T])
+}
+func MinusInt[T constraints.Signed](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[T](args, proc, args[0].GetType(), sub.NumericSubSigned[T])
+}
+func MinusFloat[T constraints.Float](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[T](args, proc, args[0].GetType(), sub.NumericSubFloat[T])
+}
+
+func MinusDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[types.Decimal64](args, proc, args[0].GetType(), sub.Decimal64VecSub)
+}
+func MinusDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[types.Decimal128](args, proc, args[0].GetType(), sub.Decimal128VecSub)
 }

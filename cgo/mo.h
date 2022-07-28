@@ -97,5 +97,10 @@ int32_t Decimal128_Add_SV(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64
 int32_t Decimal64_Add_VV(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls);
 int32_t Decimal128_Add_VV(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls);
 
+int32_t Decimal64_Sub_SV(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls);
+int32_t Decimal128_Sub_SV(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls);
+
+int32_t Decimal64_Sub_VV(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls);
+int32_t Decimal128_Sub_VV(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls);
 
 #endif /* _MO_H_ */

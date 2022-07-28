@@ -19,11 +19,11 @@ import (
 )
 
 //------------------------------------add-------------------------------------------
-func overflowUIntAdd[T constraints.Unsigned](a, b, c T) bool {
+func OverflowUIntAdd[T constraints.Unsigned](a, b, c T) bool {
 	return c < a || c < b
 }
 
-func overflowIntAdd[T constraints.Signed](a, b, c T) bool {
+func OverflowIntAdd[T constraints.Signed](a, b, c T) bool {
 	return (c > a) != (b > 0)
 	//or
 	//return a > 0 && b > 0 && c < 0 || a < 0 && b < 0 && c > 0
@@ -31,10 +31,10 @@ func overflowIntAdd[T constraints.Signed](a, b, c T) bool {
 
 //------------------------------------sub-------------------------------------------
 
-func overflowUIntSub[T constraints.Unsigned](a, b, c T) bool {
+func OverflowUIntSub[T constraints.Unsigned](a, b, c T) bool {
 	return a < b
 }
 
-func overflowIntSub[T constraints.Signed](a, b, c T) bool {
+func OverflowIntSub[T constraints.Signed](a, b, c T) bool {
 	return (c < a) != (b > 0)
 }

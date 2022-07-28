@@ -2046,7 +2046,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint8, types.T_uint8},
 				ReturnTyp: types.T_uint8,
-				Fn:        operator.MinusUint8,
+				Fn:        operator.MinusUint[uint8],
 			},
 			{
 				Index:     1,
@@ -2054,7 +2054,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint16, types.T_uint16},
 				ReturnTyp: types.T_uint16,
-				Fn:        operator.MinusUint16,
+				Fn:        operator.MinusUint[uint16],
 			},
 			{
 				Index:     2,
@@ -2062,7 +2062,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint32, types.T_uint32},
 				ReturnTyp: types.T_uint32,
-				Fn:        operator.MinusUint32,
+				Fn:        operator.MinusUint[uint32],
 			},
 			{
 				Index:     3,
@@ -2070,7 +2070,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint64, types.T_uint64},
 				ReturnTyp: types.T_uint64,
-				Fn:        operator.MinusUint64,
+				Fn:        operator.MinusUint[uint64],
 			},
 			{
 				Index:     4,
@@ -2078,7 +2078,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int8, types.T_int8},
 				ReturnTyp: types.T_int8,
-				Fn:        operator.MinusInt8,
+				Fn:        operator.MinusInt[int8],
 			},
 			{
 				Index:     5,
@@ -2086,7 +2086,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int16, types.T_int16},
 				ReturnTyp: types.T_int16,
-				Fn:        operator.MinusInt16,
+				Fn:        operator.MinusInt[int16],
 			},
 			{
 				Index:     6,
@@ -2094,7 +2094,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int32, types.T_int32},
 				ReturnTyp: types.T_int32,
-				Fn:        operator.MinusInt32,
+				Fn:        operator.MinusInt[int32],
 			},
 			{
 				Index:     7,
@@ -2102,7 +2102,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int64, types.T_int64},
 				ReturnTyp: types.T_int64,
-				Fn:        operator.MinusInt64,
+				Fn:        operator.MinusInt[int64],
 			},
 			{
 				Index:     8,
@@ -2110,7 +2110,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float32, types.T_float32},
 				ReturnTyp: types.T_float32,
-				Fn:        operator.MinusFloat32,
+				Fn:        operator.MinusFloat[float32],
 			},
 			{
 				Index:     9,
@@ -2118,7 +2118,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float64, types.T_float64},
 				ReturnTyp: types.T_float64,
-				Fn:        operator.MinusFloat64,
+				Fn:        operator.MinusFloat[float64],
 			},
 			{
 				Index:     10,
