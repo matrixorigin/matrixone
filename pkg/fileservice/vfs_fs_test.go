@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,23 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package bitmap
+package fileservice
 
-type Iterator interface {
-	HasNext() bool
-	Next() uint64
-	PeekNext() uint64
-}
+import (
+	"testing"
 
-// Bitmap represents line numbers of tuple's is null
-type Bitmap struct {
-	// len represents the size of bitmap
-	len  int
-	data []uint64
-}
+	"github.com/cockroachdb/pebble/vfs"
+	"github.com/stretchr/testify/assert"
+)
 
-type BitmapIterator struct {
-	i        uint64
-	bm       *Bitmap
-	has_next bool
+func TestVfsFS(t *testing.T) {
+
+	t.Run("file service", func(t *testing.T) {
+		testFileService(t, func() FileService {
+			fs, err := NewVfsFS(vfs.NewStrictMem())
+			assert.Nil(t, err)
+			return fs
+		})
+	})
+
+	t.Run("replaceable file service", func(t *testing.T) {
+		testReplaceableFileService(t, func() ReplaceableFileService {
+			fs, err := NewVfsFS(vfs.NewStrictMem())
+			assert.Nil(t, err)
+			return fs
+		})
+	})
+
 }
