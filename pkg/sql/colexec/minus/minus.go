@@ -120,7 +120,12 @@ func (ctr *container) buildHashTable(arg *Argument, proc *process.Process, ana p
 				n = hashmap.UnitLimit
 			}
 
-			itr.Insert(i, n, bat.Vecs, ctr.scales[index])
+			vs, _ := itr.Insert(i, n, bat.Vecs, ctr.scales[index])
+			for _, v := range vs {
+				if v > ctr.hashTable.GroupCount() {
+					ctr.hashTable.AddGroup()
+				}
+			}
 		}
 		bat.Clean(proc.Mp)
 	}
@@ -145,17 +150,15 @@ func (ctr *container) probeHashTable(arg *Argument, proc *process.Process, ana p
 		}
 		ana.Input(bat)
 
-		if ctr.bat == nil {
-			ctr.bat = batch.NewWithSize(len(bat.Vecs))
-			for i := range bat.Vecs {
-				ctr.bat.Vecs[i] = vector.New(bat.Vecs[i].Typ)
-			}
+		ctr.bat = batch.NewWithSize(len(bat.Vecs))
+		for i := range bat.Vecs {
+			ctr.bat.Vecs[i] = vector.New(bat.Vecs[i].Typ)
 		}
 
 		count := vector.Length(bat.Vecs[0])
 		itr := ctr.hashTable.NewIterator(arg.IBucket, arg.NBucket)
 		for i := 0; i < count; i += hashmap.UnitLimit {
-			insertCount := 0
+			oldHashGroup := ctr.hashTable.GroupCount()
 
 			n := count - i
 			if n > hashmap.UnitLimit {
@@ -164,13 +167,15 @@ func (ctr *container) probeHashTable(arg *Argument, proc *process.Process, ana p
 			vs, _ := itr.Insert(i, n, bat.Vecs, ctr.scales[index])
 			copy(inserted[:n], restoreInserted[:n])
 			for j, v := range vs {
-				if v == 0 {
-					insertCount++
+				if v > ctr.hashTable.GroupCount() {
+					ctr.hashTable.AddGroup()
 					inserted[j] = 1
 					ctr.bat.Zs = append(ctr.bat.Zs, 1)
 				}
 			}
 
+			newHashGroup := ctr.hashTable.GroupCount()
+			insertCount := int(newHashGroup - oldHashGroup)
 			if insertCount > 0 {
 				for pos := range bat.Vecs {
 					if err = vector.UnionBatch(ctr.bat.Vecs[pos], bat.Vecs[pos], int64(i), insertCount, inserted[:n], proc.Mp); err != nil {
