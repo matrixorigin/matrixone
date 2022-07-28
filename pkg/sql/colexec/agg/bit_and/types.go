@@ -17,4 +17,5 @@ package bit_and
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 type BitAnd[T1 types.Ints | types.UInts | types.Floats] struct {
+	elemNums []int64
 }
