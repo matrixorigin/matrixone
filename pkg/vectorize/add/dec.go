@@ -25,6 +25,7 @@ import "C"
 import (
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -41,16 +42,18 @@ func Decimal64VecAdd(xs, ys, rs *vector.Vector) error {
 	xt := vector.MustTCols[types.Decimal64](xs)
 	yt := vector.MustTCols[types.Decimal64](ys)
 	rt := vector.MustTCols[types.Decimal64](rs)
-
+	flag := 0
 	if xs.IsScalar() {
-		C.Decimal64_Add_SV(dec64PtrToC(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
-			C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)))
-	} else if ys.IsScalar() {
-		C.Decimal64_Add_SV(dec64PtrToC(&rt[0]), dec64PtrToC(&yt[0]), dec64PtrToC(&xt[0]),
-			C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)))
-	} else {
-		C.Decimal64_Add_VV(dec64PtrToC(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
-			C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)))
+		flag |= LEFT_IS_SCALAR
+	}
+	if ys.IsScalar() {
+		flag |= RIGHT_IS_SCALAR
+	}
+
+	rc := C.Decimal64_VecAdd(dec64PtrToC(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+	if rc != 0 {
+		return moerr.NewError(moerr.OUT_OF_RANGE, "Decimal64 add overflow")
 	}
 	return nil
 }
@@ -59,16 +62,17 @@ func Decimal128VecAdd(xs, ys, rs *vector.Vector) error {
 	xt := vector.MustTCols[types.Decimal128](xs)
 	yt := vector.MustTCols[types.Decimal128](ys)
 	rt := vector.MustTCols[types.Decimal128](rs)
-
+	flag := 0
 	if xs.IsScalar() {
-		C.Decimal128_Add_SV(dec128PtrToC(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
-			C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)))
-	} else if ys.IsScalar() {
-		C.Decimal128_Add_SV(dec128PtrToC(&rt[0]), dec128PtrToC(&yt[0]), dec128PtrToC(&xt[0]),
-			C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)))
-	} else {
-		C.Decimal128_Add_VV(dec128PtrToC(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
-			C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)))
+		flag |= LEFT_IS_SCALAR
+	}
+	if ys.IsScalar() {
+		flag |= RIGHT_IS_SCALAR
+	}
+	rc := C.Decimal128_VecAdd(dec128PtrToC(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+	if rc != 0 {
+		return moerr.NewError(moerr.OUT_OF_RANGE, "Decimal128 add overflow")
 	}
 	return nil
 }
