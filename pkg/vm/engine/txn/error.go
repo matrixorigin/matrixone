@@ -12,14 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package txnengine
 
-type S3Config struct {
-	Endpoint string `toml:"endpoint"`
-	Bucket   string `toml:"bucket"`
-	// KeyPrefix enables multiple fs instances in one bucket
-	KeyPrefix string `toml:"key-prefix"`
+import (
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+)
+
+type Error struct {
+	txnError *txn.TxnError
 }
 
-// key mapping scheme:
-// <KeyPrefix>/<file path> -> file content
+var _ error = Error{}
+
+func (e Error) Error() string {
+	if e.txnError != nil {
+		return e.txnError.DebugString()
+	}
+	panic("impossible")
+}
+
+func errorFromTxnResponses(resps []txn.TxnResponse) error {
+	for _, resp := range resps {
+		if resp.TxnError != nil {
+			return Error{
+				txnError: resp.TxnError,
+			}
+		}
+	}
+	return nil
+}
