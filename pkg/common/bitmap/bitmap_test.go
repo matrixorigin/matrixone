@@ -121,3 +121,24 @@ func TestC(t *testing.T) {
 	require.True(t, bm5.IsSame(bm5Copy))
 	require.True(t, bm5.Count() == int(bm5Copy.C_Count()))
 }
+
+func TestBitmapIterator_Next(t *testing.T) {
+	np := New(BenchmarkRows)
+	np.AddRange(0, 64)
+
+	// | 63 -- 0 | 127 -- 64 | 191 -- 128 | 255 -- 192 | 319 -- 256 | 383 -- 320 | ... |
+	rows := []uint64{127, 192, 320} // add some boundary case to check if loops over word
+	np.AddMany(rows)
+
+	itr := np.Iterator()
+	i := uint64(0)
+	for itr.HasNext() {
+		r := itr.Next()
+		if r < uint64(64) {
+			require.Equal(t, i, r)
+			i++
+		} else {
+			t.Logf("r now is %d\n", r)
+		}
+	}
+}
