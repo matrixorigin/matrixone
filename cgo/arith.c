@@ -65,13 +65,15 @@
     return RC_SUCCESS
 
 
+const int32_t LEFT_IS_SCALAR = 1;
+const int32_t RIGHT_IS_SCALAR = 2;
 
 #define MO_ARITH_T(OP, ZT)                                    \
     ZT *rt = (ZT *) r;                                        \
     ZT *at = (ZT *) a;                                        \
     ZT *bt = (ZT *) b;                                        \
     ZT opflag = 0;                                            \
-    if ((flag & 1) != 0) {                                    \
+    if ((flag & LEFT_IS_SCALAR) != 0) {                       \
         if (nulls != NULL) {                                  \
             for (uint64_t i = 0; i < n; i++) {                \
                 if (!bitmap_test(nulls, i)) {                 \
@@ -83,7 +85,7 @@
                 OP(rt[i], at[0], bt[i]);                      \
             }                                                 \
         }                                                     \
-    } else if ((flag & 2) != 0) {                             \
+    } else if ((flag & RIGHT_IS_SCALAR) != 0) {               \
         if (nulls != NULL) {                                  \
             for (uint64_t i = 0; i < n; i++) {                \
                 if (!bitmap_test(nulls, i)) {                 \

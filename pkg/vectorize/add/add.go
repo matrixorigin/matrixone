@@ -31,6 +31,11 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
+const (
+	LEFT_IS_SCALAR  = 1
+	RIGHT_IS_SCALAR = 2
+)
+
 func signedOverflow[T constraints.Signed](a, b, c T) bool {
 	return (a > 0 && b > 0 && c < 0) || (a < 0 && b < 0 && c > 0)
 }
@@ -47,10 +52,10 @@ func cNumericAddSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
 	flag := 0
 	if xs.IsScalar() {
-		flag |= 1
+		flag |= LEFT_IS_SCALAR
 	}
 	if ys.IsScalar() {
-		flag |= 2
+		flag |= RIGHT_IS_SCALAR
 	}
 
 	rc := C.SignedInt_VecAdd(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
@@ -104,10 +109,10 @@ func cNumericAddUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) erro
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
 	flag := 0
 	if xs.IsScalar() {
-		flag |= 1
+		flag |= LEFT_IS_SCALAR
 	}
 	if ys.IsScalar() {
-		flag |= 2
+		flag |= RIGHT_IS_SCALAR
 	}
 
 	rc := C.UnsignedInt_VecAdd(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
@@ -161,16 +166,16 @@ func cNumericAddFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
 	flag := 0
 	if xs.IsScalar() {
-		flag |= 1
+		flag |= LEFT_IS_SCALAR
 	}
 	if ys.IsScalar() {
-		flag |= 2
+		flag |= RIGHT_IS_SCALAR
 	}
 
 	rc := C.Float_VecAdd(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
 	if rc != 0 {
-		return moerr.NewError(moerr.OUT_OF_RANGE, "unsigned int add overflow")
+		return moerr.NewError(moerr.OUT_OF_RANGE, "float add overflow")
 	}
 	return nil
 }

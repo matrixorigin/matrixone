@@ -44,10 +44,10 @@ func Decimal64VecAdd(xs, ys, rs *vector.Vector) error {
 	rt := vector.MustTCols[types.Decimal64](rs)
 	flag := 0
 	if xs.IsScalar() {
-		flag |= 1
+		flag |= LEFT_IS_SCALAR
 	}
 	if ys.IsScalar() {
-		flag |= 2
+		flag |= RIGHT_IS_SCALAR
 	}
 
 	rc := C.Decimal64_VecAdd(dec64PtrToC(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
@@ -64,10 +64,10 @@ func Decimal128VecAdd(xs, ys, rs *vector.Vector) error {
 	rt := vector.MustTCols[types.Decimal128](rs)
 	flag := 0
 	if xs.IsScalar() {
-		flag |= 1
+		flag |= LEFT_IS_SCALAR
 	}
 	if ys.IsScalar() {
-		flag |= 2
+		flag |= RIGHT_IS_SCALAR
 	}
 	rc := C.Decimal128_VecAdd(dec128PtrToC(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
