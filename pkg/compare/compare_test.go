@@ -89,6 +89,9 @@ func init() {
 
 		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_varchar, 0, 0, 0)),
 		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_varchar, 0, 0, 0)),
+
+		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_blob, 0, 0, 0)),
+		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_blob, 0, 0, 0)),
 	}
 }
 

@@ -87,7 +87,7 @@ func CompareGeneric(a, b any, t types.Type) int64 {
 		return CompareOrdered[types.Date](a, b)
 	case types.Type_DATETIME:
 		return CompareOrdered[types.Datetime](a, b)
-	case types.Type_CHAR, types.Type_VARCHAR:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_BLOB:
 		return CompareBytes(a, b)
 	default:
 		panic("unsupported type")

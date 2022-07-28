@@ -397,7 +397,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 			if err := vector.Append(vec, vs); err != nil {
 				return err
 			}
-		case types.T_char, types.T_varchar:
+		case types.T_char, types.T_varchar, types.T_blob:
 			vs := make([][]byte, len(rows.Rows))
 			{
 				for j, row := range rows.Rows {
@@ -563,7 +563,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 			vec.Col = make([]float32, len(rows.Rows))
 		case types.T_float64:
 			vec.Col = make([]float64, len(rows.Rows))
-		case types.T_char, types.T_varchar:
+		case types.T_char, types.T_varchar, types.T_blob:
 			col := &types.Bytes{}
 			if err = col.Append(make([][]byte, len(rows.Rows))); err != nil {
 				return err
@@ -1183,7 +1183,7 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 		}
 		if !num.Negative() {
 			switch typ.Oid {
-			case types.T_char, types.T_varchar:
+			case types.T_char, types.T_varchar, types.T_blob:
 				return str, nil
 			case types.T_date:
 				res, err := types.ParseDate(str)
@@ -1274,12 +1274,17 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 	case string:
 		switch typ.Oid {
 		case types.T_char, types.T_varchar: // string family should compare the length but not value
-			if len(v) > math.MaxUint16 {
-				return nil, errors.New(errno.DataException, "length out of uint16 is unexpected for char / varchar value")
+			if len(v) > types.MaxStringSize {
+				return nil, errors.New(errno.DataException, "length out of 1GB is unexpected for char/varchar value")
 			}
 			if len(v) <= int(typ.Width) {
 				return v, nil
 			}
+		case types.T_blob:
+			if len(v) > types.MaxStringSize {
+				return nil, errors.New(errno.DataException, "length out of 1GB is unexpected for text value")
+			}
+			return v, nil
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
 		}
