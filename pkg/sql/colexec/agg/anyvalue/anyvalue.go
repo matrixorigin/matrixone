@@ -14,6 +14,12 @@
 
 package anyvalue
 
+import "github.com/matrixorigin/matrixone/pkg/container/types"
+
+func ReturnType(typs []types.Type) types.Type {
+	return typs[0]
+}
+
 func NewAnyvalue[T any]() *Anyvalue[T] {
 	return &Anyvalue[T]{}
 }

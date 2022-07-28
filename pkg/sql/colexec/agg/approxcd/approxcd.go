@@ -20,6 +20,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 )
 
+func ReturnType(_ []types.Type) types.Type {
+	return types.New(types.T_uint64, 0, 0, 0)
+}
+
 func NewApproxc[T any]() *ApproxCountDistic[T] {
 	return &ApproxCountDistic[T]{}
 }

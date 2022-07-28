@@ -65,6 +65,14 @@ func (m *StrHashMap) AddGroup() {
 	m.rows++
 }
 
+func (m *StrHashMap) AddGroups(rows uint64) {
+	m.rows += rows
+}
+
+func (m *StrHashMap) Cardinality() uint64 {
+	return m.hashMap.Cardinality()
+}
+
 // InsertValue insert a value, return true if it is new, otherwise false
 // never handle null
 func (m *StrHashMap) InsertValue(val any) bool {

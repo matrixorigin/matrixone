@@ -23,13 +23,13 @@ type Numeric interface {
 }
 
 type Avg[T Numeric] struct {
-	cnt int64
+	cnts []int64
 }
 
 type Decimal64Avg struct {
-	cnt int64
+	cnts []int64
 }
 
 type Decimal128Avg struct {
-	cnt int64
+	cnts []int64
 }
