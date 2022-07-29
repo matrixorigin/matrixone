@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/joincondition"
@@ -37,30 +36,6 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
-	{
-		ap.ctr.scales[0] = make([]int32, len(ap.Conditions[0]))
-		ap.ctr.scales[1] = make([]int32, len(ap.Conditions[1]))
-	}
-	for i, cond := range ap.Conditions[0] { // aligning the precision of decimal
-		switch types.T(cond.Expr.Typ.Id) {
-		case types.T_decimal64:
-			typ := ap.Conditions[1][i].Expr.Typ
-			if typ.Scale > cond.Expr.Typ.Scale {
-				cond.Scale = typ.Scale - cond.Expr.Typ.Scale
-			} else if typ.Scale < cond.Expr.Typ.Scale {
-				ap.Conditions[1][i].Scale = cond.Expr.Typ.Scale - typ.Scale
-			}
-		case types.T_decimal128:
-			typ := ap.Conditions[1][i].Expr.Typ
-			if typ.Scale > cond.Expr.Typ.Scale {
-				cond.Scale = typ.Scale - cond.Expr.Typ.Scale
-			} else if typ.Scale < cond.Expr.Typ.Scale {
-				ap.Conditions[1][i].Scale = cond.Expr.Typ.Scale - typ.Scale
-			}
-		}
-		ap.ctr.scales[0][i] = cond.Scale
-		ap.ctr.scales[1][i] = ap.Conditions[1][i].Scale
-	}
 	return nil
 }
 
@@ -152,7 +127,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		vals, zvals := itr.Insert(i, n, ctr.vecs, ctr.scales[1])
+		vals, zvals := itr.Insert(i, n, ctr.vecs)
 		for k, v := range vals {
 			if zvals[k] == 0 {
 				continue
@@ -192,7 +167,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			n = hashmap.UnitLimit
 		}
 		copy(ctr.inBuckets, hashmap.OneUInt8s)
-		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets, ctr.scales[0])
+		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
 		for k := 0; k < n; k++ {
 			if ctr.inBuckets[k] == 0 {
 				continue

@@ -32,8 +32,6 @@ type container struct {
 	// hash table related.
 	hashTable *hashmap.StrHashMap
 
-	scales [2][]int32
-
 	// bat records the final result of union operator.
 	bat *batch.Batch
 }
