@@ -1,0 +1,28 @@
+# Define workflow name.
+name: Test make pb
+
+on:
+  pull_request:
+    types: [ opened, synchronize, reopened ]
+    branches: main
+
+  workflow_dispatch:
+
+jobs:
+
+  ut-linux-x86:
+    runs-on: ubuntu-latest
+    name: UT Test on Ubuntu/x64
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: '3'
+
+      - name: Set up Go
+        uses: ./.github/actions/setup_env
+
+      - name: Unit Testing
+        run: |
+          cd $GITHUB_WORKSPACE && make clean && make config
+          make pb
