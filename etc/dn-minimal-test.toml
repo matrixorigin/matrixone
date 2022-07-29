@@ -24,6 +24,9 @@ backend = "DISK"
 # in the data dir
 data-dir = "data dir"
 
+[dn]
+uuid = "dn uuid"
+
 [dn.Txn.Storage]
 # txn storage backend implementation. [TAE|MEM]
 backend = "MEM"
