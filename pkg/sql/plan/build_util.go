@@ -16,6 +16,8 @@ package plan
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"go/constant"
 	"math"
 	"strconv"
@@ -149,6 +151,12 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 
 	defaultExpr, err := makePlan2CastExpr(planExpr, typ)
 	if err != nil {
+		return nil, err
+	}
+
+	// try to calculate default value, return err if fails
+	r := rule.NewConstantFlod()
+	if _, err := colexec.EvalExpr(r.GetBatch(), nil, defaultExpr); err != nil {
 		return nil, err
 	}
 
