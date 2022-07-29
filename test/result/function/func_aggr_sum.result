@@ -179,3 +179,19 @@ cast(min(ifl) as decimal(5,2))
 drop table t1;
 drop table t2;
 drop table t3;
+
+create table t1 (grp int, a bigint unsigned, c char(10) not null);
+insert into t1 values (1,1,"a");
+insert into t1 values (2,2,"b");
+insert into t1 values (2,3,"c");
+insert into t1 values (3,4,"E");
+insert into t1 values (3,5,"C");
+insert into t1 values (3,6,"D");
+select sum(distinct a),sum(distinct grp) from t1;
+sum(distinct a)	    sum(distinct grp)
+21	6
+insert into t1 values (null,null,'');
+select sum(distinct a),sum(distinct grp) from t1;
+sum(distinct a)	    sum(distinct grp)
+21	6
+drop table t1;
