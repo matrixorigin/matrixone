@@ -6584,6 +6584,7 @@ reserved_keyword:
 |	DELAYED
 |   PARTITION
 |	QUICK
+|   EXCEPT
 
 non_reserved_keyword:
     AGAINST
@@ -6625,7 +6626,6 @@ non_reserved_keyword:
 |   EXPANSION
 |   EXTENDED
 |   EXPIRE
-|   EXCEPT
 |   ERRORS
 |   ENFORCED
 |   FORMAT
