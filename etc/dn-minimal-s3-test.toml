@@ -18,11 +18,12 @@ data-dir = "data dir"
 [[fileservice]]
 # s3 fileservice instance, used to store data.
 name = "s3"
-# use disk as fileservice backend.
-backend = "DISK"
-# set the directory used by DISK backend. There must has a file named "thisisalocalfileservicedir"
-# in the data dir
-data-dir = "data dir"
+# use s3 as fileservice backend.
+backend = "S3"
+[fileservice.s3]
+endpoint = "s3 endpoint"
+bucket = "s3 bucket"
+key-prefix = "s3 key preifx"
 
 [dn]
 uuid = "dn uuid"
@@ -30,9 +31,3 @@ uuid = "dn uuid"
 [dn.Txn.Storage]
 # txn storage backend implementation. [TAE|MEM]
 backend = "MEM"
-
-[dn.HAKeeper.hakeeper-client]
-service-addresses = [
-    "1",
-    "2"
-]

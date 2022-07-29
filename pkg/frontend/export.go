@@ -315,7 +315,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, value.([]byte), symbol[i], closeby, flag[i]); err != nil {
+			if err = formatOutputString(oq, value.([]byte), symbol[i], closeby, true); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_DATE:

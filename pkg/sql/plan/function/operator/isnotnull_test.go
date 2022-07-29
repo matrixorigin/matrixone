@@ -27,6 +27,8 @@ func TestIsNotNullNormal(t *testing.T) {
 	expected1 := []bool{true, true, true, true, true, true}
 	vecs2 := []*vector.Vector{testutil.MakeVarcharVector([]string{"1", "2", "3", "4"}, nil)}
 	expected2 := []bool{true, true, true, true}
+	vecs3 := []*vector.Vector{testutil.MakeTextVector([]string{"1", "2", "3", "4"}, nil)}
+	expected3 := []bool{true, true, true, true}
 
 	t.Run("isnotnull test - normal", func(t *testing.T) {
 		result, err := IsNotNull[int32](vecs1, procs)
@@ -39,6 +41,11 @@ func TestIsNotNullNormal(t *testing.T) {
 			t.Fatal(err)
 		}
 		checkIsNullResult(t, result, expected2, false)
+		result, err = IsStringNotNull(vecs3, procs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkIsNullResult(t, result, expected3, false)
 	})
 }
 
@@ -48,6 +55,8 @@ func TestIsNotNullNormalWithNull(t *testing.T) {
 	expected1 := []bool{false, false, true, true, false, true}
 	vecs2 := []*vector.Vector{testutil.MakeVarcharVector([]string{"1", "2", "3", "4"}, []uint64{0, 1, 3})}
 	expected2 := []bool{false, false, true, false}
+	vecs3 := []*vector.Vector{testutil.MakeTextVector([]string{"1", "2", "3", "4"}, []uint64{2, 3})}
+	expected3 := []bool{true, true, false, false}
 
 	t.Run("isnotnull test - normal with null", func(t *testing.T) {
 		result, err := IsNotNull[float64](vecs1, procs)
@@ -60,6 +69,11 @@ func TestIsNotNullNormalWithNull(t *testing.T) {
 			t.Fatal(err)
 		}
 		checkIsNullResult(t, result, expected2, false)
+		result, err = IsStringNotNull(vecs3, procs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkIsNullResult(t, result, expected3, false)
 	})
 }
 

@@ -95,6 +95,10 @@ var (
 	IfTimestamp = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return ifGeneral[types.Timestamp](vs, proc, types.Type{Oid: types.T_timestamp})
 	}
+
+	IfText = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return ifForString(vs, proc, types.Type{Oid: types.T_blob})
+	}
 )
 
 func IfTypeCheckFn(inputTypes []types.T, _ []types.T, ret types.T) bool {

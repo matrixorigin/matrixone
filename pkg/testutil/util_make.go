@@ -81,6 +81,10 @@ var (
 		return makeStringVector(values, nsp, varcharType)
 	}
 
+	MakeTextVector = func(values []string, nsp []uint64) *vector.Vector {
+		return makeStringVector(values, nsp, textType)
+	}
+
 	MakeDecimal64Vector = func(values []int64, nsp []uint64, _ types.Type) *vector.Vector {
 		vec := vector.New(decimal64Type)
 		cols := make([]types.Decimal64, len(values))
@@ -249,6 +253,10 @@ var (
 
 	MakeScalarVarchar = func(value string, length int) *vector.Vector {
 		return makeScalarString(value, length, varcharType)
+	}
+
+	MakeTextVarchar = func(value string, length int) *vector.Vector {
+		return makeScalarString(value, length, textType)
 	}
 
 	MakeScalarDate = func(value string, length int) *vector.Vector {

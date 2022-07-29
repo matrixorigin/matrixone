@@ -514,7 +514,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		return CastDateAsTimeStamp(lv, rv, proc)
 	}
 
-	if lv.Typ.Oid == types.T_timestamp && rv.Typ.Oid == types.T_varchar {
+	if lv.Typ.Oid == types.T_timestamp && isString(rv.Typ.Oid) {
 		return castTimestampAsVarchar(lv, rv, proc)
 	}
 
@@ -973,7 +973,7 @@ func CastInt64ToUint64(lv, rv *vector.Vector, proc *process.Process) (*vector.Ve
 }
 
 // CastSpecials1Int : Cast converts string to integer,Contains the following:
-// (char / varhcar) -> (int8 / int16 / int32/ int64 / uint8 / uint16 / uint32 / uint64)
+// (char / varhcar / text) -> (int8 / int16 / int32/ int64 / uint8 / uint16 / uint32 / uint64)
 func CastSpecials1Int[T constraints.Signed](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := rv.Typ.Oid.TypeLen()
 	col := vector.MustBytesCols(lv)
@@ -1025,7 +1025,7 @@ func CastSpecials1Uint[T constraints.Unsigned](lv, rv *vector.Vector, proc *proc
 }
 
 // CastSpecials1Float : Cast converts string to floating point number,Contains the following:
-// (char / varhcar) -> (float32 / float64)
+// (char / varhcar / text) -> (float32 / float64)
 func CastSpecials1Float[T constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := rv.Typ.Oid.TypeLen()
 	col := vector.MustBytesCols(lv)
@@ -1051,7 +1051,7 @@ func CastSpecials1Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 }
 
 // CastSpecials2Int : Cast converts integer to string,Contains the following:
-// (int8 /int16/int32/int64/uint8/uint16/uint32/uint64) -> (char / varhcar)
+// (int8 /int16/int32/int64/uint8/uint16/uint32/uint64) -> (char / varhcar / text)
 func CastSpecials2Int[T constraints.Integer](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
 	lvs := vector.MustTCols[T](lv)
@@ -1130,8 +1130,13 @@ func CastSpecials2Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 // CastSpecials3 :  Cast converts string to string ,Contains the following:
 // char -> char
 // char -> varhcar
+// char -> blob
 // varchar -> char
 // varchar -> varhcar
+// varchar -> blob
+// blob -> char
+// blob -> varchar
+// blob -> blob
 func CastSpecials3(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	source := vector.MustBytesCols(lv)
 	if lv.IsScalar() {
@@ -1581,7 +1586,7 @@ func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vect
 	return vec, nil
 }
 
-// CastStringAsDecimal64 : onverts char/varchar as decimal64
+// CastStringAsDecimal64 : onverts char/varchar/text as decimal64
 func CastStringAsDecimal64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	resultType := rv.Typ
 	resultType.Size = 8
@@ -2330,7 +2335,7 @@ func isNumeric(t types.T) bool {
 
 //  isString: return true if the types.T is string type
 func isString(t types.T) bool {
-	if t == types.T_char || t == types.T_varchar {
+	if t == types.T_char || t == types.T_varchar || t == types.T_blob {
 		return true
 	}
 	return false
