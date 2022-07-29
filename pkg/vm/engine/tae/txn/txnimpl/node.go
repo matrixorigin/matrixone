@@ -352,7 +352,7 @@ func (n *insertNode) Append(data *containers.Batch, offset uint32) (an uint32, e
 	from := uint32(n.data.Length())
 	an = n.PrepareAppend(data, offset)
 	for _, attr := range data.Attrs {
-		if attr == catalog.HiddenColumnName {
+		if attr == catalog.PhyAddrColumnName {
 			continue
 		}
 		def := schema.ColDefs[schema.GetColIdx(attr)]
@@ -361,17 +361,17 @@ func (n *insertNode) Append(data *containers.Batch, offset uint32) (an uint32, e
 		destVec.ExtendWithOffset(data.Vecs[def.Idx], int(offset), int(an))
 	}
 	n.rows = uint32(n.data.Length())
-	err = n.FillHiddenColumn(from, uint32(data.Length())-offset)
+	err = n.FillPhyAddrColumn(from, uint32(data.Length())-offset)
 	return
 }
 
-func (n *insertNode) FillHiddenColumn(startRow, length uint32) (err error) {
-	col, err := model.PrepareHiddenData(catalog.HiddenColumnType, n.prefix, startRow, length)
+func (n *insertNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
+	col, err := model.PreparePhyAddrData(catalog.PhyAddrColumnType, n.prefix, startRow, length)
 	if err != nil {
 		return
 	}
 	defer col.Close()
-	vec := n.data.Vecs[n.table.entry.GetSchema().HiddenKey.Idx]
+	vec := n.data.Vecs[n.table.entry.GetSchema().PhyAddrKey.Idx]
 	vec.Extend(col)
 	return
 }

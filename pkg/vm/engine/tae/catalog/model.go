@@ -27,13 +27,13 @@ const (
 )
 
 var (
-	HiddenColumnType types.Type
+	PhyAddrColumnType types.Type
 )
 
 const (
-	HiddenColumnName    = "PADDR"
-	HiddenColumnComment = "Physical address"
-	SortKeyNamePrefx    = "_SORT_"
+	PhyAddrColumnName    = "PADDR"
+	PhyAddrColumnComment = "Physical address"
+	SortKeyNamePrefx     = "_SORT_"
 
 	SystemDBID               = uint64(1)
 	SystemDBName             = "mo_catalog"
@@ -112,7 +112,7 @@ const (
 
 func init() {
 	var err error
-	HiddenColumnType = types.Type{
+	PhyAddrColumnType = types.Type{
 		Oid:   types.Type_DECIMAL128,
 		Size:  16,
 		Width: 128,
