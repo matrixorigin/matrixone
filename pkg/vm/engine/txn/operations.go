@@ -92,6 +92,15 @@ type CreateRelationReq struct {
 	Defs       []engine.TableDef
 }
 
+func init() {
+	// register all TableDef types
+	gob.Register(new(engine.CommentDef))
+	gob.Register(new(engine.AttributeDef))
+	gob.Register(new(engine.IndexTableDef))
+	gob.Register(new(engine.PropertiesDef))
+	gob.Register(new(engine.PrimaryIndexDef))
+}
+
 type CreateRelationResp struct {
 	ErrExisted bool
 }
