@@ -25,4 +25,4 @@ jobs:
       - name: Unit Testing
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
-          make pb
+          sudo make pb
