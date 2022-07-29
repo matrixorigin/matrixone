@@ -113,6 +113,13 @@ func (s *Service) heartbeatWorker(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.heartbeat(ctx)
+			// I'd call this an ugly hack to just workaround select's
+			// policy of randomly picking a ready channel from the case list.
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 		}
 	}
 }
