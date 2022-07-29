@@ -199,6 +199,9 @@ var (
 		input:  "SELECT * FROM t1 WHERE a = ANY ( SELECT 1 intersect ( SELECT 1 intersect SELECT 1 ) );",
 		output: "select * from t1 where a = any (select 1 intersect (select 1 intersect select 1))",
 	}, {
+		input:  "SELECT * FROM t1 WHERE a = ANY ( SELECT 1 minus ( SELECT 1 minus SELECT 1 ) );",
+		output: "select * from t1 where a = any (select 1 minus (select 1 minus select 1))",
+	}, {
 		input:  "SELECT * FROM t1 WHERE (a,b) = ANY (SELECT a, max(b) FROM t1 GROUP BY a);",
 		output: "select * from t1 where (a, b) = any (select a, max(b) from t1 group by a)",
 	}, {
@@ -963,6 +966,8 @@ var (
 		input: "select * from t intersect all select c from t1",
 	}, {
 		input: "select * from t intersect distinct select c from t1",
+	}, {
+		input: "select * from t minus select c from t1",
 	}, {
 		input: "select * from (select a from t) as t1",
 	}, {
