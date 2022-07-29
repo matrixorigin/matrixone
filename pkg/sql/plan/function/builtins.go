@@ -92,7 +92,7 @@ var builtins = map[int]Functions{
 				ret := make([]types.T, len(inputs))
 				convert := false
 				for i, t := range inputs {
-					if t != types.T_char && t != types.T_varchar && t != types.T_any {
+					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob {
 						if castTable[t][types.T_varchar] {
 							ret[i] = types.T_varchar
 							convert = true
@@ -126,7 +126,7 @@ var builtins = map[int]Functions{
 				ret := make([]types.T, len(inputs))
 				convert := false
 				for i, t := range inputs {
-					if t != types.T_char && t != types.T_varchar && t != types.T_any {
+					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob {
 						if castTable[t][types.T_varchar] {
 							ret[i] = types.T_varchar
 							convert = true

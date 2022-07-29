@@ -145,7 +145,7 @@ func Sort(desc bool, os []int64, vec *vector.Vector) {
 		} else {
 			genericSort(col, os, decimal128Greater)
 		}
-	case types.T_char, types.T_varchar:
+	case types.T_char, types.T_varchar, types.T_blob:
 		col := vec.Col.(*types.Bytes)
 		if !desc {
 			genericSort([]types.String{col}, os, stringLess[types.String])

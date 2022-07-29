@@ -103,6 +103,10 @@ var (
 	CaseWhenTimestamp = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return cwGeneral[types.Timestamp](vs, proc, types.Type{Oid: types.T_timestamp})
 	}
+
+	CaseWhenText = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwString(vs, proc, types.Type{Oid: types.T_blob})
+	}
 )
 
 // CwTypeCheckFn is type check function for case-when operator

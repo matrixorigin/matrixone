@@ -60,10 +60,19 @@ func (c *CacheFS) List(ctx context.Context, dirPath string) ([]DirEntry, error) 
 func (c *CacheFS) Read(ctx context.Context, vector *IOVector) error {
 
 	numHit := 0
+	defer func() {
+		if c.stats != nil {
+			atomic.AddInt64(&c.stats.Read, int64(len(vector.Entries)))
+			atomic.AddInt64(&c.stats.CacheHit, int64(numHit))
+		}
+	}()
+
+	noObject := true
 	for i, entry := range vector.Entries {
 		if entry.ToObject == nil {
 			continue
 		}
+		noObject = false
 
 		// read from cache
 		key := CacheKey{
@@ -83,6 +92,10 @@ func (c *CacheFS) Read(ctx context.Context, vector *IOVector) error {
 		return err
 	}
 
+	if noObject {
+		return nil
+	}
+
 	for i, entry := range vector.Entries {
 		vector.Entries[i].ignore = false
 
@@ -95,11 +108,6 @@ func (c *CacheFS) Read(ctx context.Context, vector *IOVector) error {
 			}
 			c.memLRU.Set(key, entry.Object, entry.ObjectSize)
 		}
-	}
-
-	if c.stats != nil {
-		atomic.AddInt64(&c.stats.Read, int64(len(vector.Entries)))
-		atomic.AddInt64(&c.stats.CacheHit, int64(numHit))
 	}
 
 	return nil
