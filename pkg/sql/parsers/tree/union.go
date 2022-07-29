@@ -53,12 +53,14 @@ const (
 	UNION UnionType = iota
 	INTERSECT
 	EXCEPT
+	UT_MINUS
 )
 
 var unionTypeName = [...]string{
 	UNION:     "union",
 	INTERSECT: "intersect",
 	EXCEPT:    "except",
+	UT_MINUS:  "minus",
 }
 
 func (i UnionType) String() string {
