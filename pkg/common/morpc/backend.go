@@ -536,6 +536,7 @@ func (rb *remoteBackend) resetConn() error {
 
 	start := time.Now()
 	wait := time.Second
+	sleep := time.Millisecond * 200
 	for {
 		if !rb.runningLocked() {
 			return errBackendClosed
@@ -551,12 +552,19 @@ func (rb *remoteBackend) resetConn() error {
 		}
 		rb.logger.Error("init remote connection failed, retry later",
 			zap.Error(err))
-		time.Sleep(wait)
-		wait += wait / 2
 
-		if time.Since(start) > rb.options.connectTimeout {
-			return errBackendClosed
+		duration := time.Duration(0)
+		for {
+			time.Sleep(sleep)
+			duration += sleep
+			if time.Since(start) > rb.options.connectTimeout {
+				return errBackendClosed
+			}
+			if duration >= wait {
+				break
+			}
 		}
+		wait += wait / 2
 	}
 }
 
