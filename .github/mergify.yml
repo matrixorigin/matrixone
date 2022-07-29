@@ -55,7 +55,7 @@ pull_request_rules:
     actions:
       label:
         add:
-          - kind/test
+          - kind/test-ci
   - name: label for Code Refactoring
     conditions: 
       - body~=(?m)- \[(?i)x\] Code Refactoring
