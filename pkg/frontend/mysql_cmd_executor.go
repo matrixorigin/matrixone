@@ -677,6 +677,18 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 						row[i] = vs[rowIndex].ToStringWithScale(scale)
 					}
 				}
+			case types.T_blob:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.(*types.Bytes)
+					row[i] = vs.Get(rowIndex)
+				} else {
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.(*types.Bytes)
+						row[i] = vs.Get(rowIndex)
+					}
+				}
 			default:
 				logutil.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 				return fmt.Errorf("getDataFromPipeline : unsupported type %d", vec.Typ.Oid)
@@ -2230,6 +2242,8 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	case types.T_decimal128:
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+	case types.T_blob:
+		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
 	default:
 		return fmt.Errorf("RunWhileSend : unsupported type %d", engineType)
 	}

@@ -52,6 +52,13 @@ func TestParseDNConfig(t *testing.T) {
 	[dn.Txn.Storage]
 	# txn storage backend implementation. [TAE|MEM]
 	backend = "MEM"
+
+	
+	[dn.HAKeeper.hakeeper-client]
+	service-addresses = [
+		"1",
+		"2"
+	]
 	`
 	cfg, err := parseFromString(data)
 	assert.NoError(t, err)
@@ -59,6 +66,7 @@ func TestParseDNConfig(t *testing.T) {
 	assert.Equal(t, 2, len(cfg.FileServices))
 	assert.Equal(t, "local", cfg.FileServices[0].Name)
 	assert.Equal(t, "s3", cfg.FileServices[1].Name)
+	assert.Equal(t, 2, len(cfg.DN.HAKeeper.ClientConfig.ServiceAddresses))
 }
 
 func TestFileServiceFactory(t *testing.T) {

@@ -283,7 +283,7 @@ func MockVector2(typ types.Type, rows int, offset int) Vector {
 		for i := 0; i < rows; i++ {
 			vec.Append(types.Datetime(i + offset))
 		}
-	case types.Type_CHAR, types.Type_VARCHAR:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_BLOB:
 		for i := 0; i < rows; i++ {
 			vec.Append([]byte(strconv.Itoa(i + offset)))
 		}
