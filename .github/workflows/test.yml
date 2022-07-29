@@ -20,10 +20,24 @@ jobs:
           fetch-depth: '3'
 
       - name: Set up Go
-        uses: ./.github/actions/setup_env
+        with:
+          go-version: '1.18'
+          check-latest: true
 
-      - name: Unit Testing
+      - name: make pb testing
+        continue-on-error: true
         run: |
           go env
           cd $GITHUB_WORKSPACE && make clean && make config
           sudo make pb
+
+      - name: print
+        run: |
+          ls -alrht ${GOPATH}/bin/
+          cd $GITHUB_WORKSPACE 
+          echo "==========================================================="
+          ls -alrth
+          echo "==========================================================="
+          go mod vendor
+          echo "==========================================================="
+          ls -alrth
