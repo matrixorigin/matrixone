@@ -311,6 +311,10 @@ func (rb *remoteBackend) active() {
 	rb.atomic.lastActiveTime.Store(now)
 }
 
+func (rb *remoteBackend) inactive() {
+	rb.atomic.lastActiveTime.Store(time.Time{})
+}
+
 func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	rb.logger.Info("write loop started")
 	defer func() {
@@ -325,6 +329,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 		if err := rb.resetConn(); err != nil {
 			rb.logger.Error("fail to reset backend connection",
 				zap.Error(err))
+			rb.inactive()
 		}
 	}
 
