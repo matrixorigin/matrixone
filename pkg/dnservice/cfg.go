@@ -19,7 +19,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
@@ -43,8 +42,6 @@ var (
 type Config struct {
 	// UUID dn store uuid
 	UUID string `toml:"uuid"`
-	// DataDir storage directory for local data. Include DNShard metadata and TAE data.
-	DataDir string `toml:"data-dir"`
 	// ListenAddress listening address for receiving external requests.
 	ListenAddress string `toml:"listen-address"`
 	// ServiceAddress service address for communication, if this address is not set, use
@@ -67,14 +64,6 @@ type Config struct {
 	LogService struct {
 		// ConnectTimeout timeout for connect to logservice. Default is 30s.
 		ConnectTimeout toml.Duration `toml:"connect-timeout"`
-	}
-
-	// FileService file service configuration
-	FileService struct {
-		// Backend file service backend implementation. [Mem|DISK|S3|MINIO]. Default is DISK.
-		Backend string `toml:"backend"`
-		// S3 s3 configuration
-		S3 fileservice.S3Config `toml:"s3"`
 	}
 
 	// RPC configuration
@@ -134,9 +123,6 @@ func (c *Config) validate() error {
 	if c.UUID == "" {
 		return fmt.Errorf("Config.UUID not set")
 	}
-	if c.DataDir == "" {
-		return fmt.Errorf("Config.DataDir not set")
-	}
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress
 		c.ServiceAddress = defaultServiceAddress
@@ -192,19 +178,5 @@ func (c *Config) validate() error {
 	if c.LogService.ConnectTimeout.Duration == 0 {
 		c.LogService.ConnectTimeout.Duration = defaultConnectTimeout
 	}
-	if c.FileService.Backend == "" {
-		c.FileService.Backend = diskFileServiceBackend
-	}
-	if _, ok := supportFileServiceBackends[strings.ToUpper(c.FileService.Backend)]; !ok {
-		return fmt.Errorf("%s file service backend not support", c.Txn.Storage)
-	}
 	return nil
-}
-
-func (c Config) getMetadataDir() string {
-	return fmt.Sprintf("%s/metadata", c.DataDir)
-}
-
-func (c Config) getDataDir() string {
-	return fmt.Sprintf("%s/data", c.DataDir)
 }

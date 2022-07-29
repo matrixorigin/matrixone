@@ -37,8 +37,6 @@ type container struct {
 
 	sels [][]int64
 
-	scales [2][]int32
-
 	inBuckets []uint8
 
 	bat *batch.Batch

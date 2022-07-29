@@ -20,14 +20,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector, inBuckets []uint8, scales []int32) ([]uint64, []int64) {
+func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector, inBuckets []uint8) ([]uint64, []int64) {
 	defer func() {
 		for i := 0; i < count; i++ {
 			itr.mp.keys[i] = itr.mp.keys[i][:0]
 		}
 	}()
 	copy(itr.mp.zValues[:count], OneInt64s[:count])
-	itr.mp.encodeHashKeysWithScale(vecs, start, count, scales)
+	itr.mp.encodeHashKeys(vecs, start, count)
 	if itr.nbucket != 0 {
 		itr.mp.hashMap.FindStringBatchInBucket(itr.mp.strHashStates, itr.mp.keys[:count], itr.mp.values, inBuckets, itr.ibucket, itr.nbucket)
 	} else {
@@ -36,14 +36,14 @@ func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector, inB
 	return itr.mp.values[:count], itr.mp.zValues[:count]
 }
 
-func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector, scales []int32) ([]uint64, []int64) {
+func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) ([]uint64, []int64) {
 	defer func() {
 		for i := 0; i < count; i++ {
 			itr.mp.keys[i] = itr.mp.keys[i][:0]
 		}
 	}()
 	copy(itr.mp.zValues[:count], OneInt64s[:count])
-	itr.mp.encodeHashKeysWithScale(vecs, start, count, scales)
+	itr.mp.encodeHashKeys(vecs, start, count)
 	if itr.nbucket != 0 {
 		if itr.mp.hasNull {
 			itr.mp.hashMap.InsertStringBatchInBucket(itr.mp.strHashStates, itr.mp.keys[:count], itr.mp.values, itr.ibucket, itr.nbucket)
@@ -60,7 +60,7 @@ func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector, s
 	return itr.mp.values[:count], itr.mp.zValues[:count]
 }
 
-func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector, inBuckets []uint8, _ []int32) ([]uint64, []int64) {
+func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector, inBuckets []uint8) ([]uint64, []int64) {
 	defer func() {
 		for i := 0; i < count; i++ {
 			itr.mp.keys[i] = 0
@@ -78,7 +78,7 @@ func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector, inB
 	return itr.mp.values[:count], itr.mp.zValues[:count]
 }
 
-func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector, _ []int32) ([]uint64, []int64) {
+func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) ([]uint64, []int64) {
 	defer func() {
 		for i := 0; i < count; i++ {
 			itr.mp.keys[i] = 0
@@ -86,9 +86,6 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector, _
 		copy(itr.mp.keyOffs[:count], zeroUint32)
 	}()
 
-	if !itr.mp.hasNull {
-		copy(itr.mp.zValues[:count], OneInt64s[:count])
-	}
 	copy(itr.mp.zValues[:count], OneInt64s[:count])
 	itr.mp.encodeHashKeys(vecs, start, count)
 	copy(itr.mp.hashes[:count], zeroUint64[:count])

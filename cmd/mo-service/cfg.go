@@ -21,6 +21,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
@@ -48,6 +49,8 @@ type Config struct {
 	// ServiceType service type, select the corresponding configuration to start the
 	// service according to the service type. [CN|DN|Log|Standalone]
 	ServiceType string `toml:"service-type"`
+	// FileServices the config for file services
+	FileServices []fileservice.Config `toml:"fileservice"`
 	// DN dn service config
 	DN dnservice.Config `toml:"dn"`
 	// LogService is the config for log service
@@ -82,4 +85,13 @@ func (c *Config) validate() error {
 		return fmt.Errorf("service type %s not support", c.ServiceType)
 	}
 	return nil
+}
+
+func (c *Config) createFileService(name string) (fileservice.FileService, error) {
+	for _, cfg := range c.FileServices {
+		if strings.EqualFold(cfg.Name, name) {
+			return fileservice.NewFileService(cfg)
+		}
+	}
+	return nil, fmt.Errorf("file service named %s not set", name)
 }

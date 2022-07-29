@@ -48,9 +48,9 @@ const (
 // HAKeeperClientConfig is the config for HAKeeper clients.
 type HAKeeperClientConfig struct {
 	// DiscoveryAddress is the Log Service discovery address provided by k8s.
-	DiscoveryAddress string
+	DiscoveryAddress string `toml:"discovery-address"`
 	// ServiceAddresses is a list of well known Log Services' service addresses.
-	ServiceAddresses []string
+	ServiceAddresses []string `toml:"service-addresses"`
 }
 
 // Config defines the Configurations supported by the Log Service.

@@ -178,16 +178,6 @@ comment = "record the time elapsed of executing sql request"
 update-mode = "dynamic"
 
 [[parameter]]
-name = "nodeID"
-scope = ["global"]
-access = ["file"]
-type = "int64"
-domain-type = "range"
-values = ["0", "0", "10"]
-comment = "the Node ID of the cube. In a distributed setting, each node in a cluster should have a different nodeID."
-update-mode = "dynamic"
-
-[[parameter]]
 name = "storePath"
 scope = ["global"]
 access = ["file"]
@@ -196,7 +186,6 @@ domain-type = "set"
 values = ["./store"]
 comment = "the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID"
 update-mode = "dynamic"
-
 
 [[parameter]]
 name = "lengthOfQueryPrinted"
@@ -256,16 +245,6 @@ type = "int64"
 domain-type = "range"
 values = ["1024","32","3096"]
 comment = "KB. When the number of bytes in the outbuffer exceeds the it,the outbuffer will be flushed."
-update-mode = "dynamic"
-
-[[parameter]]
-name = "cubeMaxEntriesBytes"
-scope = ["global"]
-access = ["file"]
-type = "int64"
-domain-type = "set"
-values = ["314572800"]
-comment = "default is 300MB. The max entries bytes for the write batch in the cube."
 update-mode = "dynamic"
 
 [[parameter]]
@@ -374,7 +353,7 @@ scope = ["global"]
 access = ["file"]
 type = "string"
 domain-type = "set"
-values = [""]
+values = []
 comment = "default is ''. the filename of log file."
 update-mode = "dynamic"
 

@@ -246,7 +246,8 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 				m := s.store.getHeartbeatMessage()
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				defer cancel()
-				assert.NoError(t, s.store.addLogStoreHeartbeat(ctx, m))
+				_, err := s.store.addLogStoreHeartbeat(ctx, m)
+				assert.NoError(t, err)
 			}
 		}
 		sendHeartbeat(services[:3])
@@ -258,7 +259,8 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		require.NoError(t, services[0].store.addDNStoreHeartbeat(ctx, dnMsg))
+		_, err = services[0].store.addDNStoreHeartbeat(ctx, dnMsg)
+		require.NoError(t, err)
 
 		// find out the leader HAKeeper store as we need the term value
 		var term uint64
@@ -329,13 +331,15 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		}
 		dnMsg.Shards = append(dnMsg.Shards, dnShardInfo)
 		// as if DN is running
-		require.NoError(t, services[0].store.addDNStoreHeartbeat(ctx, dnMsg))
+		_, err = services[0].store.addDNStoreHeartbeat(ctx, dnMsg)
+		require.NoError(t, err)
 		// fake a free DN store
 		dnMsg2 := pb.DNStoreHeartbeat{
 			UUID:   uuid.New().String(),
 			Shards: make([]pb.DNShardInfo, 0),
 		}
-		require.NoError(t, services[0].store.addDNStoreHeartbeat(ctx, dnMsg2))
+		_, err = services[0].store.addDNStoreHeartbeat(ctx, dnMsg2)
+		require.NoError(t, err)
 
 		// stop store 1
 		require.NoError(t, services[0].Close())
@@ -346,22 +350,29 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		// wait for HAKeeper to repair the Log & HAKeeper shards
 		dnRepaired := false
 		for i := 0; i < 5000; i++ {
+			plog.Infof("iteration %d", i)
 			tn := func() (bool, error) {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				defer cancel()
 				m := services[0].store.getHeartbeatMessage()
-				if err := services[0].store.addLogStoreHeartbeat(ctx, m); err != nil {
+				if cb, err := services[0].store.addLogStoreHeartbeat(ctx, m); err != nil {
 					return false, err
+				} else {
+					services[0].handleCommands(cb.Commands)
 				}
 				m = services[1].store.getHeartbeatMessage()
-				if err := services[1].store.addLogStoreHeartbeat(ctx, m); err != nil {
+				if cb, err := services[1].store.addLogStoreHeartbeat(ctx, m); err != nil {
 					return false, err
+				} else {
+					services[1].handleCommands(cb.Commands)
 				}
 				m = services[2].store.getHeartbeatMessage()
-				if err := services[0].store.addLogStoreHeartbeat(ctx, m); err != nil {
+				if cb, err := services[0].store.addLogStoreHeartbeat(ctx, m); err != nil {
 					return false, err
+				} else {
+					services[2].handleCommands(cb.Commands)
 				}
-				if err := services[0].store.addDNStoreHeartbeat(ctx, dnMsg2); err != nil {
+				if _, err := services[0].store.addDNStoreHeartbeat(ctx, dnMsg2); err != nil {
 					return false, err
 				}
 
@@ -384,15 +395,6 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 							}
 						}
 					}
-
-					cb, err = services[0].store.getCommandBatch(ctx, s.store.id())
-					if err != nil {
-						return false, err
-					}
-					for _, cmd := range cb.Commands {
-						plog.Infof("store returned schedule command: %s", cmd.LogString())
-					}
-					s.handleCommands(cb.Commands)
 				}
 
 				logRepaired := true
@@ -411,7 +413,8 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 				}
 			}
 			completed, err := tn()
-			if err != nil && err != dragonboat.ErrTimeout {
+			if err != nil && err != dragonboat.ErrTimeout &&
+				err != dragonboat.ErrInvalidDeadline && err != dragonboat.ErrTimeoutTooSmall {
 				t.Fatalf("unexpected error %v", err)
 			}
 			if completed {
@@ -466,13 +469,15 @@ func testBootstrap(t *testing.T, fail bool) {
 		m := store.getHeartbeatMessage()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		assert.NoError(t, store.addLogStoreHeartbeat(ctx, m))
+		_, err = store.addLogStoreHeartbeat(ctx, m)
+		assert.NoError(t, err)
 
 		dnMsg := pb.DNStoreHeartbeat{
 			UUID:   uuid.New().String(),
 			Shards: make([]pb.DNShardInfo, 0),
 		}
-		assert.NoError(t, store.addDNStoreHeartbeat(ctx, dnMsg))
+		_, err = store.addDNStoreHeartbeat(ctx, dnMsg)
+		assert.NoError(t, err)
 
 		_, term, err := store.isLeaderHAKeeper()
 		require.NoError(t, err)
@@ -516,7 +521,8 @@ func testBootstrap(t *testing.T, fail bool) {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				defer cancel()
 				m := store.getHeartbeatMessage()
-				assert.NoError(t, store.addLogStoreHeartbeat(ctx, m))
+				_, err = store.addLogStoreHeartbeat(ctx, m)
+				assert.NoError(t, err)
 
 				state, err = store.getCheckerState()
 				require.NoError(t, err)
