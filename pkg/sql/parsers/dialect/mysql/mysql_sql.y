@@ -2708,13 +2708,38 @@ union_op:
         $$ = &tree.UnionTypeRecord{
             Type: tree.UNION,
             All: true,
-            Distinct: false,
+            Distinct: false, 
         }
     }
 |   UNION DISTINCT
     {
         $$ = &tree.UnionTypeRecord{
             Type: tree.UNION,
+            All: false,
+            Distinct: true,
+        }
+    }
+| 
+    EXCEPT
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.EXCEPT,
+            All: false,
+            Distinct: false,
+        }
+    }
+|   EXCEPT ALL
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.EXCEPT,
+            All: true,
+            Distinct: false, 
+        }
+    }
+|   EXCEPT DISTINCT
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.EXCEPT,
             All: false,
             Distinct: true,
         }
