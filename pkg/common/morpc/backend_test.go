@@ -525,6 +525,7 @@ func (bf *testBackendFactory) Create(backend string) (Backend, error) {
 	bf.Lock()
 	defer bf.Unlock()
 	b := &testBackend{id: bf.id}
+	b.activeTime = time.Now()
 	bf.id++
 	return b, nil
 }
