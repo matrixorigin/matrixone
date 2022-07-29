@@ -28,6 +28,6 @@ jobs:
       - name: make pb testing
         run: |
           export GOPATH=$(go env GOPATH)
-          echo $GOPATH
+          ls -al ./pkg/pb/logservice
           cd $GITHUB_WORKSPACE && make clean && make config
           make pb
