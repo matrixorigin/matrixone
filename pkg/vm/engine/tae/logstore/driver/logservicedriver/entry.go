@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
@@ -120,6 +122,19 @@ func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
 	return &recordEntry{payload: payload, meta: newMeta(), mashalMu: sync.RWMutex{}}
 }
 
+func (r *recordEntry) replay(h driver.ApplyHandle) (addr *common.ClosedIntervals) {
+	bbuf := bytes.NewBuffer(r.payload)
+	lsns:=make([]uint64,0)
+	for lsn := range r.meta.addr {
+		lsns=append(lsns, lsn)
+		e := entry.NewEmptyEntry()
+		e.ReadFrom(bbuf)
+		e.Lsn = lsn
+		h(e)
+	}
+	intervals:=common.NewClosedIntervalsBySlice(lsns)
+	return intervals
+}
 func (r *recordEntry) append(e *entry.Entry) {
 	r.entries = append(r.entries, e)
 	r.meta.addr[e.Lsn] = uint64(r.payloadSize)

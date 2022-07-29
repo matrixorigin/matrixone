@@ -31,10 +31,10 @@ func (d *LogServiceDriver) Read(drlsn uint64) (*entry.Entry, error) {
 	if err != nil {
 		panic(err)
 	}
-	r, err := d.tryRead(lsn)
+	r, err := d.readFromCache(lsn)
 	if err != nil {
-		d.readFromLogService(lsn)
-		r, err = d.tryRead(lsn)
+		d.readSmallBatchFromLogService(lsn)
+		r, err = d.readFromCache(lsn)
 		if err != nil {
 			panic(err)
 		}
@@ -42,7 +42,7 @@ func (d *LogServiceDriver) Read(drlsn uint64) (*entry.Entry, error) {
 	return r.readEntry(drlsn), nil
 }
 
-func (d *LogServiceDriver) tryRead(lsn uint64) (*recordEntry, error) {
+func (d *LogServiceDriver) readFromCache(lsn uint64) (*recordEntry, error) {
 	d.readMu.RLock()
 	defer d.readMu.RUnlock()
 	record, ok := d.records[lsn]
@@ -51,24 +51,8 @@ func (d *LogServiceDriver) tryRead(lsn uint64) (*recordEntry, error) {
 	}
 	return record, nil
 }
-func (d *LogServiceDriver) readFromLogService(lsn uint64) {
-	d.readMu.Lock()
-	defer d.readMu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
-	defer cancel()
-	client,err := d.clientPool.Get()
-	defer d.clientPool.Put(client)
-	if err != nil{
-		panic(err)
-	}
-	records, _, err := client.c.Read(ctx, lsn, d.config.ReadMaxSize)
-	if err != nil { //TODO
-		panic(err)
-	}
-	d.appendRecords(records, lsn)
-}
 
-func (d *LogServiceDriver) appendRecords(records []logservice.LogRecord, firstlsn uint64) {
+func (d *LogServiceDriver) appendRecords(records []logservice.LogRecord, firstlsn uint64,fn func(*recordEntry)) {
 	lsns := make([]uint64, 0)
 	for i, record := range records {
 		if record.GetType() != pb.UserRecord {
@@ -83,9 +67,6 @@ func (d *LogServiceDriver) appendRecords(records []logservice.LogRecord, firstls
 		lsns = append(lsns, lsn)
 	}
 	d.lsns = append(d.lsns, lsns...)
-	if len(d.lsns) > d.config.ReadCacheSize {
-		d.dropRecords()
-	}
 }
 
 func (d *LogServiceDriver) dropRecords() {
@@ -95,4 +76,43 @@ func (d *LogServiceDriver) dropRecords() {
 		delete(d.records, lsn)
 	}
 	d.lsns = d.lsns[drop:]
+}
+func (d *LogServiceDriver) dropRecordByLsn(lsn uint64) {
+		delete(d.records, lsn)
+}
+func (d *LogServiceDriver) readSmallBatchFromLogService(lsn uint64) {
+	d.readMu.Lock()
+	defer d.readMu.Unlock()
+	_, records := d.readFromLogService(lsn, int(d.config.ReadMaxSize))
+	d.appendRecords(records, lsn,nil)
+	if len(d.lsns) > d.config.ReadCacheSize {
+		d.dropRecords()
+	}
+}
+
+func (d *LogServiceDriver) readFromLogServiceInReplay(lsn uint64, size int) (uint64,uint64) {
+	nextLsn, records := d.readFromLogService(lsn, size)
+	safeLsn:=uint64(0)
+	d.appendRecords(records, lsn,func (r *recordEntry)  {
+		r.unmarshal()
+		if safeLsn<r.appended{
+			safeLsn=r.appended
+		}
+	})
+	return nextLsn,safeLsn
+}
+
+func (d *LogServiceDriver) readFromLogService(lsn uint64, size int) (nextLsn uint64, records []logservice.LogRecord) {
+	ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
+	defer cancel()
+	client, err := d.clientPool.Get()
+	defer d.clientPool.Put(client)
+	if err != nil {
+		panic(err)
+	}
+	records, nextLsn, err = client.c.Read(ctx, lsn, d.config.ReadMaxSize)
+	if err != nil { //TODO
+		panic(err)
+	}
+	return
 }

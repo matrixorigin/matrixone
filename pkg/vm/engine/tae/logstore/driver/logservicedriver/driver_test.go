@@ -3,6 +3,7 @@ package logservicedriver
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -110,6 +111,7 @@ func TestTruncate(t *testing.T) {
 		e.WaitDone()
 	}
 
+	time.Sleep(time.Second)
 	for _, e := range entries {
 		assert.NoError(t, driver.Truncate(e.Lsn))
 		testutils.WaitExpect(400, func() bool {
@@ -117,9 +119,9 @@ func TestTruncate(t *testing.T) {
 			assert.NoError(t, err)
 			return trucated == e.Lsn
 		})
-		trucated, err := driver.GetTruncated()
+		truncated, err := driver.GetTruncated()
 		assert.NoError(t, err)
-		assert.Equal(t, trucated, e.Lsn)
+		assert.Equal(t, truncated, e.Lsn)
 	}
 
 	// driver = restartDriver(t, driver)

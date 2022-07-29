@@ -33,6 +33,7 @@ func (d *LogServiceDriver) doTruncate() {
 	target := atomic.LoadUint64(&d.truncating)
 	lastServiceLsn := d.truncatedLogserviceLsn
 	lsn := lastServiceLsn
+	//TODO use valid lsn
 	for d.isToTruncate(lsn+1, target) {
 		lsn++
 	}

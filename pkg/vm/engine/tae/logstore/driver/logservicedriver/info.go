@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
@@ -14,17 +15,18 @@ var ErrRetryTimeOut = errors.New("driver info: retry time out")
 
 type driverInfo struct {
 	addr        map[uint64]*common.ClosedIntervals //logservicelsn-driverlsn TODO drop on truncate
+	validLsn    *roaring64.Bitmap
 	addrMu      sync.RWMutex
 	driverLsn   uint64
 	driverLsnMu sync.RWMutex
 
-	truncating             uint64
-	truncatedLogserviceLsn uint64
+	truncating             uint64 //
+	truncatedLogserviceLsn uint64 //
 
 	appending            uint64
 	appended             *common.ClosedIntervals
 	appendedMu           sync.RWMutex
-	logserviceAppended   *common.ClosedIntervals
+	logserviceAppended   *common.ClosedIntervals //
 	logserviceAppendedMu sync.RWMutex
 	commitCond           sync.Cond
 }
@@ -32,6 +34,7 @@ type driverInfo struct {
 func newDriverInfo() *driverInfo {
 	return &driverInfo{
 		addr:                 make(map[uint64]*common.ClosedIntervals),
+		validLsn: roaring64.NewBitmap(),
 		addrMu:               sync.RWMutex{},
 		driverLsnMu:          sync.RWMutex{},
 		appended:             common.NewClosedIntervals(),
@@ -41,18 +44,30 @@ func newDriverInfo() *driverInfo {
 		commitCond:           *sync.NewCond(new(sync.Mutex)),
 	}
 }
-
-func (info *driverInfo) isToTruncate(logserviceLsn,driverLsn uint64)bool{
-	maxlsn:=info.getMaxDriverLsn(logserviceLsn)
-	if maxlsn==0{
+func (info *driverInfo) onReplayRecordEntry(lsn uint64, driverLsns *common.ClosedIntervals){
+	info.addr[lsn]=driverLsns
+	info.validLsn.Add(lsn)
+}
+func (info *driverInfo) getNextValidLogserviceLsn(lsn uint64)uint64{
+	lsn++
+	for !info.validLsn.Contains(lsn){
+		lsn++
+	}
+	return lsn
+}
+func (info *driverInfo) isToTruncate(logserviceLsn, driverLsn uint64) bool {
+	maxlsn := info.getMaxDriverLsn(logserviceLsn)
+	logutil.Infof("service %d, max %d, target %d", logserviceLsn, maxlsn, driverLsn)
+	if maxlsn == 0 {
 		return false
 	}
-	return maxlsn<=driverLsn
+	return maxlsn <= driverLsn
 }
 
 func (info *driverInfo) getMaxDriverLsn(logserviceLsn uint64) uint64 {
 	info.addrMu.RLock()
 	intervals, ok := info.addr[logserviceLsn]
+	logutil.Infof("interval %v", intervals)
 	if !ok {
 		info.addrMu.RUnlock()
 		return 0
@@ -120,6 +135,7 @@ func (info *driverInfo) logAppend(appender *driverAppender) {
 	for key := range appender.entry.meta.addr {
 		array = append(array, key)
 	}
+	info.validLsn.Add(appender.logserviceLsn)
 	info.addr[appender.logserviceLsn] = common.NewClosedIntervalsBySlice(array)
 	info.addrMu.Unlock()
 }
