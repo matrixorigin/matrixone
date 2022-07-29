@@ -25,6 +25,8 @@ endpoint = "s3 endpoint"
 bucket = "s3 bucket"
 key-prefix = "s3 key preifx"
 
+[dn]
+uuid = "dn uuid"
 
 [dn.Txn.Storage]
 # txn storage backend implementation. [TAE|MEM]
