@@ -1013,7 +1013,7 @@ func TestCastLeftToRight(t *testing.T) {
 }
 
 func TestCastSpecials1Int(t *testing.T) {
-	// (char / varhcar) -> (int8 / int16 / int32/ int64 / uint8 / uint16 / uint32 / uint64)
+	// (char / varhcar / blob) -> (int8 / int16 / int32/ int64 / uint8 / uint16 / uint32 / uint64)
 
 	makeTempVectors := func(src string, srcType types.T, srcIsConst bool, destType types.T) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
@@ -1254,6 +1254,62 @@ func TestCastSpecials1Int(t *testing.T) {
 			wantValues: []uint64{15},
 			wantScalar: false,
 		},
+		{
+			name:       "Test33",
+			vecs:       makeTempVectors("15", types.T_blob, false, types.T_int8),
+			proc:       procs,
+			wantValues: []int8{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test34",
+			vecs:       makeTempVectors("15", types.T_blob, false, types.T_int16),
+			proc:       procs,
+			wantValues: []int16{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test35",
+			vecs:       makeTempVectors("15", types.T_blob, false, types.T_int32),
+			proc:       procs,
+			wantValues: []int32{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test36",
+			vecs:       makeTempVectors("15", types.T_blob, false, types.T_int64),
+			proc:       procs,
+			wantValues: []int64{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test37",
+			vecs:       makeTempVectors("15", types.T_blob, false, types.T_uint8),
+			proc:       procs,
+			wantValues: []uint8{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test38",
+			vecs:       makeTempVectors("15", types.T_blob, false, types.T_uint16),
+			proc:       procs,
+			wantValues: []uint16{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test39",
+			vecs:       makeTempVectors("15", types.T_blob, false, types.T_uint32),
+			proc:       procs,
+			wantValues: []uint32{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test40",
+			vecs:       makeTempVectors("15", types.T_blob, false, types.T_uint64),
+			proc:       procs,
+			wantValues: []uint64{15},
+			wantScalar: false,
+		},
 	}
 
 	for _, c := range cases {
@@ -1270,7 +1326,7 @@ func TestCastSpecials1Int(t *testing.T) {
 }
 
 func TestCastSpecials1Float(t *testing.T) {
-	// (char / varhcar) -> (float32 / float64)
+	// (char / varhcar / blob) -> (float32 / float64)
 	makeTempVectors := func(src string, srcType types.T, srcIsConst bool, destType types.T) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
 		vectors[0] = makeStringVector(src, srcType, srcIsConst)
@@ -1342,6 +1398,34 @@ func TestCastSpecials1Float(t *testing.T) {
 			wantValues: []float64{15.23},
 			wantScalar: false,
 		},
+		{
+			name:       "Test09",
+			vecs:       makeTempVectors("15.23", types.T_blob, false, types.T_float32),
+			proc:       procs,
+			wantValues: []float32{15.23},
+			wantScalar: false,
+		},
+		{
+			name:       "Test10",
+			vecs:       makeTempVectors("15.23", types.T_blob, true, types.T_float64),
+			proc:       procs,
+			wantValues: []float64{15.23},
+			wantScalar: true,
+		},
+		{
+			name:       "Test11",
+			vecs:       makeTempVectors("15.23", types.T_blob, false, types.T_float32),
+			proc:       procs,
+			wantValues: []float32{15.23},
+			wantScalar: false,
+		},
+		{
+			name:       "Test12",
+			vecs:       makeTempVectors("15.23", types.T_blob, true, types.T_float64),
+			proc:       procs,
+			wantValues: []float64{15.23},
+			wantScalar: true,
+		},
 	}
 
 	for _, c := range cases {
@@ -1358,7 +1442,7 @@ func TestCastSpecials1Float(t *testing.T) {
 }
 
 func TestCastSpecials2Float(t *testing.T) {
-	//(float32/float64) -> (char / varhcar)
+	//(float32/float64) -> (char / varhcar / blob)
 	makeTempVectors := func(src interface{}, destType types.T, srcIsConst bool) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
 		vectors[0] = makeVector(src, srcIsConst)
@@ -1430,6 +1514,34 @@ func TestCastSpecials2Float(t *testing.T) {
 			wantBytes:  []byte("23.65"),
 			wantScalar: false,
 		},
+		{
+			name:       "Test09",
+			vecs:       makeTempVectors(float32(23.65), types.T_blob, false),
+			proc:       procs,
+			wantBytes:  []byte("23.65"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test10",
+			vecs:       makeTempVectors(float64(23.65), types.T_blob, false),
+			proc:       procs,
+			wantBytes:  []byte("23.65"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test11",
+			vecs:       makeTempVectors(float32(23.65), types.T_blob, true),
+			proc:       procs,
+			wantBytes:  []byte("23.65"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test12",
+			vecs:       makeTempVectors(float64(23.65), types.T_blob, true),
+			proc:       procs,
+			wantBytes:  []byte("23.65"),
+			wantScalar: true,
+		},
 	}
 
 	for _, c := range cases {
@@ -1453,6 +1565,11 @@ func TestCastSpecials3(t *testing.T) {
 	// char -> varhcar
 	// varhcar -> char
 	// varhcar -> varhcar
+	// blob -> blob
+	// blob -> varchar
+	// blob -> char
+	// varchar -> blob
+	// char -> blob
 	makeTempVectors := func(src string, srcType types.T, destType types.T, srcIsConst bool) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
 		vectors[0] = makeStringVector(src, srcType, srcIsConst)
@@ -1520,6 +1637,41 @@ func TestCastSpecials3(t *testing.T) {
 		{
 			name:       "Test08",
 			vecs:       makeTempVectors("abcsedn", types.T_varchar, types.T_varchar, false),
+			proc:       procs,
+			wantBytes:  []byte("abcsedn"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test09",
+			vecs:       makeTempVectors("abcsedn", types.T_blob, types.T_blob, false),
+			proc:       procs,
+			wantBytes:  []byte("abcsedn"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test10",
+			vecs:       makeTempVectors("abcsedn", types.T_blob, types.T_varchar, false),
+			proc:       procs,
+			wantBytes:  []byte("abcsedn"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test11",
+			vecs:       makeTempVectors("abcsedn", types.T_blob, types.T_char, false),
+			proc:       procs,
+			wantBytes:  []byte("abcsedn"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test12",
+			vecs:       makeTempVectors("abcsedn", types.T_varchar, types.T_blob, false),
+			proc:       procs,
+			wantBytes:  []byte("abcsedn"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test13",
+			vecs:       makeTempVectors("abcsedn", types.T_char, types.T_blob, false),
 			proc:       procs,
 			wantBytes:  []byte("abcsedn"),
 			wantScalar: false,
@@ -4394,6 +4546,14 @@ func makeStringVector(src string, t types.T, isConst bool) *vector.Vector {
 			Col:     srcBytes,
 			Nsp:     &nulls.Nulls{},
 			Typ:     types.Type{Oid: types.T_varchar, Size: 24},
+			IsConst: isConst,
+			Length:  1,
+		}
+	} else if t == types.T_blob {
+		return &vector.Vector{
+			Col:     srcBytes,
+			Nsp:     &nulls.Nulls{},
+			Typ:     types.Type{Oid: types.T_blob, Size: 24},
 			IsConst: isConst,
 			Length:  1,
 		}

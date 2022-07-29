@@ -53,6 +53,7 @@ const (
 
 	Type_SEL   = types.T_sel
 	Type_TUPLE = types.T_tuple
+	Type_BLOB  = types.T_blob
 )
 
 type Type = types.Type

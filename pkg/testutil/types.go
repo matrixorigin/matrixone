@@ -38,6 +38,7 @@ var (
 	dateType       = types.T_date.ToType()
 	datetimeType   = types.T_datetime.ToType()
 	timestampType  = types.T_timestamp.ToType()
+	textType       = types.T_blob.ToType()
 )
 
 func MakeDecimal64Type(precision, scalar int32) types.Type {
