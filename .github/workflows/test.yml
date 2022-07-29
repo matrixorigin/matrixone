@@ -30,15 +30,4 @@ jobs:
         run: |
           go env
           cd $GITHUB_WORKSPACE && make clean && make config
-          sudo make pb
-
-      - name: print
-        run: |
-          ls -alrht ${GOPATH}/bin/
-          cd $GITHUB_WORKSPACE 
-          echo "==========================================================="
-          ls -alrth
-          echo "==========================================================="
-          go mod vendor
-          echo "==========================================================="
-          ls -alrth
+          make pb
