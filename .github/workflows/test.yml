@@ -28,6 +28,6 @@ jobs:
       - name: make pb testing
         continue-on-error: true
         run: |
-          go env
+          echo $GOPATH
           cd $GITHUB_WORKSPACE && make clean && make config
           make pb
