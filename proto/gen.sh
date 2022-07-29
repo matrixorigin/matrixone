@@ -97,7 +97,7 @@ else
   go build -o $GOPATH/bin/protoc-gen-gogofast
 fi
 
-go mod vendor
+
 for file in `ls $PROTOC_DIR/*.proto`
 do
 	dir=$(basename $file .proto)
@@ -106,4 +106,3 @@ do
     goimports -w $PB_DIR/$dir/*pb.go
 done
 
-rm -rf vendor
