@@ -16,6 +16,18 @@ package bit_and
 
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
+func ReturnType(typs []types.Type) types.Type {
+	switch typs[0].Oid {
+	case types.T_float32, types.T_float64:
+		return types.New(types.T_uint64, 0, 0, 0)
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		return types.New(types.T_uint64, 0, 0, 0)
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		return types.New(types.T_uint64, 0, 0, 0)
+	}
+	return types.Type{}
+}
+
 func New[T1 types.Ints | types.UInts | types.Floats]() *BitAnd[T1] {
 	return &BitAnd[T1]{}
 }
@@ -23,27 +35,26 @@ func New[T1 types.Ints | types.UInts | types.Floats]() *BitAnd[T1] {
 func (ba *BitAnd[T1]) Grows(_ int) {
 }
 
-func (ba *BitAnd[T1]) Eval(vs []int64) []int64 {
+func (ba *BitAnd[T1]) Eval(vs []uint64) []uint64 {
 	return vs
 }
 
-func (ba *BitAnd[T1]) Merge(_, _ int64, x, y int64, IsEmpty1 bool, IsEmpty2 bool, _ any) (int64, bool) {
-	if IsEmpty1 && !IsEmpty2 {
-		return y, false
-	} else if IsEmpty2 && !IsEmpty1 {
-		return x, false
-	} else if IsEmpty1 && IsEmpty2 {
-		return x, true
-	} else {
-		return x & y, false
+func (ba *BitAnd[T1]) Merge(groupIndex1, groupIndex2 int64, x, y uint64, isEmpty1 bool, isEmpty2 bool, agg any) (uint64, bool) {
+	if isEmpty1 {
+		x = ^uint64(0)
 	}
+	if isEmpty2 {
+		y = ^uint64(0)
+	}
+	return x & y, isEmpty1 && isEmpty2
 }
 
-func (ba *BitAnd[T1]) Fill(_ int64, v1 T1, v2 int64, z int64, IsEmpty bool, hasNull bool) (int64, bool) {
+func (ba *BitAnd[T1]) Fill(groupIndex int64, v1 T1, v2 uint64, z int64, isEmpty bool, hasNull bool) (uint64, bool) {
 	if hasNull {
-		return v2, IsEmpty
-	} else if IsEmpty {
-		return int64(v1), false
+		return v2, isEmpty
 	}
-	return int64(v1) & v2, false
+	if isEmpty {
+		v2 = ^uint64(0)
+	}
+	return uint64(v1) & v2, false
 }

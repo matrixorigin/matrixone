@@ -12,18 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package config
+package main
 
 import (
 	"fmt"
+	"github.com/BurntSushi/toml"
+	"html/template"
 	"log"
 	"os"
 	"sort"
 	"testing"
-	"text/template"
 	"unicode"
-
-	"github.com/BurntSushi/toml"
 )
 
 type par struct {
@@ -148,7 +147,7 @@ func Test_isAsciiChar(t *testing.T) {
 
 	for i := 0; i < len(results); i++ {
 		for _, x := range cases[i] {
-			r := isAsciiChar(x)
+			r := isASCIIChar(x)
 			if r != results[i] {
 				t.Errorf("isAsciiChar failed. %d %c %v %v", i, x, r, results[i])
 				return
@@ -170,7 +169,7 @@ func Test_isAsciiDigit(t *testing.T) {
 
 	for i := 0; i < len(results); i++ {
 		for _, x := range cases[i] {
-			r := isAsciiDigit(x)
+			r := isASCIIDigit(x)
 			if r != results[i] {
 				t.Errorf("isAsciiDigit failed. %d %c %v %v", i, x, r, results[i])
 				return
@@ -689,8 +688,8 @@ func Test_parameters_LoadParametersDefinition(t *testing.T) {
 		args    args
 		wantErr bool
 	}{
-		{"t1", args{"t1.toml"}, false},
-		{"t2", args{"t2.toml"}, true},
+		{"t1", args{"test/t1.toml"}, false},
+		{"t2", args{"test/t2.toml"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -938,11 +937,6 @@ config-file-name = "config"
 			}
 		})
 	}
-}
-
-type Inventory struct {
-	Material string
-	Count    uint
 }
 
 var tmplStr = `
@@ -1939,11 +1933,11 @@ func Test_ParameterDefinitionAndTemplate2(t *testing.T) {
 				panic(err)
 			}
 
-			f, err := os.Create("parameters.go")
+			parameterName1 := "parameters.go"
+			f, err := os.Create(parameterName1)
 			if err != nil {
 				panic(err)
 			}
-			defer f.Close()
 
 			err = tmpl.Execute(f, params)
 			if err != nil {
@@ -1955,11 +1949,11 @@ func Test_ParameterDefinitionAndTemplate2(t *testing.T) {
 				panic(err)
 			}
 
-			tomlf, err := os.Create("config.toml")
+			tomlName := "config.toml"
+			tomlf, err := os.Create(tomlName)
 			if err != nil {
 				panic(err)
 			}
-			defer tomlf.Close()
 
 			err = tomlTmpl.Execute(tomlf, params)
 			if err != nil {
@@ -1971,17 +1965,23 @@ func Test_ParameterDefinitionAndTemplate2(t *testing.T) {
 				panic(err)
 			}
 
-			testf, err := os.Create("parameters_test.go")
+			parameterName2 := "parameters_test.go"
+			testf, err := os.Create(parameterName2)
 			if err != nil {
 				panic(err)
 			}
-			defer testf.Close()
 
 			err = testTmpl.Execute(testf, params)
 			if err != nil {
 				panic(err)
 			}
 
+			_ = f.Close()
+			_ = os.Remove(parameterName1)
+			_ = tomlf.Close()
+			_ = os.Remove(tomlName)
+			_ = testf.Close()
+			_ = os.Remove(parameterName2)
 		})
 	}
 
@@ -2000,9 +2000,9 @@ func TestNewConfigurationFileGenerator(t *testing.T) {
 		args    args
 		wantErr bool
 	}{
-		{"t1", args{"def1.toml"}, false},
-		{"t2", args{"def2.toml"}, false},
-		{"t3", args{"system_vars_def.toml"}, false},
+		{"t1", args{"test/def1.toml"}, false},
+		{"t2", args{"test/def2.toml"}, false},
+		{"t3", args{"test/system_vars_def.toml"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2010,6 +2010,8 @@ func TestNewConfigurationFileGenerator(t *testing.T) {
 			if err := gen.Generate(); (err != nil) != tt.wantErr {
 				t.Errorf("Generator() = %v, want %v", err, tt.wantErr)
 			}
+
+			_ = gen.DeleteGeneratedFiles()
 		})
 	}
 }

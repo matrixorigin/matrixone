@@ -23,11 +23,11 @@ type Numeric interface {
 // if input type is int8/int16/int32/int64, the return type is int64
 // if input type is uint8/uint16/uint32/uint64, the return type is uint64
 // f input type is float32/float64, the return type is float64
-type ReturnType interface {
+type ReturnTyp interface {
 	uint64 | int64 | float64
 }
 
-type Sum[T1 Numeric, T2 ReturnType] struct {
+type Sum[T1 Numeric, T2 ReturnTyp] struct {
 }
 
 type Decimal64Sum struct {

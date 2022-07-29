@@ -508,7 +508,7 @@ func (d Decimal128) DivInt64(x int64) Decimal128 {
 	var ret Decimal128
 	rc := C.Decimal128_DivInt64(dec128PtrToC(&ret), dec128PtrToC(&d), C.int64_t(x))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 division error"))
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal128 division error"))
 	}
 	return ret
 }

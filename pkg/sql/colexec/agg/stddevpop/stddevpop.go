@@ -21,6 +21,10 @@ import (
 	Variance "github.com/matrixorigin/matrixone/pkg/sql/colexec/agg/variance"
 )
 
+func ReturnType(_ []types.Type) types.Type {
+	return types.New(types.T_float64, 0, 0, 0)
+}
+
 //New1 is used to Created a Variance which supports float,int,uint
 func New[T1 types.Floats | types.Ints | types.UInts]() *Stddevpop[T1] {
 	return &Stddevpop[T1]{variance: Variance.New1[T1]()}

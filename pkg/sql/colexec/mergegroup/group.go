@@ -16,14 +16,10 @@ package mergegroup
 
 import (
 	"bytes"
-	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/add"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -33,17 +29,22 @@ func String(_ interface{}, buf *bytes.Buffer) {
 
 func Prepare(_ *process.Process, arg interface{}) error {
 	ap := arg.(*Argument)
-	ap.ctr = new(Container)
+	ap.ctr = new(container)
+	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
+	ap.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 	ap := arg.(*Argument)
 	ctr := ap.ctr
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc); err != nil {
+			if err := ctr.build(proc, anal); err != nil {
 				ctr.state = End
 				return true, err
 			}
@@ -52,36 +53,45 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 			ctr.state = End
 			if ctr.bat != nil {
 				if ap.NeedEval {
-					for _, r := range ctr.bat.Rs {
-						ctr.bat.Vecs = append(ctr.bat.Vecs, r.Eval(ctr.bat.Zs))
+					for i, agg := range ctr.bat.Aggs {
+						vec, err := agg.Eval(proc.GetMheap())
+						if err != nil {
+							ctr.state = End
+							ctr.bat.Clean(proc.GetMheap())
+							return false, err
+						}
+						ctr.bat.Aggs[i] = nil
+						ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
 					}
-					ctr.bat.Rs = nil
+					ctr.bat.Aggs = nil
 					for i := range ctr.bat.Zs { // reset zs
 						ctr.bat.Zs[i] = 1
 					}
 				}
+				anal.Output(ctr.bat)
 				ctr.bat.ExpandNulls()
 			}
-			proc.Reg.InputBatch = ctr.bat
+			proc.SetInputBatch(ctr.bat)
 			ctr.bat = nil
 			return true, nil
 		case End:
-			proc.Reg.InputBatch = nil
+			proc.SetInputBatch(nil)
 			return true, nil
 		}
 	}
 }
 
-func (ctr *Container) build(proc *process.Process) error {
+func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 	if len(proc.Reg.MergeReceivers) == 1 {
 		for {
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				return nil
 			}
-			if len(bat.Zs) == 0 {
+			if bat.Length() == 0 {
 				continue
 			}
+			anal.Input(bat)
 			ctr.bat = bat
 			return nil
 		}
@@ -95,6 +105,7 @@ func (ctr *Container) build(proc *process.Process) error {
 			i--
 			continue
 		}
+		anal.Input(bat)
 		if err := ctr.process(bat, proc); err != nil {
 			return err
 		}
@@ -102,67 +113,36 @@ func (ctr *Container) build(proc *process.Process) error {
 	return nil
 }
 
-func (ctr *Container) process(bat *batch.Batch, proc *process.Process) error {
+func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 	var err error
 
 	if ctr.bat == nil {
 		size := 0
 		for _, vec := range bat.Vecs {
-			switch vec.Typ.Oid {
-			case types.T_int8, types.T_uint8, types.T_bool:
+			switch vec.Typ.TypeSize() {
+			case 1:
 				size += 1 + 1
-			case types.T_int16, types.T_uint16:
+			case 2:
 				size += 2 + 1
-			case types.T_int32, types.T_uint32, types.T_float32, types.T_date:
+			case 4:
 				size += 4 + 1
-			case types.T_int64, types.T_uint64, types.T_float64, types.T_datetime, types.T_decimal64:
+			case 8:
 				size += 8 + 1
-			case types.T_decimal128:
+			case 16:
 				size += 16 + 1
-			case types.T_char, types.T_varchar:
-				if width := vec.Typ.Width; width > 0 {
-					size += int(width) + 1
-				} else {
-					size = 128
-				}
+			default:
+				size = 128
 			}
 		}
-		ctr.keyOffs = make([]uint32, UnitLimit)
-		ctr.zKeyOffs = make([]uint32, UnitLimit)
-		ctr.inserted = make([]uint8, UnitLimit)
-		ctr.zInserted = make([]uint8, UnitLimit)
-		ctr.hashes = make([]uint64, UnitLimit)
-		ctr.strHashStates = make([][3]uint64, UnitLimit)
-		ctr.values = make([]uint64, UnitLimit)
-		ctr.intHashMap = &hashtable.Int64HashMap{}
-		ctr.strHashMap = &hashtable.StringHashMap{}
 		switch {
 		case size == 0:
 			ctr.typ = H0
 		case size <= 8:
 			ctr.typ = H8
-			ctr.h8.keys = make([]uint64, UnitLimit)
-			ctr.h8.zKeys = make([]uint64, UnitLimit)
-			ctr.intHashMap.Init()
-		case size <= 24:
-			ctr.typ = H24
-			ctr.h24.keys = make([][3]uint64, UnitLimit)
-			ctr.h24.zKeys = make([][3]uint64, UnitLimit)
-			ctr.strHashMap.Init()
-		case size <= 32:
-			ctr.typ = H32
-			ctr.h32.keys = make([][4]uint64, UnitLimit)
-			ctr.h32.zKeys = make([][4]uint64, UnitLimit)
-			ctr.strHashMap.Init()
-		case size <= 40:
-			ctr.typ = H40
-			ctr.h40.keys = make([][5]uint64, UnitLimit)
-			ctr.h40.zKeys = make([][5]uint64, UnitLimit)
-			ctr.strHashMap.Init()
+			ctr.intHashMap = hashmap.NewIntHashMap(true)
 		default:
 			ctr.typ = HStr
-			ctr.hstr.keys = make([][]byte, UnitLimit)
-			ctr.strHashMap.Init()
+			ctr.strHashMap = hashmap.NewStrMap(true)
 		}
 	}
 	switch ctr.typ {
@@ -170,12 +150,6 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) error {
 		err = ctr.processH0(bat, proc)
 	case H8:
 		err = ctr.processH8(bat, proc)
-	case H24:
-		err = ctr.processH24(bat, proc)
-	case H32:
-		err = ctr.processH32(bat, proc)
-	case H40:
-		err = ctr.processH40(bat, proc)
 	default:
 		err = ctr.processHStr(bat, proc)
 	}
@@ -187,7 +161,7 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) error {
 	return nil
 }
 
-func (ctr *Container) processH0(bat *batch.Batch, proc *process.Process) error {
+func (ctr *container) processH0(bat *batch.Batch, proc *process.Process) error {
 	if ctr.bat == nil {
 		ctr.bat = bat
 		return nil
@@ -196,267 +170,71 @@ func (ctr *Container) processH0(bat *batch.Batch, proc *process.Process) error {
 	for _, z := range bat.Zs {
 		ctr.bat.Zs[0] += z
 	}
-	for i, r := range ctr.bat.Rs {
-		r.Add(bat.Rs[i], 0, 0)
+	for i, agg := range ctr.bat.Aggs {
+		agg.Merge(bat.Aggs[i], 0, 0)
 	}
 	return nil
 }
 
-func (ctr *Container) processH8(bat *batch.Batch, proc *process.Process) error {
-	count := len(bat.Zs)
+func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
+	count := bat.Length()
+	itr := ctr.intHashMap.NewIterator(0, 0)
 	flg := ctr.bat == nil
 	if !flg {
 		defer bat.Clean(proc.Mp)
 	}
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
-		if n > UnitLimit {
-			n = UnitLimit
+		if n > hashmap.UnitLimit {
+			n = hashmap.UnitLimit
 		}
-		copy(ctr.keyOffs, ctr.zKeyOffs)
-		copy(ctr.h8.keys, ctr.h8.zKeys)
-		for _, vec := range bat.Vecs {
-			switch typLen := vec.Typ.Oid.FixedLength(); typLen {
-			case 1:
-				fillGroup[uint8](ctr, vec, ctr.h8.keys, n, 1, i)
-			case 2:
-				fillGroup[uint16](ctr, vec, ctr.h8.keys, n, 2, i)
-			case 4:
-				fillGroup[uint32](ctr, vec, ctr.h8.keys, n, 4, i)
-			case 8:
-				fillGroup[uint64](ctr, vec, ctr.h8.keys, n, 8, i)
-			case -8:
-				fillGroup[uint64](ctr, vec, ctr.h8.keys, n, 8, i)
-			case -16:
-				fillGroup[types.Decimal128](ctr, vec, ctr.h8.keys, n, 16, i)
-			default:
-				fillStringGroup(ctr, vec, ctr.h8.keys, n, 8, i)
-			}
-		}
-		ctr.hashes[0] = 0
-		ctr.intHashMap.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+		vals, _ := itr.Insert(i, n, bat.Vecs)
 		if !flg {
-			if err := ctr.batchFill(i, n, bat, proc); err != nil {
+			if err := ctr.batchFill(i, n, bat, vals, ctr.intHashMap, proc); err != nil {
 				return err
 			}
 		}
 	}
 	if flg {
 		ctr.bat = bat
-		ctr.rows = ctr.intHashMap.Cardinality()
+		ctr.intHashMap.AddGroups(ctr.intHashMap.Cardinality())
 	}
 	return nil
 }
 
-func (ctr *Container) processH24(bat *batch.Batch, proc *process.Process) error {
-	count := len(bat.Zs)
+func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error {
+	count := bat.Length()
+	itr := ctr.strHashMap.NewIterator(0, 0)
 	flg := ctr.bat == nil
 	if !flg {
 		defer bat.Clean(proc.Mp)
 	}
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += hashmap.UnitLimit { // batch
 		n := count - i
-		if n > UnitLimit {
-			n = UnitLimit
+		if n > hashmap.UnitLimit {
+			n = hashmap.UnitLimit
 		}
-		copy(ctr.keyOffs, ctr.zKeyOffs)
-		copy(ctr.h24.keys, ctr.h24.zKeys)
-		for _, vec := range bat.Vecs {
-			switch typLen := vec.Typ.Oid.FixedLength(); typLen {
-			case 1:
-				fillGroup[uint8](ctr, vec, ctr.h24.keys, n, 1, i)
-			case 2:
-				fillGroup[uint16](ctr, vec, ctr.h24.keys, n, 2, i)
-			case 4:
-				fillGroup[uint32](ctr, vec, ctr.h24.keys, n, 4, i)
-			case 8:
-				fillGroup[uint64](ctr, vec, ctr.h24.keys, n, 8, i)
-			case -8:
-				fillGroup[types.Decimal64](ctr, vec, ctr.h24.keys, n, 8, i)
-			case -16:
-				fillGroup[types.Decimal128](ctr, vec, ctr.h24.keys, n, 16, i)
-			default:
-				fillStringGroup(ctr, vec, ctr.h24.keys, n, 24, i)
-			}
-		}
-		ctr.strHashMap.InsertString24Batch(ctr.strHashStates, ctr.h24.keys[:n], ctr.values)
+		vals, _ := itr.Insert(i, n, bat.Vecs)
 		if !flg {
-			if err := ctr.batchFill(i, n, bat, proc); err != nil {
+			if err := ctr.batchFill(i, n, bat, vals, ctr.strHashMap, proc); err != nil {
 				return err
 			}
 		}
 	}
 	if flg {
 		ctr.bat = bat
-		ctr.rows = ctr.strHashMap.Cardinality()
+		ctr.strHashMap.AddGroups(ctr.strHashMap.Cardinality())
 	}
 	return nil
 }
 
-func (ctr *Container) processH32(bat *batch.Batch, proc *process.Process) error {
-	count := len(bat.Zs)
-	flg := ctr.bat == nil
-	if !flg {
-		defer bat.Clean(proc.Mp)
-	}
-	for i := 0; i < count; i += UnitLimit {
-		n := count - i
-		if n > UnitLimit {
-			n = UnitLimit
-		}
-		copy(ctr.keyOffs, ctr.zKeyOffs)
-		copy(ctr.h32.keys, ctr.h32.zKeys)
-		for _, vec := range bat.Vecs {
-			switch typLen := vec.Typ.Oid.FixedLength(); typLen {
-			case 1:
-				fillGroup[uint8](ctr, vec, ctr.h32.keys, n, 1, i)
-			case 2:
-				fillGroup[uint16](ctr, vec, ctr.h32.keys, n, 2, i)
-			case 4:
-				fillGroup[uint32](ctr, vec, ctr.h32.keys, n, 4, i)
-			case 8:
-				fillGroup[uint64](ctr, vec, ctr.h32.keys, n, 8, i)
-			case -8:
-				fillGroup[uint64](ctr, vec, ctr.h32.keys, n, 8, i)
-			case -16:
-				fillGroup[types.Decimal128](ctr, vec, ctr.h32.keys, n, 16, i)
-			default:
-				fillStringGroup(ctr, vec, ctr.h32.keys, n, 32, i)
-			}
-		}
-		ctr.strHashMap.InsertString32Batch(ctr.strHashStates, ctr.h32.keys[:n], ctr.values)
-		if !flg {
-			if err := ctr.batchFill(i, n, bat, proc); err != nil {
-				return err
-			}
-		}
-	}
-	if flg {
-		ctr.bat = bat
-		ctr.rows = ctr.strHashMap.Cardinality()
-	}
-	return nil
-}
-
-func (ctr *Container) processH40(bat *batch.Batch, proc *process.Process) error {
-	count := len(bat.Zs)
-	flg := ctr.bat == nil
-	if !flg {
-		defer bat.Clean(proc.Mp)
-	}
-	for i := 0; i < count; i += UnitLimit {
-		n := count - i
-		if n > UnitLimit {
-			n = UnitLimit
-		}
-		copy(ctr.keyOffs, ctr.zKeyOffs)
-		copy(ctr.h40.keys, ctr.h40.zKeys)
-		for _, vec := range bat.Vecs {
-			switch typLen := vec.Typ.Oid.FixedLength(); typLen {
-			case 1:
-				fillGroup[uint8](ctr, vec, ctr.h40.keys, n, 1, i)
-			case 2:
-				fillGroup[uint16](ctr, vec, ctr.h40.keys, n, 2, i)
-			case 4:
-				fillGroup[uint32](ctr, vec, ctr.h40.keys, n, 4, i)
-			case 8:
-				fillGroup[uint64](ctr, vec, ctr.h40.keys, n, 8, i)
-			case -8:
-				fillGroup[uint64](ctr, vec, ctr.h40.keys, n, 8, i)
-			case -16:
-				fillGroup[types.Decimal128](ctr, vec, ctr.h40.keys, n, 16, i)
-			default:
-				fillStringGroup(ctr, vec, ctr.h40.keys, n, 40, i)
-			}
-		}
-		ctr.strHashMap.InsertString40Batch(ctr.strHashStates, ctr.h40.keys[:n], ctr.values)
-		if !flg {
-			if err := ctr.batchFill(i, n, bat, proc); err != nil {
-				return err
-			}
-		}
-	}
-	if flg {
-		ctr.bat = bat
-		ctr.rows = ctr.strHashMap.Cardinality()
-	}
-	return nil
-}
-
-func (ctr *Container) processHStr(bat *batch.Batch, proc *process.Process) error {
-	count := len(bat.Zs)
-	flg := ctr.bat == nil
-	if !flg {
-		defer bat.Clean(proc.Mp)
-	}
-	for i := 0; i < count; i += UnitLimit { // batch
-		n := count - i
-		if n > UnitLimit {
-			n = UnitLimit
-		}
-		for _, vec := range bat.Vecs {
-			switch typLen := vec.Typ.Oid.FixedLength(); typLen {
-			case 1:
-				fillGroupStr[uint8](ctr, vec, n, 1, i)
-			case 2:
-				fillGroupStr[uint16](ctr, vec, n, 2, i)
-			case 4:
-				fillGroupStr[uint32](ctr, vec, n, 4, i)
-			case 8:
-				fillGroupStr[uint64](ctr, vec, n, 8, i)
-			case -8:
-				fillGroupStr[uint64](ctr, vec, n, 8, i)
-			case -16:
-				fillGroupStr[types.Decimal128](ctr, vec, n, 16, i)
-			default:
-				vs := vec.Col.(*types.Bytes)
-				if !nulls.Any(vec.Nsp) {
-					for k := 0; k < n; k++ {
-						ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(0))
-						ctr.hstr.keys[k] = append(ctr.hstr.keys[k], vs.Get(int64(i+k))...)
-					}
-				} else {
-					for k := 0; k < n; k++ {
-						if vec.Nsp.Np.Contains(uint64(i + k)) {
-							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(1))
-						} else {
-							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(0))
-							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], vs.Get(int64(i+k))...)
-						}
-					}
-				}
-
-			}
-		}
-		for k := 0; k < n; k++ {
-			if l := len(ctr.hstr.keys[k]); l < 16 {
-				ctr.hstr.keys[k] = append(ctr.hstr.keys[k], hashtable.StrKeyPadding[l:]...)
-			}
-		}
-		ctr.strHashMap.InsertStringBatch(ctr.strHashStates, ctr.hstr.keys[:n], ctr.values)
-		for k := 0; k < n; k++ {
-			ctr.hstr.keys[k] = ctr.hstr.keys[k][:0]
-		}
-		if !flg {
-			if err := ctr.batchFill(i, n, bat, proc); err != nil {
-				return err
-			}
-		}
-	}
-	if flg {
-		ctr.bat = bat
-		ctr.rows = ctr.strHashMap.Cardinality()
-	}
-	return nil
-}
-
-func (ctr *Container) batchFill(i int, n int, bat *batch.Batch, proc *process.Process) error {
+func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, mp hashmap.HashMap, proc *process.Process) error {
 	cnt := 0
 	copy(ctr.inserted[:n], ctr.zInserted[:n])
-	for k, v := range ctr.values[:n] {
-		if v > ctr.rows {
+	for k, v := range vals {
+		if v > mp.GroupCount() {
 			ctr.inserted[k] = 1
-			ctr.rows++
+			mp.AddGroup()
 			cnt++
 			ctr.bat.Zs = append(ctr.bat.Zs, 0)
 		}
@@ -465,82 +243,18 @@ func (ctr *Container) batchFill(i int, n int, bat *batch.Batch, proc *process.Pr
 	}
 	if cnt > 0 {
 		for j, vec := range ctr.bat.Vecs {
-			if err := vector.UnionBatch(vec, bat.Vecs[j], int64(i), cnt, ctr.inserted[:n], proc.Mp); err != nil {
+			if err := vector.UnionBatch(vec, bat.Vecs[j], int64(i), cnt, ctr.inserted[:n], proc.GetMheap()); err != nil {
 				return err
 			}
 		}
-		for _, r := range ctr.bat.Rs {
-			if err := r.Grows(cnt, proc.Mp); err != nil {
+		for _, agg := range ctr.bat.Aggs {
+			if err := agg.Grows(cnt, proc.Mp); err != nil {
 				return err
 			}
 		}
 	}
-	for j, r := range ctr.bat.Rs {
-		r.BatchAdd(bat.Rs[j], int64(i), ctr.inserted[:n], ctr.values)
+	for j, agg := range ctr.bat.Aggs {
+		agg.BatchMerge(bat.Aggs[j], int64(i), ctr.inserted[:n], vals)
 	}
 	return nil
-}
-
-func fillGroup[T1, T2 any](ctr *Container, vec *vector.Vector, keys []T2, n int, sz uint32, start int) {
-	vs := vector.GetFixedVectorValues[T1](vec, int(sz))
-	if !nulls.Any(vec.Nsp) {
-		for i := 0; i < n; i++ {
-			*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), ctr.keyOffs[i])) = 0
-			*(*T1)(unsafe.Add(unsafe.Pointer(&keys[i]), ctr.keyOffs[i]+1)) = vs[i+start]
-		}
-		add.Uint32AddScalar(1+sz, ctr.keyOffs[:n], ctr.keyOffs[:n])
-	} else {
-		for i := 0; i < n; i++ {
-			if vec.Nsp.Np.Contains(uint64(i + start)) {
-				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), ctr.keyOffs[i])) = 1
-				ctr.keyOffs[i]++
-			} else {
-				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), ctr.keyOffs[i])) = 0
-				*(*T1)(unsafe.Add(unsafe.Pointer(&keys[i]), ctr.keyOffs[i]+1)) = vs[i+start]
-				ctr.keyOffs[i] += 1 + sz
-			}
-		}
-	}
-}
-
-func fillStringGroup[T any](ctr *Container, vec *vector.Vector, keys []T, n int, sz uint32, start int) {
-	vData, vOff, vLen := vector.GetStrVectorValues(vec)
-	if !nulls.Any(vec.Nsp) {
-		for i := 0; i < n; i++ {
-			*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), ctr.keyOffs[i])) = 0
-			copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), sz)[ctr.keyOffs[i]+1:], vData[vOff[i+start]:vOff[i+start]+vLen[i+start]])
-			ctr.keyOffs[i] += vLen[i+start] + 1
-		}
-	} else {
-		for i := 0; i < n; i++ {
-			if vec.Nsp.Np.Contains(uint64(i + start)) {
-				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), ctr.keyOffs[i])) = 1
-				ctr.keyOffs[i]++
-			} else {
-				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), ctr.keyOffs[i])) = 0
-				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), sz)[ctr.keyOffs[i]+1:], vData[vOff[i+start]:vOff[i+start]+vLen[i+start]])
-				ctr.keyOffs[i] += vLen[i+start] + 1
-			}
-		}
-	}
-}
-
-func fillGroupStr[T any](ctr *Container, vec *vector.Vector, n int, sz int, start int) {
-	vs := vector.GetFixedVectorValues[T](vec, int(sz))
-	data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*sz)[:len(vs)*sz]
-	if !nulls.Any(vec.Nsp) {
-		for i := 0; i < n; i++ {
-			ctr.hstr.keys[i] = append(ctr.hstr.keys[i], byte(0))
-			ctr.hstr.keys[i] = append(ctr.hstr.keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
-		}
-	} else {
-		for i := 0; i < n; i++ {
-			if vec.Nsp.Np.Contains(uint64(i + start)) {
-				ctr.hstr.keys[i] = append(ctr.hstr.keys[i], byte(1))
-			} else {
-				ctr.hstr.keys[i] = append(ctr.hstr.keys[i], byte(0))
-				ctr.hstr.keys[i] = append(ctr.hstr.keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
-			}
-		}
-	}
 }
