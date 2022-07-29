@@ -41,6 +41,8 @@ type LogServiceDriver struct {
 	postAppendQueue chan any
 	postAppendLoop  *sm.Loop
 
+	truncateQueue sm.Queue
+
 	flushtimes int
 	appendtimes int
 }
@@ -69,6 +71,8 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	d.appendedLoop.Start()
 	d.postAppendLoop = sm.NewLoop(d.postAppendQueue, nil, d.onPostAppendQueue, 10000)
 	d.postAppendLoop.Start()
+	d.truncateQueue = sm.NewSafeQueue(10000,10000,d.onTruncate)
+	d.truncateQueue.Start()
 	return d
 }
 
@@ -79,6 +83,7 @@ func (d *LogServiceDriver) Close() error {
 	d.preAppendLoop.Stop()
 	d.appendedLoop.Stop()
 	d.postAppendLoop.Stop()
+	d.truncateQueue.Stop()
 	return nil
 }
 

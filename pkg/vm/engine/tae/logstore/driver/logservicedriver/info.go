@@ -18,6 +18,9 @@ type driverInfo struct {
 	driverLsn   uint64
 	driverLsnMu sync.RWMutex
 
+	truncating             uint64
+	truncatedLogserviceLsn uint64
+
 	appending            uint64
 	appended             *common.ClosedIntervals
 	appendedMu           sync.RWMutex
@@ -37,6 +40,26 @@ func newDriverInfo() *driverInfo {
 		logserviceAppendedMu: sync.RWMutex{},
 		commitCond:           *sync.NewCond(new(sync.Mutex)),
 	}
+}
+
+func (info *driverInfo) isToTruncate(logserviceLsn,driverLsn uint64)bool{
+	maxlsn:=info.getMaxDriverLsn(logserviceLsn)
+	if maxlsn==0{
+		return false
+	}
+	return maxlsn<=driverLsn
+}
+
+func (info *driverInfo) getMaxDriverLsn(logserviceLsn uint64) uint64 {
+	info.addrMu.RLock()
+	intervals, ok := info.addr[logserviceLsn]
+	if !ok {
+		info.addrMu.RUnlock()
+		return 0
+	}
+	lsn := intervals.GetMax()
+	info.addrMu.RUnlock()
+	return lsn
 }
 
 func (info *driverInfo) allocateDriverLsn() uint64 {

@@ -122,5 +122,5 @@ func TestTruncate(t *testing.T) {
 		assert.Equal(t, trucated, e.Lsn)
 	}
 
-	driver = restartDriver(t, driver)
+	// driver = restartDriver(t, driver)
 }
