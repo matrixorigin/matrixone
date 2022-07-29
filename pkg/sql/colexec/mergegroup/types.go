@@ -37,7 +37,6 @@ type container struct {
 	inserted  []uint8
 	zInserted []uint8
 
-	scales     []int32
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
 
