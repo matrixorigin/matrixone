@@ -95,6 +95,7 @@ else
   git checkout v1.3.2
   cd protoc-gen-gogofast
   go build -o $GOPATH/bin/protoc-gen-gogofast
+  cd ../..
 fi
 
 
@@ -102,7 +103,7 @@ for file in `ls $PROTOC_DIR/*.proto`
 do
 	dir=$(basename $file .proto)
 	mkdir -p $PB_DIR/$dir
-	${GOPATH}/bin/protoc -I=.:$PROTOC_DIR:$VENDOR_DIR --gogofast_out=paths=source_relative:$PWD/pkg/pb/$dir  $file
+	${GOPATH}/bin/protoc -I=.:$PROTOC_DIR:$VENDOR_DIR --gogofast_out=paths=source_relative:./pkg/pb/$dir  $file
     goimports -w $PB_DIR/$dir/*pb.go
 done
 
