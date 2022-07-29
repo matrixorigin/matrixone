@@ -15,10 +15,12 @@
 package frontend
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"strings"
 )
 
 type ComputationRunner interface {
@@ -68,4 +70,55 @@ type PrepareStmt struct {
 	Name        string
 	PreparePlan *plan.Plan
 	PrepareStmt tree.Statement
+}
+
+/*
+Disguise the COMMAND CMD_FIELD_LIST as sql query.
+*/
+const (
+	cmdFieldListSql = "__++__internal_cmd_field_list"
+)
+
+//isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
+func isCmdFieldListSql(sql string) bool {
+	return strings.HasPrefix(strings.ToLower(sql), cmdFieldListSql)
+}
+
+//makeCmdFieldListSql makes the internal CMD_FIELD_LIST sql
+func makeCmdFieldListSql(query string) string {
+	return cmdFieldListSql + " " + query
+}
+
+// parseCmdFieldList parses the internal cmd field list
+func parseCmdFieldList(sql string) (*InternalCmdFieldList, error) {
+	if !isCmdFieldListSql(sql) {
+		return nil, fmt.Errorf("it is not the CMD_FIELD_LIST")
+	}
+	rest := strings.TrimSpace(sql[len(cmdFieldListSql):])
+	//find null
+	nullIdx := strings.IndexRune(rest, rune(0))
+	var tableName string
+	if nullIdx < len(rest) {
+		tableName = rest[:nullIdx]
+		//neglect wildcard
+		//wildcard := payload[nullIdx+1:]
+		return &InternalCmdFieldList{tableName: tableName}, nil
+	} else {
+		return nil, fmt.Errorf("wrong format for COM_FIELD_LIST")
+	}
+}
+
+var _ tree.Statement = &InternalCmdFieldList{}
+
+// InternalCmdFieldList the CMD_FIELD_LIST statement
+type InternalCmdFieldList struct {
+	tableName string
+}
+
+func (icfl *InternalCmdFieldList) String() string {
+	return makeCmdFieldListSql(icfl.tableName)
+}
+
+func (icfl *InternalCmdFieldList) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeCmdFieldListSql(icfl.tableName))
 }
