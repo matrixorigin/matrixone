@@ -68,10 +68,10 @@ func TestPrepareWithConflict(t *testing.T) {
 	l := NewMemLog()
 	s := NewKVTxnStorage(0, l, newTestClock(1))
 
-	writeCommittedData(t, s, 1, 2, 1)
+	writeCommittedData(t, s, 1, 100, 1) // commit at 100
 
 	wTxn := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &wTxn, 5, storage.ErrWriteConflict)
+	prepareTestTxn(t, s, &wTxn, 5, storage.ErrWriteConflict) // prepare at 5
 }
 
 func TestCommit(t *testing.T) {

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -57,13 +58,6 @@ func WithRequestFilter(filter func(*txn.TxnRequest) bool) Option {
 	}
 }
 
-// WithMetadataFSFactory set metadata file service factory
-func WithMetadataFSFactory(factory func() fileservice.ReplaceableFileService) Option {
-	return func(s *store) {
-		s.options.metadataFSFactory = factory
-	}
-}
-
 // WithHAKeeperClientFactory set hakeeper client factory
 func WithHAKeeperClientFactory(factory func() (logservice.DNHAKeeperClient, error)) Option {
 	return func(s *store) {
@@ -85,15 +79,15 @@ type store struct {
 	sender         rpc.TxnSender
 	server         rpc.TxnServer
 	hakeeperClient logservice.DNHAKeeperClient
-	metadataFS     fileservice.ReplaceableFileService
-	dataFS         fileservice.FileService
+	fsFactory      fileservice.FileServiceFactory
+	localFS        fileservice.ReplaceableFileService
+	s3FS           fileservice.FileService
 	replicas       *sync.Map
 	stopper        *stopper.Stopper
 
 	options struct {
 		logServiceClientFactory func(metadata.DNShard) (logservice.Client, error)
 		hakeekerClientFactory   func() (logservice.DNHAKeeperClient, error)
-		metadataFSFactory       func() fileservice.ReplaceableFileService
 		requestFilter           func(*txn.TxnRequest) bool
 		adjustConfigFunc        func(c *Config)
 	}
@@ -105,13 +99,16 @@ type store struct {
 }
 
 // NewService create DN Service
-func NewService(cfg *Config, opts ...Option) (Service, error) {
+func NewService(cfg *Config,
+	fsFactory fileservice.FileServiceFactory,
+	opts ...Option) (Service, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 
 	s := &store{
-		cfg: cfg,
+		cfg:       cfg,
+		fsFactory: fsFactory,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -372,21 +369,21 @@ func (s *store) initHAKeeperClient() error {
 }
 
 func (s *store) initFileService() error {
-	if s.options.metadataFSFactory != nil {
-		s.metadataFS = s.options.metadataFSFactory()
-	} else {
-		fs, err := fileservice.NewLocalFS(s.cfg.getMetadataDir())
-		if err != nil {
-			return err
-		}
-		s.metadataFS = fs
-	}
-
-	fs, err := s.createFileService()
+	fs, err := s.fsFactory(localFileServiceName)
 	if err != nil {
 		return err
 	}
-	s.dataFS = fs
+	rfs, ok := fs.(fileservice.ReplaceableFileService)
+	if !ok {
+		return moerr.NewError(moerr.BAD_CONFIGURATION, "local fileservice must implmented ReplaceableFileService")
+	}
+	s.localFS = rfs
+
+	fs, err = s.fsFactory(s3FileServiceName)
+	if err != nil {
+		return err
+	}
+	s.s3FS = fs
 	return nil
 }
 
@@ -398,7 +395,8 @@ func (s *store) getBackendOptions() []morpc.BackendOption {
 		}),
 		morpc.WithBackendBusyBufferSize(s.cfg.RPC.BusyQueueSize),
 		morpc.WithBackendBufferSize(s.cfg.RPC.SendQueueSize),
-		morpc.WithBackendGoettyOptions(goetty.WithBufSize(int(s.cfg.RPC.ReadBufferSize), int(s.cfg.RPC.WriteBufferSize))),
+		morpc.WithBackendGoettyOptions(goetty.WithSessionRWBUfferSize(int(s.cfg.RPC.ReadBufferSize),
+			int(s.cfg.RPC.WriteBufferSize))),
 	}
 }
 

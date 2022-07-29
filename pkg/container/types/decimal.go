@@ -91,11 +91,15 @@ func Decimal128ToInt64Raw(d Decimal128) (int64, int64) {
 
 var Decimal64_Zero Decimal64 = Decimal64FromInt32(0)
 var Decimal64_One Decimal64 = Decimal64FromInt32(1)
+var Decimal64_Two Decimal64 = Decimal64FromInt32(2)
+var Decimal64_Three Decimal64 = Decimal64FromInt32(3)
 var Decimal64_Ten Decimal64 = Decimal64FromInt32(10)
 var Decimal64Min = Decimal64_NegInf()
 var Decimal64Max = Decimal64_Inf()
 var Decimal128_Zero Decimal128 = Decimal128FromInt32(0)
 var Decimal128_One Decimal128 = Decimal128FromInt32(1)
+var Decimal128_Two Decimal128 = Decimal128FromInt32(2)
+var Decimal128_Three Decimal128 = Decimal128FromInt32(3)
 var Decimal128_Ten Decimal128 = Decimal128FromInt32(10)
 var Decimal128Min = Decimal128_NegInf()
 var Decimal128Max = Decimal128_Inf()
@@ -504,7 +508,7 @@ func (d Decimal128) DivInt64(x int64) Decimal128 {
 	var ret Decimal128
 	rc := C.Decimal128_DivInt64(dec128PtrToC(&ret), dec128PtrToC(&d), C.int64_t(x))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 division error"))
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal128 division error"))
 	}
 	return ret
 }

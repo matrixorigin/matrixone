@@ -26,6 +26,7 @@ func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector, inB
 			itr.mp.keys[i] = itr.mp.keys[i][:0]
 		}
 	}()
+	copy(itr.mp.zValues[:count], OneInt64s[:count])
 	itr.mp.encodeHashKeysWithScale(vecs, start, count, scales)
 	if itr.nbucket != 0 {
 		itr.mp.hashMap.FindStringBatchInBucket(itr.mp.strHashStates, itr.mp.keys[:count], itr.mp.values, inBuckets, itr.ibucket, itr.nbucket)
@@ -66,6 +67,7 @@ func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector, inB
 		}
 		copy(itr.mp.keyOffs[:count], zeroUint32)
 	}()
+	copy(itr.mp.zValues[:count], OneInt64s[:count])
 	itr.mp.encodeHashKeys(vecs, start, count)
 	copy(itr.mp.hashes[:count], zeroUint64[:count])
 	if itr.nbucket != 0 {
@@ -84,9 +86,7 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector, _
 		copy(itr.mp.keyOffs[:count], zeroUint32)
 	}()
 
-	if !itr.mp.hasNull {
-		copy(itr.mp.zValues[:count], OneInt64s[:count])
-	}
+	copy(itr.mp.zValues[:count], OneInt64s[:count])
 	itr.mp.encodeHashKeys(vecs, start, count)
 	copy(itr.mp.hashes[:count], zeroUint64[:count])
 	if itr.nbucket != 0 {

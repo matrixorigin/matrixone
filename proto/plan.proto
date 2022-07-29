@@ -486,6 +486,7 @@ message DeleteTableCtx {
 	string tblName = 2;
 	string useDeleteKey = 3;
 	bool canTruncate = 4;
+	bool isHideKey = 5;
 }
 
 message Query {

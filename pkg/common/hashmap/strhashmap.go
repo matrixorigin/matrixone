@@ -28,6 +28,10 @@ func init() {
 	for i := range OneInt64s {
 		OneInt64s[i] = 1
 	}
+	OneUInt8s = make([]uint8, UnitLimit)
+	for i := range OneUInt8s {
+		OneUInt8s[i] = 1
+	}
 }
 
 func NewStrMap(hasNull bool) *StrHashMap {
@@ -59,6 +63,14 @@ func (m *StrHashMap) GroupCount() uint64 {
 
 func (m *StrHashMap) AddGroup() {
 	m.rows++
+}
+
+func (m *StrHashMap) AddGroups(rows uint64) {
+	m.rows += rows
+}
+
+func (m *StrHashMap) Cardinality() uint64 {
+	return m.hashMap.Cardinality()
 }
 
 // InsertValue insert a value, return true if it is new, otherwise false

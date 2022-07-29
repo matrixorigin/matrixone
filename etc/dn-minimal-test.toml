@@ -6,9 +6,23 @@ level = "debug"
 format = "json"
 max-size = 512
 
-[dn]
-# storage directory for local data. Include DNShard metadata and TAE data.
-data-dir = ""
+[[fileservice]]
+# local fileservice instance, used to store TAE Data and DNStore metadata.
+name = "local"
+# use disk as fileservice backend
+backend = "DISK"
+# set the directory used by DISK backend. There must has a file named "thisisalocalfileservicedir"
+# in the data dir
+data-dir = "data dir"
+
+[[fileservice]]
+# s3 fileservice instance, used to store data.
+name = "s3"
+# use disk as fileservice backend.
+backend = "DISK"
+# set the directory used by DISK backend. There must has a file named "thisisalocalfileservicedir"
+# in the data dir
+data-dir = "data dir"
 
 [dn.Txn.Storage]
 # txn storage backend implementation. [TAE|MEM]

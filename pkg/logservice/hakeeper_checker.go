@@ -28,7 +28,7 @@ const (
 	defaultIDBatchSize uint64 = 1024 * 10
 
 	hakeeperDefaultTimeout = 2 * time.Second
-	checkBootstrapInterval = 100
+	checkBootstrapCycles   = 100
 )
 
 type idAllocator struct {
@@ -82,8 +82,11 @@ func (l *store) setInitialClusterInfo(numOfLogShards uint64,
 		plog.Errorf("failed to propose initial cluster info, %v", err)
 		return err
 	}
+	if result.Value == uint64(pb.HAKeeperBootstrapFailed) {
+		panic("bootstrap failed")
+	}
 	if result.Value != uint64(pb.HAKeeperCreated) {
-		plog.Errorf("tried to set initial cluster info again")
+		plog.Errorf("initial cluster info already set")
 	}
 	return nil
 }
@@ -119,7 +122,7 @@ func (l *store) hakeeperCheck() {
 		}
 		switch state.State {
 		case pb.HAKeeperCreated:
-			plog.Warningf("missing initial cluster info, check skipped")
+			plog.Warningf("waiting for initial cluster info to be set, check skipped")
 			return
 		case pb.HAKeeperBootstrapping:
 			l.bootstrap(term, state)
@@ -188,14 +191,14 @@ func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
 			plog.Infof("failed to add schedule commands, %v", err)
 			return
 		}
-		l.bootstrapCheckInterval = checkBootstrapInterval
+		l.bootstrapCheckCycles = checkBootstrapCycles
 		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo, nil)
 		l.assertHAKeeperState(pb.HAKeeperBootstrapCommandsReceived)
 	}
 }
 
 func (l *store) checkBootstrap(state *pb.CheckerState) {
-	if l.bootstrapCheckInterval == 0 {
+	if l.bootstrapCheckCycles == 0 {
 		if err := l.setBootstrapState(false); err != nil {
 			panic(err)
 		}
@@ -206,7 +209,7 @@ func (l *store) checkBootstrap(state *pb.CheckerState) {
 		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo, nil)
 	}
 	if !l.bootstrapMgr.CheckBootstrap(state.LogState) {
-		l.bootstrapCheckInterval--
+		l.bootstrapCheckCycles--
 	} else {
 		if err := l.setBootstrapState(true); err != nil {
 			panic(err)

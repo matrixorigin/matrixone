@@ -18,197 +18,22 @@ import (
 	"errors"
 	"github.com/fagongzi/goetty/buf"
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/smartystreets/goconvey/convey"
 	"testing"
 )
 
-func TestTxnHandler(t *testing.T) {
-	convey.Convey("init", t, func() {
-		txn := InitTxnHandler(nil)
-		convey.So(txn.IsInTaeTxn(), convey.ShouldBeFalse)
-		convey.So(txn.IsTaeEngine(), convey.ShouldBeFalse)
-		convey.So(txn.isTxnState(TxnInit), convey.ShouldBeTrue)
-		convey.So(txn.GetStorage(), convey.ShouldBeNil)
-	})
-
-	convey.Convey("aoe begin  end", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		aoe := mock_frontend.NewMockEngine(ctrl)
-		{
-			txn := InitTxnHandler(aoe)
-			convey.So(txn.IsInTaeTxn(), convey.ShouldBeFalse)
-			convey.So(txn.IsTaeEngine(), convey.ShouldBeFalse)
-			convey.So(txn.isTxnState(TxnInit), convey.ShouldBeTrue)
-			convey.So(txn.GetStorage(), convey.ShouldNotBeNil)
-		}
-		{
-			txn := InitTxnHandler(aoe)
-			err := txn.StartByBegin()
-			convey.So(err, convey.ShouldBeNil)
-
-			err = txn.StartByBegin()
-			convey.So(err, convey.ShouldBeNil)
-
-			err = txn.CommitAfterBegin()
-			convey.So(err, convey.ShouldBeNil)
-		}
-	})
-
-	convey.Convey("tae begin end", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		txnImpl := mock_frontend.NewMockTxn(ctrl)
-		txnImpl.EXPECT().Commit().Return(nil)
-
-		tae := mock_frontend.NewMockTxnEngine(ctrl)
-		tae.EXPECT().StartTxn(gomock.Any()).Return(txnImpl, nil)
-		txn := InitTxnHandler(tae)
-		convey.So(txn.IsInTaeTxn(), convey.ShouldBeFalse)
-		convey.So(txn.IsTaeEngine(), convey.ShouldBeTrue)
-		convey.So(txn.isTxnState(TxnInit), convey.ShouldBeTrue)
-		convey.So(txn.GetStorage(), convey.ShouldNotBeNil)
-		convey.So(txn.CleanTxn(), convey.ShouldBeNil)
-		convey.So(txn.StartByBegin(), convey.ShouldBeNil)
-		convey.So(txn.CommitAfterBegin(), convey.ShouldBeNil)
-	})
-
-	convey.Convey("tae begin ... begin/autocommit", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		tae := mock_frontend.NewMockTxnEngine(ctrl)
-		txn := InitTxnHandler(tae)
-		txnImpl := mock_frontend.NewMockTxn(ctrl)
-		txnImpl.EXPECT().GetError().Return(nil).AnyTimes()
-
-		tae.EXPECT().StartTxn(gomock.Any()).Return(txnImpl, nil).AnyTimes()
-		err := txn.StartByBegin()
-		convey.So(err, convey.ShouldBeNil)
-
-		err = txn.StartByBegin()
-		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnErr)
-
-		err = txn.StartByAutocommit()
-		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnErr)
-
-		err = txn.CleanTxn()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnInit)
-	})
-
-	convey.Convey("tae begin ... commit ... commit", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		tae := mock_frontend.NewMockTxnEngine(ctrl)
-		txn := InitTxnHandler(tae)
-		txnImpl := mock_frontend.NewMockTxn(ctrl)
-		txnImpl.EXPECT().GetError().Return(nil).AnyTimes()
-		txnImpl.EXPECT().Commit().Return(nil).AnyTimes()
-
-		tae.EXPECT().StartTxn(gomock.Any()).Return(txnImpl, nil).AnyTimes()
-		err := txn.StartByBegin()
-		convey.So(err, convey.ShouldBeNil)
-
-		err = txn.CommitAfterBegin()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnEnd)
-
-		err = txn.CommitAfterBegin()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnEnd)
-
-		err = txn.CleanTxn()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnInit)
-	})
-
-	convey.Convey("tae begin ... rollback ... rollback", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		tae := mock_frontend.NewMockTxnEngine(ctrl)
-		txn := InitTxnHandler(tae)
-		txnImpl := mock_frontend.NewMockTxn(ctrl)
-		txnImpl.EXPECT().GetError().Return(nil).AnyTimes()
-		txnImpl.EXPECT().Commit().Return(nil).AnyTimes()
-		txnImpl.EXPECT().Rollback().Return(nil).AnyTimes()
-
-		tae.EXPECT().StartTxn(gomock.Any()).Return(txnImpl, nil).AnyTimes()
-		err := txn.StartByBegin()
-		convey.So(err, convey.ShouldBeNil)
-
-		err = txn.Rollback()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnEnd)
-
-		err = txn.Rollback()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnEnd)
-
-		err = txn.CleanTxn()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnInit)
-	})
-
-	convey.Convey("tae begin ... clean ... clean", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		tae := mock_frontend.NewMockTxnEngine(ctrl)
-		txn := InitTxnHandler(tae)
-		txnImpl := mock_frontend.NewMockTxn(ctrl)
-		txnImpl.EXPECT().GetError().Return(nil).AnyTimes()
-		txnImpl.EXPECT().Commit().Return(nil).AnyTimes()
-		txnImpl.EXPECT().Rollback().Return(nil).AnyTimes()
-
-		tae.EXPECT().StartTxn(gomock.Any()).Return(txnImpl, nil).AnyTimes()
-		err := txn.StartByBegin()
-		convey.So(err, convey.ShouldBeNil)
-
-		err = txn.CleanTxn()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnBegan)
-
-		err = txn.CleanTxn()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(txn.getTxnState(), convey.ShouldEqual, TxnBegan)
-	})
-}
-
-func TestTxnHandler_StartByBegin(t *testing.T) {
-	convey.Convey("storage is nil", t, func() {
-		txn := InitTxnHandler(nil)
-		err := txn.StartByBegin()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(txn.txnState.isState(TxnBegan), convey.ShouldBeTrue)
-		convey.So(txn.taeTxn, convey.ShouldNotBeNil)
-	})
-
-	convey.Convey("storage is not TxnEngine", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-		storage := mock_frontend.NewMockEngine(ctrl)
-		txn := InitTxnHandler(storage)
-		err := txn.StartByBegin()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(txn.txnState.isState(TxnBegan), convey.ShouldBeTrue)
-		convey.So(txn.taeTxn, convey.ShouldNotBeNil)
-	})
-
-	convey.Convey("storage is TxnEngine, from Init,End", t, func() {
+func TestTxnHandler_NewTxn(t *testing.T) {
+	convey.Convey("new txn", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
 		taeTxn := mock_frontend.NewMockTxn(ctrl)
 		taeTxn.EXPECT().String().Return("").AnyTimes()
+		taeTxn.EXPECT().Commit().Return(nil).AnyTimes()
 		storage := mock_frontend.NewMockTxnEngine(ctrl)
 		cnt := 0
 		storage.EXPECT().StartTxn(gomock.Any()).DoAndReturn(
@@ -222,156 +47,114 @@ func TestTxnHandler_StartByBegin(t *testing.T) {
 			}).AnyTimes()
 
 		txn := InitTxnHandler(storage)
-		err := txn.StartByBegin()
+		err := txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(txn.txnState.isState(TxnBegan), convey.ShouldBeTrue)
-		convey.So(txn.taeTxn, convey.ShouldNotBeNil)
-
-		txn2 := InitTxnHandler(storage)
-		err = txn2.StartByBegin()
+		err = txn.NewTxn()
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(txn2.txnState.isState(TxnErr), convey.ShouldBeTrue)
-		convey.So(txn2.taeTxn, convey.ShouldNotBeNil)
-
-		txn3 := InitTxnHandler(storage)
-		txn3.txnState.switchToState(TxnEnd, nil)
-		err = txn3.StartByBegin()
+		err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(txn3.txnState.isState(TxnBegan), convey.ShouldBeTrue)
-		convey.So(txn3.taeTxn, convey.ShouldNotBeNil)
-
-		txn4 := InitTxnHandler(storage)
-		txn4.txnState.switchToState(TxnEnd, nil)
-		err = txn4.StartByBegin()
-		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(txn4.txnState.isState(TxnErr), convey.ShouldBeTrue)
-		convey.So(txn4.taeTxn, convey.ShouldNotBeNil)
-	})
-
-	convey.Convey("storage is TxnEngine, from Began,Autocommit,Err", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		taeTxn := mock_frontend.NewMockTxn(ctrl)
-		taeTxn.EXPECT().String().Return("").AnyTimes()
-		storage := mock_frontend.NewMockTxnEngine(ctrl)
-
-		txn := InitTxnHandler(storage)
-		txn.txnState.switchToState(TxnBegan, nil)
-		err := txn.StartByBegin()
-		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(txn.txnState.isState(TxnErr), convey.ShouldBeTrue)
-		convey.So(txn.taeTxn, convey.ShouldNotBeNil)
-
-		txn2 := InitTxnHandler(storage)
-		txn2.txnState.switchToState(TxnAutocommit, nil)
-		err = txn2.StartByBegin()
-		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(txn2.txnState.isState(TxnErr), convey.ShouldBeTrue)
-		convey.So(txn2.taeTxn, convey.ShouldNotBeNil)
-
-		txn3 := InitTxnHandler(storage)
-		txn3.txnState.switchToState(TxnErr, nil)
-		err = txn3.StartByBegin()
-		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(txn3.txnState.isState(TxnErr), convey.ShouldBeTrue)
-		convey.So(txn3.taeTxn, convey.ShouldNotBeNil)
 	})
 }
 
-func TestTxnHandler_StartByAutocommit(t *testing.T) {
-	convey.Convey("storage is nil", t, func() {
-		txn := InitTxnHandler(nil)
-		err := txn.StartByAutocommit()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(txn.txnState.isState(TxnAutocommit), convey.ShouldBeTrue)
-		convey.So(txn.taeTxn, convey.ShouldNotBeNil)
-	})
-
-	convey.Convey("storage is not TxnEngine", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-		storage := mock_frontend.NewMockEngine(ctrl)
-		txn := InitTxnHandler(storage)
-		err := txn.StartByAutocommit()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(txn.txnState.isState(TxnAutocommit), convey.ShouldBeTrue)
-		convey.So(txn.taeTxn, convey.ShouldNotBeNil)
-	})
-
-	convey.Convey("storage is TxnEngine, from Init,End", t, func() {
+func TestTxnHandler_CommitTxn(t *testing.T) {
+	convey.Convey("commit txn", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
 		taeTxn := mock_frontend.NewMockTxn(ctrl)
 		taeTxn.EXPECT().String().Return("").AnyTimes()
-		storage := mock_frontend.NewMockTxnEngine(ctrl)
 		cnt := 0
-		storage.EXPECT().StartTxn(gomock.Any()).DoAndReturn(
-			func(x interface{}) (moengine.Txn, error) {
+		taeTxn.EXPECT().Commit().DoAndReturn(
+			func() error {
 				cnt++
 				if cnt%2 != 0 {
-					return taeTxn, nil
+					return nil
 				} else {
-					return nil, errors.New("startTxn failed")
+					return errors.New("commit failed")
 				}
 			}).AnyTimes()
+		storage := mock_frontend.NewMockTxnEngine(ctrl)
+
+		storage.EXPECT().StartTxn(gomock.Any()).Return(taeTxn, nil).AnyTimes()
 
 		txn := InitTxnHandler(storage)
-		err := txn.StartByAutocommit()
+		err := txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(txn.txnState.isState(TxnAutocommit), convey.ShouldBeTrue)
-		convey.So(txn.taeTxn, convey.ShouldNotBeNil)
-
-		txn2 := InitTxnHandler(storage)
-		err = txn2.StartByAutocommit()
-		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(txn2.txnState.isState(TxnErr), convey.ShouldBeTrue)
-		convey.So(txn2.taeTxn, convey.ShouldNotBeNil)
-
-		txn3 := InitTxnHandler(storage)
-		txn3.txnState.switchToState(TxnEnd, nil)
-		err = txn3.StartByAutocommit()
+		err = txn.CommitTxn()
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(txn3.txnState.isState(TxnAutocommit), convey.ShouldBeTrue)
-		convey.So(txn3.taeTxn, convey.ShouldNotBeNil)
-
-		txn4 := InitTxnHandler(storage)
-		txn4.txnState.switchToState(TxnEnd, nil)
-		err = txn4.StartByAutocommit()
+		err = txn.NewTxn()
+		convey.So(err, convey.ShouldBeNil)
+		err = txn.CommitTxn()
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(txn4.txnState.isState(TxnErr), convey.ShouldBeTrue)
-		convey.So(txn4.taeTxn, convey.ShouldNotBeNil)
 	})
+}
 
-	convey.Convey("storage is TxnEngine, from Began,Autocommit,Err", t, func() {
+func TestTxnHandler_RollbackTxn(t *testing.T) {
+	convey.Convey("rollback txn", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
 		taeTxn := mock_frontend.NewMockTxn(ctrl)
 		taeTxn.EXPECT().String().Return("").AnyTimes()
+		cnt := 0
+		taeTxn.EXPECT().Rollback().DoAndReturn(
+			func() error {
+				cnt++
+				if cnt%2 != 0 {
+					return nil
+				} else {
+					return errors.New("rollback failed")
+				}
+			}).AnyTimes()
 		storage := mock_frontend.NewMockTxnEngine(ctrl)
 
+		storage.EXPECT().StartTxn(gomock.Any()).Return(taeTxn, nil).AnyTimes()
+
 		txn := InitTxnHandler(storage)
-		txn.txnState.switchToState(TxnBegan, nil)
-		err := txn.StartByAutocommit()
+		err := txn.NewTxn()
+		convey.So(err, convey.ShouldBeNil)
+		err = txn.RollbackTxn()
+		convey.So(err, convey.ShouldBeNil)
+		err = txn.NewTxn()
+		convey.So(err, convey.ShouldBeNil)
+		err = txn.RollbackTxn()
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(txn.txnState.isState(TxnErr), convey.ShouldBeTrue)
-		convey.So(txn.taeTxn, convey.ShouldNotBeNil)
+	})
+}
 
-		txn2 := InitTxnHandler(storage)
-		txn2.txnState.switchToState(TxnAutocommit, nil)
-		err = txn2.StartByAutocommit()
-		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(txn2.txnState.isState(TxnErr), convey.ShouldBeTrue)
-		convey.So(txn2.taeTxn, convey.ShouldNotBeNil)
+func TestSession_TxnBegin(t *testing.T) {
+	genSession := func(ctrl *gomock.Controller, gSysVars *GlobalSystemVariables) *Session {
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		proto := NewMysqlClientProtocol(0, ioses, 1024, nil)
+		return NewSession(proto, nil, nil, nil, gSysVars)
+	}
+	convey.Convey("new session", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
 
-		txn3 := InitTxnHandler(storage)
-		txn3.txnState.switchToState(TxnErr, nil)
-		err = txn3.StartByAutocommit()
+		gSysVars := &GlobalSystemVariables{}
+		InitGlobalSystemVariables(gSysVars)
+
+		ses := genSession(ctrl, gSysVars)
+		err := ses.TxnBegin()
+		convey.So(err, convey.ShouldBeNil)
+		err = ses.TxnCommit()
+		convey.So(err, convey.ShouldBeNil)
+		err = ses.TxnBegin()
+		convey.So(err, convey.ShouldBeNil)
+		err = ses.SetAutocommit(false)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(txn3.txnState.isState(TxnErr), convey.ShouldBeTrue)
-		convey.So(txn3.taeTxn, convey.ShouldNotBeNil)
+		err = ses.TxnCommit()
+		convey.So(err, convey.ShouldBeNil)
+		_ = ses.txnHandler.GetTxn()
+
+		err = ses.SetAutocommit(true)
+		convey.So(err, convey.ShouldBeNil)
+
+		err = ses.SetAutocommit(false)
+		convey.So(err, convey.ShouldBeNil)
 	})
 }
 
@@ -620,5 +403,92 @@ func TestVariables(t *testing.T) {
 
 		newSes2 := genSession(ctrl, gSysVars)
 		checkWant(ses, existSes, newSes2, v1, v1_default, v1_default, v1_want, v1_want, v1_want, v1_want)
+	})
+
+	convey.Convey("user variables", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		gSysVars := &GlobalSystemVariables{}
+		InitGlobalSystemVariables(gSysVars)
+
+		ses := genSession(ctrl, gSysVars)
+
+		vars := ses.CopyAllSessionVars()
+		convey.So(len(vars), convey.ShouldNotBeZeroValue)
+
+		err := ses.SetUserDefinedVar("abc", 1)
+		convey.So(err, convey.ShouldBeNil)
+
+		_, _, err = ses.GetUserDefinedVar("abc")
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func TestSession_TxnCompilerContext(t *testing.T) {
+	genSession := func(ctrl *gomock.Controller, gSysVars *GlobalSystemVariables) *Session {
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		proto := NewMysqlClientProtocol(0, ioses, 1024, nil)
+		return NewSession(proto, nil, nil, nil, gSysVars)
+	}
+
+	convey.Convey("test", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		taeTxn := mock_frontend.NewMockTxn(ctrl)
+		taeTxn.EXPECT().String().Return("").AnyTimes()
+		taeTxn.EXPECT().Commit().Return(nil).AnyTimes()
+		txn := mock_frontend.NewMockTxn(ctrl)
+		txn.EXPECT().GetCtx().Return(nil).AnyTimes()
+		txn.EXPECT().Commit().Return(nil).AnyTimes()
+		txn.EXPECT().Rollback().Return(nil).AnyTimes()
+		txn.EXPECT().String().Return("txn0").AnyTimes()
+		storage := mock_frontend.NewMockTxnEngine(ctrl)
+		storage.EXPECT().StartTxn(gomock.Any()).Return(txn, nil).AnyTimes()
+
+		db := mock_frontend.NewMockDatabase(ctrl)
+		db.EXPECT().Relations(gomock.Any()).Return(nil, nil).AnyTimes()
+
+		table := mock_frontend.NewMockRelation(ctrl)
+		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
+		table.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, nil).AnyTimes()
+		table.EXPECT().GetHideKeys(gomock.Any()).Return(nil, nil).AnyTimes()
+		table.EXPECT().Rows().Return(int64(1000000)).AnyTimes()
+		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
+		storage.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
+
+		config.StorageEngine = storage
+		defer func() {
+			config.StorageEngine = nil
+		}()
+
+		gSysVars := &GlobalSystemVariables{}
+		InitGlobalSystemVariables(gSysVars)
+
+		ses := genSession(ctrl, gSysVars)
+
+		tcc := ses.GetTxnCompilerContext()
+		defDBName := tcc.DefaultDatabase()
+		convey.So(defDBName, convey.ShouldEqual, "")
+		convey.So(tcc.DatabaseExists("abc"), convey.ShouldBeTrue)
+
+		_, err := tcc.getRelation("abc", "t1")
+		convey.So(err, convey.ShouldBeNil)
+
+		object, tableRef := tcc.Resolve("abc", "t1")
+		convey.So(object, convey.ShouldNotBeNil)
+		convey.So(tableRef, convey.ShouldNotBeNil)
+
+		pkd := tcc.GetPrimaryKeyDef("abc", "t1")
+		convey.So(len(pkd), convey.ShouldBeZeroValue)
+
+		hkd := tcc.GetHideKeyDef("abc", "t1")
+		convey.So(hkd, convey.ShouldBeNil)
+
+		cost := tcc.Cost(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Expr{})
+		convey.So(cost, convey.ShouldNotBeNil)
 	})
 }

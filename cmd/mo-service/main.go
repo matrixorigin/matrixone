@@ -87,6 +87,7 @@ func startDNService(cfg *Config, stopper *stopper.Stopper) error {
 	}
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
 		s, err := dnservice.NewService(&cfg.DN,
+			cfg.createFileService,
 			dnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service")))
 		if err != nil {
 			panic(err)
@@ -103,13 +104,19 @@ func startDNService(cfg *Config, stopper *stopper.Stopper) error {
 }
 
 func startLogService(cfg *Config, stopper *stopper.Stopper) error {
+	s, err := logservice.NewService(cfg.LogService)
+	if err != nil {
+		panic(err)
+	}
+	if err := s.Start(); err != nil {
+		panic(err)
+	}
 	return stopper.RunNamedTask("log-service", func(ctx context.Context) {
-		s, err := logservice.NewService(cfg.LogService)
-		if err != nil {
-			panic(err)
-		}
-		if err := s.Start(); err != nil {
-			panic(err)
+		if cfg.LogService.BootstrapConfig.BootstrapCluster {
+			fmt.Printf("bootstrapping hakeeper...\n")
+			if err := s.BootstrapHAKeeper(ctx, cfg.LogService); err != nil {
+				panic(err)
+			}
 		}
 
 		<-ctx.Done()

@@ -14,313 +14,202 @@
 
 package add
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+/*
+#include "mo.h"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+#cgo CFLAGS: -I../../../cgo
+#cgo LDFLAGS: -L../../../cgo -lmo
+*/
+import "C"
+
+import (
+	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"golang.org/x/exp/constraints"
 )
 
-var (
-	Int8Add              = NumericAddSigned[int8]
-	Int8AddScalar        = NumericAddScalarSigned[int8]
-	Int16Add             = NumericAddSigned[int16]
-	Int16AddScalar       = NumericAddScalarSigned[int16]
-	Int32Add             = NumericAddSigned[int32]
-	Int32AddScalar       = NumericAddScalarSigned[int32]
-	Int64Add             = NumericAddSigned[int64]
-	Int64AddScalar       = NumericAddScalarSigned[int64]
-	Uint8Add             = NumericAddUnsigned[uint8]
-	Uint8AddScalar       = NumericAddScalarUnsigned[uint8]
-	Uint16Add            = NumericAddUnsigned[uint16]
-	Uint16AddScalar      = NumericAddScalarUnsigned[uint16]
-	Uint32Add            = NumericAddUnsigned[uint32]
-	Uint32AddScalar      = NumericAddScalarUnsigned[uint32]
-	Uint64Add            = NumericAddUnsigned[uint64]
-	Uint64AddScalar      = NumericAddScalarUnsigned[uint64]
-	Float32Add           = NumericAdd[float32]
-	Float32AddScalar     = NumericAddScalar[float32]
-	Float64Add           = NumericAdd[float64]
-	Float64AddScalar     = NumericAddScalar[float64]
-	Int8AddSels          = NumericAddSelsSigned[int8]
-	Int8AddScalarSels    = NumericAddScalarSelsSigned[int8]
-	Int16AddSels         = NumericAddSelsSigned[int16]
-	Int16AddScalarSels   = NumericAddScalarSelsSigned[int16]
-	Int32AddSels         = NumericAddSelsSigned[int32]
-	Int32AddScalarSels   = NumericAddScalarSelsSigned[int32]
-	Int64AddSels         = NumericAddSelsSigned[int64]
-	Int64AddScalarSels   = NumericAddScalarSelsSigned[int64]
-	Uint8AddSels         = NumericAddSelsUnsigned[uint8]
-	Uint8AddScalarSels   = NumericAddScalarSelsUnsigned[uint8]
-	Uint16AddSels        = NumericAddSelsUnsigned[uint16]
-	Uint16AddScalarSels  = NumericAddScalarSelsUnsigned[uint16]
-	Uint32AddSels        = NumericAddSelsUnsigned[uint32]
-	Uint32AddScalarSels  = NumericAddScalarSelsUnsigned[uint32]
-	Uint64AddSels        = NumericAddSelsUnsigned[uint64]
-	Uint64AddScalarSels  = NumericAddScalarSelsUnsigned[uint64]
-	Float32AddSels       = NumericAddSels[float32]
-	Float32AddScalarSels = NumericAddScalarSels[float32]
-	Float64AddSels       = NumericAddSels[float64]
-	Float64AddScalarSels = NumericAddScalarSels[float64]
-
-	Int32Int64Add               = NumericAdd2[int32, int64]
-	Int32Int64AddScalar         = NumericAddScalar2[int32, int64]
-	Int32Int64AddSels           = NumericAddSels2[int32, int64]
-	Int32Int64AddScalarSels     = NumericAddScalarSels2[int32, int64]
-	Int16Int64Add               = NumericAdd2[int16, int64]
-	Int16Int64AddScalar         = NumericAddScalar2[int16, int64]
-	Int16Int64AddSels           = NumericAddSels2[int16, int64]
-	Int16Int64AddScalarSels     = NumericAddScalarSels2[int16, int64]
-	Int8Int64Add                = NumericAdd2[int8, int64]
-	Int8Int64AddScalar          = NumericAddScalar2[int8, int64]
-	Int8Int64AddSels            = NumericAddSels2[int8, int64]
-	Int8Int64AddScalarSels      = NumericAddScalarSels2[int8, int64]
-	Int16Int32Add               = NumericAdd2[int16, int32]
-	Int16Int32AddScalar         = NumericAddScalar2[int16, int32]
-	Int16Int32AddSels           = NumericAddSels2[int16, int32]
-	Int16Int32AddScalarSels     = NumericAddScalarSels2[int16, int32]
-	Int8Int32Add                = NumericAdd2[int8, int32]
-	Int8Int32AddScalar          = NumericAddScalar2[int8, int32]
-	Int8Int32AddSels            = NumericAddSels2[int8, int32]
-	Int8Int32AddScalarSels      = NumericAddScalarSels2[int8, int32]
-	Int8Int16Add                = NumericAdd2[int8, int16]
-	Int8Int16AddScalar          = NumericAddScalar2[int8, int16]
-	Int8Int16AddSels            = NumericAddSels2[int8, int16]
-	Int8Int16AddScalarSels      = NumericAddScalarSels2[int8, int16]
-	Float32Float64Add           = NumericAdd2[float32, float64]
-	Float32Float64AddScalar     = NumericAddScalar2[float32, float64]
-	Float32Float64AddSels       = NumericAddSels2[float32, float64]
-	Float32Float64AddScalarSels = NumericAddScalarSels2[float32, float64]
-	Uint32Uint64Add             = NumericAdd2[uint32, uint64]
-	Uint32Uint64AddScalar       = NumericAddScalar2[uint32, uint64]
-	Uint32Uint64AddSels         = NumericAddSels2[uint32, uint64]
-	Uint32Uint64AddScalarSels   = NumericAddScalarSels2[uint32, uint64]
-	Uint16Uint64Add             = NumericAdd2[uint16, uint64]
-	Uint16Uint64AddScalar       = NumericAddScalar2[uint16, uint64]
-	Uint16Uint64AddSels         = NumericAddSels2[uint16, uint64]
-	Uint16Uint64AddScalarSels   = NumericAddScalarSels2[uint16, uint64]
-	Uint8Uint64Add              = NumericAdd2[uint8, uint64]
-	Uint8Uint64AddScalar        = NumericAddScalar2[uint8, uint64]
-	Uint8Uint64AddSels          = NumericAddSels2[uint8, uint64]
-	Uint8Uint64AddScalarSels    = NumericAddScalarSels2[uint8, uint64]
-	Uint16Uint32Add             = NumericAdd2[uint16, uint32]
-	Uint16Uint32AddScalar       = NumericAddScalar2[uint16, uint32]
-	Uint16Uint32AddSels         = NumericAddSels2[uint16, uint32]
-	Uint16Uint32AddScalarSels   = NumericAddScalarSels2[uint16, uint32]
-	Uint8Uint32Add              = NumericAdd2[uint8, uint32]
-	Uint8Uint32AddScalar        = NumericAddScalar2[uint8, uint32]
-	Uint8Uint32AddSels          = NumericAddSels2[uint8, uint32]
-	Uint8Uint32AddScalarSels    = NumericAddScalarSels2[uint8, uint32]
-	Uint8Uint16Add              = NumericAdd2[uint8, uint16]
-	Uint8Uint16AddScalar        = NumericAddScalar2[uint8, uint16]
-	Uint8Uint16AddSels          = NumericAddSels2[uint8, uint16]
-	Uint8Uint16AddScalarSels    = NumericAddScalarSels2[uint8, uint16]
-
-	Decimal64Add            = decimal64Add
-	Decimal64AddSels        = decimal64AddSels
-	Decimal64AddScalar      = decimal64AddScalar
-	Decimal64AddScalarSels  = decimal64AddScalarSels
-	Decimal128Add           = decimal128Add
-	Decimal128AddSels       = decimal128AddSels
-	Decimal128AddScalar     = decimal128AddScalar
-	Decimal128AddScalarSels = decimal128AddScalarSels
+const (
+	LEFT_IS_SCALAR  = 1
+	RIGHT_IS_SCALAR = 2
 )
 
-// this is the slowest overflow check
-func NumericAddSigned[T constraints.Signed](xs, ys, rs []T) []T {
-	for i, x := range xs {
-		rs[i] = x + ys[i]
-		if x > 0 && ys[i] > 0 && rs[i] <= 0 {
-			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+func signedOverflow[T constraints.Signed](a, b, c T) bool {
+	return (a > 0 && b > 0 && c < 0) || (a < 0 && b < 0 && c > 0)
+}
+
+func unsignedOverflow[T constraints.Unsigned](a, b, c T) bool {
+	return c < a || c < b
+}
+
+func NumericAddSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
+	return cNumericAddSigned[T](xs, ys, rs)
+}
+
+func cNumericAddSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
+	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	flag := 0
+	if xs.IsScalar() {
+		flag |= LEFT_IS_SCALAR
+	}
+	if ys.IsScalar() {
+		flag |= RIGHT_IS_SCALAR
+	}
+
+	rc := C.SignedInt_VecAdd(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
+	if rc != 0 {
+		return moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow")
+	}
+	return nil
+}
+
+func goNumericAddSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
+	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	if xs.IsScalar() {
+		for i, y := range yt {
+			if !nulls.Contains(rs.Nsp, uint64(i)) {
+				rt[i] = xt[0] + y
+				if signedOverflow(xt[0], y, rt[i]) {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow")
+				}
+			}
 		}
-	}
-	return rs
-}
-
-func NumericAddSelsSigned[T constraints.Signed](xs, ys, rs []T, sels []int64) []T {
-	for i, sel := range sels {
-		rs[i] = xs[sel] + ys[sel]
-		if xs[sel] > 0 && ys[i] > 0 && rs[i] <= 0 {
-			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+		return nil
+	} else if ys.IsScalar() {
+		for i, x := range xt {
+			if !nulls.Contains(rs.Nsp, uint64(i)) {
+				rt[i] = x + yt[0]
+				if signedOverflow(x, yt[0], rt[i]) {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow")
+				}
+			}
 		}
-	}
-	return rs
-}
-
-func NumericAddScalarSigned[T constraints.Signed](x T, ys, rs []T) []T {
-	for i, y := range ys {
-		rs[i] = x + y
-		if x > 0 && y > 0 && rs[i] <= 0 {
-			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+		return nil
+	} else {
+		for i, x := range xt {
+			if !nulls.Contains(rs.Nsp, uint64(i)) {
+				rt[i] = x + yt[i]
+				if signedOverflow(x, yt[i], rt[i]) {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow")
+				}
+			}
 		}
-		if x < 0 && y < 0 && rs[i] >= 0 {
-			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+		return nil
+	}
+}
+
+func NumericAddUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error {
+	return cNumericAddUnsigned[T](xs, ys, rs)
+}
+
+func cNumericAddUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error {
+	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	flag := 0
+	if xs.IsScalar() {
+		flag |= LEFT_IS_SCALAR
+	}
+	if ys.IsScalar() {
+		flag |= RIGHT_IS_SCALAR
+	}
+
+	rc := C.UnsignedInt_VecAdd(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
+	if rc != 0 {
+		return moerr.NewError(moerr.OUT_OF_RANGE, "unsigned int add overflow")
+	}
+	return nil
+}
+
+func goNumericAddUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error {
+	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	if xs.IsScalar() {
+		for i, y := range yt {
+			if !nulls.Contains(rs.Nsp, uint64(i)) {
+				rt[i] = xt[0] + y
+				if unsignedOverflow(xt[0], y, rt[i]) {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "uint add overflow")
+				}
+			}
 		}
-	}
-	return rs
-}
-
-func NumericAddScalarSelsSigned[T constraints.Signed](x T, ys, rs []T, sels []int64) []T {
-	for i, sel := range sels {
-		rs[i] = x + ys[sel]
-		if x > 0 && ys[sel] > 0 && rs[i] <= 0 {
-			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+		return nil
+	} else if ys.IsScalar() {
+		for i, x := range xt {
+			if !nulls.Contains(rs.Nsp, uint64(i)) {
+				rt[i] = x + yt[0]
+				if unsignedOverflow(x, yt[0], rt[i]) {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "uint add overflow")
+				}
+			}
 		}
-		if x < 0 && ys[sel] < 0 && rs[i] >= 0 {
-			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+		return nil
+	} else {
+		for i, x := range xt {
+			if !nulls.Contains(rs.Nsp, uint64(i)) {
+				rt[i] = x + yt[i]
+				if unsignedOverflow(x, yt[i], rt[i]) {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "uint add overflow")
+				}
+			}
 		}
+		return nil
 	}
-	return rs
 }
 
-func NumericAddUnsigned[T constraints.Unsigned](xs, ys, rs []T) []T {
-	for i, x := range xs {
-		rs[i] = x + ys[i]
-		if rs[i] < x {
-			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+func NumericAddFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
+	return cNumericAddFloat[T](xs, ys, rs)
+}
+
+func cNumericAddFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
+	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	flag := 0
+	if xs.IsScalar() {
+		flag |= LEFT_IS_SCALAR
+	}
+	if ys.IsScalar() {
+		flag |= RIGHT_IS_SCALAR
+	}
+
+	rc := C.Float_VecAdd(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
+	if rc != 0 {
+		return moerr.NewError(moerr.OUT_OF_RANGE, "float add overflow")
+	}
+	return nil
+}
+
+func goNumericAddFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
+	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	if xs.IsScalar() {
+		for i, y := range yt {
+			if !nulls.Contains(rs.Nsp, uint64(i)) {
+				rt[i] = xt[0] + y
+			}
 		}
-	}
-	return rs
-}
-
-func NumericAddSelsUnsigned[T constraints.Unsigned](xs, ys, rs []T, sels []int64) []T {
-	for i, sel := range sels {
-		rs[i] = xs[sel] + ys[sel]
-		if rs[i] < xs[sel] {
-			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+		return nil
+	} else if ys.IsScalar() {
+		for i, x := range xt {
+			if !nulls.Contains(rs.Nsp, uint64(i)) {
+				rt[i] = x + yt[0]
+			}
 		}
-	}
-	return rs
-}
-
-func NumericAddScalarUnsigned[T constraints.Integer | constraints.Float](x T, ys, rs []T) []T {
-	for i, y := range ys {
-		rs[i] = x + y
-		if rs[i] < x {
-			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+		return nil
+	} else {
+		for i, x := range xt {
+			if !nulls.Contains(rs.Nsp, uint64(i)) {
+				rt[i] = x + yt[i]
+			}
 		}
+		return nil
 	}
-	return rs
 }
 
-func NumericAddScalarSelsUnsigned[T constraints.Unsigned](x T, ys, rs []T, sels []int64) []T {
-	for i, sel := range sels {
-		rs[i] = x + ys[sel]
-		if rs[i] < x {
-			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
-		}
+func Uint32AddScalar(x uint32, ys []uint32, zs []uint32) {
+	rc := C.UnsignedInt_VecAdd(unsafe.Pointer(&zs[0]), unsafe.Pointer(&x), unsafe.Pointer(&ys[0]),
+		C.uint64_t(len(zs)), nil, C.int32_t(1), C.int32_t(4))
+	if rc != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "uint32 add overflow"))
 	}
-	return rs
-}
-
-func NumericAdd[T constraints.Integer | constraints.Float](xs, ys, rs []T) []T {
-	for i, x := range xs {
-		rs[i] = x + ys[i]
-	}
-	return rs
-}
-
-func NumericAddSels[T constraints.Integer | constraints.Float](xs, ys, rs []T, sels []int64) []T {
-	for i, sel := range sels {
-		rs[i] = xs[sel] + ys[sel]
-	}
-	return rs
-}
-
-func NumericAddScalar[T constraints.Integer | constraints.Float](x T, ys, rs []T) []T {
-	for i, y := range ys {
-		rs[i] = x + y
-	}
-	return rs
-}
-
-func NumericAddScalarSels[T constraints.Integer | constraints.Float](x T, ys, rs []T, sels []int64) []T {
-	for i, sel := range sels {
-		rs[i] = x + ys[sel]
-	}
-	return rs
-}
-
-func NumericAdd2[TSmall, TBig constraints.Integer | constraints.Float](xs []TSmall, ys, rs []TBig) []TBig {
-	for i, x := range xs {
-		rs[i] = TBig(x) + ys[i]
-	}
-	return rs
-}
-
-func NumericAddSels2[TSmall, TBig constraints.Integer | constraints.Float](xs []TSmall, ys, rs []TBig, sels []int64) []TBig {
-	for i, sel := range sels {
-		rs[i] = TBig(xs[sel]) + ys[sel]
-	}
-	return rs
-}
-
-func NumericAddScalar2[TSmall, TBig constraints.Integer | constraints.Float](x TSmall, ys, rs []TBig) []TBig {
-	for i, y := range ys {
-		rs[i] = TBig(x) + y
-	}
-	return rs
-}
-
-func NumericAddScalarSels2[TSmall, TBig constraints.Integer | constraints.Float](x TSmall, ys, rs []TBig, sels []int64) []TBig {
-	for i, sel := range sels {
-		rs[i] = TBig(x) + ys[sel]
-	}
-	return rs
-}
-
-func decimal64Add(xs []types.Decimal64, ys []types.Decimal64, xsScale int32, ysScale int32, rs []types.Decimal64) []types.Decimal64 {
-	for i, x := range xs {
-		rs[i] = types.Decimal64AddAligned(x, ys[i])
-	}
-	return rs
-}
-
-func decimal64AddSels(xs, ys []types.Decimal64, xsScale, ysScale int32, rs []types.Decimal64, sels []int64) []types.Decimal64 {
-	for i, sel := range sels {
-		rs[i] = types.Decimal64Add(xs[sel], ys[sel], xsScale, ysScale)
-	}
-	return rs
-}
-
-func decimal64AddScalar(x types.Decimal64, ys []types.Decimal64, xScale, ysScale int32, rs []types.Decimal64) []types.Decimal64 {
-	for i, y := range ys {
-		rs[i] = types.Decimal64AddAligned(x, y)
-	}
-	return rs
-}
-
-func decimal64AddScalarSels(x types.Decimal64, ys []types.Decimal64, xScale, ysScale int32, rs []types.Decimal64, sels []int64) []types.Decimal64 {
-	for i, sel := range sels {
-		rs[i] = types.Decimal64Add(x, ys[sel], xScale, ysScale)
-	}
-	return rs
-}
-
-func decimal128Add(xs []types.Decimal128, ys []types.Decimal128, xsScale int32, ysScale int32, rs []types.Decimal128) []types.Decimal128 {
-	for i, x := range xs {
-		rs[i] = types.Decimal128AddAligned(x, ys[i])
-	}
-	return rs
-}
-
-func decimal128AddSels(xs, ys []types.Decimal128, xsScale, ysScale int32, rs []types.Decimal128, sels []int64) []types.Decimal128 {
-	for i, sel := range sels {
-		rs[i] = types.Decimal128Add(xs[sel], ys[sel], xsScale, ysScale)
-	}
-	return rs
-}
-
-func decimal128AddScalar(x types.Decimal128, ys []types.Decimal128, xScale, ysScale int32, rs []types.Decimal128) []types.Decimal128 {
-	for i, y := range ys {
-		rs[i] = types.Decimal128AddAligned(x, y)
-	}
-	return rs
-}
-
-func decimal128AddScalarSels(x types.Decimal128, ys []types.Decimal128, xScale, ysScale int32, rs []types.Decimal128, sels []int64) []types.Decimal128 {
-	for i, sel := range sels {
-		rs[i] = types.Decimal128Add(x, ys[sel], xScale, ysScale)
-	}
-	return rs
 }
