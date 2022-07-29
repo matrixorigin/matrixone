@@ -484,8 +484,7 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RP
 		morpc.WithBackendConnectTimeout(connectionTimeout))
 	return morpc.NewClient(bf,
 		morpc.WithClientInitBackends([]string{target}, []int{1}),
-		morpc.WithClientMaxBackendPerHost(1),
-		morpc.WithClientDisableCreateTask())
+		morpc.WithClientMaxBackendPerHost(1))
 }
 
 func getTimeoutFromContext(ctx context.Context) (time.Duration, error) {

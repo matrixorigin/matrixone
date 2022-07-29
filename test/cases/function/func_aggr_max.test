@@ -265,5 +265,17 @@ select min(f1),max(f1) from t1;
 select min(f2),max(f2) from t1;
 select min(f3),max(f3) from t1;
 select min(f4),max(f4) from t1;
-drop table t1;
 -- @bvt:issue
+drop table t1;
+
+create table t1 (grp int, a bigint unsigned, c char(10) not null);
+insert into t1 values (1,1,"a");
+insert into t1 values (2,2,"b");
+insert into t1 values (2,3,"c");
+insert into t1 values (3,4,"E");
+insert into t1 values (3,5,"C");
+insert into t1 values (3,6,"D");
+select max(distinct a),max(distinct grp) from t1;
+insert into t1 values (null,null,'');
+select max(distinct a),max(distinct grp) from t1;
+drop table t1;

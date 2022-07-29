@@ -30,7 +30,6 @@ func String(_ interface{}, buf *bytes.Buffer) {
 func Prepare(_ *process.Process, arg interface{}) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.scales = make([]int32, hashmap.UnitLimit)
 	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
 	return nil
@@ -189,7 +188,7 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		vals, _ := itr.Insert(i, n, bat.Vecs, ctr.scales)
+		vals, _ := itr.Insert(i, n, bat.Vecs)
 		if !flg {
 			if err := ctr.batchFill(i, n, bat, vals, ctr.intHashMap, proc); err != nil {
 				return err
@@ -215,7 +214,7 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		vals, _ := itr.Insert(i, n, bat.Vecs, ctr.scales)
+		vals, _ := itr.Insert(i, n, bat.Vecs)
 		if !flg {
 			if err := ctr.batchFill(i, n, bat, vals, ctr.strHashMap, proc); err != nil {
 				return err

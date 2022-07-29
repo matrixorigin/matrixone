@@ -399,6 +399,39 @@ func TestBackendConnectTimeout(t *testing.T) {
 	assert.Nil(t, rb)
 }
 
+func TestInactiveAfterCannotConnect(t *testing.T) {
+	app := newTestApp(t, func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+		return conn.Write(msg, goetty.WriteOptions{Flush: true})
+	})
+	assert.NoError(t, app.Start())
+
+	testBackendSendWithoutServer(t,
+		testAddr,
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			req := newTestMessage(1)
+			f, err := b.Send(ctx, req, SendOptions{})
+			assert.NoError(t, err)
+			defer f.Close()
+
+			resp, err := f.Get()
+			assert.NoError(t, err)
+			assert.Equal(t, req, resp)
+
+			assert.NoError(t, app.Stop())
+			var v time.Time
+			for {
+				if b.LastActiveTime() == v {
+					break
+				}
+				time.Sleep(time.Millisecond * 100)
+			}
+		},
+		WithBackendConnectWhenCreate(),
+		WithBackendConnectTimeout(time.Millisecond*100))
+}
+
 func TestTCPProxyExample(t *testing.T) {
 	assert.NoError(t, os.RemoveAll(testProxyAddr[7:]))
 	p := goetty.NewProxy(testProxyAddr, nil)
@@ -446,6 +479,13 @@ func testBackendSendWithAddr(t *testing.T, addr string,
 		assert.NoError(t, app.Stop())
 	}()
 
+	testBackendSendWithoutServer(t, addr, testFunc, options...)
+}
+
+func testBackendSendWithoutServer(t *testing.T, addr string,
+	testFunc func(b *remoteBackend),
+	options ...BackendOption) {
+
 	options = append(options,
 		WithBackendBufferSize(1),
 		WithBackendLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel).With(zap.String("testcase", t.Name()))))
@@ -485,6 +525,7 @@ func (bf *testBackendFactory) Create(backend string) (Backend, error) {
 	bf.Lock()
 	defer bf.Unlock()
 	b := &testBackend{id: bf.id}
+	b.activeTime = time.Now()
 	bf.id++
 	return b, nil
 }
