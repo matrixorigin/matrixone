@@ -157,7 +157,6 @@ func BenchmarkSend(b *testing.B) {
 	testRPCServer(b, func(rs *server) {
 		c := newTestClient(b,
 			WithClientMaxBackendPerHost(1),
-			WithClientDisableCreateTask(),
 			WithClientInitBackends([]string{testAddr}, []int{1}))
 		defer func() {
 			c.(*client).logger.Info("55")
