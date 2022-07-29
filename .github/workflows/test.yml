@@ -26,8 +26,8 @@ jobs:
           check-latest: true
 
       - name: make pb testing
-        continue-on-error: true
         run: |
+          export GOPATH=$(go env GOPATH)
           echo $GOPATH
           cd $GITHUB_WORKSPACE && make clean && make config
           make pb
