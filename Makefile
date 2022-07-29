@@ -36,6 +36,9 @@
 # make install-static-check-tools
 # make static-check
 #
+# To construct a directory named vendor in the main module’s root directory that contains copies of all packages needed to support builds and tests of packages in the main module. 
+# make vendor
+#
 
 # where am I
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
@@ -60,6 +63,19 @@ endif
 # default target
 ###############################################################################
 all: build
+
+
+###############################################################################
+# build vendor directory 
+###############################################################################
+
+VENDOR_DIRECTORY := ./vendor
+.PHONY: vendor-build
+vendor-build: 
+	$(info [go mod vendor])
+	@go mod vendor
+
+
 
 ###############################################################################
 # code generation
@@ -89,7 +105,7 @@ generate-pb:
 
 # Generate protobuf files
 .PHONY: pb
-pb: generate-pb fmt
+pb: vendor-build generate-pb fmt
 	$(info all protos are generated) 
 
 ###############################################################################
@@ -159,6 +175,7 @@ clean:
 	$(info Clean go test cache)
 	@go clean -testcache
 	rm -f $(CONFIG_CODE_GENERATED) $(BIN_NAME) $(SERVICE_BIN_NAME) $(BUILD_CFG)
+	rm -rf $(VENDOR_DIRECTORY)
 	$(MAKE) -C cgo clean
 
 ###############################################################################
