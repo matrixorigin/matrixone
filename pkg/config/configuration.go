@@ -34,42 +34,6 @@ var StorageEngine engine.Engine
 // ClusterNodes Cluster Nodes
 var ClusterNodes engine.Nodes
 
-/**
-check if x in a slice
-*/
-func isInSlice(x string, arr []string) bool {
-	for _, y := range arr {
-		if x == y {
-			return true
-		}
-	}
-	return false
-}
-
-/**
-check if x in a slice
-*/
-func isInSliceBool(x bool, arr []bool) bool {
-	for _, y := range arr {
-		if x == y {
-			return true
-		}
-	}
-	return false
-}
-
-/**
-check if x in a slice
-*/
-func isInSliceInt64(x int64, arr []int64) bool {
-	for _, y := range arr {
-		if x == y {
-			return true
-		}
-	}
-	return false
-}
-
 type ParameterUnit struct {
 	SV *SystemVariables
 

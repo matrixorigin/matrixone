@@ -27,6 +27,13 @@ const (
 var OneUInt8s []uint8
 var OneInt64s []int64
 
+type HashMap interface {
+	AddGroup()
+	AddGroups(uint64)
+	GroupCount() uint64
+	Cardinality() uint64
+}
+
 // Iterator allows you to batch insert/find values
 type Iterator interface {
 	// Insert vecs[start, start+count) into hashmap

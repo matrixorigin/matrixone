@@ -86,9 +86,6 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector, _
 		copy(itr.mp.keyOffs[:count], zeroUint32)
 	}()
 
-	if !itr.mp.hasNull {
-		copy(itr.mp.zValues[:count], OneInt64s[:count])
-	}
 	copy(itr.mp.zValues[:count], OneInt64s[:count])
 	itr.mp.encodeHashKeys(vecs, start, count)
 	copy(itr.mp.hashes[:count], zeroUint64[:count])

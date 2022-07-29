@@ -17,7 +17,7 @@ package count
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 type Decimal128AndString interface {
-	types.Decimal128 | []byte
+	types.Decimal | []byte | bool
 }
 
 type Count[T1 types.Generic | Decimal128AndString] struct {
