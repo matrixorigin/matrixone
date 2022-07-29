@@ -534,6 +534,7 @@ func (rb *remoteBackend) resetConn() error {
 	rb.stateMu.Lock()
 	defer rb.stateMu.Unlock()
 
+	start := time.Now()
 	wait := time.Second
 	for {
 		if !rb.runningLocked() {
@@ -552,6 +553,10 @@ func (rb *remoteBackend) resetConn() error {
 			zap.Error(err))
 		time.Sleep(wait)
 		wait += wait / 2
+
+		if time.Since(start) > rb.options.connectTimeout {
+			return errBackendClosed
+		}
 	}
 }
 

@@ -391,6 +391,14 @@ func TestLastActiveWithStream(t *testing.T) {
 		WithBackendConnectWhenCreate())
 }
 
+func TestBackendConnectTimeout(t *testing.T) {
+	rb, err := NewRemoteBackend(testAddr, newTestCodec(),
+		WithBackendConnectTimeout(time.Millisecond*200),
+		WithBackendConnectWhenCreate())
+	assert.Error(t, err)
+	assert.Nil(t, rb)
+}
+
 func TestTCPProxyExample(t *testing.T) {
 	assert.NoError(t, os.RemoveAll(testProxyAddr[7:]))
 	p := goetty.NewProxy(testProxyAddr, nil)
