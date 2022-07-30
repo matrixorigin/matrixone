@@ -14,7 +14,7 @@ require (
 	github.com/cockroachdb/pebble v0.0.0-20220407171941-2120d145e292
 	github.com/docker/go-units v0.4.0
 	github.com/fagongzi/goetty v1.13.0
-	github.com/fagongzi/goetty/v2 v2.0.3-0.20220727082602-18bd581d2658
+	github.com/fagongzi/goetty/v2 v2.0.3-0.20220730091829-0a8222eaa708
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/gogo/protobuf v1.3.2
@@ -34,6 +34,7 @@ require (
 	github.com/prashantv/gostub v1.1.0
 	github.com/smartystreets/goconvey v1.7.2
 	github.com/stretchr/testify v1.7.5
+	github.com/tidwall/btree v1.3.1
 	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
 	go.uber.org/zap v1.21.0
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
