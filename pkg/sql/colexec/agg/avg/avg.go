@@ -18,25 +18,43 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func NewAvg[T Numeric]() *Avg[T] {
-	return &Avg[T]{
-		cnt: int64(0),
+func ReturnType(typs []types.Type) types.Type {
+	switch typs[0].Oid {
+	case types.T_decimal64:
+		return types.New(types.T_decimal128, 0, typs[0].Scale, typs[0].Precision)
+	case types.T_decimal128:
+		return types.New(types.T_decimal128, 0, typs[0].Scale, typs[0].Precision)
+	case types.T_float32, types.T_float64:
+		return types.New(types.T_float64, 0, 0, 0)
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		return types.New(types.T_float64, 0, 0, 0)
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		return types.New(types.T_float64, 0, 0, 0)
+	default:
+		return types.Type{}
 	}
 }
 
-func (a *Avg[T]) Grows(_ int) {
+func NewAvg[T Numeric]() *Avg[T] {
+	return &Avg[T]{}
+}
+
+func (a *Avg[T]) Grows(cnt int) {
+	for i := 0; i < cnt; i++ {
+		a.cnts = append(a.cnts, 0)
+	}
 }
 
 func (a *Avg[T]) Eval(vs []float64) []float64 {
 	for i := range vs {
-		vs[i] = float64(vs[i]) / float64(a.cnt)
+		vs[i] = float64(vs[i]) / float64(a.cnts[i])
 	}
 	return vs
 }
 
-func (a *Avg[T]) Fill(_ int64, value T, ov float64, z int64, isEmpty bool, isNull bool) (float64, bool) {
+func (a *Avg[T]) Fill(i int64, value T, ov float64, z int64, isEmpty bool, isNull bool) (float64, bool) {
 	if !isNull {
-		a.cnt += z
+		a.cnts[i] += z
 		return ov + float64(value)*float64(z), false
 	}
 	return ov, isEmpty
@@ -45,7 +63,7 @@ func (a *Avg[T]) Fill(_ int64, value T, ov float64, z int64, isEmpty bool, isNul
 func (a *Avg[T]) Merge(xIndex int64, yIndex int64, x float64, y float64, xEmpty bool, yEmpty bool, yAvg any) (float64, bool) {
 	if !yEmpty {
 		ya := yAvg.(*Avg[T])
-		a.cnt += ya.cnt
+		a.cnts[xIndex] += ya.cnts[yIndex]
 		if !xEmpty {
 			return x + y, false
 		}
@@ -56,34 +74,35 @@ func (a *Avg[T]) Merge(xIndex int64, yIndex int64, x float64, y float64, xEmpty 
 }
 
 func NewD64Avg() *Decimal64Avg {
-	return &Decimal64Avg{
-		cnt: int64(0),
-	}
+	return &Decimal64Avg{}
 }
 
-func (a *Decimal64Avg) Grows(_ int) {
+func (a *Decimal64Avg) Grows(cnt int) {
+	for i := 0; i < cnt; i++ {
+		a.cnts = append(a.cnts, 0)
+	}
 }
 
 func (a *Decimal64Avg) Eval(vs []types.Decimal128) []types.Decimal128 {
 	for i := range vs {
-		vs[i] = vs[i].DivInt64(a.cnt)
+		vs[i] = vs[i].DivInt64(a.cnts[i])
 	}
 	return vs
 }
 
-func (a *Decimal64Avg) Fill(_ int64, value types.Decimal64, ov types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
+func (a *Decimal64Avg) Fill(i int64, value types.Decimal64, ov types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
 	if !isNull {
-		a.cnt += z
-		tmp := types.InitDecimal128(value.ToInt64())
-		return ov.Add(tmp.MulInt64(z)), false
+		a.cnts[i] += z
+		tmp64 := value.MulInt64(z)
+		return ov.Add(types.Decimal128_FromDecimal64(tmp64)), false
 	}
 	return ov, isEmpty
 }
 
-func (a *Decimal64Avg) Merge(_ int64, _ int64, x types.Decimal128, y types.Decimal128, xEmpty bool, yEmpty bool, yAvg any) (types.Decimal128, bool) {
+func (a *Decimal64Avg) Merge(xIndex int64, yIndex int64, x types.Decimal128, y types.Decimal128, xEmpty bool, yEmpty bool, yAvg any) (types.Decimal128, bool) {
 	if !yEmpty {
-		ya := yAvg.(*Decimal128Avg)
-		a.cnt += ya.cnt
+		ya := yAvg.(*Decimal64Avg)
+		a.cnts[xIndex] += ya.cnts[yIndex]
 		if !xEmpty {
 			return x.Add(y), false
 		}
@@ -94,33 +113,34 @@ func (a *Decimal64Avg) Merge(_ int64, _ int64, x types.Decimal128, y types.Decim
 }
 
 func NewD128Avg() *Decimal128Avg {
-	return &Decimal128Avg{
-		cnt: int64(0),
-	}
+	return &Decimal128Avg{}
 }
 
-func (a *Decimal128Avg) Grows(_ int) {
+func (a *Decimal128Avg) Grows(cnt int) {
+	for i := 0; i < cnt; i++ {
+		a.cnts = append(a.cnts, 0)
+	}
 }
 
 func (a *Decimal128Avg) Eval(vs []types.Decimal128) []types.Decimal128 {
 	for i := range vs {
-		vs[i] = vs[i].DivInt64(a.cnt)
+		vs[i] = vs[i].DivInt64(a.cnts[i])
 	}
 	return vs
 }
 
-func (a *Decimal128Avg) Fill(_ int64, value types.Decimal128, ov types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
+func (a *Decimal128Avg) Fill(i int64, value types.Decimal128, ov types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
 	if !isNull {
-		a.cnt += z
+		a.cnts[i] += z
 		return ov.Add(value.MulInt64(z)), false
 	}
 	return ov, isEmpty
 }
 
-func (a *Decimal128Avg) Merge(_ int64, _ int64, x types.Decimal128, y types.Decimal128, xEmpty bool, yEmpty bool, yAvg any) (types.Decimal128, bool) {
+func (a *Decimal128Avg) Merge(xIndex int64, yIndex int64, x types.Decimal128, y types.Decimal128, xEmpty bool, yEmpty bool, yAvg any) (types.Decimal128, bool) {
 	if !yEmpty {
 		ya := yAvg.(*Decimal128Avg)
-		a.cnt += ya.cnt
+		a.cnts[xIndex] += ya.cnts[yIndex]
 		if !xEmpty {
 			return x.Add(y), false
 		}

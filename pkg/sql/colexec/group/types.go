@@ -15,8 +15,8 @@
 package group
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -24,14 +24,7 @@ import (
 )
 
 const (
-	UnitLimit = 256
-)
-
-const (
 	H8 = iota
-	H24
-	H32
-	H40
 	HStr
 )
 
@@ -40,47 +33,27 @@ type evalVector struct {
 	vec      *vector.Vector
 }
 
-type Container struct {
-	typ           int
-	rows          uint64
-	keyOffs       []uint32
-	zKeyOffs      []uint32
-	inserted      []uint8
-	zInserted     []uint8
-	hashes        []uint64
-	strHashStates [][3]uint64
-	values        []uint64
-	intHashMap    *hashtable.Int64HashMap
-	strHashMap    *hashtable.StringHashMap
+type container struct {
+	typ       int
+	inserted  []uint8
+	zInserted []uint8
+
+	intHashMap *hashmap.IntHashMap
+	strHashMap *hashmap.StrHashMap
 
 	aggVecs   []evalVector
 	groupVecs []evalVector
 
-	h8 struct {
-		keys  []uint64
-		zKeys []uint64
-	}
-	h24 struct {
-		keys  [][3]uint64
-		zKeys [][3]uint64
-	}
-	h32 struct {
-		keys  [][4]uint64
-		zKeys [][4]uint64
-	}
-	h40 struct {
-		keys  [][5]uint64
-		zKeys [][5]uint64
-	}
-	hstr struct {
-		keys [][]byte
-	}
+	vecs []*vector.Vector
+
 	bat *batch.Batch
 }
 
 type Argument struct {
-	ctr   *Container
-	Exprs []*plan.Expr // group Expressions
-	Types []types.Type
-	Aggs  []aggregate.Aggregate // aggregations
+	ctr     *container
+	Ibucket uint64
+	Nbucket uint64
+	Exprs   []*plan.Expr // group Expressions
+	Types   []types.Type
+	Aggs    []aggregate.Aggregate // aggregations
 }

@@ -28,6 +28,33 @@ import (
 // leave as it is for now.
 //
 
+type bitmask = uint64
+
+/*
+ * Array giving the position of the right-most set bit for each possible
+ * byte value. count the right-most position as the 0th bit, and the
+ * left-most the 7th bit.  The 0th entry of the array should not be used.
+ * e.g. 2 = 0x10 ==> rightmost_one_pos_8[2] = 1, 3 = 0x11 ==> rightmost_one_pos_8[3] = 0
+ */
+var rightmost_one_pos_8 = [256]uint8{
+	0, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+	5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+	6, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+	5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+	7, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+	5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+	6, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+	5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+}
+
 func New(n int) *Bitmap {
 	return &Bitmap{
 		len:  n,
@@ -44,29 +71,81 @@ func (n *Bitmap) Clone() *Bitmap {
 }
 
 func (n *Bitmap) Iterator() Iterator {
-	return &BitmapIterator{i: 0, bm: n}
+	// When initialization, the itr.i is set to the first rightmost_one position.
+	itr := BitmapIterator{i: 0, bm: n}
+	if first_1_pos, has_next := itr.hasNext(0); has_next {
+		itr.i = first_1_pos
+		itr.has_next = true
+		return &itr
+	}
+	itr.has_next = false
+	return &itr
+}
+
+func rightmost_one_pos_64(word uint64) uint64 {
+	// find out the rightmost_one position.
+	// Firstly, use eight bits as a group to quickly determine whether there is a 1 in it.
+	// if not, then rightmost_one exists in next group, add up the distance with result and shift the word
+	// if rightmost_one exists in this group, get the distance directly from a pre-made hash table
+	var result uint64
+	for {
+		if (word & 0xFF) == 0 {
+			word >>= 8
+			result += 8
+		} else {
+			break
+		}
+	}
+	result += uint64(rightmost_one_pos_8[word&255])
+	return result
+}
+
+func (itr *BitmapIterator) hasNext(i uint64) (uint64, bool) {
+	// if the uint64 is 0, move forward to next word
+	// if the uint64 is not 0, then calculate the rightest_one position in a word, add up prev result and return.
+	// when there is 1 in bitmap, return true, otherwise bitmap is empty and return false.
+	// either case loop over words not bits
+	nwords := (itr.bm.len-1)/64 + 1
+	current_word := i >> 6
+	mask := (^(bitmask)(0)) << (i & 0x3F) // ignore bits check before
+	var result uint64
+
+	for ; current_word < uint64(nwords); current_word++ {
+		word := itr.bm.data[current_word]
+		word &= mask
+
+		if word != 0 {
+			result = rightmost_one_pos_64(word) + current_word*64
+			return result, true
+		}
+		mask = (^(bitmask)(0)) // in subsequent words, consider all bits
+	}
+	return result, false
 }
 
 func (itr *BitmapIterator) HasNext() bool {
-	for ; itr.i < uint64(itr.bm.len); itr.i++ {
-		if itr.bm.Contains(itr.i) {
-			return true
-		}
-	}
-	return false
+	// maintain a bool var to avoid unnecessary calculations.
+	return itr.has_next
 }
 
 func (itr *BitmapIterator) PeekNext() uint64 {
-	for i := itr.i; i < uint64(itr.bm.len); i++ {
-		if itr.bm.Contains(i) {
-			return i
-		}
+	if itr.has_next {
+		return itr.i
 	}
 	return 0
 }
 
 func (itr *BitmapIterator) Next() uint64 {
-	return itr.i
+	// When a iterator is initialized, the itr.i is set to the first rightmost_one pos.
+	// so current itr.i is a rightmost_one pos, cal the next one pos and return current pos.
+	pos := itr.i
+	if next, has_next := itr.hasNext(itr.i + 1); has_next { // itr.i + 1 to ignore bits check before
+		itr.i = next
+		itr.has_next = true
+		return pos
+	}
+	itr.has_next = false
+	return pos
 }
 
 func (n *Bitmap) Clear() {
@@ -79,6 +158,13 @@ func (n *Bitmap) Len() int {
 
 func (n *Bitmap) Size() int {
 	return len(n.data) * 8
+}
+
+func (n *Bitmap) Ptr() *uint64 {
+	if n == nil {
+		return nil
+	}
+	return &n.data[0]
 }
 
 // IsEmpty returns true if no bit in the Bitmap is set, otherwise it will return false.
@@ -208,11 +294,10 @@ func (n *Bitmap) Count() int {
 
 func (n *Bitmap) ToArray() []uint64 {
 	var rows []uint64
-
-	for i := uint64(0); i < uint64(n.len); i++ {
-		if (n.data[i>>6] & (1 << (i & 0x3F))) != 0 {
-			rows = append(rows, i)
-		}
+	itr := n.Iterator()
+	for itr.HasNext() {
+		r := itr.Next()
+		rows = append(rows, r)
 	}
 	return rows
 }

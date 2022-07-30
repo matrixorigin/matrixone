@@ -173,8 +173,8 @@ fmt:
 install-static-check-tools:
 	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.47.1
 	@go install github.com/matrixorigin/linter/cmd/molint@latest
-	@go install github.com/apache/skywalking-eyes/cmd/license-eye@latest
-	@go install honnef.co/go/tools/cmd/staticcheck@latest
+	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
+	@go install honnef.co/go/tools/cmd/staticcheck@v0.3.2
 
 EXTRA_LINTERS=-E exportloopref -E rowserrcheck -E depguard -D unconvert \
 	-E prealloc -E gofmt

@@ -442,9 +442,11 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			return err
 		}
 		var rowIndex = int64(j)
-		if len(bat.Sels) != 0 {
-			rowIndex = bat.Sels[j]
-		}
+		/*
+			if len(bat.Sels) != 0 {
+				rowIndex = bat.Sels[j]
+			}
+		*/
 
 		//begin1 := time.Now()
 		for i, vec := range bat.Vecs { //col index
@@ -700,6 +702,18 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 						row[i] = vs[rowIndex].ToStringWithScale(scale)
 					}
 				}
+			case types.T_blob:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.(*types.Bytes)
+					row[i] = vs.Get(rowIndex)
+				} else {
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.(*types.Bytes)
+						row[i] = vs.Get(rowIndex)
+					}
+				}
 			default:
 				logutil.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 				return fmt.Errorf("getDataFromPipeline : unsupported type %d", vec.Typ.Oid)
@@ -924,12 +938,11 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 /*
 handle cmd CMD_FIELD_LIST
 */
-func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
+func (mce *MysqlCmdExecutor) handleCmdFieldList(icfl *InternalCmdFieldList) error {
 	var err error
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
-
-	//TODO:fix it on tae
+	tableName := icfl.tableName
 
 	ctx := context.TODO()
 
@@ -1558,9 +1571,20 @@ GetComputationWrapper gets the execs from the computation engine
 */
 var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	var cw []ComputationWrapper = nil
-	stmts, err := parsers.Parse(dialect.MYSQL, sql)
-	if err != nil {
-		return nil, err
+	var stmts []tree.Statement = nil
+	var cmdFieldStmt *InternalCmdFieldList
+	var err error
+	if isCmdFieldListSql(sql) {
+		cmdFieldStmt, err = parseCmdFieldList(sql)
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdFieldStmt)
+	} else {
+		stmts, err = parsers.Parse(dialect.MYSQL, sql)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	for _, stmt := range stmts {
@@ -1803,7 +1827,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			if err = mce.handleExplainStmt(st); err != nil {
 				goto handleFailed
 			}
-			//goto handleFailed
 		case *tree.ExplainAnalyze:
 			err = errors.New(errno.FeatureNotSupported, "not support explain analyze statement now")
 			goto handleFailed
@@ -1820,6 +1843,11 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 		case *tree.Update:
 			ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+		case *InternalCmdFieldList:
+			selfHandle = true
+			if err = mce.handleCmdFieldList(st); err != nil {
+				goto handleFailed
+			}
 		}
 
 		if selfHandle {
@@ -2070,20 +2098,11 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 		return resp, nil
 	case COM_FIELD_LIST:
 		var payload = string(req.GetData().([]byte))
-		//find null
-		nullIdx := strings.IndexRune(payload, rune(0))
-		var tableName string
-		if nullIdx < len(payload) {
-
-			tableName = payload[:nullIdx]
-			//wildcard := payload[nullIdx+1:]
-			//logutil.Infof("table name %s wildcard [%s] ",tableName,wildcard)
-			err := mce.handleCmdFieldList(tableName)
-			if err != nil {
-				resp = NewGeneralErrorResponse(COM_FIELD_LIST, err)
-			}
-		} else {
-			resp = NewGeneralErrorResponse(COM_FIELD_LIST, fmt.Errorf("wrong format for COM_FIELD_LIST"))
+		mce.addSqlCount(1)
+		query := makeCmdFieldListSql(payload)
+		err := mce.doComQuery(query)
+		if err != nil {
+			resp = NewGeneralErrorResponse(COM_FIELD_LIST, err)
 		}
 
 		return resp, nil
@@ -2136,7 +2155,7 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 		return true
 		//others
 	case *tree.Use, *tree.PrepareStmt, *tree.Execute, *tree.Deallocate,
-		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor:
+		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
 		return true
 	}
 
@@ -2250,6 +2269,8 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	case types.T_decimal128:
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+	case types.T_blob:
+		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
 	default:
 		return fmt.Errorf("RunWhileSend : unsupported type %d", engineType)
 	}

@@ -87,6 +87,9 @@ message Type {
 		// MO Special, not sure if we really need these.
 		SEL         = 200;
 		TUPLE       = 201;
+
+		// BLOB family
+		BLOB        = 202;
 	}
 
 	TypeId id           = 1;

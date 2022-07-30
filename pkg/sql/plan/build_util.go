@@ -101,6 +101,8 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			return &plan.Type{Id: plan.Type_DECIMAL64, Size: 8, Width: n.InternalType.DisplayWith, Scale: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_BOOL:
 			return &plan.Type{Id: plan.Type_BOOL, Size: 1}, nil
+		case defines.MYSQL_TYPE_BLOB:
+			return &plan.Type{Id: plan.Type_BLOB, Size: 24}, nil
 		case defines.MYSQL_TYPE_JSON:
 			return &plan.Type{Id: plan.Type_JSON}, nil
 		default:
@@ -129,6 +131,9 @@ func getDefaultExprFromColumn(column *tree.ColumnTableDef, typ *plan.Type) (*pla
 
 	for _, attr := range column.Attributes {
 		if d, ok := attr.(*tree.AttributeDefault); ok {
+			if typ.GetId() == plan.Type_BLOB {
+				return nil, errors.New(errno.InvalidColumnDefinition, "Type text don't support default value")
+			}
 			defaultExpr := d.Expr
 			// check allowNull
 			if isNullExpr(defaultExpr) {
@@ -294,8 +299,8 @@ func rangeCheck(value interface{}, typ *plan.Type, columnName string, rowNumber 
 	case string:
 		switch typ.GetId() {
 		case plan.Type_CHAR, plan.Type_VARCHAR: // string family should compare the length but not value
-			if len(v) > math.MaxUint16 {
-				return nil, errors.New(errno.DataException, "length out of uint16 is unexpected for char / varchar value")
+			if len(v) > types.MaxStringSize {
+				return nil, errors.New(errno.DataException, "length out of 1GB is unexpected for char/varchar value")
 			}
 			if len(v) <= int(typ.Width) {
 				return v, nil

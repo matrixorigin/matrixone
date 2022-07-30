@@ -557,3 +557,17 @@ func TestHandleInitialClusterRequestCmd(t *testing.T) {
 	assert.Equal(t, pb.HAKeeperBootstrapping, rsm.state.State)
 	assert.Equal(t, K8SIDRangeEnd, rsm.state.NextID)
 }
+
+func TestGetCommandBatch(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	cb := pb.CommandBatch{
+		Term: 12345,
+	}
+	rsm.state.ScheduleCommands["uuid1"] = cb
+	result := rsm.getCommandBatch("uuid1")
+	var ncb pb.CommandBatch
+	require.NoError(t, ncb.Unmarshal(result.Data))
+	assert.Equal(t, cb, ncb)
+	_, ok := rsm.state.ScheduleCommands["uuid1"]
+	assert.False(t, ok)
+}

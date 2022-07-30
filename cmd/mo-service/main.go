@@ -16,7 +16,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -31,7 +30,6 @@ import (
 )
 
 var (
-	uuid       = flag.String("uuid", "", "UUID of the service node")
 	configFile = flag.String("cfg", "./mo.toml", "toml configuration used to start mo-service")
 	version    = flag.Bool("version", false, "print version information")
 )
@@ -82,11 +80,9 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 }
 
 func startDNService(cfg *Config, stopper *stopper.Stopper) error {
-	if *uuid == "" {
-		return errors.New("UUID not set")
-	}
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
 		s, err := dnservice.NewService(&cfg.DN,
+			cfg.createFileService,
 			dnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service")))
 		if err != nil {
 			panic(err)
@@ -103,13 +99,19 @@ func startDNService(cfg *Config, stopper *stopper.Stopper) error {
 }
 
 func startLogService(cfg *Config, stopper *stopper.Stopper) error {
+	s, err := logservice.NewService(cfg.LogService)
+	if err != nil {
+		panic(err)
+	}
+	if err := s.Start(); err != nil {
+		panic(err)
+	}
 	return stopper.RunNamedTask("log-service", func(ctx context.Context) {
-		s, err := logservice.NewService(cfg.LogService)
-		if err != nil {
-			panic(err)
-		}
-		if err := s.Start(); err != nil {
-			panic(err)
+		if cfg.LogService.BootstrapConfig.BootstrapCluster {
+			fmt.Printf("bootstrapping hakeeper...\n")
+			if err := s.BootstrapHAKeeper(ctx, cfg.LogService); err != nil {
+				panic(err)
+			}
 		}
 
 		<-ctx.Done()
