@@ -85,7 +85,7 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 		Gossip: config.GossipConfig{
 			BindAddress:      cfg.GossipListenAddress,
 			AdvertiseAddress: cfg.GossipAddress,
-			Seed:             cfg.GetGossipSeedAddresses(),
+			Seed:             cfg.GossipSeedAddresses,
 			Meta:             meta.marshal(),
 		},
 	}
