@@ -202,6 +202,9 @@ func testDatabase(
 	}()
 
 	//TODO AddTableDef
+	//TODO DelTableDef
+	//TODO GetPrimaryKeys
+	//TODO GetTableDefs
 
 }
 
