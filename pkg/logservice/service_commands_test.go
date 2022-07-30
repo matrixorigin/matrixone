@@ -39,11 +39,11 @@ func TestBackgroundTickAndHeartbeat(t *testing.T) {
 		ServiceAddress:      "127.0.0.1:9002",
 		RaftAddress:         "127.0.0.1:9000",
 		GossipAddress:       "127.0.0.1:9001",
-		GossipSeedAddresses: "127.0.0.1:9010",
+		GossipSeedAddresses: []string{"127.0.0.1:9010"},
 	}
 	cfg.HeartbeatInterval.Duration = 5 * time.Millisecond
 	cfg.HAKeeperTickInterval.Duration = 5 * time.Millisecond
-	cfg.HAKeeperClientConfig.ServiceAddresses = "127.0.0.1:9002"
+	cfg.HAKeeperClientConfig.ServiceAddresses = []string{"127.0.0.1:9002"}
 	cfg.Fill()
 	service, err := NewService(cfg)
 	require.NoError(t, err)
