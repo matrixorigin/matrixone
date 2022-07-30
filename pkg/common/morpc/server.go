@@ -126,12 +126,13 @@ func (s *server) Start() error {
 }
 
 func (s *server) Close() error {
+	s.stopper.Stop()
 	err := s.application.Stop()
 	if err != nil {
 		s.logger.Error("stop rpcserver failed",
 			zap.Error(err))
 	}
-	s.stopper.Stop()
+
 	return err
 }
 
@@ -155,7 +156,10 @@ func (s *server) adjust() {
 }
 
 func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) error {
-	cs := s.getSession(rs)
+	cs, err := s.getSession(rs)
+	if err != nil {
+		return err
+	}
 	request := value.(Message)
 	if ce := s.logger.Check(zap.DebugLevel, "received request"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
@@ -164,8 +168,7 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 			zap.String("request", request.DebugString()))
 	}
 
-	err := s.handler(request, sequence, cs)
-	if err != nil {
+	if err := s.handler(request, sequence, cs); err != nil {
 		s.logger.Error("handle request failed",
 			zap.Uint64("sequence", sequence),
 			zap.String("client", rs.RemoteAddress()),
@@ -279,23 +282,24 @@ func (s *server) closeClientSession(cs *clientSession) {
 	}
 }
 
-func (s *server) getSession(rs goetty.IOSession) *clientSession {
+func (s *server) getSession(rs goetty.IOSession) (*clientSession, error) {
 	if v, ok := s.sessions.Load(rs.ID()); ok {
-		return v.(*clientSession)
+		return v.(*clientSession), nil
 	}
 
 	cs := newClientSession(rs)
 	v, loaded := s.sessions.LoadOrStore(rs.ID(), cs)
 	if loaded {
 		close(cs.c)
-		return v.(*clientSession)
+		return v.(*clientSession), nil
 	}
 
 	rs.Ref()
 	if err := s.startWriteLoop(cs); err != nil {
 		s.closeClientSession(cs)
+		return nil, err
 	}
-	return cs
+	return cs, nil
 }
 
 type clientSession struct {

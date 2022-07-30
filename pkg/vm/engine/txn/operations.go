@@ -89,6 +89,7 @@ type DeleteDatabaseResp struct {
 type CreateRelationReq struct {
 	DatabaseID string
 	Name       string
+	Type       RelationType
 	Defs       []engine.TableDef
 }
 
@@ -139,8 +140,9 @@ type AddTableDefReq struct {
 }
 
 type AddTableDefResp struct {
-	ErrTableNotFound bool
-	ErrExisted       bool
+	ErrTableNotFound  bool
+	ErrExisted        bool
+	ErrColumnNotFound string
 }
 
 type DelTableDefReq struct {
