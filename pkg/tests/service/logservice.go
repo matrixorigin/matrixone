@@ -17,7 +17,6 @@ package service
 import (
 	"path"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -81,11 +80,11 @@ func buildLogConfig(index int, opt Options, address serviceAddress) logservice.C
 		ServiceAddress:      address.getLogListenAddress(index), // hakeeper client use this address
 		RaftAddress:         address.getLogRaftAddress(index),
 		GossipAddress:       address.getLogGossipAddress(index),
-		GossipSeedAddresses: strings.Join(address.getLogGossipSeedAddresses(), tomlSeparator),
+		GossipSeedAddresses: address.getLogGossipSeedAddresses(),
 	}
 	cfg.HeartbeatInterval.Duration = defaultHeartbeatInterval
 	cfg.HAKeeperTickInterval.Duration = defaultHAKeeperTickInterval
-	cfg.HAKeeperClientConfig.ServiceAddresses = strings.Join(address.listHAKeeperListenAddresses(), tomlSeparator)
+	cfg.HAKeeperClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
 	return cfg
 }
 
