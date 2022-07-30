@@ -29,10 +29,6 @@ import (
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-const (
-	tomlSeparator = ";"
-)
-
 var (
 	defaultDeploymentID         uint64 = 1
 	defaultRTTMillisecond       uint64 = 5

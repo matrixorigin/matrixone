@@ -86,12 +86,12 @@ func TestGetInitHAKeeperMembers(t *testing.T) {
 	assert.Equal(t, "9c4dccb4-4d3c-41f8-b482-5251dc7a41be", v2)
 
 	tests := [][]string{
-		[]string{"131071:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"},
-		[]string{"262144:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"},
-		[]string{"262145:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"},
-		[]string{"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41b"},
-		[]string{"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf", ""},
-		[]string{"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf", "1:1"},
+		{"131071:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"},
+		{"262144:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"},
+		{"262145:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"},
+		{"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41b"},
+		{"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf", ""},
+		{"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf", "1:1"},
 	}
 
 	for _, v := range tests {
