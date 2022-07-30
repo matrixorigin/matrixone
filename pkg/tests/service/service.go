@@ -351,9 +351,10 @@ func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
 		cfg := c.dn.cfgs[i]
 		opt := c.dn.opts[i]
 		fsFactory := func(name string) (fileservice.FileService, error) {
+			index := i
 			switch strings.ToUpper(name) {
 			case "LOCAL":
-				return fileservices.getLocalFileService(i), nil
+				return fileservices.getLocalFileService(index), nil
 			case "S3":
 				return fileservices.getS3FileService(), nil
 			default:
