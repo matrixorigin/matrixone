@@ -99,7 +99,8 @@ func startDNService(cfg *Config, stopper *stopper.Stopper) error {
 }
 
 func startLogService(cfg *Config, stopper *stopper.Stopper) error {
-	s, err := logservice.NewService(cfg.LogService)
+	lscfg := cfg.getLogServiceConfig()
+	s, err := logservice.NewService(lscfg)
 	if err != nil {
 		panic(err)
 	}

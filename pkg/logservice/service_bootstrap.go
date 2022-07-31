@@ -22,11 +22,14 @@ import (
 )
 
 func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
+	replicaID, bootstrapping := cfg.Bootstrapping()
+	if !bootstrapping {
+		return nil
+	}
 	members, err := cfg.GetInitHAKeeperMembers()
 	if err != nil {
 		return err
 	}
-	replicaID := cfg.BootstrapConfig.HAKeeperReplicaID
 	if err := s.store.startHAKeeperReplica(replicaID, members, false); err != nil {
 		// let's be a little bit less strict, when HAKeeper replica is already
 		// running as a result of store.startReplicas(), we just ignore the

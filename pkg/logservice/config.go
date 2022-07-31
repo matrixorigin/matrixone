@@ -83,9 +83,9 @@ type Config struct {
 	GossipAddress string `toml:"gossip-address"`
 	// GossipListenAddress is the local listen address of the GossipAddress
 	GossipListenAddress string `toml:"gossip-listen-address"`
-	// GossipSeedAddresses is list of semicolon separated seed addresses that
-	// are used for introducing the local node into the gossip network.
-	GossipSeedAddresses string `toml:"gossip-seed-addresses"`
+	// GossipSeedAddresses is list of seed addresses that are used for
+	// introducing the local node into the gossip network.
+	GossipSeedAddresses []string `toml:"gossip-seed-addresses"`
 	// HeartbeatInterval is the interval of how often log service node should be
 	// sending heartbeat message to the HAKeeper.
 	HeartbeatInterval toml.Duration `toml:"logservice-heartbeat-interval"`
@@ -101,6 +101,8 @@ type Config struct {
 	// initial HAKeeper replicas during bootstrapping.
 	BootstrapConfig struct {
 		// BootstrapCluster indicates whether the cluster should be bootstrapped.
+		// Note the bootstrapping procedure will only be executed if BootstrapCluster
+		// is true and Config.UUID is found in Config.BootstrapConfig.InitHAKeeperMembers.
 		BootstrapCluster bool `toml:"bootstrap-cluster"`
 		// NumOfLogShards defines the number of Log shards in the initial deployment.
 		NumOfLogShards uint64 `toml:"num-of-log-shards"`
@@ -111,23 +113,23 @@ type Config struct {
 		// Log Stores, including Log Service shards and the HAKeeper.
 		NumOfLogShardReplicas uint64 `toml:"num-of-log-shard-replicas"`
 		// InitHAKeeperMembers defines the initial members of the HAKeeper as a list
-		// of semicolon separated HAKeeper replicaID and UUID pairs. For example,
+		// of HAKeeper replicaID and UUID pairs. For example,
 		// when the initial HAKeeper members are
 		// replica with replica ID 101 running on Log Store uuid1
 		// replica with replica ID 102 running on Log Store uuid2
 		// replica with replica ID 103 running on Log Store uuid3
 		// the InitHAKeeperMembers string value should be
-		// "101:uuid1;102:uuid2;103:uuid3"
+		// []string{"101:uuid1", "102:uuid2", "103:uuid3"}
 		// Note that these initial HAKeeper replica IDs must be assigned by k8s
 		// from the range [K8SIDRangeStart, K8SIDRangeEnd) as defined in pkg/hakeeper.
 		// All uuid values are assigned by k8s, they are used to uniquely identify
 		// CN/DN/Log stores.
-		InitHAKeeperMembers string `toml:"init-hakeeper-members"`
-		// HAKeeperReplicaID is the replica ID of the HAKeeper replica to be started
-		// on the local Log Store during bootstrapping. Note that this replica is an
-		// initial member of the HAKeeper so the replicaID should exist in
-		// InitHAKeeperMembers.
-		HAKeeperReplicaID uint64 `toml:"hakeeper-replica-id"`
+		// Config.UUID and Config.BootstrapConfig values are considered together to
+		// figure out what is the replica ID of the initial HAKeeper replica. That
+		// is when Config.UUID is found in InitHAKeeperMembers, then the corresponding
+		// replica ID value will be used to launch a HAKeeper replica on the Log
+		// Service instance.
+		InitHAKeeperMembers []string `toml:"init-hakeeper-members"`
 	}
 
 	HAKeeperConfig struct {
@@ -145,27 +147,11 @@ type Config struct {
 		DnStoreTimeout toml.Duration `toml:"dn-store-timeout"`
 	}
 
-	HAKeeperClientConfig struct {
-		// DiscoveryAddress is the Log Service discovery address provided by k8s.
-		DiscoveryAddress string `toml:"hakeeper-discovery-address"`
-		// ServiceAddresses is a list of semicolon separated well known Log Services'
-		// service addresses.
-		ServiceAddresses string `toml:"hakeeper-service-addresses"`
-	}
-
+	// HAKeeperClientConfig is the config for HAKeeperClient
+	HAKeeperClientConfig HAKeeperClientConfig
 	// DisableWorkers disables the HAKeeper ticker and HAKeeper client in tests.
 	// Never set this field to true in production
 	DisableWorkers bool
-}
-
-// GetGossipSeedAddresses returns a slice of gossip seed addresses split from
-// the GossipSeedAddresses field.
-func (c *Config) GetGossipSeedAddresses() []string {
-	return splitAddresses(c.GossipSeedAddresses)
-}
-
-func (c *Config) GetHAKeeperServiceAddresses() []string {
-	return splitAddresses(c.HAKeeperClientConfig.ServiceAddresses)
 }
 
 func (c *Config) GetHAKeeperConfig() hakeeper.Config {
@@ -177,17 +163,35 @@ func (c *Config) GetHAKeeperConfig() hakeeper.Config {
 }
 
 func (c *Config) GetHAKeeperClientConfig() HAKeeperClientConfig {
+	saddr := make([]string, 0)
+	saddr = append(saddr, c.HAKeeperClientConfig.ServiceAddresses...)
 	return HAKeeperClientConfig{
 		DiscoveryAddress: c.HAKeeperClientConfig.DiscoveryAddress,
-		ServiceAddresses: c.GetHAKeeperServiceAddresses(),
+		ServiceAddresses: saddr,
 	}
 }
 
+// returns replica ID of the HAKeeper replica and a boolean indicating whether
+// we should run the bootstrap procedure.
+func (c *Config) Bootstrapping() (uint64, bool) {
+	if !c.BootstrapConfig.BootstrapCluster {
+		return 0, false
+	}
+	members, err := c.GetInitHAKeeperMembers()
+	if err != nil {
+		return 0, false
+	}
+	for replicaID, uuid := range members {
+		if uuid == c.UUID {
+			return replicaID, true
+		}
+	}
+	return 0, false
+}
+
 func (c *Config) GetInitHAKeeperMembers() (map[uint64]dragonboat.Target, error) {
-	v := strings.TrimSpace(c.BootstrapConfig.InitHAKeeperMembers)
-	replicas := strings.Split(v, ";")
 	result := make(map[uint64]dragonboat.Target)
-	for _, pair := range replicas {
+	for _, pair := range c.BootstrapConfig.InitHAKeeperMembers {
 		pair = strings.TrimSpace(pair)
 		parts := strings.Split(pair, ":")
 		if len(parts) == 2 {
@@ -269,9 +273,6 @@ func (c *Config) Validate() error {
 		}
 		if uint64(len(members)) != c.BootstrapConfig.NumOfLogShardReplicas {
 			return errors.Wrapf(ErrInvalidConfig, "InitHAKeeperMembers and NumOfLogShardReplicas not match")
-		}
-		if _, ok := members[c.BootstrapConfig.HAKeeperReplicaID]; !ok {
-			return errors.Wrapf(ErrInvalidConfig, "HAKeeperReplicaID not a part of InitHAKeeperMembers")
 		}
 	}
 
