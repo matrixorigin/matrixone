@@ -314,11 +314,7 @@ func (s *Service) handleLogHeartbeat(req pb.Request) pb.Response {
 	defer cancel()
 	hb := req.LogHeartbeat
 	resp := getResponse(req)
-	if err := s.store.addLogStoreHeartbeat(ctx, hb); err != nil {
-		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
-		return resp
-	}
-	if cb, err := s.store.getCommandBatch(ctx, hb.UUID); err != nil {
+	if cb, err := s.store.addLogStoreHeartbeat(ctx, hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
@@ -346,11 +342,7 @@ func (s *Service) handleDNHeartbeat(req pb.Request) pb.Response {
 	defer cancel()
 	hb := req.DNHeartbeat
 	resp := getResponse(req)
-	if err := s.store.addDNStoreHeartbeat(ctx, hb); err != nil {
-		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
-		return resp
-	}
-	if cb, err := s.store.getCommandBatch(ctx, hb.UUID); err != nil {
+	if cb, err := s.store.addDNStoreHeartbeat(ctx, hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {

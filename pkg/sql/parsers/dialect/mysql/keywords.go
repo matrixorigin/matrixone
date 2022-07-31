@@ -476,5 +476,7 @@ func init() {
 		"second_microsecond":       SECOND_MICROSECOND,
 		"prepare":                  PREPARE,
 		"deallocate":               DEALLOCATE,
+		"intersect":                INTERSECT,
+		"minus":                    MINUS,
 	}
 }

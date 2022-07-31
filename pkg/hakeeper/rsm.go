@@ -59,8 +59,6 @@ const (
 )
 
 type StateQuery struct{}
-type logShardIDQuery struct{ name string }
-type logShardIDQueryResult struct{ id uint64 }
 type ScheduleCommandQuery struct{ UUID string }
 type ClusterDetailsQuery struct{ Cfg Config }
 
@@ -191,7 +189,6 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	if err := b.Unmarshal(data); err != nil {
 		panic(err)
 	}
-	plog.Infof("incoming term: %d, rsm term: %d", b.Term, s.state.Term)
 	if s.state.Term > b.Term {
 		return sm.Result{}
 	}
@@ -225,6 +222,18 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	return sm.Result{}
 }
 
+func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
+	if batch, ok := s.state.ScheduleCommands[uuid]; ok {
+		delete(s.state.ScheduleCommands, uuid)
+		data, err := batch.Marshal()
+		if err != nil {
+			panic(err)
+		}
+		return sm.Result{Data: data}
+	}
+	return sm.Result{}
+}
+
 func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 	data := parseHeartbeatCmd(cmd)
 	var hb pb.CNStoreHeartbeat
@@ -232,7 +241,7 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.CNState.Update(hb, s.state.Tick)
-	return sm.Result{}
+	return s.getCommandBatch(hb.UUID)
 }
 
 func (s *stateMachine) handleDNHeartbeat(cmd []byte) sm.Result {
@@ -242,7 +251,7 @@ func (s *stateMachine) handleDNHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.DNState.Update(hb, s.state.Tick)
-	return sm.Result{}
+	return s.getCommandBatch(hb.UUID)
 }
 
 func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
@@ -252,7 +261,7 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.LogState.Update(hb, s.state.Tick)
-	return sm.Result{}
+	return s.getCommandBatch(hb.UUID)
 }
 
 func (s *stateMachine) handleTick(cmd []byte) sm.Result {
@@ -404,14 +413,6 @@ func (s *stateMachine) handleStateQuery() interface{} {
 	return result
 }
 
-func (s *stateMachine) handleShardIDQuery(name string) *logShardIDQueryResult {
-	id, ok := s.state.LogShards[name]
-	if ok {
-		return &logShardIDQueryResult{id: id}
-	}
-	return &logShardIDQueryResult{}
-}
-
 func (s *stateMachine) handleScheduleCommandQuery(uuid string) *pb.CommandBatch {
 	if batch, ok := s.state.ScheduleCommands[uuid]; ok {
 		return &batch
@@ -465,9 +466,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 }
 
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
-	if q, ok := query.(*logShardIDQuery); ok {
-		return s.handleShardIDQuery(q.name), nil
-	} else if _, ok := query.(*StateQuery); ok {
+	if _, ok := query.(*StateQuery); ok {
 		return s.handleStateQuery(), nil
 	} else if q, ok := query.(*ScheduleCommandQuery); ok {
 		return s.handleScheduleCommandQuery(q.UUID), nil

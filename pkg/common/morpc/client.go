@@ -51,15 +51,6 @@ func WithClientInitBackends(backends []string, counts []int) ClientOption {
 	}
 }
 
-// WithClientDisableCreateTask set disable create backend task. The client has a task to create
-// backends asynchronously, but when the client finds that there are not enough backends and
-// has busy backend, it will automatically create backends until maxBackendsPerHost is reached.
-func WithClientDisableCreateTask() ClientOption {
-	return func(c *client) {
-		c.options.disableCreateTask = true
-	}
-}
-
 // WithClientCreateTaskChanSize set the buffer size of the chan that creates the Backend Task.
 func WithClientCreateTaskChanSize(size int) ClientOption {
 	return func(c *client) {
@@ -77,10 +68,11 @@ func WithClientMaxBackendMaxIdleDuration(value time.Duration) ClientOption {
 }
 
 type client struct {
-	logger  *zap.Logger
-	stopper *stopper.Stopper
-	factory BackendFactory
-	createC chan string
+	logger      *zap.Logger
+	stopper     *stopper.Stopper
+	factory     BackendFactory
+	createC     chan string
+	gcInactiveC chan string
 
 	mu struct {
 		sync.RWMutex
@@ -92,7 +84,6 @@ type client struct {
 	options struct {
 		maxBackendsPerHost int
 		maxIdleDuration    time.Duration
-		disableCreateTask  bool
 		initBackends       []string
 		initBackendCounts  []int
 	}
@@ -101,7 +92,8 @@ type client struct {
 // NewClient create rpc client with options
 func NewClient(factory BackendFactory, options ...ClientOption) (RPCClient, error) {
 	c := &client{
-		factory: factory,
+		factory:     factory,
+		gcInactiveC: make(chan string),
 	}
 	c.mu.backends = make(map[string][]Backend)
 	c.mu.ops = make(map[string]*op)
@@ -117,15 +109,16 @@ func NewClient(factory BackendFactory, options ...ClientOption) (RPCClient, erro
 		return nil, err
 	}
 
-	if !c.options.disableCreateTask {
-		if err := c.stopper.RunTask(c.createTask); err != nil {
-			return nil, err
-		}
+	if err := c.stopper.RunTask(c.createTask); err != nil {
+		return nil, err
 	}
 	if c.options.maxIdleDuration > 0 {
 		if err := c.stopper.RunTask(c.gcIdleTask); err != nil {
 			return nil, err
 		}
+	}
+	if err := c.stopper.RunTask(c.gcInactiveTask); err != nil {
+		return nil, err
 	}
 	return c, nil
 }
@@ -228,8 +221,22 @@ func (c *client) getBackendLocked(backend string) (Backend, error) {
 
 	if backends, ok := c.mu.backends[backend]; ok {
 		n := uint64(len(backends))
-		seq := c.mu.ops[backend].next()
-		b := backends[seq%n]
+		var b Backend
+		for i := uint64(0); i < n; i++ {
+			seq := c.mu.ops[backend].next()
+			b = backends[seq%n]
+			if b.LastActiveTime() != (time.Time{}) {
+				break
+			}
+			b = nil
+		}
+
+		// all backend inactived, trigger gc inactive.
+		if b == nil && n > 0 {
+			c.triggerGCInactive(backend)
+			return nil, errNoAvailableBackend
+		}
+
 		c.maybeCreateLocked(backend)
 		return b, nil
 	}
@@ -237,10 +244,6 @@ func (c *client) getBackendLocked(backend string) (Backend, error) {
 }
 
 func (c *client) maybeCreateLocked(backend string) bool {
-	if c.options.disableCreateTask {
-		return false
-	}
-
 	if len(c.mu.backends[backend]) == 0 {
 		return c.tryCreate(backend)
 	}
@@ -281,6 +284,48 @@ func (c *client) gcIdleTask(ctx context.Context) {
 			c.closeIdleBackends()
 		}
 	}
+}
+
+func (c *client) triggerGCInactive(remote string) {
+	select {
+	case c.gcInactiveC <- remote:
+		c.logger.Debug("try to remove all inactived backends",
+			zap.String("remote", remote))
+	default:
+	}
+}
+
+func (c *client) gcInactiveTask(ctx context.Context) {
+	c.logger.Info("gc inactive backends task started")
+	defer c.logger.Error("gc inactive backends task stopped")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case remote := <-c.gcInactiveC:
+			c.doRemoveInactive(remote)
+		}
+	}
+}
+
+func (c *client) doRemoveInactive(remote string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	backends, ok := c.mu.backends[remote]
+	if !ok {
+		return
+	}
+
+	newBackends := backends[:0]
+	for _, backend := range backends {
+		if backend.LastActiveTime() == (time.Time{}) {
+			backend.Close()
+			continue
+		}
+		newBackends = append(newBackends, backend)
+	}
+	c.mu.backends[remote] = newBackends
 }
 
 func (c *client) closeIdleBackends() {
@@ -343,16 +388,24 @@ func (c *client) createBackendLocked(backend string) (Backend, error) {
 		return nil, errNoAvailableBackend
 	}
 
+	b, err := c.doCreate(backend)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.backends[backend] = append(c.mu.backends[backend], b)
+	if _, ok := c.mu.ops[backend]; !ok {
+		c.mu.ops[backend] = &op{}
+	}
+	return b, nil
+}
+
+func (c *client) doCreate(backend string) (Backend, error) {
 	b, err := c.factory.Create(backend)
 	if err != nil {
 		c.logger.Error("create backend failed",
 			zap.String("backend", backend),
 			zap.Error(err))
 		return nil, err
-	}
-	c.mu.backends[backend] = append(c.mu.backends[backend], b)
-	if _, ok := c.mu.ops[backend]; !ok {
-		c.mu.ops[backend] = &op{}
 	}
 	return b, nil
 }

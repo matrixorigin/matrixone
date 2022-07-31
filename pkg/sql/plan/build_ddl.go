@@ -16,7 +16,7 @@ package plan
 
 import (
 	"fmt"
-
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -119,12 +119,19 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef) error {
 	var primaryKeys []string
+	var indexs []string
+	colNameMap := make(map[string]plan.Type_TypeId)
 	for _, item := range defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
 			colType, err := getTypeFromAst(def.Type)
 			if err != nil {
 				return err
+			}
+			if colType.Id == plan.Type_CHAR || colType.Id == plan.Type_VARCHAR {
+				if colType.GetWidth() > types.MaxStringSize {
+					return errors.New(errno.DataException, "width out of 1GB is unexpected for char/varchar type")
+				}
 			}
 			defultValue, err := getDefaultExprFromColumn(def, colType)
 			if err != nil {
@@ -135,6 +142,9 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			var comment string
 			for _, attr := range def.Attributes {
 				if _, ok := attr.(*tree.AttributePrimaryKey); ok {
+					if colType.GetId() == plan.Type_BLOB {
+						return errors.New(errno.InvalidColumnDefinition, "Type text don't support primary key")
+					}
 					pks = append(pks, def.Name.Parts[0])
 				}
 
@@ -159,6 +169,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 				Default: defultValue,
 				Comment: comment,
 			}
+			colNameMap[col.Name] = col.Typ.GetId()
 			tableDef.Cols = append(tableDef.Cols, col)
 		case *tree.PrimaryKeyIndex:
 			if len(primaryKeys) > 0 {
@@ -172,6 +183,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 				}
 				primaryKeys = append(primaryKeys, name)
 				pksMap[name] = true
+				indexs = append(indexs, name)
 			}
 		case *tree.Index:
 			var idxType plan.IndexDef_IndexType
@@ -194,12 +206,12 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			nameMap := map[string]bool{}
 			for i, key := range def.KeyParts {
 				name := key.ColName.Parts[0] // name of index column
-
 				if _, ok := nameMap[name]; ok {
 					return errors.New(errno.InvalidTableDefinition, fmt.Sprintf("Duplicate column name '%s'", key.ColName.Parts[0]))
 				}
 				idxDef.ColNames[i] = name
 				nameMap[name] = true
+				indexs = append(indexs, name)
 			}
 
 			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
@@ -225,6 +237,13 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 		})
 	}
 
+	// check index invalid on the type
+	// for example, the text type don't support index
+	for _, str := range indexs {
+		if colNameMap[str] == plan.Type_BLOB {
+			return errors.New(errno.InvalidColumnDefinition, "Type text don't support index")
+		}
+	}
 	return nil
 }
 

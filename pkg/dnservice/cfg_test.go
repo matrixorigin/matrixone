@@ -25,8 +25,6 @@ func TestValidate(t *testing.T) {
 	c := &Config{}
 	assert.Error(t, c.validate())
 	c.UUID = "dn1"
-	assert.Error(t, c.validate())
-	c.DataDir = "/tmp"
 	assert.NoError(t, c.validate())
 
 	assert.Equal(t, defaultListenAddress, c.ListenAddress)

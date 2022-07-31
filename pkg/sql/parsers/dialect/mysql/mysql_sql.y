@@ -167,7 +167,7 @@ import (
 
 %token LEX_ERROR
 %nonassoc EMPTY
-%left <str> UNION
+%left <str> UNION EXCEPT INTERSECT MINUS
 %token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
@@ -272,7 +272,7 @@ import (
 
 // SET tokens
 %token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
-%token <str> LOCAL EXCEPT
+%token <str> LOCAL
 
 // Functions
 %token <str> CURRENT_TIMESTAMP DATABASE
@@ -2708,7 +2708,7 @@ union_op:
         $$ = &tree.UnionTypeRecord{
             Type: tree.UNION,
             All: true,
-            Distinct: false,
+            Distinct: false, 
         }
     }
 |   UNION DISTINCT
@@ -2717,6 +2717,63 @@ union_op:
             Type: tree.UNION,
             All: false,
             Distinct: true,
+        }
+    }
+| 
+    EXCEPT
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.EXCEPT,
+            All: false,
+            Distinct: false,
+        }
+    }
+|   EXCEPT ALL
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.EXCEPT,
+            All: true,
+            Distinct: false, 
+        }
+    }
+|   EXCEPT DISTINCT
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.EXCEPT,
+            All: false,
+            Distinct: true,
+        }
+    }
+|    INTERSECT
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.INTERSECT,
+            All: false,
+            Distinct: false,
+        }
+    }
+|   INTERSECT ALL
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.INTERSECT,
+            All: true,
+            Distinct: false,
+        }
+    }
+|   INTERSECT DISTINCT
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.INTERSECT,
+            All: false,
+            Distinct: true,
+        }
+    }
+|    MINUS
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.UT_MINUS,
+            All: false,
+            Distinct: false,
         }
     }
 
@@ -6527,6 +6584,7 @@ reserved_keyword:
 |	DELAYED
 |   PARTITION
 |	QUICK
+|   EXCEPT
 
 non_reserved_keyword:
     AGAINST
@@ -6568,7 +6626,6 @@ non_reserved_keyword:
 |   EXPANSION
 |   EXTENDED
 |   EXPIRE
-|   EXCEPT
 |   ERRORS
 |   ENFORCED
 |   FORMAT

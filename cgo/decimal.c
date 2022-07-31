@@ -16,8 +16,8 @@
  
 #include "mo_impl.h"
 
-#include "decnumber/decDouble.h"
-#include "decnumber/decQuad.h"
+#include "decDouble.h"
+#include "decQuad.h"
 
 #include <inttypes.h>
 #include <errno.h>

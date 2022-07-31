@@ -15,10 +15,17 @@
 package hashmap
 
 import (
+	"fmt"
+	"math/rand"
+	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,13 +43,17 @@ func TestInsert(t *testing.T) {
 		types.New(types.T_decimal64, 0, 0, 0),
 		types.New(types.T_char, 0, 0, 0),
 	}
-	m := testutil.NewMheap()
-	bat := testutil.NewBatch(ts, false, Rows, m)
+	hm := host.New(1 << 30)
+	gm := guest.New(1<<30, hm)
+	m := mheap.New(gm)
+	vecs := newVectors(ts, false, Rows, m)
 	for i := 0; i < Rows; i++ {
-		ok := mp.Insert(bat.Vecs, i)
+		ok := mp.Insert(vecs, i)
 		require.Equal(t, true, ok)
 	}
-	bat.Clean(m)
+	for _, vec := range vecs {
+		vec.Free(m)
+	}
 	require.Equal(t, int64(0), m.Size())
 }
 
@@ -89,14 +100,18 @@ func TestIterator(t *testing.T) {
 			types.New(types.T_decimal64, 0, 0, 0),
 			types.New(types.T_char, 0, 0, 0),
 		}
-		m := testutil.NewMheap()
-		bat := testutil.NewBatch(ts, false, Rows, m)
+		hm := host.New(1 << 30)
+		gm := guest.New(1<<30, hm)
+		m := mheap.New(gm)
+		vecs := newVectors(ts, false, Rows, m)
 		itr := mp.NewIterator(0, 0)
-		vs, _ := itr.Insert(0, Rows, bat.Vecs, make([]int32, Rows))
+		vs, _ := itr.Insert(0, Rows, vecs)
 		require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, bat.Vecs, nil, make([]int32, Rows))
+		vs, _ = itr.Find(0, Rows, vecs, nil)
 		require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
-		bat.Clean(m)
+		for _, vec := range vecs {
+			vec.Free(m)
+		}
 		require.Equal(t, int64(0), m.Size())
 	}
 	{
@@ -109,14 +124,18 @@ func TestIterator(t *testing.T) {
 			types.New(types.T_decimal64, 0, 0, 0),
 			types.New(types.T_char, 0, 0, 0),
 		}
-		m := testutil.NewMheap()
-		bat := testutil.NewBatch(ts, false, Rows, m)
+		hm := host.New(1 << 30)
+		gm := guest.New(1<<30, hm)
+		m := mheap.New(gm)
+		vecs := newVectors(ts, false, Rows, m)
 		itr := mp.NewIterator(0, 0)
-		vs, _ := itr.Insert(0, Rows, bat.Vecs, make([]int32, Rows))
+		vs, _ := itr.Insert(0, Rows, vecs)
 		require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, bat.Vecs, nil, make([]int32, Rows))
+		vs, _ = itr.Find(0, Rows, vecs, nil)
 		require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
-		bat.Clean(m)
+		for _, vec := range vecs {
+			vec.Free(m)
+		}
 		require.Equal(t, int64(0), m.Size())
 	}
 	{
@@ -129,14 +148,282 @@ func TestIterator(t *testing.T) {
 			types.New(types.T_decimal64, 0, 0, 0),
 			types.New(types.T_char, 0, 0, 0),
 		}
-		m := testutil.NewMheap()
-		bat := testutil.NewBatchWithNulls(ts, false, Rows, m)
+		hm := host.New(1 << 30)
+		gm := guest.New(1<<30, hm)
+		m := mheap.New(gm)
+		vecs := newVectorsWithNull(ts, false, Rows, m)
 		itr := mp.NewIterator(0, 0)
-		vs, _ := itr.Insert(0, Rows, bat.Vecs, make([]int32, Rows))
+		vs, _ := itr.Insert(0, Rows, vecs)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, bat.Vecs, nil, make([]int32, Rows))
+		vs, _ = itr.Find(0, Rows, vecs, nil)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
-		bat.Clean(m)
+		for _, vec := range vecs {
+			vec.Free(m)
+		}
 		require.Equal(t, int64(0), m.Size())
 	}
+}
+
+func newVectors(ts []types.Type, random bool, n int, m *mheap.Mheap) []*vector.Vector {
+	vecs := make([]*vector.Vector, len(ts))
+	for i := range vecs {
+		vecs[i] = newVector(n, ts[i], m, random, nil)
+		nulls.New(vecs[i].Nsp, n)
+	}
+	return vecs
+}
+
+func newVectorsWithNull(ts []types.Type, random bool, n int, m *mheap.Mheap) []*vector.Vector {
+	vecs := make([]*vector.Vector, len(ts))
+	for i := range vecs {
+		vecs[i] = newVector(n, ts[i], m, random, nil)
+		nulls.New(vecs[i].Nsp, n)
+		nsp := vecs[i].GetNulls()
+		for j := 0; j < n; j++ {
+			if j%2 == 0 {
+				nsp.Set(uint64(j))
+			}
+		}
+	}
+	return vecs
+}
+
+func newVector(n int, typ types.Type, m *mheap.Mheap, random bool, Values interface{}) *vector.Vector {
+	switch typ.Oid {
+	case types.T_int8:
+		if vs, ok := Values.([]int8); ok {
+			return newInt8Vector(n, typ, m, random, vs)
+		}
+		return newInt8Vector(n, typ, m, random, nil)
+	case types.T_int16:
+		if vs, ok := Values.([]int16); ok {
+			return newInt16Vector(n, typ, m, random, vs)
+		}
+		return newInt16Vector(n, typ, m, random, nil)
+	case types.T_int32:
+		if vs, ok := Values.([]int32); ok {
+			return newInt32Vector(n, typ, m, random, vs)
+		}
+		return newInt32Vector(n, typ, m, random, nil)
+	case types.T_int64:
+		if vs, ok := Values.([]int64); ok {
+			return newInt64Vector(n, typ, m, random, vs)
+		}
+		return newInt64Vector(n, typ, m, random, nil)
+	case types.T_uint32:
+		if vs, ok := Values.([]uint32); ok {
+			return newUInt32Vector(n, typ, m, random, vs)
+		}
+		return newUInt32Vector(n, typ, m, random, nil)
+	case types.T_decimal64:
+		if vs, ok := Values.([]types.Decimal64); ok {
+			return newDecimal64Vector(n, typ, m, random, vs)
+		}
+		return newDecimal64Vector(n, typ, m, random, nil)
+	case types.T_decimal128:
+		if vs, ok := Values.([]types.Decimal128); ok {
+			return newDecimal128Vector(n, typ, m, random, vs)
+		}
+		return newDecimal128Vector(n, typ, m, random, nil)
+	case types.T_char, types.T_varchar:
+		if vs, ok := Values.([]string); ok {
+			return newStringVector(n, typ, m, random, vs)
+		}
+		return newStringVector(n, typ, m, random, nil)
+	default:
+		panic(fmt.Errorf("unsupport vector's type '%v", typ))
+	}
+}
+
+func newInt8Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int8) *vector.Vector {
+	vec := vector.New(typ)
+	if vs != nil {
+		for i := range vs {
+			if err := vec.Append(vs[i], m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		v := i
+		if random {
+			v = rand.Int()
+		}
+		if err := vec.Append(int8(v), m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func newInt16Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int16) *vector.Vector {
+	vec := vector.New(typ)
+	if vs != nil {
+		for i := range vs {
+			if err := vec.Append(vs[i], m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		v := i
+		if random {
+			v = rand.Int()
+		}
+		if err := vec.Append(int16(v), m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func newInt32Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int32) *vector.Vector {
+	vec := vector.New(typ)
+	if vs != nil {
+		for i := range vs {
+			if err := vec.Append(vs[i], m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		v := i
+		if random {
+			v = rand.Int()
+		}
+		if err := vec.Append(int32(v), m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func newInt64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int64) *vector.Vector {
+	vec := vector.New(typ)
+	if vs != nil {
+		for i := range vs {
+			if err := vec.Append(vs[i], m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		v := i
+		if random {
+			v = rand.Int()
+		}
+		if err := vec.Append(int64(v), m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func newUInt32Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []uint32) *vector.Vector {
+	vec := vector.New(typ)
+	if vs != nil {
+		for i := range vs {
+			if err := vec.Append(vs[i], m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		v := i
+		if random {
+			v = rand.Int()
+		}
+		if err := vec.Append(uint32(v), m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func newDecimal64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []types.Decimal64) *vector.Vector {
+	vec := vector.New(typ)
+	if vs != nil {
+		for i := range vs {
+			if err := vec.Append(vs[i], m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		v := i
+		if random {
+			v = rand.Int()
+		}
+		if err := vec.Append(types.InitDecimal64(int64(v)), m); err != nil {
+
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func newDecimal128Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []types.Decimal128) *vector.Vector {
+	vec := vector.New(typ)
+	if vs != nil {
+		for i := range vs {
+			if err := vec.Append(vs[i], m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		v := i
+		if random {
+			v = rand.Int()
+		}
+		if err := vec.Append(types.InitDecimal128(int64(v)), m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func newStringVector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []string) *vector.Vector {
+	vec := vector.New(typ)
+	if vs != nil {
+		for i := range vs {
+			if err := vec.Append([]byte(vs[i]), m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		v := i
+		if random {
+			v = rand.Int()
+		}
+		if err := vec.Append([]byte(strconv.Itoa(v)), m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
 }

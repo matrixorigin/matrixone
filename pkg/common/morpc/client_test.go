@@ -67,16 +67,16 @@ func TestGetBackendLockedWithEmptyBackends(t *testing.T) {
 }
 
 func TestGetBackend(t *testing.T) {
-	rc, err := NewClient(newTestBackendFactory(), WithClientMaxBackendPerHost(1 /*disable create*/))
+	rc, err := NewClient(newTestBackendFactory(), WithClientMaxBackendPerHost(1))
 	assert.NoError(t, err)
 	c := rc.(*client)
 	defer func() {
 		assert.NoError(t, c.Close())
 	}()
 
-	n := 100
+	n := 2
 	for i := 0; i < n; i++ {
-		c.mu.backends["b1"] = append(c.mu.backends["b1"], &testBackend{id: i, busy: false})
+		c.mu.backends["b1"] = append(c.mu.backends["b1"], &testBackend{id: i, busy: false, activeTime: time.Now()})
 	}
 	c.mu.ops["b1"] = &op{}
 
@@ -96,17 +96,6 @@ func TestMaybeCreateLockedWithEmptyBackends(t *testing.T) {
 	}()
 
 	assert.True(t, c.maybeCreateLocked("b1"))
-}
-
-func TestMaybeCreateLockedWithDisableCreateTask(t *testing.T) {
-	rc, err := NewClient(newTestBackendFactory(), WithClientMaxBackendPerHost(1), WithClientDisableCreateTask())
-	assert.NoError(t, err)
-	c := rc.(*client)
-	defer func() {
-		assert.NoError(t, c.Close())
-	}()
-
-	assert.False(t, c.maybeCreateLocked("b1"))
 }
 
 func TestMaybeCreateLockedWithNotFullBackendsAndHasAnyBusy(t *testing.T) {
@@ -147,18 +136,6 @@ func TestMaybeCreateLockedWithFullBackends(t *testing.T) {
 		&testBackend{busy: false},
 	}
 	assert.False(t, c.maybeCreateLocked("b1"))
-}
-
-func TestTryCreateWithFullBufferedChan(t *testing.T) {
-	rc, err := NewClient(newTestBackendFactory(), WithClientCreateTaskChanSize(1), WithClientDisableCreateTask())
-	assert.NoError(t, err)
-	c := rc.(*client)
-	defer func() {
-		assert.NoError(t, c.Close())
-	}()
-
-	assert.True(t, c.tryCreate("b1"))
-	assert.False(t, c.tryCreate("b1"))
 }
 
 func TestInitBackendsAndMaxBackendsPerHostNotMatch(t *testing.T) {
@@ -253,6 +230,34 @@ func TestCloseIdleBackends(t *testing.T) {
 				c.mu.RUnlock()
 				return
 			}
+		}
+	}
+}
+
+func TestGetBackendsWithAllInactiveAndWillCreateNew(t *testing.T) {
+	rc, err := NewClient(newTestBackendFactory(),
+		WithClientMaxBackendPerHost(1),
+		WithClientCreateTaskChanSize(1))
+	assert.NoError(t, err)
+	c := rc.(*client)
+	defer func() {
+		assert.NoError(t, c.Close())
+	}()
+
+	b, err := c.getBackend("b1")
+	assert.NoError(t, err)
+	assert.NotNil(t, b)
+
+	b.(*testBackend).activeTime = time.Time{}
+	b, err = c.getBackend("b1")
+	assert.Equal(t, errNoAvailableBackend, err)
+	assert.Nil(t, b)
+
+	for {
+		b, err := c.getBackend("b1")
+		if err == nil {
+			assert.NotNil(t, b)
+			return
 		}
 	}
 }
