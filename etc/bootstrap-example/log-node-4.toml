@@ -8,11 +8,11 @@ max-size = 512
 
 [logservice]
 deployment-id = 1
-uuid = "8c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
-data-dir = "node-2-data"
-raft-address = "127.0.0.1:32010"
-logservice-address = "127.0.0.1:32011"
-gossip-address = "127.0.0.1:32012"
+data-dir = "node-4-data"
+uuid = "4c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
+raft-address = "127.0.0.1:32030"
+logservice-address = "127.0.0.1:32031"
+gossip-address = "127.0.0.1:32032"
 gossip-seed-addresses = [
   "127.0.0.1:32002",
   "127.0.0.1:32012",
@@ -20,7 +20,7 @@ gossip-seed-addresses = [
 ]
 
 [logservice.BootstrapConfig]
-bootstrap-cluster = true
+bootstrap-cluster = false
 num-of-log-shards = 1
 num-of-dn-shards = 1
 num-of-log-shard-replicas = 3
