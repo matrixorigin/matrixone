@@ -150,7 +150,7 @@ func (c *testCluster) setInitialClusterInfo() error {
 	}
 
 	// initialize cluster only once
-	c.once.Do(initialize)
+	c.log.once.Do(initialize)
 	return <-errChan
 }
 
