@@ -30,6 +30,19 @@ int test_addi32() {
     return rc;
 }
 
+int test_subdec64() {
+    int64_t r[8192];
+    int64_t a[8192];
+    int64_t b[8192];
+    for (int i = 0; i < 8192; i++) {
+            a[i] = i;
+            b[i] = i*3;
+    }
+    int32_t rc = Decimal64_VecSub(r, a, b, 8192, NULL, 0);
+    return rc;
+}
+
 int main() {
-    test_addi32();
+//    test_addi32();
+    test_subdec64();
 }

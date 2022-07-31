@@ -15,6 +15,7 @@
 package operator
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vectorize/mult"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/sub"
 	"golang.org/x/exp/constraints"
 
@@ -73,6 +74,7 @@ func Arith[T arithT](vectors []*vector.Vector, proc *process.Process, typ types.
 	return resultVector, nil
 }
 
+// Addition operation
 func PlusUint[T constraints.Unsigned](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return Arith[T](args, proc, args[0].GetType(), add.NumericAddUnsigned[T])
 }
@@ -89,6 +91,7 @@ func PlusDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vecto
 	return Arith[types.Decimal128](args, proc, args[0].GetType(), add.Decimal128VecAdd)
 }
 
+// Subtraction operation
 func MinusUint[T constraints.Unsigned](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return Arith[T](args, proc, args[0].GetType(), sub.NumericSubUnsigned[T])
 }
@@ -98,10 +101,26 @@ func MinusInt[T constraints.Signed](args []*vector.Vector, proc *process.Process
 func MinusFloat[T constraints.Float](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return Arith[T](args, proc, args[0].GetType(), sub.NumericSubFloat[T])
 }
-
 func MinusDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return Arith[types.Decimal64](args, proc, args[0].GetType(), sub.Decimal64VecSub)
 }
 func MinusDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return Arith[types.Decimal128](args, proc, args[0].GetType(), sub.Decimal128VecSub)
+}
+
+// Multiplication operation
+func MultUint[T constraints.Unsigned](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[T](args, proc, args[0].GetType(), mult.NumericMultUnsigned[T])
+}
+func MultInt[T constraints.Signed](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[T](args, proc, args[0].GetType(), mult.NumericMultSigned[T])
+}
+func MultFloat[T constraints.Float](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[T](args, proc, args[0].GetType(), mult.NumericMultFloat[T])
+}
+func MultDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[types.Decimal64](args, proc, args[0].GetType(), mult.Decimal64VecMult)
+}
+func MultDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[types.Decimal128](args, proc, args[0].GetType(), mult.Decimal128VecMult)
 }

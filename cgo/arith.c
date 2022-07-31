@@ -64,6 +64,86 @@
     (void) opflag;                                  \
     return RC_SUCCESS
 
+/*
+ * Signed int sub with overflow check.
+ */
+#define SUB_SIGNED_OVFLAG(TGT, A, B)                 \
+    TGT = (A) - (B);                                 \
+    opflag |= ((A) ^ (B)) & ((TGT) ^ (A))
+
+#define SUB_SIGNED_OVFLAG_CHECK                      \
+    if (opflag < 0)    {                             \
+        return RC_OUT_OF_RANGE;                      \
+    }else return RC_SUCCESS
+
+
+/*
+ * Unsigned int sub with overflow check
+ *
+ * If A is less than B,, we know it wrapped around.
+ */
+#define SUB_UNSIGNED_OVFLAG(TGT, A, B)              \
+    TGT = (A) - (B);                                \
+    if ((A) < (B)) {                                \
+        opflag = 1;                                 \
+    } else (void) 0
+
+#define SUB_UNSIGNED_OVFLAG_CHECK                   \
+    if (opflag != 0) {                              \
+        return RC_OUT_OF_RANGE;                     \
+    } else return RC_SUCCESS
+
+
+/*
+ * Float/Double overflow check.
+ *
+ * At this moment we don't do anything.
+ */
+#define SUB_FLOAT_OVFLAG(TGT, A, B)                 \
+    TGT = (A) - (B)
+
+#define SUB_FLOAT_OVFLAG_CHECK                      \
+    (void) opflag;                                  \
+    return RC_SUCCESS
+
+/*
+ * Signed int mul with overflow check.
+ */
+#define MUL_SIGNED_OVFLAG(TGT, A, B)                 \
+    TGT = (A) * (B);                                 \
+    opflag = ((A) != 0) && (((TGT) / (A)) != B)
+
+#define MUL_SIGNED_OVFLAG_CHECK                      \
+    if (opflag != 0)    {                            \
+        return RC_OUT_OF_RANGE;                      \
+    }else return RC_SUCCESS
+
+
+/*
+ * Unsigned int mul with overflow check
+ */
+#define MUL_UNSIGNED_OVFLAG(TGT, A, B)              \
+    TGT = (A) * (B);                                \
+    opflag = ((A) != 0) && (((TGT) / (A)) != B)
+
+#define MUL_UNSIGNED_OVFLAG_CHECK                   \
+    if (opflag != 0) {                              \
+        return RC_OUT_OF_RANGE;                     \
+    } else return RC_SUCCESS
+
+
+/*
+ * Float/Double overflow check.
+ *
+ * At this moment we don't do anything.
+ */
+#define MUL_FLOAT_OVFLAG(TGT, A, B)                 \
+    TGT = (A) * (B)
+
+#define MUL_FLOAT_OVFLAG_CHECK                      \
+    (void) opflag;                                  \
+    return RC_SUCCESS
+
 
 const int32_t LEFT_IS_SCALAR = 1;
 const int32_t RIGHT_IS_SCALAR = 2;
@@ -156,6 +236,90 @@ int32_t Float_VecAdd(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int
     return RC_SUCCESS;
 }
 
+int32_t SignedInt_VecSub(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof)
+{
+    if (szof == 1) {
+        MO_ARITH_T(SUB_SIGNED_OVFLAG, int8_t);
+    } else if (szof == 2) {
+        MO_ARITH_T(SUB_SIGNED_OVFLAG, int16_t);
+    } else if (szof == 4) {
+        MO_ARITH_T(SUB_SIGNED_OVFLAG, int32_t);
+    } else if (szof == 8) {
+        MO_ARITH_T(SUB_SIGNED_OVFLAG, int64_t);
+    } else {
+        return RC_INVALID_ARGUMENT;
+    }
+    return RC_SUCCESS;
+}
 
+int32_t UnsignedInt_VecSub(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof)
+{
+    if (szof == 1) {
+        MO_ARITH_T(SUB_UNSIGNED_OVFLAG, uint8_t);
+    } else if (szof == 2) {
+        MO_ARITH_T(SUB_UNSIGNED_OVFLAG, uint16_t);
+    } else if (szof == 4) {
+        MO_ARITH_T(SUB_UNSIGNED_OVFLAG, uint32_t);
+    } else if (szof == 8) {
+        MO_ARITH_T(SUB_UNSIGNED_OVFLAG, uint64_t);
+    } else {
+        return RC_INVALID_ARGUMENT;
+    }
+    return RC_SUCCESS;
+}
 
+int32_t Float_VecSub(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof)
+{
+    if (szof == 4) {
+        MO_ARITH_T(SUB_FLOAT_OVFLAG, float);
+    } else if (szof == 8) {
+        MO_ARITH_T(SUB_FLOAT_OVFLAG, double);
+    } else {
+        return RC_INVALID_ARGUMENT;
+    }
+    return RC_SUCCESS;
+}
 
+int32_t SignedInt_VecMul(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof)
+{
+    if (szof == 1) {
+        MO_ARITH_T(MUL_SIGNED_OVFLAG, int8_t);
+    } else if (szof == 2) {
+        MO_ARITH_T(MUL_SIGNED_OVFLAG, int16_t);
+    } else if (szof == 4) {
+        MO_ARITH_T(MUL_SIGNED_OVFLAG, int32_t);
+    } else if (szof == 8) {
+        MO_ARITH_T(MUL_SIGNED_OVFLAG, int64_t);
+    } else {
+        return RC_INVALID_ARGUMENT;
+    }
+    return RC_SUCCESS;
+}
+
+int32_t UnsignedInt_VecMul(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof)
+{
+    if (szof == 1) {
+        MO_ARITH_T(MUL_UNSIGNED_OVFLAG, uint8_t);
+    } else if (szof == 2) {
+        MO_ARITH_T(MUL_UNSIGNED_OVFLAG, uint16_t);
+    } else if (szof == 4) {
+        MO_ARITH_T(MUL_UNSIGNED_OVFLAG, uint32_t);
+    } else if (szof == 8) {
+        MO_ARITH_T(MUL_UNSIGNED_OVFLAG, uint64_t);
+    } else {
+        return RC_INVALID_ARGUMENT;
+    }
+    return RC_SUCCESS;
+}
+
+int32_t Float_VecMul(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof)
+{
+    if (szof == 4) {
+        MO_ARITH_T(MUL_FLOAT_OVFLAG, float);
+    } else if (szof == 8) {
+        MO_ARITH_T(MUL_FLOAT_OVFLAG, double);
+    } else {
+        return RC_INVALID_ARGUMENT;
+    }
+    return RC_SUCCESS;
+}

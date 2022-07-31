@@ -14,15 +14,29 @@
 
 package sub
 
+/*
+#include "mo.h"
+
+#cgo CFLAGS: -I../../../cgo
+#cgo LDFLAGS: -L../../../cgo -lmo
+*/
+import "C"
+
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/overflow"
 	"golang.org/x/exp/constraints"
+	"unsafe"
 )
 
-func NumericSubUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error {
+const (
+	LEFT_IS_SCALAR  = 1
+	RIGHT_IS_SCALAR = 2
+)
+
+func goNumericSubUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error {
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
 	if xs.IsScalar() {
 		for i, y := range yt {
@@ -57,7 +71,7 @@ func NumericSubUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error
 	}
 }
 
-func NumericSubSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
+func goNumericSubSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
 	if xs.IsScalar() {
 		for i, y := range yt {
@@ -92,7 +106,7 @@ func NumericSubSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 	}
 }
 
-func NumericSubFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
+func goNumericSubFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
 	if xs.IsScalar() {
 		for i, y := range yt {
@@ -116,4 +130,57 @@ func NumericSubFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 		}
 		return nil
 	}
+}
+
+func NumericSubSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
+	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	flag := 0
+	if xs.IsScalar() {
+		flag |= LEFT_IS_SCALAR
+	}
+	if ys.IsScalar() {
+		flag |= RIGHT_IS_SCALAR
+	}
+
+	rc := C.SignedInt_VecSub(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
+	if rc != 0 {
+		return moerr.NewError(moerr.OUT_OF_RANGE, "int sub overflow")
+	}
+	return nil
+}
+
+func NumericSubUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error {
+	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	flag := 0
+	if xs.IsScalar() {
+		flag |= LEFT_IS_SCALAR
+	}
+	if ys.IsScalar() {
+		flag |= RIGHT_IS_SCALAR
+	}
+	rc := C.UnsignedInt_VecSub(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
+	if rc != 0 {
+		return moerr.NewError(moerr.OUT_OF_RANGE, "unsigned int sub overflow")
+	}
+	return nil
+}
+
+func NumericSubFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
+	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	flag := 0
+	if xs.IsScalar() {
+		flag |= LEFT_IS_SCALAR
+	}
+	if ys.IsScalar() {
+		flag |= RIGHT_IS_SCALAR
+	}
+
+	rc := C.Float_VecSub(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
+	if rc != 0 {
+		return moerr.NewError(moerr.OUT_OF_RANGE, "float sub overflow")
+	}
+	return nil
 }

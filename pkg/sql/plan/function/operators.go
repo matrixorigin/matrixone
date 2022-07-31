@@ -2157,7 +2157,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint8, types.T_uint8},
 				ReturnTyp: types.T_uint8,
-				Fn:        operator.MultUint8,
+				Fn:        operator.MultUint[uint8],
 			},
 			{
 				Index:     1,
@@ -2165,7 +2165,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint16, types.T_uint16},
 				ReturnTyp: types.T_uint16,
-				Fn:        operator.MultUint16,
+				Fn:        operator.MultUint[uint16],
 			},
 			{
 				Index:     2,
@@ -2173,7 +2173,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint32, types.T_uint32},
 				ReturnTyp: types.T_uint32,
-				Fn:        operator.MultUint32,
+				Fn:        operator.MultUint[uint32],
 			},
 			{
 				Index:     3,
@@ -2181,7 +2181,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint64, types.T_uint64},
 				ReturnTyp: types.T_uint64,
-				Fn:        operator.MultUint64,
+				Fn:        operator.MultUint[uint64],
 			},
 			{
 				Index:     4,
@@ -2189,7 +2189,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int8, types.T_int8},
 				ReturnTyp: types.T_int8,
-				Fn:        operator.MultInt8,
+				Fn:        operator.MultInt[int8],
 			},
 			{
 				Index:     5,
@@ -2197,7 +2197,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int16, types.T_int16},
 				ReturnTyp: types.T_int16,
-				Fn:        operator.MultInt16,
+				Fn:        operator.MultInt[int16],
 			},
 			{
 				Index:     6,
@@ -2205,7 +2205,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int32, types.T_int32},
 				ReturnTyp: types.T_int32,
-				Fn:        operator.MultInt32,
+				Fn:        operator.MultInt[int32],
 			},
 			{
 				Index:     7,
@@ -2213,7 +2213,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int64, types.T_int64},
 				ReturnTyp: types.T_int64,
-				Fn:        operator.MultInt64,
+				Fn:        operator.MultInt[int64],
 			},
 			{
 				Index:     8,
@@ -2221,7 +2221,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float32, types.T_float32},
 				ReturnTyp: types.T_float32,
-				Fn:        operator.MultFloat32,
+				Fn:        operator.MultFloat[float32],
 			},
 			{
 				Index:     9,
@@ -2229,7 +2229,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float64, types.T_float64},
 				ReturnTyp: types.T_float64,
-				Fn:        operator.MultFloat64,
+				Fn:        operator.MultFloat[float64],
 			},
 			{
 				Index:     10,

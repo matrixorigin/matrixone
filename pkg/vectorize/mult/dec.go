@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sub
+package mult
 
 /*
 #include "mo.h"
@@ -21,28 +21,26 @@ package sub
 #cgo LDFLAGS: -L../../../cgo -lmo
 */
 import "C"
-
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func dec64PtrToC(p *types.Decimal64) *C.int64_t {
 	return (*C.int64_t)(unsafe.Pointer(p))
 }
+
 func dec128PtrToC(p *types.Decimal128) *C.int64_t {
 	return (*C.int64_t)(unsafe.Pointer(p))
 }
 
-func Decimal64VecSub(xs, ys, rs *vector.Vector) error {
+func Decimal64VecMult(xs, ys, rs *vector.Vector) error {
 	xt := vector.MustTCols[types.Decimal64](xs)
 	yt := vector.MustTCols[types.Decimal64](ys)
 	rt := vector.MustTCols[types.Decimal64](rs)
-
 	flag := 0
 	if xs.IsScalar() {
 		flag |= LEFT_IS_SCALAR
@@ -51,19 +49,18 @@ func Decimal64VecSub(xs, ys, rs *vector.Vector) error {
 		flag |= RIGHT_IS_SCALAR
 	}
 
-	rc := C.Decimal64_VecSub(dec64PtrToC(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
+	rc := C.Decimal64_VecMul(dec64PtrToC(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewError(moerr.OUT_OF_RANGE, "Decimal64 sub overflow")
+		return moerr.NewError(moerr.OUT_OF_RANGE, "Decimal64 mult overflow")
 	}
 	return nil
 }
 
-func Decimal128VecSub(xs, ys, rs *vector.Vector) error {
+func Decimal128VecMult(xs, ys, rs *vector.Vector) error {
 	xt := vector.MustTCols[types.Decimal128](xs)
 	yt := vector.MustTCols[types.Decimal128](ys)
 	rt := vector.MustTCols[types.Decimal128](rs)
-
 	flag := 0
 	if xs.IsScalar() {
 		flag |= LEFT_IS_SCALAR
@@ -71,10 +68,12 @@ func Decimal128VecSub(xs, ys, rs *vector.Vector) error {
 	if ys.IsScalar() {
 		flag |= RIGHT_IS_SCALAR
 	}
-	rc := C.Decimal128_VecSub(dec128PtrToC(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
+
+	//int32_t Decimal128_VecMul(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+	rc := C.Decimal128_VecMul(dec128PtrToC(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewError(moerr.OUT_OF_RANGE, "Decimal128 sub overflow")
+		return moerr.NewError(moerr.OUT_OF_RANGE, "Decimal128 mult overflow")
 	}
 	return nil
 }
