@@ -88,14 +88,6 @@ linters-settings:
       - S1038
       - S1039
       - S1040
-  errcheck:
-    check-type-assertions: false
-    check-blank: false
-    disable-default-exclusions: true
-    exclude-functions:
-      - io/ioutil.ReadFile
-      - io.Copy(*bytes.Buffer)
-      - io.Copy(os.Stdout)
 
   staticcheck:
     checks:
