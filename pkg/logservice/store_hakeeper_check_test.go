@@ -142,7 +142,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 		ServiceAddress:      "127.0.0.1:9002",
 		RaftAddress:         "127.0.0.1:9000",
 		GossipAddress:       "127.0.0.1:9001",
-		GossipSeedAddresses: "127.0.0.1:9011;127.0.0.1:9021;127.0.0.1:9031",
+		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9021", "127.0.0.1:9031"},
 		DisableWorkers:      true,
 	}
 	cfg1.HAKeeperConfig.TickPerSecond = 10
@@ -157,7 +157,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 		ServiceAddress:      "127.0.0.1:9012",
 		RaftAddress:         "127.0.0.1:9010",
 		GossipAddress:       "127.0.0.1:9011",
-		GossipSeedAddresses: "127.0.0.1:9001;127.0.0.1:9021;127.0.0.1:9031",
+		GossipSeedAddresses: []string{"127.0.0.1:9001", "127.0.0.1:9021", "127.0.0.1:9031"},
 		DisableWorkers:      true,
 	}
 	cfg2.HAKeeperConfig.TickPerSecond = 10
@@ -172,7 +172,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 		ServiceAddress:      "127.0.0.1:9022",
 		RaftAddress:         "127.0.0.1:9020",
 		GossipAddress:       "127.0.0.1:9021",
-		GossipSeedAddresses: "127.0.0.1:9001;127.0.0.1:9011;127.0.0.1:9031",
+		GossipSeedAddresses: []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9031"},
 		DisableWorkers:      true,
 	}
 	cfg3.HAKeeperConfig.TickPerSecond = 10
@@ -187,7 +187,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 		ServiceAddress:      "127.0.0.1:9032",
 		RaftAddress:         "127.0.0.1:9030",
 		GossipAddress:       "127.0.0.1:9031",
-		GossipSeedAddresses: "127.0.0.1:9001;127.0.0.1:9011;127.0.0.1:9021",
+		GossipSeedAddresses: []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9021"},
 		DisableWorkers:      true,
 	}
 	cfg4.HAKeeperConfig.TickPerSecond = 10
