@@ -51,6 +51,8 @@ type Config struct {
 	ServiceType string `toml:"service-type"`
 	// FileServices the config for file services
 	FileServices []fileservice.Config `toml:"fileservice"`
+
+	HAKeeperClient logservice.HAKeeperClientConfig `toml:"hakeeper-client"`
 	// DN dn service config
 	DN dnservice.Config `toml:"dn"`
 	// LogService is the config for log service
@@ -87,6 +89,7 @@ func (c *Config) validate() error {
 	return nil
 }
 
+// FIXME: fileservice created by a config instance is very strange at best
 func (c *Config) createFileService(name string) (fileservice.FileService, error) {
 	for _, cfg := range c.FileServices {
 		if strings.EqualFold(cfg.Name, name) {
@@ -94,4 +97,11 @@ func (c *Config) createFileService(name string) (fileservice.FileService, error)
 		}
 	}
 	return nil, fmt.Errorf("file service named %s not set", name)
+}
+
+func (c *Config) getLogServiceConfig() logservice.Config {
+	cfg := c.LogService
+	fmt.Printf("hakeeper client cfg: %v", c.HAKeeperClient)
+	cfg.HAKeeperClientConfig = c.HAKeeperClient
+	return cfg
 }

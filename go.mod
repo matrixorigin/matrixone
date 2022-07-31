@@ -14,7 +14,7 @@ require (
 	github.com/cockroachdb/pebble v0.0.0-20220407171941-2120d145e292
 	github.com/docker/go-units v0.4.0
 	github.com/fagongzi/goetty v1.13.0
-	github.com/fagongzi/goetty/v2 v2.0.3-0.20220727082602-18bd581d2658
+	github.com/fagongzi/goetty/v2 v2.0.3-0.20220730091829-0a8222eaa708
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/gogo/protobuf v1.3.2

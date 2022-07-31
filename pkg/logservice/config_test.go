@@ -35,7 +35,7 @@ func getTestConfig() Config {
 		RaftListenAddress:    "localhost:9001",
 		GossipAddress:        "localhost:9002",
 		GossipListenAddress:  "localhost:9002",
-		GossipSeedAddresses:  "localhost:9002",
+		GossipSeedAddresses:  []string{"localhost:9002"},
 	}
 	c.Fill()
 	return c
@@ -65,7 +65,7 @@ func TestSplitAddress(t *testing.T) {
 
 func TestGetInitHAKeeperMembers(t *testing.T) {
 	cfg1 := Config{}
-	cfg1.BootstrapConfig.InitHAKeeperMembers = " 131072 :9c4dccb4-4d3c-41f8-b482-5251dc7a41bf "
+	cfg1.BootstrapConfig.InitHAKeeperMembers = []string{" 131072 :9c4dccb4-4d3c-41f8-b482-5251dc7a41bf "}
 	result, err := cfg1.GetInitHAKeeperMembers()
 	require.NoError(t, err)
 	assert.Equal(t, 1, len(result))
@@ -74,7 +74,7 @@ func TestGetInitHAKeeperMembers(t *testing.T) {
 	assert.Equal(t, "9c4dccb4-4d3c-41f8-b482-5251dc7a41bf", v)
 
 	cfg2 := Config{}
-	cfg2.BootstrapConfig.InitHAKeeperMembers = "131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf;131073:9c4dccb4-4d3c-41f8-b482-5251dc7a41be"
+	cfg2.BootstrapConfig.InitHAKeeperMembers = []string{"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf", "131073:9c4dccb4-4d3c-41f8-b482-5251dc7a41be"}
 	result, err = cfg2.GetInitHAKeeperMembers()
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(result))
@@ -85,13 +85,13 @@ func TestGetInitHAKeeperMembers(t *testing.T) {
 	assert.Equal(t, "9c4dccb4-4d3c-41f8-b482-5251dc7a41bf", v1)
 	assert.Equal(t, "9c4dccb4-4d3c-41f8-b482-5251dc7a41be", v2)
 
-	tests := []string{
-		"131071:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf",
-		"262144:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf",
-		"262145:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf",
-		"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41b",
-		"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf;",
-		"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf;1:1",
+	tests := [][]string{
+		{"131071:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"},
+		{"262144:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"},
+		{"262145:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"},
+		{"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41b"},
+		{"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf", ""},
+		{"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf", "1:1"},
 	}
 
 	for _, v := range tests {
@@ -100,14 +100,6 @@ func TestGetInitHAKeeperMembers(t *testing.T) {
 		_, err := cfg.GetInitHAKeeperMembers()
 		assert.Equal(t, ErrInvalidBootstrapConfig, err)
 	}
-}
-
-func TestGetGossipSeedAddresses(t *testing.T) {
-	cfg := Config{
-		GossipSeedAddresses: "localhost:9000;localhost:9001 ; localhost:9002 ",
-	}
-	values := cfg.GetGossipSeedAddresses()
-	assert.Equal(t, []string{"localhost:9000", "localhost:9001", "localhost:9002"}, values)
 }
 
 func TestConfigCanBeValidated(t *testing.T) {
@@ -131,7 +123,7 @@ func TestConfigCanBeValidated(t *testing.T) {
 	assert.True(t, errors.Is(c4.Validate(), ErrInvalidConfig))
 
 	c5 := c
-	c5.GossipSeedAddresses = ""
+	c5.GossipSeedAddresses = []string{}
 	assert.True(t, errors.Is(c5.Validate(), ErrInvalidConfig))
 }
 
@@ -143,8 +135,7 @@ func TestBootstrapConfigCanBeValidated(t *testing.T) {
 	c.BootstrapConfig.NumOfLogShards = 3
 	c.BootstrapConfig.NumOfDNShards = 3
 	c.BootstrapConfig.NumOfLogShardReplicas = 1
-	c.BootstrapConfig.InitHAKeeperMembers = "131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
-	c.BootstrapConfig.HAKeeperReplicaID = 131072
+	c.BootstrapConfig.InitHAKeeperMembers = []string{"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"}
 	assert.NoError(t, c.Validate())
 
 	c1 := c
@@ -162,10 +153,6 @@ func TestBootstrapConfigCanBeValidated(t *testing.T) {
 	c4 := c
 	c4.BootstrapConfig.NumOfLogShardReplicas = 2
 	assert.True(t, errors.Is(c4.Validate(), ErrInvalidConfig))
-
-	c5 := c
-	c5.BootstrapConfig.HAKeeperReplicaID = 2
-	assert.True(t, errors.Is(c5.Validate(), ErrInvalidConfig))
 }
 
 func TestFillConfig(t *testing.T) {
@@ -194,7 +181,7 @@ func TestListenAddressCanBeFilled(t *testing.T) {
 		ServiceAddress:      "127.0.0.1:9002",
 		RaftAddress:         "127.0.0.1:9000",
 		GossipAddress:       "127.0.0.1:9001",
-		GossipSeedAddresses: "127.0.0.1:9011",
+		GossipSeedAddresses: []string{"127.0.0.1:9011"},
 	}
 	cfg.Fill()
 	assert.Equal(t, cfg.ServiceAddress, cfg.ServiceListenAddress)

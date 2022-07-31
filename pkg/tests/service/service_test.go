@@ -21,9 +21,6 @@ import (
 )
 
 func TestCluster(t *testing.T) {
-	// FIXME: dn service fail to connect with hakeeper
-	t.Skip()
-
 	c, err := NewCluster(t, DefaultOptions())
 	require.NoError(t, err)
 
