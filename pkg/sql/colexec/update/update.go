@@ -192,7 +192,7 @@ func fillVector(v *vector.Vector, batLen int, proc *process.Process) error {
 		v.Col = make([]types.Decimal64, batLen)
 	case types.T_decimal128:
 		v.Col = make([]types.Decimal128, batLen)
-	case types.T_char, types.T_varchar, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
 		v.Col = &types.Bytes{}
 		tmp := make([][]byte, batLen)
 		err := v.Col.(*types.Bytes).Append(tmp)
@@ -303,7 +303,7 @@ func getIndexValue(idx int, v *vector.Vector, isNull bool) any {
 		}
 		col := v.Col.([]types.Decimal128)
 		return col[idx]
-	case types.T_char, types.T_varchar, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
 		if isNull {
 			return []byte{}
 		}

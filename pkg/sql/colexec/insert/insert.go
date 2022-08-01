@@ -76,7 +76,7 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 					bat.Vecs[i].Typ.Oid = types.T(n.TargetColDefs[i].Typ.GetId())
 				}
 				switch bat.Vecs[i].Typ.Oid {
-				case types.T_char, types.T_varchar, types.T_blob:
+				case types.T_char, types.T_varchar, types.T_blob, types.T_json:
 					bat.Vecs[i].Col = &types.Bytes{
 						Data:    nil,
 						Offsets: make([]uint32, len(bat.Zs)),

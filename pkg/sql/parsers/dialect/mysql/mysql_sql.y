@@ -301,6 +301,9 @@ import (
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
+//JSON function
+%token <str> JSON_EXTRACT
+
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE
 
@@ -373,6 +376,7 @@ import (
 %type <funcExpr> function_call_keyword
 %type <funcExpr> function_call_nonkeyword
 %type <funcExpr> function_call_aggregate
+%type <funcExpr> function_call_json
 
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list
@@ -1568,7 +1572,7 @@ prepare_stmt:
     }
 |   prepare_sym stmt_name FROM STRING
     {
-        $$ = tree.NewPrepareString(tree.Identifier($2), $4) 
+        $$ = tree.NewPrepareString(tree.Identifier($2), $4)
     }
 
 execute_stmt:
@@ -4661,6 +4665,10 @@ simple_expr:
     {
         $$ = $1
     }
+| function_call_json
+    {
+        $$ = $1
+    }
 
 else_opt:
 	{
@@ -5095,6 +5103,17 @@ function_call_generic:
              Func: tree.FuncName2ResolvableFunctionReference(name),
              Exprs: tree.Exprs{arg1, $4, $6},
         }
+	}
+function_call_json:
+	JSON_EXTRACT '(' STRING ',' STRING ')'
+	{
+		name := tree.SetUnresolvedName(strings.ToLower($1))
+		a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+		a2 := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
+	$$ = &tree.FuncExpr{
+	     Func: tree.FuncName2ResolvableFunctionReference(name),
+	     Exprs: tree.Exprs{a1, a2},
+	}
 	}
 
 trim_direction:

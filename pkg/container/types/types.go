@@ -206,6 +206,8 @@ func (t T) ToType() Type {
 
 	typ.Oid = t
 	switch t {
+	case T_json:
+		typ.Size = 24
 	case T_bool:
 		typ.Size = 1
 	case T_int8:
@@ -301,6 +303,8 @@ func (t T) String() string {
 // OidString returns T string
 func (t T) OidString() string {
 	switch t {
+	case T_json:
+		return "T_json"
 	case T_bool:
 		return "T_bool"
 	case T_int64:
@@ -394,7 +398,7 @@ func (t T) GoType() string {
 
 // GoGoType returns special go type string for T
 func (t T) GoGoType() string {
-	if t == T_char || t == T_varchar || t == T_blob {
+	if t == T_char || t == T_varchar || t == T_blob || t == T_json {
 		return "Str"
 	}
 	k := t.GoType()
@@ -404,6 +408,8 @@ func (t T) GoGoType() string {
 // TypeLen returns type's length whose type oid is T
 func (t T) TypeLen() int {
 	switch t {
+	case T_json:
+		return 24
 	case T_int8, T_bool:
 		return 1
 	case T_int16:
@@ -443,6 +449,8 @@ func (t T) TypeLen() int {
 // FixedLength dangerous code, use TypeLen() if you don't want -8, -16, -24
 func (t T) FixedLength() int {
 	switch t {
+	case T_json:
+		return -24
 	case T_int8, T_uint8, T_bool:
 		return 1
 	case T_int16, T_uint16:

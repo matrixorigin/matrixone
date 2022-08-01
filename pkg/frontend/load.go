@@ -355,7 +355,7 @@ func makeBatch(handler *ParseLineHandler, id int) *PoolElement {
 			vec.Col = make([]float32, batchSize)
 		case types.T_float64:
 			vec.Col = make([]float64, batchSize)
-		case types.T_char, types.T_varchar:
+		case types.T_char, types.T_varchar, types.T_json:
 			vBytes := &types.Bytes{
 				Offsets: make([]uint32, batchSize),
 				Lengths: make([]uint32, batchSize),
@@ -468,7 +468,7 @@ func releaseBatch(handler *ParseLineHandler, pl *PoolElement) {
 	for _, vec := range pl.bat.Vecs {
 		vec.Nsp = &nulls.Nulls{}
 		switch vec.Typ.Oid {
-		case types.T_char, types.T_varchar:
+		case types.T_char, types.T_varchar, types.T_json:
 			vBytes := vec.Col.(*types.Bytes)
 			vBytes.Data = vBytes.Data[:0]
 		}
@@ -959,7 +959,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 						cols[rowIdx] = d
 					}
-				case types.T_char, types.T_varchar:
+				case types.T_char, types.T_varchar, types.T_json:
 					vBytes := vec.Col.(*types.Bytes)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -1073,7 +1073,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 				if columnFLags[k] == 0 {
 					vec := batchData.Vecs[k]
 					switch vec.Typ.Oid {
-					case types.T_char, types.T_varchar:
+					case types.T_char, types.T_varchar, types.T_json:
 						vBytes := vec.Col.(*types.Bytes)
 						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
 						vBytes.Lengths[rowIdx] = uint32(0)
@@ -1449,7 +1449,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						cols[i] = d
 					}
 				}
-			case types.T_char, types.T_varchar:
+			case types.T_char, types.T_varchar, types.T_json:
 				vBytes := vec.Col.(*types.Bytes)
 				//row
 				for i := 0; i < countOfLineArray; i++ {
@@ -1590,7 +1590,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 				//row
 				for i := 0; i < countOfLineArray; i++ {
 					switch vec.Typ.Oid {
-					case types.T_char, types.T_varchar:
+					case types.T_char, types.T_varchar, types.T_json:
 						vBytes := vec.Col.(*types.Bytes)
 						vBytes.Offsets[i] = uint32(len(vBytes.Data))
 						vBytes.Lengths[i] = uint32(0)
@@ -1739,7 +1739,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		for _, vec := range handler.batchData.Vecs {
 			vec.Nsp = &nulls.Nulls{}
 			switch vec.Typ.Oid {
-			case types.T_char, types.T_varchar:
+			case types.T_char, types.T_varchar, types.T_json:
 				vBytes := vec.Col.(*types.Bytes)
 				vBytes.Data = vBytes.Data[:0]
 			}
@@ -1794,7 +1794,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 					case types.T_float64:
 						cols := vec.Col.([]float64)
 						vec.Col = cols[:needLen]
-					case types.T_char, types.T_varchar: //bytes is different
+					case types.T_char, types.T_varchar, types.T_json: //bytes is different
 						vBytes := vec.Col.(*types.Bytes)
 						//logutil.Infof("saveBatchToStorage before data %s ",vBytes.String())
 						if len(vBytes.Offsets) > needLen {

@@ -1781,4 +1781,18 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	JSON_EXTRACT: {
+		Id: JSON_EXTRACT,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.JsonExtract,
+			},
+		},
+	},
 }

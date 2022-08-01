@@ -1,0 +1,20 @@
+-- @suite
+-- @case
+-- @desc:test for json datatype
+-- @label:bvt
+
+#Test cases of basic action
+DROP TABLE IF EXISTS t1;
+create table t1 (a json,b int);
+insert into t1 values ('{"t1":"a"}',1),('{"t1":"b"}',2);
+select * from t1;
+select * from t1 where b=1;
+select * from t1 where b=2;
+
+
+#Test cases of update and delete
+update t1 set a='{"t1":"qaq"}' where b=1;
+delete from t1 where b=2;
+select * from t1;
+delete from t1 where b=1;
+select * from t1;

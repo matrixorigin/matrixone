@@ -162,6 +162,8 @@ func generateDefaultExpr(e *plan.DefaultExpr, t *plan.Type) (*Expr, error) {
 		Scale:     t.Scale,
 	}}
 	switch d := e.Value.ConstantValue.(type) {
+	case *plan.ConstantValue_JsonV:
+		ret.Expr = makePlan2JsonConstExpr(d.JsonV)
 	case *plan.ConstantValue_BoolV:
 		ret.Expr = makePlan2BoolConstExpr(d.BoolV)
 	case *plan.ConstantValue_Int64V:
