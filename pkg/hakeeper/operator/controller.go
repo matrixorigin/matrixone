@@ -165,6 +165,19 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
 				},
 				ServiceType: pb.LogService,
 			}
+		case KillLogZombie:
+			cmd = pb.ScheduleCommand{
+				UUID:          st.UUID,
+				Bootstrapping: false,
+				ConfigChange: &pb.ConfigChange{
+					Replica: pb.Replica{
+						UUID:    st.UUID,
+						ShardID: st.ShardID,
+					},
+					ChangeType: pb.KillZombie,
+				},
+				ServiceType: pb.LogService,
+			}
 		case AddDnReplica:
 			cmd = pb.ScheduleCommand{
 				UUID: st.StoreID,
