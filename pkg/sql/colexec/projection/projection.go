@@ -22,9 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	n := arg.(*Argument)
-	buf.WriteString("π(")
+	buf.WriteString("projection(")
 	for i, e := range n.Es {
 		if i > 0 {
 			buf.WriteString(",")
@@ -34,25 +34,29 @@ func String(arg interface{}, buf *bytes.Buffer) {
 	buf.WriteString(")")
 }
 
-func Prepare(_ *process.Process, _ interface{}) error {
+func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
 	bat := proc.Reg.InputBatch
 	if bat == nil {
 		return true, nil
 	}
-	if len(bat.Zs) == 0 {
+	if bat.Length() == 0 {
 		return false, nil
 	}
+	anal.Input(bat)
 	ap := arg.(*Argument)
 	rbat := batch.NewWithSize(len(ap.Es))
 	for i, e := range ap.Es {
 		vec, err := colexec.EvalExpr(bat, proc, e)
-		if err != nil || vec.ConstExpand(proc.Mp) == nil {
-			bat.Clean(proc.Mp)
-			rbat.Clean(proc.Mp)
+		if err != nil || vec.ConstExpand(proc.GetMheap()) == nil {
+			bat.Clean(proc.GetMheap())
+			rbat.Clean(proc.GetMheap())
 			return false, err
 		}
 		rbat.Vecs[i] = vec
@@ -67,7 +71,8 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 	}
 	rbat.Zs = bat.Zs
 	bat.Zs = nil
-	bat.Clean(proc.Mp)
+	bat.Clean(proc.GetMheap())
+	anal.Output(rbat)
 	proc.Reg.InputBatch = rbat
 	return false, nil
 }

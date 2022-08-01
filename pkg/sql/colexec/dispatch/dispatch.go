@@ -22,19 +22,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("dispatch")
 }
 
-func Prepare(_ *process.Process, arg interface{}) error {
+func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
-	ap.ctr = new(Container)
+	ap.ctr = new(container)
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	ap := arg.(*Argument)
-	bat := proc.Reg.InputBatch
+	bat := proc.InputBatch()
 	if bat == nil {
 		for _, reg := range ap.Regs {
 			select {

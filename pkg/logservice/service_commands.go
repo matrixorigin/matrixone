@@ -103,13 +103,15 @@ func (s *Service) heartbeatWorker(ctx context.Context) {
 	if s.cfg.HeartbeatInterval.Duration == 0 {
 		panic("invalid heartbeat interval")
 	}
+	defer func() {
+		plog.Infof("heartbeat worker stopped")
+	}()
 	ticker := time.NewTicker(s.cfg.HeartbeatInterval.Duration)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			plog.Infof("heartbeat worker stopped")
 			return
 		case <-ticker.C:
 			s.heartbeat(ctx)
