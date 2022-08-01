@@ -22,31 +22,51 @@ import (
 )
 
 func TestCluster(t *testing.T) {
-	dnNum := 2
-	logNum := 3
-
-	// initialize instance of Cluster
-	c, err := NewCluster(t,
-		DefaultOptions().WithDNServiceNum(dnNum).WithLogServiceNum(logNum),
-	)
+	// initialize cluster
+	c, err := NewCluster(t, DefaultOptions())
 	require.NoError(t, err)
 
 	// start the cluster
 	err = c.Start()
 	require.NoError(t, err)
 
+	// close the cluster
+	err = c.Close()
+	require.NoError(t, err)
+
+	// FIXME:
+	// 	- do some operation via `ClusterOperation`
+	// 	- check cluster state via `ClusterAssertState`
+	// 	- wait cluster state via `ClusterWaitState`
+}
+
+func TestClusterAwareness(t *testing.T) {
+	dnSvcNum := 2
+	logSvcNum := 3
+	opt := DefaultOptions().
+		WithDNServiceNum(dnSvcNum).
+		WithLogServiceNum(logSvcNum)
+
+	// initialize cluster
+	c, err := NewCluster(t, opt)
+	require.NoError(t, err)
+
+	// start the cluster
+	err = c.Start()
+	require.NoError(t, err)
+
+	// close the cluster finally
 	defer func() {
-		// close the cluster
-		err = c.Close()
+		err := c.Close()
 		require.NoError(t, err)
 	}()
 
 	// test interface `ClusterAwareness`
 	dnIDs := c.ListDNServices()
-	require.Equal(t, dnNum, len(dnIDs))
+	require.Equal(t, dnSvcNum, len(dnIDs))
 
 	logIDs := c.ListLogServices()
-	require.Equal(t, logNum, len(logIDs))
+	require.Equal(t, logSvcNum, len(logIDs))
 
 	dn, err := c.GetDNService(dnIDs[0])
 	require.NoError(t, err)
@@ -62,11 +82,7 @@ func TestCluster(t *testing.T) {
 	state, err := c.GetClusterState(2 * time.Second)
 	require.NoError(t, err)
 	// FIXME: empty of reported DNState
-	// require.Equal(t, dnNum, len(state.DNState.Stores))
-	require.Equal(t, logNum, len(state.LogState.Stores))
+	// require.Equal(t, dnSvcNum, len(state.DNState.Stores))
+	require.Equal(t, logSvcNum, len(state.LogState.Stores))
 
-	// FIXME:
-	// 	- do some operation via `ClusterOperation`
-	// 	- check cluster state via `ClusterAssertState`
-	// 	- wait cluster state via `ClusterWaitState`
 }
