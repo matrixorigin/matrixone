@@ -24,9 +24,9 @@ type replica struct {
 
 // stats collects all replicas that need to be processed.
 type stats struct {
-	// toStop collects replicas that are already removed in config but still
+	// zombies collects replicas that are already removed in config but still
 	// running on log stores.
-	toStop []replica
+	zombies []replica
 
 	// toStart collects replicas that are already added in config but
 	// not running on log stores.

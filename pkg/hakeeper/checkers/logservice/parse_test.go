@@ -268,7 +268,7 @@ func TestCollectStats(t *testing.T) {
 								Term:     0}}}},
 				},
 			},
-			expected: &stats{toStop: []replica{{"d", 1, 0, 0}},
+			expected: &stats{zombies: []replica{{"d", 1, 0, 0}},
 				toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}}},
 		{
 			desc: "do not remove replica d if it is in LogShardInfo.Replicas, despite it's epoch is small.",
@@ -445,18 +445,12 @@ func TestCollectStore(t *testing.T) {
 					Epoch:    1,
 				}},
 				Stores: map[string]pb.LogStoreInfo{
-					"a": {
-						Tick: uint64(10 * hakeeper.DefaultTickPerSecond * 60),
-					},
-					"b": {
-						Tick: uint64(13 * hakeeper.DefaultTickPerSecond * 60),
-					},
-					"c": {
-						Tick: uint64(12 * hakeeper.DefaultTickPerSecond * 60),
-					},
+					"a": {Tick: 0},
+					"b": {Tick: 0},
+					"c": {Tick: 0},
 				},
 			},
-			tick:     uint64(10 * hakeeper.DefaultTickPerSecond * 60),
+			tick:     0,
 			expected: []string{},
 		},
 		{
@@ -472,12 +466,12 @@ func TestCollectStore(t *testing.T) {
 					Epoch:    1,
 				}},
 				Stores: map[string]pb.LogStoreInfo{
-					"a": {Tick: uint64(10 * hakeeper.DefaultTickPerSecond * 60)},
+					"a": {Tick: expiredTick + 1},
 					"b": {Tick: 0},
-					"c": {Tick: uint64(12 * hakeeper.DefaultTickPerSecond * 60)},
+					"c": {Tick: expiredTick + 1},
 				},
 			},
-			tick:     uint64(15 * hakeeper.DefaultTickPerSecond * 60),
+			tick:     expiredTick + 1,
 			expected: []string{"b"},
 		},
 	}

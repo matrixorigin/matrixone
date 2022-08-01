@@ -160,7 +160,7 @@ select * from t1;
 drop table t1;
 create table t1 (
 a decimal(10,5) not null,
-b int not null default 12345.67890,
+b int not null default 12346,
 c decimal(10,5) not null default 12345.67890,
 d decimal(10,5) not null default 12345.67890,
 e decimal(10,5) not null default 12345.67890,
@@ -204,7 +204,7 @@ select * from t1;
 drop table t1;
 create table t1 (
 a decimal(10,5) not null,
-b int not null default 12345.67890,
+b int not null default 12346,
 c decimal(10,5) not null default 12345.67890,
 d decimal(10,5) not null default 12345.67890,
 e decimal(10,5) not null default 12345.67890,

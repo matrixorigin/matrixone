@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package product
+package single
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 const (
@@ -24,9 +28,24 @@ const (
 	End
 )
 
+type evalVector struct {
+	needFree bool
+	vec      *vector.Vector
+}
+
 type container struct {
 	state int
-	bat   *batch.Batch
+
+	sels []int64
+
+	inBuckets []uint8
+
+	bat *batch.Batch
+
+	evecs []evalVector
+	vecs  []*vector.Vector
+
+	mp *hashmap.StrHashMap
 }
 
 type ResultPos struct {
@@ -35,6 +54,10 @@ type ResultPos struct {
 }
 
 type Argument struct {
-	ctr    *container
-	Result []ResultPos
+	ctr        *container
+	Ibucket    uint64
+	Nbucket    uint64
+	Typs       []types.Type
+	Result     []ResultPos
+	Conditions [][]*plan.Expr
 }

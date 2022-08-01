@@ -26,9 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	ap := arg.(*Argument)
-	buf.WriteString("τ([")
+	buf.WriteString("top([")
 	for i, f := range ap.Fs {
 		if i > 0 {
 			buf.WriteString(", ")
@@ -38,7 +38,7 @@ func String(arg interface{}, buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("], %v)", ap.Limit))
 }
 
-func Prepare(_ *process.Process, arg interface{}) error {
+func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(Container)
 	ap.ctr.sels = make([]int64, 0, ap.Limit)
@@ -46,9 +46,12 @@ func Prepare(_ *process.Process, arg interface{}) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	ap := arg.(*Argument)
 	ctr := ap.ctr
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
 	for {
 		switch ctr.state {
 		case Build:

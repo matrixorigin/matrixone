@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,11 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package joincondition
+package txnengine
 
-import "github.com/matrixorigin/matrixone/pkg/sql/plan"
+import (
+	"bytes"
+	"encoding/gob"
+	"testing"
 
-type Condition struct {
-	Scale int32
-	Expr  *plan.Expr
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestVectorGobEncoding(t *testing.T) {
+	vec := vector.New(types.Type{
+		Oid: types.T_int16,
+	})
+	buf := new(bytes.Buffer)
+	err := gob.NewEncoder(buf).Encode(vec)
+	assert.Nil(t, err)
+	var v vector.Vector
+	err = gob.NewDecoder(buf).Decode(&v)
+	assert.Nil(t, err)
+	_, ok := v.Col.([]int16)
+	assert.True(t, ok)
 }

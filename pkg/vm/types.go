@@ -31,11 +31,13 @@ const (
 	Connector
 	Projection
 	Complement
+	Single
 
 	LoopJoin
 	LoopLeft
 	LoopSemi
 	LoopComplement
+	LoopSingle
 
 	MergeTop
 	MergeLimit
@@ -58,7 +60,7 @@ type Instruction struct {
 	// Op specified the operator code of an instruction.
 	Op int
 	// Arg contains the operand of this instruction.
-	Arg interface{}
+	Arg any
 }
 
 type Instructions []Instruction

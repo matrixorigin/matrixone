@@ -45,7 +45,6 @@ drop table t3;
 
 
 #子查询
--- @bvt:issue#3303
 CREATE TABLE t1 (f2 VARCHAR(20));
 CREATE TABLE t2 (f2 VARCHAR(20));
 INSERT INTO t1 VALUES ('MIN'),('MAX');
@@ -53,7 +52,6 @@ INSERT INTO t2 VALUES ('LOAD');
 SELECT CONCAT_WS('_', (SELECT t2.f2 FROM t2), t1.f2) AS concat_name FROM t1;
 drop table t1;
 drop table t2;
--- @bvt:issue
 
 #嵌套
 

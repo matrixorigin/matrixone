@@ -46,10 +46,6 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 	subID := subquery.NodeId
 	subCtx := builder.ctxByNode[subID]
 
-	if subquery.Typ == plan.SubqueryRef_SCALAR && !subCtx.hasSingleRow {
-		return 0, nil, errors.New("", "runtime check of scalar subquery will be supported in future version")
-	}
-
 	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx)
 	if err != nil {
 		return 0, nil, err
@@ -84,10 +80,15 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			joinPreds = append(joinPreds, alwaysTrue)
 		}
 
+		joinType := plan.Node_SINGLE
+		if subCtx.hasSingleRow {
+			joinType = plan.Node_LEFT
+		}
+
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeID, subID},
-			JoinType: plan.Node_LEFT,
+			JoinType: joinType,
 			OnList:   joinPreds,
 		}, ctx)
 

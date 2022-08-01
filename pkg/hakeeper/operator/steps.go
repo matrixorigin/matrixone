@@ -104,10 +104,30 @@ type StopLogService struct {
 }
 
 func (a StopLogService) String() string {
-	return fmt.Sprintf("stoping %v on %s", a.ShardID, a.UUID)
+	return fmt.Sprintf("stopping %v on %s", a.ShardID, a.UUID)
 }
 
 func (a StopLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
+	if store, ok := state.Stores[a.UUID]; ok {
+		for _, replicaInfo := range store.Replicas {
+			if replicaInfo.ShardID == a.ShardID {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+type KillLogZombie struct {
+	Replica
+}
+
+func (a KillLogZombie) String() string {
+	return fmt.Sprintf("killing zombie on %s", a.UUID)
+}
+
+func (a KillLogZombie) IsFinish(state pb.LogState, _ pb.DNState) bool {
 	if store, ok := state.Stores[a.UUID]; ok {
 		for _, replicaInfo := range store.Replicas {
 			if replicaInfo.ShardID == a.ShardID {
