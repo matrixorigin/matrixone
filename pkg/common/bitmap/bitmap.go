@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math/bits"
 
+	stdencoding "encoding"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 )
 
@@ -321,4 +322,17 @@ func (n *Bitmap) Unmarshal(data []byte) {
 
 func (n *Bitmap) String() string {
 	return fmt.Sprintf("%v", n.ToArray())
+}
+
+var _ stdencoding.BinaryMarshaler = new(Bitmap)
+
+func (n *Bitmap) MarshalBinary() ([]byte, error) {
+	return n.Marshal(), nil
+}
+
+var _ stdencoding.BinaryUnmarshaler = new(Bitmap)
+
+func (n *Bitmap) UnmarshalBinary(data []byte) error {
+	n.Unmarshal(data)
+	return nil
 }
