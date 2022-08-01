@@ -310,7 +310,6 @@ func TestFixZombie(t *testing.T) {
 				}},
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {
-						Tick: 0,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -320,7 +319,6 @@ func TestFixZombie(t *testing.T) {
 							ReplicaID: 1},
 						}},
 					"b": {
-						Tick: 0,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -331,7 +329,6 @@ func TestFixZombie(t *testing.T) {
 						}},
 					},
 					"c": {
-						Tick: 0,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -342,7 +339,6 @@ func TestFixZombie(t *testing.T) {
 						}},
 					},
 					"d": {
-						Tick: 14 * hakeeper.DefaultTickPerSecond * 60,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
