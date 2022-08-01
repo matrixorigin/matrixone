@@ -18,6 +18,9 @@ import (
 	"context"
 	goErrors "errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+
 	"os"
 	"runtime/pprof"
 	"sort"
@@ -457,6 +460,28 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			}
 
 			switch vec.Typ.Oid { //get col
+			case types.T_json:
+				if !nulls.Any(vec.Nsp) {
+					bytes := vec.Col.(*types.Bytes)
+					vs := make([]bytejson.ByteJson, 0, len(bytes.Lengths))
+					for i, length := range bytes.Lengths {
+						off := bytes.Offsets[i]
+						vs = append(vs, encoding.DecodeJson(bytes.Data[off:off+length]))
+					}
+					row[i] = vs[rowIndex]
+				} else {
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
+						row[i] = nil
+					} else {
+						bytes := vec.Col.(*types.Bytes)
+						vs := make([]bytejson.ByteJson, 0, len(bytes.Lengths))
+						for i, length := range bytes.Lengths {
+							off := bytes.Offsets[i]
+							vs = append(vs, encoding.DecodeJson(bytes.Data[off:off+length]))
+						}
+						row[i] = vs[rowIndex]
+					}
+				}
 			case types.T_bool:
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
 					vs := vec.Col.([]bool)
@@ -2202,6 +2227,8 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 	switch engineType {
 	case types.T_any:
 		col.SetColumnType(defines.MYSQL_TYPE_NULL)
+	case types.T_json:
+		col.SetColumnType(defines.MYSQL_TYPE_JSON)
 	case types.T_bool:
 		col.SetColumnType(defines.MYSQL_TYPE_BOOL)
 	case types.T_int8:

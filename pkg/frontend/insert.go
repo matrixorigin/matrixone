@@ -17,6 +17,8 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"go/constant"
 	"math"
 	"strconv"
@@ -155,6 +157,32 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 	// insert values for columns
 	for i, vec := range bat.Vecs {
 		switch vec.Typ.Oid {
+		case types.T_json:
+			vs := make([][]byte, len(rows.Rows))
+			{
+				for j, row := range rows.Rows {
+					v, err := buildConstant(vec.Typ, row[i])
+					if err != nil {
+						return err
+					}
+					if v == nil {
+						nulls.Add(vec.Nsp, uint64(j))
+					} else {
+						vv, err := rangeCheck(v.(bytejson.ByteJson), vec.Typ, bat.Attrs[i], j+1)
+						if err != nil {
+							return err
+						}
+						json, err := encoding.EncodeJson(vv.(bytejson.ByteJson))
+						if err != nil {
+							return err
+						}
+						vs[j] = json
+					}
+				}
+			}
+			if err := vector.Append(vec, vs); err != nil {
+				return err
+			}
 		case types.T_bool:
 			vs := make([]bool, len(rows.Rows))
 			{
@@ -563,7 +591,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 			vec.Col = make([]float32, len(rows.Rows))
 		case types.T_float64:
 			vec.Col = make([]float64, len(rows.Rows))
-		case types.T_char, types.T_varchar, types.T_blob:
+		case types.T_char, types.T_varchar, types.T_blob, types.T_json:
 			col := &types.Bytes{}
 			if err = col.Append(make([][]byte, len(rows.Rows))); err != nil {
 				return err
@@ -649,7 +677,7 @@ func makeExprFromVal(typ types.Type, value interface{}, isNull bool) tree.Expr {
 		res := value.(float64)
 		str := strconv.FormatFloat(res, 'f', 10, 64)
 		return tree.NewNumVal(constant.MakeFloat64(res), str, res < 0)
-	case types.T_char, types.T_varchar:
+	case types.T_char, types.T_varchar, types.T_json:
 		res := string(value.([]byte)[:])
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	case types.T_date:
@@ -1096,6 +1124,12 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 		return nil, fmt.Errorf("incorrect %s value: '%s'", typ.Oid.String(), str)
 	case constant.String:
 		switch typ.Oid {
+		case types.T_json:
+			res, err := types.ParseNumValToByteJson(num)
+			if err != nil {
+				return nil, err
+			}
+			return res, nil
 		case types.T_bool:
 			switch strings.ToLower(str) {
 			case "false":
@@ -1289,6 +1323,8 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
 		}
 		return nil, errors.New(errno.DataException, fmt.Sprintf("Data too long for column '%s' at row %d", columnName, rowNumber))
+	case bytejson.ByteJson:
+		return v, nil
 	case types.Date, types.Datetime, types.Timestamp, types.Decimal64, types.Decimal128, bool:
 		return v, nil
 	default:
