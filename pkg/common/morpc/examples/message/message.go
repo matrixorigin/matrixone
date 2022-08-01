@@ -51,7 +51,6 @@ func (tm *ExampleMessage) MarshalTo(data []byte) (int, error) {
 
 	if len(tm.Content) > 0 {
 		copy(data[offset:], []byte(tm.Content))
-		offset += len(tm.Content)
 	}
 
 	return len(data), nil
@@ -69,7 +68,6 @@ func (tm *ExampleMessage) Unmarshal(data []byte) error {
 	content := make([]byte, n)
 	if n > 0 {
 		copy(content, data[offset:offset+n])
-		offset += n
 	}
 	tm.Content = string(content)
 

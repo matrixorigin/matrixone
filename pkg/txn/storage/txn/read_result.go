@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,27 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package service
+package txnstorage
 
-import (
-	"testing"
+import "github.com/matrixorigin/matrixone/pkg/txn/storage"
 
-	"github.com/stretchr/testify/require"
-)
+type readResult struct {
+	payload []byte
+}
 
-func TestCluster(t *testing.T) {
-	c, err := NewCluster(t, DefaultOptions())
-	require.NoError(t, err)
+var _ storage.ReadResult = new(readResult)
 
-	err = c.Start()
-	require.NoError(t, err)
-	defer func() {
-		err = c.Close()
-		require.NoError(t, err)
-	}()
+func (r *readResult) Read() ([]byte, error) {
+	return r.payload, nil
+}
 
-	// FIXME:
-	// 	- do some operation via `ClusterOperation`
-	// 	- check cluster state via `ClusterAssertState`
-	// 	- wait cluster state via `ClusterWaitState`
+func (*readResult) Release() {
+}
+
+func (*readResult) WaitTxns() [][]byte {
+	//TODO
+	return nil
 }

@@ -216,7 +216,7 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 		ServiceAddress:      "127.0.0.1:9002",
 		RaftAddress:         "127.0.0.1:9000",
 		GossipAddress:       "127.0.0.1:9001",
-		GossipSeedAddresses: "127.0.0.1:9011",
+		GossipSeedAddresses: []string{"127.0.0.1:9011"},
 		DisableWorkers:      true,
 	}
 	cfg2 := Config{
@@ -228,7 +228,7 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 		ServiceAddress:      "127.0.0.1:9012",
 		RaftAddress:         "127.0.0.1:9010",
 		GossipAddress:       "127.0.0.1:9011",
-		GossipSeedAddresses: "127.0.0.1:9001",
+		GossipSeedAddresses: []string{"127.0.0.1:9001"},
 		DisableWorkers:      true,
 	}
 	cfg1.Fill()

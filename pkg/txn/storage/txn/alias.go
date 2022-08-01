@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,27 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package service
+package txnstorage
 
 import (
-	"testing"
-
-	"github.com/stretchr/testify/require"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
-func TestCluster(t *testing.T) {
-	c, err := NewCluster(t, DefaultOptions())
-	require.NoError(t, err)
-
-	err = c.Start()
-	require.NoError(t, err)
-	defer func() {
-		err = c.Close()
-		require.NoError(t, err)
-	}()
-
-	// FIXME:
-	// 	- do some operation via `ClusterOperation`
-	// 	- check cluster state via `ClusterAssertState`
-	// 	- wait cluster state via `ClusterWaitState`
-}
+type (
+	Timestamp = timestamp.Timestamp
+)
