@@ -53,7 +53,7 @@ func (l *Loop) loop() {
 				}
 			}
 		}
-		l.Itemcount+=len(batch)
+		l.Itemcount += len(batch)
 		l.Itemtimes++
 		l.fn(batch, l.nextQueue)
 	}

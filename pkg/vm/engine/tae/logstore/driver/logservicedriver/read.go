@@ -6,11 +6,13 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
 var ErrRecordNotFound = errors.New("driver read cache: lsn not found")
+var ErrAllRecordsRead = errors.New("driver read cache: all records are read")
 
 type readCache struct {
 	lsns    []uint64
@@ -31,20 +33,31 @@ func (d *LogServiceDriver) Read(drlsn uint64) (*entry.Entry, error) {
 	if err != nil {
 		panic(err)
 	}
+	d.readMu.RLock()
 	r, err := d.readFromCache(lsn)
+	d.readMu.RUnlock()
 	if err != nil {
+		d.readMu.Lock()
+		r, err = d.readFromCache(lsn)
+		if err == nil {
+			d.readMu.Unlock()
+			return r.readEntry(drlsn), nil
+		}
 		d.readSmallBatchFromLogService(lsn)
 		r, err = d.readFromCache(lsn)
 		if err != nil {
+			logutil.Infof("try read %d", lsn)
 			panic(err)
 		}
+		d.readMu.Unlock()
 	}
 	return r.readEntry(drlsn), nil
 }
 
 func (d *LogServiceDriver) readFromCache(lsn uint64) (*recordEntry, error) {
-	d.readMu.RLock()
-	defer d.readMu.RUnlock()
+	if len(d.records) == 0 {
+		return nil, ErrAllRecordsRead
+	}
 	record, ok := d.records[lsn]
 	if !ok {
 		return nil, ErrRecordNotFound
@@ -52,19 +65,29 @@ func (d *LogServiceDriver) readFromCache(lsn uint64) (*recordEntry, error) {
 	return record, nil
 }
 
-func (d *LogServiceDriver) appendRecords(records []logservice.LogRecord, firstlsn uint64,fn func(*recordEntry)) {
+func (d *LogServiceDriver) appendRecords(records []logservice.LogRecord, firstlsn uint64, fn func(uint64, *recordEntry), maxsize int) {
 	lsns := make([]uint64, 0)
+	cnt := 0
 	for i, record := range records {
 		if record.GetType() != pb.UserRecord {
 			continue
 		}
 		lsn := firstlsn + uint64(i)
+		cnt++
+		if maxsize != 0 {
+			if cnt >= d.config.ClientPoolMaxSize {
+				break
+			}
+		}
 		_, ok := d.records[lsn]
 		if ok {
 			continue
 		}
 		d.records[lsn] = newEmptyRecordEntry(record)
 		lsns = append(lsns, lsn)
+		if fn != nil {
+			fn(lsn, d.records[lsn])
+		}
 	}
 	d.lsns = append(d.lsns, lsns...)
 }
@@ -78,28 +101,27 @@ func (d *LogServiceDriver) dropRecords() {
 	d.lsns = d.lsns[drop:]
 }
 func (d *LogServiceDriver) dropRecordByLsn(lsn uint64) {
-		delete(d.records, lsn)
+	delete(d.records, lsn)
 }
 func (d *LogServiceDriver) readSmallBatchFromLogService(lsn uint64) {
-	d.readMu.Lock()
-	defer d.readMu.Unlock()
 	_, records := d.readFromLogService(lsn, int(d.config.ReadMaxSize))
-	d.appendRecords(records, lsn,nil)
+	d.appendRecords(records, lsn, nil, d.config.ReadCacheSize)
 	if len(d.lsns) > d.config.ReadCacheSize {
 		d.dropRecords()
 	}
 }
 
-func (d *LogServiceDriver) readFromLogServiceInReplay(lsn uint64, size int) (uint64,uint64) {
+func (d *LogServiceDriver) readFromLogServiceInReplay(lsn uint64, size int, fn func(lsn uint64, r *recordEntry)) (uint64, uint64) {
 	nextLsn, records := d.readFromLogService(lsn, size)
-	safeLsn:=uint64(0)
-	d.appendRecords(records, lsn,func (r *recordEntry)  {
+	safeLsn := uint64(0)
+	d.appendRecords(records, lsn, func(lsn uint64, r *recordEntry) {
 		r.unmarshal()
-		if safeLsn<r.appended{
-			safeLsn=r.appended
+		if safeLsn < r.appended {
+			safeLsn = r.appended
 		}
-	})
-	return nextLsn,safeLsn
+		fn(lsn, r)
+	}, 0)
+	return nextLsn, safeLsn
 }
 
 func (d *LogServiceDriver) readFromLogService(lsn uint64, size int) (nextLsn uint64, records []logservice.LogRecord) {
@@ -112,6 +134,7 @@ func (d *LogServiceDriver) readFromLogService(lsn uint64, size int) (nextLsn uin
 	}
 	records, nextLsn, err = client.c.Read(ctx, lsn, d.config.ReadMaxSize)
 	if err != nil { //TODO
+		logutil.Infof("try read %d", lsn)
 		panic(err)
 	}
 	return

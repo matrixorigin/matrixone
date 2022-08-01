@@ -9,7 +9,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
-func (w *StoreImpl) FuzzyCheckpoint(gid uint32, indexes []*Index) (ckpEntry entry.Entry,err error) {
+func (w *StoreImpl) FuzzyCheckpoint(gid uint32, indexes []*Index) (ckpEntry entry.Entry, err error) {
 	ckpEntry = w.makeFuzzyCheckpointEntry(gid, indexes)
 	drentry, _, _ := w.doAppend(GroupCKP, ckpEntry)
 	w.checkpointQueue.Enqueue(drentry)
@@ -69,18 +69,18 @@ func (w *StoreImpl) makeFuzzyCheckpointEntry(gid uint32, indexes []*Index) (ckpE
 }
 
 func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64) (ckpEntry entry.Entry, err error) {
-	ckpEntry = w.makeRangeCheckpointEntry(gid, start,end)
+	ckpEntry = w.makeRangeCheckpointEntry(gid, start, end)
 	drentry, _, _ := w.doAppend(GroupCKP, ckpEntry)
 	w.checkpointQueue.Enqueue(drentry)
 	return
 }
 
-func (w *StoreImpl) makeRangeCheckpointEntry(gid uint32,  start, end uint64) (ckpEntry entry.Entry) {
+func (w *StoreImpl) makeRangeCheckpointEntry(gid uint32, start, end uint64) (ckpEntry entry.Entry) {
 	info := &entry.Info{
 		Group: entry.GTCKp,
 		Checkpoints: []*entry.CkpRanges{{
-			Group:   gid,
-			Ranges: common.NewClosedIntervalsByInterval(&common.ClosedInterval{Start: start,End: end}),
+			Group:  gid,
+			Ranges: common.NewClosedIntervalsByInterval(&common.ClosedInterval{Start: start, End: end}),
 		}},
 	}
 	ckpEntry = entry.GetBase()

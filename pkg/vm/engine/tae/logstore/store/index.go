@@ -1,6 +1,6 @@
 package store
+
 import (
-	
 	"encoding/binary"
 	"fmt"
 	"io"

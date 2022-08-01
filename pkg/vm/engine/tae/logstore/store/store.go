@@ -30,19 +30,20 @@ type StoreImpl struct {
 	truncatingQueue sm.Queue
 	truncateQueue   sm.Queue
 }
-func NewStoreWithBatchStoreDriver(dir,name string,cfg *batchstoredriver.StoreCfg) Store {
-	driver,err:=batchstoredriver.NewBaseStore(dir,name,cfg)
-	if err !=nil{
+
+func NewStoreWithBatchStoreDriver(dir, name string, cfg *batchstoredriver.StoreCfg) Store {
+	driver, err := batchstoredriver.NewBaseStore(dir, name, cfg)
+	if err != nil {
 		panic(err)
 	}
 	return NewStore(driver)
 }
 func NewStore(driver driver.Driver) *StoreImpl {
 	w := &StoreImpl{
-		StoreInfo:  newWalInfo(),
-		driver:   driver,
-		appendWg: sync.WaitGroup{},
-		appendMu: sync.RWMutex{},
+		StoreInfo: newWalInfo(),
+		driver:    driver,
+		appendWg:  sync.WaitGroup{},
+		appendMu:  sync.RWMutex{},
 	}
 	w.driverAppendQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onDriverAppendQueue)
 	w.doneWithErrQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onDoneWithErrQueue)

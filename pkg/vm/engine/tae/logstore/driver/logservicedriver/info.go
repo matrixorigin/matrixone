@@ -2,6 +2,7 @@ package logservicedriver
 
 import (
 	"errors"
+	"math"
 	"sync"
 	"time"
 
@@ -17,40 +18,60 @@ type driverInfo struct {
 	addr        map[uint64]*common.ClosedIntervals //logservicelsn-driverlsn TODO drop on truncate
 	validLsn    *roaring64.Bitmap
 	addrMu      sync.RWMutex
-	driverLsn   uint64
+	driverLsn   uint64 //
+	syncing     uint64
+	synced      uint64
+	syncedMu    sync.RWMutex
 	driverLsnMu sync.RWMutex
 
 	truncating             uint64 //
 	truncatedLogserviceLsn uint64 //
 
-	appending            uint64
-	appended             *common.ClosedIntervals
-	appendedMu           sync.RWMutex
-	logserviceAppended   *common.ClosedIntervals //
-	logserviceAppendedMu sync.RWMutex
-	commitCond           sync.Cond
+	appending  uint64
+	appended   *common.ClosedIntervals
+	appendedMu sync.RWMutex
+	commitCond sync.Cond
 }
 
 func newDriverInfo() *driverInfo {
 	return &driverInfo{
-		addr:                 make(map[uint64]*common.ClosedIntervals),
-		validLsn: roaring64.NewBitmap(),
-		addrMu:               sync.RWMutex{},
-		driverLsnMu:          sync.RWMutex{},
-		appended:             common.NewClosedIntervals(),
-		logserviceAppended:   common.NewClosedIntervals(),
-		appendedMu:           sync.RWMutex{},
-		logserviceAppendedMu: sync.RWMutex{},
-		commitCond:           *sync.NewCond(new(sync.Mutex)),
+		addr:        make(map[uint64]*common.ClosedIntervals),
+		validLsn:    roaring64.NewBitmap(),
+		addrMu:      sync.RWMutex{},
+		driverLsnMu: sync.RWMutex{},
+		appended:    common.NewClosedIntervals(),
+		appendedMu:  sync.RWMutex{},
+		commitCond:  *sync.NewCond(new(sync.Mutex)),
 	}
 }
-func (info *driverInfo) onReplayRecordEntry(lsn uint64, driverLsns *common.ClosedIntervals){
-	info.addr[lsn]=driverLsns
+
+func (info *driverInfo) onReplay(r *replayer) {
+	info.driverLsn = r.maxDriverLsn
+	info.synced = r.maxDriverLsn
+	info.syncing = r.maxDriverLsn
+	if r.minDriverLsn != math.MaxUint64 {
+		info.truncating = r.minDriverLsn - 1
+	}
+	info.truncatedLogserviceLsn = r.truncatedLogserviceLsn
+}
+
+func (info *driverInfo) onReplayRecordEntry(lsn uint64, driverLsns *common.ClosedIntervals) {
+	info.addr[lsn] = driverLsns
 	info.validLsn.Add(lsn)
 }
-func (info *driverInfo) getNextValidLogserviceLsn(lsn uint64)uint64{
+
+func (info *driverInfo) getNextValidLogserviceLsn(lsn uint64) uint64 {
+	info.addrMu.Lock()
+	defer info.addrMu.Unlock()
+	if info.validLsn.GetCardinality() == 0 {
+		return 0
+	}
+	max := info.validLsn.Maximum()
+	if lsn >= max {
+		return max
+	}
 	lsn++
-	for !info.validLsn.Contains(lsn){
+	for !info.validLsn.Contains(lsn) {
 		lsn++
 	}
 	return lsn
@@ -78,10 +99,8 @@ func (info *driverInfo) getMaxDriverLsn(logserviceLsn uint64) uint64 {
 }
 
 func (info *driverInfo) allocateDriverLsn() uint64 {
-	info.driverLsnMu.Lock()
 	info.driverLsn++
 	lsn := info.driverLsn
-	info.driverLsnMu.Unlock()
 	return lsn
 }
 
@@ -136,20 +155,34 @@ func (info *driverInfo) logAppend(appender *driverAppender) {
 		array = append(array, key)
 	}
 	info.validLsn.Add(appender.logserviceLsn)
-	info.addr[appender.logserviceLsn] = common.NewClosedIntervalsBySlice(array)
+	interval := common.NewClosedIntervalsBySlice(array)
+	info.addr[appender.logserviceLsn] = interval
 	info.addrMu.Unlock()
+	if interval.GetMin() != info.syncing+1 {
+		panic("logic err")
+	}
+	if len(interval.Intervals) != 1 {
+		logutil.Infof("interval is %v", interval)
+		panic("logic err")
+	}
+	info.syncing = interval.GetMax()
 }
+func (info *driverInfo) getSynced() uint64 {
+	info.syncedMu.RLock()
+	lsn := info.synced
+	info.syncedMu.RUnlock()
+	return lsn
+}
+func (info *driverInfo) onAppend(appended []uint64) {
+	info.syncedMu.Lock()
+	info.synced = info.syncing
+	info.syncedMu.Unlock()
 
-func (info *driverInfo) onAppend(appended, logserviceAppended []uint64) {
 	appendedArray := common.NewClosedIntervalsBySlice(appended)
 	info.appendedMu.Lock()
 	info.appended.TryMerge(*appendedArray)
 	info.appendedMu.Unlock()
 
-	logserviceAppendedArray := common.NewClosedIntervalsBySlice(logserviceAppended)
-	info.logserviceAppendedMu.Lock()
-	info.logserviceAppended.TryMerge(*logserviceAppendedArray)
-	info.logserviceAppendedMu.Unlock()
 	info.commitCond.L.Lock()
 	info.commitCond.Broadcast()
 	info.commitCond.L.Unlock()

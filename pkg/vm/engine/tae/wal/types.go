@@ -15,7 +15,6 @@
 package wal
 
 import (
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 )
@@ -26,7 +25,7 @@ const (
 	GroupCatalog
 )
 
-type Index=store.Index
+type Index = store.Index
 
 type ReplayObserver interface {
 	OnTimeStamp(uint64)
@@ -45,4 +44,3 @@ type Driver interface {
 	Replay(handle store.ApplyHandle) error
 	Close() error
 }
-

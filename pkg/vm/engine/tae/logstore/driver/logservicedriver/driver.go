@@ -9,16 +9,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
 
-
-func RetryWithTimeout(timeoutDuration time.Duration, fn func()(shouldReturn bool)) error{
-	ctx,cancel:=context.WithTimeout(context.Background(),timeoutDuration)
+func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn bool)) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutDuration)
 	defer cancel()
-	for{
-		select{
+	for {
+		select {
 		case <-ctx.Done():
 			return ErrRetryTimeOut
 		default:
-			if fn(){
+			if fn() {
 				return nil
 			}
 		}
@@ -43,19 +42,19 @@ type LogServiceDriver struct {
 
 	truncateQueue sm.Queue
 
-	flushtimes int
+	flushtimes  int
 	appendtimes int
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
-	clientpoolConfig:=&clientConfig{
-		cancelDuration: cfg.NewClientDuration,
-		recordSize: cfg.NewRecordSize,
+	clientpoolConfig := &clientConfig{
+		cancelDuration:         cfg.NewClientDuration,
+		recordSize:             cfg.NewRecordSize,
 		logserviceClientConfig: cfg.ClientConfig,
-		GetClientRetryTimeOut: cfg.GetClientRetryTimeOut,
+		GetClientRetryTimeOut:  cfg.GetClientRetryTimeOut,
 	}
 	d := &LogServiceDriver{
-		clientPool: newClientPool(cfg.ClientPoolMaxSize,cfg.ClientPoolMaxSize,clientpoolConfig),
+		clientPool:      newClientPool(cfg.ClientPoolMaxSize, cfg.ClientPoolMaxSize, clientpoolConfig),
 		config:          cfg,
 		appendable:      newDriverAppender(),
 		driverInfo:      newDriverInfo(),
@@ -71,13 +70,13 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	d.appendedLoop.Start()
 	d.postAppendLoop = sm.NewLoop(d.postAppendQueue, nil, d.onPostAppendQueue, 10000)
 	d.postAppendLoop.Start()
-	d.truncateQueue = sm.NewSafeQueue(10000,10000,d.onTruncate)
+	d.truncateQueue = sm.NewSafeQueue(10000, 10000, d.onTruncate)
 	d.truncateQueue.Start()
 	return d
 }
 
 func (d *LogServiceDriver) Close() error {
-	logutil.Infof("append%d,flush%d",d.appendtimes,d.flushtimes)
+	logutil.Infof("append%d,flush%d", d.appendtimes, d.flushtimes)
 	d.clientPool.Close()
 	d.closeCancel()
 	d.preAppendLoop.Stop()
@@ -87,4 +86,9 @@ func (d *LogServiceDriver) Close() error {
 	return nil
 }
 
-func (d *LogServiceDriver) Replay(h driver.ApplyHandle) error {panic("TODO")}
+func (d *LogServiceDriver) Replay(h driver.ApplyHandle) error {
+	r := newReplayer(h, 1024, d)
+	r.replay()
+	d.onReplay(r)
+	return nil
+}

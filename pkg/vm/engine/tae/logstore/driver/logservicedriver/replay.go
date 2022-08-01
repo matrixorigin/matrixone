@@ -1,43 +1,74 @@
 package logservicedriver
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
+import (
+	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
+)
 
 type replayer struct {
 	readMaxSize int
 
-	minLogserviceLsn uint64
+	truncatedLogserviceLsn uint64
 
 	minDriverLsn uint64
 	maxDriverLsn uint64
 
+	driverLsnLogserviceLsnMap map[uint64]uint64 //start-lsn
+
 	replayHandle  driver.ApplyHandle
 	replayedLsn   uint64
+	inited        bool
 	safeLsn       uint64
 	nextToReadLsn uint64
 	d             *LogServiceDriver
 }
 
-func (r *replayer) Replay(h driver.ApplyHandle) {
-	//get truncated
-	var err error
-	r.minLogserviceLsn, err = r.d.GetTruncated()
-	if err != nil {
-		panic(err) //retry
-	}
-	//readfrom logservice
-	for !r.readRecords() {
-		for r.replayedLsn < r.safeLsn {
-			//replay entry
-			r.replayLogserviceEntry(r.replayedLsn + 1)
-			//update replayedLsn and drop replayed entries
-			r.replayedLsn++
-			r.d.dropRecordByLsn(r.replayedLsn)
-		}
+func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *replayer {
+	truncated := d.getLogserviceTruncate()
+	logutil.Infof("lalala truncated %d", truncated)
+	return &replayer{
+		minDriverLsn:              math.MaxUint64,
+		driverLsnLogserviceLsnMap: make(map[uint64]uint64),
+		replayHandle:              h,
+		readMaxSize:               readmaxsize,
+		nextToReadLsn:             truncated + 1,
+		replayedLsn:               math.MaxUint64,
+		d:                         d,
 	}
 }
 
+func (r *replayer) replay() {
+	var err error
+	r.truncatedLogserviceLsn, err = r.d.GetTruncated()
+	if err != nil {
+		panic(err) //retry
+	}
+	for !r.readRecords() {
+		for r.replayedLsn < r.safeLsn {
+			r.replayLogserviceEntry(r.replayedLsn + 1)
+		}
+	}
+	err = r.replayLogserviceEntry(r.replayedLsn + 1)
+	for err != ErrAllRecordsRead {
+		err = r.replayLogserviceEntry(r.replayedLsn + 1)
+
+	}
+	r.d.lsns = make([]uint64, 0)
+}
+
 func (r *replayer) readRecords() (readEnd bool) {
-	nextLsn, safeLsn := r.d.readFromLogServiceInReplay(r.nextToReadLsn, r.readMaxSize)
+	nextLsn, safeLsn := r.d.readFromLogServiceInReplay(r.nextToReadLsn, r.readMaxSize, func(lsn uint64, record *recordEntry) {
+		drlsn := record.GetMinLsn()
+		r.driverLsnLogserviceLsnMap[drlsn] = lsn
+		if drlsn < r.replayedLsn {
+			if r.inited {
+				panic("logic err")
+			}
+			r.replayedLsn = drlsn - 1
+		}
+	})
 	if nextLsn == r.nextToReadLsn {
 		return true
 	}
@@ -48,17 +79,32 @@ func (r *replayer) readRecords() (readEnd bool) {
 	return false
 }
 
-func (r *replayer) replayLogserviceEntry(lsn uint64) {
-	record, err := r.d.readFromCache(lsn)
+func (r *replayer) replayLogserviceEntry(lsn uint64) error {
+	logserviceLsn, ok := r.driverLsnLogserviceLsnMap[lsn]
+	if !ok {
+		if len(r.driverLsnLogserviceLsnMap) == 0 {
+			return ErrAllRecordsRead
+		}
+		logutil.Infof("try read %d in map %v", lsn, r.driverLsnLogserviceLsnMap)
+		panic("logic error")
+	}
+	record, err := r.d.readFromCache(logserviceLsn)
+	if err == ErrAllRecordsRead {
+		return err
+	}
 	if err != nil {
 		panic(err)
 	}
 	intervals := record.replay(r.replayHandle)
-	r.d.onReplayRecordEntry(lsn, intervals)
+	r.d.onReplayRecordEntry(logserviceLsn, intervals)
 	r.onReplayDriverLsn(intervals.GetMax())
 	r.onReplayDriverLsn(intervals.GetMin())
+	r.d.dropRecordByLsn(logserviceLsn)
+	r.replayedLsn = record.GetMaxLsn()
+	r.inited = true
+	delete(r.driverLsnLogserviceLsnMap, lsn)
+	return nil
 }
-
 func (r *replayer) onReplayDriverLsn(lsn uint64) {
 	if lsn == 0 {
 		return

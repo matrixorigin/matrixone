@@ -22,36 +22,36 @@ var (
 type StoreInfo struct {
 	checkpointInfo      map[uint32]*checkpointInfo
 	ckpMu               sync.RWMutex
-	walDriverLsnMap     map[uint32]map[uint64]uint64 
+	walDriverLsnMap     map[uint32]map[uint64]uint64
 	lsnMu               sync.RWMutex
-	driverCheckpointing uint64            
-	driverCheckpointed  uint64            
-	walCurrentLsn       map[uint32]uint64 
+	driverCheckpointing uint64
+	driverCheckpointed  uint64
+	walCurrentLsn       map[uint32]uint64
 	lsnmu               sync.RWMutex
-	syncing             map[uint32]uint64 
+	syncing             map[uint32]uint64
 
-	synced     map[uint32]uint64 
+	synced     map[uint32]uint64
 	syncedMu   sync.RWMutex
 	commitCond sync.Cond
 
-	checkpointed   map[uint32]uint64 
+	checkpointed   map[uint32]uint64
 	checkpointedMu sync.RWMutex
-	ckpcnt         map[uint32]uint64 
+	ckpcnt         map[uint32]uint64
 	ckpcntMu       sync.RWMutex
 }
 
 func newWalInfo() *StoreInfo {
 	return &StoreInfo{
-		checkpointInfo:  make(map[uint32]*checkpointInfo), 
+		checkpointInfo:  make(map[uint32]*checkpointInfo),
 		ckpMu:           sync.RWMutex{},
-		walDriverLsnMap: make(map[uint32]map[uint64]uint64), 
+		walDriverLsnMap: make(map[uint32]map[uint64]uint64),
 		lsnMu:           sync.RWMutex{},
 		walCurrentLsn:   make(map[uint32]uint64),
 		lsnmu:           sync.RWMutex{},
 		syncing:         make(map[uint32]uint64),
 		commitCond:      *sync.NewCond(&sync.Mutex{}),
 
-		checkpointed:   make(map[uint32]uint64), 
+		checkpointed:   make(map[uint32]uint64),
 		checkpointedMu: sync.RWMutex{},
 		synced:         make(map[uint32]uint64),
 		syncedMu:       sync.RWMutex{},

@@ -26,12 +26,12 @@ import (
 
 // var buf []byte
 func init() {
-    go http.ListenAndServe("0.0.0.0:6060", nil)
-// 	var bs bytes.Buffer
-// 	for i := 0; i < 3000; i++ {
-// 		bs.WriteString("helloyou")
-// 	}
-// 	buf = bs.Bytes()
+	go http.ListenAndServe("0.0.0.0:6060", nil)
+	// 	var bs bytes.Buffer
+	// 	for i := 0; i < 3000; i++ {
+	// 		bs.WriteString("helloyou")
+	// 	}
+	// 	buf = bs.Bytes()
 }
 
 func newTestDriver(t *testing.T) driver.Driver {
@@ -45,13 +45,13 @@ func newTestDriver(t *testing.T) driver.Driver {
 	assert.NoError(t, err)
 	return s
 }
-func newTestLogserviceDriver(t *testing.T) (driver.Driver,*logservice.Service) {
+func newTestLogserviceDriver(t *testing.T) (driver.Driver, *logservice.Service) {
 	fs := vfs.NewStrictMem()
 	service, ccfg, err := logservice.NewTestService(fs)
 	assert.NoError(t, err)
 	cfg := logservicedriver.NewTestConfig(&ccfg)
 	driver := logservicedriver.NewLogServiceDriver(cfg)
-	return driver,service
+	return driver, service
 }
 func TestAppendRead(t *testing.T) {
 	driver := newTestDriver(t)
@@ -82,7 +82,7 @@ func mockEntry() entry.Entry {
 }
 func testPerformance(t *testing.T) {
 	// driver := newTestDriver(t)
-	driver,server:=newTestLogserviceDriver(t)
+	driver, server := newTestLogserviceDriver(t)
 	defer server.Close()
 	wal := NewStore(driver)
 	defer wal.Close()
@@ -155,8 +155,8 @@ func TestWal(t *testing.T) {
 			assert.NoError(t, e.WaitDone())
 			entryGroupID, entryLSN := e.GetLsn()
 			idxes := []*Index{{LSN: entryLSN, CSN: 0, Size: 1}}
-			ckpEntry,err := wal.FuzzyCheckpoint(entryGroupID, idxes)
-			assert.NoError(t,err)
+			ckpEntry, err := wal.FuzzyCheckpoint(entryGroupID, idxes)
+			assert.NoError(t, err)
 			ckpEntry.WaitDone()
 			ckpGroup, ckpLsn := ckpEntry.GetLsn()
 			_, err = wal.Load(ckpGroup, ckpLsn)

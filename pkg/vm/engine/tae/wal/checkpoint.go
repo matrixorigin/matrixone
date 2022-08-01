@@ -5,15 +5,15 @@ import (
 )
 
 func (driver *walDriver) Checkpoint(indexes []*Index) (e LogEntry, err error) {
-	e,err= driver.impl.FuzzyCheckpoint(GroupC,indexes)
+	e, err = driver.impl.FuzzyCheckpoint(GroupC, indexes)
 	return
 }
 
-func (driver *walDriver) checkpointTicker(){
+func (driver *walDriver) checkpointTicker() {
 	defer driver.wg.Done()
-	ticker:=time.NewTicker(driver.ckpDuration)
-	for{
-		select{
+	ticker := time.NewTicker(driver.ckpDuration)
+	for {
+		select {
 		case <-driver.cancelContext.Done():
 			return
 		case <-ticker.C:
@@ -46,8 +46,8 @@ func (driver *walDriver) CkpUC() {
 	}
 	driver.cmu.RUnlock()
 	driver.ucmu.RUnlock()
-	if ckpedUC== ucLsn{
+	if ckpedUC == ucLsn {
 		return
 	}
-	driver.impl.RangeCheckpoint(GroupUC,0, ckpedUC)
+	driver.impl.RangeCheckpoint(GroupUC, 0, ckpedUC)
 }

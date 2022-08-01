@@ -118,7 +118,7 @@ func main() {
 
 	t0 := time.Now()
 
-	s= store.NewStoreWithBatchStoreDriver(sampleDir, name, nil)
+	s = store.NewStoreWithBatchStoreDriver(sampleDir, name, nil)
 	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
 		// fmt.Printf("%s", payload)
 	}

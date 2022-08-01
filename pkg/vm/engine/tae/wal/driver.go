@@ -30,8 +30,8 @@ type entryWithInfo struct {
 	info any
 }
 
-type DriverConfig struct{
-	BatchStoreConfig *batchstoredriver.StoreCfg
+type DriverConfig struct {
+	BatchStoreConfig   *batchstoredriver.StoreCfg
 	CheckpointDuration time.Duration
 }
 
@@ -41,12 +41,12 @@ type walDriver struct {
 	impl store.Store
 	own  bool
 
-	logInfoQueue    sm.Queue
+	logInfoQueue sm.Queue
 
-	ckpDuration time.Duration
-	cancelfn context.CancelFunc
+	ckpDuration   time.Duration
+	cancelfn      context.CancelFunc
 	cancelContext context.Context
-	wg sync.WaitGroup
+	wg            sync.WaitGroup
 }
 
 func NewDriver(dir, name string, cfg *DriverConfig) Driver {
@@ -55,19 +55,19 @@ func NewDriver(dir, name string, cfg *DriverConfig) Driver {
 	return driver
 }
 
-func NewDriverWithStore(impl store.Store, own bool,ckpDuration time.Duration) Driver {
-	if ckpDuration==0{
-		ckpDuration=time.Second
+func NewDriverWithStore(impl store.Store, own bool, ckpDuration time.Duration) Driver {
+	if ckpDuration == 0 {
+		ckpDuration = time.Second
 	}
 	driver := &walDriver{
-		walInfo: newWalInfo(),
-		impl:    impl,
-		own:     own,
-		wg:sync.WaitGroup{},
+		walInfo:     newWalInfo(),
+		impl:        impl,
+		own:         own,
+		wg:          sync.WaitGroup{},
 		ckpDuration: ckpDuration,
 	}
 	driver.logInfoQueue = sm.NewSafeQueue(1000, 1000, driver.onLogInfo)
-	driver.cancelContext,driver.cancelfn = context.WithCancel(context.Background())
+	driver.cancelContext, driver.cancelfn = context.WithCancel(context.Background())
 	driver.logInfoQueue.Start()
 	driver.wg.Add(1)
 	go driver.checkpointTicker()

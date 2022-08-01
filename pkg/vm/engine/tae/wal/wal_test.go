@@ -34,7 +34,7 @@ const (
 	ModuleName = "TAEWAL"
 )
 
-func initWal(t *testing.T) (Driver,string) {
+func initWal(t *testing.T) (Driver, string) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	cfg := &batchstoredriver.StoreCfg{
 		RotateChecker: batchstoredriver.NewMaxSizeRotateChecker(int(common.K) * 2),
@@ -44,11 +44,11 @@ func initWal(t *testing.T) (Driver,string) {
 		CheckpointDuration: time.Millisecond * 10,
 	}
 	driver := NewDriver(dir, "store", dcfg)
-	return driver,dir
+	return driver, dir
 }
 
-func restart(t *testing.T, driver Driver,dir string)Driver{
-	assert.NoError(t,driver.Close())
+func restart(t *testing.T, driver Driver, dir string) Driver {
+	assert.NoError(t, driver.Close())
 	cfg := &batchstoredriver.StoreCfg{
 		RotateChecker: batchstoredriver.NewMaxSizeRotateChecker(int(common.K) * 2),
 	}
@@ -126,13 +126,13 @@ func getLsn(e entry.Entry) (group uint32, lsn uint64) {
 //ckp C
 //check UC is checkpointed
 func TestCheckpointUC(t *testing.T) {
-	driver,dir := initWal(t)
+	driver, dir := initWal(t)
 
-	wg:=&sync.WaitGroup{}
-	appendworker,_:=ants.NewPool(100)
-	ckpworker,_:=ants.NewPool(100)
+	wg := &sync.WaitGroup{}
+	appendworker, _ := ants.NewPool(100)
+	ckpworker, _ := ants.NewPool(100)
 
-	ckpfn:= func(lsn uint64) func ()  {
+	ckpfn := func(lsn uint64) func() {
 		return func() {
 			ckpEntry := fuzzyCheckpointGroupC(t, driver, lsn, 0, 2, 2)
 			assert.NoError(t, ckpEntry.WaitDone())
@@ -161,7 +161,7 @@ func TestCheckpointUC(t *testing.T) {
 	}
 	wg.Wait()
 
-	driver=restart(t,driver,dir)
+	driver = restart(t, driver, dir)
 
 	testutils.WaitExpect(4000, func() bool {
 		return getCurrSeqNum(driver, GroupUC) == getCheckpointed(driver, GroupUC)

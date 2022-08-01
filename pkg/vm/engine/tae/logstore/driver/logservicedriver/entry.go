@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"sync"
 	"sync/atomic"
 
@@ -27,7 +28,25 @@ func newMeta() *meta {
 func (m *meta) SetAppended(appended uint64) {
 	m.appended = appended
 }
-
+func (m *meta) GetMinLsn() uint64 {
+	min := uint64(0)
+	min = math.MaxUint64
+	for lsn := range m.addr {
+		if lsn < min {
+			min = lsn
+		}
+	}
+	return min
+}
+func (m *meta) GetMaxLsn() uint64 {
+	max := uint64(0)
+	for lsn := range m.addr {
+		if lsn > max {
+			max = lsn
+		}
+	}
+	return max
+}
 func (m *meta) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, m.appended); err != nil {
 		return
@@ -124,15 +143,14 @@ func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
 
 func (r *recordEntry) replay(h driver.ApplyHandle) (addr *common.ClosedIntervals) {
 	bbuf := bytes.NewBuffer(r.payload)
-	lsns:=make([]uint64,0)
+	lsns := make([]uint64, 0)
 	for lsn := range r.meta.addr {
-		lsns=append(lsns, lsn)
+		lsns = append(lsns, lsn)
 		e := entry.NewEmptyEntry()
 		e.ReadFrom(bbuf)
-		e.Lsn = lsn
 		h(e)
 	}
-	intervals:=common.NewClosedIntervalsBySlice(lsns)
+	intervals := common.NewClosedIntervalsBySlice(lsns)
 	return intervals
 }
 func (r *recordEntry) append(e *entry.Entry) {

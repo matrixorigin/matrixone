@@ -26,7 +26,7 @@ func newReplayer(h driver.ApplyHandle) *replayer {
 	return &replayer{
 		addrs:      make(map[int]*common.ClosedIntervals),
 		applyEntry: h,
-		minlsn: math.MaxUint64,
+		minlsn:     math.MaxUint64,
 	}
 }
 
@@ -43,8 +43,8 @@ func (r *replayer) updateGroupLSN(lsn uint64) {
 	if lsn > r.maxlsn {
 		r.maxlsn = lsn
 	}
-	if lsn< r.minlsn{
-		r.minlsn=lsn
+	if lsn < r.minlsn {
+		r.minlsn = lsn
 	}
 }
 

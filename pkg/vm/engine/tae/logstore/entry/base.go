@@ -409,8 +409,8 @@ func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 		if err != nil {
 			return int64(n1), err
 		}
-		info:=NewEmptyInfo()
-		err=info.Unmarshal(infoBuf)
+		info := NewEmptyInfo()
+		err = info.Unmarshal(infoBuf)
 		if err != nil {
 			return int64(n1), err
 		}

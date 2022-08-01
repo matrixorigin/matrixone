@@ -6,23 +6,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
-type walInfo struct{
+type walInfo struct {
 	ucLsnTidMap map[uint64]uint64
-	ucmu sync.RWMutex
-	cTidLsnMap map[uint64]uint64
-	cmu sync.RWMutex
+	ucmu        sync.RWMutex
+	cTidLsnMap  map[uint64]uint64
+	cmu         sync.RWMutex
 }
 
-func newWalInfo()*walInfo{
+func newWalInfo() *walInfo {
 	return &walInfo{
 		ucLsnTidMap: make(map[uint64]uint64),
-		ucmu: sync.RWMutex{},
-		cTidLsnMap: make(map[uint64]uint64),
-		cmu: sync.RWMutex{},
+		ucmu:        sync.RWMutex{},
+		cTidLsnMap:  make(map[uint64]uint64),
+		cmu:         sync.RWMutex{},
 	}
 }
 
-func (w *walInfo)logEntry(info *entry.Info){
+func (w *walInfo) logEntry(info *entry.Info) {
 	if info.Group == GroupC {
 		w.cmu.Lock()
 		w.cTidLsnMap[info.TxnId] = info.GroupLSN
@@ -35,9 +35,9 @@ func (w *walInfo)logEntry(info *entry.Info){
 	}
 }
 
-func (w *walInfo)onLogInfo(items ...any){
-	for _,item:=range items{
-		e:=item.(*entryWithInfo)
+func (w *walInfo) onLogInfo(items ...any) {
+	for _, item := range items {
+		e := item.(*entryWithInfo)
 		w.logEntry(e.info.(*entry.Info))
 	}
 }
