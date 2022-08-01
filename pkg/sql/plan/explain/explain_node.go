@@ -218,7 +218,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, error) {
 	lines := make([]string, 0)
 	// Get Sort list info
-	if ndesc.Node.OrderBy != nil {
+	if len(ndesc.Node.OrderBy) > 0 {
 		orderByInfo, err := ndesc.GetOrderByInfo(options)
 		if err != nil {
 			return nil, err
@@ -236,7 +236,7 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 	}
 
 	// Get Join Condition info
-	if ndesc.Node.OnList != nil {
+	if len(ndesc.Node.OnList) > 0 {
 		joinOnInfo, err := ndesc.GetJoinConditionInfo(options)
 		if err != nil {
 			return nil, err
@@ -245,7 +245,7 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 	}
 
 	// Get Group key info
-	if ndesc.Node.GroupBy != nil {
+	if len(ndesc.Node.GroupBy) > 0 {
 		groupByInfo, err := ndesc.GetGroupByInfo(options)
 		if err != nil {
 			return nil, err
@@ -254,7 +254,7 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 	}
 
 	// Get Aggregate function info
-	if ndesc.Node.AggList != nil {
+	if len(ndesc.Node.AggList) > 0 {
 		aggListInfo, err := ndesc.GetAggregationInfo(options)
 		if err != nil {
 			return nil, err
@@ -263,7 +263,7 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 	}
 
 	// Get Filter list info
-	if ndesc.Node.FilterList != nil && len(ndesc.Node.FilterList) != 0 {
+	if len(ndesc.Node.FilterList) > 0 {
 		filterInfo, err := ndesc.GetFilterConditionInfo(options)
 		if err != nil {
 			return nil, err
