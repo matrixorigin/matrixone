@@ -30,8 +30,11 @@ import (
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
 	switch exprImpl := astExpr.(type) {
 	case *tree.NumVal:
-		expr, err = b.bindNumVal(exprImpl)
-
+		if d, ok := b.impl.(*DefaultBinder); ok {
+			expr, err = b.bindNumVal(exprImpl, d.typ)
+		} else {
+			expr, err = b.bindNumVal(exprImpl, nil)
+		}
 	case *tree.ParenExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, isRoot)
 
@@ -194,6 +197,10 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 }
 
 func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (expr *plan.Expr, err error) {
+	if b.ctx == nil {
+		return nil, errors.New("", fmt.Sprintf("Column reference '%s' is ambiguous", astExpr.Parts[0]))
+	}
+
 	col := astExpr.Parts[0]
 	table := astExpr.Parts[1]
 	name := tree.String(astExpr, dialect.MYSQL)
@@ -232,7 +239,8 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				err = errors.New("", fmt.Sprintf("Column '%s' does not exist", name))
 			}
 		} else {
-			err = errors.New("", fmt.Sprintf("missing FROM-clause entry for table %q", table))
+			err = errors.New("", fmt.Sprintf(
+				"missing FROM-clause entry for table %q", table))
 		}
 	}
 
@@ -282,6 +290,9 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 }
 
 func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Expr, error) {
+	if b.ctx == nil {
+		return nil, errors.New("", "This field reference doesn't support SUBQUERY")
+	}
 	subCtx := NewBindContext(b.builder, b.ctx)
 
 	var nodeID int32
@@ -621,6 +632,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	//	unit := astArgs[0].(*tree.UnresolvedName).Parts[0]
 	//	astArgs[0] = tree.NewNumVal(constant.MakeString(unit), unit, false)
 	case "count":
+		if b.ctx == nil {
+			return nil, errors.New("", "This field reference doesn't support COUNT")
+		}
 		// we will rewrite "count(*)" to "starcount(col)"
 		// count(*) : astExprs[0].(type) is *tree.NumVal
 		// count(col_name) : astExprs[0].(type) is *tree.UnresolvedName
@@ -841,7 +855,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	}, nil
 }
 
-func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
+func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) {
 	// over_int64_err := errors.New("", "Constants over int64 will support in future version.")
 
 	getStringExpr := func(val string) *Expr {
@@ -864,6 +878,9 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 	}
 
 	returnDecimalExpr := func(val string) (*Expr, error) {
+		if typ != nil {
+			return appendCastBeforeExpr(getStringExpr(val), typ)
+		}
 		_, scale, err := types.ParseStringToDecimal128WithoutTable(val)
 		if err != nil {
 			return nil, err

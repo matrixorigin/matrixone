@@ -169,6 +169,7 @@ type baseBinder struct {
 
 type DefaultBinder struct {
 	baseBinder
+	typ *Type
 }
 
 type TableBinder struct {

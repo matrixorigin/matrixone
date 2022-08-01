@@ -21,8 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func NewDefaultBinder(builder *QueryBuilder, ctx *BindContext) *DefaultBinder {
-	b := &DefaultBinder{}
+func NewDefaultBinder(builder *QueryBuilder, ctx *BindContext, typ *Type) *DefaultBinder {
+	b := &DefaultBinder{typ: typ}
 	b.builder = builder
 	b.ctx = ctx
 	b.impl = b

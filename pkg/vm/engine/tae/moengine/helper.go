@@ -33,6 +33,7 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		if col.IsPhyAddr() {
 			continue
 		}
+
 		expr := &plan.Expr{}
 		if col.Default.Expr != nil {
 			if err := expr.Unmarshal(col.Default.Expr); err != nil {
@@ -41,6 +42,7 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		} else {
 			expr = nil
 		}
+
 		def := &engine.AttributeDef{
 			Attr: engine.Attribute{
 				Name:    col.Name,

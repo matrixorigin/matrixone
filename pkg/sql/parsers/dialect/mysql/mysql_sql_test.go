@@ -26,8 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  "DELETE a1, a2 FROM t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.a = a2.b;",
-		output: "delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.a = a2.b",
+		input: "insert into t1 values(), ()",
 	}
 )
 

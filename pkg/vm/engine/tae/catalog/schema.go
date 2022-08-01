@@ -187,9 +187,17 @@ func MarshalDefault(w *bytes.Buffer, data Default) (err error) {
 	if err = binary.Write(w, binary.BigEndian, []byte(data.OriginString)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, uint16(len(data.Expr))); err != nil {
+	if data.Expr == nil {
+		if err = binary.Write(w, binary.BigEndian, uint16(0)); err != nil {
+			return
+		}
 		return
+	} else {
+		if err = binary.Write(w, binary.BigEndian, uint16(len(data.Expr))); err != nil {
+			return
+		}
 	}
+
 	if err = binary.Write(w, binary.BigEndian, data.Expr); err != nil {
 		return
 	}
@@ -220,6 +228,11 @@ func UnMarshalDefault(r io.Reader, data *Default) (n int64, err error) {
 		return
 	}
 	n += 2
+
+	if valueLen == 0 {
+		data.Expr = nil
+		return
+	}
 
 	buf = make([]byte, valueLen)
 	if _, err = r.Read(buf); err != nil {
@@ -400,6 +413,19 @@ func (s *Schema) AppendPKCol(name string, typ types.Type, idx int) error {
 }
 
 func (s *Schema) AppendPKColWithAttribute(attr engine.Attribute, idx int) error {
+	var bs []byte = nil
+	var err error
+	if attr.Default.Expr != nil {
+		bs, err = attr.Default.Expr.Marshal()
+		if err != nil {
+			return err
+		}
+	}
+	attrDefault := Default{
+		NullAbility:  attr.Default.NullAbility,
+		Expr:         bs,
+		OriginString: attr.Default.OriginString,
+	}
 	def := &ColDef{
 		Name:    attr.Name,
 		Type:    attr.Type,
@@ -408,6 +434,7 @@ func (s *Schema) AppendPKColWithAttribute(attr engine.Attribute, idx int) error 
 		SortKey: true,
 		Primary: true,
 		Comment: attr.Comment,
+		Default: attrDefault,
 	}
 	return s.AppendColDef(def)
 }
@@ -432,7 +459,7 @@ func (s *Schema) AppendColWithDefault(name string, typ types.Type, val Default) 
 }
 
 func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
-	var bs []byte
+	var bs []byte = nil
 	var err error
 	if attr.Default.Expr != nil {
 		bs, err = attr.Default.Expr.Marshal()
