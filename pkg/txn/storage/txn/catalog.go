@@ -19,45 +19,44 @@ import (
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 )
 
-type DatabaseAttrs struct {
+type DatabaseRow struct {
 	ID   string
 	Name string
 }
 
-func (d DatabaseAttrs) PrimaryKey() Text {
+func (d DatabaseRow) PrimaryKey() Text {
 	return Text(d.ID)
 }
 
-type RelationAttrs struct {
-	ID               string
-	DatabaseID       string
-	Name             string
-	Type             txnengine.RelationType
-	Comments         string
-	Properties       map[string]string
-	PrimaryColumnIDs []string
+type RelationRow struct {
+	ID         string
+	DatabaseID string
+	Name       string
+	Type       txnengine.RelationType
+	Comments   string
+	Properties map[string]string
 }
 
-func (r RelationAttrs) PrimaryKey() Text {
+func (r RelationRow) PrimaryKey() Text {
 	return Text(r.ID)
 }
 
-type AttributeAttrs struct {
+type AttributeRow struct {
 	ID         string
 	RelationID string
 	engine.Attribute
 }
 
-func (a AttributeAttrs) PrimaryKey() Text {
+func (a AttributeRow) PrimaryKey() Text {
 	return Text(a.ID)
 }
 
-type IndexAttrs struct {
+type IndexRow struct {
 	ID         string
 	RelationID string
 	engine.IndexTableDef
 }
 
-func (i IndexAttrs) PrimaryKey() Text {
+func (i IndexRow) PrimaryKey() Text {
 	return Text(i.ID)
 }
