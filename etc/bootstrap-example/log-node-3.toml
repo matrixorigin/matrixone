@@ -30,6 +30,11 @@ init-hakeeper-members = [
   "131074:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf",
 ]
 
+[logservice.HAKeeperConfig]
+tick-per-second = 1
+log-store-timeout = "20s"
+dn-store-timeout = "10s"
+
 [hakeeper-client]
 service-addresses = [
   "127.0.0.1:32001",

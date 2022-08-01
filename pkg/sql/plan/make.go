@@ -21,6 +21,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+func makePlan2JsonConstExpr(v string) *plan.Expr_C {
+	return &plan.Expr_C{C: &plan.Const{
+		Isnull: false,
+		Value: &plan.Const_Jsonval{
+			Jsonval: v,
+		},
+	}}
+}
+
 func makePlan2NullConstExprWithType() *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_C{

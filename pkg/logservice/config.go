@@ -283,15 +283,6 @@ func (c *Config) Fill() {
 	if c.FS == nil {
 		c.FS = vfs.Default
 	}
-	if c.HeartbeatInterval.Duration == 0 {
-		c.HeartbeatInterval.Duration = defaultHeartbeatInterval
-	}
-	if c.HAKeeperTickInterval.Duration == 0 {
-		c.HAKeeperTickInterval.Duration = hakeeper.TickDuration
-	}
-	if c.HAKeeperCheckInterval.Duration == 0 {
-		c.HAKeeperCheckInterval.Duration = hakeeper.CheckDuration
-	}
 	if c.RTTMillisecond == 0 {
 		c.RTTMillisecond = 200
 	}
@@ -325,6 +316,16 @@ func (c *Config) Fill() {
 	if c.HAKeeperConfig.DnStoreTimeout.Duration == 0 {
 		c.HAKeeperConfig.DnStoreTimeout.Duration = hakeeper.DefaultDnStoreTimeout
 	}
+	if c.HeartbeatInterval.Duration == 0 {
+		c.HeartbeatInterval.Duration = defaultHeartbeatInterval
+	}
+	if c.HAKeeperTickInterval.Duration == 0 {
+		c.HAKeeperTickInterval.Duration = time.Second / time.Duration(c.HAKeeperConfig.TickPerSecond)
+	}
+	if c.HAKeeperCheckInterval.Duration == 0 {
+		c.HAKeeperCheckInterval.Duration = hakeeper.CheckDuration
+	}
+
 }
 
 func splitAddresses(v string) []string {
