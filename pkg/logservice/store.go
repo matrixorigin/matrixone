@@ -128,10 +128,13 @@ func newLogStore(cfg Config) (*store, error) {
 	if err != nil {
 		return nil, err
 	}
+	hakeeperConfig := cfg.GetHAKeeperConfig()
+	plog.Infof("HAKeeper LogStoreTimeout: %s, DnStoreTimeout: %s",
+		hakeeperConfig.LogStoreTimeout, hakeeperConfig.DnStoreTimeout)
 	ls := &store{
 		cfg:     cfg,
 		nh:      nh,
-		checker: checkers.NewCoordinator(cfg.GetHAKeeperConfig()),
+		checker: checkers.NewCoordinator(hakeeperConfig),
 		alloc:   newIDAllocator(),
 		stopper: stopper.NewStopper("log-store"),
 	}
@@ -597,6 +600,8 @@ func (l *store) ticker(ctx context.Context) {
 	if l.cfg.HAKeeperTickInterval.Duration == 0 {
 		panic("invalid HAKeeperTickInterval")
 	}
+	plog.Infof("HAKeeper tick interval: %s, check interval: %s",
+		l.cfg.HAKeeperTickInterval, l.cfg.HAKeeperCheckInterval)
 	ticker := time.NewTicker(l.cfg.HAKeeperTickInterval.Duration)
 	defer ticker.Stop()
 	if l.cfg.HAKeeperCheckInterval.Duration == 0 {
