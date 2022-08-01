@@ -20,12 +20,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type Container struct {
+type container struct {
 	i int
 }
 
 type Argument struct {
-	ctr  *Container
+	ctr  *container
 	All  bool // dispatch batch to each consumer
 	Mmu  *guest.Mmu
 	vecs []*vector.Vector

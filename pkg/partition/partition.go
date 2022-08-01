@@ -313,7 +313,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 			diffs[i] = diffs[i] || (v != w)
 			v = w
 		}
-	case types.T_char, types.T_varchar:
+	case types.T_char, types.T_varchar, types.T_json:
 		var n bool
 		var v []byte
 

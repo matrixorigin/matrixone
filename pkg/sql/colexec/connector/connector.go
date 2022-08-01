@@ -21,18 +21,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("pipe connector")
 }
 
-func Prepare(_ *process.Process, _ interface{}) error {
+func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	ap := arg.(*Argument)
 	reg := ap.Reg
-	bat := proc.Reg.InputBatch
+	bat := proc.InputBatch()
 	if bat == nil {
 		select {
 		case <-reg.Ctx.Done():
@@ -41,13 +41,13 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 			return true, nil
 		}
 	}
-	if len(bat.Zs) == 0 {
+	if bat.Length() == 0 {
 		return false, nil
 	}
 	vecs := ap.vecs[:0]
 	for i := range bat.Vecs {
 		if bat.Vecs[i].Or {
-			vec, err := vector.Dup(bat.Vecs[i], proc.Mp)
+			vec, err := vector.Dup(bat.Vecs[i], proc.GetMheap())
 			if err != nil {
 				return false, err
 			}
@@ -62,7 +62,7 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 	}
 	select {
 	case <-reg.Ctx.Done():
-		bat.Clean(proc.Mp)
+		bat.Clean(proc.GetMheap())
 		return true, nil
 	case reg.Ch <- bat:
 		return false, nil

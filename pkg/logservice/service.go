@@ -122,7 +122,8 @@ func NewService(cfg Config) (*Service, error) {
 	}
 	// start the heartbeat worker
 	if !cfg.DisableWorkers {
-		if err := service.stopper.RunTask(func(ctx context.Context) {
+		if err := service.stopper.RunNamedTask("log-heartbeat-worker", func(ctx context.Context) {
+			plog.Infof("logservice heartbeat worker started")
 			service.heartbeatWorker(ctx)
 		}); err != nil {
 			return nil, err

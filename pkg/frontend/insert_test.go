@@ -652,13 +652,14 @@ func Test_makeExprFromVal(t *testing.T) {
 		convey.So(tmp.Negative(), convey.ShouldBeFalse)
 	})
 
-	convey.Convey("makeExprFromVal decimal128", t, func() {
+	convey.Convey("makeExprFromVal json", t, func() {
 		typ.Oid = types.T_json
+		value = []byte("{\"a\":1}")
 		ret = makeExprFromVal(typ, value, isNull)
 		tmp, ok := ret.(*tree.NumVal)
 		convey.So(ok, convey.ShouldBeTrue)
-		convey.So(tmp.Value, convey.ShouldResemble, constant.MakeUnknown())
-		convey.So(tmp.String(), convey.ShouldEqual, "NULL")
+		convey.So(tmp.Value, convey.ShouldResemble, constant.MakeString("{\"a\":1}"))
+		convey.So(tmp.String(), convey.ShouldEqual, "{\"a\":1}")
 		convey.So(tmp.Negative(), convey.ShouldBeFalse)
 	})
 }
@@ -1296,6 +1297,19 @@ func Test_buildConstantValue(t *testing.T) {
 	})
 
 	convey.Convey("buildConstantValue String", t, func() {
+
+		num = tree.NewNumVal(constant.MakeString("{"), "{", false)
+		typ.Oid = types.T_json
+		ret, err = buildConstantValue(typ, num)
+		convey.So(ret, convey.ShouldBeNil)
+		convey.So(err, convey.ShouldNotBeNil)
+
+		num = tree.NewNumVal(constant.MakeString("{\"a\":1}"), "{\"a\":1}", false)
+		ret, err = buildConstantValue(typ, num)
+		expect, _ := types.ParseStringToByteJson("{\"a\":1}")
+		convey.So(ret, convey.ShouldResemble, expect)
+		convey.So(err, convey.ShouldBeNil)
+
 		num = tree.NewNumVal(constant.MakeString("true"), "true", false)
 		typ.Oid = types.T_bool
 		ret, err = buildConstantValue(typ, num)

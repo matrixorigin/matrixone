@@ -27,9 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	ap := arg.(*Argument)
-	buf.WriteString("τ([")
+	buf.WriteString("mergetop([")
 	for i, f := range ap.Fs {
 		if i > 0 {
 			buf.WriteString(", ")
@@ -39,21 +39,24 @@ func String(arg interface{}, buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("], %v)", ap.Limit))
 }
 
-func Prepare(_ *process.Process, arg interface{}) error {
+func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
-	ap.ctr = new(Container)
+	ap.ctr = new(container)
 	ap.ctr.sels = make([]int64, 0, ap.Limit)
 	ap.ctr.poses = make([]int32, 0, len(ap.Fs))
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(ap, proc); err != nil {
+			if err := ctr.build(ap, proc, anal); err != nil {
 				ctr.state = End
 				return true, err
 			}
@@ -61,18 +64,18 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 		case Eval:
 			ctr.state = End
 			if ctr.bat == nil {
-				proc.Reg.InputBatch = nil
+				proc.SetInputBatch(nil)
 				return true, nil
 			}
-			return true, ctr.eval(ap.Limit, proc)
+			return true, ctr.eval(ap.Limit, proc, anal)
 		default:
-			proc.Reg.InputBatch = nil
+			proc.SetInputBatch(nil)
 			return true, nil
 		}
 	}
 }
 
-func (ctr *Container) build(ap *Argument, proc *process.Process) error {
+func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
 	for {
 		if len(proc.Reg.MergeReceivers) == 0 {
 			break
@@ -85,10 +88,11 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 				i--
 				continue
 			}
-			if len(bat.Zs) == 0 {
+			if bat.Length() == 0 {
 				i--
 				continue
 			}
+			anal.Input(bat)
 			ctr.n = len(bat.Vecs)
 			ctr.poses = ctr.poses[:0]
 			for _, f := range ap.Fs {
@@ -137,7 +141,7 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 	return nil
 }
 
-func (ctr *Container) processBatch(limit int64, bat *batch.Batch, proc *process.Process) error {
+func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.Process) error {
 	var start int64
 
 	length := int64(len(bat.Zs))
@@ -182,7 +186,7 @@ func (ctr *Container) processBatch(limit int64, bat *batch.Batch, proc *process.
 	return nil
 }
 
-func (ctr *Container) eval(limit int64, proc *process.Process) error {
+func (ctr *container) eval(limit int64, proc *process.Process, anal process.Analyze) error {
 	if int64(len(ctr.sels)) < limit {
 		ctr.sort()
 	}
@@ -202,13 +206,14 @@ func (ctr *Container) eval(limit int64, proc *process.Process) error {
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 	ctr.bat.ExpandNulls()
-	proc.Reg.InputBatch = ctr.bat
+	anal.Output(ctr.bat)
+	proc.SetInputBatch(ctr.bat)
 	ctr.bat = nil
 	return nil
 }
 
 // do sort work for heap, and result order will be set in container.sels
-func (ctr *Container) sort() {
+func (ctr *container) sort() {
 	for i, cmp := range ctr.cmps {
 		cmp.Set(0, ctr.bat.Vecs[i])
 	}
