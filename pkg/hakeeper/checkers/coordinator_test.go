@@ -289,6 +289,7 @@ func TestFixZombie(t *testing.T) {
 		cluster  pb.ClusterInfo
 		dn       pb.DNState
 		log      pb.LogState
+		tick     uint64
 		expected []pb.ScheduleCommand
 	}{
 		{
@@ -309,6 +310,7 @@ func TestFixZombie(t *testing.T) {
 				}},
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {
+						Tick: 0,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -318,6 +320,7 @@ func TestFixZombie(t *testing.T) {
 							ReplicaID: 1},
 						}},
 					"b": {
+						Tick: 0,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -328,6 +331,7 @@ func TestFixZombie(t *testing.T) {
 						}},
 					},
 					"c": {
+						Tick: 0,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -338,6 +342,7 @@ func TestFixZombie(t *testing.T) {
 						}},
 					},
 					"d": {
+						Tick: 14 * hakeeper.DefaultTickPerSecond * 60,
 						Replicas: []pb.LogReplicaInfo{{
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
@@ -356,20 +361,84 @@ func TestFixZombie(t *testing.T) {
 						Replica: pb.Replica{
 							UUID:    "c",
 							ShardID: 1,
-							Epoch:   1,
 						},
-						ChangeType: pb.RemoveReplica,
+						ChangeType: pb.KillZombie,
 					},
 					ServiceType: pb.LogService,
 				},
 			},
+		},
+		{
+			desc:    "store c is expired, thus replicas on it are not zombies.",
+			idAlloc: util.NewTestIDAllocator(3),
+			cluster: pb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          1,
+					NumberOfReplicas: 3,
+				}},
+			},
+			log: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{1: {
+					ShardID:  1,
+					Replicas: map[uint64]string{1: "a", 2: "b", 4: "d"},
+					Epoch:    2,
+					LeaderID: 1,
+				}},
+				Stores: map[string]pb.LogStoreInfo{
+					"a": {
+						Tick: expiredTick + 1,
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 4: "d"},
+								Epoch:    2,
+								LeaderID: 1},
+							ReplicaID: 1},
+						}},
+					"b": {
+						Tick: expiredTick + 1,
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 4: "d"},
+								Epoch:    2,
+								LeaderID: 1},
+							ReplicaID: 2,
+						}},
+					},
+					"c": {
+						Tick: 0,
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 1},
+							ReplicaID: 3,
+						}},
+					},
+					"d": {
+						Tick: expiredTick + 1,
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 4: "d"},
+								Epoch:    2,
+								LeaderID: 1},
+							ReplicaID: 3,
+						}},
+					},
+				},
+			},
+			tick:     expiredTick + 1,
+			expected: nil,
 		},
 	}
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
 		coordinator := NewCoordinator(hakeeper.Config{})
-		output := coordinator.Check(c.idAlloc, c.cluster, c.dn, c.log, 0)
+		output := coordinator.Check(c.idAlloc, c.cluster, c.dn, c.log, c.tick)
 		assert.Equal(t, c.expected, output)
 	}
 }
