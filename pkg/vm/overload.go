@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/union"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -52,7 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var stringFunc = [...]func(interface{}, *bytes.Buffer){
+var stringFunc = [...]func(any, *bytes.Buffer){
 	Top:        top.String,
 	Join:       join.String,
 	Semi:       semi.String,
@@ -88,7 +89,7 @@ var stringFunc = [...]func(interface{}, *bytes.Buffer){
 	Union: union.String,
 }
 
-var prepareFunc = [...]func(*process.Process, interface{}) error{
+var prepareFunc = [...]func(*process.Process, any) error{
 	Top:        top.Prepare,
 	Join:       join.Prepare,
 	Semi:       semi.Prepare,
@@ -124,7 +125,7 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 	Union: union.Prepare,
 }
 
-var execFunc = [...]func(int, *process.Process, interface{}) (bool, error){
+var execFunc = [...]func(int, *process.Process, any) (bool, error){
 	Top:        top.Call,
 	Join:       join.Call,
 	Semi:       semi.Call,

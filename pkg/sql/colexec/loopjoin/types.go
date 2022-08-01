@@ -25,7 +25,7 @@ const (
 	End
 )
 
-type Container struct {
+type container struct {
 	state int
 	bat   *batch.Batch
 }
@@ -36,7 +36,7 @@ type ResultPos struct {
 }
 
 type Argument struct {
-	ctr    *Container
+	ctr    *container
 	Cond   *plan.Expr
 	Result []ResultPos
 }

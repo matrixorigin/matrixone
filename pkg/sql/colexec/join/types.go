@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/joincondition"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 const (
@@ -57,5 +57,5 @@ type Argument struct {
 	Ibucket    uint64 // index in buckets
 	Nbucket    uint64 // buckets count
 	Result     []ResultPos
-	Conditions [][]joincondition.Condition
+	Conditions [][]*plan.Expr
 }

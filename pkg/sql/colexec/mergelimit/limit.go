@@ -22,25 +22,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	ap := arg.(*Argument)
 	buf.WriteString(fmt.Sprintf("mergeLimit(%d)", ap.Limit))
 }
 
-func Prepare(_ *process.Process, arg interface{}) error {
+func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.seen = 0
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	ap := arg.(*Argument)
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
 	for {
 		switch ap.ctr.state {
 		case Eval:
-			anal := proc.GetAnalyze(idx)
-			defer anal.Stop()
 			ok, err := ap.ctr.eval(ap, proc, anal)
 			if err != nil {
 				return ok, err
@@ -88,6 +89,7 @@ func (ctr *container) eval(ap *Argument, proc *process.Process, anal process.Ana
 			num := int(newSeen - ap.Limit)
 			batch.SetLength(bat, bat.Length()-num)
 			ap.ctr.seen = newSeen
+			anal.Output(bat)
 			proc.Reg.InputBatch = bat
 			return false, nil
 		}

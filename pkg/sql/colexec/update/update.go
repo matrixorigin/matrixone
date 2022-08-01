@@ -18,24 +18,25 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("update rows")
 }
 
-func Prepare(_ *process.Process, _ interface{}) error {
+func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	p := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 	if bat == nil || len(bat.Zs) == 0 {

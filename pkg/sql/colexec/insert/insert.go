@@ -36,15 +36,15 @@ type Argument struct {
 	Affected      uint64
 }
 
-func String(_ interface{}, buf *bytes.Buffer) {
+func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString("insert select")
 }
 
-func Prepare(_ *process.Process, _ interface{}) error {
+func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	n := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 	if bat == nil {

@@ -22,16 +22,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	n := arg.(*Argument)
 	buf.WriteString(fmt.Sprintf("offset(%v)", n.Offset))
 }
 
-func Prepare(_ *process.Process, _ interface{}) error {
+func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
@@ -52,7 +52,7 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 		sels := newSels(int64(ap.Offset-ap.Seen), int64(length)-int64(ap.Offset-ap.Seen), proc)
 		ap.Seen += uint64(length)
 		bat.Shrink(sels)
-		proc.PutSels(sels)
+		proc.GetMheap().PutSels(sels)
 		proc.SetInputBatch(bat)
 		return false, nil
 	}
@@ -63,7 +63,7 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 }
 
 func newSels(start, count int64, proc *process.Process) []int64 {
-	sels := proc.GetSels()
+	sels := proc.GetMheap().GetSels()
 	for i := int64(0); i < count; i++ {
 		sels = append(sels, start+i)
 	}
