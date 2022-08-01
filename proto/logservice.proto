@@ -279,6 +279,7 @@ enum ConfigChangeType {
   RemoveReplica = 1;
   StartReplica  = 2;
   StopReplica   = 3;
+  KillZombie    = 4;
 }
 
 // ConfigChange is the detail of a config change.
