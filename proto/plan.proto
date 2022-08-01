@@ -116,6 +116,7 @@ message Const {
 		decimal64 decimal64val = 10;
 		decimal128 decimal128val = 11;
 		int64 timestampval = 12;
+		string jsonval = 13;
 	}
 }
 
@@ -255,6 +256,7 @@ message ConstantValue {
 		int64 timeStamp_v = 10;
 		string string_v = 11;
 		bool bool_v = 12;
+		string json_v = 13;
 	}
 }
 
