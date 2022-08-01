@@ -19,10 +19,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/div"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
+
+// ErrDivByZero is reported on a division by zero.
+var ErrDivByZero = errors.New(errno.SyntaxErrororAccessRuleViolation, "division by zero")
 
 func IntegerDiv[T constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]

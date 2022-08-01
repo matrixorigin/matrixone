@@ -59,6 +59,7 @@ func TestU32MultOf(t *testing.T) {
 	}
 }
 
+/*
 func TestDec64Mult(t *testing.T) {
 	as := make([]int64, 10)
 	bs := make([]int64, 10)
@@ -84,6 +85,7 @@ func TestDec64Mult(t *testing.T) {
 		}
 	}
 }
+*/
 
 func TestDec128Mult(t *testing.T) {
 	as := make([]int64, 10)

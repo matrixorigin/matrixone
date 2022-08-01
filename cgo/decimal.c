@@ -598,13 +598,14 @@ static inline int32_t Decimal128_AddNoCheck(int64_t *r, int64_t *a, int64_t *b)
     return RC_SUCCESS;
 }
 
-int32_t Decimal64_MulNoCheck(int64_t *r, int64_t *a, int64_t *b)
-{
-    decDouble tmp;
-    decDoubleMultiply(&tmp, DecDoublePtr(a), DecDoublePtr(b), NULL);
-    decDoubleReduce(DecDoublePtr(r), &tmp, NULL);
-    return RC_SUCCESS;
-}
+//int32_t Decimal64_MulNoCheck(int64_t *r, int64_t *a, int64_t *b)
+//{
+//    decDouble tmp;
+//    decDoubleMultiply(&tmp, DecDoublePtr(a), DecDoublePtr(b), NULL);
+//    decDoubleReduce(DecDoublePtr(r), &tmp, NULL);
+//    return RC_SUCCESS;
+//}
+
 
 int32_t Decimal128_MulNoCheck(int64_t *r, int64_t *a, int64_t *b)
 {
@@ -612,6 +613,32 @@ int32_t Decimal128_MulNoCheck(int64_t *r, int64_t *a, int64_t *b)
     decQuadMultiply(&tmp, DecQuadPtr(a), DecQuadPtr(b), NULL);
     decQuadReduce(DecQuadPtr(r), &tmp, NULL);
     return RC_SUCCESS;
+}
+
+int32_t Decimal64_MulNoCheck(int64_t *r, int64_t *a, int64_t *b)
+{
+    decQuad wa;
+    decQuad wb;
+    Decimal64_ToDecimal128((int64_t *) &wa, a);
+    Decimal64_ToDecimal128((int64_t *) &wb, b);
+    return Decimal128_MulNoCheck(r, (int64_t *) &wa, (int64_t *) &wb);
+}
+
+int32_t Decimal128_DivNoCheck(int64_t *r, int64_t *a, int64_t *b)
+{
+    decQuad tmp;
+    decQuadDivide(&tmp, DecQuadPtr(a), DecQuadPtr(b), NULL);
+    decQuadReduce(DecQuadPtr(r), &tmp, NULL);
+    return RC_SUCCESS;
+}
+
+int32_t Decimal64_DivNoCheck(int64_t *r, int64_t *a, int64_t *b)
+{
+    decQuad wa;
+    decQuad wb;
+    Decimal64_ToDecimal128((int64_t *) &wa, a);
+    Decimal64_ToDecimal128((int64_t *) &wb, b);
+    return Decimal128_DivNoCheck(r, (int64_t *) &wa, (int64_t *) &wb);
 }
 
 #define DEF_DECIMAL_ARITH(NBITS, OP, OPCHECK)                                  \
@@ -691,6 +718,397 @@ DEF_DECIMAL_ARITH(64, Sub, Sub)
 
 DEF_DECIMAL_ARITH(128, Sub, Sub)
 
-DEF_DECIMAL_ARITH(64, Mul, MulNoCheck)
 
-DEF_DECIMAL_ARITH(128, Mul, MulNoCheck)
+
+// decimal64 mul
+int32_t Decimal64_VecMul(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag)
+{
+    if ((flag & 1) != 0)
+    {
+        if (nulls != NULL)
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (64 / 64 - 1);
+                if (!bitmap_test(nulls, i))
+                {
+                    int ret = Decimal64_MulNoCheck(r + i + i, a, b + ii);
+                    if (ret != RC_SUCCESS)
+                    {
+                        return ret;
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (64 / 64 - 1);
+                int ret = Decimal64_MulNoCheck(r + i + i, a, b + ii);
+                if (ret != RC_SUCCESS)
+                {
+                    return ret;
+                }
+            }
+        }
+        return RC_SUCCESS;
+    }
+    else if ((flag & 2) != 0)
+    {
+        if (nulls != NULL)
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (64 / 64 - 1);
+                if (!bitmap_test(nulls, i))
+                {
+                    int ret = Decimal64_MulNoCheck(r + i + i, a + ii, b);
+                    if (ret != RC_SUCCESS)
+                    {
+                        return ret;
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (64 / 64 - 1);
+                int ret = Decimal64_MulNoCheck(r + i + i, a + ii, b);
+                if (ret != RC_SUCCESS)
+                {
+                    return ret;
+                }
+            }
+        }
+        return RC_SUCCESS;
+    }
+    else
+    {
+        if (nulls != NULL)
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (64 / 64 - 1);
+                if (!bitmap_test(nulls, i))
+                {
+                    int ret = Decimal64_MulNoCheck(r + i + i, a + ii, b + ii);
+                    if (ret != RC_SUCCESS)
+                    {
+                        return ret;
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (64 / 64 - 1);
+                int ret = Decimal64_MulNoCheck(r + i + i, a + ii, b + ii);
+                if (ret != RC_SUCCESS)
+                {
+                    return ret;
+                }
+            }
+        }
+        return RC_SUCCESS;
+    }
+}
+
+// decimal128 mul
+int32_t Decimal128_VecMul(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag)
+{
+    if ((flag & 1) != 0)
+    {
+        if (nulls != NULL)
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (128 / 64 - 1);
+                if (!bitmap_test(nulls, i))
+                {
+                    int ret = Decimal128_MulNoCheck(r + ii, a, b + ii);
+                    if (ret != RC_SUCCESS)
+                    {
+                        return ret;
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (128 / 64 - 1);
+                int ret = Decimal128_MulNoCheck(r + ii, a, b + ii);
+                if (ret != RC_SUCCESS)
+                {
+                    return ret;
+                }
+            }
+        }
+        return RC_SUCCESS;
+    }
+    else if ((flag & 2) != 0)
+    {
+        if (nulls != NULL)
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (128 / 64 - 1);
+                if (!bitmap_test(nulls, i))
+                {
+                    int ret = Decimal128_MulNoCheck(r + ii, a + ii, b);
+                    if (ret != RC_SUCCESS)
+                    {
+                        return ret;
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (128 / 64 - 1);
+                int ret = Decimal128_MulNoCheck(r + ii, a + ii, b);
+                if (ret != RC_SUCCESS)
+                {
+                    return ret;
+                }
+            }
+        }
+        return RC_SUCCESS;
+    }
+    else
+    {
+        if (nulls != NULL)
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (128 / 64 - 1);
+                if (!bitmap_test(nulls, i))
+                {
+                    int ret = Decimal128_MulNoCheck(r + ii, a + ii, b + ii);
+                    if (ret != RC_SUCCESS)
+                    {
+                        return ret;
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (128 / 64 - 1);
+                int ret = Decimal128_MulNoCheck(r + ii, a + ii, b + ii);
+                if (ret != RC_SUCCESS)
+                {
+                    return ret;
+                }
+            }
+        }
+        return RC_SUCCESS;
+    }
+}
+
+
+// decimal div
+int32_t Decimal64_VecDiv(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag)
+{
+    if ((flag & 1) != 0)
+    {
+        if (nulls != NULL)
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (64 / 64 - 1);
+                if (!bitmap_test(nulls, i))
+                {
+                    int ret = Decimal64_DivNoCheck(r + i + i, a, b + ii);
+                    if (ret != RC_SUCCESS)
+                    {
+                        return ret;
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (64 / 64 - 1);
+                int ret = Decimal64_DivNoCheck(r + i + i, a, b + ii);
+                if (ret != RC_SUCCESS)
+                {
+                    return ret;
+                }
+            }
+        }
+        return RC_SUCCESS;
+    }
+    else if ((flag & 2) != 0)
+    {
+        if (nulls != NULL)
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (64 / 64 - 1);
+                if (!bitmap_test(nulls, i))
+                {
+                    int ret = Decimal64_DivNoCheck(r + i + i, a + ii, b);
+                    if (ret != RC_SUCCESS)
+                    {
+                        return ret;
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (64 / 64 - 1);
+                int ret = Decimal64_DivNoCheck(r + i + i, a + ii, b);
+                if (ret != RC_SUCCESS)
+                {
+                    return ret;
+                }
+            }
+        }
+        return RC_SUCCESS;
+    }
+    else
+    {
+        if (nulls != NULL)
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (64 / 64 - 1);
+                if (!bitmap_test(nulls, i))
+                {
+                    int ret = Decimal64_DivNoCheck(r + i + i, a + ii, b + ii);
+                    if (ret != RC_SUCCESS)
+                    {
+                        return ret;
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (64 / 64 - 1);
+                int ret = Decimal64_DivNoCheck(r + ii, a + i + i, b + ii);
+                if (ret != RC_SUCCESS)
+                {
+                    return ret;
+                }
+            }
+        }
+        return RC_SUCCESS;
+    }
+}
+
+// decimal128 div
+int32_t Decimal128_VecDiv(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag)
+{
+    if ((flag & 1) != 0)
+    {
+        if (nulls != NULL)
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (128 / 64 - 1);
+                if (!bitmap_test(nulls, i))
+                {
+                    int ret = Decimal128_DivNoCheck(r + ii, a, b + ii);
+                    if (ret != RC_SUCCESS)
+                    {
+                        return ret;
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (128 / 64 - 1);
+                int ret = Decimal128_DivNoCheck(r + ii, a, b + ii);
+                if (ret != RC_SUCCESS)
+                {
+                    return ret;
+                }
+            }
+        }
+        return RC_SUCCESS;
+    }
+    else if ((flag & 2) != 0)
+    {
+        if (nulls != NULL)
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (128 / 64 - 1);
+                if (!bitmap_test(nulls, i))
+                {
+                    int ret = Decimal128_DivNoCheck(r + ii, a + ii, b);
+                    if (ret != RC_SUCCESS)
+                    {
+                        return ret;
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (128 / 64 - 1);
+                int ret = Decimal128_DivNoCheck(r + ii, a + ii, b);
+                if (ret != RC_SUCCESS)
+                {
+                    return ret;
+                }
+            }
+        }
+        return RC_SUCCESS;
+    }
+    else
+    {
+        if (nulls != NULL)
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (128 / 64 - 1);
+                if (!bitmap_test(nulls, i))
+                {
+                    int ret = Decimal128_DivNoCheck(r + ii, a + ii, b + ii);
+                    if (ret != RC_SUCCESS)
+                    {
+                        return ret;
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                uint64_t ii = i << (128 / 64 - 1);
+                int ret = Decimal128_DivNoCheck(r + ii, a + ii, b + ii);
+                if (ret != RC_SUCCESS)
+                {
+                    return ret;
+                }
+            }
+        }
+        return RC_SUCCESS;
+    }
+}

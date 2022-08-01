@@ -100,6 +100,9 @@ int32_t Decimal128_VecSub(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64
 int32_t Decimal64_VecMul(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
 int32_t Decimal128_VecMul(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
 
+int32_t Decimal64_VecDiv(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+int32_t Decimal128_VecDiv(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+
 /* vector arithmatics */
 int32_t SignedInt_VecAdd(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
 int32_t UnsignedInt_VecAdd(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
@@ -112,5 +115,7 @@ int32_t Float_VecSub(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int
 int32_t SignedInt_VecMul(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
 int32_t UnsignedInt_VecMul(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
 int32_t Float_VecMul(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
+
+int32_t Float_VecDiv(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
 
 #endif /* _MO_H_ */

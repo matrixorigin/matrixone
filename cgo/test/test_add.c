@@ -15,6 +15,7 @@
  */
 
 #include <stddef.h>
+#include <stdio.h>
 #include "../mo.h"
 
 int test_addi32() {
@@ -42,7 +43,26 @@ int test_subdec64() {
     return rc;
 }
 
+int test_divedec64(){
+    int64_t r[10];
+    int64_t a[10];
+    int64_t b[10];
+    for (int i = 0; i < 10; i++) {
+        a[i] = (i+1)*1024;
+        b[i] = 2;
+    }
+    int32_t rc = Decimal64_VecDiv(r, a, b, 10, NULL, 0);
+
+    for (int i = 0; i < 10; i++) {
+        printf("%ld / %ld = ", a[i], b[i]);
+        printf("r[%d]=%ld \n", i, r[i]);
+    }
+
+    return rc;
+}
+
 int main() {
 //    test_addi32();
-    test_subdec64();
+//    test_subdec64();
+     test_divedec64();
 }

@@ -2346,7 +2346,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float32, types.T_float32},
 				ReturnTyp: types.T_float32,
-				Fn:        operator.Float32Div,
+				Fn:        operator.DivFloat[float32],
 			},
 			{
 				Index:     1,
@@ -2354,7 +2354,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float64, types.T_float64},
 				ReturnTyp: types.T_float64,
-				Fn:        operator.Float64Div,
+				Fn:        operator.DivFloat[float64],
 			},
 			{
 				Index:     2,

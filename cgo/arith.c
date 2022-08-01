@@ -133,7 +133,7 @@
 
 
 /*
- * Float/Double overflow check.
+ * Float/Double mul overflow check.
  *
  * At this moment we don't do anything.
  */
@@ -143,6 +143,23 @@
 #define MUL_FLOAT_OVFLAG_CHECK                      \
     (void) opflag;                                  \
     return RC_SUCCESS
+
+
+/*
+ * Float/Double div overflow check.
+ *
+ * At this moment we don't do anything.
+ */
+#define DIV_FLOAT_OVFLAG(TGT, A, B)                 \
+    if ((B) == 0) {                                 \
+        opflag = 1;                                 \
+    } else TGT = (A) / (B)
+
+#define DIV_FLOAT_OVFLAG_CHECK                      \
+    if (opflag == 1) {                              \
+        return RC_DIVISION_BY_ZERO;                 \
+    } else return RC_SUCCESS
+
 
 
 const int32_t LEFT_IS_SCALAR = 1;
@@ -318,6 +335,18 @@ int32_t Float_VecMul(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int
         MO_ARITH_T(MUL_FLOAT_OVFLAG, float);
     } else if (szof == 8) {
         MO_ARITH_T(MUL_FLOAT_OVFLAG, double);
+    } else {
+        return RC_INVALID_ARGUMENT;
+    }
+    return RC_SUCCESS;
+}
+
+
+int32_t Float_VecDiv(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof) {
+    if (szof == 4) {
+        MO_ARITH_T(DIV_FLOAT_OVFLAG, float);
+    } else if (szof == 8) {
+        MO_ARITH_T(DIV_FLOAT_OVFLAG, double);
     } else {
         return RC_INVALID_ARGUMENT;
     }
