@@ -12,50 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnstorage
+package txnengine
 
 import (
+	"bytes"
+	"encoding/gob"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/assert"
 )
 
-type TestRow struct {
-	Key   Int
-	Value int
-}
-
-func (t TestRow) PrimaryKey() Int {
-	return t.Key
-}
-
-func TestTable(t *testing.T) {
-	table := NewTable[Int, TestRow]()
-
-	tx := NewTransaction("1", Timestamp{})
-
-	row := TestRow{Key: 42, Value: 1}
-
-	// insert
-	err := table.Insert(tx, row)
+func TestVectorGobEncoding(t *testing.T) {
+	vec := vector.New(types.Type{
+		Oid: types.T_int16,
+	})
+	buf := new(bytes.Buffer)
+	err := gob.NewEncoder(buf).Encode(vec)
 	assert.Nil(t, err)
-
-	// get
-	r, err := table.Get(tx, Int(42))
+	var v vector.Vector
+	err = gob.NewDecoder(buf).Decode(&v)
 	assert.Nil(t, err)
-	assert.Equal(t, row, r)
-
-	// update
-	row.Value = 2
-	err = table.Update(tx, row)
-	assert.Nil(t, err)
-
-	r, err = table.Get(tx, Int(42))
-	assert.Nil(t, err)
-	assert.Equal(t, row, r)
-
-	// delete
-	err = table.Delete(tx, Int(42))
-	assert.Nil(t, err)
-
+	_, ok := v.Col.([]int16)
+	assert.True(t, ok)
 }
