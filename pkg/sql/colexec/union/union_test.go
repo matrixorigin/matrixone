@@ -21,8 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/joincondition"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -124,18 +122,6 @@ func newUnionTestCase(proc *process.Process, leftBatches, rightBatches []*batch.
 		}
 	}
 	arg := new(Argument)
-	{
-		arg.Conditions[0] = make([]joincondition.Condition, len(leftBatches[0].Vecs))
-		arg.Conditions[1] = make([]joincondition.Condition, len(rightBatches[0].Vecs))
-		for i := 0; i < len(arg.Conditions[0]); i++ {
-			arg.Conditions[0][i].Expr = &plan.Expr{
-				Typ: new(plan.Type),
-			}
-			arg.Conditions[1][i].Expr = &plan.Expr{
-				Typ: new(plan.Type),
-			}
-		}
-	}
 	return unionTestCase{
 		proc:   proc,
 		arg:    arg,

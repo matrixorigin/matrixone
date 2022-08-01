@@ -15,11 +15,10 @@
 package semi
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/joincondition"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 const (
@@ -28,44 +27,29 @@ const (
 	End
 )
 
-const (
-	UnitLimit = 256
-)
-
-var OneInt64s []int64
-
 type evalVector struct {
 	needFree bool
 	vec      *vector.Vector
 }
 
-type Container struct {
-	state   int
-	rows    uint64
-	keys    [][]byte
-	values  []uint64
-	zValues []int64
-	//	hashes        []uint64
-	inserted      []uint8
-	zInserted     []uint8
-	strHashStates [][3]uint64
-	strHashMap    *hashtable.StringHashMap
-
-	//poses []int32 // pos of vectors need to be copied
+type container struct {
+	state int
 
 	sels [][]int64
 
-	bat *batch.Batch
+	inBuckets []uint8
+	bat       *batch.Batch
 
-	vecs []evalVector
+	evecs []evalVector
+	vecs  []*vector.Vector
 
-	decimal64Slice  []types.Decimal64
-	decimal128Slice []types.Decimal128
+	mp *hashmap.StrHashMap
 }
 
 type Argument struct {
-	ctr        *Container
-	IsPreBuild bool // hashtable is pre-build
+	ctr        *container
+	Ibucket    uint64 // index in buckets
+	Nbucket    uint64 // buckets count
 	Result     []int32
-	Conditions [][]joincondition.Condition
+	Conditions [][]*plan.Expr
 }

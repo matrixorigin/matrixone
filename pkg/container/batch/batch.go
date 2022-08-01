@@ -191,7 +191,7 @@ func (bat *Batch) Append(mh *mheap.Mheap, b *Batch) (*Batch, error) {
 	}
 	for i := range bat.Vecs {
 		if err := vector.UnionBatch(bat.Vecs[i], b.Vecs[i], 0, vector.Length(b.Vecs[i]), flags[:vector.Length(b.Vecs[i])], mh); err != nil {
-			return nil, err
+			return bat, err
 		}
 	}
 	bat.Zs = append(bat.Zs, b.Zs...)

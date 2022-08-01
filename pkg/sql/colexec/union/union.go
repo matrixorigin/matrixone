@@ -23,18 +23,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ interface{}, buf *bytes.Buffer) {
+func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString(" union ")
 }
 
-func Prepare(_ *process.Process, argument interface{}) error {
+func Prepare(_ *process.Process, argument any) error {
 	arg := argument.(*Argument)
 	arg.ctr = new(container)
 	arg.ctr.hashTable = hashmap.NewStrMap(true)
 	return nil
 }
 
-func Call(idx int, proc *process.Process, argument interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, argument any) (bool, error) {
 	ap := argument.(*Argument)
 	ctr := ap.ctr
 	analyze := proc.GetAnalyze(idx)

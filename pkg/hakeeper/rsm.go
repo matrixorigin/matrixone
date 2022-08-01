@@ -48,10 +48,8 @@ const (
 	// [K8SIDRangeStart, K8SIDRangeEnd)
 	K8SIDRangeStart uint64 = 131072
 	K8SIDRangeEnd   uint64 = 262144
-	// TickDuration defines the frequency of ticks.
-	TickDuration = time.Second
 	// CheckDuration defines how often HAKeeper checks the health state of the cluster
-	CheckDuration = time.Second
+	CheckDuration = 3 * time.Second
 	// DefaultHAKeeperShardID is the shard ID assigned to the special HAKeeper
 	// shard.
 	DefaultHAKeeperShardID uint64 = 0

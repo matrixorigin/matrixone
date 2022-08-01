@@ -25,16 +25,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	ap := arg.(*Argument)
 	buf.WriteString(fmt.Sprintf("filter(%s)", ap.E))
 }
 
-func Prepare(_ *process.Process, _ interface{}) error {
+func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
