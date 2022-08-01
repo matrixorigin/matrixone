@@ -38,4 +38,6 @@ dn-store-timeout = "10s"
 [hakeeper-client]
 service-addresses = [
   "127.0.0.1:32001",
+  "127.0.0.1:32011",
+  "127.0.0.1:32021",
 ]
