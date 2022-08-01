@@ -18,6 +18,8 @@ import (
 	"bufio"
 	"os"
 	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
 //update statement
@@ -96,6 +98,42 @@ func NewUpdateExpr(t bool, n []*UnresolvedName, e Expr) *UpdateExpr {
 		Names: n,
 		Expr:  e,
 	}
+}
+
+const (
+	LOCAL = iota
+	S3
+	MinIO
+)
+
+const (
+	AUTO       = "auto"
+	NOCOMPRESS = "none"
+	GZIP       = "gzip"
+	BZIP2      = "bz2"
+	FLATE      = "flate"
+	LZW        = "lzw"
+	ZLIB       = "zlib"
+	LZ4        = "lz4"
+)
+
+type LoadParam struct {
+	//Fields
+	Fields *Fields
+	//Lines
+	Lines *Lines
+	//Ignored lines
+	IgnoredLines uint64
+	//col_name_or_user_var
+	ColumnList []LoadColumn
+	//set col_name
+	Assignments UpdateExprs
+	Filepath    string
+	//s3 parameter
+	Config       fileservice.S3Config
+	LoadType     int
+	CompressType string
+	S3options    []string
 }
 
 //Load data statement

@@ -78,7 +78,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 	}
 
 	switch node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, colRefCnt)
 		}
@@ -89,8 +89,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		tag := node.BindingTags[0]
 		newTableDef := &plan.TableDef{
-			Name: node.TableDef.Name,
-			Defs: node.TableDef.Defs,
+			Name:          node.TableDef.Name,
+			Defs:          node.TableDef.Defs,
+			Name2ColIndex: node.TableDef.Name2ColIndex,
+			Createsql:     node.TableDef.Createsql,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -1195,6 +1197,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 			return 0, errors.New("", fmt.Sprintf("table %q does not exist", table))
 		}
 
+		tableDef.Name2ColIndex = map[string]int32{}
+		for i := 0; i < len(tableDef.Cols); i++ {
+			tableDef.Name2ColIndex[tableDef.Cols[i].Name] = int32(i)
+		}
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_TABLE_SCAN,
 			Cost:        builder.compCtx.Cost(obj, nil),
@@ -1202,6 +1208,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 			TableDef:    tableDef,
 			BindingTags: []int32{builder.genNewTag()},
 		}, ctx)
+		if tableDef.TableType == "e" {
+			builder.qry.Nodes[len(builder.qry.Nodes)-1].NodeType = plan.Node_EXTERNAL_SCAN
+		}
 
 	case *tree.JoinTableExpr:
 		return builder.buildJoinTable(tbl, ctx)
@@ -1253,7 +1262,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var types []*plan.Type
 	var binding *Binding
 
-	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN {
+	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN {
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return errors.New("", fmt.Sprintf("table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols)))
 		}

@@ -300,6 +300,29 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			ss[i].Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, 0)
 		}
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
+	case plan.Node_EXTERNAL_SCAN:
+		src := &Source{
+			RelationName:  n.TableDef.Name,
+			SchemaName:    n.ObjRef.SchemaName,
+			Attributes:    make([]string, len(n.TableDef.Cols)),
+			Cols:          n.TableDef.Cols,
+			Name2ColIndex: n.TableDef.Name2ColIndex,
+			CreateSql:     n.TableDef.Createsql,
+		}
+		for i, col := range n.TableDef.Cols {
+			src.Attributes[i] = col.Name
+		}
+		nodes := make([]engine.Node, 1)
+		ss := make([]*Scope, len(nodes))
+		for i := range nodes {
+			ss[i] = &Scope{
+				DataSource: src,
+				Magic:      External,
+				NodeInfo:   nodes[i],
+			}
+			ss[i].Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, 0)
+		}
+		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_FILTER:
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
 		if err != nil {

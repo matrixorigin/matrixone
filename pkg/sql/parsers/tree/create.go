@@ -123,6 +123,7 @@ type CreateTable struct {
 	Defs            TableDefs
 	Options         []TableOption
 	PartitionOption *PartitionOption
+	Param           *LoadParam
 }
 
 func (node *CreateTable) Format(ctx *FmtCtx) {

@@ -15,7 +15,9 @@
 package plan
 
 import (
+	"encoding/json"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -32,7 +34,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			Name: string(stmt.Table.ObjectName),
 		},
 	}
-
+	
 	// get database name
 	if len(stmt.Table.SchemaName) == 0 {
 		createTable.Database = ""
@@ -100,6 +102,29 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		}
 	}
 
+	if stmt.Param != nil {
+		json_byte, err := json.Marshal(stmt.Param) //看上去更加格式化
+		if err != nil {
+			return nil, err
+		}
+		properties := []*plan.Property{
+			{
+				Key:   "relkind",
+				Value: "e",
+			},
+			{
+				Key:   "createsql",
+				Value: string(json_byte),
+			},
+		}
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			},
+		})
+	}
 	// set partition(unsupport now)
 	if stmt.PartitionOption != nil {
 		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("partition unsupport now; statement: '%v'", tree.String(stmt, dialect.MYSQL)))

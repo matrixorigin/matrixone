@@ -49,6 +49,19 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		}
 		defs = append(defs, pk)
 	}
+	pro := new(engine.PropertiesDef)
+	pro.Properties = append(pro.Properties, engine.Property{
+		Key:   "relkind",
+		Value: string(schema.Relkind),
+	})
+	if schema.Createsql != "" {
+		pro.Properties = append(pro.Properties, engine.Property{
+			Key:   "createsql",
+			Value: schema.Createsql,
+		})
+	}
+	defs = append(defs, pro)
+
 	return
 }
 
@@ -79,6 +92,10 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 			for _, property := range defVal.Properties {
 				if strings.ToLower(property.Key) == "comment" {
 					schema.Comment = property.Value
+				} else if strings.ToLower(property.Key) == "relkind" {
+					schema.Relkind = property.Value
+				} else if strings.ToLower(property.Key) == "createsql" {
+					schema.Createsql = property.Value
 				}
 			}
 		default:

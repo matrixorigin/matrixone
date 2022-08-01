@@ -314,6 +314,8 @@ message TableDef {
 	string name				= 1;
 	repeated ColDef cols	= 2;
 	repeated DefType defs	= 3;
+	string TableType 		= 4;
+	string Createsql 		= 5;
 }
 
 message Cost {

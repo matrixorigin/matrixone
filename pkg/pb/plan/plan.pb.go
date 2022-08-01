@@ -2595,6 +2595,9 @@ type TableDef struct {
 	XXX_NoUnkeyedLiteral struct{}            `json:"-"`
 	XXX_unrecognized     []byte              `json:"-"`
 	XXX_sizecache        int32               `json:"-"`
+	TableType            string              `json:"-"`
+	Createsql            string              `json:"-"`
+	Name2ColIndex        map[string]int32
 }
 
 func (m *TableDef) Reset()         { *m = TableDef{} }

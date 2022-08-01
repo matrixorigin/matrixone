@@ -28,6 +28,8 @@ const (
 	Merge = iota
 	Normal
 	Remote
+	External
+	External2
 	Parallel
 	CreateDatabase
 	CreateTable
@@ -45,11 +47,14 @@ var Address string
 
 // Source contains information of a relation which will be used in execution,
 type Source struct {
-	SchemaName   string
-	RelationName string
-	Attributes   []string
-	R            engine.Reader
-	Bat          *batch.Batch
+	SchemaName    string
+	RelationName  string
+	Attributes    []string
+	Cols          []*plan.ColDef
+	Name2ColIndex map[string]int32
+	CreateSql	  string
+	R             engine.Reader
+	Bat           *batch.Batch
 }
 
 // Col is the information of attribute

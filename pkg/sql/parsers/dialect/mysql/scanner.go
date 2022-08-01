@@ -145,7 +145,7 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 	switch ch {
 	case eofChar:
 		return 0, ""
-	case '=', ',', '(', ')', '+', '*', '%', '^', '~':
+	case '=', ',', '(', ')', '+', '*', '%', '^', '~', '{', '}':
 		return int(ch), ""
 	case '&':
 		if s.cur() == '&' {

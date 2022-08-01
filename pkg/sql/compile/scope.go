@@ -301,7 +301,7 @@ func (s *Scope) NumCPU() int {
 
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(e engine.Engine) (err error) {
-	p := pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
+	p := pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg, nil, nil, "")
 	if s.DataSource.Bat != nil {
 		if _, err = p.ConstRun(s.DataSource.Bat, s.Proc); err != nil {
 			return err
@@ -310,6 +310,15 @@ func (s *Scope) Run(e engine.Engine) (err error) {
 		if _, err = p.Run(s.DataSource.R, s.Proc); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// Run read data from storage engine and run the instructions of scope.
+func (s *Scope) Run2(e engine.Engine) (err error) {
+	p := pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg, s.DataSource.Cols, s.DataSource.Name2ColIndex, s.DataSource.CreateSql)
+	if _, err = p.Run2(s.Proc); err != nil {
+		return err
 	}
 	return nil
 }
@@ -350,6 +359,22 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 					errChan <- err
 				}()
 				err = cs.ParallelRun(e)
+			}(s.PreScopes[i])
+		case External:
+			go func(cs *Scope) {
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+				err = cs.ParallelRun2(e)
+			}(s.PreScopes[i])
+		case External2:
+			go func(cs *Scope) {
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+				err = cs.Run2(e)
 			}(s.PreScopes[i])
 		}
 	}
@@ -454,6 +479,192 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 				SchemaName:   s.DataSource.SchemaName,
 				RelationName: s.DataSource.RelationName,
 				Attributes:   s.DataSource.Attributes,
+			},
+		}
+		ss[i].Proc = process.New(mheap.New(s.Proc.Mp.Gm))
+		ss[i].Proc.Id = s.Proc.Id
+		ss[i].Proc.Lim = s.Proc.Lim
+		ss[i].Proc.UnixTime = s.Proc.UnixTime
+		ss[i].Proc.Snapshot = s.Proc.Snapshot
+		ss[i].Proc.SessionInfo = s.Proc.SessionInfo
+	}
+	{
+		var flg bool
+
+		for i, in := range s.Instructions {
+			if flg {
+				break
+			}
+			switch in.Op {
+			case vm.Top:
+				flg = true
+				arg := in.Arg.(*top.Argument)
+				s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+				s.Instructions[0] = vm.Instruction{
+					Op: vm.MergeTop,
+					Arg: &mergetop.Argument{
+						Fs:    arg.Fs,
+						Limit: arg.Limit,
+					},
+				}
+				for i := range ss {
+					ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+						Op: vm.Top,
+						Arg: &top.Argument{
+							Fs:    arg.Fs,
+							Limit: arg.Limit,
+						},
+					})
+				}
+			case vm.Order:
+				flg = true
+				arg := in.Arg.(*order.Argument)
+				s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+				s.Instructions[0] = vm.Instruction{
+					Op: vm.MergeOrder,
+					Arg: &mergeorder.Argument{
+						Fs: arg.Fs,
+					},
+				}
+				for i := range ss {
+					ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+						Op: vm.Order,
+						Arg: &order.Argument{
+							Fs: arg.Fs,
+						},
+					})
+				}
+			case vm.Limit:
+				flg = true
+				arg := in.Arg.(*limit.Argument)
+				s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+				s.Instructions[0] = vm.Instruction{
+					Op: vm.MergeLimit,
+					Arg: &mergelimit.Argument{
+						Limit: arg.Limit,
+					},
+				}
+				for i := range ss {
+					ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+						Op: vm.Limit,
+						Arg: &limit.Argument{
+							Limit: arg.Limit,
+						},
+					})
+				}
+			case vm.Group:
+				flg = true
+				arg := in.Arg.(*group.Argument)
+				s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+				s.Instructions[0] = vm.Instruction{
+					Op: vm.MergeGroup,
+					Arg: &mergegroup.Argument{
+						NeedEval: false,
+					},
+				}
+				for i := range ss {
+					ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+						Op: vm.Group,
+						Arg: &group.Argument{
+							Aggs:  arg.Aggs,
+							Exprs: arg.Exprs,
+							Types: arg.Types,
+						},
+					})
+				}
+			case vm.Offset:
+				flg = true
+				arg := in.Arg.(*offset.Argument)
+				s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+				s.Instructions[0] = vm.Instruction{
+					Op: vm.MergeOffset,
+					Arg: &mergeoffset.Argument{
+						Offset: arg.Offset,
+					},
+				}
+				for i := range ss {
+					ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+						Op: vm.Offset,
+						Arg: &offset.Argument{
+							Offset: arg.Offset,
+						},
+					})
+				}
+			default:
+				for i := range ss {
+					ss[i].Instructions = append(ss[i].Instructions, dupInstruction(in))
+				}
+			}
+		}
+		if !flg {
+			for i := range ss {
+				ss[i].Instructions = ss[i].Instructions[:len(ss[i].Instructions)-1]
+			}
+			s.Instructions[0] = vm.Instruction{
+				Op:  vm.Merge,
+				Arg: &merge.Argument{},
+			}
+			s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
+			s.Instructions = s.Instructions[:2]
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.Magic = Merge
+	s.PreScopes = ss
+	s.Proc.Cancel = cancel
+	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
+	{
+		for i := 0; i < len(ss); i++ {
+			s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
+				Ctx: ctx,
+				Ch:  make(chan *batch.Batch, 1),
+			}
+		}
+	}
+	for i := range ss {
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Mmu: s.Proc.Mp.Gm,
+				Reg: s.Proc.Reg.MergeReceivers[i],
+			},
+		})
+	}
+	return s.MergeRun(e)
+}
+
+// ParallelRun try to execute the scope in parallel way.
+func (s *Scope) ParallelRun2(e engine.Engine) error {
+	var rds []engine.Reader
+	if s.DataSource == nil {
+		return s.DispatchRun(e)
+	}
+	mcpu := 1 //s.NumCPU()
+	snap := engine.Snapshot(s.Proc.Snapshot)
+	{
+		ctx := context.TODO()
+		db, err := e.Database(ctx, s.DataSource.SchemaName, snap)
+		if err != nil {
+			return err
+		}
+		rel, err := db.Relation(ctx, s.DataSource.RelationName)
+		if err != nil {
+			return err
+		}
+		rds, _ = rel.NewReader(ctx, mcpu, nil, s.NodeInfo.Data)
+	}
+	ss := make([]*Scope, mcpu)
+	for i := 0; i < mcpu; i++ {
+		ss[i] = &Scope{
+			Magic: External2,
+			DataSource: &Source{
+				R:             rds[i],
+				SchemaName:    s.DataSource.SchemaName,
+				RelationName:  s.DataSource.RelationName,
+				Attributes:    s.DataSource.Attributes,
+				Cols:          s.DataSource.Cols,
+				Name2ColIndex: s.DataSource.Name2ColIndex,
+				CreateSql:     s.DataSource.CreateSql,
 			},
 		}
 		ss[i].Proc = process.New(mheap.New(s.Proc.Mp.Gm))

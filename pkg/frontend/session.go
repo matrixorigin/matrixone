@@ -646,6 +646,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	}
 
 	var defs []*plan2.ColDef
+	var TableType, Createsql string
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			defs = append(defs, &plan2.ColDef{
@@ -659,6 +660,14 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				Primary: attr.Attr.Primary,
 				Default: plan2.MakePlan2DefaultExpr(attr.Attr.Default),
 			})
+		} else if pro, ok := def.(*engine.PropertiesDef); ok {
+			for _, x := range pro.Properties {
+				if x.Key == "relkind" {
+					TableType = x.Value
+				} else if x.Key == "createsql" {
+					Createsql = x.Value
+				}
+			}
 		}
 	}
 	if tcc.QryTyp != TXN_DEFAULT {
@@ -686,8 +695,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	}
 
 	tableDef := &plan2.TableDef{
-		Name: tableName,
-		Cols: defs,
+		Name:      tableName,
+		Cols:      defs,
+		TableType: TableType,
+		Createsql: Createsql,
 	}
 	return obj, tableDef
 }

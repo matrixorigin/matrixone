@@ -48,6 +48,7 @@ import (
     rowFormatType tree.RowFormatType
     matchType tree.MatchType
     attributeReference *tree.AttributeReference
+    loadParam *tree.LoadParam
 
     from *tree.From
     where *tree.Where
@@ -233,7 +234,7 @@ import (
 %token <str> DYNAMIC COMPRESSED REDUNDANT COMPACT FIXED COLUMN_FORMAT AUTO_RANDOM
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS
-%token <str> TYPE ANY SOME
+%token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL S3OPTION
 %token <str> PREPARE DEALLOCATE
 
 // MO table option
@@ -329,6 +330,7 @@ import (
 %type <statement> analyze_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt
 %type <exportParm> export_data_param_opt
+%type <loadParam> load_param_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -379,7 +381,7 @@ import (
 %type <funcExpr> function_call_json
 
 %type <unresolvedName> column_name column_name_unresolved
-%type <strs> enum_values force_quote_opt force_quote_list
+%type <strs> enum_values force_quote_opt force_quote_list s3param s3params
 %type <str> sql_id charset_keyword db_name
 %type <str> not_keyword func_not_keyword
 %type <str> reserved_keyword non_reserved_keyword
@@ -3611,6 +3613,83 @@ create_table_stmt:
             PartitionOption: $10,
         }
     }
+|   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' load_param_opt
+    {
+        $$ = &tree.CreateTable {
+            Table: *$5,
+            Defs: $7,
+            Param: $9,
+        }
+    }
+
+load_param_opt:
+    LOCALFILE '{' STRING '=' STRING '}' load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
+    {
+        if strings.ToLower($3) != "filepath" {
+                yylex.Error(fmt.Sprintf("can not recognize the '%s'", $3))
+                return 1
+            }
+        $$ = &tree.LoadParam{
+            Filepath: $5,
+            LoadType: tree.LOCAL,
+            CompressType: tree.AUTO,
+            Fields: $7,
+            Lines: $8,
+            IgnoredLines: uint64($9),
+            ColumnList: $10,
+            Assignments: $11,
+        }
+    }
+|   LOCALFILE '{' STRING '=' STRING ',' STRING '=' STRING '}' load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
+    {
+        if strings.ToLower($3) != "filepath" || strings.ToLower($7) != "compression" {
+                yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' ", $3, $7))
+                return 1
+            }
+        $$ = &tree.LoadParam{
+            Filepath: $5,
+            LoadType: tree.LOCAL,
+            CompressType: $9,
+            Fields: $11,
+            Lines: $12,
+            IgnoredLines: uint64($13),
+            ColumnList: $14,
+            Assignments: $15,
+        }
+    }
+|   URL S3OPTION '{' s3params '}' load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
+    {
+        $$ = &tree.LoadParam{
+            LoadType: tree.S3,
+            S3options: $4,
+            Fields: $6,
+            Lines: $7,
+            IgnoredLines: uint64($8),
+            ColumnList: $9,
+            Assignments: $10,
+        }
+    }
+
+s3params:
+    s3param
+    {
+        $$ = $1
+    }
+|   s3params ',' s3param
+    {
+        $$ = append($1, $3...)
+        fmt.Println("wangjian test1 is", $$)
+    }
+
+s3param:
+    {
+        $$ = []string{}
+    }
+|   STRING '=' STRING
+    {
+        $$ = append($$, $1)
+        $$ = append($$, $3)
+    }
 
 temporary_opt:
     {
@@ -6767,6 +6846,10 @@ non_reserved_keyword:
 |	SOME
 |   TIMESTAMP %prec LOWER_THAN_STRING
 |   DATE %prec LOWER_THAN_STRING
+|   EXTERNAL
+|   LOCALFILE
+|   URL
+|   S3OPTION
 
 func_not_keyword:
 	DATE_ADD
