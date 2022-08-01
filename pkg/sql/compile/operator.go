@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -53,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -93,6 +95,12 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		}
 	case *left.Argument:
 		rin.Arg = &left.Argument{
+			Typs:       arg.Typs,
+			Result:     arg.Result,
+			Conditions: arg.Conditions,
+		}
+	case *single.Argument:
+		rin.Arg = &single.Argument{
 			Typs:       arg.Typs,
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
@@ -145,6 +153,11 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		}
 	case *loopcomplement.Argument:
 		rin.Arg = &loopcomplement.Argument{
+			Cond:   arg.Cond,
+			Result: arg.Result,
+		}
+	case *loopsingle.Argument:
+		rin.Arg = &loopsingle.Argument{
 			Cond:   arg.Cond,
 			Result: arg.Result,
 		}
@@ -297,6 +310,18 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
 	return &left.Argument{
+		Typs:       typs,
+		Result:     result,
+		Conditions: constructJoinConditions(n.OnList),
+	}
+}
+
+func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *single.Argument {
+	result := make([]single.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+	}
+	return &single.Argument{
 		Typs:       typs,
 		Result:     result,
 		Conditions: constructJoinConditions(n.OnList),
@@ -483,6 +508,17 @@ func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *
 	}
 	return &loopleft.Argument{
 		Typs:   typs,
+		Result: result,
+		Cond:   colexec.RewriteFilterExprList(n.OnList),
+	}
+}
+
+func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process) *loopsingle.Argument {
+	result := make([]loopsingle.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+	}
+	return &loopsingle.Argument{
 		Result: result,
 		Cond:   colexec.RewriteFilterExprList(n.OnList),
 	}

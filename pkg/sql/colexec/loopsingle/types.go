@@ -12,55 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package vm
+package loopsingle
 
-const (
-	Top = iota
-	Join
-	Semi
-	Left
-	Limit
-	Merge
-	Order
-	Group
-	Output
-	Offset
-	Product
-	Restrict
-	Dispatch
-	Connector
-	Projection
-	Complement
-	Single
-
-	LoopJoin
-	LoopLeft
-	LoopSemi
-	LoopComplement
-	LoopSingle
-
-	MergeTop
-	MergeLimit
-	MergeOrder
-	MergeGroup
-	MergeOffset
-
-	Deletion
-	Insert
-	Update
-
-	Union
-	Minus
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-var _ = Minus
+const (
+	Build = iota
+	Probe
+	End
+)
 
-// Instruction contains relational algebra
-type Instruction struct {
-	// Op specified the operator code of an instruction.
-	Op int
-	// Arg contains the operand of this instruction.
-	Arg any
+type container struct {
+	state int
+	bat   *batch.Batch
 }
 
-type Instructions []Instruction
+type ResultPos struct {
+	Rel int32
+	Pos int32
+}
+
+type Argument struct {
+	ctr    *container
+	Typs   []types.Type
+	Cond   *plan.Expr
+	Result []ResultPos
+}
