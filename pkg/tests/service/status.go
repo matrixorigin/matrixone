@@ -14,16 +14,11 @@
 
 package service
 
-import "fmt"
+// Status indicates serivce status.
+type Status int
 
-var (
-	ErrServiceNotExist  = fmt.Errorf("service not exist")
-	ErrServiceNoStarted = fmt.Errorf("service not started")
-	ErrFailAllocatePort = fmt.Errorf("fail to allocate port")
-	ErrInvalidFSName    = fmt.Errorf("invalid file service name")
+const (
+	Initialized Status = iota
+	Started
+	Closed
 )
-
-// wrappedError wraps error with extra message.
-func wrappedError(err error, msg string) error {
-	return fmt.Errorf("%w: %s", err, msg)
-}

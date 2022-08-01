@@ -15,6 +15,8 @@
 package service
 
 import (
+	"sync"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -27,23 +29,96 @@ type DNService interface {
 	Start() error
 	// Close stops store
 	Close() error
+	// Status returns the status of service.
+	Status() Status
 
 	// StartDNReplica start the DNShard replica
-	StartDNReplica(metadata.DNShard) error
+	StartDNReplica(shard metadata.DNShard) error
 	// CloseDNReplica close the DNShard replica.
 	CloseDNReplica(shard metadata.DNShard) error
+}
+
+// dnService wraps dnservice.Service.
+//
+// The main purpose of this structure is to maintain status.
+type dnService struct {
+	sync.Mutex
+	status Status
+	svc    dnservice.Service
+}
+
+func (ds *dnService) Start() error {
+	ds.Lock()
+	defer ds.Unlock()
+
+	if ds.status == Initialized || ds.status == Closed {
+		err := ds.svc.Start()
+		if err != nil {
+			return err
+		}
+		ds.status = Started
+	}
+
+	return nil
+}
+
+func (ds *dnService) Close() error {
+	ds.Lock()
+	defer ds.Unlock()
+
+	if ds.status == Started {
+		err := ds.svc.Close()
+		if err != nil {
+			return err
+		}
+		ds.status = Closed
+	}
+
+	return nil
+}
+
+func (ds *dnService) Status() Status {
+	ds.Lock()
+	defer ds.Unlock()
+	return ds.status
+}
+
+func (ds *dnService) StartDNReplica(shard metadata.DNShard) error {
+	ds.Lock()
+	defer ds.Unlock()
+
+	if ds.status != Started {
+		return ErrServiceNoStarted
+	}
+
+	return ds.svc.StartDNReplica(shard)
+}
+
+func (ds *dnService) CloseDNReplica(shard metadata.DNShard) error {
+	ds.Lock()
+	defer ds.Unlock()
+
+	if ds.status != Started {
+		return ErrServiceNoStarted
+	}
+
+	return ds.svc.CloseDNReplica(shard)
 }
 
 // dnOptions is options for a dn service.
 type dnOptions []dnservice.Option
 
-// newDNService initialize a DNService instance.
+// newDNService initializes an instance of `DNService`.
 func newDNService(
 	cfg *dnservice.Config,
 	factory fileservice.FileServiceFactory,
 	opts dnOptions,
 ) (DNService, error) {
-	return dnservice.NewService(cfg, factory, opts...)
+	svc, err := dnservice.NewService(cfg, factory, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &dnService{status: Initialized, svc: svc}, nil
 }
 
 // buildDnConfig builds configuration for a dn service.

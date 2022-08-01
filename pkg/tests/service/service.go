@@ -58,9 +58,9 @@ type ClusterOperation interface {
 
 // ClusterAwareness provides cluster awareness information.
 type ClusterAwareness interface {
-	// ListDNServices lists all dn svcs
+	// ListDNServices lists uuid of all dn services
 	ListDNServices() []string
-	// ListLogServices lists all log svcs
+	// ListLogServices lists uuid of all log services
 	ListLogServices() []string
 
 	// GetDNService fetches dn service instance
@@ -68,7 +68,7 @@ type ClusterAwareness interface {
 	// GetLogService fetches log service instance
 	GetLogService(id string) (LogService, error)
 	// GetClusterState fetches current cluster state
-	GetClusterState() (*logpb.CheckerState, error)
+	GetClusterState(timeout time.Duration) (*logpb.CheckerState, error)
 }
 
 // TODO: add more convenient method
@@ -86,6 +86,7 @@ type ClusterAssertState interface {
 
 // ClusterWaitState waits cluster state until timeout.
 type ClusterWaitState interface {
+	WaitHAKeeperLeader(timeout time.Duration) LogService
 	WaitHAKeeperState(timeout time.Duration, expected logpb.HAKeeperState)
 	// WaitClusterHealth(timeout time.Duration)
 	// WaitShardByNum(typ string, batch int, timeout time.Duration)
@@ -224,8 +225,9 @@ func (c *testCluster) GetLogService(id string) (LogService, error) {
 	return nil, wrappedError(ErrServiceNotExist, id)
 }
 
-func (c *testCluster) GetClusterState() (*logpb.CheckerState, error) {
-	leader := c.WaitHAKeeperLeader(time.Second)
+// FIXME: get state from leader hakeeper only or from all hakeeper?
+func (c *testCluster) GetClusterState(timeout time.Duration) (*logpb.CheckerState, error) {
+	leader := c.WaitHAKeeperLeader(timeout)
 	return leader.GetClusterState()
 }
 
@@ -464,10 +466,17 @@ func (c *testCluster) closeLogServices() error {
 
 // getHAKeeperLeader gets log service which is hakeeper leader.
 func (c *testCluster) getHAKeeperLeader() LogService {
-	var leader LogService
-	for _, svc := range c.selectHAkeeperServices() {
-		if svc.IsLeaderHakeeper() {
-			return leader
+	for i, svc := range c.selectHAkeeperServices() {
+		isLeader, err := svc.IsLeaderHakeeper()
+		if err != nil {
+			c.logger.Error("fail to check hakeeper", zap.Error(err), zap.Int("index", i))
+			continue
+		}
+
+		c.logger.Info("hakeeper state", zap.Bool("isleader", isLeader), zap.Int("index", i))
+
+		if isLeader {
+			return svc
 		}
 	}
 	return nil

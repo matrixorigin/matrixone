@@ -16,20 +16,54 @@ package service
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
 func TestCluster(t *testing.T) {
-	c, err := NewCluster(t, DefaultOptions())
+	dnNum := 2
+	logNum := 3
+
+	// initialize instance of Cluster
+	c, err := NewCluster(t,
+		DefaultOptions().WithDNServiceNum(dnNum).WithLogServiceNum(logNum),
+	)
 	require.NoError(t, err)
 
+	// start the cluster
 	err = c.Start()
 	require.NoError(t, err)
+
 	defer func() {
+		// close the cluster
 		err = c.Close()
 		require.NoError(t, err)
 	}()
+
+	// test interface `ClusterAwareness`
+	dnIDs := c.ListDNServices()
+	require.Equal(t, dnNum, len(dnIDs))
+
+	logIDs := c.ListLogServices()
+	require.Equal(t, logNum, len(logIDs))
+
+	dn, err := c.GetDNService(dnIDs[0])
+	require.NoError(t, err)
+	require.Equal(t, Started, dn.Status())
+
+	log, err := c.GetLogService(logIDs[0])
+	require.NoError(t, err)
+	require.Equal(t, Started, log.Status())
+
+	leader := c.WaitHAKeeperLeader(2 * time.Second)
+	require.NotNil(t, leader)
+
+	state, err := c.GetClusterState(2 * time.Second)
+	require.NoError(t, err)
+	// FIXME: empty of reported DNState
+	// require.Equal(t, dnNum, len(state.DNState.Stores))
+	require.Equal(t, logNum, len(state.LogState.Stores))
 
 	// FIXME:
 	// 	- do some operation via `ClusterOperation`
