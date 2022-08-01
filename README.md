@@ -541,7 +541,7 @@ Contributions to MatrixOne are welcome from everyone.
         <a href="https://github.com/aressu1985">
             <img src="https://avatars.githubusercontent.com/u/47846308?v=4" width="30;" alt="aressu1985"/>
             <br />
-            <sub><b>aressu1985</b></sub>
+            <sub><b>Aressu1985</b></sub>
         </a>
     </td>
     <td align="center">
@@ -727,10 +727,24 @@ Contributions to MatrixOne are welcome from everyone.
         <a href="https://github.com/mklzl">
             <img src="https://avatars.githubusercontent.com/u/36362816?v=4" width="30;" alt="mklzl"/>
             <br />
-            <sub><b>mklzl</b></sub>
+            <sub><b>Mklzl</b></sub>
         </a>
     </td></tr>
 <tr>
+    <td align="center">
+        <a href="https://github.com/matrix-meow">
+            <img src="https://avatars.githubusercontent.com/u/108789643?v=4" width="30;" alt="matrix-meow"/>
+            <br />
+            <sub><b>Mo-bot</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/mooleetzi">
+            <img src="https://avatars.githubusercontent.com/u/42628885?v=4" width="30;" alt="mooleetzi"/>
+            <br />
+            <sub><b>mooleetzi</b></sub>
+        </a>
+    </td>
     <td align="center">
         <a href="https://github.com/sundy-li">
             <img src="https://avatars.githubusercontent.com/u/3325189?v=4" width="30;" alt="sundy-li"/>
@@ -758,7 +772,8 @@ Contributions to MatrixOne are welcome from everyone.
             <br />
             <sub><b>Wuliuqii</b></sub>
         </a>
-    </td>
+    </td></tr>
+<tr>
     <td align="center">
         <a href="https://github.com/xiw5">
             <img src="https://avatars.githubusercontent.com/u/33027107?v=4" width="30;" alt="xiw5"/>
@@ -772,8 +787,7 @@ Contributions to MatrixOne are welcome from everyone.
             <br />
             <sub><b>Yclchuxue</b></sub>
         </a>
-    </td></tr>
-<tr>
+    </td>
     <td align="center">
         <a href="https://github.com/ZtXavier">
             <img src="https://avatars.githubusercontent.com/u/75614614?v=4" width="30;" alt="ZtXavier"/>
