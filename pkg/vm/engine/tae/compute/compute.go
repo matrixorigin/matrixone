@@ -213,7 +213,7 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (of
 			v.(types.Decimal128),
 			wtf.CompareDecimal128Decimal128Aligned,
 			skipmask)
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_BLOB:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_BLOB, types.Type_JSON:
 		// column := data.Slice().(*containers.Bytes)
 		val := v.([]byte)
 		start, end := 0, data.Length()-1
