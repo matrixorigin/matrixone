@@ -301,7 +301,7 @@ a	b
 drop table t1;
 create table t1 (
 a float(10,5) not null,
-b int not null default 12345.67890,
+b int not null default 12346,
 c float(10,5) not null default 12345.67890,
 d float(10,5) not null default 12345.67890,
 e float(10,5) not null default 12345.67890,
@@ -405,7 +405,7 @@ a	b
 drop table t1;
 create table t1 (
 a float(10,5) not null,
-b int not null default 12345.67890,
+b int not null default 12346,
 c float(10,5) not null default 12345.67890,
 d float(10,5) not null default 12345.67890,
 e float(10,5) not null default 12345.67890,
