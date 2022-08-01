@@ -87,14 +87,18 @@ func (m *Mheap) Grow(old []byte, size int64) ([]byte, error) {
 }
 
 func (m *Mheap) PutSels(sels []int64) {
-	m.Ss = append(m.Ss, sels)
+	m.Lock()
+	defer m.Unlock()
+	m.ss = append(m.ss, sels)
 }
 
 func (m *Mheap) GetSels() []int64 {
-	if len(m.Ss) == 0 {
+	m.Lock()
+	defer m.Unlock()
+	if len(m.ss) == 0 {
 		return make([]int64, 0, 16)
 	}
-	sels := m.Ss[0]
-	m.Ss = m.Ss[1:]
+	sels := m.ss[0]
+	m.ss = m.ss[1:]
 	return sels[:0]
 }
