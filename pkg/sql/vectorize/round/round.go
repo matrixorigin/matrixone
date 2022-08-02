@@ -29,7 +29,7 @@ package round
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	floor2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/floor"
+	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/floor"
 	"math"
 )
 
@@ -59,16 +59,16 @@ func init() {
 	RoundFloat64 = roundFloat64
 }
 
-var maxUint8digits = floor2.MaxUint8digits
-var maxUint16digits = floor2.MaxUint16digits
-var maxUint32digits = floor2.MaxUint32digits
-var maxUint64digits = floor2.MaxUint64digits
-var maxInt8digits = floor2.MaxInt8digits
-var maxInt16digits = floor2.MaxInt16digits
-var maxInt32digits = floor2.MaxInt32digits
-var maxInt64digits = floor2.MaxInt64digits
+var maxUint8digits = floor.MaxUint8digits
+var maxUint16digits = floor.MaxUint16digits
+var maxUint32digits = floor.MaxUint32digits
+var maxUint64digits = floor.MaxUint64digits
+var maxInt8digits = floor.MaxInt8digits
+var maxInt16digits = floor.MaxInt16digits
+var maxInt32digits = floor.MaxInt32digits
+var maxInt64digits = floor.MaxInt64digits
 
-var scaleTable = floor2.ScaleTable
+var scaleTable = floor.ScaleTable
 
 // roundUint8, roundUint16, roundUint32, roundInt8, roundInt16, roundInt32 are basically orphan code, only called in plan1 and will be deleted soon.
 func roundUint8(xs []uint8, rs []uint8, digits int64) []uint8 {
