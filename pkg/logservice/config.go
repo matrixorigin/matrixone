@@ -45,14 +45,6 @@ const (
 	defaultHeartbeatInterval = time.Second
 )
 
-// HAKeeperClientConfig is the config for HAKeeper clients.
-type HAKeeperClientConfig struct {
-	// DiscoveryAddress is the Log Service discovery address provided by k8s.
-	DiscoveryAddress string `toml:"discovery-address"`
-	// ServiceAddresses is a list of well known Log Services' service addresses.
-	ServiceAddresses []string `toml:"service-addresses"`
-}
-
 // Config defines the Configurations supported by the Log Service.
 type Config struct {
 	// FS is the underlying virtual FS used by the log service. Leave it as empty
@@ -283,15 +275,6 @@ func (c *Config) Fill() {
 	if c.FS == nil {
 		c.FS = vfs.Default
 	}
-	if c.HeartbeatInterval.Duration == 0 {
-		c.HeartbeatInterval.Duration = defaultHeartbeatInterval
-	}
-	if c.HAKeeperTickInterval.Duration == 0 {
-		c.HAKeeperTickInterval.Duration = hakeeper.TickDuration
-	}
-	if c.HAKeeperCheckInterval.Duration == 0 {
-		c.HAKeeperCheckInterval.Duration = hakeeper.CheckDuration
-	}
 	if c.RTTMillisecond == 0 {
 		c.RTTMillisecond = 200
 	}
@@ -325,6 +308,61 @@ func (c *Config) Fill() {
 	if c.HAKeeperConfig.DnStoreTimeout.Duration == 0 {
 		c.HAKeeperConfig.DnStoreTimeout.Duration = hakeeper.DefaultDnStoreTimeout
 	}
+	if c.HeartbeatInterval.Duration == 0 {
+		c.HeartbeatInterval.Duration = defaultHeartbeatInterval
+	}
+	if c.HAKeeperTickInterval.Duration == 0 {
+		c.HAKeeperTickInterval.Duration = time.Second / time.Duration(c.HAKeeperConfig.TickPerSecond)
+	}
+	if c.HAKeeperCheckInterval.Duration == 0 {
+		c.HAKeeperCheckInterval.Duration = hakeeper.CheckDuration
+	}
+
+}
+
+// HAKeeperClientConfig is the config for HAKeeper clients.
+type HAKeeperClientConfig struct {
+	// DiscoveryAddress is the Log Service discovery address provided by k8s.
+	DiscoveryAddress string `toml:"discovery-address"`
+	// ServiceAddresses is a list of well known Log Services' service addresses.
+	ServiceAddresses []string `toml:"service-addresses"`
+}
+
+// Validate validates the HAKeeperClientConfig.
+func (c *HAKeeperClientConfig) Validate() error {
+	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
+		return errors.Wrapf(ErrInvalidConfig, "empty HAKeeperClientConfig")
+	}
+	return nil
+}
+
+// ClientConfig is the configuration for log service clients.
+type ClientConfig struct {
+	// ReadOnly indicates whether this is a read-only client.
+	ReadOnly bool
+	// LogShardID is the shard ID of the log service shard to be used.
+	LogShardID uint64
+	// DNReplicaID is the replica ID of the DN that owns the created client.
+	DNReplicaID uint64
+	// DiscoveryAddress is the Log Service discovery address provided by k8s.
+	DiscoveryAddress string
+	// LogService nodes service addresses. This field is provided for testing
+	// purposes only.
+	ServiceAddresses []string
+}
+
+// Validate validates the ClientConfig.
+func (c *ClientConfig) Validate() error {
+	if c.LogShardID == 0 {
+		return errors.Wrapf(ErrInvalidConfig, "invalid LogShardID")
+	}
+	if c.DNReplicaID == 0 {
+		return errors.Wrapf(ErrInvalidConfig, "invalid DNReplicaID")
+	}
+	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
+		return errors.Wrapf(ErrInvalidConfig, "log service address info is empty")
+	}
+	return nil
 }
 
 func splitAddresses(v string) []string {

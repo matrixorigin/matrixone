@@ -1506,7 +1506,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 		joinSides := make([]int8, len(filters))
 
 		for i, filter := range filters {
-			canTurnInner := true
+			canTurnInner := false
 
 			joinSides[i] = getJoinSide(filter, leftTags, rightTags)
 			if f, ok := filter.Expr.(*plan.Expr_F); ok {
@@ -1572,7 +1572,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 					leftPushdown = append(leftPushdown, DeepCopyExpr(filter))
 					rightPushdown = append(rightPushdown, filter)
 
-				case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
+				case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
 					leftPushdown = append(leftPushdown, filter)
 
 				default:

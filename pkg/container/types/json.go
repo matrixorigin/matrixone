@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,11 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package joincondition
+package types
 
-import "github.com/matrixorigin/matrixone/pkg/sql/plan"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+)
 
-type Condition struct {
-	Scale int32
-	Expr  *plan.Expr
+func ParseNumValToByteJson(num *tree.NumVal) (bytejson.ByteJson, error) {
+	val := num.String()
+	return ParseStringToByteJson(val)
+}
+
+func ParseStringToByteJson(str string) (bytejson.ByteJson, error) {
+	return bytejson.ParseFromString(str)
+}
+func ParseSliceToByteJson(dt []byte) (bytejson.ByteJson, error) {
+	return bytejson.ParseFromByteSlice(dt)
 }

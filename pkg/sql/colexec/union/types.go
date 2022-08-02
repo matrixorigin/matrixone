@@ -17,7 +17,6 @@ package union
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/joincondition"
 )
 
 const (
@@ -38,8 +37,7 @@ type container struct {
 
 type Argument struct {
 	//  attribute which need not do serialization work
-	ctr        *container
-	Ibucket    uint64 // index in buckets
-	Nbucket    uint64 // buckets count
-	Conditions [2][]joincondition.Condition
+	ctr     *container
+	Ibucket uint64 // index in buckets
+	Nbucket uint64 // buckets count
 }

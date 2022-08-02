@@ -17,6 +17,7 @@ package loopcomplement
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -24,23 +25,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ interface{}, buf *bytes.Buffer) {
-	buf.WriteString(" \\ ")
+func String(_ any, buf *bytes.Buffer) {
+	buf.WriteString(" loop anti join ")
 }
 
-func Prepare(proc *process.Process, arg interface{}) error {
+func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
-	ap.ctr = new(Container)
+	ap.ctr = new(container)
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(ap, proc); err != nil {
+			if err := ctr.build(ap, proc, anal); err != nil {
 				ctr.state = End
 				return true, err
 			}
@@ -50,35 +54,35 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 			if bat == nil {
 				ctr.state = End
 				if ctr.bat != nil {
-					ctr.bat.Clean(proc.Mp)
+					ctr.bat.Clean(proc.GetMheap())
 				}
 				continue
 			}
-			if len(bat.Zs) == 0 {
+			if bat.Length() == 0 {
 				continue
 			}
-			if ctr.bat == nil {
-				if err := ctr.emptyProbe(bat, ap, proc); err != nil {
+			if ctr.bat == nil || ctr.bat.Length() == 0 {
+				if err := ctr.emptyProbe(bat, ap, proc, anal); err != nil {
 					ctr.state = End
-					proc.Reg.InputBatch = nil
+					proc.SetInputBatch(nil)
 					return true, err
 				}
 			} else {
-				if err := ctr.probe(bat, ap, proc); err != nil {
+				if err := ctr.probe(bat, ap, proc, anal); err != nil {
 					ctr.state = End
-					proc.Reg.InputBatch = nil
+					proc.SetInputBatch(nil)
 					return true, err
 				}
 			}
 			return false, nil
 		default:
-			proc.Reg.InputBatch = nil
+			proc.SetInputBatch(nil)
 			return true, nil
 		}
 	}
 }
 
-func (ctr *Container) build(ap *Argument, proc *process.Process) error {
+func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
 	var err error
 
 	for {
@@ -86,7 +90,7 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 		if bat == nil {
 			break
 		}
-		if len(bat.Zs) == 0 {
+		if bat.Length() == 0 {
 			continue
 		}
 		if ctr.bat == nil {
@@ -94,33 +98,38 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 			for i, vec := range bat.Vecs {
 				ctr.bat.Vecs[i] = vector.New(vec.Typ)
 			}
+			ctr.bat.Zs = proc.GetMheap().GetSels()
 		}
-		if ctr.bat, err = ctr.bat.Append(proc.Mp, bat); err != nil {
-			bat.Clean(proc.Mp)
-			ctr.bat.Clean(proc.Mp)
+		anal.Input(bat)
+		anal.Alloc(int64(bat.Size()))
+		if ctr.bat, err = ctr.bat.Append(proc.GetMheap(), bat); err != nil {
+			bat.Clean(proc.GetMheap())
+			ctr.bat.Clean(proc.GetMheap())
 			return err
 		}
-		bat.Clean(proc.Mp)
+		bat.Clean(proc.GetMheap())
 	}
 	return nil
 }
 
-func (ctr *Container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process) error {
-	defer bat.Clean(proc.Mp)
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
+	defer bat.Clean(proc.GetMheap())
+	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
+	rbat.Zs = proc.GetMheap().GetSels()
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
 	}
-	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	count := bat.Length()
+	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
-		if n > UnitLimit {
-			n = UnitLimit
+		if n > hashmap.UnitLimit {
+			n = hashmap.UnitLimit
 		}
 		for k := 0; k < n; k++ {
 			for j, pos := range ap.Result {
-				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp); err != nil {
-					rbat.Clean(proc.Mp)
+				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.GetMheap()); err != nil {
+					rbat.Clean(proc.GetMheap())
 					return err
 				}
 			}
@@ -128,17 +137,20 @@ func (ctr *Container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 		}
 	}
 	rbat.ExpandNulls()
-	proc.Reg.InputBatch = rbat
+	anal.Output(rbat)
+	proc.SetInputBatch(rbat)
 	return nil
 }
 
-func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Process) error {
-	defer bat.Clean(proc.Mp)
+func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
+	defer bat.Clean(proc.GetMheap())
+	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
+	rbat.Zs = proc.GetMheap().GetSels()
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
 	}
-	count := len(bat.Zs)
+	count := bat.Length()
 	for i := 0; i < count; i++ {
 		flg := true
 		vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, proc, ap.Cond)
@@ -151,11 +163,11 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				flg = false
 			}
 		}
-		vector.Clean(vec, proc.Mp)
+		vec.Free(proc.GetMheap())
 		if flg && !nulls.Any(vec.Nsp) {
 			for k, pos := range ap.Result {
-				if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[pos], int64(i), proc.Mp); err != nil {
-					rbat.Clean(proc.Mp)
+				if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[pos], int64(i), proc.GetMheap()); err != nil {
+					rbat.Clean(proc.GetMheap())
 					return err
 				}
 			}
@@ -163,6 +175,7 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 	rbat.ExpandNulls()
-	proc.Reg.InputBatch = rbat
+	anal.Output(rbat)
+	proc.SetInputBatch(rbat)
 	return nil
 }

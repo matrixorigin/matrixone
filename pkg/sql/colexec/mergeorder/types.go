@@ -26,7 +26,7 @@ const (
 	End
 )
 
-type Container struct {
+type container struct {
 	n     int // result vector number
 	state int
 	poses []int32           // sorted list of attributes
@@ -37,5 +37,5 @@ type Container struct {
 
 type Argument struct {
 	Fs  []order.Field // Fields store the order information
-	ctr *Container    // ctr stores the attributes needn't do Serialization work
+	ctr *container    // ctr stores the attributes needn't do Serialization work
 }

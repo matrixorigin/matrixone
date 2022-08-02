@@ -21,25 +21,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/joincondition"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ interface{}, buf *bytes.Buffer) {
+func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString(" inner join ")
 }
 
-func Prepare(proc *process.Process, arg interface{}) error {
+func Prepare(proc *process.Process, arg any) error {
+	var err error
+
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.mp = hashmap.NewStrMap(false)
+	if ap.ctr.mp, err = hashmap.NewStrMap(false, ap.Ibucket, ap.Nbucket, proc.GetMheap()); err != nil {
+		return err
+	}
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -50,6 +54,7 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
 				ctr.state = End
+				ctr.mp.Free()
 				ctr.freeSels(proc)
 				return true, err
 			}
@@ -58,6 +63,7 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
+				ctr.mp.Free()
 				ctr.freeSels(proc)
 				if ctr.bat != nil {
 					ctr.bat.Clean(proc.GetMheap())
@@ -73,6 +79,7 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 			}
 			if err := ctr.probe(bat, ap, proc, anal); err != nil {
 				ctr.state = End
+				ctr.mp.Free()
 				ctr.freeSels(proc)
 				proc.SetInputBatch(nil)
 				return true, err
@@ -120,19 +127,23 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	}
 	defer ctr.freeJoinCondition(proc)
 	rows := ctr.mp.GroupCount()
-	itr := ctr.mp.NewIterator(ap.Ibucket, ap.Nbucket)
+	itr := ctr.mp.NewIterator()
 	count := ctr.bat.Length()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		vals, zvals := itr.Insert(i, n, ctr.vecs)
+		vals, zvals, err := itr.Insert(i, n, ctr.vecs)
+		if err != nil {
+			return err
+		}
 		for k, v := range vals {
 			if zvals[k] == 0 {
 				continue
 			}
 			if v > rows {
+				rows++
 				ctr.mp.AddGroup()
 				ctr.sels = append(ctr.sels, proc.GetMheap().GetSels())
 			}
@@ -144,7 +155,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp)
+	defer bat.Clean(proc.GetMheap())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.GetMheap().GetSels()
@@ -160,7 +171,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	defer ctr.freeJoinCondition(proc)
 	count := bat.Length()
-	itr := ctr.mp.NewIterator(ap.Ibucket, ap.Nbucket)
+	itr := ctr.mp.NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -203,9 +214,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	return nil
 }
 
-func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []joincondition.Condition, proc *process.Process) error {
+func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
 	for i, cond := range conds {
-		vec, err := colexec.EvalExpr(bat, proc, cond.Expr)
+		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil || vec.ConstExpand(proc.GetMheap()) == nil {
 			for j := 0; j < i; j++ {
 				if ctr.evecs[j].needFree {

@@ -111,6 +111,7 @@ type store struct {
 	checker           hakeeper.Checker
 	alloc             hakeeper.IDAllocator
 	stopper           *stopper.Stopper
+	tickerStopper     *stopper.Stopper
 
 	bootstrapCheckCycles uint64
 	bootstrapMgr         *bootstrap.Manager
@@ -128,17 +129,22 @@ func newLogStore(cfg Config) (*store, error) {
 	if err != nil {
 		return nil, err
 	}
+	hakeeperConfig := cfg.GetHAKeeperConfig()
+	plog.Infof("HAKeeper LogStoreTimeout: %s, DnStoreTimeout: %s",
+		hakeeperConfig.LogStoreTimeout, hakeeperConfig.DnStoreTimeout)
 	ls := &store{
-		cfg:     cfg,
-		nh:      nh,
-		checker: checkers.NewCoordinator(cfg.GetHAKeeperConfig()),
-		alloc:   newIDAllocator(),
-		stopper: stopper.NewStopper("log-store"),
+		cfg:           cfg,
+		nh:            nh,
+		checker:       checkers.NewCoordinator(hakeeperConfig),
+		alloc:         newIDAllocator(),
+		stopper:       stopper.NewStopper("log-store"),
+		tickerStopper: stopper.NewStopper("hakeeper-ticker"),
 	}
 	ls.mu.truncateCh = make(chan struct{})
 	ls.mu.pendingTruncate = make(map[uint64]struct{})
 	ls.mu.metadata = metadata.LogStore{UUID: cfg.UUID}
-	if err := ls.stopper.RunTask(func(ctx context.Context) {
+	if err := ls.stopper.RunNamedTask("truncation-worker", func(ctx context.Context) {
+		plog.Infof("logservice truncation worker started")
 		ls.truncationWorker(ctx)
 	}); err != nil {
 		return nil, err
@@ -147,6 +153,7 @@ func newLogStore(cfg Config) (*store, error) {
 }
 
 func (l *store) close() error {
+	l.tickerStopper.Stop()
 	l.stopper.Stop()
 	if l.nh != nil {
 		l.nh.Close()
@@ -188,12 +195,12 @@ func (l *store) startHAKeeperReplica(replicaID uint64,
 	l.addMetadata(hakeeper.DefaultHAKeeperShardID, replicaID)
 	atomic.StoreUint64(&l.haKeeperReplicaID, replicaID)
 	if !l.cfg.DisableWorkers {
-		if err := l.stopper.RunTask(func(ctx context.Context) {
+		if err := l.tickerStopper.RunNamedTask("hakeeper-ticker", func(ctx context.Context) {
+			plog.Infof("HAKeeper ticker started")
 			l.ticker(ctx)
 		}); err != nil {
 			return err
 		}
-		plog.Infof("HAKeeper ticker restarted")
 	}
 	return nil
 }
@@ -212,8 +219,10 @@ func (l *store) startReplica(shardID uint64, replicaID uint64,
 }
 
 func (l *store) stopReplica(shardID uint64, replicaID uint64) error {
-	// FIXME: stop the hakeeper ticker when the replica being stopped
-	// is a hakeeper replica
+	if shardID == hakeeper.DefaultHAKeeperShardID {
+		plog.Infof("going to stop HAKeeper's ticker")
+		l.tickerStopper.Stop()
+	}
 	return l.nh.StopReplica(shardID, replicaID)
 }
 
@@ -584,6 +593,7 @@ func (l *store) queryLog(ctx context.Context, shardID uint64,
 			}
 			return results, next, nil
 		} else if v.RequestOutOfRange() {
+			// FIXME: add more details to the log, what is the available range
 			plog.Errorf("OutOfRange query found")
 			return nil, 0, ErrOutOfRange
 		}
@@ -597,11 +607,16 @@ func (l *store) ticker(ctx context.Context) {
 	if l.cfg.HAKeeperTickInterval.Duration == 0 {
 		panic("invalid HAKeeperTickInterval")
 	}
+	plog.Infof("HAKeeper tick interval: %s, check interval: %s",
+		l.cfg.HAKeeperTickInterval, l.cfg.HAKeeperCheckInterval)
 	ticker := time.NewTicker(l.cfg.HAKeeperTickInterval.Duration)
 	defer ticker.Stop()
 	if l.cfg.HAKeeperCheckInterval.Duration == 0 {
 		panic("invalid HAKeeperCheckInterval")
 	}
+	defer func() {
+		plog.Infof("HAKeeper ticker stopped")
+	}()
 	haTicker := time.NewTicker(l.cfg.HAKeeperCheckInterval.Duration)
 	defer haTicker.Stop()
 
@@ -614,10 +629,20 @@ func (l *store) ticker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		}
+
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 	}
 }
 
 func (l *store) truncationWorker(ctx context.Context) {
+	defer func() {
+		plog.Infof("truncation worker stopped")
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -625,6 +650,11 @@ func (l *store) truncationWorker(ctx context.Context) {
 		case <-l.mu.truncateCh:
 			if err := l.processTruncateLog(ctx); err != nil {
 				panic(err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			default:
 			}
 		}
 	}

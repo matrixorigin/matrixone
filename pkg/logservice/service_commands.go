@@ -32,13 +32,13 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 			case pb.AddReplica:
 				s.handleAddReplica(cmd)
 			case pb.RemoveReplica:
-				// FIXME: when remove replica cmd is received, we need to stop the zombie
-				// replica running on the local store.
 				s.handleRemoveReplica(cmd)
 			case pb.StartReplica:
 				s.handleStartReplica(cmd)
 			case pb.StopReplica:
 				s.handleStopReplica(cmd)
+			case pb.KillZombie:
+				s.handleKillZombie(cmd)
 			default:
 				panic("unknown config change cmd type")
 			}
@@ -94,6 +94,13 @@ func (s *Service) handleStopReplica(cmd pb.ScheduleCommand) {
 	}
 }
 
+func (s *Service) handleKillZombie(cmd pb.ScheduleCommand) {
+	shardID := cmd.ConfigChange.Replica.ShardID
+	replicaID := cmd.ConfigChange.Replica.ReplicaID
+	s.handleStopReplica(cmd)
+	s.store.removeMetadata(shardID, replicaID)
+}
+
 func (s *Service) handleShutdownStore(cmd pb.ScheduleCommand) {
 	panic("not implemented")
 }
@@ -103,13 +110,15 @@ func (s *Service) heartbeatWorker(ctx context.Context) {
 	if s.cfg.HeartbeatInterval.Duration == 0 {
 		panic("invalid heartbeat interval")
 	}
+	defer func() {
+		plog.Infof("heartbeat worker stopped")
+	}()
 	ticker := time.NewTicker(s.cfg.HeartbeatInterval.Duration)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			plog.Infof("heartbeat worker stopped")
 			return
 		case <-ticker.C:
 			s.heartbeat(ctx)

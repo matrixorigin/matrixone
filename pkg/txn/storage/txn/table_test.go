@@ -20,39 +20,39 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type TestAttrs struct {
+type TestRow struct {
 	Key   Int
 	Value int
 }
 
-func (t TestAttrs) PrimaryKey() Int {
+func (t TestRow) PrimaryKey() Int {
 	return t.Key
 }
 
 func TestTable(t *testing.T) {
-	table := NewTable[Int, TestAttrs]()
+	table := NewTable[Int, TestRow]()
 
 	tx := NewTransaction("1", Timestamp{})
 
-	attrs := TestAttrs{Key: 42, Value: 1}
+	row := TestRow{Key: 42, Value: 1}
 
 	// insert
-	err := table.Insert(tx, attrs)
+	err := table.Insert(tx, row)
 	assert.Nil(t, err)
 
 	// get
-	row, err := table.Get(tx, Int(42))
+	r, err := table.Get(tx, Int(42))
 	assert.Nil(t, err)
-	assert.Equal(t, attrs, row)
+	assert.Equal(t, row, r)
 
 	// update
-	attrs.Value = 2
-	err = table.Update(tx, attrs)
+	row.Value = 2
+	err = table.Update(tx, row)
 	assert.Nil(t, err)
 
-	row, err = table.Get(tx, Int(42))
+	r, err = table.Get(tx, Int(42))
 	assert.Nil(t, err)
-	assert.Equal(t, attrs, row)
+	assert.Equal(t, row, r)
 
 	// delete
 	err = table.Delete(tx, Int(42))

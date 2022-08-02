@@ -23,23 +23,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ interface{}, buf *bytes.Buffer) {
+func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString(" ⨝ ")
 }
 
-func Prepare(proc *process.Process, arg interface{}) error {
+func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
-	ap.ctr = new(Container)
+	ap.ctr = new(container)
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(ap, proc); err != nil {
+			if err := ctr.build(ap, proc, anal); err != nil {
 				ctr.state = End
 				return true, err
 			}
@@ -49,31 +52,31 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 			if bat == nil {
 				ctr.state = End
 				if ctr.bat != nil {
-					ctr.bat.Clean(proc.Mp)
+					ctr.bat.Clean(proc.GetMheap())
 				}
 				continue
 			}
-			if len(bat.Zs) == 0 {
+			if bat.Length() == 0 {
 				continue
 			}
 			if ctr.bat == nil {
-				bat.Clean(proc.Mp)
+				bat.Clean(proc.GetMheap())
 				continue
 			}
-			if err := ctr.probe(bat, ap, proc); err != nil {
+			if err := ctr.probe(bat, ap, proc, anal); err != nil {
 				ctr.state = End
-				proc.Reg.InputBatch = nil
+				proc.SetInputBatch(nil)
 				return true, err
 			}
 			return false, nil
 		default:
-			proc.Reg.InputBatch = nil
+			proc.SetInputBatch(nil)
 			return true, nil
 		}
 	}
 }
 
-func (ctr *Container) build(ap *Argument, proc *process.Process) error {
+func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
 	var err error
 
 	for {
@@ -81,7 +84,7 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 		if bat == nil {
 			break
 		}
-		if len(bat.Zs) == 0 {
+		if bat.Length() == 0 {
 			continue
 		}
 		if ctr.bat == nil {
@@ -89,24 +92,29 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 			for i, vec := range bat.Vecs {
 				ctr.bat.Vecs[i] = vector.New(vec.Typ)
 			}
+			ctr.bat.Zs = proc.GetMheap().GetSels()
 		}
-		if ctr.bat, err = ctr.bat.Append(proc.Mp, bat); err != nil {
-			bat.Clean(proc.Mp)
-			ctr.bat.Clean(proc.Mp)
+		anal.Input(bat)
+		anal.Alloc(int64(bat.Size()))
+		if ctr.bat, err = ctr.bat.Append(proc.GetMheap(), bat); err != nil {
+			bat.Clean(proc.GetMheap())
+			ctr.bat.Clean(proc.GetMheap())
 			return err
 		}
-		bat.Clean(proc.Mp)
+		bat.Clean(proc.GetMheap())
 	}
 	return nil
 }
 
-func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
 	defer bat.Clean(proc.Mp)
+	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
+	rbat.Zs = proc.GetMheap().GetSels()
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
 	}
-	count := len(bat.Zs)
+	count := bat.Length()
 	for i := 0; i < count; i++ {
 		vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, proc, ap.Cond)
 		if err != nil {
@@ -116,12 +124,12 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		for _, b := range bs {
 			if b {
 				for k, pos := range ap.Result {
-					if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[pos], int64(i), proc.Mp); err != nil {
-						rbat.Clean(proc.Mp)
+					if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[pos], int64(i), proc.GetMheap()); err != nil {
+						rbat.Clean(proc.GetMheap())
 						return err
 					}
 				}
-				vector.Clean(vec, proc.Mp)
+				vector.Clean(vec, proc.GetMheap())
 				rbat.Zs = append(rbat.Zs, bat.Zs[i])
 				break
 			}
@@ -129,6 +137,7 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		vector.Clean(vec, proc.Mp)
 	}
 	rbat.ExpandNulls()
-	proc.Reg.InputBatch = rbat
+	anal.Output(rbat)
+	proc.SetInputBatch(rbat)
 	return nil
 }

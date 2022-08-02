@@ -25,9 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	ap := arg.(*Argument)
-	buf.WriteString("τ([")
+	buf.WriteString("mergeorder([")
 	for i, f := range ap.Fs {
 		if i > 0 {
 			buf.WriteString(", ")
@@ -37,20 +37,23 @@ func String(arg interface{}, buf *bytes.Buffer) {
 	buf.WriteString("])")
 }
 
-func Prepare(_ *process.Process, arg interface{}) error {
+func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
-	ap.ctr = new(Container)
+	ap.ctr = new(container)
 	ap.ctr.poses = make([]int32, 0, len(ap.Fs))
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	ap := arg.(*Argument)
 	ctr := ap.ctr
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(ap, proc); err != nil {
+			if err := ctr.build(ap, proc, anal); err != nil {
 				ctr.state = End
 				return true, err
 			}
@@ -63,19 +66,20 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 				ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 				ctr.bat.ExpandNulls()
 			}
-			proc.Reg.InputBatch = ctr.bat
+			anal.Output(ctr.bat)
+			proc.SetInputBatch(ctr.bat)
 			ctr.bat = nil
 			ctr.state = End
 			return true, nil
 		default:
-			proc.Reg.InputBatch = nil
+			proc.SetInputBatch(nil)
 			return true, nil
 		}
 	}
 
 }
 
-func (ctr *Container) build(ap *Argument, proc *process.Process) error {
+func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
 	for {
 		if len(proc.Reg.MergeReceivers) == 0 {
 			break
@@ -88,10 +92,12 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 				i--
 				continue
 			}
-			if len(bat.Zs) == 0 {
+			if bat.Length() == 0 {
 				i--
 				continue
 			}
+			anal.Input(bat)
+			anal.Alloc(int64(bat.Size()))
 			ctr.n = len(bat.Vecs)
 			ctr.poses = ctr.poses[:0]
 			for _, f := range ap.Fs {
@@ -139,7 +145,7 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 	return nil
 }
 
-func (ctr *Container) processBatch(bat2 *batch.Batch, proc *process.Process) error {
+func (ctr *container) processBatch(bat2 *batch.Batch, proc *process.Process) error {
 	bat1 := ctr.bat
 	rbat := batch.NewWithSize(len(bat1.Vecs))
 	for i, vec := range bat1.Vecs {

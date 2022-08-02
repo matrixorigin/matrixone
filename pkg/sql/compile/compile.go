@@ -67,6 +67,7 @@ func (c *Compile) Compile(pn *plan.Plan, u interface{}, fill func(interface{}, *
 		return err
 	}
 	c.scope = s
+	c.scope.Plan = pn
 	return nil
 }
 
@@ -332,9 +333,9 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			return nil, err
 		}
 		if needSwap {
-			return c.compileSort(n, c.compileJoin(n, children, ss, joinTyp)), nil
+			return c.compileSort(n, c.compileJoin(n, ns[n.Children[0]], children, ss, joinTyp)), nil
 		}
-		return c.compileSort(n, c.compileJoin(n, ss, children, joinTyp)), nil
+		return c.compileSort(n, c.compileJoin(n, ns[n.Children[1]], ss, children, joinTyp)), nil
 	case plan.Node_SORT:
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
 		if err != nil {
@@ -391,7 +392,7 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
-func (c *Compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
+func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
 	rs := make([]*Scope, len(ss))
 	for i := range ss {
 		chp := &Scope{
@@ -475,16 +476,38 @@ func (c *Compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope, join
 			}
 		}
 	case plan.Node_LEFT:
+		typs := make([]types.Type, len(right.ProjectList))
+		for i, expr := range right.ProjectList {
+			typs[i] = dupType(expr.Typ)
+		}
 		for i := range rs {
 			if isEq {
 				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 					Op:  vm.Left,
-					Arg: constructLeft(n, c.proc),
+					Arg: constructLeft(n, typs, c.proc),
 				})
 			} else {
 				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 					Op:  vm.LoopLeft,
-					Arg: constructLoopLeft(n, c.proc),
+					Arg: constructLoopLeft(n, typs, c.proc),
+				})
+			}
+		}
+	case plan.Node_SINGLE:
+		typs := make([]types.Type, len(right.ProjectList))
+		for i, expr := range right.ProjectList {
+			typs[i] = dupType(expr.Typ)
+		}
+		for i := range rs {
+			if isEq {
+				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+					Op:  vm.Single,
+					Arg: constructSingle(n, typs, c.proc),
+				})
+			} else {
+				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+					Op:  vm.LoopSingle,
+					Arg: constructLoopSingle(n, typs, c.proc),
 				})
 			}
 		}
@@ -701,7 +724,19 @@ func joinType(n *plan.Node, ns []*plan.Node) (bool, plan.Node_JoinFlag) {
 		return false, plan.Node_ANTI
 	case plan.Node_RIGHT:
 		return true, plan.Node_LEFT
+	case plan.Node_SINGLE:
+		return false, plan.Node_SINGLE
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join typ '%v' not support now", n.JoinType)))
+	}
+}
+
+func dupType(typ *plan.Type) types.Type {
+	return types.Type{
+		Oid:       types.T(typ.Id),
+		Size:      typ.Size,
+		Width:     typ.Width,
+		Scale:     typ.Scale,
+		Precision: typ.Precision,
 	}
 }

@@ -4807,7 +4807,16 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_blob, types.T_bool},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.Cast,
-			}},
+			},
+			{
+				Index:     264,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_varchar, types.T_json},
+				ReturnTyp: types.T_json,
+				Fn:        operator.Cast,
+			},
+		},
 	},
 
 	COALESCE: {

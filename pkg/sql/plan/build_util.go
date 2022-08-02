@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"go/constant"
 	"math"
 	"strconv"
@@ -102,6 +103,8 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			return &plan.Type{Id: plan.Type_BOOL, Size: 1}, nil
 		case defines.MYSQL_TYPE_BLOB:
 			return &plan.Type{Id: plan.Type_BLOB, Size: 24}, nil
+		case defines.MYSQL_TYPE_JSON:
+			return &plan.Type{Id: plan.Type_JSON}, nil
 		default:
 			return nil, errors.New("", fmt.Sprintf("Data type: '%s', will be supported in future version.", tree.String(&n.InternalType, dialect.MYSQL)))
 		}
@@ -306,6 +309,8 @@ func rangeCheck(value interface{}, typ *plan.Type, columnName string, rowNumber 
 			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
 		}
 		return nil, errors.New(errno.DataException, fmt.Sprintf("Data too long for column '%s' at row %d", columnName, rowNumber))
+	case bytejson.ByteJson:
+		return v, nil
 	case bool, types.Date, types.Datetime, types.Timestamp, types.Decimal64, types.Decimal128:
 		return v, nil
 	default:
@@ -613,6 +618,8 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 		}
 	case constant.String:
 		switch typ.GetId() {
+		case plan.Type_JSON:
+			return types.ParseStringToByteJson(str)
 		case plan.Type_BOOL:
 			switch strings.ToLower(str) {
 			case "false":
