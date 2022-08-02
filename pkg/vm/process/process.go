@@ -67,6 +67,30 @@ func PutSels(sels []int64, proc *Process) {
 	proc.Reg.Ss = append(proc.Reg.Ss, sels)
 }
 
+func (_ *WaitRegister) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (_ *WaitRegister) UnmarshalBinary(_ []byte) error {
+	return nil
+}
+
+func (_ *Process) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (_ *Process) UnmarshalBinary(_ []byte) error {
+	return nil
+}
+
+func (proc *Process) QueryId() string {
+	return proc.Id
+}
+
+func (proc *Process) SetQueryId(id string) {
+	proc.Id = id
+}
+
 func (proc *Process) GetMheap() *mheap.Mheap {
 	return proc.Mp
 }

@@ -74,6 +74,14 @@ func GetStrColumn(v *Vector) *types.Bytes {
 	return v.Col.(*types.Bytes)
 }
 
+func (v *Vector) MarshalBinary() ([]byte, error) {
+	return v.Show()
+}
+
+func (v *Vector) UnmarshalBinary(data []byte) error {
+	return v.Read(data)
+}
+
 // Count return the number of rows in the vector
 func (v *Vector) Count() int {
 	return Length(v)
@@ -3971,6 +3979,11 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 func (v *Vector) Show() ([]byte, error) {
 	var buf bytes.Buffer
 
+	if v.IsConst {
+		buf.WriteByte(byte(1))
+	} else {
+		buf.WriteByte(byte(0))
+	}
 	switch v.Typ.Oid {
 	case types.T_bool:
 		buf.Write(encoding.EncodeType(v.Typ))
@@ -4217,11 +4230,16 @@ func (v *Vector) Show() ([]byte, error) {
 }
 
 func (v *Vector) Read(data []byte) error {
+	if data[0] == 1 {
+		v.IsConst = true
+	}
+	data = data[1:]
 	v.Data = data
 	typ := encoding.DecodeType(data[:encoding.TypeSize])
 	data = data[encoding.TypeSize:]
 	v.Typ = typ
 	v.Or = true
+	v.Nsp = &nulls.Nulls{}
 	switch typ.Oid {
 	case types.T_bool:
 		size := encoding.DecodeUint32(data)
