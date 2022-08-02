@@ -16,7 +16,7 @@ package memEngine
 
 import (
 	"bytes"
-	compress2 "github.com/matrixorigin/matrixone/pkg/common/compress"
+	"github.com/matrixorigin/matrixone/pkg/common/compress"
 	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -48,7 +48,7 @@ func (r *reader) Read(attrs []string, _ *plan.Expr, m *mheap.Mheap) (*batch.Batc
 	r.segs = r.segs[1:]
 	for i, attr := range attrs {
 		md := r.attrs[attr]
-		if md.Alg == compress2.None {
+		if md.Alg == compress.None {
 			data, err := r.db.Get(id+"."+attr, r.dds[i])
 			if err != nil {
 				return nil, err
@@ -70,7 +70,7 @@ func (r *reader) Read(attrs []string, _ *plan.Expr, m *mheap.Mheap) (*batch.Batc
 				r.dds[i].Grow(n)
 			}
 			buf := r.dds[i].Bytes()[:n]
-			_, err = compress2.Decompress(data[:len(data)-4], buf, int(md.Alg))
+			_, err = compress.Decompress(data[:len(data)-4], buf, int(md.Alg))
 			if err != nil {
 				return nil, err
 			}

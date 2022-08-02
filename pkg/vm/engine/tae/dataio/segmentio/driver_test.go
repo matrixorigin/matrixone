@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	compress2 "github.com/matrixorigin/matrixone/pkg/common/compress"
+	"github.com/matrixorigin/matrixone/pkg/common/compress"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
@@ -67,7 +67,7 @@ func TestBitmapAllocator_Allocate(t *testing.T) {
 	assert.Nil(t, err)
 	seg.Mount()
 	file := seg.NewBlockFile("bitmap")
-	file.snode.algo = compress2.None
+	file.snode.algo = compress.None
 	level0 := seg.allocator.(*BitmapAllocator).level0
 	level1 := seg.allocator.(*BitmapAllocator).level1
 	for i := 0; i < 20; i++ {
@@ -109,7 +109,7 @@ func TestBitmapAllocator_Allocate2(t *testing.T) {
 	level0 := seg.allocator.(*BitmapAllocator).level0
 	for i := 0; i < 8; i++ {
 		file := seg.NewBlockFile(fmt.Sprintf("test_%d.blk", i))
-		file.snode.algo = compress2.None
+		file.snode.algo = compress.None
 		buffer1 := mockData(4096)
 		if i == 1 {
 			buffer1 = mockData(57344)
@@ -127,7 +127,7 @@ func TestBitmapAllocator_Allocate2(t *testing.T) {
 	ret := 0xFFFFFFFE00000001 - level0[0]
 	assert.Equal(t, 0, int(ret))
 	file1 := seg.NewBlockFile(fmt.Sprintf("test_%d.blk", 8))
-	file1.snode.algo = compress2.None
+	file1.snode.algo = compress.None
 	buffer1 := mockData(135168)
 	err = file1.driver.Append(file1, buffer1)
 	assert.Nil(t, err)
@@ -159,7 +159,7 @@ func TestBitmapAllocator_Allocate3(t *testing.T) {
 	level0[3] = 0xffffff8000000000
 	level0[4] = 0x3
 	file := seg.NewBlockFile("test_1.blk")
-	file.snode.algo = compress2.None
+	file.snode.algo = compress.None
 	buffer := mockData(135168)
 	assert.NotNil(t, buffer)
 	err = file.driver.Append(file, buffer)
@@ -167,7 +167,7 @@ func TestBitmapAllocator_Allocate3(t *testing.T) {
 	ret := 0xFFFFFFFE00000000 - level0[5]
 	assert.Equal(t, 0, int(ret))
 	file1 := seg.NewBlockFile("test_2.blk")
-	file1.snode.algo = compress2.None
+	file1.snode.algo = compress.None
 	buffer1 := mockData(135168)
 	assert.NotNil(t, buffer1)
 	err = file.driver.Append(file1, buffer1)
@@ -177,7 +177,7 @@ func TestBitmapAllocator_Allocate3(t *testing.T) {
 	assert.Equal(t, 0, int(ret))
 	assert.Equal(t, 3, int(level0[4]))
 	file2 := seg.NewBlockFile("test_3.blk")
-	file2.snode.algo = compress2.None
+	file2.snode.algo = compress.None
 	buffer2 := mockData(135168)
 	assert.NotNil(t, buffer2)
 	err = file.driver.Append(file2, buffer2)
@@ -201,7 +201,7 @@ func TestBitmapAllocator_Allocate4(t *testing.T) {
 	level0[3] = ALL_UNIT_CLEAR
 	level0[4] = ALL_UNIT_CLEAR
 	file := seg.NewBlockFile("test_1.blk")
-	file.snode.algo = compress2.None
+	file.snode.algo = compress.None
 	buffer := mockData(73728)
 	assert.NotNil(t, buffer)
 	err = file.driver.Append(file, buffer)
@@ -209,7 +209,7 @@ func TestBitmapAllocator_Allocate4(t *testing.T) {
 	ret := 0xFFFFFFFF8000007F - level0[1]
 	assert.Equal(t, 0, int(ret))
 	file1 := seg.NewBlockFile("test_2.blk")
-	file1.snode.algo = compress2.None
+	file1.snode.algo = compress.None
 	buffer1 := mockData(135168)
 	assert.NotNil(t, buffer1)
 	err = file.driver.Append(file1, buffer1)
@@ -218,7 +218,7 @@ func TestBitmapAllocator_Allocate4(t *testing.T) {
 	assert.Equal(t, 0, int(ret))
 	level0[1] = 0xFFFFFFFF8000007F
 	file1 = seg.NewBlockFile("test_3.blk")
-	file1.snode.algo = compress2.None
+	file1.snode.algo = compress.None
 	buffer1 = mockData(143360)
 	assert.NotNil(t, buffer1)
 	err = file.driver.Append(file1, buffer1)
@@ -232,7 +232,7 @@ func TestBitmapAllocator_Allocate4(t *testing.T) {
 	level0[1] = ALL_UNIT_CLEAR
 	level0[2] = ALL_UNIT_SET
 	file1 = seg.NewBlockFile("test_4.blk")
-	file1.snode.algo = compress2.None
+	file1.snode.algo = compress.None
 	buffer1 = mockData(98304)
 	assert.NotNil(t, buffer1)
 	err = file.driver.Append(file1, buffer1)
@@ -252,7 +252,7 @@ func TestBitmapAllocator_Free(t *testing.T) {
 	assert.Nil(t, err)
 	seg.Mount()
 	file := seg.NewBlockFile("bitmap")
-	file.snode.algo = compress2.None
+	file.snode.algo = compress.None
 	level0 := seg.allocator.(*BitmapAllocator).level0
 	level1 := seg.allocator.(*BitmapAllocator).level1
 	buffer1 := mockData(2048000)
@@ -336,7 +336,7 @@ func TestBlockFile_GetExtents(t *testing.T) {
 	assert.Nil(t, err)
 	seg.Mount()
 	file := seg.NewBlockFile("bitmap")
-	file.snode.algo = compress2.None
+	file.snode.algo = compress.None
 	for i := 0; i < 16; i++ {
 		buffer1 := mockData(8388608)
 		assert.NotNil(t, buffer1)
@@ -412,7 +412,7 @@ func TestSegment_Replay2(t *testing.T) {
 	var file *DriverFile
 	for i := 0; i < INODE_NUM/2; i++ {
 		file = seg.NewBlockFile(fmt.Sprintf("test_%d.blk", i))
-		file.snode.algo = compress2.None
+		file.snode.algo = compress.None
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
 		assert.Nil(t, err)
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
@@ -420,7 +420,7 @@ func TestSegment_Replay2(t *testing.T) {
 	}
 	for i := INODE_NUM / 2; i < INODE_NUM-1; i++ {
 		file = seg.NewBlockFile(fmt.Sprintf("test_%d.blk", i))
-		file.snode.algo = compress2.None
+		file.snode.algo = compress.None
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
 		assert.Nil(t, err)
 	}
@@ -464,7 +464,7 @@ func TestSegment_Replay4(t *testing.T) {
 	var file *DriverFile
 	for i := 0; i < INODE_NUM/2-1; i++ {
 		file = seg.NewBlockFile(fmt.Sprintf("test_%d.blk", i))
-		file.snode.algo = compress2.None
+		file.snode.algo = compress.None
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
 		assert.Nil(t, err)
 	}
@@ -509,25 +509,25 @@ func TestSegment_Replay(t *testing.T) {
 	level1 := seg.allocator.(*BitmapAllocator).level1
 	var file *DriverFile
 	file = seg.NewBlockFile("test_0.blk")
-	file.snode.algo = compress2.None
+	file.snode.algo = compress.None
 	buffer1 := mockData(2048000)
 	assert.NotNil(t, buffer1)
 	err = file.driver.Append(file, buffer1)
 	assert.Nil(t, err)
 	file = seg.NewBlockFile("test_1.blk")
-	file.snode.algo = compress2.None
+	file.snode.algo = compress.None
 	buffer2 := mockData(49152)
 	assert.NotNil(t, buffer2)
 	err = file.driver.Append(file, buffer2)
 	assert.Nil(t, err)
 	file = seg.NewBlockFile("test_2.blk")
-	file.snode.algo = compress2.None
+	file.snode.algo = compress.None
 	buffer3 := mockData(8192)
 	assert.NotNil(t, buffer3)
 	err = file.driver.Append(file, buffer3)
 	assert.Nil(t, err)
 	file = seg.NewBlockFile("test_4.blk")
-	file.snode.algo = compress2.None
+	file.snode.algo = compress.None
 	buffer4 := mockData(5242880)
 	assert.NotNil(t, buffer4)
 	err = file.driver.Append(file, buffer4)
@@ -554,7 +554,7 @@ func TestSegment_Replay(t *testing.T) {
 	ret = 0xFFFFFFFFFFFFFFFB - level1[l1pos]
 	assert.Equal(t, 0, int(ret))
 	file = seg.NewBlockFile("test_5.blk")
-	file.snode.algo = compress2.None
+	file.snode.algo = compress.None
 	buffer5 := mockData(53248)
 	assert.NotNil(t, buffer5)
 	err = file.driver.Append(file, buffer5)
@@ -583,7 +583,7 @@ func TestSegment_Replay3(t *testing.T) {
 	var file *DriverFile
 	for i := 0; i < 20; i++ {
 		file = seg.NewBlockFile(fmt.Sprintf("test_%d.blk", i))
-		file.snode.algo = compress2.None
+		file.snode.algo = compress.None
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
 		assert.Nil(t, err)
 	}

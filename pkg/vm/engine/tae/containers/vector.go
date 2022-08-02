@@ -16,7 +16,7 @@ package containers
 
 import (
 	"bytes"
-	compress2 "github.com/matrixorigin/matrixone/pkg/common/compress"
+	"github.com/matrixorigin/matrixone/pkg/common/compress"
 	"io"
 	"unsafe"
 
@@ -309,7 +309,7 @@ func (vec *vector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err e
 	stat := f.Stat()
 	var n stl.MemNode
 	var buf []byte
-	if stat.CompressAlgo() != compress2.None {
+	if stat.CompressAlgo() != compress.None {
 		osize := int(stat.OriginSize())
 		size := stat.Size()
 		tmpNode := vec.GetAllocator().Alloc(int(size))
@@ -328,7 +328,7 @@ func (vec *vector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err e
 			}
 			buf = buffer.Bytes()[:osize]
 		}
-		if _, err = compress2.Decompress(srcBuf, buf, compress2.Lz4); err != nil {
+		if _, err = compress.Decompress(srcBuf, buf, compress.Lz4); err != nil {
 			if n != nil {
 				vec.GetAllocator().Free(n)
 			}

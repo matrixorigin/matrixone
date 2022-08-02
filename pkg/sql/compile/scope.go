@@ -17,7 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
-	compress2 "github.com/matrixorigin/matrixone/pkg/common/compress"
+	"github.com/matrixorigin/matrixone/pkg/common/compress"
 	"github.com/matrixorigin/matrixone/pkg/common/errno"
 	"runtime"
 
@@ -199,12 +199,12 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {
 func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 	exeCols := make([]engine.TableDef, len(planCols))
 	for i, col := range planCols {
-		var alg compress2.T
+		var alg compress.T
 		switch col.Alg {
 		case plan.CompressType_None:
-			alg = compress2.None
+			alg = compress.None
 		case plan.CompressType_Lz4:
-			alg = compress2.Lz4
+			alg = compress.Lz4
 		}
 		colTyp := col.GetTyp()
 		exeCols[i] = &engine.AttributeDef{

@@ -19,7 +19,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	compress2 "github.com/matrixorigin/matrixone/pkg/common/compress"
+	"github.com/matrixorigin/matrixone/pkg/common/compress"
 	"os"
 	"sync"
 
@@ -92,7 +92,7 @@ func (s *Driver) Init(name string) (err error) {
 	if err = binary.Write(&sbuffer, binary.BigEndian, s.super.version); err != nil {
 		return
 	}
-	if err = binary.Write(&sbuffer, binary.BigEndian, uint8(compress2.Lz4)); err != nil {
+	if err = binary.Write(&sbuffer, binary.BigEndian, uint8(compress.Lz4)); err != nil {
 		return
 	}
 	if err = binary.Write(&sbuffer, binary.BigEndian, s.super.blockSize); err != nil {
@@ -225,7 +225,7 @@ func (s *Driver) NewBlockFile(fname string) *DriverFile {
 			extents:    make([]Extent, 0),
 			logExtents: Extent{},
 			state:      RESIDENT,
-			algo:       compress2.Lz4,
+			algo:       compress.Lz4,
 			seq:        0,
 		}
 	}
@@ -244,10 +244,10 @@ func (s *Driver) NewBlockFile(fname string) *DriverFile {
 
 func (s *Driver) Append(fd *DriverFile, pl []byte) (err error) {
 	buf := pl
-	if fd.snode.algo == compress2.Lz4 {
+	if fd.snode.algo == compress.Lz4 {
 		colSize := len(pl)
 		buf = make([]byte, lz4.CompressBlockBound(colSize))
-		if buf, err = compress2.Compress(pl, buf, compress2.Lz4); err != nil {
+		if buf, err = compress.Compress(pl, buf, compress.Lz4); err != nil {
 			return
 		}
 	}

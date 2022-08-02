@@ -17,7 +17,7 @@ package memEngine
 import (
 	"context"
 	"fmt"
-	compress2 "github.com/matrixorigin/matrixone/pkg/common/compress"
+	"github.com/matrixorigin/matrixone/pkg/common/compress"
 	"log"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -53,7 +53,7 @@ func CreateR(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "orderid",
 					Type: types.Type{
 						Size:  24,
@@ -63,7 +63,7 @@ func CreateR(db engine.Database) {
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "uid",
 					Type: types.Type{
 						Size: 4,
@@ -72,7 +72,7 @@ func CreateR(db engine.Database) {
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "price",
 					Type: types.Type{
 						Size: 8,
@@ -196,7 +196,7 @@ func CreateS(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "orderid",
 					Type: types.Type{
 						Size:  24,
@@ -206,7 +206,7 @@ func CreateS(db engine.Database) {
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "uid",
 					Type: types.Type{
 						Size: 4,
@@ -215,7 +215,7 @@ func CreateS(db engine.Database) {
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "price",
 					Type: types.Type{
 						Size: 8,
@@ -339,13 +339,13 @@ func CreateT(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "id",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "price",
 					Type: types.Type{Oid: types.T(types.T_float64), Size: 8, Width: 8, Precision: 0},
 				}})
@@ -365,19 +365,19 @@ func CreateT1(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "spid",
 					Type: types.Type{Oid: types.T(types.T_int32), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "userid",
 					Type: types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "score",
 					Type: types.Type{Oid: types.T(types.T_int8), Size: 1, Width: 8, Precision: 0},
 				}})
@@ -481,49 +481,49 @@ func CreateCustomer(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "c_custkey",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "c_name",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "c_address",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "c_city",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "c_nation",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "c_region",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "c_phone",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "c_mktsegment",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
@@ -542,103 +542,103 @@ func CreateLineorder(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "lo_orderkey",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "lo_linenumber",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "lo_custkey",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "lo_partkey",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "lo_suppkey",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "lo_orderdate",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "lo_orderpriority",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "lo_shippriority",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "lo_quantity",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "lo_extendedprice",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "lo_ordtotalprice",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "lo_discount",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "lo_revenue",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "lo_supplycost",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "lo_tax",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "lo_commitdate",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "lo_shipmode",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
@@ -657,55 +657,55 @@ func CreatePart(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "p_partkey",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "p_name",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "p_mfgr",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "p_category",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "p_brand",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "p_color",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "p_type",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "p_size",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "p_container",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
@@ -724,43 +724,43 @@ func CreateSupplier(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "s_suppkey",
 					Type: types.Type{Oid: types.T(types.T_int64), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "s_name",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "s_address",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "s_city",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "s_nation",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "s_region",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "s_phone",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
@@ -779,55 +779,55 @@ func CreateDate(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "d_datekey",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "d_date",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "d_dayofweek",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "d_month",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "d_year",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "d_yearmonthnum",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "d_yearmonth",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "d_daynumnweek",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress2.Lz4,
+					Alg:  compress.Lz4,
 					Name: "d_weeknuminyear",
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})

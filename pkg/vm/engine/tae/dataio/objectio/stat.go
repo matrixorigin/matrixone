@@ -15,7 +15,7 @@
 package objectio
 
 import (
-	compress2 "github.com/matrixorigin/matrixone/pkg/common/compress"
+	"github.com/matrixorigin/matrixone/pkg/common/compress"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io/fs"
 	"time"
@@ -49,4 +49,4 @@ func (stat *objectFileStat) Name() string      { return stat.name }
 func (stat *objectFileStat) Size() int64       { return stat.size }
 func (stat *objectFileStat) DataSize() int64   { return stat.dataSize }
 func (stat *objectFileStat) OriginSize() int64 { return stat.size }
-func (stat *objectFileStat) CompressAlgo() int { return compress2.None }
+func (stat *objectFileStat) CompressAlgo() int { return compress.None }

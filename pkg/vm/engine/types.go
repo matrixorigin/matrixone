@@ -16,7 +16,7 @@ package engine
 
 import (
 	"context"
-	compress2 "github.com/matrixorigin/matrixone/pkg/common/compress"
+	"github.com/matrixorigin/matrixone/pkg/common/compress"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -47,7 +47,7 @@ type Attribute struct {
 	// Name name of attribute
 	Name string
 	// Alg compression algorithm
-	Alg compress2.T
+	Alg compress.T
 	// Type attribute's type
 	Type types.Type
 	// DefaultExpr default value of this attribute

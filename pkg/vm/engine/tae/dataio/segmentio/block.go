@@ -17,7 +17,7 @@ package segmentio
 import (
 	"bytes"
 	"fmt"
-	compress2 "github.com/matrixorigin/matrixone/pkg/common/compress"
+	"github.com/matrixorigin/matrixone/pkg/common/compress"
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
@@ -52,7 +52,7 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 	bf.indexMeta.file = append(bf.indexMeta.file, bf.seg.GetSegmentFile().NewBlockFile(
 		fmt.Sprintf("%d_%d.idx", colCnt, bf.id)))
 	bf.indexMeta.file[0].SetCols(uint32(colCnt))
-	bf.indexMeta.file[0].snode.algo = compress2.None
+	bf.indexMeta.file[0].snode.algo = compress.None
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
 		cnt := 0
@@ -202,9 +202,9 @@ func (bf *blockFile) LoadBatch(
 		if _, err = f.Read(buf); err != nil {
 			return
 		}
-		if f.Stat().CompressAlgo() == compress2.Lz4 {
+		if f.Stat().CompressAlgo() == compress.Lz4 {
 			decompress := make([]byte, f.Stat().OriginSize())
-			decompress, err = compress2.Decompress(buf, decompress, compress2.Lz4)
+			decompress, err = compress.Decompress(buf, decompress, compress.Lz4)
 			if err != nil {
 				return nil, err
 			}
@@ -370,7 +370,7 @@ func (bf *blockFile) LoadDeletes() (mask *roaring.Bitmap, err error) {
 	node := common.GPool.Alloc(uint64(osize))
 	defer common.GPool.Free(node)
 
-	if _, err = compress2.Decompress(dnode.Buf[:size], node.Buf[:osize], compress2.Lz4); err != nil {
+	if _, err = compress.Decompress(dnode.Buf[:size], node.Buf[:osize], compress.Lz4); err != nil {
 		return
 	}
 	mask = roaring.New()
