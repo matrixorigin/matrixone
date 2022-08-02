@@ -225,7 +225,7 @@ func (c *testCluster) GetLogService(id string) (LogService, error) {
 	return nil, wrappedError(ErrServiceNotExist, id)
 }
 
-// FIXME: get state from leader hakeeper only or from all hakeeper?
+// FIXME: we could also fetch cluster state from non-leader hakeeper.
 func (c *testCluster) GetClusterState(timeout time.Duration) (*logpb.CheckerState, error) {
 	leader := c.WaitHAKeeperLeader(timeout)
 	return leader.GetClusterState()
@@ -467,13 +467,19 @@ func (c *testCluster) closeLogServices() error {
 // getHAKeeperLeader gets log service which is hakeeper leader.
 func (c *testCluster) getHAKeeperLeader() LogService {
 	for i, svc := range c.selectHAkeeperServices() {
-		isLeader, err := svc.IsLeaderHakeeper()
-		if err != nil {
-			c.logger.Error("fail to check hakeeper", zap.Error(err), zap.Int("index", i))
+		index := i
+
+		if svc.Status() != Started {
+			c.logger.Warn("hakeeper service closed", zap.Int("index", index))
 			continue
 		}
 
-		c.logger.Info("hakeeper state", zap.Bool("isleader", isLeader), zap.Int("index", i))
+		isLeader, err := svc.IsLeaderHakeeper()
+		if err != nil {
+			c.logger.Error("fail to check hakeeper", zap.Error(err), zap.Int("index", index))
+			continue
+		}
+		c.logger.Info("hakeeper state", zap.Bool("isleader", isLeader), zap.Int("index", index))
 
 		if isLeader {
 			return svc
