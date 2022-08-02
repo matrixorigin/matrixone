@@ -15,10 +15,10 @@
 package operator
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 func TestIsNotNullNormal(t *testing.T) {

@@ -15,10 +15,10 @@
 package unary
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/smartystreets/goconvey/convey"
 )
 
