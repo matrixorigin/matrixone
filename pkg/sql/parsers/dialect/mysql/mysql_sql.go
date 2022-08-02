@@ -5,6 +5,7 @@ package mysql
 
 import (
 	__yyfmt__ "fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/defines"
 	__yyunsafe__ "unsafe"
 )
 
@@ -15,7 +16,6 @@ import (
 	"go/constant"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/util"
 )

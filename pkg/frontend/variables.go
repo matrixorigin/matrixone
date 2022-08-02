@@ -17,6 +17,7 @@ package frontend
 import (
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/defines"
 	"math"
 	bits2 "math/bits"
 	"strconv"
@@ -24,7 +25,6 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 var (

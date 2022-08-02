@@ -16,12 +16,11 @@ package frontend
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/defines"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-
-	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 type Column interface {

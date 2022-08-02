@@ -15,10 +15,9 @@
 package tree
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/defines"
 	"strconv"
 	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 type Family int32
