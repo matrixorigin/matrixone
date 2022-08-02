@@ -19,10 +19,12 @@ import (
 	"math"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *QueryBuilder {
@@ -152,6 +154,22 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 					},
 				},
 			})
+		}
+
+	case plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+		plan.Node_UNION, plan.Node_UNION_ALL,
+		plan.Node_MINUS, plan.Node_MINUS_ALL:
+
+		leftID := node.Children[0]
+		_, err := builder.remapAllColRefs(leftID, colRefCnt)
+		if err != nil {
+			return nil, err
+		}
+
+		rightID := node.Children[1]
+		_, err = builder.remapAllColRefs(rightID, colRefCnt)
+		if err != nil {
+			return nil, err
 		}
 
 	case plan.Node_JOIN:
@@ -593,6 +611,243 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	}
 	return builder.qry, nil
 }
+func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isRoot bool) (int32, error) {
+	var selectStmts []tree.SelectStatement
+	var unionTypes []plan.Node_NodeType
+
+	// get Union selectStmts
+	err := getUnionSelects(stmt.Select.(*tree.UnionClause), &selectStmts, &unionTypes)
+	if err != nil {
+		return 0, err
+	}
+
+	// build selects
+	var projectTypList [][]types.Type
+	selectStmtLength := len(selectStmts)
+	nodes := make([]int32, selectStmtLength)
+	subCtxList := make([]*BindContext, selectStmtLength)
+	projectNodes := make([]int32, selectStmtLength) // we will reset select Stmt's Project Node
+	var projectLength int
+	for idx, sltStmt := range selectStmts {
+		subCtx := NewBindContext(builder, ctx)
+		nodeID, err := builder.buildSelect(&tree.Select{Select: sltStmt}, subCtx, false)
+		if err != nil {
+			return 0, err
+		}
+
+		if idx == 0 {
+			projectLength = len(builder.qry.Nodes[nodeID].ProjectList)
+			projectTypList = make([][]types.Type, projectLength)
+			for i := 0; i < projectLength; i++ {
+				projectTypList[i] = make([]types.Type, selectStmtLength)
+			}
+		} else {
+			if projectLength != len(builder.qry.Nodes[nodeID].ProjectList) {
+				return 0, errors.New("", "The used SELECT statements have a different number of columns")
+			}
+		}
+
+		for i, expr := range subCtx.results {
+			projectTypList[i][idx] = makeTypeByPlan2Expr(expr)
+		}
+		subCtxList[idx] = subCtx
+		nodes[idx] = nodeID
+		projectNodeID := nodeID
+		for {
+			if builder.qry.Nodes[projectNodeID].NodeType == plan.Node_PROJECT {
+				projectNodes[idx] = projectNodeID
+				break
+			}
+			projectNodeID = builder.qry.Nodes[projectNodeID].Children[0]
+		}
+	}
+
+	// reset all select's return Projection(type cast up)
+	// we use coalesce function's type check&type cast rule
+	for columnIdx, argsType := range projectTypList {
+		_, _, argsCastType, err := function.GetFunctionByName("coalesce", argsType)
+		if err != nil {
+			return 0, errors.New("", fmt.Sprintf("the %d column cann't cast to a same type", columnIdx))
+		}
+
+		for idx, castType := range argsCastType {
+			if !argsType[idx].Eq(castType) && castType.Oid != types.T_any {
+				//  reset projectNode's projectList
+				typ := makePlan2Type(&castType)
+				node := builder.qry.Nodes[projectNodes[idx]]
+				node.ProjectList[columnIdx], err = appendCastBeforeExpr(node.ProjectList[columnIdx], typ)
+				if err != nil {
+					return 0, err
+				}
+			}
+		}
+	}
+
+	//
+	var unionNodeProject []*Expr
+	for i, expr := range builder.qry.Nodes[projectNodes[0]].ProjectList {
+		unionNodeProject = append(unionNodeProject, &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(i),
+				},
+			},
+		})
+	}
+
+	// build intersect node first.  becaulse intersect has higher precedence then UNION and MINUS
+	var newNodes []int32
+	var newUnionType []plan.Node_NodeType
+	newNodes = append(newNodes, nodes[0])
+	for i := 1; i < len(nodes); i++ {
+		utIdx := i - 1
+		lastNewNodeIdx := len(newNodes) - 1
+		if unionTypes[utIdx] == plan.Node_INTERSECT || unionTypes[utIdx] == plan.Node_INTERSECT_ALL {
+			newNodeID := builder.appendNode(&plan.Node{
+				NodeType:    unionTypes[utIdx],
+				Children:    []int32{newNodes[lastNewNodeIdx], nodes[i]},
+				ProjectList: DeepCopyExprList(unionNodeProject),
+			}, ctx)
+			newNodes[lastNewNodeIdx] = newNodeID
+		} else {
+			newNodes = append(newNodes, nodes[i])
+			newUnionType = append(newUnionType, unionTypes[utIdx])
+		}
+	}
+
+	// build UNION/MINUS node one by one
+	lastNodeId := newNodes[0]
+	for i := 1; i < len(newNodes); i++ {
+		utIdx := i - 1
+		// if newUnionType[utIdx] == plan.Node_UNION {
+		// 	lastNodeId = builder.appendNode(&plan.Node{
+		// 		NodeType:    plan.Node_UNION_ALL,
+		// 		Children:    []int32{lastNodeId, newNodes[i]},
+		// 		ProjectList: DeepCopyExprList(unionNodeProject),
+		// 	}, ctx)
+
+		// lastNodeId = builder.appendNode(&plan.Node{
+		// 	NodeType: plan.Node_DISTINCT,
+		// 	Children: []int32{lastNodeId},
+		// }, ctx)
+
+		// } else {
+		lastNodeId = builder.appendNode(&plan.Node{
+			NodeType:    newUnionType[utIdx],
+			Children:    []int32{lastNodeId, newNodes[i]},
+			ProjectList: DeepCopyExprList(unionNodeProject),
+		}, ctx)
+		// }
+	}
+
+	// set ctx base on selects[0] and it's ctx
+	ctx.groupTag = builder.genNewTag()
+	ctx.aggregateTag = builder.genNewTag()
+	ctx.projectTag = builder.genNewTag()
+	// set ctx's headings  projects  results
+	ctx.headings = append(ctx.headings, subCtxList[0].headings...)
+	for k, v := range subCtxList[0].aliasMap {
+		ctx.aliasMap[k] = v
+	}
+	for i, expr := range builder.qry.Nodes[projectNodes[0]].ProjectList {
+		ctx.projects = append(ctx.projects, &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: ctx.projectTag,
+					ColPos: int32(i),
+				},
+			},
+		})
+	}
+	havingBinder := NewHavingBinder(builder, ctx)
+	projectionBinder := NewProjectionBinder(builder, ctx, havingBinder)
+
+	// append a project node
+	lastNodeId = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: ctx.projects,
+		Children:    []int32{lastNodeId},
+		BindingTags: []int32{ctx.projectTag},
+	}, ctx)
+
+	// append orderBy
+	if stmt.OrderBy != nil {
+		orderBinder := NewOrderBinder(projectionBinder, nil)
+		orderBys := make([]*plan.OrderBySpec, 0, len(stmt.OrderBy))
+
+		for _, order := range stmt.OrderBy {
+			expr, err := orderBinder.BindExpr(order.Expr)
+			if err != nil {
+				return 0, err
+			}
+
+			orderBy := &plan.OrderBySpec{
+				Expr: expr,
+			}
+
+			switch order.Direction {
+			case tree.DefaultDirection:
+				orderBy.Flag = plan.OrderBySpec_INTERNAL
+			case tree.Ascending:
+				orderBy.Flag = plan.OrderBySpec_ASC
+			case tree.Descending:
+				orderBy.Flag = plan.OrderBySpec_DESC
+			}
+
+			orderBys = append(orderBys, orderBy)
+		}
+
+		lastNodeId = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_SORT,
+			Children: []int32{lastNodeId},
+			OrderBy:  orderBys,
+		}, ctx)
+	}
+
+	// append limit
+	if stmt.Limit != nil {
+		node := builder.qry.Nodes[lastNodeId]
+
+		limitBinder := NewLimitBinder()
+		if stmt.Limit.Offset != nil {
+			node.Limit, err = limitBinder.BindExpr(stmt.Limit.Offset, 0, true)
+			if err != nil {
+				return 0, err
+			}
+		}
+		if stmt.Limit.Count != nil {
+			node.Offset, err = limitBinder.BindExpr(stmt.Limit.Count, 0, true)
+			if err != nil {
+				return 0, err
+			}
+		}
+	}
+
+	// append result PROJECT node
+	if builder.qry.Nodes[lastNodeId].NodeType != plan.Node_PROJECT {
+		ctx.results = ctx.projects
+		ctx.resultTag = builder.genNewTag()
+
+		lastNodeId = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			ProjectList: ctx.results,
+			Children:    []int32{lastNodeId},
+			BindingTags: []int32{ctx.resultTag},
+		}, ctx)
+	} else {
+		ctx.results = ctx.projects
+	}
+
+	// set heading
+	if isRoot {
+		builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
+	}
+
+	return lastNodeId, nil
+}
 
 func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (int32, error) {
 	// preprocess CTEs
@@ -634,7 +889,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	case *tree.ParenSelect:
 		return builder.buildSelect(selectClause.Select, ctx, isRoot)
 	case *tree.UnionClause:
-		return 0, errors.New("", fmt.Sprintf("'%s' will be supported in future version.", selectClause.Type.String()))
+		return builder.buildUnion(stmt, ctx, isRoot)
+		// return 0, errors.New("", fmt.Sprintf("'%s' will be supported in future version.", selectClause.Type.String()))
 	case *tree.ValuesClause:
 		return 0, errors.New("", "'SELECT FROM VALUES' will be supported in future version.")
 	default:
