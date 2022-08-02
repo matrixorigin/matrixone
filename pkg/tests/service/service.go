@@ -466,10 +466,11 @@ func (c *testCluster) getClusterState() *logpb.CheckerState {
 	fn := func(index int, svc LogService) bool {
 		s, err := svc.GetClusterState()
 		if err != nil {
-			c.logger.Error("fail to get cluster satte", zap.Error(err), zap.Int("index", index))
+			c.logger.Error("fail to get cluster state", zap.Error(err), zap.Int("index", index))
 			return false
 		}
 		state = s
+		c.logger.Info("current cluster state", zap.Any("state", s))
 		return true
 	}
 	c.rangeHAKeeperService(fn)
@@ -504,7 +505,7 @@ func (c *testCluster) rangeHAKeeperService(fn func(index int, svc LogService) bo
 		index := i
 
 		if svc.Status() != ServiceStarted {
-			c.logger.Warn("hakeeper service closed", zap.Int("index", index))
+			c.logger.Warn("hakeeper service not started", zap.Int("index", index))
 			continue
 		}
 
