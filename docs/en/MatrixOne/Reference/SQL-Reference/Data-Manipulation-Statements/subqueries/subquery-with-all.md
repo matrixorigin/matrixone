@@ -86,3 +86,7 @@ In general, tables containing `NULL` values and empty tables are â€œedge cases.â
 +------+
 3 rows in set (0.00 sec)
 ```
+
+## **Constraints**
+
+MatrixOne does not support selecting multiple columns for the query.

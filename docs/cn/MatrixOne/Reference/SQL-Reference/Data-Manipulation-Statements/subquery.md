@@ -32,3 +32,7 @@ SELECT * FROM t1 WHERE column1 = (SELECT column1 FROM t2);
 - [子查询与 ALL 操作符的使用](subqueries/subquery-with-all.md)
 - [子查询与 EXISTS 操作符的使用](subqueries/subquery-with-exists.md)
 - [子查询与 IN 操作符的使用](subqueries/subquery-with-in.md)
+
+## **限制**
+
+MatrixOne 暂不支持选择多列进行查询。
