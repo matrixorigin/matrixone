@@ -14,7 +14,7 @@
 
 package update
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine"
+import "github.com/matrixorigin/matrixone/pkg/engine"
 
 type Argument struct {
 	Ts           uint64

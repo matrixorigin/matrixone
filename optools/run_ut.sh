@@ -141,7 +141,7 @@ EOF
 }
 
 function post_test(){
-    local aoe_test=$(find  pkg/vm/engine/aoe/test/* -type d -maxdepth 0)
+    local aoe_test=$(find  pkg/engine/aoe/test/* -type d -maxdepth 0)
     for dir in ${aoe_test[@]}; do
         logger "WRN" "Remove $dir"
         rm -rf $dir

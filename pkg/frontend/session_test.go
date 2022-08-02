@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
+	"github.com/matrixorigin/matrixone/pkg/engine/tae/moengine"
 	"github.com/smartystreets/goconvey/convey"
 	"testing"
 )

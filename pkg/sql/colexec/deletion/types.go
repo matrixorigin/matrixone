@@ -15,7 +15,7 @@
 package deletion
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/engine"
 )
 
 type Argument struct {

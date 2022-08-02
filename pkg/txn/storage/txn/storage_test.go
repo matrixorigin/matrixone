@@ -21,7 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
+	txnengine "github.com/matrixorigin/matrixone/pkg/engine/txn"
 	"github.com/stretchr/testify/assert"
 )
 

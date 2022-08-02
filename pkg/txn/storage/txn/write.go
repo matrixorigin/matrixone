@@ -19,7 +19,7 @@ import (
 	"encoding/gob"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
+	txnengine "github.com/matrixorigin/matrixone/pkg/engine/txn"
 )
 
 func (s *Storage) Write(txnMeta txn.TxnMeta, op uint32, payload []byte) (result []byte, err error) {

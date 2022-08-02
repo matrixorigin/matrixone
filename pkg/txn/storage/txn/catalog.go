@@ -15,8 +15,8 @@
 package txnstorage
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
+	"github.com/matrixorigin/matrixone/pkg/engine"
+	txnengine "github.com/matrixorigin/matrixone/pkg/engine/txn"
 )
 
 type DatabaseRow struct {
