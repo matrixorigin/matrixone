@@ -1,6 +1,7 @@
 queue_rules:
   - name: default
-    conditions: []
+    conditions: 
+      - "checks_timeout=30m"
 
 pull_request_rules:
   - name: Automatic merge on approval
@@ -24,6 +25,7 @@ pull_request_rules:
           {{ title }} (#{{ number }})
 
           Approved by: @{{ approved_reviews_by | join(', @') }}
+
   - name: label for Bug
     conditions: 
       - body~=(?m)- \[(?i)x\] BUG
