@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	findinset2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/findinset"
+	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/findinset"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -35,7 +35,7 @@ func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint64, 1)
-		vector.SetCol(resultVector, findinset2.FindInSetWithAllConst(leftValues, rightValues, resultValues))
+		vector.SetCol(resultVector, findinset.FindInSetWithAllConst(leftValues, rightValues, resultValues))
 		return resultVector, nil
 	case left.IsScalar() && !right.IsScalar():
 		if left.ConstVectorIsNull() {
@@ -48,7 +48,7 @@ func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		resultValues := encoding.DecodeUint64Slice(resultVector.Data)
 		resultValues = resultValues[:len(rightValues.Lengths)]
 		nulls.Set(resultVector.Nsp, right.Nsp)
-		vector.SetCol(resultVector, findinset2.FindInSetWithLeftConst(leftValues, rightValues, resultValues))
+		vector.SetCol(resultVector, findinset.FindInSetWithLeftConst(leftValues, rightValues, resultValues))
 		return resultVector, nil
 	case !left.IsScalar() && right.IsScalar():
 		if right.ConstVectorIsNull() {
@@ -61,7 +61,7 @@ func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		resultValues := encoding.DecodeUint64Slice(resultVector.Data)
 		resultValues = resultValues[:len(leftValues.Lengths)]
 		nulls.Set(resultVector.Nsp, left.Nsp)
-		vector.SetCol(resultVector, findinset2.FindInSetWithRightConst(leftValues, rightValues, resultValues))
+		vector.SetCol(resultVector, findinset.FindInSetWithRightConst(leftValues, rightValues, resultValues))
 		return resultVector, nil
 	}
 	resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues.Lengths)))
@@ -71,6 +71,6 @@ func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	resultValues := encoding.DecodeUint64Slice(resultVector.Data)
 	resultValues = resultValues[:len(rightValues.Lengths)]
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-	vector.SetCol(resultVector, findinset2.FindInSet(leftValues, rightValues, resultValues))
+	vector.SetCol(resultVector, findinset.FindInSet(leftValues, rightValues, resultValues))
 	return resultVector, nil
 }

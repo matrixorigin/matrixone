@@ -19,7 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/encoding"
-	shuffle2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/shuffle"
 	"reflect"
 	"strconv"
 	"unsafe"
@@ -1683,7 +1683,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeBoolSlice(data)
-		v.Col = shuffle2.BoolShuffle(vs, ws, sels)
+		v.Col = shuffle.BoolShuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		mheap.Free(m, data)
 	case types.T_int8:
@@ -1693,7 +1693,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeInt8Slice(data)
-		v.Col = shuffle2.Int8Shuffle(vs, ws, sels)
+		v.Col = shuffle.Int8Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		v.Data = v.Data[:len(sels)*1]
 		mheap.Free(m, data)
@@ -1704,7 +1704,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeInt16Slice(data)
-		v.Col = shuffle2.Int16Shuffle(vs, ws, sels)
+		v.Col = shuffle.Int16Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		v.Data = v.Data[:len(sels)*2]
 		mheap.Free(m, data)
@@ -1715,7 +1715,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeInt32Slice(data)
-		v.Col = shuffle2.Int32Shuffle(vs, ws, sels)
+		v.Col = shuffle.Int32Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		v.Data = v.Data[:len(sels)*4]
 		mheap.Free(m, data)
@@ -1726,7 +1726,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeInt64Slice(data)
-		v.Col = shuffle2.Int64Shuffle(vs, ws, sels)
+		v.Col = shuffle.Int64Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		v.Data = v.Data[:len(sels)*8]
 		mheap.Free(m, data)
@@ -1737,7 +1737,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeUint8Slice(data)
-		v.Col = shuffle2.Uint8Shuffle(vs, ws, sels)
+		v.Col = shuffle.Uint8Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		v.Data = v.Data[:len(sels)*1]
 		mheap.Free(m, data)
@@ -1748,7 +1748,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeUint16Slice(data)
-		v.Col = shuffle2.Uint16Shuffle(vs, ws, sels)
+		v.Col = shuffle.Uint16Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		v.Data = v.Data[:len(sels)*2]
 		mheap.Free(m, data)
@@ -1759,7 +1759,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeUint32Slice(data)
-		v.Col = shuffle2.Uint32Shuffle(vs, ws, sels)
+		v.Col = shuffle.Uint32Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		v.Data = v.Data[:len(sels)*4]
 		mheap.Free(m, data)
@@ -1770,7 +1770,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeUint64Slice(data)
-		v.Col = shuffle2.Uint64Shuffle(vs, ws, sels)
+		v.Col = shuffle.Uint64Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		v.Data = v.Data[:len(sels)*8]
 		mheap.Free(m, data)
@@ -1781,7 +1781,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeFloat32Slice(data)
-		v.Col = shuffle2.Float32Shuffle(vs, ws, sels)
+		v.Col = shuffle.Float32Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		v.Data = v.Data[:len(sels)*4]
 		mheap.Free(m, data)
@@ -1792,7 +1792,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeFloat64Slice(data)
-		v.Col = shuffle2.Float64Shuffle(vs, ws, sels)
+		v.Col = shuffle.Float64Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		v.Data = v.Data[:len(sels)*8]
 		mheap.Free(m, data)
@@ -1803,14 +1803,14 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeInt64Slice(data)
-		v.Col = shuffle2.Int64Shuffle(vs, ws, sels)
+		v.Col = shuffle.Int64Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		v.Data = v.Data[:len(sels)*8]
 		mheap.Free(m, data)
 	case types.T_tuple:
 		vs := v.Col.([][]interface{})
 		ws := make([][]interface{}, len(vs))
-		v.Col = shuffle2.TupleShuffle(vs, ws, sels)
+		v.Col = shuffle.TupleShuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		vs := v.Col.(*types.Bytes)
@@ -1825,7 +1825,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ns := encoding.DecodeUint32Slice(ndata)
-		v.Col = shuffle2.StrShuffle(vs, os, ns, sels)
+		v.Col = shuffle.StrShuffle(vs, os, ns, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		mheap.Free(m, odata)
 		mheap.Free(m, ndata)
@@ -1836,7 +1836,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeDateSlice(data)
-		v.Col = shuffle2.DateShuffle(vs, ws, sels)
+		v.Col = shuffle.DateShuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		v.Data = v.Data[:len(sels)*4]
 		mheap.Free(m, data)
@@ -1847,7 +1847,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeDatetimeSlice(data)
-		v.Col = shuffle2.DatetimeShuffle(vs, ws, sels)
+		v.Col = shuffle.DatetimeShuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		v.Data = v.Data[:len(sels)*8]
 		mheap.Free(m, data)
@@ -1858,7 +1858,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeTimestampSlice(data)
-		v.Col = shuffle2.TimestampShuffle(vs, ws, sels)
+		v.Col = shuffle.TimestampShuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		v.Data = v.Data[:len(sels)*8]
 		mheap.Free(m, data)
@@ -1869,7 +1869,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeDecimal64Slice(data)
-		v.Col = shuffle2.Decimal64Shuffle(vs, ws, sels)
+		v.Col = shuffle.Decimal64Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		v.Data = v.Data[:len(sels)*8]
 		mheap.Free(m, data)
@@ -1880,7 +1880,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeDecimal128Slice(data)
-		v.Col = shuffle2.Decimal128Shuffle(vs, ws, sels)
+		v.Col = shuffle.Decimal128Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		v.Data = v.Data[:len(sels)*1]
 		mheap.Free(m, data)

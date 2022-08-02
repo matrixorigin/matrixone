@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	date_add2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/date_add"
+	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/date_add"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -38,7 +38,7 @@ func DateAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		}
 		resultVector := proc.AllocScalarVector(resultType)
 		rs := make([]types.Date, 1)
-		res, err := date_add2.DateAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
+		res, err := date_add.DateAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	} else {
@@ -54,7 +54,7 @@ func DateAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		}
 		resultValues := encoding.DecodeDateSlice(resultVector.Data)
 		resultValues = resultValues[:maxLen]
-		res, err := date_add2.DateAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
+		res, err := date_add.DateAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	}
@@ -82,7 +82,7 @@ func DatetimeAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		}
 		resultVector := proc.AllocScalarVector(resultType)
 		rs := make([]types.Datetime, 1)
-		res, err := date_add2.DatetimeAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
+		res, err := date_add.DatetimeAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	} else {
@@ -98,7 +98,7 @@ func DatetimeAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		}
 		resultValues := encoding.DecodeDatetimeSlice(resultVector.Data)
 		resultValues = resultValues[:maxLen]
-		res, err := date_add2.DatetimeAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
+		res, err := date_add.DatetimeAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	}
@@ -119,7 +119,7 @@ func DateStringAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		}
 		resultVector := proc.AllocScalarVector(resultType)
 		rs := make([]types.Datetime, 1)
-		res, err := date_add2.DateStringAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
+		res, err := date_add.DateStringAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	} else {
@@ -135,7 +135,7 @@ func DateStringAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		}
 		resultValues := encoding.DecodeDatetimeSlice(resultVector.Data)
 		resultValues = resultValues[:maxLen]
-		res, err := date_add2.DateStringAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
+		res, err := date_add.DateStringAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	}
@@ -163,7 +163,7 @@ func TimeStampAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 		}
 		resultVector := proc.AllocScalarVector(resultType)
 		rs := make([]types.Timestamp, 1)
-		res, err := date_add2.TimestampAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
+		res, err := date_add.TimestampAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	} else {
@@ -180,7 +180,7 @@ func TimeStampAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 		resultValues := encoding.DecodeTimestampSlice(resultVector.Data)
 		resultValues = resultValues[:maxLen]
 		nulls.Set(resultVector.Nsp, firstVector.Nsp)
-		resultValues, err = date_add2.TimestampAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
+		resultValues, err = date_add.TimestampAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, err
 	}

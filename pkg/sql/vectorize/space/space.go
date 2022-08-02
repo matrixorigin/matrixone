@@ -21,7 +21,7 @@ package space
 import (
 	"bytes"
 	"fmt"
-	sum2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/sum"
+	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/sum"
 	"math"
 	"unicode"
 
@@ -44,13 +44,13 @@ var (
 func CountSpacesForUnsignedInt(originalVecCol interface{}) int64 {
 	switch col := originalVecCol.(type) {
 	case []uint8:
-		return int64(sum2.Uint8Sum(col))
+		return int64(sum.Uint8Sum(col))
 	case []uint16:
-		return int64(sum2.Uint16Sum(col))
+		return int64(sum.Uint16Sum(col))
 	case []uint32:
-		return int64(sum2.Uint32Sum(col))
+		return int64(sum.Uint32Sum(col))
 	case []uint64:
-		return int64(sum2.Uint64Sum(col))
+		return int64(sum.Uint64Sum(col))
 	default:
 		return 0
 	}
@@ -61,13 +61,13 @@ func CountSpacesForSignedInt(originalVecCol interface{}) int64 {
 
 	switch col := originalVecCol.(type) {
 	case []int8:
-		result = sum2.Int8Sum(col)
+		result = sum.Int8Sum(col)
 	case []int16:
-		result = sum2.Int16Sum(col)
+		result = sum.Int16Sum(col)
 	case []int32:
-		result = sum2.Int32Sum(col)
+		result = sum.Int32Sum(col)
 	case []int64:
-		result = sum2.Int64Sum(col)
+		result = sum.Int64Sum(col)
 	}
 
 	if result < 0 {
@@ -210,7 +210,7 @@ func FillSpacesFloat[T constraints.Float](originalVecCol []T, resultBytes *types
 }
 
 func CountSpacesForUint64(columnValues []uint64) int64 {
-	return int64(sum2.Uint64Sum(columnValues))
+	return int64(sum.Uint64Sum(columnValues))
 }
 func CountSpacesForFloat[T constraints.Float](columnValues []T) int64 {
 	var result int64

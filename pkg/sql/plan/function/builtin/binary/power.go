@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	power2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/power"
+	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/power"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -35,7 +35,7 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]float64, 1)
-		vector.SetCol(resultVector, power2.Power(leftValues, rightValues, resultValues))
+		vector.SetCol(resultVector, power.Power(leftValues, rightValues, resultValues))
 		return resultVector, nil
 	case left.IsScalar() && !right.IsScalar():
 		if left.ConstVectorIsNull() {
@@ -48,7 +48,7 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
 		resultValues = resultValues[:len(rightValues)]
 		nulls.Set(resultVector.Nsp, right.Nsp)
-		vector.SetCol(resultVector, power2.PowerScalarLeftConst(leftValues[0], rightValues, resultValues))
+		vector.SetCol(resultVector, power.PowerScalarLeftConst(leftValues[0], rightValues, resultValues))
 		return resultVector, nil
 	case !left.IsScalar() && right.IsScalar():
 		if right.ConstVectorIsNull() {
@@ -61,7 +61,7 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
 		resultValues = resultValues[:len(leftValues)]
 		nulls.Set(resultVector.Nsp, left.Nsp)
-		vector.SetCol(resultVector, power2.PowerScalarRightConst(rightValues[0], leftValues, resultValues))
+		vector.SetCol(resultVector, power.PowerScalarRightConst(rightValues[0], leftValues, resultValues))
 		return resultVector, nil
 	}
 	resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues)))
@@ -71,6 +71,6 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
 	resultValues = resultValues[:len(leftValues)]
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-	vector.SetCol(resultVector, power2.Power(leftValues, rightValues, resultValues))
+	vector.SetCol(resultVector, power.Power(leftValues, rightValues, resultValues))
 	return resultVector, nil
 }

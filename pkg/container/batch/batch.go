@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/errno"
-	shuffle2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/shuffle"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -114,7 +114,7 @@ func (bat *Batch) Shuffle(sels []int64, m *mheap.Mheap) error {
 			ws = make([]int64, len(bat.Zs))
 		}
 		ws = ws[:len(bat.Zs)]
-		bat.Zs = shuffle2.Int64Shuffle(bat.Zs, ws, sels)
+		bat.Zs = shuffle.Int64Shuffle(bat.Zs, ws, sels)
 		m.PutSels(ws)
 	}
 	return nil

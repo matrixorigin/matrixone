@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/defines"
 	"math"
-	bits2 "math/bits"
+	bits "math/bits"
 	"strconv"
 	"strings"
 	"sync"
@@ -555,7 +555,7 @@ func (svst SystemVariableSetType) String() string {
 }
 
 func (svst SystemVariableSetType) Values() []string {
-	bitsCount := 64 - bits2.LeadingZeros64(svst.bitmap())
+	bitsCount := 64 - bits.LeadingZeros64(svst.bitmap())
 	var res []string
 	for i := 0; i < bitsCount; i++ {
 		res = append(res, svst.bitIndex2Value[i])
@@ -573,7 +573,7 @@ func (svst SystemVariableSetType) bitmap() uint64 {
 
 func (svst SystemVariableSetType) bits2string(bitsNum uint64) (string, error) {
 	bld := strings.Builder{}
-	bitCount := 64 - bits2.LeadingZeros64(bitsNum)
+	bitCount := 64 - bits.LeadingZeros64(bitsNum)
 	if bitCount > len(svst.bitIndex2Value) {
 		return "", errorValuesAreNotEnough
 	}
@@ -609,7 +609,7 @@ func (svst SystemVariableSetType) string2bits(s string) (uint64, error) {
 				if x == 0 {
 					continue
 				}
-				bitsCount := bits2.TrailingZeros64(x)
+				bitsCount := bits.TrailingZeros64(x)
 				xv := 1 << uint64(bitsCount)
 				if _, ok2 := svst.bitIndex2Value[xv]; ok2 {
 					bitsNum |= uint64(xv)
