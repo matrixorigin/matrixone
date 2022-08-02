@@ -15,7 +15,7 @@
 package max
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/engine/tae/types"
+	"github.com/matrixorigin/matrixone/pkg/storage/tae/types"
 	"golang.org/x/exp/constraints"
 )
 

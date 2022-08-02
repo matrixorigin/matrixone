@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/logutil"
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 	"github.com/matrixorigin/simdcsv"
 	"math"
 	"os"
@@ -95,7 +95,7 @@ type SharePart struct {
 	//map column id in from data to column id in table
 	dataColumnId2TableColumnId []int
 
-	cols      []*engine.AttributeDef
+	cols      []*storage.AttributeDef
 	attrName  []string
 	timestamp uint64
 
@@ -103,9 +103,9 @@ type SharePart struct {
 	simdCsvLineArray [][]string
 
 	//storage
-	storage        engine.Engine
-	dbHandler      engine.Database
-	tableHandler   engine.Relation
+	storage        storage.Engine
+	dbHandler      storage.Database
+	tableHandler   storage.Relation
 	dbName         string
 	tableName      string
 	txnHandler     *TxnHandler
@@ -392,14 +392,14 @@ func initParseLineHandler(handler *ParseLineHandler) error {
 	relation := handler.tableHandler
 	load := handler.load
 
-	var cols []*engine.AttributeDef = nil
+	var cols []*storage.AttributeDef = nil
 	ctx := context.TODO()
 	defs, err := relation.TableDefs(ctx)
 	if err != nil {
 		return err
 	}
 	for _, def := range defs {
-		attr, ok := def.(*engine.AttributeDef)
+		attr, ok := def.(*storage.AttributeDef)
 		if ok {
 			cols = append(cols, attr)
 		}
@@ -1681,7 +1681,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		handler.ThreadInfo.SetTime(wait_a)
 		handler.ThreadInfo.SetCnt(1)
 		//dbHandler := handler.dbHandler
-		var dbHandler engine.Database
+		var dbHandler storage.Database
 		var txnHandler *TxnHandler
 		tableHandler := handler.tableHandler
 		initSes := handler.ses
@@ -1689,7 +1689,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		if !handler.skipWriteBatch {
 			if handler.oneTxnPerBatch {
 				txnHandler = tmpSes.GetTxnHandler()
-				dbHandler, err = tmpSes.GetStorage().Database(ctx, handler.dbName, engine.Snapshot(txnHandler.GetTxn().GetCtx()))
+				dbHandler, err = tmpSes.GetStorage().Database(ctx, handler.dbName, storage.Snapshot(txnHandler.GetTxn().GetCtx()))
 				if err != nil {
 					goto handleError
 				}
@@ -1832,11 +1832,11 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				// dbHandler := handler.dbHandler
 				initSes := handler.ses
 				tmpSes := NewSession(initSes.GetMysqlProtocol(), initSes.GuestMmu, initSes.Mempool, initSes.Pu, gSysVariables)
-				var dbHandler engine.Database
+				var dbHandler storage.Database
 				if !handler.skipWriteBatch {
 					if handler.oneTxnPerBatch {
 						txnHandler = tmpSes.GetTxnHandler()
-						dbHandler, err = tmpSes.GetStorage().Database(ctx, handler.dbName, engine.Snapshot(txnHandler.GetTxn().GetCtx()))
+						dbHandler, err = tmpSes.GetStorage().Database(ctx, handler.dbName, storage.Snapshot(txnHandler.GetTxn().GetCtx()))
 						if err != nil {
 							goto handleError2
 						}
@@ -1946,7 +1946,7 @@ func PrintThreadInfo(handler *ParseLineHandler, close *CloseFlag, a time.Duratio
 /*
 LoadLoop reads data from stream, extracts the fields, and saves into the table
 */
-func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
+func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler storage.Database, tableHandler storage.Relation, dbName string) (*LoadResult, error) {
 	ses := mce.GetSession()
 
 	var m sync.Mutex

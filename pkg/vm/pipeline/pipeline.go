@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -48,7 +48,7 @@ func (p *Pipeline) String() string {
 	return buf.String()
 }
 
-func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
+func (p *Pipeline) Run(r storage.Reader, proc *process.Process) (bool, error) {
 	var end bool // exist flag
 	var err error
 	var bat *batch.Batch

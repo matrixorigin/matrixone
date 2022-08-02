@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -48,7 +48,7 @@ type Source struct {
 	SchemaName   string
 	RelationName string
 	Attributes   []string
-	R            engine.Reader
+	R            storage.Reader
 	Bat          *batch.Batch
 }
 
@@ -76,7 +76,7 @@ type Scope struct {
 	// PreScopes contains children of this scope will inherit and execute.
 	PreScopes []*Scope
 	// NodeInfo contains the information about the remote node.
-	NodeInfo engine.Node
+	NodeInfo storage.Node
 	// Instructions contains command list of this scope.
 	Instructions vm.Instructions
 	// Proc contains the execution context.
@@ -101,7 +101,7 @@ type Compile struct {
 	// sql sql text.
 	sql string
 	// e db engine instance.
-	e engine.Engine
+	e storage.Engine
 	// proc stores the execution context.
 	proc *process.Process
 }

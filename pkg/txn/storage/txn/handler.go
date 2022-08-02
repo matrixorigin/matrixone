@@ -16,7 +16,7 @@ package txnstorage
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	txnengine "github.com/matrixorigin/matrixone/pkg/engine/txn"
+	txnengine "github.com/matrixorigin/matrixone/pkg/storage/txn"
 )
 
 type Handler interface {

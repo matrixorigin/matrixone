@@ -24,12 +24,12 @@ import (
 
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/engine/tae/moengine"
+	"github.com/matrixorigin/matrixone/pkg/storage/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/storage/tae/moengine"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 )
 
@@ -96,7 +96,7 @@ func recreateDir(dir string) (err error) {
 }
 
 type taeHandler struct {
-	eng engine.Engine
+	eng storage.Engine
 	tae *db.DB
 }
 

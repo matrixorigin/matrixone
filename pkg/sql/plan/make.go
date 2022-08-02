@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 )
 
 func makePlan2JsonConstExpr(v string) *plan.Expr_C {
@@ -239,7 +239,7 @@ func copyType(t *Type) *Type {
 	}
 }
 
-func MakePlan2DefaultExpr(expr engine.DefaultExpr) *plan.DefaultExpr {
+func MakePlan2DefaultExpr(expr storage.DefaultExpr) *plan.DefaultExpr {
 	ret := &plan.DefaultExpr{}
 	ret.Exist = expr.Exist
 	if !ret.Exist {

@@ -10,8 +10,8 @@ import (
 
 	gomock "github.com/golang/mock/gomock"
 	client "github.com/matrixorigin/matrixone/pkg/txn/client"
-	engine "github.com/matrixorigin/matrixone/pkg/engine"
-	moengine "github.com/matrixorigin/matrixone/pkg/engine/tae/moengine"
+	engine "github.com/matrixorigin/matrixone/pkg/storage"
+	moengine "github.com/matrixorigin/matrixone/pkg/storage/tae/moengine"
 )
 
 // MockTxn is a mock of Txn interface.

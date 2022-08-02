@@ -32,7 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 )
 
 type InsertValues struct {
@@ -40,7 +40,7 @@ type InsertValues struct {
 	dbName    string
 	currentDb string
 	dataBatch *batch.Batch
-	relation  engine.Relation
+	relation  storage.Relation
 }
 
 func (mce *MysqlCmdExecutor) handleInsertValues(stmt *tree.Insert, ts uint64) (uint64, error) {
@@ -59,7 +59,7 @@ func (mce *MysqlCmdExecutor) handleInsertValues(stmt *tree.Insert, ts uint64) (u
 	return uint64(vector.Length(plan.dataBatch.Vecs[0])), nil
 }
 
-func getTableRef(tbl *tree.TableName, currentDB string, eg engine.Engine, snapshot engine.Snapshot) (string, string, engine.Relation, error) {
+func getTableRef(tbl *tree.TableName, currentDB string, eg storage.Engine, snapshot storage.Snapshot) (string, string, storage.Relation, error) {
 	if len(tbl.SchemaName) == 0 {
 		tbl.SchemaName = tree.Identifier(currentDB)
 	}
@@ -76,7 +76,7 @@ func getTableRef(tbl *tree.TableName, currentDB string, eg engine.Engine, snapsh
 	return string(tbl.SchemaName), string(tbl.ObjectName), r, nil
 }
 
-func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, snapshot engine.Snapshot) error {
+func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg storage.Engine, snapshot storage.Snapshot) error {
 	var attrs []string
 	var bat *batch.Batch
 	var rows *tree.ValuesClause
@@ -107,7 +107,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 			return err
 		}
 		for _, def := range defs {
-			if v, ok := def.(*engine.AttributeDef); ok {
+			if v, ok := def.(*storage.AttributeDef); ok {
 				attrType[v.Attr.Name] = v.Attr.Type
 				orderAttr = append(orderAttr, v.Attr.Name)
 				if v.Attr.HasDefaultExpr() {

@@ -15,7 +15,7 @@
 package deletion
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 )
 
 type Argument struct {
@@ -26,7 +26,7 @@ type Argument struct {
 
 type DeleteCtx struct {
 	IsHideKey    bool
-	TableSource  engine.Relation
+	TableSource  storage.Relation
 	UseDeleteKey string
 	CanTruncate  bool
 }

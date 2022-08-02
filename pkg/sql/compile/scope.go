@@ -43,13 +43,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (s *Scope) CreateDatabase(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
+func (s *Scope) CreateDatabase(ts uint64, snapshot storage.Snapshot, engine storage.Engine) error {
 	ctx := context.TODO()
 	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
 	if _, err := engine.Database(ctx, dbName, snapshot); err == nil {
@@ -61,7 +61,7 @@ func (s *Scope) CreateDatabase(ts uint64, snapshot engine.Snapshot, engine engin
 	return engine.Create(ctx, dbName, snapshot)
 }
 
-func (s *Scope) DropDatabase(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
+func (s *Scope) DropDatabase(ts uint64, snapshot storage.Snapshot, engine storage.Engine) error {
 	ctx := context.TODO()
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
 	if _, err := engine.Database(ctx, dbName, snapshot); err != nil {
@@ -73,7 +73,7 @@ func (s *Scope) DropDatabase(ts uint64, snapshot engine.Snapshot, engine engine.
 	return engine.Delete(ctx, dbName, snapshot)
 }
 
-func (s *Scope) CreateTable(ts uint64, snapshot engine.Snapshot, engine engine.Engine, dbName string) error {
+func (s *Scope) CreateTable(ts uint64, snapshot storage.Snapshot, engine storage.Engine, dbName string) error {
 	ctx := context.TODO()
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
@@ -101,7 +101,7 @@ func (s *Scope) CreateTable(ts uint64, snapshot engine.Snapshot, engine engine.E
 	return dbSource.Create(ctx, tblName, append(exeCols, exeDefs...))
 }
 
-func (s *Scope) DropTable(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
+func (s *Scope) DropTable(ts uint64, snapshot storage.Snapshot, engine storage.Engine) error {
 	ctx := context.TODO()
 	qry := s.Plan.GetDdl().GetDropTable()
 
@@ -123,15 +123,15 @@ func (s *Scope) DropTable(ts uint64, snapshot engine.Snapshot, engine engine.Eng
 	return dbSource.Delete(ctx, tblName)
 }
 
-func (s *Scope) CreateIndex(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
+func (s *Scope) CreateIndex(ts uint64, snapshot storage.Snapshot, engine storage.Engine) error {
 	return nil
 }
 
-func (s *Scope) DropIndex(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
+func (s *Scope) DropIndex(ts uint64, snapshot storage.Snapshot, engine storage.Engine) error {
 	return nil
 }
 
-func (s *Scope) Delete(ts uint64, snapshot engine.Snapshot, engine engine.Engine) (uint64, error) {
+func (s *Scope) Delete(ts uint64, snapshot storage.Snapshot, engine storage.Engine) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 	arg.Ts = ts
@@ -147,7 +147,7 @@ func (s *Scope) Delete(ts uint64, snapshot engine.Snapshot, engine engine.Engine
 	return arg.AffectedRows, nil
 }
 
-func (s *Scope) Insert(ts uint64, snapshot engine.Snapshot, engine engine.Engine) (uint64, error) {
+func (s *Scope) Insert(ts uint64, snapshot storage.Snapshot, engine storage.Engine) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*insert.Argument)
 	arg.Ts = ts
@@ -157,7 +157,7 @@ func (s *Scope) Insert(ts uint64, snapshot engine.Snapshot, engine engine.Engine
 	return arg.Affected, nil
 }
 
-func (s *Scope) Update(ts uint64, snapshot engine.Snapshot, engine engine.Engine) (uint64, error) {
+func (s *Scope) Update(ts uint64, snapshot storage.Snapshot, engine storage.Engine) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*update.Argument)
 	arg.Ts = ts
@@ -167,28 +167,28 @@ func (s *Scope) Update(ts uint64, snapshot engine.Snapshot, engine engine.Engine
 	return arg.AffectedRows, nil
 }
 
-func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {
-	exeDefs := make([]engine.TableDef, len(planDefs))
+func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []storage.TableDef {
+	exeDefs := make([]storage.TableDef, len(planDefs))
 	for i, def := range planDefs {
 		switch defVal := def.GetDef().(type) {
 		case *plan.TableDef_DefType_Pk:
-			exeDefs[i] = &engine.PrimaryIndexDef{
+			exeDefs[i] = &storage.PrimaryIndexDef{
 				Names: defVal.Pk.GetNames(),
 			}
 		case *plan.TableDef_DefType_Idx:
-			exeDefs[i] = &engine.IndexTableDef{
+			exeDefs[i] = &storage.IndexTableDef{
 				ColNames: defVal.Idx.GetColNames(),
 				Name:     defVal.Idx.GetName(),
 			}
 		case *plan.TableDef_DefType_Properties:
-			properties := make([]engine.Property, len(defVal.Properties.GetProperties()))
+			properties := make([]storage.Property, len(defVal.Properties.GetProperties()))
 			for i, p := range defVal.Properties.GetProperties() {
-				properties[i] = engine.Property{
+				properties[i] = storage.Property{
 					Key:   p.GetKey(),
 					Value: p.GetValue(),
 				}
 			}
-			exeDefs[i] = &engine.PropertiesDef{
+			exeDefs[i] = &storage.PropertiesDef{
 				Properties: properties,
 			}
 		}
@@ -196,8 +196,8 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {
 	return exeDefs
 }
 
-func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
-	exeCols := make([]engine.TableDef, len(planCols))
+func planColsToExeCols(planCols []*plan.ColDef) []storage.TableDef {
+	exeCols := make([]storage.TableDef, len(planCols))
 	for i, col := range planCols {
 		var alg compress.T
 		switch col.Alg {
@@ -207,8 +207,8 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 			alg = compress.Lz4
 		}
 		colTyp := col.GetTyp()
-		exeCols[i] = &engine.AttributeDef{
-			Attr: engine.Attribute{
+		exeCols[i] = &storage.AttributeDef{
+			Attr: storage.Attribute{
 				Name: col.Name,
 				Alg:  alg,
 				Type: types.Type{
@@ -218,7 +218,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 					Scale:     colTyp.GetScale(),
 					Size:      colTyp.GetSize(),
 				},
-				Default: engine.DefaultExpr{
+				Default: storage.DefaultExpr{
 					Exist:  col.GetDefault().GetExist(),
 					Value:  planValToExeVal(col.GetDefault().GetValue(), colTyp.GetId()),
 					IsNull: col.GetDefault().GetIsNull(),
@@ -299,7 +299,7 @@ func (s *Scope) NumCPU() int {
 }
 
 // Run read data from storage engine and run the instructions of scope.
-func (s *Scope) Run(e engine.Engine) (err error) {
+func (s *Scope) Run(e storage.Engine) (err error) {
 	p := pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
 	if s.DataSource.Bat != nil {
 		if _, err = p.ConstRun(s.DataSource.Bat, s.Proc); err != nil {
@@ -314,7 +314,7 @@ func (s *Scope) Run(e engine.Engine) (err error) {
 }
 
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
-func (s *Scope) MergeRun(e engine.Engine) error {
+func (s *Scope) MergeRun(e storage.Engine) error {
 	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
@@ -365,7 +365,7 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 	return nil
 }
 
-func (s *Scope) DispatchRun(e engine.Engine) error {
+func (s *Scope) DispatchRun(e storage.Engine) error {
 	mcpu := s.NumCPU()
 	ss := make([]*Scope, mcpu)
 	regs := make([][]*process.WaitRegister, len(s.PreScopes))
@@ -419,19 +419,19 @@ func (s *Scope) DispatchRun(e engine.Engine) error {
 }
 
 // RemoteRun send the scope to a remote node (if target node is itself, it is same to function ParallelRun) and run it.
-func (s *Scope) RemoteRun(e engine.Engine) error {
+func (s *Scope) RemoteRun(e storage.Engine) error {
 	return s.ParallelRun(e)
 }
 
 // ParallelRun try to execute the scope in parallel way.
-func (s *Scope) ParallelRun(e engine.Engine) error {
-	var rds []engine.Reader
+func (s *Scope) ParallelRun(e storage.Engine) error {
+	var rds []storage.Reader
 
 	if s.DataSource == nil {
 		return s.DispatchRun(e)
 	}
 	mcpu := s.NumCPU()
-	snap := engine.Snapshot(s.Proc.Snapshot)
+	snap := storage.Snapshot(s.Proc.Snapshot)
 	{
 		ctx := context.TODO()
 		db, err := e.Database(ctx, s.DataSource.SchemaName, snap)

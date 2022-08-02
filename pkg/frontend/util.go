@@ -33,7 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 )
@@ -308,7 +308,7 @@ func getSystemVariables(configFile string) (*mo_config.SystemVariables, error) {
 	return sv, err
 }
 
-func getParameterUnit(configFile string, eng engine.Engine) (*mo_config.ParameterUnit, error) {
+func getParameterUnit(configFile string, eng storage.Engine) (*mo_config.ParameterUnit, error) {
 	sv, err := getSystemVariables(configFile)
 	if err != nil {
 		return nil, err
@@ -319,23 +319,23 @@ func getParameterUnit(configFile string, eng engine.Engine) (*mo_config.Paramete
 
 	fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
 
-	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, engine.Nodes{})
+	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, storage.Nodes{})
 
 	return pu, nil
 }
 
-func ConvertCatalogSchemaToEngineFormat(mcs *CatalogSchema) []*engine.AttributeDef {
-	genAttr := func(attr *CatalogSchemaAttribute) *engine.AttributeDef {
-		return &engine.AttributeDef{
-			Attr: engine.Attribute{
+func ConvertCatalogSchemaToEngineFormat(mcs *CatalogSchema) []*storage.AttributeDef {
+	genAttr := func(attr *CatalogSchemaAttribute) *storage.AttributeDef {
+		return &storage.AttributeDef{
+			Attr: storage.Attribute{
 				Name:    attr.AttributeName,
 				Alg:     0,
 				Type:    attr.AttributeType,
-				Default: engine.DefaultExpr{},
+				Default: storage.DefaultExpr{},
 			}}
 	}
 
-	attrs := make([]*engine.AttributeDef, 0, mcs.Length())
+	attrs := make([]*storage.AttributeDef, 0, mcs.Length())
 	for _, attr := range mcs.GetAttributes() {
 		attrs = append(attrs, genAttr(attr))
 	}
@@ -346,7 +346,7 @@ func toTypesType(t types.T) types.Type {
 	return t.ToType()
 }
 
-func AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs []*engine.AttributeDef, rowCount int) *batch.Batch {
+func AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs []*storage.AttributeDef, rowCount int) *batch.Batch {
 	var attributeNames = make([]string, len(attributeDefs))
 	for i, def := range attributeDefs {
 		attributeNames[i] = def.Attr.Name

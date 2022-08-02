@@ -22,8 +22,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/engine"
-	txnengine "github.com/matrixorigin/matrixone/pkg/engine/txn"
+	"github.com/matrixorigin/matrixone/pkg/storage"
+	txnengine "github.com/matrixorigin/matrixone/pkg/storage/txn"
 )
 
 type MemHandler struct {
@@ -73,7 +73,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 	tx := m.getTx(meta)
 	switch def := req.Def.(type) {
 
-	case *engine.CommentDef:
+	case *storage.CommentDef:
 		// update comments
 		row, err := m.relations.Get(tx, Text(req.TableID))
 		if errors.Is(err, sql.ErrNoRows) {
@@ -88,7 +88,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 			return err
 		}
 
-	case *engine.AttributeDef:
+	case *storage.AttributeDef:
 		// add attribute
 		// check existence
 		iter := m.attributes.NewIter(tx)
@@ -111,7 +111,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 			return err
 		}
 
-	case *engine.IndexTableDef:
+	case *storage.IndexTableDef:
 		// add index
 		// check existence
 		iter := m.indexes.NewIter(tx)
@@ -134,7 +134,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 			return err
 		}
 
-	case *engine.PropertiesDef:
+	case *storage.PropertiesDef:
 		// update properties
 		row, err := m.relations.Get(tx, Text(req.TableID))
 		if errors.Is(err, sql.ErrNoRows) {
@@ -148,7 +148,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 			return err
 		}
 
-	case *engine.PrimaryIndexDef:
+	case *storage.PrimaryIndexDef:
 		// set primary index
 		iter := m.attributes.NewIter(tx)
 		defer iter.Close()
@@ -238,27 +238,27 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req txnengine.Create
 	}
 
 	// handle defs
-	var relAttrs []engine.Attribute
-	var relIndexes []engine.IndexTableDef
+	var relAttrs []storage.Attribute
+	var relIndexes []storage.IndexTableDef
 	var primaryColumnNames []string
 	for _, def := range req.Defs {
 		switch def := def.(type) {
 
-		case *engine.CommentDef:
+		case *storage.CommentDef:
 			row.Comments = def.Comment
 
-		case *engine.AttributeDef:
+		case *storage.AttributeDef:
 			relAttrs = append(relAttrs, def.Attr)
 
-		case *engine.IndexTableDef:
+		case *storage.IndexTableDef:
 			relIndexes = append(relIndexes, *def)
 
-		case *engine.PropertiesDef:
+		case *storage.PropertiesDef:
 			for _, prop := range def.Properties {
 				row.Properties[prop.Key] = prop.Value
 			}
 
-		case *engine.PrimaryIndexDef:
+		case *storage.PrimaryIndexDef:
 			primaryColumnNames = def.Names
 
 		}
@@ -310,7 +310,7 @@ func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req txnengine.DelTableD
 	tx := m.getTx(meta)
 	switch def := req.Def.(type) {
 
-	case *engine.CommentDef:
+	case *storage.CommentDef:
 		// del comments
 		row, err := m.relations.Get(tx, Text(req.TableID))
 		if errors.Is(err, sql.ErrNoRows) {
@@ -325,7 +325,7 @@ func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req txnengine.DelTableD
 			return err
 		}
 
-	case *engine.AttributeDef:
+	case *storage.AttributeDef:
 		// delete attribute
 		iter := m.attributes.NewIter(tx)
 		defer iter.Close()
@@ -339,7 +339,7 @@ func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req txnengine.DelTableD
 			}
 		}
 
-	case *engine.IndexTableDef:
+	case *storage.IndexTableDef:
 		// delete index
 		iter := m.indexes.NewIter(tx)
 		defer iter.Close()
@@ -353,7 +353,7 @@ func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req txnengine.DelTableD
 			}
 		}
 
-	case *engine.PropertiesDef:
+	case *storage.PropertiesDef:
 		// delete properties
 		row, err := m.relations.Get(tx, Text(req.TableID))
 		if errors.Is(err, sql.ErrNoRows) {
@@ -367,7 +367,7 @@ func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req txnengine.DelTableD
 			return err
 		}
 
-	case *engine.PrimaryIndexDef:
+	case *storage.PrimaryIndexDef:
 		// delete primary index
 		iter := m.attributes.NewIter(tx)
 		defer iter.Close()
@@ -485,7 +485,7 @@ func (m *MemHandler) HandleGetTableDefs(meta txn.TxnMeta, req txnengine.GetTable
 	}
 
 	// comments
-	resp.Defs = append(resp.Defs, &engine.CommentDef{
+	resp.Defs = append(resp.Defs, &storage.CommentDef{
 		Comment: relRow.Comments,
 	})
 
@@ -496,7 +496,7 @@ func (m *MemHandler) HandleGetTableDefs(meta txn.TxnMeta, req txnengine.GetTable
 		defer iter.Close()
 		for ok := iter.First(); ok; ok = iter.Next() {
 			_, attrRow := iter.Read()
-			resp.Defs = append(resp.Defs, &engine.AttributeDef{
+			resp.Defs = append(resp.Defs, &storage.AttributeDef{
 				Attr: attrRow.Attribute,
 			})
 			if attrRow.Primary {
@@ -504,7 +504,7 @@ func (m *MemHandler) HandleGetTableDefs(meta txn.TxnMeta, req txnengine.GetTable
 			}
 		}
 		if len(primaryAttrNames) > 0 {
-			resp.Defs = append(resp.Defs, &engine.PrimaryIndexDef{
+			resp.Defs = append(resp.Defs, &storage.PrimaryIndexDef{
 				Names: primaryAttrNames,
 			})
 		}
@@ -521,9 +521,9 @@ func (m *MemHandler) HandleGetTableDefs(meta txn.TxnMeta, req txnengine.GetTable
 	}
 
 	// properties
-	propertiesDef := new(engine.PropertiesDef)
+	propertiesDef := new(storage.PropertiesDef)
 	for key, value := range relRow.Properties {
-		propertiesDef.Properties = append(propertiesDef.Properties, engine.Property{
+		propertiesDef.Properties = append(propertiesDef.Properties, storage.Property{
 			Key:   key,
 			Value: value,
 		})

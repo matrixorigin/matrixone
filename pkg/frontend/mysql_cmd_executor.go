@@ -42,7 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -778,7 +778,7 @@ func (mce *MysqlCmdExecutor) handleChangeDB(db string) error {
 	txnCtx := txnHandler.GetTxn().GetCtx()
 	//TODO: check meta data
 	ctx := context.TODO()
-	if _, err := ses.Pu.StorageEngine.Database(ctx, db, engine.Snapshot(txnCtx)); err != nil {
+	if _, err := ses.Pu.StorageEngine.Database(ctx, db, storage.Snapshot(txnCtx)); err != nil {
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, db)
 	}
@@ -893,7 +893,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	if ses.InMultiStmtTransactionMode() {
 		return fmt.Errorf("do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
 	}
-	dbHandler, err := ses.GetStorage().Database(ctx, loadDb, engine.Snapshot(txnHandler.GetTxn().GetCtx()))
+	dbHandler, err := ses.GetStorage().Database(ctx, loadDb, storage.Snapshot(txnHandler.GetTxn().GetCtx()))
 	if err != nil {
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, loadDb)
@@ -958,7 +958,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(icfl *InternalCmdFieldList) erro
 		if mce.tableInfos == nil || mce.db != dbName {
 			txnHandler := ses.GetTxnHandler()
 			eng := ses.GetStorage()
-			db, err := eng.Database(ctx, dbName, engine.Snapshot(txnHandler.GetTxn().GetCtx()))
+			db, err := eng.Database(ctx, dbName, storage.Snapshot(txnHandler.GetTxn().GetCtx()))
 			if err != nil {
 				return err
 			}
@@ -978,7 +978,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(icfl *InternalCmdFieldList) erro
 					return err
 				}
 				for _, def := range defs {
-					if attr, ok := def.(*engine.AttributeDef); ok {
+					if attr, ok := def.(*storage.AttributeDef); ok {
 						attrs = append(attrs, &engineColumnInfo{
 							name: attr.Attr.Name,
 							typ:  attr.Attr.Type,
@@ -1568,7 +1568,7 @@ func buildPlan(ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, err
 /*
 GetComputationWrapper gets the execs from the computation engine
 */
-var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
+var GetComputationWrapper = func(db, sql, user string, eng storage.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	var cw []ComputationWrapper = nil
 	var stmts []tree.Statement = nil
 	var cmdFieldStmt *InternalCmdFieldList

@@ -28,7 +28,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -175,7 +175,7 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 	}
 }
 
-func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*deletion.Argument, error) {
+func constructDeletion(n *plan.Node, eg storage.Engine, snapshot storage.Snapshot) (*deletion.Argument, error) {
 	ctx := context.TODO()
 	count := len(n.DeleteTablesCtx)
 	ds := make([]*deletion.DeleteCtx, count)
@@ -203,7 +203,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot)
 	}, nil
 }
 
-func constructInsert(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*insert.Argument, error) {
+func constructInsert(n *plan.Node, eg storage.Engine, snapshot storage.Snapshot) (*insert.Argument, error) {
 	ctx := context.TODO()
 	db, err := eg.Database(ctx, n.ObjRef.SchemaName, snapshot)
 	if err != nil {
@@ -219,7 +219,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (
 	}, nil
 }
 
-func constructUpdate(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*update.Argument, error) {
+func constructUpdate(n *plan.Node, eg storage.Engine, snapshot storage.Snapshot) (*update.Argument, error) {
 	ctx := context.TODO()
 	us := make([]*update.UpdateCtx, len(n.UpdateCtxs))
 	for i, updateCtx := range n.UpdateCtxs {

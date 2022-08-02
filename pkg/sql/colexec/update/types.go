@@ -14,7 +14,7 @@
 
 package update
 
-import "github.com/matrixorigin/matrixone/pkg/engine"
+import "github.com/matrixorigin/matrixone/pkg/storage"
 
 type Argument struct {
 	Ts           uint64
@@ -30,5 +30,5 @@ type UpdateCtx struct {
 	UpdateAttrs []string
 	OtherAttrs  []string
 	OrderAttrs  []string
-	TableSource engine.Relation
+	TableSource storage.Relation
 }

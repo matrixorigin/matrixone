@@ -15,8 +15,8 @@
 package txnstorage
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/engine"
-	txnengine "github.com/matrixorigin/matrixone/pkg/engine/txn"
+	"github.com/matrixorigin/matrixone/pkg/storage"
+	txnengine "github.com/matrixorigin/matrixone/pkg/storage/txn"
 )
 
 type DatabaseRow struct {
@@ -44,7 +44,7 @@ func (r RelationRow) PrimaryKey() Text {
 type AttributeRow struct {
 	ID         string
 	RelationID string
-	engine.Attribute
+	storage.Attribute
 }
 
 func (a AttributeRow) PrimaryKey() Text {
@@ -54,7 +54,7 @@ func (a AttributeRow) PrimaryKey() Text {
 type IndexRow struct {
 	ID         string
 	RelationID string
-	engine.IndexTableDef
+	storage.IndexTableDef
 }
 
 func (i IndexRow) PrimaryKey() Text {

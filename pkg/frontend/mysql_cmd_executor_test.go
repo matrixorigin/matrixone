@@ -32,7 +32,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/prashantv/gostub"
@@ -264,7 +264,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		cnt := 0
 		eng.EXPECT().Database(ctx, gomock.Any(), gomock.Any()).DoAndReturn(
-			func(ctx2 context.Context, db string, dump interface{}) (engine.Database, error) {
+			func(ctx2 context.Context, db string, dump interface{}) (storage.Database, error) {
 				cnt++
 				if cnt == 1 {
 					return nil, nil
@@ -744,7 +744,7 @@ func Test_GetColumns(t *testing.T) {
 func Test_GetComputationWrapper(t *testing.T) {
 	convey.Convey("GetComputationWrapper succ", t, func() {
 		db, sql, user := "T", "SHOW TABLES", "root"
-		var eng engine.Engine
+		var eng storage.Engine
 		proc := &process.Process{}
 		ses := &Session{}
 		cw, err := GetComputationWrapper(db, sql, user, eng, proc, ses)

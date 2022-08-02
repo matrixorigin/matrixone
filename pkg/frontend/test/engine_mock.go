@@ -13,7 +13,7 @@ import (
 	vector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	client "github.com/matrixorigin/matrixone/pkg/txn/client"
-	engine "github.com/matrixorigin/matrixone/pkg/engine"
+	engine "github.com/matrixorigin/matrixone/pkg/storage"
 	mheap "github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 

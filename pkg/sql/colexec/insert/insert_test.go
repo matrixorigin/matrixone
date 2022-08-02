@@ -25,12 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
 
 type mockRelation struct {
-	engine.Relation
+	storage.Relation
 	result *batch.Batch
 }
 

@@ -25,13 +25,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Argument struct {
 	Ts            uint64
-	TargetTable   engine.Relation
+	TargetTable   storage.Relation
 	TargetColDefs []*plan.ColDef
 	Affected      uint64
 }

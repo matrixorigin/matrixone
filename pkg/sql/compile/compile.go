@@ -29,7 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -41,7 +41,7 @@ func InitAddress(addr string) {
 
 // New is used to new an object of compile
 func New(db string, sql string, uid string,
-	e engine.Engine, proc *process.Process) *Compile {
+	e storage.Engine, proc *process.Process) *Compile {
 	return &Compile{
 		e:    e,
 		db:   db,
@@ -289,7 +289,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		for i, col := range n.TableDef.Cols {
 			src.Attributes[i] = col.Name
 		}
-		nodes := make([]engine.Node, 1)
+		nodes := make([]storage.Node, 1)
 		ss := make([]*Scope, len(nodes))
 		for i := range nodes {
 			ss[i] = &Scope{

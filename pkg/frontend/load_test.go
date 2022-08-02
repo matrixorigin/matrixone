@@ -34,7 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/simdcsv"
 	"github.com/prashantv/gostub"
@@ -64,65 +64,65 @@ func Test_load(t *testing.T) {
 		db := mock_frontend.NewMockDatabase(ctrl)
 		rel := mock_frontend.NewMockRelation(ctrl)
 		//table def
-		tableDefs := []engine.TableDef{
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+		tableDefs := []storage.TableDef{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_char},
 					Name: "a"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_varchar},
 					Name: "b"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_uint8},
 					Name: "c"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_int8},
 					Name: "d"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_uint16},
 					Name: "e"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_int16},
 					Name: "f"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_uint32},
 					Name: "g"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_int32},
 					Name: "h"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_uint64},
 					Name: "i"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_int64},
 					Name: "j"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_float32},
 					Name: "k"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_float64},
 					Name: "l"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_date},
 					Name: "m"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_datetime},
 					Name: "n"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{
 						Oid:       types.T_decimal64,
 						Size:      0,
@@ -131,8 +131,8 @@ func Test_load(t *testing.T) {
 						Precision: 0,
 					},
 					Name: "o"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{
 						Oid:       types.T_decimal128,
 						Size:      0,
@@ -141,8 +141,8 @@ func Test_load(t *testing.T) {
 						Precision: 0,
 					},
 					Name: "p"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{
 						Oid:       types.T_timestamp,
 						Size:      0,
@@ -249,65 +249,65 @@ func Test_load(t *testing.T) {
 		db := mock_frontend.NewMockDatabase(ctrl)
 		rel := mock_frontend.NewMockRelation(ctrl)
 		//table def
-		tableDefs := []engine.TableDef{
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+		tableDefs := []storage.TableDef{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_char},
 					Name: "a"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_varchar},
 					Name: "b"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_uint8},
 					Name: "c"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_int8},
 					Name: "d"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_uint16},
 					Name: "e"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_int16},
 					Name: "f"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_uint32},
 					Name: "g"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_int32},
 					Name: "h"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_uint64},
 					Name: "i"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_int64},
 					Name: "j"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_float32},
 					Name: "k"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_float64},
 					Name: "l"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_date},
 					Name: "m"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{Oid: types.T_datetime},
 					Name: "n"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{
 						Oid:       types.T_decimal64,
 						Size:      0,
@@ -316,8 +316,8 @@ func Test_load(t *testing.T) {
 						Precision: 0,
 					},
 					Name: "o"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{
 						Oid:       types.T_decimal128,
 						Size:      0,
@@ -326,8 +326,8 @@ func Test_load(t *testing.T) {
 						Precision: 0,
 					},
 					Name: "p"}},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
+			&storage.AttributeDef{
+				Attr: storage.Attribute{
 					Type: types.Type{
 						Oid:       types.T_timestamp,
 						Size:      0,

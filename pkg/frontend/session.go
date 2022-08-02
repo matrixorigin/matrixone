@@ -26,8 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/engine"
-	"github.com/matrixorigin/matrixone/pkg/engine/tae/moengine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
+	"github.com/matrixorigin/matrixone/pkg/storage/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
@@ -44,12 +44,12 @@ const (
 )
 
 type TxnHandler struct {
-	storage engine.Engine
+	storage storage.Engine
 	txn     moengine.Txn
 	ses     *Session
 }
 
-func InitTxnHandler(storage engine.Engine) *TxnHandler {
+func InitTxnHandler(storage storage.Engine) *TxnHandler {
 	return &TxnHandler{
 		storage: storage,
 	}
@@ -79,7 +79,7 @@ type Session struct {
 	closeRef      *CloseExportData
 	txnHandler    *TxnHandler
 	txnCompileCtx *TxnCompilerContext
-	storage       engine.Engine
+	storage       storage.Engine
 	sql           string
 
 	sysVars         map[string]interface{}
@@ -248,7 +248,7 @@ func (ses *Session) IsTaeEngine() bool {
 	return ok
 }
 
-func (ses *Session) GetStorage() engine.Engine {
+func (ses *Session) GetStorage() storage.Engine {
 	return ses.storage
 }
 
@@ -524,7 +524,7 @@ func (th *TxnHandler) RollbackTxn() error {
 	return err
 }
 
-func (th *TxnHandler) GetStorage() engine.Engine {
+func (th *TxnHandler) GetStorage() storage.Engine {
 	return th.storage
 }
 
@@ -582,7 +582,7 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	var err error
 	//open database
 	ctx := context.TODO()
-	_, err = tcc.txnHandler.GetStorage().Database(ctx, name, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
+	_, err = tcc.txnHandler.GetStorage().Database(ctx, name, storage.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
 	if err != nil {
 		logutil.Errorf("get database %v failed. error %v", name, err)
 		return false
@@ -591,7 +591,7 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	return true
 }
 
-func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (engine.Relation, error) {
+func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (storage.Relation, error) {
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil, err
@@ -599,7 +599,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 
 	ctx := context.TODO()
 	//open database
-	db, err := tcc.txnHandler.GetStorage().Database(ctx, dbName, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
+	db, err := tcc.txnHandler.GetStorage().Database(ctx, dbName, storage.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
 	if err != nil {
 		logutil.Errorf("get database %v error %v", dbName, err)
 		return nil, err
@@ -647,7 +647,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 
 	var defs []*plan2.ColDef
 	for _, def := range engineDefs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
+		if attr, ok := def.(*storage.AttributeDef); ok {
 			defs = append(defs, &plan2.ColDef{
 				Name: attr.Attr.Name,
 				Typ: &plan2.Type{

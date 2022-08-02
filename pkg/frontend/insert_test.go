@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 	"github.com/smartystreets/goconvey/convey"
 )
 
@@ -34,80 +34,80 @@ func Test_handleInsertValues(t *testing.T) {
 
 }
 
-var tableDefs = []engine.TableDef{
-	&engine.AttributeDef{
-		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: []byte("123")},
+var tableDefs = []storage.TableDef{
+	&storage.AttributeDef{
+		Attr: storage.Attribute{
+			Default: storage.DefaultExpr{Exist: true, Value: []byte("123")},
 			Type:    types.Type{Oid: types.T_char},
 			Name:    "a"}},
-	&engine.AttributeDef{
-		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: []byte("123")},
+	&storage.AttributeDef{
+		Attr: storage.Attribute{
+			Default: storage.DefaultExpr{Exist: true, Value: []byte("123")},
 			Type:    types.Type{Oid: types.T_varchar, Width: 10},
 			Name:    "b"}},
-	&engine.AttributeDef{
-		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: uint8(1)},
+	&storage.AttributeDef{
+		Attr: storage.Attribute{
+			Default: storage.DefaultExpr{Exist: true, Value: uint8(1)},
 			Type:    types.Type{Oid: types.T_uint8},
 			Name:    "c"}},
-	&engine.AttributeDef{
-		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: int8(1)},
+	&storage.AttributeDef{
+		Attr: storage.Attribute{
+			Default: storage.DefaultExpr{Exist: true, Value: int8(1)},
 			Type:    types.Type{Oid: types.T_int8},
 			Name:    "d"}},
-	&engine.AttributeDef{
-		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: uint16(1)},
+	&storage.AttributeDef{
+		Attr: storage.Attribute{
+			Default: storage.DefaultExpr{Exist: true, Value: uint16(1)},
 			Type:    types.Type{Oid: types.T_uint16},
 			Name:    "e"}},
-	&engine.AttributeDef{
-		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: int16(1)},
+	&storage.AttributeDef{
+		Attr: storage.Attribute{
+			Default: storage.DefaultExpr{Exist: true, Value: int16(1)},
 			Type:    types.Type{Oid: types.T_int16},
 			Name:    "f"}},
-	&engine.AttributeDef{
-		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: uint32(1)},
+	&storage.AttributeDef{
+		Attr: storage.Attribute{
+			Default: storage.DefaultExpr{Exist: true, Value: uint32(1)},
 			Type:    types.Type{Oid: types.T_uint32},
 			Name:    "g"}},
-	&engine.AttributeDef{
-		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: int32(1)},
+	&storage.AttributeDef{
+		Attr: storage.Attribute{
+			Default: storage.DefaultExpr{Exist: true, Value: int32(1)},
 			Type:    types.Type{Oid: types.T_int32},
 			Name:    "h"}},
-	&engine.AttributeDef{
-		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: uint64(1)},
+	&storage.AttributeDef{
+		Attr: storage.Attribute{
+			Default: storage.DefaultExpr{Exist: true, Value: uint64(1)},
 			Type:    types.Type{Oid: types.T_uint64},
 			Name:    "i"}},
-	&engine.AttributeDef{
-		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: int64(1)},
+	&storage.AttributeDef{
+		Attr: storage.Attribute{
+			Default: storage.DefaultExpr{Exist: true, Value: int64(1)},
 			Type:    types.Type{Oid: types.T_int64},
 			Name:    "j"}},
-	&engine.AttributeDef{
-		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: float32(1)},
+	&storage.AttributeDef{
+		Attr: storage.Attribute{
+			Default: storage.DefaultExpr{Exist: true, Value: float32(1)},
 			Type:    types.Type{Oid: types.T_float32},
 			Name:    "k"}},
-	&engine.AttributeDef{
-		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: float64(1)},
+	&storage.AttributeDef{
+		Attr: storage.Attribute{
+			Default: storage.DefaultExpr{Exist: true, Value: float64(1)},
 			Type:    types.Type{Oid: types.T_float64},
 			Name:    "l"}},
-	&engine.AttributeDef{
-		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: types.Date(100)},
+	&storage.AttributeDef{
+		Attr: storage.Attribute{
+			Default: storage.DefaultExpr{Exist: true, Value: types.Date(100)},
 			Type:    types.Type{Oid: types.T_date},
 			Name:    "m"}},
-	&engine.AttributeDef{
-		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: types.Datetime(100)},
+	&storage.AttributeDef{
+		Attr: storage.Attribute{
+			Default: storage.DefaultExpr{Exist: true, Value: types.Datetime(100)},
 			Type:    types.Type{Oid: types.T_datetime},
 			Name:    "n"}},
-	&engine.AttributeDef{
-		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: types.Decimal64_One},
+	&storage.AttributeDef{
+		Attr: storage.Attribute{
+			Default: storage.DefaultExpr{Exist: true, Value: types.Decimal64_One},
 			Type: types.Type{
 				Oid:       types.T_decimal64,
 				Size:      0,
@@ -116,9 +116,9 @@ var tableDefs = []engine.TableDef{
 				Precision: 0,
 			},
 			Name: "o"}},
-	&engine.AttributeDef{
-		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: types.Decimal128_One},
+	&storage.AttributeDef{
+		Attr: storage.Attribute{
+			Default: storage.DefaultExpr{Exist: true, Value: types.Decimal128_One},
 			Type: types.Type{
 				Oid:       types.T_decimal128,
 				Size:      0,
@@ -127,9 +127,9 @@ var tableDefs = []engine.TableDef{
 				Precision: 0,
 			},
 			Name: "p"}},
-	&engine.AttributeDef{
-		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: types.NowUTC()},
+	&storage.AttributeDef{
+		Attr: storage.Attribute{
+			Default: storage.DefaultExpr{Exist: true, Value: types.NowUTC()},
 			Type: types.Type{
 				Oid:       types.T_timestamp,
 				Size:      0,
@@ -138,9 +138,9 @@ var tableDefs = []engine.TableDef{
 				Precision: 0,
 			},
 			Name: "q"}},
-	&engine.AttributeDef{
-		Attr: engine.Attribute{
-			Default: engine.DefaultExpr{Exist: true, Value: true},
+	&storage.AttributeDef{
+		Attr: storage.Attribute{
+			Default: storage.DefaultExpr{Exist: true, Value: true},
 			Type: types.Type{
 				Oid:       types.T_bool,
 				Size:      0,
@@ -154,7 +154,7 @@ var tableDefs = []engine.TableDef{
 func Test_buildInsertValues(t *testing.T) {
 	var stmt = &tree.Insert{}
 	var plan = &InsertValues{}
-	var snapshot engine.Snapshot
+	var snapshot storage.Snapshot
 	var num = &tree.NumVal{}
 	var err error
 	convey.Convey("buildInsertValues failed", t, func() {
@@ -202,7 +202,7 @@ func Test_buildInsertValues(t *testing.T) {
 
 		num = tree.NewNumVal(constant.MakeImag(constant.MakeInt64(1)), "1234", false)
 		stmt.Rows.Select.(*tree.ValuesClause).Rows[0][0] = num
-		tableDefs[0].(*engine.AttributeDef).Attr.Default = engine.DefaultExpr{}
+		tableDefs[0].(*storage.AttributeDef).Attr.Default = storage.DefaultExpr{}
 		err = buildInsertValues(stmt, plan, eng, snapshot)
 		convey.So(err, convey.ShouldNotBeNil)
 

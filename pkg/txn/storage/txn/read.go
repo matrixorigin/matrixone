@@ -20,7 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
-	txnengine "github.com/matrixorigin/matrixone/pkg/engine/txn"
+	txnengine "github.com/matrixorigin/matrixone/pkg/storage/txn"
 )
 
 func (s *Storage) Read(txnMeta txn.TxnMeta, op uint32, payload []byte) (res storage.ReadResult, err error) {

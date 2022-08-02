@@ -23,8 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/engine"
-	"github.com/matrixorigin/matrixone/pkg/engine/tae/moengine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
+	"github.com/matrixorigin/matrixone/pkg/storage/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -603,7 +603,7 @@ func FillInitialDataForMoUser() *batch.Batch {
 }
 
 // InitDB setups the initial catalog tables in tae
-func InitDB(tae engine.Engine) error {
+func InitDB(tae storage.Engine) error {
 	taeEngine, ok := tae.(moengine.TxnEngine)
 	if !ok {
 		return errorIsNotTaeEngine
@@ -632,7 +632,7 @@ func InitDB(tae engine.Engine) error {
 	//}
 
 	ctx := context.TODO()
-	catalogDB, err := tae.Database(ctx, catalogDbName, engine.Snapshot(txnCtx.GetCtx()))
+	catalogDB, err := tae.Database(ctx, catalogDbName, storage.Snapshot(txnCtx.GetCtx()))
 	if err != nil {
 		logutil.Infof("get database %v failed.error:%v", catalogDbName, err)
 		err2 := txnCtx.Rollback()
@@ -733,10 +733,10 @@ func InitDB(tae engine.Engine) error {
 	*/
 	//1. create database information_schema
 	infoSchemaName := "information_schema"
-	db, _ := tae.Database(ctx, infoSchemaName, engine.Snapshot(txnCtx.GetCtx()))
+	db, _ := tae.Database(ctx, infoSchemaName, storage.Snapshot(txnCtx.GetCtx()))
 
 	if db == nil {
-		err = tae.Create(ctx, infoSchemaName, engine.Snapshot(txnCtx.GetCtx()))
+		err = tae.Create(ctx, infoSchemaName, storage.Snapshot(txnCtx.GetCtx()))
 		if err != nil {
 			logutil.Infof("create database %v failed.error:%v", infoSchemaName, err)
 			err2 := txnCtx.Rollback()
@@ -759,7 +759,7 @@ func InitDB(tae engine.Engine) error {
 }
 
 // sanityCheck checks the catalog is ready or not
-func sanityCheck(tae engine.Engine) error {
+func sanityCheck(tae storage.Engine) error {
 	taeEngine, ok := tae.(moengine.TxnEngine)
 	if !ok {
 		return errorIsNotTaeEngine
@@ -771,7 +771,7 @@ func sanityCheck(tae engine.Engine) error {
 	}
 	ctx := context.TODO()
 	// databases: mo_catalog,information_schema
-	dbs, err := tae.Databases(ctx, engine.Snapshot(txnCtx.GetCtx()))
+	dbs, err := tae.Databases(ctx, storage.Snapshot(txnCtx.GetCtx()))
 	if err != nil {
 		return err
 	}
@@ -823,7 +823,7 @@ func isWanted(want, actual []string) bool {
 func isWantedDatabase(taeEngine moengine.TxnEngine, txnCtx moengine.Txn,
 	dbName string, tables []string, schemas []*CatalogSchema) error {
 	ctx := context.TODO()
-	db, err := taeEngine.Database(ctx, dbName, engine.Snapshot(txnCtx.GetCtx()))
+	db, err := taeEngine.Database(ctx, dbName, storage.Snapshot(txnCtx.GetCtx()))
 	if err != nil {
 		logutil.Infof("get database %v failed.error:%v", dbName, err)
 		err2 := txnCtx.Rollback()
@@ -855,7 +855,7 @@ func isWantedDatabase(taeEngine moengine.TxnEngine, txnCtx moengine.Txn,
 }
 
 //isWantedTable checks the table has the right attributes
-func isWantedTable(db engine.Database, txnCtx moengine.Txn,
+func isWantedTable(db storage.Database, txnCtx moengine.Txn,
 	tableName string, schema *CatalogSchema) error {
 	ctx := context.TODO()
 	table, err := db.Relation(ctx, tableName)
@@ -936,8 +936,8 @@ func isWantedTable(db engine.Database, txnCtx moengine.Txn,
 	return nil
 }
 
-func convertCatalogSchemaToTableDef(sch *CatalogSchema) []engine.TableDef {
-	defs := make([]engine.TableDef, 0, len(sch.GetAttributes()))
+func convertCatalogSchemaToTableDef(sch *CatalogSchema) []storage.TableDef {
+	defs := make([]storage.TableDef, 0, len(sch.GetAttributes()))
 	var primaryKeyName []string
 
 	for _, attr := range sch.GetAttributes() {
@@ -945,17 +945,17 @@ func convertCatalogSchemaToTableDef(sch *CatalogSchema) []engine.TableDef {
 			primaryKeyName = append(primaryKeyName, attr.GetName())
 		}
 
-		defs = append(defs, &engine.AttributeDef{Attr: engine.Attribute{
+		defs = append(defs, &storage.AttributeDef{Attr: storage.Attribute{
 			Name:    attr.GetName(),
 			Alg:     0,
 			Type:    attr.GetType(),
-			Default: engine.DefaultExpr{},
+			Default: storage.DefaultExpr{},
 			Primary: attr.GetIsPrimaryKey(),
 		}})
 	}
 
 	if len(primaryKeyName) != 0 {
-		defs = append(defs, &engine.PrimaryIndexDef{
+		defs = append(defs, &storage.PrimaryIndexDef{
 			Names: primaryKeyName,
 		})
 	}

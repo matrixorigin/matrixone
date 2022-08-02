@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 	cvey "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
@@ -497,13 +497,13 @@ func TestGetSimpleExprValue(t *testing.T) {
 }
 
 func Test_AllocateBatchBasedOnEngineAttributeDefinition(t *testing.T) {
-	var attributeDefs []*engine.AttributeDef
+	var attributeDefs []*storage.AttributeDef
 	var rowCount = 1
 	var colNum = 14
-	var tmp = &engine.AttributeDef{}
+	var tmp = &storage.AttributeDef{}
 	var ret *batch.Batch
 	cvey.Convey("", t, func() {
-		attributeDefs = make([]*engine.AttributeDef, colNum)
+		attributeDefs = make([]*storage.AttributeDef, colNum)
 		tmp.Attr.Type.Oid = types.T_bool
 
 		for i := 0; i < colNum; i++ {

@@ -15,7 +15,7 @@
 package config
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/engine"
+	"github.com/matrixorigin/matrixone/pkg/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 )
@@ -29,10 +29,10 @@ var HostMmu *host.Mmu = nil
 var Mempool *mempool.Mempool = nil
 
 // StorageEngine Storage Engine
-var StorageEngine engine.Engine
+var StorageEngine storage.Engine
 
 // ClusterNodes Cluster Nodes
-var ClusterNodes engine.Nodes
+var ClusterNodes storage.Nodes
 
 type ParameterUnit struct {
 	SV *SystemVariables
@@ -44,13 +44,13 @@ type ParameterUnit struct {
 	Mempool *mempool.Mempool
 
 	//Storage Engine
-	StorageEngine engine.Engine
+	StorageEngine storage.Engine
 
 	//Cluster Nodes
-	ClusterNodes engine.Nodes
+	ClusterNodes storage.Nodes
 }
 
-func NewParameterUnit(sv *SystemVariables, hostMmu *host.Mmu, mempool *mempool.Mempool, storageEngine engine.Engine, clusterNodes engine.Nodes) *ParameterUnit {
+func NewParameterUnit(sv *SystemVariables, hostMmu *host.Mmu, mempool *mempool.Mempool, storageEngine storage.Engine, clusterNodes storage.Nodes) *ParameterUnit {
 	return &ParameterUnit{
 		SV:            sv,
 		HostMmu:       hostMmu,
