@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/shuffle"
 	"sync/atomic"
-
+	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
@@ -71,6 +71,21 @@ func NewWithSize(n int) *Batch {
 		Cnt:  1,
 		Vecs: make([]*vector.Vector, n),
 	}
+}
+
+func (bat *Batch) MarshalBinary() ([]byte, error) {
+	return encoding.Encode(&EncodeBatch{Zs: bat.Zs, Cnt: bat.Cnt, Vecs: bat.Vecs})
+}
+
+func (bat *Batch) UnmarshalBinary(data []byte) error {
+	rbat := new(EncodeBatch)
+	if err := encoding.Decode(data, rbat); err != nil {
+		return err
+	}
+	bat.Zs = rbat.Zs
+	bat.Cnt = rbat.Cnt
+	bat.Vecs = rbat.Vecs
+	return nil
 }
 
 func (bat *Batch) ExpandNulls() {

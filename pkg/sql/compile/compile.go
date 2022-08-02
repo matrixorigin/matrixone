@@ -66,6 +66,7 @@ func (c *Compile) Compile(pn *plan.Plan, u interface{}, fill func(interface{}, *
 		return err
 	}
 	c.scope = s
+	c.scope.Plan = pn
 	return nil
 }
 

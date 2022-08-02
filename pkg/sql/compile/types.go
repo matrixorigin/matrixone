@@ -43,6 +43,13 @@ const (
 // Address is the ip:port of local node
 var Address string
 
+type EncodeSource struct {
+	SchemaName   string
+	RelationName string
+	Attributes   []string
+	Bat          *batch.Batch
+}
+
 // Source contains information of a relation which will be used in execution,
 type Source struct {
 	SchemaName   string

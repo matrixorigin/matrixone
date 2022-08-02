@@ -74,6 +74,33 @@ func GetStrColumn(v *Vector) *types.Bytes {
 	return v.Col.(*types.Bytes)
 }
 
+func (v *Vector) MarshalBinary() ([]byte, error) {
+	var buf bytes.Buffer
+
+	if v.IsConst {
+		buf.WriteByte(byte(1))
+	} else {
+		buf.WriteByte(byte(0))
+	}
+	buf.Write(encoding.EncodeInt64(int64(v.Length)))
+	data, err := v.Show()
+	if err != nil {
+		return nil, err
+	}
+	buf.Write(data)
+	return buf.Bytes(), nil
+}
+
+func (v *Vector) UnmarshalBinary(data []byte) error {
+	if data[1] == 1 {
+		v.IsConst = true
+	}
+	data = data[1:]
+	v.Length = int(encoding.DecodeInt64(data[:8]))
+	data = data[8:]
+	return v.Read(data)
+}
+
 // Count return the number of rows in the vector
 func (v *Vector) Count() int {
 	return Length(v)
@@ -4222,6 +4249,7 @@ func (v *Vector) Read(data []byte) error {
 	data = data[encoding.TypeSize:]
 	v.Typ = typ
 	v.Or = true
+	v.Nsp = &nulls.Nulls{}
 	switch typ.Oid {
 	case types.T_bool:
 		size := encoding.DecodeUint32(data)
