@@ -77,13 +77,15 @@ func Call(idx int, proc *process.Process, argument interface{}) (bool, error) {
 	}
 }
 
-// use all batches from proc.Reg.MergeReceiver[index] to build the hash map.
+// buildHashTable use all batches from proc.Reg.MergeReceiver[index] to build the hash map.
 func (ctr *container) buildHashTable(arg *Argument, proc *process.Process, ana process.Analyze, index int) error {
 	for {
 		bat := <-proc.Reg.MergeReceivers[index].Ch
+		// the last batch of block.
 		if bat == nil {
 			break
 		}
+		// just an empty batch.
 		if len(bat.Zs) == 0 {
 			continue
 		}
@@ -109,9 +111,9 @@ func (ctr *container) buildHashTable(arg *Argument, proc *process.Process, ana p
 	return nil
 }
 
-// use a batch from proc.Reg.MergeReceivers[index] to probe the hash map and update the ctr.bat
-// if batch is the last one, return true
-// else return false.
+// probeHashTable use a batch from proc.Reg.MergeReceivers[index] to probe and update the hash map.
+// If a row of data never appears in the hash table, output it to the next operator.
+// if batch is the last one, return true, else return false.
 func (ctr *container) probeHashTable(arg *Argument, proc *process.Process, ana process.Analyze, index int) (bool, error) {
 	var err error
 	inserted := make([]uint8, hashmap.UnitLimit)
@@ -119,9 +121,11 @@ func (ctr *container) probeHashTable(arg *Argument, proc *process.Process, ana p
 
 	for {
 		bat := <-proc.Reg.MergeReceivers[index].Ch
+		// the last batch of block.
 		if bat == nil {
 			return true, nil
 		}
+		// just an empty batch.
 		if len(bat.Zs) == 0 {
 			continue
 		}
