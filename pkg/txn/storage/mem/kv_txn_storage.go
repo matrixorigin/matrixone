@@ -19,7 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
+	 "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"math"
 	"sync"
 	"time"

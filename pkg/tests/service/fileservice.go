@@ -15,7 +15,7 @@
 package service
 
 import (
-	fileservice "github.com/matrixorigin/matrixone/pkg/service/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/service/fileservice"
 	"sync"
 	"testing"
 

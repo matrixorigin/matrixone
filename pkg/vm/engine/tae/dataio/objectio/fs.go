@@ -15,7 +15,7 @@
 package objectio
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/compress"
+	compress2 "github.com/matrixorigin/matrixone/pkg/common/compress"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/tfs"
 	"os"
@@ -42,7 +42,7 @@ type Attr struct {
 func NewObjectFS() tfs.FS {
 	fs := &ObjectFS{
 		attr: &Attr{
-			algo: compress.None,
+			algo: compress2.None,
 		},
 		dirs: make(map[string]tfs.File),
 	}

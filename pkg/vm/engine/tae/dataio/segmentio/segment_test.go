@@ -16,11 +16,10 @@ package segmentio
 
 import (
 	"bytes"
+	compress2 "github.com/matrixorigin/matrixone/pkg/common/compress"
 	"testing"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
-	"github.com/matrixorigin/matrixone/pkg/compress"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
@@ -122,7 +121,7 @@ func TestSegmentFile_Replay(t *testing.T) {
 		dbuf := make([]byte, dsize)
 		_, err = dataFile.Read(buf)
 		assert.Nil(t, err)
-		dbuf, err = compress.Decompress(buf, dbuf, compress.Lz4)
+		dbuf, err = compress2.Decompress(buf, dbuf, compress2.Lz4)
 		assert.Nil(t, err)
 		assert.Equal(t, dataStr, string(dbuf))
 		t.Log(string(dbuf))
@@ -143,12 +142,12 @@ func TestSegmentFile_Replay(t *testing.T) {
 		dbuf = make([]byte, dsize)
 		_, err = update.Read(buf)
 		assert.Nil(t, err)
-		dbuf, err = compress.Decompress(buf, dbuf, compress.Lz4)
+		dbuf, err = compress2.Decompress(buf, dbuf, compress2.Lz4)
 		assert.Nil(t, err)
 		assert.Equal(t, dataStr, string(dbuf))
 		err = colBlk0.ReadUpdates(buf)
 		assert.Nil(t, err)
-		dbuf, err = compress.Decompress(buf, dbuf, compress.Lz4)
+		dbuf, err = compress2.Decompress(buf, dbuf, compress2.Lz4)
 		assert.Nil(t, err)
 		assert.Equal(t, dataStr, string(dbuf))
 		update.Unref()

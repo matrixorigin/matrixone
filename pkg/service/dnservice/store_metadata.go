@@ -16,7 +16,7 @@ package dnservice
 
 import (
 	"context"
-	fileservice "github.com/matrixorigin/matrixone/pkg/service/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/service/fileservice"
 	"time"
 
 	"github.com/fagongzi/util/protoc"

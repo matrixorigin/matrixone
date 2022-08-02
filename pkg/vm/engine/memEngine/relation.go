@@ -17,11 +17,11 @@ package memEngine
 import (
 	"context"
 	"fmt"
+	compress2 "github.com/matrixorigin/matrixone/pkg/common/compress"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -115,9 +115,9 @@ func (r *relation) Write(_ context.Context, bat *batch.Batch) error {
 		if err != nil {
 			return err
 		}
-		if r.md.Attrs[i].Alg == compress.Lz4 {
+		if r.md.Attrs[i].Alg == compress2.Lz4 {
 			data := make([]byte, lz4.CompressBlockBound(len(v)))
-			if data, err = compress.Compress(v, data, compress.Lz4); err != nil {
+			if data, err = compress2.Compress(v, data, compress2.Lz4); err != nil {
 				return err
 			}
 			data = append(data, encoding.EncodeInt32(int32(len(v)))...)

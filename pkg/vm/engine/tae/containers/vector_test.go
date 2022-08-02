@@ -16,11 +16,11 @@ package containers
 
 import (
 	"bytes"
+	compress2 "github.com/matrixorigin/matrixone/pkg/common/compress"
 	"testing"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/pierrec/lz4/v4"
@@ -170,9 +170,9 @@ func TestVector4(t *testing.T) {
 		srcBuf := w.Bytes()
 		srcSize := len(srcBuf)
 		destBuf := make([]byte, lz4.CompressBlockBound(srcSize))
-		destBuf, err = compress.Compress(srcBuf, destBuf, compress.Lz4)
+		destBuf, err = compress2.Compress(srcBuf, destBuf, compress2.Lz4)
 		assert.NoError(t, err)
-		f := MockCompressedFile(destBuf, srcSize, compress.Lz4)
+		f := MockCompressedFile(destBuf, srcSize, compress2.Lz4)
 		vec2 := MakeVector(vecType, true)
 		err = vec2.ReadFromFile(f, nil)
 		assert.NoError(t, err)
@@ -191,9 +191,9 @@ func TestVector4(t *testing.T) {
 		srcBuf := w.Bytes()
 		srcSize := len(srcBuf)
 		destBuf := make([]byte, lz4.CompressBlockBound(srcSize))
-		destBuf, err = compress.Compress(srcBuf, destBuf, compress.Lz4)
+		destBuf, err = compress2.Compress(srcBuf, destBuf, compress2.Lz4)
 		assert.NoError(t, err)
-		f := MockCompressedFile(destBuf, srcSize, compress.Lz4)
+		f := MockCompressedFile(destBuf, srcSize, compress2.Lz4)
 		vec2 := MakeVector(vecType, true)
 		err = vec2.ReadFromFile(f, buffer)
 		assert.NoError(t, err)

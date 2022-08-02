@@ -16,7 +16,7 @@ package mem
 
 import (
 	"context"
-	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
+	 "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"testing"
 
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"

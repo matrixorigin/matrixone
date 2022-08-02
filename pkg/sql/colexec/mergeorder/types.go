@@ -15,7 +15,7 @@
 package mergeorder
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/compare"
+	"github.com/matrixorigin/matrixone/pkg/common/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 )
@@ -29,7 +29,7 @@ const (
 type container struct {
 	n     int // result vector number
 	state int
-	poses []int32           // sorted list of attributes
+	poses []int32            // sorted list of attributes
 	cmps  []compare.Compare // compare structures used to do sort work for attrs
 
 	bat *batch.Batch // bat store the result of merge-order

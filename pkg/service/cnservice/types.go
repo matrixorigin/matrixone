@@ -15,7 +15,7 @@
 package cnservice
 
 import (
-	fileservice "github.com/matrixorigin/matrixone/pkg/service/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/service/fileservice"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"

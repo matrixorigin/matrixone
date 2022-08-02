@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	compress2 "github.com/matrixorigin/matrixone/pkg/common/compress"
 	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -25,7 +26,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
 
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -200,12 +200,12 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {
 func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 	exeCols := make([]engine.TableDef, len(planCols))
 	for i, col := range planCols {
-		var alg compress.T
+		var alg compress2.T
 		switch col.Alg {
 		case plan.CompressType_None:
-			alg = compress.None
+			alg = compress2.None
 		case plan.CompressType_Lz4:
-			alg = compress.Lz4
+			alg = compress2.Lz4
 		}
 		colTyp := col.GetTyp()
 		exeCols[i] = &engine.AttributeDef{

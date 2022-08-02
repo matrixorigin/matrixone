@@ -15,7 +15,7 @@
 package mergetop
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/compare"
+	"github.com/matrixorigin/matrixone/pkg/common/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 )
@@ -30,7 +30,7 @@ type container struct {
 	n     int // result vector number
 	state int
 	sels  []int64
-	poses []int32           // sorted list of attributes
+	poses []int32            // sorted list of attributes
 	cmps  []compare.Compare // compare structure used to do sort work
 
 	bat *batch.Batch // bat stores the final result of merge-top

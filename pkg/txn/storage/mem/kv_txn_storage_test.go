@@ -16,7 +16,7 @@ package mem
 
 import (
 	"bytes"
-	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
+	 "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"math"
 	"sync/atomic"
 	"testing"

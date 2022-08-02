@@ -16,9 +16,9 @@ package main
 
 import (
 	"fmt"
-	dnservice "github.com/matrixorigin/matrixone/pkg/service/dnservice"
-	fileservice "github.com/matrixorigin/matrixone/pkg/service/fileservice"
-	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
+	"github.com/matrixorigin/matrixone/pkg/service/dnservice"
+	"github.com/matrixorigin/matrixone/pkg/service/fileservice"
+	 "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"os"
 	"strings"
 

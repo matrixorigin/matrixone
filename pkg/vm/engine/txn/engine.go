@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
-	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
+	 "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"sync"
 
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"

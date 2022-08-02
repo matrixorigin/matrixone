@@ -18,8 +18,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	fileservice "github.com/matrixorigin/matrixone/pkg/service/fileservice"
-	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
+	"github.com/matrixorigin/matrixone/pkg/service/fileservice"
+	 "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 )
 

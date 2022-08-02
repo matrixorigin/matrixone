@@ -17,7 +17,7 @@ package service
 import (
 	"context"
 	"fmt"
-	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
+	 "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"math"
 	"sync"
 	"sync/atomic"

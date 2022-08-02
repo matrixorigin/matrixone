@@ -16,8 +16,8 @@ package dnservice
 
 import (
 	"context"
-	fileservice "github.com/matrixorigin/matrixone/pkg/service/fileservice"
-	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
+	"github.com/matrixorigin/matrixone/pkg/service/fileservice"
+	 "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"math"
 	"os"
 	"sync"

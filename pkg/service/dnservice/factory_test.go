@@ -15,7 +15,7 @@
 package dnservice
 
 import (
-	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
+	 "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
