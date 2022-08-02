@@ -571,16 +571,16 @@ func (svst SystemVariableSetType) bitmap() uint64 {
 	return uint64(1<<cnt) - 1
 }
 
-func (svst SystemVariableSetType) bits2string(bits uint64) (string, error) {
+func (svst SystemVariableSetType) bits2string(bitsNum uint64) (string, error) {
 	bld := strings.Builder{}
-	bitCount := 64 - bits2.LeadingZeros64(bits)
+	bitCount := 64 - bits2.LeadingZeros64(bitsNum)
 	if bitCount > len(svst.bitIndex2Value) {
 		return "", errorValuesAreNotEnough
 	}
 
 	for i := 0; i < bitCount; i++ {
 		mask := uint64(1 << uint64(i))
-		if mask&bits != 0 {
+		if mask&bitsNum != 0 {
 			v, ok := svst.bitIndex2Value[i]
 			if !ok {
 				return "", errorValueIsInvalid
@@ -599,11 +599,11 @@ func (svst SystemVariableSetType) string2bits(s string) (uint64, error) {
 		return 0, nil
 	}
 	ss := strings.Split(s, ",")
-	bits := uint64(0)
+	bitsNum := uint64(0)
 	for _, sss := range ss {
 		normalized := strings.ToLower(strings.TrimRight(sss, " "))
 		if origin, ok := svst.normalized2original[normalized]; ok {
-			bits |= 1 << svst.value2BitIndex[origin]
+			bitsNum |= 1 << svst.value2BitIndex[origin]
 		} else {
 			if x, err := strconv.ParseUint(sss, 10, 64); err == nil {
 				if x == 0 {
@@ -612,14 +612,14 @@ func (svst SystemVariableSetType) string2bits(s string) (uint64, error) {
 				bitsCount := bits2.TrailingZeros64(x)
 				xv := 1 << uint64(bitsCount)
 				if _, ok2 := svst.bitIndex2Value[xv]; ok2 {
-					bits |= uint64(xv)
+					bitsNum |= uint64(xv)
 					continue
 				}
 			}
 			return 0, errorValueIsInvalid
 		}
 	}
-	return bits, nil
+	return bitsNum, nil
 }
 
 func (svst SystemVariableSetType) Convert(value interface{}) (interface{}, error) {
@@ -633,11 +633,11 @@ func (svst SystemVariableSetType) Convert(value interface{}) (interface{}, error
 		return nil, errorConvertToSetFailed
 	}
 	cv2 := func(x string) (interface{}, error) {
-		bits, err := svst.string2bits(x)
+		bitsNum, err := svst.string2bits(x)
 		if err != nil {
 			return nil, err
 		}
-		return svst.bits2string(bits)
+		return svst.bits2string(bitsNum)
 	}
 
 	switch v := value.(type) {
