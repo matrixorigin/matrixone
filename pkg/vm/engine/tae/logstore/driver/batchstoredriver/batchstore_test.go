@@ -37,14 +37,16 @@ func restartStore(s *baseStore, t *testing.T) *baseStore {
 	s, err := NewBaseStore(s.dir, s.name, cfg)
 	assert.NoError(t, err)
 	tempLsn := uint64(0)
-	s.Replay(func(e *entry.Entry) {
+	err = s.Replay(func(e *entry.Entry) {
 		if e.Lsn < tempLsn {
 			panic(fmt.Errorf("logic error %d<%d", e.Lsn, tempLsn))
 		}
 		tempLsn = e.Lsn
-		s.Read(e.Lsn)
+		_, err = s.Read(e.Lsn)
+		assert.NoError(t, err)
 		// logutil.Infof("lsn is %d",e.Lsn)
 	})
+	assert.NoError(t, err)
 	assert.Equal(t, maxlsn, s.GetCurrSeqNum())
 	assert.Equal(t, maxlsn, s.synced)
 	assert.Equal(t, maxlsn, s.syncing)
@@ -102,14 +104,14 @@ func concurrentAppendReadCheckpoint(s *baseStore, t *testing.T) {
 
 	for i := range entries {
 		wg.Add(1)
-		worker.Submit(appendfn(i))
+		_ = worker.Submit(appendfn(i))
 		wg.Add(1)
-		worker.Submit(readfn(i))
+		_ = worker.Submit(readfn(i))
 	}
 	wg.Wait()
 	for i := range entries {
 		wg.Add(1)
-		worker.Submit(truncatefn(i))
+		_ = worker.Submit(truncatefn(i))
 	}
 	wg.Wait()
 }

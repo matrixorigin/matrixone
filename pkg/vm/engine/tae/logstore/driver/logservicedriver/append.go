@@ -12,7 +12,10 @@ var ErrTooMuchPenddings = errors.New("too much penddings")
 func (d *LogServiceDriver) Append(e *entry.Entry) error {
 	d.driverLsnMu.Lock()
 	e.Lsn = d.allocateDriverLsn()
-	d.preAppendLoop.Enqueue(e)
+	_, err := d.preAppendLoop.Enqueue(e)
+	if err != nil {
+		panic(err)
+	}
 	d.driverLsnMu.Unlock()
 	return nil
 }

@@ -229,7 +229,10 @@ func (r *recordEntry) unmarshal() {
 	}
 	buf := r.payload
 	r.payload = nil
-	r.Unmarshal(buf)
+	err := r.Unmarshal(buf)
+	if err != nil {
+		panic(err)
+	}
 	atomic.StoreUint32(&r.unmarshaled, 1)
 }
 

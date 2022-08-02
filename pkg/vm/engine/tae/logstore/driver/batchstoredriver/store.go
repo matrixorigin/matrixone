@@ -140,7 +140,10 @@ func (bs *baseStore) onCommits(batches ...any) {
 			// 	e.StartTime()
 			// }
 			e.DoneWithErr(nil)
-			bs.postCommitQueue.Enqueue(e)
+			_, err := bs.postCommitQueue.Enqueue(e)
+			if err != nil {
+				panic(err)
+			}
 		}
 		cnt := len(bat)
 		bs.flushWg.Add(-1 * cnt)
@@ -153,7 +156,10 @@ func (bs *baseStore) onSyncs(batches ...any) {
 		panic(err)
 	}
 	for _, item := range batches {
-		bs.commitQueue.Enqueue(item)
+		_, err := bs.commitQueue.Enqueue(item)
+		if err != nil {
+			panic(err)
+		}
 	}
 }
 
@@ -187,7 +193,10 @@ func (bs *baseStore) onEntries(entries ...any) {
 	}
 	bat := make([]any, len(entries))
 	copy(bat, entries)
-	bs.syncQueue.Enqueue(bat)
+	_, err := bs.syncQueue.Enqueue(bat)
+	if err != nil {
+		panic(err)
+	}
 }
 
 //TODO: commented due to static check
@@ -224,7 +233,10 @@ func (bs *baseStore) Truncate(lsn uint64) (err error) {
 	}
 	atomic.StoreUint64(&bs.checkpointing, lsn)
 	bs.ckpmu.Unlock()
-	bs.truncateQueue.Enqueue(lsn)
+	_, err = bs.truncateQueue.Enqueue(lsn)
+	if err != nil {
+		panic(err)
+	}
 	return nil
 }
 
@@ -249,7 +261,10 @@ func (bs *baseStore) Append(e *entry.Entry) error {
 	// 	logutil.Infof("append entry takes %dms", e.Duration().Milliseconds())
 	// 	e.StartTime()
 	// }
-	bs.flushQueue.Enqueue(e)
+	_, err := bs.flushQueue.Enqueue(e)
+	if err != nil {
+		panic(err)
+	}
 	bs.mu.Unlock()
 	return nil
 }

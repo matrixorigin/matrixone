@@ -5,9 +5,15 @@ import (
 )
 
 func (w *StoreImpl) Replay(h ApplyHandle) error {
-	w.driver.Replay(func(e *entry.Entry) {
-		w.replayEntry(e, h)
+	err := w.driver.Replay(func(e *entry.Entry) {
+		err := w.replayEntry(e, h)
+		if err != nil {
+			panic(err)
+		}
 	})
+	if err != nil {
+		panic(err)
+	}
 	lsn, err := w.driver.GetTruncated()
 	if err != nil {
 		panic(err)

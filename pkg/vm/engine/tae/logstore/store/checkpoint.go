@@ -12,7 +12,10 @@ import (
 func (w *StoreImpl) FuzzyCheckpoint(gid uint32, indexes []*Index) (ckpEntry entry.Entry, err error) {
 	ckpEntry = w.makeFuzzyCheckpointEntry(gid, indexes)
 	drentry, _, _ := w.doAppend(GroupCKP, ckpEntry)
-	w.checkpointQueue.Enqueue(drentry)
+	_, err = w.checkpointQueue.Enqueue(drentry)
+	if err != nil {
+		panic(err)
+	}
 	return
 }
 
@@ -71,7 +74,10 @@ func (w *StoreImpl) makeFuzzyCheckpointEntry(gid uint32, indexes []*Index) (ckpE
 func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64) (ckpEntry entry.Entry, err error) {
 	ckpEntry = w.makeRangeCheckpointEntry(gid, start, end)
 	drentry, _, _ := w.doAppend(GroupCKP, ckpEntry)
-	w.checkpointQueue.Enqueue(drentry)
+	_, err = w.checkpointQueue.Enqueue(drentry)
+	if err != nil {
+		panic(err)
+	}
 	return
 }
 
@@ -92,7 +98,10 @@ func (w *StoreImpl) makeRangeCheckpointEntry(gid uint32, start, end uint64) (ckp
 func (w *StoreImpl) onLogCKPInfoQueue(items ...any) {
 	for _, item := range items {
 		e := item.(*driverEntry.Entry)
-		e.WaitDone()
+		err := e.WaitDone()
+		if err != nil {
+			panic(err)
+		}
 		w.logCheckpointInfo(e.Info)
 	}
 	w.onCheckpoint()
@@ -100,7 +109,10 @@ func (w *StoreImpl) onLogCKPInfoQueue(items ...any) {
 
 func (w *StoreImpl) onCheckpoint() {
 	w.StoreInfo.onCheckpoint()
-	w.truncatingQueue.Enqueue(struct{}{})
+	_, err := w.truncatingQueue.Enqueue(struct{}{})
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (w *StoreImpl) CkpCkp() {
@@ -109,7 +121,10 @@ func (w *StoreImpl) CkpCkp() {
 	if err != nil {
 		panic(err)
 	}
-	e.WaitDone()
+	err = e.WaitDone()
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (w *StoreImpl) onTruncatingQueue(items ...any) {
@@ -122,7 +137,10 @@ func (w *StoreImpl) onTruncatingQueue(items ...any) {
 		_, driverLsn = w.getDriverCheckpointed()
 	}
 	atomic.StoreUint64(&w.driverCheckpointing, driverLsn)
-	w.truncateQueue.Enqueue(struct{}{})
+	_, err := w.truncateQueue.Enqueue(struct{}{})
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (w *StoreImpl) onTruncateQueue(items ...any) {

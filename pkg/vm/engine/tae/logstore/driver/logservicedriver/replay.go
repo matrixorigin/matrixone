@@ -47,7 +47,10 @@ func (r *replayer) replay() {
 	}
 	for !r.readRecords() {
 		for r.replayedLsn < r.safeLsn {
-			r.replayLogserviceEntry(r.replayedLsn + 1)
+			err := r.replayLogserviceEntry(r.replayedLsn + 1)
+			if err != nil {
+				panic(err)
+			}
 		}
 	}
 	err = r.replayLogserviceEntry(r.replayedLsn + 1)

@@ -65,9 +65,10 @@ func appendGroupC(t *testing.T, driver Driver, tid uint64) entry.Entry {
 	info := &entry.Info{
 		TxnId: tid,
 	}
-	e.SetPayload([]byte(strconv.Itoa(rand.Intn(10))))
+	err := e.SetPayload([]byte(strconv.Itoa(rand.Intn(10))))
+	assert.NoError(t, err)
 	e.SetInfo(info)
-	_, err := driver.AppendEntry(GroupC, e)
+	_, err = driver.AppendEntry(GroupC, e)
 	assert.NoError(t, err)
 	return e
 }
@@ -77,9 +78,10 @@ func appendGroupUC(t *testing.T, driver Driver, tid uint64) entry.Entry {
 	info := &entry.Info{
 		Uncommits: tid,
 	}
-	e.SetPayload([]byte(strconv.Itoa(rand.Intn(10))))
+	err := e.SetPayload([]byte(strconv.Itoa(rand.Intn(10))))
+	assert.NoError(t, err)
 	e.SetInfo(info)
-	_, err := driver.AppendEntry(GroupUC, e)
+	_, err = driver.AppendEntry(GroupUC, e)
 	assert.NoError(t, err)
 	return e
 }
@@ -148,7 +150,7 @@ func TestCheckpointUC(t *testing.T) {
 			assert.NoError(t, uncommitEntry.WaitDone())
 			assert.NoError(t, commitEntry.WaitDone())
 			wg.Add(1)
-			ckpworker.Submit(ckpfn(commitLsn))
+			_ = ckpworker.Submit(ckpfn(commitLsn))
 			commitEntry.Free()
 			uncommitEntry.Free()
 			wg.Done()
@@ -157,7 +159,7 @@ func TestCheckpointUC(t *testing.T) {
 
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
-		appendworker.Submit(appendfn(i))
+		_ = appendworker.Submit(appendfn(i))
 	}
 	wg.Wait()
 

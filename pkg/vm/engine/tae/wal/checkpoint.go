@@ -49,5 +49,12 @@ func (driver *walDriver) CkpUC() {
 	if ckpedUC == ucLsn {
 		return
 	}
-	driver.impl.RangeCheckpoint(GroupUC, 0, ckpedUC)
+	e, err := driver.impl.RangeCheckpoint(GroupUC, 0, ckpedUC)
+	if err != nil {
+		panic(err)
+	}
+	err = e.WaitDone()
+	if err != nil {
+		panic(err)
+	}
 }

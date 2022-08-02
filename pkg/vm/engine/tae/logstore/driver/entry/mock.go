@@ -25,7 +25,10 @@ func MockEntry() *Entry {
 	e.SetInfo(info)
 	payload := make([]byte, payloadSize)
 	copy(payload, buf)
-	e.SetPayload(payload)
+	err := e.SetPayload(payload)
+	if err != nil {
+		panic(err)
+	}
 	e.PrepareWrite()
 	return NewEntry(e)
 }

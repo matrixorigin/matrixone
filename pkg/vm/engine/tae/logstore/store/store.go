@@ -112,7 +112,10 @@ func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.En
 	drEntry = driverEntry.NewEntry(e)
 	// e.DoneWithErr(nil)
 	// return
-	w.driverAppendQueue.Enqueue(drEntry)
+	_, err = w.driverAppendQueue.Enqueue(drEntry)
+	if err != nil {
+		panic(err)
+	}
 	return
 }
 
@@ -120,18 +123,30 @@ func (w *StoreImpl) onDriverAppendQueue(items ...any) {
 	for _, item := range items {
 		driverEntry := item.(*driverEntry.Entry)
 		driverEntry.Entry.PrepareWrite()
-		w.driver.Append(driverEntry)
+		err := w.driver.Append(driverEntry)
+		if err != nil {
+			panic(err)
+		}
 		// driverEntry.Entry.DoneWithErr(nil)
-		w.doneWithErrQueue.Enqueue(driverEntry)
+		_, err = w.doneWithErrQueue.Enqueue(driverEntry)
+		if err != nil {
+			panic(err)
+		}
 	}
 }
 
 func (w *StoreImpl) onDoneWithErrQueue(items ...any) {
 	for _, item := range items {
 		e := item.(*driverEntry.Entry)
-		e.WaitDone()
+		err := e.WaitDone()
+		if err != nil {
+			panic(err)
+		}
 		e.Entry.DoneWithErr(nil)
-		w.logInfoQueue.Enqueue(e)
+		_, err = w.logInfoQueue.Enqueue(e)
+		if err != nil {
+			panic(err)
+		}
 	}
 	w.appendWg.Add(-len(items))
 }

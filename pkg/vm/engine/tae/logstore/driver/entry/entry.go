@@ -45,7 +45,10 @@ func (e *Entry) ReadFrom(r io.Reader) {
 	if err := binary.Read(r, binary.BigEndian, &e.Lsn); err != nil {
 		return
 	}
-	e.Entry.ReadFrom(r)
+	_, err := e.Entry.ReadFrom(r)
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (e *Entry) ReadAt(r *os.File, offset int) (int, error) {

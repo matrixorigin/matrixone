@@ -6,18 +6,15 @@ import (
 	"strconv"
 	"sync"
 	"testing"
-	"time"
+	// "net/http"
+	// _ "net/http/pprof"
 
-	"net/http"
-	_ "net/http/pprof"
-
-	"github.com/lni/vfs"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	// "github.com/lni/vfs"
+	// "github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
+	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/panjf2000/ants/v2"
@@ -25,14 +22,14 @@ import (
 )
 
 // var buf []byte
-func init() {
-	go http.ListenAndServe("0.0.0.0:6060", nil)
-	// 	var bs bytes.Buffer
-	// 	for i := 0; i < 3000; i++ {
-	// 		bs.WriteString("helloyou")
-	// 	}
-	// 	buf = bs.Bytes()
-}
+// func init() {
+// 	go http.ListenAndServe("0.0.0.0:6060", nil)
+// 	var bs bytes.Buffer
+// 	for i := 0; i < 3000; i++ {
+// 		bs.WriteString("helloyou")
+// 	}
+// 	buf = bs.Bytes()
+// }
 
 func newTestDriver(t *testing.T) driver.Driver {
 	dir := "/tmp/logstore/teststore"
@@ -45,25 +42,30 @@ func newTestDriver(t *testing.T) driver.Driver {
 	assert.NoError(t, err)
 	return s
 }
-func newTestLogserviceDriver(t *testing.T) (driver.Driver, *logservice.Service) {
-	fs := vfs.NewStrictMem()
-	service, ccfg, err := logservice.NewTestService(fs)
-	assert.NoError(t, err)
-	cfg := logservicedriver.NewTestConfig(&ccfg)
-	driver := logservicedriver.NewLogServiceDriver(cfg)
-	return driver, service
-}
+
+// func newTestLogserviceDriver(t *testing.T) (driver.Driver, *logservice.Service) {
+// 	fs := vfs.NewStrictMem()
+// 	service, ccfg, err := logservice.NewTestService(fs)
+// 	assert.NoError(t, err)
+// 	cfg := logservicedriver.NewTestConfig(&ccfg)
+// 	driver := logservicedriver.NewLogServiceDriver(cfg)
+// 	return driver, service
+// }
 func TestAppendRead(t *testing.T) {
 	driver := newTestDriver(t)
 	wal := NewStore(driver)
 	defer wal.Close()
 
 	e := entry.GetBase()
-	e.SetPayload([]byte("payload"))
+	err := e.SetPayload([]byte("payload"))
+	if err != nil {
+		panic(err)
+	}
 	lsn, err := wal.Append(10, e)
 	assert.NoError(t, err)
 
-	e.WaitDone()
+	err = e.WaitDone()
+	assert.NoError(t, err)
 
 	e2, err := wal.Load(10, lsn)
 	assert.NoError(t, err)
@@ -74,56 +76,60 @@ func TestAppendRead(t *testing.T) {
 
 func mockEntry() entry.Entry {
 	e := entry.GetBase()
-	e.SetPayload([]byte(strconv.Itoa(rand.Intn(10))))
+	err := e.SetPayload([]byte(strconv.Itoa(rand.Intn(10))))
+	if err != nil {
+		panic(err)
+	}
 	// payload:=make([]byte,common.K)
 	// copy(payload,buf)
 	// e.SetPayload(payload)
 	return e
 }
-func testPerformance(t *testing.T) {
-	// driver := newTestDriver(t)
-	driver, server := newTestLogserviceDriver(t)
-	defer server.Close()
-	wal := NewStore(driver)
-	defer wal.Close()
 
-	entryCount := 50000
-	// entries := make([]entry.Entry, 0)
-	wg := sync.WaitGroup{}
-	worker, _ := ants.NewPool(100)
-	appendfn := func(i int, group uint32) func() {
-		return func() {
-			// e := entries[i]
-			e := mockEntry()
-			wal.Append(group, e)
-			// assert.NoError(t, err)
-			e.WaitDone()
-			// assert.NoError(t, e.WaitDone())
-			e.Free()
-			wg.Done()
-		}
-	}
+// func testPerformance(t *testing.T) {
+// 	// driver := newTestDriver(t)
+// 	driver, server := newTestLogserviceDriver(t)
+// 	defer server.Close()
+// 	wal := NewStore(driver)
+// 	defer wal.Close()
 
-	// t0:=time.Now()
-	// for i := 0; i < entryCount; i++ {
-	// 	e := mockEntry()
-	// 	entries = append(entries, e)
-	// }
-	// logutil.Infof("make %d entries takes %v", entryCount, time.Since(t0))
-	t0 := time.Now()
-	for i := 0; i < entryCount; i++ {
-		group := uint32(10 + rand.Intn(3))
-		wg.Add(1)
-		worker.Submit(appendfn(i, group))
-	}
-	// wg.Wait()
-	logutil.Infof("%d entries takes %v", entryCount, time.Since(t0))
-	// for i := 0; i < entryCount; i++ {
-	// 	e := entries[i]
-	// 	e.Free()
-	// }
+// 	entryCount := 50000
+// 	// entries := make([]entry.Entry, 0)
+// 	wg := sync.WaitGroup{}
+// 	worker, _ := ants.NewPool(100)
+// 	appendfn := func(i int, group uint32) func() {
+// 		return func() {
+// 			// e := entries[i]
+// 			e := mockEntry()
+// 			wal.Append(group, e)
+// 			// assert.NoError(t, err)
+// 			e.WaitDone()
+// 			// assert.NoError(t, e.WaitDone())
+// 			e.Free()
+// 			wg.Done()
+// 		}
+// 	}
 
-}
+// 	// t0:=time.Now()
+// 	// for i := 0; i < entryCount; i++ {
+// 	// 	e := mockEntry()
+// 	// 	entries = append(entries, e)
+// 	// }
+// 	// logutil.Infof("make %d entries takes %v", entryCount, time.Since(t0))
+// 	t0 := time.Now()
+// 	for i := 0; i < entryCount; i++ {
+// 		group := uint32(10 + rand.Intn(3))
+// 		wg.Add(1)
+// 		worker.Submit(appendfn(i, group))
+// 	}
+// 	// wg.Wait()
+// 	logutil.Infof("%d entries takes %v", entryCount, time.Since(t0))
+// 	// for i := 0; i < entryCount; i++ {
+// 	// 	e := entries[i]
+// 	// 	e.Free()
+// 	// }
+
+// }
 func TestWal(t *testing.T) {
 	driver := newTestDriver(t)
 	wal := NewStore(driver)
@@ -157,7 +163,8 @@ func TestWal(t *testing.T) {
 			idxes := []*Index{{LSN: entryLSN, CSN: 0, Size: 1}}
 			ckpEntry, err := wal.FuzzyCheckpoint(entryGroupID, idxes)
 			assert.NoError(t, err)
-			ckpEntry.WaitDone()
+			err = ckpEntry.WaitDone()
+			assert.NoError(t, err)
 			ckpGroup, ckpLsn := ckpEntry.GetLsn()
 			_, err = wal.Load(ckpGroup, ckpLsn)
 			assert.Equal(t, GroupCKP, ckpGroup)
@@ -197,15 +204,15 @@ func TestWal(t *testing.T) {
 		group := uint32(10 + rand.Intn(3))
 		// group := uint32(5)
 		wg.Add(1)
-		worker.Submit(appendfn(i, group))
+		_ = worker.Submit(appendfn(i, group))
 		wg.Add(1)
-		worker.Submit(readfn(i))
+		_ = worker.Submit(readfn(i))
 	}
 	wg.Wait()
 	// logutil.Infof("%d entries takes %v",entryCount,time.Since(t0))
 	for i := 0; i < entryCount; i++ {
 		wg.Add(1)
-		worker.Submit(truncatefn(i))
+		_ = worker.Submit(truncatefn(i))
 	}
 	wg.Wait()
 	for i := 0; i < entryCount; i++ {

@@ -123,7 +123,7 @@ func (info *driverInfo) getAppended() uint64 {
 func (info *driverInfo) retryAllocateAppendLsnWithTimeout(maxPendding uint64, timeout time.Duration) (lsn uint64, err error) {
 	lsn, err = info.tryAllocate(maxPendding)
 	if err == ErrTooMuchPenddings {
-		RetryWithTimeout(timeout, func() (shouldReturn bool) {
+		err = RetryWithTimeout(timeout, func() (shouldReturn bool) {
 			info.commitCond.L.Lock()
 			lsn, err = info.tryAllocate(maxPendding)
 			if err != ErrTooMuchPenddings {

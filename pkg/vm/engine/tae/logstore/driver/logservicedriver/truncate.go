@@ -16,7 +16,10 @@ func (d *LogServiceDriver) Truncate(lsn uint64) error {
 	if lsn > truncated {
 		atomic.StoreUint64(&d.truncating, lsn)
 	}
-	d.truncateQueue.Enqueue(struct{}{})
+	_, err := d.truncateQueue.Enqueue(struct{}{})
+	if err != nil {
+		panic(err)
+	}
 	return nil
 }
 

@@ -105,7 +105,10 @@ func (driver *walDriver) AppendEntry(group uint32, e LogEntry) (uint64, error) {
 		e:    e,
 		info: e.GetInfo(),
 	}
-	driver.logInfoQueue.Enqueue(ent)
+	_, err2 := driver.logInfoQueue.Enqueue(ent)
+	if err2 != nil {
+		panic(err)
+	}
 	return id, err
 }
 
