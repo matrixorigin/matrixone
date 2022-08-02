@@ -82,8 +82,18 @@ func PlusFloat[T constraints.Float](args []*vector.Vector, proc *process.Process
 	return Arith[T](args, proc, args[0].GetType(), add.NumericAddFloat[T])
 }
 func PlusDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[types.Decimal64](args, proc, args[0].GetType(), add.Decimal64VecAdd)
+	t0 := args[0].GetType()
+	t1 := args[1].GetType()
+	if t1.Scale > t0.Scale {
+		t0.Scale = t1.Scale
+	}
+	return Arith[types.Decimal64](args, proc, t0, add.Decimal64VecAdd)
 }
 func PlusDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[types.Decimal128](args, proc, args[0].GetType(), add.Decimal128VecAdd)
+	t0 := args[0].GetType()
+	t1 := args[1].GetType()
+	if t1.Scale > t0.Scale {
+		t0.Scale = t1.Scale
+	}
+	return Arith[types.Decimal128](args, proc, t0, add.Decimal128VecAdd)
 }
