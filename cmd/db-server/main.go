@@ -63,7 +63,7 @@ func createMOServer() {
 	mo = frontend.NewMOServer(address, pu)
 	if config.GlobalSystemVariables.GetEnableMetric() {
 		ieFactory := func() ie.InternalExecutor {
-			return frontend.NewIternalExecutor(pu)
+			return frontend.NewInternalExecutor(pu)
 		}
 		metric.InitMetric(ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
 	}
