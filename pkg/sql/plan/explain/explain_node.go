@@ -15,9 +15,9 @@
 package explain
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/errno"
 	"strconv"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )

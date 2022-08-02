@@ -15,10 +15,10 @@
 package explain
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/errno"
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"

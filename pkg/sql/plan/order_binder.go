@@ -16,9 +16,9 @@ package plan
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/errno"
 	"go/constant"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"

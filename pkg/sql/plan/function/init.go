@@ -16,9 +16,9 @@ package function
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/errno"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 

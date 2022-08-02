@@ -16,10 +16,10 @@ package explain
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/errno"
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"

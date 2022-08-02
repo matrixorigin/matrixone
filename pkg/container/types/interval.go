@@ -15,10 +15,10 @@
 package types
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/errno"
 	"math"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 

@@ -16,12 +16,12 @@ package types
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/errno"
 	"strconv"
 	"strings"
 	gotime "time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 

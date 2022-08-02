@@ -17,10 +17,10 @@ package batch
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/errno"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
