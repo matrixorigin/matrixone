@@ -16,12 +16,12 @@ package rpc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"runtime"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"go.uber.org/zap"

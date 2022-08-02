@@ -20,13 +20,13 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/service/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/service/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 var (

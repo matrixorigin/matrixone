@@ -15,11 +15,11 @@
 package cnservice
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"sync"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 )
 

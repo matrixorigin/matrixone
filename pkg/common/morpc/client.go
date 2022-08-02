@@ -16,12 +16,12 @@ package morpc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 )
 

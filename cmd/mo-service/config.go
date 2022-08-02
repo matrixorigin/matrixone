@@ -19,11 +19,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/service/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/service/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/service/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"os"
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 const (

@@ -16,11 +16,11 @@ package db
 
 import (
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"io"
 	"runtime"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"

@@ -18,11 +18,11 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/encoding"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"strconv"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"

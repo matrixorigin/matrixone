@@ -17,6 +17,7 @@ package frontend
 import (
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,7 +26,6 @@ import (
 	"github.com/fagongzi/goetty"
 	"github.com/fagongzi/goetty/codec"
 	"github.com/fagongzi/goetty/codec/simple"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/smartystreets/goconvey/convey"
 )
 

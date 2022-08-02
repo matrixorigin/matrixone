@@ -16,10 +16,10 @@ package main
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"os"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"

@@ -19,7 +19,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/compress"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 	"path"

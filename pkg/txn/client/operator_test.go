@@ -16,11 +16,11 @@ package client
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"testing"
 	"time"
 
 	"github.com/fagongzi/util/protoc"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"

@@ -19,13 +19,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"io"
 	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 

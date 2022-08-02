@@ -15,9 +15,9 @@
 package metric
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	prom "github.com/prometheus/client_golang/prometheus"
 )
 

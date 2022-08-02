@@ -16,8 +16,8 @@ package dnservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"

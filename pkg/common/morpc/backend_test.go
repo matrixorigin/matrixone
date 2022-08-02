@@ -17,6 +17,7 @@ package morpc
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"os"
 	"runtime/debug"
 	"sync"
@@ -25,7 +26,6 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 )

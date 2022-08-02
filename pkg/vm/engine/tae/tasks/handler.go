@@ -16,8 +16,8 @@ package tasks
 
 import (
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 )
 

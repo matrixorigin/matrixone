@@ -17,9 +17,9 @@ package txnimpl
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"

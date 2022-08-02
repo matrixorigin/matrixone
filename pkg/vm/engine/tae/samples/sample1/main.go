@@ -15,12 +15,12 @@
 package main
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"os"
 	"runtime/pprof"
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"

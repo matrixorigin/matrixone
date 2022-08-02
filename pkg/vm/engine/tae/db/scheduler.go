@@ -17,8 +17,8 @@ package db
 import (
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"

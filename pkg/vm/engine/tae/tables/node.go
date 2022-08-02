@@ -16,11 +16,11 @@ package tables
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"sync/atomic"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"

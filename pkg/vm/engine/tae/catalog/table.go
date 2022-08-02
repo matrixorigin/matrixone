@@ -17,11 +17,11 @@ package catalog
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"io"
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"

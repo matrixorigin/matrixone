@@ -15,10 +15,10 @@
 package checkpoint
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"

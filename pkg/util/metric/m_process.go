@@ -16,9 +16,9 @@ package metric
 
 import (
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"os"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/shirou/gopsutil/v3/process"
 )

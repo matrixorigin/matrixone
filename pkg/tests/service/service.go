@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/service/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/service/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/service/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"strings"
 	"sync"
 	"testing"
@@ -27,7 +28,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 

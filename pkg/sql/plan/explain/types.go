@@ -15,9 +15,8 @@
 package explain
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type ExplainQuery interface {

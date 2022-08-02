@@ -16,11 +16,11 @@ package frontend
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"net"
 	"sync"
 
 	"github.com/fagongzi/goetty"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 // Response Categories

@@ -17,11 +17,11 @@ package db
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"os"
 	"path"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"

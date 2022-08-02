@@ -16,11 +16,11 @@ package ops
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"sync/atomic"
 
 	"errors"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 	iw "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"

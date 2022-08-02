@@ -16,10 +16,10 @@ package bootstrap
 
 import (
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/mohae/deepcopy"
 	"go.uber.org/zap"

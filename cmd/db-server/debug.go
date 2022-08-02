@@ -16,6 +16,7 @@ package main
 
 import (
 	"flag"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -23,7 +24,6 @@ import (
 	"runtime/pprof"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )

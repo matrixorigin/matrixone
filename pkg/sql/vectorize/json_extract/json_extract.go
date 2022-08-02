@@ -17,7 +17,7 @@ package json_extract
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 )
 
 var (

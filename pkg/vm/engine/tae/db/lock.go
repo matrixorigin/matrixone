@@ -15,11 +15,11 @@
 package db
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"io"
 	"os"
 	"syscall"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 

@@ -17,7 +17,7 @@ package segmentio
 import (
 	"bytes"
 	"encoding/binary"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io"
 )
