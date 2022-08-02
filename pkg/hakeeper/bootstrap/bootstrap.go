@@ -132,6 +132,8 @@ func (bm *Manager) bootstrapDN(alloc util.IDAllocator, dn pb.DNState) (commands 
 					UUID:      dnStores[i],
 					ShardID:   dnRecord.ShardID,
 					ReplicaID: replicaID,
+
+					LogShardID: dnRecord.LogShardID,
 				},
 				ChangeType: pb.StartReplica,
 			},
