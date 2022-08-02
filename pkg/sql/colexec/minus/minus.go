@@ -36,8 +36,8 @@ func Prepare(_ *process.Process, argument interface{}) error {
 }
 
 // Call is the execute method of minus operator
-// it built a hash table for right relation
-// use values from left relation to probe the hash table
+// it built a hash table for right relation first.
+// use values from left relation to probe and update the hash table.
 // and preserve values that do not exist in the hash table.
 func Call(idx int, proc *process.Process, argument interface{}) (bool, error) {
 	var err error
