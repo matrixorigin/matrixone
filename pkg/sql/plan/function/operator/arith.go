@@ -15,9 +15,9 @@
 package operator
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vectorize/div"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/mod"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/mult"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/newdiv"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/sub"
 	"golang.org/x/exp/constraints"
 
@@ -165,25 +165,25 @@ func MultDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vecto
 
 // Division operation
 func DivFloat[T constraints.Float](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T, T](args, proc, args[0].GetType(), newdiv.NumericDivFloat[T])
+	return Arith[T, T](args, proc, args[0].GetType(), div.NumericDivFloat[T])
 }
 func DivDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv := args[0]
 	resultScale := lv.Typ.Scale
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: resultScale}
-	return Arith[types.Decimal64, types.Decimal128](args, proc, resultTyp, newdiv.Decimal64VecDiv)
+	return Arith[types.Decimal64, types.Decimal128](args, proc, resultTyp, div.Decimal64VecDiv)
 }
 func DivDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv := args[0]
 	resultScale := lv.Typ.Scale
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: resultScale}
-	return Arith[types.Decimal128, types.Decimal128](args, proc, resultTyp, newdiv.Decimal128VecDiv)
+	return Arith[types.Decimal128, types.Decimal128](args, proc, resultTyp, div.Decimal128VecDiv)
 }
 
 // Integer division operation
 func IntegerDivFloat[T constraints.Float](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	resultTyp := types.T_int64.ToType()
-	return Arith[T, int64](args, proc, resultTyp, newdiv.NumericIntegerDivFloat[T])
+	return Arith[T, int64](args, proc, resultTyp, div.NumericIntegerDivFloat[T])
 }
 
 // mod operation
@@ -192,4 +192,7 @@ func ModUint[T constraints.Unsigned](args []*vector.Vector, proc *process.Proces
 }
 func ModInt[T constraints.Signed](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return Arith[T, T](args, proc, args[0].GetType(), mod.NumericModSigned[T])
+}
+func ModFloat[T constraints.Float](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[T, T](args, proc, args[0].GetType(), mod.NumericModFloat[T])
 }

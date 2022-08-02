@@ -18,7 +18,7 @@ package mod
 #include "mo.h"
 
 #cgo CFLAGS: -I../../../cgo
-#cgo LDFLAGS: -L../../../cgo -lmo
+#cgo LDFLAGS: -L../../../cgo -lmo -lm
 */
 import "C"
 import (
@@ -70,20 +70,20 @@ func NumericModUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error
 	return nil
 }
 
-//func NumericModFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
-//	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
-//	flag := 0
-//	if xs.IsScalar() {
-//		flag |= LEFT_IS_SCALAR
-//	}
-//	if ys.IsScalar() {
-//		flag |= RIGHT_IS_SCALAR
-//	}
-//
-//	rc := C.Float_VecMod(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
-//		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
-//	if rc != 0 {
-//		return moerr.NewError(moerr.OUT_OF_RANGE, "float mod zero modulus")
-//	}
-//	return nil
-//}
+func NumericModFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
+	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	flag := 0
+	if xs.IsScalar() {
+		flag |= LEFT_IS_SCALAR
+	}
+	if ys.IsScalar() {
+		flag |= RIGHT_IS_SCALAR
+	}
+
+	rc := C.Float_VecMod(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
+	if rc != 0 {
+		return moerr.NewError(moerr.OUT_OF_RANGE, "float mod zero modulus")
+	}
+	return nil
+}

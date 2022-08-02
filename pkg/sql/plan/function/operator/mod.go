@@ -17,12 +17,8 @@ package operator
 import (
 	"math"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
 
@@ -143,119 +139,119 @@ var ErrModByZero = errors.New(errno.SyntaxErrororAccessRuleViolation, "zero modu
 //	return vec, nil
 //}
 
-func ModFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lv, rv := vectors[0], vectors[1]
-	lvs, rvs := vector.MustTCols[T](lv), vector.MustTCols[T](rv)
-	rtl := lv.Typ.Oid.FixedLength()
-
-	if lv.IsScalarNull() || rv.IsScalarNull() {
-		return proc.AllocScalarNullVector(lv.Typ), nil
-	}
-
-	switch {
-	case lv.IsScalar() && rv.IsScalar():
-		vec := proc.AllocScalarVector(lv.Typ)
-		rs := make([]T, 1)
-		nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-		if !nulls.Any(rv.Nsp) {
-			for _, v := range rvs {
-				if v == 0 {
-					return nil, ErrModByZero
-				}
-			}
-			vector.SetCol(vec, FloatMod(lvs, rvs, rs))
-			return vec, nil
-		}
-		sels := process.GetSels(proc)
-		defer process.PutSels(sels, proc)
-		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
-			if nulls.Contains(rv.Nsp, i) {
-				continue
-			}
-			if rvs[i] == 0 {
-				return nil, ErrModByZero
-			}
-			sels = append(sels, int64(i))
-		}
-		vector.SetCol(vec, FloatModSels(lvs, rvs, rs, sels))
-		return vec, nil
-	case lv.IsScalar() && !rv.IsScalar():
-		if !nulls.Any(rv.Nsp) {
-			for _, v := range rvs {
-				if v == 0 {
-					return nil, ErrModByZero
-				}
-			}
-			vec, err := proc.AllocVector(lv.Typ, int64(rtl)*int64(len(rvs)))
-			if err != nil {
-				return nil, err
-			}
-			rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
-			nulls.Set(vec.Nsp, rv.Nsp)
-			vector.SetCol(vec, FloatModScalar(lvs[0], rvs, rs))
-			return vec, nil
-		}
-		sels := process.GetSels(proc)
-		defer process.PutSels(sels, proc)
-		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
-			if nulls.Contains(rv.Nsp, i) {
-				continue
-			}
-			if rvs[i] == 0 {
-				return nil, ErrModByZero
-			}
-			sels = append(sels, int64(i))
-		}
-		vec, err := proc.AllocVector(lv.Typ, int64(rtl)*int64(len(rvs)))
-		if err != nil {
-			return nil, err
-		}
-		rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
-		nulls.Set(vec.Nsp, rv.Nsp)
-		vector.SetCol(vec, FloatModByScalarSels(lvs[0], rvs, rs, sels))
-		return vec, nil
-	case !lv.IsScalar() && rv.IsScalar():
-		if rvs[0] == 0 {
-			return nil, ErrModByZero
-		}
-		vec, err := proc.AllocVector(lv.Typ, int64(rtl)*int64(len(lvs)))
-		if err != nil {
-			return nil, err
-		}
-		rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
-		nulls.Set(vec.Nsp, lv.Nsp)
-		vector.SetCol(vec, FloatModByScalar(rvs[0], lvs, rs))
-		return vec, nil
-	}
-	vec, err := proc.AllocVector(lv.Typ, int64(rtl)*int64(len(lvs)))
-	if err != nil {
-		return nil, err
-	}
-	rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
-	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	if !nulls.Any(rv.Nsp) {
-		for _, v := range rvs {
-			if v == 0 {
-				return nil, ErrModByZero
-			}
-		}
-		vector.SetCol(vec, FloatMod(lvs, rvs, rs))
-		return vec, nil
-	}
-	sels := process.GetSels(proc)
-	defer process.PutSels(sels, proc)
-	for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
-		if nulls.Contains(rv.Nsp, i) {
-			continue
-		}
-		if rvs[i] == 0 {
-			return nil, ErrModByZero
-		}
-		sels = append(sels, int64(i))
-	}
-	vector.SetCol(vec, FloatModSels(lvs, rvs, rs, sels))
-	return vec, nil
-}
+//func ModFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+//	lv, rv := vectors[0], vectors[1]
+//	lvs, rvs := vector.MustTCols[T](lv), vector.MustTCols[T](rv)
+//	rtl := lv.Typ.Oid.FixedLength()
+//
+//	if lv.IsScalarNull() || rv.IsScalarNull() {
+//		return proc.AllocScalarNullVector(lv.Typ), nil
+//	}
+//
+//	switch {
+//	case lv.IsScalar() && rv.IsScalar():
+//		vec := proc.AllocScalarVector(lv.Typ)
+//		rs := make([]T, 1)
+//		nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+//		if !nulls.Any(rv.Nsp) {
+//			for _, v := range rvs {
+//				if v == 0 {
+//					return nil, ErrModByZero
+//				}
+//			}
+//			vector.SetCol(vec, FloatMod(lvs, rvs, rs))
+//			return vec, nil
+//		}
+//		sels := process.GetSels(proc)
+//		defer process.PutSels(sels, proc)
+//		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+//			if nulls.Contains(rv.Nsp, i) {
+//				continue
+//			}
+//			if rvs[i] == 0 {
+//				return nil, ErrModByZero
+//			}
+//			sels = append(sels, int64(i))
+//		}
+//		vector.SetCol(vec, FloatModSels(lvs, rvs, rs, sels))
+//		return vec, nil
+//	case lv.IsScalar() && !rv.IsScalar():
+//		if !nulls.Any(rv.Nsp) {
+//			for _, v := range rvs {
+//				if v == 0 {
+//					return nil, ErrModByZero
+//				}
+//			}
+//			vec, err := proc.AllocVector(lv.Typ, int64(rtl)*int64(len(rvs)))
+//			if err != nil {
+//				return nil, err
+//			}
+//			rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
+//			nulls.Set(vec.Nsp, rv.Nsp)
+//			vector.SetCol(vec, FloatModScalar(lvs[0], rvs, rs))
+//			return vec, nil
+//		}
+//		sels := process.GetSels(proc)
+//		defer process.PutSels(sels, proc)
+//		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+//			if nulls.Contains(rv.Nsp, i) {
+//				continue
+//			}
+//			if rvs[i] == 0 {
+//				return nil, ErrModByZero
+//			}
+//			sels = append(sels, int64(i))
+//		}
+//		vec, err := proc.AllocVector(lv.Typ, int64(rtl)*int64(len(rvs)))
+//		if err != nil {
+//			return nil, err
+//		}
+//		rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
+//		nulls.Set(vec.Nsp, rv.Nsp)
+//		vector.SetCol(vec, FloatModByScalarSels(lvs[0], rvs, rs, sels))
+//		return vec, nil
+//	case !lv.IsScalar() && rv.IsScalar():
+//		if rvs[0] == 0 {
+//			return nil, ErrModByZero
+//		}
+//		vec, err := proc.AllocVector(lv.Typ, int64(rtl)*int64(len(lvs)))
+//		if err != nil {
+//			return nil, err
+//		}
+//		rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
+//		nulls.Set(vec.Nsp, lv.Nsp)
+//		vector.SetCol(vec, FloatModByScalar(rvs[0], lvs, rs))
+//		return vec, nil
+//	}
+//	vec, err := proc.AllocVector(lv.Typ, int64(rtl)*int64(len(lvs)))
+//	if err != nil {
+//		return nil, err
+//	}
+//	rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
+//	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+//	if !nulls.Any(rv.Nsp) {
+//		for _, v := range rvs {
+//			if v == 0 {
+//				return nil, ErrModByZero
+//			}
+//		}
+//		vector.SetCol(vec, FloatMod(lvs, rvs, rs))
+//		return vec, nil
+//	}
+//	sels := process.GetSels(proc)
+//	defer process.PutSels(sels, proc)
+//	for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+//		if nulls.Contains(rv.Nsp, i) {
+//			continue
+//		}
+//		if rvs[i] == 0 {
+//			return nil, ErrModByZero
+//		}
+//		sels = append(sels, int64(i))
+//	}
+//	vector.SetCol(vec, FloatModSels(lvs, rvs, rs, sels))
+//	return vec, nil
+//}
 
 var (
 	Int8Mod                = IntMod[int8]

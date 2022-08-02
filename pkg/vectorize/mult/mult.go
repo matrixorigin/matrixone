@@ -18,7 +18,7 @@ package mult
 #include "mo.h"
 
 #cgo CFLAGS: -I../../../cgo
-#cgo LDFLAGS: -L../../../cgo -lmo
+#cgo LDFLAGS: -L../../../cgo -lmo -lm
 */
 import "C"
 
