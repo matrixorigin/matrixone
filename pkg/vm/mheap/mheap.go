@@ -17,6 +17,8 @@
 package mheap
 
 import (
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
@@ -25,6 +27,11 @@ func New(gm *guest.Mmu) *Mheap {
 	return &Mheap{
 		Gm: gm,
 		Mp: mempool.New(),
+		pool: &sync.Pool{
+			New: func() any {
+				return make([]int64, 0, 16)
+			},
+		},
 	}
 }
 
@@ -57,6 +64,14 @@ func Grow(m *Mheap, old []byte, size int64) ([]byte, error) {
 	return data[:size], nil
 }
 
+func (m *Mheap) Decrease(size int64) {
+	m.Gm.Free(size)
+}
+
+func (m *Mheap) Increase(size int64) error {
+	return m.Gm.Alloc(size)
+}
+
 func (m *Mheap) Size() int64 {
 	return m.Gm.Size()
 }
@@ -87,18 +102,9 @@ func (m *Mheap) Grow(old []byte, size int64) ([]byte, error) {
 }
 
 func (m *Mheap) PutSels(sels []int64) {
-	m.Lock()
-	defer m.Unlock()
-	m.ss = append(m.ss, sels)
+	m.pool.Put(sels)
 }
 
 func (m *Mheap) GetSels() []int64 {
-	m.Lock()
-	defer m.Unlock()
-	if len(m.ss) == 0 {
-		return make([]int64, 0, 16)
-	}
-	sels := m.ss[0]
-	m.ss = m.ss[1:]
-	return sels[:0]
+	return m.pool.Get().([]int64)
 }
