@@ -111,6 +111,58 @@ func TestDec128(t *testing.T) {
 	}
 }
 
+func TestDec64OfOppNumber(t *testing.T) {
+	as := make([]int64, 10)
+	bs := make([]int64, 10)
+	cs := make([]int64, 10)
+	for i := 0; i < 10; i++ {
+		as[i] = int64(-i)
+		bs[i] = int64(i)
+	}
+
+	av := testutil.MakeDecimal64Vector(as, nil, types.T_decimal64.ToType())
+	bv := testutil.MakeDecimal64Vector(bs, nil, types.T_decimal64.ToType())
+	cv := testutil.MakeDecimal64Vector(cs, nil, types.T_decimal64.ToType())
+
+	err := Decimal64VecAdd(av, bv, cv)
+	if err != nil {
+		t.Fatalf("decimal64 add failed")
+	}
+
+	res := vector.MustTCols[types.Decimal64](cv)
+	for i := 0; i < 10; i++ {
+		if !res[i].Eq(types.Decimal64_FromInt64(as[i] + bs[i])) {
+			t.Fatalf("decimal64 add wrong result")
+		}
+	}
+}
+
+func TestDec128OfOppNumber(t *testing.T) {
+	as := make([]int64, 10)
+	bs := make([]int64, 10)
+	cs := make([]int64, 10)
+	for i := 0; i < 10; i++ {
+		as[i] = int64(i)
+		bs[i] = int64(-i)
+	}
+
+	av := testutil.MakeDecimal128Vector(as, nil, types.T_decimal128.ToType())
+	bv := testutil.MakeDecimal128Vector(bs, nil, types.T_decimal128.ToType())
+	cv := testutil.MakeDecimal128Vector(cs, nil, types.T_decimal128.ToType())
+
+	err := Decimal128VecAdd(av, bv, cv)
+	if err != nil {
+		t.Fatalf("decimal128 add failed")
+	}
+
+	res := vector.MustTCols[types.Decimal128](cv)
+	for i := 0; i < 10; i++ {
+		if !res[i].Eq(types.Decimal128_FromInt64(as[i] + bs[i])) {
+			t.Fatalf("decimal128 add wrong result")
+		}
+	}
+}
+
 func BenchmarkAddI32(b *testing.B) {
 	as := make([]int32, 8192)
 	bs := make([]int32, 8192)

@@ -585,27 +585,42 @@ int32_t Decimal128_DivInt64(int64_t *r, int64_t *a, int64_t b)
 static inline int32_t Decimal64_AddNoCheck(int64_t *r, int64_t *a, int64_t *b) 
 {
     decDouble tmp;
-    decDoubleAdd(&tmp, DecDoublePtr(a), DecDoublePtr(b), NULL);
-    decDoubleReduce(DecDoublePtr(r), &tmp, NULL);
+    DECLARE_DEC64_CTXT;
+    decDoubleAdd(&tmp, DecDoublePtr(a), DecDoublePtr(b), &_fn_dc);
+    decDoubleReduce(DecDoublePtr(r), &tmp, &_fn_dc);
+//    CHECK_OFUF;
     return RC_SUCCESS;
 }
 
 static inline int32_t Decimal128_AddNoCheck(int64_t *r, int64_t *a, int64_t *b) 
 {
     decQuad tmp;
-    decQuadAdd(&tmp, DecQuadPtr(a), DecQuadPtr(b), NULL);
-    decQuadReduce(DecQuadPtr(r), &tmp, NULL);
+    DECLARE_DEC128_CTXT;
+    decQuadAdd(&tmp, DecQuadPtr(a), DecQuadPtr(b), &_fn_dc);
+    decQuadReduce(DecQuadPtr(r), &tmp, &_fn_dc);
+//    CHECK_OFUF;
     return RC_SUCCESS;
 }
 
-//int32_t Decimal64_MulNoCheck(int64_t *r, int64_t *a, int64_t *b)
-//{
-//    decDouble tmp;
-//    decDoubleMultiply(&tmp, DecDoublePtr(a), DecDoublePtr(b), NULL);
-//    decDoubleReduce(DecDoublePtr(r), &tmp, NULL);
-//    return RC_SUCCESS;
-//}
+static inline int32_t Decimal64_SubNoCheck(int64_t *r, int64_t *a, int64_t *b)
+{
+    decDouble tmp;
+    DECLARE_DEC64_CTXT;
+    decDoubleSubtract(&tmp, DecDoublePtr(a), DecDoublePtr(b), &_fn_dc);
+    decDoubleReduce(DecDoublePtr(r), &tmp, &_fn_dc);
+//    CHECK_OFUF;
+    return RC_SUCCESS;
+}
 
+static inline int32_t Decimal128_SubNoCheck(int64_t *r, int64_t *a, int64_t *b)
+{
+    decQuad tmp;
+    DECLARE_DEC128_CTXT;
+    decQuadSubtract(&tmp, DecQuadPtr(a), DecQuadPtr(b), &_fn_dc);
+    decQuadReduce(DecQuadPtr(r), &tmp, &_fn_dc);
+//    CHECK_OFUF;
+    return RC_SUCCESS;
+}
 
 int32_t Decimal128_MulNoCheck(int64_t *r, int64_t *a, int64_t *b)
 {
@@ -714,9 +729,9 @@ DEF_DECIMAL_ARITH(64, Add, AddNoCheck)
 
 DEF_DECIMAL_ARITH(128, Add, AddNoCheck)
 
-DEF_DECIMAL_ARITH(64, Sub, Sub)
+DEF_DECIMAL_ARITH(64, Sub, SubNoCheck)
 
-DEF_DECIMAL_ARITH(128, Sub, Sub)
+DEF_DECIMAL_ARITH(128, Sub, SubNoCheck)
 
 
 

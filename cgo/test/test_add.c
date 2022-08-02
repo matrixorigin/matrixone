@@ -16,6 +16,7 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <limits.h>
 #include "../mo.h"
 
 int test_addi32() {
@@ -30,6 +31,20 @@ int test_addi32() {
     int32_t rc = SignedInt_VecAdd(r, a, b, 8192, NULL, 0, 4);
     return rc;
 }
+
+int test_adddec64() {
+    int64_t r[8192];
+    int64_t a[8192];
+    int64_t b[8192];
+    for (int i = 0; i < 8192; i++) {
+        a[i] = -i;
+        b[i] = i;
+    }
+
+    int32_t rc = Decimal64_VecAdd(r, a, b, 8192, NULL, 0);
+    return rc;
+}
+
 
 int test_subdec64() {
     int64_t r[8192];
@@ -63,6 +78,10 @@ int test_divedec64(){
 
 int main() {
 //    test_addi32();
-//    test_subdec64();
-     test_divedec64();
+     //test_subdec64();
+     //test_divedec64();
+     //test_adddec64();
+     printf("%d", INT_MAX);
+     __int128 x = 1;
+     printf("%lld", x);
 }

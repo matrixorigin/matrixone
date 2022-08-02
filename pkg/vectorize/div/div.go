@@ -14,6 +14,14 @@
 
 package div
 
+/*
+#include "mo.h"
+
+#cgo CFLAGS: -I../../../cgo
+#cgo LDFLAGS: -L../../../cgo -lmo
+*/
+import "C"
+
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"golang.org/x/exp/constraints"

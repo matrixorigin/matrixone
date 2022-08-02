@@ -117,5 +117,10 @@ int32_t UnsignedInt_VecMul(void *r, void *a, void *b, uint64_t n, uint64_t *null
 int32_t Float_VecMul(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
 
 int32_t Float_VecDiv(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
+int32_t Float_VecIntegerDiv(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
+
+int32_t SignedInt_VecMod(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
+int32_t UnsignedInt_VecMod(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
+int32_t Float_VecMod(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
 
 #endif /* _MO_H_ */

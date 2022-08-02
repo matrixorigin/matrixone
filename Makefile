@@ -97,7 +97,7 @@ pb: generate-pb fmt
 ###############################################################################
 
 RACE_OPT := 
-CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo"
+CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo -lm"
 GO=$(CGO_OPTS) $(GOBIN)
 GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_VERSION)'"
 

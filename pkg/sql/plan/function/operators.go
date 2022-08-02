@@ -2385,7 +2385,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float32, types.T_float32},
 				ReturnTyp: types.T_int64,
-				Fn:        operator.IntegerDiv[float32],
+				Fn:        operator.IntegerDivFloat[float32],
 			},
 			{
 				Index:     1,
@@ -2393,7 +2393,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float64, types.T_float64},
 				ReturnTyp: types.T_int64,
-				Fn:        operator.IntegerDiv[float64],
+				Fn:        operator.IntegerDivFloat[float64],
 			},
 		},
 	},
@@ -2408,7 +2408,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint8, types.T_uint8},
 				ReturnTyp: types.T_uint8,
-				Fn:        operator.ModInt[uint8],
+				Fn:        operator.ModUint[uint8],
 			},
 			{
 				Index:     1,
@@ -2416,7 +2416,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint16, types.T_uint16},
 				ReturnTyp: types.T_uint16,
-				Fn:        operator.ModInt[uint16],
+				Fn:        operator.ModUint[uint16],
 			},
 			{
 				Index:     2,
@@ -2424,7 +2424,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint32, types.T_uint32},
 				ReturnTyp: types.T_uint32,
-				Fn:        operator.ModInt[uint32],
+				Fn:        operator.ModUint[uint32],
 			},
 			{
 				Index:     3,
@@ -2432,7 +2432,7 @@ var operators = map[int]Functions{
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint64, types.T_uint64},
 				ReturnTyp: types.T_uint64,
-				Fn:        operator.ModInt[uint64],
+				Fn:        operator.ModUint[uint64],
 			},
 			{
 				Index:     4,
