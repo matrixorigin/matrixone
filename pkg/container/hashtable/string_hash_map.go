@@ -16,6 +16,9 @@ package hashtable
 
 import (
 	"errors"
+	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type StringRef struct {
@@ -39,16 +42,29 @@ type StringHashMap struct {
 	//confCnt     uint64
 }
 
-func (ht *StringHashMap) Init() {
+var strCellSize int64
+
+func init() {
+	strCellSize = int64(unsafe.Sizeof(StringHashMapCell{}))
+}
+
+func (ht *StringHashMap) Free(m *mheap.Mheap) {
+	m.Decrease(strCellSize * int64(ht.cellCnt))
+}
+
+func (ht *StringHashMap) Init(m *mheap.Mheap) error {
 	ht.cellCntBits = kInitialCellCntBits
 	ht.cellCnt = kInitialCellCnt
 	ht.elemCnt = 0
 	ht.maxElemCnt = kInitialCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	ht.cells = make([]StringHashMapCell, kInitialCellCnt)
+	return m.Increase(kInitialCellCnt * strCellSize)
 }
 
-func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, values []uint64) {
-	ht.resizeOnDemand(uint64(len(keys)))
+func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, values []uint64, m *mheap.Mheap) error {
+	if err := ht.resizeOnDemand(uint64(len(keys)), m); err != nil {
+		return err
+	}
 
 	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
@@ -61,8 +77,10 @@ func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, va
 		}
 		values[i] = cell.Mapped
 	}
+	return nil
 }
 
+/*
 func (ht *StringHashMap) InsertString24Batch(states [][3]uint64, keys [][3]uint64, values []uint64) {
 	ht.resizeOnDemand(uint64(len(keys)))
 
@@ -124,9 +142,12 @@ func (ht *StringHashMap) InsertHashStateBatch(states [][3]uint64, values []uint6
 		values[i] = cell.Mapped
 	}
 }
+*/
 
-func (ht *StringHashMap) InsertStringBatchWithRing(zValues []int64, states [][3]uint64, keys [][]byte, values []uint64) {
-	ht.resizeOnDemand(uint64(len(keys)))
+func (ht *StringHashMap) InsertStringBatchWithRing(zValues []int64, states [][3]uint64, keys [][]byte, values []uint64, m *mheap.Mheap) error {
+	if err := ht.resizeOnDemand(uint64(len(keys)), m); err != nil {
+		return err
+	}
 
 	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
@@ -143,8 +164,10 @@ func (ht *StringHashMap) InsertStringBatchWithRing(zValues []int64, states [][3]
 		}
 		values[i] = cell.Mapped
 	}
+	return nil
 }
 
+/*
 func (ht *StringHashMap) InsertString24BatchWithRing(zValues []int64, states [][3]uint64, keys [][3]uint64, values []uint64) {
 	ht.resizeOnDemand(uint64(len(keys)))
 
@@ -222,6 +245,7 @@ func (ht *StringHashMap) InsertHashStateBatchWithRing(zValues []int64, states []
 		values[i] = cell.Mapped
 	}
 }
+*/
 
 func (ht *StringHashMap) FindStringBatch(states [][3]uint64, keys [][]byte, values []uint64) {
 	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
@@ -305,10 +329,10 @@ func (ht *StringHashMap) findEmptyCell(state *[3]uint64) *StringHashMapCell {
 	return nil
 }
 
-func (ht *StringHashMap) resizeOnDemand(n uint64) {
+func (ht *StringHashMap) resizeOnDemand(n uint64, m *mheap.Mheap) error {
 	targetCnt := ht.elemCnt + n
 	if targetCnt <= ht.maxElemCnt {
-		return
+		return nil
 	}
 
 	newCellCntBits := ht.cellCntBits + 2
@@ -326,8 +350,10 @@ func (ht *StringHashMap) resizeOnDemand(n uint64) {
 	ht.cellCntBits = newCellCntBits
 	ht.cellCnt = newCellCnt
 	ht.maxElemCnt = newMaxElemCnt
+	if err := m.Increase(int64(newCellCnt-oldCellCnt) * strCellSize); err != nil {
+		return err
+	}
 	ht.cells = make([]StringHashMapCell, newCellCnt)
-
 	for i := uint64(0); i < oldCellCnt; i++ {
 		cell := &oldCells[i]
 		if cell.Mapped != 0 {
@@ -335,6 +361,7 @@ func (ht *StringHashMap) resizeOnDemand(n uint64) {
 			*newCell = *cell
 		}
 	}
+	return nil
 }
 
 func (ht *StringHashMap) Cardinality() uint64 {

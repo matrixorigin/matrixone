@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 func init() {
@@ -34,25 +35,35 @@ func init() {
 	}
 }
 
-func NewStrMap(hasNull bool) *StrHashMap {
+func NewStrMap(hasNull bool, ibucket, nbucket uint64, m *mheap.Mheap) (*StrHashMap, error) {
 	mp := &hashtable.StringHashMap{}
-	mp.Init()
+	if err := mp.Init(m); err != nil {
+		return nil, err
+	}
 	return &StrHashMap{
+		m:             m,
 		hashMap:       mp,
 		hasNull:       hasNull,
+		ibucket:       ibucket,
+		nbucket:       nbucket,
 		values:        make([]uint64, UnitLimit),
 		zValues:       make([]int64, UnitLimit),
 		keys:          make([][]byte, UnitLimit),
 		strHashStates: make([][3]uint64, UnitLimit),
+	}, nil
+}
+
+func (m *StrHashMap) NewIterator() Iterator {
+	return &strHashmapIterator{
+		mp:      m,
+		m:       m.m,
+		ibucket: m.ibucket,
+		nbucket: m.nbucket,
 	}
 }
 
-func (m *StrHashMap) NewIterator(ibucket, nbucket uint64) Iterator {
-	return &strHashmapIterator{
-		mp:      m,
-		ibucket: ibucket,
-		nbucket: nbucket,
-	}
+func (m *StrHashMap) Free() {
+	m.hashMap.Free(m.m)
 }
 
 func (m *StrHashMap) GroupCount() uint64 {
@@ -73,7 +84,7 @@ func (m *StrHashMap) Cardinality() uint64 {
 
 // InsertValue insert a value, return true if it is new, otherwise false
 // never handle null
-func (m *StrHashMap) InsertValue(val any) bool {
+func (m *StrHashMap) InsertValue(val any) (bool, error) {
 	defer func() { m.keys[0] = m.keys[0][:0] }()
 	if m.hasNull {
 		m.keys[0] = append(m.keys[0], byte(0))
@@ -115,24 +126,28 @@ func (m *StrHashMap) InsertValue(val any) bool {
 	if l := len(m.keys[0]); l < 16 {
 		m.keys[0] = append(m.keys[0], hashtable.StrKeyPadding[l:]...)
 	}
-	m.hashMap.InsertStringBatch(m.strHashStates, m.keys[:1], m.values[:1])
+	if err := m.hashMap.InsertStringBatch(m.strHashStates, m.keys[:1], m.values[:1], m.m); err != nil {
+		return false, err
+	}
 	if m.values[0] > m.rows {
 		m.rows++
-		return true
+		return true, nil
 	}
-	return false
+	return false, nil
 }
 
 // Insert a row from multiple columns into the hashmap, return true if it is new, otherwise false
-func (m *StrHashMap) Insert(vecs []*vector.Vector, row int) bool {
+func (m *StrHashMap) Insert(vecs []*vector.Vector, row int) (bool, error) {
 	defer func() { m.keys[0] = m.keys[0][:0] }()
 	m.encodeHashKeys(vecs, row, 1)
-	m.hashMap.InsertStringBatch(m.strHashStates, m.keys[:1], m.values[:1])
+	if err := m.hashMap.InsertStringBatch(m.strHashStates, m.keys[:1], m.values[:1], m.m); err != nil {
+		return false, err
+	}
 	if m.values[0] > m.rows {
 		m.rows++
-		return true
+		return true, nil
 	}
-	return false
+	return false, nil
 }
 
 func (m *StrHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
