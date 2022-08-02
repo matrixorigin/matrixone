@@ -971,6 +971,9 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_float64:
 		originString := astExpr.String()
+		if typ != nil && (typ.Id == plan.Type_DECIMAL || typ.Id == plan.Type_DECIMAL64 || typ.Id == plan.Type_DECIMAL128) {
+			return returnDecimalExpr(originString)
+		}
 		if !strings.Contains(originString, "e") {
 			expr, err := returnDecimalExpr(originString)
 			if err == nil {
@@ -981,9 +984,6 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 		if !ok {
 			return returnDecimalExpr(originString)
 		}
-		//if astExpr.Negative() {
-		//	floatValue = -floatValue
-		//}
 		return &Expr{
 			Expr: &plan.Expr_C{
 				C: &Const{
@@ -1004,8 +1004,25 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_bit:
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_char:
-		stringValue := constant.StringVal(astExpr.Value)
-		return getStringExpr(stringValue), nil
+		if typ != nil && typ.Id == plan.Type_TIMESTAMP {
+			val, err := types.ParseTimestamp(astExpr.String(), typ.Precision)
+			if err != nil {
+				return nil, err
+			}
+			return &Expr{
+				Expr: &plan.Expr_C{
+					C: &Const{
+						Isnull: false,
+						Value: &plan.Const_Timestampval{
+							Timestampval: int64(val),
+						},
+					},
+				},
+				Typ: typ,
+			}, nil
+		}
+		expr := getStringExpr(astExpr.String())
+		return expr, nil
 	default:
 		return nil, errors.New("", fmt.Sprintf("unsupport value: %v", astExpr.Value))
 	}

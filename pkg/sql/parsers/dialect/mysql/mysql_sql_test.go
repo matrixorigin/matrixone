@@ -26,7 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "insert into t1 values(), ()",
+		input: "insert into t2 values (1.7156e-1, 3)",
 	}
 )
 
