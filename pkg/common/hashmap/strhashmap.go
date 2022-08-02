@@ -15,12 +15,12 @@
 package hashmap
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 )
 
 func init() {

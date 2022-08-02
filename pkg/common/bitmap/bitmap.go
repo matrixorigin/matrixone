@@ -17,10 +17,10 @@ package bitmap
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 	"math/bits"
 
 	stdencoding "encoding"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 )
 
 //

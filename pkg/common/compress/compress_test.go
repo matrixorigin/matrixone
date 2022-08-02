@@ -16,10 +16,9 @@ package compress
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 	"log"
 	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 
 	"github.com/pierrec/lz4"
 )

@@ -19,10 +19,9 @@ import (
 	goErrors "errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/defines"
+	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 	"github.com/matrixorigin/matrixone/pkg/common/errno"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
-
 	"os"
 	"runtime/pprof"
 	"sort"

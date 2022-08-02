@@ -17,9 +17,9 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 	"github.com/matrixorigin/matrixone/pkg/common/errno"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"go/constant"
 	"math"
 	"strconv"

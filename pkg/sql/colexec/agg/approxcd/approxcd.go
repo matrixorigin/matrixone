@@ -16,8 +16,8 @@ package approxcd
 
 import (
 	hll "github.com/axiomhq/hyperloglog"
+	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 )
 
 func ReturnType(_ []types.Type) types.Type {

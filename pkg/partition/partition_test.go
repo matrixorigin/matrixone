@@ -15,11 +15,11 @@
 package partition
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"

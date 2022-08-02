@@ -15,7 +15,7 @@
 package operator
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 	"testing"
 	"time"
 

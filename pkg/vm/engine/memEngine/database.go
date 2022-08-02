@@ -17,8 +17,8 @@ package memEngine
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/meta"
 )

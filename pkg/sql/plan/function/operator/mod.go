@@ -15,12 +15,12 @@
 package operator
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 	"github.com/matrixorigin/matrixone/pkg/common/errno"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
