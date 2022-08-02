@@ -22,26 +22,26 @@ import (
 )
 
 type Table[
-	PrimaryKey Ordered[PrimaryKey],
-	Attrs Attributes[PrimaryKey],
+	K Ordered[K],
+	R Row[K],
 ] struct {
 	sync.Mutex
-	Rows *btree.Generic[*Row[PrimaryKey, Attrs]]
+	Rows *btree.Generic[*PhysicalRow[K, R]]
 	//TODO unique index
 	//TODO indexes
 	//TODO foreign keys
 }
 
-type Attributes[PrimaryKey any] interface {
-	PrimaryKey() PrimaryKey
+type Row[K any] interface {
+	PrimaryKey() K
 }
 
-type Row[
-	PrimaryKey Ordered[PrimaryKey],
-	Attrs Attributes[PrimaryKey],
+type PhysicalRow[
+	K Ordered[K],
+	R Row[K],
 ] struct {
-	PrimaryKey PrimaryKey
-	Values     *MVCC[Attrs]
+	PrimaryKey K
+	Values     *MVCC[R]
 }
 
 type Ordered[To any] interface {
@@ -49,25 +49,25 @@ type Ordered[To any] interface {
 }
 
 func NewTable[
-	PrimaryKey Ordered[PrimaryKey],
-	Attrs Attributes[PrimaryKey],
-]() *Table[PrimaryKey, Attrs] {
-	return &Table[PrimaryKey, Attrs]{
-		Rows: btree.NewGeneric(func(a, b *Row[PrimaryKey, Attrs]) bool {
+	K Ordered[K],
+	R Row[K],
+]() *Table[K, R] {
+	return &Table[K, R]{
+		Rows: btree.NewGeneric(func(a, b *PhysicalRow[K, R]) bool {
 			return a.PrimaryKey.Less(b.PrimaryKey)
 		}),
 	}
 }
 
-func (t *Table[PrimaryKey, Attrs]) Insert(
+func (t *Table[K, R]) Insert(
 	tx *Transaction,
-	attrs Attrs,
+	row R,
 ) error {
 	t.Lock()
-	key := attrs.PrimaryKey()
-	row := t.getRow(key)
+	key := row.PrimaryKey()
+	physicalRow := t.getRow(key)
 	t.Unlock()
-	if err := row.Values.Insert(tx, tx.CurrentTime, attrs); err != nil {
+	if err := physicalRow.Values.Insert(tx, tx.CurrentTime, row); err != nil {
 		return err
 	}
 	//TODO this is wrong
@@ -78,61 +78,62 @@ func (t *Table[PrimaryKey, Attrs]) Insert(
 	return nil
 }
 
-func (t *Table[PrimaryKey, Attrs]) Update(
+func (t *Table[K, R]) Update(
 	tx *Transaction,
-	attrs Attrs,
+	row R,
 ) error {
 	t.Lock()
-	key := attrs.PrimaryKey()
-	row := t.getRow(key)
+	key := row.PrimaryKey()
+	physicalRow := t.getRow(key)
 	t.Unlock()
-	if err := row.Values.Update(tx, tx.CurrentTime, attrs); err != nil {
+	if err := physicalRow.Values.Update(tx, tx.CurrentTime, row); err != nil {
 		return err
 	}
 	tx.Tick()
 	return nil
 }
 
-func (t *Table[PrimaryKey, Attrs]) Delete(
+func (t *Table[K, R]) Delete(
 	tx *Transaction,
-	key PrimaryKey,
+	key K,
 ) error {
 	t.Lock()
-	row := t.getRow(key)
+	physicalRow := t.getRow(key)
 	t.Unlock()
-	if err := row.Values.Delete(tx, tx.CurrentTime); err != nil {
+	if err := physicalRow.Values.Delete(tx, tx.CurrentTime); err != nil {
 		return err
 	}
+	//TODO cascade delete with foreign keys
 	tx.Tick()
 	return nil
 }
 
-func (t *Table[PrimaryKey, Attrs]) Get(
+func (t *Table[K, R]) Get(
 	tx *Transaction,
-	key PrimaryKey,
+	key K,
 ) (
-	attrs Attrs,
+	row R,
 	err error,
 ) {
 	t.Lock()
-	row := t.getRow(key)
+	physicalRow := t.getRow(key)
 	t.Unlock()
-	if row == nil {
+	if physicalRow == nil {
 		err = sql.ErrNoRows
 		return
 	}
-	attrs = *row.Values.Read(tx, tx.CurrentTime)
+	row = *physicalRow.Values.Read(tx, tx.CurrentTime)
 	return
 }
 
-func (t *Table[PrimaryKey, Attrs]) getRow(key PrimaryKey) *Row[PrimaryKey, Attrs] {
-	pivot := &Row[PrimaryKey, Attrs]{
+func (t *Table[K, R]) getRow(key K) *PhysicalRow[K, R] {
+	pivot := &PhysicalRow[K, R]{
 		PrimaryKey: key,
 	}
 	row, ok := t.Rows.Get(pivot)
 	if !ok {
 		row = pivot
-		row.Values = new(MVCC[Attrs])
+		row.Values = new(MVCC[R])
 		t.Rows.Set(row)
 	}
 	return row

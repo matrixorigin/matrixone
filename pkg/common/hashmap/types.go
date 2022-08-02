@@ -17,6 +17,7 @@ package hashmap
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 const (
@@ -27,6 +28,7 @@ var OneUInt8s []uint8
 var OneInt64s []int64
 
 type HashMap interface {
+	Free()
 	AddGroup()
 	AddGroups(uint64)
 	GroupCount() uint64
@@ -39,7 +41,7 @@ type Iterator interface {
 	// the return value corresponds to the corresponding group number(start with 1)
 	// WATCH THAT: we do not update the rows of Hash Map at Insert Method because of Speed Performance,
 	// If need it, you should call the hash map's AddGroup function by yourself.
-	Insert(start, count int, vecs []*vector.Vector) ([]uint64, []int64)
+	Insert(start, count int, vecs []*vector.Vector) ([]uint64, []int64, error)
 	// Find vecs[start, start+count) int hashmap
 	// return value is the corresponding the group number,
 	// if it is 0 it means that the corresponding value cannot be found
@@ -54,12 +56,16 @@ type StrHashMap struct {
 	keys    [][]byte
 	values  []uint64
 	// zValues, 0 indicates the presence null, 1 indicates the absence of a null
-	zValues       []int64
-	strHashStates [][3]uint64
-	hashMap       *hashtable.StringHashMap
+	zValues          []int64
+	strHashStates    [][3]uint64
+	ibucket, nbucket uint64
+
+	m       *mheap.Mheap
+	hashMap *hashtable.StringHashMap
 }
 
 type strHashmapIterator struct {
-	ibucket, nbucket uint64
+	m                *mheap.Mheap
 	mp               *StrHashMap
+	ibucket, nbucket uint64
 }

@@ -268,7 +268,7 @@ func TestCollectStats(t *testing.T) {
 								Term:     0}}}},
 				},
 			},
-			expected: &stats{toStop: []replica{{"d", 1, 0, 0}},
+			expected: &stats{zombies: []replica{{"d", 1, 0, 0}},
 				toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}}},
 		{
 			desc: "do not remove replica d if it is in LogShardInfo.Replicas, despite it's epoch is small.",

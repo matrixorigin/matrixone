@@ -31,11 +31,13 @@ const (
 	Connector
 	Projection
 	Complement
+	Single
 
 	LoopJoin
 	LoopLeft
 	LoopSemi
 	LoopComplement
+	LoopSingle
 
 	MergeTop
 	MergeLimit

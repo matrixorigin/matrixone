@@ -44,6 +44,10 @@ func (e *dummySqlExecutor) Exec(sql string, opts ie.SessionOverrideOptions) erro
 	return nil
 }
 
+func (e *dummySqlExecutor) Query(sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+	return nil
+}
+
 func newExecutorFactory(sqlch chan string) func() ie.InternalExecutor {
 	return func() ie.InternalExecutor {
 		return &dummySqlExecutor{

@@ -143,11 +143,9 @@ SELECT (WITH qn AS (SELECT t2.a*a as a FROM t1),
 FROM t1 as t2;
 -- @bvt:issue
 
--- @bvt:issue#3303
 WITH qn AS (SELECT b as a FROM t1)
 SELECT (WITH qn2 AS (SELECT a FROM qn WHERE a IS NULL or a>0)
         SELECT qn2.a FROM qn2) FROM qn;
--- @bvt:issue
 
 WITH qn AS (select "outer" as a)
 SELECT (WITH qn AS (SELECT "inner" as a) SELECT a from qn),
