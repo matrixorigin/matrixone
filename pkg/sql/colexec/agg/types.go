@@ -47,12 +47,12 @@ type Agg[T any] interface {
 
 	// Fill use the rowIndex-rows of vector to update the data of groupIndex-group.
 	// rowCount indicates the number of times the rowIndex-row is repeated.
-	Fill(groupIndex int64, rowIndex int64, rowCount int64, vecs []*vector.Vector)
+	Fill(groupIndex int64, rowIndex int64, rowCount int64, vecs []*vector.Vector) error
 
 	// BulkFill use a whole vector to update the data of agg's group
 	// groupIndex is the index number of the group
 	// rowCounts is the count number of each row.
-	BulkFill(groupIndex int64, rowCounts []int64, vecs []*vector.Vector)
+	BulkFill(groupIndex int64, rowCounts []int64, vecs []*vector.Vector) error
 
 	// BatchFill use part of the vector to update the data of agg's group
 	//      os(origin-s) records information about which groups need to be updated
@@ -64,17 +64,17 @@ type Agg[T any] interface {
 	//      agg's (vps[i]-1)th group is related to vector's (offset+i)th row.
 	//      rowCounts[i] is count number of the row[i]
 	// For a more detailed introduction of rowCounts, please refer to comments of Function Fill.
-	BatchFill(offset int64, os []uint8, vps []uint64, rowCounts []int64, vecs []*vector.Vector)
+	BatchFill(offset int64, os []uint8, vps []uint64, rowCounts []int64, vecs []*vector.Vector) error
 
 	// Merge will merge a couple of group between 2 aggregate function structures.
 	// It merges the groupIndex1-group of agg1 and
 	// groupIndex2-group of agg2
-	Merge(agg2 Agg[any], groupIndex1 int64, groupIndex2 int64)
+	Merge(agg2 Agg[any], groupIndex1 int64, groupIndex2 int64) error
 
 	// BatchAdd merges multi groups of agg1 and agg2
 	//  agg1's (vps[i]-1)th group is related to agg2's (start+i)th group
 	// For more introduction of os, please refer to comments of Function BatchFill.
-	BatchMerge(agg2 Agg[any], start int64, os []uint8, vps []uint64)
+	BatchMerge(agg2 Agg[any], start int64, os []uint8, vps []uint64) error
 }
 
 // UnaryAgg generic aggregation function with one input vector and without distinct
