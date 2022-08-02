@@ -17,7 +17,7 @@ package service
 import (
 	"github.com/matrixorigin/matrixone/pkg/service/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/service/fileservice"
-	 "github.com/matrixorigin/matrixone/pkg/service/logservice"
+	"github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"strings"
 	"sync"
 	"testing"

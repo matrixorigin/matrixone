@@ -17,7 +17,7 @@ package dnservice
 import (
 	"context"
 	"fmt"
-	 "github.com/matrixorigin/matrixone/pkg/service/logservice"
+	"github.com/matrixorigin/matrixone/pkg/service/logservice"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -103,5 +103,5 @@ func (s *store) newMemTxnStorage(shard metadata.DNShard, logClient logservice.Cl
 }
 
 func (s *store) newTAEStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
-	return taestorage.New(shard, logClient, s.s3FS, s.localFS)
+	return taestorage.New(shard, logClient, s.s3FS, s.localFS, s.clock)
 }

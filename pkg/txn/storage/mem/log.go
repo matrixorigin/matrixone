@@ -17,7 +17,7 @@ package mem
 import (
 	"context"
 	"encoding/json"
-	 "github.com/matrixorigin/matrixone/pkg/service/logservice"
+	"github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"sync"
 
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"

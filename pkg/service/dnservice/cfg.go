@@ -16,7 +16,7 @@ package dnservice
 
 import (
 	"fmt"
-	 "github.com/matrixorigin/matrixone/pkg/service/logservice"
+	"github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"strings"
 	"time"
 

@@ -19,7 +19,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/service/fileservice"
-	 "github.com/matrixorigin/matrixone/pkg/service/logservice"
+	"github.com/matrixorigin/matrixone/pkg/service/logservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 )
 
@@ -28,6 +29,7 @@ type Storage struct {
 	logClient logservice.Client
 	s3FS      fileservice.FileService
 	localFS   fileservice.FileService
+	clock     clock.Clock
 }
 
 func New(
@@ -35,6 +37,7 @@ func New(
 	logClient logservice.Client,
 	s3FS fileservice.FileService,
 	localFS fileservice.FileService,
+	clock clock.Clock,
 ) (*Storage, error) {
 
 	return &Storage{
@@ -42,6 +45,7 @@ func New(
 		logClient: logClient,
 		s3FS:      s3FS,
 		localFS:   localFS,
+		clock:     clock,
 	}, nil
 }
 

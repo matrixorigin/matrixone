@@ -15,7 +15,7 @@
 package service
 
 import (
-	 "github.com/matrixorigin/matrixone/pkg/service/logservice"
+	"github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"path"
 	"strconv"
 	"time"

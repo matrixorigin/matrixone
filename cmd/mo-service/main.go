@@ -19,7 +19,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/service/dnservice"
-	 "github.com/matrixorigin/matrixone/pkg/service/logservice"
+	"github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"os"
 	"os/signal"
 	"strings"
