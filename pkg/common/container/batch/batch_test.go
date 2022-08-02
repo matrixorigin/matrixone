@@ -15,12 +15,11 @@
 package batch
 
 import (
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 	"github.com/stretchr/testify/require"
+	"testing"
 )
 
 const (
