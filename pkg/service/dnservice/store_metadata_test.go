@@ -16,10 +16,10 @@ package dnservice
 
 import (
 	"context"
+	fileservice "github.com/matrixorigin/matrixone/pkg/service/fileservice"
 	"testing"
 
 	"github.com/fagongzi/util/protoc"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"

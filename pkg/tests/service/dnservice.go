@@ -16,9 +16,9 @@ package service
 
 import (
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/dnservice"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	dnservice "github.com/matrixorigin/matrixone/pkg/service/dnservice"
+	fileservice "github.com/matrixorigin/matrixone/pkg/service/fileservice"
 )
 
 // DNService describes expected behavior for dn service.

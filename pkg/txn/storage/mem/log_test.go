@@ -16,9 +16,9 @@ package mem
 
 import (
 	"context"
+	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
 )

@@ -17,8 +17,8 @@ package dnservice
 import (
 	"context"
 	"fmt"
+	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
 
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"

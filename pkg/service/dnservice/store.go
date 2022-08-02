@@ -16,6 +16,8 @@ package dnservice
 
 import (
 	"context"
+	fileservice "github.com/matrixorigin/matrixone/pkg/service/fileservice"
+	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"sync"
 	"time"
 
@@ -23,8 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"

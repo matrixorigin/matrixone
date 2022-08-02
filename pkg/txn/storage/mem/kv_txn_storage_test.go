@@ -16,12 +16,12 @@ package mem
 
 import (
 	"bytes"
+	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"math"
 	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"

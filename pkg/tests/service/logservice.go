@@ -15,6 +15,7 @@
 package service
 
 import (
+	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"path"
 	"strconv"
 	"time"
@@ -25,7 +26,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 

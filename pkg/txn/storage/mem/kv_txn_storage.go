@@ -19,11 +19,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"math"
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"

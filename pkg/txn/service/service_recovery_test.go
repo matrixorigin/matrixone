@@ -16,9 +16,9 @@ package service
 
 import (
 	"context"
+	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/stretchr/testify/assert"

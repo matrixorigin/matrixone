@@ -15,10 +15,10 @@
 package cnservice
 
 import (
+	fileservice "github.com/matrixorigin/matrixone/pkg/service/fileservice"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"go.uber.org/zap"
 )
 

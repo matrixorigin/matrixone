@@ -15,13 +15,12 @@
 package service
 
 import (
+	fileservice "github.com/matrixorigin/matrixone/pkg/service/fileservice"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
 // fileServices contains all FileService instances.

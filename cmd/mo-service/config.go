@@ -16,13 +16,13 @@ package main
 
 import (
 	"fmt"
+	dnservice "github.com/matrixorigin/matrixone/pkg/service/dnservice"
+	fileservice "github.com/matrixorigin/matrixone/pkg/service/fileservice"
+	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"os"
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/matrixorigin/matrixone/pkg/dnservice"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 

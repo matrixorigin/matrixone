@@ -18,14 +18,14 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	dnservice "github.com/matrixorigin/matrixone/pkg/service/dnservice"
+	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/dnservice"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 

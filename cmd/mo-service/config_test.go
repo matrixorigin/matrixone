@@ -15,9 +15,9 @@
 package main
 
 import (
+	fileservice "github.com/matrixorigin/matrixone/pkg/service/fileservice"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/stretchr/testify/assert"
 )
 

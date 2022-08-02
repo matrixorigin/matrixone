@@ -15,6 +15,9 @@
 package service
 
 import (
+	dnservice "github.com/matrixorigin/matrixone/pkg/service/dnservice"
+	fileservice "github.com/matrixorigin/matrixone/pkg/service/fileservice"
+	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"strings"
 	"sync"
 	"testing"
@@ -24,9 +27,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/dnservice"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )

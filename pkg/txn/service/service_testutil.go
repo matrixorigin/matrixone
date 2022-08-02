@@ -17,13 +17,13 @@ package service
 import (
 	"context"
 	"fmt"
+	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"

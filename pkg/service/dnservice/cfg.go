@@ -16,10 +16,10 @@ package dnservice
 
 import (
 	"fmt"
+	logservice "github.com/matrixorigin/matrixone/pkg/service/logservice"
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
