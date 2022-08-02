@@ -67,19 +67,19 @@ func PutSels(sels []int64, proc *Process) {
 	proc.Reg.Ss = append(proc.Reg.Ss, sels)
 }
 
-func (_ *WaitRegister) MarshalBinary() ([]byte, error) {
+func (wreg *WaitRegister) MarshalBinary() ([]byte, error) {
 	return nil, nil
 }
 
-func (_ *WaitRegister) UnmarshalBinary(_ []byte) error {
+func (wreg *WaitRegister) UnmarshalBinary(_ []byte) error {
 	return nil
 }
 
-func (_ *Process) MarshalBinary() ([]byte, error) {
+func (proc *Process) MarshalBinary() ([]byte, error) {
 	return nil, nil
 }
 
-func (_ *Process) UnmarshalBinary(_ []byte) error {
+func (proc *Process) UnmarshalBinary(_ []byte) error {
 	return nil
 }
 

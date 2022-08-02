@@ -21,11 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (_ Instruction) MarshalBinary() ([]byte, error) {
+func (ins Instruction) MarshalBinary() ([]byte, error) {
 	return nil, nil
 }
 
-func (_ Instruction) UnmarshalBinary(_ []byte) error {
+func (ins Instruction) UnmarshalBinary(_ []byte) error {
 	return nil
 }
 

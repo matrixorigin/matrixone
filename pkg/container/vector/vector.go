@@ -75,10 +75,29 @@ func GetStrColumn(v *Vector) *types.Bytes {
 }
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
-	return v.Show()
+	var buf bytes.Buffer
+
+	if v.IsConst {
+		buf.WriteByte(byte(1))
+	} else {
+		buf.WriteByte(byte(0))
+	}
+	buf.Write(encoding.EncodeInt64(int64(v.Length)))
+	data, err := v.Show()
+	if err != nil {
+		return nil, err
+	}
+	buf.Write(data)
+	return buf.Bytes(), nil
 }
 
 func (v *Vector) UnmarshalBinary(data []byte) error {
+	if data[1] == 1 {
+		v.IsConst = true
+	}
+	data = data[1:]
+	v.Length = int(encoding.DecodeInt64(data[:8]))
+	data = data[8:]
 	return v.Read(data)
 }
 
@@ -3979,11 +3998,6 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 func (v *Vector) Show() ([]byte, error) {
 	var buf bytes.Buffer
 
-	if v.IsConst {
-		buf.WriteByte(byte(1))
-	} else {
-		buf.WriteByte(byte(0))
-	}
 	switch v.Typ.Oid {
 	case types.T_bool:
 		buf.Write(encoding.EncodeType(v.Typ))
@@ -4230,10 +4244,6 @@ func (v *Vector) Show() ([]byte, error) {
 }
 
 func (v *Vector) Read(data []byte) error {
-	if data[0] == 1 {
-		v.IsConst = true
-	}
-	data = data[1:]
 	v.Data = data
 	typ := encoding.DecodeType(data[:encoding.TypeSize])
 	data = data[encoding.TypeSize:]
