@@ -16,7 +16,7 @@ package unary
 
 import (
 	"errors"
-	reverse2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/reverse"
+	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/reverse"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,7 +42,7 @@ func Reverse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 			Offsets: make([]uint32, len(inputValues.Offsets)),
 			Lengths: make([]uint32, len(inputValues.Lengths)),
 		}
-		res := reverse2.ReverseChar(inputValues, resultValues)
+		res := reverse.ReverseChar(inputValues, resultValues)
 		if res == nil {
 			return nil, errorReverseStringFailed
 		}
@@ -59,7 +59,7 @@ func Reverse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 			Lengths: make([]uint32, len(inputValues.Lengths)),
 		}
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		res := reverse2.ReverseChar(inputValues, resultValues)
+		res := reverse.ReverseChar(inputValues, resultValues)
 		if res == nil {
 			return nil, errorReverseStringFailed
 		}

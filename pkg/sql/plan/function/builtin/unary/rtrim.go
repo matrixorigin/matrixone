@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	rtrim2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/rtrim"
+	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/rtrim"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,7 +32,7 @@ func Rtrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		// totalCount - spaceCount is the total bytes need for the ltrim-ed string
-		spaceCount := rtrim2.CountSpacesFromRight(inputValues)
+		spaceCount := rtrim.CountSpacesFromRight(inputValues)
 		totalCount := int32(len(inputValues.Data))
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := &types.Bytes{
@@ -40,11 +40,11 @@ func Rtrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 			Offsets: make([]uint32, 1),
 			Lengths: make([]uint32, 1),
 		}
-		vector.SetCol(resultVector, rtrim2.RtrimChar(inputValues, resultValues))
+		vector.SetCol(resultVector, rtrim.RtrimChar(inputValues, resultValues))
 		return resultVector, nil
 	} else {
 		// totalCount - spaceCount is the total bytes need for the ltrim-ed string
-		spaceCount := rtrim2.CountSpacesFromRight(inputValues)
+		spaceCount := rtrim.CountSpacesFromRight(inputValues)
 		totalCount := int32(len(inputValues.Data))
 		resultVector, err := proc.AllocVector(resultType, int64(totalCount-spaceCount))
 		if err != nil {
@@ -56,7 +56,7 @@ func Rtrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 			Lengths: make([]uint32, len(inputValues.Lengths)),
 		}
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, rtrim2.RtrimChar(inputValues, resultValues))
+		vector.SetCol(resultVector, rtrim.RtrimChar(inputValues, resultValues))
 		return resultVector, nil
 	}
 }

@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	dayofyear2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/dayofyear"
+	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/dayofyear"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,7 +34,7 @@ func DayOfYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint16, 1)
-		vector.SetCol(resultVector, dayofyear2.GetDayOfYear(inputValues, resultValues))
+		vector.SetCol(resultVector, dayofyear.GetDayOfYear(inputValues, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
@@ -44,7 +44,7 @@ func DayOfYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		resultValues := encoding.DecodeUint16Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, dayofyear2.GetDayOfYear(inputValues, resultValues))
+		vector.SetCol(resultVector, dayofyear.GetDayOfYear(inputValues, resultValues))
 		return resultVector, nil
 	}
 }

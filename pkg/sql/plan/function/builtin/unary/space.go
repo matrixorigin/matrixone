@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	space2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/space"
+	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/space"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
@@ -33,7 +33,7 @@ func SpaceInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
-		bytesNeed, err := space2.CountSpacesSigned(inputValues)
+		bytesNeed, err := space.CountSpacesSigned(inputValues)
 		if err != nil {
 			return nil, err
 		}
@@ -42,12 +42,12 @@ func SpaceInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 			Offsets: make([]uint32, 1),
 			Lengths: make([]uint32, 1),
 		}
-		result := space2.FillSpacesSigned(inputValues, results)
+		result := space.FillSpacesSigned(inputValues, results)
 		nulls.Or(inputVector.Nsp, result.Nsp, resultVector.Nsp)
 		vector.SetCol(resultVector, result.Result)
 		return resultVector, nil
 	}
-	bytesNeed, err := space2.CountSpacesSigned(inputValues)
+	bytesNeed, err := space.CountSpacesSigned(inputValues)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +60,7 @@ func SpaceInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		Offsets: make([]uint32, len(inputValues)),
 		Lengths: make([]uint32, len(inputValues)),
 	}
-	result := space2.FillSpacesSigned(inputValues, resultValues)
+	result := space.FillSpacesSigned(inputValues, resultValues)
 	nulls.Or(inputVector.Nsp, result.Nsp, resultVector.Nsp)
 	vector.SetCol(resultVector, result.Result)
 	return resultVector, nil
@@ -75,7 +75,7 @@ func SpaceUint64(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
-		bytesNeed, err := space2.CountSpacesUnsigned(inputValues)
+		bytesNeed, err := space.CountSpacesUnsigned(inputValues)
 		if err != nil {
 			return nil, err
 		}
@@ -84,12 +84,12 @@ func SpaceUint64(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 			Offsets: make([]uint32, 1),
 			Lengths: make([]uint32, 1),
 		}
-		result := space2.FillSpacesUnsigned(inputValues, results)
+		result := space.FillSpacesUnsigned(inputValues, results)
 		nulls.Or(inputVector.Nsp, result.Nsp, resultVector.Nsp)
 		vector.SetCol(resultVector, result.Result)
 		return resultVector, nil
 	}
-	bytesNeed, err := space2.CountSpacesUnsigned(inputValues)
+	bytesNeed, err := space.CountSpacesUnsigned(inputValues)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +102,7 @@ func SpaceUint64(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		Offsets: make([]uint32, len(inputValues)),
 		Lengths: make([]uint32, len(inputValues)),
 	}
-	result := space2.FillSpacesUnsigned(inputValues, resultValues)
+	result := space.FillSpacesUnsigned(inputValues, resultValues)
 	nulls.Or(inputVector.Nsp, result.Nsp, resultVector.Nsp)
 	vector.SetCol(resultVector, result.Result)
 	return resultVector, nil
@@ -117,7 +117,7 @@ func SpaceFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
-		bytesNeed, err := space2.CountSpacesFloat(inputValues)
+		bytesNeed, err := space.CountSpacesFloat(inputValues)
 		if err != nil {
 			return nil, err
 		}
@@ -126,12 +126,12 @@ func SpaceFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 			Offsets: make([]uint32, 1),
 			Lengths: make([]uint32, 1),
 		}
-		result := space2.FillSpacesFloat(inputValues, results)
+		result := space.FillSpacesFloat(inputValues, results)
 		nulls.Or(inputVector.Nsp, result.Nsp, resultVector.Nsp)
 		vector.SetCol(resultVector, result.Result)
 		return resultVector, nil
 	}
-	bytesNeed, err := space2.CountSpacesFloat(inputValues)
+	bytesNeed, err := space.CountSpacesFloat(inputValues)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +144,7 @@ func SpaceFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 		Offsets: make([]uint32, len(inputValues)),
 		Lengths: make([]uint32, len(inputValues)),
 	}
-	result := space2.FillSpacesFloat(inputValues, resultValues)
+	result := space.FillSpacesFloat(inputValues, resultValues)
 	nulls.Or(inputVector.Nsp, result.Nsp, resultVector.Nsp)
 	vector.SetCol(resultVector, result.Result)
 	return resultVector, nil

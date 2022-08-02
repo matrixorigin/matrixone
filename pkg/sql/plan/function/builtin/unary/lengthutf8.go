@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	lengthutf82 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/lengthutf8"
+	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/lengthutf8"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,7 +34,7 @@ func LengthUTF8(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint64, 1)
-		vector.SetCol(resultVector, lengthutf82.StrLengthUTF8(inputValues, resultValues))
+		vector.SetCol(resultVector, lengthutf8.StrLengthUTF8(inputValues, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
@@ -44,7 +44,7 @@ func LengthUTF8(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		resultValues := encoding.DecodeUint64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues.Lengths)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, lengthutf82.StrLengthUTF8(inputValues, resultValues))
+		vector.SetCol(resultVector, lengthutf8.StrLengthUTF8(inputValues, resultValues))
 		return resultVector, nil
 	}
 }
