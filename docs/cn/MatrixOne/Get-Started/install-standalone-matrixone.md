@@ -2,9 +2,9 @@
 
 作为一款开源数据库，MatrixOne 目前支持主流的 Linux 和 MacOS 系统。你可以通过以下三种方法安装单机版 MatrixOne：
 
-- <p><a href="#code_source">方法 1：使用源代码搭建</a>.</p>
-- <p><a href="#binary_packages">方法 2：下载二进制包</a>.</p>
-- <p><a href="#use_docker">方法 3：使用 Docker</a>.</p>
+- <p><a href="#code_source">方法 1：使用源代码搭建</a></p>
+- <p><a href="#binary_packages">方法 2：下载二进制包</a></p>
+- <p><a href="#use_docker">方法 3：使用 Docker</a></p>
 
 推荐硬件规格：x86 CPU；4核；32GB 内存，支持 CentOS 7+ 操作系统。
 
