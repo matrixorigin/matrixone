@@ -32,7 +32,7 @@ import (
 // }
 
 func newTestDriver(t *testing.T) driver.Driver {
-	dir := "/tmp/logstore/teststore"
+	dir := "/tmp/logstore/teststore/store"
 	name := "mock"
 	os.RemoveAll(dir)
 	cfg := &batchstoredriver.StoreCfg{

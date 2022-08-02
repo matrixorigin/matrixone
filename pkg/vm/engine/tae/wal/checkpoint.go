@@ -2,6 +2,8 @@ package wal
 
 import (
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 func (driver *walDriver) Checkpoint(indexes []*Index) (e LogEntry, err error) {
@@ -50,6 +52,9 @@ func (driver *walDriver) CkpUC() {
 		return
 	}
 	e, err := driver.impl.RangeCheckpoint(GroupUC, 0, ckpedUC)
+	if err == common.ErrClose {
+		return
+	}
 	if err != nil {
 		panic(err)
 	}

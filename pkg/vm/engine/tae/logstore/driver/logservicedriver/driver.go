@@ -83,6 +83,9 @@ func (d *LogServiceDriver) Close() error {
 	d.appendedLoop.Stop()
 	d.postAppendLoop.Stop()
 	d.truncateQueue.Stop()
+	close(d.appendQueue)
+	close(d.appendedQueue)
+	close(d.postAppendQueue)
 	return nil
 }
 

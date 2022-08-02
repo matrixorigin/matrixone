@@ -50,8 +50,14 @@ type walDriver struct {
 }
 
 func NewDriver(dir, name string, cfg *DriverConfig) Driver {
-	impl := store.NewStoreWithBatchStoreDriver(dir, name, cfg.BatchStoreConfig)
-	driver := NewDriverWithStore(impl, true, cfg.CheckpointDuration)
+	var batchStoreCfg *batchstoredriver.StoreCfg
+	ckpDuration := time.Second * 5
+	if cfg != nil {
+		batchStoreCfg = cfg.BatchStoreConfig
+		ckpDuration = cfg.CheckpointDuration
+	}
+	impl := store.NewStoreWithBatchStoreDriver(dir, name, batchStoreCfg)
+	driver := NewDriverWithStore(impl, true, ckpDuration)
 	return driver
 }
 

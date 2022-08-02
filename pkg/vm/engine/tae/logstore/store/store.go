@@ -66,10 +66,6 @@ func (w *StoreImpl) Close() error {
 	if !w.TryClose() {
 		return nil
 	}
-	err := w.driver.Close()
-	if err != nil {
-		return err
-	}
 	w.appendMu.RLock()
 	w.appendWg.Wait()
 	w.appendMu.RUnlock()
@@ -79,7 +75,10 @@ func (w *StoreImpl) Close() error {
 	w.checkpointQueue.Stop()
 	w.truncatingQueue.Stop()
 	w.truncateQueue.Stop()
-	w.driver.Close()
+	err := w.driver.Close()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 func (w *StoreImpl) Append(gid uint32, e entry.Entry) (lsn uint64, err error) {

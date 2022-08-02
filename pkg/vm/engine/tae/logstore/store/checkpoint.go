@@ -12,6 +12,9 @@ import (
 func (w *StoreImpl) FuzzyCheckpoint(gid uint32, indexes []*Index) (ckpEntry entry.Entry, err error) {
 	ckpEntry = w.makeFuzzyCheckpointEntry(gid, indexes)
 	drentry, _, _ := w.doAppend(GroupCKP, ckpEntry)
+	if drentry == nil {
+		panic(err)
+	}
 	_, err = w.checkpointQueue.Enqueue(drentry)
 	if err != nil {
 		panic(err)
@@ -73,7 +76,13 @@ func (w *StoreImpl) makeFuzzyCheckpointEntry(gid uint32, indexes []*Index) (ckpE
 
 func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64) (ckpEntry entry.Entry, err error) {
 	ckpEntry = w.makeRangeCheckpointEntry(gid, start, end)
-	drentry, _, _ := w.doAppend(GroupCKP, ckpEntry)
+	drentry, _, err := w.doAppend(GroupCKP, ckpEntry)
+	if err == common.ErrClose {
+		return nil, err
+	}
+	if err != nil {
+		panic(err)
+	}
 	_, err = w.checkpointQueue.Enqueue(drentry)
 	if err != nil {
 		panic(err)

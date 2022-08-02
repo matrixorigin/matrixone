@@ -207,6 +207,7 @@ func (w *StoreInfo) onCheckpoint() {
 			continue
 		}
 		w.checkpointed[gid] = ckped
+		logutil.Infof("%d-%v", gid, ckp)
 	}
 	w.checkpointedMu.Unlock()
 	w.ckpcntMu.Lock()

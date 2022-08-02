@@ -15,7 +15,7 @@ import (
 )
 
 func initEnv(t *testing.T) *baseStore {
-	dir := "/tmp/logstore/teststore"
+	dir := "/tmp/logstore/teststore/batchstoredriver"
 	name := "mock"
 	os.RemoveAll(dir)
 	cfg := &StoreCfg{
@@ -27,7 +27,7 @@ func initEnv(t *testing.T) *baseStore {
 }
 
 func restartStore(s *baseStore, t *testing.T) *baseStore {
-	err:=s.Close()
+	err := s.Close()
 	assert.NoError(t, err)
 	maxlsn := s.GetCurrSeqNum()
 	// for ver,lsns:=range s.addrs{

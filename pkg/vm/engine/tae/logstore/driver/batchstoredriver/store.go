@@ -233,7 +233,7 @@ func (bs *baseStore) Truncate(lsn uint64) (err error) {
 	atomic.StoreUint64(&bs.checkpointing, lsn)
 	bs.ckpmu.Unlock()
 	_, err = bs.truncateQueue.Enqueue(lsn)
-	if err != nil {
+	if err != nil && err != common.ErrClose {
 		panic(err)
 	}
 	return nil
