@@ -188,3 +188,73 @@ func TestListenAddressCanBeFilled(t *testing.T) {
 	assert.Equal(t, cfg.RaftAddress, cfg.RaftListenAddress)
 	assert.Equal(t, cfg.GossipAddress, cfg.GossipListenAddress)
 }
+
+func TestClientConfigValidate(t *testing.T) {
+	tests := []struct {
+		cfg ClientConfig
+		ok  bool
+	}{
+		{
+			ClientConfig{}, false,
+		},
+		{
+			ClientConfig{LogShardID: 1, DiscoveryAddress: "localhost:9090"}, false,
+		},
+		{
+			ClientConfig{LogShardID: 1, DiscoveryAddress: "localhost:9090"}, false,
+		},
+		{
+			ClientConfig{LogShardID: 1, DNReplicaID: 100, DiscoveryAddress: "localhost:9090"}, true,
+		},
+		{
+			ClientConfig{
+				LogShardID:       1,
+				DNReplicaID:      100,
+				DiscoveryAddress: "localhost:9090",
+				ServiceAddresses: []string{"localhost:9091"},
+			},
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		err := tt.cfg.Validate()
+		if tt.ok {
+			assert.NoError(t, err)
+		} else {
+			assert.True(t, errors.Is(err, ErrInvalidConfig))
+		}
+	}
+}
+
+func TestHAKeeperClientConfigValidate(t *testing.T) {
+	tests := []struct {
+		cfg HAKeeperClientConfig
+		ok  bool
+	}{
+		{
+			HAKeeperClientConfig{}, false,
+		},
+		{
+			HAKeeperClientConfig{DiscoveryAddress: "localhost:9090"}, true,
+		},
+		{
+			HAKeeperClientConfig{ServiceAddresses: []string{"localhost:9090"}}, true,
+		},
+		{
+			HAKeeperClientConfig{
+				DiscoveryAddress: "localhost:9091",
+				ServiceAddresses: []string{"localhost:9090"},
+			}, true,
+		},
+	}
+
+	for _, tt := range tests {
+		err := tt.cfg.Validate()
+		if tt.ok {
+			assert.NoError(t, err)
+		} else {
+			assert.True(t, errors.Is(err, ErrInvalidConfig))
+		}
+	}
+}
