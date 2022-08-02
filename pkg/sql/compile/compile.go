@@ -492,6 +492,24 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 				})
 			}
 		}
+	case plan.Node_SINGLE:
+		typs := make([]types.Type, len(right.ProjectList))
+		for i, expr := range right.ProjectList {
+			typs[i] = dupType(expr.Typ)
+		}
+		for i := range rs {
+			if isEq {
+				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+					Op:  vm.Single,
+					Arg: constructSingle(n, typs, c.proc),
+				})
+			} else {
+				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+					Op:  vm.LoopSingle,
+					Arg: constructLoopSingle(n, typs, c.proc),
+				})
+			}
+		}
 	case plan.Node_ANTI:
 		for i := range rs {
 			if isEq && len(n.OnList) == 1 {
@@ -705,6 +723,8 @@ func joinType(n *plan.Node, ns []*plan.Node) (bool, plan.Node_JoinFlag) {
 		return false, plan.Node_ANTI
 	case plan.Node_RIGHT:
 		return true, plan.Node_LEFT
+	case plan.Node_SINGLE:
+		return false, plan.Node_SINGLE
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join typ '%v' not support now", n.JoinType)))
 	}

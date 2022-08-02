@@ -15,6 +15,8 @@
 package frontend
 
 import (
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
@@ -22,7 +24,7 @@ import (
 
 func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 	if opts.Database != nil {
-		sess.protocol.SetDatabaseName(*opts.Database)
+		sess.SetDatabaseName(*opts.Database)
 	}
 
 	if opts.Username != nil {
@@ -34,34 +36,102 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 	}
 }
 
+type internalMiniExec interface {
+	doComQuery(string) error
+	PrepareSessionBeforeExecRequest(*Session)
+}
+
 type internalExecutor struct {
-	proto MysqlProtocol
-	// MySqlCmdExecutor struct is used here, because we want to doComQuery directly
-	executor     *MysqlCmdExecutor
+	sync.Mutex
+	proto        *internalProtocol
+	executor     internalMiniExec // MySqlCmdExecutor struct impls miniExec
 	pu           *config.ParameterUnit
 	baseSessOpts ie.SessionOverrideOptions
 }
 
-func NewIternalExecutor(pu *config.ParameterUnit) *internalExecutor {
-	proto := &internalProtocol{}
-	exec := NewMysqlCmdExecutor()
+func NewInternalExecutor(pu *config.ParameterUnit) *internalExecutor {
+	return newIe(pu, NewMysqlCmdExecutor())
+}
 
-	return &internalExecutor{
+func newIe(pu *config.ParameterUnit, inner internalMiniExec) *internalExecutor {
+	proto := &internalProtocol{result: &internalExecResult{}}
+	ret := &internalExecutor{
 		proto:        proto,
-		executor:     exec,
+		executor:     inner,
 		pu:           pu,
 		baseSessOpts: ie.NewOptsBuilder().Finish(),
 	}
+	return ret
 }
 
-func (ie *internalExecutor) Exec(sql string, opts ie.SessionOverrideOptions) error {
+type internalExecResult struct {
+	affectedRows uint64
+	resultSet    *MysqlResultSet
+	dropped      uint64
+	err          error
+}
+
+func (res *internalExecResult) Error() error {
+	return res.err
+}
+
+func (res *internalExecResult) ColumnCount() uint64 {
+	return res.resultSet.GetColumnCount()
+}
+
+func (res *internalExecResult) Column(i uint64) (name string, typ uint8, signed bool, err error) {
+	col, err := res.resultSet.GetColumn(i)
+	if err == nil {
+		name = col.Name()
+		typ = col.ColumnType()
+		signed = col.IsSigned()
+	}
+	return
+}
+
+func (res *internalExecResult) RowCount() uint64 {
+	return res.resultSet.GetRowCount()
+}
+
+func (res *internalExecResult) Row(i uint64) ([]interface{}, error) {
+	return res.resultSet.GetRow(i)
+}
+
+func (res *internalExecResult) Value(ridx uint64, cidx uint64) (interface{}, error) {
+	return res.resultSet.GetValue(ridx, cidx)
+}
+
+func (res *internalExecResult) ValueByName(ridx uint64, col string) (interface{}, error) {
+	return res.resultSet.GetValueByName(ridx, col)
+}
+
+func (res *internalExecResult) StringValueByName(ridx uint64, col string) (string, error) {
+	if cidx, err := res.resultSet.columnName2Index(col); err != nil {
+		return "", err
+	} else {
+		return res.resultSet.GetString(ridx, cidx)
+	}
+}
+
+func (ie *internalExecutor) Exec(sql string, opts ie.SessionOverrideOptions) (err error) {
+	ie.Lock()
+	defer ie.Unlock()
 	sess := ie.newCmdSession(opts)
 	ie.executor.PrepareSessionBeforeExecRequest(sess)
-	if err := ie.executor.doComQuery(sql); err != nil {
-		return err
-	}
+	ie.proto.stashResult = false
+	return ie.executor.doComQuery(sql)
+}
 
-	return nil
+func (ie *internalExecutor) Query(sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+	ie.Lock()
+	defer ie.Unlock()
+	sess := ie.newCmdSession(opts)
+	ie.executor.PrepareSessionBeforeExecRequest(sess)
+	ie.proto.stashResult = true
+	err := ie.executor.doComQuery(sql)
+	res := ie.proto.swapOutResult()
+	res.err = err
+	return res
 }
 
 func (ie *internalExecutor) newCmdSession(opts ie.SessionOverrideOptions) *Session {
@@ -75,9 +145,18 @@ func (ie *internalExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions)
 	ie.baseSessOpts = opts
 }
 
+// func showCaller() {
+// 	pc, _, _, _ := runtime.Caller(1)
+// 	callFunc := runtime.FuncForPC(pc)
+// 	logutil.Infof("[Metric] called: %s", callFunc.Name())
+// }
+
 type internalProtocol struct {
-	database string
-	username string
+	sync.Mutex
+	stashResult bool
+	result      *internalExecResult
+	database    string
+	username    string
 }
 
 func (ip *internalProtocol) IsEstablished() bool {
@@ -88,11 +167,6 @@ func (ip *internalProtocol) SetEstablished() {}
 
 func (ip *internalProtocol) GetRequest(payload []byte) *Request {
 	panic("not impl")
-}
-
-// SendResponse sends a response to the client for the application request
-func (ip *internalProtocol) SendResponse(resp *Response) error {
-	return nil
 }
 
 // ConnectionID the identity of the client
@@ -123,13 +197,56 @@ func (ip *internalProtocol) SetUserName(username string) {
 
 func (ip *internalProtocol) Quit() {}
 
-//the server send group row of the result set as an independent packet thread safe
-func (ip *internalProtocol) SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt uint64) error {
+func (ip *internalProtocol) sendRows(mrs *MysqlResultSet, cnt uint64) error {
+	if ip.stashResult {
+		res := ip.result.resultSet
+		if res == nil {
+			res = &MysqlResultSet{}
+			ip.result.resultSet = res
+		}
+
+		if res.GetRowCount() > 100 {
+			ip.result.dropped += cnt
+			return nil
+		}
+
+		if res.GetColumnCount() == 0 {
+			for _, col := range mrs.Columns {
+				res.AddColumn(col)
+			}
+		}
+		colCnt := res.GetColumnCount()
+		for i := uint64(0); i < cnt; i++ {
+			row := make([]any, colCnt)
+			copy(row, mrs.Data[i])
+			res.Data = append(res.Data, row)
+		}
+	}
+
+	ip.result.affectedRows += cnt
 	return nil
 }
 
+func (ip *internalProtocol) swapOutResult() *internalExecResult {
+	ret := ip.result
+	if ret.resultSet == nil {
+		ret.resultSet = &MysqlResultSet{}
+	}
+	ip.result = &internalExecResult{}
+	return ret
+}
+
+//the server send group row of the result set as an independent packet thread safe
+func (ip *internalProtocol) SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt uint64) error {
+	ip.Lock()
+	defer ip.Unlock()
+	return ip.sendRows(mrs, cnt)
+}
+
 func (ip *internalProtocol) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, cnt uint64) error {
-	return nil
+	ip.Lock()
+	defer ip.Unlock()
+	return ip.sendRows(mrs, cnt)
 }
 
 //SendColumnDefinitionPacket the server send the column definition to the client
@@ -137,26 +254,48 @@ func (ip *internalProtocol) SendColumnDefinitionPacket(column Column, cmd int) e
 	return nil
 }
 
-//SendColumnCountPacket makes the column count packet
+// SendColumnCountPacket makes the column count packet
 func (ip *internalProtocol) SendColumnCountPacket(count uint64) error {
 	return nil
 }
 
+// SendResponse sends a response to the client for the application request
+func (ip *internalProtocol) SendResponse(resp *Response) error {
+	ip.Lock()
+	defer ip.Unlock()
+	ip.PrepareBeforeProcessingResultSet()
+	if resp.category == ResultResponse {
+		if mer := resp.data.(*MysqlExecutionResult); mer != nil && mer.Mrs() != nil {
+			ip.sendRows(mer.Mrs(), mer.affectedRows)
+		}
+	} else {
+		// OkResponse. this is NOT ErrorResponse because error will be returned by doComQuery
+		ip.result.affectedRows = resp.affectedRows
+	}
+	return nil
+}
+
+// SendEOFPacketIf ends the sending of columns definations
 func (ip *internalProtocol) SendEOFPacketIf(warnings uint16, status uint16) error {
 	return nil
 }
 
-//send OK packet to the client
+// sendOKPacket sends OK packet to the client, used in the end of sql like use <database>
 func (ip *internalProtocol) sendOKPacket(affectedRows uint64, lastInsertId uint64, status uint16, warnings uint16, message string) error {
+	ip.result.affectedRows = affectedRows
 	return nil
 }
 
-//the OK or EOF packet thread safe
+// sendEOFOrOkPacket sends the OK or EOF packet thread safe, and ends the sending of result set
 func (ip *internalProtocol) sendEOFOrOkPacket(warnings uint16, status uint16) error {
 	return nil
 }
 
 func (ip *internalProtocol) PrepareBeforeProcessingResultSet() {
+	ip.result.affectedRows = 0
+	ip.result.dropped = 0
+	ip.result.err = nil
+	ip.result.resultSet = nil
 }
 
 func (ip *internalProtocol) GetStats() string { return "internal unknown stats" }

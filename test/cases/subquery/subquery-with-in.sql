@@ -631,7 +631,6 @@ create table t4 (a int(11) default null);
 insert into t4 values (0),(1);
 create table t5 (a int(11) default null);
 insert into t5 values (0),(1),(0),(1);
--- @bvt:issue#3303
 select * from t2, t3
 where
     t2.a < 10 and
@@ -640,7 +639,6 @@ where
                  where t1.a+1=t1.a+1 and
                        t1.a < (select t4.a+10
                                   from t4, t5 limit 2));
--- @bvt:issue
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 drop table if exists t3;

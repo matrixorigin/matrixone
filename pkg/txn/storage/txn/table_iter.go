@@ -19,20 +19,20 @@ import (
 )
 
 type TableIter[
-	PrimaryKey Ordered[PrimaryKey],
-	Attrs Attributes[PrimaryKey],
+	K Ordered[K],
+	R Row[K],
 ] struct {
 	tx       *Transaction
-	iter     btree.GenericIter[*Row[PrimaryKey, Attrs]]
+	iter     btree.GenericIter[*PhysicalRow[K, R]]
 	readTime Timestamp
 }
 
-func (t *Table[PrimaryKey, Attrs]) NewIter(
+func (t *Table[K, R]) NewIter(
 	tx *Transaction,
 ) (
-	iter *TableIter[PrimaryKey, Attrs],
+	iter *TableIter[K, R],
 ) {
-	iter = &TableIter[PrimaryKey, Attrs]{
+	iter = &TableIter[K, R]{
 		tx:       tx,
 		iter:     t.Rows.Copy().Iter(),
 		readTime: tx.CurrentTime,
@@ -40,14 +40,14 @@ func (t *Table[PrimaryKey, Attrs]) NewIter(
 	return
 }
 
-func (t *TableIter[PrimaryKey, Attrs]) Read() (key PrimaryKey, attrs *Attrs) {
-	row := t.iter.Item()
-	key = row.PrimaryKey
-	attrs = row.Values.Read(t.tx, t.readTime)
+func (t *TableIter[K, R]) Read() (key K, row *R) {
+	physicalRow := t.iter.Item()
+	key = physicalRow.PrimaryKey
+	row = physicalRow.Values.Read(t.tx, t.readTime)
 	return
 }
 
-func (t *TableIter[PrimaryKey, Attrs]) Next() bool {
+func (t *TableIter[K, R]) Next() bool {
 	for {
 		if ok := t.iter.Next(); !ok {
 			return false
@@ -60,7 +60,7 @@ func (t *TableIter[PrimaryKey, Attrs]) Next() bool {
 	}
 }
 
-func (t *TableIter[PrimaryKey, Attrs]) First() bool {
+func (t *TableIter[K, R]) First() bool {
 	if ok := t.iter.First(); !ok {
 		return false
 	}
@@ -76,7 +76,7 @@ func (t *TableIter[PrimaryKey, Attrs]) First() bool {
 	}
 }
 
-func (t *TableIter[PrimaryKey, Attrs]) Close() error {
+func (t *TableIter[K, R]) Close() error {
 	t.iter.Release()
 	return nil
 }

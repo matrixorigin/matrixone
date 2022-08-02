@@ -22,8 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
-const LogStoreCapacity int = 32
-
 type fixingShard struct {
 	shardID  uint64
 	replicas map[uint64]string
@@ -124,16 +122,18 @@ func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired []string)
 
 	// Check zombies
 	for uuid, storeInfo := range infos.Stores {
-		toStop := make([]replica, 0)
+		if contains(expired, uuid) {
+			continue
+		}
+		zombie := make([]replica, 0)
 		for _, replicaInfo := range storeInfo.Replicas {
 			_, ok := infos.Shards[replicaInfo.ShardID].Replicas[replicaInfo.ReplicaID]
 			if ok || replicaInfo.Epoch >= infos.Shards[replicaInfo.ShardID].Epoch {
 				continue
 			}
-			toStop = append(toStop, replica{uuid: uuid,
-				shardID: replicaInfo.ShardID, epoch: replicaInfo.Epoch})
+			zombie = append(zombie, replica{uuid: uuid, shardID: replicaInfo.ShardID})
 		}
-		collect.toStop = append(collect.toStop, toStop...)
+		collect.zombies = append(collect.zombies, zombie...)
 	}
 
 	return collect
