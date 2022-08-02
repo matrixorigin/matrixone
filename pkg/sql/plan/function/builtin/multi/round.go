@@ -17,7 +17,7 @@ package multi
 import (
 	"errors"
 	"github.com/matrixorigin/matrixone/pkg/common/encoding"
-	round2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/round"
+	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/round"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -45,7 +45,7 @@ func RoundUint64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_uint64, Size: 8})
 		rs := make([]uint64, 1)
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, round2.RoundUint64(vs, rs, digits))
+		vector.SetCol(vec, round.RoundUint64(vs, rs, digits))
 		return vec, nil
 	} else {
 		vec, err := proc.AllocVector(types.Type{Oid: types.T_uint64, Size: 8}, 8*int64(len(vs)))
@@ -56,7 +56,7 @@ func RoundUint64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		rs = rs[:len(vs)]
 		vec.Col = rs
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, round2.RoundUint64(vs, rs, digits))
+		vector.SetCol(vec, round.RoundUint64(vs, rs, digits))
 		return vec, nil
 	}
 }
@@ -80,7 +80,7 @@ func RoundInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_int64, Size: 8})
 		rs := make([]int64, 1)
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, round2.RoundInt64(vs, rs, digits))
+		vector.SetCol(vec, round.RoundInt64(vs, rs, digits))
 		return vec, nil
 	} else {
 		vec, err := proc.AllocVector(types.Type{Oid: types.T_int64, Size: 8}, 8*int64(len(vs)))
@@ -91,7 +91,7 @@ func RoundInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		rs = rs[:len(vs)]
 		vec.Col = rs
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, round2.RoundInt64(vs, rs, digits))
+		vector.SetCol(vec, round.RoundInt64(vs, rs, digits))
 		return vec, nil
 	}
 }
@@ -116,7 +116,7 @@ func RoundFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
 		rs := make([]float64, 1)
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, round2.RoundFloat64(vs, rs, digits))
+		vector.SetCol(vec, round.RoundFloat64(vs, rs, digits))
 		return vec, nil
 	} else {
 		vec, err := proc.AllocVector(types.Type{Oid: types.T_float64, Size: 8}, 8*int64(len(vs)))
@@ -127,7 +127,7 @@ func RoundFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		rs = rs[:len(vs)]
 		vec.Col = rs
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, round2.RoundFloat64(vs, rs, digits))
+		vector.SetCol(vec, round.RoundFloat64(vs, rs, digits))
 		return vec, nil
 	}
 }

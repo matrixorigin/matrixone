@@ -17,7 +17,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	fromunixtime2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/fromunixtime"
+	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/fromunixtime"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -35,7 +35,7 @@ func FromUnixTime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, e
 			nulls.Add(inVec.Nsp, 0)
 		}
 		nulls.Set(vec.Nsp, inVec.Nsp)
-		vector.SetCol(vec, fromunixtime2.UnixToDatetime(times, rs))
+		vector.SetCol(vec, fromunixtime.UnixToDatetime(times, rs))
 		return vec, nil
 	}
 	vec, err := proc.AllocVector(types.Type{Oid: types.T_datetime, Size: int32(size)}, int64(len(times))*int64(size))
@@ -49,7 +49,7 @@ func FromUnixTime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		}
 	}
 	nulls.Set(vec.Nsp, inVec.Nsp)
-	vector.SetCol(vec, fromunixtime2.UnixToDatetime(times, rs))
+	vector.SetCol(vec, fromunixtime.UnixToDatetime(times, rs))
 	return vec, nil
 }
 
@@ -74,7 +74,7 @@ func FromUnixTimeUint64(lv []*vector.Vector, proc *process.Process) (*vector.Vec
 			nulls.Add(inVec.Nsp, 0)
 		}
 		nulls.Set(vec.Nsp, inVec.Nsp)
-		vector.SetCol(vec, fromunixtime2.UnixToDatetime(uint64ToInt64(times), rs))
+		vector.SetCol(vec, fromunixtime.UnixToDatetime(uint64ToInt64(times), rs))
 		return vec, nil
 	}
 	vec, err := proc.AllocVector(types.Type{Oid: types.T_datetime, Size: int32(size)}, int64(len(times))*int64(size))
@@ -88,7 +88,7 @@ func FromUnixTimeUint64(lv []*vector.Vector, proc *process.Process) (*vector.Vec
 		}
 	}
 	nulls.Set(vec.Nsp, inVec.Nsp)
-	vector.SetCol(vec, fromunixtime2.UnixToDatetime(uint64ToInt64(times), rs))
+	vector.SetCol(vec, fromunixtime.UnixToDatetime(uint64ToInt64(times), rs))
 	return vec, nil
 }
 
@@ -113,7 +113,7 @@ func FromUnixTimeFloat64(lv []*vector.Vector, proc *process.Process) (*vector.Ve
 			nulls.Add(inVec.Nsp, 0)
 		}
 		nulls.Set(vec.Nsp, inVec.Nsp)
-		vector.SetCol(vec, fromunixtime2.UnixToDatetime(float64Toint64(times), rs))
+		vector.SetCol(vec, fromunixtime.UnixToDatetime(float64Toint64(times), rs))
 		return vec, nil
 	}
 	vec, err := proc.AllocVector(types.Type{Oid: types.T_datetime, Size: int32(size)}, int64(len(times))*int64(size))
@@ -127,6 +127,6 @@ func FromUnixTimeFloat64(lv []*vector.Vector, proc *process.Process) (*vector.Ve
 		}
 	}
 	nulls.Set(vec.Nsp, inVec.Nsp)
-	vector.SetCol(vec, fromunixtime2.UnixToDatetime(float64Toint64(times), rs))
+	vector.SetCol(vec, fromunixtime.UnixToDatetime(float64Toint64(times), rs))
 	return vec, nil
 }

@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	like2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/like"
+	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/like"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -46,13 +46,13 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		rs := encoding.DecodeInt64Slice(vec.Data)
 		rs = rs[:len(lvs.Lengths)]
 		if nulls.Any(lv.Nsp) {
-			rs, err = like2.BtSliceNullAndConst(lvs, rvs.Get(0), lv.Nsp.Np, rs)
+			rs, err = like.BtSliceNullAndConst(lvs, rvs.Get(0), lv.Nsp.Np, rs)
 			if err != nil {
 				return nil, err
 			}
 			vec.Nsp = lv.Nsp
 		} else {
-			rs, err = like2.BtSliceAndConst(lvs, rvs.Get(0), rs)
+			rs, err = like.BtSliceAndConst(lvs, rvs.Get(0), rs)
 			if err != nil {
 				return nil, err
 			}
@@ -75,7 +75,7 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 	case lv.IsScalar() && rv.IsScalar(): // in our design, this case should deal while pruning extends.
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_bool})
 		rs := make([]int64, 1)
-		rs, err := like2.BtConstAndConst(lvs.Get(0), rvs.Get(0), rs)
+		rs, err := like.BtConstAndConst(lvs.Get(0), rvs.Get(0), rs)
 		if err != nil {
 			return nil, err
 		}
@@ -95,13 +95,13 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		rs := encoding.DecodeInt64Slice(vec.Data)
 		rs = rs[:len(rvs.Lengths)]
 		if nulls.Any(rv.Nsp) {
-			rs, err = like2.BtConstAndSliceNull(lvs.Get(0), rvs, rv.Nsp.Np, rs)
+			rs, err = like.BtConstAndSliceNull(lvs.Get(0), rvs, rv.Nsp.Np, rs)
 			if err != nil {
 				return nil, err
 			}
 			vec.Nsp = rv.Nsp
 		} else {
-			rs, err = like2.BtConstAndSlice(lvs.Get(0), rvs, rs)
+			rs, err = like.BtConstAndSlice(lvs.Get(0), rvs, rs)
 			if err != nil {
 				return nil, err
 			}
@@ -130,26 +130,26 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		rs = rs[:len(rvs.Lengths)]
 		if nulls.Any(rv.Nsp) && nulls.Any(lv.Nsp) {
 			nsp := lv.Nsp.Or(rv.Nsp)
-			rs, err = like2.BtSliceNullAndSliceNull(lvs, rvs, nsp.Np, rs)
+			rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, nsp.Np, rs)
 			if err != nil {
 				return nil, err
 			}
 			vec.Nsp = nsp
 		} else if nulls.Any(rv.Nsp) && !nulls.Any(lv.Nsp) {
-			rs, err = like2.BtSliceNullAndSliceNull(lvs, rvs, rv.Nsp.Np, rs)
+			rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, rv.Nsp.Np, rs)
 			if err != nil {
 				return nil, err
 			}
 			vec.Nsp = rv.Nsp
 		} else if !nulls.Any(rv.Nsp) && nulls.Any(lv.Nsp) {
-			rs, err = like2.BtSliceNullAndSliceNull(lvs, rvs, lv.Nsp.Np, rs)
+			rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, lv.Nsp.Np, rs)
 			if err != nil {
 				return nil, err
 			}
 			//vector.SetCol(vec, rs)
 			vec.Nsp = lv.Nsp
 		} else {
-			rs, err = like2.BtSliceAndSlice(lvs, rvs, rs)
+			rs, err = like.BtSliceAndSlice(lvs, rvs, rs)
 			if err != nil {
 				return nil, err
 			}

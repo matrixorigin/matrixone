@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	empty2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/empty"
+	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/empty"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,7 +34,7 @@ func Empty(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint8, 1)
-		vector.SetCol(resultVector, empty2.Empty(inputValues, resultValues))
+		vector.SetCol(resultVector, empty.Empty(inputValues, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
@@ -44,7 +44,7 @@ func Empty(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		resultValues := encoding.DecodeUint8Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues.Lengths)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, empty2.Empty(inputValues, resultValues))
+		vector.SetCol(resultVector, empty.Empty(inputValues, resultValues))
 		return resultVector, nil
 	}
 }

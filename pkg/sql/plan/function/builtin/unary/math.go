@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	momath2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/momath"
+	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -62,42 +62,42 @@ func math1(vs []*vector.Vector, proc *process.Process, fn mathFn) (*vector.Vecto
 }
 
 func Acos(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath2.Acos)
+	return math1(vs, proc, momath.Acos)
 }
 
 func Atan(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath2.Atan)
+	return math1(vs, proc, momath.Atan)
 }
 
 func Cos(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath2.Cos)
+	return math1(vs, proc, momath.Cos)
 }
 
 func Cot(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath2.Cot)
+	return math1(vs, proc, momath.Cot)
 }
 
 func Exp(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath2.Exp)
+	return math1(vs, proc, momath.Exp)
 }
 
 func Ln(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath2.Ln)
+	return math1(vs, proc, momath.Ln)
 }
 
 func Log(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	// MySQL log is the same as ln.
-	return math1(vs, proc, momath2.Ln)
+	return math1(vs, proc, momath.Ln)
 }
 
 func Sin(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath2.Sin)
+	return math1(vs, proc, momath.Sin)
 }
 
 func Sinh(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath2.Sinh)
+	return math1(vs, proc, momath.Sinh)
 }
 
 func Tan(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath2.Tan)
+	return math1(vs, proc, momath.Tan)
 }

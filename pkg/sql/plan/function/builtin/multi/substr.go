@@ -15,7 +15,7 @@
 package multi
 
 import (
-	substring2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/substring"
+	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/substring"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -78,11 +78,11 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 
 			resultVec.IsConst = true
 			if startValue > 0 {
-				vector.SetCol(resultVec, substring2.SubstringFromLeftConstOffsetUnbounded(columnSrcCol, results, startValue-1))
+				vector.SetCol(resultVec, substring.SubstringFromLeftConstOffsetUnbounded(columnSrcCol, results, startValue-1))
 			} else if startValue < 0 {
-				vector.SetCol(resultVec, substring2.SubstringFromRightConstOffsetUnbounded(columnSrcCol, results, -startValue))
+				vector.SetCol(resultVec, substring.SubstringFromRightConstOffsetUnbounded(columnSrcCol, results, -startValue))
 			} else {
-				vector.SetCol(resultVec, substring2.SubstringFromZeroConstOffsetUnbounded(columnSrcCol, results))
+				vector.SetCol(resultVec, substring.SubstringFromZeroConstOffsetUnbounded(columnSrcCol, results))
 			}
 			return resultVec, nil
 		} else { //has third parameter
@@ -97,11 +97,11 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 				lengthValue := castConstAsint64(lengthVector.Col, lengthVector.Typ.Oid, 0)
 
 				if startValue > 0 {
-					vector.SetCol(resultVec, substring2.SubstringFromLeftConstOffsetBounded(columnSrcCol, results, startValue-1, lengthValue))
+					vector.SetCol(resultVec, substring.SubstringFromLeftConstOffsetBounded(columnSrcCol, results, startValue-1, lengthValue))
 				} else if startValue < 0 {
-					vector.SetCol(resultVec, substring2.SubstringFromRightConstOffsetBounded(columnSrcCol, results, -startValue, lengthValue))
+					vector.SetCol(resultVec, substring.SubstringFromRightConstOffsetBounded(columnSrcCol, results, -startValue, lengthValue))
 				} else {
-					vector.SetCol(resultVec, substring2.SubstringFromZeroConstOffsetBounded(columnSrcCol, results))
+					vector.SetCol(resultVec, substring.SubstringFromZeroConstOffsetBounded(columnSrcCol, results))
 				}
 				return resultVec, nil
 			} else {
@@ -110,7 +110,7 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 				columnLengthCol := inputVecs[2].Col
 				columnLengthType := inputVecs[2].Typ.Oid
 				cs := []bool{inputVecs[0].IsScalar(), inputVecs[1].IsScalar(), inputVecs[2].IsScalar()}
-				vector.SetCol(resultVec, substring2.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs))
+				vector.SetCol(resultVec, substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs))
 				return resultVec, nil
 			}
 		}
@@ -119,7 +119,7 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 			//The pos column is a variable or an expression
 			columnStartCol := inputVecs[1].Col
 			columnStartType := inputVecs[1].Typ.Oid
-			vector.SetCol(resultVec, substring2.SubstringDynamicOffsetUnbounded(columnSrcCol, results, columnStartCol, columnStartType))
+			vector.SetCol(resultVec, substring.SubstringDynamicOffsetUnbounded(columnSrcCol, results, columnStartCol, columnStartType))
 			return resultVec, nil
 		} else {
 			//Substring column with length parameter
@@ -128,7 +128,7 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 			columnLengthCol := inputVecs[2].Col
 			columnLengthType := inputVecs[2].Typ.Oid
 			cs := []bool{inputVecs[0].IsScalar(), inputVecs[1].IsScalar(), inputVecs[2].IsScalar()}
-			vector.SetCol(resultVec, substring2.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs))
+			vector.SetCol(resultVec, substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs))
 			return resultVec, nil
 		}
 	}
@@ -165,12 +165,12 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 			// get start constant value
 			startValue := castConstAsint64(startVector.Col, startVector.Typ.Oid, 0)
 			if startValue > 0 {
-				vector.SetCol(resultVec, substring2.SubstringFromLeftConstOffsetUnbounded(columnSrcCol, results, startValue-1))
+				vector.SetCol(resultVec, substring.SubstringFromLeftConstOffsetUnbounded(columnSrcCol, results, startValue-1))
 			} else if startValue < 0 {
-				vector.SetCol(resultVec, substring2.SubstringFromRightConstOffsetUnbounded(columnSrcCol, results, -startValue))
+				vector.SetCol(resultVec, substring.SubstringFromRightConstOffsetUnbounded(columnSrcCol, results, -startValue))
 			} else {
 				//startValue == 0
-				vector.SetCol(resultVec, substring2.SubstringFromZeroConstOffsetUnbounded(columnSrcCol, results))
+				vector.SetCol(resultVec, substring.SubstringFromZeroConstOffsetUnbounded(columnSrcCol, results))
 			}
 			return resultVec, nil
 		} else { //has third parameter
@@ -182,12 +182,12 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 				// get length constant value
 				lengthValue := castConstAsint64(lengthVector.Col, lengthVector.Typ.Oid, 0)
 				if startValue > 0 {
-					vector.SetCol(resultVec, substring2.SubstringFromLeftConstOffsetBounded(columnSrcCol, results, startValue-1, lengthValue))
+					vector.SetCol(resultVec, substring.SubstringFromLeftConstOffsetBounded(columnSrcCol, results, startValue-1, lengthValue))
 				} else if startValue < 0 {
-					vector.SetCol(resultVec, substring2.SubstringFromRightConstOffsetBounded(columnSrcCol, results, -startValue, lengthValue))
+					vector.SetCol(resultVec, substring.SubstringFromRightConstOffsetBounded(columnSrcCol, results, -startValue, lengthValue))
 				} else {
 					//startValue == 0
-					vector.SetCol(resultVec, substring2.SubstringFromZeroConstOffsetBounded(columnSrcCol, results))
+					vector.SetCol(resultVec, substring.SubstringFromZeroConstOffsetBounded(columnSrcCol, results))
 				}
 				return resultVec, nil
 			} else {
@@ -196,7 +196,7 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 				columnLengthCol := inputVecs[2].Col
 				columnLengthType := inputVecs[2].Typ.Oid
 				cs := []bool{inputVecs[0].IsScalar(), inputVecs[1].IsScalar(), inputVecs[2].IsScalar()}
-				vector.SetCol(resultVec, substring2.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs))
+				vector.SetCol(resultVec, substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs))
 				return resultVec, nil
 			}
 		}
@@ -205,7 +205,7 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 			//The pos column is a variable or an expression
 			columnStartCol := inputVecs[1].Col
 			columnStartType := inputVecs[1].Typ.Oid
-			vector.SetCol(resultVec, substring2.SubstringDynamicOffsetUnbounded(columnSrcCol, results, columnStartCol, columnStartType))
+			vector.SetCol(resultVec, substring.SubstringDynamicOffsetUnbounded(columnSrcCol, results, columnStartCol, columnStartType))
 			return resultVec, nil
 		} else {
 			//Substring column with length parameter
@@ -214,7 +214,7 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 			columnLengthCol := inputVecs[2].Col
 			columnLengthType := inputVecs[2].Typ.Oid
 			cs := []bool{inputVecs[0].IsScalar(), inputVecs[1].IsScalar(), inputVecs[2].IsScalar()}
-			vector.SetCol(resultVec, substring2.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs))
+			vector.SetCol(resultVec, substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs))
 			return resultVec, nil
 		}
 	}
