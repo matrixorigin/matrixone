@@ -64,8 +64,7 @@ type Catalog struct {
 }
 
 func MockCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tasks.TaskScheduler) *Catalog {
-	var driver store.Store
-	driver = store.NewStoreWithBatchStoreDriver(dir, name, cfg)
+	driver := store.NewStoreWithBatchStoreDriver(dir, name, cfg)
 	catalog := &Catalog{
 		RWMutex:     new(sync.RWMutex),
 		IDAlloctor:  NewIDAllocator(),

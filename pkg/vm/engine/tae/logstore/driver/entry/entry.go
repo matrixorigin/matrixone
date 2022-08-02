@@ -41,14 +41,15 @@ func (e *Entry) SetInfo() {
 		e.Info = info.(*entry.Info)
 	}
 }
-func (e *Entry) ReadFrom(r io.Reader) {
-	if err := binary.Read(r, binary.BigEndian, &e.Lsn); err != nil {
+func (e *Entry) ReadFrom(r io.Reader) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &e.Lsn); err != nil {
 		return
 	}
-	_, err := e.Entry.ReadFrom(r)
+	_, err = e.Entry.ReadFrom(r)
 	if err != nil {
 		panic(err)
 	}
+	return
 }
 
 func (e *Entry) ReadAt(r *os.File, offset int) (int, error) {
