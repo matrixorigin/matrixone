@@ -21,7 +21,7 @@ pull_request_rules:
         name: default
         method: squash
         commit_message_template: |
-          {{ title }}
+          {{ title }} (#{{ number }})
 
           Approved by: @{{ approved_reviews_by | join(', @') }}
   - name: label for Bug
