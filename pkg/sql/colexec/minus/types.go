@@ -17,7 +17,6 @@ package minus
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/joincondition"
 )
 
 type Argument struct {
@@ -25,8 +24,6 @@ type Argument struct {
 
 	// hash table bucket related information.
 	IBucket, NBucket uint64
-
-	Precisions [2][]joincondition.Condition
 }
 
 const (
@@ -41,9 +38,6 @@ type container struct {
 
 	// hash table related
 	hashTable *hashmap.StrHashMap
-
-	// used to align the scale for types.
-	scales [2][]int32
 
 	// result batch of minus column execute operator
 	bat *batch.Batch

@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -32,28 +31,6 @@ func Prepare(_ *process.Process, argument interface{}) error {
 	{
 		arg.ctr.bat = nil
 		arg.ctr.hashTable = hashmap.NewStrMap(true)
-		for i := range arg.ctr.scales {
-			arg.ctr.scales[i] = make([]int32, len(arg.Precisions[0]))
-		}
-	}
-	{
-		// aligning the decimal precision
-		for i := range arg.Precisions[0] {
-			scale1 := arg.Precisions[0][i].Expr.Typ.Scale
-			scale2 := arg.Precisions[1][i].Expr.Typ.Scale
-			switch types.T(arg.Precisions[0][i].Expr.Typ.Id) {
-			case types.T_decimal64, types.T_decimal128:
-				if scale1 > scale2 {
-					arg.Precisions[1][i].Expr.Typ.Scale = scale1 - scale2
-				} else if scale2 > scale1 {
-					arg.Precisions[0][i].Expr.Typ.Scale = scale2 - scale1
-				}
-			default:
-				// do nothing
-			}
-			arg.ctr.scales[0][i] = scale1
-			arg.ctr.scales[1][i] = scale2
-		}
 	}
 	return nil
 }
@@ -120,7 +97,7 @@ func (ctr *container) buildHashTable(arg *Argument, proc *process.Process, ana p
 				n = hashmap.UnitLimit
 			}
 
-			vs, _ := itr.Insert(i, n, bat.Vecs, ctr.scales[index])
+			vs, _ := itr.Insert(i, n, bat.Vecs)
 			for _, v := range vs {
 				if v > ctr.hashTable.GroupCount() {
 					ctr.hashTable.AddGroup()
@@ -164,7 +141,7 @@ func (ctr *container) probeHashTable(arg *Argument, proc *process.Process, ana p
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
-			vs, _ := itr.Insert(i, n, bat.Vecs, ctr.scales[index])
+			vs, _ := itr.Insert(i, n, bat.Vecs)
 			copy(inserted[:n], restoreInserted[:n])
 			for j, v := range vs {
 				if v > ctr.hashTable.GroupCount() {

@@ -19,8 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/joincondition"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -122,18 +120,6 @@ func newMinusTestCase(proc *process.Process, leftBatches, rightBatches []*batch.
 		}
 	}
 	arg := new(Argument)
-	{
-		arg.Precisions[0] = make([]joincondition.Condition, len(leftBatches[0].Vecs))
-		arg.Precisions[1] = make([]joincondition.Condition, len(rightBatches[0].Vecs))
-		for i := 0; i < len(arg.Precisions[0]); i++ {
-			arg.Precisions[0][i].Expr = &plan.Expr{
-				Typ: new(plan.Type),
-			}
-			arg.Precisions[1][i].Expr = &plan.Expr{
-				Typ: new(plan.Type),
-			}
-		}
-	}
 	return minusTestCase{
 		proc:   proc,
 		arg:    arg,

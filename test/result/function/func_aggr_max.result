@@ -245,12 +245,12 @@ insert into t1 values (2,1);
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
 a	count(b)	sum(b)	avg(b)	std(b)	min(b)	max(b)	bit_and(b)	bit_or(b)
 1	0	null	null	null	null	null	null	null
-2	1	1	1.0	0.0	1	1	0	1
+2	1	1	1.0	0.0	1	1	1	1
 insert into t1 values (3,1);
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
 a	count(b)	sum(b)	avg(b)	std(b)	min(b)	max(b)	bit_and(b)	bit_or(b)
 1	0	null	null	null	null	null	null	null
-2	1	1	1.0	0.0	1	1	0	1
+2	1	1	1.0	0.0	1	1	1	1
 3	1	1	1.0	0.0	1	1	1	1
 drop table t1;
 create table t1(a1 char(3) primary key,a2 smallint,a3 char(3),a4 real,a5 date);
@@ -472,4 +472,20 @@ min(f3)	max(f3)
 select min(f4),max(f4) from t1;
 min(f4)	max(f4)
 0001-01-01 00:00:00	1998-01-01 00:00:00
+drop table t1;
+
+create table t1 (grp int, a bigint unsigned, c char(10) not null);
+insert into t1 values (1,1,"a");
+insert into t1 values (2,2,"b");
+insert into t1 values (2,3,"c");
+insert into t1 values (3,4,"E");
+insert into t1 values (3,5,"C");
+insert into t1 values (3,6,"D");
+select max(distinct a),max(distinct grp) from t1;
+max(distinct a)	    max(distinct grp)
+6	3
+insert into t1 values (null,null,'');
+select max(distinct a),max(distinct grp) from t1;
+max(distinct a)	    max(distinct grp)
+6	3
 drop table t1;

@@ -16,71 +16,41 @@ package semi
 
 import (
 	"bytes"
-	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func init() {
-	OneInt64s = make([]int64, UnitLimit)
-	for i := range OneInt64s {
-		OneInt64s[i] = 1
-	}
+func String(_ any, buf *bytes.Buffer) {
+	buf.WriteString(" semi join ")
 }
 
-func String(_ interface{}, buf *bytes.Buffer) {
-	buf.WriteString(" ⨝ ")
-}
-
-func Prepare(proc *process.Process, arg interface{}) error {
+func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
-	ap.ctr = new(Container)
-	ap.ctr.keys = make([][]byte, UnitLimit)
-	ap.ctr.values = make([]uint64, UnitLimit)
-	ap.ctr.zValues = make([]int64, UnitLimit)
-	ap.ctr.inserted = make([]uint8, UnitLimit)
-	ap.ctr.zInserted = make([]uint8, UnitLimit)
-	ap.ctr.strHashStates = make([][3]uint64, UnitLimit)
-	ap.ctr.strHashMap = &hashtable.StringHashMap{}
-	ap.ctr.strHashMap.Init()
-	ap.ctr.vecs = make([]evalVector, len(ap.Conditions[0]))
-	for i, cond := range ap.Conditions[0] { // aligning the precision of decimal
-		switch types.T(cond.Expr.Typ.Id) {
-		case types.T_decimal64:
-			typ := ap.Conditions[1][i].Expr.Typ
-			if typ.Scale > cond.Expr.Typ.Scale {
-				cond.Scale = typ.Scale - cond.Expr.Typ.Scale
-			} else if typ.Scale < cond.Expr.Typ.Scale {
-				ap.Conditions[1][i].Scale = cond.Expr.Typ.Scale - typ.Scale
-			}
-		case types.T_decimal128:
-			typ := ap.Conditions[1][i].Expr.Typ
-			if typ.Scale > cond.Expr.Typ.Scale {
-				cond.Scale = typ.Scale - cond.Expr.Typ.Scale
-			} else if typ.Scale < cond.Expr.Typ.Scale {
-				ap.Conditions[1][i].Scale = cond.Expr.Typ.Scale - typ.Scale
-			}
-		}
-	}
-	ap.ctr.decimal64Slice = make([]types.Decimal64, UnitLimit)
-	ap.ctr.decimal128Slice = make([]types.Decimal128, UnitLimit)
+	ap.ctr = new(container)
+	ap.ctr.mp = hashmap.NewStrMap(false)
+	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
+	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
+	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(ap, proc); err != nil {
+			if err := ctr.build(ap, proc, anal); err != nil {
 				ctr.state = End
+				ctr.freeSels(proc)
 				return true, err
 			}
 			ctr.state = Probe
@@ -88,38 +58,34 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
+				ctr.freeSels(proc)
 				if ctr.bat != nil {
-					ctr.bat.Clean(proc.Mp)
+					ctr.bat.Clean(proc.GetMheap())
 				}
 				continue
 			}
-			if len(bat.Zs) == 0 {
+			if bat.Length() == 0 {
 				continue
 			}
 			if ctr.bat == nil {
-				bat.Clean(proc.Mp)
+				bat.Clean(proc.GetMheap())
 				continue
 			}
-			if err := ctr.probe(bat, ap, proc); err != nil {
+			if err := ctr.probe(bat, ap, proc, anal); err != nil {
 				ctr.state = End
-				proc.Reg.InputBatch = nil
+				ctr.freeSels(proc)
+				proc.SetInputBatch(nil)
 				return true, err
 			}
 			return false, nil
 		default:
-			proc.Reg.InputBatch = nil
+			proc.SetInputBatch(nil)
 			return true, nil
 		}
 	}
 }
 
-func (ctr *Container) build(ap *Argument, proc *process.Process) error {
-	if ap.IsPreBuild {
-		bat := <-proc.Reg.MergeReceivers[1].Ch
-		ctr.bat = bat
-		ctr.strHashMap = bat.Ht.(*hashtable.StringHashMap)
-		return nil
-	}
+func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
 	var err error
 
 	for {
@@ -127,7 +93,7 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 		if bat == nil {
 			break
 		}
-		if len(bat.Zs) == 0 {
+		if bat.Length() == 0 {
 			continue
 		}
 		if ctr.bat == nil {
@@ -135,211 +101,83 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 			for i, vec := range bat.Vecs {
 				ctr.bat.Vecs[i] = vector.New(vec.Typ)
 			}
+			ctr.bat.Zs = proc.GetMheap().GetSels()
 		}
-		if ctr.bat, err = ctr.bat.Append(proc.Mp, bat); err != nil {
-			bat.Clean(proc.Mp)
-			ctr.bat.Clean(proc.Mp)
+		anal.Input(bat)
+		anal.Alloc(int64(bat.Size()))
+		if ctr.bat, err = ctr.bat.Append(proc.GetMheap(), bat); err != nil {
+			bat.Clean(proc.GetMheap())
+			ctr.bat.Clean(proc.GetMheap())
 			return err
 		}
-		bat.Clean(proc.Mp)
+		bat.Clean(proc.GetMheap())
 	}
-	if ctr.bat == nil || len(ctr.bat.Zs) == 0 {
+	if ctr.bat == nil || ctr.bat.Length() == 0 {
 		return nil
 	}
-	for i, cond := range ap.Conditions[1] {
-		vec, err := colexec.EvalExpr(ctr.bat, proc, cond.Expr)
-		if err != nil || vec.ConstExpand(proc.Mp) == nil {
-			for j := 0; j < i; j++ {
-				if ctr.vecs[j].needFree {
-					vector.Clean(ctr.vecs[j].vec, proc.Mp)
-				}
-			}
-			return err
-		}
-		ctr.vecs[i].vec = vec
-		ctr.vecs[i].needFree = true
-		for j := range ctr.bat.Vecs {
-			if ctr.bat.Vecs[j] == vec {
-				ctr.vecs[i].needFree = false
-				break
-			}
-		}
+	if err := ctr.evalJoinCondition(ctr.bat, ap.Conditions[1], proc); err != nil {
+		return err
 	}
-	defer func() {
-		for i := range ctr.vecs {
-			if ctr.vecs[i].needFree {
-				vector.Clean(ctr.vecs[i].vec, proc.Mp)
-			}
-		}
-	}()
-	count := len(ctr.bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	defer ctr.freeJoinCondition(proc)
+	rows := ctr.mp.GroupCount()
+	itr := ctr.mp.NewIterator(ap.Ibucket, ap.Nbucket)
+	count := ctr.bat.Length()
+	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
-		if n > UnitLimit {
-			n = UnitLimit
+		if n > hashmap.UnitLimit {
+			n = hashmap.UnitLimit
 		}
-		copy(ctr.zValues[:n], OneInt64s[:n])
-		for j, cond := range ap.Conditions[1] {
-			vec := ctr.vecs[j].vec
-			switch typLen := vec.Typ.Oid.FixedLength(); typLen {
-			case 1:
-				fillGroupStr[uint8](ctr, vec, n, 1, i)
-			case 2:
-				fillGroupStr[uint16](ctr, vec, n, 2, i)
-			case 4:
-				fillGroupStr[uint32](ctr, vec, n, 4, i)
-			case 8:
-				fillGroupStr[uint64](ctr, vec, n, 8, i)
-			case -8:
-				if cond.Scale > 0 {
-					fillGroupStrWithDecimal64(ctr, vec, n, i, cond.Scale)
-				} else {
-					fillGroupStr[uint64](ctr, vec, n, 8, i)
-				}
-			case -16:
-				if cond.Scale > 0 {
-					fillGroupStrWithDecimal128(ctr, vec, n, i, cond.Scale)
-				} else {
-					fillGroupStr[types.Decimal128](ctr, vec, n, 16, i)
-				}
-			default:
-				vs := vec.Col.(*types.Bytes)
-				if !nulls.Any(vec.Nsp) {
-					for k := 0; k < n; k++ {
-						ctr.keys[k] = append(ctr.keys[k], vs.Get(int64(i+k))...)
-					}
-				} else {
-					for k := 0; k < n; k++ {
-						if vec.Nsp.Np.Contains(uint64(i + k)) {
-							ctr.zValues[k] = 0
-						} else {
-							ctr.keys[k] = append(ctr.keys[k], vs.Get(int64(i+k))...)
-						}
-					}
-				}
-			}
-		}
-		for k := 0; k < n; k++ {
-			if l := len(ctr.keys[k]); l < 16 {
-				ctr.keys[k] = append(ctr.keys[k], hashtable.StrKeyPadding[l:]...)
-			}
-		}
-		ctr.strHashMap.InsertStringBatchWithRing(ctr.zValues, ctr.strHashStates, ctr.keys[:n], ctr.values)
-		for k, v := range ctr.values[:n] {
-			if ctr.zValues[k] == 0 {
+		vals, zvals := itr.Insert(i, n, ctr.vecs)
+		for k, v := range vals[:n] {
+			if zvals[k] == 0 {
 				continue
 			}
-			if v > ctr.rows {
-				ctr.sels = append(ctr.sels, make([]int64, 0, 8))
+			if v > rows {
+				rows++
+				ctr.mp.AddGroup()
+				ctr.sels = append(ctr.sels, proc.GetMheap().GetSels())
 			}
 			ai := int64(v) - 1
 			ctr.sels[ai] = append(ctr.sels[ai], int64(i+k))
-		}
-		for k := 0; k < n; k++ {
-			ctr.keys[k] = ctr.keys[k][:0]
 		}
 	}
 	return nil
 }
 
-func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Process) error {
-	defer bat.Clean(proc.Mp)
+func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
+	defer bat.Clean(proc.GetMheap())
+	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
+	rbat.Zs = proc.GetMheap().GetSels()
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
 	}
-	for i, cond := range ap.Conditions[0] {
-		vec, err := colexec.EvalExpr(bat, proc, cond.Expr)
-		if err != nil || vec.ConstExpand(proc.Mp) == nil {
-			for j := 0; j < i; j++ {
-				if ctr.vecs[j].needFree {
-					vector.Clean(ctr.vecs[j].vec, proc.Mp)
-				}
-			}
-			return err
-		}
-		ctr.vecs[i].vec = vec
-		ctr.vecs[i].needFree = true
-		for j := range bat.Vecs {
-			if bat.Vecs[j] == vec {
-				ctr.vecs[i].needFree = false
-				break
-			}
-		}
+	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
+		return err
 	}
-	defer func() {
-		for i := range ctr.vecs {
-			if ctr.vecs[i].needFree {
-				vector.Clean(ctr.vecs[i].vec, proc.Mp)
-			}
-		}
-	}()
-	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	defer ctr.freeJoinCondition(proc)
+	count := bat.Length()
+	itr := ctr.mp.NewIterator(ap.Ibucket, ap.Nbucket)
+	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
-		if n > UnitLimit {
-			n = UnitLimit
+		if n > hashmap.UnitLimit {
+			n = hashmap.UnitLimit
 		}
-		copy(ctr.zValues[:n], OneInt64s[:n])
-		for j, cond := range ap.Conditions[0] {
-			vec := ctr.vecs[j].vec
-			switch typLen := vec.Typ.Oid.FixedLength(); typLen {
-			case 1:
-				fillGroupStr[uint8](ctr, vec, n, 1, i)
-			case 2:
-				fillGroupStr[uint16](ctr, vec, n, 2, i)
-			case 4:
-				fillGroupStr[uint32](ctr, vec, n, 4, i)
-			case 8:
-				fillGroupStr[uint64](ctr, vec, n, 8, i)
-			case -8:
-				if cond.Scale > 0 {
-					fillGroupStrWithDecimal64(ctr, vec, n, i, cond.Scale)
-				} else {
-					fillGroupStr[uint64](ctr, vec, n, 8, i)
-				}
-			case -16:
-				if cond.Scale > 0 {
-					fillGroupStrWithDecimal128(ctr, vec, n, i, cond.Scale)
-				} else {
-					fillGroupStr[types.Decimal128](ctr, vec, n, 16, i)
-				}
-			default:
-				vs := vec.Col.(*types.Bytes)
-				if !nulls.Any(vec.Nsp) {
-					for k := 0; k < n; k++ {
-						ctr.keys[k] = append(ctr.keys[k], vs.Get(int64(i+k))...)
-					}
-				} else {
-					for k := 0; k < n; k++ {
-						if vec.Nsp.Np.Contains(uint64(i + k)) {
-							ctr.zValues[k] = 0
-						} else {
-							ctr.keys[k] = append(ctr.keys[k], vs.Get(int64(i+k))...)
-						}
-					}
-				}
-			}
-		}
+		copy(ctr.inBuckets, hashmap.OneUInt8s)
+		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
 		for k := 0; k < n; k++ {
-			if l := len(ctr.keys[k]); l < 16 {
-				ctr.keys[k] = append(ctr.keys[k], hashtable.StrKeyPadding[l:]...)
-			}
-		}
-		ctr.strHashMap.FindStringBatch(ctr.strHashStates, ctr.keys[:n], ctr.values)
-		for k := 0; k < n; k++ {
-			ctr.keys[k] = ctr.keys[k][:0]
-		}
-		for k := 0; k < n; k++ {
-			if ctr.zValues[k] == 0 {
+			if ctr.inBuckets[k] == 0 {
 				continue
 			}
-			if ctr.values[k] == 0 {
+			if zvals[k] == 0 {
+				continue
+			}
+			if vals[k] == 0 {
 				continue
 			}
 			for j, pos := range ap.Result {
-				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp); err != nil {
-					rbat.Clean(proc.Mp)
+				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.GetMheap()); err != nil {
+					rbat.Clean(proc.GetMheap())
 					return err
 				}
 			}
@@ -347,63 +185,46 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 	rbat.ExpandNulls()
-	proc.Reg.InputBatch = rbat
+	anal.Output(rbat)
+	proc.SetInputBatch(rbat)
 	return nil
 }
 
-func fillGroupStr[T any](ctr *Container, vec *vector.Vector, n int, sz int, start int) {
-	vs := vector.GetFixedVectorValues[T](vec, int(sz))
-	data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*sz)[:len(vs)*sz]
-	if !nulls.Any(vec.Nsp) {
-		for i := 0; i < n; i++ {
-			ctr.keys[i] = append(ctr.keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
-		}
-	} else {
-		for i := 0; i < n; i++ {
-			if vec.Nsp.Np.Contains(uint64(i + start)) {
-				ctr.zValues[i] = 0
-			} else {
-				ctr.keys[i] = append(ctr.keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
+func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
+	for i, cond := range conds {
+		vec, err := colexec.EvalExpr(bat, proc, cond)
+		if err != nil || vec.ConstExpand(proc.GetMheap()) == nil {
+			for j := 0; j < i; j++ {
+				if ctr.evecs[j].needFree {
+					vector.Clean(ctr.evecs[j].vec, proc.GetMheap())
+				}
 			}
+			return err
+		}
+		ctr.vecs[i] = vec
+		ctr.evecs[i].vec = vec
+		ctr.evecs[i].needFree = true
+		for j := range bat.Vecs {
+			if bat.Vecs[j] == vec {
+				ctr.evecs[i].needFree = false
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func (ctr *container) freeJoinCondition(proc *process.Process) {
+	for i := range ctr.evecs {
+		if ctr.evecs[i].needFree {
+			ctr.evecs[i].vec.Free(proc.GetMheap())
 		}
 	}
 }
 
-func fillGroupStrWithDecimal64(ctr *Container, vec *vector.Vector, n int, start int, scale int32) {
-	src := vector.GetFixedVectorValues[types.Decimal64](vec, 8)
-	vs := types.AlignDecimal64UsingScaleDiffBatch(src[start:start+n], ctr.decimal64Slice[:n], scale)
-	data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
-	if !nulls.Any(vec.Nsp) {
-		for i := 0; i < n; i++ {
-			ctr.keys[i] = append(ctr.keys[i], data[(i)*8:(i+1)*8]...)
-		}
-	} else {
-		for i := 0; i < n; i++ {
-			if vec.Nsp.Np.Contains(uint64(i + start)) {
-				ctr.zValues[i] = 0
-			} else {
-				ctr.keys[i] = append(ctr.keys[i], data[(i)*8:(i+1)*8]...)
-			}
-		}
+func (ctr *container) freeSels(proc *process.Process) {
+	for i := range ctr.sels {
+		proc.GetMheap().PutSels(ctr.sels[i])
 	}
-}
-
-func fillGroupStrWithDecimal128(ctr *Container, vec *vector.Vector, n int, start int, scale int32) {
-	src := vector.GetFixedVectorValues[types.Decimal128](vec, 16)
-	vs := ctr.decimal128Slice[:n]
-	types.AlignDecimal128UsingScaleDiffBatch(src[start:start+n], vs, scale)
-	data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*16)[:len(vs)*16]
-	if !nulls.Any(vec.Nsp) {
-		for i := 0; i < n; i++ {
-			ctr.keys[i] = append(ctr.keys[i], data[(i)*16:(i+1)*16]...)
-		}
-	} else {
-		for i := 0; i < n; i++ {
-			if vec.Nsp.Np.Contains(uint64(i + start)) {
-				ctr.zValues[i] = 0
-			} else {
-				ctr.keys[i] = append(ctr.keys[i], data[(i)*16:(i+1)*16]...)
-			}
-		}
-	}
+	ctr.sels = nil
 }

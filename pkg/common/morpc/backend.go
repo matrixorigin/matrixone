@@ -311,6 +311,10 @@ func (rb *remoteBackend) active() {
 	rb.atomic.lastActiveTime.Store(now)
 }
 
+func (rb *remoteBackend) inactive() {
+	rb.atomic.lastActiveTime.Store(time.Time{})
+}
+
 func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	rb.logger.Info("write loop started")
 	defer func() {
@@ -325,6 +329,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 		if err := rb.resetConn(); err != nil {
 			rb.logger.Error("fail to reset backend connection",
 				zap.Error(err))
+			rb.inactive()
 		}
 	}
 
@@ -534,7 +539,9 @@ func (rb *remoteBackend) resetConn() error {
 	rb.stateMu.Lock()
 	defer rb.stateMu.Unlock()
 
+	start := time.Now()
 	wait := time.Second
+	sleep := time.Millisecond * 200
 	for {
 		if !rb.runningLocked() {
 			return errBackendClosed
@@ -550,7 +557,18 @@ func (rb *remoteBackend) resetConn() error {
 		}
 		rb.logger.Error("init remote connection failed, retry later",
 			zap.Error(err))
-		time.Sleep(wait)
+
+		duration := time.Duration(0)
+		for {
+			time.Sleep(sleep)
+			duration += sleep
+			if time.Since(start) > rb.options.connectTimeout {
+				return errBackendClosed
+			}
+			if duration >= wait {
+				break
+			}
+		}
 		wait += wait / 2
 	}
 }

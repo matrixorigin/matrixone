@@ -14,7 +14,7 @@ require (
 	github.com/cockroachdb/pebble v0.0.0-20220407171941-2120d145e292
 	github.com/docker/go-units v0.4.0
 	github.com/fagongzi/goetty v1.13.0
-	github.com/fagongzi/goetty/v2 v2.0.3-0.20220727082602-18bd581d2658
+	github.com/fagongzi/goetty/v2 v2.0.3-0.20220730091829-0a8222eaa708
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/gogo/protobuf v1.3.2
@@ -22,7 +22,7 @@ require (
 	github.com/google/btree v1.0.1
 	github.com/google/gofuzz v1.2.0
 	github.com/google/uuid v1.3.0
-	github.com/lni/dragonboat/v4 v4.0.0-20220726132939-e3950119af4e
+	github.com/lni/dragonboat/v4 v4.0.0-20220731082147-e77cf6ba040a
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/matrixorigin/matrixcube v0.3.1-0.20220606032431-c944d801f1e5
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
@@ -34,7 +34,8 @@ require (
 	github.com/prashantv/gostub v1.1.0
 	github.com/smartystreets/goconvey v1.7.2
 	github.com/stretchr/testify v1.7.5
-	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
+	github.com/tidwall/btree v1.3.1
+	github.com/yireyun/go-queue v0.0.0-20220725040158-a4dd64810e1e
 	go.uber.org/zap v1.21.0
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )

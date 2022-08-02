@@ -18,6 +18,10 @@ import (
 	"bytes"
 )
 
+const (
+	MaxStringSize = 10485760
+)
+
 func (a *Bytes) Reset() {
 	a.Offsets = a.Offsets[:0]
 	a.Lengths = a.Lengths[:0]

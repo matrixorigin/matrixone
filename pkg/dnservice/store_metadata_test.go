@@ -29,7 +29,7 @@ func TestInitMetadata(t *testing.T) {
 	fs, err := fileservice.NewMemoryFS()
 	assert.NoError(t, err)
 
-	s := &store{logger: logutil.GetPanicLogger(), metadataFS: fs}
+	s := &store{logger: logutil.GetPanicLogger(), localFS: fs}
 	assert.NoError(t, s.initMetadata())
 }
 
@@ -58,7 +58,7 @@ func TestInitMetadataWithExistData(t *testing.T) {
 		},
 	}))
 
-	s := &store{logger: logutil.GetPanicLogger(), metadataFS: fs}
+	s := &store{logger: logutil.GetPanicLogger(), localFS: fs}
 	s.mu.metadata.UUID = "dn1"
 	assert.NoError(t, s.initMetadata())
 	assert.Equal(t, value, s.mu.metadata)
@@ -88,6 +88,6 @@ func TestInitMetadataWithInvalidUUIDWillPanic(t *testing.T) {
 		},
 	}))
 
-	s := &store{logger: logutil.GetPanicLogger(), metadataFS: fs}
+	s := &store{logger: logutil.GetPanicLogger(), localFS: fs}
 	assert.NoError(t, s.initMetadata())
 }

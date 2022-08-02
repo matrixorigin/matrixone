@@ -22,23 +22,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ interface{}, buf *bytes.Buffer) {
-	buf.WriteString(" ⨯ ")
+func String(_ any, buf *bytes.Buffer) {
+	buf.WriteString(" cross join ")
 }
 
-func Prepare(proc *process.Process, arg interface{}) error {
+func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
-	ap.ctr = new(Container)
+	ap.ctr = new(container)
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(ap, proc); err != nil {
+			if err := ctr.build(ap, proc, anal); err != nil {
 				ctr.state = End
 				return true, err
 			}
@@ -48,7 +51,7 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 			if bat == nil {
 				ctr.state = End
 				if ctr.bat != nil {
-					ctr.bat.Clean(proc.Mp)
+					ctr.bat.Clean(proc.GetMheap())
 				}
 				continue
 			}
@@ -56,24 +59,24 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 				continue
 			}
 			if ctr.bat == nil {
-				bat.Clean(proc.Mp)
+				bat.Clean(proc.GetMheap())
 				continue
 			}
-			if err := ctr.probe(bat, ap, proc); err != nil {
+			if err := ctr.probe(bat, ap, proc, anal); err != nil {
 				ctr.state = End
-				bat.Clean(proc.Mp)
-				proc.Reg.InputBatch = nil
+				bat.Clean(proc.GetMheap())
+				proc.SetInputBatch(nil)
 				return true, err
 			}
 			return false, nil
 		default:
-			proc.Reg.InputBatch = nil
+			proc.SetInputBatch(nil)
 			return true, nil
 		}
 	}
 }
 
-func (ctr *Container) build(ap *Argument, proc *process.Process) error {
+func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
 	var err error
 
 	for {
@@ -81,7 +84,7 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 		if bat == nil {
 			break
 		}
-		if len(bat.Zs) == 0 {
+		if bat.Length() == 0 {
 			continue
 		}
 		if ctr.bat == nil {
@@ -89,20 +92,25 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 			for i, vec := range bat.Vecs {
 				ctr.bat.Vecs[i] = vector.New(vec.Typ)
 			}
+			ctr.bat.Zs = proc.GetMheap().GetSels()
 		}
-		if ctr.bat, err = ctr.bat.Append(proc.Mp, bat); err != nil {
-			bat.Clean(proc.Mp)
-			ctr.bat.Clean(proc.Mp)
+		anal.Input(bat)
+		anal.Alloc(int64(bat.Size()))
+		if ctr.bat, err = ctr.bat.Append(proc.GetMheap(), bat); err != nil {
+			bat.Clean(proc.GetMheap())
+			ctr.bat.Clean(proc.GetMheap())
 			return err
 		}
-		bat.Clean(proc.Mp)
+		bat.Clean(proc.GetMheap())
 	}
 	return nil
 }
 
-func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
 	defer bat.Clean(proc.Mp)
+	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
+	rbat.Zs = proc.GetMheap().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
 			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].Typ)
@@ -110,18 +118,18 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].Typ)
 		}
 	}
-	count := len(bat.Zs)
+	count := bat.Length()
 	for i := 0; i < count; i++ {
 		for j := 0; j < len(ctr.bat.Zs); j++ {
 			for k, rp := range ap.Result {
 				if rp.Rel == 0 {
-					if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.Mp); err != nil {
-						rbat.Clean(proc.Mp)
+					if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.GetMheap()); err != nil {
+						rbat.Clean(proc.GetMheap())
 						return err
 					}
 				} else {
-					if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp); err != nil {
-						rbat.Clean(proc.Mp)
+					if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.GetMheap()); err != nil {
+						rbat.Clean(proc.GetMheap())
 						return err
 					}
 				}
@@ -130,6 +138,7 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 	rbat.ExpandNulls()
-	proc.Reg.InputBatch = rbat
+	anal.Output(rbat)
+	proc.SetInputBatch(rbat)
 	return nil
 }

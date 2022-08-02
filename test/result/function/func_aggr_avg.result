@@ -231,12 +231,12 @@ insert into t1 values (2,1);
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
 a	count(b)	sum(b)	avg(b)	std(b)	min(b)	max(b)	bit_and(b)	bit_or(b)
 1	0	null	null	null	null	null	null	null
-2	1	1	1.0	0.0	1	1	0	1
+2	1	1	1.0	0.0	1	1	1	1
 insert into t1 values (3,1);
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
 a	count(b)	sum(b)	avg(b)	std(b)	min(b)	max(b)	bit_and(b)	bit_or(b)
 1	0	null	null	null	null	null	null	null
-2	1	1	1.0	0.0	1	1	0	1
+2	1	1	1.0	0.0	1	1	1	1
 3	1	1	1.0	0.0	1	1	1	1
 drop table t1;
 create table t1 (a int);
@@ -341,3 +341,19 @@ select name, avg(value1), std(value1), variance(value1) from t1, t2 where t1.id 
 column "t2.name" must appear in the GROUP BY clause or be used in an aggregate function
 drop table t1;
 drop table t2;
+
+create table t1 (grp int, a bigint unsigned, c char(10) not null);
+insert into t1 values (1,1,"a");
+insert into t1 values (2,2,"b");
+insert into t1 values (2,3,"c");
+insert into t1 values (3,4,"E");
+insert into t1 values (3,5,"C");
+insert into t1 values (3,6,"D");
+select avg(distinct a),avg(distinct grp) from t1;
+avg(distinct a)	    avg(distinct grp)
+3.5	2.0
+insert into t1 values (null,null,'');
+select avg(distinct a),avg(distinct grp) from t1;
+avg(distinct a)	    avg(distinct grp)
+3.5	2.0
+drop table t1;

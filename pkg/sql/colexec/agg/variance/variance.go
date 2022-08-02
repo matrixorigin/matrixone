@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package Variance
+package variance
 
 import (
 	"math"
@@ -57,8 +57,7 @@ func (variance *Variance[T1]) Grows(count int) {
 		variance.count = make([]float64, count)
 	} else {
 		for i := 0; i < count; i++ {
-			var a float64
-			variance.sum = append(variance.sum, a)
+			variance.sum = append(variance.sum, 0)
 			variance.count = append(variance.count, 0)
 		}
 	}
@@ -76,7 +75,7 @@ func (variance *Variance[T1]) Merge(groupIndex1, groupIndex2 int64, x, y float64
 	variance2 := agg.(*Variance[T1])
 	if IsEmpty1 && !IsEmpty2 {
 		variance.sum[groupIndex1] = variance2.sum[groupIndex2]
-		variance.count[groupIndex1] = variance.count[groupIndex2]
+		variance.count[groupIndex1] = variance2.count[groupIndex2]
 		return y, false
 	} else if IsEmpty2 && !IsEmpty1 {
 		return x, false
@@ -94,13 +93,13 @@ func (variance *Variance[T1]) Fill(groupIndex int64, v1 T1, v2 float64, z int64,
 		return v2, IsEmpty
 	} else if IsEmpty {
 		f1 := float64(v1)
-		variance.sum[groupIndex] = any(f1 * float64(z)).(float64)
+		variance.sum[groupIndex] = f1 * float64(z)
 		variance.count[groupIndex] += float64(z)
 		return math.Pow(f1, 2) * float64(z), false
 	}
 	f1 := float64(v1)
 	f2 := float64(v2)
-	variance.sum[groupIndex] = float64(variance.sum[groupIndex]) + f1*float64(z)
+	variance.sum[groupIndex] += f1 * float64(z)
 	variance.count[groupIndex] += float64(z)
 	return f2 + math.Pow(f1, 2)*float64(z), false
 }
@@ -111,8 +110,7 @@ func (variance *Variance2) Grows(count int) {
 		variance.count = make([]float64, count)
 	} else {
 		for i := 0; i < count; i++ {
-			var a float64
-			variance.sum = append(variance.sum, a)
+			variance.sum = append(variance.sum, 0)
 			variance.count = append(variance.count, 0)
 		}
 	}
@@ -130,7 +128,7 @@ func (variance *Variance2) Merge(groupIndex1, groupIndex2 int64, x, y float64, I
 	variance2 := agg.(*Variance2)
 	if IsEmpty1 && !IsEmpty2 {
 		variance.sum[groupIndex1] = variance2.sum[groupIndex2]
-		variance.count[groupIndex1] = variance.count[groupIndex2]
+		variance.count[groupIndex1] = variance2.count[groupIndex2]
 		return y, false
 	} else if IsEmpty2 && !IsEmpty1 {
 		return x, false
@@ -183,7 +181,7 @@ func (variance *Variance3) Merge(groupIndex1, groupIndex2 int64, x, y float64, I
 	variance2 := agg.(*Variance2)
 	if IsEmpty1 && !IsEmpty2 {
 		variance.sum[groupIndex1] = variance2.sum[groupIndex2]
-		variance.count[groupIndex1] = variance.count[groupIndex2]
+		variance.count[groupIndex1] = variance2.count[groupIndex2]
 		return y, false
 	} else if IsEmpty2 && !IsEmpty1 {
 		return x, false

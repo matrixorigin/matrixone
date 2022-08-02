@@ -17,6 +17,8 @@
 package mheap
 
 import (
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
@@ -32,9 +34,10 @@ type Mheap interface {
 */
 
 type Mheap struct {
+	sync.Mutex
 	// SelectList, temporarily stores the row number list in the execution of operators
 	// and it can be reused in the future execution.
-	Ss [][]int64
+	ss [][]int64
 	Gm *guest.Mmu
 	Mp *mempool.Mempool
 }

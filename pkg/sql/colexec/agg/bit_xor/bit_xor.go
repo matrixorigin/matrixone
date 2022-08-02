@@ -16,6 +16,10 @@ package bit_xor
 
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
+func ReturnType(_ []types.Type) types.Type {
+	return types.New(types.T_uint64, 0, 0, 0)
+}
+
 func New[T1 types.Ints | types.UInts | types.Floats]() *BitXor[T1] {
 	return &BitXor[T1]{}
 }
@@ -23,11 +27,11 @@ func New[T1 types.Ints | types.UInts | types.Floats]() *BitXor[T1] {
 func (bx *BitXor[T1]) Grows(_ int) {
 }
 
-func (bx *BitXor[T1]) Eval(vs []int64) []int64 {
+func (bx *BitXor[T1]) Eval(vs []uint64) []uint64 {
 	return vs
 }
 
-func (bx *BitXor[T1]) Merge(_, _ int64, x, y int64, IsEmpty1 bool, IsEmpty2 bool, _ any) (int64, bool) {
+func (bx *BitXor[T1]) Merge(_, _ int64, x, y uint64, IsEmpty1 bool, IsEmpty2 bool, _ any) (uint64, bool) {
 	if IsEmpty1 && !IsEmpty2 {
 		return y, false
 	} else if IsEmpty2 && !IsEmpty1 {
@@ -39,19 +43,19 @@ func (bx *BitXor[T1]) Merge(_, _ int64, x, y int64, IsEmpty1 bool, IsEmpty2 bool
 	}
 }
 
-func (bx *BitXor[T1]) Fill(_ int64, v1 T1, v2 int64, z int64, IsEmpty bool, hasNull bool) (int64, bool) {
+func (bx *BitXor[T1]) Fill(_ int64, v1 T1, v2 uint64, z int64, IsEmpty bool, hasNull bool) (uint64, bool) {
 	if hasNull {
 		return v2, IsEmpty
 	} else if IsEmpty {
 		if z%2 == 0 {
-			return int64(0), false
+			return uint64(0), false
 		} else {
-			return int64(v1), false
+			return uint64(v1), false
 		}
 	}
 	if z%2 == 0 {
-		return int64(v2), false
+		return uint64(v2), false
 	} else {
-		return int64(v1) ^ v2, false
+		return uint64(v1) ^ v2, false
 	}
 }

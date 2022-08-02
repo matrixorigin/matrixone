@@ -16,7 +16,9 @@ package vm
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/union"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -53,11 +55,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var stringFunc = [...]func(interface{}, *bytes.Buffer){
+var stringFunc = [...]func(any, *bytes.Buffer){
 	Top:        top.String,
 	Join:       join.String,
 	Semi:       semi.String,
 	Left:       left.String,
+	Single:     single.String,
 	Limit:      limit.String,
 	Order:      order.String,
 	Group:      group.String,
@@ -73,6 +76,7 @@ var stringFunc = [...]func(interface{}, *bytes.Buffer){
 
 	LoopJoin:       loopjoin.String,
 	LoopLeft:       loopleft.String,
+	LoopSingle:     loopsingle.String,
 	LoopSemi:       loopsemi.String,
 	LoopComplement: loopcomplement.String,
 
@@ -90,11 +94,12 @@ var stringFunc = [...]func(interface{}, *bytes.Buffer){
 	Minus: minus.String,
 }
 
-var prepareFunc = [...]func(*process.Process, interface{}) error{
+var prepareFunc = [...]func(*process.Process, any) error{
 	Top:        top.Prepare,
 	Join:       join.Prepare,
 	Semi:       semi.Prepare,
 	Left:       left.Prepare,
+	Single:     single.Prepare,
 	Limit:      limit.Prepare,
 	Order:      order.Prepare,
 	Group:      group.Prepare,
@@ -110,6 +115,7 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 
 	LoopJoin:       loopjoin.Prepare,
 	LoopLeft:       loopleft.Prepare,
+	LoopSingle:     loopsingle.Prepare,
 	LoopSemi:       loopsemi.Prepare,
 	LoopComplement: loopcomplement.Prepare,
 
@@ -127,11 +133,12 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 	Minus: minus.Prepare,
 }
 
-var execFunc = [...]func(int, *process.Process, interface{}) (bool, error){
+var execFunc = [...]func(int, *process.Process, any) (bool, error){
 	Top:        top.Call,
 	Join:       join.Call,
 	Semi:       semi.Call,
 	Left:       left.Call,
+	Single:     single.Call,
 	Limit:      limit.Call,
 	Order:      order.Call,
 	Group:      group.Call,
@@ -147,6 +154,7 @@ var execFunc = [...]func(int, *process.Process, interface{}) (bool, error){
 
 	LoopJoin:       loopjoin.Call,
 	LoopLeft:       loopleft.Call,
+	LoopSingle:     loopsingle.Call,
 	LoopSemi:       loopsemi.Call,
 	LoopComplement: loopcomplement.Call,
 

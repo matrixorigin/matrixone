@@ -26,6 +26,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
+func TestHasMetadataRec(t *testing.T) {
+	cfg := getStoreTestConfig()
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	cfg.Fill()
+	s := store{cfg: cfg}
+	s.addMetadata(10, 1)
+	has, err := hasMetadataRec(s.cfg.DataDir, logMetadataFilename, 10, 1, s.cfg.FS)
+	require.NoError(t, err)
+	assert.True(t, has)
+	has, err = hasMetadataRec(s.cfg.DataDir, logMetadataFilename, 1, 1, s.cfg.FS)
+	require.NoError(t, err)
+	assert.False(t, has)
+}
+
 func TestAddMetadata(t *testing.T) {
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
@@ -39,6 +53,18 @@ func TestAddMetadata(t *testing.T) {
 	require.Equal(t, 1, len(ss.mu.metadata.Shards))
 	assert.Equal(t, uint64(10), ss.mu.metadata.Shards[0].ShardID)
 	assert.Equal(t, uint64(1), ss.mu.metadata.Shards[0].ReplicaID)
+}
+
+func TestAddMetadataRejectDupl(t *testing.T) {
+	cfg := getStoreTestConfig()
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	cfg.Fill()
+	s := store{cfg: cfg}
+	require.NoError(t, mkdirAll(s.cfg.DataDir, cfg.FS))
+	s.addMetadata(10, 1)
+	s.addMetadata(10, 1)
+	s.addMetadata(10, 1)
+	require.Equal(t, 1, len(s.mu.metadata.Shards))
 }
 
 func TestRemoveMetadata(t *testing.T) {

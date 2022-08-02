@@ -30,7 +30,7 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 			return got.IsScalarNull()
 		} else {
 			switch expected.Typ.Oid {
-			case types.T_char, types.T_varchar:
+			case types.T_char, types.T_varchar, types.T_json:
 				if got.Typ.Oid != expected.Typ.Oid {
 					return false
 				}
@@ -65,7 +65,7 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 			}
 		}
 		switch expected.Typ.Oid {
-		case types.T_char, types.T_varchar:
+		case types.T_char, types.T_varchar, types.T_json:
 			if got.Typ.Oid != expected.Typ.Oid {
 				return false
 			}

@@ -15,8 +15,6 @@
 package function
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/ring/stddevpop"
-	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregate"
@@ -183,6 +181,14 @@ var aggregates = map[int]Functions{
 				ReturnTyp:     types.T_char,
 				AggregateInfo: aggregate.Max,
 			},
+			{
+				Index:         18,
+				Flag:          plan.Function_AGG,
+				Layout:        STANDARD_FUNCTION,
+				Args:          []types.T{types.T_blob},
+				ReturnTyp:     types.T_blob,
+				AggregateInfo: aggregate.Max,
+			},
 		},
 	},
 	MIN: {
@@ -331,6 +337,13 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_char},
 				ReturnTyp:     types.T_char,
+				AggregateInfo: aggregate.Min,
+			}, {
+				Index:         18,
+				Flag:          plan.Function_AGG,
+				Layout:        STANDARD_FUNCTION,
+				Args:          []types.T{types.T_blob},
+				ReturnTyp:     types.T_blob,
 				AggregateInfo: aggregate.Min,
 			},
 		},
@@ -602,7 +615,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				_, err := aggregate.NewBitAnd(types.Type{Oid: inputs[0]})
+				_, err := aggregate.ReturnType(aggregate.BitAnd, types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
 				}
@@ -626,7 +639,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				_, err := aggregate.NewBitOr(types.Type{Oid: inputs[0]})
+				_, err := aggregate.ReturnType(aggregate.BitOr, types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
 				}
@@ -650,7 +663,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				_, err := aggregate.NewBitXor(types.Type{Oid: inputs[0]})
+				_, err := aggregate.ReturnType(aggregate.BitXor, types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
 				}
@@ -674,7 +687,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				_, err := variance.NewVarianceRingWithTypeCheck(types.Type{Oid: inputs[0]})
+				_, err := aggregate.ReturnType(aggregate.Variance, types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
 				}
@@ -698,7 +711,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				_, err := stddevpop.NewStdDevPopRingWithTypeCheck(types.Type{Oid: inputs[0]})
+				_, err := aggregate.ReturnType(aggregate.StdDevPop, types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
 				}
@@ -879,6 +892,14 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_timestamp},
 				ReturnTyp:     types.T_timestamp,
+				AggregateInfo: aggregate.AnyValue,
+			},
+			{
+				Index:         18,
+				Flag:          plan.Function_AGG,
+				Layout:        STANDARD_FUNCTION,
+				Args:          []types.T{types.T_blob},
+				ReturnTyp:     types.T_blob,
 				AggregateInfo: aggregate.AnyValue,
 			},
 		},

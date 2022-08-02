@@ -16,6 +16,7 @@ package loopleft
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -25,11 +26,7 @@ const (
 	End
 )
 
-const (
-	UnitLimit = 256
-)
-
-type Container struct {
+type container struct {
 	state int
 	bat   *batch.Batch
 }
@@ -40,7 +37,8 @@ type ResultPos struct {
 }
 
 type Argument struct {
-	ctr    *Container
+	ctr    *container
+	Typs   []types.Type
 	Cond   *plan.Expr
 	Result []ResultPos
 }

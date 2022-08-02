@@ -221,6 +221,20 @@ func readMetadataFile(dir string,
 	return nil
 }
 
+func hasMetadataRec(dir string,
+	filename string, shardID uint64, replicaID uint64, fs vfs.FS) (has bool, err error) {
+	var md metadata.LogStore
+	if err := readMetadataFile(dir, filename, &md, fs); err != nil {
+		return false, err
+	}
+	for _, rec := range md.Shards {
+		if rec.ShardID == shardID && rec.ReplicaID == replicaID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (l *store) loadMetadata() error {
 	fs := l.cfg.FS
 	dir := l.cfg.DataDir
@@ -257,6 +271,13 @@ func (l *store) addMetadata(shardID uint64, replicaID uint64) {
 	rec.ReplicaID = replicaID
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	for _, rec := range l.mu.metadata.Shards {
+		if rec.ShardID == shardID && rec.ReplicaID == replicaID {
+			plog.Infof("addMetadata for shardID %d skipped, dupl shard", shardID)
+			return
+		}
+	}
 
 	l.mu.metadata.Shards = append(l.mu.metadata.Shards, rec)
 	l.mustSaveMetadata()

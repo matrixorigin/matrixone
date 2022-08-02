@@ -122,7 +122,8 @@ func NewService(cfg Config) (*Service, error) {
 	}
 	// start the heartbeat worker
 	if !cfg.DisableWorkers {
-		if err := service.stopper.RunTask(func(ctx context.Context) {
+		if err := service.stopper.RunNamedTask("log-heartbeat-worker", func(ctx context.Context) {
+			plog.Infof("logservice heartbeat worker started")
 			service.heartbeatWorker(ctx)
 		}); err != nil {
 			return nil, err
@@ -314,11 +315,7 @@ func (s *Service) handleLogHeartbeat(req pb.Request) pb.Response {
 	defer cancel()
 	hb := req.LogHeartbeat
 	resp := getResponse(req)
-	if err := s.store.addLogStoreHeartbeat(ctx, hb); err != nil {
-		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
-		return resp
-	}
-	if cb, err := s.store.getCommandBatch(ctx, hb.UUID); err != nil {
+	if cb, err := s.store.addLogStoreHeartbeat(ctx, hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
@@ -346,11 +343,7 @@ func (s *Service) handleDNHeartbeat(req pb.Request) pb.Response {
 	defer cancel()
 	hb := req.DNHeartbeat
 	resp := getResponse(req)
-	if err := s.store.addDNStoreHeartbeat(ctx, hb); err != nil {
-		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
-		return resp
-	}
-	if cb, err := s.store.getCommandBatch(ctx, hb.UUID); err != nil {
+	if cb, err := s.store.addDNStoreHeartbeat(ctx, hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {

@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"unicode/utf8"
 )
 
 type LoadResult struct {
@@ -90,9 +89,8 @@ type SharePart struct {
 	lineCount uint64
 
 	//batch
-	batchSize            int
-	maxEntryBytesForCube int64
-	skipWriteBatch       bool
+	batchSize      int
+	skipWriteBatch bool
 
 	//map column id in from data to column id in table
 	dataColumnId2TableColumnId []int
@@ -260,35 +258,11 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 
 			wait_b := time.Now()
 
-			//bytes for the line
-			bytes := uint64(0)
-			for _, ll := range lineOut.Line {
-				bytes += uint64(utf8.RuneCount([]byte(ll)))
-			}
-
-			//max entries for the cube
-			if bytes > uint64(plh.maxEntryBytesForCube) {
-				return fmt.Errorf("bytes of line %d > maxEntryBytesForCube %d", bytes, plh.maxEntryBytesForCube)
-			}
-
-			if plh.bytes+bytes > uint64(plh.maxEntryBytesForCube) {
-				//logutil.Infof("+++++ batch bytes %v B %v MB",plh.bytes,plh.bytes / 1024.0 / 1024.0)
-				err := saveLinesToStorage(plh, true)
-				if err != nil {
-					return err
-				}
-
-				plh.lineIdx = 0
-				plh.maxFieldCnt = 0
-				plh.bytes = 0
-			}
-
 			//step 2 : append line into line array
 			plh.simdCsvLineArray[plh.lineIdx] = lineOut.Line
 			plh.lineIdx++
 			plh.lineCount++
 			plh.maxFieldCnt = Max(plh.maxFieldCnt, len(lineOut.Line))
-			plh.bytes += bytes
 
 			AtomicAddDuration(plh.csvLineArray1, time.Since(wait_b))
 
@@ -381,7 +355,7 @@ func makeBatch(handler *ParseLineHandler, id int) *PoolElement {
 			vec.Col = make([]float32, batchSize)
 		case types.T_float64:
 			vec.Col = make([]float64, batchSize)
-		case types.T_char, types.T_varchar:
+		case types.T_char, types.T_varchar, types.T_json:
 			vBytes := &types.Bytes{
 				Offsets: make([]uint32, batchSize),
 				Lengths: make([]uint32, batchSize),
@@ -494,7 +468,7 @@ func releaseBatch(handler *ParseLineHandler, pl *PoolElement) {
 	for _, vec := range pl.bat.Vecs {
 		vec.Nsp = &nulls.Nulls{}
 		switch vec.Typ.Oid {
-		case types.T_char, types.T_varchar:
+		case types.T_char, types.T_varchar, types.T_json:
 			vBytes := vec.Col.(*types.Bytes)
 			vBytes.Data = vBytes.Data[:0]
 		}
@@ -523,7 +497,6 @@ func initWriteBatchHandler(handler *ParseLineHandler, wHandler *WriteBatchHandle
 	wHandler.result = &LoadResult{}
 	wHandler.closeRef = handler.closeRef
 	wHandler.lineCount = handler.lineCount
-	wHandler.maxEntryBytesForCube = handler.maxEntryBytesForCube
 	wHandler.skipWriteBatch = handler.skipWriteBatch
 
 	wHandler.pl = allocBatch(handler)
@@ -986,7 +959,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 						cols[rowIdx] = d
 					}
-				case types.T_char, types.T_varchar:
+				case types.T_char, types.T_varchar, types.T_json:
 					vBytes := vec.Col.(*types.Bytes)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -1100,7 +1073,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 				if columnFLags[k] == 0 {
 					vec := batchData.Vecs[k]
 					switch vec.Typ.Oid {
-					case types.T_char, types.T_varchar:
+					case types.T_char, types.T_varchar, types.T_json:
 						vBytes := vec.Col.(*types.Bytes)
 						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
 						vBytes.Lengths[rowIdx] = uint32(0)
@@ -1476,7 +1449,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						cols[i] = d
 					}
 				}
-			case types.T_char, types.T_varchar:
+			case types.T_char, types.T_varchar, types.T_json:
 				vBytes := vec.Col.(*types.Bytes)
 				//row
 				for i := 0; i < countOfLineArray; i++ {
@@ -1617,7 +1590,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 				//row
 				for i := 0; i < countOfLineArray; i++ {
 					switch vec.Typ.Oid {
-					case types.T_char, types.T_varchar:
+					case types.T_char, types.T_varchar, types.T_json:
 						vBytes := vec.Col.(*types.Bytes)
 						vBytes.Offsets[i] = uint32(len(vBytes.Data))
 						vBytes.Lengths[i] = uint32(0)
@@ -1766,7 +1739,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		for _, vec := range handler.batchData.Vecs {
 			vec.Nsp = &nulls.Nulls{}
 			switch vec.Typ.Oid {
-			case types.T_char, types.T_varchar:
+			case types.T_char, types.T_varchar, types.T_json:
 				vBytes := vec.Col.(*types.Bytes)
 				vBytes.Data = vBytes.Data[:0]
 			}
@@ -1821,7 +1794,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 					case types.T_float64:
 						cols := vec.Col.([]float64)
 						vec.Col = cols[:needLen]
-					case types.T_char, types.T_varchar: //bytes is different
+					case types.T_char, types.T_varchar, types.T_json: //bytes is different
 						vBytes := vec.Col.(*types.Bytes)
 						//logutil.Infof("saveBatchToStorage before data %s ",vBytes.String())
 						if len(vBytes.Offsets) > needLen {
@@ -2007,22 +1980,21 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	//simdcsv
 	handler := &ParseLineHandler{
 		SharePart: SharePart{
-			load:                 load,
-			lineIdx:              0,
-			simdCsvLineArray:     make([][]string, curBatchSize),
-			storage:              ses.Pu.StorageEngine,
-			dbHandler:            dbHandler,
-			tableHandler:         tableHandler,
-			tableName:            string(load.Table.Name()),
-			dbName:               dbName,
-			txnHandler:           ses.GetTxnHandler(),
-			ses:                  ses,
-			oneTxnPerBatch:       ses.Pu.SV.GetOneTxnPerBatchDuringLoad(),
-			lineCount:            0,
-			batchSize:            curBatchSize,
-			result:               result,
-			maxEntryBytesForCube: ses.Pu.SV.GetCubeMaxEntriesBytes(),
-			skipWriteBatch:       ses.Pu.SV.GetLoadDataSkipWritingBatch(),
+			load:             load,
+			lineIdx:          0,
+			simdCsvLineArray: make([][]string, curBatchSize),
+			storage:          ses.Pu.StorageEngine,
+			dbHandler:        dbHandler,
+			tableHandler:     tableHandler,
+			tableName:        string(load.Table.Name()),
+			dbName:           dbName,
+			txnHandler:       ses.GetTxnHandler(),
+			ses:              ses,
+			oneTxnPerBatch:   ses.Pu.SV.GetOneTxnPerBatchDuringLoad(),
+			lineCount:        0,
+			batchSize:        curBatchSize,
+			result:           result,
+			skipWriteBatch:   ses.Pu.SV.GetLoadDataSkipWritingBatch(),
 		},
 		threadInfo:                    make(map[int]*ThreadInfo),
 		simdCsvGetParsedLinesChan:     atomic.Value{},

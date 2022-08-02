@@ -17,17 +17,27 @@ package logservice
 import (
 	"context"
 	"time"
+
+	"github.com/lni/dragonboat/v4"
 )
 
 func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
+	replicaID, bootstrapping := cfg.Bootstrapping()
+	if !bootstrapping {
+		return nil
+	}
 	members, err := cfg.GetInitHAKeeperMembers()
 	if err != nil {
 		return err
 	}
-	replicaID := cfg.BootstrapConfig.HAKeeperReplicaID
 	if err := s.store.startHAKeeperReplica(replicaID, members, false); err != nil {
-		plog.Errorf("failed to start hakeeper replica, %v", err)
-		return err
+		// let's be a little bit less strict, when HAKeeper replica is already
+		// running as a result of store.startReplicas(), we just ignore the
+		// dragonboat.ErrShardAlreadyExist error below.
+		if err != dragonboat.ErrShardAlreadyExist {
+			plog.Errorf("failed to start hakeeper replica, %v", err)
+			return err
+		}
 	}
 	numOfLogShards := cfg.BootstrapConfig.NumOfLogShards
 	numOfDNShards := cfg.BootstrapConfig.NumOfDNShards
@@ -38,7 +48,6 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 			return nil
 		default:
 		}
-		plog.Infof("trying to set initial cluster info")
 		if err := s.store.setInitialClusterInfo(numOfLogShards,
 			numOfDNShards, numOfLogReplicas); err != nil {
 			plog.Errorf("failed to set initial cluster info, %v", err)
