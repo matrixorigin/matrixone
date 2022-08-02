@@ -106,8 +106,7 @@ func (bs *baseStore) onTruncate(batch ...any) {
 		return
 	}
 	for i := bs.truncatedVersion + 1; i < version; i++ {
-		e := bs.file.GetHistory().GetEntry(i)
-		err := e.Destroy()
+		_, err := bs.file.GetHistory().DropEntry(i)
 		if err != nil {
 			panic(err)
 		}

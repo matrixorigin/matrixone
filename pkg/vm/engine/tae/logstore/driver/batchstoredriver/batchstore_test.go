@@ -27,6 +27,8 @@ func initEnv(t *testing.T) *baseStore {
 }
 
 func restartStore(s *baseStore, t *testing.T) *baseStore {
+	err:=s.Close()
+	assert.NoError(t, err)
 	maxlsn := s.GetCurrSeqNum()
 	// for ver,lsns:=range s.addrs{
 	// 	logutil.Infof("v%d lsn%v",ver,lsns.Intervals)
@@ -34,7 +36,7 @@ func restartStore(s *baseStore, t *testing.T) *baseStore {
 	cfg := &StoreCfg{
 		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 3),
 	}
-	s, err := NewBaseStore(s.dir, s.name, cfg)
+	s, err = NewBaseStore(s.dir, s.name, cfg)
 	assert.NoError(t, err)
 	tempLsn := uint64(0)
 	err = s.Replay(func(e *entry.Entry) {

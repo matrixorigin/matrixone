@@ -78,11 +78,11 @@ func (vf *vFile) String() string {
 }
 
 func (vf *vFile) Archive() error {
-	if vf.history == nil {
-		if err := vf.Destroy(); err != nil {
-			return err
-		}
-	}
+	// if vf.history == nil {
+	// 	if err := vf.Destroy(); err != nil {
+	// 		return err
+	// 	}
+	// }
 	vf.history.Append(vf)
 	return nil
 }
