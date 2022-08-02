@@ -9,11 +9,11 @@ pull_request_rules:
       - "#changes-requested-reviews-by<=0"
       - "check-success=Lint Docs"
       - "check-success=UT Test on Ubuntu/x64"
-      - "check-success=UT Test on Darwin/x86"
+      # - "check-success=UT Test on Darwin/x86"
       - "check-success=UT Test on Linux/Arm"
       - "check-success=BVT Test on Ubuntu/x64"
       - "check-success=BVT Test on Linux/Arm"
-      - "check-success=BVT Test on Darwin/x86"
+      # - "check-success=BVT Test on Darwin/x86"
       - "check-success=BVT RACE Test on CentOS/x64"
       - "check-success=SCA Test on Ubuntu/x64"  
     actions:
