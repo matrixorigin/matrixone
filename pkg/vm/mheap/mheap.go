@@ -106,5 +106,5 @@ func (m *Mheap) PutSels(sels []int64) {
 }
 
 func (m *Mheap) GetSels() []int64 {
-	return m.pool.Get().([]int64)
+	return m.pool.Get().([]int64)[:0]
 }
