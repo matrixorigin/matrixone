@@ -17,7 +17,7 @@ package multi
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/pi"
+	pi2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/pi"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -25,7 +25,7 @@ func Pi(_ []*vector.Vector, _ *process.Process) (*vector.Vector, error) {
 	resultType := types.Type{Oid: types.T_float64, Size: 8}
 	resultVector := vector.NewConst(resultType, 1)
 	result := make([]float64, 1)
-	result[0] = pi.GetPi()
+	result[0] = pi2.GetPi()
 	vector.SetCol(resultVector, result)
 	return resultVector, nil
 }

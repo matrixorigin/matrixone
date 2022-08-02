@@ -17,11 +17,11 @@ package binary
 import (
 	"errors"
 	"github.com/matrixorigin/matrixone/pkg/common/encoding"
+	extract2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/extract"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/extract"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -80,7 +80,7 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint32, 1)
 		unit := string(leftValues.Get(0))
-		results, err := extract.ExtractFromDate(unit, rightValues, resultValues)
+		results, err := extract2.ExtractFromDate(unit, rightValues, resultValues)
 		if err != nil {
 			return nil, errors.New("invalid input")
 		}
@@ -97,7 +97,7 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		resultValues := encoding.DecodeUint32Slice(resultVector.Data)
 		resultValues = resultValues[:len(rightValues)]
 		unit := string(leftValues.Get(0))
-		results, err := extract.ExtractFromDate(unit, rightValues, resultValues)
+		results, err := extract2.ExtractFromDate(unit, rightValues, resultValues)
 		if err != nil {
 			return nil, err
 		}
@@ -126,7 +126,7 @@ func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vect
 			Lengths: make([]uint32, 1),
 		}
 		unit := string(leftValues.Get(0))
-		results, err := extract.ExtractFromDatetime(unit, rightValues, resultValues)
+		results, err := extract2.ExtractFromDatetime(unit, rightValues, resultValues)
 		if err != nil {
 			return nil, errors.New("invalid input")
 		}
@@ -146,7 +146,7 @@ func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vect
 			Lengths: make([]uint32, len(rightValues)),
 		}
 		unit := string(leftValues.Get(0))
-		results, err := extract.ExtractFromDatetime(unit, rightValues, resultValues)
+		results, err := extract2.ExtractFromDatetime(unit, rightValues, resultValues)
 		if err != nil {
 			return nil, err
 		}

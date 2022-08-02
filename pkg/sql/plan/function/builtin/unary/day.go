@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/day"
+	day2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/day"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,7 +34,7 @@ func DateToDay(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint8, 1)
-		vector.SetCol(resultVector, day.DateToDay(inputValues, resultValues))
+		vector.SetCol(resultVector, day2.DateToDay(inputValues, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
@@ -44,7 +44,7 @@ func DateToDay(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		resultValues := encoding.DecodeUint8Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, day.DateToDay(inputValues, resultValues))
+		vector.SetCol(resultVector, day2.DateToDay(inputValues, resultValues))
 		return resultVector, nil
 	}
 }
@@ -60,7 +60,7 @@ func DatetimeToDay(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint8, 1)
-		vector.SetCol(resultVector, day.DatetimeToDay(inputValues, resultValues))
+		vector.SetCol(resultVector, day2.DatetimeToDay(inputValues, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
@@ -70,7 +70,7 @@ func DatetimeToDay(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		resultValues := encoding.DecodeUint8Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, day.DatetimeToDay(inputValues, resultValues))
+		vector.SetCol(resultVector, day2.DatetimeToDay(inputValues, resultValues))
 		return resultVector, nil
 	}
 }

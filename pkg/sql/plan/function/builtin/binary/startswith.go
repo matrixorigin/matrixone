@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/startswith"
+	startswith2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/startswith"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -35,7 +35,7 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint8, 1)
-		vector.SetCol(resultVector, startswith.StartsWithAllConst(leftValues, rightValues, resultValues))
+		vector.SetCol(resultVector, startswith2.StartsWithAllConst(leftValues, rightValues, resultValues))
 		return resultVector, nil
 	case left.IsConst && !right.IsConst:
 		if left.ConstVectorIsNull() {
@@ -48,7 +48,7 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		resultValues := encoding.DecodeUint8Slice(resultVector.Data)
 		resultValues = resultValues[:len(rightValues.Lengths)]
 		nulls.Set(resultVector.Nsp, right.Nsp)
-		vector.SetCol(resultVector, startswith.StartsWithLeftConst(leftValues, rightValues, resultValues))
+		vector.SetCol(resultVector, startswith2.StartsWithLeftConst(leftValues, rightValues, resultValues))
 		return resultVector, nil
 	case !left.IsConst && right.IsConst:
 		if right.ConstVectorIsNull() {
@@ -61,7 +61,7 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		resultValues := encoding.DecodeUint8Slice(resultVector.Data)
 		resultValues = resultValues[:len(leftValues.Lengths)]
 		nulls.Set(resultVector.Nsp, left.Nsp)
-		vector.SetCol(resultVector, startswith.StartsWithRightConst(leftValues, rightValues, resultValues))
+		vector.SetCol(resultVector, startswith2.StartsWithRightConst(leftValues, rightValues, resultValues))
 		return resultVector, nil
 	}
 	resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues.Lengths)))
@@ -71,6 +71,6 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	resultValues := encoding.DecodeUint8Slice(resultVector.Data)
 	resultValues = resultValues[:len(rightValues.Lengths)]
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-	vector.SetCol(resultVector, startswith.StartsWith(leftValues, rightValues, resultValues))
+	vector.SetCol(resultVector, startswith2.StartsWith(leftValues, rightValues, resultValues))
 	return resultVector, nil
 }

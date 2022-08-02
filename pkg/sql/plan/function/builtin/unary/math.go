@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
+	momath2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -62,42 +62,42 @@ func math1(vs []*vector.Vector, proc *process.Process, fn mathFn) (*vector.Vecto
 }
 
 func Acos(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath.Acos)
+	return math1(vs, proc, momath2.Acos)
 }
 
 func Atan(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath.Atan)
+	return math1(vs, proc, momath2.Atan)
 }
 
 func Cos(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath.Cos)
+	return math1(vs, proc, momath2.Cos)
 }
 
 func Cot(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath.Cot)
+	return math1(vs, proc, momath2.Cot)
 }
 
 func Exp(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath.Exp)
+	return math1(vs, proc, momath2.Exp)
 }
 
 func Ln(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath.Ln)
+	return math1(vs, proc, momath2.Ln)
 }
 
 func Log(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	// MySQL log is the same as ln.
-	return math1(vs, proc, momath.Ln)
+	return math1(vs, proc, momath2.Ln)
 }
 
 func Sin(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath.Sin)
+	return math1(vs, proc, momath2.Sin)
 }
 
 func Sinh(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath.Sinh)
+	return math1(vs, proc, momath2.Sinh)
 }
 
 func Tan(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath.Tan)
+	return math1(vs, proc, momath2.Tan)
 }

@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/date"
+	date2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/date"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -62,7 +62,7 @@ func DatetimeToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]types.Date, 1)
-		vector.SetCol(resultVector, date.DatetimeToDate(inputValues, resultValues))
+		vector.SetCol(resultVector, date2.DatetimeToDate(inputValues, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
@@ -72,7 +72,7 @@ func DatetimeToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 		resultValues := encoding.DecodeDateSlice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, date.DatetimeToDate(inputValues, resultValues))
+		vector.SetCol(resultVector, date2.DatetimeToDate(inputValues, resultValues))
 		return resultVector, nil
 	}
 }
@@ -89,7 +89,7 @@ func DateStringToDate(vectors []*vector.Vector, proc *process.Process) (*vector.
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]types.Date, 1)
-		result, err := date.DateStringToDate(inputValues, resultValues)
+		result, err := date2.DateStringToDate(inputValues, resultValues)
 		vector.SetCol(resultVector, result)
 		return resultVector, err
 	} else {
@@ -100,7 +100,7 @@ func DateStringToDate(vectors []*vector.Vector, proc *process.Process) (*vector.
 		resultValues := encoding.DecodeDateSlice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues.Lengths)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		result, err := date.DateStringToDate(inputValues, resultValues)
+		result, err := date2.DateStringToDate(inputValues, resultValues)
 		vector.SetCol(resultVector, result)
 		return resultVector, err
 	}

@@ -16,12 +16,12 @@ package operator
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/encoding"
+	add2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/add"
 	"golang.org/x/exp/constraints"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/add"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -73,13 +73,13 @@ func Arith[T arithT](vectors []*vector.Vector, proc *process.Process, typ types.
 }
 
 func PlusUint[T constraints.Unsigned](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T](args, proc, args[0].GetType(), add.NumericAddUnsigned[T])
+	return Arith[T](args, proc, args[0].GetType(), add2.NumericAddUnsigned[T])
 }
 func PlusInt[T constraints.Signed](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T](args, proc, args[0].GetType(), add.NumericAddSigned[T])
+	return Arith[T](args, proc, args[0].GetType(), add2.NumericAddSigned[T])
 }
 func PlusFloat[T constraints.Float](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T](args, proc, args[0].GetType(), add.NumericAddFloat[T])
+	return Arith[T](args, proc, args[0].GetType(), add2.NumericAddFloat[T])
 }
 func PlusDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	t0 := args[0].GetType()
@@ -87,7 +87,7 @@ func PlusDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector
 	if t1.Scale > t0.Scale {
 		t0.Scale = t1.Scale
 	}
-	return Arith[types.Decimal64](args, proc, t0, add.Decimal64VecAdd)
+	return Arith[types.Decimal64](args, proc, t0, add2.Decimal64VecAdd)
 }
 func PlusDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	t0 := args[0].GetType()
@@ -95,5 +95,5 @@ func PlusDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vecto
 	if t1.Scale > t0.Scale {
 		t0.Scale = t1.Scale
 	}
-	return Arith[types.Decimal128](args, proc, t0, add.Decimal128VecAdd)
+	return Arith[types.Decimal128](args, proc, t0, add2.Decimal128VecAdd)
 }

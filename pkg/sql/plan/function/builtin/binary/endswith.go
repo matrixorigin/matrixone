@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/endswith"
+	endswith2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/endswith"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -35,7 +35,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint8, 1)
-		vector.SetCol(resultVector, endswith.EndsWithAllConst(leftValues, rightValues, resultValues))
+		vector.SetCol(resultVector, endswith2.EndsWithAllConst(leftValues, rightValues, resultValues))
 		return resultVector, nil
 	case left.IsScalar() && !right.IsScalar():
 		if left.ConstVectorIsNull() {
@@ -48,7 +48,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		resultValues := encoding.DecodeUint8Slice(resultVector.Data)
 		resultValues = resultValues[:len(rightValues.Lengths)]
 		nulls.Set(resultVector.Nsp, right.Nsp)
-		vector.SetCol(resultVector, endswith.EndsWithLeftConst(leftValues, rightValues, resultValues))
+		vector.SetCol(resultVector, endswith2.EndsWithLeftConst(leftValues, rightValues, resultValues))
 		return resultVector, nil
 	case !left.IsScalar() && right.IsScalar():
 		if right.ConstVectorIsNull() {
@@ -61,7 +61,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		resultValues := encoding.DecodeUint8Slice(resultVector.Data)
 		resultValues = resultValues[:len(leftValues.Lengths)]
 		nulls.Set(resultVector.Nsp, left.Nsp)
-		vector.SetCol(resultVector, endswith.EndsWithRightConst(leftValues, rightValues, resultValues))
+		vector.SetCol(resultVector, endswith2.EndsWithRightConst(leftValues, rightValues, resultValues))
 		return resultVector, nil
 	}
 	resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues.Lengths)))
@@ -71,6 +71,6 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	resultValues := encoding.DecodeUint8Slice(resultVector.Data)
 	resultValues = resultValues[:len(rightValues.Lengths)]
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-	vector.SetCol(resultVector, endswith.EndsWith(leftValues, rightValues, resultValues))
+	vector.SetCol(resultVector, endswith2.EndsWith(leftValues, rightValues, resultValues))
 	return resultVector, nil
 }

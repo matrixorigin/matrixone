@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/bit_length"
+	bit_length2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/bit_length"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,7 +34,7 @@ func BitLengthFunc(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]int64, 1)
-		vector.SetCol(resultVector, bit_length.StrBitLength(inputValues, resultValues))
+		vector.SetCol(resultVector, bit_length2.StrBitLength(inputValues, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
@@ -44,7 +44,7 @@ func BitLengthFunc(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues.Lengths)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, bit_length.StrBitLength(inputValues, resultValues))
+		vector.SetCol(resultVector, bit_length2.StrBitLength(inputValues, resultValues))
 		return resultVector, nil
 	}
 }

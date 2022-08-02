@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/json_extract"
+	json_extract2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/json_extract"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -40,7 +40,7 @@ func JsonExtract(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 	//	Offsets: []uint32{0},
 	//}
 	//outBytes.Data = []byte("hello,json")
-	vector.SetCol(resultVector, json_extract.JsonExtract(json, path, resultValues))
+	vector.SetCol(resultVector, json_extract2.JsonExtract(json, path, resultValues))
 	logutil.Infof("JsonExtract: resultVector=%s,type:%T", resultVector, resultVector.Col)
 	return resultVector, nil
 }

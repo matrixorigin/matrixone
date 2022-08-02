@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/ceil"
+	ceil2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/ceil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -43,7 +43,7 @@ func CeilUint64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_uint64, Size: 8})
 		rs := make([]uint64, 1)
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, ceil.CeilUint64(vs, rs, digits))
+		vector.SetCol(vec, ceil2.CeilUint64(vs, rs, digits))
 		return vec, nil
 	} else {
 		vec, err := proc.AllocVector(types.Type{Oid: types.T_uint64, Size: 8}, 8*int64(len(vs)))
@@ -54,7 +54,7 @@ func CeilUint64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		rs = rs[:len(vs)]
 		vec.Col = rs
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, ceil.CeilUint64(vs, rs, digits))
+		vector.SetCol(vec, ceil2.CeilUint64(vs, rs, digits))
 		return vec, nil
 	}
 }
@@ -79,7 +79,7 @@ func CeilInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_int64, Size: 8})
 		rs := make([]int64, 1)
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, ceil.CeilInt64(vs, rs, digits))
+		vector.SetCol(vec, ceil2.CeilInt64(vs, rs, digits))
 		return vec, nil
 	} else {
 		vec, err := proc.AllocVector(types.Type{Oid: types.T_int64, Size: 8}, 8*int64(len(vs)))
@@ -90,7 +90,7 @@ func CeilInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 		rs = rs[:len(vs)]
 		vec.Col = rs
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, ceil.CeilInt64(vs, rs, digits))
+		vector.SetCol(vec, ceil2.CeilInt64(vs, rs, digits))
 		return vec, nil
 	}
 }
@@ -115,7 +115,7 @@ func CeilFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
 		rs := make([]float64, 1)
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, ceil.CeilFloat64(vs, rs, digits))
+		vector.SetCol(vec, ceil2.CeilFloat64(vs, rs, digits))
 		return vec, nil
 	} else {
 		vec, err := proc.AllocVector(types.Type{Oid: types.T_float64, Size: 8}, 8*int64(len(vs)))
@@ -126,7 +126,7 @@ func CeilFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		rs = rs[:len(vs)]
 		vec.Col = rs
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, ceil.CeilFloat64(vs, rs, digits))
+		vector.SetCol(vec, ceil2.CeilFloat64(vs, rs, digits))
 		return vec, nil
 	}
 }

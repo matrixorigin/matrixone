@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/abs"
+	abs2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/abs"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -35,7 +35,7 @@ func AbsUInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint64, 1)
-		vector.SetCol(resultVector, abs.AbsUint64(inputValues, resultValues))
+		vector.SetCol(resultVector, abs2.AbsUint64(inputValues, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
@@ -45,7 +45,7 @@ func AbsUInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		resultValues := encoding.DecodeUint64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, abs.AbsUint64(inputValues, resultValues))
+		vector.SetCol(resultVector, abs2.AbsUint64(inputValues, resultValues))
 		return resultVector, nil
 	}
 }
@@ -62,7 +62,7 @@ func AbsInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]int64, 1)
-		vector.SetCol(resultVector, abs.AbsInt64(inputValues, resultValues))
+		vector.SetCol(resultVector, abs2.AbsInt64(inputValues, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
@@ -72,7 +72,7 @@ func AbsInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, abs.AbsInt64(inputValues, resultValues))
+		vector.SetCol(resultVector, abs2.AbsInt64(inputValues, resultValues))
 		return resultVector, nil
 	}
 }
@@ -89,7 +89,7 @@ func AbsFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]float64, 1)
-		vector.SetCol(resultVector, abs.AbsFloat64(inputValues, resultValues))
+		vector.SetCol(resultVector, abs2.AbsFloat64(inputValues, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
@@ -99,7 +99,7 @@ func AbsFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, abs.AbsFloat64(inputValues, resultValues))
+		vector.SetCol(resultVector, abs2.AbsFloat64(inputValues, resultValues))
 		return resultVector, nil
 	}
 }

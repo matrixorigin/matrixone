@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/div"
+	div2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/div"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
@@ -44,7 +44,7 @@ func IntegerDiv[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 					return nil, ErrDivByZero
 				}
 			}
-			vector.SetCol(vec, div.FloatIntegerDiv(lvs, rvs, rs))
+			vector.SetCol(vec, div2.FloatIntegerDiv(lvs, rvs, rs))
 			return vec, nil
 		}
 		sels := process.GetSels(proc)
@@ -58,7 +58,7 @@ func IntegerDiv[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 			}
 			sels = append(sels, int64(i))
 		}
-		vector.SetCol(vec, div.FloatIntegerDivSels(lvs, rvs, rs, sels))
+		vector.SetCol(vec, div2.FloatIntegerDivSels(lvs, rvs, rs, sels))
 		return vec, nil
 	case lv.IsScalar() && !rv.IsScalar():
 		vec, err := proc.AllocVector(types.Type{Oid: types.T_int64, Size: 8}, int64(rtl)*int64(len(rvs)))
@@ -75,7 +75,7 @@ func IntegerDiv[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 				}
 			}
 			nulls.Set(vec.Nsp, rv.Nsp)
-			vector.SetCol(vec, div.FloatIntegerDivScalar(lvs[0], rvs, rs))
+			vector.SetCol(vec, div2.FloatIntegerDivScalar(lvs[0], rvs, rs))
 			return vec, nil
 		}
 		sels := process.GetSels(proc)
@@ -89,7 +89,7 @@ func IntegerDiv[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 			}
 			sels = append(sels, int64(i))
 		}
-		vector.SetCol(vec, div.FloatIntegerDivSels(lvs, rvs, rs, sels))
+		vector.SetCol(vec, div2.FloatIntegerDivSels(lvs, rvs, rs, sels))
 		nulls.Set(vec.Nsp, lv.Nsp.Or(rv.Nsp))
 		return vec, nil
 	case !lv.IsScalar() && rv.IsScalar():
@@ -103,7 +103,7 @@ func IntegerDiv[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 		if rvs[0] == 0 {
 			return nil, ErrDivByZero
 		}
-		vector.SetCol(vec, div.FloatIntegerDivByScalar(rvs[0], lvs, rs))
+		vector.SetCol(vec, div2.FloatIntegerDivByScalar(rvs[0], lvs, rs))
 		nulls.Set(vec.Nsp, lv.Nsp)
 		return vec, nil
 	}
@@ -121,7 +121,7 @@ func IntegerDiv[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 				return nil, ErrDivByZero
 			}
 		}
-		vector.SetCol(vec, div.FloatIntegerDiv(lvs, rvs, rs))
+		vector.SetCol(vec, div2.FloatIntegerDiv(lvs, rvs, rs))
 		return vec, nil
 	}
 	sels := process.GetSels(proc)
@@ -135,6 +135,6 @@ func IntegerDiv[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 		}
 		sels = append(sels, int64(i))
 	}
-	vector.SetCol(vec, div.FloatIntegerDivSels(lvs, rvs, rs, sels))
+	vector.SetCol(vec, div2.FloatIntegerDivSels(lvs, rvs, rs, sels))
 	return vec, nil
 }

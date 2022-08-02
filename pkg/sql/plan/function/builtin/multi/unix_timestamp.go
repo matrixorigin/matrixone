@@ -17,7 +17,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/unixtimestamp"
+	unixtimestamp2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/unixtimestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,7 +34,7 @@ func UnixTimestamp(lv []*vector.Vector, proc *process.Process) (*vector.Vector, 
 			vec := proc.AllocScalarVector(types.Type{Oid: types.T_int64, Size: int32(size)})
 			rs := make([]int64, 1)
 			nulls.Set(vec.Nsp, inVec.Nsp)
-			vector.SetCol(vec, unixtimestamp.UnixTimestamp(times, rs))
+			vector.SetCol(vec, unixtimestamp2.UnixTimestamp(times, rs))
 			return vec, nil
 		}
 	}
@@ -49,7 +49,7 @@ func UnixTimestamp(lv []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		}
 	}
 	nulls.Set(vec.Nsp, inVec.Nsp)
-	vector.SetCol(vec, unixtimestamp.UnixTimestamp(times, rs))
+	vector.SetCol(vec, unixtimestamp2.UnixTimestamp(times, rs))
 	return vec, nil
 }
 
@@ -71,7 +71,7 @@ func UnixTimestampVarchar(lv []*vector.Vector, proc *process.Process) (*vector.V
 			vec := proc.AllocScalarVector(types.Type{Oid: types.T_int64, Size: int32(size)})
 			rs := make([]int64, 1)
 			nulls.Set(vec.Nsp, inVec.Nsp)
-			vector.SetCol(vec, unixtimestamp.UnixTimestamp(times, rs))
+			vector.SetCol(vec, unixtimestamp2.UnixTimestamp(times, rs))
 			return vec, nil
 		}
 	}
@@ -82,7 +82,7 @@ func UnixTimestampVarchar(lv []*vector.Vector, proc *process.Process) (*vector.V
 	}
 	rs := make([]int64, len(times))
 	nulls.Set(vec.Nsp, inVec.Nsp)
-	vector.SetCol(vec, unixtimestamp.UnixTimestamp(times, rs))
+	vector.SetCol(vec, unixtimestamp2.UnixTimestamp(times, rs))
 	return vec, nil
 }
 

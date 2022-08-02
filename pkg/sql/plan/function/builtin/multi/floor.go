@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
+	floor2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/floor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -35,7 +35,7 @@ func FloorUInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_uint64, Size: 8})
 		rs := make([]uint64, 1)
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, floor.FloorUint64(vs, rs, digits))
+		vector.SetCol(vec, floor2.FloorUint64(vs, rs, digits))
 		return vec, nil
 	} else {
 		vec, err := proc.AllocVector(types.Type{Oid: types.T_uint64, Size: 8}, 8*int64(len(vs)))
@@ -45,7 +45,7 @@ func FloorUInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		rs := encoding.DecodeUint64Slice(vec.Data)
 		rs = rs[:len(vs)]
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, floor.FloorUint64(vs, rs, digits))
+		vector.SetCol(vec, floor2.FloorUint64(vs, rs, digits))
 		return vec, nil
 	}
 }
@@ -61,7 +61,7 @@ func FloorInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_int64, Size: 8})
 		rs := make([]int64, 1)
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, floor.FloorInt64(vs, rs, digits))
+		vector.SetCol(vec, floor2.FloorInt64(vs, rs, digits))
 		return vec, nil
 	} else {
 		vec, err := proc.AllocVector(types.Type{Oid: types.T_int64, Size: 8}, 8*int64(len(vs)))
@@ -71,7 +71,7 @@ func FloorInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		rs := encoding.DecodeInt64Slice(vec.Data)
 		rs = rs[:len(vs)]
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, floor.FloorInt64(vs, rs, digits))
+		vector.SetCol(vec, floor2.FloorInt64(vs, rs, digits))
 		return vec, nil
 	}
 }
@@ -87,7 +87,7 @@ func FloorFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
 		rs := make([]float64, 1)
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, floor.FloorFloat64(vs, rs, digits))
+		vector.SetCol(vec, floor2.FloorFloat64(vs, rs, digits))
 		return vec, nil
 	} else {
 		vec, err := proc.AllocVector(types.Type{Oid: types.T_float64, Size: 8}, 8*int64(len(vs)))
@@ -97,7 +97,7 @@ func FloorFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		rs := encoding.DecodeFloat64Slice(vec.Data)
 		rs = rs[:len(vs)]
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, floor.FloorFloat64(vs, rs, digits))
+		vector.SetCol(vec, floor2.FloorFloat64(vs, rs, digits))
 		return vec, nil
 	}
 }
@@ -118,7 +118,7 @@ func FloorUInt64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Vec
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_uint64, Size: 8})
 		rs := make([]uint64, 1)
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, floor.FloorUint64(vs, rs, digits))
+		vector.SetCol(vec, floor2.FloorUint64(vs, rs, digits))
 		return vec, nil
 	} else {
 		vec, err := proc.AllocVector(types.Type{Oid: types.T_uint64, Size: 8}, 8*int64(len(vs)))
@@ -128,7 +128,7 @@ func FloorUInt64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Vec
 		rs := encoding.DecodeUint64Slice(vec.Data)
 		rs = rs[:len(vs)]
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, floor.FloorUint64(vs, rs, digits))
+		vector.SetCol(vec, floor2.FloorUint64(vs, rs, digits))
 		return vec, nil
 	}
 }
@@ -149,7 +149,7 @@ func FloorInt64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Vect
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_int64, Size: 8})
 		rs := make([]int64, 1)
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, floor.FloorInt64(vs, rs, digits))
+		vector.SetCol(vec, floor2.FloorInt64(vs, rs, digits))
 		return vec, nil
 	} else {
 		vec, err := proc.AllocVector(types.Type{Oid: types.T_int64, Size: 8}, 8*int64(len(vs)))
@@ -159,7 +159,7 @@ func FloorInt64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Vect
 		rs := encoding.DecodeInt64Slice(vec.Data)
 		rs = rs[:len(vs)]
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, floor.FloorInt64(vs, rs, digits))
+		vector.SetCol(vec, floor2.FloorInt64(vs, rs, digits))
 		return vec, nil
 	}
 }
@@ -181,7 +181,7 @@ func FloorFloat64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Ve
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
 		rs := make([]float64, 1)
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, floor.FloorFloat64(vs, rs, digits))
+		vector.SetCol(vec, floor2.FloorFloat64(vs, rs, digits))
 		return vec, nil
 	} else {
 		vec, err := proc.AllocVector(types.Type{Oid: types.T_float64, Size: 8}, 8*int64(len(vs)))
@@ -191,7 +191,7 @@ func FloorFloat64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Ve
 		rs := encoding.DecodeFloat64Slice(vec.Data)
 		rs = rs[:len(vs)]
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, floor.FloorFloat64(vs, rs, digits))
+		vector.SetCol(vec, floor2.FloorFloat64(vs, rs, digits))
 		return vec, nil
 	}
 }

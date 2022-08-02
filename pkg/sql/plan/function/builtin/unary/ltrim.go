@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/ltrim"
+	ltrim2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/ltrim"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -31,7 +31,7 @@ func Ltrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		spaceCount := ltrim.CountSpacesFromLeft(inputValues)
+		spaceCount := ltrim2.CountSpacesFromLeft(inputValues)
 		totalCount := int32(len(inputValues.Data))
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := &types.Bytes{
@@ -39,10 +39,10 @@ func Ltrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 			Offsets: make([]uint32, 1),
 			Lengths: make([]uint32, 1),
 		}
-		vector.SetCol(resultVector, ltrim.LtrimChar(inputValues, resultValues))
+		vector.SetCol(resultVector, ltrim2.LtrimChar(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		spaceCount := ltrim.CountSpacesFromLeft(inputValues)
+		spaceCount := ltrim2.CountSpacesFromLeft(inputValues)
 		totalCount := int32(len(inputValues.Data))
 		resultVector, err := proc.AllocVector(resultType, int64(totalCount-spaceCount))
 		if err != nil {
@@ -54,7 +54,7 @@ func Ltrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 			Lengths: make([]uint32, len(inputValues.Lengths)),
 		}
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, ltrim.LtrimChar(inputValues, resultValues))
+		vector.SetCol(resultVector, ltrim2.LtrimChar(inputValues, resultValues))
 		return resultVector, nil
 	}
 }

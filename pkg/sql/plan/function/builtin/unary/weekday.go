@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/weekday"
+	weekday2 "github.com/matrixorigin/matrixone/pkg/sql/vectorize/weekday"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,7 +34,7 @@ func DateToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]int64, 1)
-		vector.SetCol(resultVector, weekday.DateToWeekday(inputValues, resultValues))
+		vector.SetCol(resultVector, weekday2.DateToWeekday(inputValues, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
@@ -44,7 +44,7 @@ func DateToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, weekday.DateToWeekday(inputValues, resultValues))
+		vector.SetCol(resultVector, weekday2.DateToWeekday(inputValues, resultValues))
 		return resultVector, nil
 	}
 }
@@ -60,7 +60,7 @@ func DatetimeToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]int64, 1)
-		vector.SetCol(resultVector, weekday.DatetimeToWeekday(inputValues, resultValues))
+		vector.SetCol(resultVector, weekday2.DatetimeToWeekday(inputValues, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
@@ -70,7 +70,7 @@ func DatetimeToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector
 		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, weekday.DatetimeToWeekday(inputValues, resultValues))
+		vector.SetCol(resultVector, weekday2.DatetimeToWeekday(inputValues, resultValues))
 		return resultVector, nil
 	}
 }
