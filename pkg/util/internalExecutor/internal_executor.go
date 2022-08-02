@@ -55,9 +55,22 @@ func (s *OptsBuilder) Finish() SessionOverrideOptions {
 	return *s.opts
 }
 
+type InternalExecResult interface {
+	Error() error
+	ColumnCount() uint64
+	Column(uint64) (string, uint8, bool, error) // type refer: pkg/defines/type.go & func convertEngineTypeToMysqlType
+	RowCount() uint64
+	Row(uint64) ([]interface{}, error)
+	Value(uint64, uint64) (interface{}, error)
+	ValueByName(uint64, string) (interface{}, error)
+	StringValueByName(uint64, string) (string, error)
+}
+
 type InternalExecutor interface {
 	// exec sql without returning results set
 	Exec(string, SessionOverrideOptions) error
+	// exec sql and return results set
+	Query(string, SessionOverrideOptions) InternalExecResult
 	// override session for the executor scope
 	ApplySessionOverride(SessionOverrideOptions)
 }

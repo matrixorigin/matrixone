@@ -49,21 +49,6 @@ func IsTempError(err error) bool {
 	return isTempError(err)
 }
 
-// ClientConfig is the configuration for log service clients.
-type ClientConfig struct {
-	// ReadOnly indicates whether this is a read-only client.
-	ReadOnly bool
-	// LogShardID is the shard ID of the log service shard to be used.
-	LogShardID uint64
-	// DNReplicaID is the replica ID of the DN that owns the created client.
-	DNReplicaID uint64
-	// DiscoveryAddress is the Log Service discovery address provided by k8s.
-	DiscoveryAddress string
-	// LogService nodes service addresses. This field is provided for testing
-	// purposes only.
-	ServiceAddresses []string
-}
-
 // Client is the Log Service Client interface exposed to the DN.
 type Client interface {
 	// Close closes the client.
@@ -115,6 +100,9 @@ var _ Client = (*managedClient)(nil)
 // to the Log Service in parallel, multiple clients should be created and used
 // to do so.
 func NewClient(ctx context.Context, cfg ClientConfig) (Client, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	client, err := newClient(ctx, cfg)
 	if err != nil {
 		return nil, err
