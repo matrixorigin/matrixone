@@ -48,10 +48,8 @@ const (
 	// [K8SIDRangeStart, K8SIDRangeEnd)
 	K8SIDRangeStart uint64 = 131072
 	K8SIDRangeEnd   uint64 = 262144
-	// TickDuration defines the frequency of ticks.
-	TickDuration = time.Second
 	// CheckDuration defines how often HAKeeper checks the health state of the cluster
-	CheckDuration = time.Second
+	CheckDuration = 3 * time.Second
 	// DefaultHAKeeperShardID is the shard ID assigned to the special HAKeeper
 	// shard.
 	DefaultHAKeeperShardID uint64 = 0
@@ -189,7 +187,6 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	if err := b.Unmarshal(data); err != nil {
 		panic(err)
 	}
-	plog.Infof("incoming term: %d, rsm term: %d", b.Term, s.state.Term)
 	if s.state.Term > b.Term {
 		return sm.Result{}
 	}

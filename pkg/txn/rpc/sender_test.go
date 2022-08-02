@@ -247,8 +247,7 @@ func BenchmarkLocalSend(b *testing.B) {
 
 func TestNewSenderWithOptions(t *testing.T) {
 	s, err := NewSender(nil, WithSenderPayloadBufferSize(100),
-		WithSenderBackendOptions(morpc.WithBackendBusyBufferSize(1)),
-		WithSenderClientOptions(morpc.WithClientDisableCreateTask()))
+		WithSenderBackendOptions(morpc.WithBackendBusyBufferSize(1)))
 	assert.NoError(t, err)
 	assert.Equal(t, 100, s.(*sender).options.payloadCopyBufferSize)
 	assert.True(t, len(s.(*sender).options.backendCreateOptions) >= 3)

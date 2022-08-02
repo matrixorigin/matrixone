@@ -130,3 +130,19 @@ drop table t1;
 SELECT min(1)<min(2);
 min(1)<min(2)
 true
+
+create table t1 (grp int, a bigint unsigned, c char(10) not null);
+insert into t1 values (1,1,"a");
+insert into t1 values (2,2,"b");
+insert into t1 values (2,3,"c");
+insert into t1 values (3,4,"E");
+insert into t1 values (3,5,"C");
+insert into t1 values (3,6,"D");
+select min(distinct a),min(distinct grp) from t1;
+min(distinct a)	    min(distinct grp)
+1	1
+insert into t1 values (null,null,'');
+select min(distinct a),min(distinct grp) from t1;
+min(distinct a)	    min(distinct grp)
+1	1
+drop table t1;

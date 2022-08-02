@@ -19,45 +19,22 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ interface{}, buf *bytes.Buffer) {
+func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString(" union ")
 }
 
-func Prepare(_ *process.Process, argument interface{}) error {
+func Prepare(_ *process.Process, argument any) error {
 	arg := argument.(*Argument)
 	arg.ctr = new(container)
 	arg.ctr.hashTable = hashmap.NewStrMap(true)
-	arg.ctr.scales[0] = make([]int32, len(arg.Conditions[0]))
-	arg.ctr.scales[1] = make([]int32, len(arg.Conditions[0]))
-	for i, cond := range arg.Conditions[0] { // aligning the precision of decimal
-		switch types.T(cond.Expr.Typ.Id) {
-		case types.T_decimal64:
-			typ := arg.Conditions[1][i].Expr.Typ
-			if typ.Scale > cond.Expr.Typ.Scale {
-				cond.Scale = typ.Scale - cond.Expr.Typ.Scale
-			} else if typ.Scale < cond.Expr.Typ.Scale {
-				arg.Conditions[1][i].Scale = cond.Expr.Typ.Scale - typ.Scale
-			}
-		case types.T_decimal128:
-			typ := arg.Conditions[1][i].Expr.Typ
-			if typ.Scale > cond.Expr.Typ.Scale {
-				cond.Scale = typ.Scale - cond.Expr.Typ.Scale
-			} else if typ.Scale < cond.Expr.Typ.Scale {
-				arg.Conditions[1][i].Scale = cond.Expr.Typ.Scale - typ.Scale
-			}
-		}
-		arg.ctr.scales[0][i] = cond.Scale
-		arg.ctr.scales[1][i] = arg.Conditions[1][i].Scale
-	}
 	return nil
 }
 
-func Call(idx int, proc *process.Process, argument interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, argument any) (bool, error) {
 	ap := argument.(*Argument)
 	ctr := ap.ctr
 	analyze := proc.GetAnalyze(idx)
@@ -127,7 +104,7 @@ func (ctr *container) insert(ap *Argument, proc *process.Process, analyze proces
 				n = hashmap.UnitLimit
 			}
 
-			vs, _ := iterator.Insert(i, n, bat.Vecs, ctr.scales[index])
+			vs, _ := iterator.Insert(i, n, bat.Vecs)
 			copy(inserted[:n], restoreInserted[:n])
 			for j, v := range vs {
 				if v > ctr.hashTable.GroupCount() {

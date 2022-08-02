@@ -92,7 +92,7 @@ var builtins = map[int]Functions{
 				ret := make([]types.T, len(inputs))
 				convert := false
 				for i, t := range inputs {
-					if t != types.T_char && t != types.T_varchar && t != types.T_any {
+					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob {
 						if castTable[t][types.T_varchar] {
 							ret[i] = types.T_varchar
 							convert = true
@@ -126,7 +126,7 @@ var builtins = map[int]Functions{
 				ret := make([]types.T, len(inputs))
 				convert := false
 				for i, t := range inputs {
-					if t != types.T_char && t != types.T_varchar && t != types.T_any {
+					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob {
 						if castTable[t][types.T_varchar] {
 							ret[i] = types.T_varchar
 							convert = true
@@ -1778,6 +1778,20 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Collation,
+			},
+		},
+	},
+	JSON_EXTRACT: {
+		Id: JSON_EXTRACT,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.JsonExtract,
 			},
 		},
 	},

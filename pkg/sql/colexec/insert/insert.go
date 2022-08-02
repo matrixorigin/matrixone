@@ -36,15 +36,15 @@ type Argument struct {
 	Affected      uint64
 }
 
-func String(_ interface{}, buf *bytes.Buffer) {
+func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString("insert select")
 }
 
-func Prepare(_ *process.Process, _ interface{}) error {
+func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	n := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 	if bat == nil {
@@ -76,7 +76,7 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 					bat.Vecs[i].Typ.Oid = types.T(n.TargetColDefs[i].Typ.GetId())
 				}
 				switch bat.Vecs[i].Typ.Oid {
-				case types.T_char, types.T_varchar:
+				case types.T_char, types.T_varchar, types.T_blob, types.T_json:
 					bat.Vecs[i].Col = &types.Bytes{
 						Data:    nil,
 						Offsets: make([]uint32, len(bat.Zs)),

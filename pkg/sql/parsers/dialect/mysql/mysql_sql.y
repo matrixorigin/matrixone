@@ -167,7 +167,7 @@ import (
 
 %token LEX_ERROR
 %nonassoc EMPTY
-%left <str> UNION
+%left <str> UNION EXCEPT INTERSECT MINUS
 %token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
@@ -272,7 +272,7 @@ import (
 
 // SET tokens
 %token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
-%token <str> LOCAL EXCEPT
+%token <str> LOCAL
 
 // Functions
 %token <str> CURRENT_TIMESTAMP DATABASE
@@ -300,6 +300,9 @@ import (
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
+
+//JSON function
+%token <str> JSON_EXTRACT
 
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE
@@ -373,6 +376,7 @@ import (
 %type <funcExpr> function_call_keyword
 %type <funcExpr> function_call_nonkeyword
 %type <funcExpr> function_call_aggregate
+%type <funcExpr> function_call_json
 
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list
@@ -1568,7 +1572,7 @@ prepare_stmt:
     }
 |   prepare_sym stmt_name FROM STRING
     {
-        $$ = tree.NewPrepareString(tree.Identifier($2), $4) 
+        $$ = tree.NewPrepareString(tree.Identifier($2), $4)
     }
 
 execute_stmt:
@@ -2708,7 +2712,7 @@ union_op:
         $$ = &tree.UnionTypeRecord{
             Type: tree.UNION,
             All: true,
-            Distinct: false,
+            Distinct: false, 
         }
     }
 |   UNION DISTINCT
@@ -2717,6 +2721,63 @@ union_op:
             Type: tree.UNION,
             All: false,
             Distinct: true,
+        }
+    }
+| 
+    EXCEPT
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.EXCEPT,
+            All: false,
+            Distinct: false,
+        }
+    }
+|   EXCEPT ALL
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.EXCEPT,
+            All: true,
+            Distinct: false, 
+        }
+    }
+|   EXCEPT DISTINCT
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.EXCEPT,
+            All: false,
+            Distinct: true,
+        }
+    }
+|    INTERSECT
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.INTERSECT,
+            All: false,
+            Distinct: false,
+        }
+    }
+|   INTERSECT ALL
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.INTERSECT,
+            All: true,
+            Distinct: false,
+        }
+    }
+|   INTERSECT DISTINCT
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.INTERSECT,
+            All: false,
+            Distinct: true,
+        }
+    }
+|    MINUS
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.UT_MINUS,
+            All: false,
+            Distinct: false,
         }
     }
 
@@ -4604,6 +4665,10 @@ simple_expr:
     {
         $$ = $1
     }
+| function_call_json
+    {
+        $$ = $1
+    }
 
 else_opt:
 	{
@@ -5038,6 +5103,17 @@ function_call_generic:
              Func: tree.FuncName2ResolvableFunctionReference(name),
              Exprs: tree.Exprs{arg1, $4, $6},
         }
+	}
+function_call_json:
+	JSON_EXTRACT '(' STRING ',' STRING ')'
+	{
+		name := tree.SetUnresolvedName(strings.ToLower($1))
+		a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+		a2 := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
+	$$ = &tree.FuncExpr{
+	     Func: tree.FuncName2ResolvableFunctionReference(name),
+	     Exprs: tree.Exprs{a1, a2},
+	}
 	}
 
 trim_direction:
@@ -6527,6 +6603,7 @@ reserved_keyword:
 |	DELAYED
 |   PARTITION
 |	QUICK
+|   EXCEPT
 
 non_reserved_keyword:
     AGAINST
@@ -6568,7 +6645,6 @@ non_reserved_keyword:
 |   EXPANSION
 |   EXTENDED
 |   EXPIRE
-|   EXCEPT
 |   ERRORS
 |   ENFORCED
 |   FORMAT

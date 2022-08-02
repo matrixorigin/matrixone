@@ -25,17 +25,13 @@ const (
 	End
 )
 
-const (
-	UnitLimit = 256
-)
-
-type Container struct {
+type container struct {
 	state int
 	bat   *batch.Batch
 }
 
 type Argument struct {
-	ctr    *Container
+	ctr    *container
 	Result []int32
 	Cond   *plan.Expr
 }

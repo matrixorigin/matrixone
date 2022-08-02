@@ -357,7 +357,12 @@ func Test_mce_selfhandle(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.Mrs = &MysqlResultSet{}
-		err = mce.handleCmdFieldList("A")
+		queryData := []byte("A")
+		queryData = append(queryData, 0)
+		query := string(queryData)
+		cflStmt, err := parseCmdFieldList(makeCmdFieldListSql(query))
+		convey.So(err, convey.ShouldBeNil)
+		err = mce.handleCmdFieldList(cflStmt)
 		convey.So(err, convey.ShouldBeError)
 
 		ses.Mrs = &MysqlResultSet{}
@@ -368,11 +373,11 @@ func Test_mce_selfhandle(t *testing.T) {
 			typ:  types.Type{Oid: types.T_varchar},
 		}}
 
-		err = mce.handleCmdFieldList("A")
+		err = mce.handleCmdFieldList(cflStmt)
 		convey.So(err, convey.ShouldBeNil)
 
 		mce.db = ses.protocol.GetDatabaseName()
-		err = mce.handleCmdFieldList("A")
+		err = mce.handleCmdFieldList(cflStmt)
 		convey.So(err, convey.ShouldBeNil)
 
 		set := "set @@tx_isolation=`READ-COMMITTED`"
@@ -447,6 +452,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 					{Oid: types.T_varchar},
 					{Oid: types.T_date},
 					{Oid: types.T_datetime},
+					{Oid: types.T_json},
 				},
 				3)
 		}
@@ -515,6 +521,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 					{Oid: types.T_varchar},
 					{Oid: types.T_date},
 					{Oid: types.T_datetime},
+					{Oid: types.T_json},
 				},
 				3)
 		}
@@ -556,6 +563,7 @@ func Test_typeconvert(t *testing.T) {
 			types.T_varchar,
 			types.T_date,
 			types.T_datetime,
+			types.T_json,
 		}
 
 		type kase struct {
@@ -577,6 +585,7 @@ func Test_typeconvert(t *testing.T) {
 			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
 			{tp: defines.MYSQL_TYPE_DATE, signed: true},
 			{tp: defines.MYSQL_TYPE_DATETIME, signed: true},
+			{tp: defines.MYSQL_TYPE_JSON, signed: true},
 		}
 
 		convey.So(len(input), convey.ShouldEqual, len(output))
@@ -619,7 +628,7 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 			vec.Col = make([]float32, batchSize)
 		case types.T_float64:
 			vec.Col = make([]float64, batchSize)
-		case types.T_char, types.T_varchar:
+		case types.T_char, types.T_varchar, types.T_json:
 			vBytes := &types.Bytes{
 				Offsets: make([]uint32, batchSize),
 				Lengths: make([]uint32, batchSize),
@@ -902,5 +911,20 @@ func Test_HandleDeallocate(t *testing.T) {
 	runTestHandle("handleDeallocate", t, func(mce *MysqlCmdExecutor) error {
 		stmt := stmt.(*tree.Deallocate)
 		return mce.handleDeallocate(stmt)
+	})
+}
+
+func Test_CMD_FIELD_LIST(t *testing.T) {
+	convey.Convey("cmd field list", t, func() {
+		queryData := []byte("XYZ")
+		queryData = append(queryData, 0)
+		query := string(queryData)
+		cmdFieldListQuery := makeCmdFieldListSql(query)
+		convey.So(isCmdFieldListSql(cmdFieldListQuery), convey.ShouldBeTrue)
+		stmt, err := parseCmdFieldList(cmdFieldListQuery)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(stmt, convey.ShouldNotBeNil)
+		s := stmt.String()
+		convey.So(isCmdFieldListSql(s), convey.ShouldBeTrue)
 	})
 }

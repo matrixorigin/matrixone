@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	ap := arg.(*Argument)
 	buf.WriteString("γ([")
 	for i, expr := range ap.Exprs {
@@ -46,16 +46,15 @@ func String(arg interface{}, buf *bytes.Buffer) {
 	buf.WriteString("])")
 }
 
-func Prepare(_ *process.Process, arg interface{}) error {
+func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.scales = make([]int32, hashmap.UnitLimit)
 	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	ap := arg.(*Argument)
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
@@ -267,7 +266,7 @@ func (ctr *container) processH8(bat *batch.Batch, ap *Argument, proc *process.Pr
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		vals, _ := itr.Insert(i, n, ctr.vecs, ctr.scales)
+		vals, _ := itr.Insert(i, n, ctr.vecs)
 		if err := ctr.batchFill(i, n, bat, vals, ap, ctr.intHashMap, proc); err != nil {
 			return err
 		}
@@ -283,7 +282,7 @@ func (ctr *container) processHStr(bat *batch.Batch, ap *Argument, proc *process.
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		vals, _ := itr.Insert(i, n, ctr.vecs, ctr.scales)
+		vals, _ := itr.Insert(i, n, ctr.vecs)
 		if err := ctr.batchFill(i, n, bat, vals, ap, ctr.strHashMap, proc); err != nil {
 			return err
 		}
