@@ -14,7 +14,9 @@
 
 package output
 
-import "github.com/matrixorigin/matrixone/pkg/container/batch"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/batch"
+)
 
 type Argument struct {
 	Data interface{}

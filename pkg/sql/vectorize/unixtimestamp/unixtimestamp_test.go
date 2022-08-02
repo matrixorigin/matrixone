@@ -15,11 +15,10 @@
 package unixtimestamp
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"reflect"
 	"testing"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func mustDatetime(s string) types.Datetime {

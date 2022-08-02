@@ -658,7 +658,7 @@ package variance
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"reflect"
 	"testing"
 )

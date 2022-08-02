@@ -15,7 +15,7 @@
 package shuffle
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"golang.org/x/exp/constraints"
 )
 

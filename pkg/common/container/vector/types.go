@@ -15,10 +15,9 @@
 package vector
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 /*
@@ -57,7 +56,7 @@ type Vector struct {
 	Link uint64 // link count
 	Data []byte // raw data
 	Typ  types.Type
-	Col  interface{}  // column data, encoded Data
+	Col  interface{}   // column data, encoded Data
 	Nsp  *nulls.Nulls // nulls list
 
 	// some attributes for const vector (a vector with a lot of rows of a same const value)

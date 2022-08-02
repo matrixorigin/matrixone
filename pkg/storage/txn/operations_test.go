@@ -17,10 +17,10 @@ package txnengine
 import (
 	"bytes"
 	"encoding/gob"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
+	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/assert"
 )
 

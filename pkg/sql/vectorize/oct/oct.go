@@ -16,9 +16,9 @@ package oct
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"strconv"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"golang.org/x/exp/constraints"
 )
 

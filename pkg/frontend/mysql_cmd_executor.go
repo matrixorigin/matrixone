@@ -18,10 +18,14 @@ import (
 	"context"
 	goErrors "errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/container/batch"
+	bytejson2 "github.com/matrixorigin/matrixone/pkg/common/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/common/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
+	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/common/defines"
 	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 	"github.com/matrixorigin/matrixone/pkg/common/errno"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"os"
 	"runtime/pprof"
@@ -36,17 +40,13 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/storage"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -462,7 +462,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			case types.T_json:
 				if !nulls.Any(vec.Nsp) {
 					bytes := vec.Col.(*types.Bytes)
-					vs := make([]bytejson.ByteJson, 0, len(bytes.Lengths))
+					vs := make([]bytejson2.ByteJson, 0, len(bytes.Lengths))
 					for i, length := range bytes.Lengths {
 						off := bytes.Offsets[i]
 						vs = append(vs, encoding.DecodeJson(bytes.Data[off:off+length]))
@@ -473,7 +473,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 						row[i] = nil
 					} else {
 						bytes := vec.Col.(*types.Bytes)
-						vs := make([]bytejson.ByteJson, 0, len(bytes.Lengths))
+						vs := make([]bytejson2.ByteJson, 0, len(bytes.Lengths))
 						for i, length := range bytes.Lengths {
 							off := bytes.Offsets[i]
 							vs = append(vs, encoding.DecodeJson(bytes.Data[off:off+length]))

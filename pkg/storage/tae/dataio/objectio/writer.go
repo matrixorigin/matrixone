@@ -15,12 +15,12 @@
 package objectio
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/storage/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/storage/tae/iface/tfs"
 	"github.com/matrixorigin/matrixone/pkg/storage/tae/stl/adaptors"
 	"os"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/storage/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/storage/tae/common"
 )

@@ -14,7 +14,9 @@
 
 package sum
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
+)
 
 type Numeric interface {
 	types.Ints | types.UInts | types.Floats

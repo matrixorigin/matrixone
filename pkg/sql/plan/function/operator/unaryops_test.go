@@ -15,11 +15,11 @@
 package operator
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
+	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
 

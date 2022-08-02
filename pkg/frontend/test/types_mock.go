@@ -5,10 +5,10 @@
 package mock_frontend
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/batch"
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
 	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 

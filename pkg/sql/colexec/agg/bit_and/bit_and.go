@@ -14,7 +14,9 @@
 
 package bit_and
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
+)
 
 func ReturnType(typs []types.Type) types.Type {
 	switch typs[0].Oid {

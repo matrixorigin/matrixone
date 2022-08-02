@@ -16,10 +16,9 @@ package startswith
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"reflect"
 	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func makeBytes(strs []string) *types.Bytes {

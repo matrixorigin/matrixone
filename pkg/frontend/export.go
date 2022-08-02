@@ -18,13 +18,13 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"github.com/matrixorigin/matrixone/pkg/common/defines"
 	"io"
 	"os"
 	"strconv"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 

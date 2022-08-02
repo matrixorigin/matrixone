@@ -16,9 +16,9 @@ package findinset
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
 

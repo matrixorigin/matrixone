@@ -15,10 +15,9 @@
 package weekday
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"reflect"
 	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func parseDate(s string) types.Date {

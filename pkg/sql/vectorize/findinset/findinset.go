@@ -15,9 +15,8 @@
 package findinset
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func findInStrList(str, strlist string) uint64 {

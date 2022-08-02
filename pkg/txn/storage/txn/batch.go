@@ -15,8 +15,8 @@
 package txnstorage
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/common/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 )
 
 type BatchIter func() (cols []any)

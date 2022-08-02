@@ -15,10 +15,9 @@
 package process
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/batch"
 	"sync/atomic"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
 func NewAnalyzeInfo(nodeId int32) *AnalyzeInfo {

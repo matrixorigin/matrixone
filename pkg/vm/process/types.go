@@ -16,9 +16,9 @@ package process
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/container/batch"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 

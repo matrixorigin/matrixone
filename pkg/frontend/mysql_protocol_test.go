@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"github.com/matrixorigin/matrixone/pkg/common/defines"
 	"math"
 	"reflect"
@@ -30,7 +31,6 @@ import (
 	"github.com/fagongzi/goetty/buf"
 	"github.com/golang/mock/gomock"
 	fuzz "github.com/google/gofuzz"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/stretchr/testify/require"
 

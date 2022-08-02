@@ -19,6 +19,7 @@ import (
 	"crypto/sha1"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"github.com/matrixorigin/matrixone/pkg/common/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"math/rand"
@@ -29,7 +30,6 @@ import (
 
 	"github.com/fagongzi/goetty"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 // DefaultCapability means default capabilities of the server

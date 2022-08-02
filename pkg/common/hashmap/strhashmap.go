@@ -15,12 +15,11 @@
 package hashmap
 
 import (
+	hashtable2 "github.com/matrixorigin/matrixone/pkg/common/container/hashtable"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
+	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 func init() {
@@ -35,7 +34,7 @@ func init() {
 }
 
 func NewStrMap(hasNull bool) *StrHashMap {
-	mp := &hashtable.StringHashMap{}
+	mp := &hashtable2.StringHashMap{}
 	mp.Init()
 	return &StrHashMap{
 		hashMap:       mp,
@@ -113,7 +112,7 @@ func (m *StrHashMap) InsertValue(val any) bool {
 		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	}
 	if l := len(m.keys[0]); l < 16 {
-		m.keys[0] = append(m.keys[0], hashtable.StrKeyPadding[l:]...)
+		m.keys[0] = append(m.keys[0], hashtable2.StrKeyPadding[l:]...)
 	}
 	m.hashMap.InsertStringBatch(m.strHashStates, m.keys[:1], m.values[:1])
 	if m.values[0] > m.rows {
@@ -154,7 +153,7 @@ func (m *StrHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	}
 	for i := 0; i < count; i++ {
 		if l := len(m.keys[i]); l < 16 {
-			m.keys[i] = append(m.keys[i], hashtable.StrKeyPadding[l:]...)
+			m.keys[i] = append(m.keys[i], hashtable2.StrKeyPadding[l:]...)
 		}
 	}
 }

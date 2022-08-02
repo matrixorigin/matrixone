@@ -17,6 +17,10 @@ package moengine
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/common/container/nulls"
+	wtf "github.com/matrixorigin/matrixone/pkg/common/container/types"
+	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"strconv"
@@ -29,10 +33,6 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	wtf "github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/storage/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/storage/tae/types"
 )

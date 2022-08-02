@@ -15,12 +15,12 @@
 package like
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
 	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func makeArgs(ss []string) *types.Bytes {

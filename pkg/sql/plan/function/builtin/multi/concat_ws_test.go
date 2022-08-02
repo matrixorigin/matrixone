@@ -15,8 +15,8 @@
 package multi
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
+	vector3 "github.com/matrixorigin/matrixone/pkg/common/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
 	"github.com/stretchr/testify/require"
 	"testing"
@@ -25,8 +25,8 @@ import (
 func TestConcat_ws(t *testing.T) {
 	vector0 := testutil.MakeScalarVarchar("---", 4)
 	vector1 := testutil.MakeVarcharVector([]string{"hello", "", "guten", "guten"}, []uint64{1})
-	vector2 := testutil.MakeVarcharVector([]string{"hello", "", "guten", "guten"}, []uint64{1})
-	inputVectors := []*vector.Vector{vector0, vector1, vector2}
+	vector := testutil.MakeVarcharVector([]string{"hello", "", "guten", "guten"}, []uint64{1})
+	inputVectors := []*vector3.Vector{vector0, vector1, vector}
 	proc := testutil.NewProc()
 	outputVector, err := Concat_ws(inputVectors, proc)
 	require.NoError(t, err)

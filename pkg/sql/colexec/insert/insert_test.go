@@ -17,13 +17,13 @@ package insert
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
+	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
 	"reflect"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/storage"
 	"github.com/stretchr/testify/require"
@@ -92,7 +92,7 @@ func TestInsertOperator(t *testing.T) {
 		}
 	}
 
-	batch2 := &batch.Batch{
+	batch := &batch.Batch{
 		Vecs: []*vector.Vector{
 			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{3}),
 		},
@@ -104,7 +104,7 @@ func TestInsertOperator(t *testing.T) {
 			{Name: "int64_column_primary", Primary: true, Typ: i64typ},
 		},
 	}
-	proc.Reg.InputBatch = batch2
+	proc.Reg.InputBatch = batch
 	_, err2 := Call(0, proc, &argument2)
 	require.Errorf(t, err2, "should return error when insert null into primary key column")
 }

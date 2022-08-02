@@ -16,13 +16,13 @@ package pipeline
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/common/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 

@@ -16,15 +16,14 @@ package plan
 
 import (
 	"fmt"
+	bytejson2 "github.com/matrixorigin/matrixone/pkg/common/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"github.com/matrixorigin/matrixone/pkg/common/defines"
 	"github.com/matrixorigin/matrixone/pkg/common/errno"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"go/constant"
 	"math"
 	"strconv"
 	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -309,7 +308,7 @@ func rangeCheck(value interface{}, typ *plan.Type, columnName string, rowNumber 
 			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
 		}
 		return nil, errors.New(errno.DataException, fmt.Sprintf("Data too long for column '%s' at row %d", columnName, rowNumber))
-	case bytejson.ByteJson:
+	case bytejson2.ByteJson:
 		return v, nil
 	case bool, types.Date, types.Datetime, types.Timestamp, types.Decimal64, types.Decimal128:
 		return v, nil

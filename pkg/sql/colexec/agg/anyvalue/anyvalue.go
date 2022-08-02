@@ -14,7 +14,9 @@
 
 package anyvalue
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
+)
 
 func ReturnType(typs []types.Type) types.Type {
 	return typs[0]

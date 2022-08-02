@@ -15,11 +15,10 @@
 package fromunixtime
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"reflect"
 	"testing"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func wantDatetimeFromUnix(ts int64) types.Datetime {

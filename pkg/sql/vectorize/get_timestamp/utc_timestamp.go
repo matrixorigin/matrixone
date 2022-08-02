@@ -13,7 +13,9 @@
 // limitations under the License.
 package get_timestamp
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
+)
 
 var (
 	GetUTCTimestamp func() types.Datetime

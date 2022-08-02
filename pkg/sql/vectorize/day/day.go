@@ -14,7 +14,9 @@
 
 package day
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
+)
 
 var (
 	DateToDay     func([]types.Date, []uint8) []uint8

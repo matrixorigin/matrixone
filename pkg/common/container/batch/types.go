@@ -15,7 +15,7 @@
 package batch
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
 

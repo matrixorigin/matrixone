@@ -17,12 +17,12 @@ package deletion
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 

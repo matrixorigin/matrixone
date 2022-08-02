@@ -15,9 +15,9 @@
 package stddevpop
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"math"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	Variance "github.com/matrixorigin/matrixone/pkg/sql/colexec/agg/variance"
 )
 

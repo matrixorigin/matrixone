@@ -14,7 +14,9 @@
 
 package week
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
+)
 
 var (
 	DateToWeek     func([]types.Date, []uint8) []uint8

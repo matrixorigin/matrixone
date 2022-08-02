@@ -15,7 +15,7 @@
 package frontend
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/common/container/batch"
 	"github.com/smartystreets/goconvey/convey"
 	"testing"
 )

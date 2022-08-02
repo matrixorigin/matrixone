@@ -14,7 +14,9 @@
 
 package bit_or
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
+)
 
 func ReturnType(_ []types.Type) types.Type {
 	return types.New(types.T_uint64, 0, 0, 0)

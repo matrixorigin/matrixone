@@ -21,14 +21,13 @@ package space
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/sum"
 	"math"
 	"unicode"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"golang.org/x/exp/constraints"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 var MaxAllowedValue = int64(8000)

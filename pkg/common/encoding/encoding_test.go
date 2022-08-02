@@ -16,11 +16,10 @@ package encoding
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"math"
 	"math/rand"
 	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func TestEncodeType(t *testing.T) {

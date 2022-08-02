@@ -13,7 +13,9 @@
 // limitations under the License.
 package empty
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
+)
 
 var (
 	Empty func(*types.Bytes, []uint8) []uint8

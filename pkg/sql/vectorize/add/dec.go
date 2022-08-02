@@ -23,12 +23,12 @@ package add
 import "C"
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
+	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 func dec64PtrToC(p *types.Decimal64) *C.int64_t {

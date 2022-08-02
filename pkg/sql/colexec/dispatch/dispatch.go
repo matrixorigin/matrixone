@@ -16,9 +16,9 @@ package dispatch
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 

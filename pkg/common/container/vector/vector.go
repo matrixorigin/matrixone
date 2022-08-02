@@ -18,14 +18,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 	"github.com/matrixorigin/matrixone/pkg/sql/vectorize/shuffle"
 	"reflect"
 	"strconv"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 

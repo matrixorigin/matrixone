@@ -15,7 +15,7 @@
 package loopcomplement
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/common/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 

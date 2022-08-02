@@ -15,11 +15,10 @@
 package variance
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"math"
 	"reflect"
 	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func ReturnType(_ []types.Type) types.Type {

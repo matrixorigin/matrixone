@@ -16,11 +16,10 @@ package frontend
 
 import (
 	"fmt"
+	bytejson2 "github.com/matrixorigin/matrixone/pkg/common/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"github.com/matrixorigin/matrixone/pkg/common/defines"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"strconv"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 type Column interface {
@@ -488,7 +487,7 @@ func (mrs *MysqlResultSet) GetString(rindex, cindex uint64) (string, error) {
 		return strconv.FormatUint(uint64(v), 10), nil
 	case types.Datetime:
 		return v.String(), nil
-	case bytejson.ByteJson:
+	case bytejson2.ByteJson:
 		return v.String(), nil
 	default:
 		return "", fmt.Errorf("unsupported type %d ", v)

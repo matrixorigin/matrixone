@@ -15,11 +15,10 @@
 package timestamp
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/common/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"github.com/stretchr/testify/require"
 	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func TestDateToTimestamp(t *testing.T) {

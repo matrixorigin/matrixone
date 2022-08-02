@@ -16,12 +16,12 @@ package types
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 	"io"
 	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 var TypeSize = encoding.TypeSize

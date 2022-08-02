@@ -16,6 +16,7 @@ package binary
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"math"
 	"strconv"
 	"strings"
@@ -23,7 +24,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"golang.org/x/exp/constraints"
 )
 

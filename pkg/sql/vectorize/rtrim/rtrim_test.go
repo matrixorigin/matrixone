@@ -16,10 +16,10 @@ package rtrim
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
 

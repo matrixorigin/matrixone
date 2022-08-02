@@ -17,8 +17,7 @@ package extract
 import (
 	"errors"
 	"fmt"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 )
 
 //func extractFromDate()

@@ -14,7 +14,7 @@
 
 package bit_xor
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import "github.com/matrixorigin/matrixone/pkg/common/container/types"
 
 type BitXor[T1 types.Ints | types.UInts | types.Floats] struct {
 }

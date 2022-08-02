@@ -14,7 +14,9 @@
 
 package weekday
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
+)
 
 // vectorize weekday function
 var (

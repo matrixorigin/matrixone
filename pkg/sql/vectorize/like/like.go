@@ -18,13 +18,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"regexp"
 	"strings"
 	"unicode/utf8"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 var (

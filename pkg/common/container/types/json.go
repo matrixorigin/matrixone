@@ -15,18 +15,18 @@
 package types
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	bytejson2 "github.com/matrixorigin/matrixone/pkg/common/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func ParseNumValToByteJson(num *tree.NumVal) (bytejson.ByteJson, error) {
+func ParseNumValToByteJson(num *tree.NumVal) (bytejson2.ByteJson, error) {
 	val := num.String()
 	return ParseStringToByteJson(val)
 }
 
-func ParseStringToByteJson(str string) (bytejson.ByteJson, error) {
-	return bytejson.ParseFromString(str)
+func ParseStringToByteJson(str string) (bytejson2.ByteJson, error) {
+	return bytejson2.ParseFromString(str)
 }
-func ParseSliceToByteJson(dt []byte) (bytejson.ByteJson, error) {
-	return bytejson.ParseFromByteSlice(dt)
+func ParseSliceToByteJson(dt []byte) (bytejson2.ByteJson, error) {
+	return bytejson2.ParseFromByteSlice(dt)
 }

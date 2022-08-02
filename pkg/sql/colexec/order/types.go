@@ -16,8 +16,8 @@ package order
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 

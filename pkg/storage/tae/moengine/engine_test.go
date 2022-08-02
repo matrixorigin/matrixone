@@ -16,9 +16,10 @@ package moengine
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 	"testing"
 
-	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/storage"
 	"github.com/matrixorigin/matrixone/pkg/storage/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/storage/tae/iface/data"
@@ -27,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/storage/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/storage/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/storage/tae/dataio/mockio"
@@ -86,7 +86,7 @@ func TestEngine(t *testing.T) {
 	bat := catalog.MockBatch(schema, 100)
 	defer bat.Close()
 
-	newbat := mobat.New(true, bat.Attrs)
+	newbat := batch.New(true, bat.Attrs)
 	newbat.Vecs = CopyToMoVectors(bat.Vecs)
 	err = rel.Write(ctx, newbat)
 	assert.Nil(t, err)
@@ -101,7 +101,7 @@ func TestEngine(t *testing.T) {
 	key := attr[0]
 	bat = catalog.MockBatch(schema, 20)
 	defer bat.Close()
-	newbat = mobat.New(true, bat.Attrs)
+	newbat = batch.New(true, bat.Attrs)
 	newbat.Vecs = CopyToMoVectors(bat.Vecs)
 	err = rel.Delete(ctx, newbat.Vecs[12], key.Name)
 	assert.Nil(t, err)
@@ -161,7 +161,7 @@ func TestEngineAllType(t *testing.T) {
 	basebat := catalog.MockBatch(schema, 100)
 	defer basebat.Close()
 
-	newbat := mobat.New(true, basebat.Attrs)
+	newbat := batch.New(true, basebat.Attrs)
 	newbat.Vecs = CopyToMoVectors(basebat.Vecs)
 	err = rel.Write(ctx, newbat)
 	assert.Nil(t, err)
@@ -176,7 +176,7 @@ func TestEngineAllType(t *testing.T) {
 	key := attr[0]
 	bat := catalog.MockBatch(schema, 20)
 	defer bat.Close()
-	newbat1 := mobat.New(true, bat.Attrs)
+	newbat1 := batch.New(true, bat.Attrs)
 	newbat1.Vecs = CopyToMoVectors(bat.Vecs)
 	err = rel.Delete(ctx, newbat1.Vecs[12], key.Name)
 	assert.Nil(t, err)
@@ -243,7 +243,7 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	bat := catalog.MockBatch(schema, 100)
 	defer bat.Close()
 
-	newbat := mobat.New(true, bat.Attrs)
+	newbat := batch.New(true, bat.Attrs)
 	newbat.Vecs = CopyToMoVectors(bat.Vecs)
 	err = rel.Write(ctx, newbat)
 	assert.Nil(t, err)
@@ -256,7 +256,7 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	readers, _ := rel.NewReader(ctx, 10, nil, nil)
-	delete := mobat.New(true, bat.Attrs)
+	delete := batch.New(true, bat.Attrs)
 	m := mheap.New(guest.New(1<<20, host.New(1<<20)))
 	for _, reader := range readers {
 		bat, err := reader.Read([]string{schema.ColDefs[13].Name}, nil, m)
@@ -325,7 +325,7 @@ func TestTxnRelation_Update(t *testing.T) {
 	bat := catalog.MockBatch(schema, 4)
 	defer bat.Close()
 
-	newbat := mobat.New(true, bat.Attrs)
+	newbat := batch.New(true, bat.Attrs)
 	newbat.Vecs = CopyToMoVectors(bat.Vecs)
 	err = rel.Write(ctx, newbat)
 	assert.Nil(t, err)
@@ -486,7 +486,7 @@ func checkSysTable(t *testing.T, name string, dbase storage.Database, txn Txn, r
 	bat := catalog.MockBatch(schema, 100)
 	defer bat.Close()
 
-	newbat := mobat.New(true, bat.Attrs)
+	newbat := batch.New(true, bat.Attrs)
 	newbat.Vecs = CopyToMoVectors(bat.Vecs)
 	err = rel.Write(ctx, newbat)
 	assert.Equal(t, ErrReadOnly, err)

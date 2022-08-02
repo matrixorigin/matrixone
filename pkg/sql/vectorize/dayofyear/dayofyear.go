@@ -13,7 +13,9 @@
 // limitations under the License.
 package dayofyear
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
+)
 
 var (
 	GetDayOfYear func([]types.Date, []uint16) []uint16

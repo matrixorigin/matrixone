@@ -16,6 +16,8 @@ package main
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/logutil"
 	"os"
@@ -23,8 +25,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/storage"
 	"github.com/matrixorigin/matrixone/pkg/storage/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/storage/tae/common"

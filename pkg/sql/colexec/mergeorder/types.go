@@ -16,7 +16,7 @@ package mergeorder
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/compare"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/common/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 )
 

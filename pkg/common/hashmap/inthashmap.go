@@ -15,10 +15,9 @@
 package hashmap
 
 import (
+	hashtable2 "github.com/matrixorigin/matrixone/pkg/common/container/hashtable"
+	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 var zeroUint64 []uint64
@@ -43,7 +42,7 @@ type IntHashMap struct {
 	zValues []int64
 	hashes  []uint64
 
-	hashMap *hashtable.Int64HashMap
+	hashMap *hashtable2.Int64HashMap
 }
 
 type intHashMapIterator struct {
@@ -52,7 +51,7 @@ type intHashMapIterator struct {
 }
 
 func NewIntHashMap(hasNull bool) *IntHashMap {
-	mp := &hashtable.Int64HashMap{}
+	mp := &hashtable2.Int64HashMap{}
 	mp.Init()
 	return &IntHashMap{
 		rows:    0,

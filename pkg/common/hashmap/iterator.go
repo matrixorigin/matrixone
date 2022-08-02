@@ -15,9 +15,8 @@
 package hashmap
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector, inBuckets []uint8) ([]uint64, []int64) {

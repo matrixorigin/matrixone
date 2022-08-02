@@ -15,10 +15,10 @@
 package compile
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"

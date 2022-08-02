@@ -15,8 +15,8 @@
 package hashmap
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	hashtable2 "github.com/matrixorigin/matrixone/pkg/common/container/hashtable"
+	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 )
 
 const (
@@ -56,7 +56,7 @@ type StrHashMap struct {
 	// zValues, 0 indicates the presence null, 1 indicates the absence of a null
 	zValues       []int64
 	strHashStates [][3]uint64
-	hashMap       *hashtable.StringHashMap
+	hashMap       *hashtable2.StringHashMap
 }
 
 type strHashmapIterator struct {

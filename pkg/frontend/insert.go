@@ -17,19 +17,19 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/container/batch"
+	bytejson2 "github.com/matrixorigin/matrixone/pkg/common/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/common/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
+	"github.com/matrixorigin/matrixone/pkg/common/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/common/encoding"
 	"github.com/matrixorigin/matrixone/pkg/common/errno"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"go/constant"
 	"math"
 	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/storage"
@@ -96,7 +96,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg storage.Engine,
 	plan.relation = relation
 	plan.dbName = db
 
-	attrType := make(map[string]types.Type)   // Map from relation's attribute name to its type
+	attrType := make(map[string]types.Type)  // Map from relation's attribute name to its type
 	attrDefault := make(map[string]tree.Expr) // Map from relation's attribute name to its default value
 	orderAttr := make([]string, 0, 32)        // order relation's attribute names
 	{
@@ -168,11 +168,11 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg storage.Engine,
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
 					} else {
-						vv, err := rangeCheck(v.(bytejson.ByteJson), vec.Typ, bat.Attrs[i], j+1)
+						vv, err := rangeCheck(v.(bytejson2.ByteJson), vec.Typ, bat.Attrs[i], j+1)
 						if err != nil {
 							return err
 						}
-						json, err := encoding.EncodeJson(vv.(bytejson.ByteJson))
+						json, err := encoding.EncodeJson(vv.(bytejson2.ByteJson))
 						if err != nil {
 							return err
 						}
@@ -1323,7 +1323,7 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
 		}
 		return nil, errors.New(errno.DataException, fmt.Sprintf("Data too long for column '%s' at row %d", columnName, rowNumber))
-	case bytejson.ByteJson:
+	case bytejson2.ByteJson:
 		return v, nil
 	case types.Date, types.Datetime, types.Timestamp, types.Decimal64, types.Decimal128, bool:
 		return v, nil

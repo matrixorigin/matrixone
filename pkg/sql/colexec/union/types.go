@@ -15,8 +15,8 @@
 package union
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
 const (

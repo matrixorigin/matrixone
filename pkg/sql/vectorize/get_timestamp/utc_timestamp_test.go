@@ -14,9 +14,8 @@
 package get_timestamp
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/container/types"
 	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func TestUTCTimeStamp(t *testing.T) {
