@@ -29,7 +29,8 @@ func New(gm *guest.Mmu) *Mheap {
 		Mp: mempool.New(),
 		pool: &sync.Pool{
 			New: func() any {
-				return make([]int64, 0, 16)
+				sels := make([]int64, 0, 16)
+				return &sels
 			},
 		},
 	}
@@ -102,9 +103,10 @@ func (m *Mheap) Grow(old []byte, size int64) ([]byte, error) {
 }
 
 func (m *Mheap) PutSels(sels []int64) {
-	m.pool.Put(sels)
+	m.pool.Put(&sels)
 }
 
 func (m *Mheap) GetSels() []int64 {
-	return m.pool.Get().([]int64)[:0]
+	sels := m.pool.Get().(*[]int64)
+	return (*sels)[:0]
 }
