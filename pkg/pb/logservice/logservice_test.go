@@ -287,6 +287,22 @@ func TestLogString(t *testing.T) {
 			},
 			expected: "L/shutdown storeA",
 		},
+		{
+			desc: "kill zombie",
+			command: ScheduleCommand{
+				UUID:          "storeA",
+				Bootstrapping: false,
+				ConfigChange: &ConfigChange{
+					Replica: Replica{
+						UUID:    "storeA",
+						ShardID: 1,
+					},
+					ChangeType: KillZombie,
+				},
+				ServiceType: LogService,
+			},
+			expected: "L/Kill storeA storeA:1:0:0",
+		},
 	}
 
 	for _, c := range cases {
