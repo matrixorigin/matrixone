@@ -33,7 +33,6 @@ For more information, see the reference below:
 - [SUBQUERY WITH EXISTS](subqueries/subquery-with-exists.md)
 - [SUBQUERY WITH IN](subqueries/subquery-with-in.md)
 
-
 ## **Constraints**
 
 MatrixOne does not support selecting multiple columns for the query.

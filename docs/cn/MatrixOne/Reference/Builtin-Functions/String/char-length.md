@@ -16,7 +16,6 @@
 |  ----  | ----  |
 | str | 必要参数，想要计算长度的字符串 |
 
-
 !!! note  "<font size=4>note</font>"
     <font size=3>`CHAR_LENGTH` 也可以写为 `lengthUTF8()`。</font>
 
