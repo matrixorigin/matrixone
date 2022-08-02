@@ -44,7 +44,7 @@ type LogService interface {
 	// Close stops store
 	Close() error
 	// Status returns the status of service
-	Status() Status
+	Status() ServiceStatus
 
 	// ID returns uuid of store
 	ID() string
@@ -67,7 +67,7 @@ type LogService interface {
 // The main purpose of this structure is to maintain status
 type logService struct {
 	sync.Mutex
-	status Status
+	status ServiceStatus
 	svc    *logservice.WrappedService
 }
 
@@ -75,12 +75,12 @@ func (ls *logService) Start() error {
 	ls.Lock()
 	defer ls.Unlock()
 
-	if ls.status == Initialized || ls.status == Closed {
+	if ls.status == ServiceInitialized || ls.status == ServiceClosed {
 		err := ls.svc.Start()
 		if err != nil {
 			return err
 		}
-		ls.status = Started
+		ls.status = ServiceStarted
 	}
 
 	return nil
@@ -90,18 +90,18 @@ func (ls *logService) Close() error {
 	ls.Lock()
 	defer ls.Unlock()
 
-	if ls.status == Started {
+	if ls.status == ServiceStarted {
 		err := ls.svc.Close()
 		if err != nil {
 			return err
 		}
-		ls.status = Closed
+		ls.status = ServiceClosed
 	}
 
 	return nil
 }
 
-func (ls *logService) Status() Status {
+func (ls *logService) Status() ServiceStatus {
 	ls.Lock()
 	defer ls.Unlock()
 	return ls.status
@@ -141,7 +141,7 @@ func newLogService(cfg logservice.Config) (LogService, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &logService{status: Initialized, svc: svc}, nil
+	return &logService{status: ServiceInitialized, svc: svc}, nil
 }
 
 // buildLogConfig builds configuration for a log service.

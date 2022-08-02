@@ -30,7 +30,7 @@ type DNService interface {
 	// Close stops store
 	Close() error
 	// Status returns the status of service.
-	Status() Status
+	Status() ServiceStatus
 
 	// StartDNReplica start the DNShard replica
 	StartDNReplica(shard metadata.DNShard) error
@@ -43,7 +43,7 @@ type DNService interface {
 // The main purpose of this structure is to maintain status.
 type dnService struct {
 	sync.Mutex
-	status Status
+	status ServiceStatus
 	svc    dnservice.Service
 }
 
@@ -51,12 +51,12 @@ func (ds *dnService) Start() error {
 	ds.Lock()
 	defer ds.Unlock()
 
-	if ds.status == Initialized || ds.status == Closed {
+	if ds.status == ServiceInitialized || ds.status == ServiceClosed {
 		err := ds.svc.Start()
 		if err != nil {
 			return err
 		}
-		ds.status = Started
+		ds.status = ServiceStarted
 	}
 
 	return nil
@@ -66,18 +66,18 @@ func (ds *dnService) Close() error {
 	ds.Lock()
 	defer ds.Unlock()
 
-	if ds.status == Started {
+	if ds.status == ServiceStarted {
 		err := ds.svc.Close()
 		if err != nil {
 			return err
 		}
-		ds.status = Closed
+		ds.status = ServiceClosed
 	}
 
 	return nil
 }
 
-func (ds *dnService) Status() Status {
+func (ds *dnService) Status() ServiceStatus {
 	ds.Lock()
 	defer ds.Unlock()
 	return ds.status
@@ -87,7 +87,7 @@ func (ds *dnService) StartDNReplica(shard metadata.DNShard) error {
 	ds.Lock()
 	defer ds.Unlock()
 
-	if ds.status != Started {
+	if ds.status != ServiceStarted {
 		return ErrServiceNoStarted
 	}
 
@@ -98,7 +98,7 @@ func (ds *dnService) CloseDNReplica(shard metadata.DNShard) error {
 	ds.Lock()
 	defer ds.Unlock()
 
-	if ds.status != Started {
+	if ds.status != ServiceStarted {
 		return ErrServiceNoStarted
 	}
 
@@ -118,7 +118,7 @@ func newDNService(
 	if err != nil {
 		return nil, err
 	}
-	return &dnService{status: Initialized, svc: svc}, nil
+	return &dnService{status: ServiceInitialized, svc: svc}, nil
 }
 
 // buildDnConfig builds configuration for a dn service.

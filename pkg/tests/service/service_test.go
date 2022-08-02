@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 func TestCluster(t *testing.T) {
@@ -55,13 +57,15 @@ func TestClusterAwareness(t *testing.T) {
 	err = c.Start()
 	require.NoError(t, err)
 
-	// close the cluster finally
+	// close the cluster after all
 	defer func() {
 		err := c.Close()
 		require.NoError(t, err)
 	}()
 
-	// test interface `ClusterAwareness`
+	// -------------------------------------------
+	// the following would test `ClusterAwareness`
+	// -------------------------------------------
 	dnIDs := c.ListDNServices()
 	require.Equal(t, dnSvcNum, len(dnIDs))
 
@@ -70,19 +74,21 @@ func TestClusterAwareness(t *testing.T) {
 
 	dn, err := c.GetDNService(dnIDs[0])
 	require.NoError(t, err)
-	require.Equal(t, Started, dn.Status())
+	require.Equal(t, ServiceStarted, dn.Status())
 
 	log, err := c.GetLogService(logIDs[0])
 	require.NoError(t, err)
-	require.Equal(t, Started, log.Status())
+	require.Equal(t, ServiceStarted, log.Status())
 
 	leader := c.WaitHAKeeperLeader(2 * time.Second)
 	require.NotNil(t, leader)
 
+	// we must wait for hakeeper's running state,
+	// or hakeeper wouldn't receive hearbeat.
+	c.WaitHAKeeperState(10*time.Second, logpb.HAKeeperRunning)
+
 	state, err := c.GetClusterState(2 * time.Second)
 	require.NoError(t, err)
-	// FIXME: empty of reported DNState
-	// require.Equal(t, dnSvcNum, len(state.DNState.Stores))
+	require.Equal(t, dnSvcNum, len(state.DNState.Stores))
 	require.Equal(t, logSvcNum, len(state.LogState.Stores))
-
 }

@@ -14,11 +14,11 @@
 
 package service
 
-// Status indicates serivce status.
-type Status int
+// ServiceStatus indicates serivce status.
+type ServiceStatus int
 
 const (
-	Initialized Status = iota
-	Started
-	Closed
+	ServiceInitialized ServiceStatus = iota
+	ServiceStarted
+	ServiceClosed
 )
