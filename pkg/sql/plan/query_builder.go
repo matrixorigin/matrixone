@@ -161,7 +161,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		plan.Node_MINUS, plan.Node_MINUS_ALL:
 
 		thisTag := node.BindingTags[0]
-		for i := range node.ProjectList {
+		for i, expr := range node.ProjectList {
+			increaseRefCnt(expr, colRefCnt)
 			globalRef := [2]int32{thisTag, int32(i)}
 			remapping.addColRef(globalRef)
 		}
@@ -191,7 +192,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			}
 		}
 
-		// childProjList := builder.qry.Nodes[leftID].ProjectList
 		for _, globalRef := range leftRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
 				continue

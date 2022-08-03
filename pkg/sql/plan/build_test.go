@@ -31,7 +31,7 @@ func TestSingleSQL(t *testing.T) {
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
 	// sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
-	sql := "select 1 union (select 2 union select 3)"
+	sql := "select 1, 2 union select 2, 3"
 	// sql := "explain a"
 	// sql := "select 18446744073709551500"
 	// stmts, err := mysql.Parse(sql)
@@ -539,6 +539,8 @@ func TestUnionSqlBuilder(t *testing.T) {
 		"select 1 union select 2 intersect select 2 union all select 1.1 minus select 22222",
 		"select 1 as a union select 2 order by a limit 1",
 		"select n_name from nation union select n_comment from nation order by n_name",
+		"with qn (foo, bar) as (select 1 as col, 2 as coll union select 4, 5) select qn1.bar from qn qn1",
+		"select n_name, n_comment from nation union all select n_name, n_comment from nation2",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
