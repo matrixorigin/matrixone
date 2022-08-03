@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package store
+package batchstoredriver
 
 import (
 	"errors"
@@ -129,68 +129,4 @@ func (h *history) EntryIds() []int {
 		ids[idx] = entry.Id()
 	}
 	return ids
-}
-
-type entryWrapper struct {
-	offset int
-	entry  VFile
-}
-
-// One worker
-// h.mu.Rlock
-// wrapper
-func (h *history) TryTruncate(c *compactor) error {
-	toDelete := make([]entryWrapper, 0, 4)
-	h.mu.RLock()
-	entries := make([]VFile, len(h.entries))
-	copy(entries, h.entries)
-	h.mu.RUnlock()
-	// for i := len(entries) - 1; i >= 0; i-- {
-	// 	e := entries[i]
-	// 	e.PrepareCompactor(c)
-	// }
-	for i := len(entries) - 1; i >= 0; i-- {
-		e := entries[i]
-		// err := e.LoadMeta()
-		// if err != nil {
-		// 	return err
-		// }
-		wrapper := entryWrapper{entry: e}
-		if e.IsToDelete(c) {
-			wrapper.offset = i
-			toDelete = append(toDelete, wrapper)
-		}
-		// e.FreeMeta()
-	}
-	h.mu.Lock()
-	for _, wrapper := range toDelete {
-		h.entries = append(h.entries[:wrapper.offset], h.entries[wrapper.offset+1:]...)
-	}
-	h.mu.Unlock()
-	for _, wrapper := range toDelete {
-		if err := wrapper.entry.Destroy(); err != nil {
-			return err
-		}
-	}
-	c.tidCidMapMu.Lock()
-	for group, tidCidMap := range c.tidCidMap {
-		ckp := c.checkpointed[group]
-		for tid, lsn := range tidCidMap {
-			if lsn < ckp {
-				delete(tidCidMap, tid)
-			}
-		}
-	}
-	c.tidCidMapMu.Unlock()
-	return nil
-}
-
-func (h *history) Replay(r *replayer, observer ReplayObserver) error {
-	for _, entry := range h.entries {
-		err := entry.Replay(r, observer)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }

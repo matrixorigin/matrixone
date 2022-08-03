@@ -12,35 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package wal
+package store
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 )
 
 const (
-	GroupUC        = entry.GTUncommit
-	GroupC  uint32 = iota + 10
-	GroupCatalog
+	GroupC = entry.GTCustomizedStart + iota
+	GroupCKP
+	GroupInternal
+	GroupUC
 )
 
-type Index = store.Index
+type Store interface {
+	Append(gid uint32, entry entry.Entry) (lsn uint64, err error)
+	FuzzyCheckpoint(gid uint32, idxes []*Index) (ckpEntry entry.Entry, err error)
+	RangeCheckpoint(gid uint32, start, end uint64) (ckpEntry entry.Entry, err error)
+	Load(gid uint32, lsn uint64) (entry.Entry, error)
 
-type ReplayObserver interface {
-	OnTimeStamp(uint64)
-	OnStaleIndex(*Index)
-}
+	GetCurrSeqNum(gid uint32) (lsn uint64)
+	GetSynced(gid uint32) (lsn uint64)
+	GetPendding(gid uint32) (cnt uint64)
+	GetCheckpointed(gid uint32) (lsn uint64)
 
-type LogEntry entry.Entry
-
-type Driver interface {
-	GetCheckpointed() uint64
-	Checkpoint(indexes []*Index) (LogEntry, error)
-	AppendEntry(uint32, LogEntry) (uint64, error)
-	LoadEntry(groupID uint32, lsn uint64) (LogEntry, error)
-	GetCurrSeqNum() uint64
-	GetPenddingCnt() uint64
-	Replay(handle store.ApplyHandle) error
+	Replay(h ApplyHandle) error
 	Close() error
 }
+
+type ApplyHandle = func(group uint32, commitId uint64, payload []byte, typ uint16, info any)

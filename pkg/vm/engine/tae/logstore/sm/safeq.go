@@ -91,6 +91,7 @@ func (q *safeQueue) Start() {
 func (q *safeQueue) Stop() {
 	q.stopReceiver()
 	q.waitStop()
+	close(q.queue)
 }
 
 func (q *safeQueue) stopReceiver() {

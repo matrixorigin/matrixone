@@ -11,8 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-package store
+package batchstoredriver
 
 import (
 	"context"
@@ -26,7 +25,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
 var suffix = ".rot"
@@ -58,22 +57,18 @@ type rotateFile struct {
 	uncommitted []*vFile
 	history     History
 
-	commitWg        sync.WaitGroup
-	commitCtx       context.Context
-	commitCancel    context.CancelFunc
-	commitQueue     chan *vFile
-	postCommitQueue chan *vFile
+	commitWg     sync.WaitGroup
+	commitCtx    context.Context
+	commitCancel context.CancelFunc
+	commitQueue  chan *vFile
 
 	nextVer uint64
 
 	wg sync.WaitGroup
-
-	bsInfo         *storeInfo
-	postCommitFunc func(VFile)
 }
 
 func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChecker,
-	historyFactory HistoryFactory, bsInfo *storeInfo, postCommitFunc func(VFile)) (*rotateFile, error) {
+	historyFactory HistoryFactory, observer ReplayObserver) (*rotateFile, error) {
 	var err error
 	if mu == nil {
 		mu = new(sync.RWMutex)
@@ -95,16 +90,13 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 	}
 
 	rf := &rotateFile{
-		RWMutex:         mu,
-		dir:             dir,
-		name:            name,
-		uncommitted:     make([]*vFile, 0),
-		checker:         rotateChecker,
-		commitQueue:     make(chan *vFile, 10000),
-		postCommitQueue: make(chan *vFile, 10000),
-		history:         historyFactory(),
-		bsInfo:          bsInfo,
-		postCommitFunc:  postCommitFunc,
+		RWMutex:     mu,
+		dir:         dir,
+		name:        name,
+		uncommitted: make([]*vFile, 0),
+		checker:     rotateChecker,
+		commitQueue: make(chan *vFile, 10000),
+		history:     historyFactory(),
 	}
 	if !newDir {
 		files, err := os.ReadDir(dir)
@@ -139,15 +131,16 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 			// vf.ReadMeta()
 			vfiles = append(vfiles, vf)
 		}
-		sort.Slice(vfiles, func(i, j int) bool {
-			return vfiles[i].(*vFile).version < vfiles[j].(*vFile).version
-		})
 		if len(vfiles) == 0 {
 			err = rf.scheduleNew()
 			if err != nil {
 				return nil, err
 			}
 		} else {
+			sort.Slice(vfiles, func(i, j int) bool {
+				return vfiles[i].(*vFile).version < vfiles[j].(*vFile).version
+			})
+			observer.onTruncatedFile(vfiles[0].Id() - 1)
 			rf.history.Extend(vfiles[:len(vfiles)-1]...)
 			for _, vf := range vfiles[:len(vfiles)-1] {
 				vf.OnReplayCommitted()
@@ -162,17 +155,22 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 	rf.commitCtx, rf.commitCancel = context.WithCancel(context.Background())
 	rf.wg.Add(1)
 	go rf.commitLoop()
-	go rf.postCommitLoop()
 	return rf, err
 }
 
-func (rf *rotateFile) Replay(r *replayer, o ReplayObserver) error {
+func (rf *rotateFile) getEntryFromUncommitted(id int) (e *vFile) {
+	for _, vf := range rf.uncommitted {
+		if vf.version == id {
+			return vf
+		}
+	}
+	return nil
+}
+func (rf *rotateFile) Replay(r *replayer) error {
 	entryIDs := rf.history.EntryIds()
 	for _, vf := range rf.uncommitted {
 		entryIDs = append(entryIDs, vf.Id())
 	}
-	entries := make([]VFile, 0)
-	failedIDs := make([]int, 0)
 	for _, id := range entryIDs {
 		entry := rf.history.GetEntry(id)
 		if entry == nil {
@@ -183,52 +181,12 @@ func (rf *rotateFile) Replay(r *replayer, o ReplayObserver) error {
 			entry = vf
 		}
 
-		err := entry.LoadMeta()
-		if err != nil {
-			err := entry.Replay(r, o)
-			if err != nil {
-				panic(err)
-			}
-			failedIDs = append(failedIDs, id)
-			continue
-		}
-		entries = append(entries, entry)
-	}
-	r.MergeCkps(entries)
-	for _, vf := range entries {
-		for _, id := range failedIDs {
-			if vf.Id() == id {
-				continue
-			}
-		}
-		err := vf.ReplayCWithCkp(r, o)
+		err := entry.Replay(r)
 		if err != nil {
 			panic(err)
 		}
 	}
 	return nil
-}
-
-// for replay
-func (rf *rotateFile) getEntryFromUncommitted(id int) (e *vFile) {
-	for _, vf := range rf.uncommitted {
-		if vf.version == id {
-			return vf
-		}
-	}
-	return nil
-}
-func (rf *rotateFile) TryTruncate(size int64) error {
-	l := len(rf.uncommitted)
-	if l == 0 {
-		return errors.New("all files committed")
-	}
-	err := rf.uncommitted[l-1].File.Truncate(size)
-	if err != nil {
-		return err
-	}
-	rf.uncommitted[l-1].size = int(size)
-	return err
 }
 
 func (rf *rotateFile) commitLoop() {
@@ -238,31 +196,15 @@ func (rf *rotateFile) commitLoop() {
 		case <-rf.commitCtx.Done():
 			return
 		case file := <-rf.commitQueue:
-			// fmt.Printf("Receive request: %s\n", file.Name())
 			file.Commit()
 			rf.commitFile()
 			rf.commitWg.Done()
-			rf.postCommitQueue <- file
-		}
-	}
-}
-
-func (rf *rotateFile) postCommitLoop() {
-	for {
-		select {
-		case <-rf.commitCtx.Done():
-			return
-		case file := <-rf.postCommitQueue:
-			if rf.postCommitFunc != nil {
-				rf.postCommitFunc(file)
-			}
 		}
 	}
 }
 
 func (rf *rotateFile) scheduleCommit(file *vFile) {
 	rf.commitWg.Add(1)
-	// fmt.Printf("Schedule request: %s\n", file.Name())
 	rf.commitQueue <- file
 }
 
@@ -284,7 +226,7 @@ func (rf *rotateFile) Close() error {
 func (rf *rotateFile) scheduleNew() error {
 	rf.nextVer++
 	fname := MakeVersionFile(rf.dir, rf.name, rf.nextVer)
-	vf, err := newVFile(nil, fname, int(rf.nextVer), rf.history, rf.bsInfo)
+	vf, err := newVFile(nil, fname, int(rf.nextVer), rf.history)
 	if err != nil {
 		return err
 	}
@@ -372,12 +314,12 @@ func (rf *rotateFile) Sync() error {
 	return lastFile.Sync()
 }
 
-func (rf *rotateFile) Load(ver int, groupID uint32, lsn uint64) (entry.Entry, error) {
+func (rf *rotateFile) Load(ver int, groupId uint32, lsn uint64) (*entry.Entry, error) {
 	vf, err := rf.GetEntryByVersion(ver)
 	if err != nil {
 		return nil, err
 	}
-	return vf.Load(groupID, lsn)
+	return vf.Load(lsn)
 }
 
 func (rf *rotateFile) GetEntryByVersion(version int) (VFile, error) {
