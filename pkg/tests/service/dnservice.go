@@ -88,7 +88,7 @@ func (ds *dnService) StartDNReplica(shard metadata.DNShard) error {
 	defer ds.Unlock()
 
 	if ds.status != ServiceStarted {
-		return ErrServiceNoStarted
+		return ErrServiceNotStarted
 	}
 
 	return ds.svc.StartDNReplica(shard)
@@ -99,7 +99,7 @@ func (ds *dnService) CloseDNReplica(shard metadata.DNShard) error {
 	defer ds.Unlock()
 
 	if ds.status != ServiceStarted {
-		return ErrServiceNoStarted
+		return ErrServiceNotStarted
 	}
 
 	return ds.svc.CloseDNReplica(shard)
