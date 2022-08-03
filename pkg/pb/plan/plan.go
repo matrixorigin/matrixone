@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package service
+package plan
 
-import "fmt"
+func (p *Plan) MarshalBinary() ([]byte, error) {
+	data := make([]byte, p.ProtoSize())
+	_, err := p.MarshalTo(data)
+	return data, err
+}
 
-var (
-	ErrServiceNotExist  = fmt.Errorf("service not exist")
-	ErrServiceNoStarted = fmt.Errorf("service not started")
-	ErrFailAllocatePort = fmt.Errorf("fail to allocate port")
-	ErrInvalidFSName    = fmt.Errorf("invalid file service name")
-)
-
-// wrappedError wraps error with extra message.
-func wrappedError(err error, msg string) error {
-	return fmt.Errorf("%w: %s", err, msg)
+func (p *Plan) UnmarshalBinary(data []byte) error {
+	return p.Unmarshal(data)
 }

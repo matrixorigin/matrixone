@@ -24,8 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -49,10 +47,8 @@ var (
 )
 
 func init() {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
 	tcs = []complementTestCase{
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+		newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 			[][]*plan.Expr{
 				{
 					newExpr(0, types.Type{Oid: types.T_int8}),
@@ -61,147 +57,13 @@ func init() {
 					newExpr(0, types.Type{Oid: types.T_int8}),
 				},
 			}),
-		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+		newTestCase(testutil.NewMheap(), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 			[][]*plan.Expr{
 				{
 					newExpr(0, types.Type{Oid: types.T_int8}),
 				},
 				{
 					newExpr(0, types.Type{Oid: types.T_int8}),
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_decimal64}}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(0, types.Type{Oid: types.T_decimal64}),
-				},
-				{
-					newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1}),
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_decimal64}}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(0, types.Type{Oid: types.T_decimal64}),
-				},
-				{
-					newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1}),
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_decimal128}}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(0, types.Type{Oid: types.T_decimal128}),
-				},
-				{
-					newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1}),
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_decimal128}}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(0, types.Type{Oid: types.T_decimal128}),
-				},
-				{
-					newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1}),
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(1, types.Type{Oid: types.T_int64}),
-				},
-				{
-					newExpr(1, types.Type{Oid: types.T_int64}),
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(1, types.Type{Oid: types.T_int64}),
-				},
-				{
-					newExpr(1, types.Type{Oid: types.T_int64}),
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal64}}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(1, types.Type{Oid: types.T_decimal64}),
-				},
-				{
-					newExpr(1, types.Type{Oid: types.T_decimal64, Scale: 1}),
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal64}}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(1, types.Type{Oid: types.T_decimal64}),
-				},
-				{
-					newExpr(1, types.Type{Oid: types.T_decimal64, Scale: 1}),
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal128}}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(1, types.Type{Oid: types.T_decimal128}),
-				},
-				{
-					newExpr(1, types.Type{Oid: types.T_decimal128, Scale: 1}),
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal128}}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(1, types.Type{Oid: types.T_decimal128}),
-				},
-				{
-					newExpr(1, types.Type{Oid: types.T_decimal128, Scale: 1}),
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal64}, {Oid: types.T_char}}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1}),
-					newExpr(1, types.Type{Oid: types.T_char}),
-				},
-				{
-					newExpr(0, types.Type{Oid: types.T_decimal64}),
-					newExpr(1, types.Type{Oid: types.T_char}),
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal64}, {Oid: types.T_char}}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1}),
-					newExpr(1, types.Type{Oid: types.T_char}),
-				},
-				{
-					newExpr(0, types.Type{Oid: types.T_decimal64}),
-					newExpr(1, types.Type{Oid: types.T_char}),
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal128}, {Oid: types.T_char}}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1}),
-					newExpr(1, types.Type{Oid: types.T_char}),
-				},
-				{
-					newExpr(0, types.Type{Oid: types.T_decimal128}),
-					newExpr(1, types.Type{Oid: types.T_char}),
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal128}, {Oid: types.T_char}}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1}),
-					newExpr(1, types.Type{Oid: types.T_char}),
-				},
-				{
-					newExpr(0, types.Type{Oid: types.T_decimal128}),
-					newExpr(1, types.Type{Oid: types.T_char}),
 				},
 			}),
 	}
@@ -211,13 +73,6 @@ func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
 	for _, tc := range tcs {
 		String(tc.arg, buf)
-	}
-}
-
-func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
-		require.NoError(t, err)
 	}
 }
 
@@ -240,7 +95,7 @@ func TestComplement(t *testing.T) {
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 		}
-		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
+		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
 	}
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
@@ -258,17 +113,14 @@ func TestComplement(t *testing.T) {
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 		}
-		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
+		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
 	}
-
 }
 
 func BenchmarkComplement(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		hm := host.New(1 << 30)
-		gm := guest.New(1<<30, hm)
 		tcs = []complementTestCase{
-			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+			newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 				[][]*plan.Expr{
 					{
 						newExpr(0, types.Type{Oid: types.T_int8}),
@@ -277,7 +129,7 @@ func BenchmarkComplement(b *testing.B) {
 						newExpr(0, types.Type{Oid: types.T_int8}),
 					},
 				}),
-			newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+			newTestCase(testutil.NewMheap(), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 				[][]*plan.Expr{
 					{
 						newExpr(0, types.Type{Oid: types.T_int8}),
