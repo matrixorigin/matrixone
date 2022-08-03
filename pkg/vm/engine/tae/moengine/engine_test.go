@@ -495,7 +495,7 @@ func checkSysTable(t *testing.T, name string, dbase engine.Database, txn Txn, re
 	assert.Equal(t, schema.SortKey.Defs[0].Name, attrs[0].Name)
 	attrs, _ = rel.GetHideKeys(ctx)
 	attr := attrs[0]
-	assert.NotNil(t, attr.Name, catalog.HiddenColumnName)
+	assert.NotNil(t, attr.Name, catalog.PhyAddrColumnName)
 }
 
 func TestSysRelation(t *testing.T) {
