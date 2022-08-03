@@ -43,6 +43,10 @@ func TestCluster(t *testing.T) {
 }
 
 func TestClusterAwareness(t *testing.T) {
+	// FIXME: skip this test after issue #4334 solved:
+	// https://github.com/matrixorigin/matrixone/issues/4334
+	t.Skip()
+
 	dnSvcNum := 2
 	logSvcNum := 3
 	opt := DefaultOptions().
