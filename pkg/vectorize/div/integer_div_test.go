@@ -15,11 +15,12 @@
 package div
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"testing"
 )
 
-func TestF32IntegerDivOf(t *testing.T) {
+func TestF32IntegerDivByZero(t *testing.T) {
 	as := make([]float32, 2)
 	bs := make([]float32, 2)
 	for i := 0; i < 2; i++ {
@@ -33,7 +34,37 @@ func TestF32IntegerDivOf(t *testing.T) {
 
 	err := NumericIntegerDivFloat[float32](av, bv, cv)
 	if err == nil {
-		t.Fatalf("should have overflowed.")
+		if moerror, ok := err.(*moerr.Error); ok {
+			if moerror.Code != moerr.DIVIVISION_BY_ZERO {
+				t.Fatalf("should have div by zero error.")
+			}
+		} else {
+			t.Fatalf("should have div by zero error.")
+		}
+	}
+}
+
+func TestF64IntegerDivByZero(t *testing.T) {
+	as := make([]float64, 2)
+	bs := make([]float64, 2)
+	for i := 0; i < 2; i++ {
+		as[i] = 50
+		bs[i] = float64(i)
+	}
+	cs := make([]int64, 2)
+	av := testutil.MakeFloat64Vector(as, nil)
+	bv := testutil.MakeFloat64Vector(bs, nil)
+	cv := testutil.MakeInt64Vector(cs, nil)
+
+	err := NumericIntegerDivFloat[float64](av, bv, cv)
+	if err == nil {
+		if moerror, ok := err.(*moerr.Error); ok {
+			if moerror.Code != moerr.DIVIVISION_BY_ZERO {
+				t.Fatalf("should have div by zero error.")
+			}
+		} else {
+			t.Fatalf("should have div by zero error.")
+		}
 	}
 }
 

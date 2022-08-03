@@ -29,6 +29,11 @@ import (
 	"unsafe"
 )
 
+const (
+	RC_DIVISION_BY_ZERO = 2000
+	RC_OUT_OF_RANGE     = 2001
+)
+
 func dec64PtrToC(p *types.Decimal64) *C.int64_t {
 	return (*C.int64_t)(unsafe.Pointer(p))
 }
@@ -52,7 +57,13 @@ func Decimal64VecDiv(xs, ys, rs *vector.Vector) error {
 	rc := C.Decimal64_VecDiv(dec128PtrToC(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewError(moerr.OUT_OF_RANGE, "Decimal64 div overflow")
+		if rc == RC_DIVISION_BY_ZERO {
+			return moerr.NewError(moerr.DIVIVISION_BY_ZERO, "Decimal64 div by zero")
+		} else if rc == RC_OUT_OF_RANGE {
+			return moerr.NewError(moerr.OUT_OF_RANGE, "Decimal64 div overflow")
+		} else {
+			return moerr.NewError(moerr.INTERNAL_ERROR, "Decimal64 div internal error")
+		}
 	}
 	return nil
 }
@@ -72,7 +83,13 @@ func Decimal128VecDiv(xs, ys, rs *vector.Vector) error {
 	rc := C.Decimal128_VecDiv(dec128PtrToC(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewError(moerr.OUT_OF_RANGE, "Decimal128 div overflow")
+		if rc == RC_DIVISION_BY_ZERO {
+			return moerr.NewError(moerr.DIVIVISION_BY_ZERO, "Decimal128 div by zero")
+		} else if rc == RC_OUT_OF_RANGE {
+			return moerr.NewError(moerr.OUT_OF_RANGE, "Decimal128 div overflow")
+		} else {
+			return moerr.NewError(moerr.INTERNAL_ERROR, "Decimal128 div internal error")
+		}
 	}
 	return nil
 }

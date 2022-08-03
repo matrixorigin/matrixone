@@ -647,7 +647,7 @@ int32_t Decimal128_DivNoCheck(int64_t *r, int64_t *a, int64_t *b)
     DECLARE_DEC128_CTXT;
     decQuadDivide(&tmp, DecQuadPtr(a), DecQuadPtr(b), &_fn_dc);
     decQuadReduce(DecQuadPtr(r), &tmp, &_fn_dc);
-//    CHECK_DIV;
+    CHECK_DIV;
 //    CHECK_OFUF;
     return RC_SUCCESS;
 }
