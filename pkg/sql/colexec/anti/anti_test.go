@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package complement
+package anti
 
 import (
 	"bytes"
@@ -34,7 +34,7 @@ const (
 )
 
 // add unit tests for cases
-type complementTestCase struct {
+type antiTestCase struct {
 	arg    *Argument
 	flgs   []bool // flgs[i] == true: nullable
 	types  []types.Type
@@ -43,11 +43,11 @@ type complementTestCase struct {
 }
 
 var (
-	tcs []complementTestCase
+	tcs []antiTestCase
 )
 
 func init() {
-	tcs = []complementTestCase{
+	tcs = []antiTestCase{
 		newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 			[][]*plan.Expr{
 				{
@@ -76,7 +76,7 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestComplement(t *testing.T) {
+func TestAnti(t *testing.T) {
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
@@ -117,9 +117,9 @@ func TestComplement(t *testing.T) {
 	}
 }
 
-func BenchmarkComplement(b *testing.B) {
+func BenchmarkAnti(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		tcs = []complementTestCase{
+		tcs = []antiTestCase{
 			newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 				[][]*plan.Expr{
 					{
@@ -178,7 +178,7 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 	}
 }
 
-func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) complementTestCase {
+func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) antiTestCase {
 	proc := process.New(m)
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -190,7 +190,7 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []int32, cs []
 		Ctx: ctx,
 		Ch:  make(chan *batch.Batch, 3),
 	}
-	return complementTestCase{
+	return antiTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
