@@ -53,8 +53,6 @@ const (
 	Minus
 )
 
-var _ = Minus
-
 // Instruction contains relational algebra
 type Instruction struct {
 	// Op specified the operator code of an instruction.

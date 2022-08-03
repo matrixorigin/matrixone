@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
@@ -91,6 +92,7 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	Update:   update.String,
 
 	Union: union.String,
+	Minus: minus.String,
 }
 
 var prepareFunc = [...]func(*process.Process, any) error{
@@ -129,6 +131,7 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Update:   update.Prepare,
 
 	Union: union.Prepare,
+	Minus: minus.Prepare,
 }
 
 var execFunc = [...]func(int, *process.Process, any) (bool, error){
@@ -167,4 +170,5 @@ var execFunc = [...]func(int, *process.Process, any) (bool, error){
 	Update:   update.Call,
 
 	Union: union.Call,
+	Minus: minus.Call,
 }
