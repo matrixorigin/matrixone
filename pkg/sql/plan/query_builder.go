@@ -161,15 +161,27 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		plan.Node_MINUS, plan.Node_MINUS_ALL:
 
 		leftID := node.Children[0]
-		_, err := builder.remapAllColRefs(leftID, colRefCnt)
+		leftRemapping, err := builder.remapAllColRefs(leftID, colRefCnt)
 		if err != nil {
 			return nil, err
 		}
 
 		rightID := node.Children[1]
-		_, err = builder.remapAllColRefs(rightID, colRefCnt)
+		rightRemapping, err := builder.remapAllColRefs(rightID, colRefCnt)
 		if err != nil {
 			return nil, err
+		}
+		for _, globalRef := range leftRemapping.localToGlobal {
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+			remapping.addColRef(globalRef)
+		}
+		for _, globalRef := range rightRemapping.localToGlobal {
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+			remapping.addColRef(globalRef)
 		}
 
 	case plan.Node_JOIN:
@@ -751,17 +763,11 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 	for k, v := range subCtxList[0].aliasMap {
 		ctx.aliasMap[k] = v
 	}
-	for i, expr := range builder.qry.Nodes[projectNodes[0]].ProjectList {
-		ctx.projects = append(ctx.projects, &plan.Expr{
-			Typ: expr.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: ctx.projectTag,
-					ColPos: int32(i),
-				},
-			},
-		})
-	}
+	// for i, expr := range builder.qry.Nodes[projectNodes[0]].ProjectList {
+	// 	tmpExpr := DeepCopyExpr(subCtxList[0].projects[i])
+	// 	tmpExpr.Typ = expr.Typ
+	// 	ctx.projects = append(ctx.projects, tmpExpr)
+	// }
 	havingBinder := NewHavingBinder(builder, ctx)
 	projectionBinder := NewProjectionBinder(builder, ctx, havingBinder)
 
