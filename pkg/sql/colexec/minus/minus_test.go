@@ -90,7 +90,6 @@ func TestMinus(t *testing.T) {
 			c.proc.InputBatch().Clean(c.proc.Mp)
 		}
 	}
-	c.arg.ctr.hashTable.Free()
 	require.Equal(t, 1, cnt) // 1 row
 	require.Equal(t, int64(0), mheap.Size(c.proc.Mp))
 }
