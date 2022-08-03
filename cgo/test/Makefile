@@ -1,4 +1,4 @@
-CFLAGS=-I.. -g -Wall -Werror
+CFLAGS=-I.. -g -Wall -Werror -lm
 
 test_add.exe: test_add.c ../libmo.a
 	$(CC) $(CFLAGS) -o test_add.exe test_add.c -L.. -lmo

@@ -80,8 +80,6 @@ int main() {
 //    test_addi32();
      //test_subdec64();
      //test_divedec64();
-     //test_adddec64();
-     printf("%d", INT_MAX);
-     __int128 x = 1;
-     printf("%lld", x);
+     test_adddec64();
+     return 0;
 }
