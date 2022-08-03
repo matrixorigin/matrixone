@@ -20,15 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-func makePlan2JsonConstExpr(v string) *plan.Expr_C {
-	return &plan.Expr_C{C: &plan.Const{
-		Isnull: false,
-		Value: &plan.Const_Jsonval{
-			Jsonval: v,
-		},
-	}}
-}
-
 func makePlan2NullConstExprWithType() *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_C{
@@ -103,15 +94,6 @@ func makePlan2Uint64ConstExprWithType(v uint64) *plan.Expr {
 	}
 }
 
-func makePlan2Float32ConstExpr(v float32) *plan.Expr_C {
-	return &plan.Expr_C{C: &plan.Const{
-		Isnull: false,
-		Value: &plan.Const_Fval{
-			Fval: v,
-		},
-	}}
-}
-
 func makePlan2Float64ConstExpr(v float64) *plan.Expr_C {
 	return &plan.Expr_C{C: &plan.Const{
 		Isnull: false,
@@ -151,53 +133,6 @@ func makePlan2StringConstExprWithType(v string) *plan.Expr {
 			Width:    int32(len(v)),
 		},
 	}
-}
-
-func makePlan2DateConstExpr(v types.Date) *plan.Expr_C {
-	return &plan.Expr_C{C: &plan.Const{
-		Isnull: false,
-		Value: &plan.Const_Dateval{
-			Dateval: int32(v),
-		},
-	}}
-}
-
-func makePlan2DatetimeConstExpr(v types.Datetime) *plan.Expr_C {
-	return &plan.Expr_C{C: &plan.Const{
-		Isnull: false,
-		Value: &plan.Const_Datetimeval{
-			Datetimeval: int64(v),
-		},
-	}}
-}
-
-func makePlan2Decimal64ConstExpr(v types.Decimal64) *plan.Expr_C {
-	dA := types.Decimal64ToInt64Raw(v)
-	return &plan.Expr_C{C: &plan.Const{
-		Isnull: false,
-		Value: &plan.Const_Decimal64Val{
-			Decimal64Val: &plan.Decimal64{A: dA},
-		},
-	}}
-}
-
-func makePlan2Decimal128ConstExpr(v types.Decimal128) *plan.Expr_C {
-	dA, dB := types.Decimal128ToInt64Raw(v)
-	return &plan.Expr_C{C: &plan.Const{
-		Isnull: false,
-		Value: &plan.Const_Decimal128Val{
-			Decimal128Val: &plan.Decimal128{A: dA, B: dB},
-		},
-	}}
-}
-
-func makePlan2TimestampConstExpr(v types.Timestamp) *plan.Expr_C {
-	return &plan.Expr_C{C: &plan.Const{
-		Isnull: false,
-		Value: &plan.Const_Timestampval{
-			Timestampval: int64(v),
-		},
-	}}
 }
 
 func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {

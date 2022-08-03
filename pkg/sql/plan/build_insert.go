@@ -62,9 +62,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 
 	var explicitCols []*ColDef
 	if stmt.Columns == nil {
-		for _, col := range tblRef.Cols {
-			explicitCols = append(explicitCols, col)
-		}
+		explicitCols = append(explicitCols, tblRef.Cols...)
 	} else {
 		for _, attr := range stmt.Columns {
 			hasAttr := false
@@ -82,7 +80,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	}
 	explicitCount := len(explicitCols)
 
-	var orderAttrs []string
+	orderAttrs := make([]string, 0, colCount)
 	for _, col := range tblRef.Cols {
 		orderAttrs = append(orderAttrs, col.Name)
 	}
