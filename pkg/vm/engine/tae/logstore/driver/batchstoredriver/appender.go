@@ -12,11 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package store
-
-import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-)
+package batchstoredriver
 
 type fileAppender struct {
 	rfile         *rotateFile
@@ -25,7 +21,7 @@ type fileAppender struct {
 	tempPos       int
 	rollbackState *vFileState
 	syncWaited    *vFile
-	info          any
+	info          any //for address
 }
 
 func newFileAppender(rfile *rotateFile) *fileAppender {
@@ -35,33 +31,24 @@ func newFileAppender(rfile *rotateFile) *fileAppender {
 	return appender
 }
 
-func (appender *fileAppender) Prepare(size int, info any) error {
+func (appender *fileAppender) Prepare(size int, lsn uint64) (any, error) {
 	var err error
 	appender.capacity = size
 	appender.rfile.Lock()
 	defer appender.rfile.Unlock()
 	if appender.syncWaited, appender.rollbackState, err = appender.rfile.makeSpace(size); err != nil {
-		return err
+		return nil, err
 	}
 	appender.tempPos = appender.rollbackState.bufPos
-	if info == nil {
-		return nil
+	addr := &VFileAddress{
+		LSN:     lsn,
+		Version: appender.rollbackState.file.version,
+		Offset:  appender.rollbackState.pos,
 	}
-	v := info.(*entry.Info)
-	switch v.Group {
-	// case entry.GTUncommit:
-	default:
-		v.Info = &VFileAddress{
-			Group:   v.Group,
-			LSN:     v.GroupLSN,
-			Version: appender.rollbackState.file.version,
-			Offset:  appender.rollbackState.pos,
-		}
-	}
+	appender.info = addr
 	// logutil.Infof("log %d-%d at %d-%d",v.Group,v.GroupLSN,appender.rollbackState.file.version,appender.rollbackState.pos)
-	appender.info = info
 	// appender.activeId = appender.rfile.idAlloc.Alloc()
-	return err
+	return addr, err
 }
 
 func (appender *fileAppender) Write(data []byte) (int, error) {
@@ -90,27 +77,4 @@ func (appender *fileAppender) Commit() error {
 	}
 	appender.rollbackState.file.FinishWrite()
 	return nil
-}
-
-func (appender *fileAppender) Rollback() {
-	appender.rollbackState.file.FinishWrite()
-	appender.Revert()
-}
-
-func (appender *fileAppender) Sync() error {
-	if appender.size != appender.capacity {
-		panic("write logic error")
-	}
-	if appender.syncWaited != nil {
-		// fmt.Printf("Sync Waiting %s\n", appender.syncWaited.Name())
-		appender.syncWaited.WaitCommitted()
-	}
-	return appender.rollbackState.file.Sync()
-}
-
-func (appender *fileAppender) Revert() {
-
-	// if err := appender.rollbackState.file.Truncate(int64(appender.rollbackState.pos)); err != nil {
-	// 	panic(err)
-	// }
 }
