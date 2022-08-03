@@ -238,7 +238,7 @@ select round(123.54)-round(123.03);
 #WHERE
 drop table if exists t1;
 create table t1(a INT,  b float);
-insert into t1 values(12124.413, -4213.413), (12124.123, -42413.409);
+insert into t1 values(12124, -4213.413), (12124, -42413.409);
 select * from t1 where round(a)=12124;
 drop table t1;
 

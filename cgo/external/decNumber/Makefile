@@ -6,9 +6,14 @@
 # we just trust the decNumber authors.
 #
 
-CFLAGS=-g -O2
+OPT_LV := -O2
+CFLAGS=-g ${OPT_LV}
 
 OBJS=decSingle.o decDouble.o decQuad.o decNumber.o decContext.o
 
 all: $(OBJS)
 	mv $(OBJS) ../..
+
+.PHONY: debug
+debug: override OPT_LV := -O0
+debug: all
