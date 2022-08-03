@@ -167,22 +167,27 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		rightID := node.Children[1]
-		rightRemapping, err := builder.remapAllColRefs(rightID, colRefCnt)
+		_, err = builder.remapAllColRefs(rightID, colRefCnt)
 		if err != nil {
 			return nil, err
 		}
-		for _, globalRef := range leftRemapping.localToGlobal {
-			if colRefCnt[globalRef] == 0 {
-				continue
-			}
-			remapping.addColRef(globalRef)
+		childProjList := builder.qry.Nodes[leftID].ProjectList
+		for i, globalRef := range leftRemapping.localToGlobal {
+			// remapping.addColRef(globalRef)
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: childProjList[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(i),
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
 		}
-		for _, globalRef := range rightRemapping.localToGlobal {
-			if colRefCnt[globalRef] == 0 {
-				continue
-			}
-			remapping.addColRef(globalRef)
-		}
+		// for _, globalRef := range rightRemapping.localToGlobal {
+		// 	remapping.addColRef(globalRef)
+		// }
 
 	case plan.Node_JOIN:
 		for _, expr := range node.OnList {
@@ -695,32 +700,19 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 		}
 	}
 
-	//
-	var unionNodeProject []*Expr
-	for i, expr := range builder.qry.Nodes[projectNodes[0]].ProjectList {
-		unionNodeProject = append(unionNodeProject, &plan.Expr{
-			Typ: expr.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 0,
-					ColPos: int32(i),
-				},
-			},
-		})
-	}
-
 	// build intersect node first.  becaulse intersect has higher precedence then UNION and MINUS
 	var newNodes []int32
 	var newUnionType []plan.Node_NodeType
+	// var lastTag int32
 	newNodes = append(newNodes, nodes[0])
 	for i := 1; i < len(nodes); i++ {
 		utIdx := i - 1
 		lastNewNodeIdx := len(newNodes) - 1
 		if unionTypes[utIdx] == plan.Node_INTERSECT || unionTypes[utIdx] == plan.Node_INTERSECT_ALL {
+
 			newNodeID := builder.appendNode(&plan.Node{
-				NodeType:    unionTypes[utIdx],
-				Children:    []int32{newNodes[lastNewNodeIdx], nodes[i]},
-				ProjectList: DeepCopyExprList(unionNodeProject),
+				NodeType: unionTypes[utIdx],
+				Children: []int32{newNodes[lastNewNodeIdx], nodes[i]},
 			}, ctx)
 			newNodes[lastNewNodeIdx] = newNodeID
 		} else {
@@ -747,9 +739,8 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 
 		// } else {
 		lastNodeId = builder.appendNode(&plan.Node{
-			NodeType:    newUnionType[utIdx],
-			Children:    []int32{lastNodeId, newNodes[i]},
-			ProjectList: DeepCopyExprList(unionNodeProject),
+			NodeType: newUnionType[utIdx],
+			Children: []int32{lastNodeId, newNodes[i]},
 		}, ctx)
 		// }
 	}
@@ -760,14 +751,16 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 	ctx.projectTag = builder.genNewTag()
 	// set ctx's headings  projects  results
 	ctx.headings = append(ctx.headings, subCtxList[0].headings...)
-	for k, v := range subCtxList[0].aliasMap {
-		ctx.aliasMap[k] = v
+	for i, v := range ctx.headings {
+		ctx.aliasMap[v] = int32(i)
 	}
-	// for i, expr := range builder.qry.Nodes[projectNodes[0]].ProjectList {
-	// 	tmpExpr := DeepCopyExpr(subCtxList[0].projects[i])
-	// 	tmpExpr.Typ = expr.Typ
-	// 	ctx.projects = append(ctx.projects, tmpExpr)
-	// }
+	for i, expr := range builder.qry.Nodes[projectNodes[0]].ProjectList {
+		// TODO 这里放什么好？
+		ctx.projects = append(ctx.projects, &plan.Expr{
+			Typ:  expr.Typ,
+			Expr: makePlan2Int64ConstExpr(int64(i)),
+		})
+	}
 	havingBinder := NewHavingBinder(builder, ctx)
 	projectionBinder := NewProjectionBinder(builder, ctx, havingBinder)
 

@@ -510,7 +510,7 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.SelectStatement, un
 	}
 
 	// right is not UNION allways
-	switch rightStmt := stmt.Left.(type) {
+	switch rightStmt := stmt.Right.(type) {
 	case *tree.SelectClause:
 		*selects = append(*selects, rightStmt)
 	case *tree.ParenSelect:
