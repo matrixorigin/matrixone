@@ -531,7 +531,9 @@ func TestUnionSqlBuilder(t *testing.T) {
 	// should pass
 	sqls := []string{
 		"select 1 union select 2",
-		"select 1 union select 2 intersect select 2 union select 1.1",
+		"select n_name from nation intersect select n_name from nation2",
+		"select n_name from nation minus select n_name from nation2",
+		"select 1 union select 2 intersect select 2 union all select 1.1 minus select 22222",
 		"select 1 as a union select 2 order by a limit 1",
 		"select n_name from nation union select n_comment from nation order by n_name",
 	}
