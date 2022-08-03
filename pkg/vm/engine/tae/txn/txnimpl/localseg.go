@@ -345,8 +345,8 @@ func (seg *localSegment) IsDeleted(row uint32) bool {
 }
 
 func (seg *localSegment) Update(row uint32, col uint16, value any) error {
-	if seg.table.entry.GetSchema().HiddenKey.Idx == int(col) {
-		return data.ErrUpdateHiddenKey
+	if seg.table.entry.GetSchema().PhyAddrKey.Idx == int(col) {
+		return data.ErrUpdatePhyAddrKey
 	}
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
 	n := seg.nodes[npos]
@@ -384,7 +384,7 @@ func (seg *localSegment) Rows() uint32 {
 func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
 	id = seg.entry.AsCommonID()
 	if !seg.table.schema.HasPK() {
-		_, _, offset = model.DecodeHiddenKeyFromValue(filter.Val)
+		_, _, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
 		return
 	}
 	if seg.table.schema.IsSinglePK() {
