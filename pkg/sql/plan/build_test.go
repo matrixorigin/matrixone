@@ -543,6 +543,8 @@ func TestUnionSqlBuilder(t *testing.T) {
 	sqls = []string{
 		"select 1 union select 2, 'a'",
 		"select n_name as a from nation union select n_comment from nation order by n_name",
+		"select n_name from nation minus all select n_name from nation2",     // not support
+		"select n_name from nation intersect all select n_name from nation2", // not support
 	}
 	runTestShouldError(mock, t, sqls)
 }

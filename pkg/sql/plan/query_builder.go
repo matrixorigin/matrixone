@@ -753,27 +753,32 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 	lastNodeId := newNodes[0]
 	for i := 1; i < len(newNodes); i++ {
 		utIdx := i - 1
+		lastTag = builder.genNewTag()
+		leftNodeTag := builder.qry.Nodes[lastNodeId].BindingTags[0]
+		// TODO split UNION to UNION_ALL + AGG is little complicated.
 		// if newUnionType[utIdx] == plan.Node_UNION {
 		// 	lastNodeId = builder.appendNode(&plan.Node{
 		// 		NodeType:    plan.Node_UNION_ALL,
 		// 		Children:    []int32{lastNodeId, newNodes[i]},
-		// 		ProjectList: DeepCopyExprList(unionNodeProject),
+		// 		ProjectList: getProjectList(leftNodeTag),
+		// 		BindingTags: []int32{lastTag},
 		// 	}, ctx)
 
-		// lastNodeId = builder.appendNode(&plan.Node{
-		// 	NodeType: plan.Node_DISTINCT,
-		// 	Children: []int32{lastNodeId},
-		// }, ctx)
-
+		// 	lastTag = builder.genNewTag()
+		// 	lastNodeId = builder.appendNode(&plan.Node{
+		// 		NodeType:    plan.Node_DISTINCT,
+		// 		Children:    []int32{lastNodeId},
+		// 		BindingTags: []int32{lastTag},
+		// 	}, ctx)
 		// } else {
-		lastTag = builder.genNewTag()
-		leftNodeTag := builder.qry.Nodes[lastNodeId].BindingTags[0]
+
 		lastNodeId = builder.appendNode(&plan.Node{
 			NodeType:    newUnionType[utIdx],
 			Children:    []int32{lastNodeId, newNodes[i]},
 			BindingTags: []int32{lastTag},
 			ProjectList: getProjectList(leftNodeTag),
 		}, ctx)
+
 		// }
 	}
 
