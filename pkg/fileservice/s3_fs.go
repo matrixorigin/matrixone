@@ -24,6 +24,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -37,6 +38,14 @@ type S3FS struct {
 	client    *s3.Client
 	bucket    string
 	keyPrefix string
+
+	memLRU *LRU
+	stats  *lruStats
+}
+
+type lruStats struct {
+	Read     int64
+	CacheHit int64
 }
 
 // key mapping scheme:
@@ -48,6 +57,7 @@ func NewS3FS(
 	endpoint string,
 	bucket string,
 	keyPrefix string,
+	memCacheCapacity int,
 ) (*S3FS, error) {
 
 	u, err := url.Parse(endpoint)
@@ -63,6 +73,7 @@ func NewS3FS(
 		endpoint,
 		bucket,
 		keyPrefix,
+		memCacheCapacity,
 		s3.WithEndpointResolver(
 			s3.EndpointResolverFromURL(endpoint),
 		),
@@ -75,6 +86,7 @@ func NewS3FSOnMinio(
 	endpoint string,
 	bucket string,
 	keyPrefix string,
+	memCacheCapacity int,
 ) (*S3FS, error) {
 
 	u, err := url.Parse(endpoint)
@@ -90,6 +102,7 @@ func NewS3FSOnMinio(
 		endpoint,
 		bucket,
 		keyPrefix,
+		memCacheCapacity,
 		s3.WithEndpointResolver(
 			s3.EndpointResolverFunc(
 				func(
@@ -114,6 +127,7 @@ func newS3FS(
 	endpoint string,
 	bucket string,
 	keyPrefix string,
+	memCacheCapacity int,
 	options ...func(*s3.Options),
 ) (*S3FS, error) {
 
@@ -129,11 +143,16 @@ func newS3FS(
 		options...,
 	)
 
-	return &S3FS{
+	fs := &S3FS{
 		client:    client,
 		bucket:    bucket,
 		keyPrefix: keyPrefix,
-	}, nil
+	}
+	if memCacheCapacity > 0 {
+		fs.memLRU = NewLRU(memCacheCapacity)
+	}
+
+	return fs, nil
 }
 
 func (m *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
@@ -252,6 +271,68 @@ func (m *S3FS) write(ctx context.Context, vector IOVector) error {
 }
 
 func (m *S3FS) Read(ctx context.Context, vector *IOVector) error {
+
+	if m.memLRU == nil {
+		// no cache
+		return m.read(ctx, vector)
+	}
+
+	numHit := 0
+	defer func() {
+		if m.stats != nil {
+			atomic.AddInt64(&m.stats.Read, int64(len(vector.Entries)))
+			atomic.AddInt64(&m.stats.CacheHit, int64(numHit))
+		}
+	}()
+
+	noObject := true
+	for i, entry := range vector.Entries {
+		if entry.ToObject == nil {
+			continue
+		}
+		noObject = false
+
+		// read from cache
+		key := CacheKey{
+			Path:   vector.FilePath,
+			Offset: entry.Offset,
+			Size:   entry.Size,
+		}
+		obj, ok := m.memLRU.Get(key)
+		if ok {
+			vector.Entries[i].Object = obj
+			vector.Entries[i].ignore = true
+			numHit++
+		}
+	}
+
+	if err := m.read(ctx, vector); err != nil {
+		return err
+	}
+
+	if noObject {
+		return nil
+	}
+
+	for i, entry := range vector.Entries {
+		vector.Entries[i].ignore = false
+
+		// set cache
+		if entry.Object != nil {
+			key := CacheKey{
+				Path:   vector.FilePath,
+				Offset: entry.Offset,
+				Size:   entry.Size,
+			}
+			m.memLRU.Set(key, entry.Object, entry.ObjectSize)
+		}
+	}
+
+	return nil
+
+}
+
+func (m *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 	min, max, readToEnd := vector.offsetRange()
 
