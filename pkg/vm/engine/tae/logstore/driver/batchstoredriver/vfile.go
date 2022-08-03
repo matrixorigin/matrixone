@@ -12,21 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package store
+package batchstoredriver
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
 var Metasize = 2
@@ -51,10 +49,9 @@ type vFile struct {
 	bufpos     int //update when write
 	syncpos    int //update when sync
 
-	bsInfo *storeInfo
 }
 
-func newVFile(mu *sync.RWMutex, name string, version int, history History, bsInfo *storeInfo) (*vFile, error) {
+func newVFile(mu *sync.RWMutex, name string, version int, history History) (*vFile, error) {
 	if mu == nil {
 		mu = new(sync.RWMutex)
 	}
@@ -74,19 +71,6 @@ func newVFile(mu *sync.RWMutex, name string, version int, history History, bsInf
 	return vf, nil
 }
 
-// func (vf *vFile) InCommits(intervals map[uint32]*common.ClosedIntervals) bool {
-// 	for group, commits := range vf.Commits {
-// 		interval, ok := intervals[group]
-// 		if !ok {
-// 			return false
-// 		}
-// 		if !interval.ContainsInterval(*commits) {
-// 			return false
-// 		}
-// 	}
-// 	return true
-// }
-
 func (vf *vFile) String() string {
 	var w bytes.Buffer
 	w.WriteString(fmt.Sprintf("[%s]\n%s", vf.Name(), vf.vInfo.String()))
@@ -94,11 +78,11 @@ func (vf *vFile) String() string {
 }
 
 func (vf *vFile) Archive() error {
-	if vf.history == nil {
-		if err := vf.Destroy(); err != nil {
-			return err
-		}
-	}
+	// if vf.history == nil {
+	// 	if err := vf.Destroy(); err != nil {
+	// 		return err
+	// 	}
+	// }
 	vf.history.Append(vf)
 	return nil
 }
@@ -130,6 +114,7 @@ func (vf *vFile) FinishWrite() {
 }
 
 func (vf *vFile) Close() error {
+	// logutil.Infof("v%d addr is %v",vf.Id(),vf.Addrs)
 	err := vf.File.Close()
 	if err != nil {
 		return err
@@ -142,7 +127,6 @@ func (vf *vFile) Commit() {
 	logutil.Infof("Committing %s\n", vf.Name())
 	vf.wg.Wait()
 	vf.flushWg.Wait()
-	vf.WriteMeta()
 	err := vf.Sync()
 	if err != nil {
 		panic(err)
@@ -162,23 +146,16 @@ func (vf *vFile) Commit() {
 func (vf *vFile) Sync() error {
 	vf.Lock()
 	defer vf.Unlock()
-	if vf.bsInfo != nil {
-		vf.bsInfo.syncTimes++
-	}
 	if vf.buf == nil {
 		err := vf.File.Sync()
 		return err
 	}
 	targetSize := vf.size
 	targetpos := vf.bufpos
-	t0 := time.Now()
 	buf := vf.buf.Bytes()
 	n, err := vf.File.WriteAt(buf[:targetpos], int64(vf.syncpos))
 	if n != targetpos {
 		panic("logic err")
-	}
-	if vf.bsInfo != nil {
-		vf.bsInfo.writeDuration += time.Since(t0)
 	}
 	if err != nil {
 		return err
@@ -195,51 +172,12 @@ func (vf *vFile) Sync() error {
 	vf.bufpos = 0
 	vf.buf.Reset()
 	// fmt.Printf("199bufpos is %v\n",vf.bufpos)
-	t0 = time.Now()
 	err = vf.File.Sync()
 	if err != nil {
 		return err
 	}
 
-	if vf.bsInfo != nil {
-		vf.bsInfo.syncDuration += time.Since(t0)
-	}
 	return nil
-}
-
-func (vf *vFile) WriteMeta() {
-	e := entry.GetBase()
-	defer e.Free()
-	buf, err := vf.MarshalMeta()
-	if err != nil {
-		panic(err)
-	}
-	e.SetType(entry.ETMeta)
-	err = e.Unmarshal(buf)
-	if err != nil {
-		panic(err)
-	}
-	n1, err := vf.WriteAt(e.GetMetaBuf(), int64(vf.size))
-	if err != nil {
-		panic(err)
-	}
-	n2, err := vf.WriteAt(e.GetPayload(), int64(vf.size))
-	if err != nil {
-		panic(err)
-	}
-	if n1+n2 != e.TotalSize() {
-		panic("logic err")
-	}
-
-	buf = make([]byte, Metasize)
-	binary.BigEndian.PutUint16(buf, uint16(e.TotalSize()))
-	n, err := vf.WriteAt(buf, int64(vf.size))
-	if err != nil {
-		panic(err)
-	}
-	if n != 2 {
-		panic("logic err")
-	}
 }
 
 func (vf *vFile) WaitCommitted() {
@@ -304,79 +242,39 @@ func (vf *vFile) Destroy() error {
 	return err
 }
 
-func (vf *vFile) Replay(r *replayer, observer ReplayObserver) error {
-	observer.OnNewEntry(vf.Id())
+func (vf *vFile) Replay(r *replayer) error {
 	for {
-		if err := r.replayHandler(vf, vf); err != nil {
+		if err := r.replayHandler(vf); err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
 			return err
 		}
 	}
-	vf.OnReplay(r)
+	// logutil.Infof("v%d addr is %v",vf.Id(),vf.Addrs)
 	return nil
 }
 
-func (vf *vFile) ReplayCWithCkp(r *replayer, observer ReplayObserver) error {
-	observer.OnNewEntry(vf.Id())
-	if err := r.replayHandlerWithCkpForCommitGroups(vf, vf); err != nil {
-		return err
-	}
-	vf.OnReplay(r)
-	return nil
-}
-
-func (vf *vFile) ReplayUCWithCkp(r *replayer, observer ReplayObserver) error {
-	observer.OnNewEntry(vf.Id())
-	if err := r.replayHandlerWithCkpForUCGroups(vf, vf); err != nil {
-		return err
-	}
-	vf.OnReplay(r)
-	return nil
-}
-func (vf *vFile) OnNewEntry(int) {}
-func (vf *vFile) OnLogInfo(info *entry.Info) {
+func (vf *vFile) OnLogInfo(info any) {
 	err := vf.Log(info)
 	if err != nil {
 		panic(err)
 	}
 }
-func (vf *vFile) OnNewCheckpoint(info *entry.Info) {
-	err := vf.Log(info)
-	if err != nil {
-		panic(err)
-	}
-}
-func (vf *vFile) OnNewTxn(info *entry.Info) {
-	err := vf.Log(info)
-	if err != nil {
-		panic(err)
-	}
-}
-func (vf *vFile) OnNewUncommit(addrs []*VFileAddress) {}
-
-func (vf *vFile) Load(groupID uint32, lsn uint64) (entry.Entry, error) {
-	// if vf.HasCommitted() {
-	// err := vf.LoadMeta()
-	// defer vf.FreeMeta()
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// }
-	offset, err := vf.GetOffsetByLSN(groupID, lsn)
+func (vf *vFile) Load(lsn uint64) (*entry.Entry, error) {
+	offset, err := vf.GetOffsetByLSN(lsn)
 	if err == ErrVFileGroupNotExist || err == ErrVFileLsnNotExist {
 		for i := 0; i < 10; i++ {
-			logutil.Infof("load retry %d-%d", groupID, lsn)
+			logutil.Infof("load retry %d", lsn)
 			vf.addrCond.L.Lock()
-			offset, err = vf.GetOffsetByLSN(groupID, lsn)
+			offset, err = vf.GetOffsetByLSN(lsn)
 			if err == nil {
 				vf.addrCond.L.Unlock()
 				break
 			}
 			vf.addrCond.Wait()
 			vf.addrCond.L.Unlock()
-			offset, err = vf.GetOffsetByLSN(groupID, lsn)
+			offset, err = vf.GetOffsetByLSN(lsn)
 			if err == nil {
 				break
 			}
@@ -390,38 +288,14 @@ func (vf *vFile) Load(groupID uint32, lsn uint64) (entry.Entry, error) {
 	}
 	return vf.readEntryAt(offset)
 }
-func (vf *vFile) LoadByOffset(offset int) (entry.Entry, error) {
+func (vf *vFile) LoadByOffset(offset int) (*entry.Entry, error) {
 	return vf.readEntryAt(offset)
 }
-func (vf *vFile) readEntryAt(offset int) (entry.Entry, error) {
-	entry := entry.GetBase()
-	metaBuf := entry.GetMetaBuf()
-	_, err := vf.ReadAt(metaBuf, int64(offset))
-	// fmt.Printf("%p|read meta [%v,%v]\n", vf, offset, offset+n)
-	if err != nil {
-		return nil, err
-	}
-	_, err = entry.ReadAt(vf.File, offset)
-	return entry, err
+func (vf *vFile) readEntryAt(offset int) (*entry.Entry, error) {
+	e := entry.NewEmptyEntry()
+	_, err := e.ReadAt(vf.File, offset)
+	return e, err
 }
 func (vf *vFile) OnReplayCommitted() {
 	vf.committed = 1
-}
-func (vf *vFile) readMeta() error {
-	buf := make([]byte, Metasize)
-	_, err := vf.ReadAt(buf, int64(vf.size)-int64(Metasize))
-	if err != nil {
-		return ErrReadMetaFailed
-	}
-	size := binary.BigEndian.Uint16(buf)
-	buf = make([]byte, int(size))
-	_, err = vf.ReadAt(buf, int64(vf.size)-int64(Metasize)-int64(size))
-	if err != nil {
-		return ErrReadMetaFailed
-	}
-	err = vf.UnmarshalMeta(buf)
-	if err != nil {
-		return ErrReadMetaFailed
-	}
-	return nil
 }

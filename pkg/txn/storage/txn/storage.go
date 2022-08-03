@@ -33,36 +33,30 @@ func New(handler Handler) (*Storage, error) {
 
 var _ storage.TxnStorage = new(Storage)
 
-func (*Storage) Commit(txnMeta txn.TxnMeta) error {
-	//TODO
-	panic("unimplemented")
+func (s *Storage) Commit(txnMeta txn.TxnMeta) error {
+	return s.handler.HandleCommit(txnMeta)
 }
 
-func (*Storage) Committing(txnMeta txn.TxnMeta) error {
-	//TODO
-	panic("unimplemented")
+func (s *Storage) Committing(txnMeta txn.TxnMeta) error {
+	return s.handler.HandleCommitting(txnMeta)
 }
 
-func (*Storage) Prepare(txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
-	//TODO
-	panic("unimplemented")
+func (s *Storage) Prepare(txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
+	return s.handler.HandlePrepare(txnMeta)
 }
 
-func (*Storage) Rollback(txnMeta txn.TxnMeta) error {
-	//TODO
-	panic("unimplemented")
+func (s *Storage) Rollback(txnMeta txn.TxnMeta) error {
+	return s.handler.HandleRollback(txnMeta)
 }
 
-func (*Storage) StartRecovery(chan txn.TxnMeta) {
-	//TODO
-	panic("unimplemented")
+func (s *Storage) StartRecovery(ch chan txn.TxnMeta) {
+	s.handler.HandleStartRecovery(ch)
 }
 
-func (*Storage) Close() error {
-	return nil
+func (s *Storage) Close() error {
+	return s.handler.HandleClose()
 }
 
-func (*Storage) Destroy() error {
-	//TODO
-	return nil
+func (s *Storage) Destroy() error {
+	return s.handler.HandleDestroy()
 }

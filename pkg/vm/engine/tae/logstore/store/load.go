@@ -15,29 +15,14 @@
 package store
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
-const (
-	DefaultRotateCheckerMaxSize = int(common.M) * 64
-)
-
-type MaxSizeRotateChecker struct {
-	MaxSize int
-}
-
-func NewMaxSizeRotateChecker(size int) *MaxSizeRotateChecker {
-	return &MaxSizeRotateChecker{
-		MaxSize: size,
+func (w *StoreImpl) Load(gid uint32, lsn uint64) (entry.Entry, error) {
+	driverLsn, err := w.retryGetDriverLsn(gid, lsn)
+	if err != nil {
+		return nil, err
 	}
-}
-
-func (c *MaxSizeRotateChecker) PrepareAppend(vfile VFile, delta int) (needRot bool, err error) {
-	if vfile == nil {
-		return false, nil
-	}
-	if vfile.SizeLocked() > c.MaxSize {
-		return true, nil
-	}
-	return false, nil
+	driverEntry, err := w.driver.Read(driverLsn)
+	return driverEntry.Entry, err
 }
