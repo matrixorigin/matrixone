@@ -515,13 +515,13 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 		for i := range rs {
 			if isEq && len(n.OnList) == 1 {
 				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
-					Op:  vm.Complement,
-					Arg: constructComplement(n, c.proc),
+					Op:  vm.Anti,
+					Arg: constructAnti(n, c.proc),
 				})
 			} else {
 				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
-					Op:  vm.LoopComplement,
-					Arg: constructLoopComplement(n, c.proc),
+					Op:  vm.LoopAnti,
+					Arg: constructLoopAnti(n, c.proc),
 				})
 			}
 		}
