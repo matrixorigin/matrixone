@@ -143,11 +143,11 @@ func (e *testEngine) deleteAll(skipConflict bool) error {
 	it := rel.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
-		view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil)
+		view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName, nil)
 		assert.NoError(e.t, err)
 		defer view.Close()
 		view.ApplyDeletes()
-		err = rel.DeleteByHiddenKeys(view.GetData())
+		err = rel.DeleteByPhyAddrKeys(view.GetData())
 		assert.NoError(e.t, err)
 		it.Next()
 	}

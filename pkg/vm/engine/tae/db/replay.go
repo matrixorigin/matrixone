@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -199,7 +200,7 @@ func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload [
 	if group != wal.GroupC {
 		return
 	}
-	idxCtx := wal.NewIndex(commitId, 0, 0)
+	idxCtx := store.NewIndex(commitId, 0, 0)
 	r := bytes.NewBuffer(payload)
 	txnCmd, _, err := txnbase.BuildCommandFrom(r)
 	if err != nil {

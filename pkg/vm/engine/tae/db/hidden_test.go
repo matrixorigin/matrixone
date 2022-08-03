@@ -52,12 +52,12 @@ func TestHiddenWithPK1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataById(schema.HiddenKey.Idx, nil)
+			view, err := blk.GetColumnDataById(schema.PhyAddrKey.Idx, nil)
 			assert.NoError(t, err)
 			defer view.Close()
 			fp := blk.Fingerprint()
 			_ = view.GetData().Foreach(func(v any, _ int) (err error) {
-				sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
+				sid, bid, offset := model.DecodePhyAddrKeyFromValue(v)
 				t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 				assert.Equal(t, fp.SegmentID, sid)
 				assert.Equal(t, fp.BlockID, bid)
@@ -75,14 +75,14 @@ func TestHiddenWithPK1(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
 		blk := getOneBlock(rel)
-		view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil)
+		view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName, nil)
 		assert.NoError(t, err)
 		defer view.Close()
 		offsets := make([]uint32, 0)
 		fp := blk.Fingerprint()
 		t.Log(fp.String())
 		_ = view.GetData().Foreach(func(v any, _ int) (err error) {
-			sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
+			sid, bid, offset := model.DecodePhyAddrKeyFromValue(v)
 			t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 			assert.Equal(t, fp.SegmentID, sid)
 			assert.Equal(t, fp.BlockID, bid)
@@ -117,14 +117,14 @@ func TestHiddenWithPK1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil)
+			view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName, nil)
 			assert.NoError(t, err)
 			defer view.Close()
 			offsets := make([]uint32, 0)
 			meta := blk.GetMeta().(*catalog.BlockEntry)
 			t.Log(meta.String())
 			_ = view.GetData().Foreach(func(v any, _ int) (err error) {
-				sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
+				sid, bid, offset := model.DecodePhyAddrKeyFromValue(v)
 				// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 				assert.Equal(t, meta.GetSegment().ID, sid)
 				assert.Equal(t, meta.ID, bid)
@@ -158,7 +158,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil)
+			view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName, nil)
 			assert.NoError(t, err)
 			defer view.Close()
 			offsets := make([]uint32, 0)
@@ -166,7 +166,7 @@ func TestHiddenWithPK1(t *testing.T) {
 			t.Log(meta.String())
 			t.Log(meta.GetSegment().String())
 			_ = view.GetData().Foreach(func(v any, _ int) (err error) {
-				sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
+				sid, bid, offset := model.DecodePhyAddrKeyFromValue(v)
 				// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 				assert.Equal(t, meta.GetSegment().ID, sid)
 				assert.Equal(t, meta.ID, bid)
@@ -202,24 +202,24 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 	err := rel.Append(bats[0])
 	assert.NoError(t, err)
 	blk := getOneBlock(rel)
-	view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil)
+	view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName, nil)
 	assert.NoError(t, err)
 	defer view.Close()
 	_ = view.GetData().Foreach(func(v any, _ int) (err error) {
-		sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
+		sid, bid, offset := model.DecodePhyAddrKeyFromValue(v)
 		t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 		expectV := bats[0].Vecs[3].Get(int(offset))
-		cv, err := rel.GetValueByHiddenKey(v, 3)
+		cv, err := rel.GetValueByPhyAddrKey(v, 3)
 		assert.NoError(t, err)
 		assert.Equal(t, expectV, cv)
 		if offset == 3 {
-			err = rel.DeleteByHiddenKey(v)
+			err = rel.DeleteByPhyAddrKey(v)
 			assert.NoError(t, err)
 		} else {
-			err = rel.UpdateByHiddenKey(v, 3, int64(9999))
+			err = rel.UpdateByPhyAddrKey(v, 3, int64(9999))
 			assert.NoError(t, err)
-			err2 := rel.UpdateByHiddenKey(v, schema.HiddenKey.Idx, v)
-			assert.ErrorIs(t, err2, data.ErrUpdateHiddenKey)
+			err2 := rel.UpdateByPhyAddrKey(v, schema.PhyAddrKey.Idx, v)
+			assert.ErrorIs(t, err2, data.ErrUpdatePhyAddrKey)
 		}
 		return
 	}, nil)
@@ -264,18 +264,18 @@ func TestHidden2(t *testing.T) {
 			assert.NoError(t, err)
 			defer view.Close()
 			assert.Equal(t, bats[0].Length(), view.Length())
-			if def.IsHidden() {
+			if def.IsPhyAddr() {
 				hidden = view
 			}
 		}
 		_ = hidden.GetData().Foreach(func(key any, _ int) (err error) {
-			sid, bid, offset := model.DecodeHiddenKeyFromValue(key)
+			sid, bid, offset := model.DecodePhyAddrKeyFromValue(key)
 			t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-			v, err := rel.GetValueByHiddenKey(key, schema.HiddenKey.Idx)
+			v, err := rel.GetValueByPhyAddrKey(key, schema.PhyAddrKey.Idx)
 			assert.NoError(t, err)
 			assert.Equal(t, key, v)
 			if offset == 1 {
-				err = rel.DeleteByHiddenKey(key)
+				err = rel.DeleteByPhyAddrKey(key)
 				assert.NoError(t, err)
 			}
 			return
@@ -300,28 +300,28 @@ func TestHidden2(t *testing.T) {
 			assert.NoError(t, err)
 			defer view.Close()
 			assert.Equal(t, bats[0].Length()-1, view.Length())
-			if def.IsHidden() {
+			if def.IsPhyAddr() {
 				hidden = view
 			}
 		}
 		_ = hidden.GetData().Foreach(func(key any, _ int) (err error) {
-			sid, bid, offset := model.DecodeHiddenKeyFromValue(key)
+			sid, bid, offset := model.DecodePhyAddrKeyFromValue(key)
 			t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-			v, err := rel.GetValueByHiddenKey(key, schema.HiddenKey.Idx)
+			v, err := rel.GetValueByPhyAddrKey(key, schema.PhyAddrKey.Idx)
 			assert.NoError(t, err)
 			assert.Equal(t, key, v)
 			if offset == 1 {
-				err = rel.DeleteByHiddenKey(key)
+				err = rel.DeleteByPhyAddrKey(key)
 				assert.NoError(t, err)
 			} else {
-				err = rel.UpdateByHiddenKey(key, 2, int32(8888))
+				err = rel.UpdateByPhyAddrKey(key, 2, int32(8888))
 				assert.NoError(t, err)
 			}
 			return
 		}, nil)
 		fp := blk.Fingerprint()
-		key := model.EncodeHiddenKey(fp.SegmentID, fp.BlockID, 2)
-		v, err := rel.GetValueByHiddenKey(key, 2)
+		key := model.EncodePhyAddrKey(fp.SegmentID, fp.BlockID, 2)
+		v, err := rel.GetValueByPhyAddrKey(key, 2)
 		assert.NoError(t, err)
 		assert.Equal(t, int32(8888), v.(int32))
 		t.Log(v)
@@ -393,7 +393,7 @@ func TestHidden2(t *testing.T) {
 		rows := 0
 		for it.Valid() {
 			blk := it.GetBlock()
-			hidden, err := blk.GetColumnDataById(schema.HiddenKey.Idx, nil)
+			hidden, err := blk.GetColumnDataById(schema.PhyAddrKey.Idx, nil)
 			assert.NoError(t, err)
 			defer hidden.Close()
 			hidden.ApplyDeletes()

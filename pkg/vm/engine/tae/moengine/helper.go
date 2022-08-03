@@ -29,15 +29,16 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		defs = append(defs, commentDef)
 	}
 	for _, col := range schema.ColDefs {
-		if col.IsHidden() {
+		if col.IsPhyAddr() {
 			continue
 		}
 		def := &engine.AttributeDef{
 			Attr: engine.Attribute{
-				Name:    col.Name,
-				Type:    col.Type,
-				Primary: col.IsPrimary(),
-				Default: engine.MakeDefaultExpr(col.Default.Set, col.Default.Value, col.Default.Null),
+				Name:     col.Name,
+				Type:     col.Type,
+				IsHidden: col.IsHidden(),
+				Primary:  col.IsPrimary(),
+				Default:  engine.MakeDefaultExpr(col.Default.Set, col.Default.Value, col.Default.Null),
 			},
 		}
 		defs = append(defs, def)
