@@ -26,10 +26,10 @@ func TestF32IntegerDivOf(t *testing.T) {
 		as[i] = 50
 		bs[i] = float32(i)
 	}
-	cs := make([]float32, 2)
+	cs := make([]int64, 2)
 	av := testutil.MakeFloat32Vector(as, nil)
 	bv := testutil.MakeFloat32Vector(bs, nil)
-	cv := testutil.MakeFloat32Vector(cs, nil)
+	cv := testutil.MakeInt64Vector(cs, nil)
 
 	err := NumericIntegerDivFloat[float32](av, bv, cv)
 	if err == nil {

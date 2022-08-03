@@ -625,8 +625,10 @@ static inline int32_t Decimal128_SubNoCheck(int64_t *r, int64_t *a, int64_t *b)
 int32_t Decimal128_MulNoCheck(int64_t *r, int64_t *a, int64_t *b)
 {
     decQuad tmp;
-    decQuadMultiply(&tmp, DecQuadPtr(a), DecQuadPtr(b), NULL);
-    decQuadReduce(DecQuadPtr(r), &tmp, NULL);
+    DECLARE_DEC128_CTXT;
+    decQuadMultiply(&tmp, DecQuadPtr(a), DecQuadPtr(b), &_fn_dc);
+    decQuadReduce(DecQuadPtr(r), &tmp, &_fn_dc);
+//    CHECK_OFUF;
     return RC_SUCCESS;
 }
 
@@ -642,8 +644,11 @@ int32_t Decimal64_MulNoCheck(int64_t *r, int64_t *a, int64_t *b)
 int32_t Decimal128_DivNoCheck(int64_t *r, int64_t *a, int64_t *b)
 {
     decQuad tmp;
-    decQuadDivide(&tmp, DecQuadPtr(a), DecQuadPtr(b), NULL);
-    decQuadReduce(DecQuadPtr(r), &tmp, NULL);
+    DECLARE_DEC128_CTXT;
+    decQuadDivide(&tmp, DecQuadPtr(a), DecQuadPtr(b), &_fn_dc);
+    decQuadReduce(DecQuadPtr(r), &tmp, &_fn_dc);
+//    CHECK_DIV;
+//    CHECK_OFUF;
     return RC_SUCCESS;
 }
 
