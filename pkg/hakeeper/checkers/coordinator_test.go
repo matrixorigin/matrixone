@@ -355,8 +355,9 @@ func TestFixZombie(t *testing.T) {
 					UUID: "c",
 					ConfigChange: &pb.ConfigChange{
 						Replica: pb.Replica{
-							UUID:    "c",
-							ShardID: 1,
+							UUID:      "c",
+							ShardID:   1,
+							ReplicaID: 3,
 						},
 						ChangeType: pb.KillZombie,
 					},

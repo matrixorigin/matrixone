@@ -71,7 +71,7 @@ func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, 
 
 	for _, zombie := range stats.zombies {
 		operators = append(operators, operator.CreateKillZombie("",
-			zombie.uuid, zombie.shardID))
+			zombie.uuid, zombie.shardID, zombie.replicaID))
 	}
 
 	return operators
