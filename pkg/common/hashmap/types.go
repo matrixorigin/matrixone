@@ -49,7 +49,8 @@ type Iterator interface {
 }
 
 // StrHashMap key is []byte, value a uint64 value (starting from 1)
-// 	each time a new key is inserted, the hashtable returns a lastvalue+1 or, if the old key is inserted, the value corresponding to that key
+//
+//	each time a new key is inserted, the hashtable returns a lastvalue+1 or, if the old key is inserted, the value corresponding to that key
 type StrHashMap struct {
 	hasNull bool
 	rows    uint64

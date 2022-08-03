@@ -1818,19 +1818,19 @@ func TestGetByFilter(t *testing.T) {
 	assert.NoError(t, txn1.Commit())
 }
 
-// 1. Set a big BlockMaxRows
-// 2. Mock one row batch
-// 3. Start tones of workers. Each work execute below routines:
-//    3.1 GetByFilter a pk val
-//        3.1.1 If found, go to 3.5
-//    3.2 Append a row
-//    3.3 err should not be duplicated(TODO: now is duplicated, should be W-W conflict)
-//        (why not duplicated: previous GetByFilter had checked that there was no duplicate key)
-//    3.4 If no error. try commit. If commit ok, inc appendedcnt. If error, rollback
-//    3.5 Delete the row
-//        3.5.1 If no error. try commit. commit should always pass
-//        3.5.2 If error, should always be w-w conflict
-// 4. Wait done all workers. Check the raw row count of table, should be same with appendedcnt.
+//  1. Set a big BlockMaxRows
+//  2. Mock one row batch
+//  3. Start tones of workers. Each work execute below routines:
+//     3.1 GetByFilter a pk val
+//     3.1.1 If found, go to 3.5
+//     3.2 Append a row
+//     3.3 err should not be duplicated(TODO: now is duplicated, should be W-W conflict)
+//     (why not duplicated: previous GetByFilter had checked that there was no duplicate key)
+//     3.4 If no error. try commit. If commit ok, inc appendedcnt. If error, rollback
+//     3.5 Delete the row
+//     3.5.1 If no error. try commit. commit should always pass
+//     3.5.2 If error, should always be w-w conflict
+//  4. Wait done all workers. Check the raw row count of table, should be same with appendedcnt.
 func TestChaos1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)

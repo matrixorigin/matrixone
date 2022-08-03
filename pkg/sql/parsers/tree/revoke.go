@@ -245,7 +245,8 @@ func (node *PrivilegeType) ToString() string {
 	}
 }
 
-/**
+/*
+*
 From: https://dev.mysql.com/doc/refman/8.0/en/grant.html
 */
 const (

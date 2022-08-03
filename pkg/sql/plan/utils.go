@@ -294,7 +294,7 @@ func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, e
 	return exprs, nil
 }
 
-//splitAstConjunction split a expression to a list of AND conditions.
+// splitAstConjunction split a expression to a list of AND conditions.
 func splitAstConjunction(astExpr tree.Expr) []tree.Expr {
 	var astExprs []tree.Expr
 	switch typ := astExpr.(type) {

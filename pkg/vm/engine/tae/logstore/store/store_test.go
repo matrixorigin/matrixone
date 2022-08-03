@@ -448,11 +448,11 @@ func TestTruncate2(t *testing.T) {
 	t.Log(s.file.GetHistory().String())
 }
 
-//1. vf1 - vfn: C & lots of CKP
-//2. vf n+1: anotherEntry
-//3. compact
-//4. replay
-//5. check ckped
+// 1. vf1 - vfn: C & lots of CKP
+// 2. vf n+1: anotherEntry
+// 3. compact
+// 4. replay
+// 5. check ckped
 func TestTruncate3(t *testing.T) {
 	s, buf := initEnv(t)
 	ckpSize := 100

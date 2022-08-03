@@ -34,19 +34,19 @@ func String(b []byte) (s string) {
 	return
 }
 
-//New1 is used to Created a Variance which supports float,int,uint
+// New1 is used to Created a Variance which supports float,int,uint
 func New1[T1 types.Floats | types.Ints | types.UInts]() *Variance[T1] {
 	return &Variance[T1]{}
 }
 
-//New2 is used to Created a Variance which supports decimal64
-//if is decimal,you need to give pricision
+// New2 is used to Created a Variance which supports decimal64
+// if is decimal,you need to give pricision
 func New2() *Variance2 {
 	return &Variance2{inputType: types.New(types.T_decimal64, 0, 0, 0)}
 }
 
-//New2 is used to Created a Variance which supports decimal64
-//if is decimal,you need to give pricision
+// New2 is used to Created a Variance which supports decimal64
+// if is decimal,you need to give pricision
 func New3() *Variance3 {
 	return &Variance3{inputType: types.New(types.T_decimal64, 0, 0, 0)}
 }

@@ -456,7 +456,7 @@ func (base *syncBase) GetVersionByGLSN(groupId uint32, lsn uint64) (int, error) 
 	return 0, ErrLsnNotExist
 }
 
-//TODO
+// TODO
 func (base *syncBase) GetLastAddr(groupName uint32, tid uint64) *VFileAddress {
 	// tidMap, ok := base.uncommits[groupName]
 	// if !ok {

@@ -264,7 +264,7 @@ func (info *vInfo) AddrsReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-//not safe
+// not safe
 func (info *vInfo) GetAddrs() (map[uint32]map[uint64]int, *sync.RWMutex) {
 	return info.Addrs, info.addrmu
 }
@@ -354,7 +354,7 @@ func (info *vInfo) FreeMeta() {
 // 	return nil
 // }
 
-//history new cp -> cp merge+ is covered -> info merge -> group merge
+// history new cp -> cp merge+ is covered -> info merge -> group merge
 func (info *vInfo) getGroupById(groupId uint32) VGroup {
 	g := info.groups[groupId]
 	return g

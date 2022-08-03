@@ -476,7 +476,8 @@ func releaseBatch(handler *ParseLineHandler, pl *PoolElement) {
 	handler.simdCsvBatchPool <- pl
 }
 
-/**
+/*
+*
 it may be suspended, when the pool does not have enough batch
 */
 func initWriteBatchHandler(handler *ParseLineHandler, wHandler *WriteBatchHandler) error {
@@ -1883,7 +1884,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 	return err
 }
 
-//row2col algorithm
+// row2col algorithm
 var row2colChoose bool = true
 
 var saveLinesToStorage = func(handler *ParseLineHandler, force bool) error {
