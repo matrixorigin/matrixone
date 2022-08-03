@@ -24,6 +24,8 @@ pull_request_rules:
         commit_message_template: |
           {{ title }} (#{{ number }})
 
+          {{ body | get_section("## What this PR does / why we need it:") }}
+
           Approved by: @{{ approved_reviews_by | join(', @') }}
 
   - name: label for Bug
