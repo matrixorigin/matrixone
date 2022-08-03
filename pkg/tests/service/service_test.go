@@ -15,7 +15,6 @@
 package service
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
@@ -99,9 +98,6 @@ func TestClusterAwareness(t *testing.T) {
 }
 
 func TestClusterOperation(t *testing.T) {
-	// FIXME: skip this test before bugs or flaws fixed
-	t.Skip()
-
 	dnSvcNum := 2
 	logSvcNum := 3
 	opt := DefaultOptions().
@@ -142,25 +138,21 @@ func TestClusterOperation(t *testing.T) {
 		require.Equal(t, ServiceStarted, ds.Status())
 
 		// 1.b close dn service via index
-		fmt.Println("=========> close dn service via index")
 		err = c.CloseDNServiceIndexed(index)
 		require.NoError(t, err)
 		require.Equal(t, ServiceClosed, ds.Status())
 
 		// 1.c start dn service via uuid
-		fmt.Println("=========> start dn service via uuid")
 		err = c.StartDNService(dsuuid)
 		require.NoError(t, err)
 		require.Equal(t, ServiceStarted, ds.Status())
 
 		// 1.d close dn service via uuid
-		fmt.Println("=========> close dn service via uuid")
 		err = c.CloseDNService(dsuuid)
 		require.NoError(t, err)
 		require.Equal(t, ServiceClosed, ds.Status())
 
 		// 1.e start dn service via index
-		fmt.Println("=========> start dn service via index")
 		err = c.StartDNServiceIndexed(index)
 		require.NoError(t, err)
 		require.Equal(t, ServiceStarted, ds.Status())
@@ -172,31 +164,26 @@ func TestClusterOperation(t *testing.T) {
 		lsuuid := logIDs[index]
 
 		// 2.a get log service instance
-		fmt.Println("=========> get log service instance")
 		ls, err := c.GetLogService(lsuuid)
 		require.NoError(t, err)
 		require.Equal(t, ServiceStarted, ls.Status())
 
 		// 2.b close log service via index
-		fmt.Println("=========> close log service via index")
 		err = c.CloseLogServiceIndexed(index)
 		require.NoError(t, err)
 		require.Equal(t, ServiceClosed, ls.Status())
 
 		// 2.c start log service via uuid
-		fmt.Println("=========> start log service via uuid")
 		err = c.StartLogService(lsuuid)
 		require.NoError(t, err)
 		require.Equal(t, ServiceStarted, ls.Status())
 
 		// 2.d close log service via uuid
-		fmt.Println("=========> close log service via uuid")
 		err = c.CloseLogService(lsuuid)
 		require.NoError(t, err)
 		require.Equal(t, ServiceClosed, ls.Status())
 
 		// 2.e start log service via index
-		fmt.Println("=========> start log service via index")
 		err = c.StartLogServiceIndexed(index)
 		require.NoError(t, err)
 		require.Equal(t, ServiceStarted, ls.Status())
