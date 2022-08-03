@@ -22,11 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ interface{}, buf *bytes.Buffer) {
+func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString(" minus ")
 }
 
-func Prepare(proc *process.Process, argument interface{}) error {
+func Prepare(proc *process.Process, argument any) error {
 	var err error
 	arg := argument.(*Argument)
 	{
@@ -43,7 +43,7 @@ func Prepare(proc *process.Process, argument interface{}) error {
 // it built a hash table for right relation first.
 // use values from left relation to probe and update the hash table.
 // and preserve values that do not exist in the hash table.
-func Call(idx int, proc *process.Process, argument interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, argument any) (bool, error) {
 	var err error
 	arg := argument.(*Argument)
 
