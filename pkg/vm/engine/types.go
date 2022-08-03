@@ -166,5 +166,5 @@ type Engine interface {
 	Databases(context.Context, client.TxnOperator) ([]string, error)
 	Database(context.Context, string, client.TxnOperator) (Database, error)
 
-	Nodes() Nodes
+	Nodes() (Nodes, error)
 }

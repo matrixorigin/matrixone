@@ -201,7 +201,11 @@ func (c *Compile) compileQuery(qry *plan.Query) (*Scope, error) {
 	if len(qry.Steps) != 1 {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", qry))
 	}
-	c.cnList = c.e.Nodes()
+	var err error
+	c.cnList, err = c.e.Nodes()
+	if err != nil {
+		return nil, err
+	}
 	if c.info.Typ == plan2.ExecTypeTP {
 		c.cnList = engine.Nodes{engine.Node{Mcpu: 1}}
 	} else {
