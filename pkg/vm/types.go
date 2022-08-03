@@ -30,13 +30,13 @@ const (
 	Dispatch
 	Connector
 	Projection
-	Complement
+	Anti
 	Single
 
 	LoopJoin
 	LoopLeft
 	LoopSemi
-	LoopComplement
+	LoopAnti
 	LoopSingle
 
 	MergeTop
@@ -52,8 +52,6 @@ const (
 	Union
 	Minus
 )
-
-var _ = Minus
 
 // Instruction contains relational algebra
 type Instruction struct {

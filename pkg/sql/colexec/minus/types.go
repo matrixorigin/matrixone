@@ -12,46 +12,51 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package complement
+package minus
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 )
 
 const (
-	Build = iota
-	Probe
-	End
+	buildingHashMap = iota
+	probingHashMap
+	operatorEnd
 )
 
-type evalVector struct {
-	needFree bool
-	vec      *vector.Vector
+type Argument struct {
+	ctr container
+
+	// hash table bucket related information.
+	IBucket, NBucket uint64
+}
+
+func (arg *Argument) MarshalBinary() ([]byte, error) {
+	return encoding.Encode(&Argument{
+		IBucket: arg.IBucket,
+		NBucket: arg.NBucket,
+	})
+}
+
+func (arg *Argument) UnmarshalBinary(data []byte) error {
+	rs := new(Argument)
+	if err := encoding.Decode(data, rs); err != nil {
+		return err
+	}
+	arg.IBucket = rs.IBucket
+	arg.NBucket = rs.NBucket
+	return nil
 }
 
 type container struct {
+	// operator execution stage.
 	state int
 
-	hasNull bool
+	// hash table related
+	hashTable *hashmap.StrHashMap
 
-	sels [][]int64
-
-	inBuckets []uint8
-
+	// result batch of minus column execute operator
 	bat *batch.Batch
-
-	evecs []evalVector
-	vecs  []*vector.Vector
-	mp    *hashmap.StrHashMap
-}
-
-type Argument struct {
-	ctr        *container
-	Ibucket    uint64
-	Nbucket    uint64
-	Result     []int32
-	Conditions [][]*plan.Expr
 }
