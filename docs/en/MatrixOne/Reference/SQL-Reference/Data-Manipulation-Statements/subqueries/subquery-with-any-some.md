@@ -63,4 +63,4 @@ Subqueries that use the `ANY` keyword return true when any value retrieved in th
 
 ## **Constraints**
 
-MatrixOne does not support selecting multiple columns for the query.
+MatrixOne does not support selecting multiple columns for the subquery.

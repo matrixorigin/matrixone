@@ -35,4 +35,4 @@ SELECT * FROM t1 WHERE column1 = (SELECT column1 FROM t2);
 
 ## **限制**
 
-MatrixOne 暂不支持选择多列进行查询。
+MatrixOne 暂不支持选择多列进行子查询。

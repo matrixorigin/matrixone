@@ -82,4 +82,4 @@ Every table in a FROM clause must have a name, therefore the [AS] name clause is
 
 ## **Constraints**
 
-MatrixOne does not support selecting multiple columns for the query.
+MatrixOne does not support selecting multiple columns for the subquery.

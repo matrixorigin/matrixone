@@ -91,4 +91,4 @@ SELECT * FROM t1 WHERE 1 > ALL (SELECT MAX(s1) FROM t2);
 
 ## **限制**
 
-MatrixOne 暂不支持选择多列进行查询。
+MatrixOne 暂不支持选择多列进行子查询。

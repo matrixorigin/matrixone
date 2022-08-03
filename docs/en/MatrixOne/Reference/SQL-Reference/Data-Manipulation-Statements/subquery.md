@@ -35,4 +35,4 @@ For more information, see the reference below:
 
 ## **Constraints**
 
-MatrixOne does not support selecting multiple columns for the query.
+MatrixOne does not support selecting multiple columns for the subquery.

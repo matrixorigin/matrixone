@@ -80,4 +80,4 @@ Empty set (0.01 sec)
 
 ## **Constraints**
 
-MatrixOne does not support selecting multiple columns for the query.
+MatrixOne does not support selecting multiple columns for the subquery.

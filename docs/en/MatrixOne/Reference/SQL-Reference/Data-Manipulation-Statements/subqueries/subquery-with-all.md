@@ -89,4 +89,4 @@ In general, tables containing `NULL` values and empty tables are â€œedge cases.â
 
 ## **Constraints**
 
-MatrixOne does not support selecting multiple columns for the query.
+MatrixOne does not support selecting multiple columns for the subquery.
