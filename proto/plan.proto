@@ -504,6 +504,11 @@ message Query {
 		MERGE		= 5;
 	}
 
+	enum EngineType {
+		TP 	= 0;
+		AP	= 1;
+	}
+
 	StatementType stmt_type		= 1;
 
 	// A query may need to run in steps.   This in theory is not
@@ -525,6 +530,8 @@ message Query {
 
 	// return head
 	repeated string headings = 5;
+
+	EngineType engine_type = 6;
 }
 
 message TransationControl {
