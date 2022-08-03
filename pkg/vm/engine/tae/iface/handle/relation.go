@@ -33,11 +33,11 @@ type Relation interface {
 	MakeSegmentIt() SegmentIt
 	MakeBlockIt() BlockIt
 
-	DeleteByHiddenKey(key any) error
-	UpdateByHiddenKey(key any, col int, v any) error
-	GetValueByHiddenKey(key any, col int) (any, error)
+	DeleteByPhyAddrKey(key any) error
+	UpdateByPhyAddrKey(key any, col int, v any) error
+	GetValueByPhyAddrKey(key any, col int) (any, error)
 
-	DeleteByHiddenKeys(keys containers.Vector) error
+	DeleteByPhyAddrKeys(keys containers.Vector) error
 
 	RangeDelete(id *common.ID, start, end uint32, dt DeleteType) error
 	Update(id *common.ID, row uint32, col uint16, v any) error

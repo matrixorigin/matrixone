@@ -290,13 +290,13 @@ func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
 	return
 }
 
-func (node *appendableNode) FillHiddenColumn(startRow, length uint32) (err error) {
-	col, err := model.PrepareHiddenData(catalog.HiddenColumnType, node.block.prefix, startRow, length)
+func (node *appendableNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
+	col, err := model.PreparePhyAddrData(catalog.PhyAddrColumnType, node.block.prefix, startRow, length)
 	if err != nil {
 		return
 	}
 	defer col.Close()
-	vec := node.data.Vecs[node.block.meta.GetSchema().HiddenKey.Idx]
+	vec := node.data.Vecs[node.block.meta.GetSchema().PhyAddrKey.Idx]
 	node.block.Lock()
 	vec.Extend(col)
 	node.block.Unlock()
@@ -313,7 +313,7 @@ func (node *appendableNode) ApplyAppend(bat *containers.Batch, txn txnif.AsyncTx
 	from = int(node.rows)
 	for srcPos, attr := range bat.Attrs {
 		def := schema.ColDefs[schema.GetColIdx(attr)]
-		if def.IsHidden() {
+		if def.IsPhyAddr() {
 			continue
 		}
 		destVec := node.data.Vecs[def.Idx]
@@ -321,7 +321,7 @@ func (node *appendableNode) ApplyAppend(bat *containers.Batch, txn txnif.AsyncTx
 		destVec.Extend(bat.Vecs[srcPos])
 		node.block.Unlock()
 	}
-	if err = node.FillHiddenColumn(uint32(from), uint32(bat.Length())); err != nil {
+	if err = node.FillPhyAddrColumn(uint32(from), uint32(bat.Length())); err != nil {
 		return
 	}
 	node.rows += uint32(bat.Length())

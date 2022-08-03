@@ -168,11 +168,11 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	task.deletes = make([]*roaring.Bitmap, len(task.compacted))
 
 	// 1. Prepare sort key resources
-	// If there's no sort key, use hidden
+	// If there's no sort key, use physical address key
 	for i, block := range task.compacted {
 		var vec containers.Vector
 		if !schema.HasSortKey() {
-			if view, err = block.GetColumnDataById(schema.HiddenKey.Idx, nil); err != nil {
+			if view, err = block.GetColumnDataById(schema.PhyAddrKey.Idx, nil); err != nil {
 				return
 			}
 			task.deletes[i] = view.DeleteMask
@@ -275,15 +275,15 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 	}
 
-	// Flush hidden column
-	hidden := schema.HiddenKey
+	// Flush phyAddr column
+	phyAddr := schema.PhyAddrKey
 	for i, blk := range task.createdBlks {
-		vec, err := model.PrepareHiddenData(hidden.Type, blk.MakeKey(), 0, uint32(vecs[i].Length()))
+		vec, err := model.PreparePhyAddrData(phyAddr.Type, blk.MakeKey(), 0, uint32(vecs[i].Length()))
 		if err != nil {
 			return err
 		}
 		defer vec.Close()
-		closure := blk.GetBlockData().FlushColumnDataClosure(ts, hidden.Idx, vec, false)
+		closure := blk.GetBlockData().FlushColumnDataClosure(ts, phyAddr.Idx, vec, false)
 		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
 		if err != nil {
 			return err
@@ -294,9 +294,9 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 	for _, def := range schema.ColDefs {
 		// Skip
-		// Hidden column was processed before
+		// PhyAddr column was processed before
 		// If only one single sort key, it was processed before
-		if def.IsHidden() || (schema.IsSingleSortKey() && def.IsSortKey()) {
+		if def.IsPhyAddr() || (schema.IsSingleSortKey() && def.IsSortKey()) {
 			continue
 		}
 		vecs = vecs[:0]

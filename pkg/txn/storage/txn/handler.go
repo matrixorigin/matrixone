@@ -20,6 +20,33 @@ import (
 )
 
 type Handler interface {
+	HandleCommit(
+		meta txn.TxnMeta,
+	) error
+
+	HandleRollback(
+		meta txn.TxnMeta,
+	) error
+
+	HandleCommitting(
+		meta txn.TxnMeta,
+	) error
+
+	HandlePrepare(
+		meta txn.TxnMeta,
+	) (
+		Timestamp,
+		error,
+	)
+
+	HandleStartRecovery(
+		chan txn.TxnMeta,
+	)
+
+	HandleClose() error
+
+	HandleDestroy() error
+
 	HandleOpenDatabase(
 		meta txn.TxnMeta,
 		req txnengine.OpenDatabaseReq,
