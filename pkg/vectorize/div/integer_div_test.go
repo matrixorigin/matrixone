@@ -24,8 +24,8 @@ func TestF32IntegerDivByZero(t *testing.T) {
 	as := make([]float32, 2)
 	bs := make([]float32, 2)
 	for i := 0; i < 2; i++ {
-		as[i] = 50
-		bs[i] = float32(i)
+		as[i] = 50.23
+		bs[i] = 0
 	}
 	cs := make([]int64, 2)
 	av := testutil.MakeFloat32Vector(as, nil)
