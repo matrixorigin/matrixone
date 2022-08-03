@@ -978,6 +978,10 @@ var (
 	}, {
 		input: "select * from t intersect distinct select c from t1",
 	}, {
+		input: "select * from t minus all select c from t1",
+	}, {
+		input: "select * from t minus distinct select c from t1",
+	}, {
 		input: "select * from t minus select c from t1",
 	}, {
 		input: "select * from (select a from t) as t1",
