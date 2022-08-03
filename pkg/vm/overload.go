@@ -24,7 +24,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopcomplement"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
@@ -79,7 +78,7 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	LoopLeft:       loopleft.String,
 	LoopSingle:     loopsingle.String,
 	LoopSemi:       loopsemi.String,
-	LoopComplement: loopcomplement.String,
+	LoopComplement: loopanti.String,
 
 	MergeTop:    mergetop.String,
 	MergeLimit:  mergelimit.String,
@@ -118,7 +117,7 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	LoopLeft:       loopleft.Prepare,
 	LoopSingle:     loopsingle.Prepare,
 	LoopSemi:       loopsemi.Prepare,
-	LoopComplement: loopcomplement.Prepare,
+	LoopComplement: loopanti.Prepare,
 
 	MergeTop:    mergetop.Prepare,
 	MergeLimit:  mergelimit.Prepare,
@@ -157,7 +156,7 @@ var execFunc = [...]func(int, *process.Process, any) (bool, error){
 	LoopLeft:       loopleft.Call,
 	LoopSingle:     loopsingle.Call,
 	LoopSemi:       loopsemi.Call,
-	LoopComplement: loopcomplement.Call,
+	LoopComplement: loopanti.Call,
 
 	MergeTop:    mergetop.Call,
 	MergeLimit:  mergelimit.Call,

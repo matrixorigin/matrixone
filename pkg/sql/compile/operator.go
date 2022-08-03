@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopcomplement"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
@@ -151,8 +150,8 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Cond:   arg.Cond,
 			Result: arg.Result,
 		}
-	case *loopcomplement.Argument:
-		rin.Arg = &loopcomplement.Argument{
+	case *loopanti.Argument:
+		rin.Arg = &loopanti.Argument{
 			Cond:   arg.Cond,
 			Result: arg.Result,
 		}
@@ -524,7 +523,7 @@ func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process)
 	}
 }
 
-func constructLoopComplement(n *plan.Node, proc *process.Process) *loopcomplement.Argument {
+func constructLoopComplement(n *plan.Node, proc *process.Process) *loopanti.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr)
@@ -533,7 +532,7 @@ func constructLoopComplement(n *plan.Node, proc *process.Process) *loopcomplemen
 		}
 		result[i] = pos
 	}
-	return &loopcomplement.Argument{
+	return &loopanti.Argument{
 		Result: result,
 		Cond:   colexec.RewriteFilterExprList(n.OnList),
 	}
