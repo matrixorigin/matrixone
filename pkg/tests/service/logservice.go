@@ -75,7 +75,7 @@ func (ls *logService) Start() error {
 	ls.Lock()
 	defer ls.Unlock()
 
-	if ls.status == ServiceInitialized || ls.status == ServiceClosed {
+	if ls.status == ServiceInitialized {
 		err := ls.svc.Start()
 		if err != nil {
 			return err

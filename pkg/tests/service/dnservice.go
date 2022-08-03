@@ -51,7 +51,7 @@ func (ds *dnService) Start() error {
 	ds.Lock()
 	defer ds.Unlock()
 
-	if ds.status == ServiceInitialized || ds.status == ServiceClosed {
+	if ds.status == ServiceInitialized {
 		err := ds.svc.Start()
 		if err != nil {
 			return err
