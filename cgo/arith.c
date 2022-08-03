@@ -110,26 +110,28 @@
 /*
  * Signed int mul with overflow check.
  */
-#define MUL_SIGNED_OVFLAG(TGT, A, B)                 \
-    TGT = (A) * (B);                                 \
-    opflag = ((A) != 0) && (((TGT) / (A)) != B)
+#define MUL_SIGNED_OVFLAG(TGT, A, B, MAXVAL, MINVAL, ZT ,UPTYPE)               \
+    temp = (UPTYPE)(A) * (UPTYPE)(B);                                          \
+    TGT = (ZT)temp;                                                            \
+    opflag = ((A ^ B) > 0 && temp > MAXVAL) || ((A ^ B) < 0 && temp < MINVAL)
 
-#define MUL_SIGNED_OVFLAG_CHECK                      \
-    if (opflag != 0)    {                            \
-        return RC_OUT_OF_RANGE;                      \
+#define MUL_SIGNED_OVFLAG_CHECK                                                \
+    if (opflag != 0)    {                                                      \
+        return RC_OUT_OF_RANGE;                                                \
     }else return RC_SUCCESS
 
 
 /*
  * Unsigned int mul with overflow check
  */
-#define MUL_UNSIGNED_OVFLAG(TGT, A, B)              \
-    TGT = (A) * (B);                                \
-    opflag = ((A) != 0) && (((TGT) / (A)) != B)
+#define MUL_UNSIGNED_OVFLAG(TGT, A, B, MAXVAL, MINVAL, ZT, UPTYPE)             \
+    temp = (UPTYPE)(A) * (UPTYPE)(B);                                          \
+    TGT = (ZT)temp;                                                            \
+    opflag = (temp > MAXVAL)
 
-#define MUL_UNSIGNED_OVFLAG_CHECK                   \
-    if (opflag != 0) {                              \
-        return RC_OUT_OF_RANGE;                     \
+#define MUL_UNSIGNED_OVFLAG_CHECK                                              \
+    if (opflag != 0) {                                                         \
+        return RC_OUT_OF_RANGE;                                                \
     } else return RC_SUCCESS
 
 
@@ -221,6 +223,7 @@
 const int32_t LEFT_IS_SCALAR = 1;
 const int32_t RIGHT_IS_SCALAR = 2;
 
+// MO_ARITH_T: Handle general arithmetic operations
 #define MO_ARITH_T(OP, ZT)                                    \
     ZT *rt = (ZT *) r;                                        \
     ZT *at = (ZT *) a;                                        \
@@ -264,6 +267,55 @@ const int32_t RIGHT_IS_SCALAR = 2;
         }                                                     \
     }                                                         \
     OP ## _CHECK 
+
+
+// MO_MUL_T: Handle signed and unsigned integer multiplication
+#define MO_MUL_T(OP, ZT, MAXVAL, MINVAL, UPTYPE)                               \
+    ZT *rt = (ZT *) r;                                                         \
+    ZT *at = (ZT *) a;                                                         \
+    ZT *bt = (ZT *) b;                                                         \
+    UPTYPE temp = 0;                                                           \
+    ZT opflag = 0;                                                             \
+    if ((flag & LEFT_IS_SCALAR) != 0) {                                        \
+        if (nulls != NULL) {                                                   \
+            for (uint64_t i = 0; i < n; i++) {                                 \
+                if (!bitmap_test(nulls, i)) {                                  \
+                    OP(rt[i], at[0], bt[i], MAXVAL, MINVAL, ZT, UPTYPE);       \
+                }                                                              \
+            }                                                                  \
+        } else {                                                               \
+            for (uint64_t i = 0; i < n; i++) {                                 \
+                OP(rt[i], at[0], bt[i], MAXVAL, MINVAL, ZT, UPTYPE);           \
+            }                                                                  \
+        }                                                                      \
+    } else if ((flag & RIGHT_IS_SCALAR) != 0) {                                \
+        if (nulls != NULL) {                                                   \
+            for (uint64_t i = 0; i < n; i++) {                                 \
+                if (!bitmap_test(nulls, i)) {                                  \
+                    OP(rt[i], at[i], bt[0], MAXVAL, MINVAL, ZT, UPTYPE);       \
+                }                                                              \
+            }                                                                  \
+        } else {                                                               \
+            for (uint64_t i = 0; i < n; i++) {                                 \
+                OP(rt[i], at[i], bt[0], MAXVAL, MINVAL, ZT, UPTYPE);           \
+            }                                                                  \
+        }                                                                      \
+    } else {                                                                   \
+        if (nulls != NULL) {                                                   \
+            for (uint64_t i = 0; i < n; i++) {                                 \
+                if (!bitmap_test(nulls, i)) {                                  \
+                    OP(rt[i], at[i], bt[i], MAXVAL, MINVAL, ZT, UPTYPE);       \
+                }                                                              \
+            }                                                                  \
+        } else {                                                               \
+            for (uint64_t i = 0; i < n; i++) {                                 \
+                OP(rt[i], at[i], bt[i], MAXVAL, MINVAL, ZT, UPTYPE);           \
+            }                                                                  \
+        }                                                                      \
+    }                                                                          \
+    OP ## _CHECK
+
+
 
 // Addition operation
 int32_t SignedInt_VecAdd(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof)
@@ -359,34 +411,36 @@ int32_t Float_VecSub(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int
 int32_t SignedInt_VecMul(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof)
 {
     if (szof == 1) {
-        MO_ARITH_T(MUL_SIGNED_OVFLAG, int8_t);
+        MO_MUL_T(MUL_SIGNED_OVFLAG, int8_t, INT8_MAX, INT8_MIN, int16_t);
     } else if (szof == 2) {
-        MO_ARITH_T(MUL_SIGNED_OVFLAG, int16_t);
+        MO_MUL_T(MUL_SIGNED_OVFLAG, int16_t, INT16_MAX, INT16_MIN, int16_t);
     } else if (szof == 4) {
-        MO_ARITH_T(MUL_SIGNED_OVFLAG, int32_t);
+        MO_MUL_T(MUL_SIGNED_OVFLAG, int32_t, INT32_MAX, INT32_MIN, int64_t);
     } else if (szof == 8) {
-        MO_ARITH_T(MUL_SIGNED_OVFLAG, int64_t);
+        MO_MUL_T(MUL_SIGNED_OVFLAG, int64_t, INT64_MAX, INT64_MIN, __int128);
     } else {
         return RC_INVALID_ARGUMENT;
     }
     return RC_SUCCESS;
 }
 
+
 int32_t UnsignedInt_VecMul(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof)
 {
     if (szof == 1) {
-        MO_ARITH_T(MUL_UNSIGNED_OVFLAG, uint8_t);
+        MO_MUL_T(MUL_UNSIGNED_OVFLAG, uint8_t, UINT8_MAX, 0, uint16_t);
     } else if (szof == 2) {
-        MO_ARITH_T(MUL_UNSIGNED_OVFLAG, uint16_t);
+        MO_MUL_T(MUL_UNSIGNED_OVFLAG, uint16_t, UINT16_MAX, 0, uint32_t);
     } else if (szof == 4) {
-        MO_ARITH_T(MUL_UNSIGNED_OVFLAG, uint32_t);
+        MO_MUL_T(MUL_UNSIGNED_OVFLAG, uint32_t, UINT32_MAX, 0, uint64_t);
     } else if (szof == 8) {
-        MO_ARITH_T(MUL_UNSIGNED_OVFLAG, uint64_t);
+        MO_MUL_T(MUL_UNSIGNED_OVFLAG, uint64_t, UINT64_MAX, 0, __int128);
     } else {
         return RC_INVALID_ARGUMENT;
     }
     return RC_SUCCESS;
 }
+
 
 int32_t Float_VecMul(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof)
 {
@@ -457,7 +511,7 @@ int32_t Float_VecMod(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int
     return RC_SUCCESS;
 }
 
-//---------------------------------------------------------------------------------------
+
 /*
  * Float/Double integer div overflow check.
  *
@@ -473,7 +527,7 @@ int32_t Float_VecMod(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int
         return RC_DIVISION_BY_ZERO;                 \
     } else return RC_SUCCESS
 
-
+// MO_INT_DIV : Handle floating-point integer division
 #define MO_INT_DIV(OP, ZT, RT)                                \
     RT *rt = (RT *) r;                                        \
     ZT *at = (ZT *) a;                                        \

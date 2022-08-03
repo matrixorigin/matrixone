@@ -187,7 +187,7 @@ func BenchmarkMultDec64(b *testing.B) {
 
 	av := testutil.MakeDecimal64Vector(as, nil, types.T_decimal64.ToType())
 	bv := testutil.MakeDecimal64Vector(bs, nil, types.T_decimal64.ToType())
-	cv := testutil.MakeDecimal64Vector(cs, nil, types.T_decimal64.ToType())
+	cv := testutil.MakeDecimal128Vector(cs, nil, types.T_decimal128.ToType())
 
 	for i := 0; i < b.N; i++ {
 		if err := Decimal64VecMult(av, bv, cv); err != nil {
