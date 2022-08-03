@@ -23,8 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -48,44 +46,42 @@ var (
 )
 
 func init() {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
 	tcs = []groupTestCase{
-		newTestCase(mheap.New(gm), []bool{false}, false, []types.Type{{Oid: types.T_int8}}),
-		newTestCase(mheap.New(gm), []bool{false}, true, []types.Type{{Oid: types.T_int8}}),
-		newTestCase(mheap.New(gm), []bool{false, true}, false, []types.Type{
+		newTestCase(testutil.NewMheap(), []bool{false}, false, []types.Type{{Oid: types.T_int8}}),
+		newTestCase(testutil.NewMheap(), []bool{false}, true, []types.Type{{Oid: types.T_int8}}),
+		newTestCase(testutil.NewMheap(), []bool{false, true}, false, []types.Type{
 			{Oid: types.T_int8},
 			{Oid: types.T_int16},
 		}),
-		newTestCase(mheap.New(gm), []bool{false, true}, true, []types.Type{
+		newTestCase(testutil.NewMheap(), []bool{false, true}, true, []types.Type{
 			{Oid: types.T_int16},
 			{Oid: types.T_int64},
 		}),
-		newTestCase(mheap.New(gm), []bool{false, true}, false, []types.Type{
+		newTestCase(testutil.NewMheap(), []bool{false, true}, false, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_decimal128},
 		}),
-		newTestCase(mheap.New(gm), []bool{true, false, true}, false, []types.Type{
+		newTestCase(testutil.NewMheap(), []bool{true, false, true}, false, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_int64},
 			{Oid: types.T_decimal128},
 		}),
-		newTestCase(mheap.New(gm), []bool{true, false, true}, false, []types.Type{
+		newTestCase(testutil.NewMheap(), []bool{true, false, true}, false, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_varchar, Width: 2},
 			{Oid: types.T_decimal128},
 		}),
-		newTestCase(mheap.New(gm), []bool{true, true, true}, false, []types.Type{
+		newTestCase(testutil.NewMheap(), []bool{true, true, true}, false, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_varchar, Width: 2},
 			{Oid: types.T_decimal128},
 		}),
-		newTestCase(mheap.New(gm), []bool{true, true, true}, false, []types.Type{
+		newTestCase(testutil.NewMheap(), []bool{true, true, true}, false, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_varchar},
 			{Oid: types.T_decimal128},
 		}),
-		newTestCase(mheap.New(gm), []bool{false, false, false}, false, []types.Type{
+		newTestCase(testutil.NewMheap(), []bool{false, false, false}, false, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_varchar},
 			{Oid: types.T_decimal128},
@@ -97,13 +93,6 @@ func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
 	for _, tc := range tcs {
 		String(tc.arg, buf)
-	}
-}
-
-func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
-		require.NoError(t, err)
 	}
 }
 
@@ -133,17 +122,15 @@ func TestGroup(t *testing.T) {
 				}
 			}
 		}
-		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
+		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
 	}
 }
 
 func BenchmarkGroup(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		hm := host.New(1 << 30)
-		gm := guest.New(1<<30, hm)
 		tcs = []groupTestCase{
-			newTestCase(mheap.New(gm), []bool{false}, true, []types.Type{{Oid: types.T_int8}}),
-			newTestCase(mheap.New(gm), []bool{false}, true, []types.Type{{Oid: types.T_int8}}),
+			newTestCase(testutil.NewMheap(), []bool{false}, true, []types.Type{{Oid: types.T_int8}}),
+			newTestCase(testutil.NewMheap(), []bool{false}, true, []types.Type{{Oid: types.T_int8}}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {

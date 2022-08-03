@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
@@ -61,6 +62,13 @@ func runClientTest(t *testing.T,
 	}()
 
 	fn(t, service, scfg, c)
+}
+
+func TestClientConfigIsValidated(t *testing.T) {
+	cfg := ClientConfig{}
+	cc, err := NewClient(context.TODO(), cfg)
+	assert.Nil(t, cc)
+	assert.True(t, errors.Is(err, ErrInvalidConfig))
 }
 
 func TestClientCanBeReset(t *testing.T) {

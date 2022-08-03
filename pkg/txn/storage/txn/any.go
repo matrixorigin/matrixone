@@ -16,33 +16,49 @@ package txnstorage
 
 import "fmt"
 
-type AnyKey struct {
-	Value any
-}
+type AnyKey []any
 
 var _ Ordered[AnyKey] = AnyKey{}
 
 func (a AnyKey) Less(than AnyKey) bool {
-	switch v := a.Value.(type) {
-	case Text:
-		return v.Less(than.Value.(Text))
-	case Int:
-		return v.Less(than.Value.(Int))
-	}
-	panic(fmt.Errorf("unknown type: %T", a.Value))
-}
-
-type MultiAnyKey []AnyKey
-
-var _ Ordered[MultiAnyKey] = MultiAnyKey{}
-
-func (m MultiAnyKey) Less(than MultiAnyKey) bool {
-	for i, key := range m {
+	for i, key := range a {
 		if i >= len(than) {
 			return false
 		}
-		if key.Less(than[i]) {
-			return true
+		switch key := key.(type) {
+
+		case Text:
+			if key.Less(than[i].(Text)) {
+				return true
+			}
+
+		case Bool:
+			if key.Less(than[i].(Bool)) {
+				return true
+			}
+
+		case Int:
+			if key.Less(than[i].(Int)) {
+				return true
+			}
+
+		case Uint:
+			if key.Less(than[i].(Uint)) {
+				return true
+			}
+
+		case Float:
+			if key.Less(than[i].(Float)) {
+				return true
+			}
+
+		case Bytes:
+			if key.Less(than[i].(Bytes)) {
+				return true
+			}
+
+		default:
+			panic(fmt.Errorf("unknown key type: %T", key))
 		}
 	}
 	return false
@@ -50,8 +66,15 @@ func (m MultiAnyKey) Less(than MultiAnyKey) bool {
 
 type AnyRow struct {
 	primaryKey AnyKey
+	attributes map[string]any // attribute id -> value
 }
 
-func (a AnyRow) PrimaryKey() AnyKey {
+func (a *AnyRow) PrimaryKey() AnyKey {
 	return a.primaryKey
+}
+
+func NewAnyRow() *AnyRow {
+	return &AnyRow{
+		attributes: make(map[string]any),
+	}
 }

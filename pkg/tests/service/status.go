@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,26 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package loopcomplement
+package service
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-)
+// ServiceStatus indicates serivce status.
+type ServiceStatus int
 
 const (
-	Build = iota
-	Probe
-	End
+	ServiceInitialized ServiceStatus = iota
+	ServiceStarted
+	ServiceClosed
 )
-
-type container struct {
-	state int
-	bat   *batch.Batch
-}
-
-type Argument struct {
-	ctr    *container
-	Result []int32
-	Cond   *plan.Expr
-}

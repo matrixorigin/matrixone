@@ -88,9 +88,10 @@ func (s *store) newLogServiceClient(shard metadata.DNShard) (logservice.Client, 
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.LogService.ConnectTimeout.Duration)
 	defer cancel()
 	return logservice.NewClient(ctx, logservice.ClientConfig{
-		ReadOnly:    false,
-		LogShardID:  shard.LogShardID,
-		DNReplicaID: shard.ReplicaID,
+		ReadOnly:         false,
+		LogShardID:       shard.LogShardID,
+		DNReplicaID:      shard.ReplicaID,
+		ServiceAddresses: s.cfg.HAKeeper.ClientConfig.ServiceAddresses,
 	})
 }
 
@@ -103,5 +104,5 @@ func (s *store) newMemTxnStorage(shard metadata.DNShard, logClient logservice.Cl
 }
 
 func (s *store) newTAEStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
-	return taestorage.New(shard, logClient, s.s3FS, s.localFS)
+	return taestorage.New(shard, logClient, s.s3FS, s.localFS, s.clock)
 }

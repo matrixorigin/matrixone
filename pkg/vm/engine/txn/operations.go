@@ -248,8 +248,9 @@ type ReadReq struct {
 }
 
 type ReadResp struct {
-	Batch            *batch.Batch
-	ErrTableNotFound bool
+	Batch             *batch.Batch
+	ErrIterNotFound   bool
+	ErrColumnNotFound string
 }
 
 type CloseTableIterReq struct {

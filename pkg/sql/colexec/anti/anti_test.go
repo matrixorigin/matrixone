@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package loopcomplement
+package anti
 
 import (
 	"bytes"
@@ -22,11 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -37,7 +34,7 @@ const (
 )
 
 // add unit tests for cases
-type joinTestCase struct {
+type antiTestCase struct {
 	arg    *Argument
 	flgs   []bool // flgs[i] == true: nullable
 	types  []types.Type
@@ -46,15 +43,29 @@ type joinTestCase struct {
 }
 
 var (
-	tcs []joinTestCase
+	tcs []antiTestCase
 )
 
 func init() {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	tcs = []joinTestCase{
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0}),
-		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0}),
+	tcs = []antiTestCase{
+		newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+			[][]*plan.Expr{
+				{
+					newExpr(0, types.Type{Oid: types.T_int8}),
+				},
+				{
+					newExpr(0, types.Type{Oid: types.T_int8}),
+				},
+			}),
+		newTestCase(testutil.NewMheap(), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+			[][]*plan.Expr{
+				{
+					newExpr(0, types.Type{Oid: types.T_int8}),
+				},
+				{
+					newExpr(0, types.Type{Oid: types.T_int8}),
+				},
+			}),
 	}
 }
 
@@ -65,14 +76,7 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
-		require.NoError(t, err)
-	}
-}
-
-func TestJoin(t *testing.T) {
+func TestAnti(t *testing.T) {
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
@@ -82,7 +86,6 @@ func TestJoin(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
@@ -112,16 +115,29 @@ func TestJoin(t *testing.T) {
 		}
 		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
 	}
-
 }
 
-func BenchmarkJoin(b *testing.B) {
+func BenchmarkAnti(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		hm := host.New(1 << 30)
-		gm := guest.New(1<<30, hm)
-		tcs = []joinTestCase{
-			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0}),
-			newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0}),
+		tcs = []antiTestCase{
+			newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+				[][]*plan.Expr{
+					{
+						newExpr(0, types.Type{Oid: types.T_int8}),
+					},
+					{
+						newExpr(0, types.Type{Oid: types.T_int8}),
+					},
+				}),
+			newTestCase(testutil.NewMheap(), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+				[][]*plan.Expr{
+					{
+						newExpr(0, types.Type{Oid: types.T_int8}),
+					},
+					{
+						newExpr(0, types.Type{Oid: types.T_int8}),
+					},
+				}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
@@ -146,7 +162,23 @@ func BenchmarkJoin(b *testing.B) {
 	}
 }
 
-func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []int32) joinTestCase {
+func newExpr(pos int32, typ types.Type) *plan.Expr {
+	return &plan.Expr{
+		Typ: &plan.Type{
+			Size:  typ.Size,
+			Scale: typ.Scale,
+			Width: typ.Width,
+			Id:    plan.Type_TypeId(typ.Oid),
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				ColPos: pos,
+			},
+		},
+	}
+}
+
+func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) antiTestCase {
 	proc := process.New(m)
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -156,54 +188,16 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []int32) joinT
 	}
 	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
 		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 4),
+		Ch:  make(chan *batch.Batch, 3),
 	}
-	fid := function.EncodeOverloadID(function.EQUAL, 4)
-	args := make([]*plan.Expr, 0, 2)
-	args = append(args, &plan.Expr{
-		Typ: &plan.Type{
-			Size: ts[0].Size,
-			Id:   plan.Type_TypeId(ts[0].Oid),
-		},
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: 0,
-				ColPos: 0,
-			},
-		},
-	})
-	args = append(args, &plan.Expr{
-		Typ: &plan.Type{
-			Size: ts[0].Size,
-			Id:   plan.Type_TypeId(ts[0].Oid),
-		},
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: 1,
-				ColPos: 0,
-			},
-		},
-	})
-	cond := &plan.Expr{
-		Typ: &plan.Type{
-			Size: 1,
-			Id:   plan.Type_BOOL,
-		},
-		Expr: &plan.Expr_F{
-			F: &plan.Function{
-				Args: args,
-				Func: &plan.ObjectRef{Obj: fid},
-			},
-		},
-	}
-	return joinTestCase{
+	return antiTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
 		arg: &Argument{
-			Cond:   cond,
-			Result: rp,
+			Result:     rp,
+			Conditions: cs,
 		},
 	}
 }
