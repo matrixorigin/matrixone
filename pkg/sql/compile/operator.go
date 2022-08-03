@@ -17,6 +17,8 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
@@ -34,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregate"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/complement"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -108,8 +109,8 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		rin.Arg = &product.Argument{
 			Result: arg.Result,
 		}
-	case *complement.Argument:
-		rin.Arg = &complement.Argument{
+	case *anti.Argument:
+		rin.Arg = &anti.Argument{
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
 		}
@@ -293,7 +294,7 @@ func constructSemi(n *plan.Node, proc *process.Process) *semi.Argument {
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr)
 		if rel != 0 {
-			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("complement result '%s' not support now", expr)))
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("semi result '%s' not support now", expr)))
 		}
 		result[i] = pos
 	}
@@ -335,16 +336,16 @@ func constructProduct(n *plan.Node, proc *process.Process) *product.Argument {
 	return &product.Argument{Result: result}
 }
 
-func constructComplement(n *plan.Node, proc *process.Process) *complement.Argument {
+func constructAnti(n *plan.Node, proc *process.Process) *anti.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr)
 		if rel != 0 {
-			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("complement result '%s' not support now", expr)))
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("anti result '%s' not support now", expr)))
 		}
 		result[i] = pos
 	}
-	return &complement.Argument{
+	return &anti.Argument{
 		Result:     result,
 		Conditions: constructJoinConditions(n.OnList),
 	}
@@ -490,7 +491,7 @@ func constructLoopSemi(n *plan.Node, proc *process.Process) *loopsemi.Argument {
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr)
 		if rel != 0 {
-			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("complement result '%s' not support now", expr)))
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("loop semi result '%s' not support now", expr)))
 		}
 		result[i] = pos
 	}
@@ -523,12 +524,12 @@ func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process)
 	}
 }
 
-func constructLoopComplement(n *plan.Node, proc *process.Process) *loopanti.Argument {
+func constructLoopAnti(n *plan.Node, proc *process.Process) *loopanti.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr)
 		if rel != 0 {
-			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("complement result '%s' not support now", expr)))
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("loop anti result '%s' not support now", expr)))
 		}
 		result[i] = pos
 	}

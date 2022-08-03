@@ -16,6 +16,8 @@ package vm
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
@@ -30,7 +32,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/complement"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -72,13 +73,13 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	Dispatch:   dispatch.String,
 	Connector:  connector.String,
 	Projection: projection.String,
-	Complement: complement.String,
+	Anti:       anti.String,
 
-	LoopJoin:       loopjoin.String,
-	LoopLeft:       loopleft.String,
-	LoopSingle:     loopsingle.String,
-	LoopSemi:       loopsemi.String,
-	LoopComplement: loopanti.String,
+	LoopJoin:   loopjoin.String,
+	LoopLeft:   loopleft.String,
+	LoopSingle: loopsingle.String,
+	LoopSemi:   loopsemi.String,
+	LoopAnti:   loopanti.String,
 
 	MergeTop:    mergetop.String,
 	MergeLimit:  mergelimit.String,
@@ -111,13 +112,13 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Dispatch:   dispatch.Prepare,
 	Connector:  connector.Prepare,
 	Projection: projection.Prepare,
-	Complement: complement.Prepare,
+	Anti:       anti.Prepare,
 
-	LoopJoin:       loopjoin.Prepare,
-	LoopLeft:       loopleft.Prepare,
-	LoopSingle:     loopsingle.Prepare,
-	LoopSemi:       loopsemi.Prepare,
-	LoopComplement: loopanti.Prepare,
+	LoopJoin:   loopjoin.Prepare,
+	LoopLeft:   loopleft.Prepare,
+	LoopSingle: loopsingle.Prepare,
+	LoopSemi:   loopsemi.Prepare,
+	LoopAnti:   loopanti.Prepare,
 
 	MergeTop:    mergetop.Prepare,
 	MergeLimit:  mergelimit.Prepare,
@@ -150,13 +151,13 @@ var execFunc = [...]func(int, *process.Process, any) (bool, error){
 	Dispatch:   dispatch.Call,
 	Connector:  connector.Call,
 	Projection: projection.Call,
-	Complement: complement.Call,
+	Anti:       anti.Call,
 
-	LoopJoin:       loopjoin.Call,
-	LoopLeft:       loopleft.Call,
-	LoopSingle:     loopsingle.Call,
-	LoopSemi:       loopsemi.Call,
-	LoopComplement: loopanti.Call,
+	LoopJoin:   loopjoin.Call,
+	LoopLeft:   loopleft.Call,
+	LoopSingle: loopsingle.Call,
+	LoopSemi:   loopsemi.Call,
+	LoopAnti:   loopanti.Call,
 
 	MergeTop:    mergetop.Call,
 	MergeLimit:  mergelimit.Call,

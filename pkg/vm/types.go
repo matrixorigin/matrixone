@@ -30,13 +30,13 @@ const (
 	Dispatch
 	Connector
 	Projection
-	Complement
+	Anti
 	Single
 
 	LoopJoin
 	LoopLeft
 	LoopSemi
-	LoopComplement
+	LoopAnti
 	LoopSingle
 
 	MergeTop
