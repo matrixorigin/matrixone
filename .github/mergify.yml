@@ -8,6 +8,7 @@ pull_request_rules:
     conditions:
       - "#approved-reviews-by>=1"
       - "#changes-requested-reviews-by<=0"
+      - "-label=do-not-merge/wip"
       - "check-success=Lint Docs"
       - "check-success=UT Test on Ubuntu/x64"
       # - "check-success=UT Test on Darwin/x86"
@@ -24,7 +25,15 @@ pull_request_rules:
         commit_message_template: |
           {{ title }} (#{{ number }})
 
+          {{ body | get_section("## What this PR does / why we need it:") }}
+
           Approved by: @{{ approved_reviews_by | join(', @') }}
+          
+  - name: Auto update branch
+    conditions:
+      - created-at>=00:10 ago
+    actions:
+      update: 
 
   - name: label for Bug
     conditions: 

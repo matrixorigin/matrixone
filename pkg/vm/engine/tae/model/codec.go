@@ -45,28 +45,28 @@ func DecodeBlockKeyPrefix(buf []byte) (segmentId, blockId uint64) {
 	return
 }
 
-func EncodeHiddenKey(segmentId, blockId uint64, offset uint32) (key any) {
+func EncodePhyAddrKey(segmentId, blockId uint64, offset uint32) (key any) {
 	buf := make([]byte, 16)
 	prefix := EncodeBlockKeyPrefix(segmentId, blockId)
 	offsetBuf := make([]byte, 4)
-	EncodeHiddenKeyWithPrefix(buf, prefix, offsetBuf, offset)
+	EncodePhyAddrKeyWithPrefix(buf, prefix, offsetBuf, offset)
 	key = types.DecodeFixed[types.Decimal128](buf)
 	return
 }
 
-func EncodeHiddenKeyWithPrefix(dest, prefix, offsetBuf []byte, offset uint32) {
+func EncodePhyAddrKeyWithPrefix(dest, prefix, offsetBuf []byte, offset uint32) {
 	copy(dest, prefix)
 	binary.BigEndian.PutUint32(offsetBuf, offset)
 	copy(dest[12:], offsetBuf)
 }
 
-func DecodeHiddenKeyFromValue(v any) (segmentId, blockId uint64, offset uint32) {
+func DecodePhyAddrKeyFromValue(v any) (segmentId, blockId uint64, offset uint32) {
 	reflected := v.(types.Decimal128)
 	src := types.EncodeFixed(reflected)
-	return DecodeHiddenKey(src)
+	return DecodePhyAddrKey(src)
 }
 
-func DecodeHiddenKey(src []byte) (segmentId, blockId uint64, offset uint32) {
+func DecodePhyAddrKey(src []byte) (segmentId, blockId uint64, offset uint32) {
 	segmentId, blockId = DecodeBlockKeyPrefix(src[:12])
 	offset = binary.BigEndian.Uint32(src[12:])
 	return
