@@ -243,7 +243,7 @@ func (n *insertNode) makeLogEntry() wal.LogEntry {
 	if err != nil {
 		panic(err)
 	}
-	if err = e.Unmarshal(buf); err != nil {
+	if err = e.SetPayload(buf); err != nil {
 		panic(err)
 	}
 	return e
@@ -315,7 +315,7 @@ func (n *insertNode) execUnload() (en wal.LogEntry) {
 	en = n.makeLogEntry()
 	info := &entry.Info{
 		Group:     wal.GroupUC,
-		Uncommits: []entry.Tid{{Group: wal.GroupC, Tid: n.table.store.txn.GetID()}},
+		Uncommits: n.table.store.txn.GetID(),
 	}
 	en.SetInfo(info)
 	if seq, err := n.driver.AppendEntry(wal.GroupUC, en); err != nil {
