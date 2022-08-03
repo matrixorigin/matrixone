@@ -24,7 +24,7 @@ import (
 	"github.com/lni/dragonboat/v4"
 	cli "github.com/lni/dragonboat/v4/client"
 	"github.com/lni/dragonboat/v4/config"
-	"github.com/lni/dragonboat/v4/plugin/tan"
+	"github.com/lni/dragonboat/v4/plugin/tee"
 	"github.com/lni/dragonboat/v4/raftpb"
 	sm "github.com/lni/dragonboat/v4/statemachine"
 
@@ -79,7 +79,7 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 		ListenAddress:       cfg.RaftListenAddress,
 		Expert: config.ExpertConfig{
 			FS:           cfg.FS,
-			LogDBFactory: tan.Factory,
+			LogDBFactory: tee.TanPebbleLogDBFactory,
 			// FIXME: dragonboat need to be updated to make this field a first class
 			// citizen
 			TestGossipProbeInterval: 50 * time.Millisecond,
