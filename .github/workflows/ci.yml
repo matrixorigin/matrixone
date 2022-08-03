@@ -393,7 +393,9 @@ jobs:
     name: Build mo-service
     runs-on: ubuntu-latest
     steps:
-      - run: 'make service'
+      - run: |
+        cd $GITHUB_WORKSPACE
+        make service
 
   lint-docs:
     name: Lint Docs
