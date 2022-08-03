@@ -48,6 +48,7 @@ func (builder *QueryBuilder) remapExpr(expr *Expr, colMap map[[2]int32][2]int32)
 			ne.Col.ColPos = ids[1]
 			ne.Col.Name = builder.nameByColRef[mapId]
 		} else {
+			panic("dd")
 			return errors.New("", fmt.Sprintf("can't find column in context's map %v", colMap))
 		}
 
@@ -160,34 +161,50 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		plan.Node_UNION, plan.Node_UNION_ALL,
 		plan.Node_MINUS, plan.Node_MINUS_ALL:
 
+		thisTag := node.BindingTags[0]
+		for i := range node.ProjectList {
+			globalRef := [2]int32{thisTag, int32(i)}
+			remapping.addColRef(globalRef)
+		}
+
+		internalMap := make(map[[2]int32][2]int32)
+
 		leftID := node.Children[0]
 		leftRemapping, err := builder.remapAllColRefs(leftID, colRefCnt)
 		if err != nil {
 			return nil, err
 		}
+		for k, v := range leftRemapping.globalToLocal {
+			internalMap[k] = v
+		}
 
 		rightID := node.Children[1]
-		_, err = builder.remapAllColRefs(rightID, colRefCnt)
+		rightRemapping, err := builder.remapAllColRefs(rightID, colRefCnt)
 		if err != nil {
 			return nil, err
 		}
-		childProjList := builder.qry.Nodes[leftID].ProjectList
-		for i, globalRef := range leftRemapping.localToGlobal {
-			// remapping.addColRef(globalRef)
-			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: childProjList[i].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 0,
-						ColPos: int32(i),
-						Name:   builder.nameByColRef[globalRef],
-					},
-				},
-			})
+
+		for _, expr := range node.ProjectList {
+			decreaseRefCnt(expr, colRefCnt)
+			err := builder.remapExpr(expr, internalMap)
+			if err != nil {
+				return nil, err
+			}
 		}
-		// for _, globalRef := range rightRemapping.localToGlobal {
-		// 	remapping.addColRef(globalRef)
-		// }
+
+		// childProjList := builder.qry.Nodes[leftID].ProjectList
+		for _, globalRef := range leftRemapping.localToGlobal {
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+			remapping.addColRef(globalRef)
+		}
+		for _, globalRef := range rightRemapping.localToGlobal {
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+			remapping.addColRef(globalRef)
+		}
 
 	case plan.Node_JOIN:
 		for _, expr := range node.OnList {
@@ -643,7 +660,6 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 	selectStmtLength := len(selectStmts)
 	nodes := make([]int32, selectStmtLength)
 	subCtxList := make([]*BindContext, selectStmtLength)
-	projectNodes := make([]int32, selectStmtLength) // we will reset select Stmt's Project Node
 	var projectLength int
 	for idx, sltStmt := range selectStmts {
 		subCtx := NewBindContext(builder, ctx)
@@ -669,14 +685,6 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 		}
 		subCtxList[idx] = subCtx
 		nodes[idx] = nodeID
-		projectNodeID := nodeID
-		for {
-			if builder.qry.Nodes[projectNodeID].NodeType == plan.Node_PROJECT {
-				projectNodes[idx] = projectNodeID
-				break
-			}
-			projectNodeID = builder.qry.Nodes[projectNodeID].Children[0]
-		}
 	}
 
 	// reset all select's return Projection(type cast up)
@@ -691,7 +699,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 			if !argsType[idx].Eq(castType) && castType.Oid != types.T_any {
 				//  reset projectNode's projectList
 				typ := makePlan2Type(&castType)
-				node := builder.qry.Nodes[projectNodes[idx]]
+				node := builder.qry.Nodes[nodes[idx]]
 				node.ProjectList[columnIdx], err = appendCastBeforeExpr(node.ProjectList[columnIdx], typ)
 				if err != nil {
 					return 0, err
@@ -700,19 +708,40 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 		}
 	}
 
-	// build intersect node first.  becaulse intersect has higher precedence then UNION and MINUS
+	firstSelectProjectNode := builder.qry.Nodes[nodes[0]]
+
+	getProjectList := func(tag int32) []*plan.Expr {
+		projectList := make([]*plan.Expr, len(firstSelectProjectNode.ProjectList))
+		for i, expr := range firstSelectProjectNode.ProjectList {
+			projectList[i] = &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: tag,
+						ColPos: int32(i),
+					},
+				},
+			}
+		}
+		return projectList
+	}
+
+	// build intersect node first.  because intersect has higher precedence then UNION and MINUS
 	var newNodes []int32
 	var newUnionType []plan.Node_NodeType
-	// var lastTag int32
+	var lastTag int32
 	newNodes = append(newNodes, nodes[0])
 	for i := 1; i < len(nodes); i++ {
 		utIdx := i - 1
 		lastNewNodeIdx := len(newNodes) - 1
 		if unionTypes[utIdx] == plan.Node_INTERSECT || unionTypes[utIdx] == plan.Node_INTERSECT_ALL {
-
+			lastTag = builder.genNewTag()
+			leftNodeTag := builder.qry.Nodes[newNodes[lastNewNodeIdx]].BindingTags[0]
 			newNodeID := builder.appendNode(&plan.Node{
-				NodeType: unionTypes[utIdx],
-				Children: []int32{newNodes[lastNewNodeIdx], nodes[i]},
+				NodeType:    unionTypes[utIdx],
+				Children:    []int32{newNodes[lastNewNodeIdx], nodes[i]},
+				BindingTags: []int32{lastTag},
+				ProjectList: getProjectList(leftNodeTag),
 			}, ctx)
 			newNodes[lastNewNodeIdx] = newNodeID
 		} else {
@@ -738,9 +767,13 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 		// }, ctx)
 
 		// } else {
+		lastTag = builder.genNewTag()
+		leftNodeTag := builder.qry.Nodes[lastNodeId].BindingTags[0]
 		lastNodeId = builder.appendNode(&plan.Node{
-			NodeType: newUnionType[utIdx],
-			Children: []int32{lastNodeId, newNodes[i]},
+			NodeType:    newUnionType[utIdx],
+			Children:    []int32{lastNodeId, newNodes[i]},
+			BindingTags: []int32{lastTag},
+			ProjectList: getProjectList(leftNodeTag),
 		}, ctx)
 		// }
 	}
@@ -753,12 +786,18 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 	ctx.headings = append(ctx.headings, subCtxList[0].headings...)
 	for i, v := range ctx.headings {
 		ctx.aliasMap[v] = int32(i)
+		builder.nameByColRef[[2]int32{lastTag, int32(i)}] = v
+		builder.nameByColRef[[2]int32{ctx.projectTag, int32(i)}] = v
 	}
-	for i, expr := range builder.qry.Nodes[projectNodes[0]].ProjectList {
-		// TODO 这里放什么好？
+	for i, expr := range firstSelectProjectNode.ProjectList {
 		ctx.projects = append(ctx.projects, &plan.Expr{
-			Typ:  expr.Typ,
-			Expr: makePlan2Int64ConstExpr(int64(i)),
+			Typ: expr.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: lastTag,
+					ColPos: int32(i),
+				},
+			},
 		})
 	}
 	havingBinder := NewHavingBinder(builder, ctx)
@@ -827,7 +866,17 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 
 	// append result PROJECT node
 	if builder.qry.Nodes[lastNodeId].NodeType != plan.Node_PROJECT {
-		ctx.results = ctx.projects
+		for i := 0; i < len(ctx.projects); i++ {
+			ctx.results = append(ctx.results, &plan.Expr{
+				Typ: ctx.projects[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: ctx.projectTag,
+						ColPos: int32(i),
+					},
+				},
+			})
+		}
 		ctx.resultTag = builder.genNewTag()
 
 		lastNodeId = builder.appendNode(&plan.Node{

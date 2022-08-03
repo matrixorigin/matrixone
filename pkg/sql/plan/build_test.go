@@ -31,7 +31,7 @@ func TestSingleSQL(t *testing.T) {
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
 	// sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
-	sql := "select N_NAME from nation union select N_NAME from nation intersect select N_NAME from nation order by N_NAME"
+	sql := "select N_NAME from nation union select N_NAME from nation order by N_NAME"
 	// sql := "explain a"
 	// sql := "select 18446744073709551500"
 	// stmts, err := mysql.Parse(sql)
@@ -521,6 +521,26 @@ func TestDerivedTableSqlBuilder(t *testing.T) {
 		"select c_custkey2222 from (select c_custkey from CUSTOMER group by c_custkey ) a",    //column not exist
 		"select col1 from (select c_custkey from CUSTOMER group by c_custkey ) a(col1, col2)", //column length not match
 		"select c_custkey from (select c_custkey from CUSTOMER group by c_custkey) a(col1)",   //column not exist
+	}
+	runTestShouldError(mock, t, sqls)
+}
+
+//test derived table plan building
+func TestUnionSqlBuilder(t *testing.T) {
+	mock := NewMockOptimizer()
+	// should pass
+	sqls := []string{
+		"select 1 union select 2",
+		"select 1 union select 2 intersect select 2 union select 1.1",
+		"select 1 as a union select 2 order by a limit 1",
+		"select n_name from nation union select n_comment from nation order by n_name",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	// should error
+	sqls = []string{
+		"select 1 union select 2, 'a'",
+		"select n_name as a from nation union select n_comment from nation order by n_name",
 	}
 	runTestShouldError(mock, t, sqls)
 }
