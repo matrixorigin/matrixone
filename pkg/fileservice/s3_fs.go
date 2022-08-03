@@ -272,6 +272,10 @@ func (m *S3FS) write(ctx context.Context, vector IOVector) error {
 
 func (m *S3FS) Read(ctx context.Context, vector *IOVector) error {
 
+	if len(vector.Entries) == 0 {
+		return ErrEmptyVector
+	}
+
 	if m.memLRU == nil {
 		// no cache
 		return m.read(ctx, vector)
