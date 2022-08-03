@@ -134,7 +134,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		return err
 	}
 	defer ctr.freeJoinCondition(proc)
-	rows := ctr.mp.GroupCount()
+
 	itr := ctr.mp.NewIterator()
 	count := ctr.bat.Length()
 	for i := 0; i < count; i += hashmap.UnitLimit {
@@ -142,6 +142,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
+		rows := ctr.mp.GroupCount()
 		vals, zvals, err := itr.Insert(i, n, ctr.vecs)
 		if err != nil {
 			ctr.bat.Clean(proc.GetMheap())
@@ -153,8 +154,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				continue
 			}
 			if v > rows {
-				rows++
-				ctr.mp.AddGroup()
 				ctr.sels = append(ctr.sels, proc.GetMheap().GetSels())
 			}
 			ai := int64(v) - 1

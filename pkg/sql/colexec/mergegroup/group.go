@@ -194,12 +194,13 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
+		rowCount := ctr.intHashMap.GroupCount()
 		vals, _, err := itr.Insert(i, n, bat.Vecs)
 		if err != nil {
 			return err
 		}
 		if !flg {
-			if err := ctr.batchFill(i, n, bat, vals, ctr.intHashMap, proc); err != nil {
+			if err := ctr.batchFill(i, n, bat, vals, rowCount, proc); err != nil {
 				return err
 			}
 		}
@@ -223,12 +224,13 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
+		rowCount := ctr.strHashMap.GroupCount()
 		vals, _, err := itr.Insert(i, n, bat.Vecs)
 		if err != nil {
 			return err
 		}
 		if !flg {
-			if err := ctr.batchFill(i, n, bat, vals, ctr.strHashMap, proc); err != nil {
+			if err := ctr.batchFill(i, n, bat, vals, rowCount, proc); err != nil {
 				return err
 			}
 		}
@@ -240,13 +242,12 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 	return nil
 }
 
-func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, mp hashmap.HashMap, proc *process.Process) error {
+func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, rowCount uint64, proc *process.Process) error {
 	cnt := 0
 	copy(ctr.inserted[:n], ctr.zInserted[:n])
 	for k, v := range vals {
-		if v > mp.GroupCount() {
+		if v > rowCount {
 			ctr.inserted[k] = 1
-			mp.AddGroup()
 			cnt++
 			ctr.bat.Zs = append(ctr.bat.Zs, 0)
 		}
@@ -266,7 +267,9 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, m
 		}
 	}
 	for j, agg := range ctr.bat.Aggs {
-		agg.BatchMerge(bat.Aggs[j], int64(i), ctr.inserted[:n], vals)
+		if err := agg.BatchMerge(bat.Aggs[j], int64(i), ctr.inserted[:n], vals); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -241,9 +241,9 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	}
 	switch ctr.typ {
 	case H8:
-		err = ctr.processH8(bat, ap, proc)
+		err = ctr.processH8(bat, proc)
 	default:
-		err = ctr.processHStr(bat, ap, proc)
+		err = ctr.processHStr(bat, proc)
 	}
 	if err != nil {
 		ctr.clean()
@@ -263,7 +263,7 @@ func (ctr *container) processH0(bat *batch.Batch, ap *Argument, proc *process.Pr
 	return nil
 }
 
-func (ctr *container) processH8(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 	count := bat.Length()
 	itr := ctr.intHashMap.NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit {
@@ -271,18 +271,19 @@ func (ctr *container) processH8(bat *batch.Batch, ap *Argument, proc *process.Pr
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
+		rows := ctr.intHashMap.GroupCount()
 		vals, _, err := itr.Insert(i, n, ctr.vecs)
 		if err != nil {
 			return err
 		}
-		if err := ctr.batchFill(i, n, bat, vals, ap, ctr.intHashMap, proc); err != nil {
+		if err := ctr.batchFill(i, n, bat, vals, rows, proc); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (ctr *container) processHStr(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error {
 	count := bat.Length()
 	itr := ctr.strHashMap.NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit { // batch
@@ -290,24 +291,24 @@ func (ctr *container) processHStr(bat *batch.Batch, ap *Argument, proc *process.
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
+		rows := ctr.strHashMap.GroupCount()
 		vals, _, err := itr.Insert(i, n, ctr.vecs)
 		if err != nil {
 			return err
 		}
-		if err := ctr.batchFill(i, n, bat, vals, ap, ctr.strHashMap, proc); err != nil {
+		if err := ctr.batchFill(i, n, bat, vals, rows, proc); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, ap *Argument, mp hashmap.HashMap, proc *process.Process) error {
+func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, hashRows uint64, proc *process.Process) error {
 	cnt := 0
 	copy(ctr.inserted[:n], ctr.zInserted[:n])
 	for k, v := range vals[:n] {
-		if v > mp.GroupCount() {
+		if v > hashRows {
 			ctr.inserted[k] = 1
-			mp.AddGroup()
 			cnt++
 			ctr.bat.Zs = append(ctr.bat.Zs, 0)
 		}
