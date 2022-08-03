@@ -31,14 +31,14 @@ func TestSingleSQL(t *testing.T) {
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
 	// sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
-	sql := "select N_NAME from nation union select N_NAME from nation order by N_NAME"
+	sql := "select 1 union (select 2 union select 3)"
 	// sql := "explain a"
 	// sql := "select 18446744073709551500"
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)
 	// }
-	// t.Logf("%+v", string(getJson(stmts[0], t)))
+	// t.Logf("%+v", string(getJSON(stmts[0], t)))
 
 	mock := NewMockOptimizer()
 	logicPlan, err := runOneStmt(mock, t, sql)
@@ -531,6 +531,9 @@ func TestUnionSqlBuilder(t *testing.T) {
 	// should pass
 	sqls := []string{
 		"select 1 union select 2",
+		"select 1 union (select 2 union select 3)",
+		"(select 1 union select 2) union select 3 intersect select 4 order by 1",
+		"select 1 union select null",
 		"select n_name from nation intersect select n_name from nation2",
 		"select n_name from nation minus select n_name from nation2",
 		"select 1 union select 2 intersect select 2 union all select 1.1 minus select 22222",

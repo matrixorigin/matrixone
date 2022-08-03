@@ -644,8 +644,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	}
 	return builder.qry, nil
 }
+
 func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isRoot bool) (int32, error) {
-	var selectStmts []tree.SelectStatement
+	var selectStmts []tree.Statement
 	var unionTypes []plan.Node_NodeType
 
 	// get Union selectStmts
@@ -660,9 +661,14 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 	nodes := make([]int32, selectStmtLength)
 	subCtxList := make([]*BindContext, selectStmtLength)
 	var projectLength int
+	var nodeID int32
 	for idx, sltStmt := range selectStmts {
 		subCtx := NewBindContext(builder, ctx)
-		nodeID, err := builder.buildSelect(&tree.Select{Select: sltStmt}, subCtx, false)
+		if slt, ok := sltStmt.(*tree.Select); ok {
+			nodeID, err = builder.buildSelect(slt, subCtx, false)
+		} else {
+			nodeID, err = builder.buildSelect(&tree.Select{Select: sltStmt}, subCtx, false)
+		}
 		if err != nil {
 			return 0, err
 		}

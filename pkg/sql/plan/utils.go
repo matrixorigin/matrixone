@@ -494,7 +494,7 @@ func getNumOfCharacters(str string) int {
 	return len(strRune)
 }
 
-func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.SelectStatement, unionTypes *[]plan.Node_NodeType) error {
+func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTypes *[]plan.Node_NodeType) error {
 	switch leftStmt := stmt.Left.(type) {
 	case *tree.UnionClause:
 		err := getUnionSelects(leftStmt, selects, unionTypes)
@@ -504,7 +504,7 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.SelectStatement, un
 	case *tree.SelectClause:
 		*selects = append(*selects, leftStmt)
 	case *tree.ParenSelect:
-		*selects = append(*selects, leftStmt)
+		*selects = append(*selects, leftStmt.Select)
 	default:
 		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement in union: '%v'", tree.String(leftStmt, dialect.MYSQL)))
 	}
