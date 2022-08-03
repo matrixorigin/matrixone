@@ -87,7 +87,7 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.Prepar
 	schema := task.meta.GetSchema()
 	var view *model.ColumnView
 	for _, def := range schema.ColDefs {
-		if def.IsHidden() {
+		if def.IsPhyAddr() {
 			continue
 		}
 		view, err = task.compacted.GetColumnDataById(def.Idx, nil)
@@ -122,16 +122,16 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.Prepar
 			return preparer, err
 		}
 	}
-	// Prepare hidden column data
-	hidden, err := model.PrepareHiddenData(
-		catalog.HiddenColumnType,
+	// Prepare PhyAddr column data
+	phyAddrVec, err := model.PreparePhyAddrData(
+		catalog.PhyAddrColumnType,
 		blkKey,
 		0,
 		uint32(preparer.Columns.Length()))
 	if err != nil {
 		return
 	}
-	preparer.Columns.AddVector(catalog.HiddenColumnName, hidden)
+	preparer.Columns.AddVector(catalog.PhyAddrColumnName, phyAddrVec)
 	return
 }
 
