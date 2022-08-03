@@ -504,7 +504,7 @@ message Query {
 		MERGE		= 5;
 	}
 
-	enum EngineType {
+	enum QueryType {
 		TP 	= 0;
 		AP	= 1;
 	}
@@ -531,7 +531,7 @@ message Query {
 	// return head
 	repeated string headings = 5;
 
-	EngineType engine_type = 6;
+	QueryType query_type = 6;
 }
 
 message TransationControl {
