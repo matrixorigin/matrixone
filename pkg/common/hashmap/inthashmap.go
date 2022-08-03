@@ -84,6 +84,10 @@ func (m *IntHashMap) NewIterator() *intHashMapIterator {
 	}
 }
 
+func (m *IntHashMap) HasNull() bool {
+	return m.hasNull
+}
+
 func (m *IntHashMap) Free() {
 	m.hashMap.Free(m.m)
 }

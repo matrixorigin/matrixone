@@ -28,6 +28,7 @@ var OneUInt8s []uint8
 var OneInt64s []int64
 
 type HashMap interface {
+	HasNull() bool
 	Free()
 	AddGroup()
 	AddGroups(uint64)

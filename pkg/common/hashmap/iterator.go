@@ -108,3 +108,25 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) (
 	}
 	return itr.mp.values[:count], itr.mp.zValues[:count], err
 }
+
+func updateHashTableRows(hashMap HashMap, vs []uint64, zvs []int64) {
+	var count uint64 = 0
+	groupCount := hashMap.GroupCount()
+	if hashMap.HasNull() {
+		for _, v := range vs {
+			if v > groupCount {
+				count++
+			}
+		}
+	} else {
+		for i, v := range vs {
+			if zvs[i] == 0 {
+				continue
+			}
+			if v > groupCount {
+				count++
+			}
+		}
+	}
+	hashMap.AddGroups(count)
+}
