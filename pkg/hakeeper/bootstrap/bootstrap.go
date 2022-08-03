@@ -129,9 +129,10 @@ func (bm *Manager) bootstrapDN(alloc util.IDAllocator, dn pb.DNState) (commands 
 			Bootstrapping: true,
 			ConfigChange: &pb.ConfigChange{
 				Replica: pb.Replica{
-					UUID:      dnStores[i],
-					ShardID:   dnRecord.ShardID,
-					ReplicaID: replicaID,
+					UUID:       dnStores[i],
+					ShardID:    dnRecord.ShardID,
+					ReplicaID:  replicaID,
+					LogShardID: dnRecord.LogShardID,
 				},
 				ChangeType: pb.StartReplica,
 			},
