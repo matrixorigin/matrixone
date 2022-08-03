@@ -16,6 +16,14 @@ package plan
 
 import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
+func DeepCopyExprList(list []*Expr) []*Expr {
+	newList := make([]*Expr, len(list))
+	for idx, expr := range list {
+		newList[idx] = DeepCopyExpr(expr)
+	}
+	return newList
+}
+
 func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode := &Node{
 		NodeType:        node.NodeType,
