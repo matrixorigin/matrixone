@@ -1,11 +1,18 @@
-CFLAGS=-I./external/decNumber -g -O3 -Wall -Werror
+DEBUG_OPT :=
+OPT_LV := -O3
+CFLAGS=-I./external/decNumber -g ${OPT_LV} -Wall -Werror
 OBJS=mo.o arith.o decimal.o
 
 all: libmo.a
 
 libmo.a: $(OBJS)
-	$(MAKE) -C external/decNumber
+	$(MAKE) ${DEBUG_OPT} -C external/decNumber
 	ar -rcs libmo.a *.o
+
+.PHONY: debug
+debug: override OPT_LV := -O0
+debug: override DEBUG_OPT := debug
+debug: all
 
 .PHONY: clean
 clean:

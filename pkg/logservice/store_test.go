@@ -498,6 +498,18 @@ func TestRemoveReplica(t *testing.T) {
 	}
 }
 
+func TestStopReplicaCanStopHAKeeperTicker(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.id()
+		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+		assert.Equal(t, int64(1), store.tickerStopper.GetTaskCount())
+		assert.NoError(t, store.stopReplica(hakeeper.DefaultHAKeeperShardID, 1))
+		assert.Equal(t, int64(0), store.tickerStopper.GetTaskCount())
+	}
+	runStoreTest(t, fn)
+}
+
 func hasShard(s *store, shardID uint64) bool {
 	hb := s.getHeartbeatMessage()
 	for _, info := range hb.Replicas {

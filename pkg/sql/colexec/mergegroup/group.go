@@ -24,7 +24,7 @@ import (
 )
 
 func String(_ interface{}, buf *bytes.Buffer) {
-	buf.WriteString("γ()")
+	buf.WriteString("mergeroup()")
 }
 
 func Prepare(_ *process.Process, arg interface{}) error {
@@ -57,6 +57,7 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 						vec, err := agg.Eval(proc.GetMheap())
 						if err != nil {
 							ctr.state = End
+							ctr.clean()
 							ctr.bat.Clean(proc.GetMheap())
 							return false, err
 						}
@@ -71,6 +72,7 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 				anal.Output(ctr.bat)
 				ctr.bat.ExpandNulls()
 			}
+			ctr.clean()
 			proc.SetInputBatch(ctr.bat)
 			ctr.bat = nil
 			return true, nil
@@ -139,10 +141,14 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 			ctr.typ = H0
 		case size <= 8:
 			ctr.typ = H8
-			ctr.intHashMap = hashmap.NewIntHashMap(true)
+			if ctr.intHashMap, err = hashmap.NewIntHashMap(true, 0, 0, proc.GetMheap()); err != nil {
+				return err
+			}
 		default:
 			ctr.typ = HStr
-			ctr.strHashMap = hashmap.NewStrMap(true)
+			if ctr.strHashMap, err = hashmap.NewStrMap(true, 0, 0, proc.GetMheap()); err != nil {
+				return err
+			}
 		}
 	}
 	switch ctr.typ {
@@ -154,8 +160,8 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 		err = ctr.processHStr(bat, proc)
 	}
 	if err != nil {
-		ctr.bat.Clean(proc.Mp)
-		ctr.bat = nil
+		ctr.clean()
+		ctr.cleanBatch(proc)
 		return err
 	}
 	return nil
@@ -178,7 +184,7 @@ func (ctr *container) processH0(bat *batch.Batch, proc *process.Process) error {
 
 func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 	count := bat.Length()
-	itr := ctr.intHashMap.NewIterator(0, 0)
+	itr := ctr.intHashMap.NewIterator()
 	flg := ctr.bat == nil
 	if !flg {
 		defer bat.Clean(proc.Mp)
@@ -188,7 +194,10 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		vals, _ := itr.Insert(i, n, bat.Vecs)
+		vals, _, err := itr.Insert(i, n, bat.Vecs)
+		if err != nil {
+			return err
+		}
 		if !flg {
 			if err := ctr.batchFill(i, n, bat, vals, ctr.intHashMap, proc); err != nil {
 				return err
@@ -204,7 +213,7 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 
 func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error {
 	count := bat.Length()
-	itr := ctr.strHashMap.NewIterator(0, 0)
+	itr := ctr.strHashMap.NewIterator()
 	flg := ctr.bat == nil
 	if !flg {
 		defer bat.Clean(proc.Mp)
@@ -214,7 +223,10 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		vals, _ := itr.Insert(i, n, bat.Vecs)
+		vals, _, err := itr.Insert(i, n, bat.Vecs)
+		if err != nil {
+			return err
+		}
 		if !flg {
 			if err := ctr.batchFill(i, n, bat, vals, ctr.strHashMap, proc); err != nil {
 				return err
@@ -257,4 +269,22 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, m
 		agg.BatchMerge(bat.Aggs[j], int64(i), ctr.inserted[:n], vals)
 	}
 	return nil
+}
+
+func (ctr *container) clean() {
+	if ctr.intHashMap != nil {
+		ctr.intHashMap.Free()
+		ctr.intHashMap = nil
+	}
+	if ctr.strHashMap != nil {
+		ctr.strHashMap.Free()
+		ctr.strHashMap = nil
+	}
+}
+
+func (ctr *container) cleanBatch(proc *process.Process) {
+	if ctr.bat != nil {
+		ctr.bat.Clean(proc.GetMheap())
+		ctr.bat = nil
+	}
 }

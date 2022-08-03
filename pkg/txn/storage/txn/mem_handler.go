@@ -21,6 +21,9 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
@@ -44,22 +47,31 @@ type MemHandler struct {
 	tables struct {
 		sync.Mutex
 		// relation id -> table
-		Map map[string]*Table[AnyKey, AnyRow]
+		Map map[string]*Table[AnyKey, *AnyRow]
 	}
 
 	// iterators
 	iterators struct {
 		sync.Mutex
 		// iterator id -> iterator
-		Map map[string]*TableIter[AnyKey, AnyRow]
+		Map map[string]*Iter[AnyKey, *AnyRow]
 	}
+}
+
+type Iter[
+	K Ordered[K],
+	R Row[K],
+] struct {
+	TableIter   *TableIter[K, R]
+	AttrsMap    map[string]*AttributeRow
+	FirstCalled bool
 }
 
 func NewMemHandler() *MemHandler {
 	h := &MemHandler{}
 	h.transactions.Map = make(map[string]*Transaction)
-	h.tables.Map = make(map[string]*Table[AnyKey, AnyRow])
-	h.iterators.Map = make(map[string]*TableIter[AnyKey, AnyRow])
+	h.tables.Map = make(map[string]*Table[AnyKey, *AnyRow])
+	h.iterators.Map = make(map[string]*Iter[AnyKey, *AnyRow])
 	h.databases = NewTable[Text, DatabaseRow]()
 	h.relations = NewTable[Text, RelationRow]()
 	h.attributes = NewTable[Text, AttributeRow]()
@@ -181,10 +193,19 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 	return nil
 }
 
-// HandleCloseTableIter implements Handler
-func (*MemHandler) HandleCloseTableIter(meta txn.TxnMeta, req txnengine.CloseTableIterReq, resp *txnengine.CloseTableIterResp) error {
-	//TODO
-	panic("unimplemented")
+func (m *MemHandler) HandleCloseTableIter(meta txn.TxnMeta, req txnengine.CloseTableIterReq, resp *txnengine.CloseTableIterResp) error {
+	m.iterators.Lock()
+	defer m.iterators.Unlock()
+	iter, ok := m.iterators.Map[req.IterID]
+	if !ok {
+		resp.ErrIterNotFound = true
+		return nil
+	}
+	delete(m.iterators.Map, req.IterID)
+	if err := iter.TableIter.Close(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (m *MemHandler) HandleCreateDatabase(meta txn.TxnMeta, req txnengine.CreateDatabaseReq, resp *txnengine.CreateDatabaseResp) error {
@@ -390,10 +411,26 @@ func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req txnengine.DelTableD
 	return nil
 }
 
-// HandleDelete implements Handler
-func (*MemHandler) HandleDelete(meta txn.TxnMeta, req txnengine.DeleteReq, resp *txnengine.DeleteResp) error {
-	//TODO
-	panic("unimplemented")
+func (m *MemHandler) HandleDelete(meta txn.TxnMeta, req txnengine.DeleteReq, resp *txnengine.DeleteResp) error {
+	m.tables.Lock()
+	table, ok := m.tables.Map[req.TableID]
+	m.tables.Unlock()
+	if !ok {
+		resp.ErrTableNotFound = true
+		return nil
+	}
+
+	tx := m.getTx(meta)
+	for i := 0; i < req.Vector.Length; i++ {
+		primaryKey := AnyKey{
+			typeConv(vectorAt(req.Vector, i)),
+		}
+		if err := table.Delete(tx, primaryKey); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (m *MemHandler) HandleDeleteDatabase(meta txn.TxnMeta, req txnengine.DeleteDatabaseReq, resp *txnengine.DeleteDatabaseResp) error {
@@ -533,10 +570,40 @@ func (m *MemHandler) HandleGetTableDefs(meta txn.TxnMeta, req txnengine.GetTable
 	return nil
 }
 
-// HandleNewTableIter implements Handler
-func (*MemHandler) HandleNewTableIter(meta txn.TxnMeta, req txnengine.NewTableIterReq, resp *txnengine.NewTableIterResp) error {
-	//TODO
-	panic("unimplemented")
+func (m *MemHandler) HandleNewTableIter(meta txn.TxnMeta, req txnengine.NewTableIterReq, resp *txnengine.NewTableIterResp) error {
+	tx := m.getTx(meta)
+
+	m.tables.Lock()
+	defer m.tables.Unlock()
+	table, ok := m.tables.Map[req.TableID]
+	if !ok {
+		resp.ErrTableNotFound = true
+		return nil
+	}
+
+	tableIter := table.NewIter(tx)
+	attrsMap := make(map[string]*AttributeRow)
+	attrIter := m.attributes.NewIter(tx)
+	for ok := attrIter.First(); ok; ok = attrIter.Next() {
+		_, row := attrIter.Read()
+		if row.RelationID != req.TableID {
+			continue
+		}
+		attrsMap[row.Name] = row
+	}
+
+	iter := &Iter[AnyKey, *AnyRow]{
+		TableIter: tableIter,
+		AttrsMap:  attrsMap,
+	}
+
+	m.iterators.Lock()
+	defer m.iterators.Unlock()
+	id := uuid.NewString()
+	resp.IterID = id
+	m.iterators.Map[id] = iter
+
+	return nil
 }
 
 func (m *MemHandler) HandleOpenDatabase(meta txn.TxnMeta, req txnengine.OpenDatabaseReq, resp *txnengine.OpenDatabaseResp) error {
@@ -571,28 +638,174 @@ func (m *MemHandler) HandleOpenRelation(meta txn.TxnMeta, req txnengine.OpenRela
 	return nil
 }
 
-// HandleRead implements Handler
-func (*MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *txnengine.ReadResp) error {
-	//TODO
-	panic("unimplemented")
+func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *txnengine.ReadResp) error {
+	m.iterators.Lock()
+	iter, ok := m.iterators.Map[req.IterID]
+	if !ok {
+		m.iterators.Unlock()
+		resp.ErrIterNotFound = true
+		return nil
+	}
+	m.iterators.Unlock()
+
+	b := batch.New(false, req.ColNames)
+
+	for i, name := range req.ColNames {
+		b.Vecs[i] = vector.New(iter.AttrsMap[name].Type)
+	}
+
+	fn := iter.TableIter.First
+	if iter.FirstCalled {
+		fn = iter.TableIter.Next
+	} else {
+		iter.FirstCalled = true
+	}
+	maxRows := 1024
+	rows := 0
+
+	for ok := fn(); ok; ok = iter.TableIter.Next() {
+		if rows > maxRows {
+			break
+		}
+
+		_, row := iter.TableIter.Read()
+
+		for i, name := range req.ColNames {
+			value, ok := (*row).attributes[name]
+			if !ok {
+				resp.ErrColumnNotFound = name
+				return nil
+			}
+			b.Vecs[i].Append(value, nil)
+		}
+		rows++
+	}
+
+	return nil
 }
 
-// HandleTruncate implements Handler
-func (*MemHandler) HandleTruncate(meta txn.TxnMeta, req txnengine.TruncateReq, resp *txnengine.TruncateResp) error {
-	//TODO
-	panic("unimplemented")
+func (m *MemHandler) HandleTruncate(meta txn.TxnMeta, req txnengine.TruncateReq, resp *txnengine.TruncateResp) error {
+	tx := m.getTx(meta)
+	_, err := m.relations.Get(tx, Text(req.TableID))
+	if errors.Is(err, sql.ErrNoRows) {
+		resp.ErrTableNotFound = true
+		return nil
+	}
+	m.tables.Lock()
+	defer m.tables.Unlock()
+	delete(m.tables.Map, req.TableID)
+	return nil
 }
 
-// HandleUpdate implements Handler
-func (*MemHandler) HandleUpdate(meta txn.TxnMeta, req txnengine.UpdateReq, resp *txnengine.UpdateResp) error {
-	//TODO
-	panic("unimplemented")
+func (m *MemHandler) HandleUpdate(meta txn.TxnMeta, req txnengine.UpdateReq, resp *txnengine.UpdateResp) error {
+	tx := m.getTx(meta)
+
+	if err := m.rangeBatchPhysicalRows(
+		tx,
+		req.TableID,
+		req.Batch,
+		&resp.ErrTableNotFound,
+		func(
+			table *Table[AnyKey, *AnyRow],
+			row *AnyRow,
+		) error {
+			if err := table.Update(tx, row); err != nil {
+				return err
+			}
+			return nil
+		},
+	); err != nil {
+		return err
+	}
+
+	return nil
 }
 
-// HandleWrite implements Handler
-func (*MemHandler) HandleWrite(meta txn.TxnMeta, req txnengine.WriteReq, resp *txnengine.WriteResp) error {
-	//TODO
-	panic("unimplemented")
+func (m *MemHandler) HandleWrite(meta txn.TxnMeta, req txnengine.WriteReq, resp *txnengine.WriteResp) error {
+	tx := m.getTx(meta)
+
+	if err := m.rangeBatchPhysicalRows(
+		tx,
+		req.TableID,
+		req.Batch,
+		&resp.ErrTableNotFound,
+		func(
+			table *Table[AnyKey, *AnyRow],
+			row *AnyRow,
+		) error {
+			if err := table.Insert(tx, row); err != nil {
+				return err
+			}
+			return nil
+		},
+	); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *MemHandler) rangeBatchPhysicalRows(
+	tx *Transaction,
+	tableID string,
+	b *batch.Batch,
+	errTableNotFound *bool,
+	fn func(
+		*Table[AnyKey, *AnyRow],
+		*AnyRow,
+	) error,
+) error {
+
+	// load attributes
+	nameToAttrs := make(map[string]*AttributeRow)
+	iter := m.attributes.NewIter(tx)
+	defer iter.Close()
+	for ok := iter.First(); ok; ok = iter.Next() {
+		_, attrRow := iter.Read()
+		if attrRow.RelationID != tableID {
+			continue
+		}
+		nameToAttrs[attrRow.Name] = attrRow
+	}
+
+	if len(nameToAttrs) == 0 {
+		*errTableNotFound = true
+		return nil
+	}
+
+	// write
+	table := m.ensureTable(tableID)
+	batchIter := NewBatchIter(b)
+	for {
+		row := batchIter()
+		if len(row) == 0 {
+			break
+		}
+
+		physicalRow := NewAnyRow()
+
+		for i, col := range row {
+			name := b.Attrs[i]
+
+			attr, ok := nameToAttrs[name]
+			if !ok {
+				return fmt.Errorf("unknown attr: %s", name)
+			}
+
+			if attr.Primary {
+				physicalRow.primaryKey = append(physicalRow.primaryKey, typeConv(col))
+			}
+
+			physicalRow.attributes[attr.ID] = col
+		}
+
+		if err := fn(table, physicalRow); err != nil {
+			return err
+		}
+
+	}
+
+	return nil
 }
 
 func (m *MemHandler) getTx(meta txn.TxnMeta) *Transaction {
@@ -605,4 +818,55 @@ func (m *MemHandler) getTx(meta txn.TxnMeta) *Transaction {
 		m.transactions.Map[id] = tx
 	}
 	return tx
+}
+
+func (m *MemHandler) ensureTable(relationID string) *Table[AnyKey, *AnyRow] {
+	m.tables.Lock()
+	defer m.tables.Unlock()
+	table, ok := m.tables.Map[relationID]
+	if !ok {
+		table = NewTable[AnyKey, *AnyRow]()
+		m.tables.Map[relationID] = table
+	}
+	return table
+}
+
+func (*MemHandler) HandleClose() error {
+	return nil
+}
+
+// HandleCommit implements Handler
+func (*MemHandler) HandleCommit(meta txn.TxnMeta) error {
+	//TODO
+	panic("unimplemented")
+}
+
+// HandleCommitting implements Handler
+func (*MemHandler) HandleCommitting(meta txn.TxnMeta) error {
+	//TODO
+	panic("unimplemented")
+}
+
+// HandleDestroy implements Handler
+func (*MemHandler) HandleDestroy() error {
+	//TODO
+	panic("unimplemented")
+}
+
+// HandlePrepare implements Handler
+func (*MemHandler) HandlePrepare(meta txn.TxnMeta) (timestamp.Timestamp, error) {
+	//TODO
+	panic("unimplemented")
+}
+
+// HandleRollback implements Handler
+func (*MemHandler) HandleRollback(meta txn.TxnMeta) error {
+	//TODO
+	panic("unimplemented")
+}
+
+// HandleStartRecovery implements Handler
+func (*MemHandler) HandleStartRecovery(chan txn.TxnMeta) {
+	//TODO
+	panic("unimplemented")
 }

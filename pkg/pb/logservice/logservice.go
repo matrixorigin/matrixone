@@ -165,6 +165,7 @@ func (m *ScheduleCommand) LogString() string {
 		RemoveReplica: "Remove",
 		StartReplica:  "Start",
 		StopReplica:   "Stop",
+		KillZombie:    "Kill",
 	}
 	scheUuid := m.UUID
 	if len(m.UUID) > 6 {

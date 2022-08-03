@@ -27,14 +27,18 @@ import (
 )
 
 func String(_ any, buf *bytes.Buffer) {
-	buf.WriteString(" left join ")
+	buf.WriteString(" single join ")
 }
 
 func Prepare(proc *process.Process, arg any) error {
+	var err error
+
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.sels = make([]int64, 0, 65536)
-	ap.ctr.mp = hashmap.NewStrMap(false)
+	if ap.ctr.mp, err = hashmap.NewStrMap(false, ap.Ibucket, ap.Nbucket, proc.GetMheap()); err != nil {
+		return err
+	}
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
@@ -57,6 +61,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
 				ctr.state = End
+				ctr.mp.Free()
 				return true, err
 			}
 			ctr.state = Probe
@@ -64,6 +69,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
+				ctr.mp.Free()
 				if ctr.bat != nil {
 					ctr.bat.Clean(proc.GetMheap())
 				}
@@ -75,6 +81,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			if ctr.bat.Length() == 0 {
 				if err := ctr.emptyProbe(bat, ap, proc, anal); err != nil {
 					ctr.state = End
+					ctr.mp.Free()
 					proc.SetInputBatch(nil)
 					return true, err
 				}
@@ -82,6 +89,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			} else {
 				if err := ctr.probe(bat, ap, proc, anal); err != nil {
 					ctr.state = End
+					ctr.mp.Free()
 					proc.SetInputBatch(nil)
 					return true, err
 				}
@@ -122,14 +130,17 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	}
 	defer ctr.freeJoinCondition(proc)
 	rows := ctr.mp.GroupCount()
-	itr := ctr.mp.NewIterator(ap.Ibucket, ap.Nbucket)
+	itr := ctr.mp.NewIterator()
 	count := ctr.bat.Length()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		vals, zvals := itr.Insert(i, n, ctr.vecs)
+		vals, zvals, err := itr.Insert(i, n, ctr.vecs)
+		if err != nil {
+			return err
+		}
 		for k, v := range vals[:n] {
 			if zvals[k] == 0 {
 				continue
@@ -204,7 +215,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	defer ctr.freeJoinCondition(proc)
 	count := bat.Length()
-	itr := ctr.mp.NewIterator(ap.Ibucket, ap.Nbucket)
+	itr := ctr.mp.NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {

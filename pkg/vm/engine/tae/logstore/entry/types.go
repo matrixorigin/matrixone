@@ -16,6 +16,7 @@ package entry
 
 import (
 	"io"
+	"os"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -51,6 +52,7 @@ type Desc interface {
 	SetPayloadSize(int)
 	GetInfoSize() int
 	SetInfoSize(int)
+	GetMetaSize() int
 	TotalSize() int
 	GetMetaBuf() []byte
 	IsFlush() bool
@@ -65,11 +67,17 @@ type Entry interface {
 	GetInfoBuf() []byte
 	SetInfoBuf(buf []byte)
 
-	Unmarshal([]byte) error
+	SetPayload([]byte) error
 	UnmarshalFromNode(*common.MemNode, bool) error
-	ReadFrom(io.Reader) (int64, error)
-	WriteTo(io.Writer) (int64, error)
 
+	Unmarshal(buf []byte) error
+	Marshal() (buf []byte, err error)
+	ReadFrom(io.Reader) (int64, error)
+	ReadAt(r *os.File, offset int) (int, error)
+	WriteTo(io.Writer) (int64, error)
+	PrepareWrite()
+
+	GetLsn() (gid uint32, lsn uint64)
 	WaitDone() error
 	DoneWithErr(error)
 	GetError() error

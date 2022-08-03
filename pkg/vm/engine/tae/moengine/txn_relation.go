@@ -69,15 +69,15 @@ func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {
 		v := MOToVectorTmp(vec, allNullables[idx])
 		bat.AddVector(data.Attrs[i], v)
 	}
-	hiddenIdx := catalog.GetAttrIdx(data.Attrs, schema.HiddenKey.Name)
-	for idx := 0; idx < bat.Vecs[hiddenIdx].Length(); idx++ {
-		v := bat.Vecs[hiddenIdx].Get(idx)
+	phyAddrIdx := catalog.GetAttrIdx(data.Attrs, schema.PhyAddrKey.Name)
+	for idx := 0; idx < bat.Vecs[phyAddrIdx].Length(); idx++ {
+		v := bat.Vecs[phyAddrIdx].Get(idx)
 		for i, attr := range bat.Attrs {
-			if schema.HiddenKey.Name == attr {
+			if schema.PhyAddrKey.Name == attr {
 				continue
 			}
 			colIdx := schema.GetColIdx(attr)
-			err := rel.handle.UpdateByHiddenKey(v, colIdx, bat.Vecs[i].Get(idx))
+			err := rel.handle.UpdateByPhyAddrKey(v, colIdx, bat.Vecs[i].Get(idx))
 			if err != nil {
 				return err
 			}
@@ -98,8 +98,8 @@ func (rel *txnRelation) Delete(_ context.Context, data *vector.Vector, col strin
 	}
 	vec := MOToVectorTmp(data, allNullables[idx])
 	defer vec.Close()
-	if schema.HiddenKey.Name == col {
-		return rel.handle.DeleteByHiddenKeys(vec)
+	if schema.PhyAddrKey.Name == col {
+		return rel.handle.DeleteByPhyAddrKeys(vec)
 	}
 	if !schema.HasPK() || schema.IsCompoundSortKey() {
 		panic(any("No valid primary key found"))
