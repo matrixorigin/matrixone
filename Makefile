@@ -83,7 +83,7 @@ vendor-build:
 
 # files generated from cmd/generate-config
 # they need to be deleted in the clean target
-CONFIG_CODE_GENERATED := ./pkg/config/system_vars.go ./pkg/config/system_vars_test.go
+CONFIG_CODE_GENERATED := ./pkg/config/system_vars.go ./pkg/config/system_vars_test.go ./system_vars_config.toml
 
 CONFIG_DEPS=cmd/generate-config/main.go  \
 	cmd/generate-config/config_template.go \
