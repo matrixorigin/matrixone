@@ -32,11 +32,19 @@ func New(m *mheap.Mheap) *Process {
 	}
 }
 
+func NewWithAnalyze(p *Process, ctx context.Context, regNumber int, anals []*AnalyzeInfo) *Process {
+	proc := NewFromProc(p, ctx, regNumber)
+	proc.AnalInfos = make([]*AnalyzeInfo, len(anals))
+	copy(proc.AnalInfos, anals)
+	return proc
+}
+
 // NewFromProc create a new Process based on another process.
-func NewFromProc(m *mheap.Mheap, p *Process, regNumber int) *Process {
-	proc := &Process{Mp: m}
-	ctx, cancel := context.WithCancel(context.Background())
+func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
+	proc := new(Process)
+	newctx, cancel := context.WithCancel(ctx)
 	proc.Id = p.Id
+	proc.Mp = p.Mp
 	proc.Lim = p.Lim
 	proc.Snapshot = p.Snapshot
 	proc.AnalInfos = p.AnalInfos
@@ -47,24 +55,11 @@ func NewFromProc(m *mheap.Mheap, p *Process, regNumber int) *Process {
 	proc.Reg.MergeReceivers = make([]*WaitRegister, regNumber)
 	for i := 0; i < regNumber; i++ {
 		proc.Reg.MergeReceivers[i] = &WaitRegister{
-			Ctx: ctx,
+			Ctx: newctx,
 			Ch:  make(chan *batch.Batch, 1),
 		}
 	}
 	return proc
-}
-
-func GetSels(proc *Process) []int64 {
-	if len(proc.Reg.Ss) == 0 {
-		return make([]int64, 0, 16)
-	}
-	sels := proc.Reg.Ss[0]
-	proc.Reg.Ss = proc.Reg.Ss[1:]
-	return sels[:0]
-}
-
-func PutSels(sels []int64, proc *Process) {
-	proc.Reg.Ss = append(proc.Reg.Ss, sels)
 }
 
 func (wreg *WaitRegister) MarshalBinary() ([]byte, error) {
@@ -107,29 +102,11 @@ func (proc *Process) InputBatch() *batch.Batch {
 	return proc.Reg.InputBatch
 }
 
-func (proc *Process) GetSels() []int64 {
-	if len(proc.Reg.Ss) == 0 {
-		return make([]int64, 0, 16)
-	}
-	sels := proc.Reg.Ss[0]
-	proc.Reg.Ss = proc.Reg.Ss[1:]
-	return sels[:0]
-}
-
 func (proc *Process) GetAnalyze(idx int) Analyze {
 	if idx >= len(proc.AnalInfos) {
 		return &analyze{analInfo: nil}
 	}
 	return &analyze{analInfo: proc.AnalInfos[idx]}
-}
-
-func (proc *Process) PutSels(sels []int64) {
-	proc.Reg.Ss = append(proc.Reg.Ss, sels)
-}
-
-func (proc *Process) GetBoolTyp(typ types.Type) (typ2 types.Type) {
-	typ.Oid = types.T_bool
-	return typ
 }
 
 func (proc *Process) AllocVector(typ types.Type, size int64) (*vector.Vector, error) {

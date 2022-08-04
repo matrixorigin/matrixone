@@ -16,13 +16,11 @@ package connector
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // Argument pipe connector
 type Argument struct {
-	Mmu  *guest.Mmu
 	vecs []*vector.Vector
 	Reg  *process.WaitRegister
 }

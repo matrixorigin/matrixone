@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -62,13 +63,9 @@ func testPrint(_ interface{}, _ *batch.Batch) error {
 	return nil
 }
 
-func TestInitAddress(t *testing.T) {
-	InitAddress("0")
-}
-
 func TestCompile(t *testing.T) {
 	for _, tc := range tcs {
-		c := New("test", tc.sql, "", tc.e, tc.proc)
+		c := New("test", tc.sql, "", context.TODO(), tc.e, tc.proc, nil)
 		err := c.Compile(tc.pn, nil, testPrint)
 		require.NoError(t, err)
 		c.GetAffectedRows()
@@ -79,7 +76,7 @@ func TestCompile(t *testing.T) {
 
 func TestEncode(t *testing.T) {
 	for _, tc := range tcs {
-		c := New("test", tc.sql, "", tc.e, tc.proc)
+		c := New("test", tc.sql, "", context.TODO(), tc.e, tc.proc, nil)
 		err := c.Compile(tc.pn, nil, testPrint)
 		require.NoError(t, err)
 		data, err := encoding.Encode(c.scope)
@@ -113,7 +110,7 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 
 func (s *Scope) equal(t *testing.T, r *Scope) {
 	require.Equal(t, s.Magic, r.Magic)
-	require.Equal(t, s.DispatchAll, r.DispatchAll)
+	require.Equal(t, s.IsEnd, r.IsEnd)
 	require.Equal(t, s.Plan, r.Plan)
 	{
 		if s.DataSource != nil {
