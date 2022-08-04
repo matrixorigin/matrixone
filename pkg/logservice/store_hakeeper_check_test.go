@@ -243,11 +243,26 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 
 		sendHeartbeat := func(ss []*Service) {
 			for _, s := range ss {
-				m := s.store.getHeartbeatMessage()
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-				defer cancel()
-				_, err := s.store.addLogStoreHeartbeat(ctx, m)
-				assert.NoError(t, err)
+				done := false
+				for i := 0; i < 10; i++ {
+					m := s.store.getHeartbeatMessage()
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					defer cancel()
+					_, err := s.store.addLogStoreHeartbeat(ctx, m)
+					if err == dragonboat.ErrTimeout {
+						time.Sleep(100 * time.Millisecond)
+					} else {
+						if err == nil {
+							done = true
+							break
+						} else {
+							t.Fatalf("failed to add heartbeat %v", err)
+						}
+					}
+				}
+				if !done {
+					t.Fatalf("failed to add heartbeat after 10 retries")
+				}
 			}
 		}
 		sendHeartbeat(services[:3])

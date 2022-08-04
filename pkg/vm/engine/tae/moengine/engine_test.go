@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"testing"
 
 	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -65,8 +66,34 @@ func TestEngine(t *testing.T) {
 
 	schema := catalog.MockSchema(13, 12)
 	defs, err := SchemaToDefs(schema)
-	defs[5].(*engine.AttributeDef).Attr.Default = engine.MakeDefaultExpr(true, int32(3), false)
-	defs[6].(*engine.AttributeDef).Attr.Default = engine.MakeDefaultExpr(true, nil, true)
+	defs[5].(*engine.AttributeDef).Attr.Default = &plan.Default{
+		NullAbility: true,
+		Expr: &plan.Expr{
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Isnull: false,
+					Value: &plan.Const_Sval{
+						Sval: "expr1",
+					},
+				},
+			},
+		},
+		OriginString: "expr1",
+	}
+	defs[6].(*engine.AttributeDef).Attr.Default = &plan.Default{
+		NullAbility: false,
+		Expr: &plan.Expr{
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Isnull: false,
+					Value: &plan.Const_Sval{
+						Sval: "expr2",
+					},
+				},
+			},
+		},
+		OriginString: "expr2",
+	}
 	assert.NoError(t, err)
 	err = dbase.Create(ctx, schema.Name, defs)
 	assert.Nil(t, err)
@@ -78,11 +105,10 @@ func TestEngine(t *testing.T) {
 	rDefs, _ := rel.TableDefs(ctx)
 	assert.Equal(t, 14, len(rDefs))
 	rAttr := rDefs[5].(*engine.AttributeDef).Attr
-	assert.Equal(t, int32(3), rAttr.Default.Value.(int32))
+	assert.Equal(t, true, rAttr.Default.NullAbility)
 	rAttr = rDefs[6].(*engine.AttributeDef).Attr
-	assert.Equal(t, true, rAttr.Default.IsNull)
-	rAttr = rDefs[7].(*engine.AttributeDef).Attr
-	assert.Equal(t, false, rAttr.Default.Exist)
+	assert.Equal(t, false, rAttr.Default.NullAbility)
+	assert.Equal(t, "expr2", rAttr.Default.OriginString)
 	bat := catalog.MockBatch(schema, 100)
 	defer bat.Close()
 
@@ -142,8 +168,34 @@ func TestEngineAllType(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(18, 12)
 	defs, err := SchemaToDefs(schema)
-	defs[5].(*engine.AttributeDef).Attr.Default = engine.MakeDefaultExpr(true, uint16(3), false)
-	defs[6].(*engine.AttributeDef).Attr.Default = engine.MakeDefaultExpr(true, nil, true)
+	defs[5].(*engine.AttributeDef).Attr.Default = &plan.Default{
+		NullAbility: true,
+		Expr: &plan.Expr{
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Isnull: false,
+					Value: &plan.Const_Sval{
+						Sval: "expr1",
+					},
+				},
+			},
+		},
+		OriginString: "expr1",
+	}
+	defs[6].(*engine.AttributeDef).Attr.Default = &plan.Default{
+		NullAbility: false,
+		Expr: &plan.Expr{
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Isnull: false,
+					Value: &plan.Const_Sval{
+						Sval: "expr2",
+					},
+				},
+			},
+		},
+		OriginString: "expr2",
+	}
 	assert.NoError(t, err)
 	err = dbase.Create(ctx, schema.Name, defs)
 	assert.Nil(t, err)
@@ -155,9 +207,9 @@ func TestEngineAllType(t *testing.T) {
 	rDefs, _ := rel.TableDefs(ctx)
 	assert.Equal(t, 19, len(rDefs))
 	rAttr := rDefs[5].(*engine.AttributeDef).Attr
-	assert.Equal(t, uint16(3), rAttr.Default.Value.(uint16))
+	assert.Equal(t, true, rAttr.Default.NullAbility)
 	rAttr = rDefs[6].(*engine.AttributeDef).Attr
-	assert.Equal(t, true, rAttr.Default.IsNull)
+	assert.Equal(t, "expr2", rAttr.Default.OriginString)
 	basebat := catalog.MockBatch(schema, 100)
 	defer basebat.Close()
 
@@ -463,8 +515,34 @@ func TestCopy1(t *testing.T) {
 func checkSysTable(t *testing.T, name string, dbase engine.Database, txn Txn, relcnt int, schema *catalog.Schema) {
 	ctx := context.TODO()
 	defs, err := SchemaToDefs(schema)
-	defs[5].(*engine.AttributeDef).Attr.Default = engine.MakeDefaultExpr(true, int32(3), false)
-	defs[6].(*engine.AttributeDef).Attr.Default = engine.MakeDefaultExpr(true, nil, true)
+	defs[5].(*engine.AttributeDef).Attr.Default = &plan.Default{
+		NullAbility: true,
+		Expr: &plan.Expr{
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Isnull: false,
+					Value: &plan.Const_Sval{
+						Sval: "expr1",
+					},
+				},
+			},
+		},
+		OriginString: "expr1",
+	}
+	defs[6].(*engine.AttributeDef).Attr.Default = &plan.Default{
+		NullAbility: false,
+		Expr: &plan.Expr{
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Isnull: false,
+					Value: &plan.Const_Sval{
+						Sval: "expr2",
+					},
+				},
+			},
+		},
+		OriginString: "expr2",
+	}
 	assert.NoError(t, err)
 	err = dbase.Create(ctx, name, defs)
 	assert.Nil(t, err)
@@ -478,11 +556,10 @@ func checkSysTable(t *testing.T, name string, dbase engine.Database, txn Txn, re
 		assert.Equal(t, defs[i], def)
 	}
 	rAttr := rDefs[5].(*engine.AttributeDef).Attr
-	assert.Equal(t, int32(3), rAttr.Default.Value.(int32))
+	assert.Equal(t, true, rAttr.Default.NullAbility)
 	rAttr = rDefs[6].(*engine.AttributeDef).Attr
-	assert.Equal(t, true, rAttr.Default.IsNull)
-	rAttr = rDefs[7].(*engine.AttributeDef).Attr
-	assert.Equal(t, false, rAttr.Default.Exist)
+	assert.Equal(t, false, rAttr.Default.NullAbility)
+	assert.Equal(t, "expr2", rAttr.Default.OriginString)
 	bat := catalog.MockBatch(schema, 100)
 	defer bat.Close()
 
