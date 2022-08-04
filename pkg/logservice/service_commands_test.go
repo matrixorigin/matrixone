@@ -31,14 +31,15 @@ import (
 func TestBackgroundTickAndHeartbeat(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := Config{
-		UUID:                uuid.New().String(),
-		FS:                  vfs.NewStrictMem(),
-		DeploymentID:        1,
-		RTTMillisecond:      5,
-		DataDir:             "data-1",
-		ServiceAddress:      "127.0.0.1:9002",
-		RaftAddress:         "127.0.0.1:9000",
-		GossipAddress:       "127.0.0.1:9001",
+		UUID:           uuid.New().String(),
+		FS:             vfs.NewStrictMem(),
+		DeploymentID:   1,
+		RTTMillisecond: 5,
+		DataDir:        "data-1",
+		ServiceAddress: "127.0.0.1:9002",
+		RaftAddress:    "127.0.0.1:9000",
+		GossipAddress:  "127.0.0.1:9001",
+		// below is an unreachable address intentionally set
 		GossipSeedAddresses: []string{"127.0.0.1:9010"},
 	}
 	cfg.HeartbeatInterval.Duration = 5 * time.Millisecond

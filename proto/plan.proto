@@ -430,6 +430,12 @@ message Node {
 		INSERT = 51;
 		UPDATE = 52;
 		DELETE = 53;
+
+		//
+		INTERSECT = 54;
+		INTERSECT_ALL = 55;
+		MINUS = 56;
+		MINUS_ALL = 57;
 	}
 
 	enum JoinFlag {

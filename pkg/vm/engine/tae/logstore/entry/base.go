@@ -15,6 +15,7 @@
 package entry
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -34,219 +35,6 @@ var (
 	}}
 )
 
-type Base struct {
-	*descriptor
-	node      *common.MemNode
-	payload   []byte
-	info      any
-	infobuf   []byte
-	wg        sync.WaitGroup
-	t0        time.Time
-	printTime bool
-	err       error
-}
-
-type Info struct {
-	Group uint32
-	// CommitId    uint64 //0 for RollBack
-	TxnId       uint64 //0 for entrys not in txn
-	Checkpoints []CkpRanges
-	Uncommits   []Tid
-
-	GroupLSN uint64
-
-	PostCommitVersion int
-	Info              any
-}
-
-func (info *Info) Marshal() []byte {
-	buf := make([]byte, 128)
-	pos := 0
-	binary.BigEndian.PutUint32(buf[pos:pos+4], info.Group)
-	pos += 4
-	binary.BigEndian.PutUint64(buf[pos:pos+8], info.TxnId)
-	pos += 8
-
-	binary.BigEndian.PutUint64(buf[pos:pos+8], uint64(info.PostCommitVersion))
-	pos += 8
-
-	length := uint64(len(info.Checkpoints))
-	binary.BigEndian.PutUint64(buf[pos:pos+8], length)
-	pos += 8
-	for _, ckps := range info.Checkpoints {
-		if len(buf) < pos+12 {
-			buf = append(buf, make([]byte, 128)...)
-		}
-		binary.BigEndian.PutUint32(buf[pos:pos+4], uint32(ckps.Group))
-		pos += 4
-		if ckps.Ranges == nil {
-			length := uint64(0)
-			binary.BigEndian.PutUint64(buf[pos:pos+8], length)
-			pos += 8
-		} else {
-			length := uint64(len(ckps.Ranges.Intervals))
-			binary.BigEndian.PutUint64(buf[pos:pos+8], length)
-			pos += 8
-			for _, interval := range ckps.Ranges.Intervals {
-				if len(buf) < pos+16 {
-					buf = append(buf, make([]byte, 128)...)
-				}
-				binary.BigEndian.PutUint64(buf[pos:pos+8], interval.Start)
-				pos += 8
-				binary.BigEndian.PutUint64(buf[pos:pos+8], interval.End)
-				pos += 8
-			}
-		}
-		if len(buf) < pos+8 {
-			buf = append(buf, make([]byte, 128)...)
-		}
-		length = uint64(len(ckps.Command))
-		binary.BigEndian.PutUint64(buf[pos:pos+8], length)
-		pos += 8
-		for lsn, cmd := range ckps.Command {
-			if len(buf) < pos+16 {
-				buf = append(buf, make([]byte, 128)...)
-			}
-			binary.BigEndian.PutUint64(buf[pos:pos+8], lsn)
-			pos += 8
-			length = uint64(len(cmd.CommandIds))
-			binary.BigEndian.PutUint64(buf[pos:pos+8], length)
-			pos += 8
-			for _, commandId := range cmd.CommandIds {
-				if len(buf) < pos+4 {
-					buf = append(buf, make([]byte, 128)...)
-				}
-				binary.BigEndian.PutUint32(buf[pos:pos+4], commandId)
-				pos += 4
-			}
-			if len(buf) < pos+4 {
-				buf = append(buf, make([]byte, 128)...)
-			}
-			binary.BigEndian.PutUint32(buf[pos:pos+4], cmd.Size)
-			pos += 4
-		}
-	}
-
-	length = uint64(len(info.Uncommits))
-	if len(buf) < pos+8 {
-		buf = append(buf, make([]byte, 128)...)
-	}
-	binary.BigEndian.PutUint64(buf[pos:pos+8], length)
-	pos += 8
-	for _, tidInfo := range info.Uncommits {
-		if len(buf) < pos+12 {
-			buf = append(buf, make([]byte, 128)...)
-		}
-		binary.BigEndian.PutUint32(buf[pos:pos+4], tidInfo.Group)
-		pos += 4
-		binary.BigEndian.PutUint64(buf[pos:pos+8], tidInfo.Tid)
-		pos += 8
-	}
-
-	if len(buf) < pos+8 {
-		buf = append(buf, make([]byte, 128)...)
-	}
-	binary.BigEndian.PutUint64(buf[pos:pos+8], info.GroupLSN)
-	pos += 8
-
-	buf = buf[:pos]
-	return buf
-}
-func Unmarshal(buf []byte) *Info {
-	info := &Info{}
-	pos := 0
-	info.Group = binary.BigEndian.Uint32(buf[pos : pos+4])
-	pos += 4
-	info.TxnId = binary.BigEndian.Uint64(buf[pos : pos+8])
-	pos += 8
-	id := binary.BigEndian.Uint64(buf[pos : pos+8])
-	pos += 8
-	info.PostCommitVersion = int(id)
-
-	length := binary.BigEndian.Uint64(buf[pos : pos+8])
-	pos += 8
-	info.Checkpoints = make([]CkpRanges, 0, length)
-	for i := 0; i < int(length); i++ {
-		ckps := CkpRanges{}
-		ckps.Group = binary.BigEndian.Uint32(buf[pos : pos+4])
-		pos += 4
-		intervalLength := binary.BigEndian.Uint64(buf[pos : pos+8])
-		pos += 8
-		ckps.Ranges = &common.ClosedIntervals{
-			Intervals: make([]*common.ClosedInterval, 0, intervalLength),
-		}
-		for j := 0; j < int(intervalLength); j++ {
-			interval := &common.ClosedInterval{}
-			interval.Start = binary.BigEndian.Uint64(buf[pos : pos+8])
-			pos += 8
-			interval.End = binary.BigEndian.Uint64(buf[pos : pos+8])
-			pos += 8
-			ckps.Ranges.Intervals = append(ckps.Ranges.Intervals, interval)
-		}
-		cmdInfoLength := binary.BigEndian.Uint64(buf[pos : pos+8])
-		pos += 8
-		ckps.Command = make(map[uint64]CommandInfo)
-		for j := 0; j < int(cmdInfoLength); j++ {
-			cmd := CommandInfo{}
-			lsn := binary.BigEndian.Uint64(buf[pos : pos+8])
-			pos += 8
-			cmdIdsLength := binary.BigEndian.Uint64(buf[pos : pos+8])
-			pos += 8
-			cmd.CommandIds = make([]uint32, cmdIdsLength)
-			for k := 0; k < int(cmdIdsLength); k++ {
-				cmd.CommandIds[k] = binary.BigEndian.Uint32(buf[pos : pos+4])
-				pos += 4
-			}
-			cmd.Size = binary.BigEndian.Uint32(buf[pos : pos+4])
-			pos += 4
-			ckps.Command[lsn] = cmd
-		}
-		info.Checkpoints = append(info.Checkpoints, ckps)
-	}
-
-	length = binary.BigEndian.Uint64(buf[pos : pos+8])
-	pos += 8
-	info.Uncommits = make([]Tid, 0, length)
-	for i := 0; i < int(length); i++ {
-		tidInfo := Tid{}
-		tidInfo.Group = binary.BigEndian.Uint32(buf[pos : pos+4])
-		pos += 4
-		tidInfo.Tid = binary.BigEndian.Uint64(buf[pos : pos+8])
-		pos += 8
-		info.Uncommits = append(info.Uncommits, tidInfo)
-	}
-	info.GroupLSN = binary.BigEndian.Uint64(buf[pos : pos+8])
-	return info
-}
-
-func (info *Info) ToString() string {
-	switch info.Group {
-	case GTCKp:
-		s := "checkpoint entry"
-		for _, ranges := range info.Checkpoints {
-			s = fmt.Sprintf("%s%s", s, ranges)
-		}
-		s = fmt.Sprintf("%s\n", s)
-		return s
-	case GTUncommit:
-		s := "uncommit entry"
-		for _, tid := range info.Uncommits {
-			s = fmt.Sprintf("%s G%d-%d", s, tid.Group, tid.Tid)
-		}
-		s = fmt.Sprintf("%s\n", s)
-		return s
-	default:
-		s := fmt.Sprintf("customized entry G%d<%d>{T%d}", info.Group, info.GroupLSN, info.TxnId)
-		s = fmt.Sprintf("%s\n", s)
-		return s
-	}
-}
-
-type Tid struct {
-	Group uint32
-	Tid   uint64
-}
-
 type CkpRanges struct {
 	Group   uint32
 	Ranges  *common.ClosedIntervals
@@ -265,36 +53,209 @@ type CommandInfo struct {
 	CommandIds []uint32
 	Size       uint32
 }
+type Info struct {
+	Group uint32
+	// CommitId    uint64 //0 for RollBack
+	TxnId       uint64 //0 for entrys not in txn
+	Checkpoints []*CkpRanges
+	Uncommits   uint64
 
-// type CommitInfo struct {
-// 	Group    uint32
-// 	CommitId uint64
-// 	Addr interface{}
-// }
+	GroupLSN uint64
 
-// func (info *CommitInfo) ToString() string {
-// 	return fmt.Sprintf("commit entry <%d>-%d\n", info.Group, info.CommitId)
-// }
+	TargetLsn uint64
+	Info      any
+}
 
-// type UncommitInfo struct {
-// 	Tids map[uint32][]uint64
-// 	Addr interface{}
-// }
+func NewEmptyInfo() *Info {
+	return &Info{}
+}
+func (info *Info) WriteTo(w io.Writer) (n int64, err error) {
+	if err = binary.Write(w, binary.BigEndian, info.Group); err != nil {
+		return
+	}
+	n += 4
+	if err = binary.Write(w, binary.BigEndian, info.GroupLSN); err != nil {
+		return
+	}
+	n += 8
+	if err = binary.Write(w, binary.BigEndian, info.TxnId); err != nil {
+		return
+	}
+	n += 8
+	if err = binary.Write(w, binary.BigEndian, info.Uncommits); err != nil {
+		return
+	}
+	n += 8
+	if err = binary.Write(w, binary.BigEndian, info.TargetLsn); err != nil {
+		return
+	}
+	n += 8
+	length := uint64(len(info.Checkpoints))
+	if err = binary.Write(w, binary.BigEndian, length); err != nil {
+		return
+	}
+	n += 8
+	for _, ckps := range info.Checkpoints {
+		if err = binary.Write(w, binary.BigEndian, ckps.Group); err != nil {
+			return
+		}
+		n += 4
+		var n2 int64
+		n2, err = ckps.Ranges.WriteTo(w)
+		if err != nil {
+			return
+		}
+		n += n2
+		cmdLength := uint64(len(ckps.Command))
+		if err = binary.Write(w, binary.BigEndian, cmdLength); err != nil {
+			return
+		}
+		n += 8
+		for lsn, cmd := range ckps.Command {
+			if err = binary.Write(w, binary.BigEndian, lsn); err != nil {
+				return
+			}
+			n += 4
+			cmdIdxLength := uint32(len(cmd.CommandIds))
+			if err = binary.Write(w, binary.BigEndian, cmdIdxLength); err != nil {
+				return
+			}
+			n += 4
+			for _, id := range cmd.CommandIds {
+				if err = binary.Write(w, binary.BigEndian, id); err != nil {
+					return
+				}
+				n += 4
+			}
+			if err = binary.Write(w, binary.BigEndian, cmd.Size); err != nil {
+				return
+			}
+			n += 4
+		}
+	}
+	return
+}
+func (info *Info) Marshal() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if _, err = info.WriteTo(&bbuf); err != nil {
+		return
+	}
+	buf = bbuf.Bytes()
+	return
+}
+func (info *Info) ReadFrom(r io.Reader) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &info.Group); err != nil {
+		return
+	}
+	n += 4
+	if err = binary.Read(r, binary.BigEndian, &info.GroupLSN); err != nil {
+		return
+	}
+	n += 8
+	if err = binary.Read(r, binary.BigEndian, &info.TxnId); err != nil {
+		return
+	}
+	n += 8
+	if err = binary.Read(r, binary.BigEndian, &info.Uncommits); err != nil {
+		return
+	}
+	n += 8
+	if err = binary.Read(r, binary.BigEndian, &info.TargetLsn); err != nil {
+		return
+	}
+	n += 8
+	length := uint64(0)
+	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+		return
+	}
+	n += 8
+	info.Checkpoints = make([]*CkpRanges, length)
+	for i := 0; i < int(length); i++ {
+		ckps := &CkpRanges{}
+		if err = binary.Read(r, binary.BigEndian, &ckps.Group); err != nil {
+			return
+		}
+		n += 4
+		ckps.Ranges = common.NewClosedIntervals()
+		var n2 int64
+		n2, err = ckps.Ranges.ReadFrom(r)
+		if err != nil {
+			return
+		}
+		n += n2
+		cmdLength := uint64(0)
+		if err = binary.Read(r, binary.BigEndian, &cmdLength); err != nil {
+			return
+		}
+		n += 8
+		ckps.Command = make(map[uint64]CommandInfo)
+		for i := 0; i < int(cmdLength); i++ {
+			lsn := uint64(0)
+			if err = binary.Read(r, binary.BigEndian, &lsn); err != nil {
+				return
+			}
+			n += 8
+			cmd := &CommandInfo{}
+			cmdIdxLength := uint32(0)
+			if err = binary.Read(r, binary.BigEndian, &cmdIdxLength); err != nil {
+				return
+			}
+			n += 4
+			cmd.CommandIds = make([]uint32, cmdIdxLength)
+			for i := 0; i < int(cmdIdxLength); i++ {
+				if err = binary.Read(r, binary.BigEndian, &cmd.CommandIds[i]); err != nil {
+					return
+				}
+				n += 4
+			}
+			if err = binary.Read(r, binary.BigEndian, &cmd.Size); err != nil {
+				return
+			}
+			n += 4
+			ckps.Command[lsn] = *cmd
+		}
+		info.Checkpoints[i] = ckps
+	}
+	return
+}
+func (info *Info) Unmarshal(buf []byte) error {
+	bbuf := bytes.NewBuffer(buf)
+	_, err := info.ReadFrom(bbuf)
+	return err
+}
 
-// func (info *UncommitInfo) ToString() string {
-// 	return fmt.Sprintf("uncommit entry %v\n", info.Tids)
-// }
+func (info *Info) ToString() string {
+	switch info.Group {
+	case GTCKp:
+		s := "checkpoint entry"
+		for _, ranges := range info.Checkpoints {
+			s = fmt.Sprintf("%s%s", s, ranges)
+		}
+		s = fmt.Sprintf("%s\n", s)
+		return s
+	case GTUncommit:
+		s := "uncommit entry"
+		s = fmt.Sprintf("%s %d", s, info.Uncommits)
+		s = fmt.Sprintf("%s\n", s)
+		return s
+	default:
+		s := fmt.Sprintf("customized entry G%d<%d>{T%d}", info.Group, info.GroupLSN, info.TxnId)
+		s = fmt.Sprintf("%s\n", s)
+		return s
+	}
+}
 
-// type TxnInfo struct {
-// 	Group    uint32
-// 	Tid      uint64
-// 	CommitId uint64
-// 	Addr     interface{}
-// }
-
-// func (info *TxnInfo) ToString() string {
-// 	return fmt.Sprintf("txn entry <%d> %d-%d\n", info.Group, info.Tid, info.CommitId)
-// }
+type Base struct {
+	*descriptor
+	node      *common.MemNode
+	payload   []byte
+	info      any
+	infobuf   []byte
+	wg        sync.WaitGroup
+	t0        time.Time
+	printTime bool
+	err       error
+}
 
 func GetBase() *Base {
 	b := _basePool.Get().(*Base)
@@ -335,6 +296,7 @@ func (b *Base) GetInfoBuf() []byte {
 	return b.infobuf
 }
 func (b *Base) SetInfoBuf(buf []byte) {
+	b.SetInfoSize(len(buf))
 	b.infobuf = buf
 }
 func (b *Base) GetError() error {
@@ -390,7 +352,7 @@ func (b *Base) UnmarshalFromNode(n *common.MemNode, own bool) error {
 	return nil
 }
 
-func (b *Base) Unmarshal(buf []byte) error {
+func (b *Base) SetPayload(buf []byte) error {
 	if b.node != nil {
 		common.GPool.Free(b.node)
 		b.node = nil
@@ -400,7 +362,37 @@ func (b *Base) Unmarshal(buf []byte) error {
 	return nil
 }
 
+func (b *Base) Unmarshal(buf []byte) error {
+	bbuf := bytes.NewBuffer(buf)
+	_, err := b.ReadFrom(bbuf)
+	return err
+}
+func (b *Base) GetLsn() (gid uint32, lsn uint64) {
+	v := b.GetInfo()
+	if v == nil {
+		return
+	}
+	info := v.(*Info)
+	gid = info.Group
+	lsn = info.GroupLSN
+	return
+}
+func (b *Base) Marshal() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if _, err = b.WriteTo(&bbuf); err != nil {
+		return
+	}
+	buf = bbuf.Bytes()
+	return
+}
+
 func (b *Base) ReadFrom(r io.Reader) (int64, error) {
+	metaBuf := b.GetMetaBuf()
+	_, err := r.Read(metaBuf)
+	if err != nil {
+		return 0, err
+	}
+
 	if b.node == nil {
 		b.node = common.GPool.Alloc(uint64(b.GetPayloadSize()))
 		b.payload = b.node.Buf[:b.GetPayloadSize()]
@@ -413,15 +405,16 @@ func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 	if b.GetInfoSize() != 0 {
 		infoBuf := make([]byte, b.GetInfoSize())
 		n, err := r.Read(infoBuf)
-		n1 = n
+		n1 += n
 		if err != nil {
 			return int64(n1), err
 		}
-		b.SetInfoBuf(infoBuf)
-		if len(infoBuf) != 0 {
-			info := Unmarshal(infoBuf)
-			b.SetInfo(info)
+		info := NewEmptyInfo()
+		err = info.Unmarshal(infoBuf)
+		if err != nil {
+			return int64(n1), err
 		}
+		b.SetInfo(info)
 	}
 	n2, err := r.Read(b.payload)
 	if err != nil {
@@ -431,25 +424,47 @@ func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 }
 
 func (b *Base) ReadAt(r *os.File, offset int) (int, error) {
+	metaBuf := b.GetMetaBuf()
+	n, err := r.ReadAt(metaBuf, int64(offset))
+	if err != nil {
+		return n, err
+	}
 	if b.node == nil {
 		b.node = common.GPool.Alloc(uint64(b.GetPayloadSize()))
 		b.payload = b.node.Buf[:b.GetPayloadSize()]
 	}
+
 	offset += len(b.GetMetaBuf())
 	infoBuf := make([]byte, b.GetInfoSize())
 	n1, err := r.ReadAt(infoBuf, int64(offset))
 	if err != nil {
-		return n1, err
+		return n + n1, err
 	}
+
 	offset += n1
 	b.SetInfoBuf(infoBuf)
-	info := Unmarshal(infoBuf)
+	info := NewEmptyInfo()
+	err = info.Unmarshal(infoBuf)
+	if err != nil {
+		return n + n1, err
+	}
 	b.SetInfo(info)
 	n2, err := r.ReadAt(b.payload, int64(offset))
 	if err != nil {
 		return n2, err
 	}
-	return n1 + n2, nil
+	return n + n1 + n2, nil
+}
+
+func (b *Base) PrepareWrite() {
+	if b.info == nil {
+		return
+	}
+	buf, err := b.info.(*Info).Marshal()
+	if err != nil {
+		panic(err)
+	}
+	b.SetInfoBuf(buf)
 }
 
 func (b *Base) WriteTo(w io.Writer) (int64, error) {

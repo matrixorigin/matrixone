@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,31 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package entry
 
 import (
-	"testing"
+	"bytes"
+	"math/rand"
 
-	"github.com/cockroachdb/pebble/vfs"
-	"github.com/stretchr/testify/assert"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
-func TestVfsFS(t *testing.T) {
+var buf []byte
 
-	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func() FileService {
-			fs, err := NewVfsFS(vfs.NewStrictMem())
-			assert.Nil(t, err)
-			return fs
-		})
-	})
+func init() {
+	var bs bytes.Buffer
+	for i := 0; i < 3000; i++ {
+		bs.WriteString("helloyou")
+	}
+	buf = bs.Bytes()
+}
 
-	t.Run("replaceable file service", func(t *testing.T) {
-		testReplaceableFileService(t, func() ReplaceableFileService {
-			fs, err := NewVfsFS(vfs.NewStrictMem())
-			assert.Nil(t, err)
-			return fs
-		})
-	})
+func MockEntry() *Entry {
+	payloadSize := 100
 
+	e := entry.GetBase()
+	info := &entry.Info{GroupLSN: uint64(rand.Intn(1000))}
+	e.SetInfo(info)
+	payload := make([]byte, payloadSize)
+	copy(payload, buf)
+	err := e.SetPayload(payload)
+	if err != nil {
+		panic(err)
+	}
+	e.PrepareWrite()
+	return NewEntry(e)
 }

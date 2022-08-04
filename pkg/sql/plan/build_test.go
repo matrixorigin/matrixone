@@ -31,16 +31,14 @@ func TestSingleSQL(t *testing.T) {
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
 	// sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
-	//sql := "prepare stmt1 from 'select current_timestamp() + 1'"
+	sql := "select 1, 2 union select 2, 3"
 	// sql := "explain a"
 	// sql := "select 18446744073709551500"
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)
 	// }
-	// t.Logf("%+v", string(getJson(stmts[0], t)))
-
-	sql := "select 1-0.5 from NATION"
+	// t.Logf("%+v", string(getJSON(stmts[0], t)))
 
 	mock := NewMockOptimizer()
 	logicPlan, err := runOneStmt(mock, t, sql)
@@ -523,6 +521,35 @@ func TestDerivedTableSqlBuilder(t *testing.T) {
 		"select c_custkey2222 from (select c_custkey from CUSTOMER group by c_custkey ) a",    //column not exist
 		"select col1 from (select c_custkey from CUSTOMER group by c_custkey ) a(col1, col2)", //column length not match
 		"select c_custkey from (select c_custkey from CUSTOMER group by c_custkey) a(col1)",   //column not exist
+	}
+	runTestShouldError(mock, t, sqls)
+}
+
+//test derived table plan building
+func TestUnionSqlBuilder(t *testing.T) {
+	mock := NewMockOptimizer()
+	// should pass
+	sqls := []string{
+		"select 1 union select 2",
+		"select 1 union (select 2 union select 3)",
+		"(select 1 union select 2) union select 3 intersect select 4 order by 1",
+		"select 1 union select null",
+		"select n_name from nation intersect select n_name from nation2",
+		"select n_name from nation minus select n_name from nation2",
+		"select 1 union select 2 intersect select 2 union all select 1.1 minus select 22222",
+		"select 1 as a union select 2 order by a limit 1",
+		"select n_name from nation union select n_comment from nation order by n_name",
+		"with qn (foo, bar) as (select 1 as col, 2 as coll union select 4, 5) select qn1.bar from qn qn1",
+		"select n_name, n_comment from nation union all select n_name, n_comment from nation2",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	// should error
+	sqls = []string{
+		"select 1 union select 2, 'a'",
+		"select n_name as a from nation union select n_comment from nation order by n_name",
+		"select n_name from nation minus all select n_name from nation2",     // not support
+		"select n_name from nation intersect all select n_name from nation2", // not support
 	}
 	runTestShouldError(mock, t, sqls)
 }
