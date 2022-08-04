@@ -37,7 +37,6 @@ func TestCluster(t *testing.T) {
 	require.NoError(t, err)
 
 	// FIXME:
-	// 	- do some operation via `ClusterOperation`
 	// 	- check cluster state via `ClusterAssertState`
 	// 	- wait cluster state via `ClusterWaitState`
 }

@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -130,6 +131,7 @@ func buildDnConfig(
 		ListenAddress: address.getDnListenAddress(index),
 	}
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
+	cfg.HAKeeper.HeatbeatDuration.Duration = opt.dn.heartbeatInterval
 	// FIXME: support different storage, consult @reusee
 	cfg.Txn.Storage.Backend = opt.dn.txnStorageBackend
 
