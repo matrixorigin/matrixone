@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -750,12 +751,12 @@ func (c *Compile) fillAnalyzeInfo() {
 		if c.anal.qry.Nodes[i].AnalyzeInfo == nil {
 			c.anal.qry.Nodes[i].AnalyzeInfo = new(plan.AnalyzeInfo)
 		}
-		c.anal.qry.Nodes[i].AnalyzeInfo.InputRows = anal.InputRows
-		c.anal.qry.Nodes[i].AnalyzeInfo.OutputRows = anal.OutputRows
-		c.anal.qry.Nodes[i].AnalyzeInfo.InputSize = anal.InputSize
-		c.anal.qry.Nodes[i].AnalyzeInfo.OutputSize = anal.OutputSize
-		c.anal.qry.Nodes[i].AnalyzeInfo.TimeConsumed = anal.TimeConsumed
-		c.anal.qry.Nodes[i].AnalyzeInfo.MemorySize = anal.MemorySize
+		c.anal.qry.Nodes[i].AnalyzeInfo.InputRows = atomic.LoadInt64(&anal.InputRows)
+		c.anal.qry.Nodes[i].AnalyzeInfo.OutputRows = atomic.LoadInt64(&anal.OutputRows)
+		c.anal.qry.Nodes[i].AnalyzeInfo.InputSize = atomic.LoadInt64(&anal.InputSize)
+		c.anal.qry.Nodes[i].AnalyzeInfo.OutputSize = atomic.LoadInt64(&anal.OutputSize)
+		c.anal.qry.Nodes[i].AnalyzeInfo.TimeConsumed = atomic.LoadInt64(&anal.TimeConsumed)
+		c.anal.qry.Nodes[i].AnalyzeInfo.MemorySize = atomic.LoadInt64(&anal.MemorySize)
 	}
 }
 
