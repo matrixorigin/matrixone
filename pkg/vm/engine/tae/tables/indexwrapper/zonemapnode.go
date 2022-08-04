@@ -30,9 +30,10 @@ type zonemapNode struct {
 	mgr     base.INodeManager
 	file    common.IVFile
 	zonemap *index.ZoneMap
+	dataTyp types.Type
 }
 
-func newZonemapNode(mgr base.INodeManager, file common.IVFile, id *common.ID) *zonemapNode {
+func newZonemapNode(mgr base.INodeManager, file common.IVFile, id *common.ID, typ types.Type) *zonemapNode {
 	impl := new(zonemapNode)
 	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(file.Stat().Size()))
 	impl.LoadFunc = impl.OnLoad
@@ -40,6 +41,7 @@ func newZonemapNode(mgr base.INodeManager, file common.IVFile, id *common.ID) *z
 	impl.DestroyFunc = impl.OnDestroy
 	impl.file = file
 	impl.mgr = mgr
+	impl.dataTyp = typ
 	mgr.RegisterNode(impl)
 	return impl
 }
@@ -62,7 +64,8 @@ func (n *zonemapNode) OnLoad() {
 	if err = Decompress(data, buf, CompressType(compressTyp)); err != nil {
 		panic(err)
 	}
-	n.zonemap, err = index.LoadZoneMapFrom(buf)
+	n.zonemap = index.NewZoneMap(n.dataTyp)
+	err = n.zonemap.Unmarshal(buf)
 	if err != nil {
 		panic(err)
 	}
@@ -92,9 +95,9 @@ type ZMReader struct {
 	node *zonemapNode
 }
 
-func NewZMReader(mgr base.INodeManager, file common.IVFile, id *common.ID) *ZMReader {
+func NewZMReader(mgr base.INodeManager, file common.IVFile, id *common.ID, typ types.Type) *ZMReader {
 	return &ZMReader{
-		node: newZonemapNode(mgr, file, id),
+		node: newZonemapNode(mgr, file, id, typ),
 	}
 }
 
