@@ -127,7 +127,7 @@ func (c *Compile) Run(ts uint64) (err error) {
 		c.setAffectedRows(affectedRows)
 		return nil
 	case InsertValues:
-		affectedRows, err := c.scope.InsertValues(ts, c.proc.Snapshot, c.e, c.stmt.(*tree.Insert))
+		affectedRows, err := c.scope.InsertValues(ts, c.proc.Snapshot, c.e, c.proc, c.stmt.(*tree.Insert))
 		if err != nil {
 			return err
 		}
