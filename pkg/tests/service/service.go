@@ -58,9 +58,9 @@ type ClusterOperation interface {
 
 // ClusterAwareness provides cluster awareness information.
 type ClusterAwareness interface {
-	// ListDNServices lists all dn svcs
+	// ListDNServices lists uuid of all dn services
 	ListDNServices() []string
-	// ListLogServices lists all log svcs
+	// ListLogServices lists uuid of all log services
 	ListLogServices() []string
 
 	// GetDNService fetches dn service instance
@@ -68,7 +68,7 @@ type ClusterAwareness interface {
 	// GetLogService fetches log service instance
 	GetLogService(id string) (LogService, error)
 	// GetClusterState fetches current cluster state
-	GetClusterState() (*logpb.CheckerState, error)
+	GetClusterState(timeout time.Duration) (*logpb.CheckerState, error)
 }
 
 // TODO: add more convenient method
@@ -86,6 +86,7 @@ type ClusterAssertState interface {
 
 // ClusterWaitState waits cluster state until timeout.
 type ClusterWaitState interface {
+	WaitHAKeeperLeader(timeout time.Duration) LogService
 	WaitHAKeeperState(timeout time.Duration, expected logpb.HAKeeperState)
 	// WaitClusterHealth(timeout time.Duration)
 	// WaitShardByNum(typ string, batch int, timeout time.Duration)
@@ -224,14 +225,16 @@ func (c *testCluster) GetLogService(id string) (LogService, error) {
 	return nil, wrappedError(ErrServiceNotExist, id)
 }
 
-func (c *testCluster) GetClusterState() (*logpb.CheckerState, error) {
-	leader := c.WaitHAKeeperLeader(time.Second)
+// NB: we could also fetch cluster state from non-leader hakeeper.
+func (c *testCluster) GetClusterState(timeout time.Duration) (*logpb.CheckerState, error) {
+	c.WaitHAKeeperState(timeout, logpb.HAKeeperRunning)
+	leader := c.WaitHAKeeperLeader(timeout)
 	return leader.GetClusterState()
 }
 
 func (c *testCluster) AssertHAKeeperState(svc LogService, expected logpb.HAKeeperState) {
-	state, err := svc.GetClusterState()
-	require.NoError(c.t, err)
+	state := c.getClusterState()
+	require.NotNil(c.t, state)
 	assert.Equal(c.t, expected, state.State)
 }
 
@@ -257,19 +260,14 @@ func (c *testCluster) WaitHAKeeperState(timeout time.Duration, expected logpb.HA
 	for {
 		select {
 		case <-timeoutCh:
-			msg := "timeout when waiting for hakeeper running"
-			c.logger.Warn(msg)
-			assert.FailNow(c.t, msg)
+			assert.FailNow(c.t, "timeout when waiting for hakeeper state: %s", expected.String())
 		default:
 			time.Sleep(100 * time.Millisecond)
 
-			leader := c.getHAKeeperLeader()
-			if leader == nil {
+			state := c.getClusterState()
+			if state == nil {
 				continue
 			}
-
-			state, err := leader.GetClusterState()
-			require.NoError(c.t, err)
 			if state.State == expected {
 				return
 			}
@@ -462,13 +460,57 @@ func (c *testCluster) closeLogServices() error {
 	return nil
 }
 
+// getClusterState fetches cluster state from arbitrary hakeeper.
+func (c *testCluster) getClusterState() *logpb.CheckerState {
+	var state *logpb.CheckerState
+	fn := func(index int, svc LogService) bool {
+		s, err := svc.GetClusterState()
+		if err != nil {
+			c.logger.Error("fail to get cluster state", zap.Error(err), zap.Int("index", index))
+			return false
+		}
+		state = s
+		c.logger.Info("current cluster state", zap.Any("state", s))
+		return true
+	}
+	c.rangeHAKeeperService(fn)
+	return state
+}
+
 // getHAKeeperLeader gets log service which is hakeeper leader.
 func (c *testCluster) getHAKeeperLeader() LogService {
 	var leader LogService
-	for _, svc := range c.selectHAkeeperServices() {
-		if svc.IsLeaderHakeeper() {
-			return leader
+	fn := func(index int, svc LogService) bool {
+		isLeader, err := svc.IsLeaderHakeeper()
+		if err != nil {
+			c.logger.Error("fail to check hakeeper", zap.Error(err), zap.Int("index", index))
+			return false
+		}
+		c.logger.Info("hakeeper state", zap.Bool("isleader", isLeader), zap.Int("index", index))
+
+		if isLeader {
+			leader = svc
+			return true
+		}
+
+		return false
+	}
+	c.rangeHAKeeperService(fn)
+	return leader
+}
+
+// rangeHAKeeperService iterates all hakeeper service until `fn` returns true.
+func (c *testCluster) rangeHAKeeperService(fn func(index int, svc LogService) bool) {
+	for i, svc := range c.selectHAkeeperServices() {
+		index := i
+
+		if svc.Status() != ServiceStarted {
+			c.logger.Warn("hakeeper service not started", zap.Int("index", index))
+			continue
+		}
+
+		if fn(index, svc) {
+			break
 		}
 	}
-	return nil
 }

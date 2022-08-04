@@ -2780,6 +2780,22 @@ union_op:
             Distinct: false,
         }
     }
+|   MINUS ALL
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.UT_MINUS,
+            All: true,
+            Distinct: false,
+        }
+    }
+|    MINUS DISTINCT
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.UT_MINUS,
+            All: false,
+            Distinct: true,
+        }
+    }
 
 simple_select_clause:
     SELECT distinct_opt select_expression_list from_opt where_expression_opt group_by_opt having_opt

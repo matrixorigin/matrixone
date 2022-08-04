@@ -21,6 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func (ins Instruction) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (ins Instruction) UnmarshalBinary(_ []byte) error {
+	return nil
+}
+
 // String range instructions and call each operator's string function to show a query plan
 func String(ins Instructions, buf *bytes.Buffer) {
 	for i, in := range ins {

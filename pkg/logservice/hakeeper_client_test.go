@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/errors"
+
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
@@ -29,6 +31,19 @@ import (
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
+
+func TestHAKeeperClientConfigIsValidated(t *testing.T) {
+	cfg := HAKeeperClientConfig{}
+	cc1, err := NewCNHAKeeperClient(context.TODO(), cfg)
+	assert.Nil(t, cc1)
+	assert.True(t, errors.Is(err, ErrInvalidConfig))
+	cc2, err := NewDNHAKeeperClient(context.TODO(), cfg)
+	assert.Nil(t, cc2)
+	assert.True(t, errors.Is(err, ErrInvalidConfig))
+	cc3, err := NewLogHAKeeperClient(context.TODO(), cfg)
+	assert.Nil(t, cc3)
+	assert.True(t, errors.Is(err, ErrInvalidConfig))
+}
 
 func TestHAKeeperClientsCanBeCreated(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
