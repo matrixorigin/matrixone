@@ -75,7 +75,7 @@ func NewWithSize(n int) *Batch {
 }
 
 func (bat *Batch) MarshalBinary() ([]byte, error) {
-	return encoding.Encode(&EncodeBatch{Zs: bat.Zs, Cnt: bat.Cnt, Vecs: bat.Vecs})
+	return encoding.Encode(&EncodeBatch{Zs: bat.Zs, Vecs: bat.Vecs})
 }
 
 func (bat *Batch) UnmarshalBinary(data []byte) error {
@@ -83,8 +83,8 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 	if err := encoding.Decode(data, rbat); err != nil {
 		return err
 	}
+	bat.Cnt = 1
 	bat.Zs = rbat.Zs
-	bat.Cnt = rbat.Cnt
 	bat.Vecs = rbat.Vecs
 	return nil
 }
@@ -182,10 +182,10 @@ func (bat *Batch) Clean(m *mheap.Mheap) {
 func (bat *Batch) String() string {
 	var buf bytes.Buffer
 
-	for i, attr := range bat.Attrs {
-		buf.WriteString(fmt.Sprintf("%s\n", attr))
+	for i, vec := range bat.Vecs {
+		buf.WriteString(fmt.Sprintf("%v\n", i))
 		if len(bat.Zs) > 0 {
-			buf.WriteString(fmt.Sprintf("\t%s\n", bat.Vecs[i]))
+			buf.WriteString(fmt.Sprintf("\t%s\n", vec))
 		}
 	}
 	return buf.String()

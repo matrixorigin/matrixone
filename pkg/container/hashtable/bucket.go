@@ -29,6 +29,7 @@ func (ht *StringHashMap) InsertStringBatchInBucket(states [][3]uint64, keys [][]
 
 	for i := range keys {
 		if states[i][0]%nbucket != ibucket {
+			values[i] = 0
 			continue
 		}
 		cell := ht.findCell(&states[i])
@@ -109,10 +110,11 @@ func (ht *StringHashMap) InsertStringBatchWithRingInBucket(zValues []int64, stat
 	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
-		if states[i][0]%nbucket != ibucket {
+		if zValues[i] == 0 {
 			continue
 		}
-		if zValues[i] == 0 {
+		if states[i][0]%nbucket != ibucket {
+			values[i] = 0
 			continue
 		}
 
@@ -241,6 +243,7 @@ func (ht *Int64HashMap) InsertBatchInBucket(n int, hashes []uint64, keysPtr unsa
 
 	for i, key := range keys {
 		if hashes[i]%nbucket != ibucket {
+			values[i] = 0
 			continue
 		}
 		cell := ht.findCell(hashes[i], key)
@@ -269,6 +272,7 @@ func (ht *Int64HashMap) InsertBatchWithRingInBucket(n int, zValues []int64, hash
 			continue
 		}
 		if hashes[i]%nbucket != ibucket {
+			values[i] = 0
 			continue
 		}
 		cell := ht.findCell(hashes[i], key)

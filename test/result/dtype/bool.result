@@ -127,10 +127,9 @@ select a,count(a) from t1 group by a having count(a)>1;
 a	count(a)
 false	2
 true	2
-select a,any_value(b) from t1 group by a order by a asc;
+select a,any_value(b) from t1 where isnotnull(a) group by a order by a asc;
 a	any_value(b)
 false	true
-null	null
 true	false
 select a,b from t1 where a in (0,1);
 a	b

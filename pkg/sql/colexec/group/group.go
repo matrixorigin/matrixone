@@ -137,6 +137,22 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	bat := proc.InputBatch()
 	if bat == nil {
 		if ctr.bat != nil {
+			if ap.Nbucket != 0 {
+				for i, agg := range ctr.bat.Aggs {
+					vec, err := agg.Eval(proc.GetMheap())
+					if err != nil {
+						ctr.clean()
+						ctr.bat.Clean(proc.GetMheap())
+						return false, err
+					}
+					ctr.bat.Aggs[i] = nil
+					ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
+				}
+				ctr.bat.Aggs = nil
+				for i := range ctr.bat.Zs { // reset zs
+					ctr.bat.Zs[i] = 1
+				}
+			}
 			ctr.clean()
 			ctr.bat.ExpandNulls()
 			anal.Output(ctr.bat)
@@ -305,6 +321,9 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, a
 	cnt := 0
 	copy(ctr.inserted[:n], ctr.zInserted[:n])
 	for k, v := range vals[:n] {
+		if v == 0 {
+			continue
+		}
 		if v > mp.GroupCount() {
 			ctr.inserted[k] = 1
 			mp.AddGroup()
