@@ -48,6 +48,119 @@ func Test_readTextFile(t *testing.T) {
 	fmt.Printf("%v\n", data)
 }
 
+//since json load cannot use ',' as delimiter, so we need to use another function to test
+func Test_loadJSON(t *testing.T) {
+	convey.Convey("loadJSON succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		eng := mock_frontend.NewMockTxnEngine(ctrl)
+		txn := mock_frontend.NewMockTxn(ctrl)
+		txn.EXPECT().GetCtx().Return(nil).AnyTimes()
+		txn.EXPECT().Commit().Return(nil).AnyTimes()
+		txn.EXPECT().Rollback().Return(nil).AnyTimes()
+		txn.EXPECT().String().Return("txn0").AnyTimes()
+		eng.EXPECT().StartTxn(nil).Return(txn, nil).AnyTimes()
+
+		db := mock_frontend.NewMockDatabase(ctrl)
+		rel := mock_frontend.NewMockRelation(ctrl)
+		tableDefs := []engine.TableDef{
+			&engine.AttributeDef{
+				Attr: engine.Attribute{
+					Type: types.Type{Oid: types.T_json},
+					Name: "a"}},
+			&engine.AttributeDef{
+				Attr: engine.Attribute{
+					Type: types.Type{Oid: types.T_varchar},
+					Name: "b"}},
+			&engine.AttributeDef{
+				Attr: engine.Attribute{
+					Type: types.Type{Oid: types.T_uint8},
+					Name: "c"}},
+		}
+		ctx := context.TODO()
+		rel.EXPECT().TableDefs(gomock.Any()).Return(tableDefs, nil).AnyTimes()
+		cnt := 0
+		rel.EXPECT().Write(ctx, gomock.Any()).DoAndReturn(
+			func(a, b interface{}) error {
+				cnt++
+				if cnt == 1 {
+					return nil
+				} else if cnt == 2 {
+					return context.DeadlineExceeded
+				}
+
+				return nil
+			},
+		).AnyTimes()
+		db.EXPECT().Relation(ctx, gomock.Any()).Return(rel, nil).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(db, nil).AnyTimes()
+
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+
+		cws := []ComputationWrapper{}
+		var self_handle_sql = []string{
+			"load data " +
+				"infile 'test/loadfile6' " +
+				"ignore " +
+				"INTO TABLE T.A " +
+				"FIELDS TERMINATED BY '\t' " +
+				"ignore 1 lines ",
+			"load data " +
+				"infile 'test/loadfile6' " +
+				"ignore " +
+				"INTO TABLE T.A " +
+				"FIELDS TERMINATED BY '\t' " +
+				"ignore 1 lines " +
+				"(a, b, c)",
+		}
+		for i := 0; i < len(self_handle_sql); i++ {
+			select_2 := mock_frontend.NewMockComputationWrapper(ctrl)
+			stmts, err := parsers.Parse(dialect.MYSQL, self_handle_sql[i])
+			convey.So(err, convey.ShouldBeNil)
+			select_2.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
+			select_2.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
+			select_2.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+			select_2.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
+
+			cws = append(cws, select_2)
+		}
+
+		stubs := gostub.StubFunc(&GetComputationWrapper, cws, nil)
+		defer stubs.Reset()
+
+		stubs2 := gostub.StubFunc(&PathExists, true, true, nil)
+		defer stubs2.Reset()
+
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		convey.So(err, convey.ShouldBeNil)
+
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+
+		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		config.StorageEngine = eng
+		defer func() {
+			config.StorageEngine = nil
+		}()
+		ses := NewSession(proto, guestMmu, pu.Mempool, pu, gSysVariables)
+
+		mce := NewMysqlCmdExecutor()
+
+		mce.PrepareSessionBeforeExecRequest(ses)
+
+		req := &Request{
+			cmd:  int(COM_QUERY),
+			data: []byte("test anywhere"),
+		}
+
+		resp, err := mce.ExecRequest(req)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(resp, convey.ShouldBeNil)
+	})
+}
+
 func Test_load(t *testing.T) {
 	convey.Convey("load succ", t, func() {
 		ctrl := gomock.NewController(t)

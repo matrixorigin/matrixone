@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"io"
 	"os"
 	"strconv"
@@ -340,6 +341,15 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				return err
 			}
 			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i]); err != nil {
+				return err
+			}
+		case defines.MYSQL_TYPE_JSON:
+			value, err := oq.mrs.GetValue(0, i)
+			if err != nil {
+				return err
+			}
+			jsonStr := value.(bytejson.ByteJson).String()
+			if err = formatOutputString(oq, []byte(jsonStr), symbol[i], closeby, flag[i]); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_TIME:
