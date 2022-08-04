@@ -112,7 +112,6 @@ func newTestCase(gm *guest.Mmu, all bool) dispatchTestCase {
 		},
 		arg: &Argument{
 			All:  all,
-			Mmu:  gm,
 			Regs: []*process.WaitRegister{reg},
 		},
 		cancel: cancel,
