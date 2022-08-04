@@ -1795,4 +1795,75 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+
+	ENABLE_FAULT_INJECTION: {
+		Id: ENABLE_FAULT_INJECTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_INTERNAL,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_bool,
+				Fn:        multi.EnableFaultInjection,
+			},
+		},
+	},
+	DISABLE_FAULT_INJECTION: {
+		Id: DISABLE_FAULT_INJECTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_INTERNAL,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_bool,
+				Fn:        multi.DisableFaultInjection,
+			},
+		},
+	},
+	ADD_FAULT_POINT: {
+		Id: ADD_FAULT_POINT,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_INTERNAL,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64, types.T_varchar},
+				ReturnTyp: types.T_bool,
+				Fn:        multi.AddFaultPoint,
+			},
+		},
+	},
+	REMOVE_FAULT_POINT: {
+		Id: REMOVE_FAULT_POINT,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_INTERNAL,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_bool,
+				Fn:        multi.RemoveFaultPoint,
+			},
+		},
+	},
+	TRIGGER_FAULT_POINT: {
+		Id: REMOVE_FAULT_POINT,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_INTERNAL,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_int64,
+				Fn:        multi.TriggerFaultPoint,
+			},
+		},
+	},
 }
