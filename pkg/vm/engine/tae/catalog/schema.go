@@ -44,9 +44,9 @@ type IndexInfo struct {
 }
 
 type Default struct {
-	Set   bool
-	Null  bool
-	Value any
+	NullAbility  bool
+	Expr         []byte
+	OriginString string
 }
 
 func NewIndexInfo(name string, typ IndexT, colIdx ...int) *IndexInfo {
@@ -177,53 +177,68 @@ func (s *Schema) GetSortKeyCnt() int {
 	return s.SortKey.Size()
 }
 
-func MarshalDefault(w *bytes.Buffer, typ types.Type, data Default) (err error) {
-	if err = binary.Write(w, binary.BigEndian, data.Set); err != nil {
+func MarshalDefault(w *bytes.Buffer, data Default) (err error) {
+	if err = binary.Write(w, binary.BigEndian, data.NullAbility); err != nil {
 		return
 	}
-	if !data.Set {
+	if err = binary.Write(w, binary.BigEndian, uint16(len([]byte(data.OriginString)))); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, data.Null); err != nil {
+	if err = binary.Write(w, binary.BigEndian, []byte(data.OriginString)); err != nil {
 		return
 	}
-	if data.Null {
+	if data.Expr == nil {
+		if err = binary.Write(w, binary.BigEndian, uint16(0)); err != nil {
+			return
+		}
 		return
+	} else {
+		if err = binary.Write(w, binary.BigEndian, uint16(len(data.Expr))); err != nil {
+			return
+		}
 	}
-	value := types.EncodeValue(data.Value, typ)
-	if err = binary.Write(w, binary.BigEndian, uint16(len(value))); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, value); err != nil {
+
+	if err = binary.Write(w, binary.BigEndian, data.Expr); err != nil {
 		return
 	}
 	return nil
 }
-func UnMarshalDefault(r io.Reader, typ types.Type, data *Default) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &data.Set); err != nil {
+
+func UnMarshalDefault(r io.Reader, data *Default) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &data.NullAbility); err != nil {
 		return
 	}
 	n = 1
-	if !data.Set {
-		return n, nil
-	}
-	if err = binary.Read(r, binary.BigEndian, &data.Null); err != nil {
-		return
-	}
-	n += 1
-	if data.Null {
-		return n, nil
-	}
+
 	var valueLen uint16 = 0
 	if err = binary.Read(r, binary.BigEndian, &valueLen); err != nil {
 		return
 	}
 	n += 2
+
 	buf := make([]byte, valueLen)
 	if _, err = r.Read(buf); err != nil {
 		return
 	}
-	data.Value = types.DecodeValue(buf, typ)
+	data.OriginString = string(buf)
+	n += int64(valueLen)
+
+	valueLen = 0
+	if err = binary.Read(r, binary.BigEndian, &valueLen); err != nil {
+		return
+	}
+	n += 2
+
+	if valueLen == 0 {
+		data.Expr = nil
+		return
+	}
+
+	buf = make([]byte, valueLen)
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+	data.Expr = buf
 	n += int64(valueLen)
 	return n, nil
 }
@@ -295,7 +310,7 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		n += 1
 		def.Default = Default{}
-		if sn, err = UnMarshalDefault(r, def.Type, &def.Default); err != nil {
+		if sn, err = UnMarshalDefault(r, &def.Default); err != nil {
 			return
 		}
 		n += sn
@@ -355,7 +370,7 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		if err = binary.Write(&w, binary.BigEndian, def.SortKey); err != nil {
 			return
 		}
-		if err = MarshalDefault(&w, def.Type, def.Default); err != nil {
+		if err = MarshalDefault(&w, def.Default); err != nil {
 			return
 		}
 	}
@@ -398,6 +413,19 @@ func (s *Schema) AppendPKCol(name string, typ types.Type, idx int) error {
 }
 
 func (s *Schema) AppendPKColWithAttribute(attr engine.Attribute, idx int) error {
+	var bs []byte = nil
+	var err error
+	if attr.Default.Expr != nil {
+		bs, err = attr.Default.Expr.Marshal()
+		if err != nil {
+			return err
+		}
+	}
+	attrDefault := Default{
+		NullAbility:  attr.Default.NullAbility,
+		Expr:         bs,
+		OriginString: attr.Default.OriginString,
+	}
 	def := &ColDef{
 		Name:    attr.Name,
 		Type:    attr.Type,
@@ -406,6 +434,7 @@ func (s *Schema) AppendPKColWithAttribute(attr engine.Attribute, idx int) error 
 		SortKey: true,
 		Primary: true,
 		Comment: attr.Comment,
+		Default: attrDefault,
 	}
 	return s.AppendColDef(def)
 }
@@ -430,13 +459,18 @@ func (s *Schema) AppendColWithDefault(name string, typ types.Type, val Default) 
 }
 
 func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
-	var attrDefault Default
-	if attr.Default.Exist {
-		attrDefault = Default{
-			Set:   attr.Default.Exist,
-			Value: attr.Default.Value,
-			Null:  attr.Default.IsNull,
+	var bs []byte = nil
+	var err error
+	if attr.Default.Expr != nil {
+		bs, err = attr.Default.Expr.Marshal()
+		if err != nil {
+			return err
 		}
+	}
+	attrDefault := Default{
+		NullAbility:  attr.Default.NullAbility,
+		Expr:         bs,
+		OriginString: attr.Default.OriginString,
 	}
 	def := &ColDef{
 		Name:    attr.Name,

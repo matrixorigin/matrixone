@@ -27,7 +27,7 @@ var (
 	_ VisitRule = &GetParamRule{}
 	_ VisitRule = &ResetParamOrderRule{}
 	_ VisitRule = &ResetParamRefRule{}
-	_ VisitRule = &ResetParamRefRule{}
+	_ VisitRule = &ResetVarRefRule{}
 )
 
 type GetParamRule struct {

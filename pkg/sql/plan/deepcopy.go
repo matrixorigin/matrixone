@@ -16,6 +16,14 @@ package plan
 
 import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
+func DeepCopyExprList(list []*Expr) []*Expr {
+	newList := make([]*Expr, len(list))
+	for idx, expr := range list {
+		newList[idx] = DeepCopyExpr(expr)
+	}
+	return newList
+}
+
 func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode := &Node{
 		NodeType:        node.NodeType,
@@ -105,8 +113,11 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 					Size:      col.Typ.Size,
 					Scale:     col.Typ.Scale,
 				},
-				// FIX ME: Default should change to Expr
-				Default: &plan.DefaultExpr{},
+				Default: &plan.Default{
+					NullAbility:  col.Default.NullAbility,
+					Expr:         DeepCopyExpr(col.Default.Expr),
+					OriginString: col.Default.String(),
+				},
 				Primary: col.Primary,
 				Pkidx:   col.Pkidx,
 			}
@@ -196,8 +207,11 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 				Size:      col.Typ.Size,
 				Scale:     col.Typ.Scale,
 			},
-			// FIX ME: Default should change to Expr
-			Default: &plan.DefaultExpr{},
+			Default: &plan.Default{
+				NullAbility:  col.Default.NullAbility,
+				Expr:         DeepCopyExpr(col.Default.Expr),
+				OriginString: col.Default.OriginString,
+			},
 			Primary: col.Primary,
 			Pkidx:   col.Pkidx,
 		}

@@ -15,9 +15,12 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"testing"
@@ -28,7 +31,7 @@ import (
 
 func TestS3FS(t *testing.T) {
 
-	var sharedConfig struct {
+	var config struct {
 		Endpoint  string
 		Region    string
 		APIKey    string
@@ -42,40 +45,21 @@ func TestS3FS(t *testing.T) {
 		return
 	}
 	assert.Nil(t, err)
-	err = json.Unmarshal(content, &sharedConfig)
+	err = json.Unmarshal(content, &config)
 	assert.Nil(t, err)
 
-	os.Setenv("AWS_REGION", sharedConfig.Region)
-	os.Setenv("AWS_ACCESS_KEY_ID", sharedConfig.APIKey)
-	os.Setenv("AWS_SECRET_ACCESS_KEY", sharedConfig.APISecret)
+	os.Setenv("AWS_REGION", config.Region)
+	os.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
+	os.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
 
 	t.Run("file service", func(t *testing.T) {
 		testFileService(t, func() FileService {
 
-			config := sharedConfig
-			config.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
-
 			fs, err := NewS3FS(
 				config.Endpoint,
 				config.Bucket,
-				config.KeyPrefix,
-			)
-			assert.Nil(t, err)
-
-			return fs
-		})
-	})
-
-	t.Run("cache", func(t *testing.T) {
-		testCache(t, func() FileService {
-
-			config := sharedConfig
-			config.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
-
-			fs, err := NewS3FS(
-				config.Endpoint,
-				config.Bucket,
-				config.KeyPrefix,
+				time.Now().Format("2006-01-02.15:04:05.000000"),
+				128*1024,
 			)
 			assert.Nil(t, err)
 
@@ -85,15 +69,85 @@ func TestS3FS(t *testing.T) {
 
 	t.Run("list root", func(t *testing.T) {
 		fs, err := NewS3FS(
-			sharedConfig.Endpoint,
-			sharedConfig.Bucket,
+			config.Endpoint,
+			config.Bucket,
 			"",
+			128*1024,
 		)
 		assert.Nil(t, err)
 		ctx := context.Background()
 		entries, err := fs.List(ctx, "")
 		assert.Nil(t, err)
 		assert.True(t, len(entries) > 0)
+	})
+
+	t.Run("cache", func(t *testing.T) {
+
+		fs, err := NewS3FS(
+			config.Endpoint,
+			config.Bucket,
+			time.Now().Format("2006-01-02.15:04:05.000000"),
+			128*1024,
+		)
+		assert.Nil(t, err)
+		fs.stats = new(lruStats)
+
+		ctx := context.Background()
+
+		buf := new(bytes.Buffer)
+		err = gob.NewEncoder(buf).Encode(map[int]int{
+			42: 42,
+		})
+		assert.Nil(t, err)
+		data := buf.Bytes()
+
+		err = fs.Write(ctx, IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size: len(data),
+					Data: data,
+				},
+			},
+		})
+		assert.Nil(t, err)
+
+		vec := &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size: len(data),
+					ToObject: func(r io.Reader) (any, int, error) {
+						var m map[int]int
+						if err := gob.NewDecoder(r).Decode(&m); err != nil {
+							return nil, 0, err
+						}
+						return m, 1, nil
+					},
+				},
+			},
+		}
+
+		err = fs.Read(ctx, vec)
+		assert.Nil(t, err)
+		m, ok := vec.Entries[0].Object.(map[int]int)
+		assert.True(t, ok)
+		assert.Equal(t, 1, len(m))
+		assert.Equal(t, 42, m[42])
+		assert.Equal(t, 1, vec.Entries[0].ObjectSize)
+
+		// read again
+		err = fs.Read(ctx, vec)
+		assert.Nil(t, err)
+		m, ok = vec.Entries[0].Object.(map[int]int)
+		assert.True(t, ok)
+		assert.Equal(t, 1, len(m))
+		assert.Equal(t, 42, m[42])
+		assert.Equal(t, 1, vec.Entries[0].ObjectSize)
+
+		assert.Equal(t, fs.stats.Read, int64(2))
+		assert.Equal(t, fs.stats.CacheHit, int64(1))
+
 	})
 
 }
@@ -134,6 +188,7 @@ func TestS3FSMinioServer(t *testing.T) {
 				"http://localhost:9000",
 				"test",
 				"",
+				128*1024,
 			)
 			assert.Nil(t, err)
 

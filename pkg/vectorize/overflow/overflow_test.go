@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,31 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package overflow
 
 import (
+	"math"
 	"testing"
-
-	"github.com/cockroachdb/pebble/vfs"
-	"github.com/stretchr/testify/assert"
 )
 
-func TestVfsFS(t *testing.T) {
+func TestOverflowIntAdd(t *testing.T) {
+	for i := int64(math.MinInt8); i <= int64(math.MaxInt8); i++ {
+		for j := int64(math.MinInt8); j <= int64(math.MaxInt8); j++ {
 
-	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func() FileService {
-			fs, err := NewVfsFS(vfs.NewStrictMem())
-			assert.Nil(t, err)
-			return fs
-		})
-	})
-
-	t.Run("replaceable file service", func(t *testing.T) {
-		testReplaceableFileService(t, func() ReplaceableFileService {
-			fs, err := NewVfsFS(vfs.NewStrictMem())
-			assert.Nil(t, err)
-			return fs
-		})
-	})
-
+		}
+	}
 }
