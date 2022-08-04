@@ -114,12 +114,11 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) (
 }
 
 func updateHashTableRows(hashMap HashMap, vs []uint64, zvs []int64) {
-	var count uint64 = 0
 	groupCount := hashMap.GroupCount()
 	if hashMap.HasNull() {
 		for _, v := range vs {
 			if v > groupCount {
-				count++
+				groupCount++
 			}
 		}
 	} else {
@@ -128,9 +127,10 @@ func updateHashTableRows(hashMap HashMap, vs []uint64, zvs []int64) {
 				continue
 			}
 			if v > groupCount {
-				count++
+				groupCount++
 			}
 		}
 	}
+	count := groupCount - hashMap.GroupCount()
 	hashMap.AddGroups(count)
 }

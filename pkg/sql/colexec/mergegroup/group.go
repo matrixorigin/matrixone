@@ -242,12 +242,13 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 	return nil
 }
 
-func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, rowCount uint64, proc *process.Process) error {
+func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, hashRows uint64, proc *process.Process) error {
 	cnt := 0
 	copy(ctr.inserted[:n], ctr.zInserted[:n])
 	for k, v := range vals {
-		if v > rowCount {
+		if v > hashRows {
 			ctr.inserted[k] = 1
+			hashRows++
 			cnt++
 			ctr.bat.Zs = append(ctr.bat.Zs, 0)
 		}
