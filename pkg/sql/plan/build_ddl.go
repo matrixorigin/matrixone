@@ -133,10 +133,6 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 					return errors.New(errno.DataException, "width out of 1GB is unexpected for char/varchar type")
 				}
 			}
-			defultValue, err := getDefaultExprFromColumn(def, colType)
-			if err != nil {
-				return err
-			}
 
 			var pks []string
 			var comment string
@@ -162,11 +158,17 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 				}
 				primaryKeys = pks
 			}
+
+			defaultValue, err := buildDefaultExpr(def, colType)
+			if err != nil {
+				return err
+			}
+
 			col := &ColDef{
 				Name:    def.Name.Parts[0],
 				Alg:     plan.CompressType_Lz4,
 				Typ:     colType,
-				Default: defultValue,
+				Default: defaultValue,
 				Comment: comment,
 			}
 			colNameMap[col.Name] = col.Typ.GetId()
