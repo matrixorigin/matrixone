@@ -1,3 +1,4 @@
+drop table if exists t;
 CREATE TABLE t (i1 INT,
 d1 DOUBLE,
 e2 DECIMAL(5,2));
