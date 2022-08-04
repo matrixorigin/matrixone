@@ -57,8 +57,8 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 			err = moerr.NewPanicError(e)
 		}
 	}()
-	for i, in := range ins {
-		if ok, err = execFunc[in.Op](i, proc, in.Arg); err != nil {
+	for _, in := range ins {
+		if ok, err = execFunc[in.Op](in.Idx, proc, in.Arg); err != nil {
 			return ok || end, err
 		}
 		if ok { // ok is true shows that at least one operator has done its work

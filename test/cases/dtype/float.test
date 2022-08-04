@@ -85,7 +85,6 @@ drop table t1;
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a float(20),
 b VARCHAR(20));
--- @bvt:issue#3355
 INSERT INTO t1 (id,a) VALUES
 (1,0),
 (2,CAST(0x7FFFFFFFFFFFFFFF AS UNSIGNED)),
@@ -95,7 +94,6 @@ select * from t1;
 UPDATE t1 SET b = a;
 select a,count(a) from t1 where ((a = 9.223372036854776e18) and (b = '9.223372036854776e18')) group by a having count(a)>2 order by count(a);
 select distinct a,b from t1 where ((a != 9.223372036854776e18) and (b != '9.223372036854776e18')) order by 2;
--- @bvt:issue
 CREATE TABLE t_float(id float(2,1));
 INSERT INTO t_float VALUES (1),(1.1), (2);
 SELECT id, id >= 1.1 FROM t_float;
