@@ -29,6 +29,18 @@ type ClosedIntervals struct {
 	Intervals []*ClosedInterval
 }
 
+func (intervals *ClosedIntervals) GetMax() uint64 {
+	if intervals == nil || len(intervals.Intervals) == 0 {
+		return 0
+	}
+	return intervals.Intervals[len(intervals.Intervals)-1].End
+}
+func (intervals *ClosedIntervals) GetMin() uint64 {
+	if intervals == nil || len(intervals.Intervals) == 0 {
+		return 0
+	}
+	return intervals.Intervals[0].Start
+}
 func (intervals *ClosedIntervals) TryMerge(o ClosedIntervals) {
 	intervals.Intervals = append(intervals.Intervals, o.Intervals...)
 	sort.Slice(intervals.Intervals, func(i, j int) bool {
@@ -134,6 +146,13 @@ func (intervals *ClosedIntervals) GetCardinality() int {
 	return cardinality
 }
 func (intervals *ClosedIntervals) WriteTo(w io.Writer) (n int64, err error) {
+	if intervals == nil {
+		if err = binary.Write(w, binary.BigEndian, uint64(0)); err != nil {
+			return
+		}
+		n += 8
+		return n, nil
+	}
 	if err = binary.Write(w, binary.BigEndian, uint64(len(intervals.Intervals))); err != nil {
 		return
 	}

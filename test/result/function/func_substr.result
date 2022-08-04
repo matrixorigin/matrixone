@@ -166,26 +166,28 @@ id	c	vc
 8	BerkAuthor	Cool.Berkly.the.book
 select distinct(substr(c,2)) from t1;
 (substr(c,2))
-affy
 ugs
-owboy
-nonymous
-estSeller
 veryoneBu
-anFran
-erkAuthor
 null
+owboy
+affy
+anFran
+nonymous
+
+estSeller
+erkAuthor
 select distinct(substr(vc,3)) from t1;
 (substr(vc,3))
-ucklife
-abbitlife
-feontherange
-nnabuythisbook?
+ol.Berkly.the.book
 eHeckuvabook
+nnabuythisbook?
 isverybook
 isasanfranlifetyle
-ol.Berkly.the.book
 null
+abbitlife
+feontherange
+
+ucklife
 select endswith(c,'a'),endswith(vc,'a') from t1;
 endswith(c, a)	endswith(vc, a)
 0	0

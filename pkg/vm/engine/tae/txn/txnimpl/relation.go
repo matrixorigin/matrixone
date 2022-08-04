@@ -216,7 +216,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (
 	bat := containers.NewBatch()
 	defer bat.Close()
 	for _, def := range schema.ColDefs {
-		if def.IsHidden() {
+		if def.IsPhyAddr() {
 			continue
 		}
 		var colVal any
@@ -240,8 +240,8 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (
 	return
 }
 
-func (h *txnRelation) UpdateByHiddenKey(key any, col int, v any) error {
-	sid, bid, row := model.DecodeHiddenKeyFromValue(key)
+func (h *txnRelation) UpdateByPhyAddrKey(key any, col int, v any) error {
+	sid, bid, row := model.DecodePhyAddrKeyFromValue(key)
 	id := &common.ID{
 		TableID:   h.table.entry.ID,
 		SegmentID: sid,
@@ -262,22 +262,22 @@ func (h *txnRelation) DeleteByFilter(filter *handle.Filter) (err error) {
 	return h.RangeDelete(id, row, row, handle.DT_Normal)
 }
 
-func (h *txnRelation) DeleteByHiddenKeys(keys containers.Vector) (err error) {
+func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
 	id := &common.ID{
 		TableID: h.table.entry.ID,
 	}
 	var row uint32
 	dbId := h.table.entry.GetDB().ID
 	err = keys.Foreach(func(key any, _ int) (err error) {
-		id.SegmentID, id.BlockID, row = model.DecodeHiddenKeyFromValue(key)
+		id.SegmentID, id.BlockID, row = model.DecodePhyAddrKeyFromValue(key)
 		err = h.Txn.GetStore().RangeDelete(dbId, id, row, row, handle.DT_Normal)
 		return
 	}, nil)
 	return
 }
 
-func (h *txnRelation) DeleteByHiddenKey(key any) error {
-	sid, bid, row := model.DecodeHiddenKeyFromValue(key)
+func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
+	sid, bid, row := model.DecodePhyAddrKeyFromValue(key)
 	id := &common.ID{
 		TableID:   h.table.entry.ID,
 		SegmentID: sid,
@@ -290,8 +290,8 @@ func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.De
 	return h.Txn.GetStore().RangeDelete(h.table.entry.GetDB().ID, id, start, end, dt)
 }
 
-func (h *txnRelation) GetValueByHiddenKey(key any, col int) (any, error) {
-	sid, bid, row := model.DecodeHiddenKeyFromValue(key)
+func (h *txnRelation) GetValueByPhyAddrKey(key any, col int) (any, error) {
+	sid, bid, row := model.DecodePhyAddrKeyFromValue(key)
 	id := &common.ID{
 		TableID:   h.table.entry.ID,
 		SegmentID: sid,

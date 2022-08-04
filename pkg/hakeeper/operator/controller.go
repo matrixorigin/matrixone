@@ -171,8 +171,9 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
 				Bootstrapping: false,
 				ConfigChange: &pb.ConfigChange{
 					Replica: pb.Replica{
-						UUID:    st.UUID,
-						ShardID: st.ShardID,
+						UUID:      st.UUID,
+						ShardID:   st.ShardID,
+						ReplicaID: st.ReplicaID,
 					},
 					ChangeType: pb.KillZombie,
 				},
