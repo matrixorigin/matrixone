@@ -167,6 +167,11 @@ type baseBinder struct {
 	boundCols []string
 }
 
+type DefaultBinder struct {
+	baseBinder
+	typ *Type
+}
+
 type TableBinder struct {
 	baseBinder
 }

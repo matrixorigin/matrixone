@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"runtime"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -36,13 +38,14 @@ import (
 
 // New is used to new an object of compile
 func New(db string, sql string, uid string,
-	e engine.Engine, proc *process.Process) *Compile {
+	e engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
 	return &Compile{
 		e:      e,
 		db:     db,
 		uid:    uid,
 		sql:    sql,
 		proc:   proc,
+		stmt:   stmt,
 		cnList: e.Nodes(),
 	}
 }
@@ -123,6 +126,13 @@ func (c *Compile) Run(ts uint64) (err error) {
 		}
 		c.setAffectedRows(affectedRows)
 		return nil
+	case InsertValues:
+		affectedRows, err := c.scope.InsertValues(ts, c.proc.Snapshot, c.e, c.stmt.(*tree.Insert))
+		if err != nil {
+			return err
+		}
+		c.setAffectedRows(affectedRows)
+		return nil
 	}
 	return nil
 }
@@ -172,6 +182,11 @@ func (c *Compile) compileScope(pn *plan.Plan) (*Scope, error) {
 			// 2、show variables will not return query
 			// 3、show create database/table need rewrite to create sql
 		}
+	case *plan.Plan_Ins:
+		return &Scope{
+			Magic: InsertValues,
+			Plan:  pn,
+		}, nil
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", pn))
 }
@@ -323,8 +338,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 }
 
 func (c *Compile) compileTableScan(n *plan.Node) []*Scope {
-	var ss []*Scope
-
+	ss := make([]*Scope, 0, len(c.cnList))
 	if len(c.cnList) == 0 {
 		ss = append(ss, c.compileTableScanWithNode(n, engine.Node{Mcpu: c.NumCPU()}))
 		return ss
@@ -645,8 +659,7 @@ func (c *Compile) newGroupScopeListWithNode(mcpu, childrenCount int) []*Scope {
 }
 
 func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) ([]*Scope, *Scope) {
-	var regs []*process.WaitRegister
-
+	regs := make([]*process.WaitRegister, 0, len(ss))
 	chp := c.newMergeScope(children)
 	chp.IsEnd = true
 	rs := make([]*Scope, len(ss))

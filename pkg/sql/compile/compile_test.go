@@ -64,7 +64,7 @@ func testPrint(_ interface{}, _ *batch.Batch) error {
 
 func TestCompile(t *testing.T) {
 	for _, tc := range tcs {
-		c := New("test", tc.sql, "", tc.e, tc.proc)
+		c := New("test", tc.sql, "", tc.e, tc.proc, nil)
 		err := c.Compile(tc.pn, nil, testPrint)
 		require.NoError(t, err)
 		c.GetAffectedRows()
@@ -75,7 +75,7 @@ func TestCompile(t *testing.T) {
 
 func TestEncode(t *testing.T) {
 	for _, tc := range tcs {
-		c := New("test", tc.sql, "", tc.e, tc.proc)
+		c := New("test", tc.sql, "", tc.e, tc.proc, nil)
 		err := c.Compile(tc.pn, nil, testPrint)
 		require.NoError(t, err)
 		data, err := encoding.Encode(c.scope)

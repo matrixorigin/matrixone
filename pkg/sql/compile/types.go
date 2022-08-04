@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -38,6 +39,7 @@ const (
 	Deletion
 	Insert
 	Update
+	InsertValues
 )
 
 type EncodeSource struct {
@@ -110,4 +112,6 @@ type Compile struct {
 	proc *process.Process
 
 	cnList engine.Nodes
+	// ast
+	stmt tree.Statement
 }
