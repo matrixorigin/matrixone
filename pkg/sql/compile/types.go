@@ -15,6 +15,8 @@
 package compile
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -91,10 +93,19 @@ type Scope struct {
 	Reg *process.WaitRegister
 }
 
+// anaylze information
+type anaylze struct {
+	// curr is the current index of plan
+	curr      int
+	qry       *plan.Query
+	analInfos []*process.AnalyzeInfo
+}
+
 // Compile contains all the information needed for compilation.
 type Compile struct {
 	scope *Scope
-	u     interface{}
+
+	u interface{}
 	//fill is a result writer runs a callback function.
 	//fill will be called when result data is ready.
 	fill func(interface{}, *batch.Batch) error
@@ -106,8 +117,11 @@ type Compile struct {
 	uid string
 	// sql sql text.
 	sql string
+
+	anal *anaylze
 	// e db engine instance.
-	e engine.Engine
+	e   engine.Engine
+	ctx context.Context
 	// proc stores the execution context.
 	proc *process.Process
 
