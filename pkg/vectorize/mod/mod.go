@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package div
+package mod
 
 /*
 #include "mo.h"
@@ -21,7 +21,6 @@ package div
 #cgo LDFLAGS: -L../../../cgo -lmo -lm
 */
 import "C"
-
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -35,7 +34,7 @@ const (
 	RIGHT_IS_SCALAR = 2
 )
 
-func NumericDivFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
+func NumericModSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
 	flag := 0
 	if xs.IsScalar() {
@@ -45,16 +44,16 @@ func NumericDivFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 		flag |= RIGHT_IS_SCALAR
 	}
 
-	rc := C.Float_VecDiv(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
+	rc := C.SignedInt_VecMod(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
 	if rc != 0 {
-		return moerr.NewError(moerr.DIVIVISION_BY_ZERO, "division by zero")
+		return moerr.NewError(moerr.OUT_OF_RANGE, "int mod zero modulus")
 	}
 	return nil
 }
 
-func NumericIntegerDivFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[int64](rs)
+func NumericModUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error {
+	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
 	flag := 0
 	if xs.IsScalar() {
 		flag |= LEFT_IS_SCALAR
@@ -63,10 +62,28 @@ func NumericIntegerDivFloat[T constraints.Float](xs, ys, rs *vector.Vector) erro
 		flag |= RIGHT_IS_SCALAR
 	}
 
-	rc := C.Float_VecIntegerDiv(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
+	rc := C.UnsignedInt_VecMod(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
 	if rc != 0 {
-		return moerr.NewError(moerr.DIVIVISION_BY_ZERO, "division by zero")
+		return moerr.NewError(moerr.OUT_OF_RANGE, "unsigned int mod zero modulus")
+	}
+	return nil
+}
+
+func NumericModFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
+	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	flag := 0
+	if xs.IsScalar() {
+		flag |= LEFT_IS_SCALAR
+	}
+	if ys.IsScalar() {
+		flag |= RIGHT_IS_SCALAR
+	}
+
+	rc := C.Float_VecMod(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
+	if rc != 0 {
+		return moerr.NewError(moerr.OUT_OF_RANGE, "float mod zero modulus")
 	}
 	return nil
 }
