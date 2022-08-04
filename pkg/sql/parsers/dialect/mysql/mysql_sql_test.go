@@ -786,9 +786,11 @@ var (
 		input:  "explain format = 'tree' for connection 10",
 		output: "explain format = tree for connection 10",
 	}, {
-		input: "explain db.a db.a.a",
+		input:  "explain db.a",
+		output: "show columns from db.a",
 	}, {
-		input: "explain a",
+		input:  "explain a",
+		output: "show columns from a",
 	}, {
 		input:  "alter user u1 require cipher 'xxx' subject 'yyy' with max_queries_per_hour 0 password expire interval 1 day password expire default account lock account unlock",
 		output: "alter user u1 require cipher xxx subject yyy with max_queries_per_hour 0 password expire interval 1 day password expire default account lock account unlock",
