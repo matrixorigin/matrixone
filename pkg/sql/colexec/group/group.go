@@ -108,14 +108,14 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		ctr.bat.Zs = proc.GetMheap().GetSels()
 		ctr.bat.Zs = append(ctr.bat.Zs, 0)
 		ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
-		for i, agg := range ap.Aggs {
-			if ctr.bat.Aggs[i], err = aggregate.New(agg.Op, agg.Dist, ctr.aggVecs[i].vec.Typ); err != nil {
+		for i, ag := range ap.Aggs {
+			if ctr.bat.Aggs[i], err = aggregate.New(ag.Op, ag.Dist, ctr.aggVecs[i].vec.Typ); err != nil {
 				ctr.bat = nil
 				return false, err
 			}
 		}
-		for _, agg := range ctr.bat.Aggs {
-			if err := agg.Grows(1, proc.GetMheap()); err != nil {
+		for _, ag := range ctr.bat.Aggs {
+			if err := ag.Grows(1, proc.GetMheap()); err != nil {
 				ctr.bat.Clean(proc.GetMheap())
 				return false, err
 			}
@@ -234,8 +234,8 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			}
 		}
 		ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
-		for i, agg := range ap.Aggs {
-			if ctr.bat.Aggs[i], err = aggregate.New(agg.Op, agg.Dist, ctr.aggVecs[i].vec.Typ); err != nil {
+		for i, ag := range ap.Aggs {
+			if ctr.bat.Aggs[i], err = aggregate.New(ag.Op, ag.Dist, ctr.aggVecs[i].vec.Typ); err != nil {
 				ctr.bat = nil
 				return false, err
 			}
@@ -257,9 +257,9 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	}
 	switch ctr.typ {
 	case H8:
-		err = ctr.processH8(bat, ap, proc)
+		err = ctr.processH8(bat, proc)
 	default:
-		err = ctr.processHStr(bat, ap, proc)
+		err = ctr.processHStr(bat, proc)
 	}
 	if err != nil {
 		ctr.clean()
@@ -279,7 +279,7 @@ func (ctr *container) processH0(bat *batch.Batch, ap *Argument, proc *process.Pr
 	return nil
 }
 
-func (ctr *container) processH8(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 	count := bat.Length()
 	itr := ctr.intHashMap.NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit {
@@ -287,18 +287,19 @@ func (ctr *container) processH8(bat *batch.Batch, ap *Argument, proc *process.Pr
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
+		rows := ctr.intHashMap.GroupCount()
 		vals, _, err := itr.Insert(i, n, ctr.vecs)
 		if err != nil {
 			return err
 		}
-		if err := ctr.batchFill(i, n, bat, vals, ap, ctr.intHashMap, proc); err != nil {
+		if err := ctr.batchFill(i, n, bat, vals, rows, proc); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (ctr *container) processHStr(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error {
 	count := bat.Length()
 	itr := ctr.strHashMap.NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit { // batch
@@ -306,27 +307,28 @@ func (ctr *container) processHStr(bat *batch.Batch, ap *Argument, proc *process.
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
+		rows := ctr.strHashMap.GroupCount()
 		vals, _, err := itr.Insert(i, n, ctr.vecs)
 		if err != nil {
 			return err
 		}
-		if err := ctr.batchFill(i, n, bat, vals, ap, ctr.strHashMap, proc); err != nil {
+		if err := ctr.batchFill(i, n, bat, vals, rows, proc); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, ap *Argument, mp hashmap.HashMap, proc *process.Process) error {
+func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, hashRows uint64, proc *process.Process) error {
 	cnt := 0
 	copy(ctr.inserted[:n], ctr.zInserted[:n])
 	for k, v := range vals[:n] {
 		if v == 0 {
 			continue
 		}
-		if v > mp.GroupCount() {
+		if v > hashRows {
 			ctr.inserted[k] = 1
-			mp.AddGroup()
+			hashRows++
 			cnt++
 			ctr.bat.Zs = append(ctr.bat.Zs, 0)
 		}
@@ -339,21 +341,24 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, a
 				return err
 			}
 		}
-		for _, agg := range ctr.bat.Aggs {
-			if err := agg.Grows(cnt, proc.Mp); err != nil {
+		for _, ag := range ctr.bat.Aggs {
+			if err := ag.Grows(cnt, proc.Mp); err != nil {
 				return err
 			}
 		}
 	}
-	for j, agg := range ctr.bat.Aggs {
-		agg.BatchFill(int64(i), ctr.inserted[:n], vals, bat.Zs, []*vector.Vector{ctr.aggVecs[j].vec})
+	for j, ag := range ctr.bat.Aggs {
+		err := ag.BatchFill(int64(i), ctr.inserted[:n], vals, bat.Zs, []*vector.Vector{ctr.aggVecs[j].vec})
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 func (ctr *container) evalAggVector(bat *batch.Batch, aggs []aggregate.Aggregate, proc *process.Process) error {
-	for i, agg := range aggs {
-		vec, err := colexec.EvalExpr(bat, proc, agg.E)
+	for i, ag := range aggs {
+		vec, err := colexec.EvalExpr(bat, proc, ag.E)
 		if err != nil || vec.ConstExpand(proc.GetMheap()) == nil {
 			for j := 0; j < i; j++ {
 				if ctr.aggVecs[j].needFree {
