@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"go/constant"
 	"os"
 	"runtime"
@@ -332,7 +333,7 @@ func ConvertCatalogSchemaToEngineFormat(mcs *CatalogSchema) []*engine.AttributeD
 				Name:    attr.AttributeName,
 				Alg:     0,
 				Type:    attr.AttributeType,
-				Default: engine.DefaultExpr{},
+				Default: &plan.Default{},
 			}}
 	}
 

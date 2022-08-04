@@ -26,8 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  "DELETE a1, a2 FROM t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.a = a2.b;",
-		output: "delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.a = a2.b",
+		input: "insert into t2 values (1.7156e-1, 3)",
 	}
 )
 
@@ -977,6 +976,10 @@ var (
 		input: "select * from t intersect all select c from t1",
 	}, {
 		input: "select * from t intersect distinct select c from t1",
+	}, {
+		input: "select * from t minus all select c from t1",
+	}, {
+		input: "select * from t minus distinct select c from t1",
 	}, {
 		input: "select * from t minus select c from t1",
 	}, {
