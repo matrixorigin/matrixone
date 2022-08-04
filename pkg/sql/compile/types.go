@@ -42,9 +42,6 @@ const (
 	InsertValues
 )
 
-// Address is the ip:port of local node
-var Address string
-
 type EncodeSource struct {
 	SchemaName   string
 	RelationName string
@@ -76,8 +73,8 @@ type Scope struct {
 	// 2 -  execution unit that requires remote call.
 	Magic int
 
-	// used for dispatch
-	DispatchAll bool
+	// IsEnd means the pipeline is end
+	IsEnd bool
 
 	Plan *plan.Plan
 	// DataSource stores information about data source.
@@ -113,6 +110,8 @@ type Compile struct {
 	e engine.Engine
 	// proc stores the execution context.
 	proc *process.Process
+
+	cnList engine.Nodes
 	// ast
 	stmt tree.Statement
 }
