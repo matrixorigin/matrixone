@@ -22,37 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-var zeroUint64 []uint64
-
-var zeroUint32 []uint32
-
 func init() {
 	zeroUint64 = make([]uint64, UnitLimit)
 	zeroUint32 = make([]uint32, UnitLimit)
-}
-
-// IntHashMap key is int64, value is an uint64 (start from 1)
-// before you use the IntHashMap, the user should make sure that
-// sum of vectors' length equal to 8
-type IntHashMap struct {
-	hasNull bool
-
-	rows             uint64
-	keys             []uint64
-	keyOffs          []uint32
-	values           []uint64
-	zValues          []int64
-	hashes           []uint64
-	ibucket, nbucket uint64
-
-	m       *mheap.Mheap
-	hashMap *hashtable.Int64HashMap
-}
-
-type intHashMapIterator struct {
-	ibucket, nbucket uint64
-	m                *mheap.Mheap
-	mp               *IntHashMap
 }
 
 func NewIntHashMap(hasNull bool, ibucket, nbucket uint64, m *mheap.Mheap) (*IntHashMap, error) {
