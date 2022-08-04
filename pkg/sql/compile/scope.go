@@ -171,7 +171,7 @@ func (s *Scope) Update(ts uint64, snapshot engine.Snapshot, c *Compile) (uint64,
 	return arg.AffectedRows, nil
 }
 
-func (s *Scope) InsertValues(ts uint64, snapshot engine.Snapshot, engine engine.Engine, stmt *tree.Insert) (uint64, error) {
+func (s *Scope) InsertValues(ts uint64, snapshot engine.Snapshot, engine engine.Engine, proc *process.Process, stmt *tree.Insert) (uint64, error) {
 	p := s.Plan.GetIns()
 
 	ctx := context.TODO()
@@ -191,7 +191,7 @@ func (s *Scope) InsertValues(ts uint64, snapshot engine.Snapshot, engine engine.
 		p.ExplicitCols = append(p.ExplicitCols, p.OtherCols...)
 	}
 
-	if err := fillBatch(bat, p, stmt.Rows.Select.(*tree.ValuesClause).Rows); err != nil {
+	if err := fillBatch(bat, p, stmt.Rows.Select.(*tree.ValuesClause).Rows, proc); err != nil {
 		return 0, err
 	}
 	batch.Reorder(bat, p.OrderAttrs)
@@ -202,7 +202,7 @@ func (s *Scope) InsertValues(ts uint64, snapshot engine.Snapshot, engine engine.
 	return uint64(len(p.Columns[0].Column)), nil
 }
 
-func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error {
+func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *process.Process) error {
 	rowCount := len(p.Columns[0].Column)
 
 	tmpBat := batch.NewWithSize(0)
@@ -214,7 +214,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error 
 			vs := make([][]byte, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, nil, expr)
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 					if err != nil {
 						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 					}
@@ -232,7 +232,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error 
 			vs := make([]bool, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, nil, expr)
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 					if err != nil {
 						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 					}
@@ -250,7 +250,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error 
 			vs := make([]int8, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, nil, expr)
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 					if err != nil {
 						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 					}
@@ -268,7 +268,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error 
 			vs := make([]int16, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, nil, expr)
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 					if err != nil {
 						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 					}
@@ -286,7 +286,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error 
 			vs := make([]int32, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, nil, expr)
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 					if err != nil {
 						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 					}
@@ -304,7 +304,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error 
 			vs := make([]int64, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, nil, expr)
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 					if err != nil {
 						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 					}
@@ -322,7 +322,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error 
 			vs := make([]uint8, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, nil, expr)
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 					if err != nil {
 						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 					}
@@ -340,7 +340,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error 
 			vs := make([]uint16, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, nil, expr)
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 					if err != nil {
 						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 					}
@@ -358,7 +358,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error 
 			vs := make([]uint32, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, nil, expr)
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 					if err != nil {
 						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 					}
@@ -376,7 +376,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error 
 			vs := make([]uint64, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, nil, expr)
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 					if err != nil {
 						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 					}
@@ -394,7 +394,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error 
 			vs := make([]float32, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, nil, expr)
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 					if err != nil {
 						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 					}
@@ -412,7 +412,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error 
 			vs := make([]float64, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, nil, expr)
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 					if err != nil {
 						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 					}
@@ -430,7 +430,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error 
 			vs := make([][]byte, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, nil, expr)
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 					if err != nil {
 						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 					}
@@ -448,7 +448,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error 
 			vs := make([]types.Date, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, nil, expr)
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 					if err != nil {
 						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 					}
@@ -466,7 +466,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error 
 			vs := make([]types.Datetime, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, nil, expr)
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 					if err != nil {
 						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 					}
@@ -484,7 +484,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error 
 			vs := make([]types.Timestamp, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, nil, expr)
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 					if err != nil {
 						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 					}
@@ -502,7 +502,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error 
 			vs := make([]types.Decimal64, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, nil, expr)
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 					if err != nil {
 						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 					}
@@ -520,7 +520,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs) error 
 			vs := make([]types.Decimal128, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, nil, expr)
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 					if err != nil {
 						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 					}
