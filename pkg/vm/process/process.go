@@ -32,8 +32,17 @@ func New(m *mheap.Mheap) *Process {
 	}
 }
 
+func NewWithAnalyze(p *Process, ctx context.Context, regNumber int, anals []*AnalyzeInfo) *Process {
+	proc := NewFromProc(p, ctx, regNumber)
+	proc.AnalInfos = make([]*AnalyzeInfo, len(anals))
+	for i := 0; i < len(anals); i++ {
+		proc.AnalInfos[i] = anals[i]
+	}
+	return proc
+}
+
 // NewFromProc create a new Process based on another process.
-func NewFromProc(p *Process, regNumber int) *Process {
+func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc := new(Process)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Id = p.Id

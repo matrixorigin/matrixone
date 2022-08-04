@@ -72,7 +72,8 @@ func init() {
 
 func dupInstruction(in vm.Instruction) vm.Instruction {
 	rin := vm.Instruction{
-		Op: in.Op,
+		Op:  in.Op,
+		Idx: in.Idx,
 	}
 	switch arg := in.Arg.(type) {
 	case *top.Argument:
@@ -99,6 +100,14 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Typs:       arg.Typs,
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
+		}
+	case *group.Argument:
+		rin.Arg = &group.Argument{
+			Aggs:    arg.Aggs,
+			Exprs:   arg.Exprs,
+			Types:   arg.Types,
+			Ibucket: arg.Ibucket,
+			Nbucket: arg.Nbucket,
 		}
 	case *single.Argument:
 		rin.Arg = &single.Argument{
