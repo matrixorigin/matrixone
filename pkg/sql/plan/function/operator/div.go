@@ -62,8 +62,8 @@ func Div[T constraints.Float](vectors []*vector.Vector, proc *process.Process, t
 			vector.SetCol(vec, div.NumericDiv(lvs, rvs, rs))
 			return vec, nil
 		}
-		sels := process.GetSels(proc)
-		defer process.PutSels(sels, proc)
+		sels := proc.GetMheap().GetSels()
+		defer proc.GetMheap().PutSels(sels)
 		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
 			if nulls.Contains(rv.Nsp, i) {
 				continue
@@ -91,8 +91,8 @@ func Div[T constraints.Float](vectors []*vector.Vector, proc *process.Process, t
 			vector.SetCol(vec, div.NumericDivScalar(lvs[0], rvs, rs))
 			return vec, nil
 		}
-		sels := process.GetSels(proc)
-		defer process.PutSels(sels, proc)
+		sels := proc.GetMheap().GetSels()
+		defer proc.GetMheap().PutSels(sels)
 		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
 			if nulls.Contains(rv.Nsp, i) {
 				continue
@@ -138,8 +138,8 @@ func Div[T constraints.Float](vectors []*vector.Vector, proc *process.Process, t
 		vector.SetCol(vec, div.NumericDiv(lvs, rvs, rs))
 		return vec, nil
 	}
-	sels := process.GetSels(proc)
-	defer process.PutSels(sels, proc)
+	sels := proc.GetMheap().GetSels()
+	defer proc.GetMheap().PutSels(sels)
 	for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
 		if nulls.Contains(rv.Nsp, i) {
 			continue
@@ -174,8 +174,8 @@ func DivDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 			vec.Typ = resultTyp
 			return vec, nil
 		}
-		sels := process.GetSels(proc)
-		defer process.PutSels(sels, proc)
+		sels := proc.GetMheap().GetSels()
+		defer proc.GetMheap().PutSels(sels)
 		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
 			if nulls.Contains(rv.Nsp, i) {
 				continue
@@ -186,8 +186,8 @@ func DivDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 		vec.Typ = resultTyp
 		return vec, nil
 	case lv.IsScalar() && !rv.IsScalar():
-		sels := process.GetSels(proc)
-		defer process.PutSels(sels, proc)
+		sels := proc.GetMheap().GetSels()
+		defer proc.GetMheap().PutSels(sels)
 		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
 			if nulls.Contains(rv.Nsp, i) {
 				continue
@@ -228,8 +228,8 @@ func DivDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 		vec.Typ = resultTyp
 		return vec, nil
 	}
-	sels := process.GetSels(proc)
-	defer process.PutSels(sels, proc)
+	sels := proc.GetMheap().GetSels()
+	defer proc.GetMheap().PutSels(sels)
 	for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
 		if nulls.Contains(rv.Nsp, i) {
 			continue
@@ -266,8 +266,8 @@ func DivDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 			vec.Typ = resultTyp
 			return vec, nil
 		}
-		sels := process.GetSels(proc)
-		defer process.PutSels(sels, proc)
+		sels := proc.GetMheap().GetSels()
+		defer proc.GetMheap().PutSels(sels)
 		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
 			if nulls.Contains(rv.Nsp, i) {
 				continue
@@ -298,8 +298,8 @@ func DivDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 			vec.Typ = resultTyp
 			return vec, nil
 		}
-		sels := process.GetSels(proc)
-		defer process.PutSels(sels, proc)
+		sels := proc.GetMheap().GetSels()
+		defer proc.GetMheap().PutSels(sels)
 		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
 			if nulls.Contains(rv.Nsp, i) {
 				continue
@@ -351,8 +351,8 @@ func DivDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		vec.Typ = resultTyp
 		return vec, nil
 	}
-	sels := process.GetSels(proc)
-	defer process.PutSels(sels, proc)
+	sels := proc.GetMheap().GetSels()
+	defer proc.GetMheap().PutSels(sels)
 	for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
 		if nulls.Contains(rv.Nsp, i) {
 			continue

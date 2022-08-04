@@ -47,8 +47,8 @@ func IntegerDiv[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 			vector.SetCol(vec, div.FloatIntegerDiv(lvs, rvs, rs))
 			return vec, nil
 		}
-		sels := process.GetSels(proc)
-		defer process.PutSels(sels, proc)
+		sels := proc.GetMheap().GetSels()
+		defer proc.GetMheap().PutSels(sels)
 		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
 			if nulls.Contains(rv.Nsp, i) {
 				continue
@@ -78,8 +78,8 @@ func IntegerDiv[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 			vector.SetCol(vec, div.FloatIntegerDivScalar(lvs[0], rvs, rs))
 			return vec, nil
 		}
-		sels := process.GetSels(proc)
-		defer process.PutSels(sels, proc)
+		sels := proc.GetMheap().GetSels()
+		defer proc.GetMheap().PutSels(sels)
 		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
 			if nulls.Contains(rv.Nsp, i) {
 				continue
@@ -124,8 +124,8 @@ func IntegerDiv[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 		vector.SetCol(vec, div.FloatIntegerDiv(lvs, rvs, rs))
 		return vec, nil
 	}
-	sels := process.GetSels(proc)
-	defer process.PutSels(sels, proc)
+	sels := proc.GetMheap().GetSels()
+	defer proc.GetMheap().PutSels(sels)
 	for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
 		if nulls.Contains(rv.Nsp, i) {
 			continue

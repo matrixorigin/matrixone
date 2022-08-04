@@ -62,10 +62,6 @@ func testPrint(_ interface{}, _ *batch.Batch) error {
 	return nil
 }
 
-func TestInitAddress(t *testing.T) {
-	InitAddress("0")
-}
-
 func TestCompile(t *testing.T) {
 	for _, tc := range tcs {
 		c := New("test", tc.sql, "", tc.e, tc.proc)
@@ -113,7 +109,7 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 
 func (s *Scope) equal(t *testing.T, r *Scope) {
 	require.Equal(t, s.Magic, r.Magic)
-	require.Equal(t, s.DispatchAll, r.DispatchAll)
+	require.Equal(t, s.IsEnd, r.IsEnd)
 	require.Equal(t, s.Plan, r.Plan)
 	{
 		if s.DataSource != nil {

@@ -386,7 +386,7 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	}
 }
 
-func constructGroup(n, cn *plan.Node) *group.Argument {
+func constructGroup(n, cn *plan.Node, ibucket, nbucket int) *group.Argument {
 	aggs := make([]aggregate.Aggregate, len(n.AggList))
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
@@ -412,10 +412,19 @@ func constructGroup(n, cn *plan.Node) *group.Argument {
 		typs[i].Precision = e.Typ.Precision
 	}
 	return &group.Argument{
-		Aggs:  aggs,
-		Types: typs,
-		Exprs: n.GroupBy,
+		Aggs:    aggs,
+		Types:   typs,
+		Exprs:   n.GroupBy,
+		Ibucket: uint64(ibucket),
+		Nbucket: uint64(nbucket),
 	}
+}
+
+func constructDispatch(all bool, regs []*process.WaitRegister) *dispatch.Argument {
+	arg := new(dispatch.Argument)
+	arg.All = all
+	arg.Regs = regs
+	return arg
 }
 
 func constructMergeGroup(_ *plan.Node, needEval bool) *mergegroup.Argument {

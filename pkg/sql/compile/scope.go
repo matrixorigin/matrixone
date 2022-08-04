@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -45,7 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -357,6 +355,7 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 	if _, err := p.MergeRun(s.Proc); err != nil {
 		return err
 	}
+
 	// check sub-goroutine's error
 	for i := 0; i < len(s.PreScopes); i++ {
 		if err := <-errChan; err != nil {
@@ -364,59 +363,6 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 		}
 	}
 	return nil
-}
-
-func (s *Scope) DispatchRun(e engine.Engine) error {
-	mcpu := s.NumCPU()
-	ss := make([]*Scope, mcpu)
-	regs := make([][]*process.WaitRegister, len(s.PreScopes))
-	{
-		for i := range regs {
-			regs[i] = make([]*process.WaitRegister, mcpu)
-		}
-	}
-	for i := 0; i < mcpu; i++ {
-		ss[i] = &Scope{
-			Magic: Merge,
-		}
-		ss[i].Proc = process.NewFromProc(mheap.New(s.Proc.Mp.Gm), s.Proc, len(s.PreScopes))
-		for j := 0; j < len(s.PreScopes); j++ {
-			regs[j][i] = ss[i].Proc.Reg.MergeReceivers[j]
-		}
-		ss[i].Instructions = append(ss[i].Instructions, dupInstruction(s.Instructions[0]))
-	}
-	for i := range s.PreScopes {
-		s.PreScopes[i].Instructions[len(s.PreScopes[i].Instructions)-1] = vm.Instruction{
-			Op: vm.Dispatch,
-			Arg: &dispatch.Argument{
-				Regs: regs[i],
-				Mmu:  s.Proc.Mp.Gm,
-				All:  s.PreScopes[i].DispatchAll,
-			},
-		}
-	}
-	s.PreScopes = append(s.PreScopes, ss...)
-	s.Instructions[0] = vm.Instruction{
-		Op:  vm.Merge,
-		Arg: &merge.Argument{},
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	s.Proc.Cancel = cancel
-	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
-	for i := range ss {
-		s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
-			Ctx: ctx,
-			Ch:  make(chan *batch.Batch, 1),
-		}
-		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Mmu: s.Proc.Mp.Gm,
-				Reg: s.Proc.Reg.MergeReceivers[i],
-			},
-		})
-	}
-	return s.MergeRun(e)
 }
 
 // RemoteRun send the scope to a remote node (if target node is itself, it is same to function ParallelRun) and run it.
@@ -429,9 +375,9 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 	var rds []engine.Reader
 
 	if s.DataSource == nil {
-		return s.DispatchRun(e)
+		return s.MergeRun(e)
 	}
-	mcpu := s.NumCPU()
+	mcpu := s.NodeInfo.Mcpu
 	snap := engine.Snapshot(s.Proc.Snapshot)
 	{
 		ctx := context.TODO()
@@ -456,12 +402,7 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 				Attributes:   s.DataSource.Attributes,
 			},
 		}
-		ss[i].Proc = process.New(mheap.New(s.Proc.Mp.Gm))
-		ss[i].Proc.Id = s.Proc.Id
-		ss[i].Proc.Lim = s.Proc.Lim
-		ss[i].Proc.UnixTime = s.Proc.UnixTime
-		ss[i].Proc.Snapshot = s.Proc.Snapshot
-		ss[i].Proc.SessionInfo = s.Proc.SessionInfo
+		ss[i].Proc = process.NewFromProc(s.Proc, 0)
 	}
 	{
 		var flg bool
@@ -600,10 +541,15 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op: vm.Connector,
 			Arg: &connector.Argument{
-				Mmu: s.Proc.Mp.Gm,
 				Reg: s.Proc.Reg.MergeReceivers[i],
 			},
 		})
 	}
 	return s.MergeRun(e)
+}
+
+func (s *Scope) appendInstruction(in vm.Instruction) {
+	if !s.IsEnd {
+		s.Instructions = append(s.Instructions, in)
+	}
 }

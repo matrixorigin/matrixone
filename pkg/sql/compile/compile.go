@@ -16,6 +16,7 @@ package compile
 
 import (
 	"fmt"
+	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,24 +31,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-// InitAddress is used to set address of local node
-func InitAddress(addr string) {
-	Address = addr
-}
 
 // New is used to new an object of compile
 func New(db string, sql string, uid string,
 	e engine.Engine, proc *process.Process) *Compile {
 	return &Compile{
-		e:    e,
-		db:   db,
-		uid:  uid,
-		sql:  sql,
-		proc: proc,
+		e:      e,
+		db:     db,
+		uid:    uid,
+		sql:    sql,
+		proc:   proc,
+		cnList: e.Nodes(),
 	}
 }
 
@@ -188,36 +184,16 @@ func (c *Compile) compileQuery(qry *plan.Query) (*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
-	var rs *Scope
+	rs := c.newMergeScope(ss)
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-		rs = &Scope{
-			PreScopes: ss,
-			Magic:     Deletion,
-		}
+		rs.Magic = Deletion
 	case plan.Query_INSERT:
-		// needn't do merge work
-		rs = &Scope{
-			PreScopes: ss,
-			Magic:     Insert,
-		}
+		rs.Magic = Insert
 	case plan.Query_UPDATE:
-		rs = &Scope{
-			PreScopes: ss,
-			Magic:     Update,
-		}
+		rs.Magic = Update
 	default:
-		rs = &Scope{
-			PreScopes: ss,
-			Magic:     Merge,
-		}
 	}
-
-	rs.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, len(ss))
-	rs.Instructions = append(rs.Instructions, vm.Instruction{
-		Op:  vm.Merge,
-		Arg: &merge.Argument{},
-	})
 	switch qry.StmtType {
 	case plan.Query_DELETE:
 		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc.Snapshot)
@@ -255,16 +231,6 @@ func (c *Compile) compileQuery(qry *plan.Query) (*Scope, error) {
 			},
 		})
 	}
-
-	for i := range ss {
-		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Mmu: rs.Proc.Mp.Gm,
-				Reg: rs.Proc.Reg.MergeReceivers[i],
-			},
-		})
-	}
 	return rs, nil
 }
 
@@ -272,7 +238,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
 		ds := &Scope{Magic: Normal}
-		ds.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, 0)
+		ds.Proc = process.NewFromProc(c.proc, 0)
 		bat := batch.NewWithSize(1)
 		{
 			bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
@@ -282,24 +248,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		ds.DataSource = &Source{Bat: bat}
 		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
 	case plan.Node_TABLE_SCAN:
-		src := &Source{
-			RelationName: n.TableDef.Name,
-			SchemaName:   n.ObjRef.SchemaName,
-			Attributes:   make([]string, len(n.TableDef.Cols)),
-		}
-		for i, col := range n.TableDef.Cols {
-			src.Attributes[i] = col.Name
-		}
-		nodes := make([]engine.Node, 1)
-		ss := make([]*Scope, len(nodes))
-		for i := range nodes {
-			ss[i] = &Scope{
-				DataSource: src,
-				Magic:      Remote,
-				NodeInfo:   nodes[i],
-			}
-			ss[i].Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, 0)
-		}
+		ss := c.compileTableScan(n)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_FILTER:
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
@@ -318,7 +267,11 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		if err != nil {
 			return nil, err
 		}
-		ss = c.compileGroup(n, ss, ns)
+		if len(n.GroupBy) == 0 {
+			ss = c.compileAgg(n, ss, ns)
+		} else {
+			ss = c.compileGroup(n, ss, ns)
+		}
 		rewriteExprListForAggNode(n.FilterList, int32(len(n.GroupBy)))
 		rewriteExprListForAggNode(n.ProjectList, int32(len(n.GroupBy)))
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
@@ -369,12 +322,45 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 	}
 }
 
+func (c *Compile) compileTableScan(n *plan.Node) []*Scope {
+	var ss []*Scope
+
+	if len(c.cnList) == 0 {
+		ss = append(ss, c.compileTableScanWithNode(n, engine.Node{Mcpu: c.NumCPU()}))
+		return ss
+	}
+	for i := range c.cnList {
+		ss = append(ss, c.compileTableScanWithNode(n, c.cnList[i]))
+	}
+	return ss
+}
+
+func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scope {
+	var s *Scope
+
+	attrs := make([]string, len(n.TableDef.Cols))
+	for j, col := range n.TableDef.Cols {
+		attrs[j] = col.Name
+	}
+	s = &Scope{
+		Magic:    Remote,
+		NodeInfo: node,
+		DataSource: &Source{
+			Attributes:   attrs,
+			RelationName: n.TableDef.Name,
+			SchemaName:   n.ObjRef.SchemaName,
+		},
+	}
+	s.Proc = process.NewFromProc(c.proc, 0)
+	return s
+}
+
 func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 	if len(n.FilterList) == 0 {
 		return ss
 	}
 	for i := range ss {
-		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Restrict,
 			Arg: constructRestrict(n),
 		})
@@ -384,7 +370,7 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
-		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Projection,
 			Arg: constructProjection(n),
 		})
@@ -393,55 +379,13 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
-	rs := make([]*Scope, len(ss))
-	for i := range ss {
-		chp := &Scope{
-			PreScopes:   children,
-			Magic:       Merge,
-			DispatchAll: true,
-		}
-		{ // build merge scope for children
-			chp.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, len(children))
-			for j := range children {
-				children[j].Instructions = append(children[j].Instructions, vm.Instruction{
-					Op: vm.Connector,
-					Arg: &connector.Argument{
-						Mmu: chp.Proc.Mp.Gm,
-						Reg: chp.Proc.Reg.MergeReceivers[j],
-					},
-				})
-			}
-			chp.Instructions = append(chp.Instructions, vm.Instruction{
-				Op:  vm.Merge,
-				Arg: &merge.Argument{},
-			})
-		}
-		rs[i] = &Scope{
-			Magic:     Remote,
-			PreScopes: []*Scope{ss[i], chp},
-		}
-		rs[i].Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, 2)
-		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Mmu: rs[i].Proc.Mp.Gm,
-				Reg: rs[i].Proc.Reg.MergeReceivers[0],
-			},
-		})
-		chp.Instructions = append(chp.Instructions, vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Mmu: rs[i].Proc.Mp.Gm,
-				Reg: rs[i].Proc.Reg.MergeReceivers[1],
-			},
-		})
-	}
+	rs, chp := c.newJoinScopeList(ss, children)
 	isEq := isEquiJoin(n.OnList)
 	switch joinTyp {
 	case plan.Node_INNER:
 		if len(n.OnList) == 0 {
 			for i := range rs {
-				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Product,
 					Arg: constructProduct(n, c.proc),
 				})
@@ -449,12 +393,12 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 		} else {
 			for i := range rs {
 				if isEq {
-					rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.Join,
 						Arg: constructJoin(n, c.proc),
 					})
 				} else {
-					rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.LoopJoin,
 						Arg: constructLoopJoin(n, c.proc),
 					})
@@ -464,12 +408,12 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 	case plan.Node_SEMI:
 		for i := range rs {
 			if isEq {
-				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Semi,
 					Arg: constructSemi(n, c.proc),
 				})
 			} else {
-				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopSemi,
 					Arg: constructLoopSemi(n, c.proc),
 				})
@@ -482,12 +426,12 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 		}
 		for i := range rs {
 			if isEq {
-				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Left,
 					Arg: constructLeft(n, typs, c.proc),
 				})
 			} else {
-				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopLeft,
 					Arg: constructLoopLeft(n, typs, c.proc),
 				})
@@ -500,12 +444,12 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 		}
 		for i := range rs {
 			if isEq {
-				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Single,
 					Arg: constructSingle(n, typs, c.proc),
 				})
 			} else {
-				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopSingle,
 					Arg: constructLoopSingle(n, typs, c.proc),
 				})
@@ -514,12 +458,12 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 	case plan.Node_ANTI:
 		for i := range rs {
 			if isEq && len(n.OnList) == 1 {
-				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Complement,
 					Arg: constructComplement(n, c.proc),
 				})
 			} else {
-				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopComplement,
 					Arg: constructLoopComplement(n, c.proc),
 				})
@@ -528,7 +472,7 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join typ '%v' not support now", n.JoinType)))
 	}
-	return rs
+	return append(rs, chp)
 }
 
 func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
@@ -554,141 +498,209 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileTop(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
-		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Top,
 			Arg: constructTop(n, c.proc),
 		})
 	}
-	rs := &Scope{
-		PreScopes: ss,
-		Magic:     Merge,
-	}
-	rs.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, len(ss))
-	rs.Instructions = append(rs.Instructions, vm.Instruction{
+	rs := c.newMergeScope(ss)
+	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeTop,
 		Arg: constructMergeTop(n, c.proc),
-	})
-
-	for i := range ss {
-		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Mmu: rs.Proc.Mp.Gm,
-				Reg: rs.Proc.Reg.MergeReceivers[i],
-			},
-		})
 	}
 	return []*Scope{rs}
 }
 
 func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
-		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Order,
 			Arg: constructOrder(n, c.proc),
 		})
 	}
-	rs := &Scope{
-		PreScopes: ss,
-		Magic:     Merge,
-	}
-	rs.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, len(ss))
-	rs.Instructions = append(rs.Instructions, vm.Instruction{
+	rs := c.newMergeScope(ss)
+	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeOrder,
 		Arg: constructMergeOrder(n, c.proc),
-	})
-
-	for i := range ss {
-		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Mmu: rs.Proc.Mp.Gm,
-				Reg: rs.Proc.Reg.MergeReceivers[i],
-			},
-		})
 	}
 	return []*Scope{rs}
 }
 
 func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
-	rs := &Scope{
-		PreScopes: ss,
-		Magic:     Merge,
-	}
-	rs.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, len(ss))
-	rs.Instructions = append(rs.Instructions, vm.Instruction{
+	rs := c.newMergeScope(ss)
+	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeOffset,
 		Arg: constructMergeOffset(n, c.proc),
-	})
-
-	for i := range ss {
-		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Mmu: rs.Proc.Mp.Gm,
-				Reg: rs.Proc.Reg.MergeReceivers[i],
-			},
-		})
 	}
 	return []*Scope{rs}
 }
 
 func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
-		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Limit,
 			Arg: constructLimit(n, c.proc),
 		})
 	}
-	rs := &Scope{
-		PreScopes: ss,
-		Magic:     Merge,
-	}
-	rs.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, len(ss))
-	rs.Instructions = append(rs.Instructions, vm.Instruction{
+	rs := c.newMergeScope(ss)
+	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeLimit,
 		Arg: constructMergeLimit(n, c.proc),
-	})
+	}
+	return []*Scope{rs}
+}
 
+func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	for i := range ss {
-		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Mmu: rs.Proc.Mp.Gm,
-				Reg: rs.Proc.Reg.MergeReceivers[i],
-			},
+		ss[i].appendInstruction(vm.Instruction{
+			Op:  vm.Group,
+			Arg: constructGroup(n, ns[n.Children[0]], 0, 0),
 		})
+	}
+	rs := c.newMergeScope(ss)
+	rs.Instructions[0] = vm.Instruction{
+		Op:  vm.MergeGroup,
+		Arg: constructMergeGroup(n, true),
 	}
 	return []*Scope{rs}
 }
 
 func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
+	rs := c.newGroupScopeList(validScopeCount(ss))
+	regs := extraGroupRegisters(rs)
 	for i := range ss {
-		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+		if !ss[i].IsEnd {
+			ss[i].appendInstruction(vm.Instruction{
+				Op:  vm.Dispatch,
+				Arg: constructDispatch(true, regs),
+			})
+			ss[i].IsEnd = true
+		}
+	}
+	for i := range rs {
+		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 			Op:  vm.Group,
-			Arg: constructGroup(n, ns[n.Children[0]]),
+			Arg: constructGroup(n, ns[n.Children[0]], i, len(rs)),
 		})
 	}
+	return []*Scope{c.newMergeScope(append(rs, ss...))}
+}
+
+func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := &Scope{
 		PreScopes: ss,
 		Magic:     Merge,
 	}
-	rs.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, len(ss))
+	cnt := 0
+	for _, s := range ss {
+		if s.IsEnd {
+			continue
+		}
+		cnt++
+	}
+	rs.Proc = process.NewFromProc(c.proc, cnt)
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
-		Op:  vm.MergeGroup,
-		Arg: constructMergeGroup(n, true),
+		Op:  vm.Merge,
+		Arg: &merge.Argument{},
 	})
-
+	j := 0
 	for i := range ss {
+		if !ss[i].IsEnd {
+			ss[i].appendInstruction(vm.Instruction{
+				Op: vm.Connector,
+				Arg: &connector.Argument{
+					Reg: rs.Proc.Reg.MergeReceivers[j],
+				},
+			})
+			j++
+		}
+	}
+	return rs
+}
+
+func (c *Compile) newGroupScopeList(childrenCount int) []*Scope {
+	var ss []*Scope
+
+	if len(c.cnList) == 0 {
+		return c.newGroupScopeListWithNode(c.NumCPU(), childrenCount)
+	}
+	for _, n := range c.cnList {
+		ss = append(ss, c.newGroupScopeListWithNode(n.Mcpu, childrenCount)...)
+	}
+	return ss
+}
+
+func (c *Compile) newGroupScopeListWithNode(mcpu, childrenCount int) []*Scope {
+	ss := make([]*Scope, mcpu)
+	for i := range ss {
+		ss[i] = new(Scope)
+		ss[i].Magic = Remote
+		ss[i].Proc = process.NewFromProc(c.proc, childrenCount)
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op:  vm.Merge,
+			Arg: &merge.Argument{},
+		})
+	}
+	return ss
+}
+
+func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) ([]*Scope, *Scope) {
+	var regs []*process.WaitRegister
+
+	chp := c.newMergeScope(children)
+	chp.IsEnd = true
+	rs := make([]*Scope, len(ss))
+	for i := range ss {
+		if ss[i].IsEnd {
+			rs[i] = ss[i]
+			continue
+		}
+		rs[i] = new(Scope)
+		rs[i].Magic = Merge
+		rs[i].PreScopes = []*Scope{ss[i]}
+		rs[i].Proc = process.NewFromProc(c.proc, 2)
+		regs = append(regs, rs[i].Proc.Reg.MergeReceivers[1])
+		ss[i].appendInstruction(vm.Instruction{
 			Op: vm.Connector,
 			Arg: &connector.Argument{
-				Mmu: rs.Proc.Mp.Gm,
-				Reg: rs.Proc.Reg.MergeReceivers[i],
+				Reg: rs[i].Proc.Reg.MergeReceivers[0],
 			},
 		})
 	}
-	return []*Scope{rs}
+	chp.Instructions = append(chp.Instructions, vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructDispatch(true, regs),
+	})
+	return rs, chp
+}
+
+// Number of cpu's available on the current machine
+func (c *Compile) NumCPU() int {
+	return runtime.NumCPU()
+}
+
+func validScopeCount(ss []*Scope) int {
+	var cnt int
+
+	for _, s := range ss {
+		if s.IsEnd {
+			continue
+		}
+		cnt++
+	}
+	return cnt
+}
+
+func extraGroupRegisters(ss []*Scope) []*process.WaitRegister {
+	var regs []*process.WaitRegister
+
+	for _, s := range ss {
+		if s.IsEnd {
+			continue
+		}
+		regs = append(regs, s.Proc.Reg.MergeReceivers...)
+	}
+	return regs
 }
 
 func rewriteExprListForAggNode(es []*plan.Expr, groupSize int32) {
