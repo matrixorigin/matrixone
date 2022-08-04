@@ -17,9 +17,6 @@ package engine
 import (
 	"bytes"
 	"fmt"
-	"strconv"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func (node *AttributeDef) Format(buf *bytes.Buffer) {
@@ -46,8 +43,10 @@ func (node *Attribute) Format(buf *bytes.Buffer) {
 		buf.WriteString(str)
 		buf.WriteByte(')')
 	}
-
-	val := makeVal2Str(node.Type, node.Default.Value, node.Default.Exist)
+	if node.Default.NullAbility {
+		buf.WriteString(" NULL ")
+	}
+	val := node.Default.Expr.String()
 	if val != "" {
 		buf.WriteString(" DEFAULT ")
 		buf.WriteString(val)
@@ -85,31 +84,4 @@ func (node *IndexTableDef) Format(buf *bytes.Buffer) {
 
 	buf.WriteString(" USING ")
 	buf.WriteString(node.Typ.ToString())
-}
-
-func makeVal2Str(typ types.Type, value interface{}, isNull bool) string {
-	if isNull {
-		return "NULL"
-	}
-	switch typ.Oid {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		res := value.(int64)
-		str := strconv.FormatInt(res, 10)
-		return str
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		res := value.(uint64)
-		str := strconv.FormatUint(res, 10)
-		return str
-	case types.T_float32, types.T_float64:
-		res := value.(float64)
-		str := strconv.FormatFloat(res, 'f', 10, 64)
-		return str
-	case types.T_char, types.T_varchar:
-		res := value.(string)
-		return res
-	case types.T_date:
-		res := value.(types.Date).String()
-		return res
-	}
-	return "NULL"
 }

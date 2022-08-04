@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -32,13 +33,26 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		if col.IsPhyAddr() {
 			continue
 		}
+
+		expr := &plan.Expr{}
+		if col.Default.Expr != nil {
+			if err := expr.Unmarshal(col.Default.Expr); err != nil {
+				return nil, err
+			}
+		} else {
+			expr = nil
+		}
+
 		def := &engine.AttributeDef{
 			Attr: engine.Attribute{
-				Name:     col.Name,
-				Type:     col.Type,
-				IsHidden: col.IsHidden(),
-				Primary:  col.IsPrimary(),
-				Default:  engine.MakeDefaultExpr(col.Default.Set, col.Default.Value, col.Default.Null),
+				Name:    col.Name,
+				Type:    col.Type,
+				Primary: col.IsPrimary(),
+				Default: &plan.Default{
+					NullAbility:  col.Default.NullAbility,
+					OriginString: col.Default.OriginString,
+					Expr:         expr,
+				},
 			},
 		}
 		defs = append(defs, def)
