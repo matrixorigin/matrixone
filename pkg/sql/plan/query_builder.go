@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -1507,6 +1508,56 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		obj, tableDef := builder.compCtx.Resolve(schema, table)
 		if tableDef == nil {
 			return 0, errors.New("", fmt.Sprintf("table %q does not exist", table))
+		}
+
+		if tableDef.IsView {
+			// set view statment to CTE
+			for _, def := range tableDef.Defs {
+				if tableViewDef, ok := def.Def.(*plan.TableDef_DefType_View); ok {
+					if ctx.cteByName == nil {
+						ctx.cteByName = make(map[string]*CTERef)
+					}
+
+					viewSql := string(tableViewDef.View.Stmt)
+					originStmts, err := mysql.Parse(viewSql)
+					if err != nil {
+						return 0, err
+					}
+					viewStmt, ok := originStmts[0].(*tree.CreateView)
+					if !ok {
+						return 0, errors.New("", "can not get view statement")
+					}
+
+					viewName := viewStmt.Name.ObjectName
+					var maskedCTEs map[string]any
+					if len(ctx.cteByName) > 0 {
+						maskedCTEs := make(map[string]any)
+						for name := range ctx.cteByName {
+							maskedCTEs[name] = nil
+						}
+					}
+
+					ctx.cteByName[string(viewName)] = &CTERef{
+						ast: &tree.CTE{
+							Name: &tree.AliasClause{
+								Alias: viewName,
+								Cols:  viewStmt.ColNames,
+							},
+							Stmt: viewStmt.AsSource,
+						},
+						maskedCTEs: maskedCTEs,
+					}
+
+					newTableName := tree.NewTableName(tree.Identifier(viewName), tree.ObjectNamePrefix{
+						CatalogName:     tbl.CatalogName,
+						SchemaName:      tbl.SchemaName,
+						ExplicitCatalog: false,
+						ExplicitSchema:  false,
+					})
+					return builder.buildTable(newTableName, ctx)
+				}
+			}
+			return 0, errors.New("", "can not get view statement")
 		}
 
 		nodeID = builder.appendNode(&plan.Node{

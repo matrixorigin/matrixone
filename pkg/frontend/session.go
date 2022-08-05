@@ -578,6 +578,10 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 	return tcc.dbName
 }
 
+func (tcc *TxnCompilerContext) GetRootSql() string {
+	return tcc.ses.GetSql()
+}
+
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	var err error
 	//open database
@@ -645,10 +649,12 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		return nil, nil
 	}
 
-	var defs []*plan2.ColDef
+	var cols []*plan2.ColDef
+	var defs []*plan2.TableDefType
+	isView := false
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
-			defs = append(defs, &plan2.ColDef{
+			cols = append(cols, &plan2.ColDef{
 				Name: attr.Attr.Name,
 				Typ: &plan2.Type{
 					Id:        plan.Type_TypeId(attr.Attr.Type.Oid),
@@ -660,6 +666,16 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				Default: attr.Attr.Default,
 			})
 		}
+		if view, ok := def.(*engine.ViewDef); ok && len(view.Stmt) > 0 {
+			defs = append(defs, &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_View{
+					View: &plan.ViewDef{
+						Stmt: view.Stmt,
+					},
+				},
+			})
+			isView = true
+		}
 	}
 	if tcc.QryTyp != TXN_DEFAULT {
 		hideKeys, err := table.GetHideKeys(ctx)
@@ -667,7 +683,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 			return nil, nil
 		}
 		hideKey := hideKeys[0]
-		defs = append(defs, &plan2.ColDef{
+		cols = append(cols, &plan2.ColDef{
 			Name: hideKey.Name,
 			Typ: &plan2.Type{
 				Id:        plan.Type_TypeId(hideKey.Type.Oid),
@@ -686,8 +702,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	}
 
 	tableDef := &plan2.TableDef{
-		Name: tableName,
-		Cols: defs,
+		Name:   tableName,
+		Cols:   cols,
+		IsView: isView,
+		Defs:   defs,
 	}
 	return obj, tableDef
 }

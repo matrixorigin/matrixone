@@ -29,6 +29,7 @@ const (
 	JoinSideCorrelated      = 1 << iota
 )
 
+type TableDefType = plan.TableDef_DefType
 type TableDef = plan.TableDef
 type ColDef = plan.ColDef
 type ObjectRef = plan.ObjectRef
@@ -58,6 +59,8 @@ type CompilerContext interface {
 	GetHideKeyDef(dbName string, tableName string) *ColDef
 	// get estimated cost by table & expr
 	Cost(obj *ObjectRef, e *Expr) *Cost
+	// get origin sql string of the root
+	GetRootSql() string
 }
 
 type Optimizer interface {

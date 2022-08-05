@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,14 +26,16 @@ import (
 )
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
+	viewName := stmt.Name.ObjectName
 	createTable := &plan.CreateTable{
 		IfNotExists: stmt.IfNotExists,
 		Temporary:   stmt.Temporary,
 		TableDef: &TableDef{
-			Name: string(stmt.Name.ObjectName),
+			Name: string(viewName),
+			// tae catalog need one column at least。
 			Cols: []*plan.ColDef{
 				{
-					Name: "a",
+					Name: "1",
 					Alg:  plan.CompressType_Lz4,
 					Typ: &plan.Type{
 						Id: plan.Type_INT8,
@@ -62,17 +63,13 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		return nil, err
 	}
 
-	// we use view as CTE
-	bytes, err := json.Marshal(tree.CTE{
-		Name: &tree.AliasClause{
-			Alias: stmt.Name.ObjectName,
-			Cols:  stmt.ColNames,
-		},
-		Stmt: stmt.AsSource,
-	})
-	if err != nil {
-		return nil, err
-	}
+	// we can not use JSON to Serialize Statement Now, because we use a lot of interface
+	// bytes, err := json.Marshal(stmt)
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	bytes := []byte(ctx.GetRootSql())
 
 	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
 		Def: &plan.TableDef_DefType_View{

@@ -301,6 +301,7 @@ message TableDef {
 	string name				= 1;
 	repeated ColDef cols	= 2;
 	repeated DefType defs	= 3;
+	bool is_view			= 4;
 }
 
 message Cost {
