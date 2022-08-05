@@ -19,7 +19,7 @@ jobs:
         id: ut-pr
         with:
           github-token: ${{ secrets.ACTION_TOKEN }}
-          ignore: "pkg/pb/,etc/,optools/,LICENSES/,cgo/,cmd/generate-config/test/,docs/,proto/,test/"
+          ignore: "etc/,optools/,LICENSES/,cgo/,cmd/generate-config/test/,docs/,proto/,test/"
 
       - uses: actions/checkout@v2
         with:
