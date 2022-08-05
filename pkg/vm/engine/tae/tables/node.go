@@ -48,7 +48,6 @@ type appendableNode struct {
 		sync.RWMutex
 		flushTS types.TS
 	}
-
 	// ckpTs     uint64 // unused
 	exception *atomic.Value
 }
