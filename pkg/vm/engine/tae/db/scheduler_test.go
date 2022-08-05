@@ -16,7 +16,6 @@ package db
 
 import (
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -27,28 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
-
-type mockIOTask struct {
-	*tasks.BaseTask
-	scope    *common.ID
-	duration time.Duration
-}
-
-func newMockIOTask(ctx *tasks.Context, scope *common.ID, duration time.Duration) *mockIOTask {
-	task := &mockIOTask{
-		scope:    scope,
-		duration: duration,
-	}
-	task.BaseTask = tasks.NewBaseTask(task, tasks.IOTask, ctx)
-	return task
-}
-
-func (task *mockIOTask) Scope() *common.ID { return task.scope }
-
-func (task *mockIOTask) Execute() error {
-	time.Sleep(task.duration)
-	return nil
-}
 
 func TestCheckpoint1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
