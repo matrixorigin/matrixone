@@ -50,10 +50,11 @@ type container struct {
 }
 
 type Argument struct {
-	ctr     *container
-	Ibucket uint64
-	Nbucket uint64
-	Exprs   []*plan.Expr // group Expressions
-	Types   []types.Type
-	Aggs    []aggregate.Aggregate // aggregations
+	ctr      *container
+	NeedEval bool // need to projection the aggregate column
+	Ibucket  uint64
+	Nbucket  uint64
+	Exprs    []*plan.Expr // group Expressions
+	Types    []types.Type
+	Aggs     []aggregate.Aggregate // aggregations
 }
