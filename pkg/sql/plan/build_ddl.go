@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -23,6 +24,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
+	createTable := &plan.CreateTable{
+		IfNotExists: stmt.IfNotExists,
+		Temporary:   stmt.Temporary,
+		TableDef: &TableDef{
+			Name: string(stmt.Name.ObjectName),
+		},
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_CREATE_TABLE,
+				Definition: &plan.DataDefinition_CreateTable{
+					CreateTable: createTable,
+				},
+			},
+		},
+	}, nil
+}
 
 func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error) {
 	createTable := &plan.CreateTable{
