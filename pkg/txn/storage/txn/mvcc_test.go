@@ -115,14 +115,10 @@ func TestMVCC(t *testing.T) {
 	now = now.Next()
 
 	// commit and read
-	tx1.State = Committed
+	tx1.State.Store(Committed)
 
-	tx3 := &Transaction{
-		ID: "3",
-	}
-	tx4 := &Transaction{
-		ID: "4",
-	}
+	tx3 := NewTransaction("3", Timestamp{})
+	tx4 := NewTransaction("4", Timestamp{})
 
 	// read committed
 	res = m.Read(tx3, now)
