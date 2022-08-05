@@ -50,14 +50,14 @@ func (a *analyze) Alloc(size int64) {
 }
 
 func (a *analyze) Input(bat *batch.Batch) {
-	if a.analInfo != nil {
+	if a.analInfo != nil && bat != nil {
 		atomic.AddInt64(&a.analInfo.InputSize, int64(bat.Size()))
 		atomic.AddInt64(&a.analInfo.InputRows, int64(bat.Length()))
 	}
 }
 
 func (a *analyze) Output(bat *batch.Batch) {
-	if a.analInfo != nil {
+	if a.analInfo != nil && bat != nil {
 		atomic.AddInt64(&a.analInfo.OutputSize, int64(bat.Size()))
 		atomic.AddInt64(&a.analInfo.OutputRows, int64(bat.Length()))
 	}

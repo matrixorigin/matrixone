@@ -83,13 +83,13 @@ select cast(cast(19999999999999999999 as decimal) as unsigned);
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a decimal(20),
 b VARCHAR(20));
--- @bvt:issue#3355
 INSERT INTO t1 (id,a) VALUES
 (1,0),
 (2,CAST(0x7FFFFFFFFFFFFFFF AS UNSIGNED)),
 (3,CAST(0x8000000000000000 AS UNSIGNED)),
 (4,CAST(0xFFFFFFFFFFFFFFFF AS UNSIGNED));
 UPDATE t1 SET b = a;
+-- @bvt:issue#4383
 select distinct * from t1 where ((a = '2147483647') and (b = '2147483647'));
 select a,count(a) from t1 group by a having count(a)>=2;
 -- @bvt:issue
