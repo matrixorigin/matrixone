@@ -16,6 +16,7 @@ package logutil2
 
 import (
 	"context"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -26,7 +27,7 @@ func Debug(ctx context.Context, msg string, fields ...zap.Field) {
 }
 
 func Info(ctx context.Context, msg string, fields ...zap.Field) {
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Info(msg, fields...)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), zap.Hooks(hook)).Info(msg, fields...)
 }
 
 func Warn(ctx context.Context, msg string, fields ...zap.Field) {
@@ -54,7 +55,7 @@ func Debugf(ctx context.Context, msg string, fields ...interface{}) {
 // Infof only use in develop mode
 func Infof(ctx context.Context, msg string, fields ...interface{}) {
 	logutil.GetReportLogFunc()(ctx, zapcore.InfoLevel, 1, msg, fields...)
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Infof(msg, fields...)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), zap.Hooks(hook)).Sugar().Infof(msg, fields...)
 }
 
 // Warnf only use in develop mode
@@ -66,7 +67,7 @@ func Warnf(ctx context.Context, msg string, fields ...interface{}) {
 // Errorf only use in develop mode
 func Errorf(ctx context.Context, msg string, fields ...interface{}) {
 	logutil.GetReportLogFunc()(ctx, zapcore.ErrorLevel, 1, msg, fields...)
-	logutil.GetGlobalLogger().WithOptions(zap.AddStacktrace(zap.ErrorLevel)).Sugar().Errorf(msg, fields...)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), zap.AddStacktrace(zap.ErrorLevel)).Sugar().Errorf(msg, fields...)
 }
 
 // Panicf only use in develop mode
@@ -79,4 +80,9 @@ func Panicf(ctx context.Context, msg string, fields ...interface{}) {
 func Fatalf(ctx context.Context, msg string, fields ...interface{}) {
 	logutil.GetReportLogFunc()(ctx, zapcore.FatalLevel, 1, msg, fields...)
 	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Fatalf(msg, fields...)
+}
+
+func hook(e zapcore.Entry) error {
+	fmt.Printf("entry: %v\n", e)
+	return nil
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"github.com/matrixorigin/matrixone/pkg/util/errors"
+	"go.uber.org/zap"
 	"sync"
 	"time"
 
@@ -94,6 +95,7 @@ func initExport(config *tracerProviderConfig) {
 	if p != nil {
 		config.spanProcessors = append(config.spanProcessors, NewBatchSpanProcessor(p))
 		logutil2.Infof(nil, "trace span processor")
+		logutil2.Info(nil, "[Replay]", zap.String("operation", "value1"), zap.String("operation_1", "value2"))
 	}
 }
 
