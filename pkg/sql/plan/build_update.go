@@ -93,7 +93,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	usePlan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_UPDATE
 	qry := usePlan.Plan.(*plan.Plan_Query).Query
 
-	// rebuild projection for update cols to get right type
+	// rebuild projection for update cols to get right type and default value
 	lastNode := qry.Nodes[qry.Steps[len(qry.Steps)-1]]
 	for _, ct := range updateCtxs {
 		var idx int
@@ -104,6 +104,15 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		}
 
 		for _, col := range ct.UpdateCols {
+			if c := lastNode.ProjectList[idx].GetC(); c != nil {
+				if c.GetDefaultval() {
+					if lastNode.ProjectList[idx], err = getDefaultExpr(col.Default, col.Typ); err != nil {
+						return nil, err
+					}
+					idx++
+					continue
+				}
+			}
 			lastNode.ProjectList[idx], err = makePlan2CastExpr(lastNode.ProjectList[idx], col.Typ)
 			if err != nil {
 				return nil, err

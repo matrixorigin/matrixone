@@ -82,3 +82,25 @@ func NewAlterUser(ife bool, iuf bool, uf *User, u []*User, r []*Role, t []TlsOpt
 		MiscOpts:   m,
 	}
 }
+
+type AlterAccount struct {
+	statementImpl
+	IfNotExists bool
+	Name        string
+	AuthOption  AccountAuthOption
+	//status_option or not
+	StatusOption AccountStatus
+	//comment or not
+	Comment AccountComment
+}
+
+func (ca *AlterAccount) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter account ")
+	if ca.IfNotExists {
+		ctx.WriteString("if not exists ")
+	}
+	ctx.WriteString(ca.Name)
+	ca.AuthOption.Format(ctx)
+	ca.StatusOption.Format(ctx)
+	ca.Comment.Format(ctx)
+}
