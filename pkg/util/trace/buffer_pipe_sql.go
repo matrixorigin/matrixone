@@ -122,7 +122,7 @@ func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 		panic(fmt.Sprintf("unknown type %s", name))
 	}
 	opt := t.opts[:]
-	opt = append(opt, bufferWithGenBatchFunc(f))
+	opt = append(opt, bufferWithGenBatchFunc(f), bufferWithType(name))
 	return newBuffer2Sql(opt...)
 }
 
@@ -351,11 +351,12 @@ var _ bp.ItemBuffer[bp.HasName, any] = &buffer2Sql{}
 
 // buffer2Sql catch item, like trace/log/error, buffer
 type buffer2Sql struct {
-	bp.Reminder
+	bp.Reminder   // see bufferWithReminder
 	buf           []IBuffer2SqlItem
 	mux           sync.Mutex
-	size          int64 // default: 1 MB
-	sizeThreshold int64 // const
+	bufferType    string // see bufferWithType
+	size          int64  // default: 1 MB
+	sizeThreshold int64  // see bufferWithSizeThreshold
 
 	genBatchFunc genBatchFunc
 }
@@ -412,6 +413,10 @@ func (b *buffer2Sql) Size() int64 {
 	return atomic.LoadInt64(&b.size)
 }
 
+func (b *buffer2Sql) GetBufferType() string {
+	return b.bufferType
+}
+
 func (b *buffer2Sql) GetBatch(buf *bytes.Buffer) any {
 	_, span := Start(DefaultContext(), "GenBatch")
 	defer span.End()
@@ -421,8 +426,7 @@ func (b *buffer2Sql) GetBatch(buf *bytes.Buffer) any {
 	if b.isEmpty() {
 		return ""
 	}
-	b.genBatchFunc(b.buf, buf)
-	return buf.String()
+	return b.genBatchFunc(b.buf, buf)
 }
 
 type buffer2SqlOption interface {
@@ -433,6 +437,18 @@ type buffer2SqlOptionFunc func(*buffer2Sql)
 
 func (f buffer2SqlOptionFunc) apply(b *buffer2Sql) {
 	f(b)
+}
+
+func bufferWithReminder(reminder bp.Reminder) buffer2SqlOption {
+	return buffer2SqlOptionFunc(func(b *buffer2Sql) {
+		b.Reminder = reminder
+	})
+}
+
+func bufferWithType(name string) buffer2SqlOption {
+	return buffer2SqlOptionFunc(func(b *buffer2Sql) {
+		b.bufferType = name
+	})
 }
 
 func bufferWithSizeThreshold(size int64) buffer2SqlOption {
