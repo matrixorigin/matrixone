@@ -6,25 +6,11 @@ import (
 	"github.com/cockroachdb/errors/withstack"
 )
 
-func Wrap(err error, message string) error {
-	// TODO
-	return nil
+func Wrap(err error, msg string) error {
+	return errutil.WrapWithDepth(1, err, msg)
 }
 
-// Wrapf wraps an error with a formatted message prefix. A stack
-// trace is also retained. If the format is empty, no prefix is added,
-// but the extra arguments are still processed for reportable strings.
-//
-// Note: the format string is assumed to not contain
-// PII and is included in Sentry reports.
-// Use errors.Wrapf(err, "%s", <unsafestring>) for errors
-// strings that may contain PII information.
-//
-// Detail output:
-// - original error message + prefix via `Error()` and formatting using `%v`/`%s`/`%q`.
-// - everything when formatting with `%+v`.
-// - stack trace, format, and redacted details via `errors.GetSafeDetails()`.
-// - stack trace, format, and redacted details in Sentry reports.
+// Wrapf like cockroachdb
 func Wrapf(err error, format string, args ...interface{}) error {
 	return WrapWithDepthf(1, err, format, args...)
 }

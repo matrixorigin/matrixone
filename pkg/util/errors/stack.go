@@ -20,8 +20,25 @@ import (
 	"io"
 	"runtime"
 
+	"github.com/cockroachdb/errors/withstack"
 	pkgErr "github.com/pkg/errors"
 )
+
+// This file mirrors the WithStack functionality from
+// github.com/pkg/errors. We would prefer to reuse the withStack
+// struct from that package directly (the library recognizes it well)
+// unfortunately github.com/pkg/errors does not enable client code to
+// customize the depth at which the stack trace is captured.
+
+// WithStack like cockroach/errors/withstack
+func WithStack(err error) error {
+	return withstack.WithStackDepth(err, 1)
+}
+
+// WithStackDepth call cockroach/errors/withstack
+func WithStackDepth(err error, depth int) error {
+	return withstack.WithStackDepth(err, depth+1)
+}
 
 type StackTrace = pkgErr.StackTrace
 
