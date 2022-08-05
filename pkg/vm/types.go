@@ -30,12 +30,14 @@ const (
 	Dispatch
 	Connector
 	Projection
-	Complement
+	Anti
+	Single
 
 	LoopJoin
 	LoopLeft
 	LoopSemi
-	LoopComplement
+	LoopAnti
+	LoopSingle
 
 	MergeTop
 	MergeLimit
@@ -51,14 +53,14 @@ const (
 	Minus
 )
 
-var _ = Minus
-
 // Instruction contains relational algebra
 type Instruction struct {
 	// Op specified the operator code of an instruction.
 	Op int
+	// Idx specified the anaylze information index
+	Idx int
 	// Arg contains the operand of this instruction.
-	Arg interface{}
+	Arg any
 }
 
 type Instructions []Instruction

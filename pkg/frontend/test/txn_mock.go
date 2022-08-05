@@ -217,11 +217,12 @@ func (mr *MockTxnEngineMockRecorder) Delete(arg0, arg1, arg2 interface{}) *gomoc
 }
 
 // Nodes mocks base method.
-func (m *MockTxnEngine) Nodes() engine.Nodes {
+func (m *MockTxnEngine) Nodes() (engine.Nodes, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Nodes")
 	ret0, _ := ret[0].(engine.Nodes)
-	return ret0
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // Nodes indicates an expected call of Nodes.

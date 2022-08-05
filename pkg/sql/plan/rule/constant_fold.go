@@ -36,6 +36,10 @@ func NewConstantFlod() *ConstantFold {
 	}
 }
 
+func (r *ConstantFold) GetBatch() *batch.Batch {
+	return r.bat
+}
+
 // Match always true
 func (r *ConstantFold) Match(n *plan.Node) bool {
 	return true

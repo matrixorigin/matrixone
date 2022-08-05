@@ -31,14 +31,15 @@ import (
 func TestBackgroundTickAndHeartbeat(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := Config{
-		UUID:                uuid.New().String(),
-		FS:                  vfs.NewStrictMem(),
-		DeploymentID:        1,
-		RTTMillisecond:      5,
-		DataDir:             "data-1",
-		ServiceAddress:      "127.0.0.1:9002",
-		RaftAddress:         "127.0.0.1:9000",
-		GossipAddress:       "127.0.0.1:9001",
+		UUID:           uuid.New().String(),
+		FS:             vfs.NewStrictMem(),
+		DeploymentID:   1,
+		RTTMillisecond: 5,
+		DataDir:        "data-1",
+		ServiceAddress: "127.0.0.1:9002",
+		RaftAddress:    "127.0.0.1:9000",
+		GossipAddress:  "127.0.0.1:9001",
+		// below is an unreachable address intentionally set
 		GossipSeedAddresses: []string{"127.0.0.1:9010"},
 	}
 	cfg.HeartbeatInterval.Duration = 5 * time.Millisecond
@@ -78,6 +79,32 @@ func TestBackgroundTickAndHeartbeat(t *testing.T) {
 	t.Fatalf("failed to tick/heartbeat")
 }
 
+func TestHandleKillZombie(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		has, err := hasMetadataRec(s.store.cfg.DataDir, logMetadataFilename, 1, 1, s.store.cfg.FS)
+		require.NoError(t, err)
+		assert.True(t, has)
+
+		cmd := pb.ScheduleCommand{
+			ConfigChange: &pb.ConfigChange{
+				ChangeType: pb.KillZombie,
+				Replica: pb.Replica{
+					ShardID:   1,
+					ReplicaID: 1,
+				},
+			},
+		}
+		mustHaveReplica(t, s.store, 1, 1)
+		s.handleCommands([]pb.ScheduleCommand{cmd})
+		assert.False(t, hasReplica(s.store, 1, 1))
+
+		has, err = hasMetadataRec(s.store.cfg.DataDir, logMetadataFilename, 1, 1, s.store.cfg.FS)
+		require.NoError(t, err)
+		assert.False(t, has)
+	}
+	runServiceTest(t, false, true, fn)
+}
+
 func TestHandleStartReplica(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cmd := pb.ScheduleCommand{
@@ -92,6 +119,10 @@ func TestHandleStartReplica(t *testing.T) {
 		}
 		s.handleCommands([]pb.ScheduleCommand{cmd})
 		mustHaveReplica(t, s.store, 1, 1)
+
+		has, err := hasMetadataRec(s.store.cfg.DataDir, logMetadataFilename, 1, 1, s.store.cfg.FS)
+		require.NoError(t, err)
+		assert.True(t, has)
 	}
 	runServiceTest(t, false, false, fn)
 }
@@ -122,6 +153,10 @@ func TestHandleStopReplica(t *testing.T) {
 		}
 		s.handleCommands([]pb.ScheduleCommand{cmd})
 		assert.False(t, hasReplica(s.store, 1, 1))
+
+		has, err := hasMetadataRec(s.store.cfg.DataDir, logMetadataFilename, 1, 1, s.store.cfg.FS)
+		require.NoError(t, err)
+		assert.True(t, has)
 	}
 	runServiceTest(t, false, false, fn)
 }

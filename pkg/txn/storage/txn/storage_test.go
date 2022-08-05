@@ -19,8 +19,10 @@ import (
 	"encoding/gob"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 	"github.com/stretchr/testify/assert"
 )
@@ -139,7 +141,22 @@ func testDatabase(
 				DatabaseID: dbID,
 				Name:       "table",
 				Type:       txnengine.RelationTable,
-				//TODO defs
+				Defs: []engine.TableDef{
+					&engine.AttributeDef{
+						Attr: engine.Attribute{
+							Name:    "a",
+							Type:    types.New(types.T_int64, 0, 0, 0),
+							Primary: true,
+						},
+					},
+					&engine.AttributeDef{
+						Attr: engine.Attribute{
+							Name:    "b",
+							Type:    types.New(types.T_int64, 0, 0, 0),
+							Primary: false,
+						},
+					},
+				},
 			},
 		)
 		assert.Equal(t, false, resp.ErrExisted)
@@ -202,6 +219,11 @@ func testDatabase(
 	}()
 
 	//TODO AddTableDef
+	//TODO DelTableDef
+	//TODO GetPrimaryKeys
+	//TODO GetTableDefs
+	//TODO Write
+	//TODO Read
 
 }
 

@@ -24,6 +24,7 @@ import (
 	"github.com/lni/dragonboat/v4"
 	cli "github.com/lni/dragonboat/v4/client"
 	"github.com/lni/dragonboat/v4/config"
+	"github.com/lni/dragonboat/v4/plugin/tee"
 	"github.com/lni/dragonboat/v4/raftpb"
 	sm "github.com/lni/dragonboat/v4/statemachine"
 
@@ -77,7 +78,8 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 		RaftAddress:         cfg.RaftAddress,
 		ListenAddress:       cfg.RaftListenAddress,
 		Expert: config.ExpertConfig{
-			FS: cfg.FS,
+			FS:           cfg.FS,
+			LogDBFactory: tee.TanPebbleLogDBFactory,
 			// FIXME: dragonboat need to be updated to make this field a first class
 			// citizen
 			TestGossipProbeInterval: 50 * time.Millisecond,
@@ -111,6 +113,7 @@ type store struct {
 	checker           hakeeper.Checker
 	alloc             hakeeper.IDAllocator
 	stopper           *stopper.Stopper
+	tickerStopper     *stopper.Stopper
 
 	bootstrapCheckCycles uint64
 	bootstrapMgr         *bootstrap.Manager
@@ -132,11 +135,12 @@ func newLogStore(cfg Config) (*store, error) {
 	plog.Infof("HAKeeper LogStoreTimeout: %s, DnStoreTimeout: %s",
 		hakeeperConfig.LogStoreTimeout, hakeeperConfig.DnStoreTimeout)
 	ls := &store{
-		cfg:     cfg,
-		nh:      nh,
-		checker: checkers.NewCoordinator(hakeeperConfig),
-		alloc:   newIDAllocator(),
-		stopper: stopper.NewStopper("log-store"),
+		cfg:           cfg,
+		nh:            nh,
+		checker:       checkers.NewCoordinator(hakeeperConfig),
+		alloc:         newIDAllocator(),
+		stopper:       stopper.NewStopper("log-store"),
+		tickerStopper: stopper.NewStopper("hakeeper-ticker"),
 	}
 	ls.mu.truncateCh = make(chan struct{})
 	ls.mu.pendingTruncate = make(map[uint64]struct{})
@@ -151,6 +155,7 @@ func newLogStore(cfg Config) (*store, error) {
 }
 
 func (l *store) close() error {
+	l.tickerStopper.Stop()
 	l.stopper.Stop()
 	if l.nh != nil {
 		l.nh.Close()
@@ -192,7 +197,7 @@ func (l *store) startHAKeeperReplica(replicaID uint64,
 	l.addMetadata(hakeeper.DefaultHAKeeperShardID, replicaID)
 	atomic.StoreUint64(&l.haKeeperReplicaID, replicaID)
 	if !l.cfg.DisableWorkers {
-		if err := l.stopper.RunNamedTask("hakeeper-ticker", func(ctx context.Context) {
+		if err := l.tickerStopper.RunNamedTask("hakeeper-ticker", func(ctx context.Context) {
 			plog.Infof("HAKeeper ticker started")
 			l.ticker(ctx)
 		}); err != nil {
@@ -216,8 +221,10 @@ func (l *store) startReplica(shardID uint64, replicaID uint64,
 }
 
 func (l *store) stopReplica(shardID uint64, replicaID uint64) error {
-	// FIXME: stop the hakeeper ticker when the replica being stopped
-	// is a hakeeper replica
+	if shardID == hakeeper.DefaultHAKeeperShardID {
+		plog.Infof("going to stop HAKeeper's ticker")
+		l.tickerStopper.Stop()
+	}
 	return l.nh.StopReplica(shardID, replicaID)
 }
 

@@ -53,7 +53,7 @@ type UnresolvedObjectName struct {
 
 func (node *UnresolvedObjectName) Format(ctx *FmtCtx) {
 	prefix := ""
-	for i := 0; i < node.NumParts; i++ {
+	for i := node.NumParts - 1; i >= 0; i-- {
 		ctx.WriteString(prefix)
 		ctx.WriteString(node.Parts[i])
 		prefix = "."

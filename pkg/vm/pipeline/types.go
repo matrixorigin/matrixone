@@ -86,7 +86,7 @@ type Pipeline struct {
 	attrs         []string
 	cols          []*plan.ColDef
 	Name2ColIndex map[string]int32
-	CreateSql	  string
+	CreateSql     string
 	// orders to be executed
 	instructions vm.Instructions
 	reg          *process.WaitRegister
@@ -96,4 +96,9 @@ type ParseLineHandler struct {
 	simdCsvReader *simdcsv.Reader
 	//csv read put lines into the channel
 	simdCsvGetParsedLinesChan atomic.Value // chan simdcsv.LineOut
+	lineIdx                   int
+	//batch
+	batchSize int
+	//simd csv
+	simdCsvLineArray [][]string
 }

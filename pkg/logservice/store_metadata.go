@@ -221,6 +221,20 @@ func readMetadataFile(dir string,
 	return nil
 }
 
+func hasMetadataRec(dir string,
+	filename string, shardID uint64, replicaID uint64, fs vfs.FS) (has bool, err error) {
+	var md metadata.LogStore
+	if err := readMetadataFile(dir, filename, &md, fs); err != nil {
+		return false, err
+	}
+	for _, rec := range md.Shards {
+		if rec.ShardID == shardID && rec.ReplicaID == replicaID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (l *store) loadMetadata() error {
 	fs := l.cfg.FS
 	dir := l.cfg.DataDir

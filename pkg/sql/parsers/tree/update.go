@@ -133,6 +133,9 @@ type LoadParam struct {
 	Config       fileservice.S3Config
 	LoadType     int
 	CompressType string
+	Region       string
+	APIKey       string
+	APISecret    string
 	S3options    []string
 }
 

@@ -281,8 +281,8 @@ func init() {
 		"force_quote":              FORCE_QUOTE,
 		"external":                 EXTERNAL,
 		"localfile":                LOCALFILE,
-		"url":						URL,
-		"s3option":					S3OPTION,
+		"url":                      URL,
+		"s3option":                 S3OPTION,
 		"parser":                   PARSER,
 		"partition":                PARTITION,
 		"partitions":               PARTITIONS,
@@ -482,5 +482,8 @@ func init() {
 		"deallocate":               DEALLOCATE,
 		"intersect":                INTERSECT,
 		"minus":                    MINUS,
+		"admin_name":               ADMIN_NAME,
+		"random":                   RANDOM,
+		"suspend":                  SUSPEND,
 	}
 }

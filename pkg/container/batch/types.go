@@ -19,6 +19,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
 
+type EncodeBatch struct {
+	Zs   []int64
+	Vecs []*vector.Vector
+}
+
 // Batch represents a part of a relationship
 // including an optional list of row numbers, columns and list of attributes
 //  (SelsData, Sels) - list of row numbers
@@ -36,5 +41,5 @@ type Batch struct {
 	// ring
 	Zs   []int64
 	Aggs []agg.Agg[any]
-	Ht   interface{} // hash table
+	Ht   any // hash table
 }

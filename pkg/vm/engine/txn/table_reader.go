@@ -15,15 +15,12 @@
 package txnengine
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -31,6 +28,7 @@ import (
 
 type TableReader struct {
 	ctx         context.Context
+	engine      *Engine
 	txnOperator client.TxnOperator
 	iterInfos   []IterInfo
 }
@@ -50,11 +48,11 @@ func (t *TableReader) Read(colNames []string, plan *plan.Expr, mh *mheap.Mheap) 
 			return nil, io.EOF
 		}
 
-		resps, err := doTxnRequest(
+		resps, err := doTxnRequest[ReadResp](
 			t.ctx,
+			t.engine,
 			t.txnOperator.Read,
-			[]logservicepb.DNNode{t.iterInfos[0].Node},
-			txn.TxnMethod_Read,
+			theseNodes([]logservicepb.DNNode{t.iterInfos[0].Node}),
 			OpRead,
 			ReadReq{
 				IterID:   t.iterInfos[0].IterID,
@@ -65,29 +63,26 @@ func (t *TableReader) Read(colNames []string, plan *plan.Expr, mh *mheap.Mheap) 
 			return nil, err
 		}
 
-		var r ReadResp
-		if err := gob.NewDecoder(bytes.NewReader(resps[0])).Decode(&r); err != nil {
-			return nil, err
-		}
+		resp := resps[0]
 
-		if r.Batch == nil {
+		if resp.Batch == nil {
 			// no more
 			t.iterInfos = t.iterInfos[1:]
 			continue
 		}
 
-		return r.Batch, nil
+		return resp.Batch, nil
 	}
 
 }
 
 func (t *TableReader) Close() error {
 	for _, info := range t.iterInfos {
-		_, err := doTxnRequest(
+		_, err := doTxnRequest[CloseTableIterResp](
 			t.ctx,
+			t.engine,
 			t.txnOperator.Read,
-			[]logservicepb.DNNode{info.Node},
-			txn.TxnMethod_Read,
+			theseNodes([]logservicepb.DNNode{info.Node}),
 			OpCloseTableIter,
 			CloseTableIterReq{
 				IterID: info.IterID,

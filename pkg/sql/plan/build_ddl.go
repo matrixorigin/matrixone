@@ -17,6 +17,7 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error) {
@@ -34,7 +36,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			Name: string(stmt.Table.ObjectName),
 		},
 	}
-	
+
 	// get database name
 	if len(stmt.Table.SchemaName) == 0 {
 		createTable.Database = ""
@@ -103,14 +105,21 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	}
 
 	if stmt.Param != nil {
-		json_byte, err := json.Marshal(stmt.Param) //看上去更加格式化
+		for i := 0; i < len(stmt.Param.S3options); i += 2 {
+			switch strings.ToLower(stmt.Param.S3options[i]) {
+			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression":
+			default:
+				return nil, fmt.Errorf("the keyword '%s' is not support", strings.ToLower(stmt.Param.S3options[i]))
+			}
+		}
+		json_byte, err := json.Marshal(stmt.Param)
 		if err != nil {
 			return nil, err
 		}
 		properties := []*plan.Property{
 			{
 				Key:   "relkind",
-				Value: "e",
+				Value: catalog.SystemExternalRel,
 			},
 			{
 				Key:   "createsql",
@@ -158,10 +167,6 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 					return errors.New(errno.DataException, "width out of 1GB is unexpected for char/varchar type")
 				}
 			}
-			defultValue, err := getDefaultExprFromColumn(def, colType)
-			if err != nil {
-				return err
-			}
 
 			var pks []string
 			var comment string
@@ -187,11 +192,17 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 				}
 				primaryKeys = pks
 			}
+
+			defaultValue, err := buildDefaultExpr(def, colType)
+			if err != nil {
+				return err
+			}
+
 			col := &ColDef{
 				Name:    def.Name.Parts[0],
 				Alg:     plan.CompressType_Lz4,
 				Typ:     colType,
-				Default: defultValue,
+				Default: defaultValue,
 				Comment: comment,
 			}
 			colNameMap[col.Name] = col.Typ.GetId()

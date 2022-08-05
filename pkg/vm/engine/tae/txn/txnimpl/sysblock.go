@@ -42,6 +42,14 @@ func newSysBlock(table *txnTable, meta *catalog.BlockEntry) *txnSysBlock {
 	return blk
 }
 
+func bool2i8(v bool) int8 {
+	if v {
+		return int8(1)
+	} else {
+		return int8(1)
+	}
+}
+
 func (blk *txnSysBlock) isSysTable() bool {
 	return sysTableNames[blk.table.entry.GetSchema().Name]
 }
@@ -200,7 +208,7 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 			case catalog.SystemColAttr_Length:
 				colData.Append(int32(colDef.Type.Width))
 			case catalog.SystemColAttr_NullAbility:
-				colData.Append(colDef.NullAbility) // TODO
+				colData.Append(bool2i8(colDef.NullAbility)) // TODO
 			case catalog.SystemColAttr_HasExpr:
 				colData.Append(int8(0)) // TODO
 			case catalog.SystemColAttr_DefaultExpr:
@@ -208,7 +216,7 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 			case catalog.SystemColAttr_IsDropped:
 				colData.Append(int8(0)) // TODO
 			case catalog.SystemColAttr_IsHidden:
-				colData.Append(colDef.Hidden) // TODO
+				colData.Append(bool2i8(colDef.Hidden))
 			case catalog.SystemColAttr_IsUnsigned:
 				v := int8(0)
 				switch colDef.Type.Oid {
@@ -217,7 +225,7 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 				}
 				colData.Append(v) // TODO
 			case catalog.SystemColAttr_IsAutoIncrement:
-				colData.Append(colDef.AutoIncrement) // TODO
+				colData.Append(bool2i8(colDef.AutoIncrement)) // TODO
 			case catalog.SystemColAttr_Comment:
 				colData.Append([]byte(colDef.Comment)) // TODO
 			default:

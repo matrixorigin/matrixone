@@ -69,9 +69,9 @@ func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, 
 			toStart.uuid, toStart.shardID, toStart.replicaID))
 	}
 
-	for _, toStop := range stats.toStop {
-		operators = append(operators, operator.CreateStopReplica("",
-			toStop.uuid, toStop.shardID, toStop.epoch))
+	for _, zombie := range stats.zombies {
+		operators = append(operators, operator.CreateKillZombie("",
+			zombie.uuid, zombie.shardID, zombie.replicaID))
 	}
 
 	return operators

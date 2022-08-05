@@ -15,6 +15,7 @@
 package tree
 
 import (
+	"fmt"
 	"strconv"
 )
 
@@ -2205,5 +2206,104 @@ func NewCreateUser(ife bool, u []*User, r []*Role, tls []TlsOption, res []Resour
 		TlsOpts:     tls,
 		ResOpts:     res,
 		MiscOpts:    misc,
+	}
+}
+
+type CreateAccount struct {
+	statementImpl
+	IfNotExists bool
+	Name        string
+	AuthOption  AccountAuthOption
+	//status_option or not
+	StatusOption AccountStatus
+	//comment or not
+	Comment AccountComment
+}
+
+func (ca *CreateAccount) Format(ctx *FmtCtx) {
+	ctx.WriteString("create account ")
+	if ca.IfNotExists {
+		ctx.WriteString("if not exists ")
+	}
+	ctx.WriteString(ca.Name)
+	ca.AuthOption.Format(ctx)
+	ca.StatusOption.Format(ctx)
+	ca.Comment.Format(ctx)
+}
+
+type AccountAuthOption struct {
+	Equal          string
+	AdminName      string
+	IdentifiedType AccountIdentified
+}
+
+func (node *AccountAuthOption) Format(ctx *FmtCtx) {
+	ctx.WriteString(" admin_name")
+	if len(node.Equal) != 0 {
+		ctx.WriteString(" ")
+		ctx.WriteString(node.Equal)
+	}
+
+	ctx.WriteString(fmt.Sprintf(" '%s'", node.AdminName))
+	node.IdentifiedType.Format(ctx)
+
+}
+
+type AccountIdentifiedOption int
+
+const (
+	AccountIdentifiedByPassword AccountIdentifiedOption = iota
+	AccountIdentifiedByRandomPassword
+	AccountIdentifiedWithSSL
+)
+
+type AccountIdentified struct {
+	Typ AccountIdentifiedOption
+	Str string
+}
+
+func (node *AccountIdentified) Format(ctx *FmtCtx) {
+	switch node.Typ {
+	case AccountIdentifiedByPassword:
+		ctx.WriteString(fmt.Sprintf(" identified by '%s'", node.Str))
+	case AccountIdentifiedByRandomPassword:
+		ctx.WriteString(" identified by random password")
+	case AccountIdentifiedWithSSL:
+		ctx.WriteString(fmt.Sprintf(" identified with '%s'", node.Str))
+	}
+}
+
+type AccountStatusOption int
+
+const (
+	AccountStatusOpen AccountStatusOption = iota
+	AccountStatusSuspend
+)
+
+type AccountStatus struct {
+	Exist  bool
+	Option AccountStatusOption
+}
+
+func (node *AccountStatus) Format(ctx *FmtCtx) {
+	if node.Exist {
+		switch node.Option {
+		case AccountStatusOpen:
+			ctx.WriteString(" open")
+		case AccountStatusSuspend:
+			ctx.WriteString(" suspend")
+		}
+	}
+}
+
+type AccountComment struct {
+	Exist   bool
+	Comment string
+}
+
+func (node *AccountComment) Format(ctx *FmtCtx) {
+	if node.Exist {
+		ctx.WriteString(" comment ")
+		ctx.WriteString(fmt.Sprintf("'%s'", node.Comment))
 	}
 }

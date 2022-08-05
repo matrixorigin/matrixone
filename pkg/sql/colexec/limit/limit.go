@@ -22,17 +22,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	n := arg.(*Argument)
 	buf.WriteString(fmt.Sprintf("limit(%v)", n.Limit))
 }
 
-func Prepare(_ *process.Process, _ interface{}) error {
+func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
 // Call returning only the first n tuples from its input
-func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil

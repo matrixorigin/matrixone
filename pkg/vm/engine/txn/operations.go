@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 const (
@@ -52,6 +53,36 @@ func mustEncodePayload(o any) []byte {
 		panic(err)
 	}
 	return buf.Bytes()
+}
+
+func init() {
+
+	// register TableDef types
+	gob.Register(new(engine.CommentDef))
+	gob.Register(new(engine.AttributeDef))
+	gob.Register(new(engine.IndexTableDef))
+	gob.Register(new(engine.PropertiesDef))
+	gob.Register(new(engine.PrimaryIndexDef))
+
+	// register vector column types
+	gob.Register([]bool{})
+	gob.Register([]int8{})
+	gob.Register([]int16{})
+	gob.Register([]int32{})
+	gob.Register([]int64{})
+	gob.Register([]uint8{})
+	gob.Register([]uint16{})
+	gob.Register([]uint32{})
+	gob.Register([]uint64{})
+	gob.Register([]float32{})
+	gob.Register([]float64{})
+	gob.Register([][]any{})
+	gob.Register(new(types.Bytes))
+	gob.Register([]types.Date{})
+	gob.Register([]types.Datetime{})
+	gob.Register([]types.Timestamp{})
+	gob.Register([]types.Decimal64{})
+	gob.Register([]types.Decimal128{})
 }
 
 type CreateDatabaseReq struct {
@@ -91,15 +122,6 @@ type CreateRelationReq struct {
 	Name       string
 	Type       RelationType
 	Defs       []engine.TableDef
-}
-
-func init() {
-	// register all TableDef types
-	gob.Register(new(engine.CommentDef))
-	gob.Register(new(engine.AttributeDef))
-	gob.Register(new(engine.IndexTableDef))
-	gob.Register(new(engine.PropertiesDef))
-	gob.Register(new(engine.PrimaryIndexDef))
 }
 
 type CreateRelationResp struct {
@@ -226,8 +248,9 @@ type ReadReq struct {
 }
 
 type ReadResp struct {
-	Batch            *batch.Batch
-	ErrTableNotFound bool
+	Batch             *batch.Batch
+	ErrIterNotFound   bool
+	ErrColumnNotFound string
 }
 
 type CloseTableIterReq struct {

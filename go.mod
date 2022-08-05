@@ -11,7 +11,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.26.11
 	github.com/axiomhq/hyperloglog v0.0.0-20220105174342-98591331716a
 	github.com/cespare/xxhash/v2 v2.1.2
-	github.com/cockroachdb/pebble v0.0.0-20220407171941-2120d145e292
 	github.com/docker/go-units v0.4.0
 	github.com/fagongzi/goetty v1.13.0
 	github.com/fagongzi/goetty/v2 v2.0.3-0.20220730091829-0a8222eaa708
@@ -22,7 +21,7 @@ require (
 	github.com/google/btree v1.0.1
 	github.com/google/gofuzz v1.2.0
 	github.com/google/uuid v1.3.0
-	github.com/lni/dragonboat/v4 v4.0.0-20220731082147-e77cf6ba040a
+	github.com/lni/dragonboat/v4 v4.0.0-20220803152440-a83f853de8b1
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/matrixorigin/matrixcube v0.3.1-0.20220606032431-c944d801f1e5
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
@@ -57,6 +56,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.11.9 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.16.7 // indirect
 	github.com/aws/smithy-go v1.11.3 // indirect
+	github.com/cockroachdb/pebble v0.0.0-20220407171941-2120d145e292 // indirect
+	github.com/frankban/quicktest v1.14.3 // indirect
 	github.com/getsentry/sentry-go v0.12.0 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
@@ -84,7 +85,6 @@ require (
 	github.com/cockroachdb/redact v1.1.3 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgryski/go-metro v0.0.0-20180109044635-280f6062b5bc // indirect
-	github.com/frankban/quicktest v1.14.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/gopherjs/gopherjs v0.0.0-20181017120253-0766667cb4d1 // indirect

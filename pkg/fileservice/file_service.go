@@ -31,6 +31,7 @@ type FileService interface {
 	// returns ErrFileNotFound if requested file not found
 	// returns ErrUnexpectedEOF if less data is read than requested size
 	// returns ErrEmptyRange if no data at specified offset and size
+	// returns ErrEmptyVector if no IOEntry is passed
 	Read(ctx context.Context, vector *IOVector) error
 
 	// List lists sub-entries in a dir

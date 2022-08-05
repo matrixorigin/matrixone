@@ -27,9 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	ap := arg.(*Argument)
-	buf.WriteString("γ([")
+	buf.WriteString("group([")
 	for i, expr := range ap.Exprs {
 		if i > 0 {
 			buf.WriteString(", ")
@@ -46,7 +46,7 @@ func String(arg interface{}, buf *bytes.Buffer) {
 	buf.WriteString("])")
 }
 
-func Prepare(_ *process.Process, arg interface{}) error {
+func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
@@ -54,7 +54,7 @@ func Prepare(_ *process.Process, arg interface{}) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	ap := arg.(*Argument)
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
@@ -108,15 +108,15 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		ctr.bat.Zs = proc.GetMheap().GetSels()
 		ctr.bat.Zs = append(ctr.bat.Zs, 0)
 		ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
-		for i, agg := range ap.Aggs {
-			if ctr.bat.Aggs[i], err = aggregate.New(agg.Op, agg.Dist, ctr.aggVecs[i].vec.Typ); err != nil {
+		for i, ag := range ap.Aggs {
+			if ctr.bat.Aggs[i], err = aggregate.New(ag.Op, ag.Dist, ctr.aggVecs[i].vec.Typ); err != nil {
 				ctr.bat = nil
 				return false, err
 			}
 		}
-		for _, agg := range ctr.bat.Aggs {
-			if err := agg.Grows(1, proc.GetMheap()); err != nil {
-				ctr.bat.Clean(proc.Mp)
+		for _, ag := range ctr.bat.Aggs {
+			if err := ag.Grows(1, proc.GetMheap()); err != nil {
+				ctr.bat.Clean(proc.GetMheap())
 				return false, err
 			}
 		}
@@ -125,7 +125,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		return false, nil
 	}
 	if err := ctr.processH0(bat, ap, proc); err != nil {
-		ctr.bat.Clean(proc.Mp)
+		ctr.bat.Clean(proc.GetMheap())
 		return false, err
 	}
 	return false, nil
@@ -137,12 +137,23 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	bat := proc.InputBatch()
 	if bat == nil {
 		if ctr.bat != nil {
-			switch ctr.typ {
-			case H8:
-				ctr.bat.Ht = ctr.intHashMap
-			default:
-				ctr.bat.Ht = ctr.strHashMap
+			if ap.NeedEval {
+				for i, agg := range ctr.bat.Aggs {
+					vec, err := agg.Eval(proc.GetMheap())
+					if err != nil {
+						ctr.clean()
+						ctr.bat.Clean(proc.GetMheap())
+						return false, err
+					}
+					ctr.bat.Aggs[i] = nil
+					ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
+				}
+				ctr.bat.Aggs = nil
+				for i := range ctr.bat.Zs { // reset zs
+					ctr.bat.Zs[i] = 1
+				}
 			}
+			ctr.clean()
 			ctr.bat.ExpandNulls()
 			anal.Output(ctr.bat)
 			proc.SetInputBatch(ctr.bat)
@@ -162,6 +173,8 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		ctr.aggVecs = make([]evalVector, len(ap.Aggs))
 	}
 	if err := ctr.evalAggVector(bat, ap.Aggs, proc); err != nil {
+		ctr.clean()
+		ctr.cleanBatch(proc)
 		return false, err
 	}
 	defer ctr.freeAggVector(proc)
@@ -177,6 +190,8 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 					ctr.groupVecs[i].vec.Free(proc.GetMheap())
 				}
 			}
+			ctr.clean()
+			ctr.cleanBatch(proc)
 			return false, err
 		}
 		ctr.groupVecs[i].vec = vec
@@ -219,8 +234,8 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			}
 		}
 		ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
-		for i, agg := range ap.Aggs {
-			if ctr.bat.Aggs[i], err = aggregate.New(agg.Op, agg.Dist, ctr.aggVecs[i].vec.Typ); err != nil {
+		for i, ag := range ap.Aggs {
+			if ctr.bat.Aggs[i], err = aggregate.New(ag.Op, ag.Dist, ctr.aggVecs[i].vec.Typ); err != nil {
 				ctr.bat = nil
 				return false, err
 			}
@@ -228,21 +243,27 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		switch {
 		case size <= 8:
 			ctr.typ = H8
-			ctr.intHashMap = hashmap.NewIntHashMap(true)
+			if ctr.intHashMap, err = hashmap.NewIntHashMap(true, ap.Ibucket, ap.Nbucket, proc.GetMheap()); err != nil {
+				ctr.cleanBatch(proc)
+				return false, err
+			}
 		default:
 			ctr.typ = HStr
-			ctr.strHashMap = hashmap.NewStrMap(true)
+			if ctr.strHashMap, err = hashmap.NewStrMap(true, ap.Ibucket, ap.Nbucket, proc.GetMheap()); err != nil {
+				ctr.cleanBatch(proc)
+				return false, err
+			}
 		}
 	}
 	switch ctr.typ {
 	case H8:
-		err = ctr.processH8(bat, ap, proc)
+		err = ctr.processH8(bat, proc)
 	default:
-		err = ctr.processHStr(bat, ap, proc)
+		err = ctr.processHStr(bat, proc)
 	}
 	if err != nil {
-		ctr.bat.Clean(proc.Mp)
-		ctr.bat = nil
+		ctr.clean()
+		ctr.cleanBatch(proc)
 		return false, err
 	}
 	return false, err
@@ -258,45 +279,56 @@ func (ctr *container) processH0(bat *batch.Batch, ap *Argument, proc *process.Pr
 	return nil
 }
 
-func (ctr *container) processH8(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 	count := bat.Length()
-	itr := ctr.intHashMap.NewIterator(ap.Ibucket, ap.Nbucket)
+	itr := ctr.intHashMap.NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		vals, _ := itr.Insert(i, n, ctr.vecs)
-		if err := ctr.batchFill(i, n, bat, vals, ap, ctr.intHashMap, proc); err != nil {
+		rows := ctr.intHashMap.GroupCount()
+		vals, _, err := itr.Insert(i, n, ctr.vecs)
+		if err != nil {
+			return err
+		}
+		if err := ctr.batchFill(i, n, bat, vals, rows, proc); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (ctr *container) processHStr(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error {
 	count := bat.Length()
-	itr := ctr.strHashMap.NewIterator(ap.Ibucket, ap.Nbucket)
+	itr := ctr.strHashMap.NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit { // batch
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		vals, _ := itr.Insert(i, n, ctr.vecs)
-		if err := ctr.batchFill(i, n, bat, vals, ap, ctr.strHashMap, proc); err != nil {
+		rows := ctr.strHashMap.GroupCount()
+		vals, _, err := itr.Insert(i, n, ctr.vecs)
+		if err != nil {
+			return err
+		}
+		if err := ctr.batchFill(i, n, bat, vals, rows, proc); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, ap *Argument, mp hashmap.HashMap, proc *process.Process) error {
+func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, hashRows uint64, proc *process.Process) error {
 	cnt := 0
 	copy(ctr.inserted[:n], ctr.zInserted[:n])
 	for k, v := range vals[:n] {
-		if v > mp.GroupCount() {
+		if v == 0 {
+			continue
+		}
+		if v > hashRows {
 			ctr.inserted[k] = 1
-			mp.AddGroup()
+			hashRows++
 			cnt++
 			ctr.bat.Zs = append(ctr.bat.Zs, 0)
 		}
@@ -309,21 +341,24 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, a
 				return err
 			}
 		}
-		for _, agg := range ctr.bat.Aggs {
-			if err := agg.Grows(cnt, proc.Mp); err != nil {
+		for _, ag := range ctr.bat.Aggs {
+			if err := ag.Grows(cnt, proc.Mp); err != nil {
 				return err
 			}
 		}
 	}
-	for j, agg := range ctr.bat.Aggs {
-		agg.BatchFill(int64(i), ctr.inserted[:n], vals, bat.Zs, []*vector.Vector{ctr.aggVecs[j].vec})
+	for j, ag := range ctr.bat.Aggs {
+		err := ag.BatchFill(int64(i), ctr.inserted[:n], vals, bat.Zs, []*vector.Vector{ctr.aggVecs[j].vec})
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 func (ctr *container) evalAggVector(bat *batch.Batch, aggs []aggregate.Aggregate, proc *process.Process) error {
-	for i, agg := range aggs {
-		vec, err := colexec.EvalExpr(bat, proc, agg.E)
+	for i, ag := range aggs {
+		vec, err := colexec.EvalExpr(bat, proc, ag.E)
 		if err != nil || vec.ConstExpand(proc.GetMheap()) == nil {
 			for j := 0; j < i; j++ {
 				if ctr.aggVecs[j].needFree {
@@ -349,5 +384,23 @@ func (ctr *container) freeAggVector(proc *process.Process) {
 		if ctr.aggVecs[i].needFree {
 			ctr.aggVecs[i].vec.Free(proc.GetMheap())
 		}
+	}
+}
+
+func (ctr *container) clean() {
+	if ctr.intHashMap != nil {
+		ctr.intHashMap.Free()
+		ctr.intHashMap = nil
+	}
+	if ctr.strHashMap != nil {
+		ctr.strHashMap.Free()
+		ctr.strHashMap = nil
+	}
+}
+
+func (ctr *container) cleanBatch(proc *process.Process) {
+	if ctr.bat != nil {
+		ctr.bat.Clean(proc.GetMheap())
+		ctr.bat = nil
 	}
 }

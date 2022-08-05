@@ -14,15 +14,22 @@
 
 package hashtable
 
-import "unsafe"
+import (
+	"unsafe"
 
-func (ht *StringHashMap) InsertStringBatchInBucket(states [][3]uint64, keys [][]byte, values []uint64, ibucket, nbucket uint64) {
-	ht.resizeOnDemand(uint64(len(keys)))
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+)
+
+func (ht *StringHashMap) InsertStringBatchInBucket(states [][3]uint64, keys [][]byte, values []uint64, ibucket, nbucket uint64, m *mheap.Mheap) error {
+	if err := ht.resizeOnDemand(uint64(len(keys)), m); err != nil {
+		return err
+	}
 
 	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
 		if states[i][0]%nbucket != ibucket {
+			values[i] = 0
 			continue
 		}
 		cell := ht.findCell(&states[i])
@@ -33,8 +40,10 @@ func (ht *StringHashMap) InsertStringBatchInBucket(states [][3]uint64, keys [][]
 		}
 		values[i] = cell.Mapped
 	}
+	return nil
 }
 
+/*
 func (ht *StringHashMap) InsertString24BatchInBucket(states [][3]uint64, keys [][3]uint64, values []uint64, ibucket, nbucket uint64) {
 	ht.resizeOnDemand(uint64(len(keys)))
 
@@ -91,9 +100,12 @@ func (ht *StringHashMap) InsertString40BatchInBucket(states [][3]uint64, keys []
 		values[i] = cell.Mapped
 	}
 }
+*/
 
-func (ht *StringHashMap) InsertStringBatchWithRingInBucket(zValues []int64, states [][3]uint64, keys [][]byte, values []uint64, ibucket, nbucket uint64) {
-	ht.resizeOnDemand(uint64(len(keys)))
+func (ht *StringHashMap) InsertStringBatchWithRingInBucket(zValues []int64, states [][3]uint64, keys [][]byte, values []uint64, ibucket, nbucket uint64, m *mheap.Mheap) error {
+	if err := ht.resizeOnDemand(uint64(len(keys)), m); err != nil {
+		return err
+	}
 
 	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
@@ -102,6 +114,7 @@ func (ht *StringHashMap) InsertStringBatchWithRingInBucket(zValues []int64, stat
 			continue
 		}
 		if states[i][0]%nbucket != ibucket {
+			values[i] = 0
 			continue
 		}
 
@@ -113,8 +126,10 @@ func (ht *StringHashMap) InsertStringBatchWithRingInBucket(zValues []int64, stat
 		}
 		values[i] = cell.Mapped
 	}
+	return nil
 }
 
+/*
 func (ht *StringHashMap) InsertString24BatchWithRingInBucket(zValues []int64, states [][3]uint64, keys [][3]uint64, values []uint64, ibucket, nbucket uint64) {
 	ht.resizeOnDemand(uint64(len(keys)))
 
@@ -183,6 +198,7 @@ func (ht *StringHashMap) InsertString40BatchWithRingInBucket(zValues []int64, st
 		values[i] = cell.Mapped
 	}
 }
+*/
 
 func (ht *StringHashMap) FindStringBatchInBucket(states [][3]uint64, keys [][]byte, values []uint64, inBuckets []uint8, ibucket, nbucket uint64) {
 	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
@@ -201,12 +217,12 @@ func (ht *StringHashMap) FindStringBatchWithRingInBucket(states [][3]uint64, zVa
 	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
-		if zValues[i] == 0 {
-			values[i] = 0
-			continue
-		}
 		if states[i][0]%nbucket != ibucket {
 			inBuckets[i] = 0 // mark of 0 means it is not in the processed bucket
+			continue
+		}
+		if zValues[i] == 0 {
+			values[i] = 0
 			continue
 		}
 		cell := ht.findCell(&states[i])
@@ -214,8 +230,10 @@ func (ht *StringHashMap) FindStringBatchWithRingInBucket(states [][3]uint64, zVa
 	}
 }
 
-func (ht *Int64HashMap) InsertBatchInBucket(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64, ibucket, nbucket uint64) {
-	ht.resizeOnDemand(n)
+func (ht *Int64HashMap) InsertBatchInBucket(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64, ibucket, nbucket uint64, m *mheap.Mheap) error {
+	if err := ht.resizeOnDemand(n, m); err != nil {
+		return err
+	}
 
 	if hashes[0] == 0 {
 		Crc32Int64BatchHash(keysPtr, &hashes[0], n)
@@ -225,6 +243,7 @@ func (ht *Int64HashMap) InsertBatchInBucket(n int, hashes []uint64, keysPtr unsa
 
 	for i, key := range keys {
 		if hashes[i]%nbucket != ibucket {
+			values[i] = 0
 			continue
 		}
 		cell := ht.findCell(hashes[i], key)
@@ -235,10 +254,13 @@ func (ht *Int64HashMap) InsertBatchInBucket(n int, hashes []uint64, keysPtr unsa
 		}
 		values[i] = cell.Mapped
 	}
+	return nil
 }
 
-func (ht *Int64HashMap) InsertBatchWithRingInBucket(n int, zValues []int64, hashes []uint64, keysPtr unsafe.Pointer, values []uint64, ibucket, nbucket uint64) {
-	ht.resizeOnDemand(n)
+func (ht *Int64HashMap) InsertBatchWithRingInBucket(n int, zValues []int64, hashes []uint64, keysPtr unsafe.Pointer, values []uint64, ibucket, nbucket uint64, m *mheap.Mheap) error {
+	if err := ht.resizeOnDemand(n, m); err != nil {
+		return err
+	}
 
 	if hashes[0] == 0 {
 		Crc32Int64BatchHash(keysPtr, &hashes[0], n)
@@ -250,6 +272,7 @@ func (ht *Int64HashMap) InsertBatchWithRingInBucket(n int, zValues []int64, hash
 			continue
 		}
 		if hashes[i]%nbucket != ibucket {
+			values[i] = 0
 			continue
 		}
 		cell := ht.findCell(hashes[i], key)
@@ -260,6 +283,7 @@ func (ht *Int64HashMap) InsertBatchWithRingInBucket(n int, zValues []int64, hash
 		}
 		values[i] = cell.Mapped
 	}
+	return nil
 }
 
 func (ht *Int64HashMap) FindBatchInBucket(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64, inBuckets []uint8, ibucket, nbucket uint64) {

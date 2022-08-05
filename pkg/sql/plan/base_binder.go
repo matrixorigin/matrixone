@@ -30,8 +30,11 @@ import (
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
 	switch exprImpl := astExpr.(type) {
 	case *tree.NumVal:
-		expr, err = b.bindNumVal(exprImpl)
-
+		if d, ok := b.impl.(*DefaultBinder); ok {
+			expr, err = b.bindNumVal(exprImpl, d.typ)
+		} else {
+			expr, err = b.bindNumVal(exprImpl, nil)
+		}
 	case *tree.ParenExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, isRoot)
 
@@ -136,8 +139,16 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.impl.BindSubquery(exprImpl, isRoot)
 
 	case *tree.DefaultVal:
-		err = errors.New("", fmt.Sprintf("expr default'%v' is not supported now", exprImpl))
-
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: false,
+					Value: &plan.Const_Defaultval{
+						Defaultval: true,
+					},
+				},
+			},
+		}, nil
 	case *tree.MaxValue:
 		err = errors.New("", fmt.Sprintf("expr max'%v' is not supported now", exprImpl))
 
@@ -194,6 +205,10 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 }
 
 func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (expr *plan.Expr, err error) {
+	if b.ctx == nil {
+		return nil, errors.New("", fmt.Sprintf("Column reference '%s' is ambiguous", astExpr.Parts[0]))
+	}
+
 	col := astExpr.Parts[0]
 	table := astExpr.Parts[1]
 	name := tree.String(astExpr, dialect.MYSQL)
@@ -232,7 +247,8 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				err = errors.New("", fmt.Sprintf("Column '%s' does not exist", name))
 			}
 		} else {
-			err = errors.New("", fmt.Sprintf("missing FROM-clause entry for table %q", table))
+			err = errors.New("", fmt.Sprintf(
+				"missing FROM-clause entry for table %q", table))
 		}
 	}
 
@@ -282,6 +298,9 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 }
 
 func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Expr, error) {
+	if b.ctx == nil {
+		return nil, errors.New("", "This field reference doesn't support SUBQUERY")
+	}
 	subCtx := NewBindContext(b.builder, b.ctx)
 
 	var nodeID int32
@@ -621,6 +640,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	//	unit := astArgs[0].(*tree.UnresolvedName).Parts[0]
 	//	astArgs[0] = tree.NewNumVal(constant.MakeString(unit), unit, false)
 	case "count":
+		if b.ctx == nil {
+			return nil, errors.New("", "This field reference doesn't support COUNT")
+		}
 		// we will rewrite "count(*)" to "starcount(col)"
 		// count(*) : astExprs[0].(type) is *tree.NumVal
 		// count(col_name) : astExprs[0].(type) is *tree.UnresolvedName
@@ -841,7 +863,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	}, nil
 }
 
-func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
+func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) {
 	// over_int64_err := errors.New("", "Constants over int64 will support in future version.")
 
 	getStringExpr := func(val string) *Expr {
@@ -864,6 +886,9 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 	}
 
 	returnDecimalExpr := func(val string) (*Expr, error) {
+		if typ != nil {
+			return appendCastBeforeExpr(getStringExpr(val), typ)
+		}
 		_, scale, err := types.ParseStringToDecimal128WithoutTable(val)
 		if err != nil {
 			return nil, err
@@ -954,6 +979,9 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_float64:
 		originString := astExpr.String()
+		if typ != nil && (typ.Id == plan.Type_DECIMAL || typ.Id == plan.Type_DECIMAL64 || typ.Id == plan.Type_DECIMAL128) {
+			return returnDecimalExpr(originString)
+		}
 		if !strings.Contains(originString, "e") {
 			expr, err := returnDecimalExpr(originString)
 			if err == nil {
@@ -964,9 +992,6 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 		if !ok {
 			return returnDecimalExpr(originString)
 		}
-		//if astExpr.Negative() {
-		//	floatValue = -floatValue
-		//}
 		return &Expr{
 			Expr: &plan.Expr_C{
 				C: &Const{
@@ -987,8 +1012,25 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 	case tree.P_bit:
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_char:
-		stringValue := constant.StringVal(astExpr.Value)
-		return getStringExpr(stringValue), nil
+		if typ != nil && typ.Id == plan.Type_TIMESTAMP {
+			val, err := types.ParseTimestamp(astExpr.String(), typ.Precision)
+			if err != nil {
+				return nil, err
+			}
+			return &Expr{
+				Expr: &plan.Expr_C{
+					C: &Const{
+						Isnull: false,
+						Value: &plan.Const_Timestampval{
+							Timestampval: int64(val),
+						},
+					},
+				},
+				Typ: typ,
+			}, nil
+		}
+		expr := getStringExpr(astExpr.String())
+		return expr, nil
 	default:
 		return nil, errors.New("", fmt.Sprintf("unsupport value: %v", astExpr.Value))
 	}
