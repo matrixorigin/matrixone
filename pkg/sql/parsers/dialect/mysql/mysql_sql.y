@@ -163,6 +163,11 @@ import (
     withClause *tree.With
     cte *tree.CTE
     cteList []*tree.CTE
+
+    accountAuthOption tree.AccountAuthOption
+    accountIdentified tree.AccountIdentified
+    accountStatus tree.AccountStatus
+    accountComment tree.AccountComment
 }
 
 %token LEX_ERROR
@@ -257,6 +262,9 @@ import (
 // Type Modifiers
 %token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL
 
+// Account
+%token <str> ADMIN_NAME RANDOM SUSPEND
+
 // User
 %token <str> USER IDENTIFIED CIPHER ISSUER X509 SUBJECT SAN REQUIRE SSL NONE PASSWORD
 %token <str> MAX_QUERIES_PER_HOUR MAX_UPDATES_PER_HOUR MAX_CONNECTIONS_PER_HOUR MAX_USER_CONNECTIONS
@@ -314,13 +322,13 @@ import (
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
 %type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt
-%type <statement> drop_role_stmt drop_user_stmt
-%type <statement> create_user_stmt create_role_stmt
+%type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
+%type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> alter_user_stmt update_stmt use_stmt update_no_with_stmt
+%type <statement> alter_account_stmt alter_user_stmt update_stmt use_stmt update_no_with_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt
@@ -505,6 +513,12 @@ import (
 %type <str> explain_option_key select_option_opt
 %type <str> explain_foramt_value view_recursive_opt trim_direction
 %type <str> priority_opt priority quick_opt ignore_opt wild_opt
+
+%type <str> account_name account_admin_name
+%type <accountAuthOption> account_auth_option
+%type <accountIdentified> account_identified
+%type <accountStatus> account_status_option
+%type <accountComment> account_comment_opt
 
 %start start_command
 
@@ -1714,7 +1728,20 @@ analyze_stmt:
 
 alter_stmt:
     alter_user_stmt
+|   alter_account_stmt
 // |    alter_ddl_stmt
+
+alter_account_stmt:
+    ALTER ACCOUNT not_exists_opt account_name account_auth_option account_status_option account_comment_opt
+    {
+	$$ = &tree.AlterAccount{
+		IfNotExists:$3,
+		Name:$4,
+		AuthOption:$5,
+		StatusOption:$6,
+		Comment:$7,
+	}
+    }
 
 alter_user_stmt:
     ALTER USER exists_opt user_spec_list require_clause_opt conn_options pwd_or_lck_opt
@@ -2043,6 +2070,16 @@ drop_ddl_stmt:
 |   drop_index_stmt
 |   drop_role_stmt
 |   drop_user_stmt
+|   drop_account_stmt
+
+drop_account_stmt:
+    DROP ACCOUNT exists_opt account_name
+    {
+        $$ = &tree.DropAccount{
+        	IfExists: $3,
+        	Name: $4,
+        }
+    }
 
 drop_user_stmt:
     DROP USER exists_opt user_spec_list
@@ -3163,6 +3200,7 @@ create_stmt:
     create_ddl_stmt
 |   create_role_stmt
 |   create_user_stmt
+|   create_account_stmt
 
 create_ddl_stmt:
     create_table_stmt
@@ -3195,6 +3233,97 @@ create_view_stmt:
 view_recursive_opt:
 	{}
 |	RECURSIVE
+
+create_account_stmt:
+    CREATE ACCOUNT not_exists_opt account_name account_auth_option account_status_option account_comment_opt
+    {
+	$$ = &tree.CreateAccount{
+		IfNotExists:$3,
+                Name:$4,
+                AuthOption:$5,
+             	StatusOption:$6,
+                Comment:$7,
+	}
+    }
+
+account_name:
+    ID
+    {
+	$$ = $1
+    }
+
+account_auth_option:
+    ADMIN_NAME equal_opt account_admin_name account_identified
+    {
+	$$ = tree.AccountAuthOption{
+		Equal:$2,
+		AdminName:$3,
+                IdentifiedType:$4,
+	}
+    }
+
+account_admin_name:
+    STRING
+    {
+	$$ = $1
+    }
+
+account_identified:
+    IDENTIFIED BY STRING
+    {
+	$$ = tree.AccountIdentified{
+		Typ: tree.AccountIdentifiedByPassword,
+		Str: $3,
+	}
+    }
+|   IDENTIFIED BY RANDOM PASSWORD
+    {
+	$$ = tree.AccountIdentified{
+		Typ: tree.AccountIdentifiedByRandomPassword,
+	}
+    }
+|   IDENTIFIED WITH STRING
+    {
+	$$ = tree.AccountIdentified{
+		Typ: tree.AccountIdentifiedWithSSL,
+		Str: $3,
+	}
+    }
+
+account_status_option:
+    {
+    	$$ = tree.AccountStatus{
+		Exist: false,
+	}
+    }
+|   OPEN
+    {
+	$$ = tree.AccountStatus{
+		Exist: true,
+		Option: tree.AccountStatusOpen,
+	}
+    }
+|   SUSPEND
+    {
+	$$ = tree.AccountStatus{
+		Exist: true,
+		Option: tree.AccountStatusSuspend,
+	}
+    }
+
+account_comment_opt:
+    {
+    	$$ = tree.AccountComment{
+		Exist: false,
+	}
+    }
+|   COMMENT_KEYWORD STRING
+    {
+	$$ = tree.AccountComment{
+		Exist: true,
+		Comment: $2,
+	}
+    }
 
 create_user_stmt:
     CREATE USER not_exists_opt user_spec_list DEFAULT ROLE account_role_name password_lock_option_list comment_or_attribute_opt
@@ -6631,6 +6760,9 @@ reserved_keyword:
 |   PARTITION
 |	QUICK
 |   EXCEPT
+|   ADMIN_NAME
+|   RANDOM
+|   SUSPEND
 
 non_reserved_keyword:
     AGAINST
