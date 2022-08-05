@@ -389,13 +389,13 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		case types.T_int64:
 			return CastSpecials2Int[int64](lv, rv, proc)
 		case types.T_uint8:
-			return CastSpecials2Int[uint8](lv, rv, proc)
+			return CastSpecials2Uint[uint8](lv, rv, proc)
 		case types.T_uint16:
-			return CastSpecials2Int[uint16](lv, rv, proc)
+			return CastSpecials2Uint[uint16](lv, rv, proc)
 		case types.T_uint32:
-			return CastSpecials2Int[uint32](lv, rv, proc)
+			return CastSpecials2Uint[uint32](lv, rv, proc)
 		case types.T_uint64:
-			return CastSpecials2Int[uint64](lv, rv, proc)
+			return CastSpecials2Uint[uint64](lv, rv, proc)
 		}
 	}
 
@@ -1055,8 +1055,8 @@ func CastSpecials1Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 }
 
 // CastSpecials2Int : Cast converts integer to string,Contains the following:
-// (int8 /int16/int32/int64/uint8/uint16/uint32/uint64) -> (char / varhcar / text)
-func CastSpecials2Int[T constraints.Integer](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+// (int8 /int16/int32/int64) -> (char / varhcar / text)
+func CastSpecials2Int[T constraints.Signed](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
 	lvs := vector.MustTCols[T](lv)
 	col := &types.Bytes{
@@ -1065,6 +1065,30 @@ func CastSpecials2Int[T constraints.Integer](lv, rv *vector.Vector, proc *proces
 		Lengths: make([]uint32, 0, len(lvs)),
 	}
 	if col, err = binary.IntToBytes(lvs, col); err != nil {
+		return nil, err
+	}
+	if err = proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
+		return nil, err
+	}
+	vec := vector.New(rv.Typ)
+	if lv.IsScalar() {
+		vec.IsConst = true
+	}
+	vec.Data = col.Data
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, col)
+	return vec, nil
+}
+
+func CastSpecials2Uint[T constraints.Unsigned](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	var err error
+	lvs := vector.MustTCols[T](lv)
+	col := &types.Bytes{
+		Data:    make([]byte, 0, len(lvs)),
+		Offsets: make([]uint32, 0, len(lvs)),
+		Lengths: make([]uint32, 0, len(lvs)),
+	}
+	if col, err = binary.UintToBytes(lvs, col); err != nil {
 		return nil, err
 	}
 	if err = proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
