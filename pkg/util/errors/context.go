@@ -63,8 +63,8 @@ func HasContext(err error) bool {
 
 var _ error = (*withContext)(nil)
 var _ Wrapper = (*withContext)(nil)
-var _ fmt.Formatter = (*withContext)(nil)
 var _ ContextTracer = (*withContext)(nil)
+var _ fmt.Formatter = (*withContext)(nil)
 
 type withContext struct {
 	cause error

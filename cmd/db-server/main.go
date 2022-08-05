@@ -18,9 +18,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"os"
-	"os/signal"
-	"syscall"
 
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -33,8 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-
-	"github.com/google/gops/agent"
 )
 
 const (
@@ -92,6 +87,10 @@ func runMOServer() error {
 }
 
 func serverShutdown(isgraceful bool) error {
+	// flush trace/log/error framework
+	if err := trace.Shutdown(trace.DefaultContext(), &config.GlobalSystemVariables); err != nil {
+		logutil.Errorf("Shutdown trace err: %v", err)
+	}
 	return mo.Stop()
 }
 
@@ -236,11 +235,6 @@ func main() {
 	} else {
 		logutil.Errorf("undefined engine %s", engineName)
 		os.Exit(LoadConfigExit)
-	}
-
-	if err := agent.Listen(agent.Options{}); err != nil {
-		fmt.Errorf("listen gops agent failed: %s", err)
-		panic(err)
 	}
 
 	createMOServer()

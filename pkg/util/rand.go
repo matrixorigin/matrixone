@@ -21,6 +21,7 @@ import (
 // fastrand32 returns a lock free uint32 value. Compared to rand.Uint32, this
 // implementation scales. We're using the go runtime's implementation through a
 // linker trick.
+//
 //go:linkname fastrand32 runtime.fastrand
 func fastrand32() uint32
 

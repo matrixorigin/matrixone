@@ -3,8 +3,6 @@ package errors
 import (
 	"context"
 	goErrors "errors"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"reflect"
 	"testing"
 )
@@ -13,18 +11,6 @@ var ctx = context.Background()
 var testErr = goErrors.New("test error")
 var stackErr = WithStack(testErr)
 var msgErr = WithMessage(stackErr, "prefix")
-
-var _ export.BatchProcessor = &fakeBatchProcessor{}
-
-type fakeBatchProcessor struct{}
-
-func (f fakeBatchProcessor) Collect(context.Context, batchpipe.HasName) error { return nil }
-func (f fakeBatchProcessor) Start() bool                                      { return true }
-func (f fakeBatchProcessor) Stop(bool) error                                  { return nil }
-
-func init() {
-	export.SetGlobalBatchProcessor(&fakeBatchProcessor{})
-}
 
 func TestGetContextTracer(t *testing.T) {
 	type args struct {

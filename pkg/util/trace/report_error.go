@@ -47,6 +47,9 @@ func (h *MOErrorHolder) Format(s fmt.State, verb rune) { errbase.FormatError(h.E
 
 // ReportError send to BatchProcessor
 func ReportError(ctx context.Context, err error) {
+	if ctx == nil {
+		ctx = DefaultContext()
+	}
 	e := &MOErrorHolder{Error: err, Timestamp: util.NowNS()}
 	export.GetGlobalBatchProcessor().Collect(ctx, e)
 }

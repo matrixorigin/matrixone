@@ -17,17 +17,19 @@ package trace
 import (
 	"context"
 	goErrors "errors"
-	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
-	"github.com/matrixorigin/matrixone/pkg/util/errors"
-	"go.uber.org/zap"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/errors"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
+
+	"go.uber.org/zap"
 )
 
 type TraceID uint64
@@ -105,6 +107,19 @@ func initExport(config *tracerProviderConfig) {
 		logutil2.Infof(nil, "trace span processor")
 		logutil2.Info(nil, "[Debug]", zap.String("operation", "value1"), zap.String("operation_1", "value2"))
 	}
+}
+
+func Shutdown(ctx context.Context, sysVar *config.SystemVariables) error {
+	if !sysVar.GetEnableTrace() {
+		return nil
+	}
+
+	gTracerProvider.enableTracer = false
+	tracer := noopTracer{}
+	_ = atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(gTracer.(*MOTracer))), unsafe.Pointer(&tracer))
+
+	// fixme: need stop timeout
+	return export.GetGlobalBatchProcessor().Stop(true)
 }
 
 func Start(ctx context.Context, spanName string, opts ...SpanOption) (context.Context, Span) {
