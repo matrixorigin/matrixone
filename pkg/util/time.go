@@ -19,10 +19,13 @@ import (
 	_ "unsafe"
 )
 
-var (
-	globalStartUixTimeNS  TimeNano = unixtimeNS()
-	globalStartMonoTimeNS TimeMono = monotimeNS()
-)
+var globalStartUnixTimeNS TimeNano
+var globalStartMonoTimeNS TimeMono
+
+func init() {
+	globalStartUnixTimeNS = unixtimeNS()
+	globalStartMonoTimeNS = monotimeNS()
+}
 
 // `time.Now()` contain two syscalls in Linux.
 // One is `CLOCK_REALTIME` and another is `CLOCK_MONOTONIC`.
@@ -51,7 +54,7 @@ func unixtimeNS() TimeNano {
 
 func NowNS() TimeNano {
 	mono := monotimeNS()
-	return TimeNano((globalStartMonoTimeNS - mono) + globalStartUixTimeNS)
+	return TimeNano((mono - globalStartMonoTimeNS) + globalStartUnixTimeNS)
 }
 
 // Now generate `hasMonotonic=0` time.Time.

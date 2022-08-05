@@ -14,6 +14,8 @@
 
 package errors
 
+import "fmt"
+
 type MOErrorCode = string
 
 const (
@@ -26,3 +28,34 @@ var (
 	UnknownErr  = NewMOError(UnknownErrCode, "%s")
 	MOServerErr = NewMOError(MOServerErrCode, "%s")
 )
+
+var _ Wrapper = &MOError{}
+var _ fmt.Formatter = &MOError{}
+
+type MOError struct {
+	code MOErrorCode
+	msg  string
+	args []any
+}
+
+func NewMOError(code MOErrorCode, msg string) error {
+	err := &MOError{
+		code: code,
+		msg:  msg,
+	}
+	return err
+}
+
+func (e *MOError) Code() string                  { return e.code }
+func (e *MOError) Cause() error                  { return nil }
+func (e *MOError) Error() string                 { return fmt.Sprintf(e.msg, e.args...) }
+func (e *MOError) Format(s fmt.State, verb rune) { fmt.Fprintf(s, e.Error()) }
+func (e *MOError) Unwrap() error                 { return nil }
+
+func (e *MOError) Mark(args ...any) error {
+	return &MOError{
+		code: e.code,
+		msg:  e.msg,
+		args: args[:],
+	}
+}

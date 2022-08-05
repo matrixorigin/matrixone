@@ -16,46 +16,67 @@ package logutil2
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
+func Debug(ctx context.Context, msg string, fields ...zap.Field) {
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Debug(msg, fields...)
+}
+
+func Info(ctx context.Context, msg string, fields ...zap.Field) {
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Info(msg, fields...)
+}
+
+func Warn(ctx context.Context, msg string, fields ...zap.Field) {
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Warn(msg, fields...)
+}
+
+func Error(ctx context.Context, msg string, fields ...zap.Field) {
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Error(msg, fields...)
+}
+
+func Panic(ctx context.Context, msg string, fields ...zap.Field) {
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Panic(msg, fields...)
+}
+
+func Fatal(ctx context.Context, msg string, fields ...zap.Field) {
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Fatal(msg, fields...)
+}
+
 // Debugf only use in develop mode
 func Debugf(ctx context.Context, msg string, fields ...interface{}) {
-	trace.ReportLog(ctx, zapcore.DebugLevel, 1, msg, fields...)
+	logutil.GetReportLogFunc()(ctx, zapcore.DebugLevel, 1, msg, fields...)
 	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Debugf(msg, fields...)
 }
 
 // Infof only use in develop mode
 func Infof(ctx context.Context, msg string, fields ...interface{}) {
-	trace.ReportLog(ctx, zapcore.InfoLevel, 1, msg, fields...)
+	logutil.GetReportLogFunc()(ctx, zapcore.InfoLevel, 1, msg, fields...)
 	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Infof(msg, fields...)
 }
 
 // Warnf only use in develop mode
 func Warnf(ctx context.Context, msg string, fields ...interface{}) {
-	trace.ReportLog(ctx, zapcore.WarnLevel, 1, msg, fields...)
+	logutil.GetReportLogFunc()(ctx, zapcore.WarnLevel, 1, msg, fields...)
 	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Warnf(msg, fields...)
 }
 
 // Errorf only use in develop mode
 func Errorf(ctx context.Context, msg string, fields ...interface{}) {
-	trace.ReportLog(ctx, zapcore.ErrorLevel, 1, msg, fields...)
+	logutil.GetReportLogFunc()(ctx, zapcore.ErrorLevel, 1, msg, fields...)
 	logutil.GetGlobalLogger().WithOptions(zap.AddStacktrace(zap.ErrorLevel)).Sugar().Errorf(msg, fields...)
 }
 
 // Panicf only use in develop mode
 func Panicf(ctx context.Context, msg string, fields ...interface{}) {
-	trace.ReportLog(ctx, zapcore.PanicLevel, 1, msg, fields...)
+	logutil.GetReportLogFunc()(ctx, zapcore.PanicLevel, 1, msg, fields...)
 	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Panicf(msg, fields...)
 }
 
 // Fatalf only use in develop mode
 func Fatalf(ctx context.Context, msg string, fields ...interface{}) {
-	trace.ReportLog(ctx, zapcore.FatalLevel, 1, msg, fields...)
+	logutil.GetReportLogFunc()(ctx, zapcore.FatalLevel, 1, msg, fields...)
 	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Fatalf(msg, fields...)
 }

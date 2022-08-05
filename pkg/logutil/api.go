@@ -60,7 +60,7 @@ func Warnf(msg string, fields ...interface{}) {
 
 // Errorf only use in develop mode
 func Errorf(msg string, fields ...interface{}) {
-	GetGlobalLogger().WithOptions(zap.AddStacktrace(zap.ErrorLevel)).Sugar().Errorf(msg, fields...)
+	GetGlobalLogger().WithOptions(zap.AddStacktrace(zap.ErrorLevel), zap.AddCallerSkip(1)).Sugar().Errorf(msg, fields...)
 }
 
 // Panicf only use in develop mode
@@ -118,9 +118,7 @@ func GetLoggerWithOptions(level zapcore.LevelEnabler, encoder zapcore.Encoder, s
 	if encoder == nil {
 		encoder = getLoggerEncoder("")
 	}
-	if f := levelChangeFunc.Load(); f != nil {
-		f.(levelChangeSignal)(level)
-	}
+	GetLevelChangeFunc()(level)
 	return zap.New(zapcore.NewCore(encoder, syncer, level), options...)
 }
 

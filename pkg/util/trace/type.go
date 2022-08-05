@@ -36,3 +36,18 @@ type Span interface {
 	// is usable even after the End method has been called for the Span.
 	SpanContext() SpanContext
 }
+
+type SpanProcessor interface {
+	OnStart(ctx context.Context, s Span)
+	OnEnd(s Span)
+	Shutdown(ctx context.Context) error
+	FLush()
+}
+
+type Sampler interface {
+}
+
+type IDGenerator interface {
+	NewIDs() (TraceID, SpanID)
+	NewSpanID() SpanID
+}

@@ -15,7 +15,6 @@
 package trace
 
 import (
-	"context"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
@@ -48,29 +47,14 @@ func SetTracerProvider(tp TracerProvider) {
 }
 */
 
-type SpanProcessor interface {
-	OnStart(ctx context.Context, s Span)
-	OnEnd(ctx context.Context, s Span)
-	Shutdown()
-	FLush()
-}
-
-type Sampler interface {
-}
-
-type IDGenerator interface {
-	NewIDs() (TraceID, SpanID)
-	NewSpanID() SpanID
-}
-
 // tracerProviderConfig.
 type tracerProviderConfig struct {
-	// processors contains collection of SpanProcessors that are processing pipeline
+	// spanProcessors contains collection of SpanProcessors that are processing pipeline
 	// for spans in the trace signal.
 	// SpanProcessors registered with a TracerProvider and are called at the start
 	// and end of a Span's lifecycle, and are called in the order they are
 	// registered.
-	processors []SpanProcessor
+	spanProcessors []SpanProcessor
 
 	// sampler is the default sampler used when creating new spans.
 	sampler Sampler

@@ -16,8 +16,9 @@ package trace
 
 import (
 	"context"
-	"encoding/hex"
-	"encoding/json"
+	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
+	"github.com/matrixorigin/matrixone/pkg/util/errors"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -26,76 +27,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 )
 
-const (
-	// FlagsSampled is a bitmask with the sampled bit set. A SpanContext
-	// with the sampling bit set means the span is sampled.
-	FlagsSampled = TraceFlags(0x01)
-)
-
 type TraceID uint64
 type SpanID uint64
-
-type defaultSpanKey int
-
-// TracerConfig is a group of options for a Tracer.
-type TracerConfig struct {
-	Name     string
-	reminder batchpipe.Reminder // WithReminder
-}
-
-// TracerOption applies an option to a TracerConfig.
-type TracerOption interface {
-	apply(*TracerConfig)
-}
-
-type tracerOptionFunc func(*TracerConfig)
-
-func (f tracerOptionFunc) apply(cfg *TracerConfig) {
-	f(cfg)
-}
-
-func WithReminder(r batchpipe.Reminder) tracerOptionFunc {
-	return tracerOptionFunc(func(cfg *TracerConfig) {
-		cfg.reminder = r
-	})
-}
-
-// TraceFlags contains flags that can be set on a SpanContext.
-type TraceFlags byte //nolint:revive // revive complains about stutter of `trace.TraceFlags`.
-
-// IsSampled returns if the sampling bit is set in the TraceFlags.
-func (tf TraceFlags) IsSampled() bool {
-	return tf&FlagsSampled == FlagsSampled
-}
-
-// WithSampled sets the sampling bit in a new copy of the TraceFlags.
-func (tf TraceFlags) WithSampled(sampled bool) TraceFlags { // nolint:revive  // sampled is not a control flag.
-	if sampled {
-		return tf | FlagsSampled
-	}
-
-	return tf &^ FlagsSampled
-}
-
-// MarshalJSON implements a custom marshal function to encode TraceFlags
-// as a hex string.
-func (tf TraceFlags) MarshalJSON() ([]byte, error) {
-	return json.Marshal(tf.String())
-}
-
-// String returns the hex string representation form of TraceFlags.
-func (tf TraceFlags) String() string {
-	return hex.EncodeToString([]byte{byte(tf)}[:])
-}
 
 var gTracerProvider *MOTracerProvider
 var gTracer Tracer
 var gTraceContext context.Context
 
+var ini sync.Once
+
 func Init(ctx context.Context, sysVar *config.SystemVariables, options ...TracerProviderOption) (context.Context, error) {
 
-	logutil.SetLevelChangeFunc(SetLogLevel)
+	// init tool dependence
+	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: ReportLog, LevelSignal: SetLogLevel})
+	errors.SetErrorReporter(HandleError)
 
+	// init TraceProvider
 	var opts = []TracerProviderOption{
 		EnableTracer(sysVar.GetEnableTrace()),
 		WithNode(sysVar.GetNodeID(), NodeTypeNode),
@@ -103,34 +50,51 @@ func Init(ctx context.Context, sysVar *config.SystemVariables, options ...Tracer
 		DebugMode(sysVar.GetEnableTraceDebug()),
 	}
 	opts = append(opts, options...)
-
 	gTracerProvider = newMOTracerProvider(opts...)
-	config := gTracerProvider.tracerProviderConfig
+	config := &gTracerProvider.tracerProviderConfig
 
+	// init Tracer
 	gTracer = gTracerProvider.Tracer("MatrixOrigin",
-		WithReminder(batchpipe.NewConstantClock(15*time.Second)),
+		WithReminder(batchpipe.NewConstantClock(5*time.Second)),
 	)
 
-	sc := SpanContext{}
-	sc.TraceID, sc.SpanID = gTracerProvider.idGenerator.NewIDs()
+	// init Node DefaultContext
+	gTraceContext = ContextWithSpanContext(ctx, SpanContextWithIDs(TraceID(0), SpanID(config.getNodeResource().NodeID)))
 
-	gTraceContext = ContextWithSpanContext(ctx, sc)
+	// init schema
+	InitSchemaByInnerExecutor(config.sqlExecutor)
 
-	export.Init()
-	// init all batch Process for trace/log/error
+	initExport(config)
+
+	return gTraceContext, nil
+}
+
+func initExport(config *tracerProviderConfig) {
+	if !config.enableTracer {
+		logutil2.Infof(nil, "initExport pass.")
+		return
+	}
+	var p export.BatchProcessor
+	// init BatchProcess for trace/log/error
 	switch {
-	case config.batchProcessMode == "singleton":
+	case config.batchProcessMode == "standalone":
 		export.Register(&MOSpan{}, NewBufferPipe2SqlWorker(
 			bufferWithSizeThreshold(MB),
 		))
 		export.Register(&MOLog{}, NewBufferPipe2SqlWorker())
 		export.Register(&StatementInfo{}, NewBufferPipe2SqlWorker())
 		export.Register(&MOErrorHolder{}, NewBufferPipe2SqlWorker())
+		logutil2.Infof(nil, "init GlobalBatchProcessor")
+		p = export.NewMOCollector()
+		export.SetGlobalBatchProcessor(p)
+		p.Start()
 	case config.batchProcessMode == "distributed":
 		//export.Register(&MOTracer{}, NewBufferPipe2SqlWorker())
 	}
-
-	return gTraceContext, nil
+	if p != nil {
+		config.spanProcessors = append(config.spanProcessors, NewBatchSpanProcessor(p))
+		logutil2.Infof(nil, "trace span processor")
+	}
 }
 
 func Start(ctx context.Context, spanName string, opts ...SpanOption) (context.Context, Span) {

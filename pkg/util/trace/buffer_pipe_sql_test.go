@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap/zapcore"
 	"reflect"
 	"sync"
 	"testing"
@@ -13,54 +11,49 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errors"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 
 	"github.com/google/gops/agent"
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap/zapcore"
 )
 
 var buf = new(bytes.Buffer)
 var err1 = errors.WithStack(errors.New("test1"))
 var err2 = errors.Wrapf(err1, "test2")
-var _ IBuffer2SqlItem = &Size{}
+var testBaseBuffer2SqlOption = []buffer2SqlOption{bufferWithSizeThreshold(1 * KB)}
+var nodeStateSpanIdStr string
 
-type Size struct {
-	IBuffer2SqlItem
-}
-
-func (s Size) GetName() string {
-	return "size"
-}
-
-func (s Size) Size() int64 {
-	return 64
-}
-
-func (s Size) Free() {}
+func noopReportLog(context.Context, zapcore.Level, int, string, ...any) {}
+func noopReportError(context.Context, error)                            {}
 
 func init() {
 	setup()
 }
 
-var testBaseBuffer2SqlOption = []buffer2SqlOption{bufferWithSizeThreshold(1 * KB)}
-
 func setup() {
-	logutil.SetLevelChangeFunc(SetLogLevel)
 	if _, err := Init(
 		context.Background(),
 		&config.GlobalSystemVariables,
 		EnableTracer(true),
 		WithMOVersion("v0.test.0"),
-		WithSQLExecutor(func() ie.InternalExecutor {
+		WithSQLExecutor(func() internalExecutor.InternalExecutor {
 			return nil
 		}),
 		DebugMode(true),
 	); err != nil {
 		panic(err)
 	}
+	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: noopReportLog, LevelSignal: SetLogLevel})
+	errors.SetErrorReporter(noopReportError)
+
+	sc := SpanFromContext(DefaultContext()).SpanContext()
+	nodeStateSpanIdStr = fmt.Sprintf("%d, %d", sc.TraceID, sc.SpanID)
+
 	if err := agent.Listen(agent.Options{}); err != nil {
 		fmt.Errorf("listen gops agent failed: %s", err)
 		panic(err)
@@ -78,7 +71,7 @@ func Test_newBuffer2Sql_base(t *testing.T) {
 	buf := newBuffer2Sql()
 	byteBuf := new(bytes.Buffer)
 	assert.Equal(t, true, buf.IsEmpty())
-	buf.Add(&Size{})
+	buf.Add(&MOSpan{})
 	assert.Equal(t, false, buf.IsEmpty())
 	assert.Equal(t, false, buf.ShouldFlush())
 	assert.Equal(t, "", buf.GetBatch(byteBuf))
@@ -101,7 +94,7 @@ func TestNewSpanBufferPipeWorker(t *testing.T) {
 			args: args{
 				opt: opts,
 			},
-			want: &batchSqlHandler{opts: opts},
+			want: &batchSqlHandler{defaultOpts: opts},
 		},
 	}
 	for _, tt := range tests {
@@ -134,7 +127,7 @@ func Test_batchSqlHandler_NewItemBuffer_Check_genBatchFunc(t1 *testing.T) {
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
 			t := batchSqlHandler{
-				opts: opts,
+				defaultOpts: opts,
 			}
 			if got := t.NewItemBuffer(tt.args.name); reflect.ValueOf(got.(*buffer2Sql).genBatchFunc).Pointer() != reflect.ValueOf(tt.want).Pointer() {
 				t1.Errorf("NewItemBuffer()'s genBatchFunc = %v, want %v", got.(*buffer2Sql).genBatchFunc, tt.want)
@@ -149,6 +142,10 @@ func Test_batchSqlHandler_genErrorBatchSql(t1 *testing.T) {
 		buf *bytes.Buffer
 	}
 	buf := new(bytes.Buffer)
+	newCtx, span := Start(DefaultContext(), "Test_batchSqlHandler_genErrorBatchSql")
+	defer span.End()
+	sc := SpanFromContext(newCtx).SpanContext()
+	newStatementSpanIdStr := fmt.Sprintf("%d, %d", sc.TraceID, sc.SpanID)
 	tests := []struct {
 		name string
 		args args
@@ -163,8 +160,8 @@ func Test_batchSqlHandler_genErrorBatchSql(t1 *testing.T) {
 				buf: buf,
 			},
 			want: `insert into system.error_info (` +
-				"`err_code`, `stack`, `timestamp`, `node_id`, `node_type`" +
-				`) values ("test1", "test1", "0001-01-01 00:00:00.000000", 0, "Node")`,
+				"`statement_id`, `span_id`, `node_id`, `node_type`, `err_code`, `stack`, `timestamp`" +
+				`) values (` + nodeStateSpanIdStr + `, 0, "Node", "test1", "test1", "0001-01-01 00:00:00.000000")`,
 		},
 		{
 			name: "multi_error",
@@ -172,19 +169,23 @@ func Test_batchSqlHandler_genErrorBatchSql(t1 *testing.T) {
 				in: []IBuffer2SqlItem{
 					&MOErrorHolder{Error: err1, Timestamp: uint64(0)},
 					&MOErrorHolder{Error: err2, Timestamp: uint64(time.Millisecond + time.Microsecond)},
+					&MOErrorHolder{Error: errors.WithContext(newCtx, err2),
+						Timestamp: uint64(time.Millisecond + time.Microsecond)},
 				},
 				buf: buf,
 			},
 			want: `insert into system.error_info (` +
-				"`err_code`, `stack`, `timestamp`, `node_id`, `node_type`" +
-				`) values ("test1", "test1", "0001-01-01 00:00:00.000000", 0, "Node"),("test2: test1", "test2: test1", "0001-01-01 00:00:00.001001", 0, "Node")`,
+				"`statement_id`, `span_id`, `node_id`, `node_type`, `err_code`, `stack`, `timestamp`" +
+				`) values (` + nodeStateSpanIdStr + `, 0, "Node", "test1", "test1", "0001-01-01 00:00:00.000000")` +
+				`,(` + nodeStateSpanIdStr + `, 0, "Node", "test2: test1", "test2: test1", "0001-01-01 00:00:00.001001")` +
+				`,(` + newStatementSpanIdStr + `, 0, "Node", "test2: test1", "test2: test1", "0001-01-01 00:00:00.001001")`,
 		},
 	}
 	errorFormatter.Store("%v")
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
 			if got := genErrorBatchSql(tt.args.in, tt.args.buf); got != tt.want {
-				t1.Errorf("genErrorBatchSql() = %v, want %v", got, tt.want)
+				t1.Errorf("genErrorBatchSql() = %v,\n want %v", got, tt.want)
 			} else {
 				t1.Logf("SQL: %s", got)
 			}
@@ -482,8 +483,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			},
 			wantFunc: genErrorBatchSql,
 			want: `insert into system.error_info (` +
-				"`err_code`, `stack`, `timestamp`, `node_id`, `node_type`" +
-				`) values ("test1", "test1", "0001-01-01 00:00:00.000000", 0, "Node")`,
+				"`statement_id`, `span_id`, `node_id`, `node_type`, `err_code`, `stack`, `timestamp`" +
+				`) values (` + nodeStateSpanIdStr + `, 0, "Node", "test1", "test1", "0001-01-01 00:00:00.000000")`,
 		},
 		{
 			name: "multi_error",
@@ -496,8 +497,9 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			},
 			wantFunc: genErrorBatchSql,
 			want: `insert into system.error_info (` +
-				"`err_code`, `stack`, `timestamp`, `node_id`, `node_type`" +
-				`) values ("test1", "test1", "0001-01-01 00:00:00.000000", 0, "Node"),("test2: test1", "test2: test1", "0001-01-01 00:00:00.001001", 0, "Node")`,
+				"`statement_id`, `span_id`, `node_id`, `node_type`, `err_code`, `stack`, `timestamp`" +
+				`) values (` + nodeStateSpanIdStr + `, 0, "Node", "test1", "test1", "0001-01-01 00:00:00.000000")` +
+				`,(` + nodeStateSpanIdStr + `, 0, "Node", "test2: test1", "test2: test1", "0001-01-01 00:00:00.001001")`,
 		},
 		{
 			name: "single_log",

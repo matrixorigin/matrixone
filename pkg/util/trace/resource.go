@@ -16,6 +16,20 @@ package trace
 
 import "encoding/json"
 
+const (
+	MOStatementType = "MOStatementType"
+	MOSpanType      = "MOSpan"
+	MOLogType       = "MOLog"
+	MOErrorType     = "MOError"
+)
+
+const (
+	B int64 = 1 << (iota * 10)
+	KB
+	MB
+	GB
+)
+
 type Resource struct {
 	m map[string]any
 }

@@ -343,8 +343,8 @@ scope = ["global"]
 access = ["file"]
 type = "string"
 domain-type = "set"
-values = ["singleton", "distributed"]
-comment = "default is singleton. if singleton, use internal sql executor"
+values = ["standalone", "distributed"]
+comment = "default is standalone. if standalone, use internal sql executor"
 update-mode = "dynamic"
 
 [[parameter]]

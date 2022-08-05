@@ -12,82 +12,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/errors"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
-const (
-	systemDBConst    = "system"
-	statsDatabase    = systemDBConst
-	spanInfoTbl      = "span_info"
-	logInfoTbl       = "log_info"
-	statementInfoTbl = "statement_info"
-	errorInfoTbl     = "error_info"
-)
+var errorFormatter atomic.Value
+var insertSQLPrefix []string
 
-const (
-	createSpanInfoTable = `CREATE TABLE IF NOT EXISTS span_info(
- span_id BIGINT UNSIGNED,
- statement_id BIGINT UNSIGNED,
- parent_span_id BIGINT UNSIGNED,
- node_id BIGINT COMMENT "MO中的节点ID",
- node_type varchar(64) COMMENT "MO中的节点类型, 例如: DN, CN, LogService; /*TODO: 应为enum类型*/",
- resource varchar(4096) COMMENT "json结构, 记录静态资源信息 /*TODO: 应为JSON类型*/",
- Name varchar(1024) COMMENT "span的名字, 例如: 执行计划的步骤名, 代码中的函数名",
- start_time datetime,
- end_time datetime,
- Duration BIGINT COMMENT "执行耗时, 单位: ns"
-)`
-	createLogInfoTable = `CREATE TABLE IF NOT EXISTS log_info(
- id BIGINT UNSIGNED COMMENT "主键, 应为auto increment类型",
- span_id BIGINT UNSIGNED,
- statement_id BIGINT UNSIGNED,
- node_id BIGINT COMMENT "MO中的节点ID",
- node_type varchar(64) COMMENT "MO中的节点类型, 例如: DN, CN, LogService; /*TODO: 应为enum类型*/",
- Timestamp datetime COMMENT "日志时间戳",
- Level varchar(32) COMMENT "日志级别, 例如: DEBUG, INFO, WARN, ERROR",
- code_line varchar(4096) COMMENT "写日志所在代码行",
- Message varchar(4096) COMMENT "日志内容/*TODO: 应为text*/"
-)`
-	createStatementInfoTable = `CREATE TABLE IF NOT EXISTS statement_info(
- statement_id BIGINT UNSIGNED,
- transaction_id BIGINT UNSIGNED,
- session_id BIGINT UNSIGNED,
- ` + "`account`" + ` varchar(1024) COMMENT '用户账号',
- user varchar(1024) COMMENT '用户访问DB 鉴权用户名',
- host varchar(1024) COMMENT '用户访问DB 鉴权ip',
- ` + "`database`" + ` varchar(1024) COMMENT '数据库名',
- statement varchar(10240) COMMENT '执行sql/*TODO: 应为类型 TEXT或 BLOB */',
- statement_tag varchar(1024),
- statement_fingerprint varchar(10240) COMMENT '执行SQL脱敏后的语句/*应为TEXT或BLOB类型*/',
- node_id BIGINT COMMENT "MO中的节点ID",
- node_type varchar(64) COMMENT "MO中的节点类型, 例如: DN, CN, LogService; /*TODO: 应为enum类型*/",
- request_at datetime,
- status varchar(1024) COMMENT '运行状态, 包括: Running, Success, Failed',
- exec_plan varchar(4096) COMMENT "Sql执行计划的耗时结果; /*TODO: 应为JSON 类型*/"
-)`
-	createErrorInfoTable = `CREATE TABLE IF NOT EXISTS error_info(
- id BIGINT UNSIGNED COMMENT "主键, 应为auto increment类型",
- err_code varchar(1024),
- stack varchar(4096),
- timestamp datetime COMMENT "日志时间戳",
- node_id BIGINT COMMENT "MO中的节点ID",
- node_type varchar(64) COMMENT "MO中的节点类型, 例如: DN, CN, LogService; /*TODO: 应为enum类型*/"
-)`
-)
+func init() {
+	errorFormatter.Store("%+v")
+	logStackFormatter.Store("%+v")
 
-const (
-	B int64 = 1 << (iota * 10)
-	KB
-	MB
-	GB
-)
-
-const (
-	MOStatementType = "MOStatementType"
-	MOSpanType      = "MOSpan"
-	MOLogType       = "MOLog"
-	MOErrorType     = "MOError"
-)
+	tables := []string{statementInfoTbl, spanInfoTbl, logInfoTbl, errorInfoTbl}
+	for _, table := range tables {
+		insertSQLPrefix = append(insertSQLPrefix, fmt.Sprintf("insert into %s.%s ", statsDatabase, table))
+	}
+}
 
 type IBuffer2SqlItem interface {
 	bp.HasName
@@ -98,7 +38,7 @@ type IBuffer2SqlItem interface {
 var _ bp.PipeImpl[bp.HasName, any] = &batchSqlHandler{}
 
 type batchSqlHandler struct {
-	opts []buffer2SqlOption
+	defaultOpts []buffer2SqlOption
 }
 
 func NewBufferPipe2SqlWorker(opt ...buffer2SqlOption) bp.PipeImpl[bp.HasName, any] {
@@ -107,7 +47,9 @@ func NewBufferPipe2SqlWorker(opt ...buffer2SqlOption) bp.PipeImpl[bp.HasName, an
 
 // NewItemBuffer implement batchpipe.PipeImpl
 func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, any] {
+	var opts []buffer2SqlOption
 	var f genBatchFunc
+	logutil.Debugf("NewItemBuffer name: %s", name)
 	switch name {
 	case MOSpanType:
 		f = genSpanBatchSql
@@ -115,15 +57,16 @@ func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 		f = genLogBatchSql
 	case MOStatementType:
 		f = genStatementBatchSql
+		opts = append(opts, bufferWithFilterItemFunc(filterTraceInsertSql))
 	case MOErrorType:
 		f = genErrorBatchSql
 	default:
 		// fixme: catch Panic Error
 		panic(fmt.Sprintf("unknown type %s", name))
 	}
-	opt := t.opts[:]
-	opt = append(opt, bufferWithGenBatchFunc(f), bufferWithType(name))
-	return newBuffer2Sql(opt...)
+	opts = append(opts, bufferWithGenBatchFunc(f), bufferWithType(name))
+	opts = append(opts, t.defaultOpts...)
+	return newBuffer2Sql(opts...)
 }
 
 // NewItemBatchHandler implement batchpipe.PipeImpl
@@ -142,14 +85,20 @@ func (t batchSqlHandler) NewItemBatchHandler() func(batch any) {
 	}
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(statsDatabase).Internal(true).Finish())
 	f = func(b any) {
+		// fixme: CollectCycle
 		_, span := Start(DefaultContext(), "BatchHandle")
 		defer span.End()
 		batch := b.(string)
+		if len(batch) == 0 {
+			logutil.Errorf("meet empty sql")
+			return
+		}
 		if err := exec.Exec(batch, ie.NewOptsBuilder().Finish()); err != nil {
 			// fixme: catch panic error
 			// fixme: handle error situation re-try
-			logutil.Errorf("[Metric] insert error. sql: %s; err: %v", batch, err)
+			logutil.Errorf("[Trace] insert error. sql: %s; err: %v", batch, err)
 		}
+		return
 	}
 	return f
 }
@@ -174,6 +123,7 @@ func quote(value string) string {
 func genSpanBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
+		logutil.Debugf("genSpanBatchSql empty")
 		return ""
 	}
 
@@ -219,6 +169,7 @@ var logStackFormatter atomic.Value
 func genLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
+		logutil.Debugf("genLogBatchSql empty")
 		return ""
 	}
 
@@ -258,6 +209,7 @@ func genLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
+		logutil.Debugf("genStatementBatchSql empty")
 		return ""
 	}
 
@@ -308,44 +260,58 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	return string(buf.Next(buf.Len() - 1))
 }
 
-var errorFormatter atomic.Value
-
-func init() {
-	errorFormatter.Store("%+v")
-	logStackFormatter.Store("%+v")
-}
-
 func genErrorBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
+		logutil.Debugf("genErrorBatchSql empty")
 		return ""
 	}
 
 	buf.WriteString(fmt.Sprintf("insert into %s.%s ", statsDatabase, errorInfoTbl))
 	buf.WriteString("(")
-	buf.WriteString("`err_code`")
-	buf.WriteString(", `stack`")
-	buf.WriteString(", `timestamp`")
+	buf.WriteString("`statement_id`")
+	buf.WriteString(", `span_id`")
 	buf.WriteString(", `node_id`")
 	buf.WriteString(", `node_type`")
+	buf.WriteString(", `err_code`")
+	buf.WriteString(", `stack`")
+	buf.WriteString(", `timestamp`")
 	buf.WriteString(") values ")
 
 	moNode := GetNodeResource()
 
+	var span Span
 	for _, item := range in {
 		s, ok := item.(*MOErrorHolder)
 		if !ok {
 			panic("Not MOErrorHolder")
 		}
+		if ct := errors.GetContextTracer(s.Error); ct != nil {
+			span = SpanFromContext(ct.Context())
+		} else {
+			span = SpanFromContext(DefaultContext())
+		}
 		buf.WriteString("(")
-		buf.WriteString(fmt.Sprintf("\"%s\"", quote(s.Error.Error())))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(fmt.Sprintf(errorFormatter.Load().(string), s.Error))))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.Timestamp).String2(6)))
+		buf.WriteString(fmt.Sprintf("%d", span.SpanContext().TraceID))
+		buf.WriteString(fmt.Sprintf(", %d", span.SpanContext().SpanID))
 		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))
 		buf.WriteString(fmt.Sprintf(", \"%s\"", moNode.NodeType.String()))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Error.Error())))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(fmt.Sprintf(errorFormatter.Load().(string), s.Error))))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.Timestamp).String2(6)))
 		buf.WriteString("),")
 	}
 	return string(buf.Next(buf.Len() - 1))
+}
+
+func filterTraceInsertSql(i IBuffer2SqlItem) {
+	s := i.(*StatementInfo)
+	for _, prefix := range insertSQLPrefix {
+		if strings.Index(s.Statement, prefix) >= 0 {
+			logutil.Debugf("find insert system record, short it.")
+			s.Statement = prefix
+		}
+	}
 }
 
 var _ bp.ItemBuffer[bp.HasName, any] = &buffer2Sql{}
@@ -359,22 +325,27 @@ type buffer2Sql struct {
 	size          int64  // default: 1 MB
 	sizeThreshold int64  // see bufferWithSizeThreshold
 
-	genBatchFunc genBatchFunc
+	filterItemFunc filterItemFunc
+	genBatchFunc   genBatchFunc
 }
 
+type filterItemFunc func(IBuffer2SqlItem)
 type genBatchFunc func([]IBuffer2SqlItem, *bytes.Buffer) any
 
-var genBatchEmptySQL = genBatchFunc(func([]IBuffer2SqlItem, *bytes.Buffer) any { return "" })
+var noopFilterItemFunc = func(IBuffer2SqlItem) {}
+var noopGenBatchSQL = genBatchFunc(func([]IBuffer2SqlItem, *bytes.Buffer) any { return "" })
 
 func newBuffer2Sql(opts ...buffer2SqlOption) *buffer2Sql {
 	b := &buffer2Sql{
-		Reminder:      bp.NewConstantClock(5 * time.Second),
-		sizeThreshold: 1 * MB,
-		genBatchFunc:  genBatchEmptySQL,
+		Reminder:       bp.NewConstantClock(5 * time.Second),
+		sizeThreshold:  1 * MB,
+		filterItemFunc: noopFilterItemFunc,
+		genBatchFunc:   noopGenBatchSQL,
 	}
 	for _, opt := range opts {
 		opt.apply(b)
 	}
+	logutil.Debugf("newBuffer2Sql, Reminder next: %v", b.Reminder.RemindNextAfter())
 	return b
 }
 
@@ -384,6 +355,7 @@ func (b *buffer2Sql) Add(i bp.HasName) {
 	if item, ok := i.(IBuffer2SqlItem); !ok {
 		panic("not implement interface IBuffer2SqlItem")
 	} else {
+		b.filterItemFunc(item)
 		b.buf = append(b.buf, item)
 		b.size += item.Size()
 	}
@@ -419,6 +391,7 @@ func (b *buffer2Sql) GetBufferType() string {
 }
 
 func (b *buffer2Sql) GetBatch(buf *bytes.Buffer) any {
+	// fixme: CollectCycle
 	_, span := Start(DefaultContext(), "GenBatch")
 	defer span.End()
 	b.mux.Lock()
@@ -455,6 +428,12 @@ func bufferWithType(name string) buffer2SqlOption {
 func bufferWithSizeThreshold(size int64) buffer2SqlOption {
 	return buffer2SqlOptionFunc(func(b *buffer2Sql) {
 		b.sizeThreshold = size
+	})
+}
+
+func bufferWithFilterItemFunc(f filterItemFunc) buffer2SqlOption {
+	return buffer2SqlOptionFunc(func(b *buffer2Sql) {
+		b.filterItemFunc = f
 	})
 }
 

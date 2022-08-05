@@ -17,12 +17,64 @@ package trace
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"sync"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/util"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
+
+// TracerConfig is a group of options for a Tracer.
+type TracerConfig struct {
+	Name     string
+	reminder batchpipe.Reminder // WithReminder
+}
+
+// TracerOption applies an option to a TracerConfig.
+type TracerOption interface {
+	apply(*TracerConfig)
+}
+
+type tracerOptionFunc func(*TracerConfig)
+
+func (f tracerOptionFunc) apply(cfg *TracerConfig) {
+	f(cfg)
+}
+
+func WithReminder(r batchpipe.Reminder) tracerOptionFunc {
+	return tracerOptionFunc(func(cfg *TracerConfig) {
+		cfg.reminder = r
+	})
+}
+
+const (
+	// FlagsSampled is a bitmask with the sampled bit set. A SpanContext
+	// with the sampling bit set means the span is sampled.
+	FlagsSampled = TraceFlags(0x01)
+)
+
+// TraceFlags contains flags that can be set on a SpanContext.
+type TraceFlags byte //nolint:revive // revive complains about stutter of `trace.TraceFlags`.
+
+// IsSampled returns if the sampling bit is set in the TraceFlags.
+func (tf TraceFlags) IsSampled() bool {
+	return tf&FlagsSampled == FlagsSampled
+}
+
+// WithSampled sets the sampling bit in a new copy of the TraceFlags.
+func (tf TraceFlags) WithSampled(sampled bool) TraceFlags { // nolint:revive  // sampled is not a control flag.
+	if sampled {
+		return tf | FlagsSampled
+	}
+
+	return tf &^ FlagsSampled
+}
+
+// String returns the hex string representation form of TraceFlags.
+func (tf TraceFlags) String() string {
+	return hex.EncodeToString([]byte{byte(tf)}[:])
+}
 
 var _ Tracer = &MOTracer{}
 
@@ -35,6 +87,7 @@ type MOTracer struct {
 func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (context.Context, Span) {
 	span := newMOSpan()
 	span.init(name, opts...)
+	span.tracer = t
 
 	parent := SpanFromContext(ctx)
 
@@ -68,9 +121,11 @@ func (c *SpanContext) IsEmpty() bool {
 }
 
 func SpanContextWithID(id TraceID) SpanContext {
-	return SpanContext{
-		TraceID: id,
-	}
+	return SpanContext{TraceID: id}
+}
+
+func SpanContextWithIDs(tid TraceID, sid SpanID) SpanContext {
+	return SpanContext{TraceID: tid, SpanID: sid}
 }
 
 // SpanConfig is a group of options for a Span.
@@ -143,21 +198,6 @@ func newMOSpan() *MOSpan {
 	return spanPool.Get().(*MOSpan)
 }
 
-func (s *MOSpan) Size() int64 {
-	return int64(unsafe.Sizeof(*s)) + int64(s.Name.Cap())
-}
-
-func (s *MOSpan) Free() {
-	s.Name.Reset()
-	s.Duration = 0
-	s.tracer = nil
-	spanPool.Put(s)
-}
-
-func (s *MOSpan) GetName() string {
-	return MOSpanType
-}
-
 func (s *MOSpan) init(name string, opts ...SpanOption) {
 	s.Name.WriteString(name)
 	s.StartTimeNS = util.NowNS()
@@ -166,11 +206,30 @@ func (s *MOSpan) init(name string, opts ...SpanOption) {
 	}
 }
 
+func (s *MOSpan) Size() int64 {
+	return int64(unsafe.Sizeof(*s)) + int64(s.Name.Cap())
+}
+
+func (s *MOSpan) Free() {
+	s.Name.Reset()
+	s.Duration = 0
+	s.tracer = nil
+	s.StartTimeNS = 0
+	s.EndTimeNS = 0
+	spanPool.Put(s)
+}
+
+func (s *MOSpan) GetName() string {
+	return MOSpanType
+}
+
 func (s *MOSpan) End(options ...SpanEndOption) {
 	s.EndTimeNS = util.NowNS()
 	s.Duration = s.EndTimeNS - s.StartTimeNS
 
-	export.GetGlobalBatchProcessor().Collect(DefaultContext(), s)
+	for _, sp := range s.tracer.provider.spanProcessors {
+		sp.OnEnd(s)
+	}
 }
 
 func (s *MOSpan) SpanContext() SpanContext {

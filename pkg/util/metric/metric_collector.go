@@ -121,7 +121,7 @@ func (c *metricCollector) NewItemBatchHandler() func(batch string) {
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(metricDBConst).Internal(true).Finish())
 	return func(batch string) {
 		if err := exec.Exec(batch, ie.NewOptsBuilder().Finish()); err != nil {
-			logutil.Errorf("[Metric] insert error. sql: %s; err: %v", batch, err)
+			logutil.Errorf("[Trace] insert error. sql: %s; err: %v", batch, err)
 		}
 	}
 }

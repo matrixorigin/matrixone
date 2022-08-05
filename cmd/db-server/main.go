@@ -33,6 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+
+	"github.com/google/gops/agent"
 )
 
 const (
@@ -63,13 +65,6 @@ func createMOServer() {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
 	mo = frontend.NewMOServer(address, pu)
-	if config.GlobalSystemVariables.GetEnableMetric() {
-		ieFactory := func() ie.InternalExecutor {
-			return frontend.NewInternalExecutor(pu)
-		}
-		metric.InitMetric(ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
-	}
-	frontend.InitServerVersion(MoVersion)
 	{
 		// init trace/log/error framework
 		if _, err := trace.Init(
@@ -83,6 +78,13 @@ func createMOServer() {
 			panic(err)
 		}
 	}
+	if config.GlobalSystemVariables.GetEnableMetric() {
+		ieFactory := func() ie.InternalExecutor {
+			return frontend.NewInternalExecutor(pu)
+		}
+		metric.InitMetric(ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
+	}
+	frontend.InitServerVersion(MoVersion)
 }
 
 func runMOServer() error {
@@ -233,6 +235,11 @@ func main() {
 	} else {
 		logutil.Errorf("undefined engine %s", engineName)
 		os.Exit(LoadConfigExit)
+	}
+
+	if err := agent.Listen(agent.Options{}); err != nil {
+		fmt.Errorf("listen gops agent failed: %s", err)
+		panic(err)
 	}
 
 	createMOServer()

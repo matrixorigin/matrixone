@@ -15,6 +15,7 @@
 package trace
 
 import (
+	"context"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -84,8 +85,8 @@ func WithRequestAt(t util.TimeNano) StatementOptionFunc {
 	})
 }
 
-func CollectStatement(s *StatementInfo) error {
-	return export.GetGlobalBatchProcessor().Collect(DefaultContext(), s)
+func ReportStatement(ctx context.Context, s *StatementInfo) error {
+	return export.GetGlobalBatchProcessor().Collect(ctx, s)
 }
 
 // TODO: update statement status

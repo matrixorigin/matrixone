@@ -27,6 +27,10 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+func init() {
+	SetLogLevel(zapcore.DebugLevel)
+}
+
 var _ batchpipe.HasName = &MOLog{}
 var _ IBuffer2SqlItem = &MOLog{}
 
@@ -57,7 +61,6 @@ var logLevelEnabler atomic.Value
 
 func SetLogLevel(l zapcore.LevelEnabler) {
 	logLevelEnabler.Store(l)
-
 }
 
 func ReportLog(ctx context.Context, level zapcore.Level, depth int, formatter string, args ...any) {
@@ -81,7 +84,7 @@ func ReportLog(ctx context.Context, level zapcore.Level, depth int, formatter st
 	log.SpanId = sc.SpanID
 	log.Timestamp = util.NowNS()
 	log.Level = level
-	log.CodeLine = util.Caller(depth)
+	log.CodeLine = util.Caller(depth + 1)
 	log.Message = fmt.Sprintf(formatter, args...)
 	export.GetGlobalBatchProcessor().Collect(DefaultContext(), log)
 }

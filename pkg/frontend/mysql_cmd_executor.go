@@ -135,21 +135,22 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
 }
 
-func (mce *MysqlCmdExecutor) RecordStatement(ses *Session, sql string, beginIns time.Time) context.Context {
-	//trace.AddStatement
-	statementId := uint64(0)
-	trace.CollectStatement(
+func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, proc *process.Process, sql string, beginIns time.Time) context.Context {
+	statementId := util.Fastrand64()
+	sessInfo := proc.SessionInfo
+	trace.ReportStatement(
+		ctx,
 		&trace.StatementInfo{
 			StatementID:          statementId,
-			SessionID:            0,
-			TransactionID:        0,
+			SessionID:            sessInfo.GetConnectionID(),
+			TransactionID:        ses.GetTxnHandler().GetTxn().GetID(),
 			Account:              "account",
-			User:                 ses.GetUserName(),
-			Host:                 ses.Pu.SV.GetHost(),
-			Database:             ses.GetDatabaseName(),
+			User:                 sessInfo.GetUser(),
+			Host:                 sessInfo.GetHost(),
+			Database:             sessInfo.GetDatabase(),
 			Statement:            sql,
-			StatementFingerprint: "",
-			StatementTag:         "",
+			StatementFingerprint: "", // fixme
+			StatementTag:         "", // fixme
 			RequestAt:            util.NowNS(),
 		},
 	)
@@ -1675,8 +1676,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	ses.SetSql(sql)
 	ses.ep.Outfile = false
 
-	mce.RecordStatement(ses, sql, beginInstant)
-
 	proc := process.New(mheap.New(ses.GuestMmu))
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = ses.Pu.SV.GetProcessLimitationSize()
@@ -1689,6 +1688,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		Database:     ses.GetDatabaseName(),
 		Version:      serverVersion,
 	}
+
+	var newCtx = mce.RecordStatement(trace.DefaultContext(), ses, proc, sql, beginInstant)
+	newCtx, span := trace.Start(newCtx, "doComQuery")
+	defer span.End()
 
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		sql,

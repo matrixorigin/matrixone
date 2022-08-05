@@ -15,71 +15,56 @@
 package errors
 
 import (
-	"fmt"
-	_ "unsafe"
+	"context"
+	goErrors "errors"
+	"sync/atomic"
 
-	goErr "errors"
+	"github.com/matrixorigin/matrixone/pkg/util"
 )
 
 type Wrapper interface {
 	Unwrap() error
 }
 
-type isError interface {
-	Is(error) bool
-}
-
-var _ Wrapper = &MOError{}
-
-type MOError struct {
-	code MOErrorCode
-	msg  string
-	args []any
-}
-
-func NewMOError(code MOErrorCode, msg string) error {
-	err := &MOError{
-		code: code,
-		msg:  msg,
-	}
-	return err
-}
-
-func (e *MOError) Mark(args ...any) error {
-	return &MOError{
-		code: e.code,
-		msg:  e.msg,
-		args: args[:],
-	}
-}
-
-func (e *MOError) Code() string { return e.code }
-func (e *MOError) Error() string {
-	return fmt.Sprintf(e.msg, e.args...)
-}
-
-// Format implements the fmt.Formatter interface.
-func (e *MOError) Format(s fmt.State, verb rune) {
-	fmt.Fprintf(s, e.Error())
-}
-
-// Unwrap implements the Wrapper interface.
-func (e *MOError) Unwrap() error {
-	return nil
-}
-
 func Unwrap(err error) error {
-	return goErr.Unwrap(err)
+	return goErrors.Unwrap(err)
 }
 
 func Is(err, target error) bool {
-	return goErr.Is(err, target)
+	return goErrors.Is(err, target)
 }
 
 func As(err error, target any) bool {
-	return goErr.As(err, target)
+	return goErrors.As(err, target)
 }
 
 func New(text string) error {
-	return &MOError{code: InnerErrCode, msg: text}
+	err := &withStack{goErrors.New(text), util.Callers(1)}
+	GetReportErrorFunc()(nil, err)
+	return err
+}
+
+func NewWithContext(ctx context.Context, text string) error {
+	stackErr := &withStack{goErrors.New(text), util.Callers(1)}
+	err := &withContext{stackErr, ctx}
+	GetReportErrorFunc()(ctx, err)
+	return err
+}
+
+type reportErrorFunc func(context.Context, error)
+
+var errorReporter atomic.Value
+
+func noopReportError(ctx context.Context, err error) {}
+
+func SetErrorReporter(f reportErrorFunc) {
+	errorReporter.Store(f)
+}
+
+func GetReportErrorFunc() reportErrorFunc {
+	return errorReporter.Load().(reportErrorFunc)
+}
+
+func init() {
+	SetErrorReporter(noopReportError)
 }
