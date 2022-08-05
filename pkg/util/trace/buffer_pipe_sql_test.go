@@ -887,26 +887,6 @@ func Test_nanoSec2Datetime(t *testing.T) {
 	}
 }
 
-func Test_newBuffer2Sql(t *testing.T) {
-	type args struct {
-		opts []buffer2SqlOption
-	}
-	tests := []struct {
-		name string
-		args args
-		want *buffer2Sql
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := newBuffer2Sql(tt.args.opts...); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("newBuffer2Sql() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func Test_quote(t *testing.T) {
 	type args struct {
 		value string
@@ -916,7 +896,9 @@ func Test_quote(t *testing.T) {
 		args args
 		want string
 	}{
-		// TODO: Add test cases.
+		{name: "'", args: args{value: `'`}, want: "\\'"},
+		{name: `"`, args: args{value: `"`}, want: "\\\""},
+		{name: `\n`, args: args{value: `\n`}, want: "\\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -925,6 +907,8 @@ func Test_quote(t *testing.T) {
 			}
 		})
 	}
+	var err1 = errors.WithStack(errors.New("test1"))
+	t.Logf("show quote(err): \"%s\"", quote(fmt.Sprintf("%+v", err1)))
 }
 
 func Test_withGenBatchFunc(t *testing.T) {
