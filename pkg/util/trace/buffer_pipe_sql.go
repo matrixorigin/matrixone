@@ -113,7 +113,7 @@ func quote(value string) string {
 		{"\n", "\\n"},
 		{"\r", "\\r"},
 		{"\t", "\\t"},
-		//{`"`, `\"`},
+		{`"`, `\"`},
 		{"\x1a", "\\\\Z"},
 	}
 	for _, rule := range replaceRules {
@@ -224,6 +224,7 @@ func genZapLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.WriteString(", `node_id`")
 	buf.WriteString(", `node_type`")
 	buf.WriteString(", `timestamp`")
+	buf.WriteString(", `name`")
 	buf.WriteString(", `level`")
 	buf.WriteString(", `code_line`")
 	buf.WriteString(", `message`")
@@ -258,7 +259,8 @@ func genZapLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		buf.WriteString(fmt.Sprintf(", %d", sc.TraceID))
 		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))                                         // node_id
 		buf.WriteString(fmt.Sprintf(", \"%s\"", moNode.NodeType.String()))                          // node_type
-		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Entry.Time.Format("2006-01-02.15:04:05.000000"))) //Timestamp
+		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Entry.Time.Format("2006-01-02 15:04:05.000000"))) // timestamp
+		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Entry.LoggerName))                                // name
 		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Entry.Level.String()))                            // log level
 		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Entry.Caller.TrimmedPath()))                      // CodeLine
 		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Entry.Message)))                            // message

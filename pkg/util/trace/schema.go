@@ -39,7 +39,8 @@ const (
  node_id BIGINT COMMENT "MO中的节点ID",
  node_type varchar(64) COMMENT "MO中的节点类型, 例如: DN, CN, LogService; /*TODO: 应为enum类型*/",
  timestamp datetime COMMENT "日志时间戳",
- Level varchar(32) COMMENT "日志级别, 例如: DEBUG, INFO, WARN, ERROR",
+ name varchar(1024) COMMENT "组件模块名",
+ level varchar(32) COMMENT "日志级别, 例如: DEBUG, INFO, WARN, ERROR",
  code_line varchar(4096) COMMENT "写日志所在代码行",
  message varchar(4096) COMMENT "日志内容/*TODO: 应为text*/",
  extra varchar(4096) COMMENT "日志内容, json结构"
@@ -77,6 +78,9 @@ const (
 func InitSchemaByInnerExecutor(ieFactory func() ie.InternalExecutor) {
 	// fixme: need errors.Recover()
 	exec := ieFactory()
+	if exec == nil {
+		return
+	}
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(statsDatabase).Internal(true).Finish())
 	mustExec := func(sql string) {
 		if err := exec.Exec(sql, ie.NewOptsBuilder().Finish()); err != nil {
