@@ -29,6 +29,11 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		commentDef.Comment = schema.Comment
 		defs = append(defs, commentDef)
 	}
+	if schema.Stmt != nil {
+		viewDef := new(engine.ViewDef)
+		viewDef.Stmt = schema.Stmt
+		defs = append(defs, viewDef)
+	}
 	for _, col := range schema.ColDefs {
 		if col.IsPhyAddr() {
 			continue
@@ -96,6 +101,8 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 					schema.Comment = property.Value
 				}
 			}
+		case *engine.ViewDef:
+			schema.Stmt = defVal.Stmt
 		default:
 			// We will not deal with other cases for the time being
 		}
