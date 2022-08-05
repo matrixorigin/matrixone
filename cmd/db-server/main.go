@@ -71,7 +71,6 @@ func createMOServer() {
 	}
 	frontend.InitServerVersion(MoVersion)
 	{
-		logutil.SetLevelChangeFunc(trace.SetLogLevel)
 		// init trace/log/error framework
 		if _, err := trace.Init(
 			context.Background(),

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 )
@@ -93,10 +94,13 @@ var gTraceContext context.Context
 
 func Init(ctx context.Context, sysVar *config.SystemVariables, options ...TracerProviderOption) (context.Context, error) {
 
+	logutil.SetLevelChangeFunc(SetLogLevel)
+
 	var opts = []TracerProviderOption{
 		EnableTracer(sysVar.GetEnableTrace()),
-		WithNode(sysVar.GetNodeID(), NodeTypeDN),
+		WithNode(sysVar.GetNodeID(), NodeTypeNode),
 		WithBatchProcessMode(sysVar.GetTraceBatchProcessor()),
+		DebugMode(sysVar.GetEnableTraceDebug()),
 	}
 	opts = append(opts, options...)
 

@@ -37,7 +37,7 @@ const (
  end_time datetime,
  Duration BIGINT COMMENT "执行耗时, 单位: ns"
 )`
-	createLogInfoTable = `CREATE TABLE IF NOT EXISTS statement_info(
+	createLogInfoTable = `CREATE TABLE IF NOT EXISTS log_info(
  id BIGINT UNSIGNED COMMENT "主键, 应为auto increment类型",
  span_id BIGINT UNSIGNED,
  statement_id BIGINT UNSIGNED,
@@ -71,7 +71,7 @@ const (
  stack varchar(4096),
  timestamp datetime COMMENT "日志时间戳",
  node_id BIGINT COMMENT "MO中的节点ID",
- node_type varchar(64) COMMENT "MO中的节点类型, 例如: DN, CN, LogService; /*TODO: 应为enum类型*/",
+ node_type varchar(64) COMMENT "MO中的节点类型, 例如: DN, CN, LogService; /*TODO: 应为enum类型*/"
 )`
 )
 
@@ -210,6 +210,8 @@ func genSpanBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	return string(buf.Next(buf.Len() - 1))
 }
 
+var logStackFormatter atomic.Value
+
 func genLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
@@ -235,12 +237,12 @@ func genLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		buf.WriteString("(")
 		buf.WriteString(fmt.Sprintf("%d", s.SpanId))
 		buf.WriteString(fmt.Sprintf(", %d", s.StatementId))
-		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))                                // node_id
-		buf.WriteString(fmt.Sprintf(", \"%s\"", moNode.NodeType.String()))                 // node_type
-		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.Timestamp).String2(6))) //Timestamp
-		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Level.String()))                         // log level
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(fmt.Sprintf("%+v", s.CodeLine))))    // CodeLine
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Message)))                         // message
+		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))                                                         // node_id
+		buf.WriteString(fmt.Sprintf(", \"%s\"", moNode.NodeType.String()))                                          // node_type
+		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.Timestamp).String2(6)))                          //Timestamp
+		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Level.String()))                                                  // log level
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(fmt.Sprintf(logStackFormatter.Load().(string), s.CodeLine)))) // CodeLine
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Message)))                                                  // message
 		buf.WriteString("),")
 	}
 	return string(buf.Next(buf.Len() - 1))
@@ -300,6 +302,7 @@ var errorFormatter atomic.Value
 
 func init() {
 	errorFormatter.Store("%+v")
+	logStackFormatter.Store("%+v")
 }
 
 func genErrorBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {

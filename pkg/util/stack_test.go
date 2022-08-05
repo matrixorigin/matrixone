@@ -1,9 +1,21 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package util
 
 import (
 	"fmt"
-	"github.com/pkg/errors"
-	"reflect"
 	"testing"
 )
 
@@ -14,13 +26,13 @@ func TestCaller(t *testing.T) {
 	tests := []struct {
 		name string
 		args args
-		want Frame
+		want string
 	}{
-		// TODO: Add test cases.
+		{name: "depth_0", args: args{depth: 0}, want: "stack_test.go:23"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := Caller(tt.args.depth); got != tt.want {
+			if got := Caller(tt.args.depth); fmt.Sprintf("%v", got) != tt.want {
 				t.Errorf("Caller() = %v, want %v", got, tt.want)
 			}
 		})
@@ -34,51 +46,17 @@ func TestCallers(t *testing.T) {
 	tests := []struct {
 		name string
 		args args
-		want *Stack
+		want string
 	}{
-		// TODO: Add test cases.
+		{name: "depth_0", args: args{depth: 0}, want: "\n\tstack_test.go\n\ttesting.go\n\tasm_amd64.s"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := Callers(tt.args.depth); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Callers() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestStack_Format(t *testing.T) {
-	type args struct {
-		st   fmt.State
-		verb rune
-	}
-	tests := []struct {
-		name string
-		s    Stack
-		args args
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tt.s.Format(tt.args.st, tt.args.verb)
-		})
-	}
-}
-
-func TestStack_StackTrace(t *testing.T) {
-	tests := []struct {
-		name string
-		s    Stack
-		want errors.StackTrace
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.s.StackTrace(); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("StackTrace() = %v, want %v", got, tt.want)
-			}
+			got := Callers(tt.args.depth)
+			t.Logf("Callers() = %s", got)
+			t.Logf("Callers(%%+s) = %+s", got)
+			t.Logf("Callers(%%v) = %v", got)
+			t.Logf("Callers(%%+v) = %+v", got)
 		})
 	}
 }

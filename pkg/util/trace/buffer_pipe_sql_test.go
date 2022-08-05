@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap/zapcore"
 	"reflect"
 	"sync"
@@ -44,16 +45,16 @@ func init() {
 var testBaseBuffer2SqlOption = []buffer2SqlOption{bufferWithSizeThreshold(1 * KB)}
 
 func setup() {
+	logutil.SetLevelChangeFunc(SetLogLevel)
 	if _, err := Init(
 		context.Background(),
 		&config.GlobalSystemVariables,
-		DebugMode(true),
 		EnableTracer(false),
 		WithMOVersion("v0.test.0"),
-		WithNode(config.GlobalSystemVariables.GetNodeID(), NodeTypeNode),
 		WithSQLExecutor(func() ie.InternalExecutor {
 			return nil
 		}),
+		DebugMode(true),
 	); err != nil {
 		panic(err)
 	}
@@ -183,7 +184,9 @@ func Test_batchSqlHandler_genErrorBatchSql(t1 *testing.T) {
 				},
 				buf: buf,
 			},
-			want: `insert into system.error_info (` + "`err_code`" + ", `stack`" + ", `timestamp`" + `) values ("test1", "test1", "0001-01-01 00:00:00.000000")`,
+			want: `insert into system.error_info (` +
+				"`err_code`, `stack`, `timestamp`, `node_id`, `node_type`" +
+				`) values ("test1", "test1", "0001-01-01 00:00:00.000000", 0, "Node")`,
 		},
 		{
 			name: "multi_error",
@@ -194,7 +197,9 @@ func Test_batchSqlHandler_genErrorBatchSql(t1 *testing.T) {
 				},
 				buf: buf,
 			},
-			want: `insert into system.error_info (` + "`err_code`" + ", `stack`" + ", `timestamp`" + `) values ("test1", "test1", "0001-01-01 00:00:00.000000"),("test2: test1", "test2: test1", "0001-01-01 00:00:00.001001")`,
+			want: `insert into system.error_info (` +
+				"`err_code`, `stack`, `timestamp`, `node_id`, `node_type`" +
+				`) values ("test1", "test1", "0001-01-01 00:00:00.000000", 0, "Node"),("test2: test1", "test2: test1", "0001-01-01 00:00:00.001001", 0, "Node")`,
 		},
 	}
 	errorFormatter.Store("%v")
@@ -202,6 +207,8 @@ func Test_batchSqlHandler_genErrorBatchSql(t1 *testing.T) {
 		t1.Run(tt.name, func(t1 *testing.T) {
 			if got := genErrorBatchSql(tt.args.in, tt.args.buf); got != tt.want {
 				t1.Errorf("genErrorBatchSql() = %v, want %v", got, tt.want)
+			} else {
+				t1.Logf("SQL: %s", got)
 			}
 		})
 	}
@@ -218,7 +225,6 @@ func Test_batchSqlHandler_genLogBatchSql(t1 *testing.T) {
 		args args
 		want string
 	}{
-		// TODO: Add test cases.
 		{
 			name: "single",
 			args: args{
@@ -226,21 +232,59 @@ func Test_batchSqlHandler_genLogBatchSql(t1 *testing.T) {
 					&MOLog{
 						StatementId: 1,
 						SpanId:      1,
-						Timestamp:   uint64(time.Millisecond + time.Microsecond),
+						Timestamp:   uint64(0),
 						Level:       zapcore.InfoLevel,
-						CodeLine:    util.Frame(0),
-						Message:     "message",
+						CodeLine:    util.Caller(0),
+						Message:     "info message",
 					},
 				},
 				buf: buf,
 			},
-			want: "",
+			want: `insert into system.log_info (` +
+				"`span_id`, `statement_id`, `node_id`, `node_type`, `timestamp`, `level`, `code_line`, `message`" +
+				`) values (1, 1, 0, "Node", "0001-01-01 00:00:00.000000", "info", "Test_batchSqlHandler_genLogBatchSql", "info message")`,
+		},
+		{
+			name: "multi",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&MOLog{
+						StatementId: 1,
+						SpanId:      1,
+						Timestamp:   uint64(0),
+						Level:       zapcore.InfoLevel,
+						CodeLine:    util.Caller(0),
+						Message:     "info message",
+					},
+					&MOLog{
+						StatementId: 1,
+						SpanId:      1,
+						Timestamp:   uint64(time.Millisecond + time.Microsecond),
+						Level:       zapcore.DebugLevel,
+						CodeLine:    util.Caller(0),
+						Message:     "debug message",
+					},
+				},
+				buf: buf,
+			},
+			want: `insert into system.log_info (` +
+				"`span_id`, `statement_id`, `node_id`, `node_type`, `timestamp`, `level`, `code_line`, `message`" +
+				`) values (1, 1, 0, "Node", "0001-01-01 00:00:00.000000", "info", "Test_batchSqlHandler_genLogBatchSql", "info message")` +
+				`,(1, 1, 0, "Node", "0001-01-01 00:00:00.001001", "debug", "Test_batchSqlHandler_genLogBatchSql", "debug message")`,
 		},
 	}
+	logStackFormatter.Store("%n")
+	t1.Logf("%%n : %n", tests[0].args.in[0].(*MOLog).CodeLine)
+	t1.Logf("%%s : %s", tests[0].args.in[0].(*MOLog).CodeLine)
+	t1.Logf("%%+s: %+s", tests[0].args.in[0].(*MOLog).CodeLine)
+	t1.Logf("%%v : %v", tests[0].args.in[0].(*MOLog).CodeLine)
+	t1.Logf("%%+v: %+v", tests[0].args.in[0].(*MOLog).CodeLine)
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
 			if got := genLogBatchSql(tt.args.in, tt.args.buf); got != tt.want {
 				t1.Errorf("genLogBatchSql() = %v, want %v", got, tt.want)
+			} else {
+				t1.Logf("SQL: %s", got)
 			}
 		})
 	}
