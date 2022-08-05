@@ -72,20 +72,37 @@ func (l *LRU) Set(key any, value any, size int) {
 
 func (l *LRU) evict() {
 	for {
-		if l.size < l.capacity {
+		if l.size <= l.capacity {
 			return
 		}
 		if len(l.kv) == 0 {
 			return
 		}
+
 		elem := l.evicts.Back()
-		if elem == nil {
-			return
+		for {
+			if elem == nil {
+				return
+			}
+			item := elem.Value.(*lruItem)
+
+			// pinned value
+			if pinned, ok := item.Value.(interface {
+				IsPinned() bool
+			}); ok {
+				if pinned.IsPinned() {
+					// skip pinned
+					elem = elem.Prev()
+					continue
+				}
+			}
+
+			l.size -= item.Size
+			l.evicts.Remove(elem)
+			delete(l.kv, item.Key)
+			break
 		}
-		item := elem.Value.(*lruItem)
-		l.size -= item.Size
-		l.evicts.Remove(elem)
-		delete(l.kv, item.Key)
+
 	}
 }
 

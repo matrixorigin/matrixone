@@ -1325,12 +1325,12 @@ func TestReplay10(t *testing.T) {
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 5
 	schema.ColDefs[1].Default = catalog.Default{
-		Set:   true,
-		Null:  false,
-		Value: int16(3)}
+		NullAbility: false,
+		Expr:        []byte("hello"),
+	}
 	schema.ColDefs[2].Default = catalog.Default{
-		Set:  true,
-		Null: true,
+		NullAbility: true,
+		Expr:        []byte("world"),
 	}
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
@@ -1347,6 +1347,6 @@ func TestReplay10(t *testing.T) {
 	checkAllColRowsByScan(t, rel, bat.Length(), false)
 	assert.NoError(t, txn.Commit())
 	schema1 := rel.GetMeta().(*catalog.TableEntry).GetSchema()
-	assert.Equal(t, int16(3), schema1.ColDefs[1].Default.Value.(int16))
-	assert.Equal(t, true, schema1.ColDefs[2].Default.Null)
+	assert.Equal(t, "hello", string(schema1.ColDefs[1].Default.Expr))
+	assert.Equal(t, true, schema1.ColDefs[2].Default.NullAbility)
 }

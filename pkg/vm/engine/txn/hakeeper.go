@@ -16,50 +16,55 @@ package txnengine
 
 import (
 	"context"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-func (e *Engine) startHAKeeperLoop(ctx context.Context) {
-	ticker := time.NewTicker(time.Second * 17)
-	for {
-		select {
+func GetClusterDetailsFromHAKeeper(
+	ctx context.Context,
+	client logservice.CNHAKeeperClient,
+) (
+	get GetClusterDetailsFunc,
+) {
 
-		case <-ticker.C:
-			if err := e.updateClusterDetails(ctx); err != nil {
-				// lost contact with hakeeper
-				e.fatal()
-				return
-			}
+	var lock sync.Mutex
+	var detailsError error
+	var details logservicepb.ClusterDetails
 
-		case <-ctx.Done():
-			return
+	go func() {
 
+		update := func() {
+			ctx, cancel := context.WithTimeout(ctx, time.Second*17)
+			defer cancel()
+			ret, err := client.GetClusterDetails(ctx)
+			lock.Lock()
+			defer lock.Unlock()
+			detailsError = err
+			details = ret
 		}
+
+		ticker := time.NewTicker(time.Second * 17)
+		for {
+			select {
+
+			case <-ticker.C:
+				update()
+
+			case <-ctx.Done():
+				return
+
+			}
+		}
+	}()
+
+	get = func() (logservicepb.ClusterDetails, error) {
+		lock.Lock()
+		defer lock.Unlock()
+		return details, detailsError
 	}
-}
 
-func (e *Engine) updateClusterDetails(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, time.Second*17)
-	defer cancel()
-	details, err := e.hakeeperClient.GetClusterDetails(ctx)
-	if err != nil {
-		return err
-	}
-	e.clusterDetails.Lock()
-	defer e.clusterDetails.Unlock()
-	e.clusterDetails.ClusterDetails = details
-	return nil
-}
-
-func (e *Engine) getDataNodes() []logservicepb.DNNode {
-	e.clusterDetails.Lock()
-	defer e.clusterDetails.Unlock()
-	return e.clusterDetails.DNNodes
-}
-
-func (e *Engine) getComputeNodes() []logservicepb.CNNode {
-	e.clusterDetails.Lock()
-	defer e.clusterDetails.Unlock()
-	return e.clusterDetails.CNNodes
+	return
 }

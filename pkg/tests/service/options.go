@@ -14,7 +14,11 @@
 
 package service
 
-import "go.uber.org/zap/zapcore"
+import (
+	"time"
+
+	"go.uber.org/zap/zapcore"
+)
 
 const (
 	// default cluster initial information
@@ -37,6 +41,16 @@ const (
 
 	// default configuration for logger
 	defaultLogLevel = zapcore.InfoLevel
+
+	// default hakeeper configuration
+	defaultTickPerSecond   = 10
+	defaultLogStoreTimeout = 10 * time.Second
+	defaultDnStoreTimeout  = 10 * time.Second
+	defaultCheckInterval   = 3 * time.Second
+
+	// default heartbeat configuration
+	defaultLogHeartbeatInterval = 1 * time.Second
+	defaultDNHeartbeatInterval  = 1 * time.Second
 )
 
 // Options are params for creating test cluster.
@@ -55,6 +69,18 @@ type Options struct {
 
 	dn struct {
 		txnStorageBackend string
+		heartbeatInterval time.Duration
+	}
+
+	log struct {
+		heartbeatInterval time.Duration
+	}
+
+	hakeeper struct {
+		tickPerSecond   int
+		checkInterval   time.Duration
+		logStoreTimeout time.Duration
+		dnStoreTimeout  time.Duration
 	}
 }
 
@@ -91,7 +117,30 @@ func (opt *Options) validate() {
 	if opt.dn.txnStorageBackend == "" {
 		opt.dn.txnStorageBackend = defaultDnStorage
 	}
+
 	opt.logLevel = defaultLogLevel
+
+	// hakeeper configuration
+	if opt.hakeeper.tickPerSecond == 0 {
+		opt.hakeeper.tickPerSecond = defaultTickPerSecond
+	}
+	if opt.hakeeper.logStoreTimeout == 0 {
+		opt.hakeeper.logStoreTimeout = defaultLogStoreTimeout
+	}
+	if opt.hakeeper.dnStoreTimeout == 0 {
+		opt.hakeeper.dnStoreTimeout = defaultDnStoreTimeout
+	}
+	if opt.hakeeper.checkInterval == 0 {
+		opt.hakeeper.checkInterval = defaultCheckInterval
+	}
+
+	// heartbeat configuration
+	if opt.log.heartbeatInterval == 0 {
+		opt.log.heartbeatInterval = defaultLogHeartbeatInterval
+	}
+	if opt.dn.heartbeatInterval == 0 {
+		opt.dn.heartbeatInterval = defaultDNHeartbeatInterval
+	}
 }
 
 // WithDNServiceNum sets dn service number in the cluster.
@@ -142,8 +191,45 @@ func (opt Options) WithHostAddress(host string) Options {
 	return opt
 }
 
+// WithLogLvel sets log level.
 func (opt Options) WithLogLvel(lvl zapcore.Level) Options {
 	opt.logLevel = lvl
+	return opt
+}
+
+// WithHKTickPerSecond sets tick per second for hakeeper.
+func (opt Options) WithHKTickPerSecond(tick int) Options {
+	opt.hakeeper.tickPerSecond = tick
+	return opt
+}
+
+// WithHKLogStoreTimeout sets log store timeout for hakeeper.
+func (opt Options) WithHKLogStoreTimeout(timeout time.Duration) Options {
+	opt.hakeeper.logStoreTimeout = timeout
+	return opt
+}
+
+// WithHKDNStoreTimeout sets dn store timeout for hakeeper.
+func (opt Options) WithHKDNStoreTimeout(timeout time.Duration) Options {
+	opt.hakeeper.dnStoreTimeout = timeout
+	return opt
+}
+
+// WithHKCheckInterval sets check interval for hakeeper.
+func (opt Options) WithHKCheckInterval(interval time.Duration) Options {
+	opt.hakeeper.checkInterval = interval
+	return opt
+}
+
+// WithDNHeartbeatInterval sets heartbeat interval fo dn service.
+func (opt Options) WithDNHeartbeatInterval(interval time.Duration) Options {
+	opt.dn.heartbeatInterval = interval
+	return opt
+}
+
+// WithLogHeartbeatInterval sets heartbeat interval fo log service.
+func (opt Options) WithLogHeartbeatInterval(interval time.Duration) Options {
+	opt.log.heartbeatInterval = interval
 	return opt
 }
 

@@ -85,4 +85,4 @@ a text not null,
 b text not null default '0'
 );
 create table t1 (a text primary key, b varchar(32));
-create table t1 (a text, index index_test(text));
+create table t1 (a text, index index_test(a));
