@@ -50,46 +50,6 @@ func (task *mockIOTask) Execute() error {
 	return nil
 }
 
-func TestIOSchedule1(t *testing.T) {
-	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
-	defer db.Close()
-	pendings := make([]tasks.Task, 0)
-	now := time.Now()
-	for i := 0; i < 5; i++ {
-		ctx := tasks.Context{Waitable: true}
-		scope := &common.ID{TableID: 1}
-		task := newMockIOTask(&ctx, scope, time.Millisecond*5)
-		err := db.Scheduler.Schedule(task)
-		assert.Nil(t, err)
-		pendings = append(pendings, task)
-	}
-	for _, task := range pendings {
-		err := task.WaitDone()
-		assert.Nil(t, err)
-	}
-	duration := time.Since(now)
-	assert.True(t, duration > time.Millisecond*5*5)
-	t.Log(time.Since(now))
-	pendings = pendings[:0]
-	now = time.Now()
-	for i := 0; i < 5; i++ {
-		ctx := tasks.Context{Waitable: true}
-		scope := &common.ID{TableID: uint64(i)}
-		task := newMockIOTask(&ctx, scope, time.Millisecond*5)
-		err := db.Scheduler.Schedule(task)
-		assert.Nil(t, err)
-		pendings = append(pendings, task)
-	}
-	for _, task := range pendings {
-		err := task.WaitDone()
-		assert.Nil(t, err)
-	}
-	duration = time.Since(now)
-	assert.True(t, duration < time.Millisecond*5*2)
-	t.Log(time.Since(now))
-}
-
 func TestCheckpoint1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	opts := new(options.Options)
