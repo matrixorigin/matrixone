@@ -132,6 +132,9 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 	if vec.GetType().IsString() {
 		for i := range os {
 			hasNull := vec.GetNulls().Contains(uint64(i) + uint64(start))
+			if vps[i] == 0 {
+				continue
+			}
 			j := vps[i] - 1
 			a.vs[j], a.es[j] = a.fill(int64(j), (any)(vec.GetString(int64(i)+start)).(T1), a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
 		}
@@ -140,6 +143,9 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 	vs := vector.GetColumn[T1](vec)
 	for i := range os {
 		hasNull := vec.GetNulls().Contains(uint64(i) + uint64(start))
+		if vps[i] == 0 {
+			continue
+		}
 		j := vps[i] - 1
 		a.vs[j], a.es[j] = a.fill(int64(j), vs[int64(i)+start], a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
 	}
@@ -177,6 +183,9 @@ func (a *UnaryAgg[T1, T2]) Merge(b Agg[any], x, y int64) error {
 func (a *UnaryAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, vps []uint64) error {
 	b0 := b.(*UnaryAgg[T1, T2])
 	for i := range os {
+		if vps[i] == 0 {
+			continue
+		}
 		j := vps[i] - 1
 		if a.es[j] && !b0.es[int64(i)+start] {
 			a.otyp = b0.otyp

@@ -15,6 +15,8 @@
 package compile
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -41,9 +43,6 @@ const (
 	Update
 	InsertValues
 )
-
-// Address is the ip:port of local node
-var Address string
 
 type EncodeSource struct {
 	SchemaName   string
@@ -76,8 +75,8 @@ type Scope struct {
 	// 2 -  execution unit that requires remote call.
 	Magic int
 
-	// used for dispatch
-	DispatchAll bool
+	// IsEnd means the pipeline is end
+	IsEnd bool
 
 	Plan *plan.Plan
 	// DataSource stores information about data source.
@@ -94,10 +93,19 @@ type Scope struct {
 	Reg *process.WaitRegister
 }
 
+// anaylze information
+type anaylze struct {
+	// curr is the current index of plan
+	curr      int
+	qry       *plan.Query
+	analInfos []*process.AnalyzeInfo
+}
+
 // Compile contains all the information needed for compilation.
 type Compile struct {
 	scope *Scope
-	u     interface{}
+
+	u interface{}
 	//fill is a result writer runs a callback function.
 	//fill will be called when result data is ready.
 	fill func(interface{}, *batch.Batch) error
@@ -109,10 +117,15 @@ type Compile struct {
 	uid string
 	// sql sql text.
 	sql string
+
+	anal *anaylze
 	// e db engine instance.
-	e engine.Engine
+	e   engine.Engine
+	ctx context.Context
 	// proc stores the execution context.
 	proc *process.Process
+
+	cnList engine.Nodes
 	// ast
 	stmt tree.Statement
 }

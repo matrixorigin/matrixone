@@ -1,5 +1,5 @@
--- @bvt:issue#3333
 #ORDER BY
+drop table if exists t;
 CREATE TABLE t (i1 INT,
 d1 DOUBLE,
 e2 DECIMAL(5,2));
@@ -12,7 +12,6 @@ IF(e2 IS NULL,i1,e2) if_c,
 SUM(d1) FROM t
 GROUP BY e2,i1 ORDER BY nullif_c, SUM(d1);
 DROP TABLE t;
--- @bvt:issue
 
 #子查询
 CREATE TABLE t1(a INT);

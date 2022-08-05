@@ -160,7 +160,7 @@ id	a	b
 2	9223372036854776000	9.223372036854776e18
 3	9223372036854776000	9.223372036854776e18
 4	18446744073709552000	1.844674407370955e19
-select a,count(a) from t1 where ((a = 9.223372036854776e18) and (b = '9.223372036854776e18')) group by a having count(a)>1 order by count(a);
+select a,count(a) from t1 where ((a = 9.223372036854776e18) and (b = '9.223372036854776E+18')) group by a having count(a)>1 order by count(a);
 a	count(a)
 9223372036854776000	2
 select distinct a,b from t1 where ((a = 1.844674407370955e19) and (b != '9.223372036854776e18')) order by 1;

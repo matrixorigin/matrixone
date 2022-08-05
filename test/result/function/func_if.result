@@ -12,6 +12,7 @@ a
 0
 null
 drop table t1;
+drop table if exists t;
 CREATE TABLE t (i1 INT,
 d1 DOUBLE,
 e2 DECIMAL(5,2));
@@ -54,6 +55,7 @@ Can't cast '9223372036854775808' from BIGINT UNSIGNED type to BIGINT type. Reaso
 select * from t1;
 a
 drop table t1;
+drop table if exists t;
 CREATE TABLE t (i1 INT,
 d1 DOUBLE,
 e2 DECIMAL(5,2));
