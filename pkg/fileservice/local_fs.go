@@ -161,6 +161,10 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 
 func (l *LocalFS) Read(ctx context.Context, vector *IOVector) error {
 
+	if len(vector.Entries) == 0 {
+		return ErrEmptyVector
+	}
+
 	nativePath := l.toNativeFilePath(vector.FilePath)
 	f, err := os.Open(nativePath)
 	if os.IsNotExist(err) {
