@@ -105,10 +105,13 @@ type anaylze struct {
 type Compile struct {
 	scope *Scope
 
-	u interface{}
+	// isTP = true means is a tp query, otherwise is an ap query
+	isTP bool
+
+	u any
 	//fill is a result writer runs a callback function.
 	//fill will be called when result data is ready.
-	fill func(interface{}, *batch.Batch) error
+	fill func(any, *batch.Batch) error
 	//affectRows stores the number of rows affected while insert / update / delete
 	affectRows uint64
 	// db current database name.
