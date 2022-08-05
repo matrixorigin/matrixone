@@ -108,15 +108,14 @@ func (ctr *container) insert(ap *Argument, proc *process.Process, analyze proces
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
-
+			rowCount := ctr.hashTable.GroupCount()
 			vs, _, err := iterator.Insert(i, n, bat.Vecs)
 			if err != nil {
 				return false, err
 			}
 			copy(inserted[:n], restoreInserted[:n])
 			for j, v := range vs {
-				if v > ctr.hashTable.GroupCount() {
-					ctr.hashTable.AddGroup()
+				if v > rowCount {
 					inserted[j] = 1
 					ctr.bat.Zs = append(ctr.bat.Zs, 1)
 				}
