@@ -37,7 +37,6 @@ func TestCluster(t *testing.T) {
 	require.NoError(t, err)
 
 	// FIXME:
-	// 	- do some operation via `ClusterOperation`
 	// 	- check cluster state via `ClusterAssertState`
 	// 	- wait cluster state via `ClusterWaitState`
 }
@@ -70,17 +69,17 @@ func TestClusterAwareness(t *testing.T) {
 	// -------------------------------------------
 	// the following would test `ClusterAwareness`
 	// -------------------------------------------
-	dnIDs := c.ListDNServices()
-	require.Equal(t, dnSvcNum, len(dnIDs))
+	dsuuids := c.ListDNServices()
+	require.Equal(t, dnSvcNum, len(dsuuids))
 
-	logIDs := c.ListLogServices()
-	require.Equal(t, logSvcNum, len(logIDs))
+	lsuuids := c.ListLogServices()
+	require.Equal(t, logSvcNum, len(lsuuids))
 
-	dn, err := c.GetDNService(dnIDs[0])
+	dn, err := c.GetDNService(dsuuids[0])
 	require.NoError(t, err)
 	require.Equal(t, ServiceStarted, dn.Status())
 
-	log, err := c.GetLogService(logIDs[0])
+	log, err := c.GetLogService(lsuuids[0])
 	require.NoError(t, err)
 	require.Equal(t, ServiceStarted, log.Status())
 
@@ -95,4 +94,127 @@ func TestClusterAwareness(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, dnSvcNum, len(state.DNState.Stores))
 	require.Equal(t, logSvcNum, len(state.LogState.Stores))
+}
+
+func TestClusterOperation(t *testing.T) {
+	dnSvcNum := 3
+	logSvcNum := 3
+	opt := DefaultOptions().
+		WithDNServiceNum(dnSvcNum).
+		WithLogServiceNum(logSvcNum)
+
+	// initialize cluster
+	c, err := NewCluster(t, opt)
+	require.NoError(t, err)
+
+	// start the cluster
+	err = c.Start()
+	require.NoError(t, err)
+
+	// close the cluster after all
+	defer func() {
+		err := c.Close()
+		require.NoError(t, err)
+	}()
+
+	// -------------------------------------------
+	// the following would test `ClusterOperation`
+	// -------------------------------------------
+	// 1. close dn services by different ways
+	dsuuids := c.ListDNServices()
+	require.Equal(t, dnSvcNum, len(dsuuids))
+	// 1.a close dn service by uuid
+	{
+		index := 0
+		dsuuid := dsuuids[index]
+
+		// get the instance of dn service
+		ds, err := c.GetDNService(dsuuid)
+		require.NoError(t, err)
+		require.Equal(t, ServiceStarted, ds.Status())
+
+		// close it
+		err = c.CloseDNService(dsuuid)
+		require.NoError(t, err)
+		require.Equal(t, ServiceClosed, ds.Status())
+	}
+
+	// 1.b close dn service by index
+	{
+		index := 1
+
+		// get the instance of dn service
+		ds, err := c.GetDNServiceIndexed(index)
+		require.NoError(t, err)
+		require.Equal(t, ServiceStarted, ds.Status())
+
+		// close it
+		err = c.CloseDNServiceIndexed(index)
+		require.NoError(t, err)
+		require.Equal(t, ServiceClosed, ds.Status())
+	}
+
+	// 1.c close dn service by instance
+	{
+		index := 2
+
+		// get the instance of dn service
+		ds, err := c.GetDNServiceIndexed(index)
+		require.NoError(t, err)
+		require.Equal(t, ServiceStarted, ds.Status())
+
+		// close it
+		err = ds.Close()
+		require.NoError(t, err)
+		require.Equal(t, ServiceClosed, ds.Status())
+	}
+
+	// 2. close log services by different ways
+	lsuuids := c.ListLogServices()
+	require.Equal(t, logSvcNum, len(lsuuids))
+	// 2.a close log service by uuid
+	{
+		index := 0
+		lsuuid := lsuuids[index]
+
+		// get the instance of log service
+		ls, err := c.GetLogService(lsuuid)
+		require.NoError(t, err)
+		require.Equal(t, ServiceStarted, ls.Status())
+
+		// close it
+		err = c.CloseLogService(lsuuid)
+		require.NoError(t, err)
+		require.Equal(t, ServiceClosed, ls.Status())
+	}
+
+	// 2.b close log service by index
+	{
+		index := 1
+
+		// get the instance of log service
+		ls, err := c.GetLogServiceIndexed(index)
+		require.NoError(t, err)
+		require.Equal(t, ServiceStarted, ls.Status())
+
+		// close it
+		err = c.CloseLogServiceIndexed(index)
+		require.NoError(t, err)
+		require.Equal(t, ServiceClosed, ls.Status())
+	}
+
+	// 2.c close log service by instance
+	{
+		index := 2
+
+		// get the instance of log service
+		ls, err := c.GetLogServiceIndexed(index)
+		require.NoError(t, err)
+		require.Equal(t, ServiceStarted, ls.Status())
+
+		// close it
+		err = ls.Close()
+		require.NoError(t, err)
+		require.Equal(t, ServiceClosed, ls.Status())
+	}
 }
