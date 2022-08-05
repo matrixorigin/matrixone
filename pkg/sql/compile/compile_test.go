@@ -69,7 +69,7 @@ func TestCompile(t *testing.T) {
 		err := c.Compile(tc.pn, nil, testPrint)
 		require.NoError(t, err)
 		c.GetAffectedRows()
-		err = c.Run()
+		err = c.Run(0)
 		require.NoError(t, err)
 	}
 }
