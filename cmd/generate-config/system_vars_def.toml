@@ -343,8 +343,8 @@ scope = ["global"]
 access = ["file"]
 type = "string"
 domain-type = "set"
-values = ["standalone", "distributed"]
-comment = "default is standalone. if standalone, use internal sql executor"
+values = ["InternalExecutor", "FileService"]
+comment = "default is InternalExecutor. if InternalExecutor, use internal sql executor, FileService will implement soon."
 update-mode = "dynamic"
 
 [[parameter]]

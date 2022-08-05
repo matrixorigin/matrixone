@@ -51,7 +51,7 @@ func Init(ctx context.Context, sysVar *config.SystemVariables, options ...Tracer
 	// init TraceProvider
 	var opts = []TracerProviderOption{
 		EnableTracer(sysVar.GetEnableTrace()),
-		WithNode(sysVar.GetNodeID(), NodeTypeNode),
+		WithNode(0, NodeTypeNode),
 		WithBatchProcessMode(sysVar.GetTraceBatchProcessor()),
 		DebugMode(sysVar.GetEnableTraceDebug()),
 	}

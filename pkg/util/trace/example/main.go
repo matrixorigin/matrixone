@@ -21,6 +21,10 @@ func (l logOutputExecutor) Exec(s string, s2 ie.SessionOverrideOptions) error {
 	logutil.Info(s)
 	return nil
 }
+func (l logOutputExecutor) Query(s string, _ ie.SessionOverrideOptions) ie.InternalExecResult {
+	logutil.Info(s)
+	return nil
+}
 func (l logOutputExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
 
 func bootstrap(ctx context.Context) (context.Context, error) {

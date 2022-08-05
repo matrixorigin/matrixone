@@ -144,7 +144,7 @@ func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, 
 			StatementID:          statementId,
 			SessionID:            sessInfo.GetConnectionID(),
 			TransactionID:        ses.GetTxnHandler().GetTxn().GetID(),
-			Account:              "account",
+			Account:              "account", //fixme: sessInfo.GetAccount()
 			User:                 sessInfo.GetUser(),
 			Host:                 sessInfo.GetHost(),
 			Database:             sessInfo.GetDatabase(),

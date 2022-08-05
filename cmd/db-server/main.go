@@ -67,7 +67,7 @@ func createMOServer() {
 			&config.GlobalSystemVariables,
 			trace.WithMOVersion(MoVersion),
 			trace.WithSQLExecutor(func() ie.InternalExecutor {
-				return frontend.NewIternalExecutor(pu)
+				return frontend.NewInternalExecutor(pu)
 			}),
 		); err != nil {
 			panic(err)
