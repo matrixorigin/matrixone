@@ -25,7 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-func (s *Scope) CreateDatabase(snapshot engine.Snapshot, c *Compile) error {
+func (s *Scope) CreateDatabase(c *Compile) error {
+	snapshot := engine.Snapshot(c.proc.Snapshot)
 	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
 	if _, err := c.e.Database(c.ctx, dbName, snapshot); err == nil {
 		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
@@ -36,7 +37,8 @@ func (s *Scope) CreateDatabase(snapshot engine.Snapshot, c *Compile) error {
 	return c.e.Create(c.ctx, dbName, snapshot)
 }
 
-func (s *Scope) DropDatabase(snapshot engine.Snapshot, c *Compile) error {
+func (s *Scope) DropDatabase(c *Compile) error {
+	snapshot := engine.Snapshot(c.proc.Snapshot)
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
 	if _, err := c.e.Database(c.ctx, dbName, snapshot); err != nil {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
@@ -47,7 +49,8 @@ func (s *Scope) DropDatabase(snapshot engine.Snapshot, c *Compile) error {
 	return c.e.Delete(c.ctx, dbName, snapshot)
 }
 
-func (s *Scope) CreateTable(snapshot engine.Snapshot, c *Compile) error {
+func (s *Scope) CreateTable(c *Compile) error {
+	snapshot := engine.Snapshot(c.proc.Snapshot)
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -75,7 +78,8 @@ func (s *Scope) CreateTable(snapshot engine.Snapshot, c *Compile) error {
 	return dbSource.Create(c.ctx, tblName, append(exeCols, exeDefs...))
 }
 
-func (s *Scope) DropTable(snapshot engine.Snapshot, c *Compile) error {
+func (s *Scope) DropTable(c *Compile) error {
+	snapshot := engine.Snapshot(c.proc.Snapshot)
 	qry := s.Plan.GetDdl().GetDropTable()
 
 	dbName := qry.GetDatabase()

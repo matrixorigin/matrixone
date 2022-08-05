@@ -15,7 +15,6 @@
 package compile
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -33,13 +32,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (s *Scope) Delete(snapshot engine.Snapshot, c *Compile) (uint64, error) {
+func (s *Scope) Delete(c *Compile) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 
-	ctx := context.TODO()
 	if arg.DeleteCtxs[0].CanTruncate {
-		return arg.DeleteCtxs[0].TableSource.Truncate(ctx)
+		return arg.DeleteCtxs[0].TableSource.Truncate(c.ctx)
 	}
 
 	if err := s.MergeRun(c); err != nil {
@@ -48,7 +46,7 @@ func (s *Scope) Delete(snapshot engine.Snapshot, c *Compile) (uint64, error) {
 	return arg.AffectedRows, nil
 }
 
-func (s *Scope) Insert(snapshot engine.Snapshot, c *Compile) (uint64, error) {
+func (s *Scope) Insert(c *Compile) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*insert.Argument)
 	if err := s.MergeRun(c); err != nil {
@@ -57,7 +55,7 @@ func (s *Scope) Insert(snapshot engine.Snapshot, c *Compile) (uint64, error) {
 	return arg.Affected, nil
 }
 
-func (s *Scope) Update(snapshot engine.Snapshot, c *Compile) (uint64, error) {
+func (s *Scope) Update(c *Compile) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*update.Argument)
 	if err := s.MergeRun(c); err != nil {
@@ -66,16 +64,15 @@ func (s *Scope) Update(snapshot engine.Snapshot, c *Compile) (uint64, error) {
 	return arg.AffectedRows, nil
 }
 
-func (s *Scope) InsertValues(snapshot engine.Snapshot, engine engine.Engine, proc *process.Process, stmt *tree.Insert) (uint64, error) {
+func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
+	snapshot := engine.Snapshot(c.proc.Snapshot)
 	p := s.Plan.GetIns()
 
-	ctx := context.TODO()
-
-	dbSource, err := engine.Database(ctx, p.DbName, snapshot)
+	dbSource, err := c.e.Database(c.ctx, p.DbName, snapshot)
 	if err != nil {
 		return 0, err
 	}
-	relation, err := dbSource.Relation(ctx, p.TblName)
+	relation, err := dbSource.Relation(c.ctx, p.TblName)
 	if err != nil {
 		return 0, err
 	}
@@ -86,11 +83,11 @@ func (s *Scope) InsertValues(snapshot engine.Snapshot, engine engine.Engine, pro
 		p.ExplicitCols = append(p.ExplicitCols, p.OtherCols...)
 	}
 
-	if err := fillBatch(bat, p, stmt.Rows.Select.(*tree.ValuesClause).Rows, proc); err != nil {
+	if err := fillBatch(bat, p, stmt.Rows.Select.(*tree.ValuesClause).Rows, c.proc); err != nil {
 		return 0, err
 	}
 	batch.Reorder(bat, p.OrderAttrs)
-	if err := relation.Write(ctx, bat); err != nil {
+	if err := relation.Write(c.ctx, bat); err != nil {
 		return 0, err
 	}
 

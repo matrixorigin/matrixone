@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -62,6 +63,7 @@ func (c *Compile) Compile(pn *plan.Plan, u any, fill func(any, *batch.Batch) err
 	}()
 	c.u = u
 	c.fill = fill
+	c.info = plan2.GetExecTypeFromPlan(pn)
 	// build scope for a single sql
 	s, err := c.compileScope(pn)
 	if err != nil {
@@ -90,43 +92,48 @@ func (c *Compile) Run() (err error) {
 
 	switch c.scope.Magic {
 	case Normal:
+		defer c.fillAnalyzeInfo()
 		return c.scope.Run(c)
 	case Merge:
 		defer c.fillAnalyzeInfo()
 		return c.scope.MergeRun(c)
 	case Remote:
+		defer c.fillAnalyzeInfo()
 		return c.scope.RemoteRun(c)
 	case CreateDatabase:
-		return c.scope.CreateDatabase(c.proc.Snapshot, c)
+		return c.scope.CreateDatabase(c)
 	case DropDatabase:
-		return c.scope.DropDatabase(c.proc.Snapshot, c)
+		return c.scope.DropDatabase(c)
 	case CreateTable:
-		return c.scope.CreateTable(c.proc.Snapshot, c)
+		return c.scope.CreateTable(c)
 	case DropTable:
-		return c.scope.DropTable(c.proc.Snapshot, c)
+		return c.scope.DropTable(c)
 	case Deletion:
-		affectedRows, err := c.scope.Delete(c.proc.Snapshot, c)
+		defer c.fillAnalyzeInfo()
+		affectedRows, err := c.scope.Delete(c)
 		if err != nil {
 			return err
 		}
 		c.setAffectedRows(affectedRows)
 		return nil
 	case Insert:
-		affectedRows, err := c.scope.Insert(c.proc.Snapshot, c)
+		defer c.fillAnalyzeInfo()
+		affectedRows, err := c.scope.Insert(c)
 		if err != nil {
 			return err
 		}
 		c.setAffectedRows(affectedRows)
 		return nil
 	case Update:
-		affectedRows, err := c.scope.Update(c.proc.Snapshot, c)
+		defer c.fillAnalyzeInfo()
+		affectedRows, err := c.scope.Update(c)
 		if err != nil {
 			return err
 		}
 		c.setAffectedRows(affectedRows)
 		return nil
 	case InsertValues:
-		affectedRows, err := c.scope.InsertValues(c.proc.Snapshot, c.e, c.proc, c.stmt.(*tree.Insert))
+		affectedRows, err := c.scope.InsertValues(c, c.stmt.(*tree.Insert))
 		if err != nil {
 			return err
 		}
@@ -195,11 +202,13 @@ func (c *Compile) compileQuery(qry *plan.Query) (*Scope, error) {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", qry))
 	}
 	c.cnList = c.e.Nodes()
-	if c.isTP {
+	if c.info.Typ == plan2.ExecTypeTP {
 		c.cnList = engine.Nodes{engine.Node{Mcpu: 1}}
 	} else {
 		if len(c.cnList) == 0 {
 			c.cnList = append(c.cnList, engine.Node{Mcpu: c.NumCPU()})
+		} else if len(c.cnList) > c.info.CnNumbers {
+			c.cnList = c.cnList[:c.info.CnNumbers]
 		}
 	}
 	c.initAnalyze(qry)
@@ -207,7 +216,7 @@ func (c *Compile) compileQuery(qry *plan.Query) (*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.isTP {
+	if c.info.Typ == plan2.ExecTypeTP {
 		return c.compileTpQuery(qry, ss)
 	}
 	return c.compileApQuery(qry, ss)
