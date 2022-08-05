@@ -433,7 +433,7 @@ import (
 %type <tlsOption> require_elem
 %type <resourceOptions> conn_option_list conn_options
 %type <resourceOption> conn_option
-%type <updateExpr> update_expression
+%type <updateExpr> update_value
 %type <updateExprs> update_list
 %type <completionType> completion_type
 %type <str> password_opt
@@ -1552,17 +1552,17 @@ update_no_with_stmt:
 	}
 
 update_list:
-    update_expression
+    update_value
     {
         $$ = tree.UpdateExprs{$1}
     }
-|   update_list ',' update_expression
+|   update_list ',' update_value
     {
         $$ = append($1, $3)
     }
 
-update_expression:
-    column_name '=' expression
+update_value:
+    column_name '=' expr_or_default
     {
         $$ = &tree.UpdateExpr{Names: []*tree.UnresolvedName{$1}, Expr: $3}
     }

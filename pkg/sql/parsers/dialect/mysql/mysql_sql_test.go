@@ -26,9 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		//input: "create account nihao admin_name 'admin' identified by random password",
 		input: "drop account if exists abc",
-		//input: "alter account if not exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
 	}
 )
 
@@ -53,6 +51,8 @@ var (
 		input  string
 		output string
 	}{{
+		input: "update t1 set a = default",
+	}, {
 		input:  "explain select * from emp",
 		output: "explain select * from emp",
 	}, {
