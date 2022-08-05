@@ -41,7 +41,8 @@ const (
  timestamp datetime COMMENT "日志时间戳",
  Level varchar(32) COMMENT "日志级别, 例如: DEBUG, INFO, WARN, ERROR",
  code_line varchar(4096) COMMENT "写日志所在代码行",
- message varchar(4096) COMMENT "日志内容/*TODO: 应为text*/"
+ message varchar(4096) COMMENT "日志内容/*TODO: 应为text*/",
+ extra varchar(4096) COMMENT "日志内容, json结构"
 )`
 	sqlCreateStatementInfoTable = `CREATE TABLE IF NOT EXISTS statement_info(
  statement_id BIGINT UNSIGNED,

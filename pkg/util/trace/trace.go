@@ -40,7 +40,7 @@ var ini sync.Once
 func Init(ctx context.Context, sysVar *config.SystemVariables, options ...TracerProviderOption) (context.Context, error) {
 
 	// init tool dependence
-	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: ReportLog, LevelSignal: SetLogLevel})
+	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog, ReportZap, SetLogLevel})
 	errors.SetErrorReporter(HandleError)
 
 	// init TraceProvider
@@ -83,6 +83,7 @@ func initExport(config *tracerProviderConfig) {
 			bufferWithSizeThreshold(MB),
 		))
 		export.Register(&MOLog{}, NewBufferPipe2SqlWorker())
+		export.Register(&MOZap{}, NewBufferPipe2SqlWorker())
 		export.Register(&StatementInfo{}, NewBufferPipe2SqlWorker())
 		export.Register(&MOErrorHolder{}, NewBufferPipe2SqlWorker())
 		logutil2.Infof(nil, "init GlobalBatchProcessor")
@@ -95,7 +96,7 @@ func initExport(config *tracerProviderConfig) {
 	if p != nil {
 		config.spanProcessors = append(config.spanProcessors, NewBatchSpanProcessor(p))
 		logutil2.Infof(nil, "trace span processor")
-		logutil2.Info(nil, "[Replay]", zap.String("operation", "value1"), zap.String("operation_1", "value2"))
+		logutil2.Info(nil, "[Debug]", zap.String("operation", "value1"), zap.String("operation_1", "value2"))
 	}
 }
 

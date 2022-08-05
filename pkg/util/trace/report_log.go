@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 
+	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
@@ -41,6 +42,7 @@ type MOLog struct {
 	Level       zapcore.Level `json:"Level"`
 	CodeLine    util.Frame    `json:"code_line"` // like "util/trace/trace.go:666"
 	Message     string        `json:"Message"`
+	Extra       string        `json:"extra"` // like json text
 }
 
 func newMOLog() *MOLog {
@@ -86,5 +88,45 @@ func ReportLog(ctx context.Context, level zapcore.Level, depth int, formatter st
 	log.Level = level
 	log.CodeLine = util.Caller(depth + 1)
 	log.Message = fmt.Sprintf(formatter, args...)
+	log.Extra = "{}"
 	export.GetGlobalBatchProcessor().Collect(DefaultContext(), log)
+}
+
+func ContextField(ctx context.Context) zap.Field {
+	return SpanField(SpanFromContext(ctx).SpanContext())
+}
+
+var _ batchpipe.HasName = &MOZap{}
+var _ IBuffer2SqlItem = &MOZap{}
+
+type MOZap struct {
+	JsonEncoder zapcore.Encoder
+	Entry       zapcore.Entry
+	Fields      []zapcore.Field
+}
+
+func newMOZap() *MOZap {
+	return &MOZap{}
+}
+
+func (m MOZap) GetName() string {
+	return MOZapType
+}
+
+const ZapFieldSize = int(unsafe.Sizeof(zapcore.Field{}))
+
+// Size 计算近似值
+func (m MOZap) Size() int64 {
+	return int64(unsafe.Sizeof(m.JsonEncoder)+unsafe.Sizeof(m.Entry)) + int64(ZapFieldSize*len(m.Fields))
+}
+
+func (m MOZap) Free() {}
+
+func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) {
+	log := newMOZap()
+	log.JsonEncoder = jsonEncoder
+	log.Entry = entry
+	log.Fields = fields
+	export.GetGlobalBatchProcessor().Collect(DefaultContext(), log)
+
 }

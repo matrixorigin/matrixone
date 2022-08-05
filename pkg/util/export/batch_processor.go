@@ -47,7 +47,6 @@ func newBufferHolder(name batchpipe.HasName, impl batchpipe.PipeImpl[batchpipe.H
 	}
 	reminder := buffer.(batchpipe.Reminder)
 	b.trigger = time.AfterFunc(reminder.RemindNextAfter(), func() {
-		logutil.Debugf("buffer %s trigger time.", name.GetName())
 		if atomic.LoadInt32(&b.readonly) == READONLY {
 			logutil.Debugf("buffer %s trigger time, pass.", name.GetName())
 			return
@@ -127,7 +126,6 @@ func NewMOCollector() *MOCollector {
 }
 
 func (c *MOCollector) Collect(ctx context.Context, i batchpipe.HasName) error {
-	logutil.Debugf("Collect %s", i.GetName())
 	c.itemAwake <- i
 	return nil
 }
@@ -177,12 +175,11 @@ func (c *MOCollector) doCollect(idx int) {
 	for {
 		select {
 		case i := <-c.itemAwake:
-			logutil.Debugf("doCollect %dth: accept item %s", idx, i.GetName())
 			if _, has := c.buffers[i.GetName()]; !has {
-				logutil.Debugf("doCollect %dth: init", idx)
+				logutil.Debugf("doCollect %dth: init buffer for %s", idx, i.GetName())
 				c.mux.Lock()
 				if _, has := c.buffers[i.GetName()]; !has {
-					logutil.Debugf("doCollect %dth: init done.", idx)
+					logutil.Debugf("doCollect %dth: init buffer done.", idx)
 					if impl, has := gPipeImplHolder.Get(i.GetName()); !has {
 						// TODO: PanicError
 						panic("unknown item type")
@@ -216,10 +213,8 @@ func (c *MOCollector) doGenerate(idx int) {
 	for {
 		select {
 		case holder := <-c.bufferAwake:
-			logutil.Debugf("doGenerate %dth: before genBatch", idx)
 			c.genBatch(holder, buf)
 			c.batchAwake <- holder
-			logutil.Debugf("doGenerate %dth: after send batchAwake", idx)
 		case <-c.stopCh:
 			break
 		}
@@ -233,7 +228,6 @@ func (c *MOCollector) doExport(idx int) {
 	for {
 		select {
 		case holder := <-c.batchAwake:
-			logutil.Debugf("doExport %dth: handleBatch", idx)
 			c.handleBatch(holder)
 		case <-c.stopCh:
 			break

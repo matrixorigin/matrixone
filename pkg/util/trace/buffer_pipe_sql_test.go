@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"reflect"
 	"sync"
 	"testing"
@@ -11,7 +12,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errors"
@@ -29,6 +29,7 @@ var testBaseBuffer2SqlOption = []buffer2SqlOption{bufferWithSizeThreshold(1 * KB
 var nodeStateSpanIdStr string
 
 func noopReportLog(context.Context, zapcore.Level, int, string, ...any) {}
+func noopReportZap(zapcore.Encoder, zapcore.Entry, []zapcore.Field)     {}
 func noopReportError(context.Context, error)                            {}
 
 func init() {
@@ -48,7 +49,7 @@ func setup() {
 	); err != nil {
 		panic(err)
 	}
-	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: noopReportLog, LevelSignal: SetLogLevel})
+	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: noopReportLog, ReportZap: noopReportZap, LevelSignal: SetLogLevel})
 	errors.SetErrorReporter(noopReportError)
 
 	sc := SpanFromContext(DefaultContext()).SpanContext()

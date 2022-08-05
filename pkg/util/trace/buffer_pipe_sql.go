@@ -55,6 +55,8 @@ func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 		f = genSpanBatchSql
 	case MOLogType:
 		f = genLogBatchSql
+	case MOZapType:
+		f = genZapLogBatchSql
 	case MOStatementType:
 		f = genStatementBatchSql
 		opts = append(opts, bufferWithFilterItemFunc(filterTraceInsertSql))
@@ -111,7 +113,7 @@ func quote(value string) string {
 		{"\n", "\\n"},
 		{"\r", "\\r"},
 		{"\t", "\\t"},
-		{`"`, `\"`},
+		//{`"`, `\"`},
 		{"\x1a", "\\\\Z"},
 	}
 	for _, rule := range replaceRules {
@@ -183,6 +185,7 @@ func genLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.WriteString(", `level`")
 	buf.WriteString(", `code_line`")
 	buf.WriteString(", `message`")
+	buf.WriteString(", `extra`")
 	buf.WriteString(") values ")
 
 	moNode := GetNodeResource()
@@ -201,6 +204,65 @@ func genLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Level.String()))                                                  // log level
 		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(fmt.Sprintf(logStackFormatter.Load().(string), s.CodeLine)))) // CodeLine
 		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Message)))                                                  // message
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Extra)))                                                    // extra
+		buf.WriteString("),")
+	}
+	return string(buf.Next(buf.Len() - 1))
+}
+
+func genZapLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
+	buf.Reset()
+	if len(in) == 0 {
+		logutil.Debugf("genZapLogBatchSql empty")
+		return ""
+	}
+
+	buf.WriteString(fmt.Sprintf("insert into %s.%s ", statsDatabase, logInfoTbl))
+	buf.WriteString("(")
+	buf.WriteString("`span_id`")
+	buf.WriteString(", `statement_id`")
+	buf.WriteString(", `node_id`")
+	buf.WriteString(", `node_type`")
+	buf.WriteString(", `timestamp`")
+	buf.WriteString(", `level`")
+	buf.WriteString(", `code_line`")
+	buf.WriteString(", `message`")
+	buf.WriteString(", `extra`")
+	buf.WriteString(") values ")
+
+	moNode := GetNodeResource()
+
+	var sc SpanContext
+	for _, item := range in {
+		s, ok := item.(*MOZap)
+		if !ok {
+			panic("Not MOZap")
+		}
+
+		// format extra, and find context
+		buffer, err := s.JsonEncoder.EncodeEntry(s.Entry, s.Fields)
+		if err != nil {
+			// TODO: report err
+		}
+		sc = SpanFromContext(DefaultContext()).SpanContext()
+		for _, f := range s.Fields {
+			if IsSpanField(f) {
+				if val, ok := f.Interface.(*SpanContext); ok {
+					sc = *val
+				}
+			}
+		}
+
+		buf.WriteString("(")
+		buf.WriteString(fmt.Sprintf("%d", sc.SpanID))
+		buf.WriteString(fmt.Sprintf(", %d", sc.TraceID))
+		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))                                         // node_id
+		buf.WriteString(fmt.Sprintf(", \"%s\"", moNode.NodeType.String()))                          // node_type
+		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Entry.Time.Format("2006-01-02.15:04:05.000000"))) //Timestamp
+		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Entry.Level.String()))                            // log level
+		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Entry.Caller.TrimmedPath()))                      // CodeLine
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Entry.Message)))                            // message
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(buffer.String())))                            // extra
 		buf.WriteString("),")
 	}
 	return string(buf.Next(buf.Len() - 1))
@@ -308,7 +370,7 @@ func filterTraceInsertSql(i IBuffer2SqlItem) {
 	s := i.(*StatementInfo)
 	for _, prefix := range insertSQLPrefix {
 		if strings.Index(s.Statement, prefix) >= 0 {
-			logutil.Debugf("find insert system record, short it.")
+			logutil.Debugf("find insert system sql, short it.")
 			s.Statement = prefix
 		}
 	}

@@ -27,7 +27,7 @@ func Debug(ctx context.Context, msg string, fields ...zap.Field) {
 }
 
 func Info(ctx context.Context, msg string, fields ...zap.Field) {
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), zap.Hooks(hook)).Info(msg, fields...)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Info(msg, fields...)
 }
 
 func Warn(ctx context.Context, msg string, fields ...zap.Field) {
@@ -82,6 +82,9 @@ func Fatalf(ctx context.Context, msg string, fields ...interface{}) {
 	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Fatalf(msg, fields...)
 }
 
+// hook can catch zapcore.Entry, which can add by WithOptions(zap.Hooks(hook))
+// But what we need is zapcore.CheckedEntry
+// @deprecated
 func hook(e zapcore.Entry) error {
 	fmt.Printf("entry: %v\n", e)
 	return nil

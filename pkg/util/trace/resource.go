@@ -20,6 +20,7 @@ const (
 	MOStatementType = "MOStatementType"
 	MOSpanType      = "MOSpan"
 	MOLogType       = "MOLog"
+	MOZapType       = "MOZap"
 	MOErrorType     = "MOError"
 )
 

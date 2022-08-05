@@ -15,13 +15,13 @@
 package logutil
 
 import (
-	"context"
 	"os"
 	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -45,7 +45,7 @@ var _globalLogger atomic.Value
 
 // init initializes a default zap logger before set up logger.
 func init() {
-	SetLogReporter(&TraceReporter{noopReportLog, noopLevelSignal})
+	SetLogReporter(&TraceReporter{noopReportLog, noopReportZap, noopLevelSignal})
 	conf := &LogConfig{Level: "info", Format: "console"}
 	logger, _ := initMOLogger(conf)
 	replaceGlobalLogger(logger)
@@ -142,38 +142,4 @@ func getConsoleSyncer() zapcore.WriteSyncer {
 		panic(err)
 	}
 	return syncer
-}
-
-// logReporter should be trace.ReportLog
-var logReporter atomic.Value
-
-// logReporter should be trace.SetLogLevel
-var levelChangeFunc atomic.Value
-
-type TraceReporter struct {
-	ReportLog   reportLogFunc
-	LevelSignal levelChangeSignal
-}
-
-type reportLogFunc func(context.Context, zapcore.Level, int, string, ...any)
-type levelChangeSignal func(zapcore.LevelEnabler)
-
-func noopReportLog(context.Context, zapcore.Level, int, string, ...any) {}
-func noopLevelSignal(zapcore.LevelEnabler)                              {}
-
-func SetLogReporter(r *TraceReporter) {
-	if r.ReportLog != nil {
-		logReporter.Store(r.ReportLog)
-	}
-	if r.LevelSignal != nil {
-		levelChangeFunc.Store(r.LevelSignal)
-	}
-}
-
-func GetReportLogFunc() reportLogFunc {
-	return logReporter.Load().(reportLogFunc)
-}
-
-func GetLevelChangeFunc() levelChangeSignal {
-	return levelChangeFunc.Load().(levelChangeSignal)
 }

@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"sync"
 	"unsafe"
 
@@ -101,23 +104,37 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (
 	return ContextWithSpan(ctx, span), span
 }
 
+var _ zapcore.ObjectMarshaler = (*SpanContext)(nil)
+
+func SpanField(sc SpanContext) zap.Field {
+	return zap.Object(common.SpanFieldKey, &sc)
+}
+
+func IsSpanField(field zapcore.Field) bool {
+	return field.Key == common.SpanFieldKey
+}
+
 // SpanContext contains identifying trace information about a Span.
 type SpanContext struct {
-	TraceID    TraceID    `json:"trace_id"`
-	SpanID     SpanID     `json:"span_id"`
-	TraceFlags TraceFlags `json:"trace_flags"` // for sample
-	Remote     bool       `json:"remote"`
+	TraceID TraceID `json:"trace_id"`
+	SpanID  SpanID  `json:"span_id"`
+	Remote  bool    `json:"remote"`
 }
 
 func (c *SpanContext) Reset() {
 	c.TraceID = 0
 	c.SpanID = 0
-	c.TraceFlags = 0
 	c.Remote = false
 }
 
 func (c *SpanContext) IsEmpty() bool {
 	return c.TraceID == 0
+}
+
+func (c *SpanContext) MarshalLogObject(enc zapcore.ObjectEncoder) error {
+	enc.AddUint64("TraceId", uint64(c.TraceID))
+	enc.AddUint64("SpanId", uint64(c.SpanID))
+	return nil
 }
 
 func SpanContextWithID(id TraceID) SpanContext {
