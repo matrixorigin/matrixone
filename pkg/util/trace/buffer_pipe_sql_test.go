@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+var buf = new(bytes.Buffer)
 var _ IBuffer2SqlItem = &Size{}
 
 type Size struct {
@@ -49,7 +50,7 @@ func setup() {
 	if _, err := Init(
 		context.Background(),
 		&config.GlobalSystemVariables,
-		EnableTracer(false),
+		EnableTracer(true),
 		WithMOVersion("v0.test.0"),
 		WithSQLExecutor(func() ie.InternalExecutor {
 			return nil
@@ -291,20 +292,62 @@ func Test_batchSqlHandler_genLogBatchSql(t1 *testing.T) {
 }
 
 func Test_batchSqlHandler_genSpanBatchSql(t1 *testing.T) {
-	type fields struct {
-		opt []buffer2SqlOption
-	}
 	type args struct {
 		in  []IBuffer2SqlItem
 		buf *bytes.Buffer
 	}
 	tests := []struct {
-		name   string
-		fields fields
-		args   args
-		want   string
+		name string
+		args args
+		want string
 	}{
-		// TODO: Add test cases.
+		{
+			name: "single",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&MOSpan{
+						SpanConfig:  SpanConfig{SpanContext: SpanContext{TraceID: 1, SpanID: 1}, parent: noopSpan{}},
+						Name:        *bytes.NewBuffer([]byte("span1")),
+						StartTimeNS: util.TimeNano(0),
+						EndTimeNS:   util.TimeNano(time.Microsecond),
+						Duration:    util.TimeNano(time.Microsecond),
+						tracer:      gTracer.(*MOTracer),
+					},
+				},
+				buf: buf,
+			},
+			want: `insert into system.span_info (` +
+				"`span_id`, `statement_id`, `parent_span_id`, `node_id`, `node_type`, `resource`, `name`, `start_time`, `end_time`, `duration`" +
+				`) values (1, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "0001-01-01 00:00:00.000000", "0001-01-01 00:00:00.000001", 1000)`,
+		},
+		{
+			name: "multi",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&MOSpan{
+						SpanConfig:  SpanConfig{SpanContext: SpanContext{TraceID: 1, SpanID: 1}, parent: noopSpan{}},
+						Name:        *bytes.NewBuffer([]byte("span1")),
+						StartTimeNS: util.TimeNano(0),
+						EndTimeNS:   util.TimeNano(time.Microsecond),
+						Duration:    util.TimeNano(time.Microsecond),
+						tracer:      gTracer.(*MOTracer),
+					},
+					&MOSpan{
+						SpanConfig:  SpanConfig{SpanContext: SpanContext{TraceID: 1, SpanID: 2}, parent: noopSpan{}},
+						Name:        *bytes.NewBuffer([]byte("span2")),
+						StartTimeNS: util.TimeNano(time.Microsecond),
+						EndTimeNS:   util.TimeNano(time.Millisecond),
+						Duration:    util.TimeNano(time.Millisecond - time.Microsecond),
+						tracer:      gTracer.(*MOTracer),
+					},
+				},
+				buf: buf,
+			},
+			want: `insert into system.span_info (` +
+				"`span_id`, `statement_id`, `parent_span_id`, `node_id`, `node_type`, `resource`, `name`, `start_time`, `end_time`, `duration`" +
+				`) values (1, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "0001-01-01 00:00:00.000000", "0001-01-01 00:00:00.000001", 1000)` +
+				`,(2, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span2", "0001-01-01 00:00:00.000001", "0001-01-01 00:00:00.001000", 999000)`,
+		},
 	}
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
@@ -316,44 +359,86 @@ func Test_batchSqlHandler_genSpanBatchSql(t1 *testing.T) {
 }
 
 func Test_batchSqlHandler_genStatementBatchSql(t1 *testing.T) {
-	type fields struct {
-		opt []buffer2SqlOption
-	}
 	type args struct {
 		in  []IBuffer2SqlItem
 		buf *bytes.Buffer
 	}
 	tests := []struct {
-		name   string
-		fields fields
-		args   args
-		want   string
+		name string
+		args args
+		want string
 	}{
-		// TODO: Add test cases.
+		{
+			name: "single",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&StatementInfo{
+						StatementID:          1,
+						TransactionID:        1,
+						SessionID:            1,
+						Account:              "MO",
+						User:                 "moroot",
+						Database:             "system",
+						Statement:            "show tables",
+						StatementFingerprint: "show tables",
+						StatementTag:         "",
+						RequestAt:            util.TimeNano(0),
+						Status:               StatementStatusRunning,
+						ExecPlan:             "",
+					},
+				},
+				buf: buf,
+			},
+			want: `insert into system.statement_info (` +
+				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_id`, `node_type`, `request_at`, `status`, `exec_plan`" +
+				`) values (1, 1, 1, "MO", "moroot", "", "system", "show tables", "show tables", "", 0, "Node", "0001-01-01 00:00:00.000000", "Running", "")`,
+		},
+		{
+			name: "single",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&StatementInfo{
+						StatementID:          1,
+						TransactionID:        1,
+						SessionID:            1,
+						Account:              "MO",
+						User:                 "moroot",
+						Database:             "system",
+						Statement:            "show tables",
+						StatementFingerprint: "show tables",
+						StatementTag:         "",
+						RequestAt:            util.TimeNano(0),
+						Status:               StatementStatusRunning,
+						ExecPlan:             "",
+					},
+					&StatementInfo{
+						StatementID:          2,
+						TransactionID:        1,
+						SessionID:            1,
+						Account:              "MO",
+						User:                 "moroot",
+						Database:             "system",
+						Statement:            "show databases",
+						StatementFingerprint: "show databases",
+						StatementTag:         "dcl",
+						RequestAt:            util.TimeNano(time.Microsecond),
+						Status:               StatementStatusFailed,
+						ExecPlan:             "",
+					},
+				},
+				buf: buf,
+			},
+			want: `insert into system.statement_info (` +
+				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_id`, `node_type`, `request_at`, `status`, `exec_plan`" +
+				`) values (1, 1, 1, "MO", "moroot", "", "system", "show tables", "show tables", "", 0, "Node", "0001-01-01 00:00:00.000000", "Running", "")` +
+				`,(2, 1, 1, "MO", "moroot", "", "system", "show databases", "show databases", "dcl", 0, "Node", "0001-01-01 00:00:00.000001", "Failed", "")`,
+		},
 	}
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
 			if got := genStatementBatchSql(tt.args.in, tt.args.buf); got != tt.want {
 				t1.Errorf("genStatementBatchSql() = %v, want %v", got, tt.want)
 			}
-		})
-	}
-}
-
-func Test_buffer2SqlOptionFunc_apply(t *testing.T) {
-	type args struct {
-		b *buffer2Sql
-	}
-	tests := []struct {
-		name string
-		f    buffer2SqlOptionFunc
-		args args
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tt.f.apply(tt.args.b)
 		})
 	}
 }
@@ -438,7 +523,26 @@ func Test_buffer2Sql_IsEmpty(t *testing.T) {
 		fields fields
 		want   bool
 	}{
-		// TODO: Add test cases.
+		{
+			name: "empty",
+			fields: fields{
+				Reminder:      batchpipe.NewConstantClock(time.Hour),
+				buf:           []IBuffer2SqlItem{},
+				sizeThreshold: GB,
+				batchFunc:     nil,
+			},
+			want: true,
+		},
+		{
+			name: "not_empty",
+			fields: fields{
+				Reminder:      batchpipe.NewConstantClock(time.Hour),
+				buf:           []IBuffer2SqlItem{&MOLog{}},
+				sizeThreshold: GB,
+				batchFunc:     nil,
+			},
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -467,8 +571,28 @@ func Test_buffer2Sql_Reset(t *testing.T) {
 	tests := []struct {
 		name   string
 		fields fields
+		want   bool
 	}{
-		// TODO: Add test cases.
+		{
+			name: "empty",
+			fields: fields{
+				Reminder:      batchpipe.NewConstantClock(time.Hour),
+				buf:           []IBuffer2SqlItem{},
+				sizeThreshold: GB,
+				batchFunc:     nil,
+			},
+			want: true,
+		},
+		{
+			name: "not_empty",
+			fields: fields{
+				Reminder:      batchpipe.NewConstantClock(time.Hour),
+				buf:           []IBuffer2SqlItem{&MOLog{}},
+				sizeThreshold: GB,
+				batchFunc:     nil,
+			},
+			want: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -480,6 +604,9 @@ func Test_buffer2Sql_Reset(t *testing.T) {
 				genBatchFunc:  tt.fields.batchFunc,
 			}
 			b.Reset()
+			if got := b.IsEmpty(); got != tt.want {
+				t.Errorf("IsEmpty() = %v, want %v", got, tt.want)
+			}
 		})
 	}
 }
@@ -492,24 +619,51 @@ func Test_buffer2Sql_ShouldFlush(t *testing.T) {
 		sizeThreshold int64
 		batchFunc     genBatchFunc
 	}
+	err1 := errors.WithStack(errors.New("test1"))
+	err2 := errors.Wrapf(err1, "test2")
 	tests := []struct {
 		name   string
 		fields fields
 		want   bool
 	}{
-		// TODO: Add test cases.
+		{
+			name: "empty",
+			fields: fields{
+				Reminder:      batchpipe.NewConstantClock(time.Hour),
+				buf:           []IBuffer2SqlItem{},
+				sizeThreshold: KB,
+				batchFunc:     nil,
+			},
+			want: false,
+		},
+		{
+			name: "not_empty",
+			fields: fields{
+				Reminder: batchpipe.NewConstantClock(time.Hour),
+				buf: []IBuffer2SqlItem{
+					&MOErrorHolder{Error: err1, Timestamp: uint64(0)},
+					&MOErrorHolder{Error: err2, Timestamp: uint64(time.Millisecond + time.Microsecond)},
+				},
+				sizeThreshold: 512 * B,
+				batchFunc:     nil,
+			},
+			want: true,
+		},
 	}
+	errorFormatter.Store("%+v")
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			b := &buffer2Sql{
 				Reminder:      tt.fields.Reminder,
-				buf:           tt.fields.buf,
 				mux:           tt.fields.mux,
 				sizeThreshold: tt.fields.sizeThreshold,
 				genBatchFunc:  tt.fields.batchFunc,
 			}
+			for _, i := range tt.fields.buf {
+				b.Add(i)
+			}
 			if got := b.ShouldFlush(); got != tt.want {
-				t.Errorf("ShouldFlush() = %v, want %v", got, tt.want)
+				t.Errorf("ShouldFlush() = %v, want %v, lenght: %d", got, tt.want, b.Size())
 			}
 		})
 	}
@@ -524,12 +678,31 @@ func Test_nanoSec2Datetime(t *testing.T) {
 		args args
 		want types.Datetime
 	}{
-		// TODO: Add test cases.
+		{
+			name: "1 ns",
+			args: args{t: util.TimeNano(1)},
+			want: types.Datetime(0),
+		},
+		{
+			name: "1 us",
+			args: args{t: util.TimeNano(time.Microsecond)},
+			want: types.Datetime(1),
+		},
+		{
+			name: "1 ms",
+			args: args{t: util.TimeNano(time.Millisecond)},
+			want: types.Datetime(1000),
+		},
+		{
+			name: "1 hour + 1ms",
+			args: args{t: util.TimeNano(time.Millisecond + time.Hour)},
+			want: types.Datetime(((time.Hour / time.Second) << 20) + 1000),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := nanoSec2Datetime(tt.args.t); got != tt.want {
-				t.Errorf("nanoSec2Datetime() = %v, want %v", got, tt.want)
+				t.Errorf("nanoSec2Datetime() = %d, want %d", got, tt.want)
 			}
 		})
 	}
@@ -582,13 +755,19 @@ func Test_withGenBatchFunc(t *testing.T) {
 	tests := []struct {
 		name string
 		args args
-		want buffer2SqlOption
+		want genBatchFunc
 	}{
-		// TODO: Add test cases.
+		{name: "genSpanBatchSql", args: args{f: genSpanBatchSql}, want: genSpanBatchSql},
+		{name: "genLogBatchSql", args: args{f: genLogBatchSql}, want: genLogBatchSql},
+		{name: "genStatementBatchSql", args: args{f: genStatementBatchSql}, want: genStatementBatchSql},
+		{name: "genErrorBatchSql", args: args{f: genErrorBatchSql}, want: genErrorBatchSql},
 	}
+	buf := &buffer2Sql{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := bufferWithGenBatchFunc(tt.args.f); !reflect.DeepEqual(got, tt.want) {
+			bufferWithGenBatchFunc(tt.args.f).apply(buf)
+			got := buf.genBatchFunc
+			if reflect.ValueOf(got).Pointer() != reflect.ValueOf(tt.want).Pointer() {
 				t.Errorf("bufferWithGenBatchFunc() = %v, want %v", got, tt.want)
 			}
 		})
@@ -602,13 +781,19 @@ func Test_withSizeThreshold(t *testing.T) {
 	tests := []struct {
 		name string
 		args args
-		want buffer2SqlOption
+		want int64
 	}{
-		// TODO: Add test cases.
+		{name: "1  B", args: args{size: B}, want: 1},
+		{name: "1 KB", args: args{size: KB}, want: 1 << 10},
+		{name: "1 MB", args: args{size: MB}, want: 1 << 20},
+		{name: "1 GB", args: args{size: GB}, want: 1 << 30},
+		{name: "1.001 GB", args: args{size: GB + MB}, want: 1<<30 + 1<<20},
 	}
+	buf := &buffer2Sql{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := bufferWithSizeThreshold(tt.args.size); !reflect.DeepEqual(got, tt.want) {
+			bufferWithSizeThreshold(tt.args.size).apply(buf)
+			if got := buf.sizeThreshold; got != tt.want {
 				t.Errorf("bufferWithSizeThreshold() = %v, want %v", got, tt.want)
 			}
 		})

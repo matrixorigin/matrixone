@@ -17,6 +17,7 @@ package trace
 import (
 	"context"
 	"fmt"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
@@ -36,7 +37,7 @@ func (h MOErrorHolder) GetName() string {
 }
 
 func (h MOErrorHolder) Size() int64 {
-	return int64(32 * 8)
+	return int64(32*8) + int64(unsafe.Sizeof(h))
 }
 func (h MOErrorHolder) Free() {}
 

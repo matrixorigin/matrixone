@@ -193,7 +193,10 @@ func genSpanBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	moNode := GetNodeResource()
 
 	for _, item := range in {
-		s, _ := item.(*MOSpan)
+		s, ok := item.(*MOSpan)
+		if !ok {
+			panic("Not MOSpan")
+		}
 		buf.WriteString("(")
 		buf.WriteString(fmt.Sprintf("%d", s.SpanID))
 		buf.WriteString(fmt.Sprintf(", %d", s.TraceID))
@@ -233,7 +236,10 @@ func genLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	moNode := GetNodeResource()
 
 	for _, item := range in {
-		s, _ := item.(*MOLog)
+		s, ok := item.(*MOLog)
+		if !ok {
+			panic("Not MOLog")
+		}
 		buf.WriteString("(")
 		buf.WriteString(fmt.Sprintf("%d", s.SpanId))
 		buf.WriteString(fmt.Sprintf(", %d", s.StatementId))
@@ -256,7 +262,7 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 
 	buf.WriteString(fmt.Sprintf("insert into %s.%s ", statsDatabase, statementInfoTbl))
 	buf.WriteString("(")
-	buf.WriteString(", `statement_id`")
+	buf.WriteString("`statement_id`")
 	buf.WriteString(", `transaction_id`")
 	buf.WriteString(", `session_id`")
 	buf.WriteString(", `account`")
@@ -276,7 +282,10 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	moNode := GetNodeResource()
 
 	for _, item := range in {
-		s, _ := item.(*StatementInfo)
+		s, ok := item.(*StatementInfo)
+		if !ok {
+			panic("Not StatementInfo")
+		}
 		buf.WriteString("(")
 		buf.WriteString(fmt.Sprintf("%d", s.StatementID))
 		buf.WriteString(fmt.Sprintf(", %d", s.TransactionID))
@@ -323,7 +332,10 @@ func genErrorBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	moNode := GetNodeResource()
 
 	for _, item := range in {
-		s, _ := item.(*MOErrorHolder)
+		s, ok := item.(*MOErrorHolder)
+		if !ok {
+			panic("Not MOErrorHolder")
+		}
 		buf.WriteString("(")
 		buf.WriteString(fmt.Sprintf("\"%s\"", quote(s.Error.Error())))
 		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(fmt.Sprintf(errorFormatter.Load().(string), s.Error))))
@@ -394,6 +406,10 @@ func (b *buffer2Sql) isEmpty() bool {
 
 func (b *buffer2Sql) ShouldFlush() bool {
 	return atomic.LoadInt64(&b.size) > b.sizeThreshold
+}
+
+func (b *buffer2Sql) Size() int64 {
+	return atomic.LoadInt64(&b.size)
 }
 
 func (b *buffer2Sql) GetBatch(buf *bytes.Buffer) any {

@@ -50,10 +50,10 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (
 
 // SpanContext contains identifying trace information about a Span.
 type SpanContext struct {
-	TraceID    TraceID
-	SpanID     SpanID
-	TraceFlags TraceFlags // for sample
-	Remote     bool
+	TraceID    TraceID    `json:"trace_id"`
+	SpanID     SpanID     `json:"span_id"`
+	TraceFlags TraceFlags `json:"trace_flags"` // for sample
+	Remote     bool       `json:"remote"`
 }
 
 func (c *SpanContext) Reset() {
@@ -80,8 +80,8 @@ type SpanConfig struct {
 	// NewRoot identifies a Span as the root Span for a new trace. This is
 	// commonly used when an existing trace crosses trust boundaries and the
 	// remote parent span context should be ignored for security.
-	NewRoot bool // see WithNewRoot
-	parent  Span
+	NewRoot bool `json:"NewRoot"` // see WithNewRoot
+	parent  Span `json:"-"`
 }
 
 // SpanStartOption applies an option to a SpanConfig. These options are applicable
