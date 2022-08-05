@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
-	"github.com/pierrec/lz4"
+	"github.com/pierrec/lz4/v4"
 )
 
 func (r *relation) Rows() int64 {
