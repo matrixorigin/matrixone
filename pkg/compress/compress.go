@@ -15,7 +15,7 @@
 package compress
 
 import (
-	"github.com/pierrec/lz4"
+	"github.com/pierrec/lz4/v4"
 )
 
 var Algorithms map[string]int = map[string]int{

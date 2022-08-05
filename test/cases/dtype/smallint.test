@@ -75,13 +75,11 @@ select cast(-32768 as signed);
 CREATE TABLE t1 (id SMALLINT PRIMARY KEY,
 a SMALLINT(6) UNSIGNED,
 b VARCHAR(6));
--- @bvt:issue#3355
 INSERT INTO t1 (id,a) VALUES
 (1,0),
 (2,CAST(0x7FFF AS UNSIGNED)),
 (3,CAST(0x8000 AS UNSIGNED)),
 (4,CAST(0xFFFF AS UNSIGNED));
--- @bvt:issue
 -- @bvt:issue#3275
 UPDATE t1 SET b = a;
 select * from t1 where ((a = 65535) and (b = '65535')) order by 1 desc, 2 asc;
