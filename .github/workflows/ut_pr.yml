@@ -15,7 +15,7 @@ jobs:
           go-version: '1.18'
 
       - name: Get PR Changed Paths
-        uses: guguducken/change-paths-action@v0.0.2
+        uses: guguducken/change-paths-action@v0.0.3
         id: ut-pr
         with:
           github-token: ${{ secrets.ACTION_TOKEN }}
