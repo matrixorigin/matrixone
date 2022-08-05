@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -105,10 +106,12 @@ type anaylze struct {
 type Compile struct {
 	scope *Scope
 
-	u interface{}
+	info plan2.ExecInfo
+
+	u any
 	//fill is a result writer runs a callback function.
 	//fill will be called when result data is ready.
-	fill func(interface{}, *batch.Batch) error
+	fill func(any, *batch.Batch) error
 	//affectRows stores the number of rows affected while insert / update / delete
 	affectRows uint64
 	// db current database name.
