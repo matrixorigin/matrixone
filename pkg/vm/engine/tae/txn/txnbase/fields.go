@@ -31,9 +31,9 @@ func TxnMgrField(mgr *TxnManager) zap.Field {
 func (mgr *TxnManager) MarshalLogObject(enc zapcore.ObjectEncoder) (err error) {
 	enc.AddUint64("currId", mgr.IdAlloc.Get())
 	//enc.AddUint64("currTs", mgr.TsAlloc.Get())
-	enc.AddBinary("currTs", mgr.TsAlloc.Get().ToSlice())
+	enc.AddByteString("currTs", mgr.TsAlloc.Get().ToSlice())
 	//enc.AddUint64("safeTs", mgr.StatSafeTS())
-	enc.AddBinary("currTs", mgr.StatSafeTS().ToSlice())
+	enc.AddByteString("currTs", mgr.StatSafeTS().ToSlice())
 	return
 }
 

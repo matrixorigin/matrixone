@@ -29,18 +29,18 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 	if !blk.meta.IsAppendable() {
 		return
 	}
-	an := updates.NewCommittedAppendNode(blk.ckpTs, 0, blk.node.rows, blk.mvcc)
+	an := updates.NewCommittedAppendNode(blk.mu.ckpTs, 0, blk.node.rows, blk.mvcc)
 	blk.mvcc.OnReplayAppendNode(an)
 	masks, vals := blk.file.LoadUpdates()
 	for colIdx, mask := range masks {
 		logutil.Info("[Start]",
-			common.TimestampField(blk.ckpTs),
+			common.TimestampField(blk.mu.ckpTs),
 			common.OperationField("install-update"),
 			common.OperandNameSpace(),
 			common.AnyField("rows", blk.node.rows),
 			common.AnyField("col", colIdx),
 			common.CountField(int(mask.GetCardinality())))
-		un := updates.NewCommittedColumnUpdateNode(blk.ckpTs, blk.ckpTs, blk.meta.AsCommonID(), nil)
+		un := updates.NewCommittedColumnUpdateNode(blk.mu.ckpTs, blk.mu.ckpTs, blk.meta.AsCommonID(), nil)
 		un.SetMask(mask)
 		un.SetValues(vals[colIdx])
 		if err = blk.OnReplayUpdate(uint16(colIdx), un); err != nil {
@@ -51,12 +51,12 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 	if err != nil || deletes == nil {
 		return
 	}
-	logutil.Info("[Start]", common.TimestampField(blk.ckpTs),
+	logutil.Info("[Start]", common.TimestampField(blk.mu.ckpTs),
 		common.OperationField("install-del"),
 		common.OperandNameSpace(),
 		common.AnyField("rows", blk.node.rows),
 		common.CountField(int(deletes.GetCardinality())))
-	deleteNode := updates.NewMergedNode(blk.ckpTs)
+	deleteNode := updates.NewMergedNode(blk.mu.ckpTs)
 	deleteNode.SetDeletes(deletes)
 	err = blk.OnReplayDelete(deleteNode)
 	return

@@ -17,6 +17,7 @@ package tables
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -37,12 +38,17 @@ import (
 
 type appendableNode struct {
 	*buffer.Node
-	file    file.Block
-	block   *dataBlock
-	data    *containers.Batch
-	rows    uint32
-	mgr     base.INodeManager
-	flushTS types.TS
+	file  file.Block
+	block *dataBlock
+	data  *containers.Batch
+	rows  uint32
+	mgr   base.INodeManager
+	//flushTS types.TS
+	mu struct {
+		sync.RWMutex
+		flushTS types.TS
+	}
+
 	// ckpTs     uint64 // unused
 	exception *atomic.Value
 }
@@ -62,7 +68,8 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	impl.file = file
 	impl.mgr = mgr
 	impl.block = block
-	impl.flushTS = flushTS
+	//impl.flushTS = flushTS
+	impl.mu.flushTS = flushTS
 	impl.rows = file.ReadRows()
 	mgr.RegisterNode(impl)
 	return impl
@@ -134,16 +141,20 @@ func (node *appendableNode) GetColumnDataCopy(
 
 func (node *appendableNode) SetBlockMaxflushTS(ts types.TS) {
 	//atomic.StoreUint64(&node.flushTS, ts)
-	node.Lock()
-	node.flushTS = ts
-	node.Unlock()
+	//node.Lock()
+	node.mu.Lock()
+	node.mu.flushTS = ts
+	//node.Unlock()
+	node.mu.Unlock()
 }
 
 func (node *appendableNode) GetBlockMaxflushTS() types.TS {
 	//return atomic.LoadUint64(&node.flushTS)
-	node.RLock()
-	defer node.RUnlock()
-	return node.flushTS
+	//node.RLock()
+	node.mu.RLock()
+	//defer node.RUnlock()
+	defer node.mu.RUnlock()
+	return node.mu.flushTS
 }
 
 func (node *appendableNode) OnLoad() {

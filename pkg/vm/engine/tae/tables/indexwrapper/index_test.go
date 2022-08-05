@@ -70,7 +70,8 @@ func TestRevert(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.Equal(t, 10, idx.art.Size())
-	assert.Equal(t, uint64(0), idx.deletes.GetMaxTS())
+	var zeroV types.TS
+	assert.Equal(t, zeroV, idx.deletes.GetMaxTS())
 	assert.False(t, idx.HasDeleteFrom(vec1.Get(7), ts2))
 	assert.False(t, idx.HasDeleteFrom(vec1.Get(8), ts2))
 	assert.False(t, idx.HasDeleteFrom(vec1.Get(9), ts2))

@@ -60,8 +60,12 @@ type dataBlock struct {
 	index     indexwrapper.Index
 	mvcc      *updates.MVCCHandle
 	nice      uint32
-	ckpTs     types.TS
-	prefix    []byte
+	//ckpTs     types.TS
+	mu struct {
+		ckpTs types.TS
+		*sync.RWMutex
+	}
+	prefix []byte
 }
 
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
@@ -87,8 +91,13 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		}
 	}
 	var node *appendableNode
+	//var zeroV types.TS
 	block := &dataBlock{
-		RWMutex:   new(sync.RWMutex),
+		RWMutex: new(sync.RWMutex),
+		mu: struct {
+			ckpTs types.TS
+			*sync.RWMutex
+		}{RWMutex: new(sync.RWMutex)},
 		meta:      meta,
 		file:      file,
 		colFiles:  colFiles,
@@ -111,7 +120,8 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		block.index = indexwrapper.NewImmutableIndex()
 	}
 	block.mvcc.SetMaxVisible(ts)
-	block.ckpTs = ts
+	//block.ckpTs = ts
+	block.mu.ckpTs = ts
 	if !ts.IsEmpty() {
 		if err := block.ReplayIndex(); err != nil {
 			panic(err)
@@ -127,17 +137,21 @@ func (blk *dataBlock) GetMeta() any                 { return blk.meta }
 func (blk *dataBlock) GetBufMgr() base.INodeManager { return blk.bufMgr }
 
 func (blk *dataBlock) SetMaxCheckpointTS(ts types.TS) {
-	blk.Lock()
+	//blk.Lock()
+	blk.mu.Lock()
 	//atomic.StoreUint64(&blk.ckpTs, ts)
-	blk.ckpTs = ts
-	blk.Unlock()
+	blk.mu.ckpTs = ts
+	//blk.Unlock()
+	blk.mu.Unlock()
 }
 
 func (blk *dataBlock) GetMaxCheckpointTS() types.TS {
 	//return atomic.LoadUint64(&blk.ckpTs)
-	blk.RLock()
-	ts := blk.ckpTs
-	blk.RUnlock()
+	//blk.RLock()
+	blk.mu.RLock()
+	ts := blk.mu.ckpTs
+	//blk.RUnlock()
+	blk.mu.RUnlock()
 	return ts
 }
 
