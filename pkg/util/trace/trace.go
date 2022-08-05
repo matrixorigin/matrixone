@@ -37,7 +37,7 @@ type SpanID uint64
 
 var gTracerProvider *MOTracerProvider
 var gTracer Tracer
-var gTraceContext context.Context
+var gTraceContext context.Context = context.Background()
 var gSpanContext atomic.Value
 
 var ini sync.Once

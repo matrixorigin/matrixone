@@ -138,12 +138,16 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, proc *process.Process, sql string, beginIns time.Time) context.Context {
 	statementId := util.Fastrand64()
 	sessInfo := proc.SessionInfo
+	txnID := uint64(0)
+	if tx := ses.GetTxnHandler().GetTxn(); tx != nil { // dcl have NO txn instance
+		txnID = tx.GetID()
+	}
 	trace.ReportStatement(
 		ctx,
 		&trace.StatementInfo{
 			StatementID:          statementId,
 			SessionID:            sessInfo.GetConnectionID(),
-			TransactionID:        ses.GetTxnHandler().GetTxn().GetID(),
+			TransactionID:        txnID,
 			Account:              "account", //fixme: sessInfo.GetAccount()
 			User:                 sessInfo.GetUser(),
 			Host:                 sessInfo.GetHost(),
@@ -154,8 +158,7 @@ func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, 
 			RequestAt:            util.NowNS(),
 		},
 	)
-	return trace.ContextWithSpanContext(trace.DefaultContext(),
-		trace.SpanContextWithID(trace.TraceID(statementId)))
+	return trace.ContextWithSpanContext(ctx, trace.SpanContextWithID(trace.TraceID(statementId)))
 }
 
 type outputQueue struct {
