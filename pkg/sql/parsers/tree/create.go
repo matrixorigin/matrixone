@@ -2266,7 +2266,7 @@ func (node *AccountIdentified) Format(ctx *FmtCtx) {
 	case AccountIdentifiedByPassword:
 		ctx.WriteString(fmt.Sprintf(" identified by '%s'", node.Str))
 	case AccountIdentifiedByRandomPassword:
-		ctx.WriteString(fmt.Sprintf(" identified by random password"))
+		ctx.WriteString(" identified by random password")
 	case AccountIdentifiedWithSSL:
 		ctx.WriteString(fmt.Sprintf(" identified with '%s'", node.Str))
 	}
