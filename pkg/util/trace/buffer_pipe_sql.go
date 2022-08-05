@@ -59,6 +59,8 @@ const (
  statement varchar(10240) COMMENT '执行sql/*TODO: 应为类型 TEXT或 BLOB */',
  statement_tag varchar(1024),
  statement_fingerprint varchar(10240) COMMENT '执行SQL脱敏后的语句/*应为TEXT或BLOB类型*/',
+ node_id BIGINT COMMENT "MO中的节点ID",
+ node_type varchar(64) COMMENT "MO中的节点类型, 例如: DN, CN, LogService; /*TODO: 应为enum类型*/",
  request_at datetime,
  status varchar(1024) COMMENT '运行状态, 包括: Running, Success, Failed',
  exec_plan varchar(4096) COMMENT "Sql执行计划的耗时结果; /*TODO: 应为JSON 类型*/"
@@ -68,6 +70,8 @@ const (
  err_code varchar(1024),
  stack varchar(4096),
  timestamp datetime COMMENT "日志时间戳",
+ node_id BIGINT COMMENT "MO中的节点ID",
+ node_type varchar(64) COMMENT "MO中的节点类型, 例如: DN, CN, LogService; /*TODO: 应为enum类型*/",
 )`
 )
 
@@ -85,9 +89,10 @@ const (
 	MOErrorType     = "MOError"
 )
 
-type HasItemSize interface {
+type IBuffer2SqlItem interface {
 	bp.HasName
 	Size() int64
+	Free()
 }
 
 var _ bp.PipeImpl[bp.HasName, any] = &batchSqlHandler{}
@@ -165,7 +170,7 @@ func quote(value string) string {
 	return value
 }
 
-func genSpanBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
+func genSpanBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
 		return ""
@@ -185,26 +190,27 @@ func genSpanBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
 	buf.WriteString(", `duration`")
 	buf.WriteString(") values ")
 
+	moNode := GetNodeResource()
+
 	for _, item := range in {
 		s, _ := item.(*MOSpan)
 		buf.WriteString("(")
 		buf.WriteString(fmt.Sprintf("%d", s.SpanID))
 		buf.WriteString(fmt.Sprintf(", %d", s.TraceID))
 		buf.WriteString(fmt.Sprintf(", %d", s.parent.SpanContext().SpanID))
-		buf.WriteString(fmt.Sprintf(", %d", s.Node.NodeID))                                  //node_d
-		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Node.NodeType.String()))                   // node_type
+		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))                                  //node_d
+		buf.WriteString(fmt.Sprintf(", \"%s\"", moNode.NodeType.String()))                   // node_type
 		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.tracer.provider.resource.String()))) // resource
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Name)))                              // Name
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Name.String())))                     // Name
 		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.StartTimeNS).String2(6))) // start_time
 		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.EndTimeNS).String2(6)))   // end_time
 		buf.WriteString(fmt.Sprintf(", %d", s.Duration))                                     // Duration
 		buf.WriteString("),")
 	}
-	buf.Truncate(buf.Len() - 1)
-	return string(buf.Next(buf.Len()))
+	return string(buf.Next(buf.Len() - 1))
 }
 
-func genLogBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
+func genLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
 		return ""
@@ -222,24 +228,25 @@ func genLogBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
 	buf.WriteString(", `message`")
 	buf.WriteString(") values ")
 
+	moNode := GetNodeResource()
+
 	for _, item := range in {
 		s, _ := item.(*MOLog)
 		buf.WriteString("(")
 		buf.WriteString(fmt.Sprintf("%d", s.SpanId))
-		buf.WriteString(fmt.Sprintf(", %d", s.Statement))
-		buf.WriteString(fmt.Sprintf(", %d", s.Node.NodeID))                                //node_d
-		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Node.NodeType.String()))                 // node_type
+		buf.WriteString(fmt.Sprintf(", %d", s.StatementId))
+		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))                                // node_id
+		buf.WriteString(fmt.Sprintf(", \"%s\"", moNode.NodeType.String()))                 // node_type
 		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.Timestamp).String2(6))) //Timestamp
-		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Level.String()))                         // end_time
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.CodeLine)))                        // Duration
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Message)))                         // Duration
+		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Level.String()))                         // log level
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(fmt.Sprintf("%+v", s.CodeLine))))    // CodeLine
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Message)))                         // message
 		buf.WriteString("),")
 	}
-	buf.Truncate(buf.Len() - 1)
-	return string(buf.Next(buf.Len()))
+	return string(buf.Next(buf.Len() - 1))
 }
 
-func genStatementBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
+func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
 		return ""
@@ -255,12 +262,16 @@ func genStatementBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
 	buf.WriteString(", `host`")
 	buf.WriteString(", `database`")
 	buf.WriteString(", `statement`")
-	buf.WriteString(", `statement_fingerprint`")
 	buf.WriteString(", `statement_tag`")
+	buf.WriteString(", `statement_fingerprint`")
+	buf.WriteString(", `node_id`")
+	buf.WriteString(", `node_type`")
 	buf.WriteString(", `request_at`")
 	buf.WriteString(", `status`")
 	buf.WriteString(", `exec_plan`")
 	buf.WriteString(") values ")
+
+	moNode := GetNodeResource()
 
 	for _, item := range in {
 		s, _ := item.(*StatementInfo)
@@ -275,18 +286,23 @@ func genStatementBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
 		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Statement)))
 		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.StatementFingerprint)))
 		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.StatementTag)))
+		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", moNode.NodeType.String()))
 		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.RequestAt).String2(6)))
 		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Status.String())))
 		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.ExecPlan)))
 		buf.WriteString("),")
 	}
-	buf.Truncate(buf.Len() - 1)
-	return string(buf.Next(buf.Len()))
+	return string(buf.Next(buf.Len() - 1))
 }
 
-var errorFormatter = "%+v"
+var errorFormatter atomic.Value
 
-func genErrorBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
+func init() {
+	errorFormatter.Store("%+v")
+}
+
+func genErrorBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
 		return ""
@@ -297,19 +313,23 @@ func genErrorBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
 	buf.WriteString("`err_code`")
 	buf.WriteString(", `stack`")
 	buf.WriteString(", `timestamp`")
+	buf.WriteString(", `node_id`")
+	buf.WriteString(", `node_type`")
 	buf.WriteString(") values ")
+
+	moNode := GetNodeResource()
 
 	for _, item := range in {
 		s, _ := item.(*MOErrorHolder)
 		buf.WriteString("(")
 		buf.WriteString(fmt.Sprintf("\"%s\"", quote(s.Error.Error())))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(fmt.Sprintf(errorFormatter, s.Error))))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(fmt.Sprintf(errorFormatter.Load().(string), s.Error))))
 		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.Timestamp).String2(6)))
+		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", moNode.NodeType.String()))
 		buf.WriteString("),")
 	}
-	// Truncate后会破坏String()的结果, 此处用
-	buf.Truncate(buf.Len() - 1)
-	return string(buf.Next(buf.Len()))
+	return string(buf.Next(buf.Len() - 1))
 }
 
 var _ bp.ItemBuffer[bp.HasName, any] = &buffer2Sql{}
@@ -317,7 +337,7 @@ var _ bp.ItemBuffer[bp.HasName, any] = &buffer2Sql{}
 // buffer2Sql catch item, like trace/log/error, buffer
 type buffer2Sql struct {
 	bp.Reminder
-	buf           []HasItemSize
+	buf           []IBuffer2SqlItem
 	mux           sync.Mutex
 	size          int64 // default: 1 MB
 	sizeThreshold int64 // const
@@ -325,9 +345,9 @@ type buffer2Sql struct {
 	genBatchFunc genBatchFunc
 }
 
-type genBatchFunc func([]HasItemSize, *bytes.Buffer) any
+type genBatchFunc func([]IBuffer2SqlItem, *bytes.Buffer) any
 
-var genBatchEmptySQL = genBatchFunc(func([]HasItemSize, *bytes.Buffer) any { return "" })
+var genBatchEmptySQL = genBatchFunc(func([]IBuffer2SqlItem, *bytes.Buffer) any { return "" })
 
 func newBuffer2Sql(opts ...buffer2SqlOption) *buffer2Sql {
 	b := &buffer2Sql{
@@ -344,8 +364,8 @@ func newBuffer2Sql(opts ...buffer2SqlOption) *buffer2Sql {
 func (b *buffer2Sql) Add(i bp.HasName) {
 	b.mux.Lock()
 	defer b.mux.Unlock()
-	if item, ok := i.(HasItemSize); !ok {
-		panic("not implement interface HasItemSize")
+	if item, ok := i.(IBuffer2SqlItem); !ok {
+		panic("not implement interface IBuffer2SqlItem")
 	} else {
 		b.buf = append(b.buf, item)
 		b.size += item.Size()

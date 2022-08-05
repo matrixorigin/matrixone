@@ -24,7 +24,7 @@ import (
 	"github.com/cockroachdb/errors/errbase"
 )
 
-var _ HasItemSize = &MOErrorHolder{}
+var _ IBuffer2SqlItem = &MOErrorHolder{}
 
 type MOErrorHolder struct {
 	Error     error         `json:"error"`
@@ -38,6 +38,7 @@ func (h MOErrorHolder) GetName() string {
 func (h MOErrorHolder) Size() int64 {
 	return int64(32 * 8)
 }
+func (h MOErrorHolder) Free() {}
 
 func (h *MOErrorHolder) Format(s fmt.State, verb rune) { errbase.FormatError(h.Error, s, verb) }
 

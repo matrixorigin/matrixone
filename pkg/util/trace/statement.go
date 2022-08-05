@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 )
 
-var _ HasItemSize = &StatementInfo{}
+var _ IBuffer2SqlItem = &StatementInfo{}
 
 type StatementInfo struct {
 	StatementID          uint64              `json:"statement_id"`
@@ -34,7 +34,7 @@ type StatementInfo struct {
 	Statement            string              `json:"statement"`
 	StatementFingerprint string              `json:"statement_fingerprint"`
 	StatementTag         string              `json:"statement_tag"`
-	RequestAt            util.TimeNano       `json:"request_at"`
+	RequestAt            util.TimeNano       `json:"request_at"` // see WithRequestAt
 	Status               StatementInfoStatus `json:"status"`
 	ExecPlan             string              `json:"exec_plan"`
 }
@@ -49,6 +49,8 @@ func (s StatementInfo) Size() int64 {
 			len(s.Database)+len(s.Statement)+len(s.StatementFingerprint)+len(s.StatementTag),
 	)
 }
+
+func (s StatementInfo) Free() {}
 
 type StatementInfoStatus int
 

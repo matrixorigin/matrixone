@@ -21,10 +21,6 @@ import (
 	goErr "errors"
 )
 
-const (
-	MaxCodeStackLen int = 32
-)
-
 type Wrapper interface {
 	Unwrap() error
 }

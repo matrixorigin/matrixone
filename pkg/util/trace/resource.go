@@ -41,26 +41,31 @@ func (r *Resource) String() string {
 
 }
 
-type SpanKind int
+type NodeType int
 
 const (
-	SpanKindNode SpanKind = iota
-	SpanKindCN
-	SpanKindDN
-	SpanKindLogService
+	NodeTypeNode NodeType = iota
+	NodeTypeCN
+	NodeTypeDN
+	NodeTypeLogService
 )
 
-func (t SpanKind) String() string {
+func (t NodeType) String() string {
 	switch t {
-	case SpanKindNode:
+	case NodeTypeNode:
 		return "Node"
-	case SpanKindCN:
+	case NodeTypeCN:
 		return "CN"
-	case SpanKindDN:
+	case NodeTypeDN:
 		return "DN"
-	case SpanKindLogService:
+	case NodeTypeLogService:
 		return "LogService"
 	default:
 		return "Unknown"
 	}
+}
+
+type MONodeResource struct {
+	NodeID   int64    `json:"node_id"`
+	NodeType NodeType `json:"node_type"`
 }

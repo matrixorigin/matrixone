@@ -18,15 +18,8 @@ import (
 	"context"
 )
 
-var gNoopTracer Tracer = &noopTracer{}
-var gNoopSpan Span = &noopSpan{}
-
-/*
-type NoopTracer struct{}
-
-func (t *NoopTracer) Start(ctx context.Context, spanName string, opts ...SpanOption) (context.Context, Span) {
-	return ContextWithSpan(ctx, gNoopSpan), gNoopSpan
-}*/
+var _ Tracer = &noopTracer{}
+var _ Span = &noopSpan{}
 
 // noopTracer is an implementation of Tracer that preforms no operations.
 type noopTracer struct{}

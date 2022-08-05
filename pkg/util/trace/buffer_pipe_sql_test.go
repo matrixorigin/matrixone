@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go.uber.org/zap/zapcore"
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -19,17 +21,21 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+var _ IBuffer2SqlItem = &Size{}
+
 type Size struct {
-	HasItemSize
+	IBuffer2SqlItem
+}
+
+func (s Size) GetName() string {
+	return "size"
 }
 
 func (s Size) Size() int64 {
 	return 64
 }
 
-func (s Size) GetName() string {
-	return "size"
-}
+func (s Size) Free() {}
 
 func init() {
 	setup()
@@ -40,9 +46,11 @@ var testBaseBuffer2SqlOption = []buffer2SqlOption{bufferWithSizeThreshold(1 * KB
 func setup() {
 	if _, err := Init(
 		context.Background(),
+		&config.GlobalSystemVariables,
+		DebugMode(true),
 		EnableTracer(false),
 		WithMOVersion("v0.test.0"),
-		WithNode(config.GlobalSystemVariables.GetNodeID(), SpanKindNode),
+		WithNode(config.GlobalSystemVariables.GetNodeID(), NodeTypeNode),
 		WithSQLExecutor(func() ie.InternalExecutor {
 			return nil
 		}),
@@ -156,7 +164,7 @@ func Test_batchSqlHandler_NewItemBuffer_Check_genBatchFunc(t1 *testing.T) {
 
 func Test_batchSqlHandler_genErrorBatchSql(t1 *testing.T) {
 	type args struct {
-		in  []HasItemSize
+		in  []IBuffer2SqlItem
 		buf *bytes.Buffer
 	}
 	buf := new(bytes.Buffer)
@@ -170,11 +178,8 @@ func Test_batchSqlHandler_genErrorBatchSql(t1 *testing.T) {
 		{
 			name: "single_error",
 			args: args{
-				in: []HasItemSize{
-					&MOErrorHolder{
-						Error:     err1,
-						Timestamp: uint64(0),
-					},
+				in: []IBuffer2SqlItem{
+					&MOErrorHolder{Error: err1, Timestamp: uint64(0)},
 				},
 				buf: buf,
 			},
@@ -183,22 +188,16 @@ func Test_batchSqlHandler_genErrorBatchSql(t1 *testing.T) {
 		{
 			name: "multi_error",
 			args: args{
-				in: []HasItemSize{
-					&MOErrorHolder{
-						Error:     err1,
-						Timestamp: uint64(0),
-					},
-					&MOErrorHolder{
-						Error:     err2,
-						Timestamp: uint64(1000),
-					},
+				in: []IBuffer2SqlItem{
+					&MOErrorHolder{Error: err1, Timestamp: uint64(0)},
+					&MOErrorHolder{Error: err2, Timestamp: uint64(time.Millisecond + time.Microsecond)},
 				},
 				buf: buf,
 			},
-			want: `insert into system.error_info (` + "`err_code`" + ", `stack`" + ", `timestamp`" + `) values ("test1", "test1", "0001-01-01 00:00:00.000000"),("test2: test1", "test2: test1", "0001-01-01 00:00:00.000001")`,
+			want: `insert into system.error_info (` + "`err_code`" + ", `stack`" + ", `timestamp`" + `) values ("test1", "test1", "0001-01-01 00:00:00.000000"),("test2: test1", "test2: test1", "0001-01-01 00:00:00.001001")`,
 		},
 	}
-	errorFormatter = "%v"
+	errorFormatter.Store("%v")
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
 			if got := genErrorBatchSql(tt.args.in, tt.args.buf); got != tt.want {
@@ -209,20 +208,34 @@ func Test_batchSqlHandler_genErrorBatchSql(t1 *testing.T) {
 }
 
 func Test_batchSqlHandler_genLogBatchSql(t1 *testing.T) {
-	type fields struct {
-		opt []buffer2SqlOption
-	}
 	type args struct {
-		in  []HasItemSize
+		in  []IBuffer2SqlItem
 		buf *bytes.Buffer
 	}
+	buf := new(bytes.Buffer)
 	tests := []struct {
-		name   string
-		fields fields
-		args   args
-		want   string
+		name string
+		args args
+		want string
 	}{
 		// TODO: Add test cases.
+		{
+			name: "single",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&MOLog{
+						StatementId: 1,
+						SpanId:      1,
+						Timestamp:   uint64(time.Millisecond + time.Microsecond),
+						Level:       zapcore.InfoLevel,
+						CodeLine:    util.Frame(0),
+						Message:     "message",
+					},
+				},
+				buf: buf,
+			},
+			want: "",
+		},
 	}
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
@@ -238,7 +251,7 @@ func Test_batchSqlHandler_genSpanBatchSql(t1 *testing.T) {
 		opt []buffer2SqlOption
 	}
 	type args struct {
-		in  []HasItemSize
+		in  []IBuffer2SqlItem
 		buf *bytes.Buffer
 	}
 	tests := []struct {
@@ -263,7 +276,7 @@ func Test_batchSqlHandler_genStatementBatchSql(t1 *testing.T) {
 		opt []buffer2SqlOption
 	}
 	type args struct {
-		in  []HasItemSize
+		in  []IBuffer2SqlItem
 		buf *bytes.Buffer
 	}
 	tests := []struct {
@@ -304,13 +317,13 @@ func Test_buffer2SqlOptionFunc_apply(t *testing.T) {
 func Test_buffer2Sql_Add(t *testing.T) {
 	type fields struct {
 		Reminder      batchpipe.Reminder
-		buf           []HasItemSize
+		buf           []IBuffer2SqlItem
 		mux           sync.Mutex
 		sizeThreshold int64
 		batchFunc     genBatchFunc
 	}
 	type args struct {
-		item HasItemSize
+		item IBuffer2SqlItem
 	}
 	tests := []struct {
 		name   string
@@ -336,7 +349,7 @@ func Test_buffer2Sql_Add(t *testing.T) {
 func Test_buffer2Sql_GetBatch(t *testing.T) {
 	type fields struct {
 		Reminder      batchpipe.Reminder
-		buf           []HasItemSize
+		buf           []IBuffer2SqlItem
 		mux           sync.Mutex
 		sizeThreshold int64
 		batchFunc     genBatchFunc
@@ -371,7 +384,7 @@ func Test_buffer2Sql_GetBatch(t *testing.T) {
 func Test_buffer2Sql_IsEmpty(t *testing.T) {
 	type fields struct {
 		Reminder      batchpipe.Reminder
-		buf           []HasItemSize
+		buf           []IBuffer2SqlItem
 		mux           sync.Mutex
 		sizeThreshold int64
 		batchFunc     genBatchFunc
@@ -402,7 +415,7 @@ func Test_buffer2Sql_IsEmpty(t *testing.T) {
 func Test_buffer2Sql_Reset(t *testing.T) {
 	type fields struct {
 		Reminder      batchpipe.Reminder
-		buf           []HasItemSize
+		buf           []IBuffer2SqlItem
 		mux           sync.Mutex
 		sizeThreshold int64
 		batchFunc     genBatchFunc
@@ -430,7 +443,7 @@ func Test_buffer2Sql_Reset(t *testing.T) {
 func Test_buffer2Sql_ShouldFlush(t *testing.T) {
 	type fields struct {
 		Reminder      batchpipe.Reminder
-		buf           []HasItemSize
+		buf           []IBuffer2SqlItem
 		mux           sync.Mutex
 		sizeThreshold int64
 		batchFunc     genBatchFunc

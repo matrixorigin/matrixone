@@ -71,12 +71,12 @@ func createMOServer() {
 	}
 	frontend.InitServerVersion(MoVersion)
 	{
+		logutil.SetLevelChangeFunc(trace.SetLogLevel)
 		// init trace/log/error framework
 		if _, err := trace.Init(
 			context.Background(),
-			trace.EnableTracer(config.GlobalSystemVariables.GetEnableTrace()),
+			&config.GlobalSystemVariables,
 			trace.WithMOVersion(MoVersion),
-			trace.WithNode(config.GlobalSystemVariables.GetNodeID(), trace.SpanKindDN),
 			trace.WithSQLExecutor(func() ie.InternalExecutor {
 				return frontend.NewIternalExecutor(pu)
 			}),

@@ -118,6 +118,9 @@ func GetLoggerWithOptions(level zapcore.LevelEnabler, encoder zapcore.Encoder, s
 	if encoder == nil {
 		encoder = getLoggerEncoder("")
 	}
+	if f := levelChangeFunc.Load(); f != nil {
+		f.(levelChangeSignal)(level)
+	}
 	return zap.New(zapcore.NewCore(encoder, syncer, level), options...)
 }
 

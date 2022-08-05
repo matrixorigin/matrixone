@@ -18,11 +18,9 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"go.uber.org/zap/zapcore"
 	"time"
-	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 )
@@ -40,9 +38,8 @@ type defaultSpanKey int
 
 // TracerConfig is a group of options for a Tracer.
 type TracerConfig struct {
-	Name string
-
-	reminder batchpipe.Reminder
+	Name     string
+	reminder batchpipe.Reminder // WithReminder
 }
 
 // TracerOption applies an option to a TracerConfig.
@@ -90,34 +87,20 @@ func (tf TraceFlags) String() string {
 	return hex.EncodeToString([]byte{byte(tf)}[:])
 }
 
-var _ batchpipe.HasName = &MOLog{}
-var _ HasItemSize = &MOLog{}
-
-type MOLog struct {
-	Statement uint64          `json:"statement_id"`
-	SpanId    uint64          `json:"span_id"`
-	Node      *MONodeResource `json:"Node"`
-	Timestamp util.TimeNano   `json:"Timestamp"`
-	Level     zapcore.Level   `json:"Level"`
-	CodeLine  string          `json:"code_line"` // like "util/trace/trace.go:666"
-	Message   string          `json:"Message"`
-}
-
-func (l MOLog) Size() int64 {
-	return int64(unsafe.Sizeof(l)) + int64(len(l.CodeLine)+len(l.Message))
-}
-
-func (MOLog) GetName() string {
-	return MOLogType
-}
-
 var gTracerProvider *MOTracerProvider
 var gTracer Tracer
 var gTraceContext context.Context
 
-func Init(ctx context.Context, opt ...TracerProviderOption) (context.Context, error) {
+func Init(ctx context.Context, sysVar *config.SystemVariables, options ...TracerProviderOption) (context.Context, error) {
 
-	gTracerProvider = newMOTracerProvider(opt...)
+	var opts = []TracerProviderOption{
+		EnableTracer(sysVar.GetEnableTrace()),
+		WithNode(sysVar.GetNodeID(), NodeTypeDN),
+		WithBatchProcessMode(sysVar.GetTraceBatchProcessor()),
+	}
+	opts = append(opts, options...)
+
+	gTracerProvider = newMOTracerProvider(opts...)
 	config := gTracerProvider.tracerProviderConfig
 
 	gTracer = gTracerProvider.Tracer("MatrixOrigin",
@@ -133,15 +116,17 @@ func Init(ctx context.Context, opt ...TracerProviderOption) (context.Context, er
 	// init all batch Process for trace/log/error
 	switch {
 	case config.batchProcessMode == "singleton":
-		/*export.Register(&MOSpan{}, NewBufferPipe2SqlWorker(
+		export.Register(&MOSpan{}, NewBufferPipe2SqlWorker(
 			bufferWithSizeThreshold(MB),
-		).(batchpipe.PipeImpl[batchpipe.HasName, any]))
-		export.Register(&MOLog{}, NewBufferPipe2SqlWorker().(batchpipe.PipeImpl[batchpipe.HasName, any]))*/
+		))
+		export.Register(&MOLog{}, NewBufferPipe2SqlWorker())
+		export.Register(&StatementInfo{}, NewBufferPipe2SqlWorker())
+		export.Register(&MOErrorHolder{}, NewBufferPipe2SqlWorker())
 	case config.batchProcessMode == "distributed":
 		//export.Register(&MOTracer{}, NewBufferPipe2SqlWorker())
 	}
 
-	return nil, nil
+	return gTraceContext, nil
 }
 
 func Start(ctx context.Context, spanName string, opts ...SpanOption) (context.Context, Span) {
@@ -150,4 +135,8 @@ func Start(ctx context.Context, spanName string, opts ...SpanOption) (context.Co
 
 func DefaultContext() context.Context {
 	return gTraceContext
+}
+
+func GetNodeResource() *MONodeResource {
+	return gTracerProvider.getNodeResource()
 }

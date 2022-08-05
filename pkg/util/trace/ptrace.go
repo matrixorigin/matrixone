@@ -18,7 +18,6 @@ import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"sync"
 )
 
 /*
@@ -80,15 +79,24 @@ type tracerProviderConfig struct {
 	idGenerator IDGenerator
 
 	// resource contains attributes representing an entity that produces telemetry.
-	resource *Resource
+	resource *Resource // see WithMOVersion, WithNode,
 
-	enableTracer bool
+	enableTracer bool // see EnableTracer
 
-	debugMode bool // TODO: can check span's END
+	// TODO: can check span's END
+	debugMode bool // see DebugMode
 
-	batchProcessMode string
+	batchProcessMode string // see WithBatchProcessMode
 
-	sqlExecutor func() ie.InternalExecutor
+	sqlExecutor func() ie.InternalExecutor // see WithSQLExecutor
+}
+
+func (cfg tracerProviderConfig) getNodeResource() *MONodeResource {
+	if val, has := cfg.resource.Get("Node"); !has {
+		return &MONodeResource{}
+	} else {
+		return val.(*MONodeResource)
+	}
 }
 
 // TracerProviderOption configures a TracerProvider.
@@ -109,7 +117,7 @@ func WithMOVersion(v string) tracerProviderOptionFunc {
 }
 
 // WithNode give id as NodeId, t as NodeType
-func WithNode(id int64, t SpanKind) tracerProviderOptionFunc {
+func WithNode(id int64, t NodeType) tracerProviderOptionFunc {
 	return func(cfg *tracerProviderConfig) {
 		cfg.resource.Put("Node", &MONodeResource{
 			NodeID:   id,
@@ -121,6 +129,18 @@ func WithNode(id int64, t SpanKind) tracerProviderOptionFunc {
 func EnableTracer(enable bool) tracerProviderOptionFunc {
 	return func(cfg *tracerProviderConfig) {
 		cfg.enableTracer = enable
+	}
+}
+
+func DebugMode(debug bool) tracerProviderOptionFunc {
+	return func(cfg *tracerProviderConfig) {
+		cfg.debugMode = debug
+	}
+}
+
+func WithBatchProcessMode(mode string) tracerProviderOptionFunc {
+	return func(cfg *tracerProviderConfig) {
+		cfg.batchProcessMode = mode
 	}
 }
 
@@ -159,21 +179,16 @@ func newMOTracerProvider(opts ...TracerProviderOption) *MOTracerProvider {
 }
 
 func (p *MOTracerProvider) Tracer(instrumentationName string, opts ...TracerOption) Tracer {
-	if p.enableTracer {
-		tracer := &MOTracer{
-			TracerConfig: TracerConfig{Name: instrumentationName},
-			provider:     p,
-		}
-		tracer.spanPool = &sync.Pool{New: func() any {
-			return &MOSpan{
-				tracer: tracer,
-			}
-		}}
-		for _, opt := range opts {
-			opt.apply(&tracer.TracerConfig)
-		}
-		return tracer
-	} else {
-		return gNoopTracer
+	if !p.enableTracer {
+		return noopTracer{}
 	}
+
+	tracer := &MOTracer{
+		TracerConfig: TracerConfig{Name: instrumentationName},
+		provider:     p,
+	}
+	for _, opt := range opts {
+		opt.apply(&tracer.TracerConfig)
+	}
+	return tracer
 }

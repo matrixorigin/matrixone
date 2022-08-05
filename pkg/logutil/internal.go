@@ -141,3 +141,11 @@ func getConsoleSyncer() zapcore.WriteSyncer {
 	}
 	return syncer
 }
+
+var levelChangeFunc atomic.Value
+
+type levelChangeSignal func(zapcore.LevelEnabler)
+
+func SetLevelChangeFunc(f levelChangeSignal) {
+	levelChangeFunc.Store(f)
+}

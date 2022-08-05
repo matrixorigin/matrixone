@@ -15,12 +15,13 @@
 package trace
 
 import (
+	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"sync"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 )
 
 var _ Tracer = &MOTracer{}
@@ -28,23 +29,19 @@ var _ Tracer = &MOTracer{}
 // MOTracer is the creator of Spans.
 type MOTracer struct {
 	TracerConfig
-	ptrace   TracerProvider
-	spanPool *sync.Pool
-	node     *MONodeResource
 	provider *MOTracerProvider
 }
 
 func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (context.Context, Span) {
-	span := t.spanPool.Get().(*MOSpan)
-	opts = append(opts, withNodeResource(t.node))
+	span := newMOSpan()
 	span.init(name, opts...)
 
 	parent := SpanFromContext(ctx)
 
 	if span.NewRoot {
-		span.TraceID, span.SpanID = TraceID(util.Fastrand64()), SpanID(util.Fastrand64())
+		span.TraceID, span.SpanID = t.provider.idGenerator.NewIDs()
 	} else {
-		span.SpanID = SpanID(util.Fastrand64())
+		span.TraceID, span.SpanID = parent.SpanContext().TraceID, t.provider.idGenerator.NewSpanID()
 		span.parent = parent
 	}
 
@@ -55,19 +52,25 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (
 type SpanContext struct {
 	TraceID    TraceID
 	SpanID     SpanID
-	TraceFlags TraceFlags
+	TraceFlags TraceFlags // for sample
 	Remote     bool
+}
+
+func (c *SpanContext) Reset() {
+	c.TraceID = 0
+	c.SpanID = 0
+	c.TraceFlags = 0
+	c.Remote = false
+}
+
+func (c *SpanContext) IsEmpty() bool {
+	return c.TraceID == 0
 }
 
 func SpanContextWithID(id TraceID) SpanContext {
 	return SpanContext{
 		TraceID: id,
 	}
-}
-
-type MONodeResource struct {
-	NodeID   int64    `json:"node_id"`
-	NodeType SpanKind `json:"node_type"`
 }
 
 // SpanConfig is a group of options for a Span.
@@ -77,8 +80,7 @@ type SpanConfig struct {
 	// NewRoot identifies a Span as the root Span for a new trace. This is
 	// commonly used when an existing trace crosses trust boundaries and the
 	// remote parent span context should be ignored for security.
-	NewRoot bool
-	Node    *MONodeResource `json:"node"`
+	NewRoot bool // see WithNewRoot
 	parent  Span
 }
 
@@ -114,12 +116,6 @@ func WithNewRoot(newRoot bool) spanOptionFunc {
 	})
 }
 
-func withNodeResource(r *MONodeResource) spanOptionFunc {
-	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.Node = r
-	})
-}
-
 func WithRemote(remote bool) spanOptionFunc {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.Remote = remote
@@ -127,11 +123,11 @@ func WithRemote(remote bool) spanOptionFunc {
 }
 
 var _ Span = &MOSpan{}
-var _ HasItemSize = &MOSpan{}
+var _ IBuffer2SqlItem = &MOSpan{}
 
 type MOSpan struct {
 	SpanConfig
-	Name        string        `json:"name"`
+	Name        bytes.Buffer  `json:"name"`
 	StartTimeNS util.TimeNano `json:"start_time"`
 	EndTimeNS   util.TimeNano `jons:"end_time"`
 	Duration    util.TimeNano `json:"duration"`
@@ -139,8 +135,23 @@ type MOSpan struct {
 	tracer *MOTracer `json:"-"`
 }
 
+var spanPool = &sync.Pool{New: func() any {
+	return &MOSpan{}
+}}
+
+func newMOSpan() *MOSpan {
+	return spanPool.Get().(*MOSpan)
+}
+
 func (s *MOSpan) Size() int64 {
-	return int64(unsafe.Sizeof(*s)) + int64(len(s.Name))
+	return int64(unsafe.Sizeof(*s)) + int64(s.Name.Cap())
+}
+
+func (s *MOSpan) Free() {
+	s.Name.Reset()
+	s.Duration = 0
+	s.tracer = nil
+	spanPool.Put(s)
 }
 
 func (s *MOSpan) GetName() string {
@@ -148,9 +159,8 @@ func (s *MOSpan) GetName() string {
 }
 
 func (s *MOSpan) init(name string, opts ...SpanOption) {
-	s.Name = name
+	s.Name.WriteString(name)
 	s.StartTimeNS = util.NowNS()
-	//s.Duration = 0
 	for _, opt := range opts {
 		opt.applySpanStart(&s.SpanConfig)
 	}
@@ -165,10 +175,6 @@ func (s *MOSpan) End(options ...SpanEndOption) {
 
 func (s *MOSpan) SpanContext() SpanContext {
 	return s.SpanConfig.SpanContext
-}
-
-func (s *MOSpan) SetName(name string) {
-	s.Name = name
 }
 
 func (s MOSpan) GetItemType() string {

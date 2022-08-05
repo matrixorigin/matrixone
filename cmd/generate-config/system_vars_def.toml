@@ -338,6 +338,26 @@ comment = "default is true. if true, enable trace at booting"
 update-mode = "dynamic"
 
 [[parameter]]
+name = "traceBatchProcessor"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["singleton", "distributed"]
+comment = "default is singleton. if singleton, use internal sql executor"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "enableTraceDebug"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = ["false", "true"]
+comment = "default is false. With true, system will check all the children span is ended, which belong to the closing span."
+update-mode = "dynamic"
+
+[[parameter]]
 name = "logLevel"
 scope = ["global"]
 access = ["file"]
