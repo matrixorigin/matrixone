@@ -4,14 +4,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"reflect"
+	"sync"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/errors"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"reflect"
-	"sync"
-	"testing"
 
 	"github.com/google/gops/agent"
 	"github.com/stretchr/testify/assert"
@@ -157,13 +159,46 @@ func Test_batchSqlHandler_genErrorBatchSql(t1 *testing.T) {
 		in  []HasItemSize
 		buf *bytes.Buffer
 	}
+	buf := new(bytes.Buffer)
+	err1 := errors.WithStack(errors.New("test1"))
+	err2 := errors.Wrapf(err1, "test2")
 	tests := []struct {
 		name string
 		args args
 		want string
 	}{
-		// TODO: Add test cases.
+		{
+			name: "single_error",
+			args: args{
+				in: []HasItemSize{
+					&MOErrorHolder{
+						Error:     err1,
+						Timestamp: uint64(0),
+					},
+				},
+				buf: buf,
+			},
+			want: `insert into system.error_info (` + "`err_code`" + ", `stack`" + ", `timestamp`" + `) values ("test1", "test1", "0001-01-01 00:00:00.000000")`,
+		},
+		{
+			name: "multi_error",
+			args: args{
+				in: []HasItemSize{
+					&MOErrorHolder{
+						Error:     err1,
+						Timestamp: uint64(0),
+					},
+					&MOErrorHolder{
+						Error:     err2,
+						Timestamp: uint64(1000),
+					},
+				},
+				buf: buf,
+			},
+			want: `insert into system.error_info (` + "`err_code`" + ", `stack`" + ", `timestamp`" + `) values ("test1", "test1", "0001-01-01 00:00:00.000000"),("test2: test1", "test2: test1", "0001-01-01 00:00:00.000001")`,
+		},
 	}
+	errorFormatter = "%v"
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
 			if got := genErrorBatchSql(tt.args.in, tt.args.buf); got != tt.want {

@@ -201,8 +201,7 @@ func genSpanBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
 		buf.WriteString("),")
 	}
 	buf.Truncate(buf.Len() - 1)
-
-	return buf.String()
+	return string(buf.Next(buf.Len()))
 }
 
 func genLogBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
@@ -237,8 +236,7 @@ func genLogBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
 		buf.WriteString("),")
 	}
 	buf.Truncate(buf.Len() - 1)
-
-	return buf.String()
+	return string(buf.Next(buf.Len()))
 }
 
 func genStatementBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
@@ -283,9 +281,10 @@ func genStatementBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
 		buf.WriteString("),")
 	}
 	buf.Truncate(buf.Len() - 1)
-
-	return buf.String()
+	return string(buf.Next(buf.Len()))
 }
+
+var errorFormatter = "%+v"
 
 func genErrorBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
 	buf.Reset()
@@ -304,13 +303,13 @@ func genErrorBatchSql(in []HasItemSize, buf *bytes.Buffer) any {
 		s, _ := item.(*MOErrorHolder)
 		buf.WriteString("(")
 		buf.WriteString(fmt.Sprintf("\"%s\"", quote(s.Error.Error())))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(fmt.Sprintf("%+v", s.Error))))
+		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(fmt.Sprintf(errorFormatter, s.Error))))
 		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.Timestamp).String2(6)))
 		buf.WriteString("),")
 	}
+	// Truncate后会破坏String()的结果, 此处用
 	buf.Truncate(buf.Len() - 1)
-
-	return buf.String()
+	return string(buf.Next(buf.Len()))
 }
 
 var _ bp.ItemBuffer[bp.HasName, any] = &buffer2Sql{}
