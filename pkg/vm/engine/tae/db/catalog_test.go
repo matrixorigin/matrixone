@@ -16,6 +16,7 @@ package db
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"sync"
 	"testing"
 
@@ -317,7 +318,8 @@ func TestCheckpointCatalog2(t *testing.T) {
 	}
 	wg.Wait()
 	ts := tae.Scheduler.GetSafeTS()
-	entry := tae.Catalog.PrepareCheckpoint(0, ts)
+	var zeroV types.TS
+	entry := tae.Catalog.PrepareCheckpoint(zeroV, ts)
 	maxIndex := entry.GetMaxIndex()
 	err = tae.Catalog.Checkpoint(ts)
 	assert.Nil(t, err)
@@ -380,8 +382,10 @@ func TestCheckpointCatalog(t *testing.T) {
 	wg.Wait()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 
-	startTs := uint64(0)
-	endTs := tae.Scheduler.GetSafeTS() - 2
+	//startTs := uint64(0)
+	//endTs := tae.Scheduler.GetSafeTS() - 2
+	var startTs types.TS
+	endTs := tae.Scheduler.GetSafeTS().Prev().Prev()
 	t.Logf("endTs=%d", endTs)
 
 	entry := tae.Catalog.PrepareCheckpoint(startTs, endTs)
@@ -395,7 +399,7 @@ func TestCheckpointCatalog(t *testing.T) {
 	}
 	entry.PrintItems()
 	assert.Equal(t, 8, blkCnt)
-	entry2 := tae.Catalog.PrepareCheckpoint(endTs+1, tae.Scheduler.GetSafeTS())
+	entry2 := tae.Catalog.PrepareCheckpoint(endTs.Next(), tae.Scheduler.GetSafeTS())
 
 	blkCnt = 0
 	for _, cmd := range entry2.Entries {
@@ -405,7 +409,8 @@ func TestCheckpointCatalog(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, blkCnt)
-	entry3 := tae.Catalog.PrepareCheckpoint(0, endTs-1)
+	var zeroV types.TS
+	entry3 := tae.Catalog.PrepareCheckpoint(zeroV, endTs.Prev())
 	entry3.PrintItems()
 
 	blockEntry := blocks[6]
@@ -414,10 +419,13 @@ func TestCheckpointCatalog(t *testing.T) {
 	t.Log(blk.String())
 	assert.Nil(t, err)
 	assert.True(t, blk.HasDropped())
-	assert.True(t, blk.DeleteAt > endTs)
-	assert.True(t, blk.CreateAt > startTs)
+	assert.True(t, blk.DeleteAt.Greater(endTs))
+	assert.True(t, blk.CreateAt.Greater(startTs))
 	assert.Equal(t, blk.CreateAt, blockEntry.CreateAt)
-	assert.Equal(t, uint64(0), blockEntry.DeleteAt)
+
+	var zeroV1 types.TS
+	//assert.Equal(t, uint64(0), blockEntry.DeleteAt)
+	assert.Equal(t, zeroV1, blockEntry.DeleteAt)
 
 	buf, err := entry.Marshal()
 	assert.Nil(t, err)

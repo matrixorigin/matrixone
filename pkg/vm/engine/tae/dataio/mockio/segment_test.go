@@ -36,7 +36,8 @@ func TestSegment1(t *testing.T) {
 	blkId1 := common.NextGlobalSeqNum()
 	blk1, err := seg.OpenBlock(blkId1, 2, nil)
 	assert.Nil(t, err)
-	blkTs1 := common.NextGlobalSeqNum()
+	//blkTs1 := common.NextGlobalSeqNum()
+	blkTs1 := common.NextGlobalTsForTest()
 	_ = blk1.WriteTS(blkTs1)
 
 	ts, _ := blk1.ReadTS()

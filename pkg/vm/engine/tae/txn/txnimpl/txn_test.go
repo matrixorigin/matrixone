@@ -75,7 +75,7 @@ func makeTable(t *testing.T, dir string, colCnt int, pkIdx int, bufSize uint64) 
 	id := common.NextGlobalSeqNum()
 	schema := catalog.MockSchemaAll(colCnt, pkIdx)
 	rel := mockTestRelation(id, schema)
-	txn := txnbase.NewTxn(nil, nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
+	txn := txnbase.NewTxn(nil, nil, common.NextGlobalSeqNum(), common.NextGlobalTsForTest(), nil)
 	store := newStore(nil, driver, mgr, nil)
 	store.BindTxn(txn)
 	return newTxnTable(store, rel.GetMeta().(*catalog.TableEntry))
@@ -396,7 +396,7 @@ func TestNodeCommand(t *testing.T) {
 func TestApplyToColumn1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	deletes := roaring.BitmapOf(1)
-	ts := common.NextGlobalSeqNum()
+	ts := common.NextGlobalTsForTest()
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
@@ -429,7 +429,7 @@ func TestApplyToColumn1(t *testing.T) {
 func TestApplyToColumn2(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	deletes := roaring.BitmapOf(1)
-	ts := common.NextGlobalSeqNum()
+	ts := common.NextGlobalTsForTest()
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
@@ -457,7 +457,7 @@ func TestApplyToColumn2(t *testing.T) {
 
 func TestApplyToColumn3(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	ts := common.NextGlobalSeqNum()
+	ts := common.NextGlobalTsForTest()
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
@@ -484,7 +484,7 @@ func TestApplyToColumn3(t *testing.T) {
 
 func TestApplyToColumn4(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	ts := common.NextGlobalSeqNum()
+	ts := common.NextGlobalTsForTest()
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
@@ -503,7 +503,8 @@ func TestApplyToColumn4(t *testing.T) {
 
 func TestTxnManager1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(nil, nil, nil, nil), TxnFactory(nil))
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(nil, nil, nil, nil),
+		TxnFactory(nil), common.MockClock(1))
 	mgr.Start()
 	txn, _ := mgr.StartTxn(nil)
 	txn.MockIncWriteCnt()
@@ -562,7 +563,8 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 	txnBufMgr := buffer.NewNodeManager(common.G, nil)
 	mutBufMgr := buffer.NewNodeManager(common.G, nil)
 	factory := tables.NewDataFactory(mockio.SegmentFactory, mutBufMgr, nil, dir)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory), TxnFactory(c))
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory),
+		TxnFactory(c), common.MockClock(1))
 	mgr.Start()
 	return c, mgr, driver
 }

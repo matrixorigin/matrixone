@@ -17,6 +17,7 @@ package wal
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -36,7 +37,7 @@ type Index struct {
 }
 
 type ReplayObserver interface {
-	OnTimeStamp(uint64)
+	OnTimeStamp(ts types.TS)
 	OnStaleIndex(*Index)
 }
 

@@ -136,6 +136,12 @@ func (c *HLCClock) Now() (timestamp.Timestamp, timestamp.Timestamp) {
 	return now, timestamp.Timestamp{PhysicalTime: now.PhysicalTime + int64(c.maxOffset)}
 }
 
+func (c *HLCClock) Get() timestamp.Timestamp {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.mu.ts
+}
+
 // Update is called whenever messages are received from other nodes. HLC
 // timestamp carried by those messages are used to update the local HLC
 // clock to capture casual relationships.

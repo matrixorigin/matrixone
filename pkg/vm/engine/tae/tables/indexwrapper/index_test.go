@@ -15,6 +15,7 @@
 package indexwrapper
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -37,14 +38,16 @@ func TestRevert(t *testing.T) {
 	ctx.Keys = vec1
 	ctx.SelectAll()
 
-	ts1 := uint64(99)
+	//ts1 := uint64(99)
+	ts1 := common.NextGlobalTsForTest().Next()
 	resp, err := idx.BatchUpsert(ctx, 0, ts1)
 	assert.NoError(t, err)
 	assert.Nil(t, resp)
 	_, err = idx.BatchDedup(vec1, nil)
 	assert.Error(t, err)
 
-	ts2 := uint64(109)
+	//ts2 := uint64(109)
+	ts2 := ts1.Next()
 	ctx.Keys = vec2
 	ctx.SelectAll()
 	resp, err = idx.BatchUpsert(ctx, vec1.Length(), ts2)

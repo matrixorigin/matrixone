@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 func (blk *dataBlock) ReplayDelta() (err error) {
@@ -99,7 +100,8 @@ func (blk *dataBlock) ReplayIndex() (err error) {
 		keysCtx.Start = 0
 		keysCtx.Count = keysCtx.Keys.Length()
 		defer keysCtx.Keys.Close()
-		_, err = blk.index.BatchUpsert(keysCtx, 0, 0)
+		var zeroV types.TS
+		_, err = blk.index.BatchUpsert(keysCtx, 0, zeroV)
 		return
 	}
 	if blk.meta.GetSchema().HasSortKey() {

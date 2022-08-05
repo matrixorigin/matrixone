@@ -15,11 +15,12 @@
 package txnbase
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -27,32 +28,35 @@ import (
 )
 
 type TxnStoreFactory = func() txnif.TxnStore
-type TxnFactory = func(*TxnManager, txnif.TxnStore, uint64, uint64, []byte) txnif.AsyncTxn
+type TxnFactory = func(*TxnManager, txnif.TxnStore, uint64, types.TS, []byte) txnif.AsyncTxn
 
 type TxnManager struct {
 	sync.RWMutex
 	common.ClosedState
 	sm.StateMachine
-	Active           map[uint64]txnif.AsyncTxn
-	IdAlloc, TsAlloc *common.IdAlloctor
-	TxnStoreFactory  TxnStoreFactory
-	TxnFactory       TxnFactory
-	ActiveMask       *roaring64.Bitmap
-	Exception        *atomic.Value
+	Active          map[uint64]txnif.AsyncTxn
+	IdAlloc         *common.IdAlloctor
+	TsAlloc         *common.TsAlloctor
+	TxnStoreFactory TxnStoreFactory
+	TxnFactory      TxnFactory
+	//ActiveMask      *roaring64.Bitmap
+	ActiveMask map[types.TS]struct{}
+	Exception  *atomic.Value
 }
 
-func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory) *TxnManager {
+func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock clock.Clock) *TxnManager {
 	if txnFactory == nil {
 		txnFactory = DefaultTxnFactory
 	}
 	mgr := &TxnManager{
 		Active:          make(map[uint64]txnif.AsyncTxn),
 		IdAlloc:         common.NewIdAlloctor(1),
-		TsAlloc:         common.NewIdAlloctor(1),
+		TsAlloc:         common.NewTsAlloctor(clock),
 		TxnStoreFactory: txnStoreFactory,
 		TxnFactory:      txnFactory,
-		ActiveMask:      roaring64.New(),
-		Exception:       new(atomic.Value),
+		//ActiveMask:      roaring64.New(),
+		ActiveMask: make(map[types.TS]struct{}),
+		Exception:  new(atomic.Value),
 	}
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.onPreparing)
 	cqueue := sm.NewSafeQueue(20000, 1000, mgr.onCommit)
@@ -60,7 +64,7 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory) *TxnM
 	return mgr
 }
 
-func (mgr *TxnManager) Init(prevTxnId uint64, prevTs uint64) error {
+func (mgr *TxnManager) Init(prevTxnId uint64, prevTs types.TS) error {
 	mgr.IdAlloc.SetStart(prevTxnId)
 	mgr.TsAlloc.SetStart(prevTs)
 	logutil.Info("[INIT]", TxnMgrField(mgr))
@@ -70,13 +74,19 @@ func (mgr *TxnManager) Init(prevTxnId uint64, prevTs uint64) error {
 func (mgr *TxnManager) StatActiveTxnCnt() int {
 	mgr.RLock()
 	defer mgr.RUnlock()
-	return int(mgr.ActiveMask.GetCardinality())
+	//return int(mgr.ActiveMask.GetCardinality())
+	return int(len(mgr.ActiveMask))
 }
 
-func (mgr *TxnManager) StatSafeTS() (ts uint64) {
+func (mgr *TxnManager) StatSafeTS() (ts types.TS) {
 	mgr.RLock()
 	if len(mgr.Active) > 0 {
-		ts = mgr.ActiveMask.Minimum() - 1
+		ts = types.MaxTs()
+		for k, _ := range mgr.ActiveMask {
+			if k.Less(ts) {
+				ts = k
+			}
+		}
 	} else {
 		ts = mgr.TsAlloc.Get()
 	}
@@ -99,7 +109,8 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	txn = mgr.TxnFactory(mgr, store, txnId, startTs, info)
 	store.BindTxn(txn)
 	mgr.Active[txnId] = txn
-	mgr.ActiveMask.Add(startTs)
+	//mgr.ActiveMask.Add(startTs)
+	mgr.ActiveMask[startTs] = struct{}{}
 	return
 }
 
@@ -108,7 +119,8 @@ func (mgr *TxnManager) DeleteTxn(id uint64) {
 	defer mgr.Unlock()
 	txn := mgr.Active[id]
 	delete(mgr.Active, id)
-	mgr.ActiveMask.Remove(txn.GetStartTS())
+	//mgr.ActiveMask.Remove(txn.GetStartTS())
+	delete(mgr.ActiveMask, txn.GetStartTS())
 }
 
 func (mgr *TxnManager) GetTxnByCtx(ctx []byte) txnif.AsyncTxn {

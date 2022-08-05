@@ -31,6 +31,7 @@ type Clock interface {
 	// Now returns the current timestamp and the upper bound of the current time
 	// caused by clock offset.
 	Now() (timestamp.Timestamp, timestamp.Timestamp)
+	Get() timestamp.Timestamp
 	// Update updates the clock based on the received timestamp.
 	Update(ts timestamp.Timestamp)
 }

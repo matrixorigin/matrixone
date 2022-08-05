@@ -15,6 +15,8 @@
 package updates
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"testing"
 	"time"
 
@@ -28,17 +30,24 @@ func TestMutationControllerAppend(t *testing.T) {
 
 	nodeCnt := 10000
 	rowsPerNode := uint32(5)
-	ts := uint64(2)
-	queries := make([]uint64, 0)
-	queries = append(queries, ts-1)
+	//ts := uint64(2)
+	//ts = 4
+	ts := common.NextGlobalTsForTest().Next().Next()
+	//queries := make([]uint64, 0)
+	//queries = append(queries, ts-1)
+	queries := make([]types.TS, 0)
+	queries = append(queries, ts.Prev())
+
 	for i := 0; i < nodeCnt; i++ {
 		txn := mockTxn()
 		txn.CommitTS = ts
 		node, _ := mc.AddAppendNodeLocked(txn, rowsPerNode*uint32(i), rowsPerNode*(uint32(i)+1))
 		err := node.ApplyCommit(nil)
 		assert.Nil(t, err)
-		queries = append(queries, ts+1)
-		ts += 2
+		//queries = append(queries, ts+1)
+		queries = append(queries, ts.Next())
+		//ts += 2
+		ts = ts.Next().Next()
 	}
 
 	st := time.Now()

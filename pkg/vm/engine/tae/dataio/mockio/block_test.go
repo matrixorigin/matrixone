@@ -30,7 +30,7 @@ func TestBlock1(t *testing.T) {
 		indexCnt[col] = 2
 	}
 	block := newBlock(common.NextGlobalSeqNum(), nil, colCnt, indexCnt)
-	blockTs := common.NextGlobalSeqNum()
+	blockTs := common.NextGlobalTsForTest()
 	_ = block.WriteTS(blockTs)
 	readTs, _ := block.ReadTS()
 	assert.Equal(t, blockTs, readTs)

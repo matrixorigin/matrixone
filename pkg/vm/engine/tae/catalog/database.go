@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"io"
 	"sync"
 
@@ -67,9 +68,10 @@ func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 			CommitInfo: CommitInfo{
 				CurrOp: OpCreate,
 			},
-			RWMutex:  new(sync.RWMutex),
-			ID:       id,
-			CreateAt: 1,
+			RWMutex: new(sync.RWMutex),
+			ID:      id,
+			//CreateAt: 1,
+			CreateAt: types.SystemDBTS,
 		},
 		catalog:   catalog,
 		name:      SystemDBName,
