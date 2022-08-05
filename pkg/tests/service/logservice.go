@@ -18,7 +18,6 @@ import (
 	"path"
 	"strconv"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
@@ -31,10 +30,8 @@ import (
 )
 
 var (
-	defaultDeploymentID         uint64 = 1
-	defaultRTTMillisecond       uint64 = 5
-	defaultHeartbeatInterval           = 5 * time.Millisecond
-	defaultHAKeeperTickInterval        = 5 * time.Millisecond
+	defaultDeploymentID   uint64 = 1
+	defaultRTTMillisecond uint64 = 5
 )
 
 // LogService describes expected behavior for log service.
@@ -75,7 +72,7 @@ func (ls *logService) Start() error {
 	ls.Lock()
 	defer ls.Unlock()
 
-	if ls.status == ServiceInitialized || ls.status == ServiceClosed {
+	if ls.status == ServiceInitialized {
 		err := ls.svc.Start()
 		if err != nil {
 			return err
@@ -135,8 +132,6 @@ func (ls *logService) StartHAKeeperReplica(
 
 // newLogService constructs an instance of `LogService`.
 func newLogService(cfg logservice.Config) (LogService, error) {
-	cfg.Fill()
-
 	svc, err := logservice.NewWrappedService(cfg)
 	if err != nil {
 		return nil, err
@@ -157,9 +152,17 @@ func buildLogConfig(index int, opt Options, address serviceAddress) logservice.C
 		GossipAddress:       address.getLogGossipAddress(index),
 		GossipSeedAddresses: address.getLogGossipSeedAddresses(),
 	}
-	cfg.HeartbeatInterval.Duration = defaultHeartbeatInterval
-	cfg.HAKeeperTickInterval.Duration = defaultHAKeeperTickInterval
+	cfg.HeartbeatInterval.Duration = opt.log.heartbeatInterval
+	cfg.HAKeeperCheckInterval.Duration = opt.hakeeper.checkInterval
 	cfg.HAKeeperClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
+
+	// setting hakeeper configuration
+	cfg.HAKeeperConfig.TickPerSecond = opt.hakeeper.tickPerSecond
+	cfg.HAKeeperConfig.LogStoreTimeout.Duration = opt.hakeeper.logStoreTimeout
+	cfg.HAKeeperConfig.DnStoreTimeout.Duration = opt.hakeeper.dnStoreTimeout
+
+	// we must invoke Fill in order to setting default configruation value.
+	cfg.Fill()
 	return cfg
 }
 

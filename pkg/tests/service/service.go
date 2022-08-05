@@ -15,6 +15,7 @@
 package service
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -38,7 +39,7 @@ type Cluster interface {
 	// Close stops svcs sequentially
 	Close() error
 
-	// ClusterOperation
+	ClusterOperation
 	ClusterAwareness
 	ClusterAssertState
 	ClusterWaitState
@@ -46,32 +47,53 @@ type Cluster interface {
 
 // ClusterOperation supports kinds of cluster operations.
 type ClusterOperation interface {
-	CloseDNService(id string) error
-	StartDNService(id string) error
+	// CloseDNService closes dn service by uuid.
+	CloseDNService(uuid string) error
+	// StartDNService starts dn service by uuid.
+	StartDNService(uuid string) error
 
-	CloseLogService(id string) error
-	StartLogService(id string) error
+	// CloseDNServiceIndexed closes dn service by its index.
+	CloseDNServiceIndexed(index int) error
+	// StartDNServiceIndexed starts dn service by its index.
+	StartDNServiceIndexed(index int) error
 
+	// CloseLogService closes log service by uuid.
+	CloseLogService(uuid string) error
+	// StartLogService starts log service by uuid.
+	StartLogService(uuid string) error
+
+	// CloseLogServiceIndexed closes log service by its index.
+	CloseLogServiceIndexed(index int) error
+	// StartLogServiceIndexed starts log service by its index.
+	StartLogServiceIndexed(index int) error
+
+	// FXIME: support this in the end of development
 	// StartNetworkPartition(partitions [][]int) error
 	// CloseNetworkPartition() error
 }
 
 // ClusterAwareness provides cluster awareness information.
 type ClusterAwareness interface {
-	// ListDNServices lists uuid of all dn services
+	// ListDNServices lists uuid of all dn services.
 	ListDNServices() []string
-	// ListLogServices lists uuid of all log services
+	// ListLogServices lists uuid of all log services.
 	ListLogServices() []string
 
-	// GetDNService fetches dn service instance
-	GetDNService(id string) (DNService, error)
-	// GetLogService fetches log service instance
-	GetLogService(id string) (LogService, error)
+	// GetDNService fetches dn service instance by uuid.
+	GetDNService(uuid string) (DNService, error)
+	// GetLogService fetches log service instance by index.
+	GetLogService(uuid string) (LogService, error)
+
+	// GetDNServiceIndexed fetches dn service instance by uuid.
+	GetDNServiceIndexed(index int) (DNService, error)
+	// GetLogServiceIndexed fetches log service instance by index.
+	GetLogServiceIndexed(index int) (LogService, error)
+
 	// GetClusterState fetches current cluster state
 	GetClusterState(timeout time.Duration) (*logpb.CheckerState, error)
 }
 
-// TODO: add more convenient method
+// FIXME: add more convenient method
 // ClusterAssertState asserts current cluster state.
 type ClusterAssertState interface {
 	AssertHAKeeperState(svc LogService, expected logpb.HAKeeperState)
@@ -199,30 +221,48 @@ func (c *testCluster) Close() error {
 	return nil
 }
 
-func (c *testCluster) GetDNService(id string) (DNService, error) {
+func (c *testCluster) GetDNService(uuid string) (DNService, error) {
 	c.dn.Lock()
 	defer c.dn.Unlock()
 
 	for i, cfg := range c.dn.cfgs {
-		if cfg.UUID == id {
+		if cfg.UUID == uuid {
 			return c.dn.svcs[i], nil
 		}
 	}
-
-	return nil, wrappedError(ErrServiceNotExist, id)
+	return nil, wrappedError(ErrServiceNotExist, uuid)
 }
 
-func (c *testCluster) GetLogService(id string) (LogService, error) {
+func (c *testCluster) GetLogService(uuid string) (LogService, error) {
 	c.log.Lock()
 	defer c.log.Unlock()
 
 	for _, svc := range c.log.svcs {
-		if svc.ID() == id {
+		if svc.ID() == uuid {
 			return svc, nil
 		}
 	}
+	return nil, wrappedError(ErrServiceNotExist, uuid)
+}
 
-	return nil, wrappedError(ErrServiceNotExist, id)
+func (c *testCluster) GetDNServiceIndexed(index int) (DNService, error) {
+	c.dn.Lock()
+	defer c.dn.Unlock()
+
+	if index >= len(c.dn.svcs) || index < 0 {
+		return nil, wrappedError(ErrInvalidServiceIndex, fmt.Sprintf("index: %d", index))
+	}
+	return c.dn.svcs[index], nil
+}
+
+func (c *testCluster) GetLogServiceIndexed(index int) (LogService, error) {
+	c.log.Lock()
+	defer c.log.Unlock()
+
+	if index >= len(c.log.svcs) || index < 0 {
+		return nil, wrappedError(ErrInvalidServiceIndex, fmt.Sprintf("index: %d", index))
+	}
+	return c.log.svcs[index], nil
 }
 
 // NB: we could also fetch cluster state from non-leader hakeeper.
@@ -289,6 +329,70 @@ func (c *testCluster) ListLogServices() []string {
 		ids = append(ids, svc.ID())
 	}
 	return ids
+}
+
+func (c *testCluster) CloseDNService(uuid string) error {
+	ds, err := c.GetDNService(uuid)
+	if err != nil {
+		return err
+	}
+	return ds.Close()
+}
+
+func (c *testCluster) StartDNService(uuid string) error {
+	ds, err := c.GetDNService(uuid)
+	if err != nil {
+		return err
+	}
+	return ds.Start()
+}
+
+func (c *testCluster) CloseDNServiceIndexed(index int) error {
+	ds, err := c.GetDNServiceIndexed(index)
+	if err != nil {
+		return err
+	}
+	return ds.Close()
+}
+
+func (c *testCluster) StartDNServiceIndexed(index int) error {
+	ds, err := c.GetDNServiceIndexed(index)
+	if err != nil {
+		return err
+	}
+	return ds.Start()
+}
+
+func (c *testCluster) CloseLogService(uuid string) error {
+	ls, err := c.GetLogService(uuid)
+	if err != nil {
+		return err
+	}
+	return ls.Close()
+}
+
+func (c *testCluster) StartLogService(uuid string) error {
+	ls, err := c.GetLogService(uuid)
+	if err != nil {
+		return err
+	}
+	return ls.Start()
+}
+
+func (c *testCluster) CloseLogServiceIndexed(index int) error {
+	ls, err := c.GetLogServiceIndexed(index)
+	if err != nil {
+		return err
+	}
+	return ls.Close()
+}
+
+func (c *testCluster) StartLogServiceIndexed(index int) error {
+	ls, err := c.GetLogServiceIndexed(index)
+	if err != nil {
+		return err
+	}
+	return ls.Start()
 }
 
 // ------------------------------------------------------
