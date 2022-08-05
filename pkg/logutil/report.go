@@ -22,6 +22,21 @@ import (
 	"sync/atomic"
 )
 
+// enableStoreDB mark cfg.EnableStoreDB from initMOLogger
+var enableStoreDB int32 = 0
+
+func setEnableStoreDB(enable bool) {
+	if enable {
+		atomic.StoreInt32(&enableStoreDB, 1)
+	} else {
+		atomic.StoreInt32(&enableStoreDB, 0)
+	}
+}
+
+func EnableStoreDB() bool {
+	return atomic.LoadInt32(&enableStoreDB) == 1
+}
+
 // logReporter should be trace.ReportLog
 var logReporter atomic.Value
 

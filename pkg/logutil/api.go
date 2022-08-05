@@ -124,7 +124,7 @@ func GetLoggerWithOptions(level zapcore.LevelEnabler, encoder zapcore.Encoder, s
 	cores = append(cores, zapcore.NewCore(encoder, syncer, level))
 	configs.cfgs = append(configs.cfgs, ZapConfig{encoder, syncer})
 
-	{
+	if EnableStoreDB() {
 		var traceLogEncoder zapcore.Encoder = newTraceLogEncoder()
 		var traceLogSyncer zapcore.WriteSyncer = zapcore.AddSync(ioutil.Discard)
 		cores = append(cores, zapcore.NewCore(traceLogEncoder, traceLogSyncer, level))

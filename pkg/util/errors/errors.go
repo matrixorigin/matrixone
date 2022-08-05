@@ -40,23 +40,23 @@ func As(err error, target any) bool {
 
 func New(text string) error {
 	err := &withStack{goErrors.New(text), util.Callers(1)}
-	GetReportErrorFunc()(nil, err)
+	GetReportErrorFunc()(nil, err, 1)
 	return err
 }
 
 func NewWithContext(ctx context.Context, text string) (err error) {
 	err = &withStack{goErrors.New(text), util.Callers(1)}
 	err = &withContext{err, ctx}
-	GetReportErrorFunc()(ctx, err)
+	GetReportErrorFunc()(ctx, err, 1)
 	return err
 }
 
-type reportErrorFunc func(context.Context, error)
+type reportErrorFunc func(context.Context, error, int)
 
 // errorReporter should be trace.HandleError
 var errorReporter atomic.Value
 
-func noopReportError(context.Context, error) {}
+func noopReportError(context.Context, error, int) {}
 
 func SetErrorReporter(f reportErrorFunc) {
 	errorReporter.Store(f)

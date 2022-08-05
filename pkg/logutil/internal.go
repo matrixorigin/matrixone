@@ -21,7 +21,6 @@ import (
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -37,6 +36,7 @@ func SetupMOLogger(conf *LogConfig) {
 
 // initMOLogger initializes a zap Logger.
 func initMOLogger(cfg *LogConfig) (*zap.Logger, error) {
+	setEnableStoreDB(cfg.EnableStore)
 	return GetLoggerWithOptions(cfg.getLevel(), cfg.getEncoder(), cfg.getSyncer()), nil
 }
 
@@ -62,13 +62,13 @@ func replaceGlobalLogger(logger *zap.Logger) {
 }
 
 type LogConfig struct {
-	Level        string `toml:"level"`
-	Format       string `toml:"format"`
-	Filename     string `toml:"filename"`
-	MaxSize      int    `toml:"max-size"`
-	MaxDays      int    `toml:"max-days"`
-	MaxBackups   int    `toml:"max-backups"`
-	EnableReport bool   `toml:"enable-report"`
+	Level       string `toml:"level"`
+	Format      string `toml:"format"`
+	Filename    string `toml:"filename"`
+	MaxSize     int    `toml:"max-size"`
+	MaxDays     int    `toml:"max-days"`
+	MaxBackups  int    `toml:"max-backups"`
+	EnableStore bool   `toml:"enable-report"` // for mo, store log into db
 }
 
 func (cfg *LogConfig) getSyncer() zapcore.WriteSyncer {

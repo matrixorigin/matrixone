@@ -69,9 +69,6 @@ func Init(ctx context.Context, sysVar *config.SystemVariables, options ...Tracer
 	gSpanContext.Store(&sc)
 	gTraceContext = ContextWithSpanContext(ctx, sc)
 
-	// init schema
-	InitSchemaByInnerExecutor(config.sqlExecutor)
-
 	initExport(config)
 
 	errors.WithContext(DefaultContext(), goErrors.New("finish trace init"))
@@ -87,7 +84,10 @@ func initExport(config *tracerProviderConfig) {
 	var p export.BatchProcessor
 	// init BatchProcess for trace/log/error
 	switch {
-	case config.batchProcessMode == "standalone":
+	case config.batchProcessMode == "InternalExecutor":
+		// init schema
+		InitSchemaByInnerExecutor(config.sqlExecutor)
+		// register buffer pipe implements
 		export.Register(&MOSpan{}, NewBufferPipe2SqlWorker(
 			bufferWithSizeThreshold(MB),
 		))
@@ -96,11 +96,12 @@ func initExport(config *tracerProviderConfig) {
 		export.Register(&StatementInfo{}, NewBufferPipe2SqlWorker())
 		export.Register(&MOErrorHolder{}, NewBufferPipe2SqlWorker())
 		logutil2.Infof(nil, "init GlobalBatchProcessor")
+		// init BatchProcessor for standalone mode.
 		p = export.NewMOCollector()
 		export.SetGlobalBatchProcessor(p)
 		p.Start()
-	case config.batchProcessMode == "distributed":
-		//export.Register(&MOTracer{}, NewBufferPipe2SqlWorker())
+	case config.batchProcessMode == "FileService":
+		// TODO: will write csv file.
 	}
 	if p != nil {
 		config.spanProcessors = append(config.spanProcessors, NewBatchSpanProcessor(p))

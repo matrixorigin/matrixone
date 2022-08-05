@@ -73,12 +73,12 @@ func DragonboatFactory(pkgName string) logger.ILogger {
 		cores = append(cores, zapcore.NewCore(cfg.enc, cfg.out, atom))
 	}
 	return &DragonboatAdaptLogger{
-		logger:  zap.New(zapcore.NewTee(cores...)).WithOptions(zap.AddCallerSkip(2)).Sugar(),
+		logger:  zap.New(zapcore.NewTee(cores...), configs.options...).WithOptions(zap.AddCallerSkip(2)).Sugar(),
 		atom:    &atom,
 		pkgName: pkgName,
 	}
 }
 
 func init() {
-	logger.SetLoggerFactory(DragonboatFactory)
+	//logger.SetLoggerFactory(DragonboatFactory)
 }

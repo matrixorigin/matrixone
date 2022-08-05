@@ -254,6 +254,10 @@ func (s *MOSpan) SpanContext() SpanContext {
 	return s.SpanConfig.SpanContext
 }
 
+func (s *MOSpan) ParentSpanContext() SpanContext {
+	return s.SpanConfig.parent.SpanContext()
+}
+
 func (s MOSpan) GetItemType() string {
 	return "MOSpan"
 }

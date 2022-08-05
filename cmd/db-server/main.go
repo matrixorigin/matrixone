@@ -181,13 +181,13 @@ func main() {
 	}
 
 	logConf := logutil.LogConfig{
-		Level:        config.GlobalSystemVariables.GetLogLevel(),
-		Format:       config.GlobalSystemVariables.GetLogFormat(),
-		Filename:     config.GlobalSystemVariables.GetLogFilename(),
-		MaxSize:      int(config.GlobalSystemVariables.GetLogMaxSize()),
-		MaxDays:      int(config.GlobalSystemVariables.GetLogMaxDays()),
-		MaxBackups:   int(config.GlobalSystemVariables.GetLogMaxBackups()),
-		EnableReport: config.GlobalSystemVariables.GetEnableTrace(),
+		Level:       config.GlobalSystemVariables.GetLogLevel(),
+		Format:      config.GlobalSystemVariables.GetLogFormat(),
+		Filename:    config.GlobalSystemVariables.GetLogFilename(),
+		MaxSize:     int(config.GlobalSystemVariables.GetLogMaxSize()),
+		MaxDays:     int(config.GlobalSystemVariables.GetLogMaxDays()),
+		MaxBackups:  int(config.GlobalSystemVariables.GetLogMaxBackups()),
+		EnableStore: config.GlobalSystemVariables.GetEnableTrace(),
 	}
 
 	logutil.SetupMOLogger(&logConf)

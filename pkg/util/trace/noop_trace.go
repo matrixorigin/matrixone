@@ -43,6 +43,8 @@ var _ Span = noopSpan{}
 // SpanContext returns an empty span context.
 func (noopSpan) SpanContext() SpanContext { return SpanContext{} }
 
+func (noopSpan) ParentSpanContext() SpanContext { return SpanContext{} }
+
 // IsRecording always returns false.
 func (noopSpan) IsRecording() bool { return false }
 
@@ -61,6 +63,5 @@ type nonRecordingSpan struct {
 	sc SpanContext
 }
 
-func (s *nonRecordingSpan) SpanContext() SpanContext {
-	return s.sc
-}
+func (s *nonRecordingSpan) SpanContext() SpanContext       { return s.sc }
+func (s *nonRecordingSpan) ParentSpanContext() SpanContext { return SpanContext{} }

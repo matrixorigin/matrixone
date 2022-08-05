@@ -55,8 +55,10 @@ func ReportError(ctx context.Context, err error) {
 }
 
 // HandleError api for pkg/util/errors as errorReporter
-func HandleError(ctx context.Context, err error) {
-	const depth = 2
+func HandleError(ctx context.Context, err error, depth int) {
+	if ctx == nil {
+		ctx = DefaultContext()
+	}
 	ReportError(ctx, err)
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(depth)).Info("error", ContextField(ctx), zap.Error(err))
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(depth+1)).Info("error", ContextField(ctx), zap.Error(err))
 }
