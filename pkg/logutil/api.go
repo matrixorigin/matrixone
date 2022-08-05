@@ -112,6 +112,7 @@ func Adjust(logger *zap.Logger, options ...zap.Option) *zap.Logger {
 
 // GetLoggerWithOptions get default zap logger
 func GetLoggerWithOptions(level zapcore.LevelEnabler, encoder zapcore.Encoder, syncer zapcore.WriteSyncer, options ...zap.Option) *zap.Logger {
+	var configs ZapConfigs // keep for dragonboat
 	var cores []zapcore.Core
 	options = append(options, zap.AddStacktrace(zapcore.FatalLevel), zap.AddCaller())
 	if syncer == nil {
@@ -121,14 +122,19 @@ func GetLoggerWithOptions(level zapcore.LevelEnabler, encoder zapcore.Encoder, s
 		encoder = getLoggerEncoder("")
 	}
 	cores = append(cores, zapcore.NewCore(encoder, syncer, level))
-	GetLevelChangeFunc()(level)
+	configs.cfgs = append(configs.cfgs, ZapConfig{encoder, syncer})
 
 	{
 		var traceLogEncoder zapcore.Encoder = newTraceLogEncoder()
 		var traceLogSyncer zapcore.WriteSyncer = zapcore.AddSync(ioutil.Discard)
 		cores = append(cores, zapcore.NewCore(traceLogEncoder, traceLogSyncer, level))
+		configs.cfgs = append(configs.cfgs, ZapConfig{traceLogEncoder, traceLogSyncer})
 	}
 
+	configs.options = options
+	gZapConfigs.Store(&configs)
+
+	GetLevelChangeFunc()(level)
 	return zap.New(zapcore.NewTee(cores...), options...)
 }
 
