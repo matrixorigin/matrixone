@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -46,16 +45,15 @@ func (h MOErrorHolder) Free() {}
 
 func (h *MOErrorHolder) Format(s fmt.State, verb rune) { errbase.FormatError(h.Error, s, verb) }
 
+// ReportError send to BatchProcessor
 func ReportError(ctx context.Context, err error) {
 	e := &MOErrorHolder{Error: err, Timestamp: util.NowNS()}
 	export.GetGlobalBatchProcessor().Collect(ctx, e)
 }
 
+// HandleError api for pkg/util/errors as errorReporter
 func HandleError(ctx context.Context, err error) {
 	const depth = 2
-	msg := "record error"
-	fields := []any{zap.Error(err)}
 	ReportError(ctx, err)
-	ReportLog(ctx, zapcore.InfoLevel, depth, msg, fields...)
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(depth)).Sugar().Infof(msg, fields...)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(depth)).Info("error", ContextField(ctx), zap.Error(err))
 }

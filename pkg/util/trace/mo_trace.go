@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"sync"
@@ -106,12 +105,14 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (
 
 var _ zapcore.ObjectMarshaler = (*SpanContext)(nil)
 
+const SpanFieldKey = "span"
+
 func SpanField(sc SpanContext) zap.Field {
-	return zap.Object(common.SpanFieldKey, &sc)
+	return zap.Object(SpanFieldKey, &sc)
 }
 
 func IsSpanField(field zapcore.Field) bool {
-	return field.Key == common.SpanFieldKey
+	return field.Key == SpanFieldKey
 }
 
 // SpanContext contains identifying trace information about a Span.

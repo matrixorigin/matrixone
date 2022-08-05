@@ -16,10 +16,12 @@ package trace
 
 import (
 	"context"
+	goErrors "errors"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"github.com/matrixorigin/matrixone/pkg/util/errors"
 	"go.uber.org/zap"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -34,13 +36,14 @@ type SpanID uint64
 var gTracerProvider *MOTracerProvider
 var gTracer Tracer
 var gTraceContext context.Context
+var gSpanContext atomic.Value
 
 var ini sync.Once
 
 func Init(ctx context.Context, sysVar *config.SystemVariables, options ...TracerProviderOption) (context.Context, error) {
 
 	// init tool dependence
-	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog, ReportZap, SetLogLevel, logutil.ContextFieldsFunc(ContextFields)})
+	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog, ReportZap, SetLogLevel, ContextField})
 	errors.SetErrorReporter(HandleError)
 
 	// init TraceProvider
@@ -60,12 +63,16 @@ func Init(ctx context.Context, sysVar *config.SystemVariables, options ...Tracer
 	)
 
 	// init Node DefaultContext
-	gTraceContext = ContextWithSpanContext(ctx, SpanContextWithIDs(TraceID(0), SpanID(config.getNodeResource().NodeID)))
+	sc := SpanContextWithIDs(TraceID(1), SpanID(config.getNodeResource().NodeID))
+	gSpanContext.Store(&sc)
+	gTraceContext = ContextWithSpanContext(ctx, sc)
 
 	// init schema
 	InitSchemaByInnerExecutor(config.sqlExecutor)
 
 	initExport(config)
+
+	errors.WithContext(DefaultContext(), goErrors.New("finish trace init"))
 
 	return gTraceContext, nil
 }
@@ -106,6 +113,10 @@ func Start(ctx context.Context, spanName string, opts ...SpanOption) (context.Co
 
 func DefaultContext() context.Context {
 	return gTraceContext
+}
+
+func DefaultSpanContext() *SpanContext {
+	return gSpanContext.Load().(*SpanContext)
 }
 
 func GetNodeResource() *MONodeResource {

@@ -44,18 +44,19 @@ func New(text string) error {
 	return err
 }
 
-func NewWithContext(ctx context.Context, text string) error {
-	stackErr := &withStack{goErrors.New(text), util.Callers(1)}
-	err := &withContext{stackErr, ctx}
+func NewWithContext(ctx context.Context, text string) (err error) {
+	err = &withStack{goErrors.New(text), util.Callers(1)}
+	err = &withContext{err, ctx}
 	GetReportErrorFunc()(ctx, err)
 	return err
 }
 
 type reportErrorFunc func(context.Context, error)
 
+// errorReporter should be trace.HandleError
 var errorReporter atomic.Value
 
-func noopReportError(ctx context.Context, err error) {}
+func noopReportError(context.Context, error) {}
 
 func SetErrorReporter(f reportErrorFunc) {
 	errorReporter.Store(f)

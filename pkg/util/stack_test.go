@@ -28,7 +28,7 @@ func TestCaller(t *testing.T) {
 		args args
 		want string
 	}{
-		{name: "depth_0", args: args{depth: 0}, want: "stack_test.go:23"},
+		{name: "depth_0", args: args{depth: 0}, want: "stack_test.go:35"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

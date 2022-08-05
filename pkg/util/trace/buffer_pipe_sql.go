@@ -154,13 +154,13 @@ func genSpanBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		buf.WriteString(fmt.Sprintf("%d", s.SpanID))
 		buf.WriteString(fmt.Sprintf(", %d", s.TraceID))
 		buf.WriteString(fmt.Sprintf(", %d", s.parent.SpanContext().SpanID))
-		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))                                  //node_d
-		buf.WriteString(fmt.Sprintf(", \"%s\"", moNode.NodeType.String()))                   // node_type
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.tracer.provider.resource.String()))) // resource
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Name.String())))                     // Name
-		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.StartTimeNS).String2(6))) // start_time
-		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.EndTimeNS).String2(6)))   // end_time
-		buf.WriteString(fmt.Sprintf(", %d", s.Duration))                                     // Duration
+		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))                                //node_d
+		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeType.String()))                   // node_type
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.tracer.provider.resource.String()))) // resource
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Name.String())))                     // Name
+		buf.WriteString(fmt.Sprintf(`, "%s"`, nanoSec2Datetime(s.StartTimeNS).String2(6))) // start_time
+		buf.WriteString(fmt.Sprintf(`, "%s"`, nanoSec2Datetime(s.EndTimeNS).String2(6)))   // end_time
+		buf.WriteString(fmt.Sprintf(", %d", s.Duration))                                   // Duration
 		buf.WriteString("),")
 	}
 	return string(buf.Next(buf.Len() - 1))
@@ -182,8 +182,9 @@ func genLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.WriteString(", `node_id`")
 	buf.WriteString(", `node_type`")
 	buf.WriteString(", `timestamp`")
+	buf.WriteString(", `name`")
 	buf.WriteString(", `level`")
-	buf.WriteString(", `code_line`")
+	buf.WriteString(", `caller`")
 	buf.WriteString(", `message`")
 	buf.WriteString(", `extra`")
 	buf.WriteString(") values ")
@@ -198,13 +199,14 @@ func genLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		buf.WriteString("(")
 		buf.WriteString(fmt.Sprintf("%d", s.SpanId))
 		buf.WriteString(fmt.Sprintf(", %d", s.StatementId))
-		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))                                                         // node_id
-		buf.WriteString(fmt.Sprintf(", \"%s\"", moNode.NodeType.String()))                                          // node_type
-		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.Timestamp).String2(6)))                          //Timestamp
-		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Level.String()))                                                  // log level
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(fmt.Sprintf(logStackFormatter.Load().(string), s.CodeLine)))) // CodeLine
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Message)))                                                  // message
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Extra)))                                                    // extra
+		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))                                                     // node_id
+		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeType.String()))                                        // node_type
+		buf.WriteString(fmt.Sprintf(`, "%s"`, nanoSec2Datetime(s.Timestamp).String2(6)))                        // timestamp
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Name)))                                                   // log level
+		buf.WriteString(fmt.Sprintf(`, "%s"`, s.Level.String()))                                                // log level
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(fmt.Sprintf(logStackFormatter.Load().(string), s.Caller)))) // caller
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Message)))                                                // message
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Extra)))                                                  // extra
 		buf.WriteString("),")
 	}
 	return string(buf.Next(buf.Len() - 1))
@@ -226,45 +228,30 @@ func genZapLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.WriteString(", `timestamp`")
 	buf.WriteString(", `name`")
 	buf.WriteString(", `level`")
-	buf.WriteString(", `code_line`")
+	buf.WriteString(", `caller`")
 	buf.WriteString(", `message`")
 	buf.WriteString(", `extra`")
 	buf.WriteString(") values ")
 
 	moNode := GetNodeResource()
 
-	var sc SpanContext
 	for _, item := range in {
 		s, ok := item.(*MOZap)
 		if !ok {
 			panic("Not MOZap")
 		}
 
-		// format extra, and find context
-		buffer, err := s.JsonEncoder.EncodeEntry(s.Entry, s.Fields)
-		if err != nil {
-			// TODO: report err
-		}
-		sc = SpanFromContext(DefaultContext()).SpanContext()
-		for _, f := range s.Fields {
-			if IsSpanField(f) {
-				if val, ok := f.Interface.(*SpanContext); ok {
-					sc = *val
-				}
-			}
-		}
-
 		buf.WriteString("(")
-		buf.WriteString(fmt.Sprintf("%d", sc.SpanID))
-		buf.WriteString(fmt.Sprintf(", %d", sc.TraceID))
-		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))                                         // node_id
-		buf.WriteString(fmt.Sprintf(", \"%s\"", moNode.NodeType.String()))                          // node_type
-		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Entry.Time.Format("2006-01-02 15:04:05.000000"))) // timestamp
-		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Entry.LoggerName))                                // name
-		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Entry.Level.String()))                            // log level
-		buf.WriteString(fmt.Sprintf(", \"%s\"", s.Entry.Caller.TrimmedPath()))                      // CodeLine
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Entry.Message)))                            // message
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(buffer.String())))                            // extra
+		buf.WriteString(fmt.Sprintf("%d", s.SpanContext.SpanID))
+		buf.WriteString(fmt.Sprintf(", %d", s.SpanContext.TraceID))
+		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))                                      // node_id
+		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeType.String()))                         // node_type
+		buf.WriteString(fmt.Sprintf(`, "%s"`, s.Timestamp.Format("2006-01-02 15:04:05.000000"))) // timestamp
+		buf.WriteString(fmt.Sprintf(`, "%s"`, s.LoggerName))                                     // name
+		buf.WriteString(fmt.Sprintf(`, "%s"`, s.Level.String()))                                 // log level
+		buf.WriteString(fmt.Sprintf(`, "%s"`, s.Caller))                                         // caller
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Message)))                                 // message
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Extra)))                                   // extra
 		buf.WriteString("),")
 	}
 	return string(buf.Next(buf.Len() - 1))
@@ -307,18 +294,18 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		buf.WriteString(fmt.Sprintf("%d", s.StatementID))
 		buf.WriteString(fmt.Sprintf(", %d", s.TransactionID))
 		buf.WriteString(fmt.Sprintf(", %d", s.SessionID))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Account)))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.User)))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Host)))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Database)))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Statement)))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.StatementFingerprint)))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.StatementTag)))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Account)))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.User)))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Host)))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Database)))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Statement)))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.StatementFingerprint)))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.StatementTag)))
 		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", moNode.NodeType.String()))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.RequestAt).String2(6)))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Status.String())))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.ExecPlan)))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeType.String()))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, nanoSec2Datetime(s.RequestAt).String2(6)))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Status.String())))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.ExecPlan)))
 		buf.WriteString("),")
 	}
 	return string(buf.Next(buf.Len() - 1))
@@ -359,10 +346,10 @@ func genErrorBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		buf.WriteString(fmt.Sprintf("%d", span.SpanContext().TraceID))
 		buf.WriteString(fmt.Sprintf(", %d", span.SpanContext().SpanID))
 		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", moNode.NodeType.String()))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(s.Error.Error())))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", quote(fmt.Sprintf(errorFormatter.Load().(string), s.Error))))
-		buf.WriteString(fmt.Sprintf(", \"%s\"", nanoSec2Datetime(s.Timestamp).String2(6)))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeType.String()))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Error.Error())))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(fmt.Sprintf(errorFormatter.Load().(string), s.Error))))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, nanoSec2Datetime(s.Timestamp).String2(6)))
 		buf.WriteString("),")
 	}
 	return string(buf.Next(buf.Len() - 1))
@@ -410,6 +397,10 @@ func newBuffer2Sql(opts ...buffer2SqlOption) *buffer2Sql {
 		opt.apply(b)
 	}
 	logutil.Debugf("newBuffer2Sql, Reminder next: %v", b.Reminder.RemindNextAfter())
+	if b.genBatchFunc == nil || b.filterItemFunc == nil || b.Reminder == nil {
+		logutil.Debug("newBuffer2Sql meet nil elem")
+		return nil
+	}
 	return b
 }
 

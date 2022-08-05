@@ -21,8 +21,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const SpanFieldKey = "span"
-
 type Reprer interface {
 	Repr() string
 }

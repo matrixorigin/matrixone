@@ -41,7 +41,7 @@ const (
  timestamp datetime COMMENT "日志时间戳",
  name varchar(1024) COMMENT "组件模块名",
  level varchar(32) COMMENT "日志级别, 例如: DEBUG, INFO, WARN, ERROR",
- code_line varchar(4096) COMMENT "写日志所在代码行",
+ caller varchar(4096) COMMENT "写日志所在代码行",
  message varchar(4096) COMMENT "日志内容/*TODO: 应为text*/",
  extra varchar(4096) COMMENT "日志内容, json结构"
 )`

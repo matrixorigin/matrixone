@@ -45,7 +45,7 @@ var _globalLogger atomic.Value
 
 // init initializes a default zap logger before set up logger.
 func init() {
-	SetLogReporter(&TraceReporter{noopReportLog, noopReportZap, noopLevelSignal, noopContextFields})
+	SetLogReporter(&TraceReporter{noopReportLog, noopReportZap, noopLevelSignal, noopContextField})
 	conf := &LogConfig{Level: "info", Format: "console"}
 	logger, _ := initMOLogger(conf)
 	replaceGlobalLogger(logger)
@@ -62,12 +62,13 @@ func replaceGlobalLogger(logger *zap.Logger) {
 }
 
 type LogConfig struct {
-	Level      string `toml:"level"`
-	Format     string `toml:"format"`
-	Filename   string `toml:"filename"`
-	MaxSize    int    `toml:"max-size"`
-	MaxDays    int    `toml:"max-days"`
-	MaxBackups int    `toml:"max-backups"`
+	Level        string `toml:"level"`
+	Format       string `toml:"format"`
+	Filename     string `toml:"filename"`
+	MaxSize      int    `toml:"max-size"`
+	MaxDays      int    `toml:"max-days"`
+	MaxBackups   int    `toml:"max-backups"`
+	EnableReport bool   `toml:"enable-report"`
 }
 
 func (cfg *LogConfig) getSyncer() zapcore.WriteSyncer {

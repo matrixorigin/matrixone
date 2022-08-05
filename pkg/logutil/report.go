@@ -25,30 +25,33 @@ import (
 // logReporter should be trace.ReportLog
 var logReporter atomic.Value
 
+// zapReporter should be trace.ReportZap
 var zapReporter atomic.Value
 
-// levelChangeFunc should be trace.SetLogLevel
+// levelChangeFunc should be trace.SetLogLevel function
 var levelChangeFunc atomic.Value
 
-// contextFields
-var contextFields atomic.Value
+// contextField should be trace.ContextField function
+var contextField atomic.Value
 
 type TraceReporter struct {
-	ReportLog     reportLogFunc
-	ReportZap     reportZapFunc
-	LevelSignal   levelChangeSignal
-	ContextFields ContextFieldsFunc
+	ReportLog    reportLogFunc
+	ReportZap    reportZapFunc
+	LevelSignal  levelChangeSignal
+	ContextField contextFieldFunc
 }
 
 type reportLogFunc func(context.Context, zapcore.Level, int, string, ...any)
-type reportZapFunc func(zapcore.Encoder, zapcore.Entry, []zapcore.Field)
+type reportZapFunc func(zapcore.Encoder, zapcore.Entry, []zapcore.Field) (*buffer.Buffer, error)
 type levelChangeSignal func(zapcore.LevelEnabler)
-type ContextFieldsFunc func(context.Context) zap.Option
+type contextFieldFunc func(context.Context) zap.Field
 
 func noopReportLog(context.Context, zapcore.Level, int, string, ...any) {}
-func noopReportZap(zapcore.Encoder, zapcore.Entry, []zapcore.Field)     {}
-func noopLevelSignal(zapcore.LevelEnabler)                              {}
-func noopContextFields(context.Context) zap.Option                      { return zap.Fields() }
+func noopReportZap(zapcore.Encoder, zapcore.Entry, []zapcore.Field) (*buffer.Buffer, error) {
+	return buffer.NewPool().Get(), nil
+}
+func noopLevelSignal(zapcore.LevelEnabler)       {}
+func noopContextField(context.Context) zap.Field { return zap.String("span", "{}") }
 
 func SetLogReporter(r *TraceReporter) {
 	if r.ReportLog != nil {
@@ -60,8 +63,8 @@ func SetLogReporter(r *TraceReporter) {
 	if r.LevelSignal != nil {
 		levelChangeFunc.Store(r.LevelSignal)
 	}
-	if r.ContextFields != nil {
-		contextFields.Store(r.ContextFields)
+	if r.ContextField != nil {
+		contextField.Store(r.ContextField)
 	}
 }
 
@@ -77,8 +80,8 @@ func GetLevelChangeFunc() levelChangeSignal {
 	return levelChangeFunc.Load().(levelChangeSignal)
 }
 
-func ContextFields() ContextFieldsFunc {
-	return contextFields.Load().(ContextFieldsFunc)
+func GetContextFieldFunc() contextFieldFunc {
+	return contextField.Load().(contextFieldFunc)
 }
 
 var _ zapcore.Encoder = (*TraceLogEncoder)(nil)
@@ -94,12 +97,11 @@ func (e *TraceLogEncoder) Clone() zapcore.Encoder {
 }
 
 func (e *TraceLogEncoder) EncodeEntry(entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
-	GetReportZapFunc()(e.Encoder, entry, fields)
-	return buffer.NewPool().Get(), nil
+	return GetReportZapFunc()(e.Encoder, entry, fields)
 }
 
 func newTraceLogEncoder() *TraceLogEncoder {
-	// default like zap.NewProductionEncoderConfig()
+	// default like zap.NewProductionEncoderConfig(), but clean core-elems ENCODE
 	e := &TraceLogEncoder{
 		Encoder: zapcore.NewJSONEncoder(
 			zapcore.EncoderConfig{

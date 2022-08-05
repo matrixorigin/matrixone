@@ -25,13 +25,19 @@ import (
 // ReportError at the mean time.
 // If err is nil, WithContext returns nil.
 func WithContext(ctx context.Context, err error) error {
+	return ContextErrWithDepth(ctx, err, 1)
+}
+
+func ContextErrWithDepth(ctx context.Context, err error, depth int) error {
 	if err == nil {
 		return nil
 	}
-	stackErr := &withStack{cause: err, Stack: util.Callers(1)}
-	e := &withContext{cause: stackErr, ctx: ctx}
+	if _, ok := err.(StackTracer); !ok {
+		err = &withStack{cause: err, Stack: util.Callers(depth + 1)}
+	}
+	err = &withContext{cause: err, ctx: ctx}
 	GetReportErrorFunc()(ctx, err)
-	return e
+	return err
 }
 
 // ContextTracer retrieves the context.Context
@@ -69,5 +75,5 @@ type withContext struct {
 func (w *withContext) Error() string                 { return w.cause.Error() }
 func (w *withContext) Cause() error                  { return w.cause }
 func (w *withContext) Unwrap() error                 { return w.cause }
-func (w *withContext) Format(s fmt.State, verb rune) { errbase.FormatError(w, s, verb) }
 func (w *withContext) Context() context.Context      { return w.ctx }
+func (w *withContext) Format(s fmt.State, verb rune) { errbase.FormatError(w, s, verb) }
