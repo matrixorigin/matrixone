@@ -2159,10 +2159,9 @@ type CreateUser struct {
 	statementImpl
 	IfNotExists bool
 	Users       []*User
-	Roles       []*Role
-	TlsOpts     []TlsOption
-	ResOpts     []ResourceOption
+	Role        *Role
 	MiscOpts    []UserMiscOption
+	// comment or attribute
 }
 
 func (node *CreateUser) Format(ctx *FmtCtx) {
@@ -2178,31 +2177,13 @@ func (node *CreateUser) Format(ctx *FmtCtx) {
 			prefix = ", "
 		}
 	}
-	if len(node.TlsOpts) > 0 {
-		ctx.WriteString(" require ")
-		prefix := ""
-		for _, t := range node.TlsOpts {
-			ctx.WriteString(prefix)
-			t.Format(ctx)
-			prefix = " and "
-		}
-	}
-	if len(node.ResOpts) > 0 {
-		ctx.WriteString(" with")
-		for _, r := range node.ResOpts {
-			ctx.WriteByte(' ')
-			r.Format(ctx)
-		}
-	}
 }
 
-func NewCreateUser(ife bool, u []*User, r []*Role, tls []TlsOption, res []ResourceOption, misc []UserMiscOption) *CreateUser {
+func NewCreateUser(ife bool, u []*User, r *Role, misc []UserMiscOption) *CreateUser {
 	return &CreateUser{
 		IfNotExists: ife,
 		Users:       u,
-		Roles:       r,
-		TlsOpts:     tls,
-		ResOpts:     res,
+		Role:        r,
 		MiscOpts:    misc,
 	}
 }

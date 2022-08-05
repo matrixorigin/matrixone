@@ -3197,15 +3197,28 @@ view_recursive_opt:
 |	RECURSIVE
 
 create_user_stmt:
-    CREATE USER not_exists_opt user_spec_list require_clause_opt conn_options
+    CREATE USER not_exists_opt user_spec_list DEFAULT ROLE account_role_name password_lock_option_list comment_or_attribute_opt
     {
         $$ = &tree.CreateUser{
             IfNotExists: $3,
             Users: $4,
-            TlsOpts: $5,
-            ResOpts: $6,
+            Role: $7,
+            MiscOpts: $8,
         }
     }
+
+account_role_name:
+    ID
+    {
+
+    }
+
+password_lock_option_list:
+
+password_lock_option:
+
+comment_or_attribute_opt:
+
 
 conn_options:
     {
