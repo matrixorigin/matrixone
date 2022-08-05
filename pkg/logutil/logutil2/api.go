@@ -23,63 +23,57 @@ import (
 )
 
 func Debug(ctx context.Context, msg string, fields ...zap.Field) {
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Debug(msg, fields...)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), logutil.ContextFields()(ctx)).Debug(msg, fields...)
 }
 
 func Info(ctx context.Context, msg string, fields ...zap.Field) {
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Info(msg, fields...)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), logutil.ContextFields()(ctx)).Info(msg, fields...)
 }
 
 func Warn(ctx context.Context, msg string, fields ...zap.Field) {
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Warn(msg, fields...)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), logutil.ContextFields()(ctx)).Warn(msg, fields...)
 }
 
 func Error(ctx context.Context, msg string, fields ...zap.Field) {
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Error(msg, fields...)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), logutil.ContextFields()(ctx)).Error(msg, fields...)
 }
 
 func Panic(ctx context.Context, msg string, fields ...zap.Field) {
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Panic(msg, fields...)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), logutil.ContextFields()(ctx)).Panic(msg, fields...)
 }
 
 func Fatal(ctx context.Context, msg string, fields ...zap.Field) {
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Fatal(msg, fields...)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), logutil.ContextFields()(ctx)).Fatal(msg, fields...)
 }
 
 // Debugf only use in develop mode
 func Debugf(ctx context.Context, msg string, fields ...interface{}) {
-	logutil.GetReportLogFunc()(ctx, zapcore.DebugLevel, 1, msg, fields...)
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Debugf(msg, fields...)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), logutil.ContextFields()(ctx)).Sugar().Debugf(msg, fields...)
 }
 
 // Infof only use in develop mode
 func Infof(ctx context.Context, msg string, fields ...interface{}) {
-	logutil.GetReportLogFunc()(ctx, zapcore.InfoLevel, 1, msg, fields...)
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), zap.Hooks(hook)).Sugar().Infof(msg, fields...)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), logutil.ContextFields()(ctx)).Sugar().Infof(msg, fields...)
 }
 
 // Warnf only use in develop mode
 func Warnf(ctx context.Context, msg string, fields ...interface{}) {
-	logutil.GetReportLogFunc()(ctx, zapcore.WarnLevel, 1, msg, fields...)
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Warnf(msg, fields...)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), logutil.ContextFields()(ctx)).Sugar().Warnf(msg, fields...)
 }
 
 // Errorf only use in develop mode
 func Errorf(ctx context.Context, msg string, fields ...interface{}) {
-	logutil.GetReportLogFunc()(ctx, zapcore.ErrorLevel, 1, msg, fields...)
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), zap.AddStacktrace(zap.ErrorLevel)).Sugar().Errorf(msg, fields...)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), logutil.ContextFields()(ctx), zap.AddStacktrace(zap.ErrorLevel)).Sugar().Errorf(msg, fields...)
 }
 
 // Panicf only use in develop mode
 func Panicf(ctx context.Context, msg string, fields ...interface{}) {
-	logutil.GetReportLogFunc()(ctx, zapcore.PanicLevel, 1, msg, fields...)
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Panicf(msg, fields...)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), logutil.ContextFields()(ctx)).Sugar().Panicf(msg, fields...)
 }
 
 // Fatalf only use in develop mode
 func Fatalf(ctx context.Context, msg string, fields ...interface{}) {
-	logutil.GetReportLogFunc()(ctx, zapcore.FatalLevel, 1, msg, fields...)
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Fatalf(msg, fields...)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), logutil.ContextFields()(ctx)).Sugar().Fatalf(msg, fields...)
 }
 
 // hook can catch zapcore.Entry, which can add by WithOptions(zap.Hooks(hook))

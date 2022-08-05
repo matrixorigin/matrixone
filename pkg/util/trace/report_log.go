@@ -96,6 +96,10 @@ func ContextField(ctx context.Context) zap.Field {
 	return SpanField(SpanFromContext(ctx).SpanContext())
 }
 
+func ContextFields(ctx context.Context) zap.Option {
+	return zap.Fields(ContextField(ctx))
+}
+
 var _ batchpipe.HasName = &MOZap{}
 var _ IBuffer2SqlItem = &MOZap{}
 

@@ -40,7 +40,7 @@ var ini sync.Once
 func Init(ctx context.Context, sysVar *config.SystemVariables, options ...TracerProviderOption) (context.Context, error) {
 
 	// init tool dependence
-	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog, ReportZap, SetLogLevel})
+	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog, ReportZap, SetLogLevel, logutil.ContextFieldsFunc(ContextFields)})
 	errors.SetErrorReporter(HandleError)
 
 	// init TraceProvider

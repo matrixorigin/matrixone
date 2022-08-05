@@ -16,6 +16,7 @@ package logutil
 
 import (
 	"context"
+	"go.uber.org/zap"
 	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
 	"sync/atomic"
@@ -26,22 +27,28 @@ var logReporter atomic.Value
 
 var zapReporter atomic.Value
 
-// logReporter should be trace.SetLogLevel
+// levelChangeFunc should be trace.SetLogLevel
 var levelChangeFunc atomic.Value
 
+// contextFields
+var contextFields atomic.Value
+
 type TraceReporter struct {
-	ReportLog   reportLogFunc
-	ReportZap   reportZapFunc
-	LevelSignal levelChangeSignal
+	ReportLog     reportLogFunc
+	ReportZap     reportZapFunc
+	LevelSignal   levelChangeSignal
+	ContextFields ContextFieldsFunc
 }
 
 type reportLogFunc func(context.Context, zapcore.Level, int, string, ...any)
 type reportZapFunc func(zapcore.Encoder, zapcore.Entry, []zapcore.Field)
 type levelChangeSignal func(zapcore.LevelEnabler)
+type ContextFieldsFunc func(context.Context) zap.Option
 
 func noopReportLog(context.Context, zapcore.Level, int, string, ...any) {}
 func noopReportZap(zapcore.Encoder, zapcore.Entry, []zapcore.Field)     {}
 func noopLevelSignal(zapcore.LevelEnabler)                              {}
+func noopContextFields(context.Context) zap.Option                      { return zap.Fields() }
 
 func SetLogReporter(r *TraceReporter) {
 	if r.ReportLog != nil {
@@ -52,6 +59,9 @@ func SetLogReporter(r *TraceReporter) {
 	}
 	if r.LevelSignal != nil {
 		levelChangeFunc.Store(r.LevelSignal)
+	}
+	if r.ContextFields != nil {
+		contextFields.Store(r.ContextFields)
 	}
 }
 
@@ -67,10 +77,20 @@ func GetLevelChangeFunc() levelChangeSignal {
 	return levelChangeFunc.Load().(levelChangeSignal)
 }
 
+func ContextFields() ContextFieldsFunc {
+	return contextFields.Load().(ContextFieldsFunc)
+}
+
 var _ zapcore.Encoder = (*TraceLogEncoder)(nil)
 
 type TraceLogEncoder struct {
 	zapcore.Encoder
+}
+
+func (e *TraceLogEncoder) Clone() zapcore.Encoder {
+	return &TraceLogEncoder{
+		e.Encoder.Clone(),
+	}
 }
 
 func (e *TraceLogEncoder) EncodeEntry(entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {

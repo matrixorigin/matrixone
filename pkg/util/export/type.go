@@ -2,9 +2,7 @@ package export
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"reflect"
 	"sync/atomic"
 )
 
@@ -32,7 +30,6 @@ type processorHolder struct {
 }
 
 func SetGlobalBatchProcessor(p BatchProcessor) {
-	logutil2.Debugf(nil, "SetGlobalBatchProcessor type: %v", reflect.ValueOf(p).Type())
 	gBatchProcessor.Store(&processorHolder{p: p})
 }
 
