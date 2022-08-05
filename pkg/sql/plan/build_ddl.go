@@ -32,7 +32,34 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		Temporary:   stmt.Temporary,
 		TableDef: &TableDef{
 			Name: string(stmt.Name.ObjectName),
+			Cols: []*plan.ColDef{
+				{
+					Name: "a",
+					Alg:  plan.CompressType_Lz4,
+					Typ: &plan.Type{
+						Id: plan.Type_INT8,
+					},
+					Default: &plan.Default{
+						NullAbility:  false,
+						Expr:         makePlan2Int64ConstExprWithType(1),
+						OriginString: "1",
+					},
+				},
+			},
 		},
+	}
+
+	// get database name
+	if len(stmt.Name.SchemaName) == 0 {
+		createTable.Database = ""
+	} else {
+		createTable.Database = string(stmt.Name.SchemaName)
+	}
+
+	// check view statement
+	_, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.AsSource)
+	if err != nil {
+		return nil, err
 	}
 
 	// we use view as CTE
@@ -298,6 +325,31 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	}
 	if len(stmt.Names) != 1 {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "support drop one table now")
+	}
+	dropTable.Database = string(stmt.Names[0].SchemaName)
+	if dropTable.Database == "" {
+		dropTable.Database = ctx.DefaultDatabase()
+	}
+	dropTable.Table = string(stmt.Names[0].ObjectName)
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_DROP_TABLE,
+				Definition: &plan.DataDefinition_DropTable{
+					DropTable: dropTable,
+				},
+			},
+		},
+	}, nil
+}
+
+func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
+	dropTable := &plan.DropTable{
+		IfExists: stmt.IfExists,
+	}
+	if len(stmt.Names) != 1 {
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "support drop one view now")
 	}
 	dropTable.Database = string(stmt.Names[0].SchemaName)
 	if dropTable.Database == "" {

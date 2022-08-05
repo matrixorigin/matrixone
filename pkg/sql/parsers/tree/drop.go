@@ -40,7 +40,7 @@ func NewDropDatabase(n Identifier, i bool) *DropDatabase {
 	}
 }
 
-//DROP Table statement
+// DropTable DROP Table statement
 type DropTable struct {
 	statementImpl
 	IfExists bool
@@ -58,6 +58,29 @@ func (node *DropTable) Format(ctx *FmtCtx) {
 
 func NewDropTable(i bool, n TableNames) *DropTable {
 	return &DropTable{
+		IfExists: i,
+		Names:    n,
+	}
+}
+
+// DropView DROP View statement
+type DropView struct {
+	statementImpl
+	IfExists bool
+	Names    TableNames
+}
+
+func (node *DropView) Format(ctx *FmtCtx) {
+	ctx.WriteString("drop view")
+	if node.IfExists {
+		ctx.WriteString(" if exists")
+	}
+	ctx.WriteByte(' ')
+	node.Names.Format(ctx)
+}
+
+func NewDropView(i bool, n TableNames) *DropView {
+	return &DropView{
 		IfExists: i,
 		Names:    n,
 	}
