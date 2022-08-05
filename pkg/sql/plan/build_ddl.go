@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,6 +34,26 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 			Name: string(stmt.Name.ObjectName),
 		},
 	}
+
+	// we use view as CTE
+	bytes, err := json.Marshal(tree.CTE{
+		Name: &tree.AliasClause{
+			Alias: stmt.Name.ObjectName,
+			Cols:  stmt.ColNames,
+		},
+		Stmt: stmt.AsSource,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_View{
+			View: &plan.ViewDef{
+				Stmt: bytes,
+			},
+		},
+	})
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
