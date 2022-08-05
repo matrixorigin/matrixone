@@ -45,3 +45,83 @@ a
 18446744073709551613
 18446744073709551614
 18446744073709551615
+
+drop table if exists t1;
+create table t1(a int, b int);
+insert into t1 values(), ();
+select * from t1;
+a	b
+null	null
+null	null
+
+drop table if exists t1;
+create table t1(a int default (1+12), b int);
+insert into t1(b) values(1), (1);
+select * from t1;
+a	b
+13	1
+13	1
+
+drop table if exists t1;
+create table t1(a int primary key default (1+12));
+insert into t1 values();
+select * from t1;
+a
+13
+
+drop table if exists t1;
+create table t1(a int, b int);
+insert into t1(a) values(1), (2);
+select * from t1;
+a	b
+1	null
+2	null
+
+drop table if exists t1;
+create table t1 (a int);
+insert into t1 values (1+2), (2*2);
+select * from t1;
+a
+3
+4
+
+drop table if exists t1;
+create table t1 (a datetime default now());
+insert into t1 values();
+insert into t1 values(now());
+
+drop table if exists t1;
+create table t1 (a int);
+insert into t1 values(1+2*3), (666/2);
+select * from t1;
+a
+7
+333
+
+drop table if exists t;
+CREATE TABLE t (i1 INT, d1 DOUBLE, e2 DECIMAL(5,2));
+INSERT INTO t VALUES ( 6, 6.0, 10.0/3), ( null, 9.0, 10.0/3), ( 1, null, 10.0/3), ( 2, 2.0, null );
+select * from t;
+i1	d1	e2
+6	6.0	3.33
+null	9.0	3.33
+1	null	3.33
+2	2.0	null
+
+drop table if exists t1;
+create table t1 (a date);
+insert into t1 values(DATE("2017-06-15 09:34:21")),(DATE("2019-06-25 10:12:21")),(DATE("2019-06-25 18:20:49"));
+select * from t1;
+a
+2017-06-15
+2019-06-25
+2019-06-25
+
+drop table if exists t1;
+create table t1 (a date default DATE("2017-06-15 09:34:21"));
+insert into t1 (a) values (default), (default), (default);
+select * from t1;
+a
+2017-06-15
+2017-06-15
+2017-06-15

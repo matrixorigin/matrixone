@@ -32,10 +32,17 @@ func New(m *mheap.Mheap) *Process {
 	}
 }
 
+func NewWithAnalyze(p *Process, ctx context.Context, regNumber int, anals []*AnalyzeInfo) *Process {
+	proc := NewFromProc(p, ctx, regNumber)
+	proc.AnalInfos = make([]*AnalyzeInfo, len(anals))
+	copy(proc.AnalInfos, anals)
+	return proc
+}
+
 // NewFromProc create a new Process based on another process.
-func NewFromProc(p *Process, regNumber int) *Process {
+func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc := new(Process)
-	ctx, cancel := context.WithCancel(context.Background())
+	newctx, cancel := context.WithCancel(ctx)
 	proc.Id = p.Id
 	proc.Mp = p.Mp
 	proc.Lim = p.Lim
@@ -48,7 +55,7 @@ func NewFromProc(p *Process, regNumber int) *Process {
 	proc.Reg.MergeReceivers = make([]*WaitRegister, regNumber)
 	for i := 0; i < regNumber; i++ {
 		proc.Reg.MergeReceivers[i] = &WaitRegister{
-			Ctx: ctx,
+			Ctx: newctx,
 			Ch:  make(chan *batch.Batch, 1),
 		}
 	}
