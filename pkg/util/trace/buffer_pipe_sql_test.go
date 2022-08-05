@@ -29,7 +29,7 @@ var testBaseBuffer2SqlOption = []buffer2SqlOption{bufferWithSizeThreshold(1 * KB
 var nodeStateSpanIdStr string
 
 func noopReportLog(context.Context, zapcore.Level, int, string, ...any) {}
-func noopReportError(context.Context, error)                            {}
+func noopReportError(context.Context, error, int)                       {}
 
 func init() {
 	setup()
@@ -161,7 +161,7 @@ func Test_batchSqlHandler_genErrorBatchSql(t1 *testing.T) {
 			},
 			want: `insert into system.error_info (` +
 				"`statement_id`, `span_id`, `node_id`, `node_type`, `err_code`, `stack`, `timestamp`" +
-				`) values (` + nodeStateSpanIdStr + `, 0, "Node", "test1", "test1", "0001-01-01 00:00:00.000000")`,
+				`) values (` + nodeStateSpanIdStr + `, 0, "Node", "test1", "test1", "1970-01-01 00:00:00.000000 +0000")`,
 		},
 		{
 			name: "multi_error",
@@ -176,9 +176,9 @@ func Test_batchSqlHandler_genErrorBatchSql(t1 *testing.T) {
 			},
 			want: `insert into system.error_info (` +
 				"`statement_id`, `span_id`, `node_id`, `node_type`, `err_code`, `stack`, `timestamp`" +
-				`) values (` + nodeStateSpanIdStr + `, 0, "Node", "test1", "test1", "0001-01-01 00:00:00.000000")` +
-				`,(` + nodeStateSpanIdStr + `, 0, "Node", "test2: test1", "test2: test1", "0001-01-01 00:00:00.001001")` +
-				`,(` + newStatementSpanIdStr + `, 0, "Node", "test2: test1", "test2: test1", "0001-01-01 00:00:00.001001")`,
+				`) values (` + nodeStateSpanIdStr + `, 0, "Node", "test1", "test1", "1970-01-01 00:00:00.000000 +0000")` +
+				`,(` + nodeStateSpanIdStr + `, 0, "Node", "test2: test1", "test2: test1", "1970-01-01 00:00:00.001001 +0000")` +
+				`,(` + newStatementSpanIdStr + `, 0, "Node", "test2: test1", "test2: test1", "1970-01-01 00:00:00.001001 +0000")`,
 		},
 	}
 	errorFormatter.Store("%v")
@@ -222,7 +222,7 @@ func Test_batchSqlHandler_genLogBatchSql(t1 *testing.T) {
 			},
 			want: `insert into system.log_info (` +
 				"`span_id`, `statement_id`, `node_id`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
-				`) values (1, 1, 0, "Node", "0001-01-01 00:00:00.000000", "", "info", "Test_batchSqlHandler_genLogBatchSql", "info message", "{}")`,
+				`) values (1, 1, 0, "Node", "1970-01-01 00:00:00.000000 +0000", "", "info", "Test_batchSqlHandler_genLogBatchSql", "info message", "{}")`,
 		},
 		{
 			name: "multi",
@@ -251,8 +251,8 @@ func Test_batchSqlHandler_genLogBatchSql(t1 *testing.T) {
 			},
 			want: `insert into system.log_info (` +
 				"`span_id`, `statement_id`, `node_id`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
-				`) values (1, 1, 0, "Node", "0001-01-01 00:00:00.000000", "", "info", "Test_batchSqlHandler_genLogBatchSql", "info message", "{}")` +
-				`,(1, 1, 0, "Node", "0001-01-01 00:00:00.001001", "", "debug", "Test_batchSqlHandler_genLogBatchSql", "debug message", "{}")`,
+				`) values (1, 1, 0, "Node", "1970-01-01 00:00:00.000000 +0000", "", "info", "Test_batchSqlHandler_genLogBatchSql", "info message", "{}")` +
+				`,(1, 1, 0, "Node", "1970-01-01 00:00:00.001001 +0000", "", "debug", "Test_batchSqlHandler_genLogBatchSql", "debug message", "{}")`,
 		},
 	}
 	logStackFormatter.Store("%n")
@@ -299,7 +299,7 @@ func Test_batchSqlHandler_genSpanBatchSql(t1 *testing.T) {
 			},
 			want: `insert into system.span_info (` +
 				"`span_id`, `statement_id`, `parent_span_id`, `node_id`, `node_type`, `resource`, `name`, `start_time`, `end_time`, `duration`" +
-				`) values (1, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "0001-01-01 00:00:00.000000", "0001-01-01 00:00:00.000001", 1000)`,
+				`) values (1, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "1970-01-01 00:00:00.000000 +0000", "1970-01-01 00:00:00.000001 +0000", 1000)`,
 		},
 		{
 			name: "multi_span",
@@ -326,14 +326,14 @@ func Test_batchSqlHandler_genSpanBatchSql(t1 *testing.T) {
 			},
 			want: `insert into system.span_info (` +
 				"`span_id`, `statement_id`, `parent_span_id`, `node_id`, `node_type`, `resource`, `name`, `start_time`, `end_time`, `duration`" +
-				`) values (1, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "0001-01-01 00:00:00.000000", "0001-01-01 00:00:00.000001", 1000)` +
-				`,(2, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span2", "0001-01-01 00:00:00.000001", "0001-01-01 00:00:00.001000", 999000)`,
+				`) values (1, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "1970-01-01 00:00:00.000000 +0000", "1970-01-01 00:00:00.000001 +0000", 1000)` +
+				`,(2, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span2", "1970-01-01 00:00:00.000001 +0000", "1970-01-01 00:00:00.001000 +0000", 999000)`,
 		},
 	}
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
 			if got := genSpanBatchSql(tt.args.in, tt.args.buf); got != tt.want {
-				t1.Errorf("genSpanBatchSql() = %v, want %v", got, tt.want)
+				t1.Errorf("genSpanBatchSql() = %v,\n want %v", got, tt.want)
 			}
 		})
 	}
@@ -372,7 +372,7 @@ func Test_batchSqlHandler_genStatementBatchSql(t1 *testing.T) {
 			},
 			want: `insert into system.statement_info (` +
 				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_id`, `node_type`, `request_at`, `status`, `exec_plan`" +
-				`) values (1, 1, 1, "MO", "moroot", "", "system", "show tables", "show tables", "", 0, "Node", "0001-01-01 00:00:00.000000", "Running", "")`,
+				`) values (1, 1, 1, "MO", "moroot", "", "system", "show tables", "show tables", "", 0, "Node", "1970-01-01 00:00:00.000000 +0000", "Running", "")`,
 		},
 		{
 			name: "multi_statement",
@@ -411,8 +411,8 @@ func Test_batchSqlHandler_genStatementBatchSql(t1 *testing.T) {
 			},
 			want: `insert into system.statement_info (` +
 				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_id`, `node_type`, `request_at`, `status`, `exec_plan`" +
-				`) values (1, 1, 1, "MO", "moroot", "", "system", "show tables", "show tables", "", 0, "Node", "0001-01-01 00:00:00.000000", "Running", "")` +
-				`,(2, 1, 1, "MO", "moroot", "", "system", "show databases", "show databases", "dcl", 0, "Node", "0001-01-01 00:00:00.000001", "Failed", "")`,
+				`) values (1, 1, 1, "MO", "moroot", "", "system", "show tables", "show tables", "", 0, "Node", "1970-01-01 00:00:00.000000 +0000", "Running", "")` +
+				`,(2, 1, 1, "MO", "moroot", "", "system", "show databases", "show databases", "dcl", 0, "Node", "1970-01-01 00:00:00.000001 +0000", "Failed", "")`,
 		},
 	}
 	for _, tt := range tests {
@@ -488,7 +488,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genErrorBatchSql,
 			want: `insert into system.error_info (` +
 				"`statement_id`, `span_id`, `node_id`, `node_type`, `err_code`, `stack`, `timestamp`" +
-				`) values (` + nodeStateSpanIdStr + `, 0, "Node", "test1", "test1", "0001-01-01 00:00:00.000000")`,
+				`) values (` + nodeStateSpanIdStr + `, 0, "Node", "test1", "test1", "1970-01-01 00:00:00.000000 +0000")`,
 		},
 		{
 			name:   "multi_error",
@@ -503,8 +503,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genErrorBatchSql,
 			want: `insert into system.error_info (` +
 				"`statement_id`, `span_id`, `node_id`, `node_type`, `err_code`, `stack`, `timestamp`" +
-				`) values (` + nodeStateSpanIdStr + `, 0, "Node", "test1", "test1", "0001-01-01 00:00:00.000000")` +
-				`,(` + nodeStateSpanIdStr + `, 0, "Node", "test2: test1", "test2: test1", "0001-01-01 00:00:00.001001")`,
+				`) values (` + nodeStateSpanIdStr + `, 0, "Node", "test1", "test1", "1970-01-01 00:00:00.000000 +0000")` +
+				`,(` + nodeStateSpanIdStr + `, 0, "Node", "test2: test1", "test2: test1", "1970-01-01 00:00:00.001001 +0000")`,
 		},
 		{
 			name:   "single_log",
@@ -526,7 +526,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genLogBatchSql,
 			want: `insert into system.log_info (` +
 				"`span_id`, `statement_id`, `node_id`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
-				`) values (1, 1, 0, "Node", "0001-01-01 00:00:00.000000", "", "info", "Test_buffer2Sql_GetBatch_AllType", "info message", "{}")`,
+				`) values (1, 1, 0, "Node", "1970-01-01 00:00:00.000000 +0000", "", "info", "Test_buffer2Sql_GetBatch_AllType", "info message", "{}")`,
 		},
 		{
 			name:   "multi_log",
@@ -557,8 +557,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genLogBatchSql,
 			want: `insert into system.log_info (` +
 				"`span_id`, `statement_id`, `node_id`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
-				`) values (1, 1, 0, "Node", "0001-01-01 00:00:00.000000", "", "info", "Test_buffer2Sql_GetBatch_AllType", "info message", "{}")` +
-				`,(1, 1, 0, "Node", "0001-01-01 00:00:00.001001", "", "debug", "Test_buffer2Sql_GetBatch_AllType", "debug message", "{}")`,
+				`) values (1, 1, 0, "Node", "1970-01-01 00:00:00.000000 +0000", "", "info", "Test_buffer2Sql_GetBatch_AllType", "info message", "{}")` +
+				`,(1, 1, 0, "Node", "1970-01-01 00:00:00.001001 +0000", "", "debug", "Test_buffer2Sql_GetBatch_AllType", "debug message", "{}")`,
 		},
 		{
 			name:   "single_span",
@@ -579,7 +579,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genSpanBatchSql,
 			want: `insert into system.span_info (` +
 				"`span_id`, `statement_id`, `parent_span_id`, `node_id`, `node_type`, `resource`, `name`, `start_time`, `end_time`, `duration`" +
-				`) values (1, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "0001-01-01 00:00:00.000000", "0001-01-01 00:00:00.000001", 1000)`,
+				`) values (1, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "1970-01-01 00:00:00.000000 +0000", "1970-01-01 00:00:00.000001 +0000", 1000)`,
 		},
 		{
 			name:   "multi_span",
@@ -608,8 +608,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genSpanBatchSql,
 			want: `insert into system.span_info (` +
 				"`span_id`, `statement_id`, `parent_span_id`, `node_id`, `node_type`, `resource`, `name`, `start_time`, `end_time`, `duration`" +
-				`) values (1, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "0001-01-01 00:00:00.000000", "0001-01-01 00:00:00.000001", 1000)` +
-				`,(2, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span2", "0001-01-01 00:00:00.000001", "0001-01-01 00:00:00.001000", 999000)`,
+				`) values (1, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "1970-01-01 00:00:00.000000 +0000", "1970-01-01 00:00:00.000001 +0000", 1000)` +
+				`,(2, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span2", "1970-01-01 00:00:00.000001 +0000", "1970-01-01 00:00:00.001000 +0000", 999000)`,
 		},
 		{
 			name:   "single_statement",
@@ -636,7 +636,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genStatementBatchSql,
 			want: `insert into system.statement_info (` +
 				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_id`, `node_type`, `request_at`, `status`, `exec_plan`" +
-				`) values (1, 1, 1, "MO", "moroot", "", "system", "show tables", "show tables", "", 0, "Node", "0001-01-01 00:00:00.000000", "Running", "")`,
+				`) values (1, 1, 1, "MO", "moroot", "", "system", "show tables", "show tables", "", 0, "Node", "1970-01-01 00:00:00.000000 +0000", "Running", "")`,
 		},
 		{
 			name:   "multi_statement",
@@ -677,8 +677,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genStatementBatchSql,
 			want: `insert into system.statement_info (` +
 				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_id`, `node_type`, `request_at`, `status`, `exec_plan`" +
-				`) values (1, 1, 1, "MO", "moroot", "", "system", "show tables", "show tables", "", 0, "Node", "0001-01-01 00:00:00.000000", "Running", "")` +
-				`,(2, 1, 1, "MO", "moroot", "", "system", "show databases", "show databases", "dcl", 0, "Node", "0001-01-01 00:00:00.000001", "Failed", "")`,
+				`) values (1, 1, 1, "MO", "moroot", "", "system", "show tables", "show tables", "", 0, "Node", "1970-01-01 00:00:00.000000 +0000", "Running", "")` +
+				`,(2, 1, 1, "MO", "moroot", "", "system", "show databases", "show databases", "dcl", 0, "Node", "1970-01-01 00:00:00.000001 +0000", "Failed", "")`,
 		},
 	}
 
@@ -698,8 +698,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			if got := b.(*buffer2Sql).genBatchFunc; reflect.ValueOf(got).Pointer() != reflect.ValueOf(tt.wantFunc).Pointer() {
 				t.Errorf("buffer2Sql's genBatchFunc = %v, want %v", got, tt.wantFunc)
 			}
-			if got := b.GetBatch(tt.args.buf); got != tt.want {
-				t.Errorf("GetBatch() = %v, want %v", got, tt.want)
+			if got := b.GetBatch(tt.args.buf); got.(string) != tt.want {
+				t.Errorf("GetBatch() = %v,\n want %v", got, tt.want)
 			}
 		})
 	}

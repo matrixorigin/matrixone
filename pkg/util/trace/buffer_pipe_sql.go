@@ -508,5 +508,5 @@ func nanoSec2Datetime(t util.TimeMono) types.Datetime {
 // nanoSec2Datetime implement container/types/datetime.go Datetime.String2
 func nanoSec2DatetimeString(t util.TimeMono) string {
 	sec, nsec := t/1e9, t%1e9
-	return time.Unix(int64(sec), int64(nsec)).Format("2006-01-02 15:04:05.000000")
+	return time.Unix(int64(sec), int64(nsec)).UTC().Format("2006-01-02 15:04:05.000000 +0000")
 }

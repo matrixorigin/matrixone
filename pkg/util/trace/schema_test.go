@@ -28,6 +28,8 @@ func Test_showSchema(t *testing.T) {
 	t.Logf("%s", sqlCreateErrorInfoTable)
 }
 
+var _ ie.InternalExecutor = &dummySqlExecutor{}
+
 type dummySqlExecutor struct {
 	opts ie.SessionOverrideOptions
 	t    *testing.T
@@ -35,6 +37,9 @@ type dummySqlExecutor struct {
 }
 
 func (e *dummySqlExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions) {}
+func (e *dummySqlExecutor) Query(s string, options ie.SessionOverrideOptions) ie.InternalExecResult {
+	return nil
+}
 func (e *dummySqlExecutor) Exec(sql string, opts ie.SessionOverrideOptions) error {
 	e.ch <- sql
 	return nil
