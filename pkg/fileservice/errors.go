@@ -25,4 +25,5 @@ var (
 	ErrUnexpectedEOF = io.ErrUnexpectedEOF
 	ErrSizeNotMatch  = errors.New("size not match")
 	ErrEmptyRange    = errors.New("empty range")
+	ErrEmptyVector   = errors.New("empty vector")
 )
