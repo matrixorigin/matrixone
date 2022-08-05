@@ -88,9 +88,10 @@ func (s *store) newLogServiceClient(shard metadata.DNShard) (logservice.Client, 
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.LogService.ConnectTimeout.Duration)
 	defer cancel()
 	return logservice.NewClient(ctx, logservice.ClientConfig{
-		ReadOnly:    false,
-		LogShardID:  shard.LogShardID,
-		DNReplicaID: shard.ReplicaID,
+		ReadOnly:         false,
+		LogShardID:       shard.LogShardID,
+		DNReplicaID:      shard.ReplicaID,
+		ServiceAddresses: s.cfg.HAKeeper.ClientConfig.ServiceAddresses,
 	})
 }
 

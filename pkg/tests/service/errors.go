@@ -18,7 +18,7 @@ import "fmt"
 
 var (
 	ErrServiceNotExist  = fmt.Errorf("service not exist")
-	ErrNoLeaderHakeeper = fmt.Errorf("no leader hakeeper")
+	ErrServiceNoStarted = fmt.Errorf("service not started")
 	ErrFailAllocatePort = fmt.Errorf("fail to allocate port")
 	ErrInvalidFSName    = fmt.Errorf("invalid file service name")
 )

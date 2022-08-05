@@ -17,6 +17,7 @@ package service
 import (
 	"path"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,15 +41,16 @@ var (
 type LogService interface {
 	// Start sends heartbeat and start to handle command.
 	Start() error
-
 	// Close stops store
 	Close() error
+	// Status returns the status of service
+	Status() ServiceStatus
 
 	// ID returns uuid of store
 	ID() string
 
 	// IsLeaderHakeeper checks hakeeper information.
-	IsLeaderHakeeper() bool
+	IsLeaderHakeeper() (bool, error)
 
 	// GetClusterState returns cluster information from hakeeper leader.
 	GetClusterState() (*logpb.CheckerState, error)
@@ -60,9 +62,86 @@ type LogService interface {
 	StartHAKeeperReplica(replicaID uint64, initialReplicas map[uint64]dragonboat.Target, join bool) error
 }
 
+// logService wraps logservice.WrappedService.
+//
+// The main purpose of this structure is to maintain status
+type logService struct {
+	sync.Mutex
+	status ServiceStatus
+	svc    *logservice.WrappedService
+}
+
+func (ls *logService) Start() error {
+	ls.Lock()
+	defer ls.Unlock()
+
+	if ls.status == ServiceInitialized || ls.status == ServiceClosed {
+		err := ls.svc.Start()
+		if err != nil {
+			return err
+		}
+		ls.status = ServiceStarted
+	}
+
+	return nil
+}
+
+func (ls *logService) Close() error {
+	ls.Lock()
+	defer ls.Unlock()
+
+	if ls.status == ServiceStarted {
+		err := ls.svc.Close()
+		if err != nil {
+			return err
+		}
+		ls.status = ServiceClosed
+	}
+
+	return nil
+}
+
+func (ls *logService) Status() ServiceStatus {
+	ls.Lock()
+	defer ls.Unlock()
+	return ls.status
+}
+
+func (ls *logService) ID() string {
+	return ls.svc.ID()
+}
+
+func (ls *logService) IsLeaderHakeeper() (bool, error) {
+	return ls.svc.IsLeaderHakeeper()
+}
+
+func (ls *logService) GetClusterState() (*logpb.CheckerState, error) {
+	return ls.svc.GetClusterState()
+}
+
+func (ls *logService) SetInitialClusterInfo(
+	numOfLogShards, numOfDNShards, numOfLogReplicas uint64,
+) error {
+	return ls.svc.SetInitialClusterInfo(
+		numOfLogShards, numOfDNShards, numOfLogReplicas,
+	)
+}
+
+func (ls *logService) StartHAKeeperReplica(
+	replicaID uint64, initialReplicas map[uint64]dragonboat.Target, join bool,
+) error {
+	return ls.svc.StartHAKeeperReplica(replicaID, initialReplicas, join)
+}
+
+// newLogService constructs an instance of `LogService`.
 func newLogService(cfg logservice.Config) (LogService, error) {
 	cfg.Fill()
-	return logservice.NewWrappedService(cfg)
+
+	svc, err := logservice.NewWrappedService(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &logService{status: ServiceInitialized, svc: svc}, nil
 }
 
 // buildLogConfig builds configuration for a log service.

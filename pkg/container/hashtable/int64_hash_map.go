@@ -17,6 +17,8 @@ package hashtable
 import (
 	"errors"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type Int64HashMapCell struct {
@@ -34,17 +36,30 @@ type Int64HashMap struct {
 	//confCnt     uint64
 }
 
-func (ht *Int64HashMap) Init() {
+var intCellSize int64
+
+func init() {
+	intCellSize = int64(unsafe.Sizeof(Int64HashMapCell{}))
+}
+
+func (ht *Int64HashMap) Free(m *mheap.Mheap) {
+	m.Decrease(intCellSize * int64(ht.cellCnt))
+}
+
+func (ht *Int64HashMap) Init(m *mheap.Mheap) error {
 	ht.cellCntBits = kInitialCellCntBits
 	ht.cellCnt = kInitialCellCnt
 	ht.cellCntMask = kInitialCellCnt - 1
 	ht.elemCnt = 0
 	ht.maxElemCnt = kInitialCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	ht.cells = make([]Int64HashMapCell, kInitialCellCnt)
+	return m.Increase(kInitialCellCnt * intCellSize)
 }
 
-func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64) {
-	ht.resizeOnDemand(n)
+func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64, m *mheap.Mheap) error {
+	if err := ht.resizeOnDemand(n, m); err != nil {
+		return err
+	}
 
 	if hashes[0] == 0 {
 		Crc32Int64BatchHash(keysPtr, &hashes[0], n)
@@ -61,10 +76,13 @@ func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Point
 		}
 		values[i] = cell.Mapped
 	}
+	return nil
 }
 
-func (ht *Int64HashMap) InsertBatchWithRing(n int, zValues []int64, hashes []uint64, keysPtr unsafe.Pointer, values []uint64) {
-	ht.resizeOnDemand(n)
+func (ht *Int64HashMap) InsertBatchWithRing(n int, zValues []int64, hashes []uint64, keysPtr unsafe.Pointer, values []uint64, m *mheap.Mheap) error {
+	if err := ht.resizeOnDemand(n, m); err != nil {
+		return err
+	}
 
 	if hashes[0] == 0 {
 		Crc32Int64BatchHash(keysPtr, &hashes[0], n)
@@ -83,6 +101,7 @@ func (ht *Int64HashMap) InsertBatchWithRing(n int, zValues []int64, hashes []uin
 		}
 		values[i] = cell.Mapped
 	}
+	return nil
 }
 
 func (ht *Int64HashMap) FindBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64) {
@@ -137,10 +156,10 @@ func (ht *Int64HashMap) findEmptyCell(hash uint64, key uint64) *Int64HashMapCell
 	return nil
 }
 
-func (ht *Int64HashMap) resizeOnDemand(n int) {
+func (ht *Int64HashMap) resizeOnDemand(n int, m *mheap.Mheap) error {
 	targetCnt := ht.elemCnt + uint64(n)
 	if targetCnt <= ht.maxElemCnt {
-		return
+		return nil
 	}
 
 	newCellCntBits := ht.cellCntBits + 2
@@ -159,6 +178,9 @@ func (ht *Int64HashMap) resizeOnDemand(n int) {
 	ht.cellCnt = newCellCnt
 	ht.cellCntMask = newCellCnt - 1
 	ht.maxElemCnt = newMaxElemCnt
+	if err := m.Increase(int64(newCellCnt-oldCellCnt) * intCellSize); err != nil {
+		return err
+	}
 	ht.cells = make([]Int64HashMapCell, newCellCnt)
 
 	var hashes [256]uint64
@@ -175,6 +197,7 @@ func (ht *Int64HashMap) resizeOnDemand(n int) {
 			}
 		}
 	}
+	return nil
 }
 
 func (ht *Int64HashMap) Cardinality() uint64 {

@@ -43,9 +43,9 @@ func (w *WrappedService) ID() string {
 	return w.svc.ID()
 }
 
-func (w *WrappedService) IsLeaderHakeeper() bool {
-	isLeader, _, _ := w.svc.store.isLeaderHAKeeper()
-	return isLeader
+func (w *WrappedService) IsLeaderHakeeper() (bool, error) {
+	isLeader, _, err := w.svc.store.isLeaderHAKeeper()
+	return isLeader, err
 }
 
 func (w *WrappedService) GetClusterState() (*pb.CheckerState, error) {

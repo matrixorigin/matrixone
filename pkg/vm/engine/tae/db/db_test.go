@@ -103,7 +103,7 @@ func TestAppend2(t *testing.T) {
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 
 	now := time.Now()
-	testutils.WaitExpect(8000, func() bool {
+	testutils.WaitExpect(10000, func() bool {
 		return db.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	t.Log(time.Since(now))

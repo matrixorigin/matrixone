@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 var zeroUint64 []uint64
@@ -36,42 +37,55 @@ func init() {
 type IntHashMap struct {
 	hasNull bool
 
-	rows    uint64
-	keys    []uint64
-	keyOffs []uint32
-	values  []uint64
-	zValues []int64
-	hashes  []uint64
+	rows             uint64
+	keys             []uint64
+	keyOffs          []uint32
+	values           []uint64
+	zValues          []int64
+	hashes           []uint64
+	ibucket, nbucket uint64
 
+	m       *mheap.Mheap
 	hashMap *hashtable.Int64HashMap
 }
 
 type intHashMapIterator struct {
 	ibucket, nbucket uint64
+	m                *mheap.Mheap
 	mp               *IntHashMap
 }
 
-func NewIntHashMap(hasNull bool) *IntHashMap {
+func NewIntHashMap(hasNull bool, ibucket, nbucket uint64, m *mheap.Mheap) (*IntHashMap, error) {
 	mp := &hashtable.Int64HashMap{}
-	mp.Init()
+	if err := mp.Init(m); err != nil {
+		return nil, err
+	}
 	return &IntHashMap{
+		m:       m,
 		rows:    0,
 		hasNull: hasNull,
+		ibucket: ibucket,
+		nbucket: nbucket,
 		keys:    make([]uint64, UnitLimit),
 		keyOffs: make([]uint32, UnitLimit),
 		values:  make([]uint64, UnitLimit),
 		zValues: make([]int64, UnitLimit),
 		hashes:  make([]uint64, UnitLimit),
 		hashMap: mp,
+	}, nil
+}
+
+func (m *IntHashMap) NewIterator() *intHashMapIterator {
+	return &intHashMapIterator{
+		mp:      m,
+		m:       m.m,
+		ibucket: m.ibucket,
+		nbucket: m.nbucket,
 	}
 }
 
-func (m *IntHashMap) NewIterator(ibucket, nbucket uint64) *intHashMapIterator {
-	return &intHashMapIterator{
-		mp:      m,
-		ibucket: ibucket,
-		nbucket: nbucket,
-	}
+func (m *IntHashMap) Free() {
+	m.hashMap.Free(m.m)
 }
 
 func (m *IntHashMap) GroupCount() uint64 {

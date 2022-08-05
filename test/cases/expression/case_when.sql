@@ -109,9 +109,11 @@ drop table if exists big;
 -- @case
 -- @desc:test for case_when expression with union
 -- @label:bvt
+-- @bvt:issue#3419
 SELECT 'case+union+test'
 UNION
 SELECT CASE '1' WHEN '2' THEN 'BUG' ELSE 'nobug' END;
+-- @bvt:issue
 
 -- @case
 -- @desc:test for case_when expression in where filter
