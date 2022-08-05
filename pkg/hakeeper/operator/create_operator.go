@@ -37,9 +37,9 @@ func CreateStopReplica(brief string, uuid string, shardID uint64, epoch uint64) 
 		StopLogService{Replica{uuid, shardID, 0, epoch}})
 }
 
-func CreateKillZombie(brief, uuid string, shardID uint64) *Operator {
+func CreateKillZombie(brief, uuid string, shardID, replicaID uint64) *Operator {
 	return NewOperator(brief, shardID, 0,
-		KillLogZombie{Replica{UUID: uuid, ShardID: shardID}})
+		KillLogZombie{Replica{UUID: uuid, ShardID: shardID, ReplicaID: replicaID}})
 }
 
 func CreateStartReplica(brief, uuid string, shardID, replicaID uint64) *Operator {

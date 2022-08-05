@@ -24,8 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -49,10 +47,8 @@ var (
 )
 
 func init() {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
 	tcs = []joinTestCase{
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+		newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 			[][]*plan.Expr{
 				{
 					newExpr(0, types.Type{Oid: types.T_int8}),
@@ -61,7 +57,7 @@ func init() {
 					newExpr(0, types.Type{Oid: types.T_int8}),
 				},
 			}),
-		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+		newTestCase(testutil.NewMheap(), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 			[][]*plan.Expr{
 				{
 					newExpr(0, types.Type{Oid: types.T_int8}),
@@ -77,13 +73,6 @@ func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
 	for _, tc := range tcs {
 		String(tc.arg, buf)
-	}
-}
-
-func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
-		require.NoError(t, err)
 	}
 }
 
@@ -106,16 +95,14 @@ func TestJoin(t *testing.T) {
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 		}
-		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
+		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
 	}
 }
 
 func BenchmarkJoin(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		hm := host.New(1 << 30)
-		gm := guest.New(1<<30, hm)
 		tcs = []joinTestCase{
-			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+			newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 				[][]*plan.Expr{
 					{
 						newExpr(0, types.Type{Oid: types.T_int8}),
@@ -124,7 +111,7 @@ func BenchmarkJoin(b *testing.B) {
 						newExpr(0, types.Type{Oid: types.T_int8}),
 					},
 				}),
-			newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+			newTestCase(testutil.NewMheap(), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 				[][]*plan.Expr{
 					{
 						newExpr(0, types.Type{Oid: types.T_int8}),

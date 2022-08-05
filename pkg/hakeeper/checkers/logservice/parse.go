@@ -131,7 +131,8 @@ func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired []string)
 			if ok || replicaInfo.Epoch >= infos.Shards[replicaInfo.ShardID].Epoch {
 				continue
 			}
-			zombie = append(zombie, replica{uuid: uuid, shardID: replicaInfo.ShardID})
+			zombie = append(zombie, replica{uuid: uuid, shardID: replicaInfo.ShardID,
+				replicaID: replicaInfo.ReplicaID})
 		}
 		collect.zombies = append(collect.zombies, zombie...)
 	}

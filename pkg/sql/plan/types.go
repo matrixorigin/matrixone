@@ -77,6 +77,20 @@ type BaseOptimizer struct {
 	ctx   CompilerContext
 }
 
+type ExecType int
+
+const (
+	ExecTypeAP ExecType = iota
+	ExecTypeTP
+)
+
+type ExecInfo struct {
+	Typ        ExecType
+	WithGPU    bool
+	WithBigMem bool
+	CnNumbers  int
+}
+
 ///////////////////////////////
 // Data structures for refactor
 ///////////////////////////////
@@ -165,6 +179,11 @@ type baseBinder struct {
 	ctx       *BindContext
 	impl      Binder
 	boundCols []string
+}
+
+type DefaultBinder struct {
+	baseBinder
+	typ *Type
 }
 
 type TableBinder struct {

@@ -206,8 +206,8 @@ func MockBatch(schema *Schema, rows int) *containers.Batch {
 		sortKey := schema.GetSingleSortKey()
 		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, sortKey.Idx, nil)
 	} else if schema.IsCompoundSortKey() {
-		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, schema.HiddenKey.Idx, nil)
+		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, schema.PhyAddrKey.Idx, nil)
 	} else {
-		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, schema.HiddenKey.Idx, nil)
+		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, schema.PhyAddrKey.Idx, nil)
 	}
 }

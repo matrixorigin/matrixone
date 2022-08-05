@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -63,13 +64,8 @@ type Catalog struct {
 	columnCnt int32
 }
 
-func MockCatalog(dir, name string, cfg *store.StoreCfg, scheduler tasks.TaskScheduler) *Catalog {
-	var driver store.Store
-	var err error
-	driver, err = store.NewBaseStore(dir, name, cfg)
-	if err != nil {
-		panic(err)
-	}
+func MockCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tasks.TaskScheduler) *Catalog {
+	driver := store.NewStoreWithBatchStoreDriver(dir, name, cfg)
 	catalog := &Catalog{
 		RWMutex:     new(sync.RWMutex),
 		IDAlloctor:  NewIDAllocator(),
@@ -84,11 +80,8 @@ func MockCatalog(dir, name string, cfg *store.StoreCfg, scheduler tasks.TaskSche
 	return catalog
 }
 
-func OpenCatalog(dir, name string, cfg *store.StoreCfg, scheduler tasks.TaskScheduler, dataFactory DataFactory) (*Catalog, error) {
-	driver, err := store.NewBaseStore(dir, name, cfg)
-	if err != nil {
-		panic(err)
-	}
+func OpenCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tasks.TaskScheduler, dataFactory DataFactory) (*Catalog, error) {
+	driver := store.NewStoreWithBatchStoreDriver(dir, name, cfg)
 	catalog := &Catalog{
 		RWMutex:     new(sync.RWMutex),
 		IDAlloctor:  NewIDAllocator(),
@@ -101,7 +94,7 @@ func OpenCatalog(dir, name string, cfg *store.StoreCfg, scheduler tasks.TaskSche
 	}
 	catalog.InitSystemDB()
 	replayer := NewReplayer(dataFactory, catalog)
-	err = catalog.store.Replay(replayer.ReplayerHandle)
+	err := catalog.store.Replay(replayer.ReplayerHandle)
 	return catalog, err
 }
 
@@ -862,7 +855,7 @@ func (catalog *Catalog) Checkpoint(maxTs types.TS) (err error) {
 	checkpoint := new(Checkpoint)
 	checkpoint.MaxTS = maxTs
 	checkpoint.LSN = entry.MaxIndex.LSN
-	checkpoint.CommitId, err = catalog.store.AppendEntry(0, logEntry)
+	checkpoint.CommitId, err = catalog.store.Append(0, logEntry)
 	if err != nil {
 		panic(err)
 	}

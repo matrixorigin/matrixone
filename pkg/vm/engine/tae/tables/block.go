@@ -518,8 +518,8 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 }
 
 func (blk *dataBlock) Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v any) (node txnif.UpdateNode, err error) {
-	if blk.meta.GetSchema().HiddenKey.Idx == int(colIdx) {
-		err = data.ErrUpdateHiddenKey
+	if blk.meta.GetSchema().PhyAddrKey.Idx == int(colIdx) {
+		err = data.ErrUpdatePhyAddrKey
 		return
 	}
 	return blk.updateWithFineLock(txn, row, colIdx, v)
@@ -715,7 +715,7 @@ func (blk *dataBlock) GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (of
 		panic("logic error")
 	}
 	if blk.meta.GetSchema().SortKey == nil {
-		_, _, offset = model.DecodeHiddenKeyFromValue(filter.Val)
+		_, _, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
 		return
 	}
 	ts := txn.GetStartTS()

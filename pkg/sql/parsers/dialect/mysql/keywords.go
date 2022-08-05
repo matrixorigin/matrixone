@@ -478,5 +478,8 @@ func init() {
 		"deallocate":               DEALLOCATE,
 		"intersect":                INTERSECT,
 		"minus":                    MINUS,
+		"admin_name":               ADMIN_NAME,
+		"random":                   RANDOM,
+		"suspend":                  SUSPEND,
 	}
 }

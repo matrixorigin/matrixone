@@ -21,6 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func (ins Instruction) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (ins Instruction) UnmarshalBinary(_ []byte) error {
+	return nil
+}
+
 // String range instructions and call each operator's string function to show a query plan
 func String(ins Instructions, buf *bytes.Buffer) {
 	for i, in := range ins {
@@ -49,8 +57,8 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 			err = moerr.NewPanicError(e)
 		}
 	}()
-	for i, in := range ins {
-		if ok, err = execFunc[in.Op](i, proc, in.Arg); err != nil {
+	for _, in := range ins {
+		if ok, err = execFunc[in.Op](in.Idx, proc, in.Arg); err != nil {
 			return ok || end, err
 		}
 		if ok { // ok is true shows that at least one operator has done its work

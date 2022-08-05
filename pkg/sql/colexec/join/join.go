@@ -30,9 +30,13 @@ func String(_ any, buf *bytes.Buffer) {
 }
 
 func Prepare(proc *process.Process, arg any) error {
+	var err error
+
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.mp = hashmap.NewStrMap(false)
+	if ap.ctr.mp, err = hashmap.NewStrMap(false, ap.Ibucket, ap.Nbucket, proc.GetMheap()); err != nil {
+		return err
+	}
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
@@ -50,6 +54,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
 				ctr.state = End
+				ctr.mp.Free()
 				ctr.freeSels(proc)
 				return true, err
 			}
@@ -58,6 +63,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
+				ctr.mp.Free()
 				ctr.freeSels(proc)
 				if ctr.bat != nil {
 					ctr.bat.Clean(proc.GetMheap())
@@ -73,6 +79,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			}
 			if err := ctr.probe(bat, ap, proc, anal); err != nil {
 				ctr.state = End
+				ctr.mp.Free()
 				ctr.freeSels(proc)
 				proc.SetInputBatch(nil)
 				return true, err
@@ -119,22 +126,24 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		return err
 	}
 	defer ctr.freeJoinCondition(proc)
-	rows := ctr.mp.GroupCount()
-	itr := ctr.mp.NewIterator(ap.Ibucket, ap.Nbucket)
+
+	itr := ctr.mp.NewIterator()
 	count := ctr.bat.Length()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		vals, zvals := itr.Insert(i, n, ctr.vecs)
+		rows := ctr.mp.GroupCount()
+		vals, zvals, err := itr.Insert(i, n, ctr.vecs)
+		if err != nil {
+			return err
+		}
 		for k, v := range vals {
 			if zvals[k] == 0 {
 				continue
 			}
 			if v > rows {
-				rows++
-				ctr.mp.AddGroup()
 				ctr.sels = append(ctr.sels, proc.GetMheap().GetSels())
 			}
 			ai := int64(v) - 1
@@ -161,7 +170,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	defer ctr.freeJoinCondition(proc)
 	count := bat.Length()
-	itr := ctr.mp.NewIterator(ap.Ibucket, ap.Nbucket)
+	itr := ctr.mp.NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {

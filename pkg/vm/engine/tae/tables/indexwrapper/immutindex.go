@@ -110,7 +110,8 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 		return
 	}
 	metas := idxMeta.(*IndicesMeta)
-	colFile, err := file.OpenColumn(entry.GetSchema().SortKey.Defs[0].Idx)
+	colDef := entry.GetSchema().SortKey.Defs[0]
+	colFile, err := file.OpenColumn(colDef.Idx)
 	if err != nil {
 		return
 	}
@@ -131,7 +132,7 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 				idxFile.Unref()
 				return err
 			}
-			index.zmReader = NewZMReader(blk.GetBufMgr(), idxFile, id)
+			index.zmReader = NewZMReader(blk.GetBufMgr(), idxFile, id, colDef.Type)
 		case StaticFilterIndex:
 			size := idxFile.Stat().Size()
 			buf := make([]byte, size)

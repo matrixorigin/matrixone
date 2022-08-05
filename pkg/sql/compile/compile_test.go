@@ -15,9 +15,11 @@
 package compile
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -61,18 +63,28 @@ func testPrint(_ interface{}, _ *batch.Batch) error {
 	return nil
 }
 
-func TestInitAddress(t *testing.T) {
-	InitAddress("0")
-}
-
 func TestCompile(t *testing.T) {
 	for _, tc := range tcs {
-		c := New("test", tc.sql, "", tc.e, tc.proc)
+		c := New("test", tc.sql, "", context.TODO(), tc.e, tc.proc, nil)
 		err := c.Compile(tc.pn, nil, testPrint)
 		require.NoError(t, err)
 		c.GetAffectedRows()
 		err = c.Run(0)
 		require.NoError(t, err)
+	}
+}
+
+func TestEncode(t *testing.T) {
+	for _, tc := range tcs {
+		c := New("test", tc.sql, "", context.TODO(), tc.e, tc.proc, nil)
+		err := c.Compile(tc.pn, nil, testPrint)
+		require.NoError(t, err)
+		data, err := encoding.Encode(c.scope)
+		require.NoError(t, err)
+		s := new(Scope)
+		err = encoding.Decode(data, s)
+		require.NoError(t, err)
+		c.scope.equal(t, s)
 	}
 }
 
@@ -93,5 +105,27 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 				Query: qry,
 			},
 		},
+	}
+}
+
+func (s *Scope) equal(t *testing.T, r *Scope) {
+	require.Equal(t, s.Magic, r.Magic)
+	require.Equal(t, s.IsEnd, r.IsEnd)
+	require.Equal(t, s.Plan, r.Plan)
+	{
+		if s.DataSource != nil {
+			if s.DataSource.Bat != nil {
+				for i, vec := range s.DataSource.Bat.Vecs {
+					require.Equal(t, vec.Col, r.DataSource.Bat.Vecs[i].Col)
+				}
+			}
+			require.Equal(t, s.DataSource.SchemaName, r.DataSource.SchemaName)
+			require.Equal(t, s.DataSource.RelationName, r.DataSource.RelationName)
+			require.Equal(t, s.DataSource.Attributes, r.DataSource.Attributes)
+		}
+	}
+	require.Equal(t, s.NodeInfo, r.NodeInfo)
+	for i := range s.PreScopes {
+		s.PreScopes[i].equal(t, r.PreScopes[i])
 	}
 }

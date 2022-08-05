@@ -77,11 +77,17 @@ func (rel *baseRelation) GetPrimaryKeys(_ context.Context) ([]*engine.Attribute,
 	return attrs, nil
 }
 
+// The hidden column in tae has been renamed to PhyAddr, while GetHideKeys method remains untouched.
+// As @nnsgmsone suggests, it is better to only retain TableDefs and discard other column-info-related methods.
+// Might that can be done in the future
+
 func (rel *baseRelation) GetHideKeys(_ context.Context) ([]*engine.Attribute, error) {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	key := new(engine.Attribute)
-	key.Name = schema.HiddenKey.Name
-	key.Type = schema.HiddenKey.Type
+	key.Name = schema.PhyAddrKey.Name
+	key.Type = schema.PhyAddrKey.Type
+	key.IsRowId = true
+	// key.IsHidden = true
 	logutil.Debugf("GetHideKey: %v", key)
 	return []*engine.Attribute{key}, nil
 }

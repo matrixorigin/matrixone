@@ -17,10 +17,11 @@ package service
 import "fmt"
 
 var (
-	ErrServiceNotExist  = fmt.Errorf("service not exist")
-	ErrNoLeaderHakeeper = fmt.Errorf("no leader hakeeper")
-	ErrFailAllocatePort = fmt.Errorf("fail to allocate port")
-	ErrInvalidFSName    = fmt.Errorf("invalid file service name")
+	ErrServiceNotExist     = fmt.Errorf("service not exist")
+	ErrServiceNotStarted   = fmt.Errorf("service not started")
+	ErrInvalidServiceIndex = fmt.Errorf("invalid service index")
+	ErrFailAllocatePort    = fmt.Errorf("fail to allocate port")
+	ErrInvalidFSName       = fmt.Errorf("invalid file service name")
 )
 
 // wrappedError wraps error with extra message.

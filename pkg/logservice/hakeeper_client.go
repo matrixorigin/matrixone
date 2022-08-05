@@ -71,18 +71,27 @@ var _ LogHAKeeperClient = (*managedHAKeeperClient)(nil)
 // NewCNHAKeeperClient creates a HAKeeper client to be used by a CN node.
 func NewCNHAKeeperClient(ctx context.Context,
 	cfg HAKeeperClientConfig) (CNHAKeeperClient, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	return newManagedHAKeeperClient(ctx, cfg)
 }
 
 // NewDNHAKeeperClient creates a HAKeeper client to be used by a DN node.
 func NewDNHAKeeperClient(ctx context.Context,
 	cfg HAKeeperClientConfig) (DNHAKeeperClient, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	return newManagedHAKeeperClient(ctx, cfg)
 }
 
 // NewLogHAKeeperClient creates a HAKeeper client to be used by a Log Service node.
 func NewLogHAKeeperClient(ctx context.Context,
 	cfg HAKeeperClientConfig) (LogHAKeeperClient, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	return newManagedHAKeeperClient(ctx, cfg)
 }
 

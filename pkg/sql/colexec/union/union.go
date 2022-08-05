@@ -27,10 +27,14 @@ func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString(" union ")
 }
 
-func Prepare(_ *process.Process, argument any) error {
-	arg := argument.(*Argument)
-	arg.ctr = new(container)
-	arg.ctr.hashTable = hashmap.NewStrMap(true)
+func Prepare(proc *process.Process, argument any) error {
+	var err error
+
+	ap := argument.(*Argument)
+	ap.ctr = new(container)
+	if ap.ctr.hashTable, err = hashmap.NewStrMap(true, ap.Ibucket, ap.Nbucket, proc.GetMheap()); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -46,6 +50,7 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 			end, err := ctr.insert(ap, proc, analyze, 1)
 			if err != nil {
 				ctr.state = End
+				ctr.hashTable.Free()
 				return true, err
 			}
 			if end {
@@ -57,9 +62,11 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 			end, err := ctr.insert(ap, proc, analyze, 0)
 			if err != nil {
 				ctr.state = End
+				ctr.hashTable.Free()
 				return true, err
 			}
 			if end {
+				ctr.hashTable.Free()
 				ctr.state = End
 			}
 			return end, nil
@@ -73,8 +80,6 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 // insert function use Table[index] to probe the HashTable.
 // if row data doesn't in HashTable, append it to bat and update the HashTable.
 func (ctr *container) insert(ap *Argument, proc *process.Process, analyze process.Analyze, index int) (bool, error) {
-	var err error
-
 	inserted := make([]uint8, hashmap.UnitLimit)
 	restoreInserted := make([]uint8, hashmap.UnitLimit)
 
@@ -97,18 +102,20 @@ func (ctr *container) insert(ap *Argument, proc *process.Process, analyze proces
 
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			oldHashGroup := ctr.hashTable.GroupCount()
-			iterator := ctr.hashTable.NewIterator(ap.Ibucket, ap.Nbucket)
+			iterator := ctr.hashTable.NewIterator()
 
 			n := count - i
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
-
-			vs, _ := iterator.Insert(i, n, bat.Vecs)
+			rowCount := ctr.hashTable.GroupCount()
+			vs, _, err := iterator.Insert(i, n, bat.Vecs)
+			if err != nil {
+				return false, err
+			}
 			copy(inserted[:n], restoreInserted[:n])
 			for j, v := range vs {
-				if v > ctr.hashTable.GroupCount() {
-					ctr.hashTable.AddGroup()
+				if v > rowCount {
 					inserted[j] = 1
 					ctr.bat.Zs = append(ctr.bat.Zs, 1)
 				}
