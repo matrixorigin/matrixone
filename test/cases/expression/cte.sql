@@ -107,6 +107,7 @@ select (select max(a) from qn where a=0),
 drop table if exists sales_days;
 create table sales_days(day_of_sale DATE, amount INT);
 insert into sales_days values('2015-01-02', 100), ('2015-01-05', 200),('2015-02-02', 10),  ('2015-02-10', 100),('2015-03-02', 10),  ('2015-03-18', 1);
+-- @bvt:issue#3419
 with sales_by_month(month,total) as
  (select month(day_of_sale), sum(amount) from sales_days
   where year(day_of_sale)=2015
@@ -118,14 +119,17 @@ with sales_by_month(month,total) as
  (select month, total, "worst" from sales_by_month
   where total=(select min(total) from sales_by_month))
  select * from best_month union all select * from worst_month;
+-- @bvt:issue
 
 drop table if exists sales_days;
 
 drop table if exists t1;
 create table t1(a int);
 insert into t1 values(1),(2);
+-- @bvt:issue#3419
 with qn(a) as (select 1 from t1 limit 2)
 select * from qn where qn.a=(select * from qn qn1 limit 1) union select 2;
+-- @bvt:issue
 
 -- @case
 -- @desc:test for with  with-nested
@@ -218,8 +222,10 @@ with qn (foo, bar) as (select 1,1 from t1) select * from qn;
 with qn (foo, bar) as (select 1,1) select * from qn;
 with qn (foo, bar) as (select 1, 2 from t1 limit 2) select * from qn, qn qn1;
 with qn (foo, bar) as (select 1 as col, 2 as coll from t1 limit 2) select * from qn, qn qn1;
+-- @bvt:issue#3419
 with qn (foo, bar) as (select 1 as col, 2 as coll union
                        select a,b from t1) select qn1.bar from qn qn1;
+-- @bvt:issue
 with qn (foo, bar) as (select a, b from t1 limit 2) select qn.bar,foo from qn;
 
 -- @case

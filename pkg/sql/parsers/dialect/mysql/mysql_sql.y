@@ -1603,13 +1603,11 @@ explainable_stmt:
 explain_stmt:
     explain_sym unresolved_object_name
     {
-        st := &tree.ShowColumns{Table: $2}
-        $$ = tree.NewExplainStmt(st, "")
+        $$ = &tree.ShowColumns{Table: $2}
     }
 |   explain_sym unresolved_object_name column_name
     {
-        st := &tree.ShowColumns{Table: $2, ColName: $3}
-        $$ = tree.NewExplainStmt(st, "")
+        $$ = &tree.ShowColumns{Table: $2, ColName: $3}
     }
 |   explain_sym FOR CONNECTION INTEGRAL
     {
@@ -2778,6 +2776,22 @@ union_op:
             Type: tree.UT_MINUS,
             All: false,
             Distinct: false,
+        }
+    }
+|   MINUS ALL
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.UT_MINUS,
+            All: true,
+            Distinct: false,
+        }
+    }
+|    MINUS DISTINCT
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.UT_MINUS,
+            All: false,
+            Distinct: true,
         }
     }
 

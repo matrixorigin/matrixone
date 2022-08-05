@@ -236,30 +236,6 @@ enum CompressType {
 	Lz4 	= 1;
 }
 
-message DefaultExpr {
-	bool exist 		= 1;
-	ConstantValue value 		= 2;
-	bool is_null 	= 3;
-}
-
-message ConstantValue {
-	oneof constantValue {
-		int32 unknown_v = 1;
-		int64 int64_v = 2;
-		decimal64 decimal64_v = 3;
-		decimal128 decimal128_v = 4;
-		uint64 uint64_v = 5;
-		float float32_v = 6;
-		double float64_v = 7;
-		int32 date_v = 8;
-		int64 dateTime_v = 9;
-		int64 timeStamp_v = 10;
-		string string_v = 11;
-		bool bool_v = 12;
-		string json_v = 13;
-	}
-}
-
 message decimal64 {
 	int64 a = 1;
 }
@@ -273,10 +249,16 @@ message ColDef {
 	string name 		= 1;
 	CompressType alg 	= 2;
 	Type typ			= 3;
-	DefaultExpr default = 4;
+	Default default = 4;
 	bool primary        = 5;
 	int32 pkidx 		= 6;
 	string comment	=7;
+}
+
+message Default {
+	bool null_ability = 1;
+	Expr expr = 2;
+	string origin_string = 3;
 }
 
 message IndexDef {
@@ -430,6 +412,12 @@ message Node {
 		INSERT = 51;
 		UPDATE = 52;
 		DELETE = 53;
+
+		//
+		INTERSECT = 54;
+		INTERSECT_ALL = 55;
+		MINUS = 56;
+		MINUS_ALL = 57;
 	}
 
 	enum JoinFlag {
@@ -569,7 +557,21 @@ message Plan {
 		TransationControl tcl 	= 2;
 		DataDefinition ddl 		= 3;
 		DataControl	dcl			= 4;
+		InsertValues ins = 5;
 	}
+}
+
+message InsertValues {
+	string db_name = 1;
+	string tbl_name = 2;
+	repeated ColDef explicit_cols = 3;
+	repeated ColDef other_cols = 4;
+	repeated string order_attrs = 5;
+	repeated column columns = 6;
+}
+
+message column{
+	repeated Expr column = 1;
 }
 
 message DataControl {

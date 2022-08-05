@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
@@ -71,6 +72,21 @@ func NewWithSize(n int) *Batch {
 		Cnt:  1,
 		Vecs: make([]*vector.Vector, n),
 	}
+}
+
+func (bat *Batch) MarshalBinary() ([]byte, error) {
+	return encoding.Encode(&EncodeBatch{Zs: bat.Zs, Vecs: bat.Vecs})
+}
+
+func (bat *Batch) UnmarshalBinary(data []byte) error {
+	rbat := new(EncodeBatch)
+	if err := encoding.Decode(data, rbat); err != nil {
+		return err
+	}
+	bat.Cnt = 1
+	bat.Zs = rbat.Zs
+	bat.Vecs = rbat.Vecs
+	return nil
 }
 
 func (bat *Batch) ExpandNulls() {
@@ -166,10 +182,10 @@ func (bat *Batch) Clean(m *mheap.Mheap) {
 func (bat *Batch) String() string {
 	var buf bytes.Buffer
 
-	for i, attr := range bat.Attrs {
-		buf.WriteString(fmt.Sprintf("%s\n", attr))
+	for i, vec := range bat.Vecs {
+		buf.WriteString(fmt.Sprintf("%v\n", i))
 		if len(bat.Zs) > 0 {
-			buf.WriteString(fmt.Sprintf("\t%s\n", bat.Vecs[i]))
+			buf.WriteString(fmt.Sprintf("\t%s\n", vec))
 		}
 	}
 	return buf.String()

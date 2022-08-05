@@ -657,7 +657,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Scale:     attr.Attr.Type.Scale,
 				},
 				Primary: attr.Attr.Primary,
-				Default: plan2.MakePlan2DefaultExpr(attr.Attr.Default),
+				Default: attr.Attr.Default,
 			})
 		}
 	}

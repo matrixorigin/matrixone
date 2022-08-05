@@ -47,7 +47,7 @@ select * from t1 where a<=b and a is not NULL;
 select t1.a,t2.b from t1 join t2 on t1.a=t2.a order by t1.a desc, 2 desc;
 -- @bvt:issue
 select a,count(a) from t1 group by a having count(a)>1; 
-select a,any_value(b) from t1 group by a order by a asc;
+select a,any_value(b) from t1 where isnotnull(a) group by a order by a asc;
 select a,b from t1 where a in (0,1);
 select a,b from t1 where a not in (0,2);
 select distinct t.a from (select * from t1) t where a not in (2) order by t.a asc;

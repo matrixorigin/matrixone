@@ -114,13 +114,14 @@ pb: vendor-build generate-pb fmt
 
 RACE_OPT := 
 DEBUG_OPT := 
-CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo"
+CGO_DEBUG_OPT :=
+CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo -lm"
 GO=$(CGO_OPTS) $(GOBIN)
 GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_VERSION)'"
 
 .PHONY: cgo
 cgo:
-	@(cd cgo; make)
+	@(cd cgo; make ${CGO_DEBUG_OPT})
 
 BUILD_NAME=binary
 # build mo-server binary
@@ -135,6 +136,7 @@ build: config cgo cmd/db-server/$(wildcard *.go)
 debug: override BUILD_NAME := debug-binary
 debug: override RACE_OPT := -race
 debug: override DEBUG_OPT := -gcflags=all="-N -l"
+debug: override CGO_DEBUG_OPT := debug
 debug: build
 
 ###############################################################################

@@ -26,8 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  "DELETE a1, a2 FROM t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.a = a2.b;",
-		output: "delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.a = a2.b",
+		input: "insert into t2 values (1.7156e-1, 3)",
 	}
 )
 
@@ -786,9 +785,11 @@ var (
 		input:  "explain format = 'tree' for connection 10",
 		output: "explain format = tree for connection 10",
 	}, {
-		input: "explain db.a db.a.a",
+		input:  "explain db.a",
+		output: "show columns from db.a",
 	}, {
-		input: "explain a",
+		input:  "explain a",
+		output: "show columns from a",
 	}, {
 		input:  "alter user u1 require cipher 'xxx' subject 'yyy' with max_queries_per_hour 0 password expire interval 1 day password expire default account lock account unlock",
 		output: "alter user u1 require cipher xxx subject yyy with max_queries_per_hour 0 password expire interval 1 day password expire default account lock account unlock",
@@ -977,6 +978,10 @@ var (
 		input: "select * from t intersect all select c from t1",
 	}, {
 		input: "select * from t intersect distinct select c from t1",
+	}, {
+		input: "select * from t minus all select c from t1",
+	}, {
+		input: "select * from t minus distinct select c from t1",
 	}, {
 		input: "select * from t minus select c from t1",
 	}, {

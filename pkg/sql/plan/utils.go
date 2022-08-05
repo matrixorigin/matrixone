@@ -15,11 +15,16 @@
 package plan
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -487,4 +492,52 @@ func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge 
 func getNumOfCharacters(str string) int {
 	strRune := []rune(str)
 	return len(strRune)
+}
+
+func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTypes *[]plan.Node_NodeType) error {
+	switch leftStmt := stmt.Left.(type) {
+	case *tree.UnionClause:
+		err := getUnionSelects(leftStmt, selects, unionTypes)
+		if err != nil {
+			return err
+		}
+	case *tree.SelectClause:
+		*selects = append(*selects, leftStmt)
+	case *tree.ParenSelect:
+		*selects = append(*selects, leftStmt.Select)
+	default:
+		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement in union: '%v'", tree.String(leftStmt, dialect.MYSQL)))
+	}
+
+	// right is not UNION allways
+	switch rightStmt := stmt.Right.(type) {
+	case *tree.SelectClause:
+		*selects = append(*selects, rightStmt)
+	case *tree.ParenSelect:
+		*selects = append(*selects, rightStmt.Select)
+	default:
+		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL)))
+	}
+
+	switch stmt.Type {
+	case tree.UNION:
+		if stmt.All {
+			*unionTypes = append(*unionTypes, plan.Node_UNION_ALL)
+		} else {
+			*unionTypes = append(*unionTypes, plan.Node_UNION)
+		}
+	case tree.INTERSECT:
+		if stmt.All {
+			return errors.New("", "INTERSECT ALL clause will support in future version.")
+		} else {
+			*unionTypes = append(*unionTypes, plan.Node_INTERSECT)
+		}
+	case tree.EXCEPT, tree.UT_MINUS:
+		if stmt.All {
+			return errors.New("", "EXCEPT/MINUS ALL clause will support in future version.")
+		} else {
+			*unionTypes = append(*unionTypes, plan.Node_UNION)
+		}
+	}
+	return nil
 }

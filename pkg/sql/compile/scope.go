@@ -17,8 +17,13 @@ package compile
 import (
 	"context"
 	"fmt"
-	"runtime"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
@@ -29,8 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -43,9 +46,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	y "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -132,7 +135,7 @@ func (s *Scope) DropIndex(ts uint64, snapshot engine.Snapshot, engine engine.Eng
 	return nil
 }
 
-func (s *Scope) Delete(ts uint64, snapshot engine.Snapshot, engine engine.Engine) (uint64, error) {
+func (s *Scope) Delete(ts uint64, snapshot engine.Snapshot, c *Compile) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 	arg.Ts = ts
@@ -142,30 +145,424 @@ func (s *Scope) Delete(ts uint64, snapshot engine.Snapshot, engine engine.Engine
 		return arg.DeleteCtxs[0].TableSource.Truncate(ctx)
 	}
 
-	if err := s.MergeRun(engine); err != nil {
+	if err := s.MergeRun(c); err != nil {
 		return 0, err
 	}
 	return arg.AffectedRows, nil
 }
 
-func (s *Scope) Insert(ts uint64, snapshot engine.Snapshot, engine engine.Engine) (uint64, error) {
+func (s *Scope) Insert(ts uint64, snapshot engine.Snapshot, c *Compile) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*insert.Argument)
 	arg.Ts = ts
-	if err := s.MergeRun(engine); err != nil {
+	if err := s.MergeRun(c); err != nil {
 		return 0, err
 	}
 	return arg.Affected, nil
 }
 
-func (s *Scope) Update(ts uint64, snapshot engine.Snapshot, engine engine.Engine) (uint64, error) {
+func (s *Scope) Update(ts uint64, snapshot engine.Snapshot, c *Compile) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*update.Argument)
 	arg.Ts = ts
-	if err := s.MergeRun(engine); err != nil {
+	if err := s.MergeRun(c); err != nil {
 		return 0, err
 	}
 	return arg.AffectedRows, nil
+}
+
+func (s *Scope) InsertValues(ts uint64, snapshot engine.Snapshot, engine engine.Engine, proc *process.Process, stmt *tree.Insert) (uint64, error) {
+	p := s.Plan.GetIns()
+
+	ctx := context.TODO()
+
+	dbSource, err := engine.Database(ctx, p.DbName, snapshot)
+	if err != nil {
+		return 0, err
+	}
+	relation, err := dbSource.Relation(ctx, p.TblName)
+	if err != nil {
+		return 0, err
+	}
+
+	bat := makeInsertBatch(p)
+
+	if p.OtherCols != nil {
+		p.ExplicitCols = append(p.ExplicitCols, p.OtherCols...)
+	}
+
+	if err := fillBatch(bat, p, stmt.Rows.Select.(*tree.ValuesClause).Rows, proc); err != nil {
+		return 0, err
+	}
+	batch.Reorder(bat, p.OrderAttrs)
+	if err := relation.Write(ctx, bat); err != nil {
+		return 0, err
+	}
+
+	return uint64(len(p.Columns[0].Column)), nil
+}
+
+func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *process.Process) error {
+	rowCount := len(p.Columns[0].Column)
+
+	tmpBat := batch.NewWithSize(0)
+	tmpBat.Zs = []int64{1}
+
+	for i, v := range bat.Vecs {
+		switch v.Typ.Oid {
+		case types.T_json:
+			vs := make([][]byte, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.(*types.Bytes).Data
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
+		case types.T_bool:
+			vs := make([]bool, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.([]bool)[0]
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
+		case types.T_int8:
+			vs := make([]int8, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.([]int8)[0]
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
+		case types.T_int16:
+			vs := make([]int16, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.([]int16)[0]
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
+		case types.T_int32:
+			vs := make([]int32, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.([]int32)[0]
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
+		case types.T_int64:
+			vs := make([]int64, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.([]int64)[0]
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
+		case types.T_uint8:
+			vs := make([]uint8, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.([]uint8)[0]
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
+		case types.T_uint16:
+			vs := make([]uint16, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.([]uint16)[0]
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
+		case types.T_uint32:
+			vs := make([]uint32, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.([]uint32)[0]
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
+		case types.T_uint64:
+			vs := make([]uint64, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.([]uint64)[0]
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
+		case types.T_float32:
+			vs := make([]float32, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.([]float32)[0]
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
+		case types.T_float64:
+			vs := make([]float64, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.([]float64)[0]
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
+		case types.T_char, types.T_varchar, types.T_blob:
+			vs := make([][]byte, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.(*types.Bytes).Data
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
+		case types.T_date:
+			vs := make([]types.Date, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.([]types.Date)[0]
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
+		case types.T_datetime:
+			vs := make([]types.Datetime, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.([]types.Datetime)[0]
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
+		case types.T_timestamp:
+			vs := make([]types.Timestamp, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.([]types.Timestamp)[0]
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
+		case types.T_decimal64:
+			vs := make([]types.Decimal64, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.([]types.Decimal64)[0]
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
+		case types.T_decimal128:
+			vs := make([]types.Decimal128, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.([]types.Decimal128)[0]
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("data truncation: type of '%v' doesn't implement", v.Typ)
+		}
+	}
+	return nil
+}
+
+func makeInsertBatch(p *plan.InsertValues) *batch.Batch {
+	attrs := make([]string, 0, len(p.OrderAttrs))
+
+	for _, col := range p.ExplicitCols {
+		attrs = append(attrs, col.Name)
+	}
+	for _, col := range p.OtherCols {
+		attrs = append(attrs, col.Name)
+	}
+
+	bat := batch.New(true, attrs)
+	idx := 0
+	for _, col := range p.ExplicitCols {
+		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId())})
+		idx++
+	}
+	for _, col := range p.OtherCols {
+		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId())})
+		idx++
+	}
+
+	return bat
 }
 
 func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {
@@ -219,68 +616,13 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 					Scale:     colTyp.GetScale(),
 					Size:      colTyp.GetSize(),
 				},
-				Default: engine.DefaultExpr{
-					Exist:  col.GetDefault().GetExist(),
-					Value:  planValToExeVal(col.GetDefault().GetValue(), colTyp.GetId()),
-					IsNull: col.GetDefault().GetIsNull(),
-				},
+				Default: planCols[i].GetDefault(),
 				Primary: col.GetPrimary(),
 				Comment: col.GetComment(),
 			},
 		}
 	}
 	return exeCols
-}
-
-func planValToExeVal(value *plan.ConstantValue, typ plan.Type_TypeId) interface{} {
-	switch v := value.GetConstantValue().(type) {
-	case *plan.ConstantValue_BoolV:
-		return v.BoolV
-	case *plan.ConstantValue_Int64V:
-		switch typ {
-		case plan.Type_INT8:
-			return int8(v.Int64V)
-		case plan.Type_INT16:
-			return int16(v.Int64V)
-		case plan.Type_INT32:
-			return int32(v.Int64V)
-		case plan.Type_INT64:
-			return v.Int64V
-		}
-	case *plan.ConstantValue_Uint64V:
-		switch typ {
-		case plan.Type_UINT8:
-			return uint8(v.Uint64V)
-		case plan.Type_UINT16:
-			return uint16(v.Uint64V)
-		case plan.Type_UINT32:
-			return uint32(v.Uint64V)
-		case plan.Type_UINT64:
-			return v.Uint64V
-		}
-	case *plan.ConstantValue_Float32V:
-		return v.Float32V
-	case *plan.ConstantValue_Float64V:
-		switch typ {
-		case plan.Type_FLOAT32:
-			return float32(v.Float64V)
-		case plan.Type_FLOAT64:
-			return v.Float64V
-		}
-	case *plan.ConstantValue_StringV:
-		return []byte(v.StringV)
-	case *plan.ConstantValue_DateV:
-		return types.Date(v.DateV)
-	case *plan.ConstantValue_DateTimeV:
-		return types.Datetime(v.DateTimeV)
-	case *plan.ConstantValue_TimeStampV:
-		return types.Timestamp(v.TimeStampV)
-	case *plan.ConstantValue_Decimal64V:
-		return types.Decimal64FromInt64Raw(v.Decimal64V.A)
-	case *plan.ConstantValue_Decimal128V:
-		return types.Decimal128FromInt64Raw(v.Decimal128V.A, v.Decimal128V.B)
-	}
-	return nil
 }
 
 // PrintScope Print is to format scope list
@@ -294,13 +636,8 @@ func PrintScope(prefix []byte, ss []*Scope) {
 	}
 }
 
-// NumCPU Get the number of cpu's available for the current scope
-func (s *Scope) NumCPU() int {
-	return runtime.NumCPU()
-}
-
 // Run read data from storage engine and run the instructions of scope.
-func (s *Scope) Run(e engine.Engine) (err error) {
+func (s *Scope) Run(c *Compile) (err error) {
 	p := pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
 	if s.DataSource.Bat != nil {
 		if _, err = p.ConstRun(s.DataSource.Bat, s.Proc); err != nil {
@@ -315,7 +652,7 @@ func (s *Scope) Run(e engine.Engine) (err error) {
 }
 
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
-func (s *Scope) MergeRun(e engine.Engine) error {
+func (s *Scope) MergeRun(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
@@ -325,7 +662,7 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 				defer func() {
 					errChan <- err
 				}()
-				err = cs.Run(e)
+				err = cs.Run(c)
 			}(s.PreScopes[i])
 		case Merge:
 			go func(cs *Scope) {
@@ -333,7 +670,7 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 				defer func() {
 					errChan <- err
 				}()
-				err = cs.MergeRun(e)
+				err = cs.MergeRun(c)
 			}(s.PreScopes[i])
 		case Remote:
 			go func(cs *Scope) {
@@ -341,7 +678,7 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 				defer func() {
 					errChan <- err
 				}()
-				err = cs.RemoteRun(e)
+				err = cs.RemoteRun(c)
 			}(s.PreScopes[i])
 		case Parallel:
 			go func(cs *Scope) {
@@ -349,7 +686,7 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 				defer func() {
 					errChan <- err
 				}()
-				err = cs.ParallelRun(e)
+				err = cs.ParallelRun(c)
 			}(s.PreScopes[i])
 		}
 	}
@@ -357,6 +694,7 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 	if _, err := p.MergeRun(s.Proc); err != nil {
 		return err
 	}
+
 	// check sub-goroutine's error
 	for i := 0; i < len(s.PreScopes); i++ {
 		if err := <-errChan; err != nil {
@@ -366,84 +704,30 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 	return nil
 }
 
-func (s *Scope) DispatchRun(e engine.Engine) error {
-	mcpu := s.NumCPU()
-	ss := make([]*Scope, mcpu)
-	regs := make([][]*process.WaitRegister, len(s.PreScopes))
-	{
-		for i := range regs {
-			regs[i] = make([]*process.WaitRegister, mcpu)
-		}
-	}
-	for i := 0; i < mcpu; i++ {
-		ss[i] = &Scope{
-			Magic: Merge,
-		}
-		ss[i].Proc = process.NewFromProc(mheap.New(s.Proc.Mp.Gm), s.Proc, len(s.PreScopes))
-		for j := 0; j < len(s.PreScopes); j++ {
-			regs[j][i] = ss[i].Proc.Reg.MergeReceivers[j]
-		}
-		ss[i].Instructions = append(ss[i].Instructions, dupInstruction(s.Instructions[0]))
-	}
-	for i := range s.PreScopes {
-		s.PreScopes[i].Instructions[len(s.PreScopes[i].Instructions)-1] = vm.Instruction{
-			Op: vm.Dispatch,
-			Arg: &dispatch.Argument{
-				Regs: regs[i],
-				Mmu:  s.Proc.Mp.Gm,
-				All:  s.PreScopes[i].DispatchAll,
-			},
-		}
-	}
-	s.PreScopes = append(s.PreScopes, ss...)
-	s.Instructions[0] = vm.Instruction{
-		Op:  vm.Merge,
-		Arg: &merge.Argument{},
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	s.Proc.Cancel = cancel
-	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
-	for i := range ss {
-		s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
-			Ctx: ctx,
-			Ch:  make(chan *batch.Batch, 1),
-		}
-		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Mmu: s.Proc.Mp.Gm,
-				Reg: s.Proc.Reg.MergeReceivers[i],
-			},
-		})
-	}
-	return s.MergeRun(e)
-}
-
 // RemoteRun send the scope to a remote node (if target node is itself, it is same to function ParallelRun) and run it.
-func (s *Scope) RemoteRun(e engine.Engine) error {
-	return s.ParallelRun(e)
+func (s *Scope) RemoteRun(c *Compile) error {
+	return s.ParallelRun(c)
 }
 
 // ParallelRun try to execute the scope in parallel way.
-func (s *Scope) ParallelRun(e engine.Engine) error {
+func (s *Scope) ParallelRun(c *Compile) error {
 	var rds []engine.Reader
 
 	if s.DataSource == nil {
-		return s.DispatchRun(e)
+		return s.MergeRun(c)
 	}
-	mcpu := s.NumCPU()
+	mcpu := s.NodeInfo.Mcpu
 	snap := engine.Snapshot(s.Proc.Snapshot)
 	{
-		ctx := context.TODO()
-		db, err := e.Database(ctx, s.DataSource.SchemaName, snap)
+		db, err := c.e.Database(c.ctx, s.DataSource.SchemaName, snap)
 		if err != nil {
 			return err
 		}
-		rel, err := db.Relation(ctx, s.DataSource.RelationName)
+		rel, err := db.Relation(c.ctx, s.DataSource.RelationName)
 		if err != nil {
 			return err
 		}
-		rds, _ = rel.NewReader(ctx, mcpu, nil, s.NodeInfo.Data)
+		rds, _ = rel.NewReader(c.ctx, mcpu, nil, s.NodeInfo.Data)
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
@@ -456,12 +740,7 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 				Attributes:   s.DataSource.Attributes,
 			},
 		}
-		ss[i].Proc = process.New(mheap.New(s.Proc.Mp.Gm))
-		ss[i].Proc.Id = s.Proc.Id
-		ss[i].Proc.Lim = s.Proc.Lim
-		ss[i].Proc.UnixTime = s.Proc.UnixTime
-		ss[i].Proc.Snapshot = s.Proc.Snapshot
-		ss[i].Proc.SessionInfo = s.Proc.SessionInfo
+		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
 	{
 		var flg bool
@@ -476,7 +755,8 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 				arg := in.Arg.(*top.Argument)
 				s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
 				s.Instructions[0] = vm.Instruction{
-					Op: vm.MergeTop,
+					Op:  vm.MergeTop,
+					Idx: in.Idx,
 					Arg: &mergetop.Argument{
 						Fs:    arg.Fs,
 						Limit: arg.Limit,
@@ -484,7 +764,8 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 				}
 				for i := range ss {
 					ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-						Op: vm.Top,
+						Op:  vm.Top,
+						Idx: in.Idx,
 						Arg: &top.Argument{
 							Fs:    arg.Fs,
 							Limit: arg.Limit,
@@ -496,14 +777,16 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 				arg := in.Arg.(*order.Argument)
 				s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
 				s.Instructions[0] = vm.Instruction{
-					Op: vm.MergeOrder,
+					Op:  vm.MergeOrder,
+					Idx: in.Idx,
 					Arg: &mergeorder.Argument{
 						Fs: arg.Fs,
 					},
 				}
 				for i := range ss {
 					ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-						Op: vm.Order,
+						Op:  vm.Order,
+						Idx: in.Idx,
 						Arg: &order.Argument{
 							Fs: arg.Fs,
 						},
@@ -514,14 +797,16 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 				arg := in.Arg.(*limit.Argument)
 				s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
 				s.Instructions[0] = vm.Instruction{
-					Op: vm.MergeLimit,
+					Op:  vm.MergeLimit,
+					Idx: in.Idx,
 					Arg: &mergelimit.Argument{
 						Limit: arg.Limit,
 					},
 				}
 				for i := range ss {
 					ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-						Op: vm.Limit,
+						Op:  vm.Limit,
+						Idx: in.Idx,
 						Arg: &limit.Argument{
 							Limit: arg.Limit,
 						},
@@ -583,7 +868,7 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 			s.Instructions = s.Instructions[:2]
 		}
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(c.ctx)
 	s.Magic = Merge
 	s.PreScopes = ss
 	s.Proc.Cancel = cancel
@@ -600,10 +885,15 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op: vm.Connector,
 			Arg: &connector.Argument{
-				Mmu: s.Proc.Mp.Gm,
 				Reg: s.Proc.Reg.MergeReceivers[i],
 			},
 		})
 	}
-	return s.MergeRun(e)
+	return s.MergeRun(c)
+}
+
+func (s *Scope) appendInstruction(in vm.Instruction) {
+	if !s.IsEnd {
+		s.Instructions = append(s.Instructions, in)
+	}
 }

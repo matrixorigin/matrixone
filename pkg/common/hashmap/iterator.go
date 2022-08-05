@@ -59,7 +59,9 @@ func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) (
 			err = itr.mp.hashMap.InsertStringBatchWithRing(itr.mp.zValues, itr.mp.strHashStates, itr.mp.keys[:count], itr.mp.values, itr.m)
 		}
 	}
-	return itr.mp.values[:count], itr.mp.zValues[:count], err
+	vs, zvs := itr.mp.values[:count], itr.mp.zValues[:count]
+	updateHashTableRows(itr.mp, vs, zvs)
+	return vs, zvs, err
 }
 
 func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector, inBuckets []uint8) ([]uint64, []int64) {
@@ -106,5 +108,29 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) (
 			err = itr.mp.hashMap.InsertBatchWithRing(count, itr.mp.zValues, itr.mp.hashes, unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values, itr.m)
 		}
 	}
-	return itr.mp.values[:count], itr.mp.zValues[:count], err
+	vs, zvs := itr.mp.values[:count], itr.mp.zValues[:count]
+	updateHashTableRows(itr.mp, vs, zvs)
+	return vs, zvs, err
+}
+
+func updateHashTableRows(hashMap HashMap, vs []uint64, zvs []int64) {
+	groupCount := hashMap.GroupCount()
+	if hashMap.HasNull() {
+		for _, v := range vs {
+			if v > groupCount {
+				groupCount++
+			}
+		}
+	} else {
+		for i, v := range vs {
+			if zvs[i] == 0 {
+				continue
+			}
+			if v > groupCount {
+				groupCount++
+			}
+		}
+	}
+	count := groupCount - hashMap.GroupCount()
+	hashMap.AddGroups(count)
 }

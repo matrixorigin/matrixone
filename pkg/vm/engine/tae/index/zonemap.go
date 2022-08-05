@@ -15,18 +15,55 @@
 package index
 
 import (
-	"bytes"
-
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
+// A zonemap with 64-byte serialized data.
+//
+// If the data type is string, only a part of prefix of minimum and maximum will be written to disk
+// Rule of thumb: false positive is allowed but false negative is not
+// That means the searialized min-max range should cover the original min-max range.
+//
+// Therefore, we must record minv length, because filling zero for minv makes it bigger, which is not acceptable.
+// For maxv, we have to construct a bigger value in 32 bytes by plus one if needed.
+// What if the leading 32 bytes are all 0xff? That is means +inf, we should
+// compare specifically, refer to the comments on isInf field
+//
+// Layout for string:
+// [B0,...B30,B31,B32,...B62,B63]
+//  ---------  -  --------------
+//     minv    |       maxv
+//             |
+//         [b7=init,b6~b5 unused,b4~b0=len(minv)]
+
+const (
+	constZMInited uint8  = 0x80
+	constMaxU64   uint64 = ^uint64(0)
+)
+
+func is32BytesMax(bs []byte) bool {
+	isMax := true
+	// iter u64 is about 8x faster than iter byte
+	for i := 0; i < 32; i += 8 {
+		if types.DecodeFixed[uint64](bs[i:i+8]) != constMaxU64 {
+			isMax = false
+			break
+		}
+	}
+	return isMax
+}
+
 type ZoneMap struct {
 	typ      types.Type
 	min, max any
 	inited   bool
+	// only in a deserialized zonemap, this field is possibile to be True.
+	// isInf is true means we can't find a 32-byte upper bound for original maximum when serializing,
+	// and after deserializing, we have to infer that the original maximum is positive infinite.
+	isInf bool
 }
 
 func NewZoneMap(typ types.Type) *ZoneMap {
@@ -34,21 +71,19 @@ func NewZoneMap(typ types.Type) *ZoneMap {
 	return zm
 }
 
-func LoadZoneMapFrom(data []byte) (zm *ZoneMap, err error) {
-	zm = new(ZoneMap)
-	err = zm.Unmarshal(data)
-	return
-}
-
 func (zm *ZoneMap) GetType() types.Type {
 	return zm.typ
 }
 
+func (zm *ZoneMap) init(v any) {
+	zm.min = v
+	zm.max = v
+	zm.inited = true
+}
+
 func (zm *ZoneMap) Update(v any) (err error) {
 	if !zm.inited {
-		zm.min = v
-		zm.max = v
-		zm.inited = true
+		zm.init(v)
 		return
 	}
 	if compute.CompareGeneric(v, zm.max, zm.typ) > 0 {
@@ -76,10 +111,9 @@ func (zm *ZoneMap) Contains(key any) (ok bool) {
 	if !zm.inited {
 		return
 	}
-	if compute.CompareGeneric(key, zm.max, zm.typ) > 0 || compute.CompareGeneric(key, zm.min, zm.typ) < 0 {
-		return
+	if (zm.isInf || compute.CompareGeneric(key, zm.max, zm.typ) <= 0) && compute.CompareGeneric(key, zm.min, zm.typ) >= 0 {
+		ok = true
 	}
-	ok = true
 	return
 }
 
@@ -90,7 +124,7 @@ func (zm *ZoneMap) ContainsAny(keys containers.Vector) (visibility *roaring.Bitm
 	visibility = roaring.NewBitmap()
 	row := uint32(0)
 	op := func(key any, _ int) (err error) {
-		if compute.CompareGeneric(key, zm.max, zm.typ) <= 0 && compute.CompareGeneric(key, zm.min, zm.typ) >= 0 {
+		if (zm.isInf || compute.CompareGeneric(key, zm.max, zm.typ) <= 0) && compute.CompareGeneric(key, zm.min, zm.typ) >= 0 {
 			visibility.Add(row)
 		}
 		row++
@@ -107,9 +141,7 @@ func (zm *ZoneMap) ContainsAny(keys containers.Vector) (visibility *roaring.Bitm
 
 func (zm *ZoneMap) SetMax(v any) {
 	if !zm.inited {
-		zm.min = v
-		zm.max = v
-		zm.inited = true
+		zm.init(v)
 		return
 	}
 	if compute.CompareGeneric(v, zm.max, zm.typ) > 0 {
@@ -123,9 +155,7 @@ func (zm *ZoneMap) GetMax() any {
 
 func (zm *ZoneMap) SetMin(v any) {
 	if !zm.inited {
-		zm.min = v
-		zm.max = v
-		zm.inited = true
+		zm.init(v)
 		return
 	}
 	if compute.CompareGeneric(v, zm.min, zm.typ) < 0 {
@@ -149,47 +179,48 @@ func (zm *ZoneMap) GetMin() any {
 // }
 
 func (zm *ZoneMap) Marshal() (buf []byte, err error) {
-	var w bytes.Buffer
-	if _, err = w.Write(types.EncodeType(zm.typ)); err != nil {
-		return
-	}
+	buf = make([]byte, 64)
 	if !zm.inited {
-		if err = types.WriteFixedValue(&w, int8(0)); err != nil {
-			return
-		}
-		buf = w.Bytes()
 		return
 	}
-	if err = types.WriteFixedValue(&w, int8(1)); err != nil {
-		return
-	}
+	buf[31] |= constZMInited
 	switch zm.typ.Oid {
 	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
-		minv := zm.min.([]byte)
-		maxv := zm.max.([]byte)
-		if _, err = types.WriteValues(
-			&w,
-			int16(len(minv)),
-			minv,
-			int16(len(maxv)),
-			maxv); err != nil {
-			return
+		minv, maxv := zm.min.([]byte), zm.max.([]byte)
+		// write 31-byte prefix of minv
+		copy(buf[0:31], minv)
+		minLen := uint8(31)
+		if len(minv) < 31 {
+			minLen = uint8(len(minv))
 		}
-		buf = w.Bytes()
+		buf[31] |= minLen
+
+		// write 32-byte prefix of maxv
+		copy(buf[32:64], maxv)
+		// no truncation, get a bigger value by filling tail zeros
+		if len(maxv) > 32 && !is32BytesMax(buf[32:64]) {
+			// truncation happens, get a bigger one by plus one
+			for i := 63; i >= 32; i-- {
+				buf[i] += 1
+				if buf[i] != 0 {
+					break
+				}
+			}
+		}
 	default:
-		if _, err = types.WriteValues(&w, zm.min, zm.max); err != nil {
-			return
+		minv := types.EncodeValue(zm.min, zm.typ)
+		maxv := types.EncodeValue(zm.max, zm.typ)
+		if len(maxv) > 16 || len(minv) > 16 {
+			panic("zonemap: large fixed length type, check again")
 		}
-		buf = w.Bytes()
+		copy(buf[0:], minv)
+		copy(buf[32:], maxv)
 	}
 	return
 }
 
 func (zm *ZoneMap) Unmarshal(buf []byte) error {
-	zm.typ = types.DecodeType(buf[:types.TypeSize])
-	buf = buf[types.TypeSize:]
-	init := types.DecodeFixed[int8](buf[:1])
-	buf = buf[1:]
+	init := buf[31] & constZMInited
 	if init == 0 {
 		zm.inited = false
 		return nil
@@ -198,106 +229,99 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 	switch zm.typ.Oid {
 	case types.Type_BOOL:
 		zm.min = types.DecodeFixed[bool](buf[:1])
-		buf = buf[1:]
+		buf = buf[32:]
 		zm.max = types.DecodeFixed[bool](buf[:1])
 		return nil
 	case types.Type_INT8:
 		zm.min = types.DecodeFixed[int8](buf[:1])
-		buf = buf[1:]
+		buf = buf[32:]
 		zm.max = types.DecodeFixed[int8](buf[:1])
 		return nil
 	case types.Type_INT16:
 		zm.min = types.DecodeFixed[int16](buf[:2])
-		buf = buf[2:]
+		buf = buf[32:]
 		zm.max = types.DecodeFixed[int16](buf[:2])
 		return nil
 	case types.Type_INT32:
 		zm.min = types.DecodeFixed[int32](buf[:4])
-		buf = buf[4:]
+		buf = buf[32:]
 		zm.max = types.DecodeFixed[int32](buf[:4])
 		return nil
 	case types.Type_INT64:
 		zm.min = types.DecodeFixed[int64](buf[:8])
-		buf = buf[8:]
+		buf = buf[32:]
 		zm.max = types.DecodeFixed[int64](buf[:8])
 		return nil
 	case types.Type_UINT8:
 		zm.min = types.DecodeFixed[uint8](buf[:1])
-		buf = buf[1:]
+		buf = buf[32:]
 		zm.max = types.DecodeFixed[uint8](buf[:1])
 		return nil
 	case types.Type_UINT16:
 		zm.min = types.DecodeFixed[uint16](buf[:2])
-		buf = buf[2:]
+		buf = buf[32:]
 		zm.max = types.DecodeFixed[uint16](buf[:2])
 		return nil
 	case types.Type_UINT32:
 		zm.min = types.DecodeFixed[uint32](buf[:4])
-		buf = buf[4:]
+		buf = buf[32:]
 		zm.max = types.DecodeFixed[uint32](buf[:4])
 		return nil
 	case types.Type_UINT64:
 		zm.min = types.DecodeFixed[uint64](buf[:8])
-		buf = buf[8:]
+		buf = buf[32:]
 		zm.max = types.DecodeFixed[uint64](buf[:8])
 		return nil
 	case types.Type_FLOAT32:
 		zm.min = types.DecodeFixed[float32](buf[:4])
-		buf = buf[4:]
+		buf = buf[32:]
 		zm.max = types.DecodeFixed[float32](buf[:4])
 		return nil
 	case types.Type_FLOAT64:
 		zm.min = types.DecodeFixed[float64](buf[:8])
-		buf = buf[8:]
+		buf = buf[32:]
 		zm.max = types.DecodeFixed[float64](buf[:8])
 		return nil
 	case types.Type_DATE:
 		zm.min = types.DecodeFixed[types.Date](buf[:4])
-		buf = buf[4:]
+		buf = buf[32:]
 		zm.max = types.DecodeFixed[types.Date](buf[:4])
 		return nil
 	case types.Type_DATETIME:
 		zm.min = types.DecodeFixed[types.Datetime](buf[:8])
-		buf = buf[8:]
+		buf = buf[32:]
 		zm.max = types.DecodeFixed[types.Datetime](buf[:8])
 		return nil
 	case types.Type_TIMESTAMP:
 		zm.min = types.DecodeFixed[types.Timestamp](buf[:8])
-		buf = buf[8:]
+		buf = buf[32:]
 		zm.max = types.DecodeFixed[types.Timestamp](buf[:8])
 		return nil
 	case types.Type_DECIMAL64:
 		zm.min = types.DecodeFixed[types.Decimal64](buf[:8])
-		buf = buf[8:]
+		buf = buf[32:]
 		zm.max = types.DecodeFixed[types.Decimal64](buf[:8])
 		return nil
 	case types.Type_DECIMAL128:
 		zm.min = types.DecodeFixed[types.Decimal128](buf[:16])
-		buf = buf[16:]
+		buf = buf[32:]
 		zm.max = types.DecodeFixed[types.Decimal128](buf[:16])
 		return nil
 	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
-		lenminv := types.DecodeFixed[int16](buf[:2])
-		buf = buf[2:]
-		minBuf := make([]byte, int(lenminv))
-		copy(minBuf, buf[:int(lenminv)])
-		buf = buf[int(lenminv):]
-
-		lenmaxv := types.DecodeFixed[int16](buf[:2])
-		buf = buf[2:]
-		maxBuf := make([]byte, int(lenmaxv))
-		copy(maxBuf, buf[:int(lenmaxv)])
+		minBuf := make([]byte, buf[31]&0x7f)
+		copy(minBuf, buf[0:32])
+		maxBuf := make([]byte, 32)
+		copy(maxBuf, buf[32:64])
 		zm.min = minBuf
 		zm.max = maxBuf
+
+		zm.isInf = is32BytesMax(maxBuf)
 		return nil
+	default:
+		panic("unsupported type")
 	}
-	return nil
 }
 
 func (zm *ZoneMap) GetMemoryUsage() uint64 {
-	buf, err := zm.Marshal()
-	if err != nil {
-		panic(err)
-	}
-	return uint64(len(buf))
+	return 64
 }
