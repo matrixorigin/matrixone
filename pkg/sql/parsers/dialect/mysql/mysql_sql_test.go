@@ -26,7 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "insert into t2 values (1.7156e-1, 3)",
+		input: "update t1 set a = default",
 	}
 )
 
@@ -51,6 +51,8 @@ var (
 		input  string
 		output string
 	}{{
+		input: "update t1 set a = default",
+	}, {
 		input:  "explain select * from emp",
 		output: "explain select * from emp",
 	}, {
