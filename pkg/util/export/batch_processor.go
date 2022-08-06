@@ -82,7 +82,7 @@ func (r *bufferHolder) Stop() bool {
 func (r *bufferHolder) GetBatch(buf *bytes.Buffer) (any, bool) {
 	r.mux.Lock()
 	defer r.mux.Unlock()
-	for atomic.LoadInt32(&r.readonly) != READONLY {
+	if atomic.LoadInt32(&r.readonly) != READONLY {
 		return nil, false
 	}
 	return r.buffer.GetBatch(buf), true
@@ -91,7 +91,7 @@ func (r *bufferHolder) GetBatch(buf *bytes.Buffer) (any, bool) {
 func (r *bufferHolder) Flush() bool {
 	r.mux.Lock()
 	defer r.mux.Unlock()
-	for atomic.LoadInt32(&r.readonly) != READONLY {
+	if atomic.LoadInt32(&r.readonly) != READONLY {
 		return false
 	}
 	var flush = r.impl.NewItemBatchHandler()

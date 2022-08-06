@@ -34,7 +34,7 @@ func (s *SizeBuffer) IsEmpty() bool              { return len(s.arr) == 0 }
 func (s *SizeBuffer) ShouldFlush() bool          { return len(s.arr) >= 3 }
 func (s *SizeBuffer) GetBatch(buf *bytes.Buffer) any {
 	buf.Reset()
-	if s.IsEmpty() {
+	if len(s.arr) == 0 {
 		return ""
 	}
 
