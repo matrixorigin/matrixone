@@ -36,7 +36,7 @@ type MVCCValue[T any] struct {
 // Read reads the visible value from Values
 // readTime's logical time should be monotonically increasing in one transaction to reflect commands order
 func (m *MVCC[T]) Read(tx *Transaction, readTime Timestamp) *T {
-	if tx.State != Active {
+	if tx.State.Load() != Active {
 		panic("should not call Read")
 	}
 
@@ -52,7 +52,7 @@ func (m *MVCC[T]) Read(tx *Transaction, readTime Timestamp) *T {
 }
 
 func (m *MVCC[T]) Visible(tx *Transaction, readTime Timestamp) bool {
-	if tx.State != Active {
+	if tx.State.Load() != Active {
 		panic("should not call Visible")
 	}
 
@@ -87,7 +87,7 @@ func (m *MVCCValue[T]) Visible(txID string, readTime Timestamp) bool {
 	}
 
 	// inserted by a committed tx
-	if m.BornTx.State == Committed {
+	if m.BornTx.State.Load() == Committed {
 		// not been deleted
 		if m.LockTx == nil {
 			return true
@@ -97,7 +97,7 @@ func (m *MVCCValue[T]) Visible(txID string, readTime Timestamp) bool {
 			return true
 		}
 		// deleted by another tx but not committed
-		if m.LockTx.ID != txID && m.LockTx.State != Committed {
+		if m.LockTx.ID != txID && m.LockTx.State.Load() != Committed {
 			return true
 		}
 	}
@@ -106,7 +106,7 @@ func (m *MVCCValue[T]) Visible(txID string, readTime Timestamp) bool {
 }
 
 func (m *MVCC[T]) Insert(tx *Transaction, writeTime Timestamp, value T) error {
-	if tx.State != Active {
+	if tx.State.Load() != Active {
 		panic("should not call Insert")
 	}
 
@@ -121,7 +121,7 @@ func (m *MVCC[T]) Insert(tx *Transaction, writeTime Timestamp, value T) error {
 }
 
 func (m *MVCC[T]) Delete(tx *Transaction, writeTime Timestamp) error {
-	if tx.State != Active {
+	if tx.State.Load() != Active {
 		panic("should not call Delete")
 	}
 
@@ -147,7 +147,7 @@ func (m *MVCC[T]) Delete(tx *Transaction, writeTime Timestamp) error {
 }
 
 func (m *MVCC[T]) Update(tx *Transaction, writeTime Timestamp, newValue T) error {
-	if tx.State != Active {
+	if tx.State.Load() != Active {
 		panic("should not call Update")
 	}
 

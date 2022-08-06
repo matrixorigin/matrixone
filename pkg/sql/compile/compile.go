@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -42,20 +43,19 @@ import (
 func New(db string, sql string, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
 	return &Compile{
-		e:      e,
-		db:     db,
-		ctx:    ctx,
-		uid:    uid,
-		sql:    sql,
-		proc:   proc,
-		stmt:   stmt,
-		cnList: e.Nodes(),
+		e:    e,
+		db:   db,
+		ctx:  ctx,
+		uid:  uid,
+		sql:  sql,
+		proc: proc,
+		stmt: stmt,
 	}
 }
 
 // Compile is the entrance of the compute-layer, it compiles AST tree to scope list.
 // A scope is an execution unit.
-func (c *Compile) Compile(pn *plan.Plan, u interface{}, fill func(interface{}, *batch.Batch) error) (err error) {
+func (c *Compile) Compile(pn *plan.Plan, u any, fill func(any, *batch.Batch) error) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.NewPanicError(e)
@@ -63,6 +63,7 @@ func (c *Compile) Compile(pn *plan.Plan, u interface{}, fill func(interface{}, *
 	}()
 	c.u = u
 	c.fill = fill
+	c.info = plan2.GetExecTypeFromPlan(pn)
 	// build scope for a single sql
 	s, err := c.compileScope(pn)
 	if err != nil {
@@ -82,7 +83,7 @@ func (c *Compile) GetAffectedRows() uint64 {
 }
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
-func (c *Compile) Run(ts uint64) (err error) {
+func (c *Compile) Run(_ uint64) (err error) {
 	if c.scope == nil {
 		return nil
 	}
@@ -91,47 +92,48 @@ func (c *Compile) Run(ts uint64) (err error) {
 
 	switch c.scope.Magic {
 	case Normal:
+		defer c.fillAnalyzeInfo()
 		return c.scope.Run(c)
 	case Merge:
 		defer c.fillAnalyzeInfo()
 		return c.scope.MergeRun(c)
 	case Remote:
+		defer c.fillAnalyzeInfo()
 		return c.scope.RemoteRun(c)
 	case CreateDatabase:
-		return c.scope.CreateDatabase(ts, c.proc.Snapshot, c.e)
+		return c.scope.CreateDatabase(c)
 	case DropDatabase:
-		return c.scope.DropDatabase(ts, c.proc.Snapshot, c.e)
+		return c.scope.DropDatabase(c)
 	case CreateTable:
-		return c.scope.CreateTable(ts, c.proc.Snapshot, c.e, c.db)
+		return c.scope.CreateTable(c)
 	case DropTable:
-		return c.scope.DropTable(ts, c.proc.Snapshot, c.e)
-	case CreateIndex:
-		return c.scope.CreateIndex(ts, c.proc.Snapshot, c.e)
-	case DropIndex:
-		return c.scope.DropIndex(ts, c.proc.Snapshot, c.e)
+		return c.scope.DropTable(c)
 	case Deletion:
-		affectedRows, err := c.scope.Delete(ts, c.proc.Snapshot, c)
+		defer c.fillAnalyzeInfo()
+		affectedRows, err := c.scope.Delete(c)
 		if err != nil {
 			return err
 		}
 		c.setAffectedRows(affectedRows)
 		return nil
 	case Insert:
-		affectedRows, err := c.scope.Insert(ts, c.proc.Snapshot, c)
+		defer c.fillAnalyzeInfo()
+		affectedRows, err := c.scope.Insert(c)
 		if err != nil {
 			return err
 		}
 		c.setAffectedRows(affectedRows)
 		return nil
 	case Update:
-		affectedRows, err := c.scope.Update(ts, c.proc.Snapshot, c)
+		defer c.fillAnalyzeInfo()
+		affectedRows, err := c.scope.Update(c)
 		if err != nil {
 			return err
 		}
 		c.setAffectedRows(affectedRows)
 		return nil
 	case InsertValues:
-		affectedRows, err := c.scope.InsertValues(ts, c.proc.Snapshot, c.e, c.proc, c.stmt.(*tree.Insert))
+		affectedRows, err := c.scope.InsertValues(c, c.stmt.(*tree.Insert))
 		if err != nil {
 			return err
 		}
@@ -199,21 +201,83 @@ func (c *Compile) compileQuery(qry *plan.Query) (*Scope, error) {
 	if len(qry.Steps) != 1 {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", qry))
 	}
-	{ // init analyze
-		anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
-		for i := range anals {
-			anals[i] = new(process.AnalyzeInfo)
-		}
-		c.anal = &anaylze{
-			qry:       qry,
-			analInfos: anals,
-			curr:      int(qry.Steps[0]),
+	var err error
+	c.cnList, err = c.e.Nodes()
+	if err != nil {
+		return nil, err
+	}
+	if c.info.Typ == plan2.ExecTypeTP {
+		c.cnList = engine.Nodes{engine.Node{Mcpu: 1}}
+	} else {
+		if len(c.cnList) == 0 {
+			c.cnList = append(c.cnList, engine.Node{Mcpu: c.NumCPU()})
+		} else if len(c.cnList) > c.info.CnNumbers {
+			c.cnList = c.cnList[:c.info.CnNumbers]
 		}
 	}
+	c.initAnalyze(qry)
 	ss, err := c.compilePlanScope(qry.Nodes[qry.Steps[0]], qry.Nodes)
 	if err != nil {
 		return nil, err
 	}
+	if c.info.Typ == plan2.ExecTypeTP {
+		return c.compileTpQuery(qry, ss)
+	}
+	return c.compileApQuery(qry, ss)
+}
+
+func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
+	rs := c.newMergeScope(ss)
+	switch qry.StmtType {
+	case plan.Query_DELETE:
+		rs.Magic = Deletion
+	case plan.Query_INSERT:
+		rs.Magic = Insert
+	case plan.Query_UPDATE:
+		rs.Magic = Update
+	default:
+	}
+	switch qry.StmtType {
+	case plan.Query_DELETE:
+		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc.Snapshot)
+		if err != nil {
+			return nil, err
+		}
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  vm.Deletion,
+			Arg: scp,
+		})
+	case plan.Query_INSERT:
+		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.Snapshot)
+		if err != nil {
+			return nil, err
+		}
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  vm.Insert,
+			Arg: arg,
+		})
+	case plan.Query_UPDATE:
+		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc.Snapshot)
+		if err != nil {
+			return nil, err
+		}
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  vm.Update,
+			Arg: scp,
+		})
+	default:
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op: vm.Output,
+			Arg: &output.Argument{
+				Data: c.u,
+				Func: c.fill,
+			},
+		})
+	}
+	return rs, nil
+}
+
+func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	rs := c.newMergeScope(ss)
 	switch qry.StmtType {
 	case plan.Query_DELETE:
@@ -370,10 +434,6 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 
 func (c *Compile) compileTableScan(n *plan.Node) []*Scope {
 	ss := make([]*Scope, 0, len(c.cnList))
-	if len(c.cnList) == 0 {
-		ss = append(ss, c.compileTableScanWithNode(n, engine.Node{Mcpu: c.NumCPU()}))
-		return ss
-	}
 	for i := range c.cnList {
 		ss = append(ss, c.compileTableScanWithNode(n, c.cnList[i]))
 	}
@@ -620,7 +680,7 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
-			Arg: constructGroup(n, ns[n.Children[0]], 0, 0),
+			Arg: constructGroup(n, ns[n.Children[0]], 0, 0, false),
 		})
 	}
 	rs := c.newMergeScope(ss)
@@ -648,7 +708,7 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
-			Arg: constructGroup(n, ns[n.Children[0]], i, len(rs)),
+			Arg: constructGroup(n, ns[n.Children[0]], i, len(rs), true),
 		})
 	}
 	return []*Scope{c.newMergeScope(append(rs, ss...))}
@@ -689,9 +749,6 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 func (c *Compile) newGroupScopeList(childrenCount int) []*Scope {
 	var ss []*Scope
 
-	if len(c.cnList) == 0 {
-		return c.newGroupScopeListWithNode(c.NumCPU(), childrenCount)
-	}
 	for _, n := range c.cnList {
 		ss = append(ss, c.newGroupScopeListWithNode(n.Mcpu, childrenCount)...)
 	}
@@ -744,6 +801,18 @@ func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) ([]*Scope, *S
 // Number of cpu's available on the current machine
 func (c *Compile) NumCPU() int {
 	return runtime.NumCPU()
+}
+
+func (c *Compile) initAnalyze(qry *plan.Query) {
+	anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
+	for i := range anals {
+		anals[i] = new(process.AnalyzeInfo)
+	}
+	c.anal = &anaylze{
+		qry:       qry,
+		analInfos: anals,
+		curr:      int(qry.Steps[0]),
+	}
 }
 
 func (c *Compile) fillAnalyzeInfo() {

@@ -26,7 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "insert into t2 values (1.7156e-1, 3)",
+		input: "drop account if exists abc",
 	}
 )
 
@@ -51,6 +51,8 @@ var (
 		input  string
 		output string
 	}{{
+		input: "update t1 set a = default",
+	}, {
 		input:  "explain select * from emp",
 		output: "explain select * from emp",
 	}, {
@@ -1048,6 +1050,32 @@ var (
 		output: "prepare stmt_name1 from select * from t1",
 	}, {
 		input: "prepare stmt_name1 from select * from t1 where a > ? or abs(b) < ?",
+	}, {
+		input: "create account if not exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
+	}, {
+		input: "create account if not exists nihao admin_name 'admin' identified by random password",
+	}, {
+		input: "create account if not exists nihao admin_name 'admin' identified with '123'",
+	}, {
+		input: "create account nihao admin_name 'admin' identified by '123' open comment 'new account'",
+	}, {
+		input: "create account nihao admin_name 'admin' identified by random password",
+	}, {
+		input: "create account nihao admin_name 'admin' identified with '123'",
+	}, {
+		input: "drop account if exists abc",
+	}, {
+		input: "alter account if not exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
+	}, {
+		input: "alter account if not exists nihao admin_name 'admin' identified by random password",
+	}, {
+		input: "alter account if not exists nihao admin_name 'admin' identified with '123'",
+	}, {
+		input: "alter account nihao admin_name 'admin' identified by '123' open comment 'new account'",
+	}, {
+		input: "alter account nihao admin_name 'admin' identified by random password",
+	}, {
+		input: "alter account nihao admin_name 'admin' identified with '123'",
 	}}
 )
 
