@@ -20,7 +20,6 @@ import (
 )
 
 type EncodeBatch struct {
-	Cnt  int64
 	Zs   []int64
 	Vecs []*vector.Vector
 }

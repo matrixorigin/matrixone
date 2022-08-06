@@ -62,6 +62,10 @@ func (m *StrHashMap) NewIterator() Iterator {
 	}
 }
 
+func (m *StrHashMap) HasNull() bool {
+	return m.hasNull
+}
+
 func (m *StrHashMap) Free() {
 	m.hashMap.Free(m.m)
 }

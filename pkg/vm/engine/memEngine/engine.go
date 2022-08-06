@@ -50,8 +50,8 @@ func (e *MemEngine) Database(_ context.Context, name string, _ client.TxnOperato
 	return &database{db: e.db, n: e.n}, nil
 }
 
-func (e *MemEngine) Nodes() engine.Nodes {
-	return nil
+func (e *MemEngine) Nodes() (engine.Nodes, error) {
+	return nil, nil
 }
 
 func (e *MemEngine) DefaultDatabase() string {

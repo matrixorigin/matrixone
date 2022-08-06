@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 
@@ -71,7 +72,8 @@ func init() {
 
 func dupInstruction(in vm.Instruction) vm.Instruction {
 	rin := vm.Instruction{
-		Op: in.Op,
+		Op:  in.Op,
+		Idx: in.Idx,
 	}
 	switch arg := in.Arg.(type) {
 	case *top.Argument:
@@ -98,6 +100,14 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Typs:       arg.Typs,
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
+		}
+	case *group.Argument:
+		rin.Arg = &group.Argument{
+			Aggs:    arg.Aggs,
+			Exprs:   arg.Exprs,
+			Types:   arg.Types,
+			Ibucket: arg.Ibucket,
+			Nbucket: arg.Nbucket,
 		}
 	case *single.Argument:
 		rin.Arg = &single.Argument{
@@ -386,13 +396,13 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	}
 }
 
-func constructGroup(n, cn *plan.Node) *group.Argument {
+func constructGroup(n, cn *plan.Node, ibucket, nbucket int, needEval bool) *group.Argument {
 	aggs := make([]aggregate.Aggregate, len(n.AggList))
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
 			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
-			f.F.Func.Obj = int64(uint64(f.F.Func.Obj) & function.DistinctMask)
-			fun, err := function.GetFunctionByID(f.F.Func.GetObj())
+			obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
+			fun, err := function.GetFunctionByID(obj)
 			if err != nil {
 				panic(err)
 			}
@@ -412,10 +422,20 @@ func constructGroup(n, cn *plan.Node) *group.Argument {
 		typs[i].Precision = e.Typ.Precision
 	}
 	return &group.Argument{
-		Aggs:  aggs,
-		Types: typs,
-		Exprs: n.GroupBy,
+		Aggs:     aggs,
+		Types:    typs,
+		NeedEval: needEval,
+		Exprs:    n.GroupBy,
+		Ibucket:  uint64(ibucket),
+		Nbucket:  uint64(nbucket),
 	}
+}
+
+func constructDispatch(all bool, regs []*process.WaitRegister) *dispatch.Argument {
+	arg := new(dispatch.Argument)
+	arg.All = all
+	arg.Regs = regs
+	return arg
 }
 
 func constructMergeGroup(_ *plan.Node, needEval bool) *mergegroup.Argument {

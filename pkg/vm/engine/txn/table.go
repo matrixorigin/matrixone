@@ -15,14 +15,11 @@
 package txnengine
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -45,11 +42,11 @@ func (*Table) Size(string) int64 {
 
 func (t *Table) AddTableDef(ctx context.Context, def engine.TableDef) error {
 
-	_, err := doTxnRequest(
+	_, err := doTxnRequest[AddTableDefResp](
 		ctx,
+		t.engine,
 		t.txnOperator.Write,
-		t.engine.getDataNodes(),
-		txn.TxnMethod_Write,
+		allNodes,
 		OpAddTableDef,
 		AddTableDefReq{
 			TableID: t.id,
@@ -65,11 +62,11 @@ func (t *Table) AddTableDef(ctx context.Context, def engine.TableDef) error {
 
 func (t *Table) DelTableDef(ctx context.Context, def engine.TableDef) error {
 
-	_, err := doTxnRequest(
+	_, err := doTxnRequest[DelTableDefResp](
 		ctx,
+		t.engine,
 		t.txnOperator.Write,
-		t.engine.getDataNodes(),
-		txn.TxnMethod_Write,
+		allNodes,
 		OpDelTableDef,
 		DelTableDefReq{
 			TableID: t.id,
@@ -85,17 +82,24 @@ func (t *Table) DelTableDef(ctx context.Context, def engine.TableDef) error {
 
 func (t *Table) Delete(ctx context.Context, vec *vector.Vector, _ string) error {
 
-	shards, err := t.engine.shardPolicy.Vector(vec, t.engine.getDataNodes())
+	clusterDetails, err := t.engine.getClusterDetails()
+	if err != nil {
+		return err
+	}
+	shards, err := t.engine.shardPolicy.Vector(
+		vec,
+		clusterDetails.DNNodes,
+	)
 	if err != nil {
 		return err
 	}
 
 	for _, shard := range shards {
-		_, err := doTxnRequest(
+		_, err := doTxnRequest[DeleteResp](
 			ctx,
+			t.engine,
 			t.txnOperator.Write,
-			shard.Nodes,
-			txn.TxnMethod_Write,
+			theseNodes(shard.Nodes),
 			OpDelete,
 			DeleteReq{
 				TableID: t.id,
@@ -120,11 +124,11 @@ func (*Table) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
 
 func (t *Table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
 
-	resps, err := doTxnRequest(
+	resps, err := doTxnRequest[GetPrimaryKeysResp](
 		ctx,
+		t.engine,
 		t.txnOperator.Read,
-		t.engine.getDataNodes()[:1],
-		txn.TxnMethod_Read,
+		firstNode,
 		OpGetPrimaryKeys,
 		GetPrimaryKeysReq{
 			TableID: t.id,
@@ -134,16 +138,17 @@ func (t *Table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error)
 		return nil, err
 	}
 
-	var resp GetPrimaryKeysResp
-	if err := gob.NewDecoder(bytes.NewReader(resps[0])).Decode(&resp); err != nil {
-		return nil, err
-	}
+	resp := resps[0]
 
 	return resp.Attrs, nil
 }
 
 func (t *Table) Ranges(ctx context.Context) ([][]byte, error) {
-	nodes := t.engine.getDataNodes()
+	clusterDetails, err := t.engine.getClusterDetails()
+	if err != nil {
+		return nil, err
+	}
+	nodes := clusterDetails.DNNodes
 	shards := make([][]byte, 0, len(nodes))
 	for _, node := range nodes {
 		shards = append(shards, []byte(node.UUID))
@@ -156,10 +161,18 @@ func (t *Table) NewReader(
 	parallel int,
 	expr *plan.Expr,
 	shards [][]byte,
-) (readers []engine.Reader, err error) {
+) (
+	readers []engine.Reader,
+	err error,
+) {
+
+	clusterDetails, err := t.engine.getClusterDetails()
+	if err != nil {
+		return nil, err
+	}
 
 	readers = make([]engine.Reader, parallel)
-	nodes := t.engine.getDataNodes()
+	nodes := clusterDetails.DNNodes
 
 	if len(shards) > 0 {
 		uuidSet := make(map[string]bool)
@@ -175,11 +188,11 @@ func (t *Table) NewReader(
 		nodes = filteredNodes
 	}
 
-	resps, err := doTxnRequest(
+	resps, err := doTxnRequest[NewTableIterResp](
 		ctx,
+		t.engine,
 		t.txnOperator.Read,
-		nodes,
-		txn.TxnMethod_Read,
+		theseNodes(nodes),
 		OpNewTableIter,
 		NewTableIterReq{
 			TableID: t.id,
@@ -193,13 +206,9 @@ func (t *Table) NewReader(
 
 	iterIDSets := make([][]string, parallel)
 	i := 0
-	for _, payload := range resps {
-		var r NewTableIterResp
-		if err := gob.NewDecoder(bytes.NewReader(payload)).Decode(&r); err != nil {
-			return nil, err
-		}
-		if r.IterID != "" {
-			iterIDSets[i] = append(iterIDSets[i], r.IterID)
+	for _, resp := range resps {
+		if resp.IterID != "" {
+			iterIDSets[i] = append(iterIDSets[i], resp.IterID)
 			i++
 			if i >= parallel {
 				// round
@@ -213,6 +222,7 @@ func (t *Table) NewReader(
 			continue
 		}
 		reader := &TableReader{
+			engine:      t.engine,
 			txnOperator: t.txnOperator,
 			ctx:         ctx,
 		}
@@ -228,17 +238,13 @@ func (t *Table) NewReader(
 	return
 }
 
-func (t *Table) Nodes() engine.Nodes {
-	return t.engine.Nodes()
-}
-
 func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 
-	resps, err := doTxnRequest(
+	resps, err := doTxnRequest[GetTableDefsResp](
 		ctx,
+		t.engine,
 		t.txnOperator.Read,
-		t.engine.getDataNodes()[:1],
-		txn.TxnMethod_Read,
+		firstNode,
 		OpGetTableDefs,
 		GetTableDefsReq{
 			TableID: t.id,
@@ -248,21 +254,18 @@ func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 		return nil, err
 	}
 
-	var resp GetTableDefsResp
-	if err := gob.NewDecoder(bytes.NewReader(resps[0])).Decode(&resp); err != nil {
-		return nil, err
-	}
+	resp := resps[0]
 
 	return resp.Defs, nil
 }
 
 func (t *Table) Truncate(ctx context.Context) (uint64, error) {
 
-	resps, err := doTxnRequest(
+	resps, err := doTxnRequest[TruncateResp](
 		ctx,
+		t.engine,
 		t.txnOperator.Write,
-		t.engine.getDataNodes(),
-		txn.TxnMethod_Write,
+		allNodes,
 		OpTruncate,
 		TruncateReq{
 			TableID: t.id,
@@ -273,12 +276,8 @@ func (t *Table) Truncate(ctx context.Context) (uint64, error) {
 	}
 
 	var affectedRows int64
-	for _, payload := range resps {
-		var r TruncateResp
-		if err := gob.NewDecoder(bytes.NewReader(payload)).Decode(&r); err != nil {
-			return uint64(affectedRows), err
-		}
-		affectedRows += r.AffectedRows
+	for _, resp := range resps {
+		affectedRows += resp.AffectedRows
 	}
 
 	return uint64(affectedRows), nil
@@ -286,17 +285,25 @@ func (t *Table) Truncate(ctx context.Context) (uint64, error) {
 
 func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 
-	shards, err := t.engine.shardPolicy.Batch(data, t.engine.getDataNodes())
+	clusterDetails, err := t.engine.getClusterDetails()
+	if err != nil {
+		return err
+	}
+
+	shards, err := t.engine.shardPolicy.Batch(
+		data,
+		clusterDetails.DNNodes,
+	)
 	if err != nil {
 		return err
 	}
 
 	for _, shard := range shards {
-		_, err := doTxnRequest(
+		_, err := doTxnRequest[UpdateResp](
 			ctx,
+			t.engine,
 			t.txnOperator.Write,
-			shard.Nodes,
-			txn.TxnMethod_Write,
+			theseNodes(shard.Nodes),
 			OpUpdate,
 			UpdateReq{
 				TableID: t.id,
@@ -313,17 +320,25 @@ func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 
 func (t *Table) Write(ctx context.Context, data *batch.Batch) error {
 
-	shards, err := t.engine.shardPolicy.Batch(data, t.engine.getDataNodes())
+	clusterDetails, err := t.engine.getClusterDetails()
+	if err != nil {
+		return err
+	}
+
+	shards, err := t.engine.shardPolicy.Batch(
+		data,
+		clusterDetails.DNNodes,
+	)
 	if err != nil {
 		return err
 	}
 
 	for _, shard := range shards {
-		_, err := doTxnRequest(
+		_, err := doTxnRequest[WriteResp](
 			ctx,
+			t.engine,
 			t.txnOperator.Write,
-			shard.Nodes,
-			txn.TxnMethod_Write,
+			theseNodes(shard.Nodes),
 			OpWrite,
 			WriteReq{
 				TableID: t.id,
