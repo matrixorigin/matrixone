@@ -76,8 +76,8 @@ func (e *txnEngine) Database(_ context.Context, name string, ctx client.TxnOpera
 	return db, nil
 }
 
-func (e *txnEngine) Nodes() engine.Nodes {
-	return nil
+func (e *txnEngine) Nodes() (engine.Nodes, error) {
+	return nil, nil
 }
 
 func (e *txnEngine) StartTxn(info []byte) (txn Txn, err error) {
