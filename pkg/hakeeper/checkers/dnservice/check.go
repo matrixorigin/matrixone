@@ -46,19 +46,22 @@ func Check(
 		return nil
 	}
 
+	mapper := parseClusterInfo(cluster)
+
 	var operators []*operator.Operator
 
 	// 1. check reported dn state
 	operators = append(operators,
 		checkReportedState(
-			reportedShards, stores.WorkingStores(), idAlloc,
+			reportedShards, mapper, stores.WorkingStores(), idAlloc,
 		)...,
 	)
 
 	// 2. check expected dn state
 	operators = append(operators,
 		checkInitatingShards(
-			reportedShards, stores.WorkingStores(), idAlloc, cluster, cfg, currTick,
+			reportedShards, mapper, stores.WorkingStores(), idAlloc,
+			cluster, cfg, currTick,
 		)...,
 	)
 
@@ -68,7 +71,7 @@ func Check(
 // schedule generator operator as much as possible
 // NB: the returned order should be deterministic.
 func checkShard(
-	shard *dnShard, workingStores []*util.Store, idAlloc util.IDAllocator,
+	shard *dnShard, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator,
 ) []operator.OpStep {
 	switch len(shard.workingReplicas()) {
 	case 0: // need add replica
@@ -84,17 +87,30 @@ func checkShard(
 			return nil
 		}
 
+		logShardID, err := mapper.getLogShardID(shard.shardID)
+		if err != nil {
+			// warning with un-recorded shard
+			return nil
+		}
+
 		return []operator.OpStep{
-			newAddStep(target, shard.shardID, newReplicaID),
+			newAddStep(target, shard.shardID, newReplicaID, logShardID),
 		}
 	case 1: // ignore expired replicas
 		return nil
 	default: // remove extra working replicas
 		replicas := extraWorkingReplicas(shard)
 		steps := make([]operator.OpStep, 0, len(replicas))
+
+		logShardID, err := mapper.getLogShardID(shard.shardID)
+		if err != nil {
+			// warning with un-recorded shard
+			return nil
+		}
+
 		for _, r := range replicas {
 			steps = append(steps,
-				newRemoveStep(r.storeID, r.shardID, r.replicaID),
+				newRemoveStep(r.storeID, r.shardID, r.replicaID, logShardID),
 			)
 		}
 		return steps
@@ -102,20 +118,22 @@ func checkShard(
 }
 
 // newAddStep constructs operator to launch a dn shard replica
-func newAddStep(target string, shardID, replicaID uint64) operator.OpStep {
+func newAddStep(target string, shardID, replicaID, logShardID uint64) operator.OpStep {
 	return operator.AddDnReplica{
-		StoreID:   target,
-		ShardID:   shardID,
-		ReplicaID: replicaID,
+		StoreID:    target,
+		ShardID:    shardID,
+		ReplicaID:  replicaID,
+		LogShardID: logShardID,
 	}
 }
 
 // newRemoveStep constructs operator to remove a dn shard replica
-func newRemoveStep(target string, shardID, replicaID uint64) operator.OpStep {
+func newRemoveStep(target string, shardID, replicaID, logShardID uint64) operator.OpStep {
 	return operator.RemoveDnReplica{
-		StoreID:   target,
-		ShardID:   shardID,
-		ReplicaID: replicaID,
+		StoreID:    target,
+		ShardID:    shardID,
+		ReplicaID:  replicaID,
+		LogShardID: logShardID,
 	}
 }
 

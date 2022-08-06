@@ -28,6 +28,32 @@ const (
 	DnStoreCapacity = 32
 )
 
+// ShardMapper used to get log shard ID for dn shard
+type ShardMapper interface {
+	getLogShardID(dnShardID uint64) (uint64, error)
+}
+
+// dnShardToLogShard implements interface `ShardMapper`
+type dnShardToLogShard map[uint64]uint64
+
+// parseClusterInfo parses information from `pb.ClusterInfo`
+func parseClusterInfo(cluster pb.ClusterInfo) dnShardToLogShard {
+	m := make(map[uint64]uint64)
+	for _, r := range cluster.DNShards {
+		// warning with duplicated dn shard ID
+		m[r.ShardID] = r.LogShardID
+	}
+	return m
+}
+
+// getLogShardID implements interface `ShardMapper`
+func (d dnShardToLogShard) getLogShardID(dnShardID uint64) (uint64, error) {
+	if logShardID, ok := d[dnShardID]; ok {
+		return logShardID, nil
+	}
+	return 0, errShardNotRecorded
+}
+
 // parseDnState parses cluster dn state.
 func parseDnState(cfg hakeeper.Config,
 	dnState pb.DNState, currTick uint64,
@@ -60,7 +86,7 @@ func parseDnState(cfg hakeeper.Config,
 // checkReportedState generates Operators for reported state.
 // NB: the order of list is deterministic.
 func checkReportedState(
-	rs *reportedShards, workingStores []*util.Store, idAlloc util.IDAllocator,
+	rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator,
 ) []*operator.Operator {
 	var ops []*operator.Operator
 
@@ -77,7 +103,7 @@ func checkReportedState(
 			panic(fmt.Sprintf("shard `%d` not register", shardID))
 		}
 
-		steps := checkShard(shard, workingStores, idAlloc)
+		steps := checkShard(shard, mapper, workingStores, idAlloc)
 		// avoid Operator with nil steps
 		if len(steps) > 0 {
 			ops = append(ops,
@@ -91,7 +117,7 @@ func checkReportedState(
 // checkInitatingState generates Operators for newly-created shards.
 // NB: the order of list is deterministic.
 func checkInitatingShards(
-	rs *reportedShards, workingStores []*util.Store, idAlloc util.IDAllocator,
+	rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator,
 	cluster pb.ClusterInfo, cfg hakeeper.Config, currTick uint64,
 ) []*operator.Operator {
 	// update the registered newly-created shards
@@ -117,7 +143,7 @@ func checkInitatingShards(
 
 	var ops []*operator.Operator
 	for _, id := range expired {
-		steps := checkShard(newDnShard(id), workingStores, idAlloc)
+		steps := checkShard(newDnShard(id), mapper, workingStores, idAlloc)
 		if len(steps) > 0 { // avoid Operator with nil steps
 			ops = append(ops,
 				operator.NewOperator("dnservice", id, operator.NoopEpoch, steps...),

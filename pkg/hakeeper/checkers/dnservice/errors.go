@@ -18,5 +18,6 @@ import "fmt"
 
 var (
 	errShardNotReported = fmt.Errorf("shard not reported")
+	errShardNotRecorded = fmt.Errorf("shard not recorded in cluster")
 	errNoWorkingStore   = fmt.Errorf("no working store")
 )

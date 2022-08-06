@@ -65,19 +65,23 @@ func TestCheckInitatingShards(t *testing.T) {
 		LogStoreTimeout: 10 * time.Second,
 		DnStoreTimeout:  10 * time.Second,
 	}
+
+	// mock ShardMapper
+	mapper := mockShardMapper()
+
 	earliestTick := uint64(10)
 	expiredTick := config.ExpiredTick(earliestTick, config.DnStoreTimeout) + 1
 
 	// discover an initial shard => no operators generated
-	ops := checkInitatingShards(rs, workingStores, idAlloc, cluster, config, earliestTick)
+	ops := checkInitatingShards(rs, mapper, workingStores, idAlloc, cluster, config, earliestTick)
 	require.Equal(t, 0, len(ops))
 
 	// waiting some time, but not long enough
-	ops = checkInitatingShards(rs, workingStores, idAlloc, cluster, config, expiredTick-1)
+	ops = checkInitatingShards(rs, mapper, workingStores, idAlloc, cluster, config, expiredTick-1)
 	require.Equal(t, 0, len(ops))
 
 	// waiting long enough
-	ops = checkInitatingShards(rs, workingStores, idAlloc, cluster, config, expiredTick)
+	ops = checkInitatingShards(rs, mapper, workingStores, idAlloc, cluster, config, expiredTick)
 	require.Equal(t, 1, len(ops))
 }
 
@@ -85,6 +89,7 @@ func TestCheckReportedState(t *testing.T) {
 	nextReplicaID := uint64(100)
 	enough := true
 	idAlloc := newMockIDAllocator(nextReplicaID, enough)
+	mapper := mockShardMapper()
 
 	workingStores := []*util.Store{
 		util.NewStore("store1", 2, DnStoreCapacity),
@@ -97,14 +102,14 @@ func TestCheckReportedState(t *testing.T) {
 	// register an expired replica => should add a new replica
 	rs := newReportedShards()
 	rs.registerReplica(newReplica(11, shardID, "store11"), true)
-	ops := checkReportedState(rs, workingStores, idAlloc)
+	ops := checkReportedState(rs, mapper, workingStores, idAlloc)
 	require.Equal(t, 1, len(ops))
 	require.Equal(t, shardID, ops[0].ShardID())
 
 	// register a working replica => no more step
 	rs = newReportedShards()
 	rs.registerReplica(newReplica(12, shardID, "store12"), false)
-	ops = checkReportedState(rs, workingStores, idAlloc)
+	ops = checkReportedState(rs, mapper, workingStores, idAlloc)
 	require.Equal(t, 0, len(ops))
 }
 
