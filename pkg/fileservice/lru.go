@@ -116,3 +116,11 @@ func (l *LRU) Get(key any) (value any, ok bool) {
 	}
 	return nil, false
 }
+
+func (l *LRU) Flush() {
+	l.Lock()
+	defer l.Unlock()
+	l.size = 0
+	l.evicts = list.New()
+	l.kv = make(map[any]*list.Element)
+}
