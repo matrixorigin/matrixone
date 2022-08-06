@@ -18,11 +18,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/stretchr/testify/require"
 )
 
 func TestCheckInitatingShards(t *testing.T) {
@@ -50,14 +50,7 @@ func TestCheckInitatingShards(t *testing.T) {
 	rs.registerReplica(newReplica(reportedReplica, reportedShard, "store11"), false)
 
 	// mock pb.ClusterInfo
-	cluster := pb.ClusterInfo{
-		DNShards: []metadata.DNShardRecord{
-			{
-				ShardID:    initialShard, // un-reported shard
-				LogShardID: 21,
-			},
-		},
-	}
+	cluster := mockClusterInfo(reportedShard, initialShard)
 
 	// mock hakeeper.Config
 	config := hakeeper.Config{
