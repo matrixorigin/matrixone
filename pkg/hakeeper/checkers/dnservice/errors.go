@@ -17,6 +17,6 @@ package dnservice
 import "fmt"
 
 var (
-	errShardNotExist  = fmt.Errorf("shard not exist")
-	errNoWorkingStore = fmt.Errorf("no working store")
+	errShardNotReported = fmt.Errorf("shard not reported")
+	errNoWorkingStore   = fmt.Errorf("no working store")
 )

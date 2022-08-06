@@ -15,7 +15,6 @@
 package dnservice
 
 import (
-	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -24,40 +23,45 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
+// waitingShards makes check logic stateful.
+var waitingShards *initialShards
+
+func init() {
+	waitingShards = newInitialShards()
+}
+
 // Check checks dn state and generate operator for expired dn store.
 // The less shard ID, the higher priority.
 // NB: the returned order should be deterministic.
 func Check(
-	idAlloc util.IDAllocator, cfg hakeeper.Config, dnState pb.DNState, currTick uint64,
+	idAlloc util.IDAllocator,
+	cfg hakeeper.Config,
+	cluster pb.ClusterInfo,
+	dnState pb.DNState,
+	currTick uint64,
 ) []*operator.Operator {
-	stores, shards := parseDnState(cfg, dnState, currTick)
+	stores, reportedShards := parseDnState(cfg, dnState, currTick)
 	if len(stores.WorkingStores()) < 1 {
 		// warning with no working store
 		return nil
 	}
 
-	// keep order of all shards deterministic
-	shardIDs := shards.listShards()
-	sort.Slice(shardIDs, func(i, j int) bool {
-		return shardIDs[i] < shardIDs[j]
-	})
-
 	var operators []*operator.Operator
-	for _, shardID := range shardIDs {
-		shard, err := shards.getShard(shardID)
-		if err != nil {
-			// error should be always nil
-			panic(fmt.Sprintf("shard `%d` not register", shardID))
-		}
 
-		steps := checkShard(shard, stores.WorkingStores(), idAlloc)
-		if len(steps) > 0 {
-			operators = append(operators,
-				operator.NewOperator("dnservice", shardID, operator.NoopEpoch, steps...),
-			)
-		}
+	// 1. check reported dn state
+	operators = append(operators,
+		checkReportedState(
+			reportedShards, stores.WorkingStores(), idAlloc,
+		)...,
+	)
 
-	}
+	// 2. check expected dn state
+	operators = append(operators,
+		checkInitatingShards(
+			reportedShards, stores.WorkingStores(), idAlloc, cluster, cfg, currTick,
+		)...,
+	)
+
 	return operators
 }
 
