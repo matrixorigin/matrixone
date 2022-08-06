@@ -15,8 +15,12 @@
 package dnservice
 
 import (
+	"fmt"
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -24,12 +28,38 @@ const (
 	DnStoreCapacity = 32
 )
 
+// ShardMapper used to get log shard ID for dn shard
+type ShardMapper interface {
+	getLogShardID(dnShardID uint64) (uint64, error)
+}
+
+// dnShardToLogShard implements interface `ShardMapper`
+type dnShardToLogShard map[uint64]uint64
+
+// parseClusterInfo parses information from `pb.ClusterInfo`
+func parseClusterInfo(cluster pb.ClusterInfo) dnShardToLogShard {
+	m := make(map[uint64]uint64)
+	for _, r := range cluster.DNShards {
+		// warning with duplicated dn shard ID
+		m[r.ShardID] = r.LogShardID
+	}
+	return m
+}
+
+// getLogShardID implements interface `ShardMapper`
+func (d dnShardToLogShard) getLogShardID(dnShardID uint64) (uint64, error) {
+	if logShardID, ok := d[dnShardID]; ok {
+		return logShardID, nil
+	}
+	return 0, errShardNotRecorded
+}
+
 // parseDnState parses cluster dn state.
 func parseDnState(cfg hakeeper.Config,
 	dnState pb.DNState, currTick uint64,
-) (*util.ClusterStores, *clusterShards) {
+) (*util.ClusterStores, *reportedShards) {
 	stores := util.NewClusterStores()
-	shards := newClusterShards()
+	shards := newReportedShards()
 
 	for storeID, storeInfo := range dnState.Stores {
 		expired := false
@@ -53,40 +83,163 @@ func parseDnState(cfg hakeeper.Config,
 	return stores, shards
 }
 
-// clusterShards collects all dn shards.
-type clusterShards struct {
+// checkReportedState generates Operators for reported state.
+// NB: the order of list is deterministic.
+func checkReportedState(
+	rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator,
+) []*operator.Operator {
+	var ops []*operator.Operator
+
+	reported := rs.listShards()
+	// keep order of all shards deterministic
+	sort.Slice(reported, func(i, j int) bool {
+		return reported[i] < reported[j]
+	})
+
+	for _, shardID := range reported {
+		shard, err := rs.getShard(shardID)
+		if err != nil {
+			// error should be always nil
+			panic(fmt.Sprintf("shard `%d` not register", shardID))
+		}
+
+		steps := checkShard(shard, mapper, workingStores, idAlloc)
+		// avoid Operator with nil steps
+		if len(steps) > 0 {
+			ops = append(ops,
+				operator.NewOperator("dnservice", shardID, operator.NoopEpoch, steps...),
+			)
+		}
+	}
+	return ops
+}
+
+// checkInitatingState generates Operators for newly-created shards.
+// NB: the order of list is deterministic.
+func checkInitatingShards(
+	rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator,
+	cluster pb.ClusterInfo, cfg hakeeper.Config, currTick uint64,
+) []*operator.Operator {
+	// update the registered newly-created shards
+	for _, record := range cluster.DNShards {
+		shardID := record.ShardID
+		_, err := rs.getShard(shardID)
+		if err != nil {
+			if err == errShardNotReported {
+				// if a shard not reported, register it,
+				// and launch its replica after a while.
+				waitingShards.register(shardID, currTick)
+			}
+			continue
+		}
+		// shard reported via heartbeat, no need to wait
+		waitingShards.remove(shardID)
+	}
+
+	// list newly-created shards which had been waiting for a while
+	expired := waitingShards.listEligibleShards(func(start uint64) bool {
+		return cfg.DnStoreExpired(start, currTick)
+	})
+
+	var ops []*operator.Operator
+	for _, id := range expired {
+		steps := checkShard(newDnShard(id), mapper, workingStores, idAlloc)
+		if len(steps) > 0 { // avoid Operator with nil steps
+			ops = append(ops,
+				operator.NewOperator("dnservice", id, operator.NoopEpoch, steps...),
+			)
+		}
+	}
+	return ops
+}
+
+type earliestTick struct {
+	tick uint64
+}
+
+// initialShards records all fresh dn shards.
+type initialShards struct {
+	shards map[uint64]earliestTick
+}
+
+func newInitialShards() *initialShards {
+	return &initialShards{
+		shards: make(map[uint64]earliestTick),
+	}
+}
+
+// register records initial shard with its oldest tick.
+func (w *initialShards) register(shardID, currTick uint64) bool {
+	if earliest, ok := w.shards[shardID]; ok {
+		if currTick >= earliest.tick {
+			return false
+		}
+	}
+	// newly registered or updated with older tick
+	w.shards[shardID] = earliestTick{tick: currTick}
+	return true
+}
+
+// remove deletes shard from the recorded fresh shards.
+func (w *initialShards) remove(shardID uint64) bool {
+	if _, ok := w.shards[shardID]; ok {
+		delete(w.shards, shardID)
+		return true
+	}
+	return false
+}
+
+// listEligibleShards lists all shards that `fn` returns true.
+// NB: the order of list isn't deterministic.
+func (w *initialShards) listEligibleShards(fn func(tick uint64) bool) []uint64 {
+	ids := make([]uint64, 0)
+	for id, earliest := range w.shards {
+		if fn(earliest.tick) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// clear clears all record.
+func (w *initialShards) clear() {
+	w.shards = make(map[uint64]earliestTick)
+}
+
+// reportedShards collects all reported dn shards.
+type reportedShards struct {
 	shards   map[uint64]*dnShard
 	shardIDs []uint64
 }
 
-func newClusterShards() *clusterShards {
-	return &clusterShards{
+func newReportedShards() *reportedShards {
+	return &reportedShards{
 		shards: make(map[uint64]*dnShard),
 	}
 }
 
 // registerReplica collects dn shard replicas by their status.
-func (cs *clusterShards) registerReplica(replica *dnReplica, expired bool) {
+func (rs *reportedShards) registerReplica(replica *dnReplica, expired bool) {
 	shardID := replica.shardID
-	if _, ok := cs.shards[shardID]; !ok {
-		cs.shardIDs = append(cs.shardIDs, shardID)
-		cs.shards[shardID] = newDnShard(shardID)
+	if _, ok := rs.shards[shardID]; !ok {
+		rs.shardIDs = append(rs.shardIDs, shardID)
+		rs.shards[shardID] = newDnShard(shardID)
 	}
-	cs.shards[shardID].register(replica, expired)
+	rs.shards[shardID].register(replica, expired)
 }
 
 // listShards lists all the shard IDs.
 // NB: the returned order isn't deterministic.
-func (cs *clusterShards) listShards() []uint64 {
-	return cs.shardIDs
+func (rs *reportedShards) listShards() []uint64 {
+	return rs.shardIDs
 }
 
 // getShard returns dn shard by shard ID.
-func (cs *clusterShards) getShard(shardID uint64) (*dnShard, error) {
-	if shard, ok := cs.shards[shardID]; ok {
+func (rs *reportedShards) getShard(shardID uint64) (*dnShard, error) {
+	if shard, ok := rs.shards[shardID]; ok {
 		return shard, nil
 	}
-	return nil, errShardNotExist
+	return nil, errShardNotReported
 }
 
 // dnShard records metadata for dn shard.
