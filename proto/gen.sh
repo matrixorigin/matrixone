@@ -1,10 +1,8 @@
 #!/bin/bash
 #
-# Generate all matrixcube protobuf bindings.
-# Run from repository root.
+# Generate all MatrixOne protobuf bindings. Run from repository root.
 #
 set -ex
-
 
 program_exists() {
   if command -v "${1}" > /dev/null 2>&1; then
@@ -20,7 +18,6 @@ PROTOC_DIR="$PWD/proto"
 PROTO_SYNTAX_VERSION='3'
 PROTOC_VERSION='21.1'
 GOGOPROTOBUF_VERSION='1.'
-
 
 res=$(program_exists goimports)
 echo "res: ${res}"

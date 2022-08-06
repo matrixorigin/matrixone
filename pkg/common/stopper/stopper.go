@@ -22,7 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixcube/components/log"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"go.uber.org/zap"
 )
 
@@ -56,7 +57,7 @@ func (opts *options) adjust() {
 	if opts.stopTimeout == 0 {
 		opts.stopTimeout = defaultStoppedTimeout
 	}
-	opts.logger = log.Adjust(opts.logger)
+	opts.logger = logutil.Adjust(opts.logger)
 }
 
 // WithStopTimeout the stopper will print the names of tasks that are still running beyond this timeout.
