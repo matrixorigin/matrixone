@@ -168,6 +168,9 @@ import (
     accountIdentified tree.AccountIdentified
     accountStatus tree.AccountStatus
     accountComment tree.AccountComment
+    accountCommentOrAttribute tree.AccountCommentOrAttribute
+    userIdentified *tree.AccountIdentified
+    accountRole *tree.Role
 }
 
 %token LEX_ERROR
@@ -263,7 +266,7 @@ import (
 %token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL
 
 // Account
-%token <str> ADMIN_NAME RANDOM SUSPEND
+%token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED
 
 // User
 %token <str> USER IDENTIFIED CIPHER ISSUER X509 SUBJECT SAN REQUIRE SSL NONE PASSWORD
@@ -426,13 +429,12 @@ import (
 %type <role> role_spec
 %type <str> role_name
 %type <usernameRecord> user_name
-%type <authRecord> auth_option
-%type <user> user_spec
-%type <users> user_spec_list
+%type <user> user_spec drop_user_spec
+%type <users> user_spec_list drop_user_spec_list
 %type <tlsOptions> require_clause_opt require_clause require_list
 %type <tlsOption> require_elem
-%type <resourceOptions> conn_option_list conn_options
-%type <resourceOption> conn_option
+//%type <resourceOptions> conn_option_list conn_options
+//%type <resourceOption> conn_option
 %type <updateExpr> update_value
 %type <updateExprs> update_list
 %type <completionType> completion_type
@@ -514,11 +516,14 @@ import (
 %type <str> explain_foramt_value view_recursive_opt trim_direction
 %type <str> priority_opt priority quick_opt ignore_opt wild_opt
 
-%type <str> account_name account_admin_name
+%type <str> account_name account_admin_name account_role_name
 %type <accountAuthOption> account_auth_option
 %type <accountIdentified> account_identified
 %type <accountStatus> account_status_option
 %type <accountComment> account_comment_opt
+%type <accountCommentOrAttribute> user_comment_or_attribute_opt
+%type <userIdentified> user_identified_opt
+%type <accountRole> default_role_opt
 
 %start start_command
 
@@ -1732,10 +1737,10 @@ alter_stmt:
 // |    alter_ddl_stmt
 
 alter_account_stmt:
-    ALTER ACCOUNT not_exists_opt account_name account_auth_option account_status_option account_comment_opt
+    ALTER ACCOUNT exists_opt account_name account_auth_option account_status_option account_comment_opt
     {
 	$$ = &tree.AlterAccount{
-		IfNotExists:$3,
+		IfExists:$3,
 		Name:$4,
 		AuthOption:$5,
 		StatusOption:$6,
@@ -1744,28 +1749,24 @@ alter_account_stmt:
     }
 
 alter_user_stmt:
-    ALTER USER exists_opt user_spec_list require_clause_opt conn_options pwd_or_lck_opt
+    ALTER USER exists_opt user_spec_list default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
     {
         $$ = &tree.AlterUser{
             IfExists: $3,
-            IsUserFunc: false,
             Users: $4,
-            TlsOpts: $5,
-            ResOpts: $6,
-            MiscOpts: $7,
+            Role: $5,
+            MiscOpts: $6,
+            CommentOrAttribute: $7,
         }
     }
-|   ALTER USER exists_opt USER '(' ')' IDENTIFIED BY auth_string
+
+default_role_opt:
     {
-        auth := &tree.User{
-            AuthString: $9,
-            ByAuth: true,
-        }
-        $$ = &tree.AlterUser{
-            IfExists: $3,
-            IsUserFunc: true,
-            UserFunc: auth,
-        }
+        $$ = nil
+    }
+|   DEFAULT ROLE account_role_name
+    {
+        $$ = &tree.Role{UserName:$3}
     }
 
 exists_opt:
@@ -1797,11 +1798,11 @@ pwd_or_lck_list:
     }
 
 pwd_or_lck:
-    ACCOUNT UNLOCK
+    UNLOCK
     {
         $$ = &tree.UserMiscOptionAccountUnlock{}
     }
-|   ACCOUNT LOCK
+|   LOCK
     {
         $$ = &tree.UserMiscOptionAccountLock{}
     }
@@ -1820,6 +1821,46 @@ pwd_or_lck:
 |   pwd_expire DEFAULT
     {
         $$ = &tree.UserMiscOptionPasswordExpireDefault{}
+    }
+|   PASSWORD HISTORY DEFAULT
+    {
+        $$ = &tree.UserMiscOptionPasswordHistoryDefault{}
+    }
+|   PASSWORD HISTORY INTEGRAL
+    {
+        $$ = &tree.UserMiscOptionPasswordHistoryCount{Value: $3.(int64)}
+    }
+|   PASSWORD REUSE INTERVAL DEFAULT
+    {
+        $$ = &tree.UserMiscOptionPasswordReuseIntervalDefault{}
+    }
+|   PASSWORD REUSE INTERVAL INTEGRAL DAY
+    {
+        $$ = &tree.UserMiscOptionPasswordReuseIntervalCount{Value: $4.(int64)}
+    }
+|   PASSWORD REQUIRE CURRENT
+    {
+        $$ = &tree.UserMiscOptionPasswordRequireCurrentNone{}
+    }
+|   PASSWORD REQUIRE CURRENT DEFAULT
+    {
+        $$ = &tree.UserMiscOptionPasswordRequireCurrentDefault{}
+    }
+|   PASSWORD REQUIRE CURRENT OPTIONAL
+    {
+        $$ = &tree.UserMiscOptionPasswordRequireCurrentOptional{}
+    }
+|   FAILED_LOGIN_ATTEMPTS INTEGRAL
+    {
+        $$ = &tree.UserMiscOptionFailedLoginAttempts{Value: $2.(int64)}
+    }
+|   PASSWORD_LOCK_TIME INTEGRAL
+    {
+        $$ = &tree.UserMiscOptionPasswordLockTimeCount{Value: $2.(int64)}
+    }
+|   PASSWORD_LOCK_TIME UNBOUNDED
+    {
+        $$ = &tree.UserMiscOptionPasswordLockTimeUnbounded{}
     }
 
 pwd_expire:
@@ -2082,11 +2123,30 @@ drop_account_stmt:
     }
 
 drop_user_stmt:
-    DROP USER exists_opt user_spec_list
+    DROP USER exists_opt drop_user_spec_list
     {
         $$ = &tree.DropUser{
             IfExists: $3,
             Users: $4,
+        }
+    }
+
+drop_user_spec_list:
+    drop_user_spec
+    {
+        $$ = []*tree.User{$1}
+    }
+|   drop_user_spec_list ',' drop_user_spec
+    {
+        $$ = append($1, $3)
+    }
+
+drop_user_spec:
+    user_name
+    {
+        $$ = &tree.User{
+            Username: $1.Username,
+            Hostname: $1.Hostname,
         }
     }
 
@@ -3326,52 +3386,82 @@ account_comment_opt:
     }
 
 create_user_stmt:
-    CREATE USER not_exists_opt user_spec_list require_clause_opt conn_options
+    CREATE USER not_exists_opt user_spec_list DEFAULT ROLE account_role_name pwd_or_lck_opt user_comment_or_attribute_opt
     {
         $$ = &tree.CreateUser{
             IfNotExists: $3,
             Users: $4,
-            TlsOpts: $5,
-            ResOpts: $6,
+            Role: tree.Role{UserName:$7},
+            MiscOpts: $8,
+            CommentOrAttribute: $9,
         }
     }
 
-conn_options:
+account_role_name:
+    ID
     {
-        $$ = nil
-    }
-|   WITH conn_option_list
-    {
-        $$ = $2
+	$$ = $1
     }
 
-conn_option_list:
-    conn_option
+user_comment_or_attribute_opt:
     {
-        $$ = []tree.ResourceOption{$1}
+        $$ = tree.AccountCommentOrAttribute{
+            Exist: false,
+        }
     }
-|   conn_option_list conn_option
+|   COMMENT_KEYWORD STRING
     {
-        $$ = append($1, $2)
+	$$ = tree.AccountCommentOrAttribute{
+		Exist: true,
+		IsComment: true,
+		Str: $2,
+	}
+    }
+|   ATTRIBUTE STRING
+    {
+	$$ = tree.AccountCommentOrAttribute{
+		Exist: true,
+		IsComment: false,
+		Str: $2,
+	}
     }
 
-conn_option:
-    MAX_QUERIES_PER_HOUR INTEGRAL
-    {
-        $$ = &tree.ResourceOptionMaxQueriesPerHour{Count: $2.(int64)}
-    }
-|   MAX_UPDATES_PER_HOUR INTEGRAL
-    {
-        $$ = &tree.ResourceOptionMaxUpdatesPerHour{Count: $2.(int64)}
-    }
-|   MAX_CONNECTIONS_PER_HOUR INTEGRAL
-    {
-        $$ = &tree.ResourceOptionMaxConnectionPerHour{Count: $2.(int64)}
-    }
-|   MAX_USER_CONNECTIONS INTEGRAL
-    {
-        $$ = &tree.ResourceOptionMaxUserConnections{Count: $2.(int64)}
-    }
+//conn_options:
+//    {
+//        $$ = nil
+//    }
+//|   WITH conn_option_list
+//    {
+//        $$ = $2
+//    }
+//
+//conn_option_list:
+//    conn_option
+//    {
+//        $$ = []tree.ResourceOption{$1}
+//    }
+//|   conn_option_list conn_option
+//    {
+//        $$ = append($1, $2)
+//    }
+//
+//conn_option:
+//    MAX_QUERIES_PER_HOUR INTEGRAL
+//    {
+//        $$ = &tree.ResourceOptionMaxQueriesPerHour{Count: $2.(int64)}
+//    }
+//|   MAX_UPDATES_PER_HOUR INTEGRAL
+//    {
+//        $$ = &tree.ResourceOptionMaxUpdatesPerHour{Count: $2.(int64)}
+//    }
+//|   MAX_CONNECTIONS_PER_HOUR INTEGRAL
+//    {
+//        $$ = &tree.ResourceOptionMaxConnectionPerHour{Count: $2.(int64)}
+//    }
+//|   MAX_USER_CONNECTIONS INTEGRAL
+//    {
+//        $$ = &tree.ResourceOptionMaxUserConnections{Count: $2.(int64)}
+//    }
 
 
 require_clause_opt:
@@ -3444,15 +3534,12 @@ user_spec_list:
     }
 
 user_spec:
-    user_name auth_option
+    user_name user_identified_opt
     {
         $$ = &tree.User{
             Username: $1.Username,
             Hostname: $1.Hostname,
-            AuthPlugin: $2.AuthPlugin,
-            AuthString: $2.AuthString,
-            HashString: $2.HashString,
-            ByAuth: $2.ByAuth,
+            AuthOption: $2,
         }
     }
 
@@ -3470,44 +3557,30 @@ user_name:
         $$ = &tree.UsernameRecord{Username: $1, Hostname: $2}
     }
 
-auth_option:
+user_identified_opt:
     {
-        $$ = &tree.AuthRecord{}
+        $$ = nil
     }
-|	IDENTIFIED BY name_string
-	{
-		$$ = &tree.AuthRecord{
-			AuthString: $3,
-			ByAuth: true,
-		}
+|   IDENTIFIED BY STRING
+    {
+	$$ = &tree.AccountIdentified{
+		Typ: tree.AccountIdentifiedByPassword,
+		Str: $3,
 	}
-|	IDENTIFIED WITH name_string
-	{ 
-		$$ = &tree.AuthRecord{
-			AuthPlugin: $3,
-		}
+    }
+|   IDENTIFIED BY RANDOM PASSWORD
+    {
+	$$ = &tree.AccountIdentified{
+		Typ: tree.AccountIdentifiedByRandomPassword,
 	}
-|	IDENTIFIED WITH name_string BY name_string
-	{
-		$$ = &tree.AuthRecord{
-			AuthPlugin: $3,
-			AuthString: $5,
-			ByAuth: true,
-		}
+    }
+|   IDENTIFIED WITH STRING
+    {
+	$$ = &tree.AccountIdentified{
+		Typ: tree.AccountIdentifiedWithSSL,
+		Str: $3,
 	}
-|	IDENTIFIED WITH name_string AS name_string
-	{
-		$$ = &tree.AuthRecord{
-			AuthPlugin: $3,
-			HashString: $5,
-		}
-	}
-|	IDENTIFIED BY PASSWORD name_string
-	{
-		$$ = &tree.AuthRecord{
-			HashString: $4,
-		}
-	}
+    }
 
 name_string:
     ident
@@ -6750,6 +6823,13 @@ reserved_keyword:
 |   ADMIN_NAME
 |   RANDOM
 |   SUSPEND
+|   ATTRIBUTE
+|   REUSE
+|   CURRENT
+|   OPTIONAL
+|   FAILED_LOGIN_ATTEMPTS
+|   PASSWORD_LOCK_TIME
+|   UNBOUNDED
 
 non_reserved_keyword:
     AGAINST
