@@ -25,7 +25,7 @@ func TestLocalFS(t *testing.T) {
 	t.Run("file service", func(t *testing.T) {
 		testFileService(t, func() FileService {
 			dir := t.TempDir()
-			fs, err := NewLocalFS(dir)
+			fs, err := NewLocalFS(dir, 0)
 			assert.Nil(t, err)
 			return fs
 		})
@@ -34,7 +34,7 @@ func TestLocalFS(t *testing.T) {
 	t.Run("mutable file service", func(t *testing.T) {
 		testMutableFileService(t, func() MutableFileService {
 			dir := t.TempDir()
-			fs, err := NewLocalFS(dir)
+			fs, err := NewLocalFS(dir, 0)
 			assert.Nil(t, err)
 			return fs
 		})
@@ -43,7 +43,16 @@ func TestLocalFS(t *testing.T) {
 	t.Run("replaceable file service", func(t *testing.T) {
 		testReplaceableFileService(t, func() ReplaceableFileService {
 			dir := t.TempDir()
-			fs, err := NewLocalFS(dir)
+			fs, err := NewLocalFS(dir, 0)
+			assert.Nil(t, err)
+			return fs
+		})
+	})
+
+	t.Run("caching file service", func(t *testing.T) {
+		testCachingFileService(t, func() CachingFileService {
+			dir := t.TempDir()
+			fs, err := NewLocalFS(dir, 128*1024)
 			assert.Nil(t, err)
 			return fs
 		})
@@ -54,7 +63,7 @@ func TestLocalFS(t *testing.T) {
 func BenchmarkLocalFS(b *testing.B) {
 	benchmarkFileService(b, func() FileService {
 		dir := b.TempDir()
-		fs, err := NewLocalFS(dir)
+		fs, err := NewLocalFS(dir, 0)
 		assert.Nil(b, err)
 		return fs
 	})

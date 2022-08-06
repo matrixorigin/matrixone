@@ -72,7 +72,10 @@ func newMemFileService(cfg Config) (FileService, error) {
 }
 
 func newDiskFileService(cfg Config) (FileService, error) {
-	fs, err := NewLocalFS(cfg.DataDir)
+	fs, err := NewLocalFS(
+		cfg.DataDir,
+		int(cfg.CacheMemCapacityBytes),
+	)
 	if err != nil {
 		return nil, err
 	}
