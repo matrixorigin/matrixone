@@ -26,7 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "drop account if exists abc",
+		input: "alter user abc1",
 	}
 )
 
@@ -793,12 +793,6 @@ var (
 		input:  "explain a",
 		output: "show columns from a",
 	}, {
-		input:  "alter user u1 require cipher 'xxx' subject 'yyy' with max_queries_per_hour 0 password expire interval 1 day password expire default account lock account unlock",
-		output: "alter user u1 require cipher xxx subject yyy with max_queries_per_hour 0 password expire interval 1 day password expire default account lock account unlock",
-	}, {
-		input:  "alter user if exists user() identified by 'test'",
-		output: "alter user if exists user() identified by test",
-	}, {
 		input: "show index from t where true",
 	}, {
 		input:  "show databases like 'a%'",
@@ -869,18 +863,11 @@ var (
 	}, {
 		input: "drop database t",
 	}, {
-		input: "create user u1@'hostname'",
-	}, {
-		input: "create user u1",
-	}, {
-		input:  "create user if not exists u1 identified by 'u1', u2 require cipher 'xxx' subject 'yyy' with max_queries_per_hour 0",
-		output: "create user if not exists u1 identified by u1, u2 require cipher xxx and subject yyy with max_queries_per_hour 0",
-	}, {
 		input:  "create role if not exists 'a'@'localhost', 'b'@'localhost'",
-		output: "create role if not exists a@localhost, b@localhost",
+		output: "create role if not exists a, b",
 	}, {
 		input:  "create role if not exists 'webapp' @ \"identier\"",
-		output: "create role if not exists webapp@identier",
+		output: "create role if not exists webapp",
 	}, {
 		input:  "create role 'admin', 'developer'",
 		output: "create role admin, developer",
@@ -1065,17 +1052,127 @@ var (
 	}, {
 		input: "drop account if exists abc",
 	}, {
-		input: "alter account if not exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
+		input: "alter account if exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
 	}, {
-		input: "alter account if not exists nihao admin_name 'admin' identified by random password",
+		input: "alter account if exists nihao admin_name 'admin' identified by random password",
 	}, {
-		input: "alter account if not exists nihao admin_name 'admin' identified with '123'",
+		input: "alter account if exists nihao admin_name 'admin' identified with '123'",
 	}, {
 		input: "alter account nihao admin_name 'admin' identified by '123' open comment 'new account'",
 	}, {
 		input: "alter account nihao admin_name 'admin' identified by random password",
 	}, {
 		input: "alter account nihao admin_name 'admin' identified with '123'",
+	}, {
+		input: "create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 default role de_role " +
+			"lock " +
+			"unlock " +
+			"password expire " +
+			"password expire interval 3 day " +
+			"password history 4 " +
+			"password reuse interval 5 day " +
+			"password require current " +
+			"password require current default " +
+			"failed_login_attempts 6 " +
+			"password_lock_time 7 " +
+			"comment 'new comment'",
+	}, {
+		input: "create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 default role de_role " +
+			"lock " +
+			"unlock " +
+			"password expire " +
+			"password expire interval 3 day " +
+			"password history 4 " +
+			"password reuse interval 5 day " +
+			"password require current " +
+			"password require current default " +
+			"failed_login_attempts 6 " +
+			"password_lock_time 7 " +
+			"attribute 'new attribute'",
+	}, {
+		input: "create user if not exists abc1 identified by '123', abc2 identified by '234', abc3, " +
+			"abc4 identified by random password, " +
+			"abc5 identified with '345' " +
+			"default role de_role " +
+			"attribute 'new attribute'",
+	}, {
+		input: "create user if not exists abc1 " +
+			"default role de_role " +
+			"comment 'new comment'",
+	}, {
+		input: "create user if not exists abc1 " +
+			"default role de_role",
+	}, {
+		input: "create user if not exists abc1 identified by '123' " +
+			"default role de_role",
+	}, {
+		input: "create user if not exists abc1 identified by '123' " +
+			"default role de_role",
+	}, {
+		input: "create user abc1 identified by '123' " +
+			"default role de_role",
+	}, {
+		input: "create user abc1 " +
+			"default role de_role",
+	}, {
+		input: "drop user if exists abc1, abc2, abc3",
+	}, {
+		input: "drop user abc1, abc2, abc3",
+	}, {
+		input: "drop user abc1",
+	}, {
+		input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 " +
+			"default role de_role " +
+			"lock " +
+			"unlock " +
+			"password expire " +
+			"password expire interval 3 day " +
+			"password history 4 " +
+			"password reuse interval 5 day " +
+			"password require current " +
+			"password require current default " +
+			"failed_login_attempts 6 " +
+			"password_lock_time 7 " +
+			"comment 'new comment'",
+	}, {
+		input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 " +
+			"lock " +
+			"unlock " +
+			"password expire " +
+			"password expire interval 3 day " +
+			"password history 4 " +
+			"password reuse interval 5 day " +
+			"password require current " +
+			"password require current default " +
+			"failed_login_attempts 6 " +
+			"password_lock_time 7 " +
+			"comment 'new comment'",
+	}, {
+		input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 " +
+			"lock " +
+			"unlock " +
+			"password expire " +
+			"password expire interval 3 day " +
+			"password history 4 " +
+			"password reuse interval 5 day " +
+			"password require current " +
+			"password require current default " +
+			"failed_login_attempts 6 " +
+			"password_lock_time 7 " +
+			"attribute 'new attribute'",
+	}, {
+		input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 " +
+			"attribute 'new attribute'",
+	}, {
+		input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3",
+	}, {
+		input: "alter user if exists abc1 identified by '123', abc2 identified with '234', abc3 identified with 'SSL'",
+	}, {
+		input: "alter user if exists abc1 identified by '123'",
+	}, {
+		input: "alter user if exists abc1",
+	}, {
+		input: "alter user abc1",
 	}}
 )
 
