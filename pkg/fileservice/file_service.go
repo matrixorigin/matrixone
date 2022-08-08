@@ -70,6 +70,8 @@ type IOEntry struct {
 
 	// ToObject constructs an object from entry contents
 	// the io.Reader must be fully read before returning nil error
+	// return an *RC value to make the object pinnable
+	// cache implementations should not evict an *RC value with non-zero reference
 	ToObject func(r io.Reader) (object any, objectSize int, err error)
 
 	// ObjectSize indicates the memory bytes to hold the object

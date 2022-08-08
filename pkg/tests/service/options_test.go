@@ -16,6 +16,7 @@ package service
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zapcore"
@@ -78,6 +79,60 @@ func TestWithLogLevel(t *testing.T) {
 	lvl := zapcore.WarnLevel
 	opt := Options{}.WithLogLvel(lvl)
 	require.Equal(t, lvl, opt.logLevel)
+}
+
+func TestWithHKTickPerSecond(t *testing.T) {
+	opt := DefaultOptions()
+	require.Equal(t, defaultTickPerSecond, opt.hakeeper.tickPerSecond)
+
+	tick := 11
+	opt = opt.WithHKTickPerSecond(tick)
+	require.Equal(t, tick, opt.hakeeper.tickPerSecond)
+}
+
+func TestWithHKLogStoreTimeout(t *testing.T) {
+	opt := DefaultOptions()
+	require.Equal(t, defaultLogStoreTimeout, opt.hakeeper.logStoreTimeout)
+
+	timeout := 20 * time.Second
+	opt = opt.WithHKLogStoreTimeout(timeout)
+	require.Equal(t, timeout, opt.hakeeper.logStoreTimeout)
+}
+
+func TestWithHKDNStoreTimeout(t *testing.T) {
+	opt := DefaultOptions()
+	require.Equal(t, defaultDnStoreTimeout, opt.hakeeper.dnStoreTimeout)
+
+	timeout := 21 * time.Second
+	opt = opt.WithHKDNStoreTimeout(timeout)
+	require.Equal(t, timeout, opt.hakeeper.dnStoreTimeout)
+}
+
+func TestWithDNHeartbeatInterval(t *testing.T) {
+	opt := DefaultOptions()
+	require.Equal(t, defaultDNHeartbeatInterval, opt.dn.heartbeatInterval)
+
+	interval := 21 * time.Second
+	opt = opt.WithDNHeartbeatInterval(interval)
+	require.Equal(t, interval, opt.dn.heartbeatInterval)
+}
+
+func TestWithLogHeartbeatInterval(t *testing.T) {
+	opt := DefaultOptions()
+	require.Equal(t, defaultLogHeartbeatInterval, opt.log.heartbeatInterval)
+
+	interval := 22 * time.Second
+	opt = opt.WithLogHeartbeatInterval(interval)
+	require.Equal(t, interval, opt.log.heartbeatInterval)
+}
+
+func TestWithHKCheckInterval(t *testing.T) {
+	opt := DefaultOptions()
+	require.Equal(t, defaultCheckInterval, opt.hakeeper.checkInterval)
+
+	interval := 23 * time.Second
+	opt = opt.WithHKCheckInterval(interval)
+	require.Equal(t, interval, opt.hakeeper.checkInterval)
 }
 
 func TestGossipSeedNum(t *testing.T) {

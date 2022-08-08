@@ -15,6 +15,8 @@
 package service
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -29,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 // Cluster describes behavior of test framwork.
@@ -38,59 +41,90 @@ type Cluster interface {
 	// Close stops svcs sequentially
 	Close() error
 
-	// ClusterOperation
+	ClusterOperation
 	ClusterAwareness
-	ClusterAssertState
+	ClusterState
 	ClusterWaitState
 }
 
 // ClusterOperation supports kinds of cluster operations.
 type ClusterOperation interface {
-	CloseDNService(id string) error
-	StartDNService(id string) error
+	// CloseDNService closes dn service by uuid.
+	CloseDNService(uuid string) error
+	// StartDNService starts dn service by uuid.
+	StartDNService(uuid string) error
 
-	CloseLogService(id string) error
-	StartLogService(id string) error
+	// CloseDNServiceIndexed closes dn service by its index.
+	CloseDNServiceIndexed(index int) error
+	// StartDNServiceIndexed starts dn service by its index.
+	StartDNServiceIndexed(index int) error
 
+	// CloseLogService closes log service by uuid.
+	CloseLogService(uuid string) error
+	// StartLogService starts log service by uuid.
+	StartLogService(uuid string) error
+
+	// CloseLogServiceIndexed closes log service by its index.
+	CloseLogServiceIndexed(index int) error
+	// StartLogServiceIndexed starts log service by its index.
+	StartLogServiceIndexed(index int) error
+
+	// FXIME: support this in the end of development
 	// StartNetworkPartition(partitions [][]int) error
 	// CloseNetworkPartition() error
 }
 
 // ClusterAwareness provides cluster awareness information.
 type ClusterAwareness interface {
-	// ListDNServices lists uuid of all dn services
+	// ListDNServices lists uuid of all dn services.
 	ListDNServices() []string
-	// ListLogServices lists uuid of all log services
+	// ListLogServices lists uuid of all log services.
 	ListLogServices() []string
+	// ListHAKeeperServices lists all hakeeper log services.
+	ListHAKeeperServices() []LogService
 
-	// GetDNService fetches dn service instance
-	GetDNService(id string) (DNService, error)
-	// GetLogService fetches log service instance
-	GetLogService(id string) (LogService, error)
+	// GetDNService fetches dn service instance by uuid.
+	GetDNService(uuid string) (DNService, error)
+	// GetLogService fetches log service instance by index.
+	GetLogService(uuid string) (LogService, error)
+	// GetDNServiceIndexed fetches dn service instance by uuid.
+	GetDNServiceIndexed(index int) (DNService, error)
+	// GetLogServiceIndexed fetches log service instance by index.
+	GetLogServiceIndexed(index int) (LogService, error)
+
 	// GetClusterState fetches current cluster state
-	GetClusterState(timeout time.Duration) (*logpb.CheckerState, error)
+	GetClusterState(ctx context.Context) (*logpb.CheckerState, error)
 }
 
-// TODO: add more convenient method
-// ClusterAssertState asserts current cluster state.
-type ClusterAssertState interface {
-	AssertHAKeeperState(svc LogService, expected logpb.HAKeeperState)
-	// AssertClusterHealth()
-	// AssertClusterUnhealth()
+// FIXME: add more convenient methods
+// ClusterState provides cluster running state.
+type ClusterState interface {
+	// ListDNShards lists all dn shards within the cluster.
+	ListDNShards(ctx context.Context) ([]metadata.DNShardRecord, error)
+	// ListLogShards lists all log shards within the cluster.
+	ListLogShards(ctx context.Context) ([]metadata.LogShardRecord, error)
 
-	// AssertShardNum(typ string, exptect int)
-	// AssertReplicaNum(shardId uint64, expected int)
+	// GetDNStoreInfo gets dn store information by uuid.
+	GetDNStoreInfo(ctx context.Context, uuid string) (logpb.DNStoreInfo, error)
+	// GetDNStoreInfoIndexed gets dn store information by index.
+	GetDNStoreInfoIndexed(ctx context.Context, index int) (logpb.DNStoreInfo, error)
 
-	// AssertLeaderHakeeperState(expeted logpb.HAKeeperState)
+	// GetLogStoreInfo gets dn store information by uuid.
+	GetLogStoreInfo(ctx context.Context, uuid string) (logpb.LogStoreInfo, error)
+	// GetLogStoreInfoIndexed gets dn store information by index.
+	GetLogStoreInfoIndexed(ctx context.Context, index int) (logpb.LogStoreInfo, error)
+
+	// GetHAKeeperState returns hakeeper state from running hakeeper.
+	GetHAKeeperState() logpb.HAKeeperState
 }
 
 // ClusterWaitState waits cluster state until timeout.
 type ClusterWaitState interface {
-	WaitHAKeeperLeader(timeout time.Duration) LogService
-	WaitHAKeeperState(timeout time.Duration, expected logpb.HAKeeperState)
-	// WaitClusterHealth(timeout time.Duration)
-	// WaitShardByNum(typ string, batch int, timeout time.Duration)
-	// WaitReplicaByNum(shardID uint64, batch int, timeout time.Duration)
+	WaitHAKeeperLeader(ctx context.Context) LogService
+	WaitHAKeeperState(ctx context.Context, expected logpb.HAKeeperState)
+	// WaitClusterHealth(ctx context.Context)
+	// WaitShardByNum(typ string, batch int, ctx context.Context)
+	// WaitReplicaByNum(shardID uint64, batch int, ctx context.Context)
 }
 
 // ----------------------------------------------------
@@ -199,51 +233,167 @@ func (c *testCluster) Close() error {
 	return nil
 }
 
-func (c *testCluster) GetDNService(id string) (DNService, error) {
+func (c *testCluster) GetDNService(uuid string) (DNService, error) {
 	c.dn.Lock()
 	defer c.dn.Unlock()
 
 	for i, cfg := range c.dn.cfgs {
-		if cfg.UUID == id {
+		if cfg.UUID == uuid {
 			return c.dn.svcs[i], nil
 		}
 	}
-
-	return nil, wrappedError(ErrServiceNotExist, id)
+	return nil, wrappedError(ErrServiceNotExist, uuid)
 }
 
-func (c *testCluster) GetLogService(id string) (LogService, error) {
+func (c *testCluster) GetLogService(uuid string) (LogService, error) {
 	c.log.Lock()
 	defer c.log.Unlock()
 
 	for _, svc := range c.log.svcs {
-		if svc.ID() == id {
+		if svc.ID() == uuid {
 			return svc, nil
 		}
 	}
+	return nil, wrappedError(ErrServiceNotExist, uuid)
+}
 
-	return nil, wrappedError(ErrServiceNotExist, id)
+func (c *testCluster) GetDNServiceIndexed(index int) (DNService, error) {
+	c.dn.Lock()
+	defer c.dn.Unlock()
+
+	if index >= len(c.dn.svcs) || index < 0 {
+		return nil, wrappedError(
+			ErrInvalidServiceIndex, fmt.Sprintf("index: %d", index),
+		)
+	}
+	return c.dn.svcs[index], nil
+}
+
+func (c *testCluster) GetLogServiceIndexed(index int) (LogService, error) {
+	c.log.Lock()
+	defer c.log.Unlock()
+
+	if index >= len(c.log.svcs) || index < 0 {
+		return nil, wrappedError(
+			ErrInvalidServiceIndex, fmt.Sprintf("index: %d", index),
+		)
+	}
+	return c.log.svcs[index], nil
 }
 
 // NB: we could also fetch cluster state from non-leader hakeeper.
-func (c *testCluster) GetClusterState(timeout time.Duration) (*logpb.CheckerState, error) {
-	c.WaitHAKeeperState(timeout, logpb.HAKeeperRunning)
-	leader := c.WaitHAKeeperLeader(timeout)
+func (c *testCluster) GetClusterState(
+	ctx context.Context,
+) (*logpb.CheckerState, error) {
+	c.WaitHAKeeperState(ctx, logpb.HAKeeperRunning)
+	leader := c.WaitHAKeeperLeader(ctx)
 	return leader.GetClusterState()
 }
 
-func (c *testCluster) AssertHAKeeperState(svc LogService, expected logpb.HAKeeperState) {
-	state := c.getClusterState()
-	require.NotNil(c.t, state)
-	assert.Equal(c.t, expected, state.State)
+func (c *testCluster) ListDNShards(
+	ctx context.Context,
+) ([]metadata.DNShardRecord, error) {
+	state, err := c.GetClusterState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return state.ClusterInfo.DNShards, nil
 }
 
-func (c *testCluster) WaitHAKeeperLeader(timeout time.Duration) LogService {
-	timeoutCh := time.After(timeout)
+func (c *testCluster) ListLogShards(
+	ctx context.Context,
+) ([]metadata.LogShardRecord, error) {
+	state, err := c.GetClusterState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return state.ClusterInfo.LogShards, nil
+}
+
+func (c *testCluster) GetDNStoreInfo(
+	ctx context.Context, uuid string,
+) (logpb.DNStoreInfo, error) {
+	state, err := c.GetClusterState(ctx)
+	if err != nil {
+		return logpb.DNStoreInfo{}, err
+	}
+	stores := state.DNState.Stores
+	if storeInfo, ok := stores[uuid]; ok {
+		return storeInfo, nil
+	}
+	return logpb.DNStoreInfo{}, ErrServiceNotExist
+}
+
+func (c *testCluster) GetLogStoreInfo(
+	ctx context.Context, uuid string,
+) (logpb.LogStoreInfo, error) {
+	state, err := c.GetClusterState(ctx)
+	if err != nil {
+		return logpb.LogStoreInfo{}, err
+	}
+	stores := state.LogState.Stores
+	if storeInfo, ok := stores[uuid]; ok {
+		return storeInfo, nil
+	}
+	return logpb.LogStoreInfo{}, ErrServiceNotExist
+}
+
+func (c *testCluster) GetDNStoreInfoIndexed(
+	ctx context.Context, index int,
+) (logpb.DNStoreInfo, error) {
+	state, err := c.GetClusterState(ctx)
+	if err != nil {
+		return logpb.DNStoreInfo{}, err
+	}
+
+	ds, err := c.GetDNServiceIndexed(index)
+	if err != nil {
+		return logpb.DNStoreInfo{}, err
+	}
+	uuid := ds.ID()
+
+	stores := state.DNState.Stores
+	if storeInfo, ok := stores[uuid]; ok {
+		return storeInfo, nil
+	}
+	return logpb.DNStoreInfo{}, ErrServiceNotExist
+}
+
+func (c *testCluster) GetLogStoreInfoIndexed(
+	ctx context.Context, index int,
+) (logpb.LogStoreInfo, error) {
+	state, err := c.GetClusterState(ctx)
+	if err != nil {
+		return logpb.LogStoreInfo{}, err
+	}
+
+	ls, err := c.GetLogServiceIndexed(index)
+	if err != nil {
+		return logpb.LogStoreInfo{}, err
+	}
+	uuid := ls.ID()
+
+	stores := state.LogState.Stores
+	if storeInfo, ok := stores[uuid]; ok {
+		return storeInfo, nil
+	}
+	return logpb.LogStoreInfo{}, ErrServiceNotExist
+}
+
+func (c *testCluster) GetHAKeeperState() logpb.HAKeeperState {
+	state := c.getClusterState()
+	require.NotNil(c.t, state)
+	return state.State
+}
+
+func (c *testCluster) WaitHAKeeperLeader(ctx context.Context) LogService {
 	for {
 		select {
-		case <-timeoutCh:
-			assert.FailNow(c.t, "timeout when waiting for hakeeper leader")
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting for hakeeper leader: %s", ctx.Err(),
+			)
 		default:
 			time.Sleep(time.Millisecond * 100)
 
@@ -254,13 +404,16 @@ func (c *testCluster) WaitHAKeeperLeader(timeout time.Duration) LogService {
 		}
 	}
 }
-
-func (c *testCluster) WaitHAKeeperState(timeout time.Duration, expected logpb.HAKeeperState) {
-	timeoutCh := time.After(timeout)
+func (c *testCluster) WaitHAKeeperState(
+	ctx context.Context, expected logpb.HAKeeperState,
+) {
 	for {
 		select {
-		case <-timeoutCh:
-			assert.FailNow(c.t, "timeout when waiting for hakeeper state: %s", expected.String())
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting for hakeeper state: %s", ctx.Err(),
+			)
 		default:
 			time.Sleep(100 * time.Millisecond)
 
@@ -291,6 +444,74 @@ func (c *testCluster) ListLogServices() []string {
 	return ids
 }
 
+func (c *testCluster) ListHAKeeperServices() []LogService {
+	return c.selectHAkeeperServices()
+}
+
+func (c *testCluster) CloseDNService(uuid string) error {
+	ds, err := c.GetDNService(uuid)
+	if err != nil {
+		return err
+	}
+	return ds.Close()
+}
+
+func (c *testCluster) StartDNService(uuid string) error {
+	ds, err := c.GetDNService(uuid)
+	if err != nil {
+		return err
+	}
+	return ds.Start()
+}
+
+func (c *testCluster) CloseDNServiceIndexed(index int) error {
+	ds, err := c.GetDNServiceIndexed(index)
+	if err != nil {
+		return err
+	}
+	return ds.Close()
+}
+
+func (c *testCluster) StartDNServiceIndexed(index int) error {
+	ds, err := c.GetDNServiceIndexed(index)
+	if err != nil {
+		return err
+	}
+	return ds.Start()
+}
+
+func (c *testCluster) CloseLogService(uuid string) error {
+	ls, err := c.GetLogService(uuid)
+	if err != nil {
+		return err
+	}
+	return ls.Close()
+}
+
+func (c *testCluster) StartLogService(uuid string) error {
+	ls, err := c.GetLogService(uuid)
+	if err != nil {
+		return err
+	}
+	return ls.Start()
+}
+
+func (c *testCluster) CloseLogServiceIndexed(index int) error {
+	ls, err := c.GetLogServiceIndexed(index)
+	if err != nil {
+		return err
+	}
+	return ls.Close()
+}
+
+func (c *testCluster) StartLogServiceIndexed(index int) error {
+	ls, err := c.GetLogServiceIndexed(index)
+	if err != nil {
+		return err
+	}
+	return ls.Start()
+}
+
 // ------------------------------------------------------
 // The following are private utilities for `testCluster`.
 // ------------------------------------------------------
@@ -311,7 +532,9 @@ func (c *testCluster) buildFileServices() *fileServices {
 }
 
 // buildDnConfigs builds configurations for all dn services.
-func (c *testCluster) buildDnConfigs(address serviceAddress) ([]*dnservice.Config, []dnOptions) {
+func (c *testCluster) buildDnConfigs(
+	address serviceAddress,
+) ([]*dnservice.Config, []dnOptions) {
 	batch := c.opt.initial.dnServiceNum
 
 	cfgs := make([]*dnservice.Config, 0, batch)
@@ -325,7 +548,9 @@ func (c *testCluster) buildDnConfigs(address serviceAddress) ([]*dnservice.Confi
 }
 
 // buildLogConfigs builds configurations for all log services.
-func (c *testCluster) buildLogConfigs(address serviceAddress) []logservice.Config {
+func (c *testCluster) buildLogConfigs(
+	address serviceAddress,
+) []logservice.Config {
 	batch := c.opt.initial.logServiceNum
 
 	cfgs := make([]logservice.Config, 0, batch)
@@ -363,7 +588,11 @@ func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
 		ds, err := newDNService(cfg, fsFactory, opt)
 		require.NoError(c.t, err)
 
-		c.logger.Info("dn service initialized", zap.Int("index", i), zap.Any("config", cfg))
+		c.logger.Info(
+			"dn service initialized",
+			zap.Int("index", i),
+			zap.Any("config", cfg),
+		)
 
 		svcs = append(svcs, ds)
 	}
@@ -383,7 +612,11 @@ func (c *testCluster) initLogServices() []LogService {
 		ls, err := newLogService(cfg)
 		require.NoError(c.t, err)
 
-		c.logger.Info("log service initialized", zap.Int("index", i), zap.Any("config", cfg))
+		c.logger.Info(
+			"log service initialized",
+			zap.Int("index", i),
+			zap.Any("config", cfg),
+		)
 
 		svcs = append(svcs, ls)
 	}
@@ -466,7 +699,11 @@ func (c *testCluster) getClusterState() *logpb.CheckerState {
 	fn := func(index int, svc LogService) bool {
 		s, err := svc.GetClusterState()
 		if err != nil {
-			c.logger.Error("fail to get cluster state", zap.Error(err), zap.Int("index", index))
+			c.logger.Error(
+				"fail to get cluster state",
+				zap.Error(err),
+				zap.Int("index", index),
+			)
 			return false
 		}
 		state = s
@@ -483,10 +720,18 @@ func (c *testCluster) getHAKeeperLeader() LogService {
 	fn := func(index int, svc LogService) bool {
 		isLeader, err := svc.IsLeaderHakeeper()
 		if err != nil {
-			c.logger.Error("fail to check hakeeper", zap.Error(err), zap.Int("index", index))
+			c.logger.Error(
+				"fail to check hakeeper",
+				zap.Error(err),
+				zap.Int("index", index),
+			)
 			return false
 		}
-		c.logger.Info("hakeeper state", zap.Bool("isleader", isLeader), zap.Int("index", index))
+		c.logger.Info(
+			"hakeeper state",
+			zap.Bool("isleader", isLeader),
+			zap.Int("index", index),
+		)
 
 		if isLeader {
 			leader = svc
@@ -500,12 +745,17 @@ func (c *testCluster) getHAKeeperLeader() LogService {
 }
 
 // rangeHAKeeperService iterates all hakeeper service until `fn` returns true.
-func (c *testCluster) rangeHAKeeperService(fn func(index int, svc LogService) bool) {
+func (c *testCluster) rangeHAKeeperService(
+	fn func(index int, svc LogService) bool,
+) {
 	for i, svc := range c.selectHAkeeperServices() {
 		index := i
 
 		if svc.Status() != ServiceStarted {
-			c.logger.Warn("hakeeper service not started", zap.Int("index", index))
+			c.logger.Warn(
+				"hakeeper service not started",
+				zap.Int("index", index),
+			)
 			continue
 		}
 

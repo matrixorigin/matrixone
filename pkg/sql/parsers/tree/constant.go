@@ -19,7 +19,7 @@ import (
 	"strings"
 )
 
-//the AST for literals like string,numeric,bool and etc.
+// the AST for literals like string,numeric,bool and etc.
 type Constant interface {
 	Expr
 }
@@ -39,7 +39,7 @@ const (
 	P_bit
 )
 
-//the AST for the constant numeric value.
+// the AST for the constant numeric value.
 type NumVal struct {
 	Constant
 	Value constant.Value

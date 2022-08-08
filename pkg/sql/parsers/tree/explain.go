@@ -29,7 +29,7 @@ type explainImpl struct {
 	Options   []OptionElem
 }
 
-//EXPLAIN stmt statement
+// EXPLAIN stmt statement
 type ExplainStmt struct {
 	explainImpl
 }
@@ -72,7 +72,7 @@ func NewExplainStmt(stmt Statement, f string) *ExplainStmt {
 	return &ExplainStmt{explainImpl{Statement: stmt, Format: f}}
 }
 
-//EXPLAIN ANALYZE statement
+// EXPLAIN ANALYZE statement
 type ExplainAnalyze struct {
 	explainImpl
 }
@@ -86,7 +86,7 @@ func NewExplainAnalyze(stmt Statement, f string) *ExplainAnalyze {
 	return &ExplainAnalyze{explainImpl{Statement: stmt, Format: f}}
 }
 
-//EXPLAIN FOR CONNECTION statement
+// EXPLAIN FOR CONNECTION statement
 type ExplainFor struct {
 	explainImpl
 	ID uint64

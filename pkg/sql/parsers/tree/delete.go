@@ -14,7 +14,7 @@
 
 package tree
 
-//Delete statement
+// Delete statement
 type Delete struct {
 	statementImpl
 	Tables         TableExprs
