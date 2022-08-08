@@ -16,10 +16,13 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -32,6 +35,8 @@ const (
 	logServiceType        = "LOG"
 	standaloneServiceType = "STANDALONE"
 )
+
+var ErrInvalidConfig = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid log configuration")
 
 var (
 	supportServiceTypes = map[string]any{
@@ -75,8 +80,10 @@ func parseFromString(data string) (*Config, error) {
 	if _, err := toml.Decode(data, cfg); err != nil {
 		return nil, err
 	}
-
 	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	if err := cfg.resolveGossipSeedAddresses(); err != nil {
 		return nil, err
 	}
 	return cfg, nil
@@ -104,4 +111,32 @@ func (c *Config) getLogServiceConfig() logservice.Config {
 	fmt.Printf("hakeeper client cfg: %v", c.HAKeeperClient)
 	cfg.HAKeeperClientConfig = c.HAKeeperClient
 	return cfg
+}
+
+// memberlist requires all gossip seed addresses to be provided as IP:PORT
+func (c *Config) resolveGossipSeedAddresses() error {
+	result := make([]string, 0)
+	for _, addr := range c.LogService.GossipSeedAddresses {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return err
+		}
+		addrs, err := net.LookupHost(host)
+		if err != nil {
+			return err
+		}
+		// only keep IPv4 addresses
+		filtered := make([]string, 0)
+		for _, cur := range addrs {
+			if net.ParseIP(cur).To4() != nil {
+				filtered = append(filtered, cur)
+			}
+		}
+		if len(filtered) != 1 {
+			return ErrInvalidConfig
+		}
+		result = append(result, net.JoinHostPort(filtered[0], port))
+	}
+	c.LogService.GossipSeedAddresses = result
+	return nil
 }

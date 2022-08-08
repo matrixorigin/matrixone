@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -83,4 +84,76 @@ func TestFileServiceFactory(t *testing.T) {
 	fs, err = c.createFileService("B")
 	assert.Error(t, err)
 	assert.Nil(t, fs)
+}
+
+func TestResolveGossipSeedAddresses(t *testing.T) {
+	tests := []struct {
+		addrs   []string
+		results []string
+		err     error
+	}{
+		{
+			[]string{"localhost:32001", "localhost:32011"},
+			[]string{"127.0.0.1:32001", "127.0.0.1:32011"},
+			nil,
+		},
+		{
+			[]string{"localhost:32001", "localhost:32011", "127.0.0.1:32021"},
+			[]string{"127.0.0.1:32001", "127.0.0.1:32011", "127.0.0.1:32021"},
+			nil,
+		},
+		{
+			[]string{"127.0.0.1:32001"},
+			[]string{"127.0.0.1:32001"},
+			nil,
+		},
+	}
+
+	for _, tt := range tests {
+		cfg := Config{
+			LogService: logservice.Config{
+				GossipSeedAddresses: tt.addrs,
+			},
+		}
+		err := cfg.resolveGossipSeedAddresses()
+		if err != tt.err {
+			t.Errorf("expected %v, got %v", tt.err, err)
+		}
+	}
+}
+
+func TestGossipSeedAddressesAreResolved(t *testing.T) {
+	data := `
+	service-type = "LOG"
+
+[log]
+level = "debug"
+format = "json"
+max-size = 512
+
+[logservice]
+deployment-id = 1
+uuid = "9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
+gossip-seed-addresses = [
+  "localhost:32002",
+]
+
+[logservice.BootstrapConfig]
+bootstrap-cluster = true
+num-of-log-shards = 1
+num-of-dn-shards = 1
+num-of-log-shard-replicas = 1
+init-hakeeper-members = [
+  "131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf",
+]
+
+[hakeeper-client]
+service-addresses = [
+  "127.0.0.1:32000",
+]
+	`
+	cfg, err := parseFromString(data)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(cfg.LogService.GossipSeedAddresses))
+	assert.Equal(t, "127.0.0.1:32002", cfg.LogService.GossipSeedAddresses[0])
 }
