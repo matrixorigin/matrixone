@@ -14,9 +14,29 @@
 
 package output
 
-import "github.com/matrixorigin/matrixone/pkg/container/batch"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+)
 
 type Argument struct {
 	Data interface{}
 	Func func(interface{}, *batch.Batch) error
+}
+
+func (arg *Argument) MarshalBinary() ([]byte, error) {
+	return encoding.Encode(&Argument{
+		Data: arg.Data,
+		Func: arg.Func,
+	})
+}
+
+func (arg *Argument) UnmarshalBinary(data []byte) error {
+	rs := new(Argument)
+	if err := encoding.Decode(data, rs); err != nil {
+		return err
+	}
+	arg.Data = rs.Data
+	arg.Func = rs.Func
+	return nil
 }

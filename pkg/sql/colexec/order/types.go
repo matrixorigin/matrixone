@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -70,4 +71,19 @@ func (i Direction) String() string {
 		return fmt.Sprintf("Direction(%d)", i)
 	}
 	return directionName[i]
+}
+
+func (arg *Argument) MarshalBinary() ([]byte, error) {
+	return encoding.Encode(&Argument{
+		Fs: arg.Fs,
+	})
+}
+
+func (arg *Argument) UnmarshalBinary(data []byte) error {
+	rs := new(Argument)
+	if err := encoding.Decode(data, rs); err != nil {
+		return err
+	}
+	arg.Fs = rs.Fs
+	return nil
 }

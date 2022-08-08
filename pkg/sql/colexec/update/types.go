@@ -14,7 +14,10 @@
 
 package update
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine"
+import (
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+)
 
 type Argument struct {
 	Ts           uint64
@@ -31,4 +34,23 @@ type UpdateCtx struct {
 	OtherAttrs  []string
 	OrderAttrs  []string
 	TableSource engine.Relation
+}
+
+func (arg *Argument) MarshalBinary() ([]byte, error) {
+	return encoding.Encode(&Argument{
+		Ts: arg.Ts,
+		AffectedRows: arg.AffectedRows,
+		UpdateCtxs: arg.UpdateCtxs,
+	})
+}
+
+func (arg *Argument) UnmarshalBinary(data []byte) error {
+	rs := new(Argument)
+	if err := encoding.Decode(data, rs); err != nil {
+		return err
+	}
+	arg.Ts = rs.Ts
+	arg.AffectedRows = rs.AffectedRows
+	arg.UpdateCtxs = rs.UpdateCtxs
+	return nil
 }

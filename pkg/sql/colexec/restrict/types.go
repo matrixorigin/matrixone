@@ -14,8 +14,26 @@
 
 package restrict
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
 
 type Argument struct {
 	E *plan.Expr
+}
+
+func (arg *Argument) MarshalBinary() ([]byte, error) {
+	return encoding.Encode(&Argument{
+		E: arg.E,
+	})
+}
+
+func (arg *Argument) UnmarshalBinary(data []byte) error {
+	rs := new(Argument)
+	if err := encoding.Decode(data, rs); err != nil {
+		return err
+	}
+	arg.E = rs.E
+	return nil
 }

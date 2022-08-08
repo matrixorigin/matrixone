@@ -14,8 +14,26 @@
 
 package projection
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
 
 type Argument struct {
 	Es []*plan.Expr
+}
+
+func (arg *Argument) MarshalBinary() ([]byte, error) {
+	return encoding.Encode(&Argument{
+		Es: arg.Es,
+	})
+}
+
+func (arg *Argument) UnmarshalBinary(data []byte) error {
+	rs := new(Argument)
+	if err := encoding.Decode(data, rs); err != nil {
+		return err
+	}
+	arg.Es = rs.Es
+	return nil
 }

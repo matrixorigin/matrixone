@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
@@ -60,4 +61,27 @@ type Argument struct {
 	Typs       []types.Type
 	Result     []ResultPos
 	Conditions [][]*plan.Expr
+}
+
+func (arg *Argument) MarshalBinary() ([]byte, error) {
+	return encoding.Encode(&Argument{
+		Ibucket: arg.Ibucket,
+		Nbucket: arg.Nbucket,
+		Typs: arg.Typs,
+		Result: arg.Result,
+		Conditions: arg.Conditions,
+	})
+}
+
+func (arg *Argument) UnmarshalBinary(data []byte) error {
+	rs := new(Argument)
+	if err := encoding.Decode(data, rs); err != nil {
+		return err
+	}
+	arg.Ibucket = rs.Ibucket
+	arg.Nbucket = rs.Nbucket
+	arg.Typs = rs.Typs
+	arg.Result = rs.Result
+	arg.Conditions = rs.Conditions
+	return nil
 }

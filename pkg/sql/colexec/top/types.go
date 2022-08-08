@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -110,4 +111,21 @@ func (ctr *Container) Pop() interface{} {
 	x := ctr.sels[n]
 	ctr.sels = ctr.sels[:n]
 	return x
+}
+
+func (arg *Argument) MarshalBinary() ([]byte, error) {
+	return encoding.Encode(&Argument{
+		Limit: arg.Limit,
+		Fs: arg.Fs,
+	})
+}
+
+func (arg *Argument) UnmarshalBinary(data []byte) error {
+	rs := new(Argument)
+	if err := encoding.Decode(data, rs); err != nil {
+		return err
+	}
+	arg.Limit = rs.Limit
+	arg.Fs = rs.Fs
+	return nil
 }

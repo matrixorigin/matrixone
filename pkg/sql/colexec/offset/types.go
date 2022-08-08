@@ -14,7 +14,26 @@
 
 package offset
 
+import "github.com/matrixorigin/matrixone/pkg/encoding"
+
 type Argument struct {
 	Seen   uint64 // seen is the number of tuples seen so far
 	Offset uint64
+}
+
+func (arg *Argument) MarshalBinary() ([]byte, error) {
+	return encoding.Encode(&Argument{
+		Seen: arg.Seen,
+		Offset: arg.Offset,
+	})
+}
+
+func (arg *Argument) UnmarshalBinary(data []byte) error {
+	rs := new(Argument)
+	if err := encoding.Decode(data, rs); err != nil {
+		return err
+	}
+	arg.Seen = rs.Seen
+	arg.Offset = rs.Offset
+	return nil
 }
