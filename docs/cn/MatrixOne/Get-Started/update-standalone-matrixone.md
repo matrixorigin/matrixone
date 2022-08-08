@@ -135,6 +135,18 @@ cp -r ${path_name} store
 
 ## <h2><a name="use_docker_update">方法 3：使用 Docker 进行升级</a></h2>
 
+如果你无需保留历史数据，那么可以使用以下命令将从 Docker Hub 中下载 MatrixOne v0.5.1 版本的镜像。
+
+```
+docker ps
+docker stop matrixone
+docker rm matrixone
+docker pull matrixorigin/matrixone:0.5.1
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1
+```
+
+如果你需要保留历史数据，请参考下面的场景示例：
+
 **场景示例**：
 
 - 已使用 Docker 运行了 v0.5.0版本 MatrixOne
