@@ -16,6 +16,7 @@ package mockio
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"

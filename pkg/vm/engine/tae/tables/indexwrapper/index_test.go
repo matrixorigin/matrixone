@@ -15,7 +15,6 @@
 package indexwrapper
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
