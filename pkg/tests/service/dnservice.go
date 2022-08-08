@@ -33,6 +33,9 @@ type DNService interface {
 	// Status returns the status of service.
 	Status() ServiceStatus
 
+	// ID returns uuid of store
+	ID() string
+
 	// StartDNReplica start the DNShard replica
 	StartDNReplica(shard metadata.DNShard) error
 	// CloseDNReplica close the DNShard replica.
@@ -45,6 +48,7 @@ type DNService interface {
 type dnService struct {
 	sync.Mutex
 	status ServiceStatus
+	uuid   string
 	svc    dnservice.Service
 }
 
@@ -84,6 +88,12 @@ func (ds *dnService) Status() ServiceStatus {
 	return ds.status
 }
 
+func (ds *dnService) ID() string {
+	ds.Lock()
+	defer ds.Unlock()
+	return ds.uuid
+}
+
 func (ds *dnService) StartDNReplica(shard metadata.DNShard) error {
 	ds.Lock()
 	defer ds.Unlock()
@@ -119,7 +129,11 @@ func newDNService(
 	if err != nil {
 		return nil, err
 	}
-	return &dnService{status: ServiceInitialized, svc: svc}, nil
+	return &dnService{
+		status: ServiceInitialized,
+		uuid:   cfg.UUID,
+		svc:    svc,
+	}, nil
 }
 
 // buildDnConfig builds configuration for a dn service.

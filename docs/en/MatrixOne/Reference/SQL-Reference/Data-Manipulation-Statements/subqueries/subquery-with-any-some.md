@@ -60,3 +60,7 @@ Subqueries that use the `ANY` keyword return true when any value retrieved in th
 +------+
 1 row in set (0.00 sec)
 ```
+
+## **Constraints**
+
+MatrixOne does not support selecting multiple columns for the subquery.

@@ -88,3 +88,7 @@ SELECT * FROM t1 WHERE 1 > ALL (SELECT MAX(s1) FROM t2);
 +------+
 3 rows in set (0.00 sec)
 ```
+
+## **限制**
+
+MatrixOne 暂不支持选择多列进行子查询。
