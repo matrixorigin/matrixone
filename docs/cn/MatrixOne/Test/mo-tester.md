@@ -116,7 +116,8 @@ bash run.sh -p case -m run -t script -r 100 -i select,subquery -e substring -g
 
 * `report.txt` 示例如下：
 
-```[SUMMARY] TOTAL : 486, SUCCESS : 486, ERROR :0, NOEXE :0, SUCCESS RATE : 100%
+```
+[SUMMARY] TOTAL : 486, SUCCESS : 486, ERROR :0, NOEXE :0, SUCCESS RATE : 100%
 [SUMMARY] TOTAL : 486, SUCCESS : 485, ERROR :1, NOEXE :0, SUCCESS RATE : 99%
 [cases/transaction/atomicity.sql] TOTAL : 67, SUCCESS : 66, ERROR :1, NOEXE :0, SUCCESS RATE : 98%
 [cases/transaction/isolation.sql] TOTAL : 202, SUCCESS : 202, ERROR :0, NOEXE :0, SUCCESS RATE : 100%
