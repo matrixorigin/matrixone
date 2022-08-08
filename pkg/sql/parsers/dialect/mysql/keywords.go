@@ -489,5 +489,6 @@ func init() {
 		"failed_login_attempts":    FAILED_LOGIN_ATTEMPTS,
 		"password_lock_time":       PASSWORD_LOCK_TIME,
 		"unbounded":                UNBOUNDED,
+		"secondary":                SECONDARY,
 	}
 }
