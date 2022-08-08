@@ -55,6 +55,11 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 			Name: query.Headings[idx],
 			Alg:  plan.CompressType_Lz4,
 			Typ:  expr.Typ,
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
 		}
 	}
 	createTable.TableDef.Cols = cols
