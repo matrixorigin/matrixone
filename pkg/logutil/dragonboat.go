@@ -4,19 +4,7 @@ import (
 	"github.com/lni/dragonboat/v4/logger"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"sync/atomic"
 )
-
-var gZapConfigs atomic.Value
-
-type ZapConfig struct {
-	enc zapcore.Encoder
-	out zapcore.WriteSyncer
-}
-type ZapConfigs struct {
-	cfgs    []ZapConfig
-	options []zap.Option
-}
 
 var _ logger.ILogger = (*DragonboatAdaptLogger)(nil)
 
@@ -65,17 +53,20 @@ func (d DragonboatAdaptLogger) Panicf(format string, args ...interface{}) {
 
 // DragonboatFactory implement logger.Factory for logger.SetLoggerFactory
 // create DragonboatAdaptLogger intance
-func DragonboatFactory(pkgName string) logger.ILogger {
+func DragonboatFactory(name string) logger.ILogger {
 	var cores []zapcore.Core
-	configs := gZapConfigs.Load().(*ZapConfigs)
-	atom := zap.NewAtomicLevel()
-	for _, cfg := range configs.cfgs {
-		cores = append(cores, zapcore.NewCore(cfg.enc, cfg.out, atom))
+	cfg := getGlobalLogConfig()
+	atom := cfg.getLevel()
+	sinks := cfg.getSinks()
+	for _, sink := range sinks {
+		cores = append(cores, zapcore.NewCore(sink.enc, sink.out, atom))
 	}
+	options := cfg.getOptions()
+	options = append(options, zap.AddCallerSkip(2))
 	return &DragonboatAdaptLogger{
-		logger:  zap.New(zapcore.NewTee(cores...), configs.options...).WithOptions(zap.AddCallerSkip(2)).Sugar(),
+		logger:  zap.New(zapcore.NewTee(cores...), options...).Named(name).Sugar(),
 		atom:    &atom,
-		pkgName: pkgName,
+		pkgName: name,
 	}
 }
 

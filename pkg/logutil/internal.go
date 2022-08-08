@@ -26,6 +26,7 @@ import (
 
 // SetupMOLogger sets up the global logger for MO Server.
 func SetupMOLogger(conf *LogConfig) {
+	setGlobalLogConfig(conf) // keep for dragonboat/v4, ... and so on
 	logger, err := initMOLogger(conf)
 	if err != nil {
 		panic(err)
@@ -36,7 +37,6 @@ func SetupMOLogger(conf *LogConfig) {
 
 // initMOLogger initializes a zap Logger.
 func initMOLogger(cfg *LogConfig) (*zap.Logger, error) {
-	setEnableStoreDB(cfg.EnableStore)
 	return GetLoggerWithOptions(cfg.getLevel(), cfg.getEncoder(), cfg.getSyncer()), nil
 }
 
@@ -47,6 +47,7 @@ var _globalLogger atomic.Value
 func init() {
 	SetLogReporter(&TraceReporter{noopReportLog, noopReportZap, noopLevelSignal, noopContextField})
 	conf := &LogConfig{Level: "info", Format: "console"}
+	setGlobalLogConfig(conf)
 	logger, _ := initMOLogger(conf)
 	replaceGlobalLogger(logger)
 }
@@ -107,6 +108,20 @@ func (cfg *LogConfig) getLevel() zap.AtomicLevel {
 		panic(err)
 	}
 	return level
+}
+
+func (cfg *LogConfig) getSinks() (sinks []ZapSink) {
+	encoder, syncer := cfg.getEncoder(), cfg.getSyncer()
+	sinks = append(sinks, ZapSink{encoder, syncer})
+	if cfg.EnableStore {
+		encoder, syncer := getTraceLogSinks()
+		sinks = append(sinks, ZapSink{encoder, syncer})
+	}
+	return
+}
+
+func (cfg *LogConfig) getOptions() []zap.Option {
+	return []zap.Option{zap.AddStacktrace(zapcore.FatalLevel), zap.AddCaller()}
 }
 
 func getLoggerEncoder(format string) zapcore.Encoder {

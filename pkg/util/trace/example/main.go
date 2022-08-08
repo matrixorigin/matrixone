@@ -97,7 +97,7 @@ func logUsage(ctx context.Context) {
 
 	// case4: 3rd lib like dragonboat, could use logutil.DragonboatFactory, like
 	logger.SetLoggerFactory(logutil.DragonboatFactory)
-	plog := logger.GetLogger("example")
+	plog := logger.GetLogger("dragonboat.logger")
 	plog.Infof("log with DragonboatFactory, now: %s", time.Now())
 }
 

@@ -19,22 +19,27 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
+	"io/ioutil"
 	"sync/atomic"
 )
 
-// enableStoreDB mark cfg.EnableStoreDB from initMOLogger
-var enableStoreDB int32 = 0
-
-func setEnableStoreDB(enable bool) {
-	if enable {
-		atomic.StoreInt32(&enableStoreDB, 1)
-	} else {
-		atomic.StoreInt32(&enableStoreDB, 0)
-	}
-}
+var gLogConfigs atomic.Value
 
 func EnableStoreDB() bool {
-	return atomic.LoadInt32(&enableStoreDB) == 1
+	return gLogConfigs.Load().(*LogConfig).EnableStore
+}
+
+func setGlobalLogConfig(cfg *LogConfig) {
+	gLogConfigs.Store(cfg)
+}
+
+func getGlobalLogConfig() *LogConfig {
+	return gLogConfigs.Load().(*LogConfig)
+}
+
+type ZapSink struct {
+	enc zapcore.Encoder
+	out zapcore.WriteSyncer
 }
 
 // logReporter should be trace.ReportLog
@@ -129,4 +134,8 @@ func newTraceLogEncoder() *TraceLogEncoder {
 			}),
 	}
 	return e
+}
+
+func getTraceLogSinks() (zapcore.Encoder, zapcore.WriteSyncer) {
+	return newTraceLogEncoder(), zapcore.AddSync(ioutil.Discard)
 }
