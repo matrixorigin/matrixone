@@ -153,6 +153,41 @@ func errorUsage(ctx context.Context) {
 
 }
 
+type rpcRequest struct {
+	TraceId trace.TraceID
+	SpanId  trace.SpanID
+}
+type rpcResponse struct {
+	message string
+}
+type rpcServer struct {
+}
+
+func rpcUsage(ctx context.Context) {
+	traceId, spanId := trace.SpanFromContext(ctx).SpanContext().GetIDs()
+	req := &rpcRequest{
+		TraceId: traceId,
+		SpanId:  spanId,
+	}
+	_ = remoteCallFunction(ctx, req)
+}
+
+func remoteCallFunction(ctx context.Context, req *rpcRequest) error {
+	s := &rpcServer{}
+	resp, err := s.Function(ctx, req)
+	logutil2.Infof(ctx, "resp: %s", resp.message)
+	return err
+}
+
+func (s *rpcServer) Function(ctx context.Context, req *rpcRequest) (*rpcResponse, error) {
+	rootCtx := trace.ContextWithSpanContext(ctx, trace.SpanContextWithIDs(req.TraceId, req.SpanId))
+	newCtx, span := trace.Start(rootCtx, "Function")
+	defer span.End()
+
+	logutil2.Info(newCtx, "do Function")
+	return &rpcResponse{message: "success"}, nil
+}
+
 func mixUsage(ctx context.Context) {
 	newCtx, span := trace.Start(ctx, "mixUsage")
 	defer span.End()
@@ -191,6 +226,8 @@ func main() {
 	logUsage(rootCtx)
 
 	errorUsage(rootCtx)
+
+	rpcUsage(rootCtx)
 
 	mixUsage(rootCtx)
 

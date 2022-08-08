@@ -106,11 +106,11 @@ func (t batchSqlHandler) NewItemBatchHandler() func(batch any) {
 		defer span.End()
 		batch := b.(string)
 		if len(batch) == 0 {
-			logutil.Errorf("meet empty sql")
+			logutil.Warnf("meet empty sql")
 			return
 		}
 		if err := exec.Exec(batch, ie.NewOptsBuilder().Finish()); err != nil {
-			// fixme: catch panic error
+			// fixme: error -> log -> exec.Exec -> ... cycle
 			// fixme: handle error situation re-try
 			logutil.Errorf("[Trace] insert error. sql: %s; err: %v", batch, err)
 		}

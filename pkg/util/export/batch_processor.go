@@ -162,7 +162,6 @@ func NewMOCollector() *MOCollector {
 		exporterCnt:  gPipeImplHolder.Size(),
 	}
 	return c
-
 }
 
 func (c *MOCollector) Collect(ctx context.Context, i batchpipe.HasName) error {

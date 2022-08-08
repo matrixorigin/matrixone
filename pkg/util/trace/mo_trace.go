@@ -121,6 +121,10 @@ type SpanContext struct {
 	SpanID  SpanID  `json:"span_id"`
 }
 
+func (c SpanContext) GetIDs() (TraceID, SpanID) {
+	return c.TraceID, c.SpanID
+}
+
 func (c *SpanContext) Reset() {
 	c.TraceID = 0
 	c.SpanID = 0

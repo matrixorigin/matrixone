@@ -139,8 +139,8 @@ func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, 
 	statementId := util.Fastrand64()
 	sessInfo := proc.SessionInfo
 	txnID := uint64(0)
-	if tx := ses.GetTxnHandler().GetTxn(); tx != nil { // dcl have NO txn instance
-		txnID = tx.GetID()
+	if ses.GetTxnHandler().IsValidTxn() { // fixme: how Could I get an valid txn ID.
+		txnID = ses.GetTxnHandler().GetTxn().GetID()
 	}
 	trace.ReportStatement(
 		ctx,

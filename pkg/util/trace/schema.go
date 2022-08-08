@@ -43,12 +43,12 @@ const (
  name varchar(1024) COMMENT "span name, for example: step name of execution plan, function name in code, ...",
  start_time datetime,
  end_time datetime,
- duration BIGINT COMMENT "execution time, unit: ns"",
+ duration BIGINT COMMENT "execution time, unit: ns",
  resource varchar(4096) COMMENT "json, static resource informations /*should by json type*/"
 )`
 	sqlCreateLogInfoTable = `CREATE TABLE IF NOT EXISTS log_info(
  statement_id BIGINT UNSIGNED,
- span_id BIGINT UNSIGNED "",
+ span_id BIGINT UNSIGNED,
  node_id BIGINT COMMENT "node uuid in MO",
  node_type varchar(64) COMMENT "node type in MO, enum: DN, CN, LogService;",
  timestamp datetime COMMENT "log timestamp",

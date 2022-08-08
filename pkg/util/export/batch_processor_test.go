@@ -17,9 +17,13 @@ package export
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"reflect"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+
+	"github.com/stretchr/testify/require"
 )
 
 const NumType = "Num"
@@ -144,9 +148,7 @@ func Test_newBufferHolder(t *testing.T) {
 				buf.Add(v)
 			}
 			got := <-ch
-			if got != tt.want {
-				t.Errorf("newBufferHolder() = %v, want %v", got, tt.want)
-			}
+			require.Equal(t, got, tt.want)
 			buf.Reset()
 
 			for _, v := range tt.args.elemsReminder {
@@ -156,6 +158,22 @@ func Test_newBufferHolder(t *testing.T) {
 			got = <-ch
 			if got != tt.wantReminder {
 				t.Errorf("newBufferHolder() = %v, want %v", got, tt.wantReminder)
+			}
+		})
+	}
+}
+
+func TestNewMOCollector(t *testing.T) {
+	tests := []struct {
+		name string
+		want *MOCollector
+	}{
+		// TODO: Add test cases.
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NewMOCollector(); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("NewMOCollector() = %v, want %v", got, tt.want)
 			}
 		})
 	}
