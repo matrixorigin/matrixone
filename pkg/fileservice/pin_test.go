@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,19 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package service
+package fileservice
 
-import "fmt"
+import (
+	"testing"
 
-var (
-	ErrServiceNotExist     = fmt.Errorf("service not exist")
-	ErrServiceNotStarted   = fmt.Errorf("service not started")
-	ErrInvalidServiceIndex = fmt.Errorf("invalid service index")
-	ErrFailAllocatePort    = fmt.Errorf("fail to allocate port")
-	ErrInvalidFSName       = fmt.Errorf("invalid file service name")
+	"github.com/stretchr/testify/assert"
 )
 
-// wrappedError wraps error with extra message.
-func wrappedError(err error, msg string) error {
-	return fmt.Errorf("%w: %s", err, msg)
+func TestPin(t *testing.T) {
+	l := NewLRU(1)
+
+	p := Pin(42)
+	l.Set(1, p, 1)
+	_, ok := l.kv[1]
+	assert.True(t, ok)
+
+	l.Set(2, 42, 1)
+	_, ok = l.kv[1]
+	assert.True(t, ok)
+	_, ok = l.kv[2]
+	assert.False(t, ok)
+
+	p.Unpin()
+	l.Set(2, 42, 1)
+	_, ok = l.kv[1]
+	assert.False(t, ok)
+	_, ok = l.kv[2]
+	assert.True(t, ok)
+
+	l.Set(3, Pin(42), 1)
+	_, ok = l.kv[3]
+	assert.True(t, ok)
+	_, ok = l.kv[2]
+	assert.False(t, ok)
+
 }

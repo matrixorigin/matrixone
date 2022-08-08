@@ -142,10 +142,13 @@ func (a KillLogZombie) IsFinish(state pb.LogState, _ pb.DNState) bool {
 type AddDnReplica struct {
 	StoreID            string
 	ShardID, ReplicaID uint64
+	LogShardID         uint64
 }
 
 func (a AddDnReplica) String() string {
-	return fmt.Sprintf("adding %v:%v to dn store %s", a.ShardID, a.ReplicaID, a.StoreID)
+	return fmt.Sprintf("adding %v:%v to dn store %s (log shard %d)",
+		a.ShardID, a.ReplicaID, a.StoreID, a.LogShardID,
+	)
 }
 
 func (a AddDnReplica) IsFinish(_ pb.LogState, state pb.DNState) bool {
@@ -160,10 +163,13 @@ func (a AddDnReplica) IsFinish(_ pb.LogState, state pb.DNState) bool {
 type RemoveDnReplica struct {
 	StoreID            string
 	ShardID, ReplicaID uint64
+	LogShardID         uint64
 }
 
 func (a RemoveDnReplica) String() string {
-	return fmt.Sprintf("removing %v:%v on dn store %s", a.ShardID, a.ReplicaID, a.StoreID)
+	return fmt.Sprintf("removing %v:%v to dn store %s (log shard %d)",
+		a.ShardID, a.ReplicaID, a.StoreID, a.LogShardID,
+	)
 }
 
 func (a RemoveDnReplica) IsFinish(_ pb.LogState, state pb.DNState) bool {
