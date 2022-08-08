@@ -33,7 +33,7 @@ import (
 
 var MaxAllowedValue = int64(8000)
 
-//maximum 512mb
+// maximum 512mb
 var TotalMaximumSpaceCount = int64(512 * 1024 * 1024)
 
 var (

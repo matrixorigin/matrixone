@@ -20,7 +20,7 @@ import (
 	"strconv"
 )
 
-//update statement
+// update statement
 type Update struct {
 	statementImpl
 	Tables  TableExprs
@@ -71,7 +71,7 @@ func (node *UpdateExprs) Format(ctx *FmtCtx) {
 	}
 }
 
-//the update expression.
+// the update expression.
 type UpdateExpr struct {
 	NodeFormatter
 	Tuple bool
@@ -98,7 +98,7 @@ func NewUpdateExpr(t bool, n []*UnresolvedName, e Expr) *UpdateExpr {
 	}
 }
 
-//Load data statement
+// Load data statement
 type Load struct {
 	statementImpl
 	Local             bool
@@ -277,7 +277,7 @@ func NewLines(s string, t string) *Lines {
 	}
 }
 
-//column element in load data column list
+// column element in load data column list
 type LoadColumn interface {
 	NodeFormatter
 }

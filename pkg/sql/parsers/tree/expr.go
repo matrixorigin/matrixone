@@ -18,7 +18,7 @@ import (
 	"fmt"
 )
 
-//AST for the expression
+// AST for the expression
 type Expr interface {
 	fmt.Stringer
 	NodeFormatter
@@ -32,7 +32,7 @@ func (node *exprImpl) String() string {
 	return ""
 }
 
-//Binary Operator
+// Binary Operator
 type BinaryOp int
 
 const (
@@ -78,7 +78,7 @@ func (op BinaryOp) ToString() string {
 	}
 }
 
-//binary expression
+// binary expression
 type BinaryExpr struct {
 	exprImpl
 
@@ -108,7 +108,7 @@ func NewBinaryExpr(op BinaryOp, left Expr, right Expr) *BinaryExpr {
 	}
 }
 
-//unary expression
+// unary expression
 type UnaryOp int
 
 const (
@@ -137,7 +137,7 @@ func (op UnaryOp) ToString() string {
 	}
 }
 
-//unary expression
+// unary expression
 type UnaryExpr struct {
 	exprImpl
 
@@ -177,7 +177,7 @@ var unaryOpName = []string{
 	"!",
 }
 
-//comparion operation
+// comparion operation
 type ComparisonOp int
 
 const (
@@ -314,7 +314,7 @@ func NewComparisonExprWithEscape(op ComparisonOp, l, r, e Expr) *ComparisonExpr 
 	}
 }
 
-//and expression
+// and expression
 type AndExpr struct {
 	exprImpl
 	Left, Right Expr
@@ -333,7 +333,7 @@ func NewAndExpr(l, r Expr) *AndExpr {
 	}
 }
 
-//xor expression
+// xor expression
 type XorExpr struct {
 	exprImpl
 	Left, Right Expr
@@ -352,7 +352,7 @@ func NewXorExpr(l, r Expr) *XorExpr {
 	}
 }
 
-//or expression
+// or expression
 type OrExpr struct {
 	exprImpl
 	Left, Right Expr
@@ -371,7 +371,7 @@ func NewOrExpr(l, r Expr) *OrExpr {
 	}
 }
 
-//not expression
+// not expression
 type NotExpr struct {
 	exprImpl
 	Expr Expr
@@ -388,7 +388,7 @@ func NewNotExpr(e Expr) *NotExpr {
 	}
 }
 
-//is null expression
+// is null expression
 type IsNullExpr struct {
 	exprImpl
 	Expr Expr
@@ -405,7 +405,7 @@ func NewIsNullExpr(e Expr) *IsNullExpr {
 	}
 }
 
-//is not null expression
+// is not null expression
 type IsNotNullExpr struct {
 	exprImpl
 	Expr Expr
@@ -422,12 +422,12 @@ func NewIsNotNullExpr(e Expr) *IsNotNullExpr {
 	}
 }
 
-//subquery interface
+// subquery interface
 type SubqueryExpr interface {
 	Expr
 }
 
-//subquery
+// subquery
 type Subquery struct {
 	SubqueryExpr
 
@@ -449,7 +449,7 @@ func NewSubquery(s SelectStatement, e bool) *Subquery {
 	}
 }
 
-//a list of expression.
+// a list of expression.
 type Exprs []Expr
 
 func (node Exprs) Format(ctx *FmtCtx) {
@@ -461,13 +461,13 @@ func (node Exprs) Format(ctx *FmtCtx) {
 	}
 }
 
-//ast fir the list of expression
+// ast fir the list of expression
 type ExprList struct {
 	exprImpl
 	Exprs Exprs
 }
 
-//the parenthesized expression.
+// the parenthesized expression.
 type ParenExpr struct {
 	exprImpl
 	Expr Expr
@@ -512,7 +512,7 @@ const (
 	AGG_TYPE_GENERAL
 )
 
-//the common interface to UnresolvedName and QualifiedFunctionName.
+// the common interface to UnresolvedName and QualifiedFunctionName.
 type FunctionReference interface {
 	fmt.Stringer
 	NodeFormatter
@@ -520,7 +520,7 @@ type FunctionReference interface {
 
 var _ FunctionReference = &UnresolvedName{}
 
-//function reference
+// function reference
 type ResolvableFunctionReference struct {
 	FunctionReference
 }
@@ -533,7 +533,7 @@ func FuncName2ResolvableFunctionReference(funcName *UnresolvedName) ResolvableFu
 	return ResolvableFunctionReference{FunctionReference: funcName}
 }
 
-//function call expression
+// function call expression
 type FuncExpr struct {
 	exprImpl
 	Func  ResolvableFunctionReference
@@ -569,14 +569,14 @@ func NewFuncExpr(ft FuncType, name *UnresolvedName, e Exprs, order OrderBy) *Fun
 	}
 }
 
-//type reference
+// type reference
 type ResolvableTypeReference interface {
 }
 
 var _ ResolvableTypeReference = &UnresolvedObjectName{}
 var _ ResolvableTypeReference = &T{}
 
-//the Cast expression
+// the Cast expression
 type CastExpr struct {
 	exprImpl
 	Expr Expr
@@ -598,7 +598,7 @@ func NewCastExpr(e Expr, t ResolvableTypeReference) *CastExpr {
 	}
 }
 
-//the parenthesized list of expressions.
+// the parenthesized list of expressions.
 type Tuple struct {
 	exprImpl
 	Exprs Exprs
@@ -616,7 +616,7 @@ func NewTuple(e Exprs) *Tuple {
 	return &Tuple{Exprs: e}
 }
 
-//the BETWEEN or a NOT BETWEEN expression
+// the BETWEEN or a NOT BETWEEN expression
 type RangeCond struct {
 	exprImpl
 	Not      bool
@@ -644,7 +644,7 @@ func NewRangeCond(n bool, l, f, t Expr) *RangeCond {
 	}
 }
 
-//Case-When expression.
+// Case-When expression.
 type CaseExpr struct {
 	exprImpl
 	Expr  Expr
@@ -680,7 +680,7 @@ func NewCaseExpr(e Expr, w []*When, el Expr) *CaseExpr {
 	}
 }
 
-//When sub-expression.
+// When sub-expression.
 type When struct {
 	Cond Expr
 	Val  Expr
@@ -757,7 +757,7 @@ const (
 	INTERVAL_TYPE_YEARMONTH
 )
 
-//INTERVAL / time unit
+// INTERVAL / time unit
 type IntervalExpr struct {
 	exprImpl
 	Expr Expr
@@ -782,7 +782,7 @@ func NewIntervalExpr(t IntervalType) *IntervalExpr {
 	}
 }
 
-//the DEFAULT expression.
+// the DEFAULT expression.
 type DefaultVal struct {
 	exprImpl
 	Expr Expr
