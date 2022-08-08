@@ -15,51 +15,31 @@
 package txnengine
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
-	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 // Engine is an engine.Engine impl
 type Engine struct {
-
-	// hakeeper
-	hakeeperClient logservice.CNHAKeeperClient
-	clusterDetails struct {
-		sync.Mutex
-		logservicepb.ClusterDetails
-	}
-
-	// shard
-	shardPolicy ShardPolicy
-
-	fatal func()
+	shardPolicy       ShardPolicy
+	getClusterDetails GetClusterDetailsFunc
 }
+
+type GetClusterDetailsFunc = func() (logservicepb.ClusterDetails, error)
 
 func New(
 	ctx context.Context,
-	hakeeperClient logservice.CNHAKeeperClient,
 	shardPolicy ShardPolicy,
+	getClusterDetails GetClusterDetailsFunc,
 ) *Engine {
 
-	ctx, cancel := context.WithCancel(ctx)
-	fatal := func() {
-		cancel()
-	}
-
 	engine := &Engine{
-		hakeeperClient: hakeeperClient,
-		shardPolicy:    shardPolicy,
-		fatal:          fatal,
+		shardPolicy:       shardPolicy,
+		getClusterDetails: getClusterDetails,
 	}
-	go engine.startHAKeeperLoop(ctx)
 
 	return engine
 }
@@ -68,11 +48,11 @@ var _ engine.Engine = new(Engine)
 
 func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.TxnOperator) error {
 
-	_, err := doTxnRequest(
+	_, err := doTxnRequest[CreateDatabaseResp](
 		ctx,
+		e,
 		txnOperator.Write,
-		e.getDataNodes(),
-		txn.TxnMethod_Write,
+		allNodes,
 		OpCreateDatabase,
 		CreateDatabaseReq{
 			Name: dbName,
@@ -87,11 +67,11 @@ func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.T
 
 func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client.TxnOperator) (engine.Database, error) {
 
-	resps, err := doTxnRequest(
+	resps, err := doTxnRequest[OpenDatabaseResp](
 		ctx,
+		e,
 		txnOperator.Read,
-		e.getDataNodes()[:1],
-		txn.TxnMethod_Read,
+		firstNode,
 		OpOpenDatabase,
 		OpenDatabaseReq{
 			Name: dbName,
@@ -101,10 +81,7 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 		return nil, err
 	}
 
-	var resp OpenDatabaseResp
-	if err := gob.NewDecoder(bytes.NewReader(resps[0])).Decode(&resp); err != nil {
-		return nil, err
-	}
+	resp := resps[0]
 
 	db := &Database{
 		engine:      e,
@@ -117,13 +94,13 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 
 func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) ([]string, error) {
 
-	resps, err := doTxnRequest(
+	resps, err := doTxnRequest[GetDatabasesResp](
 		ctx,
+		e,
 		txnOperator.Read,
-		e.getDataNodes()[:1],
-		txn.TxnMethod_Read,
+		firstNode,
 		OpGetDatabases,
-		nil,
+		GetDatabasesReq{},
 	)
 	if err != nil {
 		return nil, err
@@ -131,11 +108,7 @@ func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) 
 
 	var dbNames []string
 	for _, resp := range resps {
-		var r GetDatabasesResp
-		if err := gob.NewDecoder(bytes.NewReader(resp)).Decode(&r); err != nil {
-			return nil, err
-		}
-		dbNames = append(dbNames, r.Names...)
+		dbNames = append(dbNames, resp.Names...)
 	}
 
 	return dbNames, nil
@@ -143,11 +116,11 @@ func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) 
 
 func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.TxnOperator) error {
 
-	_, err := doTxnRequest(
+	_, err := doTxnRequest[DeleteDatabaseResp](
 		ctx,
+		e,
 		txnOperator.Write,
-		e.getDataNodes(),
-		txn.TxnMethod_Write,
+		allNodes,
 		OpDeleteDatabase,
 		DeleteDatabaseReq{
 			Name: dbName,
@@ -160,10 +133,14 @@ func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.T
 	return nil
 }
 
-func (e *Engine) Nodes() engine.Nodes {
+func (e *Engine) Nodes() (engine.Nodes, error) {
+	clusterDetails, err := e.getClusterDetails()
+	if err != nil {
+		return nil, err
+	}
 
 	var nodes engine.Nodes
-	for _, node := range e.getComputeNodes() {
+	for _, node := range clusterDetails.CNNodes {
 		nodes = append(nodes, engine.Node{
 			Mcpu: 1,
 			Id:   node.UUID,
@@ -171,5 +148,5 @@ func (e *Engine) Nodes() engine.Nodes {
 		})
 	}
 
-	return nodes
+	return nodes, nil
 }

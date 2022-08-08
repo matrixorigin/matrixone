@@ -134,3 +134,21 @@ func (proc *Process) AllocConstNullVector(typ types.Type, cnt int) *vector.Vecto
 	nulls.Add(vec.Nsp, 0)
 	return vec
 }
+
+func (proc *Process) AllocBoolScalarVector(v bool) *vector.Vector {
+	typ := types.T_bool.ToType()
+	vec := proc.AllocScalarVector(typ)
+	bvec := make([]bool, 1)
+	bvec[0] = v
+	vec.Col = bvec
+	return vec
+}
+
+func (proc *Process) AllocInt64ScalarVector(v int64) *vector.Vector {
+	typ := types.T_int64.ToType()
+	vec := proc.AllocScalarVector(typ)
+	ivec := make([]int64, 1)
+	ivec[0] = v
+	vec.Col = ivec
+	return vec
+}

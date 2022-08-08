@@ -15,11 +15,8 @@
 package txnengine
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -35,11 +32,11 @@ var _ engine.Database = new(Database)
 
 func (d *Database) Create(ctx context.Context, relName string, defs []engine.TableDef) error {
 
-	_, err := doTxnRequest(
+	_, err := doTxnRequest[CreateDatabaseResp](
 		ctx,
+		d.engine,
 		d.txnOperator.Write,
-		d.engine.getDataNodes(),
-		txn.TxnMethod_Write,
+		allNodes,
 		OpCreateRelation,
 		CreateRelationReq{
 			DatabaseID: d.id,
@@ -56,11 +53,11 @@ func (d *Database) Create(ctx context.Context, relName string, defs []engine.Tab
 
 func (d *Database) Delete(ctx context.Context, relName string) error {
 
-	_, err := doTxnRequest(
+	_, err := doTxnRequest[DeleteRelationResp](
 		ctx,
+		d.engine,
 		d.txnOperator.Write,
-		d.engine.getDataNodes(),
-		txn.TxnMethod_Write,
+		allNodes,
 		OpDeleteRelation,
 		DeleteRelationReq{
 			DatabaseID: d.id,
@@ -76,11 +73,11 @@ func (d *Database) Delete(ctx context.Context, relName string) error {
 
 func (d *Database) Relation(ctx context.Context, relName string) (engine.Relation, error) {
 
-	resps, err := doTxnRequest(
+	resps, err := doTxnRequest[OpenRelationResp](
 		ctx,
+		d.engine,
 		d.txnOperator.Read,
-		d.engine.getDataNodes()[:1],
-		txn.TxnMethod_Read,
+		firstNode,
 		OpOpenRelation,
 		OpenRelationReq{
 			DatabaseID: d.id,
@@ -91,10 +88,7 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 		return nil, err
 	}
 
-	var resp OpenRelationResp
-	if err := gob.NewDecoder(bytes.NewReader(resps[0])).Decode(&resp); err != nil {
-		return nil, err
-	}
+	resp := resps[0]
 
 	switch resp.Type {
 
@@ -114,11 +108,11 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 
 func (d *Database) Relations(ctx context.Context) ([]string, error) {
 
-	resps, err := doTxnRequest(
+	resps, err := doTxnRequest[GetRelationsResp](
 		ctx,
+		d.engine,
 		d.txnOperator.Read,
-		d.engine.getDataNodes()[:1],
-		txn.TxnMethod_Read,
+		firstNode,
 		OpGetRelations,
 		GetRelationsReq{
 			DatabaseID: d.id,
@@ -130,11 +124,7 @@ func (d *Database) Relations(ctx context.Context) ([]string, error) {
 
 	var relNames []string
 	for _, resp := range resps {
-		var r GetRelationsResp
-		if err := gob.NewDecoder(bytes.NewReader(resp)).Decode(&r); err != nil {
-			return nil, err
-		}
-		relNames = append(relNames, r.Names...)
+		relNames = append(relNames, resp.Names...)
 	}
 
 	return relNames, nil

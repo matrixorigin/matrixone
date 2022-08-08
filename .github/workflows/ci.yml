@@ -388,14 +388,29 @@ jobs:
           path: |
             ${{ github.workspace }}
           retention-days: 7
-          
+ 
+  build-services:
+    name: Build mo-service
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: '3'
+
+      - name: Set up Go
+        uses: ./.github/actions/setup_env
+
+      - name: Build mo-service
+        run: |
+          cd $GITHUB_WORKSPACE && make service 
+
   lint-docs:
     name: Lint Docs
     runs-on: ubuntu-latest
     steps:
       - run: 'echo "No build required" '
-      
-      
+       
   sca:
     runs-on: ubuntu-latest
     name: SCA Test on Ubuntu/x64
