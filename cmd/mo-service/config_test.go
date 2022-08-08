@@ -107,6 +107,11 @@ func TestResolveGossipSeedAddresses(t *testing.T) {
 			[]string{"127.0.0.1:32001"},
 			nil,
 		},
+		{
+			[]string{"127.0.0.1:32001", "of-course-no-such-address42033.io:32001"},
+			[]string{"127.0.0.1:32001"},
+			nil,
+		},
 	}
 
 	for _, tt := range tests {
