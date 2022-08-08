@@ -457,7 +457,7 @@ var operators = map[int]Functions{
 					types.T_uint8,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.EqGeneralX[uint8],
+				Fn:        operator.EqGeneral[uint8],
 			},
 			{
 				Index:  1,
@@ -468,7 +468,7 @@ var operators = map[int]Functions{
 					types.T_uint16,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.EqGeneralX[uint16],
+				Fn:        operator.EqGeneral[uint16],
 			},
 			{
 				Index:  2,
@@ -479,7 +479,7 @@ var operators = map[int]Functions{
 					types.T_uint32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.EqGeneralX[uint32],
+				Fn:        operator.EqGeneral[uint32],
 			},
 			{
 				Index:  3,
@@ -490,7 +490,7 @@ var operators = map[int]Functions{
 					types.T_uint64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.EqGeneralX[uint64],
+				Fn:        operator.EqGeneral[uint64],
 			},
 			{
 				Index:  4,
@@ -501,7 +501,7 @@ var operators = map[int]Functions{
 					types.T_int8,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.EqGeneralX[int8],
+				Fn:        operator.EqGeneral[int8],
 			},
 			{
 				Index:  5,
@@ -512,7 +512,7 @@ var operators = map[int]Functions{
 					types.T_int16,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.EqGeneralX[int16],
+				Fn:        operator.EqGeneral[int16],
 			},
 			{
 				Index:  6,
@@ -523,7 +523,7 @@ var operators = map[int]Functions{
 					types.T_int32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.EqGeneralX[int32],
+				Fn:        operator.EqGeneral[int32],
 			},
 			{
 				Index:  7,
@@ -534,7 +534,7 @@ var operators = map[int]Functions{
 					types.T_int64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.EqGeneralX[int64],
+				Fn:        operator.EqGeneral[int64],
 			},
 			{
 				Index:  8,
@@ -545,7 +545,7 @@ var operators = map[int]Functions{
 					types.T_float32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.EqGeneralX[float32],
+				Fn:        operator.EqGeneral[float32],
 			},
 			{
 				Index:  9,
@@ -556,7 +556,7 @@ var operators = map[int]Functions{
 					types.T_float64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.EqGeneralX[float64],
+				Fn:        operator.EqGeneral[float64],
 			},
 			{
 				Index:  10,
@@ -567,7 +567,7 @@ var operators = map[int]Functions{
 					types.T_decimal64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.EqDecimal64X,
+				Fn:        operator.EqDecimal64,
 			},
 			{
 				Index:  11,
@@ -578,7 +578,7 @@ var operators = map[int]Functions{
 					types.T_decimal128,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.EqDecimal128X,
+				Fn:        operator.EqDecimal128,
 			},
 			{
 				Index:  12,
@@ -611,7 +611,7 @@ var operators = map[int]Functions{
 					types.T_date,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.EqGeneralX[types.Date],
+				Fn:        operator.EqGeneral[types.Date],
 			},
 			{
 				Index:  15,
@@ -622,7 +622,7 @@ var operators = map[int]Functions{
 					types.T_datetime,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.EqGeneralX[types.Datetime],
+				Fn:        operator.EqGeneral[types.Datetime],
 			},
 			{
 				Index:  16,
@@ -633,7 +633,7 @@ var operators = map[int]Functions{
 					types.T_bool,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.EqBool,
+				Fn:        operator.EqGeneral[bool],
 			},
 			{
 				Index:  17,
@@ -644,7 +644,7 @@ var operators = map[int]Functions{
 					types.T_timestamp,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.EqGeneralX[types.Timestamp],
+				Fn:        operator.EqGeneral[types.Timestamp],
 			},
 			{
 				Index:  18,
@@ -673,7 +673,7 @@ var operators = map[int]Functions{
 					types.T_uint8,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GtGeneralX[uint8],
+				Fn:        operator.GtGeneral[uint8],
 			},
 			{
 				Index:  1,
@@ -684,7 +684,7 @@ var operators = map[int]Functions{
 					types.T_uint16,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GtGeneralX[uint16],
+				Fn:        operator.GtGeneral[uint16],
 			},
 			{
 				Index:  2,
@@ -695,7 +695,7 @@ var operators = map[int]Functions{
 					types.T_uint32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GtGeneralX[uint32],
+				Fn:        operator.GtGeneral[uint32],
 			},
 			{
 				Index:  3,
@@ -706,7 +706,7 @@ var operators = map[int]Functions{
 					types.T_uint64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GtGeneralX[uint64],
+				Fn:        operator.GtGeneral[uint64],
 			},
 			{
 				Index:  4,
@@ -717,7 +717,7 @@ var operators = map[int]Functions{
 					types.T_int8,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GtGeneralX[int8],
+				Fn:        operator.GtGeneral[int8],
 			},
 			{
 				Index:  5,
@@ -728,7 +728,7 @@ var operators = map[int]Functions{
 					types.T_int16,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GtGeneralX[int16],
+				Fn:        operator.GtGeneral[int16],
 			},
 			{
 				Index:  6,
@@ -739,7 +739,7 @@ var operators = map[int]Functions{
 					types.T_int32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GtGeneralX[int32],
+				Fn:        operator.GtGeneral[int32],
 			},
 			{
 				Index:  7,
@@ -750,7 +750,7 @@ var operators = map[int]Functions{
 					types.T_int64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GtGeneralX[int64],
+				Fn:        operator.GtGeneral[int64],
 			},
 			{
 				Index:  8,
@@ -761,7 +761,7 @@ var operators = map[int]Functions{
 					types.T_float32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GtGeneralX[float32],
+				Fn:        operator.GtGeneral[float32],
 			},
 			{
 				Index:  9,
@@ -772,7 +772,7 @@ var operators = map[int]Functions{
 					types.T_float64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GtGeneralX[float64],
+				Fn:        operator.GtGeneral[float64],
 			},
 			{
 				Index:  10,
@@ -783,7 +783,7 @@ var operators = map[int]Functions{
 					types.T_decimal64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GtDecimal64X,
+				Fn:        operator.GtDecimal64,
 			},
 			{
 				Index:  11,
@@ -794,7 +794,7 @@ var operators = map[int]Functions{
 					types.T_decimal128,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GtDecimal128X,
+				Fn:        operator.GtDecimal128,
 			},
 			{
 				Index:  12,
@@ -827,7 +827,7 @@ var operators = map[int]Functions{
 					types.T_date,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GtGeneralX[types.Date],
+				Fn:        operator.GtGeneral[types.Date],
 			},
 			{
 				Index:  15,
@@ -838,7 +838,7 @@ var operators = map[int]Functions{
 					types.T_datetime,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GtGeneralX[types.Datetime],
+				Fn:        operator.GtGeneral[types.Datetime],
 			},
 			{
 				Index:  16,
@@ -849,7 +849,7 @@ var operators = map[int]Functions{
 					types.T_bool,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GtBool,
+				Fn:        operator.GtGeneral[bool],
 			},
 			{
 				Index:  17,
@@ -860,7 +860,7 @@ var operators = map[int]Functions{
 					types.T_timestamp,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GtGeneralX[types.Timestamp],
+				Fn:        operator.GtGeneral[types.Timestamp],
 			},
 			{
 				Index:  18,
@@ -889,7 +889,7 @@ var operators = map[int]Functions{
 					types.T_uint8,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GeGeneralX[uint8],
+				Fn:        operator.GeGeneral[uint8],
 			},
 			{
 				Index:  1,
@@ -900,7 +900,7 @@ var operators = map[int]Functions{
 					types.T_uint16,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GeGeneralX[uint16],
+				Fn:        operator.GeGeneral[uint16],
 			},
 			{
 				Index:  2,
@@ -911,7 +911,7 @@ var operators = map[int]Functions{
 					types.T_uint32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GeGeneralX[uint32],
+				Fn:        operator.GeGeneral[uint32],
 			},
 			{
 				Index:  3,
@@ -922,7 +922,7 @@ var operators = map[int]Functions{
 					types.T_uint64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GeGeneralX[uint64],
+				Fn:        operator.GeGeneral[uint64],
 			},
 			{
 				Index:  4,
@@ -933,7 +933,7 @@ var operators = map[int]Functions{
 					types.T_int8,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GeGeneralX[int8],
+				Fn:        operator.GeGeneral[int8],
 			},
 			{
 				Index:  5,
@@ -944,7 +944,7 @@ var operators = map[int]Functions{
 					types.T_int16,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GeGeneralX[int16],
+				Fn:        operator.GeGeneral[int16],
 			},
 			{
 				Index:  6,
@@ -955,7 +955,7 @@ var operators = map[int]Functions{
 					types.T_int32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GeGeneralX[int32],
+				Fn:        operator.GeGeneral[int32],
 			},
 			{
 				Index:  7,
@@ -966,7 +966,7 @@ var operators = map[int]Functions{
 					types.T_int64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GeGeneralX[int64],
+				Fn:        operator.GeGeneral[int64],
 			},
 			{
 				Index:  8,
@@ -977,7 +977,7 @@ var operators = map[int]Functions{
 					types.T_float32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GeGeneralX[float32],
+				Fn:        operator.GeGeneral[float32],
 			},
 			{
 				Index:  9,
@@ -988,7 +988,7 @@ var operators = map[int]Functions{
 					types.T_float64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GeGeneralX[float64],
+				Fn:        operator.GeGeneral[float64],
 			},
 			{
 				Index:  10,
@@ -999,7 +999,7 @@ var operators = map[int]Functions{
 					types.T_decimal64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GeDecimal64X,
+				Fn:        operator.GeDecimal64,
 			},
 			{
 				Index:  11,
@@ -1010,7 +1010,7 @@ var operators = map[int]Functions{
 					types.T_decimal128,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GeDecimal128X,
+				Fn:        operator.GeDecimal128,
 			},
 			{
 				Index:  12,
@@ -1043,7 +1043,7 @@ var operators = map[int]Functions{
 					types.T_date,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GeGeneralX[types.Date],
+				Fn:        operator.GeGeneral[types.Date],
 			},
 			{
 				Index:  15,
@@ -1054,7 +1054,7 @@ var operators = map[int]Functions{
 					types.T_datetime,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GeGeneralX[types.Datetime],
+				Fn:        operator.GeGeneral[types.Datetime],
 			},
 			{
 				Index:  16,
@@ -1065,7 +1065,7 @@ var operators = map[int]Functions{
 					types.T_bool,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GeBool,
+				Fn:        operator.GeGeneral[bool],
 			},
 			{
 				Index:  17,
@@ -1076,7 +1076,7 @@ var operators = map[int]Functions{
 					types.T_timestamp,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GeGeneralX[types.Timestamp],
+				Fn:        operator.GeGeneral[types.Timestamp],
 			},
 			{
 				Index:  18,
@@ -1105,7 +1105,7 @@ var operators = map[int]Functions{
 					types.T_uint8,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LtGeneralX[uint8],
+				Fn:        operator.LtGeneral[uint8],
 			},
 			{
 				Index:  1,
@@ -1116,7 +1116,7 @@ var operators = map[int]Functions{
 					types.T_uint16,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LtGeneralX[uint16],
+				Fn:        operator.LtGeneral[uint16],
 			},
 			{
 				Index:  2,
@@ -1127,7 +1127,7 @@ var operators = map[int]Functions{
 					types.T_uint32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LtGeneralX[uint32],
+				Fn:        operator.LtGeneral[uint32],
 			},
 			{
 				Index:  3,
@@ -1138,7 +1138,7 @@ var operators = map[int]Functions{
 					types.T_uint64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LtGeneralX[uint64],
+				Fn:        operator.LtGeneral[uint64],
 			},
 			{
 				Index:  4,
@@ -1149,7 +1149,7 @@ var operators = map[int]Functions{
 					types.T_int8,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LtGeneralX[int8],
+				Fn:        operator.LtGeneral[int8],
 			},
 			{
 				Index:  5,
@@ -1160,7 +1160,7 @@ var operators = map[int]Functions{
 					types.T_int16,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LtGeneralX[int16],
+				Fn:        operator.LtGeneral[int16],
 			},
 			{
 				Index:  6,
@@ -1171,7 +1171,7 @@ var operators = map[int]Functions{
 					types.T_int32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LtGeneralX[int32],
+				Fn:        operator.LtGeneral[int32],
 			},
 			{
 				Index:  7,
@@ -1182,7 +1182,7 @@ var operators = map[int]Functions{
 					types.T_int64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LtGeneralX[int64],
+				Fn:        operator.LtGeneral[int64],
 			},
 			{
 				Index:  8,
@@ -1193,7 +1193,7 @@ var operators = map[int]Functions{
 					types.T_float32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LtGeneralX[float32],
+				Fn:        operator.LtGeneral[float32],
 			},
 			{
 				Index:  9,
@@ -1204,7 +1204,7 @@ var operators = map[int]Functions{
 					types.T_float64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LtGeneralX[float64],
+				Fn:        operator.LtGeneral[float64],
 			},
 			{
 				Index:  10,
@@ -1215,7 +1215,7 @@ var operators = map[int]Functions{
 					types.T_decimal64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LtDecimal64X,
+				Fn:        operator.LtDecimal64,
 			},
 			{
 				Index:  11,
@@ -1226,7 +1226,7 @@ var operators = map[int]Functions{
 					types.T_decimal128,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LtDecimal128X,
+				Fn:        operator.LtDecimal128,
 			},
 			{
 				Index:  12,
@@ -1259,7 +1259,7 @@ var operators = map[int]Functions{
 					types.T_date,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LtGeneralX[types.Date],
+				Fn:        operator.LtGeneral[types.Date],
 			},
 			{
 				Index:  15,
@@ -1270,7 +1270,7 @@ var operators = map[int]Functions{
 					types.T_datetime,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LtGeneralX[types.Datetime],
+				Fn:        operator.LtGeneral[types.Datetime],
 			},
 			{
 				Index:  16,
@@ -1281,7 +1281,7 @@ var operators = map[int]Functions{
 					types.T_bool,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LtBool,
+				Fn:        operator.LtGeneral[bool],
 			},
 			{
 				Index:  17,
@@ -1292,7 +1292,7 @@ var operators = map[int]Functions{
 					types.T_timestamp,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LtGeneralX[types.Timestamp],
+				Fn:        operator.LtGeneral[types.Timestamp],
 			},
 			{
 				Index:  18,
@@ -1321,7 +1321,7 @@ var operators = map[int]Functions{
 					types.T_uint8,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LeGeneralX[uint8],
+				Fn:        operator.LeGeneral[uint8],
 			},
 			{
 				Index:  1,
@@ -1332,7 +1332,7 @@ var operators = map[int]Functions{
 					types.T_uint16,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LeGeneralX[uint16],
+				Fn:        operator.LeGeneral[uint16],
 			},
 			{
 				Index:  2,
@@ -1343,7 +1343,7 @@ var operators = map[int]Functions{
 					types.T_uint32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LeGeneralX[uint32],
+				Fn:        operator.LeGeneral[uint32],
 			},
 			{
 				Index:  3,
@@ -1354,7 +1354,7 @@ var operators = map[int]Functions{
 					types.T_uint64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LeGeneralX[uint64],
+				Fn:        operator.LeGeneral[uint64],
 			},
 			{
 				Index:  4,
@@ -1365,7 +1365,7 @@ var operators = map[int]Functions{
 					types.T_int8,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LeGeneralX[int8],
+				Fn:        operator.LeGeneral[int8],
 			},
 			{
 				Index:  5,
@@ -1376,7 +1376,7 @@ var operators = map[int]Functions{
 					types.T_int16,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LeGeneralX[int16],
+				Fn:        operator.LeGeneral[int16],
 			},
 			{
 				Index:  6,
@@ -1387,7 +1387,7 @@ var operators = map[int]Functions{
 					types.T_int32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LeGeneralX[int32],
+				Fn:        operator.LeGeneral[int32],
 			},
 			{
 				Index:  7,
@@ -1398,7 +1398,7 @@ var operators = map[int]Functions{
 					types.T_int64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LeGeneralX[int64],
+				Fn:        operator.LeGeneral[int64],
 			},
 			{
 				Index:  8,
@@ -1409,7 +1409,7 @@ var operators = map[int]Functions{
 					types.T_float32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LeGeneralX[float32],
+				Fn:        operator.LeGeneral[float32],
 			},
 			{
 				Index:  9,
@@ -1420,7 +1420,7 @@ var operators = map[int]Functions{
 					types.T_float64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LeGeneralX[float64],
+				Fn:        operator.LeGeneral[float64],
 			},
 			{
 				Index:  10,
@@ -1431,7 +1431,7 @@ var operators = map[int]Functions{
 					types.T_decimal64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LeDecimal64X,
+				Fn:        operator.LeDecimal64,
 			},
 			{
 				Index:  11,
@@ -1442,7 +1442,7 @@ var operators = map[int]Functions{
 					types.T_decimal128,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LeDecimal128X,
+				Fn:        operator.LeDecimal128,
 			},
 			{
 				Index:  12,
@@ -1475,7 +1475,7 @@ var operators = map[int]Functions{
 					types.T_date,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LeGeneralX[types.Date],
+				Fn:        operator.LeGeneral[types.Date],
 			},
 			{
 				Index:  15,
@@ -1486,7 +1486,7 @@ var operators = map[int]Functions{
 					types.T_datetime,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LeGeneralX[types.Datetime],
+				Fn:        operator.LeGeneral[types.Datetime],
 			},
 			{
 				Index:  16,
@@ -1497,7 +1497,7 @@ var operators = map[int]Functions{
 					types.T_bool,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LeBool,
+				Fn:        operator.LeGeneral[bool],
 			},
 			{
 				Index:  17,
@@ -1508,7 +1508,7 @@ var operators = map[int]Functions{
 					types.T_timestamp,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LeGeneralX[types.Timestamp],
+				Fn:        operator.LeGeneral[types.Timestamp],
 			},
 			{
 				Index:  18,
@@ -1537,7 +1537,7 @@ var operators = map[int]Functions{
 					types.T_uint8,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeGeneralX[uint8],
+				Fn:        operator.NeGeneral[uint8],
 			},
 			{
 				Index:  1,
@@ -1548,7 +1548,7 @@ var operators = map[int]Functions{
 					types.T_uint16,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeGeneralX[uint16],
+				Fn:        operator.NeGeneral[uint16],
 			},
 			{
 				Index:  2,
@@ -1559,7 +1559,7 @@ var operators = map[int]Functions{
 					types.T_uint32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeGeneralX[uint16],
+				Fn:        operator.NeGeneral[uint16],
 			},
 			{
 				Index:  3,
@@ -1570,7 +1570,7 @@ var operators = map[int]Functions{
 					types.T_uint64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeGeneralX[uint64],
+				Fn:        operator.NeGeneral[uint64],
 			},
 			{
 				Index:  4,
@@ -1581,7 +1581,7 @@ var operators = map[int]Functions{
 					types.T_int8,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeGeneralX[int8],
+				Fn:        operator.NeGeneral[int8],
 			},
 			{
 				Index:  5,
@@ -1592,7 +1592,7 @@ var operators = map[int]Functions{
 					types.T_int16,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeGeneralX[int16],
+				Fn:        operator.NeGeneral[int16],
 			},
 			{
 				Index:  6,
@@ -1603,7 +1603,7 @@ var operators = map[int]Functions{
 					types.T_int32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeGeneralX[int32],
+				Fn:        operator.NeGeneral[int32],
 			},
 			{
 				Index:  7,
@@ -1614,7 +1614,7 @@ var operators = map[int]Functions{
 					types.T_int64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeGeneralX[int64],
+				Fn:        operator.NeGeneral[int64],
 			},
 			{
 				Index:  8,
@@ -1625,7 +1625,7 @@ var operators = map[int]Functions{
 					types.T_float32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeGeneralX[float32],
+				Fn:        operator.NeGeneral[float32],
 			},
 			{
 				Index:  9,
@@ -1636,7 +1636,7 @@ var operators = map[int]Functions{
 					types.T_float64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeGeneralX[float64],
+				Fn:        operator.NeGeneral[float64],
 			},
 			{
 				Index:  10,
@@ -1647,7 +1647,7 @@ var operators = map[int]Functions{
 					types.T_decimal64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeDecimal64X,
+				Fn:        operator.NeDecimal64,
 			},
 			{
 				Index:  11,
@@ -1658,7 +1658,7 @@ var operators = map[int]Functions{
 					types.T_decimal128,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeDecimal128X,
+				Fn:        operator.NeDecimal128,
 			},
 			{
 				Index:  12,
@@ -1691,7 +1691,7 @@ var operators = map[int]Functions{
 					types.T_date,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeGeneralX[types.Date],
+				Fn:        operator.NeGeneral[types.Date],
 			},
 			{
 				Index:  15,
@@ -1702,7 +1702,7 @@ var operators = map[int]Functions{
 					types.T_datetime,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeGeneralX[types.Datetime],
+				Fn:        operator.NeGeneral[types.Datetime],
 			},
 			{
 				Index:  16,
@@ -1713,7 +1713,7 @@ var operators = map[int]Functions{
 					types.T_bool,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeBool,
+				Fn:        operator.NeGeneral[bool],
 			},
 			{
 				Index:  17,
@@ -1724,7 +1724,7 @@ var operators = map[int]Functions{
 					types.T_timestamp,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeGeneralX[types.Timestamp],
+				Fn:        operator.NeGeneral[types.Timestamp],
 			},
 			{
 				Index:  18,

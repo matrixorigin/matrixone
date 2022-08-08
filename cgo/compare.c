@@ -148,35 +148,35 @@
 
 
 
-int32_t Numeric_VecEq(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof)
+int32_t Numeric_VecEq(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t type)
 {
-    if (szof == Type_INT8) {
+    if (type == Type_INT8) {
         MO_COMPARE_T(COMPARE_EQ, int8_t);
-    } else if (szof == Type_INT16) {
+    } else if (type == Type_INT16) {
         MO_COMPARE_T(COMPARE_EQ, int16_t);
-    } else if (szof == Type_INT32) {
+    } else if (type == Type_INT32) {
         MO_COMPARE_T(COMPARE_EQ, int32_t);
-    } else if (szof == Type_INT64) {
+    } else if (type == Type_INT64) {
         MO_COMPARE_T(COMPARE_EQ, int64_t);
-    } else if (szof == Type_UINT8) {
+    } else if (type == Type_UINT8) {
         MO_COMPARE_T(COMPARE_EQ, uint8_t);
-    } else if (szof == Type_UINT16) {
+    } else if (type == Type_UINT16) {
         MO_COMPARE_T(COMPARE_EQ, uint16_t);
-    } else if (szof == Type_UINT32) {
+    } else if (type == Type_UINT32) {
         MO_COMPARE_T(COMPARE_EQ, uint32_t);
-    } else if (szof == Type_UINT64) {
+    } else if (type == Type_UINT64) {
         MO_COMPARE_T(COMPARE_EQ, uint64_t);
-    } else if (szof == Type_FLOAT32) {
+    } else if (type == Type_FLOAT32) {
         MO_COMPARE_T(COMPARE_EQ, float);
-    } else if (szof == Type_FLOAT64) {
+    } else if (type == Type_FLOAT64) {
         MO_COMPARE_T(COMPARE_EQ, double);
-    } else if (szof == Type_DATE) {
+    } else if (type == Type_DATE) {
         MO_COMPARE_T(COMPARE_EQ, int32_t);
-    } else if (szof == Type_DATETIME) {
+    } else if (type == Type_DATETIME) {
         MO_COMPARE_T(COMPARE_EQ, int64_t);
-    } else if (szof == Type_TIMESTAMP) {
+    } else if (type == Type_TIMESTAMP) {
         MO_COMPARE_T(COMPARE_EQ, int64_t);
-    } else if (szof == Type_BOOL) {
+    } else if (type == Type_BOOL) {
         MO_COMPARE_T(COMPARE_BOOL_EQ, bool);
     } else {
         return RC_INVALID_ARGUMENT;
@@ -185,104 +185,110 @@ int32_t Numeric_VecEq(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, i
 }
 
 
-int32_t Numeric_VecNe(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof)
+int32_t Numeric_VecNe(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t type)
 {
-    if (szof == Type_INT8) {
+    if (type == Type_INT8) {
         MO_COMPARE_T(COMPARE_NE, int8_t);
-    } else if (szof == Type_INT16) {
+    } else if (type == Type_INT16) {
         MO_COMPARE_T(COMPARE_NE, int16_t);
-    } else if (szof == Type_INT32) {
+    } else if (type == Type_INT32) {
         MO_COMPARE_T(COMPARE_NE, int32_t);
-    } else if (szof == Type_INT64) {
+    } else if (type == Type_INT64) {
         MO_COMPARE_T(COMPARE_NE, int64_t);
-    } else if (szof == Type_UINT8) {
+    } else if (type == Type_UINT8) {
         MO_COMPARE_T(COMPARE_NE, uint8_t);
-    } else if (szof == Type_UINT16) {
+    } else if (type == Type_UINT16) {
         MO_COMPARE_T(COMPARE_NE, uint16_t);
-    } else if (szof == Type_UINT32) {
+    } else if (type == Type_UINT32) {
         MO_COMPARE_T(COMPARE_NE, uint32_t);
-    } else if (szof == Type_UINT64) {
+    } else if (type == Type_UINT64) {
         MO_COMPARE_T(COMPARE_NE, uint64_t);
-    } else if (szof == Type_FLOAT32) {
+    } else if (type == Type_FLOAT32) {
         MO_COMPARE_T(COMPARE_NE, float);
-    } else if (szof == Type_FLOAT64) {
+    } else if (type == Type_FLOAT64) {
         MO_COMPARE_T(COMPARE_NE, double);
-    } else if (szof == Type_DATE) {
+    } else if (type == Type_DATE) {
         MO_COMPARE_T(COMPARE_NE, int32_t);
-    } else if (szof == Type_DATETIME) {
+    } else if (type == Type_DATETIME) {
         MO_COMPARE_T(COMPARE_NE, int64_t);
-    } else if (szof == Type_TIMESTAMP) {
+    } else if (type == Type_TIMESTAMP) {
         MO_COMPARE_T(COMPARE_NE, int64_t);
-    }else {
+    } else if (type == Type_BOOL) {
+        MO_COMPARE_T(COMPARE_BOOL_NE, bool);
+    } else {
         return RC_INVALID_ARGUMENT;
     }
     return RC_SUCCESS;
 }
 
 
-int32_t Numeric_VecGt(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof)
+int32_t Numeric_VecGt(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t type)
 {
-    if (szof == Type_INT8) {
+    if (type == Type_INT8) {
         MO_COMPARE_T(COMPARE_GT, int8_t);
-    } else if (szof == Type_INT16) {
+    } else if (type == Type_INT16) {
         MO_COMPARE_T(COMPARE_GT, int16_t);
-    } else if (szof == Type_INT32) {
+    } else if (type == Type_INT32) {
         MO_COMPARE_T(COMPARE_GT, int32_t);
-    } else if (szof == Type_INT64) {
+    } else if (type == Type_INT64) {
         MO_COMPARE_T(COMPARE_GT, int64_t);
-    } else if (szof == Type_UINT8) {
+    } else if (type == Type_UINT8) {
         MO_COMPARE_T(COMPARE_GT, uint8_t);
-    } else if (szof == Type_UINT16) {
+    } else if (type == Type_UINT16) {
         MO_COMPARE_T(COMPARE_GT, uint16_t);
-    } else if (szof == Type_UINT32) {
+    } else if (type == Type_UINT32) {
         MO_COMPARE_T(COMPARE_GT, uint32_t);
-    } else if (szof == Type_UINT64) {
+    } else if (type == Type_UINT64) {
         MO_COMPARE_T(COMPARE_GT, uint64_t);
-    } else if (szof == Type_FLOAT32) {
+    } else if (type == Type_FLOAT32) {
         MO_COMPARE_T(COMPARE_GT, float);
-    } else if (szof == Type_FLOAT64) {
+    } else if (type == Type_FLOAT64) {
         MO_COMPARE_T(COMPARE_GT, double);
-    } else if (szof == Type_DATE) {
+    } else if (type == Type_DATE) {
         MO_COMPARE_T(COMPARE_GT, int32_t);
-    } else if (szof == Type_DATETIME) {
+    } else if (type == Type_DATETIME) {
         MO_COMPARE_T(COMPARE_GT, int64_t);
-    } else if (szof == Type_TIMESTAMP) {
+    } else if (type == Type_TIMESTAMP) {
         MO_COMPARE_T(COMPARE_GT, int64_t);
-    }else {
+    } else if (type == Type_BOOL) {
+        MO_COMPARE_T(COMPARE_BOOL_GT, bool);
+    } else {
         return RC_INVALID_ARGUMENT;
     }
     return RC_SUCCESS;
 }
 
-int32_t Numeric_VecGe(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof)
+int32_t Numeric_VecGe(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t type)
 {
-    if (szof == Type_INT8) {
+    if (type == Type_INT8) {
         MO_COMPARE_T(COMPARE_GE, int8_t);
-    } else if (szof == Type_INT16) {
+    } else if (type == Type_INT16) {
         MO_COMPARE_T(COMPARE_GE, int16_t);
-    } else if (szof == Type_INT32) {
+    } else if (type == Type_INT32) {
         MO_COMPARE_T(COMPARE_GE, int32_t);
-    } else if (szof == Type_INT64) {
+    } else if (type == Type_INT64) {
         MO_COMPARE_T(COMPARE_GE, int64_t);
-    } else if (szof == Type_UINT8) {
+    } else if (type == Type_UINT8) {
         MO_COMPARE_T(COMPARE_GE, uint8_t);
-    } else if (szof == Type_UINT16) {
+    } else if (type == Type_UINT16) {
         MO_COMPARE_T(COMPARE_GE, uint16_t);
-    } else if (szof == Type_UINT32) {
+    } else if (type == Type_UINT32) {
         MO_COMPARE_T(COMPARE_GE, uint32_t);
-    } else if (szof == Type_UINT64) {
+    } else if (type == Type_UINT64) {
         MO_COMPARE_T(COMPARE_GE, uint64_t);
-    } else if (szof == Type_FLOAT32) {
+    } else if (type == Type_FLOAT32) {
         MO_COMPARE_T(COMPARE_GE, float);
-    } else if (szof == Type_FLOAT64) {
+    } else if (type == Type_FLOAT64) {
         MO_COMPARE_T(COMPARE_GE, double);
-    } else if (szof == Type_DATE) {
+    } else if (type == Type_DATE) {
         MO_COMPARE_T(COMPARE_GE, int32_t);
-    } else if (szof == Type_DATETIME) {
+    } else if (type == Type_DATETIME) {
         MO_COMPARE_T(COMPARE_GE, int64_t);
-    } else if (szof == Type_TIMESTAMP) {
+    } else if (type == Type_TIMESTAMP) {
         MO_COMPARE_T(COMPARE_GE, int64_t);
-    }else {
+    } else if (type == Type_BOOL) {
+        MO_COMPARE_T(COMPARE_BOOL_GE, bool);
+    } else {
         return RC_INVALID_ARGUMENT;
     }
 
@@ -290,71 +296,74 @@ int32_t Numeric_VecGe(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, i
 }
 
 
-int32_t Numeric_VecLt(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof)
+int32_t Numeric_VecLt(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t type)
 {
-    if (szof == Type_INT8) {
+    if (type == Type_INT8) {
         MO_COMPARE_T(COMPARE_LT, int8_t);
-    } else if (szof == Type_INT16) {
+    } else if (type == Type_INT16) {
         MO_COMPARE_T(COMPARE_LT, int16_t);
-    } else if (szof == Type_INT32) {
+    } else if (type == Type_INT32) {
         MO_COMPARE_T(COMPARE_LT, int32_t);
-    } else if (szof == Type_INT64) {
+    } else if (type == Type_INT64) {
         MO_COMPARE_T(COMPARE_LT, int64_t);
-    } else if (szof == Type_UINT8) {
+    } else if (type == Type_UINT8) {
         MO_COMPARE_T(COMPARE_LT, uint8_t);
-    } else if (szof == Type_UINT16) {
+    } else if (type == Type_UINT16) {
         MO_COMPARE_T(COMPARE_LT, uint16_t);
-    } else if (szof == Type_UINT32) {
+    } else if (type == Type_UINT32) {
         MO_COMPARE_T(COMPARE_LT, uint32_t);
-    } else if (szof == Type_UINT64) {
+    } else if (type == Type_UINT64) {
         MO_COMPARE_T(COMPARE_LT, uint64_t);
-    } else if (szof == Type_FLOAT32) {
+    } else if (type == Type_FLOAT32) {
         MO_COMPARE_T(COMPARE_LT, float);
-    } else if (szof == Type_FLOAT64) {
+    } else if (type == Type_FLOAT64) {
         MO_COMPARE_T(COMPARE_LT, double);
-    } else if (szof == Type_DATE) {
+    } else if (type == Type_DATE) {
         MO_COMPARE_T(COMPARE_LT, int32_t);
-    } else if (szof == Type_DATETIME) {
+    } else if (type == Type_DATETIME) {
         MO_COMPARE_T(COMPARE_LT, int64_t);
-    } else if (szof == Type_TIMESTAMP) {
+    } else if (type == Type_TIMESTAMP) {
         MO_COMPARE_T(COMPARE_LT, int64_t);
-    }else {
+    } else if (type == Type_BOOL) {
+        MO_COMPARE_T(COMPARE_BOOL_LT, bool);
+    } else {
         return RC_INVALID_ARGUMENT;
     }
-
     return RC_SUCCESS;
 }
 
 
-int32_t Numeric_VecLe(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof)
+int32_t Numeric_VecLe(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t type)
 {
-    if (szof == Type_INT8) {
+    if (type == Type_INT8) {
         MO_COMPARE_T(COMPARE_LE, int8_t);
-    } else if (szof == Type_INT16) {
+    } else if (type == Type_INT16) {
         MO_COMPARE_T(COMPARE_LE, int16_t);
-    } else if (szof == Type_INT32) {
+    } else if (type == Type_INT32) {
         MO_COMPARE_T(COMPARE_LE, int32_t);
-    } else if (szof == Type_INT64) {
+    } else if (type == Type_INT64) {
         MO_COMPARE_T(COMPARE_LE, int64_t);
-    } else if (szof == Type_UINT8) {
+    } else if (type == Type_UINT8) {
         MO_COMPARE_T(COMPARE_LE, uint8_t);
-    } else if (szof == Type_UINT16) {
+    } else if (type == Type_UINT16) {
         MO_COMPARE_T(COMPARE_LE, uint16_t);
-    } else if (szof == Type_UINT32) {
+    } else if (type == Type_UINT32) {
         MO_COMPARE_T(COMPARE_LE, uint32_t);
-    } else if (szof == Type_UINT64) {
+    } else if (type == Type_UINT64) {
         MO_COMPARE_T(COMPARE_LE, uint64_t);
-    } else if (szof == Type_FLOAT32) {
+    } else if (type == Type_FLOAT32) {
         MO_COMPARE_T(COMPARE_LE, float);
-    } else if (szof == Type_FLOAT64) {
+    } else if (type == Type_FLOAT64) {
         MO_COMPARE_T(COMPARE_LE, double);
-    } else if (szof == Type_DATE) {
+    } else if (type == Type_DATE) {
         MO_COMPARE_T(COMPARE_LE, int32_t);
-    } else if (szof == Type_DATETIME) {
+    } else if (type == Type_DATETIME) {
         MO_COMPARE_T(COMPARE_LE, int64_t);
-    } else if (szof == Type_TIMESTAMP) {
+    } else if (type == Type_TIMESTAMP) {
         MO_COMPARE_T(COMPARE_LE, int64_t);
-    }else {
+    } else if (type == Type_BOOL) {
+        MO_COMPARE_T(COMPARE_BOOL_LE, bool);
+    } else {
         return RC_INVALID_ARGUMENT;
     }
     return RC_SUCCESS;

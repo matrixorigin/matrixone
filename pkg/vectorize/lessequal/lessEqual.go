@@ -36,7 +36,7 @@ const (
 	RIGHT_IS_SCALAR = 2
 )
 
-func NumericLessEqual[T constraints.Integer | constraints.Float](xs, ys, rs *vector.Vector) error {
+func NumericLessEqual[T constraints.Integer | constraints.Float | bool](xs, ys, rs *vector.Vector) error {
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[bool](rs)
 	flag := 0
 	if xs.IsScalar() {
