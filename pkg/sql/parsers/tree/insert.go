@@ -14,7 +14,7 @@
 
 package tree
 
-//the INSERT statement.
+// the INSERT statement.
 type Insert struct {
 	statementImpl
 	Table          TableExpr

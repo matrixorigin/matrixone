@@ -130,13 +130,16 @@ func (n *nodeList) TxnGetTableNodeLocked(txn txnif.TxnReader) (dn *common.DLNode
 	return n.TxnGetNodeLocked(txn, getter)
 }
 
-//          Create                  Deleted
-//            |                        |
+//	Create                  Deleted
+//	  |                        |
+//
 // --+------+-+------------+--+------+-+--+-------+--+----->
-//   |      | |            |  |      | |  |       |  |
-//   |      +-|------Txn2--|--+      | |  +--Txn5-|--+
-//   +--Txn1--+            +----Txn3-|-+          |
-//                                   +----Txn4----+
+//
+//	|      | |            |  |      | |  |       |  |
+//	|      +-|------Txn2--|--+      | |  +--Txn5-|--+
+//	+--Txn1--+            +----Txn3-|-+          |
+//	                                +----Txn4----+
+//
 // 1. Txn1 start and create a table "tb1"
 // 2. Txn2 start and cannot find "tb1".
 // 3. Txn1 commit
