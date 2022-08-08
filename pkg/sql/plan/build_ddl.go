@@ -32,21 +32,6 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		Temporary:   stmt.Temporary,
 		TableDef: &TableDef{
 			Name: string(viewName),
-			// tae catalog need one column at least。
-			Cols: []*plan.ColDef{
-				{
-					Name: "1",
-					Alg:  plan.CompressType_Lz4,
-					Typ: &plan.Type{
-						Id: plan.Type_INT8,
-					},
-					Default: &plan.Default{
-						NullAbility:  false,
-						Expr:         makePlan2Int64ConstExprWithType(1),
-						OriginString: "1",
-					},
-				},
-			},
 		},
 	}
 
@@ -58,10 +43,21 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	}
 
 	// check view statement
-	_, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.AsSource)
+	stmtPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.AsSource)
 	if err != nil {
 		return nil, err
 	}
+
+	query := stmtPlan.GetQuery()
+	cols := make([]*plan.ColDef, len(query.Headings))
+	for idx, expr := range query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList {
+		cols[idx] = &plan.ColDef{
+			Name: query.Headings[idx],
+			Alg:  plan.CompressType_Lz4,
+			Typ:  expr.Typ,
+		}
+	}
+	createTable.TableDef.Cols = cols
 
 	// we can not use JSON to Serialize Statement Now, because we use a lot of interface
 	// bytes, err := json.Marshal(stmt)
@@ -329,6 +325,19 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	}
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 
+	_, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
+	if tableDef == nil {
+		if !dropTable.IfExists {
+			return nil, errors.New("", fmt.Sprintf("table %s is not exists", dropTable.Table))
+		}
+	} else {
+		for _, def := range tableDef.Defs {
+			if _, ok := def.Def.(*plan.TableDef_DefType_View); ok {
+				return nil, errors.New("", fmt.Sprintf("table %s is not exists", dropTable.Table))
+			}
+		}
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -353,6 +362,24 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 		dropTable.Database = ctx.DefaultDatabase()
 	}
 	dropTable.Table = string(stmt.Names[0].ObjectName)
+
+	_, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
+	if tableDef == nil {
+		if !dropTable.IfExists {
+			return nil, errors.New("", fmt.Sprintf("view %s is not exists", dropTable.Table))
+		}
+	} else {
+		isView := false
+		for _, def := range tableDef.Defs {
+			if _, ok := def.Def.(*plan.TableDef_DefType_View); ok {
+				isView = true
+				break
+			}
+		}
+		if !isView {
+			return nil, errors.New("", fmt.Sprintf("%s is not a view", dropTable.Table))
+		}
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{

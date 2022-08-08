@@ -2164,7 +2164,9 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 //IsDDL checks the statement is the DDL statement.
 func IsDDL(stmt tree.Statement) bool {
 	switch stmt.(type) {
-	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
+	case *tree.CreateTable, *tree.DropTable,
+		*tree.CreateView, *tree.DropView,
+		*tree.CreateDatabase, *tree.DropDatabase,
 		*tree.CreateIndex, *tree.DropIndex:
 		return true
 	}
@@ -2174,7 +2176,7 @@ func IsDDL(stmt tree.Statement) bool {
 // IsDropStatement checks the statement is the drop statement.
 func IsDropStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
-	case *tree.DropDatabase, *tree.DropTable, *tree.DropIndex:
+	case *tree.DropDatabase, *tree.DropTable, *tree.DropView, *tree.DropIndex:
 		return true
 	}
 	return false
