@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,12 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dnservice
+package fileservice
 
-import "fmt"
+// CachingFileService is an extension to the FileService
+type CachingFileService interface {
+	FileService
 
-var (
-	errShardNotReported = fmt.Errorf("shard not reported")
-	errShardNotRecorded = fmt.Errorf("shard not recorded in cluster")
-	errNoWorkingStore   = fmt.Errorf("no working store")
-)
+	// FlushCache flushes cache
+	FlushCache()
+
+	// CacheStats returns cache statistics
+	CacheStats() *CacheStats
+}
+
+type CacheStats struct {
+	NumRead int64
+	NumHit  int64
+}

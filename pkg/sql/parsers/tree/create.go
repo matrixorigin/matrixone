@@ -1866,21 +1866,15 @@ func NewCreateRole(ife bool, r []*Role) *CreateRole {
 type Role struct {
 	NodeFormatter
 	UserName string
-	HostName string
 }
 
 func (node *Role) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.UserName)
-	if node.HostName != "%" {
-		ctx.WriteByte('@')
-		ctx.WriteString(node.HostName)
-	}
 }
 
-func NewRole(u, h string) *Role {
+func NewRole(u string) *Role {
 	return &Role{
 		UserName: u,
-		HostName: h,
 	}
 }
 
@@ -1888,10 +1882,7 @@ type User struct {
 	NodeFormatter
 	Username   string
 	Hostname   string
-	AuthPlugin string
-	AuthString string
-	HashString string
-	ByAuth     bool
+	AuthOption *AccountIdentified
 }
 
 func (node *User) Format(ctx *FmtCtx) {
@@ -1900,28 +1891,15 @@ func (node *User) Format(ctx *FmtCtx) {
 		ctx.WriteByte('@')
 		ctx.WriteString(node.Hostname)
 	}
-	if node.AuthPlugin != "" || node.AuthString != "" || node.HashString != "" {
-		ctx.WriteString(" identified")
-		if node.AuthPlugin != "" {
-			ctx.WriteString(" with ")
-			ctx.WriteString(node.AuthPlugin)
-		}
-		if node.AuthString != "" {
-			ctx.WriteString(" by ")
-			ctx.WriteString(node.AuthString)
-		} else if node.HashString != "" {
-			ctx.WriteString(" as ")
-			ctx.WriteString(node.HashString)
-		}
+	if node.AuthOption != nil {
+		node.AuthOption.Format(ctx)
 	}
 }
 
-func NewUser(u, h, ap, as string) *User {
+func NewUser(u, h string) *User {
 	return &User{
-		Username:   u,
-		Hostname:   h,
-		AuthPlugin: ap,
-		AuthString: as,
+		Username: u,
+		Hostname: h,
 	}
 }
 
@@ -2104,40 +2082,84 @@ type UserMiscOptionPasswordHistoryDefault struct {
 	userMiscOptionImpl
 }
 
+func (node *UserMiscOptionPasswordHistoryDefault) Format(ctx *FmtCtx) {
+	ctx.WriteString("password history default")
+}
+
 type UserMiscOptionPasswordHistoryCount struct {
 	userMiscOptionImpl
-	Value int
+	Value int64
+}
+
+func (node *UserMiscOptionPasswordHistoryCount) Format(ctx *FmtCtx) {
+	ctx.WriteString(fmt.Sprintf("password history %d", node.Value))
 }
 
 type UserMiscOptionPasswordReuseIntervalDefault struct {
 	userMiscOptionImpl
 }
 
+func (node *UserMiscOptionPasswordReuseIntervalDefault) Format(ctx *FmtCtx) {
+	ctx.WriteString("password reuse interval default")
+}
+
 type UserMiscOptionPasswordReuseIntervalCount struct {
 	userMiscOptionImpl
-	Value int
+	Value int64
+}
+
+func (node *UserMiscOptionPasswordReuseIntervalCount) Format(ctx *FmtCtx) {
+	ctx.WriteString(fmt.Sprintf("password reuse interval %d day", node.Value))
+}
+
+type UserMiscOptionPasswordRequireCurrentNone struct {
+	userMiscOptionImpl
+}
+
+func (node *UserMiscOptionPasswordRequireCurrentNone) Format(ctx *FmtCtx) {
+	ctx.WriteString("password require current")
 }
 
 type UserMiscOptionPasswordRequireCurrentDefault struct {
 	userMiscOptionImpl
 }
 
+func (node *UserMiscOptionPasswordRequireCurrentDefault) Format(ctx *FmtCtx) {
+	ctx.WriteString("password require current default")
+}
+
 type UserMiscOptionPasswordRequireCurrentOptional struct {
 	userMiscOptionImpl
 }
 
+func (node *UserMiscOptionPasswordRequireCurrentOptional) Format(ctx *FmtCtx) {
+	ctx.WriteString("password require current optional")
+}
+
 type UserMiscOptionFailedLoginAttempts struct {
 	userMiscOptionImpl
-	Value int
+	Value int64
+}
+
+func (node *UserMiscOptionFailedLoginAttempts) Format(ctx *FmtCtx) {
+	ctx.WriteString(fmt.Sprintf("failed_login_attempts %d", node.Value))
 }
 
 type UserMiscOptionPasswordLockTimeCount struct {
 	userMiscOptionImpl
-	Value int
+	Value int64
+}
+
+func (node *UserMiscOptionPasswordLockTimeCount) Format(ctx *FmtCtx) {
+	ctx.WriteString(fmt.Sprintf("password_lock_time %d", node.Value))
 }
 
 type UserMiscOptionPasswordLockTimeUnbounded struct {
 	userMiscOptionImpl
+}
+
+func (node *UserMiscOptionPasswordLockTimeUnbounded) Format(ctx *FmtCtx) {
+	ctx.WriteString("password_lock_time unbounded")
 }
 
 type UserMiscOptionAccountLock struct {
@@ -2145,7 +2167,7 @@ type UserMiscOptionAccountLock struct {
 }
 
 func (node *UserMiscOptionAccountLock) Format(ctx *FmtCtx) {
-	ctx.WriteString("account lock")
+	ctx.WriteString("lock")
 }
 
 type UserMiscOptionAccountUnlock struct {
@@ -2153,17 +2175,17 @@ type UserMiscOptionAccountUnlock struct {
 }
 
 func (node *UserMiscOptionAccountUnlock) Format(ctx *FmtCtx) {
-	ctx.WriteString("account unlock")
+	ctx.WriteString("unlock")
 }
 
 type CreateUser struct {
 	statementImpl
 	IfNotExists bool
 	Users       []*User
-	Roles       []*Role
-	TlsOpts     []TlsOption
-	ResOpts     []ResourceOption
+	Role        Role
 	MiscOpts    []UserMiscOption
+	// comment or attribute
+	CommentOrAttribute AccountCommentOrAttribute
 }
 
 func (node *CreateUser) Format(ctx *FmtCtx) {
@@ -2179,31 +2201,24 @@ func (node *CreateUser) Format(ctx *FmtCtx) {
 			prefix = ", "
 		}
 	}
-	if len(node.TlsOpts) > 0 {
-		ctx.WriteString(" require ")
-		prefix := ""
-		for _, t := range node.TlsOpts {
-			ctx.WriteString(prefix)
-			t.Format(ctx)
-			prefix = " and "
+	ctx.WriteString(" default role")
+	ctx.WriteString(" ")
+	node.Role.Format(ctx)
+	if len(node.MiscOpts) != 0 {
+		for _, opt := range node.MiscOpts {
+			ctx.WriteString(" ")
+			opt.Format(ctx)
 		}
 	}
-	if len(node.ResOpts) > 0 {
-		ctx.WriteString(" with")
-		for _, r := range node.ResOpts {
-			ctx.WriteByte(' ')
-			r.Format(ctx)
-		}
-	}
+
+	node.CommentOrAttribute.Format(ctx)
 }
 
-func NewCreateUser(ife bool, u []*User, r []*Role, tls []TlsOption, res []ResourceOption, misc []UserMiscOption) *CreateUser {
+func NewCreateUser(ife bool, u []*User, r Role, misc []UserMiscOption) *CreateUser {
 	return &CreateUser{
 		IfNotExists: ife,
 		Users:       u,
-		Roles:       r,
-		TlsOpts:     tls,
-		ResOpts:     res,
+		Role:        r,
 		MiscOpts:    misc,
 	}
 }
@@ -2304,5 +2319,22 @@ func (node *AccountComment) Format(ctx *FmtCtx) {
 	if node.Exist {
 		ctx.WriteString(" comment ")
 		ctx.WriteString(fmt.Sprintf("'%s'", node.Comment))
+	}
+}
+
+type AccountCommentOrAttribute struct {
+	Exist     bool
+	IsComment bool
+	Str       string
+}
+
+func (node *AccountCommentOrAttribute) Format(ctx *FmtCtx) {
+	if node.Exist {
+		if node.IsComment {
+			ctx.WriteString(" comment ")
+		} else {
+			ctx.WriteString(" attribute ")
+		}
+		ctx.WriteString(fmt.Sprintf("'%s'", node.Str))
 	}
 }

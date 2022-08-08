@@ -1,16 +1,16 @@
 # **Install standalone MatrixOne**
 
-MatrixOne supports Linux and macOS. You can install a standalone MatrixOne version by 3 methods:
+MatrixOne supports Linux and MacOS. You can install a standalone MatrixOne version by 3 methods:
 
-* Building from the source.
-* Using binary package.
-* Using Docker.
+- <p><a href="#code_source">Method 1: Building from source</a>.</p>
+- <p><a href="#binary_packages">Method 2: Using binary package</a>.</p>
+- <p><a href="#use_docker">Method 3: Using Docker</a>.</p>
 
 Recommended hardware specification: x86 CPU with 4 cores and 32GB memory, with CentOS 7+ OS.
 
-## **Method 1: Building from source**
+## <h2><a name="code_source">Method 1: Building from source</a></h2>
 
-#### 1. Install Go as necessary dependency
+#### 1. Install Go as necessary dependancy
 
 Go version 1.18 is required.
 
@@ -20,7 +20,7 @@ Depending on your needs, choose whether you want to keep your code up to date, o
 
 ##### Option 1: Get the MatrixOne(Preview Version) code
 
-The **main** branch is the default branch. The code on the main branch is always up-to-date but not stable enough.
+The **main** branch is the default branch, the code on the main branch is always up-to-date but not stable enough.
 
 ```
 git clone https://github.com/matrixorigin/matrixone.git
@@ -58,7 +58,7 @@ When you finish installing MatrixOne, you can refer to the section below to conn
 
 See [Connect to MatrixOne server](connect-to-matrixone-server.md).
 
-## **Method 2: Downloading binary packages**
+## <h2><a name="binary_packages">Method 2: Downloading binary packages</a></h2>
 
 For each release, you can download binary packages directly to run MatrixOne in the X86_64 Linux or Mac X86_64 environment.
 
@@ -71,17 +71,17 @@ wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.0/mo-serve
 unzip mo-server-v0.5.0-linux-amd64.zip
 ```
 
-macOS Environment
+MacOS Environment
 
 ```bash
 wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.0/mo-server-v0.5.0-darwin-x86_64.zip
 unzip mo-server-v0.5.0-darwin-x86_64.zip
 ```
 
-#### 2. Launch MatrixOne server
+#### 2.Launch MatrixOne server
 
 ```
-$./mo-server system_vars_config.toml
+./mo-server system_vars_config.toml
 ```
 
 #### 3. Connect to MatrixOne Server
@@ -90,11 +90,11 @@ When you finish installing MatrixOne, you can refer to the section below to conn
 
 See [Connect to MatrixOne server](connect-to-matrixone-server.md).
 
-## **Method 3: Using docker**
+## <h2><a name="use_docker">Method 3: Using docker</a></h2>
 
 #### 1. Install Docker
 
-Please verify that the docker daemon is running in the background:
+Please verify that Docker daemon is running in the background:
 
 ```
 docker --version
@@ -102,7 +102,7 @@ docker --version
 
 #### 2. Create and run the container of MatrixOne
 
-It will pull the image from Docker Hub if it does not exist. You can choose to pull the latest image or a stable version.
+It will pull the image from Docker Hub if not exists. You can choose to pull the latest image or a stable version.
 
 Latest Image
 
@@ -116,10 +116,14 @@ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
 docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
 ```
 
-For the user name and password information, see the next step - Connect to MatrixOne Server.
+For the information on the user name and password, see the next step - Connect to MatrixOne Server.
 
 #### 3. Connect to MatrixOne Server
 
 When you finish installing MatrixOne, you can refer to the section below to connect to the MatrixOne server.
 
 See [Connect to MatrixOne server](connect-to-matrixone-server.md).
+
+## Reference
+
+For more information on deployment，see[Deployment FAQs](../FAQs/deployment-faqs.md).
