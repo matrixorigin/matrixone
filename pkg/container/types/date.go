@@ -640,7 +640,7 @@ func calcWeekday(daynr int, sundayFirstDayOfWeek bool) int {
 	return daynr % 7
 }
 
-//  Calculate nr of day since year 0 in new date-system (from 1615).
+// Calculate nr of day since year 0 in new date-system (from 1615).
 func calcDaynr(year, month, day int) int {
 	if year == 0 && month == 0 {
 		return 0

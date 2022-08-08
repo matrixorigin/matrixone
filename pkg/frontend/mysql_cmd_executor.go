@@ -111,7 +111,7 @@ func (mce *MysqlCmdExecutor) GetSession() *Session {
 	return mce.ses
 }
 
-//get new process id
+// get new process id
 func (mce *MysqlCmdExecutor) getNextProcessId() string {
 	/*
 		temporary method:
@@ -368,6 +368,7 @@ extract the data from the pipeline.
 obj: routine obj
 TODO:Add error
 Warning: The pipeline is the multi-thread environment. The getDataFromPipeline will
+
 	access the shared data. Be careful when it writes the shared data.
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
@@ -1216,7 +1217,7 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 	return mce.doComQuery(sql)
 }
 
-//Note: for pass the compile quickly. We will remove the comments in the future.
+// Note: for pass the compile quickly. We will remove the comments in the future.
 func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	es := explain.NewExplainDefaultOptions()
 
@@ -1642,7 +1643,7 @@ func (mce *MysqlCmdExecutor) afterRun(stmt tree.Statement, beginInstant time.Tim
 
 }
 
-//execute query
+// execute query
 func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	beginInstant := time.Now()
 	ses := mce.GetSession()
@@ -2159,7 +2160,7 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 	return false
 }
 
-//IsDDL checks the statement is the DDL statement.
+// IsDDL checks the statement is the DDL statement.
 func IsDDL(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
@@ -2178,7 +2179,7 @@ func IsDropStatement(stmt tree.Statement) bool {
 	return false
 }
 
-//IsAdministrativeStatement checks the statement is the administrative statement.
+// IsAdministrativeStatement checks the statement is the administrative statement.
 func IsAdministrativeStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.CreateUser, *tree.DropUser, *tree.AlterUser,
@@ -2190,7 +2191,7 @@ func IsAdministrativeStatement(stmt tree.Statement) bool {
 	return false
 }
 
-//IsParameterModificationStatement checks the statement is the statement of parameter modification statement.
+// IsParameterModificationStatement checks the statement is the statement of parameter modification statement.
 func IsParameterModificationStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.SetVar:
@@ -2204,6 +2205,7 @@ IsStatementToBeCommittedInActiveTransaction checks the statement that need to be
 in an active transaction.
 
 Currently, it includes the drop statement, the administration statement ,
+
 	the parameter modification statement.
 */
 func IsStatementToBeCommittedInActiveTransaction(stmt tree.Statement) bool {
