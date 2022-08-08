@@ -82,7 +82,7 @@ func (mgr *TxnManager) StatSafeTS() (ts types.TS) {
 	mgr.RLock()
 	if len(mgr.Active) > 0 {
 		ts = types.MaxTs()
-		for k, _ := range mgr.ActiveMask {
+		for k := range mgr.ActiveMask {
 			if k.Less(ts) {
 				ts = k
 			}
