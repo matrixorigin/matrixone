@@ -14,37 +14,33 @@
 
 package fileservice
 
-import (
-	"testing"
+import "sync/atomic"
 
-	"github.com/stretchr/testify/assert"
-)
+// RC represents a reference counted value that will not evict in LRU if refs is greater than 0
+type RC[T any] struct {
+	refs  int64
+	Value T
+}
 
-func TestPin(t *testing.T) {
-	l := NewLRU(1)
+// NewRC creates an RC value with 0 reference
+func NewRC[T any](value T) *RC[T] {
+	return &RC[T]{
+		Value: value,
+		refs:  0,
+	}
+}
 
-	p := Pin(42)
-	l.Set(1, p, 1)
-	_, ok := l.kv[1]
-	assert.True(t, ok)
+// IncRef increases reference count
+func (r *RC[T]) IncRef() {
+	atomic.AddInt64(&r.refs, 1)
+}
 
-	l.Set(2, 42, 1)
-	_, ok = l.kv[1]
-	assert.True(t, ok)
-	_, ok = l.kv[2]
-	assert.False(t, ok)
+// DecRef decreases reference count
+func (r *RC[T]) DecRef() {
+	atomic.AddInt64(&r.refs, -1)
+}
 
-	p.Unpin()
-	l.Set(2, 42, 1)
-	_, ok = l.kv[1]
-	assert.False(t, ok)
-	_, ok = l.kv[2]
-	assert.True(t, ok)
-
-	l.Set(3, Pin(42), 1)
-	_, ok = l.kv[3]
-	assert.True(t, ok)
-	_, ok = l.kv[2]
-	assert.False(t, ok)
-
+// RefCount returns reference count
+func (r *RC[T]) RefCount() int64 {
+	return atomic.LoadInt64(&r.refs)
 }
