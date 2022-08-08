@@ -75,10 +75,24 @@ func Test_newBufferHolder(t *testing.T) {
 	}
 	ch := make(chan string, 1)
 	byteBuf := new(bytes.Buffer)
+	signalC := make(chan *bufferHolder)
 	var signal = func(b *bufferHolder) {
-		b.Stop()
-		ch <- b.buffer.GetBatch(byteBuf).(string)
+		signalC <- b
 	}
+	go func() {
+		for {
+			select {
+			case b := <-signalC:
+				b.Stop()
+				if val, ok := b.GetBatch(byteBuf); !ok {
+					t.Errorf("GenBatch failed by in readwrite mode")
+				} else {
+					ch <- val.(string)
+				}
+			}
+
+		}
+	}()
 	tests := []struct {
 		name         string
 		args         args

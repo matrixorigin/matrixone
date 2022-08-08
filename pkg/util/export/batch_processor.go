@@ -58,10 +58,12 @@ func newBufferHolder(name batchpipe.HasName, impl batchpipe.PipeImpl[batchpipe.H
 
 // Add directly call buffer.Add(), while bufferHolder is NOT readonly
 func (r *bufferHolder) Add(item batchpipe.HasName) {
-	for atomic.LoadInt32(&r.readonly) == READONLY {
-		time.Sleep(time.Millisecond)
-	}
 	r.mux.RLock()
+	for atomic.LoadInt32(&r.readonly) == READONLY {
+		r.mux.RUnlock()
+		time.Sleep(time.Millisecond)
+		r.mux.RLock()
+	}
 	defer r.mux.RUnlock()
 	r.buffer.Add(item)
 	if r.buffer.ShouldFlush() {

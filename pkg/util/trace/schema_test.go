@@ -70,8 +70,10 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 		},
 	}
 	wg := sync.WaitGroup{}
+	startedC := make(chan struct{}, 1)
 	go func() {
 		wg.Add(1)
+		startedC <- struct{}{}
 	loop:
 		for {
 			select {
@@ -86,6 +88,7 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 		}
 		wg.Done()
 	}()
+	<-startedC
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			InitSchemaByInnerExecutor(tt.args.ieFactory)
