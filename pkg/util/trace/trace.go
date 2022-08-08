@@ -17,7 +17,6 @@ package trace
 import (
 	"context"
 	goErrors "errors"
-	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -40,13 +39,12 @@ var gTracer Tracer
 var gTraceContext context.Context = context.Background()
 var gSpanContext atomic.Value
 
-var ini sync.Once
-
 func Init(ctx context.Context, sysVar *config.SystemVariables, options ...TracerProviderOption) (context.Context, error) {
 
 	// init tool dependence
-	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog, ReportZap, SetLogLevel, ContextField})
+	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: ReportLog, ReportZap: ReportZap, LevelSignal: SetLogLevel, ContextField: ContextField})
 	errors.SetErrorReporter(HandleError)
+	export.SetDefaultContextFunc(DefaultContext)
 
 	// init TraceProvider
 	var opts = []TracerProviderOption{
@@ -78,7 +76,7 @@ func Init(ctx context.Context, sysVar *config.SystemVariables, options ...Tracer
 
 func initExport(config *tracerProviderConfig) {
 	if !config.enableTracer {
-		logutil2.Infof(nil, "initExport pass.")
+		logutil2.Infof(context.TODO(), "initExport pass.")
 		return
 	}
 	var p export.BatchProcessor
@@ -95,7 +93,7 @@ func initExport(config *tracerProviderConfig) {
 		export.Register(&MOZap{}, NewBufferPipe2SqlWorker())
 		export.Register(&StatementInfo{}, NewBufferPipe2SqlWorker())
 		export.Register(&MOErrorHolder{}, NewBufferPipe2SqlWorker())
-		logutil2.Infof(nil, "init GlobalBatchProcessor")
+		logutil2.Infof(context.TODO(), "init GlobalBatchProcessor")
 		// init BatchProcessor for standalone mode.
 		p = export.NewMOCollector()
 		export.SetGlobalBatchProcessor(p)
@@ -105,8 +103,8 @@ func initExport(config *tracerProviderConfig) {
 	}
 	if p != nil {
 		config.spanProcessors = append(config.spanProcessors, NewBatchSpanProcessor(p))
-		logutil2.Infof(nil, "trace span processor")
-		logutil2.Info(nil, "[Debug]", zap.String("operation", "value1"), zap.String("operation_1", "value2"))
+		logutil2.Infof(context.TODO(), "trace span processor")
+		logutil2.Info(context.TODO(), "[Debug]", zap.String("operation", "value1"), zap.String("operation_1", "value2"))
 	}
 }
 

@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package trace
 
 import (
@@ -6,7 +20,6 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
 
@@ -55,15 +68,10 @@ func setup() {
 	nodeStateSpanIdStr = fmt.Sprintf("%d, %d", sc.TraceID, sc.SpanID)
 
 	if err := agent.Listen(agent.Options{}); err != nil {
-		fmt.Errorf("listen gops agent failed: %s", err)
+		_ = fmt.Errorf("listen gops agent failed: %s", err)
 		panic(err)
 	}
 	fmt.Println("Finish tests init.")
-}
-
-func teardown() {
-	agent.Close()
-	fmt.Println("After all tests")
 }
 
 func Test_newBuffer2Sql_base(t *testing.T) {
@@ -427,38 +435,6 @@ func Test_batchSqlHandler_genStatementBatchSql(t1 *testing.T) {
 	}
 }
 
-func Test_buffer2Sql_Add(t *testing.T) {
-	type fields struct {
-		Reminder      batchpipe.Reminder
-		buf           []IBuffer2SqlItem
-		mux           sync.Mutex
-		sizeThreshold int64
-		batchFunc     genBatchFunc
-	}
-	type args struct {
-		item IBuffer2SqlItem
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		args   args
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			b := &buffer2Sql{
-				Reminder:      tt.fields.Reminder,
-				buf:           tt.fields.buf,
-				mux:           tt.fields.mux,
-				sizeThreshold: tt.fields.sizeThreshold,
-				genBatchFunc:  tt.fields.batchFunc,
-			}
-			b.Add(tt.args.item)
-		})
-	}
-}
-
 func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 	type fields struct {
 		Reminder      batchpipe.Reminder
@@ -712,7 +688,6 @@ func Test_buffer2Sql_IsEmpty(t *testing.T) {
 	type fields struct {
 		Reminder      batchpipe.Reminder
 		buf           []IBuffer2SqlItem
-		mux           sync.Mutex
 		sizeThreshold int64
 		batchFunc     genBatchFunc
 	}
@@ -747,7 +722,6 @@ func Test_buffer2Sql_IsEmpty(t *testing.T) {
 			b := &buffer2Sql{
 				Reminder:      tt.fields.Reminder,
 				buf:           tt.fields.buf,
-				mux:           tt.fields.mux,
 				sizeThreshold: tt.fields.sizeThreshold,
 				genBatchFunc:  tt.fields.batchFunc,
 			}
@@ -762,7 +736,6 @@ func Test_buffer2Sql_Reset(t *testing.T) {
 	type fields struct {
 		Reminder      batchpipe.Reminder
 		buf           []IBuffer2SqlItem
-		mux           sync.Mutex
 		sizeThreshold int64
 		batchFunc     genBatchFunc
 	}
@@ -797,7 +770,6 @@ func Test_buffer2Sql_Reset(t *testing.T) {
 			b := &buffer2Sql{
 				Reminder:      tt.fields.Reminder,
 				buf:           tt.fields.buf,
-				mux:           tt.fields.mux,
 				sizeThreshold: tt.fields.sizeThreshold,
 				genBatchFunc:  tt.fields.batchFunc,
 			}

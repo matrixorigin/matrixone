@@ -119,13 +119,11 @@ func IsSpanField(field zapcore.Field) bool {
 type SpanContext struct {
 	TraceID TraceID `json:"trace_id"`
 	SpanID  SpanID  `json:"span_id"`
-	Remote  bool    `json:"remote"`
 }
 
 func (c *SpanContext) Reset() {
 	c.TraceID = 0
 	c.SpanID = 0
-	c.Remote = false
 }
 
 func (c *SpanContext) IsEmpty() bool {
@@ -186,12 +184,6 @@ func (f spanOptionFunc) applySpanStart(cfg *SpanConfig) {
 func WithNewRoot(newRoot bool) spanOptionFunc {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.NewRoot = newRoot
-	})
-}
-
-func WithRemote(remote bool) spanOptionFunc {
-	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.Remote = remote
 	})
 }
 

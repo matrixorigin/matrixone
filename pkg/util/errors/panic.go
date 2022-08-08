@@ -16,7 +16,6 @@ package errors
 
 import (
 	"context"
-	goErrors "errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/util"
 )
@@ -41,5 +40,5 @@ func PanicAsError(r any, depth int) error {
 	if err, ok := r.(error); ok {
 		return &withStack{err, util.Callers(depth + 1)}
 	}
-	return &withStack{goErrors.New(fmt.Sprintf("panic: %v", r)), util.Callers(depth + 1)}
+	return &withStack{fmt.Errorf(fmt.Sprintf("panic: %v", r)), util.Callers(depth + 1)}
 }

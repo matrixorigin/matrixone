@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
-	"io/ioutil"
+	"io"
 	"sync/atomic"
 )
 
@@ -137,5 +137,5 @@ func newTraceLogEncoder() *TraceLogEncoder {
 }
 
 func getTraceLogSinks() (zapcore.Encoder, zapcore.WriteSyncer) {
-	return newTraceLogEncoder(), zapcore.AddSync(ioutil.Discard)
+	return newTraceLogEncoder(), zapcore.AddSync(io.Discard)
 }

@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package export
 
 import (
@@ -158,7 +172,7 @@ func (c *MOCollector) Collect(ctx context.Context, i batchpipe.HasName) error {
 
 func (c *MOCollector) Start() bool {
 	c.startOnce.Do(func() {
-		logutil2.Infof(nil, "MOCollector Start")
+		logutil2.Infof(DefaultContext(), "MOCollector Start")
 		for i := 0; i < c.collectorCnt; i++ {
 			go c.doCollect(i)
 		}
@@ -176,7 +190,7 @@ func (c *MOCollector) Start() bool {
 // goroutine worker
 func (c *MOCollector) doCollect(idx int) {
 	c.stopWait.Add(1)
-	defer errors.Recover(nil)
+	defer errors.Recover(DefaultContext())
 	defer c.stopWait.Done()
 	logutil.Debugf("doCollect %dth: start", idx)
 loop:
@@ -218,7 +232,7 @@ func awakeBuffer(c *MOCollector) func(holder *bufferHolder) {
 func (c *MOCollector) doGenerate(idx int) {
 	var buf = new(bytes.Buffer)
 	c.stopWait.Add(1)
-	defer errors.Recover(nil)
+	defer errors.Recover(DefaultContext())
 	defer c.stopWait.Done()
 	logutil.Debugf("doGenerate %dth: start", idx)
 loop:
@@ -238,7 +252,7 @@ loop:
 func (c *MOCollector) doExport(idx int) {
 	c.stopWait.Add(1)
 	defer c.stopWait.Done()
-	defer errors.Recover(nil)
+	defer errors.Recover(DefaultContext())
 	logutil.Debugf("doExport %dth: start", idx)
 loop:
 	for {
@@ -354,8 +368,4 @@ func (h *pipeImplHolder) Put(name string, impl batchpipe.PipeImpl[batchpipe.HasN
 
 func (h *pipeImplHolder) Size() int {
 	return len(h.impls)
-}
-
-type BatchRequest struct {
-	content any
 }

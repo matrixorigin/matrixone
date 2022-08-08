@@ -49,7 +49,7 @@ func NewMOError(code MOErrorCode, msg string) error {
 func (e *MOError) Code() string                  { return e.code }
 func (e *MOError) Cause() error                  { return nil }
 func (e *MOError) Error() string                 { return fmt.Sprintf(e.msg, e.args...) }
-func (e *MOError) Format(s fmt.State, verb rune) { fmt.Fprintf(s, e.Error()) }
+func (e *MOError) Format(s fmt.State, verb rune) { s.Write([]byte(e.Error())) }
 func (e *MOError) Unwrap() error                 { return nil }
 
 func (e *MOError) Mark(args ...any) error {

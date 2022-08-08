@@ -16,7 +16,6 @@ package logutil2
 
 import (
 	"context"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -85,10 +84,9 @@ func Fatalf(ctx context.Context, msg string, fields ...interface{}) {
 // hook can catch zapcore.Entry, which can add by WithOptions(zap.Hooks(hook))
 // But what we need is zapcore.CheckedEntry
 // @deprecated
-func hook(e zapcore.Entry) error {
-	fmt.Printf("entry: %v\n", e)
-	return nil
-}
+func hook(e zapcore.Entry) error { return nil }
+
+var _ = hook(zapcore.Entry{})
 
 func ContextFieldsOption(ctx context.Context) zap.Option {
 	return zap.Fields(logutil.GetContextFieldFunc()(ctx))

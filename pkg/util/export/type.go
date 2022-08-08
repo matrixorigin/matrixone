@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package export
 
 import (
@@ -9,6 +23,7 @@ import (
 func init() {
 	var p BatchProcessor = &noopBatchProcessor{}
 	SetGlobalBatchProcessor(p)
+	SetDefaultContextFunc(func() context.Context { return context.Background() })
 }
 
 type BatchProcessor interface {
@@ -18,9 +33,7 @@ type BatchProcessor interface {
 }
 
 func Register(name batchpipe.HasName, impl batchpipe.PipeImpl[batchpipe.HasName, any]) {
-	if ok := gPipeImplHolder.Put(name.GetName(), impl); !ok {
-		// record double Register
-	}
+	_ = gPipeImplHolder.Put(name.GetName(), impl)
 }
 
 var gBatchProcessor atomic.Value
@@ -35,4 +48,15 @@ func SetGlobalBatchProcessor(p BatchProcessor) {
 
 func GetGlobalBatchProcessor() BatchProcessor {
 	return gBatchProcessor.Load().(*processorHolder).p
+}
+
+type getContextFunc func() context.Context
+
+var defaultContext atomic.Value
+
+func SetDefaultContextFunc(f getContextFunc) {
+	defaultContext.Store(f)
+}
+func DefaultContext() context.Context {
+	return defaultContext.Load().(getContextFunc)()
 }

@@ -56,9 +56,6 @@ type tracerProviderConfig struct {
 	// registered.
 	spanProcessors []SpanProcessor
 
-	// sampler is the default sampler used when creating new spans.
-	sampler Sampler
-
 	// idGenerator is used to generate all Span and Trace IDs when needed.
 	idGenerator IDGenerator
 

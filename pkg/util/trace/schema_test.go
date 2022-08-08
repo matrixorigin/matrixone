@@ -32,7 +32,6 @@ var _ ie.InternalExecutor = &dummySqlExecutor{}
 
 type dummySqlExecutor struct {
 	opts ie.SessionOverrideOptions
-	t    *testing.T
 	ch   chan<- string
 }
 
@@ -71,19 +70,17 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 	}
 	wg := sync.WaitGroup{}
 	startedC := make(chan struct{}, 1)
+	wg.Add(1)
 	go func() {
-		wg.Add(1)
 		startedC <- struct{}{}
 	loop:
 		for {
-			select {
-			case sql, ok := <-c:
-				if ok {
-					t.Logf("exec sql: %s", sql)
-				} else {
-					t.Log("exec sql Done.")
-					break loop
-				}
+			sql, ok := <-c
+			if ok {
+				t.Logf("exec sql: %s", sql)
+			} else {
+				t.Log("exec sql Done.")
+				break loop
 			}
 		}
 		wg.Done()

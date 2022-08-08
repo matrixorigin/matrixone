@@ -1693,7 +1693,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	}
 
 	var newCtx = mce.RecordStatement(trace.DefaultContext(), ses, proc, sql, beginInstant)
-	newCtx, span := trace.Start(newCtx, "doComQuery")
+	/*newCtx*/ _, span := trace.Start(newCtx, "doComQuery")
 	defer span.End()
 
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),

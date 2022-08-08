@@ -43,10 +43,6 @@ type SpanProcessor interface {
 	OnStart(ctx context.Context, s Span)
 	OnEnd(s Span)
 	Shutdown(ctx context.Context) error
-	FLush()
-}
-
-type Sampler interface {
 }
 
 type IDGenerator interface {

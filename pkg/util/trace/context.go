@@ -28,11 +28,6 @@ func ContextWithSpanContext(parent context.Context, sc SpanContext) context.Cont
 	return ContextWithSpan(parent, &nonRecordingSpan{sc: sc})
 }
 
-func ContextWithRemoteSpanContext(parent context.Context, rsc SpanContext) context.Context {
-	rsc.Remote = true
-	return ContextWithSpanContext(parent, rsc)
-}
-
 func SpanFromContext(ctx context.Context) Span {
 	if ctx == nil {
 		return noopSpan{}
