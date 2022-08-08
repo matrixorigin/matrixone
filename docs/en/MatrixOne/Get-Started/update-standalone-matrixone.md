@@ -136,6 +136,18 @@ See [Connect to MatrixOne server](connect-to-matrixone-server.md).
 
 ## <h2><a name="use_docker_update">Method 3: Using Docker to update</a></h2>
 
+If you do not need to keep historical data, you can use the following command to download an image of MatrixOne V0.5.1 from Docker Hub.
+
+``` 
+docker ps 
+docker stop matrixone 
+docker rm matrixone 
+docker pull matrixorigin/matrixone:0.5.1 
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1 
+```
+
+If you need to keep historical data, please refer to the following scenario example:
+
 **Scenario Example** :
 
 - The v0.5.0 version of MatrixOne is runing by Docker.
