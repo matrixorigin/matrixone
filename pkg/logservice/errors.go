@@ -39,9 +39,8 @@ var errorToCodeMappings = getErrorToCodeMapping()
 func getErrorToCodeMapping() []errorToCode {
 	return []errorToCode{
 		{dragonboat.ErrTimeout, pb.Timeout, true},
-		{dragonboat.ErrShardNotFound, pb.InvalidShard, true},
-		// TODO: why ErrTimeoutTooSmall is possible
 		{dragonboat.ErrTimeoutTooSmall, pb.Timeout, false},
+		{dragonboat.ErrInvalidDeadline, pb.Timeout, false},
 		{dragonboat.ErrPayloadTooBig, pb.InvalidPayloadSize, true},
 		{dragonboat.ErrRejected, pb.Rejected, true},
 		{dragonboat.ErrShardNotReady, pb.ShardNotReady, true},

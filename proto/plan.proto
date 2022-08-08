@@ -87,6 +87,9 @@ message Type {
 		// MO Special, not sure if we really need these.
 		SEL         = 200;
 		TUPLE       = 201;
+
+		// BLOB family
+		BLOB        = 202;
 	}
 
 	TypeId id           = 1;
@@ -113,6 +116,8 @@ message Const {
 		decimal64 decimal64val = 10;
 		decimal128 decimal128val = 11;
 		int64 timestampval = 12;
+		string jsonval = 13;
+		bool defaultval = 14;
 	}
 }
 
@@ -232,29 +237,6 @@ enum CompressType {
 	Lz4 	= 1;
 }
 
-message DefaultExpr {
-	bool exist 		= 1;
-	ConstantValue value 		= 2;
-	bool is_null 	= 3;
-}
-
-message ConstantValue {
-	oneof constantValue {
-		int32 unknown_v = 1;
-		int64 int64_v = 2;
-		decimal64 decimal64_v = 3;
-		decimal128 decimal128_v = 4;
-		uint64 uint64_v = 5;
-		float float32_v = 6;
-		double float64_v = 7;
-		int32 date_v = 8;
-		int64 dateTime_v = 9;
-		int64 timeStamp_v = 10;
-		string string_v = 11;
-		bool bool_v = 12;
-	}
-}
-
 message decimal64 {
 	int64 a = 1;
 }
@@ -268,10 +250,16 @@ message ColDef {
 	string name 		= 1;
 	CompressType alg 	= 2;
 	Type typ			= 3;
-	DefaultExpr default = 4;
+	Default default = 4;
 	bool primary        = 5;
 	int32 pkidx 		= 6;
 	string comment	=7;
+}
+
+message Default {
+	bool null_ability = 1;
+	Expr expr = 2;
+	string origin_string = 3;
 }
 
 message IndexDef {
@@ -357,13 +345,16 @@ message WindowSpec {
 	int32 lag  = 4;
 }
 
-message UpdateInfo {
-	string pri_key = 1;
-	int32 pri_key_idx = 2;
-	string hide_key = 3;
-	repeated string update_attrs = 4;
-	repeated string other_attrs = 5;
-	repeated string attr_orders = 6;
+message UpdateCtx {
+	string db_name = 1;
+	string tbl_name = 2;
+	string pri_key = 3;
+	int32 pri_key_idx = 4;
+	string hide_key = 5;
+	int32 hide_key_idx = 6;
+	repeated ColDef update_cols = 7;
+	repeated string other_attrs = 8;
+	repeated string order_attrs = 9;
 }
 
 message AnalyzeInfo {
@@ -422,6 +413,12 @@ message Node {
 		INSERT = 51;
 		UPDATE = 52;
 		DELETE = 53;
+
+		//
+		INTERSECT = 54;
+		INTERSECT_ALL = 55;
+		MINUS = 56;
+		MINUS_ALL = 57;
 	}
 
 	enum JoinFlag {
@@ -463,7 +460,7 @@ message Node {
 	repeated Expr grouping_set = 10;
 	repeated Expr agg_list = 11;
 	repeated OrderBySpec order_by = 12;
-	UpdateInfo update_info = 13;
+	repeated UpdateCtx update_ctxs = 13;
 	WindowSpec win_spec = 14;
 	Expr limit = 15;
 	Expr offset = 16;
@@ -483,6 +480,7 @@ message DeleteTableCtx {
 	string tblName = 2;
 	string useDeleteKey = 3;
 	bool canTruncate = 4;
+	bool isHideKey = 5;
 }
 
 message Query {
@@ -560,7 +558,21 @@ message Plan {
 		TransationControl tcl 	= 2;
 		DataDefinition ddl 		= 3;
 		DataControl	dcl			= 4;
+		InsertValues ins = 5;
 	}
+}
+
+message InsertValues {
+	string db_name = 1;
+	string tbl_name = 2;
+	repeated ColDef explicit_cols = 3;
+	repeated ColDef other_cols = 4;
+	repeated string order_attrs = 5;
+	repeated column columns = 6;
+}
+
+message column{
+	repeated Expr column = 1;
 }
 
 message DataControl {

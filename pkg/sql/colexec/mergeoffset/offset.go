@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -82,8 +81,8 @@ func (ctr *container) eval(ap *Argument, proc *process.Process, anal process.Ana
 		if ap.ctr.seen+uint64(length) > ap.Offset {
 			sels := newSels(int64(ap.Offset-ap.ctr.seen), int64(length)-int64(ap.Offset-ap.ctr.seen), proc)
 			ap.ctr.seen += uint64(length)
-			batch.Shrink(bat, sels)
-			proc.PutSels(sels)
+			bat.Shrink(sels)
+			proc.GetMheap().PutSels(sels)
 			anal.Output(bat)
 			proc.SetInputBatch(bat)
 			return false, nil
@@ -97,7 +96,7 @@ func (ctr *container) eval(ap *Argument, proc *process.Process, anal process.Ana
 }
 
 func newSels(start, count int64, proc *process.Process) []int64 {
-	sels := proc.GetSels()
+	sels := proc.GetMheap().GetSels()
 	for i := int64(0); i < count; i++ {
 		sels = append(sels, start+i)
 	}

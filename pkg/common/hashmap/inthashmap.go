@@ -15,62 +15,53 @@
 package hashmap
 
 import (
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/add"
-	"unsafe"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
-
-var wrongUseOfIntHashTable = errors.New(errno.InternalError, "wrong use of IntHashMap")
-
-var zeroUint64 []uint64
-
-var zeroUint32 []uint32
 
 func init() {
 	zeroUint64 = make([]uint64, UnitLimit)
 	zeroUint32 = make([]uint32, UnitLimit)
 }
 
-// IntHashMap key is int64, value is an uint64 (start from 1)
-// before you use the IntHashMap, the user should make sure that
-// sum of vectors' length equal to 8
-type IntHashMap struct {
-	hasNull bool
-
-	rows    uint64
-	keys    []uint64
-	keyOffs []uint32
-	values  []uint64
-	zValues []int64
-	hashes  []uint64
-
-	hashMap *hashtable.Int64HashMap
-}
-
-type intHashMapIterator struct {
-	mp *IntHashMap
-}
-
-func NewIntHashMap(hasNull bool) *IntHashMap {
+func NewIntHashMap(hasNull bool, ibucket, nbucket uint64, m *mheap.Mheap) (*IntHashMap, error) {
 	mp := &hashtable.Int64HashMap{}
-	mp.Init()
+	if err := mp.Init(m); err != nil {
+		return nil, err
+	}
 	return &IntHashMap{
+		m:       m,
 		rows:    0,
 		hasNull: hasNull,
+		ibucket: ibucket,
+		nbucket: nbucket,
 		keys:    make([]uint64, UnitLimit),
 		keyOffs: make([]uint32, UnitLimit),
 		values:  make([]uint64, UnitLimit),
 		zValues: make([]int64, UnitLimit),
 		hashes:  make([]uint64, UnitLimit),
 		hashMap: mp,
-	}
+	}, nil
 }
 
 func (m *IntHashMap) NewIterator() *intHashMapIterator {
-	return &intHashMapIterator{mp: m}
+	return &intHashMapIterator{
+		mp:      m,
+		m:       m.m,
+		ibucket: m.ibucket,
+		nbucket: m.nbucket,
+	}
+}
+
+func (m *IntHashMap) HasNull() bool {
+	return m.hasNull
+}
+
+func (m *IntHashMap) Free() {
+	m.hashMap.Free(m.m)
 }
 
 func (m *IntHashMap) GroupCount() uint64 {
@@ -81,20 +72,17 @@ func (m *IntHashMap) AddGroup() {
 	m.rows++
 }
 
-func (m *IntHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) error {
-	targetLength := 8
-	if m.hasNull {
-		targetLength -= len(vecs)
-	}
-	for _, vec := range vecs {
-		targetLength -= vec.Typ.TypeSize()
-	}
-	if targetLength != 0 {
-		return wrongUseOfIntHashTable
-	}
+func (m *IntHashMap) AddGroups(rows uint64) {
+	m.rows += rows
+}
 
+func (m *IntHashMap) Cardinality() uint64 {
+	return m.hashMap.Cardinality()
+}
+
+func (m *IntHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	for _, vec := range vecs {
-		switch vec.Typ.Oid.FixedLength() {
+		switch vec.Typ.TypeSize() {
 		case 1:
 			fillKeys[uint8](m, vec, 1, start, count)
 		case 2:
@@ -103,13 +91,10 @@ func (m *IntHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) err
 			fillKeys[uint32](m, vec, 4, start, count)
 		case 8:
 			fillKeys[uint64](m, vec, 8, start, count)
-		//case -8:
-		//	fillKeys[types.Decimal64](m, vec, 8, start, count)
 		default:
-			return wrongUseOfIntHashTable
+			fillStrKey(m, vec, start, count)
 		}
 	}
-	return nil
 }
 
 func fillKeys[T any](m *IntHashMap, vec *vector.Vector, size uint32, start int, n int) {
@@ -122,12 +107,12 @@ func fillKeys[T any](m *IntHashMap, vec *vector.Vector, size uint32, start int, 
 				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
 				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = vs[i+start]
 			}
-			add.Uint32AddScalar(1+size, keyOffs[:n], keyOffs[:n])
+			uint32AddScalar(1+size, keyOffs[:n], keyOffs[:n])
 		} else {
 			for i := 0; i < n; i++ {
 				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = vs[i+start]
 			}
-			add.Uint32AddScalar(size, keyOffs[:n], keyOffs[:n])
+			uint32AddScalar(size, keyOffs[:n], keyOffs[:n])
 		}
 	} else {
 		nsp := vec.GetNulls()
@@ -153,4 +138,54 @@ func fillKeys[T any](m *IntHashMap, vec *vector.Vector, size uint32, start int, 
 			}
 		}
 	}
+}
+
+func fillStrKey(m *IntHashMap, vec *vector.Vector, start int, n int) {
+	vData, vOff, vLen := vector.GetStrVectorValues(vec)
+	keys := m.keys
+	keyOffs := m.keyOffs
+	if !vec.GetNulls().Any() {
+		if m.hasNull {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]+1:], vData[vOff[i+start]:vOff[i+start]+vLen[i+start]])
+				m.keyOffs[i] += vLen[i+start] + 1
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]:], vData[vOff[i+start]:vOff[i+start]+vLen[i+start]])
+				m.keyOffs[i] += vLen[i+start]
+			}
+		}
+	} else {
+		nsp := vec.GetNulls()
+		if m.hasNull {
+			for i := 0; i < n; i++ {
+				if nsp.Contains(uint64(i + start)) {
+					*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
+					keyOffs[i]++
+				} else {
+					*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+					copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]+1:], vData[vOff[i+start]:vOff[i+start]+vLen[i+start]])
+					m.keyOffs[i] += vLen[i+start] + 1
+				}
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				if nsp.Contains(uint64(i + start)) {
+					m.zValues[i] = 0
+					continue
+				}
+				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]:], vData[vOff[i+start]:vOff[i+start]+vLen[i+start]])
+				m.keyOffs[i] += vLen[i+start]
+			}
+		}
+	}
+}
+
+func uint32AddScalar(x uint32, ys, rs []uint32) []uint32 {
+	for i, y := range ys {
+		rs[i] = x + y
+	}
+	return rs
 }

@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -162,11 +163,12 @@ func newTestStore(t *testing.T, uuid string, options ...Option) *store {
 	assert.NoError(t, os.MkdirAll(testDataDir, 0755))
 	c := &Config{
 		UUID:          uuid,
-		DataDir:       testDataDir,
 		ListenAddress: testDNStoreAddr,
 	}
 	c.Txn.Clock.MaxClockOffset.Duration = time.Duration(math.MaxInt64)
-	s, err := NewService(c, options...)
+	s, err := NewService(c, func(name string) (fileservice.FileService, error) {
+		return fileservice.NewMemoryFS()
+	}, options...)
 	assert.NoError(t, err)
 	return s.(*store)
 }

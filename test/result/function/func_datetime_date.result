@@ -65,7 +65,7 @@ DATE_ADD(coalesce(last_recharge, first_usage), INTERVAL life_time DAY ) as dt,
 DATE_ADD(coalesce(last_recharge, first_usage), INTERVAL life_time DAY ) <
 DATE('2011-04-28') as exp FROM t1;
 dt	exp
-2013-10-13 00:00:00	0
+2013-10-13 00:00:00	false
 DROP TABLE t1;
 SELECT DATE(20110512154559.616), DATE(FLOOR(20110512154559.616));
 DATE(20110512154559.616)	DATE(FLOOR(20110512154559.616))

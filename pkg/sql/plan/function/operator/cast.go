@@ -389,13 +389,13 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		case types.T_int64:
 			return CastSpecials2Int[int64](lv, rv, proc)
 		case types.T_uint8:
-			return CastSpecials2Int[uint8](lv, rv, proc)
+			return CastSpecials2Uint[uint8](lv, rv, proc)
 		case types.T_uint16:
-			return CastSpecials2Int[uint16](lv, rv, proc)
+			return CastSpecials2Uint[uint16](lv, rv, proc)
 		case types.T_uint32:
-			return CastSpecials2Int[uint32](lv, rv, proc)
+			return CastSpecials2Uint[uint32](lv, rv, proc)
 		case types.T_uint64:
-			return CastSpecials2Int[uint64](lv, rv, proc)
+			return CastSpecials2Uint[uint64](lv, rv, proc)
 		}
 	}
 
@@ -514,7 +514,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		return CastDateAsTimeStamp(lv, rv, proc)
 	}
 
-	if lv.Typ.Oid == types.T_timestamp && rv.Typ.Oid == types.T_varchar {
+	if lv.Typ.Oid == types.T_timestamp && isString(rv.Typ.Oid) {
 		return castTimestampAsVarchar(lv, rv, proc)
 	}
 
@@ -631,6 +631,10 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 
 	if isString(lv.Typ.Oid) && rv.Typ.Oid == types.T_bool {
 		return CastStringToBool(lv, rv, proc)
+	}
+
+	if isString(lv.Typ.Oid) && rv.Typ.Oid == types.T_json {
+		return CastStringToJson(lv, rv, proc)
 	}
 
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("parameter types [%s, %s] of cast function do not match", lv.Typ.Oid, rv.Typ.Oid))
@@ -973,7 +977,7 @@ func CastInt64ToUint64(lv, rv *vector.Vector, proc *process.Process) (*vector.Ve
 }
 
 // CastSpecials1Int : Cast converts string to integer,Contains the following:
-// (char / varhcar) -> (int8 / int16 / int32/ int64 / uint8 / uint16 / uint32 / uint64)
+// (char / varhcar / text) -> (int8 / int16 / int32/ int64 / uint8 / uint16 / uint32 / uint64)
 func CastSpecials1Int[T constraints.Signed](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := rv.Typ.Oid.TypeLen()
 	col := vector.MustBytesCols(lv)
@@ -1025,7 +1029,7 @@ func CastSpecials1Uint[T constraints.Unsigned](lv, rv *vector.Vector, proc *proc
 }
 
 // CastSpecials1Float : Cast converts string to floating point number,Contains the following:
-// (char / varhcar) -> (float32 / float64)
+// (char / varhcar / text) -> (float32 / float64)
 func CastSpecials1Float[T constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := rv.Typ.Oid.TypeLen()
 	col := vector.MustBytesCols(lv)
@@ -1051,8 +1055,8 @@ func CastSpecials1Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 }
 
 // CastSpecials2Int : Cast converts integer to string,Contains the following:
-// (int8 /int16/int32/int64/uint8/uint16/uint32/uint64) -> (char / varhcar)
-func CastSpecials2Int[T constraints.Integer](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+// (int8 /int16/int32/int64) -> (char / varhcar / text)
+func CastSpecials2Int[T constraints.Signed](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
 	lvs := vector.MustTCols[T](lv)
 	col := &types.Bytes{
@@ -1061,6 +1065,30 @@ func CastSpecials2Int[T constraints.Integer](lv, rv *vector.Vector, proc *proces
 		Lengths: make([]uint32, 0, len(lvs)),
 	}
 	if col, err = binary.IntToBytes(lvs, col); err != nil {
+		return nil, err
+	}
+	if err = proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
+		return nil, err
+	}
+	vec := vector.New(rv.Typ)
+	if lv.IsScalar() {
+		vec.IsConst = true
+	}
+	vec.Data = col.Data
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, col)
+	return vec, nil
+}
+
+func CastSpecials2Uint[T constraints.Unsigned](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	var err error
+	lvs := vector.MustTCols[T](lv)
+	col := &types.Bytes{
+		Data:    make([]byte, 0, len(lvs)),
+		Offsets: make([]uint32, 0, len(lvs)),
+		Lengths: make([]uint32, 0, len(lvs)),
+	}
+	if col, err = binary.UintToBytes(lvs, col); err != nil {
 		return nil, err
 	}
 	if err = proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
@@ -1130,8 +1158,13 @@ func CastSpecials2Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 // CastSpecials3 :  Cast converts string to string ,Contains the following:
 // char -> char
 // char -> varhcar
+// char -> blob
 // varchar -> char
 // varchar -> varhcar
+// varchar -> blob
+// blob -> char
+// blob -> varchar
+// blob -> blob
 func CastSpecials3(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	source := vector.MustBytesCols(lv)
 	if lv.IsScalar() {
@@ -1581,7 +1614,7 @@ func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vect
 	return vec, nil
 }
 
-// CastStringAsDecimal64 : onverts char/varchar as decimal64
+// CastStringAsDecimal64 : onverts char/varchar/text as decimal64
 func CastStringAsDecimal64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	resultType := rv.Typ
 	resultType.Size = 8
@@ -1803,7 +1836,7 @@ func CastDatetimeAsString(lv, rv *vector.Vector, proc *process.Process) (*vector
 		Offsets: make([]uint32, 0, len(lvs)),
 		Lengths: make([]uint32, 0, len(lvs)),
 	}
-	if col, err = binary.DateTimeToBytes(lvs, col); err != nil {
+	if col, err = binary.DateTimeToBytes(lvs, col, lv.Typ.Precision); err != nil {
 		return nil, err
 	}
 	if err = proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
@@ -2246,6 +2279,61 @@ func CastNumValToBool[T constraints.Integer | constraints.Float](lv, rv *vector.
 	return vec, nil
 }
 
+func CastStringToJson(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	resultType := rv.Typ
+	vs := vector.MustBytesCols(lv)
+	if lv.IsScalar() {
+		srcStr := vs.Get(0)
+		vec := proc.AllocScalarVector(resultType)
+		json, err := types.ParseStringToByteJson(string(srcStr))
+		if err != nil {
+			return nil, err
+		}
+		val, err := encoding.EncodeJson(json)
+		if err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		col := &types.Bytes{
+			Data:    val,
+			Offsets: []uint32{0},
+			Lengths: []uint32{uint32(len(val))},
+		}
+		nulls.Reset(vec.Nsp)
+		vector.SetCol(vec, col)
+		return vec, nil
+	}
+	mem := int64(0)
+	col := &types.Bytes{
+		Data:    make([]byte, 0),
+		Offsets: make([]uint32, 0),
+		Lengths: make([]uint32, 0),
+	}
+	for i := range vs.Lengths {
+		if nulls.Contains(lv.Nsp, uint64(i)) {
+			continue
+		}
+		srcStr := vs.Get(int64(i))
+		json, err := types.ParseSliceToByteJson(srcStr)
+		if err != nil {
+			return nil, err
+		}
+		val, err := encoding.EncodeJson(json)
+		if err != nil {
+			return nil, err
+		}
+		mem += int64(cap(val))
+		col.AppendOnce(val)
+	}
+	vec, err := proc.AllocVector(resultType, mem)
+	if err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, col)
+	return vec, nil
+}
+
 func CastStringToBool(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	resultType := rv.Typ
 	resultType.Size = 8
@@ -2330,7 +2418,7 @@ func isNumeric(t types.T) bool {
 
 //  isString: return true if the types.T is string type
 func isString(t types.T) bool {
-	if t == types.T_char || t == types.T_varchar {
+	if t == types.T_char || t == types.T_varchar || t == types.T_blob {
 		return true
 	}
 	return false

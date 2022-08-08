@@ -101,4 +101,32 @@ MatrixOne 的数据类型与MySQL数据类型的定义一致，可参考：
 +---------+---------------------------+
 | 123.456 | 123456.123456789141124135 |
 +---------+---------------------------+
+
+//Create a table named "booltest" with 2 attribute of a "boolean" and b "bool"
+> create table booltest (a boolean,b bool);
+> insert into booltest values (0,1),(true,false),(true,1),(0,false),(NULL,NULL);
+> select * from booltest;
++-------+-------+
+| a     | b     |
++-------+-------+
+| false | true  |
+| true  | false |
+| true  | true  |
+| false | false |
+| NULL  | NULL  |
++-------+-------+
+5 rows in set (0.00 sec)
+
+//Create a table named "timestamptest" with 1 attribute of a "timestamp"
+> create table timestamptest (a timestamp(0) not null, primary key(a));
+> insert into timestamptest values ('20200101000000'), ('2022-01-02'), ('2022-01-02 00:00:01'), ('2022-01-02 00:00:01.512345');
+> select * from timestamptest;
++---------------------+
+| a                   |
++---------------------+
+| 2020-01-01 00:00:00 |
+| 2022-01-02 00:00:00 |
+| 2022-01-02 00:00:01 |
+| 2022-01-02 00:00:02 |
++---------------------+
 ```

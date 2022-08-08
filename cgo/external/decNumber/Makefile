@@ -1,23 +1,19 @@
 #
-# We (MO) added this makefile.   
+# We (MO) added this makefile.
 #
-# CFLAGS is -g -O2 because -Wall and -O3 will generate warnings.  
+# CFLAGS is -g -O2 because -Wall and -O3 will generate warnings.
 # There are patches on internet that silence these warnings, here
 # we just trust the decNumber authors.
 #
 
-OBJS = decSingle.o decDouble.o decQuad.o decNumber.o decContext.o
+OPT_LV := -O2
+CFLAGS=-g ${OPT_LV}
 
-CFLAGS = -g -O2
+OBJS=decSingle.o decDouble.o decQuad.o decNumber.o decContext.o
 
-libdecnumber.a: $(OBJS)
-	ar -rcs libdecnumber.a $(OBJS)
+all: $(OBJS)
+	mv $(OBJS) ../..
 
-clean:
-	rm -f *.a *.o
-
-install: libdecnumber.a
-	mkdir -p ../include/decnumber
-	mkdir -p ../lib
-	cp *.h ../include/decnumber/
-	cp libdecnumber.a ../..
+.PHONY: debug
+debug: override OPT_LV := -O0
+debug: all

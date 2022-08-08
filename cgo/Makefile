@@ -1,19 +1,18 @@
-CFLAGS=-I. -I./external/include -g -O3 -Wall -Werror
+DEBUG_OPT :=
+OPT_LV := -O3
+CFLAGS=-I./external/decNumber -g ${OPT_LV} -Wall -Werror
 OBJS=mo.o arith.o decimal.o
-LIBS=libdecnumber.a
 
-%.o: %.c mo.h mo_impl.h
-	$(CC) $(CFLAGS) -c -o $@ $< 
+all: libmo.a
 
-all: $(LIBS) $(OBJS)
-	ar -x libdecnumber.a
+libmo.a: $(OBJS)
+	$(MAKE) ${DEBUG_OPT} -C external/decNumber
 	ar -rcs libmo.a *.o
-	ranlib libmo.a
-	rm -f *.o
-	rm -f $(LIBS)
 
-libdecnumber.a:
-	(cd external; bash ./build.sh)
+.PHONY: debug
+debug: override OPT_LV := -O0
+debug: override DEBUG_OPT := debug
+debug: all
 
 .PHONY: clean
 clean:

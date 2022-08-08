@@ -1,6 +1,8 @@
 .idea/
 *.o
 *.a
+*.exe
+*.lib
 *.swp
 bin/
 y.go
@@ -12,12 +14,16 @@ y.go
 tags
 system_vars_config.toml
 coverage.txt
+out.txt
 vendor/
 gen_config
 main
 mo-server
+mo-service
 cube*/
 store/
+mo-data/
+node-*-data/
 pkg/catalog/test/
 pkg/config/system_vars.go
 pkg/config/system_vars_test.go

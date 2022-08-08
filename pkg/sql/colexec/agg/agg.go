@@ -98,7 +98,7 @@ func (a *UnaryAgg[T1, T2]) Grows(size int, m *mheap.Mheap) error {
 		a.es = make([]bool, 0, size)
 		a.vs = encoding.DecodeSlice[T2](a.da, sz)
 	} else if n+size >= cap(a.vs) {
-		a.da = a.da[:n*8]
+		a.da = a.da[:n*sz]
 		data, err := m.Grow(a.da, int64(n+size)*int64(sz))
 		if err != nil {
 			return err
@@ -116,7 +116,7 @@ func (a *UnaryAgg[T1, T2]) Grows(size int, m *mheap.Mheap) error {
 	return nil
 }
 
-func (a *UnaryAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector) {
+func (a *UnaryAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector) error {
 	vec := vecs[0]
 	hasNull := vec.GetNulls().Contains(uint64(sel))
 	if vec.Typ.IsString() {
@@ -124,27 +124,35 @@ func (a *UnaryAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector) {
 	} else {
 		a.vs[i], a.es[i] = a.fill(i, vector.GetColumn[T1](vec)[sel], a.vs[i], z, a.es[i], hasNull)
 	}
+	return nil
 }
 
-func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vecs []*vector.Vector) {
+func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vecs []*vector.Vector) error {
 	vec := vecs[0]
 	if vec.GetType().IsString() {
 		for i := range os {
 			hasNull := vec.GetNulls().Contains(uint64(i) + uint64(start))
+			if vps[i] == 0 {
+				continue
+			}
 			j := vps[i] - 1
 			a.vs[j], a.es[j] = a.fill(int64(j), (any)(vec.GetString(int64(i)+start)).(T1), a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
 		}
-		return
+		return nil
 	}
 	vs := vector.GetColumn[T1](vec)
 	for i := range os {
 		hasNull := vec.GetNulls().Contains(uint64(i) + uint64(start))
+		if vps[i] == 0 {
+			continue
+		}
 		j := vps[i] - 1
 		a.vs[j], a.es[j] = a.fill(int64(j), vs[int64(i)+start], a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
 	}
+	return nil
 }
 
-func (a *UnaryAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vector) {
+func (a *UnaryAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vector) error {
 	vec := vecs[0]
 	if vec.GetType().IsString() {
 		len := vec.Count()
@@ -152,27 +160,39 @@ func (a *UnaryAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vector) 
 			hasNull := vec.GetNulls().Contains(uint64(j))
 			a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetString(int64(j))).(T1), a.vs[i], zs[j], a.es[i], hasNull)
 		}
-		return
+		return nil
 	}
 	vs := vector.GetColumn[T1](vec)
 	for j, v := range vs {
 		hasNull := vec.GetNulls().Contains(uint64(j))
 		a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
 	}
+	return nil
 }
 
 // Merge a[x] += b[y]
-func (a *UnaryAgg[T1, T2]) Merge(b Agg[any], x, y int64) {
+func (a *UnaryAgg[T1, T2]) Merge(b Agg[any], x, y int64) error {
 	b0 := b.(*UnaryAgg[T1, T2])
+	if a.es[x] && !b0.es[y] {
+		a.otyp = b0.otyp
+	}
 	a.vs[x], a.es[x] = a.merge(x, y, a.vs[x], b0.vs[y], a.es[x], b0.es[y], b0.priv)
+	return nil
 }
 
-func (a *UnaryAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, vps []uint64) {
+func (a *UnaryAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, vps []uint64) error {
 	b0 := b.(*UnaryAgg[T1, T2])
 	for i := range os {
+		if vps[i] == 0 {
+			continue
+		}
 		j := vps[i] - 1
+		if a.es[j] && !b0.es[int64(i)+start] {
+			a.otyp = b0.otyp
+		}
 		a.vs[j], a.es[j] = a.merge(int64(j), int64(i)+start, a.vs[j], b0.vs[int64(i)+start], a.es[j], b0.es[int64(i)+start], b0.priv)
 	}
+	return nil
 }
 
 func (a *UnaryAgg[T1, T2]) Eval(m *mheap.Mheap) (*vector.Vector, error) {
@@ -191,6 +211,7 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mheap.Mheap) (*vector.Vector, error) {
 	}
 	if a.otyp.IsString() {
 		vec := vector.New(a.otyp)
+		vec.Nsp = nsp
 		a.vs = a.eval(a.vs)
 		vs := (any)(a.vs).([][]byte)
 		for _, v := range vs {

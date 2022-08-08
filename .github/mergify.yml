@@ -1,10 +1,86 @@
+queue_rules:
+  - name: default
+    conditions: []
+    checks_timeout: 30m
+
 pull_request_rules:
-  - name: Reviewed for pull request
+  - name: Automatic merge on approval
     conditions:
-      - base=main
-      - "status-success=Build on CentOS/x64"
       - "#approved-reviews-by>=1"
+      - "#changes-requested-reviews-by<=0"
+      - "-label=do-not-merge/wip"
+      - "check-success=Lint Docs"
+      - "check-success=UT Test on Ubuntu/x64"
+      # - "check-success=UT Test on Darwin/x86"
+      - "check-success=UT Test on Linux/Arm"
+      - "check-success=BVT Test on Ubuntu/x64"
+      - "check-success=BVT Test on Linux/Arm"
+      # - "check-success=BVT Test on Darwin/x86"
+      - "check-success=BVT RACE Test on CentOS/x64"
+      - "check-success=SCA Test on Ubuntu/x64"  
+    actions:
+      queue:
+        name: default
+        method: squash
+        commit_message_template: |
+          {{ title }} (#{{ number }})
+
+          {{ body | get_section("## What this PR does / why we need it:") }}
+
+          Approved by: @{{ approved_reviews_by | join(', @') }}
+          
+  - name: Auto update branch
+    conditions:
+      - created-at>=00:10 ago
+    actions:
+      update: 
+
+  - name: label for Bug
+    conditions: 
+      - body~=(?m)- \[(?i)x\] BUG
     actions:
       label:
         add:
-          - reviewed
+          - kind/bug
+  - name: label for Feature
+    conditions: 
+      - body~=(?m)- \[(?i)x\] Feature
+    actions:
+      label:
+        add:
+          - kind/feature
+  - name: label for Improvement
+    conditions: 
+      - body~=(?m)- \[(?i)x\] Improvement
+    actions:
+      label:
+        add:
+          - kind/enhancement
+  - name: label for Documentation
+    conditions: 
+      - body~=(?m)- \[(?i)x\] Documentation
+    actions:
+      label:
+        add:
+          - kind/documentation
+  - name: label for Test and CI
+    conditions: 
+      - body~=(?m)- \[(?i)x\] Test and CI
+    actions:
+      label:
+        add:
+          - kind/test-ci
+  - name: label for Code Refactoring
+    conditions: 
+      - body~=(?m)- \[(?i)x\] Code Refactoring
+    actions:
+      label:
+        add:
+          - kind/refactor
+  - name: label for API-change
+    conditions: 
+      - body~=(?m)- \[(?i)x\] API-change
+    actions:
+      label:
+        add:
+          - kind/api-change

@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -36,6 +37,8 @@ type S3FS struct {
 	client    *s3.Client
 	bucket    string
 	keyPrefix string
+
+	memCache *MemCache
 }
 
 // key mapping scheme:
@@ -47,14 +50,8 @@ func NewS3FS(
 	endpoint string,
 	bucket string,
 	keyPrefix string,
+	memCacheCapacity int,
 ) (*S3FS, error) {
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*7)
-	defer cancel()
-	cfg, err := config.LoadDefaultConfig(ctx)
-	if err != nil {
-		return nil, err
-	}
 
 	u, err := url.Parse(endpoint)
 	if err != nil {
@@ -65,28 +62,106 @@ func NewS3FS(
 	}
 	endpoint = u.String()
 
+	return newS3FS(
+		endpoint,
+		bucket,
+		keyPrefix,
+		memCacheCapacity,
+		s3.WithEndpointResolver(
+			s3.EndpointResolverFromURL(endpoint),
+		),
+	)
+}
+
+// NewS3FSOnMinio creates S3FS on minio server
+// this is needed because the URL scheme of minio server does not compatible with AWS'
+func NewS3FSOnMinio(
+	endpoint string,
+	bucket string,
+	keyPrefix string,
+	memCacheCapacity int,
+) (*S3FS, error) {
+
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	if u.Scheme == "" {
+		u.Scheme = "https"
+	}
+	endpoint = u.String()
+
+	return newS3FS(
+		endpoint,
+		bucket,
+		keyPrefix,
+		memCacheCapacity,
+		s3.WithEndpointResolver(
+			s3.EndpointResolverFunc(
+				func(
+					region string,
+					options s3.EndpointResolverOptions,
+				) (
+					ep aws.Endpoint,
+					err error,
+				) {
+					ep.URL = endpoint
+					ep.Source = aws.EndpointSourceCustom
+					ep.HostnameImmutable = true
+					ep.SigningRegion = region
+					return
+				},
+			),
+		),
+	)
+}
+
+func newS3FS(
+	endpoint string,
+	bucket string,
+	keyPrefix string,
+	memCacheCapacity int,
+	options ...func(*s3.Options),
+) (*S3FS, error) {
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*7)
+	defer cancel()
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	client := s3.NewFromConfig(
 		cfg,
-		s3.WithEndpointResolver(s3.EndpointResolverFromURL(endpoint)),
+		options...,
 	)
 
-	return &S3FS{
+	fs := &S3FS{
 		client:    client,
 		bucket:    bucket,
 		keyPrefix: keyPrefix,
-	}, nil
+	}
+	if memCacheCapacity > 0 {
+		fs.memCache = NewMemCache(memCacheCapacity)
+	}
+
+	return fs, nil
 }
 
-func (m *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
+func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
 
 	var cont *string
+	prefix := s.pathToKey(dirPath)
+	if prefix != "" {
+		prefix += "/"
+	}
 	for {
-		output, err := m.client.ListObjectsV2(
+		output, err := s.client.ListObjectsV2(
 			ctx,
 			&s3.ListObjectsV2Input{
-				Bucket:            ptrTo(m.bucket),
+				Bucket:            ptrTo(s.bucket),
 				Delimiter:         ptrTo("/"),
-				Prefix:            ptrTo(m.pathToKey(dirPath) + "/"),
+				Prefix:            ptrTo(prefix),
 				ContinuationToken: cont,
 			},
 		)
@@ -95,7 +170,7 @@ func (m *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 		}
 
 		for _, obj := range output.Contents {
-			filePath := m.keyToPath(*obj.Key)
+			filePath := s.keyToPath(*obj.Key)
 			filePath = strings.TrimRight(filePath, "/")
 			_, name := path.Split(filePath)
 			entries = append(entries, DirEntry{
@@ -106,7 +181,7 @@ func (m *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 		}
 
 		for _, prefix := range output.CommonPrefixes {
-			filePath := m.keyToPath(*prefix.Prefix)
+			filePath := s.keyToPath(*prefix.Prefix)
 			filePath = strings.TrimRight(filePath, "/")
 			entries = append(entries, DirEntry{
 				Name:  filePath,
@@ -124,18 +199,18 @@ func (m *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 	return
 }
 
-func (m *S3FS) Write(ctx context.Context, vector IOVector) error {
+func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 
 	// check existence
-	key := m.pathToKey(vector.FilePath)
-	output, err := m.client.HeadObject(
+	key := s.pathToKey(vector.FilePath)
+	output, err := s.client.HeadObject(
 		ctx,
 		&s3.HeadObjectInput{
-			Bucket: ptrTo(m.bucket),
+			Bucket: ptrTo(s.bucket),
 			Key:    ptrTo(key),
 		},
 	)
-	err = m.mapError(err)
+	err = s.mapError(err)
 	if errors.Is(err, ErrFileNotFound) {
 		// key not exists
 		err = nil
@@ -149,11 +224,11 @@ func (m *S3FS) Write(ctx context.Context, vector IOVector) error {
 		return ErrFileExisted
 	}
 
-	return m.write(ctx, vector)
+	return s.write(ctx, vector)
 }
 
-func (m *S3FS) write(ctx context.Context, vector IOVector) error {
-	key := m.pathToKey(vector.FilePath)
+func (s *S3FS) write(ctx context.Context, vector IOVector) error {
+	key := s.pathToKey(vector.FilePath)
 
 	// sort
 	sort.Slice(vector.Entries, func(i, j int) bool {
@@ -172,10 +247,10 @@ func (m *S3FS) write(ctx context.Context, vector IOVector) error {
 	if err != nil {
 		return err
 	}
-	_, err = m.client.PutObject(
+	_, err = s.client.PutObject(
 		ctx,
 		&s3.PutObjectInput{
-			Bucket:        ptrTo(m.bucket),
+			Bucket:        ptrTo(s.bucket),
 			Key:           ptrTo(key),
 			Body:          bytes.NewReader(content),
 			ContentLength: size,
@@ -188,7 +263,25 @@ func (m *S3FS) write(ctx context.Context, vector IOVector) error {
 	return nil
 }
 
-func (m *S3FS) Read(ctx context.Context, vector *IOVector) error {
+func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
+
+	if len(vector.Entries) == 0 {
+		return ErrEmptyVector
+	}
+
+	if s.memCache == nil {
+		// no cache
+		return s.read(ctx, vector)
+	}
+
+	if err := s.memCache.Read(ctx, vector, s.read); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 	min, max, readToEnd := vector.offsetRange()
 
@@ -196,48 +289,52 @@ func (m *S3FS) Read(ctx context.Context, vector *IOVector) error {
 
 	if readToEnd {
 		rang := fmt.Sprintf("bytes=%d-", min)
-		output, err := m.client.GetObject(
+		output, err := s.client.GetObject(
 			ctx,
 			&s3.GetObjectInput{
-				Bucket: ptrTo(m.bucket),
-				Key:    ptrTo(m.pathToKey(vector.FilePath)),
+				Bucket: ptrTo(s.bucket),
+				Key:    ptrTo(s.pathToKey(vector.FilePath)),
 				Range:  ptrTo(rang),
 			},
 		)
-		err = m.mapError(err)
+		err = s.mapError(err)
 		if err != nil {
 			return err
 		}
 		defer output.Body.Close()
 		content, err = io.ReadAll(output.Body)
-		err = m.mapError(err)
+		err = s.mapError(err)
 		if err != nil {
 			return err
 		}
 
 	} else {
 		rang := fmt.Sprintf("bytes=%d-%d", min, max)
-		output, err := m.client.GetObject(
+		output, err := s.client.GetObject(
 			ctx,
 			&s3.GetObjectInput{
-				Bucket: ptrTo(m.bucket),
-				Key:    ptrTo(m.pathToKey(vector.FilePath)),
+				Bucket: ptrTo(s.bucket),
+				Key:    ptrTo(s.pathToKey(vector.FilePath)),
 				Range:  ptrTo(rang),
 			},
 		)
-		err = m.mapError(err)
+		err = s.mapError(err)
 		if err != nil {
 			return err
 		}
 		defer output.Body.Close()
 		content, err = io.ReadAll(io.LimitReader(output.Body, int64(max-min)))
-		err = m.mapError(err)
+		err = s.mapError(err)
 		if err != nil {
 			return err
 		}
 	}
 
 	for i, entry := range vector.Entries {
+		if entry.ignore {
+			continue
+		}
+
 		start := entry.Offset - min
 		if start >= len(content) {
 			return ErrEmptyRange
@@ -259,6 +356,7 @@ func (m *S3FS) Read(ctx context.Context, vector *IOVector) error {
 		}
 
 		setData := true
+
 		if w := vector.Entries[i].WriterForRead; w != nil {
 			setData = false
 			_, err := w.Write(data)
@@ -266,29 +364,37 @@ func (m *S3FS) Read(ctx context.Context, vector *IOVector) error {
 				return err
 			}
 		}
+
 		if ptr := vector.Entries[i].ReadCloserForRead; ptr != nil {
 			setData = false
 			*ptr = io.NopCloser(bytes.NewReader(data))
 		}
+
 		if setData {
 			if len(entry.Data) < entry.Size || entry.Size < 0 {
-				vector.Entries[i].Data = data
+				entry.Data = data
 			} else {
 				copy(entry.Data, data)
 			}
 		}
+
+		if err := entry.setObjectFromData(); err != nil {
+			return err
+		}
+
+		vector.Entries[i] = entry
 	}
 
 	return nil
 }
 
-func (m *S3FS) Delete(ctx context.Context, filePath string) error {
+func (s *S3FS) Delete(ctx context.Context, filePath string) error {
 
-	_, err := m.client.DeleteObject(
+	_, err := s.client.DeleteObject(
 		ctx,
 		&s3.DeleteObjectInput{
-			Bucket: ptrTo(m.bucket),
-			Key:    ptrTo(m.pathToKey(filePath)),
+			Bucket: ptrTo(s.bucket),
+			Key:    ptrTo(s.pathToKey(filePath)),
 		},
 	)
 	if err != nil {
@@ -298,17 +404,17 @@ func (m *S3FS) Delete(ctx context.Context, filePath string) error {
 	return nil
 }
 
-func (m *S3FS) pathToKey(filePath string) string {
-	return path.Join(m.keyPrefix, filePath)
+func (s *S3FS) pathToKey(filePath string) string {
+	return path.Join(s.keyPrefix, filePath)
 }
 
-func (m *S3FS) keyToPath(key string) string {
-	path := strings.TrimPrefix(key, m.keyPrefix)
+func (s *S3FS) keyToPath(key string) string {
+	path := strings.TrimPrefix(key, s.keyPrefix)
 	path = strings.TrimLeft(path, "/")
 	return path
 }
 
-func (m *S3FS) mapError(err error) error {
+func (s *S3FS) mapError(err error) error {
 	if err == nil {
 		return nil
 	}
@@ -324,3 +430,18 @@ func (m *S3FS) mapError(err error) error {
 var _ ETLFileService = new(S3FS)
 
 func (*S3FS) ETLCompatible() {}
+
+var _ CachingFileService = new(S3FS)
+
+func (s *S3FS) FlushCache() {
+	if s.memCache != nil {
+		s.memCache.Flush()
+	}
+}
+
+func (s *S3FS) CacheStats() *CacheStats {
+	if s.memCache != nil {
+		return s.memCache.CacheStats()
+	}
+	return nil
+}

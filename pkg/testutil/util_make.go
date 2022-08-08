@@ -15,6 +15,7 @@
 package testutil
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -79,6 +80,10 @@ var (
 
 	MakeVarcharVector = func(values []string, nsp []uint64) *vector.Vector {
 		return makeStringVector(values, nsp, varcharType)
+	}
+
+	MakeTextVector = func(values []string, nsp []uint64) *vector.Vector {
+		return makeStringVector(values, nsp, textType)
 	}
 
 	MakeDecimal64Vector = func(values []int64, nsp []uint64, _ types.Type) *vector.Vector {
@@ -251,6 +256,10 @@ var (
 		return makeScalarString(value, length, varcharType)
 	}
 
+	MakeTextVarchar = func(value string, length int) *vector.Vector {
+		return makeScalarString(value, length, textType)
+	}
+
 	MakeScalarDate = func(value string, length int) *vector.Vector {
 		vec := NewProc().AllocScalarVector(dateType)
 		vec.Length = length
@@ -295,6 +304,23 @@ var (
 		vec := NewProc().AllocScalarVector(decimal128Type)
 		vec.Length = length
 		vec.Col = []types.Decimal128{types.InitDecimal128UsingUint(v)}
+		return vec
+	}
+
+	MakeScalarDecimal128ByFloat64 = func(v float64, length int, _ types.Type) *vector.Vector {
+		val := fmt.Sprintf("%f", v)
+		_, scale, err := types.ParseStringToDecimal128WithoutTable(val)
+		if err != nil {
+			panic(err)
+		}
+
+		vec := NewProc().AllocScalarVector(decimal128Type)
+		vec.Length = length
+		dec128Val, err := types.ParseStringToDecimal128(val, 34, scale)
+		if err != nil {
+			panic(err)
+		}
+		vec.Col = []types.Decimal128{dec128Val}
 		return vec
 	}
 )

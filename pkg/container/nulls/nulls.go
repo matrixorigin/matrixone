@@ -26,25 +26,16 @@ import (
 
 // Or performs union operation on Nulls n,m and store the result in r
 func Or(n, m, r *Nulls) {
-	if (n == nil || (n != nil && n.Np == nil)) && m != nil && m.Np != nil {
-		if r.Np == nil {
-			r.Np = bitmap.New(0)
-		}
-		r.Np.Or(m.Np)
+	if Ptr(n) == nil && Ptr(m) == nil {
+		r.Np = nil
 		return
 	}
-	if (m == nil || (m != nil && m.Np == nil)) && n != nil && n.Np != nil {
-		if r.Np == nil {
-			r.Np = bitmap.New(0)
-		}
+
+	r.Np = bitmap.New(0)
+	if Ptr(n) != nil {
 		r.Np.Or(n.Np)
-		return
 	}
-	if m != nil && m.Np != nil && n != nil && n.Np != nil {
-		if r.Np == nil {
-			r.Np = bitmap.New(0)
-		}
-		r.Np.Or(n.Np)
+	if Ptr(m) != nil {
 		r.Np.Or(m.Np)
 	}
 }
@@ -71,6 +62,13 @@ func Any(n *Nulls) bool {
 		return false
 	}
 	return !n.Np.IsEmpty()
+}
+
+func Ptr(n *Nulls) *uint64 {
+	if n == nil {
+		return nil
+	}
+	return n.Np.Ptr()
 }
 
 // Size estimates the memory usage of the Nulls.

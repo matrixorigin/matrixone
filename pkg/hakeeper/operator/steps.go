@@ -32,17 +32,20 @@ type OpStep interface {
 	IsFinish(state pb.LogState, dnState pb.DNState) bool
 }
 
-type AddLogService struct {
-	Target string
-
-	StoreID   string
+type Replica struct {
+	UUID      string
 	ShardID   uint64
 	ReplicaID uint64
 	Epoch     uint64
 }
 
+type AddLogService struct {
+	Target string
+	Replica
+}
+
 func (a AddLogService) String() string {
-	return fmt.Sprintf("adding %v:%v(at epoch %v) to %s", a.ShardID, a.ReplicaID, a.Epoch, a.StoreID)
+	return fmt.Sprintf("adding %v:%v(at epoch %v) to %s", a.ShardID, a.ReplicaID, a.Epoch, a.UUID)
 }
 
 func (a AddLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
@@ -58,15 +61,11 @@ func (a AddLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
 
 type RemoveLogService struct {
 	Target string
-
-	StoreID   string
-	ShardID   uint64
-	ReplicaID uint64
-	Epoch     uint64
+	Replica
 }
 
 func (a RemoveLogService) String() string {
-	return fmt.Sprintf("removing %v:%v(at epoch %v) on log store %s", a.ShardID, a.ReplicaID, a.Epoch, a.StoreID)
+	return fmt.Sprintf("removing %v:%v(at epoch %v) on log store %s", a.ShardID, a.ReplicaID, a.Epoch, a.UUID)
 }
 
 func (a RemoveLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
@@ -80,19 +79,18 @@ func (a RemoveLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
 }
 
 type StartLogService struct {
-	StoreID            string
-	ShardID, ReplicaID uint64
+	Replica
 }
 
 func (a StartLogService) String() string {
-	return fmt.Sprintf("starting %v:%v on %s", a.ShardID, a.ReplicaID, a.StoreID)
+	return fmt.Sprintf("starting %v:%v on %s", a.ShardID, a.ReplicaID, a.UUID)
 }
 
 func (a StartLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
-	if _, ok := state.Stores[a.StoreID]; !ok {
+	if _, ok := state.Stores[a.UUID]; !ok {
 		return true
 	}
-	for _, replicaInfo := range state.Stores[a.StoreID].Replicas {
+	for _, replicaInfo := range state.Stores[a.UUID].Replicas {
 		if replicaInfo.ShardID == a.ShardID {
 			return true
 		}
@@ -102,17 +100,35 @@ func (a StartLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
 }
 
 type StopLogService struct {
-	StoreID string
-	ShardID uint64
-	Epoch   uint64
+	Replica
 }
 
 func (a StopLogService) String() string {
-	return fmt.Sprintf("stoping %v on %s", a.ShardID, a.StoreID)
+	return fmt.Sprintf("stopping %v on %s", a.ShardID, a.UUID)
 }
 
 func (a StopLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
-	if store, ok := state.Stores[a.StoreID]; ok {
+	if store, ok := state.Stores[a.UUID]; ok {
+		for _, replicaInfo := range store.Replicas {
+			if replicaInfo.ShardID == a.ShardID {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+type KillLogZombie struct {
+	Replica
+}
+
+func (a KillLogZombie) String() string {
+	return fmt.Sprintf("killing zombie on %s", a.UUID)
+}
+
+func (a KillLogZombie) IsFinish(state pb.LogState, _ pb.DNState) bool {
+	if store, ok := state.Stores[a.UUID]; ok {
 		for _, replicaInfo := range store.Replicas {
 			if replicaInfo.ShardID == a.ShardID {
 				return false
@@ -126,10 +142,13 @@ func (a StopLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
 type AddDnReplica struct {
 	StoreID            string
 	ShardID, ReplicaID uint64
+	LogShardID         uint64
 }
 
 func (a AddDnReplica) String() string {
-	return fmt.Sprintf("adding %v:%v to dn store %s", a.ShardID, a.ReplicaID, a.StoreID)
+	return fmt.Sprintf("adding %v:%v to dn store %s (log shard %d)",
+		a.ShardID, a.ReplicaID, a.StoreID, a.LogShardID,
+	)
 }
 
 func (a AddDnReplica) IsFinish(_ pb.LogState, state pb.DNState) bool {
@@ -144,10 +163,13 @@ func (a AddDnReplica) IsFinish(_ pb.LogState, state pb.DNState) bool {
 type RemoveDnReplica struct {
 	StoreID            string
 	ShardID, ReplicaID uint64
+	LogShardID         uint64
 }
 
 func (a RemoveDnReplica) String() string {
-	return fmt.Sprintf("removing %v:%v on dn store %s", a.ShardID, a.ReplicaID, a.StoreID)
+	return fmt.Sprintf("removing %v:%v to dn store %s (log shard %d)",
+		a.ShardID, a.ReplicaID, a.StoreID, a.LogShardID,
+	)
 }
 
 func (a RemoveDnReplica) IsFinish(_ pb.LogState, state pb.DNState) bool {

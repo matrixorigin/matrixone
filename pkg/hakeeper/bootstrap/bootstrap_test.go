@@ -71,6 +71,7 @@ func TestBootstrap(t *testing.T) {
 
 		expectedNum            int
 		expectedInitialMembers map[uint64]string
+		expectedDNLogShardID   uint64
 		err                    error
 	}{
 		{
@@ -121,6 +122,7 @@ func TestBootstrap(t *testing.T) {
 				2: "log-c",
 				3: "log-b",
 			},
+			expectedDNLogShardID: 1,
 		},
 		{
 			desc: "ignore shard 0",
@@ -173,6 +175,7 @@ func TestBootstrap(t *testing.T) {
 				2: "log-c",
 				3: "log-b",
 			},
+			expectedDNLogShardID: 1,
 		},
 	}
 
@@ -190,6 +193,12 @@ func TestBootstrap(t *testing.T) {
 		if len(output) != 0 {
 			assert.Equal(t, c.expectedInitialMembers, output[0].ConfigChange.InitialMembers)
 			assert.Equal(t, pb.StartReplica, output[0].ConfigChange.ChangeType)
+		}
+
+		for _, command := range output {
+			if command.ServiceType == pb.DnService {
+				assert.Equal(t, c.expectedDNLogShardID, command.ConfigChange.Replica.LogShardID)
+			}
 		}
 	}
 }
@@ -345,7 +354,6 @@ func TestIssue3814(t *testing.T) {
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
-					Name:             "",
 				}},
 			},
 			log:      pb.LogState{},

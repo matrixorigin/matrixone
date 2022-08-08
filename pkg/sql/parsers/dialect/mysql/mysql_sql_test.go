@@ -26,8 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  "with t11 as (select * from t1) update t11 join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
-		output: "with t11 as (select * from t1) update t11 inner join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
+		input: "use secondary role none",
 	}
 )
 
@@ -52,6 +51,8 @@ var (
 		input  string
 		output string
 	}{{
+		input: "update t1 set a = default",
+	}, {
 		input:  "explain select * from emp",
 		output: "explain select * from emp",
 	}, {
@@ -94,13 +95,13 @@ var (
 		input: "select cast(false as varchar)",
 	}, {
 		input:  "select cast(a as timestamp)",
-		output: "select cast(a as timestamp(26, 6))",
+		output: "select cast(a as timestamp(26))",
 	}, {
 		input:  "select cast(\"2022-01-30\" as varchar);",
 		output: "select cast(2022-01-30 as varchar)",
 	}, {
 		input:  "select cast(b as timestamp) from t2",
-		output: "select cast(b as timestamp(26, 6)) from t2",
+		output: "select cast(b as timestamp(26)) from t2",
 	}, {
 		input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
 		output: "select cast(2022-01-01 01:23:34 as varchar)",
@@ -173,7 +174,7 @@ var (
 		output: "set a = b",
 	}, {
 		input:  "CREATE TABLE t1 (datetime datetime, timestamp timestamp, date date)",
-		output: "create table t1 (datetime datetime(26, 6), timestamp timestamp(26, 6), date date)",
+		output: "create table t1 (datetime datetime(26), timestamp timestamp(26), date date)",
 	}, {
 		input:  "SET timestamp=DEFAULT;",
 		output: "set timestamp = default",
@@ -195,6 +196,15 @@ var (
 	}, {
 		input:  "SELECT * FROM t1 WHERE a = ANY ( SELECT 1 UNION ( SELECT 1 UNION SELECT 1 ) );",
 		output: "select * from t1 where a = any (select 1 union (select 1 union select 1))",
+	}, {
+		input:  "SELECT * FROM t1 WHERE a = ANY ( SELECT 1 except ( SELECT 1 except SELECT 1 ) );",
+		output: "select * from t1 where a = any (select 1 except (select 1 except select 1))",
+	}, {
+		input:  "SELECT * FROM t1 WHERE a = ANY ( SELECT 1 intersect ( SELECT 1 intersect SELECT 1 ) );",
+		output: "select * from t1 where a = any (select 1 intersect (select 1 intersect select 1))",
+	}, {
+		input:  "SELECT * FROM t1 WHERE a = ANY ( SELECT 1 minus ( SELECT 1 minus SELECT 1 ) );",
+		output: "select * from t1 where a = any (select 1 minus (select 1 minus select 1))",
 	}, {
 		input:  "SELECT * FROM t1 WHERE (a,b) = ANY (SELECT a, max(b) FROM t1 GROUP BY a);",
 		output: "select * from t1 where (a, b) = any (select a, max(b) from t1 group by a)",
@@ -667,354 +677,558 @@ var (
 	}, {
 		input: "create table a (a int not null default 1 auto_increment unique primary key collate utf8_bin storage disk)",
 	}, {
-		input:  "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.A to u1, 'u2'@'h2', ''@'h3' with grant option",
-		output: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a to u1, u2@h2, @h3 with grant option",
+		input: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a to u1, u2 with grant option",
 	}, {
 		input: "grant proxy on u1 to u2, u3, u4 with grant option",
 	}, {
 		input: "grant proxy on u1 to u2, u3, u4",
-	}, {
-		input: "grant r1, r2, r3 to u1, u1, u3",
-	}, {
-		input:  "grant super(a, b, c) on procedure db.func to 'h3'",
-		output: "grant super(a, b, c) on procedure db.func to h3",
-	}, {
-		input:  "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.A from u1, 'u2'@'h2', ''@'h3'",
-		output: "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a from u1, u2@h2, @h3",
-	}, {
-		input: "revoke r1, r2, r3 from u1, u2, u3",
-	}, {
-		input: "revoke super(a, b, c) on procedure db.func from h3",
-	}, {
-		input:  "revoke all on table db.A from u1, 'u2'@'h2', ''@'h3'",
-		output: "revoke all on table db.a from u1, u2@h2, @h3",
-	}, {
-		input: "revoke all on table db.a from u1",
-	}, {
-		input: "set default role r1, r2, r3 to u1, u2, u3",
-	}, {
-		input: "set default role all to u1, u2, u3",
-	}, {
-		input: "set default role none to u1, u2, u3",
-	}, {
-		input: "set role all",
-	}, {
-		input: "set role none",
-	}, {
-		input: "set role r1, r2, r3",
-	}, {
-		input: "set role all except r1, r2, r3",
-	}, {
-		input:  "set password = password('ppp')",
-		output: "set password = ppp",
-	}, {
-		input:  "set password for u1@h1 = password('ppp')",
-		output: "set password for u1@h1 = ppp",
-	}, {
-		input:  "set password for u1@h1 = 'ppp'",
-		output: "set password for u1@h1 = ppp",
-	}, {
-		input:  "set @a = 0, @b = 1",
-		output: "set a = 0, b = 1",
-	}, {
-		input:  "set a = 0, session b = 1, @@session.c = 1, global d = 1, @@global.e = 1",
-		output: "set a = 0, b = 1, c = 1, global d = 1, global e = 1",
-	}, {
-		input:  "set @@session.a = 1",
-		output: "set a = 1",
-	}, {
-		input:  "set @@global.a = 1",
-		output: "set global a = 1",
-	}, {
-		input: "set global a = 1",
-	}, {
-		input: "set a = 1",
-	}, {
-		input: "rollback",
-	}, {
-		input:  "rollback and chain no release",
-		output: "rollback",
-	}, {
-		input:  "commit and chain no release",
-		output: "commit",
-	}, {
-		input: "commit",
-	}, {
-		input: "start transaction read only",
-	}, {
-		input: "start transaction read write",
-	}, {
-		input: "start transaction",
-	}, {
-		input: "use db1",
-	}, {
-		input: "use",
-	}, {
-		input: "update a as aa set a = 3, b = 4 where a != 0 order by b limit 1",
-	}, {
-		input: "update a as aa set a = 3, b = 4",
-	}, {
-		input: "explain insert into u (a, b, c, d) values (1, 2, 3, 4), (5, 6, 7, 8)",
-	}, {
-		input: "explain delete from a where a != 0 order by b limit 1",
-	}, {
-		input: "explain select a from a union select b from b",
-	}, {
-		input: "explain select a from a",
-	}, {
-		input:  "explain (format text) select a from A",
-		output: "explain (format text) select a from a",
-	}, {
-		input:  "explain analyze select * from t",
-		output: "explain (analyze) select * from t",
-	}, {
-		input:  "explain format = 'tree' for connection 10",
-		output: "explain format = tree for connection 10",
-	}, {
-		input: "explain db.a db.a.a",
-	}, {
-		input: "explain a",
-	}, {
-		input:  "alter user u1 require cipher 'xxx' subject 'yyy' with max_queries_per_hour 0 password expire interval 1 day password expire default account lock account unlock",
-		output: "alter user u1 require cipher xxx subject yyy with max_queries_per_hour 0 password expire interval 1 day password expire default account lock account unlock",
-	}, {
-		input:  "alter user if exists user() identified by 'test'",
-		output: "alter user if exists user() identified by test",
-	}, {
-		input: "show index from t where true",
-	}, {
-		input:  "show databases like 'a%'",
-		output: "show databases like a%",
-	}, {
-		input: "show global status where 1 + 21 > 21",
-	}, {
-		input: "show global variables",
-	}, {
-		input: "show warnings",
-	}, {
-		input: "show errors",
-	}, {
-		input: "show full processlist",
-	}, {
-		input: "show processlist",
-	}, {
-		input:  "show full tables from db1 like 'a%' where a != 0",
-		output: "show full tables from db1 like a% where a != 0",
-	}, {
-		input:  "show open tables from db1 like 'a%' where a != 0",
-		output: "show open tables from db1 like a% where a != 0",
-	}, {
-		input:  "show tables from db1 like 'a%' where a != 0",
-		output: "show tables from db1 like a% where a != 0",
-	}, {
-		input:  "show databases like 'a%' where a != 0",
-		output: "show databases like a% where a != 0",
-	}, {
-		input: "show databases",
-	}, {
-		input:  "show extended full columns from t from db like 'a%'",
-		output: "show extended full columns from t from db like a%",
-	}, {
-		input: "show extended full columns from t from db where a != 0",
-	}, {
-		input: "show columns from t from db where a != 0",
-	}, {
-		input: "show columns from t from db",
-	}, {
-		input: "show create database if not exists db",
-	}, {
-		input: "show create database db",
-	}, {
-		input: "show create table db.t1",
-	}, {
-		input: "show create table t1",
-	}, {
-		input: "drop user if exists u1, u2, u3",
-	}, {
-		input: "drop user u1",
-	}, {
-		input: "drop role r1",
-	}, {
-		input: "drop role if exists r1, r2, r3",
-	}, {
-		input: "drop index if exists idx1 on db.t",
-	}, {
-		input: "drop index idx1 on db.t",
-	}, {
-		input: "drop table if exists t1, t2, db.t",
-	}, {
-		input: "drop table db.t",
-	}, {
-		input: "drop table if exists t",
-	}, {
-		input: "drop database if exists t",
-	}, {
-		input: "drop database t",
-	}, {
-		input: "create user u1@'hostname'",
-	}, {
-		input: "create user u1",
-	}, {
-		input:  "create user if not exists u1 identified by 'u1', u2 require cipher 'xxx' subject 'yyy' with max_queries_per_hour 0",
-		output: "create user if not exists u1 identified by u1, u2 require cipher xxx and subject yyy with max_queries_per_hour 0",
-	}, {
-		input:  "create role if not exists 'a'@'localhost', 'b'@'localhost'",
-		output: "create role if not exists a@localhost, b@localhost",
-	}, {
-		input:  "create role if not exists 'webapp' @ \"identier\"",
-		output: "create role if not exists webapp@identier",
-	}, {
-		input:  "create role 'admin', 'developer'",
-		output: "create role admin, developer",
-	}, {
-		input:  "create index idx1 on a (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
-		output: "create index idx1 on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
-	}, {
-		input:  "create index idx1 using btree on A (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
-		output: "create index idx1 using btree on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
-	}, {
-		input: "create index idx1 on a (a)",
-	}, {
-		input: "create unique index idx1 using btree on a (a, b(10), (a + b), (a - b)) visible",
-	}, {
-		input:  "create database test_db default collate 'utf8mb4_general_ci' collate utf8mb4_general_ci",
-		output: "create database test_db default collate utf8mb4_general_ci collate utf8mb4_general_ci",
-	}, {
-		input: "create database if not exists test_db character set geostd8",
-	}, {
-		input: "create database test_db default collate utf8mb4_general_ci",
-	}, {
-		input: "create database if not exists db",
-	}, {
-		input: "create database db",
-	}, {
-		input: "delete from a as aa",
-	}, {
-		input: "delete from t where a > 1 order by b limit 1 offset 2",
-	}, {
-		input: "delete from t where a = 1",
-	}, {
-		input: "insert into u partition(p1, p2) (a, b, c, d) values (1, 2, 3, 4), (5, 6, 1, 0)",
-	}, {
-		input:  "insert into t values ('aa', 'bb', 'cc')",
-		output: "insert into t values (aa, bb, cc)",
-	}, {
-		input:  "insert into t() values (1, 2, 3)",
-		output: "insert into t values (1, 2, 3)",
-	}, {
-		input: "insert into t (c1, c2, c3) values (1, 2, 3)",
-	}, {
-		input: "insert into t (c1, c2, c3) select c1, c2, c3 from t1",
-	}, {
-		input: "insert into t select c1, c2, c3 from t1",
-	}, {
-		input: "insert into t values (1, 3, 4)",
-	}, {
-		input:  "create table t1 (`show` bool(0));",
-		output: "create table t1 (show bool(0))",
-	}, {
-		input:  "create table t1 (t bool(0));",
-		output: "create table t1 (t bool(0))",
-	}, {
-		input: "create table t1 (t char(0))",
-	}, {
-		input: "create table t1 (t bool(20), b int, c char(20), d varchar(20))",
-	}, {
-		input: "create table t (a int(20) not null)",
-	}, {
-		input: "create table db.t (db.t.a int(20) null)",
-	}, {
-		input: "create table t (a float(20, 20) not null, b int(20) null, c int(30) null)",
-	}, {
-		input:  "create table t1 (t time(3) null, dt datetime(6) null, ts timestamp(1) null)",
-		output: "create table t1 (t time(3) null, dt datetime(26, 6) null, ts timestamp(26, 1) null)",
-	}, {
-		input:  "create table t1 (a int default 1 + 1 - 2 * 3 / 4 div 7 ^ 8 << 9 >> 10 % 11)",
-		output: "create table t1 (a int default 1 + 1 - 2 * 3 / 4 div 7 ^ 8 << 9 >> 10 % 11)",
-	}, {
-		input: "create table t1 (t bool default -1 + +1)",
-	}, {
-		input: "create table t (id int unique key)",
-	}, {
-		input: "select * from t",
-	}, {
-		input: "select c1, c2, c3 from t1, t as t2 where t1.c1 = 1 group by c2 having c2 > 10",
-	}, {
-		input: "select a from t order by a desc limit 1 offset 2",
-	}, {
-		input:  "select a from t order by a desc limit 1, 2",
-		output: "select a from t order by a desc limit 2 offset 1",
-	}, {
-		input: "select * from t union select c from t1",
-	}, {
-		input: "select * from t union all select c from t1",
-	}, {
-		input: "select * from t union distinct select c from t1",
-	}, {
-		input: "select * from (select a from t) as t1",
-	}, {
-		input:  "select * from (select a from t) as t1 join t2 on 1",
-		output: "select * from (select a from t) as t1 inner join t2 on 1",
-	}, {
-		input: "select * from (select a from t) as t1 inner join t2 using (a)",
-	}, {
-		input: "select * from (select a from t) as t1 cross join t2",
-	}, {
-		input:  "select * from t1 join t2 using (a, b, c)",
-		output: "select * from t1 inner join t2 using (a, b, c)",
-	}, {
-		input: "select * from t1 straight_join t2 on 1 + 213",
-	}, {
-		input: "select * from t1 straight_join t2 on col",
-	}, {
-		input:  "select * from t1 right outer join t2 on 123",
-		output: "select * from t1 right join t2 on 123",
-	}, {
-		input: "select * from t1 natural left join t2",
-	}, {
-		input: "select 1",
-	}, {
-		input: "select $ from t",
-	}, {
-		input:  "analyze table part (a,b )",
-		output: "analyze table part(a, b)",
-	}, {
-		input:  "select $ from t into outfile '/Users/tmp/test'",
-		output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
-	}, {
-		input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ','",
-		output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
-	}, {
-		input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'",
-		output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
-	}, {
-		input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'TRUE'",
-		output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
-	}, {
-		input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE'",
-		output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false",
-	}, {
-		input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE' MAX_FILE_SIZE 100",
-		output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false max_file_size 102400",
-	}, {
-		input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE' MAX_FILE_SIZE 100 FORCE_QUOTE (a, b)",
-		output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false max_file_size 102400 force_quote a, b",
-	}, {
-		input: "drop prepare stmt_name1",
-	}, {
-		input: "deallocate prepare stmt_name1",
-	}, {
-		input: "execute stmt_name1",
-	}, {
-		input: "execute stmt_name1 using @var_name,@@sys_name",
-	}, {
-		input: "prepare stmt_name1 from select * from t1",
-	}, {
-		input:  "prepare stmt_name1 from 'select * from t1'",
-		output: "prepare stmt_name1 from select * from t1",
-	}, {
-		input: "prepare stmt_name1 from select * from t1 where a > ? or abs(b) < ?",
-	}}
+	},
+		{
+			input: "grant r1, r2, r3 to u1, u1, u3",
+		}, {
+			input:  "grant super(a, b, c) on procedure db.func to 'h3'",
+			output: "grant super(a, b, c) on procedure db.func to h3",
+		},
+		{
+			input:  "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.A from u1, 'u2'@'h2', ''@'h3'",
+			output: "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a from u1, u2@h2, @h3",
+		}, {
+			input: "revoke r1, r2, r3 from u1, u2, u3",
+		}, {
+			input: "revoke super(a, b, c) on procedure db.func from h3",
+		}, {
+			input:  "revoke all on table db.A from u1, 'u2'@'h2', ''@'h3'",
+			output: "revoke all on table db.a from u1, u2@h2, @h3",
+		}, {
+			input: "revoke all on table db.a from u1",
+		}, {
+			input: "set default role r1, r2, r3 to u1, u2, u3",
+		}, {
+			input: "set default role all to u1, u2, u3",
+		}, {
+			input: "set default role none to u1, u2, u3",
+		}, {
+			input: "set role all",
+		}, {
+			input: "set role none",
+		}, {
+			input: "set role r1, r2, r3",
+		}, {
+			input: "set role all except r1, r2, r3",
+		}, {
+			input:  "set password = password('ppp')",
+			output: "set password = ppp",
+		}, {
+			input:  "set password for u1@h1 = password('ppp')",
+			output: "set password for u1@h1 = ppp",
+		}, {
+			input:  "set password for u1@h1 = 'ppp'",
+			output: "set password for u1@h1 = ppp",
+		}, {
+			input:  "set @a = 0, @b = 1",
+			output: "set a = 0, b = 1",
+		}, {
+			input:  "set a = 0, session b = 1, @@session.c = 1, global d = 1, @@global.e = 1",
+			output: "set a = 0, b = 1, c = 1, global d = 1, global e = 1",
+		}, {
+			input:  "set @@session.a = 1",
+			output: "set a = 1",
+		}, {
+			input:  "set @@global.a = 1",
+			output: "set global a = 1",
+		}, {
+			input: "set global a = 1",
+		}, {
+			input: "set a = 1",
+		}, {
+			input: "rollback",
+		}, {
+			input:  "rollback and chain no release",
+			output: "rollback",
+		}, {
+			input:  "commit and chain no release",
+			output: "commit",
+		}, {
+			input: "commit",
+		}, {
+			input: "start transaction read only",
+		}, {
+			input: "start transaction read write",
+		}, {
+			input: "start transaction",
+		}, {
+			input: "use db1",
+		}, {
+			input: "use",
+		}, {
+			input: "update a as aa set a = 3, b = 4 where a != 0 order by b limit 1",
+		}, {
+			input: "update a as aa set a = 3, b = 4",
+		}, {
+			input: "explain insert into u (a, b, c, d) values (1, 2, 3, 4), (5, 6, 7, 8)",
+		}, {
+			input: "explain delete from a where a != 0 order by b limit 1",
+		}, {
+			input: "explain select a from a union select b from b",
+		}, {
+			input: "explain select a from a intersect select b from b",
+		}, {
+			input: "explain select a from a except select b from b",
+		}, {
+			input: "explain select a from a minus select b from b",
+		}, {
+			input: "explain select a from a",
+		}, {
+			input:  "explain (format text) select a from A",
+			output: "explain (format text) select a from a",
+		}, {
+			input:  "explain analyze select * from t",
+			output: "explain (analyze) select * from t",
+		}, {
+			input:  "explain format = 'tree' for connection 10",
+			output: "explain format = tree for connection 10",
+		}, {
+			input:  "explain db.a",
+			output: "show columns from db.a",
+		}, {
+			input:  "explain a",
+			output: "show columns from a",
+		}, {
+			input: "show index from t where true",
+		}, {
+			input:  "show databases like 'a%'",
+			output: "show databases like a%",
+		}, {
+			input: "show global status where 1 + 21 > 21",
+		}, {
+			input: "show global variables",
+		}, {
+			input: "show warnings",
+		}, {
+			input: "show errors",
+		}, {
+			input: "show full processlist",
+		}, {
+			input: "show processlist",
+		}, {
+			input:  "show full tables from db1 like 'a%' where a != 0",
+			output: "show full tables from db1 like a% where a != 0",
+		}, {
+			input:  "show open tables from db1 like 'a%' where a != 0",
+			output: "show open tables from db1 like a% where a != 0",
+		}, {
+			input:  "show tables from db1 like 'a%' where a != 0",
+			output: "show tables from db1 like a% where a != 0",
+		}, {
+			input:  "show databases like 'a%' where a != 0",
+			output: "show databases like a% where a != 0",
+		}, {
+			input: "show databases",
+		}, {
+			input:  "show extended full columns from t from db like 'a%'",
+			output: "show extended full columns from t from db like a%",
+		}, {
+			input: "show extended full columns from t from db where a != 0",
+		}, {
+			input: "show columns from t from db where a != 0",
+		}, {
+			input: "show columns from t from db",
+		}, {
+			input: "show create database if not exists db",
+		}, {
+			input: "show create database db",
+		}, {
+			input: "show create table db.t1",
+		}, {
+			input: "show create table t1",
+		}, {
+			input: "drop user if exists u1, u2, u3",
+		}, {
+			input: "drop user u1",
+		}, {
+			input: "drop role r1",
+		}, {
+			input: "drop role if exists r1, r2, r3",
+		}, {
+			input: "drop index if exists idx1 on db.t",
+		}, {
+			input: "drop index idx1 on db.t",
+		}, {
+			input: "drop table if exists t1, t2, db.t",
+		}, {
+			input: "drop table db.t",
+		}, {
+			input: "drop table if exists t",
+		}, {
+			input: "drop database if exists t",
+		}, {
+			input: "drop database t",
+		}, {
+			input:  "create role if not exists 'a', 'b'",
+			output: "create role if not exists a, b",
+		}, {
+			input:  "create role if not exists 'webapp'",
+			output: "create role if not exists webapp",
+		}, {
+			input:  "create role 'admin', 'developer'",
+			output: "create role admin, developer",
+		}, {
+			input:  "create index idx1 on a (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
+			output: "create index idx1 on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
+		}, {
+			input:  "create index idx1 using btree on A (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
+			output: "create index idx1 using btree on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
+		}, {
+			input: "create index idx1 on a (a)",
+		}, {
+			input: "create unique index idx1 using btree on a (a, b(10), (a + b), (a - b)) visible",
+		}, {
+			input:  "create database test_db default collate 'utf8mb4_general_ci' collate utf8mb4_general_ci",
+			output: "create database test_db default collate utf8mb4_general_ci collate utf8mb4_general_ci",
+		}, {
+			input: "create database if not exists test_db character set geostd8",
+		}, {
+			input: "create database test_db default collate utf8mb4_general_ci",
+		}, {
+			input: "create database if not exists db",
+		}, {
+			input: "create database db",
+		}, {
+			input: "delete from a as aa",
+		}, {
+			input: "delete from t where a > 1 order by b limit 1 offset 2",
+		}, {
+			input: "delete from t where a = 1",
+		}, {
+			input: "insert into u partition(p1, p2) (a, b, c, d) values (1, 2, 3, 4), (5, 6, 1, 0)",
+		}, {
+			input:  "insert into t values ('aa', 'bb', 'cc')",
+			output: "insert into t values (aa, bb, cc)",
+		}, {
+			input:  "insert into t() values (1, 2, 3)",
+			output: "insert into t values (1, 2, 3)",
+		}, {
+			input: "insert into t (c1, c2, c3) values (1, 2, 3)",
+		}, {
+			input: "insert into t (c1, c2, c3) select c1, c2, c3 from t1",
+		}, {
+			input: "insert into t select c1, c2, c3 from t1",
+		}, {
+			input: "insert into t values (1, 3, 4)",
+		}, {
+			input:  "create table t1 (`show` bool(0));",
+			output: "create table t1 (show bool(0))",
+		}, {
+			input:  "create table t1 (t bool(0));",
+			output: "create table t1 (t bool(0))",
+		}, {
+			input: "create table t1 (t char(0))",
+		}, {
+			input: "create table t1 (t bool(20), b int, c char(20), d varchar(20))",
+		}, {
+			input: "create table t (a int(20) not null)",
+		}, {
+			input: "create table db.t (db.t.a int(20) null)",
+		}, {
+			input: "create table t (a float(20, 20) not null, b int(20) null, c int(30) null)",
+		}, {
+			input:  "create table t1 (t time(3) null, dt datetime(6) null, ts timestamp(1) null)",
+			output: "create table t1 (t time(3) null, dt datetime(26, 6) null, ts timestamp(26, 1) null)",
+		}, {
+			input:  "create table t1 (a int default 1 + 1 - 2 * 3 / 4 div 7 ^ 8 << 9 >> 10 % 11)",
+			output: "create table t1 (a int default 1 + 1 - 2 * 3 / 4 div 7 ^ 8 << 9 >> 10 % 11)",
+		}, {
+			input: "create table t1 (t bool default -1 + +1)",
+		}, {
+			input: "create table t (id int unique key)",
+		}, {
+			input: "select * from t",
+		}, {
+			input: "select c1, c2, c3 from t1, t as t2 where t1.c1 = 1 group by c2 having c2 > 10",
+		}, {
+			input: "select a from t order by a desc limit 1 offset 2",
+		}, {
+			input:  "select a from t order by a desc limit 1, 2",
+			output: "select a from t order by a desc limit 2 offset 1",
+		}, {
+			input: "select * from t union select c from t1",
+		}, {
+			input: "select * from t union all select c from t1",
+		}, {
+			input: "select * from t union distinct select c from t1",
+		}, {
+			input: "select * from t except select c from t1",
+		}, {
+			input: "select * from t except all select c from t1",
+		}, {
+			input: "select * from t except distinct select c from t1",
+		}, {
+			input: "select * from t intersect select c from t1",
+		}, {
+			input: "select * from t intersect all select c from t1",
+		}, {
+			input: "select * from t intersect distinct select c from t1",
+		}, {
+			input: "select * from t minus all select c from t1",
+		}, {
+			input: "select * from t minus distinct select c from t1",
+		}, {
+			input: "select * from t minus select c from t1",
+		}, {
+			input: "select * from (select a from t) as t1",
+		}, {
+			input:  "select * from (select a from t) as t1 join t2 on 1",
+			output: "select * from (select a from t) as t1 inner join t2 on 1",
+		}, {
+			input: "select * from (select a from t) as t1 inner join t2 using (a)",
+		}, {
+			input: "select * from (select a from t) as t1 cross join t2",
+		}, {
+			input:  "select * from t1 join t2 using (a, b, c)",
+			output: "select * from t1 inner join t2 using (a, b, c)",
+		}, {
+			input: "select * from t1 straight_join t2 on 1 + 213",
+		}, {
+			input: "select * from t1 straight_join t2 on col",
+		}, {
+			input:  "select * from t1 right outer join t2 on 123",
+			output: "select * from t1 right join t2 on 123",
+		}, {
+			input: "select * from t1 natural left join t2",
+		}, {
+			input: "select 1",
+		}, {
+			input: "select $ from t",
+		}, {
+			input:  "analyze table part (a,b )",
+			output: "analyze table part(a, b)",
+		}, {
+			input:  "select $ from t into outfile '/Users/tmp/test'",
+			output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
+		}, {
+			input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ','",
+			output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
+		}, {
+			input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'",
+			output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
+		}, {
+			input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'TRUE'",
+			output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
+		}, {
+			input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE'",
+			output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false",
+		}, {
+			input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE' MAX_FILE_SIZE 100",
+			output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false max_file_size 102400",
+		}, {
+			input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE' MAX_FILE_SIZE 100 FORCE_QUOTE (a, b)",
+			output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false max_file_size 102400 force_quote a, b",
+		}, {
+			input: "drop prepare stmt_name1",
+		}, {
+			input: "deallocate prepare stmt_name1",
+		}, {
+			input: "execute stmt_name1",
+		}, {
+			input: "execute stmt_name1 using @var_name,@@sys_name",
+		}, {
+			input: "prepare stmt_name1 from select * from t1",
+		}, {
+			input:  "prepare stmt_name1 from 'select * from t1'",
+			output: "prepare stmt_name1 from select * from t1",
+		}, {
+			input: "prepare stmt_name1 from select * from t1 where a > ? or abs(b) < ?",
+		}, {
+			input: "create account if not exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
+		}, {
+			input: "create account if not exists nihao admin_name 'admin' identified by random password",
+		}, {
+			input: "create account if not exists nihao admin_name 'admin' identified with '123'",
+		}, {
+			input: "create account nihao admin_name 'admin' identified by '123' open comment 'new account'",
+		}, {
+			input: "create account nihao admin_name 'admin' identified by random password",
+		}, {
+			input: "create account nihao admin_name 'admin' identified with '123'",
+		}, {
+			input: "drop account if exists abc",
+		}, {
+			input: "alter account if exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
+		}, {
+			input: "alter account if exists nihao admin_name 'admin' identified by random password",
+		}, {
+			input: "alter account if exists nihao admin_name 'admin' identified with '123'",
+		}, {
+			input: "alter account nihao admin_name 'admin' identified by '123' open comment 'new account'",
+		}, {
+			input: "alter account nihao admin_name 'admin' identified by random password",
+		}, {
+			input: "alter account nihao admin_name 'admin' identified with '123'",
+		}, {
+			input: "create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 default role de_role " +
+				"lock " +
+				"unlock " +
+				"password expire " +
+				"password expire interval 3 day " +
+				"password history 4 " +
+				"password reuse interval 5 day " +
+				"password require current " +
+				"password require current default " +
+				"failed_login_attempts 6 " +
+				"password_lock_time 7 " +
+				"comment 'new comment'",
+		}, {
+			input: "create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 default role de_role " +
+				"lock " +
+				"unlock " +
+				"password expire " +
+				"password expire interval 3 day " +
+				"password history 4 " +
+				"password reuse interval 5 day " +
+				"password require current " +
+				"password require current default " +
+				"failed_login_attempts 6 " +
+				"password_lock_time 7 " +
+				"attribute 'new attribute'",
+		}, {
+			input: "create user if not exists abc1 identified by '123', abc2 identified by '234', abc3, " +
+				"abc4 identified by random password, " +
+				"abc5 identified with '345' " +
+				"default role de_role " +
+				"attribute 'new attribute'",
+		}, {
+			input: "create user if not exists abc1 " +
+				"default role de_role " +
+				"comment 'new comment'",
+		}, {
+			input: "create user if not exists abc1 " +
+				"default role de_role",
+		}, {
+			input: "create user if not exists abc1 identified by '123' " +
+				"default role de_role",
+		}, {
+			input: "create user if not exists abc1 identified by '123' " +
+				"default role de_role",
+		}, {
+			input: "create user abc1 identified by '123' " +
+				"default role de_role",
+		}, {
+			input: "create user abc1 " +
+				"default role de_role",
+		}, {
+			input: "drop user if exists abc1, abc2, abc3",
+		}, {
+			input: "drop user abc1, abc2, abc3",
+		}, {
+			input: "drop user abc1",
+		}, {
+			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 " +
+				"default role de_role " +
+				"lock " +
+				"unlock " +
+				"password expire " +
+				"password expire interval 3 day " +
+				"password history 4 " +
+				"password reuse interval 5 day " +
+				"password require current " +
+				"password require current default " +
+				"failed_login_attempts 6 " +
+				"password_lock_time 7 " +
+				"comment 'new comment'",
+		}, {
+			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 " +
+				"lock " +
+				"unlock " +
+				"password expire " +
+				"password expire interval 3 day " +
+				"password history 4 " +
+				"password reuse interval 5 day " +
+				"password require current " +
+				"password require current default " +
+				"failed_login_attempts 6 " +
+				"password_lock_time 7 " +
+				"comment 'new comment'",
+		}, {
+			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 " +
+				"lock " +
+				"unlock " +
+				"password expire " +
+				"password expire interval 3 day " +
+				"password history 4 " +
+				"password reuse interval 5 day " +
+				"password require current " +
+				"password require current default " +
+				"failed_login_attempts 6 " +
+				"password_lock_time 7 " +
+				"attribute 'new attribute'",
+		}, {
+			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 " +
+				"attribute 'new attribute'",
+		}, {
+			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3",
+		}, {
+			input: "alter user if exists abc1 identified by '123', abc2 identified with '234', abc3 identified with 'SSL'",
+		}, {
+			input: "alter user if exists abc1 identified by '123'",
+		}, {
+			input: "alter user if exists abc1",
+		}, {
+			input: "alter user abc1",
+		}, {
+			input: "create role if not exists role1, role2, role2",
+		}, {
+			input: "create role role1",
+		}, {
+			input: "drop role if exists role1, role2, role2",
+		}, {
+			input: "drop role if exists role1",
+		}, {
+			input: "drop role role1",
+		}, {
+			input: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a to u1, u2 with grant option",
+		}, {
+			input: "grant all, all(a, b) on *.* to u1, u2 with grant option",
+		}, {
+			input: "grant all, all(a, b) on db.a to u1, u2 with grant option",
+		}, {
+			input: "grant all, all(a, b) on db.* to u1, u2 with grant option",
+		}, {
+			input: "grant all, all(a, b) on * to u1, u2 with grant option",
+		}, {
+			input: "grant all, all(a, b) on *.* to u1, u2 with grant option",
+		}, {
+			input: "grant all, all(a, b) on db1.* to u1, u2 with grant option",
+		}, {
+			input: "grant all, all(a, b) on db1.tb1 to u1, u2 with grant option",
+		}, {
+			input: "grant all, all(a, b) on tb1 to u1, u2 with grant option",
+		}, {
+			input: "grant r1, r2 to u1, u2, r3 with grant option",
+		}, {
+			input: "grant r1, r2 to u1, u2, r3",
+		}, {
+			input: "grant r1, r2 to u1@h1, u2@h2, r3",
+		}, {
+			input:  "revoke if exists all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.A from u1, 'u2'@'h2', ''@'h3'",
+			output: "revoke if exists all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a from u1, u2@h2, @h3",
+		}, {
+			input: "revoke if exists r1, r2, r3 from u1, u2, u3",
+		}, {
+			input: "revoke if exists super(a, b, c) on procedure db.func from h3",
+		}, {
+			input:  "revoke if exists all on table db.A from u1, 'u2'@'h2', ''@'h3'",
+			output: "revoke if exists all on table db.a from u1, u2@h2, @h3",
+		}, {
+			input: "revoke if exists all on table db.a from u1",
+		}, {
+			input: "use db1",
+		}, {
+			input: "use role r1",
+		}, {
+			input: "use secondary role all",
+		}, {
+			input: "use secondary role none",
+		}}
 )
 
 func TestValid(t *testing.T) {

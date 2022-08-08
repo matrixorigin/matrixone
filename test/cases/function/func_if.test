@@ -9,9 +9,7 @@ SELECT * FROM t1 WHERE IF(1 AND a, 0, 1);
 -- @bvt:issue
 drop table t1;
 
-
--- @bvt:issue#3333
--- @bvt:issue#3183
+drop table if exists t;
 CREATE TABLE t (i1 INT,
 d1 DOUBLE,
 e2 DECIMAL(5,2));
@@ -21,8 +19,6 @@ INSERT INTO t VALUES ( 6,    6.0,  10.0/3),
 ( 2,    2.0,  null  );
 SELECT coalesce(e2,i1) nullif_c, IF(e2 IS NULL,i1,e2) if_c, SUM(d1) FROM t GROUP BY e2,i1 ORDER BY nullif_c, SUM(d1);
 DROP TABLE t;
--- @bvt:issue
--- @bvt:issue
 
 -- @bvt:issue#3588
 CREATE TABLE source(bt INTEGER, bf INTEGER, i8u BIGINT UNSIGNED, i8s BIGINT);
@@ -42,20 +38,17 @@ drop table t1;
 select if(1, cast(1111111111111111111 as unsigned), 1) i, case when 1 then cast(1111111111111111111 as unsigned) else 1 end c, coalesce(cast(1111111111111111111 as unsigned), 1) co;
 -- @bvt:issue
 
--- @bvt:issue#3183
 create table t1 (a bigint unsigned);
 insert into t1 select (if(1, 9223372036854775808, 1));
 insert into t1 select (case when 1 then 9223372036854775808 else 1 end);
 insert into t1 select (coalesce(9223372036854775808, 1));
 select * from t1;
 drop table t1;
--- @bvt:issue
 
-
+drop table if exists t;
 CREATE TABLE t (i1 INT,
 d1 DOUBLE,
 e2 DECIMAL(5,2));
--- @bvt:issue#3333
 INSERT INTO t VALUES ( 6,    6.0,  10.0/3),
 ( null, 9.0,  10.0/3),
 ( 1,    null, 10.0/3),
@@ -63,7 +56,6 @@ INSERT INTO t VALUES ( 6,    6.0,  10.0/3),
 SELECT IF(e2 IS NULL,i1,e2) if_c,
 SUM(d1) FROM t
 GROUP BY e2,i1 ORDER BY SUM(d1);
--- @bvt:issue
 DROP TABLE t;
 
 
@@ -161,9 +153,7 @@ DROP TABLE t1;
 
 
 CREATE TABLE t1 (c varchar(255));
--- @bvt:issue#3333
 INSERT INTO t1 VALUES(1), (2), (3), (4), ('12345678901234567890');
--- @bvt:issue
 -- @bvt:issue#3588
 SELECT * FROM (SELECT MAX(IF(1, CAST(c AS UNSIGNED), 0)) FROM t1) AS te;
 -- @bvt:issue

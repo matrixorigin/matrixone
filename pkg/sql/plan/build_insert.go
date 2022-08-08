@@ -16,11 +16,11 @@ package plan
 
 import (
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -36,8 +36,171 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
 	}
 }
 
-func buildInsertValues(_ *tree.Insert, _ CompilerContext) (p *Plan, err error) {
-	return nil, errors.New(errno.FeatureNotSupported, "building plan for insert values is not supported now")
+func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
+	// get table source
+	tbl, ok := stmt.Table.(*tree.TableName)
+	if !ok {
+		return nil, errors.New("", fmt.Sprintf("Invalid table name: %s", tree.String(stmt.Table, dialect.MYSQL)))
+	}
+	tblName := string(tbl.ObjectName)
+	dbName := string(tbl.SchemaName)
+	if dbName == "" {
+		dbName = ctx.DefaultDatabase()
+	}
+	_, tblRef := ctx.Resolve(dbName, tblName)
+	if tblRef == nil {
+		return nil, errors.New("", fmt.Sprintf("Invalid table name: %s", tree.String(stmt.Table, dialect.MYSQL)))
+	}
+
+	// build columns
+	colCount := len(tblRef.Cols)
+
+	hasExplicitCols := false
+	if stmt.Columns != nil {
+		hasExplicitCols = true
+	}
+
+	var explicitCols []*ColDef
+	if stmt.Columns == nil {
+		explicitCols = append(explicitCols, tblRef.Cols...)
+	} else {
+		for _, attr := range stmt.Columns {
+			hasAttr := false
+			for _, col := range tblRef.Cols {
+				if string(attr) == col.Name {
+					explicitCols = append(explicitCols, col)
+					hasAttr = true
+					break
+				}
+			}
+			if !hasAttr {
+				return nil, errors.New("", fmt.Sprintf("Unknown column '%s' in 'field list'", string(attr)))
+			}
+		}
+	}
+	explicitCount := len(explicitCols)
+
+	orderAttrs := make([]string, 0, colCount)
+	for _, col := range tblRef.Cols {
+		orderAttrs = append(orderAttrs, col.Name)
+	}
+
+	var otherCols []*ColDef
+	if len(explicitCols) < colCount {
+		for _, c1 := range tblRef.Cols {
+			hasCol := false
+			for _, c2 := range explicitCols {
+				if c1.Name == c2.Name {
+					hasCol = true
+					break
+				}
+			}
+			if !hasCol {
+				otherCols = append(otherCols, c1)
+			}
+		}
+	}
+
+	rows := stmt.Rows.Select.(*tree.ValuesClause).Rows
+	isAllDefault := false
+	if rows[0] == nil {
+		isAllDefault = true
+	}
+
+	if isAllDefault && hasExplicitCols {
+		return nil, errors.New("", "Column count doesn't match value count at row 1")
+	}
+
+	rowCount := len(rows)
+	columns := make([]*plan.Column, colCount)
+	for i := range columns {
+		columns[i] = &plan.Column{
+			Column: make([]*plan.Expr, 0, rowCount),
+		}
+	}
+
+	if isAllDefault {
+		// hasExplicitCols must be false
+		for i, row := range rows {
+			if row != nil {
+				return nil, errors.New("", fmt.Sprintf("Column count doesn't match value count at row %d", i+1))
+			}
+			// build column
+			for j, col := range explicitCols {
+				expr, err := getDefaultExpr(col.Default, col.Typ)
+				if err != nil {
+					return nil, err
+				}
+				columns[j].Column = append(columns[j].Column, expr)
+			}
+		}
+	} else {
+		// hasExplicitCols maybe true or false
+		for i, row := range rows {
+			if row == nil || explicitCount != len(row) {
+				return nil, errors.New("", fmt.Sprintf("Column count doesn't match value count at row %d", i+1))
+			}
+
+			idx := 0
+			for j, col := range explicitCols {
+				if _, ok := row[idx].(*tree.DefaultVal); ok {
+					expr, err := getDefaultExpr(col.Default, col.Typ)
+					if err != nil {
+						return nil, err
+					}
+					columns[idx].Column = append(columns[idx].Column, expr)
+				} else {
+					binder := NewDefaultBinder(nil, nil, col.Typ)
+					planExpr, err := binder.BindExpr(row[idx], 0, false)
+					if err != nil {
+						err = MakeInsertError(types.T(col.Typ.Id), col, rows, j, i)
+						return nil, err
+					}
+					resExpr, err := makePlan2CastExpr(planExpr, col.Typ)
+					if err != nil {
+						err = MakeInsertError(types.T(col.Typ.Id), col, rows, j, i)
+						return nil, err
+					}
+					columns[idx].Column = append(columns[idx].Column, resExpr)
+				}
+				idx++
+			}
+
+			for _, col := range otherCols {
+				expr, err := getDefaultExpr(col.Default, col.Typ)
+				if err != nil {
+					return nil, err
+				}
+				columns[idx].Column = append(columns[idx].Column, expr)
+				idx++
+			}
+		}
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ins{
+			Ins: &plan.InsertValues{
+				DbName:       dbName,
+				TblName:      tblName,
+				ExplicitCols: explicitCols,
+				OtherCols:    otherCols,
+				OrderAttrs:   orderAttrs,
+				Columns:      columns,
+			},
+		},
+	}, nil
+}
+
+func MakeInsertError(id types.T, col *ColDef, rows []tree.Exprs, colIdx, rowIdx int) error {
+	var str string
+	if rows[rowIdx] == nil || len(rows[rowIdx]) < colIdx {
+		str = col.Default.OriginString
+	} else if _, ok := rows[rowIdx][colIdx].(*tree.DefaultVal); ok {
+		str = col.Default.OriginString
+	} else {
+		str = tree.String(rows[rowIdx][colIdx], dialect.MYSQL)
+	}
+	return fmt.Errorf("%s truncation: Incorrect %s value: '%s' for column '%s' at row %d", "Data", id.String(), str, col.Name, rowIdx)
 }
 
 func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
@@ -92,7 +255,6 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 
 func getInsertExprs(stmt *tree.Insert, cols []*ColDef, tableDef *TableDef) ([]*Expr, error) {
 	var exprs []*Expr
-	var err error
 
 	if len(stmt.Columns) == 0 {
 		exprs = make([]*Expr, len(cols))
@@ -133,8 +295,8 @@ func getInsertExprs(stmt *tree.Insert, cols []*ColDef, tableDef *TableDef) ([]*E
 					},
 				}
 			} else {
-				// get default value, and init constant expr.
-				exprs[i], err = generateDefaultExpr(tableDef.Cols[i].Default, tableDef.Cols[i].Typ)
+				var err error
+				exprs[i], err = getDefaultExpr(tableDef.Cols[i].Default, tableDef.Cols[i].Typ)
 				if err != nil {
 					return nil, err
 				}
@@ -142,61 +304,6 @@ func getInsertExprs(stmt *tree.Insert, cols []*ColDef, tableDef *TableDef) ([]*E
 		}
 	}
 	return exprs, nil
-}
-
-func generateDefaultExpr(e *plan.DefaultExpr, t *plan.Type) (*Expr, error) {
-	if e == nil || !e.Exist || e.IsNull {
-		return &plan.Expr{
-			Typ: t,
-			Expr: &plan.Expr_C{
-				C: &Const{Isnull: true},
-			},
-		}, nil
-	}
-	var ret = plan.Expr{Typ: &plan.Type{
-		Id:        t.Id,
-		Nullable:  t.Nullable,
-		Width:     t.Width,
-		Precision: t.Precision,
-		Size:      t.Size,
-		Scale:     t.Scale,
-	}}
-	switch d := e.Value.ConstantValue.(type) {
-	case *plan.ConstantValue_BoolV:
-		ret.Expr = makePlan2BoolConstExpr(d.BoolV)
-	case *plan.ConstantValue_Int64V:
-		ret.Expr = makePlan2Int64ConstExpr(d.Int64V)
-		ret.Typ.Id = plan.Type_INT64
-		ret.Typ.Size = 8
-		ret.Typ.Width = 64
-	case *plan.ConstantValue_Uint64V:
-		ret.Expr = makePlan2Uint64ConstExpr(d.Uint64V)
-		ret.Typ.Id = plan.Type_UINT64
-		ret.Typ.Size = 8
-		ret.Typ.Width = 64
-	case *plan.ConstantValue_Float32V:
-		ret.Expr = makePlan2Float32ConstExpr(d.Float32V)
-	case *plan.ConstantValue_Float64V:
-		ret.Expr = makePlan2Float64ConstExpr(d.Float64V)
-	case *plan.ConstantValue_StringV:
-		ret.Expr = makePlan2StringConstExpr(d.StringV)
-		ret.Typ.Id = plan.Type_VARCHAR
-	case *plan.ConstantValue_DateV:
-		ret.Expr = makePlan2DateConstExpr(types.Date(d.DateV))
-	case *plan.ConstantValue_DateTimeV:
-		ret.Expr = makePlan2DatetimeConstExpr(types.Datetime(d.DateTimeV))
-	case *plan.ConstantValue_Decimal64V:
-		d64 := types.Decimal64FromInt64Raw(d.Decimal64V.A)
-		ret.Expr = makePlan2Decimal64ConstExpr(d64)
-	case *plan.ConstantValue_Decimal128V:
-		d128 := types.Decimal128FromInt64Raw(d.Decimal128V.A, d.Decimal128V.B)
-		ret.Expr = makePlan2Decimal128ConstExpr(d128)
-	case *plan.ConstantValue_TimeStampV:
-		ret.Expr = makePlan2TimestampConstExpr(types.Timestamp(d.TimeStampV))
-	default:
-		return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("default type '%s' is not support now", t))
-	}
-	return &ret, nil
 }
 
 func getInsertTable(stmt tree.TableExpr, ctx CompilerContext) (*ObjectRef, *TableDef, error) {

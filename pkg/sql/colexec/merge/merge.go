@@ -20,20 +20,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ interface{}, buf *bytes.Buffer) {
-	buf.WriteString(" merge ")
+func String(_ any, buf *bytes.Buffer) {
+	buf.WriteString(" union all ")
 }
 
-func Prepare(_ *process.Process, arg interface{}) error {
+func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
-	ap.ctr = new(Container)
+	ap.ctr = new(container)
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
 	ap := arg.(*Argument)
 	for {
 		if len(proc.Reg.MergeReceivers) == 0 {
+			proc.SetInputBatch(nil)
 			return true, nil
 		}
 		reg := proc.Reg.MergeReceivers[ap.ctr.i]
@@ -48,6 +52,8 @@ func Call(_ int, proc *process.Process, arg interface{}) (bool, error) {
 		if bat.Length() == 0 {
 			continue
 		}
+		anal.Input(bat)
+		anal.Output(bat)
 		proc.SetInputBatch(bat)
 		if ap.ctr.i = ap.ctr.i + 1; ap.ctr.i >= len(proc.Reg.MergeReceivers) {
 			ap.ctr.i = 0

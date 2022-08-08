@@ -2,7 +2,7 @@
 
 ## **Description**
 
-The LOAD DATA statement reads rows from a text file into a table at a very high speed.
+The LOAD DATA statement reads rows from a csv file into a table at a very high speed.
 
 ## **Syntax**
 
@@ -32,4 +32,4 @@ The SSB Test is an example of LOAD DATA syntax. [Complete a SSB Test with Matrix
 
 ## **Constraints**
 
-Only CSV format file is supported for now. 
+Only CSV format file is supported for now.

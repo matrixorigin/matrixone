@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 func init() {
@@ -28,25 +29,45 @@ func init() {
 	for i := range OneInt64s {
 		OneInt64s[i] = 1
 	}
-}
-
-func NewStrMap(hasNull bool) *StrHashMap {
-	mp := &hashtable.StringHashMap{}
-	mp.Init()
-	return &StrHashMap{
-		hashMap:         mp,
-		hasNull:         hasNull,
-		values:          make([]uint64, UnitLimit),
-		zValues:         make([]int64, UnitLimit),
-		keys:            make([][]byte, UnitLimit),
-		strHashStates:   make([][3]uint64, UnitLimit),
-		decimal64Slice:  make([]types.Decimal64, UnitLimit),
-		decimal128Slice: make([]types.Decimal128, UnitLimit),
+	OneUInt8s = make([]uint8, UnitLimit)
+	for i := range OneUInt8s {
+		OneUInt8s[i] = 1
 	}
 }
 
+func NewStrMap(hasNull bool, ibucket, nbucket uint64, m *mheap.Mheap) (*StrHashMap, error) {
+	mp := &hashtable.StringHashMap{}
+	if err := mp.Init(m); err != nil {
+		return nil, err
+	}
+	return &StrHashMap{
+		m:             m,
+		hashMap:       mp,
+		hasNull:       hasNull,
+		ibucket:       ibucket,
+		nbucket:       nbucket,
+		values:        make([]uint64, UnitLimit),
+		zValues:       make([]int64, UnitLimit),
+		keys:          make([][]byte, UnitLimit),
+		strHashStates: make([][3]uint64, UnitLimit),
+	}, nil
+}
+
 func (m *StrHashMap) NewIterator() Iterator {
-	return &strHashmapIterator{mp: m}
+	return &strHashmapIterator{
+		mp:      m,
+		m:       m.m,
+		ibucket: m.ibucket,
+		nbucket: m.nbucket,
+	}
+}
+
+func (m *StrHashMap) HasNull() bool {
+	return m.hasNull
+}
+
+func (m *StrHashMap) Free() {
+	m.hashMap.Free(m.m)
 }
 
 func (m *StrHashMap) GroupCount() uint64 {
@@ -57,9 +78,17 @@ func (m *StrHashMap) AddGroup() {
 	m.rows++
 }
 
+func (m *StrHashMap) AddGroups(rows uint64) {
+	m.rows += rows
+}
+
+func (m *StrHashMap) Cardinality() uint64 {
+	return m.hashMap.Cardinality()
+}
+
 // InsertValue insert a value, return true if it is new, otherwise false
 // never handle null
-func (m *StrHashMap) InsertValue(val any) bool {
+func (m *StrHashMap) InsertValue(val any) (bool, error) {
 	defer func() { m.keys[0] = m.keys[0][:0] }()
 	if m.hasNull {
 		m.keys[0] = append(m.keys[0], byte(0))
@@ -87,6 +116,12 @@ func (m *StrHashMap) InsertValue(val any) bool {
 		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	case []byte:
 		m.keys[0] = append(m.keys[0], v...)
+	case types.Date:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case types.Datetime:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
+	case types.Timestamp:
+		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	case types.Decimal64:
 		m.keys[0] = append(m.keys[0], encoding.EncodeFixed(v)...)
 	case types.Decimal128:
@@ -95,48 +130,28 @@ func (m *StrHashMap) InsertValue(val any) bool {
 	if l := len(m.keys[0]); l < 16 {
 		m.keys[0] = append(m.keys[0], hashtable.StrKeyPadding[l:]...)
 	}
-	m.hashMap.InsertStringBatch(m.strHashStates, m.keys[:1], m.values[:1])
+	if err := m.hashMap.InsertStringBatch(m.strHashStates, m.keys[:1], m.values[:1], m.m); err != nil {
+		return false, err
+	}
 	if m.values[0] > m.rows {
 		m.rows++
-		return true
+		return true, nil
 	}
-	return false
+	return false, nil
 }
 
 // Insert a row from multiple columns into the hashmap, return true if it is new, otherwise false
-func (m *StrHashMap) Insert(vecs []*vector.Vector, row int) bool {
+func (m *StrHashMap) Insert(vecs []*vector.Vector, row int) (bool, error) {
 	defer func() { m.keys[0] = m.keys[0][:0] }()
 	m.encodeHashKeys(vecs, row, 1)
-	m.hashMap.InsertStringBatch(m.strHashStates, m.keys[:1], m.values[:1])
+	if err := m.hashMap.InsertStringBatch(m.strHashStates, m.keys[:1], m.values[:1], m.m); err != nil {
+		return false, err
+	}
 	if m.values[0] > m.rows {
 		m.rows++
-		return true
+		return true, nil
 	}
-	return false
-}
-
-func (m *StrHashMap) encodeHashKeysWithScale(vecs []*vector.Vector, start, count int, scales []int32) {
-	for i, vec := range vecs {
-		switch typLen := vec.Typ.TypeSize(); typLen {
-		case 1:
-			fillGroupStr[uint8](m, vec, count, 1, start, scales[i])
-		case 2:
-			fillGroupStr[uint16](m, vec, count, 2, start, scales[i])
-		case 4:
-			fillGroupStr[uint32](m, vec, count, 4, start, scales[i])
-		case 8:
-			fillGroupStr[uint64](m, vec, count, 8, start, scales[i])
-		case 16:
-			fillGroupStr[types.Decimal128](m, vec, count, 16, start, scales[i])
-		default:
-			fillStringGroupStr(m, vec, count, start)
-		}
-	}
-	for i := 0; i < count; i++ {
-		if l := len(m.keys[i]); l < 16 {
-			m.keys[i] = append(m.keys[i], hashtable.StrKeyPadding[l:]...)
-		}
-	}
+	return false, nil
 }
 
 func (m *StrHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
@@ -195,23 +210,8 @@ func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int) {
 }
 
 func fillGroupStr[T any](m *StrHashMap, vec *vector.Vector, n int, sz int, start int, scale int32) {
-	var data []byte
-
-	if scale > 0 {
-		if vec.Typ.Oid == types.T_decimal64 {
-			src := vector.GetFixedVectorValues[types.Decimal64](vec, sz)
-			vs := types.AlignDecimal64UsingScaleDiffBatch(src[start:start+n], m.decimal64Slice[:n], scale)
-			data = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*sz)[:len(vs)*sz]
-		} else if vec.Typ.Oid == types.T_decimal128 {
-			src := vector.GetFixedVectorValues[types.Decimal128](vec, sz)
-			vs := m.decimal128Slice[:n]
-			types.AlignDecimal128UsingScaleDiffBatch(src[start:start+n], vs, scale)
-			data = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*sz)[:len(vs)*sz]
-		}
-	} else {
-		vs := vector.GetFixedVectorValues[T](vec, int(sz))
-		data = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*sz)[:len(vs)*sz]
-	}
+	vs := vector.GetFixedVectorValues[T](vec, int(sz))
+	data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*sz)[:len(vs)*sz]
 	if !vec.GetNulls().Any() {
 		for i := 0; i < n; i++ {
 			if m.hasNull {

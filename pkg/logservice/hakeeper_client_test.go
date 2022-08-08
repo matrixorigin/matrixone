@@ -20,6 +20,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/errors"
+
+	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
@@ -28,6 +31,19 @@ import (
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
+
+func TestHAKeeperClientConfigIsValidated(t *testing.T) {
+	cfg := HAKeeperClientConfig{}
+	cc1, err := NewCNHAKeeperClient(context.TODO(), cfg)
+	assert.Nil(t, cc1)
+	assert.True(t, errors.Is(err, ErrInvalidConfig))
+	cc2, err := NewDNHAKeeperClient(context.TODO(), cfg)
+	assert.Nil(t, cc2)
+	assert.True(t, errors.Is(err, ErrInvalidConfig))
+	cc3, err := NewLogHAKeeperClient(context.TODO(), cfg)
+	assert.Nil(t, cc3)
+	assert.True(t, errors.Is(err, ErrInvalidConfig))
+}
 
 func TestHAKeeperClientsCanBeCreated(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
@@ -207,6 +223,7 @@ func TestHAKeeperClientSendLogHeartbeat(t *testing.T) {
 func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAKeeperClient)) {
 	defer leaktest.AfterTest(t)()
 	cfg1 := Config{
+		UUID:                uuid.New().String(),
 		FS:                  vfs.NewStrictMem(),
 		DeploymentID:        1,
 		RTTMillisecond:      5,
@@ -218,6 +235,7 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 		DisableWorkers:      true,
 	}
 	cfg2 := Config{
+		UUID:                uuid.New().String(),
 		FS:                  vfs.NewStrictMem(),
 		DeploymentID:        1,
 		RTTMillisecond:      5,

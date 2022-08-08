@@ -15,13 +15,16 @@
 package compile
 
 import (
+	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/joincondition"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopcomplement"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -34,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregate"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/complement"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -53,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -69,7 +72,8 @@ func init() {
 
 func dupInstruction(in vm.Instruction) vm.Instruction {
 	rin := vm.Instruction{
-		Op: in.Op,
+		Op:  in.Op,
+		Idx: in.Idx,
 	}
 	switch arg := in.Arg.(type) {
 	case *top.Argument:
@@ -83,29 +87,40 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		}
 	case *join.Argument:
 		rin.Arg = &join.Argument{
-			IsPreBuild: arg.IsPreBuild,
 			Result:     arg.Result,
-			Conditions: copyCondition(arg.Conditions),
+			Conditions: arg.Conditions,
 		}
 	case *semi.Argument:
 		rin.Arg = &semi.Argument{
-			IsPreBuild: arg.IsPreBuild,
 			Result:     arg.Result,
-			Conditions: copyCondition(arg.Conditions),
+			Conditions: arg.Conditions,
 		}
 	case *left.Argument:
 		rin.Arg = &left.Argument{
-			IsPreBuild: arg.IsPreBuild,
+			Typs:       arg.Typs,
 			Result:     arg.Result,
-			Conditions: copyCondition(arg.Conditions),
+			Conditions: arg.Conditions,
+		}
+	case *group.Argument:
+		rin.Arg = &group.Argument{
+			Aggs:    arg.Aggs,
+			Exprs:   arg.Exprs,
+			Types:   arg.Types,
+			Ibucket: arg.Ibucket,
+			Nbucket: arg.Nbucket,
+		}
+	case *single.Argument:
+		rin.Arg = &single.Argument{
+			Typs:       arg.Typs,
+			Result:     arg.Result,
+			Conditions: arg.Conditions,
 		}
 	case *product.Argument:
 		rin.Arg = &product.Argument{
 			Result: arg.Result,
 		}
-	case *complement.Argument:
-		rin.Arg = &complement.Argument{
-			IsPreBuild: arg.IsPreBuild,
+	case *anti.Argument:
+		rin.Arg = &anti.Argument{
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
 		}
@@ -142,11 +157,17 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		}
 	case *loopleft.Argument:
 		rin.Arg = &loopleft.Argument{
+			Typs:   arg.Typs,
 			Cond:   arg.Cond,
 			Result: arg.Result,
 		}
-	case *loopcomplement.Argument:
-		rin.Arg = &loopcomplement.Argument{
+	case *loopanti.Argument:
+		rin.Arg = &loopanti.Argument{
+			Cond:   arg.Cond,
+			Result: arg.Result,
+		}
+	case *loopsingle.Argument:
+		rin.Arg = &loopsingle.Argument{
 			Cond:   arg.Cond,
 			Result: arg.Result,
 		}
@@ -165,15 +186,16 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 }
 
 func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*deletion.Argument, error) {
+	ctx := context.TODO()
 	count := len(n.DeleteTablesCtx)
 	ds := make([]*deletion.DeleteCtx, count)
 	for i := 0; i < count; i++ {
 
-		dbSource, err := eg.Database(n.DeleteTablesCtx[i].DbName, snapshot)
+		dbSource, err := eg.Database(ctx, n.DeleteTablesCtx[i].DbName, snapshot)
 		if err != nil {
 			return nil, err
 		}
-		relation, err := dbSource.Relation(n.DeleteTablesCtx[i].TblName, snapshot)
+		relation, err := dbSource.Relation(ctx, n.DeleteTablesCtx[i].TblName)
 		if err != nil {
 			return nil, err
 		}
@@ -182,6 +204,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot)
 			TableSource:  relation,
 			UseDeleteKey: n.DeleteTablesCtx[i].UseDeleteKey,
 			CanTruncate:  n.DeleteTablesCtx[i].CanTruncate,
+			IsHideKey:    n.DeleteTablesCtx[i].IsHideKey,
 		}
 	}
 
@@ -191,11 +214,12 @@ func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot)
 }
 
 func constructInsert(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*insert.Argument, error) {
-	db, err := eg.Database(n.ObjRef.SchemaName, snapshot)
+	ctx := context.TODO()
+	db, err := eg.Database(ctx, n.ObjRef.SchemaName, snapshot)
 	if err != nil {
 		return nil, err
 	}
-	relation, err := db.Relation(n.TableDef.Name, snapshot)
+	relation, err := db.Relation(ctx, n.TableDef.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -206,22 +230,37 @@ func constructInsert(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (
 }
 
 func constructUpdate(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*update.Argument, error) {
-	dbSource, err := eg.Database(n.ObjRef.SchemaName, snapshot)
-	if err != nil {
-		return nil, err
-	}
-	relation, err := dbSource.Relation(n.TableDef.Name, snapshot)
-	if err != nil {
-		return nil, err
+	ctx := context.TODO()
+	us := make([]*update.UpdateCtx, len(n.UpdateCtxs))
+	for i, updateCtx := range n.UpdateCtxs {
+
+		dbSource, err := eg.Database(ctx, updateCtx.DbName, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		relation, err := dbSource.Relation(ctx, updateCtx.TblName)
+		if err != nil {
+			return nil, err
+		}
+
+		colNames := make([]string, 0, len(updateCtx.UpdateCols))
+		for _, col := range updateCtx.UpdateCols {
+			colNames = append(colNames, col.Name)
+		}
+
+		us[i] = &update.UpdateCtx{
+			PriKey:      updateCtx.PriKey,
+			PriKeyIdx:   updateCtx.PriKeyIdx,
+			HideKey:     updateCtx.HideKey,
+			HideKeyIdx:  updateCtx.HideKeyIdx,
+			UpdateAttrs: colNames,
+			OtherAttrs:  updateCtx.OtherAttrs,
+			OrderAttrs:  updateCtx.OrderAttrs,
+			TableSource: relation,
+		}
 	}
 	return &update.Argument{
-		TableSource: relation,
-		PriKey:      n.UpdateInfo.PriKey,
-		PriKeyIdx:   n.UpdateInfo.PriKeyIdx,
-		HideKey:     n.UpdateInfo.HideKey,
-		UpdateAttrs: n.UpdateInfo.UpdateAttrs,
-		OtherAttrs:  n.UpdateInfo.OtherAttrs,
-		AttrOrders:  n.UpdateInfo.AttrOrders,
+		UpdateCtxs: us,
 	}, nil
 }
 
@@ -254,18 +293,9 @@ func constructJoin(n *plan.Node, proc *process.Process) *join.Argument {
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
-	conds := make([][]joincondition.Condition, 2)
-	{
-		conds[0] = make([]joincondition.Condition, len(n.OnList))
-		conds[1] = make([]joincondition.Condition, len(n.OnList))
-	}
-	for i, expr := range n.OnList {
-		conds[0][i].Expr, conds[1][i].Expr = constructJoinCondition(expr)
-	}
 	return &join.Argument{
-		IsPreBuild: false,
-		Conditions: conds,
 		Result:     result,
+		Conditions: constructJoinConditions(n.OnList),
 	}
 }
 
@@ -274,42 +304,37 @@ func constructSemi(n *plan.Node, proc *process.Process) *semi.Argument {
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr)
 		if rel != 0 {
-			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("complement result '%s' not support now", expr)))
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("semi result '%s' not support now", expr)))
 		}
 		result[i] = pos
 	}
-	conds := make([][]joincondition.Condition, 2)
-	{
-		conds[0] = make([]joincondition.Condition, len(n.OnList))
-		conds[1] = make([]joincondition.Condition, len(n.OnList))
-	}
-	for i, expr := range n.OnList {
-		conds[0][i].Expr, conds[1][i].Expr = constructJoinCondition(expr)
-	}
 	return &semi.Argument{
-		IsPreBuild: false,
-		Conditions: conds,
 		Result:     result,
+		Conditions: constructJoinConditions(n.OnList),
 	}
 }
 
-func constructLeft(n *plan.Node, proc *process.Process) *left.Argument {
+func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left.Argument {
 	result := make([]left.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
-	conds := make([][]joincondition.Condition, 2)
-	{
-		conds[0] = make([]joincondition.Condition, len(n.OnList))
-		conds[1] = make([]joincondition.Condition, len(n.OnList))
-	}
-	for i, expr := range n.OnList {
-		conds[0][i].Expr, conds[1][i].Expr = constructJoinCondition(expr)
-	}
 	return &left.Argument{
-		IsPreBuild: false,
-		Conditions: conds,
+		Typs:       typs,
 		Result:     result,
+		Conditions: constructJoinConditions(n.OnList),
+	}
+}
+
+func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *single.Argument {
+	result := make([]single.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+	}
+	return &single.Argument{
+		Typs:       typs,
+		Result:     result,
+		Conditions: constructJoinConditions(n.OnList),
 	}
 }
 
@@ -321,27 +346,18 @@ func constructProduct(n *plan.Node, proc *process.Process) *product.Argument {
 	return &product.Argument{Result: result}
 }
 
-func constructComplement(n *plan.Node, proc *process.Process) *complement.Argument {
+func constructAnti(n *plan.Node, proc *process.Process) *anti.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr)
 		if rel != 0 {
-			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("complement result '%s' not support now", expr)))
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("anti result '%s' not support now", expr)))
 		}
 		result[i] = pos
 	}
-	conds := make([][]complement.Condition, 2)
-	{
-		conds[0] = make([]complement.Condition, len(n.OnList))
-		conds[1] = make([]complement.Condition, len(n.OnList))
-	}
-	for i, expr := range n.OnList {
-		conds[0][i].Expr, conds[1][i].Expr = constructJoinCondition(expr)
-	}
-	return &complement.Argument{
-		IsPreBuild: false,
-		Conditions: conds,
+	return &anti.Argument{
 		Result:     result,
+		Conditions: constructJoinConditions(n.OnList),
 	}
 }
 
@@ -380,13 +396,13 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	}
 }
 
-func constructGroup(n, cn *plan.Node) *group.Argument {
+func constructGroup(n, cn *plan.Node, ibucket, nbucket int, needEval bool) *group.Argument {
 	aggs := make([]aggregate.Aggregate, len(n.AggList))
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
 			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
-			f.F.Func.Obj = int64(uint64(f.F.Func.Obj) & function.DistinctMask)
-			fun, err := function.GetFunctionByID(f.F.Func.GetObj())
+			obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
+			fun, err := function.GetFunctionByID(obj)
 			if err != nil {
 				panic(err)
 			}
@@ -406,10 +422,20 @@ func constructGroup(n, cn *plan.Node) *group.Argument {
 		typs[i].Precision = e.Typ.Precision
 	}
 	return &group.Argument{
-		Aggs:  aggs,
-		Types: typs,
-		Exprs: n.GroupBy,
+		Aggs:     aggs,
+		Types:    typs,
+		NeedEval: needEval,
+		Exprs:    n.GroupBy,
+		Ibucket:  uint64(ibucket),
+		Nbucket:  uint64(nbucket),
 	}
+}
+
+func constructDispatch(all bool, regs []*process.WaitRegister) *dispatch.Argument {
+	arg := new(dispatch.Argument)
+	arg.All = all
+	arg.Regs = regs
+	return arg
 }
 
 func constructMergeGroup(_ *plan.Node, needEval bool) *mergegroup.Argument {
@@ -485,7 +511,7 @@ func constructLoopSemi(n *plan.Node, proc *process.Process) *loopsemi.Argument {
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr)
 		if rel != 0 {
-			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("complement result '%s' not support now", expr)))
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("loop semi result '%s' not support now", expr)))
 		}
 		result[i] = pos
 	}
@@ -495,27 +521,39 @@ func constructLoopSemi(n *plan.Node, proc *process.Process) *loopsemi.Argument {
 	}
 }
 
-func constructLoopLeft(n *plan.Node, proc *process.Process) *loopleft.Argument {
+func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *loopleft.Argument {
 	result := make([]loopleft.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
 	return &loopleft.Argument{
+		Typs:   typs,
 		Result: result,
 		Cond:   colexec.RewriteFilterExprList(n.OnList),
 	}
 }
 
-func constructLoopComplement(n *plan.Node, proc *process.Process) *loopcomplement.Argument {
+func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process) *loopsingle.Argument {
+	result := make([]loopsingle.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+	}
+	return &loopsingle.Argument{
+		Result: result,
+		Cond:   colexec.RewriteFilterExprList(n.OnList),
+	}
+}
+
+func constructLoopAnti(n *plan.Node, proc *process.Process) *loopanti.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr)
 		if rel != 0 {
-			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("complement result '%s' not support now", expr)))
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("loop anti result '%s' not support now", expr)))
 		}
 		result[i] = pos
 	}
-	return &loopcomplement.Argument{
+	return &loopanti.Argument{
 		Result: result,
 		Cond:   colexec.RewriteFilterExprList(n.OnList),
 	}
@@ -527,6 +565,16 @@ func constructJoinResult(expr *plan.Expr) (int32, int32) {
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join result '%s' not support now", expr)))
 	}
 	return e.Col.RelPos, e.Col.ColPos
+}
+
+func constructJoinConditions(exprs []*plan.Expr) [][]*plan.Expr {
+	conds := make([][]*plan.Expr, 2)
+	conds[0] = make([]*plan.Expr, len(exprs))
+	conds[1] = make([]*plan.Expr, len(exprs))
+	for i, expr := range exprs {
+		conds[0][i], conds[1][i] = constructJoinCondition(expr)
+	}
+	return conds
 }
 
 func constructJoinCondition(expr *plan.Expr) (*plan.Expr, *plan.Expr) {
@@ -564,7 +612,7 @@ func isEquiJoin(exprs []*plan.Expr) bool {
 				return false
 			}
 			lpos, rpos := hasColExpr(e.F.Args[0], -1), hasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos != rpos) {
+			if lpos == -1 || rpos == -1 || (lpos == rpos) {
 				return false
 			}
 		}
@@ -581,9 +629,9 @@ func hasColExpr(expr *plan.Expr, pos int32) int32 {
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		if pos == -1 {
-			return e.Col.ColPos
+			return e.Col.RelPos
 		}
-		if pos != e.Col.ColPos {
+		if pos != e.Col.RelPos {
 			return -1
 		}
 		return pos
@@ -616,16 +664,4 @@ func exprRelPos(expr *plan.Expr) int32 {
 		}
 	}
 	return -1
-}
-
-func copyCondition(conds [][]joincondition.Condition) [][]joincondition.Condition {
-	rconds := make([][]joincondition.Condition, len(conds))
-	for i := range conds {
-		rconds[i] = make([]joincondition.Condition, len(conds[i]))
-		for j := range conds[i] {
-			rconds[i][j].Expr = conds[i][j].Expr
-			rconds[i][j].Scale = conds[i][j].Scale
-		}
-	}
-	return rconds
 }

@@ -26,10 +26,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	attrClientSession = "cs"
-)
-
 // WithServerLogger set rpc server logger
 func WithServerLogger(logger *zap.Logger) ServerOption {
 	return func(rs *server) {
@@ -76,8 +72,8 @@ type server struct {
 	application goetty.NetApplication
 	stopper     *stopper.Stopper
 	handler     func(request Message, sequence uint64, cs ClientSession) error
-
-	options struct {
+	sessions    *sync.Map // session-id => *clientSession
+	options     struct {
 		goettyOptions []goetty.Option
 		bufferSize    int
 		batchSendSize int
@@ -90,9 +86,10 @@ type server struct {
 // sent to the client by the write goroutine.
 func NewRPCServer(name, address string, codec Codec, options ...ServerOption) (RPCServer, error) {
 	s := &server{
-		name:    name,
-		address: address,
-		stopper: stopper.NewStopper(fmt.Sprintf("rpc-server-%s", name)),
+		name:     name,
+		address:  address,
+		stopper:  stopper.NewStopper(fmt.Sprintf("rpc-server-%s", name)),
+		sessions: &sync.Map{},
 	}
 	for _, opt := range options {
 		opt(s)
@@ -100,9 +97,8 @@ func NewRPCServer(name, address string, codec Codec, options ...ServerOption) (R
 	s.adjust()
 
 	s.options.goettyOptions = append(s.options.goettyOptions,
-		goetty.WithCodec(codec, codec),
-		goetty.WithLogger(s.logger),
-		goetty.WithDisableReleaseOutBuf()) // release out buf when write loop reutrned
+		goetty.WithSessionCodec(codec),
+		goetty.WithSessionLogger(s.logger))
 
 	app, err := goetty.NewApplication(
 		s.address,
@@ -130,12 +126,13 @@ func (s *server) Start() error {
 }
 
 func (s *server) Close() error {
+	s.stopper.Stop()
 	err := s.application.Stop()
 	if err != nil {
 		s.logger.Error("stop rpcserver failed",
 			zap.Error(err))
 	}
-	s.stopper.Stop()
+
 	return err
 }
 
@@ -158,50 +155,38 @@ func (s *server) adjust() {
 	}
 }
 
-func (s *server) onMessage(rs goetty.IOSession, value interface{}, sequence uint64) error {
-	var cs *clientSession
-	if sequence == 1 {
-		cs = newClientSession()
-		rs.SetAttr(attrClientSession, cs)
-		if err := s.startWriteLoop(rs, cs); err != nil {
-			cs.close()
-			return err
-		}
-	} else {
-		cs = rs.GetAttr(attrClientSession).(*clientSession)
+func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) error {
+	cs, err := s.getSession(rs)
+	if err != nil {
+		return err
 	}
-
 	request := value.(Message)
 	if ce := s.logger.Check(zap.DebugLevel, "received request"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
-			zap.String("client", rs.RemoteAddr()),
+			zap.String("client", rs.RemoteAddress()),
 			zap.Uint64("request-id", request.GetID()),
 			zap.String("request", request.DebugString()))
 	}
 
-	err := s.handler(request, sequence, cs)
-	if err != nil {
+	if err := s.handler(request, sequence, cs); err != nil {
 		s.logger.Error("handle request failed",
 			zap.Uint64("sequence", sequence),
-			zap.String("client", rs.RemoteAddr()),
+			zap.String("client", rs.RemoteAddress()),
 			zap.Error(err))
 		return err
 	}
 
 	if ce := s.logger.Check(zap.DebugLevel, "handle request completed"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
-			zap.String("client", rs.RemoteAddr()),
+			zap.String("client", rs.RemoteAddress()),
 			zap.Uint64("request-id", request.GetID()))
 	}
 	return nil
 }
 
-func (s *server) startWriteLoop(rs goetty.IOSession, cs *clientSession) error {
+func (s *server) startWriteLoop(cs *clientSession) error {
 	return s.stopper.RunTask(func(ctx context.Context) {
-		defer func() {
-			cs.close()
-			rs.OutBuf().Release()
-		}()
+		defer s.closeClientSession(cs)
 
 		responses := make([]sendMessage, 0, s.options.batchSendSize)
 		fetch := func() {
@@ -251,7 +236,7 @@ func (s *server) startWriteLoop(rs goetty.IOSession, cs *clientSession) error {
 					timeout := time.Duration(0)
 					for idx := range sendResponses {
 						timeout += sendResponses[idx].opts.Timeout
-						if err := rs.Write(sendResponses[idx].message, goetty.WriteOptions{}); err != nil {
+						if err := cs.conn.Write(sendResponses[idx].message, goetty.WriteOptions{}); err != nil {
 							s.logger.Error("write response failed",
 								zap.Uint64("request-id", sendResponses[idx].message.GetID()),
 								zap.Error(err))
@@ -261,7 +246,7 @@ func (s *server) startWriteLoop(rs goetty.IOSession, cs *clientSession) error {
 					}
 
 					if written > 0 {
-						if err := rs.Flush(timeout); err != nil {
+						if err := cs.conn.Flush(timeout); err != nil {
 							for idx := range sendResponses {
 								s.logger.Error("write response failed",
 									zap.Uint64("request-id", sendResponses[idx].message.GetID()),
@@ -271,7 +256,7 @@ func (s *server) startWriteLoop(rs goetty.IOSession, cs *clientSession) error {
 						}
 						if ce := s.logger.Check(zap.DebugLevel, "write responses"); ce != nil {
 							var fields []zap.Field
-							fields = append(fields, zap.String("client", rs.RemoteAddr()))
+							fields = append(fields, zap.String("client", cs.conn.RemoteAddress()))
 							for idx := range sendResponses {
 								fields = append(fields, zap.Uint64("request-id",
 									sendResponses[idx].message.GetID()))
@@ -289,8 +274,37 @@ func (s *server) startWriteLoop(rs goetty.IOSession, cs *clientSession) error {
 	})
 }
 
+func (s *server) closeClientSession(cs *clientSession) {
+	s.sessions.Delete(cs.conn.ID())
+	if err := cs.close(); err != nil {
+		s.logger.Error("close client session failed",
+			zap.Error(err))
+	}
+}
+
+func (s *server) getSession(rs goetty.IOSession) (*clientSession, error) {
+	if v, ok := s.sessions.Load(rs.ID()); ok {
+		return v.(*clientSession), nil
+	}
+
+	cs := newClientSession(rs)
+	v, loaded := s.sessions.LoadOrStore(rs.ID(), cs)
+	if loaded {
+		close(cs.c)
+		return v.(*clientSession), nil
+	}
+
+	rs.Ref()
+	if err := s.startWriteLoop(cs); err != nil {
+		s.closeClientSession(cs)
+		return nil, err
+	}
+	return cs, nil
+}
+
 type clientSession struct {
-	c chan sendMessage
+	conn goetty.IOSession
+	c    chan sendMessage
 
 	mu struct {
 		sync.RWMutex
@@ -298,20 +312,23 @@ type clientSession struct {
 	}
 }
 
-func newClientSession() *clientSession {
+func newClientSession(conn goetty.IOSession) *clientSession {
 	return &clientSession{
-		c: make(chan sendMessage, 16),
+		c:    make(chan sendMessage, 16),
+		conn: conn,
 	}
 }
 
-func (cs *clientSession) close() {
+func (cs *clientSession) close() error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	if cs.mu.closed {
-		return
+		return nil
 	}
 
+	close(cs.c)
 	cs.mu.closed = true
+	return cs.conn.Close()
 }
 
 func (cs *clientSession) Write(message Message, opts SendOptions) error {

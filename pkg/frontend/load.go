@@ -19,6 +19,11 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/simdcsv"
 	"math"
 	"os"
 	"runtime"
@@ -29,19 +34,9 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/config"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
-	"unicode/utf8"
-
-	"github.com/matrixorigin/simdcsv"
 )
 
 type LoadResult struct {
@@ -94,9 +89,8 @@ type SharePart struct {
 	lineCount uint64
 
 	//batch
-	batchSize            int
-	maxEntryBytesForCube int64
-	skipWriteBatch       bool
+	batchSize      int
+	skipWriteBatch bool
 
 	//map column id in from data to column id in table
 	dataColumnId2TableColumnId []int
@@ -116,6 +110,7 @@ type SharePart struct {
 	tableName      string
 	txnHandler     *TxnHandler
 	oneTxnPerBatch bool
+	ses            *Session
 
 	//result of load
 	result *LoadResult
@@ -263,35 +258,11 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 
 			wait_b := time.Now()
 
-			//bytes for the line
-			bytes := uint64(0)
-			for _, ll := range lineOut.Line {
-				bytes += uint64(utf8.RuneCount([]byte(ll)))
-			}
-
-			//max entries for the cube
-			if bytes > uint64(plh.maxEntryBytesForCube) {
-				return fmt.Errorf("bytes of line %d > maxEntryBytesForCube %d", bytes, plh.maxEntryBytesForCube)
-			}
-
-			if plh.bytes+bytes > uint64(plh.maxEntryBytesForCube) {
-				//logutil.Infof("+++++ batch bytes %v B %v MB",plh.bytes,plh.bytes / 1024.0 / 1024.0)
-				err := saveLinesToStorage(plh, true)
-				if err != nil {
-					return err
-				}
-
-				plh.lineIdx = 0
-				plh.maxFieldCnt = 0
-				plh.bytes = 0
-			}
-
 			//step 2 : append line into line array
 			plh.simdCsvLineArray[plh.lineIdx] = lineOut.Line
 			plh.lineIdx++
 			plh.lineCount++
 			plh.maxFieldCnt = Max(plh.maxFieldCnt, len(lineOut.Line))
-			plh.bytes += bytes
 
 			AtomicAddDuration(plh.csvLineArray1, time.Since(wait_b))
 
@@ -384,7 +355,7 @@ func makeBatch(handler *ParseLineHandler, id int) *PoolElement {
 			vec.Col = make([]float32, batchSize)
 		case types.T_float64:
 			vec.Col = make([]float64, batchSize)
-		case types.T_char, types.T_varchar:
+		case types.T_char, types.T_varchar, types.T_json:
 			vBytes := &types.Bytes{
 				Offsets: make([]uint32, batchSize),
 				Lengths: make([]uint32, batchSize),
@@ -422,7 +393,11 @@ func initParseLineHandler(handler *ParseLineHandler) error {
 	load := handler.load
 
 	var cols []*engine.AttributeDef = nil
-	defs := relation.TableDefs(handler.txnHandler.GetTxn().GetCtx())
+	ctx := context.TODO()
+	defs, err := relation.TableDefs(ctx)
+	if err != nil {
+		return err
+	}
 	for _, def := range defs {
 		attr, ok := def.(*engine.AttributeDef)
 		if ok {
@@ -493,7 +468,7 @@ func releaseBatch(handler *ParseLineHandler, pl *PoolElement) {
 	for _, vec := range pl.bat.Vecs {
 		vec.Nsp = &nulls.Nulls{}
 		switch vec.Typ.Oid {
-		case types.T_char, types.T_varchar:
+		case types.T_char, types.T_varchar, types.T_json:
 			vBytes := vec.Col.(*types.Bytes)
 			vBytes.Data = vBytes.Data[:0]
 		}
@@ -516,12 +491,12 @@ func initWriteBatchHandler(handler *ParseLineHandler, wHandler *WriteBatchHandle
 	wHandler.tableHandler = handler.tableHandler
 	wHandler.tableName = handler.tableName
 	wHandler.txnHandler = handler.txnHandler
+	wHandler.ses = handler.ses
 	wHandler.oneTxnPerBatch = handler.oneTxnPerBatch
 	wHandler.timestamp = handler.timestamp
 	wHandler.result = &LoadResult{}
 	wHandler.closeRef = handler.closeRef
 	wHandler.lineCount = handler.lineCount
-	wHandler.maxEntryBytesForCube = handler.maxEntryBytesForCube
 	wHandler.skipWriteBatch = handler.skipWriteBatch
 
 	wHandler.pl = allocBatch(handler)
@@ -984,7 +959,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 						cols[rowIdx] = d
 					}
-				case types.T_char, types.T_varchar:
+				case types.T_char, types.T_varchar, types.T_json:
 					vBytes := vec.Col.(*types.Bytes)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -1098,7 +1073,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 				if columnFLags[k] == 0 {
 					vec := batchData.Vecs[k]
 					switch vec.Typ.Oid {
-					case types.T_char, types.T_varchar:
+					case types.T_char, types.T_varchar, types.T_json:
 						vBytes := vec.Col.(*types.Bytes)
 						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
 						vBytes.Lengths[rowIdx] = uint32(0)
@@ -1474,7 +1449,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						cols[i] = d
 					}
 				}
-			case types.T_char, types.T_varchar:
+			case types.T_char, types.T_varchar, types.T_json:
 				vBytes := vec.Col.(*types.Bytes)
 				//row
 				for i := 0; i < countOfLineArray; i++ {
@@ -1615,7 +1590,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 				//row
 				for i := 0; i < countOfLineArray; i++ {
 					switch vec.Typ.Oid {
-					case types.T_char, types.T_varchar:
+					case types.T_char, types.T_varchar, types.T_json:
 						vBytes := vec.Col.(*types.Bytes)
 						vBytes.Offsets[i] = uint32(len(vBytes.Data))
 						vBytes.Lengths[i] = uint32(0)
@@ -1685,6 +1660,8 @@ when force is true, batchsize will be changed.
 */
 func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 	var err error = nil
+
+	ctx := context.TODO()
 	if handler.batchFilled == handler.batchSize {
 		//batchBytes := 0
 		//for _, vec := range handler.batchData.Vecs {
@@ -1705,30 +1682,28 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		handler.ThreadInfo.SetCnt(1)
 		//dbHandler := handler.dbHandler
 		var dbHandler engine.Database
-		txnHandler := handler.txnHandler
+		var txnHandler *TxnHandler
 		tableHandler := handler.tableHandler
+		initSes := handler.ses
+		tmpSes := NewSession(initSes.GetMysqlProtocol(), initSes.GuestMmu, initSes.Mempool, initSes.Pu, gSysVariables)
 		if !handler.skipWriteBatch {
 			if handler.oneTxnPerBatch {
-				txnHandler = InitTxnHandler(config.StorageEngine)
-				_, err = txnHandler.StartByAutocommitIfNeeded()
+				txnHandler = tmpSes.GetTxnHandler()
+				dbHandler, err = tmpSes.GetStorage().Database(ctx, handler.dbName, engine.Snapshot(txnHandler.GetTxn().GetCtx()))
 				if err != nil {
 					goto handleError
 				}
-				dbHandler, err = handler.storage.Database(handler.dbName, txnHandler.GetTxn().GetCtx())
-				if err != nil {
-					goto handleError
-				}
-				tableHandler, err = dbHandler.Relation(handler.tableName, txnHandler.GetTxn().GetCtx())
+				tableHandler, err = dbHandler.Relation(ctx, handler.tableName)
 				if err != nil {
 					goto handleError
 				}
 			}
-			err = tableHandler.Write(handler.timestamp, handler.batchData, txnHandler.GetTxn().GetCtx())
+			err = tableHandler.Write(ctx, handler.batchData)
 			if handler.oneTxnPerBatch {
 				if err != nil {
 					goto handleError
 				}
-				err = txnHandler.CommitAfterAutocommitOnly()
+				err = tmpSes.TxnCommitSingleStatement(nil)
 				if err != nil {
 					goto handleError
 				}
@@ -1750,7 +1725,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		}
 
 		if handler.oneTxnPerBatch && err != nil {
-			err2 := txnHandler.RollbackAfterAutocommitOnly()
+			err2 := tmpSes.TxnRollbackSingleStatement(nil)
 			if err2 != nil {
 				logutil.Errorf("rollback failed.error:%v", err2)
 			}
@@ -1764,7 +1739,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		for _, vec := range handler.batchData.Vecs {
 			vec.Nsp = &nulls.Nulls{}
 			switch vec.Typ.Oid {
-			case types.T_char, types.T_varchar:
+			case types.T_char, types.T_varchar, types.T_json:
 				vBytes := vec.Col.(*types.Bytes)
 				vBytes.Data = vBytes.Data[:0]
 			}
@@ -1819,7 +1794,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 					case types.T_float64:
 						cols := vec.Col.([]float64)
 						vec.Col = cols[:needLen]
-					case types.T_char, types.T_varchar: //bytes is different
+					case types.T_char, types.T_varchar, types.T_json: //bytes is different
 						vBytes := vec.Col.(*types.Bytes)
 						//logutil.Infof("saveBatchToStorage before data %s ",vBytes.String())
 						if len(vBytes.Offsets) > needLen {
@@ -1852,33 +1827,31 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				wait_a := time.Now()
 				handler.ThreadInfo.SetTime(wait_a)
 				handler.ThreadInfo.SetCnt(1)
-				txnHandler := handler.txnHandler
+				var txnHandler *TxnHandler
 				tableHandler := handler.tableHandler
 				// dbHandler := handler.dbHandler
+				initSes := handler.ses
+				tmpSes := NewSession(initSes.GetMysqlProtocol(), initSes.GuestMmu, initSes.Mempool, initSes.Pu, gSysVariables)
 				var dbHandler engine.Database
 				if !handler.skipWriteBatch {
 					if handler.oneTxnPerBatch {
-						txnHandler = InitTxnHandler(config.StorageEngine)
-						_, err = txnHandler.StartByAutocommitIfNeeded()
-						if err != nil {
-							goto handleError2
-						}
-						dbHandler, err = handler.storage.Database(handler.dbName, txnHandler.GetTxn().GetCtx())
+						txnHandler = tmpSes.GetTxnHandler()
+						dbHandler, err = tmpSes.GetStorage().Database(ctx, handler.dbName, engine.Snapshot(txnHandler.GetTxn().GetCtx()))
 						if err != nil {
 							goto handleError2
 						}
 						//new relation
-						tableHandler, err = dbHandler.Relation(handler.tableName, txnHandler.GetTxn().GetCtx())
+						tableHandler, err = dbHandler.Relation(ctx, handler.tableName)
 						if err != nil {
 							goto handleError2
 						}
 					}
-					err = tableHandler.Write(handler.timestamp, handler.batchData, txnHandler.GetTxn().GetCtx())
+					err = tableHandler.Write(ctx, handler.batchData)
 					if handler.oneTxnPerBatch {
 						if err != nil {
 							goto handleError2
 						}
-						err = txnHandler.CommitAfterAutocommitOnly()
+						err = tmpSes.TxnCommitSingleStatement(nil)
 						if err != nil {
 							goto handleError2
 						}
@@ -1899,7 +1872,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				}
 
 				if handler.oneTxnPerBatch && err != nil {
-					err2 := txnHandler.RollbackAfterAutocommitOnly()
+					err2 := tmpSes.TxnRollbackSingleStatement(nil)
 					if err2 != nil {
 						logutil.Errorf("rollback failed.error:%v", err2)
 					}
@@ -2007,21 +1980,21 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	//simdcsv
 	handler := &ParseLineHandler{
 		SharePart: SharePart{
-			load:                 load,
-			lineIdx:              0,
-			simdCsvLineArray:     make([][]string, curBatchSize),
-			storage:              ses.Pu.StorageEngine,
-			dbHandler:            dbHandler,
-			tableHandler:         tableHandler,
-			tableName:            string(load.Table.Name()),
-			dbName:               dbName,
-			txnHandler:           ses.GetTxnHandler(),
-			oneTxnPerBatch:       ses.Pu.SV.GetOneTxnPerBatchDuringLoad(),
-			lineCount:            0,
-			batchSize:            curBatchSize,
-			result:               result,
-			maxEntryBytesForCube: ses.Pu.SV.GetCubeMaxEntriesBytes(),
-			skipWriteBatch:       ses.Pu.SV.GetLoadDataSkipWritingBatch(),
+			load:             load,
+			lineIdx:          0,
+			simdCsvLineArray: make([][]string, curBatchSize),
+			storage:          ses.Pu.StorageEngine,
+			dbHandler:        dbHandler,
+			tableHandler:     tableHandler,
+			tableName:        string(load.Table.Name()),
+			dbName:           dbName,
+			txnHandler:       ses.GetTxnHandler(),
+			ses:              ses,
+			oneTxnPerBatch:   ses.Pu.SV.GetOneTxnPerBatchDuringLoad(),
+			lineCount:        0,
+			batchSize:        curBatchSize,
+			result:           result,
+			skipWriteBatch:   ses.Pu.SV.GetLoadDataSkipWritingBatch(),
 		},
 		threadInfo:                    make(map[int]*ThreadInfo),
 		simdCsvGetParsedLinesChan:     atomic.Value{},
@@ -2081,8 +2054,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 
 	//TODO: remove it after tae is ready
 	if handler.oneTxnPerBatch {
-		txnHandler := ses.GetTxnHandler()
-		err = txnHandler.CommitAfterAutocommitOnly()
+		err = ses.TxnCommitSingleStatement(nil)
 		if err != nil {
 			return nil, err
 		}

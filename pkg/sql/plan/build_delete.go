@@ -26,22 +26,46 @@ import (
 )
 
 func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
-	if len(stmt.Tables) == 1 {
+	if len(stmt.Tables) == 1 && stmt.TableRefs == nil {
 		return buildDeleteSingleTable(stmt, ctx)
 	}
 	return buildDeleteMultipleTable(stmt, ctx)
+}
+
+func extractAliasTable(aliasTable *tree.AliasedTableExpr, tf *tableInfo, ctx CompilerContext) {
+	dbName := string(aliasTable.Expr.(*tree.TableName).SchemaName)
+	if dbName == "" {
+		dbName = ctx.DefaultDatabase()
+	}
+	tf.dbNames[0] = dbName
+	tf.tableNames[0] = string(aliasTable.Expr.(*tree.TableName).ObjectName)
+	if string(aliasTable.As.Alias) != "" {
+		tf.baseNameMap[string(aliasTable.As.Alias)] = tf.tableNames[0]
+	} else {
+		tf.baseNameMap[tf.tableNames[0]] = tf.tableNames[0]
+	}
+}
+
+func reverseMap(m map[string]string) map[string]string {
+	res := make(map[string]string)
+	for k, v := range m {
+		res[v] = k
+	}
+	return res
 }
 
 // buildDeleteSingleTable, delete single table can optimize to truncate and different from syntax of multiple-tables,
 // so it is build singly.
 func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	// check database's name and table's name
-	tbl := getTableNames(stmt.Tables)[0]
-	dbName := string(tbl.SchemaName)
-	if dbName == "" {
-		dbName = ctx.DefaultDatabase()
+	tf := &tableInfo{
+		baseNameMap: make(map[string]string),
+		dbNames:     make([]string, 1),
+		tableNames:  make([]string, 1),
 	}
-	objRef, tableDef := ctx.Resolve(dbName, string(tbl.ObjectName))
+	extractAliasTable(stmt.Tables[0].(*tree.AliasedTableExpr), tf, ctx)
+	tf.baseNameMap = reverseMap(tf.baseNameMap)
+	objRef, tableDef := ctx.Resolve(tf.dbNames[0], tf.tableNames[0])
 	if tableDef == nil {
 		return nil, errors.New(errno.FeatureNotSupported, "cannot find delete table")
 	}
@@ -53,7 +77,7 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 
 	// find out use keys to delete
 	var useProjectExprs tree.SelectExprs = nil
-	useProjectExprs, useKey, err := buildUseProjection(stmt, useProjectExprs, objRef, tableDef, ctx)
+	useProjectExprs, useKey, isHideKey, err := buildUseProjection(stmt, useProjectExprs, objRef, tableDef, tf, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -81,6 +105,7 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 		DbName:       objRef.SchemaName,
 		TblName:      tableDef.Name,
 		UseDeleteKey: useKey.Name,
+		IsHideKey:    isHideKey,
 		CanTruncate:  false,
 	}
 	node := &Node{
@@ -122,6 +147,14 @@ func buildDelete2Truncate(objRef *ObjectRef, tblDef *TableDef) (*Plan, error) {
 }
 
 func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
+	// build map between base table and alias table
+	tf := &tableInfo{baseNameMap: make(map[string]string)}
+	for _, expr := range stmt.TableRefs {
+		if err := extractExprTable(expr, tf, ctx); err != nil {
+			return nil, err
+		}
+	}
+
 	// check database's name and table's name
 	tbs := getTableNames(stmt.Tables)
 	tableCount := len(tbs)
@@ -132,18 +165,24 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 		if dbName == "" {
 			dbName = ctx.DefaultDatabase()
 		}
-		objRefs[i], tblDefs[i] = ctx.Resolve(dbName, string(t.ObjectName))
+		tblName := string(t.ObjectName)
+		if _, ok := tf.baseNameMap[tblName]; ok {
+			tblName = tf.baseNameMap[tblName]
+		}
+		objRefs[i], tblDefs[i] = ctx.Resolve(dbName, tblName)
 		if tblDefs[i] == nil {
 			return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("cannot find delete table: %s.%s", dbName, string(t.ObjectName)))
 		}
 	}
+	tf.baseNameMap = reverseMap(tf.baseNameMap)
 
 	// find out use keys to delete
 	var err error
+	isHideKeyArr := make([]bool, tableCount)
 	useKeys := make([]*ColDef, tableCount)
 	var useProjectExprs tree.SelectExprs = nil
 	for i := 0; i < tableCount; i++ {
-		useProjectExprs, useKeys[i], err = buildUseProjection(stmt, useProjectExprs, objRefs[i], tblDefs[i], ctx)
+		useProjectExprs, useKeys[i], isHideKeyArr[i], err = buildUseProjection(stmt, useProjectExprs, objRefs[i], tblDefs[i], tf, ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -173,6 +212,7 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 			DbName:       objRefs[i].SchemaName,
 			TblName:      tblDefs[i].Name,
 			UseDeleteKey: useKeys[i].Name,
+			IsHideKey:    isHideKeyArr[i],
 			CanTruncate:  false,
 		}
 	}
@@ -193,20 +233,17 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 func getTableNames(tableExprs tree.TableExprs) []*tree.TableName {
 	tbs := make([]*tree.TableName, 0, len(tableExprs))
 	for _, tableExpr := range tableExprs {
-		if t, ok := tableExpr.(*tree.AliasedTableExpr); ok {
-			tbs = append(tbs, t.Expr.(*tree.TableName))
-			continue
-		}
 		tbs = append(tbs, tableExpr.(*tree.TableName))
 	}
 	return tbs
 }
 
-func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRef, tableDef *TableDef, ctx CompilerContext) (tree.SelectExprs, *ColDef, error) {
+func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRef, tableDef *TableDef, tf *tableInfo, ctx CompilerContext) (tree.SelectExprs, *ColDef, bool, error) {
 	var useKey *ColDef = nil
+	isHideKey := false
 	priKeys := ctx.GetPrimaryKeyDef(objRef.SchemaName, tableDef.Name)
 	for _, key := range priKeys {
-		e := tree.SetUnresolvedName(objRef.SchemaName, tableDef.Name, key.Name)
+		e := tree.SetUnresolvedName(tf.baseNameMap[tableDef.Name], key.Name)
 		if isContainNameInFilter(stmt, key.Name) {
 			ps = append(ps, tree.SelectExpr{Expr: e})
 			useKey = key
@@ -216,13 +253,14 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 	if useKey == nil {
 		hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name)
 		if hideKey == nil {
-			return nil, nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "cannot find hide key now")
+			return nil, nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, "cannot find hide key now")
 		}
 		useKey = hideKey
-		e := tree.SetUnresolvedName(objRef.SchemaName, tableDef.Name, hideKey.Name)
+		e := tree.SetUnresolvedName(tf.baseNameMap[tableDef.Name], hideKey.Name)
 		ps = append(ps, tree.SelectExpr{Expr: e})
+		isHideKey = true
 	}
-	return ps, useKey, nil
+	return ps, useKey, isHideKey, nil
 }
 
 // isContainNameInFilter is to find out if contain primary key in expr.

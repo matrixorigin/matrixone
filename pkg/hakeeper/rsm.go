@@ -48,10 +48,8 @@ const (
 	// [K8SIDRangeStart, K8SIDRangeEnd)
 	K8SIDRangeStart uint64 = 131072
 	K8SIDRangeEnd   uint64 = 262144
-	// TickDuration defines the frequency of ticks.
-	TickDuration = time.Second
 	// CheckDuration defines how often HAKeeper checks the health state of the cluster
-	CheckDuration = time.Second
+	CheckDuration = 3 * time.Second
 	// DefaultHAKeeperShardID is the shard ID assigned to the special HAKeeper
 	// shard.
 	DefaultHAKeeperShardID uint64 = 0
@@ -59,10 +57,8 @@ const (
 )
 
 type StateQuery struct{}
-type logShardIDQuery struct{ name string }
-type logShardIDQueryResult struct{ id uint64 }
 type ScheduleCommandQuery struct{ UUID string }
-type ClusterDetailsQuery struct{}
+type ClusterDetailsQuery struct{ Cfg Config }
 
 type stateMachine struct {
 	replicaID uint64
@@ -191,7 +187,6 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	if err := b.Unmarshal(data); err != nil {
 		panic(err)
 	}
-	plog.Infof("incoming term: %d, rsm term: %d", b.Term, s.state.Term)
 	if s.state.Term > b.Term {
 		return sm.Result{}
 	}
@@ -225,6 +220,18 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	return sm.Result{}
 }
 
+func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
+	if batch, ok := s.state.ScheduleCommands[uuid]; ok {
+		delete(s.state.ScheduleCommands, uuid)
+		data, err := batch.Marshal()
+		if err != nil {
+			panic(err)
+		}
+		return sm.Result{Data: data}
+	}
+	return sm.Result{}
+}
+
 func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 	data := parseHeartbeatCmd(cmd)
 	var hb pb.CNStoreHeartbeat
@@ -232,7 +239,7 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.CNState.Update(hb, s.state.Tick)
-	return sm.Result{}
+	return s.getCommandBatch(hb.UUID)
 }
 
 func (s *stateMachine) handleDNHeartbeat(cmd []byte) sm.Result {
@@ -242,7 +249,7 @@ func (s *stateMachine) handleDNHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.DNState.Update(hb, s.state.Tick)
-	return sm.Result{}
+	return s.getCommandBatch(hb.UUID)
 }
 
 func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
@@ -252,7 +259,7 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.LogState.Update(hb, s.state.Tick)
-	return sm.Result{}
+	return s.getCommandBatch(hb.UUID)
 }
 
 func (s *stateMachine) handleTick(cmd []byte) sm.Result {
@@ -404,14 +411,6 @@ func (s *stateMachine) handleStateQuery() interface{} {
 	return result
 }
 
-func (s *stateMachine) handleShardIDQuery(name string) *logShardIDQueryResult {
-	id, ok := s.state.LogShards[name]
-	if ok {
-		return &logShardIDQueryResult{id: id}
-	}
-	return &logShardIDQueryResult{}
-}
-
 func (s *stateMachine) handleScheduleCommandQuery(uuid string) *pb.CommandBatch {
 	if batch, ok := s.state.ScheduleCommands[uuid]; ok {
 		return &batch
@@ -419,10 +418,12 @@ func (s *stateMachine) handleScheduleCommandQuery(uuid string) *pb.CommandBatch 
 	return &pb.CommandBatch{}
 }
 
-func (s *stateMachine) handleClusterDetailsQuery() *pb.ClusterDetails {
+func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails {
+	cfg.Fill()
 	cd := &pb.ClusterDetails{
-		CNNodes: make([]pb.CNNode, 0),
-		DNNodes: make([]pb.DNNode, 0),
+		CNNodes:  make([]pb.CNNode, 0, len(s.state.CNState.Stores)),
+		DNNodes:  make([]pb.DNNode, 0, len(s.state.DNState.Stores)),
+		LogNodes: make([]pb.LogNode, 0, len(s.state.LogState.Stores)),
 	}
 	for uuid, info := range s.state.CNState.Stores {
 		n := pb.CNNode{
@@ -433,25 +434,42 @@ func (s *stateMachine) handleClusterDetailsQuery() *pb.ClusterDetails {
 		cd.CNNodes = append(cd.CNNodes, n)
 	}
 	for uuid, info := range s.state.DNState.Stores {
+		state := pb.NormalState
+		if cfg.DnStoreExpired(info.Tick, s.state.Tick) {
+			state = pb.TimeoutState
+		}
 		n := pb.DNNode{
 			UUID:           uuid,
 			Tick:           info.Tick,
+			State:          state,
 			ServiceAddress: info.ServiceAddress,
 		}
 		cd.DNNodes = append(cd.DNNodes, n)
+	}
+	for uuid, info := range s.state.LogState.Stores {
+		state := pb.NormalState
+		if cfg.LogStoreExpired(info.Tick, s.state.Tick) {
+			state = pb.TimeoutState
+		}
+		n := pb.LogNode{
+			UUID:           uuid,
+			Tick:           info.Tick,
+			State:          state,
+			ServiceAddress: info.ServiceAddress,
+			Replicas:       info.Replicas,
+		}
+		cd.LogNodes = append(cd.LogNodes, n)
 	}
 	return cd
 }
 
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
-	if q, ok := query.(*logShardIDQuery); ok {
-		return s.handleShardIDQuery(q.name), nil
-	} else if _, ok := query.(*StateQuery); ok {
+	if _, ok := query.(*StateQuery); ok {
 		return s.handleStateQuery(), nil
 	} else if q, ok := query.(*ScheduleCommandQuery); ok {
 		return s.handleScheduleCommandQuery(q.UUID), nil
-	} else if _, ok := query.(*ClusterDetailsQuery); ok {
-		return s.handleClusterDetailsQuery(), nil
+	} else if q, ok := query.(*ClusterDetailsQuery); ok {
+		return s.handleClusterDetailsQuery(q.Cfg), nil
 	}
 	panic("unknown query type")
 }

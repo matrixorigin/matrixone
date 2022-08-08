@@ -22,11 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/joincondition"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -50,159 +47,32 @@ var (
 )
 
 func init() {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
 	tcs = []joinTestCase{
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}},
-			[][]joincondition.Condition{
+		newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}},
+			[][]*plan.Expr{
 				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_int8})},
+					newExpr(0, types.Type{Oid: types.T_int8}),
 				},
 				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_int8})},
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}},
-			[][]joincondition.Condition{
-				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_int8})},
-				},
-				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_int8})},
+					newExpr(0, types.Type{Oid: types.T_int8}),
 				},
 			}),
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_decimal64}}, []ResultPos{{0, 0}},
-			[][]joincondition.Condition{
+		newTestCase(testutil.NewMheap(), []bool{true}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}},
+			[][]*plan.Expr{
 				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal64})},
+					newExpr(0, types.Type{Oid: types.T_int8}),
 				},
 				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1})},
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_decimal64}}, []ResultPos{{0, 0}, {1, 0}},
-			[][]joincondition.Condition{
-				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal64})},
-				},
-				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1})},
+					newExpr(0, types.Type{Oid: types.T_int8}),
 				},
 			}),
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_decimal128}}, []ResultPos{{0, 0}},
-			[][]joincondition.Condition{
+		newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_decimal64}}, []ResultPos{{0, 0}},
+			[][]*plan.Expr{
 				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal128})},
+					newExpr(0, types.Type{Oid: types.T_decimal64}),
 				},
 				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1})},
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_decimal128}}, []ResultPos{{0, 0}},
-			[][]joincondition.Condition{
-				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal128})},
-				},
-				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1})},
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []ResultPos{{0, 0}},
-			[][]joincondition.Condition{
-				{
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_int64})},
-				},
-				{
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_int64})},
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []ResultPos{{0, 0}, {1, 0}},
-			[][]joincondition.Condition{
-				{
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_int64})},
-				},
-				{
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_int64})},
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal64}}, []ResultPos{{0, 0}},
-			[][]joincondition.Condition{
-				{
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_decimal64})},
-				},
-				{
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_decimal64, Scale: 1})},
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal64}}, []ResultPos{{0, 0}, {1, 0}},
-			[][]joincondition.Condition{
-				{
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_decimal64})},
-				},
-				{
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_decimal64, Scale: 1})},
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal128}}, []ResultPos{{0, 0}, {1, 0}},
-			[][]joincondition.Condition{
-				{
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_decimal128})},
-				},
-				{
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_decimal128, Scale: 1})},
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal128}}, []ResultPos{{0, 0}, {1, 0}},
-			[][]joincondition.Condition{
-				{
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_decimal128})},
-				},
-				{
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_decimal128, Scale: 1})},
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal64}, {Oid: types.T_char}}, []ResultPos{{0, 0}},
-			[][]joincondition.Condition{
-				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1})},
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_char})},
-				},
-				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal64})},
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_char})},
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal64}, {Oid: types.T_char}}, []ResultPos{{0, 0}, {1, 0}},
-			[][]joincondition.Condition{
-				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1})},
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_char})},
-				},
-				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal64})},
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_char})},
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal128}, {Oid: types.T_char}}, []ResultPos{{0, 0}},
-			[][]joincondition.Condition{
-				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1})},
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_char})},
-				},
-				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal128})},
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_char})},
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal128}, {Oid: types.T_char}}, []ResultPos{{0, 0}, {1, 0}},
-			[][]joincondition.Condition{
-				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1})},
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_char})},
-				},
-				{
-					{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_decimal128})},
-					{Scale: 0, Expr: newExpr(1, types.Type{Oid: types.T_char})},
+					newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1}),
 				},
 			}),
 	}
@@ -212,13 +82,6 @@ func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
 	for _, tc := range tcs {
 		String(tc.arg, buf)
-	}
-}
-
-func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
-		require.NoError(t, err)
 	}
 }
 
@@ -241,31 +104,48 @@ func TestJoin(t *testing.T) {
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 		}
-		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
+		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
 	}
+	for _, tc := range tcs {
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		tc.proc.Reg.MergeReceivers[1].Ch <- nil
+		for {
+			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
+				break
+			}
+			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+		}
+		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
+	}
+
 }
 
 func BenchmarkJoin(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		hm := host.New(1 << 30)
-		gm := guest.New(1<<30, hm)
 		tcs = []joinTestCase{
-			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}},
-				[][]joincondition.Condition{
+			newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}},
+				[][]*plan.Expr{
 					{
-						{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_int8})},
+						newExpr(0, types.Type{Oid: types.T_int8}),
 					},
 					{
-						{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_int8})},
+						newExpr(0, types.Type{Oid: types.T_int8}),
 					},
 				}),
-			newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}},
-				[][]joincondition.Condition{
+			newTestCase(testutil.NewMheap(), []bool{true}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}},
+				[][]*plan.Expr{
 					{
-						{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_int8})},
+						newExpr(0, types.Type{Oid: types.T_int8}),
 					},
 					{
-						{Scale: 0, Expr: newExpr(0, types.Type{Oid: types.T_int8})},
+						newExpr(0, types.Type{Oid: types.T_int8}),
 					},
 				}),
 		}
@@ -308,7 +188,7 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 	}
 }
 
-func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []ResultPos, cs [][]joincondition.Condition) joinTestCase {
+func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []ResultPos, cs [][]*plan.Expr) joinTestCase {
 	proc := process.New(m)
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -326,6 +206,7 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []ResultPos, c
 		proc:   proc,
 		cancel: cancel,
 		arg: &Argument{
+			Typs:       ts,
 			Result:     rp,
 			Conditions: cs,
 		},

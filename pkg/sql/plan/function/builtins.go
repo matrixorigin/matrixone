@@ -92,7 +92,7 @@ var builtins = map[int]Functions{
 				ret := make([]types.T, len(inputs))
 				convert := false
 				for i, t := range inputs {
-					if t != types.T_char && t != types.T_varchar && t != types.T_any {
+					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob {
 						if castTable[t][types.T_varchar] {
 							ret[i] = types.T_varchar
 							convert = true
@@ -126,7 +126,7 @@ var builtins = map[int]Functions{
 				ret := make([]types.T, len(inputs))
 				convert := false
 				for i, t := range inputs {
-					if t != types.T_char && t != types.T_varchar && t != types.T_any {
+					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob {
 						if castTable[t][types.T_varchar] {
 							ret[i] = types.T_varchar
 							convert = true
@@ -627,6 +627,27 @@ var builtins = map[int]Functions{
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_uint8, Fn: binary.Startswith,
+			},
+		},
+	},
+	DATE_FORMAT: {
+		Id: DATE_FORMAT,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_datetime, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.DateFormat,
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_datetime, types.T_char},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.DateFormat,
 			},
 		},
 	},
@@ -1757,6 +1778,91 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Collation,
+			},
+		},
+	},
+	JSON_EXTRACT: {
+		Id: JSON_EXTRACT,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.JsonExtract,
+			},
+		},
+	},
+
+	ENABLE_FAULT_INJECTION: {
+		Id: ENABLE_FAULT_INJECTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_INTERNAL,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_bool,
+				Fn:        multi.EnableFaultInjection,
+			},
+		},
+	},
+	DISABLE_FAULT_INJECTION: {
+		Id: DISABLE_FAULT_INJECTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_INTERNAL,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_bool,
+				Fn:        multi.DisableFaultInjection,
+			},
+		},
+	},
+	ADD_FAULT_POINT: {
+		Id: ADD_FAULT_POINT,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_INTERNAL,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64, types.T_varchar},
+				ReturnTyp: types.T_bool,
+				Fn:        multi.AddFaultPoint,
+			},
+		},
+	},
+	REMOVE_FAULT_POINT: {
+		Id: REMOVE_FAULT_POINT,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_INTERNAL,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_bool,
+				Fn:        multi.RemoveFaultPoint,
+			},
+		},
+	},
+	TRIGGER_FAULT_POINT: {
+		Id: REMOVE_FAULT_POINT,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_INTERNAL,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_int64,
+				Fn:        multi.TriggerFaultPoint,
 			},
 		},
 	},

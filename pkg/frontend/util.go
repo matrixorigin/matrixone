@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"go/constant"
 	"os"
 	"runtime"
@@ -332,7 +333,7 @@ func ConvertCatalogSchemaToEngineFormat(mcs *CatalogSchema) []*engine.AttributeD
 				Name:    attr.AttributeName,
 				Alg:     0,
 				Type:    attr.AttributeType,
-				Default: engine.DefaultExpr{},
+				Default: &plan.Default{},
 			}}
 	}
 
@@ -398,7 +399,7 @@ func AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs []*engine.Attri
 		case types.T_float64:
 			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_float64).Size))
 			vec.Col = encoding.DecodeFloat64Slice(vec.Data)
-		case types.T_char, types.T_varchar:
+		case types.T_char, types.T_varchar, types.T_json:
 			vBytes := &types.Bytes{
 				Offsets: make([]uint32, rowCount),
 				Lengths: make([]uint32, rowCount),
@@ -563,7 +564,7 @@ func FillBatchWithData(data [][]string, batch *batch.Batch) {
 					}
 					cols[rowIdx] = d
 				}
-			case types.T_char, types.T_varchar:
+			case types.T_char, types.T_varchar, types.T_json:
 				vBytes := vec.Col.(*types.Bytes)
 				if isNullOrEmpty {
 					nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -745,7 +746,7 @@ func FormatLineInBatch(bat *batch.Batch, rowIndex int) []string {
 					row[i] = vs[rowIndex]
 				}
 			}
-		case types.T_char, types.T_varchar:
+		case types.T_char, types.T_varchar, types.T_json:
 			if !nulls.Any(vec.Nsp) { //all data in this column are not null
 				vs := vec.Col.(*types.Bytes)
 				row[i] = string(vs.Get(int64(rowIndex)))

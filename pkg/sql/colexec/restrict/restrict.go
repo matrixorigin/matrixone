@@ -25,16 +25,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	ap := arg.(*Argument)
 	buf.WriteString(fmt.Sprintf("filter(%s)", ap.E))
 }
 
-func Prepare(_ *process.Process, _ interface{}) error {
+func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
@@ -49,10 +49,10 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 	anal.Input(bat)
 	vec, err := colexec.EvalExpr(bat, proc, ap.E)
 	if err != nil {
-		bat.Clean(proc.Mp)
+		bat.Clean(proc.GetMheap())
 		return false, err
 	}
-	defer vec.Free(proc.Mp)
+	defer vec.Free(proc.GetMheap())
 	if proc.OperatorOutofMemory(int64(vec.Size())) {
 		return false, errors.New("", "out of memory")
 	}
@@ -66,14 +66,14 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 			bat.Shrink(nil)
 		}
 	} else {
-		sels := proc.GetSels()
+		sels := proc.GetMheap().GetSels()
 		for i, b := range bs {
 			if b {
 				sels = append(sels, int64(i))
 			}
 		}
 		bat.Shrink(sels)
-		proc.PutSels(sels)
+		proc.GetMheap().PutSels(sels)
 	}
 	anal.Output(bat)
 	proc.SetInputBatch(bat)

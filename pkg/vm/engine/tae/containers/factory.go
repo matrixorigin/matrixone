@@ -52,7 +52,7 @@ func MakeVector(typ types.Type, nullable bool, opts ...*Options) (vec Vector) {
 		vec = NewVector[types.Timestamp](typ, nullable, opts...)
 	case types.Type_DATETIME:
 		vec = NewVector[types.Datetime](typ, nullable, opts...)
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON, types.Type_BLOB:
 		vec = NewVector[[]byte](typ, nullable, opts...)
 	default:
 		panic("not support")

@@ -18,9 +18,7 @@ SELECT DATE('2008-05-17 11:31:31') as required_DATE;
 
 
 #NULL值
--- @bvt:issue#3183
 select coalesce(date(NULL)), coalesce(cast(NULL as DATE));
--- @bvt:issue
 select date(NULL);
 
 
@@ -78,7 +76,7 @@ DROP TABLE t1;
 
 
 #逻辑比较
--- @bvt:issue#3183
+
 CREATE TABLE t1
 (first_usage DATE, last_recharge DATETIME, life_time SMALLINT(4) UNSIGNED);
 INSERT INTO t1 VALUES ('2011-04-27', null, 900);
@@ -87,7 +85,7 @@ DATE_ADD(coalesce(last_recharge, first_usage), INTERVAL life_time DAY ) as dt,
 DATE_ADD(coalesce(last_recharge, first_usage), INTERVAL life_time DAY ) <
 DATE('2011-04-28') as exp FROM t1;
 DROP TABLE t1;
--- @bvt:issue
+
 
 
 #EXTREME VALUES

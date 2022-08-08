@@ -1,5 +1,5 @@
--- @bvt:issue#3183
 #ORDER BY
+drop table if exists t;
 CREATE TABLE t (i1 INT,
 d1 DOUBLE,
 e2 DECIMAL(5,2));
@@ -12,7 +12,6 @@ IF(e2 IS NULL,i1,e2) if_c,
 SUM(d1) FROM t
 GROUP BY e2,i1 ORDER BY nullif_c, SUM(d1);
 DROP TABLE t;
--- @bvt:issue
 
 #子查询
 CREATE TABLE t1(a INT);
@@ -153,3 +152,15 @@ select cast(min(ifl) as decimal(5,2)) from t3;
 drop table t1;
 drop table t2;
 drop table t3;
+
+create table t1 (grp int, a bigint unsigned, c char(10) not null);
+insert into t1 values (1,1,"a");
+insert into t1 values (2,2,"b");
+insert into t1 values (2,3,"c");
+insert into t1 values (3,4,"E");
+insert into t1 values (3,5,"C");
+insert into t1 values (3,6,"D");
+select sum(distinct a),sum(distinct grp) from t1;
+insert into t1 values (null,null,'');
+select sum(distinct a),sum(distinct grp) from t1;
+drop table t1;

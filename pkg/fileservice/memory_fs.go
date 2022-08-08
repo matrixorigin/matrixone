@@ -22,20 +22,22 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/google/btree"
+	"github.com/tidwall/btree"
 )
 
 // MemoryFS is an in-memory FileService implementation
 type MemoryFS struct {
 	sync.RWMutex
-	tree *btree.BTree
+	tree *btree.Generic[*_MemFSEntry]
 }
 
 var _ FileService = new(MemoryFS)
 
 func NewMemoryFS() (*MemoryFS, error) {
 	return &MemoryFS{
-		tree: btree.New(2),
+		tree: btree.NewGeneric(func(a, b *_MemFSEntry) bool {
+			return a.FilePath < b.FilePath
+		}),
 	}, nil
 }
 
@@ -43,13 +45,16 @@ func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry
 	m.RLock()
 	defer m.RUnlock()
 
+	iter := m.tree.Iter()
+	defer iter.Release()
+
 	pivot := &_MemFSEntry{
 		FilePath: dirPath,
 	}
-	m.tree.AscendGreaterOrEqual(pivot, func(v btree.Item) bool {
-		item := v.(*_MemFSEntry)
+	for ok := iter.Seek(pivot); ok; ok = iter.Next() {
+		item := iter.Item()
 		if !strings.HasPrefix(item.FilePath, dirPath) {
-			return false
+			break
 		}
 
 		relPath := strings.TrimPrefix(item.FilePath, dirPath)
@@ -65,9 +70,7 @@ func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry
 				Size:  len(item.Data),
 			})
 		}
-
-		return true
-	})
+	}
 
 	return
 }
@@ -79,15 +82,8 @@ func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
 	pivot := &_MemFSEntry{
 		FilePath: vector.FilePath,
 	}
-	existed := false
-	m.tree.AscendGreaterOrEqual(pivot, func(item btree.Item) bool {
-		entry := item.(*_MemFSEntry)
-		if entry.FilePath == vector.FilePath {
-			existed = true
-		}
-		return false
-	})
-	if existed {
+	_, ok := m.tree.Get(pivot)
+	if ok {
 		return ErrFileExisted
 	}
 
@@ -119,12 +115,17 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 		FilePath: vector.FilePath,
 		Data:     data,
 	}
-	m.tree.ReplaceOrInsert(entry)
+	m.tree.Set(entry)
 
 	return nil
 }
 
 func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
+
+	if len(vector.Entries) == 0 {
+		return ErrEmptyVector
+	}
+
 	m.RLock()
 	defer m.RUnlock()
 
@@ -132,14 +133,16 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 		FilePath: vector.FilePath,
 	}
 
-	v := m.tree.Get(pivot)
-	if v == nil {
+	fsEntry, ok := m.tree.Get(pivot)
+	if !ok {
 		return ErrFileNotFound
 	}
 
-	fsEntry := v.(*_MemFSEntry)
-
 	for i, entry := range vector.Entries {
+		if entry.ignore {
+			continue
+		}
+
 		if entry.Size == 0 {
 			return ErrEmptyRange
 		}
@@ -152,6 +155,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 		data := fsEntry.Data[entry.Offset : entry.Offset+entry.Size]
 
 		setData := true
+
 		if w := vector.Entries[i].WriterForRead; w != nil {
 			setData = false
 			_, err := w.Write(data)
@@ -159,17 +163,25 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 				return err
 			}
 		}
+
 		if ptr := vector.Entries[i].ReadCloserForRead; ptr != nil {
 			setData = false
 			*ptr = io.NopCloser(bytes.NewReader(data))
 		}
+
 		if setData {
 			if len(entry.Data) < entry.Size {
-				vector.Entries[i].Data = data
+				entry.Data = data
 			} else {
 				copy(entry.Data, data)
 			}
 		}
+
+		if err := entry.setObjectFromData(); err != nil {
+			return err
+		}
+
+		vector.Entries[i] = entry
 	}
 
 	return nil
@@ -182,18 +194,7 @@ func (m *MemoryFS) Delete(ctx context.Context, filePath string) error {
 	pivot := &_MemFSEntry{
 		FilePath: filePath,
 	}
-	var toDelete []btree.Item
-	m.tree.AscendGreaterOrEqual(pivot, func(v btree.Item) bool {
-		item := v.(*_MemFSEntry)
-		if item.FilePath != filePath {
-			return false
-		}
-		toDelete = append(toDelete, v)
-		return true
-	})
-	for _, v := range toDelete {
-		m.tree.Delete(v)
-	}
+	m.tree.Delete(pivot)
 
 	return nil
 }
@@ -201,13 +202,6 @@ func (m *MemoryFS) Delete(ctx context.Context, filePath string) error {
 type _MemFSEntry struct {
 	FilePath string
 	Data     []byte
-}
-
-var _ btree.Item = new(_MemFSEntry)
-
-func (m *_MemFSEntry) Less(than btree.Item) bool {
-	m2 := than.(*_MemFSEntry)
-	return m.FilePath < m2.FilePath
 }
 
 var _ ReplaceableFileService = new(MemoryFS)

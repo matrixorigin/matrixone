@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
@@ -37,6 +38,7 @@ const (
 
 func getServiceTestConfig() Config {
 	c := Config{
+		UUID:                 uuid.New().String(),
 		RTTMillisecond:       10,
 		GossipSeedAddresses:  []string{"127.0.0.1:9000"},
 		DeploymentID:         1,
@@ -482,6 +484,7 @@ func TestServiceCheckHAKeeper(t *testing.T) {
 func TestShardInfoCanBeQueried(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg1 := Config{
+		UUID:                uuid.New().String(),
 		FS:                  vfs.NewStrictMem(),
 		DeploymentID:        1,
 		RTTMillisecond:      5,
@@ -493,6 +496,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		DisableWorkers:      true,
 	}
 	cfg2 := Config{
+		UUID:                uuid.New().String(),
 		FS:                  vfs.NewStrictMem(),
 		DeploymentID:        1,
 		RTTMillisecond:      5,

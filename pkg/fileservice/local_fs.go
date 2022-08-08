@@ -35,11 +35,16 @@ type LocalFS struct {
 
 	sync.RWMutex
 	dirFiles map[string]*os.File
+
+	memCache *MemCache
 }
 
 var _ FileService = new(LocalFS)
 
-func NewLocalFS(rootPath string) (*LocalFS, error) {
+func NewLocalFS(
+	rootPath string,
+	memCacheCapacity int,
+) (*LocalFS, error) {
 
 	const sentinelFileName = "thisisalocalfileservicedir"
 
@@ -87,10 +92,15 @@ func NewLocalFS(rootPath string) (*LocalFS, error) {
 		return nil, err
 	}
 
-	return &LocalFS{
+	fs := &LocalFS{
 		rootPath: rootPath,
 		dirFiles: make(map[string]*os.File),
-	}, nil
+	}
+	if memCacheCapacity > 0 {
+		fs.memCache = NewMemCache(memCacheCapacity)
+	}
+
+	return fs, nil
 }
 
 func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
@@ -161,6 +171,24 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 
 func (l *LocalFS) Read(ctx context.Context, vector *IOVector) error {
 
+	if len(vector.Entries) == 0 {
+		return ErrEmptyVector
+	}
+
+	if l.memCache == nil {
+		// no cache
+		return l.read(ctx, vector)
+	}
+
+	if err := l.memCache.Read(ctx, vector, l.read); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
+
 	nativePath := l.toNativeFilePath(vector.FilePath)
 	f, err := os.Open(nativePath)
 	if os.IsNotExist(err) {
@@ -192,6 +220,10 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) error {
 	}
 
 	for i, entry := range vector.Entries {
+		if entry.ignore {
+			continue
+		}
+
 		start := entry.Offset - min
 		if start >= len(content) {
 			return ErrEmptyRange
@@ -209,6 +241,7 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) error {
 		}
 
 		setData := true
+
 		if w := vector.Entries[i].WriterForRead; w != nil {
 			setData = false
 			_, err := w.Write(data)
@@ -216,17 +249,25 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) error {
 				return err
 			}
 		}
+
 		if ptr := vector.Entries[i].ReadCloserForRead; ptr != nil {
 			setData = false
 			*ptr = io.NopCloser(bytes.NewReader(data))
 		}
+
 		if setData {
 			if len(entry.Data) < entry.Size {
-				vector.Entries[i].Data = data
+				entry.Data = data
 			} else {
 				copy(entry.Data, data)
 			}
 		}
+
+		if err := entry.setObjectFromData(); err != nil {
+			return err
+		}
+
+		vector.Entries[i] = entry
 	}
 
 	return nil
@@ -442,4 +483,19 @@ var _ ReplaceableFileService = new(LocalFS)
 
 func (l *LocalFS) Replace(ctx context.Context, vector IOVector) error {
 	return l.write(ctx, vector)
+}
+
+var _ CachingFileService = new(LocalFS)
+
+func (l *LocalFS) FlushCache() {
+	if l.memCache != nil {
+		l.memCache.Flush()
+	}
+}
+
+func (l *LocalFS) CacheStats() *CacheStats {
+	if l.memCache != nil {
+		return l.memCache.CacheStats()
+	}
+	return nil
 }

@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"os"
@@ -122,6 +123,10 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 
 func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 
+	if len(vector.Entries) == 0 {
+		return ErrEmptyVector
+	}
+
 	nativePath := l.toNativeFilePath(vector.FilePath)
 	_, err := os.Stat(nativePath)
 	if os.IsNotExist(err) {
@@ -134,6 +139,10 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 	for i, entry := range vector.Entries {
 		if entry.Size == 0 {
 			return ErrEmptyRange
+		}
+
+		if entry.ignore {
+			continue
 		}
 
 		if entry.WriterForRead != nil {
@@ -154,12 +163,30 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 			if entry.Size > 0 {
 				r = io.LimitReader(r, int64(entry.Size))
 			}
-			n, err := io.Copy(entry.WriterForRead, r)
-			if err != nil {
-				return err
-			}
-			if n != int64(entry.Size) {
-				return ErrUnexpectedEOF
+
+			if entry.ToObject != nil {
+				r = io.TeeReader(r, entry.WriterForRead)
+				cr := &countingReader{
+					R: r,
+				}
+				obj, size, err := entry.ToObject(cr)
+				if err != nil {
+					return err
+				}
+				vector.Entries[i].Object = obj
+				vector.Entries[i].ObjectSize = size
+				if cr.N != entry.Size {
+					return ErrUnexpectedEOF
+				}
+
+			} else {
+				n, err := io.Copy(entry.WriterForRead, r)
+				if err != nil {
+					return err
+				}
+				if n != int64(entry.Size) {
+					return ErrUnexpectedEOF
+				}
 			}
 
 		} else if entry.ReadCloserForRead != nil {
@@ -179,9 +206,26 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 			if entry.Size > 0 {
 				r = io.LimitReader(r, int64(entry.Size))
 			}
-			*entry.ReadCloserForRead = &readCloser{
-				r:         r,
-				closeFunc: f.Close,
+			if entry.ToObject == nil {
+				*entry.ReadCloserForRead = &readCloser{
+					r:         r,
+					closeFunc: f.Close,
+				}
+			} else {
+				buf := new(bytes.Buffer)
+				*entry.ReadCloserForRead = &readCloser{
+					r: io.TeeReader(r, buf),
+					closeFunc: func() error {
+						defer f.Close()
+						obj, size, err := entry.ToObject(buf)
+						if err != nil {
+							return err
+						}
+						vector.Entries[i].Object = obj
+						vector.Entries[i].ObjectSize = size
+						return nil
+					},
+				}
 			}
 
 		} else {
@@ -221,6 +265,10 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				if n != entry.Size {
 					return ErrUnexpectedEOF
 				}
+			}
+
+			if err := entry.setObjectFromData(); err != nil {
+				return err
 			}
 
 			vector.Entries[i] = entry

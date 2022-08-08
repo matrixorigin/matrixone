@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -487,6 +488,8 @@ func (mrs *MysqlResultSet) GetString(rindex, cindex uint64) (string, error) {
 	case uint:
 		return strconv.FormatUint(uint64(v), 10), nil
 	case types.Datetime:
+		return v.String(), nil
+	case bytejson.ByteJson:
 		return v.String(), nil
 	default:
 		return "", fmt.Errorf("unsupported type %d ", v)

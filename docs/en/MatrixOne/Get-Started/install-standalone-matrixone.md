@@ -2,13 +2,13 @@
 
 MatrixOne supports Linux and MacOS. You can install a standalone MatrixOne version by 3 methods:
 
-* Building from source.
-* Using binary package.
-* Using Docker.
+- <p><a href="#code_source">Method 1: Building from source</a>.</p>
+- <p><a href="#binary_packages">Method 2: Using binary package</a>.</p>
+- <p><a href="#use_docker">Method 3: Using Docker</a>.</p>
 
 Recommended hardware specification: x86 CPU with 4 cores and 32GB memory, with CentOS 7+ OS.
 
-## **Method 1: Building from source**
+## <h2><a name="code_source">Method 1: Building from source</a></h2>
 
 #### 1. Install Go as necessary dependancy
 
@@ -58,7 +58,7 @@ When you finish installing MatrixOne, you can refer to the section below to conn
 
 See [Connect to MatrixOne server](connect-to-matrixone-server.md).
 
-## **Method 2: Downloading binary packages**
+## <h2><a name="binary_packages">Method 2: Downloading binary packages</a></h2>
 
 For each release, you can download binary packages directly to run MatrixOne in the X86_64 Linux or Mac X86_64 environment.
 
@@ -81,7 +81,7 @@ unzip mo-server-v0.5.0-darwin-x86_64.zip
 #### 2.Launch MatrixOne server
 
 ```
-$./mo-server system_vars_config.toml
+./mo-server system_vars_config.toml
 ```
 
 #### 3. Connect to MatrixOne Server
@@ -90,7 +90,7 @@ When you finish installing MatrixOne, you can refer to the section below to conn
 
 See [Connect to MatrixOne server](connect-to-matrixone-server.md).
 
-## **Method 3: Using docker**
+## <h2><a name="use_docker">Method 3: Using docker</a></h2>
 
 #### 1. Install Docker
 
@@ -123,3 +123,7 @@ For the information on the user name and password, see the next step - Connect t
 When you finish installing MatrixOne, you can refer to the section below to connect to the MatrixOne server.
 
 See [Connect to MatrixOne server](connect-to-matrixone-server.md).
+
+## Reference
+
+For more information on deployment，see[Deployment FAQs](../FAQs/deployment-faqs.md).

@@ -1,0 +1,38 @@
+# service node type, [DN|CN|LOG]
+service-type = "DN"
+
+[log]
+level = "debug"
+format = "json"
+max-size = 512
+
+[[fileservice]]
+# local fileservice instance, used to store TAE Data and DNStore metadata.
+name = "local"
+# use disk as fileservice backend
+backend = "DISK"
+# set the directory used by DISK backend. There must has a file named "thisisalocalfileservicedir"
+# in the data dir
+data-dir = "data dir"
+
+[[fileservice]]
+# s3 fileservice instance, used to store data.
+name = "s3"
+# use disk as fileservice backend.
+backend = "DISK"
+# set the directory used by DISK backend. There must has a file named "thisisalocalfileservicedir"
+# in the data dir
+data-dir = "data dir"
+
+[dn]
+uuid = "dn uuid"
+
+[dn.Txn.Storage]
+# txn storage backend implementation. [TAE|MEM]
+backend = "MEM"
+
+[dn.HAKeeper.hakeeper-client]
+service-addresses = [
+    "1",
+    "2"
+]

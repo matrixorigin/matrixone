@@ -18,6 +18,10 @@ import (
 	"bytes"
 )
 
+const (
+	MaxStringSize = 10485760
+)
+
 func (a *Bytes) Reset() {
 	a.Offsets = a.Offsets[:0]
 	a.Lengths = a.Lengths[:0]
@@ -53,6 +57,10 @@ func (a *Bytes) Append(vs [][]byte) error {
 func (a *Bytes) Get(n int64) []byte {
 	offset := a.Offsets[n]
 	return a.Data[offset : offset+a.Lengths[n]]
+}
+
+func (a *Bytes) GetString(n int64) string {
+	return string(a.Get(n))
 }
 
 func (a *Bytes) Swap(i, j int64) {

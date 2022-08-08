@@ -31,6 +31,7 @@ type FileService interface {
 	// returns ErrFileNotFound if requested file not found
 	// returns ErrUnexpectedEOF if less data is read than requested size
 	// returns ErrEmptyRange if no data at specified offset and size
+	// returns ErrEmptyVector if no IOEntry is passed
 	Read(ctx context.Context, vector *IOVector) error
 
 	// List lists sub-entries in a dir
@@ -61,6 +62,26 @@ type IOEntry struct {
 
 	// when writing, if Reader is not nil, read data from it instead of reading Data field
 	ReaderForWrite io.Reader
+
+	// when reading, if the ToObject field is not nil, the returning object will be set to this field
+	// caches may choose to cache this object instead of caching []byte
+	// Data, WriterForRead, ReadCloserForRead may be empty if Object is not null
+	Object any
+
+	// ToObject constructs an object from entry contents
+	// the io.Reader must be fully read before returning nil error
+	// to pin a value in cache, return a *Pinned[T] value
+	ToObject func(r io.Reader) (object any, objectSize int, err error)
+
+	// ObjectSize indicates the memory bytes to hold the object
+	// set from ToObject returning value
+	// used in capacity limited caches
+	ObjectSize int
+
+	// ignore indicates the entry should be ignored
+	// if true, implementations must not change any field
+	// for caches to skip individual IOEntry without using another IOVector
+	ignore bool
 }
 
 // DirEntry is a file or dir

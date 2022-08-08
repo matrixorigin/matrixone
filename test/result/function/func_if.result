@@ -12,6 +12,7 @@ a
 0
 null
 drop table t1;
+drop table if exists t;
 CREATE TABLE t (i1 INT,
 d1 DOUBLE,
 e2 DECIMAL(5,2));
@@ -46,14 +47,15 @@ i	c	co
 1111111111111111111	1111111111111111111	1111111111111111111
 create table t1 (a bigint unsigned);
 insert into t1 select (if(1, 9223372036854775808, 1));
+Can't cast '9223372036854775808' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 insert into t1 select (case when 1 then 9223372036854775808 else 1 end);
+Can't cast '9223372036854775808' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 insert into t1 select (coalesce(9223372036854775808, 1));
+Can't cast '9223372036854775808' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 select * from t1;
 a
-9223372036854775808
-9223372036854775808
-9223372036854775808
 drop table t1;
+drop table if exists t;
 CREATE TABLE t (i1 INT,
 d1 DOUBLE,
 e2 DECIMAL(5,2));
