@@ -117,6 +117,7 @@ message Const {
 		decimal128 decimal128val = 11;
 		int64 timestampval = 12;
 		string jsonval = 13;
+		bool defaultval = 14;
 	}
 }
 

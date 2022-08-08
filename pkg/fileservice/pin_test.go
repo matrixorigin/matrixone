@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,12 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dnservice
+package fileservice
 
-import "fmt"
+import (
+	"testing"
 
-var (
-	errShardNotReported = fmt.Errorf("shard not reported")
-	errShardNotRecorded = fmt.Errorf("shard not recorded in cluster")
-	errNoWorkingStore   = fmt.Errorf("no working store")
+	"github.com/stretchr/testify/assert"
 )
+
+func TestPin(t *testing.T) {
+	l := NewLRU(1)
+
+	p := Pin(42)
+	l.Set(1, p, 1)
+	_, ok := l.kv[1]
+	assert.True(t, ok)
+
+	l.Set(2, 42, 1)
+	_, ok = l.kv[1]
+	assert.True(t, ok)
+	_, ok = l.kv[2]
+	assert.False(t, ok)
+
+	p.Unpin()
+	l.Set(2, 42, 1)
+	_, ok = l.kv[1]
+	assert.False(t, ok)
+	_, ok = l.kv[2]
+	assert.True(t, ok)
+
+	l.Set(3, Pin(42), 1)
+	_, ok = l.kv[3]
+	assert.True(t, ok)
+	_, ok = l.kv[2]
+	assert.False(t, ok)
+
+}

@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,12 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dnservice
+package fileservice
 
-import "fmt"
+import "sync/atomic"
 
-var (
-	errShardNotReported = fmt.Errorf("shard not reported")
-	errShardNotRecorded = fmt.Errorf("shard not recorded in cluster")
-	errNoWorkingStore   = fmt.Errorf("no working store")
-)
+// Pinned represents a pinned value that will not evict in LRU
+type Pinned[T any] struct {
+	Value T
+	unpin int32
+}
+
+// Pin creates a Pinned value
+func Pin[T any](value T) *Pinned[T] {
+	return &Pinned[T]{
+		Value: value,
+	}
+}
+
+// Unpin marks the value as unpin to be evictable in LRU
+func (p *Pinned[T]) Unpin() {
+	atomic.StoreInt32(&p.unpin, 1)
+}
+
+// IsPinned returns whether the value is pinned
+func (p *Pinned[T]) IsPinned() bool {
+	return atomic.LoadInt32(&p.unpin) == 0
+}

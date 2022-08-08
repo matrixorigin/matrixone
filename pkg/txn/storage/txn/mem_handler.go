@@ -835,38 +835,32 @@ func (*MemHandler) HandleClose() error {
 	return nil
 }
 
-// HandleCommit implements Handler
-func (*MemHandler) HandleCommit(meta txn.TxnMeta) error {
-	//TODO
-	panic("unimplemented")
+func (m *MemHandler) HandleCommit(meta txn.TxnMeta) error {
+	tx := m.getTx(meta)
+	tx.State.Store(Committed)
+	return nil
 }
 
-// HandleCommitting implements Handler
-func (*MemHandler) HandleCommitting(meta txn.TxnMeta) error {
-	//TODO
-	panic("unimplemented")
+func (m *MemHandler) HandleCommitting(meta txn.TxnMeta) error {
+	return nil
 }
 
-// HandleDestroy implements Handler
-func (*MemHandler) HandleDestroy() error {
-	//TODO
-	panic("unimplemented")
+func (m *MemHandler) HandleDestroy() error {
+	*m = *NewMemHandler()
+	return nil
 }
 
-// HandlePrepare implements Handler
-func (*MemHandler) HandlePrepare(meta txn.TxnMeta) (timestamp.Timestamp, error) {
-	//TODO
-	panic("unimplemented")
+func (m *MemHandler) HandlePrepare(meta txn.TxnMeta) (timestamp.Timestamp, error) {
+	tx := m.getTx(meta)
+	tx.Tick()
+	return tx.CurrentTime, nil
 }
 
-// HandleRollback implements Handler
-func (*MemHandler) HandleRollback(meta txn.TxnMeta) error {
-	//TODO
-	panic("unimplemented")
+func (m *MemHandler) HandleRollback(meta txn.TxnMeta) error {
+	tx := m.getTx(meta)
+	tx.State.Store(Aborted)
+	return nil
 }
 
-// HandleStartRecovery implements Handler
-func (*MemHandler) HandleStartRecovery(chan txn.TxnMeta) {
-	//TODO
-	panic("unimplemented")
+func (m *MemHandler) HandleStartRecovery(chan txn.TxnMeta) {
 }

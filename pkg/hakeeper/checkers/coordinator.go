@@ -66,7 +66,7 @@ func (c *Coordinator) Check(alloc util.IDAllocator, cluster pb.ClusterInfo,
 
 	operators := make([]*operator.Operator, 0)
 	operators = append(operators, logservice.Check(alloc, c.cfg, cluster, logState, executing, currentTick)...)
-	operators = append(operators, dnservice.Check(alloc, c.cfg, dnState, currentTick)...)
+	operators = append(operators, dnservice.Check(alloc, c.cfg, cluster, dnState, currentTick)...)
 
 	return c.OperatorController.Dispatch(operators, logState, dnState)
 }

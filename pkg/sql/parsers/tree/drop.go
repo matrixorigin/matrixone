@@ -166,3 +166,18 @@ func NewDropUser(ife bool, u []*User) *DropUser {
 		Users:    u,
 	}
 }
+
+type DropAccount struct {
+	statementImpl
+	IfExists bool
+	Name     string
+}
+
+func (node *DropAccount) Format(ctx *FmtCtx) {
+	ctx.WriteString("drop account")
+	if node.IfExists {
+		ctx.WriteString(" if exists")
+	}
+	ctx.WriteString(" ")
+	ctx.WriteString(node.Name)
+}
