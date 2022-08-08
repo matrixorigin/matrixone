@@ -856,24 +856,24 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 		return fmt.Errorf("LOCAL is unsupported now")
 	}
 
-	if load.Fields == nil || len(load.Fields.Terminated) == 0 {
+	if load.LoadParam.Tail.Fields == nil || len(load.LoadParam.Tail.Fields.Terminated) == 0 {
 		return fmt.Errorf("load need FIELDS TERMINATED BY ")
 	}
 
-	if load.Fields != nil && load.Fields.EscapedBy != 0 {
+	if load.LoadParam.Tail.Fields != nil && load.LoadParam.Tail.Fields.EscapedBy != 0 {
 		return fmt.Errorf("EscapedBy field is unsupported now")
 	}
 
 	/*
 		check file
 	*/
-	exist, isfile, err := PathExists(load.File)
+	exist, isfile, err := PathExists(load.LoadParam.Filepath)
 	if err != nil || !exist {
-		return fmt.Errorf("file %s does exist. err:%v", load.File, err)
+		return fmt.Errorf("file %s does exist. err:%v", load.LoadParam.Filepath, err)
 	}
 
 	if !isfile {
-		return fmt.Errorf("file %s is a directory", load.File)
+		return fmt.Errorf("file %s is a directory", load.LoadParam.Filepath)
 	}
 
 	/*
@@ -1775,13 +1775,13 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetUserName("")
 			}
-		case *tree.Load:
-			fromLoadData = true
-			selfHandle = true
-			err = mce.handleLoadData(st)
-			if err != nil {
-				goto handleFailed
-			}
+		/*case *tree.Load:
+		fromLoadData = true
+		selfHandle = true
+		err = mce.handleLoadData(st)
+		if err != nil {
+			goto handleFailed
+		}*/
 		case *tree.PrepareStmt:
 			selfHandle = true
 			err = mce.handlePrepareStmt(st)
@@ -2005,7 +2005,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			switch stmt.(type) {
 			case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
-				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
+				*tree.CreateUser, *tree.DropUser, *tree.AlterUser, *tree.Load,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete,
 				*tree.PrepareStmt, *tree.PrepareString, *tree.Deallocate:

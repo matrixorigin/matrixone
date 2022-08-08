@@ -28,7 +28,7 @@ MatrixOne is a future-oriented hyperconverged cloud & edge native DBMS that supp
 
 * **High Performance**
 
-     Accelerated queries supported by patented vectorized execution as well as optimal computation push-down strategies through factorization techniques.
+     Accelerated queries supported by patented vectorized execution as well as optimal computation.
 
 * **Strong Consistency**
 

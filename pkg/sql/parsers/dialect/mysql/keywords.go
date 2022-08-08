@@ -280,7 +280,6 @@ func init() {
 		"max_file_size":            MAX_FILE_SIZE,
 		"force_quote":              FORCE_QUOTE,
 		"external":                 EXTERNAL,
-		"localfile":                LOCALFILE,
 		"url":                      URL,
 		"s3option":                 S3OPTION,
 		"parser":                   PARSER,
@@ -485,5 +484,14 @@ func init() {
 		"admin_name":               ADMIN_NAME,
 		"random":                   RANDOM,
 		"suspend":                  SUSPEND,
+		"attribute":                ATTRIBUTE,
+		"history":                  HISTORY,
+		"reuse":                    REUSE,
+		"current":                  CURRENT,
+		"optional":                 OPTIONAL,
+		"failed_login_attempts":    FAILED_LOGIN_ATTEMPTS,
+		"password_lock_time":       PASSWORD_LOCK_TIME,
+		"unbounded":                UNBOUNDED,
+		"secondary":                SECONDARY,
 	}
 }

@@ -91,12 +91,12 @@ func (c *Compile) Run(_ uint64) (err error) {
 	//	PrintScope(nil, []*Scope{c.scope})
 
 	switch c.scope.Magic {
-	case Normal:
-		defer c.fillAnalyzeInfo()
-		return c.scope.Run(c)
 	case Merge:
 		defer c.fillAnalyzeInfo()
 		return c.scope.MergeRun(c)
+	case Normal:
+		defer c.fillAnalyzeInfo()
+		return c.scope.Run(c)
 	case Remote:
 		defer c.fillAnalyzeInfo()
 		return c.scope.RemoteRun(c)

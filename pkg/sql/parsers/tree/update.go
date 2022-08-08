@@ -117,7 +117,24 @@ const (
 	LZ4        = "lz4"
 )
 
-type LoadParam struct {
+type LoadParameter struct {
+	LoadType     int
+	Filepath     string
+	CompressType string
+	Tail         *TailParameter
+	S3Param      *S3Parameter
+	S3option     []string
+}
+
+type S3Parameter struct {
+	//s3 parameter
+	Config    fileservice.S3Config
+	Region    string
+	APIKey    string
+	APISecret string
+}
+
+type TailParameter struct {
 	//Fields
 	Fields *Fields
 	//Lines
@@ -128,35 +145,16 @@ type LoadParam struct {
 	ColumnList []LoadColumn
 	//set col_name
 	Assignments UpdateExprs
-	Filepath    string
-	//s3 parameter
-	Config       fileservice.S3Config
-	LoadType     int
-	CompressType string
-	Region       string
-	APIKey       string
-	APISecret    string
-	S3options    []string
 }
 
 //Load data statement
 type Load struct {
 	statementImpl
 	Local             bool
-	File              string
 	DuplicateHandling DuplicateKey
 	Table             *TableName
 	//Partition
-	//Fields
-	Fields *Fields
-	//Lines
-	Lines *Lines
-	//Ignored lines
-	IgnoredLines uint64
-	//col_name_or_user_var
-	ColumnList []LoadColumn
-	//set col_name
-	Assignments UpdateExprs
+	LoadParam *LoadParameter
 }
 
 func (node *Load) Format(ctx *FmtCtx) {
@@ -165,7 +163,7 @@ func (node *Load) Format(ctx *FmtCtx) {
 		ctx.WriteString(" local")
 	}
 	ctx.WriteString(" infile ")
-	ctx.WriteString(node.File)
+	//ctx.WriteString(node.File)
 
 	switch node.DuplicateHandling.(type) {
 	case *DuplicateKeyError:
@@ -178,49 +176,33 @@ func (node *Load) Format(ctx *FmtCtx) {
 	ctx.WriteString(" into table ")
 	node.Table.Format(ctx)
 
-	if node.Fields != nil {
+	if node.LoadParam.Tail.Fields != nil {
 		ctx.WriteByte(' ')
-		node.Fields.Format(ctx)
+		node.LoadParam.Tail.Fields.Format(ctx)
 	}
 
-	if node.Lines != nil {
+	if node.LoadParam.Tail.Lines != nil {
 		ctx.WriteByte(' ')
-		node.Lines.Format(ctx)
+		node.LoadParam.Tail.Lines.Format(ctx)
 	}
 
-	if node.IgnoredLines != 0 {
+	if node.LoadParam.Tail.IgnoredLines != 0 {
 		ctx.WriteString(" ignore ")
-		ctx.WriteString(strconv.FormatUint(node.IgnoredLines, 10))
+		ctx.WriteString(strconv.FormatUint(node.LoadParam.Tail.IgnoredLines, 10))
 		ctx.WriteString(" lines")
 	}
-	if node.ColumnList != nil {
+	if node.LoadParam.Tail.ColumnList != nil {
 		prefix := " ("
-		for _, c := range node.ColumnList {
+		for _, c := range node.LoadParam.Tail.ColumnList {
 			ctx.WriteString(prefix)
 			c.Format(ctx)
 			prefix = ", "
 		}
 		ctx.WriteByte(')')
 	}
-	if node.Assignments != nil {
+	if node.LoadParam.Tail.Assignments != nil {
 		ctx.WriteString(" set ")
-		node.Assignments.Format(ctx)
-	}
-}
-
-func NewLoad(l bool, f string, d DuplicateKey, t *TableName,
-	fie *Fields, li *Lines, il uint64, cl []LoadColumn,
-	a UpdateExprs) *Load {
-	return &Load{
-		Local:             l,
-		File:              f,
-		DuplicateHandling: d,
-		Table:             t,
-		Fields:            fie,
-		Lines:             li,
-		IgnoredLines:      il,
-		ColumnList:        cl,
-		Assignments:       a,
+		node.LoadParam.Tail.Assignments.Format(ctx)
 	}
 }
 

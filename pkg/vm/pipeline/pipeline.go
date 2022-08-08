@@ -17,7 +17,6 @@ package pipeline
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -102,7 +101,7 @@ func (p *Pipeline) Run2(proc *process.Process) (bool, error) {
 		return false, err
 	}
 
-	load := &tree.LoadParam{}
+	load := &tree.LoadParameter{}
 	err = json.Unmarshal([]byte(p.CreateSql), load)
 	if err != nil {
 		return false, err
@@ -113,7 +112,6 @@ func (p *Pipeline) Run2(proc *process.Process) (bool, error) {
 		return false, err
 	}
 
-	fmt.Println("wangjian sql1 is", load.IgnoredLines)
 	for _, fileName := range fileList {
 		load.Filepath = fileName
 		_, err := Run3(load, p, proc)

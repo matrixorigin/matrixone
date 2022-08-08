@@ -45,14 +45,14 @@ import (
 	"github.com/pierrec/lz4"
 )
 
-func ReadFromS3(loadParam *tree.LoadParam) ([]string, error) {
+func ReadFromS3(loadParam *tree.LoadParameter) ([]string, error) {
 	var config fileservice.S3Config
-	config.Bucket = loadParam.Config.Bucket
-	config.Endpoint = loadParam.Config.Endpoint
+	config.Bucket = loadParam.S3Param.Config.Bucket
+	config.Endpoint = loadParam.S3Param.Config.Endpoint
 
-	os.Setenv("AWS_REGION", loadParam.Region)
-	os.Setenv("AWS_ACCESS_KEY_ID", loadParam.APIKey)
-	os.Setenv("AWS_SECRET_ACCESS_KEY", loadParam.APISecret)
+	os.Setenv("AWS_REGION", loadParam.S3Param.Region)
+	os.Setenv("AWS_ACCESS_KEY_ID", loadParam.S3Param.APIKey)
+	os.Setenv("AWS_SECRET_ACCESS_KEY", loadParam.S3Param.APISecret)
 
 	fs, err := fileservice.NewS3FS(
 		config.Endpoint,
@@ -65,7 +65,7 @@ func ReadFromS3(loadParam *tree.LoadParam) ([]string, error) {
 	}
 
 	index := strings.LastIndex(loadParam.Filepath, "/")
-	dir, file  := "", loadParam.Filepath
+	dir, file := "", loadParam.Filepath
 	if index != -1 {
 		dir = string([]byte(loadParam.Filepath)[0:index])
 		file = string([]byte(loadParam.Filepath)[index+1:])
@@ -91,14 +91,14 @@ func ReadFromS3(loadParam *tree.LoadParam) ([]string, error) {
 	return fileList, nil
 }
 
-func ReadFromS3File(loadParam *tree.LoadParam) (io.ReadCloser, error) {
+func ReadFromS3File(loadParam *tree.LoadParameter) (io.ReadCloser, error) {
 	var config fileservice.S3Config
-	config.Bucket = loadParam.Config.Bucket
-	config.Endpoint = loadParam.Config.Endpoint
+	config.Bucket = loadParam.S3Param.Config.Bucket
+	config.Endpoint = loadParam.S3Param.Config.Endpoint
 
-	os.Setenv("AWS_REGION", loadParam.Region)
-	os.Setenv("AWS_ACCESS_KEY_ID", loadParam.APIKey)
-	os.Setenv("AWS_SECRET_ACCESS_KEY", loadParam.APISecret)
+	os.Setenv("AWS_REGION", loadParam.S3Param.Region)
+	os.Setenv("AWS_ACCESS_KEY_ID", loadParam.S3Param.APIKey)
+	os.Setenv("AWS_SECRET_ACCESS_KEY", loadParam.S3Param.APISecret)
 
 	fs, err := fileservice.NewS3FS(
 		config.Endpoint,
@@ -129,9 +129,9 @@ func ReadFromS3File(loadParam *tree.LoadParam) (io.ReadCloser, error) {
 	return r, nil
 }
 
-func ReadFromLocal(loadParam *tree.LoadParam) ([]string, error) {
+func ReadFromLocal(loadParam *tree.LoadParameter) ([]string, error) {
 	index := strings.LastIndex(loadParam.Filepath, "/")
-	dir, file  := "", loadParam.Filepath
+	dir, file := "", loadParam.Filepath
 	if index != -1 {
 		dir = string([]byte(loadParam.Filepath)[0:index])
 		file = string([]byte(loadParam.Filepath)[index+1:])
@@ -158,10 +158,10 @@ func ReadFromLocal(loadParam *tree.LoadParam) ([]string, error) {
 	return fileList, nil
 }
 
-func ReadFromLocalFile(loadParam *tree.LoadParam) (io.ReadCloser, error) {
+func ReadFromLocalFile(loadParam *tree.LoadParameter) (io.ReadCloser, error) {
 	var r io.ReadCloser
 	index := strings.LastIndex(loadParam.Filepath, "/")
-	dir, file  := "", loadParam.Filepath
+	dir, file := "", loadParam.Filepath
 	if index != -1 {
 		dir = string([]byte(loadParam.Filepath)[0:index])
 		file = string([]byte(loadParam.Filepath)[index+1:])
@@ -189,31 +189,31 @@ func ReadFromLocalFile(loadParam *tree.LoadParam) (io.ReadCloser, error) {
 	return r, nil
 }
 
-func InitS3Param(loadParam *tree.LoadParam) error {
-	for i := 0; i < len(loadParam.S3options); i += 2 {
-		switch strings.ToLower(loadParam.S3options[i]) {
+func InitS3Param(loadParam *tree.LoadParameter) error {
+	for i := 0; i < len(loadParam.S3option); i += 2 {
+		switch strings.ToLower(loadParam.S3option[i]) {
 		case "endpoint":
-			loadParam.Config.Endpoint = loadParam.S3options[i+1]
+			loadParam.S3Param.Config.Endpoint = loadParam.S3option[i+1]
 		case "region":
-			loadParam.Region = loadParam.S3options[i+1]
+			loadParam.S3Param.Region = loadParam.S3option[i+1]
 		case "access_key_id":
-			loadParam.APIKey = loadParam.S3options[i+1]
+			loadParam.S3Param.APIKey = loadParam.S3option[i+1]
 		case "secret_access_key":
-			loadParam.APISecret = loadParam.S3options[i+1]
+			loadParam.S3Param.APISecret = loadParam.S3option[i+1]
 		case "bucket":
-			loadParam.Config.Bucket = loadParam.S3options[i+1]
+			loadParam.S3Param.Config.Bucket = loadParam.S3option[i+1]
 		case "filepath":
-			loadParam.Filepath = loadParam.S3options[i+1]
+			loadParam.Filepath = loadParam.S3option[i+1]
 		case "compression":
-			loadParam.CompressType = loadParam.S3options[i+1]
+			loadParam.CompressType = loadParam.S3option[i+1]
 		default:
-			return fmt.Errorf("the keyword '%s' is not support", strings.ToLower(loadParam.S3options[i]))
+			return fmt.Errorf("the keyword '%s' is not support", strings.ToLower(loadParam.S3option[i]))
 		}
 	}
 	return nil
 }
 
-func getLoadDataList(loadParam *tree.LoadParam) ([]string, error) {
+func getLoadDataList(loadParam *tree.LoadParameter) ([]string, error) {
 	switch loadParam.LoadType {
 	case tree.LOCAL:
 		dataFile, err := ReadFromLocal(loadParam)
@@ -236,7 +236,7 @@ func getLoadDataList(loadParam *tree.LoadParam) ([]string, error) {
 	}
 }
 
-func getLoadDataReader(loadParam *tree.LoadParam) (io.ReadCloser, error) {
+func getLoadDataReader(loadParam *tree.LoadParameter) (io.ReadCloser, error) {
 	switch loadParam.LoadType {
 	case tree.LOCAL:
 		dataFile, err := ReadFromLocalFile(loadParam)
@@ -255,7 +255,7 @@ func getLoadDataReader(loadParam *tree.LoadParam) (io.ReadCloser, error) {
 	}
 }
 
-func getCompressType(loadParam *tree.LoadParam) string {
+func getCompressType(loadParam *tree.LoadParameter) string {
 	if loadParam.CompressType != "" && loadParam.CompressType != tree.AUTO {
 		return loadParam.CompressType
 	}
@@ -276,7 +276,7 @@ func getCompressType(loadParam *tree.LoadParam) string {
 	}
 }
 
-func getUnCompressReader(loadParam *tree.LoadParam, r io.ReadCloser) (io.ReadCloser, error) {
+func getUnCompressReader(loadParam *tree.LoadParameter, r io.ReadCloser) (io.ReadCloser, error) {
 	switch strings.ToLower(getCompressType(loadParam)) {
 	case tree.NOCOMPRESS:
 		return r, nil
@@ -708,7 +708,7 @@ func GetBatchData(p *Pipeline, plh *ParseLineHandler, proc *process.Process) (*b
 	return bat, nil
 }
 
-func Run3(load *tree.LoadParam, p *Pipeline, proc *process.Process) (bool, error) {
+func Run3(load *tree.LoadParameter, p *Pipeline, proc *process.Process) (bool, error) {
 	var bat *batch.Batch
 	var end bool // exist flag
 	var dataFile io.ReadCloser
@@ -736,11 +736,11 @@ func Run3(load *tree.LoadParam, p *Pipeline, proc *process.Process) (bool, error
 	plh.lineIdx = 0
 	plh.simdCsvGetParsedLinesChan = atomic.Value{}
 	plh.simdCsvGetParsedLinesChan.Store(make(chan simdcsv.LineOut, channelSize))
-	if load.Fields == nil {
-		load.Fields = &tree.Fields{Terminated: ","}
+	if load.Tail.Fields == nil {
+		load.Tail.Fields = &tree.Fields{Terminated: ","}
 	}
 	plh.simdCsvReader = simdcsv.NewReaderWithOptions(dataFile,
-		rune(load.Fields.Terminated[0]),
+		rune(load.Tail.Fields.Terminated[0]),
 		'#',
 		false,
 		false)
@@ -755,7 +755,7 @@ func Run3(load *tree.LoadParam, p *Pipeline, proc *process.Process) (bool, error
 		}
 	}()
 
-	ignore := int(load.IgnoredLines)
+	ignore := int(load.Tail.IgnoredLines)
 	var lineOut simdcsv.LineOut
 	for {
 		lineOut = <-getLineOutChan(plh.simdCsvGetParsedLinesChan)

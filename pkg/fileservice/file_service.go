@@ -70,6 +70,7 @@ type IOEntry struct {
 
 	// ToObject constructs an object from entry contents
 	// the io.Reader must be fully read before returning nil error
+	// to pin a value in cache, return a *Pinned[T] value
 	ToObject func(r io.Reader) (object any, objectSize int, err error)
 
 	// ObjectSize indicates the memory bytes to hold the object

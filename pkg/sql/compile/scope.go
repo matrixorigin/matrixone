@@ -132,7 +132,6 @@ func (s *Scope) MergeRun(c *Compile) error {
 	if _, err := p.MergeRun(s.Proc); err != nil {
 		return err
 	}
-
 	// check sub-goroutine's error
 	for i := 0; i < len(s.PreScopes); i++ {
 		if err := <-errChan; err != nil {
