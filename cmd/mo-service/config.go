@@ -123,7 +123,7 @@ func (c *Config) resolveGossipSeedAddresses() error {
 		}
 		addrs, err := net.LookupHost(host)
 		if err != nil {
-			return err
+			continue
 		}
 		// only keep IPv4 addresses
 		filtered := make([]string, 0)
