@@ -36,7 +36,7 @@ type TxnManager struct {
 	sm.StateMachine
 	Active          map[uint64]txnif.AsyncTxn
 	IdAlloc         *common.IdAlloctor
-	TsAlloc         *common.TsAlloctor
+	TsAlloc         *types.TsAlloctor
 	TxnStoreFactory TxnStoreFactory
 	TxnFactory      TxnFactory
 	//ActiveMask      *roaring64.Bitmap
@@ -51,7 +51,7 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	mgr := &TxnManager{
 		Active:          make(map[uint64]txnif.AsyncTxn),
 		IdAlloc:         common.NewIdAlloctor(1),
-		TsAlloc:         common.NewTsAlloctor(clock),
+		TsAlloc:         types.NewTsAlloctor(clock),
 		TxnStoreFactory: txnStoreFactory,
 		TxnFactory:      txnFactory,
 		//ActiveMask:      roaring64.New(),

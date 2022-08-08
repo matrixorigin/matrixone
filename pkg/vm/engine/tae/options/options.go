@@ -14,7 +14,9 @@
 
 package options
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+)
 
 func (o *Options) FillDefaults(dirname string) *Options {
 	if o == nil {
@@ -54,7 +56,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 
 	if o.Clock == nil {
-		o.Clock = common.MockClock(1)
+		o.Clock = types.MockClock(1)
 	}
 
 	return o

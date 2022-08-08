@@ -65,7 +65,7 @@ func TestCreateDB1(t *testing.T) {
 	catalog := MockCatalog(dir, "mock", nil, nil)
 	defer catalog.Close()
 
-	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), common.MockClock(1))
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.MockClock(1))
 	txnMgr.Start()
 	defer txnMgr.Stop()
 
@@ -151,7 +151,7 @@ func TestTableEntry1(t *testing.T) {
 	catalog := MockCatalog(dir, "mock", nil, nil)
 	defer catalog.Close()
 
-	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), common.MockClock(1))
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.MockClock(1))
 	txnMgr.Start()
 	defer txnMgr.Stop()
 
@@ -226,7 +226,7 @@ func TestTableEntry2(t *testing.T) {
 	catalog := MockCatalog(dir, "mock", nil, nil)
 	defer catalog.Close()
 
-	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), common.MockClock(1))
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.MockClock(1))
 	txnMgr.Start()
 	defer txnMgr.Stop()
 
@@ -290,7 +290,7 @@ func TestDB1(t *testing.T) {
 	catalog := MockCatalog(dir, "mock", nil, nil)
 	defer catalog.Close()
 
-	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), common.MockClock(1))
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.MockClock(1))
 	txnMgr.Start()
 	defer txnMgr.Stop()
 	name := "db1"
@@ -326,7 +326,7 @@ func TestTable1(t *testing.T) {
 	catalog := MockCatalog(dir, "mock", nil, nil)
 	defer catalog.Close()
 
-	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), common.MockClock(1))
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.MockClock(1))
 	txnMgr.Start()
 	defer txnMgr.Stop()
 	name := "db1"
@@ -375,7 +375,7 @@ func TestCommand(t *testing.T) {
 
 	db := NewDBEntry(catalog, name, nil)
 	//db.CreateAt = common.NextGlobalSeqNum()
-	db.CreateAt = common.NextGlobalTsForTest()
+	db.CreateAt = types.NextGlobalTsForTest()
 	db.CurrOp = OpCreate
 	db.ID = uint64(99)
 
@@ -399,7 +399,7 @@ func TestCommand(t *testing.T) {
 
 	db.CurrOp = OpSoftDelete
 	//db.DeleteAt = common.NextGlobalSeqNum()
-	db.DeleteAt = common.NextGlobalTsForTest()
+	db.DeleteAt = types.NextGlobalTsForTest()
 
 	cdb, err = db.MakeCommand(1)
 	assert.Nil(t, err)
@@ -421,7 +421,7 @@ func TestCommand(t *testing.T) {
 	schema := MockSchemaAll(13, 0)
 	tb := NewTableEntry(db, schema, nil, nil)
 	//tb.CreateAt = common.NextGlobalSeqNum()
-	tb.CreateAt = common.NextGlobalTsForTest()
+	tb.CreateAt = types.NextGlobalTsForTest()
 	tb.ID = common.NextGlobalSeqNum()
 
 	w.Reset()
@@ -442,7 +442,7 @@ func TestCommand(t *testing.T) {
 	assert.Equal(t, tb.GetSchema().Name, eCmd.Table.GetSchema().Name)
 	assert.Equal(t, tb.db.ID, eCmd.DBID)
 
-	tb.DeleteAt = common.NextGlobalTsForTest()
+	tb.DeleteAt = types.NextGlobalTsForTest()
 	tb.CurrOp = OpSoftDelete
 
 	cmd, err = tb.MakeCommand(3)
@@ -474,7 +474,7 @@ func TestSegment1(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	catalog := MockCatalog(dir, "mock", nil, nil)
 	defer catalog.Close()
-	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), common.MockClock(1))
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.MockClock(1))
 	txnMgr.Start()
 	defer txnMgr.Stop()
 	name := "db"

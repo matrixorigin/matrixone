@@ -41,7 +41,7 @@ func TestSegment1(t *testing.T) {
 	blk1, err := seg.OpenBlock(blkId1, 2, nil)
 	assert.Nil(t, err)
 	//blkTs1 := common.NextGlobalSeqNum()
-	blkTs1 := common.NextGlobalTsForTest()
+	blkTs1 := types.NextGlobalTsForTest()
 	err = blk1.WriteTS(blkTs1)
 	assert.Nil(t, err)
 
@@ -75,7 +75,7 @@ func TestSegmentFile_Replay(t *testing.T) {
 		blkId1 := common.NextGlobalSeqNum()
 		block, err := seg.OpenBlock(blkId1, colCnt, indexCnt)
 		assert.Nil(t, err)
-		blockTs := common.NextGlobalTsForTest()
+		blockTs := types.NextGlobalTsForTest()
 		err = block.WriteTS(blockTs)
 		assert.Nil(t, err)
 		err = block.WriteRows(1)

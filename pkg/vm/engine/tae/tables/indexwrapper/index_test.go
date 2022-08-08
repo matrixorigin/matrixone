@@ -39,7 +39,7 @@ func TestRevert(t *testing.T) {
 	ctx.SelectAll()
 
 	//ts1 := uint64(99)
-	ts1 := common.NextGlobalTsForTest().Next()
+	ts1 := types.NextGlobalTsForTest().Next()
 	resp, err := idx.BatchUpsert(ctx, 0, ts1)
 	assert.NoError(t, err)
 	assert.Nil(t, resp)

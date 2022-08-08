@@ -39,7 +39,7 @@ func TestBlock1(t *testing.T) {
 	seg := SegmentFactory.Build(dir, id).(*segmentFile)
 	block = newBlock(common.NextGlobalSeqNum(), seg, colCnt, indexCnt)
 	//blockTs := common.NextGlobalSeqNum()
-	blockTs := common.NextGlobalTsForTest()
+	blockTs := types.NextGlobalTsForTest()
 	err := block.WriteTS(blockTs)
 	assert.Nil(t, err)
 	readTs, _ := block.ReadTS()

@@ -38,7 +38,7 @@ func TestCompactBlockCmd(t *testing.T) {
 
 	controller := NewMVCCHandle(blk)
 
-	ts := common.NextGlobalTsForTest()
+	ts := types.NextGlobalTsForTest()
 	//node := MockAppendNode(341, 0, 2515, controller)
 	node := MockAppendNode(ts, 0, 2515, controller)
 	cmd := NewAppendCmd(1, node)
