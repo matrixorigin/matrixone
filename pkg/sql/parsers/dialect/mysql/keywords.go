@@ -478,5 +478,16 @@ func init() {
 		"deallocate":               DEALLOCATE,
 		"intersect":                INTERSECT,
 		"minus":                    MINUS,
+		"admin_name":               ADMIN_NAME,
+		"random":                   RANDOM,
+		"suspend":                  SUSPEND,
+		"attribute":                ATTRIBUTE,
+		"history":                  HISTORY,
+		"reuse":                    REUSE,
+		"current":                  CURRENT,
+		"optional":                 OPTIONAL,
+		"failed_login_attempts":    FAILED_LOGIN_ATTEMPTS,
+		"password_lock_time":       PASSWORD_LOCK_TIME,
+		"unbounded":                UNBOUNDED,
 	}
 }

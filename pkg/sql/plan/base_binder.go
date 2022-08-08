@@ -139,8 +139,16 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.impl.BindSubquery(exprImpl, isRoot)
 
 	case *tree.DefaultVal:
-		err = errors.New("", fmt.Sprintf("expr default'%v' is not supported now", exprImpl))
-
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: false,
+					Value: &plan.Const_Defaultval{
+						Defaultval: true,
+					},
+				},
+			},
+		}, nil
 	case *tree.MaxValue:
 		err = errors.New("", fmt.Sprintf("expr max'%v' is not supported now", exprImpl))
 

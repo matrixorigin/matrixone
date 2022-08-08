@@ -137,7 +137,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	bat := proc.InputBatch()
 	if bat == nil {
 		if ctr.bat != nil {
-			if ap.Nbucket != 0 {
+			if ap.NeedEval {
 				for i, agg := range ctr.bat.Aggs {
 					vec, err := agg.Eval(proc.GetMheap())
 					if err != nil {
