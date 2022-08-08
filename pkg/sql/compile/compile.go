@@ -193,6 +193,14 @@ func (c *Compile) compileScope(pn *plan.Plan) (*Scope, error) {
 			Magic: InsertValues,
 			Plan:  pn,
 		}, nil
+	case *plan.Plan_Admin:
+		switch qry.Admin.AdminType {
+		case plan.Administration_CREATE_ACCOUNT:
+			return &Scope{
+				Magic: CreateAccount,
+				Plan:  pn,
+			}, nil
+		}
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", pn))
 }

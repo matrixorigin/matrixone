@@ -2135,7 +2135,7 @@ func (mce *MysqlCmdExecutor) Close() {
 StatementCanBeExecutedInUncommittedTransaction checks the statement can be executed in an active transaction.
 */
 func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
-	switch stmt.(type) {
+	switch st := stmt.(type) {
 	//ddl statement
 	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView:
 		return true
@@ -2151,9 +2151,16 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowWarnings:
 		return true
 		//others
-	case *tree.Use, *tree.PrepareStmt, *tree.Execute, *tree.Deallocate,
+	case *tree.PrepareStmt, *tree.Execute, *tree.Deallocate,
 		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
 		return true
+	case *tree.Use:
+		/*
+			These statements can not be executed in an uncommitted transaction:
+				USE SECONDARY ROLE { ALL | NONE }
+				USE ROLE role;
+		*/
+		return !st.IsUseRole()
 	}
 
 	return false
@@ -2180,12 +2187,15 @@ func IsDropStatement(stmt tree.Statement) bool {
 
 //IsAdministrativeStatement checks the statement is the administrative statement.
 func IsAdministrativeStatement(stmt tree.Statement) bool {
-	switch stmt.(type) {
-	case *tree.CreateUser, *tree.DropUser, *tree.AlterUser,
+	switch st := stmt.(type) {
+	case *tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
+		*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 		*tree.CreateRole, *tree.DropRole,
 		*tree.Revoke, *tree.Grant,
 		*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword:
 		return true
+	case *tree.Use:
+		return st.IsUseRole()
 	}
 	return false
 }

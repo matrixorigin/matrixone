@@ -559,6 +559,7 @@ message Plan {
 		DataDefinition ddl 		= 3;
 		DataControl	dcl			= 4;
 		InsertValues ins = 5;
+		Administration admin = 6;
 	}
 }
 
@@ -723,4 +724,61 @@ message Execute {
 
 message Deallocate {
 	string name			= 1;
+}
+
+//Database Administration statements
+message Administration {
+	enum AdminType{
+		CREATE_ACCOUNT = 0;
+		ALTER_ACCOUNT = 1;
+		DROP_ACCOUNT = 2;
+		CREATE_USER = 3;
+		ALTER_USER = 4;
+		DROP_USER = 5;
+		CREATE_ROLE = 6;
+		GRANT_PRIVILEGE = 7;
+		GRANT_ROLE = 8;
+		REVOKE_PRIVILEGE = 9;
+		REVOKE_ROLE = 10;
+		USE_ROLE = 11;
+	}
+	AdminType admin_type = 1;
+	oneof definition{
+		CreateAccount create_account = 2;
+	}
+}
+
+message CreateAccount{
+	bool if_not_exists = 1;
+	string name = 2;
+	AccountAuthOption auth_option = 3;
+	AccountStatus status_option = 4;
+	AccountComment account_comment = 5;
+}
+
+message AccountAuthOption{
+	string admin_name = 1;
+	AccountIdentified identified_type =2;
+}
+
+message AccountIdentified{
+	enum AccountIdentifiedOption{
+		ACCOUNT_IDENTIFIED_BY_PASSWORD = 0;
+		ACCOUNT_IDENTIFIED_BY_RANDOM_PASSWORD  =1;
+		ACCOUNT_IDENTIFIED_WITH_SSL  =2;
+	}
+	AccountIdentifiedOption Typ = 1;
+	string Str = 2;
+}
+
+message AccountStatus{
+	enum AccountStatusOption{
+		ACCOUNT_STATUS_OPEN = 0;
+		ACCOUNT_STATUS_SUSPEND =1;
+	}
+	AccountStatusOption option = 1;
+}
+
+message AccountComment{
+	string comment = 1;
 }
