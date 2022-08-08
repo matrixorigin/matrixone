@@ -59,6 +59,10 @@ func (a *Bytes) Get(n int64) []byte {
 	return a.Data[offset : offset+a.Lengths[n]]
 }
 
+func (a *Bytes) GetString(n int64) string {
+	return string(a.Get(n))
+}
+
 func (a *Bytes) Swap(i, j int64) {
 	a.Offsets[i], a.Offsets[j] = a.Offsets[j], a.Offsets[i]
 	a.Lengths[i], a.Lengths[j] = a.Lengths[j], a.Lengths[i]

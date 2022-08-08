@@ -42,3 +42,7 @@ WHERE EXISTS
 +------+
 2 rows in set (0.00 sec)
 ```
+
+## **Constraints**
+
+MatrixOne does not support selecting multiple columns for the subquery.
