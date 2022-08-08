@@ -1866,17 +1866,15 @@ func NewCreateRole(ife bool, r []*Role) *CreateRole {
 type Role struct {
 	NodeFormatter
 	UserName string
-	HostName string
 }
 
 func (node *Role) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.UserName)
 }
 
-func NewRole(u, h string) *Role {
+func NewRole(u string) *Role {
 	return &Role{
 		UserName: u,
-		HostName: h,
 	}
 }
 
