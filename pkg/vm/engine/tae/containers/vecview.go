@@ -32,31 +32,31 @@ func newVecView(impl Vector) *vecView {
 	}
 }
 
-// func (vec *vecView) Equals(o Vector) bool {
-// 	if vec.Length() != o.Length() {
-// 		return false
-// 	}
-// 	if vec.GetType() != o.GetType() {
-// 		return false
-// 	}
-// 	if vec.Nullable() != o.Nullable() {
-// 		return false
-// 	}
-// 	if vec.HasNull() != o.HasNull() {
-// 		return false
-// 	}
-// 	if vec.HasNull() {
-// 		if !vec.NullMask().Equals(o.NullMask()) {
-// 			return false
-// 		}
-// 	}
-// 	for i := 0; i < vec.Length(); i++ {
-// 		if vec.Get(i) != o.Get(i) {
-// 			return false
-// 		}
-// 	}
-// 	return true
-// }
+//	func (vec *vecView) Equals(o Vector) bool {
+//		if vec.Length() != o.Length() {
+//			return false
+//		}
+//		if vec.GetType() != o.GetType() {
+//			return false
+//		}
+//		if vec.Nullable() != o.Nullable() {
+//			return false
+//		}
+//		if vec.HasNull() != o.HasNull() {
+//			return false
+//		}
+//		if vec.HasNull() {
+//			if !vec.NullMask().Equals(o.NullMask()) {
+//				return false
+//			}
+//		}
+//		for i := 0; i < vec.Length(); i++ {
+//			if vec.Get(i) != o.Get(i) {
+//				return false
+//			}
+//		}
+//		return true
+//	}
 func (vec *vecView) IsView() bool                { return true }
 func (vec *vecView) Nullable() bool              { return vec.impl.Nullable() }
 func (vec *vecView) IsNull(i int) bool           { return vec.impl.IsNull(i) }

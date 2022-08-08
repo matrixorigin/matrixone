@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
-//RelationName counter for the new connection
+// RelationName counter for the new connection
 var initConnectionID uint32 = 1000
 
 // MOServer MatrixOne Server

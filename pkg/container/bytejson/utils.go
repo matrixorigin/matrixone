@@ -103,7 +103,7 @@ func extendByte(buf []byte, n int) []byte {
 	return buf
 }
 
-//add a uint64 to slice
+// add a uint64 to slice
 func addUint64(buf []byte, x uint64) []byte {
 	off := len(buf)
 	buf = extendByte(buf, numberSize)

@@ -29,23 +29,27 @@ import (
 )
 
 /*
-	scope options:
+scope options:
 
-	session:
+session:
 
-	If you change a session parameter,
-		the value remains in effect within your session until you change the variable to a different value
-			or the session ends.
-		The change has no effect on other sessions.
+If you change a session parameter,
 
-	global:
+	the value remains in effect within your session until you change the variable to a different value
+		or the session ends.
+	The change has no effect on other sessions.
 
-	If you change a global parameter, the value is remembered and used to initialize the session value
-		for new sessions until you change the parameter to a different value or the server exits.
-	The change is visible to any client that accesses the global value.
-		However, the change affects the corresponding session value only for clients that connect after the change.
-		The global parameter change does not affect the session value for any current client sessions (
-		not even the session within which the global value change occurs).
+global:
+
+If you change a global parameter, the value is remembered and used to initialize the session value
+
+	for new sessions until you change the parameter to a different value or the server exits.
+
+The change is visible to any client that accesses the global value.
+
+	However, the change affects the corresponding session value only for clients that connect after the change.
+	The global parameter change does not affect the session value for any current client sessions (
+	not even the session within which the global value change occurs).
 */
 var scopeOptions = []string{"session", "global"}
 
@@ -135,7 +139,8 @@ type parameters struct {
 	Parameter []parameter
 }
 
-/**
+/*
+*
 load and analyse parameters definition from the template file
 */
 func (params *parameters) LoadParametersDefinitionFromFile(filename string) error {
@@ -254,35 +259,40 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 	return err
 }
 
-/**
+/*
+*
 check if x is a valid lowercase ascii character
 */
 func isLowCaseASCIIChar(x byte) bool {
 	return x >= 'a' && x <= 'z' || x == '_'
 }
 
-/**
+/*
+*
 check if x is a valid uppercase ascii character
 */
 func isUpCaseASCIIChar(x byte) bool {
 	return x >= 'A' && x <= 'Z'
 }
 
-/**
+/*
+*
 check if x is a valid ascii character
 */
 func isASCIIChar(x byte) bool {
 	return x >= 'a' && x <= 'z' || x >= 'A' && x <= 'Z' || x == '_'
 }
 
-/**
+/*
+*
 check if x is a valid ascii digit
 */
 func isASCIIDigit(x byte) bool {
 	return x >= '0' && x <= '9'
 }
 
-/**
+/*
+*
 check if the string can be a valid identifier in Golang.
 
 In our context, the identifier can be defined as follow:
@@ -314,7 +324,8 @@ func isGoIdentifier(s string) bool {
 	return true
 }
 
-/**
+/*
+*
 check if the string can be a valid identifier in Golang.
 
 In our context, the identifier can be defined as follow:
@@ -346,7 +357,8 @@ func isExportedGoIdentifier(s string) bool {
 	return true
 }
 
-/**
+/*
+*
 check if the string can be a valid struct and interface identifier in Golang.
 
 In our context, the identifier can be defined as follow:
@@ -377,35 +389,40 @@ func isGoStructAndInterfaceIdentifier(s string) bool {
 	return true
 }
 
-/**
+/*
+*
 check if the scope is valid.
 */
 func isScope(sc []string) bool {
 	return isSubset(sc, scopeOptions)
 }
 
-/**
+/*
+*
 check if the access is valid.
 */
 func isAccess(sc []string) bool {
 	return isSubset(sc, accessOptions)
 }
 
-/**
+/*
+*
 check if the data type is valid
 */
 func isDataType(x string) bool {
 	return isInSlice(x, dataTypeOptions)
 }
 
-/**
+/*
+*
 check if the domain type is valid
 */
 func isDomainType(x string) bool {
 	return isInSlice(x, domainTyoeOptions)
 }
 
-/**
+/*
+*
 make a float string look like a float64 string.
 */
 func looklikeFloat64String(s string) string {
@@ -419,7 +436,8 @@ func looklikeFloat64String(s string) string {
 	}
 }
 
-/**
+/*
+*
 check if the values are valid based on dataType, domainType.
 */
 func checkValues(dataType string, domainType string, values []string) bool {
@@ -558,14 +576,16 @@ func checkValues(dataType string, domainType string, values []string) bool {
 	return false
 }
 
-/**
+/*
+*
 check if the update mode is valid
 */
 func isUpdateMode(um string) bool {
 	return isInSlice(um, updateModeOptions)
 }
 
-/**
+/*
+*
 check if A is a valid subset of B.
 if A has something that is not in B, then return false.
 if A has duplicate elements, then return false.
@@ -597,7 +617,8 @@ func isSubset(A []string, B []string) bool {
 	return len(A) > 0
 }
 
-/**
+/*
+*
 check if x in a slice
 */
 func isInSlice(x string, arr []string) bool {
@@ -609,7 +630,8 @@ func isInSlice(x string, arr []string) bool {
 	return false
 }
 
-/**
+/*
+*
 check if x has duplicate values.
 */
 func hasDuplicateValueString(x []string) bool {
@@ -624,7 +646,8 @@ func hasDuplicateValueString(x []string) bool {
 	return false
 }
 
-/**
+/*
+*
 check if x has duplicate values.
 */
 func hasDuplicateValueInt64(x []int64) bool {
@@ -639,7 +662,8 @@ func hasDuplicateValueInt64(x []int64) bool {
 	return false
 }
 
-/**
+/*
+*
 check if x has duplicate values.
 */
 func hasDuplicateValueFloat64(x []float64) bool {
