@@ -14,7 +14,26 @@
 
 package limit
 
+import "github.com/matrixorigin/matrixone/pkg/encoding"
+
 type Argument struct {
 	Seen  uint64 // seen is the number of tuples seen so far
 	Limit uint64
+}
+
+func (arg *Argument) MarshalBinary() ([]byte, error) {
+	return encoding.Encode(&Argument{
+		Limit: arg.Limit,
+		Seen:  arg.Seen,
+	})
+}
+
+func (arg *Argument) UnmarshalBinary(data []byte) error {
+	rs := new(Argument)
+	if err := encoding.Decode(data, rs); err != nil {
+		return err
+	}
+	arg.Limit = rs.Limit
+	arg.Seen = rs.Seen
+	return nil
 }

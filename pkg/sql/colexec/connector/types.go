@@ -16,6 +16,7 @@ package connector
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -23,4 +24,21 @@ import (
 type Argument struct {
 	vecs []*vector.Vector
 	Reg  *process.WaitRegister
+}
+
+func (arg *Argument) MarshalBinary() ([]byte, error) {
+	return encoding.Encode(&Argument{
+		vecs: arg.vecs,
+		Reg:  arg.Reg,
+	})
+}
+
+func (arg *Argument) UnmarshalBinary(data []byte) error {
+	rs := new(Argument)
+	if err := encoding.Decode(data, rs); err != nil {
+		return err
+	}
+	arg.Reg = rs.Reg
+	arg.vecs = rs.vecs
+	return nil
 }

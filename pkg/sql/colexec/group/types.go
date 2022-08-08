@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregate"
 )
@@ -57,4 +58,29 @@ type Argument struct {
 	Exprs    []*plan.Expr // group Expressions
 	Types    []types.Type
 	Aggs     []aggregate.Aggregate // aggregations
+}
+
+func (arg *Argument) MarshalBinary() ([]byte, error) {
+	return encoding.Encode(&Argument{
+		Ibucket:  arg.Ibucket,
+		Nbucket:  arg.Nbucket,
+		NeedEval: arg.NeedEval,
+		Exprs:    arg.Exprs,
+		Types:    arg.Types,
+		Aggs:     arg.Aggs,
+	})
+}
+
+func (arg *Argument) UnmarshalBinary(data []byte) error {
+	rs := new(Argument)
+	if err := encoding.Decode(data, rs); err != nil {
+		return err
+	}
+	arg.Ibucket = rs.Ibucket
+	arg.Nbucket = rs.Nbucket
+	arg.Aggs = rs.Aggs
+	arg.Exprs = rs.Exprs
+	arg.Types = rs.Types
+	arg.NeedEval = rs.NeedEval
+	return nil
 }

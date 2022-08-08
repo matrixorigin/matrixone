@@ -16,6 +16,7 @@ package dispatch
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -28,4 +29,23 @@ type Argument struct {
 	All  bool // dispatch batch to each consumer
 	vecs []*vector.Vector
 	Regs []*process.WaitRegister
+}
+
+func (arg *Argument) MarshalBinary() ([]byte, error) {
+	return encoding.Encode(&Argument{
+		All:  arg.All,
+		vecs: arg.vecs,
+		Regs: arg.Regs,
+	})
+}
+
+func (arg *Argument) UnmarshalBinary(data []byte) error {
+	rs := new(Argument)
+	if err := encoding.Decode(data, rs); err != nil {
+		return err
+	}
+	arg.All = rs.All
+	arg.vecs = rs.vecs
+	arg.Regs = rs.Regs
+	return nil
 }

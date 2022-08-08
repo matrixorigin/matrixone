@@ -16,6 +16,7 @@ package loopanti
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -34,4 +35,21 @@ type Argument struct {
 	ctr    *container
 	Result []int32
 	Cond   *plan.Expr
+}
+
+func (arg *Argument) MarshalBinary() ([]byte, error) {
+	return encoding.Encode(&Argument{
+		Result: arg.Result,
+		Cond:   arg.Cond,
+	})
+}
+
+func (arg *Argument) UnmarshalBinary(data []byte) error {
+	rs := new(Argument)
+	if err := encoding.Decode(data, rs); err != nil {
+		return err
+	}
+	arg.Result = rs.Result
+	arg.Cond = rs.Cond
+	return nil
 }

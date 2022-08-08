@@ -15,6 +15,7 @@
 package deletion
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -29,4 +30,23 @@ type DeleteCtx struct {
 	TableSource  engine.Relation
 	UseDeleteKey string
 	CanTruncate  bool
+}
+
+func (arg *Argument) MarshalBinary() ([]byte, error) {
+	return encoding.Encode(&Argument{
+		Ts:           arg.Ts,
+		DeleteCtxs:   arg.DeleteCtxs,
+		AffectedRows: arg.AffectedRows,
+	})
+}
+
+func (arg *Argument) UnmarshalBinary(data []byte) error {
+	rs := new(Argument)
+	if err := encoding.Decode(data, rs); err != nil {
+		return err
+	}
+	arg.Ts = rs.Ts
+	arg.AffectedRows = rs.AffectedRows
+	arg.DeleteCtxs = rs.DeleteCtxs
+	return nil
 }

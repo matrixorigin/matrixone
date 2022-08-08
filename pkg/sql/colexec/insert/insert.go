@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -34,6 +35,27 @@ type Argument struct {
 	TargetTable   engine.Relation
 	TargetColDefs []*plan.ColDef
 	Affected      uint64
+}
+
+func (arg *Argument) MarshalBinary() ([]byte, error) {
+	return encoding.Encode(&Argument{
+		Ts:            arg.Ts,
+		Affected:      arg.Affected,
+		TargetTable:   arg.TargetTable,
+		TargetColDefs: arg.TargetColDefs,
+	})
+}
+
+func (arg *Argument) UnmarshalBinary(data []byte) error {
+	rs := new(Argument)
+	if err := encoding.Decode(data, rs); err != nil {
+		return err
+	}
+	arg.Ts = rs.Ts
+	arg.Affected = rs.Affected
+	arg.TargetTable = rs.TargetTable
+	arg.TargetColDefs = rs.TargetColDefs
+	return nil
 }
 
 func String(_ any, buf *bytes.Buffer) {
