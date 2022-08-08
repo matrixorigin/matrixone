@@ -79,6 +79,29 @@
     TGT = ((A) <= (B))
 
 
+/*
+ * bool compare operator
+ */
+#define COMPARE_BOOL_EQ(TGT, A, B)                            \
+    TGT = ((A) == (B))
+
+#define COMPARE_BOOL_NE(TGT, A, B)                            \
+    TGT = ((A) != (B))
+
+#define COMPARE_BOOL_LE(TGT, A, B)                            \
+    TGT = ((!A) || (B))
+
+#define COMPARE_BOOL_LT(TGT, A, B)                            \
+    TGT = ((!A) && (B))
+
+#define COMPARE_BOOL_GE(TGT, A, B)                            \
+    TGT = ((A) || (!B))
+
+#define COMPARE_BOOL_GT(TGT, A, B)                            \
+    TGT = ((A) && (!B))
+
+
+
 
 
 #define MO_COMPARE_T(OP, ZT)                                  \
@@ -153,7 +176,9 @@ int32_t Numeric_VecEq(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, i
         MO_COMPARE_T(COMPARE_EQ, int64_t);
     } else if (szof == Type_TIMESTAMP) {
         MO_COMPARE_T(COMPARE_EQ, int64_t);
-    }else {
+    } else if (szof == Type_BOOL) {
+        MO_COMPARE_T(COMPARE_BOOL_EQ, bool);
+    } else {
         return RC_INVALID_ARGUMENT;
     }
     return RC_SUCCESS;
