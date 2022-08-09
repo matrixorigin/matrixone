@@ -18,10 +18,12 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
@@ -38,6 +40,7 @@ func main() {
 	flag.Parse()
 	maybePrintVersion()
 
+	rand.Seed(time.Now().UnixNano())
 	cfg, err := parseConfigFromFile(*configFile)
 	if err != nil {
 		panic(fmt.Sprintf("failed to parse config from %s, error: %s", *configFile, err.Error()))
