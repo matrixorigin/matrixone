@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package greatthan
+package compare
 
 import (
 	"fmt"
@@ -23,7 +23,7 @@ import (
 	"testing"
 )
 
-func TestI32(t *testing.T) {
+func TestI32Le(t *testing.T) {
 	as := make([]int32, 10)
 	bs := make([]int32, 10)
 	for i := 0; i < 10; i++ {
@@ -35,7 +35,7 @@ func TestI32(t *testing.T) {
 	bv := testutil.MakeInt32Vector(bs, nil)
 	cv := testutil.MakeBoolVector(cs)
 
-	err := NumericGreatThan[int32](av, bv, cv)
+	err := NumericLessEqual[int32](av, bv, cv)
 	if err != nil {
 		t.Fatal(err)
 		t.Fatalf("should not error.")
@@ -43,12 +43,12 @@ func TestI32(t *testing.T) {
 
 	res := vector.MustTCols[bool](cv)
 	for i := 0; i < 10; i++ {
-		fmt.Printf("%+v > %+v \n", as[i], bs[i])
-		assert.Equal(t, as[i] > bs[i], res[i])
+		fmt.Printf("%+v <= %+v \n", as[i], bs[i])
+		assert.Equal(t, as[i] <= bs[i], res[i])
 	}
 }
 
-func TestU32(t *testing.T) {
+func TestU32Le(t *testing.T) {
 	as := make([]uint32, 10)
 	bs := make([]uint32, 10)
 	for i := 0; i < 10; i++ {
@@ -60,7 +60,7 @@ func TestU32(t *testing.T) {
 	bv := testutil.MakeUint32Vector(bs, nil)
 	cv := testutil.MakeBoolVector(cs)
 
-	err := NumericGreatThan[uint32](av, bv, cv)
+	err := NumericLessEqual[uint32](av, bv, cv)
 	if err != nil {
 		t.Fatal(err)
 		t.Fatalf("should not error.")
@@ -68,12 +68,12 @@ func TestU32(t *testing.T) {
 
 	res := vector.MustTCols[bool](cv)
 	for i := 0; i < 10; i++ {
-		fmt.Printf("%+v > %+v \n", as[i], bs[i])
-		assert.Equal(t, as[i] > bs[i], res[i])
+		fmt.Printf("%+v <= %+v \n", as[i], bs[i])
+		assert.Equal(t, as[i] <= bs[i], res[i])
 	}
 }
 
-func TestF32(t *testing.T) {
+func TestF32Le(t *testing.T) {
 	as := make([]float32, 2)
 	bs := make([]float32, 2)
 	for i := 0; i < 2; i++ {
@@ -85,19 +85,19 @@ func TestF32(t *testing.T) {
 	bv := testutil.MakeFloat32Vector(bs, nil)
 	cv := testutil.MakeBoolVector(cs)
 
-	err := NumericGreatThan[float32](av, bv, cv)
+	err := NumericLessEqual[float32](av, bv, cv)
 	if err != nil {
 		t.Fatalf("should not error.")
 	}
 
 	res := vector.MustTCols[bool](cv)
 	for i := 0; i < 2; i++ {
-		fmt.Printf("%+v > %+v \n", as[i], bs[i])
-		assert.Equal(t, as[i] > bs[i], res[i])
+		fmt.Printf("%+v <= %+v \n", as[i], bs[i])
+		assert.Equal(t, as[i] <= bs[i], res[i])
 	}
 }
 
-func TestF64(t *testing.T) {
+func TestF64Le(t *testing.T) {
 	as := make([]float64, 2)
 	bs := make([]float64, 2)
 	for i := 0; i < 2; i++ {
@@ -109,19 +109,19 @@ func TestF64(t *testing.T) {
 	bv := testutil.MakeFloat64Vector(bs, nil)
 	cv := testutil.MakeBoolVector(cs)
 
-	err := NumericGreatThan[float64](av, bv, cv)
+	err := NumericLessEqual[float64](av, bv, cv)
 	if err != nil {
 		t.Fatalf("should not error.")
 	}
 
 	res := vector.MustTCols[bool](cv)
 	for i := 0; i < 2; i++ {
-		fmt.Printf("%+v > %+v \n", as[i], bs[i])
-		assert.Equal(t, as[i] > bs[i], res[i])
+		fmt.Printf("%+v <= %+v \n", as[i], bs[i])
+		assert.Equal(t, as[i] <= bs[i], res[i])
 	}
 }
 
-func TestDec64(t *testing.T) {
+func TestDec64Le(t *testing.T) {
 	as := make([]int64, 10)
 	bs := make([]int64, 10)
 	cs := make([]bool, 10)
@@ -134,19 +134,19 @@ func TestDec64(t *testing.T) {
 	bv := testutil.MakeDecimal64Vector(bs, nil, types.T_decimal64.ToType())
 	cv := testutil.MakeBoolVector(cs)
 
-	err := Decimal64VecGt(av, bv, cv)
+	err := Decimal64VecLe(av, bv, cv)
 	if err != nil {
-		t.Fatalf("decimal64 great than failed")
+		t.Fatalf("decimal64 less equal failed")
 	}
 
 	res := vector.MustTCols[bool](cv)
 	for i := 0; i < 10; i++ {
-		fmt.Printf("%+v > %+v \n", as[i], bs[i])
-		assert.Equal(t, as[i] > bs[i], res[i])
+		fmt.Printf("%+v <= %+v \n", as[i], bs[i])
+		assert.Equal(t, as[i] <= bs[i], res[i])
 	}
 }
 
-func TestDec128(t *testing.T) {
+func TestDec128Le(t *testing.T) {
 	as := make([]int64, 10)
 	bs := make([]int64, 10)
 	cs := make([]bool, 10)
@@ -159,14 +159,14 @@ func TestDec128(t *testing.T) {
 	bv := testutil.MakeDecimal128Vector(bs, nil, types.T_decimal128.ToType())
 	cv := testutil.MakeBoolVector(cs)
 
-	err := Decimal128VecGt(av, bv, cv)
+	err := Decimal128VecLe(av, bv, cv)
 	if err != nil {
-		t.Fatalf("decimal128 great than failed")
+		t.Fatalf("decimal128 less equal failed")
 	}
 
 	res := vector.MustTCols[bool](cv)
 	for i := 0; i < 10; i++ {
-		fmt.Printf("%+v > %+v \n", as[i], bs[i])
-		assert.Equal(t, as[i] > bs[i], res[i])
+		fmt.Printf("%+v <= %+v \n", as[i], bs[i])
+		assert.Equal(t, as[i] <= bs[i], res[i])
 	}
 }

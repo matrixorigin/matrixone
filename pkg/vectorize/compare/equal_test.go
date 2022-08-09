@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package equal
+package compare
 
 import (
 	"fmt"
@@ -136,7 +136,7 @@ func TestF64Eq(t *testing.T) {
 	}
 }
 
-func TestDec64(t *testing.T) {
+func TestDec64Eq(t *testing.T) {
 	as := make([]int64, 10)
 	bs := make([]int64, 10)
 	cs := make([]bool, 10)
@@ -165,7 +165,7 @@ func TestDec64(t *testing.T) {
 	}
 }
 
-func TestDec128(t *testing.T) {
+func TestDec128Eq(t *testing.T) {
 	as := make([]int64, 10)
 	bs := make([]int64, 10)
 	cs := make([]bool, 10)
@@ -196,7 +196,7 @@ func TestDec128(t *testing.T) {
 
 // benach mark test
 
-func BenchmarkEqI32_C(b *testing.B) {
+func BenchmarkEqI32Eq_C(b *testing.B) {
 	as := make([]int32, 8192)
 	bs := make([]int32, 8192)
 	for i := 0; i < 8192; i++ {
@@ -217,7 +217,7 @@ func BenchmarkEqI32_C(b *testing.B) {
 	}
 }
 
-func BenchmarkEqUI32_C(b *testing.B) {
+func BenchmarkEqUI32Eq_C(b *testing.B) {
 	as := make([]uint32, 8192)
 	bs := make([]uint32, 8192)
 	for i := 0; i < 8192; i++ {
@@ -238,7 +238,7 @@ func BenchmarkEqUI32_C(b *testing.B) {
 	}
 }
 
-func BenchmarkEqF64_C(b *testing.B) {
+func BenchmarkEqF64Eq_C(b *testing.B) {
 	as := make([]float64, 8192)
 	bs := make([]float64, 8192)
 	for i := 0; i < 8192; i++ {

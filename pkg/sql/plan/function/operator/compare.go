@@ -21,12 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/equal"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/greatequal"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/greatthan"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/lessequal"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/lessthan"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/notequal"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/compare"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
@@ -89,80 +84,80 @@ func CompareOrdered(vs []*vector.Vector, proc *process.Process, cfn compareFn) (
 
 // Equal compare operator
 func EqGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareOrdered(args, proc, equal.NumericEqual[T])
+	return CompareOrdered(args, proc, compare.NumericEqual[T])
 }
 
 func EqDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareOrdered(args, proc, equal.Decimal64VecEq)
+	return CompareOrdered(args, proc, compare.Decimal64VecEq)
 }
 
 func EqDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareOrdered(args, proc, equal.Decimal128VecEq)
+	return CompareOrdered(args, proc, compare.Decimal128VecEq)
 }
 
 // Not Equal compare operator
 func NeGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareOrdered(args, proc, notequal.NumericNotEqual[T])
+	return CompareOrdered(args, proc, compare.NumericNotEqual[T])
 }
 
 func NeDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareOrdered(args, proc, notequal.Decimal64VecNe)
+	return CompareOrdered(args, proc, compare.Decimal64VecNe)
 }
 
 func NeDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareOrdered(args, proc, notequal.Decimal128VecNe)
+	return CompareOrdered(args, proc, compare.Decimal128VecNe)
 }
 
 // Great than operator
 func GtGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareOrdered(args, proc, greatthan.NumericGreatThan[T])
+	return CompareOrdered(args, proc, compare.NumericGreatThan[T])
 }
 
 func GtDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareOrdered(args, proc, greatthan.Decimal64VecGt)
+	return CompareOrdered(args, proc, compare.Decimal64VecGt)
 }
 
 func GtDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareOrdered(args, proc, greatthan.Decimal128VecGt)
+	return CompareOrdered(args, proc, compare.Decimal128VecGt)
 }
 
 // Great equal operator
 func GeGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareOrdered(args, proc, greatequal.NumericGreatEqual[T])
+	return CompareOrdered(args, proc, compare.NumericGreatEqual[T])
 }
 
 func GeDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareOrdered(args, proc, greatequal.Decimal64VecGe)
+	return CompareOrdered(args, proc, compare.Decimal64VecGe)
 }
 
 func GeDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareOrdered(args, proc, greatequal.Decimal128VecGe)
+	return CompareOrdered(args, proc, compare.Decimal128VecGe)
 }
 
 // less than operator
 func LtGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareOrdered(args, proc, lessthan.NumericLessThan[T])
+	return CompareOrdered(args, proc, compare.NumericLessThan[T])
 }
 
 func LtDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareOrdered(args, proc, lessthan.Decimal64VecLt)
+	return CompareOrdered(args, proc, compare.Decimal64VecLt)
 }
 
 func LtDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareOrdered(args, proc, lessthan.Decimal128VecLt)
+	return CompareOrdered(args, proc, compare.Decimal128VecLt)
 }
 
 // less equal operator
 func LeGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareOrdered(args, proc, lessequal.NumericLessEqual[T])
+	return CompareOrdered(args, proc, compare.NumericLessEqual[T])
 }
 
 func LeDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareOrdered(args, proc, lessequal.Decimal64VecLe)
+	return CompareOrdered(args, proc, compare.Decimal64VecLe)
 }
 
 func LeDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareOrdered(args, proc, lessequal.Decimal128VecLe)
+	return CompareOrdered(args, proc, compare.Decimal128VecLe)
 }
 
 // string compare

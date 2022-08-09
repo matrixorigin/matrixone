@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package greatequal
+package compare
 
 import (
 	"fmt"
@@ -23,7 +23,7 @@ import (
 	"testing"
 )
 
-func TestI32(t *testing.T) {
+func TestI32Ge(t *testing.T) {
 	as := make([]int32, 10)
 	bs := make([]int32, 10)
 	for i := 0; i < 10; i++ {
@@ -48,7 +48,7 @@ func TestI32(t *testing.T) {
 	}
 }
 
-func TestU32(t *testing.T) {
+func TestU32Ge(t *testing.T) {
 	as := make([]uint32, 10)
 	bs := make([]uint32, 10)
 	for i := 0; i < 10; i++ {
@@ -73,7 +73,7 @@ func TestU32(t *testing.T) {
 	}
 }
 
-func TestF32(t *testing.T) {
+func TestF32Ge(t *testing.T) {
 	as := make([]float32, 10)
 	bs := make([]float32, 10)
 	for i := 0; i < 10; i++ {
@@ -97,7 +97,7 @@ func TestF32(t *testing.T) {
 	}
 }
 
-func TestF64(t *testing.T) {
+func TestF64Ge(t *testing.T) {
 	as := make([]float64, 10)
 	bs := make([]float64, 10)
 	for i := 0; i < 10; i++ {
@@ -121,7 +121,7 @@ func TestF64(t *testing.T) {
 	}
 }
 
-func TestDec64(t *testing.T) {
+func TestDec64Ge(t *testing.T) {
 	as := make([]int64, 10)
 	bs := make([]int64, 10)
 	cs := make([]bool, 10)
@@ -146,7 +146,7 @@ func TestDec64(t *testing.T) {
 	}
 }
 
-func TestDec128(t *testing.T) {
+func TestDec128Ge(t *testing.T) {
 	as := make([]int64, 10)
 	bs := make([]int64, 10)
 	cs := make([]bool, 10)
