@@ -236,7 +236,7 @@ func (ip *internalProtocol) swapOutResult() *internalExecResult {
 	return ret
 }
 
-//the server send group row of the result set as an independent packet thread safe
+// the server send group row of the result set as an independent packet thread safe
 func (ip *internalProtocol) SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt uint64) error {
 	ip.Lock()
 	defer ip.Unlock()
@@ -249,7 +249,7 @@ func (ip *internalProtocol) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet
 	return ip.sendRows(mrs, cnt)
 }
 
-//SendColumnDefinitionPacket the server send the column definition to the client
+// SendColumnDefinitionPacket the server send the column definition to the client
 func (ip *internalProtocol) SendColumnDefinitionPacket(column Column, cmd int) error {
 	return nil
 }

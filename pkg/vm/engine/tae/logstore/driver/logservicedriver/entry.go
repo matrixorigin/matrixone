@@ -134,8 +134,8 @@ func (m *meta) Marshal() (buf []byte, err error) {
 	return
 }
 
-//read: logrecord -> meta+payload -> entry
-//write: entries+meta -> payload -> record
+// read: logrecord -> meta+payload -> entry
+// write: entries+meta -> payload -> record
 type recordEntry struct {
 	*meta
 	entries []*entry.Entry

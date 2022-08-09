@@ -49,7 +49,7 @@ type Register struct {
 	MergeReceivers []*WaitRegister
 }
 
-//Limitation specifies the maximum resources that can be used in one query.
+// Limitation specifies the maximum resources that can be used in one query.
 type Limitation struct {
 	// Size, memory threshold for operator.
 	Size int64
