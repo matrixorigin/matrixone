@@ -51,7 +51,7 @@ SELECT SINH(-0.001);
 sinh(-0.001)
 -0.001
 SELECT SINH("ABC");
-[42883]unsupported parameter types [VARCHAR] for function 'sinh'
+Can't cast 'ABC' from VARCHAR type to DOUBLE type.
 SELECT SINH(NULL);
 sinh(null)
 null
