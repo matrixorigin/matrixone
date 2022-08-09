@@ -31,6 +31,11 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	InternalExecutor = "InternalExecutor"
+	FileService      = "FileService"
+)
+
 type TraceID uint64
 type SpanID uint64
 
@@ -63,7 +68,7 @@ func Init(ctx context.Context, sysVar *config.SystemVariables, options ...Tracer
 	)
 
 	// init Node DefaultContext
-	sc := SpanContextWithIDs(TraceID(1), SpanID(config.getNodeResource().NodeID))
+	sc := SpanContextWithIDs(TraceID(0), SpanID(config.getNodeResource().NodeID))
 	gSpanContext.Store(&sc)
 	gTraceContext = ContextWithSpanContext(ctx, sc)
 
@@ -82,7 +87,7 @@ func initExport(config *tracerProviderConfig) {
 	var p export.BatchProcessor
 	// init BatchProcess for trace/log/error
 	switch {
-	case config.batchProcessMode == "InternalExecutor":
+	case config.batchProcessMode == InternalExecutor:
 		// init schema
 		InitSchemaByInnerExecutor(config.sqlExecutor)
 		// register buffer pipe implements
@@ -98,7 +103,7 @@ func initExport(config *tracerProviderConfig) {
 		p = export.NewMOCollector()
 		export.SetGlobalBatchProcessor(p)
 		p.Start()
-	case config.batchProcessMode == "FileService":
+	case config.batchProcessMode == FileService:
 		// TODO: will write csv file.
 	}
 	if p != nil {

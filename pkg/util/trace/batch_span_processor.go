@@ -16,9 +16,10 @@ package trace
 
 import (
 	"context"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
-	"sync"
 )
 
 var _ SpanProcessor = &batchSpanProcessor{}
@@ -35,7 +36,8 @@ type batchSpanProcessor struct {
 
 func NewBatchSpanProcessor(exporter export.BatchProcessor) SpanProcessor {
 	bsp := &batchSpanProcessor{
-		e: exporter,
+		e:      exporter,
+		stopCh: make(chan struct{}),
 	}
 
 	return bsp

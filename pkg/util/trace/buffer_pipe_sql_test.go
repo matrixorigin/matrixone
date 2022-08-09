@@ -19,7 +19,9 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/stretchr/testify/require"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -200,6 +202,79 @@ func Test_batchSqlHandler_genErrorBatchSql(t1 *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_batchSqlHandler_genZapBatchSql(t1 *testing.T) {
+	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
+	type args struct {
+		in  []IBuffer2SqlItem
+		buf *bytes.Buffer
+	}
+	buf := new(bytes.Buffer)
+	sc := SpanContextWithIDs(1, 1)
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "single",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&MOZap{
+						Level:       zapcore.InfoLevel,
+						SpanContext: &sc,
+						Timestamp:   time.Unix(0, 0),
+						Caller:      "trace/buffer_pipe_sql_test.go:100",
+						Message:     "info message",
+						Extra:       "{}",
+					},
+				},
+				buf: buf,
+			},
+			want: `insert into system.log_info (` +
+				"`span_id`, `statement_id`, `node_id`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
+				`) values (1, 1, 0, "Node", "1970-01-01 00:00:00.000000", "", "info", "trace/buffer_pipe_sql_test.go:100", "info message", "{}")`,
+		},
+		{
+			name: "multi",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&MOZap{
+						Level:       zapcore.InfoLevel,
+						SpanContext: &sc,
+						Timestamp:   time.Unix(0, 0),
+						Caller:      "trace/buffer_pipe_sql_test.go:100",
+						Message:     "info message",
+						Extra:       "{}",
+					},
+					&MOZap{
+						Level:       zapcore.DebugLevel,
+						SpanContext: &sc,
+						Timestamp:   time.Unix(0, int64(time.Microsecond+time.Millisecond)),
+						Caller:      "trace/buffer_pipe_sql_test.go:100",
+						Message:     "debug message",
+						Extra:       "{}",
+					},
+				},
+				buf: buf,
+			},
+			want: `insert into system.log_info (` +
+				"`span_id`, `statement_id`, `node_id`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
+				`) values (1, 1, 0, "Node", "1970-01-01 00:00:00.000000", "", "info", "trace/buffer_pipe_sql_test.go:100", "info message", "{}")` +
+				`,(1, 1, 0, "Node", "1970-01-01 00:00:00.001001", "", "debug", "trace/buffer_pipe_sql_test.go:100", "debug message", "{}")`,
+		},
+	}
+	for _, tt := range tests {
+		t1.Run(tt.name, func(t1 *testing.T) {
+			if got := genZapLogBatchSql(tt.args.in, tt.args.buf); got != tt.want {
+				t1.Errorf("genZapLogBatchSql() = %v,\n want %v", got, tt.want)
+			} else {
+				t1.Logf("SQL: %s", got)
+			}
+		})
+	}
+	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
 }
 
 func Test_batchSqlHandler_genLogBatchSql(t1 *testing.T) {
@@ -967,6 +1042,66 @@ func Test_withSizeThreshold(t *testing.T) {
 			if got := buf.sizeThreshold; got != tt.want {
 				t.Errorf("bufferWithSizeThreshold() = %v, want %v", got, tt.want)
 			}
+		})
+	}
+}
+
+func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
+	type fields struct {
+		defaultOpts []buffer2SqlOption
+		ch          chan string
+	}
+	type args struct {
+		batch string
+	}
+
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   func(batch any)
+	}{
+		{
+			name: "nil",
+			fields: fields{
+				defaultOpts: []buffer2SqlOption{bufferWithSizeThreshold(GB)},
+				ch:          make(chan string, 10),
+			},
+			args: args{
+				batch: "batch",
+			},
+			want: func(batch any) {},
+		},
+	}
+	for _, tt := range tests {
+		t1.Run(tt.name, func(t1 *testing.T) {
+			gTracerProvider = newMOTracerProvider(WithSQLExecutor(newExecutorFactory(tt.fields.ch)))
+			t := batchSqlHandler{
+				defaultOpts: tt.fields.defaultOpts,
+			}
+
+			wg := sync.WaitGroup{}
+			startedC := make(chan struct{}, 1)
+			wg.Add(1)
+			go func() {
+				startedC <- struct{}{}
+			loop:
+				for {
+					batch, ok := <-tt.fields.ch
+					if ok {
+						require.Equal(t1, tt.args.batch, batch)
+					} else {
+						t1.Log("exec sql Done.")
+						break loop
+					}
+				}
+				wg.Done()
+			}()
+			<-startedC
+			got := t.NewItemBatchHandler()
+			got(tt.args.batch)
+			close(tt.fields.ch)
+			wg.Wait()
 		})
 	}
 }

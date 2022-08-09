@@ -17,20 +17,17 @@ package errors
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/util"
 )
 
-// Recover should be used in defer func() { /*here*/ }
-func Recover(ctx context.Context) error {
-	if err := recover(); err != nil {
-		return ReportPanic(ctx, err, 1)
-	}
-	return nil
-}
-
 // ReportPanic reports a panic has occurred on the real stderr.
 // return error, which already reported.
-func ReportPanic(ctx context.Context, r any, depth int) error {
+func ReportPanic(ctx context.Context, r any) error {
+	return ReportPanicWithDepth(ctx, r, 3)
+}
+
+func ReportPanicWithDepth(ctx context.Context, r any, depth int) error {
 	panicErr := PanicAsError(r, depth+1)
 	return WithContext(ctx, panicErr)
 }
@@ -40,5 +37,5 @@ func PanicAsError(r any, depth int) error {
 	if err, ok := r.(error); ok {
 		return &withStack{err, util.Callers(depth + 1)}
 	}
-	return &withStack{fmt.Errorf(fmt.Sprintf("panic: %v", r)), util.Callers(depth + 1)}
+	return &withStack{fmt.Errorf("panic: %v", r), util.Callers(depth + 1)}
 }

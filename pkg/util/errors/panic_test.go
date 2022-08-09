@@ -18,9 +18,16 @@ import (
 	"context"
 	"fmt"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/util"
+
+	"github.com/stretchr/testify/require"
 )
 
-func TestRecover(t *testing.T) {
+func InitErrorCollector(ch chan error) {
+	SetErrorReporter(func(_ context.Context, err error, i int) {
+		ch <- err
+	})
 }
 
 func TestRecoverRaw(t *testing.T) {
@@ -35,11 +42,44 @@ func TestRecoverRaw(t *testing.T) {
 }
 
 func TestRecoverFunc(t *testing.T) {
-	defer Recover(context.Background())
-	panic("TestRecoverFunc")
+	resultCh := make(chan error)
+	InitErrorCollector(resultCh)
+	go func() {
+		defer func() {
+			if err := recover(); err != nil {
+				ReportPanic(context.Background(), err)
+				t.Logf("raw Caller: %+v", util.Callers(0))
+			}
+		}()
+		panic("TestRecoverFunc")
+	}()
+	err := <-resultCh
+	require.NotEmpty(t, err, "get error is nil.")
+	t.Logf("err %%s : %s", err)
+	t.Logf("err %%+v: %+v", err)
+}
+
+func TestRecoverFunc_nil(t *testing.T) {
+	resultCh := make(chan error)
+	InitErrorCollector(resultCh)
+	go func() {
+		defer func() {
+			if err := recover(); err != nil {
+
+				ReportPanic(context.Background(), err)
+				t.Logf("raw Caller: %+v", util.Callers(0))
+			}
+		}()
+		panic(fmt.Errorf("TestRecoverFunc"))
+	}()
+	err := <-resultCh
+	require.NotEmpty(t, err, "get error is nil.")
+	t.Logf("err %%s : %s", WithStack(fmt.Errorf("example")))
+	t.Logf("err %%+v: %+v", err)
 }
 
 func TestReportPanic(t *testing.T) {
+	SetErrorReporter(noopReportError)
 	type args struct {
 		ctx context.Context
 	}
@@ -63,7 +103,7 @@ func TestReportPanic(t *testing.T) {
 			defer func() {
 				if err := recover(); (err != nil) == tt.wantErr {
 					t.Logf("recover() error = %v", err)
-					err = ReportPanic(tt.args.ctx, err, 1)
+					err = ReportPanic(tt.args.ctx, err)
 					if fmt.Sprintf("%s", err) != fmt.Sprintf("panic: %s", tt.wantMsg) {
 						t.Errorf("ReportPanic() error = %v, wantMsg: %s", err, tt.wantMsg)
 					}

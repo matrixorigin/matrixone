@@ -79,15 +79,6 @@ type StatementOption interface {
 
 type StatementOptionFunc func(*StatementInfo)
 
-func WithRequestAt(t util.TimeNano) StatementOptionFunc {
-	return StatementOptionFunc(func(s *StatementInfo) {
-		s.RequestAt = t
-	})
-}
-
 func ReportStatement(ctx context.Context, s *StatementInfo) error {
 	return export.GetGlobalBatchProcessor().Collect(ctx, s)
 }
-
-// TODO: update statement status
-// TODO: update statement exec plan

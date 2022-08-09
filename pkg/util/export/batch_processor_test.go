@@ -16,21 +16,44 @@ package export
 
 import (
 	"bytes"
+	"context"
 	"fmt"
-	"reflect"
+	"github.com/matrixorigin/matrixone/pkg/util"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/errors"
 
+	"github.com/google/gops/agent"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 )
+
+func init() {
+	logutil.SetupMOLogger(&logutil.LogConfig{
+		Level:       zapcore.InfoLevel.String(),
+		Format:      "console",
+		Filename:    config.GlobalSystemVariables.GetLogFilename(),
+		MaxSize:     int(config.GlobalSystemVariables.GetLogMaxSize()),
+		MaxDays:     int(config.GlobalSystemVariables.GetLogMaxDays()),
+		MaxBackups:  int(config.GlobalSystemVariables.GetLogMaxBackups()),
+		EnableStore: false,
+	})
+	if err := agent.Listen(agent.Options{}); err != nil {
+		logutil.Errorf("listen gops agent failed: %s", err)
+		return
+	}
+}
 
 const NumType = "Num"
 
 var _ batchpipe.HasName = (*Num)(nil)
-var _ batchpipe.ItemBuffer[batchpipe.HasName, any] = &SizeBuffer{}
-var _ batchpipe.PipeImpl[batchpipe.HasName, any] = &testNumPipeImpl{}
+var _ batchpipe.ItemBuffer[batchpipe.HasName, any] = &numBuffer{}
+var _ batchpipe.PipeImpl[batchpipe.HasName, any] = &dummyNumPipeImpl{}
 
 type Num int64
 
@@ -41,21 +64,53 @@ func newNum(v int64) *Num {
 
 func (n Num) GetName() string { return NumType }
 
-type SizeBuffer struct {
+var signalFunc = func() {}
+
+type numBuffer struct {
 	batchpipe.Reminder
-	arr []batchpipe.HasName
+	arr    []batchpipe.HasName
+	mux    sync.Mutex
+	signal func()
 }
 
-func (s *SizeBuffer) Add(item batchpipe.HasName) { s.arr = append(s.arr, item) }
-func (s *SizeBuffer) Reset()                     { s.arr = s.arr[0:0] }
-func (s *SizeBuffer) IsEmpty() bool              { return len(s.arr) == 0 }
-func (s *SizeBuffer) ShouldFlush() bool          { return len(s.arr) >= 3 }
-func (s *SizeBuffer) GetBatch(buf *bytes.Buffer) any {
+func (s *numBuffer) Add(item batchpipe.HasName) {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	s.arr = append(s.arr, item)
+	if s.signal != nil {
+		val := int(*item.(*Num))
+		if val != len(s.arr) && (val-3) != len(s.arr) {
+			panic(fmt.Errorf("len not rignt, elem: %d, len: %d", val, len(s.arr)))
+		}
+		logutil.Infof("accept: %v, len: %d", *item.(*Num), len(s.arr))
+		s.signal()
+	}
+}
+func (s *numBuffer) Reset() {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	logutil.Infof("buffer reset, stack: %+v", util.Callers(0))
+	s.arr = s.arr[0:0]
+}
+func (s *numBuffer) IsEmpty() bool {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	return len(s.arr) == 0
+}
+func (s *numBuffer) ShouldFlush() bool {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	return len(s.arr) >= 3
+}
+func (s *numBuffer) GetBatch(buf *bytes.Buffer) any {
+	s.mux.Lock()
+	defer s.mux.Unlock()
 	buf.Reset()
 	if len(s.arr) == 0 {
 		return ""
 	}
 
+	logutil.Infof("GetBatch, len: %d", len(s.arr))
 	for _, item := range s.arr {
 		s, ok := item.(*Num)
 		if !ok {
@@ -68,15 +123,15 @@ func (s *SizeBuffer) GetBatch(buf *bytes.Buffer) any {
 	return string(buf.Next(buf.Len() - 1))
 }
 
-type testNumPipeImpl struct {
+type dummyNumPipeImpl struct {
 	ch chan string
 }
 
-func (n *testNumPipeImpl) NewItemBuffer(string) batchpipe.ItemBuffer[batchpipe.HasName, any] {
-	return &SizeBuffer{Reminder: batchpipe.NewConstantClock(100 * time.Millisecond)}
+func (n *dummyNumPipeImpl) NewItemBuffer(string) batchpipe.ItemBuffer[batchpipe.HasName, any] {
+	return &numBuffer{Reminder: batchpipe.NewConstantClock(100 * time.Millisecond), signal: signalFunc}
 }
 
-func (n *testNumPipeImpl) NewItemBatchHandler() func(any) {
+func (n *dummyNumPipeImpl) NewItemBatchHandler() func(any) {
 	return func(batch any) {
 		n.ch <- batch.(string)
 	}
@@ -118,7 +173,7 @@ func Test_newBufferHolder(t *testing.T) {
 			name: "normal",
 			args: args{
 				name:          newNum(0),
-				impl:          &testNumPipeImpl{ch: ch},
+				impl:          &dummyNumPipeImpl{ch: ch},
 				signal:        signal,
 				elems:         []*Num{newNum(1), newNum(2), newNum(3)},
 				elemsReminder: []*Num{newNum(4), newNum(5)},
@@ -131,7 +186,7 @@ func Test_newBufferHolder(t *testing.T) {
 			name: "emptyReminder",
 			args: args{
 				name:          newNum(0),
-				impl:          &testNumPipeImpl{ch: ch},
+				impl:          &dummyNumPipeImpl{ch: ch},
 				signal:        signal,
 				elems:         []*Num{newNum(1), newNum(2), newNum(3)},
 				elemsReminder: []*Num{},
@@ -159,22 +214,39 @@ func Test_newBufferHolder(t *testing.T) {
 			if got != tt.wantReminder {
 				t.Errorf("newBufferHolder() = %v, want %v", got, tt.wantReminder)
 			}
+			buf.Stop()
 		})
 	}
 }
 
 func TestNewMOCollector(t *testing.T) {
-	tests := []struct {
-		name string
-		want *MOCollector
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := NewMOCollector(); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("NewMOCollector() = %v, want %v", got, tt.want)
-			}
-		})
-	}
+	ch := make(chan string, 1)
+	errors.SetErrorReporter(func(ctx context.Context, err error, i int) {
+		t.Logf("TestNewMOCollector::ErrorReport: %+v", err)
+	})
+	var signalC = make(chan struct{}, 16)
+	var acceptSignal = func() { <-signalC }
+	signalFunc = func() { signalC <- struct{}{} }
+
+	Register(newNum(0), &dummyNumPipeImpl{ch: ch})
+	collector := NewMOCollector()
+	collector.Start()
+
+	collector.Collect(DefaultContext(), newNum(1))
+	acceptSignal()
+	collector.Collect(DefaultContext(), newNum(2))
+	acceptSignal()
+	collector.Collect(DefaultContext(), newNum(3))
+	acceptSignal()
+	got := <-ch
+	require.Equal(t, `(1),(2),(3)`, got)
+	collector.Collect(DefaultContext(), newNum(4))
+	acceptSignal()
+	collector.Collect(DefaultContext(), newNum(5))
+	acceptSignal()
+	collector.Collect(DefaultContext(), newNum(6))
+	acceptSignal()
+	collector.Stop(true)
+	got = <-ch
+	require.Equal(t, `(4),(5),(6)`, got)
 }

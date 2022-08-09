@@ -25,6 +25,7 @@ var ctx = context.Background()
 var testErr = goErrors.New("test error")
 var stackErr = WithStack(testErr)
 var msgErr = WithMessage(stackErr, "prefix")
+var msg2Err = WithMessagef(msgErr, "prefix by %s", "jack")
 
 func TestGetContextTracer(t *testing.T) {
 	type args struct {
@@ -252,9 +253,9 @@ func Test_withContext_Unwrap(t *testing.T) {
 			wantErr: stackErr,
 		},
 		{
-			name:    "message",
-			fields:  fields{msgErr, ctx},
-			wantErr: msgErr,
+			name:    "message2",
+			fields:  fields{msg2Err, ctx},
+			wantErr: msg2Err,
 		},
 	}
 	for _, tt := range tests {
@@ -265,6 +266,36 @@ func Test_withContext_Unwrap(t *testing.T) {
 			}
 			if got := w.Unwrap(); !reflect.DeepEqual(got, tt.wantErr) {
 				t.Errorf("Unwrap() = %v, want %v", got, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestWithContext(t *testing.T) {
+	type args struct {
+		ctx context.Context
+		err error
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr bool
+	}{
+		{
+			name:    "normal",
+			args:    args{context.Background(), testErr},
+			wantErr: true,
+		},
+		{
+			name:    "nil",
+			args:    args{},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := WithContext(tt.args.ctx, tt.args.err); (err != nil) != tt.wantErr {
+				t.Errorf("TestWithContext() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}

@@ -45,9 +45,6 @@ func (noopSpan) SpanContext() SpanContext { return SpanContext{} }
 
 func (noopSpan) ParentSpanContext() SpanContext { return SpanContext{} }
 
-// IsRecording always returns false.
-func (noopSpan) IsRecording() bool { return false }
-
 // End does nothing.
 func (noopSpan) End(...SpanEndOption) {}
 

@@ -37,7 +37,7 @@ func WithMessage(err error, message string) error {
 
 // WithMessagef annotates err with the format specifier.
 // If err is nil, WithMessagef returns nil.
-func WithMessagef(err error, format string, args ...interface{}) error {
+func WithMessagef(err error, format string, args ...any) error {
 	if err == nil {
 		return nil
 	}
@@ -49,6 +49,7 @@ func WithMessagef(err error, format string, args ...interface{}) error {
 
 var _ error = (*withMessage)(nil)
 var _ Wrapper = (*withMessage)(nil)
+var _ WithIs = (*withMessage)(nil)
 var _ fmt.Formatter = (*withMessage)(nil)
 
 type withMessage struct {
@@ -65,6 +66,10 @@ func (w *withMessage) Error() string {
 func (w *withMessage) Cause() error  { return w.cause }
 func (w *withMessage) Unwrap() error { return w.cause }
 
+func (w *withMessage) Is(err error) bool {
+	return w.Error() == err.Error()
+}
+
 func (w *withMessage) Format(s fmt.State, verb rune) {
 	switch verb {
 	case 'v':
@@ -73,8 +78,9 @@ func (w *withMessage) Format(s fmt.State, verb rune) {
 			io.WriteString(s, w.msg)
 			return
 		}
-		fallthrough
-	case 's', 'q':
+	case 's':
 		io.WriteString(s, w.Error())
+	case 'q':
+		fmt.Fprintf(s, "%q", w.Error())
 	}
 }
