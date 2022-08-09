@@ -1539,7 +1539,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 						return 0, errors.New("", "can not get view statement")
 					}
 
-					viewName := viewStmt.Name.ObjectName
+					// when use db1.v1 in db2 context, if you use v1 for ViewName， that may conflict
+					viewName := fmt.Sprintf("%s.%s", viewData.DefaultDatabase, viewStmt.Name.ObjectName)
 					var maskedCTEs map[string]any
 					if len(ctx.cteByName) > 0 {
 						maskedCTEs := make(map[string]any)
@@ -1551,7 +1552,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					ctx.cteByName[string(viewName)] = &CTERef{
 						ast: &tree.CTE{
 							Name: &tree.AliasClause{
-								Alias: viewName,
+								Alias: tree.Identifier(viewName),
 								Cols:  viewStmt.ColNames,
 							},
 							Stmt: viewStmt.AsSource,
@@ -1562,7 +1563,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 					newTableName := tree.NewTableName(tree.Identifier(viewName), tree.ObjectNamePrefix{
 						CatalogName:     tbl.CatalogName, // TODO unused now, if used in some code, that will be save in view
-						SchemaName:      tree.Identifier(schema),
+						SchemaName:      tree.Identifier(""),
 						ExplicitCatalog: false,
 						ExplicitSchema:  false,
 					})
