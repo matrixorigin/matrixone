@@ -43,9 +43,6 @@ const (
 	Insert
 	Update
 	InsertValues
-	CreateAccount
-	AlterAccount
-	DropAccount
 )
 
 type EncodeSource struct {

@@ -101,12 +101,6 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildExecute(stmt, ctx)
 	case *tree.Deallocate:
 		return buildDeallocate(stmt, ctx)
-	case *tree.CreateAccount:
-		return buildCreateAccount(stmt, ctx)
-	case *tree.AlterAccount:
-		return nil, nil
-	case *tree.DropAccount:
-		return nil, nil
 	case tree.Prepare: //Prepare is an interface
 		return buildPrepare(stmt, ctx)
 	default:
