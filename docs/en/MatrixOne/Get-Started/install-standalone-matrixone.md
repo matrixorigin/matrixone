@@ -12,7 +12,7 @@ Recommended hardware specification: x86 CPU with 4 cores and 32GB memory, with C
 
 #### 1. Install Go as necessary dependancy
 
-Go version 1.18 is required.
+Go version 1.19 is required.
 
 #### 2. Get the MatrixOne code
 
@@ -118,7 +118,15 @@ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
 
 For the information on the user name and password, see the next step - Connect to MatrixOne Server.
 
-#### 3. Connect to MatrixOne Server
+#### 3. Mount the data directory(Optional)
+
+To customize the configuration file, you can mount the custom configuration file stored on the local disk.
+
+```
+docker run -d -p 6001:6001 -v ${path_name}/system_vars_config.toml:/system_vars_config.toml:ro -v ${path_name}/store:/store:rw --name matrixone matrixorigin/matrixone:0.5.1
+```
+
+#### 4. Connect to MatrixOne Server
 
 When you finish installing MatrixOne, you can refer to the section below to connect to the MatrixOne server.
 
