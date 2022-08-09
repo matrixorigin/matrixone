@@ -9,10 +9,8 @@ jobs:
     name: Get Change Paths
 
     steps:
-      - name: Setup Go environment
-        uses: actions/setup-go@v3.2.1
-        with:
-          go-version: '1.18'
+      - name: Set up Go
+        uses: ./.github/actions/setup_env
 
       - name: Get PR Changed Paths
         uses: guguducken/change-paths-action@v0.0.3
@@ -40,7 +38,7 @@ jobs:
           echo "ut start"
           CGO_CFLAGS="-I${GITHUB_WORKSPACE}/matrixone/cgo"
           CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/matrixone/cgo -lmo"
-          go test -v -tags matrixone_test -p 1 -covermode=count -coverpkg=${test_scope} | grep -a -P "(?m)(?<=ok|\?){1}.*(?=%|])" | tee ${ raw_ut_coverage }
+          go test -v -tags matrixone_test -p 1 -covermode=count --count=1 -coverpkg=${test_scope} | grep -a -P "(?m)(?<=ok|\?){1}.*(?=%|])" | tee ${ raw_ut_coverage }
           echo "ut finished"
           
 
