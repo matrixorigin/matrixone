@@ -66,8 +66,8 @@ select * from t1 where substr(c,2) > substring('fdasfsad',2);
 -- @case
 -- @desc:test for SUBSTRING with distinct
 -- @label:bvt
-select distinct(substr(c,2)) from t1;
-select distinct(substr(vc,3)) from t1;
+select distinct(substr(c,2)) from t1 order by 1;
+select distinct(substr(vc,3)) from t1 order by 1;
 
 
 -- @case

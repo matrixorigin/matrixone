@@ -164,28 +164,30 @@ id	c	vc
 5	BestSeller	OneHeckuvabook
 6	EveryoneBu	Thisverybook
 8	BerkAuthor	Cool.Berkly.the.book
-select distinct(substr(c,2)) from t1;
+select distinct(substr(c,2)) from t1 order by 1;
 (substr(c,2))
+null
+
 affy
-ugs
-owboy
-nonymous
-estSeller
-veryoneBu
 anFran
 erkAuthor
-null
-select distinct(substr(vc,3)) from t1;
+estSeller
+nonymous
+owboy
+ugs
+veryoneBu
+select distinct(substr(vc,3)) from t1 order by 1;
 (substr(vc,3))
-ucklife
-abbitlife
-feontherange
-nnabuythisbook?
-eHeckuvabook
-isverybook
-isasanfranlifetyle
-ol.Berkly.the.book
 null
+
+abbitlife
+eHeckuvabook
+feontherange
+isasanfranlifetyle
+isverybook
+nnabuythisbook?
+ol.Berkly.the.book
+ucklife
 select endswith(c,'a'),endswith(vc,'a') from t1;
 endswith(c, a)	endswith(vc, a)
 0	0

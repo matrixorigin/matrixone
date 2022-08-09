@@ -15,6 +15,7 @@
 package tree
 
 import (
+	"fmt"
 	"strconv"
 )
 
@@ -172,7 +173,7 @@ type tableDefImpl struct {
 	TableDef
 }
 
-//the list of table definitions
+// the list of table definitions
 type TableDefs []TableDef
 
 type ColumnTableDef struct {
@@ -205,7 +206,7 @@ func NewColumnTableDef(n *UnresolvedName, t ResolvableTypeReference, a []ColumnA
 	}
 }
 
-//column attribute
+// column attribute
 type ColumnAttribute interface {
 	NodeFormatter
 }
@@ -469,7 +470,7 @@ func NewKeyPart(c *UnresolvedName, l int, e Expr) *KeyPart {
 	}
 }
 
-//in reference definition
+// in reference definition
 type MatchType int
 
 func (node *MatchType) ToString() string {
@@ -1865,21 +1866,15 @@ func NewCreateRole(ife bool, r []*Role) *CreateRole {
 type Role struct {
 	NodeFormatter
 	UserName string
-	HostName string
 }
 
 func (node *Role) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.UserName)
-	if node.HostName != "%" {
-		ctx.WriteByte('@')
-		ctx.WriteString(node.HostName)
-	}
 }
 
-func NewRole(u, h string) *Role {
+func NewRole(u string) *Role {
 	return &Role{
 		UserName: u,
-		HostName: h,
 	}
 }
 
@@ -1887,10 +1882,7 @@ type User struct {
 	NodeFormatter
 	Username   string
 	Hostname   string
-	AuthPlugin string
-	AuthString string
-	HashString string
-	ByAuth     bool
+	AuthOption *AccountIdentified
 }
 
 func (node *User) Format(ctx *FmtCtx) {
@@ -1899,28 +1891,15 @@ func (node *User) Format(ctx *FmtCtx) {
 		ctx.WriteByte('@')
 		ctx.WriteString(node.Hostname)
 	}
-	if node.AuthPlugin != "" || node.AuthString != "" || node.HashString != "" {
-		ctx.WriteString(" identified")
-		if node.AuthPlugin != "" {
-			ctx.WriteString(" with ")
-			ctx.WriteString(node.AuthPlugin)
-		}
-		if node.AuthString != "" {
-			ctx.WriteString(" by ")
-			ctx.WriteString(node.AuthString)
-		} else if node.HashString != "" {
-			ctx.WriteString(" as ")
-			ctx.WriteString(node.HashString)
-		}
+	if node.AuthOption != nil {
+		node.AuthOption.Format(ctx)
 	}
 }
 
-func NewUser(u, h, ap, as string) *User {
+func NewUser(u, h string) *User {
 	return &User{
-		Username:   u,
-		Hostname:   h,
-		AuthPlugin: ap,
-		AuthString: as,
+		Username: u,
+		Hostname: h,
 	}
 }
 
@@ -2103,40 +2082,84 @@ type UserMiscOptionPasswordHistoryDefault struct {
 	userMiscOptionImpl
 }
 
+func (node *UserMiscOptionPasswordHistoryDefault) Format(ctx *FmtCtx) {
+	ctx.WriteString("password history default")
+}
+
 type UserMiscOptionPasswordHistoryCount struct {
 	userMiscOptionImpl
-	Value int
+	Value int64
+}
+
+func (node *UserMiscOptionPasswordHistoryCount) Format(ctx *FmtCtx) {
+	ctx.WriteString(fmt.Sprintf("password history %d", node.Value))
 }
 
 type UserMiscOptionPasswordReuseIntervalDefault struct {
 	userMiscOptionImpl
 }
 
+func (node *UserMiscOptionPasswordReuseIntervalDefault) Format(ctx *FmtCtx) {
+	ctx.WriteString("password reuse interval default")
+}
+
 type UserMiscOptionPasswordReuseIntervalCount struct {
 	userMiscOptionImpl
-	Value int
+	Value int64
+}
+
+func (node *UserMiscOptionPasswordReuseIntervalCount) Format(ctx *FmtCtx) {
+	ctx.WriteString(fmt.Sprintf("password reuse interval %d day", node.Value))
+}
+
+type UserMiscOptionPasswordRequireCurrentNone struct {
+	userMiscOptionImpl
+}
+
+func (node *UserMiscOptionPasswordRequireCurrentNone) Format(ctx *FmtCtx) {
+	ctx.WriteString("password require current")
 }
 
 type UserMiscOptionPasswordRequireCurrentDefault struct {
 	userMiscOptionImpl
 }
 
+func (node *UserMiscOptionPasswordRequireCurrentDefault) Format(ctx *FmtCtx) {
+	ctx.WriteString("password require current default")
+}
+
 type UserMiscOptionPasswordRequireCurrentOptional struct {
 	userMiscOptionImpl
 }
 
+func (node *UserMiscOptionPasswordRequireCurrentOptional) Format(ctx *FmtCtx) {
+	ctx.WriteString("password require current optional")
+}
+
 type UserMiscOptionFailedLoginAttempts struct {
 	userMiscOptionImpl
-	Value int
+	Value int64
+}
+
+func (node *UserMiscOptionFailedLoginAttempts) Format(ctx *FmtCtx) {
+	ctx.WriteString(fmt.Sprintf("failed_login_attempts %d", node.Value))
 }
 
 type UserMiscOptionPasswordLockTimeCount struct {
 	userMiscOptionImpl
-	Value int
+	Value int64
+}
+
+func (node *UserMiscOptionPasswordLockTimeCount) Format(ctx *FmtCtx) {
+	ctx.WriteString(fmt.Sprintf("password_lock_time %d", node.Value))
 }
 
 type UserMiscOptionPasswordLockTimeUnbounded struct {
 	userMiscOptionImpl
+}
+
+func (node *UserMiscOptionPasswordLockTimeUnbounded) Format(ctx *FmtCtx) {
+	ctx.WriteString("password_lock_time unbounded")
 }
 
 type UserMiscOptionAccountLock struct {
@@ -2144,7 +2167,7 @@ type UserMiscOptionAccountLock struct {
 }
 
 func (node *UserMiscOptionAccountLock) Format(ctx *FmtCtx) {
-	ctx.WriteString("account lock")
+	ctx.WriteString("lock")
 }
 
 type UserMiscOptionAccountUnlock struct {
@@ -2152,17 +2175,17 @@ type UserMiscOptionAccountUnlock struct {
 }
 
 func (node *UserMiscOptionAccountUnlock) Format(ctx *FmtCtx) {
-	ctx.WriteString("account unlock")
+	ctx.WriteString("unlock")
 }
 
 type CreateUser struct {
 	statementImpl
 	IfNotExists bool
 	Users       []*User
-	Roles       []*Role
-	TlsOpts     []TlsOption
-	ResOpts     []ResourceOption
+	Role        Role
 	MiscOpts    []UserMiscOption
+	// comment or attribute
+	CommentOrAttribute AccountCommentOrAttribute
 }
 
 func (node *CreateUser) Format(ctx *FmtCtx) {
@@ -2178,31 +2201,140 @@ func (node *CreateUser) Format(ctx *FmtCtx) {
 			prefix = ", "
 		}
 	}
-	if len(node.TlsOpts) > 0 {
-		ctx.WriteString(" require ")
-		prefix := ""
-		for _, t := range node.TlsOpts {
-			ctx.WriteString(prefix)
-			t.Format(ctx)
-			prefix = " and "
+	ctx.WriteString(" default role")
+	ctx.WriteString(" ")
+	node.Role.Format(ctx)
+	if len(node.MiscOpts) != 0 {
+		for _, opt := range node.MiscOpts {
+			ctx.WriteString(" ")
+			opt.Format(ctx)
 		}
 	}
-	if len(node.ResOpts) > 0 {
-		ctx.WriteString(" with")
-		for _, r := range node.ResOpts {
-			ctx.WriteByte(' ')
-			r.Format(ctx)
+
+	node.CommentOrAttribute.Format(ctx)
+}
+
+func NewCreateUser(ife bool, u []*User, r Role, misc []UserMiscOption) *CreateUser {
+	return &CreateUser{
+		IfNotExists: ife,
+		Users:       u,
+		Role:        r,
+		MiscOpts:    misc,
+	}
+}
+
+type CreateAccount struct {
+	statementImpl
+	IfNotExists bool
+	Name        string
+	AuthOption  AccountAuthOption
+	//status_option or not
+	StatusOption AccountStatus
+	//comment or not
+	Comment AccountComment
+}
+
+func (ca *CreateAccount) Format(ctx *FmtCtx) {
+	ctx.WriteString("create account ")
+	if ca.IfNotExists {
+		ctx.WriteString("if not exists ")
+	}
+	ctx.WriteString(ca.Name)
+	ca.AuthOption.Format(ctx)
+	ca.StatusOption.Format(ctx)
+	ca.Comment.Format(ctx)
+}
+
+type AccountAuthOption struct {
+	Equal          string
+	AdminName      string
+	IdentifiedType AccountIdentified
+}
+
+func (node *AccountAuthOption) Format(ctx *FmtCtx) {
+	ctx.WriteString(" admin_name")
+	if len(node.Equal) != 0 {
+		ctx.WriteString(" ")
+		ctx.WriteString(node.Equal)
+	}
+
+	ctx.WriteString(fmt.Sprintf(" '%s'", node.AdminName))
+	node.IdentifiedType.Format(ctx)
+
+}
+
+type AccountIdentifiedOption int
+
+const (
+	AccountIdentifiedByPassword AccountIdentifiedOption = iota
+	AccountIdentifiedByRandomPassword
+	AccountIdentifiedWithSSL
+)
+
+type AccountIdentified struct {
+	Typ AccountIdentifiedOption
+	Str string
+}
+
+func (node *AccountIdentified) Format(ctx *FmtCtx) {
+	switch node.Typ {
+	case AccountIdentifiedByPassword:
+		ctx.WriteString(fmt.Sprintf(" identified by '%s'", node.Str))
+	case AccountIdentifiedByRandomPassword:
+		ctx.WriteString(" identified by random password")
+	case AccountIdentifiedWithSSL:
+		ctx.WriteString(fmt.Sprintf(" identified with '%s'", node.Str))
+	}
+}
+
+type AccountStatusOption int
+
+const (
+	AccountStatusOpen AccountStatusOption = iota
+	AccountStatusSuspend
+)
+
+type AccountStatus struct {
+	Exist  bool
+	Option AccountStatusOption
+}
+
+func (node *AccountStatus) Format(ctx *FmtCtx) {
+	if node.Exist {
+		switch node.Option {
+		case AccountStatusOpen:
+			ctx.WriteString(" open")
+		case AccountStatusSuspend:
+			ctx.WriteString(" suspend")
 		}
 	}
 }
 
-func NewCreateUser(ife bool, u []*User, r []*Role, tls []TlsOption, res []ResourceOption, misc []UserMiscOption) *CreateUser {
-	return &CreateUser{
-		IfNotExists: ife,
-		Users:       u,
-		Roles:       r,
-		TlsOpts:     tls,
-		ResOpts:     res,
-		MiscOpts:    misc,
+type AccountComment struct {
+	Exist   bool
+	Comment string
+}
+
+func (node *AccountComment) Format(ctx *FmtCtx) {
+	if node.Exist {
+		ctx.WriteString(" comment ")
+		ctx.WriteString(fmt.Sprintf("'%s'", node.Comment))
+	}
+}
+
+type AccountCommentOrAttribute struct {
+	Exist     bool
+	IsComment bool
+	Str       string
+}
+
+func (node *AccountCommentOrAttribute) Format(ctx *FmtCtx) {
+	if node.Exist {
+		if node.IsComment {
+			ctx.WriteString(" comment ")
+		} else {
+			ctx.WriteString(" attribute ")
+		}
+		ctx.WriteString(fmt.Sprintf("'%s'", node.Str))
 	}
 }

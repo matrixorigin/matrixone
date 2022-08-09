@@ -68,15 +68,18 @@ func newMemFileService(cfg Config) (FileService, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewCacheFS(fs, int(cfg.CacheMemCapacityBytes))
+	return fs, nil
 }
 
 func newDiskFileService(cfg Config) (FileService, error) {
-	fs, err := NewLocalFS(cfg.DataDir)
+	fs, err := NewLocalFS(
+		cfg.DataDir,
+		int(cfg.CacheMemCapacityBytes),
+	)
 	if err != nil {
 		return nil, err
 	}
-	return NewCacheFS(fs, int(cfg.CacheMemCapacityBytes))
+	return fs, nil
 }
 
 func newMinioFileService(cfg Config) (FileService, error) {
@@ -84,11 +87,12 @@ func newMinioFileService(cfg Config) (FileService, error) {
 		cfg.S3.Endpoint,
 		cfg.S3.Bucket,
 		cfg.S3.KeyPrefix,
+		int(cfg.CacheMemCapacityBytes),
 	)
 	if err != nil {
 		return nil, err
 	}
-	return NewCacheFS(fs, int(cfg.CacheMemCapacityBytes))
+	return fs, nil
 }
 
 func newS3FileService(cfg Config) (FileService, error) {
@@ -96,9 +100,10 @@ func newS3FileService(cfg Config) (FileService, error) {
 		cfg.S3.Endpoint,
 		cfg.S3.Bucket,
 		cfg.S3.KeyPrefix,
+		int(cfg.CacheMemCapacityBytes),
 	)
 	if err != nil {
 		return nil, err
 	}
-	return NewCacheFS(fs, int(cfg.CacheMemCapacityBytes))
+	return fs, nil
 }

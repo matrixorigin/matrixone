@@ -72,20 +72,37 @@ func (l *LRU) Set(key any, value any, size int) {
 
 func (l *LRU) evict() {
 	for {
-		if l.size < l.capacity {
+		if l.size <= l.capacity {
 			return
 		}
 		if len(l.kv) == 0 {
 			return
 		}
+
 		elem := l.evicts.Back()
-		if elem == nil {
-			return
+		for {
+			if elem == nil {
+				return
+			}
+			item := elem.Value.(*lruItem)
+
+			// RC value
+			if rc, ok := item.Value.(interface {
+				RefCount() int64
+			}); ok {
+				if rc.RefCount() > 0 {
+					// skip
+					elem = elem.Prev()
+					continue
+				}
+			}
+
+			l.size -= item.Size
+			l.evicts.Remove(elem)
+			delete(l.kv, item.Key)
+			break
 		}
-		item := elem.Value.(*lruItem)
-		l.size -= item.Size
-		l.evicts.Remove(elem)
-		delete(l.kv, item.Key)
+
 	}
 }
 
@@ -98,4 +115,12 @@ func (l *LRU) Get(key any) (value any, ok bool) {
 		return item.Value, true
 	}
 	return nil, false
+}
+
+func (l *LRU) Flush() {
+	l.Lock()
+	defer l.Unlock()
+	l.size = 0
+	l.evicts = list.New()
+	l.kv = make(map[any]*list.Element)
 }

@@ -194,18 +194,14 @@ select cast(concat_ws('184467440','73709551615') as signed);
 #
 # Bug #13344: cast of large decimal to signed int not handled correctly
 #
--- @bvt:issue#3506
 select cast(1.0e+300 as signed int);
--- @bvt:issue
 #
 # Bugs: #15098: CAST(column double TO signed int), wrong result
 #
 CREATE TABLE t1 (f1 double);
 INSERT INTO t1 SET f1 = -1.0e+30 ;
 INSERT INTO t1 SET f1 = +1.0e+30 ;
--- @bvt:issue#3506
 SELECT f1 AS double_val, CAST(f1 AS SIGNED INT) AS cast_val FROM t1;
--- @bvt:issue
 DROP TABLE t1;					   
 
 -- @bvt:issue#3257

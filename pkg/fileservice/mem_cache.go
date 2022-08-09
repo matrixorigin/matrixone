@@ -19,51 +19,31 @@ import (
 	"sync/atomic"
 )
 
-type CacheFS struct {
-	upstream FileService
-
-	memLRU *LRU
-	stats  *lruStats
+type MemCache struct {
+	lru   *LRU
+	stats *CacheStats
 }
 
-type lruStats struct {
-	Read     int64
-	CacheHit int64
-}
-
-var _ FileService = new(CacheFS)
-
-func NewCacheFS(
-	upstream FileService,
-	memoryCapacity int,
-) (
-	*CacheFS,
-	error,
-) {
-
-	fs := &CacheFS{
-		upstream: upstream,
-		memLRU:   NewLRU(memoryCapacity),
+func NewMemCache(capacity int) *MemCache {
+	return &MemCache{
+		lru:   NewLRU(capacity),
+		stats: new(CacheStats),
 	}
-
-	return fs, nil
 }
 
-func (c *CacheFS) Delete(ctx context.Context, filePath string) error {
-	return c.upstream.Delete(ctx, filePath)
-}
-
-func (c *CacheFS) List(ctx context.Context, dirPath string) ([]DirEntry, error) {
-	return c.upstream.List(ctx, dirPath)
-}
-
-func (c *CacheFS) Read(ctx context.Context, vector *IOVector) error {
+func (m *MemCache) Read(
+	ctx context.Context,
+	vector *IOVector,
+	upstreamRead func(context.Context, *IOVector) error,
+) (
+	err error,
+) {
 
 	numHit := 0
 	defer func() {
-		if c.stats != nil {
-			atomic.AddInt64(&c.stats.Read, int64(len(vector.Entries)))
-			atomic.AddInt64(&c.stats.CacheHit, int64(numHit))
+		if m.stats != nil {
+			atomic.AddInt64(&m.stats.NumRead, int64(len(vector.Entries)))
+			atomic.AddInt64(&m.stats.NumHit, int64(numHit))
 		}
 	}()
 
@@ -80,7 +60,7 @@ func (c *CacheFS) Read(ctx context.Context, vector *IOVector) error {
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
-		obj, ok := c.memLRU.Get(key)
+		obj, ok := m.lru.Get(key)
 		if ok {
 			vector.Entries[i].Object = obj
 			vector.Entries[i].ignore = true
@@ -88,7 +68,7 @@ func (c *CacheFS) Read(ctx context.Context, vector *IOVector) error {
 		}
 	}
 
-	if err := c.upstream.Read(ctx, vector); err != nil {
+	if err := upstreamRead(ctx, vector); err != nil {
 		return err
 	}
 
@@ -106,13 +86,17 @@ func (c *CacheFS) Read(ctx context.Context, vector *IOVector) error {
 				Offset: entry.Offset,
 				Size:   entry.Size,
 			}
-			c.memLRU.Set(key, entry.Object, entry.ObjectSize)
+			m.lru.Set(key, entry.Object, entry.ObjectSize)
 		}
 	}
 
-	return nil
+	return
 }
 
-func (c *CacheFS) Write(ctx context.Context, vector IOVector) error {
-	return c.upstream.Write(ctx, vector)
+func (m *MemCache) Flush() {
+	m.lru.Flush()
+}
+
+func (m *MemCache) CacheStats() *CacheStats {
+	return m.stats
 }

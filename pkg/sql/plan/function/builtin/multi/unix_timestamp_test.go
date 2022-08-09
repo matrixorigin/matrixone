@@ -34,7 +34,7 @@ func TestUnixTimestamp(t *testing.T) {
 	UnixtimeCase(t, types.T_int64, MustDatetimeMe("2022-01-03 22:23:00"), 1641219780)
 }
 
-//func FromUnixTime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error)
+// func FromUnixTime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 func UnixtimeCase(t *testing.T, typ types.T, src types.Datetime, res int64) {
 	makeProcess := func() *process.Process {
 		hm := host.New(1 << 40)

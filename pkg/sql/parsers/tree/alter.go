@@ -16,25 +16,18 @@ package tree
 
 type AlterUser struct {
 	statementImpl
-	IfExists   bool
-	IsUserFunc bool
-	UserFunc   *User
-	Users      []*User
-	Roles      []*Role
-	TlsOpts    []TlsOption
-	ResOpts    []ResourceOption
-	MiscOpts   []UserMiscOption
+	IfExists bool
+	Users    []*User
+	Role     *Role
+	MiscOpts []UserMiscOption
+	// comment or attribute
+	CommentOrAttribute AccountCommentOrAttribute
 }
 
 func (node *AlterUser) Format(ctx *FmtCtx) {
 	ctx.WriteString("alter user")
 	if node.IfExists {
 		ctx.WriteString(" if exists")
-	}
-	if node.IsUserFunc {
-		ctx.WriteString(" user() identified by ")
-		ctx.WriteString(node.UserFunc.AuthString)
-		return
 	}
 	if node.Users != nil {
 		prefix := " "
@@ -44,21 +37,9 @@ func (node *AlterUser) Format(ctx *FmtCtx) {
 			prefix = ", "
 		}
 	}
-	if node.TlsOpts != nil {
-		prefix := " require "
-		for _, t := range node.TlsOpts {
-			ctx.WriteString(prefix)
-			t.Format(ctx)
-			prefix = " "
-		}
-	}
-	if node.ResOpts != nil {
-		prefix := " with "
-		for _, r := range node.ResOpts {
-			ctx.WriteString(prefix)
-			r.Format(ctx)
-			prefix = " "
-		}
+	if node.Role != nil {
+		ctx.WriteString(" default role ")
+		node.Role.Format(ctx)
 	}
 	if node.MiscOpts != nil {
 		prefix := " "
@@ -68,17 +49,36 @@ func (node *AlterUser) Format(ctx *FmtCtx) {
 			prefix = " "
 		}
 	}
+	node.CommentOrAttribute.Format(ctx)
 }
 
-func NewAlterUser(ife bool, iuf bool, uf *User, u []*User, r []*Role, t []TlsOption, res []ResourceOption, m []UserMiscOption) *AlterUser {
+func NewAlterUser(ife bool, u []*User, r *Role, m []UserMiscOption) *AlterUser {
 	return &AlterUser{
-		IfExists:   ife,
-		IsUserFunc: iuf,
-		UserFunc:   uf,
-		Users:      u,
-		Roles:      r,
-		TlsOpts:    t,
-		ResOpts:    res,
-		MiscOpts:   m,
+		IfExists: ife,
+		Users:    u,
+		Role:     r,
+		MiscOpts: m,
 	}
+}
+
+type AlterAccount struct {
+	statementImpl
+	IfExists   bool
+	Name       string
+	AuthOption AccountAuthOption
+	//status_option or not
+	StatusOption AccountStatus
+	//comment or not
+	Comment AccountComment
+}
+
+func (ca *AlterAccount) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter account ")
+	if ca.IfExists {
+		ctx.WriteString("if exists ")
+	}
+	ctx.WriteString(ca.Name)
+	ca.AuthOption.Format(ctx)
+	ca.StatusOption.Format(ctx)
+	ca.Comment.Format(ctx)
 }

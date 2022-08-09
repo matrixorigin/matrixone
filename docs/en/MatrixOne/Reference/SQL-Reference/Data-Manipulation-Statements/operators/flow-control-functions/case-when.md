@@ -1,4 +1,4 @@
-# **CASE**
+# **CASE WHEN**
 
 ## **Description**
 

@@ -17,26 +17,37 @@ package fileservice
 import (
 	"testing"
 
-	"github.com/cockroachdb/pebble/vfs"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestVfsFS(t *testing.T) {
+func TestRC(t *testing.T) {
+	l := NewLRU(1)
 
-	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func() FileService {
-			fs, err := NewVfsFS(vfs.NewStrictMem())
-			assert.Nil(t, err)
-			return fs
-		})
-	})
+	r := NewRC(42)
+	r.IncRef()
+	l.Set(1, r, 1)
+	_, ok := l.kv[1]
+	assert.True(t, ok)
 
-	t.Run("replaceable file service", func(t *testing.T) {
-		testReplaceableFileService(t, func() ReplaceableFileService {
-			fs, err := NewVfsFS(vfs.NewStrictMem())
-			assert.Nil(t, err)
-			return fs
-		})
-	})
+	l.Set(2, 42, 1)
+	_, ok = l.kv[1]
+	assert.True(t, ok)
+	_, ok = l.kv[2]
+	assert.False(t, ok)
+
+	r.DecRef()
+	l.Set(2, 42, 1)
+	_, ok = l.kv[1]
+	assert.False(t, ok)
+	_, ok = l.kv[2]
+	assert.True(t, ok)
+
+	r2 := NewRC(42)
+	r2.IncRef()
+	l.Set(3, r2, 1)
+	_, ok = l.kv[3]
+	assert.True(t, ok)
+	_, ok = l.kv[2]
+	assert.False(t, ok)
 
 }
