@@ -26,9 +26,10 @@ type EncodeBatch struct {
 
 // Batch represents a part of a relationship
 // including an optional list of row numbers, columns and list of attributes
-//  (SelsData, Sels) - list of row numbers
-//  (Attrs) - list of attributes
-//  (vecs) 	- columns
+//
+//	(SelsData, Sels) - list of row numbers
+//	(Attrs) - list of attributes
+//	(vecs) 	- columns
 type Batch struct {
 	// Ro if true, Attrs is read only
 	Ro bool

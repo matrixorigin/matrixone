@@ -73,7 +73,7 @@ func (node *OrderBy) Format(ctx *FmtCtx) {
 	}
 }
 
-//the ordering expression.
+// the ordering expression.
 type Order struct {
 	Expr      Expr
 	Direction Direction
@@ -120,7 +120,7 @@ func (d Direction) String() string {
 	return directionName[d]
 }
 
-//the LIMIT clause.
+// the LIMIT clause.
 type Limit struct {
 	Offset, Count Expr
 }
@@ -212,7 +212,7 @@ func (node *SelectClause) Format(ctx *FmtCtx) {
 	}
 }
 
-//WHERE or HAVING clause.
+// WHERE or HAVING clause.
 type Where struct {
 	Type string
 	Expr Expr
@@ -233,7 +233,7 @@ func NewWhere(e Expr) *Where {
 	return &Where{Expr: e}
 }
 
-//SELECT expressions.
+// SELECT expressions.
 type SelectExprs []SelectExpr
 
 func (node *SelectExprs) Format(ctx *FmtCtx) {
@@ -245,7 +245,7 @@ func (node *SelectExprs) Format(ctx *FmtCtx) {
 	}
 }
 
-//a SELECT expression.
+// a SELECT expression.
 type SelectExpr struct {
 	exprImpl
 	Expr Expr
@@ -260,7 +260,7 @@ func (node *SelectExpr) Format(ctx *FmtCtx) {
 	}
 }
 
-//a GROUP BY clause.
+// a GROUP BY clause.
 type GroupBy []Expr
 
 func (node *GroupBy) Format(ctx *FmtCtx) {
@@ -284,7 +284,7 @@ const (
 	JOIN_TYPE_NATURAL_RIGHT = "NATURAL RIGHT"
 )
 
-//the table expression
+// the table expression
 type TableExpr interface {
 	NodeFormatter
 }
@@ -330,7 +330,7 @@ func NewJoinTableExpr(jt string, l, r TableExpr, jc JoinCond) *JoinTableExpr {
 	}
 }
 
-//the join condition.
+// the join condition.
 type JoinCond interface {
 	NodeFormatter
 }
@@ -348,7 +348,7 @@ func NewNaturalJoinCond() *NaturalJoinCond {
 	return &NaturalJoinCond{}
 }
 
-//the ON condition for join
+// the ON condition for join
 type OnJoinCond struct {
 	JoinCond
 	Expr Expr
@@ -363,7 +363,7 @@ func NewOnJoinCond(e Expr) *OnJoinCond {
 	return &OnJoinCond{Expr: e}
 }
 
-//the USING condition
+// the USING condition
 type UsingJoinCond struct {
 	JoinCond
 	Cols IdentifierList
@@ -379,7 +379,7 @@ func NewUsingJoinCond(c IdentifierList) *UsingJoinCond {
 	return &UsingJoinCond{Cols: c}
 }
 
-//the parenthesized TableExpr.
+// the parenthesized TableExpr.
 type ParenTableExpr struct {
 	TableExpr
 	Expr TableExpr
@@ -395,7 +395,7 @@ func NewParenTableExpr(e TableExpr) *ParenTableExpr {
 	return &ParenTableExpr{Expr: e}
 }
 
-//The alias, optionally with a column list:
+// The alias, optionally with a column list:
 // "AS name" or "AS name(col1, col2)".
 type AliasClause struct {
 	NodeFormatter
@@ -414,7 +414,7 @@ func (node *AliasClause) Format(ctx *FmtCtx) {
 	}
 }
 
-//the table expression coupled with an optional alias.
+// the table expression coupled with an optional alias.
 type AliasedTableExpr struct {
 	TableExpr
 	Expr TableExpr
@@ -436,7 +436,7 @@ func NewAliasedTableExpr(e TableExpr, a AliasClause) *AliasedTableExpr {
 	}
 }
 
-//the statements as a data source includes the select statement.
+// the statements as a data source includes the select statement.
 type StatementSource struct {
 	TableExpr
 	Statement Statement
@@ -448,7 +448,7 @@ func NewStatementSource(s Statement) *StatementSource {
 	}
 }
 
-//the list of table expressions.
+// the list of table expressions.
 type TableExprs []TableExpr
 
 func (node *TableExprs) Format(ctx *FmtCtx) {
@@ -460,7 +460,7 @@ func (node *TableExprs) Format(ctx *FmtCtx) {
 	}
 }
 
-//the FROM clause.
+// the FROM clause.
 type From struct {
 	Tables TableExprs
 }

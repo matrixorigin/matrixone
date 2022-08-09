@@ -33,8 +33,7 @@ select oct(-0.00000000000000000000000001);
 oct(-0.00000000000000000000000001)
 0
 select oct("你好");
-oct("你好")
-0
+Can't cast '你好' from VARCHAR type to BIGINT type.
 create table t1(a int);
 insert into t1 values();
 select oct(a) from t1;

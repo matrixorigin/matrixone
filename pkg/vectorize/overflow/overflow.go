@@ -18,7 +18,7 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-//------------------------------------add-------------------------------------------
+// ------------------------------------add-------------------------------------------
 func OverflowUIntAdd[T constraints.Unsigned](a, b, c T) bool {
 	return c < a || c < b
 }

@@ -200,8 +200,7 @@ drop table t1;
 CREATE TABLE t1(a INT);
 INSERT INTO t1 VALUES (0),(0);
 SELECT 1 FROM t1 GROUP BY SUBSTRING('',1,'');
-1
-1
+Can't cast '' from VARCHAR type to BIGINT type.
 drop table t1;
 create table t1 (email varchar(50));
 insert into t1 values ('sasha@mysql.com'),('monty@mysql.com'),('foo@hotmail.com'),('foo@aol.com'),('bar@aol.com');

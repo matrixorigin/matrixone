@@ -21,17 +21,16 @@ type IdentifierName interface {
 	Expr
 }
 
-//sql indentifier
+// sql indentifier
 type Identifier string
 
 func (node *Identifier) Format(ctx *FmtCtx) {
 	ctx.WriteString(string(*node))
 }
 
-//
 type UnrestrictedIdentifier string
 
-//the list of identifiers.
+// the list of identifiers.
 type IdentifierList []Identifier
 
 func (node *IdentifierList) Format(ctx *FmtCtx) {
@@ -50,7 +49,7 @@ type ColumnItem struct {
 	ColumnName Identifier
 }
 
-//the unresolved qualified name like column name.
+// the unresolved qualified name like column name.
 type UnresolvedName struct {
 	exprImpl
 	//the number of name parts specified, including the star. Always 1 or greater.
@@ -82,7 +81,7 @@ func (node *UnresolvedName) GetNames() (string, string, string) {
 	return node.Parts[2], node.Parts[1], node.Parts[0]
 }
 
-//the path in an UnresolvedName.
+// the path in an UnresolvedName.
 type NameParts = [4]string
 
 func NewUnresolvedName(parts ...string) (*UnresolvedName, error) {
@@ -140,7 +139,7 @@ func SetUnresolvedNameWithStar(parts ...string) *UnresolvedName {
 	return u
 }
 
-//variable in the scalar expression
+// variable in the scalar expression
 type VarName interface {
 	Expr
 }
@@ -148,7 +147,7 @@ type VarName interface {
 var _ VarName = &UnresolvedName{}
 var _ VarName = UnqualifiedStar{}
 
-//'*' in the scalar expression
+// '*' in the scalar expression
 type UnqualifiedStar struct {
 	VarName
 }
