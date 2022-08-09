@@ -16,7 +16,12 @@
 
 syntax = "proto3";
 package pipeline; 
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/pipeline";
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
 
 import "plan.proto";
 
