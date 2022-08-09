@@ -251,9 +251,9 @@ func TestClusterState(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	// -------------------------------------------
-	// the following would test `ClusterState`
-	// -------------------------------------------
+	// ----------------------------------------
+	// the following would test `ClusterState`.
+	// ----------------------------------------
 	ctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel1()
 	leader := c.WaitHAKeeperLeader(ctx1)
@@ -270,6 +270,12 @@ func TestClusterState(t *testing.T) {
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel2()
 	c.WaitHAKeeperState(ctx2, logpb.HAKeeperRunning)
+
+	hkstate := c.GetHAKeeperState()
+	require.Equal(t, logpb.HAKeeperRunning, hkstate)
+
+	// cluster should be healthy
+	require.True(t, c.IsClusterHealthy())
 
 	ctx3, cancel3 := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel3()
@@ -290,32 +296,138 @@ func TestClusterState(t *testing.T) {
 	_, err = c.ListLogShards(ctx5)
 	require.NoError(t, err)
 
-	// test GetDNStoreInfo and GetDNStoreInfoIndexed
-	dnIndex := 0
-	dsuuid := dsuuids[dnIndex]
+	// test for:
+	//   - GetDNStoreInfo
+	//   - GetDNStoreInfoIndexed
+	//   - DNStoreExpired
+	//   - DNStoreExpiredIndexed
+	{
+		dnIndex := 0
+		dsuuid := dsuuids[dnIndex]
 
-	ctx6, cancel6 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel6()
-	dnStoreInfo1, err := c.GetDNStoreInfo(ctx6, dsuuid)
+		ctx6, cancel6 := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel6()
+		dnStoreInfo1, err := c.GetDNStoreInfo(ctx6, dsuuid)
+		require.NoError(t, err)
+
+		ctx7, cancel7 := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel7()
+		dnStoreInfo2, err := c.GetDNStoreInfoIndexed(ctx7, dnIndex)
+		require.NoError(t, err)
+		require.Equal(t, dnStoreInfo1, dnStoreInfo2)
+
+		expired1, err := c.DNStoreExpired(dsuuid)
+		require.NoError(t, err)
+		require.False(t, expired1)
+
+		expired2, err := c.DNStoreExpiredIndexed(dnIndex)
+		require.NoError(t, err)
+		require.False(t, expired2)
+	}
+
+	// test for:
+	//   - GetLogStoreInfo
+	//   - GetLogStoreInfoIndexed
+	//   - LogStoreExpired
+	//   - LogStoreExpiredIndexed
+	{
+		logIndex := 1
+		lsuuid := lsuuids[logIndex]
+
+		ctx8, cancel8 := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel8()
+		logStoreInfo1, err := c.GetLogStoreInfo(ctx8, lsuuid)
+		require.NoError(t, err)
+
+		ctx9, cancel9 := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel9()
+		logStoreInfo2, err := c.GetLogStoreInfoIndexed(ctx9, logIndex)
+		require.NoError(t, err)
+		require.Equal(t, logStoreInfo1, logStoreInfo2)
+
+		expired1, err := c.LogStoreExpired(lsuuid)
+		require.NoError(t, err)
+		require.False(t, expired1)
+
+		expired2, err := c.LogStoreExpiredIndexed(logIndex)
+		require.NoError(t, err)
+		require.False(t, expired2)
+	}
+}
+
+func TestClusterWaitState(t *testing.T) {
+	// FIXME: skip this test after issue #4334 solved:
+	// https://github.com/matrixorigin/matrixone/issues/4334
+	t.Skip()
+
+	dnSvcNum := 2
+	logSvcNum := 3
+	opt := DefaultOptions().
+		WithDNServiceNum(dnSvcNum).
+		WithLogServiceNum(logSvcNum)
+
+	// initialize cluster
+	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
 
-	ctx7, cancel7 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel7()
-	dnStoreInfo2, err := c.GetDNStoreInfoIndexed(ctx7, dnIndex)
-	require.NoError(t, err)
-	require.Equal(t, dnStoreInfo1, dnStoreInfo2)
-
-	logIndex := 1
-	lsuuid := lsuuids[logIndex]
-
-	ctx8, cancel8 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel8()
-	logStoreInfo1, err := c.GetLogStoreInfo(ctx8, lsuuid)
+	// start the cluster
+	err = c.Start()
 	require.NoError(t, err)
 
-	ctx9, cancel9 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel9()
-	logStoreInfo2, err := c.GetLogStoreInfoIndexed(ctx9, logIndex)
-	require.NoError(t, err)
-	require.Equal(t, logStoreInfo1, logStoreInfo2)
+	// close the cluster after all
+	defer func() {
+		err := c.Close()
+		require.NoError(t, err)
+	}()
+
+	// --------------------------------------------
+	// the following would test `ClusterWaitState`.
+	// --------------------------------------------
+	// we must wait for hakeeper's running state,
+	// or hakeeper wouldn't receive hearbeat.
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel1()
+	c.WaitHAKeeperState(ctx1, logpb.HAKeeperRunning)
+
+	// test WaitDNShardsReported
+	{
+		ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel2()
+		c.WaitDNShardsReported(ctx2)
+	}
+
+	// test WaitLogShardsReported
+	{
+		ctx3, cancel3 := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel3()
+		c.WaitLogShardsReported(ctx3)
+	}
+
+	// test WaitDNReplicaReported
+	{
+		ctx4, cancel4 := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel4()
+		dnShards, err := c.ListDNShards(ctx4)
+		require.NoError(t, err)
+		require.NotZero(t, len(dnShards))
+
+		dnShardID := dnShards[0].ShardID
+		ctx5, cancel5 := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel5()
+		c.WaitDNReplicaReported(ctx5, dnShardID)
+	}
+
+	// test WaitLogReplicaReported
+	{
+		ctx6, cancel6 := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel6()
+		logShards, err := c.ListLogShards(ctx6)
+		require.NotZero(t, len(logShards))
+		require.NoError(t, err)
+
+		logShardID := logShards[0].ShardID
+		ctx7, cancel7 := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel7()
+		c.WaitLogReplicaReported(ctx7, logShardID)
+	}
 }

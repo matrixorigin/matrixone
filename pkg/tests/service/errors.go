@@ -19,6 +19,7 @@ import "fmt"
 var (
 	ErrServiceNotExist     = fmt.Errorf("service not exist")
 	ErrServiceNotStarted   = fmt.Errorf("service not started")
+	ErrStoreNotReported    = fmt.Errorf("store not reported")
 	ErrInvalidServiceIndex = fmt.Errorf("invalid service index")
 	ErrFailAllocatePort    = fmt.Errorf("fail to allocate port")
 	ErrInvalidFSName       = fmt.Errorf("invalid file service name")

@@ -148,3 +148,11 @@ func TestHaKeeperNum(t *testing.T) {
 	require.Equal(t, 3, haKeeperNum(3))
 	require.Equal(t, 3, haKeeperNum(4))
 }
+
+func TestBuildHAKeeperConfig(t *testing.T) {
+	opt := DefaultOptions()
+	cfg := opt.BuildHAKeeperConfig()
+	require.Equal(t, opt.hakeeper.tickPerSecond, cfg.TickPerSecond)
+	require.Equal(t, opt.hakeeper.logStoreTimeout, cfg.LogStoreTimeout)
+	require.Equal(t, opt.hakeeper.dnStoreTimeout, cfg.DnStoreTimeout)
+}
