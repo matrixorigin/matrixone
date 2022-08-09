@@ -85,10 +85,11 @@ func (dt Datetime) String2(precision int32) string {
 // 3. yyyymmddhhmmss(.msec)
 // during parsing, the Datetime value will be rounded(away from zero) to the predefined precision, for example:
 // Datetime(3) input string   					parsing result
-// 				"1999-09-09 11:11:11.1234"		"1999-09-09 11:11:11.123"
-//				"1999-09-09 11:11:11.1235"		"1999-09-09 11:11:11.124"
-// 				"1999-09-09 11:11:11.9994"      "1999-09-09 11:11:11.999"
-// 				"1999-09-09 11:11:11.9995"      "1999-09-09 11:11:12.000"
+//
+//	"1999-09-09 11:11:11.1234"		"1999-09-09 11:11:11.123"
+//	"1999-09-09 11:11:11.1235"		"1999-09-09 11:11:11.124"
+//	"1999-09-09 11:11:11.9994"      "1999-09-09 11:11:11.999"
+//	"1999-09-09 11:11:11.9995"      "1999-09-09 11:11:12.000"
 func ParseDatetime(s string, precision int32) (Datetime, error) {
 	s = strings.TrimSpace(s)
 	if len(s) < 14 {

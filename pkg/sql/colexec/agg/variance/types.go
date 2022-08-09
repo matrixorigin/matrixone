@@ -23,14 +23,14 @@ type Variance[T1 types.Floats | types.Ints | types.UInts] struct {
 	count []float64
 }
 
-//for decimal64
+// for decimal64
 type Variance2 struct {
 	inputType types.Type
 	sum       []float64
 	count     []float64
 }
 
-//for deimal128
+// for deimal128
 type Variance3 struct {
 	inputType types.Type
 	sum       []float64

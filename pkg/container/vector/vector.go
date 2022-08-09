@@ -562,14 +562,16 @@ func (v *Vector) initConst(typ types.Type) {
 
 // IsScalar return true if the vector means a scalar value.
 // e.g.
-// 		a + 1, and 1's vector will return true
+//
+//	a + 1, and 1's vector will return true
 func (v *Vector) IsScalar() bool {
 	return v.IsConst
 }
 
 // IsScalarNull return true if the vector means a scalar Null.
 // e.g.
-// 		a + Null, and the vector of right part will return true
+//
+//	a + Null, and the vector of right part will return true
 func (v *Vector) IsScalarNull() bool {
 	return v.IsConst && v.Nsp != nil && nulls.Contains(v.Nsp, 0)
 }

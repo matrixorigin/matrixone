@@ -180,10 +180,10 @@ func rpad(rowCount int, strs *types.Bytes, sizes interface{}, pads interface{}, 
 	return result, nsp, nil
 }
 
-//note that: for flag:
-//0: nothing todo
-//1: is an overflow flag
-//2: is an parse_error flag
+// note that: for flag:
+// 0: nothing todo
+// 1: is an overflow flag
+// 2: is an parse_error flag
 func rpadInt64(rowCount int, strs *types.Bytes, sizes []int64, padstrs *types.Bytes, isConst []bool, oriNsp []*nulls.Nulls, isEmptyStringOrNull ...[]int) (*types.Bytes, *nulls.Nulls) {
 	results := &types.Bytes{}
 	resultNsp := new(nulls.Nulls)

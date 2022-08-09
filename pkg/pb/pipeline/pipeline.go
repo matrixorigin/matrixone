@@ -16,6 +16,10 @@ package pipeline
 
 import fmt "fmt"
 
+func (m *Message) Size() int {
+	return m.ProtoSize()
+}
+
 func (m *Message) GetID() uint64 {
 	return m.Sid
 }
