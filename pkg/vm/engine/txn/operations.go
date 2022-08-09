@@ -58,7 +58,6 @@ func mustEncodePayload(o any) []byte {
 func init() {
 
 	// register TableDef types
-	gob.Register(new(engine.ViewDef))
 	gob.Register(new(engine.CommentDef))
 	gob.Register(new(engine.AttributeDef))
 	gob.Register(new(engine.IndexTableDef))

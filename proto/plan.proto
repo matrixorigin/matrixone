@@ -286,23 +286,17 @@ message PropertiesDef {
 	repeated Property properties 	= 1;
 }
 
-message ViewDef {
-	bytes stmt = 1;
-}
-
 message TableDef {
 	message DefType {
 		oneof def {
 			PrimaryKeyDef pk			= 1;
 			IndexDef idx				= 2;
 			PropertiesDef properties	= 3;
-			ViewDef view 				= 4;
 		}
 	}
 	string name				= 1;
 	repeated ColDef cols	= 2;
 	repeated DefType defs	= 3;
-	bool is_view			= 4;
 }
 
 message Cost {

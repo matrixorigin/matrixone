@@ -653,7 +653,6 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 
 	var cols []*plan2.ColDef
 	var defs []*plan2.TableDefType
-	isView := false
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			cols = append(cols, &plan2.ColDef{
@@ -667,16 +666,21 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				Primary: attr.Attr.Primary,
 				Default: attr.Attr.Default,
 			})
-		}
-		if view, ok := def.(*engine.ViewDef); ok && len(view.Stmt) > 0 {
+		} else if def, ok := def.(*engine.PropertiesDef); ok {
+			properties := make([]*plan.Property, len(def.Properties))
+			for i, p := range def.Properties {
+				properties[i] = &plan.Property{
+					Key:   p.Key,
+					Value: p.Value,
+				}
+			}
 			defs = append(defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_View{
-					View: &plan.ViewDef{
-						Stmt: view.Stmt,
+				Def: &plan.TableDef_DefType_Properties{
+					Properties: &plan.PropertiesDef{
+						Properties: properties,
 					},
 				},
 			})
-			isView = true
 		}
 	}
 	if tcc.QryTyp != TXN_DEFAULT {
@@ -704,10 +708,9 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	}
 
 	tableDef := &plan2.TableDef{
-		Name:   tableName,
-		Cols:   cols,
-		IsView: isView,
-		Defs:   defs,
+		Name: tableName,
+		Cols: cols,
+		Defs: defs,
 	}
 	return obj, tableDef
 }

@@ -109,15 +109,10 @@ type CommentDef struct {
 	Comment string
 }
 
-type ViewDef struct {
-	Stmt []byte
-}
-
 type TableDef interface {
 	tableDef()
 }
 
-func (*ViewDef) tableDef()         {}
 func (*CommentDef) tableDef()      {}
 func (*AttributeDef) tableDef()    {}
 func (*IndexTableDef) tableDef()   {}

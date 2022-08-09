@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
@@ -65,13 +66,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	}
 	createTable.TableDef.Cols = cols
 
-	// we can not use JSON to Serialize Statement Now, because we use a lot of interface
-	// bytes, err := json.Marshal(stmt)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	bytes, err := json.Marshal(ViewData{
+	viewData, err := json.Marshal(ViewData{
 		Stmt:            ctx.GetRootSql(),
 		DefaultDatabase: ctx.DefaultDatabase(),
 	})
@@ -80,9 +75,12 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	}
 
 	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-		Def: &plan.TableDef_DefType_View{
-			View: &plan.ViewDef{
-				Stmt: bytes,
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: []*plan.Property{
+					{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemViewRel},
+					{Key: catalog.SystemRelAttr_CreateSQL, Value: string(viewData)},
+				},
 			},
 		},
 	})
@@ -344,8 +342,13 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		}
 	} else {
 		for _, def := range tableDef.Defs {
-			if _, ok := def.Def.(*plan.TableDef_DefType_View); ok {
-				return nil, errors.New("", fmt.Sprintf("table %s is not exists", dropTable.Table))
+			if pro, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
+				for _, p := range pro.Properties.Properties {
+					if p.Key == catalog.SystemRelAttr_Kind && p.Value == catalog.SystemViewRel {
+						// it's a view, not a normal table
+						return nil, errors.New("", fmt.Sprintf("table %s is not exists", dropTable.Table))
+					}
+				}
 			}
 		}
 	}
@@ -383,9 +386,13 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 	} else {
 		isView := false
 		for _, def := range tableDef.Defs {
-			if _, ok := def.Def.(*plan.TableDef_DefType_View); ok {
-				isView = true
-				break
+			if pro, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
+				for _, p := range pro.Properties.Properties {
+					if p.Key == catalog.SystemRelAttr_Kind && p.Value == catalog.SystemViewRel {
+						isView = true
+						break
+					}
+				}
 			}
 		}
 		if !isView {

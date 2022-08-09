@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *QueryBuilder {
@@ -1516,16 +1517,26 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 			return 0, errors.New("", fmt.Sprintf("table %q does not exist", table))
 		}
 
-		if tableDef.IsView {
-			// set view statment to CTE
-			for _, def := range tableDef.Defs {
-				if tableViewDef, ok := def.Def.(*plan.TableDef_DefType_View); ok {
+		// set view statment to CTE
+		for _, def := range tableDef.Defs {
+			if defProperties, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
+				viewSql := ""
+				isView := false
+				for _, p := range defProperties.Properties.Properties {
+					switch p.Key {
+					case catalog.SystemRelAttr_Kind:
+						isView = p.Value == catalog.SystemViewRel
+					case catalog.SystemRelAttr_CreateSQL:
+						viewSql = p.Value
+					}
+				}
+				if isView && len(viewSql) > 0 {
 					if ctx.cteByName == nil {
 						ctx.cteByName = make(map[string]*CTERef)
 					}
 
 					viewData := ViewData{}
-					err := json.Unmarshal(tableViewDef.View.Stmt, &viewData)
+					err := json.Unmarshal([]byte(viewSql), &viewData)
 					if err != nil {
 						return 0, err
 					}
@@ -1570,7 +1581,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					return builder.buildTable(newTableName, ctx)
 				}
 			}
-			return 0, errors.New("", "can not get view statement")
 		}
 
 		nodeID = builder.appendNode(&plan.Node{

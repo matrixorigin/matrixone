@@ -16,8 +16,9 @@ package moengine
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -28,11 +29,6 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		commentDef := new(engine.CommentDef)
 		commentDef.Comment = schema.Comment
 		defs = append(defs, commentDef)
-	}
-	if schema.Stmt != nil {
-		viewDef := new(engine.ViewDef)
-		viewDef.Stmt = schema.Stmt
-		defs = append(defs, viewDef)
 	}
 	for _, col := range schema.ColDefs {
 		if col.IsPhyAddr() {
@@ -101,8 +97,6 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 					schema.Comment = property.Value
 				}
 			}
-		case *engine.ViewDef:
-			schema.Stmt = defVal.Stmt
 		default:
 			// We will not deal with other cases for the time being
 		}
