@@ -83,10 +83,10 @@
  * bool compare operator
  */
 #define COMPARE_BOOL_EQ(TGT, A, B)                                     \
-    TGT = ((((A) != 0) && ((B) != 0)) || (((A) == 0) && ((B) == 0)))
+    TGT = (((A) && (B)) || (!(A) && !(B)))
 
 #define COMPARE_BOOL_NE(TGT, A, B)                                     \
-    TGT = ((((A) != 0) && ((B) == 0)) || (((A) == 0) && ((B) != 0)))
+    TGT = ((!(A) && (B)) || ((A) && !(B)))
 
 #define COMPARE_BOOL_LE(TGT, A, B)                                     \
     TGT = (!(A) || (B))
