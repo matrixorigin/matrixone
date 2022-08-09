@@ -24,14 +24,15 @@ import (
 
 func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	bc := &BindContext{
-		groupByAst:     make(map[string]int32),
-		aggregateByAst: make(map[string]int32),
-		projectByExpr:  make(map[string]int32),
-		aliasMap:       make(map[string]int32),
-		bindingByTag:   make(map[int32]*Binding),
-		bindingByTable: make(map[string]*Binding),
-		bindingByCol:   make(map[string]*Binding),
-		parent:         parent,
+		groupByAst:      make(map[string]int32),
+		aggregateByAst:  make(map[string]int32),
+		projectByExpr:   make(map[string]int32),
+		aliasMap:        make(map[string]int32),
+		bindingByTag:    make(map[int32]*Binding),
+		bindingByTable:  make(map[string]*Binding),
+		bindingByCol:    make(map[string]*Binding),
+		parent:          parent,
+		defaultDatabase: parent.defaultDatabase,
 	}
 
 	return bc

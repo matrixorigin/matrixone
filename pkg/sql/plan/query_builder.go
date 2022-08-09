@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -1467,6 +1468,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 				subCtx := NewBindContext(builder, ctx)
 				subCtx.maskedCTEs = cteRef.maskedCTEs
 				subCtx.cteName = table
+				//reset defaultDatabase
+				if len(cteRef.defaultDatabase) > 0 {
+					subCtx.defaultDatabase = cteRef.defaultDatabase
+				}
 
 				switch stmt := cteRef.ast.Stmt.(type) {
 				case *tree.Select:
@@ -1503,6 +1508,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 				break
 			}
+			schema = ctx.defaultDatabase
 		}
 
 		obj, tableDef := builder.compCtx.Resolve(schema, table)
@@ -1518,8 +1524,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 						ctx.cteByName = make(map[string]*CTERef)
 					}
 
-					viewSql := string(tableViewDef.View.Stmt)
-					originStmts, err := mysql.Parse(viewSql)
+					viewData := ViewData{}
+					err := json.Unmarshal(tableViewDef.View.Stmt, &viewData)
+					if err != nil {
+						return 0, err
+					}
+
+					originStmts, err := mysql.Parse(viewData.Stmt)
 					if err != nil {
 						return 0, err
 					}
@@ -1545,12 +1556,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 							},
 							Stmt: viewStmt.AsSource,
 						},
-						maskedCTEs: maskedCTEs,
+						defaultDatabase: viewData.DefaultDatabase, //todo save defaultDatabase in view?
+						maskedCTEs:      maskedCTEs,
 					}
 
 					newTableName := tree.NewTableName(tree.Identifier(viewName), tree.ObjectNamePrefix{
-						CatalogName:     tbl.CatalogName,
-						SchemaName:      tbl.SchemaName,
+						CatalogName:     tbl.CatalogName, // TODO unused now, if used in some code, that will be save in view
+						SchemaName:      tree.Identifier(schema),
 						ExplicitCatalog: false,
 						ExplicitSchema:  false,
 					})

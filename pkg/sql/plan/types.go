@@ -80,6 +80,11 @@ type BaseOptimizer struct {
 	ctx   CompilerContext
 }
 
+type ViewData struct {
+	Stmt            string
+	DefaultDatabase string
+}
+
 type ExecType int
 
 const (
@@ -109,8 +114,9 @@ type QueryBuilder struct {
 }
 
 type CTERef struct {
-	ast        *tree.CTE
-	maskedCTEs map[string]any
+	defaultDatabase string
+	ast             *tree.CTE
+	maskedCTEs      map[string]any
 }
 
 type BindContext struct {
@@ -153,6 +159,8 @@ type BindContext struct {
 	parent     *BindContext
 	leftChild  *BindContext
 	rightChild *BindContext
+
+	defaultDatabase string
 }
 
 type NameTuple struct {

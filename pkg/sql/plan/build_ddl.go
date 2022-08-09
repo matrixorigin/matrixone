@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -70,7 +71,13 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	// 	return nil, err
 	// }
 
-	bytes := []byte(ctx.GetRootSql())
+	bytes, err := json.Marshal(ViewData{
+		Stmt:            ctx.GetRootSql(),
+		DefaultDatabase: ctx.DefaultDatabase(),
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
 		Def: &plan.TableDef_DefType_View{
