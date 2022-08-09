@@ -23,8 +23,6 @@ import (
 )
 
 // driver lsn -> entry lsn
-//
-//
 func (d *LogServiceDriver) Truncate(lsn uint64) error {
 	truncated := atomic.LoadUint64(&d.truncating)
 	if lsn > truncated {

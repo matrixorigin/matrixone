@@ -315,7 +315,7 @@ func (mp *MysqlProtocolImpl) Quit() {
 	mp.ProtocolImpl.Quit()
 }
 
-//handshake response 41
+// handshake response 41
 type response41 struct {
 	capabilities     uint32
 	maxPacketSize    uint32
@@ -326,7 +326,7 @@ type response41 struct {
 	clientPluginName string
 }
 
-//handshake response 320
+// handshake response 320
 type response320 struct {
 	capabilities  uint32
 	maxPacketSize uint32
@@ -335,8 +335,8 @@ type response320 struct {
 	database      string
 }
 
-//read an int with length encoded from the buffer at the position
-//return the int ; position + the count of bytes for length encoded (1 or 3 or 4 or 9)
+// read an int with length encoded from the buffer at the position
+// return the int ; position + the count of bytes for length encoded (1 or 3 or 4 or 9)
 func (mp *MysqlProtocolImpl) readIntLenEnc(data []byte, pos int) (uint64, int, bool) {
 	if pos >= len(data) {
 		return 0, 0, false
@@ -381,8 +381,8 @@ func (mp *MysqlProtocolImpl) readIntLenEnc(data []byte, pos int) (uint64, int, b
 	return uint64(data[pos]), pos + 1, true
 }
 
-//write an int with length encoded into the buffer at the position
-//return position + the count of bytes for length encoded (1 or 3 or 4 or 9)
+// write an int with length encoded into the buffer at the position
+// return position + the count of bytes for length encoded (1 or 3 or 4 or 9)
 func (mp *MysqlProtocolImpl) writeIntLenEnc(data []byte, pos int, value uint64) int {
 	switch {
 	case value < 251:
@@ -413,16 +413,16 @@ func (mp *MysqlProtocolImpl) writeIntLenEnc(data []byte, pos int, value uint64) 
 	}
 }
 
-//append an int with length encoded to the buffer
-//return the buffer
+// append an int with length encoded to the buffer
+// return the buffer
 func (mp *MysqlProtocolImpl) appendIntLenEnc(data []byte, value uint64) []byte {
 	mp.lenEncBuffer = mp.lenEncBuffer[:9]
 	pos := mp.writeIntLenEnc(mp.lenEncBuffer, 0, value)
 	return mp.append(data, mp.lenEncBuffer[:pos]...)
 }
 
-//read the count of bytes from the buffer at the position
-//return bytes slice ; position + count ; true - succeeded or false - failed
+// read the count of bytes from the buffer at the position
+// return bytes slice ; position + count ; true - succeeded or false - failed
 func (mp *MysqlProtocolImpl) readCountOfBytes(data []byte, pos int, count int) ([]byte, int, bool) {
 	if pos+count-1 >= len(data) {
 		return nil, 0, false
@@ -430,21 +430,21 @@ func (mp *MysqlProtocolImpl) readCountOfBytes(data []byte, pos int, count int) (
 	return data[pos : pos+count], pos + count, true
 }
 
-//write the count of bytes into the buffer at the position
-//return position + the number of bytes
+// write the count of bytes into the buffer at the position
+// return position + the number of bytes
 func (mp *MysqlProtocolImpl) writeCountOfBytes(data []byte, pos int, value []byte) int {
 	pos += copy(data[pos:], value)
 	return pos
 }
 
-//append the count of bytes to the buffer
-//return the buffer
+// append the count of bytes to the buffer
+// return the buffer
 func (mp *MysqlProtocolImpl) appendCountOfBytes(data []byte, value []byte) []byte {
 	return mp.append(data, value...)
 }
 
-//read a string with fixed length from the buffer at the position
-//return string ; position + length ; true - succeeded or false - failed
+// read a string with fixed length from the buffer at the position
+// return string ; position + length ; true - succeeded or false - failed
 func (mp *MysqlProtocolImpl) readStringFix(data []byte, pos int, length int) (string, int, bool) {
 	var sdata []byte
 	var ok bool
@@ -455,21 +455,21 @@ func (mp *MysqlProtocolImpl) readStringFix(data []byte, pos int, length int) (st
 	return string(sdata), pos, true
 }
 
-//write a string with fixed length into the buffer at the position
-//return pos + string.length
+// write a string with fixed length into the buffer at the position
+// return pos + string.length
 func (mp *MysqlProtocolImpl) writeStringFix(data []byte, pos int, value string, length int) int {
 	pos += copy(data[pos:], value[0:length])
 	return pos
 }
 
-//append a string with fixed length to the buffer
-//return the buffer
+// append a string with fixed length to the buffer
+// return the buffer
 func (mp *MysqlProtocolImpl) appendStringFix(data []byte, value string, length int) []byte {
 	return mp.append(data, []byte(value[:length])...)
 }
 
-//read a string appended with zero from the buffer at the position
-//return string ; position + length of the string + 1; true - succeeded or false - failed
+// read a string appended with zero from the buffer at the position
+// return string ; position + length of the string + 1; true - succeeded or false - failed
 func (mp *MysqlProtocolImpl) readStringNUL(data []byte, pos int) (string, int, bool) {
 	zeroPos := bytes.IndexByte(data[pos:], 0)
 	if zeroPos == -1 {
@@ -478,16 +478,16 @@ func (mp *MysqlProtocolImpl) readStringNUL(data []byte, pos int) (string, int, b
 	return string(data[pos : pos+zeroPos]), pos + zeroPos + 1, true
 }
 
-//write a string into the buffer at the position, then appended with 0
-//return pos + string.length + 1
+// write a string into the buffer at the position, then appended with 0
+// return pos + string.length + 1
 func (mp *MysqlProtocolImpl) writeStringNUL(data []byte, pos int, value string) int {
 	pos = mp.writeStringFix(data, pos, value, len(value))
 	data[pos] = 0
 	return pos + 1
 }
 
-//read a string with length encoded from the buffer at the position
-//return string ; position + the count of bytes for length encoded (1 or 3 or 4 or 9) + length of the string; true - succeeded or false - failed
+// read a string with length encoded from the buffer at the position
+// return string ; position + the count of bytes for length encoded (1 or 3 or 4 or 9) + length of the string; true - succeeded or false - failed
 func (mp *MysqlProtocolImpl) readStringLenEnc(data []byte, pos int) (string, int, bool) {
 	var value uint64
 	var ok bool
@@ -502,45 +502,45 @@ func (mp *MysqlProtocolImpl) readStringLenEnc(data []byte, pos int) (string, int
 	return string(data[pos : pos+sLength]), pos + sLength, true
 }
 
-//write a string with length encoded into the buffer at the position
-//return position + the count of bytes for length encoded (1 or 3 or 4 or 9) + length of the string;
+// write a string with length encoded into the buffer at the position
+// return position + the count of bytes for length encoded (1 or 3 or 4 or 9) + length of the string;
 func (mp *MysqlProtocolImpl) writeStringLenEnc(data []byte, pos int, value string) int {
 	pos = mp.writeIntLenEnc(data, pos, uint64(len(value)))
 	return mp.writeStringFix(data, pos, value, len(value))
 }
 
-//append a string with length encoded to the buffer
-//return the buffer
+// append a string with length encoded to the buffer
+// return the buffer
 func (mp *MysqlProtocolImpl) appendStringLenEnc(data []byte, value string) []byte {
 	data = mp.appendIntLenEnc(data, uint64(len(value)))
 	return mp.appendStringFix(data, value, len(value))
 }
 
-//append bytes with length encoded to the buffer
-//return the buffer
+// append bytes with length encoded to the buffer
+// return the buffer
 func (mp *MysqlProtocolImpl) appendCountOfBytesLenEnc(data []byte, value []byte) []byte {
 	data = mp.appendIntLenEnc(data, uint64(len(value)))
 	return mp.appendCountOfBytes(data, value)
 }
 
-//append an int64 value converted to string with length encoded to the buffer
-//return the buffer
+// append an int64 value converted to string with length encoded to the buffer
+// return the buffer
 func (mp *MysqlProtocolImpl) appendStringLenEncOfInt64(data []byte, value int64) []byte {
 	mp.strconvBuffer = mp.strconvBuffer[:0]
 	mp.strconvBuffer = strconv.AppendInt(mp.strconvBuffer, value, 10)
 	return mp.appendCountOfBytesLenEnc(data, mp.strconvBuffer)
 }
 
-//append an uint64 value converted to string with length encoded to the buffer
-//return the buffer
+// append an uint64 value converted to string with length encoded to the buffer
+// return the buffer
 func (mp *MysqlProtocolImpl) appendStringLenEncOfUint64(data []byte, value uint64) []byte {
 	mp.strconvBuffer = mp.strconvBuffer[:0]
 	mp.strconvBuffer = strconv.AppendUint(mp.strconvBuffer, value, 10)
 	return mp.appendCountOfBytesLenEnc(data, mp.strconvBuffer)
 }
 
-//append an float32 value converted to string with length encoded to the buffer
-//return the buffer
+// append an float32 value converted to string with length encoded to the buffer
+// return the buffer
 func (mp *MysqlProtocolImpl) appendStringLenEncOfFloat64(data []byte, value float64, bitSize int) []byte {
 	mp.strconvBuffer = mp.strconvBuffer[:0]
 	mp.strconvBuffer = strconv.AppendFloat(mp.strconvBuffer, value, 'f', -1, bitSize)
@@ -551,8 +551,8 @@ func (mp *MysqlProtocolImpl) appendUint8(data []byte, e uint8) []byte {
 	return mp.append(data, e)
 }
 
-//write the count of zeros into the buffer at the position
-//return pos + count
+// write the count of zeros into the buffer at the position
+// return pos + count
 func (mp *MysqlProtocolImpl) writeZeros(data []byte, pos int, count int) int {
 	for i := 0; i < count; i++ {
 		data[pos+i] = 0
@@ -560,9 +560,9 @@ func (mp *MysqlProtocolImpl) writeZeros(data []byte, pos int, count int) int {
 	return pos + count
 }
 
-//the server calculates the hash value of the password with the algorithm
-//and judges it with the authentication data from the client.
-//Algorithm: SHA1( password ) XOR SHA1( slat + SHA1( SHA1( password ) ) )
+// the server calculates the hash value of the password with the algorithm
+// and judges it with the authentication data from the client.
+// Algorithm: SHA1( password ) XOR SHA1( slat + SHA1( SHA1( password ) ) )
 func (mp *MysqlProtocolImpl) checkPassword(password, salt, auth []byte) bool {
 	if len(password) == 0 {
 		return false
@@ -610,7 +610,7 @@ func (mp *MysqlProtocolImpl) checkPassword(password, salt, auth []byte) bool {
 	return bytes.Equal(hash1, auth)
 }
 
-//the server authenticate that the client can connect and use the database
+// the server authenticate that the client can connect and use the database
 func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 	//TODO:check the user and the connection
 	//TODO:get the user's password
@@ -694,8 +694,8 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) error {
 	return nil
 }
 
-//the server makes a handshake v10 packet
-//return handshake packet
+// the server makes a handshake v10 packet
+// return handshake packet
 func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 	var data = make([]byte, HeaderOffset+256)
 	var pos = HeaderOffset
@@ -753,8 +753,8 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 	return data[:pos]
 }
 
-//the server analyses handshake response41 info from the client
-//return true - analysed successfully / false - failed ; response41 ; error
+// the server analyses handshake response41 info from the client
+// return true - analysed successfully / false - failed ; response41 ; error
 func (mp *MysqlProtocolImpl) analyseHandshakeResponse41(data []byte) (bool, response41, error) {
 	var pos = 0
 	var ok bool
@@ -898,8 +898,8 @@ func (mp *MysqlProtocolImpl) handleClientResponse41(resp41 response41) error {
 }
 */
 
-//the server analyses handshake response320 info from the old client
-//return true - analysed successfully / false - failed ; response320 ; error
+// the server analyses handshake response320 info from the old client
+// return true - analysed successfully / false - failed ; response320 ; error
 func (mp *MysqlProtocolImpl) analyseHandshakeResponse320(data []byte) (bool, response320, error) {
 	var pos = 0
 	var ok bool
@@ -981,7 +981,7 @@ func (mp *MysqlProtocolImpl) handleClientResponse320(resp320 response320) error 
 }
 */
 
-//the server makes a AuthSwitchRequest that asks the client to authenticate the data with new method
+// the server makes a AuthSwitchRequest that asks the client to authenticate the data with new method
 func (mp *MysqlProtocolImpl) makeAuthSwitchRequestPayload(authMethodName string) []byte {
 	data := make([]byte, HeaderOffset+1+len(authMethodName)+1+len(mp.salt)+1)
 	pos := HeaderOffset
@@ -992,9 +992,9 @@ func (mp *MysqlProtocolImpl) makeAuthSwitchRequestPayload(authMethodName string)
 	return data[:pos]
 }
 
-//the server can send AuthSwitchRequest to ask client to use designated authentication method,
-//if both server and client support CLIENT_PLUGIN_AUTH capability.
-//return data authenticated with new method
+// the server can send AuthSwitchRequest to ask client to use designated authentication method,
+// if both server and client support CLIENT_PLUGIN_AUTH capability.
+// return data authenticated with new method
 func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod() ([]byte, error) {
 	var err error
 	aswPkt := mp.makeAuthSwitchRequestPayload(AuthNativePassword)
@@ -1026,7 +1026,7 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod() ([]byte, error) {
 	return data, nil
 }
 
-//make a OK packet
+// make a OK packet
 func (mp *MysqlProtocolImpl) makeOKPayload(affectedRows, lastInsertId uint64, statusFlags, warnings uint16, message string) []byte {
 	data := make([]byte, HeaderOffset+128+len(message)+10)
 	var pos = HeaderOffset
@@ -1050,13 +1050,13 @@ func (mp *MysqlProtocolImpl) makeOKPayload(affectedRows, lastInsertId uint64, st
 	return data[:pos]
 }
 
-//send OK packet to the client
+// send OK packet to the client
 func (mp *MysqlProtocolImpl) sendOKPacket(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
 	okPkt := mp.makeOKPayload(affectedRows, lastInsertId, status, warnings, message)
 	return mp.writePackets(okPkt)
 }
 
-//make Err packet
+// make Err packet
 func (mp *MysqlProtocolImpl) makeErrPayload(errorCode uint16, sqlState, errorMessage string) []byte {
 	data := make([]byte, HeaderOffset+9+len(errorMessage))
 	pos := HeaderOffset
@@ -1082,6 +1082,7 @@ mysql version 8.0.23
 usually it is in the directory /usr/local/include/mysql/mysqld_error.h
 
 Error information includes several elements: an error code, SQLSTATE value, and message string.
+
 	Error code: This value is numeric. It is MySQL-specific and is not portable to other database systems.
 	SQLSTATE value: This value is a five-character string (for example, '42S02'). SQLSTATE values are taken from ANSI SQL and ODBC and are more standardized than the numeric error codes.
 	Message string: This string provides a textual description of the error.
@@ -1115,8 +1116,8 @@ func (mp *MysqlProtocolImpl) SendEOFPacketIf(warnings, status uint16) error {
 	return nil
 }
 
-//the OK or EOF packet
-//thread safe
+// the OK or EOF packet
+// thread safe
 func (mp *MysqlProtocolImpl) sendEOFOrOkPacket(warnings, status uint16) error {
 	//If the CLIENT_DEPRECATE_EOF client capabilities flag is set, OK_Packet; else EOF_Packet.
 	if mp.capability&CLIENT_DEPRECATE_EOF != 0 {
@@ -1126,7 +1127,7 @@ func (mp *MysqlProtocolImpl) sendEOFOrOkPacket(warnings, status uint16) error {
 	}
 }
 
-//make the column information with the format of column definition41
+// make the column information with the format of column definition41
 func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, cmd int) []byte {
 	space := HeaderOffset + 8*9 + //lenenc bytes of 8 fields
 		21 + //fixed-length fields
@@ -1238,7 +1239,7 @@ func (mp *MysqlProtocolImpl) sendColumns(mrs *MysqlResultSet, cmd int, warnings,
 	return nil
 }
 
-//the server convert every row of the result set into the format that mysql protocol needs
+// the server convert every row of the result set into the format that mysql protocol needs
 func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultSet, r uint64) ([]byte, error) {
 	for i := uint64(0); i < mrs.GetColumnCount(); i++ {
 		column, err := mrs.GetColumn(i)
@@ -1351,8 +1352,8 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 	return data, nil
 }
 
-//the server send group row of the result set as an independent packet
-//thread safe
+// the server send group row of the result set as an independent packet
+// thread safe
 func (mp *MysqlProtocolImpl) SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt uint64) error {
 	if cnt == 0 {
 		return nil
@@ -1408,7 +1409,7 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 	return err
 }
 
-//open a new row of the resultset
+// open a new row of the resultset
 func (mp *MysqlProtocolImpl) openRow(_ []byte) error {
 	if mp.enableLog {
 		fmt.Println("openRow")
@@ -1416,7 +1417,7 @@ func (mp *MysqlProtocolImpl) openRow(_ []byte) error {
 	return mp.openPacket()
 }
 
-//close a finished row of the resultset
+// close a finished row of the resultset
 func (mp *MysqlProtocolImpl) closeRow(_ []byte) error {
 	if mp.enableLog {
 		fmt.Println("closeRow")
@@ -1434,7 +1435,7 @@ func (mp *MysqlProtocolImpl) closeRow(_ []byte) error {
 	return err
 }
 
-//flushOutBuffer the data in the outbuf into the network
+// flushOutBuffer the data in the outbuf into the network
 func (mp *MysqlProtocolImpl) flushOutBuffer() error {
 	if mp.enableLog {
 		fmt.Println("flush")
@@ -1452,7 +1453,7 @@ func (mp *MysqlProtocolImpl) flushOutBuffer() error {
 	return nil
 }
 
-//open a new mysql protocol packet
+// open a new mysql protocol packet
 func (mp *MysqlProtocolImpl) openPacket() error {
 	if mp.enableLog {
 		fmt.Println("openPacket")
@@ -1472,7 +1473,7 @@ func (mp *MysqlProtocolImpl) openPacket() error {
 	return err
 }
 
-//fill the packet with data
+// fill the packet with data
 func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 	if mp.enableLog {
 		logutil.Infof("fillPacket len %d\n", len(elems))
@@ -1531,7 +1532,7 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 	return nil
 }
 
-//close a mysql protocol packet
+// close a mysql protocol packet
 func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) error {
 	if mp.enableLog {
 		fmt.Println("closePacket")
@@ -1571,7 +1572,8 @@ func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) error {
 	return nil
 }
 
-/**
+/*
+*
 append the elems into the outbuffer
 */
 func (mp *MysqlProtocolImpl) append(_ []byte, elems ...byte) []byte {
@@ -1582,8 +1584,8 @@ func (mp *MysqlProtocolImpl) append(_ []byte, elems ...byte) []byte {
 	return mp.tcpConn.OutBuf().RawBuf()
 }
 
-//the server send every row of the result set as an independent packet
-//thread safe
+// the server send every row of the result set as an independent packet
+// thread safe
 func (mp *MysqlProtocolImpl) SendResultSetTextRow(mrs *MysqlResultSet, r uint64) error {
 	mp.GetLock().Lock()
 	defer mp.GetLock().Unlock()
@@ -1591,7 +1593,7 @@ func (mp *MysqlProtocolImpl) SendResultSetTextRow(mrs *MysqlResultSet, r uint64)
 	return mp.sendResultSetTextRow(mrs, r)
 }
 
-//the server send every row of the result set as an independent packet
+// the server send every row of the result set as an independent packet
 func (mp *MysqlProtocolImpl) sendResultSetTextRow(mrs *MysqlResultSet, r uint64) error {
 	var err error
 	err = mp.openRow(nil)
@@ -1622,8 +1624,8 @@ func (mp *MysqlProtocolImpl) sendResultSetTextRow(mrs *MysqlResultSet, r uint64)
 	return nil
 }
 
-//the server send the result set of execution the client
-//the routine follows the article: https://dev.mysql.com/doc/internals/en/com-query-response.html
+// the server send the result set of execution the client
+// the routine follows the article: https://dev.mysql.com/doc/internals/en/com-query-response.html
 func (mp *MysqlProtocolImpl) sendResultSet(set ResultSet, cmd int, warnings, status uint16) error {
 	mysqlRS, ok := set.(*MysqlResultSet)
 	if !ok {
@@ -1663,7 +1665,7 @@ func (mp *MysqlProtocolImpl) sendResultSet(set ResultSet, cmd int, warnings, sta
 	return nil
 }
 
-//the server sends the payload to the client
+// the server sends the payload to the client
 func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 	//protocol header length
 	var headerLen = HeaderOffset

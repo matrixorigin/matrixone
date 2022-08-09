@@ -63,7 +63,7 @@ func (ctx *FmtCtx) PrintExpr(currentExpr Expr, expr Expr, left bool) {
 	}
 }
 
-//needParens says if we need a parenthesis
+// needParens says if we need a parenthesis
 // op is the operator we are printing
 // val is the value we are checking if we need parens around or not
 // left let's us know if the value is on the lhs or rhs of the operator

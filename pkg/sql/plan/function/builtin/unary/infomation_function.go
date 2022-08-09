@@ -31,7 +31,6 @@ var (
 These functions get information from the session and system status.
 */
 
-//
 func adapter(vectors []*vector.Vector,
 	proc *process.Process,
 	resultType types.Type,
@@ -250,7 +249,7 @@ func LastInsertID(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	)
 }
 
-//RolesGraphml returns a GraphML document representing memory role subgraphs
+// RolesGraphml returns a GraphML document representing memory role subgraphs
 func RolesGraphml(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return adapter(vectors, proc, types.T_varchar.ToType(), 0,
 		func(proc *process.Process, params ...interface{}) (int, error) {
@@ -267,7 +266,7 @@ func RolesGraphml(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	)
 }
 
-//RowCount returns The number of rows updated
+// RowCount returns The number of rows updated
 func RowCount(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return adapter(vectors, proc, types.T_uint64.ToType(), 0,
 		func(proc *process.Process, params ...interface{}) (int, error) {
@@ -281,7 +280,7 @@ func RowCount(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	)
 }
 
-//	Return a string that indicates the MySQL server version
+// Return a string that indicates the MySQL server version
 func Version(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return adapter(vectors, proc, types.T_varchar.ToType(), 0,
 		func(proc *process.Process, params ...interface{}) (int, error) {
@@ -298,7 +297,7 @@ func Version(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	)
 }
 
-//Collation	returns the collation of the string argument
+// Collation	returns the collation of the string argument
 func Collation(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return adapter(vectors, proc, types.T_varchar.ToType(), 0,
 		func(proc *process.Process, params ...interface{}) (int, error) {

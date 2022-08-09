@@ -31,7 +31,7 @@ const (
 	Rows = 10
 )
 
-//TODO: add distict decimal128 test
+// TODO: add distict decimal128 test
 func TestAvg(t *testing.T) {
 	testTyp := types.New(types.T_int8, 0, 0, 0)
 	retTyp := types.New(types.T_float64, 0, 0, 0)

@@ -125,7 +125,7 @@ func lpadPure(res *types.Bytes, src *types.Bytes, length uint32, pad *types.Byte
 	return res
 }
 
-//Slice from left to right, starting from 0
+// Slice from left to right, starting from 0
 func getSliceFromLeft(bytes []byte, length uint32) ([]byte, uint32) {
 	elemsize := uint32(len(bytes))
 	if length > elemsize {

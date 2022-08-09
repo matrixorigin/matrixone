@@ -38,7 +38,7 @@ func (driver *walDriver) checkpointTicker() {
 	}
 }
 
-//tid-lsn-ckped uclsn-tid,tid-clsn,cckped
+// tid-lsn-ckped uclsn-tid,tid-clsn,cckped
 func (driver *walDriver) CkpUC() {
 	ckpedlsn := driver.impl.GetCheckpointed(GroupC)
 	ucLsn := driver.impl.GetCheckpointed(GroupUC)
