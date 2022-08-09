@@ -44,7 +44,7 @@
 /pkg/common/stopper @zhangxu19830126
 
 # other directories under pkg
-/pkg/cnservice @nnsgmsone
+/pkg/cnservice @nnsgmsone @reusee
 /pkg/compare @nnsgmsone
 /pkg/compress @nnsgmsone
 /pkg/config @daviszhen
@@ -60,11 +60,14 @@
 /pkg/logutil @daviszhen
 /pkg/partition @nnsgmsone
 /pkg/sort @nnsgmsone
-/pkg/sql @daviszhen
+/pkg/sql/colexec @nnsgmsone
+/pkg/sql/compile @nnsgmsone
+/pkg/sql/parsers @iamlinjunhong
+/pkg/sql/plan @ouyuanning @aunjgr
 /pkg/tests/service @zhangxu19830126 @cnutshell
 /pkg/testutil @nnsgmsone
 /pkg/txn @zhangxu19830126 @lni
-/pkg/vectorize @nnsgmsone
+/pkg/vectorize @aunjgr
 /pkg/util/internalExecutor @aptend
 /pkg/util/metric @aptend
 /pkg/util/toml @zhangxu19830126
