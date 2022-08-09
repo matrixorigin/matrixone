@@ -48,7 +48,6 @@ func Test_readTextFile(t *testing.T) {
 	fmt.Printf("%v\n", data)
 }
 
-//since json load cannot use ',' as delimiter, so we need to use another function to test
 func Test_loadJSON(t *testing.T) {
 	convey.Convey("loadJSON succ", t, func() {
 		ctrl := gomock.NewController(t)
