@@ -31,7 +31,7 @@ const (
 	Rows = 10
 )
 
-//TODO: add distinc decimal128 test
+// TODO: add distinc decimal128 test
 func TestMin(t *testing.T) {
 	testTyp := types.New(types.T_int64, 0, 0, 0)
 	mn := NewMin[int64]()

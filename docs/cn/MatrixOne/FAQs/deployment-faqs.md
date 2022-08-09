@@ -2,7 +2,7 @@
 
 ## 操作系统要求
 
-### 部署MatrixOne所需的操作系统版本是什么?
+* **部署MatrixOne所需的操作系统版本是什么？**
 
 - 单机推荐配置： MatrixOne 0.5.0 支持下表中操作系统。
 
@@ -21,13 +21,13 @@
 
 ## 硬件要求
 
-### MatrixOne对部署硬件的配置要求如何？
+* **MatrixOne对部署硬件的配置要求如何？**
 
 单机安装情况下，MatrixOne 0.5.0 可以运行在 Intel x86-64 架构的 64 位通用硬件服务器平台上。
 
 对于开发、测试和生产环境的服务器硬件配置要求和建议如下：
 
-#### 开发和测试环境要求
+* 开发和测试环境要求
 
 | CPU     | 内存 | 本地存储   |
 | :------ | :----- | :-------------- |
@@ -35,7 +35,7 @@
 
 ARM 架构的 Macbook M1/M2 也适合开发环境。
 
-#### 生产环境要求
+* 生产环境要求
 
 | CPU      | 内存 | 本地存储   |
 | :------- | :----- | :-------------- |
@@ -43,11 +43,11 @@ ARM 架构的 Macbook M1/M2 也适合开发环境。
 
 ## 安装和部署
 
-### 安装时需要更改什么设置吗？
+* **安装时需要更改什么设置吗？**
 
 通常情况下，安装时，你无需更改任何设置。`system_vars_config.toml` 默认设置完全可以直接运行 MatrixOne。但是如果你需要自定义监听端口、IP 地址、存储数据文件路径，你可以修改相应的 `system_vars_config.toml` 记录。
 
-### 当我安装选择从源代码安装构建 MatrixOne时，产生了以下错误或构建失败提示，我该如何继续？
+* **当我安装选择从源代码安装构建 MatrixOne时，产生了以下错误或构建失败提示，我该如何继续？**
 
 报错： `Get "https://proxy.golang.org/........": dial tcp 142.251.43.17:443: i/o timeout`
 
@@ -63,7 +63,7 @@ go env -w GOPROXY=https://goproxy.cn,direct
 
 设置完成后，`make build` 应该很快就能完成。
 
-### 当我通过 MO-Tester 对 MatrixOne 进行测试时，我如何解决产生的 `too many open files` 错误？
+* **当我通过 MO-Tester 对 MatrixOne 进行测试时，我如何解决产生的 `too many open files` 错误？**
 
 为了对 MatrixOne 进行测试，MO-Tester 会快速地打开和关闭许多 SQL 文件，于是很快就达到 Linux 和 MacOS 系统的最大打开文件限制，这就是导致 `too many open files` 错误的原因。
 

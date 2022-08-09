@@ -16,7 +16,14 @@
 
 syntax = "proto3";
 package pipeline; 
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/pipeline";
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
+
+import "plan.proto";
 
 message Message {
     uint64  sid = 1;
@@ -25,3 +32,126 @@ message Message {
     bytes   data = 4;
 }
 
+message Dispatch {
+    bool all = 1;
+    repeated int32 children = 2;
+}
+
+message Aggregate {
+    int32 op = 1;
+    bool dist = 2;
+    plan.Expr expr = 3;
+}
+
+message Group {
+    bool need_eval = 1;
+    uint64 ibucket = 2;
+    uint64 nbucket = 3;
+    repeated plan.Expr  exprs = 4;
+    repeated plan.Type  types = 5;
+    repeated Aggregate  aggs = 6;
+}
+
+message AntiJoin{
+    uint64 ibucket = 1;
+    uint64 nbucket = 2;
+    repeated int32 result = 3;
+    repeated plan.Expr left_cond = 4;
+    repeated plan.Expr right_cond = 5;
+}
+
+message InnerJoin {
+    uint64 ibucket = 1;
+    uint64 nbucket = 2;
+    repeated int32 rel_list = 3;
+    repeated int32 col_list = 4;
+    repeated plan.Expr left_cond = 5;
+    repeated plan.Expr right_cond = 6;
+}
+
+message LeftJoin {
+    uint64 ibucket = 1;
+    uint64 nbucket = 2;
+    repeated int32 rel_list = 3;
+    repeated int32 col_list = 4;
+    repeated plan.Type  types = 5;
+    repeated plan.Expr left_cond = 6;
+    repeated plan.Expr right_cond = 7;
+}
+
+message SemiJoin {
+    uint64 ibucket = 1;
+    uint64 nbucket = 2;
+    repeated int32 result = 3;
+    repeated plan.Expr left_cond = 4;
+    repeated plan.Expr right_cond = 5;
+}
+
+message SingleJoin {
+    uint64 ibucket = 1;
+    uint64 nbucket = 2;
+    repeated int32 rel_list = 3;
+    repeated int32 col_list = 4;
+    repeated plan.Type  types = 5;
+    repeated plan.Expr left_cond = 6;
+    repeated plan.Expr right_cond = 7;
+}
+
+message Product {
+    repeated int32 rel_list = 1;
+    repeated int32 col_list = 2;
+}
+
+message Instruction{
+    // Op specified the operator code of an instruction.
+    int32 op = 1;
+    // Idx specified the anaylze information index.
+    int32 idx = 2;
+    AntiJoin  anti = 3;
+    Dispatch  dispatch = 4;
+    Group     agg = 5;
+    InnerJoin inner_join = 6;
+    LeftJoin  left_join = 7;
+    SemiJoin  semi_join = 8;
+    SingleJoin single_join = 9;
+    Product    product = 10;
+	repeated plan.OrderBySpec order_by = 11;
+    repeated plan.Expr    project_list = 12;
+    plan.Expr    filter = 13;
+    uint64    limit = 14;
+    uint64    offset = 15;
+}
+
+message Source {
+    string schema_name = 1;
+    string table_name = 2;
+    repeated string col_list = 3;
+    string    block = 4;
+}
+
+message NodeInfo {
+    int32 mcpu = 1;
+    string id = 2;
+    string addr = 3;
+    repeated string payload = 4;
+}
+
+message Pipeline {
+    enum PipelineType{
+        Merge = 0;
+        Normal = 1;
+        Remote = 2;
+        Parallel = 3;
+    }
+
+    PipelineType pipeline_type =1;
+    int32 pipeline_id = 2;
+    plan.Plan qry = 3;
+    Source data_source = 4;
+    repeated Pipeline children = 5;
+    repeated Instruction instruction_list = 6;
+
+    bool is_end = 7;
+    NodeInfo node = 8;
+    int32 push_down_info = 9;
+}

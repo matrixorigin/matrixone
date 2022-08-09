@@ -9,7 +9,7 @@ The `UPDATE` statement is used to modify the existing records in a table.
 ### **Single-table Syntax**
 
 ```
-UPDATE [LOW_PRIORITY] [IGNORE] table_reference
+UPDATE table_reference
     SET assignment_list
     [WHERE where_condition]
     [ORDER BY ...]

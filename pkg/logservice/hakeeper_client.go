@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -233,7 +234,11 @@ func newHAKeeperClient(ctx context.Context,
 		respPool: respPool,
 	}
 	var e error
-	for _, addr := range cfg.ServiceAddresses {
+	addresses := append([]string{}, cfg.ServiceAddresses...)
+	rand.Shuffle(len(cfg.ServiceAddresses), func(i, j int) {
+		addresses[i], addresses[j] = addresses[j], addresses[i]
+	})
+	for _, addr := range addresses {
 		cc, err := getRPCClient(ctx, addr, c.respPool)
 		if err != nil {
 			e = err

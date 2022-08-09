@@ -9,7 +9,7 @@
 ### **单表语法结构**
 
 ```
-UPDATE [LOW_PRIORITY] [IGNORE] table_reference
+UPDATE table_reference
     SET assignment_list
     [WHERE where_condition]
     [ORDER BY ...]

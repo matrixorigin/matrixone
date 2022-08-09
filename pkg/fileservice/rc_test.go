@@ -14,27 +14,40 @@
 
 package fileservice
 
-import "sync/atomic"
+import (
+	"testing"
 
-// Pinned represents a pinned value that will not evict in LRU
-type Pinned[T any] struct {
-	Value T
-	unpin int32
-}
+	"github.com/stretchr/testify/assert"
+)
 
-// Pin creates a Pinned value
-func Pin[T any](value T) *Pinned[T] {
-	return &Pinned[T]{
-		Value: value,
-	}
-}
+func TestRC(t *testing.T) {
+	l := NewLRU(1)
 
-// Unpin marks the value as unpin to be evictable in LRU
-func (p *Pinned[T]) Unpin() {
-	atomic.StoreInt32(&p.unpin, 1)
-}
+	r := NewRC(42)
+	r.IncRef()
+	l.Set(1, r, 1)
+	_, ok := l.kv[1]
+	assert.True(t, ok)
 
-// IsPinned returns whether the value is pinned
-func (p *Pinned[T]) IsPinned() bool {
-	return atomic.LoadInt32(&p.unpin) == 0
+	l.Set(2, 42, 1)
+	_, ok = l.kv[1]
+	assert.True(t, ok)
+	_, ok = l.kv[2]
+	assert.False(t, ok)
+
+	r.DecRef()
+	l.Set(2, 42, 1)
+	_, ok = l.kv[1]
+	assert.False(t, ok)
+	_, ok = l.kv[2]
+	assert.True(t, ok)
+
+	r2 := NewRC(42)
+	r2.IncRef()
+	l.Set(3, r2, 1)
+	_, ok = l.kv[3]
+	assert.True(t, ok)
+	_, ok = l.kv[2]
+	assert.False(t, ok)
+
 }
