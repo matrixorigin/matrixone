@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/assert"
 	"testing"
 )
 
@@ -133,6 +134,30 @@ func TestF64Eq(t *testing.T) {
 		if res[i] != (as[i] == bs[i]) {
 			t.Fatalf("float32 equal wrong result")
 		}
+	}
+}
+
+func TestBoolEq(t *testing.T) {
+	as := make([]bool, 2)
+	bs := make([]bool, 2)
+	for i := 0; i < 2; i++ {
+		as[i] = true
+		bs[i] = false
+	}
+	cs := make([]bool, 2)
+	av := testutil.MakeBoolVector(as)
+	bv := testutil.MakeBoolVector(bs)
+	cv := testutil.MakeBoolVector(cs)
+
+	err := NumericEqual[bool](av, bv, cv)
+	if err != nil {
+		t.Fatalf("should not error.")
+	}
+
+	res := vector.MustTCols[bool](cv)
+	for i := 0; i < 2; i++ {
+		fmt.Printf("%+v == %+v : %v \n", as[i], bs[i], res[i])
+		assert.Equal(t, as[i] == bs[i], res[i])
 	}
 }
 

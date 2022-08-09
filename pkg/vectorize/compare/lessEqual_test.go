@@ -121,6 +121,30 @@ func TestF64Le(t *testing.T) {
 	}
 }
 
+func TestBoolLe(t *testing.T) {
+	as := make([]bool, 2)
+	bs := make([]bool, 2)
+	for i := 0; i < 2; i++ {
+		as[i] = true
+		bs[i] = false
+	}
+	cs := make([]bool, 2)
+	av := testutil.MakeBoolVector(as)
+	bv := testutil.MakeBoolVector(bs)
+	cv := testutil.MakeBoolVector(cs)
+
+	err := NumericLessEqual[bool](av, bv, cv)
+	if err != nil {
+		t.Fatalf("should not error.")
+	}
+
+	res := vector.MustTCols[bool](cv)
+	for i := 0; i < 2; i++ {
+		fmt.Printf("%+v <= %+v : %v \n", as[i], bs[i], res[i])
+		assert.Equal(t, !(as[i]) || bs[i], res[i])
+	}
+}
+
 func TestDec64Le(t *testing.T) {
 	as := make([]int64, 10)
 	bs := make([]int64, 10)
