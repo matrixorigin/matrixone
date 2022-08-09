@@ -96,6 +96,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				i--
 				continue
 			}
+			bat.ExpandNulls()
 			anal.Input(bat)
 			anal.Alloc(int64(bat.Size()))
 			ctr.n = len(bat.Vecs)
