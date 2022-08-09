@@ -53,6 +53,7 @@ type TestRoutineManager struct {
 
 func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
 	pro := NewMysqlClientProtocol(nextConnectionID(), rs, 1024, tRM.pu.SV)
+	pro.SetSkipCheckUser(true)
 	exe := NewMysqlCmdExecutor()
 	routine := NewRoutine(pro, exe, tRM.pu)
 
@@ -2005,6 +2006,7 @@ func Test_handleHandshake(t *testing.T) {
 		mp := &MysqlProtocolImpl{SV: SV}
 		mp.io = &IO
 		mp.tcpConn = ioses
+		mp.SetSkipCheckUser(true)
 		payload := []byte{'a'}
 		err := mp.handleHandshake(payload)
 		convey.So(err, convey.ShouldNotBeNil)
@@ -2035,6 +2037,7 @@ func Test_handleHandshake_Recover(t *testing.T) {
 		mp := &MysqlProtocolImpl{SV: SV}
 		mp.io = &IO
 		mp.tcpConn = ioses
+		mp.SetSkipCheckUser(true)
 		var payload []byte
 		for i := 0; i < count; i++ {
 			f.Fuzz(&payload)
