@@ -12,6 +12,14 @@ select * from v1 where a > 1;
 a	b
 2	22
 3	33
+create database db2;
+use db2;
+select * from view.v1 where a > 1;
+a	b
+2	22
+3	33
+use view;
+drop database db2;
 drop table t1;
 select * from v1;
 table "t1" does not exist
