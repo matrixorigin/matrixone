@@ -37,6 +37,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	ap := arg.(*Argument)
 	for {
 		if len(proc.Reg.MergeReceivers) == 0 {
+			proc.SetInputBatch(nil)
 			return true, nil
 		}
 		reg := proc.Reg.MergeReceivers[ap.ctr.i]

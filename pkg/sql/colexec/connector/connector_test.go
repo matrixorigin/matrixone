@@ -109,7 +109,6 @@ func newTestCase(gm *guest.Mmu) connectorTestCase {
 			{Oid: types.T_int8},
 		},
 		arg: &Argument{
-			Mmu: gm,
 			Reg: &process.WaitRegister{
 				Ctx: ctx,
 				Ch:  make(chan *batch.Batch, 3),

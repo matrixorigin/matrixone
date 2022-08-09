@@ -1818,19 +1818,19 @@ func TestGetByFilter(t *testing.T) {
 	assert.NoError(t, txn1.Commit())
 }
 
-// 1. Set a big BlockMaxRows
-// 2. Mock one row batch
-// 3. Start tones of workers. Each work execute below routines:
-//    3.1 GetByFilter a pk val
-//        3.1.1 If found, go to 3.5
-//    3.2 Append a row
-//    3.3 err should not be duplicated(TODO: now is duplicated, should be W-W conflict)
-//        (why not duplicated: previous GetByFilter had checked that there was no duplicate key)
-//    3.4 If no error. try commit. If commit ok, inc appendedcnt. If error, rollback
-//    3.5 Delete the row
-//        3.5.1 If no error. try commit. commit should always pass
-//        3.5.2 If error, should always be w-w conflict
-// 4. Wait done all workers. Check the raw row count of table, should be same with appendedcnt.
+//  1. Set a big BlockMaxRows
+//  2. Mock one row batch
+//  3. Start tones of workers. Each work execute below routines:
+//     3.1 GetByFilter a pk val
+//     3.1.1 If found, go to 3.5
+//     3.2 Append a row
+//     3.3 err should not be duplicated(TODO: now is duplicated, should be W-W conflict)
+//     (why not duplicated: previous GetByFilter had checked that there was no duplicate key)
+//     3.4 If no error. try commit. If commit ok, inc appendedcnt. If error, rollback
+//     3.5 Delete the row
+//     3.5.1 If no error. try commit. commit should always pass
+//     3.5.2 If error, should always be w-w conflict
+//  4. Wait done all workers. Check the raw row count of table, should be same with appendedcnt.
 func TestChaos1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
@@ -2563,4 +2563,88 @@ func TestDropCreated2(t *testing.T) {
 	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).DeleteAt)
 
 	tae.restart()
+}
+
+func TestTruncateZonemap(t *testing.T) {
+	type Mod struct {
+		offset int
+		v      byte
+	}
+	mockBytes := func(init byte, size int, mods ...Mod) []byte {
+		ret := make([]byte, size)
+		for i := 0; i < size; i++ {
+			ret[i] = init
+		}
+		for _, m := range mods {
+			ret[m.offset] = m.v
+		}
+		return ret
+	}
+	testutils.EnsureNoLeak(t)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(13, 12) // set varchar PK
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+
+	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*2+9))        // 2.9 blocks
+	minv := mockBytes(0, 35)                                              // 0x00000000
+	trickyMinv := mockBytes(0, 33)                                        // smaller than minv, not in mut index but in immut index
+	maxv := mockBytes(0xff, 35, Mod{0, 0x61}, Mod{1, 0x62}, Mod{2, 0x63}) // abc0xff0xff...
+	trickyMaxv := []byte("abd")                                           // bigger than maxv, not in mut index but in immut index
+	bat.Vecs[12].Update(8, maxv)
+	bat.Vecs[12].Update(11, minv)
+	bat.Vecs[12].Update(22, []byte("abcc"))
+	defer bat.Close()
+
+	checkMinMax := func(rel handle.Relation, minvOffset, maxvOffset uint32) {
+		_, _, err := rel.GetByFilter(handle.NewEQFilter(trickyMinv))
+		assert.Equal(t, err.Error(), data.ErrNotFound.Error())
+		_, _, err = rel.GetByFilter(handle.NewEQFilter(trickyMaxv))
+		assert.Equal(t, err.Error(), data.ErrNotFound.Error())
+		_, row, err := rel.GetByFilter(handle.NewEQFilter(minv))
+		assert.NoError(t, err)
+		assert.Equal(t, minvOffset, row)
+		_, row, err = rel.GetByFilter(handle.NewEQFilter(maxv))
+		assert.NoError(t, err)
+		assert.Equal(t, maxvOffset, row)
+	}
+
+	tae.createRelAndAppend(bat, true)
+
+	// runtime check
+	txn, rel := tae.getRelation()
+	checkMinMax(rel, 1, 8)
+	assert.NoError(t, txn.Commit())
+
+	// restart without compact
+	tae.restart()
+	txn, rel = tae.getRelation()
+	checkMinMax(rel, 1, 8)
+	assert.NoError(t, txn.Commit())
+
+	// restart with compact
+	tae.compactBlocks(false)
+	tae.mergeBlocks(false)
+	tae.restart()
+	txn, rel = tae.getRelation()
+	checkMinMax(rel, 0, 9)
+	assert.NoError(t, txn.Commit())
+
+	// 3 NonAppendable Blocks
+	txn, rel = tae.getRelation()
+	rel.UpdateByFilter(handle.NewEQFilter(maxv), 12, mockBytes(0xff, 35))
+	assert.NoError(t, txn.Commit())
+	tae.compactBlocks(false)
+	tae.mergeBlocks(false)
+	tae.restart()
+
+	txn, rel = tae.getRelation()
+	_, row, err := rel.GetByFilter(handle.NewEQFilter(mockBytes(0xff, 35)))
+	assert.NoError(t, err)
+	assert.Equal(t, uint32(9), row)
+	assert.NoError(t, txn.Commit())
 }

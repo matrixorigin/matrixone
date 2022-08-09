@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
 )
 
@@ -100,6 +101,7 @@ func TestCheckShard(t *testing.T) {
 		nextReplicaID := uint64(100)
 		enough := true
 		idAlloc := newMockIDAllocator(nextReplicaID, enough)
+		mapper := mockShardMapper()
 
 		workingStores := []*util.Store{
 			util.NewStore("store1", 2, DnStoreCapacity),
@@ -112,7 +114,7 @@ func TestCheckShard(t *testing.T) {
 
 		// register an expired replica => should add a new replica
 		shard.register(newReplica(11, shardID, "store11"), true)
-		steps := checkShard(shard, workingStores, idAlloc)
+		steps := checkShard(shard, mapper, workingStores, idAlloc)
 		require.Equal(t, 1, len(steps))
 		add, ok := (steps[0]).(operator.AddDnReplica)
 		require.True(t, ok)
@@ -122,12 +124,12 @@ func TestCheckShard(t *testing.T) {
 
 		// register a working replica => no more step
 		shard.register(newReplica(12, shardID, "store12"), false)
-		steps = checkShard(shard, workingStores, idAlloc)
+		steps = checkShard(shard, mapper, workingStores, idAlloc)
 		require.Equal(t, 0, len(steps))
 
 		// register another working replica => should remove extra replicas
 		shard.register(newReplica(13, shardID, "store13"), false)
-		steps = checkShard(shard, workingStores, idAlloc)
+		steps = checkShard(shard, mapper, workingStores, idAlloc)
 		require.Equal(t, 1, len(steps))
 		remove, ok := (steps[0]).(operator.RemoveDnReplica)
 		require.True(t, ok)
@@ -140,6 +142,7 @@ func TestCheckShard(t *testing.T) {
 		// ID exhausted temporarily
 		enough := false
 		idAlloc := newMockIDAllocator(0, enough)
+		mapper := mockShardMapper()
 
 		workingStores := []*util.Store{
 			util.NewStore("store1", 2, DnStoreCapacity),
@@ -150,7 +153,7 @@ func TestCheckShard(t *testing.T) {
 		anotherShard := uint64(100)
 		// register another expired replica, should add a new replica
 		shard := mockDnShard(anotherShard, nil, []uint64{101})
-		steps := checkShard(shard, workingStores, idAlloc)
+		steps := checkShard(shard, mapper, workingStores, idAlloc)
 		require.Equal(t, 0, len(steps))
 	}
 }
@@ -182,11 +185,16 @@ func mockDnShard(
 }
 
 func TestCheck(t *testing.T) {
-	expiredTick := uint64(10)
+	// clear all records, or other test would failed
+	defer func() {
+		waitingShards.clear()
+	}()
+
+	staleTick := uint64(10)
 	// construct current tick in order to make heartbeat tick expired
 	config := hakeeper.Config{}
 	config.Fill()
-	currTick := config.ExpiredTick(expiredTick, config.DnStoreTimeout) + 1
+	currTick := config.ExpiredTick(staleTick, config.DnStoreTimeout) + 1
 
 	enough := true
 	newReplicaID := uint64(100)
@@ -197,21 +205,23 @@ func TestCheck(t *testing.T) {
 		dnState := pb.DNState{
 			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
-					Tick: expiredTick,
+					Tick: staleTick,
 					Shards: []pb.DNShardInfo{
-						mockDnShardMeta(10, 12),
+						mockDnShardInfo(10, 12),
 					},
 				},
 				"expired2": {
-					Tick: expiredTick,
+					Tick: staleTick,
 					Shards: []pb.DNShardInfo{
-						mockDnShardMeta(11, 13),
+						mockDnShardInfo(11, 13),
 					},
 				},
 			},
 		}
 
-		steps := Check(idAlloc, config, dnState, currTick)
+		clusterInfo := mockClusterInfo(10, 11)
+
+		steps := Check(idAlloc, config, clusterInfo, dnState, currTick)
 		require.Equal(t, len(steps), 0)
 	}
 
@@ -220,39 +230,42 @@ func TestCheck(t *testing.T) {
 		dnState := pb.DNState{
 			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
-					Tick: expiredTick,
+					Tick: staleTick,
 					Shards: []pb.DNShardInfo{
-						mockDnShardMeta(10, 11),
-						mockDnShardMeta(14, 17),
+						mockDnShardInfo(10, 11),
+						mockDnShardInfo(14, 17),
 					},
 				},
 				"working1": {
 					Tick: currTick,
 					Shards: []pb.DNShardInfo{
-						mockDnShardMeta(12, 13),
+						mockDnShardInfo(12, 13),
 					},
 				},
 				"working2": {
 					Tick: currTick,
 					Shards: []pb.DNShardInfo{
-						mockDnShardMeta(14, 15),
-						mockDnShardMeta(12, 16),
+						mockDnShardInfo(14, 15),
+						mockDnShardInfo(12, 16),
 					},
 				},
 				"working3": {
 					Tick: currTick,
 					Shards: []pb.DNShardInfo{
-						mockDnShardMeta(12, 18),
+						mockDnShardInfo(12, 18),
 					},
 				},
 			},
 		}
 
-		// shard 10, 12, 14:
+		// all shards were reported
+		clusterInfo := mockClusterInfo(10, 12, 14)
+
+		// At current tick, shard 10, 12, 14:
 		//  10 - add replica
 		//  12 - remove two extra replica (16, 13)
 		//  14 - no command
-		operators := Check(idAlloc, config, dnState, currTick)
+		operators := Check(idAlloc, config, clusterInfo, dnState, currTick)
 		require.Equal(t, 2, len(operators))
 
 		// shard 10 - single operator step
@@ -278,6 +291,61 @@ func TestCheck(t *testing.T) {
 		require.Equal(t, remove.StoreID, "working2")
 		require.Equal(t, remove.ReplicaID, uint64(16))
 	}
+
+	// 3. cluster running with initial shard
+	{
+
+		dnState := pb.DNState{
+			Stores: map[string]pb.DNStoreInfo{
+				"expired1": {
+					Tick: staleTick,
+					Shards: []pb.DNShardInfo{
+						mockDnShardInfo(14, 17),
+					},
+				},
+				"working1": {
+					Tick: currTick,
+					Shards: []pb.DNShardInfo{
+						mockDnShardInfo(12, 16),
+					},
+				},
+			},
+		}
+
+		// with un-reported shard ID
+		unreported := uint64(20)
+		cluster := mockClusterInfo(unreported, 12, 14)
+
+		// at the tick of `staleTick`, shard 14, 20:
+		//  14 - no command
+		//  20 - add replica after a while
+		operators := Check(idAlloc, config, cluster, dnState, staleTick)
+		require.Equal(t, 0, len(operators))
+
+		// at the tick of `currTick`, shard 14, 20:
+		//  14 - add replica
+		//  20 - add replica
+		operators = Check(idAlloc, config, cluster, dnState, currTick)
+		require.Equal(t, 2, len(operators))
+
+		// shard 14 - single operator step
+		op := operators[0]
+		require.Equal(t, op.ShardID(), uint64(14))
+		steps := op.OpSteps()
+		require.Equal(t, len(steps), 1)
+		add, ok := steps[0].(operator.AddDnReplica)
+		require.True(t, ok)
+		require.Equal(t, add.StoreID, "working1")
+
+		// shard 20 - add replica after a while
+		op = operators[1]
+		require.Equal(t, op.ShardID(), uint64(20))
+		steps = op.OpSteps()
+		require.Equal(t, len(steps), 1)
+		add, ok = steps[0].(operator.AddDnReplica)
+		require.True(t, ok)
+		require.Equal(t, add.StoreID, "working1")
+	}
 }
 
 type mockIDAllocator struct {
@@ -300,4 +368,29 @@ func (idAlloc *mockIDAllocator) Next() (uint64, bool) {
 	id := idAlloc.next
 	idAlloc.next += 1
 	return id, true
+}
+
+func mockClusterInfo(ids ...uint64) pb.ClusterInfo {
+	var c pb.ClusterInfo
+
+	records := make([]metadata.DNShardRecord, 0, len(ids))
+	for _, id := range ids {
+		records = append(records, metadata.DNShardRecord{
+			ShardID:    id,
+			LogShardID: id,
+		})
+	}
+	c.DNShards = records
+
+	return c
+}
+
+type mapper struct{}
+
+func (m mapper) getLogShardID(shardID uint64) (uint64, error) {
+	return shardID, nil
+}
+
+func mockShardMapper() ShardMapper {
+	return mapper{}
 }

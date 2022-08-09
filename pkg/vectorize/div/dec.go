@@ -18,15 +18,16 @@ package div
 #include "mo.h"
 
 #cgo CFLAGS: -I../../../cgo
-#cgo LDFLAGS: -L../../../cgo -lmo
+#cgo LDFLAGS: -L../../../cgo -lmo -lm
 */
 import "C"
 import (
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"unsafe"
 )
 
 const (

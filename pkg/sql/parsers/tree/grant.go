@@ -14,40 +14,50 @@
 
 package tree
 
+type GrantType int
+
+const (
+	GrantTypePrivilege GrantType = iota
+	GrantTypeRole
+	GrantTypeProxy
+)
+
 type Grant struct {
 	statementImpl
+	Typ            GrantType
+	GrantPrivilege GrantPrivilege
+	GrantRole      GrantRole
+	GrantProxy     GrantProxy
+}
+
+func (node *Grant) Format(ctx *FmtCtx) {
+	switch node.Typ {
+	case GrantTypePrivilege:
+		node.GrantPrivilege.Format(ctx)
+	case GrantTypeRole:
+		node.GrantRole.Format(ctx)
+	case GrantTypeProxy:
+		node.GrantProxy.Format(ctx)
+	}
+}
+
+func NewGrant() *Grant {
+	return &Grant{}
+}
+
+type GrantPrivilege struct {
+	statementImpl
 	Privileges []*Privilege
-
-	IsGrantRole      bool
-	RolesInGrantRole []*Role
-
-	IsProxy   bool
-	ProxyUser *User
-
-	ObjType     ObjectType
+	//grant privileges
+	ObjType ObjectType
+	//grant privileges
 	Level       *PrivilegeLevel
-	Users       []*User
 	Roles       []*Role
 	GrantOption bool
 }
 
-func (node *Grant) Format(ctx *FmtCtx) {
+func (node *GrantPrivilege) Format(ctx *FmtCtx) {
 	ctx.WriteString("grant")
-	if node.IsGrantRole {
-		prefix := " "
-		for _, r := range node.RolesInGrantRole {
-			ctx.WriteString(prefix)
-			r.Format(ctx)
-			prefix = ", "
-		}
-		goto common
-	}
-	if node.IsProxy {
-		ctx.WriteString(" proxy on ")
-		node.ProxyUser.Format(ctx)
-		goto common
-	}
-
 	if node.Privileges != nil {
 		prefix := " "
 		for _, p := range node.Privileges {
@@ -66,13 +76,12 @@ func (node *Grant) Format(ctx *FmtCtx) {
 		node.Level.Format(ctx)
 	}
 
-common:
-	if node.Users != nil {
+	if node.Roles != nil {
 		ctx.WriteString(" to")
 		prefix := " "
-		for _, u := range node.Users {
+		for _, r := range node.Roles {
 			ctx.WriteString(prefix)
-			u.Format(ctx)
+			r.Format(ctx)
 			prefix = ", "
 		}
 	}
@@ -81,17 +90,60 @@ common:
 	}
 }
 
-func NewGrant(igr bool, ip bool, rigr []*Role, p []*Privilege, t ObjectType, l *PrivilegeLevel, pu *User, u []*User, r []*Role, gopt bool) *Grant {
-	return &Grant{
-		IsGrantRole:      igr,
-		IsProxy:          ip,
-		RolesInGrantRole: rigr,
-		Privileges:       p,
-		ObjType:          t,
-		Level:            l,
-		ProxyUser:        pu,
-		Users:            u,
-		Roles:            r,
-		GrantOption:      gopt,
+type GrantRole struct {
+	statementImpl
+	Roles       []*Role
+	Users       []*User
+	GrantOption bool
+}
+
+func (node *GrantRole) Format(ctx *FmtCtx) {
+	ctx.WriteString("grant")
+	if node.Roles != nil {
+		prefix := " "
+		for _, r := range node.Roles {
+			ctx.WriteString(prefix)
+			r.Format(ctx)
+			prefix = ", "
+		}
+	}
+	if node.Users != nil {
+		ctx.WriteString(" to")
+		prefix := " "
+		for _, r := range node.Users {
+			ctx.WriteString(prefix)
+			r.Format(ctx)
+			prefix = ", "
+		}
+	}
+	if node.GrantOption {
+		ctx.WriteString(" with grant option")
+	}
+}
+
+type GrantProxy struct {
+	statementImpl
+	ProxyUser   *User
+	Users       []*User
+	GrantOption bool
+}
+
+func (node *GrantProxy) Format(ctx *FmtCtx) {
+	ctx.WriteString("grant")
+	if node.ProxyUser != nil {
+		ctx.WriteString(" proxy on ")
+		node.ProxyUser.Format(ctx)
+	}
+	if node.Users != nil {
+		ctx.WriteString(" to")
+		prefix := " "
+		for _, r := range node.Users {
+			ctx.WriteString(prefix)
+			r.Format(ctx)
+			prefix = ", "
+		}
+	}
+	if node.GrantOption {
+		ctx.WriteString(" with grant option")
 	}
 }

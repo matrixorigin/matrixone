@@ -14,8 +14,8 @@
 
 package defines
 
-//information from: https://dev.mysql.com/doc/internals/en/com-query-response.html
-//also in mysql 8.0.23 source code : include/field_types.h
+// information from: https://dev.mysql.com/doc/internals/en/com-query-response.html
+// also in mysql 8.0.23 source code : include/field_types.h
 const (
 	MYSQL_TYPE_DECIMAL     uint8 = 0x00 //lenenc_str
 	MYSQL_TYPE_TINY        uint8 = 0x01 //int<1> int8
@@ -54,8 +54,8 @@ const (
 	MYSQL_TYPE_GEOMETRY    uint8 = 0xff
 )
 
-//flags
-//in mysql 8.0.23 source code : include/mysql_com.h
+// flags
+// in mysql 8.0.23 source code : include/mysql_com.h
 const (
 	NOT_NULL_FLAG     uint32 = 1 << 0 /**< Field can't be NULL */
 	PRI_KEY_FLAG      uint32 = 1 << 1 /**< Field is part of a primary key */

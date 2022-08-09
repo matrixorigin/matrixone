@@ -187,7 +187,7 @@ func (bj ByteJson) toFloat64(buf []byte) ([]byte, error) {
 	return buf, nil
 }
 
-//transform byte string to visible string
+// transform byte string to visible string
 func (bj ByteJson) toString(buf []byte) []byte {
 	data := bj.GetString()
 	return toString(buf, data)

@@ -37,7 +37,7 @@ func NewSetVar(a []*VarAssignmentExpr) *SetVar {
 	}
 }
 
-//for variable = expr
+// for variable = expr
 type VarAssignmentExpr struct {
 	NodeFormatter
 	System   bool

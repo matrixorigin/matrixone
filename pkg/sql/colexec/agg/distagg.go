@@ -175,6 +175,9 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 	vec := vecs[0]
 	if vec.GetType().IsString() {
 		for i := range os {
+			if vps[i] == 0 {
+				continue
+			}
 			j := vps[i] - 1
 			if ok, err = a.maps[j].Insert(vecs, i+int(start)); err != nil {
 				return err
@@ -193,6 +196,9 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 	}
 	vs := vector.GetColumn[T1](vec)
 	for i := range os {
+		if vps[i] == 0 {
+			continue
+		}
 		j := vps[i] - 1
 		if ok, err = a.maps[j].Insert(vecs, i+int(start)); err != nil {
 			return err
@@ -279,6 +285,9 @@ func (a *UnaryDistAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, v
 
 	b0 := b.(*UnaryDistAgg[T1, T2])
 	for i := range os {
+		if vps[i] == 0 {
+			continue
+		}
 		j := vps[i] - 1
 		k := int64(i) + start
 		if b0.es[k] {

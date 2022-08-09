@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -854,7 +855,7 @@ func isWantedDatabase(taeEngine moengine.TxnEngine, txnCtx moengine.Txn,
 	return err
 }
 
-//isWantedTable checks the table has the right attributes
+// isWantedTable checks the table has the right attributes
 func isWantedTable(db engine.Database, txnCtx moengine.Txn,
 	tableName string, schema *CatalogSchema) error {
 	ctx := context.TODO()
@@ -949,7 +950,7 @@ func convertCatalogSchemaToTableDef(sch *CatalogSchema) []engine.TableDef {
 			Name:    attr.GetName(),
 			Alg:     0,
 			Type:    attr.GetType(),
-			Default: engine.DefaultExpr{},
+			Default: &plan.Default{},
 			Primary: attr.GetIsPrimaryKey(),
 		}})
 	}

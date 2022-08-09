@@ -22,7 +22,7 @@ type showImpl struct {
 	Show
 }
 
-//SHOW CREATE TABLE statement
+// SHOW CREATE TABLE statement
 type ShowCreateTable struct {
 	showImpl
 	Name *UnresolvedObjectName
@@ -37,7 +37,7 @@ func NewShowCreate(n *UnresolvedObjectName) *ShowCreateTable {
 	return &ShowCreateTable{Name: n}
 }
 
-//SHOW CREATE DATABASE statement
+// SHOW CREATE DATABASE statement
 type ShowCreateDatabase struct {
 	showImpl
 	IfNotExists bool
@@ -57,7 +57,7 @@ func NewShowCreateDatabase(i bool, n string) *ShowCreateDatabase {
 	return &ShowCreateDatabase{IfNotExists: i, Name: n}
 }
 
-//SHOW COLUMNS statement.
+// SHOW COLUMNS statement.
 type ShowColumns struct {
 	showImpl
 	Ext     bool
@@ -108,7 +108,7 @@ func NewShowColumns(e bool, f bool, t *UnresolvedObjectName, d string, l *Compar
 	}
 }
 
-//the SHOW DATABASES statement.
+// the SHOW DATABASES statement.
 type ShowDatabases struct {
 	showImpl
 	Like  *ComparisonExpr
@@ -157,7 +157,7 @@ func (node *ShowTarget) Format(ctx *FmtCtx) {
 	}
 }
 
-//SHOW TABLES statement.
+// SHOW TABLES statement.
 type ShowTables struct {
 	showImpl
 	Ext    bool
@@ -201,7 +201,7 @@ func NewShowTables(e bool, f bool, n string, l *ComparisonExpr, w *Where) *ShowT
 	}
 }
 
-//SHOW PROCESSLIST
+// SHOW PROCESSLIST
 type ShowProcessList struct {
 	showImpl
 	Full bool
@@ -243,8 +243,8 @@ func NewShowWarnings() *ShowWarnings {
 	return &ShowWarnings{}
 }
 
-//SHOW VARIABLES statement
-//System Variables
+// SHOW VARIABLES statement
+// System Variables
 type ShowVariables struct {
 	showImpl
 	Global bool
@@ -276,7 +276,7 @@ func NewShowVariables(g bool, l *ComparisonExpr, w *Where) *ShowVariables {
 	}
 }
 
-//SHOW STATUS statement
+// SHOW STATUS statement
 type ShowStatus struct {
 	showImpl
 	Global bool
@@ -308,7 +308,7 @@ func NewShowStatus(g bool, l *ComparisonExpr, w *Where) *ShowStatus {
 	}
 }
 
-//show index statement
+// show index statement
 type ShowIndex struct {
 	showImpl
 	TableName TableName

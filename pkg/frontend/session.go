@@ -148,7 +148,7 @@ func (ses *Session) RemovePrepareStmt(name string) {
 }
 
 // SetGlobalVar sets the value of system variable in global.
-//used by SET GLOBAL
+// used by SET GLOBAL
 func (ses *Session) SetGlobalVar(name string, value interface{}) error {
 	return ses.gSysVars.SetGlobalSysVar(name, value)
 }
@@ -340,10 +340,12 @@ func (ses *Session) InActiveMultiStmtTransaction() bool {
 TxnStart starts the transaction implicitly and idempotent
 
 When it is in multi-statement transaction mode:
+
 	Set SERVER_STATUS_IN_TRANS bit;
 	Starts a new transaction if there is none. Reuse the current transaction if there is one.
 
 When it is not in single statement transaction mode:
+
 	Starts a new transaction if there is none. Reuse the current transaction if there is one.
 */
 func (ses *Session) TxnStart() error {
@@ -421,7 +423,7 @@ func (ses *Session) TxnBegin() error {
 	return err
 }
 
-//TxnCommit commits the current transaction.
+// TxnCommit commits the current transaction.
 func (ses *Session) TxnCommit() error {
 	var err error
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY)
@@ -431,7 +433,7 @@ func (ses *Session) TxnCommit() error {
 	return err
 }
 
-//TxnRollback rollbacks the current transaction.
+// TxnRollback rollbacks the current transaction.
 func (ses *Session) TxnRollback() error {
 	var err error
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY)
@@ -475,8 +477,8 @@ func (th *TxnHandler) SetSession(ses *Session) {
 	th.ses = ses
 }
 
-//NewTxn commits the old transaction if it existed.
-//Then it creates the new transaction.
+// NewTxn commits the old transaction if it existed.
+// Then it creates the new transaction.
 func (th *TxnHandler) NewTxn() error {
 	var err error
 	if th.IsValidTxn() {
@@ -497,7 +499,7 @@ func (th *TxnHandler) NewTxn() error {
 	return err
 }
 
-//IsValidTxn checks the transaction is true or not.
+// IsValidTxn checks the transaction is true or not.
 func (th *TxnHandler) IsValidTxn() bool {
 	return th.txn != nil
 }
@@ -657,7 +659,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Scale:     attr.Attr.Type.Scale,
 				},
 				Primary: attr.Attr.Primary,
-				Default: plan2.MakePlan2DefaultExpr(attr.Attr.Default),
+				Default: attr.Attr.Default,
 			})
 		}
 	}

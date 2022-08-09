@@ -15,7 +15,9 @@
 package txnengine
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -23,25 +25,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
 
-func doTxnRequest(
+func doTxnRequest[
+	Resp any,
+	Req any,
+](
 	ctx context.Context,
+	e *Engine,
 	reqFunc func(context.Context, []txn.TxnRequest) (*rpc.SendResult, error),
-	nodes []logservicepb.DNNode,
-	method txn.TxnMethod,
+	selectNodes func([]logservicepb.DNNode) []logservicepb.DNNode,
 	op uint32,
-	reqPayload any,
+	req Req,
 ) (
-	respPayloads [][]byte,
+	resps []Resp,
 	err error,
 ) {
+
+	clusterDetails, err := e.getClusterDetails()
+	if err != nil {
+		return nil, err
+	}
+	nodes := selectNodes(clusterDetails.DNNodes)
 
 	requests := make([]txn.TxnRequest, 0, len(nodes))
 	for _, node := range nodes {
 		requests = append(requests, txn.TxnRequest{
-			Method: method,
 			CNRequest: &txn.CNOpRequest{
 				OpCode:  op,
-				Payload: mustEncodePayload(reqPayload),
+				Payload: mustEncodePayload(req),
 				Target: metadata.DNShard{
 					Address: node.ServiceAddress,
 				},
@@ -51,15 +61,33 @@ func doTxnRequest(
 
 	result, err := reqFunc(ctx, requests)
 	if err != nil {
-		return nil, err
+		return
 	}
-	if err := errorFromTxnResponses(result.Responses); err != nil {
-		return nil, err
+	if err = errorFromTxnResponses(result.Responses); err != nil {
+		return
 	}
 
-	for _, resp := range result.Responses {
-		respPayloads = append(respPayloads, resp.CNOpResponse.Payload)
+	for _, res := range result.Responses {
+		var resp Resp
+		if err = gob.NewDecoder(bytes.NewReader(res.CNOpResponse.Payload)).Decode(&resp); err != nil {
+			return
+		}
+		resps = append(resps, resp)
 	}
 
 	return
+}
+
+func allNodes(nodes []logservicepb.DNNode) []logservicepb.DNNode {
+	return nodes
+}
+
+func firstNode(nodes []logservicepb.DNNode) []logservicepb.DNNode {
+	return nodes[:1]
+}
+
+func theseNodes(nodes []logservicepb.DNNode) func(nodes []logservicepb.DNNode) []logservicepb.DNNode {
+	return func(_ []logservicepb.DNNode) []logservicepb.DNNode {
+		return nodes
+	}
 }
