@@ -57,7 +57,7 @@ const (
 type Instruction struct {
 	// Op specified the operator code of an instruction.
 	Op int
-	// Idx specified the anaylze information index
+	// Idx specified the anaylze information index.
 	Idx int
 	// Arg contains the operand of this instruction.
 	Arg any
