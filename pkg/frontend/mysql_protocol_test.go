@@ -274,6 +274,7 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
 
 	rm := NewRoutineManager(pu)
+	rm.SetSkipCheckUser(true)
 
 	encoder, decoder := NewSqlCodec()
 
