@@ -6,7 +6,7 @@ select 1123.2333+1233.3331;
 2356.5664
 select cast(9223372.036854775808 as decimal)+1;
 cast(9223372.036854775808 as decimal)+1
-9223373
+9223373.036854775808
 select round(cast(2320310.66666612312 as decimal));
 round(cast(2320310.66666612312 as decimal))
 2320311
@@ -124,8 +124,7 @@ select cast(10000002383263201056 as decimal) mod 50 as result;
 result
 49
 select cast(cast(19999999999999999999 as decimal) as unsigned);
-cast(cast(19999999999999999999 as decimal) as unsigned)
-9999999999
+Can't cast '19999999999999999999' from DECIMAL128 type to BIGINT UNSIGNED type. Reason: overflow
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a decimal(20),
 b VARCHAR(20));
