@@ -130,7 +130,7 @@ func GetExecTypeFromPlan(_ *Plan) ExecInfo {
 	return defInfo
 }
 
-//GetResultColumnsFromPlan
+// GetResultColumnsFromPlan
 func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	getResultColumnsByProjectionlist := func(query *Query) []*ColDef {
 		lastNode := query.Nodes[query.Steps[len(query.Steps)-1]]

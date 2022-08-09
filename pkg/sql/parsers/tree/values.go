@@ -14,7 +14,7 @@
 
 package tree
 
-//the VALUES clause
+// the VALUES clause
 type ValuesClause struct {
 	SelectStatement
 	Rows []Exprs

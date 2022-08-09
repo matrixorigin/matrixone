@@ -889,7 +889,7 @@ func makeMoreThan16MBResultSet() *MysqlResultSet {
 	return rs
 }
 
-//the size of resultset will be morethan 16MB
+// the size of resultset will be morethan 16MB
 func makeMoreThan16MBResult() *MysqlExecutionResult {
 	return NewMysqlExecutionResult(0, 0, 0, 0, makeMoreThan16MBResultSet())
 }
@@ -946,7 +946,7 @@ func make16MBRowResultSet() *MysqlResultSet {
 	return rs
 }
 
-//the size of resultset row will be more than 16MB
+// the size of resultset row will be more than 16MB
 func make16MBRowResult() *MysqlExecutionResult {
 	return NewMysqlExecutionResult(0, 0, 0, 0, make16MBRowResultSet())
 }

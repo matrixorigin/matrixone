@@ -25,19 +25,19 @@ func ReturnType(_ []types.Type) types.Type {
 	return types.New(types.T_float64, 0, 0, 0)
 }
 
-//New1 is used to Created a Variance which supports float,int,uint
+// New1 is used to Created a Variance which supports float,int,uint
 func New[T1 types.Floats | types.Ints | types.UInts]() *Stddevpop[T1] {
 	return &Stddevpop[T1]{variance: Variance.New1[T1]()}
 }
 
-//New2 is used to Created a Variance which supports decimal64
-//if is decimal,you need to give pricision
+// New2 is used to Created a Variance which supports decimal64
+// if is decimal,you need to give pricision
 func New2() *Stddevpop2 {
 	return &Stddevpop2{variance: Variance.New2()}
 }
 
-//New2 is used to Created a Variance which supports decimal64
-//if is decimal,you need to give pricision
+// New2 is used to Created a Variance which supports decimal64
+// if is decimal,you need to give pricision
 func New3() *Stddevpop3 {
 	return &Stddevpop3{variance: Variance.New3()}
 }
