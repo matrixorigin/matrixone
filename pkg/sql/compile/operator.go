@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
@@ -428,6 +429,13 @@ func constructGroup(n, cn *plan.Node, ibucket, nbucket int, needEval bool) *grou
 		Exprs:    n.GroupBy,
 		Ibucket:  uint64(ibucket),
 		Nbucket:  uint64(nbucket),
+	}
+}
+
+func constructMinus(n *plan.Node, proc *process.Process, ibucket, nbucket int) *minus.Argument {
+	return &minus.Argument{
+		IBucket: uint64(ibucket),
+		NBucket: uint64(nbucket),
 	}
 }
 
