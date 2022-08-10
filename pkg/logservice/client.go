@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -262,7 +263,11 @@ func newClient(ctx context.Context,
 		respPool: respPool,
 	}
 	var e error
-	for _, addr := range cfg.ServiceAddresses {
+	addresses := append([]string{}, cfg.ServiceAddresses...)
+	rand.Shuffle(len(cfg.ServiceAddresses), func(i, j int) {
+		addresses[i], addresses[j] = addresses[j], addresses[i]
+	})
+	for _, addr := range addresses {
 		cc, err := getRPCClient(ctx, addr, c.respPool)
 		if err != nil {
 			e = err
@@ -465,14 +470,14 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RP
 	mf := func() morpc.Message {
 		return pool.Get().(*RPCResponse)
 	}
-	timeout, err := getTimeoutFromContext(ctx)
+	/*timeout, err := getTimeoutFromContext(ctx)
 	if err != nil {
 		return nil, err
-	}
+	}*/
 	codec := morpc.NewMessageCodec(mf, defaultWriteSocketSize)
 	bf := morpc.NewGoettyBasedBackendFactory(codec,
 		morpc.WithBackendConnectWhenCreate(),
-		morpc.WithBackendConnectTimeout(timeout))
+		morpc.WithBackendConnectTimeout(time.Second))
 	return morpc.NewClient(bf,
 		morpc.WithClientInitBackends([]string{target}, []int{1}),
 		morpc.WithClientMaxBackendPerHost(1))

@@ -258,7 +258,35 @@ func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) {
 }
 
 func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObserver) {
+	hasActive := false
+	for _, info := range cmd.Infos {
+		database, err := db.Catalog.GetDatabaseByID(info.GetDBID())
+		if err != nil {
+			panic(err)
+		}
+		id := info.GetDest()
+		blk, err := database.GetBlockEntryByID(id)
+		if err != nil {
+			panic(err)
+		}
+		if !blk.IsActive() {
+			continue
+		}
+		if observer != nil {
+			observer.OnTimeStamp(blk.GetBlockData().GetMaxCheckpointTS())
+		}
+		if cmd.Ts <= blk.GetBlockData().GetMaxCheckpointTS() {
+			continue
+		}
+		hasActive = true
+	}
+
+	if !hasActive {
+		return
+	}
+
 	var data *containers.Batch
+
 	for _, subTxnCmd := range cmd.Cmds {
 		switch subCmd := subTxnCmd.(type) {
 		case *txnbase.BatchCmd:

@@ -117,7 +117,6 @@ func IntervalTypeOf(s string) (IntervalType, error) {
 	return IntervalTypeMax, errors.New(errno.DataException, "Invalud Interval Type")
 }
 
-//
 // parseInts parse integer from string s.   This is used to handle interval values,
 // when interval type is Second_MicroSecond Minute_MicroSecond Hour_MicroSecond Day_MicroSecond
 // we should set second parameter true, other set false
@@ -128,10 +127,9 @@ func IntervalTypeOf(s string) (IntervalType, error) {
 // for example: when the s is "1:001"
 // the last number length is 3, so the last number should be 1e(6 - 3) * 1 = 1000
 // so there are a few strange things.
-//	1. Only takes 0-9, may have leading 0, still means decimal instead oct.
+//  1. Only takes 0-9, may have leading 0, still means decimal instead oct.
 //  2. 1-1 is parsed out as 1, 1 '-' is delim, so is '+', '.' etc.
-//	3. we will not support int32 overflow.
-//
+//  3. we will not support int32 overflow.
 func parseInts(s string, isxxxMicrosecond bool, typeMaxLength int) ([]int64, error) {
 	ret := make([]int64, 0)
 	numLength := 0

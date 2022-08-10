@@ -31,7 +31,7 @@ const (
 	Rows = 10
 )
 
-//TODO: add decimal128 and more type test.
+// TODO: add decimal128 and more type test.
 func TestAnyvalue(t *testing.T) {
 	testTyp := types.New(types.T_int64, 0, 0, 0)
 	a := NewAnyvalue[int64]()

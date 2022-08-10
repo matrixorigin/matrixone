@@ -222,8 +222,9 @@ func (l *store) startReplica(shardID uint64, replicaID uint64,
 
 func (l *store) stopReplica(shardID uint64, replicaID uint64) error {
 	if shardID == hakeeper.DefaultHAKeeperShardID {
-		plog.Infof("going to stop HAKeeper's ticker")
-		l.tickerStopper.Stop()
+		defer func() {
+			atomic.StoreUint64(&l.haKeeperReplicaID, 0)
+		}()
 	}
 	return l.nh.StopReplica(shardID, replicaID)
 }
@@ -665,10 +666,10 @@ func (l *store) truncationWorker(ctx context.Context) {
 func (l *store) isLeaderHAKeeper() (bool, uint64, error) {
 	leaderID, term, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
 	if err != nil {
-		plog.Errorf("failed to get HAKeeper Leader ID, %v", err)
 		return false, 0, err
 	}
-	return ok && leaderID == l.haKeeperReplicaID, term, nil
+	replicaID := atomic.LoadUint64(&l.haKeeperReplicaID)
+	return ok && replicaID != 0 && leaderID == replicaID, term, nil
 }
 
 // TODO: add test for this

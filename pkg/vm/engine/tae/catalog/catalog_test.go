@@ -132,20 +132,22 @@ func TestCreateDB1(t *testing.T) {
 	// assert.Equal(t, db1.(*mcokDBHandle).entry, h.(*mcokDBHandle).entry)
 }
 
-//
 // TXN1-S     TXN2-S      TXN1-C  TXN3-S TXN4-S  TXN3-C TXN5-S
-//  |            |           |      |      |       |      |                                Time
+//
+//	|            |           |      |      |       |      |                                Time
+//
 // -+-+---+---+--+--+----+---+--+---+-+----+-+-----+------+-+------------------------------------>
-//    |   |   |     |    |      |     |      |              |
-//    |   |   |     |    |      |     |      |            [TXN5]: GET TBL [NOTFOUND]
-//    |   |   |     |    |      |     |    [TXN4]: GET TBL [OK] | DROP DB1-TB1 [W-W]
-//    |   |   |     |    |      |   [TXN3]: GET TBL [OK] | DROP DB1-TB1 [OK] | GET TBL [NOT FOUND]
-//    |   |   |     |    |    [TXN2]: DROP DB [NOTFOUND]
-//    |   |   |     |  [TXN2]: DROP DB [NOTFOUND]
-//    |   |   |   [TXN2]:  GET DB [NOTFOUND] | CREATE DB [W-W]
-//    |   | [TXN1]: CREATE DB1-TB1 [DUP]
-//    | [TXN1]: CREATE DB1-TB1 [OK] | GET TBL [OK]
-//  [TXN1]: CREATE DB1 [OK] | GET DB [OK]
+//
+//	  |   |   |     |    |      |     |      |              |
+//	  |   |   |     |    |      |     |      |            [TXN5]: GET TBL [NOTFOUND]
+//	  |   |   |     |    |      |     |    [TXN4]: GET TBL [OK] | DROP DB1-TB1 [W-W]
+//	  |   |   |     |    |      |   [TXN3]: GET TBL [OK] | DROP DB1-TB1 [OK] | GET TBL [NOT FOUND]
+//	  |   |   |     |    |    [TXN2]: DROP DB [NOTFOUND]
+//	  |   |   |     |  [TXN2]: DROP DB [NOTFOUND]
+//	  |   |   |   [TXN2]:  GET DB [NOTFOUND] | CREATE DB [W-W]
+//	  |   | [TXN1]: CREATE DB1-TB1 [DUP]
+//	  | [TXN1]: CREATE DB1-TB1 [OK] | GET TBL [OK]
+//	[TXN1]: CREATE DB1 [OK] | GET DB [OK]
 func TestTableEntry1(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	catalog := MockCatalog(dir, "mock", nil, nil)

@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 )
 
-//only use in developing
+// only use in developing
 func TestSingleSQL(t *testing.T) {
 	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
@@ -380,7 +380,7 @@ func TestSingleSQL(t *testing.T) {
 // 	}
 // }
 
-//test single table plan building
+// test single table plan building
 func TestSingleTableSQLBuilder(t *testing.T) {
 	mock := NewMockOptimizer()
 
@@ -467,7 +467,7 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
-//test join table plan building
+// test join table plan building
 func TestJoinTableSqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer()
 
@@ -499,7 +499,7 @@ func TestJoinTableSqlBuilder(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
-//test derived table plan building
+// test derived table plan building
 func TestDerivedTableSqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer()
 	// should pass
@@ -525,7 +525,7 @@ func TestDerivedTableSqlBuilder(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
-//test derived table plan building
+// test derived table plan building
 func TestUnionSqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer()
 	// should pass
@@ -554,7 +554,7 @@ func TestUnionSqlBuilder(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
-//test CTE plan building
+// test CTE plan building
 func TestCTESqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer()
 

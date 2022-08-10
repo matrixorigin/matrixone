@@ -173,7 +173,7 @@ type tableDefImpl struct {
 	TableDef
 }
 
-//the list of table definitions
+// the list of table definitions
 type TableDefs []TableDef
 
 type ColumnTableDef struct {
@@ -206,7 +206,7 @@ func NewColumnTableDef(n *UnresolvedName, t ResolvableTypeReference, a []ColumnA
 	}
 }
 
-//column attribute
+// column attribute
 type ColumnAttribute interface {
 	NodeFormatter
 }
@@ -470,7 +470,7 @@ func NewKeyPart(c *UnresolvedName, l int, e Expr) *KeyPart {
 	}
 }
 
-//in reference definition
+// in reference definition
 type MatchType int
 
 func (node *MatchType) ToString() string {
