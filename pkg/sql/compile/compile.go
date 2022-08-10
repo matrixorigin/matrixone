@@ -36,6 +36,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -91,12 +92,12 @@ func (c *Compile) Run(_ uint64) (err error) {
 	//	PrintScope(nil, []*Scope{c.scope})
 
 	switch c.scope.Magic {
-	case Merge:
-		defer c.fillAnalyzeInfo()
-		return c.scope.MergeRun(c)
 	case Normal:
 		defer c.fillAnalyzeInfo()
 		return c.scope.Run(c)
+	case Merge:
+		defer c.fillAnalyzeInfo()
+		return c.scope.MergeRun(c)
 	case Remote:
 		defer c.fillAnalyzeInfo()
 		return c.scope.RemoteRun(c)
@@ -330,7 +331,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 
 func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, error) {
 	switch n.NodeType {
-	case plan.Node_VALUE_SCAN:
+	case plan.Node_VALUE_SCAN, plan.Node_EXTERNAL_SCAN:
 		ds := &Scope{Magic: Normal}
 		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 		bat := batch.NewWithSize(1)
@@ -340,12 +341,21 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			bat.InitZsOne(1)
 		}
 		ds.DataSource = &Source{Bat: bat}
+		if n.NodeType == plan.Node_EXTERNAL_SCAN {
+			attrs := make([]string, len(n.TableDef.Cols))
+			for j, col := range n.TableDef.Cols {
+				attrs[j] = col.Name
+			}
+			ds.DataSource.Attributes = attrs
+			ds.DataSource.ExternalParam = &pipeline.ExternalParam{
+				Cols:          n.TableDef.Cols,
+				Name2ColIndex: n.TableDef.Name2ColIndex,
+				CreateSql:     n.TableDef.Createsql,
+			}
+		}
 		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
 	case plan.Node_TABLE_SCAN:
 		ss := c.compileTableScan(n)
-		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
-	case plan.Node_EXTERNAL_SCAN:
-		ss := c.compileExternalScan(n)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_FILTER:
 		curr := c.anal.curr
@@ -457,37 +467,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			Attributes:   attrs,
 			RelationName: n.TableDef.Name,
 			SchemaName:   n.ObjRef.SchemaName,
-		},
-	}
-	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
-	return s
-}
-
-func (c *Compile) compileExternalScan(n *plan.Node) []*Scope {
-	ss := make([]*Scope, 0, len(c.cnList))
-	for i := range c.cnList {
-		ss = append(ss, c.compileExternalScanWithNode(n, c.cnList[i]))
-	}
-	return ss
-}
-
-func (c *Compile) compileExternalScanWithNode(n *plan.Node, node engine.Node) *Scope {
-	var s *Scope
-
-	attrs := make([]string, len(n.TableDef.Cols))
-	for j, col := range n.TableDef.Cols {
-		attrs[j] = col.Name
-	}
-	s = &Scope{
-		Magic:    External,
-		NodeInfo: node,
-		DataSource: &Source{
-			Attributes:    attrs,
-			RelationName:  n.TableDef.Name,
-			SchemaName:    n.ObjRef.SchemaName,
-			Cols:          n.TableDef.Cols,
-			Name2ColIndex: n.TableDef.Name2ColIndex,
-			CreateSql:     n.TableDef.Createsql,
 		},
 	}
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())

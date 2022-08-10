@@ -297,8 +297,9 @@ message TableDef {
 	string name				= 1;
 	repeated ColDef cols	= 2;
 	repeated DefType defs	= 3;
-	string TableType 		= 4;
-	string Createsql 		= 5;
+	string table_type 		= 4;
+	string createsql 		= 5;
+	map<string, int32> name2col_index = 6;
 }
 
 message Cost {

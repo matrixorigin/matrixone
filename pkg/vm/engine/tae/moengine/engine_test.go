@@ -16,8 +16,9 @@ package moengine
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -103,7 +104,7 @@ func TestEngine(t *testing.T) {
 	rel, err := dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
 	rDefs, _ := rel.TableDefs(ctx)
-	assert.Equal(t, 14, len(rDefs))
+	assert.Equal(t, 15, len(rDefs))
 	rAttr := rDefs[5].(*engine.AttributeDef).Attr
 	assert.Equal(t, true, rAttr.Default.NullAbility)
 	rAttr = rDefs[6].(*engine.AttributeDef).Attr
@@ -205,7 +206,7 @@ func TestEngineAllType(t *testing.T) {
 	rel, err := dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
 	rDefs, _ := rel.TableDefs(ctx)
-	assert.Equal(t, 19, len(rDefs))
+	assert.Equal(t, 20, len(rDefs))
 	rAttr := rDefs[5].(*engine.AttributeDef).Attr
 	assert.Equal(t, true, rAttr.Default.NullAbility)
 	rAttr = rDefs[6].(*engine.AttributeDef).Attr

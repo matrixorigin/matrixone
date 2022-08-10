@@ -77,7 +77,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 			properties := []*plan.Property{
 				{
-					Key:   "Comment",
+					Key:   catalog.SystemRelAttr_Comment,
 					Value: opt.Comment,
 				},
 			}
@@ -118,11 +118,11 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		}
 		properties := []*plan.Property{
 			{
-				Key:   "relkind",
+				Key:   catalog.SystemRelAttr_Kind,
 				Value: catalog.SystemExternalRel,
 			},
 			{
-				Key:   "createsql",
+				Key:   catalog.SystemRelAttr_CreateSQL,
 				Value: string(json_byte),
 			},
 		}

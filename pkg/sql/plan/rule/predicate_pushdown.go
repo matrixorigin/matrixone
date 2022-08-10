@@ -27,7 +27,7 @@ func NewPredicatePushdown() *PredicatePushdown {
 }
 
 func (r *PredicatePushdown) Match(n *plan.Node) bool {
-	return n.NodeType != plan.Node_TABLE_SCAN && n.NodeType != plan.Node_EXTERNAL_SCAN && len(n.FilterList) > 0
+	return n.NodeType != plan.Node_TABLE_SCAN && len(n.FilterList) > 0
 }
 
 func (r *PredicatePushdown) Apply(n *plan.Node, qry *plan.Query) {

@@ -16,8 +16,9 @@ package moengine
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -66,12 +67,12 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 	}
 	pro := new(engine.PropertiesDef)
 	pro.Properties = append(pro.Properties, engine.Property{
-		Key:   "relkind",
+		Key:   catalog.SystemRelAttr_Kind,
 		Value: string(schema.Relkind),
 	})
 	if schema.Createsql != "" {
 		pro.Properties = append(pro.Properties, engine.Property{
-			Key:   "createsql",
+			Key:   catalog.SystemRelAttr_CreateSQL,
 			Value: schema.Createsql,
 		})
 	}
@@ -105,12 +106,14 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 			}
 		case *engine.PropertiesDef:
 			for _, property := range defVal.Properties {
-				if strings.ToLower(property.Key) == "comment" {
+				switch strings.ToLower(property.Key) {
+				case catalog.SystemRelAttr_Comment:
 					schema.Comment = property.Value
-				} else if strings.ToLower(property.Key) == "relkind" {
+				case catalog.SystemRelAttr_Kind:
 					schema.Relkind = property.Value
-				} else if strings.ToLower(property.Key) == "createsql" {
+				case catalog.SystemRelAttr_CreateSQL:
 					schema.Createsql = property.Value
+				default:
 				}
 			}
 		default:

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
@@ -51,6 +52,9 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	_, tblRef := ctx.Resolve(dbName, tblName)
 	if tblRef == nil {
 		return nil, errors.New("", fmt.Sprintf("Invalid table name: %s", tree.String(stmt.Table, dialect.MYSQL)))
+	}
+	if tblRef.TableType == catalog.SystemExternalRel {
+		return nil, fmt.Errorf("the external table '%s' is not support insert operation", tblName)
 	}
 
 	// build columns
@@ -218,6 +222,9 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	objRef, tableDef, err := getInsertTable(stmt.Table, ctx)
 	if err != nil {
 		return nil, err
+	}
+	if tableDef.TableType == catalog.SystemExternalRel {
+		return nil, fmt.Errorf("the external table is not support insert operation")
 	}
 	valueCount := len(stmt.Columns)
 	if len(stmt.Columns) == 0 {

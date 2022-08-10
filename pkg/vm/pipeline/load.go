@@ -58,7 +58,7 @@ func ReadFromS3(loadParam *tree.LoadParameter) ([]string, error) {
 		config.Endpoint,
 		config.Bucket,
 		config.KeyPrefix,
-		1,
+		128*1024,
 	)
 	if err != nil {
 		return nil, err
@@ -190,6 +190,7 @@ func ReadFromLocalFile(loadParam *tree.LoadParameter) (io.ReadCloser, error) {
 }
 
 func InitS3Param(loadParam *tree.LoadParameter) error {
+	loadParam.S3Param = &tree.S3Parameter{}
 	for i := 0; i < len(loadParam.S3option); i += 2 {
 		switch strings.ToLower(loadParam.S3option[i]) {
 		case "endpoint":
@@ -326,7 +327,7 @@ func makeBatch(p *Pipeline, plh *ParseLineHandler) *batch.Batch {
 	batchSize := plh.batchSize
 	//alloc space for vector
 	for i := 0; i < len(p.attrs); i++ {
-		typ := types.New(types.T(p.cols[i].Typ.Id), p.cols[i].Typ.Width, p.cols[i].Typ.Scale, p.cols[i].Typ.Precision)
+		typ := types.New(types.T(p.param.Cols[i].Typ.Id), p.param.Cols[i].Typ.Width, p.param.Cols[i].Typ.Scale, p.param.Cols[i].Typ.Precision)
 		vec := vector.New(typ)
 		switch vec.Typ.Oid {
 		case types.T_bool:
@@ -403,10 +404,10 @@ func GetBatchData(p *Pipeline, plh *ParseLineHandler, proc *process.Process) (*b
 			return nil, errors.New("the table colnum is larger than input data colnum")
 		}
 		for colIdx := range p.attrs {
-			field := strings.TrimSpace(Line[p.Name2ColIndex[p.attrs[colIdx]]])
+			field := strings.TrimSpace(Line[p.param.Name2ColIndex[p.attrs[colIdx]]])
 			vec := bat.Vecs[colIdx]
 			isNullOrEmpty := len(field) == 0 || field == NULL_FLAG
-			switch types.T(p.cols[colIdx].Typ.Id) {
+			switch types.T(p.param.Cols[colIdx].Typ.Id) {
 			case types.T_bool:
 				cols := vec.Col.([]bool)
 				if isNullOrEmpty {
@@ -690,7 +691,7 @@ func GetBatchData(p *Pipeline, plh *ParseLineHandler, proc *process.Process) (*b
 					cols[rowIdx] = d
 				}
 			default:
-				return nil, fmt.Errorf("the value type %d is not support now", p.cols[rowIdx].Typ.Id)
+				return nil, fmt.Errorf("the value type %d is not support now", p.param.Cols[rowIdx].Typ.Id)
 			}
 		}
 	}
@@ -708,7 +709,8 @@ func GetBatchData(p *Pipeline, plh *ParseLineHandler, proc *process.Process) (*b
 	return bat, nil
 }
 
-func Run3(load *tree.LoadParameter, p *Pipeline, proc *process.Process) (bool, error) {
+// read batch data from external file
+func ExternalRead(load *tree.LoadParameter, p *Pipeline, proc *process.Process) (bool, error) {
 	var bat *batch.Batch
 	var end bool // exist flag
 	var dataFile io.ReadCloser
@@ -728,7 +730,6 @@ func Run3(load *tree.LoadParameter, p *Pipeline, proc *process.Process) (bool, e
 			logutil.Errorf("close file failed. err:%v", err)
 		}
 	}()
-
 	channelSize := 100
 	plh := &ParseLineHandler{}
 	plh.batchSize = 40000
@@ -788,7 +789,6 @@ func Run3(load *tree.LoadParameter, p *Pipeline, proc *process.Process) (bool, e
 			bat.Cnt = 1
 			plh.lineIdx = 0
 		}
-
 		// processing the batch according to the instructions
 		proc.Reg.InputBatch = bat
 		if end, err = vm.Run(p.instructions, proc); err != nil || end { // end is true means pipeline successfully completed

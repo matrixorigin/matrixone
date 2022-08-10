@@ -18,11 +18,12 @@ import (
 	"bufio"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
-//update statement
+// update statement
 type Update struct {
 	statementImpl
 	Tables  TableExprs
@@ -73,7 +74,7 @@ func (node *UpdateExprs) Format(ctx *FmtCtx) {
 	}
 }
 
-//the update expression.
+// the update expression.
 type UpdateExpr struct {
 	NodeFormatter
 	Tuple bool
@@ -162,8 +163,18 @@ func (node *Load) Format(ctx *FmtCtx) {
 	if node.Local {
 		ctx.WriteString(" local")
 	}
-	ctx.WriteString(" infile ")
-	//ctx.WriteString(node.File)
+
+	if node.LoadParam.LoadType == LOCAL && (node.LoadParam.CompressType == AUTO || node.LoadParam.CompressType == NOCOMPRESS) {
+		ctx.WriteString(" infile ")
+		ctx.WriteString(node.LoadParam.Filepath)
+	} else if node.LoadParam.LoadType == LOCAL {
+		ctx.WriteString(" infile ")
+		ctx.WriteString("{'filepath':'" + node.LoadParam.Filepath + "', 'compression':'" + strings.ToLower(node.LoadParam.CompressType) + "'}")
+	} else {
+		ctx.WriteString(" url s3option ")
+		ctx.WriteString("{'endpoint'='" + node.LoadParam.S3option[0] + "', 'access_key_id'='" + node.LoadParam.S3option[3] +
+			"', 'secret_access_key'='" + node.LoadParam.S3option[5] + "', 'bucket'='" + node.LoadParam.S3option[7] + "', 'filepath'='" + node.LoadParam.S3option[9] + "', 'region'='" + node.LoadParam.S3option[11] + "'}")
+	}
 
 	switch node.DuplicateHandling.(type) {
 	case *DuplicateKeyError:
@@ -300,7 +311,7 @@ func NewLines(s string, t string) *Lines {
 	}
 }
 
-//column element in load data column list
+// column element in load data column list
 type LoadColumn interface {
 	NodeFormatter
 }

@@ -17,8 +17,9 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/config"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
@@ -926,5 +927,35 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		convey.So(stmt, convey.ShouldNotBeNil)
 		s := stmt.String()
 		convey.So(isCmdFieldListSql(s), convey.ShouldBeTrue)
+	})
+}
+
+func Test_handleLoadData(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("call handleLoadData func", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		eng := mock_frontend.NewMockTxnEngine(ctrl)
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
+
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		if err != nil {
+			t.Error(err)
+		}
+
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+
+		mce := NewMysqlCmdExecutor()
+		ses := &Session{
+			protocol: proto,
+		}
+		mce.ses = ses
+		load := &tree.Load{
+			Local: true,
+		}
+		err = mce.handleLoadData(load)
+		convey.So(err, convey.ShouldNotBeNil)
 	})
 }

@@ -22,7 +22,8 @@ import (
 )
 
 // If operator supported format like that
-//		If(<boolean operator>, <value operator>, <value operator>)
+//
+//	If(<boolean operator>, <value operator>, <value operator>)
 var (
 	IfBool = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return ifGeneral[bool](vs, proc, types.Type{Oid: types.T_bool})

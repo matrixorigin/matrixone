@@ -342,7 +342,7 @@ import (
 %type <statement> analyze_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt
 %type <exportParm> export_data_param_opt
-%type <loadParam> load_param_opt
+%type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
 
 %type <select> select_stmt select_no_parens
@@ -485,6 +485,7 @@ import (
 %type <exprs> data_values data_opt row_value
 
 %type <boolVal> local_opt
+%type <duplicateKey> duplicate_opt
 %type <fields> load_fields field_item export_fields
 %type <fieldsList> field_item_list
 %type <str> field_terminator starting_opt lines_terminated_opt
@@ -578,14 +579,15 @@ stmt:
     }
 
 load_data_stmt:
-    LOAD DATA local_opt load_param_opt INTO TABLE table_name tail_param_opt
+    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt
     {
         $$ = &tree.Load{
             Local: $3,
             LoadParam: $4,
-            Table: $7,
+            DuplicateHandling: $5,
+            Table: $8,
         }
-        $$.(*tree.Load).LoadParam.Tail = $8
+        $$.(*tree.Load).LoadParam.Tail = $9
     }
 
 load_set_spec_opt:
@@ -884,6 +886,19 @@ field_terminator:
     STRING
 // |   HEXNUM
 // |   BIT_LITERAL
+
+duplicate_opt:
+    {
+        $$ = &tree.DuplicateKeyError{}
+    }
+|   IGNORE
+    {
+        $$ = &tree.DuplicateKeyIgnore{}
+    }
+|   REPLACE
+    {
+        $$ = &tree.DuplicateKeyReplace{}
+    }
 
 local_opt:
     {
@@ -3861,7 +3876,7 @@ create_table_stmt:
             PartitionOption: $10,
         }
     }
-|   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' load_param_opt
+|   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' load_param_opt_2
     {
         $$ = &tree.CreateTable {
             Table: *$5,
@@ -3870,17 +3885,23 @@ create_table_stmt:
         }
     }
 
+load_param_opt_2:
+    load_param_opt tail_param_opt
+    {
+        $$ = $1
+        $$.Tail = $2
+    }
+
 load_param_opt:
-    INFILE STRING tail_param_opt
+    INFILE STRING
     {
         $$ = &tree.LoadParameter{
             Filepath: $2,
             LoadType: tree.LOCAL,
             CompressType: tree.AUTO,
-            Tail: $3,
         }
     }
-|   INFILE '{' STRING '=' STRING '}' tail_param_opt
+|   INFILE '{' STRING '=' STRING '}'
     {
         if strings.ToLower($3) != "filepath" {
                 yylex.Error(fmt.Sprintf("can not recognize the '%s'", $3))
@@ -3890,10 +3911,9 @@ load_param_opt:
             Filepath: $5,
             LoadType: tree.LOCAL,
             CompressType: tree.AUTO,
-            Tail: $7,
         }
     }
-|   INFILE '{' STRING '=' STRING ',' STRING '=' STRING '}' tail_param_opt
+|   INFILE '{' STRING '=' STRING ',' STRING '=' STRING '}'
     {
         if strings.ToLower($3) != "filepath" || strings.ToLower($7) != "compression" {
                 yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' ", $3, $7))
@@ -3903,15 +3923,13 @@ load_param_opt:
             Filepath: $5,
             LoadType: tree.LOCAL,
             CompressType: $9,
-            Tail: $11,
         }
     }
-|   URL S3OPTION '{' s3params '}' tail_param_opt
+|   URL S3OPTION '{' s3params '}'
     {
         $$ = &tree.LoadParameter{
             LoadType: tree.S3,
             S3option: $4,
-            Tail: $6,
         }
     }
 
@@ -3935,7 +3953,6 @@ s3params:
 |   s3params ',' s3param
     {
         $$ = append($1, $3...)
-        fmt.Println("wangjian test1 is", $$)
     }
 
 s3param:

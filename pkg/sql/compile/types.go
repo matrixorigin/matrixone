@@ -24,6 +24,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,8 +33,6 @@ const (
 	Merge = iota
 	Normal
 	Remote
-	External
-	External2
 	Parallel
 	CreateDatabase
 	CreateTable
@@ -59,9 +58,7 @@ type Source struct {
 	SchemaName    string
 	RelationName  string
 	Attributes    []string
-	Cols          []*plan.ColDef
-	Name2ColIndex map[string]int32
-	CreateSql     string
+	ExternalParam *pipeline.ExternalParam
 	R             engine.Reader
 	Bat           *batch.Batch
 }

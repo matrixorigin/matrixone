@@ -79,12 +79,12 @@ const (
 	cmdFieldListSql = "__++__internal_cmd_field_list"
 )
 
-//isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
+// isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
 func isCmdFieldListSql(sql string) bool {
 	return strings.HasPrefix(strings.ToLower(sql), cmdFieldListSql)
 }
 
-//makeCmdFieldListSql makes the internal CMD_FIELD_LIST sql
+// makeCmdFieldListSql makes the internal CMD_FIELD_LIST sql
 func makeCmdFieldListSql(query string) string {
 	return cmdFieldListSql + " " + query
 }

@@ -1527,6 +1527,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 			TableDef:    tableDef,
 			BindingTags: []int32{builder.genNewTag()},
 		}, ctx)
+
 	case *tree.JoinTableExpr:
 		return builder.buildJoinTable(tbl, ctx)
 

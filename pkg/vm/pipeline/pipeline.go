@@ -17,8 +17,8 @@ package pipeline
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
@@ -29,14 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func New(attrs []string, ins vm.Instructions, reg *process.WaitRegister, cols []*plan.ColDef, name2ColIndex map[string]int32, sql string) *Pipeline {
+func New(attrs []string, ins vm.Instructions, reg *process.WaitRegister, param *ExternalParam) *Pipeline {
 	return &Pipeline{
-		reg:           reg,
-		instructions:  ins,
-		attrs:         attrs,
-		cols:          cols,
-		Name2ColIndex: name2ColIndex,
-		CreateSql:     sql,
+		reg:          reg,
+		instructions: ins,
+		attrs:        attrs,
+		param:        param,
 	}
 }
 
@@ -69,7 +67,6 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 	if err = vm.Prepare(p.instructions, proc); err != nil {
 		return false, err
 	}
-
 	for {
 		// read data from storage engine
 		if bat, err = r.Read(p.attrs, nil, proc.Mp); err != nil {
@@ -86,7 +83,8 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 	}
 }
 
-func (p *Pipeline) Run2(proc *process.Process) (bool, error) {
+// Read data from external table
+func (p *Pipeline) ExternalRun(proc *process.Process) (bool, error) {
 	var err error
 	var end bool
 	defer cleanup(p, proc)
@@ -96,13 +94,12 @@ func (p *Pipeline) Run2(proc *process.Process) (bool, error) {
 		case <-p.reg.Ch:
 		}
 	}
-
 	if err = vm.Prepare(p.instructions, proc); err != nil {
 		return false, err
 	}
 
 	load := &tree.LoadParameter{}
-	err = json.Unmarshal([]byte(p.CreateSql), load)
+	err = json.Unmarshal([]byte(p.param.CreateSql), load)
 	if err != nil {
 		return false, err
 	}
@@ -112,9 +109,13 @@ func (p *Pipeline) Run2(proc *process.Process) (bool, error) {
 		return false, err
 	}
 
+	if len(fileList) == 0 {
+		return false, fmt.Errorf("no such file '%s'", load.Filepath)
+	}
+
 	for _, fileName := range fileList {
 		load.Filepath = fileName
-		_, err := Run3(load, p, proc)
+		_, err := ExternalRead(load, p, proc)
 		if err != nil {
 			return false, err
 		}

@@ -17,6 +17,7 @@ package tree
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 type CreateOption interface {
@@ -132,6 +133,10 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	if node.Temporary {
 		ctx.WriteString(" temporary")
 	}
+	if node.Param != nil {
+		ctx.WriteString(" external")
+	}
+
 	ctx.WriteString(" table")
 
 	if node.IfNotExists {
@@ -164,6 +169,49 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.PartitionOption.Format(ctx)
 	}
+
+	if node.Param != nil {
+		if node.Param.LoadType == LOCAL && (node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS) {
+			ctx.WriteString(" infile ")
+			ctx.WriteString("'" + node.Param.Filepath + "'")
+		} else if node.Param.LoadType == LOCAL {
+			ctx.WriteString(" infile ")
+			ctx.WriteString("{'filepath':'" + node.Param.Filepath + "', 'compression':'" + strings.ToLower(node.Param.CompressType) + "'}")
+		} else {
+			ctx.WriteString(" url s3option ")
+			ctx.WriteString("{'endpoint'='" + node.Param.S3option[0] + "', 'access_key_id'='" + node.Param.S3option[3] +
+			"', 'secret_access_key'='" + node.Param.S3option[5] + "', 'bucket'='" + node.Param.S3option[7] + "', 'filepath'='" + node.Param.S3option[9] + "', 'region'='" + node.Param.S3option[11] + "'}")
+
+		}
+		if node.Param.Tail.Fields != nil {
+			ctx.WriteByte(' ')
+			node.Param.Tail.Fields.Format(ctx)
+		}
+
+		if node.Param.Tail.Lines != nil {
+			ctx.WriteByte(' ')
+			node.Param.Tail.Lines.Format(ctx)
+		}
+
+		if node.Param.Tail.IgnoredLines != 0 {
+			ctx.WriteString(" ignore ")
+			ctx.WriteString(strconv.FormatUint(node.Param.Tail.IgnoredLines, 10))
+			ctx.WriteString(" lines")
+		}
+		if node.Param.Tail.ColumnList != nil {
+			prefix := " ("
+			for _, c := range node.Param.Tail.ColumnList {
+				ctx.WriteString(prefix)
+				c.Format(ctx)
+				prefix = ", "
+			}
+			ctx.WriteByte(')')
+		}
+		if node.Param.Tail.Assignments != nil {
+			ctx.WriteString(" set ")
+			node.Param.Tail.Assignments.Format(ctx)
+		}
+	}
 }
 
 type TableDef interface {
@@ -174,7 +222,7 @@ type tableDefImpl struct {
 	TableDef
 }
 
-//the list of table definitions
+// the list of table definitions
 type TableDefs []TableDef
 
 type ColumnTableDef struct {
@@ -207,7 +255,7 @@ func NewColumnTableDef(n *UnresolvedName, t ResolvableTypeReference, a []ColumnA
 	}
 }
 
-//column attribute
+// column attribute
 type ColumnAttribute interface {
 	NodeFormatter
 }
@@ -471,7 +519,7 @@ func NewKeyPart(c *UnresolvedName, l int, e Expr) *KeyPart {
 	}
 }
 
-//in reference definition
+// in reference definition
 type MatchType int
 
 func (node *MatchType) ToString() string {
