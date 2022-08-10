@@ -93,9 +93,7 @@ SELECT id, 1.1 <= '2020-01-01' FROM t_date;
 -- @bvt:issue#3257
 SELECT id, id = 202020101 FROM t_date;
 -- @bvt:issue
--- @bvt:issue#3283
-SELECT id, 20200101 = id FROM t_date;
--- @bvt:issue
+SELECT id, '20200101' = id FROM t_date;
 -- @bvt:issue#3257
 SELECT * from t_date WHERE id = 20200101;
 -- @bvt:issue

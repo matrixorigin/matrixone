@@ -1,0 +1,49 @@
+name: PR Unit Test Coverage
+on:
+  pull_request_target:
+    types: [ opened, synchronize,reopened ]
+
+jobs:
+  test-name:
+    runs-on: ubuntu-latest
+    name: PR Unit Test Coverage
+
+    steps:
+      - name: Get PR Changed Paths
+        uses: guguducken/change-paths-action@v0.0.3
+        id: ut-pr
+        with:
+          github-token: ${{ secrets.TOKEN_ACTION }}
+          ignore: "/,etc/,optools/,LICENSES/,cgo/,cmd/,docs/,proto/,test/,.github/"
+
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: '3'
+          path: ./matrixone
+          repository: ${{ steps.ut-pr.outputs.resource }}
+          ref: ${{ steps.ut-pr.outputs.branch }}
+
+      - name: Set Variables
+        run: |
+          echo "raw_ut_coverage='ut_coverage.raw'" >> $GITHUB_ENV
+      - name: Set up Go
+        uses: ./matrixone/.github/actions/setup_env
+
+      - name: PR Unit Test
+        timeout-minutes: 60
+        run: |
+          cd $GITHUB_WORKSPACE/matrixone
+          make clean && make cgo
+          echo "ut start"
+          CGO_CFLAGS="-I${GITHUB_WORKSPACE}/matrixone/cgo"
+          CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/matrixone/cgo -lmo -lm"
+          go test -v -cover -tags matrixone_test -p 1 -covermode=count --count=1 ${{ steps.ut-pr.outputs.paths }} | grep -a -P "(?m)(?<=ok|\?).*(?=%|])" | tee ${{ env.raw_ut_coverage }}
+          echo "ut finished"
+          
+      - name: Coverage Calculate
+        run: |
+          cd $GITHUB_WORKSPACE/matrixone
+          echo "ut_coverage start"
+          awk -F '[ %\t]+' '{if($1=="ok"){if($5 == "[no"){print "warning: please move tested code file to "$2;} else if($5 < 75) {print "error: the code coverage of "$2" is "$5"% is below 75%";} else {print "The code coverage of `"$2"` is "$5"%, this is up to standard"}} else if($1 == "?"){print "error: There are no test files in this path -- "$2;}}' ${{ env.raw_ut_coverage }}
+          rm -rf ${{ env.raw_ut_coverage }}
+          echo "ut_coverage finished"
