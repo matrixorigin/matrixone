@@ -51,6 +51,9 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		if err := s.store.setInitialClusterInfo(numOfLogShards,
 			numOfDNShards, numOfLogReplicas); err != nil {
 			plog.Errorf("failed to set initial cluster info, %v", err)
+			if err == dragonboat.ErrShardNotFound {
+				return nil
+			}
 			time.Sleep(time.Second)
 			continue
 		}
