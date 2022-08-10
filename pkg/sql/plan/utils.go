@@ -536,7 +536,7 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 		if stmt.All {
 			return errors.New("", "EXCEPT/MINUS ALL clause will support in future version.")
 		} else {
-			*unionTypes = append(*unionTypes, plan.Node_UNION)
+			*unionTypes = append(*unionTypes, plan.Node_MINUS)
 		}
 	}
 	return nil
