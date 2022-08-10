@@ -68,7 +68,7 @@ type Decimal128 = types.Decimal128
 type Bytes = types.Bytes
 type Null struct{}
 
-//timestamp for transaction : physical time(high 8 bytes) + logical time(low 4 bytes)
+// timestamp for transaction : physical time(high 8 bytes) + logical time(low 4 bytes)
 type TS [12]byte
 
 func (ts TS) IsEmpty() bool {

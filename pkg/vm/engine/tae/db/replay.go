@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"os"
+
 	"path"
 	"sync"
 
@@ -275,7 +276,7 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObser
 		if observer != nil {
 			observer.OnTimeStamp(blk.GetBlockData().GetMaxCheckpointTS())
 		}
-		if cmd.Ts <= blk.GetBlockData().GetMaxCheckpointTS() {
+		if cmd.Ts.LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
 			continue
 		}
 		hasActive = true

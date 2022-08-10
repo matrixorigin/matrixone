@@ -17,7 +17,7 @@ package txnif
 import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 
 const (
-//UncommitTS = ^uint64(0)
+// UncommitTS = ^uint64(0)
 )
 
 var UncommitTS types.TS

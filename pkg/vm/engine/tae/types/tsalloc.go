@@ -52,7 +52,7 @@ func (alloc *TsAlloctor) Alloc() TS {
 	return ts
 }
 
-//TODO::will be removed
+// TODO::will be removed
 func (alloc *TsAlloctor) Get() TS {
 	if mockClock, ok := alloc.clock.(*MockHLCClock); ok {
 		var ts TS
@@ -85,7 +85,7 @@ type MockHLCClock struct {
 	maxOffset time.Duration
 }
 
-//Just for test , start >= 1
+// Just for test , start >= 1
 func NewMockHLCClock(start int64) *MockHLCClock {
 	return &MockHLCClock{pTime: start}
 }
@@ -98,7 +98,7 @@ func (c *MockHLCClock) Now() (timestamp.Timestamp, timestamp.Timestamp) {
 	return now, timestamp.Timestamp{PhysicalTime: now.PhysicalTime + int64(c.maxOffset)}
 }
 
-//TODO::will be removed
+// TODO::will be removed
 func (c *MockHLCClock) Get() timestamp.Timestamp {
 	return timestamp.Timestamp{
 		PhysicalTime: atomic.LoadInt64(&c.pTime),

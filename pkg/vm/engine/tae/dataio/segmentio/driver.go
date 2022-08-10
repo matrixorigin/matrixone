@@ -212,7 +212,6 @@ func (s *Driver) Replay(cache *bytes.Buffer) error {
 	return s.log.Replay(cache)
 }
 
-//FIXME::NewDriverFile
 func (s *Driver) NewBlockFile(fname string) *DriverFile {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
