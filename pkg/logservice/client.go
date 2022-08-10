@@ -470,14 +470,14 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RP
 	mf := func() morpc.Message {
 		return pool.Get().(*RPCResponse)
 	}
-	timeout, err := getTimeoutFromContext(ctx)
+	/*timeout, err := getTimeoutFromContext(ctx)
 	if err != nil {
 		return nil, err
-	}
+	}*/
 	codec := morpc.NewMessageCodec(mf, defaultWriteSocketSize)
 	bf := morpc.NewGoettyBasedBackendFactory(codec,
 		morpc.WithBackendConnectWhenCreate(),
-		morpc.WithBackendConnectTimeout(timeout))
+		morpc.WithBackendConnectTimeout(time.Second))
 	return morpc.NewClient(bf,
 		morpc.WithClientInitBackends([]string{target}, []int{1}),
 		morpc.WithClientMaxBackendPerHost(1))
