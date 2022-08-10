@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"testing"
 
@@ -41,7 +42,7 @@ type miniExec struct {
 	sess *Session
 }
 
-func (e *miniExec) doComQuery(string) error {
+func (e *miniExec) doComQuery(context.Context, string) error {
 	_ = e.sess.GetMysqlProtocol()
 	return nil
 }
@@ -56,7 +57,7 @@ func TestIe(t *testing.T) {
 	sess := executor.newCmdSession(ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
 	assert.Equal(t, "dump", sess.GetMysqlProtocol().GetUserName())
 
-	err := executor.Exec("whatever", ie.NewOptsBuilder().Finish())
+	err := executor.Exec(nil, "whatever", ie.NewOptsBuilder().Finish())
 	assert.NoError(t, err)
 	res := executor.Query("whatever", ie.NewOptsBuilder().Finish())
 	assert.NoError(t, err)

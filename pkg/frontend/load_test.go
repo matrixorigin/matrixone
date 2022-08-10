@@ -229,7 +229,7 @@ func Test_load(t *testing.T) {
 			data: []byte("test anywhere"),
 		}
 
-		resp, err := mce.ExecRequest(req)
+		resp, err := mce.ExecRequest(nil, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldBeNil)
 	})
@@ -433,7 +433,7 @@ func Test_load(t *testing.T) {
 				row2col = gostub.Stub(&row2colChoose, false)
 			}
 
-			_, err := mce.LoadLoop(cws[i], db, rel, "T")
+			_, err := mce.LoadLoop(nil, cws[i], db, rel, "T")
 			if kases[i].fail {
 				convey.So(err, convey.ShouldBeError)
 			} else {

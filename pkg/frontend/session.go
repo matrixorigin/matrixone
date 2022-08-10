@@ -93,6 +93,8 @@ type Session struct {
 	optionBits uint32
 
 	prepareStmts map[string]*PrepareStmt
+
+	requestCtx context.Context
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
@@ -124,6 +126,14 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 	ses.txnCompileCtx.SetSession(ses)
 	ses.txnHandler.SetSession(ses)
 	return ses
+}
+
+func (ses *Session) SetRequestContext(reqCtx context.Context) {
+	ses.requestCtx = reqCtx
+}
+
+func (ses *Session) GetRequestContext() context.Context {
+	return ses.requestCtx
 }
 
 func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error {
@@ -583,8 +593,7 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	var err error
 	//open database
-	ctx := context.TODO()
-	_, err = tcc.txnHandler.GetStorage().Database(ctx, name, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
+	_, err = tcc.txnHandler.GetStorage().Database(tcc.ses.GetRequestContext(), name, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
 	if err != nil {
 		logutil.Errorf("get database %v failed. error %v", name, err)
 		return false
@@ -599,7 +608,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 		return nil, err
 	}
 
-	ctx := context.TODO()
+	ctx := tcc.ses.GetRequestContext()
 	//open database
 	db, err := tcc.txnHandler.GetStorage().Database(ctx, dbName, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
 	if err != nil {
@@ -641,7 +650,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	if err != nil {
 		return nil, nil
 	}
-	ctx := context.TODO()
+	ctx := tcc.ses.GetRequestContext()
 	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
 		return nil, nil
@@ -708,7 +717,7 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 }
 
 func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*plan2.ColDef {
-	ctx := context.TODO()
+	ctx := tcc.ses.GetRequestContext()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
@@ -744,7 +753,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 }
 
 func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *plan2.ColDef {
-	ctx := context.TODO()
+	ctx := tcc.ses.GetRequestContext()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil

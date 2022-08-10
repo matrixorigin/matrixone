@@ -114,6 +114,8 @@ type SharePart struct {
 
 	//result of load
 	result *LoadResult
+
+	loadCtx context.Context
 }
 
 type notifyEventType int
@@ -388,13 +390,12 @@ func makeBatch(handler *ParseLineHandler, id int) *PoolElement {
 /*
 Init ParseLineHandler
 */
-func initParseLineHandler(handler *ParseLineHandler) error {
+func initParseLineHandler(requestCtx context.Context, handler *ParseLineHandler) error {
 	relation := handler.tableHandler
 	load := handler.load
 
 	var cols []*engine.AttributeDef = nil
-	ctx := context.TODO()
-	defs, err := relation.TableDefs(ctx)
+	defs, err := relation.TableDefs(requestCtx)
 	if err != nil {
 		return err
 	}
@@ -499,6 +500,7 @@ func initWriteBatchHandler(handler *ParseLineHandler, wHandler *WriteBatchHandle
 	wHandler.closeRef = handler.closeRef
 	wHandler.lineCount = handler.lineCount
 	wHandler.skipWriteBatch = handler.skipWriteBatch
+	wHandler.loadCtx = handler.loadCtx
 
 	wHandler.pl = allocBatch(handler)
 	wHandler.ThreadInfo = handler.threadInfo[wHandler.pl.id]
@@ -1662,7 +1664,7 @@ when force is true, batchsize will be changed.
 func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 	var err error = nil
 
-	ctx := context.TODO()
+	ctx := handler.loadCtx
 	if handler.batchFilled == handler.batchSize {
 		//batchBytes := 0
 		//for _, vec := range handler.batchData.Vecs {
@@ -1947,7 +1949,7 @@ func PrintThreadInfo(handler *ParseLineHandler, close *CloseFlag, a time.Duratio
 /*
 LoadLoop reads data from stream, extracts the fields, and saves into the table
 */
-func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
+func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
 	ses := mce.GetSession()
 
 	var m sync.Mutex
@@ -1996,6 +1998,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			batchSize:        curBatchSize,
 			result:           result,
 			skipWriteBatch:   ses.Pu.SV.GetLoadDataSkipWritingBatch(),
+			loadCtx:          requestCtx,
 		},
 		threadInfo:                    make(map[int]*ThreadInfo),
 		simdCsvGetParsedLinesChan:     atomic.Value{},
@@ -2048,7 +2051,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	//release resources of handler
 	defer handler.close()
 
-	err = initParseLineHandler(handler)
+	err = initParseLineHandler(requestCtx, handler)
 	if err != nil {
 		return nil, err
 	}
@@ -2112,7 +2115,11 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 				//get obvious cancel
 				retErr = NewMysqlError(ER_QUERY_INTERRUPTED)
 				quit = true
-				//logutil.Infof("----- get stop in load ")
+			//logutil.Infof("----- get stop in load ")
+			case <-requestCtx.Done():
+				logutil.Info("cancel the load")
+				retErr = NewMysqlError(ER_QUERY_INTERRUPTED)
+				quit = true
 
 			case ne = <-handler.simdCsvNotiyEventChan:
 				switch ne.neType {

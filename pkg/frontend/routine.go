@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
@@ -45,6 +46,8 @@ type Routine struct {
 
 	onceCloseNotifyChan sync.Once
 
+	cancelRoutineFunc context.CancelFunc
+
 	routineMgr *RoutineManager
 }
 
@@ -71,7 +74,7 @@ func (routine *Routine) GetRoutineMgr() *RoutineManager {
 /*
 After the handshake with the client is done, the routine goes into processing loop.
 */
-func (routine *Routine) Loop() {
+func (routine *Routine) Loop(routineCtx context.Context) {
 	var req *Request = nil
 	var err error
 	var resp *Response
@@ -81,6 +84,9 @@ func (routine *Routine) Loop() {
 	for {
 		quit := false
 		select {
+		case <-routineCtx.Done():
+			logutil.Infof("-----cancel routine")
+			quit = true
 		case <-routine.notifyChan:
 			logutil.Infof("-----routine quit")
 			quit = true
@@ -103,7 +109,7 @@ func (routine *Routine) Loop() {
 
 		routine.executor.PrepareSessionBeforeExecRequest(ses)
 
-		if resp, err = routine.executor.ExecRequest(req); err != nil {
+		if resp, err = routine.executor.ExecRequest(routineCtx, req); err != nil {
 			logutil.Errorf("routine execute request failed. error:%v \n", err)
 		}
 
@@ -125,6 +131,9 @@ When the io is closed, the Quit will be called.
 func (routine *Routine) Quit() {
 	routine.notifyClose()
 
+	if routine.cancelRoutineFunc != nil {
+		routine.cancelRoutineFunc()
+	}
 	routine.onceCloseNotifyChan.Do(func() {
 		//logutil.Infof("---------notify close")
 		close(routine.notifyChan)
@@ -144,18 +153,20 @@ func (routine *Routine) notifyClose() {
 	}
 }
 
-func NewRoutine(protocol MysqlProtocol, executor CmdExecutor, pu *config.ParameterUnit) *Routine {
+func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecutor, pu *config.ParameterUnit) *Routine {
+	cancelRoutineCtx, cancelRoutineFunc := context.WithCancel(ctx)
 	ri := &Routine{
-		protocol:    protocol,
-		executor:    executor,
-		requestChan: make(chan *Request, 1),
-		notifyChan:  make(chan interface{}),
-		guestMmu:    guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu),
-		mempool:     pu.Mempool,
+		protocol:          protocol,
+		executor:          executor,
+		requestChan:       make(chan *Request, 1),
+		notifyChan:        make(chan interface{}),
+		guestMmu:          guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu),
+		mempool:           pu.Mempool,
+		cancelRoutineFunc: cancelRoutineFunc,
 	}
 
 	//async process request
-	go ri.Loop()
+	go ri.Loop(cancelRoutineCtx)
 
 	return ri
 }

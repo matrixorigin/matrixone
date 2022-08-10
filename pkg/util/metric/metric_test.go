@@ -39,7 +39,7 @@ func TestMetric(t *testing.T) {
 		_ = pu.SV.SetMetricToProm(true)
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
-		InitMetric(factory, pu, 0, "test")
+		InitMetric(nil, factory, pu, 0, "test")
 		defer StopMetricSync()
 
 		const (
@@ -92,7 +92,7 @@ func TestMetricNoProm(t *testing.T) {
 
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
-		InitMetric(factory, pu, 0, "test")
+		InitMetric(nil, factory, pu, 0, "test")
 		defer StopMetricSync()
 
 		client := http.Client{

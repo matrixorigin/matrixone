@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
@@ -43,7 +44,8 @@ func create_test_server() *MOServer {
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
 
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
-	return NewMOServer(address, pu)
+	moServerCtx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	return NewMOServer(moServerCtx, address, pu)
 }
 
 func Test_Closed(t *testing.T) {

@@ -36,7 +36,7 @@ func (e *dummySqlExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions) 
 	e.opts = opts
 }
 
-func (e *dummySqlExecutor) Exec(sql string, opts ie.SessionOverrideOptions) error {
+func (e *dummySqlExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) error {
 	select {
 	case e.ch <- sql:
 	default:
@@ -44,7 +44,7 @@ func (e *dummySqlExecutor) Exec(sql string, opts ie.SessionOverrideOptions) erro
 	return nil
 }
 
-func (e *dummySqlExecutor) Query(sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+func (e *dummySqlExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 	return nil
 }
 
@@ -135,8 +135,8 @@ func TestCollector(t *testing.T) {
 	sqlch := make(chan string, 100)
 	factory := newExecutorFactory(sqlch)
 	collector := newMetricCollector(factory, WithFlushInterval(200*time.Millisecond), WithMetricThreshold(2))
-	collector.Start()
-	defer collector.Stop()
+	collector.Start(context.TODO())
+	defer collector.Stop(context.TODO())
 	names := []string{"m1", "m2"}
 	nodes := []int32{1, 2}
 	roles := []string{"ping", "pong"}

@@ -33,8 +33,8 @@ const CHAN_CAPACITY = 10000
 
 type MetricCollector interface {
 	SendMetrics(context.Context, []*pb.MetricFamily) error
-	Start()
-	Stop() (<-chan struct{}, bool)
+	Start(context.Context)
+	Stop(context.Context) (<-chan struct{}, bool)
 }
 
 type collectorOpts struct {
@@ -120,15 +120,15 @@ func (c *metricCollector) SendMetrics(ctx context.Context, mfs []*pb.MetricFamil
 	return nil
 }
 
-func (c *metricCollector) Start() {
+func (c *metricCollector) Start(ctx context.Context) {
 	if atomic.SwapInt32(&c.isRunning, 1) == 1 {
 		return
 	}
-	c.startSqlWorker()
-	c.startMergeWorker()
+	c.startSqlWorker(ctx)
+	c.startMergeWorker(ctx)
 }
 
-func (c *metricCollector) Stop() (<-chan struct{}, bool) {
+func (c *metricCollector) Stop(ctx context.Context) (<-chan struct{}, bool) {
 	if atomic.SwapInt32(&c.isRunning, 0) == 0 {
 		return nil, false
 	}
@@ -139,8 +139,8 @@ func (c *metricCollector) Stop() (<-chan struct{}, bool) {
 	return stopCh, true
 }
 
-func (c *metricCollector) startSqlWorker() {
-	ctx, cancel := context.WithCancel(context.Background())
+func (c *metricCollector) startSqlWorker(inputCtx context.Context) {
+	ctx, cancel := context.WithCancel(inputCtx)
 	c.sqlWorkerCancel = cancel
 	for i := 0; i < c.opts.sqlWorkerNum; i++ {
 		exec := c.ieFactory()
@@ -150,8 +150,8 @@ func (c *metricCollector) startSqlWorker() {
 	}
 }
 
-func (c *metricCollector) startMergeWorker() {
-	ctx, cancel := context.WithCancel(context.Background())
+func (c *metricCollector) startMergeWorker(inputCtx context.Context) {
+	ctx, cancel := context.WithCancel(inputCtx)
 	c.mergeWorkerCancel = cancel
 	c.stopWg.Add(1)
 	go c.mergeWorker(ctx)
@@ -214,7 +214,7 @@ func (c *metricCollector) sqlWorker(ctx context.Context, exec ie.InternalExecuto
 		case <-ctx.Done():
 			return
 		case sql := <-c.sqlCh:
-			if err := exec.Exec(sql, ie.NewOptsBuilder().Finish()); err != nil {
+			if err := exec.Exec(nil, sql, ie.NewOptsBuilder().Finish()); err != nil {
 				logutil.Errorf("[Metric] insert error. sql: %s; err: %v", sql, err)
 			}
 		}

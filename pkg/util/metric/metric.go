@@ -73,7 +73,7 @@ var moExporter MetricExporter
 var moCollector MetricCollector
 var statusSvr *statusServer
 
-func InitMetric(ieFactory func() ie.InternalExecutor, pu *config.ParameterUnit, nodeId int, role string) {
+func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, pu *config.ParameterUnit, nodeId int, role string) {
 	// init global variables
 	initConfigByParamaterUnit(pu)
 	registry = prom.NewRegistry()
@@ -85,7 +85,7 @@ func InitMetric(ieFactory func() ie.InternalExecutor, pu *config.ParameterUnit, 
 	initTables(ieFactory)
 
 	// start the data flow
-	moCollector.Start()
+	moCollector.Start(ctx)
 	moExporter.Start()
 
 	if getExportToProm() {
@@ -107,7 +107,7 @@ func InitMetric(ieFactory func() ie.InternalExecutor, pu *config.ParameterUnit, 
 
 func StopMetricSync() {
 	if moCollector != nil {
-		if ch, effect := moCollector.Stop(); effect {
+		if ch, effect := moCollector.Stop(context.TODO()); effect {
 			<-ch
 		}
 		moCollector = nil
@@ -146,7 +146,7 @@ func initTables(ieFactory func() ie.InternalExecutor) {
 	exec := ieFactory()
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(METRIC_DB).Internal(true).Finish())
 	mustExec := func(sql string) {
-		if err := exec.Exec(sql, ie.NewOptsBuilder().Finish()); err != nil {
+		if err := exec.Exec(nil, sql, ie.NewOptsBuilder().Finish()); err != nil {
 			panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
 		}
 	}

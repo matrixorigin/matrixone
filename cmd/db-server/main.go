@@ -15,6 +15,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -57,15 +58,15 @@ var (
 	MoVersion    = ""
 )
 
-func createMOServer() {
+func createMOServer(moServerCtx context.Context) {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
-	mo = frontend.NewMOServer(address, pu)
+	pu := config.GetParameterUnit(moServerCtx)
+	mo = frontend.NewMOServer(moServerCtx, address, pu)
 	if config.GlobalSystemVariables.GetEnableMetric() {
 		ieFactory := func() ie.InternalExecutor {
 			return frontend.NewInternalExecutor(pu)
 		}
-		metric.InitMetric(ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
+		metric.InitMetric(moServerCtx, ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
 	}
 	frontend.InitServerVersion(MoVersion)
 }
@@ -179,7 +180,7 @@ func main() {
 	if len(args) == 2 && args[1] == "initdb" {
 		fmt.Println("Initialize the TAE engine ...")
 		taeWrapper := initTae()
-		err := frontend.InitDB(taeWrapper.eng)
+		err := frontend.InitDB(nil, taeWrapper.eng)
 		if err != nil {
 			logutil.Infof("Initialize catalog failed. error:%v", err)
 			os.Exit(InitCatalogExit)
@@ -204,12 +205,16 @@ func main() {
 	//	Host := config.GlobalSystemVariables.GetHost()
 	engineName := config.GlobalSystemVariables.GetStorageEngine()
 	//	port := config.GlobalSystemVariables.GetPortOfRpcServerInComputationEngine()
+	rootCtx := context.Background()
+	cancelMoServerCtx, cancelMoServerFunc := context.WithCancel(rootCtx)
+	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
+	moServerCtx := context.WithValue(cancelMoServerCtx, config.ParameterUnitKey, pu)
 
 	var tae *taeHandler
 	if engineName == "tae" {
 		fmt.Println("Initialize the TAE engine ...")
 		tae = initTae()
-		err := frontend.InitDB(tae.eng)
+		err := frontend.InitDB(moServerCtx, tae.eng)
 		if err != nil {
 			logutil.Infof("Initialize catalog failed. error:%v", err)
 			os.Exit(InitCatalogExit)
@@ -220,7 +225,7 @@ func main() {
 		os.Exit(LoadConfigExit)
 	}
 
-	createMOServer()
+	createMOServer(moServerCtx)
 
 	err := runMOServer()
 	if err != nil {
@@ -234,6 +239,9 @@ func main() {
 		logutil.Infof("Server shutdown failed, %v", err)
 		os.Exit(ShutdownExit)
 	}
+
+	//cancel mo server
+	cancelMoServerFunc()
 
 	cleanup()
 
