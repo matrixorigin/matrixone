@@ -192,7 +192,7 @@ func float64ToInt64(xs []float64, rs []int64, isEmptyStringOrNull ...[]int) ([]i
 			if usedEmptyStringOrNull {
 				isEmptyStringOrNull[0][i] = 1
 			} else {
-				return nil, moerr.NewError(moerr.OUT_OF_RANGE, "overflow from double to bigint")
+				return nil, moerr.New(moerr.OUT_OF_RANGE, "double", "bigint")
 			}
 		}
 		rs[i] = int64(math.Round((x)))
