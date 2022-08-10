@@ -14,7 +14,9 @@
 
 package sum
 
-import "golang.org/x/exp/constraints"
+import (
+	"golang.org/x/exp/constraints"
+)
 
 var (
 	Int8Sum      = signedSum[int8]
@@ -94,3 +96,21 @@ func floatSumSels[T constraints.Float](xs []T, sels []int64) T {
 	}
 	return res
 }
+
+/*
+func VecSum(rs, vs []uint64, start int64, count int64, vps []uint64, zs []int64, nulls bitmap) {
+	for i := int64(0); i < count; i++ {
+		if vps[i] == 0 {
+			continue
+		}
+		if nulls.Contains(i + start) {
+			continue
+		}
+		rs[vps[i]-1] += vs[i+start] * zs[i+start]
+	}
+}
+
+func VecSum(rs, vs []types.Decimal64, start int64, count int64, vps []uint64, zs []int64, nulls bitmap)
+
+func VecSum(rs, vs []types.Decimal128, start int64, count int64, vps []uint64, zs []int64, nulls bitmap)
+*/

@@ -220,9 +220,6 @@
     } else return RC_SUCCESS
 
 
-const int32_t LEFT_IS_SCALAR = 1;
-const int32_t RIGHT_IS_SCALAR = 2;
-
 // MO_ARITH_T: Handle general arithmetic operations
 #define MO_ARITH_T(OP, ZT)                                    \
     ZT *rt = (ZT *) r;                                        \

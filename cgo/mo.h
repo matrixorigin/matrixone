@@ -123,4 +123,11 @@ int32_t SignedInt_VecMod(void *r, void *a, void *b, uint64_t n, uint64_t *nulls,
 int32_t UnsignedInt_VecMod(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
 int32_t Float_VecMod(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
 
+
+/* vector logical operation */
+int32_t Logic_VecAnd(void *r, void *a, void  *b, uint64_t n, uint64_t *anulls, uint64_t *bnulls, uint64_t *rnulls, int32_t flag);
+int32_t Logic_VecOr(void *r, void *a, void  *b, uint64_t n, uint64_t *anulls, uint64_t *bnulls, uint64_t *rnulls, int32_t flag);
+int32_t Logic_VecXor(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag);
+int32_t Logic_VecNot(void *r, void *a, uint64_t n, uint64_t *nulls, int32_t flag);
+
 #endif /* _MO_H_ */
