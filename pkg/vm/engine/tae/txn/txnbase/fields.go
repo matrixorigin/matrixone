@@ -42,11 +42,11 @@ func (txn *Txn) MarshalLogObject(enc zapcore.ObjectEncoder) (err error) {
 	defer txn.RUnlock()
 	enc.AddUint64("id", txn.ID)
 	//enc.AddUint64("startTs", txn.StartTS)
-	enc.AddBinary("startTs", txn.StartTS.ToSlice())
+	enc.AddByteString("startTs", txn.StartTS.ToSlice())
 	enc.AddString("state", txnif.TxnStrState(txn.State))
 	if !txn.IsActiveLocked() {
 		//enc.AddUint64("commitTs", txn.CommitTS)
-		enc.AddBinary("commitTs", txn.CommitTS.ToSlice())
+		enc.AddByteString("commitTs", txn.CommitTS.ToSlice())
 	}
 	return
 }

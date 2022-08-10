@@ -504,7 +504,7 @@ func TestApplyToColumn4(t *testing.T) {
 func TestTxnManager1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(nil, nil, nil, nil),
-		TxnFactory(nil), types.MockClock(1))
+		TxnFactory(nil), types.NewMockHLCClock(1))
 	mgr.Start()
 	txn, _ := mgr.StartTxn(nil)
 	txn.MockIncWriteCnt()
@@ -564,7 +564,7 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 	mutBufMgr := buffer.NewNodeManager(common.G, nil)
 	factory := tables.NewDataFactory(mockio.SegmentFactory, mutBufMgr, nil, dir)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory),
-		TxnFactory(c), types.MockClock(1))
+		TxnFactory(c), types.NewMockHLCClock(1))
 	mgr.Start()
 	return c, mgr, driver
 }

@@ -56,7 +56,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 
 	if o.Clock == nil {
-		o.Clock = types.MockClock(1)
+		o.Clock = types.NewMockHLCClock(1)
 	}
 
 	return o

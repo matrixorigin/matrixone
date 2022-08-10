@@ -17,6 +17,7 @@ package db
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"sort"
 	"sync"
 	"testing"
 
@@ -334,6 +335,10 @@ func TestCheckpointCatalog(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
+	var mu struct {
+		sync.RWMutex
+		commitTss []types.TS
+	}
 	txn, _ := tae.StartTxn(nil)
 	schema := catalog.MockSchemaAll(2, 0)
 	db, err := txn.CreateDatabase("db")
@@ -342,6 +347,7 @@ func TestCheckpointCatalog(t *testing.T) {
 	assert.Nil(t, err)
 	err = txn.Commit()
 	assert.Nil(t, err)
+	mu.commitTss = append(mu.commitTss, txn.GetCommitTS())
 
 	pool, _ := ants.NewPool(1)
 	var wg sync.WaitGroup
@@ -363,6 +369,10 @@ func TestCheckpointCatalog(t *testing.T) {
 		err = txn.Commit()
 		assert.Nil(t, err)
 
+		mu.Lock()
+		mu.commitTss = append(mu.commitTss, txn.GetCommitTS())
+		mu.Unlock()
+
 		txn, _ = tae.StartTxn(nil)
 		db, err = txn.GetDatabase("db")
 		assert.Nil(t, err)
@@ -373,6 +383,10 @@ func TestCheckpointCatalog(t *testing.T) {
 		err = seg.SoftDeleteBlock(id.BlockID)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
+
+		mu.Lock()
+		mu.commitTss = append(mu.commitTss, txn.GetCommitTS())
+		mu.Unlock()
 	}
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
@@ -385,7 +399,11 @@ func TestCheckpointCatalog(t *testing.T) {
 	//startTs := uint64(0)
 	//endTs := tae.Scheduler.GetSafeTS() - 2
 	var startTs types.TS
-	endTs := tae.Scheduler.GetSafeTS().Prev().Prev()
+	sort.Slice(mu.commitTss, func(i, j int) bool {
+		return mu.commitTss[i].Less(mu.commitTss[j])
+	})
+	//endTs := tae.Scheduler.GetSafeTS().Prev().Prev()
+	endTs := mu.commitTss[len(mu.commitTss)-1].Prev()
 	t.Logf("endTs=%d", endTs)
 
 	entry := tae.Catalog.PrepareCheckpoint(startTs, endTs)

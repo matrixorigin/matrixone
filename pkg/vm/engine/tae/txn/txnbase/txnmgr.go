@@ -17,6 +17,7 @@ package txnbase
 import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"github.com/tidwall/btree"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,14 +35,13 @@ type TxnManager struct {
 	sync.RWMutex
 	common.ClosedState
 	sm.StateMachine
-	Active          map[uint64]txnif.AsyncTxn
+	IDMap           map[uint64]txnif.AsyncTxn
 	IdAlloc         *common.IdAlloctor
 	TsAlloc         *types.TsAlloctor
 	TxnStoreFactory TxnStoreFactory
 	TxnFactory      TxnFactory
-	//ActiveMask      *roaring64.Bitmap
-	ActiveMask map[types.TS]struct{}
-	Exception  *atomic.Value
+	Active          *btree.Generic[types.TS]
+	Exception       *atomic.Value
 }
 
 func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock clock.Clock) *TxnManager {
@@ -49,15 +49,15 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 		txnFactory = DefaultTxnFactory
 	}
 	mgr := &TxnManager{
-		Active:          make(map[uint64]txnif.AsyncTxn),
+		IDMap:           make(map[uint64]txnif.AsyncTxn),
 		IdAlloc:         common.NewIdAlloctor(1),
 		TsAlloc:         types.NewTsAlloctor(clock),
 		TxnStoreFactory: txnStoreFactory,
 		TxnFactory:      txnFactory,
-		//ActiveMask:      roaring64.New(),
-		ActiveMask: make(map[types.TS]struct{}),
-		Exception:  new(atomic.Value),
-	}
+		Active: btree.NewGeneric[types.TS](func(a, b types.TS) bool {
+			return a.Less(b)
+		}),
+		Exception: new(atomic.Value)}
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.onPreparing)
 	cqueue := sm.NewSafeQueue(20000, 1000, mgr.onCommit)
 	mgr.StateMachine = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, cqueue)
@@ -74,21 +74,17 @@ func (mgr *TxnManager) Init(prevTxnId uint64, prevTs types.TS) error {
 func (mgr *TxnManager) StatActiveTxnCnt() int {
 	mgr.RLock()
 	defer mgr.RUnlock()
-	//return int(mgr.ActiveMask.GetCardinality())
-	return int(len(mgr.ActiveMask))
+	return mgr.Active.Len()
 }
 
 func (mgr *TxnManager) StatSafeTS() (ts types.TS) {
 	mgr.RLock()
-	if len(mgr.Active) > 0 {
-		ts = types.MaxTs()
-		for k := range mgr.ActiveMask {
-			if k.Less(ts) {
-				ts = k
-			}
-		}
+	if len(mgr.IDMap) > 0 {
+		ts, _ = mgr.Active.Min()
+		ts = ts.Prev()
 	} else {
-		ts = mgr.TsAlloc.Get()
+		//ts = mgr.TsAlloc.Get()
+		ts = mgr.TsAlloc.Alloc()
 	}
 	mgr.RUnlock()
 	return
@@ -108,19 +104,19 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	store := mgr.TxnStoreFactory()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTs, info)
 	store.BindTxn(txn)
-	mgr.Active[txnId] = txn
+	mgr.IDMap[txnId] = txn
 	//mgr.ActiveMask.Add(startTs)
-	mgr.ActiveMask[startTs] = struct{}{}
+	mgr.Active.Set(startTs)
 	return
 }
 
 func (mgr *TxnManager) DeleteTxn(id uint64) {
 	mgr.Lock()
 	defer mgr.Unlock()
-	txn := mgr.Active[id]
-	delete(mgr.Active, id)
+	txn := mgr.IDMap[id]
+	delete(mgr.IDMap, id)
 	//mgr.ActiveMask.Remove(txn.GetStartTS())
-	delete(mgr.ActiveMask, txn.GetStartTS())
+	mgr.Active.Delete(txn.GetStartTS())
 }
 
 func (mgr *TxnManager) GetTxnByCtx(ctx []byte) txnif.AsyncTxn {
@@ -130,7 +126,7 @@ func (mgr *TxnManager) GetTxnByCtx(ctx []byte) txnif.AsyncTxn {
 func (mgr *TxnManager) GetTxn(id uint64) txnif.AsyncTxn {
 	mgr.RLock()
 	defer mgr.RUnlock()
-	return mgr.Active[id]
+	return mgr.IDMap[id]
 }
 
 func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {

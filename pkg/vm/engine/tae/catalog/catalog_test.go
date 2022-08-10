@@ -65,7 +65,7 @@ func TestCreateDB1(t *testing.T) {
 	catalog := MockCatalog(dir, "mock", nil, nil)
 	defer catalog.Close()
 
-	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.MockClock(1))
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
 	txnMgr.Start()
 	defer txnMgr.Stop()
 
@@ -151,7 +151,7 @@ func TestTableEntry1(t *testing.T) {
 	catalog := MockCatalog(dir, "mock", nil, nil)
 	defer catalog.Close()
 
-	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.MockClock(1))
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
 	txnMgr.Start()
 	defer txnMgr.Stop()
 
@@ -226,7 +226,7 @@ func TestTableEntry2(t *testing.T) {
 	catalog := MockCatalog(dir, "mock", nil, nil)
 	defer catalog.Close()
 
-	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.MockClock(1))
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
 	txnMgr.Start()
 	defer txnMgr.Stop()
 
@@ -290,7 +290,7 @@ func TestDB1(t *testing.T) {
 	catalog := MockCatalog(dir, "mock", nil, nil)
 	defer catalog.Close()
 
-	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.MockClock(1))
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
 	txnMgr.Start()
 	defer txnMgr.Stop()
 	name := "db1"
@@ -326,7 +326,7 @@ func TestTable1(t *testing.T) {
 	catalog := MockCatalog(dir, "mock", nil, nil)
 	defer catalog.Close()
 
-	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.MockClock(1))
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
 	txnMgr.Start()
 	defer txnMgr.Stop()
 	name := "db1"
@@ -474,7 +474,7 @@ func TestSegment1(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	catalog := MockCatalog(dir, "mock", nil, nil)
 	defer catalog.Close()
-	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.MockClock(1))
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
 	txnMgr.Start()
 	defer txnMgr.Stop()
 	name := "db"
