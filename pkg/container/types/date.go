@@ -53,13 +53,13 @@ func (d Weekday) String() string {
 
 var startupTime time.Time
 var localTZ int64
-var unixEpoch int64 // second unit, 1970-1-1 00:00:00 since 1-1-1 00:00:00
+var unixEpoch int64 // microsecond unit, 1970-1-1 00:00:00 since 1-1-1 00:00:00
 
 func init() {
 	startupTime = time.Now()
 	_, offset := startupTime.Zone()
 	localTZ = int64(offset)
-	unixEpoch = FromClock(1970, 1, 1, 0, 0, 0, 0).sec()
+	unixEpoch = int64(FromClock(1970, 1, 1, 0, 0, 0, 0))
 }
 
 var (
@@ -233,9 +233,8 @@ func (d Date) String() string {
 }
 
 // Today Holds number of days since January 1, year 1 in Gregorian calendar
-func Today() Date {
-	sec := Now().sec()
-	return Date((sec + localTZ) / secsPerDay)
+func Today(loc *time.Location) Date {
+	return Now(loc).ToDate()
 }
 
 const dayInfoTableMinYear = 1924
@@ -668,15 +667,14 @@ func isLeap(year int32) bool {
 	return year%4 == 0 && (year%100 != 0 || year%400 == 0)
 }
 
-func (d Date) ToTime() Datetime {
-	return Datetime(int64(d)*secsPerDay) << 20
+func (d Date) ToDatetime() Datetime {
+	return Datetime(int64(d) * secsPerDay * microSecsPerSec)
 }
 
-func DateToTimestamp(xs []Date, rs []Timestamp) ([]Timestamp, error) {
-	for i, x := range xs {
-		rs[i] = x.ToTimeUTC()
-	}
-	return rs, nil
+func (d Date) ToTimestamp(loc *time.Location) Timestamp {
+	year, mon, day, _ := d.Calendar(true)
+	t := time.Date(int(year), time.Month(mon), int(day), 0, 0, 0, 0, loc)
+	return Timestamp(t.UnixMicro() + unixEpoch)
 }
 
 func (d Date) Month() uint8 {

@@ -15,13 +15,14 @@
 package unary
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestDateToTimestamp(t *testing.T) {
@@ -34,7 +35,7 @@ func TestDateToTimestamp(t *testing.T) {
 		{
 			name: "TEST01",
 			vecs: makeDateToTimestampVectors("2022-01-01", true),
-			proc: process.New(mheap.New(nil)),
+			proc: testutil.NewProc(),
 			want: []types.Timestamp{types.FromClockUTC(2022, 1, 1, 0, 0, 0, 0)},
 		},
 	}
@@ -61,7 +62,7 @@ func TestDatetimeToTimestamp(t *testing.T) {
 		{
 			name: "TEST01",
 			vecs: makeDatetimeToTimestampVectors("2022-01-01 00:00:00", true),
-			proc: process.New(mheap.New(nil)),
+			proc: testutil.NewProc(),
 			want: []types.Timestamp{types.FromClockUTC(2022, 1, 1, 0, 0, 0, 0)},
 		},
 	}
@@ -89,21 +90,21 @@ func TestDateStringAdd(t *testing.T) {
 		{
 			name:    "TEST01",
 			vecs:    makeDateStringToTimestampVectors("2022-01-01", true),
-			proc:    process.New(mheap.New(nil)),
+			proc:    testutil.NewProc(),
 			want:    []types.Timestamp{types.FromClockUTC(2022, 1, 1, 0, 0, 0, 0)},
 			contain: false,
 		},
 		{
 			name:    "TEST02",
 			vecs:    makeDateStringToTimestampVectors("2022-01-01 00:00:00", true),
-			proc:    process.New(mheap.New(nil)),
+			proc:    testutil.NewProc(),
 			want:    []types.Timestamp{types.FromClockUTC(2022, 1, 1, 0, 0, 0, 0)},
 			contain: false,
 		},
 		{
 			name:    "TEST03",
 			vecs:    makeDateStringToTimestampVectors("xxxx", true),
-			proc:    process.New(mheap.New(nil)),
+			proc:    testutil.NewProc(),
 			want:    []types.Timestamp{types.Timestamp(0)},
 			contain: true,
 		},

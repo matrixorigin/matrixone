@@ -21,9 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -36,12 +34,7 @@ func TestFromUnixtime(t *testing.T) {
 
 // func FromUnixTime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 func FromUnixtimeCase(t *testing.T, typ types.T, src int64, res types.Datetime) {
-	makeProcess := func() *process.Process {
-		hm := host.New(1 << 40)
-		gm := guest.New(1<<40, hm)
-		return process.New(mheap.New(gm))
-	}
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
