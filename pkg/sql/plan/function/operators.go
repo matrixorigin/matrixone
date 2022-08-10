@@ -633,7 +633,7 @@ var operators = map[int]Functions{
 					types.T_bool,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.EqBool,
+				Fn:        operator.EqGeneral[bool],
 			},
 			{
 				Index:  17,
@@ -849,7 +849,7 @@ var operators = map[int]Functions{
 					types.T_bool,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GtBool,
+				Fn:        operator.GtGeneral[bool],
 			},
 			{
 				Index:  17,
@@ -1065,7 +1065,7 @@ var operators = map[int]Functions{
 					types.T_bool,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GeBool,
+				Fn:        operator.GeGeneral[bool],
 			},
 			{
 				Index:  17,
@@ -1281,7 +1281,7 @@ var operators = map[int]Functions{
 					types.T_bool,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LtBool,
+				Fn:        operator.LtGeneral[bool],
 			},
 			{
 				Index:  17,
@@ -1497,7 +1497,7 @@ var operators = map[int]Functions{
 					types.T_bool,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LeBool,
+				Fn:        operator.LeGeneral[bool],
 			},
 			{
 				Index:  17,
@@ -1713,7 +1713,7 @@ var operators = map[int]Functions{
 					types.T_bool,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeBool,
+				Fn:        operator.NeGeneral[bool],
 			},
 			{
 				Index:  17,
