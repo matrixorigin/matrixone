@@ -9,9 +9,6 @@ jobs:
     name: Get Change Paths
 
     steps:
-      - name: Set up Go
-        uses: ./.github/actions/setup_env
-
       - name: Get PR Changed Paths
         uses: guguducken/change-paths-action@v0.0.3
         id: ut-pr
@@ -29,6 +26,9 @@ jobs:
       - name: Set Variables
         run: |
           echo "raw_ut_coverage='ut_coverage.raw'" >> $GITHUB_ENV
+          
+      - name: Set up Go
+        uses: ./matrixone/.github/actions/setup_env
 
       - name: PR Unit Test
         timeout-minutes: 60
