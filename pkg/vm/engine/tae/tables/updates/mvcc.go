@@ -30,15 +30,11 @@ import (
 
 type MVCCHandle struct {
 	*sync.RWMutex
-	columns map[uint16]*ColumnChain
-	deletes *DeleteChain
-	holes   *roaring.Bitmap
-	meta    *catalog.BlockEntry
-	//maxVisible      types.TS
-	mu struct {
-		*sync.RWMutex
-		maxVisible types.TS
-	}
+	columns         map[uint16]*ColumnChain
+	deletes         *DeleteChain
+	holes           *roaring.Bitmap
+	meta            *catalog.BlockEntry
+	maxVisible      atomic.Value
 	appends         []*AppendNode
 	changes         uint32
 	deletesListener func(uint64, common.RowGen, types.TS) error
@@ -48,10 +44,6 @@ type MVCCHandle struct {
 func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
 	node := &MVCCHandle{
 		RWMutex: new(sync.RWMutex),
-		mu: struct {
-			*sync.RWMutex
-			maxVisible types.TS
-		}{RWMutex: new(sync.RWMutex)},
 		columns: make(map[uint16]*ColumnChain),
 		meta:    meta,
 		appends: make([]*AppendNode, 0),
@@ -135,21 +127,11 @@ func (n *MVCCHandle) GetDeleteCnt() uint32 {
 }
 
 func (n *MVCCHandle) SetMaxVisible(ts types.TS) {
-	//atomic.StoreUint64(&n.maxVisible, ts)
-	//n.Lock()
-	n.mu.Lock()
-	n.mu.maxVisible = ts
-	//n.Unlock()
-	n.mu.Unlock()
+	n.maxVisible.Store(ts)
 }
 
 func (n *MVCCHandle) LoadMaxVisible() types.TS {
-	//return atomic.LoadUint64(&n.maxVisible)
-	//n.RLock()
-	n.mu.RLock()
-	ts := n.mu.maxVisible
-	//n.RUnlock()
-	n.mu.RUnlock()
+	ts := n.maxVisible.Load().(types.TS)
 	return ts
 }
 
@@ -232,8 +214,8 @@ func (n *MVCCHandle) OnReplayAppendNode(an *AppendNode) {
 	n.TrySetMaxVisible(an.commitTs)
 }
 func (n *MVCCHandle) TrySetMaxVisible(ts types.TS) {
-	if ts.Greater(n.mu.maxVisible) {
-		n.mu.maxVisible = ts
+	if ts.Greater(n.maxVisible.Load().(types.TS)) {
+		n.maxVisible.Store(ts)
 	}
 }
 func (n *MVCCHandle) AddAppendNodeLocked(
