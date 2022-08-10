@@ -49,9 +49,8 @@ func GetDefaultRole() string {
 	return "public"
 }
 
+//GetTenantInfo extract tenant info from the input of the user.
 /**
-GetTenantInfo extract tenant info from the input of the user.
-
 The format of the user
 1. tenant:user:role
 2. tenant:user
