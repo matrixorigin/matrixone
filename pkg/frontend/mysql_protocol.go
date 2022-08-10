@@ -336,7 +336,7 @@ func (mp *MysqlProtocolImpl) SetSession(ses *Session) {
 	mp.ses = ses
 }
 
-//handshake response 41
+// handshake response 41
 type response41 struct {
 	capabilities     uint32
 	maxPacketSize    uint32

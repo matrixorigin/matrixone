@@ -133,7 +133,7 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
 }
 
-//outputPool outputs the data
+// outputPool outputs the data
 type outputPool interface {
 	resetLineStr()
 
@@ -233,7 +233,7 @@ func (o *outputQueue) flush() error {
 	return nil
 }
 
-//fakeOutputQueue saves the data into the session.
+// fakeOutputQueue saves the data into the session.
 type fakeOutputQueue struct {
 	mrs *MysqlResultSet
 }
@@ -522,7 +522,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	return nil
 }
 
-//extractRowFromEveryVector gets the j row from the every vector and outputs the row
+// extractRowFromEveryVector gets the j row from the every vector and outputs the row
 func extractRowFromEveryVector(dataSet *batch.Batch, j int64, oq outputPool) ([]interface{}, error) {
 	row, err := oq.getEmptyRow()
 	if err != nil {
@@ -558,7 +558,7 @@ func extractRowFromEveryVector(dataSet *batch.Batch, j int64, oq outputPool) ([]
 	return row, nil
 }
 
-//extractRowFromVector gets the rowIndex row from the i vector
+// extractRowFromVector gets the rowIndex row from the i vector
 func extractRowFromVector(vec *vector.Vector, i int, row []interface{}, rowIndex int64) error {
 	switch vec.Typ.Oid { //get col
 	case types.T_json:

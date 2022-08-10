@@ -51,7 +51,8 @@ func (node *Use) Format(ctx *FmtCtx) {
 	}
 }
 
-//IsUseRole checks the statement is:
+// IsUseRole checks the statement is:
+//
 //	USE SECONDARY ROLE { ALL | NONE };
 //	USE ROLE role;
 func (node *Use) IsUseRole() bool {

@@ -511,7 +511,7 @@ func (ses *Session) SetOutputCallback(callback func(interface{}, *batch.Batch) e
 	ses.outputCallback = callback
 }
 
-//AuthenticateUser verifies the password of the user.
+// AuthenticateUser verifies the password of the user.
 func (ses *Session) AuthenticateUser(userInput string) error {
 	//Get tenant info
 	tenant, err := GetTenantInfo(userInput)
@@ -845,8 +845,8 @@ func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) *plan2.
 	return &plan2.Cost{Card: float64(rows)}
 }
 
-//fakeDataSetFetcher gets the result set from the pipeline and save it in the session.
-//It will not send the result to the client.
+// fakeDataSetFetcher gets the result set from the pipeline and save it in the session.
+// It will not send the result to the client.
 func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 	if handle == nil || dataSet == nil {
 		return nil
@@ -872,8 +872,8 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 	return nil
 }
 
-//executeSQLInBackgroundSession executes the sql in an independent session and transaction.
-//It sends nothing to the client.
+// executeSQLInBackgroundSession executes the sql in an independent session and transaction.
+// It sends nothing to the client.
 func executeSQLInBackgroundSession(gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) error {
 	mce := NewMysqlCmdExecutor()
 	defer mce.Close()
