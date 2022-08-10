@@ -23,7 +23,7 @@ var _ = math.Inf
 // is compatible with the proto package it is being compiled against.
 // A compilation error at this line likely means your copy of the
 // proto package needs to be updated.
-const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
+const _ = proto.GoGoProtoPackageIsVersion2 // please upgrade the proto package
 
 type Pipeline_PipelineType int32
 
@@ -80,7 +80,7 @@ func (m *Message) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_Message.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
+		n, err := m.MarshalTo(b)
 		if err != nil {
 			return nil, err
 		}
@@ -149,7 +149,7 @@ func (m *Dispatch) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_Dispatch.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
+		n, err := m.MarshalTo(b)
 		if err != nil {
 			return nil, err
 		}
@@ -205,7 +205,7 @@ func (m *Aggregate) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_Aggregate.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
+		n, err := m.MarshalTo(b)
 		if err != nil {
 			return nil, err
 		}
@@ -271,7 +271,7 @@ func (m *Group) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_Group.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
+		n, err := m.MarshalTo(b)
 		if err != nil {
 			return nil, err
 		}
@@ -357,7 +357,7 @@ func (m *AntiJoin) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_AntiJoin.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
+		n, err := m.MarshalTo(b)
 		if err != nil {
 			return nil, err
 		}
@@ -437,7 +437,7 @@ func (m *InnerJoin) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_InnerJoin.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
+		n, err := m.MarshalTo(b)
 		if err != nil {
 			return nil, err
 		}
@@ -525,7 +525,7 @@ func (m *LeftJoin) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_LeftJoin.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
+		n, err := m.MarshalTo(b)
 		if err != nil {
 			return nil, err
 		}
@@ -618,7 +618,7 @@ func (m *SemiJoin) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_SemiJoin.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
+		n, err := m.MarshalTo(b)
 		if err != nil {
 			return nil, err
 		}
@@ -699,7 +699,7 @@ func (m *SingleJoin) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_SingleJoin.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
+		n, err := m.MarshalTo(b)
 		if err != nil {
 			return nil, err
 		}
@@ -789,7 +789,7 @@ func (m *Product) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_Product.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
+		n, err := m.MarshalTo(b)
 		if err != nil {
 			return nil, err
 		}
@@ -859,7 +859,7 @@ func (m *Instruction) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) 
 		return xxx_messageInfo_Instruction.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
+		n, err := m.MarshalTo(b)
 		if err != nil {
 			return nil, err
 		}
@@ -1007,7 +1007,7 @@ func (m *Source) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_Source.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
+		n, err := m.MarshalTo(b)
 		if err != nil {
 			return nil, err
 		}
@@ -1078,7 +1078,7 @@ func (m *NodeInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_NodeInfo.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
+		n, err := m.MarshalTo(b)
 		if err != nil {
 			return nil, err
 		}
@@ -1154,7 +1154,7 @@ func (m *Pipeline) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_Pipeline.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
+		n, err := m.MarshalTo(b)
 		if err != nil {
 			return nil, err
 		}
@@ -1334,7 +1334,7 @@ var fileDescriptor_7ac67a7adf3df9c7 = []byte{
 func (m *Message) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	n, err := m.MarshalTo(dAtA)
 	if err != nil {
 		return nil, err
 	}
@@ -1342,50 +1342,42 @@ func (m *Message) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *Message) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *Message) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
+	var i int
 	_ = i
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	if len(m.Data) > 0 {
-		i -= len(m.Data)
-		copy(dAtA[i:], m.Data)
-		i = encodeVarintPipeline(dAtA, i, uint64(len(m.Data)))
-		i--
-		dAtA[i] = 0x22
-	}
-	if len(m.Code) > 0 {
-		i -= len(m.Code)
-		copy(dAtA[i:], m.Code)
-		i = encodeVarintPipeline(dAtA, i, uint64(len(m.Code)))
-		i--
-		dAtA[i] = 0x1a
+	if m.Sid != 0 {
+		dAtA[i] = 0x8
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Sid))
 	}
 	if m.Cmd != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Cmd))
-		i--
 		dAtA[i] = 0x10
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Cmd))
 	}
-	if m.Sid != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Sid))
-		i--
-		dAtA[i] = 0x8
+	if len(m.Code) > 0 {
+		dAtA[i] = 0x1a
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(len(m.Code)))
+		i += copy(dAtA[i:], m.Code)
 	}
-	return len(dAtA) - i, nil
+	if len(m.Data) > 0 {
+		dAtA[i] = 0x22
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(len(m.Data)))
+		i += copy(dAtA[i:], m.Data)
+	}
+	if m.XXX_unrecognized != nil {
+		i += copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	return i, nil
 }
 
 func (m *Dispatch) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	n, err := m.MarshalTo(dAtA)
 	if err != nil {
 		return nil, err
 	}
@@ -1393,18 +1385,19 @@ func (m *Dispatch) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *Dispatch) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *Dispatch) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
+	var i int
 	_ = i
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
+	if m.All {
+		dAtA[i] = 0x8
+		i++
+		if m.All {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i++
 	}
 	if len(m.Children) > 0 {
 		dAtA2 := make([]byte, len(m.Children)*10)
@@ -1419,29 +1412,21 @@ func (m *Dispatch) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA2[j1] = uint8(num)
 			j1++
 		}
-		i -= j1
-		copy(dAtA[i:], dAtA2[:j1])
-		i = encodeVarintPipeline(dAtA, i, uint64(j1))
-		i--
 		dAtA[i] = 0x12
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(j1))
+		i += copy(dAtA[i:], dAtA2[:j1])
 	}
-	if m.All {
-		i--
-		if m.All {
-			dAtA[i] = 1
-		} else {
-			dAtA[i] = 0
-		}
-		i--
-		dAtA[i] = 0x8
+	if m.XXX_unrecognized != nil {
+		i += copy(dAtA[i:], m.XXX_unrecognized)
 	}
-	return len(dAtA) - i, nil
+	return i, nil
 }
 
 func (m *Aggregate) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	n, err := m.MarshalTo(dAtA)
 	if err != nil {
 		return nil, err
 	}
@@ -1449,53 +1434,45 @@ func (m *Aggregate) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *Aggregate) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *Aggregate) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
+	var i int
 	_ = i
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	if m.Expr != nil {
-		{
-			size, err := m.Expr.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintPipeline(dAtA, i, uint64(size))
-		}
-		i--
-		dAtA[i] = 0x1a
+	if m.Op != 0 {
+		dAtA[i] = 0x8
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Op))
 	}
 	if m.Dist {
-		i--
+		dAtA[i] = 0x10
+		i++
 		if m.Dist {
 			dAtA[i] = 1
 		} else {
 			dAtA[i] = 0
 		}
-		i--
-		dAtA[i] = 0x10
+		i++
 	}
-	if m.Op != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Op))
-		i--
-		dAtA[i] = 0x8
+	if m.Expr != nil {
+		dAtA[i] = 0x1a
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Expr.ProtoSize()))
+		n3, err3 := m.Expr.MarshalTo(dAtA[i:])
+		if err3 != nil {
+			return 0, err3
+		}
+		i += n3
 	}
-	return len(dAtA) - i, nil
+	if m.XXX_unrecognized != nil {
+		i += copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	return i, nil
 }
 
 func (m *Group) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	n, err := m.MarshalTo(dAtA)
 	if err != nil {
 		return nil, err
 	}
@@ -1503,88 +1480,76 @@ func (m *Group) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *Group) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *Group) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
+	var i int
 	_ = i
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	if len(m.Aggs) > 0 {
-		for iNdEx := len(m.Aggs) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.Aggs[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x32
-		}
-	}
-	if len(m.Types) > 0 {
-		for iNdEx := len(m.Types) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.Types[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x2a
-		}
-	}
-	if len(m.Exprs) > 0 {
-		for iNdEx := len(m.Exprs) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.Exprs[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x22
-		}
-	}
-	if m.Nbucket != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Nbucket))
-		i--
-		dAtA[i] = 0x18
-	}
-	if m.Ibucket != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Ibucket))
-		i--
-		dAtA[i] = 0x10
-	}
 	if m.NeedEval {
-		i--
+		dAtA[i] = 0x8
+		i++
 		if m.NeedEval {
 			dAtA[i] = 1
 		} else {
 			dAtA[i] = 0
 		}
-		i--
-		dAtA[i] = 0x8
+		i++
 	}
-	return len(dAtA) - i, nil
+	if m.Ibucket != 0 {
+		dAtA[i] = 0x10
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Ibucket))
+	}
+	if m.Nbucket != 0 {
+		dAtA[i] = 0x18
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Nbucket))
+	}
+	if len(m.Exprs) > 0 {
+		for _, msg := range m.Exprs {
+			dAtA[i] = 0x22
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
+	}
+	if len(m.Types) > 0 {
+		for _, msg := range m.Types {
+			dAtA[i] = 0x2a
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
+	}
+	if len(m.Aggs) > 0 {
+		for _, msg := range m.Aggs {
+			dAtA[i] = 0x32
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
+	}
+	if m.XXX_unrecognized != nil {
+		i += copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	return i, nil
 }
 
 func (m *AntiJoin) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	n, err := m.MarshalTo(dAtA)
 	if err != nil {
 		return nil, err
 	}
@@ -1592,46 +1557,19 @@ func (m *AntiJoin) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *AntiJoin) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *AntiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
+	var i int
 	_ = i
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
+	if m.Ibucket != 0 {
+		dAtA[i] = 0x8
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Ibucket))
 	}
-	if len(m.RightCond) > 0 {
-		for iNdEx := len(m.RightCond) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.RightCond[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x2a
-		}
-	}
-	if len(m.LeftCond) > 0 {
-		for iNdEx := len(m.LeftCond) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.LeftCond[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x22
-		}
+	if m.Nbucket != 0 {
+		dAtA[i] = 0x10
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Nbucket))
 	}
 	if len(m.Result) > 0 {
 		dAtA5 := make([]byte, len(m.Result)*10)
@@ -1646,29 +1584,45 @@ func (m *AntiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA5[j4] = uint8(num)
 			j4++
 		}
-		i -= j4
-		copy(dAtA[i:], dAtA5[:j4])
-		i = encodeVarintPipeline(dAtA, i, uint64(j4))
-		i--
 		dAtA[i] = 0x1a
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(j4))
+		i += copy(dAtA[i:], dAtA5[:j4])
 	}
-	if m.Nbucket != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Nbucket))
-		i--
-		dAtA[i] = 0x10
+	if len(m.LeftCond) > 0 {
+		for _, msg := range m.LeftCond {
+			dAtA[i] = 0x22
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
 	}
-	if m.Ibucket != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Ibucket))
-		i--
-		dAtA[i] = 0x8
+	if len(m.RightCond) > 0 {
+		for _, msg := range m.RightCond {
+			dAtA[i] = 0x2a
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
 	}
-	return len(dAtA) - i, nil
+	if m.XXX_unrecognized != nil {
+		i += copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	return i, nil
 }
 
 func (m *InnerJoin) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	n, err := m.MarshalTo(dAtA)
 	if err != nil {
 		return nil, err
 	}
@@ -1676,51 +1630,24 @@ func (m *InnerJoin) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *InnerJoin) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *InnerJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
+	var i int
 	_ = i
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
+	if m.Ibucket != 0 {
+		dAtA[i] = 0x8
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Ibucket))
 	}
-	if len(m.RightCond) > 0 {
-		for iNdEx := len(m.RightCond) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.RightCond[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x32
-		}
+	if m.Nbucket != 0 {
+		dAtA[i] = 0x10
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Nbucket))
 	}
-	if len(m.LeftCond) > 0 {
-		for iNdEx := len(m.LeftCond) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.LeftCond[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x2a
-		}
-	}
-	if len(m.ColList) > 0 {
-		dAtA7 := make([]byte, len(m.ColList)*10)
+	if len(m.RelList) > 0 {
+		dAtA7 := make([]byte, len(m.RelList)*10)
 		var j6 int
-		for _, num1 := range m.ColList {
+		for _, num1 := range m.RelList {
 			num := uint64(num1)
 			for num >= 1<<7 {
 				dAtA7[j6] = uint8(uint64(num)&0x7f | 0x80)
@@ -1730,16 +1657,15 @@ func (m *InnerJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA7[j6] = uint8(num)
 			j6++
 		}
-		i -= j6
-		copy(dAtA[i:], dAtA7[:j6])
+		dAtA[i] = 0x1a
+		i++
 		i = encodeVarintPipeline(dAtA, i, uint64(j6))
-		i--
-		dAtA[i] = 0x22
+		i += copy(dAtA[i:], dAtA7[:j6])
 	}
-	if len(m.RelList) > 0 {
-		dAtA9 := make([]byte, len(m.RelList)*10)
+	if len(m.ColList) > 0 {
+		dAtA9 := make([]byte, len(m.ColList)*10)
 		var j8 int
-		for _, num1 := range m.RelList {
+		for _, num1 := range m.ColList {
 			num := uint64(num1)
 			for num >= 1<<7 {
 				dAtA9[j8] = uint8(uint64(num)&0x7f | 0x80)
@@ -1749,29 +1675,45 @@ func (m *InnerJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA9[j8] = uint8(num)
 			j8++
 		}
-		i -= j8
-		copy(dAtA[i:], dAtA9[:j8])
+		dAtA[i] = 0x22
+		i++
 		i = encodeVarintPipeline(dAtA, i, uint64(j8))
-		i--
-		dAtA[i] = 0x1a
+		i += copy(dAtA[i:], dAtA9[:j8])
 	}
-	if m.Nbucket != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Nbucket))
-		i--
-		dAtA[i] = 0x10
+	if len(m.LeftCond) > 0 {
+		for _, msg := range m.LeftCond {
+			dAtA[i] = 0x2a
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
 	}
-	if m.Ibucket != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Ibucket))
-		i--
-		dAtA[i] = 0x8
+	if len(m.RightCond) > 0 {
+		for _, msg := range m.RightCond {
+			dAtA[i] = 0x32
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
 	}
-	return len(dAtA) - i, nil
+	if m.XXX_unrecognized != nil {
+		i += copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	return i, nil
 }
 
 func (m *LeftJoin) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	n, err := m.MarshalTo(dAtA)
 	if err != nil {
 		return nil, err
 	}
@@ -1779,65 +1721,24 @@ func (m *LeftJoin) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *LeftJoin) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *LeftJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
+	var i int
 	_ = i
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
+	if m.Ibucket != 0 {
+		dAtA[i] = 0x8
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Ibucket))
 	}
-	if len(m.RightCond) > 0 {
-		for iNdEx := len(m.RightCond) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.RightCond[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x3a
-		}
+	if m.Nbucket != 0 {
+		dAtA[i] = 0x10
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Nbucket))
 	}
-	if len(m.LeftCond) > 0 {
-		for iNdEx := len(m.LeftCond) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.LeftCond[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x32
-		}
-	}
-	if len(m.Types) > 0 {
-		for iNdEx := len(m.Types) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.Types[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x2a
-		}
-	}
-	if len(m.ColList) > 0 {
-		dAtA11 := make([]byte, len(m.ColList)*10)
+	if len(m.RelList) > 0 {
+		dAtA11 := make([]byte, len(m.RelList)*10)
 		var j10 int
-		for _, num1 := range m.ColList {
+		for _, num1 := range m.RelList {
 			num := uint64(num1)
 			for num >= 1<<7 {
 				dAtA11[j10] = uint8(uint64(num)&0x7f | 0x80)
@@ -1847,16 +1748,15 @@ func (m *LeftJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA11[j10] = uint8(num)
 			j10++
 		}
-		i -= j10
-		copy(dAtA[i:], dAtA11[:j10])
+		dAtA[i] = 0x1a
+		i++
 		i = encodeVarintPipeline(dAtA, i, uint64(j10))
-		i--
-		dAtA[i] = 0x22
+		i += copy(dAtA[i:], dAtA11[:j10])
 	}
-	if len(m.RelList) > 0 {
-		dAtA13 := make([]byte, len(m.RelList)*10)
+	if len(m.ColList) > 0 {
+		dAtA13 := make([]byte, len(m.ColList)*10)
 		var j12 int
-		for _, num1 := range m.RelList {
+		for _, num1 := range m.ColList {
 			num := uint64(num1)
 			for num >= 1<<7 {
 				dAtA13[j12] = uint8(uint64(num)&0x7f | 0x80)
@@ -1866,29 +1766,57 @@ func (m *LeftJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA13[j12] = uint8(num)
 			j12++
 		}
-		i -= j12
-		copy(dAtA[i:], dAtA13[:j12])
+		dAtA[i] = 0x22
+		i++
 		i = encodeVarintPipeline(dAtA, i, uint64(j12))
-		i--
-		dAtA[i] = 0x1a
+		i += copy(dAtA[i:], dAtA13[:j12])
 	}
-	if m.Nbucket != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Nbucket))
-		i--
-		dAtA[i] = 0x10
+	if len(m.Types) > 0 {
+		for _, msg := range m.Types {
+			dAtA[i] = 0x2a
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
 	}
-	if m.Ibucket != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Ibucket))
-		i--
-		dAtA[i] = 0x8
+	if len(m.LeftCond) > 0 {
+		for _, msg := range m.LeftCond {
+			dAtA[i] = 0x32
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
 	}
-	return len(dAtA) - i, nil
+	if len(m.RightCond) > 0 {
+		for _, msg := range m.RightCond {
+			dAtA[i] = 0x3a
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
+	}
+	if m.XXX_unrecognized != nil {
+		i += copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	return i, nil
 }
 
 func (m *SemiJoin) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	n, err := m.MarshalTo(dAtA)
 	if err != nil {
 		return nil, err
 	}
@@ -1896,46 +1824,19 @@ func (m *SemiJoin) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *SemiJoin) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *SemiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
+	var i int
 	_ = i
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
+	if m.Ibucket != 0 {
+		dAtA[i] = 0x8
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Ibucket))
 	}
-	if len(m.RightCond) > 0 {
-		for iNdEx := len(m.RightCond) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.RightCond[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x2a
-		}
-	}
-	if len(m.LeftCond) > 0 {
-		for iNdEx := len(m.LeftCond) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.LeftCond[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x22
-		}
+	if m.Nbucket != 0 {
+		dAtA[i] = 0x10
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Nbucket))
 	}
 	if len(m.Result) > 0 {
 		dAtA15 := make([]byte, len(m.Result)*10)
@@ -1950,29 +1851,45 @@ func (m *SemiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA15[j14] = uint8(num)
 			j14++
 		}
-		i -= j14
-		copy(dAtA[i:], dAtA15[:j14])
-		i = encodeVarintPipeline(dAtA, i, uint64(j14))
-		i--
 		dAtA[i] = 0x1a
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(j14))
+		i += copy(dAtA[i:], dAtA15[:j14])
 	}
-	if m.Nbucket != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Nbucket))
-		i--
-		dAtA[i] = 0x10
+	if len(m.LeftCond) > 0 {
+		for _, msg := range m.LeftCond {
+			dAtA[i] = 0x22
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
 	}
-	if m.Ibucket != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Ibucket))
-		i--
-		dAtA[i] = 0x8
+	if len(m.RightCond) > 0 {
+		for _, msg := range m.RightCond {
+			dAtA[i] = 0x2a
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
 	}
-	return len(dAtA) - i, nil
+	if m.XXX_unrecognized != nil {
+		i += copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	return i, nil
 }
 
 func (m *SingleJoin) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	n, err := m.MarshalTo(dAtA)
 	if err != nil {
 		return nil, err
 	}
@@ -1980,65 +1897,24 @@ func (m *SingleJoin) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *SingleJoin) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *SingleJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
+	var i int
 	_ = i
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
+	if m.Ibucket != 0 {
+		dAtA[i] = 0x8
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Ibucket))
 	}
-	if len(m.RightCond) > 0 {
-		for iNdEx := len(m.RightCond) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.RightCond[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x3a
-		}
+	if m.Nbucket != 0 {
+		dAtA[i] = 0x10
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Nbucket))
 	}
-	if len(m.LeftCond) > 0 {
-		for iNdEx := len(m.LeftCond) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.LeftCond[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x32
-		}
-	}
-	if len(m.Types) > 0 {
-		for iNdEx := len(m.Types) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.Types[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x2a
-		}
-	}
-	if len(m.ColList) > 0 {
-		dAtA17 := make([]byte, len(m.ColList)*10)
+	if len(m.RelList) > 0 {
+		dAtA17 := make([]byte, len(m.RelList)*10)
 		var j16 int
-		for _, num1 := range m.ColList {
+		for _, num1 := range m.RelList {
 			num := uint64(num1)
 			for num >= 1<<7 {
 				dAtA17[j16] = uint8(uint64(num)&0x7f | 0x80)
@@ -2048,16 +1924,15 @@ func (m *SingleJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA17[j16] = uint8(num)
 			j16++
 		}
-		i -= j16
-		copy(dAtA[i:], dAtA17[:j16])
+		dAtA[i] = 0x1a
+		i++
 		i = encodeVarintPipeline(dAtA, i, uint64(j16))
-		i--
-		dAtA[i] = 0x22
+		i += copy(dAtA[i:], dAtA17[:j16])
 	}
-	if len(m.RelList) > 0 {
-		dAtA19 := make([]byte, len(m.RelList)*10)
+	if len(m.ColList) > 0 {
+		dAtA19 := make([]byte, len(m.ColList)*10)
 		var j18 int
-		for _, num1 := range m.RelList {
+		for _, num1 := range m.ColList {
 			num := uint64(num1)
 			for num >= 1<<7 {
 				dAtA19[j18] = uint8(uint64(num)&0x7f | 0x80)
@@ -2067,29 +1942,57 @@ func (m *SingleJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA19[j18] = uint8(num)
 			j18++
 		}
-		i -= j18
-		copy(dAtA[i:], dAtA19[:j18])
+		dAtA[i] = 0x22
+		i++
 		i = encodeVarintPipeline(dAtA, i, uint64(j18))
-		i--
-		dAtA[i] = 0x1a
+		i += copy(dAtA[i:], dAtA19[:j18])
 	}
-	if m.Nbucket != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Nbucket))
-		i--
-		dAtA[i] = 0x10
+	if len(m.Types) > 0 {
+		for _, msg := range m.Types {
+			dAtA[i] = 0x2a
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
 	}
-	if m.Ibucket != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Ibucket))
-		i--
-		dAtA[i] = 0x8
+	if len(m.LeftCond) > 0 {
+		for _, msg := range m.LeftCond {
+			dAtA[i] = 0x32
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
 	}
-	return len(dAtA) - i, nil
+	if len(m.RightCond) > 0 {
+		for _, msg := range m.RightCond {
+			dAtA[i] = 0x3a
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
+	}
+	if m.XXX_unrecognized != nil {
+		i += copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	return i, nil
 }
 
 func (m *Product) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	n, err := m.MarshalTo(dAtA)
 	if err != nil {
 		return nil, err
 	}
@@ -2097,23 +2000,14 @@ func (m *Product) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *Product) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *Product) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
+	var i int
 	_ = i
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	if len(m.ColList) > 0 {
-		dAtA21 := make([]byte, len(m.ColList)*10)
+	if len(m.RelList) > 0 {
+		dAtA21 := make([]byte, len(m.RelList)*10)
 		var j20 int
-		for _, num1 := range m.ColList {
+		for _, num1 := range m.RelList {
 			num := uint64(num1)
 			for num >= 1<<7 {
 				dAtA21[j20] = uint8(uint64(num)&0x7f | 0x80)
@@ -2123,16 +2017,15 @@ func (m *Product) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA21[j20] = uint8(num)
 			j20++
 		}
-		i -= j20
-		copy(dAtA[i:], dAtA21[:j20])
+		dAtA[i] = 0xa
+		i++
 		i = encodeVarintPipeline(dAtA, i, uint64(j20))
-		i--
-		dAtA[i] = 0x12
+		i += copy(dAtA[i:], dAtA21[:j20])
 	}
-	if len(m.RelList) > 0 {
-		dAtA23 := make([]byte, len(m.RelList)*10)
+	if len(m.ColList) > 0 {
+		dAtA23 := make([]byte, len(m.ColList)*10)
 		var j22 int
-		for _, num1 := range m.RelList {
+		for _, num1 := range m.ColList {
 			num := uint64(num1)
 			for num >= 1<<7 {
 				dAtA23[j22] = uint8(uint64(num)&0x7f | 0x80)
@@ -2142,19 +2035,21 @@ func (m *Product) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA23[j22] = uint8(num)
 			j22++
 		}
-		i -= j22
-		copy(dAtA[i:], dAtA23[:j22])
+		dAtA[i] = 0x12
+		i++
 		i = encodeVarintPipeline(dAtA, i, uint64(j22))
-		i--
-		dAtA[i] = 0xa
+		i += copy(dAtA[i:], dAtA23[:j22])
 	}
-	return len(dAtA) - i, nil
+	if m.XXX_unrecognized != nil {
+		i += copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	return i, nil
 }
 
 func (m *Instruction) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	n, err := m.MarshalTo(dAtA)
 	if err != nil {
 		return nil, err
 	}
@@ -2162,182 +2057,154 @@ func (m *Instruction) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *Instruction) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *Instruction) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
+	var i int
 	_ = i
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	if m.Offset != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Offset))
-		i--
-		dAtA[i] = 0x78
-	}
-	if m.Limit != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Limit))
-		i--
-		dAtA[i] = 0x70
-	}
-	if m.Filter != nil {
-		{
-			size, err := m.Filter.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintPipeline(dAtA, i, uint64(size))
-		}
-		i--
-		dAtA[i] = 0x6a
-	}
-	if len(m.ProjectList) > 0 {
-		for iNdEx := len(m.ProjectList) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.ProjectList[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x62
-		}
-	}
-	if len(m.OrderBy) > 0 {
-		for iNdEx := len(m.OrderBy) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.OrderBy[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x5a
-		}
-	}
-	if m.Product != nil {
-		{
-			size, err := m.Product.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintPipeline(dAtA, i, uint64(size))
-		}
-		i--
-		dAtA[i] = 0x52
-	}
-	if m.SingleJoin != nil {
-		{
-			size, err := m.SingleJoin.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintPipeline(dAtA, i, uint64(size))
-		}
-		i--
-		dAtA[i] = 0x4a
-	}
-	if m.SemiJoin != nil {
-		{
-			size, err := m.SemiJoin.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintPipeline(dAtA, i, uint64(size))
-		}
-		i--
-		dAtA[i] = 0x42
-	}
-	if m.LeftJoin != nil {
-		{
-			size, err := m.LeftJoin.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintPipeline(dAtA, i, uint64(size))
-		}
-		i--
-		dAtA[i] = 0x3a
-	}
-	if m.InnerJoin != nil {
-		{
-			size, err := m.InnerJoin.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintPipeline(dAtA, i, uint64(size))
-		}
-		i--
-		dAtA[i] = 0x32
-	}
-	if m.Agg != nil {
-		{
-			size, err := m.Agg.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintPipeline(dAtA, i, uint64(size))
-		}
-		i--
-		dAtA[i] = 0x2a
-	}
-	if m.Dispatch != nil {
-		{
-			size, err := m.Dispatch.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintPipeline(dAtA, i, uint64(size))
-		}
-		i--
-		dAtA[i] = 0x22
-	}
-	if m.Anti != nil {
-		{
-			size, err := m.Anti.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintPipeline(dAtA, i, uint64(size))
-		}
-		i--
-		dAtA[i] = 0x1a
+	if m.Op != 0 {
+		dAtA[i] = 0x8
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Op))
 	}
 	if m.Idx != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Idx))
-		i--
 		dAtA[i] = 0x10
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Idx))
 	}
-	if m.Op != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Op))
-		i--
-		dAtA[i] = 0x8
+	if m.Anti != nil {
+		dAtA[i] = 0x1a
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Anti.ProtoSize()))
+		n24, err24 := m.Anti.MarshalTo(dAtA[i:])
+		if err24 != nil {
+			return 0, err24
+		}
+		i += n24
 	}
-	return len(dAtA) - i, nil
+	if m.Dispatch != nil {
+		dAtA[i] = 0x22
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Dispatch.ProtoSize()))
+		n25, err25 := m.Dispatch.MarshalTo(dAtA[i:])
+		if err25 != nil {
+			return 0, err25
+		}
+		i += n25
+	}
+	if m.Agg != nil {
+		dAtA[i] = 0x2a
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Agg.ProtoSize()))
+		n26, err26 := m.Agg.MarshalTo(dAtA[i:])
+		if err26 != nil {
+			return 0, err26
+		}
+		i += n26
+	}
+	if m.InnerJoin != nil {
+		dAtA[i] = 0x32
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.InnerJoin.ProtoSize()))
+		n27, err27 := m.InnerJoin.MarshalTo(dAtA[i:])
+		if err27 != nil {
+			return 0, err27
+		}
+		i += n27
+	}
+	if m.LeftJoin != nil {
+		dAtA[i] = 0x3a
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.LeftJoin.ProtoSize()))
+		n28, err28 := m.LeftJoin.MarshalTo(dAtA[i:])
+		if err28 != nil {
+			return 0, err28
+		}
+		i += n28
+	}
+	if m.SemiJoin != nil {
+		dAtA[i] = 0x42
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.SemiJoin.ProtoSize()))
+		n29, err29 := m.SemiJoin.MarshalTo(dAtA[i:])
+		if err29 != nil {
+			return 0, err29
+		}
+		i += n29
+	}
+	if m.SingleJoin != nil {
+		dAtA[i] = 0x4a
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.SingleJoin.ProtoSize()))
+		n30, err30 := m.SingleJoin.MarshalTo(dAtA[i:])
+		if err30 != nil {
+			return 0, err30
+		}
+		i += n30
+	}
+	if m.Product != nil {
+		dAtA[i] = 0x52
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Product.ProtoSize()))
+		n31, err31 := m.Product.MarshalTo(dAtA[i:])
+		if err31 != nil {
+			return 0, err31
+		}
+		i += n31
+	}
+	if len(m.OrderBy) > 0 {
+		for _, msg := range m.OrderBy {
+			dAtA[i] = 0x5a
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
+	}
+	if len(m.ProjectList) > 0 {
+		for _, msg := range m.ProjectList {
+			dAtA[i] = 0x62
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
+	}
+	if m.Filter != nil {
+		dAtA[i] = 0x6a
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Filter.ProtoSize()))
+		n32, err32 := m.Filter.MarshalTo(dAtA[i:])
+		if err32 != nil {
+			return 0, err32
+		}
+		i += n32
+	}
+	if m.Limit != 0 {
+		dAtA[i] = 0x70
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Limit))
+	}
+	if m.Offset != 0 {
+		dAtA[i] = 0x78
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Offset))
+	}
+	if m.XXX_unrecognized != nil {
+		i += copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	return i, nil
 }
 
 func (m *Source) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	n, err := m.MarshalTo(dAtA)
 	if err != nil {
 		return nil, err
 	}
@@ -2345,56 +2212,53 @@ func (m *Source) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *Source) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *Source) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
+	var i int
 	_ = i
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	if len(m.Block) > 0 {
-		i -= len(m.Block)
-		copy(dAtA[i:], m.Block)
-		i = encodeVarintPipeline(dAtA, i, uint64(len(m.Block)))
-		i--
-		dAtA[i] = 0x22
-	}
-	if len(m.ColList) > 0 {
-		for iNdEx := len(m.ColList) - 1; iNdEx >= 0; iNdEx-- {
-			i -= len(m.ColList[iNdEx])
-			copy(dAtA[i:], m.ColList[iNdEx])
-			i = encodeVarintPipeline(dAtA, i, uint64(len(m.ColList[iNdEx])))
-			i--
-			dAtA[i] = 0x1a
-		}
+	if len(m.SchemaName) > 0 {
+		dAtA[i] = 0xa
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(len(m.SchemaName)))
+		i += copy(dAtA[i:], m.SchemaName)
 	}
 	if len(m.TableName) > 0 {
-		i -= len(m.TableName)
-		copy(dAtA[i:], m.TableName)
-		i = encodeVarintPipeline(dAtA, i, uint64(len(m.TableName)))
-		i--
 		dAtA[i] = 0x12
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(len(m.TableName)))
+		i += copy(dAtA[i:], m.TableName)
 	}
-	if len(m.SchemaName) > 0 {
-		i -= len(m.SchemaName)
-		copy(dAtA[i:], m.SchemaName)
-		i = encodeVarintPipeline(dAtA, i, uint64(len(m.SchemaName)))
-		i--
-		dAtA[i] = 0xa
+	if len(m.ColList) > 0 {
+		for _, s := range m.ColList {
+			dAtA[i] = 0x1a
+			i++
+			l = len(s)
+			for l >= 1<<7 {
+				dAtA[i] = uint8(uint64(l)&0x7f | 0x80)
+				l >>= 7
+				i++
+			}
+			dAtA[i] = uint8(l)
+			i++
+			i += copy(dAtA[i:], s)
+		}
 	}
-	return len(dAtA) - i, nil
+	if len(m.Block) > 0 {
+		dAtA[i] = 0x22
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(len(m.Block)))
+		i += copy(dAtA[i:], m.Block)
+	}
+	if m.XXX_unrecognized != nil {
+		i += copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	return i, nil
 }
 
 func (m *NodeInfo) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	n, err := m.MarshalTo(dAtA)
 	if err != nil {
 		return nil, err
 	}
@@ -2402,54 +2266,52 @@ func (m *NodeInfo) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *NodeInfo) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *NodeInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
+	var i int
 	_ = i
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	if len(m.Payload) > 0 {
-		for iNdEx := len(m.Payload) - 1; iNdEx >= 0; iNdEx-- {
-			i -= len(m.Payload[iNdEx])
-			copy(dAtA[i:], m.Payload[iNdEx])
-			i = encodeVarintPipeline(dAtA, i, uint64(len(m.Payload[iNdEx])))
-			i--
-			dAtA[i] = 0x22
-		}
-	}
-	if len(m.Addr) > 0 {
-		i -= len(m.Addr)
-		copy(dAtA[i:], m.Addr)
-		i = encodeVarintPipeline(dAtA, i, uint64(len(m.Addr)))
-		i--
-		dAtA[i] = 0x1a
+	if m.Mcpu != 0 {
+		dAtA[i] = 0x8
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Mcpu))
 	}
 	if len(m.Id) > 0 {
-		i -= len(m.Id)
-		copy(dAtA[i:], m.Id)
-		i = encodeVarintPipeline(dAtA, i, uint64(len(m.Id)))
-		i--
 		dAtA[i] = 0x12
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(len(m.Id)))
+		i += copy(dAtA[i:], m.Id)
 	}
-	if m.Mcpu != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Mcpu))
-		i--
-		dAtA[i] = 0x8
+	if len(m.Addr) > 0 {
+		dAtA[i] = 0x1a
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(len(m.Addr)))
+		i += copy(dAtA[i:], m.Addr)
 	}
-	return len(dAtA) - i, nil
+	if len(m.Payload) > 0 {
+		for _, s := range m.Payload {
+			dAtA[i] = 0x22
+			i++
+			l = len(s)
+			for l >= 1<<7 {
+				dAtA[i] = uint8(uint64(l)&0x7f | 0x80)
+				l >>= 7
+				i++
+			}
+			dAtA[i] = uint8(l)
+			i++
+			i += copy(dAtA[i:], s)
+		}
+	}
+	if m.XXX_unrecognized != nil {
+		i += copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	return i, nil
 }
 
 func (m *Pipeline) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	n, err := m.MarshalTo(dAtA)
 	if err != nil {
 		return nil, err
 	}
@@ -2457,121 +2319,103 @@ func (m *Pipeline) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *Pipeline) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *Pipeline) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
+	var i int
 	_ = i
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
+	if m.PipelineType != 0 {
+		dAtA[i] = 0x8
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.PipelineType))
 	}
-	if m.PushDownInfo != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.PushDownInfo))
-		i--
-		dAtA[i] = 0x48
+	if m.PipelineId != 0 {
+		dAtA[i] = 0x10
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.PipelineId))
 	}
-	if m.Node != nil {
-		{
-			size, err := m.Node.MarshalToSizedBuffer(dAtA[:i])
+	if m.Qry != nil {
+		dAtA[i] = 0x1a
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Qry.ProtoSize()))
+		n33, err33 := m.Qry.MarshalTo(dAtA[i:])
+		if err33 != nil {
+			return 0, err33
+		}
+		i += n33
+	}
+	if m.DataSource != nil {
+		dAtA[i] = 0x22
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.DataSource.ProtoSize()))
+		n34, err34 := m.DataSource.MarshalTo(dAtA[i:])
+		if err34 != nil {
+			return 0, err34
+		}
+		i += n34
+	}
+	if len(m.Children) > 0 {
+		for _, msg := range m.Children {
+			dAtA[i] = 0x2a
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
 			if err != nil {
 				return 0, err
 			}
-			i -= size
-			i = encodeVarintPipeline(dAtA, i, uint64(size))
+			i += n
 		}
-		i--
-		dAtA[i] = 0x42
+	}
+	if len(m.InstructionList) > 0 {
+		for _, msg := range m.InstructionList {
+			dAtA[i] = 0x32
+			i++
+			i = encodeVarintPipeline(dAtA, i, uint64(msg.ProtoSize()))
+			n, err := msg.MarshalTo(dAtA[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
 	}
 	if m.IsEnd {
-		i--
+		dAtA[i] = 0x38
+		i++
 		if m.IsEnd {
 			dAtA[i] = 1
 		} else {
 			dAtA[i] = 0
 		}
-		i--
-		dAtA[i] = 0x38
+		i++
 	}
-	if len(m.InstructionList) > 0 {
-		for iNdEx := len(m.InstructionList) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.InstructionList[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x32
+	if m.Node != nil {
+		dAtA[i] = 0x42
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.Node.ProtoSize()))
+		n35, err35 := m.Node.MarshalTo(dAtA[i:])
+		if err35 != nil {
+			return 0, err35
 		}
+		i += n35
 	}
-	if len(m.Children) > 0 {
-		for iNdEx := len(m.Children) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.Children[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x2a
-		}
+	if m.PushDownInfo != 0 {
+		dAtA[i] = 0x48
+		i++
+		i = encodeVarintPipeline(dAtA, i, uint64(m.PushDownInfo))
 	}
-	if m.DataSource != nil {
-		{
-			size, err := m.DataSource.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintPipeline(dAtA, i, uint64(size))
-		}
-		i--
-		dAtA[i] = 0x22
+	if m.XXX_unrecognized != nil {
+		i += copy(dAtA[i:], m.XXX_unrecognized)
 	}
-	if m.Qry != nil {
-		{
-			size, err := m.Qry.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintPipeline(dAtA, i, uint64(size))
-		}
-		i--
-		dAtA[i] = 0x1a
-	}
-	if m.PipelineId != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.PipelineId))
-		i--
-		dAtA[i] = 0x10
-	}
-	if m.PipelineType != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.PipelineType))
-		i--
-		dAtA[i] = 0x8
-	}
-	return len(dAtA) - i, nil
+	return i, nil
 }
 
 func encodeVarintPipeline(dAtA []byte, offset int, v uint64) int {
-	offset -= sovPipeline(v)
-	base := offset
 	for v >= 1<<7 {
 		dAtA[offset] = uint8(v&0x7f | 0x80)
 		v >>= 7
 		offset++
 	}
 	dAtA[offset] = uint8(v)
-	return base
+	return offset + 1
 }
 func (m *Message) ProtoSize() (n int) {
 	if m == nil {
@@ -3252,7 +3096,10 @@ func (m *Message) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthPipeline
 			}
 			if (iNdEx + skippy) > l {
@@ -3399,7 +3246,10 @@ func (m *Dispatch) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthPipeline
 			}
 			if (iNdEx + skippy) > l {
@@ -3525,7 +3375,10 @@ func (m *Aggregate) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthPipeline
 			}
 			if (iNdEx + skippy) > l {
@@ -3736,7 +3589,10 @@ func (m *Group) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthPipeline
 			}
 			if (iNdEx + skippy) > l {
@@ -3969,7 +3825,10 @@ func (m *AntiJoin) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthPipeline
 			}
 			if (iNdEx + skippy) > l {
@@ -4278,7 +4137,10 @@ func (m *InnerJoin) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthPipeline
 			}
 			if (iNdEx + skippy) > l {
@@ -4621,7 +4483,10 @@ func (m *LeftJoin) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthPipeline
 			}
 			if (iNdEx + skippy) > l {
@@ -4854,7 +4719,10 @@ func (m *SemiJoin) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthPipeline
 			}
 			if (iNdEx + skippy) > l {
@@ -5197,7 +5065,10 @@ func (m *SingleJoin) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthPipeline
 			}
 			if (iNdEx + skippy) > l {
@@ -5400,7 +5271,10 @@ func (m *Product) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthPipeline
 			}
 			if (iNdEx + skippy) > l {
@@ -5919,7 +5793,10 @@ func (m *Instruction) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthPipeline
 			}
 			if (iNdEx + skippy) > l {
@@ -6098,7 +5975,10 @@ func (m *Source) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthPipeline
 			}
 			if (iNdEx + skippy) > l {
@@ -6264,7 +6144,10 @@ func (m *NodeInfo) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthPipeline
 			}
 			if (iNdEx + skippy) > l {
@@ -6568,7 +6451,10 @@ func (m *Pipeline) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthPipeline
 			}
 			if (iNdEx + skippy) > l {
@@ -6587,7 +6473,6 @@ func (m *Pipeline) Unmarshal(dAtA []byte) error {
 func skipPipeline(dAtA []byte) (n int, err error) {
 	l := len(dAtA)
 	iNdEx := 0
-	depth := 0
 	for iNdEx < l {
 		var wire uint64
 		for shift := uint(0); ; shift += 7 {
@@ -6619,8 +6504,10 @@ func skipPipeline(dAtA []byte) (n int, err error) {
 					break
 				}
 			}
+			return iNdEx, nil
 		case 1:
 			iNdEx += 8
+			return iNdEx, nil
 		case 2:
 			var length int
 			for shift := uint(0); ; shift += 7 {
@@ -6641,30 +6528,55 @@ func skipPipeline(dAtA []byte) (n int, err error) {
 				return 0, ErrInvalidLengthPipeline
 			}
 			iNdEx += length
-		case 3:
-			depth++
-		case 4:
-			if depth == 0 {
-				return 0, ErrUnexpectedEndOfGroupPipeline
+			if iNdEx < 0 {
+				return 0, ErrInvalidLengthPipeline
 			}
-			depth--
+			return iNdEx, nil
+		case 3:
+			for {
+				var innerWire uint64
+				var start int = iNdEx
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return 0, ErrIntOverflowPipeline
+					}
+					if iNdEx >= l {
+						return 0, io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					innerWire |= (uint64(b) & 0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				innerWireType := int(innerWire & 0x7)
+				if innerWireType == 4 {
+					break
+				}
+				next, err := skipPipeline(dAtA[start:])
+				if err != nil {
+					return 0, err
+				}
+				iNdEx = start + next
+				if iNdEx < 0 {
+					return 0, ErrInvalidLengthPipeline
+				}
+			}
+			return iNdEx, nil
+		case 4:
+			return iNdEx, nil
 		case 5:
 			iNdEx += 4
+			return iNdEx, nil
 		default:
 			return 0, fmt.Errorf("proto: illegal wireType %d", wireType)
 		}
-		if iNdEx < 0 {
-			return 0, ErrInvalidLengthPipeline
-		}
-		if depth == 0 {
-			return iNdEx, nil
-		}
 	}
-	return 0, io.ErrUnexpectedEOF
+	panic("unreachable")
 }
 
 var (
-	ErrInvalidLengthPipeline        = fmt.Errorf("proto: negative length found during unmarshaling")
-	ErrIntOverflowPipeline          = fmt.Errorf("proto: integer overflow")
-	ErrUnexpectedEndOfGroupPipeline = fmt.Errorf("proto: unexpected end of group")
+	ErrInvalidLengthPipeline = fmt.Errorf("proto: negative length found during unmarshaling")
+	ErrIntOverflowPipeline   = fmt.Errorf("proto: integer overflow")
 )
