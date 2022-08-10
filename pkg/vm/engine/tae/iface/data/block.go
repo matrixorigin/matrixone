@@ -16,6 +16,7 @@ package data
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
@@ -74,8 +75,8 @@ type Block interface {
 	Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v any) (txnif.UpdateNode, error)
 
 	GetTotalChanges() int
-	CollectChangesInRange(startTs, endTs uint64) (*model.BlockView, error)
-	CollectAppendLogIndexes(startTs, endTs uint64) ([]*wal.Index, error)
+	CollectChangesInRange(startTs, endTs types.TS) (*model.BlockView, error)
+	CollectAppendLogIndexes(startTs, endTs types.TS) ([]*wal.Index, error)
 
 	BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap) error
 	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
@@ -83,13 +84,13 @@ type Block interface {
 	PPString(level common.PPLevel, depth int, prefix string) string
 	GetBlockFile() file.Block
 
-	SetMaxCheckpointTS(ts uint64)
-	GetMaxCheckpointTS() uint64
-	GetMaxVisibleTS() uint64
+	SetMaxCheckpointTS(ts types.TS)
+	GetMaxCheckpointTS() types.TS
+	GetMaxVisibleTS() types.TS
 
-	CheckpointWALClosure(endTs uint64) tasks.FuncT
-	SyncBlockDataClosure(ts uint64, rows uint32) tasks.FuncT
-	FlushColumnDataClosure(ts uint64, colIdx int, colData containers.Vector, sync bool) tasks.FuncT
+	CheckpointWALClosure(endTs types.TS) tasks.FuncT
+	SyncBlockDataClosure(ts types.TS, rows uint32) tasks.FuncT
+	FlushColumnDataClosure(ts types.TS, colIdx int, colData containers.Vector, sync bool) tasks.FuncT
 	ForceCompact() error
 	Destroy() error
 	ReplayIndex() error

@@ -17,7 +17,6 @@ package minus
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 )
 
 const (
@@ -31,23 +30,6 @@ type Argument struct {
 
 	// hash table bucket related information.
 	IBucket, NBucket uint64
-}
-
-func (arg *Argument) MarshalBinary() ([]byte, error) {
-	return encoding.Encode(&Argument{
-		IBucket: arg.IBucket,
-		NBucket: arg.NBucket,
-	})
-}
-
-func (arg *Argument) UnmarshalBinary(data []byte) error {
-	rs := new(Argument)
-	if err := encoding.Decode(data, rs); err != nil {
-		return err
-	}
-	arg.IBucket = rs.IBucket
-	arg.NBucket = rs.NBucket
-	return nil
 }
 
 type container struct {
