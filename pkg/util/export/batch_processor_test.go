@@ -35,7 +35,7 @@ import (
 
 func init() {
 	logutil.SetupMOLogger(&logutil.LogConfig{
-		Level:       zapcore.InfoLevel.String(),
+		Level:       zapcore.DebugLevel.String(),
 		Format:      "console",
 		Filename:    config.GlobalSystemVariables.GetLogFilename(),
 		MaxSize:     int(config.GlobalSystemVariables.GetLogMaxSize()),
@@ -79,10 +79,11 @@ func (s *numBuffer) Add(item batchpipe.HasName) {
 	s.arr = append(s.arr, item)
 	if s.signal != nil {
 		val := int(*item.(*Num))
-		if val != len(s.arr) && (val-3) != len(s.arr) {
-			panic(fmt.Errorf("len not rignt, elem: %d, len: %d", val, len(s.arr)))
+		length := len(s.arr)
+		logutil.Infof("accept: %v, len: %d", *item.(*Num), length)
+		if (val <= 3 && val != length) && (val-3) != length {
+			panic(fmt.Errorf("len not rignt, elem: %d, len: %d", val, length))
 		}
-		logutil.Infof("accept: %v, len: %d", *item.(*Num), len(s.arr))
 		s.signal()
 	}
 }
@@ -105,12 +106,12 @@ func (s *numBuffer) ShouldFlush() bool {
 func (s *numBuffer) GetBatch(buf *bytes.Buffer) any {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	buf.Reset()
 	if len(s.arr) == 0 {
 		return ""
 	}
 
 	logutil.Infof("GetBatch, len: %d", len(s.arr))
+	buf.Reset()
 	for _, item := range s.arr {
 		s, ok := item.(*Num)
 		if !ok {
@@ -120,6 +121,7 @@ func (s *numBuffer) GetBatch(buf *bytes.Buffer) any {
 		buf.WriteString(fmt.Sprintf("%d", *s))
 		buf.WriteString("),")
 	}
+	logutil.Infof("GetBatch: %s", buf.String())
 	return string(buf.Next(buf.Len() - 1))
 }
 
@@ -154,7 +156,10 @@ func Test_newBufferHolder(t *testing.T) {
 	}
 	go func() {
 		for {
-			b := <-signalC
+			b, ok := <-signalC
+			if !ok {
+				break
+			}
 			b.Stop()
 			if val, ok := b.GetBatch(byteBuf); !ok {
 				t.Errorf("GenBatch failed by in readwrite mode")
@@ -204,7 +209,7 @@ func Test_newBufferHolder(t *testing.T) {
 			}
 			got := <-ch
 			require.Equal(t, got, tt.want)
-			buf.Reset()
+			buf.FlushAndReset()
 
 			for _, v := range tt.args.elemsReminder {
 				buf.Add(v)
@@ -217,10 +222,11 @@ func Test_newBufferHolder(t *testing.T) {
 			buf.Stop()
 		})
 	}
+	close(signalC)
 }
 
 func TestNewMOCollector(t *testing.T) {
-	ch := make(chan string, 1)
+	ch := make(chan string, 3)
 	errors.SetErrorReporter(func(ctx context.Context, err error, i int) {
 		t.Logf("TestNewMOCollector::ErrorReport: %+v", err)
 	})
@@ -247,6 +253,11 @@ func TestNewMOCollector(t *testing.T) {
 	collector.Collect(DefaultContext(), newNum(6))
 	acceptSignal()
 	collector.Stop(true)
+	logutil.GetGlobalLogger().Sync()
 	got = <-ch
 	require.Equal(t, `(4),(5),(6)`, got)
+	for i := len(ch); i > 0; i-- {
+		got = <-ch
+		t.Logf("left ch: %s", got)
+	}
 }

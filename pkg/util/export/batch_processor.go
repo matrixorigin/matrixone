@@ -41,7 +41,7 @@ type bufferHolder struct {
 	trigger *time.Timer
 
 	mux      sync.RWMutex
-	readonly int32
+	readonly uint32
 
 	batch *any
 }
@@ -64,7 +64,7 @@ func newBufferHolder(name batchpipe.HasName, impl batchpipe.PipeImpl[batchpipe.H
 	defer b.mux.Unlock()
 	reminder := b.buffer.(batchpipe.Reminder)
 	b.trigger = time.AfterFunc(reminder.RemindNextAfter(), func() {
-		if atomic.LoadInt32(&b.readonly) == READONLY {
+		if atomic.LoadUint32(&b.readonly) == READONLY {
 			logutil.Debugf("buffer %s trigger time, pass.", b.name)
 			return
 		}
@@ -76,11 +76,12 @@ func newBufferHolder(name batchpipe.HasName, impl batchpipe.PipeImpl[batchpipe.H
 // Add directly call buffer.Add(), while bufferHolder is NOT readonly
 func (b *bufferHolder) Add(item batchpipe.HasName) {
 	b.mux.RLock()
-	for atomic.LoadInt32(&b.readonly) == READONLY {
+	for atomic.LoadUint32(&b.readonly) == READONLY {
 		b.mux.RUnlock()
 		time.Sleep(time.Millisecond)
 		b.mux.RLock()
 	}
+	logutil.Debugf("Add get lock: readonly: %d", atomic.LoadUint32(&b.readonly))
 	defer b.mux.RUnlock()
 	b.buffer.Add(item)
 	if b.buffer.ShouldFlush() {
@@ -92,42 +93,45 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 func (b *bufferHolder) Stop() bool {
 	b.mux.RLock()
 	defer b.mux.RUnlock()
-	if !atomic.CompareAndSwapInt32(&b.readonly, READWRITE, READONLY) {
+	if !atomic.CompareAndSwapUint32(&b.readonly, READWRITE, READONLY) {
 		return false
 	}
 	b.trigger.Stop()
 	return true
 }
 
+func (b *bufferHolder) StopTrigger() bool {
+	b.mux.Lock()
+	defer b.mux.Unlock()
+	return b.trigger.Stop()
+}
+
 func (b *bufferHolder) GetBatch(buf *bytes.Buffer) (any, bool) {
 	b.mux.Lock()
 	defer b.mux.Unlock()
-	if atomic.LoadInt32(&b.readonly) != READONLY {
+	if atomic.LoadUint32(&b.readonly) != READONLY {
 		return nil, false
 	}
 	return b.buffer.GetBatch(buf), true
 }
 
-func (b *bufferHolder) Flush() bool {
+func (b *bufferHolder) FlushAndReset() bool {
 	b.mux.Lock()
 	defer b.mux.Unlock()
-	if atomic.LoadInt32(&b.readonly) != READONLY {
+	if atomic.LoadUint32(&b.readonly) != READONLY {
 		return false
 	}
-	var flush = b.impl.NewItemBatchHandler()
-	flush(*b.batch)
-	return true
-}
-
-func (b *bufferHolder) Reset() {
-	b.mux.Lock()
-	defer b.mux.Unlock()
-	if !atomic.CompareAndSwapInt32(&b.readonly, READONLY, READWRITE) {
-		return
+	if b.batch != nil {
+		var flush = b.impl.NewItemBatchHandler()
+		flush(*b.batch)
+	} else {
+		logutil.Debugf("batch is nil")
 	}
 	b.resetTrigger()
 	b.buffer.Reset()
 	b.batch = nil
+	atomic.StoreUint32(&b.readonly, READWRITE)
+	return true
 }
 
 func (b *bufferHolder) resetTrigger() {
@@ -211,7 +215,7 @@ func (c *MOCollector) Start() bool {
 func (c *MOCollector) doCollect(idx int) {
 	defer func() {
 		if err := recover(); err != nil {
-			errors.ReportPanic(DefaultContext(), err)
+			_ = errors.ReportPanic(DefaultContext(), err)
 		}
 	}()
 	defer c.stopWait.Done()
@@ -235,7 +239,7 @@ loop:
 				c.mux.Unlock()
 			}
 			c.mux.RLock()
-			c.buffers[i.GetName()].buffer.Add(i)
+			c.buffers[i.GetName()].Add(i)
 			c.mux.RUnlock()
 		case <-c.stopCh:
 			break loop
@@ -255,7 +259,7 @@ func awakeBuffer(c *MOCollector) func(holder *bufferHolder) {
 func (c *MOCollector) doGenerate(idx int) {
 	defer func() {
 		if err := recover(); err != nil {
-			errors.ReportPanic(DefaultContext(), err)
+			_ = errors.ReportPanic(DefaultContext(), err)
 		}
 	}()
 	defer c.stopWait.Done()
@@ -266,7 +270,10 @@ loop:
 		select {
 		case holder := <-c.awakeGenerate:
 			c.genBatch(holder, buf)
-			c.awakeBatch <- holder
+			select {
+			case c.awakeBatch <- holder:
+			case <-c.stopCh:
+			}
 		case <-c.stopCh:
 			break loop
 		}
@@ -276,12 +283,12 @@ loop:
 
 // doExport handle BatchRequest
 func (c *MOCollector) doExport(idx int) {
-	defer c.stopWait.Done()
 	defer func() {
 		if err := recover(); err != nil {
-			errors.ReportPanic(DefaultContext(), err)
+			_ = errors.ReportPanic(DefaultContext(), err)
 		}
 	}()
+	defer c.stopWait.Done()
 	logutil.Debugf("doExport %dth: start", idx)
 loop:
 	for {
@@ -289,6 +296,11 @@ loop:
 		case holder := <-c.awakeBatch:
 			c.handleBatch(holder)
 		case <-c.stopCh:
+			c.mux.Lock()
+			for len(c.awakeBatch) > 0 {
+				<-c.awakeBatch
+			}
+			c.mux.Unlock()
 			break loop
 		}
 	}
@@ -297,7 +309,7 @@ loop:
 
 func (c *MOCollector) genBatch(holder *bufferHolder, buf *bytes.Buffer) {
 	if ok := holder.Stop(); !ok {
-		logutil.Warnf("buffer %s: trigger meet sizeThreshold", holder.name)
+		logutil.Debugf("genBatch: buffer %s: already stop", holder.name)
 		return
 	}
 	if batch, ok := holder.GetBatch(buf); ok {
@@ -306,8 +318,7 @@ func (c *MOCollector) genBatch(holder *bufferHolder, buf *bytes.Buffer) {
 }
 
 func (c *MOCollector) handleBatch(holder *bufferHolder) {
-	holder.Flush()
-	holder.Reset()
+	holder.FlushAndReset()
 }
 
 func (c *MOCollector) Stop(graceful bool) error {
@@ -318,10 +329,12 @@ func (c *MOCollector) Stop(graceful bool) error {
 			logutil.Debugf("doCollect left %d job", len(c.awakeCollect))
 			time.Sleep(250 * time.Second)
 		}
+		for _, buffer := range c.buffers {
+			_ = buffer.StopTrigger()
+		}
 		close(c.stopCh)
 		c.stopWait.Wait()
 		for _, buffer := range c.buffers {
-			//logutil.Infof("buffer count: %d", buffer.buffer.IsEmpty())
 			c.genBatch(buffer, buf)
 			c.handleBatch(buffer)
 		}
