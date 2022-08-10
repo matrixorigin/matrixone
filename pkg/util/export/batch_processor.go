@@ -81,7 +81,6 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 		time.Sleep(time.Millisecond)
 		b.mux.RLock()
 	}
-	logutil.Debugf("Add get lock: readonly: %d", atomic.LoadUint32(&b.readonly))
 	defer b.mux.RUnlock()
 	b.buffer.Add(item)
 	if b.buffer.ShouldFlush() {
