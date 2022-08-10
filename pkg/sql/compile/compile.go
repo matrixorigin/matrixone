@@ -88,7 +88,7 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return nil
 	}
 
-	//	PrintScope(nil, []*Scope{c.scope})
+	//PrintScope(nil, []*Scope{c.scope})
 
 	switch c.scope.Magic {
 	case Normal:
@@ -406,6 +406,48 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		c.anal.curr = curr
 		ss = c.compileSort(n, ss)
 		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
+	case plan.Node_UNION:
+		curr := c.anal.curr
+		c.anal.curr = int(n.Children[0])
+		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.anal.curr = int(n.Children[1])
+		children, err := c.compilePlanScope(ns[n.Children[1]], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.anal.curr = curr
+		return c.compileSort(n, c.compileUnion(n, ss, children, ns)), nil
+	case plan.Node_MINUS:
+		curr := c.anal.curr
+		c.anal.curr = int(n.Children[0])
+		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.anal.curr = int(n.Children[1])
+		children, err := c.compilePlanScope(ns[n.Children[1]], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.anal.curr = curr
+		return c.compileSort(n, c.compileMinusAndIntersect(n, ss, children, n.NodeType)), nil
+	case plan.Node_UNION_ALL:
+		curr := c.anal.curr
+		c.anal.curr = int(n.Children[0])
+		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.anal.curr = int(n.Children[1])
+		children, err := c.compilePlanScope(ns[n.Children[1]], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.anal.curr = curr
+		return c.compileSort(n, c.compileUnionAll(n, ss, children)), nil
 	case plan.Node_DELETE:
 		if n.DeleteTablesCtx[0].CanTruncate {
 			return nil, nil
@@ -483,6 +525,53 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 		})
 	}
 	return ss
+}
+
+func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns []*plan.Node) []*Scope {
+	ss = append(ss, children...)
+	rs := c.newGroupScopeList(validScopeCount(ss))
+	regs := extraGroupRegisters(rs)
+	for i := range ss {
+		if !ss[i].IsEnd {
+			ss[i].appendInstruction(vm.Instruction{
+				Op:  vm.Dispatch,
+				Arg: constructDispatch(true, regs),
+			})
+			ss[i].IsEnd = true
+		}
+	}
+	gn := new(plan.Node)
+	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
+	copy(gn.GroupBy, n.ProjectList)
+	for i := range rs {
+		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+			Op:  vm.Group,
+			Idx: c.anal.curr,
+			Arg: constructGroup(gn, n, i, len(rs), true),
+		})
+	}
+	return []*Scope{c.newMergeScope(append(rs, ss...))}
+}
+
+func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children []*Scope, nodeType plan.Node_NodeType) []*Scope {
+	rs, left, right := c.newJoinScopeListWithBucket(c.newGroupScopeList(2), ss, children)
+	switch nodeType {
+	case plan.Node_MINUS:
+		for i := range rs {
+			rs[i].Instructions[0] = vm.Instruction{
+				Op:  vm.Minus,
+				Idx: c.anal.curr,
+				Arg: constructMinus(n, c.proc, i, len(rs)),
+			}
+		}
+	}
+	return []*Scope{c.newMergeScope(append(append(rs, left), right))}
+}
+
+func (c *Compile) compileUnionAll(n *plan.Node, ss []*Scope, children []*Scope) []*Scope {
+	rs := c.newMergeScope(append(ss, children...))
+	rs.Instructions[0].Idx = c.anal.curr
+	return []*Scope{rs}
 }
 
 func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
@@ -769,6 +858,24 @@ func (c *Compile) newGroupScopeListWithNode(mcpu, childrenCount int) []*Scope {
 	return ss
 }
 
+func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) ([]*Scope, *Scope, *Scope) {
+	left := c.newMergeScope(ss)
+	right := c.newMergeScope(children)
+	leftRegs := extraJoinRegisters(rs, 0)
+	left.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructDispatch(true, leftRegs),
+	})
+	rightRegs := extraJoinRegisters(rs, 1)
+	right.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructDispatch(true, rightRegs),
+	})
+	left.IsEnd = true
+	right.IsEnd = true
+	return rs, left, right
+}
+
 func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) ([]*Scope, *Scope) {
 	regs := make([]*process.WaitRegister, 0, len(ss))
 	chp := c.newMergeScope(children)
@@ -853,6 +960,18 @@ func extraGroupRegisters(ss []*Scope) []*process.WaitRegister {
 			continue
 		}
 		regs = append(regs, s.Proc.Reg.MergeReceivers...)
+	}
+	return regs
+}
+
+func extraJoinRegisters(ss []*Scope, i int) []*process.WaitRegister {
+	var regs []*process.WaitRegister
+
+	for _, s := range ss {
+		if s.IsEnd {
+			continue
+		}
+		regs = append(regs, s.Proc.Reg.MergeReceivers[i])
 	}
 	return regs
 }
