@@ -16,6 +16,7 @@ package minus
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -93,10 +94,11 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze, index int) error {
 	for {
 		bat := <-proc.Reg.MergeReceivers[index].Ch
-		// the last batch of block.
+		// the last batch of pipeline.
 		if bat == nil {
 			break
 		}
+
 		// just an empty batch.
 		if len(bat.Zs) == 0 {
 			continue
