@@ -425,7 +425,7 @@ func (b *buffer2Sql) Add(i bp.HasName) {
 	} else {
 		b.filterItemFunc(item)
 		b.buf = append(b.buf, item)
-		b.size += item.Size()
+		atomic.AddInt64(&b.size, item.Size())
 	}
 }
 
