@@ -14,7 +14,9 @@
 
 package common
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+)
 
 var (
 	GlobalSeqNum uint64 = 0
