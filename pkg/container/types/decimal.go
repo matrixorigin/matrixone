@@ -258,7 +258,7 @@ func (d Decimal128) ToInt64() int64 {
 	if rc == 0 {
 		return int64(ret)
 	}
-	panic(moerr.NewError(int32(rc), "error when converting decimal128 to float64"))
+	panic(moerr.NewError(int32(rc), "error when converting decimal128 to int64"))
 }
 
 func (d Decimal128) String() string {

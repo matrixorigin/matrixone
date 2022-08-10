@@ -34,6 +34,7 @@ N >= 0, floor to the Nth placeholder after decimal point
 */
 
 import (
+	"fmt"
 	"math"
 )
 
@@ -278,6 +279,7 @@ func floorFloat64(xs, rs []float64, digits int64) []float64 {
 		for i := range xs {
 			rs[i] = math.Floor(xs[i])
 		}
+		fmt.Println(digits)
 	} else {
 		scale := math.Pow10(int(digits))
 		for i := range xs {
