@@ -370,7 +370,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			return nil, err
 		}
 		c.anal.curr = curr
-		if len(n.GroupBy) == 0 {
+		if len(n.GroupBy) == 0 || !c.info.WithBigMem {
 			ss = c.compileAgg(n, ss, ns)
 		} else {
 			ss = c.compileGroup(n, ss, ns)
