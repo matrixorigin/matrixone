@@ -965,8 +965,7 @@ func extraGroupRegisters(ss []*Scope) []*process.WaitRegister {
 }
 
 func extraJoinRegisters(ss []*Scope, i int) []*process.WaitRegister {
-	var regs []*process.WaitRegister
-
+	regs := make([]*process.WaitRegister, 0, len(ss))
 	for _, s := range ss {
 		if s.IsEnd {
 			continue
