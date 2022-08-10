@@ -17,6 +17,7 @@ package export
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/errors"
 )
 
 // bufferHolder
@@ -212,34 +212,32 @@ func (c *MOCollector) Start() bool {
 // doCollect handle all item accept work, send it to the corresponding buffer
 // goroutine worker
 func (c *MOCollector) doCollect(idx int) {
-	defer func() {
-		if err := recover(); err != nil {
-			_ = errors.ReportPanic(DefaultContext(), err)
-		}
-	}()
 	defer c.stopWait.Done()
 	logutil.Debugf("doCollect %dth: start", idx)
 loop:
 	for {
 		select {
 		case i := <-c.awakeCollect:
-			if _, has := c.buffers[i.GetName()]; !has {
+			c.mux.RLock()
+			if buf, has := c.buffers[i.GetName()]; !has {
 				logutil.Debugf("doCollect %dth: init buffer for %s", idx, i.GetName())
+				c.mux.RUnlock()
 				c.mux.Lock()
 				if _, has := c.buffers[i.GetName()]; !has {
 					logutil.Debugf("doCollect %dth: init buffer done.", idx)
 					if impl, has := gPipeImplHolder.Get(i.GetName()); !has {
-						// TODO: ReportError
-						panic("unknown item type")
+						panic(fmt.Errorf("unknown item type: %s", i.GetName()))
 					} else {
-						c.buffers[i.GetName()] = newBufferHolder(i, impl, awakeBuffer(c))
+						buf = newBufferHolder(i, impl, awakeBuffer(c))
+						c.buffers[i.GetName()] = buf
+						buf.Add(i)
 					}
 				}
 				c.mux.Unlock()
+			} else {
+				buf.Add(i)
+				c.mux.RUnlock()
 			}
-			c.mux.RLock()
-			c.buffers[i.GetName()].Add(i)
-			c.mux.RUnlock()
 		case <-c.stopCh:
 			break loop
 		}
@@ -256,11 +254,6 @@ func awakeBuffer(c *MOCollector) func(holder *bufferHolder) {
 // doGenerate handle buffer gen BatchRequest, which could be anything
 // goroutine worker
 func (c *MOCollector) doGenerate(idx int) {
-	defer func() {
-		if err := recover(); err != nil {
-			_ = errors.ReportPanic(DefaultContext(), err)
-		}
-	}()
 	defer c.stopWait.Done()
 	var buf = new(bytes.Buffer)
 	logutil.Debugf("doGenerate %dth: start", idx)
@@ -282,11 +275,6 @@ loop:
 
 // doExport handle BatchRequest
 func (c *MOCollector) doExport(idx int) {
-	defer func() {
-		if err := recover(); err != nil {
-			_ = errors.ReportPanic(DefaultContext(), err)
-		}
-	}()
 	defer c.stopWait.Done()
 	logutil.Debugf("doExport %dth: start", idx)
 loop:
@@ -340,38 +328,6 @@ func (c *MOCollector) Stop(graceful bool) error {
 	})
 	return err
 }
-
-/*
-// ForceFlush exports all ended spans that have not yet been exported.
-func (bsp *batchSpanProcessor) ForceFlush(ctx context.Context) error {
-	var err error
-	if bsp.e != nil {
-		flushCh := make(chan struct{})
-		if bsp.enqueueBlockOnQueueFull(ctx, forceFlushSpan{flushed: flushCh}) {
-			select {
-			case <-flushCh:
-				// Processed any items in queue prior to ForceFlush being called
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-
-		wait := make(chan error)
-		go func() {
-			wait <- bsp.exportSpans(ctx)
-			close(wait)
-		}()
-		// Wait until the export is finished or the context is cancelled/timed out
-		select {
-		case err = <-wait:
-		case <-ctx.Done():
-			err = ctx.Err()
-		}
-	}
-	return err
-}
-
-*/
 
 var _ BatchProcessor = &noopBatchProcessor{}
 
