@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"go/constant"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1013,7 +1014,8 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_char:
 		if typ != nil && typ.Id == plan.T_timestamp {
-			val, err := types.ParseTimestamp(astExpr.String(), typ.Precision)
+			// FIXME
+			val, err := types.ParseTimestamp(time.Local, astExpr.String(), typ.Precision)
 			if err != nil {
 				return nil, err
 			}

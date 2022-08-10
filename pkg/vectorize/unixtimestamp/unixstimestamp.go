@@ -14,20 +14,24 @@
 
 package unixtimestamp
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
 
 var (
-	UnixTimestamp func([]types.Datetime, []int64) []int64
+	UnixTimestamp func(*time.Location, []types.Datetime, []int64) []int64
 )
 
 func init() {
 	UnixTimestamp = unixTimestamp
 }
 
-func unixTimestamp(xs []types.Datetime, rs []int64) []int64 {
+func unixTimestamp(loc *time.Location, xs []types.Datetime, rs []int64) []int64 {
 	for i := range xs {
-		rs[i] = xs[i].UnixTimestamp()
-		if rs[i] < 0 || rs[i] > 32536771199 {
+		rs[i] = xs[i].UnixTimestamp(loc)
+		if rs[i] < 0 {
 			rs[i] = 0
 		}
 	}

@@ -14,15 +14,17 @@
 package date_sub
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 var (
-	DateSub       func([]types.Date, []int64, []int64, *nulls.Nulls, *nulls.Nulls, *nulls.Nulls, []types.Date) ([]types.Date, error)
-	DatetimeSub   func([]types.Datetime, []int64, []int64, *nulls.Nulls, *nulls.Nulls, *nulls.Nulls, []types.Datetime) ([]types.Datetime, error)
-	DateStringSub func(*types.Bytes, []int64, []int64, *nulls.Nulls, *nulls.Nulls, *nulls.Nulls, []types.Datetime) ([]types.Datetime, error)
-	TimestampSub  func([]types.Timestamp, []int64, []int64, *nulls.Nulls, *nulls.Nulls, *nulls.Nulls, []types.Timestamp) ([]types.Timestamp, error)
+	DateSub       func(*time.Location, []types.Date, []int64, []int64, *nulls.Nulls, *nulls.Nulls, *nulls.Nulls, []types.Date) ([]types.Date, error)
+	DatetimeSub   func(*time.Location, []types.Datetime, []int64, []int64, *nulls.Nulls, *nulls.Nulls, *nulls.Nulls, []types.Datetime) ([]types.Datetime, error)
+	DateStringSub func(*time.Location, *types.Bytes, []int64, []int64, *nulls.Nulls, *nulls.Nulls, *nulls.Nulls, []types.Datetime) ([]types.Datetime, error)
+	TimestampSub  func(*time.Location, []types.Timestamp, []int64, []int64, *nulls.Nulls, *nulls.Nulls, *nulls.Nulls, []types.Timestamp) ([]types.Timestamp, error)
 )
 
 func init() {
@@ -32,7 +34,7 @@ func init() {
 	TimestampSub = timestampSub
 }
 
-func dateSub(xs []types.Date, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Date) ([]types.Date, error) {
+func dateSub(loc *time.Location, xs []types.Date, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Date) ([]types.Date, error) {
 	if len(ys) == 0 || len(zs) == 0 {
 		for i := range xs {
 			nulls.Add(rns, uint64(i))
@@ -56,7 +58,7 @@ func dateSub(xs []types.Date, ys []int64, zs []int64, xns *nulls.Nulls, yns *nul
 				nulls.Add(rns, uint64(i))
 				continue
 			}
-			date, success := d.ToTime().AddInterval(-ys[i], types.IntervalType(zs[0]), types.DateType)
+			date, success := d.ToDatetime().AddInterval(loc, -ys[i], types.IntervalType(zs[0]), types.DateType)
 			if success {
 				rs[i] = date.ToDate()
 			} else {
@@ -69,7 +71,7 @@ func dateSub(xs []types.Date, ys []int64, zs []int64, xns *nulls.Nulls, yns *nul
 				nulls.Add(rns, uint64(i))
 				continue
 			}
-			date, success := xs[0].ToTime().AddInterval(-d, types.IntervalType(zs[0]), types.DateType)
+			date, success := xs[0].ToDatetime().AddInterval(loc, -d, types.IntervalType(zs[0]), types.DateType)
 			if success {
 				rs[i] = date.ToDate()
 			} else {
@@ -82,7 +84,7 @@ func dateSub(xs []types.Date, ys []int64, zs []int64, xns *nulls.Nulls, yns *nul
 				nulls.Add(rns, uint64(i))
 				continue
 			}
-			date, success := d.ToTime().AddInterval(-ys[0], types.IntervalType(zs[0]), types.DateType)
+			date, success := d.ToDatetime().AddInterval(loc, -ys[0], types.IntervalType(zs[0]), types.DateType)
 			if success {
 				rs[i] = date.ToDate()
 			} else {
@@ -93,7 +95,7 @@ func dateSub(xs []types.Date, ys []int64, zs []int64, xns *nulls.Nulls, yns *nul
 	return rs, nil
 }
 
-func datetimeSub(xs []types.Datetime, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Datetime) ([]types.Datetime, error) {
+func datetimeSub(loc *time.Location, xs []types.Datetime, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Datetime) ([]types.Datetime, error) {
 	if len(ys) == 0 || len(zs) == 0 {
 		for i := range xs {
 			nulls.Add(rns, uint64(i))
@@ -117,7 +119,7 @@ func datetimeSub(xs []types.Datetime, ys []int64, zs []int64, xns *nulls.Nulls, 
 				nulls.Add(rns, uint64(i))
 				continue
 			}
-			date, success := d.AddInterval(-ys[i], types.IntervalType(zs[0]), types.DateTimeType)
+			date, success := d.AddInterval(loc, -ys[i], types.IntervalType(zs[0]), types.DateTimeType)
 			if success {
 				rs[i] = date
 			} else {
@@ -130,7 +132,7 @@ func datetimeSub(xs []types.Datetime, ys []int64, zs []int64, xns *nulls.Nulls, 
 				nulls.Add(rns, uint64(i))
 				continue
 			}
-			date, success := xs[0].AddInterval(-d, types.IntervalType(zs[0]), types.DateTimeType)
+			date, success := xs[0].AddInterval(loc, -d, types.IntervalType(zs[0]), types.DateTimeType)
 			if success {
 				rs[i] = date
 			} else {
@@ -143,7 +145,7 @@ func datetimeSub(xs []types.Datetime, ys []int64, zs []int64, xns *nulls.Nulls, 
 				nulls.Add(rns, uint64(i))
 				continue
 			}
-			date, success := d.AddInterval(-ys[0], types.IntervalType(zs[0]), types.DateTimeType)
+			date, success := d.AddInterval(loc, -ys[0], types.IntervalType(zs[0]), types.DateTimeType)
 			if success {
 				rs[i] = date
 			} else {
@@ -154,7 +156,7 @@ func datetimeSub(xs []types.Datetime, ys []int64, zs []int64, xns *nulls.Nulls, 
 	return rs, nil
 }
 
-func dateStringSub(xs *types.Bytes, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Datetime) ([]types.Datetime, error) {
+func dateStringSub(loc *time.Location, xs *types.Bytes, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Datetime) ([]types.Datetime, error) {
 	if len(ys) == 0 || len(zs) == 0 {
 		for i := range xs.Lengths {
 			nulls.Add(rns, uint64(i))
@@ -191,7 +193,7 @@ func dateStringSub(xs *types.Bytes, ys []int64, zs []int64, xns *nulls.Nulls, yn
 				nulls.Add(rns, uint64(i))
 				continue
 			}
-			date, success := d.AddInterval(-ys[i], types.IntervalType(zs[0]), types.DateTimeType)
+			date, success := d.AddInterval(loc, -ys[i], types.IntervalType(zs[0]), types.DateTimeType)
 			if success {
 				rs[i] = date
 			} else {
@@ -204,7 +206,7 @@ func dateStringSub(xs *types.Bytes, ys []int64, zs []int64, xns *nulls.Nulls, yn
 				nulls.Add(rns, uint64(i))
 				continue
 			}
-			date, success := ds[0].AddInterval(-d, types.IntervalType(zs[0]), types.DateTimeType)
+			date, success := ds[0].AddInterval(loc, -d, types.IntervalType(zs[0]), types.DateTimeType)
 			if success {
 				rs[i] = date
 			} else {
@@ -217,7 +219,7 @@ func dateStringSub(xs *types.Bytes, ys []int64, zs []int64, xns *nulls.Nulls, yn
 				nulls.Add(rns, uint64(i))
 				continue
 			}
-			date, success := d.AddInterval(-ys[0], types.IntervalType(zs[0]), types.DateTimeType)
+			date, success := d.AddInterval(loc, -ys[0], types.IntervalType(zs[0]), types.DateTimeType)
 			if success {
 				rs[i] = date
 			} else {
@@ -228,7 +230,7 @@ func dateStringSub(xs *types.Bytes, ys []int64, zs []int64, xns *nulls.Nulls, yn
 	return rs, nil
 }
 
-func timestampSub(xs []types.Timestamp, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Timestamp) ([]types.Timestamp, error) {
+func timestampSub(loc *time.Location, xs []types.Timestamp, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Timestamp) ([]types.Timestamp, error) {
 	if len(ys) == 0 || len(zs) == 0 {
 		for i := range xs {
 			nulls.Add(rns, uint64(i))
@@ -256,7 +258,7 @@ func timestampSub(xs []types.Timestamp, ys []int64, zs []int64, xns *nulls.Nulls
 				nulls.Add(rns, uint64(i))
 				continue
 			}
-			date, success := d.AddInterval(-ys[i], types.IntervalType(zs[0]), types.TimeStampType)
+			date, success := d.AddInterval(loc, -ys[i], types.IntervalType(zs[0]), types.TimeStampType)
 			if success {
 				rs[i] = types.FromClockUTC(int32(date.Year()), date.Month(), date.Day(), uint8(date.Hour()), uint8(date.Minute()), uint8(date.Sec()), uint32(date.MicroSec()))
 			} else {
@@ -269,7 +271,7 @@ func timestampSub(xs []types.Timestamp, ys []int64, zs []int64, xns *nulls.Nulls
 				nulls.Add(rns, uint64(i))
 				continue
 			}
-			date, success := ds[0].AddInterval(-d, types.IntervalType(zs[0]), types.TimeStampType)
+			date, success := ds[0].AddInterval(loc, -d, types.IntervalType(zs[0]), types.TimeStampType)
 			if success {
 				rs[i] = types.FromClockUTC(int32(date.Year()), date.Month(), date.Day(), uint8(date.Hour()), uint8(date.Minute()), uint8(date.Sec()), uint32(date.MicroSec()))
 			} else {
@@ -282,7 +284,7 @@ func timestampSub(xs []types.Timestamp, ys []int64, zs []int64, xns *nulls.Nulls
 				nulls.Add(rns, uint64(i))
 				continue
 			}
-			date, success := d.AddInterval(-ys[0], types.IntervalType(zs[0]), types.TimeStampType)
+			date, success := d.AddInterval(loc, -ys[0], types.IntervalType(zs[0]), types.TimeStampType)
 			if success {
 				rs[i] = types.FromClockUTC(int32(date.Year()), date.Month(), date.Day(), uint8(date.Hour()), uint8(date.Minute()), uint8(date.Sec()), uint32(date.MicroSec()))
 			} else {

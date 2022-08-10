@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/timestamp"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
@@ -1436,7 +1437,7 @@ func CastVarcharAsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vect
 		scalarVector := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Timestamp, 1)
 		strBytes := vs.Get(0)
-		data, err := types.ParseTimestamp(string(strBytes), 6)
+		data, err := types.ParseTimestamp(proc.SessionInfo.TimeZone, string(strBytes), 6)
 		if err != nil {
 			return nil, err
 		}
@@ -1454,7 +1455,7 @@ func CastVarcharAsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vect
 	rs = rs[:len(vs.Lengths)]
 	for i := range vs.Lengths {
 		strBytes := vs.Get(int64(i))
-		data, err := types.ParseTimestamp(string(strBytes), 6)
+		data, err := types.ParseTimestamp(proc.SessionInfo.TimeZone, string(strBytes), 6)
 		if err != nil {
 			return nil, err
 		}
@@ -1807,9 +1808,7 @@ func CastDatetimeAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vec
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Timestamp, 1)
-		if _, err := binary.DatetimeToTimestamp(lvs, rs); err != nil {
-			return nil, err
-		}
+		timestamp.DatetimeToTimestamp(proc.SessionInfo.TimeZone, lvs, lv.Nsp, rs)
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, rs)
 		return vec, nil
@@ -1821,9 +1820,7 @@ func CastDatetimeAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vec
 	}
 	rs := types.DecodeTimestampSlice(vec.Data)
 	rs = rs[:len(lvs)]
-	if _, err := binary.DatetimeToTimestamp(lvs, rs); err != nil {
-		return nil, err
-	}
+	timestamp.DatetimeToTimestamp(proc.SessionInfo.TimeZone, lvs, lv.Nsp, rs)
 	nulls.Set(vec.Nsp, lv.Nsp)
 	vector.SetCol(vec, rs)
 	return vec, nil
@@ -1836,9 +1833,7 @@ func CastDateAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vector.
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Timestamp, 1)
-		if _, err := binary.DateToTimestamp(lvs, rs); err != nil {
-			return nil, err
-		}
+		timestamp.DateToTimestamp(proc.SessionInfo.TimeZone, lvs, lv.Nsp, rs)
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, rs)
 		return vec, nil
@@ -1850,9 +1845,7 @@ func CastDateAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vector.
 	}
 	rs := types.DecodeTimestampSlice(vec.Data)
 	rs = rs[:len(lvs)]
-	if _, err := binary.DateToTimestamp(lvs, rs); err != nil {
-		return nil, err
-	}
+	timestamp.DateToTimestamp(proc.SessionInfo.TimeZone, lvs, lv.Nsp, rs)
 	nulls.Set(vec.Nsp, lv.Nsp)
 	vector.SetCol(vec, rs)
 	return vec, nil

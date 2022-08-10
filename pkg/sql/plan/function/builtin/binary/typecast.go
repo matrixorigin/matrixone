@@ -161,8 +161,6 @@ var (
 	Uint64ToDecimal128 = UintToDecimal128[uint64]
 
 	TimestampToDatetime = timestampToDatetime
-	DatetimeToTimestamp = datetimeToTimestamp
-	DateToTimestamp     = dateToTimestamp
 	TimestampToVarchar  = timestampToVarchar
 	BoolToBytes         = boolToBytes
 	DateToBytes         = dateToBytes
@@ -374,14 +372,6 @@ func timestampToDatetime(xs []types.Timestamp, rs []types.Datetime) ([]types.Dat
 	return types.TimestampToDatetime(xs, rs)
 }
 
-func datetimeToTimestamp(xs []types.Datetime, rs []types.Timestamp) ([]types.Timestamp, error) {
-	return types.DatetimeToTimestamp(xs, rs)
-}
-
-func dateToTimestamp(xs []types.Date, rs []types.Timestamp) ([]types.Timestamp, error) {
-	return types.DateToTimestamp(xs, rs)
-}
-
 func timestampToVarchar(xs []types.Timestamp, rs *types.Bytes, precision int32) (*types.Bytes, error) {
 	oldLen := uint32(0)
 	for i, x := range xs {
@@ -408,7 +398,7 @@ func boolToBytes(xs []bool, rs *types.Bytes) (*types.Bytes, error) {
 
 func dateToDateTime(xs []types.Date, rs []types.Datetime) ([]types.Datetime, error) {
 	for i := range xs {
-		rs[i] = xs[i].ToTime()
+		rs[i] = xs[i].ToDatetime()
 	}
 	return rs, nil
 }

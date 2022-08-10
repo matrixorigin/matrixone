@@ -64,7 +64,12 @@ func TestDatetime(t *testing.T) {
 	fmt.Println(dt.ToDate().Calendar(true))
 	fmt.Println(dt.Clock())
 
-	dt = Now()
+	dt = Now(time.Local)
+	fmt.Println(dt.ToDate().Calendar(true))
+	fmt.Println(dt.Clock())
+
+	loc, _ := time.LoadLocation("America/Los_Angeles")
+	dt = Now(loc)
 	fmt.Println(dt.ToDate().Calendar(true))
 	fmt.Println(dt.Clock())
 }
@@ -119,7 +124,7 @@ func TestAddDatetime(t *testing.T) {
 		ret, rettype, _ := NormalizeInterval(test.InputIntervalNum, test.InputIntervalTypes)
 		d, err := ParseDatetime(test.Input, 6)
 		require.Equal(t, err, nil)
-		d, b := d.AddInterval(ret, rettype, DateTimeType)
+		d, b := d.AddInterval(time.Local, ret, rettype, DateTimeType)
 		require.Equal(t, d.String2(6), test.expect)
 		require.Equal(t, b, test.success)
 
@@ -168,7 +173,7 @@ func TestSubDateTime(t *testing.T) {
 		ret, rettype, _ := NormalizeInterval(test.InputIntervalNum, test.InputIntervalTypes)
 		d, err := ParseDatetime(test.Input, 6)
 		require.Equal(t, err, nil)
-		d, b := d.AddInterval(-ret, rettype, DateType)
+		d, b := d.AddInterval(time.Local, -ret, rettype, DateType)
 		require.Equal(t, d.String2(6), test.expect)
 		require.Equal(t, b, test.success)
 	}
@@ -289,25 +294,16 @@ func TestParseDatetime(t *testing.T) {
 	}
 }
 
-func TestUTC(t *testing.T) {
-	args, _ := ParseDatetime("1987-08-25 00:00:00", 6)
-	utc := args.UTC()
-	_, offset := time.Now().Local().Zone()
-	if args.sec()-utc.sec() != localTZ {
-		t.Errorf("UTC() args %v got %v and time zone UTC+%v", args, utc, offset/secsPerHour)
-	}
-}
-
 func TestUnix(t *testing.T) {
 	for _, timestr := range []string{"1955-08-25 09:21:34", "2012-01-25 09:21:34"} {
 		motime, _ := ParseDatetime(timestr, 6)
-		motimeUnix := motime.UnixTimestamp()
+		motimeUnix := motime.UnixTimestamp(time.Local)
 		goLcoalTime, _ := time.ParseInLocation("2006-01-02 15:04:05", timestr, time.Local)
 		goUnix := goLcoalTime.Unix()
 
 		require.Equal(t, motimeUnix, goUnix)
 
-		parse_time := FromUnix(motimeUnix)
+		parse_time := FromUnix(time.Local, motimeUnix)
 		require.Equal(t, motime, parse_time)
 	}
 }

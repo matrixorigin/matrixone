@@ -1340,7 +1340,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	}
 
 	//get query optimizer and execute Optimize
-	buildPlan, err := buildPlan(mce.ses.txnCompileCtx, stmt.Statement)
+	plan, err := buildPlan(mce.ses.txnCompileCtx, stmt.Statement)
 	if err != nil {
 		return err
 	}
@@ -1353,7 +1353,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	// build explain data buffer
 	buffer := explain.NewExplainDataBuffer()
 	// generator query explain
-	explainQuery := explain.NewExplainQueryImpl(buildPlan.GetQuery())
+	explainQuery := explain.NewExplainQueryImpl(plan.GetQuery())
 	err = explainQuery.ExplainPlan(buffer, es)
 	if err != nil {
 		logutil.Errorf("explain Query statement error: %v", err)
@@ -1738,6 +1738,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		ConnectionID: uint64(proto.ConnectionID()),
 		Database:     ses.GetDatabaseName(),
 		Version:      serverVersion,
+		TimeZone:     ses.timeZone,
 	}
 
 	var rootCtx = mce.RecordStatement(trace.DefaultContext(), ses, proc, sql, beginInstant)

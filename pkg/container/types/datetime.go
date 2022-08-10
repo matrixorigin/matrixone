@@ -18,25 +18,23 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	gotime "time"
-	"unsafe"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
 const (
-	secsPerMinute = 60
-	secsPerHour   = 60 * secsPerMinute
-	secsPerDay    = 24 * secsPerHour
-	//secsPerWeek   = 7 * secsPerDay
-	//microSecondBitMask = 0xfffff
+	secsPerMinute   = 60
+	secsPerHour     = 60 * secsPerMinute
+	secsPerDay      = 24 * secsPerHour
+	secsPerWeek     = 7 * secsPerDay
+	microSecsPerSec = 1000000
 	MaxDatetimeYear = 9999
 	MinDatetimeYear = 1
 )
 
-// The higher 44 bits holds number of seconds since January 1, year 1 in Gregorian
-// calendar, and lower 20 bits holds number of microseconds
+// The Datetime type holds number of microseconds since January 1, year 1 in Gregorian calendar
 
 const (
 	//tsMask         = ^uint64(0) >> 1
@@ -47,10 +45,6 @@ const (
 	minHourInDay, maxHourInDay           = 0, 23
 	minMinuteInHour, maxMinuteInHour     = 0, 59
 	minSecondInMinute, maxSecondInMinute = 0, 59
-
-	secondMaxAddNum = int64(9223372036)
-	minuteMaxAddNum = int64(153722867)
-	hourMaxAddNum   = int64(2562047)
 )
 
 var (
@@ -68,7 +62,7 @@ func (dt Datetime) String2(precision int32) string {
 	y, m, d, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
 	if precision > 0 {
-		msec := int64(dt) & 0xfffff
+		msec := int64(dt) % microSecsPerSec
 		msecInstr := fmt.Sprintf("%06d\n", msec)
 		msecInstr = msecInstr[:precision]
 
@@ -94,7 +88,7 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 	s = strings.TrimSpace(s)
 	if len(s) < 14 {
 		if d, err := ParseDate(s); err == nil {
-			return d.ToTime(), nil
+			return d.ToDatetime(), nil
 		}
 		return -1, ErrIncorrectDatetimeValue
 	}
@@ -206,52 +200,38 @@ func validTimeInDay(h, m, s uint8) bool {
 	return true
 }
 
-// UTC turn local datetime to utc datetime
-func (dt Datetime) UTC() Datetime {
-	return Datetime((dt.sec() - localTZ) << 20)
+func (dt Datetime) UnixTimestamp(loc *time.Location) int64 {
+	return dt.ConvertToGoTime(loc).Unix()
 }
 
-func (dt Datetime) UnixTimestamp() int64 {
-	return dt.sec() - unixEpoch - localTZ
+func FromUnix(loc *time.Location, ts int64) Datetime {
+	t := time.Unix(ts, 0).In(loc)
+	_, offset := t.Zone()
+	return Datetime((ts + unixEpoch + int64(offset)) * microSecsPerSec)
 }
 
-func FromUnix(time int64) Datetime {
-	return Datetime((time + unixEpoch + localTZ) << 20)
+func UnixToTimestamp(ts int64) Timestamp {
+	return Timestamp((ts + unixEpoch) * microSecsPerSec)
 }
 
-func UnixToTimestamp(time int64) Timestamp {
-	localTZAligned := localTZ << 20
-	dt := FromUnix(time)
-	return Timestamp(dt.ToInt64() - localTZAligned)
+func Now(loc *time.Location) Datetime {
+	now := time.Now().In(loc)
+	_, offset := now.Zone()
+	return Datetime(now.UnixMicro() + (unixEpoch+int64(offset))*microSecsPerSec)
 }
 
-func Now() Datetime {
-	t := gotime.Now()
-	wall := *(*uint64)(unsafe.Pointer(&t))
-	ext := *(*int64)(unsafe.Pointer(uintptr(unsafe.Pointer(&t)) + unsafe.Sizeof(wall)))
-	var sec, nsec int64
-	if wall&hasMonotonic != 0 {
-		sec = int64(wall<<1>>31) + wallToInternal
-		nsec = int64(wall << 34 >> 34)
-	} else {
-		sec = ext
-		nsec = int64(wall)
-	}
-	return Datetime((sec << 20) + nsec/1000)
+func UTC() Datetime {
+	return Datetime(time.Now().UnixMicro() + unixEpoch*microSecsPerSec)
 }
 
 func (dt Datetime) ToDate() Date {
 	return Date((dt.sec()) / secsPerDay)
 }
 
-func (dt Datetime) ToInt64() int64 {
-	return int64(dt)
-}
-
-func (dt Datetime) Clock() (hour, min, sec int8) {
+func (dt Datetime) Clock() (hour, minute, sec int8) {
 	t := (dt.sec()) % secsPerDay
 	hour = int8(t / secsPerHour)
-	min = int8(t % secsPerHour / secsPerMinute)
+	minute = int8(t % secsPerHour / secsPerMinute)
 	sec = int8(t % secsPerMinute)
 	return
 }
@@ -271,36 +251,23 @@ func (dt Datetime) Hour() int8 {
 	return hour
 }
 
-func FromClock(year int32, month, day, hour, min, sec uint8, msec uint32) Datetime {
+func FromClock(year int32, month, day, hour, minute, sec uint8, msec uint32) Datetime {
 	days := FromCalendar(year, month, day)
-	secs := int64(days)*secsPerDay + int64(hour)*secsPerHour + int64(min)*secsPerMinute + int64(sec)
-	return Datetime((secs << 20) + int64(msec))
+	secs := int64(days)*secsPerDay + int64(hour)*secsPerHour + int64(minute)*secsPerMinute + int64(sec)
+	return Datetime(secs*microSecsPerSec + int64(msec))
 }
 
-func (dt Datetime) ConvertToGoTime() gotime.Time {
-	y, m, d, _ := dt.ToDate().Calendar(true)
-	msec := dt.MicroSec()
-	hour, min, sec := dt.Clock()
-	return gotime.Date(int(y), gotime.Month(m), int(d), int(hour), int(min), int(sec), int(msec*1000), startupTime.Location())
+func (dt Datetime) ConvertToGoTime(loc *time.Location) time.Time {
+	year, mon, day, _ := dt.ToDate().Calendar(true)
+	hour, minute, sec := dt.Clock()
+	nsec := dt.MicroSec() * 1000
+	return time.Date(int(year), time.Month(mon), int(day), int(hour), int(minute), int(sec), int(nsec), loc)
 }
 
-func DatetimeToTimestamp(xs []Datetime, rs []Timestamp) ([]Timestamp, error) {
-	localTZAligned := localTZ << 20
-	xsInInt64 := *(*[]int64)(unsafe.Pointer(&xs))
-	rsInInt64 := *(*[]int64)(unsafe.Pointer(&rs))
-	for i, x := range xsInInt64 {
-		rsInInt64[i] = x - localTZAligned
-	}
-	return rs, nil
-}
-
-func (dt Datetime) AddDateTime(date gotime.Time, addMsec, addSec, addMin, addHour, addDay, addMonth, addYear int64, timeType TimeType) (Datetime, bool) {
-	date = date.Add(gotime.Duration(addMsec) * gotime.Microsecond)
-	date = addTimeForLoop(date, addSec, 0)
-	date = addTimeForLoop(date, addMin, 1)
-	date = addTimeForLoop(date, addHour, 2)
+func (dt Datetime) AddDateTime(date time.Time, addMonth, addYear int64, timeType TimeType) (Datetime, bool) {
 	// corner case: mysql: date_add('2022-01-31',interval 1 month) -> 2022-02-28
 	// only in the month year year-month
+	var addDay int64
 	if addMonth != 0 || addYear != 0 {
 		originDay := date.Day()
 		newDate := date.AddDate(int(addYear), int(addMonth), int(addDay))
@@ -333,38 +300,44 @@ func (dt Datetime) AddDateTime(date gotime.Time, addMsec, addSec, addMin, addHou
 // we need a bool arg to tell isDate/isDatetime
 // date/datetime have different regions, so we don't use same valid function
 // return type bool means the if the date/datetime is valid
-func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) (Datetime, bool) {
-	goTime := dt.ConvertToGoTime()
-	var addMsec, addSec, addMin, addHour, addDay, addMonth, addYear int64
+func (dt Datetime) AddInterval(loc *time.Location, nums int64, its IntervalType, timeType TimeType) (Datetime, bool) {
+	var addMonth, addYear int64
 	switch its {
-	case MicroSecond:
-		addMsec = nums
 	case Second:
-		addSec = nums
+		nums *= microSecsPerSec
 	case Minute:
-		addMin = nums
+		nums *= microSecsPerSec * secsPerMinute
 	case Hour:
-		addHour = nums
+		nums *= microSecsPerSec * secsPerHour
 	case Day:
-		addDay = nums
+		nums *= microSecsPerSec * secsPerDay
 	case Week:
-		addDay = 7 * nums
+		nums *= microSecsPerSec * secsPerWeek
 	case Month:
 		addMonth = nums
+		return dt.AddDateTime(dt.ConvertToGoTime(loc), addMonth, addYear, timeType)
 	case Quarter:
 		addMonth = 3 * nums
+		return dt.AddDateTime(dt.ConvertToGoTime(loc), addMonth, addYear, timeType)
 	case Year:
 		addYear = nums
+		return dt.AddDateTime(dt.ConvertToGoTime(loc), addMonth, addYear, timeType)
 	}
-	return dt.AddDateTime(goTime, addMsec, addSec, addMin, addHour, addDay, addMonth, addYear, timeType)
+
+	newDate := dt + Datetime(nums)
+	y, m, d, _ := newDate.ToDate().Calendar(true)
+	if !validDatetime(y, m, d) {
+		return 0, false
+	}
+	return newDate, true
 }
 
 func (dt Datetime) MicroSec() int64 {
-	return int64(dt) & 0xfffff
+	return int64(dt) % microSecsPerSec
 }
 
 func (dt Datetime) sec() int64 {
-	return int64(dt) >> 20
+	return int64(dt) / microSecsPerSec
 }
 
 func (dt Datetime) Year() uint16 {
@@ -398,6 +371,10 @@ func (dt Datetime) Week(mode int) int {
 // YearWeek returns year and week.
 func (dt Datetime) YearWeek(mode int) (year int, week int) {
 	return dt.ToDate().YearWeek(mode)
+}
+
+func (dt Datetime) ToTimestamp(loc *time.Location) Timestamp {
+	return Timestamp(dt.ConvertToGoTime(loc).UnixMicro() + unixEpoch*microSecsPerSec)
 }
 
 func (dt Datetime) SecondMicrosecondStr() string {
@@ -469,27 +446,4 @@ func validDatetime(year int32, month, day uint8) bool {
 		}
 	}
 	return false
-}
-
-func addTimeForLoop(date gotime.Time, all int64, t int) gotime.Time {
-	var addMaxNum int64
-	var dur gotime.Duration
-	switch t {
-	case 0:
-		addMaxNum = secondMaxAddNum
-		dur = gotime.Second
-	case 1:
-		addMaxNum = minuteMaxAddNum
-		dur = gotime.Minute
-	case 2:
-		addMaxNum = hourMaxAddNum
-		dur = gotime.Hour
-	}
-	count := all / addMaxNum
-	left := all % addMaxNum
-	for i := int64(0); i < count; i++ {
-		date = date.Add(gotime.Duration(addMaxNum) * dur)
-	}
-	date = date.Add(gotime.Duration(left) * dur)
-	return date
 }
