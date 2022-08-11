@@ -21,7 +21,7 @@ const (
 	SecondaryRoleTypeNone
 )
 
-//Use statement
+// Use statement
 type Use struct {
 	statementImpl
 	Name              string
@@ -49,6 +49,14 @@ func (node *Use) Format(ctx *FmtCtx) {
 			ctx.WriteString("none")
 		}
 	}
+}
+
+// IsUseRole checks the statement is:
+//
+//	USE SECONDARY ROLE { ALL | NONE };
+//	USE ROLE role;
+func (node *Use) IsUseRole() bool {
+	return node.SecondaryRole || node.Role != nil
 }
 
 func NewUse(n string) *Use {

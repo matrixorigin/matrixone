@@ -23,7 +23,7 @@ type Iterator interface {
 // Bitmap represents line numbers of tuple's is null
 type Bitmap struct {
 	// len represents the size of bitmap
-	len  int
+	len  int64
 	data []uint64
 }
 

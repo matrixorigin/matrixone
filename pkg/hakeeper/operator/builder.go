@@ -28,10 +28,12 @@ import (
 )
 
 // Builder is used to create operators. Usage:
-//     op, err := NewBuilder(desc, cluster, shard).
-//                 RemovePeer(store1).
-//                 AddPeer(peer1).
-//                 Build(kind)
+//
+//	op, err := NewBuilder(desc, cluster, shard).
+//	            RemovePeer(store1).
+//	            AddPeer(peer1).
+//	            Build(kind)
+//
 // The generated Operator will choose the most appropriate execution order
 // according to various constraints.
 type Builder struct {

@@ -124,9 +124,9 @@ func getLsn(e entry.Entry) (group uint32, lsn uint64) {
 	return info.Group, info.GroupLSN
 }
 
-//append C, append UC
-//ckp C
-//check UC is checkpointed
+// append C, append UC
+// ckp C
+// check UC is checkpointed
 func TestCheckpointUC(t *testing.T) {
 	driver, dir := initWal(t)
 

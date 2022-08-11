@@ -17,6 +17,7 @@ package catalog
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -172,7 +173,7 @@ func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, 
 
 func (catalog *Catalog) onReplayCreateDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
 	catalog.OnReplayDBID(cmd.DB.ID)
-	if cmd.entry.CreateAt <= catalog.GetCheckpointed().MaxTS {
+	if cmd.entry.CreateAt.LessEq(catalog.GetCheckpointed().MaxTS) {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
 		}
@@ -197,7 +198,7 @@ func (catalog *Catalog) onReplayCreateDatabase(cmd *EntryCommand, idx *wal.Index
 
 func (catalog *Catalog) onReplayDropDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
 	catalog.OnReplayDBID(cmd.DBID)
-	if cmd.entry.DeleteAt <= catalog.GetCheckpointed().MaxTS {
+	if cmd.entry.DeleteAt.LessEq(catalog.GetCheckpointed().MaxTS) {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
 		}
@@ -249,9 +250,10 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 	}
 }
 
-func (catalog *Catalog) onReplayCreateTable(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
+func (catalog *Catalog) onReplayCreateTable(cmd *EntryCommand, dataFactory DataFactory,
+	idx *wal.Index, observer wal.ReplayObserver) {
 	catalog.OnReplayTableID(cmd.Table.ID)
-	if cmd.entry.CreateAt <= catalog.GetCheckpointed().MaxTS {
+	if cmd.entry.CreateAt.LessEq(catalog.GetCheckpointed().MaxTS) {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
 		}
@@ -280,7 +282,7 @@ func (catalog *Catalog) onReplayCreateTable(cmd *EntryCommand, dataFactory DataF
 
 func (catalog *Catalog) onReplayDropTable(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
 	catalog.OnReplayTableID(cmd.TableID)
-	if cmd.entry.DeleteAt <= catalog.GetCheckpointed().MaxTS {
+	if cmd.entry.DeleteAt.LessEq(catalog.GetCheckpointed().MaxTS) {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
 		}
@@ -336,7 +338,7 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, dataFactory DataFactory
 
 func (catalog *Catalog) onReplayCreateSegment(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver, cache *bytes.Buffer) {
 	catalog.OnReplaySegmentID(cmd.Segment.ID)
-	if cmd.entry.CreateAt <= catalog.GetCheckpointed().MaxTS {
+	if cmd.entry.CreateAt.LessEq(catalog.GetCheckpointed().MaxTS) {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
 		}
@@ -370,7 +372,7 @@ func (catalog *Catalog) onReplayCreateSegment(cmd *EntryCommand, dataFactory Dat
 
 func (catalog *Catalog) onReplayDropSegment(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
 	catalog.OnReplaySegmentID(cmd.entry.ID)
-	if cmd.entry.DeleteAt <= catalog.GetCheckpointed().MaxTS {
+	if cmd.entry.DeleteAt.LessEq(catalog.GetCheckpointed().MaxTS) {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
 		}
@@ -426,7 +428,7 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFacto
 
 func (catalog *Catalog) onReplayCreateBlock(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
 	catalog.OnReplayBlockID(cmd.Block.ID)
-	if cmd.entry.CreateAt <= catalog.GetCheckpointed().MaxTS {
+	if cmd.entry.CreateAt.LessEq(catalog.GetCheckpointed().MaxTS) {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
 		}
@@ -466,7 +468,7 @@ func (catalog *Catalog) onReplayCreateBlock(cmd *EntryCommand, dataFactory DataF
 
 func (catalog *Catalog) onReplayDropBlock(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
 	catalog.OnReplayBlockID(cmd.entry.ID)
-	if cmd.entry.DeleteAt <= catalog.GetCheckpointed().MaxTS {
+	if cmd.entry.DeleteAt.LessEq(catalog.GetCheckpointed().MaxTS) {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
 		}
@@ -768,7 +770,7 @@ func (catalog *Catalog) RecurLoop(processor Processor) (err error) {
 	return err
 }
 
-func (catalog *Catalog) PrepareCheckpoint(startTs, endTs uint64) *CheckpointEntry {
+func (catalog *Catalog) PrepareCheckpoint(startTs, endTs types.TS) *CheckpointEntry {
 	ckpEntry := NewCheckpointEntry(startTs, endTs)
 	processor := new(LoopProcessor)
 	processor.BlockFn = func(block *BlockEntry) (err error) {
@@ -814,25 +816,26 @@ func (catalog *Catalog) GetCheckpointed() *Checkpoint {
 	return catalog.checkpoints[len(catalog.checkpoints)-1]
 }
 
-func (catalog *Catalog) CheckpointClosure(maxTs uint64) tasks.FuncT {
+func (catalog *Catalog) CheckpointClosure(maxTs types.TS) tasks.FuncT {
 	return func() error {
 		return catalog.Checkpoint(maxTs)
 	}
 }
 
-func (catalog *Catalog) Checkpoint(maxTs uint64) (err error) {
-	var minTs uint64
+func (catalog *Catalog) Checkpoint(maxTs types.TS) (err error) {
+	var minTs types.TS
 	catalog.ckpmu.RLock()
 	if len(catalog.checkpoints) != 0 {
 		lastMax := catalog.checkpoints[len(catalog.checkpoints)-1].MaxTS
-		if maxTs < lastMax {
+		if maxTs.Less(lastMax) {
 			err = ErrCheckpoint
 		}
-		if maxTs == lastMax {
+		if maxTs.Equal(lastMax) {
 			catalog.ckpmu.RUnlock()
 			return
 		}
-		minTs = lastMax + 1
+		//minTs = lastMax + 1
+		minTs = lastMax.Next()
 	}
 	catalog.ckpmu.RUnlock()
 	now := time.Now()

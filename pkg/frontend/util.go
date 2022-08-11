@@ -45,8 +45,8 @@ type CloseFlag struct {
 	closed uint32
 }
 
-//1 for closed
-//0 for others
+// 1 for closed
+// 0 for others
 func (cf *CloseFlag) setClosed(value uint32) {
 	atomic.StoreUint32(&cf.closed, value)
 }
@@ -216,7 +216,8 @@ func (t *Timeout) UpdateTime(tn time.Time) {
 
 /*
 ----------+---------+------------------+--------
-      lastTime     Now         lastTime + timeGap
+
+	lastTime     Now         lastTime + timeGap
 
 return true  :  is timeout. the lastTime has been updated.
 return false :  is not timeout. the lastTime has not been updated.

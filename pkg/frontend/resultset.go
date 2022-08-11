@@ -277,7 +277,7 @@ func (mrs *MysqlResultSet) GetValue(rindex uint64, cindex uint64) (interface{}, 
 	}
 }
 
-//get the index of the column with name
+// get the index of the column with name
 func (mrs *MysqlResultSet) columnName2Index(name string) (uint64, error) {
 	if cindex, ok := mrs.Name2Index[name]; !ok {
 		return 0, fmt.Errorf("column name does not exist. %s", name)
@@ -294,8 +294,8 @@ func (mrs *MysqlResultSet) GetValueByName(rindex uint64, colName string) (interf
 	}
 }
 
-//the value in position (rindex,cindex) is null or not
-//return true - null ; false - not null
+// the value in position (rindex,cindex) is null or not
+// return true - null ; false - not null
 func (mrs *MysqlResultSet) ColumnIsNull(rindex, cindex uint64) (bool, error) {
 	if value, err := mrs.GetValue(rindex, cindex); err != nil {
 		return false, err
@@ -304,7 +304,7 @@ func (mrs *MysqlResultSet) ColumnIsNull(rindex, cindex uint64) (bool, error) {
 	}
 }
 
-//convert the value into int64
+// convert the value into int64
 func (mrs *MysqlResultSet) GetInt64(rindex, cindex uint64) (int64, error) {
 	value, err := mrs.GetValue(rindex, cindex)
 	if err != nil {
@@ -351,7 +351,7 @@ func (mrs *MysqlResultSet) GetInt64(rindex, cindex uint64) (int64, error) {
 	}
 }
 
-//convert the value into uint64
+// convert the value into uint64
 func (mrs *MysqlResultSet) GetUint64(rindex, cindex uint64) (uint64, error) {
 	value, err := mrs.GetValue(rindex, cindex)
 	if err != nil {
@@ -398,7 +398,7 @@ func (mrs *MysqlResultSet) GetUint64(rindex, cindex uint64) (uint64, error) {
 	}
 }
 
-//convert the value into Float64
+// convert the value into Float64
 func (mrs *MysqlResultSet) GetFloat64(rindex, cindex uint64) (float64, error) {
 	value, err := mrs.GetValue(rindex, cindex)
 	if err != nil {
@@ -445,7 +445,7 @@ func (mrs *MysqlResultSet) GetFloat64(rindex, cindex uint64) (float64, error) {
 	}
 }
 
-//convert the value into string
+// convert the value into string
 func (mrs *MysqlResultSet) GetString(rindex, cindex uint64) (string, error) {
 	value, err := mrs.GetValue(rindex, cindex)
 	if err != nil {
@@ -496,7 +496,7 @@ func (mrs *MysqlResultSet) GetString(rindex, cindex uint64) (string, error) {
 	}
 }
 
-//the result of the execution
+// the result of the execution
 type MysqlExecutionResult struct {
 	status       uint16
 	insertID     uint64

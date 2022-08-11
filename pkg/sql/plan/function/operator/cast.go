@@ -484,7 +484,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 
 	// sametype
 	if lv.Typ.Oid == types.T_decimal128 && rv.Typ.Oid == types.T_decimal128 {
-		return CastDecimal128AsDecimal128(lv, rv, proc)
+		return CastDecimal128ToDecimal128(lv, rv, proc)
 	}
 
 	if isString(lv.Typ.Oid) && rv.Typ.Oid == types.T_date {
@@ -824,7 +824,9 @@ func CastSameType2[T types.Date | types.Datetime | types.Timestamp](lv, rv *vect
 }
 
 // CastLeftToRight : Cast handles conversions in the form of cast (left as right), where left and right are different types,
-//  and both left and right are numeric types, Contains the following:
+//
+//	and both left and right are numeric types, Contains the following:
+//
 // int8 -> (int16/int32/int64/uint8/uint16/uint32/uint64/float32/float64)
 // int16 -> (int8/int32/int64/uint8/uint16/uint32/uint64/float32/float64)
 // int32 -> (int8/int16/int64/uint8/uint16/uint32/uint64/float32/float64)
@@ -1154,7 +1156,6 @@ func CastSpecials2Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 // 	return vec, nil
 // }
 
-//
 // CastSpecials3 :  Cast converts string to string ,Contains the following:
 // char -> char
 // char -> varhcar
@@ -1544,7 +1545,34 @@ func CastDecimal128AsDecimal128(lv, _ *vector.Vector, proc *process.Process) (*v
 	return vec, nil
 }
 
-//  castTimeStampAsDatetime : Cast converts timestamp to datetime decimal128
+func CastDecimal128ToDecimal128(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := 16
+	lvs := lv.Col.([]types.Decimal128)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]types.Decimal128, 1)
+		if _, err := binary.Decimal128ToDecimal128(lvs, rv.Typ.Scale, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVector(rv.Typ, int64(len(lvs)*rtl))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeDecimal128Slice(vec.Data)
+	rs = rs[:len(lvs)]
+	if _, err := binary.Decimal128ToDecimal128(lvs, rv.Typ.Scale, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+// castTimeStampAsDatetime : Cast converts timestamp to datetime decimal128
 func castTimeStampAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := 8
 	lvs := vector.MustTCols[types.Timestamp](lv)
@@ -1573,7 +1601,7 @@ func castTimeStampAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vec
 	return vec, nil
 }
 
-//  castTimestampAsVarchar : Cast converts timestamp to varchar
+// castTimestampAsVarchar : Cast converts timestamp to varchar
 func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lvs := vector.MustTCols[types.Timestamp](lv)
 	resultType := rv.Typ
@@ -2375,7 +2403,7 @@ func CastStringToBool(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 	return vec, nil
 }
 
-//  isInteger return true if the types.T is integer type
+// isInteger return true if the types.T is integer type
 func isInteger(t types.T) bool {
 	if t == types.T_int8 || t == types.T_int16 || t == types.T_int32 || t == types.T_int64 ||
 		t == types.T_uint8 || t == types.T_uint16 || t == types.T_uint32 || t == types.T_uint64 {
@@ -2384,7 +2412,7 @@ func isInteger(t types.T) bool {
 	return false
 }
 
-//  isSignedInteger: return true if the types.T is Signed integer type
+// isSignedInteger: return true if the types.T is Signed integer type
 func isSignedInteger(t types.T) bool {
 	if t == types.T_int8 || t == types.T_int16 || t == types.T_int32 || t == types.T_int64 {
 		return true
@@ -2392,7 +2420,7 @@ func isSignedInteger(t types.T) bool {
 	return false
 }
 
-//  isUnsignedInteger: return true if the types.T is UnSigned integer type
+// isUnsignedInteger: return true if the types.T is UnSigned integer type
 func isUnsignedInteger(t types.T) bool {
 	if t == types.T_uint8 || t == types.T_uint16 || t == types.T_uint32 || t == types.T_uint64 {
 		return true
@@ -2400,7 +2428,7 @@ func isUnsignedInteger(t types.T) bool {
 	return false
 }
 
-//  isFloat: return true if the types.T is floating Point Types
+// isFloat: return true if the types.T is floating Point Types
 func isFloat(t types.T) bool {
 	if t == types.T_float32 || t == types.T_float64 {
 		return true
@@ -2408,7 +2436,7 @@ func isFloat(t types.T) bool {
 	return false
 }
 
-//  isNumeric: return true if the types.T is numbric type
+// isNumeric: return true if the types.T is numbric type
 func isNumeric(t types.T) bool {
 	if isInteger(t) || isFloat(t) {
 		return true
@@ -2416,7 +2444,7 @@ func isNumeric(t types.T) bool {
 	return false
 }
 
-//  isString: return true if the types.T is string type
+// isString: return true if the types.T is string type
 func isString(t types.T) bool {
 	if t == types.T_char || t == types.T_varchar || t == types.T_blob {
 		return true
@@ -2424,7 +2452,7 @@ func isString(t types.T) bool {
 	return false
 }
 
-//  isDateSeries: return true if the types.T is date related type
+// isDateSeries: return true if the types.T is date related type
 func isDateSeries(t types.T) bool {
 	if t == types.T_date || t == types.T_datetime || t == types.T_timestamp {
 		return true

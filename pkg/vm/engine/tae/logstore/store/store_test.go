@@ -57,14 +57,14 @@ func newTestDriver(t *testing.T) driver.Driver {
 	return s
 }
 
-// func newTestLogserviceDriver(t *testing.T) (driver.Driver, *logservice.Service) {
-// 	fs := vfs.NewStrictMem()
-// 	service, ccfg, err := logservice.NewTestService(fs)
-// 	assert.NoError(t, err)
-// 	cfg := logservicedriver.NewTestConfig(&ccfg)
-// 	driver := logservicedriver.NewLogServiceDriver(cfg)
-// 	return driver, service
-// }
+//	func newTestLogserviceDriver(t *testing.T) (driver.Driver, *logservice.Service) {
+//		fs := vfs.NewStrictMem()
+//		service, ccfg, err := logservice.NewTestService(fs)
+//		assert.NoError(t, err)
+//		cfg := logservicedriver.NewTestConfig(&ccfg)
+//		driver := logservicedriver.NewLogServiceDriver(cfg)
+//		return driver, service
+//	}
 func TestAppendRead(t *testing.T) {
 	driver := newTestDriver(t)
 	wal := NewStore(driver)
