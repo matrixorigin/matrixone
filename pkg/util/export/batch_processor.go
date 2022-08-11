@@ -27,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
+const defaultQueueSize = 262144 // queue mem cost = 2MB
+
 // bufferHolder
 type bufferHolder struct {
 	// name like a type
@@ -166,7 +168,7 @@ type MOCollector struct {
 func NewMOCollector() *MOCollector {
 	c := &MOCollector{
 		buffers:       make(map[string]*bufferHolder),
-		awakeCollect:  make(chan batchpipe.HasName, 65536),
+		awakeCollect:  make(chan batchpipe.HasName, defaultQueueSize),
 		awakeGenerate: make(chan *bufferHolder, 16),
 		awakeBatch:    make(chan *bufferHolder),
 		stopCh:        make(chan struct{}),
