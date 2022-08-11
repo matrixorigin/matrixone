@@ -322,8 +322,15 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 		rb.logger.Info("write loop stopped")
 	}()
 
+	resetConnTimes := uint64(0)
 	retry := false
+	retryAt := uint64(0)
 	futures := make([]backendSendMessage, 0, rb.options.batchSendSize)
+
+	resetRetry := func() {
+		retry = false
+		retryAt = 0
+	}
 
 	handleResetConn := func() {
 		if err := rb.resetConn(); err != nil {
@@ -331,6 +338,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 				zap.Error(err))
 			rb.inactive()
 		}
+		resetConnTimes++
 	}
 
 	fetch := func() {
@@ -392,14 +400,16 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 
 			if len(futures) > 0 {
 				if retry && !rb.conn.Connected() {
-					for _, f := range futures {
-						f.completed()
+					if retryAt < resetConnTimes {
+						for _, f := range futures {
+							f.completed()
+						}
+						resetRetry()
 					}
-					retry = false
 					continue
 				}
 
-				retry = false
+				resetRetry()
 				written := 0
 				writeTimeout := time.Duration(0)
 				for _, f := range futures {
@@ -436,6 +446,8 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 							f.completed()
 						}
 					}
+				} else {
+					retryAt = resetConnTimes
 				}
 			}
 		}
