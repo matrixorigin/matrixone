@@ -1,6 +1,6 @@
 # default owner for stuff that is not explicitly set for ownership
 # for triage only
-* @matrix-meow
+* @yingfeng
 
 # github and CI related stuff
 .github @sukki37
