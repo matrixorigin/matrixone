@@ -21,6 +21,10 @@ PROTO_SYNTAX_VERSION='3'
 PROTOC_VERSION='21.1'
 GOGOPROTOBUF_VERSION='1.'
 
+if [ "${GOPATH}" == "" ];then
+  GOPATH=`go env GOPATH`
+fi
+echo "GOPATH: ${GOPATH}"
 
 res=$(program_exists goimports)
 echo "res: ${res}"
