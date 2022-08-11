@@ -484,7 +484,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 
 	// sametype
 	if lv.Typ.Oid == types.T_decimal128 && rv.Typ.Oid == types.T_decimal128 {
-		return CastDecimal128AsDecimal128(lv, rv, proc)
+		return CastDecimal128ToDecimal128(lv, rv, proc)
 	}
 
 	if isString(lv.Typ.Oid) && rv.Typ.Oid == types.T_date {
@@ -1540,6 +1540,33 @@ func CastDecimal128AsDecimal128(lv, _ *vector.Vector, proc *process.Process) (*v
 	rs := encoding.DecodeDecimal128Slice(vec.Data)
 	rs = rs[:len(lvs)]
 	copy(rs, lvs)
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastDecimal128ToDecimal128(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := 16
+	lvs := lv.Col.([]types.Decimal128)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]types.Decimal128, 1)
+		if _, err := binary.Decimal128ToDecimal128(lvs, rv.Typ.Scale, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVector(rv.Typ, int64(len(lvs)*rtl))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeDecimal128Slice(vec.Data)
+	rs = rs[:len(lvs)]
+	if _, err := binary.Decimal128ToDecimal128(lvs, rv.Typ.Scale, rs); err != nil {
+		return nil, err
+	}
 	nulls.Set(vec.Nsp, lv.Nsp)
 	vector.SetCol(vec, rs)
 	return vec, nil

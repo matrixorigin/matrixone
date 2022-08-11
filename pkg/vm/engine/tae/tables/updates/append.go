@@ -17,6 +17,7 @@ package updates
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"io"
 	"sync"
 
@@ -29,7 +30,7 @@ import (
 
 type AppendNode struct {
 	sync.RWMutex
-	commitTs uint64
+	commitTs types.TS
 	txn      txnif.AsyncTxn
 	logIndex *wal.Index
 	startRow uint32
@@ -38,7 +39,7 @@ type AppendNode struct {
 	id       *common.ID
 }
 
-func MockAppendNode(ts uint64, startRow, maxRow uint32, mvcc *MVCCHandle) *AppendNode {
+func MockAppendNode(ts types.TS, startRow, maxRow uint32, mvcc *MVCCHandle) *AppendNode {
 	return &AppendNode{
 		commitTs: ts,
 		maxRow:   maxRow,
@@ -47,7 +48,7 @@ func MockAppendNode(ts uint64, startRow, maxRow uint32, mvcc *MVCCHandle) *Appen
 }
 
 func NewCommittedAppendNode(
-	ts uint64,
+	ts types.TS,
 	startRow, maxRow uint32,
 	mvcc *MVCCHandle) *AppendNode {
 	return &AppendNode{
@@ -62,7 +63,8 @@ func NewAppendNode(
 	txn txnif.AsyncTxn,
 	startRow, maxRow uint32,
 	mvcc *MVCCHandle) *AppendNode {
-	ts := uint64(0)
+	//ts := uint64(0)
+	var ts types.TS
 	if txn != nil {
 		ts = txn.GetCommitTS()
 	}
@@ -92,7 +94,7 @@ func (node *AppendNode) SetLogIndex(idx *wal.Index) {
 func (node *AppendNode) GetID() *common.ID {
 	return node.id
 }
-func (node *AppendNode) GetCommitTS() uint64 {
+func (node *AppendNode) GetCommitTS() types.TS {
 	node.RLock()
 	defer node.RUnlock()
 	if node.txn != nil {

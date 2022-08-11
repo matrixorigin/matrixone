@@ -16,6 +16,7 @@ package segmentio
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -38,7 +39,8 @@ func TestBlock1(t *testing.T) {
 	id := common.NextGlobalSeqNum()
 	seg := SegmentFactory.Build(dir, id).(*segmentFile)
 	block = newBlock(common.NextGlobalSeqNum(), seg, colCnt, indexCnt)
-	blockTs := common.NextGlobalSeqNum()
+	//blockTs := common.NextGlobalSeqNum()
+	blockTs := types.NextGlobalTsForTest()
 	err := block.WriteTS(blockTs)
 	assert.Nil(t, err)
 	readTs, _ := block.ReadTS()
