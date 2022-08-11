@@ -134,5 +134,5 @@ See [Connect to MatrixOne server](connect-to-matrixone-server.md).
 
 ## Reference
 
-For more information on update，see[Update Standalone MatrixOne](update-standalone-matrixone.md).
-For more information on deployment，see[Deployment FAQs](../FAQs/deployment-faqs.md).
+- For more information on update，see[Update Standalone MatrixOne](update-standalone-matrixone.md).
+- For more information on deployment，see[Deployment FAQs](../FAQs/deployment-faqs.md).
