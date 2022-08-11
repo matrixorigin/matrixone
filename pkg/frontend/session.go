@@ -76,7 +76,6 @@ type Session struct {
 	ep           *tree.ExportParam
 	showStmtType ShowStatementType
 
-	closeRef      *CloseExportData
 	txnHandler    *TxnHandler
 	txnCompileCtx *TxnCompilerContext
 	storage       engine.Engine

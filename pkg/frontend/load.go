@@ -187,8 +187,6 @@ type ParseLineHandler struct {
 	simdCsvBatchPool              chan *PoolElement
 	simdCsvNotiyEventChan         chan *notifyEvent
 	closeOnce                     sync.Once
-
-	closeRef *CloseLoadData
 }
 
 type WriteBatchHandler struct {
@@ -238,7 +236,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 	for {
 		quit := false
 		select {
-		case <-plh.closeRef.stopLoadData:
+		case <-plh.loadCtx.Done():
 			logutil.Infof("----- get stop in getLineOutFromSimdCsvRoutine")
 			quit = true
 		case lineOut = <-getLineOutChan(plh.simdCsvGetParsedLinesChan):
@@ -318,7 +316,6 @@ func (plh *ParseLineHandler) close() {
 		close(plh.simdCsvNotiyEventChan)
 		plh.simdCsvReader.Close()
 	})
-	plh.closeRef.Close()
 }
 
 /*
@@ -497,7 +494,6 @@ func initWriteBatchHandler(handler *ParseLineHandler, wHandler *WriteBatchHandle
 	wHandler.oneTxnPerBatch = handler.oneTxnPerBatch
 	wHandler.timestamp = handler.timestamp
 	wHandler.result = &LoadResult{}
-	wHandler.closeRef = handler.closeRef
 	wHandler.lineCount = handler.lineCount
 	wHandler.skipWriteBatch = handler.skipWriteBatch
 	wHandler.loadCtx = handler.loadCtx
@@ -2029,14 +2025,6 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 	notifyChanSize := handler.simdCsvConcurrencyCountOfWriteBatch * 2
 	notifyChanSize = Max(100, notifyChanSize)
 
-	/*
-		make close reference
-	*/
-	handler.closeRef = NewCloseLoadData()
-
-	//put closeRef into the executor
-	mce.loadDataClose = handler.closeRef
-
 	handler.simdCsvReader = simdcsv.NewReaderWithOptions(dataFile,
 		rune(load.Fields.Terminated[0]),
 		'#',
@@ -2111,11 +2099,6 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 		for {
 			quit := false
 			select {
-			case <-handler.closeRef.stopLoadData:
-				//get obvious cancel
-				retErr = NewMysqlError(ER_QUERY_INTERRUPTED)
-				quit = true
-			//logutil.Infof("----- get stop in load ")
 			case <-requestCtx.Done():
 				logutil.Info("cancel the load")
 				retErr = NewMysqlError(ER_QUERY_INTERRUPTED)

@@ -457,19 +457,19 @@ func getParsedLinesChan(simdCsvGetParsedLinesChan chan simdcsv.LineOut) {
 func Test_getLineOutFromSimdCsvRoutine(t *testing.T) {
 	convey.Convey("getLineOutFromSimdCsvRoutine succ", t, func() {
 		handler := &ParseLineHandler{
-			closeRef:                  &CloseLoadData{stopLoadData: make(chan interface{}, 1)},
 			simdCsvGetParsedLinesChan: atomic.Value{},
 			SharePart: SharePart{
 				load:             &tree.Load{IgnoredLines: 1},
 				simdCsvLineArray: make([][]string, 100)},
 		}
 		handler.simdCsvGetParsedLinesChan.Store(make(chan simdcsv.LineOut, 100))
-		handler.closeRef.stopLoadData <- 1
+
 		gostub.StubFunc(&saveLinesToStorage, nil)
+		handler.loadCtx, _ = context.WithTimeout(context.TODO(), time.Second)
 		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldBeNil)
 
-		handler.closeRef.stopLoadData <- 1
 		gostub.StubFunc(&saveLinesToStorage, errors.New("1"))
+		handler.loadCtx, _ = context.WithTimeout(context.TODO(), time.Second)
 		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldNotBeNil)
 
 		getParsedLinesChan(getLineOutChan(handler.simdCsvGetParsedLinesChan))

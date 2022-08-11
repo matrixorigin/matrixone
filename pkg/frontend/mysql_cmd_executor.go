@@ -88,18 +88,13 @@ type MysqlCmdExecutor struct {
 	//the count of sql has been processed
 	sqlCount uint64
 
-	//for load data closing
-	loadDataClose *CloseLoadData
-
-	//for export data closing
-	exportDataClose *CloseExportData
-
 	ses *Session
 
 	sessionRWLock sync.RWMutex
 
 	routineMgr *RoutineManager
 
+	rwLock            sync.RWMutex
 	cancelRequestFunc context.CancelFunc
 }
 
@@ -110,6 +105,8 @@ func (mce *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session) {
 }
 
 func (mce *MysqlCmdExecutor) GetSession() *Session {
+	mce.sessionRWLock.RLock()
+	defer mce.sessionRWLock.RUnlock()
 	return mce.ses
 }
 
@@ -428,7 +425,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	for j := 0; j < n; j++ { //row index
 		if oq.ep.Outfile {
 			select {
-			case <-ses.closeRef.stopExportData:
+			case <-ses.requestCtx.Done():
 				{
 					return nil
 				}
@@ -1742,9 +1739,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		switch st := stmt.(type) {
 		case *tree.Select:
 			if st.Ep != nil {
-				mce.exportDataClose = NewCloseExportData()
 				ses.ep = st.Ep
-				ses.closeRef = mce.exportDataClose
 			}
 		}
 
@@ -2113,21 +2108,28 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 	return resp, nil
 }
 
+func (mce *MysqlCmdExecutor) setCancelRequestFunc(cancelFunc context.CancelFunc) {
+	mce.rwLock.Lock()
+	defer mce.rwLock.Unlock()
+	mce.cancelRequestFunc = cancelFunc
+}
+
+func (mce *MysqlCmdExecutor) getCancelRequestFunc() context.CancelFunc {
+	mce.rwLock.RLock()
+	defer mce.rwLock.RUnlock()
+	return mce.cancelRequestFunc
+}
+
 func (mce *MysqlCmdExecutor) Close() {
-	if mce.cancelRequestFunc != nil {
-		mce.cancelRequestFunc()
+	cancelRequestFunc := mce.getCancelRequestFunc()
+	if cancelRequestFunc != nil {
+		cancelRequestFunc()
 	}
-	//logutil.Infof("close executor")
-	if mce.loadDataClose != nil {
-		//logutil.Infof("close process load data")
-		mce.loadDataClose.Close()
-	}
-	if mce.exportDataClose != nil {
-		mce.exportDataClose.Close()
-	}
+
 	mce.sessionRWLock.Lock()
 	defer mce.sessionRWLock.Unlock()
-	err := mce.ses.TxnRollback()
+	ses := mce.GetSession()
+	err := ses.TxnRollback()
 	if err != nil {
 		logutil.Errorf("rollback txn in mce.Close failed.error:%v", err)
 	}

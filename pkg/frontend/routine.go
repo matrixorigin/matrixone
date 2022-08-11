@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"sync"
 	"time"
 )
 
@@ -40,11 +39,6 @@ type Routine struct {
 
 	//channel of request
 	requestChan chan *Request
-
-	//channel of notify
-	notifyChan chan interface{}
-
-	onceCloseNotifyChan sync.Once
 
 	cancelRoutineFunc context.CancelFunc
 
@@ -87,9 +81,6 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		case <-routineCtx.Done():
 			logutil.Infof("-----cancel routine")
 			quit = true
-		case <-routine.notifyChan:
-			logutil.Infof("-----routine quit")
-			quit = true
 		case req = <-routine.requestChan:
 		}
 
@@ -108,7 +99,7 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		}
 
 		cancelRequestCtx, cancelRequestFunc := context.WithCancel(routineCtx)
-		routine.executor.(*MysqlCmdExecutor).cancelRequestFunc = cancelRequestFunc
+		routine.executor.(*MysqlCmdExecutor).setCancelRequestFunc(cancelRequestFunc)
 		ses.SetRequestContext(cancelRequestCtx)
 		routine.executor.PrepareSessionBeforeExecRequest(ses)
 
@@ -139,10 +130,6 @@ func (routine *Routine) Quit() {
 	if routine.cancelRoutineFunc != nil {
 		routine.cancelRoutineFunc()
 	}
-	routine.onceCloseNotifyChan.Do(func() {
-		//logutil.Infof("---------notify close")
-		close(routine.notifyChan)
-	})
 
 	if routine.protocol != nil {
 		routine.protocol.Quit()
@@ -164,7 +151,6 @@ func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecuto
 		protocol:          protocol,
 		executor:          executor,
 		requestChan:       make(chan *Request, 1),
-		notifyChan:        make(chan interface{}),
 		guestMmu:          guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu),
 		mempool:           pu.Mempool,
 		cancelRoutineFunc: cancelRoutineFunc,
