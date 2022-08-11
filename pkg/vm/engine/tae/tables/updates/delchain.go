@@ -16,6 +16,7 @@ package updates
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"sync"
 	"sync/atomic"
 
@@ -78,15 +79,15 @@ func (chain *DeleteChain) LoopChainLocked(fn func(node *DeleteNode) bool, revers
 	chain.Loop(wrapped, reverse)
 }
 
-func (chain *DeleteChain) IsDeleted(row uint32, ts uint64, rwlocker *sync.RWMutex) (deleted bool, err error) {
+func (chain *DeleteChain) IsDeleted(row uint32, ts types.TS, rwlocker *sync.RWMutex) (deleted bool, err error) {
 	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		// Skip txn that started after ts
-		if n.GetStartTS() > ts {
+		if n.GetStartTS().Greater(ts) {
 			return true
 		}
 		n.RLock()
 		// Skip txn that committed|committing after ts
-		if n.GetCommitTSLocked() > ts && n.GetStartTS() != ts {
+		if n.GetCommitTSLocked().Greater(ts) && !n.GetStartTS().Equal(ts) {
 			n.RUnlock()
 			return true
 		}
@@ -123,13 +124,13 @@ func (chain *DeleteChain) IsDeleted(row uint32, ts uint64, rwlocker *sync.RWMute
 	return
 }
 
-func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts uint64) (err error) {
+func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (err error) {
 	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		n.RLock()
 		defer n.RUnlock()
 		overlap := n.HasOverlapLocked(start, end)
 		if overlap {
-			if n.txn == nil || n.txn.GetStartTS() == ts {
+			if n.txn == nil || n.txn.GetStartTS().Equal(ts) {
 				err = data.ErrNotFound
 			} else {
 				err = txnif.ErrTxnWWConflict
@@ -196,7 +197,7 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 
 // CollectDeletesInRange collects [startTs, endTs)
 func (chain *DeleteChain) CollectDeletesInRange(
-	startTs, endTs uint64,
+	startTs, endTs types.TS,
 	rwlocker *sync.RWMutex) (mask *roaring.Bitmap, indexes []*wal.Index, err error) {
 	n, err := chain.CollectDeletesLocked(startTs, true, rwlocker)
 	if err != nil {
@@ -225,7 +226,7 @@ func (chain *DeleteChain) CollectDeletesInRange(
 }
 
 func (chain *DeleteChain) CollectDeletesLocked(
-	ts uint64,
+	ts types.TS,
 	collectIndex bool,
 	rwlocker *sync.RWMutex) (txnif.DeleteNode, error) {
 	var merged *DeleteNode
@@ -233,7 +234,7 @@ func (chain *DeleteChain) CollectDeletesLocked(
 	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		// Merged node is a loop breaker
 		if n.IsMerged() {
-			if n.GetCommitTSLocked() > ts {
+			if n.GetCommitTSLocked().Greater(ts) {
 				return true
 			}
 			if merged == nil {
@@ -246,7 +247,7 @@ func (chain *DeleteChain) CollectDeletesLocked(
 		txn := n.txn
 
 		if txn == nil {
-			if n.GetCommitTSLocked() <= ts {
+			if n.GetCommitTSLocked().LessEq(ts) {
 				if merged == nil {
 					merged = NewMergedNode(n.GetCommitTSLocked())
 				}

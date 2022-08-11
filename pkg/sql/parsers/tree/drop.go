@@ -14,7 +14,7 @@
 
 package tree
 
-//DROP Database statement
+// DROP Database statement
 type DropDatabase struct {
 	statementImpl
 	Name     Identifier
@@ -40,7 +40,7 @@ func NewDropDatabase(n Identifier, i bool) *DropDatabase {
 	}
 }
 
-//DROP Table statement
+// DROP Table statement
 type DropTable struct {
 	statementImpl
 	IfExists bool
@@ -142,4 +142,19 @@ func NewDropUser(ife bool, u []*User) *DropUser {
 		IfExists: ife,
 		Users:    u,
 	}
+}
+
+type DropAccount struct {
+	statementImpl
+	IfExists bool
+	Name     string
+}
+
+func (node *DropAccount) Format(ctx *FmtCtx) {
+	ctx.WriteString("drop account")
+	if node.IfExists {
+		ctx.WriteString(" if exists")
+	}
+	ctx.WriteString(" ")
+	ctx.WriteString(node.Name)
 }

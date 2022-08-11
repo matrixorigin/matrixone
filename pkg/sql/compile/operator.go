@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
@@ -396,7 +397,7 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	}
 }
 
-func constructGroup(n, cn *plan.Node, ibucket, nbucket int) *group.Argument {
+func constructGroup(n, cn *plan.Node, ibucket, nbucket int, needEval bool) *group.Argument {
 	aggs := make([]aggregate.Aggregate, len(n.AggList))
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
@@ -422,11 +423,19 @@ func constructGroup(n, cn *plan.Node, ibucket, nbucket int) *group.Argument {
 		typs[i].Precision = e.Typ.Precision
 	}
 	return &group.Argument{
-		Aggs:    aggs,
-		Types:   typs,
-		Exprs:   n.GroupBy,
-		Ibucket: uint64(ibucket),
-		Nbucket: uint64(nbucket),
+		Aggs:     aggs,
+		Types:    typs,
+		NeedEval: needEval,
+		Exprs:    n.GroupBy,
+		Ibucket:  uint64(ibucket),
+		Nbucket:  uint64(nbucket),
+	}
+}
+
+func constructMinus(n *plan.Node, proc *process.Process, ibucket, nbucket int) *minus.Argument {
+	return &minus.Argument{
+		IBucket: uint64(ibucket),
+		NBucket: uint64(nbucket),
 	}
 }
 

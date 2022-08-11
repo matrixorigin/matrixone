@@ -16,7 +16,6 @@ package db
 
 import (
 	"bytes"
-	"math"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -496,7 +495,7 @@ func TestCompactBlock1(t *testing.T) {
 		assert.Nil(t, err)
 		defer preparer.Close()
 		assert.Equal(t, bat.Vecs[0].Length()-1, preparer.Columns.Vecs[0].Length())
-		var maxTs uint64
+		var maxTs types.TS
 		{
 			txn, rel := getDefaultRelation(t, db, schema.Name)
 			seg, err := rel.GetSegment(id.SegmentID)
@@ -514,7 +513,7 @@ func TestCompactBlock1(t *testing.T) {
 		}
 
 		dataBlock := block.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		changes, err := dataBlock.CollectChangesInRange(txn.GetStartTS(), maxTs+1)
+		changes, err := dataBlock.CollectChangesInRange(txn.GetStartTS(), maxTs.Next())
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(1), changes.DeleteMask.GetCardinality())
 
@@ -531,7 +530,8 @@ func TestCompactBlock1(t *testing.T) {
 		assert.Nil(t, err)
 		t.Log(destBlockData.PPString(common.PPL1, 0, ""))
 
-		view, err := destBlockData.CollectChangesInRange(0, math.MaxUint64)
+		var zeroV types.TS
+		view, err := destBlockData.CollectChangesInRange(zeroV, types.MaxTs())
 		assert.NoError(t, err)
 		assert.True(t, view.DeleteMask.Equals(changes.DeleteMask))
 	}
@@ -1267,7 +1267,9 @@ func TestLogIndex1(t *testing.T) {
 		txn, rel := getDefaultRelation(t, tae, schema.Name)
 		blk := getOneBlock(rel)
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(1, txn.GetStartTS())
+
+		var zeroV types.TS
+		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(zeroV.Next(), txn.GetStartTS())
 		assert.NoError(t, err)
 		for i, index := range indexes {
 			t.Logf("%d: %s", i, index.String())
@@ -1818,19 +1820,19 @@ func TestGetByFilter(t *testing.T) {
 	assert.NoError(t, txn1.Commit())
 }
 
-// 1. Set a big BlockMaxRows
-// 2. Mock one row batch
-// 3. Start tones of workers. Each work execute below routines:
-//    3.1 GetByFilter a pk val
-//        3.1.1 If found, go to 3.5
-//    3.2 Append a row
-//    3.3 err should not be duplicated(TODO: now is duplicated, should be W-W conflict)
-//        (why not duplicated: previous GetByFilter had checked that there was no duplicate key)
-//    3.4 If no error. try commit. If commit ok, inc appendedcnt. If error, rollback
-//    3.5 Delete the row
-//        3.5.1 If no error. try commit. commit should always pass
-//        3.5.2 If error, should always be w-w conflict
-// 4. Wait done all workers. Check the raw row count of table, should be same with appendedcnt.
+//  1. Set a big BlockMaxRows
+//  2. Mock one row batch
+//  3. Start tones of workers. Each work execute below routines:
+//     3.1 GetByFilter a pk val
+//     3.1.1 If found, go to 3.5
+//     3.2 Append a row
+//     3.3 err should not be duplicated(TODO: now is duplicated, should be W-W conflict)
+//     (why not duplicated: previous GetByFilter had checked that there was no duplicate key)
+//     3.4 If no error. try commit. If commit ok, inc appendedcnt. If error, rollback
+//     3.5 Delete the row
+//     3.5.1 If no error. try commit. commit should always pass
+//     3.5.2 If error, should always be w-w conflict
+//  4. Wait done all workers. Check the raw row count of table, should be same with appendedcnt.
 func TestChaos1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)

@@ -855,7 +855,7 @@ func isWantedDatabase(taeEngine moengine.TxnEngine, txnCtx moengine.Txn,
 	return err
 }
 
-//isWantedTable checks the table has the right attributes
+// isWantedTable checks the table has the right attributes
 func isWantedTable(db engine.Database, txnCtx moengine.Txn,
 	tableName string, schema *CatalogSchema) error {
 	ctx := context.TODO()

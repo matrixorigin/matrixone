@@ -101,15 +101,12 @@ select cast(concat_ws('184467440','73709551615') as signed);
 cast(concat_ws('184467440','73709551615') as signed)
 73709551615
 select cast(1.0e+300 as signed int);
-cast(1.0e+300 as signed int)
-9223372036854775807
+Can't cast '1e+300' from DOUBLE type to BIGINT type. Reason: overflow
 CREATE TABLE t1 (f1 double);
 INSERT INTO t1 SET f1 = -1.0e+30 ;
 INSERT INTO t1 SET f1 = +1.0e+30 ;
 SELECT f1 AS double_val, CAST(f1 AS SIGNED INT) AS cast_val FROM t1;
-double_val	cast_val
--1.0E30	-9223372036854775808
-1.0E30	9223372036854775807
+Can't cast column from DOUBLE type to BIGINT type because of one or more values in that column. Reason: overflow
 DROP TABLE t1;
 SELECT CAST(cast('01-01-01' as date) AS UNSIGNED);
 [42883]unsupported parameter types [DATE BIGINT UNSIGNED] for operator 'cast'

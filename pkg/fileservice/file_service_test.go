@@ -297,6 +297,16 @@ func testFileService(
 		err := fs.Read(ctx, &IOVector{
 			FilePath: "foo",
 		})
+		assert.ErrorIs(t, err, ErrEmptyVector)
+
+		err = fs.Read(ctx, &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size: -1,
+				},
+			},
+		})
 		assert.ErrorIs(t, err, ErrFileNotFound)
 
 		err = fs.Write(ctx, IOVector{

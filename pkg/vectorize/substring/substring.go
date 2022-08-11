@@ -16,6 +16,7 @@ package substring
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"math"
 )
 
 /*
@@ -44,7 +45,7 @@ func init() {
 	SubstringDynamicOffsetBounded = substringDynamicOffsetBounded
 }
 
-//Slice from left to right, starting from 0
+// Slice from left to right, starting from 0
 func getSliceFromLeft(bytes []byte, offset int64) ([]byte, int64) {
 	sourceRune := []rune(string(bytes))
 	elemsize := int64(len(sourceRune))
@@ -105,7 +106,7 @@ func getSliceFromRightWithLength(bytes []byte, offset int64, length int64) ([]by
 	return substrSlice, substrSliceLen
 }
 
-//The length parameter is not bound. Cut the string from the left
+// The length parameter is not bound. Cut the string from the left
 func substringFromLeftConstOffsetUnbounded(src *types.Bytes, res *types.Bytes, start int64) *types.Bytes {
 	var retCursor uint32 = 0
 	for idx, offset := range src.Offsets {
@@ -129,7 +130,7 @@ func substringFromLeftConstOffsetUnbounded(src *types.Bytes, res *types.Bytes, s
 	return res
 }
 
-//The length parameter is not bound. Cut the string from the right
+// The length parameter is not bound. Cut the string from the right
 func substringFromRightConstOffsetUnbounded(src *types.Bytes, res *types.Bytes, start int64) *types.Bytes {
 	var retCursor uint32 = 0
 	for idx, offset := range src.Offsets {
@@ -152,7 +153,7 @@ func substringFromRightConstOffsetUnbounded(src *types.Bytes, res *types.Bytes, 
 	return res
 }
 
-//The length parameter is not bound. Cut the string from 0
+// The length parameter is not bound. Cut the string from 0
 func substringFromZeroConstOffsetUnbounded(src *types.Bytes, res *types.Bytes) *types.Bytes {
 	for idx := range src.Offsets {
 		if idx != 0 {
@@ -165,7 +166,7 @@ func substringFromZeroConstOffsetUnbounded(src *types.Bytes, res *types.Bytes) *
 	return res
 }
 
-//bound length parameter. Cut the string from 0
+// bound length parameter. Cut the string from 0
 func substringFromZeroConstOffsetBounded(src *types.Bytes, res *types.Bytes) *types.Bytes {
 	for idx := range src.Offsets {
 		if idx != 0 {
@@ -178,7 +179,7 @@ func substringFromZeroConstOffsetBounded(src *types.Bytes, res *types.Bytes) *ty
 	return res
 }
 
-//Without binding the length parameter, dynamically cut the string
+// Without binding the length parameter, dynamically cut the string
 func substringDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, startColumn interface{}, startColumnType types.T) *types.Bytes {
 	var retCursor uint32
 	for idx, offset := range src.Offsets {
@@ -206,6 +207,15 @@ func substringDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, startCo
 			startValue = int64(startColumn.([]int32)[idx])
 		case types.T_int64:
 			startValue = startColumn.([]int64)[idx]
+		case types.T_float64:
+			fval := startColumn.([]float64)[idx]
+			if fval > float64(math.MaxInt64) {
+				startValue = math.MaxInt64
+			} else if fval < float64(math.MinInt64) {
+				startValue = math.MinInt64
+			} else {
+				startValue = int64(fval)
+			}
 		default:
 			startValue = int64(1)
 		}
@@ -246,7 +256,7 @@ func substringDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, startCo
 	return res
 }
 
-//bound length parameter. Cut the string from left
+// bound length parameter. Cut the string from left
 func substringFromLeftConstOffsetBounded(src *types.Bytes, res *types.Bytes, start int64, length int64) *types.Bytes {
 	var retCursor uint32 = 0
 	for idx, offset := range src.Offsets {
@@ -269,7 +279,7 @@ func substringFromLeftConstOffsetBounded(src *types.Bytes, res *types.Bytes, sta
 	return res
 }
 
-//bound length parameter. Cut the string from right
+// bound length parameter. Cut the string from right
 func substringFromRightConstOffsetBounded(src *types.Bytes, res *types.Bytes, start int64, length int64) *types.Bytes {
 	var retCursor uint32 = 0
 	for idx, offset := range src.Offsets {
@@ -386,6 +396,15 @@ func getColumnValue(srcColumn interface{}, columnType types.T, idx int, isConstt
 		dstValue = int64(srcColumn.([]int32)[idx])
 	case types.T_int64:
 		dstValue = srcColumn.([]int64)[idx]
+	case types.T_float64:
+		fval := srcColumn.([]float64)[idx]
+		if fval > float64(math.MaxInt64) {
+			dstValue = math.MaxInt64
+		} else if fval < float64(math.MinInt64) {
+			dstValue = math.MinInt64
+		} else {
+			dstValue = int64(fval)
+		}
 	default:
 		dstValue = int64(1)
 	}

@@ -123,6 +123,10 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 
 func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 
+	if len(vector.Entries) == 0 {
+		return ErrEmptyVector
+	}
+
 	nativePath := l.toNativeFilePath(vector.FilePath)
 	_, err := os.Stat(nativePath)
 	if os.IsNotExist(err) {

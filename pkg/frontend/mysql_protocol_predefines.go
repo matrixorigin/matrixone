@@ -19,15 +19,15 @@ import (
 	"strings"
 )
 
-//tuple (collation name, charset)
+// tuple (collation name, charset)
 type charsetCollationName struct {
 	charset       string
 	collationName string
 }
 
-//the map: collation id --> (charset, collation name)
-//Run the SQL below in Mysql 8.0.23 to get the map.
-//the SQL: select concat(RelationName,':\t\t{"',CHARACTER_SET_NAME,'",\t"',collation_name,'"},') from INFORMATION_SCHEMA.COLLATIONS order by id;
+// the map: collation id --> (charset, collation name)
+// Run the SQL below in Mysql 8.0.23 to get the map.
+// the SQL: select concat(RelationName,':\t\t{"',CHARACTER_SET_NAME,'",\t"',collation_name,'"},') from INFORMATION_SCHEMA.COLLATIONS order by id;
 var collationID2CharsetAndName = map[int]charsetCollationName{
 	1:   {"big5", "big5_chinese_ci"},
 	2:   {"latin2", "latin2_czech_cs"},
@@ -303,7 +303,7 @@ var collationID2CharsetAndName = map[int]charsetCollationName{
 	309: {"utf8mb4", "utf8mb4_0900_bin"},
 }
 
-//mysql client capabilities
+// mysql client capabilities
 const (
 	CLIENT_LONG_PASSWORD                  uint32 = 0x00000001
 	CLIENT_FOUND_ROWS                     uint32 = 0x00000002
@@ -331,7 +331,7 @@ const (
 	CLIENT_DEPRECATE_EOF                  uint32 = 0x01000000
 )
 
-//server status
+// server status
 const (
 	SERVER_STATUS_IN_TRANS             uint16 = 0x0001
 	SERVER_STATUS_AUTOCOMMIT           uint16 = 0x0002
@@ -349,8 +349,8 @@ const (
 	SERVER_SESSION_STATE_CHANGED       uint16 = 0x4000
 )
 
-//text protocol in mysql client protocol
-//iteration command
+// text protocol in mysql client protocol
+// iteration command
 const (
 	COM_SLEEP               uint8 = 0x00
 	COM_QUIT                uint8 = 0x01
@@ -388,6 +388,7 @@ mysql version 8.0.23
 usually it is in the directory /usr/local/include/mysql/mysqld_error.h
 
 Error information includes several elements: an error code, SQLSTATE value, and message string.
+
 	Error code: This value is numeric. It is MySQL-specific and is not portable to other database systems.
 	SQLSTATE value: This value is a five-character string (for example, '42S02'). SQLSTATE values are taken from ANSI SQL and ODBC and are more standardized than the numeric error codes.
 	Message string: This string provides a textual description of the error.
@@ -5789,7 +5790,7 @@ For server-side errors, not all MySQL error numbers have corresponding SQLSTATE 
 For client-side errors, the SQLSTATE value is always 'HY000' (general error), so it is not meaningful for distinguishing one client error from another.
 */
 
-//error message components
+// error message components
 type errorMsgItem struct {
 	errorCode        uint16
 	sqlStates        []string
@@ -5800,12 +5801,12 @@ type errorMsgItem struct {
 error code -> [error code integer ; [sqlstate1,...] ; error message or format]
 
 information merged from:
+
 	https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html
 
 	under mysql 8.0.23 installation directory(like /usr/local/opt/mysql@8.0)?:
 		/share/mysql/messages_to_clients.txt
 		/share/mysql/messages_to_error_log.txt
-
 */
 var errorMsgRefer = map[uint16]errorMsgItem{
 	//OBSOLETE_ER_HASHCHK : {0000,[]string{""},"hashchk"},
@@ -11198,7 +11199,7 @@ func NewMysqlError(code uint16, args ...interface{}) *MysqlError {
 	}
 }
 
-//reference to sql/query_options.h in mysql server 8.0.23
+// reference to sql/query_options.h in mysql server 8.0.23
 const (
 	OPTION_AUTOCOMMIT        uint32 = 1 << 8
 	OPTION_BIG_SELECTS       uint32 = 1 << 9

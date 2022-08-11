@@ -299,7 +299,7 @@ func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, e
 	return exprs, nil
 }
 
-//splitAstConjunction split a expression to a list of AND conditions.
+// splitAstConjunction split a expression to a list of AND conditions.
 func splitAstConjunction(astExpr tree.Expr) []tree.Expr {
 	var astExprs []tree.Expr
 	switch typ := astExpr.(type) {
@@ -536,7 +536,7 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 		if stmt.All {
 			return errors.New("", "EXCEPT/MINUS ALL clause will support in future version.")
 		} else {
-			*unionTypes = append(*unionTypes, plan.Node_UNION)
+			*unionTypes = append(*unionTypes, plan.Node_MINUS)
 		}
 	}
 	return nil

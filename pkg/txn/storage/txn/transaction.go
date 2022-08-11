@@ -20,7 +20,7 @@ type Transaction struct {
 	ID          string
 	BeginTime   Timestamp
 	CurrentTime Timestamp
-	State       TransactionState
+	State       *Atomic[TransactionState]
 }
 
 func NewTransaction(id string, t Timestamp) *Transaction {
@@ -28,7 +28,7 @@ func NewTransaction(id string, t Timestamp) *Transaction {
 		ID:          id,
 		BeginTime:   t,
 		CurrentTime: t,
-		State:       Active,
+		State:       NewAtomic[TransactionState](Active),
 	}
 }
 
