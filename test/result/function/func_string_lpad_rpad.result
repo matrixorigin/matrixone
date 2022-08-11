@@ -100,17 +100,23 @@ select lpad('hello', 4294967297, '1');
 lpad('hello', 4294967297, '1')
 null
 select lpad('hello', -18446744073709551615, '1');
-Operator 'cast' with parameters [DECIMAL128 BIGINT] will be implemented in future version.
+lpad(hello, -18446744073709551615, 1)
+null
 select lpad('hello', 18446744073709551615, '1');
-Can't cast '18446744073709551615' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
+lpad(hello, 18446744073709551615, 1)
+null
 select lpad('hello', -18446744073709551616, '1');
-Operator 'cast' with parameters [DECIMAL128 BIGINT] will be implemented in future version.
+lpad(hello, -18446744073709551616, 1)
+null
 select lpad('hello', 18446744073709551616, '1');
-Operator 'cast' with parameters [DECIMAL128 BIGINT] will be implemented in future version.
+lpad(hello, 18446744073709551616, 1)
+null
 select lpad('hello', -18446744073709551617, '1');
-Operator 'cast' with parameters [DECIMAL128 BIGINT] will be implemented in future version.
+lpad(hello, -18446744073709551617, 1)
+null
 select lpad('hello', 18446744073709551617, '1');
-Operator 'cast' with parameters [DECIMAL128 BIGINT] will be implemented in future version.
+lpad(hello, 18446744073709551617, 1)
+null
 SELECT RPAD('hi', year(FROM_UNIXTIME(-1)),'?');
 RPAD('hi', year(FROM_UNIXTIME(-1)),'?')
 null

@@ -47,7 +47,7 @@ func (l *KVLog) MustMarshal() []byte {
 	return data
 }
 
-// NewMemLog new log use memory as backend
+// NewMemLog new log use memory as backend. Log index is start from 1.
 func NewMemLog() logservice.Client {
 	return &memLogClient{}
 }
@@ -69,20 +69,21 @@ func (mc *memLogClient) Append(ctx context.Context, log logpb.LogRecord) (logser
 	mc.Lock()
 	defer mc.Unlock()
 
+	log.Lsn = logservice.Lsn(len(mc.logs) + 1)
 	mc.logs = append(mc.logs, log)
-	return logservice.Lsn(len(mc.logs) - 1), nil
+	return logservice.Lsn(len(mc.logs)), nil
 }
 
 func (mc *memLogClient) Read(ctx context.Context, firstIndex logservice.Lsn, maxSize uint64) ([]logpb.LogRecord, logservice.Lsn, error) {
 	mc.RLock()
 	defer mc.RUnlock()
 
-	if firstIndex >= logservice.Lsn(len(mc.logs)) {
+	if firstIndex > logservice.Lsn(len(mc.logs)) {
 		return nil, firstIndex, nil
 	}
 
-	values := make([]logpb.LogRecord, logservice.Lsn(len(mc.logs))-firstIndex)
-	copy(values, mc.logs[firstIndex:])
+	values := make([]logpb.LogRecord, logservice.Lsn(len(mc.logs))-firstIndex+1)
+	copy(values, mc.logs[firstIndex-1:])
 	return values, firstIndex, nil
 }
 
@@ -90,11 +91,11 @@ func (mc *memLogClient) Truncate(ctx context.Context, index logservice.Lsn) erro
 	mc.Lock()
 	defer mc.Unlock()
 
-	if index >= logservice.Lsn(len(mc.logs)) {
+	if index > logservice.Lsn(len(mc.logs)) {
 		panic("invalid truncate index")
 	}
 
-	mc.logs = mc.logs[index+1:]
+	mc.logs = mc.logs[index:]
 	return nil
 }
 

@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
 )
 
 const (
@@ -40,7 +41,7 @@ func Lpad(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 	sourceStr := vector.MustBytesCols(vecs[ParameterSourceString]) //Get the first arg
 
 	//characters length not bytes length
-	lengthsOfChars := vector.MustTCols[int64](vecs[ParameterLengths])
+	lengthsOfChars := getLensForLpad(vecs[ParameterLengths].Col)
 
 	//pad string
 	padStr := vector.MustBytesCols(vecs[ParameterPadString])
@@ -82,6 +83,36 @@ func Lpad(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 	resultVec.Nsp = resultNUll
 	vector.SetCol(resultVec, results)
 	return resultVec, nil
+}
+
+func getLensForLpad(col interface{}) []int64 {
+	switch vs := col.(type) {
+	case []int64:
+		return vs
+	case []float64:
+		res := make([]int64, 0, len(vs))
+		for _, v := range vs {
+			if v > float64(math.MaxInt64) {
+				res = append(res, math.MaxInt64)
+			} else if v < float64(math.MinInt64) {
+				res = append(res, math.MinInt64)
+			} else {
+				res = append(res, int64(v))
+			}
+		}
+		return res
+	case []uint64:
+		res := make([]int64, 0, len(vs))
+		for _, v := range vs {
+			if v > uint64(math.MaxInt64) {
+				res = append(res, math.MaxInt64)
+			} else {
+				res = append(res, int64(v))
+			}
+		}
+		return res
+	}
+	panic("unexpected parameter types were received")
 }
 
 func getSpaceLengthOfLpad(sourceStr *types.Bytes, lengths []int64, padStr *types.Bytes, rowCount int, constVectors []bool, inputNulls []*nulls.Nulls) int64 {
