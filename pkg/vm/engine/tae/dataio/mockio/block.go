@@ -28,7 +28,7 @@ type blockFile struct {
 	seg       file.Segment
 	rows      uint32
 	id        uint64
-	ts        uint64
+	ts        types.TS
 	columns   []*columnBlock
 	deletes   *deletesFile
 	indexMeta *dataFile
@@ -78,12 +78,12 @@ func (bf *blockFile) ReadRows() uint32 {
 	return bf.rows
 }
 
-func (bf *blockFile) WriteTS(ts uint64) (err error) {
+func (bf *blockFile) WriteTS(ts types.TS) (err error) {
 	bf.ts = ts
 	return
 }
 
-func (bf *blockFile) ReadTS() (ts uint64, err error) {
+func (bf *blockFile) ReadTS() (ts types.TS, err error) {
 	ts = bf.ts
 	return
 }
@@ -170,17 +170,17 @@ func (bf *blockFile) LoadBatch(
 	return
 }
 
-func (bf *blockFile) WriteColumnVec(ts uint64, colIdx int, vec containers.Vector) (err error) {
+func (bf *blockFile) WriteColumnVec(ts types.TS, colIdx int, vec containers.Vector) (err error) {
 	panic("not implemented")
 }
 
-func (bf *blockFile) WriteBatch(bat *containers.Batch, ts uint64) (err error) {
+func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (err error) {
 	panic("not implemented")
 }
 
 func (bf *blockFile) WriteSnapshot(
 	bat *containers.Batch,
-	ts uint64,
+	ts types.TS,
 	masks map[uint16]*roaring.Bitmap,
 	vals map[uint16]map[uint32]any,
 	deletes *roaring.Bitmap) (err error) {

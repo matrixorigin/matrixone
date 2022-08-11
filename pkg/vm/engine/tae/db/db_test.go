@@ -16,7 +16,6 @@ package db
 
 import (
 	"bytes"
-	"math"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -496,7 +495,7 @@ func TestCompactBlock1(t *testing.T) {
 		assert.Nil(t, err)
 		defer preparer.Close()
 		assert.Equal(t, bat.Vecs[0].Length()-1, preparer.Columns.Vecs[0].Length())
-		var maxTs uint64
+		var maxTs types.TS
 		{
 			txn, rel := getDefaultRelation(t, db, schema.Name)
 			seg, err := rel.GetSegment(id.SegmentID)
@@ -514,7 +513,7 @@ func TestCompactBlock1(t *testing.T) {
 		}
 
 		dataBlock := block.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		changes, err := dataBlock.CollectChangesInRange(txn.GetStartTS(), maxTs+1)
+		changes, err := dataBlock.CollectChangesInRange(txn.GetStartTS(), maxTs.Next())
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(1), changes.DeleteMask.GetCardinality())
 
@@ -531,7 +530,8 @@ func TestCompactBlock1(t *testing.T) {
 		assert.Nil(t, err)
 		t.Log(destBlockData.PPString(common.PPL1, 0, ""))
 
-		view, err := destBlockData.CollectChangesInRange(0, math.MaxUint64)
+		var zeroV types.TS
+		view, err := destBlockData.CollectChangesInRange(zeroV, types.MaxTs())
 		assert.NoError(t, err)
 		assert.True(t, view.DeleteMask.Equals(changes.DeleteMask))
 	}
@@ -1267,7 +1267,9 @@ func TestLogIndex1(t *testing.T) {
 		txn, rel := getDefaultRelation(t, tae, schema.Name)
 		blk := getOneBlock(rel)
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(1, txn.GetStartTS())
+
+		var zeroV types.TS
+		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(zeroV.Next(), txn.GetStartTS())
 		assert.NoError(t, err)
 		for i, index := range indexes {
 			t.Logf("%d: %s", i, index.String())

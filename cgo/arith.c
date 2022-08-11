@@ -15,7 +15,6 @@
  */
 
 #include "mo_impl.h"
-#include <math.h>
 
 /* 
  * Signed int add with overflow check.
@@ -218,10 +217,6 @@
     if (opflag == 1) {                              \
         return RC_DIVISION_BY_ZERO;                 \
     } else return RC_SUCCESS
-
-
-const int32_t LEFT_IS_SCALAR = 1;
-const int32_t RIGHT_IS_SCALAR = 2;
 
 // MO_ARITH_T: Handle general arithmetic operations
 #define MO_ARITH_T(OP, ZT)                                    \
