@@ -33,6 +33,17 @@ func (p *Path) init(subs []subPath) {
 		}
 	}
 }
+
+func (p Path) empty() bool {
+	return len(p.paths) == 0
+}
+
+func (p Path) remove() (sub subPath, newP Path) {
+	sub = p.paths[0]
+	newP.init(p.paths[1:])
+	return
+}
+
 func (p Path) String() string {
 	var s strings.Builder
 

@@ -278,11 +278,6 @@ func calStrLen(buf []byte) (int, int) {
 	return int(strLen), lenLen
 }
 
-// containsStar returns true if pef contains any asterisk.
-func (pf pathFlag) containsStar() bool {
-	pf &= pathFlagSingleStar | pathFlagDoubleStar
-	return byte(pf) != 0
-}
 func isBlank(c rune) bool {
 	if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
 		return true
@@ -364,4 +359,31 @@ func ParseJsonPath(path string) (p Path, err error) {
 	}
 	p.init(subPaths)
 	return
+}
+
+func addByteElem(buf []byte, entryStart int, elems []ByteJson) []byte {
+	for i, elem := range elems {
+		buf[entryStart+i*valEntrySize] = byte(elem.Type)
+		if elem.Type == TpCodeLiteral {
+			buf[entryStart+i*valEntrySize+valTypeSize] = elem.Data[0]
+		} else {
+			endian.PutUint32(buf[entryStart+i*valEntrySize+valTypeSize:], uint32(len(buf)))
+			buf = append(buf, elem.Data...)
+		}
+	}
+	return buf
+}
+
+func mergeToArray(origin []ByteJson) ByteJson {
+	totalSize := headerSize + len(origin)*valEntrySize
+	for _, el := range origin {
+		if el.Type != TpCodeLiteral {
+			totalSize += len(el.Data)
+		}
+	}
+	buf := make([]byte, headerSize+len(origin)*valEntrySize, totalSize)
+	endian.PutUint32(buf, uint32(len(origin)))
+	endian.PutUint32(buf[docSizeOff:], uint32(totalSize))
+	buf = addByteElem(buf, headerSize, origin)
+	return ByteJson{Type: TpCodeArray, Data: buf}
 }

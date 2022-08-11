@@ -80,6 +80,6 @@ const (
 )
 
 var (
-	endian            = binary.LittleEndian
+	endian        = binary.LittleEndian
 	jsonSubPathRe = regexp.MustCompile(`(\.\s*(([\$]*[a-zA-Z_][a-zA-Z0-9_]*)+|\*|"[^"\\]*(\\.[^"\\]*)*")|(\[\s*([0-9]+|\*)\s*\])|\*\*)`)
 )
