@@ -33,6 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+
+	"github.com/google/gops/agent"
 )
 
 const (
@@ -65,10 +67,12 @@ func createMOServer() {
 	mo = frontend.NewMOServer(address, pu)
 	{
 		// init trace/log/error framework
-		if _, err := trace.Init(
-			context.Background(),
-			&config.GlobalSystemVariables,
+		if _, err := trace.Init(context.Background(),
 			trace.WithMOVersion(MoVersion),
+			trace.WithNode(0, trace.NodeTypeNode),
+			trace.EnableTracer(config.GlobalSystemVariables.GetEnableTrace()),
+			trace.WithBatchProcessMode(config.GlobalSystemVariables.GetTraceBatchProcessor()),
+			trace.DebugMode(config.GlobalSystemVariables.GetEnableTraceDebug()),
 			trace.WithSQLExecutor(func() ie.InternalExecutor {
 				return frontend.NewInternalExecutor(pu)
 			}),
@@ -91,7 +95,7 @@ func runMOServer() error {
 
 func serverShutdown(isgraceful bool) error {
 	// flush trace/log/error framework
-	if err := trace.Shutdown(trace.DefaultContext(), &config.GlobalSystemVariables); err != nil {
+	if err := trace.Shutdown(trace.DefaultContext()); err != nil {
 		logutil.Errorf("Shutdown trace err: %v", err)
 	}
 	return mo.Stop()
@@ -240,6 +244,11 @@ func main() {
 		os.Exit(LoadConfigExit)
 	}
 
+	if err := agent.Listen(agent.Options{}); err != nil {
+		logutil.Errorf("listen gops agent failed: %s", err)
+		os.Exit(StartMOExit)
+	}
+
 	createMOServer()
 
 	err := runMOServer()
@@ -254,6 +263,8 @@ func main() {
 		logutil.Infof("Server shutdown failed, %v", err)
 		os.Exit(ShutdownExit)
 	}
+
+	agent.Close()
 
 	cleanup()
 

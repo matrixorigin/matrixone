@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -1692,8 +1693,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		Version:      serverVersion,
 	}
 
-	var newCtx = mce.RecordStatement(trace.DefaultContext(), ses, proc, sql, beginInstant)
-	/*newCtx*/ _, span := trace.Start(newCtx, "doComQuery")
+	var rootCtx = mce.RecordStatement(trace.DefaultContext(), ses, proc, sql, beginInstant)
+	ctx, span := trace.Start(rootCtx, "doComQuery")
 	defer span.End()
 
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
@@ -1894,7 +1895,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 
 		runner = ret.(ComputationRunner)
 		if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-			logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
+			logutil2.Infof(ctx, "time of Exec.Build : %s", time.Since(cmpBegin).String())
 		}
 
 		// cw.Compile might rewrite sql, here we fetch the latest version

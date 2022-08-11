@@ -108,15 +108,30 @@ var _ zapcore.Encoder = (*TraceLogEncoder)(nil)
 
 type TraceLogEncoder struct {
 	zapcore.Encoder
+	spanContextField zap.Field
 }
 
 func (e *TraceLogEncoder) Clone() zapcore.Encoder {
 	return &TraceLogEncoder{
-		e.Encoder.Clone(),
+		Encoder: e.Encoder.Clone(),
 	}
 }
 
+var SpanFieldKey atomic.Value
+
+func (e *TraceLogEncoder) AddObject(key string, val zapcore.ObjectMarshaler) error {
+	if key == SpanFieldKey.Load().(string) {
+		//e.sp = obj.(*trace.SpanContext)
+		e.spanContextField = zap.Object(key, val)
+		return nil
+	}
+	return e.Encoder.AddObject(key, val)
+}
+
 func (e *TraceLogEncoder) EncodeEntry(entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
+	if e.spanContextField.Key == SpanFieldKey.Load().(string) {
+		fields = append(fields, e.spanContextField)
+	}
 	return GetReportZapFunc()(e.Encoder, entry, fields)
 }
 
@@ -138,4 +153,8 @@ func newTraceLogEncoder() *TraceLogEncoder {
 
 func getTraceLogSinks() (zapcore.Encoder, zapcore.WriteSyncer) {
 	return newTraceLogEncoder(), zapcore.AddSync(io.Discard)
+}
+
+func init() {
+	SpanFieldKey.Store("")
 }

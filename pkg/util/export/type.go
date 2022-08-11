@@ -21,8 +21,7 @@ import (
 )
 
 func init() {
-	var p BatchProcessor = &noopBatchProcessor{}
-	SetGlobalBatchProcessor(p)
+	ResetGlobalBatchProcessor()
 	SetDefaultContextFunc(func() context.Context { return context.Background() })
 }
 
@@ -40,6 +39,11 @@ var gBatchProcessor atomic.Value
 
 type processorHolder struct {
 	p BatchProcessor
+}
+
+func ResetGlobalBatchProcessor() {
+	var p BatchProcessor = &noopBatchProcessor{}
+	SetGlobalBatchProcessor(p)
 }
 
 func SetGlobalBatchProcessor(p BatchProcessor) {

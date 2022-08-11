@@ -56,13 +56,13 @@ type tracerProviderConfig struct {
 	// registered.
 	spanProcessors []SpanProcessor
 
+	enableTracer bool // see EnableTracer
+
 	// idGenerator is used to generate all Span and Trace IDs when needed.
 	idGenerator IDGenerator
 
 	// resource contains attributes representing an entity that produces telemetry.
 	resource *Resource // see WithMOVersion, WithNode,
-
-	enableTracer bool // see EnableTracer
 
 	// TODO: can check span's END
 	debugMode bool // see DebugMode
@@ -150,9 +150,14 @@ type MOTracerProvider struct {
 }
 
 func newMOTracerProvider(opts ...TracerProviderOption) *MOTracerProvider {
-	pTracer := &MOTracerProvider{}
-	pTracer.resource = newResource()
-	pTracer.idGenerator = &MOTraceIdGenerator{}
+	pTracer := &MOTracerProvider{
+		tracerProviderConfig{
+			enableTracer:     false,
+			resource:         newResource(),
+			idGenerator:      &MOTraceIdGenerator{},
+			batchProcessMode: InternalExecutor,
+		},
+	}
 	for _, opt := range opts {
 		opt.apply(&pTracer.tracerProviderConfig)
 	}

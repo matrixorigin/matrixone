@@ -41,7 +41,7 @@ import (
 )
 
 func init() {
-	trace.Init(context.Background(), &config.GlobalSystemVariables, trace.EnableTracer(false))
+	trace.Init(context.Background(), trace.EnableTracer(false))
 }
 
 func Test_mce(t *testing.T) {

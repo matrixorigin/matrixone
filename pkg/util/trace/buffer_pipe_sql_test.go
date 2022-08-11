@@ -25,7 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
@@ -53,9 +52,9 @@ func init() {
 func setup() {
 	if _, err := Init(
 		context.Background(),
-		&config.GlobalSystemVariables,
 		EnableTracer(true),
 		WithMOVersion("v0.test.0"),
+		WithNode(0, NodeTypeNode),
 		WithSQLExecutor(func() internalExecutor.InternalExecutor {
 			return nil
 		}),
@@ -418,9 +417,8 @@ func Test_batchSqlHandler_genSpanBatchSql(t1 *testing.T) {
 	}
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
-			if got := genSpanBatchSql(tt.args.in, tt.args.buf); got != tt.want {
-				t1.Errorf("genSpanBatchSql() = %v,\n want %v", got, tt.want)
-			}
+			got := genSpanBatchSql(tt.args.in, tt.args.buf)
+			require.Equal(t1, tt.want, got)
 		})
 	}
 }

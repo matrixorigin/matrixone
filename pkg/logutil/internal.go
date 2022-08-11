@@ -42,6 +42,7 @@ func initMOLogger(cfg *LogConfig) (*zap.Logger, error) {
 
 // global zap logger for MO server.
 var _globalLogger atomic.Value
+var _skip1Logger atomic.Value
 
 // init initializes a default zap logger before set up logger.
 func init() {
@@ -57,9 +58,14 @@ func GetGlobalLogger() *zap.Logger {
 	return _globalLogger.Load().(*zap.Logger)
 }
 
+func GetSkip1Logger() *zap.Logger {
+	return _skip1Logger.Load().(*zap.Logger)
+}
+
 // replaceGlobalLogger replaces the current global zap Logger.
 func replaceGlobalLogger(logger *zap.Logger) {
 	_globalLogger.Store(logger)
+	_skip1Logger.Store(logger.WithOptions(zap.AddCallerSkip(1)))
 }
 
 type LogConfig struct {

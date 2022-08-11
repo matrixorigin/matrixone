@@ -21,7 +21,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
@@ -44,21 +43,15 @@ var gTracer Tracer
 var gTraceContext context.Context = context.Background()
 var gSpanContext atomic.Value
 
-func Init(ctx context.Context, sysVar *config.SystemVariables, options ...TracerProviderOption) (context.Context, error) {
+func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, error) {
 
 	// init tool dependence
 	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: ReportLog, ReportZap: ReportZap, LevelSignal: SetLogLevel, ContextField: ContextField})
+	logutil.SpanFieldKey.Store(SpanFieldKey)
 	errors.SetErrorReporter(HandleError)
 	export.SetDefaultContextFunc(DefaultContext)
 
 	// init TraceProvider
-	var opts = []TracerProviderOption{
-		EnableTracer(sysVar.GetEnableTrace()),
-		WithNode(0, NodeTypeNode),
-		WithBatchProcessMode(sysVar.GetTraceBatchProcessor()),
-		DebugMode(sysVar.GetEnableTraceDebug()),
-	}
-	opts = append(opts, options...)
 	gTracerProvider = newMOTracerProvider(opts...)
 	config := &gTracerProvider.tracerProviderConfig
 
@@ -113,8 +106,8 @@ func initExport(config *tracerProviderConfig) {
 	}
 }
 
-func Shutdown(ctx context.Context, sysVar *config.SystemVariables) error {
-	if !sysVar.GetEnableTrace() {
+func Shutdown(ctx context.Context) error {
+	if !gTracerProvider.enableTracer {
 		return nil
 	}
 

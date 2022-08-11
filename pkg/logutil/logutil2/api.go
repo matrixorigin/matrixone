@@ -16,6 +16,7 @@ package logutil2
 
 import (
 	"context"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -53,32 +54,57 @@ func Fatal(ctx context.Context, msg string, fields ...zap.Field) {
 
 // Debugf only use in develop mode
 func Debugf(ctx context.Context, msg string, fields ...interface{}) {
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), ContextFieldsOption(ctx)).Sugar().With().Debugf(msg, fields...)
+	if len(fields) == 0 {
+		logutil.GetSkip1Logger().Debug(msg, ContextField(ctx))
+	} else {
+		logutil.GetSkip1Logger().Debug(fmt.Sprintf(msg, fields...), ContextField(ctx))
+	}
 }
 
 // Infof only use in develop mode
 func Infof(ctx context.Context, msg string, fields ...interface{}) {
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), ContextFieldsOption(ctx)).Sugar().Infof(msg, fields...)
+	if len(fields) == 0 {
+		logutil.GetSkip1Logger().Info(msg, ContextField(ctx))
+	} else {
+		logutil.GetSkip1Logger().Info(fmt.Sprintf(msg, fields...), ContextField(ctx))
+	}
 }
 
 // Warnf only use in develop mode
 func Warnf(ctx context.Context, msg string, fields ...interface{}) {
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), ContextFieldsOption(ctx)).Sugar().Warnf(msg, fields...)
+	if len(fields) == 0 {
+		logutil.GetSkip1Logger().Warn(msg, ContextField(ctx))
+	} else {
+		logutil.GetSkip1Logger().Warn(fmt.Sprintf(msg, fields...), ContextField(ctx))
+	}
 }
 
 // Errorf only use in develop mode
 func Errorf(ctx context.Context, msg string, fields ...interface{}) {
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), ContextFieldsOption(ctx), zap.AddStacktrace(zap.ErrorLevel)).Sugar().Errorf(msg, fields...)
+	l := logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), ContextFieldsOption(ctx), zap.AddStacktrace(zap.ErrorLevel))
+	if len(fields) == 0 {
+		l.Error(msg, ContextField(ctx))
+	} else {
+		l.Error(fmt.Sprintf(msg, fields...), ContextField(ctx))
+	}
 }
 
 // Panicf only use in develop mode
 func Panicf(ctx context.Context, msg string, fields ...interface{}) {
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), ContextFieldsOption(ctx)).Sugar().Panicf(msg, fields...)
+	if len(fields) == 0 {
+		logutil.GetSkip1Logger().Panic(msg, ContextField(ctx))
+	} else {
+		logutil.GetSkip1Logger().Panic(fmt.Sprintf(msg, fields...), ContextField(ctx))
+	}
 }
 
 // Fatalf only use in develop mode
 func Fatalf(ctx context.Context, msg string, fields ...interface{}) {
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), ContextFieldsOption(ctx)).Sugar().Fatalf(msg, fields...)
+	if len(fields) == 0 {
+		logutil.GetSkip1Logger().Fatal(msg, ContextField(ctx))
+	} else {
+		logutil.GetSkip1Logger().Fatal(fmt.Sprintf(msg, fields...), ContextField(ctx))
+	}
 }
 
 // hook can catch zapcore.Entry, which can add by WithOptions(zap.Hooks(hook))

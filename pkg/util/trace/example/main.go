@@ -18,12 +18,12 @@ import (
 	"context"
 	goErrors "errors"
 	"github.com/lni/dragonboat/v4/logger"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"github.com/matrixorigin/matrixone/pkg/util/errors"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 	"time"
 )
 
@@ -44,7 +44,7 @@ func (l logOutputExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
 func bootstrap(ctx context.Context) (context.Context, error) {
 	logutil.SetupMOLogger(&logutil.LogConfig{Format: "console"})
 	// init trace/log/error framework & BatchProcessor
-	return trace.Init(ctx, &config.GlobalSystemVariables,
+	return trace.Init(ctx,
 		trace.WithMOVersion("v0.6.0"),
 		// nodeType like CN/DN/LogService; id maybe in config.
 		trace.WithNode(0, trace.NodeTypeNode),
@@ -102,7 +102,7 @@ func logUsage(ctx context.Context) {
 	// case 2: use logutil.Info/Infof/..., with context.Context
 	// it will store log into db, related to span, which save in ctx
 	// Suggestion: trace.ContextField should be 1st Field arg, which will help log to find span info faster.
-	logutil.Info("use with ctx", trace.ContextField(ctx))
+	logutil.Info("use with ctx", trace.ContextField(ctx), zap.Int("int", 1))
 
 	// case 3: use logutil2.Info/Infof/..., with contex.Context
 	// it will store log into db, related to span, which save in ctx
@@ -206,7 +206,7 @@ func childFunc(ctx context.Context) error {
 
 func shutdown(ctx context.Context) {
 	logutil2.Warn(ctx, "shutdown")
-	trace.Shutdown(ctx, &config.GlobalSystemVariables)
+	trace.Shutdown(ctx)
 }
 
 func main() {

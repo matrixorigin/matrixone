@@ -25,6 +25,48 @@ import (
 	"testing"
 )
 
+func Test_initExport(t *testing.T) {
+	type args struct {
+		config *tracerProviderConfig
+	}
+	ch := make(chan string, 10)
+	tests := []struct {
+		name  string
+		args  args
+		empty bool
+	}{
+		{
+			name: "disable",
+			args: args{
+				config: &tracerProviderConfig{enableTracer: false},
+			},
+			empty: true,
+		},
+		{
+			name: "enable_InternalExecutor",
+			args: args{
+				config: &tracerProviderConfig{
+					enableTracer: true, batchProcessMode: InternalExecutor, sqlExecutor: newExecutorFactory(ch),
+				}},
+			empty: false,
+		},
+	}
+	sysVar := &config.GlobalSystemVariables
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sysVar.SetEnableTrace(tt.args.config.enableTracer)
+			export.ResetGlobalBatchProcessor()
+			initExport(tt.args.config)
+			if tt.empty {
+				require.Equal(t, "*export.noopBatchProcessor", fmt.Sprintf("%v", reflect.ValueOf(export.GetGlobalBatchProcessor()).Type()))
+			} else {
+				require.Equal(t, "*export.MOCollector", fmt.Sprintf("%v", reflect.ValueOf(export.GetGlobalBatchProcessor()).Type()))
+			}
+			require.Equal(t, Shutdown(context.Background()), nil)
+		})
+	}
+}
+
 func TestDefaultContext(t *testing.T) {
 	tests := []struct {
 		name string
@@ -73,47 +115,6 @@ func TestGetNodeResource(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equalf(t, tt.want, GetNodeResource(), "GetNodeResource()")
-		})
-	}
-}
-
-func Test_initExport(t *testing.T) {
-	type args struct {
-		config *tracerProviderConfig
-	}
-	ch := make(chan string, 10)
-	tests := []struct {
-		name  string
-		args  args
-		empty bool
-	}{
-		{
-			name: "disable",
-			args: args{
-				config: &tracerProviderConfig{enableTracer: false},
-			},
-			empty: true,
-		},
-		{
-			name: "enable_InternalExecutor",
-			args: args{
-				config: &tracerProviderConfig{
-					enableTracer: true, batchProcessMode: InternalExecutor, sqlExecutor: newExecutorFactory(ch),
-				}},
-			empty: false,
-		},
-	}
-	sysVar := &config.GlobalSystemVariables
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sysVar.SetEnableTrace(tt.args.config.enableTracer)
-			initExport(tt.args.config)
-			if tt.empty {
-				require.Equal(t, fmt.Sprintf("%v", reflect.ValueOf(export.GetGlobalBatchProcessor()).Type()), "*export.noopBatchProcessor")
-			} else {
-				require.Equal(t, fmt.Sprintf("%v", reflect.ValueOf(export.GetGlobalBatchProcessor()).Type()), "*export.MOCollector")
-			}
-			require.Equal(t, Shutdown(context.Background(), sysVar), nil)
 		})
 	}
 }
