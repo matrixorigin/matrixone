@@ -30,6 +30,7 @@ var initConnectionID uint32 = 1000
 type MOServer struct {
 	addr string
 	app  goetty.NetApplication
+	rm   *RoutineManager
 }
 
 func (mo *MOServer) Start() error {
@@ -74,5 +75,6 @@ func NewMOServer(addr string, pu *config.ParameterUnit) *MOServer {
 	return &MOServer{
 		addr: addr,
 		app:  app,
+		rm:   rm,
 	}
 }

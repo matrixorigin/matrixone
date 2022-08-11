@@ -282,6 +282,23 @@ type MysqlProtocolImpl struct {
 	SV *config.SystemVariables
 
 	m sync.Mutex
+
+	ses *Session
+
+	//skip checking the password of the user
+	skipCheckUser bool
+}
+
+func (mp *MysqlProtocolImpl) SetSkipCheckUser(b bool) {
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	mp.skipCheckUser = b
+}
+
+func (mp *MysqlProtocolImpl) GetSkipCheckUser() bool {
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	return mp.skipCheckUser
 }
 
 func (mp *MysqlProtocolImpl) GetDatabaseName() string {
@@ -313,6 +330,10 @@ func (mp *MysqlProtocolImpl) PrepareBeforeProcessingResultSet() {
 
 func (mp *MysqlProtocolImpl) Quit() {
 	mp.ProtocolImpl.Quit()
+}
+
+func (mp *MysqlProtocolImpl) SetSession(ses *Session) {
+	mp.ses = ses
 }
 
 // handshake response 41
@@ -617,6 +638,13 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 	var psw []byte
 	if mp.username == mp.SV.GetDumpuser() { //the user dump for test
 		psw = []byte(mp.SV.GetDumppassword())
+	}
+
+	if !mp.GetSkipCheckUser() {
+		err := mp.ses.AuthenticateUser(mp.username)
+		if err != nil {
+			return err
+		}
 	}
 
 	//TO Check password

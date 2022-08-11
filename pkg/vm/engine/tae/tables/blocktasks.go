@@ -15,6 +15,7 @@
 package tables
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -25,26 +26,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-func (blk *dataBlock) CheckpointWALClosure(currTs uint64) tasks.FuncT {
+func (blk *dataBlock) CheckpointWALClosure(currTs types.TS) tasks.FuncT {
 	return func() error {
 		return blk.CheckpointWAL(currTs)
 	}
 }
 
-func (blk *dataBlock) SyncBlockDataClosure(ts uint64, rows uint32) tasks.FuncT {
+func (blk *dataBlock) SyncBlockDataClosure(ts types.TS, rows uint32) tasks.FuncT {
 	return func() error {
 		return blk.SyncBlockData(ts, rows)
 	}
 }
 
-func (blk *dataBlock) FlushColumnDataClosure(ts uint64, colIdx int, colData containers.Vector, sync bool) tasks.FuncT {
+func (blk *dataBlock) FlushColumnDataClosure(ts types.TS, colIdx int, colData containers.Vector, sync bool) tasks.FuncT {
 	return func() error {
 		return blk.FlushColumnData(ts, colIdx, colData, sync)
 	}
 }
 
 func (blk *dataBlock) ABlkFlushDataClosure(
-	ts uint64,
+	ts types.TS,
 	bat *containers.Batch,
 	masks map[uint16]*roaring.Bitmap,
 	vals map[uint16]map[uint32]any,
@@ -54,14 +55,14 @@ func (blk *dataBlock) ABlkFlushDataClosure(
 	}
 }
 
-func (blk *dataBlock) CheckpointWAL(currTs uint64) (err error) {
+func (blk *dataBlock) CheckpointWAL(currTs types.TS) (err error) {
 	if blk.meta.IsAppendable() {
 		return blk.ABlkCheckpointWAL(currTs)
 	}
 	return blk.BlkCheckpointWAL(currTs)
 }
 
-func (blk *dataBlock) BlkCheckpointWAL(currTs uint64) (err error) {
+func (blk *dataBlock) BlkCheckpointWAL(currTs types.TS) (err error) {
 	defer func() {
 		logutil.Info("[Done]", common.ReprerField("blk", blk.meta),
 			common.OperationField("ckp-wal"),
@@ -73,10 +74,10 @@ func (blk *dataBlock) BlkCheckpointWAL(currTs uint64) (err error) {
 		common.OperationField("ckp-wal"),
 		common.AnyField("ckped", ckpTs),
 		common.AnyField("curr", currTs))
-	if currTs <= ckpTs {
+	if currTs.LessEq(ckpTs) {
 		return
 	}
-	view, err := blk.CollectChangesInRange(ckpTs+1, currTs)
+	view, err := blk.CollectChangesInRange(ckpTs.Next(), currTs)
 	if err != nil {
 		return
 	}
@@ -98,7 +99,7 @@ func (blk *dataBlock) BlkCheckpointWAL(currTs uint64) (err error) {
 	return
 }
 
-func (blk *dataBlock) ABlkCheckpointWAL(currTs uint64) (err error) {
+func (blk *dataBlock) ABlkCheckpointWAL(currTs types.TS) (err error) {
 	defer func() {
 		if err != nil {
 			logutil.Warn("[Done]", common.ReprerField("blk", blk.meta),
@@ -111,14 +112,15 @@ func (blk *dataBlock) ABlkCheckpointWAL(currTs uint64) (err error) {
 		common.OperationField("ckp-wal"),
 		common.AnyField("ckpTs", ckpTs),
 		common.AnyField("curr", currTs))
-	if currTs <= ckpTs {
+	if currTs.LessEq(ckpTs) {
 		return
 	}
-	indexes, err := blk.CollectAppendLogIndexes(ckpTs+1, currTs)
+	indexes, err := blk.CollectAppendLogIndexes(ckpTs.Next(), currTs)
 	if err != nil {
 		return
 	}
-	view, err := blk.CollectChangesInRange(ckpTs+1, currTs+1)
+	//view, err := blk.CollectChangesInRange(ckpTs+1, currTs+1)
+	view, err := blk.CollectChangesInRange(ckpTs.Next(), currTs.Next())
 	if err != nil {
 		return
 	}
@@ -150,7 +152,7 @@ func (blk *dataBlock) ABlkCheckpointWAL(currTs uint64) (err error) {
 	return
 }
 
-func (blk *dataBlock) FlushColumnData(ts uint64, colIdx int, colData containers.Vector, sync bool) (err error) {
+func (blk *dataBlock) FlushColumnData(ts types.TS, colIdx int, colData containers.Vector, sync bool) (err error) {
 	if err = blk.file.WriteColumnVec(ts, colIdx, colData); err != nil {
 		return err
 	}
@@ -160,7 +162,7 @@ func (blk *dataBlock) FlushColumnData(ts uint64, colIdx int, colData containers.
 	return
 }
 
-func (blk *dataBlock) SyncBlockData(ts uint64, rows uint32) (err error) {
+func (blk *dataBlock) SyncBlockData(ts types.TS, rows uint32) (err error) {
 	if err = blk.file.WriteRows(rows); err != nil {
 		return
 	}
@@ -175,7 +177,7 @@ func (blk *dataBlock) ForceCompact() (err error) {
 		panic("todo")
 	}
 	ts := blk.mvcc.LoadMaxVisible()
-	if blk.node.GetBlockMaxflushTS() >= ts {
+	if blk.node.GetBlockMaxflushTS().GreaterEq(ts) {
 		return
 	}
 	h, err := blk.bufMgr.TryPin(blk.node, time.Second)
@@ -184,7 +186,7 @@ func (blk *dataBlock) ForceCompact() (err error) {
 	}
 	defer h.Close()
 	// Why check again? May be a flush was executed in between
-	if blk.node.GetBlockMaxflushTS() >= ts {
+	if blk.node.GetBlockMaxflushTS().GreaterEq(ts) {
 		return
 	}
 	blk.mvcc.RLock()
@@ -214,13 +216,13 @@ func (blk *dataBlock) ForceCompact() (err error) {
 }
 
 func (blk *dataBlock) ABlkFlushData(
-	ts uint64,
+	ts types.TS,
 	bat *containers.Batch,
 	masks map[uint16]*roaring.Bitmap,
 	vals map[uint16]map[uint32]any,
 	deletes *roaring.Bitmap) (err error) {
 	flushTS := blk.node.GetBlockMaxflushTS()
-	if ts <= flushTS {
+	if ts.LessEq(flushTS) {
 		logutil.Info("[Cancelled]",
 			common.ReprerField("blk", blk.meta),
 			common.OperationField("flush"),

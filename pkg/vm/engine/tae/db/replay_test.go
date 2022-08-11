@@ -440,13 +440,14 @@ func TestReplay2(t *testing.T) {
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	tae.Close()
-	prevTs := tae.TxnMgr.TsAlloc.Get()
+	//prevTs := tae.TxnMgr.TsAlloc.Get()
 
 	tae2, err := Open(tae.Dir, nil)
 	assert.Nil(t, err)
 	t.Log(tae2.Catalog.SimplePPString(common.PPL1))
-	currTs := tae2.TxnMgr.TsAlloc.Get()
-	assert.Equal(t, prevTs, currTs)
+
+	//currTs := tae2.TxnMgr.TsAlloc.Get()
+	//assert.True(t, currTs.GreaterEq(prevTs))
 
 	txn, err = tae2.StartTxn(nil)
 	assert.Nil(t, err)

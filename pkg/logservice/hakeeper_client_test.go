@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -80,6 +81,61 @@ func TestHAKeeperClientCanNotConnectToNonHAKeeperNode(t *testing.T) {
 		assert.Equal(t, ErrNotHAKeeper, err)
 	}
 	runServiceTest(t, false, true, fn)
+}
+
+func TestHAKeeperClientConnectByReverseProxy(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		done := false
+		for i := 0; i < 1000; i++ {
+			si, ok, err := GetShardInfo(testServiceAddress, hakeeper.DefaultHAKeeperShardID)
+			if err != nil {
+				time.Sleep(10 * time.Millisecond)
+				continue
+			}
+			done = true
+			require.NoError(t, err)
+			assert.True(t, ok)
+			assert.Equal(t, uint64(1), si.ReplicaID)
+			addr, ok := si.Replicas[si.ReplicaID]
+			assert.True(t, ok)
+			assert.Equal(t, testServiceAddress, addr)
+			break
+		}
+		if !done {
+			t.Fatalf("failed to get shard info")
+		}
+		// now shard info can be queried
+		cfg := HAKeeperClientConfig{
+			ServiceAddresses: []string{"localhost:53033"}, // obvious not reachable
+			DiscoveryAddress: testServiceAddress,
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		c, err := NewLogHAKeeperClient(ctx, cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, c.Close())
+		}()
+
+		hb := s.store.getHeartbeatMessage()
+		cb, err := c.SendLogHeartbeat(ctx, hb)
+		require.NoError(t, err)
+		assert.Equal(t, 0, len(cb.Commands))
+
+		sc := pb.ScheduleCommand{
+			UUID:        s.ID(),
+			ServiceType: pb.DnService,
+			ShutdownStore: &pb.ShutdownStore{
+				StoreID: "hello world",
+			},
+		}
+		require.NoError(t, s.store.addScheduleCommands(ctx, 0, []pb.ScheduleCommand{sc}))
+		cb, err = c.SendLogHeartbeat(ctx, hb)
+		require.NoError(t, err)
+		require.Equal(t, 1, len(cb.Commands))
+		require.Equal(t, sc, cb.Commands[0])
+	}
+	runServiceTest(t, true, true, fn)
 }
 
 func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
