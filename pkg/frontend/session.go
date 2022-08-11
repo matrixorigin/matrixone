@@ -17,7 +17,8 @@ package frontend
 import (
 	"context"
 	"fmt"
-
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -93,6 +94,14 @@ type Session struct {
 	optionBits uint32
 
 	prepareStmts map[string]*PrepareStmt
+
+	//it gets the result set from the pipeline and send it to the client
+	outputCallback func(interface{}, *batch.Batch) error
+
+	//all the result set of executing the sql in background task
+	allResultSet []*MysqlResultSet
+
+	tenant *TenantInfo
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
@@ -118,12 +127,37 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 		serverStatus: 0,
 		optionBits:   0,
 
-		prepareStmts: make(map[string]*PrepareStmt),
+		prepareStmts:   make(map[string]*PrepareStmt),
+		outputCallback: getDataFromPipeline,
 	}
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.txnCompileCtx.SetSession(ses)
 	ses.txnHandler.SetSession(ses)
 	return ses
+}
+
+func (ses *Session) SetMysqlResultSet(mrs *MysqlResultSet) {
+	ses.Mrs = mrs
+}
+
+func (ses *Session) GetMysqlResultSet() *MysqlResultSet {
+	return ses.Mrs
+}
+
+func (ses *Session) AppendMysqlResultSetOfBackgroundTask(mrs *MysqlResultSet) {
+	ses.allResultSet = append(ses.allResultSet, mrs)
+}
+
+func (ses *Session) GetAllMysqlResultSet() []*MysqlResultSet {
+	return ses.allResultSet
+}
+
+func (ses *Session) GetTenantInfo() *TenantInfo {
+	return ses.tenant
+}
+
+func (ses *Session) SetTenantInfo(ti *TenantInfo) {
+	ses.tenant = ti
 }
 
 func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error {
@@ -473,6 +507,25 @@ func (ses *Session) SetAutocommit(on bool) error {
 	return nil
 }
 
+func (ses *Session) SetOutputCallback(callback func(interface{}, *batch.Batch) error) {
+	ses.outputCallback = callback
+}
+
+// AuthenticateUser verifies the password of the user.
+func (ses *Session) AuthenticateUser(userInput string) error {
+	//Get tenant info
+	tenant, err := GetTenantInfo(userInput)
+	if err != nil {
+		return err
+	}
+
+	ses.SetTenantInfo(tenant)
+
+	//Get the password of the user in an independent session
+	err = executeSQLInBackgroundSession(ses.GuestMmu, ses.Mempool, ses.Pu, "use mo_catalog; select * from mo_database;")
+	return err
+}
+
 func (th *TxnHandler) SetSession(ses *Session) {
 	th.ses = ses
 }
@@ -790,4 +843,59 @@ func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) *plan2.
 	}
 	rows := table.Rows()
 	return &plan2.Cost{Card: float64(rows)}
+}
+
+// fakeDataSetFetcher gets the result set from the pipeline and save it in the session.
+// It will not send the result to the client.
+func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
+	if handle == nil || dataSet == nil {
+		return nil
+	}
+
+	ses := handle.(*Session)
+	oq := newFakeOutputQueue(ses.GetMysqlResultSet())
+	n := vector.Length(dataSet.Vecs[0])
+	for j := 0; j < n; j++ { //row index
+		if dataSet.Zs[j] <= 0 {
+			continue
+		}
+		_, err := extractRowFromEveryVector(dataSet, int64(j), oq)
+		if err != nil {
+			return err
+		}
+	}
+	err := oq.flush()
+	if err != nil {
+		return err
+	}
+	ses.AppendMysqlResultSetOfBackgroundTask(ses.GetMysqlResultSet())
+	return nil
+}
+
+// executeSQLInBackgroundSession executes the sql in an independent session and transaction.
+// It sends nothing to the client.
+func executeSQLInBackgroundSession(gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) error {
+	mce := NewMysqlCmdExecutor()
+	defer mce.Close()
+	ses := NewSession(&FakeProtocol{}, gm, mp, pu, gSysVariables)
+	ses.SetOutputCallback(fakeDataSetFetcher)
+	mce.PrepareSessionBeforeExecRequest(ses)
+	err := mce.doComQuery(sql)
+	if err != nil {
+		return err
+	}
+	//get the result set
+	//TODO: debug further
+	//mrsArray := ses.GetAllMysqlResultSet()
+	//for _, mrs := range mrsArray {
+	//	for i := uint64(0); i < mrs.GetRowCount(); i++ {
+	//		row, err := mrs.GetRow(i)
+	//		if err != nil {
+	//			return err
+	//		}
+	//		fmt.Println(row)
+	//	}
+	//}
+
+	return nil
 }

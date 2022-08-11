@@ -261,6 +261,10 @@ func Test_mce_selfhandle(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockTxnEngine(ctrl)
+		config.StorageEngine = eng
+		defer func() {
+			config.StorageEngine = nil
+		}()
 
 		cnt := 0
 		eng.EXPECT().Database(ctx, gomock.Any(), gomock.Any()).DoAndReturn(
@@ -317,6 +321,10 @@ func Test_mce_selfhandle(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		config.StorageEngine = eng
+		defer func() {
+			config.StorageEngine = nil
+		}()
 
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 
@@ -354,6 +362,20 @@ func Test_mce_selfhandle(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		sv2 := st2.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
 		err = mce.handleSelectVariables(sv2)
+		convey.So(err, convey.ShouldBeNil)
+
+		ses.Mrs = &MysqlResultSet{}
+		st3, err := parsers.ParseOne(dialect.MYSQL, "select @@global.version_comment")
+		convey.So(err, convey.ShouldBeNil)
+		sv3 := st3.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
+		err = mce.handleSelectVariables(sv3)
+		convey.So(err, convey.ShouldBeNil)
+
+		ses.Mrs = &MysqlResultSet{}
+		st4, err := parsers.ParseOne(dialect.MYSQL, "select @version_comment")
+		convey.So(err, convey.ShouldBeNil)
+		sv4 := st4.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
+		err = mce.handleSelectVariables(sv4)
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.Mrs = &MysqlResultSet{}
@@ -915,8 +937,9 @@ func Test_HandleDeallocate(t *testing.T) {
 }
 
 func Test_CMD_FIELD_LIST(t *testing.T) {
+	ctx := context.TODO()
 	convey.Convey("cmd field list", t, func() {
-		queryData := []byte("XYZ")
+		queryData := []byte("A")
 		queryData = append(queryData, 0)
 		query := string(queryData)
 		cmdFieldListQuery := makeCmdFieldListSql(query)
@@ -926,5 +949,106 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		convey.So(stmt, convey.ShouldNotBeNil)
 		s := stmt.String()
 		convey.So(isCmdFieldListSql(s), convey.ShouldBeTrue)
+
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		eng := mock_frontend.NewMockTxnEngine(ctrl)
+		db := mock_frontend.NewMockDatabase(ctrl)
+		db.EXPECT().Relations(ctx).Return([]string{"t"}, nil).AnyTimes()
+
+		table := mock_frontend.NewMockRelation(ctrl)
+		db.EXPECT().Relation(ctx, "t").Return(table, nil).AnyTimes()
+		defs := []engine.TableDef{
+			&engine.AttributeDef{Attr: engine.Attribute{Name: "a", Type: toTypesType(types.T_char)}},
+			&engine.AttributeDef{Attr: engine.Attribute{Name: "b", Type: toTypesType(types.T_int32)}},
+		}
+
+		table.EXPECT().TableDefs(ctx).Return(defs, nil).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(db, nil).AnyTimes()
+
+		txn := mock_frontend.NewMockTxn(ctrl)
+		txn.EXPECT().GetCtx().Return(nil).AnyTimes()
+		txn.EXPECT().Commit().Return(nil).AnyTimes()
+		txn.EXPECT().Rollback().Return(nil).AnyTimes()
+		txn.EXPECT().String().Return("txn0").AnyTimes()
+		eng.EXPECT().StartTxn(nil).Return(txn, nil).AnyTimes()
+
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		if err != nil {
+			t.Error(err)
+		}
+
+		pu.StorageEngine = eng
+		config.StorageEngine = eng
+		defer func() {
+			config.StorageEngine = nil
+		}()
+
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, nil, nil, pu, &gSys)
+		ses.Mrs = &MysqlResultSet{}
+		ses.SetDatabaseName("t")
+		mce := &MysqlCmdExecutor{}
+		mce.PrepareSessionBeforeExecRequest(ses)
+
+		err = mce.doComQuery(cmdFieldListQuery)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func Test_fakeoutput(t *testing.T) {
+	convey.Convey("fake outout", t, func() {
+		mrs := &MysqlResultSet{}
+		fo := newFakeOutputQueue(mrs)
+		_, _ = fo.getEmptyRow()
+		_ = fo.flush()
+	})
+}
+
+func Test_statement_type(t *testing.T) {
+	convey.Convey("statement", t, func() {
+		type kase struct {
+			stmt tree.Statement
+		}
+		kases := []kase{
+			{&tree.CreateTable{}},
+			{&tree.Insert{}},
+			{&tree.BeginTransaction{}},
+			{&tree.ShowTables{}},
+			{&tree.Execute{}},
+			{&tree.Use{}},
+		}
+
+		for _, k := range kases {
+			ret := StatementCanBeExecutedInUncommittedTransaction(k.stmt)
+			convey.So(ret, convey.ShouldBeTrue)
+		}
+
+		convey.So(IsDDL(&tree.CreateTable{}), convey.ShouldBeTrue)
+		convey.So(IsDropStatement(&tree.DropTable{}), convey.ShouldBeTrue)
+		convey.So(IsAdministrativeStatement(&tree.CreateAccount{}), convey.ShouldBeTrue)
+		convey.So(IsParameterModificationStatement(&tree.SetVar{}), convey.ShouldBeTrue)
+		convey.So(IsStatementToBeCommittedInActiveTransaction(&tree.SetVar{}), convey.ShouldBeTrue)
+		convey.So(IsStatementToBeCommittedInActiveTransaction(&tree.DropTable{}), convey.ShouldBeTrue)
+		convey.So(IsStatementToBeCommittedInActiveTransaction(&tree.CreateAccount{}), convey.ShouldBeTrue)
+		convey.So(IsStatementToBeCommittedInActiveTransaction(nil), convey.ShouldBeFalse)
+	})
+}
+
+func Test_convert_type(t *testing.T) {
+	convey.Convey("type conversion", t, func() {
+		convertEngineTypeToMysqlType(types.T_any, &MysqlColumn{})
+		convertEngineTypeToMysqlType(types.T_bool, &MysqlColumn{})
+		convertEngineTypeToMysqlType(types.T_timestamp, &MysqlColumn{})
+		convertEngineTypeToMysqlType(types.T_decimal64, &MysqlColumn{})
+		convertEngineTypeToMysqlType(types.T_decimal128, &MysqlColumn{})
+		convertEngineTypeToMysqlType(types.T_blob, &MysqlColumn{})
 	})
 }
