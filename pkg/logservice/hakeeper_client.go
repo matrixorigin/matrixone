@@ -325,13 +325,13 @@ func (c *hakeeperClient) getClusterDetails(ctx context.Context) (pb.ClusterDetai
 	if err != nil {
 		return pb.ClusterDetails{}, err
 	}
-	return resp.ClusterDetails, nil
+	return *resp.ClusterDetails, nil
 }
 
 func (c *hakeeperClient) sendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) error {
 	req := pb.Request{
 		Method:      pb.CN_HEARTBEAT,
-		CNHeartbeat: hb,
+		CNHeartbeat: &hb,
 	}
 	_, err := c.sendHeartbeat(ctx, req)
 	return err
@@ -341,7 +341,7 @@ func (c *hakeeperClient) sendDNHeartbeat(ctx context.Context,
 	hb pb.DNStoreHeartbeat) (pb.CommandBatch, error) {
 	req := pb.Request{
 		Method:      pb.DN_HEARTBEAT,
-		DNHeartbeat: hb,
+		DNHeartbeat: &hb,
 	}
 	return c.sendHeartbeat(ctx, req)
 }
@@ -350,7 +350,7 @@ func (c *hakeeperClient) sendLogHeartbeat(ctx context.Context,
 	hb pb.LogStoreHeartbeat) (pb.CommandBatch, error) {
 	req := pb.Request{
 		Method:       pb.LOG_HEARTBEAT,
-		LogHeartbeat: hb,
+		LogHeartbeat: &hb,
 	}
 	cb, err := c.sendHeartbeat(ctx, req)
 	if err != nil {
@@ -368,7 +368,10 @@ func (c *hakeeperClient) sendHeartbeat(ctx context.Context,
 	if err != nil {
 		return pb.CommandBatch{}, err
 	}
-	return resp.CommandBatch, nil
+	if resp.CommandBatch == nil {
+		return pb.CommandBatch{}, nil
+	}
+	return *resp.CommandBatch, nil
 }
 
 func (c *hakeeperClient) checkIsHAKeeper(ctx context.Context) (bool, error) {

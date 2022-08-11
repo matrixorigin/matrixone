@@ -16,6 +16,7 @@ package substring
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"math"
 )
 
 /*
@@ -206,6 +207,15 @@ func substringDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, startCo
 			startValue = int64(startColumn.([]int32)[idx])
 		case types.T_int64:
 			startValue = startColumn.([]int64)[idx]
+		case types.T_float64:
+			fval := startColumn.([]float64)[idx]
+			if fval > float64(math.MaxInt64) {
+				startValue = math.MaxInt64
+			} else if fval < float64(math.MinInt64) {
+				startValue = math.MinInt64
+			} else {
+				startValue = int64(fval)
+			}
 		default:
 			startValue = int64(1)
 		}
@@ -386,6 +396,15 @@ func getColumnValue(srcColumn interface{}, columnType types.T, idx int, isConstt
 		dstValue = int64(srcColumn.([]int32)[idx])
 	case types.T_int64:
 		dstValue = srcColumn.([]int64)[idx]
+	case types.T_float64:
+		fval := srcColumn.([]float64)[idx]
+		if fval > float64(math.MaxInt64) {
+			dstValue = math.MaxInt64
+		} else if fval < float64(math.MinInt64) {
+			dstValue = math.MinInt64
+		} else {
+			dstValue = int64(fval)
+		}
 	default:
 		dstValue = int64(1)
 	}
