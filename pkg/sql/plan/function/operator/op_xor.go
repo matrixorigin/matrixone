@@ -81,10 +81,10 @@ func OpXorGeneral[T opXorT](vs []*vector.Vector, proc *process.Process, cfn comp
 			vec.Col = vec.Col.([]T)[:vecLen]
 			
 			for i := 0; i < vecLen; i++ {
-				if noScalar.Nsp.Contains(uint64(i)) {
+				if left.Nsp.Contains(uint64(i)) ||right.Nsp.Contains(uint64(i)) {
 					nulls.Add(vec.Nsp, uint64(i))
 				} else {
-					vec.Col.([]T)[i] = scalar.Col.([]T)[0] ^ noScalar.Col.([]T)[i]
+					vec.Col.([]T)[i] = left.Col.([]T)[i] ^ right.Col.([]T)[i]
 				}
 			}
 			return vec, nil
