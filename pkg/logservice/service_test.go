@@ -147,7 +147,7 @@ func TestServiceHandleLogHeartbeat(t *testing.T) {
 		req := pb.Request{
 			Method:  pb.LOG_HEARTBEAT,
 			Timeout: int64(time.Second),
-			LogHeartbeat: pb.LogStoreHeartbeat{
+			LogHeartbeat: &pb.LogStoreHeartbeat{
 				UUID: "uuid1",
 			},
 		}
@@ -190,12 +190,12 @@ func TestServiceHandleCNHeartbeat(t *testing.T) {
 		req := pb.Request{
 			Method:  pb.CN_HEARTBEAT,
 			Timeout: int64(time.Second),
-			CNHeartbeat: pb.CNStoreHeartbeat{
+			CNHeartbeat: &pb.CNStoreHeartbeat{
 				UUID: "uuid1",
 			},
 		}
 		resp := s.handleCNHeartbeat(req)
-		assert.Equal(t, 0, len(resp.CommandBatch.Commands))
+		assert.Nil(t, resp.CommandBatch)
 		assert.Equal(t, pb.ErrorCode(0), resp.ErrorCode)
 	}
 	runServiceTest(t, true, true, fn)
@@ -206,7 +206,7 @@ func TestServiceHandleDNHeartbeat(t *testing.T) {
 		req := pb.Request{
 			Method:  pb.DN_HEARTBEAT,
 			Timeout: int64(time.Second),
-			DNHeartbeat: pb.DNStoreHeartbeat{
+			DNHeartbeat: &pb.DNStoreHeartbeat{
 				UUID: "uuid1",
 			},
 		}
@@ -430,7 +430,7 @@ func TestServiceTsoUpdate(t *testing.T) {
 		req := pb.Request{
 			Method:  pb.TSO_UPDATE,
 			Timeout: int64(time.Second),
-			TsoRequest: pb.TsoRequest{
+			TsoRequest: &pb.TsoRequest{
 				Count: 100,
 			},
 		}
