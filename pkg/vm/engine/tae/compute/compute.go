@@ -240,6 +240,22 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (of
 	}
 }
 
+func BinarySearchTs(a []types.TS, x types.TS) int {
+	start, mid, end := 0, 0, len(a)-1
+	for start <= end {
+		mid = (start + end) >> 1
+		switch {
+		case a[mid].Greater(x):
+			end = mid - 1
+		case a[mid].Less(x):
+			start = mid + 1
+		default:
+			return mid
+		}
+	}
+	return -1
+}
+
 func BinarySearch[T constraints.Ordered](a []T, x T) int {
 	start, mid, end := 0, 0, len(a)-1
 	for start <= end {
