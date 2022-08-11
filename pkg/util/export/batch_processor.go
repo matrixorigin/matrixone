@@ -166,7 +166,7 @@ type MOCollector struct {
 func NewMOCollector() *MOCollector {
 	c := &MOCollector{
 		buffers:       make(map[string]*bufferHolder),
-		awakeCollect:  make(chan batchpipe.HasName, 12800),
+		awakeCollect:  make(chan batchpipe.HasName, 65536),
 		awakeGenerate: make(chan *bufferHolder, 16),
 		awakeBatch:    make(chan *bufferHolder),
 		stopCh:        make(chan struct{}),

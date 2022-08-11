@@ -402,6 +402,7 @@ var noopGenBatchSQL = genBatchFunc(func([]IBuffer2SqlItem, *bytes.Buffer) any { 
 func newBuffer2Sql(opts ...buffer2SqlOption) *buffer2Sql {
 	b := &buffer2Sql{
 		Reminder:       bp.NewConstantClock(5 * time.Second),
+		buf:            make([]IBuffer2SqlItem, 0, 10240),
 		sizeThreshold:  1 * MB,
 		filterItemFunc: noopFilterItemFunc,
 		genBatchFunc:   noopGenBatchSQL,
