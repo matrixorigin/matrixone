@@ -430,6 +430,17 @@ var operators = map[int]Functions{
 	OP_XOR: {
 		Id: OP_XOR,
 		Overloads: []Function{
+			// {
+			// 	Index:  0,
+			// 	Flag:   plan.Function_STRICT,
+			// 	Layout: COMPARISON_OPERATOR,
+			// 	Args: []types.T{
+			// 		types.T_int32,
+			// 		types.T_int32,
+			// 	},
+			// 	ReturnTyp: types.T_int32,
+			// 	Fn:        operator.OpXorGeneral[int32],
+			// },
 			{
 				Index:  0,
 				Flag:   plan.Function_STRICT,
@@ -439,7 +450,7 @@ var operators = map[int]Functions{
 					types.T_int64,
 				},
 				ReturnTyp: types.T_int64,
-				Fn:        operator.Is,
+				Fn:        operator.OpXorGeneral[int64],
 			},
 		},
 	},

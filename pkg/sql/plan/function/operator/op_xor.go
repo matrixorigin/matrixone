@@ -15,6 +15,7 @@
 package operator
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
@@ -24,7 +25,7 @@ type opXorT interface {
 	constraints.Integer
 }
 
-func OpXorGeneral[T opXorT](vs []*vector.Vector, proc *process.Process, cfn compareFn) (*vector.Vector, error) {
+func OpXorGeneral[T opXorT](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vs[0], vs[1]
 	returnTyp := left.Typ
 
@@ -35,8 +36,8 @@ func OpXorGeneral[T opXorT](vs []*vector.Vector, proc *process.Process, cfn comp
 		return proc.AllocConstNullVector(returnTyp, vector.Length(left)), nil
 	}
 
-	getXorVec := function(scalar *vector.Vector,  noScalar *vector.Vector) (*vector.Vector, error) {
-		typeLen := noScalar.Oid.TypeLen()
+	getXorVec := func(scalar *vector.Vector, noScalar *vector.Vector) (*vector.Vector, error) {
+		typeLen := noScalar.Typ.Oid.TypeLen()
 		vecLen := vector.Length(noScalar)
 		vec, err := proc.AllocVector(returnTyp, int64(vecLen*typeLen))
 		if err != nil {
@@ -71,7 +72,7 @@ func OpXorGeneral[T opXorT](vs []*vector.Vector, proc *process.Process, cfn comp
 		} else if right.IsScalar() {
 			return getXorVec(right, left)
 		} else {
-			typeLen := left.Oid.TypeLen()
+			typeLen := left.Typ.Oid.TypeLen()
 			vecLen := vector.Length(left)
 			vec, err := proc.AllocVector(returnTyp, int64(vecLen*typeLen))
 			if err != nil {
@@ -79,9 +80,9 @@ func OpXorGeneral[T opXorT](vs []*vector.Vector, proc *process.Process, cfn comp
 			}
 			vec.Col = vector.DecodeFixedCol[T](vec, typeLen)
 			vec.Col = vec.Col.([]T)[:vecLen]
-			
+
 			for i := 0; i < vecLen; i++ {
-				if left.Nsp.Contains(uint64(i)) ||right.Nsp.Contains(uint64(i)) {
+				if left.Nsp.Contains(uint64(i)) || right.Nsp.Contains(uint64(i)) {
 					nulls.Add(vec.Nsp, uint64(i))
 				} else {
 					vec.Col.([]T)[i] = left.Col.([]T)[i] ^ right.Col.([]T)[i]
