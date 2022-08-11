@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -176,8 +177,9 @@ func (cmd *EntryCommand) GetLogIndex() *wal.Index {
 	return cmd.entry.LogIndex
 }
 
-func (cmd *EntryCommand) GetTs() uint64 {
-	ts := uint64(0)
+func (cmd *EntryCommand) GetTs() types.TS {
+	//ts := uint64(0)
+	var ts types.TS
 	switch cmd.cmdType {
 	case CmdCreateDatabase, CmdCreateTable, CmdCreateSegment, CmdCreateBlock:
 		ts = cmd.entry.CreateAt

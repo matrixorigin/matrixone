@@ -13514,7 +13514,7 @@ yydefault:
 			if yyDollar[2].lengthScaleOptUnion().DisplayWith > 38 || yyDollar[2].lengthScaleOptUnion().DisplayWith < 0 {
 				yylex.Error("For decimal(M), M must between 0 and 38.")
 				return 1
-			} else if yyDollar[2].lengthScaleOptUnion().DisplayWith <= 18 {
+			} else if yyDollar[2].lengthScaleOptUnion().DisplayWith <= 16 {
 				yyLOCAL = &tree.T{
 					InternalType: tree.InternalType{
 						Family:       tree.FloatFamily,
@@ -14027,7 +14027,7 @@ yydefault:
 //line mysql_sql.y:6739
 		{
 			yyLOCAL = tree.LengthScaleOpt{
-				DisplayWith: 10, // this is the default precision for decimal
+				DisplayWith: 34, // this is the default precision for decimal
 				Precision:   0,
 			}
 		}

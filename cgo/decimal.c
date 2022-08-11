@@ -1132,3 +1132,144 @@ int32_t Decimal128_VecDiv(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64
         return RC_SUCCESS;
     }
 }
+
+
+// Comparison operation series
+
+#define  EQ     // =   EQUAL
+#define  NE     // <>  NOT_EQUAL
+#define  GT     // >   GREAT_THAN
+#define  GE     // >=  GREAT_EQUAL
+#define  LT     // <   LESS_THAN
+#define  LE     // <=  LESS_EQUAL
+
+// EQUAL
+#define DEC_COMP_EQ(TGT, R)                                           \
+    TGT = (R == 0)
+
+// NOT EQUAL
+#define DEC_COMP_NE(TGT, R)                                           \
+    TGT = (R != 0)
+
+// GREAT_THAN
+#define DEC_COMP_GT(TGT, R)                                           \
+    TGT = (R == 1)
+
+// GREAT_EQUAL
+#define DEC_COMP_GE(TGT, R)                                           \
+    TGT = (R != -1)
+
+// LESS_THAN
+#define DEC_COMP_LT(TGT, R)                                           \
+    TGT = (R == -1)
+
+// LESS_EQUAL
+#define DEC_COMP_LE(TGT, R)                                           \
+    TGT = (R != 1)
+
+
+#define DEF_DECIMAL_COMPARE(NBITS, NAME ,OP)                          \
+int32_t Decimal ## NBITS ## _Vec ## NAME(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag) { \
+    int32_t cmp = 0;                                                  \
+    if ((flag & 1) != 0) {                                            \
+        if (nulls != NULL) {                                          \
+            for (uint64_t i = 0; i < n; i++) {                        \
+                uint64_t ii = i << (NBITS / 64 - 1);                  \
+                if (!bitmap_test(nulls, i)) {                         \
+                    int ret = Decimal ## NBITS ## _Compare (&cmp, a, b+ii); \
+                    OP(r[i], cmp);                                    \
+                    if (ret != RC_SUCCESS) {                          \
+                        return ret;                                   \
+                    }                                                 \
+                }                                                     \
+            }                                                         \
+        } else {                                                      \
+            for (uint64_t i = 0; i < n; i++) {                        \
+                uint64_t ii = i << (NBITS / 64 - 1);                  \
+                int ret = Decimal ## NBITS ## _Compare (&cmp, a, b+ii);\
+                OP(r[i], cmp);                                        \
+                if (ret != RC_SUCCESS) {                              \
+                    return ret;                                       \
+                }                                                     \
+            }                                                         \
+        }                                                             \
+        return RC_SUCCESS;                                            \
+    } else if ((flag & 2) != 0) {                                     \
+        if (nulls != NULL) {                                          \
+            for (uint64_t i = 0; i < n; i++) {                        \
+                uint64_t ii = i << (NBITS / 64 - 1);                  \
+                if (!bitmap_test(nulls, i)) {                         \
+                    int ret = Decimal ## NBITS ## _Compare (&cmp, a+ii, b); \
+                    OP(r[i], cmp);                                    \
+                    if (ret != RC_SUCCESS) {                          \
+                        return ret;                                   \
+                    }                                                 \
+                }                                                     \
+            }                                                         \
+        } else {                                                      \
+            for (uint64_t i = 0; i < n; i++) {                        \
+                uint64_t ii = i << (NBITS / 64 - 1);                  \
+                int ret = Decimal ## NBITS ## _Compare (&cmp, a+ii, b);\
+                OP(r[i], cmp);                                        \
+                if (ret != RC_SUCCESS) {                              \
+                    return ret;                                       \
+                }                                                     \
+            }                                                         \
+        }                                                             \
+        return RC_SUCCESS;                                            \
+    } else {                                                          \
+        if (nulls != NULL) {                                          \
+            for (uint64_t i = 0; i < n; i++) {                        \
+                uint64_t ii = i << (NBITS / 64 - 1);                  \
+                if (!bitmap_test(nulls, i)) {                         \
+                    int ret = Decimal ## NBITS ## _Compare (&cmp, a+ii, b+ii); \
+                    OP(r[i], cmp);                                    \
+                    if (ret != RC_SUCCESS) {                          \
+                        return ret;                                   \
+                    }                                                 \
+                }                                                     \
+            }                                                         \
+        } else {                                                      \
+            for (uint64_t i = 0; i < n; i++) {                        \
+                uint64_t ii = i << (NBITS / 64 - 1);                  \
+                int ret = Decimal ## NBITS ## _Compare (&cmp, a+ii, b+ii); \
+                OP(r[i], cmp);                                        \
+                if (ret != RC_SUCCESS) {                              \
+                    return ret;                                       \
+                }                                                     \
+            }                                                         \
+        }                                                             \
+        return RC_SUCCESS;                                            \
+    }                                                                 \
+}
+
+
+// equal (=)
+DEF_DECIMAL_COMPARE(64, EQ, DEC_COMP_EQ)
+
+DEF_DECIMAL_COMPARE(128, EQ, DEC_COMP_EQ)
+
+// not equal (<>)
+DEF_DECIMAL_COMPARE(64, NE, DEC_COMP_NE)
+
+DEF_DECIMAL_COMPARE(128, NE, DEC_COMP_NE)
+
+// great than (>)
+DEF_DECIMAL_COMPARE(64, GT, DEC_COMP_GT)
+
+DEF_DECIMAL_COMPARE(128, GT, DEC_COMP_GT)
+
+// great equal (>=)
+DEF_DECIMAL_COMPARE(64, GE, DEC_COMP_GE)
+
+DEF_DECIMAL_COMPARE(128, GE, DEC_COMP_GE)
+
+// less than (<)
+DEF_DECIMAL_COMPARE(64, LT, DEC_COMP_LT)
+
+DEF_DECIMAL_COMPARE(128, LT, DEC_COMP_LT)
+
+// less equal (<=)
+DEF_DECIMAL_COMPARE(64, LE, DEC_COMP_LE)
+
+DEF_DECIMAL_COMPARE(128, LE, DEC_COMP_LE)

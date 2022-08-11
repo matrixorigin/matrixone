@@ -6320,7 +6320,7 @@ decimal_type:
         if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
         	yylex.Error("For decimal(M), M must between 0 and 38.")
                 return 1
-        } else if $2.DisplayWith <= 18 {
+        } else if $2.DisplayWith <= 16 {
         	$$ = &tree.T{
 		    InternalType: tree.InternalType{
 			Family: tree.FloatFamily,
@@ -6738,7 +6738,7 @@ decimal_length_opt:
     /* EMPTY */
     {
         $$ = tree.LengthScaleOpt{
-            DisplayWith: 10,           // this is the default precision for decimal
+            DisplayWith: 34,           // this is the default precision for decimal
             Precision: 0,
         }
     }

@@ -164,15 +164,30 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		plan.Node_MINUS, plan.Node_MINUS_ALL:
 
 		thisTag := node.BindingTags[0]
+		leftID := node.Children[0]
+		rightID := node.Children[1]
 		for i, expr := range node.ProjectList {
 			increaseRefCnt(expr, colRefCnt)
 			globalRef := [2]int32{thisTag, int32(i)}
 			remapping.addColRef(globalRef)
 		}
 
+		rightNode := builder.qry.Nodes[rightID]
+		if rightNode.NodeType == plan.Node_PROJECT {
+			projectTag := rightNode.BindingTags[0]
+			for i := range rightNode.ProjectList {
+				increaseRefCnt(&plan.Expr{
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: projectTag,
+							ColPos: int32(i),
+						},
+					}}, colRefCnt)
+			}
+		}
+
 		internalMap := make(map[[2]int32][2]int32)
 
-		leftID := node.Children[0]
 		leftRemapping, err := builder.remapAllColRefs(leftID, colRefCnt)
 		if err != nil {
 			return nil, err
@@ -181,8 +196,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			internalMap[k] = v
 		}
 
-		rightID := node.Children[1]
-		rightRemapping, err := builder.remapAllColRefs(rightID, colRefCnt)
+		_, err = builder.remapAllColRefs(rightID, colRefCnt)
 		if err != nil {
 			return nil, err
 		}
@@ -193,19 +207,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			if err != nil {
 				return nil, err
 			}
-		}
-
-		for _, globalRef := range leftRemapping.localToGlobal {
-			if colRefCnt[globalRef] == 0 {
-				continue
-			}
-			remapping.addColRef(globalRef)
-		}
-		for _, globalRef := range rightRemapping.localToGlobal {
-			if colRefCnt[globalRef] == 0 {
-				continue
-			}
-			remapping.addColRef(globalRef)
 		}
 
 	case plan.Node_JOIN:
