@@ -50,6 +50,7 @@ const (
 	ISNOT                  //ISNOT
 	ISNULL                 //ISNULL
 	ISNOTNULL              //ISNOTNULL
+	OP_XOR                 // ^
 
 	ABS            // ABS
 	ACOS           // ACOS
@@ -272,6 +273,7 @@ var functionIdRegister = map[string]int32{
 	"ifnull":      ISNULL,
 	"is_not_null": ISNOTNULL,
 	"isnotnull":   ISNOTNULL,
+	"^":           OP_XOR,
 	// aggregate
 	"max":                   MAX,
 	"min":                   MIN,
