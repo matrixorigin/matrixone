@@ -98,40 +98,26 @@ func (ts TS) Greater(rhs TS) bool {
 }
 
 func (ts TS) Prev() TS {
-	pTs := encoding.DecodeInt64(ts[4:12])
-	lTs := encoding.DecodeUint32(ts[:4])
-
 	var rv TS
-	s1 := rv[4:12]
-	s2 := rv[:4]
-
-	if lTs == 0 {
-		copy(s1, encoding.EncodeInt64(pTs-1))
-		copy(s2, encoding.EncodeUint32(math.MaxUint32))
+	if encoding.DecodeUint32(ts[:4]) == 0 {
+		copy(rv[4:12], encoding.EncodeInt64(encoding.DecodeInt64(ts[4:12])-1))
+		copy(rv[:4], encoding.EncodeUint32(math.MaxUint32))
 		return rv
 	}
-
-	copy(s1, encoding.EncodeInt64(pTs))
-	copy(s2, encoding.EncodeUint32(lTs-1))
+	copy(rv[4:12], encoding.EncodeInt64(encoding.DecodeInt64(ts[4:12])))
+	copy(rv[:4], encoding.EncodeUint32(encoding.DecodeUint32(ts[:4])-1))
 	return rv
 }
 
 func (ts TS) Next() TS {
-	pTs := encoding.DecodeInt64(ts[4:12])
-	lTs := encoding.DecodeUint32(ts[:4])
-
 	var rv TS
-	s1 := rv[4:12]
-	s2 := rv[:4]
-
-	if lTs == math.MaxUint32 {
-		copy(s1, encoding.EncodeInt64(pTs+1))
-		copy(s2, encoding.EncodeUint32(0))
+	if encoding.DecodeUint32(ts[:4]) == math.MaxUint32 {
+		copy(rv[4:12], encoding.EncodeInt64(encoding.DecodeInt64(ts[4:12])+1))
+		copy(rv[:4], encoding.EncodeUint32(0))
 		return rv
 	}
-
-	copy(s1, encoding.EncodeInt64(pTs))
-	copy(s2, encoding.EncodeUint32(lTs+1))
+	copy(rv[4:12], encoding.EncodeInt64(encoding.DecodeInt64(ts[4:12])))
+	copy(rv[:4], encoding.EncodeUint32(encoding.DecodeUint32(ts[:4])+1))
 	return rv
 }
 
@@ -156,11 +142,8 @@ func StringToTS(s string) (ts TS) {
 
 func MaxTs() TS {
 	var rv TS
-	s1 := rv[4:12]
-	s2 := rv[:4]
-
-	copy(s1, encoding.EncodeInt64(math.MaxInt64))
-	copy(s2, encoding.EncodeUint32(math.MaxUint32))
+	copy(rv[4:12], encoding.EncodeInt64(math.MaxInt64))
+	copy(rv[:4], encoding.EncodeUint32(math.MaxUint32))
 	return rv
 }
 
