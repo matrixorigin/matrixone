@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/lni/dragonboat/v4"
 	"github.com/lni/dragonboat/v4/logger"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -199,6 +200,8 @@ func (s *Service) handle(req pb.Request,
 		return s.handleCheckHAKeeper(req), pb.LogRecordResponse{}
 	case pb.GET_CLUSTER_DETAILS:
 		return s.handleGetClusterDetails(req), pb.LogRecordResponse{}
+	case pb.GET_SHARD_INFO:
+		return s.handleGetShardInfo(req), pb.LogRecordResponse{}
 	default:
 		panic("unknown log service method type")
 	}
@@ -206,6 +209,16 @@ func (s *Service) handle(req pb.Request,
 
 func getResponse(req pb.Request) pb.Response {
 	return pb.Response{Method: req.Method}
+}
+
+func (s *Service) handleGetShardInfo(req pb.Request) pb.Response {
+	resp := getResponse(req)
+	if result, ok := s.getShardInfo(req.LogRequest.ShardID); !ok {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(dragonboat.ErrShardNotFound)
+	} else {
+		resp.ShardInfo = &result
+	}
+	return resp
 }
 
 func (s *Service) handleGetClusterDetails(req pb.Request) pb.Response {

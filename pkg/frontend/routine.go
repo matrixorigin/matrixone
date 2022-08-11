@@ -43,6 +43,8 @@ type Routine struct {
 	cancelRoutineFunc context.CancelFunc
 
 	routineMgr *RoutineManager
+
+	ses *Session
 }
 
 func (routine *Routine) GetClientProtocol() Protocol {
@@ -65,6 +67,14 @@ func (routine *Routine) GetRoutineMgr() *RoutineManager {
 	return routine.routineMgr
 }
 
+func (routine *Routine) SetSession(ses *Session) {
+	routine.ses = ses
+}
+
+func (routine *Routine) GetSession() *Session {
+	return routine.ses
+}
+
 /*
 After the handshake with the client is done, the routine goes into processing loop.
 */
@@ -74,7 +84,6 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 	var resp *Response
 	defer routine.Quit()
 	//session for the connection
-	var ses *Session = nil
 	for {
 		quit := false
 		select {
@@ -92,16 +101,14 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 
 		mgr := routine.GetRoutineMgr()
 
-		routine.protocol.(*MysqlProtocolImpl).sequenceId = req.seq
-
-		if ses == nil {
-			ses = NewSession(routine.protocol, routine.guestMmu, routine.mempool, mgr.getParameterUnit(), gSysVariables)
-		}
+		mpi := routine.protocol.(*MysqlProtocolImpl)
+		mpi.sequenceId = req.seq
 
 		cancelRequestCtx, cancelRequestFunc := context.WithCancel(routineCtx)
 		routine.executor.(*MysqlCmdExecutor).setCancelRequestFunc(cancelRequestFunc)
+		ses := routine.GetSession()
 		ses.SetRequestContext(cancelRequestCtx)
-		routine.executor.PrepareSessionBeforeExecRequest(ses)
+		routine.executor.PrepareSessionBeforeExecRequest(routine.GetSession())
 
 		if resp, err = routine.executor.ExecRequest(cancelRequestCtx, req); err != nil {
 			logutil.Errorf("routine execute request failed. error:%v \n", err)

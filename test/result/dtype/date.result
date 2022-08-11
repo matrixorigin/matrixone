@@ -133,7 +133,7 @@ SELECT id, id = 202020101 FROM t_date;
 id	id = 202020101
 2020-01-01	false	
 2022-01-02	false	
-SELECT id, 20200101 = id FROM t_date;
+SELECT id, '20200101' = id FROM t_date;
 id	20200101 = id
 2020-01-01	true	
 2022-01-02	false	

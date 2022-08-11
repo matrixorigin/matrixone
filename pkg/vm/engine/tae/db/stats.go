@@ -16,6 +16,7 @@ package db
 
 import (
 	"encoding/json"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -57,9 +58,9 @@ type CatalogStats struct {
 }
 
 type TxnStats struct {
-	MaxTS  uint64
+	MaxTS  types.TS
 	MaxID  uint64
-	SafeTS uint64
+	SafeTS types.TS
 }
 
 type WalStats struct {
