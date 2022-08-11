@@ -526,9 +526,9 @@ func (m *CNOpResponse) GetPayload() []byte {
 // to TxnMethod.
 //
 // Request flow of TxnRequest as below:
-//  1. CN -> DN (TxnMethod.Read, TxnMethod.Write, TxnMethod.Commit, TxnMethod.Rollback)
-//  2. DN -> DN (TxnMethod.Prepare, TxnMethod.GetStatus, TxnMethod.CommitDNShard, TxnMethod.RollbackDNShard,
-//     TxnMethod.RemoveMetadata)
+// 1. CN -> DN (TxnMethod.Read, TxnMethod.Write, TxnMethod.Commit, TxnMethod.Rollback)
+// 2. DN -> DN (TxnMethod.Prepare, TxnMethod.GetStatus, TxnMethod.CommitDNShard, TxnMethod.RollbackDNShard,
+//             TxnMethod.RemoveMetadata)
 type TxnRequest struct {
 	// RequestID request id
 	RequestID uint64 `protobuf:"varint,1,opt,name=RequestID,proto3" json:"RequestID,omitempty"`
