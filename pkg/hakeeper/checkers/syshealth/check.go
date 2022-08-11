@@ -37,13 +37,14 @@ func Check(
 	sysHealthy := true
 
 	// parse all log stores for expired stores mainly
-	logStores := parseLogStores(cfg, logState, currTick)
+	logStores := parseLogState(cfg, logState, currTick)
 	if len(logStores.expired) == 0 {
 		return nil, sysHealthy
 	}
 
 	// check system healthy or not
-	for _, shard := range logShardsWithExpired(logStores.expired, logState, cluster) {
+	expiredShards := listExpiredShards(logStores.expired, logStores.working, logState, cluster)
+	for _, shard := range expiredShards {
 		// if one of log shards wasn't healthy, the entire system wasn't healthy.
 		if !shard.healthy() {
 			sysHealthy = false
@@ -56,7 +57,7 @@ func Check(
 	}
 
 	// parse all dn stores
-	dnStores := parseDnStores(cfg, dnState, currTick)
+	dnStores := parseDnState(cfg, dnState, currTick)
 
 	// generate operators to shut down all stores
 	operators := make([]*operator.Operator, 0, logStores.length()+dnStores.length())
@@ -86,20 +87,46 @@ func (m logShardMap) registerExpiredReplica(replica pb.LogReplicaInfo, cluster p
 	m[shardID].registerExpiredReplica(replicaID)
 }
 
-// logShardsWithExpired gathers metadata for expired log shards.
-func logShardsWithExpired(
+// registerWorkingReplica registers replica as working.
+func (m logShardMap) registerWorkingReplica(replica pb.LogReplicaInfo, cluster pb.ClusterInfo) {
+	replicaID := replica.ReplicaID
+	shardID := replica.ShardID
+
+	if _, ok := m[shardID]; !ok {
+		m[shardID] = newLogShard(shardID, getLogShardSize(shardID, cluster))
+	}
+	m[shardID].registerWorkingReplica(replicaID)
+}
+
+// listExpiredShards lists those shards which has expired replica.
+func listExpiredShards(
 	expiredStores map[string]struct{},
+	workingStores map[string]struct{},
 	logState pb.LogState,
 	cluster pb.ClusterInfo,
 ) logShardMap {
-	expiredShardMap := newLogShardMap()
+	expired := newLogShardMap()
+
+	// register log shards on expired stores
 	for id := range expiredStores {
 		expiredReplicas := logState.Stores[id].Replicas
 		for _, replica := range expiredReplicas {
-			expiredShardMap.registerExpiredReplica(replica, cluster)
+			expired.registerExpiredReplica(replica, cluster)
 		}
 	}
-	return expiredShardMap
+
+	// register working replica for
+	for id := range workingStores {
+		workingReplicas := logState.Stores[id].Replicas
+		for _, replica := range workingReplicas {
+			// only register working replica for expired shards
+			if _, ok := expired[replica.ShardID]; ok {
+				expired.registerWorkingReplica(replica, cluster)
+			}
+		}
+	}
+
+	return expired
 }
 
 // getLogShardSize gets raft group size for the specified shard.
@@ -117,6 +144,7 @@ type logShard struct {
 	shardID          uint64
 	numberOfReplicas uint64
 	expiredReplicas  map[uint64]struct{}
+	workingReplicas  map[uint64]struct{}
 }
 
 func newLogShard(shardID uint64, numberOfReplicas uint64) *logShard {
@@ -124,6 +152,7 @@ func newLogShard(shardID uint64, numberOfReplicas uint64) *logShard {
 		shardID:          shardID,
 		numberOfReplicas: numberOfReplicas,
 		expiredReplicas:  make(map[uint64]struct{}),
+		workingReplicas:  make(map[uint64]struct{}),
 	}
 }
 
@@ -132,13 +161,18 @@ func (s *logShard) registerExpiredReplica(replicaID uint64) {
 	s.expiredReplicas[replicaID] = struct{}{}
 }
 
+// registerWorkingReplica registers working replica ID.
+func (s *logShard) registerWorkingReplica(replicaID uint64) {
+	s.workingReplicas[replicaID] = struct{}{}
+}
+
 // healthy checks whether log shard working or not.
 func (s *logShard) healthy() bool {
 	if s.numberOfReplicas > 0 &&
-		len(s.expiredReplicas)*2 >= int(s.numberOfReplicas) {
-		return false
+		len(s.workingReplicas)*2 > int(s.numberOfReplicas) {
+		return true
 	}
-	return true
+	return false
 }
 
 // storeSet separates stores as expired and working.
@@ -171,8 +205,8 @@ func (s *storeSet) shutdownWorkingStores() []*operator.Operator {
 	return shutdownStores(s.serviceType, s.working)
 }
 
-// parseLogStores separates log stores as expired and working.
-func parseLogStores(cfg hakeeper.Config, logState pb.LogState, currTick uint64) *storeSet {
+// parseLogState separates log stores as expired and working.
+func parseLogState(cfg hakeeper.Config, logState pb.LogState, currTick uint64) *storeSet {
 	set := newStoreSet(pb.LogService)
 	for id, storeInfo := range logState.Stores {
 		if cfg.LogStoreExpired(storeInfo.Tick, currTick) {
@@ -184,8 +218,8 @@ func parseLogStores(cfg hakeeper.Config, logState pb.LogState, currTick uint64) 
 	return set
 }
 
-// parseDnStores separates dn stores as expired and working.
-func parseDnStores(cfg hakeeper.Config, dnState pb.DNState, currTick uint64) *storeSet {
+// parseDnState separates dn stores as expired and working.
+func parseDnState(cfg hakeeper.Config, dnState pb.DNState, currTick uint64) *storeSet {
 	set := newStoreSet(pb.DnService)
 	for id, storeInfo := range dnState.Stores {
 		if cfg.DnStoreExpired(storeInfo.Tick, currTick) {

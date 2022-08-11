@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"io"
 	"sync"
 
@@ -70,7 +71,7 @@ func NewReplaySegmentEntry() *SegmentEntry {
 	return e
 }
 
-func NewStandaloneSegment(table *TableEntry, id uint64, ts uint64) *SegmentEntry {
+func NewStandaloneSegment(table *TableEntry, id uint64, ts types.TS) *SegmentEntry {
 	e := &SegmentEntry{
 		BaseEntry: &BaseEntry{
 			CommitInfo: CommitInfo{
@@ -96,7 +97,7 @@ func NewSysSegmentEntry(table *TableEntry, id uint64) *SegmentEntry {
 			},
 			RWMutex:  new(sync.RWMutex),
 			ID:       id,
-			CreateAt: 1,
+			CreateAt: types.SystemDBTS,
 		},
 		table:   table,
 		link:    new(common.Link),

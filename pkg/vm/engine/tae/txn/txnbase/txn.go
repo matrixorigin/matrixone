@@ -16,6 +16,7 @@ package txnbase
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -44,7 +45,7 @@ func (txn *OpTxn) Repr() string {
 	}
 }
 
-var DefaultTxnFactory = func(mgr *TxnManager, store txnif.TxnStore, id, startTS uint64, info []byte) txnif.AsyncTxn {
+var DefaultTxnFactory = func(mgr *TxnManager, store txnif.TxnStore, id uint64, startTS types.TS, info []byte) txnif.AsyncTxn {
 	return NewTxn(mgr, store, id, startTS, info)
 }
 
@@ -64,7 +65,7 @@ type Txn struct {
 	ApplyRollbackFn   func(txnif.AsyncTxn) error
 }
 
-func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId uint64, start uint64, info []byte) *Txn {
+func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId uint64, start types.TS, info []byte) *Txn {
 	txn := &Txn{
 		Mgr:   mgr,
 		Store: store,
@@ -98,7 +99,8 @@ func (txn *Txn) Commit() (err error) {
 	if err != nil {
 		txn.SetError(err)
 		txn.Lock()
-		_ = txn.ToRollbackingLocked(txn.GetStartTS() + 1)
+		//_ = txn.ToRollbackingLocked(txn.GetStartTS() + 1)
+		_ = txn.ToRollbackingLocked(txn.GetStartTS().Next())
 		txn.Unlock()
 		_ = txn.PrepareRollback()
 		_ = txn.ApplyRollback()

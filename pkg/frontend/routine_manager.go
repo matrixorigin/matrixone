@@ -24,9 +24,22 @@ import (
 )
 
 type RoutineManager struct {
-	rwlock  sync.RWMutex
-	clients map[goetty.IOSession]*Routine
-	pu      *config.ParameterUnit
+	rwlock        sync.RWMutex
+	clients       map[goetty.IOSession]*Routine
+	pu            *config.ParameterUnit
+	skipCheckUser bool
+}
+
+func (rm *RoutineManager) SetSkipCheckUser(b bool) {
+	rm.rwlock.Lock()
+	defer rm.rwlock.Unlock()
+	rm.skipCheckUser = b
+}
+
+func (rm *RoutineManager) GetSkipCheckUser() bool {
+	rm.rwlock.RLock()
+	defer rm.rwlock.RUnlock()
+	return rm.skipCheckUser
 }
 
 func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
@@ -35,11 +48,15 @@ func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
 
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	pro := NewMysqlClientProtocol(nextConnectionID(), rs, int(rm.pu.SV.GetMaxBytesInOutbufToFlush()), rm.pu.SV)
+	pro.SetSkipCheckUser(rm.GetSkipCheckUser())
 	exe := NewMysqlCmdExecutor()
 	exe.SetRoutineManager(rm)
 
 	routine := NewRoutine(pro, exe, rm.pu)
 	routine.SetRoutineMgr(rm)
+	ses := NewSession(routine.protocol, routine.guestMmu, routine.mempool, rm.pu, gSysVariables)
+	routine.SetSession(ses)
+	pro.SetSession(ses)
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)

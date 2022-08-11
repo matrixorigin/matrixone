@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 )
 
 var (
+	ErrLogServiceNotReady = moerr.NewError(moerr.LOG_SERVICE_NOT_READY, "log service not ready")
 	// ErrDeadlineNotSet is returned when deadline is not set in the context.
 	ErrDeadlineNotSet = moerr.NewError(moerr.INVALID_INPUT, "deadline not set")
 	// ErrInvalidDeadline is returned when the specified deadline is invalid, e.g.
@@ -246,8 +248,48 @@ type client struct {
 	respPool *sync.Pool
 }
 
-func newClient(ctx context.Context,
-	cfg ClientConfig) (*client, error) {
+func newClient(ctx context.Context, cfg ClientConfig) (*client, error) {
+	client, err := connectToLogService(ctx, cfg.ServiceAddresses, cfg)
+	if client != nil && err == nil {
+		return client, nil
+	}
+	if len(cfg.DiscoveryAddress) > 0 {
+		return connectToLogServiceByReverseProxy(ctx, cfg.DiscoveryAddress, cfg)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, ErrLogServiceNotReady
+}
+
+func connectToLogServiceByReverseProxy(ctx context.Context,
+	discoveryAddress string, cfg ClientConfig) (*client, error) {
+	si, ok, err := GetShardInfo(discoveryAddress, cfg.LogShardID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrLogServiceNotReady
+	}
+	addresses := make([]string, 0)
+	leaderAddress, ok := si.Replicas[si.ReplicaID]
+	if ok {
+		addresses = append(addresses, leaderAddress)
+	}
+	for replicaID, address := range si.Replicas {
+		if replicaID != si.ReplicaID {
+			addresses = append(addresses, address)
+		}
+	}
+	return connectToLogService(ctx, addresses, cfg)
+}
+
+func connectToLogService(ctx context.Context,
+	targets []string, cfg ClientConfig) (*client, error) {
+	if len(targets) == 0 {
+		return nil, nil
+	}
+
 	pool := &sync.Pool{}
 	pool.New = func() interface{} {
 		return &RPCRequest{pool: pool}
@@ -262,7 +304,11 @@ func newClient(ctx context.Context,
 		respPool: respPool,
 	}
 	var e error
-	for _, addr := range cfg.ServiceAddresses {
+	addresses := append([]string{}, targets...)
+	rand.Shuffle(len(cfg.ServiceAddresses), func(i, j int) {
+		addresses[i], addresses[j] = addresses[j], addresses[i]
+	})
+	for _, addr := range addresses {
 		cc, err := getRPCClient(ctx, addr, c.respPool)
 		if err != nil {
 			e = err
@@ -465,14 +511,13 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RP
 	mf := func() morpc.Message {
 		return pool.Get().(*RPCResponse)
 	}
-	timeout, err := getTimeoutFromContext(ctx)
-	if err != nil {
-		return nil, err
-	}
+	// we set connection timeout to a constant value so if ctx's deadline is much
+	// larger, then we can ensure that all specified potential nodes have a chance
+	// to be attempted
 	codec := morpc.NewMessageCodec(mf, defaultWriteSocketSize)
 	bf := morpc.NewGoettyBasedBackendFactory(codec,
 		morpc.WithBackendConnectWhenCreate(),
-		morpc.WithBackendConnectTimeout(timeout))
+		morpc.WithBackendConnectTimeout(time.Second))
 	return morpc.NewClient(bf,
 		morpc.WithClientInitBackends([]string{target}, []int{1}),
 		morpc.WithClientMaxBackendPerHost(1))
