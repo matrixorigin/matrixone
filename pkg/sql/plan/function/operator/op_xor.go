@@ -35,30 +35,30 @@ func OpXorGeneral[T opXorT](vs []*vector.Vector, proc *process.Process, cfn comp
 		return proc.AllocConstNullVector(returnTyp, vector.Length(left)), nil
 	}
 
-	// getXorVec := function(scalar *vector.Vector,  noScalar *vector.Vector) (*vector.Vector, error) {
-	// 	typeLen := noScalar.Oid.TypeLen()
-	// 	vecLen := vector.Length(noScalar)
-	// 	vec, err := proc.AllocVector(returnTyp, int64(vecLen*typeLen))
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	vec.Col = vector.DecodeFixedCol[T](vec, typeLen)
-	// 	vec.Col = vec.Col.([]T)[:vecLen]
-	// 	if nulls.Any(noScalar.Nsp) {
-	// 		for i := 0; i < vecLen; i++ {
-	// 			if noScalar.Nsp.Contains(uint64(i)) {
-	// 				nulls.Add(vec.Nsp, uint64(i))
-	// 			} else {
-	// 				vec.Col.([]T)[i] = scalar.Col.([]T)[0] ^ noScalar.Col.([]T)[i]
-	// 			}
-	// 		}
-	// 	} else {
-	// 		for i := 0; i < vecLen; i++ {
-	// 			vec.Col.([]T)[i] = scalar.Col.([]T)[0] ^ right.Col.([]T)[i]
-	// 		}
-	// 	}
-	// 	return vec, nil
-	// }
+	getXorVec := function(scalar *vector.Vector,  noScalar *vector.Vector) (*vector.Vector, error) {
+		typeLen := noScalar.Oid.TypeLen()
+		vecLen := vector.Length(noScalar)
+		vec, err := proc.AllocVector(returnTyp, int64(vecLen*typeLen))
+		if err != nil {
+			return nil, err
+		}
+		vec.Col = vector.DecodeFixedCol[T](vec, typeLen)
+		vec.Col = vec.Col.([]T)[:vecLen]
+		if nulls.Any(noScalar.Nsp) {
+			for i := 0; i < vecLen; i++ {
+				if noScalar.Nsp.Contains(uint64(i)) {
+					nulls.Add(vec.Nsp, uint64(i))
+				} else {
+					vec.Col.([]T)[i] = scalar.Col.([]T)[0] ^ noScalar.Col.([]T)[i]
+				}
+			}
+		} else {
+			for i := 0; i < vecLen; i++ {
+				vec.Col.([]T)[i] = scalar.Col.([]T)[0] ^ noScalar.Col.([]T)[i]
+			}
+		}
+		return vec, nil
+	}
 
 	if left.IsScalar() && right.IsScalar() {
 		vec := proc.AllocScalarVector(left.Typ.Oid.ToType())
@@ -66,13 +66,28 @@ func OpXorGeneral[T opXorT](vs []*vector.Vector, proc *process.Process, cfn comp
 		vec.Col.([]T)[0] = left.Col.([]T)[0] ^ right.Col.([]T)[0]
 		return vec, nil
 	} else {
-		// if left.
-		// } else if right.IsScalar() {
-
-		// } else {
-
-		// }
-
-		return nil, nil
+		if left.IsScalar() {
+			return getXorVec(left, right)
+		} else if right.IsScalar() {
+			return getXorVec(right, left)
+		} else {
+			typeLen := left.Oid.TypeLen()
+			vecLen := vector.Length(left)
+			vec, err := proc.AllocVector(returnTyp, int64(vecLen*typeLen))
+			if err != nil {
+				return nil, err
+			}
+			vec.Col = vector.DecodeFixedCol[T](vec, typeLen)
+			vec.Col = vec.Col.([]T)[:vecLen]
+			
+			for i := 0; i < vecLen; i++ {
+				if noScalar.Nsp.Contains(uint64(i)) {
+					nulls.Add(vec.Nsp, uint64(i))
+				} else {
+					vec.Col.([]T)[i] = scalar.Col.([]T)[0] ^ noScalar.Col.([]T)[i]
+				}
+			}
+			return vec, nil
+		}
 	}
 }
