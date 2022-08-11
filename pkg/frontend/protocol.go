@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"sync"
 
@@ -264,3 +265,90 @@ func (mp *MysqlProtocolImpl) SendResponse(resp *Response) error {
 		return fmt.Errorf("unsupported response:%d ", resp.category)
 	}
 }
+
+var _ Protocol = &FakeProtocol{}
+var _ MysqlProtocol = &FakeProtocol{}
+
+const (
+	fakeConnectionID uint32 = math.MaxUint32
+)
+
+// FakeProtocol works for the background transaction that does not use the network protocol.
+type FakeProtocol struct {
+	username string
+	database string
+}
+
+func (fp *FakeProtocol) SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt uint64) error {
+	return nil
+}
+
+func (fp *FakeProtocol) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, cnt uint64) error {
+	return nil
+}
+
+func (fp *FakeProtocol) SendColumnDefinitionPacket(column Column, cmd int) error {
+	return nil
+}
+
+func (fp *FakeProtocol) SendColumnCountPacket(count uint64) error {
+	return nil
+}
+
+func (fp *FakeProtocol) SendEOFPacketIf(warnings uint16, status uint16) error {
+	return nil
+}
+
+func (fp *FakeProtocol) sendOKPacket(affectedRows uint64, lastInsertId uint64, status uint16, warnings uint16, message string) error {
+	return nil
+}
+
+func (fp *FakeProtocol) sendEOFOrOkPacket(warnings uint16, status uint16) error {
+	return nil
+}
+
+func (fp *FakeProtocol) PrepareBeforeProcessingResultSet() {}
+
+func (fp *FakeProtocol) GetStats() string {
+	return ""
+}
+
+func (fp *FakeProtocol) IsEstablished() bool {
+	return true
+}
+
+func (fp *FakeProtocol) SetEstablished() {}
+
+func (fp *FakeProtocol) GetRequest(payload []byte) *Request {
+	return nil
+}
+
+func (fp *FakeProtocol) SendResponse(response *Response) error {
+	return nil
+}
+
+func (fp *FakeProtocol) ConnectionID() uint32 {
+	return fakeConnectionID
+}
+
+func (fp *FakeProtocol) Peer() (string, string) {
+	return "", ""
+}
+
+func (fp *FakeProtocol) GetDatabaseName() string {
+	return fp.database
+}
+
+func (fp *FakeProtocol) SetDatabaseName(s string) {
+	fp.database = s
+}
+
+func (fp *FakeProtocol) GetUserName() string {
+	return fp.username
+}
+
+func (fp *FakeProtocol) SetUserName(s string) {
+	fp.username = s
+}
+
+func (fp *FakeProtocol) Quit() {}
