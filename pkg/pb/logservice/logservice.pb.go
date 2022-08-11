@@ -23,7 +23,7 @@ var _ = math.Inf
 // is compatible with the proto package it is being compiled against.
 // A compilation error at this line likely means your copy of the
 // proto package needs to be updated.
-const _ = proto.GoGoProtoPackageIsVersion2 // please upgrade the proto package
+const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 
 type UpdateType int32
 
@@ -399,7 +399,7 @@ func (m *CNNode) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_CNNode.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -470,7 +470,7 @@ func (m *DNNode) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_DNNode.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -542,7 +542,7 @@ func (m *LogNode) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_LogNode.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -630,7 +630,7 @@ func (m *LogShardInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error)
 		return xxx_messageInfo_LogShardInfo.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -708,7 +708,7 @@ func (m *LogReplicaInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, erro
 		return xxx_messageInfo_LogReplicaInfo.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -757,7 +757,7 @@ func (m *CNStoreHeartbeat) XXX_Marshal(b []byte, deterministic bool) ([]byte, er
 		return xxx_messageInfo_CNStoreHeartbeat.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -821,7 +821,7 @@ func (m *LogStoreHeartbeat) XXX_Marshal(b []byte, deterministic bool) ([]byte, e
 		return xxx_messageInfo_LogStoreHeartbeat.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -903,7 +903,7 @@ func (m *DNShardInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) 
 		return xxx_messageInfo_DNShardInfo.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -963,7 +963,7 @@ func (m *DNStoreHeartbeat) XXX_Marshal(b []byte, deterministic bool) ([]byte, er
 		return xxx_messageInfo_DNStoreHeartbeat.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -1028,7 +1028,7 @@ func (m *RSMState) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_RSMState.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -1106,7 +1106,7 @@ func (m *LogRecord) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_LogRecord.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -1172,7 +1172,7 @@ func (m *LogRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_LogRequest.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -1254,7 +1254,7 @@ func (m *TsoRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_TsoRequest.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -1308,7 +1308,7 @@ func (m *Request) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_Request.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -1406,7 +1406,7 @@ func (m *LogResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) 
 		return xxx_messageInfo_LogResponse.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -1476,7 +1476,7 @@ func (m *Response) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_Response.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -1586,7 +1586,7 @@ func (m *LogRecordResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, e
 		return xxx_messageInfo_LogRecordResponse.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -1633,7 +1633,7 @@ func (m *TsoResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) 
 		return xxx_messageInfo_TsoResponse.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -1687,7 +1687,7 @@ func (m *Replica) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_Replica.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -1766,7 +1766,7 @@ func (m *ConfigChange) XXX_Marshal(b []byte, deterministic bool) ([]byte, error)
 		return xxx_messageInfo_ConfigChange.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -1828,7 +1828,7 @@ func (m *ShutdownStore) XXX_Marshal(b []byte, deterministic bool) ([]byte, error
 		return xxx_messageInfo_ShutdownStore.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -1881,7 +1881,7 @@ func (m *ScheduleCommand) XXX_Marshal(b []byte, deterministic bool) ([]byte, err
 		return xxx_messageInfo_ScheduleCommand.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -1957,7 +1957,7 @@ func (m *CommandBatch) XXX_Marshal(b []byte, deterministic bool) ([]byte, error)
 		return xxx_messageInfo_CommandBatch.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -2013,7 +2013,7 @@ func (m *CNStoreInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) 
 		return xxx_messageInfo_CNStoreInfo.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -2069,7 +2069,7 @@ func (m *CNState) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_CNState.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -2119,7 +2119,7 @@ func (m *DNStoreInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) 
 		return xxx_messageInfo_DNStoreInfo.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -2182,7 +2182,7 @@ func (m *DNState) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_DNState.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -2231,7 +2231,7 @@ func (m *ClusterDetails) XXX_Marshal(b []byte, deterministic bool) ([]byte, erro
 		return xxx_messageInfo_ClusterDetails.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -2296,7 +2296,7 @@ func (m *ClusterInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) 
 		return xxx_messageInfo_ClusterInfo.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -2352,7 +2352,7 @@ func (m *InitialClusterRequest) XXX_Marshal(b []byte, deterministic bool) ([]byt
 		return xxx_messageInfo_InitialClusterRequest.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -2418,7 +2418,7 @@ func (m *LogStoreInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error)
 		return xxx_messageInfo_LogStoreInfo.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -2501,7 +2501,7 @@ func (m *LogState) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_LogState.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -2561,7 +2561,7 @@ func (m *CheckerState) XXX_Marshal(b []byte, deterministic bool) ([]byte, error)
 		return xxx_messageInfo_CheckerState.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -2646,7 +2646,7 @@ func (m *HAKeeperRSMState) XXX_Marshal(b []byte, deterministic bool) ([]byte, er
 		return xxx_messageInfo_HAKeeperRSMState.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -2758,7 +2758,7 @@ func (m *ReplicaInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) 
 		return xxx_messageInfo_ReplicaInfo.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -2817,7 +2817,7 @@ func (m *ShardInfoQueryResult) XXX_Marshal(b []byte, deterministic bool) ([]byte
 		return xxx_messageInfo_ShardInfoQueryResult.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -3096,7 +3096,7 @@ var fileDescriptor_fd1040c5381ab5a7 = []byte{
 func (m *CNNode) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3104,42 +3104,50 @@ func (m *CNNode) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *CNNode) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *CNNode) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if len(m.UUID) > 0 {
-		dAtA[i] = 0xa
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.UUID)))
-		i += copy(dAtA[i:], m.UUID)
-	}
-	if len(m.ServiceAddress) > 0 {
-		dAtA[i] = 0x12
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ServiceAddress)))
-		i += copy(dAtA[i:], m.ServiceAddress)
-	}
-	if m.Tick != 0 {
-		dAtA[i] = 0x18
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Tick))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if m.State != 0 {
-		dAtA[i] = 0x20
-		i++
 		i = encodeVarintLogservice(dAtA, i, uint64(m.State))
+		i--
+		dAtA[i] = 0x20
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if m.Tick != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Tick))
+		i--
+		dAtA[i] = 0x18
 	}
-	return i, nil
+	if len(m.ServiceAddress) > 0 {
+		i -= len(m.ServiceAddress)
+		copy(dAtA[i:], m.ServiceAddress)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ServiceAddress)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.UUID) > 0 {
+		i -= len(m.UUID)
+		copy(dAtA[i:], m.UUID)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.UUID)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
 }
 
 func (m *DNNode) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3147,42 +3155,50 @@ func (m *DNNode) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *DNNode) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *DNNode) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if len(m.UUID) > 0 {
-		dAtA[i] = 0xa
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.UUID)))
-		i += copy(dAtA[i:], m.UUID)
-	}
-	if len(m.ServiceAddress) > 0 {
-		dAtA[i] = 0x12
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ServiceAddress)))
-		i += copy(dAtA[i:], m.ServiceAddress)
-	}
-	if m.Tick != 0 {
-		dAtA[i] = 0x18
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Tick))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if m.State != 0 {
-		dAtA[i] = 0x20
-		i++
 		i = encodeVarintLogservice(dAtA, i, uint64(m.State))
+		i--
+		dAtA[i] = 0x20
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if m.Tick != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Tick))
+		i--
+		dAtA[i] = 0x18
 	}
-	return i, nil
+	if len(m.ServiceAddress) > 0 {
+		i -= len(m.ServiceAddress)
+		copy(dAtA[i:], m.ServiceAddress)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ServiceAddress)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.UUID) > 0 {
+		i -= len(m.UUID)
+		copy(dAtA[i:], m.UUID)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.UUID)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
 }
 
 func (m *LogNode) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3190,54 +3206,64 @@ func (m *LogNode) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *LogNode) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *LogNode) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if len(m.UUID) > 0 {
-		dAtA[i] = 0xa
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.UUID)))
-		i += copy(dAtA[i:], m.UUID)
-	}
-	if len(m.ServiceAddress) > 0 {
-		dAtA[i] = 0x12
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ServiceAddress)))
-		i += copy(dAtA[i:], m.ServiceAddress)
-	}
-	if m.Tick != 0 {
-		dAtA[i] = 0x18
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Tick))
-	}
-	if m.State != 0 {
-		dAtA[i] = 0x20
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.State))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.Replicas) > 0 {
-		for _, msg := range m.Replicas {
-			dAtA[i] = 0x2a
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(msg.Size()))
-			n, err := msg.MarshalTo(dAtA[i:])
-			if err != nil {
-				return 0, err
+		for iNdEx := len(m.Replicas) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.Replicas[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogservice(dAtA, i, uint64(size))
 			}
-			i += n
+			i--
+			dAtA[i] = 0x2a
 		}
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if m.State != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.State))
+		i--
+		dAtA[i] = 0x20
 	}
-	return i, nil
+	if m.Tick != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Tick))
+		i--
+		dAtA[i] = 0x18
+	}
+	if len(m.ServiceAddress) > 0 {
+		i -= len(m.ServiceAddress)
+		copy(dAtA[i:], m.ServiceAddress)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ServiceAddress)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.UUID) > 0 {
+		i -= len(m.UUID)
+		copy(dAtA[i:], m.UUID)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.UUID)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
 }
 
 func (m *LogShardInfo) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3245,56 +3271,63 @@ func (m *LogShardInfo) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *LogShardInfo) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *LogShardInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.ShardID != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.ShardID))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.Term != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Term))
+		i--
+		dAtA[i] = 0x28
+	}
+	if m.LeaderID != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.LeaderID))
+		i--
+		dAtA[i] = 0x20
+	}
+	if m.Epoch != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Epoch))
+		i--
+		dAtA[i] = 0x18
 	}
 	if len(m.Replicas) > 0 {
 		for k := range m.Replicas {
-			dAtA[i] = 0x12
-			i++
 			v := m.Replicas[k]
-			mapSize := 1 + sovLogservice(uint64(k)) + 1 + len(v) + sovLogservice(uint64(len(v)))
-			i = encodeVarintLogservice(dAtA, i, uint64(mapSize))
-			dAtA[i] = 0x8
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(k))
-			dAtA[i] = 0x12
-			i++
+			baseI := i
+			i -= len(v)
+			copy(dAtA[i:], v)
 			i = encodeVarintLogservice(dAtA, i, uint64(len(v)))
-			i += copy(dAtA[i:], v)
+			i--
+			dAtA[i] = 0x12
+			i = encodeVarintLogservice(dAtA, i, uint64(k))
+			i--
+			dAtA[i] = 0x8
+			i = encodeVarintLogservice(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0x12
 		}
 	}
-	if m.Epoch != 0 {
-		dAtA[i] = 0x18
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Epoch))
+	if m.ShardID != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.ShardID))
+		i--
+		dAtA[i] = 0x8
 	}
-	if m.LeaderID != 0 {
-		dAtA[i] = 0x20
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.LeaderID))
-	}
-	if m.Term != 0 {
-		dAtA[i] = 0x28
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Term))
-	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	return i, nil
+	return len(dAtA) - i, nil
 }
 
 func (m *LogReplicaInfo) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3302,33 +3335,41 @@ func (m *LogReplicaInfo) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *LogReplicaInfo) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *LogReplicaInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	dAtA[i] = 0xa
-	i++
-	i = encodeVarintLogservice(dAtA, i, uint64(m.LogShardInfo.Size()))
-	n1, err1 := m.LogShardInfo.MarshalTo(dAtA[i:])
-	if err1 != nil {
-		return 0, err1
-	}
-	i += n1
-	if m.ReplicaID != 0 {
-		dAtA[i] = 0x10
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.ReplicaID))
-	}
 	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
-	return i, nil
+	if m.ReplicaID != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.ReplicaID))
+		i--
+		dAtA[i] = 0x10
+	}
+	{
+		size, err := m.LogShardInfo.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLogservice(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0xa
+	return len(dAtA) - i, nil
 }
 
 func (m *CNStoreHeartbeat) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3336,32 +3377,40 @@ func (m *CNStoreHeartbeat) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *CNStoreHeartbeat) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *CNStoreHeartbeat) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if len(m.UUID) > 0 {
-		dAtA[i] = 0xa
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.UUID)))
-		i += copy(dAtA[i:], m.UUID)
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.ServiceAddress) > 0 {
-		dAtA[i] = 0x12
-		i++
+		i -= len(m.ServiceAddress)
+		copy(dAtA[i:], m.ServiceAddress)
 		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ServiceAddress)))
-		i += copy(dAtA[i:], m.ServiceAddress)
+		i--
+		dAtA[i] = 0x12
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if len(m.UUID) > 0 {
+		i -= len(m.UUID)
+		copy(dAtA[i:], m.UUID)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.UUID)))
+		i--
+		dAtA[i] = 0xa
 	}
-	return i, nil
+	return len(dAtA) - i, nil
 }
 
 func (m *LogStoreHeartbeat) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3369,56 +3418,68 @@ func (m *LogStoreHeartbeat) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *LogStoreHeartbeat) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *LogStoreHeartbeat) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if len(m.UUID) > 0 {
-		dAtA[i] = 0xa
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.UUID)))
-		i += copy(dAtA[i:], m.UUID)
-	}
-	if len(m.RaftAddress) > 0 {
-		dAtA[i] = 0x12
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.RaftAddress)))
-		i += copy(dAtA[i:], m.RaftAddress)
-	}
-	if len(m.ServiceAddress) > 0 {
-		dAtA[i] = 0x1a
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ServiceAddress)))
-		i += copy(dAtA[i:], m.ServiceAddress)
-	}
-	if len(m.GossipAddress) > 0 {
-		dAtA[i] = 0x22
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.GossipAddress)))
-		i += copy(dAtA[i:], m.GossipAddress)
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.Replicas) > 0 {
-		for _, msg := range m.Replicas {
-			dAtA[i] = 0x2a
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(msg.Size()))
-			n, err := msg.MarshalTo(dAtA[i:])
-			if err != nil {
-				return 0, err
+		for iNdEx := len(m.Replicas) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.Replicas[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogservice(dAtA, i, uint64(size))
 			}
-			i += n
+			i--
+			dAtA[i] = 0x2a
 		}
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if len(m.GossipAddress) > 0 {
+		i -= len(m.GossipAddress)
+		copy(dAtA[i:], m.GossipAddress)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.GossipAddress)))
+		i--
+		dAtA[i] = 0x22
 	}
-	return i, nil
+	if len(m.ServiceAddress) > 0 {
+		i -= len(m.ServiceAddress)
+		copy(dAtA[i:], m.ServiceAddress)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ServiceAddress)))
+		i--
+		dAtA[i] = 0x1a
+	}
+	if len(m.RaftAddress) > 0 {
+		i -= len(m.RaftAddress)
+		copy(dAtA[i:], m.RaftAddress)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.RaftAddress)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.UUID) > 0 {
+		i -= len(m.UUID)
+		copy(dAtA[i:], m.UUID)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.UUID)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
 }
 
 func (m *DNShardInfo) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3426,30 +3487,36 @@ func (m *DNShardInfo) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *DNShardInfo) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *DNShardInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.ShardID != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.ShardID))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if m.ReplicaID != 0 {
-		dAtA[i] = 0x10
-		i++
 		i = encodeVarintLogservice(dAtA, i, uint64(m.ReplicaID))
+		i--
+		dAtA[i] = 0x10
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if m.ShardID != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.ShardID))
+		i--
+		dAtA[i] = 0x8
 	}
-	return i, nil
+	return len(dAtA) - i, nil
 }
 
 func (m *DNStoreHeartbeat) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3457,44 +3524,54 @@ func (m *DNStoreHeartbeat) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *DNStoreHeartbeat) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *DNStoreHeartbeat) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if len(m.UUID) > 0 {
-		dAtA[i] = 0xa
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.UUID)))
-		i += copy(dAtA[i:], m.UUID)
-	}
-	if len(m.ServiceAddress) > 0 {
-		dAtA[i] = 0x12
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ServiceAddress)))
-		i += copy(dAtA[i:], m.ServiceAddress)
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.Shards) > 0 {
-		for _, msg := range m.Shards {
-			dAtA[i] = 0x1a
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(msg.Size()))
-			n, err := msg.MarshalTo(dAtA[i:])
-			if err != nil {
-				return 0, err
+		for iNdEx := len(m.Shards) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.Shards[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogservice(dAtA, i, uint64(size))
 			}
-			i += n
+			i--
+			dAtA[i] = 0x1a
 		}
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if len(m.ServiceAddress) > 0 {
+		i -= len(m.ServiceAddress)
+		copy(dAtA[i:], m.ServiceAddress)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ServiceAddress)))
+		i--
+		dAtA[i] = 0x12
 	}
-	return i, nil
+	if len(m.UUID) > 0 {
+		i -= len(m.UUID)
+		copy(dAtA[i:], m.UUID)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.UUID)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
 }
 
 func (m *RSMState) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3502,55 +3579,61 @@ func (m *RSMState) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *RSMState) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *RSMState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.Tso != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Tso))
-	}
-	if m.Index != 0 {
-		dAtA[i] = 0x10
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Index))
-	}
-	if m.LeaseHolderID != 0 {
-		dAtA[i] = 0x18
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.LeaseHolderID))
-	}
-	if m.TruncatedLsn != 0 {
-		dAtA[i] = 0x20
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.TruncatedLsn))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.LeaseHistory) > 0 {
 		for k := range m.LeaseHistory {
-			dAtA[i] = 0x2a
-			i++
 			v := m.LeaseHistory[k]
-			mapSize := 1 + sovLogservice(uint64(k)) + 1 + sovLogservice(uint64(v))
-			i = encodeVarintLogservice(dAtA, i, uint64(mapSize))
-			dAtA[i] = 0x8
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(k))
-			dAtA[i] = 0x10
-			i++
+			baseI := i
 			i = encodeVarintLogservice(dAtA, i, uint64(v))
+			i--
+			dAtA[i] = 0x10
+			i = encodeVarintLogservice(dAtA, i, uint64(k))
+			i--
+			dAtA[i] = 0x8
+			i = encodeVarintLogservice(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0x2a
 		}
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if m.TruncatedLsn != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.TruncatedLsn))
+		i--
+		dAtA[i] = 0x20
 	}
-	return i, nil
+	if m.LeaseHolderID != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.LeaseHolderID))
+		i--
+		dAtA[i] = 0x18
+	}
+	if m.Index != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Index))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.Tso != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Tso))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
 }
 
 func (m *LogRecord) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3558,36 +3641,43 @@ func (m *LogRecord) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *LogRecord) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *LogRecord) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.Lsn != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Lsn))
-	}
-	if m.Type != 0 {
-		dAtA[i] = 0x10
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Type))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.Data) > 0 {
-		dAtA[i] = 0x1a
-		i++
+		i -= len(m.Data)
+		copy(dAtA[i:], m.Data)
 		i = encodeVarintLogservice(dAtA, i, uint64(len(m.Data)))
-		i += copy(dAtA[i:], m.Data)
+		i--
+		dAtA[i] = 0x1a
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if m.Type != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Type))
+		i--
+		dAtA[i] = 0x10
 	}
-	return i, nil
+	if m.Lsn != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Lsn))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
 }
 
 func (m *LogRequest) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3595,51 +3685,58 @@ func (m *LogRequest) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *LogRequest) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *LogRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if len(m.Name) > 0 {
-		dAtA[i] = 0xa
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.Name)))
-		i += copy(dAtA[i:], m.Name)
-	}
-	if m.ShardID != 0 {
-		dAtA[i] = 0x10
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.ShardID))
-	}
-	if m.Lsn != 0 {
-		dAtA[i] = 0x18
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Lsn))
-	}
-	if m.MaxSize != 0 {
-		dAtA[i] = 0x20
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.MaxSize))
-	}
-	if m.DNShardID != 0 {
-		dAtA[i] = 0x28
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.DNShardID))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if m.DNID != 0 {
-		dAtA[i] = 0x30
-		i++
 		i = encodeVarintLogservice(dAtA, i, uint64(m.DNID))
+		i--
+		dAtA[i] = 0x30
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if m.DNShardID != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.DNShardID))
+		i--
+		dAtA[i] = 0x28
 	}
-	return i, nil
+	if m.MaxSize != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.MaxSize))
+		i--
+		dAtA[i] = 0x20
+	}
+	if m.Lsn != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Lsn))
+		i--
+		dAtA[i] = 0x18
+	}
+	if m.ShardID != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.ShardID))
+		i--
+		dAtA[i] = 0x10
+	}
+	if len(m.Name) > 0 {
+		i -= len(m.Name)
+		copy(dAtA[i:], m.Name)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.Name)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
 }
 
 func (m *TsoRequest) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3647,25 +3744,31 @@ func (m *TsoRequest) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *TsoRequest) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *TsoRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.Count != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Count))
-	}
 	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
-	return i, nil
+	if m.Count != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Count))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
 }
 
 func (m *Request) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3673,75 +3776,91 @@ func (m *Request) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *Request) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *Request) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.RequestID != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.RequestID))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	{
+		size, err := m.TsoRequest.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLogservice(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x42
+	{
+		size, err := m.DNHeartbeat.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLogservice(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x3a
+	{
+		size, err := m.CNHeartbeat.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLogservice(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x32
+	{
+		size, err := m.LogHeartbeat.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLogservice(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x2a
+	{
+		size, err := m.LogRequest.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLogservice(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x22
+	if m.Timeout != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Timeout))
+		i--
+		dAtA[i] = 0x18
 	}
 	if m.Method != 0 {
-		dAtA[i] = 0x10
-		i++
 		i = encodeVarintLogservice(dAtA, i, uint64(m.Method))
+		i--
+		dAtA[i] = 0x10
 	}
-	if m.Timeout != 0 {
-		dAtA[i] = 0x18
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Timeout))
+	if m.RequestID != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.RequestID))
+		i--
+		dAtA[i] = 0x8
 	}
-	dAtA[i] = 0x22
-	i++
-	i = encodeVarintLogservice(dAtA, i, uint64(m.LogRequest.Size()))
-	n2, err2 := m.LogRequest.MarshalTo(dAtA[i:])
-	if err2 != nil {
-		return 0, err2
-	}
-	i += n2
-	dAtA[i] = 0x2a
-	i++
-	i = encodeVarintLogservice(dAtA, i, uint64(m.LogHeartbeat.Size()))
-	n3, err3 := m.LogHeartbeat.MarshalTo(dAtA[i:])
-	if err3 != nil {
-		return 0, err3
-	}
-	i += n3
-	dAtA[i] = 0x32
-	i++
-	i = encodeVarintLogservice(dAtA, i, uint64(m.CNHeartbeat.Size()))
-	n4, err4 := m.CNHeartbeat.MarshalTo(dAtA[i:])
-	if err4 != nil {
-		return 0, err4
-	}
-	i += n4
-	dAtA[i] = 0x3a
-	i++
-	i = encodeVarintLogservice(dAtA, i, uint64(m.DNHeartbeat.Size()))
-	n5, err5 := m.DNHeartbeat.MarshalTo(dAtA[i:])
-	if err5 != nil {
-		return 0, err5
-	}
-	i += n5
-	dAtA[i] = 0x42
-	i++
-	i = encodeVarintLogservice(dAtA, i, uint64(m.TsoRequest.Size()))
-	n6, err6 := m.TsoRequest.MarshalTo(dAtA[i:])
-	if err6 != nil {
-		return 0, err6
-	}
-	i += n6
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	return i, nil
+	return len(dAtA) - i, nil
 }
 
 func (m *LogResponse) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3749,35 +3868,41 @@ func (m *LogResponse) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *LogResponse) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *LogResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.ShardID != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.ShardID))
-	}
-	if m.Lsn != 0 {
-		dAtA[i] = 0x10
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Lsn))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if m.LastLsn != 0 {
-		dAtA[i] = 0x18
-		i++
 		i = encodeVarintLogservice(dAtA, i, uint64(m.LastLsn))
+		i--
+		dAtA[i] = 0x18
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if m.Lsn != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Lsn))
+		i--
+		dAtA[i] = 0x10
 	}
-	return i, nil
+	if m.ShardID != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.ShardID))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
 }
 
 func (m *Response) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3785,93 +3910,110 @@ func (m *Response) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *Response) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *Response) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.RequestID != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.RequestID))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
-	if m.Method != 0 {
-		dAtA[i] = 0x10
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Method))
+	if m.ShardInfo != nil {
+		{
+			size, err := m.ShardInfo.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintLogservice(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x52
 	}
-	if m.ErrorCode != 0 {
-		dAtA[i] = 0x18
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.ErrorCode))
+	{
+		size, err := m.ClusterDetails.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLogservice(dAtA, i, uint64(size))
 	}
-	if len(m.ErrorMessage) > 0 {
-		dAtA[i] = 0x22
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ErrorMessage)))
-		i += copy(dAtA[i:], m.ErrorMessage)
+	i--
+	dAtA[i] = 0x4a
+	{
+		size, err := m.TsoResponse.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLogservice(dAtA, i, uint64(size))
 	}
+	i--
+	dAtA[i] = 0x42
+	{
+		size, err := m.CommandBatch.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLogservice(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x3a
+	{
+		size, err := m.LogResponse.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLogservice(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x32
 	if m.IsHAKeeper {
-		dAtA[i] = 0x28
-		i++
+		i--
 		if m.IsHAKeeper {
 			dAtA[i] = 1
 		} else {
 			dAtA[i] = 0
 		}
-		i++
+		i--
+		dAtA[i] = 0x28
 	}
-	dAtA[i] = 0x32
-	i++
-	i = encodeVarintLogservice(dAtA, i, uint64(m.LogResponse.Size()))
-	n7, err7 := m.LogResponse.MarshalTo(dAtA[i:])
-	if err7 != nil {
-		return 0, err7
+	if len(m.ErrorMessage) > 0 {
+		i -= len(m.ErrorMessage)
+		copy(dAtA[i:], m.ErrorMessage)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ErrorMessage)))
+		i--
+		dAtA[i] = 0x22
 	}
-	i += n7
-	dAtA[i] = 0x3a
-	i++
-	i = encodeVarintLogservice(dAtA, i, uint64(m.CommandBatch.Size()))
-	n8, err8 := m.CommandBatch.MarshalTo(dAtA[i:])
-	if err8 != nil {
-		return 0, err8
+	if m.ErrorCode != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.ErrorCode))
+		i--
+		dAtA[i] = 0x18
 	}
-	i += n8
-	dAtA[i] = 0x42
-	i++
-	i = encodeVarintLogservice(dAtA, i, uint64(m.TsoResponse.Size()))
-	n9, err9 := m.TsoResponse.MarshalTo(dAtA[i:])
-	if err9 != nil {
-		return 0, err9
+	if m.Method != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Method))
+		i--
+		dAtA[i] = 0x10
 	}
-	i += n9
-	dAtA[i] = 0x4a
-	i++
-	i = encodeVarintLogservice(dAtA, i, uint64(m.ClusterDetails.Size()))
-	n10, err10 := m.ClusterDetails.MarshalTo(dAtA[i:])
-	if err10 != nil {
-		return 0, err10
+	if m.RequestID != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.RequestID))
+		i--
+		dAtA[i] = 0x8
 	}
-	i += n10
-	if m.ShardInfo != nil {
-		dAtA[i] = 0x52
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.ShardInfo.Size()))
-		n11, err11 := m.ShardInfo.MarshalTo(dAtA[i:])
-		if err11 != nil {
-			return 0, err11
-		}
-		i += n11
-	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	return i, nil
+	return len(dAtA) - i, nil
 }
 
 func (m *LogRecordResponse) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3879,32 +4021,40 @@ func (m *LogRecordResponse) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *LogRecordResponse) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *LogRecordResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
 	if len(m.Records) > 0 {
-		for _, msg := range m.Records {
-			dAtA[i] = 0xa
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(msg.Size()))
-			n, err := msg.MarshalTo(dAtA[i:])
-			if err != nil {
-				return 0, err
+		for iNdEx := len(m.Records) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.Records[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogservice(dAtA, i, uint64(size))
 			}
-			i += n
+			i--
+			dAtA[i] = 0xa
 		}
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	return i, nil
+	return len(dAtA) - i, nil
 }
 
 func (m *TsoResponse) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3912,25 +4062,31 @@ func (m *TsoResponse) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *TsoResponse) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *TsoResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.Value != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Value))
-	}
 	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
-	return i, nil
+	if m.Value != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Value))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
 }
 
 func (m *Replica) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3938,46 +4094,53 @@ func (m *Replica) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *Replica) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *Replica) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if len(m.UUID) > 0 {
-		dAtA[i] = 0xa
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.UUID)))
-		i += copy(dAtA[i:], m.UUID)
-	}
-	if m.ShardID != 0 {
-		dAtA[i] = 0x10
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.ShardID))
-	}
-	if m.ReplicaID != 0 {
-		dAtA[i] = 0x18
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.ReplicaID))
-	}
-	if m.Epoch != 0 {
-		dAtA[i] = 0x20
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Epoch))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if m.LogShardID != 0 {
-		dAtA[i] = 0x28
-		i++
 		i = encodeVarintLogservice(dAtA, i, uint64(m.LogShardID))
+		i--
+		dAtA[i] = 0x28
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if m.Epoch != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Epoch))
+		i--
+		dAtA[i] = 0x20
 	}
-	return i, nil
+	if m.ReplicaID != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.ReplicaID))
+		i--
+		dAtA[i] = 0x18
+	}
+	if m.ShardID != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.ShardID))
+		i--
+		dAtA[i] = 0x10
+	}
+	if len(m.UUID) > 0 {
+		i -= len(m.UUID)
+		copy(dAtA[i:], m.UUID)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.UUID)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
 }
 
 func (m *ConfigChange) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -3985,49 +4148,58 @@ func (m *ConfigChange) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *ConfigChange) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *ConfigChange) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	dAtA[i] = 0xa
-	i++
-	i = encodeVarintLogservice(dAtA, i, uint64(m.Replica.Size()))
-	n12, err12 := m.Replica.MarshalTo(dAtA[i:])
-	if err12 != nil {
-		return 0, err12
-	}
-	i += n12
-	if m.ChangeType != 0 {
-		dAtA[i] = 0x10
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.ChangeType))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.InitialMembers) > 0 {
 		for k := range m.InitialMembers {
-			dAtA[i] = 0x1a
-			i++
 			v := m.InitialMembers[k]
-			mapSize := 1 + sovLogservice(uint64(k)) + 1 + len(v) + sovLogservice(uint64(len(v)))
-			i = encodeVarintLogservice(dAtA, i, uint64(mapSize))
-			dAtA[i] = 0x8
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(k))
-			dAtA[i] = 0x12
-			i++
+			baseI := i
+			i -= len(v)
+			copy(dAtA[i:], v)
 			i = encodeVarintLogservice(dAtA, i, uint64(len(v)))
-			i += copy(dAtA[i:], v)
+			i--
+			dAtA[i] = 0x12
+			i = encodeVarintLogservice(dAtA, i, uint64(k))
+			i--
+			dAtA[i] = 0x8
+			i = encodeVarintLogservice(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0x1a
 		}
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if m.ChangeType != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.ChangeType))
+		i--
+		dAtA[i] = 0x10
 	}
-	return i, nil
+	{
+		size, err := m.Replica.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLogservice(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0xa
+	return len(dAtA) - i, nil
 }
 
 func (m *ShutdownStore) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -4035,26 +4207,33 @@ func (m *ShutdownStore) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *ShutdownStore) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *ShutdownStore) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if len(m.StoreID) > 0 {
-		dAtA[i] = 0xa
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.StoreID)))
-		i += copy(dAtA[i:], m.StoreID)
-	}
 	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
-	return i, nil
+	if len(m.StoreID) > 0 {
+		i -= len(m.StoreID)
+		copy(dAtA[i:], m.StoreID)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.StoreID)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
 }
 
 func (m *ScheduleCommand) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -4062,61 +4241,72 @@ func (m *ScheduleCommand) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *ScheduleCommand) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *ScheduleCommand) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if len(m.UUID) > 0 {
-		dAtA[i] = 0xa
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.UUID)))
-		i += copy(dAtA[i:], m.UUID)
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.ShutdownStore != nil {
+		{
+			size, err := m.ShutdownStore.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintLogservice(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x2a
+	}
+	if m.ServiceType != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.ServiceType))
+		i--
+		dAtA[i] = 0x20
+	}
+	if m.ConfigChange != nil {
+		{
+			size, err := m.ConfigChange.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintLogservice(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x1a
 	}
 	if m.Bootstrapping {
-		dAtA[i] = 0x10
-		i++
+		i--
 		if m.Bootstrapping {
 			dAtA[i] = 1
 		} else {
 			dAtA[i] = 0
 		}
-		i++
+		i--
+		dAtA[i] = 0x10
 	}
-	if m.ConfigChange != nil {
-		dAtA[i] = 0x1a
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.ConfigChange.Size()))
-		n13, err13 := m.ConfigChange.MarshalTo(dAtA[i:])
-		if err13 != nil {
-			return 0, err13
-		}
-		i += n13
+	if len(m.UUID) > 0 {
+		i -= len(m.UUID)
+		copy(dAtA[i:], m.UUID)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.UUID)))
+		i--
+		dAtA[i] = 0xa
 	}
-	if m.ServiceType != 0 {
-		dAtA[i] = 0x20
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.ServiceType))
-	}
-	if m.ShutdownStore != nil {
-		dAtA[i] = 0x2a
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.ShutdownStore.Size()))
-		n14, err14 := m.ShutdownStore.MarshalTo(dAtA[i:])
-		if err14 != nil {
-			return 0, err14
-		}
-		i += n14
-	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	return i, nil
+	return len(dAtA) - i, nil
 }
 
 func (m *CommandBatch) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -4124,37 +4314,45 @@ func (m *CommandBatch) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *CommandBatch) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *CommandBatch) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.Term != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Term))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.Commands) > 0 {
-		for _, msg := range m.Commands {
-			dAtA[i] = 0x12
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(msg.Size()))
-			n, err := msg.MarshalTo(dAtA[i:])
-			if err != nil {
-				return 0, err
+		for iNdEx := len(m.Commands) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.Commands[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogservice(dAtA, i, uint64(size))
 			}
-			i += n
+			i--
+			dAtA[i] = 0x12
 		}
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if m.Term != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Term))
+		i--
+		dAtA[i] = 0x8
 	}
-	return i, nil
+	return len(dAtA) - i, nil
 }
 
 func (m *CNStoreInfo) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -4162,31 +4360,38 @@ func (m *CNStoreInfo) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *CNStoreInfo) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *CNStoreInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.Tick != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Tick))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.ServiceAddress) > 0 {
-		dAtA[i] = 0x12
-		i++
+		i -= len(m.ServiceAddress)
+		copy(dAtA[i:], m.ServiceAddress)
 		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ServiceAddress)))
-		i += copy(dAtA[i:], m.ServiceAddress)
+		i--
+		dAtA[i] = 0x12
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if m.Tick != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Tick))
+		i--
+		dAtA[i] = 0x8
 	}
-	return i, nil
+	return len(dAtA) - i, nil
 }
 
 func (m *CNState) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -4194,46 +4399,50 @@ func (m *CNState) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *CNState) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *CNState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
 	if len(m.Stores) > 0 {
 		for k := range m.Stores {
-			dAtA[i] = 0xa
-			i++
 			v := m.Stores[k]
-			msgSize := 0
-			if (&v) != nil {
-				msgSize = (&v).Size()
-				msgSize += 1 + sovLogservice(uint64(msgSize))
+			baseI := i
+			{
+				size, err := (&v).MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogservice(dAtA, i, uint64(size))
 			}
-			mapSize := 1 + len(k) + sovLogservice(uint64(len(k))) + msgSize
-			i = encodeVarintLogservice(dAtA, i, uint64(mapSize))
-			dAtA[i] = 0xa
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(len(k)))
-			i += copy(dAtA[i:], k)
+			i--
 			dAtA[i] = 0x12
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64((&v).Size()))
-			n15, err15 := (&v).MarshalTo(dAtA[i:])
-			if err15 != nil {
-				return 0, err15
-			}
-			i += n15
+			i -= len(k)
+			copy(dAtA[i:], k)
+			i = encodeVarintLogservice(dAtA, i, uint64(len(k)))
+			i--
+			dAtA[i] = 0xa
+			i = encodeVarintLogservice(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0xa
 		}
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	return i, nil
+	return len(dAtA) - i, nil
 }
 
 func (m *DNStoreInfo) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -4241,43 +4450,52 @@ func (m *DNStoreInfo) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *DNStoreInfo) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *DNStoreInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.Tick != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Tick))
-	}
-	if len(m.ServiceAddress) > 0 {
-		dAtA[i] = 0x12
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ServiceAddress)))
-		i += copy(dAtA[i:], m.ServiceAddress)
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.Shards) > 0 {
-		for _, msg := range m.Shards {
-			dAtA[i] = 0x1a
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(msg.Size()))
-			n, err := msg.MarshalTo(dAtA[i:])
-			if err != nil {
-				return 0, err
+		for iNdEx := len(m.Shards) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.Shards[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogservice(dAtA, i, uint64(size))
 			}
-			i += n
+			i--
+			dAtA[i] = 0x1a
 		}
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if len(m.ServiceAddress) > 0 {
+		i -= len(m.ServiceAddress)
+		copy(dAtA[i:], m.ServiceAddress)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ServiceAddress)))
+		i--
+		dAtA[i] = 0x12
 	}
-	return i, nil
+	if m.Tick != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Tick))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
 }
 
 func (m *DNState) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -4285,46 +4503,50 @@ func (m *DNState) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *DNState) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *DNState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
 	if len(m.Stores) > 0 {
 		for k := range m.Stores {
-			dAtA[i] = 0xa
-			i++
 			v := m.Stores[k]
-			msgSize := 0
-			if (&v) != nil {
-				msgSize = (&v).Size()
-				msgSize += 1 + sovLogservice(uint64(msgSize))
+			baseI := i
+			{
+				size, err := (&v).MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogservice(dAtA, i, uint64(size))
 			}
-			mapSize := 1 + len(k) + sovLogservice(uint64(len(k))) + msgSize
-			i = encodeVarintLogservice(dAtA, i, uint64(mapSize))
-			dAtA[i] = 0xa
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(len(k)))
-			i += copy(dAtA[i:], k)
+			i--
 			dAtA[i] = 0x12
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64((&v).Size()))
-			n16, err16 := (&v).MarshalTo(dAtA[i:])
-			if err16 != nil {
-				return 0, err16
-			}
-			i += n16
+			i -= len(k)
+			copy(dAtA[i:], k)
+			i = encodeVarintLogservice(dAtA, i, uint64(len(k)))
+			i--
+			dAtA[i] = 0xa
+			i = encodeVarintLogservice(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0xa
 		}
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	return i, nil
+	return len(dAtA) - i, nil
 }
 
 func (m *ClusterDetails) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -4332,56 +4554,68 @@ func (m *ClusterDetails) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *ClusterDetails) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *ClusterDetails) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if len(m.DNNodes) > 0 {
-		for _, msg := range m.DNNodes {
-			dAtA[i] = 0xa
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(msg.Size()))
-			n, err := msg.MarshalTo(dAtA[i:])
-			if err != nil {
-				return 0, err
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.LogNodes) > 0 {
+		for iNdEx := len(m.LogNodes) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.LogNodes[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogservice(dAtA, i, uint64(size))
 			}
-			i += n
+			i--
+			dAtA[i] = 0x1a
 		}
 	}
 	if len(m.CNNodes) > 0 {
-		for _, msg := range m.CNNodes {
+		for iNdEx := len(m.CNNodes) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.CNNodes[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogservice(dAtA, i, uint64(size))
+			}
+			i--
 			dAtA[i] = 0x12
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(msg.Size()))
-			n, err := msg.MarshalTo(dAtA[i:])
-			if err != nil {
-				return 0, err
-			}
-			i += n
 		}
 	}
-	if len(m.LogNodes) > 0 {
-		for _, msg := range m.LogNodes {
-			dAtA[i] = 0x1a
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(msg.Size()))
-			n, err := msg.MarshalTo(dAtA[i:])
-			if err != nil {
-				return 0, err
+	if len(m.DNNodes) > 0 {
+		for iNdEx := len(m.DNNodes) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.DNNodes[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogservice(dAtA, i, uint64(size))
 			}
-			i += n
+			i--
+			dAtA[i] = 0xa
 		}
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	return i, nil
+	return len(dAtA) - i, nil
 }
 
 func (m *ClusterInfo) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -4389,44 +4623,54 @@ func (m *ClusterInfo) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *ClusterInfo) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *ClusterInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if len(m.DNShards) > 0 {
-		for _, msg := range m.DNShards {
-			dAtA[i] = 0xa
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(msg.Size()))
-			n, err := msg.MarshalTo(dAtA[i:])
-			if err != nil {
-				return 0, err
-			}
-			i += n
-		}
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.LogShards) > 0 {
-		for _, msg := range m.LogShards {
-			dAtA[i] = 0x12
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(msg.Size()))
-			n, err := msg.MarshalTo(dAtA[i:])
-			if err != nil {
-				return 0, err
+		for iNdEx := len(m.LogShards) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.LogShards[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogservice(dAtA, i, uint64(size))
 			}
-			i += n
+			i--
+			dAtA[i] = 0x12
 		}
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if len(m.DNShards) > 0 {
+		for iNdEx := len(m.DNShards) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.DNShards[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogservice(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0xa
+		}
 	}
-	return i, nil
+	return len(dAtA) - i, nil
 }
 
 func (m *InitialClusterRequest) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -4434,35 +4678,41 @@ func (m *InitialClusterRequest) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *InitialClusterRequest) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *InitialClusterRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.NumOfLogShards != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.NumOfLogShards))
-	}
-	if m.NumOfDNShards != 0 {
-		dAtA[i] = 0x10
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.NumOfDNShards))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if m.NumOfLogReplicas != 0 {
-		dAtA[i] = 0x18
-		i++
 		i = encodeVarintLogservice(dAtA, i, uint64(m.NumOfLogReplicas))
+		i--
+		dAtA[i] = 0x18
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if m.NumOfDNShards != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.NumOfDNShards))
+		i--
+		dAtA[i] = 0x10
 	}
-	return i, nil
+	if m.NumOfLogShards != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.NumOfLogShards))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
 }
 
 func (m *LogStoreInfo) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -4470,55 +4720,66 @@ func (m *LogStoreInfo) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *LogStoreInfo) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *LogStoreInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.Tick != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Tick))
-	}
-	if len(m.RaftAddress) > 0 {
-		dAtA[i] = 0x12
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.RaftAddress)))
-		i += copy(dAtA[i:], m.RaftAddress)
-	}
-	if len(m.ServiceAddress) > 0 {
-		dAtA[i] = 0x1a
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ServiceAddress)))
-		i += copy(dAtA[i:], m.ServiceAddress)
-	}
-	if len(m.GossipAddress) > 0 {
-		dAtA[i] = 0x22
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.GossipAddress)))
-		i += copy(dAtA[i:], m.GossipAddress)
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.Replicas) > 0 {
-		for _, msg := range m.Replicas {
-			dAtA[i] = 0x2a
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(msg.Size()))
-			n, err := msg.MarshalTo(dAtA[i:])
-			if err != nil {
-				return 0, err
+		for iNdEx := len(m.Replicas) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.Replicas[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogservice(dAtA, i, uint64(size))
 			}
-			i += n
+			i--
+			dAtA[i] = 0x2a
 		}
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if len(m.GossipAddress) > 0 {
+		i -= len(m.GossipAddress)
+		copy(dAtA[i:], m.GossipAddress)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.GossipAddress)))
+		i--
+		dAtA[i] = 0x22
 	}
-	return i, nil
+	if len(m.ServiceAddress) > 0 {
+		i -= len(m.ServiceAddress)
+		copy(dAtA[i:], m.ServiceAddress)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ServiceAddress)))
+		i--
+		dAtA[i] = 0x1a
+	}
+	if len(m.RaftAddress) > 0 {
+		i -= len(m.RaftAddress)
+		copy(dAtA[i:], m.RaftAddress)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.RaftAddress)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if m.Tick != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Tick))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
 }
 
 func (m *LogState) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -4526,71 +4787,72 @@ func (m *LogState) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *LogState) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *LogState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if len(m.Shards) > 0 {
-		for k := range m.Shards {
-			dAtA[i] = 0xa
-			i++
-			v := m.Shards[k]
-			msgSize := 0
-			if (&v) != nil {
-				msgSize = (&v).Size()
-				msgSize += 1 + sovLogservice(uint64(msgSize))
-			}
-			mapSize := 1 + sovLogservice(uint64(k)) + msgSize
-			i = encodeVarintLogservice(dAtA, i, uint64(mapSize))
-			dAtA[i] = 0x8
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(k))
-			dAtA[i] = 0x12
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64((&v).Size()))
-			n17, err17 := (&v).MarshalTo(dAtA[i:])
-			if err17 != nil {
-				return 0, err17
-			}
-			i += n17
-		}
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.Stores) > 0 {
 		for k := range m.Stores {
-			dAtA[i] = 0x12
-			i++
 			v := m.Stores[k]
-			msgSize := 0
-			if (&v) != nil {
-				msgSize = (&v).Size()
-				msgSize += 1 + sovLogservice(uint64(msgSize))
+			baseI := i
+			{
+				size, err := (&v).MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogservice(dAtA, i, uint64(size))
 			}
-			mapSize := 1 + len(k) + sovLogservice(uint64(len(k))) + msgSize
-			i = encodeVarintLogservice(dAtA, i, uint64(mapSize))
-			dAtA[i] = 0xa
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(len(k)))
-			i += copy(dAtA[i:], k)
+			i--
 			dAtA[i] = 0x12
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64((&v).Size()))
-			n18, err18 := (&v).MarshalTo(dAtA[i:])
-			if err18 != nil {
-				return 0, err18
-			}
-			i += n18
+			i -= len(k)
+			copy(dAtA[i:], k)
+			i = encodeVarintLogservice(dAtA, i, uint64(len(k)))
+			i--
+			dAtA[i] = 0xa
+			i = encodeVarintLogservice(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0x12
 		}
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if len(m.Shards) > 0 {
+		for k := range m.Shards {
+			v := m.Shards[k]
+			baseI := i
+			{
+				size, err := (&v).MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogservice(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x12
+			i = encodeVarintLogservice(dAtA, i, uint64(k))
+			i--
+			dAtA[i] = 0x8
+			i = encodeVarintLogservice(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0xa
+		}
 	}
-	return i, nil
+	return len(dAtA) - i, nil
 }
 
 func (m *CheckerState) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -4598,54 +4860,66 @@ func (m *CheckerState) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *CheckerState) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *CheckerState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.Tick != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Tick))
-	}
-	dAtA[i] = 0x12
-	i++
-	i = encodeVarintLogservice(dAtA, i, uint64(m.ClusterInfo.Size()))
-	n19, err19 := m.ClusterInfo.MarshalTo(dAtA[i:])
-	if err19 != nil {
-		return 0, err19
-	}
-	i += n19
-	dAtA[i] = 0x1a
-	i++
-	i = encodeVarintLogservice(dAtA, i, uint64(m.DNState.Size()))
-	n20, err20 := m.DNState.MarshalTo(dAtA[i:])
-	if err20 != nil {
-		return 0, err20
-	}
-	i += n20
-	dAtA[i] = 0x22
-	i++
-	i = encodeVarintLogservice(dAtA, i, uint64(m.LogState.Size()))
-	n21, err21 := m.LogState.MarshalTo(dAtA[i:])
-	if err21 != nil {
-		return 0, err21
-	}
-	i += n21
-	if m.State != 0 {
-		dAtA[i] = 0x28
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.State))
-	}
 	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
-	return i, nil
+	if m.State != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.State))
+		i--
+		dAtA[i] = 0x28
+	}
+	{
+		size, err := m.LogState.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLogservice(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x22
+	{
+		size, err := m.DNState.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLogservice(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x1a
+	{
+		size, err := m.ClusterInfo.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLogservice(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x12
+	if m.Tick != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Tick))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
 }
 
 func (m *HAKeeperRSMState) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -4653,114 +4927,127 @@ func (m *HAKeeperRSMState) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *HAKeeperRSMState) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *HAKeeperRSMState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.Tick != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Tick))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
-	if m.NextID != 0 {
-		dAtA[i] = 0x10
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.NextID))
+	{
+		size, err := m.ClusterInfo.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLogservice(dAtA, i, uint64(size))
 	}
-	if m.Term != 0 {
-		dAtA[i] = 0x18
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Term))
+	i--
+	dAtA[i] = 0x52
+	{
+		size, err := m.LogState.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLogservice(dAtA, i, uint64(size))
 	}
-	if m.State != 0 {
-		dAtA[i] = 0x20
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.State))
+	i--
+	dAtA[i] = 0x4a
+	{
+		size, err := m.DNState.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLogservice(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x42
+	{
+		size, err := m.CNState.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLogservice(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x3a
+	if len(m.LogShards) > 0 {
+		for k := range m.LogShards {
+			v := m.LogShards[k]
+			baseI := i
+			i = encodeVarintLogservice(dAtA, i, uint64(v))
+			i--
+			dAtA[i] = 0x10
+			i -= len(k)
+			copy(dAtA[i:], k)
+			i = encodeVarintLogservice(dAtA, i, uint64(len(k)))
+			i--
+			dAtA[i] = 0xa
+			i = encodeVarintLogservice(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0x32
+		}
 	}
 	if len(m.ScheduleCommands) > 0 {
 		for k := range m.ScheduleCommands {
-			dAtA[i] = 0x2a
-			i++
 			v := m.ScheduleCommands[k]
-			msgSize := 0
-			if (&v) != nil {
-				msgSize = (&v).Size()
-				msgSize += 1 + sovLogservice(uint64(msgSize))
+			baseI := i
+			{
+				size, err := (&v).MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogservice(dAtA, i, uint64(size))
 			}
-			mapSize := 1 + len(k) + sovLogservice(uint64(len(k))) + msgSize
-			i = encodeVarintLogservice(dAtA, i, uint64(mapSize))
-			dAtA[i] = 0xa
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(len(k)))
-			i += copy(dAtA[i:], k)
+			i--
 			dAtA[i] = 0x12
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64((&v).Size()))
-			n22, err22 := (&v).MarshalTo(dAtA[i:])
-			if err22 != nil {
-				return 0, err22
-			}
-			i += n22
-		}
-	}
-	if len(m.LogShards) > 0 {
-		for k := range m.LogShards {
-			dAtA[i] = 0x32
-			i++
-			v := m.LogShards[k]
-			mapSize := 1 + len(k) + sovLogservice(uint64(len(k))) + 1 + sovLogservice(uint64(v))
-			i = encodeVarintLogservice(dAtA, i, uint64(mapSize))
-			dAtA[i] = 0xa
-			i++
+			i -= len(k)
+			copy(dAtA[i:], k)
 			i = encodeVarintLogservice(dAtA, i, uint64(len(k)))
-			i += copy(dAtA[i:], k)
-			dAtA[i] = 0x10
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(v))
+			i--
+			dAtA[i] = 0xa
+			i = encodeVarintLogservice(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0x2a
 		}
 	}
-	dAtA[i] = 0x3a
-	i++
-	i = encodeVarintLogservice(dAtA, i, uint64(m.CNState.Size()))
-	n23, err23 := m.CNState.MarshalTo(dAtA[i:])
-	if err23 != nil {
-		return 0, err23
+	if m.State != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.State))
+		i--
+		dAtA[i] = 0x20
 	}
-	i += n23
-	dAtA[i] = 0x42
-	i++
-	i = encodeVarintLogservice(dAtA, i, uint64(m.DNState.Size()))
-	n24, err24 := m.DNState.MarshalTo(dAtA[i:])
-	if err24 != nil {
-		return 0, err24
+	if m.Term != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Term))
+		i--
+		dAtA[i] = 0x18
 	}
-	i += n24
-	dAtA[i] = 0x4a
-	i++
-	i = encodeVarintLogservice(dAtA, i, uint64(m.LogState.Size()))
-	n25, err25 := m.LogState.MarshalTo(dAtA[i:])
-	if err25 != nil {
-		return 0, err25
+	if m.NextID != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.NextID))
+		i--
+		dAtA[i] = 0x10
 	}
-	i += n25
-	dAtA[i] = 0x52
-	i++
-	i = encodeVarintLogservice(dAtA, i, uint64(m.ClusterInfo.Size()))
-	n26, err26 := m.ClusterInfo.MarshalTo(dAtA[i:])
-	if err26 != nil {
-		return 0, err26
+	if m.Tick != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Tick))
+		i--
+		dAtA[i] = 0x8
 	}
-	i += n26
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	return i, nil
+	return len(dAtA) - i, nil
 }
 
 func (m *ReplicaInfo) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -4768,32 +5055,40 @@ func (m *ReplicaInfo) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *ReplicaInfo) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *ReplicaInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if len(m.UUID) > 0 {
-		dAtA[i] = 0xa
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(len(m.UUID)))
-		i += copy(dAtA[i:], m.UUID)
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.ServiceAddress) > 0 {
-		dAtA[i] = 0x12
-		i++
+		i -= len(m.ServiceAddress)
+		copy(dAtA[i:], m.ServiceAddress)
 		i = encodeVarintLogservice(dAtA, i, uint64(len(m.ServiceAddress)))
-		i += copy(dAtA[i:], m.ServiceAddress)
+		i--
+		dAtA[i] = 0x12
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if len(m.UUID) > 0 {
+		i -= len(m.UUID)
+		copy(dAtA[i:], m.UUID)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.UUID)))
+		i--
+		dAtA[i] = 0xa
 	}
-	return i, nil
+	return len(dAtA) - i, nil
 }
 
 func (m *ShardInfoQueryResult) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -4801,69 +5096,74 @@ func (m *ShardInfoQueryResult) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *ShardInfoQueryResult) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *ShardInfoQueryResult) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.ShardID != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.ShardID))
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.Term != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Term))
+		i--
+		dAtA[i] = 0x28
+	}
+	if m.LeaderID != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.LeaderID))
+		i--
+		dAtA[i] = 0x20
+	}
+	if m.Epoch != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.Epoch))
+		i--
+		dAtA[i] = 0x18
 	}
 	if len(m.Replicas) > 0 {
 		for k := range m.Replicas {
-			dAtA[i] = 0x12
-			i++
 			v := m.Replicas[k]
-			msgSize := 0
-			if (&v) != nil {
-				msgSize = (&v).Size()
-				msgSize += 1 + sovLogservice(uint64(msgSize))
+			baseI := i
+			{
+				size, err := (&v).MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogservice(dAtA, i, uint64(size))
 			}
-			mapSize := 1 + sovLogservice(uint64(k)) + msgSize
-			i = encodeVarintLogservice(dAtA, i, uint64(mapSize))
-			dAtA[i] = 0x8
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64(k))
+			i--
 			dAtA[i] = 0x12
-			i++
-			i = encodeVarintLogservice(dAtA, i, uint64((&v).Size()))
-			n27, err27 := (&v).MarshalTo(dAtA[i:])
-			if err27 != nil {
-				return 0, err27
-			}
-			i += n27
+			i = encodeVarintLogservice(dAtA, i, uint64(k))
+			i--
+			dAtA[i] = 0x8
+			i = encodeVarintLogservice(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0x12
 		}
 	}
-	if m.Epoch != 0 {
-		dAtA[i] = 0x18
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Epoch))
+	if m.ShardID != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.ShardID))
+		i--
+		dAtA[i] = 0x8
 	}
-	if m.LeaderID != 0 {
-		dAtA[i] = 0x20
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.LeaderID))
-	}
-	if m.Term != 0 {
-		dAtA[i] = 0x28
-		i++
-		i = encodeVarintLogservice(dAtA, i, uint64(m.Term))
-	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	return i, nil
+	return len(dAtA) - i, nil
 }
 
 func encodeVarintLogservice(dAtA []byte, offset int, v uint64) int {
+	offset -= sovLogservice(v)
+	base := offset
 	for v >= 1<<7 {
 		dAtA[offset] = uint8(v&0x7f | 0x80)
 		v >>= 7
 		offset++
 	}
 	dAtA[offset] = uint8(v)
-	return offset + 1
+	return base
 }
 func (m *CNNode) Size() (n int) {
 	if m == nil {
@@ -5934,10 +6234,7 @@ func (m *CNNode) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -6090,10 +6387,7 @@ func (m *DNNode) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -6280,10 +6574,7 @@ func (m *LogNode) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -6449,7 +6740,7 @@ func (m *LogShardInfo) Unmarshal(dAtA []byte) error {
 					if err != nil {
 						return err
 					}
-					if skippy < 0 {
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
 						return ErrInvalidLengthLogservice
 					}
 					if (iNdEx + skippy) > postIndex {
@@ -6523,10 +6814,7 @@ func (m *LogShardInfo) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -6629,10 +6917,7 @@ func (m *LogReplicaInfo) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -6747,10 +7032,7 @@ func (m *CNStoreHeartbeat) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -6963,10 +7245,7 @@ func (m *LogStoreHeartbeat) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -7055,10 +7334,7 @@ func (m *DNShardInfo) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -7207,10 +7483,7 @@ func (m *DNStoreHeartbeat) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -7419,7 +7692,7 @@ func (m *RSMState) Unmarshal(dAtA []byte) error {
 					if err != nil {
 						return err
 					}
-					if skippy < 0 {
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
 						return ErrInvalidLengthLogservice
 					}
 					if (iNdEx + skippy) > postIndex {
@@ -7436,10 +7709,7 @@ func (m *RSMState) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -7562,10 +7832,7 @@ func (m *LogRecord) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -7743,10 +8010,7 @@ func (m *LogRequest) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -7816,10 +8080,7 @@ func (m *TsoRequest) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -8092,10 +8353,7 @@ func (m *Request) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -8203,10 +8461,7 @@ func (m *LogResponse) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -8534,10 +8789,7 @@ func (m *Response) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -8622,10 +8874,7 @@ func (m *LogRecordResponse) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -8695,10 +8944,7 @@ func (m *TsoResponse) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -8857,10 +9103,7 @@ func (m *Replica) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -9059,7 +9302,7 @@ func (m *ConfigChange) Unmarshal(dAtA []byte) error {
 					if err != nil {
 						return err
 					}
-					if skippy < 0 {
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
 						return ErrInvalidLengthLogservice
 					}
 					if (iNdEx + skippy) > postIndex {
@@ -9076,10 +9319,7 @@ func (m *ConfigChange) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -9162,10 +9402,7 @@ func (m *ShutdownStore) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -9359,10 +9596,7 @@ func (m *ScheduleCommand) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -9466,10 +9700,7 @@ func (m *CommandBatch) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -9571,10 +9802,7 @@ func (m *CNStoreInfo) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -9737,7 +9965,7 @@ func (m *CNState) Unmarshal(dAtA []byte) error {
 					if err != nil {
 						return err
 					}
-					if skippy < 0 {
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
 						return ErrInvalidLengthLogservice
 					}
 					if (iNdEx + skippy) > postIndex {
@@ -9754,10 +9982,7 @@ func (m *CNState) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -9893,10 +10118,7 @@ func (m *DNStoreInfo) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -10059,7 +10281,7 @@ func (m *DNState) Unmarshal(dAtA []byte) error {
 					if err != nil {
 						return err
 					}
-					if skippy < 0 {
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
 						return ErrInvalidLengthLogservice
 					}
 					if (iNdEx + skippy) > postIndex {
@@ -10076,10 +10298,7 @@ func (m *DNState) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -10232,10 +10451,7 @@ func (m *ClusterDetails) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -10354,10 +10570,7 @@ func (m *ClusterInfo) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -10465,10 +10678,7 @@ func (m *InitialClusterRequest) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -10668,10 +10878,7 @@ func (m *LogStoreInfo) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -10820,7 +11027,7 @@ func (m *LogState) Unmarshal(dAtA []byte) error {
 					if err != nil {
 						return err
 					}
-					if skippy < 0 {
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
 						return ErrInvalidLengthLogservice
 					}
 					if (iNdEx + skippy) > postIndex {
@@ -10949,7 +11156,7 @@ func (m *LogState) Unmarshal(dAtA []byte) error {
 					if err != nil {
 						return err
 					}
-					if skippy < 0 {
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
 						return ErrInvalidLengthLogservice
 					}
 					if (iNdEx + skippy) > postIndex {
@@ -10966,10 +11173,7 @@ func (m *LogState) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -11157,10 +11361,7 @@ func (m *CheckerState) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -11399,7 +11600,7 @@ func (m *HAKeeperRSMState) Unmarshal(dAtA []byte) error {
 					if err != nil {
 						return err
 					}
-					if skippy < 0 {
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
 						return ErrInvalidLengthLogservice
 					}
 					if (iNdEx + skippy) > postIndex {
@@ -11512,7 +11713,7 @@ func (m *HAKeeperRSMState) Unmarshal(dAtA []byte) error {
 					if err != nil {
 						return err
 					}
-					if skippy < 0 {
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
 						return ErrInvalidLengthLogservice
 					}
 					if (iNdEx + skippy) > postIndex {
@@ -11661,10 +11862,7 @@ func (m *HAKeeperRSMState) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -11779,10 +11977,7 @@ func (m *ReplicaInfo) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -11950,7 +12145,7 @@ func (m *ShardInfoQueryResult) Unmarshal(dAtA []byte) error {
 					if err != nil {
 						return err
 					}
-					if skippy < 0 {
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
 						return ErrInvalidLengthLogservice
 					}
 					if (iNdEx + skippy) > postIndex {
@@ -12024,10 +12219,7 @@ func (m *ShardInfoQueryResult) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthLogservice
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthLogservice
 			}
 			if (iNdEx + skippy) > l {
@@ -12046,6 +12238,7 @@ func (m *ShardInfoQueryResult) Unmarshal(dAtA []byte) error {
 func skipLogservice(dAtA []byte) (n int, err error) {
 	l := len(dAtA)
 	iNdEx := 0
+	depth := 0
 	for iNdEx < l {
 		var wire uint64
 		for shift := uint(0); ; shift += 7 {
@@ -12077,10 +12270,8 @@ func skipLogservice(dAtA []byte) (n int, err error) {
 					break
 				}
 			}
-			return iNdEx, nil
 		case 1:
 			iNdEx += 8
-			return iNdEx, nil
 		case 2:
 			var length int
 			for shift := uint(0); ; shift += 7 {
@@ -12101,55 +12292,30 @@ func skipLogservice(dAtA []byte) (n int, err error) {
 				return 0, ErrInvalidLengthLogservice
 			}
 			iNdEx += length
-			if iNdEx < 0 {
-				return 0, ErrInvalidLengthLogservice
-			}
-			return iNdEx, nil
 		case 3:
-			for {
-				var innerWire uint64
-				var start int = iNdEx
-				for shift := uint(0); ; shift += 7 {
-					if shift >= 64 {
-						return 0, ErrIntOverflowLogservice
-					}
-					if iNdEx >= l {
-						return 0, io.ErrUnexpectedEOF
-					}
-					b := dAtA[iNdEx]
-					iNdEx++
-					innerWire |= (uint64(b) & 0x7F) << shift
-					if b < 0x80 {
-						break
-					}
-				}
-				innerWireType := int(innerWire & 0x7)
-				if innerWireType == 4 {
-					break
-				}
-				next, err := skipLogservice(dAtA[start:])
-				if err != nil {
-					return 0, err
-				}
-				iNdEx = start + next
-				if iNdEx < 0 {
-					return 0, ErrInvalidLengthLogservice
-				}
-			}
-			return iNdEx, nil
+			depth++
 		case 4:
-			return iNdEx, nil
+			if depth == 0 {
+				return 0, ErrUnexpectedEndOfGroupLogservice
+			}
+			depth--
 		case 5:
 			iNdEx += 4
-			return iNdEx, nil
 		default:
 			return 0, fmt.Errorf("proto: illegal wireType %d", wireType)
 		}
+		if iNdEx < 0 {
+			return 0, ErrInvalidLengthLogservice
+		}
+		if depth == 0 {
+			return iNdEx, nil
+		}
 	}
-	panic("unreachable")
+	return 0, io.ErrUnexpectedEOF
 }
 
 var (
-	ErrInvalidLengthLogservice = fmt.Errorf("proto: negative length found during unmarshaling")
-	ErrIntOverflowLogservice   = fmt.Errorf("proto: integer overflow")
+	ErrInvalidLengthLogservice        = fmt.Errorf("proto: negative length found during unmarshaling")
+	ErrIntOverflowLogservice          = fmt.Errorf("proto: integer overflow")
+	ErrUnexpectedEndOfGroupLogservice = fmt.Errorf("proto: unexpected end of group")
 )
