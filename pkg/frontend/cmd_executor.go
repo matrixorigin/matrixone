@@ -21,7 +21,7 @@ type CmdExecutor interface {
 	PrepareSessionBeforeExecRequest(*Session)
 
 	// ExecRequest execute the request and get the response
-	ExecRequest(requestCtx context.Context, req *Request) (*Response, error)
+	ExecRequest(context.Context, *Request) (*Response, error)
 
 	Close()
 }

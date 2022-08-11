@@ -176,11 +176,16 @@ func main() {
 
 	logutil.SetupMOLogger(&logConf)
 
+	rootCtx := context.Background()
+	cancelMoServerCtx, cancelMoServerFunc := context.WithCancel(rootCtx)
+	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
+	moServerCtx := context.WithValue(cancelMoServerCtx, config.ParameterUnitKey, pu)
+
 	//just initialize the tae after configuration has been loaded
 	if len(args) == 2 && args[1] == "initdb" {
 		fmt.Println("Initialize the TAE engine ...")
 		taeWrapper := initTae()
-		err := frontend.InitDB(nil, taeWrapper.eng)
+		err := frontend.InitDB(moServerCtx, taeWrapper.eng)
 		if err != nil {
 			logutil.Infof("Initialize catalog failed. error:%v", err)
 			os.Exit(InitCatalogExit)
@@ -205,10 +210,6 @@ func main() {
 	//	Host := config.GlobalSystemVariables.GetHost()
 	engineName := config.GlobalSystemVariables.GetStorageEngine()
 	//	port := config.GlobalSystemVariables.GetPortOfRpcServerInComputationEngine()
-	rootCtx := context.Background()
-	cancelMoServerCtx, cancelMoServerFunc := context.WithCancel(rootCtx)
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
-	moServerCtx := context.WithValue(cancelMoServerCtx, config.ParameterUnitKey, pu)
 
 	var tae *taeHandler
 	if engineName == "tae" {

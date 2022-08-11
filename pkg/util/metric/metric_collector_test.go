@@ -136,7 +136,7 @@ func TestCollector(t *testing.T) {
 	factory := newExecutorFactory(sqlch)
 	collector := newMetricCollector(factory, WithFlushInterval(200*time.Millisecond), WithMetricThreshold(2))
 	collector.Start(context.TODO())
-	defer collector.Stop(context.TODO())
+	defer collector.Stop()
 	names := []string{"m1", "m2"}
 	nodes := []int32{1, 2}
 	roles := []string{"ping", "pong"}

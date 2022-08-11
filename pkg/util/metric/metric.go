@@ -82,11 +82,11 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, pu *c
 
 	// register metrics and create tables
 	registerAllMetrics()
-	initTables(ieFactory)
+	initTables(ctx, ieFactory)
 
 	// start the data flow
 	moCollector.Start(ctx)
-	moExporter.Start()
+	moExporter.Start(ctx)
 
 	if getExportToProm() {
 		// http.HandleFunc("/query", makeDebugHandleFunc(ieFactory))
@@ -107,7 +107,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, pu *c
 
 func StopMetricSync() {
 	if moCollector != nil {
-		if ch, effect := moCollector.Stop(context.TODO()); effect {
+		if ch, effect := moCollector.Stop(); effect {
 			<-ch
 		}
 		moCollector = nil
@@ -142,11 +142,11 @@ func mustRegister(collector Collector) {
 }
 
 // initTables gathers all metrics and extract metadata to format create table sql
-func initTables(ieFactory func() ie.InternalExecutor) {
+func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor) {
 	exec := ieFactory()
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(METRIC_DB).Internal(true).Finish())
 	mustExec := func(sql string) {
-		if err := exec.Exec(nil, sql, ie.NewOptsBuilder().Finish()); err != nil {
+		if err := exec.Exec(ctx, sql, ie.NewOptsBuilder().Finish()); err != nil {
 			panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
 		}
 	}

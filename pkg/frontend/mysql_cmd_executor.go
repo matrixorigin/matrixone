@@ -2031,16 +2031,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
 func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Request) (resp *Response, err error) {
-	cancelRequestCtx, cancelRequestFunc := context.WithCancel(requestCtx)
-	mce.cancelRequestFunc = cancelRequestFunc
-	mce.ses.SetRequestContext(cancelRequestCtx)
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.NewPanicError(e)
 			resp = NewGeneralErrorResponse(COM_QUERY, err)
 		}
-		mce.cancelRequestFunc()
-		mce.cancelRequestFunc = nil
 	}()
 
 	logutil.Infof("cmd %v", req.GetCmd())
@@ -2082,7 +2077,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 			return resp, nil
 		}
 
-		err := mce.doComQuery(cancelRequestCtx, query)
+		err := mce.doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_QUERY, err)
 		}
@@ -2091,7 +2086,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		var dbname = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		query := "use `" + dbname + "`"
-		err := mce.doComQuery(cancelRequestCtx, query)
+		err := mce.doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_INIT_DB, err)
 		}
@@ -2101,7 +2096,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		var payload = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		query := makeCmdFieldListSql(payload)
-		err := mce.doComQuery(cancelRequestCtx, query)
+		err := mce.doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_FIELD_LIST, err)
 		}

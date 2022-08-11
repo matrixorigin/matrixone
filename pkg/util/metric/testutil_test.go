@@ -18,6 +18,7 @@
 package metric
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -59,5 +60,5 @@ func makeDummyClock(startOffset int64) func() int64 {
 
 type dummySwitch struct{}
 
-func (dummySwitch) Start()                        {}
+func (dummySwitch) Start(context.Context)         {}
 func (dummySwitch) Stop() (<-chan struct{}, bool) { return nil, false }

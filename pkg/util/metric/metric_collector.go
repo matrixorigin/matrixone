@@ -34,7 +34,7 @@ const CHAN_CAPACITY = 10000
 type MetricCollector interface {
 	SendMetrics(context.Context, []*pb.MetricFamily) error
 	Start(context.Context)
-	Stop(context.Context) (<-chan struct{}, bool)
+	Stop() (<-chan struct{}, bool)
 }
 
 type collectorOpts struct {
@@ -128,7 +128,7 @@ func (c *metricCollector) Start(ctx context.Context) {
 	c.startMergeWorker(ctx)
 }
 
-func (c *metricCollector) Stop(ctx context.Context) (<-chan struct{}, bool) {
+func (c *metricCollector) Stop() (<-chan struct{}, bool) {
 	if atomic.SwapInt32(&c.isRunning, 0) == 0 {
 		return nil, false
 	}
@@ -214,7 +214,7 @@ func (c *metricCollector) sqlWorker(ctx context.Context, exec ie.InternalExecuto
 		case <-ctx.Done():
 			return
 		case sql := <-c.sqlCh:
-			if err := exec.Exec(nil, sql, ie.NewOptsBuilder().Finish()); err != nil {
+			if err := exec.Exec(ctx, sql, ie.NewOptsBuilder().Finish()); err != nil {
 				logutil.Errorf("[Metric] insert error. sql: %s; err: %v", sql, err)
 			}
 		}

@@ -202,7 +202,7 @@ func Test_mce(t *testing.T) {
 			data: []byte("test anywhere"),
 		}
 
-		resp, err := mce.ExecRequest(nil, req)
+		resp, err := mce.ExecRequest(ctx, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldBeNil)
 
@@ -210,7 +210,7 @@ func Test_mce(t *testing.T) {
 			cmd:  int(COM_QUERY),
 			data: []byte("kill"),
 		}
-		resp, err = mce.ExecRequest(nil, req)
+		resp, err = mce.ExecRequest(ctx, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldNotBeNil)
 
@@ -219,7 +219,7 @@ func Test_mce(t *testing.T) {
 			data: []byte("kill 10"),
 		}
 		mce.SetRoutineManager(&RoutineManager{})
-		resp, err = mce.ExecRequest(nil, req)
+		resp, err = mce.ExecRequest(ctx, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldNotBeNil)
 
@@ -228,7 +228,7 @@ func Test_mce(t *testing.T) {
 			data: []byte("test anywhere"),
 		}
 
-		_, err = mce.ExecRequest(nil, req)
+		_, err = mce.ExecRequest(ctx, req)
 		convey.So(err, convey.ShouldBeNil)
 		//COM_INIT_DB replaced by changeDB()
 		//convey.So(resp.category, convey.ShouldEqual, OkResponse)
@@ -238,7 +238,7 @@ func Test_mce(t *testing.T) {
 			data: []byte("test anywhere"),
 		}
 
-		resp, err = mce.ExecRequest(nil, req)
+		resp, err = mce.ExecRequest(ctx, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp.category, convey.ShouldEqual, OkResponse)
 
@@ -247,7 +247,7 @@ func Test_mce(t *testing.T) {
 			data: []byte("test anywhere"),
 		}
 
-		resp, err = mce.ExecRequest(nil, req)
+		resp, err = mce.ExecRequest(ctx, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldBeNil)
 
@@ -304,11 +304,11 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		mce := NewMysqlCmdExecutor()
 		mce.PrepareSessionBeforeExecRequest(ses)
-		err = mce.handleChangeDB(nil, "T")
+		err = mce.handleChangeDB(ctx, "T")
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ses.protocol.GetDatabaseName(), convey.ShouldEqual, "T")
 
-		err = mce.handleChangeDB(nil, "T")
+		err = mce.handleChangeDB(ctx, "T")
 		convey.So(err, convey.ShouldBeError)
 	})
 
@@ -362,7 +362,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		query := string(queryData)
 		cflStmt, err := parseCmdFieldList(makeCmdFieldListSql(query))
 		convey.So(err, convey.ShouldBeNil)
-		err = mce.handleCmdFieldList(nil, cflStmt)
+		err = mce.handleCmdFieldList(ctx, cflStmt)
 		convey.So(err, convey.ShouldBeError)
 
 		ses.Mrs = &MysqlResultSet{}
@@ -373,11 +373,11 @@ func Test_mce_selfhandle(t *testing.T) {
 			typ:  types.Type{Oid: types.T_varchar},
 		}}
 
-		err = mce.handleCmdFieldList(nil, cflStmt)
+		err = mce.handleCmdFieldList(ctx, cflStmt)
 		convey.So(err, convey.ShouldBeNil)
 
 		mce.db = ses.protocol.GetDatabaseName()
-		err = mce.handleCmdFieldList(nil, cflStmt)
+		err = mce.handleCmdFieldList(ctx, cflStmt)
 		convey.So(err, convey.ShouldBeNil)
 
 		set := "set @@tx_isolation=`READ-COMMITTED`"
@@ -392,7 +392,7 @@ func Test_mce_selfhandle(t *testing.T) {
 			data: []byte{'A', 0},
 		}
 
-		resp, err := mce.ExecRequest(nil, req)
+		resp, err := mce.ExecRequest(ctx, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldBeNil)
 	})

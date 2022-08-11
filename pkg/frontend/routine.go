@@ -107,9 +107,12 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 			ses = NewSession(routine.protocol, routine.guestMmu, routine.mempool, mgr.getParameterUnit(), gSysVariables)
 		}
 
+		cancelRequestCtx, cancelRequestFunc := context.WithCancel(routineCtx)
+		routine.executor.(*MysqlCmdExecutor).cancelRequestFunc = cancelRequestFunc
+		ses.SetRequestContext(cancelRequestCtx)
 		routine.executor.PrepareSessionBeforeExecRequest(ses)
 
-		if resp, err = routine.executor.ExecRequest(routineCtx, req); err != nil {
+		if resp, err = routine.executor.ExecRequest(cancelRequestCtx, req); err != nil {
 			logutil.Errorf("routine execute request failed. error:%v \n", err)
 		}
 
@@ -122,6 +125,8 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		if mgr.getParameterUnit().SV.GetRecordTimeElapsedOfSqlRequest() {
 			logutil.Infof("connection id %d , the time of handling the request %s", routine.getConnID(), time.Since(reqBegin).String())
 		}
+
+		cancelRequestFunc()
 	}
 }
 

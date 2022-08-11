@@ -57,9 +57,9 @@ func TestIe(t *testing.T) {
 	sess := executor.newCmdSession(ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
 	assert.Equal(t, "dump", sess.GetMysqlProtocol().GetUserName())
 
-	err := executor.Exec(nil, "whatever", ie.NewOptsBuilder().Finish())
+	err := executor.Exec(context.TODO(), "whatever", ie.NewOptsBuilder().Finish())
 	assert.NoError(t, err)
-	res := executor.Query("whatever", ie.NewOptsBuilder().Finish())
+	res := executor.Query(context.TODO(), "whatever", ie.NewOptsBuilder().Finish())
 	assert.NoError(t, err)
 	assert.Equal(t, uint64(0), res.RowCount())
 }
