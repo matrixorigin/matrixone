@@ -16,6 +16,7 @@ package tasks
 
 import (
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -46,7 +47,7 @@ type TaskScheduler interface {
 
 	GetCheckpointedLSN() uint64
 	GetPenddingLSNCnt() uint64
-	GetSafeTS() uint64
+	GetSafeTS() types.TS
 }
 
 type BaseScheduler struct {

@@ -20,6 +20,8 @@
 #include "mo.h"
 
 #include <stdlib.h>
+#include <stdbool.h>
+#include <math.h>
 
 static const int32_t RC_SUCCESS = 0;
 static const int32_t RC_INFO = 1;
@@ -31,6 +33,10 @@ static const int32_t RC_DIVISION_BY_ZERO = 2000;
 static const int32_t RC_OUT_OF_RANGE = 2001;
 static const int32_t RC_DATA_TRUNCATED = 2002;
 static const int32_t RC_INVALID_ARGUMENT = 2003;
+
+static const int32_t LEFT_IS_SCALAR = 1;
+static const int32_t RIGHT_IS_SCALAR = 2;
+
 
 #include "bitmap.h"
 
