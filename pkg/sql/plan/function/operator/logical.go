@@ -67,10 +67,7 @@ func LogicNot(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	if v1.IsScalarNull() {
 		return proc.AllocScalarNullVector(boolType), nil
 	}
-
-	c1 := v1.IsScalar()
-	switch {
-	case c1:
+	if v1.IsScalar() {
 		vec := proc.AllocScalarVector(boolType)
 		if err := logical.Not(v1, vec); err != nil {
 			return nil, err
