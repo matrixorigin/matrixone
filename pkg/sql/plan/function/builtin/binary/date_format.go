@@ -74,7 +74,7 @@ var (
 	}
 )
 
-//  DateFromat: Formats the date value according to the format string. If either argument is NULL, the function returns NULL.
+// DateFromat: Formats the date value according to the format string. If either argument is NULL, the function returns NULL.
 func DateFormat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	dateVector := vectors[0]
 	formatVector := vectors[1]
@@ -124,7 +124,7 @@ func DateFormat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	}
 }
 
-//  CalcDateFromat: DateFromat is used to formating the datetime values according to the format string.
+// CalcDateFromat: DateFromat is used to formating the datetime values according to the format string.
 func CalcDateFromat(datetimes []types.Datetime, format string, ns *nulls.Nulls, res *types.Bytes) error {
 	for idx, datetime := range datetimes {
 		if nulls.Contains(ns, uint64(idx)) {
@@ -149,7 +149,7 @@ func CalcDateFromat(datetimes []types.Datetime, format string, ns *nulls.Nulls, 
 	return nil
 }
 
-//  datetimeFormat: format the datetime value according to the format string.
+// datetimeFormat: format the datetime value according to the format string.
 func datetimeFormat(datetime types.Datetime, format string) (string, error) {
 	var buf bytes.Buffer
 	inPatternMatch := false

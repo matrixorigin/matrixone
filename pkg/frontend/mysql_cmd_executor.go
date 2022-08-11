@@ -18,6 +18,7 @@ import (
 	"context"
 	goErrors "errors"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 
@@ -110,7 +111,7 @@ func (mce *MysqlCmdExecutor) GetSession() *Session {
 	return mce.ses
 }
 
-//get new process id
+// get new process id
 func (mce *MysqlCmdExecutor) getNextProcessId() string {
 	/*
 		temporary method:
@@ -367,6 +368,7 @@ extract the data from the pipeline.
 obj: routine obj
 TODO:Add error
 Warning: The pipeline is the multi-thread environment. The getDataFromPipeline will
+
 	access the shared data. Be careful when it writes the shared data.
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
@@ -1215,7 +1217,7 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 	return mce.doComQuery(sql)
 }
 
-//Note: for pass the compile quickly. We will remove the comments in the future.
+// Note: for pass the compile quickly. We will remove the comments in the future.
 func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	es := explain.NewExplainDefaultOptions()
 
@@ -1533,7 +1535,7 @@ func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{},
 	cwft.proc.UnixTime = time.Now().UnixNano()
 	txnHandler := cwft.ses.GetTxnHandler()
 	cwft.proc.Snapshot = txnHandler.GetTxn().GetCtx()
-	cwft.compile = compile.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), cwft.ses.GetStorage(), cwft.proc)
+	cwft.compile = compile.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), context.TODO(), cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
 	err = cwft.compile.Compile(cwft.plan, cwft.ses, fill)
 	if err != nil {
 		return nil, err
@@ -1546,6 +1548,11 @@ func (cwft *TxnComputationWrapper) Run(ts uint64) error {
 }
 
 func buildPlan(ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+	if s, ok := stmt.(*tree.Insert); ok {
+		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
+			return plan2.BuildPlan(ctx, stmt)
+		}
+	}
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect,
 		*tree.Update, *tree.Delete, *tree.Insert,
@@ -1636,7 +1643,7 @@ func (mce *MysqlCmdExecutor) afterRun(stmt tree.Statement, beginInstant time.Tim
 
 }
 
-//execute query
+// execute query
 func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	beginInstant := time.Now()
 	ses := mce.GetSession()
@@ -1763,15 +1770,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			err = proto.sendOKPacket(0, 0, 0, 0, "")
 			if err != nil {
 				goto handleFailed
-			}
-		case *tree.Insert:
-			_, ok := st.Rows.Select.(*tree.ValuesClause)
-			if ok {
-				selfHandle = true
-				rspLen, err = mce.handleInsertValues(st, 0)
-				if err != nil {
-					goto handleFailed
-				}
 			}
 		case *tree.DropDatabase:
 			// if the droped database is the same as the one in use, database must be reseted to empty.
@@ -2162,7 +2160,7 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 	return false
 }
 
-//IsDDL checks the statement is the DDL statement.
+// IsDDL checks the statement is the DDL statement.
 func IsDDL(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
@@ -2181,7 +2179,7 @@ func IsDropStatement(stmt tree.Statement) bool {
 	return false
 }
 
-//IsAdministrativeStatement checks the statement is the administrative statement.
+// IsAdministrativeStatement checks the statement is the administrative statement.
 func IsAdministrativeStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.CreateUser, *tree.DropUser, *tree.AlterUser,
@@ -2193,7 +2191,7 @@ func IsAdministrativeStatement(stmt tree.Statement) bool {
 	return false
 }
 
-//IsParameterModificationStatement checks the statement is the statement of parameter modification statement.
+// IsParameterModificationStatement checks the statement is the statement of parameter modification statement.
 func IsParameterModificationStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.SetVar:
@@ -2207,6 +2205,7 @@ IsStatementToBeCommittedInActiveTransaction checks the statement that need to be
 in an active transaction.
 
 Currently, it includes the drop statement, the administration statement ,
+
 	the parameter modification statement.
 */
 func IsStatementToBeCommittedInActiveTransaction(stmt tree.Statement) bool {

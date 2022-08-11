@@ -16,6 +16,7 @@ package minus
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -93,10 +94,11 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze, index int) error {
 	for {
 		bat := <-proc.Reg.MergeReceivers[index].Ch
-		// the last batch of block.
+		// the last batch of pipeline.
 		if bat == nil {
 			break
 		}
+
 		// just an empty batch.
 		if len(bat.Zs) == 0 {
 			continue
@@ -110,16 +112,10 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
-
-			vs, _, err := itr.Insert(i, n, bat.Vecs)
+			_, _, err := itr.Insert(i, n, bat.Vecs)
 			if err != nil {
 				bat.Clean(proc.Mp)
 				return err
-			}
-			for _, v := range vs {
-				if v > ctr.hashTable.GroupCount() {
-					ctr.hashTable.AddGroup()
-				}
 			}
 		}
 		bat.Clean(proc.Mp)
@@ -166,9 +162,11 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 				return false, err
 			}
 			copy(inserted[:n], restoreInserted[:n])
+			rows := oldHashGroup
 			for j, v := range vs {
-				if v > ctr.hashTable.GroupCount() {
-					ctr.hashTable.AddGroup()
+				if v > rows {
+					// ensure that the same value will only be inserted once.
+					rows++
 					inserted[j] = 1
 					ctr.bat.Zs = append(ctr.bat.Zs, 1)
 				}

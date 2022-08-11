@@ -51,18 +51,11 @@ type Attribute struct {
 	// Type attribute's type
 	Type types.Type
 	// DefaultExpr default value of this attribute
-	Default DefaultExpr
+	Default *plan.Default
 	// Primary is primary key or not
 	Primary bool
 	// Comment of attribute
 	Comment string
-}
-
-// DefaultExpr default value of this attribute
-type DefaultExpr struct {
-	Exist  bool
-	Value  interface{} // int64, float32, float64, string, types.Date, types.Datetime
-	IsNull bool
 }
 
 type PrimaryIndexDef struct {
@@ -173,25 +166,5 @@ type Engine interface {
 	Databases(context.Context, client.TxnOperator) ([]string, error)
 	Database(context.Context, string, client.TxnOperator) (Database, error)
 
-	Nodes() Nodes
-}
-
-// MakeDefaultExpr returns a new DefaultExpr
-func MakeDefaultExpr(exist bool, value interface{}, isNull bool) DefaultExpr {
-	return DefaultExpr{
-		Exist:  exist,
-		Value:  value,
-		IsNull: isNull,
-	}
-}
-
-// EmptyDefaultExpr means there is no definition for default expr
-var EmptyDefaultExpr = DefaultExpr{Exist: false}
-
-func (node Attribute) HasDefaultExpr() bool {
-	return node.Default.Exist
-}
-
-func (node Attribute) GetDefaultExpr() (interface{}, bool) {
-	return node.Default.Value, node.Default.IsNull
+	Nodes() (Nodes, error)
 }

@@ -80,7 +80,6 @@ select cast(-19999999999999999999 as signed);
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a BIGINT(20) UNSIGNED,
 b VARCHAR(20));
--- @bvt:issue#3355
 insert INTO t1 (id,a) VALUES
 (1,0),
 (2,CAST(0x7FFFFFFFFFFFFFFF AS UNSIGNED)),
@@ -88,8 +87,6 @@ insert INTO t1 (id,a) VALUES
 (4,CAST(0xFFFFFFFFFFFFFFFF AS UNSIGNED));
 UPDATE t1 SET b = a;
 select * from t1 where ((a = 18446744073709551615) and (b = '18446744073709551615')) order by a asc;
--- @bvt:issue
-
 #Test cases of operators
 CREATE TABLE t_bigint(id BIGINT);
 insert INTO t_bigint VALUES (1), (2);

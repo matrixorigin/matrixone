@@ -94,9 +94,59 @@ int32_t Decimal128_DivInt64(int64_t *r, int64_t *a, int64_t b);
 int32_t Decimal64_VecAdd(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
 int32_t Decimal128_VecAdd(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
 
+int32_t Decimal64_VecSub(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+int32_t Decimal128_VecSub(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+
+int32_t Decimal64_VecMul(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+int32_t Decimal128_VecMul(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+
+int32_t Decimal64_VecDiv(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+int32_t Decimal128_VecDiv(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+
 /* vector arithmatics */
 int32_t SignedInt_VecAdd(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
 int32_t UnsignedInt_VecAdd(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
 int32_t Float_VecAdd(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
+
+int32_t SignedInt_VecSub(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
+int32_t UnsignedInt_VecSub(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
+int32_t Float_VecSub(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
+
+int32_t SignedInt_VecMul(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
+int32_t UnsignedInt_VecMul(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
+int32_t Float_VecMul(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
+
+int32_t Float_VecDiv(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
+int32_t Float_VecIntegerDiv(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
+
+int32_t SignedInt_VecMod(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
+int32_t UnsignedInt_VecMod(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
+int32_t Float_VecMod(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
+
+
+// compare operator
+int32_t Numeric_VecEq(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t type);
+int32_t Decimal64_VecEQ(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+int32_t Decimal128_VecEQ(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+
+int32_t Numeric_VecNe(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t type);
+int32_t Decimal64_VecNE(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+int32_t Decimal128_VecNE(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+
+int32_t Numeric_VecGt(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t type);
+int32_t Decimal64_VecGT(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+int32_t Decimal128_VecGT(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+
+int32_t Numeric_VecGe(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t type);
+int32_t Decimal64_VecGE(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+int32_t Decimal128_VecGE(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+
+int32_t Numeric_VecLt(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t type);
+int32_t Decimal64_VecLT(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+int32_t Decimal128_VecLT(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+
+int32_t Numeric_VecLe(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t type);
+int32_t Decimal64_VecLE(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+int32_t Decimal128_VecLE(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
 
 #endif /* _MO_H_ */

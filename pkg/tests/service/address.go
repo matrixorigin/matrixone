@@ -89,7 +89,7 @@ func (a serviceAddress) assertLogService() {
 func (a serviceAddress) getDnListenAddress(index int) string {
 	a.assertDNService()
 
-	if index >= len(a.dnAddresses) {
+	if index >= len(a.dnAddresses) || index < 0 {
 		return ""
 	}
 	return a.dnAddresses[index].listenAddr
@@ -99,7 +99,7 @@ func (a serviceAddress) getDnListenAddress(index int) string {
 func (a serviceAddress) getLogListenAddress(index int) string {
 	a.assertLogService()
 
-	if index >= len(a.logAddresses) {
+	if index >= len(a.logAddresses) || index < 0 {
 		return ""
 	}
 	return a.logAddresses[index].listenAddr
@@ -109,7 +109,7 @@ func (a serviceAddress) getLogListenAddress(index int) string {
 func (a serviceAddress) getLogRaftAddress(index int) string {
 	a.assertLogService()
 
-	if index >= len(a.logAddresses) {
+	if index >= len(a.logAddresses) || index < 0 {
 		return ""
 	}
 	return a.logAddresses[index].raftAddr
@@ -119,7 +119,7 @@ func (a serviceAddress) getLogRaftAddress(index int) string {
 func (a serviceAddress) getLogGossipAddress(index int) string {
 	a.assertLogService()
 
-	if index >= len(a.logAddresses) {
+	if index >= len(a.logAddresses) || index < 0 {
 		return ""
 	}
 	return a.logAddresses[index].gossipAddr

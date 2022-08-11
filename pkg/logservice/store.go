@@ -24,6 +24,7 @@ import (
 	"github.com/lni/dragonboat/v4"
 	cli "github.com/lni/dragonboat/v4/client"
 	"github.com/lni/dragonboat/v4/config"
+	"github.com/lni/dragonboat/v4/plugin/tee"
 	"github.com/lni/dragonboat/v4/raftpb"
 	sm "github.com/lni/dragonboat/v4/statemachine"
 
@@ -77,7 +78,8 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 		RaftAddress:         cfg.RaftAddress,
 		ListenAddress:       cfg.RaftListenAddress,
 		Expert: config.ExpertConfig{
-			FS: cfg.FS,
+			FS:           cfg.FS,
+			LogDBFactory: tee.TanPebbleLogDBFactory,
 			// FIXME: dragonboat need to be updated to make this field a first class
 			// citizen
 			TestGossipProbeInterval: 50 * time.Millisecond,
@@ -220,8 +222,9 @@ func (l *store) startReplica(shardID uint64, replicaID uint64,
 
 func (l *store) stopReplica(shardID uint64, replicaID uint64) error {
 	if shardID == hakeeper.DefaultHAKeeperShardID {
-		plog.Infof("going to stop HAKeeper's ticker")
-		l.tickerStopper.Stop()
+		defer func() {
+			atomic.StoreUint64(&l.haKeeperReplicaID, 0)
+		}()
 	}
 	return l.nh.StopReplica(shardID, replicaID)
 }
@@ -663,10 +666,10 @@ func (l *store) truncationWorker(ctx context.Context) {
 func (l *store) isLeaderHAKeeper() (bool, uint64, error) {
 	leaderID, term, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
 	if err != nil {
-		plog.Errorf("failed to get HAKeeper Leader ID, %v", err)
 		return false, 0, err
 	}
-	return ok && leaderID == l.haKeeperReplicaID, term, nil
+	replicaID := atomic.LoadUint64(&l.haKeeperReplicaID)
+	return ok && replicaID != 0 && leaderID == replicaID, term, nil
 }
 
 // TODO: add test for this

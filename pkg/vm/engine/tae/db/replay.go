@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -199,7 +200,7 @@ func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload [
 	if group != wal.GroupC {
 		return
 	}
-	idxCtx := wal.NewIndex(commitId, 0, 0)
+	idxCtx := store.NewIndex(commitId, 0, 0)
 	r := bytes.NewBuffer(payload)
 	txnCmd, _, err := txnbase.BuildCommandFrom(r)
 	if err != nil {
@@ -256,7 +257,35 @@ func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) {
 }
 
 func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObserver) {
+	hasActive := false
+	for _, info := range cmd.Infos {
+		database, err := db.Catalog.GetDatabaseByID(info.GetDBID())
+		if err != nil {
+			panic(err)
+		}
+		id := info.GetDest()
+		blk, err := database.GetBlockEntryByID(id)
+		if err != nil {
+			panic(err)
+		}
+		if !blk.IsActive() {
+			continue
+		}
+		if observer != nil {
+			observer.OnTimeStamp(blk.GetBlockData().GetMaxCheckpointTS())
+		}
+		if cmd.Ts <= blk.GetBlockData().GetMaxCheckpointTS() {
+			continue
+		}
+		hasActive = true
+	}
+
+	if !hasActive {
+		return
+	}
+
 	var data *containers.Batch
+
 	for _, subTxnCmd := range cmd.Cmds {
 		switch subCmd := subTxnCmd.(type) {
 		case *txnbase.BatchCmd:
