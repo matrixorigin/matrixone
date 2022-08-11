@@ -391,6 +391,14 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 			}
 
 			if len(futures) > 0 {
+				if retry && !rb.conn.Connected() {
+					for _, f := range futures {
+						f.completed()
+					}
+					retry = false
+					continue
+				}
+
 				retry = false
 				written := 0
 				writeTimeout := time.Duration(0)
