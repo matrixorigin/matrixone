@@ -1519,69 +1519,55 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		}
 
 		// set view statment to CTE
-		for _, def := range tableDef.Defs {
-			if defProperties, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
-				viewSql := ""
-				isView := false
-				for _, p := range defProperties.Properties.Properties {
-					switch p.Key {
-					case catalog.SystemRelAttr_Kind:
-						isView = p.Value == catalog.SystemViewRel
-					case catalog.SystemRelAttr_CreateSQL:
-						viewSql = p.Value
-					}
-				}
-				if isView && len(viewSql) > 0 {
-					if ctx.cteByName == nil {
-						ctx.cteByName = make(map[string]*CTERef)
-					}
+		if tableDef.Typ == catalog.SystemViewRel {
+			if ctx.cteByName == nil {
+				ctx.cteByName = make(map[string]*CTERef)
+			}
 
-					viewData := ViewData{}
-					err := json.Unmarshal([]byte(viewSql), &viewData)
-					if err != nil {
-						return 0, err
-					}
+			viewData := ViewData{}
+			err := json.Unmarshal([]byte(tableDef.CreateSql), &viewData)
+			if err != nil {
+				return 0, err
+			}
 
-					originStmts, err := mysql.Parse(viewData.Stmt)
-					if err != nil {
-						return 0, err
-					}
-					viewStmt, ok := originStmts[0].(*tree.CreateView)
-					if !ok {
-						return 0, errors.New("", "can not get view statement")
-					}
+			originStmts, err := mysql.Parse(viewData.Stmt)
+			if err != nil {
+				return 0, err
+			}
+			viewStmt, ok := originStmts[0].(*tree.CreateView)
+			if !ok {
+				return 0, errors.New("", "can not get view statement")
+			}
 
-					// when use db1.v1 in db2 context, if you use v1 for ViewName， that may conflict
-					viewName := fmt.Sprintf("%s.%s", viewData.DefaultDatabase, viewStmt.Name.ObjectName)
-					var maskedCTEs map[string]any
-					if len(ctx.cteByName) > 0 {
-						maskedCTEs := make(map[string]any)
-						for name := range ctx.cteByName {
-							maskedCTEs[name] = nil
-						}
-					}
-
-					ctx.cteByName[string(viewName)] = &CTERef{
-						ast: &tree.CTE{
-							Name: &tree.AliasClause{
-								Alias: tree.Identifier(viewName),
-								Cols:  viewStmt.ColNames,
-							},
-							Stmt: viewStmt.AsSource,
-						},
-						defaultDatabase: viewData.DefaultDatabase, //todo save defaultDatabase in view?
-						maskedCTEs:      maskedCTEs,
-					}
-
-					newTableName := tree.NewTableName(tree.Identifier(viewName), tree.ObjectNamePrefix{
-						CatalogName:     tbl.CatalogName, // TODO unused now, if used in some code, that will be save in view
-						SchemaName:      tree.Identifier(""),
-						ExplicitCatalog: false,
-						ExplicitSchema:  false,
-					})
-					return builder.buildTable(newTableName, ctx)
+			// when use db1.v1 in db2 context, if you use v1 as ViewName， that may conflict
+			viewName := fmt.Sprintf("%s.%s", viewData.DefaultDatabase, viewStmt.Name.ObjectName)
+			var maskedCTEs map[string]any
+			if len(ctx.cteByName) > 0 {
+				maskedCTEs := make(map[string]any)
+				for name := range ctx.cteByName {
+					maskedCTEs[name] = nil
 				}
 			}
+
+			ctx.cteByName[string(viewName)] = &CTERef{
+				ast: &tree.CTE{
+					Name: &tree.AliasClause{
+						Alias: tree.Identifier(viewName),
+						Cols:  viewStmt.ColNames,
+					},
+					Stmt: viewStmt.AsSource,
+				},
+				defaultDatabase: viewData.DefaultDatabase,
+				maskedCTEs:      maskedCTEs,
+			}
+
+			newTableName := tree.NewTableName(tree.Identifier(viewName), tree.ObjectNamePrefix{
+				CatalogName:     tbl.CatalogName, // TODO unused now, if used in some code, that will be save in view
+				SchemaName:      tree.Identifier(""),
+				ExplicitCatalog: false,
+				ExplicitSchema:  false,
+			})
+			return builder.buildTable(newTableName, ctx)
 		}
 
 		nodeID = builder.appendNode(&plan.Node{

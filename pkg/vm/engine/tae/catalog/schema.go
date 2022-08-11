@@ -126,6 +126,8 @@ type Schema struct {
 	BlockMaxRows     uint32
 	SegmentMaxBlocks uint16
 	Comment          string
+	Relkind          string
+	Createsql        string
 
 	SortKey    *SortKey
 	PhyAddrKey *ColDef
@@ -260,6 +262,14 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
+	if s.Relkind, sn, err = common.ReadString(r); err != nil {
+		return
+	}
+	n += sn
+	if s.Createsql, sn, err = common.ReadString(r); err != nil {
+		return
+	}
+	n += sn
 	colCnt := uint16(0)
 	if err = binary.Read(r, binary.BigEndian, &colCnt); err != nil {
 		return
@@ -334,6 +344,12 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		return
 	}
 	if _, err = common.WriteString(s.Comment, &w); err != nil {
+		return
+	}
+	if _, err = common.WriteString(s.Relkind, &w); err != nil {
+		return
+	}
+	if _, err = common.WriteString(s.Createsql, &w); err != nil {
 		return
 	}
 	if err = binary.Write(&w, binary.BigEndian, uint16(len(s.ColDefs))); err != nil {

@@ -40,7 +40,7 @@ func NewDropDatabase(n Identifier, i bool) *DropDatabase {
 	}
 }
 
-//DROP Table statement
+// DROP Table statement
 type DropTable struct {
 	statementImpl
 	IfExists bool

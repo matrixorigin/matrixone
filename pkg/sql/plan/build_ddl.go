@@ -341,15 +341,8 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			return nil, errors.New("", fmt.Sprintf("table %s is not exists", dropTable.Table))
 		}
 	} else {
-		for _, def := range tableDef.Defs {
-			if pro, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
-				for _, p := range pro.Properties.Properties {
-					if p.Key == catalog.SystemRelAttr_Kind && p.Value == catalog.SystemViewRel {
-						// it's a view, not a normal table
-						return nil, errors.New("", fmt.Sprintf("table %s is not exists", dropTable.Table))
-					}
-				}
-			}
+		if tableDef.Typ == catalog.SystemViewRel {
+			return nil, errors.New("", fmt.Sprintf("table %s is not exists", dropTable.Table))
 		}
 	}
 
@@ -384,18 +377,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 			return nil, errors.New("", fmt.Sprintf("view %s is not exists", dropTable.Table))
 		}
 	} else {
-		isView := false
-		for _, def := range tableDef.Defs {
-			if pro, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
-				for _, p := range pro.Properties.Properties {
-					if p.Key == catalog.SystemRelAttr_Kind && p.Value == catalog.SystemViewRel {
-						isView = true
-						break
-					}
-				}
-			}
-		}
-		if !isView {
+		if tableDef.Typ != catalog.SystemViewRel {
 			return nil, errors.New("", fmt.Sprintf("%s is not a view", dropTable.Table))
 		}
 	}
