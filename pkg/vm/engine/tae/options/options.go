@@ -14,6 +14,10 @@
 
 package options
 
+import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+)
+
 func (o *Options) FillDefaults(dirname string) *Options {
 	if o == nil {
 		o = &Options{}
@@ -49,6 +53,10 @@ func (o *Options) FillDefaults(dirname string) *Options {
 			IOWorkers:    DefaultIOWorkers,
 			AsyncWorkers: DefaultAsyncWorkers,
 		}
+	}
+
+	if o.Clock == nil {
+		o.Clock = types.NewMockHLCClock(1)
 	}
 
 	return o
