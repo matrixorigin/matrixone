@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type flushBlkTask struct {
@@ -28,13 +29,13 @@ type flushBlkTask struct {
 	sortCol containers.Vector
 	meta    *catalog.BlockEntry
 	file    file.Block
-	ts      uint64
+	ts      types.TS
 }
 
 func NewFlushBlkTask(
 	ctx *tasks.Context,
 	bf file.Block,
-	ts uint64,
+	ts types.TS,
 	meta *catalog.BlockEntry,
 	data *containers.Batch,
 	sortCol containers.Vector) *flushBlkTask {

@@ -86,12 +86,12 @@ func (l *LRU) evict() {
 			}
 			item := elem.Value.(*lruItem)
 
-			// pinned value
-			if pinned, ok := item.Value.(interface {
-				IsPinned() bool
+			// RC value
+			if rc, ok := item.Value.(interface {
+				RefCount() int64
 			}); ok {
-				if pinned.IsPinned() {
-					// skip pinned
+				if rc.RefCount() > 0 {
+					// skip
 					elem = elem.Prev()
 					continue
 				}

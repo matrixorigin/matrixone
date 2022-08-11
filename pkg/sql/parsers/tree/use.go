@@ -14,18 +14,49 @@
 
 package tree
 
-//Use statement
+type SecondaryRoleType int
+
+const (
+	SecondaryRoleTypeAll SecondaryRoleType = iota
+	SecondaryRoleTypeNone
+)
+
+// Use statement
 type Use struct {
 	statementImpl
-	Name string
+	Name              string
+	SecondaryRole     bool
+	SecondaryRoleType SecondaryRoleType
+	Role              *Role
 }
 
 func (node *Use) Format(ctx *FmtCtx) {
 	ctx.WriteString("use")
-	if node.Name != "" {
-		ctx.WriteByte(' ')
-		ctx.WriteString(node.Name)
+	if !node.SecondaryRole {
+		if node.Role != nil {
+			ctx.WriteString(" role ")
+			node.Role.Format(ctx)
+		} else if node.Name != "" {
+			ctx.WriteByte(' ')
+			ctx.WriteString(node.Name)
+		}
+	} else {
+		ctx.WriteString(" secondary role ")
+		switch node.SecondaryRoleType {
+		case SecondaryRoleTypeAll:
+			ctx.WriteString("all")
+		case SecondaryRoleTypeNone:
+			ctx.WriteString("none")
+		}
 	}
+}
+
+// IsUseRole checks the statement is:
+//
+//	USE SECONDARY ROLE { ALL | NONE };
+//	USE ROLE role;
+func (node *Use) IsUseRole() bool {
+	return node.SecondaryRole || node.Role != nil
 }
 
 func NewUse(n string) *Use {

@@ -121,36 +121,40 @@ func NewStopper(name string, opts ...Option) *Stopper {
 // RunTask run a task that can be cancelled. ErrUnavailable returned if stopped is not running
 // See also `RunNamedTask`
 // Example:
-// err := s.RunTask(func(ctx context.Context) {
-// 	select {
-// 	case <-ctx.Done():
-// 	// cancelled
-// 	case <-time.After(time.Second):
-// 		// do something
-// 	}
-// })
-// if err != nil {
-// 	// hanle error
-// 	return
-// }
+//
+//	err := s.RunTask(func(ctx context.Context) {
+//		select {
+//		case <-ctx.Done():
+//		// cancelled
+//		case <-time.After(time.Second):
+//			// do something
+//		}
+//	})
+//
+//	if err != nil {
+//		// hanle error
+//		return
+//	}
 func (s *Stopper) RunTask(task func(context.Context)) error {
 	return s.RunNamedTask("undefined", task)
 }
 
 // RunNamedTask run a task that can be cancelled. ErrUnavailable returned if stopped is not running
 // Example:
-// err := s.RunNamedTask("named task", func(ctx context.Context) {
-// 	select {
-// 	case <-ctx.Done():
-// 	// cancelled
-// 	case <-time.After(time.Second):
-// 		// do something
-// 	}
-// })
-// if err != nil {
-// 	// hanle error
-// 	return
-// }
+//
+//	err := s.RunNamedTask("named task", func(ctx context.Context) {
+//		select {
+//		case <-ctx.Done():
+//		// cancelled
+//		case <-time.After(time.Second):
+//			// do something
+//		}
+//	})
+//
+//	if err != nil {
+//		// hanle error
+//		return
+//	}
 func (s *Stopper) RunNamedTask(name string, task func(context.Context)) error {
 	// we use read lock here for avoid race
 	s.mu.RLock()

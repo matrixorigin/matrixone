@@ -266,7 +266,7 @@ import (
 %token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL
 
 // Account
-%token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED
+%token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED SECONDARY
 
 // User
 %token <str> USER IDENTIFIED CIPHER ISSUER X509 SUBJECT SAN REQUIRE SSL NONE PASSWORD
@@ -431,8 +431,8 @@ import (
 %type <usernameRecord> user_name
 %type <user> user_spec drop_user_spec
 %type <users> user_spec_list drop_user_spec_list
-%type <tlsOptions> require_clause_opt require_clause require_list
-%type <tlsOption> require_elem
+//%type <tlsOptions> require_clause_opt require_clause require_list
+//%type <tlsOption> require_elem
 //%type <resourceOptions> conn_option_list conn_options
 //%type <resourceOption> conn_option
 %type <updateExpr> update_value
@@ -910,32 +910,41 @@ local_opt:
     }
 
 grant_stmt:
-    GRANT priv_list ON object_type priv_level TO user_spec_list require_clause_opt grant_option_opt
+    GRANT priv_list ON object_type priv_level TO role_spec_list grant_option_opt
     {
         $$ = &tree.Grant{
-            Privileges: $2,
-            ObjType: $4,
-            Level: $5,
-            Users: $7,
-            GrantOption: $9,
+            Typ: tree.GrantTypePrivilege,
+            GrantPrivilege: tree.GrantPrivilege{
+                Privileges: $2,
+	    	ObjType: $4,
+	    	Level: $5,
+	    	Roles: $7,
+	    	GrantOption: $8,
+            },
         }
     }
-|   GRANT role_spec_list TO user_spec_list
+|   GRANT role_spec_list TO drop_user_spec_list grant_option_opt
     {
         $$ = &tree.Grant{
-            IsGrantRole: true,
-            RolesInGrantRole: $2,
-            Users: $4,
-        }
+                 Typ: tree.GrantTypeRole,
+                 GrantRole:tree.GrantRole{
+		       Roles: $2,
+		       Users: $4,
+		       GrantOption: $5,
+		   },
+             }
     }
 |   GRANT PROXY ON user_spec TO user_spec_list grant_option_opt
     {
-        $$ = &tree.Grant{
-            IsProxy: true,
-            ProxyUser: $4,
-            Users: $6,
-            GrantOption: $7,
-        }
+        $$ =  &tree.Grant{
+	      Typ: tree.GrantTypeProxy,
+	      GrantProxy:tree.GrantProxy{
+		     ProxyUser: $4,
+		     Users: $6,
+		     GrantOption: $7,
+		 },
+	  }
+
     }
 
 grant_option_opt:
@@ -952,22 +961,28 @@ grant_option_opt:
 // |	WITH MAX_USER_CONNECTIONS INTEGRAL
 
 revoke_stmt:
-    REVOKE priv_list ON object_type priv_level FROM user_spec_list
+    REVOKE exists_opt  priv_list ON object_type priv_level FROM user_spec_list
     {
         $$ = &tree.Revoke{
-            Privileges: $2,
-            ObjType: $4,
-            Level: $5,
-            Users: $7,
-            Roles: nil,
+            Typ: tree.RevokeTypePrivilege,
+            RevokePrivilege: tree.RevokePrivilege{
+		    IfExists: $2,
+		    Privileges: $3,
+		    ObjType: $5,
+		    Level: $6,
+		    Users: $8,
+            },
         }
     }
-|   REVOKE role_spec_list FROM user_spec_list
+|   REVOKE exists_opt role_spec_list FROM user_spec_list
     {
         $$ = &tree.Revoke{
-            IsRevokeRole: true,
-            RolesInRevokeRole: $2,
-            Users: $4,
+            Typ: tree.RevokeTypeRole,
+            RevokeRole: tree.RevokeRole{
+		IfExists: $2,
+		Roles: $3,
+                Users: $5,
+            },
         }
     }
 
@@ -975,26 +990,26 @@ priv_level:
     '*'
     {
         $$ = &tree.PrivilegeLevel{
-            Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE,
+            Level: tree.PRIVILEGE_LEVEL_TYPE_STAR,
         }
     }
 |   '*' '.' '*'
     {
         $$ = &tree.PrivilegeLevel{
-            Level: tree.PRIVILEGE_LEVEL_TYPE_GLOBAL,
+            Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR,
         }
     }
 |   ID '.' '*'
     {
         $$ = &tree.PrivilegeLevel{
-            Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE,
+            Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
             DbName: $1,
         }
     }
 |   ID '.' ID
     {
         $$ = &tree.PrivilegeLevel{
-            Level: tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+            Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
             DbName: $1,
             TabName: $3,
         }
@@ -1015,6 +1030,10 @@ object_type:
     {
         $$ = tree.OBJECT_TYPE_TABLE
     }
+|   DATABASE
+    {
+        $$ = tree.OBJECT_TYPE_DATABASE
+    }
 |   FUNCTION
     {
         $$ = tree.OBJECT_TYPE_FUNCTION
@@ -1022,6 +1041,10 @@ object_type:
 |   PROCEDURE
     {
         $$ = tree.OBJECT_TYPE_PROCEDURE
+    }
+|   VIEW
+    {
+        $$ = tree.OBJECT_TYPE_VIEW
     }
 
 priv_list:
@@ -1519,11 +1542,37 @@ begin_stmt:
 use_stmt:
     USE ident
     {
-        $$ = &tree.Use{Name: $2}
+        $$ = &tree.Use{
+        	SecondaryRole: false,
+        	Name: $2,
+        }
     }
 |   USE
     {
-        $$ = &tree.Use{}
+        $$ = &tree.Use{
+        	SecondaryRole: false,
+        }
+    }
+|   USE ROLE role_spec
+    {
+	$$ = &tree.Use{
+		SecondaryRole: false,
+		Role: $3,
+	}
+    }
+|   USE SECONDARY ROLE ALL
+    {
+	$$ = &tree.Use{
+		SecondaryRole: true,
+		SecondaryRoleType: tree.SecondaryRoleTypeAll,
+	}
+    }
+|   USE SECONDARY ROLE NONE
+    {
+	$$ = &tree.Use{
+		SecondaryRole: true,
+		SecondaryRoleType: tree.SecondaryRoleTypeNone,
+	}
     }
 
 update_stmt:
@@ -3464,64 +3513,64 @@ user_comment_or_attribute_opt:
 //    }
 
 
-require_clause_opt:
-    {
-        $$ = nil
-    }
-|   require_clause
-
-require_clause:
-    REQUIRE NONE
-    {
-        t := &tree.TlsOptionNone{}
-        $$ = []tree.TlsOption{t}
-    }
-|   REQUIRE SSL
-    {
-        t := &tree.TlsOptionSSL{}
-        $$ = []tree.TlsOption{t}
-    }
-|   REQUIRE X509
-    {
-        t := &tree.TlsOptionX509{}
-        $$ = []tree.TlsOption{t}
-    }
-|   REQUIRE require_list
-    {
-        $$ = $2
-    }
-
-require_list:
-    require_elem
-    {
-        $$ = []tree.TlsOption{$1}
-    }
-|   require_list AND require_elem
-    {
-        $$ = append($1, $3)
-    }
-|   require_list require_elem
-    {
-        $$ = append($1, $2)
-    }
-
-require_elem:
-    ISSUER STRING
-    {
-        $$ = &tree.TlsOptionIssuer{Issuer: $2}
-    }
-|   SUBJECT STRING
-    {
-        $$ = &tree.TlsOptionSubject{Subject: $2}
-    }
-|   CIPHER STRING
-    {
-        $$ = &tree.TlsOptionCipher{Cipher: $2}
-    }
-|   SAN STRING
-    {
-        $$ = &tree.TlsOptionSan{San: $2}
-    }
+//require_clause_opt:
+//    {
+//        $$ = nil
+//    }
+//|   require_clause
+//
+//require_clause:
+//    REQUIRE NONE
+//    {
+//        t := &tree.TlsOptionNone{}
+//        $$ = []tree.TlsOption{t}
+//    }
+//|   REQUIRE SSL
+//    {
+//        t := &tree.TlsOptionSSL{}
+//        $$ = []tree.TlsOption{t}
+//    }
+//|   REQUIRE X509
+//    {
+//        t := &tree.TlsOptionX509{}
+//        $$ = []tree.TlsOption{t}
+//    }
+//|   REQUIRE require_list
+//    {
+//        $$ = $2
+//    }
+//
+//require_list:
+//    require_elem
+//    {
+//        $$ = []tree.TlsOption{$1}
+//    }
+//|   require_list AND require_elem
+//    {
+//        $$ = append($1, $3)
+//    }
+//|   require_list require_elem
+//    {
+//        $$ = append($1, $2)
+//    }
+//
+//require_elem:
+//    ISSUER STRING
+//    {
+//        $$ = &tree.TlsOptionIssuer{Issuer: $2}
+//    }
+//|   SUBJECT STRING
+//    {
+//        $$ = &tree.TlsOptionSubject{Subject: $2}
+//    }
+//|   CIPHER STRING
+//    {
+//        $$ = &tree.TlsOptionCipher{Cipher: $2}
+//    }
+//|   SAN STRING
+//    {
+//        $$ = &tree.TlsOptionSan{San: $2}
+//    }
 
 user_spec_list:
     user_spec
@@ -3608,16 +3657,16 @@ role_spec_list:
 role_spec:
     role_name
     {
-        $$ = &tree.Role{UserName: $1, HostName: "%"}
+        $$ = &tree.Role{UserName: $1}
     }
-|   name_string '@' name_string
-    {
-        $$ = &tree.Role{UserName: $1, HostName: $3}
-    }
-|   name_string AT_ID
-    {
-        $$ = &tree.Role{UserName: $1, HostName: $2}
-    }
+//|   name_string '@' name_string
+//    {
+//        $$ = &tree.Role{UserName: $1, HostName: $3}
+//    }
+//|   name_string AT_ID
+//    {
+//        $$ = &tree.Role{UserName: $1, HostName: $2}
+//    }
 
 role_name:
     ID
@@ -6183,7 +6232,7 @@ decimal_type:
         if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
         	yylex.Error("For decimal(M), M must between 0 and 38.")
                 return 1
-        } else if $2.DisplayWith <= 18 {
+        } else if $2.DisplayWith <= 16 {
         	$$ = &tree.T{
 		    InternalType: tree.InternalType{
 			Family: tree.FloatFamily,
@@ -6601,7 +6650,7 @@ decimal_length_opt:
     /* EMPTY */
     {
         $$ = tree.LengthScaleOpt{
-            DisplayWith: 10,           // this is the default precision for decimal
+            DisplayWith: 34,           // this is the default precision for decimal
             Precision: 0,
         }
     }
@@ -6830,6 +6879,7 @@ reserved_keyword:
 |   FAILED_LOGIN_ATTEMPTS
 |   PASSWORD_LOCK_TIME
 |   UNBOUNDED
+|   SECONDARY
 
 non_reserved_keyword:
     AGAINST

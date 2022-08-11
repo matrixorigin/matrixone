@@ -14,7 +14,7 @@
 
 package tree
 
-//Use statement
+// Use statement
 type AnalyzeStmt struct {
 	statementImpl
 	Table *TableName

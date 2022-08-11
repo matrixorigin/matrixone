@@ -14,7 +14,8 @@
 
 package frontend
 
-/**
+/*
+*
 phase statistics
 */
 type PhaseProfiler interface {
@@ -33,7 +34,7 @@ type PhaseProfiler interface {
 	ToString() string
 }
 
-//OperatorProfiler : operator statistics
+// OperatorProfiler : operator statistics
 type OperatorProfiler interface {
 	//start the statistics for the operator
 	StartOperator(operator interface{})
@@ -48,7 +49,7 @@ type OperatorProfiler interface {
 	ToString() string
 }
 
-//query statistics
+// query statistics
 type QueryProfiler interface {
 	//start the statistics for the query
 	StartQuery(string)

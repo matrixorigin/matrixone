@@ -115,6 +115,56 @@ func TestClientCanBeCreated(t *testing.T) {
 	runClientTest(t, true, fn)
 }
 
+func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg := getServiceTestConfig()
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	service, err := NewService(cfg)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, service.Close())
+	}()
+
+	init := make(map[uint64]string)
+	init[2] = service.ID()
+	assert.NoError(t, service.store.startReplica(1, 2, init, false))
+
+	scfg := ClientConfig{
+		LogShardID:       1,
+		DNReplicaID:      2,
+		ServiceAddresses: []string{"localhost:53032"}, // unreachable
+		DiscoveryAddress: testServiceAddress,
+	}
+
+	done := false
+	for i := 0; i < 1000; i++ {
+		si, ok, err := GetShardInfo(testServiceAddress, 1)
+		if err != nil {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		done = true
+		require.NoError(t, err)
+		assert.True(t, ok)
+		assert.Equal(t, uint64(2), si.ReplicaID)
+		addr, ok := si.Replicas[si.ReplicaID]
+		assert.True(t, ok)
+		assert.Equal(t, testServiceAddress, addr)
+		break
+	}
+	if !done {
+		t.Fatalf("failed to get shard info")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	c, err := NewClient(ctx, scfg)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, c.Close())
+	}()
+}
+
 func TestClientGetTSOTimestamp(t *testing.T) {
 	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)

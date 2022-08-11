@@ -14,28 +14,44 @@
 
 package tree
 
+import "fmt"
+
+type RevokeType int
+
+const (
+	RevokeTypePrivilege RevokeType = iota
+	RevokeTypeRole
+)
+
 type Revoke struct {
 	statementImpl
-	IsRevokeRole      bool
-	RolesInRevokeRole []*Role
+	Typ             RevokeType
+	RevokePrivilege RevokePrivilege
+	RevokeRole      RevokeRole
+}
 
+func (node *Revoke) Format(ctx *FmtCtx) {
+	switch node.Typ {
+	case RevokeTypePrivilege:
+		node.RevokePrivilege.Format(ctx)
+	case RevokeTypeRole:
+		node.RevokeRole.Format(ctx)
+	}
+}
+
+type RevokePrivilege struct {
+	statementImpl
+	IfExists   bool
 	Privileges []*Privilege
 	ObjType    ObjectType
 	Level      *PrivilegeLevel
 	Users      []*User
-	Roles      []*Role
 }
 
-func (node *Revoke) Format(ctx *FmtCtx) {
+func (node *RevokePrivilege) Format(ctx *FmtCtx) {
 	ctx.WriteString("revoke")
-	if node.IsRevokeRole {
-		prefix := " "
-		for _, r := range node.RolesInRevokeRole {
-			ctx.WriteString(prefix)
-			r.Format(ctx)
-			prefix = ", "
-		}
-		goto common
+	if node.IfExists {
+		ctx.WriteString(" if exists")
 	}
 
 	if node.Privileges != nil {
@@ -56,7 +72,6 @@ func (node *Revoke) Format(ctx *FmtCtx) {
 		node.Level.Format(ctx)
 	}
 
-common:
 	if node.Users != nil {
 		ctx.WriteString(" from")
 		prefix := " "
@@ -68,15 +83,38 @@ common:
 	}
 }
 
-func NewRevoke(irr bool, rirr []*Role, p []*Privilege, o ObjectType, l *PrivilegeLevel, u []*User, r []*Role) *Revoke {
-	return &Revoke{
-		IsRevokeRole:      irr,
-		RolesInRevokeRole: rirr,
-		Privileges:        p,
-		ObjType:           o,
-		Level:             l,
-		Users:             u,
-		Roles:             r,
+func NewRevoke() *Revoke {
+	return &Revoke{}
+}
+
+type RevokeRole struct {
+	statementImpl
+	IfExists bool
+	Roles    []*Role
+	Users    []*User
+}
+
+func (node *RevokeRole) Format(ctx *FmtCtx) {
+	ctx.WriteString("revoke")
+	if node.IfExists {
+		ctx.WriteString(" if exists")
+	}
+	if node.Roles != nil {
+		prefix := " "
+		for _, r := range node.Roles {
+			ctx.WriteString(prefix)
+			r.Format(ctx)
+			prefix = ", "
+		}
+	}
+	if node.Users != nil {
+		ctx.WriteString(" from")
+		prefix := " "
+		for _, r := range node.Users {
+			ctx.WriteString(prefix)
+			r.Format(ctx)
+			prefix = ", "
+		}
 	}
 }
 
@@ -89,13 +127,16 @@ type PrivilegeLevel struct {
 }
 
 func (node *PrivilegeLevel) Format(ctx *FmtCtx) {
-	if node.DbName != "" {
-		ctx.WriteString(node.DbName)
-	}
-	if node.TabName != "" {
-		if node.DbName != "" {
-			ctx.WriteByte('.')
-		}
+	switch node.Level {
+	case PRIVILEGE_LEVEL_TYPE_STAR:
+		ctx.WriteString("*")
+	case PRIVILEGE_LEVEL_TYPE_STAR_STAR:
+		ctx.WriteString("*.*")
+	case PRIVILEGE_LEVEL_TYPE_DATABASE_STAR:
+		ctx.WriteString(fmt.Sprintf("%s.*", node.DbName))
+	case PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE:
+		ctx.WriteString(fmt.Sprintf("%s.%s", node.DbName, node.TabName))
+	case PRIVILEGE_LEVEL_TYPE_TABLE:
 		ctx.WriteString(node.TabName)
 	}
 }
@@ -112,12 +153,15 @@ func NewPrivilegeLevel(l PrivilegeLevelType, d, t, r string) *PrivilegeLevel {
 type PrivilegeLevelType int
 
 const (
-	PRIVILEGE_LEVEL_TYPE_GLOBAL         PrivilegeLevelType = iota //*.*
-	PRIVILEGE_LEVEL_TYPE_DATABASE                                 //db_name.*
-	PRIVILEGE_LEVEL_TYPE_TABLE                                    //db_name.tbl_name
+	PRIVILEGE_LEVEL_TYPE_STAR           PrivilegeLevelType = iota //*
+	PRIVILEGE_LEVEL_TYPE_STAR_STAR                                //*.*
+	PRIVILEGE_LEVEL_TYPE_DATABASE_STAR                            //db_name.*
+	PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE                           //db_name.tbl_name
+	PRIVILEGE_LEVEL_TYPE_TABLE                                    //tbl_name
 	PRIVILEGE_LEVEL_TYPE_COLUMN                                   // (x,x)
 	PRIVILEGE_LEVEL_TYPE_STORED_ROUTINE                           //procedure
 	PRIVILEGE_LEVEL_TYPE_PROXY
+	PRIVILEGE_LEVEL_TYPE_ROUTINE
 )
 
 type Privilege struct {
@@ -164,8 +208,10 @@ func (node *ObjectType) ToString() string {
 const (
 	OBJECT_TYPE_NONE ObjectType = iota
 	OBJECT_TYPE_TABLE
+	OBJECT_TYPE_DATABASE
 	OBJECT_TYPE_FUNCTION
 	OBJECT_TYPE_PROCEDURE
+	OBJECT_TYPE_VIEW
 )
 
 type PrivilegeType int
@@ -245,7 +291,8 @@ func (node *PrivilegeType) ToString() string {
 	}
 }
 
-/**
+/*
+*
 From: https://dev.mysql.com/doc/refman/8.0/en/grant.html
 */
 const (

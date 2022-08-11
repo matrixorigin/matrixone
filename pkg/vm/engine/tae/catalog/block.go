@@ -17,6 +17,7 @@ package catalog
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"io"
 	"sync"
 
@@ -61,7 +62,7 @@ func NewBlockEntry(segment *SegmentEntry, txn txnif.AsyncTxn, state EntryState, 
 	return e
 }
 
-func NewStandaloneBlock(segment *SegmentEntry, id uint64, ts uint64) *BlockEntry {
+func NewStandaloneBlock(segment *SegmentEntry, id uint64, ts types.TS) *BlockEntry {
 	e := &BlockEntry{
 		BaseEntry: &BaseEntry{
 			CommitInfo: CommitInfo{
@@ -85,7 +86,7 @@ func NewSysBlockEntry(segment *SegmentEntry, id uint64) *BlockEntry {
 			},
 			RWMutex:  new(sync.RWMutex),
 			ID:       id,
-			CreateAt: 1,
+			CreateAt: types.SystemDBTS,
 		},
 		segment: segment,
 		state:   ES_Appendable,
@@ -155,7 +156,7 @@ func (entry *BlockEntry) InitData(factory DataFactory) {
 }
 func (entry *BlockEntry) GetBlockData() data.Block { return entry.blkData }
 func (entry *BlockEntry) GetSchema() *Schema       { return entry.GetSegment().GetTable().GetSchema() }
-func (entry *BlockEntry) GetFileTs() (uint64, error) {
+func (entry *BlockEntry) GetFileTs() (types.TS, error) {
 	return entry.GetBlockData().GetBlockFile().ReadTS()
 }
 func (entry *BlockEntry) PrepareRollback() (err error) {
@@ -239,7 +240,7 @@ func (entry *BlockEntry) IsActive() bool {
 }
 
 // GetTerminationTS is coarse API: no consistency check
-func (entry *BlockEntry) GetTerminationTS() (ts uint64, terminated bool) {
+func (entry *BlockEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 	segmentEntry := entry.GetSegment()
 	tableEntry := segmentEntry.GetTable()
 	dbEntry := tableEntry.GetDB()

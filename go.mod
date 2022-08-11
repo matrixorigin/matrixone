@@ -13,7 +13,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.1.2
 	github.com/docker/go-units v0.4.0
 	github.com/fagongzi/goetty v1.13.0
-	github.com/fagongzi/goetty/v2 v2.0.3-0.20220730091829-0a8222eaa708
+	github.com/fagongzi/goetty/v2 v2.0.3-0.20220811042451-6d175dc0a90f
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/gogo/protobuf v1.3.2

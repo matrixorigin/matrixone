@@ -20,6 +20,7 @@ import (
 	"math/bits"
 
 	stdencoding "encoding"
+
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 )
 
@@ -58,7 +59,7 @@ var rightmost_one_pos_8 = [256]uint8{
 
 func New(n int) *Bitmap {
 	return &Bitmap{
-		len:  n,
+		len:  int64(n),
 		data: make([]uint64, (n-1)/64+1),
 	}
 }
@@ -154,7 +155,7 @@ func (n *Bitmap) Clear() {
 }
 
 func (n *Bitmap) Len() int {
-	return n.len
+	return int(n.len)
 }
 
 func (n *Bitmap) Size() int {
@@ -257,12 +258,12 @@ func (n *Bitmap) And(m *Bitmap) {
 
 func (n *Bitmap) TryExpand(m *Bitmap) {
 	if n.len < m.len {
-		n.Expand(m.len)
+		n.Expand(int(m.len))
 	}
 }
 
 func (n *Bitmap) TryExpandWithSize(size int) {
-	if n.len < size {
+	if int(n.len) < size {
 		n.Expand(size)
 	}
 }
@@ -270,12 +271,12 @@ func (n *Bitmap) TryExpandWithSize(size int) {
 func (n *Bitmap) Expand(size int) {
 	data := make([]uint64, (size-1)/64+1)
 	copy(data, n.data)
-	n.len = size
+	n.len = int64(size)
 	n.data = data
 }
 
 func (n *Bitmap) Filter(sels []int64) *Bitmap {
-	m := New(n.len)
+	m := New(int(n.len))
 	for i, sel := range sels {
 		if n.Contains(uint64(sel)) {
 			m.Add(uint64(i))
@@ -313,7 +314,7 @@ func (n *Bitmap) Marshal() []byte {
 }
 
 func (n *Bitmap) Unmarshal(data []byte) {
-	n.len = int(encoding.DecodeUint64(data[:8]))
+	n.len = int64(encoding.DecodeUint64(data[:8]))
 	data = data[8:]
 	size := int(encoding.DecodeUint64(data[:8]))
 	data = data[8:]
