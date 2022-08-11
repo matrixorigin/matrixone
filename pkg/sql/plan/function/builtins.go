@@ -174,6 +174,24 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	UUID: {
+		Id: UUID,
+		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			if len(inputs) == 0 {
+				return int32(0), nil
+			}
+			return wrongFunctionParameters, nil
+		},
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_int64},
+				ReturnTyp: types.T_varchar, Fn: multi.UUID,
+			},
+		},
+	},
 	DATE: {
 		Id: DATE,
 		Overloads: []Function{

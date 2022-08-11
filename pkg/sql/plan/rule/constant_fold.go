@@ -74,6 +74,9 @@ func (r *ConstantFold) constantFold(e *plan.Expr) *plan.Expr {
 	if !ok {
 		return e
 	}
+	if ef.F.Func.GetObjName() == "uuid" {
+		return e
+	}
 	overloadID := ef.F.Func.GetObj()
 	f, err := function.GetFunctionByID(overloadID)
 	if err != nil {

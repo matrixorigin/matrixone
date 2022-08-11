@@ -15,27 +15,46 @@
 package multi
 
 import (
-	"fmt"
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/pi"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func UUID(_ []*vector.Vector, _ *process.Process) (*vector.Vector, error) {
-	var id uuid.UUID
-	id, err := uuid.NewUUID()
-	if err != nil {
-		return nil, err
-	}
-	uuid := id.String()
-	fmt.Println(uuid)
+const UUID_LENGTH uint32 = 36
 
-	resultType := types.Type{Oid: types.T_float64, Size: 8}
-	resultVector := vector.NewConst(resultType, 1)
-	result := make([]float64, 1)
-	result[0] = pi.GetPi()
-	vector.SetCol(resultVector, result)
+func UUID(inputVecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if len(inputVecs) != 1 {
+		return nil, moerr.NewError(moerr.INTERNAL_ERROR, "uuid function requires a hidden parameter")
+	}
+	rows := inputVecs[0].Length
+	resultType := types.T_varchar.ToType()
+	resultVector := vector.New(resultType)
+
+	results := &types.Bytes{
+		Data:    make([]byte, int(UUID_LENGTH)*rows),
+		Offsets: make([]uint32, rows),
+		Lengths: make([]uint32, rows),
+	}
+	var retCursor uint32 = 0
+	for i := 0; i < rows; i++ {
+		id, err := uuid.NewUUID()
+		if err != nil {
+			return nil, moerr.NewError(moerr.INTERNAL_ERROR, "generation uuid error")
+		}
+		slice := []byte(id.String())
+		for _, b := range slice {
+			results.Data[retCursor] = b
+			retCursor++
+		}
+		if i != 0 {
+			results.Offsets[i] = results.Offsets[i-1] + results.Lengths[i-1]
+		} else {
+			results.Offsets[i] = uint32(0)
+		}
+		results.Lengths[i] = UUID_LENGTH
+	}
+	vector.SetCol(resultVector, results)
 	return resultVector, nil
 }

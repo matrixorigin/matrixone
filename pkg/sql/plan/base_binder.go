@@ -851,6 +851,10 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	}
 
+	if name == "uuid" {
+		args = append(args, makePlan2Int64ConstExprWithType(1))
+	}
+
 	// return new expr
 	return &Expr{
 		Expr: &plan.Expr_F{
