@@ -18,12 +18,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type columnBlock struct {
 	common.RefHelper
 	block   *blockFile
-	ts      uint64
+	ts      types.TS
 	indexes []*indexFile
 	updates *updatesFile
 	data    *dataFile
@@ -44,7 +45,7 @@ func newColumnBlock(block *blockFile, indexCnt int) *columnBlock {
 	return cb
 }
 
-func (cb *columnBlock) WriteTS(ts uint64) (err error) {
+func (cb *columnBlock) WriteTS(ts types.TS) (err error) {
 	cb.ts = ts
 	return
 }
@@ -69,7 +70,7 @@ func (cb *columnBlock) WriteIndex(idx int, buf []byte) (err error) {
 	return
 }
 
-func (cb *columnBlock) ReadTS() uint64 { return cb.ts }
+func (cb *columnBlock) ReadTS() types.TS { return cb.ts }
 
 func (cb *columnBlock) ReadData(buf []byte) (err error) {
 	_, err = cb.data.Read(buf)

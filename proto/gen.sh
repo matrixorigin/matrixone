@@ -107,3 +107,4 @@ do
     goimports -w $PB_DIR/$dir/*pb.go
 done
 
+if [ -f protobuf/ ];then rm -rf protobuf/;fi
