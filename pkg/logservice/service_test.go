@@ -17,7 +17,6 @@ package logservice
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -594,12 +593,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	assert.True(t, done)
 }
 
-func TestGossipConvergeDelay(t *testing.T) {
-	if os.Getenv("LONG_TEST") == "" {
-		// this test will fail on go1.18 when -race is enabled as it requires more
-		// than 8128 goroutines. it works fine on go1.19 beta1.
-		t.Skip("Skipping long test")
-	}
+func TestGossipInSimulatedCluster(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	// start all services
 	configs := make([]Config, 0)
@@ -607,6 +601,7 @@ func TestGossipConvergeDelay(t *testing.T) {
 	for i := 0; i < 48; i++ {
 		cfg := Config{
 			FS:                  vfs.NewStrictMem(),
+			UUID:                uuid.New().String(),
 			DeploymentID:        1,
 			RTTMillisecond:      5,
 			DataDir:             fmt.Sprintf("data-%d", i),
@@ -655,18 +650,19 @@ func TestGossipConvergeDelay(t *testing.T) {
 		require.NoError(t, services[i*3+2].store.startReplica(shardID, r3, replicas, false))
 	}
 	wait := func() {
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 	// check & wait all leaders to be elected and known to all services
 	cci := uint64(0)
-	for retry := 0; retry < 500; retry++ {
-		done := true
+	iterations := 1000
+	for retry := 0; retry < iterations; retry++ {
+		notReady := 0
 		for i := 0; i < 48; i++ {
 			shardID := uint64(i/3 + 1)
 			service := services[i]
 			info, ok := service.getShardInfo(shardID)
 			if !ok || info.LeaderID == 0 {
-				done = false
+				notReady++
 				wait()
 				break
 			}
@@ -674,31 +670,45 @@ func TestGossipConvergeDelay(t *testing.T) {
 				cci = info.Epoch
 			}
 		}
-		if done {
+		if notReady <= 1 {
 			break
 		}
-		require.True(t, retry < 499)
+		require.True(t, retry < iterations-1)
 	}
 	require.True(t, cci != 0)
 	// all good now, add a replica to shard 1
 	id += 1
-	require.NoError(t, services[0].store.addReplica(1, id, services[3].ID(), cci))
+
+	for i := 0; i < iterations; i++ {
+		err := services[0].store.addReplica(1, id, services[3].ID(), cci)
+		if err == nil {
+			break
+		} else if err == dragonboat.ErrTimeout || err == dragonboat.ErrSystemBusy ||
+			err == dragonboat.ErrInvalidDeadline {
+			wait()
+			continue
+		} else if err == dragonboat.ErrRejected {
+			break
+		}
+		t.Fatalf("failed to add replica, %v", err)
+	}
+
 	// check the above change can be observed by all services
-	for retry := 0; retry < 500; retry++ {
-		done := true
+	for retry := 0; retry < iterations; retry++ {
+		notReady := 0
 		for i := 0; i < 48; i++ {
 			service := services[i]
 			info, ok := service.getShardInfo(1)
 			if !ok || info.LeaderID == 0 || len(info.Replicas) != 4 {
-				done = false
+				notReady++
 				wait()
 				break
 			}
 		}
-		if done {
+		if notReady <= 1 {
 			break
 		}
-		require.True(t, retry < 499)
+		require.True(t, retry < iterations-1)
 	}
 	// restart a service, watch how long will it take to get all required
 	// shard info
@@ -710,20 +720,20 @@ func TestGossipConvergeDelay(t *testing.T) {
 	defer func() {
 		require.NoError(t, service.Close())
 	}()
-	for retry := 0; retry < 500; retry++ {
-		done := true
+	for retry := 0; retry < iterations; retry++ {
+		notReady := 0
 		for i := uint64(0); i < 16; i++ {
 			shardID := i + 1
 			info, ok := service.getShardInfo(shardID)
 			if !ok || info.LeaderID == 0 {
-				done = false
+				notReady++
 				wait()
 				break
 			}
 		}
-		if done {
+		if notReady <= 1 {
 			break
 		}
-		require.True(t, retry < 499)
+		require.True(t, retry < iterations-1)
 	}
 }
