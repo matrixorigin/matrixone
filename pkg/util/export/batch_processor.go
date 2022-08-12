@@ -29,7 +29,7 @@ import (
 
 const defaultQueueSize = 262144 // queue mem cost = 2MB
 
-// bufferHolder
+// bufferHolder hold ItemBuffer content, handle buffer's new/flush/reset/reminder(base on timer) operations.
 type bufferHolder struct {
 	// name like a type
 	name string
@@ -90,32 +90,28 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 	}
 }
 
-// Stop set bufferHolder readonly, and hold Add request
-func (b *bufferHolder) Stop() bool {
+// StopAndGetBatch set bufferHolder readonly, which can hold Add request,
+// and gen batch request content
+func (b *bufferHolder) StopAndGetBatch(buf *bytes.Buffer) bool {
 	b.mux.RLock()
 	defer b.mux.RUnlock()
 	if !atomic.CompareAndSwapUint32(&b.readonly, READWRITE, READONLY) {
 		return false
 	}
 	b.trigger.Stop()
+	batch := b.buffer.GetBatch(buf)
+	b.batch = &batch
 	return true
 }
 
+// StopTrigger stop buffer's Reminder
 func (b *bufferHolder) StopTrigger() bool {
 	b.mux.Lock()
 	defer b.mux.Unlock()
 	return b.trigger.Stop()
 }
 
-func (b *bufferHolder) GetBatch(buf *bytes.Buffer) (any, bool) {
-	b.mux.Lock()
-	defer b.mux.Unlock()
-	if atomic.LoadUint32(&b.readonly) != READONLY {
-		return nil, false
-	}
-	return b.buffer.GetBatch(buf), true
-}
-
+// FlushAndReset handle batch request, and reset buffer after finish batch request.
 func (b *bufferHolder) FlushAndReset() bool {
 	b.mux.Lock()
 	defer b.mux.Unlock()
@@ -184,6 +180,7 @@ func (c *MOCollector) Collect(ctx context.Context, i batchpipe.HasName) error {
 	return nil
 }
 
+// Start all goroutine worker, including collector, generator, and exporter
 func (c *MOCollector) Start() bool {
 	if atomic.LoadUint32(&c.started) != 0 {
 		return false
@@ -297,17 +294,16 @@ loop:
 }
 
 func (c *MOCollector) genBatch(holder *bufferHolder, buf *bytes.Buffer) {
-	if ok := holder.Stop(); !ok {
+	if ok := holder.StopAndGetBatch(buf); !ok {
 		logutil.Debugf("genBatch: buffer %s: already stop", holder.name)
 		return
-	}
-	if batch, ok := holder.GetBatch(buf); ok {
-		holder.batch = &batch
 	}
 }
 
 func (c *MOCollector) handleBatch(holder *bufferHolder) {
-	holder.FlushAndReset()
+	if ok := holder.FlushAndReset(); !ok {
+		logutil.Debugf("handleBatch: buffer %s: already reset", holder.name)
+	}
 }
 
 func (c *MOCollector) Stop(graceful bool) error {

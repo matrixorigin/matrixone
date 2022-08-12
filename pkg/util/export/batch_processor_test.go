@@ -18,13 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errors"
 
@@ -164,11 +164,12 @@ func Test_newBufferHolder(t *testing.T) {
 			if !ok {
 				break
 			}
-			b.Stop()
-			if val, ok := b.GetBatch(byteBuf); !ok {
+			if ok := b.StopAndGetBatch(byteBuf); !ok {
 				t.Errorf("GenBatch failed by in readwrite mode")
 			} else {
-				ch <- val.(string)
+				content := b.batch
+				b.batch = nil // aim to ignore FlushAndReset process
+				ch <- (*content).(string)
 			}
 			signalAcceptable.Add(1) // init started-lock
 		}
@@ -230,7 +231,7 @@ func Test_newBufferHolder(t *testing.T) {
 			if got != tt.wantReminder {
 				t.Errorf("newBufferHolder() = %v, want %v", got, tt.wantReminder)
 			}
-			buf.Stop()
+			buf.StopAndGetBatch(new(bytes.Buffer))
 		})
 	}
 	//signalAcceptable.Done() // release started-lock
