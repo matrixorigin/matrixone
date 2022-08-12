@@ -15,6 +15,7 @@
 package types
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"golang.org/x/exp/constraints"
@@ -126,8 +127,7 @@ func (ts TS) GreaterEq(rhs TS) bool {
 }
 
 func (ts TS) ToString() (s string) {
-	s = string(ts[:])
-	return
+	return fmt.Sprintf("%d-%d", encoding.DecodeInt64(ts[4:12]), encoding.DecodeUint32(ts[:4]))
 }
 
 func (ts TS) ToSlice() (s []byte) {
