@@ -24,7 +24,8 @@ import (
 )
 
 func TestEval(t *testing.T) {
-	view := NewBlockView(123455)
+	var zeroV types.TS
+	view := NewBlockView(zeroV.Next().Next())
 	colTypes := types.MockColTypes(14)
 	rows := 64
 	bat := containers.MockBatch(colTypes, rows, 3, nil)

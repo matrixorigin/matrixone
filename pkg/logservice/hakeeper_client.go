@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -220,6 +221,47 @@ type hakeeperClient struct {
 
 func newHAKeeperClient(ctx context.Context,
 	cfg HAKeeperClientConfig) (*hakeeperClient, error) {
+	client, err := connectToHAKeeper(ctx, cfg.ServiceAddresses, cfg)
+	if client != nil && err == nil {
+		return client, nil
+	}
+	if len(cfg.DiscoveryAddress) > 0 {
+		return connectByReverseProxy(ctx, cfg.DiscoveryAddress, cfg)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, ErrNotHAKeeper
+}
+
+func connectByReverseProxy(ctx context.Context,
+	discoveryAddress string, cfg HAKeeperClientConfig) (*hakeeperClient, error) {
+	si, ok, err := GetShardInfo(discoveryAddress, hakeeper.DefaultHAKeeperShardID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	addresses := make([]string, 0)
+	leaderAddress, ok := si.Replicas[si.ReplicaID]
+	if ok {
+		addresses = append(addresses, leaderAddress)
+	}
+	for replicaID, address := range si.Replicas {
+		if replicaID != si.ReplicaID {
+			addresses = append(addresses, address)
+		}
+	}
+	return connectToHAKeeper(ctx, addresses, cfg)
+}
+
+func connectToHAKeeper(ctx context.Context,
+	targets []string, cfg HAKeeperClientConfig) (*hakeeperClient, error) {
+	if len(targets) == 0 {
+		return nil, nil
+	}
+
 	pool := &sync.Pool{}
 	pool.New = func() interface{} {
 		return &RPCRequest{pool: pool}
@@ -234,8 +276,8 @@ func newHAKeeperClient(ctx context.Context,
 		respPool: respPool,
 	}
 	var e error
-	addresses := append([]string{}, cfg.ServiceAddresses...)
-	rand.Shuffle(len(cfg.ServiceAddresses), func(i, j int) {
+	addresses := append([]string{}, targets...)
+	rand.Shuffle(len(addresses), func(i, j int) {
 		addresses[i], addresses[j] = addresses[j], addresses[i]
 	})
 	for _, addr := range addresses {
@@ -283,13 +325,13 @@ func (c *hakeeperClient) getClusterDetails(ctx context.Context) (pb.ClusterDetai
 	if err != nil {
 		return pb.ClusterDetails{}, err
 	}
-	return resp.ClusterDetails, nil
+	return *resp.ClusterDetails, nil
 }
 
 func (c *hakeeperClient) sendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) error {
 	req := pb.Request{
 		Method:      pb.CN_HEARTBEAT,
-		CNHeartbeat: hb,
+		CNHeartbeat: &hb,
 	}
 	_, err := c.sendHeartbeat(ctx, req)
 	return err
@@ -299,7 +341,7 @@ func (c *hakeeperClient) sendDNHeartbeat(ctx context.Context,
 	hb pb.DNStoreHeartbeat) (pb.CommandBatch, error) {
 	req := pb.Request{
 		Method:      pb.DN_HEARTBEAT,
-		DNHeartbeat: hb,
+		DNHeartbeat: &hb,
 	}
 	return c.sendHeartbeat(ctx, req)
 }
@@ -308,7 +350,7 @@ func (c *hakeeperClient) sendLogHeartbeat(ctx context.Context,
 	hb pb.LogStoreHeartbeat) (pb.CommandBatch, error) {
 	req := pb.Request{
 		Method:       pb.LOG_HEARTBEAT,
-		LogHeartbeat: hb,
+		LogHeartbeat: &hb,
 	}
 	cb, err := c.sendHeartbeat(ctx, req)
 	if err != nil {
@@ -326,7 +368,10 @@ func (c *hakeeperClient) sendHeartbeat(ctx context.Context,
 	if err != nil {
 		return pb.CommandBatch{}, err
 	}
-	return resp.CommandBatch, nil
+	if resp.CommandBatch == nil {
+		return pb.CommandBatch{}, nil
+	}
+	return *resp.CommandBatch, nil
 }
 
 func (c *hakeeperClient) checkIsHAKeeper(ctx context.Context) (bool, error) {

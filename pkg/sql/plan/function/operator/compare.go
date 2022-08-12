@@ -16,53 +16,22 @@ package operator
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/compare"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
 
+type compareT interface {
+	constraints.Integer | constraints.Float | bool |
+		types.Date | types.Datetime | types.Timestamp
+}
+
 var boolType = types.T_bool.ToType()
-
-type CompEq[T constraints.Integer | constraints.Float] struct{}
-type CompGe[T constraints.Integer | constraints.Float] struct{}
-type CompGt[T constraints.Integer | constraints.Float] struct{}
-type CompLe[T constraints.Integer | constraints.Float] struct{}
-type CompLt[T constraints.Integer | constraints.Float] struct{}
-type CompNe[T constraints.Integer | constraints.Float] struct{}
-
-type CompOp[T constraints.Integer | constraints.Float] interface {
-	CompEq[T] | CompGe[T] | CompGt[T] | CompLe[T] | CompLt[T] | CompNe[T]
-	Eval(a, b T) bool
-}
-
-func (c CompEq[T]) Eval(a, b T) bool {
-	return a == b
-}
-
-func (c CompGe[T]) Eval(a, b T) bool {
-	return a >= b
-}
-
-func (c CompGt[T]) Eval(a, b T) bool {
-	return a > b
-}
-
-func (c CompLe[T]) Eval(a, b T) bool {
-	return a <= b
-}
-
-func (c CompLt[T]) Eval(a, b T) bool {
-	return a < b
-}
-
-func (c CompNe[T]) Eval(a, b T) bool {
-	return a != b
-}
 
 func handleScalarNull(v1, v2 *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if v1.IsScalarNull() {
@@ -83,168 +52,115 @@ func allocateBoolVector(length int, proc *process.Process) *vector.Vector {
 	return vec
 }
 
-func CompareOrdered[T constraints.Integer | constraints.Float, C CompOp[T]](c C, vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	v1, v2 := vs[0], vs[1]
-	col1, col2 := vector.MustTCols[T](v1), vector.MustTCols[T](v2)
-	if v1.IsScalarNull() || v2.IsScalarNull() {
-		return handleScalarNull(v1, v2, proc)
+type compareFn func(v1, v2, r *vector.Vector) error
+
+func CompareOrdered(vs []*vector.Vector, proc *process.Process, cfn compareFn) (*vector.Vector, error) {
+	left, right := vs[0], vs[1]
+
+	if left.IsScalarNull() || right.IsScalarNull() {
+		return handleScalarNull(left, right, proc)
 	}
 
-	if v1.IsScalar() && v2.IsScalar() {
-		vec := proc.AllocScalarVector(boolType)
-		vec.Col = make([]bool, 1)
-		vec.Col.([]bool)[0] = c.Eval(col1[0], col2[0])
-		return vec, nil
-	}
-
-	if v1.IsScalar() {
-		val1 := col1[0]
-		length := vector.Length(v2)
-		vec := allocateBoolVector(length, proc)
-		veccol := vec.Col.([]bool)
-		for i := range veccol {
-			veccol[i] = c.Eval(val1, col2[i])
+	if left.IsScalar() && right.IsScalar() {
+		resultVector := proc.AllocScalarVector(boolType)
+		if err := cfn(left, right, resultVector); err != nil {
+			return nil, err
 		}
-		nulls.Or(v2.Nsp, nil, vec.Nsp)
-		return vec, nil
+		return resultVector, nil
 	}
 
-	if v2.IsScalar() {
-		val2 := col2[0]
-		length := vector.Length(v1)
-		vec := allocateBoolVector(length, proc)
-		veccol := vec.Col.([]bool)
-		for i := range veccol {
-			veccol[i] = c.Eval(col1[i], val2)
-		}
-		nulls.Or(v1.Nsp, nil, vec.Nsp)
-		return vec, nil
+	length := vector.Length(left)
+	if left.IsScalar() {
+		length = vector.Length(right)
 	}
+	resultVector := allocateBoolVector(length, proc)
+	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
 
-	// Vec Vec
-	length := vector.Length(v1)
-	vec := allocateBoolVector(length, proc)
-	veccol := vec.Col.([]bool)
-	for i := range veccol {
-		veccol[i] = c.Eval(col1[i], col2[i])
+	if err := cfn(left, right, resultVector); err != nil {
+		return nil, err
 	}
-	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
-	return vec, nil
+	return resultVector, nil
 }
 
-type compFnType interface {
-	bool | types.Decimal64 | types.Decimal128
+// Equal compare operator
+func EqGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareOrdered(args, proc, compare.NumericEqual[T])
 }
 
-type compFn[T compFnType] func(v1, v2 T, s1, s2 int32) bool
-
-func CompareWithFn[T compFnType](vs []*vector.Vector, fn compFn[T], proc *process.Process) (*vector.Vector, error) {
-	v1, v2 := vs[0], vs[1]
-
-	col1, col2 := vector.MustTCols[T](v1), vector.MustTCols[T](v2)
-	if v1.IsScalarNull() || v2.IsScalarNull() {
-		return handleScalarNull(v1, v2, proc)
-	}
-
-	if v1.IsScalar() && v2.IsScalar() {
-		vec := proc.AllocScalarVector(boolType)
-		vec.Col = make([]bool, 1)
-		vec.Col.([]bool)[0] = fn(col1[0], col2[0], v1.Typ.Scale, v2.Typ.Scale)
-		return vec, nil
-	}
-
-	if v1.IsScalar() {
-		val1 := col1[0]
-		length := vector.Length(v2)
-		vec := allocateBoolVector(length, proc)
-		veccol := vec.Col.([]bool)
-		for i := range veccol {
-			veccol[i] = fn(val1, col2[i], v1.Typ.Scale, v2.Typ.Scale)
-		}
-		nulls.Or(v2.Nsp, nil, vec.Nsp)
-		return vec, nil
-	}
-
-	if v2.IsScalar() {
-		val2 := col2[0]
-		length := vector.Length(v1)
-		vec := allocateBoolVector(length, proc)
-		veccol := vec.Col.([]bool)
-		for i := range veccol {
-			veccol[i] = fn(col1[i], val2, v1.Typ.Scale, v2.Typ.Scale)
-		}
-		nulls.Or(v1.Nsp, nil, vec.Nsp)
-		return vec, nil
-	}
-
-	// Vec Vec
-	length := vector.Length(v1)
-	vec := allocateBoolVector(length, proc)
-	veccol := vec.Col.([]bool)
-	for i := range veccol {
-		veccol[i] = fn(col1[i], col2[i], v1.Typ.Scale, v2.Typ.Scale)
-	}
-	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
-	return vec, nil
+func EqDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareOrdered(args, proc, compare.Decimal64VecEq)
 }
 
-func CompareDecimal64Eq(v1, v2 types.Decimal64, s1, s2 int32) bool {
-	return types.CompareDecimal64Decimal64(v1, v2, s1, s2) == 0
-}
-func CompareDecimal64Le(v1, v2 types.Decimal64, s1, s2 int32) bool {
-	return types.CompareDecimal64Decimal64(v1, v2, s1, s2) <= 0
-}
-func CompareDecimal64Lt(v1, v2 types.Decimal64, s1, s2 int32) bool {
-	return types.CompareDecimal64Decimal64(v1, v2, s1, s2) < 0
-}
-func CompareDecimal64Ge(v1, v2 types.Decimal64, s1, s2 int32) bool {
-	return types.CompareDecimal64Decimal64(v1, v2, s1, s2) >= 0
-}
-func CompareDecimal64Gt(v1, v2 types.Decimal64, s1, s2 int32) bool {
-	return types.CompareDecimal64Decimal64(v1, v2, s1, s2) > 0
-}
-func CompareDecimal64Ne(v1, v2 types.Decimal64, s1, s2 int32) bool {
-	return types.CompareDecimal64Decimal64(v1, v2, s1, s2) != 0
+func EqDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareOrdered(args, proc, compare.Decimal128VecEq)
 }
 
-func CompareDecimal128Eq(v1, v2 types.Decimal128, s1, s2 int32) bool {
-	return types.CompareDecimal128Decimal128(v1, v2, s1, s2) == 0
-}
-func CompareDecimal128Le(v1, v2 types.Decimal128, s1, s2 int32) bool {
-	return types.CompareDecimal128Decimal128(v1, v2, s1, s2) <= 0
-}
-func CompareDecimal128Lt(v1, v2 types.Decimal128, s1, s2 int32) bool {
-	return types.CompareDecimal128Decimal128(v1, v2, s1, s2) < 0
-}
-func CompareDecimal128Ge(v1, v2 types.Decimal128, s1, s2 int32) bool {
-	return types.CompareDecimal128Decimal128(v1, v2, s1, s2) >= 0
-}
-func CompareDecimal128Gt(v1, v2 types.Decimal128, s1, s2 int32) bool {
-	return types.CompareDecimal128Decimal128(v1, v2, s1, s2) > 0
-}
-func CompareDecimal128Ne(v1, v2 types.Decimal128, s1, s2 int32) bool {
-	return types.CompareDecimal128Decimal128(v1, v2, s1, s2) != 0
+// Not Equal compare operator
+func NeGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareOrdered(args, proc, compare.NumericNotEqual[T])
 }
 
-func CompareBoolEq(v1, v2 bool, s1, s2 int32) bool {
-	return v1 == v2
-}
-func CompareBoolLe(v1, v2 bool, s1, s2 int32) bool {
-	return (!v1) || v2
-}
-func CompareBoolLt(v1, v2 bool, s1, s2 int32) bool {
-	return (!v1) && v2
-}
-func CompareBoolGe(v1, v2 bool, s1, s2 int32) bool {
-	return v1 || (!v2)
-}
-func CompareBoolGt(v1, v2 bool, s1, s2 int32) bool {
-	return v1 && (!v2)
-}
-func CompareBoolNe(v1, v2 bool, s1, s2 int32) bool {
-	return v1 != v2
+func NeDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareOrdered(args, proc, compare.Decimal64VecNe)
 }
 
+func NeDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareOrdered(args, proc, compare.Decimal128VecNe)
+}
+
+// Great than operator
+func GtGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareOrdered(args, proc, compare.NumericGreatThan[T])
+}
+
+func GtDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareOrdered(args, proc, compare.Decimal64VecGt)
+}
+
+func GtDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareOrdered(args, proc, compare.Decimal128VecGt)
+}
+
+// Great equal operator
+func GeGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareOrdered(args, proc, compare.NumericGreatEqual[T])
+}
+
+func GeDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareOrdered(args, proc, compare.Decimal64VecGe)
+}
+
+func GeDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareOrdered(args, proc, compare.Decimal128VecGe)
+}
+
+// less than operator
+func LtGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareOrdered(args, proc, compare.NumericLessThan[T])
+}
+
+func LtDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareOrdered(args, proc, compare.Decimal64VecLt)
+}
+
+func LtDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareOrdered(args, proc, compare.Decimal128VecLt)
+}
+
+// less equal operator
+func LeGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareOrdered(args, proc, compare.NumericLessEqual[T])
+}
+
+func LeDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareOrdered(args, proc, compare.Decimal64VecLe)
+}
+
+func LeDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareOrdered(args, proc, compare.Decimal128VecLe)
+}
+
+// string compare
 type compStringFn func(v1, v2 []byte, s1, s2 int32) bool
 
 func CompareBytesEq(v1, v2 []byte, s1, s2 int32) bool {
@@ -313,126 +229,24 @@ func CompareString(vs []*vector.Vector, fn compStringFn, proc *process.Process) 
 	return vec, nil
 }
 
-func EqGeneral[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	var c CompEq[T]
-	return CompareOrdered[T](c, vs, proc)
-}
-
-func EqDecimal64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareWithFn(vs, CompareDecimal64Eq, proc)
-}
-
-func EqDecimal128(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareWithFn(vs, CompareDecimal128Eq, proc)
-}
-
-func EqBool(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareWithFn(vs, CompareBoolEq, proc)
-}
-
 func EqString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return CompareString(vs, CompareBytesEq, proc)
-}
-
-func LeGeneral[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	var c CompLe[T]
-	return CompareOrdered[T](c, vs, proc)
-}
-
-func LeDecimal64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareWithFn(vs, CompareDecimal64Le, proc)
-}
-
-func LeDecimal128(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareWithFn(vs, CompareDecimal128Le, proc)
-}
-
-func LeBool(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareWithFn(vs, CompareBoolLe, proc)
 }
 
 func LeString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return CompareString(vs, CompareBytesLe, proc)
 }
 
-func LtGeneral[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	var c CompLt[T]
-	return CompareOrdered[T](c, vs, proc)
-}
-
-func LtDecimal64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareWithFn(vs, CompareDecimal64Lt, proc)
-}
-
-func LtDecimal128(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareWithFn(vs, CompareDecimal128Lt, proc)
-}
-
-func LtBool(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareWithFn(vs, CompareBoolLt, proc)
-}
-
 func LtString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return CompareString(vs, CompareBytesLt, proc)
-}
-
-func GeGeneral[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	var c CompGe[T]
-	return CompareOrdered[T](c, vs, proc)
-}
-
-func GeDecimal64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareWithFn(vs, CompareDecimal64Ge, proc)
-}
-
-func GeDecimal128(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareWithFn(vs, CompareDecimal128Ge, proc)
-}
-
-func GeBool(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareWithFn(vs, CompareBoolGe, proc)
 }
 
 func GeString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return CompareString(vs, CompareBytesGe, proc)
 }
 
-func GtGeneral[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	var c CompGt[T]
-	return CompareOrdered[T](c, vs, proc)
-}
-
-func GtDecimal64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareWithFn(vs, CompareDecimal64Gt, proc)
-}
-
-func GtDecimal128(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareWithFn(vs, CompareDecimal128Gt, proc)
-}
-
-func GtBool(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareWithFn(vs, CompareBoolGt, proc)
-}
-
 func GtString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return CompareString(vs, CompareBytesGt, proc)
-}
-
-func NeGeneral[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	var c CompNe[T]
-	return CompareOrdered[T](c, vs, proc)
-}
-
-func NeDecimal64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareWithFn(vs, CompareDecimal64Ne, proc)
-}
-
-func NeDecimal128(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareWithFn(vs, CompareDecimal128Ne, proc)
-}
-
-func NeBool(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareWithFn(vs, CompareBoolNe, proc)
 }
 
 func NeString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {

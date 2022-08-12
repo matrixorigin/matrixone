@@ -14,12 +14,14 @@
 
 package file
 
+import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+
 type Segment interface {
 	Base
 	Name() string
 	OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (Block, error)
-	WriteTS(ts uint64) error
-	ReadTS() uint64
+	WriteTS(ts types.TS) error
+	ReadTS() types.TS
 	String() string
 	RemoveBlock(id uint64)
 }

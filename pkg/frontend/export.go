@@ -265,14 +265,14 @@ func exportDataToCSVFile(oq *outputQueue) error {
 						return err
 					}
 				} else {
-					oq.ResetLineStr()
+					oq.resetLineStr()
 					oq.lineStr = strconv.AppendInt(oq.lineStr, value, 10)
 					if err = formatOutputString(oq, oq.lineStr, symbol[i], closeby, flag[i]); err != nil {
 						return err
 					}
 				}
 			} else {
-				oq.ResetLineStr()
+				oq.resetLineStr()
 				oq.lineStr = strconv.AppendInt(oq.lineStr, value, 10)
 				if err = formatOutputString(oq, oq.lineStr, symbol[i], closeby, flag[i]); err != nil {
 					return err
@@ -283,7 +283,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 			if err != nil {
 				return err
 			}
-			oq.ResetLineStr()
+			oq.resetLineStr()
 			oq.lineStr = strconv.AppendFloat(oq.lineStr, value, 'f', 4, 64)
 			if err = formatOutputString(oq, oq.lineStr, symbol[i], closeby, flag[i]); err != nil {
 				return err
@@ -293,7 +293,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				if value, err := oq.mrs.GetUint64(0, i); err != nil {
 					return err
 				} else {
-					oq.ResetLineStr()
+					oq.resetLineStr()
 					oq.lineStr = strconv.AppendUint(oq.lineStr, value, 10)
 					if err = formatOutputString(oq, oq.lineStr, symbol[i], closeby, flag[i]); err != nil {
 						return err
@@ -303,7 +303,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				if value, err := oq.mrs.GetInt64(0, i); err != nil {
 					return err
 				} else {
-					oq.ResetLineStr()
+					oq.resetLineStr()
 					oq.lineStr = strconv.AppendInt(oq.lineStr, value, 10)
 					if err = formatOutputString(oq, oq.lineStr, symbol[i], closeby, flag[i]); err != nil {
 						return err

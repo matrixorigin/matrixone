@@ -27,8 +27,8 @@ type Block interface {
 	Base
 	Sync() error
 	// IsAppendable() bool
-	WriteTS(ts uint64) error
-	ReadTS() (uint64, error)
+	WriteTS(ts types.TS) error
+	ReadTS() (types.TS, error)
 	WriteRows(rows uint32) error
 	ReadRows() uint32
 
@@ -47,23 +47,23 @@ type Block interface {
 	// WriteColumn(colIdx int, ts uint64, data []byte, updates []byte) (common.IVFile, error)
 
 	// TODO: Remove later
-	WriteSnapshot(bat *containers.Batch, ts uint64, masks map[uint16]*roaring.Bitmap,
+	WriteSnapshot(bat *containers.Batch, ts types.TS, masks map[uint16]*roaring.Bitmap,
 		vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) error
-	WriteBatch(bat *containers.Batch, ts uint64) error
+	WriteBatch(bat *containers.Batch, ts types.TS) error
 	LoadBatch([]types.Type, []string, []bool, *containers.Options) (bat *containers.Batch, err error)
-	WriteColumnVec(ts uint64, colIdx int, vec containers.Vector) error
+	WriteColumnVec(ts types.TS, colIdx int, vec containers.Vector) error
 
 	Destroy() error
 }
 
 type ColumnBlock interface {
 	io.Closer
-	WriteTS(ts uint64) error
+	WriteTS(ts types.TS) error
 	WriteData(buf []byte) error
 	WriteIndex(idx int, buf []byte) error
 	WriteUpdates(buf []byte) error
 
-	ReadTS() uint64
+	ReadTS() types.TS
 	ReadData(buf []byte) error
 	ReadIndex(idx int, buf []byte) error
 	ReadUpdates(buf []byte) error

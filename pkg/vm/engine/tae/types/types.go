@@ -16,7 +16,9 @@ package types
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"golang.org/x/exp/constraints"
+	"math"
 )
 
 type TypeId = types.T
@@ -65,6 +67,92 @@ type Decimal64 = types.Decimal64
 type Decimal128 = types.Decimal128
 type Bytes = types.Bytes
 type Null struct{}
+
+// timestamp for transaction : physical time(high 8 bytes) + logical time(low 4 bytes)
+type TS [12]byte
+
+func (ts TS) IsEmpty() bool {
+	return encoding.DecodeInt64(ts[4:12]) == 0 &&
+		encoding.DecodeUint32(ts[:4]) == 0
+}
+
+func (ts TS) Equal(rhs TS) bool {
+	return ts == rhs
+}
+
+func (ts TS) Less(rhs TS) bool {
+	return encoding.DecodeInt64(ts[4:12]) < encoding.DecodeInt64(rhs[4:12]) ||
+		(encoding.DecodeInt64(ts[4:12]) == encoding.DecodeInt64(rhs[4:12]) &&
+			encoding.DecodeUint32(ts[:4]) < encoding.DecodeUint32(rhs[:4]))
+}
+
+func (ts TS) LessEq(rhs TS) bool {
+	return ts.Less(rhs) || ts.Equal(rhs)
+}
+
+func (ts TS) Greater(rhs TS) bool {
+	return encoding.DecodeInt64(ts[4:12]) > encoding.DecodeInt64(rhs[4:12]) ||
+		(encoding.DecodeInt64(ts[4:12]) == encoding.DecodeInt64(rhs[4:12]) &&
+			encoding.DecodeUint32(ts[:4]) > encoding.DecodeUint32(rhs[:4]))
+
+}
+
+func (ts TS) Prev() TS {
+	var rv TS
+	if encoding.DecodeUint32(ts[:4]) == 0 {
+		copy(rv[4:12], encoding.EncodeInt64(encoding.DecodeInt64(ts[4:12])-1))
+		copy(rv[:4], encoding.EncodeUint32(math.MaxUint32))
+		return rv
+	}
+	copy(rv[4:12], encoding.EncodeInt64(encoding.DecodeInt64(ts[4:12])))
+	copy(rv[:4], encoding.EncodeUint32(encoding.DecodeUint32(ts[:4])-1))
+	return rv
+}
+
+func (ts TS) Next() TS {
+	var rv TS
+	if encoding.DecodeUint32(ts[:4]) == math.MaxUint32 {
+		copy(rv[4:12], encoding.EncodeInt64(encoding.DecodeInt64(ts[4:12])+1))
+		copy(rv[:4], encoding.EncodeUint32(0))
+		return rv
+	}
+	copy(rv[4:12], encoding.EncodeInt64(encoding.DecodeInt64(ts[4:12])))
+	copy(rv[:4], encoding.EncodeUint32(encoding.DecodeUint32(ts[:4])+1))
+	return rv
+}
+
+func (ts TS) GreaterEq(rhs TS) bool {
+	return ts.Greater(rhs) || ts.Equal(rhs)
+}
+
+func (ts TS) ToString() (s string) {
+	s = string(ts[:])
+	return
+}
+
+func (ts TS) ToSlice() (s []byte) {
+	s = ts[:]
+	return
+}
+
+func StringToTS(s string) (ts TS) {
+	copy(ts[:], s)
+	return
+}
+
+func MaxTs() TS {
+	var rv TS
+	copy(rv[4:12], encoding.EncodeInt64(math.MaxInt64))
+	copy(rv[:4], encoding.EncodeUint32(math.MaxUint32))
+	return rv
+}
+
+var SystemDBTS TS
+
+func init() {
+	copy(SystemDBTS[4:12], encoding.EncodeInt64(1))
+	copy(SystemDBTS[:4], encoding.EncodeUint32(0))
+}
 
 var CompareDecimal128 = types.CompareDecimal128
 var FromClock = types.FromClock

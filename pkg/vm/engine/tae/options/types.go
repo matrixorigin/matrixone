@@ -15,6 +15,7 @@
 package options
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
@@ -43,4 +44,5 @@ type Options struct {
 	CheckpointCfg *CheckpointCfg `toml:"checkpoint-cfg"`
 	SchedulerCfg  *SchedulerCfg  `toml:"scheduler-cfg"`
 	Catalog       *catalog.Catalog
+	Clock         clock.Clock
 }
