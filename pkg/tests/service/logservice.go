@@ -159,7 +159,7 @@ func buildLogConfig(index int, opt Options, address serviceAddress) logservice.C
 	// setting hakeeper configuration
 	cfg.HAKeeperConfig.TickPerSecond = opt.hakeeper.tickPerSecond
 	cfg.HAKeeperConfig.LogStoreTimeout.Duration = opt.hakeeper.logStoreTimeout
-	cfg.HAKeeperConfig.DnStoreTimeout.Duration = opt.hakeeper.dnStoreTimeout
+	cfg.HAKeeperConfig.DNStoreTimeout.Duration = opt.hakeeper.dnStoreTimeout
 
 	// we must invoke Fill in order to setting default configruation value.
 	cfg.Fill()
