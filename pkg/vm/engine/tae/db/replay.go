@@ -59,6 +59,9 @@ func newReplayer(dataFactory *tables.DataFactory, db *DB) *Replayer {
 func (replayer *Replayer) PreReplayWal() {
 	processor := new(catalog.LoopProcessor)
 	processor.BlockFn = func(entry *catalog.BlockEntry) (err error) {
+		if !entry.IsActive() {
+			return nil
+		}
 		entry.InitData(replayer.DataFactory)
 		blkData := entry.GetBlockData()
 		replayer.OnTimeStamp(blkData.GetMaxCheckpointTS())
