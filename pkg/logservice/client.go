@@ -443,7 +443,7 @@ func (c *client) tsoRequest(ctx context.Context, count uint64) (uint64, error) {
 	req := pb.Request{
 		Method:  pb.TSO_UPDATE,
 		Timeout: int64(timeout),
-		TsoRequest: pb.TsoRequest{
+		TsoRequest: &pb.TsoRequest{
 			Count: count,
 		},
 	}

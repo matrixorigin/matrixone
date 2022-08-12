@@ -56,6 +56,7 @@ func Test_load(t *testing.T) {
 		eng := mock_frontend.NewMockTxnEngine(ctrl)
 		txn := mock_frontend.NewMockTxn(ctrl)
 		txn.EXPECT().GetCtx().Return(nil).AnyTimes()
+		txn.EXPECT().GetID().Return(uint64(0)).AnyTimes()
 		txn.EXPECT().Commit().Return(nil).AnyTimes()
 		txn.EXPECT().Rollback().Return(nil).AnyTimes()
 		txn.EXPECT().String().Return("txn0").AnyTimes()

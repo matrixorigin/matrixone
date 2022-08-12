@@ -83,7 +83,7 @@ func TestRawHistVec(t *testing.T) {
 		}
 
 		// wait Export complete
-		if err := waitTimeout(&dummyExp.WaitGroup, time.Second); err != nil {
+		if err := waitWgTimeout(&dummyExp.WaitGroup, time.Second); err != nil {
 			t.Errorf("rawHist send timeout")
 		}
 	})
@@ -136,7 +136,7 @@ func TestRawHistVec(t *testing.T) {
 		return
 	}
 
-	if err := waitTimeout(&dummyExp.WaitGroup, time.Second); err != nil {
+	if err := waitWgTimeout(&dummyExp.WaitGroup, time.Second); err != nil {
 		t.Errorf("rawHist send timeout")
 		return
 	}
@@ -198,7 +198,7 @@ func TestRawHistGather(t *testing.T) {
 	if err != nil {
 		t.Errorf("rawHist Gather err: %v", err)
 	}
-	if err := waitTimeout(&dumExp.WaitGroup, time.Second); err != nil {
+	if err := waitWgTimeout(&dumExp.WaitGroup, time.Second); err != nil {
 		t.Errorf("rawHist send timeout")
 		return
 	}
