@@ -764,6 +764,13 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_float64, types.T_int64},
 				ReturnTyp: types.T_float64, Fn: multi.FloorFloat64Int64,
 			},
+			{
+				Index:     6,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_decimal128},
+				ReturnTyp: types.T_decimal128, Fn: multi.FloorDecimal128,
+			},
 		},
 	},
 	LPAD: {
