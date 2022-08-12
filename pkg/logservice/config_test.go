@@ -170,7 +170,7 @@ func TestFillConfig(t *testing.T) {
 	assert.Equal(t, 0, len(c.GossipSeedAddresses))
 	assert.Equal(t, hakeeper.DefaultTickPerSecond, c.HAKeeperConfig.TickPerSecond)
 	assert.Equal(t, hakeeper.DefaultLogStoreTimeout, c.HAKeeperConfig.LogStoreTimeout.Duration)
-	assert.Equal(t, hakeeper.DefaultDnStoreTimeout, c.HAKeeperConfig.DnStoreTimeout.Duration)
+	assert.Equal(t, hakeeper.DefaultDNStoreTimeout, c.HAKeeperConfig.DNStoreTimeout.Duration)
 }
 
 func TestListenAddressCanBeFilled(t *testing.T) {
