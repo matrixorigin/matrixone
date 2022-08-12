@@ -19,13 +19,12 @@ import (
 	"context"
 	"fmt"
 	"runtime"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
+	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
@@ -33,8 +32,8 @@ const CHAN_CAPACITY = 10000
 
 type MetricCollector interface {
 	SendMetrics(context.Context, []*pb.MetricFamily) error
-	Start()
-	Stop() (<-chan struct{}, bool)
+	Start() bool
+	Stop(graceful bool) (<-chan struct{}, bool)
 }
 
 type collectorOpts struct {
@@ -89,14 +88,9 @@ func (x WithFlushInterval) ApplyTo(o *collectorOpts) {
 }
 
 type metricCollector struct {
-	ieFactory         func() ie.InternalExecutor
-	isRunning         int32
-	opts              collectorOpts
-	mfCh              chan *pb.MetricFamily
-	sqlCh             chan string
-	stopWg            sync.WaitGroup
-	sqlWorkerCancel   context.CancelFunc
-	mergeWorkerCancel context.CancelFunc
+	*bp.BaseBatchPipe[*pb.MetricFamily, string]
+	ieFactory func() ie.InternalExecutor
+	opts      collectorOpts
 }
 
 func newMetricCollector(factory func() ie.InternalExecutor, opts ...collectorOpt) MetricCollector {
@@ -107,166 +101,49 @@ func newMetricCollector(factory func() ie.InternalExecutor, opts ...collectorOpt
 	c := &metricCollector{
 		ieFactory: factory,
 		opts:      initOpts,
-		sqlCh:     make(chan string, CHAN_CAPACITY),
-		mfCh:      make(chan *pb.MetricFamily, CHAN_CAPACITY),
 	}
+	base := bp.NewBaseBatchPipe[*pb.MetricFamily, string](c, bp.PipeWithBatchWorkerNum(c.opts.sqlWorkerNum))
+	c.BaseBatchPipe = base
 	return c
 }
 
 func (c *metricCollector) SendMetrics(ctx context.Context, mfs []*pb.MetricFamily) error {
 	for _, mf := range mfs {
-		c.mfCh <- mf
+		if err := c.SendItem(mf); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func (c *metricCollector) Start() {
-	if atomic.SwapInt32(&c.isRunning, 1) == 1 {
-		return
-	}
-	c.startSqlWorker()
-	c.startMergeWorker()
-}
-
-func (c *metricCollector) Stop() (<-chan struct{}, bool) {
-	if atomic.SwapInt32(&c.isRunning, 0) == 0 {
-		return nil, false
-	}
-	c.sqlWorkerCancel()
-	c.mergeWorkerCancel()
-	stopCh := make(chan struct{})
-	go func() { c.stopWg.Wait(); close(stopCh) }()
-	return stopCh, true
-}
-
-func (c *metricCollector) startSqlWorker() {
-	ctx, cancel := context.WithCancel(context.Background())
-	c.sqlWorkerCancel = cancel
-	for i := 0; i < c.opts.sqlWorkerNum; i++ {
-		exec := c.ieFactory()
-		exec.ApplySessionOverride(ie.NewOptsBuilder().Database(METRIC_DB).Internal(true).Finish())
-		c.stopWg.Add(1)
-		go c.sqlWorker(ctx, exec)
-	}
-}
-
-func (c *metricCollector) startMergeWorker() {
-	ctx, cancel := context.WithCancel(context.Background())
-	c.mergeWorkerCancel = cancel
-	c.stopWg.Add(1)
-	go c.mergeWorker(ctx)
-}
-
-func (c *metricCollector) mergeWorker(ctx context.Context) {
-	defer c.stopWg.Done()
-	mfByNames := make(map[string]*mfset)
-	sqlbuf := new(bytes.Buffer)
-	reminder := newReminder()
-	defer reminder.CleanAll()
-
-	doFlush := func(name string, set *mfset) {
-		c.pushToSqlCh(set, sqlbuf)
-		set.reset()
-		reminder.Reset(name, c.opts.flushInterval)
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case mf := <-c.mfCh:
-			if isFullBatchRawHist(mf) {
-				c.pushToSqlCh(newMfset(mf), sqlbuf)
-				continue
-			}
-			name := mf.GetName()
-			entryMfs := mfByNames[name]
-			if entryMfs != nil {
-				entryMfs.add(mf)
-			} else {
-				entryMfs = newMfset(mf)
-				mfByNames[name] = entryMfs
-				reminder.Register(name, c.opts.flushInterval)
-			}
-			if entryMfs.shouldFlush(&c.opts) {
-				doFlush(name, entryMfs)
-			}
-		case name := <-reminder.C:
-			if entryMfs := mfByNames[name]; entryMfs != nil && entryMfs.rows > 0 {
-				doFlush(name, entryMfs)
-			} else {
-				reminder.Reset(name, c.opts.flushInterval)
-			}
+func (c *metricCollector) NewItemBatchHandler() func(batch string) {
+	exec := c.ieFactory()
+	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(metricDBConst).Internal(true).Finish())
+	return func(batch string) {
+		if err := exec.Exec(batch, ie.NewOptsBuilder().Finish()); err != nil {
+			logutil.Errorf("[Trace] insert error. sql: %s; err: %v", batch, err)
 		}
 	}
 }
 
-func (c *metricCollector) pushToSqlCh(set *mfset, buf *bytes.Buffer) {
-	if sql := set.getSql(buf); sql != "" {
-		c.sqlCh <- sql
-	}
-}
-
-func (c *metricCollector) sqlWorker(ctx context.Context, exec ie.InternalExecutor) {
-	defer c.stopWg.Done()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case sql := <-c.sqlCh:
-			if err := exec.Exec(sql, ie.NewOptsBuilder().Finish()); err != nil {
-				logutil.Errorf("[Metric] insert error. sql: %s; err: %v", sql, err)
-			}
-		}
-	}
-}
-
-type reminder struct {
-	registry map[string]*time.Timer
-	C        chan string
-}
-
-func newReminder() *reminder {
-	return &reminder{
-		registry: make(map[string]*time.Timer),
-		C:        make(chan string, CHAN_CAPACITY),
-	}
-}
-
-func (r *reminder) Register(name string, after time.Duration) {
-	if r.registry[name] != nil {
-		panic(fmt.Sprintf("%s already registered", name))
-	}
-	r.registry[name] = time.AfterFunc(after, func() { r.C <- name })
-}
-
-func (r *reminder) Reset(name string, after time.Duration) {
-	if t := r.registry[name]; t != nil {
-		t.Reset(after)
-	}
-}
-
-func (r *reminder) CleanAll() {
-	for _, timer := range r.registry {
-		timer.Stop()
+func (c *metricCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily, string] {
+	return &mfset{
+		Reminder:        bp.NewConstantClock(c.opts.flushInterval),
+		metricThreshold: c.opts.metricThreshold,
+		sampleThreshold: c.opts.sampleThreshold,
 	}
 }
 
 type mfset struct {
-	mfs  []*pb.MetricFamily
-	typ  pb.MetricType
-	rows int // how many rows it would take when flushing to db
+	bp.Reminder
+	mfs             []*pb.MetricFamily
+	typ             pb.MetricType
+	rows            int // how many buffered rows
+	metricThreshold int // haw many rows should be flushed as a batch
+	sampleThreshold int // treat rawhist samples differently because it has higher generate rate
 }
 
-func newMfset(mfs ...*pb.MetricFamily) *mfset {
-	set := &mfset{}
-	for _, mf := range mfs {
-		set.add(mf)
-	}
-	return set
-}
-
-func (s *mfset) add(mf *pb.MetricFamily) {
+func (s *mfset) Add(mf *pb.MetricFamily) {
 	if s.typ == mf.GetType() {
 		s.typ = mf.GetType()
 	}
@@ -281,28 +158,33 @@ func (s *mfset) add(mf *pb.MetricFamily) {
 	s.mfs = append(s.mfs, mf)
 }
 
-func (s *mfset) shouldFlush(opts *collectorOpts) bool {
+func (s *mfset) ShouldFlush() bool {
 	switch s.typ {
 	case pb.MetricType_COUNTER, pb.MetricType_GAUGE:
-		return s.rows > opts.metricThreshold
+		return s.rows > s.metricThreshold
 	case pb.MetricType_RAWHIST:
-		return s.rows > opts.sampleThreshold
+		return s.rows > s.sampleThreshold
 	default:
 		return false
 	}
 }
 
-func (s *mfset) reset() {
+func (s *mfset) Reset() {
 	s.mfs = s.mfs[:0]
 	s.typ = pb.MetricType_COUNTER // 0
 	s.rows = 0
+	s.RemindReset()
+}
+
+func (s *mfset) IsEmpty() bool {
+	return len(s.mfs) == 0
 }
 
 // getSql extracts a insert sql from a set of MetricFamily. the bytes.Buffer is
-// used to mitigate memory allocation. getSql assume there is at least one row in mfset
-func (s *mfset) getSql(buf *bytes.Buffer) string {
+// used to mitigate memory allocation
+func (s *mfset) GetBatch(buf *bytes.Buffer) string {
 	buf.Reset()
-	buf.WriteString(fmt.Sprintf("insert into %s.%s values ", METRIC_DB, s.mfs[0].GetName()))
+	buf.WriteString(fmt.Sprintf("insert into %s.%s values ", metricDBConst, s.mfs[0].GetName()))
 	lblsBuf := new(bytes.Buffer)
 	writeValues := func(t string, v float64, lbls string) {
 		buf.WriteString("(")
