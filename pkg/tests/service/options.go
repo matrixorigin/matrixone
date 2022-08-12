@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"go.uber.org/zap/zapcore"
+
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 )
 
 const (
@@ -45,7 +47,7 @@ const (
 	// default hakeeper configuration
 	defaultTickPerSecond   = 10
 	defaultLogStoreTimeout = 10 * time.Second
-	defaultDnStoreTimeout  = 10 * time.Second
+	defaultDNStoreTimeout  = 10 * time.Second
 	defaultCheckInterval   = 3 * time.Second
 
 	// default heartbeat configuration
@@ -128,7 +130,7 @@ func (opt *Options) validate() {
 		opt.hakeeper.logStoreTimeout = defaultLogStoreTimeout
 	}
 	if opt.hakeeper.dnStoreTimeout == 0 {
-		opt.hakeeper.dnStoreTimeout = defaultDnStoreTimeout
+		opt.hakeeper.dnStoreTimeout = defaultDNStoreTimeout
 	}
 	if opt.hakeeper.checkInterval == 0 {
 		opt.hakeeper.checkInterval = defaultCheckInterval
@@ -140,6 +142,17 @@ func (opt *Options) validate() {
 	}
 	if opt.dn.heartbeatInterval == 0 {
 		opt.dn.heartbeatInterval = defaultDNHeartbeatInterval
+	}
+}
+
+// BuildHAKeeperConfig returns hakeeper.Config
+//
+// We could check timeout for dn/log store via hakeeper.Config.
+func (opt Options) BuildHAKeeperConfig() hakeeper.Config {
+	return hakeeper.Config{
+		TickPerSecond:   opt.hakeeper.tickPerSecond,
+		LogStoreTimeout: opt.hakeeper.logStoreTimeout,
+		DNStoreTimeout:  opt.hakeeper.dnStoreTimeout,
 	}
 }
 

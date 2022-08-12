@@ -104,7 +104,7 @@ func TestParseDnStores(t *testing.T) {
 	// construct current tick in order to make heartbeat tick expired
 	cfg := hakeeper.Config{}
 	cfg.Fill()
-	currTick := cfg.ExpiredTick(expiredTick, cfg.DnStoreTimeout) + 1
+	currTick := cfg.ExpiredTick(expiredTick, cfg.DNStoreTimeout) + 1
 
 	dnState := pb.DNState{
 		Stores: map[string]pb.DNStoreInfo{
