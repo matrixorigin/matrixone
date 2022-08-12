@@ -23,6 +23,7 @@ import (
 )
 
 // case-when operator only support format like that
+//
 //	`
 //		case
 //		when A = a1 then ...
@@ -30,6 +31,7 @@ import (
 //		when A = a3 then ...
 //		(else ...)
 //	`
+//
 // format `case A when a1 then ... when a2 then ...` should be converted to required format.
 var (
 	CaseWhenUint8 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {

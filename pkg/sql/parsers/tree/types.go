@@ -53,7 +53,7 @@ type GeoMetadata struct {
 type PersistentUserDefinedTypeMetadata struct {
 }
 
-//for sql type
+// for sql type
 type InternalType struct {
 	//the group of types that are compatible with each other
 	Family       Family
@@ -175,7 +175,7 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 	}
 }
 
-//sql type
+// sql type
 type T struct {
 	InternalType InternalType
 }

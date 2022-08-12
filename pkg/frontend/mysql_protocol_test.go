@@ -53,6 +53,7 @@ type TestRoutineManager struct {
 
 func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
 	pro := NewMysqlClientProtocol(nextConnectionID(), rs, 1024, tRM.pu.SV)
+	pro.SetSkipCheckUser(true)
 	exe := NewMysqlCmdExecutor()
 	routine := NewRoutine(pro, exe, tRM.pu)
 
@@ -274,6 +275,7 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
 
 	rm := NewRoutineManager(pu)
+	rm.SetSkipCheckUser(true)
 
 	encoder, decoder := NewSqlCodec()
 
@@ -888,7 +890,7 @@ func makeMoreThan16MBResultSet() *MysqlResultSet {
 	return rs
 }
 
-//the size of resultset will be morethan 16MB
+// the size of resultset will be morethan 16MB
 func makeMoreThan16MBResult() *MysqlExecutionResult {
 	return NewMysqlExecutionResult(0, 0, 0, 0, makeMoreThan16MBResultSet())
 }
@@ -945,7 +947,7 @@ func make16MBRowResultSet() *MysqlResultSet {
 	return rs
 }
 
-//the size of resultset row will be more than 16MB
+// the size of resultset row will be more than 16MB
 func make16MBRowResult() *MysqlExecutionResult {
 	return NewMysqlExecutionResult(0, 0, 0, 0, make16MBRowResultSet())
 }
@@ -2004,6 +2006,7 @@ func Test_handleHandshake(t *testing.T) {
 		mp := &MysqlProtocolImpl{SV: SV}
 		mp.io = &IO
 		mp.tcpConn = ioses
+		mp.SetSkipCheckUser(true)
 		payload := []byte{'a'}
 		err := mp.handleHandshake(payload)
 		convey.So(err, convey.ShouldNotBeNil)
@@ -2034,6 +2037,7 @@ func Test_handleHandshake_Recover(t *testing.T) {
 		mp := &MysqlProtocolImpl{SV: SV}
 		mp.io = &IO
 		mp.tcpConn = ioses
+		mp.SetSkipCheckUser(true)
 		var payload []byte
 		for i := 0; i < count; i++ {
 			f.Fuzz(&payload)

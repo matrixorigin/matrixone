@@ -259,6 +259,15 @@ func castConstAsint64(srcColumn interface{}, columnType types.T, idx int) int64 
 		dstValue = int64(srcColumn.([]int32)[idx])
 	case types.T_int64:
 		dstValue = srcColumn.([]int64)[idx]
+	case types.T_float64:
+		fval := srcColumn.([]float64)[idx]
+		if fval > float64(math.MaxInt64) {
+			dstValue = math.MaxInt64
+		} else if fval < float64(math.MinInt64) {
+			dstValue = math.MinInt64
+		} else {
+			dstValue = int64(fval)
+		}
 	default:
 		dstValue = int64(0)
 	}

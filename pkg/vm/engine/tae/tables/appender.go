@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type blockAppender struct {
@@ -90,7 +91,10 @@ func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (err error) {
 			keysCtx.Start = 0
 			keysCtx.Count = bat.Length()
 			// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
-			_, err = appender.node.block.index.BatchUpsert(keysCtx, from, 0)
+
+			//_, err = appender.node.block.index.BatchUpsert(keysCtx, from, 0)
+			var zeroV types.TS
+			_, err = appender.node.block.index.BatchUpsert(keysCtx, from, zeroV)
 			if err != nil {
 				panic(err)
 			}

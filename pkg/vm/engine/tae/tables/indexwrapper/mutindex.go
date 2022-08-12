@@ -36,7 +36,8 @@ func NewMutableIndex(keyT types.Type) *mutableIndex {
 	}
 }
 
-func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int, ts uint64) (resp *index.BatchResp, err error) {
+func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx,
+	offset int, ts types.TS) (resp *index.BatchResp, err error) {
 	defer func() {
 		err = TranslateError(err)
 	}()
@@ -59,17 +60,18 @@ func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int, ts uint
 	return
 }
 
-func (idx *mutableIndex) HasDeleteFrom(key any, fromTs uint64) bool {
+func (idx *mutableIndex) HasDeleteFrom(key any, fromTs types.TS) bool {
 	return idx.deletes.HasDeleteFrom(key, fromTs)
 }
 
-func (idx *mutableIndex) IsKeyDeleted(key any, ts uint64) (deleted bool, existed bool) {
+func (idx *mutableIndex) IsKeyDeleted(key any, ts types.TS) (deleted bool, existed bool) {
 	return idx.deletes.IsKeyDeleted(key, ts)
 }
 
-func (idx *mutableIndex) GetMaxDeleteTS() uint64 { return idx.deletes.GetMaxTS() }
+func (idx *mutableIndex) GetMaxDeleteTS() types.TS { return idx.deletes.GetMaxTS() }
 
-func (idx *mutableIndex) RevertUpsert(keys containers.Vector, updatePositions, updateRows *roaring.Bitmap, ts uint64) (err error) {
+func (idx *mutableIndex) RevertUpsert(keys containers.Vector, updatePositions,
+	updateRows *roaring.Bitmap, ts types.TS) (err error) {
 	defer func() {
 		err = TranslateError(err)
 	}()
@@ -97,7 +99,7 @@ func (idx *mutableIndex) RevertUpsert(keys containers.Vector, updatePositions, u
 	return
 }
 
-func (idx *mutableIndex) Delete(key any, ts uint64) (err error) {
+func (idx *mutableIndex) Delete(key any, ts types.TS) (err error) {
 	defer func() {
 		err = TranslateError(err)
 	}()
@@ -130,7 +132,8 @@ func (idx *mutableIndex) String() string {
 	return idx.art.String()
 }
 func (idx *mutableIndex) Dedup(any) error { panic("implement me") }
-func (idx *mutableIndex) BatchDedup(keys containers.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
+func (idx *mutableIndex) BatchDedup(keys containers.Vector,
+	rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
 	keyselects, exist := idx.zonemap.ContainsAny(keys)
 	// 1. all keys are definitely not existed
 	if !exist {

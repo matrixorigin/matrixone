@@ -173,7 +173,7 @@ type tableDefImpl struct {
 	TableDef
 }
 
-//the list of table definitions
+// the list of table definitions
 type TableDefs []TableDef
 
 type ColumnTableDef struct {
@@ -206,7 +206,7 @@ func NewColumnTableDef(n *UnresolvedName, t ResolvableTypeReference, a []ColumnA
 	}
 }
 
-//column attribute
+// column attribute
 type ColumnAttribute interface {
 	NodeFormatter
 }
@@ -470,7 +470,7 @@ func NewKeyPart(c *UnresolvedName, l int, e Expr) *KeyPart {
 	}
 }
 
-//in reference definition
+// in reference definition
 type MatchType int
 
 func (node *MatchType) ToString() string {
@@ -1866,17 +1866,15 @@ func NewCreateRole(ife bool, r []*Role) *CreateRole {
 type Role struct {
 	NodeFormatter
 	UserName string
-	HostName string
 }
 
 func (node *Role) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.UserName)
 }
 
-func NewRole(u, h string) *Role {
+func NewRole(u string) *Role {
 	return &Role{
 		UserName: u,
-		HostName: h,
 	}
 }
 

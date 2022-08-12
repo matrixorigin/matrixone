@@ -45,7 +45,7 @@ func (tn *TableName) Catalog() Identifier {
 
 var _ TableExpr = &TableName{}
 
-//table name array
+// table name array
 type TableNames []*TableName
 
 func (node *TableNames) Format(ctx *FmtCtx) {

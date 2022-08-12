@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type immutableIndex struct {
@@ -31,11 +32,11 @@ func NewImmutableIndex() *immutableIndex {
 	return new(immutableIndex)
 }
 
-func (index *immutableIndex) IsKeyDeleted(any, uint64) (bool, bool)        { panic("not supported") }
-func (index *immutableIndex) GetActiveRow(any) (uint32, error)             { panic("not supported") }
-func (index *immutableIndex) Delete(any, uint64) error                     { panic("not supported") }
-func (index *immutableIndex) RevertUpsert(containers.Vector, uint64) error { panic("not supported") }
-func (index *immutableIndex) BatchUpsert(*index.KeysCtx, int, uint64) (*index.BatchResp, error) {
+func (index *immutableIndex) IsKeyDeleted(any, types.TS) (bool, bool)        { panic("not supported") }
+func (index *immutableIndex) GetActiveRow(any) (uint32, error)               { panic("not supported") }
+func (index *immutableIndex) Delete(any, types.TS) error                     { panic("not supported") }
+func (index *immutableIndex) RevertUpsert(containers.Vector, types.TS) error { panic("not supported") }
+func (index *immutableIndex) BatchUpsert(*index.KeysCtx, int, types.TS) (*index.BatchResp, error) {
 	panic("not supported")
 }
 
@@ -60,10 +61,11 @@ func (index *immutableIndex) Dedup(key any) (err error) {
 func (index *immutableIndex) String() string {
 	panic("implement me")
 }
-func (index *immutableIndex) GetMaxDeleteTS() uint64                    { panic("not supported") }
-func (index *immutableIndex) HasDeleteFrom(key any, fromTs uint64) bool { panic("not supported") }
+func (index *immutableIndex) GetMaxDeleteTS() types.TS                    { panic("not supported") }
+func (index *immutableIndex) HasDeleteFrom(key any, fromTs types.TS) bool { panic("not supported") }
 
-func (index *immutableIndex) BatchDedup(keys containers.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
+func (index *immutableIndex) BatchDedup(keys containers.Vector,
+	rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
 	keyselects, exist := index.zmReader.ContainsAny(keys)
 	// 1. all keys are not in [min, max]. definitely not
 	if !exist {

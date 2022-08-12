@@ -31,3 +31,7 @@
 | tracing       |
 +---------------+
 ```
+
+## **限制**
+
+MatrixOne 暂不支持 `SHOW TABLE STATUS`。
