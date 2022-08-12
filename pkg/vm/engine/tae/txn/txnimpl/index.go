@@ -82,7 +82,7 @@ func InsertOp[T comparable](input any, start, count int, fromRow uint32, dedupIn
 func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
 	vec := containers.MakeVector(kType, false)
 	switch kType.Oid {
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON, types.Type_BLOB:
 		for k := range idx.tree {
 			vec.Append([]byte(k.(string)))
 		}
@@ -180,7 +180,7 @@ func (idx *simpleTableIndex) BatchInsert(col containers.Vector, start, count int
 		return InsertOp[types.Timestamp](col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.Type_DATETIME:
 		return InsertOp[types.Datetime](col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON, types.Type_BLOB:
 		vs := col.Slice().(*containers.Bytes)
 		if dedupInput {
 			set := make(map[string]bool)
@@ -247,7 +247,7 @@ func (idx *simpleTableIndex) BatchDedup(col containers.Vector) error {
 		return DedupOp[types.Datetime](vals, idx.tree)
 	case types.Type_TIMESTAMP:
 		return DedupOp[types.Timestamp](vals, idx.tree)
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON, types.Type_BLOB:
 		vals := vals.(*containers.Bytes)
 		for i, s := range vals.Offset {
 			e := s + vals.Length[i]

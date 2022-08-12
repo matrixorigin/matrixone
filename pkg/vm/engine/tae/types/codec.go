@@ -132,7 +132,7 @@ func DecodeValue(val []byte, typ Type) any {
 		return DecodeFixed[Decimal64](val)
 	case Type_DECIMAL128:
 		return DecodeFixed[Decimal128](val)
-	case Type_CHAR, Type_VARCHAR:
+	case Type_CHAR, Type_VARCHAR, Type_BLOB:
 		return val
 	default:
 		panic("unsupported type")
@@ -173,7 +173,7 @@ func EncodeValue(val any, typ Type) []byte {
 		return EncodeFixed(val.(Timestamp))
 	case Type_DATETIME:
 		return EncodeFixed(val.(Datetime))
-	case Type_CHAR, Type_VARCHAR:
+	case Type_CHAR, Type_VARCHAR, Type_BLOB:
 		return val.([]byte)
 	default:
 		panic("unsupported type")

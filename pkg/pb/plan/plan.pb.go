@@ -913,7 +913,6 @@ func (m *Type) GetScale() int32 {
 type Const struct {
 	Isnull bool `protobuf:"varint,1,opt,name=isnull,proto3" json:"isnull,omitempty"`
 	// Types that are valid to be assigned to Value:
-	//
 	//	*Const_Ival
 	//	*Const_Dval
 	//	*Const_Sval
@@ -1728,7 +1727,6 @@ func (m *Function) GetArgs() []*Expr {
 type Expr struct {
 	Typ *Type `protobuf:"bytes,1,opt,name=typ,proto3" json:"typ,omitempty"`
 	// Types that are valid to be assigned to Expr:
-	//
 	//	*Expr_C
 	//	*Expr_P
 	//	*Expr_V
@@ -2450,7 +2448,6 @@ func (m *TableDef) GetDefs() []*TableDef_DefType {
 
 type TableDef_DefType struct {
 	// Types that are valid to be assigned to Def:
-	//
 	//	*TableDef_DefType_Pk
 	//	*TableDef_DefType_Idx
 	//	*TableDef_DefType_Properties
@@ -3507,10 +3504,9 @@ func (m *Query) GetHeadings() []string {
 }
 
 type TransationControl struct {
-	// TransationControl type
+	//TransationControl type
 	TclType TransationControl_TclType `protobuf:"varint,1,opt,name=tcl_type,json=tclType,proto3,enum=plan.TransationControl_TclType" json:"tcl_type,omitempty"`
 	// Types that are valid to be assigned to Action:
-	//
 	//	*TransationControl_Begin
 	//	*TransationControl_Commit
 	//	*TransationControl_Rollback
@@ -3760,7 +3756,6 @@ func (m *TransationRollback) GetCompletionType() TransationCompletionType {
 
 type Plan struct {
 	// Types that are valid to be assigned to Plan:
-	//
 	//	*Plan_Query
 	//	*Plan_Tcl
 	//	*Plan_Ddl
@@ -4021,10 +4016,9 @@ func (m *Column) GetColumn() []*Expr {
 }
 
 type DataControl struct {
-	// DataDefinition type
+	//DataDefinition type
 	DclType DataControl_DclType `protobuf:"varint,1,opt,name=dcl_type,json=dclType,proto3,enum=plan.DataControl_DclType" json:"dcl_type,omitempty"`
 	// Types that are valid to be assigned to Control:
-	//
 	//	*DataControl_SetVariables
 	//	*DataControl_Prepare
 	//	*DataControl_Execute
@@ -4145,14 +4139,13 @@ func (*DataControl) XXX_OneofWrappers() []interface{} {
 }
 
 type DataDefinition struct {
-	// DataDefinition type
+	//DataDefinition type
 	DdlType DataDefinition_DdlType `protobuf:"varint,1,opt,name=ddl_type,json=ddlType,proto3,enum=plan.DataDefinition_DdlType" json:"ddl_type,omitempty"`
-	// other show statement we will rewrite to a select statement
-	// then we will get a Query
-	// eg: 'show databases' will rewrite to 'select md.datname as `Database` from mo_database md'
+	//other show statement we will rewrite to a select statement
+	//then we will get a Query
+	//eg: 'show databases' will rewrite to 'select md.datname as `Database` from mo_database md'
 	Query *Query `protobuf:"bytes,2,opt,name=query,proto3" json:"query,omitempty"`
 	// Types that are valid to be assigned to Definition:
-	//
 	//	*DataDefinition_CreateDatabase
 	//	*DataDefinition_AlterDatabase
 	//	*DataDefinition_DropDatabase

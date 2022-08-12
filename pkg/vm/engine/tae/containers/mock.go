@@ -174,7 +174,7 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 			v2 := rand.Intn(math.MaxInt32) + 1
 			vec.Append(float64(v1) / float64(v2))
 		}
-	case types.Type_VARCHAR, types.Type_CHAR:
+	case types.Type_VARCHAR, types.Type_CHAR, types.Type_BLOB:
 		if unique {
 			for i := 0; i < rows; i++ {
 				s := fmt.Sprintf("%d-%d", i, 0)
