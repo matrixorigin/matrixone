@@ -126,11 +126,12 @@ func (s *numBuffer) GetBatch(buf *bytes.Buffer) any {
 }
 
 type dummyNumPipeImpl struct {
-	ch chan string
+	ch       chan string
+	duration time.Duration
 }
 
 func (n *dummyNumPipeImpl) NewItemBuffer(string) batchpipe.ItemBuffer[batchpipe.HasName, any] {
-	return &numBuffer{Reminder: batchpipe.NewConstantClock(100 * time.Millisecond), signal: signalFunc}
+	return &numBuffer{Reminder: batchpipe.NewConstantClock(n.duration), signal: signalFunc}
 }
 
 func (n *dummyNumPipeImpl) NewItemBatchHandler() func(any) {
@@ -148,14 +149,17 @@ func Test_newBufferHolder(t *testing.T) {
 		elemsReminder []*Num
 		interval      time.Duration
 	}
-	ch := make(chan string, 1)
+	ch := make(chan string)
 	byteBuf := new(bytes.Buffer)
 	signalC := make(chan *bufferHolder)
 	var signal = func(b *bufferHolder) {
 		signalC <- b
 	}
+	var signalAcceptable sync.WaitGroup
+	signalAcceptable.Add(1) // init started-lock
 	go func() {
 		for {
+			signalAcceptable.Wait()
 			b, ok := <-signalC
 			if !ok {
 				break
@@ -166,6 +170,7 @@ func Test_newBufferHolder(t *testing.T) {
 			} else {
 				ch <- val.(string)
 			}
+			signalAcceptable.Add(1) // init started-lock
 		}
 	}()
 	tests := []struct {
@@ -178,7 +183,7 @@ func Test_newBufferHolder(t *testing.T) {
 			name: "normal",
 			args: args{
 				name:          newNum(0),
-				impl:          &dummyNumPipeImpl{ch: ch},
+				impl:          &dummyNumPipeImpl{ch: ch, duration: 100 * time.Millisecond},
 				signal:        signal,
 				elems:         []*Num{newNum(1), newNum(2), newNum(3)},
 				elemsReminder: []*Num{newNum(4), newNum(5)},
@@ -191,7 +196,7 @@ func Test_newBufferHolder(t *testing.T) {
 			name: "emptyReminder",
 			args: args{
 				name:          newNum(0),
-				impl:          &dummyNumPipeImpl{ch: ch},
+				impl:          &dummyNumPipeImpl{ch: ch, duration: 100 * time.Millisecond},
 				signal:        signal,
 				elems:         []*Num{newNum(1), newNum(2), newNum(3)},
 				elemsReminder: []*Num{},
@@ -204,14 +209,20 @@ func Test_newBufferHolder(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			buf := newBufferHolder(tt.args.name, tt.args.impl, tt.args.signal)
+			signalAcceptable.Add(len(tt.args.elems)) // wait Add request
+			signalAcceptable.Done()                  // release started-lock
 			for _, v := range tt.args.elems {
+				signalAcceptable.Done() // done Add request
 				buf.Add(v)
 			}
 			got := <-ch
 			require.Equal(t, got, tt.want)
 			buf.FlushAndReset()
 
+			signalAcceptable.Add(len(tt.args.elemsReminder)) // wait Add request
+			signalAcceptable.Done()                          // release started-lock
 			for _, v := range tt.args.elemsReminder {
+				signalAcceptable.Done() // done Add request
 				buf.Add(v)
 			}
 			time.Sleep(tt.args.interval)
@@ -222,6 +233,7 @@ func Test_newBufferHolder(t *testing.T) {
 			buf.Stop()
 		})
 	}
+	//signalAcceptable.Done() // release started-lock
 	close(signalC)
 }
 
@@ -234,7 +246,7 @@ func TestNewMOCollector(t *testing.T) {
 	var acceptSignal = func() { <-signalC }
 	signalFunc = func() { signalC <- struct{}{} }
 
-	Register(newNum(0), &dummyNumPipeImpl{ch: ch})
+	Register(newNum(0), &dummyNumPipeImpl{ch: ch, duration: time.Hour})
 	collector := NewMOCollector()
 	collector.Start()
 
@@ -250,12 +262,10 @@ func TestNewMOCollector(t *testing.T) {
 	acceptSignal()
 	collector.Collect(DefaultContext(), newNum(5))
 	acceptSignal()
-	collector.Collect(DefaultContext(), newNum(6))
-	acceptSignal()
 	collector.Stop(true)
 	logutil.GetGlobalLogger().Sync()
 	got = <-ch
-	require.Equal(t, `(4),(5),(6)`, got)
+	require.Equal(t, `(4),(5)`, got)
 	for i := len(ch); i > 0; i-- {
 		got = <-ch
 		t.Logf("left ch: %s", got)
