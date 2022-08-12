@@ -17,8 +17,8 @@ package metric
 var initCollectors = []Collector{
 	SQLLatencyObserverFactory,
 	StatementCounterFactory,
-	ProcessCollector,
-	HardwareStatsCollector,
+	processCollector,
+	hardwareStatsCollector,
 }
 
 // register all defined collector here

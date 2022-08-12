@@ -10,6 +10,7 @@ show databases;
 Database
 mo_catalog
 information_schema
+system
 system_metrics
 new_database
 test01
@@ -29,6 +30,7 @@ show databases;
 Database
 mo_catalog
 information_schema
+system
 system_metrics
 new_database
 ABCDE

@@ -35,8 +35,8 @@ func withModifiedConfig(f func()) {
 	f()
 }
 
-// waitTimeout return a error if the WaitGroup doesn't return in timeout duration
-func waitTimeout(wg *sync.WaitGroup, after time.Duration) error {
+// waitWgTimeout returns an error if the WaitGroup doesn't return in timeout duration
+func waitWgTimeout(wg *sync.WaitGroup, after time.Duration) error {
 	c := make(chan struct{})
 	go func() {
 		defer close(c)
@@ -59,5 +59,5 @@ func makeDummyClock(startOffset int64) func() int64 {
 
 type dummySwitch struct{}
 
-func (dummySwitch) Start()                        {}
-func (dummySwitch) Stop() (<-chan struct{}, bool) { return nil, false }
+func (dummySwitch) Start() bool                                { return true }
+func (dummySwitch) Stop(graceful bool) (<-chan struct{}, bool) { return nil, false }

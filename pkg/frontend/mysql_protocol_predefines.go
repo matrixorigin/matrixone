@@ -10933,7 +10933,7 @@ var errorMsgRefer = map[uint16]errorMsgItem{
 	ER_GRP_RPL_RECOVERY_START_FALLBACK:                      {13472, []string{"HY000"}, "Due to some issue on the previous step distributed recovery is now executing: %s"},
 	ER_GRP_RPL_RECOVERY_START_NO_FALLBACK:                   {13473, []string{"HY000"}, "Due to a critical cloning error or lack of donors, distributed recovery cannot be executed. The member will now leave the group."},
 	ER_GRP_RPL_SLAVE_THREAD_ERROR_ON_CLONE:                  {13474, []string{"HY000"}, "The '%s' thread of channel '%s' will error out as the server will attempt to clone another server"},
-	ER_UNKNOWN_TABLE_IN_UPGRADE:                             {13475, []string{"HY000"}, "Unknown table '%-.129s'"},
+	ER_UNKNOWN_TABLE_IN_UPGRADE:                             {13475, []string{"42S02"}, "Unknown table '%-.129s'"},
 	ER_IDENT_CAUSES_TOO_LONG_PATH_IN_UPGRADE:                {13476, []string{"HY000"}, "Long database name and identifier for object resulted in path length exceeding %d characters. Path: '%s'."},
 	ER_XA_CANT_CREATE_MDL_BACKUP:                            {13477, []string{"HY000"}, "XA: Failed to take MDL Lock backup of PREPARED XA transaction during client disconnect."},
 	ER_AUDIT_LOG_SUPER_PRIVILEGE_REQUIRED:                   {13478, []string{"HY000"}, "SUPER privilege or AUDIT_ADMIN role required for '%s'@'%s' user."},
