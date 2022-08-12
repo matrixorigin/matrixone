@@ -550,6 +550,24 @@ func Decimal128ToInt64(xs []types.Decimal128, scale int32, rs []int64) ([]int64,
 	return rs, nil
 }
 
+func Decimal128ToInt32(xs []types.Decimal128, scale int32, rs []int32) ([]int32, error) {
+	for i, x := range xs {
+		xStr := x.ToStringWithScale(scale)
+		floatRepresentation, err := strconv.ParseFloat(xStr, 64)
+		if err != nil {
+			return []int32{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to INT correctly")
+		}
+
+		if floatRepresentation > math.MaxInt32 || floatRepresentation < math.MinInt32 {
+			return []int32{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to INT correctly")
+		}
+
+		result := int32(math.Round(floatRepresentation))
+		rs[i] = result
+	}
+	return rs, nil
+}
+
 func Decimal64ToUint64(xs []types.Decimal64, scale int32, rs []uint64) ([]uint64, error) {
 	for i, x := range xs {
 		xStr := x.ToStringWithScale(scale)
