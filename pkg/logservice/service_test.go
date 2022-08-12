@@ -148,7 +148,7 @@ func TestServiceHandleLogHeartbeat(t *testing.T) {
 		req := pb.Request{
 			Method:  pb.LOG_HEARTBEAT,
 			Timeout: int64(time.Second),
-			LogHeartbeat: pb.LogStoreHeartbeat{
+			LogHeartbeat: &pb.LogStoreHeartbeat{
 				UUID: "uuid1",
 			},
 		}
@@ -191,12 +191,12 @@ func TestServiceHandleCNHeartbeat(t *testing.T) {
 		req := pb.Request{
 			Method:  pb.CN_HEARTBEAT,
 			Timeout: int64(time.Second),
-			CNHeartbeat: pb.CNStoreHeartbeat{
+			CNHeartbeat: &pb.CNStoreHeartbeat{
 				UUID: "uuid1",
 			},
 		}
 		resp := s.handleCNHeartbeat(req)
-		assert.Equal(t, 0, len(resp.CommandBatch.Commands))
+		assert.Nil(t, resp.CommandBatch)
 		assert.Equal(t, pb.ErrorCode(0), resp.ErrorCode)
 	}
 	runServiceTest(t, true, true, fn)
@@ -207,7 +207,7 @@ func TestServiceHandleDNHeartbeat(t *testing.T) {
 		req := pb.Request{
 			Method:  pb.DN_HEARTBEAT,
 			Timeout: int64(time.Second),
-			DNHeartbeat: pb.DNStoreHeartbeat{
+			DNHeartbeat: &pb.DNStoreHeartbeat{
 				UUID: "uuid1",
 			},
 		}
@@ -431,7 +431,7 @@ func TestServiceTsoUpdate(t *testing.T) {
 		req := pb.Request{
 			Method:  pb.TSO_UPDATE,
 			Timeout: int64(time.Second),
-			TsoRequest: pb.TsoRequest{
+			TsoRequest: &pb.TsoRequest{
 				Count: 100,
 			},
 		}
@@ -536,7 +536,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	// see whether gossip can finish syncing in 6 seconds time. also added some
 	// logging to get collect more details
 	for i := 0; i < 6000; i++ {
-		si1, ok := service1.GetShardInfo(1)
+		si1, ok := service1.getShardInfo(1)
 		if !ok || si1.LeaderID != 1 {
 			plog.Errorf("shard 1 info missing on service 1")
 			time.Sleep(time.Millisecond)
@@ -549,7 +549,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		assert.Equal(t, nhID1, ri.UUID)
 		assert.Equal(t, cfg1.ServiceAddress, ri.ServiceAddress)
 
-		si2, ok := service1.GetShardInfo(2)
+		si2, ok := service1.getShardInfo(2)
 		if !ok || si2.LeaderID != 1 {
 			plog.Errorf("shard 2 info missing on service 1")
 			time.Sleep(time.Millisecond)
@@ -562,7 +562,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		assert.Equal(t, nhID2, ri.UUID)
 		assert.Equal(t, cfg2.ServiceAddress, ri.ServiceAddress)
 
-		si1, ok = service2.GetShardInfo(1)
+		si1, ok = service2.getShardInfo(1)
 		if !ok || si1.LeaderID != 1 {
 			plog.Errorf("shard 1 info missing on service 2")
 			time.Sleep(time.Millisecond)
@@ -575,7 +575,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		assert.Equal(t, nhID1, ri.UUID)
 		assert.Equal(t, cfg1.ServiceAddress, ri.ServiceAddress)
 
-		si2, ok = service2.GetShardInfo(2)
+		si2, ok = service2.getShardInfo(2)
 		if !ok || si2.LeaderID != 1 {
 			plog.Errorf("shard 2 info missing on service 2")
 			time.Sleep(time.Millisecond)
@@ -664,7 +664,7 @@ func TestGossipConvergeDelay(t *testing.T) {
 		for i := 0; i < 48; i++ {
 			shardID := uint64(i/3 + 1)
 			service := services[i]
-			info, ok := service.GetShardInfo(shardID)
+			info, ok := service.getShardInfo(shardID)
 			if !ok || info.LeaderID == 0 {
 				done = false
 				wait()
@@ -688,7 +688,7 @@ func TestGossipConvergeDelay(t *testing.T) {
 		done := true
 		for i := 0; i < 48; i++ {
 			service := services[i]
-			info, ok := service.GetShardInfo(1)
+			info, ok := service.getShardInfo(1)
 			if !ok || info.LeaderID == 0 || len(info.Replicas) != 4 {
 				done = false
 				wait()
@@ -714,7 +714,7 @@ func TestGossipConvergeDelay(t *testing.T) {
 		done := true
 		for i := uint64(0); i < 16; i++ {
 			shardID := i + 1
-			info, ok := service.GetShardInfo(shardID)
+			info, ok := service.getShardInfo(shardID)
 			if !ok || info.LeaderID == 0 {
 				done = false
 				wait()

@@ -16,6 +16,7 @@ package segmentio
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"path"
 	"strconv"
 	"strings"
@@ -66,7 +67,7 @@ type segmentFile struct {
 	sync.RWMutex
 	common.RefHelper
 	id     *common.ID
-	ts     uint64
+	ts     types.TS
 	blocks map[uint64]*blockFile
 	name   string
 	driver *Driver
@@ -152,14 +153,16 @@ func getColumnBlock(col int, block *blockFile) *columnBlock {
 	return cb
 }
 
-func getFileTs(name string) (ts uint64, err error) {
+func getFileTs(name string) (ts types.TS, err error) {
 	tmpName := strings.Split(name, ".")
 	fileName := strings.Split(tmpName[0], "_")
 	if len(fileName) > 2 {
-		ts, err = strconv.ParseUint(fileName[2], 10, 64)
-		if err != nil {
-			return 0, err
-		}
+		//ts, err = strconv.ParseUint(fileName[2], 10, 64)
+		//if err != nil {
+		//return 0, err
+		//}
+		ts = types.StringToTS(fileName[2])
+		return ts, nil
 	}
 	return ts, nil
 }
@@ -188,11 +191,20 @@ func (sf *segmentFile) Replay() error {
 		if err != nil {
 			return err
 		}
-		var ts uint64 = 0
+		//var ts uint64 = 0
+		var ts types.TS
+		var idx uint64
 		if len(info) > 2 {
-			ts, err = strconv.ParseUint(info[2], 10, 64)
-			if err != nil {
-				return err
+			//ts, err = strconv.ParseUint(info[2], 10, 64)
+			//if err != nil {
+			//	return err
+			//}
+			ts = types.StringToTS(info[2])
+			if fileName[1] == INDEX_SUFFIX {
+				idx, err = strconv.ParseUint(info[2], 10, 64)
+				if err != nil {
+					return err
+				}
 			}
 		}
 		if file.snode.GetCols() > uint32(len(bf.columns)) && fileName[1] != INDEX_SUFFIX {
@@ -203,47 +215,49 @@ func (sf *segmentFile) Replay() error {
 			if file.snode.GetIdxs() > uint32(len(bf.columns[col].indexes)) {
 				bf.columns[col].AddIndex(int(file.snode.GetIdxs()))
 			}
-			if len(bf.columns[col].data.file) == 0 || bf.columns[col].ts < ts {
+			if len(bf.columns[col].data.file) == 0 || bf.columns[col].ts.Less(ts) {
 				bf.columns[col].ts = ts
 				setFile(&bf.columns[col].data.file, file)
 				sf.replayInfo(bf.columns[col].data.stat, file)
 			}
-			if bf.ts <= ts {
+			if bf.ts.LessEq(ts) {
 				bf.ts = ts
 				bf.rows = file.GetInode().GetRows()
 			}
 		case UPDATE_SUFFIX:
-			if bf.ts <= ts {
+			if bf.ts.LessEq(ts) {
 				bf.ts = ts
 			}
-			var updateTs uint64 = 0
+			//var updateTs uint64 = 0
+			var updateTs types.TS
 			if len(bf.columns[col].updates.file) > 0 {
 				updateTs, err = getFileTs(bf.columns[col].updates.file[0].name)
 				if err != nil {
 					return err
 				}
 			}
-			if len(bf.columns[col].updates.file) == 0 || updateTs < ts {
+			if len(bf.columns[col].updates.file) == 0 || updateTs.Less(ts) {
 				setFile(&bf.columns[col].updates.file, file)
 				sf.replayInfo(bf.columns[col].updates.stat, file)
 			}
 		case DELETE_SUFFIX:
-			if bf.ts <= ts {
+			if bf.ts.LessEq(ts) {
 				bf.ts = ts
 			}
-			var delTs uint64 = 0
+			//var delTs uint64 = 0
+			var delTs types.TS
 			if len(bf.deletes.file) > 0 {
 				delTs, err = getFileTs(bf.deletes.file[0].name)
 				if err != nil {
 					return err
 				}
 			}
-			if len(bf.deletes.file) == 0 || delTs < ts {
+			if len(bf.deletes.file) == 0 || delTs.Less(ts) {
 				setFile(&bf.deletes.file, file)
 				sf.replayInfo(bf.deletes.stat, file)
 			}
 		case INDEX_SUFFIX:
-			if ts == 0 && len(info) < 3 {
+			if idx == 0 && len(info) < 3 {
 				setFile(&bf.indexMeta.file, file)
 				sf.replayInfo(bf.indexMeta.stat, file)
 				break
@@ -254,8 +268,8 @@ func (sf *segmentFile) Replay() error {
 			if file.snode.GetIdxs() > uint32(len(bf.columns[col].indexes)) {
 				bf.columns[col].AddIndex(int(file.snode.GetIdxs()))
 			}
-			setFile(&bf.columns[col].indexes[ts].dataFile.file, file)
-			sf.replayInfo(bf.columns[col].indexes[ts].dataFile.stat, file)
+			setFile(&bf.columns[col].indexes[idx].dataFile.file, file)
+			sf.replayInfo(bf.columns[col].indexes[idx].dataFile.stat, file)
 		default:
 			panic(any("No Support"))
 		}
@@ -296,12 +310,12 @@ func (sf *segmentFile) OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (b
 	return
 }
 
-func (sf *segmentFile) WriteTS(ts uint64) error {
+func (sf *segmentFile) WriteTS(ts types.TS) error {
 	sf.ts = ts
 	return nil
 }
 
-func (sf *segmentFile) ReadTS() uint64 {
+func (sf *segmentFile) ReadTS() types.TS {
 	return sf.ts
 }
 

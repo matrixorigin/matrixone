@@ -23,9 +23,7 @@ select oct(10e50);
 select oct(-10e50);
 select oct(0.00000000000000000000000001);
 select oct(-0.00000000000000000000000001);
--- @bvt:issue#3506
 select oct("你好");
--- @bvt:issue
 
 create table t1(a int);
 insert into t1 values();
@@ -51,9 +49,7 @@ drop table t1;
 CREATE TABLE t1(a char(255), b varchar(255));
 INSERT INTO t1 select oct(56), oct(234);
 INSERT INTO t1 select oct(100), oct(234);
--- @bvt:issue#3506
 SELECT distinct oct(a), oct(b) FROM t1 ORDER BY oct(a);
--- @bvt:issue
 drop table t1;
 
 

@@ -27,10 +27,7 @@ SELECT SIN(-1);
 SELECT SIN(0);
 SELECT SIN(0.001);
 SELECT SIN(-0.001);
-
--- @bvt:issue#3506
 SELECT SIN("ABC");
--- @bvt:issue
 
 SELECT COS(13413);
 SELECT COS(-3114);
@@ -39,9 +36,7 @@ SELECT COS(-1);
 SELECT COS(0);
 SELECT COS(0.001);
 SELECT COS(-0.001);
--- @bvt:issue#3506
 SELECT COS("ABC");
--- @bvt:issue
 
 SELECT TAN(13413);
 SELECT TAN(-3114);
@@ -50,9 +45,7 @@ SELECT TAN(-1);
 SELECT TAN(0);
 SELECT TAN(0.001);
 SELECT TAN(-0.001);
--- @bvt:issue#3506
 SELECT TAN("ABC");
--- @bvt:issue
 
 SELECT COT(13413);
 SELECT COT(-3114);
@@ -70,9 +63,7 @@ select cot(0);
 #SELECT ASIN(0);
 #SELECT ASIN(0.001);
 #SELECT ASIN(-0.001);
--- @bvt:issue#3506
 #SELECT ASIN("ABC");
--- @bvt:issue
 
 SELECT ATAN(13413);
 SELECT ATAN(-3114);
@@ -81,9 +72,7 @@ SELECT ATAN(-1);
 SELECT ATAN(0);
 SELECT ATAN(0.001);
 SELECT ATAN(-0.001);
--- @bvt:issue#3506
 SELECT ATAN("ABC");
--- @bvt:issue
 
 # SELECT ATAN2(-1,-1);
 # SELECT ATAN2(1,1);

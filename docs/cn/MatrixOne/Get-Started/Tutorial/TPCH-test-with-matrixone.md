@@ -59,7 +59,7 @@ MatrixOne 暂不支持复合主键和分区，`PARTSUPP` 和 `LINEITEM` 表的�
 ```
 drop database if exists TPCH;
 create database if not exists TPCH;
-use TPCH;
+use tpch;
 CREATE TABLE NATION(
 N_NATIONKEY  INTEGER NOT NULL,
 N_NAME       CHAR(25) NOT NULL,

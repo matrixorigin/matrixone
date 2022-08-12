@@ -67,10 +67,10 @@ type InternalExecResult interface {
 }
 
 type InternalExecutor interface {
-	// exec sql without returning results set
+	// Exec sql without returning results set
 	Exec(string, SessionOverrideOptions) error
-	// exec sql and return results set
+	// Query exec sql and return results set
 	Query(string, SessionOverrideOptions) InternalExecResult
-	// override session for the executor scope
+	// ApplySessionOverride override session for the executor scope
 	ApplySessionOverride(SessionOverrideOptions)
 }

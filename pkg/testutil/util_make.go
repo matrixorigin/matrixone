@@ -34,6 +34,10 @@ var (
 		return makeVector(values, nil, boolType)
 	}
 
+	MakeBooleanlVector = func(values []bool, nsp []uint64) *vector.Vector {
+		return makeVector(values, nsp, boolType)
+	}
+
 	MakeInt64Vector = func(values []int64, nsp []uint64) *vector.Vector {
 		return makeVector(values, nsp, int64Type)
 	}
