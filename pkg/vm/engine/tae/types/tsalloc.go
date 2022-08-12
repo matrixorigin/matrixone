@@ -42,13 +42,8 @@ func NewTsAlloctor(clock clock.Clock) *TsAlloctor {
 func (alloc *TsAlloctor) Alloc() TS {
 	now, _ := alloc.clock.Now()
 	var ts TS
-
-	s1 := ts[4:12]
-	copy(s1, encoding.EncodeInt64(now.PhysicalTime))
-
-	s2 := ts[:4]
-	copy(s2, encoding.EncodeUint32(now.LogicalTime))
-
+	copy(ts[4:12], encoding.EncodeInt64(now.PhysicalTime))
+	copy(ts[:4], encoding.EncodeUint32(now.LogicalTime))
 	return ts
 }
 
@@ -56,12 +51,8 @@ func (alloc *TsAlloctor) Alloc() TS {
 func (alloc *TsAlloctor) Get() TS {
 	if mockClock, ok := alloc.clock.(*MockHLCClock); ok {
 		var ts TS
-		s1 := ts[4:12]
-		copy(s1, encoding.EncodeInt64(mockClock.Get().PhysicalTime))
-
-		//s2 := ts[:4]
-		//copy(s2, encoding.EncodeUint32(mockClock.Get().LogicalTime))
-
+		copy(ts[4:12], encoding.EncodeInt64(mockClock.Get().PhysicalTime))
+		//copy(ts[:4], encoding.EncodeUint32(mockClock.Get().LogicalTime))
 		return ts
 	}
 	panic("HLCClock does not support Get()")

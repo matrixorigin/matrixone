@@ -61,7 +61,7 @@ func TestPrepare(t *testing.T) {
 
 	checkUncommitted(t, s, wTxn, 1)
 	checkLogCount(t, l, 1)
-	checkLog(t, l, 0, wTxn, 1)
+	checkLog(t, l, 1, wTxn, 1)
 }
 
 func TestPrepareWithConflict(t *testing.T) {
@@ -83,7 +83,7 @@ func TestCommit(t *testing.T) {
 
 	checkCommitted(t, s, wTxn, 1)
 	checkLogCount(t, l, 1)
-	checkLog(t, l, 0, wTxn, 1)
+	checkLog(t, l, 1, wTxn, 1)
 }
 
 func TestCommitWithTxnNotExist(t *testing.T) {
@@ -113,7 +113,7 @@ func TestCommitAfterPrepared(t *testing.T) {
 
 	checkCommitted(t, s, wTxn, 1)
 	checkLogCount(t, l, 2)
-	checkLog(t, l, 1, wTxn)
+	checkLog(t, l, 2, wTxn)
 }
 
 func TestRollback(t *testing.T) {
@@ -243,28 +243,28 @@ func TestRecovery(t *testing.T) {
 
 	prepareTxn := writeTestData(t, s, 1, nil, 1)
 	prepareTestTxn(t, s, &prepareTxn, 2, nil)
-	checkLog(t, l, 0, prepareTxn, 1)
+	checkLog(t, l, 1, prepareTxn, 1)
 
 	committedTxn := writeTestData(t, s, 1, nil, 2)
 	commitTestTxn(t, s, &committedTxn, 3, nil)
-	checkLog(t, l, 1, committedTxn, 2)
+	checkLog(t, l, 2, committedTxn, 2)
 
 	committedAndPreparedTxn := writeTestData(t, s, 1, nil, 3)
 	prepareTestTxn(t, s, &committedAndPreparedTxn, 2, nil)
-	checkLog(t, l, 2, committedAndPreparedTxn, 3)
+	checkLog(t, l, 3, committedAndPreparedTxn, 3)
 	commitTestTxn(t, s, &committedAndPreparedTxn, 3, nil)
-	checkLog(t, l, 3, committedAndPreparedTxn)
+	checkLog(t, l, 4, committedAndPreparedTxn)
 
 	committingTxn := writeTestData(t, s, 1, nil, 4)
 	prepareTestTxn(t, s, &committingTxn, 2, nil)
-	checkLog(t, l, 4, committingTxn, 4)
+	checkLog(t, l, 5, committingTxn, 4)
 	committingTestTxn(t, s, &committingTxn, 3)
-	checkLog(t, l, 5, committingTxn)
+	checkLog(t, l, 6, committingTxn)
 
 	checkLogCount(t, l, 6)
 
 	c := make(chan txn.TxnMeta, 10)
-	s2 := NewKVTxnStorage(0, l, newTestClock(1))
+	s2 := NewKVTxnStorage(1, l, newTestClock(1))
 	s2.StartRecovery(c)
 
 	checkUncommitted(t, s2, prepareTxn, 1)
@@ -348,7 +348,7 @@ func checkLog(t *testing.T, ll logservice.Client, offset int, wTxn txn.TxnMeta, 
 		klog.Values = append(klog.Values, value)
 	}
 
-	assert.Equal(t, klog.MustMarshal(), l.logs[offset].Data)
+	assert.Equal(t, klog.MustMarshal(), l.logs[offset-1].Data)
 }
 
 func checkUncommitted(t *testing.T, s *KVTxnStorage, wTxn txn.TxnMeta, keys ...byte) {

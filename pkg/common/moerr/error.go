@@ -42,7 +42,8 @@ const (
 	INVALID_INPUT     = 3001
 
 	// Group 4: unexpected state
-	INVALID_STATE = 4000
+	INVALID_STATE         = 4000
+	LOG_SERVICE_NOT_READY = 4001
 
 	// group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout

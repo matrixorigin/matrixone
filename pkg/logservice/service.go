@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/lni/dragonboat/v4"
 	"github.com/lni/dragonboat/v4/logger"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -199,6 +200,8 @@ func (s *Service) handle(req pb.Request,
 		return s.handleCheckHAKeeper(req), pb.LogRecordResponse{}
 	case pb.GET_CLUSTER_DETAILS:
 		return s.handleGetClusterDetails(req), pb.LogRecordResponse{}
+	case pb.GET_SHARD_INFO:
+		return s.handleGetShardInfo(req), pb.LogRecordResponse{}
 	default:
 		panic("unknown log service method type")
 	}
@@ -208,6 +211,16 @@ func getResponse(req pb.Request) pb.Response {
 	return pb.Response{Method: req.Method}
 }
 
+func (s *Service) handleGetShardInfo(req pb.Request) pb.Response {
+	resp := getResponse(req)
+	if result, ok := s.getShardInfo(req.LogRequest.ShardID); !ok {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(dragonboat.ErrShardNotFound)
+	} else {
+		resp.ShardInfo = &result
+	}
+	return resp
+}
+
 func (s *Service) handleGetClusterDetails(req pb.Request) pb.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
@@ -215,7 +228,7 @@ func (s *Service) handleGetClusterDetails(req pb.Request) pb.Response {
 	if v, err := s.store.getClusterDetails(ctx); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.ClusterDetails = v
+		resp.ClusterDetails = &v
 	}
 	return resp
 }
@@ -228,7 +241,7 @@ func (s *Service) handleTsoUpdate(req pb.Request) pb.Response {
 	if v, err := s.store.tsoUpdate(ctx, r.Count); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.TsoResponse.Value = v
+		resp.TsoResponse = &pb.TsoResponse{Value: v}
 	}
 	return resp
 }
@@ -315,11 +328,11 @@ func (s *Service) handleLogHeartbeat(req pb.Request) pb.Response {
 	defer cancel()
 	hb := req.LogHeartbeat
 	resp := getResponse(req)
-	if cb, err := s.store.addLogStoreHeartbeat(ctx, hb); err != nil {
+	if cb, err := s.store.addLogStoreHeartbeat(ctx, *hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
-		resp.CommandBatch = cb
+		resp.CommandBatch = &cb
 	}
 
 	return resp
@@ -330,7 +343,7 @@ func (s *Service) handleCNHeartbeat(req pb.Request) pb.Response {
 	defer cancel()
 	hb := req.CNHeartbeat
 	resp := getResponse(req)
-	if err := s.store.addCNStoreHeartbeat(ctx, hb); err != nil {
+	if err := s.store.addCNStoreHeartbeat(ctx, *hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	}
@@ -343,11 +356,11 @@ func (s *Service) handleDNHeartbeat(req pb.Request) pb.Response {
 	defer cancel()
 	hb := req.DNHeartbeat
 	resp := getResponse(req)
-	if cb, err := s.store.addDNStoreHeartbeat(ctx, hb); err != nil {
+	if cb, err := s.store.addDNStoreHeartbeat(ctx, *hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
-		resp.CommandBatch = cb
+		resp.CommandBatch = &cb
 	}
 
 	return resp

@@ -150,6 +150,7 @@ enum MethodType {
   DN_HEARTBEAT   = 9;
   CHECK_HAKEEPER = 10;
   GET_CLUSTER_DETAILS = 11;
+  GET_SHARD_INFO = 12;
 };
 
 enum RecordType {
@@ -184,10 +185,10 @@ message Request {
   MethodType Method              = 2;
   int64 Timeout                  = 3;
   LogRequest LogRequest          = 4 [(gogoproto.nullable) = false];
-  LogStoreHeartbeat LogHeartbeat = 5 [(gogoproto.nullable) = false];
-  CNStoreHeartbeat CNHeartbeat   = 6 [(gogoproto.nullable) = false];
-  DNStoreHeartbeat DNHeartbeat   = 7 [(gogoproto.nullable) = false];
-  TsoRequest TsoRequest          = 8 [(gogoproto.nullable) = false];
+  LogStoreHeartbeat LogHeartbeat = 5;
+  CNStoreHeartbeat CNHeartbeat   = 6;
+  DNStoreHeartbeat DNHeartbeat   = 7;
+  TsoRequest TsoRequest          = 8;
 };
 
 enum ErrorCode {
@@ -218,15 +219,16 @@ message LogResponse {
 }
 
 message Response {
-  uint64 RequestID          = 1;
-  MethodType Method         = 2;
-  ErrorCode ErrorCode       = 3;
-  string ErrorMessage       = 4;
-  bool IsHAKeeper           = 5;
-  LogResponse LogResponse   = 6 [(gogoproto.nullable) = false];
-  CommandBatch CommandBatch = 7 [(gogoproto.nullable) = false];
-  TsoResponse TsoResponse   = 8 [(gogoproto.nullable) = false];
-  ClusterDetails ClusterDetails = 9 [(gogoproto.nullable) = false];
+  uint64 RequestID               = 1;
+  MethodType Method              = 2;
+  ErrorCode ErrorCode            = 3;
+  string ErrorMessage            = 4;
+  bool IsHAKeeper                = 5;
+  LogResponse LogResponse        = 6 [(gogoproto.nullable) = false];
+  CommandBatch CommandBatch      = 7;
+  TsoResponse TsoResponse        = 8;
+  ClusterDetails ClusterDetails  = 9;
+  ShardInfoQueryResult ShardInfo = 10;
 };
 
 message LogRecordResponse {
@@ -407,4 +409,19 @@ message HAKeeperRSMState {
   DNState DNState               = 8  [(gogoproto.nullable) = false];
   LogState LogState             = 9  [(gogoproto.nullable) = false];
   ClusterInfo ClusterInfo       = 10 [(gogoproto.nullable) = false];
+}
+
+// ReplicaInfo contains details of a replica
+message ReplicaInfo {
+  string UUID           = 1;
+  string ServiceAddress = 2;
+}
+
+// ShardInfoQueryResult contains the result of the shard info query. 
+message ShardInfoQueryResult {
+  uint64 ShardID                    = 1;
+  map<uint64, ReplicaInfo> Replicas = 2 [(gogoproto.nullable) = false];
+  uint64 Epoch                      = 3;
+  uint64 LeaderID                   = 4;
+  uint64 Term                       = 5;
 }
