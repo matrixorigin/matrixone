@@ -135,7 +135,7 @@ func (ts TS) ToString() (s string) {
 func StringToTS(s string) (ts TS) {
 	tmp := strings.Split(s, "-")
 	if len(tmp) == 1 {
-		panic("format of s is wrong, it should be xxx-xxx")
+		panic("format of s is wrong, lack of - ")
 	}
 	pTime, _ := strconv.ParseInt(tmp[0], 10, 64)
 	copy(ts[4:12], encoding.EncodeInt64(pTime))
