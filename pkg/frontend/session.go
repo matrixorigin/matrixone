@@ -137,6 +137,31 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 	return ses
 }
 
+// BackgroundSession executing the sql in background
+type BackgroundSession struct {
+	*Session
+	cancel context.CancelFunc
+}
+
+// NewBackgroundSession generates an independent background session executing the sql
+func NewBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *BackgroundSession {
+	ses := NewSession(&FakeProtocol{}, gm, mp, PU, gSysVars)
+	ses.SetOutputCallback(fakeDataSetFetcher)
+	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(ctx)
+	ses.SetRequestContext(cancelBackgroundCtx)
+	backSes := &BackgroundSession{
+		Session: ses,
+		cancel:  cancelBackgroundFunc,
+	}
+	return backSes
+}
+
+func (bgs *BackgroundSession) Close() {
+	if bgs.cancel != nil {
+		bgs.cancel()
+	}
+}
+
 func (ses *Session) SetRequestContext(reqCtx context.Context) {
 	ses.requestCtx = reqCtx
 }
@@ -885,12 +910,10 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) error {
 	mce := NewMysqlCmdExecutor()
 	defer mce.Close()
-	ses := NewSession(&FakeProtocol{}, gm, mp, pu, gSysVariables)
-	ses.SetOutputCallback(fakeDataSetFetcher)
-	mce.PrepareSessionBeforeExecRequest(ses)
-	cancelBackgroundSessionCtx, cancelBackgroundSessionFunc := context.WithCancel(ctx)
-	defer cancelBackgroundSessionFunc()
-	err := mce.doComQuery(cancelBackgroundSessionCtx, sql)
+	backSess := NewBackgroundSession(ctx, gm, mp, pu, gSysVariables)
+	mce.PrepareSessionBeforeExecRequest(backSess.Session)
+	defer backSess.Close()
+	err := mce.doComQuery(backSess.GetRequestContext(), sql)
 	if err != nil {
 		return err
 	}

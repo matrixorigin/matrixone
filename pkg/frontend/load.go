@@ -1682,8 +1682,8 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		var txnHandler *TxnHandler
 		tableHandler := handler.tableHandler
 		initSes := handler.ses
-		tmpSes := NewSession(initSes.GetMysqlProtocol(), initSes.GuestMmu, initSes.Mempool, initSes.Pu, gSysVariables)
-		tmpSes.SetRequestContext(ctx)
+		tmpSes := NewBackgroundSession(ctx, initSes.GuestMmu, initSes.Mempool, initSes.Pu, gSysVariables)
+		defer tmpSes.Close()
 		if !handler.skipWriteBatch {
 			if handler.oneTxnPerBatch {
 				txnHandler = tmpSes.GetTxnHandler()
@@ -1829,8 +1829,8 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				tableHandler := handler.tableHandler
 				// dbHandler := handler.dbHandler
 				initSes := handler.ses
-				tmpSes := NewSession(initSes.GetMysqlProtocol(), initSes.GuestMmu, initSes.Mempool, initSes.Pu, gSysVariables)
-				tmpSes.SetRequestContext(ctx)
+				tmpSes := NewBackgroundSession(ctx, initSes.GuestMmu, initSes.Mempool, initSes.Pu, gSysVariables)
+				defer tmpSes.Close()
 				var dbHandler engine.Database
 				if !handler.skipWriteBatch {
 					if handler.oneTxnPerBatch {
