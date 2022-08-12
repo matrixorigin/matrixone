@@ -4,4 +4,6 @@ SELECT length(uuid()) FROM t1;
 length(uuid())
 36
 36
+SELECT uuid(1) FROM t1;
+Function 'uuid' with parameters [BIGINT] will be implemented in future version.
 drop table t1;

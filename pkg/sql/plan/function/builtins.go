@@ -175,6 +175,7 @@ var builtins = map[int]Functions{
 		},
 	},
 	UUID: {
+		// uuid function contains a hidden placeholder parameter
 		Id: UUID,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
 			if len(inputs) == 0 {
@@ -188,7 +189,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Volatile:  true,
-				Args:      []types.T{types.T_int64},
+				Args:      []types.T{types.T_any},
 				ReturnTyp: types.T_varchar, Fn: multi.UUID,
 			},
 		},
