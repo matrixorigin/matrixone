@@ -187,6 +187,7 @@ var builtins = map[int]Functions{
 				Index:     0,
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
+				Volatile:  true,
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_varchar, Fn: multi.UUID,
 			},
