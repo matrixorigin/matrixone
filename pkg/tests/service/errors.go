@@ -14,15 +14,18 @@
 
 package service
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 var (
-	ErrServiceNotExist     = fmt.Errorf("service not exist")
-	ErrServiceNotStarted   = fmt.Errorf("service not started")
-	ErrStoreNotReported    = fmt.Errorf("store not reported")
-	ErrInvalidServiceIndex = fmt.Errorf("invalid service index")
-	ErrFailAllocatePort    = fmt.Errorf("fail to allocate port")
-	ErrInvalidFSName       = fmt.Errorf("invalid file service name")
+	ErrServiceNotExist     = errors.New("service not exist")
+	ErrServiceNotStarted   = errors.New("service not started")
+	ErrStoreNotReported    = errors.New("store not reported")
+	ErrInvalidServiceIndex = errors.New("invalid service index")
+	ErrFailAllocatePort    = errors.New("fail to allocate port")
+	ErrInvalidFSName       = errors.New("invalid file service name")
 )
 
 // wrappedError wraps error with extra message.

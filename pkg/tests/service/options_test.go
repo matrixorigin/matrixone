@@ -101,7 +101,7 @@ func TestWithHKLogStoreTimeout(t *testing.T) {
 
 func TestWithHKDNStoreTimeout(t *testing.T) {
 	opt := DefaultOptions()
-	require.Equal(t, defaultDnStoreTimeout, opt.hakeeper.dnStoreTimeout)
+	require.Equal(t, defaultDNStoreTimeout, opt.hakeeper.dnStoreTimeout)
 
 	timeout := 21 * time.Second
 	opt = opt.WithHKDNStoreTimeout(timeout)
@@ -154,5 +154,5 @@ func TestBuildHAKeeperConfig(t *testing.T) {
 	cfg := opt.BuildHAKeeperConfig()
 	require.Equal(t, opt.hakeeper.tickPerSecond, cfg.TickPerSecond)
 	require.Equal(t, opt.hakeeper.logStoreTimeout, cfg.LogStoreTimeout)
-	require.Equal(t, opt.hakeeper.dnStoreTimeout, cfg.DnStoreTimeout)
+	require.Equal(t, opt.hakeeper.dnStoreTimeout, cfg.DNStoreTimeout)
 }
