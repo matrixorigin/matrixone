@@ -15,6 +15,7 @@
 package morpc
 
 import (
+	"io"
 	"testing"
 
 	"github.com/fagongzi/goetty/v2/buf"
@@ -23,6 +24,34 @@ import (
 
 func TestEncodeAndDecode(t *testing.T) {
 	codec := newTestCodec()
+	buf := buf.NewByteBuf(32)
+
+	msg := newTestMessage(1)
+	err := codec.Encode(msg, buf, nil)
+	assert.NoError(t, err)
+
+	v, ok, err := codec.Decode(buf)
+	assert.True(t, ok)
+	assert.Equal(t, msg, v)
+	assert.NoError(t, err)
+}
+
+func TestEncodeAndDecodeAndChecksum(t *testing.T) {
+	codec := newTestCodecWithChecksum()
+	buf1 := buf.NewByteBuf(32)
+
+	msg := newTestMessage(1)
+	err := codec.Encode(msg, buf1, nil)
+	assert.NoError(t, err)
+
+	buf.Uint64ToBytesTo(0, buf1.RawSlice(5, 5+8))
+	_, ok, err := codec.Decode(buf1)
+	assert.False(t, ok)
+	assert.Error(t, err)
+}
+
+func TestEncodeAndDecodeAndChecksumMismatch(t *testing.T) {
+	codec := newTestCodecWithChecksum()
 	buf := buf.NewByteBuf(32)
 
 	msg := newTestMessage(1)
@@ -49,4 +78,52 @@ func TestEncodeAndDecodeWithPayload(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, msg, v)
 	assert.NoError(t, err)
+}
+
+func TestEncodeAndDecodeWithPayloadAndChecksum(t *testing.T) {
+	codec := newTestCodecWithChecksum()
+	buf1 := buf.NewByteBuf(32)
+	buf2 := buf.NewByteBuf(32)
+
+	msg := newTestMessage(1)
+	msg.payload = []byte("payload")
+	err := codec.Encode(msg, buf1, buf2)
+	assert.NoError(t, err)
+
+	v, ok, err := codec.Decode(buf2)
+	assert.True(t, ok)
+	assert.Equal(t, msg, v)
+	assert.NoError(t, err)
+}
+
+func TestEncodeAndDecodeWithEmptyPayloadAndChecksum(t *testing.T) {
+	codec := newTestCodecWithChecksum()
+	buf1 := buf.NewByteBuf(32)
+	buf2 := buf.NewByteBuf(32)
+
+	msg := newTestMessage(1)
+	err := codec.Encode(msg, buf1, buf2)
+	assert.NoError(t, err)
+	io.Copy(buf2, buf1)
+
+	v, ok, err := codec.Decode(buf2)
+	assert.True(t, ok)
+	assert.Equal(t, msg, v)
+	assert.NoError(t, err)
+}
+
+func TestEncodeAndDecodeWithEmptyPayloadAndChecksumMismatch(t *testing.T) {
+	codec := newTestCodecWithChecksum()
+	buf1 := buf.NewByteBuf(32)
+	buf2 := buf.NewByteBuf(32)
+
+	msg := newTestMessage(1)
+	err := codec.Encode(msg, buf1, buf2)
+	assert.NoError(t, err)
+	io.Copy(buf2, buf1)
+
+	buf.Uint64ToBytesTo(0, buf2.RawSlice(5, 5+8))
+	_, ok, err := codec.Decode(buf2)
+	assert.False(t, ok)
+	assert.Error(t, err)
 }
