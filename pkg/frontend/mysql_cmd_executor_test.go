@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -39,6 +40,10 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 )
 
+func init() {
+	trace.Init(context.Background(), trace.EnableTracer(false))
+}
+
 func Test_mce(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("boot mce succ", t, func() {
@@ -50,6 +55,7 @@ func Test_mce(t *testing.T) {
 
 		txn := mock_frontend.NewMockTxn(ctrl)
 		txn.EXPECT().GetCtx().Return(nil).AnyTimes()
+		txn.EXPECT().GetID().Return(uint64(0)).AnyTimes()
 		txn.EXPECT().Commit().Return(nil).AnyTimes()
 		txn.EXPECT().Rollback().Return(nil).AnyTimes()
 		txn.EXPECT().String().Return("txn0").AnyTimes()
@@ -279,6 +285,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		txn := mock_frontend.NewMockTxn(ctrl)
 		txn.EXPECT().GetCtx().Return(nil).AnyTimes()
+		txn.EXPECT().GetID().Return(uint64(0)).AnyTimes()
 		txn.EXPECT().Commit().Return(nil).AnyTimes()
 		txn.EXPECT().Rollback().Return(nil).AnyTimes()
 		txn.EXPECT().String().Return("txn0").AnyTimes()

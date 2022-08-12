@@ -33,6 +33,11 @@ func TestNewReplica(t *testing.T) {
 	}
 }
 
+func TestCloseNotStartedReplica(t *testing.T) {
+	r := newReplica(newTestDNShard(1, 2, 3), nil)
+	assert.NoError(t, r.close(false))
+}
+
 func TestWaitStarted(t *testing.T) {
 	r := newReplica(newTestDNShard(1, 2, 3), nil)
 	c := make(chan struct{})
