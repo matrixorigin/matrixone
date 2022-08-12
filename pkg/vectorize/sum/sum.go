@@ -110,7 +110,6 @@ func VecSum(rs, vs []uint64, start int64, count int64, vps []uint64, zs []int64,
 	}
 }
 
-
 func VecSum(rs, vs []types.Decimal64, start int64, count int64, vps []uint64, zs []int64, nulls bitmap)
 
 func VecSum(rs, vs []types.Decimal128, start int64, count int64, vps []uint64, zs []int64, nulls bitmap)

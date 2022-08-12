@@ -1277,7 +1277,6 @@ DEF_DECIMAL_COMPARE(128, LE, DEC_COMP_LE)
 
 
 // aggregate operator
-// func VecSum(rs, vs []types.Decimal64, start int64, count int64, vps []uint64, zs []int64, nulls bitmap)
 int32_t Decimal64_VecSum(int64_t *rs, int64_t *vs, int64_t start, int64_t count, uint64_t *vps ,int64_t *zs, uint64_t *nulls) {
     for (uint64_t i = 0; i < count; i++) {
         if (vps[i] == 0) {
@@ -1288,14 +1287,14 @@ int32_t Decimal64_VecSum(int64_t *rs, int64_t *vs, int64_t start, int64_t count,
         }
 
         decDouble tmp1;
-        int ret = Decimal64_MulInt64(Int64tPtr(&tmp1), zs + i + start , vs + i + start);
+        int ret = Decimal64_MulInt64(Int64tPtr(&tmp1) , vs + i + start, zs[i + start]);
         if (ret != RC_SUCCESS) {
             return ret;
         }
 
         decDouble tmp2;
         memcpy(&tmp2, rs + vps[i] - 1, DECDOUBLE_Bytes);
-        ret = Decimal64_Add(rs + vps[i]-1, &tmp2, &tmp1);
+        ret = Decimal64_Add(rs + vps[i]-1, Int64tPtr(&tmp2), Int64tPtr(&tmp1));
         if (ret != RC_SUCCESS) {
             return ret;
         }
@@ -1304,7 +1303,6 @@ int32_t Decimal64_VecSum(int64_t *rs, int64_t *vs, int64_t start, int64_t count,
 }
 
 
-// func VecSum(rs, vs []types.Decimal128, start int64, count int64, vps []uint64, zs []int64, nulls bitmap)
 int32_t Decimal128_VecSum(int64_t *rs, int64_t *vs, int64_t start, int64_t count, uint64_t *vps ,int64_t *zs, uint64_t *nulls) {
     for (uint64_t i = 0; i < count; i++) {
         if (vps[i] == 0) {
@@ -1315,14 +1313,14 @@ int32_t Decimal128_VecSum(int64_t *rs, int64_t *vs, int64_t start, int64_t count
         }
 
         decQuad tmp1;
-        int ret = Decimal128_MulInt64(&tmp1, zs + i + start, vs + (i + start)*2);
+        int ret = Decimal128_MulInt64(Int64tPtr(&tmp1), vs + (i + start)*2, zs[i + start]);
         if (ret != RC_SUCCESS) {
             return ret;
         }
 
         decQuad tmp2;
         memcpy(&tmp2, rs + (vps[i] - 1)*2, DECQUAD_Bytes);
-        ret = Decimal128_Add(rs + (vps[i] - 1)*2, &tmp2, &tmp1);
+        ret = Decimal128_Add(rs + (vps[i] - 1)*2, Int64tPtr(&tmp2), Int64tPtr(&tmp1));
         if (ret != RC_SUCCESS) {
             return ret;
         }
