@@ -34,21 +34,23 @@ N >= 0, floor to the Nth placeholder after decimal point
 */
 
 import (
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math"
+	"strings"
 )
 
 var (
-	FloorUint8   func([]uint8, []uint8, int64) []uint8
-	FloorUint16  func([]uint16, []uint16, int64) []uint16
-	FloorUint32  func([]uint32, []uint32, int64) []uint32
-	FloorUint64  func([]uint64, []uint64, int64) []uint64
-	FloorInt8    func([]int8, []int8, int64) []int8
-	FloorInt16   func([]int16, []int16, int64) []int16
-	FloorInt32   func([]int32, []int32, int64) []int32
-	FloorInt64   func([]int64, []int64, int64) []int64
-	FloorFloat32 func([]float32, []float32, int64) []float32
-	FloorFloat64 func([]float64, []float64, int64) []float64
+	FloorUint8      func([]uint8, []uint8, int64) []uint8
+	FloorUint16     func([]uint16, []uint16, int64) []uint16
+	FloorUint32     func([]uint32, []uint32, int64) []uint32
+	FloorUint64     func([]uint64, []uint64, int64) []uint64
+	FloorInt8       func([]int8, []int8, int64) []int8
+	FloorInt16      func([]int16, []int16, int64) []int16
+	FloorInt32      func([]int32, []int32, int64) []int32
+	FloorInt64      func([]int64, []int64, int64) []int64
+	FloorFloat32    func([]float32, []float32, int64) []float32
+	FloorFloat64    func([]float64, []float64, int64) []float64
+	FloorDecimal128 func([]types.Decimal128, []types.Decimal128, int64) []types.Decimal128
 )
 
 var MaxUint8digits = numOfDigits(math.MaxUint8)
@@ -104,6 +106,7 @@ func init() {
 	FloorInt64 = floorInt64
 	FloorFloat32 = floorFloat32
 	FloorFloat64 = floorFloat64
+	FloorDecimal128 = floorDecimal128
 }
 
 func floorUint8(xs, rs []uint8, digits int64) []uint8 {
@@ -279,13 +282,25 @@ func floorFloat64(xs, rs []float64, digits int64) []float64 {
 		for i := range xs {
 			rs[i] = math.Floor(xs[i])
 		}
-		fmt.Println(digits)
 	} else {
 		scale := math.Pow10(int(digits))
 		for i := range xs {
 			value := xs[i] * scale
 			rs[i] = math.Floor(value) / scale
 		}
+	}
+	return rs
+}
+
+func floorDecimal128(xs, rs []types.Decimal128, _ int64) []types.Decimal128 {
+	for i := range xs {
+		str := strings.Split(xs[i].String(), ".")[0]
+		x, _ := types.Decimal128_FromString(str)
+		if str[0] != '-' {
+			rs[i] = x
+			continue
+		}
+		rs[i] = x.AddInt64(-1)
 	}
 	return rs
 }

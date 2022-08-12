@@ -133,10 +133,10 @@ type Config struct {
 		// If HAKeeper does not receive two heartbeat within LogStoreTimeout,
 		// it regards the log store as down.
 		LogStoreTimeout toml.Duration `toml:"log-store-timeout"`
-		// DnStoreTimeout is the actual time limit between a dn store's heartbeat.
-		// If HAKeeper does not receive two heartbeat within DnStoreTimeout,
+		// DNStoreTimeout is the actual time limit between a dn store's heartbeat.
+		// If HAKeeper does not receive two heartbeat within DNStoreTimeout,
 		// it regards the dn store as down.
-		DnStoreTimeout toml.Duration `toml:"dn-store-timeout"`
+		DNStoreTimeout toml.Duration `toml:"dn-store-timeout"`
 	}
 
 	// HAKeeperClientConfig is the config for HAKeeperClient
@@ -150,7 +150,7 @@ func (c *Config) GetHAKeeperConfig() hakeeper.Config {
 	return hakeeper.Config{
 		TickPerSecond:   c.HAKeeperConfig.TickPerSecond,
 		LogStoreTimeout: c.HAKeeperConfig.LogStoreTimeout.Duration,
-		DnStoreTimeout:  c.HAKeeperConfig.DnStoreTimeout.Duration,
+		DNStoreTimeout:  c.HAKeeperConfig.DNStoreTimeout.Duration,
 	}
 }
 
@@ -239,8 +239,8 @@ func (c *Config) Validate() error {
 	if c.HAKeeperConfig.LogStoreTimeout.Duration == 0 {
 		return errors.Wrapf(ErrInvalidConfig, "LogStoreTimeout not set")
 	}
-	if c.HAKeeperConfig.DnStoreTimeout.Duration == 0 {
-		return errors.Wrapf(ErrInvalidConfig, "DnStoreTimeout not set")
+	if c.HAKeeperConfig.DNStoreTimeout.Duration == 0 {
+		return errors.Wrapf(ErrInvalidConfig, "DNStoreTimeout not set")
 	}
 	// validate BootstrapConfig
 	if c.BootstrapConfig.BootstrapCluster {
@@ -305,8 +305,8 @@ func (c *Config) Fill() {
 	if c.HAKeeperConfig.LogStoreTimeout.Duration == 0 {
 		c.HAKeeperConfig.LogStoreTimeout.Duration = hakeeper.DefaultLogStoreTimeout
 	}
-	if c.HAKeeperConfig.DnStoreTimeout.Duration == 0 {
-		c.HAKeeperConfig.DnStoreTimeout.Duration = hakeeper.DefaultDnStoreTimeout
+	if c.HAKeeperConfig.DNStoreTimeout.Duration == 0 {
+		c.HAKeeperConfig.DNStoreTimeout.Duration = hakeeper.DefaultDNStoreTimeout
 	}
 	if c.HeartbeatInterval.Duration == 0 {
 		c.HeartbeatInterval.Duration = defaultHeartbeatInterval
