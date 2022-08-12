@@ -195,16 +195,13 @@ func (sf *segmentFile) Replay() error {
 		var ts types.TS
 		var idx uint64
 		if len(info) > 2 {
-			//ts, err = strconv.ParseUint(info[2], 10, 64)
-			//if err != nil {
-			//	return err
-			//}
-			ts = types.StringToTS(info[2])
 			if fileName[1] == INDEX_SUFFIX {
 				idx, err = strconv.ParseUint(info[2], 10, 64)
 				if err != nil {
 					return err
 				}
+			} else {
+				ts = types.StringToTS(info[2])
 			}
 		}
 		if file.snode.GetCols() > uint32(len(bf.columns)) && fileName[1] != INDEX_SUFFIX {
