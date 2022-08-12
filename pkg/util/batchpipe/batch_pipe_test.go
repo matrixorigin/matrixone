@@ -128,6 +128,7 @@ type testCollector struct {
 	*BaseBatchPipe[*TestItem, string]
 	receivedString []string
 	posBufWakeupCh chan time.Time
+	notify4Batch   func()
 }
 
 // create a new buffer for one kind of Item
@@ -153,6 +154,9 @@ func (c *testCollector) NewItemBatchHandler() func(batch string) {
 		c.Lock()
 		defer c.Unlock()
 		c.receivedString = append(c.receivedString, batch)
+		if c.notify4Batch != nil {
+			c.notify4Batch()
+		}
 	}
 }
 
@@ -244,24 +248,33 @@ func TestBaseCollectorReminder(t *testing.T) {
 }
 
 func TestBaseCollectorGracefulStop(t *testing.T) {
-	collector := newTestCollector(PipeWithBatchWorkerNum(2), PipeWithBufferWorkerNum(2))
+	var notify sync.WaitGroup
+	var notifyFun = func() {
+		notify.Done()
+	}
+	collector := newTestCollector(PipeWithBatchWorkerNum(2), PipeWithBufferWorkerNum(1))
+	collector.notify4Batch = notifyFun
 	collector.Start()
 
+	notify.Add(1)
 	err := collector.SendItem(
 		&TestItem{name: T_INT, intval: 32},
 		&TestItem{name: T_INT, intval: 40},
 		&TestItem{name: T_INT, intval: 33},
 	)
+	notify.Wait()
 	require.NoError(t, err)
 	time.Sleep(10 * time.Millisecond)
 	require.Contains(t, collector.Received(), "Batch int 105")
 
+	notify.Add(1)
 	_ = collector.SendItem(&TestItem{name: T_INT, intval: 40})
 	handle, succ := collector.Stop(true)
 	require.True(t, succ)
 	handle2, succ2 := collector.Stop(true)
 	require.False(t, succ2)
 	require.Nil(t, handle2)
+	notify.Add(1)
 	require.Error(t, collector.SendItem(&TestItem{name: T_INT, intval: 40}))
 	require.NoError(t, waitChTimeout(handle, func(element struct{}, closed bool) (goOn bool, err error) {
 		assert.True(t, closed)

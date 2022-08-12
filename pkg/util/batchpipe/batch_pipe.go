@@ -232,6 +232,7 @@ func (bc *BaseBatchPipe[T, B]) Stop(graceful bool) (<-chan struct{}, bool) {
 		return nil, false
 	}
 
+	logutil.Infof("BaseBatchPipe accept graceful(%v) Stop", graceful)
 	stopCh := make(chan struct{})
 	if graceful {
 		go func() {
