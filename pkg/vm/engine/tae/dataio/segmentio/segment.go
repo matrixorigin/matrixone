@@ -154,8 +154,8 @@ func getColumnBlock(col int, block *blockFile) *columnBlock {
 }
 
 func getFileTs(name string) (ts types.TS, err error) {
-	tmpName := strings.Split(name, ".")
-	fileName := strings.Split(tmpName[0], "_")
+	tmpName, _ := getFileName(name)
+	fileName := strings.Split(tmpName, "_")
 	if len(fileName) > 2 {
 		//ts, err = strconv.ParseUint(fileName[2], 10, 64)
 		//if err != nil {
@@ -167,13 +167,21 @@ func getFileTs(name string) (ts types.TS, err error) {
 	return ts, nil
 }
 
+func getFileName(str string) (name, suffix string) {
+	file := strings.Split(str, ".")
+	suffix = file[len(file)-1]
+	file = strings.Split(str, fmt.Sprintf(".%s", suffix))
+	name = file[0]
+	return
+}
+
 func (sf *segmentFile) Replay() error {
 	nodes := sf.driver.GetNodes()
 	sf.Lock()
 	defer sf.Unlock()
 	for name, file := range nodes {
-		fileName := strings.Split(name, ".")
-		info := strings.Split(fileName[0], "_")
+		fileName, suffix := getFileName(name)
+		info := strings.Split(fileName, "_")
 		if len(info) < 2 {
 			//logfile
 			continue
@@ -200,17 +208,17 @@ func (sf *segmentFile) Replay() error {
 			//	return err
 			//}
 			ts = types.StringToTS(info[2])
-			if fileName[1] == INDEX_SUFFIX {
+			if suffix == INDEX_SUFFIX {
 				idx, err = strconv.ParseUint(info[2], 10, 64)
 				if err != nil {
 					return err
 				}
 			}
 		}
-		if file.snode.GetCols() > uint32(len(bf.columns)) && fileName[1] != INDEX_SUFFIX {
+		if file.snode.GetCols() > uint32(len(bf.columns)) && suffix != INDEX_SUFFIX {
 			bf.AddColumn(int(file.snode.GetCols()))
 		}
-		switch fileName[1] {
+		switch suffix {
 		case BLOCK_SUFFIX:
 			if file.snode.GetIdxs() > uint32(len(bf.columns[col].indexes)) {
 				bf.columns[col].AddIndex(int(file.snode.GetIdxs()))
