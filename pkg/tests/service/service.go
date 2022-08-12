@@ -406,7 +406,8 @@ func (c *testCluster) WaitHAKeeperLeader(ctx context.Context) LogService {
 		case <-ctx.Done():
 			assert.FailNow(
 				c.t,
-				"terminated when waiting for hakeeper leader: %s", ctx.Err(),
+				"terminated when waiting for hakeeper leader",
+				"error: %s", ctx.Err(),
 			)
 		default:
 			time.Sleep(defaultWaitInterval)
@@ -427,7 +428,8 @@ func (c *testCluster) WaitHAKeeperState(
 		case <-ctx.Done():
 			assert.FailNow(
 				c.t,
-				"terminated when waiting for hakeeper state: %s", ctx.Err(),
+				"terminated when waiting for hakeeper state",
+				"error: %s", ctx.Err(),
 			)
 		default:
 			time.Sleep(defaultWaitInterval)
@@ -449,7 +451,8 @@ func (c *testCluster) WaitDNShardsReported(ctx context.Context) {
 		case <-ctx.Done():
 			assert.FailNow(
 				c.t,
-				"terminated when waiting for all dn shards reported: %s", ctx.Err(),
+				"terminated when waiting for all dn shards reported",
+				"error: %s", ctx.Err(),
 			)
 		default:
 			time.Sleep(defaultWaitInterval)
@@ -477,7 +480,8 @@ func (c *testCluster) WaitLogShardsReported(ctx context.Context) {
 		case <-ctx.Done():
 			assert.FailNow(
 				c.t,
-				"terminated when waiting for all log shards reported: %s", ctx.Err(),
+				"terminated when waiting for all log shards reported",
+				"error: %s", ctx.Err(),
 			)
 		default:
 			time.Sleep(defaultWaitInterval)
@@ -505,7 +509,8 @@ func (c *testCluster) WaitDNReplicaReported(ctx context.Context, shardID uint64)
 		case <-ctx.Done():
 			assert.FailNow(
 				c.t,
-				"terminated when waiting replica of dn shard `%d` reported: %s", shardID, ctx.Err(),
+				"terminated when waiting replica of dn shard reported",
+				"shard %d, error: %s", shardID, ctx.Err(),
 			)
 		default:
 			time.Sleep(defaultWaitInterval)
@@ -531,7 +536,8 @@ func (c *testCluster) WaitLogReplicaReported(ctx context.Context, shardID uint64
 		case <-ctx.Done():
 			assert.FailNow(
 				c.t,
-				"terminated when waiting replica of log shard `%d` reported: %s", shardID, ctx.Err(),
+				"terminated when waiting replica of log shard reported",
+				"shard %d, error: %s", shardID, ctx.Err(),
 			)
 		default:
 			time.Sleep(defaultWaitInterval)
