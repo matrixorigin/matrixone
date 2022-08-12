@@ -15,10 +15,13 @@
 package types
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"golang.org/x/exp/constraints"
 	"math"
+	"strconv"
+	"strings"
 )
 
 type TypeId = types.T
@@ -126,17 +129,19 @@ func (ts TS) GreaterEq(rhs TS) bool {
 }
 
 func (ts TS) ToString() (s string) {
-	s = string(ts[:])
-	return
-}
-
-func (ts TS) ToSlice() (s []byte) {
-	s = ts[:]
-	return
+	return fmt.Sprintf("%d-%d", encoding.DecodeInt64(ts[4:12]), encoding.DecodeUint32(ts[:4]))
 }
 
 func StringToTS(s string) (ts TS) {
-	copy(ts[:], s)
+	tmp := strings.Split(s, "-")
+	if len(tmp) == 1 {
+		panic("format of s is wrong, lack of - ")
+	}
+	pTime, _ := strconv.ParseInt(tmp[0], 10, 64)
+	copy(ts[4:12], encoding.EncodeInt64(pTime))
+
+	lTime, _ := strconv.ParseUint(tmp[1], 10, 32)
+	copy(ts[:4], encoding.EncodeUint32(uint32(lTime)))
 	return
 }
 
