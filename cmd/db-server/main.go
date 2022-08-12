@@ -15,6 +15,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -23,6 +24,7 @@ import (
 
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 
@@ -31,6 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+
+	"github.com/google/gops/agent"
 )
 
 const (
@@ -61,6 +65,21 @@ func createMOServer() {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
 	mo = frontend.NewMOServer(address, pu)
+	{
+		// init trace/log/error framework
+		if _, err := trace.Init(context.Background(),
+			trace.WithMOVersion(MoVersion),
+			trace.WithNode(0, trace.NodeTypeNode),
+			trace.EnableTracer(config.GlobalSystemVariables.GetEnableTrace()),
+			trace.WithBatchProcessMode(config.GlobalSystemVariables.GetTraceBatchProcessor()),
+			trace.DebugMode(config.GlobalSystemVariables.GetEnableTraceDebug()),
+			trace.WithSQLExecutor(func() ie.InternalExecutor {
+				return frontend.NewInternalExecutor(pu)
+			}),
+		); err != nil {
+			panic(err)
+		}
+	}
 	if config.GlobalSystemVariables.GetEnableMetric() {
 		ieFactory := func() ie.InternalExecutor {
 			return frontend.NewInternalExecutor(pu)
@@ -75,6 +94,10 @@ func runMOServer() error {
 }
 
 func serverShutdown(isgraceful bool) error {
+	// flush trace/log/error framework
+	if err := trace.Shutdown(trace.DefaultContext()); err != nil {
+		logutil.Errorf("Shutdown trace err: %v", err)
+	}
 	return mo.Stop()
 }
 
@@ -165,12 +188,13 @@ func main() {
 	}
 
 	logConf := logutil.LogConfig{
-		Level:      config.GlobalSystemVariables.GetLogLevel(),
-		Format:     config.GlobalSystemVariables.GetLogFormat(),
-		Filename:   config.GlobalSystemVariables.GetLogFilename(),
-		MaxSize:    int(config.GlobalSystemVariables.GetLogMaxSize()),
-		MaxDays:    int(config.GlobalSystemVariables.GetLogMaxDays()),
-		MaxBackups: int(config.GlobalSystemVariables.GetLogMaxBackups()),
+		Level:       config.GlobalSystemVariables.GetLogLevel(),
+		Format:      config.GlobalSystemVariables.GetLogFormat(),
+		Filename:    config.GlobalSystemVariables.GetLogFilename(),
+		MaxSize:     int(config.GlobalSystemVariables.GetLogMaxSize()),
+		MaxDays:     int(config.GlobalSystemVariables.GetLogMaxDays()),
+		MaxBackups:  int(config.GlobalSystemVariables.GetLogMaxBackups()),
+		EnableStore: config.GlobalSystemVariables.GetEnableTrace(),
 	}
 
 	logutil.SetupMOLogger(&logConf)
@@ -220,6 +244,11 @@ func main() {
 		os.Exit(LoadConfigExit)
 	}
 
+	if err := agent.Listen(agent.Options{}); err != nil {
+		logutil.Errorf("listen gops agent failed: %s", err)
+		os.Exit(StartMOExit)
+	}
+
 	createMOServer()
 
 	err := runMOServer()
@@ -234,6 +263,8 @@ func main() {
 		logutil.Infof("Server shutdown failed, %v", err)
 		os.Exit(ShutdownExit)
 	}
+
+	agent.Close()
 
 	cleanup()
 

@@ -29,7 +29,7 @@ import (
 // - open fds & max fds (not available on MacOS)
 // - virtual_resident_mem_bytes
 
-var ProcessCollector = newBatchStatsCollector(procCpuPercent{}, procMemUsage{}, procOpenFds{}, procFdsLimit{})
+var processCollector = newBatchStatsCollector(procCpuPercent{}, procMemUsage{}, procOpenFds{}, procFdsLimit{})
 
 var pid = int32(os.Getpid())
 
@@ -54,7 +54,7 @@ func (c procCpuPercent) Desc() *prom.Desc {
 }
 
 func (c procCpuPercent) Metric(s *statCaches) (prom.Metric, error) {
-	val := s.getOrInsert(CacheKey_Process, getProcess)
+	val := s.getOrInsert(cacheKeyProcess, getProcess)
 	if val == nil {
 		return nil, errors.New("empty process")
 	}
@@ -79,7 +79,7 @@ func (c procMemUsage) Desc() *prom.Desc {
 }
 
 func (c procMemUsage) Metric(s *statCaches) (prom.Metric, error) {
-	val := s.getOrInsert(CacheKey_Process, getProcess)
+	val := s.getOrInsert(cacheKeyProcess, getProcess)
 	if val == nil {
 		return nil, errors.New("empty process")
 	}
@@ -102,7 +102,7 @@ func (c procOpenFds) Desc() *prom.Desc {
 }
 
 func (c procOpenFds) Metric(s *statCaches) (prom.Metric, error) {
-	val := s.getOrInsert(CacheKey_Process, getProcess)
+	val := s.getOrInsert(cacheKeyProcess, getProcess)
 	if val == nil {
 		return nil, errors.New("empty process")
 	}
@@ -125,7 +125,7 @@ func (c procFdsLimit) Desc() *prom.Desc {
 }
 
 func (c procFdsLimit) Metric(s *statCaches) (prom.Metric, error) {
-	val := s.getOrInsert(CacheKey_Process, getProcess)
+	val := s.getOrInsert(cacheKeyProcess, getProcess)
 	if val == nil {
 		return nil, errors.New("empty process")
 	}
