@@ -29,8 +29,8 @@ import (
 type MetricExporter interface {
 	// ExportMetricFamily can be used by a metric to push data. this method must be thread safe
 	ExportMetricFamily(context.Context, *pb.MetricFamily) error
-	Start()
-	Stop() (<-chan struct{}, bool)
+	Start() bool
+	Stop(bool) (<-chan struct{}, bool)
 }
 
 type metricExporter struct {
@@ -71,7 +71,7 @@ func (e *metricExporter) ExportMetricFamily(ctx context.Context, mf *pb.MetricFa
 	return nil
 }
 
-func (e *metricExporter) Stop() (<-chan struct{}, bool) {
+func (e *metricExporter) Stop(_ bool) (<-chan struct{}, bool) {
 	if atomic.SwapInt32(&e.isRunning, 0) == 0 {
 		return nil, false
 	}
@@ -81,9 +81,9 @@ func (e *metricExporter) Stop() (<-chan struct{}, bool) {
 	return stopCh, true
 }
 
-func (e *metricExporter) Start() {
+func (e *metricExporter) Start() bool {
 	if atomic.SwapInt32(&e.isRunning, 1) == 1 {
-		return
+		return false
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	e.cancel = cancel
@@ -101,6 +101,7 @@ func (e *metricExporter) Start() {
 			}
 		}
 	}()
+	return true
 }
 
 func (e *metricExporter) send(mfs []*pb.MetricFamily) {

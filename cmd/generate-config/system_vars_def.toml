@@ -318,6 +318,36 @@ comment = "default is true. if true, enable metric at booting"
 update-mode = "dynamic"
 
 [[parameter]]
+name = "enableTrace"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = ["true", "false"]
+comment = "default is true. if true, enable trace at booting"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "traceBatchProcessor"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["InternalExecutor", "FileService"]
+comment = "default is InternalExecutor. if InternalExecutor, use internal sql executor, FileService will implement soon."
+update-mode = "dynamic"
+
+[[parameter]]
+name = "enableTraceDebug"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = ["false", "true"]
+comment = "default is false. With true, system will check all the children span is ended, which belong to the closing span."
+update-mode = "dynamic"
+
+[[parameter]]
 name = "logLevel"
 scope = ["global"]
 access = ["file"]
