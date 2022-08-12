@@ -25,6 +25,7 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
@@ -57,16 +58,20 @@ func TestSend(t *testing.T) {
 }
 
 func TestCloseWhileContinueSending(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
 			return conn.Write(msg, goetty.WriteOptions{Flush: true})
 		},
 		func(b *remoteBackend) {
 			c := make(chan struct{})
-
+			stopC := make(chan struct{})
+			var wg sync.WaitGroup
+			wg.Add(1)
 			go func() {
+				defer wg.Done()
 				sendFunc := func() {
-					ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 					defer cancel()
 					req := newTestMessage(1)
 					f, err := b.Send(ctx, req, SendOptions{})
@@ -76,8 +81,9 @@ func TestCloseWhileContinueSending(t *testing.T) {
 					defer f.Close()
 
 					resp, err := f.Get()
-					assert.NoError(t, err)
-					assert.Equal(t, req, resp)
+					if err == nil {
+						assert.Equal(t, req, resp)
+					}
 					select {
 					case c <- struct{}{}:
 					default:
@@ -85,11 +91,18 @@ func TestCloseWhileContinueSending(t *testing.T) {
 				}
 
 				for {
-					sendFunc()
+					select {
+					case <-stopC:
+						return
+					default:
+						sendFunc()
+					}
 				}
 			}()
 			<-c
 			b.Close()
+			close(stopC)
+			wg.Wait()
 		},
 		WithBackendConnectWhenCreate())
 }
@@ -196,6 +209,35 @@ func TestSendWithReconnect(t *testing.T) {
 			}
 			return true
 		}))
+}
+
+func TestSendWithCannotConnectWillTimeout(t *testing.T) {
+	var rb *remoteBackend
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			rb = b
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*50)
+			defer cancel()
+			req := &testMessage{id: 1}
+			f, err := b.Send(ctx, req, SendOptions{})
+			assert.NoError(t, err)
+			defer f.Close()
+
+			resp, err := f.Get()
+			assert.Error(t, err)
+			assert.Nil(t, resp)
+			assert.Equal(t, err, ctx.Err())
+		},
+		WithBackendFilter(func(m Message) bool {
+			assert.NoError(t, rb.conn.Disconnect())
+			rb.remote = ""
+			return true
+		}),
+		WithBackendConnectTimeout(time.Millisecond*200),
+		WithBackendConnectWhenCreate())
 }
 
 func TestStream(t *testing.T) {

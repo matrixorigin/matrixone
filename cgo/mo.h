@@ -149,4 +149,11 @@ int32_t Numeric_VecLe(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, i
 int32_t Decimal64_VecLE(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
 int32_t Decimal128_VecLE(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
 
+
+/* vector logical operation */
+int32_t Logic_VecAnd(void *r, void *a, void  *b, uint64_t n, uint64_t *anulls, uint64_t *bnulls, uint64_t *rnulls, int32_t flag);
+int32_t Logic_VecOr(void *r, void *a, void  *b, uint64_t n, uint64_t *anulls, uint64_t *bnulls, uint64_t *rnulls, int32_t flag);
+int32_t Logic_VecXor(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag);
+int32_t Logic_VecNot(void *r, void *a, uint64_t n, uint64_t *nulls, int32_t flag);
+
 #endif /* _MO_H_ */
