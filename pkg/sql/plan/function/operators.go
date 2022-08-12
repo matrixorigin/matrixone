@@ -427,22 +427,44 @@ var operators = map[int]Functions{
 		},
 	},
 
-	OP_XOR: {
-		Id: OP_XOR,
+	OP_BIT_XOR: {
+		Id: OP_BIT_XOR,
 		Overloads: []Function{
-			// {
-			// 	Index:  0,
-			// 	Flag:   plan.Function_STRICT,
-			// 	Layout: COMPARISON_OPERATOR,
-			// 	Args: []types.T{
-			// 		types.T_int32,
-			// 		types.T_int32,
-			// 	},
-			// 	ReturnTyp: types.T_int32,
-			// 	Fn:        operator.OpXorGeneral[int32],
-			// },
 			{
 				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint8,
+					types.T_uint8,
+				},
+				ReturnTyp: types.T_uint8,
+				Fn:        operator.OpBitXorFun[uint8],
+			},
+			{
+				Index:  1,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint16,
+					types.T_uint16,
+				},
+				ReturnTyp: types.T_uint16,
+				Fn:        operator.OpBitXorFun[uint16],
+			},
+			{
+				Index:  2,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint32,
+					types.T_uint32,
+				},
+				ReturnTyp: types.T_uint32,
+				Fn:        operator.OpBitXorFun[uint32],
+			},
+			{
+				Index:  3,
 				Flag:   plan.Function_STRICT,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
@@ -450,7 +472,107 @@ var operators = map[int]Functions{
 					types.T_uint64,
 				},
 				ReturnTyp: types.T_uint64,
-				Fn:        operator.OpXorGeneral[uint64],
+				Fn:        operator.OpBitXorFun[uint64],
+			},
+		},
+	},
+
+	OP_BIT_OR: {
+		Id: OP_BIT_OR,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint8,
+					types.T_uint8,
+				},
+				ReturnTyp: types.T_uint8,
+				Fn:        operator.OpBitOrFun[uint8],
+			},
+			{
+				Index:  1,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint16,
+					types.T_uint16,
+				},
+				ReturnTyp: types.T_uint16,
+				Fn:        operator.OpBitOrFun[uint16],
+			},
+			{
+				Index:  2,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint32,
+					types.T_uint32,
+				},
+				ReturnTyp: types.T_uint32,
+				Fn:        operator.OpBitOrFun[uint32],
+			},
+			{
+				Index:  3,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint64,
+					types.T_uint64,
+				},
+				ReturnTyp: types.T_uint64,
+				Fn:        operator.OpBitOrFun[uint64],
+			},
+		},
+	},
+
+	OP_BIT_AND: {
+		Id: OP_BIT_AND,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint8,
+					types.T_uint8,
+				},
+				ReturnTyp: types.T_uint8,
+				Fn:        operator.OpBitAndFun[uint8],
+			},
+			{
+				Index:  1,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint16,
+					types.T_uint16,
+				},
+				ReturnTyp: types.T_uint16,
+				Fn:        operator.OpBitAndFun[uint16],
+			},
+			{
+				Index:  2,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint32,
+					types.T_uint32,
+				},
+				ReturnTyp: types.T_uint32,
+				Fn:        operator.OpBitAndFun[uint32],
+			},
+			{
+				Index:  3,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint64,
+					types.T_uint64,
+				},
+				ReturnTyp: types.T_uint64,
+				Fn:        operator.OpBitAndFun[uint64],
 			},
 		},
 	},
