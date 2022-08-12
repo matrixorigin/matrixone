@@ -22,14 +22,8 @@ DROP TABLE t1;
 #EXTREME VALUE
 
 select floor(999999999999999999);
-
--- @bvt:issue#3588
 select floor(9999999999999999999999);
--- @bvt:issue
-
--- @bvt:issue#3579
 select floor(9.999999999999999999999);
--- @bvt:issue
 
 
 select floor(-9.999999999999999999999);
