@@ -16,6 +16,7 @@ package dnservice
 
 import (
 	"context"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -31,6 +32,11 @@ type replica struct {
 	shard    metadata.DNShard
 	service  service.TxnService
 	startedC chan struct{}
+
+	mu struct {
+		sync.RWMutex
+		starting bool
+	}
 }
 
 func newReplica(shard metadata.DNShard, logger *zap.Logger) *replica {
@@ -42,12 +48,25 @@ func newReplica(shard metadata.DNShard, logger *zap.Logger) *replica {
 }
 
 func (r *replica) start(txnService service.TxnService) error {
+	r.mu.Lock()
+	if r.mu.starting {
+		r.mu.Unlock()
+		return nil
+	}
+	r.mu.starting = true
+	r.mu.Unlock()
+
 	defer close(r.startedC)
 	r.service = txnService
 	return r.service.Start()
 }
 
 func (r *replica) close(destroy bool) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.mu.starting {
+		return nil
+	}
 	r.waitStarted()
 	return r.service.Close(destroy)
 }
