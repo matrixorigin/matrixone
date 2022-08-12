@@ -465,12 +465,15 @@ func Test_getLineOutFromSimdCsvRoutine(t *testing.T) {
 		handler.simdCsvGetParsedLinesChan.Store(make(chan simdcsv.LineOut, 100))
 
 		gostub.StubFunc(&saveLinesToStorage, nil)
-		handler.loadCtx, _ = context.WithTimeout(context.TODO(), time.Second)
+		var cancel context.CancelFunc
+		handler.loadCtx, cancel = context.WithTimeout(context.TODO(), time.Second)
 		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldBeNil)
+		cancel()
 
 		gostub.StubFunc(&saveLinesToStorage, errors.New("1"))
-		handler.loadCtx, _ = context.WithTimeout(context.TODO(), time.Second)
+		handler.loadCtx, cancel = context.WithTimeout(context.TODO(), time.Second)
 		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldNotBeNil)
+		cancel()
 
 		getParsedLinesChan(getLineOutChan(handler.simdCsvGetParsedLinesChan))
 		stubs := gostub.StubFunc(&saveLinesToStorage, nil)

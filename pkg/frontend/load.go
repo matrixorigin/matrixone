@@ -198,8 +198,6 @@ type WriteBatchHandler struct {
 	pl          *PoolElement
 	batchFilled int
 	simdCsvErr  error
-
-	closeRef *CloseLoadData
 }
 
 type CloseLoadData struct {
@@ -1685,6 +1683,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		tableHandler := handler.tableHandler
 		initSes := handler.ses
 		tmpSes := NewSession(initSes.GetMysqlProtocol(), initSes.GuestMmu, initSes.Mempool, initSes.Pu, gSysVariables)
+		tmpSes.SetRequestContext(ctx)
 		if !handler.skipWriteBatch {
 			if handler.oneTxnPerBatch {
 				txnHandler = tmpSes.GetTxnHandler()
@@ -1831,6 +1830,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				// dbHandler := handler.dbHandler
 				initSes := handler.ses
 				tmpSes := NewSession(initSes.GetMysqlProtocol(), initSes.GuestMmu, initSes.Mempool, initSes.Pu, gSysVariables)
+				tmpSes.SetRequestContext(ctx)
 				var dbHandler engine.Database
 				if !handler.skipWriteBatch {
 					if handler.oneTxnPerBatch {
@@ -1948,7 +1948,6 @@ LoadLoop reads data from stream, extracts the fields, and saves into the table
 func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
 	ses := mce.GetSession()
 
-	var m sync.Mutex
 	//begin:=  time.Now()
 	//defer func() {
 	//	logutil.Infof("-----load loop exit %s",time.Since(begin))
@@ -2076,8 +2075,6 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 		defer wg.Done()
 		wait_b := time.Now()
 
-		m.Lock()
-		defer m.Unlock()
 		err := handler.simdCsvReader.ReadLoop(getLineOutChan(handler.simdCsvGetParsedLinesChan))
 		if err != nil {
 			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_READ_SIMDCSV_ERROR, err, nil)
@@ -2129,8 +2126,6 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 				//
 				handler.simdCsvReader.Close()
 				handler.closeOnceGetParsedLinesChan.Do(func() {
-					m.Lock()
-					defer m.Unlock()
 					close(getLineOutChan(handler.simdCsvGetParsedLinesChan))
 				})
 				go func() {

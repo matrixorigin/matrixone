@@ -2103,6 +2103,14 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 
 		if strings.ToLower(seps[0]) == "kill" {
 			//last one is processID
+			/*
+				The 'kill query xxx' is processed in an independent connection.
+				When a 'Ctrl+C' is received from the user in mysql client shell,
+				an independent connection is established and the 'kill query xxx'
+				is sent to the server. The server cancels the 'query xxx' after it
+				receives the 'kill query xxx'. The server responses the OK.
+				Then, the client quit this connection.
+			*/
 			procIdStr := seps[len(seps)-1]
 			procID, err := strconv.ParseUint(procIdStr, 10, 64)
 			if err != nil {

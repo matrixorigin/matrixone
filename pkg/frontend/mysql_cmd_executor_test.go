@@ -998,7 +998,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		mce := &MysqlCmdExecutor{}
 		mce.PrepareSessionBeforeExecRequest(ses)
 
-		err = mce.doComQuery(cmdFieldListQuery)
+		err = mce.doComQuery(ctx, cmdFieldListQuery)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

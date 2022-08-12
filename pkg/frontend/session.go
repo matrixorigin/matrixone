@@ -884,11 +884,12 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 // It sends nothing to the client.
 func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) error {
 	mce := NewMysqlCmdExecutor()
+	defer mce.Close()
 	ses := NewSession(&FakeProtocol{}, gm, mp, pu, gSysVariables)
 	ses.SetOutputCallback(fakeDataSetFetcher)
 	mce.PrepareSessionBeforeExecRequest(ses)
 	cancelBackgroundSessionCtx, cancelBackgroundSessionFunc := context.WithCancel(ctx)
-
+	defer cancelBackgroundSessionFunc()
 	err := mce.doComQuery(cancelBackgroundSessionCtx, sql)
 	if err != nil {
 		return err
@@ -906,7 +907,5 @@ func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempo
 	//	}
 	//}
 
-	cancelBackgroundSessionFunc()
-	mce.Close()
 	return nil
 }
