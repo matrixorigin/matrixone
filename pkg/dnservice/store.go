@@ -153,6 +153,7 @@ func (s *store) Start() error {
 }
 
 func (s *store) Close() error {
+	s.stopper.Stop()
 	var err error
 	if e := s.hakeeperClient.Close(); e != nil {
 		err = multierr.Append(e, err)
@@ -170,7 +171,6 @@ func (s *store) Close() error {
 		}
 		return true
 	})
-	s.stopper.Stop()
 	return err
 }
 
