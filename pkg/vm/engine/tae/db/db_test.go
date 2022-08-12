@@ -2013,7 +2013,7 @@ func TestMergeBlocks(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
-	schema := catalog.MockSchemaAll(13, -1)
+	schema := catalog.MockSchemaAll(13, 1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 3
 	bat := catalog.MockBatch(schema, 30)
@@ -2064,6 +2064,105 @@ func TestMergeBlocks(t *testing.T) {
 		it.Next()
 	}
 	assert.Nil(t, txn.Commit())
+}
+
+// delete
+// merge but not commit
+// delete
+// commit merge
+func TestMergeblocks2(t *testing.T) {
+	testutils.EnsureNoLeak(t)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 3
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 6)
+	bats := bat.Split(2)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bats[0], true)
+
+	txn, rel := tae.getRelation()
+	_ = rel.Append(bats[1])
+	assert.Nil(t, txn.Commit())
+
+	{
+		v := getSingleSortKeyValue(bat, schema, 1)
+		t.Logf("v is %v**********", v)
+		filter := handle.NewEQFilter(v)
+		txn2, rel := tae.getRelation()
+		t.Log("********before delete******************")
+		checkAllColRowsByScan(t, rel, 6, true)
+		_ = rel.DeleteByFilter(filter)
+		assert.Nil(t, txn2.Commit())
+	}
+
+	_, rel = tae.getRelation()
+	t.Log("**********************")
+	checkAllColRowsByScan(t, rel, 5, true)
+
+	{
+		t.Log("************merge************")
+
+		txn, rel = tae.getRelation()
+
+		segIt := rel.MakeSegmentIt()
+		seg := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry)
+		segHandle, err := rel.GetSegment(seg.ID)
+		assert.NoError(t, err)
+
+		var metas []*catalog.BlockEntry
+		it := segHandle.MakeBlockIt()
+		for it.Valid() {
+			meta := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+			metas = append(metas, meta)
+			it.Next()
+		}
+		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
+		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, tae.Scheduler)
+		assert.NoError(t, err)
+		err = task.OnExec()
+		assert.NoError(t, err)
+
+		{
+			v := getSingleSortKeyValue(bat, schema, 2)
+			t.Logf("v is %v**********", v)
+			filter := handle.NewEQFilter(v)
+			txn2, rel := tae.getRelation()
+			t.Log("********before delete******************")
+			checkAllColRowsByScan(t, rel, 5, true)
+			_ = rel.DeleteByFilter(filter)
+			assert.Nil(t, txn2.Commit())
+		}
+		err = txn.Commit()
+		assert.NoError(t, err)
+	}
+
+	t.Log("********************")
+	_, rel = tae.getRelation()
+	checkAllColRowsByScan(t, rel, 4, true)
+	assert.Equal(t, int64(4), rel.Rows())
+
+	v := getSingleSortKeyValue(bat, schema, 1)
+	filter := handle.NewEQFilter(v)
+	_, _, err := rel.GetByFilter(filter)
+	assert.NotNil(t, err)
+
+	v = getSingleSortKeyValue(bat, schema, 2)
+	filter = handle.NewEQFilter(v)
+	_, _, err = rel.GetByFilter(filter)
+	assert.NotNil(t, err)
+
+	// v = getSingleSortKeyValue(bat, schema, 4)
+	// filter = handle.NewEQFilter(v)
+	// _, _, err = rel.GetByFilter(filter)
+	// assert.NotNil(t, err)
+
+	// tae.restart()
+	// assert.Equal(t, int64(2), rel.Rows())
 }
 
 func TestDelete2(t *testing.T) {
