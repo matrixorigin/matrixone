@@ -65,14 +65,14 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	gSpanContext.Store(&sc)
 	gTraceContext = ContextWithSpanContext(ctx, sc)
 
-	initExport(config)
+	initExport(ctx, config)
 
 	errors.WithContext(DefaultContext(), goErrors.New("finish trace init"))
 
 	return gTraceContext, nil
 }
 
-func initExport(config *tracerProviderConfig) {
+func initExport(ctx context.Context, config *tracerProviderConfig) {
 	if !config.enableTracer {
 		logutil2.Infof(context.TODO(), "initExport pass.")
 		return
@@ -82,7 +82,7 @@ func initExport(config *tracerProviderConfig) {
 	switch {
 	case config.batchProcessMode == InternalExecutor:
 		// init schema
-		InitSchemaByInnerExecutor(config.sqlExecutor)
+		InitSchemaByInnerExecutor(ctx, config.sqlExecutor)
 		// register buffer pipe implements
 		export.Register(&MOSpan{}, NewBufferPipe2SqlWorker(
 			bufferWithSizeThreshold(MB),
