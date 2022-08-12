@@ -33,23 +33,23 @@ import (
 )
 
 const (
-	METRIC_DB       = "system_metrics"
-	SQL_CREATE_DB   = "create database if not exists " + METRIC_DB
-	SQL_DROP_DB     = "drop database if exists " + METRIC_DB
-	ALL_IN_ONE_MODE = "monolithic"
+	metricDBConst    = "system_metrics"
+	sqlCreateDBConst = "create database if not exists " + metricDBConst
+	sqlDropDBConst   = "drop database if exists " + metricDBConst
+	ALL_IN_ONE_MODE  = "monolithic"
 )
 
 var (
-	LBL_NODE     = "node"
-	LBL_ROLE     = "role"
-	LBL_VALUE    = "value"
-	LBL_TIME     = "collecttime"
-	occupiedLbls = map[string]struct{}{LBL_TIME: {}, LBL_VALUE: {}, LBL_NODE: {}, LBL_ROLE: {}}
+	lblNodeConst  = "node"
+	lblRoleConst  = "role"
+	lblValueConst = "value"
+	lblTimeConst  = "collecttime"
+	occupiedLbls  = map[string]struct{}{lblTimeConst: {}, lblValueConst: {}, lblNodeConst: {}, lblRoleConst: {}}
 )
 
 type Collector interface {
 	prom.Collector
-	// CancelToProm remove the cost introduced by being compatible with prometheus
+	// cancelToProm remove the cost introduced by being compatible with prometheus
 	CancelToProm()
 	// collectorForProm returns a collector used in prometheus scrape registry
 	CollectorToProm() prom.Collector
@@ -107,13 +107,13 @@ func InitMetric(ieFactory func() ie.InternalExecutor, pu *config.ParameterUnit, 
 
 func StopMetricSync() {
 	if moCollector != nil {
-		if ch, effect := moCollector.Stop(); effect {
+		if ch, effect := moCollector.Stop(true); effect {
 			<-ch
 		}
 		moCollector = nil
 	}
 	if moExporter != nil {
-		if ch, effect := moExporter.Stop(); effect {
+		if ch, effect := moExporter.Stop(true); effect {
 			<-ch
 		}
 		moExporter = nil
@@ -144,16 +144,16 @@ func mustRegister(collector Collector) {
 // initTables gathers all metrics and extract metadata to format create table sql
 func initTables(ieFactory func() ie.InternalExecutor) {
 	exec := ieFactory()
-	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(METRIC_DB).Internal(true).Finish())
+	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(metricDBConst).Internal(true).Finish())
 	mustExec := func(sql string) {
 		if err := exec.Exec(sql, ie.NewOptsBuilder().Finish()); err != nil {
 			panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
 		}
 	}
 	if getForceInit() {
-		mustExec(SQL_DROP_DB)
+		mustExec(sqlDropDBConst)
 	}
-	mustExec(SQL_CREATE_DB)
+	mustExec(sqlCreateDBConst)
 	var createCost time.Duration
 	defer func() {
 		logutil.Debugf(
@@ -186,7 +186,7 @@ func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer) string {
 	extra := newDescExtra(desc)
 	buf.WriteString(fmt.Sprintf(
 		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` int, `%s` varchar(20)",
-		METRIC_DB, extra.fqName, LBL_TIME, LBL_VALUE, LBL_NODE, LBL_ROLE,
+		metricDBConst, extra.fqName, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
 	))
 	for _, lbl := range extra.labels {
 		buf.WriteString(", `")
