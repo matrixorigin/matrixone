@@ -15,8 +15,9 @@
 package hakeeper
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestTimeoutConfig(t *testing.T) {
@@ -24,5 +25,5 @@ func TestTimeoutConfig(t *testing.T) {
 	c.Fill()
 	assert.Equal(t, DefaultTickPerSecond, c.TickPerSecond)
 	assert.Equal(t, DefaultLogStoreTimeout, c.LogStoreTimeout)
-	assert.Equal(t, DefaultDnStoreTimeout, c.DnStoreTimeout)
+	assert.Equal(t, DefaultDNStoreTimeout, c.DNStoreTimeout)
 }

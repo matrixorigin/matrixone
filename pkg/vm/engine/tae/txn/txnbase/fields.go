@@ -30,10 +30,8 @@ func TxnMgrField(mgr *TxnManager) zap.Field {
 
 func (mgr *TxnManager) MarshalLogObject(enc zapcore.ObjectEncoder) (err error) {
 	enc.AddUint64("currId", mgr.IdAlloc.Get())
-	//enc.AddUint64("currTs", mgr.TsAlloc.Get())
-	enc.AddByteString("currTs", mgr.TsAlloc.Get().ToSlice())
-	//enc.AddUint64("safeTs", mgr.StatSafeTS())
-	enc.AddByteString("currTs", mgr.StatSafeTS().ToSlice())
+	enc.AddString("currTs", mgr.TsAlloc.Get().ToString())
+	enc.AddString("currTs", mgr.StatSafeTS().ToString())
 	return
 }
 
@@ -41,12 +39,10 @@ func (txn *Txn) MarshalLogObject(enc zapcore.ObjectEncoder) (err error) {
 	txn.RLock()
 	defer txn.RUnlock()
 	enc.AddUint64("id", txn.ID)
-	//enc.AddUint64("startTs", txn.StartTS)
-	enc.AddByteString("startTs", txn.StartTS.ToSlice())
+	enc.AddString("startTs", txn.StartTS.ToString())
 	enc.AddString("state", txnif.TxnStrState(txn.State))
 	if !txn.IsActiveLocked() {
-		//enc.AddUint64("commitTs", txn.CommitTS)
-		enc.AddByteString("commitTs", txn.CommitTS.ToSlice())
+		enc.AddString("commitTs", txn.CommitTS.ToString())
 	}
 	return
 }
