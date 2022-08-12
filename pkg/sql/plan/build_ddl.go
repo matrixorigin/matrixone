@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
@@ -73,14 +72,10 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	if err != nil {
 		return nil, err
 	}
-
 	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-		Def: &plan.TableDef_DefType_Properties{
-			Properties: &plan.PropertiesDef{
-				Properties: []*plan.Property{
-					{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemViewRel},
-					{Key: catalog.SystemRelAttr_CreateSQL, Value: string(viewData)},
-				},
+		Def: &plan.TableDef_DefType_View{
+			View: &plan.ViewDef{
+				View: string(viewData),
 			},
 		},
 	})
@@ -341,7 +336,14 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			return nil, errors.New("", fmt.Sprintf("table %s is not exists", dropTable.Table))
 		}
 	} else {
-		if tableDef.Typ == catalog.SystemViewRel {
+		isView := false
+		for _, def := range tableDef.Defs {
+			if _, ok := def.Def.(*plan.TableDef_DefType_View); ok {
+				isView = true
+				break
+			}
+		}
+		if isView {
 			return nil, errors.New("", fmt.Sprintf("table %s is not exists", dropTable.Table))
 		}
 	}
@@ -377,7 +379,14 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 			return nil, errors.New("", fmt.Sprintf("view %s is not exists", dropTable.Table))
 		}
 	} else {
-		if tableDef.Typ != catalog.SystemViewRel {
+		isView := false
+		for _, def := range tableDef.Defs {
+			if _, ok := def.Def.(*plan.TableDef_DefType_View); ok {
+				isView = true
+				break
+			}
+		}
+		if !isView {
 			return nil, errors.New("", fmt.Sprintf("%s is not a view", dropTable.Table))
 		}
 	}

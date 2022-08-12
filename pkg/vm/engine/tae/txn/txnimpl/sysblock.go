@@ -260,9 +260,9 @@ func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err
 		case catalog.SystemRelAttr_Persistence:
 			colData.Append([]byte(catalog.SystemPersistRel))
 		case catalog.SystemRelAttr_Kind:
-			colData.Append([]byte(table.GetSchema().Relkind))
+			colData.Append([]byte(catalog.SystemOrdinaryRel))
 		case catalog.SystemRelAttr_CreateSQL:
-			colData.Append([]byte(table.GetSchema().Createsql))
+			colData.Append([]byte("todosql"))
 		default:
 			panic("unexpected")
 		}

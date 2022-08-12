@@ -30,6 +30,12 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		commentDef.Comment = schema.Comment
 		defs = append(defs, commentDef)
 	}
+
+	if schema.View != "" {
+		viewDef := new(engine.ViewDef)
+		viewDef.View = schema.View
+		defs = append(defs, viewDef)
+	}
 	for _, col := range schema.ColDefs {
 		if col.IsPhyAddr() {
 			continue
@@ -65,18 +71,6 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		}
 		defs = append(defs, pk)
 	}
-	pro := new(engine.PropertiesDef)
-	pro.Properties = append(pro.Properties, engine.Property{
-		Key:   catalog.SystemRelAttr_Kind,
-		Value: string(schema.Relkind),
-	})
-	if schema.Createsql != "" {
-		pro.Properties = append(pro.Properties, engine.Property{
-			Key:   catalog.SystemRelAttr_CreateSQL,
-			Value: schema.Createsql,
-		})
-	}
-	defs = append(defs, pro)
 	return
 }
 
@@ -103,17 +97,18 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 					return
 				}
 			}
+
 		case *engine.PropertiesDef:
 			for _, property := range defVal.Properties {
 				switch strings.ToLower(property.Key) {
 				case catalog.SystemRelAttr_Comment:
 					schema.Comment = property.Value
-				case catalog.SystemRelAttr_Kind:
-					schema.Relkind = property.Value
-				case catalog.SystemRelAttr_CreateSQL:
-					schema.Createsql = property.Value
 				}
 			}
+
+		case *engine.ViewDef:
+			schema.View = defVal.View
+
 		default:
 			// We will not deal with other cases for the time being
 		}

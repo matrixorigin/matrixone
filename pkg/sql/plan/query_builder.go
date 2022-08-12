@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *QueryBuilder {
@@ -1519,13 +1518,20 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		}
 
 		// set view statment to CTE
-		if tableDef.Typ == catalog.SystemViewRel {
+		viewDefString := ""
+		for _, def := range tableDef.Defs {
+			if viewDef, ok := def.Def.(*plan.TableDef_DefType_View); ok {
+				viewDefString = viewDef.View.View
+				break
+			}
+		}
+		if viewDefString != "" {
 			if ctx.cteByName == nil {
 				ctx.cteByName = make(map[string]*CTERef)
 			}
 
 			viewData := ViewData{}
-			err := json.Unmarshal([]byte(tableDef.CreateSql), &viewData)
+			err := json.Unmarshal([]byte(viewDefString), &viewData)
 			if err != nil {
 				return 0, err
 			}
