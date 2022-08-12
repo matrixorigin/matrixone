@@ -15,46 +15,115 @@
 package logservice
 
 import (
+	"context"
+	"reflect"
+	"sync"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-type ReplicaInfo struct {
-	UUID           string
-	ServiceAddress string
-}
-
 type ShardInfo struct {
-	ShardID  uint64
-	Replicas map[uint64]ReplicaInfo
-	Epoch    uint64
-	LeaderID uint64
-	Term     uint64
+	// ReplicaID is the ID of the replica recommended to use
+	ReplicaID uint64
+	// Replicas is a map of replica ID to their service addresses
+	Replicas map[uint64]string
 }
 
-func (s *Service) GetShardInfo(shardID uint64) (ShardInfo, bool) {
+// GetShardInfo is to be invoked when querying ShardInfo on a Log Service node.
+// address is usually the reverse proxy that randomly redirect the request to
+// a known Log Service node.
+func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
+	timeout := time.Second
+	respPool := &sync.Pool{}
+	respPool.New = func() interface{} {
+		return &RPCResponse{pool: respPool}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cc, err := getRPCClient(ctx, address, respPool)
+	if err != nil {
+		return ShardInfo{}, false, err
+	}
+	defer func() {
+		if err := cc.Close(); err != nil {
+			plog.Errorf("failed to close client %v", err)
+		}
+	}()
+	req := pb.Request{
+		Method:  pb.GET_SHARD_INFO,
+		Timeout: int64(timeout),
+		LogRequest: pb.LogRequest{
+			ShardID: shardID,
+		},
+	}
+	rpcReq := &RPCRequest{
+		Request: req,
+	}
+	future, err := cc.Send(ctx,
+		address, rpcReq, morpc.SendOptions{Timeout: time.Duration(timeout)})
+	if err != nil {
+		return ShardInfo{}, false, err
+	}
+	defer future.Close()
+	msg, err := future.Get()
+	if err != nil {
+		return ShardInfo{}, false, err
+	}
+	response, ok := msg.(*RPCResponse)
+	if !ok {
+		panic("unexpected response type")
+	}
+	resp := response.Response
+	defer response.Release()
+	err = toError(resp)
+	if err != nil {
+		return ShardInfo{}, false, err
+	}
+	si := *resp.ShardInfo
+	if reflect.DeepEqual(si, pb.ShardInfoQueryResult{}) {
+		return ShardInfo{}, false, nil
+	}
+	// leader address is unknown
+	if _, ok := si.Replicas[si.LeaderID]; !ok {
+		return ShardInfo{}, false, nil
+	}
+	result := ShardInfo{
+		ReplicaID: si.LeaderID,
+		Replicas:  make(map[uint64]string),
+	}
+	for replicaID, info := range si.Replicas {
+		result.Replicas[replicaID] = info.ServiceAddress
+	}
+	return result, true, nil
+}
+
+func (s *Service) getShardInfo(shardID uint64) (pb.ShardInfoQueryResult, bool) {
 	r, ok := s.store.nh.GetNodeHostRegistry()
 	if !ok {
 		panic(moerr.NewError(moerr.INVALID_STATE, "gossip registry not enabled"))
 	}
 	shard, ok := r.GetShardInfo(shardID)
 	if !ok {
-		return ShardInfo{}, false
+		return pb.ShardInfoQueryResult{}, false
 	}
-	result := ShardInfo{
+	result := pb.ShardInfoQueryResult{
 		ShardID:  shard.ShardID,
 		Epoch:    shard.ConfigChangeIndex,
 		LeaderID: shard.LeaderID,
 		Term:     shard.Term,
-		Replicas: make(map[uint64]ReplicaInfo),
+		Replicas: make(map[uint64]pb.ReplicaInfo),
 	}
 	for nodeID, uuid := range shard.Nodes {
 		data, ok := r.GetMeta(uuid)
 		if !ok {
-			return ShardInfo{}, false
+			return pb.ShardInfoQueryResult{}, false
 		}
 		var md storeMeta
 		md.unmarshal(data)
-		result.Replicas[nodeID] = ReplicaInfo{
+		result.Replicas[nodeID] = pb.ReplicaInfo{
 			UUID:           uuid,
 			ServiceAddress: md.serviceAddress,
 		}
