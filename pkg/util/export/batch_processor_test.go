@@ -151,15 +151,14 @@ func Test_newBufferHolder(t *testing.T) {
 	}
 	ch := make(chan string)
 	byteBuf := new(bytes.Buffer)
-	signalC := make(chan *bufferHolder)
+	signalC := make(chan *bufferHolder, 1)
 	var signal = func(b *bufferHolder) {
 		signalC <- b
 	}
-	var signalAcceptable sync.WaitGroup
-	signalAcceptable.Add(1) // init started-lock
+	var signalAcceptableCh = make(chan struct{}, 1)
 	go func() {
 		for {
-			signalAcceptable.Wait()
+			<-signalAcceptableCh
 			b, ok := <-signalC
 			if !ok {
 				break
@@ -171,7 +170,6 @@ func Test_newBufferHolder(t *testing.T) {
 				b.batch = nil // aim to ignore FlushAndReset process
 				ch <- (*content).(string)
 			}
-			signalAcceptable.Add(1) // init started-lock
 		}
 	}()
 	tests := []struct {
@@ -210,23 +208,18 @@ func Test_newBufferHolder(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			buf := newBufferHolder(tt.args.name, tt.args.impl, tt.args.signal)
-			signalAcceptable.Add(len(tt.args.elems)) // wait Add request
-			signalAcceptable.Done()                  // release started-lock
 			for _, v := range tt.args.elems {
-				signalAcceptable.Done() // done Add request
 				buf.Add(v)
 			}
+			signalAcceptableCh <- struct{}{}
 			got := <-ch
 			require.Equal(t, got, tt.want)
 			buf.FlushAndReset()
 
-			signalAcceptable.Add(len(tt.args.elemsReminder)) // wait Add request
-			signalAcceptable.Done()                          // release started-lock
 			for _, v := range tt.args.elemsReminder {
-				signalAcceptable.Done() // done Add request
 				buf.Add(v)
 			}
-			time.Sleep(tt.args.interval)
+			signalAcceptableCh <- struct{}{}
 			got = <-ch
 			if got != tt.wantReminder {
 				t.Errorf("newBufferHolder() = %v, want %v", got, tt.wantReminder)
@@ -236,6 +229,7 @@ func Test_newBufferHolder(t *testing.T) {
 	}
 	//signalAcceptable.Done() // release started-lock
 	close(signalC)
+	signalAcceptableCh <- struct{}{}
 }
 
 func TestNewMOCollector(t *testing.T) {
