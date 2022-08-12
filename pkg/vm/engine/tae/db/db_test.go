@@ -2013,7 +2013,7 @@ func TestMergeBlocks(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
-	schema := catalog.MockSchemaAll(13, 1)
+	schema := catalog.MockSchemaAll(13, -1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 3
 	bat := catalog.MockBatch(schema, 30)
