@@ -232,7 +232,6 @@ func main() {
 	mixUsage(rootCtx)
 
 	logutil2.Warn(rootCtx, "wait 5s to see insert sql")
-	time.Sleep(5 * time.Second)
 
 	shutdown(rootCtx)
 }
