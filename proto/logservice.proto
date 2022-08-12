@@ -185,10 +185,10 @@ message Request {
   MethodType Method              = 2;
   int64 Timeout                  = 3;
   LogRequest LogRequest          = 4 [(gogoproto.nullable) = false];
-  LogStoreHeartbeat LogHeartbeat = 5 [(gogoproto.nullable) = false];
-  CNStoreHeartbeat CNHeartbeat   = 6 [(gogoproto.nullable) = false];
-  DNStoreHeartbeat DNHeartbeat   = 7 [(gogoproto.nullable) = false];
-  TsoRequest TsoRequest          = 8 [(gogoproto.nullable) = false];
+  LogStoreHeartbeat LogHeartbeat = 5;
+  CNStoreHeartbeat CNHeartbeat   = 6;
+  DNStoreHeartbeat DNHeartbeat   = 7;
+  TsoRequest TsoRequest          = 8;
 };
 
 enum ErrorCode {
@@ -225,9 +225,9 @@ message Response {
   string ErrorMessage            = 4;
   bool IsHAKeeper                = 5;
   LogResponse LogResponse        = 6 [(gogoproto.nullable) = false];
-  CommandBatch CommandBatch      = 7 [(gogoproto.nullable) = false];
-  TsoResponse TsoResponse        = 8 [(gogoproto.nullable) = false];
-  ClusterDetails ClusterDetails  = 9 [(gogoproto.nullable) = false];
+  CommandBatch CommandBatch      = 7;
+  TsoResponse TsoResponse        = 8;
+  ClusterDetails ClusterDetails  = 9;
   ShardInfoQueryResult ShardInfo = 10;
 };
 
