@@ -83,12 +83,12 @@ func OpBitBase[T opBitT](vectors []*vector.Vector, proc *process.Process, typ ty
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
 	vector.SetCol(resultVector, resultValues)
 
-	goOpXorGeneral(left, right, resultVector, afn)
+	goOpBitGeneral(left, right, resultVector, afn)
 
 	return resultVector, nil
 }
 
-func goOpXorGeneral[T opBitT](xs, ys, rs *vector.Vector, bfn opBitFun[T]) error {
+func goOpBitGeneral[T opBitT](xs, ys, rs *vector.Vector, bfn opBitFun[T]) error {
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
 	if xs.IsScalar() {
 		if nulls.Any(ys.Nsp) {
