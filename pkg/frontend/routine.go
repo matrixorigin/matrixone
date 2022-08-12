@@ -40,6 +40,7 @@ type Routine struct {
 	//channel of request
 	requestChan chan *Request
 
+	cancelRoutineCtx  context.Context
 	cancelRoutineFunc context.CancelFunc
 
 	routineMgr *RoutineManager
@@ -160,6 +161,7 @@ func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecuto
 		requestChan:       make(chan *Request, 1),
 		guestMmu:          guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu),
 		mempool:           pu.Mempool,
+		cancelRoutineCtx:  cancelRoutineCtx,
 		cancelRoutineFunc: cancelRoutineFunc,
 	}
 

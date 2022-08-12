@@ -58,9 +58,10 @@ var (
 	MoVersion    = ""
 )
 
-func createMOServer(moServerCtx context.Context) {
+func createMOServer(inputCtx context.Context) {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
-	pu := config.GetParameterUnit(moServerCtx)
+	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
+	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
 	mo = frontend.NewMOServer(moServerCtx, address, pu)
 	if config.GlobalSystemVariables.GetEnableMetric() {
 		ieFactory := func() ie.InternalExecutor {
@@ -178,14 +179,12 @@ func main() {
 
 	rootCtx := context.Background()
 	cancelMoServerCtx, cancelMoServerFunc := context.WithCancel(rootCtx)
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
-	moServerCtx := context.WithValue(cancelMoServerCtx, config.ParameterUnitKey, pu)
 
 	//just initialize the tae after configuration has been loaded
 	if len(args) == 2 && args[1] == "initdb" {
 		fmt.Println("Initialize the TAE engine ...")
 		taeWrapper := initTae()
-		err := frontend.InitDB(moServerCtx, taeWrapper.eng)
+		err := frontend.InitDB(cancelMoServerCtx, taeWrapper.eng)
 		if err != nil {
 			logutil.Infof("Initialize catalog failed. error:%v", err)
 			os.Exit(InitCatalogExit)
@@ -215,7 +214,7 @@ func main() {
 	if engineName == "tae" {
 		fmt.Println("Initialize the TAE engine ...")
 		tae = initTae()
-		err := frontend.InitDB(moServerCtx, tae.eng)
+		err := frontend.InitDB(cancelMoServerCtx, tae.eng)
 		if err != nil {
 			logutil.Infof("Initialize catalog failed. error:%v", err)
 			os.Exit(InitCatalogExit)
@@ -226,7 +225,7 @@ func main() {
 		os.Exit(LoadConfigExit)
 	}
 
-	createMOServer(moServerCtx)
+	createMOServer(cancelMoServerCtx)
 
 	err := runMOServer()
 	if err != nil {

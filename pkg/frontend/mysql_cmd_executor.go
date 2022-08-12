@@ -1791,7 +1791,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 
 		selfHandle = false
-
 		ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
 
 		switch st := stmt.(type) {
@@ -2173,8 +2172,6 @@ func (mce *MysqlCmdExecutor) Close() {
 		cancelRequestFunc()
 	}
 
-	mce.sessionRWLock.Lock()
-	defer mce.sessionRWLock.Unlock()
 	ses := mce.GetSession()
 	err := ses.TxnRollback()
 	if err != nil {

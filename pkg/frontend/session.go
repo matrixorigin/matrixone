@@ -531,7 +531,7 @@ func (ses *Session) AuthenticateUser(userInput string) error {
 	ses.SetTenantInfo(tenant)
 
 	//Get the password of the user in an independent session
-	err = executeSQLInBackgroundSession(ses.GuestMmu, ses.Mempool, ses.Pu, "use mo_catalog; select * from mo_database;")
+	err = executeSQLInBackgroundSession(ses.requestCtx, ses.GuestMmu, ses.Mempool, ses.Pu, "use mo_catalog; select * from mo_database;")
 	return err
 }
 
@@ -882,13 +882,14 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 
 // executeSQLInBackgroundSession executes the sql in an independent session and transaction.
 // It sends nothing to the client.
-func executeSQLInBackgroundSession(gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) error {
+func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) error {
 	mce := NewMysqlCmdExecutor()
-	defer mce.Close()
 	ses := NewSession(&FakeProtocol{}, gm, mp, pu, gSysVariables)
 	ses.SetOutputCallback(fakeDataSetFetcher)
 	mce.PrepareSessionBeforeExecRequest(ses)
-	err := mce.doComQuery(sql)
+	cancelBackgroundSessionCtx, cancelBackgroundSessionFunc := context.WithCancel(ctx)
+
+	err := mce.doComQuery(cancelBackgroundSessionCtx, sql)
 	if err != nil {
 		return err
 	}
@@ -905,5 +906,7 @@ func executeSQLInBackgroundSession(gm *guest.Mmu, mp *mempool.Mempool, pu *confi
 	//	}
 	//}
 
+	cancelBackgroundSessionFunc()
+	mce.Close()
 	return nil
 }

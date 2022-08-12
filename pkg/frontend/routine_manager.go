@@ -25,10 +25,10 @@ import (
 )
 
 type RoutineManager struct {
-	rwlock  sync.RWMutex
-	ctx     context.Context
-	clients map[goetty.IOSession]*Routine
-	pu      *config.ParameterUnit
+	rwlock        sync.RWMutex
+	ctx           context.Context
+	clients       map[goetty.IOSession]*Routine
+	pu            *config.ParameterUnit
 	skipCheckUser bool
 }
 
@@ -42,7 +42,6 @@ func (rm *RoutineManager) GetSkipCheckUser() bool {
 	rm.rwlock.RLock()
 	defer rm.rwlock.RUnlock()
 	return rm.skipCheckUser
->>>>>>> main
 }
 
 func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
@@ -58,6 +57,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	routine := NewRoutine(rm.ctx, pro, exe, rm.pu)
 	routine.SetRoutineMgr(rm)
 	ses := NewSession(routine.protocol, routine.guestMmu, routine.mempool, rm.pu, gSysVariables)
+	ses.SetRequestContext(routine.cancelRoutineCtx)
 	routine.SetSession(ses)
 	pro.SetSession(ses)
 
