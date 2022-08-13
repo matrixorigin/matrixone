@@ -22,10 +22,10 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type internalVector interface {
@@ -256,7 +256,7 @@ func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	vec.releaseRoStorage()
 	var tmpn int64
 	// 1. Vector type
-	typeBuf := make([]byte, types.TypeSize)
+	typeBuf := make([]byte, types.TSize)
 	if _, err = r.Read(typeBuf); err != nil {
 		return
 	}
@@ -335,8 +335,8 @@ func (vec *vector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err e
 			return
 		}
 	}
-	vec.typ = types.DecodeType(buf[:types.TypeSize])
-	buf = buf[types.TypeSize:]
+	vec.typ = types.DecodeType(buf[:types.TSize])
+	buf = buf[types.TSize:]
 
 	nullable := types.DecodeFixed[bool](buf[:1])
 	buf = buf[1:]

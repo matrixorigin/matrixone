@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/meta"
 )
@@ -36,7 +36,7 @@ func (d *database) Relation(_ context.Context, name string) (engine.Relation, er
 	if err != nil {
 		return nil, err
 	}
-	if err := encoding.Decode(data, &md); err != nil {
+	if err := types.Decode(data, &md); err != nil {
 		return nil, err
 	}
 	return &relation{id: name, db: d.db, n: d.n, md: md}, nil
@@ -57,7 +57,7 @@ func (d *database) Create(_ context.Context, name string, defs []engine.TableDef
 			md.Index = append(md.Index, engine.IndexTableDef{Typ: d.Typ, ColNames: d.ColNames, Name: d.Name})
 		}
 	}
-	data, err := encoding.Encode(md)
+	data, err := types.Encode(md)
 	if err != nil {
 		return err
 	}

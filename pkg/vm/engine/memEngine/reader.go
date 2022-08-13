@@ -19,8 +19,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
@@ -64,7 +64,7 @@ func (r *reader) Read(attrs []string, _ *plan.Expr, m *mheap.Mheap) (*batch.Batc
 				return nil, err
 			}
 			bat.Vecs[i] = vector.New(md.Type)
-			n := int(encoding.DecodeInt32(data[len(data)-4:]))
+			n := int(types.DecodeInt32(data[len(data)-4:]))
 			r.dds[i].Reset()
 			if n > r.dds[i].Cap() {
 				r.dds[i].Grow(n)

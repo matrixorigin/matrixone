@@ -18,10 +18,10 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,7 +33,7 @@ func TestStaticFilterIndex(t *testing.T) {
 	var exist bool
 	var ans *roaring.Bitmap
 	cType := Plain
-	typ := types.Type{Oid: types.Type_INT32}
+	typ := types.Type{Oid: types.T_int32}
 	colIdx := uint16(0)
 	interIdx := uint16(0)
 
