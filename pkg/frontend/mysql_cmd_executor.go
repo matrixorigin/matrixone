@@ -49,7 +49,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -596,7 +595,7 @@ func extractRowFromVector(vec *vector.Vector, i int, row []interface{}, rowIndex
 			vs := make([]bytejson.ByteJson, 0, len(bytes.Lengths))
 			for i, length := range bytes.Lengths {
 				off := bytes.Offsets[i]
-				vs = append(vs, encoding.DecodeJson(bytes.Data[off:off+length]))
+				vs = append(vs, types.DecodeJson(bytes.Data[off:off+length]))
 			}
 			row[i] = vs[rowIndex]
 		} else {
@@ -607,7 +606,7 @@ func extractRowFromVector(vec *vector.Vector, i int, row []interface{}, rowIndex
 				vs := make([]bytejson.ByteJson, 0, len(bytes.Lengths))
 				for i, length := range bytes.Lengths {
 					off := bytes.Offsets[i]
-					vs = append(vs, encoding.DecodeJson(bytes.Data[off:off+length]))
+					vs = append(vs, types.DecodeJson(bytes.Data[off:off+length]))
 				}
 				row[i] = vs[rowIndex]
 			}

@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/endswith"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -45,7 +44,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeUint8Slice(resultVector.Data)
+		resultValues := types.DecodeUint8Slice(resultVector.Data)
 		resultValues = resultValues[:len(rightValues.Lengths)]
 		nulls.Set(resultVector.Nsp, right.Nsp)
 		vector.SetCol(resultVector, endswith.EndsWithLeftConst(leftValues, rightValues, resultValues))
@@ -58,7 +57,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeUint8Slice(resultVector.Data)
+		resultValues := types.DecodeUint8Slice(resultVector.Data)
 		resultValues = resultValues[:len(leftValues.Lengths)]
 		nulls.Set(resultVector.Nsp, left.Nsp)
 		vector.SetCol(resultVector, endswith.EndsWithRightConst(leftValues, rightValues, resultValues))
@@ -68,7 +67,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	if err != nil {
 		return nil, err
 	}
-	resultValues := encoding.DecodeUint8Slice(resultVector.Data)
+	resultValues := types.DecodeUint8Slice(resultVector.Data)
 	resultValues = resultValues[:len(rightValues.Lengths)]
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
 	vector.SetCol(resultVector, endswith.EndsWith(leftValues, rightValues, resultValues))

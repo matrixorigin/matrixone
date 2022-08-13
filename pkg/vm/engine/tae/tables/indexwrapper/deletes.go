@@ -20,7 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 type DeletesMap struct {

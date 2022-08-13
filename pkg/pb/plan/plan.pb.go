@@ -81,29 +81,29 @@ func (TransationCompletionType) EnumDescriptor() ([]byte, []int) {
 type Type_TypeId int32
 
 const (
-	Type_ANY  Type_TypeId = 0
+	T_any  Type_TypeId = 0
 	Type_STAR Type_TypeId = 1
-	Type_BOOL Type_TypeId = 10
+	T_bool Type_TypeId = 10
 	// INTs
-	Type_INT8   Type_TypeId = 20
-	Type_INT16  Type_TypeId = 21
-	Type_INT32  Type_TypeId = 22
-	Type_INT64  Type_TypeId = 23
-	Type_INT128 Type_TypeId = 24
+	T_int8   Type_TypeId = 20
+	T_int16  Type_TypeId = 21
+	T_int32  Type_TypeId = 22
+	T_int64  Type_TypeId = 23
+	T_int128 Type_TypeId = 24
 	// UINT are mysql quirks.
-	Type_UINT8      Type_TypeId = 25
-	Type_UINT16     Type_TypeId = 26
-	Type_UINT32     Type_TypeId = 27
-	Type_UINT64     Type_TypeId = 28
-	Type_UINT128    Type_TypeId = 29
-	Type_FLOAT32    Type_TypeId = 30
-	Type_FLOAT64    Type_TypeId = 31
-	Type_DECIMAL64  Type_TypeId = 32
-	Type_DECIMAL128 Type_TypeId = 33
-	Type_DECIMAL    Type_TypeId = 34
-	Type_ANYINT     Type_TypeId = 37
-	Type_ANYFLOAT   Type_TypeId = 38
-	Type_ANYNUMBER  Type_TypeId = 39
+	T_uint8      Type_TypeId = 25
+	T_uint16     Type_TypeId = 26
+	T_uint32     Type_TypeId = 27
+	T_uint64     Type_TypeId = 28
+	T_uint128    Type_TypeId = 29
+	T_float32    Type_TypeId = 30
+	T_float64    Type_TypeId = 31
+	T_decimal64  Type_TypeId = 32
+	T_decimal128 Type_TypeId = 33
+	T_decimal    Type_TypeId = 34
+	T_anyINT     Type_TypeId = 37
+	T_anyFLOAT   Type_TypeId = 38
+	T_anyNUMBER  Type_TypeId = 39
 	// Some special small (<= 32 bytes) fixed len types that worth optimize
 	Type_UUID  Type_TypeId = 40
 	Type_UB160 Type_TypeId = 41
@@ -112,16 +112,16 @@ const (
 	Type_UB224 Type_TypeId = 44
 	Type_UB256 Type_TypeId = 45
 	// Time
-	Type_DATE      Type_TypeId = 50
+	T_date      Type_TypeId = 50
 	Type_TIME      Type_TypeId = 51
-	Type_DATETIME  Type_TypeId = 52
-	Type_TIMESTAMP Type_TypeId = 53
-	Type_INTERVAL  Type_TypeId = 54
-	Type_ANYTIME   Type_TypeId = 59
+	T_datetime  Type_TypeId = 52
+	T_timestamp Type_TypeId = 53
+	T_intERVAL  Type_TypeId = 54
+	T_anyTIME   Type_TypeId = 59
 	// Strings and binaries
-	Type_CHAR      Type_TypeId = 60
-	Type_VARCHAR   Type_TypeId = 61
-	Type_JSON      Type_TypeId = 62
+	T_char      Type_TypeId = 60
+	T_varchar   Type_TypeId = 61
+	T_json      Type_TypeId = 62
 	Type_BINARY    Type_TypeId = 70
 	Type_VARBINARY Type_TypeId = 71
 	// Special
@@ -135,7 +135,7 @@ const (
 	Type_SEL   Type_TypeId = 200
 	Type_TUPLE Type_TypeId = 201
 	// BLOB family
-	Type_BLOB Type_TypeId = 202
+	T_blob Type_TypeId = 202
 )
 
 var Type_TypeId_name = map[int32]string{
@@ -870,7 +870,7 @@ func (m *Type) GetId() Type_TypeId {
 	if m != nil {
 		return m.Id
 	}
-	return Type_ANY
+	return T_any
 }
 
 func (m *Type) GetNullable() bool {

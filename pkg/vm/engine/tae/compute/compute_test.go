@@ -21,7 +21,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -53,7 +53,7 @@ func TestShuffleByDeletes(t *testing.T) {
 }
 
 func TestCheckRowExists(t *testing.T) {
-	typ := types.Type_INT32.ToType()
+	typ := types.T_int32.ToType()
 	vec := containers.MockVector2(typ, 100, 0)
 	_, exist := GetOffsetByVal(vec, int32(55), nil)
 	require.True(t, exist)

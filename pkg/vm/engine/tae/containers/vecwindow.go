@@ -23,7 +23,7 @@ import (
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 type windowBase struct {

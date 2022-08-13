@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -487,7 +487,7 @@ func TestTxnRelation_Update(t *testing.T) {
 
 func TestCopy1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	t1 := types.Type_VARCHAR.ToType()
+	t1 := types.T_varchar.ToType()
 	v1 := containers.MockVector(t1, 10, false, true, nil)
 	defer v1.Close()
 	v1.Update(5, types.Null{})
@@ -496,7 +496,7 @@ func TestCopy1(t *testing.T) {
 		assert.Equal(t, v1.Get(i), GetValue(mv1, uint32(i)))
 	}
 
-	t2 := types.Type_DATE.ToType()
+	t2 := types.T_date.ToType()
 	v2 := containers.MockVector(t2, 20, false, true, nil)
 	defer v2.Close()
 	v2.Update(6, types.Null{})

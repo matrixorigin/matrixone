@@ -22,12 +22,12 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -196,7 +196,7 @@ func (node *ColumnUpdateNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = node.mask.UnmarshalBinary(buf); err != nil {
 		return
 	}
-	buf = make([]byte, types.TypeSize)
+	buf = make([]byte, types.TSize)
 	if _, err = r.Read(buf); err != nil {
 		return
 	}

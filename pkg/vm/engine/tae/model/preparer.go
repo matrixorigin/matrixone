@@ -16,7 +16,7 @@ package model
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func PreparePhyAddrData(typ types.Type, prefix []byte, startRow, length uint32) (col containers.Vector, err error) {

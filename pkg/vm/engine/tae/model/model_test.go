@@ -18,12 +18,12 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestPrepareHiddenData(t *testing.T) {
-	typ := types.Type_DECIMAL128.ToType()
+	typ := types.T_decimal128.ToType()
 	id := common.ID{
 		TableID:   1,
 		SegmentID: 2,

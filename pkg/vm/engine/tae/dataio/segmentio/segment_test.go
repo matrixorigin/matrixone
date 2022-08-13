@@ -16,7 +16,7 @@ package segmentio
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"testing"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"

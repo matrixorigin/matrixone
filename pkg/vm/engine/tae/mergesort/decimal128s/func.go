@@ -16,7 +16,7 @@ package decimal128s
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func Sort(col containers.Vector, idx []uint32) (ret containers.Vector) {
