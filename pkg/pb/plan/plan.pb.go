@@ -81,9 +81,9 @@ func (TransationCompletionType) EnumDescriptor() ([]byte, []int) {
 type Type_TypeId int32
 
 const (
-	T_any  Type_TypeId = 0
+	T_any     Type_TypeId = 0
 	Type_STAR Type_TypeId = 1
-	T_bool Type_TypeId = 10
+	T_bool    Type_TypeId = 10
 	// INTs
 	T_int8   Type_TypeId = 20
 	T_int16  Type_TypeId = 21
@@ -113,15 +113,15 @@ const (
 	Type_UB256 Type_TypeId = 45
 	// Time
 	T_date      Type_TypeId = 50
-	Type_TIME      Type_TypeId = 51
+	Type_TIME   Type_TypeId = 51
 	T_datetime  Type_TypeId = 52
 	T_timestamp Type_TypeId = 53
 	T_intERVAL  Type_TypeId = 54
 	T_anyTIME   Type_TypeId = 59
 	// Strings and binaries
-	T_char      Type_TypeId = 60
-	T_varchar   Type_TypeId = 61
-	T_json      Type_TypeId = 62
+	T_char         Type_TypeId = 60
+	T_varchar      Type_TypeId = 61
+	T_json         Type_TypeId = 62
 	Type_BINARY    Type_TypeId = 70
 	Type_VARBINARY Type_TypeId = 71
 	// Special
