@@ -138,14 +138,14 @@ var errorMsgRefer = map[int32]moErrorMsgItem{
 }
 
 func New(code int32, args ...any) *Error {
-	return newWithDepth(Context(), 1, code, args...)
+	return newWithDepth(Context(), code, args...)
 }
 
 func NewWithContext(ctx context.Context, code int32, args ...any) *Error {
-	return newWithDepth(ctx, 1, code, args...)
+	return newWithDepth(ctx, code, args...)
 }
 
-func newWithDepth(ctx context.Context, depth int, code int32, args ...any) *Error {
+func newWithDepth(ctx context.Context, code int32, args ...any) *Error {
 	var err *Error
 	item, has := errorMsgRefer[code]
 	if !has {
@@ -166,7 +166,7 @@ func newWithDepth(ctx context.Context, depth int, code int32, args ...any) *Erro
 			Message:      fmt.Sprintf(item.errorMsgOrFormat, args...),
 		}
 	}
-	_ = errors.WithContextWithDepth(ctx, err, depth+1)
+	_ = errors.WithContextWithDepth(ctx, err, 2)
 	return err
 }
 
@@ -222,7 +222,7 @@ func NewWarn(msg string) error {
 }
 
 func NewInternalError(msg string, args ...any) *Error {
-	return newWithDepth(Context(), 1, INTERNAL_ERROR, fmt.Sprintf("Internal error: "+msg, args...))
+	return newWithDepth(Context(), INTERNAL_ERROR, fmt.Sprintf("Internal error: "+msg, args...))
 }
 
 // NewPanicError converts a runtime panic to internal error.
@@ -230,7 +230,7 @@ func NewPanicError(v interface{}) *Error {
 	if e, ok := v.(*Error); ok {
 		return e
 	}
-	return newWithDepth(Context(), 1, INTERNAL_ERROR, fmt.Sprintf("panic %v: %s", v, debug.Stack()))
+	return newWithDepth(Context(), INTERNAL_ERROR, fmt.Sprintf("panic %v: %s", v, debug.Stack()))
 }
 
 func NewError(code int32, msg string) *Error {
