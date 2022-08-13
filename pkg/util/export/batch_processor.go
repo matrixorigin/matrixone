@@ -32,8 +32,8 @@ const defaultQueueSize = 262144 // queue mem cost = 2MB
 // bufferHolder hold ItemBuffer content, handle buffer's new/flush/reset/reminder(base on timer) operations.
 // work like:
 // ---> Add ---> ShouldFlush or trigger.signal -----> StopAndGetBatch ---> FlushAndReset ---> Add ---> ...
-//       ^                   |No                Yes
-//       |<------------------/
+// #     ^                   |No                |Yes, go next call
+// #     |<------------------/Accept next Add
 type bufferHolder struct {
 	// name like a type
 	name string
