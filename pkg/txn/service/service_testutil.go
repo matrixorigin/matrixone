@@ -60,7 +60,7 @@ func NewTestTxnStorage(log logservice.Client, clock clock.Clock) storage.TxnStor
 	if log == nil {
 		log = mem.NewMemLog()
 	}
-	return mem.NewKVTxnStorage(0, log, clock)
+	return mem.NewKVTxnStorage(1, log, clock)
 }
 
 // NewTestDNShard create a test DNShard

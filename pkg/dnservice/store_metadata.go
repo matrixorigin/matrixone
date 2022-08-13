@@ -62,10 +62,7 @@ func (s *store) initMetadata() error {
 	return nil
 }
 
-func (s *store) addDNShard(shard metadata.DNShard) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+func (s *store) addDNShardLocked(shard metadata.DNShard) {
 	for _, dn := range s.mu.metadata.Shards {
 		if dn.ShardID == shard.ShardID {
 			return

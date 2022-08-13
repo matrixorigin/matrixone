@@ -153,6 +153,7 @@ func (s *store) Start() error {
 }
 
 func (s *store) Close() error {
+	s.stopper.Stop()
 	var err error
 	if e := s.hakeeperClient.Close(); e != nil {
 		err = multierr.Append(e, err)
@@ -170,7 +171,6 @@ func (s *store) Close() error {
 		}
 		return true
 	})
-	s.stopper.Stop()
 	return err
 }
 
@@ -295,7 +295,7 @@ func (s *store) createReplica(shard metadata.DNShard) error {
 		return err
 	}
 
-	s.addDNShard(shard)
+	s.addDNShardLocked(shard)
 	return nil
 }
 

@@ -132,8 +132,8 @@ func newLogStore(cfg Config) (*store, error) {
 		return nil, err
 	}
 	hakeeperConfig := cfg.GetHAKeeperConfig()
-	plog.Infof("HAKeeper LogStoreTimeout: %s, DnStoreTimeout: %s",
-		hakeeperConfig.LogStoreTimeout, hakeeperConfig.DnStoreTimeout)
+	plog.Infof("HAKeeper LogStoreTimeout: %s, DNStoreTimeout: %s",
+		hakeeperConfig.LogStoreTimeout, hakeeperConfig.DNStoreTimeout)
 	ls := &store{
 		cfg:           cfg,
 		nh:            nh,

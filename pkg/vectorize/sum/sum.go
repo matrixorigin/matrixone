@@ -14,7 +14,9 @@
 
 package sum
 
-import "golang.org/x/exp/constraints"
+import (
+	"golang.org/x/exp/constraints"
+)
 
 var (
 	Int8Sum      = signedSum[int8]
