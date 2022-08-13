@@ -18,7 +18,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/fagongzi/goetty"
+	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
@@ -66,7 +66,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 
 	rm.rwlock.Lock()
 	defer rm.rwlock.Unlock()
-
+	rs.Ref()
 	rm.clients[rs] = routine
 }
 
@@ -131,7 +131,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	payload := packet.Payload
 	for uint32(length) == MaxPayloadSize {
 		var err error
-		msg, err = protocol.tcpConn.Read()
+		msg, err = protocol.tcpConn.Read(goetty.ReadOptions{})
 		if err != nil {
 			return errors.New("read msg error")
 		}

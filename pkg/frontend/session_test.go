@@ -16,14 +16,15 @@ package frontend
 
 import (
 	"errors"
-	"github.com/fagongzi/goetty/buf"
+	"testing"
+
+	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/smartystreets/goconvey/convey"
-	"testing"
 )
 
 func TestTxnHandler_NewTxn(t *testing.T) {
@@ -126,7 +127,7 @@ func TestSession_TxnBegin(t *testing.T) {
 	genSession := func(ctrl *gomock.Controller, gSysVars *GlobalSystemVariables) *Session {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		proto := NewMysqlClientProtocol(0, ioses, 1024, nil)
 		return NewSession(proto, nil, nil, nil, gSysVars)
 	}
@@ -162,7 +163,7 @@ func TestVariables(t *testing.T) {
 	genSession := func(ctrl *gomock.Controller, gSysVars *GlobalSystemVariables) *Session {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		proto := NewMysqlClientProtocol(0, ioses, 1024, nil)
 		return NewSession(proto, nil, nil, nil, gSysVars)
 	}
@@ -429,7 +430,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 	genSession := func(ctrl *gomock.Controller, gSysVars *GlobalSystemVariables) *Session {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		proto := NewMysqlClientProtocol(0, ioses, 1024, nil)
 		return NewSession(proto, nil, nil, nil, gSysVars)
 	}
