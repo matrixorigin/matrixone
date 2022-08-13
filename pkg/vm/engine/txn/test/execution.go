@@ -46,6 +46,10 @@ func (e *Execution) DefaultDatabase() string {
 	return "test"
 }
 
+func (e *Execution) GetRootSql() string {
+	return ""
+}
+
 func (e *Execution) GetHideKeyDef(dbName string, tableName string) *plan.ColDef {
 	attrs, err := e.getTableAttrs(dbName, tableName)
 	if err != nil {
