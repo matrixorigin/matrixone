@@ -46,10 +46,10 @@ func TestExpr_1(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
 			}
-			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
+			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "and")
 			for j, arg := range exprF.F.Args {
-				convey.So(arg.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
+				convey.So(arg.Typ.Id, convey.ShouldEqual, plan.T_bool)
 				exprC, ok := arg.Expr.(*plan.Expr_C)
 				if !ok {
 					t.Fatalf("%+v", errors.New("the parse expr type is not right"))
@@ -87,10 +87,10 @@ func TestExpr_2(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
 			}
-			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
+			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "or")
 			for j, arg := range exprF.F.Args {
-				convey.So(arg.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
+				convey.So(arg.Typ.Id, convey.ShouldEqual, plan.T_bool)
 				exprC, ok := arg.Expr.(*plan.Expr_C)
 				if !ok {
 					t.Fatalf("%+v", errors.New("the parse expr type is not right"))
@@ -128,10 +128,10 @@ func TestExpr_3(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
 			}
-			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
+			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "not")
 			for _, arg := range exprF.F.Args {
-				convey.So(arg.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
+				convey.So(arg.Typ.Id, convey.ShouldEqual, plan.T_bool)
 				exprC, ok := arg.Expr.(*plan.Expr_C)
 				if !ok {
 					t.Fatalf("%+v", errors.New("the parse expr type is not right"))
@@ -170,7 +170,7 @@ func TestExpr_4(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
 			}
-			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
+			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "=")
 		}
 	})
@@ -198,7 +198,7 @@ func TestExpr_5(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
 			}
-			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
+			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "<")
 		}
 	})
@@ -226,7 +226,7 @@ func TestExpr_6(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
 			}
-			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
+			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "<=")
 		}
 	})
@@ -254,7 +254,7 @@ func TestExpr_7(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
 			}
-			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
+			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, ">")
 		}
 	})
@@ -282,7 +282,7 @@ func TestExpr_8(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
 			}
-			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
+			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, ">=")
 		}
 	})
@@ -313,7 +313,7 @@ func TestExpr_9(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
 			}
-			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
+			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "<>")
 		}
 	})
@@ -341,10 +341,10 @@ func TestExpr_A(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
 			}
-			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
+			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, name[i])
 			for _, arg := range exprF.F.Args {
-				convey.So(arg.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
+				convey.So(arg.Typ.Id, convey.ShouldEqual, plan.T_bool)
 			}
 		}
 	})
@@ -369,10 +369,10 @@ func TestExpr_B(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
 			}
-			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
+			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "and")
 			for _, arg := range exprF.F.Args {
-				convey.So(arg.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
+				convey.So(arg.Typ.Id, convey.ShouldEqual, plan.T_bool)
 			}
 		}
 	})
