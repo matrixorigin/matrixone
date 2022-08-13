@@ -60,10 +60,10 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 	}
 
 	newTxn.DNShards = request.Txn.DNShards
-	ts, err := s.storage.Prepare(newTxn)
+	ts, err := s.storage.Prepare(ctx, newTxn)
 	if err != nil {
 		response.TxnError = newTAEPrepareError(err)
-		if err := s.storage.Rollback(newTxn); err != nil {
+		if err := s.storage.Rollback(ctx, newTxn); err != nil {
 			s.logger.Error("rollback failed",
 				util.TxnIDFieldWithID(newTxn.ID),
 				zap.Error(err))
@@ -149,7 +149,7 @@ func (s *service) CommitDNShard(ctx context.Context, request *txn.TxnRequest, re
 	}
 
 	newTxn.CommitTS = request.Txn.CommitTS
-	if err := s.storage.Commit(newTxn); err != nil {
+	if err := s.storage.Commit(ctx, newTxn); err != nil {
 		response.TxnError = newTAECommitError(err)
 		return nil
 	}
@@ -204,7 +204,7 @@ func (s *service) RollbackDNShard(ctx context.Context, request *txn.TxnRequest, 
 			util.TxnIDFieldWithID(newTxn.ID))
 	}
 
-	if err := s.storage.Rollback(newTxn); err != nil {
+	if err := s.storage.Rollback(ctx, newTxn); err != nil {
 		response.TxnError = newTAERollbackError(err)
 	}
 
