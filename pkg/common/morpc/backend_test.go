@@ -662,6 +662,10 @@ func newTestCodec() Codec {
 	return NewMessageCodec(func() Message { return messagePool.Get().(*testMessage) }, 1024)
 }
 
+func newTestCodecWithChecksum() Codec {
+	return NewMessageCodecWithChecksum(func() Message { return messagePool.Get().(*testMessage) }, 1024)
+}
+
 var (
 	messagePool = sync.Pool{
 		New: func() any {
