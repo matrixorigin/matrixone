@@ -192,6 +192,14 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) error {
 func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 
 	nativePath := l.toNativeFilePath(vector.FilePath)
+	file, err := os.Open(nativePath)
+	if os.IsNotExist(err) {
+		return ErrFileNotFound
+	}
+	if err != nil {
+		return nil
+	}
+	defer file.Close()
 
 	for i, entry := range vector.Entries {
 		if entry.Size == 0 {
@@ -203,14 +211,6 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 		}
 
 		if entry.WriterForRead != nil {
-			file, err := os.Open(nativePath)
-			if os.IsNotExist(err) {
-				return ErrFileNotFound
-			}
-			if err != nil {
-				return nil
-			}
-			defer file.Close()
 			mapper := NewBlockMapper(file, _BlockContentSize)
 
 			if entry.Offset > 0 {
@@ -294,14 +294,6 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 			}
 
 		} else {
-			file, err := os.Open(nativePath)
-			if os.IsNotExist(err) {
-				return ErrFileNotFound
-			}
-			if err != nil {
-				return nil
-			}
-			defer file.Close()
 			mapper := NewBlockMapper(file, _BlockContentSize)
 
 			if entry.Offset > 0 {
@@ -504,7 +496,7 @@ func (l *LocalFS) NewMutator(filePath string) (Mutator, error) {
 
 type _LocalFSMutator struct {
 	f      *os.File
-	mapper *BlockMapper
+	mapper *BlockMapper[*os.File]
 }
 
 func (l *_LocalFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error {

@@ -25,7 +25,7 @@ import (
 )
 
 func TestContentOffsetToBlockOffset(t *testing.T) {
-	mapper := NewBlockMapper(nil, 64)
+	mapper := NewBlockMapper[*os.File](nil, 64)
 
 	blockOffset, offsetInBlock := mapper.contentOffsetToBlockOffset(0)
 	assert.Equal(t, int64(0), blockOffset)
@@ -56,17 +56,34 @@ func TestBlockMapper(t *testing.T) {
 	blockContentSize := 8
 	tempDir := t.TempDir()
 
+	testBlockMapper(
+		t,
+		blockContentSize,
+		func() BlockMappable {
+			f, err := os.CreateTemp(tempDir, "*")
+			assert.Nil(t, err)
+			t.Cleanup(func() {
+				f.Close()
+			})
+			return f
+		},
+	)
+}
+
+func testBlockMapper(
+	t *testing.T,
+	blockContentSize int,
+	newUnderlying func() BlockMappable,
+) {
+
 	for i := 0; i < blockContentSize*4; i++ {
 
-		// create file and mapper
-		f, err := os.CreateTemp(tempDir, "*")
-		assert.Nil(t, err)
-		defer f.Close()
-		mapper := NewBlockMapper(f, blockContentSize)
+		underlying := newUnderlying()
+		mapper := NewBlockMapper(underlying, blockContentSize)
 
 		// random bytes
 		data := make([]byte, i)
-		_, err = rand.Read(data)
+		_, err := rand.Read(data)
 		assert.Nil(t, err)
 
 		// write
@@ -82,15 +99,15 @@ func TestBlockMapper(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, data, content)
 
-		// file size
-		stat, err := f.Stat()
+		// underlying size
+		underlyingSize, err := underlying.Seek(0, io.SeekEnd)
 		assert.Nil(t, err)
 		expectedSize := len(data) / blockContentSize * (blockContentSize + _ChecksumSize)
 		mod := len(data) % blockContentSize
 		if mod != 0 {
 			expectedSize += _ChecksumSize + mod
 		}
-		assert.Equal(t, expectedSize, int(stat.Size()))
+		assert.Equal(t, expectedSize, int(underlyingSize))
 
 		// iotest
 		pos, err = mapper.Seek(0, io.SeekStart)
@@ -133,4 +150,25 @@ func TestBlockMapper(t *testing.T) {
 		}
 
 	}
+}
+
+func TestMultiLayerBlockMapper(t *testing.T) {
+	blockContentSize := 8
+	tempDir := t.TempDir()
+
+	testBlockMapper(
+		t,
+		blockContentSize,
+		func() BlockMappable {
+			f, err := os.CreateTemp(tempDir, "*")
+			assert.Nil(t, err)
+			t.Cleanup(func() {
+				f.Close()
+			})
+			m := NewBlockMapper(f, blockContentSize)
+			m2 := NewBlockMapper(m, blockContentSize)
+			m3 := NewBlockMapper(m2, blockContentSize)
+			return m3
+		},
+	)
 }
