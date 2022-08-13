@@ -207,12 +207,13 @@ func (sf *segmentFile) Replay() error {
 			//if err != nil {
 			//	return err
 			//}
-			ts = types.StringToTS(info[2])
 			if suffix == INDEX_SUFFIX {
 				idx, err = strconv.ParseUint(info[2], 10, 64)
 				if err != nil {
 					return err
 				}
+			} else {
+				ts = types.StringToTS(info[2])
 			}
 		}
 		if file.snode.GetCols() > uint32(len(bf.columns)) && suffix != INDEX_SUFFIX {
