@@ -28,7 +28,7 @@ func makePlan2NullConstExprWithType() *plan.Expr {
 			},
 		},
 		Typ: &plan.Type{
-			Id:       plan.T_any,
+			Id:       int32(types.T_any),
 			Nullable: true,
 		},
 	}
@@ -47,7 +47,7 @@ func makePlan2BoolConstExprWithType(v bool) *plan.Expr {
 	return &plan.Expr{
 		Expr: makePlan2BoolConstExpr(v),
 		Typ: &plan.Type{
-			Id:       plan.T_bool,
+			Id:       int32(types.T_bool),
 			Nullable: false,
 			Size:     1,
 		},
@@ -67,7 +67,7 @@ func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
 	return &plan.Expr{
 		Expr: makePlan2Int64ConstExpr(v),
 		Typ: &plan.Type{
-			Id:       plan.T_int64,
+			Id:       int32(types.T_int64),
 			Nullable: false,
 			Size:     8,
 		},
@@ -87,7 +87,7 @@ func makePlan2Uint64ConstExprWithType(v uint64) *plan.Expr {
 	return &plan.Expr{
 		Expr: makePlan2Uint64ConstExpr(v),
 		Typ: &plan.Type{
-			Id:       plan.T_uint64,
+			Id:       int32(types.T_uint64),
 			Nullable: false,
 			Size:     8,
 		},
@@ -107,7 +107,7 @@ func makePlan2Float64ConstExprWithType(v float64) *plan.Expr {
 	return &plan.Expr{
 		Expr: makePlan2Float64ConstExpr(v),
 		Typ: &plan.Type{
-			Id:       plan.T_float64,
+			Id:       int32(types.T_float64),
 			Nullable: false,
 			Size:     8,
 		},
@@ -127,7 +127,7 @@ func makePlan2StringConstExprWithType(v string) *plan.Expr {
 	return &plan.Expr{
 		Expr: makePlan2StringConstExpr(v),
 		Typ: &plan.Type{
-			Id:       plan.T_varchar,
+			Id:       int32(types.T_varchar),
 			Nullable: false,
 			Size:     4,
 			Width:    int32(len(v)),
@@ -176,12 +176,12 @@ func copyType(t *Type) *Type {
 // if typ is decimal128 and decimal64 without scalar and precision
 // set a default value for it.
 func rewriteDecimalTypeIfNecessary(typ *plan.Type) *plan.Type {
-	if typ.Id == plan.T_decimal128 && typ.Scale == 0 && typ.Width == 0 {
+	if typ.Id == int32(types.T_decimal128) && typ.Scale == 0 && typ.Width == 0 {
 		typ.Scale = 10
 		typ.Width = 38 // precision
 		typ.Size = int32(types.T_decimal128.TypeLen())
 	}
-	if typ.Id == plan.T_decimal64 && typ.Scale == 0 && typ.Width == 0 {
+	if typ.Id == int32(types.T_decimal64) && typ.Scale == 0 && typ.Width == 0 {
 		typ.Scale = 2
 		typ.Width = 6 // precision
 		typ.Size = int32(types.T_decimal64.TypeLen())
@@ -191,7 +191,7 @@ func rewriteDecimalTypeIfNecessary(typ *plan.Type) *plan.Type {
 
 func makePlan2Type(typ *types.Type) *plan.Type {
 	return &plan.Type{
-		Id:        plan.Type_TypeId(typ.Oid),
+		Id:        int32(typ.Oid),
 		Width:     typ.Width,
 		Precision: typ.Precision,
 		Size:      typ.Size,
