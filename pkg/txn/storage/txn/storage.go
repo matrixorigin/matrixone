@@ -15,6 +15,8 @@
 package txnstorage
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
@@ -33,30 +35,30 @@ func New(handler Handler) (*Storage, error) {
 
 var _ storage.TxnStorage = new(Storage)
 
-func (s *Storage) Commit(txnMeta txn.TxnMeta) error {
+func (s *Storage) Commit(ctx context.Context, txnMeta txn.TxnMeta) error {
 	return s.handler.HandleCommit(txnMeta)
 }
 
-func (s *Storage) Committing(txnMeta txn.TxnMeta) error {
+func (s *Storage) Committing(ctx context.Context, txnMeta txn.TxnMeta) error {
 	return s.handler.HandleCommitting(txnMeta)
 }
 
-func (s *Storage) Prepare(txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
+func (s *Storage) Prepare(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
 	return s.handler.HandlePrepare(txnMeta)
 }
 
-func (s *Storage) Rollback(txnMeta txn.TxnMeta) error {
+func (s *Storage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error {
 	return s.handler.HandleRollback(txnMeta)
 }
 
-func (s *Storage) StartRecovery(ch chan txn.TxnMeta) {
+func (s *Storage) StartRecovery(ctx context.Context, ch chan txn.TxnMeta) {
 	s.handler.HandleStartRecovery(ch)
 }
 
-func (s *Storage) Close() error {
+func (s *Storage) Close(ctx context.Context) error {
 	return s.handler.HandleClose()
 }
 
-func (s *Storage) Destroy() error {
+func (s *Storage) Destroy(ctx context.Context) error {
 	return s.handler.HandleDestroy()
 }

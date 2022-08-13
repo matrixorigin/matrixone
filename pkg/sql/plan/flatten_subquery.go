@@ -67,7 +67,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			},
 		},
 		Typ: &plan.Type{
-			Id:       plan.Type_BOOL,
+			Id:       plan.T_bool,
 			Nullable: false,
 			Size:     1,
 		},

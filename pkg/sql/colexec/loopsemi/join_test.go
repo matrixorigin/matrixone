@@ -168,7 +168,7 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []int32) joinT
 	cond := &plan.Expr{
 		Typ: &plan.Type{
 			Size: 1,
-			Id:   plan.Type_BOOL,
+			Id:   plan.T_bool,
 		},
 		Expr: &plan.Expr_F{
 			F: &plan.Function{

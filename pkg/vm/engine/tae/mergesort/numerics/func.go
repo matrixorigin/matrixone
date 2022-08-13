@@ -15,8 +15,8 @@
 package numerics
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 func Sort[T types.OrderedT](col containers.Vector, idx []uint32) (ret containers.Vector) {
