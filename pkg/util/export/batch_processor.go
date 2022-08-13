@@ -30,6 +30,10 @@ import (
 const defaultQueueSize = 262144 // queue mem cost = 2MB
 
 // bufferHolder hold ItemBuffer content, handle buffer's new/flush/reset/reminder(base on timer) operations.
+// work like:
+// ---> Add ---> ShouldFlush or trigger.signal -----> StopAndGetBatch ---> FlushAndReset ---> Add ---> ...
+//       ^                   |No                Yes
+//       |<------------------/
 type bufferHolder struct {
 	// name like a type
 	name string
@@ -92,6 +96,7 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 
 // StopAndGetBatch set bufferHolder readonly, which can hold Add request,
 // and gen batch request content
+// against FlushAndReset
 func (b *bufferHolder) StopAndGetBatch(buf *bytes.Buffer) bool {
 	b.mux.RLock()
 	defer b.mux.RUnlock()
@@ -104,7 +109,7 @@ func (b *bufferHolder) StopAndGetBatch(buf *bytes.Buffer) bool {
 	return true
 }
 
-// StopTrigger stop buffer's Reminder
+// StopTrigger stop buffer's trigger(Reminder)
 func (b *bufferHolder) StopTrigger() bool {
 	b.mux.Lock()
 	defer b.mux.Unlock()
@@ -115,7 +120,7 @@ func (b *bufferHolder) StopTrigger() bool {
 func (b *bufferHolder) FlushAndReset() bool {
 	b.mux.Lock()
 	defer b.mux.Unlock()
-	if atomic.LoadUint32(&b.readonly) != READONLY {
+	if b.readonly != READONLY {
 		return false
 	}
 	if b.batch != nil {
@@ -127,7 +132,7 @@ func (b *bufferHolder) FlushAndReset() bool {
 	b.resetTrigger()
 	b.buffer.Reset()
 	b.batch = nil
-	atomic.StoreUint32(&b.readonly, READWRITE)
+	b.readonly = READWRITE
 	return true
 }
 
