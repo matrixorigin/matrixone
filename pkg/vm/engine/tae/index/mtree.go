@@ -15,7 +15,7 @@
 package index
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	art "github.com/plar/go-adaptive-radix-tree"
 )
 

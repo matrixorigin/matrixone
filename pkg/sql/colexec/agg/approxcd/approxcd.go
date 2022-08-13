@@ -17,7 +17,6 @@ package approxcd
 import (
 	hll "github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 )
 
 func ReturnType(_ []types.Type) types.Type {
@@ -75,31 +74,31 @@ func getTheBytes(value any) []byte {
 	var data []byte
 	switch v := value.(type) {
 	case uint8:
-		data = append(data, encoding.EncodeFixed(v)...)
+		data = append(data, types.EncodeFixed(v)...)
 	case uint16:
-		data = append(data, encoding.EncodeFixed(v)...)
+		data = append(data, types.EncodeFixed(v)...)
 	case uint32:
-		data = append(data, encoding.EncodeFixed(v)...)
+		data = append(data, types.EncodeFixed(v)...)
 	case uint64:
-		data = append(data, encoding.EncodeFixed(v)...)
+		data = append(data, types.EncodeFixed(v)...)
 	case int8:
-		data = append(data, encoding.EncodeFixed(v)...)
+		data = append(data, types.EncodeFixed(v)...)
 	case int16:
-		data = append(data, encoding.EncodeFixed(v)...)
+		data = append(data, types.EncodeFixed(v)...)
 	case int32:
-		data = append(data, encoding.EncodeFixed(v)...)
+		data = append(data, types.EncodeFixed(v)...)
 	case int64:
-		data = append(data, encoding.EncodeFixed(v)...)
+		data = append(data, types.EncodeFixed(v)...)
 	case float32:
-		data = append(data, encoding.EncodeFixed(v)...)
+		data = append(data, types.EncodeFixed(v)...)
 	case float64:
-		data = append(data, encoding.EncodeFixed(v)...)
+		data = append(data, types.EncodeFixed(v)...)
 	case []byte:
 		data = append(data, v...)
 	case types.Decimal64:
-		data = append(data, encoding.EncodeFixed(v)...)
+		data = append(data, types.EncodeFixed(v)...)
 	case types.Decimal128:
-		data = append(data, encoding.EncodeFixed(v)...)
+		data = append(data, types.EncodeFixed(v)...)
 	default:
 		panic("not support for type")
 	}

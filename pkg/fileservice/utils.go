@@ -17,3 +17,11 @@ package fileservice
 func ptrTo[T any](v T) *T {
 	return &v
 }
+
+func ceilingDiv[T int | int64](n, by T) T {
+	res := n / by
+	if n%by == 0 {
+		return res
+	}
+	return res + 1
+}

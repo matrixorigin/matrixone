@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/extract"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -94,7 +93,7 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeUint32Slice(resultVector.Data)
+		resultValues := types.DecodeUint32Slice(resultVector.Data)
 		resultValues = resultValues[:len(rightValues)]
 		unit := string(leftValues.Get(0))
 		results, err := extract.ExtractFromDate(unit, rightValues, resultValues)
