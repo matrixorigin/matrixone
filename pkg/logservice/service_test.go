@@ -596,21 +596,35 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 func TestGossipInSimulatedCluster(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	// start all services
+	nodeCount := 24
+	shardCount := nodeCount / 3
 	configs := make([]Config, 0)
 	services := make([]*Service, 0)
-	for i := 0; i < 48; i++ {
+	for i := 0; i < nodeCount; i++ {
 		cfg := Config{
-			FS:                  vfs.NewStrictMem(),
-			UUID:                uuid.New().String(),
-			DeploymentID:        1,
-			RTTMillisecond:      5,
-			DataDir:             fmt.Sprintf("data-%d", i),
-			ServiceAddress:      fmt.Sprintf("127.0.0.1:%d", 6000+10*i),
-			RaftAddress:         fmt.Sprintf("127.0.0.1:%d", 6000+10*i+1),
-			GossipAddress:       fmt.Sprintf("127.0.0.1:%d", 6000+10*i+2),
-			GossipSeedAddresses: []string{"127.0.0.1:6002", "127.0.0.1:6012"},
-			DisableWorkers:      true,
+			FS:             vfs.NewStrictMem(),
+			UUID:           uuid.New().String(),
+			DeploymentID:   1,
+			RTTMillisecond: 200,
+			DataDir:        fmt.Sprintf("data-%d", i),
+			ServiceAddress: fmt.Sprintf("127.0.0.1:%d", 6000+10*i),
+			RaftAddress:    fmt.Sprintf("127.0.0.1:%d", 6000+10*i+1),
+			GossipAddress:  fmt.Sprintf("127.0.0.1:%d", 6000+10*i+2),
+			GossipSeedAddresses: []string{
+				"127.0.0.1:6002",
+				"127.0.0.1:6012",
+				"127.0.0.1:6022",
+				"127.0.0.1:6032",
+				"127.0.0.1:6042",
+				"127.0.0.1:6052",
+				"127.0.0.1:6062",
+				"127.0.0.1:6072",
+				"127.0.0.1:6082",
+				"127.0.0.1:6092",
+			},
+			DisableWorkers: true,
 		}
+		cfg.GossipProbeInterval.Duration = 350 * time.Millisecond
 		configs = append(configs, cfg)
 		service, err := NewService(cfg)
 		require.NoError(t, err)
@@ -635,7 +649,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 	// start all replicas
 	// shardID: [1, 16]
 	id := uint64(100)
-	for i := uint64(0); i < 16; i++ {
+	for i := uint64(0); i < uint64(shardCount); i++ {
 		shardID := i + 1
 		r1 := id
 		r2 := id + 1
@@ -657,7 +671,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 	iterations := 1000
 	for retry := 0; retry < iterations; retry++ {
 		notReady := 0
-		for i := 0; i < 48; i++ {
+		for i := 0; i < nodeCount; i++ {
 			shardID := uint64(i/3 + 1)
 			service := services[i]
 			info, ok := service.getShardInfo(shardID)
@@ -696,7 +710,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 	// check the above change can be observed by all services
 	for retry := 0; retry < iterations; retry++ {
 		notReady := 0
-		for i := 0; i < 48; i++ {
+		for i := 0; i < nodeCount; i++ {
 			service := services[i]
 			info, ok := service.getShardInfo(1)
 			if !ok || info.LeaderID == 0 || len(info.Replicas) != 4 {
@@ -722,7 +736,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 	}()
 	for retry := 0; retry < iterations; retry++ {
 		notReady := 0
-		for i := uint64(0); i < 16; i++ {
+		for i := uint64(0); i < uint64(shardCount); i++ {
 			shardID := i + 1
 			info, ok := service.getShardInfo(shardID)
 			if !ok || info.LeaderID == 0 {

@@ -125,6 +125,10 @@ func TestConfigCanBeValidated(t *testing.T) {
 	c5 := c
 	c5.GossipSeedAddresses = []string{}
 	assert.True(t, errors.Is(c5.Validate(), ErrInvalidConfig))
+
+	c6 := c
+	c6.GossipProbeInterval.Duration = 0
+	assert.True(t, errors.Is(c6.Validate(), ErrInvalidConfig))
 }
 
 func TestBootstrapConfigCanBeValidated(t *testing.T) {
