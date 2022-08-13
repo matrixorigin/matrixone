@@ -664,9 +664,9 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 			if !ok || info.LeaderID == 0 {
 				notReady++
 				wait()
-				break
+				continue
 			}
-			if shardID == 1 {
+			if shardID == 1 && info.Epoch != 0 {
 				cci = info.Epoch
 			}
 		}
@@ -702,7 +702,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 			if !ok || info.LeaderID == 0 || len(info.Replicas) != 4 {
 				notReady++
 				wait()
-				break
+				continue
 			}
 		}
 		if notReady <= 1 {
@@ -728,7 +728,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 			if !ok || info.LeaderID == 0 {
 				notReady++
 				wait()
-				break
+				continue
 			}
 		}
 		if notReady <= 1 {
