@@ -16,6 +16,7 @@ package txnstorage
 
 import (
 	"bytes"
+	"context"
 	"encoding/gob"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -23,7 +24,7 @@ import (
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 )
 
-func (s *Storage) Read(txnMeta txn.TxnMeta, op uint32, payload []byte) (res storage.ReadResult, err error) {
+func (s *Storage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) (res storage.ReadResult, err error) {
 
 	switch op {
 

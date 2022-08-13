@@ -15,18 +15,19 @@
 //go:build !debug
 // +build !debug
 
-package encoding
+package types
 
 import (
 	"bytes"
 	"encoding/gob"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"fmt"
+	"io"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 )
 
-var TypeSize int
+var TSize int
 var DateSize int
 var DatetimeSize int
 var TimestampSize int
@@ -34,12 +35,12 @@ var Decimal64Size int
 var Decimal128Size int
 
 func init() {
-	TypeSize = int(unsafe.Sizeof(types.Type{}))
-	DateSize = int(unsafe.Sizeof(types.Date(0)))
-	DatetimeSize = int(unsafe.Sizeof(types.Datetime(0)))
-	TimestampSize = int(unsafe.Sizeof(types.Timestamp(0)))
-	Decimal64Size = int(unsafe.Sizeof(types.Decimal64{}))
-	Decimal128Size = int(unsafe.Sizeof(types.Decimal128{}))
+	TSize = int(unsafe.Sizeof(Type{}))
+	DateSize = int(unsafe.Sizeof(Date(0)))
+	DatetimeSize = int(unsafe.Sizeof(Datetime(0)))
+	TimestampSize = int(unsafe.Sizeof(Timestamp(0)))
+	Decimal64Size = int(unsafe.Sizeof(Decimal64{}))
+	Decimal128Size = int(unsafe.Sizeof(Decimal128{}))
 }
 
 func EncodeSlice[T any](v []T, sz int) (ret []byte) {
@@ -82,12 +83,12 @@ func DecodeJson(buf []byte) bytejson.ByteJson {
 	return bj
 }
 
-func EncodeType(v types.Type) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), TypeSize)
+func EncodeType(v Type) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), TSize)
 }
 
-func DecodeType(v []byte) types.Type {
-	return *(*types.Type)(unsafe.Pointer(&v[0]))
+func DecodeType(v []byte) Type {
+	return *(*Type)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeFixed[T any](v T) []byte {
@@ -186,44 +187,44 @@ func DecodeFloat64(v []byte) float64 {
 	return *(*float64)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeDate(v types.Date) []byte {
+func EncodeDate(v Date) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 4)
 }
 
-func DecodeDate(v []byte) types.Date {
-	return *(*types.Date)(unsafe.Pointer(&v[0]))
+func DecodeDate(v []byte) Date {
+	return *(*Date)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeDatetime(v types.Datetime) []byte {
+func EncodeDatetime(v Datetime) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 8)
 }
 
-func DecodeDatetime(v []byte) types.Datetime {
-	return *(*types.Datetime)(unsafe.Pointer(&v[0]))
+func DecodeDatetime(v []byte) Datetime {
+	return *(*Datetime)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeTimestamp(v types.Timestamp) []byte {
+func EncodeTimestamp(v Timestamp) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 8)
 }
 
-func DecodeTimestamp(v []byte) types.Timestamp {
-	return *(*types.Timestamp)(unsafe.Pointer(&v[0]))
+func DecodeTimestamp(v []byte) Timestamp {
+	return *(*Timestamp)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeDecimal64(v types.Decimal64) []byte {
+func EncodeDecimal64(v Decimal64) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), Decimal64Size)
 }
 
-func DecodeDecimal64(v []byte) types.Decimal64 {
-	return *(*types.Decimal64)(unsafe.Pointer(&v[0]))
+func DecodeDecimal64(v []byte) Decimal64 {
+	return *(*Decimal64)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeDecimal128(v types.Decimal128) []byte {
+func EncodeDecimal128(v Decimal128) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), Decimal128Size)
 }
 
-func DecodeDecimal128(v []byte) types.Decimal128 {
-	return *(*types.Decimal128)(unsafe.Pointer(&v[0]))
+func DecodeDecimal128(v []byte) Decimal128 {
+	return *(*Decimal128)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeFixedSlice[T any](v []T, sz int) (ret []byte) {
@@ -342,44 +343,44 @@ func DecodeFloat64SliceForBenchmark(v []byte) (ret []float64) {
 	return
 }
 
-func EncodeDateSlice(v []types.Date) []byte {
+func EncodeDateSlice(v []Date) []byte {
 	return EncodeFixedSlice(v, DateSize)
 }
 
-func DecodeDateSlice(v []byte) []types.Date {
-	return DecodeFixedSlice[types.Date](v, DateSize)
+func DecodeDateSlice(v []byte) []Date {
+	return DecodeFixedSlice[Date](v, DateSize)
 }
 
-func EncodeDatetimeSlice(v []types.Datetime) []byte {
+func EncodeDatetimeSlice(v []Datetime) []byte {
 	return EncodeFixedSlice(v, DatetimeSize)
 }
 
-func DecodeDatetimeSlice(v []byte) (ret []types.Datetime) {
-	return DecodeFixedSlice[types.Datetime](v, DatetimeSize)
+func DecodeDatetimeSlice(v []byte) (ret []Datetime) {
+	return DecodeFixedSlice[Datetime](v, DatetimeSize)
 }
 
-func EncodeTimestampSlice(v []types.Timestamp) []byte {
+func EncodeTimestampSlice(v []Timestamp) []byte {
 	return EncodeFixedSlice(v, TimestampSize)
 }
 
-func DecodeTimestampSlice(v []byte) (ret []types.Timestamp) {
-	return DecodeFixedSlice[types.Timestamp](v, TimestampSize)
+func DecodeTimestampSlice(v []byte) (ret []Timestamp) {
+	return DecodeFixedSlice[Timestamp](v, TimestampSize)
 }
 
-func EncodeDecimal64Slice(v []types.Decimal64) []byte {
+func EncodeDecimal64Slice(v []Decimal64) []byte {
 	return EncodeFixedSlice(v, Decimal64Size)
 }
 
-func DecodeDecimal64Slice(v []byte) (ret []types.Decimal64) {
-	return DecodeFixedSlice[types.Decimal64](v, Decimal64Size)
+func DecodeDecimal64Slice(v []byte) (ret []Decimal64) {
+	return DecodeFixedSlice[Decimal64](v, Decimal64Size)
 }
 
-func EncodeDecimal128Slice(v []types.Decimal128) []byte {
+func EncodeDecimal128Slice(v []Decimal128) []byte {
 	return EncodeFixedSlice(v, Decimal128Size)
 }
 
-func DecodeDecimal128Slice(v []byte) (ret []types.Decimal128) {
-	return DecodeFixedSlice[types.Decimal128](v, Decimal128Size)
+func DecodeDecimal128Slice(v []byte) (ret []Decimal128) {
+	return DecodeFixedSlice[Decimal128](v, Decimal128Size)
 }
 
 func EncodeStringSlice(vs []string) []byte {
@@ -424,4 +425,191 @@ func DecodeStringSlice(data []byte) []string {
 		}
 	}
 	return vs
+}
+
+func DecodeValue(val []byte, typ Type) any {
+	switch typ.Oid {
+	case T_bool:
+		return DecodeFixed[bool](val)
+	case T_int8:
+		return DecodeFixed[int8](val)
+	case T_int16:
+		return DecodeFixed[int16](val)
+	case T_int32:
+		return DecodeFixed[int32](val)
+	case T_int64:
+		return DecodeFixed[int64](val)
+	case T_uint8:
+		return DecodeFixed[uint8](val)
+	case T_uint16:
+		return DecodeFixed[uint16](val)
+	case T_uint32:
+		return DecodeFixed[uint32](val)
+	case T_uint64:
+		return DecodeFixed[uint64](val)
+	case T_float32:
+		return DecodeFixed[float32](val)
+	case T_float64:
+		return DecodeFixed[float64](val)
+	case T_date:
+		return DecodeFixed[Date](val)
+	case T_datetime:
+		return DecodeFixed[Datetime](val)
+	case T_timestamp:
+		return DecodeFixed[Timestamp](val)
+	case T_decimal64:
+		return DecodeFixed[Decimal64](val)
+	case T_decimal128:
+		return DecodeFixed[Decimal128](val)
+	case T_char, T_varchar:
+		return val
+	default:
+		panic("unsupported type")
+	}
+}
+
+func EncodeValue(val any, typ Type) []byte {
+	switch typ.Oid {
+	case T_bool:
+		return EncodeFixed(val.(bool))
+	case T_int8:
+		return EncodeFixed(val.(int8))
+	case T_int16:
+		return EncodeFixed(val.(int16))
+	case T_int32:
+		return EncodeFixed(val.(int32))
+	case T_int64:
+		return EncodeFixed(val.(int64))
+	case T_uint8:
+		return EncodeFixed(val.(uint8))
+	case T_uint16:
+		return EncodeFixed(val.(uint16))
+	case T_uint32:
+		return EncodeFixed(val.(uint32))
+	case T_uint64:
+		return EncodeFixed(val.(uint64))
+	case T_decimal64:
+		return EncodeFixed(val.(Decimal64))
+	case T_decimal128:
+		return EncodeFixed(val.(Decimal128))
+	case T_float32:
+		return EncodeFixed(val.(float32))
+	case T_float64:
+		return EncodeFixed(val.(float64))
+	case T_date:
+		return EncodeFixed(val.(Date))
+	case T_timestamp:
+		return EncodeFixed(val.(Timestamp))
+	case T_datetime:
+		return EncodeFixed(val.(Datetime))
+	case T_char, T_varchar:
+		return val.([]byte)
+	default:
+		panic("unsupported type")
+	}
+}
+func WriteFixedValue[T any](w io.Writer, v T) (err error) {
+	_, err = w.Write(EncodeFixed(v))
+	return
+}
+
+func WriteValues(w io.Writer, vals ...any) (n int64, err error) {
+	var nr int
+	for _, val := range vals {
+		switch v := val.(type) {
+		case []byte:
+			if nr, err = w.Write(v); err != nil {
+				return
+			}
+			n += int64(nr)
+		case bool:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case int8:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case int16:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case int32:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case int64:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case uint8:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case uint16:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case uint32:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case uint64:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case float32:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case float64:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case Date:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case Datetime:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case Timestamp:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case Decimal64:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case Decimal128:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		default:
+			panic(fmt.Errorf("%T:%v not supported", v, v))
+		}
+	}
+	return
+}
+
+func CopyFixValueToBuf[T any](dest []byte, val T) {
+	vbuf := EncodeFixed(val)
+	copy(dest[:unsafe.Sizeof(val)], vbuf)
 }

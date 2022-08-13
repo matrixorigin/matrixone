@@ -159,7 +159,7 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		switch logicPlan.Ddl.DdlType {
 		case plan.DataDefinition_SHOW_VARIABLES:
 			typ := &plan.Type{
-				Id:    plan.Type_VARCHAR,
+				Id:    plan.T_varchar,
 				Width: 1024,
 			}
 			return []*ColDef{
@@ -168,7 +168,7 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 			}
 		case plan.DataDefinition_SHOW_CREATEDATABASE:
 			typ := &plan.Type{
-				Id:    plan.Type_VARCHAR,
+				Id:    plan.T_varchar,
 				Width: 1024,
 			}
 			return []*ColDef{
@@ -177,7 +177,7 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 			}
 		case plan.DataDefinition_SHOW_CREATETABLE:
 			typ := &plan.Type{
-				Id:    plan.Type_VARCHAR,
+				Id:    plan.T_varchar,
 				Width: 1024,
 			}
 			return []*ColDef{

@@ -269,7 +269,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ: &plan.Type{
-					Id:       plan.Type_BOOL,
+					Id:       plan.T_bool,
 					Nullable: true,
 					Size:     1,
 				},
@@ -613,7 +613,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 	case plan.Node_VALUE_SCAN:
 		// VALUE_SCAN always have one column now
 		node.ProjectList = append(node.ProjectList, &plan.Expr{
-			Typ:  &plan.Type{Id: plan.Type_INT64},
+			Typ:  &plan.Type{Id: plan.T_int64},
 			Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_Ival{Ival: 0}}},
 		})
 

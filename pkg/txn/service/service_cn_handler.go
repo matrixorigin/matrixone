@@ -51,7 +51,7 @@ func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *t
 	// We do not write transaction information to sync.Map during read operations because commit and abort
 	// for read-only transactions are not sent to the DN node, so there is no way to clean up the transaction
 	// information in sync.Map.
-	result, err := s.storage.Read(request.Txn, request.CNRequest.OpCode, request.CNRequest.Payload)
+	result, err := s.storage.Read(ctx, request.Txn, request.CNRequest.OpCode, request.CNRequest.Payload)
 	if err != nil {
 		util.LogTxnReadFailed(s.logger, request.Txn, err)
 		response.TxnError = newTAEReadError(err)
@@ -145,7 +145,7 @@ func (s *service) Write(ctx context.Context, request *txn.TxnRequest, response *
 		return nil
 	}
 
-	data, err := s.storage.Write(request.Txn, request.CNRequest.OpCode, request.CNRequest.Payload)
+	data, err := s.storage.Write(ctx, request.Txn, request.CNRequest.OpCode, request.CNRequest.Payload)
 	if err != nil {
 		util.LogTxnWriteFailed(s.logger, newTxn, err)
 		response.TxnError = newTAEWriteError(err)
@@ -215,7 +215,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 		txnCtx.updateTxnLocked(newTxn)
 
 		util.LogTxnStart1PCCommit(s.logger, newTxn)
-		if err := s.storage.Commit(newTxn); err != nil {
+		if err := s.storage.Commit(ctx, newTxn); err != nil {
 			util.LogTxnStart1PCCommitFailed(s.logger, newTxn, err)
 			response.TxnError = newTAECommitError(err)
 			changeStatus(txn.TxnStatus_Aborted)
@@ -369,7 +369,7 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 
 		if txnMeta.Status != txn.TxnStatus_Committing {
 			for {
-				err := s.storage.Committing(txnMeta)
+				err := s.storage.Committing(ctx, txnMeta)
 				if err == nil {
 					txnCtx.changeStatusLocked(txn.TxnStatus_Committing)
 					break
@@ -401,7 +401,7 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 				ce.Write(util.TxnIDFieldWithID(txnMeta.ID))
 			}
 
-			if err := s.storage.Commit(txnMeta); err != nil {
+			if err := s.storage.Commit(ctx, txnMeta); err != nil {
 				s.logger.Fatal("commit failed after prepared",
 					util.TxnIDFieldWithID(txnMeta.ID),
 					zap.Error(err))

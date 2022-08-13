@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/neg"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
@@ -43,7 +42,7 @@ func UnaryMinus[T constraints.Signed | constraints.Float](vectors []*vector.Vect
 		if err != nil {
 			return nil, err
 		}
-		resValues := encoding.DecodeFixedSlice[T](resVector.Data, resultElementSize)
+		resValues := types.DecodeFixedSlice[T](resVector.Data, resultElementSize)
 		nulls.Set(resVector.Nsp, srcVector.Nsp)
 		vector.SetCol(resVector, neg.NumericNeg(srcValues, resValues))
 		return resVector, nil
@@ -69,7 +68,7 @@ func UnaryMinusDecimal64(vectors []*vector.Vector, proc *process.Process) (*vect
 		if err != nil {
 			return nil, err
 		}
-		resValues := encoding.DecodeDecimal64Slice(resVector.Data)
+		resValues := types.DecodeDecimal64Slice(resVector.Data)
 		nulls.Set(resVector.Nsp, srcVector.Nsp)
 		vector.SetCol(resVector, neg.Decimal64Neg(srcValues, resValues))
 		return resVector, nil
@@ -94,7 +93,7 @@ func UnaryMinusDecimal128(vectors []*vector.Vector, proc *process.Process) (*vec
 		if err != nil {
 			return nil, err
 		}
-		resValues := encoding.DecodeDecimal128Slice(resVector.Data)
+		resValues := types.DecodeDecimal128Slice(resVector.Data)
 		nulls.Set(resVector.Nsp, srcVector.Nsp)
 		vector.SetCol(resVector, neg.Decimal128Neg(srcValues, resValues))
 		return resVector, nil
