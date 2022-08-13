@@ -16,10 +16,8 @@ package txnengine
 
 import (
 	"context"
-	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -34,25 +32,115 @@ type TableReader struct {
 }
 
 type IterInfo struct {
-	Node   logservicepb.DNNode
+	Shard  Shard
 	IterID string
+}
+
+func (t *Table) NewReader(
+	ctx context.Context,
+	parallel int,
+	expr *plan.Expr,
+	shards [][]byte,
+) (
+	readers []engine.Reader,
+	err error,
+) {
+
+	clusterDetails, err := t.engine.getClusterDetails()
+	if err != nil {
+		return nil, err
+	}
+
+	readers = make([]engine.Reader, parallel)
+	nodes := clusterDetails.DNNodes
+
+	if len(shards) > 0 {
+		uuidSet := make(map[string]bool)
+		for _, shard := range shards {
+			uuidSet[string(shard)] = true
+		}
+		filteredNodes := nodes[:0]
+		for _, node := range nodes {
+			if uuidSet[node.UUID] {
+				filteredNodes = append(filteredNodes, node)
+			}
+		}
+		nodes = filteredNodes
+	}
+	dnShards, err := t.engine.shardPolicy.Nodes(nodes)
+	if err != nil {
+		return nil, err
+	}
+
+	resps, err := doTxnRequest[NewTableIterResp](
+		ctx,
+		t.engine,
+		t.txnOperator.Read,
+		theseShards(dnShards),
+		OpNewTableIter,
+		NewTableIterReq{
+			TableID: t.id,
+			Expr:    expr,
+			Shards:  shards,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	iterIDSets := make([][]string, parallel)
+	i := 0
+	for _, resp := range resps {
+		if resp.IterID != "" {
+			iterIDSets[i] = append(iterIDSets[i], resp.IterID)
+			i++
+			if i >= parallel {
+				// round
+				i = 0
+			}
+		}
+	}
+
+	for i, idSet := range iterIDSets {
+		if len(idSet) == 0 {
+			readers[i] = new(TableReader)
+			continue
+		}
+		reader := &TableReader{
+			engine:      t.engine,
+			txnOperator: t.txnOperator,
+			ctx:         ctx,
+		}
+		for _, iterID := range idSet {
+			reader.iterInfos = append(reader.iterInfos, IterInfo{
+				Shard:  dnShards[i],
+				IterID: iterID,
+			})
+		}
+		readers[i] = reader
+	}
+
+	return
 }
 
 var _ engine.Reader = new(TableReader)
 
 func (t *TableReader) Read(colNames []string, plan *plan.Expr, mh *mheap.Mheap) (*batch.Batch, error) {
+	if t == nil {
+		return nil, nil
+	}
 
 	for {
 
 		if len(t.iterInfos) == 0 {
-			return nil, io.EOF
+			return nil, nil
 		}
 
 		resps, err := doTxnRequest[ReadResp](
 			t.ctx,
 			t.engine,
 			t.txnOperator.Read,
-			theseNodes([]logservicepb.DNNode{t.iterInfos[0].Node}),
+			thisShard(t.iterInfos[0].Shard),
 			OpRead,
 			ReadReq{
 				IterID:   t.iterInfos[0].IterID,
@@ -77,12 +165,15 @@ func (t *TableReader) Read(colNames []string, plan *plan.Expr, mh *mheap.Mheap) 
 }
 
 func (t *TableReader) Close() error {
+	if t == nil {
+		return nil
+	}
 	for _, info := range t.iterInfos {
 		_, err := doTxnRequest[CloseTableIterResp](
 			t.ctx,
 			t.engine,
 			t.txnOperator.Read,
-			theseNodes([]logservicepb.DNNode{info.Node}),
+			thisShard(info.Shard),
 			OpCloseTableIter,
 			CloseTableIterReq{
 				IterID: info.IterID,
