@@ -70,9 +70,13 @@ func newBufferHolder(name batchpipe.HasName, impl batchpipe.PipeImpl[batchpipe.H
 	defer b.mux.Unlock()
 	reminder := b.buffer.(batchpipe.Reminder)
 	b.trigger = time.AfterFunc(reminder.RemindNextAfter(), func() {
-		if atomic.LoadUint32(&b.readonly) == READONLY {
-			logutil.Debugf("buffer %s trigger time, pass.", b.name)
-			return
+		if b.mux.TryLock() {
+			if b.readonly == READONLY {
+				logutil.Debugf("buffer %s trigger time, pass", b.name)
+				b.mux.Unlock()
+				return
+			}
+			b.mux.Unlock()
 		}
 		b.signal(b)
 	})
@@ -82,7 +86,7 @@ func newBufferHolder(name batchpipe.HasName, impl batchpipe.PipeImpl[batchpipe.H
 // Add directly call buffer.Add(), while bufferHolder is NOT readonly
 func (b *bufferHolder) Add(item batchpipe.HasName) {
 	b.mux.RLock()
-	for atomic.LoadUint32(&b.readonly) == READONLY {
+	for b.readonly == READONLY {
 		b.mux.RUnlock()
 		time.Sleep(time.Millisecond)
 		b.mux.RLock()
@@ -98,14 +102,15 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 // and gen batch request content
 // against FlushAndReset
 func (b *bufferHolder) StopAndGetBatch(buf *bytes.Buffer) bool {
-	b.mux.RLock()
-	defer b.mux.RUnlock()
-	if !atomic.CompareAndSwapUint32(&b.readonly, READWRITE, READONLY) {
+	b.mux.Lock()
+	defer b.mux.Unlock()
+	if b.readonly == READONLY {
 		return false
 	}
 	b.trigger.Stop()
 	batch := b.buffer.GetBatch(buf)
 	b.batch = &batch
+	b.readonly = READONLY
 	return true
 }
 
@@ -120,7 +125,7 @@ func (b *bufferHolder) StopTrigger() bool {
 func (b *bufferHolder) FlushAndReset() bool {
 	b.mux.Lock()
 	defer b.mux.Unlock()
-	if b.readonly != READONLY {
+	if b.readonly == READWRITE {
 		return false
 	}
 	if b.batch != nil {
