@@ -17,52 +17,52 @@ package mergesort
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/bools"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/decimal128s"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/decimal64s"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/numerics"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/varchar"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 func SortBlockColumns(cols []containers.Vector, pk int) ([]uint32, error) {
 	sortedIdx := make([]uint32, cols[pk].Length())
 
 	switch cols[pk].GetType().Oid {
-	case types.Type_BOOL:
+	case types.T_bool:
 		bools.Sort(cols[pk], sortedIdx)
-	case types.Type_INT8:
+	case types.T_int8:
 		numerics.Sort[int8](cols[pk], sortedIdx)
-	case types.Type_INT16:
+	case types.T_int16:
 		numerics.Sort[int16](cols[pk], sortedIdx)
-	case types.Type_INT32:
+	case types.T_int32:
 		numerics.Sort[int32](cols[pk], sortedIdx)
-	case types.Type_INT64:
+	case types.T_int64:
 		numerics.Sort[int64](cols[pk], sortedIdx)
-	case types.Type_UINT8:
+	case types.T_uint8:
 		numerics.Sort[uint8](cols[pk], sortedIdx)
-	case types.Type_UINT16:
+	case types.T_uint16:
 		numerics.Sort[uint16](cols[pk], sortedIdx)
-	case types.Type_UINT32:
+	case types.T_uint32:
 		numerics.Sort[uint32](cols[pk], sortedIdx)
-	case types.Type_UINT64:
+	case types.T_uint64:
 		numerics.Sort[uint64](cols[pk], sortedIdx)
-	case types.Type_FLOAT32:
+	case types.T_float32:
 		numerics.Sort[float32](cols[pk], sortedIdx)
-	case types.Type_FLOAT64:
+	case types.T_float64:
 		numerics.Sort[float64](cols[pk], sortedIdx)
-	case types.Type_DATE:
+	case types.T_date:
 		numerics.Sort[types.Date](cols[pk], sortedIdx)
-	case types.Type_DATETIME:
+	case types.T_datetime:
 		numerics.Sort[types.Datetime](cols[pk], sortedIdx)
-	case types.Type_DECIMAL64:
+	case types.T_decimal64:
 		decimal64s.Sort(cols[pk], sortedIdx)
-	case types.Type_DECIMAL128:
+	case types.T_decimal128:
 		decimal128s.Sort(cols[pk], sortedIdx)
-	case types.Type_TIMESTAMP:
+	case types.T_timestamp:
 		numerics.Sort[types.Timestamp](cols[pk], sortedIdx)
-	case types.Type_CHAR, types.Type_JSON, types.Type_VARCHAR:
+	case types.T_char, types.T_json, types.T_varchar:
 		varchar.Sort(cols[pk], sortedIdx)
 	default:
 		panic(fmt.Sprintf("%s not supported", cols[pk].GetType().String()))
@@ -79,39 +79,39 @@ func SortBlockColumns(cols []containers.Vector, pk int) ([]uint32, error) {
 
 func MergeSortedColumn(column []containers.Vector, sortedIdx *[]uint32, fromLayout, toLayout []uint32) (ret []containers.Vector, mapping []uint32) {
 	switch column[0].GetType().Oid {
-	case types.Type_BOOL:
+	case types.T_bool:
 		ret, mapping = bools.Merge(column, sortedIdx, fromLayout, toLayout)
-	case types.Type_INT8:
+	case types.T_int8:
 		ret, mapping = numerics.Merge[int8](column, sortedIdx, fromLayout, toLayout)
-	case types.Type_INT16:
+	case types.T_int16:
 		ret, mapping = numerics.Merge[int16](column, sortedIdx, fromLayout, toLayout)
-	case types.Type_INT32:
+	case types.T_int32:
 		ret, mapping = numerics.Merge[int32](column, sortedIdx, fromLayout, toLayout)
-	case types.Type_INT64:
+	case types.T_int64:
 		ret, mapping = numerics.Merge[int64](column, sortedIdx, fromLayout, toLayout)
-	case types.Type_UINT8:
+	case types.T_uint8:
 		ret, mapping = numerics.Merge[uint8](column, sortedIdx, fromLayout, toLayout)
-	case types.Type_UINT16:
+	case types.T_uint16:
 		ret, mapping = numerics.Merge[uint16](column, sortedIdx, fromLayout, toLayout)
-	case types.Type_UINT32:
+	case types.T_uint32:
 		ret, mapping = numerics.Merge[uint32](column, sortedIdx, fromLayout, toLayout)
-	case types.Type_UINT64:
+	case types.T_uint64:
 		ret, mapping = numerics.Merge[uint64](column, sortedIdx, fromLayout, toLayout)
-	case types.Type_FLOAT32:
+	case types.T_float32:
 		ret, mapping = numerics.Merge[float32](column, sortedIdx, fromLayout, toLayout)
-	case types.Type_FLOAT64:
+	case types.T_float64:
 		ret, mapping = numerics.Merge[float64](column, sortedIdx, fromLayout, toLayout)
-	case types.Type_DATE:
+	case types.T_date:
 		ret, mapping = numerics.Merge[types.Date](column, sortedIdx, fromLayout, toLayout)
-	case types.Type_DATETIME:
+	case types.T_datetime:
 		ret, mapping = numerics.Merge[types.Datetime](column, sortedIdx, fromLayout, toLayout)
-	case types.Type_DECIMAL64:
+	case types.T_decimal64:
 		ret, mapping = decimal64s.Merge(column, sortedIdx, fromLayout, toLayout)
-	case types.Type_DECIMAL128:
+	case types.T_decimal128:
 		ret, mapping = decimal128s.Merge(column, sortedIdx, fromLayout, toLayout)
-	case types.Type_TIMESTAMP:
+	case types.T_timestamp:
 		ret, mapping = numerics.Merge[types.Timestamp](column, sortedIdx, fromLayout, toLayout)
-	case types.Type_CHAR, types.Type_JSON, types.Type_VARCHAR:
+	case types.T_char, types.T_json, types.T_varchar:
 		ret, mapping = varchar.Merge(column, sortedIdx, fromLayout, toLayout)
 	default:
 		panic(fmt.Sprintf("%s not supported", column[0].GetType().String()))
@@ -167,31 +167,31 @@ func ShuffleColumn(column []containers.Vector, sortedIdx []uint32, fromLayout, t
 //	}
 //
 //	switch blks[0].Vecs[pk].Typ.Oid {
-//	case types.Type_INT8:
+//	case types.T_int8:
 //		int8s.Merge(col, mergedSrc)
-//	case types.Type_INT16:
+//	case types.T_int16:
 //		int16s.Merge(col, mergedSrc)
-//	case types.Type_INT32:
+//	case types.T_int32:
 //		int32s.Merge(col, mergedSrc)
-//	case types.Type_INT64:
+//	case types.T_int64:
 //		int64s.Merge(col, mergedSrc)
-//	case types.Type_UINT8:
+//	case types.T_uint8:
 //		uint8s.Merge(col, mergedSrc)
-//	case types.Type_UINT16:
+//	case types.T_uint16:
 //		uint16s.Merge(col, mergedSrc)
-//	case types.Type_UINT32:
+//	case types.T_uint32:
 //		uint32s.Merge(col, mergedSrc)
-//	case types.Type_UINT64:
+//	case types.T_uint64:
 //		uint64s.Merge(col, mergedSrc)
-//	case types.Type_FLOAT32:
+//	case types.T_float32:
 //		float32s.Merge(col, mergedSrc)
-//	case types.Type_FLOAT64:
+//	case types.T_float64:
 //		float64s.Merge(col, mergedSrc)
-//	case types.Type_DATE:
+//	case types.T_date:
 //		dates.Merge(col, mergedSrc)
-//	case types.Type_DATETIME:
+//	case types.T_datetime:
 //		datetimes.Merge(col, mergedSrc)
-//	case types.Type_CHAR, types.Type_JSON, types.Type_VARCHAR:
+//	case types.T_char, types.T_json, types.T_varchar:
 //		varchar.Merge(col, mergedSrc)
 //	}
 //
@@ -204,31 +204,31 @@ func ShuffleColumn(column []containers.Vector, sortedIdx []uint32, fromLayout, t
 //		}
 //
 //		switch blks[0].Vecs[j].Typ.Oid {
-//		case types.Type_INT8:
+//		case types.T_int8:
 //			int8s.Multiplex(col, mergedSrc)
-//		case types.Type_INT16:
+//		case types.T_int16:
 //			int16s.Multiplex(col, mergedSrc)
-//		case types.Type_INT32:
+//		case types.T_int32:
 //			int32s.Multiplex(col, mergedSrc)
-//		case types.Type_INT64:
+//		case types.T_int64:
 //			int64s.Multiplex(col, mergedSrc)
-//		case types.Type_UINT8:
+//		case types.T_uint8:
 //			uint8s.Multiplex(col, mergedSrc)
-//		case types.Type_UINT16:
+//		case types.T_uint16:
 //			uint16s.Multiplex(col, mergedSrc)
-//		case types.Type_UINT32:
+//		case types.T_uint32:
 //			uint32s.Multiplex(col, mergedSrc)
-//		case types.Type_UINT64:
+//		case types.T_uint64:
 //			uint64s.Multiplex(col, mergedSrc)
-//		case types.Type_FLOAT32:
+//		case types.T_float32:
 //			float32s.Multiplex(col, mergedSrc)
-//		case types.Type_FLOAT64:
+//		case types.T_float64:
 //			float64s.Multiplex(col, mergedSrc)
-//		case types.Type_DATE:
+//		case types.T_date:
 //			dates.Multiplex(col, mergedSrc)
-//		case types.Type_DATETIME:
+//		case types.T_datetime:
 //			datetimes.Multiplex(col, mergedSrc)
-//		case types.Type_CHAR, types.Type_JSON, types.Type_VARCHAR:
+//		case types.T_char, types.T_json, types.T_varchar:
 //			varchar.Multiplex(col, mergedSrc)
 //		}
 //	}

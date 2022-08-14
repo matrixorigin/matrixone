@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -36,7 +37,7 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	if err != nil {
 		return nil, err
 	}
-	if expr.Typ.Id == plan.Type_DECIMAL128 || expr.Typ.Id == plan.Type_DECIMAL64 {
+	if expr.Typ.Id == int32(types.T_decimal128) || expr.Typ.Id == int32(types.T_decimal64) {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "only int64 support in limit/offset clause")
 	}
 	return expr, nil

@@ -18,12 +18,12 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/pierrec/lz4/v4"
@@ -120,7 +120,7 @@ func (r *relation) Write(_ context.Context, bat *batch.Batch) error {
 			if data, err = compress.Compress(v, data, compress.Lz4); err != nil {
 				return err
 			}
-			data = append(data, encoding.EncodeInt32(int32(len(v)))...)
+			data = append(data, types.EncodeInt32(int32(len(v)))...)
 			v = data
 		}
 		if err := r.db.Set(key+"."+attr, v); err != nil {
@@ -129,7 +129,7 @@ func (r *relation) Write(_ context.Context, bat *batch.Batch) error {
 	}
 	{
 		r.md.Segs++
-		data, err := encoding.Encode(r.md)
+		data, err := types.Encode(r.md)
 		if err != nil {
 			return err
 		}

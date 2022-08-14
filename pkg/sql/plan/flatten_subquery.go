@@ -17,6 +17,7 @@ package plan
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
@@ -67,7 +68,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			},
 		},
 		Typ: &plan.Type{
-			Id:       plan.Type_BOOL,
+			Id:       int32(types.T_bool),
 			Nullable: false,
 			Size:     1,
 		},

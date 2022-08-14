@@ -18,8 +18,8 @@ import (
 	"fmt"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	art "github.com/plar/go-adaptive-radix-tree"
 )
 
