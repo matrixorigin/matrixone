@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"testing"
+	"testing/iotest"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -56,27 +57,32 @@ func TestBlockMapper(t *testing.T) {
 	tempDir := t.TempDir()
 
 	for i := 0; i < blockContentSize*4; i++ {
+
+		// create file and mapper
 		f, err := os.CreateTemp(tempDir, "*")
 		assert.Nil(t, err)
 		defer f.Close()
 		mapper := NewBlockMapper(f, blockContentSize)
 
+		// random bytes
 		data := make([]byte, i)
 		_, err = rand.Read(data)
 		assert.Nil(t, err)
 
+		// write
 		n, err := mapper.Write(data)
 		assert.Nil(t, err)
 		assert.Equal(t, i, n)
 
+		// check content
 		pos, err := mapper.Seek(0, io.SeekStart)
 		assert.Nil(t, err)
 		assert.Equal(t, int64(0), pos)
-
 		content, err := io.ReadAll(mapper)
 		assert.Nil(t, err)
 		assert.Equal(t, data, content)
 
+		// file size
 		stat, err := f.Stat()
 		assert.Nil(t, err)
 		expectedSize := len(data) / blockContentSize * (blockContentSize + _ChecksumSize)
@@ -86,24 +92,44 @@ func TestBlockMapper(t *testing.T) {
 		}
 		assert.Equal(t, expectedSize, int(stat.Size()))
 
+		// iotest
+		pos, err = mapper.Seek(0, io.SeekStart)
+		assert.Nil(t, err)
+		assert.Equal(t, int64(0), pos)
+		err = iotest.TestReader(mapper, data)
+		if err != nil {
+			t.Logf("%s", err)
+		}
+		assert.Nil(t, err)
+
 		for j := 0; j < len(data); j++ {
+
+			// seek and write random bytes
 			_, err = rand.Read(data[j:])
 			assert.Nil(t, err)
-
 			pos, err = mapper.Seek(int64(j), io.SeekStart)
 			assert.Nil(t, err)
 			assert.Equal(t, int64(j), pos)
-
 			n, err = mapper.Write(data[j:])
 			assert.Nil(t, err)
 			assert.Equal(t, len(data[j:]), n)
 
+			// check content
 			pos, err = mapper.Seek(0, io.SeekStart)
 			assert.Nil(t, err)
 			assert.Equal(t, int64(0), pos)
 			content, err = io.ReadAll(mapper)
 			assert.Nil(t, err)
 			assert.Equal(t, data, content)
+
+			// seek and read
+			pos, err = mapper.Seek(int64(j), io.SeekStart)
+			assert.Nil(t, err)
+			assert.Equal(t, int64(j), pos)
+			content, err = io.ReadAll(mapper)
+			assert.Nil(t, err)
+			assert.Equal(t, data[j:], content)
+
 		}
 
 	}

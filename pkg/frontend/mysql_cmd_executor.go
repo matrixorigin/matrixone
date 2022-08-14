@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
-	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -1453,7 +1452,7 @@ func (mce *MysqlCmdExecutor) handleDeallocate(st *tree.Deallocate) error {
 
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
 	cols := []*plan2.ColDef{
-		{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_varchar)}, Name: explainColName},
+		{Typ: &plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
 	}
 	columns := make([]interface{}, len(cols))
 	var err error = nil
@@ -1523,17 +1522,17 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	switch cwft.GetAst().(type) {
 	case *tree.ShowCreateTable:
 		cols = []*plan2.ColDef{
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Table"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Create Table"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Table"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Create Table"},
 		}
 	case *tree.ShowColumns:
 		cols = []*plan2.ColDef{
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Field"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Type"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Null"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Key"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Default"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Comment"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
 		}
 	}
 	columns := make([]interface{}, len(cols))

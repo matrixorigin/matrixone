@@ -17,6 +17,7 @@ package plan
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -159,7 +160,7 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		switch logicPlan.Ddl.DdlType {
 		case plan.DataDefinition_SHOW_VARIABLES:
 			typ := &plan.Type{
-				Id:    plan.T_varchar,
+				Id:    int32(types.T_varchar),
 				Width: 1024,
 			}
 			return []*ColDef{
@@ -168,7 +169,7 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 			}
 		case plan.DataDefinition_SHOW_CREATEDATABASE:
 			typ := &plan.Type{
-				Id:    plan.T_varchar,
+				Id:    int32(types.T_varchar),
 				Width: 1024,
 			}
 			return []*ColDef{
@@ -177,7 +178,7 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 			}
 		case plan.DataDefinition_SHOW_CREATETABLE:
 			typ := &plan.Type{
-				Id:    plan.T_varchar,
+				Id:    int32(types.T_varchar),
 				Width: 1024,
 			}
 			return []*ColDef{

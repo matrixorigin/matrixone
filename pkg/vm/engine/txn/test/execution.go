@@ -17,7 +17,6 @@ package testtxnengine
 import (
 	"context"
 
-	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -136,7 +135,7 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 	return &plan.ColDef{
 		Name: attr.Name,
 		Typ: &plan.Type{
-			Id:        planpb.Type_TypeId(attr.Type.Oid),
+			Id:        int32(attr.Type.Oid),
 			Nullable:  false, //TODO
 			Width:     attr.Type.Width,
 			Precision: attr.Type.Precision,

@@ -83,7 +83,7 @@ func (e *MemEngine) Resolve(_ string, tableName string) (*plan.ObjectRef, *plan.
 		cols = append(cols, &plan.ColDef{
 			Name: attr.Attr.Name,
 			Typ: &plan.Type{
-				Id:    plan.Type_TypeId(attr.Attr.Type.Oid),
+				Id:    int32(attr.Attr.Type.Oid),
 				Width: attr.Attr.Type.Width,
 				Size:  attr.Attr.Type.Size,
 			},

@@ -258,7 +258,9 @@ func testFileService(
 		assert.Equal(t, entries[3].Size, 0)
 		assert.Equal(t, entries[10].IsDir, false)
 		assert.Equal(t, entries[10].Name, "7")
-		assert.Equal(t, entries[10].Size, 7)
+		if _, ok := fs.(ETLFileService); ok {
+			assert.Equal(t, entries[10].Size, 7)
+		}
 
 		entries, err = fs.List(ctx, "abc")
 		assert.Nil(t, err)

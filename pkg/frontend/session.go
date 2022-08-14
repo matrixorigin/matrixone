@@ -24,7 +24,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -712,7 +711,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 			cols = append(cols, &plan2.ColDef{
 				Name: attr.Attr.Name,
 				Typ: &plan2.Type{
-					Id:        plan.Type_TypeId(attr.Attr.Type.Oid),
+					Id:        int32(attr.Attr.Type.Oid),
 					Width:     attr.Attr.Type.Width,
 					Precision: attr.Attr.Type.Precision,
 					Scale:     attr.Attr.Type.Scale,
@@ -754,7 +753,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		cols = append(cols, &plan2.ColDef{
 			Name: hideKey.Name,
 			Typ: &plan2.Type{
-				Id:        plan.Type_TypeId(hideKey.Type.Oid),
+				Id:        int32(hideKey.Type.Oid),
 				Width:     hideKey.Type.Width,
 				Precision: hideKey.Type.Precision,
 				Scale:     hideKey.Type.Scale,
@@ -814,7 +813,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 		priDefs = append(priDefs, &plan2.ColDef{
 			Name: key.Name,
 			Typ: &plan2.Type{
-				Id:        plan.Type_TypeId(key.Type.Oid),
+				Id:        int32(key.Type.Oid),
 				Width:     key.Type.Width,
 				Precision: key.Type.Precision,
 				Scale:     key.Type.Scale,
@@ -849,7 +848,7 @@ func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *p
 	hideDef := &plan2.ColDef{
 		Name: hideKey.Name,
 		Typ: &plan2.Type{
-			Id:        plan.Type_TypeId(hideKey.Type.Oid),
+			Id:        int32(hideKey.Type.Oid),
 			Width:     hideKey.Type.Width,
 			Precision: hideKey.Type.Precision,
 			Scale:     hideKey.Type.Scale,
