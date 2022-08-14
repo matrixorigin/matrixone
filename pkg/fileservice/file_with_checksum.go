@@ -17,13 +17,13 @@ package fileservice
 import (
 	"encoding/binary"
 	"errors"
-	"hash/crc64"
+	"hash/crc32"
 	"io"
 	"os"
 )
 
-// BlockMapper maps file content to blocks with CRC checksum
-type BlockMapper[T BlockMappable] struct {
+// FileWithChecksum maps file contents to blocks with checksum
+type FileWithChecksum[T FileLike] struct {
 	underlying       T
 	blockSize        int
 	blockContentSize int
@@ -31,40 +31,34 @@ type BlockMapper[T BlockMappable] struct {
 }
 
 const (
-	_ChecksumSize     = 8
+	_ChecksumSize     = crc32.Size
 	_BlockContentSize = 2048 - _ChecksumSize
 )
 
 var (
-	crc64Table = crc64.MakeTable(crc64.ECMA)
+	crcTable = crc32.MakeTable(crc32.Castagnoli)
 
 	ErrChecksumNotMatch = errors.New("checksum not match")
 )
 
-type BlockMappable interface {
-	io.ReadWriteSeeker
-	io.WriterAt
-	io.ReaderAt
-}
-
-func NewBlockMapper[T BlockMappable](
+func NewFileWithChecksum[T FileLike](
 	underlying T,
 	blockContentSize int,
-) *BlockMapper[T] {
-	return &BlockMapper[T]{
+) *FileWithChecksum[T] {
+	return &FileWithChecksum[T]{
 		underlying:       underlying,
 		blockSize:        blockContentSize + _ChecksumSize,
 		blockContentSize: blockContentSize,
 	}
 }
 
-var _ BlockMappable = new(BlockMapper[*os.File])
+var _ FileLike = new(FileWithChecksum[*os.File])
 
-func (b *BlockMapper[T]) ReadAt(buf []byte, offset int64) (n int, err error) {
+func (f *FileWithChecksum[T]) ReadAt(buf []byte, offset int64) (n int, err error) {
 	for len(buf) > 0 {
-		blockOffset, offsetInBlock := b.contentOffsetToBlockOffset(offset)
+		blockOffset, offsetInBlock := f.contentOffsetToBlockOffset(offset)
 		var data []byte
-		data, err = b.readBlock(blockOffset)
+		data, err = f.readBlock(blockOffset)
 		if err != nil && err != io.EOF {
 			// read error
 			return
@@ -86,25 +80,25 @@ func (b *BlockMapper[T]) ReadAt(buf []byte, offset int64) (n int, err error) {
 	return
 }
 
-func (b *BlockMapper[T]) Read(buf []byte) (n int, err error) {
-	n, err = b.ReadAt(buf, b.contentOffset)
-	b.contentOffset += int64(n)
+func (f *FileWithChecksum[T]) Read(buf []byte) (n int, err error) {
+	n, err = f.ReadAt(buf, f.contentOffset)
+	f.contentOffset += int64(n)
 	return
 }
 
-func (b *BlockMapper[T]) WriteAt(buf []byte, offset int64) (n int, err error) {
+func (f *FileWithChecksum[T]) WriteAt(buf []byte, offset int64) (n int, err error) {
 	for len(buf) > 0 {
 
-		blockOffset, offsetInBlock := b.contentOffsetToBlockOffset(offset)
-		data, err := b.readBlock(blockOffset)
+		blockOffset, offsetInBlock := f.contentOffsetToBlockOffset(offset)
+		data, err := f.readBlock(blockOffset)
 		if err != nil && err != io.EOF {
 			return 0, err
 		}
 
 		if len(data[offsetInBlock:]) == 0 {
 			nAppend := len(buf)
-			if nAppend+len(data) > b.blockContentSize {
-				nAppend = b.blockContentSize - len(data)
+			if nAppend+len(data) > f.blockContentSize {
+				nAppend = f.blockContentSize - len(data)
 			}
 			data = append(data, make([]byte, nAppend)...)
 		}
@@ -112,14 +106,14 @@ func (b *BlockMapper[T]) WriteAt(buf []byte, offset int64) (n int, err error) {
 		nBytes := copy(data[offsetInBlock:], buf)
 		buf = buf[nBytes:]
 
-		checksum := crc64.Checksum(data, crc64Table)
+		checksum := crc32.Checksum(data, crcTable)
 		checksumBytes := make([]byte, _ChecksumSize)
-		binary.LittleEndian.PutUint64(checksumBytes, checksum)
-		if _, err := b.underlying.WriteAt(checksumBytes, blockOffset); err != nil {
+		binary.LittleEndian.PutUint32(checksumBytes, checksum)
+		if _, err := f.underlying.WriteAt(checksumBytes, blockOffset); err != nil {
 			return n, err
 		}
 
-		if _, err := b.underlying.WriteAt(data, blockOffset+_ChecksumSize); err != nil {
+		if _, err := f.underlying.WriteAt(data, blockOffset+_ChecksumSize); err != nil {
 			return n, err
 		}
 
@@ -130,61 +124,61 @@ func (b *BlockMapper[T]) WriteAt(buf []byte, offset int64) (n int, err error) {
 	return
 }
 
-func (b *BlockMapper[T]) Write(buf []byte) (n int, err error) {
-	n, err = b.WriteAt(buf, b.contentOffset)
-	b.contentOffset += int64(n)
+func (f *FileWithChecksum[T]) Write(buf []byte) (n int, err error) {
+	n, err = f.WriteAt(buf, f.contentOffset)
+	f.contentOffset += int64(n)
 	return
 }
 
-func (b *BlockMapper[T]) Seek(offset int64, whence int) (int64, error) {
+func (f *FileWithChecksum[T]) Seek(offset int64, whence int) (int64, error) {
 
-	fileSize, err := b.underlying.Seek(0, io.SeekEnd)
+	fileSize, err := f.underlying.Seek(0, io.SeekEnd)
 	if err != nil {
 		return 0, err
 	}
 
 	contentSize := fileSize
-	nBlock := ceilingDiv(contentSize, int64(b.blockSize))
+	nBlock := ceilingDiv(contentSize, int64(f.blockSize))
 	contentSize -= _ChecksumSize * nBlock
 
 	switch whence {
 	case io.SeekStart:
-		b.contentOffset = offset
+		f.contentOffset = offset
 	case io.SeekCurrent:
-		b.contentOffset += offset
+		f.contentOffset += offset
 	case io.SeekEnd:
-		b.contentOffset = contentSize + offset
+		f.contentOffset = contentSize + offset
 	}
 
-	if b.contentOffset < 0 {
-		b.contentOffset = 0
+	if f.contentOffset < 0 {
+		f.contentOffset = 0
 	}
-	if b.contentOffset > contentSize {
-		b.contentOffset = contentSize
+	if f.contentOffset > contentSize {
+		f.contentOffset = contentSize
 	}
 
-	return b.contentOffset, nil
+	return f.contentOffset, nil
 }
 
-func (b *BlockMapper[T]) contentOffsetToBlockOffset(
+func (f *FileWithChecksum[T]) contentOffsetToBlockOffset(
 	contentOffset int64,
 ) (
 	blockOffset int64,
 	offsetInBlock int64,
 ) {
 
-	nBlock := contentOffset / int64(b.blockContentSize)
-	blockOffset += nBlock * int64(b.blockSize)
+	nBlock := contentOffset / int64(f.blockContentSize)
+	blockOffset += nBlock * int64(f.blockSize)
 
-	offsetInBlock = contentOffset % int64(b.blockContentSize)
+	offsetInBlock = contentOffset % int64(f.blockContentSize)
 
 	return
 }
 
-func (b *BlockMapper[T]) readBlock(offset int64) (data []byte, err error) {
+func (f *FileWithChecksum[T]) readBlock(offset int64) (data []byte, err error) {
 
-	data = make([]byte, b.blockSize)
-	n, err := b.underlying.ReadAt(data, offset)
+	data = make([]byte, f.blockSize)
+	n, err := f.underlying.ReadAt(data, offset)
 	data = data[:n]
 	if err != nil && err != io.EOF {
 		return nil, err
@@ -195,10 +189,10 @@ func (b *BlockMapper[T]) readBlock(offset int64) (data []byte, err error) {
 		return
 	}
 
-	checksum := binary.LittleEndian.Uint64(data[:_ChecksumSize])
+	checksum := binary.LittleEndian.Uint32(data[:_ChecksumSize])
 	data = data[_ChecksumSize:]
 
-	expectedChecksum := crc64.Checksum(data, crc64Table)
+	expectedChecksum := crc32.Checksum(data, crcTable)
 	if checksum != expectedChecksum {
 		return nil, ErrChecksumNotMatch
 	}
