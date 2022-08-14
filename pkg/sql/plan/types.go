@@ -43,6 +43,11 @@ type Query = plan.Query
 type Plan = plan.Plan
 type Type = plan.Type
 type Plan_Query = plan.Plan_Query
+type Property = plan.Property
+type TableDef_DefType_Properties = plan.TableDef_DefType_Properties
+type TableDef_DefType_View = plan.TableDef_DefType_View
+type PropertiesDef = plan.PropertiesDef
+type ViewDef = plan.ViewDef
 
 type CompilerContext interface {
 	// Default database/schema in context

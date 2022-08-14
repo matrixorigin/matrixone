@@ -720,24 +720,24 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				Default: attr.Attr.Default,
 			})
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
-			properties := make([]*plan.Property, len(pro.Properties))
+			properties := make([]*plan2.Property, len(pro.Properties))
 			for i, p := range pro.Properties {
-				properties[i] = &plan.Property{
+				properties[i] = &plan2.Property{
 					Key:   p.Key,
 					Value: p.Value,
 				}
 			}
-			defs = append(defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Properties{
-					Properties: &plan.PropertiesDef{
+			defs = append(defs, &plan2.TableDefType{
+				Def: &plan2.TableDef_DefType_Properties{
+					Properties: &plan2.PropertiesDef{
 						Properties: properties,
 					},
 				},
 			})
 		} else if viewDef, ok := def.(*engine.ViewDef); ok {
-			defs = append(defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_View{
-					View: &plan.ViewDef{
+			defs = append(defs, &plan2.TableDefType{
+				Def: &plan2.TableDef_DefType_View{
+					View: &plan2.ViewDef{
 						View: viewDef.View,
 					},
 				},
