@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -36,7 +35,7 @@ func IsNotNull[T NormalType](vectors []*vector.Vector, proc *process.Process) (*
 		if err != nil {
 			return nil, err
 		}
-		col := encoding.DecodeFixedSlice[bool](vec.Data, 1)
+		col := types.DecodeFixedSlice[bool](vec.Data, 1)
 		col = col[:l]
 		for i := range cols {
 			if nulls.Contains(input.Nsp, uint64(i)) {
@@ -68,7 +67,7 @@ func IsStringNotNull(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		if err != nil {
 			return nil, err
 		}
-		col := encoding.DecodeFixedSlice[bool](vec.Data, 1)
+		col := types.DecodeFixedSlice[bool](vec.Data, 1)
 		col = col[:l]
 		for i := range cols.Lengths {
 			if nulls.Contains(input.Nsp, uint64(i)) {

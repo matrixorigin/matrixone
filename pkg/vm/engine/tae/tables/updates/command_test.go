@@ -16,7 +16,7 @@ package updates
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"

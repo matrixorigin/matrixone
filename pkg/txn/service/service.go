@@ -114,7 +114,8 @@ func (s *service) Close(destroy bool) error {
 	if destroy {
 		closer = s.storage.Destroy
 	}
-	if err := closer(); err != nil {
+	// FIXME: all context.TODO() need to use tracing context
+	if err := closer(context.TODO()); err != nil {
 		return multierr.Append(err, s.sender.Close())
 	}
 	return s.sender.Close()
@@ -142,7 +143,7 @@ func (s *service) gcZombieTxn(ctx context.Context) {
 			})
 			for _, txn := range cleanTxns {
 				s.removeTxn(txn.ID)
-				if err := s.storage.Rollback(txn); err != nil {
+				if err := s.storage.Rollback(ctx, txn); err != nil {
 					s.logger.Error("start rollback task failed",
 						util.TxnIDFieldWithID(txn.ID),
 						zap.Error(err))

@@ -19,8 +19,8 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type CompoundKeyEncoder = func(*bytes.Buffer, ...any) []byte

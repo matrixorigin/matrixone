@@ -17,6 +17,7 @@ package explain
 import (
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -39,7 +40,7 @@ func describeExpr(expr *plan.Expr, options *ExplainOptions) (string, error) {
 		}
 	case *plan.Expr_C:
 		if exprImpl.C.Isnull {
-			result += expr.Typ.Id.String() + "(null)"
+			result += "(null)"
 			break
 		}
 
@@ -163,7 +164,7 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 		if err != nil {
 			return result, err
 		}
-		result += "CAST(" + describeExpr + " AS " + plan.Type_TypeId_name[int32(Typ.Id)] + ")"
+		result += "CAST(" + describeExpr + " AS " + types.T(Typ.Id).String() + ")"
 	case function.CASE_WHEN_EXPRESSION:
 		// TODO need rewrite to deal with case is nil
 		result += "CASE"
