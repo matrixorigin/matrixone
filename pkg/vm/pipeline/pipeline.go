@@ -16,11 +16,8 @@ package pipeline
 
 import (
 	"bytes"
-	"encoding/json"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -29,12 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func New(attrs []string, ins vm.Instructions, reg *process.WaitRegister, param *ExternalParam) *Pipeline {
+func New(attrs []string, ins vm.Instructions, reg *process.WaitRegister) *Pipeline {
 	return &Pipeline{
 		reg:          reg,
 		instructions: ins,
 		attrs:        attrs,
-		param:        param,
 	}
 }
 
@@ -83,50 +79,6 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 	}
 }
 
-// Read data from external table
-func (p *Pipeline) ExternalRun(proc *process.Process) (bool, error) {
-	var err error
-	var end bool
-	defer cleanup(p, proc)
-	if p.reg != nil { // used to handle some push-down request
-		select {
-		case <-p.reg.Ctx.Done():
-		case <-p.reg.Ch:
-		}
-	}
-	if err = vm.Prepare(p.instructions, proc); err != nil {
-		return false, err
-	}
-
-	load := &tree.LoadParameter{}
-	err = json.Unmarshal([]byte(p.param.CreateSql), load)
-	if err != nil {
-		return false, err
-	}
-
-	fileList, err := getLoadDataList(load)
-	if err != nil {
-		return false, err
-	}
-
-	if len(fileList) == 0 {
-		return false, fmt.Errorf("no such file '%s'", load.Filepath)
-	}
-
-	for _, fileName := range fileList {
-		load.Filepath = fileName
-		_, err := ExternalRead(load, p, proc)
-		if err != nil {
-			return false, err
-		}
-	}
-	proc.Reg.InputBatch = nil
-	if end, err = vm.Run(p.instructions, proc); err != nil || end { // end is true means pipeline successfully completed
-		return end, err
-	}
-	return true, nil
-}
-
 func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, error) {
 	var end bool // exist flag
 	var err error
@@ -143,10 +95,14 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, erro
 	}
 	bat.Cnt = 1
 	// processing the batch according to the instructions
-	proc.Reg.InputBatch = bat
-	end, err = vm.Run(p.instructions, proc)
-	proc.Reg.InputBatch = nil
-	_, _ = vm.Run(p.instructions, proc)
+	for {
+		proc.Reg.InputBatch = bat
+		end, err = vm.Run(p.instructions, proc)
+		proc.Reg.InputBatch = nil
+		if end2, err2 := vm.Run(p.instructions, proc); err2 != nil || end2 {
+			break
+		}
+	}
 	return end, err
 }
 

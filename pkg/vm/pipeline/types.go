@@ -15,12 +15,8 @@
 package pipeline
 
 import (
-	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/matrixorigin/simdcsv"
 )
 
 // Pipeline contains the information associated with a pipeline in a query execution plan.
@@ -85,26 +81,7 @@ import (
 type Pipeline struct {
 	// attrs, column list.
 	attrs []string
-	param *ExternalParam
 	// orders to be executed
 	instructions vm.Instructions
 	reg          *process.WaitRegister
-}
-
-type ParseLineHandler struct {
-	simdCsvReader *simdcsv.Reader
-	//csv read put lines into the channel
-	simdCsvGetParsedLinesChan atomic.Value // chan simdcsv.LineOut
-	lineIdx                   int
-	//batch
-	batchSize int
-	//simd csv
-	simdCsvLineArray [][]string
-}
-
-// Use for External table scan param
-type ExternalParam struct {
-	Cols          []*plan.ColDef
-	Name2ColIndex map[string]int32
-	CreateSql     string
 }

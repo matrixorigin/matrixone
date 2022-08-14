@@ -36,7 +36,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -90,7 +89,6 @@ func (c *Compile) Run(_ uint64) (err error) {
 	}
 
 	//PrintScope(nil, []*Scope{c.scope})
-
 	switch c.scope.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -221,6 +219,7 @@ func (c *Compile) compileQuery(qry *plan.Query) (*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if c.info.Typ == plan2.ExecTypeTP {
 		return c.compileTpQuery(qry, ss)
 	}
@@ -331,7 +330,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 
 func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, error) {
 	switch n.NodeType {
-	case plan.Node_VALUE_SCAN, plan.Node_EXTERNAL_SCAN:
+	case plan.Node_VALUE_SCAN:
 		ds := &Scope{Magic: Normal}
 		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 		bat := batch.NewWithSize(1)
@@ -341,19 +340,18 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			bat.InitZsOne(1)
 		}
 		ds.DataSource = &Source{Bat: bat}
-		if n.NodeType == plan.Node_EXTERNAL_SCAN {
-			attrs := make([]string, len(n.TableDef.Cols))
-			for j, col := range n.TableDef.Cols {
-				attrs[j] = col.Name
-			}
-			ds.DataSource.Attributes = attrs
-			ds.DataSource.ExternalParam = &pipeline.ExternalParam{
-				Cols:          n.TableDef.Cols,
-				Name2ColIndex: n.TableDef.Name2ColIndex,
-				CreateSql:     n.TableDef.Createsql,
-			}
-		}
 		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
+	case plan.Node_EXTERNAL_SCAN:
+		ds := &Scope{Magic: Normal}
+		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+		bat := batch.NewWithSize(1)
+		{
+			bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
+			bat.Vecs[0].Col = make([]int64, 1)
+			bat.InitZsOne(1)
+		}
+		ds.DataSource = &Source{Bat: bat}
+		return c.compileSort(n, c.compileExternal(n, []*Scope{ds})), nil
 	case plan.Node_TABLE_SCAN:
 		ss := c.compileTableScan(n)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
@@ -535,6 +533,17 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 			Op:  vm.Projection,
 			Idx: c.anal.curr,
 			Arg: constructProjection(n),
+		})
+	}
+	return ss
+}
+
+func (c *Compile) compileExternal(n *plan.Node, ss []*Scope) []*Scope {
+	for i := range ss {
+		ss[i].appendInstruction(vm.Instruction{
+			Op:  vm.External,
+			Idx: c.anal.curr,
+			Arg: constructExternal(n),
 		})
 	}
 	return ss

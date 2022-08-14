@@ -24,7 +24,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -55,12 +54,11 @@ type EncodeSource struct {
 
 // Source contains information of a relation which will be used in execution,
 type Source struct {
-	SchemaName    string
-	RelationName  string
-	Attributes    []string
-	ExternalParam *pipeline.ExternalParam
-	R             engine.Reader
-	Bat           *batch.Batch
+	SchemaName   string
+	RelationName string
+	Attributes   []string
+	R            engine.Reader
+	Bat          *batch.Batch
 }
 
 // Col is the information of attribute

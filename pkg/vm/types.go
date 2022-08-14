@@ -48,6 +48,7 @@ const (
 	Deletion
 	Insert
 	Update
+	External
 
 	Union
 	Minus

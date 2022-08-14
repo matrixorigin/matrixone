@@ -16,7 +16,9 @@ package vm
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 
@@ -90,6 +92,7 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	Deletion: deletion.String,
 	Insert:   insert.String,
 	Update:   update.String,
+	External: external.String,
 
 	Union: union.String,
 	Minus: minus.String,
@@ -129,6 +132,7 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Deletion: deletion.Prepare,
 	Insert:   insert.Prepare,
 	Update:   update.Prepare,
+	External: external.Prepare,
 
 	Union: union.Prepare,
 	Minus: minus.Prepare,
@@ -168,6 +172,7 @@ var execFunc = [...]func(int, *process.Process, any) (bool, error){
 	Deletion: deletion.Call,
 	Insert:   insert.Call,
 	Update:   update.Call,
+	External: external.Call,
 
 	Union: union.Call,
 	Minus: minus.Call,

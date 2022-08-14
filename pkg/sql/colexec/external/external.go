@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package pipeline
+package external
 
 import (
+	"bytes"
 	"compress/bzip2"
 	"compress/flate"
 	"compress/gzip"
 	"compress/zlib"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -39,11 +41,65 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/matrixorigin/simdcsv"
 	"github.com/pierrec/lz4"
 )
+
+func String(arg any, buf *bytes.Buffer) {
+	buf.WriteString("sql output")
+}
+
+func Prepare(_ *process.Process, arg any) error {
+	param := arg.(*Argument).Es
+	load := &tree.LoadParameter{}
+	err := json.Unmarshal([]byte(param.CreateSql), load)
+	if err != nil {
+		param.End = true
+		return err
+	}
+	param.IgnoreLineTag = int(load.Tail.IgnoredLines)
+	param.IgnoreLine = param.IgnoreLineTag
+	fileList, err := getLoadDataList(load)
+	if err != nil {
+		param.End = true
+		return err
+	}
+
+	if len(fileList) == 0 {
+		param.End = true
+		return fmt.Errorf("no such file '%s'", load.Filepath)
+	}
+
+	param.handlerChan = make(chan *ParseLineHandler, 1)
+	param.FileCnt = len(fileList)
+	go func() {
+		for idx, fileName := range fileList {
+			load.Filepath = fileName
+			_, err := ExternalScanFile(load, param, idx)
+			if err != nil {
+				param.End = true
+				close(getLineOutChan(param.plh.simdCsvGetParsedLinesChan))
+			}
+		}
+	}()
+
+	return nil
+}
+
+func Call(_ int, proc *process.Process, arg any) (bool, error) {
+	param := arg.(*Argument).Es
+	if param.End {
+		proc.Reg.InputBatch = nil
+		return true, nil
+	}
+	bat, _, err := ExternalGetFileData(param, proc)
+	if err != nil {
+		return false, err
+	}
+	proc.Reg.InputBatch = bat
+	return false, nil
+}
 
 func ReadFromS3(loadParam *tree.LoadParameter) ([]string, error) {
 	var config fileservice.S3Config
@@ -322,12 +378,12 @@ func judgeInterge(field string) bool {
 	return true
 }
 
-func makeBatch(p *Pipeline, plh *ParseLineHandler) *batch.Batch {
-	batchData := batch.New(true, p.attrs)
+func makeBatch(param *ExternalParam, plh *ParseLineHandler) *batch.Batch {
+	batchData := batch.New(true, param.Attrs)
 	batchSize := plh.batchSize
 	//alloc space for vector
-	for i := 0; i < len(p.attrs); i++ {
-		typ := types.New(types.T(p.param.Cols[i].Typ.Id), p.param.Cols[i].Typ.Width, p.param.Cols[i].Typ.Scale, p.param.Cols[i].Typ.Precision)
+	for i := 0; i < len(param.Attrs); i++ {
+		typ := types.New(types.T(param.Cols[i].Typ.Id), param.Cols[i].Typ.Width, param.Cols[i].Typ.Scale, param.Cols[i].Typ.Precision)
 		vec := vector.New(typ)
 		switch vec.Typ.Oid {
 		case types.T_bool:
@@ -394,20 +450,19 @@ func makeBatch(p *Pipeline, plh *ParseLineHandler) *batch.Batch {
 	return batchData
 }
 
-func GetBatchData(p *Pipeline, plh *ParseLineHandler, proc *process.Process) (*batch.Batch, error) {
-	bat := makeBatch(p, plh)
-
+func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process) (*batch.Batch, error) {
+	bat := makeBatch(param, plh)
 	var Line []string
 	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {
 		Line = plh.simdCsvLineArray[rowIdx]
-		if len(Line) < len(p.attrs) {
+		if len(Line) < len(param.Attrs) {
 			return nil, errors.New("the table colnum is larger than input data colnum")
 		}
-		for colIdx := range p.attrs {
-			field := strings.TrimSpace(Line[p.param.Name2ColIndex[p.attrs[colIdx]]])
+		for colIdx := range param.Attrs {
+			field := strings.TrimSpace(Line[param.Name2ColIndex[param.Attrs[colIdx]]])
 			vec := bat.Vecs[colIdx]
 			isNullOrEmpty := len(field) == 0 || field == NULL_FLAG
-			switch types.T(p.param.Cols[colIdx].Typ.Id) {
+			switch types.T(param.Cols[colIdx].Typ.Id) {
 			case types.T_bool:
 				cols := vec.Col.([]bool)
 				if isNullOrEmpty {
@@ -691,7 +746,7 @@ func GetBatchData(p *Pipeline, plh *ParseLineHandler, proc *process.Process) (*b
 					cols[rowIdx] = d
 				}
 			default:
-				return nil, fmt.Errorf("the value type %d is not support now", p.param.Cols[rowIdx].Typ.Id)
+				return nil, fmt.Errorf("the value type %d is not support now", param.Cols[rowIdx].Typ.Id)
 			}
 		}
 	}
@@ -710,9 +765,9 @@ func GetBatchData(p *Pipeline, plh *ParseLineHandler, proc *process.Process) (*b
 }
 
 // read batch data from external file
-func ExternalRead(load *tree.LoadParameter, p *Pipeline, proc *process.Process) (bool, error) {
-	var bat *batch.Batch
-	var end bool // exist flag
+func ExternalScanFile(load *tree.LoadParameter, param *ExternalParam, idx int) (bool, error) {
+	// var bat *batch.Batch
+	// var end bool // exist flag
 	var dataFile io.ReadCloser
 	dataFile, err := getLoadDataReader(load)
 	if err != nil {
@@ -746,6 +801,8 @@ func ExternalRead(load *tree.LoadParameter, p *Pipeline, proc *process.Process) 
 		false,
 		false)
 
+	param.handlerChan <- plh
+
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
@@ -756,48 +813,58 @@ func ExternalRead(load *tree.LoadParameter, p *Pipeline, proc *process.Process) 
 		}
 	}()
 
-	ignore := int(load.Tail.IgnoredLines)
+	wg.Wait()
+	return true, nil
+}
+
+// read batch data from external file
+func ExternalGetFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, bool, error) {
+	var bat *batch.Batch
+	var err error
 	var lineOut simdcsv.LineOut
+	if param.plh == nil {
+		param.plh = <-param.handlerChan
+		param.FileIndex++
+	}
+	plh := param.plh
 	for {
-		lineOut = <-getLineOutChan(plh.simdCsvGetParsedLinesChan)
+		lineOut = <-getLineOutChan(param.plh.simdCsvGetParsedLinesChan)
 		if lineOut.Line == nil && lineOut.Lines == nil {
+			close(getLineOutChan(param.plh.simdCsvGetParsedLinesChan))
 			bat = nil
+			param.plh = nil
+			param.IgnoreLine = param.IgnoreLineTag
+			if param.FileIndex == param.FileCnt {
+				param.End = true
+			}
 		} else {
-			if plh.lineIdx < ignore {
-				ignore--
+			if plh.lineIdx < param.IgnoreLine {
+				param.IgnoreLine--
 				continue
 			}
 			plh.simdCsvLineArray[plh.lineIdx] = lineOut.Line
 			plh.lineIdx++
 			if plh.lineIdx == plh.batchSize {
-				bat, err = GetBatchData(p, plh, proc)
+				bat, err = GetBatchData(param, plh, proc)
 				if err != nil {
-					return false, err
+					return nil, false, err
 				}
 				bat.Cnt = 1
 				plh.lineIdx = 0
+				return bat, false, nil
 			} else {
 				continue
 			}
 		}
 		if bat == nil && plh.lineIdx != 0 {
 			plh.batchSize = plh.lineIdx
-			bat, err = GetBatchData(p, plh, proc)
+			bat, err = GetBatchData(param, plh, proc)
 			if err != nil {
-				return false, err
+				return nil, false, err
 			}
 			bat.Cnt = 1
 			plh.lineIdx = 0
-		}
-		// processing the batch according to the instructions
-		proc.Reg.InputBatch = bat
-		if end, err = vm.Run(p.instructions, proc); err != nil || end { // end is true means pipeline successfully completed
-			break
-		}
-		if lineOut.Line == nil && lineOut.Lines == nil {
-			break
+			return bat, true, nil
 		}
 	}
-	wg.Wait()
-	return true, nil
 }

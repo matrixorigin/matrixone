@@ -180,7 +180,7 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		} else {
 			ctx.WriteString(" url s3option ")
 			ctx.WriteString("{'endpoint'='" + node.Param.S3option[0] + "', 'access_key_id'='" + node.Param.S3option[3] +
-			"', 'secret_access_key'='" + node.Param.S3option[5] + "', 'bucket'='" + node.Param.S3option[7] + "', 'filepath'='" + node.Param.S3option[9] + "', 'region'='" + node.Param.S3option[11] + "'}")
+				"', 'secret_access_key'='" + node.Param.S3option[5] + "', 'bucket'='" + node.Param.S3option[7] + "', 'filepath'='" + node.Param.S3option[9] + "', 'region'='" + node.Param.S3option[11] + "'}")
 
 		}
 		if node.Param.Tail.Fields != nil {

@@ -51,16 +51,10 @@ func PrintScope(prefix []byte, ss []*Scope) {
 
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(c *Compile) (err error) {
-	p := pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg, s.DataSource.ExternalParam)
+	p := pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
 	if s.DataSource.Bat != nil {
-		if s.DataSource.ExternalParam == nil {
-			if _, err = p.ConstRun(s.DataSource.Bat, s.Proc); err != nil {
-				return err
-			}
-		} else {
-			if _, err = p.ExternalRun(s.Proc); err != nil {
-				return err
-			}
+		if _, err = p.ConstRun(s.DataSource.Bat, s.Proc); err != nil {
+			return err
 		}
 	} else {
 		if _, err = p.Run(s.DataSource.R, s.Proc); err != nil {

@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 
@@ -268,6 +269,21 @@ func constructUpdate(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (
 func constructProjection(n *plan.Node) *projection.Argument {
 	return &projection.Argument{
 		Es: n.ProjectList,
+	}
+}
+
+func constructExternal(n *plan.Node) *external.Argument {
+	attrs := make([]string, len(n.TableDef.Cols))
+	for j, col := range n.TableDef.Cols {
+		attrs[j] = col.Name
+	}
+	return &external.Argument{
+		Es: &external.ExternalParam{
+			Attrs:         attrs,
+			Cols:          n.TableDef.Cols,
+			Name2ColIndex: n.TableDef.Name2ColIndex,
+			CreateSql:     n.TableDef.Createsql,
+		},
 	}
 }
 
