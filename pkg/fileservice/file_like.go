@@ -14,34 +14,10 @@
 
 package fileservice
 
-import "math"
+import "io"
 
-type IOVector struct {
-	// path to file, '/' separated
-	FilePath string
-	// io entries
-	// empty entry not allowed
-	Entries []IOEntry
-}
-
-func (i IOVector) offsetRange() (
-	min int,
-	max int,
-	readToEnd bool,
-) {
-	min = math.MaxInt
-	max = 0
-	for _, entry := range i.Entries {
-		if entry.Offset < min {
-			min = entry.Offset
-		}
-		if entry.Size < 0 {
-			entry.Size = 0
-			readToEnd = true
-		}
-		if end := entry.Offset + entry.Size; end > max {
-			max = end
-		}
-	}
-	return
+type FileLike interface {
+	io.ReadWriteSeeker
+	io.WriterAt
+	io.ReaderAt
 }
