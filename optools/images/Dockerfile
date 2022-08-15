@@ -1,4 +1,4 @@
-FROM golang:1.18-buster as builder
+FROM golang:1.19-buster as builder
 
 RUN mkdir -p /go/src/github.com/matrixorigin/matrixone
 
@@ -13,7 +13,7 @@ RUN go mod download
 
 COPY . .
 
-RUN make config && make build
+RUN make build
 
 FROM ubuntu:latest
 
