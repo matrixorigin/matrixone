@@ -185,12 +185,12 @@ var builtins = map[int]Functions{
 		},
 		Overloads: []Function{
 			{
-				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
-				Volatile:  true,
-				Args:      []types.T{types.T_any},
-				ReturnTyp: types.T_varchar, Fn: multi.UUID,
+				Index:         0,
+				Flag:          plan.Function_STRICT,
+				Layout:        STANDARD_FUNCTION,
+				Volatile:      true,
+				AppendHideArg: true,
+				ReturnTyp:     types.T_varchar, Fn: multi.UUID,
 			},
 		},
 	},

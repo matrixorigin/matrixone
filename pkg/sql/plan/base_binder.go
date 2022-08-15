@@ -851,8 +851,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	}
 
-	if name == "uuid" {
-		// uuid function contains a hidden placeholder parameter
+	if function.GetFunctionAppendHideArgByID(funcID) {
+		// Append a hidden parameter to the function. The default value is constant null
 		args = append(args, makePlan2NullConstExprWithType())
 	}
 
