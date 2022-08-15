@@ -12,21 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package encoding
+package types
 
 import (
 	"fmt"
 	"math"
 	"math/rand"
 	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func TestEncodeType(t *testing.T) {
 	typesConst := []int{0, 1, 2, 3, 5, 6, 7, 9, 10, 11, 12, 13, 15, 18, 20, 21, 32, 200, 201}
 	for _, typeId := range typesConst {
-		typeStruct := types.T(typeId).ToType()
+		typeStruct := T(typeId).ToType()
 		typeStruct.Width = int32(rand.Intn(100))
 		typeStruct.Precision = int32(rand.Intn(100))
 		if DecodeType(EncodeType(typeStruct)) != typeStruct {
@@ -226,7 +224,7 @@ func TestEncodeFloat64Slice(t *testing.T) {
 }
 
 func TestEncodeDate(t *testing.T) {
-	nums := []types.Date{0, math.MaxInt32}
+	nums := []Date{0, math.MaxInt32}
 	for _, num := range nums {
 		if DecodeDate(EncodeDate(num)) != num {
 			t.Fatalf("Date Encoding Error\n")
@@ -235,7 +233,7 @@ func TestEncodeDate(t *testing.T) {
 }
 
 func TestEncodeDateSlice(t *testing.T) {
-	dates := []types.Date{0, math.MaxInt32}
+	dates := []Date{0, math.MaxInt32}
 	datesDecode := DecodeDateSlice(EncodeDateSlice(dates))
 	for i, date := range dates {
 		if datesDecode[i] != date {
@@ -245,7 +243,7 @@ func TestEncodeDateSlice(t *testing.T) {
 }
 
 func TestEncodeDatetime(t *testing.T) {
-	nums := []types.Datetime{math.MinInt64, math.MaxInt64, 0}
+	nums := []Datetime{math.MinInt64, math.MaxInt64, 0}
 	for _, num := range nums {
 		if DecodeDatetime(EncodeDatetime(num)) != num {
 			t.Fatalf("Int64 Encoding Error\n")
@@ -254,7 +252,7 @@ func TestEncodeDatetime(t *testing.T) {
 }
 
 func TestEncodeDatetimeSlice(t *testing.T) {
-	dateTimes := []types.Datetime{0, math.MaxInt64}
+	dateTimes := []Datetime{0, math.MaxInt64}
 	dateTimesDecode := DecodeDatetimeSlice(EncodeDatetimeSlice(dateTimes))
 	for i, date := range dateTimes {
 		if dateTimesDecode[i] != date {

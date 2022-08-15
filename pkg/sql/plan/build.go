@@ -17,6 +17,7 @@ package plan
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -69,6 +70,10 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildCreateTable(stmt, ctx)
 	case *tree.DropTable:
 		return buildDropTable(stmt, ctx)
+	case *tree.DropView:
+		return buildDropView(stmt, ctx)
+	case *tree.CreateView:
+		return buildCreateView(stmt, ctx)
 	case *tree.CreateIndex:
 		return buildCreateIndex(stmt, ctx)
 	case *tree.DropIndex:
@@ -155,7 +160,7 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		switch logicPlan.Ddl.DdlType {
 		case plan.DataDefinition_SHOW_VARIABLES:
 			typ := &plan.Type{
-				Id:    plan.Type_VARCHAR,
+				Id:    int32(types.T_varchar),
 				Width: 1024,
 			}
 			return []*ColDef{
@@ -164,7 +169,7 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 			}
 		case plan.DataDefinition_SHOW_CREATEDATABASE:
 			typ := &plan.Type{
-				Id:    plan.Type_VARCHAR,
+				Id:    int32(types.T_varchar),
 				Width: 1024,
 			}
 			return []*ColDef{
@@ -173,7 +178,7 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 			}
 		case plan.DataDefinition_SHOW_CREATETABLE:
 			typ := &plan.Type{
-				Id:    plan.Type_VARCHAR,
+				Id:    int32(types.T_varchar),
 				Width: 1024,
 			}
 			return []*ColDef{

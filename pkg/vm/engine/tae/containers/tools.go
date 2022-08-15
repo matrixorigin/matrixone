@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 func WriteValueInto[T any](tool *CodecTool, v T) (n int64, err error) {
@@ -40,7 +40,7 @@ type CodecTool struct {
 
 func NewCodecTool() *CodecTool {
 	return &CodecTool{
-		storage: NewVector[[]byte](types.Type_CHAR.ToType(), false),
+		storage: NewVector[[]byte](types.T_char.ToType(), false),
 	}
 }
 

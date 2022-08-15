@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"math"
 	"sync"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -130,15 +129,12 @@ func (kv *KVTxnStorage) GetUncommittedKV() *KV {
 	return kv.uncommitted
 }
 
-func (kv *KVTxnStorage) StartRecovery(c chan txn.TxnMeta) {
+func (kv *KVTxnStorage) StartRecovery(ctx context.Context, c chan txn.TxnMeta) {
 	defer close(c)
 
 	if kv.recoverFrom < 1 {
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
 
 	for {
 		logs, lsn, err := kv.logClient.Read(ctx, kv.recoverFrom, math.MaxUint64)
@@ -156,7 +152,7 @@ func (kv *KVTxnStorage) StartRecovery(c chan txn.TxnMeta) {
 					req := &message{}
 					req.Keys = klog.Keys
 					req.Values = klog.Values
-					_, err := kv.Write(klog.Txn, setOpCode, req.mustMarshal())
+					_, err := kv.Write(ctx, klog.Txn, setOpCode, req.mustMarshal())
 					if err != nil {
 						panic(err)
 					}
@@ -187,15 +183,15 @@ func (kv *KVTxnStorage) StartRecovery(c chan txn.TxnMeta) {
 	}
 }
 
-func (kv *KVTxnStorage) Close() error {
+func (kv *KVTxnStorage) Close(ctx context.Context) error {
 	return nil
 }
 
-func (kv *KVTxnStorage) Destroy() error {
+func (kv *KVTxnStorage) Destroy(ctx context.Context) error {
 	return nil
 }
 
-func (kv *KVTxnStorage) Read(txnMeta txn.TxnMeta, op uint32, payload []byte) (storage.ReadResult, error) {
+func (kv *KVTxnStorage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) (storage.ReadResult, error) {
 	kv.RLock()
 	defer kv.RUnlock()
 
@@ -249,7 +245,7 @@ func (kv *KVTxnStorage) readValue(key []byte, txnMeta txn.TxnMeta) []byte {
 	return value
 }
 
-func (kv *KVTxnStorage) Write(txnMeta txn.TxnMeta, op uint32, payload []byte) ([]byte, error) {
+func (kv *KVTxnStorage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) ([]byte, error) {
 	kv.Lock()
 	defer kv.Unlock()
 
@@ -275,7 +271,7 @@ func (kv *KVTxnStorage) Write(txnMeta txn.TxnMeta, op uint32, payload []byte) ([
 	return nil, nil
 }
 
-func (kv *KVTxnStorage) Prepare(txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
+func (kv *KVTxnStorage) Prepare(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
 	kv.Lock()
 	defer kv.Unlock()
 
@@ -306,7 +302,7 @@ func (kv *KVTxnStorage) Prepare(txnMeta txn.TxnMeta) (timestamp.Timestamp, error
 	return txnMeta.PreparedTS, nil
 }
 
-func (kv *KVTxnStorage) Committing(txnMeta txn.TxnMeta) error {
+func (kv *KVTxnStorage) Committing(ctx context.Context, txnMeta txn.TxnMeta) error {
 	kv.Lock()
 	defer kv.Unlock()
 
@@ -328,7 +324,7 @@ func (kv *KVTxnStorage) Committing(txnMeta txn.TxnMeta) error {
 	return nil
 }
 
-func (kv *KVTxnStorage) Commit(txnMeta txn.TxnMeta) error {
+func (kv *KVTxnStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) error {
 	kv.Lock()
 	defer kv.Unlock()
 
@@ -362,7 +358,7 @@ func (kv *KVTxnStorage) Commit(txnMeta txn.TxnMeta) error {
 	return nil
 }
 
-func (kv *KVTxnStorage) Rollback(txnMeta txn.TxnMeta) error {
+func (kv *KVTxnStorage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error {
 	kv.Lock()
 	defer kv.Unlock()
 
