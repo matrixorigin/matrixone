@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/date"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -42,7 +41,7 @@ func DateToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeDateSlice(resultVector.Data)
+		resultValues := types.DecodeDateSlice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		copy(resultValues, inputValues)
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
@@ -69,7 +68,7 @@ func DatetimeToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeDateSlice(resultVector.Data)
+		resultValues := types.DecodeDateSlice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		vector.SetCol(resultVector, date.DatetimeToDate(inputValues, resultValues))
@@ -97,7 +96,7 @@ func DateStringToDate(vectors []*vector.Vector, proc *process.Process) (*vector.
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeDateSlice(resultVector.Data)
+		resultValues := types.DecodeDateSlice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues.Lengths)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		result, err := date.DateStringToDate(inputValues, resultValues)

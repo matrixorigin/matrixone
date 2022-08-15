@@ -15,7 +15,7 @@
 // implementation; the file example_pq_test.go has the complete source.
 package numerics
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 // Init establishes the heap invariants required by the other routines in this package.
 // Init is idempotent with respect to the heap invariants

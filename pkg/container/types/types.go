@@ -19,56 +19,62 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"golang.org/x/exp/constraints"
 )
 
 type T uint8
 
 const (
 	// any family
-	T_any T = T(plan.Type_ANY)
+	T_any  T = 0
+	T_star T = 1
 
 	// bool family
-	T_bool T = T(plan.Type_BOOL)
+	T_bool T = 10
 
 	// numeric/integer family
-	T_int8   T = T(plan.Type_INT8)
-	T_int16  T = T(plan.Type_INT16)
-	T_int32  T = T(plan.Type_INT32)
-	T_int64  T = T(plan.Type_INT64)
-	T_uint8  T = T(plan.Type_UINT8)
-	T_uint16 T = T(plan.Type_UINT16)
-	T_uint32 T = T(plan.Type_UINT32)
-	T_uint64 T = T(plan.Type_UINT64)
+	T_int8    T = 20
+	T_int16   T = 21
+	T_int32   T = 22
+	T_int64   T = 23
+	T_int128  T = 24
+	T_uint8   T = 25
+	T_uint16  T = 26
+	T_uint32  T = 27
+	T_uint64  T = 28
+	T_uint128 T = 29
 
-	// numeric/float family - unsigned attribute is deprecated
-	T_float32 T = T(plan.Type_FLOAT32)
-	T_float64 T = T(plan.Type_FLOAT64)
+	// numeric/float family
+	T_float32 T = 30
+	T_float64 T = 31
 
-	// date family
-	T_date      T = T(plan.Type_DATE)
-	T_datetime  T = T(plan.Type_DATETIME)
-	T_timestamp T = T(plan.Type_TIMESTAMP)
-	T_interval  T = T(plan.Type_INTERVAL)
-	T_time      T = T(plan.Type_TIME)
+	// numeric/decimals
+	T_decimal64  T = 32
+	T_decimal128 T = 33
+
+	// pseudo numerics, not used
+
+	// date and time
+	T_date      T = 50
+	T_time      T = 51
+	T_datetime  T = 52
+	T_timestamp T = 53
+	T_interval  T = 54
 
 	// string family
-	T_char    T = T(plan.Type_CHAR)
-	T_varchar T = T(plan.Type_VARCHAR)
+	T_char    T = 60
+	T_varchar T = 61
+	T_json    T = 62
 
-	// json family
-	T_json T = T(plan.Type_JSON)
+	// blobs
+	T_blob T = 70
 
-	// numeric/decimal family - unsigned attribute is deprecated
-	T_decimal64  = T(plan.Type_DECIMAL64)
-	T_decimal128 = T(plan.Type_DECIMAL128)
+	// Transaction TS
+	T_TS T = 100
 
 	// system family
-	T_sel   T = T(plan.Type_SEL)   //selection
-	T_tuple T = T(plan.Type_TUPLE) // immutable, size = 24
-
-	// blob family
-	T_blob T = T(plan.Type_BLOB)
+	T_sel   T = 200
+	T_tuple T = 201
 )
 
 type Type struct {
@@ -97,6 +103,10 @@ type Timestamp int64
 type Decimal64 [8]byte
 type Decimal128 [16]byte
 
+// timestamp for transaction: physical time (higher 8 bytes) + logical (lower 4 bytes)
+// See txts.go for impl.
+type TS [12]byte
+
 type Ints interface {
 	int8 | int16 | int32 | int64
 }
@@ -109,8 +119,20 @@ type Floats interface {
 	float32 | float64
 }
 
+type OrderedT interface {
+	constraints.Ordered | Date | Datetime | Timestamp
+}
+
 type Decimal interface {
 	Decimal64 | Decimal128
+}
+
+type FixedSizeT interface {
+	bool | OrderedT | Decimal
+}
+
+type VarSizeT interface {
+	Bytes
 }
 
 type Number interface {

@@ -862,5 +862,7 @@ func (m *MemHandler) HandleRollback(meta txn.TxnMeta) error {
 	return nil
 }
 
-func (m *MemHandler) HandleStartRecovery(chan txn.TxnMeta) {
+func (m *MemHandler) HandleStartRecovery(ch chan txn.TxnMeta) {
+	// no recovery
+	close(ch)
 }

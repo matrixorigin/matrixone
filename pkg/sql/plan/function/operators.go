@@ -4816,6 +4816,14 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_json,
 				Fn:        operator.Cast,
 			},
+			{
+				Index:     265,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_decimal128, types.T_int32},
+				ReturnTyp: types.T_json,
+				Fn:        operator.Cast,
+			},
 		},
 	},
 

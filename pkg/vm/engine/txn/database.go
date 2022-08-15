@@ -16,6 +16,7 @@ package txnengine
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -36,10 +37,11 @@ func (d *Database) Create(ctx context.Context, relName string, defs []engine.Tab
 		ctx,
 		d.engine,
 		d.txnOperator.Write,
-		allNodes,
+		d.engine.allNodesShards,
 		OpCreateRelation,
 		CreateRelationReq{
 			DatabaseID: d.id,
+			Type:       RelationTable,
 			Name:       relName,
 			Defs:       defs,
 		},
@@ -57,7 +59,7 @@ func (d *Database) Delete(ctx context.Context, relName string) error {
 		ctx,
 		d.engine,
 		d.txnOperator.Write,
-		allNodes,
+		d.engine.allNodesShards,
 		OpDeleteRelation,
 		DeleteRelationReq{
 			DatabaseID: d.id,
@@ -77,7 +79,7 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 		ctx,
 		d.engine,
 		d.txnOperator.Read,
-		firstNode,
+		d.engine.firstNodeShard,
 		OpOpenRelation,
 		OpenRelationReq{
 			DatabaseID: d.id,
@@ -89,6 +91,9 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 	}
 
 	resp := resps[0]
+	if resp.ErrNotFound {
+		return nil, fmt.Errorf("relation not found: %s", relName)
+	}
 
 	switch resp.Type {
 
@@ -101,7 +106,7 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 		return table, nil
 
 	default:
-		panic("unknown type")
+		panic(fmt.Errorf("unknown type: %+v", resp))
 	}
 
 }
@@ -112,7 +117,7 @@ func (d *Database) Relations(ctx context.Context) ([]string, error) {
 		ctx,
 		d.engine,
 		d.txnOperator.Read,
-		firstNode,
+		d.engine.firstNodeShard,
 		OpGetRelations,
 		GetRelationsReq{
 			DatabaseID: d.id,
