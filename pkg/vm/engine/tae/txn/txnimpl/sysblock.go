@@ -97,23 +97,18 @@ func (blk *txnSysBlock) tableRows() int {
 }
 
 func (blk *txnSysBlock) processDB(fn func(*catalog.DBEntry) error, ignoreErr bool) (err error) {
-	canRead := false
-	dbIt := blk.catalog.MakeDBIt(true)
-	for dbIt.Valid() {
-		db := dbIt.Get().GetPayload().(*catalog.DBEntry)
-		db.RLock()
-		canRead, err = db.TxnCanRead(blk.Txn, db.RWMutex)
-		db.RUnlock()
+	it := newDBIt(blk.Txn, blk.catalog)
+	for it.linkIt.Valid() {
+		err = it.GetError()
 		if err != nil && !ignoreErr {
 			break
 		}
-		if canRead {
-			err = fn(db)
-			if err != nil && !ignoreErr {
-				break
-			}
+		db := it.GetCurr()
+		err = fn(db)
+		if err != nil && !ignoreErr {
+			break
 		}
-		dbIt.Next()
+		it.Next()
 	}
 	return
 }

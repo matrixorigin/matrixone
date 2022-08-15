@@ -70,18 +70,16 @@ func (it *txnDBIt) Next() {
 		curr.RLock()
 		if curr.GetTenantID() == it.txn.GetTenantID() || curr.GetName() == catalog.SystemDBName {
 			valid, err = curr.TxnCanRead(it.txn, curr.RWMutex)
-			if err != nil {
-				curr.RUnlock()
-				it.err = err
-				break
-			}
-			if valid {
-				curr.RUnlock()
-				it.curr = curr
-				break
-			}
 		}
 		curr.RUnlock()
+		if err != nil {
+			it.err = err
+			break
+		}
+		if valid {
+			it.curr = curr
+			break
+		}
 	}
 }
 

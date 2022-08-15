@@ -64,7 +64,12 @@ type Catalog struct {
 	columnCnt int32
 }
 
-func genDBFullName(tenantID uint32, name string) string { return fmt.Sprintf("%d-%s", tenantID, name) }
+func genDBFullName(tenantID uint32, name string) string {
+	if name == SystemDBName {
+		tenantID = 0
+	}
+	return fmt.Sprintf("%d-%s", tenantID, name)
+}
 
 func MockCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tasks.TaskScheduler) *Catalog {
 	driver := store.NewStoreWithBatchStoreDriver(dir, name, cfg)
