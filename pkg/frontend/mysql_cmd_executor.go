@@ -19,9 +19,6 @@ import (
 	goErrors "errors"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
-
 	"os"
 	"runtime/pprof"
 	"sort"
@@ -40,19 +37,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 func onlyCreateStatementErrorInfo() string {
@@ -131,6 +132,32 @@ func (mce *MysqlCmdExecutor) SetRoutineManager(mgr *RoutineManager) {
 
 func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
+}
+
+func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, proc *process.Process, sql string, beginIns time.Time) context.Context {
+	statementId := util.Fastrand64()
+	sessInfo := proc.SessionInfo
+	txnID := uint64(0)
+	if ses.GetTxnHandler().IsValidTxn() { // fixme: how Could I get an valid txn ID.
+		txnID = ses.GetTxnHandler().GetTxn().GetID()
+	}
+	trace.ReportStatement(
+		ctx,
+		&trace.StatementInfo{
+			StatementID:          statementId,
+			SessionID:            sessInfo.GetConnectionID(),
+			TransactionID:        txnID,
+			Account:              "account", //fixme: sessInfo.GetAccount()
+			User:                 sessInfo.GetUser(),
+			Host:                 sessInfo.GetHost(),
+			Database:             sessInfo.GetDatabase(),
+			Statement:            sql,
+			StatementFingerprint: "", // fixme
+			StatementTag:         "", // fixme
+			RequestAt:            util.NowNS(),
+		},
+	)
+	return trace.ContextWithSpanContext(ctx, trace.SpanContextWithID(trace.TraceID(statementId)))
 }
 
 // outputPool outputs the data
@@ -567,7 +594,7 @@ func extractRowFromVector(vec *vector.Vector, i int, row []interface{}, rowIndex
 			vs := make([]bytejson.ByteJson, 0, len(bytes.Lengths))
 			for i, length := range bytes.Lengths {
 				off := bytes.Offsets[i]
-				vs = append(vs, encoding.DecodeJson(bytes.Data[off:off+length]))
+				vs = append(vs, types.DecodeJson(bytes.Data[off:off+length]))
 			}
 			row[i] = vs[rowIndex]
 		} else {
@@ -578,7 +605,7 @@ func extractRowFromVector(vec *vector.Vector, i int, row []interface{}, rowIndex
 				vs := make([]bytejson.ByteJson, 0, len(bytes.Lengths))
 				for i, length := range bytes.Lengths {
 					off := bytes.Offsets[i]
-					vs = append(vs, encoding.DecodeJson(bytes.Data[off:off+length]))
+					vs = append(vs, types.DecodeJson(bytes.Data[off:off+length]))
 				}
 				row[i] = vs[rowIndex]
 			}
@@ -1424,7 +1451,7 @@ func (mce *MysqlCmdExecutor) handleDeallocate(st *tree.Deallocate) error {
 
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
 	cols := []*plan2.ColDef{
-		{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_varchar)}, Name: explainColName},
+		{Typ: &plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
 	}
 	columns := make([]interface{}, len(cols))
 	var err error = nil
@@ -1494,17 +1521,17 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	switch cwft.GetAst().(type) {
 	case *tree.ShowCreateTable:
 		cols = []*plan2.ColDef{
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Table"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Create Table"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Table"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Create Table"},
 		}
 	case *tree.ShowColumns:
 		cols = []*plan2.ColDef{
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Field"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Type"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Null"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Key"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Default"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Comment"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
 		}
 	}
 	columns := make([]interface{}, len(cols))
@@ -1711,6 +1738,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		Version:      serverVersion,
 	}
 
+	var rootCtx = mce.RecordStatement(trace.DefaultContext(), ses, proc, sql, beginInstant)
+	ctx, span := trace.Start(rootCtx, "doComQuery")
+	defer span.End()
+
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		sql,
 		ses.GetUserName(),
@@ -1909,7 +1940,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 
 		runner = ret.(ComputationRunner)
 		if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-			logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
+			logutil2.Infof(ctx, "time of Exec.Build : %s", time.Since(cmpBegin).String())
 		}
 
 		// cw.Compile might rewrite sql, here we fetch the latest version
@@ -2014,6 +2045,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		//just status, no result set
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex,
+			*tree.CreateView, *tree.DropView,
 			*tree.Insert, *tree.Update,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 			*tree.SetVar,
@@ -2052,7 +2084,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			switch stmt.(type) {
 			case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
-				*tree.CreateUser, *tree.DropUser, *tree.AlterUser, *tree.Load,
+				*tree.CreateView, *tree.DropView, *tree.Load,
+				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete,
 				*tree.PrepareStmt, *tree.PrepareString, *tree.Deallocate:
@@ -2216,7 +2249,9 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 // IsDDL checks the statement is the DDL statement.
 func IsDDL(stmt tree.Statement) bool {
 	switch stmt.(type) {
-	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
+	case *tree.CreateTable, *tree.DropTable,
+		*tree.CreateView, *tree.DropView,
+		*tree.CreateDatabase, *tree.DropDatabase,
 		*tree.CreateIndex, *tree.DropIndex:
 		return true
 	}
@@ -2226,7 +2261,7 @@ func IsDDL(stmt tree.Statement) bool {
 // IsDropStatement checks the statement is the drop statement.
 func IsDropStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
-	case *tree.DropDatabase, *tree.DropTable, *tree.DropIndex:
+	case *tree.DropDatabase, *tree.DropTable, *tree.DropView, *tree.DropIndex:
 		return true
 	}
 	return false

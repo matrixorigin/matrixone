@@ -30,7 +30,6 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -52,15 +51,16 @@ func String(arg any, buf *bytes.Buffer) {
 
 func Prepare(_ *process.Process, arg any) error {
 	param := arg.(*Argument).Es
-	load := &tree.LoadParameter{}
-	err := json.Unmarshal([]byte(param.CreateSql), load)
+	param.batchSize = 40000
+	param.load = &tree.LoadParameter{}
+	err := json.Unmarshal([]byte(param.CreateSql), param.load)
 	if err != nil {
 		param.End = true
 		return err
 	}
-	param.IgnoreLineTag = int(load.Tail.IgnoredLines)
+	param.IgnoreLineTag = int(param.load.Tail.IgnoredLines)
 	param.IgnoreLine = param.IgnoreLineTag
-	fileList, err := getLoadDataList(load)
+	fileList, err := getLoadDataList(param.load)
 	if err != nil {
 		param.End = true
 		return err
@@ -68,22 +68,10 @@ func Prepare(_ *process.Process, arg any) error {
 
 	if len(fileList) == 0 {
 		param.End = true
-		return fmt.Errorf("no such file '%s'", load.Filepath)
+		return fmt.Errorf("no such file '%s'", param.load.Filepath)
 	}
-
-	param.handlerChan = make(chan *ParseLineHandler, 1)
+	param.FileList = fileList
 	param.FileCnt = len(fileList)
-	go func() {
-		for idx, fileName := range fileList {
-			load.Filepath = fileName
-			_, err := ExternalScanFile(load, param, idx)
-			if err != nil {
-				param.End = true
-				close(getLineOutChan(param.plh.simdCsvGetParsedLinesChan))
-			}
-		}
-	}()
-
 	return nil
 }
 
@@ -93,7 +81,8 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		proc.Reg.InputBatch = nil
 		return true, nil
 	}
-	bat, _, err := ExternalGetFileData(param, proc)
+	param.load.Filepath = param.FileList[param.FileIndex]
+	bat, err := ScanFileData(param, proc)
 	if err != nil {
 		return false, err
 	}
@@ -273,21 +262,21 @@ func InitS3Param(loadParam *tree.LoadParameter) error {
 func getLoadDataList(loadParam *tree.LoadParameter) ([]string, error) {
 	switch loadParam.LoadType {
 	case tree.LOCAL:
-		dataFile, err := ReadFromLocal(loadParam)
+		fileList, err := ReadFromLocal(loadParam)
 		if err != nil {
 			return nil, err
 		}
-		return dataFile, nil
+		return fileList, nil
 	case tree.S3, tree.MinIO:
 		err := InitS3Param(loadParam)
 		if err != nil {
 			return nil, err
 		}
-		dataFile, err := ReadFromS3(loadParam)
+		fileList, err := ReadFromS3(loadParam)
 		if err != nil {
 			return nil, err
 		}
-		return dataFile, nil
+		return fileList, nil
 	default:
 		return nil, errors.New("the load file type is not support now")
 	}
@@ -296,17 +285,17 @@ func getLoadDataList(loadParam *tree.LoadParameter) ([]string, error) {
 func getLoadDataReader(loadParam *tree.LoadParameter) (io.ReadCloser, error) {
 	switch loadParam.LoadType {
 	case tree.LOCAL:
-		dataFile, err := ReadFromLocalFile(loadParam)
+		reader, err := ReadFromLocalFile(loadParam)
 		if err != nil {
 			return nil, err
 		}
-		return dataFile, nil
+		return reader, nil
 	case tree.S3, tree.MinIO:
-		dataFile, err := ReadFromS3File(loadParam)
+		reader, err := ReadFromS3File(loadParam)
 		if err != nil {
 			return nil, err
 		}
-		return dataFile, nil
+		return reader, nil
 	default:
 		return nil, errors.New("the load file type is not support now")
 	}
@@ -364,10 +353,6 @@ func getUnCompressReader(loadParam *tree.LoadParameter, r io.ReadCloser) (io.Rea
 }
 
 const NULL_FLAG = "\\N"
-
-func getLineOutChan(v atomic.Value) chan simdcsv.LineOut {
-	return v.Load().(chan simdcsv.LineOut)
-}
 
 func judgeInterge(field string) bool {
 	for i := 0; i < len(field); i++ {
@@ -765,106 +750,71 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 }
 
 // read batch data from external file
-func ExternalScanFile(load *tree.LoadParameter, param *ExternalParam, idx int) (bool, error) {
-	// var bat *batch.Batch
-	// var end bool // exist flag
-	var dataFile io.ReadCloser
-	dataFile, err := getLoadDataReader(load)
+func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
+	var err error
+	param.reader, err = getLoadDataReader(param.load)
 	if err != nil {
 		logutil.Errorf("open file failed. err:%v", err)
-		return false, err
+		return nil, err
 	}
-	dataFile, err = getUnCompressReader(load, dataFile)
+	param.reader, err = getUnCompressReader(param.load, param.reader)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
-	defer func() {
-		err := dataFile.Close()
-		if err != nil {
-			logutil.Errorf("close file failed. err:%v", err)
-		}
-	}()
 	channelSize := 100
 	plh := &ParseLineHandler{}
-	plh.batchSize = 40000
-	plh.simdCsvLineArray = make([][]string, plh.batchSize)
-	plh.lineIdx = 0
+	plh.batchSize = param.batchSize
 	plh.simdCsvGetParsedLinesChan = atomic.Value{}
 	plh.simdCsvGetParsedLinesChan.Store(make(chan simdcsv.LineOut, channelSize))
-	if load.Tail.Fields == nil {
-		load.Tail.Fields = &tree.Fields{Terminated: ","}
+	if param.load.Tail.Fields == nil {
+		param.load.Tail.Fields = &tree.Fields{Terminated: ","}
 	}
-	plh.simdCsvReader = simdcsv.NewReaderWithOptions(dataFile,
-		rune(load.Tail.Fields.Terminated[0]),
+	plh.simdCsvReader = simdcsv.NewReaderWithOptions(param.reader,
+		rune(param.load.Tail.Fields.Terminated[0]),
 		'#',
 		false,
 		false)
 
-	param.handlerChan <- plh
-
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err := plh.simdCsvReader.ReadLoop(getLineOutChan(plh.simdCsvGetParsedLinesChan))
-		if err != nil {
-			close(getLineOutChan(plh.simdCsvGetParsedLinesChan))
-		}
-	}()
-
-	wg.Wait()
-	return true, nil
+	return plh, nil
 }
 
 // read batch data from external file
-func ExternalGetFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, bool, error) {
+func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	var bat *batch.Batch
 	var err error
-	var lineOut simdcsv.LineOut
 	if param.plh == nil {
-		param.plh = <-param.handlerChan
-		param.FileIndex++
+		param.plh, err = GetSimdcsvReader(param)
+		if err != nil {
+			return nil, err
+		}
 	}
 	plh := param.plh
-	for {
-		lineOut = <-getLineOutChan(param.plh.simdCsvGetParsedLinesChan)
-		if lineOut.Line == nil && lineOut.Lines == nil {
-			close(getLineOutChan(param.plh.simdCsvGetParsedLinesChan))
-			bat = nil
-			param.plh = nil
-			param.IgnoreLine = param.IgnoreLineTag
-			if param.FileIndex == param.FileCnt {
-				param.End = true
-			}
-		} else {
-			if plh.lineIdx < param.IgnoreLine {
-				param.IgnoreLine--
-				continue
-			}
-			plh.simdCsvLineArray[plh.lineIdx] = lineOut.Line
-			plh.lineIdx++
-			if plh.lineIdx == plh.batchSize {
-				bat, err = GetBatchData(param, plh, proc)
-				if err != nil {
-					return nil, false, err
-				}
-				bat.Cnt = 1
-				plh.lineIdx = 0
-				return bat, false, nil
-			} else {
-				continue
-			}
+	plh.simdCsvLineArray, err = plh.simdCsvReader.Read(param.batchSize)
+	if err != nil {
+		return nil, err
+	}
+	if param.IgnoreLine != 0 {
+		plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:]
+		param.IgnoreLine = 0
+	}
+	plh.batchSize = len(plh.simdCsvLineArray)
+	bat, err = GetBatchData(param, plh, proc)
+	if err != nil {
+		return nil, err
+	}
+	bat.Cnt = 1
+	if len(plh.simdCsvLineArray) < param.batchSize {
+		err := param.reader.Close()
+		if err != nil {
+			logutil.Errorf("close file failed. err:%v", err)
 		}
-		if bat == nil && plh.lineIdx != 0 {
-			plh.batchSize = plh.lineIdx
-			bat, err = GetBatchData(param, plh, proc)
-			if err != nil {
-				return nil, false, err
-			}
-			bat.Cnt = 1
-			plh.lineIdx = 0
-			return bat, true, nil
+		param.plh = nil
+		param.FileIndex++
+		param.IgnoreLine = param.IgnoreLineTag
+		if param.FileIndex >= param.FileCnt {
+			param.End = true
 		}
 	}
+	return bat, nil
 }

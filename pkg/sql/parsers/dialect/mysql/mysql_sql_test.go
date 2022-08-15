@@ -464,8 +464,8 @@ var (
 		input:  "create external table t (a int) infile 'data.txt' FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY ''",
 		output: "create external table t (a int) infile 'data.txt' fields terminated by \t optionally enclosed by \u0000 lines",
 	}, {
-		input:  "create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='wangjian-test', 'filepath'='*.txt', 'region'='us-west-2'}",
-		output: "create external table t (a int) url s3option {'endpoint'='endpoint', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='wangjian-test', 'filepath'='*.txt', 'region'='us-west-2'}",
+		input:  "create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
+		output: "create external table t (a int) url s3option {'endpoint'='endpoint', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='-test', 'filepath'='*.txt', 'region'='us-west-2'}",
 	}, {
 		input:  "SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'",
 		output: "set names = utf8mb4 utf8mb4_general_ci",
@@ -537,8 +537,8 @@ var (
 		input:  "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
 		output: "load data infile {'filepath':'data.txt', 'compression':'lz4'} into table db.a",
 	}, {
-		input:  "LOAD DATA URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='wangjian-test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
-		output: "load data url s3option {'endpoint'='endpoint', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='wangjian-test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
+		input:  "LOAD DATA URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
+		output: "load data url s3option {'endpoint'='endpoint', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
 	}, {
 		input:  "show tables from test01 where tables_in_test01 like '%t2%'",
 		output: "show tables from test01 where tables_in_test01 like %t2%",

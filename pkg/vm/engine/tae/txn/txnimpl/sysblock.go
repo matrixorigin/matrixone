@@ -18,13 +18,13 @@ import (
 	"bytes"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type txnSysBlock struct {
@@ -220,7 +220,7 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 			case catalog.SystemColAttr_IsUnsigned:
 				v := int8(0)
 				switch colDef.Type.Oid {
-				case types.Type_UINT8, types.Type_UINT16, types.Type_UINT32, types.Type_UINT64:
+				case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 					v = int8(1)
 				}
 				colData.Append(v) // TODO

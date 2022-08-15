@@ -42,7 +42,8 @@ var (
 )
 
 const (
-	defaultHeartbeatInterval = time.Second
+	defaultGossipProbeInterval = 50 * time.Millisecond
+	defaultHeartbeatInterval   = time.Second
 )
 
 // Config defines the Configurations supported by the Log Service.
@@ -78,6 +79,8 @@ type Config struct {
 	// GossipSeedAddresses is list of seed addresses that are used for
 	// introducing the local node into the gossip network.
 	GossipSeedAddresses []string `toml:"gossip-seed-addresses"`
+	// GossipProbeInternval how often gossip nodes probe each other.
+	GossipProbeInterval toml.Duration `toml:"gossip-probe-interval"`
 	// HeartbeatInterval is the interval of how often log service node should be
 	// sending heartbeat message to the HAKeeper.
 	HeartbeatInterval toml.Duration `toml:"logservice-heartbeat-interval"`
@@ -133,10 +136,10 @@ type Config struct {
 		// If HAKeeper does not receive two heartbeat within LogStoreTimeout,
 		// it regards the log store as down.
 		LogStoreTimeout toml.Duration `toml:"log-store-timeout"`
-		// DnStoreTimeout is the actual time limit between a dn store's heartbeat.
-		// If HAKeeper does not receive two heartbeat within DnStoreTimeout,
+		// DNStoreTimeout is the actual time limit between a dn store's heartbeat.
+		// If HAKeeper does not receive two heartbeat within DNStoreTimeout,
 		// it regards the dn store as down.
-		DnStoreTimeout toml.Duration `toml:"dn-store-timeout"`
+		DNStoreTimeout toml.Duration `toml:"dn-store-timeout"`
 	}
 
 	// HAKeeperClientConfig is the config for HAKeeperClient
@@ -150,7 +153,7 @@ func (c *Config) GetHAKeeperConfig() hakeeper.Config {
 	return hakeeper.Config{
 		TickPerSecond:   c.HAKeeperConfig.TickPerSecond,
 		LogStoreTimeout: c.HAKeeperConfig.LogStoreTimeout.Duration,
-		DnStoreTimeout:  c.HAKeeperConfig.DnStoreTimeout.Duration,
+		DNStoreTimeout:  c.HAKeeperConfig.DNStoreTimeout.Duration,
 	}
 }
 
@@ -239,8 +242,11 @@ func (c *Config) Validate() error {
 	if c.HAKeeperConfig.LogStoreTimeout.Duration == 0 {
 		return errors.Wrapf(ErrInvalidConfig, "LogStoreTimeout not set")
 	}
-	if c.HAKeeperConfig.DnStoreTimeout.Duration == 0 {
-		return errors.Wrapf(ErrInvalidConfig, "DnStoreTimeout not set")
+	if c.HAKeeperConfig.DNStoreTimeout.Duration == 0 {
+		return errors.Wrapf(ErrInvalidConfig, "DNStoreTimeout not set")
+	}
+	if c.GossipProbeInterval.Duration == 0 {
+		return errors.Wrapf(ErrInvalidConfig, "GossipProbeInterval not set")
 	}
 	// validate BootstrapConfig
 	if c.BootstrapConfig.BootstrapCluster {
@@ -305,8 +311,8 @@ func (c *Config) Fill() {
 	if c.HAKeeperConfig.LogStoreTimeout.Duration == 0 {
 		c.HAKeeperConfig.LogStoreTimeout.Duration = hakeeper.DefaultLogStoreTimeout
 	}
-	if c.HAKeeperConfig.DnStoreTimeout.Duration == 0 {
-		c.HAKeeperConfig.DnStoreTimeout.Duration = hakeeper.DefaultDnStoreTimeout
+	if c.HAKeeperConfig.DNStoreTimeout.Duration == 0 {
+		c.HAKeeperConfig.DNStoreTimeout.Duration = hakeeper.DefaultDNStoreTimeout
 	}
 	if c.HeartbeatInterval.Duration == 0 {
 		c.HeartbeatInterval.Duration = defaultHeartbeatInterval
@@ -317,7 +323,9 @@ func (c *Config) Fill() {
 	if c.HAKeeperCheckInterval.Duration == 0 {
 		c.HAKeeperCheckInterval.Duration = hakeeper.CheckDuration
 	}
-
+	if c.GossipProbeInterval.Duration == 0 {
+		c.GossipProbeInterval.Duration = defaultGossipProbeInterval
+	}
 }
 
 // HAKeeperClientConfig is the config for HAKeeper clients.

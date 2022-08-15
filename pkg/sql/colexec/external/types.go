@@ -15,8 +15,10 @@
 package external
 
 import (
+	"io"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/simdcsv"
 )
@@ -28,13 +30,16 @@ type ExternalParam struct {
 	Name2ColIndex map[string]int32
 	CreateSql     string
 	plh           *ParseLineHandler
-	handlerChan   chan *ParseLineHandler
+	load 		  *tree.LoadParameter
 	IgnoreLine    int
 	IgnoreLineTag int
 	// tag indicate the fileScan is finished
 	End       bool
 	FileCnt   int
 	FileIndex int
+	FileList  []string
+	batchSize int
+	reader io.ReadCloser
 }
 
 type Argument struct {
@@ -45,7 +50,6 @@ type ParseLineHandler struct {
 	simdCsvReader *simdcsv.Reader
 	//csv read put lines into the channel
 	simdCsvGetParsedLinesChan atomic.Value // chan simdcsv.LineOut
-	lineIdx                   int
 	//batch
 	batchSize int
 	//simd csv

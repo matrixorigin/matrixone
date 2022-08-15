@@ -18,19 +18,52 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
+
+type Shard = metadata.DNShard
 
 type ShardPolicy interface {
 	Vector(vec *vector.Vector, nodes []logservicepb.DNNode) ([]*ShardedVector, error)
 	Batch(batch *batch.Batch, nodes []logservicepb.DNNode) ([]*ShardedBatch, error)
+	Nodes(nodes []logservicepb.DNNode) ([]Shard, error)
 }
 
 type ShardedVector struct {
+	Shard  Shard
 	Vector *vector.Vector
-	Nodes  []logservicepb.DNNode
 }
 
 type ShardedBatch struct {
+	Shard Shard
 	Batch *batch.Batch
-	Nodes []logservicepb.DNNode
+}
+
+func (e *Engine) allNodesShards() ([]Shard, error) {
+	clusterDetails, err := e.getClusterDetails()
+	if err != nil {
+		return nil, err
+	}
+	return e.shardPolicy.Nodes(clusterDetails.DNNodes)
+}
+
+func (e *Engine) firstNodeShard() ([]Shard, error) {
+	clusterDetails, err := e.getClusterDetails()
+	if err != nil {
+		return nil, err
+	}
+	return e.shardPolicy.Nodes(clusterDetails.DNNodes[:1])
+}
+
+func thisShard(shard Shard) func() ([]Shard, error) {
+	shards := []Shard{shard}
+	return func() ([]Shard, error) {
+		return shards, nil
+	}
+}
+
+func theseShards(shards []Shard) func() ([]Shard, error) {
+	return func() ([]Shard, error) {
+		return shards, nil
+	}
 }

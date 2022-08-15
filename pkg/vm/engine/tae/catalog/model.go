@@ -14,7 +14,7 @@
 
 package catalog
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 type EntryType uint8
 
@@ -114,14 +114,14 @@ const (
 func init() {
 	var err error
 	PhyAddrColumnType = types.Type{
-		Oid:   types.Type_DECIMAL128,
+		Oid:   types.T_decimal128,
 		Size:  16,
 		Width: 128,
 	}
 
 	SystemDBSchema = NewEmptySchema(SystemTable_DB_Name)
 	t := types.Type{
-		Oid:   types.Type_VARCHAR,
+		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
@@ -129,7 +129,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_VARCHAR,
+		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
@@ -137,7 +137,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_VARCHAR,
+		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
@@ -150,7 +150,7 @@ func init() {
 
 	SystemTableSchema = NewEmptySchema(SystemTable_Table_Name)
 	t = types.Type{
-		Oid:   types.Type_VARCHAR,
+		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
@@ -158,7 +158,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_VARCHAR,
+		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
@@ -166,7 +166,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_CHAR,
+		Oid:   types.T_char,
 		Size:  1,
 		Width: 8,
 	}
@@ -174,7 +174,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_CHAR,
+		Oid:   types.T_char,
 		Size:  1,
 		Width: 8,
 	}
@@ -182,7 +182,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_VARCHAR,
+		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
@@ -190,7 +190,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_VARCHAR,
+		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
@@ -203,7 +203,7 @@ func init() {
 
 	SystemColumnSchema = NewEmptySchema(SystemTable_Columns_Name)
 	t = types.Type{
-		Oid:   types.Type_VARCHAR,
+		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
@@ -211,7 +211,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_VARCHAR,
+		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
@@ -219,7 +219,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_VARCHAR,
+		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
@@ -227,7 +227,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_INT32,
+		Oid:   types.T_int32,
 		Size:  4,
 		Width: 32,
 	}
@@ -235,7 +235,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_INT32,
+		Oid:   types.T_int32,
 		Size:  4,
 		Width: 32,
 	}
@@ -243,7 +243,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_INT32,
+		Oid:   types.T_int32,
 		Size:  4,
 		Width: 32,
 	}
@@ -251,7 +251,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_INT8,
+		Oid:   types.T_int8,
 		Size:  1,
 		Width: 8,
 	}
@@ -259,7 +259,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_INT8,
+		Oid:   types.T_int8,
 		Size:  1,
 		Width: 8,
 	}
@@ -267,7 +267,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_VARCHAR,
+		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
@@ -275,7 +275,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_INT8,
+		Oid:   types.T_int8,
 		Size:  1,
 		Width: 8,
 	}
@@ -283,7 +283,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_CHAR,
+		Oid:   types.T_char,
 		Size:  1,
 		Width: 8,
 	}
@@ -291,7 +291,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_INT8,
+		Oid:   types.T_int8,
 		Size:  1,
 		Width: 8,
 	}
@@ -299,7 +299,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_INT8,
+		Oid:   types.T_int8,
 		Size:  1,
 		Width: 8,
 	}
@@ -307,7 +307,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_VARCHAR,
+		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
@@ -315,7 +315,7 @@ func init() {
 		panic(err)
 	}
 	t = types.Type{
-		Oid:   types.Type_INT8,
+		Oid:   types.T_int8,
 		Size:  1,
 		Width: 8,
 	}

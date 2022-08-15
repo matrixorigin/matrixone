@@ -14,7 +14,7 @@
 
 package txnif
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 const (
 // UncommitTS = ^uint64(0)

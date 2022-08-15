@@ -24,75 +24,7 @@ option (gogoproto.sizer_all) = false;
 option (gogoproto.protosizer_all) = true;
 
 message Type {
-	enum TypeId {
-		ANY = 0;
-		STAR = 1;
-
-		BOOL    = 10;
-
-		// INTs
-		INT8    = 20;
-		INT16   = 21;
-		INT32   = 22;
-		INT64   = 23;
-		INT128  = 24;
-		// UINT are mysql quirks.
-		UINT8   = 25;
-		UINT16  = 26;
-		UINT32  = 27;
-		UINT64  = 28;
-		UINT128 = 29;
-
-		FLOAT32 = 30;
-		FLOAT64 = 31;
-		DECIMAL64	= 32;
-		DECIMAL128	= 33;
-		DECIMAL     = 34;
-		ANYINT    = 37;
-		ANYFLOAT  = 38;
-		ANYNUMBER = 39;
-
-		// Some special small (<= 32 bytes) fixed len types that worth optimize
-		UUID      = 40;		// 16 bytes,
-		UB160     = 41;     // 20 bytes, SHA-1
-		UB184     = 42;     // 23 bytes,
-		UB192     = 43;		// 24 bytes, for example, BLAKE3 output of 24 bytes.
-		UB224	  = 44;		// 28 bytes, for example, SHA-224, BLAKE3-224
-		UB256	  = 45;		// 32 bytes, for example, SHA-256, BLAKE3-256
-
-		// Time
-		DATE		= 50;
-		TIME        = 51;
-		DATETIME	= 52;
-		TIMESTAMP	= 53;
-		INTERVAL    = 54;
-		ANYTIME     = 59;
-
-		// Strings and binaries
-		CHAR		= 60;
-		VARCHAR		= 61;
-		JSON		= 62;
-		BINARY      = 70;
-		VARBINARY   = 71;
-
-		// Special
-		ARRAY       = 90;
-		FLEXBUFFER  = 91;
-
-		// Physical for varlen
-		BYTEA8      = 100;
-		BYTEA16     = 101;
-		BYTEA       = 102;
-
-		// MO Special, not sure if we really need these.
-		SEL         = 200;
-		TUPLE       = 201;
-
-		// BLOB family
-		BLOB        = 202;
-	}
-
-	TypeId id           = 1;
+	int32 id           = 1;
 	bool nullable		= 2;
 	int32 width			= 3;
 	int32 precision		= 4;
@@ -286,12 +218,17 @@ message PropertiesDef {
 	repeated Property properties 	= 1;
 }
 
+message ViewDef {
+	string view  = 1;
+}
+
 message TableDef {
 	message DefType {
 		oneof def {
 			PrimaryKeyDef pk			= 1;
 			IndexDef idx				= 2;
 			PropertiesDef properties	= 3;
+			ViewDef view				= 4;
 		}
 	}
 	string name				= 1;

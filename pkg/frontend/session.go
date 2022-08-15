@@ -17,13 +17,13 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -634,6 +634,10 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 	return tcc.dbName
 }
 
+func (tcc *TxnCompilerContext) GetRootSql() string {
+	return tcc.ses.GetSql()
+}
+
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	var err error
 	//open database
@@ -701,14 +705,15 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		return nil, nil
 	}
 
-	var defs []*plan2.ColDef
+	var cols []*plan2.ColDef
+	var defs []*plan2.TableDefType
 	var TableType, Createsql string
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
-			defs = append(defs, &plan2.ColDef{
+			cols = append(cols, &plan2.ColDef{
 				Name: attr.Attr.Name,
 				Typ: &plan2.Type{
-					Id:        plan.Type_TypeId(attr.Attr.Type.Oid),
+					Id:        int32(attr.Attr.Type.Oid),
 					Width:     attr.Attr.Type.Width,
 					Precision: attr.Attr.Type.Precision,
 					Scale:     attr.Attr.Type.Scale,
@@ -717,15 +722,35 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				Default: attr.Attr.Default,
 			})
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
-			for _, x := range pro.Properties {
-				switch x.Key {
+			properties := make([]*plan2.Property, len(pro.Properties))
+			for i, p := range pro.Properties {
+				switch p.Key {
 				case catalog.SystemRelAttr_Kind:
-					TableType = x.Value
+					TableType = p.Value
 				case catalog.SystemRelAttr_CreateSQL:
-					Createsql = x.Value
+					Createsql = p.Value
 				default:
 				}
+				properties[i] = &plan2.Property{
+					Key:   p.Key,
+					Value: p.Value,
+				}
 			}
+			defs = append(defs, &plan2.TableDefType{
+				Def: &plan2.TableDef_DefType_Properties{
+					Properties: &plan2.PropertiesDef{
+						Properties: properties,
+					},
+				},
+			})
+		} else if viewDef, ok := def.(*engine.ViewDef); ok {
+			defs = append(defs, &plan2.TableDefType{
+				Def: &plan2.TableDef_DefType_View{
+					View: &plan2.ViewDef{
+						View: viewDef.View,
+					},
+				},
+			})
 		}
 	}
 	if tcc.QryTyp != TXN_DEFAULT {
@@ -734,10 +759,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 			return nil, nil
 		}
 		hideKey := hideKeys[0]
-		defs = append(defs, &plan2.ColDef{
+		cols = append(cols, &plan2.ColDef{
 			Name: hideKey.Name,
 			Typ: &plan2.Type{
-				Id:        plan.Type_TypeId(hideKey.Type.Oid),
+				Id:        int32(hideKey.Type.Oid),
 				Width:     hideKey.Type.Width,
 				Precision: hideKey.Type.Precision,
 				Scale:     hideKey.Type.Scale,
@@ -754,7 +779,8 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 
 	tableDef := &plan2.TableDef{
 		Name:      tableName,
-		Cols:      defs,
+		Cols:      cols,
+		Defs:      defs,
 		TableType: TableType,
 		Createsql: Createsql,
 	}
@@ -798,7 +824,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 		priDefs = append(priDefs, &plan2.ColDef{
 			Name: key.Name,
 			Typ: &plan2.Type{
-				Id:        plan.Type_TypeId(key.Type.Oid),
+				Id:        int32(key.Type.Oid),
 				Width:     key.Type.Width,
 				Precision: key.Type.Precision,
 				Scale:     key.Type.Scale,
@@ -833,7 +859,7 @@ func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *p
 	hideDef := &plan2.ColDef{
 		Name: hideKey.Name,
 		Typ: &plan2.Type{
-			Id:        plan.Type_TypeId(hideKey.Type.Oid),
+			Id:        int32(hideKey.Type.Oid),
 			Width:     hideKey.Type.Width,
 			Precision: hideKey.Type.Precision,
 			Scale:     hideKey.Type.Scale,

@@ -21,9 +21,8 @@ import (
 	"strconv"
 	"time"
 
-	wtf "github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type MockDataProvider struct {
@@ -60,7 +59,7 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 	}
 
 	switch t.Oid {
-	case types.Type_BOOL:
+	case types.T_bool:
 		for i := 0; i < rows; i++ {
 			if i%2 == 0 {
 				vec.Append(true)
@@ -68,7 +67,7 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 				vec.Append(false)
 			}
 		}
-	case types.Type_INT8:
+	case types.T_int8:
 		if unique {
 			if int(rows) >= math.MaxInt8-math.MinInt8 {
 				panic("overflow")
@@ -82,7 +81,7 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 				vec.Append(int8(ival))
 			}
 		}
-	case types.Type_INT16:
+	case types.T_int16:
 		if unique {
 			for i := 0; i < rows; i++ {
 				vec.Append(int16(i))
@@ -93,7 +92,7 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 				vec.Append(int16(ival))
 			}
 		}
-	case types.Type_INT32:
+	case types.T_int32:
 		if unique {
 			for i := 0; i < rows; i++ {
 				vec.Append(int32(i))
@@ -104,7 +103,7 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 				vec.Append(int32(ival))
 			}
 		}
-	case types.Type_INT64:
+	case types.T_int64:
 		if unique {
 			for i := 0; i < rows; i++ {
 				vec.Append(int64(i))
@@ -115,7 +114,7 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 				vec.Append(int64(ival))
 			}
 		}
-	case types.Type_UINT8:
+	case types.T_uint8:
 		if unique {
 			if int(rows) >= math.MaxUint8 {
 				panic("overflow")
@@ -129,7 +128,7 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 				vec.Append(uint8(ival))
 			}
 		}
-	case types.Type_UINT16:
+	case types.T_uint16:
 		if unique {
 			for i := 0; i < rows; i++ {
 				vec.Append(uint16(i))
@@ -140,7 +139,7 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 				vec.Append(uint16(ival))
 			}
 		}
-	case types.Type_UINT32:
+	case types.T_uint32:
 		if unique {
 			for i := 0; i < rows; i++ {
 				vec.Append(uint32(i))
@@ -151,7 +150,7 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 				vec.Append(uint32(ival))
 			}
 		}
-	case types.Type_UINT64:
+	case types.T_uint64:
 		if unique {
 			for i := 0; i < rows; i++ {
 				vec.Append(uint64(i))
@@ -162,19 +161,19 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 				vec.Append(uint64(ival))
 			}
 		}
-	case types.Type_FLOAT32:
+	case types.T_float32:
 		for i := 0; i < rows; i++ {
 			v1 := rand.Intn(math.MaxInt32)
 			v2 := rand.Intn(math.MaxInt32) + 1
 			vec.Append(float32(v1) / float32(v2))
 		}
-	case types.Type_FLOAT64:
+	case types.T_float64:
 		for i := 0; i < rows; i++ {
 			v1 := rand.Intn(math.MaxInt32)
 			v2 := rand.Intn(math.MaxInt32) + 1
 			vec.Append(float64(v1) / float64(v2))
 		}
-	case types.Type_VARCHAR, types.Type_CHAR:
+	case types.T_varchar, types.T_char:
 		if unique {
 			for i := 0; i < rows; i++ {
 				s := fmt.Sprintf("%d-%d", i, 0)
@@ -186,25 +185,25 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 				vec.Append([]byte(s))
 			}
 		}
-	case types.Type_DATETIME:
+	case types.T_datetime:
 		for i := 1; i <= rows; i++ {
 			vec.Append(types.FromClock(int32(i*100), 1, 1, 1, 1, 1, 1))
 		}
-	case types.Type_DATE:
+	case types.T_date:
 		for i := 1; i <= rows; i++ {
 			vec.Append(types.FromCalendar(int32(i)*100, 1, 1))
 		}
-	case types.Type_TIMESTAMP:
+	case types.T_timestamp:
 		for i := int32(1); i <= int32(rows); i++ {
 			vec.Append(types.Timestamp(common.NextGlobalSeqNum()))
 		}
-	case types.Type_DECIMAL64:
+	case types.T_decimal64:
 		for i := int32(1); i <= int32(rows); i++ {
-			vec.Append(wtf.InitDecimal64UsingUint(common.NextGlobalSeqNum(), 0))
+			vec.Append(types.InitDecimal64UsingUint(common.NextGlobalSeqNum(), 0))
 		}
-	case types.Type_DECIMAL128:
+	case types.T_decimal128:
 		for i := int32(1); i <= int32(rows); i++ {
-			vec.Append(wtf.InitDecimal128UsingUint(common.NextGlobalSeqNum()))
+			vec.Append(types.InitDecimal128UsingUint(common.NextGlobalSeqNum()))
 		}
 	default:
 		panic("not supported")
@@ -215,7 +214,7 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 func MockVector2(typ types.Type, rows int, offset int) Vector {
 	vec := MakeVector(typ, true)
 	switch typ.Oid {
-	case types.Type_BOOL:
+	case types.T_bool:
 		for i := 0; i < rows; i++ {
 			if i%2 == 0 {
 				vec.Append(true)
@@ -223,67 +222,67 @@ func MockVector2(typ types.Type, rows int, offset int) Vector {
 				vec.Append(false)
 			}
 		}
-	case types.Type_INT8:
+	case types.T_int8:
 		for i := 0; i < rows; i++ {
 			vec.Append(int8(i + offset))
 		}
-	case types.Type_INT16:
+	case types.T_int16:
 		for i := 0; i < rows; i++ {
 			vec.Append(int16(i + offset))
 		}
-	case types.Type_INT32:
+	case types.T_int32:
 		for i := 0; i < rows; i++ {
 			vec.Append(int32(i + offset))
 		}
-	case types.Type_INT64:
+	case types.T_int64:
 		for i := 0; i < rows; i++ {
 			vec.Append(int64(i + offset))
 		}
-	case types.Type_UINT8:
+	case types.T_uint8:
 		for i := 0; i < rows; i++ {
 			vec.Append(uint8(i + offset))
 		}
-	case types.Type_UINT16:
+	case types.T_uint16:
 		for i := 0; i < rows; i++ {
 			vec.Append(uint16(i + offset))
 		}
-	case types.Type_UINT32:
+	case types.T_uint32:
 		for i := 0; i < rows; i++ {
 			vec.Append(uint32(i + offset))
 		}
-	case types.Type_UINT64:
+	case types.T_uint64:
 		for i := 0; i < rows; i++ {
 			vec.Append(uint64(i + offset))
 		}
-	case types.Type_FLOAT32:
+	case types.T_float32:
 		for i := 0; i < rows; i++ {
 			vec.Append(float32(i + offset))
 		}
-	case types.Type_FLOAT64:
+	case types.T_float64:
 		for i := 0; i < rows; i++ {
 			vec.Append(float64(i + offset))
 		}
-	case types.Type_DECIMAL64:
+	case types.T_decimal64:
 		for i := 0; i < rows; i++ {
-			vec.Append(wtf.InitDecimal64(int64(i + offset)))
+			vec.Append(types.InitDecimal64(int64(i + offset)))
 		}
-	case types.Type_DECIMAL128:
+	case types.T_decimal128:
 		for i := 0; i < rows; i++ {
-			vec.Append(wtf.InitDecimal128(int64(i + offset)))
+			vec.Append(types.InitDecimal128(int64(i + offset)))
 		}
-	case types.Type_TIMESTAMP:
+	case types.T_timestamp:
 		for i := 0; i < rows; i++ {
 			vec.Append(types.Timestamp(i + offset))
 		}
-	case types.Type_DATE:
+	case types.T_date:
 		for i := 0; i < rows; i++ {
 			vec.Append(types.Date(i + offset))
 		}
-	case types.Type_DATETIME:
+	case types.T_datetime:
 		for i := 0; i < rows; i++ {
 			vec.Append(types.Datetime(i + offset))
 		}
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_BLOB:
+	case types.T_char, types.T_varchar, types.T_blob:
 		for i := 0; i < rows; i++ {
 			vec.Append([]byte(strconv.Itoa(i + offset)))
 		}

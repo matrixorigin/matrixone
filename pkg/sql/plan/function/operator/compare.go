@@ -16,11 +16,11 @@ package operator
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/compare"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
@@ -47,7 +47,7 @@ func allocateBoolVector(length int, proc *process.Process) *vector.Vector {
 	if err != nil {
 		panic(moerr.NewPanicError("allocBoolVec OOM"))
 	}
-	vec.Col = encoding.DecodeBoolSlice(vec.Data)
+	vec.Col = types.DecodeBoolSlice(vec.Data)
 	vec.Col = vec.Col.([]bool)[:length]
 	return vec
 }

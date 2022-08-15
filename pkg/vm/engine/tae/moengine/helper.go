@@ -30,6 +30,12 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		commentDef.Comment = schema.Comment
 		defs = append(defs, commentDef)
 	}
+
+	if schema.View != "" {
+		viewDef := new(engine.ViewDef)
+		viewDef.View = schema.View
+		defs = append(defs, viewDef)
+	}
 	for _, col := range schema.ColDefs {
 		if col.IsPhyAddr() {
 			continue
@@ -104,6 +110,7 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 					return
 				}
 			}
+
 		case *engine.PropertiesDef:
 			for _, property := range defVal.Properties {
 				switch strings.ToLower(property.Key) {
@@ -116,6 +123,10 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 				default:
 				}
 			}
+
+		case *engine.ViewDef:
+			schema.View = defVal.View
+
 		default:
 			// We will not deal with other cases for the time being
 		}

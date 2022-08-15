@@ -25,7 +25,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/fagongzi/goetty"
+	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -1031,7 +1031,7 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod() ([]byte, error) {
 		return nil, err
 	}
 
-	read, err := mp.tcpConn.Read()
+	read, err := mp.tcpConn.Read(goetty.ReadOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -1472,7 +1472,8 @@ func (mp *MysqlProtocolImpl) flushOutBuffer() error {
 	if mp.bytesInOutBuffer >= mp.untilBytesInOutbufToFlush {
 		mp.flushCount++
 		mp.writeBytes += uint64(mp.bytesInOutBuffer)
-		err := mp.tcpConn.Flush()
+		// FIXME: use a suitable timeout value
+		err := mp.tcpConn.Flush(0)
 		if err != nil {
 			return err
 		}
@@ -1489,16 +1490,16 @@ func (mp *MysqlProtocolImpl) openPacket() error {
 
 	outbuf := mp.tcpConn.OutBuf()
 	n := 4
-	outbuf.Expansion(n)
+	outbuf.Grow(n)
 	writeIdx := outbuf.GetWriteIndex()
 	mp.beginWriteIndex = writeIdx
 	writeIdx += n
 	mp.bytesInOutBuffer += n
-	err := outbuf.SetWriterIndex(writeIdx)
+	outbuf.SetWriteIndex(writeIdx)
 	if mp.enableLog {
 		logutil.Infof("openPacket curWriteIdx %d\n", outbuf.GetWriteIndex())
 	}
-	return err
+	return nil
 }
 
 // fill the packet with data
@@ -1528,16 +1529,13 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 		if curLen < 0 {
 			return fmt.Errorf("needLen %d < 0. hasDataLen %d n - i %d", curLen, hasDataLen, n-i)
 		}
-		outbuf.Expansion(curLen)
+		outbuf.Grow(curLen)
 		buf = outbuf.RawBuf()
 		writeIdx := outbuf.GetWriteIndex()
 		copy(buf[writeIdx:], elems[i:i+curLen])
 		writeIdx += curLen
 		mp.bytesInOutBuffer += curLen
-		err = outbuf.SetWriterIndex(writeIdx)
-		if err != nil {
-			return err
-		}
+		outbuf.SetWriteIndex(writeIdx)
 		if mp.enableLog {
 			logutil.Infof("fillPacket curWriteIdx %d\n", outbuf.GetWriteIndex())
 		}
@@ -1718,7 +1716,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 		//send packet
 		var packet = append(header[:], payload[i:i+curLen]...)
 
-		err := mp.tcpConn.WriteAndFlush(packet)
+		err := mp.tcpConn.Write(packet, goetty.WriteOptions{Flush: true})
 		if err != nil {
 			return err
 		}
@@ -1734,7 +1732,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 			header[3] = mp.sequenceId
 
 			//send header / zero-sized packet
-			err := mp.tcpConn.WriteAndFlush(header[:])
+			err := mp.tcpConn.Write(header[:], goetty.WriteOptions{Flush: true})
 			if err != nil {
 				return err
 			}
