@@ -16,16 +16,15 @@ package db
 
 import (
 	"bytes"
-	"math"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -496,7 +495,7 @@ func TestCompactBlock1(t *testing.T) {
 		assert.Nil(t, err)
 		defer preparer.Close()
 		assert.Equal(t, bat.Vecs[0].Length()-1, preparer.Columns.Vecs[0].Length())
-		var maxTs uint64
+		var maxTs types.TS
 		{
 			txn, rel := getDefaultRelation(t, db, schema.Name)
 			seg, err := rel.GetSegment(id.SegmentID)
@@ -514,7 +513,7 @@ func TestCompactBlock1(t *testing.T) {
 		}
 
 		dataBlock := block.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		changes, err := dataBlock.CollectChangesInRange(txn.GetStartTS(), maxTs+1)
+		changes, err := dataBlock.CollectChangesInRange(txn.GetStartTS(), maxTs.Next())
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(1), changes.DeleteMask.GetCardinality())
 
@@ -531,7 +530,8 @@ func TestCompactBlock1(t *testing.T) {
 		assert.Nil(t, err)
 		t.Log(destBlockData.PPString(common.PPL1, 0, ""))
 
-		view, err := destBlockData.CollectChangesInRange(0, math.MaxUint64)
+		var zeroV types.TS
+		view, err := destBlockData.CollectChangesInRange(zeroV, types.MaxTs())
 		assert.NoError(t, err)
 		assert.True(t, view.DeleteMask.Equals(changes.DeleteMask))
 	}
@@ -1267,7 +1267,9 @@ func TestLogIndex1(t *testing.T) {
 		txn, rel := getDefaultRelation(t, tae, schema.Name)
 		blk := getOneBlock(rel)
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(1, txn.GetStartTS())
+
+		var zeroV types.TS
+		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(zeroV.Next(), txn.GetStartTS())
 		assert.NoError(t, err)
 		for i, index := range indexes {
 			t.Logf("%d: %s", i, index.String())
@@ -2062,6 +2064,105 @@ func TestMergeBlocks(t *testing.T) {
 		it.Next()
 	}
 	assert.Nil(t, txn.Commit())
+}
+
+// delete
+// merge but not commit
+// delete
+// commit merge
+func TestMergeblocks2(t *testing.T) {
+	testutils.EnsureNoLeak(t)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 3
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 6)
+	bats := bat.Split(2)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bats[0], true)
+
+	txn, rel := tae.getRelation()
+	_ = rel.Append(bats[1])
+	assert.Nil(t, txn.Commit())
+
+	{
+		v := getSingleSortKeyValue(bat, schema, 1)
+		t.Logf("v is %v**********", v)
+		filter := handle.NewEQFilter(v)
+		txn2, rel := tae.getRelation()
+		t.Log("********before delete******************")
+		checkAllColRowsByScan(t, rel, 6, true)
+		_ = rel.DeleteByFilter(filter)
+		assert.Nil(t, txn2.Commit())
+	}
+
+	_, rel = tae.getRelation()
+	t.Log("**********************")
+	checkAllColRowsByScan(t, rel, 5, true)
+
+	{
+		t.Log("************merge************")
+
+		txn, rel = tae.getRelation()
+
+		segIt := rel.MakeSegmentIt()
+		seg := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry)
+		segHandle, err := rel.GetSegment(seg.ID)
+		assert.NoError(t, err)
+
+		var metas []*catalog.BlockEntry
+		it := segHandle.MakeBlockIt()
+		for it.Valid() {
+			meta := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+			metas = append(metas, meta)
+			it.Next()
+		}
+		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
+		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, tae.Scheduler)
+		assert.NoError(t, err)
+		err = task.OnExec()
+		assert.NoError(t, err)
+
+		{
+			v := getSingleSortKeyValue(bat, schema, 2)
+			t.Logf("v is %v**********", v)
+			filter := handle.NewEQFilter(v)
+			txn2, rel := tae.getRelation()
+			t.Log("********before delete******************")
+			checkAllColRowsByScan(t, rel, 5, true)
+			_ = rel.DeleteByFilter(filter)
+			assert.Nil(t, txn2.Commit())
+		}
+		err = txn.Commit()
+		assert.NoError(t, err)
+	}
+
+	t.Log("********************")
+	_, rel = tae.getRelation()
+	checkAllColRowsByScan(t, rel, 4, true)
+	assert.Equal(t, int64(4), rel.Rows())
+
+	v := getSingleSortKeyValue(bat, schema, 1)
+	filter := handle.NewEQFilter(v)
+	_, _, err := rel.GetByFilter(filter)
+	assert.NotNil(t, err)
+
+	v = getSingleSortKeyValue(bat, schema, 2)
+	filter = handle.NewEQFilter(v)
+	_, _, err = rel.GetByFilter(filter)
+	assert.NotNil(t, err)
+
+	// v = getSingleSortKeyValue(bat, schema, 4)
+	// filter = handle.NewEQFilter(v)
+	// _, _, err = rel.GetByFilter(filter)
+	// assert.NotNil(t, err)
+
+	// tae.restart()
+	// assert.Equal(t, int64(2), rel.Rows())
 }
 
 func TestDelete2(t *testing.T) {

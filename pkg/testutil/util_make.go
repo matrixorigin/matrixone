@@ -16,10 +16,10 @@ package testutil
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -32,6 +32,10 @@ import (
 var (
 	MakeBoolVector = func(values []bool) *vector.Vector {
 		return makeVector(values, nil, boolType)
+	}
+
+	MakeBooleanlVector = func(values []bool, nsp []uint64) *vector.Vector {
+		return makeVector(values, nsp, boolType)
 	}
 
 	MakeInt64Vector = func(values []int64, nsp []uint64) *vector.Vector {
@@ -148,7 +152,7 @@ var (
 			}
 			ds[i] = d
 		}
-		vec.Data = encoding.EncodeDateSlice(ds)
+		vec.Data = types.EncodeDateSlice(ds)
 		vec.Col = ds
 		return vec
 	}
@@ -169,7 +173,7 @@ var (
 			}
 			ds[i] = d
 		}
-		vec.Data = encoding.EncodeDatetimeSlice(ds)
+		vec.Data = types.EncodeDatetimeSlice(ds)
 		vec.Col = ds
 		return vec
 	}
@@ -190,7 +194,7 @@ var (
 			}
 			ds[i] = d
 		}
-		vec.Data = encoding.EncodeTimestampSlice(ds)
+		vec.Data = types.EncodeTimestampSlice(ds)
 		vec.Col = ds
 		return vec
 	}
@@ -335,7 +339,7 @@ func NewProc() *process.Process {
 
 func makeVector[T vecType](values []T, nsp []uint64, typ types.Type) *vector.Vector {
 	vec := vector.New(typ)
-	vec.Data = encoding.EncodeFixedSlice(values, typ.TypeSize())
+	vec.Data = types.EncodeFixedSlice(values, typ.TypeSize())
 	vec.Col = values
 	for _, n := range nsp {
 		nulls.Add(vec.Nsp, n)

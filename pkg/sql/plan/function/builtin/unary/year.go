@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -43,7 +42,7 @@ func DateToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
+		resultValues := types.DecodeInt64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		DateToYearPlan2(inputValues, resultValues)
@@ -78,7 +77,7 @@ func DatetimeToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 			return nil, err
 		}
 		// resultValues := make([]uint16, len(inputValues))
-		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
+		resultValues := types.DecodeInt64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		DatetimeToYearPlan2(inputValues, resultValues)
@@ -112,7 +111,7 @@ func DateStringToYear(vectors []*vector.Vector, proc *process.Process) (*vector.
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
+		resultValues := types.DecodeInt64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues.Lengths)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		DateStringToYearPlan2(inputValues, resultVector.Nsp, resultValues)

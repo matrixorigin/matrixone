@@ -16,6 +16,7 @@ package mockio
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
@@ -30,7 +31,7 @@ func TestBlock1(t *testing.T) {
 		indexCnt[col] = 2
 	}
 	block := newBlock(common.NextGlobalSeqNum(), nil, colCnt, indexCnt)
-	blockTs := common.NextGlobalSeqNum()
+	blockTs := types.NextGlobalTsForTest()
 	_ = block.WriteTS(blockTs)
 	readTs, _ := block.ReadTS()
 	assert.Equal(t, blockTs, readTs)

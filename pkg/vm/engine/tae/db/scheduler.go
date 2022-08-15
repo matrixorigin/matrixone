@@ -17,6 +17,7 @@ package db
 import (
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -108,7 +109,7 @@ func (s *taskScheduler) Checkpoint(indexes []*wal.Index) (err error) {
 	return
 }
 
-func (s *taskScheduler) GetSafeTS() uint64 {
+func (s *taskScheduler) GetSafeTS() types.TS {
 	return s.db.TxnMgr.StatSafeTS()
 }
 

@@ -288,7 +288,7 @@ func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, e
 		// expr must be bool type, if not, try to do type convert
 		// but just ignore the subQuery. It will be solved at optimizer.
 		if expr.GetSub() == nil {
-			expr, err = makePlan2CastExpr(expr, &plan.Type{Id: plan.Type_BOOL})
+			expr, err = makePlan2CastExpr(expr, &plan.Type{Id: int32(types.T_bool)})
 			if err != nil {
 				return nil, err
 			}
@@ -536,7 +536,7 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 		if stmt.All {
 			return errors.New("", "EXCEPT/MINUS ALL clause will support in future version.")
 		} else {
-			*unionTypes = append(*unionTypes, plan.Node_UNION)
+			*unionTypes = append(*unionTypes, plan.Node_MINUS)
 		}
 	}
 	return nil

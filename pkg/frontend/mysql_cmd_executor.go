@@ -19,9 +19,6 @@ import (
 	goErrors "errors"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
-
 	"os"
 	"runtime/pprof"
 	"sort"
@@ -40,19 +37,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 func onlyCreateStatementErrorInfo() string {
@@ -133,6 +134,46 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
 }
 
+func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, proc *process.Process, sql string, beginIns time.Time) context.Context {
+	statementId := util.Fastrand64()
+	sessInfo := proc.SessionInfo
+	txnID := uint64(0)
+	if ses.GetTxnHandler().IsValidTxn() { // fixme: how Could I get an valid txn ID.
+		txnID = ses.GetTxnHandler().GetTxn().GetID()
+	}
+	trace.ReportStatement(
+		ctx,
+		&trace.StatementInfo{
+			StatementID:          statementId,
+			SessionID:            sessInfo.GetConnectionID(),
+			TransactionID:        txnID,
+			Account:              "account", //fixme: sessInfo.GetAccount()
+			User:                 sessInfo.GetUser(),
+			Host:                 sessInfo.GetHost(),
+			Database:             sessInfo.GetDatabase(),
+			Statement:            sql,
+			StatementFingerprint: "", // fixme
+			StatementTag:         "", // fixme
+			RequestAt:            util.NowNS(),
+		},
+	)
+	return trace.ContextWithSpanContext(ctx, trace.SpanContextWithID(trace.TraceID(statementId)))
+}
+
+// outputPool outputs the data
+type outputPool interface {
+	resetLineStr()
+
+	reset()
+
+	getEmptyRow() ([]interface{}, error)
+
+	flush() error
+}
+
+var _ outputPool = &outputQueue{}
+var _ outputPool = &fakeOutputQueue{}
+
 type outputQueue struct {
 	proto        MysqlProtocol
 	mrs          *MysqlResultSet
@@ -146,11 +187,11 @@ type outputQueue struct {
 	flushTime       time.Duration
 }
 
-func (o *outputQueue) ResetLineStr() {
+func (o *outputQueue) resetLineStr() {
 	o.lineStr = o.lineStr[:0]
 }
 
-func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *tree.ExportParam, showStatementType ShowStatementType) *outputQueue {
+func NewOutputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *tree.ExportParam, showStatementType ShowStatementType) *outputQueue {
 	return &outputQueue{
 		proto:        proto,
 		mrs:          mrs,
@@ -216,6 +257,29 @@ func (o *outputQueue) flush() error {
 		}
 	}
 	o.rowIdx = 0
+	return nil
+}
+
+// fakeOutputQueue saves the data into the session.
+type fakeOutputQueue struct {
+	mrs *MysqlResultSet
+}
+
+func newFakeOutputQueue(mrs *MysqlResultSet) outputPool {
+	return &fakeOutputQueue{mrs: mrs}
+}
+
+func (foq *fakeOutputQueue) resetLineStr() {}
+
+func (foq *fakeOutputQueue) reset() {}
+
+func (foq *fakeOutputQueue) getEmptyRow() ([]interface{}, error) {
+	row := make([]interface{}, foq.mrs.GetColumnCount())
+	foq.mrs.AddRow(row)
+	return row, nil
+}
+
+func (foq *fakeOutputQueue) flush() error {
 	return nil
 }
 
@@ -409,7 +473,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	}
 	allocateOutBufferTime := time.Since(begin3)
 
-	oq := NewOuputQueue(proto, mrs, uint64(countOfResultSet), ses.ep, ses.showStmtType)
+	oq := NewOutputQueue(proto, mrs, uint64(countOfResultSet), ses.ep, ses.showStmtType)
 	oq.reset()
 
 	row2colTime := time.Duration(0)
@@ -439,299 +503,9 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		if bat.Zs[j] <= 0 {
 			continue
 		}
-		row, err := oq.getEmptyRow()
+		row, err := extractRowFromEveryVector(bat, int64(j), oq)
 		if err != nil {
 			return err
-		}
-		var rowIndex = int64(j)
-		/*
-			if len(bat.Sels) != 0 {
-				rowIndex = bat.Sels[j]
-			}
-		*/
-
-		//begin1 := time.Now()
-		for i, vec := range bat.Vecs { //col index
-			rowIndexBackup := rowIndex
-			if vec.IsScalarNull() {
-				row[i] = nil
-				continue
-			}
-			if vec.IsScalar() {
-				rowIndex = 0
-			}
-
-			switch vec.Typ.Oid { //get col
-			case types.T_json:
-				if !nulls.Any(vec.Nsp) {
-					bytes := vec.Col.(*types.Bytes)
-					vs := make([]bytejson.ByteJson, 0, len(bytes.Lengths))
-					for i, length := range bytes.Lengths {
-						off := bytes.Offsets[i]
-						vs = append(vs, encoding.DecodeJson(bytes.Data[off:off+length]))
-					}
-					row[i] = vs[rowIndex]
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
-						row[i] = nil
-					} else {
-						bytes := vec.Col.(*types.Bytes)
-						vs := make([]bytejson.ByteJson, 0, len(bytes.Lengths))
-						for i, length := range bytes.Lengths {
-							off := bytes.Offsets[i]
-							vs = append(vs, encoding.DecodeJson(bytes.Data[off:off+length]))
-						}
-						row[i] = vs[rowIndex]
-					}
-				}
-			case types.T_bool:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.([]bool)
-					row[i] = vs[rowIndex]
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
-						vs := vec.Col.([]bool)
-						row[i] = vs[rowIndex]
-					}
-				}
-			case types.T_int8:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.([]int8)
-					row[i] = vs[rowIndex]
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
-						vs := vec.Col.([]int8)
-						row[i] = vs[rowIndex]
-					}
-				}
-			case types.T_uint8:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.([]uint8)
-					row[i] = vs[rowIndex]
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
-						vs := vec.Col.([]uint8)
-						row[i] = vs[rowIndex]
-					}
-				}
-			case types.T_int16:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.([]int16)
-					row[i] = vs[rowIndex]
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
-						vs := vec.Col.([]int16)
-						row[i] = vs[rowIndex]
-					}
-				}
-			case types.T_uint16:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.([]uint16)
-					row[i] = vs[rowIndex]
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
-						vs := vec.Col.([]uint16)
-						row[i] = vs[rowIndex]
-					}
-				}
-			case types.T_int32:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.([]int32)
-					row[i] = vs[rowIndex]
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
-						vs := vec.Col.([]int32)
-						row[i] = vs[rowIndex]
-					}
-				}
-			case types.T_uint32:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.([]uint32)
-					row[i] = vs[rowIndex]
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
-						vs := vec.Col.([]uint32)
-						row[i] = vs[rowIndex]
-					}
-				}
-			case types.T_int64:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.([]int64)
-					row[i] = vs[rowIndex]
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
-						vs := vec.Col.([]int64)
-						row[i] = vs[rowIndex]
-					}
-				}
-			case types.T_uint64:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.([]uint64)
-					row[i] = vs[rowIndex]
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
-						vs := vec.Col.([]uint64)
-						row[i] = vs[rowIndex]
-					}
-				}
-			case types.T_float32:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.([]float32)
-					row[i] = vs[rowIndex]
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
-						vs := vec.Col.([]float32)
-						row[i] = vs[rowIndex]
-					}
-				}
-			case types.T_float64:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.([]float64)
-					row[i] = vs[rowIndex]
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
-						vs := vec.Col.([]float64)
-						row[i] = vs[rowIndex]
-					}
-				}
-			case types.T_char:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.(*types.Bytes)
-					row[i] = vs.Get(rowIndex)
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
-						vs := vec.Col.(*types.Bytes)
-						row[i] = vs.Get(rowIndex)
-					}
-				}
-			case types.T_varchar:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.(*types.Bytes)
-					row[i] = vs.Get(rowIndex)
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
-						vs := vec.Col.(*types.Bytes)
-						row[i] = vs.Get(rowIndex)
-					}
-				}
-			case types.T_date:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.([]types.Date)
-					row[i] = vs[rowIndex]
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
-						vs := vec.Col.([]types.Date)
-						row[i] = vs[rowIndex]
-					}
-				}
-			case types.T_datetime:
-				precision := vec.Typ.Precision
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.([]types.Datetime)
-					row[i] = vs[rowIndex].String2(precision)
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
-						vs := vec.Col.([]types.Datetime)
-						row[i] = vs[rowIndex].String2(precision)
-					}
-				}
-			case types.T_timestamp:
-				precision := vec.Typ.Precision
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.([]types.Timestamp)
-					row[i] = vs[rowIndex].String2(precision)
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
-						vs := vec.Col.([]types.Timestamp)
-						row[i] = vs[rowIndex].String2(precision)
-					}
-				}
-			case types.T_decimal64:
-				scale := vec.Typ.Scale
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.([]types.Decimal64)
-					row[i] = vs[rowIndex].ToStringWithScale(scale)
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
-						row[i] = nil
-					} else {
-						vs := vec.Col.([]types.Decimal64)
-						row[i] = vs[rowIndex].ToStringWithScale(scale)
-					}
-				}
-			case types.T_decimal128:
-				scale := vec.Typ.Scale
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.([]types.Decimal128)
-					row[i] = vs[rowIndex].ToStringWithScale(scale)
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
-						row[i] = nil
-					} else {
-						vs := vec.Col.([]types.Decimal128)
-						row[i] = vs[rowIndex].ToStringWithScale(scale)
-					}
-				}
-			case types.T_blob:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
-					vs := vec.Col.(*types.Bytes)
-					row[i] = vs.Get(rowIndex)
-				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
-						vs := vec.Col.(*types.Bytes)
-						row[i] = vs.Get(rowIndex)
-					}
-				}
-			default:
-				logutil.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
-				return fmt.Errorf("getDataFromPipeline : unsupported type %d", vec.Typ.Oid)
-			}
-			rowIndex = rowIndexBackup
-		}
-		//row2colTime += time.Since(begin1)
-		//duplicate rows
-		for i := int64(0); i < bat.Zs[j]-1; i++ {
-			erow, rr := oq.getEmptyRow()
-			if rr != nil {
-				return rr
-			}
-			for l := 0; l < len(bat.Vecs); l++ {
-				erow[l] = row[l]
-			}
 		}
 		if oq.showStmtType == ShowCreateDatabase || oq.showStmtType == ShowCreateTable || oq.showStmtType == ShowColumns {
 			row2 := make([]interface{}, len(row))
@@ -772,6 +546,306 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		tTime-row2colTime-allocateOutBufferTime,
 		proto.GetStats())
 
+	return nil
+}
+
+// extractRowFromEveryVector gets the j row from the every vector and outputs the row
+func extractRowFromEveryVector(dataSet *batch.Batch, j int64, oq outputPool) ([]interface{}, error) {
+	row, err := oq.getEmptyRow()
+	if err != nil {
+		return nil, err
+	}
+	var rowIndex = int64(j)
+	for i, vec := range dataSet.Vecs { //col index
+		rowIndexBackup := rowIndex
+		if vec.IsScalarNull() {
+			row[i] = nil
+			continue
+		}
+		if vec.IsScalar() {
+			rowIndex = 0
+		}
+
+		err = extractRowFromVector(vec, i, row, rowIndex)
+		if err != nil {
+			return nil, err
+		}
+		rowIndex = rowIndexBackup
+	}
+	//duplicate rows
+	for i := int64(0); i < dataSet.Zs[j]-1; i++ {
+		erow, rr := oq.getEmptyRow()
+		if rr != nil {
+			return nil, rr
+		}
+		for l := 0; l < len(dataSet.Vecs); l++ {
+			erow[l] = row[l]
+		}
+	}
+	return row, nil
+}
+
+// extractRowFromVector gets the rowIndex row from the i vector
+func extractRowFromVector(vec *vector.Vector, i int, row []interface{}, rowIndex int64) error {
+	switch vec.Typ.Oid { //get col
+	case types.T_json:
+		if !nulls.Any(vec.Nsp) {
+			bytes := vec.Col.(*types.Bytes)
+			vs := make([]bytejson.ByteJson, 0, len(bytes.Lengths))
+			for i, length := range bytes.Lengths {
+				off := bytes.Offsets[i]
+				vs = append(vs, types.DecodeJson(bytes.Data[off:off+length]))
+			}
+			row[i] = vs[rowIndex]
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
+				row[i] = nil
+			} else {
+				bytes := vec.Col.(*types.Bytes)
+				vs := make([]bytejson.ByteJson, 0, len(bytes.Lengths))
+				for i, length := range bytes.Lengths {
+					off := bytes.Offsets[i]
+					vs = append(vs, types.DecodeJson(bytes.Data[off:off+length]))
+				}
+				row[i] = vs[rowIndex]
+			}
+		}
+	case types.T_bool:
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.([]bool)
+			row[i] = vs[rowIndex]
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]bool)
+				row[i] = vs[rowIndex]
+			}
+		}
+	case types.T_int8:
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.([]int8)
+			row[i] = vs[rowIndex]
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]int8)
+				row[i] = vs[rowIndex]
+			}
+		}
+	case types.T_uint8:
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.([]uint8)
+			row[i] = vs[rowIndex]
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]uint8)
+				row[i] = vs[rowIndex]
+			}
+		}
+	case types.T_int16:
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.([]int16)
+			row[i] = vs[rowIndex]
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]int16)
+				row[i] = vs[rowIndex]
+			}
+		}
+	case types.T_uint16:
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.([]uint16)
+			row[i] = vs[rowIndex]
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]uint16)
+				row[i] = vs[rowIndex]
+			}
+		}
+	case types.T_int32:
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.([]int32)
+			row[i] = vs[rowIndex]
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]int32)
+				row[i] = vs[rowIndex]
+			}
+		}
+	case types.T_uint32:
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.([]uint32)
+			row[i] = vs[rowIndex]
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]uint32)
+				row[i] = vs[rowIndex]
+			}
+		}
+	case types.T_int64:
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.([]int64)
+			row[i] = vs[rowIndex]
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]int64)
+				row[i] = vs[rowIndex]
+			}
+		}
+	case types.T_uint64:
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.([]uint64)
+			row[i] = vs[rowIndex]
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]uint64)
+				row[i] = vs[rowIndex]
+			}
+		}
+	case types.T_float32:
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.([]float32)
+			row[i] = vs[rowIndex]
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]float32)
+				row[i] = vs[rowIndex]
+			}
+		}
+	case types.T_float64:
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.([]float64)
+			row[i] = vs[rowIndex]
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]float64)
+				row[i] = vs[rowIndex]
+			}
+		}
+	case types.T_char:
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.(*types.Bytes)
+			row[i] = vs.Get(rowIndex)
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.(*types.Bytes)
+				row[i] = vs.Get(rowIndex)
+			}
+		}
+	case types.T_varchar:
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.(*types.Bytes)
+			row[i] = vs.Get(rowIndex)
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.(*types.Bytes)
+				row[i] = vs.Get(rowIndex)
+			}
+		}
+	case types.T_date:
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.([]types.Date)
+			row[i] = vs[rowIndex]
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]types.Date)
+				row[i] = vs[rowIndex]
+			}
+		}
+	case types.T_datetime:
+		precision := vec.Typ.Precision
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.([]types.Datetime)
+			row[i] = vs[rowIndex].String2(precision)
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]types.Datetime)
+				row[i] = vs[rowIndex].String2(precision)
+			}
+		}
+	case types.T_timestamp:
+		precision := vec.Typ.Precision
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.([]types.Timestamp)
+			row[i] = vs[rowIndex].String2(precision)
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]types.Timestamp)
+				row[i] = vs[rowIndex].String2(precision)
+			}
+		}
+	case types.T_decimal64:
+		scale := vec.Typ.Scale
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.([]types.Decimal64)
+			row[i] = vs[rowIndex].ToStringWithScale(scale)
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]types.Decimal64)
+				row[i] = vs[rowIndex].ToStringWithScale(scale)
+			}
+		}
+	case types.T_decimal128:
+		scale := vec.Typ.Scale
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.([]types.Decimal128)
+			row[i] = vs[rowIndex].ToStringWithScale(scale)
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]types.Decimal128)
+				row[i] = vs[rowIndex].ToStringWithScale(scale)
+			}
+		}
+	case types.T_blob:
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.(*types.Bytes)
+			row[i] = vs.Get(rowIndex)
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.(*types.Bytes)
+				row[i] = vs.Get(rowIndex)
+			}
+		}
+	default:
+		logutil.Errorf("extractRowFromVector : unsupported type %d \n", vec.Typ.Oid)
+		return fmt.Errorf("extractRowFromVector : unsupported type %d", vec.Typ.Oid)
+	}
 	return nil
 }
 
@@ -1378,7 +1452,7 @@ func (mce *MysqlCmdExecutor) handleDeallocate(st *tree.Deallocate) error {
 
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
 	cols := []*plan2.ColDef{
-		{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_varchar)}, Name: explainColName},
+		{Typ: &plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
 	}
 	columns := make([]interface{}, len(cols))
 	var err error = nil
@@ -1448,17 +1522,17 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	switch cwft.GetAst().(type) {
 	case *tree.ShowCreateTable:
 		cols = []*plan2.ColDef{
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Table"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Create Table"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Table"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Create Table"},
 		}
 	case *tree.ShowColumns:
 		cols = []*plan2.ColDef{
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Field"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Type"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Null"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Key"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Default"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Comment"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
 		}
 	}
 	columns := make([]interface{}, len(cols))
@@ -1665,6 +1739,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		Version:      serverVersion,
 	}
 
+	var rootCtx = mce.RecordStatement(trace.DefaultContext(), ses, proc, sql, beginInstant)
+	ctx, span := trace.Start(rootCtx, "doComQuery")
+	defer span.End()
+
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		sql,
 		ses.GetUserName(),
@@ -1675,7 +1753,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	}
 
 	defer func() {
-		ses.Mrs = nil
+		ses.SetMysqlResultSet(nil)
 	}()
 
 	var cmpBegin time.Time
@@ -1690,7 +1768,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	mce.beforeRun(stmt)
 	defer mce.afterRun(stmt, beginInstant)
 	for _, cw := range cws {
-		ses.Mrs = &MysqlResultSet{}
+		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
 
 		/*
@@ -1857,13 +1935,13 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 
 		cmpBegin = time.Now()
 
-		if ret, err = cw.Compile(ses, getDataFromPipeline); err != nil {
+		if ret, err = cw.Compile(ses, ses.outputCallback); err != nil {
 			goto handleFailed
 		}
 
 		runner = ret.(ComputationRunner)
 		if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-			logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
+			logutil2.Infof(ctx, "time of Exec.Build : %s", time.Since(cmpBegin).String())
 		}
 
 		// cw.Compile might rewrite sql, here we fetch the latest version
@@ -2136,7 +2214,7 @@ func (mce *MysqlCmdExecutor) Close() {
 StatementCanBeExecutedInUncommittedTransaction checks the statement can be executed in an active transaction.
 */
 func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
-	switch stmt.(type) {
+	switch st := stmt.(type) {
 	//ddl statement
 	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView:
 		return true
@@ -2152,9 +2230,16 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowWarnings:
 		return true
 		//others
-	case *tree.Use, *tree.PrepareStmt, *tree.Execute, *tree.Deallocate,
+	case *tree.PrepareStmt, *tree.Execute, *tree.Deallocate,
 		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
 		return true
+	case *tree.Use:
+		/*
+			These statements can not be executed in an uncommitted transaction:
+				USE SECONDARY ROLE { ALL | NONE }
+				USE ROLE role;
+		*/
+		return !st.IsUseRole()
 	}
 
 	return false
@@ -2181,12 +2266,15 @@ func IsDropStatement(stmt tree.Statement) bool {
 
 // IsAdministrativeStatement checks the statement is the administrative statement.
 func IsAdministrativeStatement(stmt tree.Statement) bool {
-	switch stmt.(type) {
-	case *tree.CreateUser, *tree.DropUser, *tree.AlterUser,
+	switch st := stmt.(type) {
+	case *tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
+		*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 		*tree.CreateRole, *tree.DropRole,
 		*tree.Revoke, *tree.Grant,
 		*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword:
 		return true
+	case *tree.Use:
+		return st.IsUseRole()
 	}
 	return false
 }

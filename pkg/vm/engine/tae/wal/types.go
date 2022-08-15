@@ -15,6 +15,7 @@
 package wal
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 )
@@ -28,7 +29,7 @@ const (
 type Index = store.Index
 
 type ReplayObserver interface {
-	OnTimeStamp(uint64)
+	OnTimeStamp(ts types.TS)
 	OnStaleIndex(*Index)
 }
 

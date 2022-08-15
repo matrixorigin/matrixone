@@ -16,6 +16,7 @@ package tables
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync/atomic"
 	"time"
 
@@ -41,7 +42,12 @@ type appendableNode struct {
 	data    *containers.Batch
 	rows    uint32
 	mgr     base.INodeManager
-	flushTS uint64
+	flushTS atomic.Value
+	//mu      struct {
+	//	sync.RWMutex
+	//	flushTS types.TS
+	//}
+
 	// ckpTs     uint64 // unused
 	exception *atomic.Value
 }
@@ -61,7 +67,7 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	impl.file = file
 	impl.mgr = mgr
 	impl.block = block
-	impl.flushTS = flushTS
+	impl.flushTS.Store(flushTS)
 	impl.rows = file.ReadRows()
 	mgr.RegisterNode(impl)
 	return impl
@@ -131,12 +137,12 @@ func (node *appendableNode) GetColumnDataCopy(
 	return
 }
 
-func (node *appendableNode) SetBlockMaxflushTS(ts uint64) {
-	atomic.StoreUint64(&node.flushTS, ts)
+func (node *appendableNode) SetBlockMaxflushTS(ts types.TS) {
+	node.flushTS.Store(ts)
 }
 
-func (node *appendableNode) GetBlockMaxflushTS() uint64 {
-	return atomic.LoadUint64(&node.flushTS)
+func (node *appendableNode) GetBlockMaxflushTS() types.TS {
+	return node.flushTS.Load().(types.TS)
 }
 
 func (node *appendableNode) OnLoad() {
@@ -161,14 +167,14 @@ func (node *appendableNode) OnLoad() {
 	}
 }
 
-func (node *appendableNode) flushData(ts uint64, colsData *containers.Batch, opCtx Operation) (err error) {
+func (node *appendableNode) flushData(ts types.TS, colsData *containers.Batch, opCtx Operation) (err error) {
 	if exception := node.exception.Load(); exception != nil {
 		logutil.Error("[Exception]", common.ExceptionField(exception))
 		err = exception.(error)
 		return
 	}
 	mvcc := node.block.mvcc
-	if node.GetBlockMaxflushTS() == ts {
+	if node.GetBlockMaxflushTS().Equal(ts) {
 		err = data.ErrStaleRequest
 		logutil.Info("[Done]", common.TimestampField(ts),
 			common.OperationField(opCtx.OpName()),

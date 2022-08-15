@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/month"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -41,7 +40,7 @@ func DateToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeUint8Slice(resultVector.Data)
+		resultValues := types.DecodeUint8Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		vector.SetCol(resultVector, month.DateToMonth(inputValues, resultValues))
@@ -67,7 +66,7 @@ func DatetimeToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeUint8Slice(resultVector.Data)
+		resultValues := types.DecodeUint8Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		vector.SetCol(resultVector, month.DatetimeToMonth(inputValues, resultValues))
@@ -93,7 +92,7 @@ func DateStringToMonth(vectors []*vector.Vector, proc *process.Process) (*vector
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeUint8Slice(resultVector.Data)
+		resultValues := types.DecodeUint8Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues.Lengths)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		vector.SetCol(resultVector, month.DateStringToMonth(inputValues, resultVector.Nsp, resultValues))

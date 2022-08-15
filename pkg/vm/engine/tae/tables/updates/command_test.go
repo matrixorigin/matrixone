@@ -16,6 +16,7 @@ package updates
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -36,7 +37,10 @@ func TestCompactBlockCmd(t *testing.T) {
 	blk, _ := seg.CreateBlock(nil, catalog.ES_Appendable, nil)
 
 	controller := NewMVCCHandle(blk)
-	node := MockAppendNode(341, 0, 2515, controller)
+
+	ts := types.NextGlobalTsForTest()
+	//node := MockAppendNode(341, 0, 2515, controller)
+	node := MockAppendNode(ts, 0, 2515, controller)
 	cmd := NewAppendCmd(1, node)
 
 	var w bytes.Buffer

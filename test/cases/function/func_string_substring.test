@@ -32,12 +32,10 @@ select substring('hello', -18446744073709551615, 1);
 -- @bvt:issue
 select substring('hello', 18446744073709551615, 1);
 
--- @bvt:issue#3249
 select substring('hello', -18446744073709551616, 1);
 select substring('hello', 18446744073709551616, 1);
 select substring('hello', -18446744073709551617, 1);
 select substring('hello', 18446744073709551617, 1);
--- @bvt:issue
 
 select substring('hello', 1, -1);
 
@@ -65,14 +63,12 @@ select substring('hello', 4294967296, 4294967296);
 select substring('hello', -4294967297, -4294967297);
 select substring('hello', 4294967297, 4294967297);
 
--- @bvt:issue#3249
 select substring('hello', -18446744073709551615, -18446744073709551615);
 select substring('hello', 18446744073709551615, 18446744073709551615);
 select substring('hello', -18446744073709551616, -18446744073709551616);
 select substring('hello', 18446744073709551616, 18446744073709551616);
 select substring('hello', -18446744073709551617, -18446744073709551617);
 select substring('hello', 18446744073709551617, 18446744073709551617);
--- @bvt:issue
 
 SELECT SUBSTRING('Sakila' FROM -4 FOR 2);
 SELECT SUBSTRING('foobarbar' FROM 4);

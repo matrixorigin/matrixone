@@ -17,6 +17,7 @@ package catalog
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -69,7 +70,7 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 			},
 			RWMutex:  new(sync.RWMutex),
 			ID:       id,
-			CreateAt: 1,
+			CreateAt: types.SystemDBTS,
 		},
 		db:      db,
 		schema:  schema,

@@ -16,18 +16,19 @@ package model
 
 import (
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type BlockView struct {
-	Ts               uint64
+	Ts               types.TS
 	Columns          map[int]*ColumnView
 	DeleteMask       *roaring.Bitmap
 	DeleteLogIndexes []*wal.Index
 }
 
-func NewBlockView(ts uint64) *BlockView {
+func NewBlockView(ts types.TS) *BlockView {
 	return &BlockView{
 		Ts:      ts,
 		Columns: make(map[int]*ColumnView),

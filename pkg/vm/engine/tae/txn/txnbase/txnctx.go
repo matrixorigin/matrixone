@@ -17,6 +17,7 @@ package txnbase
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -36,12 +37,12 @@ type TxnCtx struct {
 	*sync.RWMutex
 	ID                uint64
 	IDCtx             []byte
-	StartTS, CommitTS uint64
+	StartTS, CommitTS types.TS
 	Info              []byte
 	State             txnif.TxnState
 }
 
-func NewTxnCtx(rwlocker *sync.RWMutex, id, start uint64, info []byte) *TxnCtx {
+func NewTxnCtx(rwlocker *sync.RWMutex, id uint64, start types.TS, info []byte) *TxnCtx {
 	if rwlocker == nil {
 		rwlocker = new(sync.RWMutex)
 	}
@@ -66,19 +67,19 @@ func (ctx *TxnCtx) Repr() string {
 	return repr
 }
 
-func (ctx *TxnCtx) SameTxn(startTs uint64) bool { return ctx.StartTS == startTs }
-func (ctx *TxnCtx) CommitBefore(startTs uint64) bool {
-	return ctx.GetCommitTS() < startTs
+func (ctx *TxnCtx) SameTxn(startTs types.TS) bool { return ctx.StartTS.Equal(startTs) }
+func (ctx *TxnCtx) CommitBefore(startTs types.TS) bool {
+	return ctx.GetCommitTS().Less(startTs)
 }
-func (ctx *TxnCtx) CommitAfter(startTs uint64) bool {
-	return ctx.GetCommitTS() > startTs
+func (ctx *TxnCtx) CommitAfter(startTs types.TS) bool {
+	return ctx.GetCommitTS().Greater(startTs)
 }
 
-func (ctx *TxnCtx) String() string     { return ctx.Repr() }
-func (ctx *TxnCtx) GetID() uint64      { return ctx.ID }
-func (ctx *TxnCtx) GetInfo() []byte    { return ctx.Info }
-func (ctx *TxnCtx) GetStartTS() uint64 { return ctx.StartTS }
-func (ctx *TxnCtx) GetCommitTS() uint64 {
+func (ctx *TxnCtx) String() string       { return ctx.Repr() }
+func (ctx *TxnCtx) GetID() uint64        { return ctx.ID }
+func (ctx *TxnCtx) GetInfo() []byte      { return ctx.Info }
+func (ctx *TxnCtx) GetStartTS() types.TS { return ctx.StartTS }
+func (ctx *TxnCtx) GetCommitTS() types.TS {
 	ctx.RLock()
 	defer ctx.RUnlock()
 	return ctx.CommitTS
@@ -88,18 +89,18 @@ func (ctx *TxnCtx) IsVisible(o txnif.TxnReader) bool {
 	ostart := o.GetStartTS()
 	ctx.RLock()
 	defer ctx.RUnlock()
-	return ostart <= ctx.StartTS
+	return ostart.LessEq(ctx.StartTS)
 }
 
 func (ctx *TxnCtx) IsActiveLocked() bool {
 	return ctx.CommitTS == txnif.UncommitTS
 }
 
-func (ctx *TxnCtx) ToCommittingLocked(ts uint64) error {
-	if ts <= ctx.StartTS {
+func (ctx *TxnCtx) ToCommittingLocked(ts types.TS) error {
+	if ts.LessEq(ctx.StartTS) {
 		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
 	}
-	if ctx.CommitTS != txnif.UncommitTS {
+	if !ctx.CommitTS.Equal(txnif.UncommitTS) {
 		return ErrTxnNotActive
 	}
 	ctx.CommitTS = ts
@@ -115,8 +116,8 @@ func (ctx *TxnCtx) ToCommittedLocked() error {
 	return nil
 }
 
-func (ctx *TxnCtx) ToRollbackingLocked(ts uint64) error {
-	if ts <= ctx.StartTS {
+func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
+	if ts.LessEq(ctx.StartTS) {
 		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
 	}
 	if (ctx.State != txnif.TxnStateActive) && (ctx.State != txnif.TxnStateCommitting) {
@@ -140,4 +141,4 @@ func (ctx *TxnCtx) ToUnknownLocked() {
 }
 
 // MockSetCommitTSLocked is for testing
-func (ctx *TxnCtx) MockSetCommitTSLocked(ts uint64) { ctx.CommitTS = ts }
+func (ctx *TxnCtx) MockSetCommitTSLocked(ts types.TS) { ctx.CommitTS = ts }

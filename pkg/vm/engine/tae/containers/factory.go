@@ -14,45 +14,45 @@
 
 package containers
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 func MakeVector(typ types.Type, nullable bool, opts ...*Options) (vec Vector) {
 	switch typ.Oid {
-	case types.Type_ANY:
+	case types.T_any:
 		vec = NewVector[any](typ, nullable, opts...)
-	case types.Type_BOOL:
+	case types.T_bool:
 		vec = NewVector[bool](typ, nullable, opts...)
-	case types.Type_INT8:
+	case types.T_int8:
 		vec = NewVector[int8](typ, nullable, opts...)
-	case types.Type_INT16:
+	case types.T_int16:
 		vec = NewVector[int16](typ, nullable, opts...)
-	case types.Type_INT32:
+	case types.T_int32:
 		vec = NewVector[int32](typ, nullable, opts...)
-	case types.Type_INT64:
+	case types.T_int64:
 		vec = NewVector[int64](typ, nullable, opts...)
-	case types.Type_UINT8:
+	case types.T_uint8:
 		vec = NewVector[uint8](typ, nullable, opts...)
-	case types.Type_UINT16:
+	case types.T_uint16:
 		vec = NewVector[uint16](typ, nullable, opts...)
-	case types.Type_UINT32:
+	case types.T_uint32:
 		vec = NewVector[uint32](typ, nullable, opts...)
-	case types.Type_UINT64:
+	case types.T_uint64:
 		vec = NewVector[uint64](typ, nullable, opts...)
-	case types.Type_DECIMAL64:
+	case types.T_decimal64:
 		vec = NewVector[types.Decimal64](typ, nullable, opts...)
-	case types.Type_DECIMAL128:
+	case types.T_decimal128:
 		vec = NewVector[types.Decimal128](typ, nullable, opts...)
-	case types.Type_FLOAT32:
+	case types.T_float32:
 		vec = NewVector[float32](typ, nullable, opts...)
-	case types.Type_FLOAT64:
+	case types.T_float64:
 		vec = NewVector[float64](typ, nullable, opts...)
-	case types.Type_DATE:
+	case types.T_date:
 		vec = NewVector[types.Date](typ, nullable, opts...)
-	case types.Type_TIMESTAMP:
+	case types.T_timestamp:
 		vec = NewVector[types.Timestamp](typ, nullable, opts...)
-	case types.Type_DATETIME:
+	case types.T_datetime:
 		vec = NewVector[types.Datetime](typ, nullable, opts...)
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON, types.Type_BLOB:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		vec = NewVector[[]byte](typ, nullable, opts...)
 	default:
 		panic("not support")

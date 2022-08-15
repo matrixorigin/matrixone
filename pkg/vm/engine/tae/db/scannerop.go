@@ -15,6 +15,7 @@
 package db
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -114,8 +115,8 @@ type catalogStatsMonitor struct {
 	*catalog.LoopProcessor
 	db                 *DB
 	unCheckpointedCnt  int64
-	minTs              uint64
-	maxTs              uint64
+	minTs              types.TS
+	maxTs              types.TS
 	lastScheduleTime   time.Time
 	cntLimit           int64
 	intervalLimit      time.Duration
@@ -147,7 +148,7 @@ func newCatalogStatsMonitor(db *DB, cntLimit int64, intervalLimit time.Duration)
 
 func (monitor *catalogStatsMonitor) PreExecute() error {
 	monitor.unCheckpointedCnt = 0
-	monitor.minTs = monitor.db.Catalog.GetCheckpointed().MaxTS + 1
+	monitor.minTs = monitor.db.Catalog.GetCheckpointed().MaxTS.Next()
 	monitor.maxTs = monitor.db.Scheduler.GetSafeTS()
 	return nil
 }
@@ -174,7 +175,7 @@ func (monitor *catalogStatsMonitor) PostExecute() error {
 }
 
 func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err error) {
-	if monitor.minTs <= monitor.maxTs && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
+	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
 		return
 	}
@@ -202,7 +203,7 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 	} else {
 		blkData := entry.GetBlockData()
 		ts, terminated := entry.GetTerminationTS()
-		if terminated && blkData.GetMaxCheckpointTS() < ts {
+		if terminated && blkData.GetMaxCheckpointTS().Less(ts) {
 			_, err = monitor.db.Scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, entry.AsCommonID(), blkData.CheckpointWALClosure(ts))
 			if err != nil {
 				logutil.Warnf("CheckpointWALClosure %s: %v", entry.Repr(), err)
@@ -214,7 +215,7 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 }
 
 func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err error) {
-	if monitor.minTs <= monitor.maxTs && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
+	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
 		return
 	}
@@ -245,7 +246,7 @@ func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err 
 }
 
 func (monitor *catalogStatsMonitor) onTable(entry *catalog.TableEntry) (err error) {
-	if monitor.minTs <= monitor.maxTs && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
+	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
 		return
 	}
@@ -275,7 +276,7 @@ func (monitor *catalogStatsMonitor) onTable(entry *catalog.TableEntry) (err erro
 }
 
 func (monitor *catalogStatsMonitor) onDatabase(entry *catalog.DBEntry) (err error) {
-	if monitor.minTs <= monitor.maxTs && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
+	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
 		return
 	}

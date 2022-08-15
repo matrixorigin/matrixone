@@ -15,6 +15,7 @@
 package indexwrapper
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
@@ -54,20 +55,20 @@ type Index interface {
 	// BatchUpsert batch insert the specific keys
 	// If any deduplication, it will fetch the old value first, fill the active map with new value, insert the old value into delete map
 	// If any other unknown error hanppens, return error
-	BatchUpsert(keysCtx *index.KeysCtx, offset int, ts uint64) (*index.BatchResp, error)
+	BatchUpsert(keysCtx *index.KeysCtx, offset int, ts types.TS) (*index.BatchResp, error)
 
 	// Delete delete the specific key
 	// If the specified key not found in active map, return ErrNotFound
 	// If any other error happens, return error
 	// Delete the specific key from active map and then insert it into delete map
-	Delete(key any, ts uint64) error
+	Delete(key any, ts types.TS) error
 	GetActiveRow(key any) (row uint32, err error)
 	// Check deletes map for specified key @ts
 	// If deleted is true, the specified key was deleted @ts
 	// If existed is false, the specified key was not found in deletes map
-	IsKeyDeleted(key any, ts uint64) (deleted bool, existed bool)
-	HasDeleteFrom(key any, fromTs uint64) bool
-	GetMaxDeleteTS() uint64
+	IsKeyDeleted(key any, ts types.TS) (deleted bool, existed bool)
+	HasDeleteFrom(key any, ts types.TS) bool
+	GetMaxDeleteTS() types.TS
 
 	// RevertUpsert(keys containers.Vector, ts uint64) error
 

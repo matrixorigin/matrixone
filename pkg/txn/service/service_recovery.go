@@ -27,7 +27,7 @@ func (s *service) startRecovery() {
 		s.logger.Fatal("start recover task failed",
 			zap.Error(err))
 	}
-	s.storage.StartRecovery(s.txnC)
+	s.storage.StartRecovery(context.TODO(), s.txnC)
 	s.waitRecoveryCompleted()
 }
 

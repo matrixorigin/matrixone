@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -39,7 +40,7 @@ type AppendCmd struct {
 	*txnbase.BaseCustomizedCmd
 	*txnbase.ComposedCmd
 	Infos []*appendInfo
-	Ts    uint64
+	Ts    types.TS
 	Node  InsertNode
 }
 

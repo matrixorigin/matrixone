@@ -144,7 +144,7 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []ResultPos) j
 	args = append(args, &plan.Expr{
 		Typ: &plan.Type{
 			Size: ts[0].Size,
-			Id:   plan.Type_TypeId(ts[0].Oid),
+			Id:   int32(ts[0].Oid),
 		},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -156,7 +156,7 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []ResultPos) j
 	args = append(args, &plan.Expr{
 		Typ: &plan.Type{
 			Size: ts[0].Size,
-			Id:   plan.Type_TypeId(ts[0].Oid),
+			Id:   int32(ts[0].Oid),
 		},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -168,7 +168,7 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []ResultPos) j
 	cond := &plan.Expr{
 		Typ: &plan.Type{
 			Size: 1,
-			Id:   plan.Type_BOOL,
+			Id:   int32(types.T_bool),
 		},
 		Expr: &plan.Expr_F{
 			F: &plan.Function{

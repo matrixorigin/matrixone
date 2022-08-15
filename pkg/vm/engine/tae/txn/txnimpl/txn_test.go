@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -36,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
@@ -75,7 +75,7 @@ func makeTable(t *testing.T, dir string, colCnt int, pkIdx int, bufSize uint64) 
 	id := common.NextGlobalSeqNum()
 	schema := catalog.MockSchemaAll(colCnt, pkIdx)
 	rel := mockTestRelation(id, schema)
-	txn := txnbase.NewTxn(nil, nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
+	txn := txnbase.NewTxn(nil, nil, common.NextGlobalSeqNum(), types.NextGlobalTsForTest(), nil)
 	store := newStore(nil, driver, mgr, nil)
 	store.BindTxn(txn)
 	return newTxnTable(store, rel.GetMeta().(*catalog.TableEntry))
@@ -396,7 +396,7 @@ func TestNodeCommand(t *testing.T) {
 func TestApplyToColumn1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	deletes := roaring.BitmapOf(1)
-	ts := common.NextGlobalSeqNum()
+	ts := types.NextGlobalTsForTest()
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
@@ -404,7 +404,7 @@ func TestApplyToColumn1(t *testing.T) {
 	assert.Nil(t, err)
 	deletes.AddRange(3, 4)
 
-	vec := containers.MakeVector(types.Type_VARCHAR.ToType(), true)
+	vec := containers.MakeVector(types.T_varchar.ToType(), true)
 	defer vec.Close()
 	for i := 0; i < 5; i++ {
 		data := "val" + strconv.Itoa(i)
@@ -429,7 +429,7 @@ func TestApplyToColumn1(t *testing.T) {
 func TestApplyToColumn2(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	deletes := roaring.BitmapOf(1)
-	ts := common.NextGlobalSeqNum()
+	ts := types.NextGlobalTsForTest()
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
@@ -437,7 +437,7 @@ func TestApplyToColumn2(t *testing.T) {
 	assert.Nil(t, err)
 	deletes.AddRange(2, 4)
 
-	vec := containers.MakeVector(types.Type_INT32.ToType(), true)
+	vec := containers.MakeVector(types.T_int32.ToType(), true)
 	defer vec.Close()
 	vec.AppendMany(int32(1), int32(2), int32(3), int32(4))
 
@@ -457,14 +457,14 @@ func TestApplyToColumn2(t *testing.T) {
 
 func TestApplyToColumn3(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	ts := common.NextGlobalSeqNum()
+	ts := types.NextGlobalTsForTest()
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
 	err := node.UpdateLocked(3, []byte("update"))
 	assert.Nil(t, err)
 
-	vec := containers.MakeVector(types.Type_VARCHAR.ToType(), true)
+	vec := containers.MakeVector(types.T_varchar.ToType(), true)
 	defer vec.Close()
 	for i := 0; i < 5; i++ {
 		data := "val" + strconv.Itoa(i)
@@ -484,14 +484,14 @@ func TestApplyToColumn3(t *testing.T) {
 
 func TestApplyToColumn4(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	ts := common.NextGlobalSeqNum()
+	ts := types.NextGlobalTsForTest()
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
 	err := node.UpdateLocked(3, int32(8))
 	assert.Nil(t, err)
 
-	vec := containers.MakeVector(types.Type_INT32.ToType(), true)
+	vec := containers.MakeVector(types.T_int32.ToType(), true)
 	defer vec.Close()
 	vec.AppendMany(int32(1), int32(2), int32(3), int32(4))
 
@@ -503,7 +503,8 @@ func TestApplyToColumn4(t *testing.T) {
 
 func TestTxnManager1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(nil, nil, nil, nil), TxnFactory(nil))
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(nil, nil, nil, nil),
+		TxnFactory(nil), types.NewMockHLCClock(1))
 	mgr.Start()
 	txn, _ := mgr.StartTxn(nil)
 	txn.MockIncWriteCnt()
@@ -562,7 +563,8 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 	txnBufMgr := buffer.NewNodeManager(common.G, nil)
 	mutBufMgr := buffer.NewNodeManager(common.G, nil)
 	factory := tables.NewDataFactory(mockio.SegmentFactory, mutBufMgr, nil, dir)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory), TxnFactory(c))
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory),
+		TxnFactory(c), types.NewMockHLCClock(1))
 	mgr.Start()
 	return c, mgr, driver
 }

@@ -16,6 +16,7 @@ package updates
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -37,7 +38,7 @@ func NewColumnView() *ColumnView {
 	}
 }
 
-func (view *ColumnView) CollectUpdates(ts uint64) (mask *roaring.Bitmap, vals map[uint32]any, err error) {
+func (view *ColumnView) CollectUpdates(ts types.TS) (mask *roaring.Bitmap, vals map[uint32]any, err error) {
 	if len(view.links) == 0 {
 		return
 	}
@@ -59,7 +60,7 @@ func (view *ColumnView) CollectUpdates(ts uint64) (mask *roaring.Bitmap, vals ma
 	return
 }
 
-func (view *ColumnView) GetValue(key uint32, startTs uint64) (v any, err error) {
+func (view *ColumnView) GetValue(key uint32, startTs types.TS) (v any, err error) {
 	link := view.links[key]
 	if link == nil {
 		err = data.ErrNotFound
@@ -68,7 +69,7 @@ func (view *ColumnView) GetValue(key uint32, startTs uint64) (v any, err error) 
 	head := link.GetHead()
 	for head != nil {
 		node := head.GetPayload().(*ColumnUpdateNode)
-		if node.GetStartTS() < startTs {
+		if node.GetStartTS().Less(startTs) {
 			node.RLock()
 			//        |
 			// start \|/ commit
@@ -77,7 +78,7 @@ func (view *ColumnView) GetValue(key uint32, startTs uint64) (v any, err error) 
 			// --|   NODE  |------->
 			//   +---------+
 			// 1. Read ts is between node start and commit. Go to prev node
-			if node.GetCommitTSLocked() > startTs {
+			if node.GetCommitTSLocked().Greater(startTs) {
 				node.RUnlock()
 				head = head.GetNext()
 				continue
@@ -110,7 +111,7 @@ func (view *ColumnView) GetValue(key uint32, startTs uint64) (v any, err error) 
 				}
 			}
 		}
-		if node.GetStartTS() > startTs {
+		if node.GetStartTS().Greater(startTs) {
 			head = head.GetNext()
 			continue
 		}
@@ -126,7 +127,7 @@ func (view *ColumnView) GetValue(key uint32, startTs uint64) (v any, err error) 
 	return
 }
 
-func (view *ColumnView) PrepapreInsert(key uint32, ts uint64) (err error) {
+func (view *ColumnView) PrepapreInsert(key uint32, ts types.TS) (err error) {
 	// First update to key
 	var link *common.Link
 	if link = view.links[key]; link == nil {
@@ -138,7 +139,7 @@ func (view *ColumnView) PrepapreInsert(key uint32, ts uint64) (err error) {
 	// 1. The specified row has committed update
 	if node.txn == nil {
 		// 1.1 The update was committed after txn start. w-w conflict
-		if node.GetCommitTSLocked() > ts {
+		if node.GetCommitTSLocked().Greater(ts) {
 			err = txnif.ErrTxnWWConflict
 			node.RUnlock()
 			return
@@ -176,7 +177,7 @@ func (view *ColumnView) Insert(key uint32, un txnif.UpdateNode) (err error) {
 	// 1. The specified row has committed update
 	if node.txn == nil {
 		// 1.1 The update was committed after txn start. w-w conflict
-		if node.GetCommitTSLocked() > n.GetStartTS() {
+		if node.GetCommitTSLocked().Greater(n.GetStartTS()) {
 			err = txnif.ErrTxnWWConflict
 			node.RUnlock()
 			return
