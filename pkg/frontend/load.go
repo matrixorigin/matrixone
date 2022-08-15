@@ -1100,8 +1100,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
 						fs := field
-						// FIXME
-						d, err := types.ParseTimestamp(time.Local, fs, vec.Typ.Precision)
+						d, err := types.ParseTimestamp(handler.ses.timeZone, fs, vec.Typ.Precision)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
@@ -1614,8 +1613,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					} else {
 						field := line[j]
 						//logutil.Infof("==== > field string [%s] ",fs)
-						// FIXME
-						d, err := types.ParseTimestamp(time.Local, field, vec.Typ.Precision)
+						d, err := types.ParseTimestamp(handler.ses.timeZone, field, vec.Typ.Precision)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
