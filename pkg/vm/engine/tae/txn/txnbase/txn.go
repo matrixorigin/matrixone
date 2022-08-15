@@ -16,7 +16,7 @@ package txnbase
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"

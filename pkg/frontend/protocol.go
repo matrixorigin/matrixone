@@ -20,7 +20,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/fagongzi/goetty"
+	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
@@ -211,7 +211,7 @@ func (cpi *ProtocolImpl) SetTcpConnection(tcp goetty.IOSession) {
 }
 
 func (cpi *ProtocolImpl) Peer() (string, string) {
-	addr := cpi.tcpConn.RemoteAddr()
+	addr := cpi.tcpConn.RemoteAddress()
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		logutil.Errorf("get peer host:port failed. error:%v ", err)

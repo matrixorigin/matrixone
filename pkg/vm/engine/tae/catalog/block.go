@@ -17,10 +17,10 @@ package catalog
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"

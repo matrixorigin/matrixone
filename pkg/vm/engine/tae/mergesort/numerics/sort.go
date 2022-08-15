@@ -7,7 +7,7 @@
 // Package sort provides primitives for sorting slices and user-defined collections.
 package numerics
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 // insertionSort sorts data[a:b] using insertion sort.
 func insertionSort[T types.OrderedT](data sortSlice[T], a, b int) {

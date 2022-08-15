@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -50,7 +49,7 @@ func math1(vs []*vector.Vector, proc *process.Process, fn mathFn) (*vector.Vecto
 		if err != nil {
 			return nil, err
 		}
-		resCol := encoding.DecodeFloat64Slice(resultVector.Data)
+		resCol := types.DecodeFloat64Slice(resultVector.Data)
 		resCol = resCol[:vecLen]
 		nulls.Set(resultVector.Nsp, origVec.Nsp)
 		vector.SetCol(resultVector, resCol)

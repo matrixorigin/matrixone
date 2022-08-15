@@ -21,8 +21,8 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/assert"
 )
@@ -53,7 +53,7 @@ func withAllocator(opt *Options) *Options {
 
 func TestVector1(t *testing.T) {
 	opt := withAllocator(nil)
-	vec := MakeVector(types.Type_INT32.ToType(), false, opt)
+	vec := MakeVector(types.T_int32.ToType(), false, opt)
 	vec.Append(int32(12))
 	vec.Append(int32(32))
 	assert.False(t, vec.Nullable())
@@ -63,7 +63,7 @@ func TestVector1(t *testing.T) {
 	assert.Equal(t, int32(32), vec.Get(1).(int32))
 	assert.Equal(t, int32(1), vec.Get(2).(int32))
 	assert.Equal(t, int32(100), vec.Get(3).(int32))
-	vec2 := NewVector[int32](types.Type_INT32.ToType(), false)
+	vec2 := NewVector[int32](types.T_int32.ToType(), false)
 	vec2.Extend(vec)
 	assert.Equal(t, 4, vec2.Length())
 	assert.Equal(t, int32(12), vec2.Get(0).(int32))
@@ -78,7 +78,7 @@ func TestVector1(t *testing.T) {
 
 func TestVector2(t *testing.T) {
 	opt := withAllocator(nil)
-	vec := MakeVector(types.Type_INT64.ToType(), true, opt)
+	vec := MakeVector(types.T_int64.ToType(), true, opt)
 	t.Log(vec.String())
 	assert.True(t, vec.Nullable())
 	now := time.Now()
@@ -134,7 +134,7 @@ func TestVector2(t *testing.T) {
 
 func TestVector3(t *testing.T) {
 	opts := withAllocator(nil)
-	vec1 := MakeVector(types.Type_INT32.ToType(), false, opts)
+	vec1 := MakeVector(types.T_int32.ToType(), false, opts)
 	for i := 0; i < 100; i++ {
 		vec1.Append(int32(i))
 	}
@@ -145,7 +145,7 @@ func TestVector3(t *testing.T) {
 
 	r := bytes.NewBuffer(w.Bytes())
 
-	vec2 := MakeVector(types.Type_INT32.ToType(), false, opts)
+	vec2 := MakeVector(types.T_int32.ToType(), false, opts)
 	_, err = vec2.ReadFrom(r)
 	assert.NoError(t, err)
 
@@ -374,7 +374,7 @@ func TestVector7(t *testing.T) {
 }
 
 func TestVector8(t *testing.T) {
-	vec := MakeVector(types.Type_INT32.ToType(), true)
+	vec := MakeVector(types.T_int32.ToType(), true)
 	defer vec.Close()
 	vec.Append(int32(0))
 	vec.Append(int32(1))
@@ -403,7 +403,7 @@ func TestVector8(t *testing.T) {
 
 func TestVector9(t *testing.T) {
 	opts := withAllocator(nil)
-	vec := MakeVector(types.Type_VARCHAR.ToType(), true, opts)
+	vec := MakeVector(types.T_varchar.ToType(), true, opts)
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("h22"))
 	vec.Append([]byte("h333"))
@@ -421,7 +421,7 @@ func TestVector9(t *testing.T) {
 
 func TestCloneWithBuffer(t *testing.T) {
 	opts := withAllocator(nil)
-	vec := MakeVector(types.Type_VARCHAR.ToType(), true, opts)
+	vec := MakeVector(types.T_varchar.ToType(), true, opts)
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("h22"))
 	vec.Append([]byte("h333"))
@@ -446,7 +446,7 @@ func TestCloneWithBuffer(t *testing.T) {
 
 func TestCompact(t *testing.T) {
 	opts := withAllocator(nil)
-	vec := MakeVector(types.Type_VARCHAR.ToType(), true, opts)
+	vec := MakeVector(types.T_varchar.ToType(), true, opts)
 
 	vec.Append(types.Null{})
 	deletes := roaring.BitmapOf(0)
