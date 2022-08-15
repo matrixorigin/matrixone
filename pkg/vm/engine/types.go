@@ -109,11 +109,16 @@ type CommentDef struct {
 	Comment string
 }
 
+type ViewDef struct {
+	View string
+}
+
 type TableDef interface {
 	tableDef()
 }
 
 func (*CommentDef) tableDef()      {}
+func (*ViewDef) tableDef()         {}
 func (*AttributeDef) tableDef()    {}
 func (*IndexTableDef) tableDef()   {}
 func (*PropertiesDef) tableDef()   {}
