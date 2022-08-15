@@ -17,8 +17,9 @@ package txnbase
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
@@ -34,7 +35,8 @@ func IDCtxToID(buf []byte) uint64 {
 }
 
 type TxnCtx struct {
-	*sync.RWMutex
+	sync.RWMutex
+	DoneCond          sync.Cond
 	ID                uint64
 	IDCtx             []byte
 	StartTS, CommitTS types.TS
@@ -42,18 +44,16 @@ type TxnCtx struct {
 	State             txnif.TxnState
 }
 
-func NewTxnCtx(rwlocker *sync.RWMutex, id uint64, start types.TS, info []byte) *TxnCtx {
-	if rwlocker == nil {
-		rwlocker = new(sync.RWMutex)
-	}
-	return &TxnCtx{
+func NewTxnCtx(id uint64, start types.TS, info []byte) *TxnCtx {
+	ctx := &TxnCtx{
 		ID:       id,
 		IDCtx:    IDToIDCtx(id),
-		RWMutex:  rwlocker,
 		StartTS:  start,
 		CommitTS: txnif.UncommitTS,
 		Info:     info,
 	}
+	ctx.DoneCond = *sync.NewCond(ctx)
+	return ctx
 }
 
 func (ctx *TxnCtx) GetCtx() []byte {
@@ -63,7 +63,7 @@ func (ctx *TxnCtx) GetCtx() []byte {
 func (ctx *TxnCtx) Repr() string {
 	ctx.RLock()
 	defer ctx.RUnlock()
-	repr := fmt.Sprintf("Txn[%d][%d->%d][%s]", ctx.ID, ctx.StartTS, ctx.CommitTS, txnif.TxnStrState(ctx.State))
+	repr := fmt.Sprintf("ctx[%d][%d->%d][%s]", ctx.ID, ctx.StartTS, ctx.CommitTS, txnif.TxnStrState(ctx.State))
 	return repr
 }
 
@@ -83,6 +83,30 @@ func (ctx *TxnCtx) GetCommitTS() types.TS {
 	ctx.RLock()
 	defer ctx.RUnlock()
 	return ctx.CommitTS
+}
+
+func (ctx *TxnCtx) GetTxnState(waitIfcommitting bool) txnif.TxnState {
+	ctx.RLock()
+	state := ctx.State
+	if !waitIfcommitting {
+		ctx.RUnlock()
+		return state
+	}
+	if state != txnif.TxnStateCommitting {
+		ctx.RUnlock()
+		return state
+	}
+	ctx.RUnlock()
+	ctx.DoneCond.L.Lock()
+	state = ctx.State
+	if state != txnif.TxnStateCommitting {
+		ctx.DoneCond.L.Unlock()
+		return state
+	}
+	ctx.DoneCond.Wait()
+	state = ctx.State
+	ctx.DoneCond.L.Unlock()
+	return state
 }
 
 func (ctx *TxnCtx) IsVisible(o txnif.TxnReader) bool {
