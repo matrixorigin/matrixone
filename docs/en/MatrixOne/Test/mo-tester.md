@@ -39,7 +39,7 @@ MO-Tester includes testing cases in the following table.
 
 * Make sure you have installed jdk8.
 
-* Launch MatrixOne or other database instance. Please refer to more information about [how to install and launch MatrixOne](https://docs.matrixorigin.io/0.5.0/MatrixOne/Get-Started/install-standalone-matrixone/).
+* Launch MatrixOne or other database instance. Please refer to more information about [how to install and launch MatrixOne](../Get-Started/install-standalone-matrixone/).
 
 * Clone `mo-tester` repository.
 
@@ -49,7 +49,7 @@ MO-Tester includes testing cases in the following table.
 
 ## 2. Configure `mo-tester`
 
-* In `mo.yml` file, configure the server address, default database name, username&password, etc. MO-tester is based on java, so these parameters are required for the JDBC driver. Below is a default example for a local standalone version MatrixOne.
+* In `mo.yml` file, configure the server address, default database name, username, and password, etc. MO-tester is based on java, so these parameters are required for the JDBC(JDBC，Java Database Connectivity) driver. Below is a default example for a local standalone version MatrixOne.
 
   ```
   #jdbc
@@ -77,42 +77,41 @@ MO-Tester includes testing cases in the following table.
 
 ## 3. Run mo-tester
 
-* With the simple below command, all the SQL test cases will automatically run and generate reports and error messages to `report/report.txt` and `report/error.txt`.
+* With the simple below command, all the SQL test cases will automatically run and generate reports and error messages to *report/report.txt* and *report/error.txt*.
 
 ```
 > ./run.sh
 ```
 
-If you'd like to adjust the test range, you can just change the `path` parameter of `run.yml`. And you can also specify some 			parameters when executing the command `run.sh`, parameters are as followings:
+If you'd like to adjust the test range, you can just change the `path` parameter of `run.yml`. And you can also specify some parameters when executing the command `run.sh`, parameters are as followings:
+
+|Parameters|Description|
+|---|---|
+|-p|set the path of test cases needed to be executed by mo-tester, the default value is configured by the `path` in `run.yaml`|
+|-m|set the method that mo-tester will run with, the default value is configured by the `method` in `run.yaml`|
+|-t| set the type of the format that mo-tester executes the SQL command in, the default value is configured by the `type` in `run.yaml`|
+|-r|set The success rate that test cases should reach, the default value is configured by the `rate` in `run.yaml`|
+|-i|set the including list, and only script files in the path whose name contains one of the lists will be executed, if more than one, separated by `,`, if not specified, refers to all cases included|
+|-e|set the excluding list, and script files in the path whose name contains one of the lists will not be executed, if more than one, separated by `,`, if not specified, refers to none of the cases excluded|
+|-g|means SQL commands which is marked with [bvt:issue] flag will not be executed,this flag starts with [-- @bvt:issue#{issueNO.}],and ends with [-- @bvt:issue],eg:<br>-- @bvt:issue#3236<br/><br>select date_add("1997-12-31 23:59:59",INTERVAL "-10000:1" HOUR_MINUTE);<br/><br>select date_add("1997-12-31 23:59:59",INTERVAL "-100 1" YEAR_MONTH);<br/><br>-- @bvt:issue<br/><br>Those two sql commands are associated with issue#3236, and they will not be executed in bvt test, until the flag is removed when issue#3236 is fixed.<br/>|
+|-n|means the metadata of the resultset will be ignored when comparing the result|
+
+**Examples**:
 
 ```
--p  set the path of test cases needed to be executed by mo-tester, the default value is configured by the `path` in `run.yaml`
--m  set the method that mo-tester will run with, the default value is configured by the `method` in `run.yaml`
--t  set the type of the format that mo-tester executes the SQL command in, the default value is configured by the `type` in `run.yaml`
--r  set The success rate that test cases should reach, the default value is configured by the `rate` in `run.yaml`
--i  set the including list, and only script files in the path whose name contains one of the lists will be executed, if more than one, separated by `,`, if not specified, refers to all cases included
--e  set the excluding list, and script files in the path whose name contains one of the lists will not be executed, if more than one, separated by `,`, if not specified, refers to none of the cases excluded
--g  means SQL commands which is marked with [bvt:issue] flag will not be executed,this flag starts with [-- @bvt:issue#{issueNO.}],and ends with [-- @bvt:issue],eg:
-    -- @bvt:issue#3236
-    select date_add("1997-12-31 23:59:59",INTERVAL "-10000:1" HOUR_MINUTE);
-    select date_add("1997-12-31 23:59:59",INTERVAL "-100 1" YEAR_MONTH);
-    -- @bvt:issue
-    Those two sql commands are associated with issue#3236, and they will not be executed in bvt test, until the flag is removed when issue#3236 is fixed.
-
--n  means the metadata of the resultset will be ignored when comparing the result
-Examples:
-bash run.sh -p case -m run -t script -r 100 -i select,subquery -e substring -g
+./run.sh -p case -m run -t script -r 100 -i select,subquery -e substring -g
 ```
 
-If you want to automatically generate SQL results for the new SQL cases, you can just change the `method` parameter of `run.yml` to `genrs`. Running the `run.sh` scripts will directly record test results in the `result/` path with their original filenames.
+If you want to automatically generate SQL results for the new SQL cases, you can just change the `method` parameter of `run.yml` file to `genrs`, or you can just change the command `-m run` to `-m genrs`. Running the `run.sh` scripts will directly record test results in the `result/` path with their original filenames. For more information on example, see <a href="#new_test_scenario">Example 4</a>.
 
-Note: every time running `run.sh` will overwrite the `error`, `report`, and `success` reports.
+!!! note
+    Every time running `run.sh` will overwrite the report of the  *error.txt* file, *report.txt* file, and *success.txt* file.
 
 ## 4. Check the report
 
-* Once the test is finished, `mo-tester` generates `error`, `report` and `success` reports in `txt` format.
+* Once the test is finished, *mo-tester* generates *error.txt* file, *report.txt* file and *success.txt* file reports .
 
-* An example of `report.txt`  looks like this:
+* An example of *report.txt* file looks like this:
 
 ```
 [SUMMARY] TOTAL : 486, SUCCESS : 486, ERROR :0, NOEXE :0, SUCCESS RATE : 100%
@@ -122,7 +121,7 @@ Note: every time running `run.sh` will overwrite the `error`, `report`, and `suc
 [cases/transaction/isolation_1.sql] TOTAL : 217, SUCCESS : 217, ERROR :0, NOEXE :0, SUCCESS RATE : 100%
 ```
 
-* An example of `error.txt` looks like this:
+* An example of *error.txt* file looks like this:
 
 ```
 [ERROR]
@@ -137,3 +136,126 @@ c	d
 c	d
 1	1
 ```
+
+## 5. Test Examples
+
+### Example 1
+
+**Example Description**: Run all test cases in the */cases* path of the *mo-tester* repository.
+
+**Steps**:
+
+1. Get the latest *mo-tester* code.
+
+   ```
+   cd mo-tester
+   git pull https://github.com/matrixorigin/mo-tester.git
+   ```
+
+2. To run all the test cases of the *mo-tester* repository, see the following commands:
+
+   ```
+   ./run.sh
+   ```
+
+3. Check the result reports in the *error.txt* file, *report.txt* file, and *success.txt* file in the *report/* path.
+
+### Example 2
+
+**Example Description**: Run the test cases in the */cases/transaction/* path of the *mo-tester* repository.
+
+**Steps**:
+
+1. Get the latest *mo-tester* code.
+
+   ```
+   cd mo-tester
+   git pull https://github.com/matrixorigin/mo-tester.git
+   ```
+
+2. To run the test cases in the *cases/transaction/* path of the *mo-tester* repository, see the following commands:
+
+   ```
+   ./run.sh -p cases/transaction/
+   ```
+
+3. Check the result reports in the *error.txt* file, *report.txt* file, and *success.txt* file in the *report/* path. The example of the expected *report.txt* looks like this:
+
+   ```
+   [SUMMARY] TOTAL : 486, SUCCESS : 486, ERROR :0, NOEXE :0, SUCCESS RATE : 100%
+   [cases/transaction/atomicity.sql] TOTAL : 67, SUCCESS : 67, ERROR :0, NOEXE :0, SUCCESS RATE : 100%
+   [cases/transaction/isolation.sql] TOTAL : 202, SUCCESS : 202, ERROR :0, NOEXE :0, SUCCESS RATE : 100%
+   [cases/transaction/isolation_1.sql] TOTAL : 217, SUCCESS : 217, ERROR :0, NOEXE :0, SUCCESS RATE : 100%
+   ```
+
+### Example 3
+
+**Example Description**: Run the single test case *cases/transaction/atomicity.sql*.
+
+**Steps**:
+
+1. Get the latest *mo-tester* code.
+
+   ```
+   cd mo-tester
+   git pull https://github.com/matrixorigin/mo-tester.git
+   ```
+
+2. To run the test cases *cases/transaction/atomicity.sql*, see the following commands:
+
+   ```
+   ./run.sh -p cases/transaction/atomicity.sql
+   ```
+
+3. Check the result reports in the *error.txt* file, *report.txt* file, and *success.txt* file in the *report/* path. The example of the expected *report.txt* looks like this:
+
+   ```
+   [SUMMARY] TOTAL : 67, SUCCESS : 67, ERROR :0, NOEXE :0, SUCCESS RATE : 100%
+   [cases/transaction/atomicity.sql] TOTAL : 67, SUCCESS : 67, ERROR :0, NOEXE :0, SUCCESS RATE : 100%
+   ```
+
+### <h3><a name="new_test_scenario">Example 4</a></h3>
+
+**Example Description**:
+
+- Create a new folder named *local_test* and place it in */cases*
+- Add a test file named *new_test.sql* to *cases/local_test/*
+- Only run the single test case *new_test.sql**
+
+**Steps**
+
+1. Get the latest *mo-tester* code.
+
+   ```
+   cd mo-tester
+   git pull https://github.com/matrixorigin/mo-tester.git
+   ```
+
+2. Generate test results:
+
+   - Method 1: To generate the test result, run the following command.
+
+   ```
+   ./run.sh -p cases/local_test/new_test.sql -m genrs -g
+   ```
+
+   - Method 2: Open the *run.yml* file, change the *method* parameter from the default `run` to `genrs`, and run the following command to generate the test result.
+
+   ```
+   ./run.sh -p cases/local_test/new_test.sql
+   ```
+
+3. Check the result file in the *result/* path.
+
+4. To run the test cases *cases/local_test/new_test.sql*, see the following commands:
+
+   ```
+   ./run.sh -p cases/local_test/new_test.sql -m run -g
+   ```
+
+4. Check the result reports in the *error.txt* file, *report.txt* file, and *success.txt* file in the *report/* path. The example of the expected *report.txt* looks like this:
+
+   ```
+   [SUMMARY] TOTAL : 67, SUCCESS : 67, ERROR :0, NOEXE :0, SUCCESS RATE : 100%
+   [cases/local_test/new_test.sql] TOTAL : 67, SUCCESS : 67, ERROR :0, NOEXE :0, SUCCESS RATE : 100%
+   ```
