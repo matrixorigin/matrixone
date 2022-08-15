@@ -44,6 +44,7 @@ func (replayer *Replayer) ReplayerHandle(group uint32, commitId uint64, payload 
 	if err := e.Unmarshal(payload); err != nil {
 		panic(err)
 	}
+
 	checkpoint := new(Checkpoint)
 	checkpoint.CommitId = commitId
 	checkpoint.MaxTS = e.MaxTS
