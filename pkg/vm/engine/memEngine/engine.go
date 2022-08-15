@@ -107,3 +107,7 @@ func (e *MemEngine) GetHideKeyDef(_ string, _ string) *plan.ColDef {
 func (e *MemEngine) Cost(_ *plan.ObjectRef, _ *plan.Expr) *plan.Cost {
 	return &plan.Cost{}
 }
+
+func (e *MemEngine) GetRootSql() string {
+	return ""
+}

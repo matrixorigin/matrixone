@@ -633,6 +633,10 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 	return tcc.dbName
 }
 
+func (tcc *TxnCompilerContext) GetRootSql() string {
+	return tcc.ses.GetSql()
+}
+
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	var err error
 	//open database
@@ -700,10 +704,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		return nil, nil
 	}
 
-	var defs []*plan2.ColDef
+	var cols []*plan2.ColDef
+	var defs []*plan2.TableDefType
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
-			defs = append(defs, &plan2.ColDef{
+			cols = append(cols, &plan2.ColDef{
 				Name: attr.Attr.Name,
 				Typ: &plan2.Type{
 					Id:        int32(attr.Attr.Type.Oid),
@@ -714,6 +719,29 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				Primary: attr.Attr.Primary,
 				Default: attr.Attr.Default,
 			})
+		} else if pro, ok := def.(*engine.PropertiesDef); ok {
+			properties := make([]*plan2.Property, len(pro.Properties))
+			for i, p := range pro.Properties {
+				properties[i] = &plan2.Property{
+					Key:   p.Key,
+					Value: p.Value,
+				}
+			}
+			defs = append(defs, &plan2.TableDefType{
+				Def: &plan2.TableDef_DefType_Properties{
+					Properties: &plan2.PropertiesDef{
+						Properties: properties,
+					},
+				},
+			})
+		} else if viewDef, ok := def.(*engine.ViewDef); ok {
+			defs = append(defs, &plan2.TableDefType{
+				Def: &plan2.TableDef_DefType_View{
+					View: &plan2.ViewDef{
+						View: viewDef.View,
+					},
+				},
+			})
 		}
 	}
 	if tcc.QryTyp != TXN_DEFAULT {
@@ -722,7 +750,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 			return nil, nil
 		}
 		hideKey := hideKeys[0]
-		defs = append(defs, &plan2.ColDef{
+		cols = append(cols, &plan2.ColDef{
 			Name: hideKey.Name,
 			Typ: &plan2.Type{
 				Id:        int32(hideKey.Type.Oid),
@@ -742,7 +770,8 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 
 	tableDef := &plan2.TableDef{
 		Name: tableName,
-		Cols: defs,
+		Cols: cols,
+		Defs: defs,
 	}
 	return obj, tableDef
 }
