@@ -420,7 +420,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		}
 		c.anal.curr = curr
 		return c.compileSort(n, c.compileUnion(n, ss, children, ns)), nil
-	case plan.Node_MINUS:
+	case plan.Node_MINUS, plan.Node_INTERSECT:
 		curr := c.anal.curr
 		c.anal.curr = int(n.Children[0])
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)

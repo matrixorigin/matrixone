@@ -129,9 +129,6 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 }
 
 func (c *container) probeHashTable(proc *process.Process, analyze process.Analyze, idx int) (bool, error) {
-	needInsert := make([]uint8, hashmap.UnitLimit)
-	resetsNeedInsert := make([]uint8, hashmap.UnitLimit)
-
 	btc := <-proc.Reg.MergeReceivers[idx].Ch
 
 	// last batch of block
@@ -151,6 +148,8 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 	for i := range btc.Vecs {
 		c.btc.Vecs[i] = vector.New(btc.Vecs[i].Typ)
 	}
+	needInsert := make([]uint8, hashmap.UnitLimit)
+	resetsNeedInsert := make([]uint8, hashmap.UnitLimit)
 	cnt := btc.Length()
 	itr := c.hashTable.NewIterator()
 	for i := 0; i < cnt; i += hashmap.UnitLimit {
