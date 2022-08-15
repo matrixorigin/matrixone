@@ -19,12 +19,13 @@ import (
 	"io"
 	"os"
 	"testing"
+	"testing/iotest"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestContentOffsetToBlockOffset(t *testing.T) {
-	mapper := NewBlockMapper(nil, 64)
+	mapper := NewBlockMapper[*os.File](nil, 64)
 
 	blockOffset, offsetInBlock := mapper.contentOffsetToBlockOffset(0)
 	assert.Equal(t, int64(0), blockOffset)
@@ -55,56 +56,119 @@ func TestBlockMapper(t *testing.T) {
 	blockContentSize := 8
 	tempDir := t.TempDir()
 
+	testBlockMapper(
+		t,
+		blockContentSize,
+		func() BlockMappable {
+			f, err := os.CreateTemp(tempDir, "*")
+			assert.Nil(t, err)
+			t.Cleanup(func() {
+				f.Close()
+			})
+			return f
+		},
+	)
+}
+
+func testBlockMapper(
+	t *testing.T,
+	blockContentSize int,
+	newUnderlying func() BlockMappable,
+) {
+
 	for i := 0; i < blockContentSize*4; i++ {
-		f, err := os.CreateTemp(tempDir, "*")
-		assert.Nil(t, err)
-		defer f.Close()
-		mapper := NewBlockMapper(f, blockContentSize)
 
+		underlying := newUnderlying()
+		mapper := NewBlockMapper(underlying, blockContentSize)
+
+		// random bytes
 		data := make([]byte, i)
-		_, err = rand.Read(data)
+		_, err := rand.Read(data)
 		assert.Nil(t, err)
 
+		// write
 		n, err := mapper.Write(data)
 		assert.Nil(t, err)
 		assert.Equal(t, i, n)
 
+		// check content
 		pos, err := mapper.Seek(0, io.SeekStart)
 		assert.Nil(t, err)
 		assert.Equal(t, int64(0), pos)
-
 		content, err := io.ReadAll(mapper)
 		assert.Nil(t, err)
 		assert.Equal(t, data, content)
 
-		stat, err := f.Stat()
+		// underlying size
+		underlyingSize, err := underlying.Seek(0, io.SeekEnd)
 		assert.Nil(t, err)
 		expectedSize := len(data) / blockContentSize * (blockContentSize + _ChecksumSize)
 		mod := len(data) % blockContentSize
 		if mod != 0 {
 			expectedSize += _ChecksumSize + mod
 		}
-		assert.Equal(t, expectedSize, int(stat.Size()))
+		assert.Equal(t, expectedSize, int(underlyingSize))
+
+		// iotest
+		pos, err = mapper.Seek(0, io.SeekStart)
+		assert.Nil(t, err)
+		assert.Equal(t, int64(0), pos)
+		err = iotest.TestReader(mapper, data)
+		if err != nil {
+			t.Logf("%s", err)
+		}
+		assert.Nil(t, err)
 
 		for j := 0; j < len(data); j++ {
+
+			// seek and write random bytes
 			_, err = rand.Read(data[j:])
 			assert.Nil(t, err)
-
 			pos, err = mapper.Seek(int64(j), io.SeekStart)
 			assert.Nil(t, err)
 			assert.Equal(t, int64(j), pos)
-
 			n, err = mapper.Write(data[j:])
 			assert.Nil(t, err)
 			assert.Equal(t, len(data[j:]), n)
 
+			// check content
 			pos, err = mapper.Seek(0, io.SeekStart)
 			assert.Nil(t, err)
 			assert.Equal(t, int64(0), pos)
 			content, err = io.ReadAll(mapper)
 			assert.Nil(t, err)
 			assert.Equal(t, data, content)
+
+			// seek and read
+			pos, err = mapper.Seek(int64(j), io.SeekStart)
+			assert.Nil(t, err)
+			assert.Equal(t, int64(j), pos)
+			content, err = io.ReadAll(mapper)
+			assert.Nil(t, err)
+			assert.Equal(t, data[j:], content)
+
 		}
 
 	}
+}
+
+func TestMultiLayerBlockMapper(t *testing.T) {
+	blockContentSize := 8
+	tempDir := t.TempDir()
+
+	testBlockMapper(
+		t,
+		blockContentSize,
+		func() BlockMappable {
+			f, err := os.CreateTemp(tempDir, "*")
+			assert.Nil(t, err)
+			t.Cleanup(func() {
+				f.Close()
+			})
+			m := NewBlockMapper(f, blockContentSize)
+			m2 := NewBlockMapper(m, blockContentSize)
+			m3 := NewBlockMapper(m2, blockContentSize)
+			return m3
+		},
+	)
 }

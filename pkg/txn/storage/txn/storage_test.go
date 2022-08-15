@@ -16,6 +16,7 @@ package txnstorage
 
 import (
 	"bytes"
+	"context"
 	"encoding/gob"
 	"testing"
 
@@ -35,7 +36,7 @@ func testDatabase(
 	// new
 	s, err := newStorage()
 	assert.Nil(t, err)
-	defer s.Close()
+	defer s.Close(context.TODO())
 
 	// txn
 	txnMeta := txn.TxnMeta{
@@ -244,7 +245,7 @@ func testRead[
 	err := gob.NewEncoder(buf).Encode(req)
 	assert.Nil(t, err)
 
-	res, err := s.Read(txnMeta, op, buf.Bytes())
+	res, err := s.Read(context.TODO(), txnMeta, op, buf.Bytes())
 	assert.Nil(t, err)
 	data, err := res.Read()
 	assert.Nil(t, err)
@@ -272,7 +273,7 @@ func testWrite[
 	err := gob.NewEncoder(buf).Encode(req)
 	assert.Nil(t, err)
 
-	data, err := s.Write(txnMeta, op, buf.Bytes())
+	data, err := s.Write(context.TODO(), txnMeta, op, buf.Bytes())
 	assert.Nil(t, err)
 
 	err = gob.NewDecoder(bytes.NewReader(data)).Decode(&resp)
