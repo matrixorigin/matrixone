@@ -14,10 +14,10 @@
 
 package compile
 
-import "github.com/matrixorigin/matrixone/pkg/encoding"
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 func (s *Source) MarshalBinary() ([]byte, error) {
-	return encoding.Encode(&EncodeSource{
+	return types.Encode(&EncodeSource{
 		Bat:          s.Bat,
 		SchemaName:   s.SchemaName,
 		RelationName: s.RelationName,
@@ -27,7 +27,7 @@ func (s *Source) MarshalBinary() ([]byte, error) {
 
 func (s *Source) UnmarshalBinary(data []byte) error {
 	rs := new(EncodeSource)
-	if err := encoding.Decode(data, rs); err != nil {
+	if err := types.Decode(data, rs); err != nil {
 		return err
 	}
 	s.Bat = rs.Bat

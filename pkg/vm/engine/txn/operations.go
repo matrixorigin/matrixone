@@ -19,10 +19,10 @@ import (
 	"encoding/gob"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 const (
@@ -58,6 +58,7 @@ func mustEncodePayload(o any) []byte {
 func init() {
 
 	// register TableDef types
+	gob.Register(new(engine.ViewDef))
 	gob.Register(new(engine.CommentDef))
 	gob.Register(new(engine.AttributeDef))
 	gob.Register(new(engine.IndexTableDef))

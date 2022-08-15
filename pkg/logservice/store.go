@@ -69,6 +69,9 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 	meta := storeMeta{
 		serviceAddress: cfg.ServiceAddress,
 	}
+	if cfg.GossipProbeInterval.Duration == 0 {
+		panic("cfg.GossipProbeInterval.Duration is 0")
+	}
 	return config.NodeHostConfig{
 		DeploymentID:        cfg.DeploymentID,
 		NodeHostID:          cfg.UUID,
@@ -82,7 +85,7 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 			LogDBFactory: tee.TanPebbleLogDBFactory,
 			// FIXME: dragonboat need to be updated to make this field a first class
 			// citizen
-			TestGossipProbeInterval: 50 * time.Millisecond,
+			TestGossipProbeInterval: cfg.GossipProbeInterval.Duration,
 		},
 		Gossip: config.GossipConfig{
 			BindAddress:      cfg.GossipListenAddress,
@@ -132,8 +135,8 @@ func newLogStore(cfg Config) (*store, error) {
 		return nil, err
 	}
 	hakeeperConfig := cfg.GetHAKeeperConfig()
-	plog.Infof("HAKeeper LogStoreTimeout: %s, DnStoreTimeout: %s",
-		hakeeperConfig.LogStoreTimeout, hakeeperConfig.DnStoreTimeout)
+	plog.Infof("HAKeeper LogStoreTimeout: %s, DNStoreTimeout: %s",
+		hakeeperConfig.LogStoreTimeout, hakeeperConfig.DNStoreTimeout)
 	ls := &store{
 		cfg:           cfg,
 		nh:            nh,

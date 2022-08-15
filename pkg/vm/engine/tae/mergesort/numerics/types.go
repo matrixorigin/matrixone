@@ -14,7 +14,7 @@
 
 package numerics
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 type sortElem[T types.OrderedT] struct {
 	data T

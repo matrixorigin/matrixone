@@ -125,6 +125,10 @@ func TestConfigCanBeValidated(t *testing.T) {
 	c5 := c
 	c5.GossipSeedAddresses = []string{}
 	assert.True(t, errors.Is(c5.Validate(), ErrInvalidConfig))
+
+	c6 := c
+	c6.GossipProbeInterval.Duration = 0
+	assert.True(t, errors.Is(c6.Validate(), ErrInvalidConfig))
 }
 
 func TestBootstrapConfigCanBeValidated(t *testing.T) {
@@ -170,7 +174,7 @@ func TestFillConfig(t *testing.T) {
 	assert.Equal(t, 0, len(c.GossipSeedAddresses))
 	assert.Equal(t, hakeeper.DefaultTickPerSecond, c.HAKeeperConfig.TickPerSecond)
 	assert.Equal(t, hakeeper.DefaultLogStoreTimeout, c.HAKeeperConfig.LogStoreTimeout.Duration)
-	assert.Equal(t, hakeeper.DefaultDnStoreTimeout, c.HAKeeperConfig.DnStoreTimeout.Duration)
+	assert.Equal(t, hakeeper.DefaultDNStoreTimeout, c.HAKeeperConfig.DNStoreTimeout.Duration)
 }
 
 func TestListenAddressCanBeFilled(t *testing.T) {

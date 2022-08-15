@@ -21,6 +21,7 @@ import (
 )
 
 type MVCC[T any] struct {
+	//TODO use lock-free linked list
 	sync.RWMutex
 	Values []*MVCCValue[T]
 }

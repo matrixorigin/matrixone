@@ -147,7 +147,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	}
 	cfg1.HAKeeperConfig.TickPerSecond = 10
 	cfg1.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
-	cfg1.HAKeeperConfig.DnStoreTimeout.Duration = 10 * time.Second
+	cfg1.HAKeeperConfig.DNStoreTimeout.Duration = 10 * time.Second
 	cfg2 := Config{
 		UUID:                uuid.New().String(),
 		FS:                  vfs.NewStrictMem(),
@@ -162,7 +162,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	}
 	cfg2.HAKeeperConfig.TickPerSecond = 10
 	cfg2.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
-	cfg2.HAKeeperConfig.DnStoreTimeout.Duration = 10 * time.Second
+	cfg2.HAKeeperConfig.DNStoreTimeout.Duration = 10 * time.Second
 	cfg3 := Config{
 		UUID:                uuid.New().String(),
 		FS:                  vfs.NewStrictMem(),
@@ -177,7 +177,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	}
 	cfg3.HAKeeperConfig.TickPerSecond = 10
 	cfg3.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
-	cfg3.HAKeeperConfig.DnStoreTimeout.Duration = 10 * time.Second
+	cfg3.HAKeeperConfig.DNStoreTimeout.Duration = 10 * time.Second
 	cfg4 := Config{
 		UUID:                uuid.New().String(),
 		FS:                  vfs.NewStrictMem(),
@@ -192,7 +192,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	}
 	cfg4.HAKeeperConfig.TickPerSecond = 10
 	cfg4.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
-	cfg4.HAKeeperConfig.DnStoreTimeout.Duration = 10 * time.Second
+	cfg4.HAKeeperConfig.DNStoreTimeout.Duration = 10 * time.Second
 	cfg1.Fill()
 	service1, err := NewService(cfg1)
 	require.NoError(t, err)
