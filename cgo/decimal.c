@@ -24,6 +24,7 @@
 
 #define DecDoublePtr(X) ((decDouble*)(X))
 #define DecQuadPtr(X) ((decQuad*)(X))
+#define Int64tPtr(X)  ((int64_t*)(X))
 
 #define DECLARE_DEC_CTXT(x)                       \
     decContext _fn_dc;                            \
@@ -1273,3 +1274,50 @@ DEF_DECIMAL_COMPARE(128, LT, DEC_COMP_LT)
 DEF_DECIMAL_COMPARE(64, LE, DEC_COMP_LE)
 
 DEF_DECIMAL_COMPARE(128, LE, DEC_COMP_LE)
+
+
+// aggregate operator
+int32_t Decimal64_VecSum(int64_t *rs, int64_t *vs, int64_t start, int64_t count, uint64_t *vps ,int64_t *zs, uint64_t *nulls) {
+    for (uint64_t i = 0; i < count; i++) {
+        if (vps[i] == 0) {
+            continue;
+        }
+        if (Bitmap_Contains(nulls, i+start)){
+            continue;
+        }
+
+        decDouble tmp1;
+        int ret = Decimal64_MulInt64(Int64tPtr(&tmp1) , vs + i + start, zs[i + start]);
+        if (ret != RC_SUCCESS) {
+            return ret;
+        }
+        ret = Decimal64_Add(rs + vps[i]-1, rs + vps[i] - 1, Int64tPtr(&tmp1));
+        if (ret != RC_SUCCESS) {
+            return ret;
+        }
+    }
+    return RC_SUCCESS;
+}
+
+
+int32_t Decimal128_VecSum(int64_t *rs, int64_t *vs, int64_t start, int64_t count, uint64_t *vps ,int64_t *zs, uint64_t *nulls) {
+    for (uint64_t i = 0; i < count; i++) {
+        if (vps[i] == 0) {
+            continue;
+        }
+        if (Bitmap_Contains(nulls, i+start)){
+            continue;
+        }
+
+        decQuad tmp1;
+        int ret = Decimal128_MulInt64(Int64tPtr(&tmp1), vs + (i + start)*2, zs[i + start]);
+        if (ret != RC_SUCCESS) {
+            return ret;
+        }
+        ret = Decimal128_Add(rs + (vps[i] - 1)*2, rs + (vps[i] - 1)*2, Int64tPtr(&tmp1));
+        if (ret != RC_SUCCESS) {
+            return ret;
+        }
+    }
+    return RC_SUCCESS;
+}
