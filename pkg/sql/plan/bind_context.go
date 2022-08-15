@@ -33,6 +33,9 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		bindingByCol:   make(map[string]*Binding),
 		parent:         parent,
 	}
+	if parent != nil {
+		bc.defaultDatabase = parent.defaultDatabase
+	}
 
 	return bc
 }
