@@ -224,6 +224,50 @@ func getLineOutChan(v atomic.Value) chan simdcsv.LineOut {
 	return v.Load().(chan simdcsv.LineOut)
 }
 
+func (plh *ParseLineHandler) getLineOutCallback(lineOut simdcsv.LineOut) error {
+	wait_a := time.Now()
+	defer func() {
+		AtomicAddDuration(plh.asyncChan, time.Since(wait_a))
+	}()
+
+	wait_d := time.Now()
+	if lineOut.Line == nil && lineOut.Lines == nil {
+		return nil
+	}
+	if lineOut.Line != nil {
+		//step 1 : skip dropped lines
+		if plh.lineCount < plh.load.IgnoredLines {
+			plh.lineCount++
+			return nil
+		}
+
+		wait_b := time.Now()
+
+		//step 2 : append line into line array
+		plh.simdCsvLineArray[plh.lineIdx] = lineOut.Line
+		plh.lineIdx++
+		plh.lineCount++
+		plh.maxFieldCnt = Max(plh.maxFieldCnt, len(lineOut.Line))
+
+		AtomicAddDuration(plh.csvLineArray1, time.Since(wait_b))
+
+		if plh.lineIdx == plh.batchSize {
+			//logutil.Infof("+++++ batch bytes %v B %v MB",plh.bytes,plh.bytes / 1024.0 / 1024.0)
+			err := saveLinesToStorage(plh, false)
+			if err != nil {
+				return err
+			}
+
+			plh.lineIdx = 0
+			plh.maxFieldCnt = 0
+			plh.bytes = 0
+		}
+	}
+	AtomicAddDuration(plh.asyncChanLoop, time.Since(wait_d))
+
+	return nil
+}
+
 func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 	wait_a := time.Now()
 	defer func() {
@@ -231,20 +275,28 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 	}()
 
 	var lineOut simdcsv.LineOut
+	var status bool
 	for {
+		fmt.Println("11111111")
 		quit := false
 		select {
 		case <-plh.loadCtx.Done():
 			logutil.Infof("----- get stop in getLineOutFromSimdCsvRoutine")
 			quit = true
-		case lineOut = <-getLineOutChan(plh.simdCsvGetParsedLinesChan):
+		case lineOut, status = <-getLineOutChan(plh.simdCsvGetParsedLinesChan):
+			if !status {
+				quit = true
+			}
 		}
 
+		fmt.Println("xxxxxx")
+		fmt.Println(lineOut)
 		if quit {
 			break
 		}
 		wait_d := time.Now()
 		if lineOut.Line == nil && lineOut.Lines == nil {
+			fmt.Println("tttttttttt")
 			break
 		}
 		if lineOut.Line != nil {
@@ -306,9 +358,9 @@ func AtomicAddDuration(v atomic.Value, t interface{}) {
 }
 
 func (plh *ParseLineHandler) close() {
-	plh.closeOnceGetParsedLinesChan.Do(func() {
-		close(getLineOutChan(plh.simdCsvGetParsedLinesChan))
-	})
+	//plh.closeOnceGetParsedLinesChan.Do(func() {
+	//	close(getLineOutChan(plh.simdCsvGetParsedLinesChan))
+	//})
 	plh.closeOnce.Do(func() {
 		close(plh.simdCsvBatchPool)
 		close(plh.simdCsvNotiyEventChan)
@@ -2057,15 +2109,18 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 		read from the output channel of the simdcsv parser, make a batch,
 		deliver it to async routine writing batch
 	*/
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err := handler.getLineOutFromSimdCsvRoutine()
-		if err != nil {
-			logutil.Errorf("get line from simdcsv failed. err:%v", err)
-			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_OUTPUT_SIMDCSV_ERROR, err, nil)
-		}
-	}()
+	//wg.Add(1)
+	//go func() {
+	//	defer wg.Done()
+	//	fmt.Println("ccccccccc")
+	//	//TODO:remove it
+	//	err := handler.getLineOutFromSimdCsvRoutine()
+	//	fmt.Println("ddddddddd")
+	//	if err != nil {
+	//		logutil.Errorf("get line from simdcsv failed. err:%v", err)
+	//		handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_OUTPUT_SIMDCSV_ERROR, err, nil)
+	//	}
+	//}()
 
 	/*
 		get lines from simdcsv, deliver them to the output channel.
@@ -2074,8 +2129,17 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 	go func() {
 		defer wg.Done()
 		wait_b := time.Now()
-
-		err := handler.simdCsvReader.ReadLoop(getLineOutChan(handler.simdCsvGetParsedLinesChan))
+		fmt.Println("aaaaaaaaaa")
+		//TODO: add a output callback
+		//TODO: remove the channel
+		err := handler.simdCsvReader.ReadLoop(requestCtx, nil, handler.getLineOutCallback)
+		//last batch
+		err = saveLinesToStorage(handler, true)
+		if err != nil {
+			logutil.Errorf("get line from simdcsv failed. err:%v", err)
+			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_OUTPUT_SIMDCSV_ERROR, err, nil)
+		}
+		fmt.Println("bbbbbbbbbb")
 		if err != nil {
 			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_READ_SIMDCSV_ERROR, err, nil)
 		}
@@ -2100,7 +2164,10 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 				logutil.Info("cancel the load")
 				retErr = NewMysqlError(ER_QUERY_INTERRUPTED)
 				quit = true
-
+				go func() {
+					for _ = range getLineOutChan(handler.simdCsvGetParsedLinesChan) {
+					}
+				}()
 			case ne = <-handler.simdCsvNotiyEventChan:
 				switch ne.neType {
 				case NOTIFY_EVENT_WRITE_BATCH_RESULT:
@@ -2123,11 +2190,8 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 			}
 
 			if quit {
-				//
 				handler.simdCsvReader.Close()
-				handler.closeOnceGetParsedLinesChan.Do(func() {
-					close(getLineOutChan(handler.simdCsvGetParsedLinesChan))
-				})
+
 				go func() {
 					for closechannel.IsOpened() {
 						select {
@@ -2164,6 +2228,5 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 	statsWg.Wait()
 	close.Close()
 	closechannel.Close()
-
 	return result, retErr
 }

@@ -24,7 +24,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -93,23 +92,16 @@ type MysqlCmdExecutor struct {
 
 	ses *Session
 
-	sessionRWLock sync.RWMutex
-
 	routineMgr *RoutineManager
 
-	rwLock            sync.RWMutex
 	cancelRequestFunc context.CancelFunc
 }
 
 func (mce *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session) {
-	mce.sessionRWLock.Lock()
-	defer mce.sessionRWLock.Unlock()
 	mce.ses = ses
 }
 
 func (mce *MysqlCmdExecutor) GetSession() *Session {
-	mce.sessionRWLock.RLock()
-	defer mce.sessionRWLock.RUnlock()
 	return mce.ses
 }
 
@@ -2196,14 +2188,10 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 }
 
 func (mce *MysqlCmdExecutor) setCancelRequestFunc(cancelFunc context.CancelFunc) {
-	mce.rwLock.Lock()
-	defer mce.rwLock.Unlock()
 	mce.cancelRequestFunc = cancelFunc
 }
 
 func (mce *MysqlCmdExecutor) getCancelRequestFunc() context.CancelFunc {
-	mce.rwLock.RLock()
-	defer mce.rwLock.RUnlock()
 	return mce.cancelRequestFunc
 }
 
@@ -2213,6 +2201,7 @@ func (mce *MysqlCmdExecutor) Close() {
 		cancelRequestFunc()
 	}
 
+	fmt.Println("----close mce")
 	ses := mce.GetSession()
 	err := ses.TxnRollback()
 	if err != nil {
