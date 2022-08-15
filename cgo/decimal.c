@@ -1291,10 +1291,7 @@ int32_t Decimal64_VecSum(int64_t *rs, int64_t *vs, int64_t start, int64_t count,
         if (ret != RC_SUCCESS) {
             return ret;
         }
-
-        decDouble tmp2;
-        memcpy(&tmp2, rs + vps[i] - 1, DECDOUBLE_Bytes);
-        ret = Decimal64_Add(rs + vps[i]-1, Int64tPtr(&tmp2), Int64tPtr(&tmp1));
+        ret = Decimal64_Add(rs + vps[i]-1, rs + vps[i] - 1, Int64tPtr(&tmp1));
         if (ret != RC_SUCCESS) {
             return ret;
         }
@@ -1317,10 +1314,7 @@ int32_t Decimal128_VecSum(int64_t *rs, int64_t *vs, int64_t start, int64_t count
         if (ret != RC_SUCCESS) {
             return ret;
         }
-
-        decQuad tmp2;
-        memcpy(&tmp2, rs + (vps[i] - 1)*2, DECQUAD_Bytes);
-        ret = Decimal128_Add(rs + (vps[i] - 1)*2, Int64tPtr(&tmp2), Int64tPtr(&tmp1));
+        ret = Decimal128_Add(rs + (vps[i] - 1)*2, rs + (vps[i] - 1)*2, Int64tPtr(&tmp1));
         if (ret != RC_SUCCESS) {
             return ret;
         }
