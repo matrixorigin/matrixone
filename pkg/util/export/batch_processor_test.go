@@ -134,7 +134,7 @@ func (n *dummyNumPipeImpl) NewItemBuffer(string) batchpipe.ItemBuffer[batchpipe.
 	return &numBuffer{Reminder: batchpipe.NewConstantClock(n.duration), signal: signalFunc}
 }
 
-func (n *dummyNumPipeImpl) NewItemBatchHandler() func(any) {
+func (n *dummyNumPipeImpl) NewItemBatchHandler(ctx context.Context) func(any) {
 	return func(batch any) {
 		n.ch <- batch.(string)
 	}

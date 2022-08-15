@@ -15,6 +15,7 @@
 package trace
 
 import (
+	"context"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"sync"
 	"testing"
@@ -36,10 +37,10 @@ type dummySqlExecutor struct {
 }
 
 func (e *dummySqlExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions) {}
-func (e *dummySqlExecutor) Query(s string, options ie.SessionOverrideOptions) ie.InternalExecResult {
+func (e *dummySqlExecutor) Query(ctx context.Context, s string, options ie.SessionOverrideOptions) ie.InternalExecResult {
 	return nil
 }
-func (e *dummySqlExecutor) Exec(sql string, opts ie.SessionOverrideOptions) error {
+func (e *dummySqlExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) error {
 	e.ch <- sql
 	return nil
 }
@@ -88,7 +89,7 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 	<-startedC
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			InitSchemaByInnerExecutor(tt.args.ieFactory)
+			InitSchemaByInnerExecutor(context.TODO(), tt.args.ieFactory)
 		})
 	}
 	close(c)
