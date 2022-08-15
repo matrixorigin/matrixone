@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
@@ -79,7 +78,7 @@ func OpBitBase[T opBitT](vectors []*vector.Vector, proc *process.Process, typ ty
 		return nil, err
 	}
 
-	resultValues := encoding.DecodeFixedSlice[T](resultVector.Data, resultElementSize)
+	resultValues := types.DecodeFixedSlice[T](resultVector.Data, resultElementSize)
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
 	vector.SetCol(resultVector, resultValues)
 
