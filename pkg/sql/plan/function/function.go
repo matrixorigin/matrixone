@@ -115,6 +115,9 @@ type Function struct {
 	// Volatile function cannot be fold
 	Volatile bool
 
+	// whether the function needs to append a hidden parameter, such as 'uuid'
+	AppendHideArg bool
+
 	Flag plan.Function_FuncFlag
 
 	// Layout adapt to plan/function.go, used for `explain SQL`.
@@ -202,6 +205,15 @@ func GetFunctionIsAggregateByName(name string) bool {
 	return len(fs) > 0 && fs[0].IsAggregate()
 }
 
+// Check whether the function needs to append a hidden parameter
+func GetFunctionAppendHideArgByID(overloadID int64) bool {
+	function, err := GetFunctionByID(overloadID)
+	if err != nil {
+		return false
+	}
+	return function.AppendHideArg
+}
+
 // GetFunctionByName check a function exist or not according to input function name and arg types,
 // if matches,
 // return the encoded overload id and the overload's return type
@@ -237,6 +249,9 @@ func GetFunctionByName(name string, args []types.Type) (int64, types.Type, []typ
 		return -1, emptyType, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Operator '%s' with parameters %v will be implemented in future version.", name, ArgsToPrint))
 	case tooManyFunctionsMatched:
 		return -1, emptyType, nil, errors.New(errno.AmbiguousParameter, fmt.Sprintf("too many overloads matched for '%s%v'", name, args))
+	case wrongFuncParamForAgg:
+		ArgsToPrint := getOidSlice(finalTypes)
+		return -1, emptyType, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Aggregate function of '%s' do not support implicit conversions for param of %v", name, ArgsToPrint))
 	}
 
 	// make the real return type of function overload.

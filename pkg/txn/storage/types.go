@@ -15,6 +15,8 @@
 package storage
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -34,11 +36,11 @@ var (
 type TxnStorage interface {
 	// StartRecovery start txnStorage recovery process. Use the incoming channel to send the Txn that needs to be
 	// recovered and close the channel when all the logs have been processed.
-	StartRecovery(chan txn.TxnMeta)
+	StartRecovery(context.Context, chan txn.TxnMeta)
 	// Close close the txn storage.
-	Close() error
+	Close(context.Context) error
 	// Destroy is similar to Close, but perform remove all related data and resources.
-	Destroy() error
+	Destroy(context.Context) error
 
 	// Read execute read requests sent by CN.
 	//
@@ -50,24 +52,24 @@ type TxnStorage interface {
 	// the following:
 	// case1. Txn.Status == Committing && CurrentTxn.SnapshotTimestamp > Txn.CommitTimestamp
 	// case2. Txn.Status == Prepared && CurrentTxn.SnapshotTimestamp > Txn.PreparedTimestamp
-	Read(txnMeta txn.TxnMeta, op uint32, payload []byte) (ReadResult, error)
+	Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) (ReadResult, error)
 	// Write execute write requests sent by CN.
 	// TODO: Handle spec error by storage.
-	Write(txnMeta txn.TxnMeta, op uint32, payload []byte) ([]byte, error)
+	Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) ([]byte, error)
 	// Prepare prepare data written by a transaction on a DNShard. TxnStorage needs to do conflict
 	// detection locally. The txn metadata(status change to prepared) and the data should be written to
 	// LogService.
 	//
 	// Note that for a distributed transaction, when all DNShards are Prepared, then the transaction is
 	// considered to have been committed.
-	Prepare(txnMeta txn.TxnMeta) (timestamp.Timestamp, error)
+	Prepare(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error)
 	// Committing for distributed transactions, all participating DNShards have been PREPARED and the status
 	// of the transaction is logged to the LogService.
-	Committing(txnMeta txn.TxnMeta) error
+	Committing(ctx context.Context, txnMeta txn.TxnMeta) error
 	// Commit commit the transaction. TxnStorage needs to do conflict locally.
-	Commit(txnMeta txn.TxnMeta) error
+	Commit(ctx context.Context, txnMeta txn.TxnMeta) error
 	// Rollback rollback the transaction.
-	Rollback(txnMeta txn.TxnMeta) error
+	Rollback(ctx context.Context, txnMeta txn.TxnMeta) error
 }
 
 // ReadResult read result from TxnStorage. When a read operation encounters any concurrent write transaction,

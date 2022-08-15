@@ -174,6 +174,26 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	UUID: {
+		// uuid function contains a hidden placeholder parameter
+		Id: UUID,
+		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			if len(inputs) == 0 {
+				return int32(0), nil
+			}
+			return wrongFunctionParameters, nil
+		},
+		Overloads: []Function{
+			{
+				Index:         0,
+				Flag:          plan.Function_STRICT,
+				Layout:        STANDARD_FUNCTION,
+				Volatile:      true,
+				AppendHideArg: true,
+				ReturnTyp:     types.T_varchar, Fn: multi.UUID,
+			},
+		},
+	},
 	DATE: {
 		Id: DATE,
 		Overloads: []Function{
@@ -743,6 +763,13 @@ var builtins = map[int]Functions{
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64, types.T_int64},
 				ReturnTyp: types.T_float64, Fn: multi.FloorFloat64Int64,
+			},
+			{
+				Index:     6,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_decimal128},
+				ReturnTyp: types.T_decimal128, Fn: multi.FloorDecimal128,
 			},
 		},
 	},

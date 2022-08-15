@@ -18,9 +18,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"time"
 
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
@@ -32,7 +31,7 @@ func doTxnRequest[
 	ctx context.Context,
 	e *Engine,
 	reqFunc func(context.Context, []txn.TxnRequest) (*rpc.SendResult, error),
-	selectNodes func([]logservicepb.DNNode) []logservicepb.DNNode,
+	shardsFunc func() ([]Shard, error),
 	op uint32,
 	req Req,
 ) (
@@ -40,24 +39,23 @@ func doTxnRequest[
 	err error,
 ) {
 
-	clusterDetails, err := e.getClusterDetails()
+	shards, err := shardsFunc()
 	if err != nil {
 		return nil, err
 	}
-	nodes := selectNodes(clusterDetails.DNNodes)
-
-	requests := make([]txn.TxnRequest, 0, len(nodes))
-	for _, node := range nodes {
+	requests := make([]txn.TxnRequest, 0, len(shards))
+	for _, shard := range shards {
 		requests = append(requests, txn.TxnRequest{
 			CNRequest: &txn.CNOpRequest{
 				OpCode:  op,
 				Payload: mustEncodePayload(req),
-				Target: metadata.DNShard{
-					Address: node.ServiceAddress,
-				},
+				Target:  shard,
 			},
 		})
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, time.Minute) //TODO get from config or argument
+	defer cancel()
 
 	result, err := reqFunc(ctx, requests)
 	if err != nil {
@@ -76,18 +74,4 @@ func doTxnRequest[
 	}
 
 	return
-}
-
-func allNodes(nodes []logservicepb.DNNode) []logservicepb.DNNode {
-	return nodes
-}
-
-func firstNode(nodes []logservicepb.DNNode) []logservicepb.DNNode {
-	return nodes[:1]
-}
-
-func theseNodes(nodes []logservicepb.DNNode) func(nodes []logservicepb.DNNode) []logservicepb.DNNode {
-	return func(_ []logservicepb.DNNode) []logservicepb.DNNode {
-		return nodes
-	}
 }

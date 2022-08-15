@@ -107,11 +107,11 @@ func initExport(ctx context.Context, config *tracerProviderConfig) {
 }
 
 func Shutdown(ctx context.Context) error {
-	if !gTracerProvider.enableTracer {
+	if !gTracerProvider.IsEnable() {
 		return nil
 	}
 
-	gTracerProvider.enableTracer = false
+	gTracerProvider.EnableTracer(false)
 	tracer := noopTracer{}
 	_ = atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(gTracer.(*MOTracer))), unsafe.Pointer(&tracer))
 

@@ -16,6 +16,7 @@ package mem
 
 import (
 	"bytes"
+	"context"
 	"math"
 	"sync/atomic"
 	"testing"
@@ -123,7 +124,7 @@ func TestRollback(t *testing.T) {
 	wTxn := writeTestData(t, s, 1, nil, 1)
 	checkUncommitted(t, s, wTxn, 1)
 
-	assert.NoError(t, s.Rollback(wTxn))
+	assert.NoError(t, s.Rollback(context.TODO(), wTxn))
 	checkRollback(t, s, wTxn, 1)
 }
 
@@ -131,7 +132,7 @@ func TestRollbackWithTxnNotExist(t *testing.T) {
 	l := NewMemLog()
 	s := NewKVTxnStorage(0, l, newTestClock(1))
 
-	assert.NoError(t, s.Rollback(txn.TxnMeta{}))
+	assert.NoError(t, s.Rollback(context.TODO(), txn.TxnMeta{}))
 	checkRollback(t, s, txn.TxnMeta{})
 }
 
@@ -265,7 +266,7 @@ func TestRecovery(t *testing.T) {
 
 	c := make(chan txn.TxnMeta, 10)
 	s2 := NewKVTxnStorage(1, l, newTestClock(1))
-	s2.StartRecovery(c)
+	s2.StartRecovery(context.TODO(), c)
 
 	checkUncommitted(t, s2, prepareTxn, 1)
 	checkCommitted(t, s2, committedTxn, 2)
@@ -297,7 +298,7 @@ func TestEvent(t *testing.T) {
 	assert.Equal(t, e, Event{Type: CommitType, Txn: wTxn})
 
 	wTxn = writeTestData(t, s, 1, nil, 2)
-	assert.NoError(t, s.Rollback(wTxn))
+	assert.NoError(t, s.Rollback(context.TODO(), wTxn))
 	checkRollback(t, s, wTxn, 2)
 	e = <-s.GetEventC()
 	assert.Equal(t, e, Event{Type: RollbackType, Txn: wTxn})
@@ -305,7 +306,7 @@ func TestEvent(t *testing.T) {
 
 func prepareTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64, err error) {
 	wTxn.PreparedTS = newTimestamp(ts)
-	pts, perr := s.Prepare(*wTxn)
+	pts, perr := s.Prepare(context.TODO(), *wTxn)
 	assert.Equal(t, err, perr)
 	wTxn.Status = txn.TxnStatus_Prepared
 	wTxn.PreparedTS = pts
@@ -313,13 +314,13 @@ func prepareTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64, 
 
 func committingTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64) {
 	wTxn.CommitTS = newTimestamp(ts)
-	assert.NoError(t, s.Committing(*wTxn))
+	assert.NoError(t, s.Committing(context.TODO(), *wTxn))
 	wTxn.Status = txn.TxnStatus_Committing
 }
 
 func commitTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64, err error) {
 	wTxn.CommitTS = newTimestamp(ts)
-	assert.Equal(t, err, s.Commit(*wTxn))
+	assert.Equal(t, err, s.Commit(context.TODO(), *wTxn))
 	wTxn.Status = txn.TxnStatus_Committed
 }
 
@@ -412,7 +413,7 @@ func writeTestData(t *testing.T, s *KVTxnStorage, ts int64, expectError error, k
 		req.Values = append(req.Values, []byte{v, byte(ts)})
 	}
 	wTxn := newTxnMeta(ts)
-	_, err := s.Write(wTxn, setOpCode, req.mustMarshal())
+	_, err := s.Write(context.TODO(), wTxn, setOpCode, req.mustMarshal())
 	assert.Equal(t, expectError, err)
 	return wTxn
 }
@@ -463,7 +464,7 @@ func readTestDataWithTxn(t *testing.T, s *KVTxnStorage, rTxn *txn.TxnMeta, waitT
 		req.Keys = append(req.Keys, key)
 	}
 
-	rs, err := s.Read(*rTxn, getOpCode, req.mustMarshal())
+	rs, err := s.Read(context.TODO(), *rTxn, getOpCode, req.mustMarshal())
 	assert.NoError(t, err)
 	assert.Equal(t, waitTxns, rs.WaitTxns())
 	return rs.(*readResult)

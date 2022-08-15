@@ -70,3 +70,51 @@ ulimit -n 65536
 * For Linux, please refer to this detailed [guide](https://www.linuxtechi.com/set-ulimit-file-descriptors-limit-linux-servers/) to set the ulimit to 100000.
 
 After setting this value, there will be no more `too many open files` error.
+
+* **Ssb-dbgen cannot be compiled on a PC with M1 chip**
+
+To complete the following configuration, then compiling 'SSB-DBgen' for a PC with M1 chip:
+
+1. Download and install [GCC11](https://gcc.gnu.org/install/).
+
+2. To ensure the gcc-11 is successful installed, run the following ccommand:
+
+   ```
+   gcc-11 -v
+   ```
+
+   The successful result is as below:
+
+   ```
+   Using built-in specs.
+   COLLECT_GCC=gcc-11
+   COLLECT_LTO_WRAPPER=/opt/homebrew/Cellar/gcc@11/11.3.0/bin/../libexec/gcc/aarch64-apple-darwin21/11/lto-wrapper
+   Target: aarch64-apple-darwin21
+   Configured with: ../configure --prefix=/opt/homebrew/opt/gcc@11 --libdir=/opt/homebrew/opt/gcc@11/lib/gcc/11 --disable-nls --enable-checking=release --with-gcc-major-version-only --enable-languages=c,c++,objc,obj-c++,fortran --program-suffix=-11 --with-gmp=/opt/homebrew/opt/gmp --with-mpfr=/opt/homebrew/opt/mpfr --with-mpc=/opt/homebrew/opt/libmpc --with-isl=/opt/homebrew/opt/isl --with-zstd=/opt/homebrew/opt/zstd --with-pkgversion='Homebrew GCC 11.3.0' --with-bugurl=https://github.com/Homebrew/homebrew-core/issues --build=aarch64-apple-darwin21 --with-system-zlib --with-sysroot=/Library/Developer/CommandLineTools/SDKs/MacOSX12.sdk
+   Thread model: posix
+   Supported LTO compression algorithms: zlib zstd
+   gcc version 11.3.0 (Homebrew GCC 11.3.0)
+   ```
+
+3. Modify the *bm_utils.c* file in the *ssb-dbgen* directory:
+
+   - Change the `#include <malloc.h>` in line 41 to `#include <sys/malloc.h>`
+
+   - Change the `open(fullpath, ((*mode == 'r')?O_RDONLY:O_WRONLY)|O_CREAT|O_LARGEFILE,0644);` in line 398 to ``open(fullpath, ((*mode == 'r')?O_RDONLY:O_WRONLY)|O_CREAT,0644);``
+
+4. Modify the *varsub.c* file in the *ssb-dbgen* directory:
+
+   - Change the `#include <malloc.h>` in line 5 to `#include <sys/malloc.h>`
+
+5. Modify the *makefile* file in the *ssb-dbgen* directory:
+
+   - Change the `CC      = gcc` in line 5 to `CC      = gcc-11`
+
+6. Enter into *ssb-dbgen* directory again and compile:
+
+   ```
+   cd ssb-dbgen
+   make
+   ```
+
+7. Check the *ssb-dbgen* directory, when the the *dbgen* file is generated, indicating that the compilation is successful.

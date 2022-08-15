@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -267,7 +269,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ: &plan.Type{
-					Id:       plan.Type_BOOL,
+					Id:       int32(types.T_bool),
 					Nullable: true,
 					Size:     1,
 				},
@@ -611,7 +613,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 	case plan.Node_VALUE_SCAN:
 		// VALUE_SCAN always have one column now
 		node.ProjectList = append(node.ProjectList, &plan.Expr{
-			Typ:  &plan.Type{Id: plan.Type_INT64},
+			Typ:  &plan.Type{Id: int32(types.T_int64)},
 			Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_Ival{Ival: 0}}},
 		})
 
@@ -1467,6 +1469,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 				subCtx := NewBindContext(builder, ctx)
 				subCtx.maskedCTEs = cteRef.maskedCTEs
 				subCtx.cteName = table
+				//reset defaultDatabase
+				if len(cteRef.defaultDatabase) > 0 {
+					subCtx.defaultDatabase = cteRef.defaultDatabase
+				}
 
 				switch stmt := cteRef.ast.Stmt.(type) {
 				case *tree.Select:
@@ -1503,11 +1509,71 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 				break
 			}
+			schema = ctx.defaultDatabase
 		}
 
 		obj, tableDef := builder.compCtx.Resolve(schema, table)
 		if tableDef == nil {
 			return 0, errors.New("", fmt.Sprintf("table %q does not exist", table))
+		}
+
+		// set view statment to CTE
+		viewDefString := ""
+		for _, def := range tableDef.Defs {
+			if viewDef, ok := def.Def.(*plan.TableDef_DefType_View); ok {
+				viewDefString = viewDef.View.View
+				break
+			}
+		}
+		if viewDefString != "" {
+			if ctx.cteByName == nil {
+				ctx.cteByName = make(map[string]*CTERef)
+			}
+
+			viewData := ViewData{}
+			err := json.Unmarshal([]byte(viewDefString), &viewData)
+			if err != nil {
+				return 0, err
+			}
+
+			originStmts, err := mysql.Parse(viewData.Stmt)
+			if err != nil {
+				return 0, err
+			}
+			viewStmt, ok := originStmts[0].(*tree.CreateView)
+			if !ok {
+				return 0, errors.New("", "can not get view statement")
+			}
+
+			// when use db1.v1 in db2 context, if you use v1 as ViewName， that may conflict
+			viewName := fmt.Sprintf("%s.%s", viewData.DefaultDatabase, viewStmt.Name.ObjectName)
+			var maskedCTEs map[string]any
+			if len(ctx.cteByName) > 0 {
+				maskedCTEs := make(map[string]any)
+				for name := range ctx.cteByName {
+					maskedCTEs[name] = nil
+				}
+			}
+
+			ctx.cteByName[string(viewName)] = &CTERef{
+				ast: &tree.CTE{
+					Name: &tree.AliasClause{
+						Alias: tree.Identifier(viewName),
+						Cols:  viewStmt.ColNames,
+					},
+					Stmt: viewStmt.AsSource,
+				},
+				defaultDatabase: viewData.DefaultDatabase,
+				maskedCTEs:      maskedCTEs,
+			}
+
+			newTableName := tree.NewTableName(tree.Identifier(viewName), tree.ObjectNamePrefix{
+				CatalogName:     tbl.CatalogName, // TODO unused now, if used in some code, that will be save in view
+				SchemaName:      tree.Identifier(""),
+				ExplicitCatalog: false,
+				ExplicitSchema:  false,
+			})
+			return builder.buildTable(newTableName, ctx)
 		}
 
 		nodeID = builder.appendNode(&plan.Node{

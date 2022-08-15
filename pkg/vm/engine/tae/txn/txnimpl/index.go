@@ -19,9 +19,9 @@ import (
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type TableIndex interface {
@@ -82,7 +82,7 @@ func InsertOp[T comparable](input any, start, count int, fromRow uint32, dedupIn
 func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
 	vec := containers.MakeVector(kType, false)
 	switch kType.Oid {
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+	case types.T_char, types.T_varchar, types.T_json:
 		for k := range idx.tree {
 			vec.Append([]byte(k.(string)))
 		}
@@ -148,39 +148,39 @@ func (idx *simpleTableIndex) BatchInsert(col containers.Vector, start, count int
 	idx.Lock()
 	defer idx.Unlock()
 	switch col.GetType().Oid {
-	case types.Type_BOOL:
+	case types.T_bool:
 		return InsertOp[bool](col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.Type_INT8:
+	case types.T_int8:
 		return InsertOp[int8](col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.Type_INT16:
+	case types.T_int16:
 		return InsertOp[int16](col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.Type_INT32:
+	case types.T_int32:
 		return InsertOp[int32](col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.Type_INT64:
+	case types.T_int64:
 		return InsertOp[int64](col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.Type_UINT8:
+	case types.T_uint8:
 		return InsertOp[uint8](col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.Type_UINT16:
+	case types.T_uint16:
 		return InsertOp[uint16](col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.Type_UINT32:
+	case types.T_uint32:
 		return InsertOp[uint32](col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.Type_UINT64:
+	case types.T_uint64:
 		return InsertOp[uint64](col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.Type_DECIMAL64:
+	case types.T_decimal64:
 		return InsertOp[types.Decimal64](col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.Type_DECIMAL128:
+	case types.T_decimal128:
 		return InsertOp[types.Decimal128](col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.Type_FLOAT32:
+	case types.T_float32:
 		return InsertOp[float32](col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.Type_FLOAT64:
+	case types.T_float64:
 		return InsertOp[float64](col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.Type_DATE:
+	case types.T_date:
 		return InsertOp[types.Date](col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.Type_TIMESTAMP:
+	case types.T_timestamp:
 		return InsertOp[types.Timestamp](col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.Type_DATETIME:
+	case types.T_datetime:
 		return InsertOp[types.Datetime](col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+	case types.T_char, types.T_varchar, types.T_json:
 		vs := col.Slice().(*containers.Bytes)
 		if dedupInput {
 			set := make(map[string]bool)
@@ -215,39 +215,39 @@ func (idx *simpleTableIndex) BatchDedup(col containers.Vector) error {
 	defer idx.RUnlock()
 	vals := col.Slice()
 	switch col.GetType().Oid {
-	case types.Type_BOOL:
+	case types.T_bool:
 		return DedupOp[bool](vals, idx.tree)
-	case types.Type_INT8:
+	case types.T_int8:
 		return DedupOp[int8](vals, idx.tree)
-	case types.Type_INT16:
+	case types.T_int16:
 		return DedupOp[int16](vals, idx.tree)
-	case types.Type_INT32:
+	case types.T_int32:
 		return DedupOp[int32](vals, idx.tree)
-	case types.Type_INT64:
+	case types.T_int64:
 		return DedupOp[int64](vals, idx.tree)
-	case types.Type_UINT8:
+	case types.T_uint8:
 		return DedupOp[uint8](vals, idx.tree)
-	case types.Type_UINT16:
+	case types.T_uint16:
 		return DedupOp[uint16](vals, idx.tree)
-	case types.Type_UINT32:
+	case types.T_uint32:
 		return DedupOp[uint32](vals, idx.tree)
-	case types.Type_UINT64:
+	case types.T_uint64:
 		return DedupOp[uint64](vals, idx.tree)
-	case types.Type_DECIMAL64:
+	case types.T_decimal64:
 		return DedupOp[types.Decimal64](vals, idx.tree)
-	case types.Type_DECIMAL128:
+	case types.T_decimal128:
 		return DedupOp[types.Decimal128](vals, idx.tree)
-	case types.Type_FLOAT32:
+	case types.T_float32:
 		return DedupOp[float32](vals, idx.tree)
-	case types.Type_FLOAT64:
+	case types.T_float64:
 		return DedupOp[float64](vals, idx.tree)
-	case types.Type_DATE:
+	case types.T_date:
 		return DedupOp[types.Date](vals, idx.tree)
-	case types.Type_DATETIME:
+	case types.T_datetime:
 		return DedupOp[types.Datetime](vals, idx.tree)
-	case types.Type_TIMESTAMP:
+	case types.T_timestamp:
 		return DedupOp[types.Timestamp](vals, idx.tree)
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+	case types.T_char, types.T_varchar, types.T_json:
 		vals := vals.(*containers.Bytes)
 		for i, s := range vals.Offset {
 			e := s + vals.Length[i]
