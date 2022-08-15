@@ -17,11 +17,11 @@ package catalog
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
@@ -63,6 +63,8 @@ type Catalog struct {
 	tableCnt  int32
 	columnCnt int32
 }
+
+func genDBFullName(tenantID uint32, name string) string { return fmt.Sprintf("%d-%s", tenantID, name) }
 
 func MockCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tasks.TaskScheduler) *Catalog {
 	driver := store.NewStoreWithBatchStoreDriver(dir, name, cfg)
@@ -524,7 +526,7 @@ func (catalog *Catalog) ReplayTableRows() {
 	}
 	processor := new(LoopProcessor)
 	processor.TableFn = func(tbl *TableEntry) error {
-		if tbl.db.name == "mo_catalog" {
+		if tbl.db.name == SystemDBName {
 			return nil
 		}
 		rows = 0
@@ -589,13 +591,13 @@ func (catalog *Catalog) GetDatabaseByID(id uint64) (db *DBEntry, err error) {
 }
 
 func (catalog *Catalog) AddEntryLocked(database *DBEntry) error {
-	nn := catalog.nameNodes[database.name]
+	nn := catalog.nameNodes[database.GetFullName()]
 	if nn == nil {
 		n := catalog.link.Insert(database)
 		catalog.entries[database.GetID()] = n
 
 		nn := newNodeList(catalog, &catalog.nodesMu, database.name)
-		catalog.nameNodes[database.name] = nn
+		catalog.nameNodes[database.GetFullName()] = nn
 
 		nn.CreateNode(database.GetID())
 	} else {
@@ -671,11 +673,11 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 	if n, ok := catalog.entries[database.GetID()]; !ok {
 		return ErrNotFound
 	} else {
-		nn := catalog.nameNodes[database.name]
+		nn := catalog.nameNodes[database.GetFullName()]
 		nn.DeleteNode(database.GetID())
 		catalog.link.Delete(n)
 		if nn.Length() == 0 {
-			delete(catalog.nameNodes, database.name)
+			delete(catalog.nameNodes, database.GetFullName())
 		}
 		delete(catalog.entries, database.GetID())
 	}
@@ -683,7 +685,8 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 }
 
 func (catalog *Catalog) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTxn) (*common.DLNode, error) {
-	node := catalog.nameNodes[name]
+	fullName := genDBFullName(txnCtx.GetTenantID(), name)
+	node := catalog.nameNodes[fullName]
 	if node == nil {
 		return nil, ErrNotFound
 	}

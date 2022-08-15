@@ -15,11 +15,11 @@
 package txnif
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -58,6 +58,8 @@ type TxnReader interface {
 }
 
 type TxnHandle interface {
+	BindTenantID(uint32)
+	GetTenantID() uint32
 	CreateDatabase(name string) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)

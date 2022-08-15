@@ -35,6 +35,8 @@ const (
 	PhyAddrColumnComment = "Physical address"
 	SortKeyNamePrefx     = "_SORT_"
 
+	TenantSysID = uint32(0)
+
 	SystemDBID               = uint64(1)
 	SystemDBName             = "mo_catalog"
 	CatalogName              = "taec"

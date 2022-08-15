@@ -19,7 +19,6 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -53,10 +52,11 @@ var DefaultTxnFactory = func(mgr *TxnManager, store txnif.TxnStore, id uint64, s
 type Txn struct {
 	sync.WaitGroup
 	*TxnCtx
-	Mgr   *TxnManager
-	Store txnif.TxnStore
-	Err   error
-	LSN   uint64
+	Mgr      *TxnManager
+	Store    txnif.TxnStore
+	Err      error
+	LSN      uint64
+	TenantID uint32
 
 	PrepareCommitFn   func(txnif.AsyncTxn) error
 	PrepareRollbackFn func(txnif.AsyncTxn) error
@@ -238,6 +238,13 @@ func (txn *Txn) WaitDone(err error) error {
 	// logutil.Infof("Wait %s Done", txn.String())
 	txn.DoneWithErr(err)
 	return txn.Err
+}
+
+func (txn *Txn) BindTenantID(tenantID uint32) {
+	txn.TenantID = tenantID
+}
+func (txn *Txn) GetTenantID() uint32 {
+	return txn.TenantID
 }
 
 func (txn *Txn) CreateDatabase(name string) (db handle.Database, err error) {

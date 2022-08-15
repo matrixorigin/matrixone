@@ -2749,3 +2749,70 @@ func TestTruncateZonemap(t *testing.T) {
 	assert.Equal(t, uint32(9), row)
 	assert.NoError(t, txn.Commit())
 }
+
+func mustStartTxn(t *testing.T, tae *testEngine, tenantID uint32) txnif.AsyncTxn {
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	txn.BindTenantID(tenantID)
+	return txn
+}
+
+func TestMultiTenantDBOps(t *testing.T) {
+	var err error
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	txn11 := mustStartTxn(t, tae, 1)
+
+	_, err = txn11.CreateDatabase("db")
+	assert.NoError(t, err)
+	txn12 := mustStartTxn(t, tae, 1)
+	_, err = txn11.CreateDatabase("db")
+	assert.Error(t, err)
+
+	txn21 := mustStartTxn(t, tae, 2)
+	_, err = txn21.CreateDatabase("db")
+	assert.NoError(t, err)
+
+	assert.NoError(t, txn11.Commit())
+	assert.NoError(t, txn12.Commit())
+	assert.NoError(t, txn21.Commit())
+
+	txn22 := mustStartTxn(t, tae, 2)
+	_, _ = txn22.CreateDatabase("db2")
+
+	txn23 := mustStartTxn(t, tae, 2)
+	// [mo_catalog, db]
+	assert.Equal(t, 2, len(txn23.DatabaseNames()))
+	assert.NoError(t, txn23.Commit())
+
+	txn22.Commit()
+	tae.restart()
+
+	txn24 := mustStartTxn(t, tae, 2)
+	// [mo_catalog, db, db2]
+	assert.Equal(t, 3, len(txn24.DatabaseNames()))
+	assert.NoError(t, txn24.Commit())
+
+	txn13 := mustStartTxn(t, tae, 1)
+	// [mo_catalog, db]
+	assert.Equal(t, 2, len(txn13.DatabaseNames()))
+
+	_, err = txn13.GetDatabase("db2")
+	assert.Error(t, err)
+	dbHdl, err := txn13.GetDatabase("db")
+	assert.NoError(t, err)
+	assert.Equal(t, uint32(1), dbHdl.GetMeta().(*catalog.DBEntry).GetTenantID())
+
+	_, err = txn13.DropDatabase("db2")
+	assert.Error(t, err)
+	_, err = txn13.DropDatabase("db")
+	assert.NoError(t, err)
+	assert.NoError(t, txn13.Commit())
+
+	txn14 := mustStartTxn(t, tae, 1)
+	// [mo_catalog]
+	assert.Equal(t, 1, len(txn14.DatabaseNames()))
+	assert.NoError(t, txn14.Commit())
+}

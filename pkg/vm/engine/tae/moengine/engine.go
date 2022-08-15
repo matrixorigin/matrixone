@@ -27,6 +27,8 @@ var (
 	_ engine.Engine = (*txnEngine)(nil)
 )
 
+type TenantIDKey struct{}
+
 func NewEngine(impl *db.DB) *txnEngine {
 	return &txnEngine{
 		impl: impl,
@@ -42,31 +44,40 @@ func (e *txnEngine) Delete(_ context.Context, name string, ctx client.TxnOperato
 	return
 }
 
-func (e *txnEngine) Create(_ context.Context, name string, ctx client.TxnOperator) (err error) {
+func (e *txnEngine) Create(ctx context.Context, name string, txnOp client.TxnOperator) (err error) {
 	var txn txnif.AsyncTxn
 	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
 		panic(err)
+	}
+	if tid, ok := ctx.Value(TenantIDKey{}).(uint32); ok {
+		txn.BindTenantID(tid)
 	}
 	_, err = txn.CreateDatabase(name)
 	return
 }
 
-func (e *txnEngine) Databases(_ context.Context, ctx client.TxnOperator) ([]string, error) {
+func (e *txnEngine) Databases(ctx context.Context, txnOp client.TxnOperator) ([]string, error) {
 	var err error
 	var txn txnif.AsyncTxn
 
 	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
 		panic(err)
 	}
+	if tid, ok := ctx.Value(TenantIDKey{}).(uint32); ok {
+		txn.BindTenantID(tid)
+	}
 	return txn.DatabaseNames(), nil
 }
 
-func (e *txnEngine) Database(_ context.Context, name string, ctx client.TxnOperator) (engine.Database, error) {
+func (e *txnEngine) Database(ctx context.Context, name string, txnOp client.TxnOperator) (engine.Database, error) {
 	var err error
 	var txn txnif.AsyncTxn
 
 	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
 		panic(err)
+	}
+	if tid, ok := ctx.Value(TenantIDKey{}).(uint32); ok {
+		txn.BindTenantID(tid)
 	}
 	h, err := txn.GetDatabase(name)
 	if err != nil {
