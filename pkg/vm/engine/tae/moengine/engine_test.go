@@ -16,8 +16,9 @@ package moengine
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"

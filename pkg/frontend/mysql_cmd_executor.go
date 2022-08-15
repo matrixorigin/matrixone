@@ -2046,6 +2046,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		//just status, no result set
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex,
+			*tree.CreateView, *tree.DropView,
 			*tree.Insert, *tree.Update,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 			*tree.SetVar,
@@ -2084,6 +2085,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			switch stmt.(type) {
 			case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
+				*tree.CreateView, *tree.DropView,
 				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete,
@@ -2248,7 +2250,9 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 // IsDDL checks the statement is the DDL statement.
 func IsDDL(stmt tree.Statement) bool {
 	switch stmt.(type) {
-	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
+	case *tree.CreateTable, *tree.DropTable,
+		*tree.CreateView, *tree.DropView,
+		*tree.CreateDatabase, *tree.DropDatabase,
 		*tree.CreateIndex, *tree.DropIndex:
 		return true
 	}
@@ -2258,7 +2262,7 @@ func IsDDL(stmt tree.Statement) bool {
 // IsDropStatement checks the statement is the drop statement.
 func IsDropStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
-	case *tree.DropDatabase, *tree.DropTable, *tree.DropIndex:
+	case *tree.DropDatabase, *tree.DropTable, *tree.DropView, *tree.DropIndex:
 		return true
 	}
 	return false

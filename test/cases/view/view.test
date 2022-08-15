@@ -1,0 +1,17 @@
+-- @label:bvt
+drop table if exists t1;
+create table t1 (a int, b int);
+create view v1 as select * from t1;
+select * from v1;
+insert into t1 values (1, 11), (2, 22), (3, 33);
+show columns from v1;
+select * from v1 where a > 1;
+create database db2;
+use db2;
+select * from view.v1 where a > 1;
+use view;
+drop database db2;
+drop table t1;
+select * from v1;
+drop table v1;
+drop view v1;
