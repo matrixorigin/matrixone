@@ -175,6 +175,16 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		}
 	case *dispatch.Argument:
 	case *connector.Argument:
+	case *minus.Argument:
+		rin.Arg = &minus.Argument{
+			IBucket: arg.IBucket,
+			NBucket: arg.NBucket,
+		}
+	case *intersect.Argument:
+		rin.Arg = &intersect.Argument{
+			IBucket: arg.IBucket,
+			NBucket: arg.NBucket,
+		}
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Unsupport instruction %T\n", in.Arg)))
 	}
