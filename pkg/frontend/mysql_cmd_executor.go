@@ -1410,6 +1410,12 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 
 // handlePrepareStmt
 func (mce *MysqlCmdExecutor) handlePrepareStmt(st *tree.PrepareStmt) error {
+	switch st.Stmt.(type) {
+	case *tree.Update:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+	case *tree.Delete:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
+	}
 	preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
 	if err != nil {
 		return err
@@ -1424,15 +1430,21 @@ func (mce *MysqlCmdExecutor) handlePrepareStmt(st *tree.PrepareStmt) error {
 
 // handlePrepareString
 func (mce *MysqlCmdExecutor) handlePrepareString(st *tree.PrepareString) error {
-	preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
-	if err != nil {
-		return err
-	}
 	stmts, err := mysql.Parse(st.Sql)
 	if err != nil {
 		return err
 	}
+	switch stmts[0].(type) {
+	case *tree.Update:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+	case *tree.Delete:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
+	}
 
+	preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
+	if err != nil {
+		return err
+	}
 	return mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), &PrepareStmt{
 		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
 		PreparePlan: preparePlan,
@@ -1938,6 +1950,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		if ret, err = cw.Compile(ses, ses.outputCallback); err != nil {
 			goto handleFailed
 		}
+		stmt = cw.GetAst()
 
 		runner = ret.(ComputationRunner)
 		if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
