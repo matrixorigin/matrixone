@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 
@@ -434,6 +435,13 @@ func constructGroup(n, cn *plan.Node, ibucket, nbucket int, needEval bool) *grou
 
 func constructMinus(n *plan.Node, proc *process.Process, ibucket, nbucket int) *minus.Argument {
 	return &minus.Argument{
+		IBucket: uint64(ibucket),
+		NBucket: uint64(nbucket),
+	}
+}
+
+func constructIntersect(n *plan.Node, proc *process.Process, ibucket, nbucket int) *intersect.Argument {
+	return &intersect.Argument{
 		IBucket: uint64(ibucket),
 		NBucket: uint64(nbucket),
 	}

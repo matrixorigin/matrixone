@@ -564,6 +564,14 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 				Arg: constructMinus(n, c.proc, i, len(rs)),
 			}
 		}
+	case plan.Node_INTERSECT:
+		for i := range rs {
+			rs[i].Instructions[0] = vm.Instruction{
+				Op:  vm.Intersect,
+				Idx: c.anal.curr,
+				Arg: constructIntersect(n, c.proc, i, len(rs)),
+			}
+		}
 	}
 	return []*Scope{c.newMergeScope(append(append(rs, left), right))}
 }
