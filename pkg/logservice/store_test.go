@@ -42,6 +42,7 @@ func TestNodeHostConfig(t *testing.T) {
 		DeploymentID: 1234,
 		DataDir:      "lalala",
 	}
+	cfg.Fill()
 	nhConfig := getNodeHostConfig(cfg)
 	assert.Equal(t, cfg.DeploymentID, nhConfig.DeploymentID)
 	assert.Equal(t, cfg.DataDir, nhConfig.NodeHostDir)

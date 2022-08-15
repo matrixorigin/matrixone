@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/empty"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -41,7 +40,7 @@ func Empty(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeUint8Slice(resultVector.Data)
+		resultValues := types.DecodeUint8Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues.Lengths)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		vector.SetCol(resultVector, empty.Empty(inputValues, resultValues))

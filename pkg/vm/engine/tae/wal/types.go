@@ -15,9 +15,9 @@
 package wal
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 const (

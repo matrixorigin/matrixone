@@ -19,7 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -79,10 +79,10 @@ func TestEncode(t *testing.T) {
 		c := New("test", tc.sql, "", context.TODO(), tc.e, tc.proc, nil)
 		err := c.Compile(tc.pn, nil, testPrint)
 		require.NoError(t, err)
-		data, err := encoding.Encode(c.scope)
+		data, err := types.Encode(c.scope)
 		require.NoError(t, err)
 		s := new(Scope)
-		err = encoding.Decode(data, s)
+		err = types.Decode(data, s)
 		require.NoError(t, err)
 		c.scope.equal(t, s)
 	}

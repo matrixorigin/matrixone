@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/bit_length"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -41,7 +40,7 @@ func BitLengthFunc(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
+		resultValues := types.DecodeInt64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues.Lengths)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		vector.SetCol(resultVector, bit_length.StrBitLength(inputValues, resultValues))

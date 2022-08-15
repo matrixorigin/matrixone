@@ -18,9 +18,8 @@ import (
 	"bytes"
 
 	"github.com/RoaringBitmap/roaring"
-	wtf "github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 
 	"golang.org/x/exp/constraints"
 )
@@ -173,47 +172,47 @@ func EstimateSize(bat *containers.Batch, offset, length uint32) uint64 {
 
 func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (offset int, exist bool) {
 	switch data.GetType().Oid {
-	case types.Type_BOOL:
+	case types.T_bool:
 		return GetOffsetWithFunc(data.Slice().([]bool), v.(bool), CompareBool, skipmask)
-	case types.Type_INT8:
+	case types.T_int8:
 		return GetOffsetOfOrdered[int8](data.Slice(), v, skipmask)
-	case types.Type_INT16:
+	case types.T_int16:
 		return GetOffsetOfOrdered[int16](data.Slice(), v, skipmask)
-	case types.Type_INT32:
+	case types.T_int32:
 		return GetOffsetOfOrdered[int32](data.Slice(), v, skipmask)
-	case types.Type_INT64:
+	case types.T_int64:
 		return GetOffsetOfOrdered[int64](data.Slice(), v, skipmask)
-	case types.Type_UINT8:
+	case types.T_uint8:
 		return GetOffsetOfOrdered[uint8](data.Slice(), v, skipmask)
-	case types.Type_UINT16:
+	case types.T_uint16:
 		return GetOffsetOfOrdered[uint16](data.Slice(), v, skipmask)
-	case types.Type_UINT32:
+	case types.T_uint32:
 		return GetOffsetOfOrdered[uint32](data.Slice(), v, skipmask)
-	case types.Type_UINT64:
+	case types.T_uint64:
 		return GetOffsetOfOrdered[uint64](data.Slice(), v, skipmask)
-	case types.Type_FLOAT32:
+	case types.T_float32:
 		return GetOffsetOfOrdered[float32](data.Slice(), v, skipmask)
-	case types.Type_FLOAT64:
+	case types.T_float64:
 		return GetOffsetOfOrdered[float64](data.Slice(), v, skipmask)
-	case types.Type_DATE:
+	case types.T_date:
 		return GetOffsetOfOrdered[types.Date](data.Slice(), v, skipmask)
-	case types.Type_DATETIME:
+	case types.T_datetime:
 		return GetOffsetOfOrdered[types.Datetime](data.Slice(), v, skipmask)
-	case types.Type_TIMESTAMP:
+	case types.T_timestamp:
 		return GetOffsetOfOrdered[types.Timestamp](data.Slice(), v, skipmask)
-	case types.Type_DECIMAL64:
+	case types.T_decimal64:
 		return GetOffsetWithFunc(
 			data.Slice().([]types.Decimal64),
 			v.(types.Decimal64),
-			wtf.CompareDecimal64Decimal64Aligned,
+			types.CompareDecimal64Decimal64Aligned,
 			skipmask)
-	case types.Type_DECIMAL128:
+	case types.T_decimal128:
 		return GetOffsetWithFunc(
 			data.Slice().([]types.Decimal128),
 			v.(types.Decimal128),
-			wtf.CompareDecimal128Decimal128Aligned,
+			types.CompareDecimal128Decimal128Aligned,
 			skipmask)
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_BLOB, types.Type_JSON:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
 		// column := data.Slice().(*containers.Bytes)
 		val := v.([]byte)
 		start, end := 0, data.Length()-1
