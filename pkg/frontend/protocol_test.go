@@ -18,9 +18,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/fagongzi/goetty"
-	"github.com/fagongzi/goetty/buf"
-	"github.com/fagongzi/goetty/codec/simple"
+	"github.com/fagongzi/goetty/v2"
+	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/fagongzi/goetty/v2/codec/simple"
 	"github.com/golang/mock/gomock"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/smartystreets/goconvey/convey"
@@ -40,8 +40,7 @@ func Test_protocol(t *testing.T) {
 		convey.So(res.GetCategory(), convey.ShouldEqual, 2)
 
 		cpi := &ProtocolImpl{}
-		encoder, decoder := simple.NewStringCodec()
-		io := goetty.NewIOSession(goetty.WithCodec(encoder, decoder))
+		io := goetty.NewIOSession(goetty.WithSessionCodec(simple.NewStringCodec()))
 		cpi.tcpConn = io
 
 		str1, str2 := cpi.Peer()
@@ -62,7 +61,7 @@ func Test_SendResponse(t *testing.T) {
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		mp := &MysqlProtocolImpl{}
 		mp.io = iopackage
