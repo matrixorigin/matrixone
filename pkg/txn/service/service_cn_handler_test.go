@@ -294,7 +294,7 @@ func TestReadCannotBlockByCommittingIfSnapshotTSIsLECommitTS(t *testing.T) {
 	prepareTestTxn(t, sender, wTxn, 1) // prepare at 2
 
 	wTxn.CommitTS = NewTestTimestamp(2)
-	assert.NoError(t, s.storage.(*mem.KVTxnStorage).Committing(wTxn))
+	assert.NoError(t, s.storage.(*mem.KVTxnStorage).Committing(context.TODO(), wTxn))
 
 	rTxn := NewTestTxn(2, 1)
 	checkReadResponses(t, readTestData(t, sender, 1, rTxn, 1), "")
@@ -321,7 +321,7 @@ func TestReadWillBlockByCommittingIfSnapshotTSIsGTCommitTS(t *testing.T) {
 	prepareTestTxn(t, sender, wTxn, 1) // prepare at 2
 
 	wTxn.CommitTS = NewTestTimestamp(2)
-	assert.NoError(t, s.storage.(*mem.KVTxnStorage).Committing(wTxn))
+	assert.NoError(t, s.storage.(*mem.KVTxnStorage).Committing(context.TODO(), wTxn))
 
 	c := make(chan struct{})
 	go func() {

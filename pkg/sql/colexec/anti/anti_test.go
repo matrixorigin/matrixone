@@ -168,7 +168,7 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 			Size:  typ.Size,
 			Scale: typ.Scale,
 			Width: typ.Width,
-			Id:    plan.Type_TypeId(typ.Oid),
+			Id:    int32(typ.Oid),
 		},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{

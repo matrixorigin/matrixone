@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
-	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -49,7 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -595,7 +593,7 @@ func extractRowFromVector(vec *vector.Vector, i int, row []interface{}, rowIndex
 			vs := make([]bytejson.ByteJson, 0, len(bytes.Lengths))
 			for i, length := range bytes.Lengths {
 				off := bytes.Offsets[i]
-				vs = append(vs, encoding.DecodeJson(bytes.Data[off:off+length]))
+				vs = append(vs, types.DecodeJson(bytes.Data[off:off+length]))
 			}
 			row[i] = vs[rowIndex]
 		} else {
@@ -606,7 +604,7 @@ func extractRowFromVector(vec *vector.Vector, i int, row []interface{}, rowIndex
 				vs := make([]bytejson.ByteJson, 0, len(bytes.Lengths))
 				for i, length := range bytes.Lengths {
 					off := bytes.Offsets[i]
-					vs = append(vs, encoding.DecodeJson(bytes.Data[off:off+length]))
+					vs = append(vs, types.DecodeJson(bytes.Data[off:off+length]))
 				}
 				row[i] = vs[rowIndex]
 			}
@@ -1449,7 +1447,7 @@ func (mce *MysqlCmdExecutor) handleDeallocate(st *tree.Deallocate) error {
 
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
 	cols := []*plan2.ColDef{
-		{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_varchar)}, Name: explainColName},
+		{Typ: &plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
 	}
 	columns := make([]interface{}, len(cols))
 	var err error = nil
@@ -1519,17 +1517,17 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	switch cwft.GetAst().(type) {
 	case *tree.ShowCreateTable:
 		cols = []*plan2.ColDef{
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Table"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Create Table"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Table"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Create Table"},
 		}
 	case *tree.ShowColumns:
 		cols = []*plan2.ColDef{
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Field"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Type"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Null"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Key"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Default"},
-			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Comment"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
+			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
 		}
 	}
 	columns := make([]interface{}, len(cols))
@@ -2040,6 +2038,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		//just status, no result set
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex,
+			*tree.CreateView, *tree.DropView,
 			*tree.Insert, *tree.Update,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 			*tree.SetVar,
@@ -2078,6 +2077,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			switch stmt.(type) {
 			case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
+				*tree.CreateView, *tree.DropView,
 				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete,
@@ -2258,7 +2258,9 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 // IsDDL checks the statement is the DDL statement.
 func IsDDL(stmt tree.Statement) bool {
 	switch stmt.(type) {
-	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
+	case *tree.CreateTable, *tree.DropTable,
+		*tree.CreateView, *tree.DropView,
+		*tree.CreateDatabase, *tree.DropDatabase,
 		*tree.CreateIndex, *tree.DropIndex:
 		return true
 	}
@@ -2268,7 +2270,7 @@ func IsDDL(stmt tree.Statement) bool {
 // IsDropStatement checks the statement is the drop statement.
 func IsDropStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
-	case *tree.DropDatabase, *tree.DropTable, *tree.DropIndex:
+	case *tree.DropDatabase, *tree.DropTable, *tree.DropView, *tree.DropIndex:
 		return true
 	}
 	return false

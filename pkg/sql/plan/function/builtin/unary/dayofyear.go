@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/dayofyear"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -41,7 +40,7 @@ func DayOfYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeUint16Slice(resultVector.Data)
+		resultValues := types.DecodeUint16Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		vector.SetCol(resultVector, dayofyear.GetDayOfYear(inputValues, resultValues))

@@ -16,10 +16,10 @@ package operator
 
 import (
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/like"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -43,7 +43,7 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		if err != nil {
 			return nil, err
 		}
-		rs := encoding.DecodeInt64Slice(vec.Data)
+		rs := types.DecodeInt64Slice(vec.Data)
 		rs = rs[:len(lvs.Lengths)]
 		if nulls.Any(lv.Nsp) {
 			rs, err = like.BtSliceNullAndConst(lvs, rvs.Get(0), lv.Nsp.Np, rs)
@@ -92,7 +92,7 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		if err != nil {
 			return nil, err
 		}
-		rs := encoding.DecodeInt64Slice(vec.Data)
+		rs := types.DecodeInt64Slice(vec.Data)
 		rs = rs[:len(rvs.Lengths)]
 		if nulls.Any(rv.Nsp) {
 			rs, err = like.BtConstAndSliceNull(lvs.Get(0), rvs, rv.Nsp.Np, rs)
@@ -126,7 +126,7 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		if err != nil {
 			return nil, err
 		}
-		rs := encoding.DecodeInt64Slice(vec.Data)
+		rs := types.DecodeInt64Slice(vec.Data)
 		rs = rs[:len(rvs.Lengths)]
 		if nulls.Any(rv.Nsp) && nulls.Any(lv.Nsp) {
 			nsp := lv.Nsp.Or(rv.Nsp)

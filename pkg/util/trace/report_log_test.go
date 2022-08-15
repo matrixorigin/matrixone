@@ -61,7 +61,7 @@ func TestReportLog(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		gTracerProvider.enableTracer = tt.enableTracer
+		gTracerProvider.EnableTracer(tt.enableTracer)
 		t.Run(tt.name, func(t *testing.T) {
 			ReportLog(tt.args.ctx, tt.args.level, tt.args.depth, tt.args.formatter, tt.args.args...)
 		})

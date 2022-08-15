@@ -18,10 +18,10 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,7 +29,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	bufManager := buffer.NewNodeManager(1024*1024, nil)
 	file := common.MockRWFile()
 	cType := Plain
-	typ := types.Type{Oid: types.Type_INT32}
+	typ := types.Type{Oid: types.T_int32}
 	pkColIdx := uint16(0)
 	interIdx := uint16(0)
 	var err error

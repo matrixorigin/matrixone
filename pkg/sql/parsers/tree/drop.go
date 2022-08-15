@@ -63,6 +63,29 @@ func NewDropTable(i bool, n TableNames) *DropTable {
 	}
 }
 
+// DropView DROP View statement
+type DropView struct {
+	statementImpl
+	IfExists bool
+	Names    TableNames
+}
+
+func (node *DropView) Format(ctx *FmtCtx) {
+	ctx.WriteString("drop view")
+	if node.IfExists {
+		ctx.WriteString(" if exists")
+	}
+	ctx.WriteByte(' ')
+	node.Names.Format(ctx)
+}
+
+func NewDropView(i bool, n TableNames) *DropView {
+	return &DropView{
+		IfExists: i,
+		Names:    n,
+	}
+}
+
 type DropIndex struct {
 	statementImpl
 	Name       Identifier

@@ -16,12 +16,11 @@ package bitmap
 
 import (
 	"bytes"
+	"encoding"
 	"fmt"
 	"math/bits"
 
-	stdencoding "encoding"
-
-	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 //
@@ -307,31 +306,31 @@ func (n *Bitmap) ToArray() []uint64 {
 func (n *Bitmap) Marshal() []byte {
 	var buf bytes.Buffer
 
-	buf.Write(encoding.EncodeUint64(uint64(n.len)))
-	buf.Write(encoding.EncodeUint64(uint64(len(n.data) * 8)))
-	buf.Write(encoding.EncodeFixedSlice(n.data, 8))
+	buf.Write(types.EncodeUint64(uint64(n.len)))
+	buf.Write(types.EncodeUint64(uint64(len(n.data) * 8)))
+	buf.Write(types.EncodeFixedSlice(n.data, 8))
 	return buf.Bytes()
 }
 
 func (n *Bitmap) Unmarshal(data []byte) {
-	n.len = int64(encoding.DecodeUint64(data[:8]))
+	n.len = int64(types.DecodeUint64(data[:8]))
 	data = data[8:]
-	size := int(encoding.DecodeUint64(data[:8]))
+	size := int(types.DecodeUint64(data[:8]))
 	data = data[8:]
-	n.data = encoding.DecodeFixedSlice[uint64](data[:size], 8)
+	n.data = types.DecodeFixedSlice[uint64](data[:size], 8)
 }
 
 func (n *Bitmap) String() string {
 	return fmt.Sprintf("%v", n.ToArray())
 }
 
-var _ stdencoding.BinaryMarshaler = new(Bitmap)
+var _ encoding.BinaryMarshaler = new(Bitmap)
 
 func (n *Bitmap) MarshalBinary() ([]byte, error) {
 	return n.Marshal(), nil
 }
 
-var _ stdencoding.BinaryUnmarshaler = new(Bitmap)
+var _ encoding.BinaryUnmarshaler = new(Bitmap)
 
 func (n *Bitmap) UnmarshalBinary(data []byte) error {
 	n.Unmarshal(data)
