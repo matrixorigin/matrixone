@@ -61,7 +61,7 @@ func TestDateAdd(t *testing.T) {
 			xnu := &nulls.Nulls{}
 			ynu := &nulls.Nulls{}
 			rnu := &nulls.Nulls{}
-			d, e := dateAdd(time.Local, c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
+			d, e := dateAdd(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
 			if c.success {
 				require.Equal(t, e, nil)
 			} else {
@@ -111,7 +111,7 @@ func TestDatetimeAdd(t *testing.T) {
 			xnu := &nulls.Nulls{}
 			ynu := &nulls.Nulls{}
 			rnu := &nulls.Nulls{}
-			d, e := datetimeAdd(time.Local, c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
+			d, e := datetimeAdd(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
 			if c.success {
 				require.Equal(t, e, nil)
 			} else {
@@ -168,7 +168,7 @@ func TestDateStringAdd(t *testing.T) {
 			xnu := &nulls.Nulls{}
 			ynu := &nulls.Nulls{}
 			rnu := &nulls.Nulls{}
-			d, e := dateStringAdd(time.Local, c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
+			d, e := dateStringAdd(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
 			if c.success {
 				require.Equal(t, e, nil)
 			} else {

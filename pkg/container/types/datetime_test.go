@@ -124,7 +124,7 @@ func TestAddDatetime(t *testing.T) {
 		ret, rettype, _ := NormalizeInterval(test.InputIntervalNum, test.InputIntervalTypes)
 		d, err := ParseDatetime(test.Input, 6)
 		require.Equal(t, err, nil)
-		d, b := d.AddInterval(time.Local, ret, rettype, DateTimeType)
+		d, b := d.AddInterval(ret, rettype, DateTimeType)
 		require.Equal(t, d.String2(6), test.expect)
 		require.Equal(t, b, test.success)
 
@@ -173,7 +173,7 @@ func TestSubDateTime(t *testing.T) {
 		ret, rettype, _ := NormalizeInterval(test.InputIntervalNum, test.InputIntervalTypes)
 		d, err := ParseDatetime(test.Input, 6)
 		require.Equal(t, err, nil)
-		d, b := d.AddInterval(time.Local, -ret, rettype, DateType)
+		d, b := d.AddInterval(-ret, rettype, DateType)
 		require.Equal(t, d.String2(6), test.expect)
 		require.Equal(t, b, test.success)
 	}

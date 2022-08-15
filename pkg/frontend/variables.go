@@ -1111,7 +1111,7 @@ func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val
 		}
 
 		vars[name] = tzStr
-		sess.SetTimeZone(time.FixedZone("custom", -minute*60))
+		sess.SetTimeZone(time.FixedZone("FixedZone", -minute*60))
 	} else if tzStr[0] == '+' {
 		if len(tzStr) != 6 {
 			return errors.New("incorrect timezone " + tzStr)
@@ -1145,7 +1145,7 @@ func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val
 		}
 
 		vars[name] = tzStr
-		sess.SetTimeZone(time.FixedZone("custom", minute*60))
+		sess.SetTimeZone(time.FixedZone("FixedZone", minute*60))
 	} else {
 		loc, err := time.LoadLocation(tzStr)
 		if err != nil {

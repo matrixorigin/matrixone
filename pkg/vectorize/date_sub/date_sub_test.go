@@ -51,7 +51,7 @@ func TestDateSub(t *testing.T) {
 			xnu := &nulls.Nulls{}
 			ynu := &nulls.Nulls{}
 			rnu := &nulls.Nulls{}
-			d, e := dateSub(time.Local, c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
+			d, e := dateSub(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
 			require.Equal(t, c.want, d)
 			require.Equal(t, e, nil)
 		})
@@ -87,7 +87,7 @@ func TestDatetimeSub(t *testing.T) {
 			xnu := &nulls.Nulls{}
 			ynu := &nulls.Nulls{}
 			rnu := &nulls.Nulls{}
-			d, e := datetimeSub(time.Local, c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
+			d, e := datetimeSub(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
 			require.Equal(t, c.want, d)
 			require.Equal(t, e, nil)
 		})
@@ -133,7 +133,7 @@ func TestDateStringSub(t *testing.T) {
 			xnu := &nulls.Nulls{}
 			ynu := &nulls.Nulls{}
 			rnu := &nulls.Nulls{}
-			d, e := dateStringSub(time.Local, c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
+			d, e := dateStringSub(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
 			require.Equal(t, c.want, d)
 			require.Equal(t, e, nil)
 		})

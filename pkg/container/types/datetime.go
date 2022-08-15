@@ -257,43 +257,49 @@ func (dt Datetime) ConvertToGoTime(loc *time.Location) time.Time {
 	return time.Date(int(year), time.Month(mon), int(day), int(hour), int(minute), int(sec), int(nsec), loc)
 }
 
-func (dt Datetime) AddDateTime(date time.Time, addMonth, addYear int64, timeType TimeType) (Datetime, bool) {
+func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Datetime, bool) {
 	// corner case: mysql: date_add('2022-01-31',interval 1 month) -> 2022-02-28
 	// only in the month year year-month
-	var addDay int64
-	if addMonth != 0 || addYear != 0 {
-		originDay := date.Day()
-		newDate := date.AddDate(int(addYear), int(addMonth), int(addDay))
-		newDay := newDate.Day()
-		if originDay != newDay {
-			maxDay := LastDay(uint16(newDate.Year()), uint8(newDate.Month()-1))
-			addDay = int64(maxDay) - int64(originDay)
-		}
+	oldDate := dt.ToDate()
+	y, m, d, _ := oldDate.Calendar(true)
+	year := int64(y) + addYear + addMonth/12
+	month := int64(m) + addMonth%12
+	if month <= 0 {
+		year--
+		month += 12
 	}
-	date = date.AddDate(int(addYear), int(addMonth), int(addDay))
+	if month > 12 {
+		year++
+		month -= 12
+	}
+
+	y = int32(year)
+	m = uint8(month)
+
+	lastDay := LastDay(y, m)
+	if lastDay < d {
+		d = lastDay
+	}
 
 	switch timeType {
 	case DateType:
-		if !validDate(int32(date.Year()), uint8(date.Month()), uint8(date.Day())) {
+		if !validDate(y, m, d) {
 			return 0, false
 		}
 	case DateTimeType:
-		if !validDatetime(int32(date.Year()), uint8(date.Month()), uint8(date.Day())) {
-			return 0, false
-		}
-	case TimeStampType:
-		if !ValidTimestamp(Timestamp(date.UnixMicro() + unixEpoch)) {
+		if !validDatetime(y, m, d) {
 			return 0, false
 		}
 	}
-	return FromClock(int32(date.Year()), uint8(date.Month()), uint8(date.Day()), uint8(date.Hour()), uint8(date.Minute()), uint8(date.Second()), uint32(date.Nanosecond()/1000)), true
+	newDate := FromCalendar(y, m, d)
+	return dt + Datetime(newDate-oldDate)*secsPerDay*microSecsPerSec, true
 }
 
 // AddInterval now date or datetime use the function to add/sub date,
 // we need a bool arg to tell isDate/isDatetime
 // date/datetime have different regions, so we don't use same valid function
 // return type bool means the if the date/datetime is valid
-func (dt Datetime) AddInterval(loc *time.Location, nums int64, its IntervalType, timeType TimeType) (Datetime, bool) {
+func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) (Datetime, bool) {
 	var addMonth, addYear int64
 	switch its {
 	case Second:
@@ -308,13 +314,13 @@ func (dt Datetime) AddInterval(loc *time.Location, nums int64, its IntervalType,
 		nums *= microSecsPerSec * secsPerWeek
 	case Month:
 		addMonth = nums
-		return dt.AddDateTime(dt.ConvertToGoTime(loc), addMonth, addYear, timeType)
+		return dt.AddDateTime(addMonth, addYear, timeType)
 	case Quarter:
 		addMonth = 3 * nums
-		return dt.AddDateTime(dt.ConvertToGoTime(loc), addMonth, addYear, timeType)
+		return dt.AddDateTime(addMonth, addYear, timeType)
 	case Year:
 		addYear = nums
-		return dt.AddDateTime(dt.ConvertToGoTime(loc), addMonth, addYear, timeType)
+		return dt.AddDateTime(addMonth, addYear, timeType)
 	}
 
 	newDate := dt + Datetime(nums)

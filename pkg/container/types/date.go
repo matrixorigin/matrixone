@@ -682,11 +682,11 @@ func (d Date) Month() uint8 {
 	return month
 }
 
-func LastDay(year uint16, month uint8) int {
-	if isLeap(int32(year)) {
-		return int(leapYearMonthDays[month-1])
+func LastDay(year int32, month uint8) uint8 {
+	if isLeap(year) {
+		return leapYearMonthDays[month-1]
 	}
-	return int(flatYearMonthDays[month-1])
+	return flatYearMonthDays[month-1]
 }
 
 func (d Date) Day() uint8 {

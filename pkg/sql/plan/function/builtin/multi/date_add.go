@@ -37,7 +37,7 @@ func DateAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		}
 		resultVector := proc.AllocScalarVector(resultType)
 		rs := make([]types.Date, 1)
-		res, err := date_add.DateAdd(proc.SessionInfo.TimeZone, firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
+		res, err := date_add.DateAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	} else {
@@ -53,7 +53,7 @@ func DateAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		}
 		resultValues := types.DecodeDateSlice(resultVector.Data)
 		resultValues = resultValues[:maxLen]
-		res, err := date_add.DateAdd(proc.SessionInfo.TimeZone, firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
+		res, err := date_add.DateAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	}
@@ -81,7 +81,7 @@ func DatetimeAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		}
 		resultVector := proc.AllocScalarVector(resultType)
 		rs := make([]types.Datetime, 1)
-		res, err := date_add.DatetimeAdd(proc.SessionInfo.TimeZone, firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
+		res, err := date_add.DatetimeAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	} else {
@@ -97,7 +97,7 @@ func DatetimeAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		}
 		resultValues := types.DecodeDatetimeSlice(resultVector.Data)
 		resultValues = resultValues[:maxLen]
-		res, err := date_add.DatetimeAdd(proc.SessionInfo.TimeZone, firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
+		res, err := date_add.DatetimeAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	}
@@ -118,7 +118,7 @@ func DateStringAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		}
 		resultVector := proc.AllocScalarVector(resultType)
 		rs := make([]types.Datetime, 1)
-		res, err := date_add.DateStringAdd(proc.SessionInfo.TimeZone, firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
+		res, err := date_add.DateStringAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	} else {
@@ -134,7 +134,7 @@ func DateStringAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		}
 		resultValues := types.DecodeDatetimeSlice(resultVector.Data)
 		resultValues = resultValues[:maxLen]
-		res, err := date_add.DateStringAdd(proc.SessionInfo.TimeZone, firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
+		res, err := date_add.DateStringAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	}
