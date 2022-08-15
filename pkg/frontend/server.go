@@ -60,7 +60,7 @@ func nextConnectionID() uint32 {
 }
 
 func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit) *MOServer {
-	encoder, decoder := NewSqlCodec()
+	codec := NewSqlCodec()
 	rm := NewRoutineManager(ctx, pu)
 	// TODO asyncFlushBatch
 	app, err := goetty.NewApplication(addr, rm.Handler,

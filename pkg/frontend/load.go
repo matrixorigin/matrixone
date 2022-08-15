@@ -175,9 +175,9 @@ type ParseLineHandler struct {
 	SharePart
 	DebugTime
 
-	threadInfo                  map[int]*ThreadInfo
-	simdCsvReader               *simdcsv.Reader
-	closeOnceGetParsedLinesChan sync.Once
+	threadInfo    map[int]*ThreadInfo
+	simdCsvReader *simdcsv.Reader
+	//closeOnceGetParsedLinesChan sync.Once
 	//csv read put lines into the channel
 	simdCsvGetParsedLinesChan atomic.Value // chan simdcsv.LineOut
 	//the count of writing routine
@@ -2132,7 +2132,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 		fmt.Println("aaaaaaaaaa")
 		//TODO: add a output callback
 		//TODO: remove the channel
-		err := handler.simdCsvReader.ReadLoop(requestCtx, nil, handler.getLineOutCallback)
+		err = handler.simdCsvReader.ReadLoop(requestCtx, nil, handler.getLineOutCallback)
 		//last batch
 		err = saveLinesToStorage(handler, true)
 		if err != nil {
@@ -2164,10 +2164,6 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 				logutil.Info("cancel the load")
 				retErr = NewMysqlError(ER_QUERY_INTERRUPTED)
 				quit = true
-				go func() {
-					for _ = range getLineOutChan(handler.simdCsvGetParsedLinesChan) {
-					}
-				}()
 			case ne = <-handler.simdCsvNotiyEventChan:
 				switch ne.neType {
 				case NOTIFY_EVENT_WRITE_BATCH_RESULT:

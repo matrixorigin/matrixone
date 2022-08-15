@@ -73,7 +73,7 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 }
 
 func initExport(ctx context.Context, config *tracerProviderConfig) {
-	if !config.enableTracer {
+	if !config.IsEnable() {
 		logutil2.Infof(context.TODO(), "initExport pass.")
 		return
 	}
