@@ -34,16 +34,15 @@ const (
 	defaultServiceAddress = "0.0.0.0:32000"
 	defaultRaftAddress    = "0.0.0.0:32001"
 	defaultGossipAddress  = "0.0.0.0:32002"
+
+	defaultGossipProbeInterval = 50 * time.Millisecond
+	defaultHeartbeatInterval   = time.Second
+	defaultLogDBBufferSize     = 768 * 1024
 )
 
 var (
 	ErrInvalidBootstrapConfig = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid bootstrap configuration")
 	ErrInvalidConfig          = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid log configuration")
-)
-
-const (
-	defaultGossipProbeInterval = 50 * time.Millisecond
-	defaultHeartbeatInterval   = time.Second
 )
 
 // Config defines the Configurations supported by the Log Service.
@@ -72,6 +71,8 @@ type Config struct {
 	RaftAddress string `toml:"raft-address"`
 	// RaftListenAddress is the local listen address of the RaftAddress.
 	RaftListenAddress string `toml:"raft-listen-address"`
+	// LogDBBufferSize is the size of the logdb buffer in bytes.
+	LogDBBufferSize uint64 `toml:"logdb-buffer-size"`
 	// GossipAddress is the address used for accepting gossip communication.
 	GossipAddress string `toml:"gossip-address"`
 	// GossipListenAddress is the local listen address of the GossipAddress
@@ -230,6 +231,9 @@ func (c *Config) Validate() error {
 	if len(c.RaftAddress) == 0 && len(c.RaftListenAddress) != 0 {
 		return errors.Wrapf(ErrInvalidConfig, "RaftAddress not set")
 	}
+	if c.LogDBBufferSize == 0 {
+		return errors.Wrapf(ErrInvalidConfig, "LogDBBufferSize not set")
+	}
 	if len(c.GossipAddress) == 0 && len(c.GossipListenAddress) != 0 {
 		return errors.Wrapf(ErrInvalidConfig, "GossipAddress not set")
 	}
@@ -298,6 +302,9 @@ func (c *Config) Fill() {
 		c.RaftListenAddress = defaultRaftAddress
 	} else if len(c.RaftAddress) != 0 && len(c.RaftListenAddress) == 0 {
 		c.RaftListenAddress = c.RaftAddress
+	}
+	if c.LogDBBufferSize == 0 {
+		c.LogDBBufferSize = defaultLogDBBufferSize
 	}
 	if len(c.GossipAddress) == 0 {
 		c.GossipAddress = defaultGossipAddress
