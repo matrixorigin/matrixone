@@ -42,7 +42,8 @@ var (
 )
 
 const (
-	defaultHeartbeatInterval = time.Second
+	defaultGossipProbeInterval = 50 * time.Millisecond
+	defaultHeartbeatInterval   = time.Second
 )
 
 // Config defines the Configurations supported by the Log Service.
@@ -78,6 +79,8 @@ type Config struct {
 	// GossipSeedAddresses is list of seed addresses that are used for
 	// introducing the local node into the gossip network.
 	GossipSeedAddresses []string `toml:"gossip-seed-addresses"`
+	// GossipProbeInternval how often gossip nodes probe each other.
+	GossipProbeInterval toml.Duration `toml:"gossip-probe-interval"`
 	// HeartbeatInterval is the interval of how often log service node should be
 	// sending heartbeat message to the HAKeeper.
 	HeartbeatInterval toml.Duration `toml:"logservice-heartbeat-interval"`
@@ -242,6 +245,9 @@ func (c *Config) Validate() error {
 	if c.HAKeeperConfig.DNStoreTimeout.Duration == 0 {
 		return errors.Wrapf(ErrInvalidConfig, "DNStoreTimeout not set")
 	}
+	if c.GossipProbeInterval.Duration == 0 {
+		return errors.Wrapf(ErrInvalidConfig, "GossipProbeInterval not set")
+	}
 	// validate BootstrapConfig
 	if c.BootstrapConfig.BootstrapCluster {
 		if c.BootstrapConfig.NumOfLogShards == 0 {
@@ -317,7 +323,9 @@ func (c *Config) Fill() {
 	if c.HAKeeperCheckInterval.Duration == 0 {
 		c.HAKeeperCheckInterval.Duration = hakeeper.CheckDuration
 	}
-
+	if c.GossipProbeInterval.Duration == 0 {
+		c.GossipProbeInterval.Duration = defaultGossipProbeInterval
+	}
 }
 
 // HAKeeperClientConfig is the config for HAKeeper clients.

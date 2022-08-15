@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -120,7 +121,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef) error {
 	var primaryKeys []string
 	var indexs []string
-	colNameMap := make(map[string]plan.Type_TypeId)
+	colNameMap := make(map[string]int32)
 	for _, item := range defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
@@ -128,7 +129,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			if err != nil {
 				return err
 			}
-			if colType.Id == plan.Type_CHAR || colType.Id == plan.Type_VARCHAR {
+			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) {
 				if colType.GetWidth() > types.MaxStringSize {
 					return errors.New(errno.DataException, "width out of 1GB is unexpected for char/varchar type")
 				}
@@ -138,7 +139,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			var comment string
 			for _, attr := range def.Attributes {
 				if _, ok := attr.(*tree.AttributePrimaryKey); ok {
-					if colType.GetId() == plan.Type_BLOB {
+					if colType.GetId() == int32(types.T_blob) {
 						return errors.New(errno.InvalidColumnDefinition, "Type text don't support primary key")
 					}
 					pks = append(pks, def.Name.Parts[0])
@@ -242,7 +243,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 	// check index invalid on the type
 	// for example, the text type don't support index
 	for _, str := range indexs {
-		if colNameMap[str] == plan.Type_BLOB {
+		if colNameMap[str] == int32(types.T_blob) {
 			return errors.New(errno.InvalidColumnDefinition, "Type text don't support index")
 		}
 	}

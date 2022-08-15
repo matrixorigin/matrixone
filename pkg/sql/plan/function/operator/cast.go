@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -662,7 +661,7 @@ func CastTimestampAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeDatetimeSlice(vec.Data)
+	rs := types.DecodeDatetimeSlice(vec.Data)
 	rs = rs[:len(lvs)]
 	rs2 := make([]types.Date, len(lvs), cap(lvs))
 	if _, err := binary.TimestampToDatetime(lvs, rs); err != nil {
@@ -699,7 +698,7 @@ func CastTimestampAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.
 // 	if err != nil {
 // 		return nil, err
 // 	}
-// 	rs := encoding.DecodeDatetimeSlice(vec.Data)
+// 	rs := types.DecodeDatetimeSlice(vec.Data)
 // 	rs = rs[:len(lvs)]
 // 	rs2 := make([]types.Date, len(lvs))
 // 	if _, err := typecast.TimestampToDatetime(lvs, rs); err != nil {
@@ -791,7 +790,7 @@ func CastSameType[T constraints.Integer | constraints.Float](lv, rv *vector.Vect
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
+	rs := types.DecodeFixedSlice[T](vec.Data, rtl)
 	copy(rs, lvs)
 	nulls.Set(vec.Nsp, lv.Nsp)
 	vector.SetCol(vec, rs)
@@ -819,7 +818,7 @@ func CastSameType2[T types.Date | types.Datetime | types.Timestamp](lv, rv *vect
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
+	rs := types.DecodeFixedSlice[T](vec.Data, rtl)
 	copy(rs, lvs)
 	nulls.Set(vec.Nsp, lv.Nsp)
 	vector.SetCol(vec, rs)
@@ -857,7 +856,7 @@ func CastLeftToRight[T1, T2 constraints.Integer | constraints.Float](lv, rv *vec
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeFixedSlice[T2](vec.Data, rtl)
+	rs := types.DecodeFixedSlice[T2](vec.Data, rtl)
 	if _, err := binary.NumericToNumeric(lvs, rs); err != nil {
 		return nil, err
 	}
@@ -885,7 +884,7 @@ func CastFloatToInt[T1 constraints.Float, T2 constraints.Integer](lv, rv *vector
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeFixedSlice[T2](vec.Data, rtl)
+	rs := types.DecodeFixedSlice[T2](vec.Data, rtl)
 	if _, err := binary.FloatToIntWithoutError(lvs, rs); err != nil {
 		return nil, err
 	}
@@ -914,7 +913,7 @@ func CastFloat64ToInt64(lv, rv *vector.Vector, proc *process.Process) (*vector.V
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeInt64Slice(vec.Data)
+	rs := types.DecodeInt64Slice(vec.Data)
 	if _, err := binary.Float64ToInt64(lvs, rs); err != nil {
 		return nil, err
 	}
@@ -943,7 +942,7 @@ func CastUint64ToInt64(lv, rv *vector.Vector, proc *process.Process) (*vector.Ve
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeInt64Slice(vec.Data)
+	rs := types.DecodeInt64Slice(vec.Data)
 	if _, err := binary.Uint64ToInt64(lvs, rs); err != nil {
 		return nil, err
 	}
@@ -972,7 +971,7 @@ func CastInt64ToUint64(lv, rv *vector.Vector, proc *process.Process) (*vector.Ve
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeUint64Slice(vec.Data)
+	rs := types.DecodeUint64Slice(vec.Data)
 	if _, err := binary.Int64ToUint64(lvs, rs); err != nil {
 		return nil, err
 	}
@@ -997,7 +996,7 @@ func CastSpecials1Int[T constraints.Signed](lv, rv *vector.Vector, proc *process
 		if err != nil {
 			return nil, err
 		}
-		rs = encoding.DecodeFixedSlice[T](vec.Data, rtl)
+		rs = types.DecodeFixedSlice[T](vec.Data, rtl)
 	}
 	if _, err = binary.BytesToInt(col, rs); err != nil {
 		return nil, err
@@ -1022,7 +1021,7 @@ func CastSpecials1Uint[T constraints.Unsigned](lv, rv *vector.Vector, proc *proc
 		if err != nil {
 			return nil, err
 		}
-		rs = encoding.DecodeFixedSlice[T](vec.Data, rtl)
+		rs = types.DecodeFixedSlice[T](vec.Data, rtl)
 	}
 	if _, err = binary.BytesToUint(col, rs); err != nil {
 		return nil, err
@@ -1049,7 +1048,7 @@ func CastSpecials1Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 		if err != nil {
 			return nil, err
 		}
-		rs = encoding.DecodeFixedSlice[T](vec.Data, rtl)
+		rs = types.DecodeFixedSlice[T](vec.Data, rtl)
 	}
 	if _, err = binary.BytesToFloat(col, rs); err != nil {
 		return nil, err
@@ -1222,7 +1221,7 @@ func CastSpecialIntToDecimal[T constraints.Integer](
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeDecimal128Slice(vec.Data)
+	rs := types.DecodeDecimal128Slice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := i2d(lvs, rs); err != nil {
 		return nil, err
@@ -1254,7 +1253,7 @@ func CastSpecialIntToDecimal64[T constraints.Integer](
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeDecimal64Slice(vec.Data)
+	rs := types.DecodeDecimal64Slice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := i2d(lvs, rs); err != nil {
 		return nil, err
@@ -1301,7 +1300,7 @@ func CastFloatAsDecimal128[T constraints.Float](lv, rv *vector.Vector, proc *pro
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeDecimal128Slice(vec.Data)
+	rs := types.DecodeDecimal128Slice(vec.Data)
 	rs = rs[:len(vs)]
 	for i := 0; i < len(vs); i++ {
 		if nulls.Contains(lv.Nsp, uint64(i)) {
@@ -1336,7 +1335,7 @@ func CastFloatAsDecimal64[T constraints.Float](lv, rv *vector.Vector, proc *proc
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeDecimal64Slice(vec.Data)
+	rs := types.DecodeDecimal64Slice(vec.Data)
 	rs = rs[:len(vs)]
 	for i := 0; i < len(vs); i++ {
 		if nulls.Contains(lv.Nsp, uint64(i)) {
@@ -1371,7 +1370,7 @@ func CastVarcharAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Ve
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeDateSlice(vec.Data)
+	rs := types.DecodeDateSlice(vec.Data)
 	rs = rs[:len(vs.Lengths)]
 	for i := range vs.Lengths {
 		if nulls.Contains(lv.Nsp, uint64(i)) {
@@ -1411,7 +1410,7 @@ func CastVarcharAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vecto
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeDatetimeSlice(vec.Data)
+	rs := types.DecodeDatetimeSlice(vec.Data)
 	rs = rs[:len(vs.Lengths)]
 	for i := range vs.Lengths {
 		if nulls.Contains(lv.Nsp, uint64(i)) {
@@ -1451,7 +1450,7 @@ func CastVarcharAsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vect
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeTimestampSlice(allocVector.Data)
+	rs := types.DecodeTimestampSlice(allocVector.Data)
 	rs = rs[:len(vs.Lengths)]
 	for i := range vs.Lengths {
 		strBytes := vs.Get(int64(i))
@@ -1488,7 +1487,7 @@ func CastDecimal64AsDecimal128(lv, _ *vector.Vector, proc *process.Process) (*ve
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeDecimal128Slice(vec.Data)
+	rs := types.DecodeDecimal128Slice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.Decimal64ToDecimal128(lvs, rs); err != nil {
 		return nil, err
@@ -1516,7 +1515,7 @@ func CastDecimal64AsDecimal64(lv, _ *vector.Vector, proc *process.Process) (*vec
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeDecimal64Slice(vec.Data)
+	rs := types.DecodeDecimal64Slice(vec.Data)
 	rs = rs[:len(lvs)]
 	copy(rs, lvs)
 	nulls.Set(vec.Nsp, lv.Nsp)
@@ -1540,7 +1539,7 @@ func CastDecimal128AsDecimal128(lv, _ *vector.Vector, proc *process.Process) (*v
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeDecimal128Slice(vec.Data)
+	rs := types.DecodeDecimal128Slice(vec.Data)
 	rs = rs[:len(lvs)]
 	copy(rs, lvs)
 	nulls.Set(vec.Nsp, lv.Nsp)
@@ -1565,7 +1564,7 @@ func CastDecimal128ToDecimal128(lv, rv *vector.Vector, proc *process.Process) (*
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeDecimal128Slice(vec.Data)
+	rs := types.DecodeDecimal128Slice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.Decimal128ToDecimal128(lvs, rv.Typ.Scale, rs); err != nil {
 		return nil, err
@@ -1594,7 +1593,7 @@ func castTimeStampAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vec
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeDatetimeSlice(vec.Data)
+	rs := types.DecodeDatetimeSlice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.TimestampToDatetime(lvs, rs); err != nil {
 		return nil, err
@@ -1668,7 +1667,7 @@ func CastStringAsDecimal64(lv, rv *vector.Vector, proc *process.Process) (*vecto
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeDecimal64Slice(vec.Data)
+	rs := types.DecodeDecimal64Slice(vec.Data)
 	rs = rs[:len(vs.Lengths)]
 	for i := range vs.Lengths {
 		if nulls.Contains(lv.Nsp, uint64(i)) {
@@ -1751,7 +1750,7 @@ func CastDateAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vector.V
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeDatetimeSlice(vec.Data)
+	rs := types.DecodeDatetimeSlice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.DateToDatetime(lvs, rs); err != nil {
 		return nil, err
@@ -1783,7 +1782,7 @@ func CastStringAsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*vect
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeDecimal128Slice(vec.Data)
+	rs := types.DecodeDecimal128Slice(vec.Data)
 	rs = rs[:len(vs.Lengths)]
 	for i := range vs.Lengths {
 		if nulls.Contains(lv.Nsp, uint64(i)) {
@@ -1820,7 +1819,7 @@ func CastDatetimeAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vec
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeTimestampSlice(vec.Data)
+	rs := types.DecodeTimestampSlice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.DatetimeToTimestamp(lvs, rs); err != nil {
 		return nil, err
@@ -1849,7 +1848,7 @@ func CastDateAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vector.
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeTimestampSlice(vec.Data)
+	rs := types.DecodeTimestampSlice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.DateToTimestamp(lvs, rs); err != nil {
 		return nil, err
@@ -1902,7 +1901,7 @@ func CastDatetimeAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.V
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeDateSlice(vec.Data)
+	rs := types.DecodeDateSlice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.DateTimeToDate(lvs, rs); err != nil {
 		return nil, err
@@ -1932,7 +1931,7 @@ func CastIntAsTimestamp[T constraints.Signed](lv, rv *vector.Vector, proc *proce
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeTimestampSlice(vec.Data)
+	rs := types.DecodeTimestampSlice(vec.Data)
 	rs = rs[:len(lvs)]
 	for i := 0; i < len(lvs); i++ {
 		if lvs[i] < 0 || int64(lvs[i]) > 32536771199 {
@@ -1967,7 +1966,7 @@ func CastUIntAsTimestamp[T constraints.Unsigned](lv, rv *vector.Vector, proc *pr
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeTimestampSlice(vec.Data)
+	rs := types.DecodeTimestampSlice(vec.Data)
 	rs = rs[:len(lvs)]
 	for i := 0; i < len(lvs); i++ {
 		if lvs[i] < 0 || uint64(lvs[i]) > 32536771199 {
@@ -1999,7 +1998,7 @@ func CastDecimal64AsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*ve
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeTimestampSlice(vec.Data)
+	rs := types.DecodeTimestampSlice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.Decimal64ToTimestamp(lvs, lv.Typ.Precision, lv.Typ.Scale, rs); err != nil {
 		return nil, err
@@ -2026,7 +2025,7 @@ func CastDecimal128AsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*v
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeTimestampSlice(vec.Data)
+	rs := types.DecodeTimestampSlice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.Decimal128ToTimestamp(lvs, lv.Typ.Precision, lv.Typ.Scale, rs); err != nil {
 		return nil, err
@@ -2053,7 +2052,7 @@ func CastDecimal64ToFloat32(lv, rv *vector.Vector, proc *process.Process) (*vect
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeFloat32Slice(vec.Data)
+	rs := types.DecodeFloat32Slice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.Decimal64ToFloat32(lvs, lv.Typ.Scale, rs); err != nil {
 		return nil, err
@@ -2080,7 +2079,7 @@ func CastDecimal128ToFloat32(lv, rv *vector.Vector, proc *process.Process) (*vec
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeFloat32Slice(vec.Data)
+	rs := types.DecodeFloat32Slice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.Decimal128ToFloat32(lvs, lv.Typ.Scale, rs); err != nil {
 		return nil, err
@@ -2107,7 +2106,7 @@ func CastDecimal64ToFloat64(lv, rv *vector.Vector, proc *process.Process) (*vect
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeFloat64Slice(vec.Data)
+	rs := types.DecodeFloat64Slice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.Decimal64ToFloat64(lvs, lv.Typ.Scale, rs); err != nil {
 		return nil, err
@@ -2134,7 +2133,7 @@ func CastDecimal128ToFloat64(lv, rv *vector.Vector, proc *process.Process) (*vec
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeFloat64Slice(vec.Data)
+	rs := types.DecodeFloat64Slice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.Decimal128ToFloat64(lvs, lv.Typ.Scale, rs); err != nil {
 		return nil, err
@@ -2161,7 +2160,7 @@ func CastDecimal64ToUint64(lv, rv *vector.Vector, proc *process.Process) (*vecto
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeUint64Slice(vec.Data)
+	rs := types.DecodeUint64Slice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.Decimal64ToUint64(lvs, lv.Typ.Scale, rs); err != nil {
 		return nil, err
@@ -2188,7 +2187,7 @@ func CastDecimal128ToUint64(lv, rv *vector.Vector, proc *process.Process) (*vect
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeUint64Slice(vec.Data)
+	rs := types.DecodeUint64Slice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.Decimal128ToUint64(lvs, lv.Typ.Scale, rs); err != nil {
 		return nil, err
@@ -2219,7 +2218,7 @@ func CastDecimal128ToDecimal64(lv, rv *vector.Vector, proc *process.Process) (*v
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeDecimal64Slice(vec.Data)
+	rs := types.DecodeDecimal64Slice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.Decimal128ToDecimal64(lvs, lv.Typ.Scale, rv.Typ.Precision, rv.Typ.Scale, rs); err != nil {
 		return nil, err
@@ -2246,7 +2245,7 @@ func CastDecimal64ToInt64(lv, rv *vector.Vector, proc *process.Process) (*vector
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeInt64Slice(vec.Data)
+	rs := types.DecodeInt64Slice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.Decimal64ToInt64(lvs, lv.Typ.Scale, rs); err != nil {
 		return nil, err
@@ -2273,7 +2272,7 @@ func CastDecimal128ToInt64(lv, rv *vector.Vector, proc *process.Process) (*vecto
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeInt64Slice(vec.Data)
+	rs := types.DecodeInt64Slice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.Decimal128ToInt64(lvs, lv.Typ.Scale, rs); err != nil {
 		return nil, err
@@ -2300,7 +2299,7 @@ func CastDecimal128ToInt32(lv, rv *vector.Vector, proc *process.Process) (*vecto
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeInt32Slice(vec.Data)
+	rs := types.DecodeInt32Slice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.Decimal128ToInt32(lvs, lv.Typ.Scale, rs); err != nil {
 		return nil, err
@@ -2327,7 +2326,7 @@ func CastNumValToBool[T constraints.Integer | constraints.Float](lv, rv *vector.
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeBoolSlice(vec.Data)
+	rs := types.DecodeBoolSlice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.NumericToBool(lvs, rs); err != nil {
 		return nil, err
@@ -2347,7 +2346,7 @@ func CastStringToJson(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 		if err != nil {
 			return nil, err
 		}
-		val, err := encoding.EncodeJson(json)
+		val, err := types.EncodeJson(json)
 		if err != nil {
 			return nil, err
 		}
@@ -2376,7 +2375,7 @@ func CastStringToJson(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 		if err != nil {
 			return nil, err
 		}
-		val, err := encoding.EncodeJson(json)
+		val, err := types.EncodeJson(json)
 		if err != nil {
 			return nil, err
 		}
@@ -2416,7 +2415,7 @@ func CastStringToBool(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeBoolSlice(vec.Data)
+	rs := types.DecodeBoolSlice(vec.Data)
 	rs = rs[:len(vs.Lengths)]
 	for i := range vs.Lengths {
 		if nulls.Contains(lv.Nsp, uint64(i)) {

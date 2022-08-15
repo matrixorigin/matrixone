@@ -14,7 +14,7 @@
 
 package catalog
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 type EntryState int8
 
@@ -55,7 +55,7 @@ const (
 
 func EstimateColumnBlockSize(colIdx int, rows uint32, meta *BlockEntry) uint32 {
 	switch meta.GetSegment().GetTable().GetSchema().ColDefs[colIdx].Type.Oid {
-	case types.Type_JSON, types.Type_CHAR, types.Type_VARCHAR:
+	case types.T_json, types.T_char, types.T_varchar:
 		return rows * 2 * 4
 	default:
 		return rows * uint32(meta.GetSegment().GetTable().GetSchema().ColDefs[colIdx].Type.Size)
