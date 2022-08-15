@@ -15,6 +15,7 @@
 package trace
 
 import (
+	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"time"
@@ -87,7 +88,7 @@ const (
 )
 
 // InitSchemaByInnerExecutor just for standalone version, which can access db itself by io.InternalExecutor on any Node.
-func InitSchemaByInnerExecutor(ieFactory func() ie.InternalExecutor) {
+func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.InternalExecutor) {
 	// fixme: need errors.Recover()
 	exec := ieFactory()
 	if exec == nil {
@@ -95,7 +96,7 @@ func InitSchemaByInnerExecutor(ieFactory func() ie.InternalExecutor) {
 	}
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(statsDatabase).Internal(true).Finish())
 	mustExec := func(sql string) {
-		if err := exec.Exec(sql, ie.NewOptsBuilder().Finish()); err != nil {
+		if err := exec.Exec(ctx, sql, ie.NewOptsBuilder().Finish()); err != nil {
 			panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
 		}
 	}

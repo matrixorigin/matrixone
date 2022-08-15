@@ -249,6 +249,9 @@ func GetFunctionByName(name string, args []types.Type) (int64, types.Type, []typ
 		return -1, emptyType, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Operator '%s' with parameters %v will be implemented in future version.", name, ArgsToPrint))
 	case tooManyFunctionsMatched:
 		return -1, emptyType, nil, errors.New(errno.AmbiguousParameter, fmt.Sprintf("too many overloads matched for '%s%v'", name, args))
+	case wrongFuncParamForAgg:
+		ArgsToPrint := getOidSlice(finalTypes)
+		return -1, emptyType, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Aggregate function of '%s' do not support implicit conversions for param of %v", name, ArgsToPrint))
 	}
 
 	// make the real return type of function overload.

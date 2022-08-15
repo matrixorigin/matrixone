@@ -9,9 +9,9 @@ import (
 	reflect "reflect"
 	time "time"
 
+	goetty "github.com/fagongzi/goetty/v2"
 	buf "github.com/fagongzi/goetty/v2/buf"
 	gomock "github.com/golang/mock/gomock"
-	goetty "github.com/fagongzi/goetty/v2"
 )
 
 // MockIOSession is a mock of IOSession interface.

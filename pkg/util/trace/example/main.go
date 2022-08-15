@@ -31,11 +31,11 @@ var _ ie.InternalExecutor = &logOutputExecutor{}
 
 type logOutputExecutor struct{}
 
-func (l logOutputExecutor) Exec(s string, s2 ie.SessionOverrideOptions) error {
+func (l logOutputExecutor) Exec(ctx context.Context, s string, s2 ie.SessionOverrideOptions) error {
 	logutil.Info(s)
 	return nil
 }
-func (l logOutputExecutor) Query(s string, _ ie.SessionOverrideOptions) ie.InternalExecResult {
+func (l logOutputExecutor) Query(ctx context.Context, s string, _ ie.SessionOverrideOptions) ie.InternalExecResult {
 	logutil.Info(s)
 	return nil
 }
