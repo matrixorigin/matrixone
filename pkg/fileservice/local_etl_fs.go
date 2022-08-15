@@ -238,9 +238,11 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 			}
 			defer f.Close()
 
-			_, err = f.Seek(int64(entry.Offset), io.SeekStart)
-			if err != nil {
-				return err
+			if entry.Offset > 0 {
+				_, err = f.Seek(int64(entry.Offset), io.SeekStart)
+				if err != nil {
+					return err
+				}
 			}
 			r := (io.Reader)(f)
 			if entry.Size > 0 {

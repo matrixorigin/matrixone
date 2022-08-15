@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -46,7 +45,7 @@ func (t *Table) AddTableDef(ctx context.Context, def engine.TableDef) error {
 		ctx,
 		t.engine,
 		t.txnOperator.Write,
-		allNodes,
+		t.engine.allNodesShards,
 		OpAddTableDef,
 		AddTableDefReq{
 			TableID: t.id,
@@ -66,7 +65,7 @@ func (t *Table) DelTableDef(ctx context.Context, def engine.TableDef) error {
 		ctx,
 		t.engine,
 		t.txnOperator.Write,
-		allNodes,
+		t.engine.allNodesShards,
 		OpDelTableDef,
 		DelTableDefReq{
 			TableID: t.id,
@@ -99,7 +98,7 @@ func (t *Table) Delete(ctx context.Context, vec *vector.Vector, _ string) error 
 			ctx,
 			t.engine,
 			t.txnOperator.Write,
-			theseNodes(shard.Nodes),
+			thisShard(shard.Shard),
 			OpDelete,
 			DeleteReq{
 				TableID: t.id,
@@ -128,7 +127,7 @@ func (t *Table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error)
 		ctx,
 		t.engine,
 		t.txnOperator.Read,
-		firstNode,
+		t.engine.firstNodeShard,
 		OpGetPrimaryKeys,
 		GetPrimaryKeysReq{
 			TableID: t.id,
@@ -156,95 +155,13 @@ func (t *Table) Ranges(ctx context.Context) ([][]byte, error) {
 	return shards, nil
 }
 
-func (t *Table) NewReader(
-	ctx context.Context,
-	parallel int,
-	expr *plan.Expr,
-	shards [][]byte,
-) (
-	readers []engine.Reader,
-	err error,
-) {
-
-	clusterDetails, err := t.engine.getClusterDetails()
-	if err != nil {
-		return nil, err
-	}
-
-	readers = make([]engine.Reader, parallel)
-	nodes := clusterDetails.DNNodes
-
-	if len(shards) > 0 {
-		uuidSet := make(map[string]bool)
-		for _, shard := range shards {
-			uuidSet[string(shard)] = true
-		}
-		filteredNodes := nodes[:0]
-		for _, node := range nodes {
-			if uuidSet[node.UUID] {
-				filteredNodes = append(filteredNodes, node)
-			}
-		}
-		nodes = filteredNodes
-	}
-
-	resps, err := doTxnRequest[NewTableIterResp](
-		ctx,
-		t.engine,
-		t.txnOperator.Read,
-		theseNodes(nodes),
-		OpNewTableIter,
-		NewTableIterReq{
-			TableID: t.id,
-			Expr:    expr,
-			Shards:  shards,
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	iterIDSets := make([][]string, parallel)
-	i := 0
-	for _, resp := range resps {
-		if resp.IterID != "" {
-			iterIDSets[i] = append(iterIDSets[i], resp.IterID)
-			i++
-			if i >= parallel {
-				// round
-				i = 0
-			}
-		}
-	}
-
-	for i, idSet := range iterIDSets {
-		if len(idSet) == 0 {
-			continue
-		}
-		reader := &TableReader{
-			engine:      t.engine,
-			txnOperator: t.txnOperator,
-			ctx:         ctx,
-		}
-		for _, iterID := range idSet {
-			reader.iterInfos = append(reader.iterInfos, IterInfo{
-				Node:   nodes[i],
-				IterID: iterID,
-			})
-		}
-		readers[i] = reader
-	}
-
-	return
-}
-
 func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 
 	resps, err := doTxnRequest[GetTableDefsResp](
 		ctx,
 		t.engine,
 		t.txnOperator.Read,
-		firstNode,
+		t.engine.firstNodeShard,
 		OpGetTableDefs,
 		GetTableDefsReq{
 			TableID: t.id,
@@ -265,7 +182,7 @@ func (t *Table) Truncate(ctx context.Context) (uint64, error) {
 		ctx,
 		t.engine,
 		t.txnOperator.Write,
-		allNodes,
+		t.engine.allNodesShards,
 		OpTruncate,
 		TruncateReq{
 			TableID: t.id,
@@ -303,7 +220,7 @@ func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 			ctx,
 			t.engine,
 			t.txnOperator.Write,
-			theseNodes(shard.Nodes),
+			thisShard(shard.Shard),
 			OpUpdate,
 			UpdateReq{
 				TableID: t.id,
@@ -338,7 +255,7 @@ func (t *Table) Write(ctx context.Context, data *batch.Batch) error {
 			ctx,
 			t.engine,
 			t.txnOperator.Write,
-			theseNodes(shard.Nodes),
+			thisShard(shard.Shard),
 			OpWrite,
 			WriteReq{
 				TableID: t.id,

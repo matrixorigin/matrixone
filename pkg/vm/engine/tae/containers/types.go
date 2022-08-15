@@ -20,10 +20,10 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type MemAllocator = stl.MemAllocator

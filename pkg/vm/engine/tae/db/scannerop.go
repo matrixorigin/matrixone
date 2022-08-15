@@ -15,7 +15,7 @@
 package db
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"

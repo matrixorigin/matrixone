@@ -47,12 +47,13 @@ func New(
 var _ engine.Engine = new(Engine)
 
 func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.TxnOperator) error {
+	txnOperator = ToOperator(txnOperator) //TODO remove this
 
 	_, err := doTxnRequest[CreateDatabaseResp](
 		ctx,
 		e,
 		txnOperator.Write,
-		allNodes,
+		e.allNodesShards,
 		OpCreateDatabase,
 		CreateDatabaseReq{
 			Name: dbName,
@@ -66,12 +67,13 @@ func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.T
 }
 
 func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client.TxnOperator) (engine.Database, error) {
+	txnOperator = ToOperator(txnOperator) //TODO remove this
 
 	resps, err := doTxnRequest[OpenDatabaseResp](
 		ctx,
 		e,
 		txnOperator.Read,
-		firstNode,
+		e.firstNodeShard,
 		OpOpenDatabase,
 		OpenDatabaseReq{
 			Name: dbName,
@@ -93,12 +95,13 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 }
 
 func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) ([]string, error) {
+	txnOperator = ToOperator(txnOperator) //TODO remove this
 
 	resps, err := doTxnRequest[GetDatabasesResp](
 		ctx,
 		e,
 		txnOperator.Read,
-		firstNode,
+		e.firstNodeShard,
 		OpGetDatabases,
 		GetDatabasesReq{},
 	)
@@ -115,12 +118,13 @@ func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) 
 }
 
 func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.TxnOperator) error {
+	txnOperator = ToOperator(txnOperator) //TODO remove this
 
 	_, err := doTxnRequest[DeleteDatabaseResp](
 		ctx,
 		e,
 		txnOperator.Write,
-		allNodes,
+		e.allNodesShards,
 		OpDeleteDatabase,
 		DeleteDatabaseReq{
 			Name: dbName,

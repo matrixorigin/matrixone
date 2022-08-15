@@ -17,14 +17,11 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-
-	"github.com/fagongzi/goetty/buf"
+	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,6 +30,8 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -63,7 +62,7 @@ func Test_mce(t *testing.T) {
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		use_t := mock_frontend.NewMockComputationWrapper(ctrl)
 		stmts, err := parsers.Parse(dialect.MYSQL, "use T")
@@ -292,7 +291,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		eng.EXPECT().StartTxn(nil).Return(txn, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
 		if err != nil {
@@ -337,7 +336,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
 		if err != nil {
@@ -439,7 +438,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
 		if err != nil {
@@ -703,7 +702,7 @@ func Test_handleSelectVariables(t *testing.T) {
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
 		if err != nil {
@@ -741,7 +740,7 @@ func Test_handleShowVariables(t *testing.T) {
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
 		if err != nil {
@@ -788,7 +787,7 @@ func Test_handleShowCreateTable(t *testing.T) {
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
@@ -823,7 +822,7 @@ func Test_handleShowCreateDatabase(t *testing.T) {
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
@@ -854,7 +853,7 @@ func Test_handleShowColumns(t *testing.T) {
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
@@ -891,7 +890,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
 		if err != nil {
@@ -983,7 +982,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
 		if err != nil {

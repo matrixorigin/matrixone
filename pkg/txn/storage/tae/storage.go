@@ -15,6 +15,8 @@
 package taestorage
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -52,46 +54,46 @@ func New(
 var _ storage.TxnStorage = new(Storage)
 
 // Close implements storage.TxnStorage
-func (*Storage) Close() error {
+func (*Storage) Close(ctx context.Context) error {
 	panic("unimplemented")
 }
 
 // Commit implements storage.TxnStorage
-func (*Storage) Commit(txnMeta txn.TxnMeta) error {
+func (*Storage) Commit(ctx context.Context, txnMeta txn.TxnMeta) error {
 	panic("unimplemented")
 }
 
 // Committing implements storage.TxnStorage
-func (*Storage) Committing(txnMeta txn.TxnMeta) error {
+func (*Storage) Committing(ctx context.Context, txnMeta txn.TxnMeta) error {
 	panic("unimplemented")
 }
 
 // Destroy implements storage.TxnStorage
-func (*Storage) Destroy() error {
+func (*Storage) Destroy(ctx context.Context) error {
 	panic("unimplemented")
 }
 
 // Prepare implements storage.TxnStorage
-func (*Storage) Prepare(txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
+func (*Storage) Prepare(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
 	panic("unimplemented")
 }
 
 // Read implements storage.TxnStorage
-func (*Storage) Read(txnMeta txn.TxnMeta, op uint32, payload []byte) (storage.ReadResult, error) {
+func (*Storage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) (storage.ReadResult, error) {
 	panic("unimplemented")
 }
 
 // Rollback implements storage.TxnStorage
-func (*Storage) Rollback(txnMeta txn.TxnMeta) error {
+func (*Storage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error {
 	panic("unimplemented")
 }
 
 // StartRecovery implements storage.TxnStorage
-func (*Storage) StartRecovery(chan txn.TxnMeta) {
+func (*Storage) StartRecovery(context.Context, chan txn.TxnMeta) {
 	panic("unimplemented")
 }
 
 // Write implements storage.TxnStorage
-func (*Storage) Write(txnMeta txn.TxnMeta, op uint32, payload []byte) ([]byte, error) {
+func (*Storage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) ([]byte, error) {
 	panic("unimplemented")
 }

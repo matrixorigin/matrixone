@@ -9,18 +9,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: size-label
-        uses: "pascalgn/size-label-action@v0.4.2"
-        env:
-          GITHUB_TOKEN: "${{ secrets.TOKEN_ACTION }}"
-          IGNORED: "docs/**\n**/*.pb.go"
+        uses: "guguducken/label-size-action@v0.0.1"
         with:
+          size_token: ${{ secrets.TOKEN_ACTION }}
+          ignore: ".txt,.md"
           sizes: >
             {
-              "0": "xs",
-              "10": "s",
-              "100": "m",
-              "500": "l",
-              "1000": "xl",
-              "2000": "xxl"
+              "XS":0,
+              "S":10,
+              "M":100,
+              "L":500,
+              "XL":1000,
+              "XXL":2000
             }
             
