@@ -85,28 +85,42 @@ func (ctx *TxnCtx) GetCommitTS() types.TS {
 	return ctx.CommitTS
 }
 
-func (ctx *TxnCtx) GetTxnState(waitIfcommitting bool) txnif.TxnState {
+// Atomically returns the current txn state
+func (ctx *TxnCtx) getTxnState() txnif.TxnState {
 	ctx.RLock()
-	state := ctx.State
-	if !waitIfcommitting {
-		ctx.RUnlock()
-		return state
-	}
-	if state != txnif.TxnStateCommitting {
-		ctx.RUnlock()
-		return state
-	}
-	ctx.RUnlock()
+	defer ctx.RUnlock()
+	return ctx.State
+}
+
+// Wait txn state to be rollbacked or committed
+func (ctx *TxnCtx) resolveTxnState() txnif.TxnState {
 	ctx.DoneCond.L.Lock()
-	state = ctx.State
+	defer ctx.DoneCond.L.Unlock()
+	state := ctx.State
 	if state != txnif.TxnStateCommitting {
-		ctx.DoneCond.L.Unlock()
 		return state
 	}
 	ctx.DoneCond.Wait()
-	state = ctx.State
-	ctx.DoneCond.L.Unlock()
-	return state
+	return ctx.State
+}
+
+// False when atomically get the current txn state
+//
+// True when the txn state is committing, wait it to be committed or rollbacked. It
+// is used during snapshot reads. If TxnStateActive is currently returned, this value will
+// definitely not be used, because even if it becomes TxnStateCommitting later, the timestamp
+// would be larger than the current read timestamp.
+func (ctx *TxnCtx) GetTxnState(waitIfcommitting bool) (state txnif.TxnState) {
+	// Quick get the current txn state
+	// If waitIfcommitting is false, return the state
+	// If state is not txnif.TxnStateCommitting, return the state
+	if state = ctx.getTxnState(); !waitIfcommitting || state != txnif.TxnStateCommitting {
+		return state
+	}
+
+	// Wait the committing txn to be committed or rollbacked
+	state = ctx.resolveTxnState()
+	return
 }
 
 func (ctx *TxnCtx) IsVisible(o txnif.TxnReader) bool {
