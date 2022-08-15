@@ -857,6 +857,11 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	}
 
+	if function.GetFunctionAppendHideArgByID(funcID) {
+		// Append a hidden parameter to the function. The default value is constant null
+		args = append(args, makePlan2NullConstExprWithType())
+	}
+
 	// return new expr
 	return &Expr{
 		Expr: &plan.Expr_F{

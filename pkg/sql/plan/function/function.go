@@ -115,6 +115,9 @@ type Function struct {
 	// Volatile function cannot be fold
 	Volatile bool
 
+	// whether the function needs to append a hidden parameter, such as 'uuid'
+	AppendHideArg bool
+
 	Flag plan.Function_FuncFlag
 
 	// Layout adapt to plan/function.go, used for `explain SQL`.
@@ -200,6 +203,15 @@ func GetFunctionIsAggregateByName(name string) bool {
 	}
 	fs := functionRegister[fid].Overloads
 	return len(fs) > 0 && fs[0].IsAggregate()
+}
+
+// Check whether the function needs to append a hidden parameter
+func GetFunctionAppendHideArgByID(overloadID int64) bool {
+	function, err := GetFunctionByID(overloadID)
+	if err != nil {
+		return false
+	}
+	return function.AppendHideArg
 }
 
 // GetFunctionByName check a function exist or not according to input function name and arg types,
