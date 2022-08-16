@@ -26,7 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "use secondary role none",
+		input: "select * from tables",
 	}
 )
 
@@ -51,6 +51,8 @@ var (
 		input  string
 		output string
 	}{{
+		input: "select * from tables",
+	}, {
 		input: "update t1 set a = default",
 	}, {
 		input:  "explain select * from emp",

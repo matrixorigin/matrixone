@@ -151,7 +151,7 @@ CREATE TABLE t1(a varchar(255), b INT, c INT UNSIGNED, d DECIMAL(12,2), e REAL);
 INSERT INTO t1 VALUES('iynfj', 1, 1, 1, 1);
 INSERT INTO t1 VALUES('innfj', 2, 2, 2, 2);
 SELECT DISTINCT SUM(  a ) FROM t1 GROUP BY a HAVING a IN ( AVG( 1 ), 1 + a);
-SUM(  a )
+Aggregate function of 'sum' do not support implicit conversions for param of [VARCHAR]
 SELECT DISTINCT SUM(  b ) FROM t1 GROUP BY b HAVING b IN ( AVG( 1 ), 1 + b);
 SUM(  b )
 1

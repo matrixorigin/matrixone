@@ -113,11 +113,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 					Size:      col.Typ.Size,
 					Scale:     col.Typ.Scale,
 				},
-				Default: &plan.Default{
-					NullAbility:  col.Default.NullAbility,
-					Expr:         DeepCopyExpr(col.Default.Expr),
-					OriginString: col.Default.String(),
-				},
+				Default: DeepCopyDefault(col.Default),
 				Primary: col.Primary,
 				Pkidx:   col.Pkidx,
 			}
@@ -189,6 +185,17 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 	return newNode
 }
 
+func DeepCopyDefault(def *plan.Default) *plan.Default {
+	if def == nil {
+		return nil
+	}
+	return &plan.Default{
+		NullAbility:  def.NullAbility,
+		Expr:         DeepCopyExpr(def.Expr),
+		OriginString: def.OriginString,
+	}
+}
+
 func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 	newTable := &plan.TableDef{
 		Name: table.Name,
@@ -207,11 +214,7 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 				Size:      col.Typ.Size,
 				Scale:     col.Typ.Scale,
 			},
-			Default: &plan.Default{
-				NullAbility:  col.Default.NullAbility,
-				Expr:         DeepCopyExpr(col.Default.Expr),
-				OriginString: col.Default.OriginString,
-			},
+			Default: DeepCopyDefault(col.Default),
 			Primary: col.Primary,
 			Pkidx:   col.Pkidx,
 		}

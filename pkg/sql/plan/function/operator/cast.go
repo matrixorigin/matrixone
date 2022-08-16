@@ -87,7 +87,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		return proc.AllocScalarNullVector(rv.Typ), nil
 	}
 
-	if lv.Typ.Oid == rv.Typ.Oid && isNumeric(lv.Typ.Oid) {
+	if lv.Typ.Oid == rv.Typ.Oid && IsNumeric(lv.Typ.Oid) {
 		switch lv.Typ.Oid {
 		case types.T_int8:
 			return CastSameType[int8](lv, rv, proc)
@@ -123,7 +123,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		}
 	}
 
-	if lv.Typ.Oid != rv.Typ.Oid && isNumeric(lv.Typ.Oid) && isNumeric(rv.Typ.Oid) {
+	if lv.Typ.Oid != rv.Typ.Oid && IsNumeric(lv.Typ.Oid) && IsNumeric(rv.Typ.Oid) {
 		switch lv.Typ.Oid {
 		case types.T_int8:
 			switch rv.Typ.Oid {
@@ -338,7 +338,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		}
 	}
 
-	if isString(lv.Typ.Oid) && isInteger(rv.Typ.Oid) {
+	if isString(lv.Typ.Oid) && IsInteger(rv.Typ.Oid) {
 		switch rv.Typ.Oid {
 		case types.T_int8:
 			return CastSpecials1Int[int8](lv, rv, proc)
@@ -359,7 +359,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		}
 	}
 
-	if isString(lv.Typ.Oid) && isFloat(rv.Typ.Oid) {
+	if isString(lv.Typ.Oid) && IsFloat(rv.Typ.Oid) {
 		switch rv.Typ.Oid {
 		case types.T_float32:
 			return CastSpecials1Float[float32](lv, rv, proc)
@@ -377,7 +377,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		}
 	}
 
-	if isInteger(lv.Typ.Oid) && isString(rv.Typ.Oid) {
+	if IsInteger(lv.Typ.Oid) && isString(rv.Typ.Oid) {
 		switch lv.Typ.Oid {
 		case types.T_int8:
 			return CastSpecials2Int[int8](lv, rv, proc)
@@ -398,7 +398,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		}
 	}
 
-	if isFloat(lv.Typ.Oid) && isString(rv.Typ.Oid) {
+	if IsFloat(lv.Typ.Oid) && isString(rv.Typ.Oid) {
 		switch lv.Typ.Oid {
 		case types.T_float32:
 			return CastSpecials2Float[float32](lv, rv, proc)
@@ -459,7 +459,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		}
 	}
 
-	if isFloat(lv.Typ.Oid) && rv.Typ.Oid == types.T_decimal128 {
+	if IsFloat(lv.Typ.Oid) && rv.Typ.Oid == types.T_decimal128 {
 		switch lv.Typ.Oid {
 		case types.T_float32:
 			return CastFloatAsDecimal128[float32](lv, rv, proc)
@@ -468,7 +468,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		}
 	}
 
-	if isFloat(lv.Typ.Oid) && rv.Typ.Oid == types.T_decimal64 {
+	if IsFloat(lv.Typ.Oid) && rv.Typ.Oid == types.T_decimal64 {
 		switch lv.Typ.Oid {
 		case types.T_float32:
 			return CastFloatAsDecimal64[float32](lv, rv, proc)
@@ -537,7 +537,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		return CastDatetimeAsString(lv, rv, proc)
 	}
 
-	if isInteger(lv.Typ.Oid) && rv.Typ.Oid == types.T_timestamp {
+	if IsInteger(lv.Typ.Oid) && rv.Typ.Oid == types.T_timestamp {
 		switch lv.Typ.Oid {
 		case types.T_int8:
 			return CastIntAsTimestamp[int8](lv, rv, proc)
@@ -606,7 +606,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 	// 	return CastTimestampAsTime(lv, rv, proc)
 	// }
 
-	if isNumeric(lv.Typ.Oid) && rv.Typ.Oid == types.T_bool {
+	if IsNumeric(lv.Typ.Oid) && rv.Typ.Oid == types.T_bool {
 		switch lv.Typ.Oid {
 		case types.T_int8:
 			return CastNumValToBool[int8](lv, rv, proc)
@@ -2432,8 +2432,8 @@ func CastStringToBool(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 	return vec, nil
 }
 
-// isInteger return true if the types.T is integer type
-func isInteger(t types.T) bool {
+// IsInteger return true if the types.T is integer type
+func IsInteger(t types.T) bool {
 	if t == types.T_int8 || t == types.T_int16 || t == types.T_int32 || t == types.T_int64 ||
 		t == types.T_uint8 || t == types.T_uint16 || t == types.T_uint32 || t == types.T_uint64 {
 		return true
@@ -2457,17 +2457,17 @@ func isUnsignedInteger(t types.T) bool {
 	return false
 }
 
-// isFloat: return true if the types.T is floating Point Types
-func isFloat(t types.T) bool {
+// IsFloat: return true if the types.T is floating Point Types
+func IsFloat(t types.T) bool {
 	if t == types.T_float32 || t == types.T_float64 {
 		return true
 	}
 	return false
 }
 
-// isNumeric: return true if the types.T is numbric type
-func isNumeric(t types.T) bool {
-	if isInteger(t) || isFloat(t) {
+// IsNumeric: return true if the types.T is numbric type
+func IsNumeric(t types.T) bool {
+	if IsInteger(t) || IsFloat(t) {
 		return true
 	}
 	return false
