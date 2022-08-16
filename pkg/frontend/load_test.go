@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/simdcsv"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
@@ -434,14 +433,6 @@ func Test_load(t *testing.T) {
 			}
 		}
 	})
-}
-
-func getParsedLinesChan(simdCsvGetParsedLinesChan chan simdcsv.LineOut) {
-	var str = [][]string{{"123"}, {"456"}, {"789"}, {"78910"}}
-	for i := 0; i < len(str); i++ {
-		simdCsvGetParsedLinesChan <- simdcsv.LineOut{Lines: nil, Line: str[i]}
-	}
-	simdCsvGetParsedLinesChan <- simdcsv.LineOut{Lines: nil, Line: nil}
 }
 
 func Test_rowToColumnAndSaveToStorage(t *testing.T) {
