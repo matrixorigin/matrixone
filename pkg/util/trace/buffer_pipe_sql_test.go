@@ -1096,7 +1096,7 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 				wg.Done()
 			}()
 			<-startedC
-			got := t.NewItemBatchHandler()
+			got := t.NewItemBatchHandler(context.TODO())
 			got(tt.args.batch)
 			close(tt.fields.ch)
 			wg.Wait()

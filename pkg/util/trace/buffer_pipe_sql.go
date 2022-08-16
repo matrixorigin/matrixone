@@ -16,6 +16,7 @@ package trace
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -86,7 +87,7 @@ func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 }
 
 // NewItemBatchHandler implement batchpipe.PipeImpl
-func (t batchSqlHandler) NewItemBatchHandler() func(batch any) {
+func (t batchSqlHandler) NewItemBatchHandler(ctx context.Context) func(batch any) {
 	var f = func(b any) {}
 	if gTracerProvider.sqlExecutor == nil {
 		// fixme: handle error situation, should panic
@@ -109,7 +110,7 @@ func (t batchSqlHandler) NewItemBatchHandler() func(batch any) {
 			logutil.Warnf("meet empty sql")
 			return
 		}
-		if err := exec.Exec(batch, ie.NewOptsBuilder().Finish()); err != nil {
+		if err := exec.Exec(ctx, batch, ie.NewOptsBuilder().Finish()); err != nil {
 			// fixme: error -> log -> exec.Exec -> ... cycle
 			// fixme: handle error situation re-try
 			logutil.Error(fmt.Sprintf("[Trace] faield to insert. sql: %s", batch), NoReportFiled())

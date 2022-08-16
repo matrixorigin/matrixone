@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/binary"
 	"errors"
@@ -53,7 +54,7 @@ func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
 	pro := NewMysqlClientProtocol(nextConnectionID(), rs, 1024, tRM.pu.SV)
 	pro.SetSkipCheckUser(true)
 	exe := NewMysqlCmdExecutor()
-	routine := NewRoutine(pro, exe, tRM.pu)
+	routine := NewRoutine(context.TODO(), pro, exe, tRM.pu)
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
@@ -271,8 +272,8 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
 	config.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
-
-	rm := NewRoutineManager(pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm := NewRoutineManager(ctx, pu)
 	rm.SetSkipCheckUser(true)
 
 	wg := sync.WaitGroup{}
