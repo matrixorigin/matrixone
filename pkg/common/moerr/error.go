@@ -65,6 +65,7 @@ const (
 
 	// Group 6: sql error, can usually correspond one-to-one to MysqlError, val in [6000, 6999]
 	ErrNoDatabaseSelected = 6000 + iota
+	ErrBadTable
 
 	// Group 10: txn
 	// ErrTxnAborted read and write a transaction that has been rolled back.
@@ -124,6 +125,7 @@ var errorMsgRefer = map[int32]moErrorMsgItem{
 
 	// Group 1: sql error
 	ErrNoDatabaseSelected: {26000, 1046, "No database selected"},
+	ErrBadTable:           {26001, 1051, "Unknown table '%-.129s.%-.129s'"},
 
 	// Group 10: txn
 	ErrTxnClosed:          {30000, 0, "the transaction has been committed or aborted"},
