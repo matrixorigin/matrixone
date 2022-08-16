@@ -322,6 +322,13 @@ var builtins = map[int]Functions{
 				Index:     0,
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_uint64, Fn: unary.LengthUTF8,
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_uint64, Fn: unary.LengthUTF8,
 			},
