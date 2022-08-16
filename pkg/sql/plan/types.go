@@ -233,12 +233,17 @@ type LimitBinder struct {
 	baseBinder
 }
 
+type PartitionBinder struct {
+	baseBinder
+}
+
 var _ Binder = (*TableBinder)(nil)
 var _ Binder = (*WhereBinder)(nil)
 var _ Binder = (*GroupBinder)(nil)
 var _ Binder = (*HavingBinder)(nil)
 var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
+var _ Binder = (*PartitionBinder)(nil)
 
 const (
 	NotFound      int32 = math.MaxInt32

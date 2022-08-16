@@ -17,7 +17,6 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -93,6 +92,9 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 }
 
 func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error) {
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	bindContext := NewBindContext(builder, nil)
+
 	createTable := &plan.CreateTable{
 		IfNotExists: stmt.IfNotExists,
 		Temporary:   stmt.Temporary,
@@ -168,9 +170,24 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		}
 	}
 
-	// set partition(unsupport now)
+	// After handleTableOptions, so begin the partitions processing depend on TableDef
 	if stmt.PartitionOption != nil {
-		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("partition unsupport now; statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+		nodeID := builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_TABLE_SCAN,
+			Cost:        nil,
+			ObjRef:      nil,
+			TableDef:    createTable.TableDef,
+			BindingTags: []int32{builder.genNewTag()},
+		}, bindContext)
+
+		err = builder.addBinding(nodeID, tree.AliasClause{}, bindContext)
+		partitionBinder := NewPartitionBinder(builder, bindContext)
+		err = buildPartitionByClause(partitionBinder, stmt.PartitionOption, createTable.TableDef)
+		if err != nil {
+			return nil, err
+		}
+
+		//return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("partition unsupport now; statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 	}
 
 	return &Plan{
@@ -183,6 +200,46 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			},
 		},
 	}, nil
+}
+
+//  buildPartitionByClause build partition by clause info and semantic check.
+func buildPartitionByClause(partitionBinder *PartitionBinder, partitionOption *tree.PartitionOption, tableDef *TableDef) error {
+	switch partitionOption.PartBy.PType.(type) {
+	case *tree.HashType:
+		err := buildHashPartition(partitionBinder, partitionOption, tableDef)
+		if err != nil {
+			return err
+		}
+	case *tree.KeyType:
+		err := buildKeyPartition(partitionBinder, partitionOption, tableDef)
+		if err != nil {
+			return err
+		}
+	case *tree.RangeType:
+		err := buildRangePartition(partitionBinder, partitionOption, tableDef)
+		if err != nil {
+			return err
+		}
+	case *tree.ListType:
+		err := buildListPartitiion(partitionBinder, partitionOption, tableDef)
+		if err != nil {
+			return err
+		}
+	}
+
+	partitionNum := partitionOption.PartBy.Num
+	if partitionOption.Partitions != nil {
+		for i, partition := range partitionOption.Partitions {
+			fmt.Println(i, partition)
+		}
+	}
+	fmt.Println(partitionNum)
+
+	if partitionOption.SubPartBy != nil {
+
+	}
+
+	return nil
 }
 
 func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef) error {

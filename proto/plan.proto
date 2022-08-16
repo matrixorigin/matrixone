@@ -218,6 +218,36 @@ message PropertiesDef {
 	repeated Property properties 	= 1;
 }
 
+message PartitionDef {
+	enum PartitionType {
+		INVAILD = 0;
+		RANGE = 1;
+		RANGE_COLUMNS = 2;
+		LIST = 3;
+		LIST_COLUMNS = 4;
+		HASH = 5;
+		LINEAR_HASH = 6;
+		KEY = 7;
+		LINEAR_KEY = 8;
+	}
+	PartitionType typ = 1;
+	string partitionExpr = 2;
+	repeated string partitionColumns = 3;
+	uint64 partitionNum = 4;
+	repeated PartitionItem partitions = 5;
+	bool isSubPartition = 6;
+}
+
+message PartitionItem {
+	string partitionName = 1;
+	uint32 ordinalPosition = 2;
+	string description = 3;
+	string comment = 4;
+	string partitionExpression = 5;
+	int64 algorithm = 6;
+	PartitionDef subPartition = 7;
+}
+
 message ViewDef {
 	string view  = 1;
 }
@@ -229,6 +259,7 @@ message TableDef {
 			IndexDef idx				= 2;
 			PropertiesDef properties	= 3;
 			ViewDef view				= 4;
+			PartitionDef partition				= 5;
 		}
 	}
 	string name				= 1;
