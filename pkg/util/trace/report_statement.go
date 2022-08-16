@@ -80,5 +80,8 @@ type StatementOption interface {
 type StatementOptionFunc func(*StatementInfo)
 
 func ReportStatement(ctx context.Context, s *StatementInfo) error {
+	if !gTracerProvider.IsEnable() {
+		return nil
+	}
 	return export.GetGlobalBatchProcessor().Collect(ctx, s)
 }

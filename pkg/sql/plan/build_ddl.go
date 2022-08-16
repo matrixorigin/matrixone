@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,6 +25,72 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
+	viewName := stmt.Name.ObjectName
+	createTable := &plan.CreateTable{
+		IfNotExists: stmt.IfNotExists,
+		Temporary:   stmt.Temporary,
+		TableDef: &TableDef{
+			Name: string(viewName),
+		},
+	}
+
+	// get database name
+	if len(stmt.Name.SchemaName) == 0 {
+		createTable.Database = ""
+	} else {
+		createTable.Database = string(stmt.Name.SchemaName)
+	}
+
+	// check view statement
+	stmtPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.AsSource)
+	if err != nil {
+		return nil, err
+	}
+
+	query := stmtPlan.GetQuery()
+	cols := make([]*plan.ColDef, len(query.Headings))
+	for idx, expr := range query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList {
+		cols[idx] = &plan.ColDef{
+			Name: query.Headings[idx],
+			Alg:  plan.CompressType_Lz4,
+			Typ:  expr.Typ,
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+	}
+	createTable.TableDef.Cols = cols
+
+	viewData, err := json.Marshal(ViewData{
+		Stmt:            ctx.GetRootSql(),
+		DefaultDatabase: ctx.DefaultDatabase(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_View{
+			View: &plan.ViewDef{
+				View: string(viewData),
+			},
+		},
+	})
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_CREATE_TABLE,
+				Definition: &plan.DataDefinition_CreateTable{
+					CreateTable: createTable,
+				},
+			},
+		},
+	}, nil
+}
 
 func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error) {
 	createTable := &plan.CreateTable{
@@ -262,6 +329,67 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		dropTable.Database = ctx.DefaultDatabase()
 	}
 	dropTable.Table = string(stmt.Names[0].ObjectName)
+
+	_, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
+	if tableDef == nil {
+		if !dropTable.IfExists {
+			return nil, errors.New("", fmt.Sprintf("table %s is not exists", dropTable.Table))
+		}
+	} else {
+		isView := false
+		for _, def := range tableDef.Defs {
+			if _, ok := def.Def.(*plan.TableDef_DefType_View); ok {
+				isView = true
+				break
+			}
+		}
+		if isView {
+			return nil, errors.New("", fmt.Sprintf("table %s is not exists", dropTable.Table))
+		}
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_DROP_TABLE,
+				Definition: &plan.DataDefinition_DropTable{
+					DropTable: dropTable,
+				},
+			},
+		},
+	}, nil
+}
+
+func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
+	dropTable := &plan.DropTable{
+		IfExists: stmt.IfExists,
+	}
+	if len(stmt.Names) != 1 {
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "support drop one view now")
+	}
+	dropTable.Database = string(stmt.Names[0].SchemaName)
+	if dropTable.Database == "" {
+		dropTable.Database = ctx.DefaultDatabase()
+	}
+	dropTable.Table = string(stmt.Names[0].ObjectName)
+
+	_, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
+	if tableDef == nil {
+		if !dropTable.IfExists {
+			return nil, errors.New("", fmt.Sprintf("view %s is not exists", dropTable.Table))
+		}
+	} else {
+		isView := false
+		for _, def := range tableDef.Defs {
+			if _, ok := def.Def.(*plan.TableDef_DefType_View); ok {
+				isView = true
+				break
+			}
+		}
+		if !isView {
+			return nil, errors.New("", fmt.Sprintf("%s is not a view", dropTable.Table))
+		}
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{

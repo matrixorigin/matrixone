@@ -15,37 +15,12 @@
 package trace
 
 import (
+	"sync"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/util"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
-
-/*
-import (
-	"sync/atomic"
-)
-
-var (
-	gTracer = defaultTracerValue()
-)
-
-type tracerProviderHolder struct {
-	tp TracerProvider
-}
-
-func defaultTracerValue() *atomic.Value {
-	v := &atomic.Value{}
-	v.Store(tracerProviderHolder{tp: &MOTracerProvider{}})
-	return v
-}
-
-func GetTracerProvider() TracerProvider {
-	return gTracer.Load().(tracerProviderHolder).tp
-}
-
-func SetTracerProvider(tp TracerProvider) {
-	gTracer.Store(tracerProviderHolder{tp: tp})
-}
-*/
 
 // tracerProviderConfig.
 type tracerProviderConfig struct {
@@ -56,7 +31,7 @@ type tracerProviderConfig struct {
 	// registered.
 	spanProcessors []SpanProcessor
 
-	enableTracer bool // see EnableTracer
+	enableTracer uint32 // see EnableTracer
 
 	// idGenerator is used to generate all Span and Trace IDs when needed.
 	idGenerator IDGenerator
@@ -70,13 +45,33 @@ type tracerProviderConfig struct {
 	batchProcessMode string // see WithBatchProcessMode
 
 	sqlExecutor func() ie.InternalExecutor // see WithSQLExecutor
+
+	mux sync.RWMutex
 }
 
-func (cfg tracerProviderConfig) getNodeResource() *MONodeResource {
+func (cfg *tracerProviderConfig) getNodeResource() *MONodeResource {
+	cfg.mux.RLock()
+	defer cfg.mux.RUnlock()
 	if val, has := cfg.resource.Get("Node"); !has {
 		return &MONodeResource{}
 	} else {
 		return val.(*MONodeResource)
+	}
+}
+
+func (cfg *tracerProviderConfig) IsEnable() bool {
+	cfg.mux.RLock()
+	defer cfg.mux.RUnlock()
+	return atomic.LoadUint32(&cfg.enableTracer) == 1
+}
+
+func (cfg *tracerProviderConfig) EnableTracer(enable bool) {
+	cfg.mux.Lock()
+	defer cfg.mux.Unlock()
+	if enable {
+		atomic.StoreUint32(&cfg.enableTracer, 1)
+	} else {
+		atomic.StoreUint32(&cfg.enableTracer, 0)
 	}
 }
 
@@ -109,7 +104,7 @@ func WithNode(id int64, t NodeType) tracerProviderOptionFunc {
 
 func EnableTracer(enable bool) tracerProviderOptionFunc {
 	return func(cfg *tracerProviderConfig) {
-		cfg.enableTracer = enable
+		cfg.EnableTracer(enable)
 	}
 }
 
@@ -152,7 +147,7 @@ type MOTracerProvider struct {
 func newMOTracerProvider(opts ...TracerProviderOption) *MOTracerProvider {
 	pTracer := &MOTracerProvider{
 		tracerProviderConfig{
-			enableTracer:     false,
+			enableTracer:     0,
 			resource:         newResource(),
 			idGenerator:      &MOTraceIdGenerator{},
 			batchProcessMode: InternalExecutor,
@@ -165,7 +160,7 @@ func newMOTracerProvider(opts ...TracerProviderOption) *MOTracerProvider {
 }
 
 func (p *MOTracerProvider) Tracer(instrumentationName string, opts ...TracerOption) Tracer {
-	if !p.enableTracer {
+	if !p.IsEnable() {
 		return noopTracer{}
 	}
 

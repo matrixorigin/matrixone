@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"errors"
 	"sync"
 
@@ -25,6 +26,7 @@ import (
 
 type RoutineManager struct {
 	rwlock        sync.RWMutex
+	ctx           context.Context
 	clients       map[goetty.IOSession]*Routine
 	pu            *config.ParameterUnit
 	skipCheckUser bool
@@ -52,9 +54,10 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	exe := NewMysqlCmdExecutor()
 	exe.SetRoutineManager(rm)
 
-	routine := NewRoutine(pro, exe, rm.pu)
+	routine := NewRoutine(rm.ctx, pro, exe, rm.pu)
 	routine.SetRoutineMgr(rm)
 	ses := NewSession(routine.protocol, routine.guestMmu, routine.mempool, rm.pu, gSysVariables)
+	ses.SetRequestContext(routine.cancelRoutineCtx)
 	routine.SetSession(ses)
 	pro.SetSession(ses)
 
@@ -171,8 +174,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	return nil
 }
 
-func NewRoutineManager(pu *config.ParameterUnit) *RoutineManager {
+func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) *RoutineManager {
 	rm := &RoutineManager{
+		ctx:     ctx,
 		clients: make(map[goetty.IOSession]*Routine),
 		pu:      pu,
 	}
