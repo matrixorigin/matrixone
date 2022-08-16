@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"fmt"
 	"sync/atomic"
 
@@ -58,9 +59,9 @@ func nextConnectionID() uint32 {
 	return atomic.AddUint32(&initConnectionID, 1)
 }
 
-func NewMOServer(addr string, pu *config.ParameterUnit) *MOServer {
+func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit) *MOServer {
 	codec := NewSqlCodec()
-	rm := NewRoutineManager(pu)
+	rm := NewRoutineManager(ctx, pu)
 	// TODO asyncFlushBatch
 	app, err := goetty.NewApplication(addr, rm.Handler,
 		goetty.WithAppLogger(logutil.GetGlobalLogger()),

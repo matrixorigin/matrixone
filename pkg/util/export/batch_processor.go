@@ -129,7 +129,7 @@ func (b *bufferHolder) FlushAndReset() bool {
 		return false
 	}
 	if b.batch != nil {
-		var flush = b.impl.NewItemBatchHandler()
+		var flush = b.impl.NewItemBatchHandler(context.TODO())
 		flush(*b.batch)
 	} else {
 		logutil.Debugf("batch is nil")

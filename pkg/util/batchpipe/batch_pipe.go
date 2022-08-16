@@ -58,7 +58,7 @@ type PipeImpl[T any, B any] interface {
 	NewItemBuffer(name string) ItemBuffer[T, B]
 	// NewItemBatchHandler handle the StoreBatch from an ItemBuffer, for example, execute an insert sql.
 	// this handle may be running on multiple goroutine
-	NewItemBatchHandler() func(batch B)
+	NewItemBatchHandler(ctx context.Context) func(batch B)
 }
 
 type backOffClock struct {
@@ -216,12 +216,12 @@ func (bc *BaseBatchPipe[T, B]) SendItem(items ...T) error {
 }
 
 // Start kicks off the merge workers and batch workers, return false if the pipe is workinghas been called
-func (bc *BaseBatchPipe[T, B]) Start() bool {
+func (bc *BaseBatchPipe[T, B]) Start(ctx context.Context) bool {
 	if atomic.SwapInt32(&bc.isRunning, 1) == 1 {
 		return false
 	}
-	bc.startBatchWorker()
-	bc.startMergeWorker()
+	bc.startBatchWorker(ctx)
+	bc.startMergeWorker(ctx)
 	return true
 }
 
@@ -256,8 +256,8 @@ func (bc *BaseBatchPipe[T, B]) Stop(graceful bool) (<-chan struct{}, bool) {
 	return stopCh, true
 }
 
-func (bc *BaseBatchPipe[T, B]) startBatchWorker() {
-	ctx, cancel := context.WithCancel(context.Background())
+func (bc *BaseBatchPipe[T, B]) startBatchWorker(inputCtx context.Context) {
+	ctx, cancel := context.WithCancel(inputCtx)
 	bc.batchWorkerCancel = cancel
 	for i := 0; i < bc.opts.BatchWorkerNum; i++ {
 		bc.batchStopWg.Add(1)
@@ -265,8 +265,8 @@ func (bc *BaseBatchPipe[T, B]) startBatchWorker() {
 	}
 }
 
-func (bc *BaseBatchPipe[T, B]) startMergeWorker() {
-	ctx, cancel := context.WithCancel(context.Background())
+func (bc *BaseBatchPipe[T, B]) startMergeWorker(inputCtx context.Context) {
+	ctx, cancel := context.WithCancel(inputCtx)
 	bc.mergeWorkerCancel = cancel
 	for i := 0; i < bc.opts.BufferWorkerNum; i++ {
 		bc.mergeStopWg.Add(1)
@@ -278,7 +278,7 @@ func (bc *BaseBatchPipe[T, B]) batchWorker(ctx context.Context) {
 	defer bc.batchStopWg.Done()
 	quitMsg := quitUnknown
 	defer logutil.Infof("batchWorker quit: %s", &quitMsg)
-	f := bc.impl.NewItemBatchHandler()
+	f := bc.impl.NewItemBatchHandler(ctx)
 	for {
 		select {
 		case <-ctx.Done():

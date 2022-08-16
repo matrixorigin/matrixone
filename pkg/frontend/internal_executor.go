@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -37,7 +38,7 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 }
 
 type internalMiniExec interface {
-	doComQuery(string) error
+	doComQuery(requestCtx context.Context, sql string) error
 	PrepareSessionBeforeExecRequest(*Session)
 }
 
@@ -113,22 +114,22 @@ func (res *internalExecResult) StringValueByName(ridx uint64, col string) (strin
 	}
 }
 
-func (ie *internalExecutor) Exec(sql string, opts ie.SessionOverrideOptions) (err error) {
+func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (err error) {
 	ie.Lock()
 	defer ie.Unlock()
 	sess := ie.newCmdSession(opts)
 	ie.executor.PrepareSessionBeforeExecRequest(sess)
 	ie.proto.stashResult = false
-	return ie.executor.doComQuery(sql)
+	return ie.executor.doComQuery(ctx, sql)
 }
 
-func (ie *internalExecutor) Query(sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 	ie.Lock()
 	defer ie.Unlock()
 	sess := ie.newCmdSession(opts)
 	ie.executor.PrepareSessionBeforeExecRequest(sess)
 	ie.proto.stashResult = true
-	err := ie.executor.doComQuery(sql)
+	err := ie.executor.doComQuery(ctx, sql)
 	res := ie.proto.swapOutResult()
 	res.err = err
 	return res
