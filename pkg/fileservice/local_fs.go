@@ -137,8 +137,8 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 	if err != nil {
 		return err
 	}
-	mapper := NewBlockMapper(f, _BlockContentSize)
-	n, err := io.Copy(mapper, newIOEntriesReader(vector.Entries))
+	fileWithChecksum := NewFileWithChecksum(f, _BlockContentSize)
+	n, err := io.Copy(fileWithChecksum, newIOEntriesReader(vector.Entries))
 	if err != nil {
 		return err
 	}
@@ -211,15 +211,15 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 		}
 
 		if entry.WriterForRead != nil {
-			mapper := NewBlockMapper(file, _BlockContentSize)
+			fileWithChecksum := NewFileWithChecksum(file, _BlockContentSize)
 
 			if entry.Offset > 0 {
-				_, err := mapper.Seek(int64(entry.Offset), io.SeekStart)
+				_, err := fileWithChecksum.Seek(int64(entry.Offset), io.SeekStart)
 				if err != nil {
 					return err
 				}
 			}
-			r := (io.Reader)(mapper)
+			r := (io.Reader)(fileWithChecksum)
 			if entry.Size > 0 {
 				r = io.LimitReader(r, int64(entry.Size))
 			}
@@ -257,15 +257,15 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 			if err != nil {
 				return nil
 			}
-			mapper := NewBlockMapper(file, _BlockContentSize)
+			fileWithChecksum := NewFileWithChecksum(file, _BlockContentSize)
 
 			if entry.Offset > 0 {
-				_, err := mapper.Seek(int64(entry.Offset), io.SeekStart)
+				_, err := fileWithChecksum.Seek(int64(entry.Offset), io.SeekStart)
 				if err != nil {
 					return err
 				}
 			}
-			r := (io.Reader)(mapper)
+			r := (io.Reader)(fileWithChecksum)
 			if entry.Size > 0 {
 				r = io.LimitReader(r, int64(entry.Size))
 			}
@@ -294,15 +294,15 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 			}
 
 		} else {
-			mapper := NewBlockMapper(file, _BlockContentSize)
+			fileWithChecksum := NewFileWithChecksum(file, _BlockContentSize)
 
 			if entry.Offset > 0 {
-				_, err := mapper.Seek(int64(entry.Offset), io.SeekStart)
+				_, err := fileWithChecksum.Seek(int64(entry.Offset), io.SeekStart)
 				if err != nil {
 					return err
 				}
 			}
-			r := (io.Reader)(mapper)
+			r := (io.Reader)(fileWithChecksum)
 			if entry.Size > 0 {
 				r = io.LimitReader(r, int64(entry.Size))
 			}
@@ -489,14 +489,14 @@ func (l *LocalFS) NewMutator(filePath string) (Mutator, error) {
 		return nil, ErrFileNotFound
 	}
 	return &_LocalFSMutator{
-		f:      f,
-		mapper: NewBlockMapper(f, _BlockContentSize),
+		osFile:           f,
+		fileWithChecksum: NewFileWithChecksum(f, _BlockContentSize),
 	}, nil
 }
 
 type _LocalFSMutator struct {
-	f      *os.File
-	mapper *BlockMapper[*os.File]
+	osFile           *os.File
+	fileWithChecksum *FileWithChecksum[*os.File]
 }
 
 func (l *_LocalFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error {
@@ -506,11 +506,11 @@ func (l *_LocalFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error 
 
 		if entry.ReaderForWrite != nil {
 			// seek and copy
-			_, err := l.mapper.Seek(int64(entry.Offset), 0)
+			_, err := l.fileWithChecksum.Seek(int64(entry.Offset), 0)
 			if err != nil {
 				return err
 			}
-			n, err := io.Copy(l.mapper, entry.ReaderForWrite)
+			n, err := io.Copy(l.fileWithChecksum, entry.ReaderForWrite)
 			if err != nil {
 				return err
 			}
@@ -520,7 +520,7 @@ func (l *_LocalFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error 
 
 		} else {
 			// WriteAt
-			n, err := l.mapper.WriteAt(entry.Data, int64(entry.Offset))
+			n, err := l.fileWithChecksum.WriteAt(entry.Data, int64(entry.Offset))
 			if err != nil {
 				return err
 			}
@@ -536,12 +536,12 @@ func (l *_LocalFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error 
 
 func (l *_LocalFSMutator) Close() error {
 	// sync
-	if err := l.f.Sync(); err != nil {
+	if err := l.osFile.Sync(); err != nil {
 		return err
 	}
 
 	// close
-	if err := l.f.Close(); err != nil {
+	if err := l.osFile.Close(); err != nil {
 		return err
 	}
 
