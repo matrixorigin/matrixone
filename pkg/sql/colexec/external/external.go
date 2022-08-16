@@ -52,7 +52,7 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(_ *process.Process, arg any) error {
 	param := arg.(*Argument).Es
 	param.batchSize = 40000
-	param.load = &tree.LoadParameter{}
+	param.load = &tree.ExternParam{}
 	err := json.Unmarshal([]byte(param.CreateSql), param.load)
 	if err != nil {
 		param.End = true
@@ -91,7 +91,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	return false, nil
 }
 
-func ReadFromS3(loadParam *tree.LoadParameter) ([]string, error) {
+func ReadFromS3(loadParam *tree.ExternParam) ([]string, error) {
 	var config fileservice.S3Config
 	config.Bucket = loadParam.S3Param.Config.Bucket
 	config.Endpoint = loadParam.S3Param.Config.Endpoint
@@ -137,7 +137,7 @@ func ReadFromS3(loadParam *tree.LoadParameter) ([]string, error) {
 	return fileList, nil
 }
 
-func ReadFromS3File(loadParam *tree.LoadParameter) (io.ReadCloser, error) {
+func ReadFromS3File(loadParam *tree.ExternParam) (io.ReadCloser, error) {
 	var config fileservice.S3Config
 	config.Bucket = loadParam.S3Param.Config.Bucket
 	config.Endpoint = loadParam.S3Param.Config.Endpoint
@@ -175,7 +175,7 @@ func ReadFromS3File(loadParam *tree.LoadParameter) (io.ReadCloser, error) {
 	return r, nil
 }
 
-func ReadFromLocal(loadParam *tree.LoadParameter) ([]string, error) {
+func ReadFromLocal(loadParam *tree.ExternParam) ([]string, error) {
 	index := strings.LastIndex(loadParam.Filepath, "/")
 	dir, file := "", loadParam.Filepath
 	if index != -1 {
@@ -204,7 +204,7 @@ func ReadFromLocal(loadParam *tree.LoadParameter) ([]string, error) {
 	return fileList, nil
 }
 
-func ReadFromLocalFile(loadParam *tree.LoadParameter) (io.ReadCloser, error) {
+func ReadFromLocalFile(loadParam *tree.ExternParam) (io.ReadCloser, error) {
 	var r io.ReadCloser
 	index := strings.LastIndex(loadParam.Filepath, "/")
 	dir, file := "", loadParam.Filepath
@@ -235,7 +235,7 @@ func ReadFromLocalFile(loadParam *tree.LoadParameter) (io.ReadCloser, error) {
 	return r, nil
 }
 
-func InitS3Param(loadParam *tree.LoadParameter) error {
+func InitS3Param(loadParam *tree.ExternParam) error {
 	loadParam.S3Param = &tree.S3Parameter{}
 	for i := 0; i < len(loadParam.S3option); i += 2 {
 		switch strings.ToLower(loadParam.S3option[i]) {
@@ -260,8 +260,8 @@ func InitS3Param(loadParam *tree.LoadParameter) error {
 	return nil
 }
 
-func getLoadDataList(loadParam *tree.LoadParameter) ([]string, error) {
-	switch loadParam.LoadType {
+func getLoadDataList(loadParam *tree.ExternParam) ([]string, error) {
+	switch loadParam.ScanType {
 	case tree.LOCAL:
 		fileList, err := ReadFromLocal(loadParam)
 		if err != nil {
@@ -283,8 +283,8 @@ func getLoadDataList(loadParam *tree.LoadParameter) ([]string, error) {
 	}
 }
 
-func getLoadDataReader(loadParam *tree.LoadParameter) (io.ReadCloser, error) {
-	switch loadParam.LoadType {
+func getLoadDataReader(loadParam *tree.ExternParam) (io.ReadCloser, error) {
+	switch loadParam.ScanType {
 	case tree.LOCAL:
 		reader, err := ReadFromLocalFile(loadParam)
 		if err != nil {
@@ -302,7 +302,7 @@ func getLoadDataReader(loadParam *tree.LoadParameter) (io.ReadCloser, error) {
 	}
 }
 
-func getCompressType(loadParam *tree.LoadParameter) string {
+func getCompressType(loadParam *tree.ExternParam) string {
 	if loadParam.CompressType != "" && loadParam.CompressType != tree.AUTO {
 		return loadParam.CompressType
 	}
@@ -323,7 +323,7 @@ func getCompressType(loadParam *tree.LoadParameter) string {
 	}
 }
 
-func getUnCompressReader(loadParam *tree.LoadParameter, r io.ReadCloser) (io.ReadCloser, error) {
+func getUnCompressReader(loadParam *tree.ExternParam, r io.ReadCloser) (io.ReadCloser, error) {
 	switch strings.ToLower(getCompressType(loadParam)) {
 	case tree.NOCOMPRESS:
 		return r, nil

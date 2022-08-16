@@ -74,8 +74,8 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	node3.TableDef = tableDef
 	node3.ObjRef = objRef
 
-	stmt.LoadParam.Tail.ColumnList = nil
-	json_byte, err := json.Marshal(stmt.LoadParam)
+	stmt.Param.Tail.ColumnList = nil
+	json_byte, err := json.Marshal(stmt.Param)
 	if err != nil {
 		return nil, err
 	}
@@ -109,16 +109,16 @@ func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2
 	if tableDef == nil {
 		return fmt.Errorf("invalid table name: %s", string(stmt.Table.ObjectName))
 	}
-	if len(stmt.LoadParam.Tail.ColumnList) > len(tableDef.Cols) {
+	if len(stmt.Param.Tail.ColumnList) > len(tableDef.Cols) {
 		return fmt.Errorf("the load data colnum list is larger than table colnum")
 	}
 	colToIndex := make(map[int32]string, 0)
-	if len(stmt.LoadParam.Tail.ColumnList) == 0 {
+	if len(stmt.Param.Tail.ColumnList) == 0 {
 		for i := 0; i < len(tableDef.Cols); i++ {
 			colToIndex[int32(i)] = tableDef.Cols[i].Name
 		}
 	} else {
-		for i, col := range stmt.LoadParam.Tail.ColumnList {
+		for i, col := range stmt.Param.Tail.ColumnList {
 			switch realCol := col.(type) {
 			case *tree.UnresolvedName:
 				if _, ok := Name2ColIndex[realCol.Parts[0]]; !ok {

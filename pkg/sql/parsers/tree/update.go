@@ -118,8 +118,8 @@ const (
 	LZ4        = "lz4"
 )
 
-type LoadParameter struct {
-	LoadType     int
+type ExternParam struct {
+	ScanType     int
 	Filepath     string
 	CompressType string
 	Tail         *TailParameter
@@ -148,14 +148,14 @@ type TailParameter struct {
 	Assignments UpdateExprs
 }
 
-//Load data statement
+// Load data statement
 type Load struct {
 	statementImpl
 	Local             bool
 	DuplicateHandling DuplicateKey
 	Table             *TableName
 	//Partition
-	LoadParam *LoadParameter
+	Param *ExternParam
 }
 
 func (node *Load) Format(ctx *FmtCtx) {
@@ -164,16 +164,17 @@ func (node *Load) Format(ctx *FmtCtx) {
 		ctx.WriteString(" local")
 	}
 
-	if node.LoadParam.LoadType == LOCAL && (node.LoadParam.CompressType == AUTO || node.LoadParam.CompressType == NOCOMPRESS) {
+	if node.Param.ScanType == LOCAL && (node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS) {
 		ctx.WriteString(" infile ")
-		ctx.WriteString(node.LoadParam.Filepath)
-	} else if node.LoadParam.LoadType == LOCAL {
+		ctx.WriteString(node.Param.Filepath)
+	} else if node.Param.ScanType == LOCAL {
 		ctx.WriteString(" infile ")
-		ctx.WriteString("{'filepath':'" + node.LoadParam.Filepath + "', 'compression':'" + strings.ToLower(node.LoadParam.CompressType) + "'}")
+		ctx.WriteString("{'filepath':'" + node.Param.Filepath + "', 'compression':'" + strings.ToLower(node.Param.CompressType) + "'}")
 	} else {
 		ctx.WriteString(" url s3option ")
-		ctx.WriteString("{'endpoint'='" + node.LoadParam.S3option[0] + "', 'access_key_id'='" + node.LoadParam.S3option[3] +
-			"', 'secret_access_key'='" + node.LoadParam.S3option[5] + "', 'bucket'='" + node.LoadParam.S3option[7] + "', 'filepath'='" + node.LoadParam.S3option[9] + "', 'region'='" + node.LoadParam.S3option[11] + "'}")
+		ctx.WriteString("{'endpoint'='" + node.Param.S3option[0] + "', 'access_key_id'='" + node.Param.S3option[3] +
+			"', 'secret_access_key'='" + node.Param.S3option[5] + "', 'bucket'='" + node.Param.S3option[7] + "', 'filepath'='" +
+			node.Param.S3option[9] + "', 'region'='" + node.Param.S3option[11] + "'}")
 	}
 
 	switch node.DuplicateHandling.(type) {
@@ -187,33 +188,33 @@ func (node *Load) Format(ctx *FmtCtx) {
 	ctx.WriteString(" into table ")
 	node.Table.Format(ctx)
 
-	if node.LoadParam.Tail.Fields != nil {
+	if node.Param.Tail.Fields != nil {
 		ctx.WriteByte(' ')
-		node.LoadParam.Tail.Fields.Format(ctx)
+		node.Param.Tail.Fields.Format(ctx)
 	}
 
-	if node.LoadParam.Tail.Lines != nil {
+	if node.Param.Tail.Lines != nil {
 		ctx.WriteByte(' ')
-		node.LoadParam.Tail.Lines.Format(ctx)
+		node.Param.Tail.Lines.Format(ctx)
 	}
 
-	if node.LoadParam.Tail.IgnoredLines != 0 {
+	if node.Param.Tail.IgnoredLines != 0 {
 		ctx.WriteString(" ignore ")
-		ctx.WriteString(strconv.FormatUint(node.LoadParam.Tail.IgnoredLines, 10))
+		ctx.WriteString(strconv.FormatUint(node.Param.Tail.IgnoredLines, 10))
 		ctx.WriteString(" lines")
 	}
-	if node.LoadParam.Tail.ColumnList != nil {
+	if node.Param.Tail.ColumnList != nil {
 		prefix := " ("
-		for _, c := range node.LoadParam.Tail.ColumnList {
+		for _, c := range node.Param.Tail.ColumnList {
 			ctx.WriteString(prefix)
 			c.Format(ctx)
 			prefix = ", "
 		}
 		ctx.WriteByte(')')
 	}
-	if node.LoadParam.Tail.Assignments != nil {
+	if node.Param.Tail.Assignments != nil {
 		ctx.WriteString(" set ")
-		node.LoadParam.Tail.Assignments.Format(ctx)
+		node.Param.Tail.Assignments.Format(ctx)
 	}
 }
 

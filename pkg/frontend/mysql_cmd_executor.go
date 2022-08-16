@@ -920,24 +920,24 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 	if load.Local {
 		return fmt.Errorf("LOCAL is unsupported now")
 	}
-	if load.LoadParam.Tail.Fields == nil || len(load.LoadParam.Tail.Fields.Terminated) == 0 {
+	if load.Param.Tail.Fields == nil || len(load.Param.Tail.Fields.Terminated) == 0 {
 		return fmt.Errorf("load need FIELDS TERMINATED BY ")
 	}
 
-	if load.LoadParam.Tail.Fields != nil && load.LoadParam.Tail.Fields.EscapedBy != 0 {
+	if load.Param.Tail.Fields != nil && load.Param.Tail.Fields.EscapedBy != 0 {
 		return fmt.Errorf("EscapedBy field is unsupported now")
 	}
 
 	/*
 		check file
 	*/
-	exist, isfile, err := PathExists(load.LoadParam.Filepath)
+	exist, isfile, err := PathExists(load.Param.Filepath)
 	if err != nil || !exist {
-		return fmt.Errorf("file %s does exist. err:%v", load.LoadParam.Filepath, err)
+		return fmt.Errorf("file %s does exist. err:%v", load.Param.Filepath, err)
 	}
 
 	if !isfile {
-		return fmt.Errorf("file %s is a directory", load.LoadParam.Filepath)
+		return fmt.Errorf("file %s is a directory", load.Param.Filepath)
 	}
 
 	/*

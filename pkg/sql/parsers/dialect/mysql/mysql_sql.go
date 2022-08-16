@@ -3863,8 +3863,8 @@ func (st *yySymType) loadColumnsUnion() []tree.LoadColumn {
 	return v
 }
 
-func (st *yySymType) loadParamUnion() *tree.LoadParameter {
-	v, _ := st.union.(*tree.LoadParameter)
+func (st *yySymType) loadParamUnion() *tree.ExternParam {
+	v, _ := st.union.(*tree.ExternParam)
 	return v
 }
 
@@ -5487,11 +5487,11 @@ yydefault:
 		{
 			yyLOCAL = &tree.Load{
 				Local:             yyDollar[3].boolValUnion(),
-				LoadParam:         yyDollar[4].loadParamUnion(),
+				Param:             yyDollar[4].loadParamUnion(),
 				DuplicateHandling: yyDollar[5].duplicateKeyUnion(),
 				Table:             yyDollar[8].tableNameUnion(),
 			}
-			yyLOCAL.(*tree.Load).LoadParam.Tail = yyDollar[9].tailParamUnion()
+			yyLOCAL.(*tree.Load).Param.Tail = yyDollar[9].tailParamUnion()
 		}
 		yyVAL.union = yyLOCAL
 	case 25:
@@ -10026,7 +10026,7 @@ yydefault:
 		yyVAL.union = yyLOCAL
 	case 620:
 		yyDollar = yyS[yypt-2 : yypt+1]
-		var yyLOCAL *tree.LoadParameter
+		var yyLOCAL *tree.ExternParam
 //line mysql_sql.y:3897
 		{
 			yyLOCAL = yyDollar[1].loadParamUnion()
@@ -10035,55 +10035,55 @@ yydefault:
 		yyVAL.union = yyLOCAL
 	case 621:
 		yyDollar = yyS[yypt-2 : yypt+1]
-		var yyLOCAL *tree.LoadParameter
+		var yyLOCAL *tree.ExternParam
 //line mysql_sql.y:3904
 		{
-			yyLOCAL = &tree.LoadParameter{
+			yyLOCAL = &tree.ExternParam{
 				Filepath:     yyDollar[2].str,
-				LoadType:     tree.LOCAL,
+				ScanType:     tree.LOCAL,
 				CompressType: tree.AUTO,
 			}
 		}
 		yyVAL.union = yyLOCAL
 	case 622:
 		yyDollar = yyS[yypt-6 : yypt+1]
-		var yyLOCAL *tree.LoadParameter
+		var yyLOCAL *tree.ExternParam
 //line mysql_sql.y:3912
 		{
 			if strings.ToLower(yyDollar[3].str) != "filepath" {
 				yylex.Error(fmt.Sprintf("can not recognize the '%s'", yyDollar[3].str))
 				return 1
 			}
-			yyLOCAL = &tree.LoadParameter{
+			yyLOCAL = &tree.ExternParam{
 				Filepath:     yyDollar[5].str,
-				LoadType:     tree.LOCAL,
+				ScanType:     tree.LOCAL,
 				CompressType: tree.AUTO,
 			}
 		}
 		yyVAL.union = yyLOCAL
 	case 623:
 		yyDollar = yyS[yypt-10 : yypt+1]
-		var yyLOCAL *tree.LoadParameter
+		var yyLOCAL *tree.ExternParam
 //line mysql_sql.y:3924
 		{
 			if strings.ToLower(yyDollar[3].str) != "filepath" || strings.ToLower(yyDollar[7].str) != "compression" {
 				yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' ", yyDollar[3].str, yyDollar[7].str))
 				return 1
 			}
-			yyLOCAL = &tree.LoadParameter{
+			yyLOCAL = &tree.ExternParam{
 				Filepath:     yyDollar[5].str,
-				LoadType:     tree.LOCAL,
+				ScanType:     tree.LOCAL,
 				CompressType: yyDollar[9].str,
 			}
 		}
 		yyVAL.union = yyLOCAL
 	case 624:
 		yyDollar = yyS[yypt-5 : yypt+1]
-		var yyLOCAL *tree.LoadParameter
+		var yyLOCAL *tree.ExternParam
 //line mysql_sql.y:3936
 		{
-			yyLOCAL = &tree.LoadParameter{
-				LoadType: tree.S3,
+			yyLOCAL = &tree.ExternParam{
+				ScanType: tree.S3,
 				S3option: yyDollar[4].strsUnion(),
 			}
 		}

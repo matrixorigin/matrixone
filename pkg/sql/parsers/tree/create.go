@@ -125,7 +125,7 @@ type CreateTable struct {
 	Defs            TableDefs
 	Options         []TableOption
 	PartitionOption *PartitionOption
-	Param           *LoadParameter
+	Param           *ExternParam
 }
 
 func (node *CreateTable) Format(ctx *FmtCtx) {
@@ -171,10 +171,10 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	}
 
 	if node.Param != nil {
-		if node.Param.LoadType == LOCAL && (node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS) {
+		if node.Param.ScanType == LOCAL && (node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS) {
 			ctx.WriteString(" infile ")
 			ctx.WriteString("'" + node.Param.Filepath + "'")
-		} else if node.Param.LoadType == LOCAL {
+		} else if node.Param.ScanType == LOCAL {
 			ctx.WriteString(" infile ")
 			ctx.WriteString("{'filepath':'" + node.Param.Filepath + "', 'compression':'" + strings.ToLower(node.Param.CompressType) + "'}")
 		} else {

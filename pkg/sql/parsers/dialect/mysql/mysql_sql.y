@@ -48,7 +48,7 @@ import (
     rowFormatType tree.RowFormatType
     matchType tree.MatchType
     attributeReference *tree.AttributeReference
-    loadParam *tree.LoadParameter
+    loadParam *tree.ExternParam
     tailParam *tree.TailParameter
 
     from *tree.From
@@ -583,11 +583,11 @@ load_data_stmt:
     {
         $$ = &tree.Load{
             Local: $3,
-            LoadParam: $4,
+            Param: $4,
             DuplicateHandling: $5,
             Table: $8,
         }
-        $$.(*tree.Load).LoadParam.Tail = $9
+        $$.(*tree.Load).Param.Tail = $9
     }
 
 load_set_spec_opt:
@@ -3902,9 +3902,9 @@ load_param_opt_2:
 load_param_opt:
     INFILE STRING
     {
-        $$ = &tree.LoadParameter{
+        $$ = &tree.ExternParam{
             Filepath: $2,
-            LoadType: tree.LOCAL,
+            ScanType: tree.LOCAL,
             CompressType: tree.AUTO,
         }
     }
@@ -3914,9 +3914,9 @@ load_param_opt:
                 yylex.Error(fmt.Sprintf("can not recognize the '%s'", $3))
                 return 1
             }
-        $$ = &tree.LoadParameter{
+        $$ = &tree.ExternParam{
             Filepath: $5,
-            LoadType: tree.LOCAL,
+            ScanType: tree.LOCAL,
             CompressType: tree.AUTO,
         }
     }
@@ -3926,16 +3926,16 @@ load_param_opt:
                 yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' ", $3, $7))
                 return 1
             }
-        $$ = &tree.LoadParameter{
+        $$ = &tree.ExternParam{
             Filepath: $5,
-            LoadType: tree.LOCAL,
+            ScanType: tree.LOCAL,
             CompressType: $9,
         }
     }
 |   URL S3OPTION '{' s3params '}'
     {
-        $$ = &tree.LoadParameter{
-            LoadType: tree.S3,
+        $$ = &tree.ExternParam{
+            ScanType: tree.S3,
             S3option: $4,
         }
     }
