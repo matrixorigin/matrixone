@@ -84,6 +84,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	param.load.Filepath = param.FileList[param.FileIndex]
 	bat, err := ScanFileData(param, proc)
 	if err != nil {
+		param.End = true
 		return false, err
 	}
 	proc.Reg.InputBatch = bat
@@ -790,20 +791,10 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		}
 	}
 	plh := param.plh
-	plh.simdCsvLineArray, err = plh.simdCsvReader.Read(param.batchSize)
+	plh.simdCsvLineArray, err = plh.simdCsvReader.Read(param.batchSize, param.Ctx)
 	if err != nil {
 		return nil, err
 	}
-	if param.IgnoreLine != 0 {
-		plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:]
-		param.IgnoreLine = 0
-	}
-	plh.batchSize = len(plh.simdCsvLineArray)
-	bat, err = GetBatchData(param, plh, proc)
-	if err != nil {
-		return nil, err
-	}
-	bat.Cnt = 1
 	if len(plh.simdCsvLineArray) < param.batchSize {
 		err := param.reader.Close()
 		if err != nil {
@@ -816,5 +807,15 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 			param.End = true
 		}
 	}
+	if param.IgnoreLine != 0 {
+		plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:]
+		param.IgnoreLine = 0
+	}
+	plh.batchSize = len(plh.simdCsvLineArray)
+	bat, err = GetBatchData(param, plh, proc)
+	if err != nil {
+		return nil, err
+	}
+	bat.Cnt = 1
 	return bat, nil
 }

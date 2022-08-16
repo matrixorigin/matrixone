@@ -42,6 +42,14 @@ type FileService interface {
 	Delete(ctx context.Context, filePath string) error
 }
 
+type IOVector struct {
+	// path to file, '/' separated
+	FilePath string
+	// io entries
+	// empty entry not allowed
+	Entries []IOEntry
+}
+
 type IOEntry struct {
 	// offset in file, [0, len(file) - 1]
 	Offset int

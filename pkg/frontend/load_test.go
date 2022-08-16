@@ -18,6 +18,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -224,7 +229,7 @@ func Test_readTextFile(t *testing.T) {
 			data: []byte("test anywhere"),
 		}
 
-		resp, err := mce.ExecRequest(req)
+		resp, err := mce.ExecRequest(ctx, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldBeNil)
 	})
@@ -428,7 +433,7 @@ func Test_readTextFile(t *testing.T) {
 				row2col = gostub.Stub(&row2colChoose, false)
 			}
 
-			_, err := mce.LoadLoop(cws[i], db, rel, "T")
+			_, err := mce.LoadLoop(context.TODO(), cws[i], db, rel, "T")
 			if kases[i].fail {
 				convey.So(err, convey.ShouldBeError)
 			} else {
@@ -452,7 +457,6 @@ func getParsedLinesChan(simdCsvGetParsedLinesChan chan simdcsv.LineOut) {
 func Test_getLineOutFromSimdCsvRoutine(t *testing.T) {
 	convey.Convey("getLineOutFromSimdCsvRoutine succ", t, func() {
 		handler := &ParseLineHandler{
-			closeRef:                  &CloseLoadData{stopLoadData: make(chan interface{}, 1)},
 			simdCsvGetParsedLinesChan: atomic.Value{},
 			SharePart: SharePart{
 				load: &tree.Load{
@@ -463,13 +467,17 @@ func Test_getLineOutFromSimdCsvRoutine(t *testing.T) {
 				simdCsvLineArray: make([][]string, 100)},
 		}
 		handler.simdCsvGetParsedLinesChan.Store(make(chan simdcsv.LineOut, 100))
-		handler.closeRef.stopLoadData <- 1
-		gostub.StubFunc(&saveLinesToStorage, nil)
-		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldBeNil)
 
-		handler.closeRef.stopLoadData <- 1
+		gostub.StubFunc(&saveLinesToStorage, nil)
+		var cancel context.CancelFunc
+		handler.loadCtx, cancel = context.WithTimeout(context.TODO(), time.Second)
+		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldBeNil)
+		cancel()
+
 		gostub.StubFunc(&saveLinesToStorage, errors.New("1"))
+		handler.loadCtx, cancel = context.WithTimeout(context.TODO(), time.Second)
 		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldNotBeNil)
+		cancel()
 
 		getParsedLinesChan(getLineOutChan(handler.simdCsvGetParsedLinesChan))
 		stubs := gostub.StubFunc(&saveLinesToStorage, nil)

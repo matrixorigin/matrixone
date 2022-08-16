@@ -24,7 +24,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -89,22 +88,14 @@ type MysqlCmdExecutor struct {
 	//the count of sql has been processed
 	sqlCount uint64
 
-	//for load data closing
-	loadDataClose *CloseLoadData
-
-	//for export data closing
-	exportDataClose *CloseExportData
-
 	ses *Session
 
-	sessionRWLock sync.RWMutex
-
 	routineMgr *RoutineManager
+
+	cancelRequestFunc context.CancelFunc
 }
 
 func (mce *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session) {
-	mce.sessionRWLock.Lock()
-	defer mce.sessionRWLock.Unlock()
 	mce.ses = ses
 }
 
@@ -490,7 +481,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	for j := 0; j < n; j++ { //row index
 		if oq.ep.Outfile {
 			select {
-			case <-ses.closeRef.stopExportData:
+			case <-ses.requestCtx.Done():
 				{
 					return nil
 				}
@@ -849,13 +840,12 @@ func extractRowFromVector(vec *vector.Vector, i int, row []interface{}, rowIndex
 	return nil
 }
 
-func (mce *MysqlCmdExecutor) handleChangeDB(db string) error {
+func (mce *MysqlCmdExecutor) handleChangeDB(requestCtx context.Context, db string) error {
 	ses := mce.GetSession()
 	txnHandler := ses.GetTxnHandler()
 	txnCtx := txnHandler.GetTxn().GetCtx()
 	//TODO: check meta data
-	ctx := context.TODO()
-	if _, err := ses.Pu.StorageEngine.Database(ctx, db, engine.Snapshot(txnCtx)); err != nil {
+	if _, err := ses.Pu.StorageEngine.Database(requestCtx, db, engine.Snapshot(txnCtx)); err != nil {
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, db)
 	}
@@ -918,7 +908,7 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 /*
 handle Load DataSource statement
 */
-func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
+func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tree.Load) error {
 	var err error
 	ses := mce.GetSession()
 	proto := ses.protocol
@@ -964,12 +954,11 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 		loadDb = ses.protocol.GetDatabaseName()
 	}
 
-	ctx := context.TODO()
 	txnHandler := ses.GetTxnHandler()
 	if ses.InMultiStmtTransactionMode() {
 		return fmt.Errorf("do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
 	}
-	dbHandler, err := ses.GetStorage().Database(ctx, loadDb, engine.Snapshot(txnHandler.GetTxn().GetCtx()))
+	dbHandler, err := ses.GetStorage().Database(requestCtx, loadDb, engine.Snapshot(txnHandler.GetTxn().GetCtx()))
 	if err != nil {
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, loadDb)
@@ -985,7 +974,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	/*
 		check table
 	*/
-	tableHandler, err := dbHandler.Relation(ctx, loadTable)
+	tableHandler, err := dbHandler.Relation(requestCtx, loadTable)
 	if err != nil {
 		//echo client. no such table
 		return NewMysqlError(ER_NO_SUCH_TABLE, loadDb, loadTable)
@@ -994,7 +983,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	/*
 		execute load data
 	*/
-	result, err := mce.LoadLoop(load, dbHandler, tableHandler, loadDb)
+	result, err := mce.LoadLoop(requestCtx, load, dbHandler, tableHandler, loadDb)
 	if err != nil {
 		return err
 	}
@@ -1013,13 +1002,11 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 /*
 handle cmd CMD_FIELD_LIST
 */
-func (mce *MysqlCmdExecutor) handleCmdFieldList(icfl *InternalCmdFieldList) error {
+func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl *InternalCmdFieldList) error {
 	var err error
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 	tableName := icfl.tableName
-
-	ctx := context.TODO()
 
 	dbName := ses.GetDatabaseName()
 	if dbName == "" {
@@ -1034,22 +1021,22 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(icfl *InternalCmdFieldList) erro
 		if mce.tableInfos == nil || mce.db != dbName {
 			txnHandler := ses.GetTxnHandler()
 			eng := ses.GetStorage()
-			db, err := eng.Database(ctx, dbName, engine.Snapshot(txnHandler.GetTxn().GetCtx()))
+			db, err := eng.Database(requestCtx, dbName, engine.Snapshot(txnHandler.GetTxn().GetCtx()))
 			if err != nil {
 				return err
 			}
 
-			names, err := db.Relations(ctx)
+			names, err := db.Relations(requestCtx)
 			if err != nil {
 				return err
 			}
 			for _, name := range names {
-				table, err := db.Relation(ctx, name)
+				table, err := db.Relation(requestCtx, name)
 				if err != nil {
 					return err
 				}
 
-				defs, err := table.TableDefs(ctx)
+				defs, err := table.TableDefs(requestCtx)
 				if err != nil {
 					return err
 				}
@@ -1269,7 +1256,7 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 	return err
 }
 
-func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
+func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, stmt *tree.AnalyzeStmt) error {
 	// rewrite analyzeStmt to `select approx_count_distinct(col), .. from tbl`
 	// IMO, this approach is simple and future-proof
 	// Although this rewriting processing could have been handled in rewrite module,
@@ -1287,7 +1274,7 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 	ctx.WriteString(" from ")
 	stmt.Table.Format(ctx)
 	sql := ctx.String()
-	return mce.doComQuery(sql)
+	return mce.doComQuery(requestCtx, sql)
 }
 
 // Note: for pass the compile quickly. We will remove the comments in the future.
@@ -1551,7 +1538,7 @@ func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 	return cwft.compile.GetAffectedRows()
 }
 
-func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	var err error
 	cwft.plan, err = buildPlan(cwft.ses.GetTxnCompilerContext(), cwft.stmt)
 	if err != nil {
@@ -1608,7 +1595,7 @@ func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{},
 	cwft.proc.UnixTime = time.Now().UnixNano()
 	txnHandler := cwft.ses.GetTxnHandler()
 	cwft.proc.Snapshot = txnHandler.GetTxn().GetCtx()
-	cwft.compile = compile.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), context.TODO(), cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
+	cwft.compile = compile.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), requestCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
 	err = cwft.compile.Compile(cwft.plan, cwft.ses, fill)
 	if err != nil {
 		return nil, err
@@ -1717,7 +1704,7 @@ func (mce *MysqlCmdExecutor) afterRun(stmt tree.Statement, beginInstant time.Tim
 }
 
 // execute query
-func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
+func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) (retErr error) {
 	beginInstant := time.Now()
 	ses := mce.GetSession()
 	ses.showStmtType = NotShowStatement
@@ -1821,14 +1808,11 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		switch st := stmt.(type) {
 		case *tree.Select:
 			if st.Ep != nil {
-				mce.exportDataClose = NewCloseExportData()
 				ses.ep = st.Ep
-				ses.closeRef = mce.exportDataClose
 			}
 		}
 
 		selfHandle = false
-
 		ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
 
 		switch st := stmt.(type) {
@@ -1840,7 +1824,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			}
 		case *tree.Use:
 			selfHandle = true
-			err = mce.handleChangeDB(st.Name)
+			err = mce.handleChangeDB(requestCtx, st.Name)
 			if err != nil {
 				goto handleFailed
 			}
@@ -1856,7 +1840,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		/*case *tree.Load:
 		fromLoadData = true
 		selfHandle = true
-		err = mce.handleLoadData(st)
+		err = mce.handleLoadData(requestCtx, st)
 		if err != nil {
 			goto handleFailed
 		}*/
@@ -1894,7 +1878,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			}
 		case *tree.AnalyzeStmt:
 			selfHandle = true
-			if err = mce.handleAnalyzeStmt(st); err != nil {
+			if err = mce.handleAnalyzeStmt(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		case *tree.ExplainStmt:
@@ -1920,7 +1904,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
 		case *InternalCmdFieldList:
 			selfHandle = true
-			if err = mce.handleCmdFieldList(st); err != nil {
+			if err = mce.handleCmdFieldList(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		}
@@ -1934,7 +1918,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 
 		cmpBegin = time.Now()
 
-		if ret, err = cw.Compile(ses, ses.outputCallback); err != nil {
+		if ret, err = cw.Compile(requestCtx, ses, ses.outputCallback); err != nil {
 			goto handleFailed
 		}
 
@@ -2111,7 +2095,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 }
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
-func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err error) {
+func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Request) (resp *Response, err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.NewPanicError(e)
@@ -2143,6 +2127,14 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 
 		if strings.ToLower(seps[0]) == "kill" {
 			//last one is processID
+			/*
+				The 'kill query xxx' is processed in an independent connection.
+				When a 'Ctrl+C' is received from the user in mysql client shell,
+				an independent connection is established and the 'kill query xxx'
+				is sent to the server. The server cancels the 'query xxx' after it
+				receives the 'kill query xxx'. The server responses the OK.
+				Then, the client quit this connection.
+			*/
 			procIdStr := seps[len(seps)-1]
 			procID, err := strconv.ParseUint(procIdStr, 10, 64)
 			if err != nil {
@@ -2158,7 +2150,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 			return resp, nil
 		}
 
-		err := mce.doComQuery(query)
+		err := mce.doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_QUERY, err)
 		}
@@ -2167,7 +2159,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 		var dbname = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		query := "use `" + dbname + "`"
-		err := mce.doComQuery(query)
+		err := mce.doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_INIT_DB, err)
 		}
@@ -2177,7 +2169,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 		var payload = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		query := makeCmdFieldListSql(payload)
-		err := mce.doComQuery(query)
+		err := mce.doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_FIELD_LIST, err)
 		}
@@ -2194,18 +2186,23 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 	return resp, nil
 }
 
+func (mce *MysqlCmdExecutor) setCancelRequestFunc(cancelFunc context.CancelFunc) {
+	mce.cancelRequestFunc = cancelFunc
+}
+
+func (mce *MysqlCmdExecutor) getCancelRequestFunc() context.CancelFunc {
+	return mce.cancelRequestFunc
+}
+
 func (mce *MysqlCmdExecutor) Close() {
-	//logutil.Infof("close executor")
-	if mce.loadDataClose != nil {
-		//logutil.Infof("close process load data")
-		mce.loadDataClose.Close()
+	cancelRequestFunc := mce.getCancelRequestFunc()
+	if cancelRequestFunc != nil {
+		cancelRequestFunc()
 	}
-	if mce.exportDataClose != nil {
-		mce.exportDataClose.Close()
-	}
-	mce.sessionRWLock.Lock()
-	defer mce.sessionRWLock.Unlock()
-	err := mce.ses.TxnRollback()
+
+	fmt.Println("----close mce")
+	ses := mce.GetSession()
+	err := ses.TxnRollback()
 	if err != nil {
 		logutil.Errorf("rollback txn in mce.Close failed.error:%v", err)
 	}

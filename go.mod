@@ -21,10 +21,10 @@ require (
 	github.com/google/gofuzz v1.2.0
 	github.com/google/gops v0.3.25
 	github.com/google/uuid v1.3.0
-	github.com/lni/dragonboat/v4 v4.0.0-20220803152440-a83f853de8b1
+	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/matrixorigin/matrixcube v0.3.1-0.20220606032431-c944d801f1e5
-	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
+	github.com/matrixorigin/simdcsv v0.0.0-20220816072029-cbd764f09dc5
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
 	github.com/panjf2000/ants/v2 v2.4.6
 	github.com/pierrec/lz4 v2.6.1+incompatible

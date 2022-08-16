@@ -78,7 +78,6 @@ type Session struct {
 	ep           *tree.ExportParam
 	showStmtType ShowStatementType
 
-	closeRef      *CloseExportData
 	txnHandler    *TxnHandler
 	txnCompileCtx *TxnCompilerContext
 	storage       engine.Engine
@@ -95,6 +94,8 @@ type Session struct {
 	optionBits uint32
 
 	prepareStmts map[string]*PrepareStmt
+
+	requestCtx context.Context
 
 	//it gets the result set from the pipeline and send it to the client
 	outputCallback func(interface{}, *batch.Batch) error
@@ -135,6 +136,39 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 	ses.txnCompileCtx.SetSession(ses)
 	ses.txnHandler.SetSession(ses)
 	return ses
+}
+
+// BackgroundSession executing the sql in background
+type BackgroundSession struct {
+	*Session
+	cancel context.CancelFunc
+}
+
+// NewBackgroundSession generates an independent background session executing the sql
+func NewBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *BackgroundSession {
+	ses := NewSession(&FakeProtocol{}, gm, mp, PU, gSysVars)
+	ses.SetOutputCallback(fakeDataSetFetcher)
+	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(ctx)
+	ses.SetRequestContext(cancelBackgroundCtx)
+	backSes := &BackgroundSession{
+		Session: ses,
+		cancel:  cancelBackgroundFunc,
+	}
+	return backSes
+}
+
+func (bgs *BackgroundSession) Close() {
+	if bgs.cancel != nil {
+		bgs.cancel()
+	}
+}
+
+func (ses *Session) SetRequestContext(reqCtx context.Context) {
+	ses.requestCtx = reqCtx
+}
+
+func (ses *Session) GetRequestContext() context.Context {
+	return ses.requestCtx
 }
 
 func (ses *Session) SetMysqlResultSet(mrs *MysqlResultSet) {
@@ -523,7 +557,7 @@ func (ses *Session) AuthenticateUser(userInput string) error {
 	ses.SetTenantInfo(tenant)
 
 	//Get the password of the user in an independent session
-	err = executeSQLInBackgroundSession(ses.GuestMmu, ses.Mempool, ses.Pu, "use mo_catalog; select * from mo_database;")
+	err = executeSQLInBackgroundSession(ses.requestCtx, ses.GuestMmu, ses.Mempool, ses.Pu, "use mo_catalog; select * from mo_database;")
 	return err
 }
 
@@ -641,8 +675,7 @@ func (tcc *TxnCompilerContext) GetRootSql() string {
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	var err error
 	//open database
-	ctx := context.TODO()
-	_, err = tcc.txnHandler.GetStorage().Database(ctx, name, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
+	_, err = tcc.txnHandler.GetStorage().Database(tcc.ses.GetRequestContext(), name, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
 	if err != nil {
 		logutil.Errorf("get database %v failed. error %v", name, err)
 		return false
@@ -657,7 +690,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 		return nil, err
 	}
 
-	ctx := context.TODO()
+	ctx := tcc.ses.GetRequestContext()
 	//open database
 	db, err := tcc.txnHandler.GetStorage().Database(ctx, dbName, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
 	if err != nil {
@@ -699,7 +732,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	if err != nil {
 		return nil, nil
 	}
-	ctx := context.TODO()
+	ctx := tcc.ses.GetRequestContext()
 	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
 		return nil, nil
@@ -801,7 +834,7 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 }
 
 func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*plan2.ColDef {
-	ctx := context.TODO()
+	ctx := tcc.ses.GetRequestContext()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
@@ -837,7 +870,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 }
 
 func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *plan2.ColDef {
-	ctx := context.TODO()
+	ctx := tcc.ses.GetRequestContext()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
@@ -914,13 +947,13 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 
 // executeSQLInBackgroundSession executes the sql in an independent session and transaction.
 // It sends nothing to the client.
-func executeSQLInBackgroundSession(gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) error {
+func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) error {
 	mce := NewMysqlCmdExecutor()
 	defer mce.Close()
-	ses := NewSession(&FakeProtocol{}, gm, mp, pu, gSysVariables)
-	ses.SetOutputCallback(fakeDataSetFetcher)
-	mce.PrepareSessionBeforeExecRequest(ses)
-	err := mce.doComQuery(sql)
+	backSess := NewBackgroundSession(ctx, gm, mp, pu, gSysVariables)
+	mce.PrepareSessionBeforeExecRequest(backSess.Session)
+	defer backSess.Close()
+	err := mce.doComQuery(backSess.GetRequestContext(), sql)
 	if err != nil {
 		return err
 	}

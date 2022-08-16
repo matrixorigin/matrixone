@@ -15,6 +15,7 @@
 package external
 
 import (
+	"context"
 	"io"
 	"sync/atomic"
 
@@ -29,8 +30,9 @@ type ExternalParam struct {
 	Cols          []*plan.ColDef
 	Name2ColIndex map[string]int32
 	CreateSql     string
+	Ctx           context.Context
 	plh           *ParseLineHandler
-	load 		  *tree.LoadParameter
+	load          *tree.LoadParameter
 	IgnoreLine    int
 	IgnoreLineTag int
 	// tag indicate the fileScan is finished
@@ -39,7 +41,7 @@ type ExternalParam struct {
 	FileIndex int
 	FileList  []string
 	batchSize int
-	reader io.ReadCloser
+	reader    io.ReadCloser
 }
 
 type Argument struct {

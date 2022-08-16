@@ -115,6 +115,8 @@ type SharePart struct {
 
 	//result of load
 	result *LoadResult
+
+	loadCtx context.Context
 }
 
 type notifyEventType int
@@ -174,9 +176,9 @@ type ParseLineHandler struct {
 	SharePart
 	DebugTime
 
-	threadInfo                  map[int]*ThreadInfo
-	simdCsvReader               *simdcsv.Reader
-	closeOnceGetParsedLinesChan sync.Once
+	threadInfo    map[int]*ThreadInfo
+	simdCsvReader *simdcsv.Reader
+	//closeOnceGetParsedLinesChan sync.Once
 	//csv read put lines into the channel
 	simdCsvGetParsedLinesChan atomic.Value // chan simdcsv.LineOut
 	//the count of writing routine
@@ -186,8 +188,6 @@ type ParseLineHandler struct {
 	simdCsvBatchPool              chan *PoolElement
 	simdCsvNotiyEventChan         chan *notifyEvent
 	closeOnce                     sync.Once
-
-	closeRef *CloseLoadData
 }
 
 type WriteBatchHandler struct {
@@ -199,8 +199,6 @@ type WriteBatchHandler struct {
 	pl          *PoolElement
 	batchFilled int
 	simdCsvErr  error
-
-	closeRef *CloseLoadData
 }
 
 type CloseLoadData struct {
@@ -227,6 +225,50 @@ func getLineOutChan(v atomic.Value) chan simdcsv.LineOut {
 	return v.Load().(chan simdcsv.LineOut)
 }
 
+func (plh *ParseLineHandler) getLineOutCallback(lineOut simdcsv.LineOut) error {
+	wait_a := time.Now()
+	defer func() {
+		AtomicAddDuration(plh.asyncChan, time.Since(wait_a))
+	}()
+
+	wait_d := time.Now()
+	if lineOut.Line == nil && lineOut.Lines == nil {
+		return nil
+	}
+	if lineOut.Line != nil {
+		//step 1 : skip dropped lines
+		if plh.lineCount < plh.load.LoadParam.Tail.IgnoredLines {
+			plh.lineCount++
+			return nil
+		}
+
+		wait_b := time.Now()
+
+		//step 2 : append line into line array
+		plh.simdCsvLineArray[plh.lineIdx] = lineOut.Line
+		plh.lineIdx++
+		plh.lineCount++
+		plh.maxFieldCnt = Max(plh.maxFieldCnt, len(lineOut.Line))
+
+		AtomicAddDuration(plh.csvLineArray1, time.Since(wait_b))
+
+		if plh.lineIdx == plh.batchSize {
+			//logutil.Infof("+++++ batch bytes %v B %v MB",plh.bytes,plh.bytes / 1024.0 / 1024.0)
+			err := saveLinesToStorage(plh, false)
+			if err != nil {
+				return err
+			}
+
+			plh.lineIdx = 0
+			plh.maxFieldCnt = 0
+			plh.bytes = 0
+		}
+	}
+	AtomicAddDuration(plh.asyncChanLoop, time.Since(wait_d))
+
+	return nil
+}
+
 func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 	wait_a := time.Now()
 	defer func() {
@@ -234,13 +276,17 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 	}()
 
 	var lineOut simdcsv.LineOut
+	var status bool
 	for {
 		quit := false
 		select {
-		case <-plh.closeRef.stopLoadData:
+		case <-plh.loadCtx.Done():
 			logutil.Infof("----- get stop in getLineOutFromSimdCsvRoutine")
 			quit = true
-		case lineOut = <-getLineOutChan(plh.simdCsvGetParsedLinesChan):
+		case lineOut, status = <-getLineOutChan(plh.simdCsvGetParsedLinesChan):
+			if !status {
+				quit = true
+			}
 		}
 
 		if quit {
@@ -309,15 +355,14 @@ func AtomicAddDuration(v atomic.Value, t interface{}) {
 }
 
 func (plh *ParseLineHandler) close() {
-	plh.closeOnceGetParsedLinesChan.Do(func() {
-		close(getLineOutChan(plh.simdCsvGetParsedLinesChan))
-	})
+	//plh.closeOnceGetParsedLinesChan.Do(func() {
+	//	close(getLineOutChan(plh.simdCsvGetParsedLinesChan))
+	//})
 	plh.closeOnce.Do(func() {
 		close(plh.simdCsvBatchPool)
 		close(plh.simdCsvNotiyEventChan)
 		plh.simdCsvReader.Close()
 	})
-	plh.closeRef.Close()
 }
 
 /*
@@ -389,13 +434,12 @@ func makeBatch(handler *ParseLineHandler, id int) *PoolElement {
 /*
 Init ParseLineHandler
 */
-func initParseLineHandler(handler *ParseLineHandler) error {
+func initParseLineHandler(requestCtx context.Context, handler *ParseLineHandler) error {
 	relation := handler.tableHandler
 	load := handler.load
 
 	var cols []*engine.AttributeDef = nil
-	ctx := context.TODO()
-	defs, err := relation.TableDefs(ctx)
+	defs, err := relation.TableDefs(requestCtx)
 	if err != nil {
 		return err
 	}
@@ -497,9 +541,9 @@ func initWriteBatchHandler(handler *ParseLineHandler, wHandler *WriteBatchHandle
 	wHandler.oneTxnPerBatch = handler.oneTxnPerBatch
 	wHandler.timestamp = handler.timestamp
 	wHandler.result = &LoadResult{}
-	wHandler.closeRef = handler.closeRef
 	wHandler.lineCount = handler.lineCount
 	wHandler.skipWriteBatch = handler.skipWriteBatch
+	wHandler.loadCtx = handler.loadCtx
 
 	wHandler.pl = allocBatch(handler)
 	wHandler.ThreadInfo = handler.threadInfo[wHandler.pl.id]
@@ -641,7 +685,6 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 			rowIdx := batchBegin + i
 			offset := i + 1
 			base := handler.lineCount - uint64(fetchCnt)
-			//fmt.Println(line)
 			//logutil.Infof("------ linecount %d fetchcnt %d base %d offset %d",
 			//	handler.lineCount,fetchCnt,base,offset)
 			//record missing column
@@ -1663,7 +1706,7 @@ when force is true, batchsize will be changed.
 func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 	var err error = nil
 
-	ctx := context.TODO()
+	ctx := handler.loadCtx
 	if handler.batchFilled == handler.batchSize {
 		//batchBytes := 0
 		//for _, vec := range handler.batchData.Vecs {
@@ -1687,7 +1730,8 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		var txnHandler *TxnHandler
 		tableHandler := handler.tableHandler
 		initSes := handler.ses
-		tmpSes := NewSession(initSes.GetMysqlProtocol(), initSes.GuestMmu, initSes.Mempool, initSes.Pu, gSysVariables)
+		tmpSes := NewBackgroundSession(ctx, initSes.GuestMmu, initSes.Mempool, initSes.Pu, gSysVariables)
+		defer tmpSes.Close()
 		if !handler.skipWriteBatch {
 			if handler.oneTxnPerBatch {
 				txnHandler = tmpSes.GetTxnHandler()
@@ -1833,7 +1877,8 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				tableHandler := handler.tableHandler
 				// dbHandler := handler.dbHandler
 				initSes := handler.ses
-				tmpSes := NewSession(initSes.GetMysqlProtocol(), initSes.GuestMmu, initSes.Mempool, initSes.Pu, gSysVariables)
+				tmpSes := NewBackgroundSession(ctx, initSes.GuestMmu, initSes.Mempool, initSes.Pu, gSysVariables)
+				defer tmpSes.Close()
 				var dbHandler engine.Database
 				if !handler.skipWriteBatch {
 					if handler.oneTxnPerBatch {
@@ -1948,10 +1993,9 @@ func PrintThreadInfo(handler *ParseLineHandler, close *CloseFlag, a time.Duratio
 /*
 LoadLoop reads data from stream, extracts the fields, and saves into the table
 */
-func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
+func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
 	ses := mce.GetSession()
 
-	var m sync.Mutex
 	//begin:=  time.Now()
 	//defer func() {
 	//	logutil.Infof("-----load loop exit %s",time.Since(begin))
@@ -1997,6 +2041,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			batchSize:        curBatchSize,
 			result:           result,
 			skipWriteBatch:   ses.Pu.SV.GetLoadDataSkipWritingBatch(),
+			loadCtx:          requestCtx,
 		},
 		threadInfo:                    make(map[int]*ThreadInfo),
 		simdCsvGetParsedLinesChan:     atomic.Value{},
@@ -2027,14 +2072,6 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	notifyChanSize := handler.simdCsvConcurrencyCountOfWriteBatch * 2
 	notifyChanSize = Max(100, notifyChanSize)
 
-	/*
-		make close reference
-	*/
-	handler.closeRef = NewCloseLoadData()
-
-	//put closeRef into the executor
-	mce.loadDataClose = handler.closeRef
-
 	handler.simdCsvReader = simdcsv.NewReaderWithOptions(dataFile,
 		rune(load.LoadParam.Tail.Fields.Terminated[0]),
 		'#',
@@ -2049,7 +2086,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	//release resources of handler
 	defer handler.close()
 
-	err = initParseLineHandler(handler)
+	err = initParseLineHandler(requestCtx, handler)
 	if err != nil {
 		return nil, err
 	}
@@ -2065,30 +2102,21 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	wg := sync.WaitGroup{}
 
 	/*
-		read from the output channel of the simdcsv parser, make a batch,
-		deliver it to async routine writing batch
-	*/
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err := handler.getLineOutFromSimdCsvRoutine()
-		if err != nil {
-			logutil.Errorf("get line from simdcsv failed. err:%v", err)
-			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_OUTPUT_SIMDCSV_ERROR, err, nil)
-		}
-	}()
-
-	/*
 		get lines from simdcsv, deliver them to the output channel.
 	*/
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		wait_b := time.Now()
-
-		m.Lock()
-		defer m.Unlock()
-		err := handler.simdCsvReader.ReadLoop(getLineOutChan(handler.simdCsvGetParsedLinesChan))
+		//TODO: add a output callback
+		//TODO: remove the channel
+		err = handler.simdCsvReader.ReadLoop(requestCtx, nil, handler.getLineOutCallback)
+		//last batch
+		err = saveLinesToStorage(handler, true)
+		if err != nil {
+			logutil.Errorf("get line from simdcsv failed. err:%v", err)
+			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_OUTPUT_SIMDCSV_ERROR, err, nil)
+		}
 		if err != nil {
 			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_READ_SIMDCSV_ERROR, err, nil)
 		}
@@ -2109,12 +2137,10 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 		for {
 			quit := false
 			select {
-			case <-handler.closeRef.stopLoadData:
-				//get obvious cancel
+			case <-requestCtx.Done():
+				logutil.Info("cancel the load")
 				retErr = NewMysqlError(ER_QUERY_INTERRUPTED)
 				quit = true
-				//logutil.Infof("----- get stop in load ")
-
 			case ne = <-handler.simdCsvNotiyEventChan:
 				switch ne.neType {
 				case NOTIFY_EVENT_WRITE_BATCH_RESULT:
@@ -2137,13 +2163,8 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			}
 
 			if quit {
-				//
 				handler.simdCsvReader.Close()
-				handler.closeOnceGetParsedLinesChan.Do(func() {
-					m.Lock()
-					defer m.Unlock()
-					close(getLineOutChan(handler.simdCsvGetParsedLinesChan))
-				})
+
 				go func() {
 					for closechannel.IsOpened() {
 						select {
@@ -2180,6 +2201,5 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	statsWg.Wait()
 	close.Close()
 	closechannel.Close()
-
 	return result, retErr
 }
