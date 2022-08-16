@@ -51,16 +51,7 @@ func (d Weekday) String() string {
 	return "%Weekday(" + strconv.FormatUint(uint64(d), 10) + ")"
 }
 
-var startupTime time.Time
-var localTZ int64
-var unixEpoch int64 // microsecond unit, 1970-1-1 00:00:00 since 1-1-1 00:00:00
-
-func init() {
-	startupTime = time.Now()
-	_, offset := startupTime.Zone()
-	localTZ = int64(offset)
-	unixEpoch = int64(FromClock(1970, 1, 1, 0, 0, 0, 0))
-}
+var unixEpoch = int64(FromClock(1970, 1, 1, 0, 0, 0, 0))
 
 var (
 	ErrIncorrectDateValue = errors.New(errno.DataException, "Incorrect date format")

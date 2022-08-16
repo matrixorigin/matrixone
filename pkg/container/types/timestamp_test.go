@@ -17,6 +17,7 @@ package types
 import (
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/require"
 )
@@ -25,28 +26,20 @@ func TestTimestamp_String(t *testing.T) {
 	a, err := ParseTimestamp(time.Local, "2012-01-01 11:11:11", 6)
 	require.NoError(t, err)
 	resultStr := a.String()
-	require.Equal(t, "2012-01-01 11:11:11.000000", resultStr)
+	require.Equal(t, "2012-01-01 03:11:11.000000 UTC", resultStr)
 	a, err = ParseTimestamp(time.Local, "20120101111111", 6)
 	require.NoError(t, err)
 	resultStr = a.String()
-	require.Equal(t, "2012-01-01 11:11:11.000000", resultStr)
-
-	resultStr1 := a.String()
-	require.NoError(t, err)
-	require.Equal(t, "2012-01-01 11:11:11.000000", resultStr1)
-
-	resultStr2 := a.String()
-	require.NoError(t, err)
-	require.Equal(t, "2012-01-01 11:11:11.000000", resultStr2)
+	require.Equal(t, "2012-01-01 03:11:11.000000 UTC", resultStr)
 
 	a, err = ParseTimestamp(time.Local, "2012-01-01 11:11:11.123", 6)
 	resultStr3 := a.String()
 	require.NoError(t, err)
-	require.Equal(t, "2012-01-01 11:11:11.123000", resultStr3)
+	require.Equal(t, "2012-01-01 03:11:11.123000 UTC", resultStr3)
 	a, err = ParseTimestamp(time.Local, "20120101111111.123", 6)
 	resultStr3 = a.String()
 	require.NoError(t, err)
-	require.Equal(t, "2012-01-01 11:11:11.123000", resultStr3)
+	require.Equal(t, "2012-01-01 03:11:11.123000 UTC", resultStr3)
 
 }
 
@@ -134,4 +127,15 @@ func TestParseTimestamp(t *testing.T) {
 	//ts, err := ParseTimestamp(time.UTC, "9999-12-31 23:59:59.5", 0)
 	//fmt.Println(int64(ts))
 	//require.Error(t, err)
+}
+
+func TestLocation(t *testing.T) {
+	loc := time.FixedZone("test", 8*3600)
+	locPtr := (*unsafeLoc)(unsafe.Pointer(loc))
+	require.Equal(t, len(locPtr.zone), 1)
+
+	loc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	locPtr = (*unsafeLoc)(unsafe.Pointer(loc))
+	require.Greater(t, len(locPtr.zone), 1)
 }

@@ -57,11 +57,11 @@ func init() {
 }
 
 func (ts Timestamp) String() string {
-	dt := Datetime(int64(ts) + localTZ*microSecsPerSec)
+	dt := Datetime(int64(ts))
 	y, m, d, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
 	msec := int64(ts) % microSecsPerSec
-	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d.%06d", y, m, d, hour, minute, sec, msec)
+	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d.%06d UTC", y, m, d, hour, minute, sec, msec)
 }
 
 // String2 stringify timestamp, including its fractional seconds precision part(fsp)
@@ -144,13 +144,37 @@ func ParseTimestamp(loc *time.Location, s string, precision int32) (Timestamp, e
 	return result, nil
 }
 
+type unsafeLoc struct {
+	name String
+	zone []struct {
+		name   string
+		offset int
+		isDST  bool
+	}
+	tx []struct {
+		when         int64
+		index        uint8
+		isstd, isutc bool
+	}
+	extend string
+}
+
 func TimestampToDatetime(loc *time.Location, xs []Timestamp, rs []Datetime) ([]Datetime, error) {
 	xsInInt64 := *(*[]int64)(unsafe.Pointer(&xs))
 	rsInInt64 := *(*[]int64)(unsafe.Pointer(&rs))
-	for i, x := range xsInInt64 {
-		t := time.UnixMicro(x - unixEpoch).In(loc)
-		_, offset := t.Zone()
-		rsInInt64[i] = x + int64(offset)*microSecsPerSec
+
+	locPtr := (*unsafeLoc)(unsafe.Pointer(loc))
+	if len(locPtr.zone) == 1 {
+		offset := int64(locPtr.zone[0].offset) * microSecsPerSec
+		for i, x := range xsInInt64 {
+			rsInInt64[i] = x + offset
+		}
+	} else {
+		for i, x := range xsInInt64 {
+			t := time.UnixMicro(x - unixEpoch).In(loc)
+			_, offset := t.Zone()
+			rsInInt64[i] = x + int64(offset)*microSecsPerSec
+		}
 	}
 	return rs, nil
 }
