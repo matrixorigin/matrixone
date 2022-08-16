@@ -112,7 +112,8 @@ type Process struct {
 
 	SessionInfo SessionInfo
 
-	// snapshot is transaction context
+	Ctx context.Context
+
 	Cancel context.CancelFunc
 }
 
