@@ -231,11 +231,12 @@ message PartitionDef {
 		LINEAR_KEY = 8;
 	}
 	PartitionType typ = 1;
-	string partitionExpr = 2;
+	string partitionExpression = 2;
 	repeated string partitionColumns = 3;
 	uint64 partitionNum = 4;
-	repeated PartitionItem partitions = 5;
-	bool isSubPartition = 6;
+	int64 algorithm = 5;
+	repeated PartitionItem partitions = 6;
+	bool isSubPartition = 7;
 }
 
 message PartitionItem {
@@ -243,9 +244,10 @@ message PartitionItem {
 	uint32 ordinalPosition = 2;
 	string description = 3;
 	string comment = 4;
-	string partitionExpression = 5;
-	int64 algorithm = 6;
-	PartitionDef subPartition = 7;
+	int64 algorithm = 5;
+	string partitionExpression = 6;
+	repeated string partitionColumns = 7;
+	PartitionDef subPartition = 8;
 }
 
 message ViewDef {

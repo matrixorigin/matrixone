@@ -26,10 +26,12 @@ const (
 	WARN    = 2
 
 	// Group 1: Internal errors
-	ERROR_START              = 1000
-	INTERNAL_ERROR           = 1001
-	NYI                      = 1002
-	ERROR_FUNCTION_PARAMETER = 1003
+	ERROR_START                = 1000
+	INTERNAL_ERROR             = 1001
+	NYI                        = 1002
+	ERROR_FUNCTION_PARAMETER   = 1003
+	ERROR_FIELD_NOT_FOUND_PART = 1488
+	ERROR_SUBPARTITION         = 1500
 
 	// Group 2: numeric
 	DIVIVISION_BY_ZERO = 2000

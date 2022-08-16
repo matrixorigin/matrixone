@@ -4099,7 +4099,7 @@ sub_partition_method:
 
 algorithm_opt:
     {
-        $$ = 0
+        $$ = 2
     }
 |   ALGORITHM '=' INTEGRAL
     {

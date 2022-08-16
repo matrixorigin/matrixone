@@ -10295,7 +10295,7 @@ yydefault:
 		var yyLOCAL int64
 //line mysql_sql.y:4101
 		{
-			yyLOCAL = 0
+			yyLOCAL = 2
 		}
 		yyVAL.union = yyLOCAL
 	case 653:

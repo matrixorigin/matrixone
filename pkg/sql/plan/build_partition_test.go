@@ -21,13 +21,12 @@ import (
 
 func TestKeyPartition(t *testing.T) {
 	// KEY(column_list) Partition
-	sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col3) PARTITIONS 4;"
-	//sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col4) PARTITIONS 4;" //tolerance test
+	//sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col3) PARTITIONS 4;"
 	//sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col3);"
 	//sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR KEY(col3) PARTITIONS 5;"
 	//sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY ALGORITHM = 1 (col3);"
-	//sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY ALGORITHM = 3 (col3);"
 	//sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR KEY ALGORITHM = 1 (col3) PARTITIONS 5;"
+	sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col1, col2) PARTITIONS 4;"
 
 	mock := NewMockOptimizer()
 	logicPlan, err := buildSingleStmt(mock, t, sql)
@@ -37,11 +36,25 @@ func TestKeyPartition(t *testing.T) {
 	outPutPlan(logicPlan, false, t)
 }
 
+func TestKeyPartitionError(t *testing.T) {
+	//sql := "CREATE TABLE ts (id INT, purchased DATE) PARTITION BY KEY( id ) PARTITIONS 4 SUBPARTITION BY HASH( TO_DAYS(purchased) ) SUBPARTITIONS 2;"
+	//sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col4) PARTITIONS 4;"
+	sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY ALGORITHM = 3 (col3);"
+	mock := NewMockOptimizer()
+	_, err := buildSingleStmt(mock, t, sql)
+	if err == nil {
+		t.Fatalf("should show error")
+	}
+}
+
+//---------------------------------------------------------------------------------
+
 func TestHashPartition(t *testing.T) {
 	// HASH(expr) Partition
-	sql := "CREATE TABLE t1 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col1);"
+	//sql := "CREATE TABLE t1 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col1);"
+	//sql := "CREATE TABLE t1 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col1) PARTITIONS 4;"
 	//sql := "CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3));"
-	//sql := "CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR HASH( YEAR(col3)) PARTITIONS 6;"
+	sql := "CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR HASH( YEAR(col3)) PARTITIONS 6;"
 
 	mock := NewMockOptimizer()
 	logicPlan, err := buildSingleStmt(mock, t, sql)
@@ -49,6 +62,17 @@ func TestHashPartition(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 	outPutPlan(logicPlan, false, t)
+}
+
+func TestHashPartitionTest(t *testing.T) {
+	// HASH(expr) Partition
+	sql := "CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3)) PARTITIONS 4 SUBPARTITION BY KEY(col1);"
+
+	mock := NewMockOptimizer()
+	_, err := buildSingleStmt(mock, t, sql)
+	if err == nil {
+		t.Fatalf("Should show error")
+	}
 }
 
 func TestRangePartition(t *testing.T) {
