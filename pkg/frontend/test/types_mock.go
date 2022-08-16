@@ -5,6 +5,7 @@
 package mock_frontend
 
 import (
+	"context"
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
@@ -73,7 +74,7 @@ func (m *MockComputationWrapper) EXPECT() *MockComputationWrapperMockRecorder {
 }
 
 // Compile mocks base method.
-func (m *MockComputationWrapper) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+func (m *MockComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Compile", u, fill)
 	ret0, _ := ret[0].(interface{})

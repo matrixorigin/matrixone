@@ -59,7 +59,7 @@ func Test_initExport(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			sysVar.SetEnableTrace(tt.args.enableTracer)
 			export.ResetGlobalBatchProcessor()
-			initExport(tt.args.config)
+			initExport(context.TODO(), tt.args.config)
 			if tt.empty {
 				require.Equal(t, "*export.noopBatchProcessor", fmt.Sprintf("%v", reflect.ValueOf(export.GetGlobalBatchProcessor()).Type()))
 			} else {
