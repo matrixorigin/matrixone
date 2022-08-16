@@ -15,6 +15,7 @@
 package trace
 
 import (
+	"encoding/binary"
 	"sync"
 	"sync/atomic"
 
@@ -93,10 +94,10 @@ func WithMOVersion(v string) tracerProviderOptionFunc {
 }
 
 // WithNode give id as NodeId, t as NodeType
-func WithNode(id int64, t NodeType) tracerProviderOptionFunc {
+func WithNode(uuid string, t NodeType) tracerProviderOptionFunc {
 	return func(cfg *tracerProviderConfig) {
 		cfg.resource.Put("Node", &MONodeResource{
-			NodeID:   id,
+			NodeUuid: uuid,
 			NodeType: t,
 		})
 	}
@@ -126,16 +127,33 @@ func WithSQLExecutor(f func() ie.InternalExecutor) tracerProviderOptionFunc {
 	}
 }
 
-var _ IDGenerator = &MOTraceIdGenerator{}
+type Uint64IdGenerator struct{}
 
-type MOTraceIdGenerator struct{}
-
-func (M MOTraceIdGenerator) NewIDs() (TraceID, SpanID) {
-	return TraceID(util.Fastrand64()), SpanID(util.Fastrand64())
+func (M Uint64IdGenerator) NewIDs() (uint64, uint64) {
+	return util.Fastrand64(), util.Fastrand64()
 }
 
-func (M MOTraceIdGenerator) NewSpanID() SpanID {
-	return SpanID(util.Fastrand64())
+func (M Uint64IdGenerator) NewSpanID() uint64 {
+	return util.Fastrand64()
+}
+
+var _ IDGenerator = &moIDGenerator{}
+
+type moIDGenerator struct{}
+
+func (M moIDGenerator) NewIDs() (TraceID, SpanID) {
+	tid := TraceID{}
+	binary.BigEndian.PutUint64(tid[:], util.Fastrand64())
+	binary.BigEndian.PutUint64(tid[8:], util.Fastrand64())
+	sid := SpanID{}
+	binary.BigEndian.PutUint64(sid[:], util.Fastrand64())
+	return tid, sid
+}
+
+func (M moIDGenerator) NewSpanID() SpanID {
+	sid := SpanID{}
+	binary.BigEndian.PutUint64(sid[:], util.Fastrand64())
+	return sid
 }
 
 var _ TracerProvider = &MOTracerProvider{}
@@ -144,15 +162,22 @@ type MOTracerProvider struct {
 	tracerProviderConfig
 }
 
-func newMOTracerProvider(opts ...TracerProviderOption) *MOTracerProvider {
+func defaultMOTracerProvider() *MOTracerProvider {
 	pTracer := &MOTracerProvider{
 		tracerProviderConfig{
 			enableTracer:     0,
 			resource:         newResource(),
-			idGenerator:      &MOTraceIdGenerator{},
+			idGenerator:      &moIDGenerator{},
 			batchProcessMode: InternalExecutor,
 		},
 	}
+	WithNode("node_uuid", NodeTypeNode).apply(&pTracer.tracerProviderConfig)
+	WithMOVersion("MatrixOne").apply(&pTracer.tracerProviderConfig)
+	return pTracer
+}
+
+func newMOTracerProvider(opts ...TracerProviderOption) *MOTracerProvider {
+	pTracer := defaultMOTracerProvider()
 	for _, opt := range opts {
 		opt.apply(&pTracer.tracerProviderConfig)
 	}

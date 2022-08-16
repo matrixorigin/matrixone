@@ -54,7 +54,7 @@ func setup() {
 		context.Background(),
 		EnableTracer(true),
 		WithMOVersion("v0.test.0"),
-		WithNode(0, NodeTypeNode),
+		WithNode("node_uuid", NodeTypeNode),
 		WithSQLExecutor(func() internalExecutor.InternalExecutor {
 			return nil
 		}),

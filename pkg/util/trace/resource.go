@@ -81,6 +81,6 @@ func (t NodeType) String() string {
 }
 
 type MONodeResource struct {
-	NodeID   int64    `json:"node_id"`
+	NodeUuid string   `json:"node_id"`
 	NodeType NodeType `json:"node_type"`
 }
