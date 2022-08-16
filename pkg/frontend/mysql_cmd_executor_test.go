@@ -1084,7 +1084,7 @@ func Test_handleLoadData(t *testing.T) {
 		load := &tree.Load{
 			Local: true,
 		}
-		err = mce.handleLoadData(load)
+		err = mce.handleLoadData(ctx, load)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }

@@ -78,7 +78,7 @@ func Prepare(_ *process.Process, arg any) error {
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	param := arg.(*Argument).Es
 	if param.End {
-		proc.Reg.InputBatch = nil
+		proc.SetInputBatch(nil)
 		return true, nil
 	}
 	param.load.Filepath = param.FileList[param.FileIndex]
@@ -87,7 +87,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		param.End = true
 		return false, err
 	}
-	proc.Reg.InputBatch = bat
+	proc.SetInputBatch(bat)
 	return false, nil
 }
 
@@ -750,7 +750,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	return bat, nil
 }
 
-// read batch data from external file
+// get file reader from external file
 func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 	var err error
 	param.reader, err = getLoadDataReader(param.load)
