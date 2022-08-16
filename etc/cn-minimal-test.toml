@@ -7,9 +7,6 @@ format = "json"
 max-size = 512
 
 [cn.frontend]
-#Start MatrixOne cluster on docker or kubernetes, please refer to this repo [matrixorigin/matrixone-operator](https://github.com/matrixorigin/matrixone-operator)
-
-
 #root name
 rootname = "root"
 
