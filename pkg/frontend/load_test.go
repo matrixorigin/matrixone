@@ -16,14 +16,12 @@ package frontend
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"os"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -444,32 +442,6 @@ func getParsedLinesChan(simdCsvGetParsedLinesChan chan simdcsv.LineOut) {
 		simdCsvGetParsedLinesChan <- simdcsv.LineOut{Lines: nil, Line: str[i]}
 	}
 	simdCsvGetParsedLinesChan <- simdcsv.LineOut{Lines: nil, Line: nil}
-}
-func Test_getLineOutFromSimdCsvRoutine(t *testing.T) {
-	convey.Convey("getLineOutFromSimdCsvRoutine succ", t, func() {
-		handler := &ParseLineHandler{
-			simdCsvGetParsedLinesChan: atomic.Value{},
-			SharePart: SharePart{
-				load:             &tree.Load{IgnoredLines: 1},
-				simdCsvLineArray: make([][]string, 100)},
-		}
-		handler.simdCsvGetParsedLinesChan.Store(make(chan simdcsv.LineOut, 100))
-
-		gostub.StubFunc(&saveLinesToStorage, nil)
-		var cancel context.CancelFunc
-		handler.loadCtx, cancel = context.WithTimeout(context.TODO(), time.Second)
-		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldBeNil)
-		cancel()
-
-		gostub.StubFunc(&saveLinesToStorage, errors.New("1"))
-		handler.loadCtx, cancel = context.WithTimeout(context.TODO(), time.Second)
-		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldNotBeNil)
-		cancel()
-
-		getParsedLinesChan(getLineOutChan(handler.simdCsvGetParsedLinesChan))
-		stubs := gostub.StubFunc(&saveLinesToStorage, nil)
-		defer stubs.Reset()
-	})
 }
 
 func Test_rowToColumnAndSaveToStorage(t *testing.T) {

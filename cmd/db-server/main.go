@@ -265,7 +265,5 @@ func main() {
 
 	cleanup()
 
-	if gSystemVariables.StorageEngine == "tae" {
-		closeTae(tae)
-	}
+	closeTae(tae)
 }

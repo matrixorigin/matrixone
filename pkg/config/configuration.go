@@ -102,9 +102,6 @@ type SystemVariables struct {
 	//export data to csv file default flush size
 	ExportDataDefaultFlushSize int64 `toml:"exportDataDefaultFlushSize"`
 
-	//default engine is 'tae'.
-	StorageEngine string `toml:"storageEngine"`
-
 	//port defines which port the rpc server listens on
 	PortOfRpcServerInComputationEngine int64 `toml:"portOfRpcServerInComputationEngine"`
 
