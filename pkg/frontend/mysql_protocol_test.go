@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/BurntSushi/toml"
 	"math"
 	"reflect"
 	"strconv"
@@ -258,18 +259,12 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	//client connection method: mysql -h 127.0.0.1 -P 6001 -udump -p
 
 	//before anything using the configuration
-	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
-		fmt.Printf("error:%v\n", err)
+	_, err := toml.DecodeFile("test/system_vars_config.toml", &config.GlobalSystemVariables)
+	if err != nil {
 		panic(err)
 	}
 
-	if err := config.LoadvarsConfigFromFile("test/system_vars_config.toml",
-		&config.GlobalSystemVariables); err != nil {
-		fmt.Printf("error:%v\n", err)
-		panic(err)
-	}
-
-	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
+	config.HostMmu = host.New(config.GlobalSystemVariables.HostMmuLimitation)
 	config.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -1188,18 +1183,12 @@ func TestMysqlResultSet(t *testing.T) {
 	//	mysql-8.0.23 success
 	//./mysql-test-run 1st --extern user=root --extern port=6001 --extern host=127.0.0.1
 	//	matrixone failed: mysql-test-run: *** ERROR: Could not connect to extern server using command: '/Users/pengzhen/Documents/mysql-server-mysql-8.0.23/bld/runtime_output_directory//mysql --no-defaults --user=root --user=root --port=6001 --host=127.0.0.1 --silent --database=mysql --execute="SHOW GLOBAL VARIABLES"'
-	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
-		fmt.Printf("error:%v\n", err)
+	_, err := toml.DecodeFile("test/system_vars_config.toml", &config.GlobalSystemVariables)
+	if err != nil {
 		panic(err)
 	}
 
-	if err := config.LoadvarsConfigFromFile("test/system_vars_config.toml",
-		&config.GlobalSystemVariables); err != nil {
-		fmt.Printf("error:%v\n", err)
-		panic(err)
-	}
-
-	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
+	config.HostMmu = host.New(config.GlobalSystemVariables.HostMmuLimitation)
 	config.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
 

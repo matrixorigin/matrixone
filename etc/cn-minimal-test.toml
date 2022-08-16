@@ -1,0 +1,52 @@
+# service node type, [DN|CN|LOG]
+service-type = "CN"
+
+[log]
+level = "debug"
+format = "json"
+max-size = 512
+
+[cn]
+
+[cn.frontend]
+rootname = "root"
+rootpassword = ""
+dumpuser = "dump"
+dumppassword = "111"
+dumpdatabase = "default"
+port = 6001
+host = "0.0.0.0"
+hostMmuLimitation = 1099511627776
+guestMmuLimitation = 1099511627776
+mempoolMaxSize = 1099511627776
+mempoolFactor = 8
+processLimitationSize = 42949672960
+processLimitationBatchRows = 42949672960
+processLimitationBatchSize = 0
+processLimitationPartitionRows = 42949672960
+recordTimeElapsedOfSqlRequest = true
+storePath = "./store"
+lengthOfQueryPrinted = 50
+batchSizeInLoadData = 40000
+loadDataConcurrencyCount = 4
+loadDataSkipWritingBatch = false
+enableProfileGetDataFromPipeline = false
+maxBytesInOutbufToFlush = 1024
+printLogInterVal = 10
+exportDataDefaultFlushSize = 1
+storageEngine = "tae"
+portOfRpcServerInComputationEngine = 20000
+oneTxnPerBatchDuringLoad = true
+statusPort = 7001
+metricToProm = true
+enableMetric = true
+enableTrace = true
+traceBatchProcessor = "InternalExecutor"
+enableTraceDebug = false
+logLevel = "debug"
+logFormat = "json"
+logFilename = ""
+logMaxSize = 512
+logMaxDays = 0
+logMaxBackups = 0
+

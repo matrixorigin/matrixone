@@ -2025,7 +2025,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 	//processTime := time.Now()
 	process_block := time.Duration(0)
 
-	curBatchSize := int(ses.Pu.SV.GetBatchSizeInLoadData())
+	curBatchSize := int(ses.Pu.SV.BatchSizeInLoadData)
 	channelSize := 100
 	//simdcsv
 	handler := &ParseLineHandler{
@@ -2040,11 +2040,11 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 			dbName:           dbName,
 			txnHandler:       ses.GetTxnHandler(),
 			ses:              ses,
-			oneTxnPerBatch:   ses.Pu.SV.GetOneTxnPerBatchDuringLoad(),
+			oneTxnPerBatch:   ses.Pu.SV.OneTxnPerBatchDuringLoad,
 			lineCount:        0,
 			batchSize:        curBatchSize,
 			result:           result,
-			skipWriteBatch:   ses.Pu.SV.GetLoadDataSkipWritingBatch(),
+			skipWriteBatch:   ses.Pu.SV.LoadDataSkipWritingBatch,
 			loadCtx:          requestCtx,
 		},
 		threadInfo:                    make(map[int]*ThreadInfo),
@@ -2053,7 +2053,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 	}
 	handler.simdCsvGetParsedLinesChan.Store(make(chan simdcsv.LineOut, channelSize))
 
-	handler.simdCsvConcurrencyCountOfWriteBatch = Min(int(ses.Pu.SV.GetLoadDataConcurrencyCount()), runtime.NumCPU())
+	handler.simdCsvConcurrencyCountOfWriteBatch = Min(int(ses.Pu.SV.LoadDataConcurrencyCount), runtime.NumCPU())
 	handler.simdCsvConcurrencyCountOfWriteBatch = Max(1, handler.simdCsvConcurrencyCountOfWriteBatch)
 	handler.simdCsvBatchPool = make(chan *PoolElement, handler.simdCsvConcurrencyCountOfWriteBatch)
 	for i := 0; i < handler.simdCsvConcurrencyCountOfWriteBatch; i++ {
@@ -2129,7 +2129,6 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 	go func() {
 		defer wg.Done()
 		wait_b := time.Now()
-		fmt.Println("aaaaaaaaaa")
 		//TODO: add a output callback
 		//TODO: remove the channel
 		err = handler.simdCsvReader.ReadLoop(requestCtx, nil, handler.getLineOutCallback)
@@ -2139,7 +2138,6 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 			logutil.Errorf("get line from simdcsv failed. err:%v", err)
 			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_OUTPUT_SIMDCSV_ERROR, err, nil)
 		}
-		fmt.Println("bbbbbbbbbb")
 		if err != nil {
 			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_READ_SIMDCSV_ERROR, err, nil)
 		}
@@ -2202,7 +2200,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 	}()
 
 	close := CloseFlag{}
-	var a = time.Duration(ses.Pu.SV.GetPrintLogInterVal())
+	var a = time.Duration(ses.Pu.SV.PrintLogInterVal)
 	go func() {
 		PrintThreadInfo(handler, &close, a)
 	}()

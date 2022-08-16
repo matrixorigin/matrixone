@@ -18,6 +18,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/BurntSushi/toml"
 	"os"
 	"os/signal"
 	"syscall"
@@ -38,9 +39,8 @@ import (
 )
 
 const (
-	InitialValuesExit = 1
-	LoadConfigExit    = 2
-	RecreateDirExit   = 3
+	LoadConfigExit  = 2
+	RecreateDirExit = 3
 	//	CreateRPCExit     = 10
 	StartMOExit = 12
 	//	RunRPCExit        = 14
@@ -62,7 +62,7 @@ var (
 )
 
 func createMOServer(inputCtx context.Context) {
-	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
+	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.Host, config.GlobalSystemVariables.Port)
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
 
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
@@ -72,9 +72,9 @@ func createMOServer(inputCtx context.Context) {
 		if _, err := trace.Init(moServerCtx,
 			trace.WithMOVersion(MoVersion),
 			trace.WithNode(0, trace.NodeTypeNode),
-			trace.EnableTracer(config.GlobalSystemVariables.GetEnableTrace()),
-			trace.WithBatchProcessMode(config.GlobalSystemVariables.GetTraceBatchProcessor()),
-			trace.DebugMode(config.GlobalSystemVariables.GetEnableTraceDebug()),
+			trace.EnableTracer(config.GlobalSystemVariables.EnableTrace),
+			trace.WithBatchProcessMode(config.GlobalSystemVariables.TraceBatchProcessor),
+			trace.DebugMode(config.GlobalSystemVariables.EnableTraceDebug),
 			trace.WithSQLExecutor(func() ie.InternalExecutor {
 				return frontend.NewInternalExecutor(pu)
 			}),
@@ -83,7 +83,7 @@ func createMOServer(inputCtx context.Context) {
 		}
 	}
 
-	if config.GlobalSystemVariables.GetEnableMetric() {
+	if config.GlobalSystemVariables.EnableMetric {
 		ieFactory := func() ie.InternalExecutor {
 			return frontend.NewInternalExecutor(pu)
 		}
@@ -127,7 +127,7 @@ type taeHandler struct {
 }
 
 func initTae() *taeHandler {
-	targetDir := config.GlobalSystemVariables.GetStorePath()
+	targetDir := config.GlobalSystemVariables.StorePath
 	if err := recreateDir(targetDir); err != nil {
 		logutil.Infof("Recreate dir error:%v\n", err)
 		os.Exit(RecreateDirExit)
@@ -180,24 +180,19 @@ func main() {
 	configFilePath := args[0]
 
 	//before anything using the configuration
-	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
-		logutil.Infof("Initial values error:%v\n", err)
-		os.Exit(InitialValuesExit)
-	}
-
-	if err := config.LoadvarsConfigFromFile(configFilePath, &config.GlobalSystemVariables); err != nil {
-		logutil.Infof("Load config error:%v\n", err)
+	_, err := toml.DecodeFile(configFilePath, &config.GlobalSystemVariables)
+	if err != nil {
 		os.Exit(LoadConfigExit)
 	}
 
 	logConf := logutil.LogConfig{
-		Level:       config.GlobalSystemVariables.GetLogLevel(),
-		Format:      config.GlobalSystemVariables.GetLogFormat(),
-		Filename:    config.GlobalSystemVariables.GetLogFilename(),
-		MaxSize:     int(config.GlobalSystemVariables.GetLogMaxSize()),
-		MaxDays:     int(config.GlobalSystemVariables.GetLogMaxDays()),
-		MaxBackups:  int(config.GlobalSystemVariables.GetLogMaxBackups()),
-		EnableStore: config.GlobalSystemVariables.GetEnableTrace(),
+		Level:       config.GlobalSystemVariables.LogLevel,
+		Format:      config.GlobalSystemVariables.LogFormat,
+		Filename:    config.GlobalSystemVariables.LogFilename,
+		MaxSize:     int(config.GlobalSystemVariables.LogMaxSize),
+		MaxDays:     int(config.GlobalSystemVariables.LogMaxDays),
+		MaxBackups:  int(config.GlobalSystemVariables.LogMaxBackups),
+		EnableStore: config.GlobalSystemVariables.EnableTrace,
 	}
 
 	logutil.SetupMOLogger(&logConf)
@@ -229,10 +224,10 @@ func main() {
 
 	logutil.Infof("Shutdown The Server With Ctrl+C | Ctrl+\\.")
 
-	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
+	config.HostMmu = host.New(config.GlobalSystemVariables.HostMmuLimitation)
 
 	//	Host := config.GlobalSystemVariables.GetHost()
-	engineName := config.GlobalSystemVariables.GetStorageEngine()
+	engineName := config.GlobalSystemVariables.StorageEngine
 	//	port := config.GlobalSystemVariables.GetPortOfRpcServerInComputationEngine()
 
 	var tae *taeHandler
@@ -257,7 +252,7 @@ func main() {
 
 	createMOServer(cancelMoServerCtx)
 
-	err := runMOServer()
+	err = runMOServer()
 	if err != nil {
 		logutil.Infof("Start MOServer failed, %v", err)
 		os.Exit(StartMOExit)

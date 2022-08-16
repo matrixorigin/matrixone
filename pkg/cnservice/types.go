@@ -15,6 +15,7 @@
 package cnservice
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -51,6 +52,8 @@ type Config struct {
 		// BatchSize is the memory limit for one batch
 		BatchSize int64 `toml:"batch-size"`
 	}
+	//parameters for the frontend
+	Frontend config.SystemVariables `toml:"frontend"`
 }
 
 type service struct {

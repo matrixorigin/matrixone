@@ -49,7 +49,7 @@ func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
 }
 
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
-	pro := NewMysqlClientProtocol(nextConnectionID(), rs, int(rm.pu.SV.GetMaxBytesInOutbufToFlush()), rm.pu.SV)
+	pro := NewMysqlClientProtocol(nextConnectionID(), rs, int(rm.pu.SV.MaxBytesInOutbufToFlush), rm.pu.SV)
 	pro.SetSkipCheckUser(rm.GetSkipCheckUser())
 	exe := NewMysqlCmdExecutor()
 	exe.SetRoutineManager(rm)

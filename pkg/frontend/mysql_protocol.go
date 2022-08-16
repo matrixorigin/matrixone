@@ -636,8 +636,8 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 	//TODO:check the user and the connection
 	//TODO:get the user's password
 	var psw []byte
-	if mp.username == mp.SV.GetDumpuser() { //the user dump for test
-		psw = []byte(mp.SV.GetDumppassword())
+	if mp.username == mp.SV.Dumpuser { //the user dump for test
+		psw = []byte(mp.SV.Dumppassword)
 	}
 
 	if !mp.GetSkipCheckUser() {

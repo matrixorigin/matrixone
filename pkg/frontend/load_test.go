@@ -214,7 +214,7 @@ func Test_load(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		config.StorageEngine = eng
 		defer func() {
 			config.StorageEngine = nil
@@ -415,7 +415,7 @@ func Test_load(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 
 		config.StorageEngine = eng
 		defer func() {

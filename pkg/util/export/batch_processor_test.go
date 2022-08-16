@@ -37,10 +37,10 @@ func init() {
 	logutil.SetupMOLogger(&logutil.LogConfig{
 		Level:       zapcore.DebugLevel.String(),
 		Format:      "console",
-		Filename:    config.GlobalSystemVariables.GetLogFilename(),
-		MaxSize:     int(config.GlobalSystemVariables.GetLogMaxSize()),
-		MaxDays:     int(config.GlobalSystemVariables.GetLogMaxDays()),
-		MaxBackups:  int(config.GlobalSystemVariables.GetLogMaxBackups()),
+		Filename:    config.GlobalSystemVariables.LogFilename,
+		MaxSize:     int(config.GlobalSystemVariables.LogMaxSize),
+		MaxDays:     int(config.GlobalSystemVariables.LogMaxDays),
+		MaxBackups:  int(config.GlobalSystemVariables.LogMaxBackups),
 		EnableStore: false,
 	})
 	if err := agent.Listen(agent.Options{}); err != nil {

@@ -1,5 +1,5 @@
 # do not change this part {
-parameter-struct-name = "SystemVariables"
+parameter-struct-name = "SystemVariablesAbandoned"
 config-struct-name = "varsConfig"
 
 operation-file-name = "system_vars"
@@ -15,7 +15,7 @@ type = "string"
 domain-type = "set"
 values = ["root"]
 comment = "root name"
-update-mode = "fix"
+update-mode = "dynamic"
 
 [[parameter]]
 name = "rootpassword"
@@ -35,7 +35,7 @@ type = "string"
 domain-type = "set"
 values = ["dump"]
 comment = "dump user name"
-update-mode = "fix"
+update-mode = "dynamic"
 
 [[parameter]]
 name = "dumppassword"
@@ -45,7 +45,7 @@ type = "string"
 domain-type = "set"
 values = ["111"]
 comment = "dump user password"
-update-mode = "fix"
+update-mode = "dynamic"
 
 [[parameter]]
 name = "dumpdatabase"

@@ -186,7 +186,7 @@ func Test_mce(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
@@ -300,7 +300,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
@@ -345,7 +345,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
@@ -447,7 +447,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
@@ -518,7 +518,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 			t.Error(err)
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 
@@ -795,7 +795,7 @@ func Test_handleShowCreateTable(t *testing.T) {
 			t.Error(err)
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
@@ -830,7 +830,7 @@ func Test_handleShowCreateDatabase(t *testing.T) {
 			t.Error(err)
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
@@ -861,7 +861,7 @@ func Test_handleShowColumns(t *testing.T) {
 			t.Error(err)
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
