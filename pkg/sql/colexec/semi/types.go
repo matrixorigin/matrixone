@@ -48,8 +48,8 @@ type container struct {
 
 type Argument struct {
 	ctr        *container
-	Ibucket    uint64 // index in buckets
-	Nbucket    uint64 // buckets count
-	Result     []int32
+	Ibucket    uint64  // index in buckets
+	Nbucket    uint64  // buckets count
+	Result     []int32 // col no.
 	Conditions [][]*plan.Expr
 }

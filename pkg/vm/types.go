@@ -51,6 +51,8 @@ const (
 
 	Union
 	Minus
+
+	IntersectAll
 )
 
 // Instruction contains relational algebra

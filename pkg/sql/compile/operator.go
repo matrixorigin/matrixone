@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
@@ -429,6 +430,16 @@ func constructGroup(n, cn *plan.Node, ibucket, nbucket int, needEval bool) *grou
 		Exprs:    n.GroupBy,
 		Ibucket:  uint64(ibucket),
 		Nbucket:  uint64(nbucket),
+	}
+}
+
+//ibucket: bucket number
+//nbucket:
+//construct operator argument
+func constructIntersectAll(_ *plan.Node, proc *process.Process, ibucket, nbucket int) *intersectall.Argument {
+	return &intersectall.Argument{
+		IBucket: uint64(ibucket),
+		NBucket: uint64(nbucket),
 	}
 }
 
