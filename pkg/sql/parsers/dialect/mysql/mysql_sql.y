@@ -6827,7 +6827,6 @@ reserved_keyword:
 |   SHOW
 |   STRAIGHT_JOIN
 |   TABLE
-|   TABLES
 |   THEN
 |   TO
 |   TRUE
@@ -7050,6 +7049,7 @@ non_reserved_keyword:
 |	SOME
 |   TIMESTAMP %prec LOWER_THAN_STRING
 |   DATE %prec LOWER_THAN_STRING
+|   TABLES
 
 func_not_keyword:
 	DATE_ADD

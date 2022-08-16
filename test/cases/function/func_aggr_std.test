@@ -42,10 +42,8 @@ select STDDEV_POP(i) from t1;
 select STDDEV_POP(k) from t1;
 select STDDEV_POP(l) from t1;
 -- @bvt:issue
--- @bvt:issue#3375
 select STDDEV_POP(m) from t1;
 select STDDEV_POP(n) from t1;
--- @bvt:issue
 drop table t1;
 
 
