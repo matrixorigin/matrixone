@@ -78,17 +78,28 @@ func Test_Prepare(t *testing.T) {
 		param := tcs.arg.Es
 		err := Prepare(tcs.proc, tcs.arg)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(param.load, convey.ShouldNotBeNil)
+		convey.So(param.extern, convey.ShouldNotBeNil)
 		convey.So(param.End, convey.ShouldBeTrue)
 
-		load := &tree.LoadParameter{
+		extern := &tree.ExternParam{
 			Filepath: "",
-			LoadType: tree.LOCAL,
+			ScanType: tree.LOCAL,
 			Tail: &tree.TailParameter{
 				IgnoredLines: 0,
 			},
 		}
-		json_byte, err := json.Marshal(load)
+		json_byte, err := json.Marshal(extern)
+		if err != nil {
+			panic(err)
+		}
+		param.CreateSql = string(json_byte)
+		err = Prepare(tcs.proc, tcs.arg)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(param.FileList, convey.ShouldBeNil)
+		convey.So(param.FileCnt, convey.ShouldEqual, 0)
+
+		extern.ScanType = tree.S3
+		json_byte, err = json.Marshal(extern)
 		if err != nil {
 			panic(err)
 		}
@@ -102,6 +113,25 @@ func Test_Prepare(t *testing.T) {
 
 func Test_Call(t *testing.T) {
 	convey.Convey("external Call", t, func() {
+		param := tcs.arg.Es
+		extern := &tree.ExternParam{
+			Filepath: "",
+			ScanType: tree.LOCAL,
+			Tail: &tree.TailParameter{
+				IgnoredLines: 0,
+			},
+		}
+		param.extern = extern
+		param.FileList = []string{"a.txt"}
+		end, err := Call(1, tcs.proc, tcs.arg)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(end, convey.ShouldBeFalse)
 
+		extern.ScanType = tree.S3
+		extern.S3Param = &tree.S3Parameter{}
+		param.End = false
+		end, err = Call(1, tcs.proc, tcs.arg)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(end, convey.ShouldBeFalse)
 	})
 }

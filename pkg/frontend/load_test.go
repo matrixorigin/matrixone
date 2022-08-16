@@ -455,7 +455,7 @@ func Test_getLineOutFromSimdCsvRoutine(t *testing.T) {
 			simdCsvGetParsedLinesChan: atomic.Value{},
 			SharePart: SharePart{
 				load: &tree.Load{
-					LoadParam: &tree.LoadParameter{
+					Param: &tree.ExternParam{
 						Tail: &tree.TailParameter{IgnoredLines: 1},
 					},
 				},

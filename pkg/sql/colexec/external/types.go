@@ -32,7 +32,7 @@ type ExternalParam struct {
 	CreateSql     string
 	Ctx           context.Context
 	plh           *ParseLineHandler
-	load          *tree.ExternParam
+	extern        *tree.ExternParam
 	IgnoreLine    int
 	IgnoreLineTag int
 	// tag indicate the fileScan is finished

@@ -351,7 +351,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			bat.InitZsOne(1)
 		}
 		ds.DataSource = &Source{Bat: bat}
-		return c.compileSort(n, c.compileExternal(n, []*Scope{ds})), nil
+		return c.compileSort(n, c.compileExternalScan(n, []*Scope{ds})), nil
 	case plan.Node_TABLE_SCAN:
 		ss := c.compileTableScan(n)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
@@ -538,7 +538,7 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
-func (c *Compile) compileExternal(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileExternalScan(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.External,
