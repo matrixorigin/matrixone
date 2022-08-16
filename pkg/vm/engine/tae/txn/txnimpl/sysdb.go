@@ -28,6 +28,10 @@ func init() {
 	sysTableNames[catalog.SystemTable_DB_Name] = true
 }
 
+func isSysTable(name string) bool {
+	return sysTableNames[name]
+}
+
 func buildDB(db *txnDB) handle.Database {
 	if db.entry.IsSystemDB() {
 		return newSysDB(db)
@@ -47,7 +51,7 @@ func newSysDB(db *txnDB) *txnSysDB {
 }
 
 func (db *txnSysDB) DropRelationByName(name string) (rel handle.Relation, err error) {
-	if isSys := sysTableNames[name]; isSys {
+	if isSysTable(name) {
 		err = catalog.ErrNotPermitted
 		return
 	}
@@ -55,7 +59,7 @@ func (db *txnSysDB) DropRelationByName(name string) (rel handle.Relation, err er
 }
 
 func (db *txnSysDB) TruncateByName(name string) (rel handle.Relation, err error) {
-	if isSys := sysTableNames[name]; isSys {
+	if isSysTable(name) {
 		err = catalog.ErrNotPermitted
 		return
 	}

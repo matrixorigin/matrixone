@@ -46,12 +46,12 @@ func bool2i8(v bool) int8 {
 	if v {
 		return int8(1)
 	} else {
-		return int8(1)
+		return int8(0)
 	}
 }
 
 func (blk *txnSysBlock) isSysTable() bool {
-	return sysTableNames[blk.table.entry.GetSchema().Name]
+	return isSysTable(blk.table.entry.GetSchema().Name)
 }
 
 func (blk *txnSysBlock) GetTotalChanges() int {
@@ -99,13 +99,11 @@ func (blk *txnSysBlock) tableRows() int {
 func (blk *txnSysBlock) processDB(fn func(*catalog.DBEntry) error, ignoreErr bool) (err error) {
 	it := newDBIt(blk.Txn, blk.catalog)
 	for it.linkIt.Valid() {
-		err = it.GetError()
-		if err != nil && !ignoreErr {
+		if err = it.GetError(); err != nil && !ignoreErr {
 			break
 		}
 		db := it.GetCurr()
-		err = fn(db)
-		if err != nil && !ignoreErr {
+		if err = fn(db); err != nil && !ignoreErr {
 			break
 		}
 		it.Next()
@@ -114,23 +112,20 @@ func (blk *txnSysBlock) processDB(fn func(*catalog.DBEntry) error, ignoreErr boo
 }
 
 func (blk *txnSysBlock) processTable(entry *catalog.DBEntry, fn func(*catalog.TableEntry) error, ignoreErr bool) (err error) {
-	canRead := false
-	tableIt := entry.MakeTableIt(true)
-	for tableIt.Valid() {
-		table := tableIt.Get().GetPayload().(*catalog.TableEntry)
-		table.RLock()
-		canRead, err = table.TxnCanRead(blk.Txn, table.RWMutex)
-		table.RUnlock()
-		if err != nil && !ignoreErr {
+	txnDB, err := blk.table.store.getOrSetDB(entry.GetID())
+	if err != nil {
+		return
+	}
+	it := newRelationIt(txnDB)
+	for it.linkIt.Valid() {
+		if err = it.GetError(); err != nil && !ignoreErr {
 			break
 		}
-		if canRead {
-			err = fn(table)
-			if err != nil && ignoreErr {
-				break
-			}
+		table := it.GetCurr()
+		if err = fn(table); err != nil && !ignoreErr {
+			break
 		}
-		tableIt.Next()
+		it.Next()
 	}
 	return
 }

@@ -2866,21 +2866,65 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 	tae.compactBlocks(false)
 	tae.mergeBlocks(false)
 
-	// tae.restart()
+	tae.restart()
 
-	// check data for good
-	_, tbl := tae.getRelation()
-	checkAllColRowsByScan(t, tbl, 35, false)
+	{
+		// account 2
+		// check data for good
+		_, tbl := tae.getRelation()
+		checkAllColRowsByScan(t, tbl, 35, false)
+		// [mo_catalog, db]
+		assert.Equal(t, 2, len(mustStartTxn(t, tae, 2).DatabaseNames()))
+		_, sysDB = tae.getDB(catalog.SystemDBName)
+		sysDB.Relations()
+		sysDBTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_DB_Name)
+		// [mo_catalog, db]
+		checkAllColRowsByScan(t, sysDBTbl, 2, true)
+		sysTblTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Table_Name)
+		// [mo_database, mo_tables, mo_columns, 'mo_users_t2' 'test-table-a-timestamp']
+		checkAllColRowsByScan(t, sysTblTbl, 5, true)
+		sysColTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Columns_Name)
+		// [mo_database(3), mo_tables(6), mo_columns(15), 'mo_users_t2'(1+1), 'test-table-a-timestamp'(2+1)]
+		checkAllColRowsByScan(t, sysColTbl, 29, true)
+	}
+	{
+		// account 1
+		tae.bindSchema(schema11)
+		tae.bindTenantID(1)
+		// check data for good
+		_, tbl := tae.getRelation()
+		checkAllColRowsByScan(t, tbl, 29, false)
+		// [mo_catalog, db]
+		assert.Equal(t, 2, len(mustStartTxn(t, tae, 1).DatabaseNames()))
+		_, sysDB = tae.getDB(catalog.SystemDBName)
+		sysDB.Relations()
+		sysDBTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_DB_Name)
+		// [mo_catalog, db]
+		checkAllColRowsByScan(t, sysDBTbl, 2, true)
+		sysTblTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Table_Name)
+		// [mo_database, mo_tables, mo_columns, 'mo_users_t1' 'test-table-a-timestamp']
+		checkAllColRowsByScan(t, sysTblTbl, 5, true)
+		sysColTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Columns_Name)
+		// [mo_database(3), mo_tables(6), mo_columns(15), 'mo_users_t1'(1+1), 'test-table-a-timestamp'(3+1)]
+		checkAllColRowsByScan(t, sysColTbl, 30, true)
+	}
+	{
+		// sys account
+		tae.bindSchema(nil)
+		tae.bindTenantID(0)
+		// [mo_catalog]
+		assert.Equal(t, 1, len(mustStartTxn(t, tae, 0).DatabaseNames()))
+		_, sysDB = tae.getDB(catalog.SystemDBName)
+		sysDB.Relations()
+		sysDBTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_DB_Name)
+		// [mo_catalog]
+		checkAllColRowsByScan(t, sysDBTbl, 1, true)
+		sysTblTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Table_Name)
+		// [mo_database, mo_tables, mo_columns, 'mo_accounts']
+		checkAllColRowsByScan(t, sysTblTbl, 4, true)
+		sysColTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Columns_Name)
+		// [mo_database(3), mo_tables(6), mo_columns(15), 'mo_accounts'(1+1)]
+		checkAllColRowsByScan(t, sysColTbl, 26, true)
+	}
 
-	// [mo_catalog, db]
-	assert.Equal(t, 2, len(mustStartTxn(t, tae, 2).DatabaseNames()))
-	_, sysDB = tae.getDB(catalog.SystemDBName)
-	sysDB.Relations()
-	sysDBTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_DB_Name)
-	// [mo_catalog, db]
-	checkAllColRowsByScan(t, sysDBTbl, 2, true)
-
-	// sysTblTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Table_Name)
-	// // [mo_database, mo_tables, mo_columns, 'mo_users_t2' 'test-table-a-timestamp']
-	// checkAllColRowsByScan(t, sysTblTbl, 5, true)
 }
