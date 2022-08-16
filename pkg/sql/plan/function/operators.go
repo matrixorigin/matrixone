@@ -446,6 +446,17 @@ var operators = map[int]Functions{
 				Flag:   plan.Function_STRICT,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
+					types.T_int8,
+					types.T_int8,
+				},
+				ReturnTyp: types.T_int8,
+				Fn:        operator.OpBitXorFun[int8],
+			},
+			{
+				Index:  2,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
 					types.T_uint16,
 					types.T_uint16,
 				},
@@ -453,7 +464,18 @@ var operators = map[int]Functions{
 				Fn:        operator.OpBitXorFun[uint16],
 			},
 			{
-				Index:  2,
+				Index:  3,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int16,
+					types.T_int16,
+				},
+				ReturnTyp: types.T_int16,
+				Fn:        operator.OpBitXorFun[int16],
+			},
+			{
+				Index:  4,
 				Flag:   plan.Function_STRICT,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
@@ -464,7 +486,18 @@ var operators = map[int]Functions{
 				Fn:        operator.OpBitXorFun[uint32],
 			},
 			{
-				Index:  3,
+				Index:  5,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int32,
+					types.T_int32,
+				},
+				ReturnTyp: types.T_int32,
+				Fn:        operator.OpBitXorFun[int32],
+			},
+			{
+				Index:  6,
 				Flag:   plan.Function_STRICT,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
@@ -473,6 +506,17 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_uint64,
 				Fn:        operator.OpBitXorFun[uint64],
+			},
+			{
+				Index:  7,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int64,
+					types.T_int64,
+				},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.OpBitXorFun[int64],
 			},
 		},
 	},
@@ -496,6 +540,17 @@ var operators = map[int]Functions{
 				Flag:   plan.Function_STRICT,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
+					types.T_int8,
+					types.T_int8,
+				},
+				ReturnTyp: types.T_int8,
+				Fn:        operator.OpBitOrFun[int8],
+			},
+			{
+				Index:  2,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
 					types.T_uint16,
 					types.T_uint16,
 				},
@@ -503,7 +558,18 @@ var operators = map[int]Functions{
 				Fn:        operator.OpBitOrFun[uint16],
 			},
 			{
-				Index:  2,
+				Index:  3,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int16,
+					types.T_int16,
+				},
+				ReturnTyp: types.T_int16,
+				Fn:        operator.OpBitOrFun[int16],
+			},
+			{
+				Index:  4,
 				Flag:   plan.Function_STRICT,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
@@ -514,7 +580,18 @@ var operators = map[int]Functions{
 				Fn:        operator.OpBitOrFun[uint32],
 			},
 			{
-				Index:  3,
+				Index:  5,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int32,
+					types.T_int32,
+				},
+				ReturnTyp: types.T_int32,
+				Fn:        operator.OpBitOrFun[int32],
+			},
+			{
+				Index:  6,
 				Flag:   plan.Function_STRICT,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
@@ -523,6 +600,17 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_uint64,
 				Fn:        operator.OpBitOrFun[uint64],
+			},
+			{
+				Index:  7,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int64,
+					types.T_int64,
+				},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.OpBitOrFun[int64],
 			},
 		},
 	},
@@ -546,6 +634,17 @@ var operators = map[int]Functions{
 				Flag:   plan.Function_STRICT,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
+					types.T_int8,
+					types.T_int8,
+				},
+				ReturnTyp: types.T_int8,
+				Fn:        operator.OpBitAndFun[int8],
+			},
+			{
+				Index:  2,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
 					types.T_uint16,
 					types.T_uint16,
 				},
@@ -553,7 +652,18 @@ var operators = map[int]Functions{
 				Fn:        operator.OpBitAndFun[uint16],
 			},
 			{
-				Index:  2,
+				Index:  3,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int16,
+					types.T_int16,
+				},
+				ReturnTyp: types.T_int16,
+				Fn:        operator.OpBitAndFun[int16],
+			},
+			{
+				Index:  4,
 				Flag:   plan.Function_STRICT,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
@@ -564,7 +674,18 @@ var operators = map[int]Functions{
 				Fn:        operator.OpBitAndFun[uint32],
 			},
 			{
-				Index:  3,
+				Index:  5,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int32,
+					types.T_int32,
+				},
+				ReturnTyp: types.T_int32,
+				Fn:        operator.OpBitAndFun[int32],
+			},
+			{
+				Index:  6,
 				Flag:   plan.Function_STRICT,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
@@ -573,6 +694,17 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_uint64,
 				Fn:        operator.OpBitAndFun[uint64],
+			},
+			{
+				Index:  7,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int64,
+					types.T_int64,
+				},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.OpBitAndFun[int64],
 			},
 		},
 	},

@@ -16,14 +16,13 @@ package operator
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
 
 type opBitT interface {
-	constraints.Unsigned
+	constraints.Integer
 }
 
 type opBitFun[T opBitT] func(v1, v2 T) T
@@ -41,50 +40,21 @@ func opBitAnd[T opBitT](v1, v2 T) T {
 }
 
 func OpBitAndFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return OpBitBase(args, proc, args[0].GetType(), opBitAnd[T])
+	return Arith[T, T](args, proc, args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
+		return goOpBitGeneral(xs, ys, rs, opBitAnd[T])
+	})
 }
 
 func OpBitOrFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return OpBitBase(args, proc, args[0].GetType(), opBitOr[T])
+	return Arith[T, T](args, proc, args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
+		return goOpBitGeneral(xs, ys, rs, opBitOr[T])
+	})
 }
 
 func OpBitXorFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return OpBitBase(args, proc, args[0].GetType(), opBitXor[T])
-}
-
-func OpBitBase[T opBitT](vectors []*vector.Vector, proc *process.Process, typ types.Type, afn opBitFun[T]) (*vector.Vector, error) {
-	left, right := vectors[0], vectors[1]
-	leftValues, rightValues := vector.MustTCols[T](left), vector.MustTCols[T](right)
-
-	if left.IsScalarNull() || right.IsScalarNull() {
-		return proc.AllocScalarNullVector(typ), nil
-	}
-
-	if left.IsScalar() && right.IsScalar() {
-		vec := proc.AllocScalarVector(typ)
-		vec.Col = make([]T, 1)
-		vec.Col.([]T)[0] = afn(left.Col.([]T)[0], right.Col.([]T)[0])
-		return vec, nil
-	}
-
-	resultElementSize := typ.Oid.TypeLen()
-	nEle := len(leftValues)
-	if left.IsScalar() {
-		nEle = len(rightValues)
-	}
-
-	resultVector, err := proc.AllocVector(typ, int64(resultElementSize*nEle))
-	if err != nil {
-		return nil, err
-	}
-
-	resultValues := types.DecodeFixedSlice[T](resultVector.Data, resultElementSize)
-	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-	vector.SetCol(resultVector, resultValues)
-
-	goOpBitGeneral(left, right, resultVector, afn)
-
-	return resultVector, nil
+	return Arith[T, T](args, proc, args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
+		return goOpBitGeneral(xs, ys, rs, opBitXor[T])
+	})
 }
 
 func goOpBitGeneral[T opBitT](xs, ys, rs *vector.Vector, bfn opBitFun[T]) error {
