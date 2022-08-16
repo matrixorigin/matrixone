@@ -124,7 +124,7 @@ int32_t UnsignedInt_VecMod(void *r, void *a, void *b, uint64_t n, uint64_t *null
 int32_t Float_VecMod(void *r, void *a, void *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t szof);
 
 
-// compare operator
+/* compare operator */
 int32_t Numeric_VecEq(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t type);
 int32_t Decimal64_VecEQ(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
 int32_t Decimal128_VecEQ(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
@@ -148,5 +148,16 @@ int32_t Decimal128_VecLT(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *
 int32_t Numeric_VecLe(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag, int32_t type);
 int32_t Decimal64_VecLE(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
 int32_t Decimal128_VecLE(bool *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
+
+
+/* vector logical operation */
+int32_t Logic_VecAnd(void *r, void *a, void  *b, uint64_t n, uint64_t *anulls, uint64_t *bnulls, uint64_t *rnulls, int32_t flag);
+int32_t Logic_VecOr(void *r, void *a, void  *b, uint64_t n, uint64_t *anulls, uint64_t *bnulls, uint64_t *rnulls, int32_t flag);
+int32_t Logic_VecXor(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag);
+int32_t Logic_VecNot(void *r, void *a, uint64_t n, uint64_t *nulls, int32_t flag);
+
+/* aggregation operation */
+int32_t Decimal64_VecSum(int64_t *rs, int64_t *vs, int64_t start, int64_t count, uint64_t *vps ,int64_t *zs, uint64_t *nulls);
+int32_t Decimal128_VecSum(int64_t *rs, int64_t *vs, int64_t start, int64_t count, uint64_t *vps ,int64_t *zs, uint64_t *nulls);
 
 #endif /* _MO_H_ */

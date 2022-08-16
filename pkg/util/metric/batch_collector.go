@@ -24,8 +24,8 @@ import (
 type cacheKey = int
 
 const (
-	CacheKey_MemStats cacheKey = iota
-	CacheKey_Process
+	cacheKeyMemStats cacheKey = iota
+	cacheKeyProcess
 )
 
 type statCaches struct {

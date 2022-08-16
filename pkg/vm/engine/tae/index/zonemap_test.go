@@ -19,15 +19,15 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/require"
 )
 
 func TestZoneMapNumeric(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	typ := types.Type{Oid: types.Type_INT32}
+	typ := types.Type{Oid: types.T_int32}
 	zm := NewZoneMap(typ)
 	var yes bool
 	var err error
@@ -95,7 +95,7 @@ func TestZoneMapNumeric(t *testing.T) {
 
 	rows = 500
 	typ1 := typ
-	typ1.Oid = types.Type_INT64
+	typ1.Oid = types.T_int64
 	ctx.Keys = containers.MockVector2(typ1, rows, 2000)
 	ctx.Count = rows
 	defer ctx.Keys.Close()
@@ -108,7 +108,7 @@ func TestZoneMapNumeric(t *testing.T) {
 	yes = zm1.Contains(int32(1199))
 	require.True(t, yes)
 
-	typ1.Oid = types.Type_INT32
+	typ1.Oid = types.T_int32
 	vec := containers.MockVector2(typ1, rows, 3000)
 	defer vec.Close()
 	visibility, yes = zm1.ContainsAny(vec)
@@ -130,7 +130,7 @@ func TestZoneMapNumeric(t *testing.T) {
 
 func TestZoneMapString(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	typ := types.Type{Oid: types.Type_CHAR}
+	typ := types.Type{Oid: types.T_char}
 	zm := NewZoneMap(typ)
 	var yes bool
 	var err error
@@ -186,7 +186,7 @@ func TestZoneMapString(t *testing.T) {
 }
 
 func TestZMEmptyString(t *testing.T) {
-	typ := types.Type{Oid: types.Type_VARCHAR}
+	typ := types.Type{Oid: types.T_varchar}
 	zm := NewZoneMap(typ)
 	require.Equal(t, typ.Oid, zm.GetType().Oid)
 	// check not inited
@@ -229,7 +229,7 @@ func TestZMTruncatedString(t *testing.T) {
 		return ret
 	}
 
-	typ := types.Type{Oid: types.Type_VARCHAR}
+	typ := types.Type{Oid: types.T_varchar}
 	zm := NewZoneMap(typ)
 
 	minv := mockBytes(0x00, 33)

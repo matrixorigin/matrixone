@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,10 +44,10 @@ func init() {
 
 func TestBatch(t *testing.T) {
 	for _, tc := range tcs {
-		data, err := encoding.Encode(tc.bat)
+		data, err := types.Encode(tc.bat)
 		require.NoError(t, err)
 		rbat := new(Batch)
-		err = encoding.Decode(data, rbat)
+		err = types.Decode(data, rbat)
 		require.NoError(t, err)
 		for i, vec := range rbat.Vecs {
 			require.Equal(t, tc.bat.Vecs[i].Col, vec.Col)

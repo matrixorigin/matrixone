@@ -15,8 +15,8 @@
 package txnbase
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/tidwall/btree"
 	"sync"
 	"sync/atomic"

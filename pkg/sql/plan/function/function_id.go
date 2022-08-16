@@ -228,6 +228,7 @@ const (
 	ADD_FAULT_POINT     // Add a fault point
 	REMOVE_FAULT_POINT  // Remove
 	TRIGGER_FAULT_POINT // Trigger.
+	UUID
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -373,6 +374,7 @@ var functionIdRegister = map[string]int32{
 	"add_fault_point":         ADD_FAULT_POINT,
 	"remove_fault_point":      REMOVE_FAULT_POINT,
 	"trigger_fault_point":     TRIGGER_FAULT_POINT,
+	"uuid":                    UUID,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

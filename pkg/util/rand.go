@@ -12,36 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package util
 
-import "math"
+import (
+	_ "unsafe"
+)
 
-type IOVector struct {
-	// path to file, '/' separated
-	FilePath string
-	// io entries
-	// empty entry not allowed
-	Entries []IOEntry
-}
+// fastrand32 returns a lock free uint32 value. Compared to rand.Uint32, this
+// implementation scales. We're using the go runtime's implementation through a
+// linker trick.
+//
+//go:linkname fastrand32 runtime.fastrand
+func fastrand32() uint32
 
-func (i IOVector) offsetRange() (
-	min int,
-	max int,
-	readToEnd bool,
-) {
-	min = math.MaxInt
-	max = 0
-	for _, entry := range i.Entries {
-		if entry.Offset < min {
-			min = entry.Offset
-		}
-		if entry.Size < 0 {
-			entry.Size = 0
-			readToEnd = true
-		}
-		if end := entry.Offset + entry.Size; end > max {
-			max = end
-		}
-	}
-	return
+// Fastrand64 returns a lock free uint64 value.
+// Compared to rand.Int63(), this implementation scales.
+func Fastrand64() uint64 {
+	x, y := fastrand32(), fastrand32() // 32-bit halves
+	return uint64(x)<<32 ^ uint64(y)
 }

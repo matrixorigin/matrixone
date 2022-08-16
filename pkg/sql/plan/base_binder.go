@@ -117,7 +117,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				},
 			},
 			Typ: &plan.Type{
-				Id: plan.Type_TUPLE,
+				Id: int32(types.T_tuple),
 			},
 		}
 
@@ -179,7 +179,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	return &Expr{
 		Typ: &plan.Type{
-			Id: plan.Type_ANY,
+			Id: int32(types.T_any),
 		},
 		Expr: &plan.Expr_P{
 			P: &plan.ParamRef{
@@ -192,7 +192,7 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	return &Expr{
 		Typ: &plan.Type{
-			Id: plan.Type_ANY,
+			Id: int32(types.T_any),
 		},
 		Expr: &plan.Expr_V{
 			V: &plan.VarRef{
@@ -320,7 +320,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 
 	returnExpr := &plan.Expr{
 		Typ: &plan.Type{
-			Id: plan.Type_TUPLE,
+			Id: int32(types.T_tuple),
 		},
 		Expr: &plan.Expr_Sub{
 			Sub: &plan.SubqueryRef{
@@ -332,7 +332,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 
 	if astExpr.Exists {
 		returnExpr.Typ = &plan.Type{
-			Id:       plan.Type_BOOL,
+			Id:       int32(types.T_bool),
 			Nullable: false,
 			Size:     1,
 		}
@@ -683,16 +683,16 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	switch name {
 	case "date":
 		// rewrite date function to cast function, and retrun directly
-		if args[0].Typ.Id != plan.Type_VARCHAR && args[0].Typ.Id != plan.Type_CHAR {
+		if args[0].Typ.Id != int32(types.T_varchar) && args[0].Typ.Id != int32(types.T_char) {
 			return appendCastBeforeExpr(args[0], &Type{
-				Id: plan.Type_DATE,
+				Id: int32(types.T_date),
 			})
 		}
 	case "interval":
 		// rewrite interval function to ListExpr, and retrun directly
 		return &plan.Expr{
 			Typ: &plan.Type{
-				Id: plan.Type_INTERVAL,
+				Id: int32(types.T_interval),
 			},
 			Expr: &plan.Expr_List{
 				List: &plan.ExprList{
@@ -703,9 +703,9 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	case "and", "or", "not", "xor":
 		// why not append cast function?
 		// for i := 0; i < len(args); i++ {
-		// 	if args[i].Typ.Id != plan.Type_BOOL {
+		// 	if args[i].Typ.Id != types.T_bool {
 		// 		arg, err := appendCastBeforeExpr(args[i], &plan.Type{
-		// 			Id: plan.Type_BOOL,
+		// 			Id: types.T_bool,
 		// 		})
 		// 		if err != nil {
 		// 			return nil, err
@@ -749,22 +749,22 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if len(args) != 2 {
 			return nil, errors.New("", "operator function need two args")
 		}
-		if args[0].Typ.Id == plan.Type_DATE && args[1].Typ.Id == plan.Type_INTERVAL {
+		if args[0].Typ.Id == int32(types.T_date) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[0], args[1])
-		} else if args[0].Typ.Id == plan.Type_INTERVAL && args[1].Typ.Id == plan.Type_DATE {
+		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_date) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[1], args[0])
-		} else if args[0].Typ.Id == plan.Type_DATETIME && args[1].Typ.Id == plan.Type_INTERVAL {
+		} else if args[0].Typ.Id == int32(types.T_datetime) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[0], args[1])
-		} else if args[0].Typ.Id == plan.Type_INTERVAL && args[1].Typ.Id == plan.Type_DATETIME {
+		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_datetime) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[1], args[0])
-		} else if args[0].Typ.Id == plan.Type_VARCHAR && args[1].Typ.Id == plan.Type_INTERVAL {
+		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[0], args[1])
-		} else if args[0].Typ.Id == plan.Type_INTERVAL && args[1].Typ.Id == plan.Type_VARCHAR {
+		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_varchar) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[1], args[0])
 		}
@@ -773,13 +773,13 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	case "-":
 		// rewrite "date '2001' - interval '1 day'" to date_sub(date '2001', 1, day(unit))
-		if args[0].Typ.Id == plan.Type_DATE && args[1].Typ.Id == plan.Type_INTERVAL {
+		if args[0].Typ.Id == int32(types.T_date) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(args[0], args[1])
-		} else if args[0].Typ.Id == plan.Type_DATETIME && args[1].Typ.Id == plan.Type_INTERVAL {
+		} else if args[0].Typ.Id == int32(types.T_datetime) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(args[0], args[1])
-		} else if args[0].Typ.Id == plan.Type_VARCHAR && args[1].Typ.Id == plan.Type_INTERVAL {
+		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(args[0], args[1])
 		}
@@ -787,9 +787,9 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			return nil, err
 		}
 	case "unary_minus":
-		if args[0].Typ.Id == plan.Type_UINT64 {
+		if args[0].Typ.Id == int32(types.T_uint64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
-				Id:       plan.Type_DECIMAL128,
+				Id:       int32(types.T_decimal128),
 				Nullable: false,
 			})
 			if err != nil {
@@ -797,9 +797,9 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			}
 		}
 	case "variance":
-		if args[0].Typ.Id == plan.Type_DECIMAL128 || args[0].Typ.Id == plan.Type_DECIMAL64 {
+		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
-				Id:       plan.Type_FLOAT64,
+				Id:       int32(types.T_float64),
 				Nullable: false,
 			})
 			if err != nil {
@@ -808,9 +808,9 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 
 		}
 	case "stddev_pop":
-		if args[0].Typ.Id == plan.Type_DECIMAL128 || args[0].Typ.Id == plan.Type_DECIMAL64 {
+		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
-				Id:       plan.Type_FLOAT64,
+				Id:       int32(types.T_float64),
 				Nullable: false,
 			})
 			if err != nil {
@@ -851,6 +851,11 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	}
 
+	if function.GetFunctionAppendHideArgByID(funcID) {
+		// Append a hidden parameter to the function. The default value is constant null
+		args = append(args, makePlan2NullConstExprWithType())
+	}
+
 	// return new expr
 	return &Expr{
 		Expr: &plan.Expr_F{
@@ -877,7 +882,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 				},
 			},
 			Typ: &plan.Type{
-				Id:       plan.Type_VARCHAR,
+				Id:       int32(types.T_varchar),
 				Nullable: false,
 				Size:     4,
 				Width:    int32(len(val)),
@@ -894,7 +899,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 			return nil, err
 		}
 		typ := &plan.Type{
-			Id: plan.Type_DECIMAL128,
+			Id: int32(types.T_decimal128),
 			// Width: int32(len(val)),
 			// Scale: 0,
 			Width:     34,
@@ -914,7 +919,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 				},
 			},
 			Typ: &plan.Type{
-				Id:       plan.Type_ANY,
+				Id:       int32(types.T_any),
 				Nullable: true,
 			},
 		}, nil
@@ -930,7 +935,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 				},
 			},
 			Typ: &plan.Type{
-				Id:       plan.Type_BOOL,
+				Id:       int32(types.T_bool),
 				Nullable: false,
 				Size:     1,
 			},
@@ -950,7 +955,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 				},
 			},
 			Typ: &plan.Type{
-				Id:       plan.Type_INT64,
+				Id:       int32(types.T_int64),
 				Nullable: false,
 				Size:     8,
 			},
@@ -970,7 +975,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 				},
 			},
 			Typ: &plan.Type{
-				Id:       plan.Type_UINT64,
+				Id:       int32(types.T_uint64),
 				Nullable: false,
 				Size:     8,
 			},
@@ -979,7 +984,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_float64:
 		originString := astExpr.String()
-		if typ != nil && (typ.Id == plan.Type_DECIMAL || typ.Id == plan.Type_DECIMAL64 || typ.Id == plan.Type_DECIMAL128) {
+		if typ != nil && (typ.Id == int32(types.T_decimal64) || typ.Id == int32(types.T_decimal128)) {
 			return returnDecimalExpr(originString)
 		}
 		if !strings.Contains(originString, "e") {
@@ -1002,7 +1007,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 				},
 			},
 			Typ: &plan.Type{
-				Id:       plan.Type_FLOAT64,
+				Id:       int32(types.T_float64),
 				Nullable: false,
 				Size:     8,
 			},
@@ -1012,7 +1017,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_bit:
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_char:
-		if typ != nil && typ.Id == plan.Type_TIMESTAMP {
+		if typ != nil && typ.Id == int32(types.T_timestamp) {
 			val, err := types.ParseTimestamp(astExpr.String(), typ.Precision)
 			if err != nil {
 				return nil, err
@@ -1039,7 +1044,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 // --- util functions ----
 
 func appendCastBeforeExpr(expr *Expr, toType *Type) (*Expr, error) {
-	if expr.Typ.Id == plan.Type_ANY {
+	if expr.Typ.Id == int32(types.T_any) {
 		return expr, nil
 	}
 	argsType := []types.Type{
@@ -1079,11 +1084,11 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 	}
 
 	intervalTypeInFunction := &plan.Type{
-		Id:   plan.Type_INT64,
+		Id:   int32(types.T_int64),
 		Size: 8,
 	}
 
-	if firstExpr.Typ.Id == plan.Type_VARCHAR || firstExpr.Typ.Id == plan.Type_CHAR {
+	if firstExpr.Typ.Id == int32(types.T_varchar) || firstExpr.Typ.Id == int32(types.T_char) {
 		s := firstExpr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
 		returnNum, returnType, err := types.NormalizeInterval(s, intervalType)
 
@@ -1092,12 +1097,12 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 		}
 		// "date '2020-10-10' - interval 1 Hour"  will return datetime
 		// so we rewrite "date '2020-10-10' - interval 1 Hour"  to  "date_add(datetime, 1, hour)"
-		if dateExpr.Typ.Id == plan.Type_DATE {
+		if dateExpr.Typ.Id == int32(types.T_date) {
 			switch returnType {
 			case types.Day, types.Week, types.Month, types.Quarter, types.Year:
 			default:
 				dateExpr, err = appendCastBeforeExpr(dateExpr, &plan.Type{
-					Id:   plan.Type_DATETIME,
+					Id:   int32(types.T_datetime),
 					Size: 8,
 				})
 
@@ -1133,12 +1138,12 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 
 	// "date '2020-10-10' - interval 1 Hour"  will return datetime
 	// so we rewrite "date '2020-10-10' - interval 1 Hour"  to  "date_add(datetime, 1, hour)"
-	if dateExpr.Typ.Id == plan.Type_DATE {
+	if dateExpr.Typ.Id == int32(types.T_date) {
 		switch intervalType {
 		case types.Day, types.Week, types.Month, types.Quarter, types.Year:
 		default:
 			dateExpr, err = appendCastBeforeExpr(dateExpr, &plan.Type{
-				Id:   plan.Type_DATETIME,
+				Id:   int32(types.T_datetime),
 				Size: 8,
 			})
 
@@ -1179,7 +1184,7 @@ func resetDateFunctionArgs2(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error)
 	}
 	list.List[0] = intervalExpr
 	strType := &plan.Type{
-		Id:   plan.Type_CHAR,
+		Id:   int32(types.T_char),
 		Size: 4,
 	}
 	strExpr := &Expr{

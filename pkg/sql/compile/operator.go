@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 
@@ -175,6 +176,16 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		}
 	case *dispatch.Argument:
 	case *connector.Argument:
+	case *minus.Argument:
+		rin.Arg = &minus.Argument{
+			IBucket: arg.IBucket,
+			NBucket: arg.NBucket,
+		}
+	case *intersect.Argument:
+		rin.Arg = &intersect.Argument{
+			IBucket: arg.IBucket,
+			NBucket: arg.NBucket,
+		}
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Unsupport instruction %T\n", in.Arg)))
 	}
@@ -445,6 +456,13 @@ func constructIntersectAll(_ *plan.Node, proc *process.Process, ibucket, nbucket
 
 func constructMinus(n *plan.Node, proc *process.Process, ibucket, nbucket int) *minus.Argument {
 	return &minus.Argument{
+		IBucket: uint64(ibucket),
+		NBucket: uint64(nbucket),
+	}
+}
+
+func constructIntersect(n *plan.Node, proc *process.Process, ibucket, nbucket int) *intersect.Argument {
+	return &intersect.Argument{
 		IBucket: uint64(ibucket),
 		NBucket: uint64(nbucket),
 	}

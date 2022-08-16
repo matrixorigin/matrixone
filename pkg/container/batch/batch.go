@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
@@ -75,12 +75,12 @@ func NewWithSize(n int) *Batch {
 }
 
 func (bat *Batch) MarshalBinary() ([]byte, error) {
-	return encoding.Encode(&EncodeBatch{Zs: bat.Zs, Vecs: bat.Vecs})
+	return types.Encode(&EncodeBatch{Zs: bat.Zs, Vecs: bat.Vecs})
 }
 
 func (bat *Batch) UnmarshalBinary(data []byte) error {
 	rbat := new(EncodeBatch)
-	if err := encoding.Decode(data, rbat); err != nil {
+	if err := types.Decode(data, rbat); err != nil {
 		return err
 	}
 	bat.Cnt = 1

@@ -228,7 +228,7 @@ func (s *Service) handleGetClusterDetails(req pb.Request) pb.Response {
 	if v, err := s.store.getClusterDetails(ctx); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.ClusterDetails = v
+		resp.ClusterDetails = &v
 	}
 	return resp
 }
@@ -241,7 +241,7 @@ func (s *Service) handleTsoUpdate(req pb.Request) pb.Response {
 	if v, err := s.store.tsoUpdate(ctx, r.Count); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.TsoResponse.Value = v
+		resp.TsoResponse = &pb.TsoResponse{Value: v}
 	}
 	return resp
 }
@@ -328,11 +328,11 @@ func (s *Service) handleLogHeartbeat(req pb.Request) pb.Response {
 	defer cancel()
 	hb := req.LogHeartbeat
 	resp := getResponse(req)
-	if cb, err := s.store.addLogStoreHeartbeat(ctx, hb); err != nil {
+	if cb, err := s.store.addLogStoreHeartbeat(ctx, *hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
-		resp.CommandBatch = cb
+		resp.CommandBatch = &cb
 	}
 
 	return resp
@@ -343,7 +343,7 @@ func (s *Service) handleCNHeartbeat(req pb.Request) pb.Response {
 	defer cancel()
 	hb := req.CNHeartbeat
 	resp := getResponse(req)
-	if err := s.store.addCNStoreHeartbeat(ctx, hb); err != nil {
+	if err := s.store.addCNStoreHeartbeat(ctx, *hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	}
@@ -356,11 +356,11 @@ func (s *Service) handleDNHeartbeat(req pb.Request) pb.Response {
 	defer cancel()
 	hb := req.DNHeartbeat
 	resp := getResponse(req)
-	if cb, err := s.store.addDNStoreHeartbeat(ctx, hb); err != nil {
+	if cb, err := s.store.addDNStoreHeartbeat(ctx, *hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
-		resp.CommandBatch = cb
+		resp.CommandBatch = &cb
 	}
 
 	return resp

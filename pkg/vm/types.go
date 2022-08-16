@@ -51,6 +51,7 @@ const (
 
 	Union
 	Minus
+	Intersect
 
 	IntersectAll
 )

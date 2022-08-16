@@ -60,7 +60,7 @@ func Warnf(msg string, fields ...interface{}) {
 
 // Errorf only use in develop mode
 func Errorf(msg string, fields ...interface{}) {
-	GetGlobalLogger().WithOptions(zap.AddStacktrace(zap.ErrorLevel)).Sugar().Errorf(msg, fields...)
+	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), zap.AddStacktrace(zap.ErrorLevel)).Sugar().Errorf(msg, fields...)
 }
 
 // Panicf only use in develop mode
@@ -111,6 +111,7 @@ func Adjust(logger *zap.Logger, options ...zap.Option) *zap.Logger {
 
 // GetLoggerWithOptions get default zap logger
 func GetLoggerWithOptions(level zapcore.LevelEnabler, encoder zapcore.Encoder, syncer zapcore.WriteSyncer, options ...zap.Option) *zap.Logger {
+	var cores []zapcore.Core
 	options = append(options, zap.AddStacktrace(zapcore.FatalLevel), zap.AddCaller())
 	if syncer == nil {
 		syncer = getConsoleSyncer()
@@ -118,7 +119,15 @@ func GetLoggerWithOptions(level zapcore.LevelEnabler, encoder zapcore.Encoder, s
 	if encoder == nil {
 		encoder = getLoggerEncoder("")
 	}
-	return zap.New(zapcore.NewCore(encoder, syncer, level), options...)
+	cores = append(cores, zapcore.NewCore(encoder, syncer, level))
+
+	if EnableStoreDB() {
+		encoder, syncer := getTraceLogSinks()
+		cores = append(cores, zapcore.NewCore(encoder, syncer, level))
+	}
+
+	GetLevelChangeFunc()(level)
+	return zap.New(zapcore.NewTee(cores...), options...)
 }
 
 // GetLogger get default zap logger
