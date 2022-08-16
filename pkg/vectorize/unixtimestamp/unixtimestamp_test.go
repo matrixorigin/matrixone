@@ -22,26 +22,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func mustDatetime(s string) types.Datetime {
-	datetime, err := types.ParseDatetime(s, 6)
+func mustTimestamp(s string) types.Timestamp {
+	timestamp, err := types.ParseTimestamp(time.Local, s, 6)
 	if err != nil {
 		panic("bad datetime")
 	}
-	return datetime
+	return timestamp
 }
 
 func TestUnixTimestamp(t *testing.T) {
 
-	xs := make([]types.Datetime, 3)
+	xs := make([]types.Timestamp, 3)
 	rs := make([]int64, 3)
 	want := make([]int64, 3)
 	for i, timestr := range []string{"2022-01-01 22:23:00", "2022-01-02 22:23:00", "2022-01-03 22:23:00"} {
-		xs[i] = mustDatetime(timestr)
+		xs[i] = mustTimestamp(timestr)
 		goLcoalTime, _ := time.ParseInLocation("2006-01-02 15:04:05", timestr, time.Local)
 		want[i] = goLcoalTime.Unix()
 	}
 
-	got := unixTimestamp(time.Local, xs, rs)
+	got := unixTimestamp(xs, rs)
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("unixtimestamp() want %v but got %v", want, got)
 	}

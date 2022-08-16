@@ -17,6 +17,7 @@ package multi
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,13 +28,13 @@ import (
 )
 
 func TestUnixTimestamp(t *testing.T) {
-	UnixtimeCase(t, types.T_int64, MustDatetimeMe("2022-01-01 22:23:00"), 1641046980)
-	UnixtimeCase(t, types.T_int64, MustDatetimeMe("2022-01-02 22:23:00"), 1641133380)
-	UnixtimeCase(t, types.T_int64, MustDatetimeMe("2022-01-03 22:23:00"), 1641219780)
+	UnixtimeCase(t, types.T_int64, MustTimestamp(time.UTC, "2022-01-01 22:23:00"), 1641046980)
+	UnixtimeCase(t, types.T_int64, MustTimestamp(time.UTC, "2022-01-02 22:23:00"), 1641133380)
+	UnixtimeCase(t, types.T_int64, MustTimestamp(time.UTC, "2022-01-03 22:23:00"), 1641219780)
 }
 
 // func FromUnixTime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error)
-func UnixtimeCase(t *testing.T, typ types.T, src types.Datetime, res int64) {
+func UnixtimeCase(t *testing.T, typ types.T, src types.Timestamp, res int64) {
 	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
@@ -63,10 +64,10 @@ func UnixtimeCase(t *testing.T, typ types.T, src types.Datetime, res int64) {
 	}
 }
 
-func makeVector2(src types.Datetime, srcScalar bool, t types.T) []*vector.Vector {
+func makeVector2(src types.Timestamp, srcScalar bool, t types.T) []*vector.Vector {
 	vectors := make([]*vector.Vector, 1)
 	vectors[0] = &vector.Vector{
-		Col:     []types.Datetime{src},
+		Col:     []types.Timestamp{src},
 		Nsp:     &nulls.Nulls{},
 		Typ:     types.Type{Oid: t},
 		IsConst: srcScalar,

@@ -130,3 +130,11 @@ func FromUnixTimeFloat64(lv []*vector.Vector, proc *process.Process) (*vector.Ve
 	vector.SetCol(vec, fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, float64Toint64(times), rs))
 	return vec, nil
 }
+
+func MustDatetime(s string) types.Datetime {
+	dt, err := types.ParseDatetime(s, 6)
+	if err != nil {
+		panic("bad datetime")
+	}
+	return dt
+}

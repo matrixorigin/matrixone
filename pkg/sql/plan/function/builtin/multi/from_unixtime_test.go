@@ -27,9 +27,9 @@ import (
 )
 
 func TestFromUnixtime(t *testing.T) {
-	FromUnixtimeCase(t, types.T_int64, 1641046980, MustDatetimeMe("2022-01-01 22:23:00"))
-	FromUnixtimeCase(t, types.T_int64, 1641046980, MustDatetimeMe("2022-01-01 22:23:00"))
-	FromUnixtimeCase(t, types.T_int64, 1641046980, MustDatetimeMe("2022-01-01 22:23:00"))
+	FromUnixtimeCase(t, types.T_int64, 1641046980, MustDatetime("2022-01-01 22:23:00"))
+	FromUnixtimeCase(t, types.T_int64, 1641046980, MustDatetime("2022-01-01 22:23:00"))
+	FromUnixtimeCase(t, types.T_int64, 1641046980, MustDatetime("2022-01-01 22:23:00"))
 }
 
 // func FromUnixTime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error)

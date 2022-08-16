@@ -14,6 +14,8 @@
 package multi
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -27,14 +29,14 @@ func UnixTimestamp(lv []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	if inVec.IsScalarNull() {
 		return proc.AllocScalarNullVector(types.Type{Oid: types.T_int64, Size: int32(size)}), nil
 	}
-	times := vector.MustTCols[types.Datetime](inVec)
+	times := vector.MustTCols[types.Timestamp](inVec)
 
 	if inVec.IsScalar() {
 		{
 			vec := proc.AllocScalarVector(types.Type{Oid: types.T_int64, Size: int32(size)})
 			rs := make([]int64, 1)
 			nulls.Set(vec.Nsp, inVec.Nsp)
-			vector.SetCol(vec, unixtimestamp.UnixTimestamp(proc.SessionInfo.TimeZone, times, rs))
+			vector.SetCol(vec, unixtimestamp.UnixTimestamp(times, rs))
 			return vec, nil
 		}
 	}
@@ -49,7 +51,7 @@ func UnixTimestamp(lv []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		}
 	}
 	nulls.Set(vec.Nsp, inVec.Nsp)
-	vector.SetCol(vec, unixtimestamp.UnixTimestamp(proc.SessionInfo.TimeZone, times, rs))
+	vector.SetCol(vec, unixtimestamp.UnixTimestamp(times, rs))
 	return vec, nil
 }
 
@@ -60,9 +62,9 @@ func UnixTimestampVarchar(lv []*vector.Vector, proc *process.Process) (*vector.V
 		return proc.AllocScalarNullVector(types.Type{Oid: types.T_int64, Size: int32(size)}), nil
 	}
 	times_ := vector.MustBytesCols(inVec)
-	var times []types.Datetime
+	var times []types.Timestamp
 	for i := 0; i < len(times_.Lengths); i++ {
-		times = append(times, MustDatetimeMe(string(times_.Get(int64(i)))))
+		times = append(times, MustTimestamp(proc.SessionInfo.TimeZone, string(times_.Get(int64(i)))))
 	}
 	if inVec.IsScalar() {
 		if inVec.IsScalarNull() {
@@ -71,7 +73,7 @@ func UnixTimestampVarchar(lv []*vector.Vector, proc *process.Process) (*vector.V
 			vec := proc.AllocScalarVector(types.Type{Oid: types.T_int64, Size: int32(size)})
 			rs := make([]int64, 1)
 			nulls.Set(vec.Nsp, inVec.Nsp)
-			vector.SetCol(vec, unixtimestamp.UnixTimestamp(proc.SessionInfo.TimeZone, times, rs))
+			vector.SetCol(vec, unixtimestamp.UnixTimestamp(times, rs))
 			return vec, nil
 		}
 	}
@@ -82,14 +84,14 @@ func UnixTimestampVarchar(lv []*vector.Vector, proc *process.Process) (*vector.V
 	}
 	rs := make([]int64, len(times))
 	nulls.Set(vec.Nsp, inVec.Nsp)
-	vector.SetCol(vec, unixtimestamp.UnixTimestamp(proc.SessionInfo.TimeZone, times, rs))
+	vector.SetCol(vec, unixtimestamp.UnixTimestamp(times, rs))
 	return vec, nil
 }
 
-func MustDatetimeMe(s string) types.Datetime {
-	datetime, err := types.ParseDatetime(s, 6)
+func MustTimestamp(loc *time.Location, s string) types.Timestamp {
+	ts, err := types.ParseTimestamp(loc, s, 6)
 	if err != nil {
-		panic("bad datetime")
+		ts = 0
 	}
-	return datetime
+	return ts
 }

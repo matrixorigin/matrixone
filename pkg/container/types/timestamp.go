@@ -80,6 +80,10 @@ func (ts Timestamp) String2(loc *time.Location, precision int32) string {
 	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
 }
 
+func (ts Timestamp) Unix() int64 {
+	return (int64(ts) - unixEpoch) / microSecsPerSec
+}
+
 var (
 	errIncorrectTimestampValue = errors.New(errno.DataException, "Incorrect timestamp value")
 	errTimestampOutOfRange     = errors.New(errno.DataException, "timestamp out of range")
