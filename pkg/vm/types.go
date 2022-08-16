@@ -49,9 +49,10 @@ const (
 	Insert
 	Update
 
-	Union
 	Minus
 	Intersect
+
+	HashBuild
 )
 
 // Instruction contains relational algebra
