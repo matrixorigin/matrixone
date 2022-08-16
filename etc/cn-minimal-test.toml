@@ -6,8 +6,6 @@ level = "debug"
 format = "json"
 max-size = 512
 
-[cn]
-
 [cn.frontend]
 rootname = "root"
 rootpassword = ""
@@ -34,7 +32,6 @@ enableProfileGetDataFromPipeline = false
 maxBytesInOutbufToFlush = 1024
 printLogInterVal = 10
 exportDataDefaultFlushSize = 1
-storageEngine = "tae"
 portOfRpcServerInComputationEngine = 20000
 oneTxnPerBatchDuringLoad = true
 statusPort = 7001

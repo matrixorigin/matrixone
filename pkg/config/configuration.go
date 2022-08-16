@@ -148,20 +148,6 @@ type SystemVariables struct {
 	LogMaxBackups int64 `toml:"logMaxBackups"`
 }
 
-var GlobalSystemVariables SystemVariables
-
-// HostMmu host memory
-var HostMmu *host.Mmu = nil
-
-// Mempool memory pool
-var Mempool *mempool.Mempool = nil
-
-// StorageEngine Storage Engine
-var StorageEngine engine.Engine
-
-// ClusterNodes Cluster Nodes
-var ClusterNodes engine.Nodes
-
 type ParameterUnit struct {
 	SV *SystemVariables
 

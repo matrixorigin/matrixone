@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -215,10 +214,6 @@ func Test_load(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-		config.StorageEngine = eng
-		defer func() {
-			config.StorageEngine = nil
-		}()
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, gSysVariables)
 
 		mce := NewMysqlCmdExecutor()
@@ -416,11 +411,6 @@ func Test_load(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-
-		config.StorageEngine = eng
-		defer func() {
-			config.StorageEngine = nil
-		}()
 
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, gSysVariables)
 

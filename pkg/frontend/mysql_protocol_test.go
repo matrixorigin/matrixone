@@ -259,14 +259,15 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	//client connection method: mysql -h 127.0.0.1 -P 6001 -udump -p
 
 	//before anything using the configuration
-	_, err := toml.DecodeFile("test/system_vars_config.toml", &config.GlobalSystemVariables)
+	pu := config.NewParameterUnit(&config.SystemVariables{}, nil, nil, nil, nil)
+	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	if err != nil {
 		panic(err)
 	}
 
-	config.HostMmu = host.New(config.GlobalSystemVariables.HostMmuLimitation)
-	config.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
+	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
+	pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
+
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	rm := NewRoutineManager(ctx, pu)
 	rm.SetSkipCheckUser(true)
@@ -1183,14 +1184,14 @@ func TestMysqlResultSet(t *testing.T) {
 	//	mysql-8.0.23 success
 	//./mysql-test-run 1st --extern user=root --extern port=6001 --extern host=127.0.0.1
 	//	matrixone failed: mysql-test-run: *** ERROR: Could not connect to extern server using command: '/Users/pengzhen/Documents/mysql-server-mysql-8.0.23/bld/runtime_output_directory//mysql --no-defaults --user=root --user=root --port=6001 --host=127.0.0.1 --silent --database=mysql --execute="SHOW GLOBAL VARIABLES"'
-	_, err := toml.DecodeFile("test/system_vars_config.toml", &config.GlobalSystemVariables)
+	pu := config.NewParameterUnit(&config.SystemVariables{}, nil, nil, nil, nil)
+	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	if err != nil {
 		panic(err)
 	}
 
-	config.HostMmu = host.New(config.GlobalSystemVariables.HostMmuLimitation)
-	config.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
+	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
+	pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
 
 	trm := NewTestRoutineManager(pu)
 

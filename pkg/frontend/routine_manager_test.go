@@ -29,16 +29,16 @@ import (
 
 func create_test_server() *MOServer {
 	//before anything using the configuration
-	_, err := toml.DecodeFile("test/system_vars_config.toml", &config.GlobalSystemVariables)
+	pu := config.NewParameterUnit(&config.SystemVariables{}, nil, nil, nil, nil)
+	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	if err != nil {
 		panic(err)
 	}
 
-	config.HostMmu = host.New(config.GlobalSystemVariables.HostMmuLimitation)
-	config.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
+	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
+	pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
 
-	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.Host, config.GlobalSystemVariables.Port)
+	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	return NewMOServer(moServerCtx, address, pu)
 }

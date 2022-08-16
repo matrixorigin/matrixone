@@ -15,7 +15,10 @@
 package cnservice
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -57,8 +60,11 @@ type Config struct {
 }
 
 type service struct {
-	cfg    *Config
-	pool   *sync.Pool
-	logger *zap.Logger
-	server morpc.RPCServer
+	cfg                *Config
+	pool               *sync.Pool
+	logger             *zap.Logger
+	server             morpc.RPCServer
+	cancelMoServerFunc context.CancelFunc
+	engine             engine.Engine
+	mo                 *frontend.MOServer
 }
