@@ -16,8 +16,9 @@ package txnbase
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -50,14 +51,12 @@ var DefaultTxnFactory = func(mgr *TxnManager, store txnif.TxnStore, id uint64, s
 }
 
 type Txn struct {
-	sync.RWMutex
 	sync.WaitGroup
 	*TxnCtx
-	Mgr      *TxnManager
-	Store    txnif.TxnStore
-	Err      error
-	DoneCond sync.Cond
-	LSN      uint64
+	Mgr   *TxnManager
+	Store txnif.TxnStore
+	Err   error
+	LSN   uint64
 
 	PrepareCommitFn   func(txnif.AsyncTxn) error
 	PrepareRollbackFn func(txnif.AsyncTxn) error
@@ -70,8 +69,7 @@ func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId uint64, start types.TS,
 		Mgr:   mgr,
 		Store: store,
 	}
-	txn.TxnCtx = NewTxnCtx(&txn.RWMutex, txnId, start, info)
-	txn.DoneCond = *sync.NewCond(txn)
+	txn.TxnCtx = NewTxnCtx(txnId, start, info)
 	return txn
 }
 
@@ -162,30 +160,6 @@ func (txn *Txn) DoneWithErr(err error) {
 func (txn *Txn) IsTerminated(waitIfcommitting bool) bool {
 	state := txn.GetTxnState(waitIfcommitting)
 	return state == txnif.TxnStateCommitted || state == txnif.TxnStateRollbacked
-}
-
-func (txn *Txn) GetTxnState(waitIfcommitting bool) txnif.TxnState {
-	txn.RLock()
-	state := txn.State
-	if !waitIfcommitting {
-		txn.RUnlock()
-		return state
-	}
-	if state != txnif.TxnStateCommitting {
-		txn.RUnlock()
-		return state
-	}
-	txn.RUnlock()
-	txn.DoneCond.L.Lock()
-	state = txn.State
-	if state != txnif.TxnStateCommitting {
-		txn.DoneCond.L.Unlock()
-		return state
-	}
-	txn.DoneCond.Wait()
-	state = txn.State
-	txn.DoneCond.L.Unlock()
-	return state
 }
 
 func (txn *Txn) PrepareCommit() (err error) {
