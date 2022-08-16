@@ -29,7 +29,11 @@ import (
 
 const defaultQueueSize = 262144 // queue mem cost = 2MB
 
-// bufferHolder
+// bufferHolder hold ItemBuffer content, handle buffer's new/flush/reset/reminder(base on timer) operations.
+// work like:
+// ---> Add ---> ShouldFlush or trigger.signal -----> StopAndGetBatch ---> FlushAndReset ---> Add ---> ...
+// #     ^                   |No                |Yes, go next call
+// #     |<------------------/Accept next Add
 type bufferHolder struct {
 	// name like a type
 	name string
@@ -66,9 +70,13 @@ func newBufferHolder(name batchpipe.HasName, impl batchpipe.PipeImpl[batchpipe.H
 	defer b.mux.Unlock()
 	reminder := b.buffer.(batchpipe.Reminder)
 	b.trigger = time.AfterFunc(reminder.RemindNextAfter(), func() {
-		if atomic.LoadUint32(&b.readonly) == READONLY {
-			logutil.Debugf("buffer %s trigger time, pass.", b.name)
-			return
+		if b.mux.TryLock() {
+			if b.readonly == READONLY {
+				logutil.Debugf("buffer %s trigger time, pass", b.name)
+				b.mux.Unlock()
+				return
+			}
+			b.mux.Unlock()
 		}
 		b.signal(b)
 	})
@@ -78,7 +86,7 @@ func newBufferHolder(name batchpipe.HasName, impl batchpipe.PipeImpl[batchpipe.H
 // Add directly call buffer.Add(), while bufferHolder is NOT readonly
 func (b *bufferHolder) Add(item batchpipe.HasName) {
 	b.mux.RLock()
-	for atomic.LoadUint32(&b.readonly) == READONLY {
+	for b.readonly == READONLY {
 		b.mux.RUnlock()
 		time.Sleep(time.Millisecond)
 		b.mux.RLock()
@@ -90,40 +98,38 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 	}
 }
 
-// Stop set bufferHolder readonly, and hold Add request
-func (b *bufferHolder) Stop() bool {
-	b.mux.RLock()
-	defer b.mux.RUnlock()
-	if !atomic.CompareAndSwapUint32(&b.readonly, READWRITE, READONLY) {
+// StopAndGetBatch set bufferHolder readonly, which can hold Add request,
+// and gen batch request content
+// against FlushAndReset
+func (b *bufferHolder) StopAndGetBatch(buf *bytes.Buffer) bool {
+	b.mux.Lock()
+	defer b.mux.Unlock()
+	if b.readonly == READONLY {
 		return false
 	}
 	b.trigger.Stop()
+	batch := b.buffer.GetBatch(buf)
+	b.batch = &batch
+	b.readonly = READONLY
 	return true
 }
 
+// StopTrigger stop buffer's trigger(Reminder)
 func (b *bufferHolder) StopTrigger() bool {
 	b.mux.Lock()
 	defer b.mux.Unlock()
 	return b.trigger.Stop()
 }
 
-func (b *bufferHolder) GetBatch(buf *bytes.Buffer) (any, bool) {
-	b.mux.Lock()
-	defer b.mux.Unlock()
-	if atomic.LoadUint32(&b.readonly) != READONLY {
-		return nil, false
-	}
-	return b.buffer.GetBatch(buf), true
-}
-
+// FlushAndReset handle batch request, and reset buffer after finish batch request.
 func (b *bufferHolder) FlushAndReset() bool {
 	b.mux.Lock()
 	defer b.mux.Unlock()
-	if atomic.LoadUint32(&b.readonly) != READONLY {
+	if b.readonly == READWRITE {
 		return false
 	}
 	if b.batch != nil {
-		var flush = b.impl.NewItemBatchHandler()
+		var flush = b.impl.NewItemBatchHandler(context.TODO())
 		flush(*b.batch)
 	} else {
 		logutil.Debugf("batch is nil")
@@ -131,7 +137,7 @@ func (b *bufferHolder) FlushAndReset() bool {
 	b.resetTrigger()
 	b.buffer.Reset()
 	b.batch = nil
-	atomic.StoreUint32(&b.readonly, READWRITE)
+	b.readonly = READWRITE
 	return true
 }
 
@@ -184,6 +190,7 @@ func (c *MOCollector) Collect(ctx context.Context, i batchpipe.HasName) error {
 	return nil
 }
 
+// Start all goroutine worker, including collector, generator, and exporter
 func (c *MOCollector) Start() bool {
 	if atomic.LoadUint32(&c.started) != 0 {
 		return false
@@ -297,17 +304,16 @@ loop:
 }
 
 func (c *MOCollector) genBatch(holder *bufferHolder, buf *bytes.Buffer) {
-	if ok := holder.Stop(); !ok {
+	if ok := holder.StopAndGetBatch(buf); !ok {
 		logutil.Debugf("genBatch: buffer %s: already stop", holder.name)
 		return
-	}
-	if batch, ok := holder.GetBatch(buf); ok {
-		holder.batch = &batch
 	}
 }
 
 func (c *MOCollector) handleBatch(holder *bufferHolder) {
-	holder.FlushAndReset()
+	if ok := holder.FlushAndReset(); !ok {
+		logutil.Debugf("handleBatch: buffer %s: already reset", holder.name)
+	}
 }
 
 func (c *MOCollector) Stop(graceful bool) error {

@@ -32,7 +32,7 @@ const CHAN_CAPACITY = 10000
 
 type MetricCollector interface {
 	SendMetrics(context.Context, []*pb.MetricFamily) error
-	Start() bool
+	Start(context.Context) bool
 	Stop(graceful bool) (<-chan struct{}, bool)
 }
 
@@ -116,11 +116,11 @@ func (c *metricCollector) SendMetrics(ctx context.Context, mfs []*pb.MetricFamil
 	return nil
 }
 
-func (c *metricCollector) NewItemBatchHandler() func(batch string) {
+func (c *metricCollector) NewItemBatchHandler(ctx context.Context) func(batch string) {
 	exec := c.ieFactory()
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(metricDBConst).Internal(true).Finish())
 	return func(batch string) {
-		if err := exec.Exec(batch, ie.NewOptsBuilder().Finish()); err != nil {
+		if err := exec.Exec(ctx, batch, ie.NewOptsBuilder().Finish()); err != nil {
 			logutil.Errorf("[Trace] insert error. sql: %s; err: %v", batch, err)
 		}
 	}
