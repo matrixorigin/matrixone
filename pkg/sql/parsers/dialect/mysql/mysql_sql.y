@@ -4008,6 +4008,12 @@ values_opt:
     {
         $$ = nil
     }
+|   VALUES LESS THAN MAXVALUE
+    {
+    	expr := tree.NewMaxValueExpr()
+    	exprs := tree.Exprs{expr}
+    	$$ = &tree.ValuesLessThan{ValueList: exprs}
+    }
 |   VALUES LESS THAN '(' expression_list ')'
     {
         $$ = &tree.ValuesLessThan{ValueList: $5}
@@ -5723,6 +5729,10 @@ expression:
 |   NOT expression %prec NOT
     {
         $$ = tree.NewNotExpr($2)
+    }
+|   MAXVALUE
+    {
+    	$$ = tree.NewMaxValueExpr()
     }
 |   boolean_primary IS true_or_false %prec IS
 	{

@@ -641,3 +641,13 @@ func isConstant(e *plan.Expr) bool {
 		return false
 	}
 }
+
+// if expr type is integer return true,else return false
+func IsIntegerType(expr *plan.Expr) bool {
+	t := types.T(expr.Typ.Id)
+	if t == types.T_int8 || t == types.T_int16 || t == types.T_int32 || t == types.T_int64 ||
+		t == types.T_uint8 || t == types.T_uint16 || t == types.T_uint32 || t == types.T_uint64 {
+		return true
+	}
+	return false
+}

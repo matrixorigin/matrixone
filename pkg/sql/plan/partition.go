@@ -40,13 +40,16 @@ func buildHashPartition(partitionBinder *PartitionBinder, partitionOption *tree.
 	if err != nil {
 		return err
 	}
+	partitionExpr := tree.String(partitionType.Expr, dialect.MYSQL)
 
 	// expr must return a nonconstant, nonrandom integer value (in other words, it should be varying but deterministic)
-	if _, ok := expr.Expr.(*plan.Expr_C); ok {
+	if isConstant(expr) {
 		return moerr.New(moerr.ErrWrongExprInPartitionFunc)
 	}
 
-	partitionExpr := tree.String(partitionType.Expr, dialect.MYSQL)
+	if !IsIntegerType(expr) {
+		return moerr.New(moerr.ErrFieldTypeNotAllowedAsPartitionField, partitionExpr)
+	}
 
 	partitionsNum := partitionOption.PartBy.Num
 	// If you do not include a PARTITIONS clause, the number of partitions defaults to 1.
@@ -84,7 +87,6 @@ func buildHashPartition(partitionBinder *PartitionBinder, partitionOption *tree.
 			Partition: partitionDef,
 		},
 	})
-
 	return nil
 }
 
@@ -147,90 +149,99 @@ func buildKeyPartition(partitionBinder *PartitionBinder, partitionOption *tree.P
 }
 
 func buildRangePartition(partitionBinder *PartitionBinder, partitionOption *tree.PartitionOption, tableDef *TableDef) error {
-	/*
-		partitionType := partitionOption.PartBy.PType.(*tree.RangeType)
+	partitionType := partitionOption.PartBy.PType.(*tree.RangeType)
 
-		partitionNum := len(partitionOption.Partitions)
-		partitionDef := &plan.PartitionDef{
-			IsSubPartition: partitionOption.PartBy.IsSubPartition,
-			Partitions:     make([]*plan.PartitionItem, partitionNum),
+	partitionNum := len(partitionOption.Partitions)
+	partitionDef := &plan.PartitionDef{
+		IsSubPartition: partitionOption.PartBy.IsSubPartition,
+		Partitions:     make([]*plan.PartitionItem, partitionNum),
+	}
+
+	if partitionType.ColumnList == nil {
+		partitionDef.Typ = plan.PartitionDef_RANGE
+
+		_, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
+		if err != nil {
+			return err
 		}
+		partitionExpr := tree.String(partitionType.Expr, dialect.MYSQL)
+		partitionDef.PartitionExpression = partitionExpr
 
-		if partitionType.ColumnList == nil {
-			partitionDef.Typ = plan.PartitionDef_RANGE
+		// VALUES LESS THAN value must be strictly increasing for each partition
+		for i, partition := range partitionOption.Partitions {
+			partitionItem := &plan.PartitionItem{
+				PartitionName:       string(partition.Name),
+				OrdinalPosition:     uint32(i + 1),
+				PartitionExpression: partitionExpr,
+			}
 
-			expr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
+			if valuesLessThan, ok := partition.Values.(*tree.ValuesLessThan); ok {
+				if len(valuesLessThan.ValueList) != 1 {
+					panic("syntax error")
+				}
+				partitionItem.Description = tree.String(valuesLessThan.ValueList, dialect.MYSQL)
+			} else {
+				panic("syntax error")
+			}
+
+			for _, tableOption := range partition.Options {
+				if opComment, ok := tableOption.(*tree.TableOptionComment); ok {
+					partitionItem.Comment = opComment.Comment
+				}
+			}
+			partitionDef.Partitions[i] = partitionItem
+		}
+		tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Partition{
+				Partition: partitionDef,
+			},
+		})
+	} else {
+		partitionDef.Typ = plan.PartitionDef_RANGE_COLUMNS
+
+		colListExprs := make([]*plan.Expr, len(partitionType.ColumnList))
+		partitionColumns := make([]string, len(partitionType.ColumnList))
+		for i, column := range partitionType.ColumnList {
+			colExpr, err := partitionBinder.BindColRef(column, 0, true)
 			if err != nil {
 				return err
 			}
-			fmt.Println(expr)
-			partitionExpr := tree.String(partitionType.Expr, dialect.MYSQL)
-
-			// VALUES LESS THAN value must be strictly increasing for each partition
-			for i, partition := range partitionOption.Partitions {
-				partitionItem := &plan.PartitionItem{
-					PartitionName:       string(partition.Name),
-					OrdinalPosition:     uint32(i + 1),
-					PartitionExpression: partitionExpr,
-				}
-
-				if valuesLessThan, ok := partition.Values.(*tree.ValuesLessThan); ok {
-					if len(valuesLessThan.ValueList) != 1 {
-						panic("syntax error")
-					}
-					partitionItem.Description = tree.String(valuesLessThan, dialect.MYSQL)
-				} else {
-					panic("syntax error")
-				}
-				partitionDef.Partitions[i] = partitionItem
-			}
-			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Partition{
-					Partition: partitionDef,
-				},
-			})
-		} else {
-			partitionDef.Typ = plan.PartitionDef_RANGE_COLUMNS
-			colListExprs := make([]*plan.Expr, len(partitionType.ColumnList))
-			var partitionExpr string
-			for i, column := range partitionType.ColumnList {
-				colExpr, err := partitionBinder.BindColRef(column, 0, true)
-				if err != nil {
-					return err
-				}
-				colListExprs[i] = colExpr
-				partitionExpr += tree.String(column, dialect.MYSQL)
-			}
-
-			// VALUES LESS THAN value must be strictly increasing for each partition
-			for i, partition := range partitionOption.Partitions {
-				partitionItem := &plan.PartitionItem{
-					PartitionName:       string(partition.Name),
-					OrdinalPosition:     uint32(i + 1),
-					PartitionExpression: partitionExpr,
-				}
-
-				if valuesLessThan, ok := partition.Values.(*tree.ValuesLessThan); ok {
-					if len(valuesLessThan.ValueList) != len(colListExprs) {
-						panic("syntax error")
-					}
-
-					for _, value := range valuesLessThan.ValueList {
-						partitionItem.Description += tree.String(value, dialect.MYSQL)
-					}
-				} else {
-					panic("syntax error")
-				}
-				partitionDef.Partitions[i] = partitionItem
-			}
-
-			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Partition{
-					Partition: partitionDef,
-				},
-			})
+			colListExprs[i] = colExpr
+			partitionColumns[i] = tree.String(column, dialect.MYSQL)
 		}
-	*/
+
+		// VALUES LESS THAN value must be strictly increasing for each partition
+		for i, partition := range partitionOption.Partitions {
+			partitionItem := &plan.PartitionItem{
+				PartitionName:    string(partition.Name),
+				OrdinalPosition:  uint32(i + 1),
+				PartitionColumns: partitionColumns,
+			}
+
+			if valuesLessThan, ok := partition.Values.(*tree.ValuesLessThan); ok {
+				if len(valuesLessThan.ValueList) != len(colListExprs) {
+					panic("syntax error")
+				}
+				partitionItem.Description = tree.String(valuesLessThan.ValueList, dialect.MYSQL)
+			} else {
+				panic("syntax error")
+			}
+
+			for _, tableOption := range partition.Options {
+				if opComment, ok := tableOption.(*tree.TableOptionComment); ok {
+					partitionItem.Comment = opComment.Comment
+				}
+			}
+
+			partitionDef.Partitions[i] = partitionItem
+		}
+
+		tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Partition{
+				Partition: partitionDef,
+			},
+		})
+	}
 	return nil
 }
 

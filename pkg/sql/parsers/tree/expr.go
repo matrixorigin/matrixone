@@ -865,3 +865,15 @@ func NewParamExpr(offset int) *ParamExpr {
 		Offset: offset,
 	}
 }
+
+type MaxValueExpr struct {
+	exprImpl
+}
+
+func (node *MaxValueExpr) Format(ctx *FmtCtx) {
+	ctx.WriteString("MAXVALUE")
+}
+
+func NewMaxValueExpr() *MaxValueExpr {
+	return &MaxValueExpr{}
+}

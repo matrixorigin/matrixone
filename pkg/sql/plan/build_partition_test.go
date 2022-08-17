@@ -26,7 +26,18 @@ func TestKeyPartition(t *testing.T) {
 	//sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR KEY(col3) PARTITIONS 5;"
 	//sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY ALGORITHM = 1 (col3);"
 	//sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR KEY ALGORITHM = 1 (col3) PARTITIONS 5;"
-	sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col1, col2) PARTITIONS 4;"
+	//sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col1, col2) PARTITIONS 4;"
+	sql := `CREATE TABLE employees (
+				id INT NOT NULL,
+				fname VARCHAR(30),
+				lname VARCHAR(30),
+				hired DATE NOT NULL DEFAULT '1970-01-01',
+				separated DATE NOT NULL DEFAULT '9999-12-31',
+				job_code INT,
+				store_id INT
+			)
+			PARTITION BY LINEAR HASH( YEAR(hired) )
+			PARTITIONS 4;`
 
 	mock := NewMockOptimizer()
 	logicPlan, err := buildSingleStmt(mock, t, sql)
@@ -39,15 +50,20 @@ func TestKeyPartition(t *testing.T) {
 func TestKeyPartitionError(t *testing.T) {
 	//sql := "CREATE TABLE ts (id INT, purchased DATE) PARTITION BY KEY( id ) PARTITIONS 4 SUBPARTITION BY HASH( TO_DAYS(purchased) ) SUBPARTITIONS 2;"
 	//sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col4) PARTITIONS 4;"
-	sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY ALGORITHM = 3 (col3);"
+	//sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY ALGORITHM = 3 (col3);"
+	//sql := "CREATE TABLE t1 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col2);"
+	//sql := "CREATE TABLE t1 (col1 INT, col2 DECIMAL) PARTITION BY HASH(col2);"
+	sql := "CREATE TABLE t1 (col1 INT, col2 DECIMAL) PARTITION BY HASH(col1+0.5);"
 	mock := NewMockOptimizer()
 	_, err := buildSingleStmt(mock, t, sql)
 	if err == nil {
 		t.Fatalf("should show error")
+	} else {
+		t.Log(err)
 	}
 }
 
-//---------------------------------------------------------------------------------
+//-----------------------------------------------------------------------------------
 
 func TestHashPartition(t *testing.T) {
 	// HASH(expr) Partition
@@ -100,7 +116,25 @@ func TestHashPartitionError(t *testing.T) {
 	}
 }
 
+//-----------------------------------------------------------------------------------
+
 func TestRangePartition(t *testing.T) {
+	//sql := `CREATE TABLE employees (
+	//			id INT NOT NULL,
+	//			fname VARCHAR(30),
+	//			lname VARCHAR(30),
+	//			hired DATE NOT NULL DEFAULT '1970-01-01',
+	//			separated DATE NOT NULL DEFAULT '9999-12-31',
+	//			job_code INT NOT NULL,
+	//			store_id INT NOT NULL
+	//		)
+	//		PARTITION BY RANGE (store_id) (
+	//			PARTITION p0 VALUES LESS THAN (6),
+	//			PARTITION p1 VALUES LESS THAN (11),
+	//			PARTITION p2 VALUES LESS THAN (16),
+	//			PARTITION p3 VALUES LESS THAN (21)
+	//		);`
+
 	//sql := `CREATE TABLE t1 (
 	//			year_col  INT,
 	//			some_data INT
@@ -112,29 +146,6 @@ func TestRangePartition(t *testing.T) {
 	//			PARTITION p3 VALUES LESS THAN (2002),
 	//			PARTITION p4 VALUES LESS THAN (2006),
 	//			PARTITION p5 VALUES LESS THAN (2012)
-	//		);`
-
-	sql := `CREATE TABLE rc (
-				a INT NOT NULL,
-				b INT NOT NULL
-			)
-			PARTITION BY RANGE COLUMNS(a,b) (
-				PARTITION p0 VALUES LESS THAN (10,5),
-				PARTITION p1 VALUES LESS THAN (20,10),
-				PARTITION p2 VALUES LESS THAN (50,20),
-				PARTITION p3 VALUES LESS THAN (65,30)
-			);`
-
-	//sql := `CREATE TABLE rc (
-	//			a INT NOT NULL,
-	//			b INT NOT NULL
-	//		)
-	//		PARTITION BY RANGE COLUMNS(a,b) (
-	//			PARTITION p0 VALUES LESS THAN (10,5),
-	//			PARTITION p1 VALUES LESS THAN (20,10),
-	//			PARTITION p2 VALUES LESS THAN (50,MAXVALUE),
-	//			PARTITION p3 VALUES LESS THAN (65,MAXVALUE),
-	//			PARTITION p4 VALUES LESS THAN (MAXVALUE,MAXVALUE)
 	//		);`
 
 	//sql := `CREATE TABLE t1 (
@@ -150,17 +161,87 @@ func TestRangePartition(t *testing.T) {
 	//			PARTITION p5 VALUES LESS THAN (2012) COMMENT = 'Data for the years previous to 2012'
 	//		);`
 
+	//sql := `CREATE TABLE employees (
+	//			id INT NOT NULL,
+	//			fname VARCHAR(30),
+	//			lname VARCHAR(30),
+	//			hired DATE NOT NULL DEFAULT '1970-01-01',
+	//			separated DATE NOT NULL DEFAULT '9999-12-31',
+	//			job_code INT NOT NULL,
+	//			store_id INT NOT NULL
+	//		)
+	//		PARTITION BY RANGE (store_id) (
+	//			PARTITION p0 VALUES LESS THAN (6),
+	//			PARTITION p1 VALUES LESS THAN (11),
+	//			PARTITION p2 VALUES LESS THAN (16),
+	//			PARTITION p3 VALUES LESS THAN MAXVALUE
+	//		);`
+
+	//sql := `CREATE TABLE employees (
+	//			id INT NOT NULL,
+	//			fname VARCHAR(30),
+	//			lname VARCHAR(30),
+	//			hired DATE NOT NULL DEFAULT '1970-01-01',
+	//			separated DATE NOT NULL DEFAULT '9999-12-31',
+	//			job_code INT NOT NULL,
+	//			store_id INT NOT NULL
+	//		)
+	//		PARTITION BY RANGE (job_code) (
+	//			PARTITION p0 VALUES LESS THAN (100),
+	//			PARTITION p1 VALUES LESS THAN (1000),
+	//			PARTITION p2 VALUES LESS THAN (10000)
+	//		);`
+
+	//sql := `CREATE TABLE employees (
+	//			id INT NOT NULL,
+	//			fname VARCHAR(30),
+	//			lname VARCHAR(30),
+	//			hired DATE NOT NULL DEFAULT '1970-01-01',
+	//			separated DATE NOT NULL DEFAULT '9999-12-31',
+	//			job_code INT,
+	//			store_id INT
+	//		)
+	//		PARTITION BY RANGE ( YEAR(separated) ) (
+	//			PARTITION p0 VALUES LESS THAN (1991),
+	//			PARTITION p1 VALUES LESS THAN (1996),
+	//			PARTITION p2 VALUES LESS THAN (2001),
+	//			PARTITION p3 VALUES LESS THAN MAXVALUE
+	//		);`
+
 	//sql := `CREATE TABLE rc (
 	//			a INT NOT NULL,
 	//			b INT NOT NULL
 	//		)
 	//		PARTITION BY RANGE COLUMNS(a,b) (
-	//			PARTITION p0 VALUES LESS THAN (10,5) COMMENT = 'Data for LESS THAN (10,5)',
-	//			PARTITION p1 VALUES LESS THAN (20,10) COMMENT = 'Data for LESS THAN (20,10)',
-	//			PARTITION p2 VALUES LESS THAN (50,MAXVALUE) COMMENT = 'Data for LESS THAN (50,MAXVALUE)',
-	//			PARTITION p3 VALUES LESS THAN (65,MAXVALUE) COMMENT = 'Data for LESS THAN (65,MAXVALUE)',
-	//			PARTITION p4 VALUES LESS THAN (MAXVALUE,MAXVALUE) COMMENT = 'Data for LESS THAN (MAXVALUE,MAXVALUE)'
+	//			PARTITION p0 VALUES LESS THAN (10,5),
+	//			PARTITION p1 VALUES LESS THAN (20,10),
+	//			PARTITION p2 VALUES LESS THAN (50,20),
+	//			PARTITION p3 VALUES LESS THAN (65,30)
 	//		);`
+
+	//sql := `CREATE TABLE rc (
+	//			a INT NOT NULL,
+	//			b INT NOT NULL
+	//		)
+	//		PARTITION BY RANGE COLUMNS(a,b) (
+	//			PARTITION p0 VALUES LESS THAN (10,5),
+	//			PARTITION p1 VALUES LESS THAN (20,10),
+	//			PARTITION p2 VALUES LESS THAN (50,MAXVALUE),
+	//			PARTITION p3 VALUES LESS THAN (65,MAXVALUE),
+	//			PARTITION p4 VALUES LESS THAN (MAXVALUE,MAXVALUE)
+	//		);`
+
+	sql := `CREATE TABLE rc (
+				a INT NOT NULL,
+				b INT NOT NULL
+			)
+			PARTITION BY RANGE COLUMNS(a,b) (
+				PARTITION p0 VALUES LESS THAN (10,5) COMMENT = 'Data for LESS THAN (10,5)',
+				PARTITION p1 VALUES LESS THAN (20,10) COMMENT = 'Data for LESS THAN (20,10)',
+				PARTITION p2 VALUES LESS THAN (50,MAXVALUE) COMMENT = 'Data for LESS THAN (50,MAXVALUE)',
+				PARTITION p3 VALUES LESS THAN (65,MAXVALUE) COMMENT = 'Data for LESS THAN (65,MAXVALUE)',
+				PARTITION p4 VALUES LESS THAN (MAXVALUE,MAXVALUE) COMMENT = 'Data for LESS THAN (MAXVALUE,MAXVALUE)'
+			);`
 
 	mock := NewMockOptimizer()
 	logicPlan, err := buildSingleStmt(mock, t, sql)
