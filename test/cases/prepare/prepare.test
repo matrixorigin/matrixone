@@ -26,6 +26,14 @@ execute stmt1 using @b_var;
 select * from t1;
 deallocate prepare stmt1;
 
+prepare stmt1 from "insert into t1 values (?, ?), (?, 99)";
+set @a_var=5;
+set @b_var=55;
+set @c_var=9;
+execute stmt1 using @a_var, @b_var, @c_var;
+select * from t1;
+deallocate prepare stmt1;
+
 drop table t1;
 
 prepare stmt2 from 'select @var_t1';
