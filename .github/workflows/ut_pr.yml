@@ -2,6 +2,18 @@ name: PR Unit Test Coverage
 on:
   pull_request_target:
     types: [ opened, synchronize,reopened ]
+    branches:
+      - main
+    paths-ignore:
+      - "etc/"
+      - "optools/"
+      - "LICENSES/"
+      - "cgo/"
+      - "cmd/"
+      - "proto/"
+      - "test/"
+      - "docs/"
+      - ".github/"
 
 jobs:
   test-name:
