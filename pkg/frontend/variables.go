@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -768,6 +769,8 @@ type SystemVariable struct {
 	Type SystemVariableType
 
 	Default interface{}
+
+	UpdateSessVar func(*Session, map[string]interface{}, string, interface{}) error
 }
 
 func (sv SystemVariable) GetName() string {
@@ -1054,4 +1057,104 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemSystemEnumType("completion_type", "NO_CHAIN", "CHAIN", "RELEASE"),
 		Default:           "NO_CHAIN",
 	},
+	"time_zone": {
+		Name:              "time_zone",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: true,
+		Type:              InitSystemVariableStringType("time_zone"),
+		Default:           "SYSTEM",
+		UpdateSessVar:     updateTimeZone,
+	},
+}
+
+func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {
+	oldVal := vars[name]
+	if oldVal == val {
+		return nil
+	}
+
+	tzStr := val.(string)
+	if tzStr == "SYSTEM" {
+		vars[name] = "SYSTEM"
+		sess.SetTimeZone(time.Local)
+	} else if tzStr[0] == '-' {
+		if len(tzStr) != 6 {
+			return errors.New("incorrect timezone " + tzStr)
+		}
+
+		if tzStr[1] < '0' || tzStr[1] > '9' {
+			return errors.New("incorrect timezone " + tzStr)
+		}
+		hour := int(tzStr[1]-'0') * 10
+		if tzStr[2] < '0' || tzStr[2] > '9' {
+			return errors.New("incorrect timezone " + tzStr)
+		}
+		hour += int(tzStr[2] - '0')
+
+		if tzStr[3] != ':' {
+			return errors.New("incorrect timezone " + tzStr)
+		}
+
+		if tzStr[4] < '0' || tzStr[4] > '9' {
+			return errors.New("incorrect timezone " + tzStr)
+		}
+		minute := int(tzStr[4]-'0') * 10
+		if tzStr[5] < '0' || tzStr[5] > '9' {
+			return errors.New("incorrect timezone " + tzStr)
+		}
+		minute += int(tzStr[5] - '0')
+
+		minute += hour * 60
+		if minute >= 14*60 {
+			return errors.New("incorrect timezone " + tzStr)
+		}
+
+		vars[name] = tzStr
+		sess.SetTimeZone(time.FixedZone("FixedZone", -minute*60))
+	} else if tzStr[0] == '+' {
+		if len(tzStr) != 6 {
+			return errors.New("incorrect timezone " + tzStr)
+		}
+
+		if tzStr[1] < '0' || tzStr[1] > '9' {
+			return errors.New("incorrect timezone " + tzStr)
+		}
+		hour := int(tzStr[1]-'0') * 10
+		if tzStr[2] < '0' || tzStr[2] > '9' {
+			return errors.New("incorrect timezone " + tzStr)
+		}
+		hour += int(tzStr[2] - '0')
+
+		if tzStr[3] != ':' {
+			return errors.New("incorrect timezone " + tzStr)
+		}
+
+		if tzStr[4] < '0' || tzStr[4] > '9' {
+			return errors.New("incorrect timezone " + tzStr)
+		}
+		minute := int(tzStr[4]-'0') * 10
+		if tzStr[5] < '0' || tzStr[5] > '9' {
+			return errors.New("incorrect timezone " + tzStr)
+		}
+		minute += int(tzStr[5] - '0')
+
+		minute += hour * 60
+		if minute > 14*60 {
+			return errors.New("incorrect timezone " + tzStr)
+		}
+
+		vars[name] = tzStr
+		sess.SetTimeZone(time.FixedZone("FixedZone", minute*60))
+	} else {
+		loc, err := time.LoadLocation(tzStr)
+		if err != nil {
+			return err
+		}
+
+		vars[name] = tzStr
+		sess.SetTimeZone(loc)
+	}
+
+	return nil
 }
