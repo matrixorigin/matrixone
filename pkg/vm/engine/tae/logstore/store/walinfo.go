@@ -30,7 +30,8 @@ import (
 var (
 	ErrGroupNotFount = errors.New("group not found")
 	ErrLsnNotFount   = errors.New("lsn not found")
-	ErrTimeOut       = errors.New("retry time our")
+	ErrTimeOut       = errors.New("retry timeout")
+	ErrLsnTooSmall   = errors.New("lsn is too small")
 )
 
 type StoreInfo struct {
@@ -40,11 +41,11 @@ type StoreInfo struct {
 	lsnMu               sync.RWMutex
 	driverCheckpointing uint64
 	driverCheckpointed  uint64
-	walCurrentLsn       map[uint32]uint64
+	walCurrentLsn       map[uint32]uint64 //todo
 	lsnmu               sync.RWMutex
-	syncing             map[uint32]uint64
+	syncing             map[uint32]uint64 //todo
 
-	synced     map[uint32]uint64
+	synced     map[uint32]uint64 //todo
 	syncedMu   sync.RWMutex
 	commitCond sync.Cond
 
@@ -52,6 +53,8 @@ type StoreInfo struct {
 	checkpointedMu sync.RWMutex
 	ckpcnt         map[uint32]uint64
 	ckpcntMu       sync.RWMutex
+
+	minLsn map[uint32]uint64
 }
 
 func newWalInfo() *StoreInfo {
@@ -71,8 +74,11 @@ func newWalInfo() *StoreInfo {
 		syncedMu:       sync.RWMutex{},
 		ckpcnt:         make(map[uint32]uint64),
 		ckpcntMu:       sync.RWMutex{},
+
+		minLsn: make(map[uint32]uint64),
 	}
 }
+
 func (w *StoreInfo) GetCurrSeqNum(gid uint32) (lsn uint64) {
 	w.lsnmu.RLock()
 	defer w.lsnmu.RUnlock()
@@ -183,6 +189,10 @@ func (w *StoreInfo) retryGetDriverLsn(gid uint32, lsn uint64) (driverLsn uint64,
 func (w *StoreInfo) getDriverLsn(gid uint32, lsn uint64) (driverLsn uint64, err error) {
 	w.lsnMu.RLock()
 	defer w.lsnMu.RUnlock()
+	minLsn := w.minLsn[gid]
+	if lsn < minLsn {
+		return 0, ErrLsnTooSmall
+	}
 	lsnMap, ok := w.walDriverLsnMap[gid]
 	if !ok {
 		return 0, ErrGroupNotFount
@@ -241,6 +251,10 @@ func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
 	for g, lsn := range w.checkpointed {
 		drLsn, err := w.retryGetDriverLsn(g, lsn)
 		if err != nil {
+			if err == ErrLsnTooSmall {
+				logutil.Infof("%d-%d too small", g, lsn)
+				continue
+			}
 			logutil.Infof("%d-%d", g, lsn)
 			panic(err)
 		}
@@ -281,6 +295,12 @@ func (w *StoreInfo) marshalPostCommitEntry() (buf []byte, err error) {
 	return
 }
 
+func (w *StoreInfo) unmarshalPostCommitEntry(buf []byte) (err error) {
+	bbuf := bytes.NewBuffer(buf)
+	_, err = w.readPostCommitEntry(bbuf)
+	return
+}
+
 func (w *StoreInfo) writePostCommitEntry(writer io.Writer) (n int64, err error) {
 	w.ckpMu.RLock()
 	defer w.ckpMu.RUnlock()
@@ -299,6 +319,37 @@ func (w *StoreInfo) writePostCommitEntry(writer io.Writer) (n int64, err error) 
 		n += sn
 		if err != nil {
 			return n, err
+		}
+	}
+	return
+}
+
+func (w *StoreInfo) readPostCommitEntry(reader io.Reader) (n int64, err error) {
+	w.ckpMu.Lock()
+	defer w.ckpMu.Unlock()
+	//checkpointing
+	length := uint32(0)
+	if err = binary.Read(reader, binary.BigEndian, &length); err != nil {
+		return
+	}
+	n += 4
+	for i := 0; i < int(length); i++ {
+		groupID := uint32(0)
+		if err = binary.Read(reader, binary.BigEndian, &groupID); err != nil {
+			return
+		}
+		n += 4
+		ckpInfo := newCheckpointInfo()
+		sn, err := ckpInfo.ReadFrom(reader)
+		n += sn
+		if err != nil {
+			return n, err
+		}
+		ckp, ok := w.checkpointInfo[groupID]
+		if ok {
+			ckp.MergeCheckpointInfo(ckpInfo)
+		} else {
+			w.checkpointInfo[groupID] = ckpInfo
 		}
 	}
 	return
