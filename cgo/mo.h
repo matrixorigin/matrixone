@@ -161,6 +161,4 @@ int32_t Decimal64_VecSum(int64_t *rs, int64_t *vs, int64_t start, int64_t count,
 int32_t Decimal64_VecSumToDecimal128(int64_t *rs, int64_t *vs, int64_t start, int64_t count, uint64_t *vps ,int64_t *zs, uint64_t *nulls);
 int32_t Decimal128_VecSum(int64_t *rs, int64_t *vs, int64_t start, int64_t count, uint64_t *vps ,int64_t *zs, uint64_t *nulls);
 
-int32_t Decimal64_VecSumToDecimal128(int64_t *rs, int64_t *vs, int64_t start, int64_t count, uint64_t *vps ,int64_t *zs, uint64_t *nulls);
-
 #endif /* _MO_H_ */
