@@ -498,6 +498,7 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 				maxFieldCnt:                curBatchSize,
 				simdCsvLineArray:           make([][]string, curBatchSize),
 				dataColumnId2TableColumnId: make([]int, curBatchSize),
+				ses:                        &Session{timeZone: time.Local},
 				result:                     &LoadResult{},
 				ignoreFieldError:           true},
 			batchData: &batch.Batch{
