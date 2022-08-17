@@ -71,6 +71,12 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 	// TODO: start other service
 	switch strings.ToUpper(cfg.ServiceType) {
 	case cnServiceType:
+		cfg.CN.Frontend.LogLevel = cfg.Log.Level
+		cfg.CN.Frontend.LogFormat = cfg.Log.Format
+		cfg.CN.Frontend.LogFilename = cfg.Log.Filename
+		cfg.CN.Frontend.LogMaxSize = int64(cfg.Log.MaxSize)
+		cfg.CN.Frontend.LogMaxDays = int64(cfg.Log.MaxDays)
+		cfg.CN.Frontend.LogMaxBackups = int64(cfg.Log.MaxBackups)
 		cfg.CN.Frontend.MoVersion = Version
 		return startCNService(cfg, stopper)
 	case dnServiceType:

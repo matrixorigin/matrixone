@@ -43,6 +43,9 @@ processLimitationBatchRows = 42949672960
 #process.Limitation.PartitionRows.  10 << 32 = 42949672960
 processLimitationPartitionRows = 42949672960
 
+#record the time elapsed of executing sql request
+recordTimeElapsedOfSqlRequest = true
+
 #the root directory of the storage and matrixcube's data.
 storePath = "./store"
 
@@ -84,3 +87,6 @@ enableTrace = true
 
 #default is InternalExecutor. if InternalExecutor, use internal sql executor, FileService will implement soon.
 traceBatchProcessor = "InternalExecutor"
+
+#With true, system will check all the children span is ended, which belong to the closing span.
+enableTraceDebug = false
