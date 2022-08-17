@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -33,21 +32,16 @@ import (
 )
 
 type appendableNode struct {
-	//*buffer.Node
-	file  file.Block
-	block *dataBlock
-	data  *containers.Batch
-	rows  uint32
-	//mgr       base.INodeManager
-	//flushTS   atomic.Value
+	file      file.Block
+	block     *dataBlock
+	data      *containers.Batch
+	rows      uint32
 	exception *atomic.Value
 }
 
 func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendableNode {
 	impl := new(appendableNode)
 	impl.exception = new(atomic.Value)
-	//id := block.meta.AsCommonID()
-	//impl.Node = buffer.NewNode(impl, mgr, *id, uint64(catalog.EstimateBlockSize(block.meta, block.meta.GetSchema().BlockMaxRows)))
 	impl.block = block
 	impl.file = file
 	impl.rows = file.ReadRows()
@@ -99,7 +93,6 @@ func (node *appendableNode) GetColumnDataCopy(
 	} else {
 		vec = node.data.Vecs[colIdx].CloneWindow(0, int(maxRow), containers.DefaultAllocator)
 	}
-	// logutil.Infof("src-length: %d, to copy-[0->%d]: %s", node.data.Vecs[colIdx].Length(), maxRow, node.block.meta.String())
 	node.block.RUnlock()
 	return
 }
@@ -190,47 +183,14 @@ func (node *appendableNode) OnUnload() {
 		logutil.Errorf("%v", exception)
 		return
 	}
-	ts := node.block.mvcc.LoadMaxVisible()
-	needCkp := true
-	if err := node.flushData(ts, node.data, new(unloadOp)); err != nil {
-		needCkp = false
-		if err == data.ErrStaleRequest {
-			// err = nil
-		} else {
-			logutil.Warnf("%s: %v", node.block.meta.String(), err)
-			node.exception.Store(err)
-		}
-	}
 	node.data.Close()
 	node.data = nil
-	if needCkp {
-		_, _ = node.block.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, node.block.meta.AsCommonID(), node.block.CheckpointWALClosure(ts))
-	}
 }
 
 func (node *appendableNode) Close() (err error) {
 	if node.data != nil {
 		node.data.Close()
 		node.data = nil
-	}
-	return
-}
-
-func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
-	if exception := node.exception.Load(); exception != nil {
-		logutil.Errorf("%v", exception)
-		err = exception.(error)
-		return
-	}
-	left := node.block.meta.GetSchema().BlockMaxRows - node.rows
-	if left == 0 {
-		err = data.ErrNotAppendable
-		return
-	}
-	if rows > left {
-		n = left
-	} else {
-		n = rows
 	}
 	return
 }
