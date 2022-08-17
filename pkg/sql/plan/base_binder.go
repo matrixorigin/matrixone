@@ -823,6 +823,14 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				return nil, err
 			}
 		}
+	case "like":
+		// sql 'select * from t where col like ?'  the ? Expr's type will be T_any
+		if args[0].Typ.Id == int32(types.T_any) {
+			args[0].Typ.Id = int32(types.T_varchar)
+		}
+		if args[1].Typ.Id == int32(types.T_any) {
+			args[1].Typ.Id = int32(types.T_varchar)
+		}
 	}
 
 	// get args(exprs) & types
