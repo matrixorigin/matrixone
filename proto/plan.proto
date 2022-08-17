@@ -651,6 +651,7 @@ message Prepare {
 	string name		 			= 1;
 	repeated ObjectRef schemas 	= 2;
 	Plan   plan		 			= 3;
+	repeated int32 param_types  = 4;
 }
 
 message Execute {

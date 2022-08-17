@@ -24,24 +24,27 @@ import (
 )
 
 var (
-	_ VisitRule = &GetParamRule{}
-	_ VisitRule = &ResetParamOrderRule{}
-	_ VisitRule = &ResetParamRefRule{}
-	_ VisitRule = &ResetVarRefRule{}
+	_ VisitPlanRule = &GetParamRule{}
+	_ VisitPlanRule = &ResetParamOrderRule{}
+	_ VisitPlanRule = &ResetParamRefRule{}
+	_ VisitPlanRule = &ResetVarRefRule{}
 )
 
 type GetParamRule struct {
-	params  map[int]int
-	schemas []*plan.ObjectRef
+	params     map[int]int
+	mapTypes   map[int]int32
+	paramTypes []int32
+	schemas    []*plan.ObjectRef
 }
 
 func NewGetParamRule() *GetParamRule {
 	return &GetParamRule{
-		params: make(map[int]int),
+		params:   make(map[int]int),
+		mapTypes: make(map[int]int32),
 	}
 }
 
-func (rule *GetParamRule) Match(node *Node) bool {
+func (rule *GetParamRule) MatchNode(node *Node) bool {
 	if node.NodeType == plan.Node_TABLE_SCAN {
 		rule.schemas = append(rule.schemas, &plan.ObjectRef{
 			Server:     node.ObjRef.Server,
@@ -54,45 +57,36 @@ func (rule *GetParamRule) Match(node *Node) bool {
 			ObjName:    node.ObjRef.ObjName,
 		})
 	}
+	return false
+}
+
+func (rule *GetParamRule) IsApplyExpr() bool {
 	return true
 }
 
-func (rule *GetParamRule) Apply(node *Node, _ *Query) error {
-	if node.Limit != nil {
-		node.Limit = rule.getParam(node.Limit)
-	}
-
-	if node.Offset != nil {
-		node.Offset = rule.getParam(node.Offset)
-	}
-
-	for i := range node.OnList {
-		node.OnList[i] = rule.getParam(node.OnList[i])
-	}
-
-	for i := range node.FilterList {
-		node.FilterList[i] = rule.getParam(node.FilterList[i])
-	}
-
-	for i := range node.ProjectList {
-		node.ProjectList[i] = rule.getParam(node.ProjectList[i])
-	}
-
+func (rule *GetParamRule) ApplyNode(node *Node) error {
 	return nil
 }
 
-func (rule *GetParamRule) getParam(e *plan.Expr) *plan.Expr {
+func (rule *GetParamRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
 		for i := range exprImpl.F.Args {
-			exprImpl.F.Args[i] = rule.getParam(exprImpl.F.Args[i])
+			exprImpl.F.Args[i], _ = rule.ApplyExpr(exprImpl.F.Args[i])
 		}
-		return e
+		return e, nil
 	case *plan.Expr_P:
-		rule.params[int(exprImpl.P.Pos)] = 0
-		return e
+		pos := int(exprImpl.P.Pos)
+		rule.params[pos] = 0
+		if e.Typ.Id == int32(types.T_any) && !e.Typ.Nullable {
+			// is not null, use string
+			rule.mapTypes[pos] = int32(types.T_varchar)
+		} else {
+			rule.mapTypes[pos] = e.Typ.Id
+		}
+		return e, nil
 	default:
-		return e
+		return e, nil
 	}
 }
 
@@ -102,8 +96,11 @@ func (rule *GetParamRule) SetParamOrder() {
 		argPos = append(argPos, pos)
 	}
 	sort.Ints(argPos)
+	rule.paramTypes = make([]int32, len(argPos))
+
 	for idx, pos := range argPos {
 		rule.params[pos] = idx
+		rule.paramTypes[idx] = rule.mapTypes[pos]
 	}
 }
 
@@ -119,47 +116,30 @@ func NewResetParamOrderRule(params map[int]int) *ResetParamOrderRule {
 	}
 }
 
-func (rule *ResetParamOrderRule) Match(_ *Node) bool {
+func (rule *ResetParamOrderRule) MatchNode(_ *Node) bool {
+	return false
+}
+
+func (rule *ResetParamOrderRule) IsApplyExpr() bool {
 	return true
 }
 
-func (rule *ResetParamOrderRule) Apply(node *Node, qry *Query) error {
-
-	if node.Limit != nil {
-		node.Limit = rule.setOrder(node.Limit)
-	}
-
-	if node.Offset != nil {
-		node.Offset = rule.setOrder(node.Offset)
-	}
-
-	for i := range node.OnList {
-		node.OnList[i] = rule.setOrder(node.OnList[i])
-	}
-
-	for i := range node.FilterList {
-		node.FilterList[i] = rule.setOrder(node.FilterList[i])
-	}
-
-	for i := range node.ProjectList {
-		node.ProjectList[i] = rule.setOrder(node.ProjectList[i])
-	}
-
+func (rule *ResetParamOrderRule) ApplyNode(node *Node) error {
 	return nil
 }
 
-func (rule *ResetParamOrderRule) setOrder(e *plan.Expr) *plan.Expr {
+func (rule *ResetParamOrderRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
 		for i := range exprImpl.F.Args {
-			exprImpl.F.Args[i] = rule.setOrder(exprImpl.F.Args[i])
+			exprImpl.F.Args[i], _ = rule.ApplyExpr(exprImpl.F.Args[i])
 		}
-		return e
+		return e, nil
 	case *plan.Expr_P:
 		exprImpl.P.Pos = int32(rule.params[int(exprImpl.P.Pos)])
-		return e
+		return e, nil
 	default:
-		return e
+		return e, nil
 	}
 }
 
@@ -175,35 +155,20 @@ func NewResetParamRefRule(params []*Expr) *ResetParamRefRule {
 	}
 }
 
-func (rule *ResetParamRefRule) Match(_ *Node) bool {
+func (rule *ResetParamRefRule) MatchNode(_ *Node) bool {
+	return false
+}
+
+func (rule *ResetParamRefRule) IsApplyExpr() bool {
 	return true
 }
 
-func (rule *ResetParamRefRule) Apply(node *Node, qry *Query) error {
-	if node.Limit != nil {
-		node.Limit = rule.resetParamRef(node.Limit)
-	}
-
-	if node.Offset != nil {
-		node.Offset = rule.resetParamRef(node.Offset)
-	}
-
-	for i := range node.OnList {
-		node.OnList[i] = rule.resetParamRef(node.OnList[i])
-	}
-
-	for i := range node.FilterList {
-		node.FilterList[i] = rule.resetParamRef(node.FilterList[i])
-	}
-
-	for i := range node.ProjectList {
-		node.ProjectList[i] = rule.resetParamRef(node.ProjectList[i])
-	}
-
+func (rule *ResetParamRefRule) ApplyNode(node *Node) error {
 	return nil
 }
 
-func (rule *ResetParamRefRule) resetParamRef(e *plan.Expr) *plan.Expr {
+func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	var err error
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
 		needResetFunction := false
@@ -211,19 +176,24 @@ func (rule *ResetParamRefRule) resetParamRef(e *plan.Expr) *plan.Expr {
 			if _, ok := arg.Expr.(*plan.Expr_P); ok {
 				needResetFunction = true
 			}
-			exprImpl.F.Args[i] = rule.resetParamRef(arg)
+			exprImpl.F.Args[i], err = rule.ApplyExpr(arg)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		// reset function
 		if needResetFunction {
-			newExpr, _ := bindFuncExprImplByPlanExpr(exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
-			return newExpr
+			return bindFuncExprImplByPlanExpr(exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
 		}
-		return e
+		return e, nil
 	case *plan.Expr_P:
-		return rule.params[int(exprImpl.P.Pos)]
+		return &plan.Expr{
+			Typ:  e.Typ,
+			Expr: rule.params[int(exprImpl.P.Pos)].Expr,
+		}, nil
 	default:
-		return e
+		return e, nil
 	}
 }
 
@@ -239,50 +209,19 @@ func NewResetVarRefRule(compCtx CompilerContext) *ResetVarRefRule {
 	}
 }
 
-func (rule *ResetVarRefRule) Match(_ *Node) bool {
+func (rule *ResetVarRefRule) MatchNode(_ *Node) bool {
+	return false
+}
+
+func (rule *ResetVarRefRule) IsApplyExpr() bool {
 	return true
 }
 
-func (rule *ResetVarRefRule) Apply(node *Node, qry *Query) error {
-	var err error
-	if node.Limit != nil {
-		node.Limit, err = rule.resetVarRef(node.Limit)
-	}
-	if err != nil {
-		return err
-	}
-
-	if node.Offset != nil {
-		node.Offset, err = rule.resetVarRef(node.Offset)
-	}
-	if err != nil {
-		return err
-	}
-
-	for i := range node.OnList {
-		node.OnList[i], err = rule.resetVarRef(node.OnList[i])
-	}
-	if err != nil {
-		return err
-	}
-
-	for i := range node.FilterList {
-		node.FilterList[i], err = rule.resetVarRef(node.FilterList[i])
-	}
-	if err != nil {
-		return err
-	}
-
-	for i := range node.ProjectList {
-		node.ProjectList[i], err = rule.resetVarRef(node.ProjectList[i])
-	}
-	if err != nil {
-		return err
-	}
+func (rule *ResetVarRefRule) ApplyNode(node *Node) error {
 	return nil
 }
 
-func (rule *ResetVarRefRule) resetVarRef(e *plan.Expr) (*plan.Expr, error) {
+func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
@@ -291,7 +230,7 @@ func (rule *ResetVarRefRule) resetVarRef(e *plan.Expr) (*plan.Expr, error) {
 			if _, ok := arg.Expr.(*plan.Expr_V); ok {
 				needResetFunction = true
 			}
-			exprImpl.F.Args[i], err = rule.resetVarRef(arg)
+			exprImpl.F.Args[i], err = rule.ApplyExpr(arg)
 			if err != nil {
 				return nil, err
 			}
@@ -343,6 +282,9 @@ func (rule *ResetVarRefRule) resetVarRef(e *plan.Expr) (*plan.Expr, error) {
 			err = errors.New("", "decimal var not support now")
 		default:
 			err = errors.New("", fmt.Sprintf("type of var %q is not supported now", exprImpl.V.Name))
+		}
+		if expr.Typ.Id != e.Typ.Id {
+			return appendCastBeforeExpr(expr, e.Typ)
 		}
 		return expr, err
 	default:
