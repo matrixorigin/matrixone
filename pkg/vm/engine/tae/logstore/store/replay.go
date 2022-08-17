@@ -39,7 +39,23 @@ func (w *StoreImpl) Replay(h ApplyHandle) error {
 		w.walCurrentLsn[g] = lsn
 		w.synced[g] = lsn
 	}
+	for g, ckped := range w.checkpointed {
+		if w.walCurrentLsn[g] == 0 {
+			w.walCurrentLsn[g] = ckped
+			w.synced[g] = ckped
+		}
+		if w.minLsn[g] == 0 {
+			w.minLsn[g] = ckped + 1
+		}
+	}
 	return nil
+}
+
+func (w *StoreImpl) onReplayLsn(g uint32, lsn uint64) {
+	_, ok := w.minLsn[g]
+	if !ok {
+		w.minLsn[g] = lsn
+	}
 }
 
 func (w *StoreImpl) replayEntry(e *entry.Entry, h ApplyHandle) error {
@@ -47,11 +63,15 @@ func (w *StoreImpl) replayEntry(e *entry.Entry, h ApplyHandle) error {
 	info := e.Info
 	switch info.Group {
 	case GroupInternal:
+		w.unmarshalPostCommitEntry(walEntry.GetPayload())
+		w.checkpointed[GroupCKP] = info.TargetLsn
+		return nil
 	case GroupCKP:
 		w.logCheckpointInfo(info)
 	case GroupC:
 	}
 	w.logDriverLsn(e)
+	w.onReplayLsn(info.Group, info.GroupLSN)
 	h(info.Group, info.GroupLSN, walEntry.GetPayload(), walEntry.GetType(), walEntry.GetInfo())
 	return nil
 }

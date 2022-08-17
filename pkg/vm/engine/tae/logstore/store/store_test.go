@@ -45,12 +45,23 @@ import (
 // 	buf = bs.Bytes()
 // }
 
-func newTestDriver(t *testing.T) driver.Driver {
+func newTestDriver(t *testing.T, size int) driver.Driver {
 	dir := "/tmp/logstore/teststore/store"
 	name := "mock"
 	os.RemoveAll(dir)
 	cfg := &batchstoredriver.StoreCfg{
-		RotateChecker: batchstoredriver.NewMaxSizeRotateChecker(int(common.M) * 64),
+		RotateChecker: batchstoredriver.NewMaxSizeRotateChecker(size),
+	}
+	s, err := batchstoredriver.NewBaseStore(dir, name, cfg)
+	assert.NoError(t, err)
+	return s
+}
+
+func restartTestDriver(t *testing.T, size int) driver.Driver {
+	dir := "/tmp/logstore/teststore/store"
+	name := "mock"
+	cfg := &batchstoredriver.StoreCfg{
+		RotateChecker: batchstoredriver.NewMaxSizeRotateChecker(size),
 	}
 	s, err := batchstoredriver.NewBaseStore(dir, name, cfg)
 	assert.NoError(t, err)
@@ -66,7 +77,7 @@ func newTestDriver(t *testing.T) driver.Driver {
 //		return driver, service
 //	}
 func TestAppendRead(t *testing.T) {
-	driver := newTestDriver(t)
+	driver := newTestDriver(t, int(common.M)*64)
 	wal := NewStore(driver)
 	defer wal.Close()
 
@@ -145,7 +156,7 @@ func mockEntry() entry.Entry {
 
 // }
 func TestWal(t *testing.T) {
-	driver := newTestDriver(t)
+	driver := newTestDriver(t, int(common.M)*64)
 	wal := NewStore(driver)
 	defer wal.Close()
 
@@ -233,4 +244,51 @@ func TestWal(t *testing.T) {
 		e := entries[i]
 		e.Free()
 	}
+}
+
+func TestReplay(t *testing.T) {
+	driver := newTestDriver(t, int(common.K)*3)
+	wal := NewStore(driver)
+
+	e := entry.GetBase()
+	err := e.SetPayload([]byte("payload"))
+	if err != nil {
+		panic(err)
+	}
+	_, err = wal.Append(10, e)
+	assert.NoError(t, err)
+
+	err = e.WaitDone()
+	assert.NoError(t, err)
+	e.Free()
+
+	e2 := entry.GetBase()
+	err = e2.SetPayload(make([]byte, int(common.K*3)))
+	if err != nil {
+		panic(err)
+	}
+	_, err = wal.Append(10, e2)
+	assert.NoError(t, err)
+
+	err = e2.WaitDone()
+	assert.NoError(t, err)
+	e2.Free()
+
+	e2 = entry.GetBase()
+	err = e2.SetPayload(make([]byte, int(common.K*3)))
+	if err != nil {
+		panic(err)
+	}
+	_, err = wal.Append(10, e2)
+	assert.NoError(t, err)
+
+	err = e2.WaitDone()
+	assert.NoError(t, err)
+	e2.Free()
+
+	wal.Close()
+
+	driver = restartTestDriver(t, int(common.K)*3)
+	wal = NewStore(driver)
+	wal.Close()
 }

@@ -91,17 +91,22 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		}
 	case *join.Argument:
 		rin.Arg = &join.Argument{
+			Typs:       arg.Typs,
+			Cond:       arg.Cond,
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
 		}
 	case *semi.Argument:
 		rin.Arg = &semi.Argument{
+			Typs:       arg.Typs,
+			Cond:       arg.Cond,
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
 		}
 	case *left.Argument:
 		rin.Arg = &left.Argument{
 			Typs:       arg.Typs,
+			Cond:       arg.Cond,
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
 		}
@@ -116,15 +121,19 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 	case *single.Argument:
 		rin.Arg = &single.Argument{
 			Typs:       arg.Typs,
+			Cond:       arg.Cond,
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
 		}
 	case *product.Argument:
 		rin.Arg = &product.Argument{
+			Typs:   arg.Typs,
 			Result: arg.Result,
 		}
 	case *anti.Argument:
 		rin.Arg = &anti.Argument{
+			Typs:       arg.Typs,
+			Cond:       arg.Cond,
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
 		}
@@ -151,11 +160,13 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		}
 	case *loopjoin.Argument:
 		rin.Arg = &loopjoin.Argument{
+			Typs:   arg.Typs,
 			Cond:   arg.Cond,
 			Result: arg.Result,
 		}
 	case *loopsemi.Argument:
 		rin.Arg = &loopsemi.Argument{
+			Typs:   arg.Typs,
 			Cond:   arg.Cond,
 			Result: arg.Result,
 		}
@@ -167,11 +178,13 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		}
 	case *loopanti.Argument:
 		rin.Arg = &loopanti.Argument{
+			Typs:   arg.Typs,
 			Cond:   arg.Cond,
 			Result: arg.Result,
 		}
 	case *loopsingle.Argument:
 		rin.Arg = &loopsingle.Argument{
+			Typs:   arg.Typs,
 			Cond:   arg.Cond,
 			Result: arg.Result,
 		}
@@ -327,10 +340,12 @@ func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
+	cond, conds := extraJoinConditions(n.OnList)
 	return &join.Argument{
 		Typs:       typs,
 		Result:     result,
-		Conditions: constructJoinConditions(n.OnList),
+		Cond:       cond,
+		Conditions: constructJoinConditions(conds),
 	}
 }
 
@@ -343,10 +358,12 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 		}
 		result[i] = pos
 	}
+	cond, conds := extraJoinConditions(n.OnList)
 	return &semi.Argument{
 		Typs:       typs,
 		Result:     result,
-		Conditions: constructJoinConditions(n.OnList),
+		Cond:       cond,
+		Conditions: constructJoinConditions(conds),
 	}
 }
 
@@ -355,10 +372,12 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
+	cond, conds := extraJoinConditions(n.OnList)
 	return &left.Argument{
 		Typs:       typs,
 		Result:     result,
-		Conditions: constructJoinConditions(n.OnList),
+		Cond:       cond,
+		Conditions: constructJoinConditions(conds),
 	}
 }
 
@@ -367,10 +386,12 @@ func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *si
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
+	cond, conds := extraJoinConditions(n.OnList)
 	return &single.Argument{
 		Typs:       typs,
 		Result:     result,
-		Conditions: constructJoinConditions(n.OnList),
+		Cond:       cond,
+		Conditions: constructJoinConditions(conds),
 	}
 }
 
@@ -391,10 +412,12 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 		}
 		result[i] = pos
 	}
+	cond, conds := extraJoinConditions(n.OnList)
 	return &anti.Argument{
 		Typs:       typs,
 		Result:     result,
-		Conditions: constructJoinConditions(n.OnList),
+		Cond:       cond,
+		Conditions: constructJoinConditions(conds),
 	}
 }
 
@@ -741,6 +764,22 @@ func isEquiJoin(exprs []*plan.Expr) bool {
 	for _, expr := range exprs {
 		if e, ok := expr.Expr.(*plan.Expr_F); ok {
 			if !supportedJoinCondition(e.F.Func.GetObj()) {
+				continue
+			}
+			lpos, rpos := hasColExpr(e.F.Args[0], -1), hasColExpr(e.F.Args[1], -1)
+			if lpos == -1 || rpos == -1 || (lpos == rpos) {
+				continue
+			}
+			return true
+		}
+	}
+	return false || isEquiJoin0(exprs)
+}
+
+func isEquiJoin0(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if e, ok := expr.Expr.(*plan.Expr_F); ok {
+			if !supportedJoinCondition(e.F.Func.GetObj()) {
 				return false
 			}
 			lpos, rpos := hasColExpr(e.F.Args[0], -1), hasColExpr(e.F.Args[1], -1)
@@ -750,6 +789,30 @@ func isEquiJoin(exprs []*plan.Expr) bool {
 		}
 	}
 	return true
+}
+
+func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
+	exprs = colexec.SplitAndExprs(exprs)
+	eqConds := make([]*plan.Expr, 0, len(exprs))
+	notEqConds := make([]*plan.Expr, 0, len(exprs))
+	for i, expr := range exprs {
+		if e, ok := expr.Expr.(*plan.Expr_F); ok {
+			if !supportedJoinCondition(e.F.Func.GetObj()) {
+				notEqConds = append(notEqConds, exprs[i])
+				continue
+			}
+			lpos, rpos := hasColExpr(e.F.Args[0], -1), hasColExpr(e.F.Args[1], -1)
+			if lpos == -1 || rpos == -1 || (lpos == rpos) {
+				notEqConds = append(notEqConds, exprs[i])
+				continue
+			}
+			eqConds = append(eqConds, exprs[i])
+		}
+	}
+	if len(notEqConds) == 0 {
+		return nil, eqConds
+	}
+	return colexec.RewriteFilterExprList(notEqConds), eqConds
 }
 
 func supportedJoinCondition(id int64) bool {
