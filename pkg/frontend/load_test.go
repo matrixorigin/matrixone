@@ -42,7 +42,6 @@ func Test_readTextFile(t *testing.T) {
 	fmt.Printf("%v\n", data)
 }
 
-
 /*func Test_loadJSON(t *testing.T) {
 	convey.Convey("loadJSON succ", t, func() {
 		ctrl := gomock.NewController(t)
