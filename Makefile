@@ -81,23 +81,10 @@ vendor-build:
 # code generation
 ###############################################################################
 
-# files generated from cmd/generate-config
-# they need to be deleted in the clean target
-CONFIG_CODE_GENERATED := ./pkg/config/system_vars.go ./pkg/config/system_vars_test.go
-
-CONFIG_DEPS=cmd/generate-config/main.go  \
-	cmd/generate-config/config_template.go \
-	cmd/generate-config/system_vars_def.toml
-
 .PHONY: config
-config: $(CONFIG_DEPS)
+config:
 	$(info [Create build config])
 	@go mod tidy
-	@go build -o $(BUILD_CFG) cmd/generate-config/main.go cmd/generate-config/config_template.go
-	@./$(BUILD_CFG) cmd/generate-config/system_vars_def.toml
-	@mv -f cmd/generate-config/system_vars_config.toml .
-	@mv -f cmd/generate-config/system_vars.go pkg/config
-	@mv -f cmd/generate-config/system_vars_test.go pkg/config
 
 .PHONY: generate-pb
 generate-pb:
@@ -178,7 +165,7 @@ clean:
 	$(info [Clean up])
 	$(info Clean go test cache)
 	@go clean -testcache
-	rm -f $(CONFIG_CODE_GENERATED) $(BIN_NAME) $(SERVICE_BIN_NAME) $(BUILD_CFG)
+	rm -f $(BIN_NAME) $(SERVICE_BIN_NAME) $(BUILD_CFG)
 	rm -rf $(VENDOR_DIRECTORY)
 	$(MAKE) -C cgo clean
 

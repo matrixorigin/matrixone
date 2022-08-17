@@ -16,6 +16,7 @@ package txnengine
 
 import (
 	"context"
+	"strings"
 
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -56,7 +57,7 @@ func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.T
 		e.allNodesShards,
 		OpCreateDatabase,
 		CreateDatabaseReq{
-			Name: dbName,
+			Name: strings.ToLower(dbName),
 		},
 	)
 	if err != nil {
@@ -76,7 +77,7 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 		e.firstNodeShard,
 		OpOpenDatabase,
 		OpenDatabaseReq{
-			Name: dbName,
+			Name: strings.ToLower(dbName),
 		},
 	)
 	if err != nil {
@@ -127,7 +128,7 @@ func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.T
 		e.allNodesShards,
 		OpDeleteDatabase,
 		DeleteDatabaseReq{
-			Name: dbName,
+			Name: strings.ToLower(dbName),
 		},
 	)
 	if err != nil {

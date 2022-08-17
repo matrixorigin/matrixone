@@ -21,7 +21,6 @@ import (
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -186,15 +185,10 @@ func Test_mce(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-
-		config.StorageEngine = eng
-		defer func() {
-			config.StorageEngine = nil
-		}()
 
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
 
@@ -266,11 +260,6 @@ func Test_mce_selfhandle(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockTxnEngine(ctrl)
-		config.StorageEngine = eng
-		defer func() {
-			config.StorageEngine = nil
-		}()
-
 		cnt := 0
 		eng.EXPECT().Database(ctx, gomock.Any(), gomock.Any()).DoAndReturn(
 			func(ctx2 context.Context, db string, dump interface{}) (engine.Database, error) {
@@ -300,16 +289,10 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-
-		config.StorageEngine = eng
-		defer func() {
-			config.StorageEngine = nil
-		}()
-
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
 
 		mce := NewMysqlCmdExecutor()
@@ -327,11 +310,6 @@ func Test_mce_selfhandle(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
-		config.StorageEngine = eng
-		defer func() {
-			config.StorageEngine = nil
-		}()
-
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -345,7 +323,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
@@ -447,7 +425,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
@@ -518,7 +496,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 			t.Error(err)
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 
@@ -712,7 +690,7 @@ func Test_handleSelectVariables(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, nil, nil, &gSys)
+		ses := NewSession(proto, nil, nil, pu, &gSys)
 		ses.Mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 		mce.PrepareSessionBeforeExecRequest(ses)
@@ -750,7 +728,7 @@ func Test_handleShowVariables(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, nil, nil, &gSys)
+		ses := NewSession(proto, nil, nil, pu, &gSys)
 		ses.Mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 		mce.PrepareSessionBeforeExecRequest(ses)
@@ -795,7 +773,7 @@ func Test_handleShowCreateTable(t *testing.T) {
 			t.Error(err)
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
@@ -830,7 +808,7 @@ func Test_handleShowCreateDatabase(t *testing.T) {
 			t.Error(err)
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
@@ -861,7 +839,7 @@ func Test_handleShowColumns(t *testing.T) {
 			t.Error(err)
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
@@ -900,7 +878,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, nil, nil, &gSys)
+		ses := NewSession(proto, nil, nil, pu, &gSys)
 		ses.Mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 		mce.PrepareSessionBeforeExecRequest(ses)
@@ -990,11 +968,6 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		}
 
 		pu.StorageEngine = eng
-		config.StorageEngine = eng
-		defer func() {
-			config.StorageEngine = nil
-		}()
-
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)

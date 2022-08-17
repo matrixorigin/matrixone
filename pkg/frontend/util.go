@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"fmt"
+	"github.com/BurntSushi/toml"
 	"go/constant"
 	"os"
 	"runtime"
@@ -295,17 +296,11 @@ func MakeDebugInfo(data []byte, bytesCount int, bytesPerLine int) string {
 	return ps
 }
 
-func getSystemVariables(configFile string) (*mo_config.SystemVariables, error) {
-	sv := &mo_config.SystemVariables{}
+func getSystemVariables(configFile string) (*mo_config.FrontendParameters, error) {
+	sv := &mo_config.FrontendParameters{}
 	var err error
-	//before anything using the configuration
-	if err = sv.LoadInitialValues(); err != nil {
-		logutil.Errorf("error:%v", err)
-		return nil, err
-	}
-
-	if err = mo_config.LoadvarsConfigFromFile(configFile, sv); err != nil {
-		logutil.Errorf("error:%v", err)
+	_, err = toml.DecodeFile(configFile, sv)
+	if err != nil {
 		return nil, err
 	}
 	return sv, err
@@ -317,7 +312,7 @@ func getParameterUnit(configFile string, eng engine.Engine) (*mo_config.Paramete
 		return nil, err
 	}
 
-	hostMmu := host.New(sv.GetHostMmuLimitation())
+	hostMmu := host.New(sv.HostMmuLimitation)
 	mempool := mempool.New( /*int(sv.GetMempoolMaxSize()), int(sv.GetMempoolFactor())*/ )
 
 	fmt.Println("Using Dump Storage Engine and Cluster Nodes.")

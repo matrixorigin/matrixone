@@ -16,14 +16,18 @@ package testtxnengine
 
 import (
 	"context"
+	"errors"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 )
 
 type Execution struct {
-	tx  *Tx
-	ctx context.Context
+	ctx  context.Context
+	tx   *Tx
+	stmt tree.Statement
 }
 
 var _ plan.CompilerContext = new(Execution)
@@ -42,7 +46,7 @@ func (e *Execution) DatabaseExists(name string) bool {
 }
 
 func (e *Execution) DefaultDatabase() string {
-	return "test"
+	return e.tx.databaseName
 }
 
 func (e *Execution) GetRootSql() string {
@@ -55,7 +59,7 @@ func (e *Execution) GetHideKeyDef(dbName string, tableName string) *plan.ColDef 
 		panic(err)
 	}
 	for i, attr := range attrs {
-		if attr.Primary { //TODO hide key?
+		if attr.IsHidden {
 			return engineAttrToPlanColDef(i, attr)
 		}
 	}
@@ -77,6 +81,9 @@ func (e *Execution) GetPrimaryKeyDef(dbName string, tableName string) (defs []*p
 }
 
 func (e *Execution) Resolve(schemaName string, tableName string) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
+	if schemaName == "" {
+		schemaName = e.tx.databaseName
+	}
 
 	objRef = &plan.ObjectRef{
 		SchemaName: schemaName,
@@ -86,13 +93,36 @@ func (e *Execution) Resolve(schemaName string, tableName string) (objRef *plan.O
 	tableDef = &plan.TableDef{
 		Name: tableName,
 	}
+
 	attrs, err := e.getTableAttrs(schemaName, tableName)
+	var errDBNotFound txnengine.ErrDatabaseNotFound
+	if errors.As(err, &errDBNotFound) {
+		return nil, nil
+	}
+	var errRelNotFound txnengine.ErrRelationNotFound
+	if errors.As(err, &errRelNotFound) {
+		return nil, nil
+	}
 	if err != nil {
 		panic(err)
 	}
+
 	for i, attr := range attrs {
+
+		// return hidden columns for update or detete statement
+		if attr.IsHidden {
+			switch e.stmt.(type) {
+			case *tree.Update, *tree.Delete:
+			default:
+				continue
+			}
+		}
+
 		tableDef.Cols = append(tableDef.Cols, engineAttrToPlanColDef(i, attr))
 	}
+
+	//TODO properties
+	//TODO view
 
 	return
 }
@@ -136,13 +166,15 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 		Name: attr.Name,
 		Typ: &plan.Type{
 			Id:        int32(attr.Type.Oid),
-			Nullable:  false, //TODO
+			Nullable:  attr.Default.NullAbility,
 			Width:     attr.Type.Width,
 			Precision: attr.Type.Precision,
 			Size:      attr.Type.Size,
 			Scale:     attr.Type.Scale,
 		},
+		Default: attr.Default,
 		Primary: attr.Primary,
 		Pkidx:   int32(idx),
+		Comment: attr.Comment,
 	}
 }
