@@ -563,7 +563,7 @@ Contributions to MatrixOne are welcome from everyone.
         <a href="https://github.com/triump2020">
             <img src="https://avatars.githubusercontent.com/u/63033222?v=4" width="30;" alt="triump2020"/>
             <br />
-            <sub><b>triump2020</b></sub>
+            <sub><b>Triump2020</b></sub>
         </a>
     </td>
     <td align="center">
@@ -756,7 +756,7 @@ Contributions to MatrixOne are welcome from everyone.
         <a href="https://github.com/mooleetzi">
             <img src="https://avatars.githubusercontent.com/u/42628885?v=4" width="30;" alt="mooleetzi"/>
             <br />
-            <sub><b>mooleetzi</b></sub>
+            <sub><b>Mooleetzi</b></sub>
         </a>
     </td>
     <td align="center">
