@@ -36,7 +36,7 @@ func TestBitXor(t *testing.T) {
 	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
 	vec := testutil.NewVector(Rows, types.New(types.T_int8, 0, 0, 0), m, false, nil)
 	{
-		agg := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), bx.Grows, bx.Eval, bx.Merge, bx.Fill)
+		agg := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), bx.Grows, bx.Eval, bx.Merge, bx.Fill, nil)
 		err := agg.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -49,7 +49,7 @@ func TestBitXor(t *testing.T) {
 	}
 	{
 		vec0 := testutil.NewVector(2, types.New(types.T_int8, 0, 0, 0), m, false, []int8{2, 2})
-		agg := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), bx.Grows, bx.Eval, bx.Merge, bx.Fill)
+		agg := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), bx.Grows, bx.Eval, bx.Merge, bx.Fill, nil)
 		err := agg.Grows(1, m)
 		require.NoError(t, err)
 		agg.Fill(0, int64(0), 2, []*vector.Vector{vec0})
@@ -62,7 +62,7 @@ func TestBitXor(t *testing.T) {
 	}
 	{
 		vec0 := testutil.NewVector(3, types.New(types.T_int8, 0, 0, 0), m, false, []int8{1, 2, 2})
-		agg := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), bx.Grows, bx.Eval, bx.Merge, bx.Fill)
+		agg := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), bx.Grows, bx.Eval, bx.Merge, bx.Fill, nil)
 		err := agg.Grows(1, m)
 		require.NoError(t, err)
 		agg.Fill(0, int64(0), 1, []*vector.Vector{vec0})
@@ -75,13 +75,13 @@ func TestBitXor(t *testing.T) {
 		vec0.Free(m)
 	}
 	{
-		agg0 := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), bx.Grows, bx.Eval, bx.Merge, bx.Fill)
+		agg0 := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), bx.Grows, bx.Eval, bx.Merge, bx.Fill, nil)
 		err := agg0.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
 			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
 		}
-		agg1 := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), bx.Grows, bx.Eval, bx.Merge, bx.Fill)
+		agg1 := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), bx.Grows, bx.Eval, bx.Merge, bx.Fill, nil)
 		err = agg1.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
