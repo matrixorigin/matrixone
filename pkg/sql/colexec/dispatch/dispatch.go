@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -42,7 +43,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			case reg.Ch <- nil:
 			}
 		}
-		return false, nil
+		return true, nil
 	}
 	vecs := ap.vecs[:0]
 	for i := range bat.Vecs {
@@ -62,6 +63,12 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	}
 	if ap.All {
 		atomic.AddInt64(&bat.Cnt, int64(len(ap.Regs))-1)
+		if bat.Ht != nil {
+			jm, ok := bat.Ht.(*hashmap.JoinMap)
+			if ok {
+				jm.IncRef(int64(len(ap.Regs)) - 1)
+			}
+		}
 		for _, reg := range ap.Regs {
 			select {
 			case <-reg.Ctx.Done():

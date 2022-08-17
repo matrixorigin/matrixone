@@ -39,7 +39,8 @@ var uint64VecBase = []uint64{0, 1, 4, 16, 0}
 var uint64VecBase2 = []uint64{0, 16, 0}
 var float64VecBase = []float64{-1.1, 0.01, 4.2, 8.4, 0}
 var float64VecBase2 = []float64{0.01, 2.3, 0}
-var charVecBase = []string{"-1", "0", "4", "8", ""}
+
+// var charVecBase = []string{"-1", "0", "4", "8", ""}
 var charVecBase2 = []string{"a", "12", ""}
 var compVec []string
 var compNsp = []int64{0, 1, 2, 5, 8, 11, 12, 13, 14, 15, 16, 17, 20, 23, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44}

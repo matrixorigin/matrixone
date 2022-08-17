@@ -36,8 +36,6 @@ type evalVector struct {
 type container struct {
 	state int
 
-	sels []int64
-
 	inBuckets []uint8
 
 	bat *batch.Batch
@@ -45,7 +43,7 @@ type container struct {
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *hashmap.StrHashMap
+	mp *hashmap.JoinMap
 }
 
 type ResultPos struct {
