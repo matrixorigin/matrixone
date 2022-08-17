@@ -18,6 +18,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"math/rand"
 	"os"
 	"os/signal"
@@ -70,7 +71,7 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 	// TODO: start other service
 	switch strings.ToUpper(cfg.ServiceType) {
 	case cnServiceType:
-		panic("not implemented")
+		return startCNService(cfg, stopper)
 	case dnServiceType:
 		return startDNService(cfg, stopper)
 	case logServiceType:
@@ -80,6 +81,24 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 	default:
 		panic("unknown service type")
 	}
+}
+
+func startCNService(cfg *Config, stopper *stopper.Stopper) error {
+	cfg.CN.Frontend.SetLogAndVersion(&cfg.Log, Version)
+	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
+		s, err := cnservice.NewService(&cfg.CN, ctx)
+		if err != nil {
+			panic(err)
+		}
+		if err := s.Start(); err != nil {
+			panic(err)
+		}
+
+		<-ctx.Done()
+		if err := s.Close(); err != nil {
+			panic(err)
+		}
+	})
 }
 
 func startDNService(cfg *Config, stopper *stopper.Stopper) error {

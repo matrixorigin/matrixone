@@ -110,7 +110,7 @@ type Session struct {
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
-	txnHandler := InitTxnHandler(config.StorageEngine)
+	txnHandler := InitTxnHandler(PU.StorageEngine)
 	ses := &Session{
 		protocol: proto,
 		GuestMmu: gm,
@@ -124,7 +124,7 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 		txnHandler: txnHandler,
 		//TODO:fix database name after the catalog is ready
 		txnCompileCtx:   InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
-		storage:         config.StorageEngine,
+		storage:         PU.StorageEngine,
 		sysVars:         gSysVars.CopySysVarsToSession(),
 		userDefinedVars: make(map[string]interface{}),
 		gSysVars:        gSysVars,

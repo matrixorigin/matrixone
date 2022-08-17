@@ -16,10 +16,8 @@ package frontend
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,9 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/simdcsv"
-	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
@@ -320,11 +315,7 @@ func Test_readTextFile(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
-		config.StorageEngine = eng
-		defer func() {
-			config.StorageEngine = nil
-		}()
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, gSysVariables)
 
 		mce := NewMysqlCmdExecutor()
@@ -521,12 +512,7 @@ func Test_readTextFile(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
-
-		config.StorageEngine = eng
-		defer func() {
-			config.StorageEngine = nil
-		}()
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, gSysVariables)
 
@@ -553,44 +539,6 @@ func Test_readTextFile(t *testing.T) {
 		}
 	})
 }*/
-
-func getParsedLinesChan(simdCsvGetParsedLinesChan chan simdcsv.LineOut) {
-	var str = [][]string{{"123"}, {"456"}, {"789"}, {"78910"}}
-	for i := 0; i < len(str); i++ {
-		simdCsvGetParsedLinesChan <- simdcsv.LineOut{Lines: nil, Line: str[i]}
-	}
-	simdCsvGetParsedLinesChan <- simdcsv.LineOut{Lines: nil, Line: nil}
-}
-func Test_getLineOutFromSimdCsvRoutine(t *testing.T) {
-	convey.Convey("getLineOutFromSimdCsvRoutine succ", t, func() {
-		handler := &ParseLineHandler{
-			simdCsvGetParsedLinesChan: atomic.Value{},
-			SharePart: SharePart{
-				load: &tree.Load{
-					Param: &tree.ExternParam{
-						Tail: &tree.TailParameter{IgnoredLines: 1},
-					},
-				},
-				simdCsvLineArray: make([][]string, 100)},
-		}
-		handler.simdCsvGetParsedLinesChan.Store(make(chan simdcsv.LineOut, 100))
-
-		gostub.StubFunc(&saveLinesToStorage, nil)
-		var cancel context.CancelFunc
-		handler.loadCtx, cancel = context.WithTimeout(context.TODO(), time.Second)
-		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldBeNil)
-		cancel()
-
-		gostub.StubFunc(&saveLinesToStorage, errors.New("1"))
-		handler.loadCtx, cancel = context.WithTimeout(context.TODO(), time.Second)
-		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldNotBeNil)
-		cancel()
-
-		getParsedLinesChan(getLineOutChan(handler.simdCsvGetParsedLinesChan))
-		stubs := gostub.StubFunc(&saveLinesToStorage, nil)
-		defer stubs.Reset()
-	})
-}
 
 func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 	ctx := context.TODO()
