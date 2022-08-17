@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/simdcsv"
-  "github.com/matrixorigin/matrixone/pkg/encoding"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -1033,7 +1032,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						if err != nil {
 							return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
 						}
-						jsonBytes, err := encoding.EncodeJson(json)
+						jsonBytes, err := types.EncodeJson(json)
 						if err != nil {
 							return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
 						}
@@ -1557,7 +1556,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 							result.Warnings++
 							//break
 						}
-						jsonBytes, err := encoding.EncodeJson(json)
+						jsonBytes, err := types.EncodeJson(json)
 						if err != nil {
 							logutil.Errorf("encode field[%v] err:%v", field, err)
 							if !ignoreFieldError {
