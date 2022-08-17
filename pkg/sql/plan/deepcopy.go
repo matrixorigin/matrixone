@@ -297,7 +297,7 @@ func DeepCopyInsertValues(insert *plan.InsertValues) *plan.InsertValues {
 	return newInsert
 }
 
-func DeepCoplyPlan(pl *Plan) *Plan {
+func DeepCopyPlan(pl *Plan) *Plan {
 	switch pl := pl.Plan.(type) {
 	case *Plan_Query:
 		return &Plan{
