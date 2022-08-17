@@ -920,25 +920,24 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 	if load.Local {
 		return fmt.Errorf("LOCAL is unsupported now")
 	}
-
-	if load.Fields == nil || len(load.Fields.Terminated) == 0 {
+	if load.Param.Tail.Fields == nil || len(load.Param.Tail.Fields.Terminated) == 0 {
 		return fmt.Errorf("load need FIELDS TERMINATED BY ")
 	}
 
-	if load.Fields != nil && load.Fields.EscapedBy != 0 {
+	if load.Param.Tail.Fields != nil && load.Param.Tail.Fields.EscapedBy != 0 {
 		return fmt.Errorf("EscapedBy field is unsupported now")
 	}
 
 	/*
 		check file
 	*/
-	exist, isfile, err := PathExists(load.File)
+	exist, isfile, err := PathExists(load.Param.Filepath)
 	if err != nil || !exist {
-		return fmt.Errorf("file %s does exist. err:%v", load.File, err)
+		return fmt.Errorf("file %s does exist. err:%v", load.Param.Filepath, err)
 	}
 
 	if !isfile {
-		return fmt.Errorf("file %s is a directory", load.File)
+		return fmt.Errorf("file %s is a directory", load.Param.Filepath)
 	}
 
 	/*
@@ -1851,13 +1850,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetUserName("")
 			}
-		case *tree.Load:
-			fromLoadData = true
-			selfHandle = true
-			err = mce.handleLoadData(requestCtx, st)
-			if err != nil {
-				goto handleFailed
-			}
+		/*case *tree.Load:
+		fromLoadData = true
+		selfHandle = true
+		err = mce.handleLoadData(requestCtx, st)
+		if err != nil {
+			goto handleFailed
+		}*/
 		case *tree.PrepareStmt:
 			selfHandle = true
 			err = mce.handlePrepareStmt(st)
@@ -2083,7 +2082,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			switch stmt.(type) {
 			case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
-				*tree.CreateView, *tree.DropView,
+				*tree.CreateView, *tree.DropView, *tree.Load,
 				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete,
