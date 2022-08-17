@@ -201,8 +201,22 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				continue
 			}
 			sels := mSels[vals[k]-1]
+			flg := true
 			for _, sel := range sels {
 				for j, rp := range ap.Result {
+					if ap.Cond != nil {
+						vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
+						if err != nil {
+							return err
+						}
+						bs := vec.Col.([]bool)
+						if !bs[0] {
+							vec.Free(proc.Mp)
+							continue
+						}
+						vec.Free(proc.Mp)
+					}
+					flg = false
 					if rp.Rel == 0 {
 						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.GetMheap()); err != nil {
 							rbat.Clean(proc.GetMheap())
@@ -216,6 +230,23 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					}
 				}
 				rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
+			}
+			if flg {
+				for j, rp := range ap.Result {
+					if rp.Rel == 0 {
+						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.GetMheap()); err != nil {
+							rbat.Clean(proc.GetMheap())
+							return err
+						}
+					} else {
+						if err := vector.UnionNull(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], proc.GetMheap()); err != nil {
+							rbat.Clean(proc.GetMheap())
+							return err
+						}
+					}
+				}
+				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
+				continue
 			}
 		}
 	}

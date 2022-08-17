@@ -910,7 +910,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 						cols[rowIdx] = d
 					}
-				case types.T_char, types.T_varchar, types.T_json:
+				case types.T_char, types.T_varchar:
 					vBytes := vec.Col.(*types.Bytes)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -920,6 +920,25 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
 						vBytes.Data = append(vBytes.Data, field...)
 						vBytes.Lengths[rowIdx] = uint32(len(field))
+					}
+				case types.T_json:
+					vBytes := vec.Col.(*types.Bytes)
+					if isNullOrEmpty {
+						nulls.Add(vec.Nsp, uint64(rowIdx))
+						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
+						vBytes.Lengths[rowIdx] = uint32(len(field))
+					} else {
+						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
+						json, err := types.ParseStringToByteJson(field)
+						if err != nil {
+							return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+						}
+						jsonBytes, err := types.EncodeJson(json)
+						if err != nil {
+							return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+						}
+						vBytes.Data = append(vBytes.Data, jsonBytes...)
+						vBytes.Lengths[rowIdx] = uint32(len(jsonBytes))
 					}
 				case types.T_date:
 					cols := vec.Col.([]types.Date)
@@ -1400,7 +1419,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						cols[i] = d
 					}
 				}
-			case types.T_char, types.T_varchar, types.T_json:
+			case types.T_char, types.T_varchar:
 				vBytes := vec.Col.(*types.Bytes)
 				//row
 				for i := 0; i < countOfLineArray; i++ {
@@ -1414,6 +1433,41 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						vBytes.Offsets[i] = uint32(len(vBytes.Data))
 						vBytes.Data = append(vBytes.Data, field...)
 						vBytes.Lengths[i] = uint32(len(field))
+					}
+				}
+			case types.T_json:
+				vBytes := vec.Col.(*types.Bytes)
+				//row
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						nulls.Add(vec.Nsp, uint64(i))
+						vBytes.Offsets[i] = uint32(len(vBytes.Data))
+						vBytes.Lengths[i] = uint32(len(line[j]))
+					} else {
+						field := line[j]
+						vBytes.Offsets[i] = uint32(len(vBytes.Data))
+						//vBytes.Data = append(vBytes.Data, field...)
+						json, err := types.ParseStringToByteJson(field)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return err
+							}
+							result.Warnings++
+							//break
+						}
+						jsonBytes, err := types.EncodeJson(json)
+						if err != nil {
+							logutil.Errorf("encode field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return err
+							}
+							result.Warnings++
+							//break
+						}
+						vBytes.Data = append(vBytes.Data, jsonBytes...)
+						vBytes.Lengths[i] = uint32(len(jsonBytes))
 					}
 				}
 			case types.T_date:
@@ -1978,7 +2032,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 	handler.simdCsvReader = simdcsv.NewReaderWithOptions(dataFile,
 		rune(load.Param.Tail.Fields.Terminated[0]),
 		'#',
-		false,
+		true,
 		false)
 
 	/*
