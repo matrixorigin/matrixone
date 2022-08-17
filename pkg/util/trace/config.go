@@ -16,10 +16,13 @@ package trace
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -34,11 +37,11 @@ const (
 )
 
 const (
-	MOStatementType = "MOStatementType"
-	MOSpanType      = "MOSpan"
-	MOLogType       = "MOLog"
-	MOZapType       = "MOZap"
-	MOErrorType     = "MOError"
+	MOStatementType = "statement"
+	MOSpanType      = "span"
+	MOLogType       = "log"
+	MOZapType       = "zap"
+	MOErrorType     = "error"
 )
 
 const (
@@ -69,6 +72,9 @@ type tracerProviderConfig struct {
 	debugMode bool // see DebugMode
 
 	batchProcessMode string // see WithBatchProcessMode
+
+	fsConfig  FSConfig      // see WithFSConfig
+	fsFactory fsFactoryFunc // see WithFSWriterFactory, default: export.GetFSWriterFactory
 
 	sqlExecutor func() ie.InternalExecutor // see WithSQLExecutor
 
@@ -132,6 +138,20 @@ func EnableTracer(enable bool) tracerProviderOptionFunc {
 	return func(cfg *tracerProviderConfig) {
 		cfg.EnableTracer(enable)
 	}
+}
+
+func WithFSConfig(fsConfig FSConfig) tracerProviderOptionFunc {
+	return tracerProviderOptionFunc(func(cfg *tracerProviderConfig) {
+		cfg.fsConfig = fsConfig
+	})
+}
+
+type fsFactoryFunc func(ctx context.Context, dir string, name batchpipe.HasName) io.StringWriter
+
+func WithFSWriterFactory(f fsFactoryFunc) tracerProviderOptionFunc {
+	return tracerProviderOptionFunc(func(cfg *tracerProviderConfig) {
+		cfg.fsFactory = f
+	})
 }
 
 func DebugMode(debug bool) tracerProviderOptionFunc {
@@ -386,7 +406,7 @@ const (
 func (t NodeType) String() string {
 	switch t {
 	case NodeTypeNode:
-		return "Node"
+		return "Standalone"
 	case NodeTypeCN:
 		return "CN"
 	case NodeTypeDN:
@@ -401,4 +421,19 @@ func (t NodeType) String() string {
 type MONodeResource struct {
 	NodeUuid string   `json:"node_uuid"`
 	NodeType NodeType `json:"node_type"`
+}
+
+const (
+	diskFSBackend = export.DiskFSBackend
+	s3FSBackend   = export.S3FSBackend
+)
+
+type FSConfig interface {
+	Backend() string
+	BaseDir() string
+	Endpoint() string
+	AccessKeyID() string
+	SecretAccessKey() string
+	Bucket() string
+	Region() string
 }

@@ -19,11 +19,13 @@ import (
 	"flag"
 	"fmt"
 	"github.com/BurntSushi/toml"
-	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -68,16 +70,19 @@ func createMOServer(inputCtx context.Context, pu *config.ParameterUnit) {
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
 	mo = frontend.NewMOServer(moServerCtx, address, pu)
 	{
+		// init trace/log/error framework
 		if err := util.SetUUIDNodeID(nil); err != nil {
 			panic(err)
-		}
-		// init trace/log/error framework
-		if _, err := trace.Init(moServerCtx,
+		} else if fs, cfg, err := export.ParseFileService(moServerCtx, fileservice.Config{Name: "local", Backend: "DISK", DataDir: pu.SV.StorePath}); err != nil {
+			panic(err)
+		} else if _, err := trace.Init(moServerCtx,
 			trace.WithMOVersion(MoVersion),
 			trace.WithNode("node_uuid", trace.NodeTypeNode),
 			trace.EnableTracer(!pu.SV.DisableTrace),
 			trace.WithBatchProcessMode(pu.SV.TraceBatchProcessor),
 			trace.DebugMode(pu.SV.EnableTraceDebug),
+			trace.WithFSWriterFactory(export.GetFSWriterFactory(fs, "node_uuid", trace.NodeTypeNode.String())),
+			trace.WithFSConfig(&cfg),
 			trace.WithSQLExecutor(func() ie.InternalExecutor {
 				return frontend.NewInternalExecutor(pu)
 			}),

@@ -80,7 +80,7 @@ disableMetric = false
 disableTrace = false
 
 #default is InternalExecutor. if InternalExecutor, use internal sql executor, FileService will implement soon.
-traceBatchProcessor = "InternalExecutor"
+traceBatchProcessor = "FileService"
 
 #With true, system will check all the children span is ended, which belong to the closing span.
 enableTraceDebug = false

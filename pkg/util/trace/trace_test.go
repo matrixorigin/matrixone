@@ -17,11 +17,12 @@ package trace
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"reflect"
-	"testing"
 )
 
 func Test_initExport(t *testing.T) {
@@ -48,7 +49,17 @@ func Test_initExport(t *testing.T) {
 			args: args{
 				enableTracer: true,
 				config: &tracerProviderConfig{
-					enableTracer: 1, batchProcessMode: InternalExecutor, sqlExecutor: newExecutorFactory(ch),
+					enableTracer: 1, batchProcessMode: InternalExecutor, sqlExecutor: newDummyExecutorFactory(ch),
+				}},
+			empty: false,
+		},
+		{
+			name: "enable_FileService",
+			args: args{
+				enableTracer: true,
+				config: &tracerProviderConfig{
+					enableTracer: 1, batchProcessMode: FileService, sqlExecutor: newDummyExecutorFactory(ch),
+					fsConfig: &dummyFSConfig{},
 				}},
 			empty: false,
 		},

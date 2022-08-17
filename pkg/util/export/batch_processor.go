@@ -108,8 +108,11 @@ func (b *bufferHolder) StopAndGetBatch(buf *bytes.Buffer) bool {
 		return false
 	}
 	b.trigger.Stop()
-	batch := b.buffer.GetBatch(buf)
-	b.batch = &batch
+	if batch := b.buffer.GetBatch(buf); batch == nil {
+		b.batch = nil
+	} else {
+		b.batch = &batch
+	}
 	b.readonly = READONLY
 	return true
 }

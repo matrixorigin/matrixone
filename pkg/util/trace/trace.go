@@ -16,16 +16,14 @@ package trace
 
 import (
 	"context"
-	goErrors "errors"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync/atomic"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"github.com/matrixorigin/matrixone/pkg/util/errors"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
-
-	"go.uber.org/zap"
 )
 
 var gTracerProvider *MOTracerProvider
@@ -55,24 +53,26 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	gSpanContext.Store(&sc)
 	gTraceContext = ContextWithSpanContext(ctx, sc)
 
-	initExport(ctx, config)
-
-	errors.WithContext(DefaultContext(), goErrors.New("finish trace init"))
+	if err := initExport(ctx, config); err != nil {
+		return nil, err
+	}
 
 	return gTraceContext, nil
 }
 
-func initExport(ctx context.Context, config *tracerProviderConfig) {
+func initExport(ctx context.Context, config *tracerProviderConfig) error {
 	if !config.IsEnable() {
 		logutil.Info("initExport pass.")
-		return
+		return nil
 	}
 	var p export.BatchProcessor
 	// init BatchProcess for trace/log/error
 	switch {
 	case config.batchProcessMode == InternalExecutor:
 		// init schema
-		InitSchemaByInnerExecutor(ctx, config.sqlExecutor)
+		if err := InitSchemaByInnerExecutor(ctx, config.sqlExecutor); err != nil {
+			return err
+		}
 		// register buffer pipe implements
 		export.Register(&MOSpan{}, NewBufferPipe2SqlWorker(
 			bufferWithSizeThreshold(MB),
@@ -81,19 +81,31 @@ func initExport(ctx context.Context, config *tracerProviderConfig) {
 		export.Register(&MOZap{}, NewBufferPipe2SqlWorker())
 		export.Register(&StatementInfo{}, NewBufferPipe2SqlWorker())
 		export.Register(&MOErrorHolder{}, NewBufferPipe2SqlWorker())
-		logutil2.Infof(context.TODO(), "init GlobalBatchProcessor")
-		// init BatchProcessor for standalone mode.
-		p = export.NewMOCollector()
-		export.SetGlobalBatchProcessor(p)
-		p.Start()
 	case config.batchProcessMode == FileService:
-		// TODO: will write csv file.
+		if GetNodeResource().NodeType == NodeTypeNode || GetNodeResource().NodeType == NodeTypeCN {
+			// only in standalone mode or CN node can init schema
+			if err := InitExternalTblSchema(ctx, config.sqlExecutor, config.fsConfig); err != nil {
+				return err
+			}
+		}
+		export.Register(&MOSpan{}, NewBufferPipe2CSVWorker())
+		export.Register(&MOLog{}, NewBufferPipe2CSVWorker())
+		export.Register(&MOZap{}, NewBufferPipe2CSVWorker())
+		export.Register(&StatementInfo{}, NewBufferPipe2CSVWorker())
+		export.Register(&MOErrorHolder{}, NewBufferPipe2CSVWorker())
+	default:
+		return moerr.NewPanicError(fmt.Errorf("unknown batchProcessMode: %s", config.batchProcessMode))
 	}
-	if p != nil {
-		config.spanProcessors = append(config.spanProcessors, NewBatchSpanProcessor(p))
-		logutil.Info("trace span processor")
-		logutil.Info("[Debug]", zap.String("operation", "value1"), zap.String("operation_1", "value2"))
+	logutil.Info("init GlobalBatchProcessor")
+	// init BatchProcessor for standalone mode.
+	p = export.NewMOCollector()
+	export.SetGlobalBatchProcessor(p)
+	if !p.Start() {
+		return moerr.NewPanicError("trace exporter already started")
 	}
+	config.spanProcessors = append(config.spanProcessors, NewBatchSpanProcessor(p))
+	logutil.Info("init trace span processor")
+	return nil
 }
 
 func Shutdown(ctx context.Context) error {

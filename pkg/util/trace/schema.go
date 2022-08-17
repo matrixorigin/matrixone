@@ -17,15 +17,17 @@ package trace
 import (
 	"context"
 	"fmt"
-	"time"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"path"
+	"strings"
+	"time"
 )
 
 const (
 	SystemDBConst    = "system"
-	statsDatabase    = SystemDBConst
+	StatsDatabase    = SystemDBConst
 	spanInfoTbl      = "span_info"
 	logInfoTbl       = "log_info"
 	statementInfoTbl = "statement_info"
@@ -33,7 +35,7 @@ const (
 )
 
 const (
-	sqlCreateDBConst = `create database if not exists ` + statsDatabase
+	sqlCreateDBConst = `create database if not exists ` + StatsDatabase
 
 	sqlCreateSpanInfoTable = `CREATE TABLE IF NOT EXISTS span_info(
  span_id varchar(16),
@@ -45,7 +47,7 @@ const (
  start_time datetime,
  end_time datetime,
  duration BIGINT COMMENT "execution time, unit: ns",
- resource varchar(4096) COMMENT "json, static resource informations /*should by json type*/"
+ resource varchar(4096) COMMENT "json, static resource information /*should by json type*/"
 )`
 	sqlCreateLogInfoTable = `CREATE TABLE IF NOT EXISTS log_info(
  statement_id varchar(36),
@@ -63,6 +65,8 @@ const (
  statement_id varchar(36),
  transaction_id varchar(36),
  session_id varchar(36),
+ tenant_id INT UNSIGNED,
+ user_id INT UNSIGNED,
  ` + "`account`" + ` varchar(1024) COMMENT 'account name',
  user varchar(1024) COMMENT 'user name',
  host varchar(1024) COMMENT 'user client ip',
@@ -73,7 +77,6 @@ const (
  node_uuid varchar(36) COMMENT "node uuid in MO, which node accept this request",
  node_type varchar(64) COMMENT "node type in MO, enum: DN, CN, LogService;",
  request_at datetime,
- status varchar(1024) COMMENT 'sql statement running status, enum: Running, Success, Failed',
  exec_plan varchar(4096) COMMENT "sql execution plan; /*TODO: 应为JSON 类型*/"
 )`
 	sqlCreateErrorInfoTable = `CREATE TABLE IF NOT EXISTS error_info(
@@ -88,17 +91,17 @@ const (
 )
 
 // InitSchemaByInnerExecutor just for standalone version, which can access db itself by io.InternalExecutor on any Node.
-func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.InternalExecutor) {
-	// fixme: need errors.Recover()
+func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
 	exec := ieFactory()
 	if exec == nil {
-		return
+		return nil
 	}
-	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(statsDatabase).Internal(true).Finish())
-	mustExec := func(sql string) {
+	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(StatsDatabase).Internal(true).Finish())
+	mustExec := func(sql string) error {
 		if err := exec.Exec(ctx, sql, ie.NewOptsBuilder().Finish()); err != nil {
-			panic(fmt.Errorf("[Metric] init metric tables error: %v, sql: %s", err, sql))
+			return moerr.NewPanicError(fmt.Errorf("[Trace] init table error: %v, sql: %s", err, sql))
 		}
+		return nil
 	}
 
 	mustExec(sqlCreateDBConst)
@@ -106,7 +109,7 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	defer func() {
 		logutil2.Debugf(
 			DefaultContext(),
-			"[Metric] init metrics tables: create cost %d ms",
+			"[Trace] init trace tables: create cost %d ms",
 			createCost.Milliseconds())
 	}()
 	instant := time.Now()
@@ -118,8 +121,75 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 		sqlCreateErrorInfoTable,
 	}
 	for _, sql := range initCollectors {
-		mustExec(sql)
+		if err := mustExec(sql); err != nil {
+			return err
+		}
 	}
 
 	createCost = time.Since(instant)
+	return nil
+}
+
+// InitExternalTblSchema for FileService
+func InitExternalTblSchema(ctx context.Context, ieFactory func() ie.InternalExecutor, cfg FSConfig) error {
+	exec := ieFactory()
+	if exec == nil {
+		return nil
+	}
+	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(StatsDatabase).Internal(true).Finish())
+	mustExec := func(sql string) error {
+		if err := exec.Exec(ctx, sql, ie.NewOptsBuilder().Finish()); err != nil {
+			return moerr.NewPanicError(fmt.Errorf("[Trace] init table error: %v, sql: %s", err, sql))
+		}
+		return nil
+	}
+
+	var infileFormatter string
+	switch cfg.Backend() {
+	case diskFSBackend:
+		infileFormatter = fmt.Sprintf(` infile{"filepath"="%s/%%s_*.csv","compression"="none"}`+
+			` FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`,
+			path.Join(cfg.BaseDir(), StatsDatabase))
+	case s3FSBackend:
+		infileFormatter = fmt.Sprintf(` URL s3option {`+
+			`"endpoint"="%s", "access_key_id"="%s", "secret_access_key"="%s",`+
+			`"bucket"="%s", "region"="%s", "filepath"="%s/%%s_*.csv"}`+
+			` FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`,
+			cfg.Endpoint(), cfg.AccessKeyID(), cfg.SecretAccessKey(),
+			cfg.Bucket(), cfg.Region(), path.Join(cfg.BaseDir(), StatsDatabase))
+	default:
+		return moerr.NewPanicError(fmt.Errorf("unsupport csv, fileservice: %v", cfg.Bucket()))
+	}
+
+	if err := mustExec(sqlCreateDBConst); err != nil {
+		return err
+	}
+	var createCost time.Duration
+	defer func() {
+		logutil2.Debugf(
+			DefaultContext(),
+			"[Trace] init external tables: create cost %d ms",
+			createCost.Milliseconds())
+	}()
+	instant := time.Now()
+
+	var initDDLs = []struct{ sqlPrefix, filePrefix string }{
+		{getExternalTableDDLPrefix(sqlCreateStatementInfoTable), MOStatementType},
+		{getExternalTableDDLPrefix(sqlCreateSpanInfoTable), MOSpanType},
+		{getExternalTableDDLPrefix(sqlCreateLogInfoTable), MOZapType},
+		{getExternalTableDDLPrefix(sqlCreateErrorInfoTable), MOErrorType},
+	}
+	for _, ddl := range initDDLs {
+		sql := ddl.sqlPrefix + fmt.Sprintf(infileFormatter, ddl.filePrefix)
+		if err := mustExec(sql); err != nil {
+			return err
+		}
+	}
+
+	createCost = time.Since(instant)
+	return nil
+}
+
+func getExternalTableDDLPrefix(sql string) string {
+	return strings.Replace(sql, "CREATE TABLE", "CREATE EXTERNAL TABLE", 1)
 }

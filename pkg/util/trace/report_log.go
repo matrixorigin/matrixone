@@ -34,8 +34,9 @@ func init() {
 	SetLogLevel(zapcore.DebugLevel)
 }
 
-var _ batchpipe.HasName = &MOLog{}
-var _ IBuffer2SqlItem = &MOLog{}
+var _ batchpipe.HasName = (*MOLog)(nil)
+var _ IBuffer2SqlItem = (*MOLog)(nil)
+var _ CsvFields = (*MOLog)(nil)
 
 type MOLog struct {
 	TraceID   TraceID       `json:"trace_id"`
@@ -61,6 +62,25 @@ func (l MOLog) Size() int64 {
 }
 
 func (l MOLog) Free() {}
+
+func (l MOLog) CsvOptions() *CsvOptions {
+	return commonCsvOptions
+}
+
+func (l MOLog) CsvFields() []string {
+	var result []string
+	result = append(result, l.TraceID.String())
+	result = append(result, l.SpanID.String())
+	result = append(result, GetNodeResource().NodeUuid)
+	result = append(result, GetNodeResource().NodeType.String())
+	result = append(result, nanoSec2DatetimeString(l.Timestamp))
+	result = append(result, l.Name)
+	result = append(result, l.Level.String())
+	result = append(result, fmt.Sprintf(logStackFormatter.Load().(string), l.Caller))
+	result = append(result, l.Message)
+	result = append(result, l.Extra)
+	return result
+}
 
 var logLevelEnabler atomic.Value
 
@@ -99,8 +119,9 @@ func ContextField(ctx context.Context) zap.Field {
 	return SpanField(SpanFromContext(ctx).SpanContext())
 }
 
-var _ batchpipe.HasName = &MOZap{}
-var _ IBuffer2SqlItem = &MOZap{}
+var _ batchpipe.HasName = (*MOZap)(nil)
+var _ IBuffer2SqlItem = (*MOZap)(nil)
+var _ CsvFields = (*MOZap)(nil)
 
 type MOZap struct {
 	Level       zapcore.Level `json:"Level"`
@@ -126,6 +147,25 @@ func (m MOZap) Size() int64 {
 }
 
 func (m MOZap) Free() {}
+
+func (m MOZap) CsvOptions() *CsvOptions {
+	return commonCsvOptions
+}
+
+func (m MOZap) CsvFields() []string {
+	var result []string
+	result = append(result, m.SpanContext.TraceID.String())
+	result = append(result, m.SpanContext.SpanID.String())
+	result = append(result, GetNodeResource().NodeUuid)
+	result = append(result, GetNodeResource().NodeType.String())
+	result = append(result, time2DatetimeString(m.Timestamp))
+	result = append(result, m.LoggerName)
+	result = append(result, m.Level.String())
+	result = append(result, m.Caller)
+	result = append(result, m.Message)
+	result = append(result, m.Extra)
+	return result
+}
 
 func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
 	var needReport = true
