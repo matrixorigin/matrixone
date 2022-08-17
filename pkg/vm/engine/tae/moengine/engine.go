@@ -49,8 +49,10 @@ func (e *txnEngine) Create(ctx context.Context, name string, txnOp client.TxnOpe
 	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
 		panic(err)
 	}
-	if tid, ok := ctx.Value(TenantIDKey{}).(uint32); ok {
-		txn.BindAcessInfo(tid, 100, 100)
+	if ctx != nil {
+		if tid, ok := ctx.Value(TenantIDKey{}).(uint32); ok {
+			txn.BindAcessInfo(tid, 100, 100)
+		}
 	}
 	_, err = txn.CreateDatabase(name)
 	return
@@ -63,9 +65,12 @@ func (e *txnEngine) Databases(ctx context.Context, txnOp client.TxnOperator) ([]
 	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
 		panic(err)
 	}
-	if tid, ok := ctx.Value(TenantIDKey{}).(uint32); ok {
-		txn.BindAcessInfo(tid, 100, 100)
+	if ctx != nil {
+		if tid, ok := ctx.Value(TenantIDKey{}).(uint32); ok {
+			txn.BindAcessInfo(tid, 100, 100)
+		}
 	}
+
 	return txn.DatabaseNames(), nil
 }
 
@@ -76,9 +81,13 @@ func (e *txnEngine) Database(ctx context.Context, name string, txnOp client.TxnO
 	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
 		panic(err)
 	}
-	if tid, ok := ctx.Value(TenantIDKey{}).(uint32); ok {
-		txn.BindAcessInfo(tid, 100, 100)
+	// TODO(aptend): remove ctx check
+	if ctx != nil {
+		if tid, ok := ctx.Value(TenantIDKey{}).(uint32); ok {
+			txn.BindAcessInfo(tid, 100, 100)
+		}
 	}
+
 	h, err := txn.GetDatabase(name)
 	if err != nil {
 		return nil, err

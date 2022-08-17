@@ -135,6 +135,8 @@ func (e *DBEntry) Compare(o common.NodePayload) int {
 }
 
 func (e *DBEntry) GetTenantID() uint32 { return e.acInfo.TenantID }
+func (e *DBEntry) GetUserID() uint32   { return e.acInfo.UserID }
+func (e *DBEntry) GetRoleID() uint32   { return e.acInfo.RoleID }
 func (e *DBEntry) GetName() string     { return e.name }
 func (e *DBEntry) GetFullName() string {
 	if len(e.fullName) == 0 {

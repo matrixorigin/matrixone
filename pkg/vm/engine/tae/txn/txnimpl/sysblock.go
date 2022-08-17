@@ -165,9 +165,9 @@ func (blk *txnSysBlock) isPrimaryKey(schema *catalog.Schema, colIdx int) bool {
 	case catalog.SystemTable_Columns_Name:
 		return attrName == catalog.SystemColAttr_Name || attrName == catalog.SystemColAttr_DBName || attrName == catalog.SystemColAttr_RelName
 	case catalog.SystemTable_Table_Name:
-		return attrName == catalog.SystemRelAttr_DBName || attrName == catalog.SystemRelAttr_Name
+		return attrName == catalog.SystemRelAttr_ID
 	case catalog.SystemTable_DB_Name:
-		return attrName == catalog.SystemDBAttr_Name
+		return attrName == catalog.SystemDBAttr_ID
 	}
 	return schema.IsPartOfPK(colIdx)
 }
@@ -177,16 +177,23 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 	col := catalog.SystemColumnSchema.ColDefs[colIdx]
 	colData := containers.MakeVector(col.Type, col.Nullable())
 	tableFn := func(table *catalog.TableEntry) error {
+		schema := table.GetSchema()
 		for i, colDef := range table.GetSchema().ColDefs {
 			switch col.Name {
+			case catalog.SystemColAttr_AccID:
+				colData.Append(schema.AcInfo.TenantID)
 			case catalog.SystemColAttr_Name:
 				colData.Append([]byte(colDef.Name))
 			case catalog.SystemColAttr_Num:
 				colData.Append(int32(i + 1))
 			case catalog.SystemColAttr_Type:
 				colData.Append(int32(colDef.Type.Oid))
+			case catalog.SystemColAttr_DBID:
+				colData.Append(table.GetDB().GetID())
 			case catalog.SystemColAttr_DBName:
 				colData.Append([]byte(table.GetDB().GetName()))
+			case catalog.SystemColAttr_RelID:
+				colData.Append(table.GetID())
 			case catalog.SystemColAttr_RelName:
 				colData.Append([]byte(table.GetSchema().Name))
 			case catalog.SystemColAttr_ConstraintType:
@@ -240,11 +247,16 @@ func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err
 	colDef := catalog.SystemTableSchema.ColDefs[colIdx]
 	colData := containers.MakeVector(colDef.Type, colDef.Nullable())
 	tableFn := func(table *catalog.TableEntry) error {
+		schema := table.GetSchema()
 		switch colDef.Name {
+		case catalog.SystemRelAttr_ID:
+			colData.Append(table.GetID())
 		case catalog.SystemRelAttr_Name:
-			colData.Append([]byte(table.GetSchema().Name))
+			colData.Append([]byte(schema.Name))
 		case catalog.SystemRelAttr_DBName:
 			colData.Append([]byte(table.GetDB().GetName()))
+		case catalog.SystemRelAttr_DBID:
+			colData.Append(table.GetDB().GetID())
 		case catalog.SystemRelAttr_Comment:
 			colData.Append([]byte(table.GetSchema().Comment))
 		case catalog.SystemRelAttr_Persistence:
@@ -253,6 +265,12 @@ func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err
 			colData.Append([]byte(table.GetSchema().Relkind))
 		case catalog.SystemRelAttr_CreateSQL:
 			colData.Append([]byte(table.GetSchema().Createsql))
+		case catalog.SystemRelAttr_Owner:
+			colData.Append(schema.AcInfo.RoleID)
+		case catalog.SystemRelAttr_Creator:
+			colData.Append(schema.AcInfo.UserID)
+		case catalog.SystemRelAttr_AccID:
+			colData.Append(schema.AcInfo.TenantID)
 		default:
 			panic("unexpected")
 		}
@@ -274,12 +292,20 @@ func (blk *txnSysBlock) getDBTableData(colIdx int) (view *model.ColumnView, err 
 	colData := containers.MakeVector(colDef.Type, colDef.Nullable())
 	fn := func(db *catalog.DBEntry) error {
 		switch colDef.Name {
+		case catalog.SystemDBAttr_ID:
+			colData.Append(db.GetID())
 		case catalog.SystemDBAttr_Name:
 			colData.Append([]byte(db.GetName()))
 		case catalog.SystemDBAttr_CatalogName:
 			colData.Append([]byte(catalog.SystemCatalogName))
 		case catalog.SystemDBAttr_CreateSQL:
 			colData.Append([]byte("todosql"))
+		case catalog.SystemDBAttr_Owner:
+			colData.Append(db.GetRoleID())
+		case catalog.SystemDBAttr_Creator:
+			colData.Append(db.GetUserID())
+		case catalog.SystemDBAttr_AccID:
+			colData.Append(db.GetTenantID())
 		default:
 			panic("unexpected")
 		}
