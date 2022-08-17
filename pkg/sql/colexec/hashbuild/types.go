@@ -12,32 +12,48 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package union
+package hashbuild
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 const (
 	Build = iota
-	Probe
 	End
 )
+
+type evalVector struct {
+	needFree bool
+	vec      *vector.Vector
+}
 
 type container struct {
 	state int
 
-	// hash table related.
-	hashTable *hashmap.StrHashMap
+	hasNull bool
 
-	// bat records the final result of union operator.
+	sels [][]int64
+
 	bat *batch.Batch
+
+	evecs []evalVector
+	vecs  []*vector.Vector
+
+	mp *hashmap.StrHashMap
 }
 
 type Argument struct {
-	//  attribute which need not do serialization work
-	ctr     *container
-	Ibucket uint64 // index in buckets
-	Nbucket uint64 // buckets count
+	ctr *container
+	// need to generate a push-down filter expression
+	NeedExpr    bool
+	NeedHashMap bool
+	Ibucket     uint64
+	Nbucket     uint64
+	Typs        []types.Type
+	Conditions  []*plan.Expr
 }
