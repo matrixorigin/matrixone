@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strconv"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -546,7 +547,7 @@ func NewTimestampVector(n int, typ types.Type, m *mheap.Mheap, random bool, vs [
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
-			d, err := types.ParseTimestamp(vs[i], 6)
+			d, err := types.ParseTimestamp(time.Local, vs[i], 6)
 			if err != nil {
 				return nil
 			}

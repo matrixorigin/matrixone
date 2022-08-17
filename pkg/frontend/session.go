@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
@@ -103,6 +105,8 @@ type Session struct {
 	allResultSet []*MysqlResultSet
 
 	tenant *TenantInfo
+
+	timeZone *time.Location
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
@@ -130,6 +134,7 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 
 		prepareStmts:   make(map[string]*PrepareStmt),
 		outputCallback: getDataFromPipeline,
+		timeZone:       time.Local,
 	}
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.txnCompileCtx.SetSession(ses)
@@ -168,6 +173,14 @@ func (ses *Session) SetRequestContext(reqCtx context.Context) {
 
 func (ses *Session) GetRequestContext() context.Context {
 	return ses.requestCtx
+}
+
+func (ses *Session) SetTimeZone(loc *time.Location) {
+	ses.timeZone = loc
+}
+
+func (ses *Session) GetTimeZone() *time.Location {
+	return ses.timeZone
 }
 
 func (ses *Session) SetMysqlResultSet(mrs *MysqlResultSet) {
@@ -252,7 +265,12 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 		if err != nil {
 			return err
 		}
-		ses.sysVars[def.GetName()] = cv
+
+		if def.UpdateSessVar == nil {
+			ses.sysVars[def.GetName()] = cv
+		} else {
+			return def.UpdateSessVar(ses, ses.sysVars, def.GetName(), cv)
+		}
 	} else {
 		return errorSystemVariableDoesNotExist
 	}
@@ -739,6 +757,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 
 	var cols []*plan2.ColDef
 	var defs []*plan2.TableDefType
+	var TableType, Createsql string
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			cols = append(cols, &plan2.ColDef{
@@ -755,6 +774,13 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
 			properties := make([]*plan2.Property, len(pro.Properties))
 			for i, p := range pro.Properties {
+				switch p.Key {
+				case catalog.SystemRelAttr_Kind:
+					TableType = p.Value
+				case catalog.SystemRelAttr_CreateSQL:
+					Createsql = p.Value
+				default:
+				}
 				properties[i] = &plan2.Property{
 					Key:   p.Key,
 					Value: p.Value,
@@ -802,9 +828,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	}
 
 	tableDef := &plan2.TableDef{
-		Name: tableName,
-		Cols: cols,
-		Defs: defs,
+		Name:      tableName,
+		Cols:      cols,
+		Defs:      defs,
+		TableType: TableType,
+		Createsql: Createsql,
 	}
 	return obj, tableDef
 }
@@ -921,7 +949,7 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 		if dataSet.Zs[j] <= 0 {
 			continue
 		}
-		_, err := extractRowFromEveryVector(dataSet, int64(j), oq)
+		_, err := extractRowFromEveryVector(ses, dataSet, int64(j), oq)
 		if err != nil {
 			return err
 		}

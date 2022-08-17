@@ -4203,6 +4203,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     153,
+				Volatile:  true,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_varchar, types.T_timestamp},
@@ -4235,6 +4236,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     157,
+				Volatile:  true,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_timestamp, types.T_datetime},
@@ -4315,6 +4317,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     167,
+				Volatile:  true,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_timestamp, types.T_varchar},
@@ -4419,6 +4422,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     180,
+				Volatile:  true,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_datetime, types.T_timestamp},
@@ -4427,6 +4431,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     181,
+				Volatile:  true,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_date, types.T_timestamp},
@@ -4467,6 +4472,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     186,
+				Volatile:  true,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_timestamp, types.T_date},
@@ -4603,6 +4609,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     203,
+				Volatile:  true,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_char, types.T_timestamp},
@@ -5012,6 +5019,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     254,
+				Volatile:  true,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_blob, types.T_timestamp},
@@ -5036,6 +5044,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     257,
+				Volatile:  true,
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_timestamp, types.T_blob},
