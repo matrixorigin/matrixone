@@ -49,7 +49,10 @@ func (vq *VisitPlan) visitNode(qry *Query, node *Node) error {
 				return err
 			}
 		} else if rule.IsApplyExpr() {
-			vq.exploreNode(rule, node)
+			err := vq.exploreNode(rule, node)
+			if err != nil {
+				return err
+			}
 		}
 	}
 

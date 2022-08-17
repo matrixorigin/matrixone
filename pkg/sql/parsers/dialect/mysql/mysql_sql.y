@@ -5962,7 +5962,7 @@ literal:
 	}
 |   VALUE_ARG
     {
-        $$ = tree.NewParamExpr(yyp)
+        $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
     }
 
 column_type:

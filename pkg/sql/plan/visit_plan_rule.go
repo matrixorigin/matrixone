@@ -283,7 +283,7 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		default:
 			err = errors.New("", fmt.Sprintf("type of var %q is not supported now", exprImpl.V.Name))
 		}
-		if expr.Typ.Id != e.Typ.Id {
+		if e.Typ.Id != int32(types.T_any) && expr.Typ.Id != e.Typ.Id {
 			return appendCastBeforeExpr(expr, e.Typ)
 		}
 		return expr, err

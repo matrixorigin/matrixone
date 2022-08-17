@@ -13020,7 +13020,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:5964
 		{
-			yyLOCAL = tree.NewParamExpr(yyp)
+			yyLOCAL = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
 		}
 		yyVAL.union = yyLOCAL
 	case 1046:
