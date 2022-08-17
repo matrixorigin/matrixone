@@ -32,12 +32,10 @@ const (
 	WARN    = 2
 
 	// Group 1: Internal errors
-	ERROR_START                = 1000
-	INTERNAL_ERROR             = 1001
-	NYI                        = 1002
-	ERROR_FUNCTION_PARAMETER   = 1003
-	ERROR_FIELD_NOT_FOUND_PART = 1488
-	ERROR_SUBPARTITION         = 1500
+	ERROR_START              = 1000
+	INTERNAL_ERROR           = 1001
+	NYI                      = 1002
+	ERROR_FUNCTION_PARAMETER = 1003
 
 	// Group 2: numeric
 	DIVIVISION_BY_ZERO = 2000
@@ -68,6 +66,9 @@ const (
 	// Group 6: sql error, can usually correspond one-to-one to MysqlError, val in [6000, 6999]
 	ErrNoDatabaseSelected = 6000 + iota
 	ErrBadTable
+	ErrFieldNotFoundPart
+	ErrPartitionSubpartition
+	ErrWrongExprInPartitionFunc
 
 	// Group 10: txn
 	// ErrTxnAborted read and write a transaction that has been rolled back.
@@ -126,9 +127,11 @@ var errorMsgRefer = map[int32]moErrorMsgItem{
 	ErrNoAvailableBackend: {25004, 0, "no available backend"},
 
 	// Group 1: sql error
-	ErrNoDatabaseSelected: {26000, 1046, "No database selected"},
-	ErrBadTable:           {26001, 1051, "Unknown table '%-.129s.%-.129s'"},
-
+	ErrNoDatabaseSelected:       {26000, 1046, "No database selected"},
+	ErrBadTable:                 {26001, 1051, "Unknown table '%-.129s.%-.129s'"},
+	ErrFieldNotFoundPart:        {26002, 1500, "Field in list of fields for partition function not found in table"},
+	ErrPartitionSubpartition:    {26003, 1482, "It is only possible to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning"},
+	ErrWrongExprInPartitionFunc: {26004, 1486, "Constant, random or timezone-dependent expressions in (sub)partitioning function are not allowed"},
 	// Group 10: txn
 	ErrTxnClosed:          {30000, 0, "the transaction has been committed or aborted"},
 	ErrTxnWriteConflict:   {30001, 0, "write conflict"},

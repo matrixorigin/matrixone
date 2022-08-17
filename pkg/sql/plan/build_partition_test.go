@@ -54,7 +54,18 @@ func TestHashPartition(t *testing.T) {
 	//sql := "CREATE TABLE t1 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col1);"
 	//sql := "CREATE TABLE t1 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col1) PARTITIONS 4;"
 	//sql := "CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3));"
-	sql := "CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR HASH( YEAR(col3)) PARTITIONS 6;"
+	//sql := "CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR HASH( YEAR(col3)) PARTITIONS 6;"
+	sql := `CREATE TABLE employees (
+				id INT NOT NULL,
+				fname VARCHAR(30),
+				lname VARCHAR(30),
+				hired DATE NOT NULL DEFAULT '1970-01-01',
+				separated DATE NOT NULL DEFAULT '9999-12-31',
+				job_code INT,
+				store_id INT
+			)
+			PARTITION BY HASH(store_id)
+			PARTITIONS 4;`
 
 	mock := NewMockOptimizer()
 	logicPlan, err := buildSingleStmt(mock, t, sql)
@@ -64,14 +75,28 @@ func TestHashPartition(t *testing.T) {
 	outPutPlan(logicPlan, false, t)
 }
 
-func TestHashPartitionTest(t *testing.T) {
+func TestHashPartitionError(t *testing.T) {
 	// HASH(expr) Partition
 	sql := "CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3)) PARTITIONS 4 SUBPARTITION BY KEY(col1);"
+	//sql := "CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY HASH( YEAR(col3) ) PARTITIONS;"
+	//sql := `CREATE TABLE employees (
+	//			id INT NOT NULL,
+	//			fname VARCHAR(30),
+	//			lname VARCHAR(30),
+	//			hired DATE NOT NULL DEFAULT '1970-01-01',
+	//			separated DATE NOT NULL DEFAULT '9999-12-31',
+	//			job_code INT,
+	//			store_id INT
+	//		)
+	//		PARTITION BY HASH(4)
+	//		PARTITIONS 4;`
 
 	mock := NewMockOptimizer()
 	_, err := buildSingleStmt(mock, t, sql)
 	if err == nil {
 		t.Fatalf("Should show error")
+	} else {
+		t.Log(err)
 	}
 }
 
@@ -231,7 +256,7 @@ func TestSubPartition(t *testing.T) {
 func buildSingleStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 	statements, err := mysql.Parse(sql)
 	if err != nil {
-		t.Fatalf("%+v", err)
+		return nil, err
 	}
 	// this sql always return single statement
 	context := opt.CurrentContext()

@@ -31,15 +31,25 @@ const (
 
 func buildHashPartition(partitionBinder *PartitionBinder, partitionOption *tree.PartitionOption, tableDef *TableDef) error {
 	if partitionOption.SubPartBy != nil {
-		return moerr.NewError(moerr.ERROR_SUBPARTITION, "It is only possible to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning")
+		return moerr.New(moerr.ErrPartitionSubpartition)
 	}
 
 	partitionType := partitionOption.PartBy.PType.(*tree.HashType)
 
-	partitionBinder.BindExpr(partitionType.Expr, 0, true)
+	expr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
+	if err != nil {
+		return err
+	}
+
+	// expr must return a nonconstant, nonrandom integer value (in other words, it should be varying but deterministic)
+	if _, ok := expr.Expr.(*plan.Expr_C); ok {
+		return moerr.New(moerr.ErrWrongExprInPartitionFunc)
+	}
+
 	partitionExpr := tree.String(partitionType.Expr, dialect.MYSQL)
 
 	partitionsNum := partitionOption.PartBy.Num
+	// If you do not include a PARTITIONS clause, the number of partitions defaults to 1.
 	if partitionsNum <= 0 {
 		partitionsNum = 1
 	}
@@ -80,7 +90,7 @@ func buildHashPartition(partitionBinder *PartitionBinder, partitionOption *tree.
 
 func buildKeyPartition(partitionBinder *PartitionBinder, partitionOption *tree.PartitionOption, tableDef *TableDef) error {
 	if partitionOption.SubPartBy != nil {
-		return moerr.NewError(moerr.ERROR_SUBPARTITION, "It is only possible to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning")
+		return moerr.New(moerr.ErrPartitionSubpartition)
 	}
 
 	partitionType := partitionOption.PartBy.PType.(*tree.KeyType)
@@ -96,6 +106,7 @@ func buildKeyPartition(partitionBinder *PartitionBinder, partitionOption *tree.P
 	}
 
 	partitionsNum := partitionOption.PartBy.Num
+	// If you do not include a PARTITIONS clause, the number of partitions defaults to 1.
 	if partitionsNum <= 0 {
 		partitionsNum = 1
 	}
@@ -311,7 +322,7 @@ func semanticCheckKeyPartition(partitionBinder *PartitionBinder, columnList []*t
 		partitionBinder.baseBindColRef(column, 0, true)
 		_, err := partitionBinder.baseBindColRef(column, 0, true)
 		if err != nil {
-			return nil, moerr.NewError(moerr.ERROR_FIELD_NOT_FOUND_PART, "Field in list of fields for partition function not found in table")
+			return nil, moerr.New(moerr.ErrFieldNotFoundPart)
 		}
 		columnsList[i] = tree.String(column, dialect.MYSQL)
 	}
