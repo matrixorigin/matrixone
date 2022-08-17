@@ -42,10 +42,11 @@ type TableEntry struct {
 
 func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) *TableEntry {
 	id := db.catalog.NextTable()
-	schema.TenantID = TenantSysID
 	if txnCtx != nil {
 		// Only in unit test, txnCtx can be nil
-		schema.TenantID = txnCtx.GetTenantID()
+		schema.AcInfo.TenantID = txnCtx.GetTenantID()
+		schema.AcInfo.UserID, schema.AcInfo.RoleID = txnCtx.GetUserAndRoleID()
+
 	}
 	e := &TableEntry{
 		BaseEntry: &BaseEntry{

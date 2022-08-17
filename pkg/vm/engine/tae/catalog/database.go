@@ -27,10 +27,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
+type acessInfo struct {
+	TenantID, UserID, RoleID uint32
+}
+
+func (ai *acessInfo) WriteTo(w io.Writer) (n int64, err error) {
+	for _, id := range []uint32{ai.TenantID, ai.UserID, ai.RoleID} {
+		if err = binary.Write(w, binary.BigEndian, id); err != nil {
+			return
+		}
+	}
+	return 12, nil
+}
+
+func (ai *acessInfo) ReadFrom(r io.Reader) (n int64, err error) {
+	for _, idPtr := range []*uint32{&ai.TenantID, &ai.UserID, &ai.RoleID} {
+		if err = binary.Read(r, binary.BigEndian, idPtr); err != nil {
+			return
+		}
+	}
+	return 12, nil
+}
+
 type DBEntry struct {
 	*BaseEntry
 	catalog  *Catalog
-	tenantID uint32
+	acInfo   acessInfo
 	name     string
 	fullName string
 	isSys    bool
@@ -44,11 +66,7 @@ type DBEntry struct {
 
 func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
 	id := catalog.NextDB()
-	tenantID := TenantSysID
-	if txnCtx != nil {
-		// Only in unit test, txnCtx can be nil
-		tenantID = txnCtx.GetTenantID()
-	}
+
 	e := &DBEntry{
 		BaseEntry: &BaseEntry{
 			CommitInfo: CommitInfo{
@@ -59,11 +77,15 @@ func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
 			ID:      id,
 		},
 		catalog:   catalog,
-		tenantID:  tenantID,
 		name:      name,
 		entries:   make(map[uint64]*common.DLNode),
 		nameNodes: make(map[string]*nodeList),
 		link:      new(common.Link),
+	}
+	if txnCtx != nil {
+		// Only in unit test, txnCtx can be nil
+		e.acInfo.TenantID = txnCtx.GetTenantID()
+		e.acInfo.UserID, e.acInfo.RoleID = txnCtx.GetUserAndRoleID()
 	}
 	return e
 }
@@ -81,7 +103,6 @@ func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 			CreateAt: types.SystemDBTS,
 		},
 		catalog:   catalog,
-		tenantID:  TenantSysID,
 		name:      SystemDBName,
 		entries:   make(map[uint64]*common.DLNode),
 		nameNodes: make(map[string]*nodeList),
@@ -113,11 +134,11 @@ func (e *DBEntry) Compare(o common.NodePayload) int {
 	return e.DoCompre(oe)
 }
 
-func (e *DBEntry) GetTenantID() uint32 { return e.tenantID }
+func (e *DBEntry) GetTenantID() uint32 { return e.acInfo.TenantID }
 func (e *DBEntry) GetName() string     { return e.name }
 func (e *DBEntry) GetFullName() string {
 	if len(e.fullName) == 0 {
-		e.fullName = genDBFullName(e.tenantID, e.name)
+		e.fullName = genDBFullName(e.acInfo.TenantID, e.name)
 	}
 	return e.fullName
 }
@@ -348,10 +369,11 @@ func (e *DBEntry) WriteTo(w io.Writer) (n int64, err error) {
 	if n, err = e.BaseEntry.WriteTo(w); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, e.tenantID); err != nil {
+	x, err := e.acInfo.WriteTo(w)
+	if err != nil {
 		return
 	}
-	n += 4
+	n += x
 	if err = binary.Write(w, binary.BigEndian, uint16(len(e.name))); err != nil {
 		return
 	}
@@ -365,10 +387,11 @@ func (e *DBEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	if n, err = e.BaseEntry.ReadFrom(r); err != nil {
 		return
 	}
-	if err = binary.Read(r, binary.BigEndian, &e.tenantID); err != nil {
+	x, err := e.acInfo.ReadFrom(r)
+	if err != nil {
 		return
 	}
-	n += 4
+	n += x
 	size := uint16(0)
 	if err = binary.Read(r, binary.BigEndian, &size); err != nil {
 		return
@@ -390,7 +413,7 @@ func (e *DBEntry) MakeLogEntry() *EntryCommand {
 func (e *DBEntry) Clone() CheckpointItem {
 	cloned := &DBEntry{
 		BaseEntry: e.BaseEntry.Clone(),
-		tenantID:  e.tenantID,
+		acInfo:    e.acInfo,
 		name:      e.name,
 	}
 	return cloned
@@ -399,7 +422,7 @@ func (e *DBEntry) Clone() CheckpointItem {
 func (e *DBEntry) CloneCreate() CheckpointItem {
 	cloned := &DBEntry{
 		BaseEntry: e.BaseEntry.CloneCreate(),
-		tenantID:  e.tenantID,
+		acInfo:    e.acInfo,
 		name:      e.name,
 	}
 	return cloned
@@ -408,7 +431,7 @@ func (e *DBEntry) CloneCreate() CheckpointItem {
 func (e *DBEntry) CloneCreateEntry() *DBEntry {
 	cloned := &DBEntry{
 		BaseEntry: e.BaseEntry.Clone(),
-		tenantID:  e.tenantID,
+		acInfo:    e.acInfo,
 		name:      e.name,
 	}
 	cloned.RWMutex = &sync.RWMutex{}

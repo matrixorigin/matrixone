@@ -50,7 +50,7 @@ func (e *txnEngine) Create(ctx context.Context, name string, txnOp client.TxnOpe
 		panic(err)
 	}
 	if tid, ok := ctx.Value(TenantIDKey{}).(uint32); ok {
-		txn.BindTenantID(tid)
+		txn.BindAcessInfo(tid, 100, 100)
 	}
 	_, err = txn.CreateDatabase(name)
 	return
@@ -64,7 +64,7 @@ func (e *txnEngine) Databases(ctx context.Context, txnOp client.TxnOperator) ([]
 		panic(err)
 	}
 	if tid, ok := ctx.Value(TenantIDKey{}).(uint32); ok {
-		txn.BindTenantID(tid)
+		txn.BindAcessInfo(tid, 100, 100)
 	}
 	return txn.DatabaseNames(), nil
 }
@@ -77,7 +77,7 @@ func (e *txnEngine) Database(ctx context.Context, name string, txnOp client.TxnO
 		panic(err)
 	}
 	if tid, ok := ctx.Value(TenantIDKey{}).(uint32); ok {
-		txn.BindTenantID(tid)
+		txn.BindAcessInfo(tid, 100, 100)
 	}
 	h, err := txn.GetDatabase(name)
 	if err != nil {

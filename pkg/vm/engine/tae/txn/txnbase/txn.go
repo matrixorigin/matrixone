@@ -52,11 +52,12 @@ var DefaultTxnFactory = func(mgr *TxnManager, store txnif.TxnStore, id uint64, s
 type Txn struct {
 	sync.WaitGroup
 	*TxnCtx
-	Mgr      *TxnManager
-	Store    txnif.TxnStore
-	Err      error
-	LSN      uint64
-	TenantID uint32
+	Mgr   *TxnManager
+	Store txnif.TxnStore
+	Err   error
+	LSN   uint64
+
+	TenantID, UserID, RoleID uint32
 
 	PrepareCommitFn   func(txnif.AsyncTxn) error
 	PrepareRollbackFn func(txnif.AsyncTxn) error
@@ -240,11 +241,18 @@ func (txn *Txn) WaitDone(err error) error {
 	return txn.Err
 }
 
-func (txn *Txn) BindTenantID(tenantID uint32) {
+func (txn *Txn) BindAcessInfo(tenantID, userID, roleID uint32) {
 	txn.TenantID = tenantID
+	txn.UserID = userID
+	txn.RoleID = roleID
 }
+
 func (txn *Txn) GetTenantID() uint32 {
 	return txn.TenantID
+}
+
+func (txn *Txn) GetUserAndRoleID() (uint32, uint32) {
+	return txn.UserID, txn.RoleID
 }
 
 func (txn *Txn) CreateDatabase(name string) (db handle.Database, err error) {

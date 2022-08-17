@@ -76,7 +76,8 @@ func (it *txnRelationIt) Next() {
 		entry.RLock()
 		// SystemDB can hold table created by different tenant, filter needed.
 		// while the 3 shared tables are not affected
-		if it.txnDB.entry.IsSystemDB() && !isSysTable(entry.GetSchema().Name) && entry.GetSchema().TenantID != txn.GetTenantID() {
+		if it.txnDB.entry.IsSystemDB() && !isSysTable(entry.GetSchema().Name) &&
+			entry.GetSchema().AcInfo.TenantID != txn.GetTenantID() {
 			entry.RUnlock()
 			continue
 		}
