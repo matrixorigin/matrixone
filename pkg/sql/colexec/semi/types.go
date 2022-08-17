@@ -52,5 +52,6 @@ type Argument struct {
 	Nbucket    uint64 // buckets count
 	Result     []int32
 	Typs       []types.Type
+	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
 }

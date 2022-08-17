@@ -17,7 +17,9 @@ package sum
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/sum"
 )
 
 func ReturnType(typs []types.Type) types.Type {
@@ -93,6 +95,10 @@ func (s *Decimal64Sum) Merge(_ int64, _ int64, x types.Decimal64, y types.Decima
 	return x, xEmpty
 }
 
+func (s *Decimal64Sum) BatchFill(rs, vs any, start, count int64, vps []uint64, zs []int64, nsp *nulls.Nulls) error {
+	return sum.Decimal64Sum(rs.([]types.Decimal64), vs.([]types.Decimal64), start, count, vps, zs, nsp)
+}
+
 func NewD128Sum() *Decimal128Sum {
 	return &Decimal128Sum{}
 }
@@ -119,4 +125,8 @@ func (s *Decimal128Sum) Merge(_ int64, _ int64, x types.Decimal128, y types.Deci
 		return y, false
 	}
 	return x, xEmpty
+}
+
+func (s *Decimal128Sum) BatchFill(rs, vs any, start, count int64, vps []uint64, zs []int64, nsp *nulls.Nulls) error {
+	return sum.Decimal128Sum(rs.([]types.Decimal128), vs.([]types.Decimal128), start, count, vps, zs, nsp)
 }
