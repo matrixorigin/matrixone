@@ -106,6 +106,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildExecute(stmt, ctx)
 	case *tree.Deallocate:
 		return buildDeallocate(stmt, ctx)
+	case *tree.Load:
+		return buildLoad(stmt, ctx)
 	case tree.Prepare: //Prepare is an interface
 		return buildPrepare(stmt, ctx)
 	default:
