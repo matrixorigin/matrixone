@@ -22,6 +22,12 @@ import (
 )
 
 func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
+	if s, ok := stmt.(*tree.Insert); ok {
+		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
+			return BuildPlan(ctx, stmt)
+		}
+	}
+
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect,
 		*tree.Update, *tree.Delete, *tree.Insert,
@@ -72,6 +78,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 
 	// dcl tcl is not support
 	var schemas []*plan.ObjectRef
+	var paramTypes []int32
 
 	switch pp := preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
@@ -80,7 +87,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
 			getParamRule := NewGetParamRule()
-			VisitQuery := NewVisitQuery(pp.Ddl.Query, []VisitRule{getParamRule})
+			VisitQuery := NewVisitPlan(preparePlan, []VisitPlanRule{getParamRule})
 			err = VisitQuery.Visit()
 			if err != nil {
 				return nil, err
@@ -90,23 +97,25 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 				return nil, errors.New("", "ArgExpr is not support in DDL statement")
 			}
 		}
-	case *plan.Plan_Query:
+
+	case *plan.Plan_Query, *plan.Plan_Ins:
 		// collect args
 		getParamRule := NewGetParamRule()
-		VisitQuery := NewVisitQuery(pp.Query, []VisitRule{getParamRule})
+		VisitQuery := NewVisitPlan(preparePlan, []VisitPlanRule{getParamRule})
 		err = VisitQuery.Visit()
 		if err != nil {
 			return nil, err
 		}
 
-		// set arg order
+		// sort arg
 		getParamRule.SetParamOrder()
 		args := getParamRule.params
 		schemas = getParamRule.schemas
+		paramTypes = getParamRule.paramTypes
 
-		// set arg order
+		// reset arg order
 		resetParamRule := NewResetParamOrderRule(args)
-		VisitQuery = NewVisitQuery(pp.Query, []VisitRule{resetParamRule})
+		VisitQuery = NewVisitPlan(preparePlan, []VisitPlanRule{resetParamRule})
 		err = VisitQuery.Visit()
 		if err != nil {
 			return nil, err
@@ -114,9 +123,10 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	}
 
 	prepare := &plan.Prepare{
-		Name:    stmtName,
-		Schemas: schemas,
-		Plan:    preparePlan,
+		Name:       stmtName,
+		Schemas:    schemas,
+		Plan:       preparePlan,
+		ParamTypes: paramTypes,
 	}
 
 	return &Plan{
