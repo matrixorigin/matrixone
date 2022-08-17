@@ -17,6 +17,7 @@ package logservice
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"testing"
 	"time"
@@ -595,6 +596,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 
 func TestGossipInSimulatedCluster(t *testing.T) {
 	defer leaktest.AfterTest(t)()
+	debug.SetMemoryLimit(1 << 30)
 	// start all services
 	nodeCount := 24
 	shardCount := nodeCount / 3
@@ -622,7 +624,8 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				"127.0.0.1:6082",
 				"127.0.0.1:6092",
 			},
-			DisableWorkers: true,
+			DisableWorkers:  true,
+			LogDBBufferSize: 1024 * 16,
 		}
 		cfg.GossipProbeInterval.Duration = 350 * time.Millisecond
 		configs = append(configs, cfg)

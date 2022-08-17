@@ -218,12 +218,17 @@ message PropertiesDef {
 	repeated Property properties 	= 1;
 }
 
+message ViewDef {
+	string view  = 1;
+}
+
 message TableDef {
 	message DefType {
 		oneof def {
 			PrimaryKeyDef pk			= 1;
 			IndexDef idx				= 2;
 			PropertiesDef properties	= 3;
+			ViewDef view				= 4;
 		}
 	}
 	string name				= 1;

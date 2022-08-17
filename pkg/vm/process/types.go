@@ -71,6 +71,7 @@ type SessionInfo struct {
 	ConnectionID uint64
 	Database     string
 	Version      string
+	TimeZone     *time.Location
 }
 
 // AnalyzeInfo  analyze information for query
@@ -111,7 +112,8 @@ type Process struct {
 
 	SessionInfo SessionInfo
 
-	// snapshot is transaction context
+	Ctx context.Context
+
 	Cancel context.CancelFunc
 }
 

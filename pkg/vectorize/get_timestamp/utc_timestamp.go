@@ -24,5 +24,5 @@ func init() {
 }
 
 func getUTCTimestamp() types.Datetime {
-	return types.Now().UTC()
+	return types.UTC()
 }

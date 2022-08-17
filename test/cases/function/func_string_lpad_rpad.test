@@ -89,7 +89,7 @@ SELECT ((+0) IN
 (32767.1)));
 
 
--- @bvt:issue#3619
+-- @bvt:issue#3588
 SELECT ((rpad(1.0,2048,1)) = ('4(') ^ (0.1));
 -- @bvt:issue
 

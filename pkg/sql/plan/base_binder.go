@@ -409,6 +409,12 @@ func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoo
 		return b.bindFuncExprImplByAstExpr("/", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.INTEGER_DIV:
 		return b.bindFuncExprImplByAstExpr("div", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+	case tree.BIT_XOR:
+		return b.bindFuncExprImplByAstExpr("^", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+	case tree.BIT_OR:
+		return b.bindFuncExprImplByAstExpr("|", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+	case tree.BIT_AND:
+		return b.bindFuncExprImplByAstExpr("&", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	}
 	return nil, errors.New("", fmt.Sprintf("'%v' operator is not supported now", astExpr.Op.ToString()))
 }
@@ -851,6 +857,11 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	}
 
+	if function.GetFunctionAppendHideArgByID(funcID) {
+		// Append a hidden parameter to the function. The default value is constant null
+		args = append(args, makePlan2NullConstExprWithType())
+	}
+
 	// return new expr
 	return &Expr{
 		Expr: &plan.Expr_F{
@@ -1012,22 +1023,8 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_bit:
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_char:
-		if typ != nil && typ.Id == int32(types.T_timestamp) {
-			val, err := types.ParseTimestamp(astExpr.String(), typ.Precision)
-			if err != nil {
-				return nil, err
-			}
-			return &Expr{
-				Expr: &plan.Expr_C{
-					C: &Const{
-						Isnull: false,
-						Value: &plan.Const_Timestampval{
-							Timestampval: int64(val),
-						},
-					},
-				},
-				Typ: typ,
-			}, nil
+		if typ != nil && typ.Id != int32(types.T_char) && typ.Id != int32(types.T_varchar) {
+			return appendCastBeforeExpr(getStringExpr(astExpr.String()), typ)
 		}
 		expr := getStringExpr(astExpr.String())
 		return expr, nil

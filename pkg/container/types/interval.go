@@ -30,8 +30,7 @@ import (
 
 type IntervalType int8
 
-const IntervalNumMAX = int32(^uint32(0) >> 1)
-const IntervalInt64MAX = int64(^uint64(0) >> 1)
+const IntervalNumMAX = int64(^uint64(0) >> 21)
 
 var (
 	ErrIntervalNumOverflow = errors.New(errno.DataException, "Interval num overflow")

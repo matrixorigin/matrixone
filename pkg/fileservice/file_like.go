@@ -12,24 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package unixtimestamp
+package fileservice
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import "io"
 
-var (
-	UnixTimestamp func([]types.Datetime, []int64) []int64
-)
-
-func init() {
-	UnixTimestamp = unixTimestamp
-}
-
-func unixTimestamp(xs []types.Datetime, rs []int64) []int64 {
-	for i := range xs {
-		rs[i] = xs[i].UnixTimestamp()
-		if rs[i] < 0 || rs[i] > 32536771199 {
-			rs[i] = 0
-		}
-	}
-	return rs
+type FileLike interface {
+	io.ReadWriteSeeker
+	io.WriterAt
+	io.ReaderAt
 }

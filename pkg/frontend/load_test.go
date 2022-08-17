@@ -18,6 +18,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -25,17 +30,12 @@ import (
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/simdcsv"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
@@ -342,7 +342,7 @@ func Test_load(t *testing.T) {
 			data: []byte("test anywhere"),
 		}
 
-		resp, err := mce.ExecRequest(req)
+		resp, err := mce.ExecRequest(ctx, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldBeNil)
 	})
@@ -546,7 +546,7 @@ func Test_load(t *testing.T) {
 				row2col = gostub.Stub(&row2colChoose, false)
 			}
 
-			_, err := mce.LoadLoop(cws[i], db, rel, "T")
+			_, err := mce.LoadLoop(context.TODO(), cws[i], db, rel, "T")
 			if kases[i].fail {
 				convey.So(err, convey.ShouldBeError)
 			} else {
@@ -570,20 +570,23 @@ func getParsedLinesChan(simdCsvGetParsedLinesChan chan simdcsv.LineOut) {
 func Test_getLineOutFromSimdCsvRoutine(t *testing.T) {
 	convey.Convey("getLineOutFromSimdCsvRoutine succ", t, func() {
 		handler := &ParseLineHandler{
-			closeRef:                  &CloseLoadData{stopLoadData: make(chan interface{}, 1)},
 			simdCsvGetParsedLinesChan: atomic.Value{},
 			SharePart: SharePart{
 				load:             &tree.Load{IgnoredLines: 1},
 				simdCsvLineArray: make([][]string, 100)},
 		}
 		handler.simdCsvGetParsedLinesChan.Store(make(chan simdcsv.LineOut, 100))
-		handler.closeRef.stopLoadData <- 1
-		gostub.StubFunc(&saveLinesToStorage, nil)
-		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldBeNil)
 
-		handler.closeRef.stopLoadData <- 1
+		gostub.StubFunc(&saveLinesToStorage, nil)
+		var cancel context.CancelFunc
+		handler.loadCtx, cancel = context.WithTimeout(context.TODO(), time.Second)
+		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldBeNil)
+		cancel()
+
 		gostub.StubFunc(&saveLinesToStorage, errors.New("1"))
+		handler.loadCtx, cancel = context.WithTimeout(context.TODO(), time.Second)
 		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldNotBeNil)
+		cancel()
 
 		getParsedLinesChan(getLineOutChan(handler.simdCsvGetParsedLinesChan))
 		stubs := gostub.StubFunc(&saveLinesToStorage, nil)
@@ -607,6 +610,7 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 				maxFieldCnt:                curBatchSize,
 				simdCsvLineArray:           make([][]string, curBatchSize),
 				dataColumnId2TableColumnId: make([]int, curBatchSize),
+				ses:                        &Session{timeZone: time.Local},
 				result:                     &LoadResult{},
 				ignoreFieldError:           true},
 			batchData: &batch.Batch{

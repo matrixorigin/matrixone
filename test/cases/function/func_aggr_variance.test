@@ -21,10 +21,8 @@ select variance(i) from t1;
 select variance(k) from t1;
 select variance(l) from t1;
 -- @bvt:issue
--- @bvt:issue#3377
 select variance(m) from t1;
 select variance(n) from t1;
--- @bvt:issue
 drop table t1;
 
 #0.5暂不支持time类型
