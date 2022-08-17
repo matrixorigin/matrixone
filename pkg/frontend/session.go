@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
@@ -770,6 +771,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 
 	var cols []*plan2.ColDef
 	var defs []*plan2.TableDefType
+	var TableType, Createsql string
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			cols = append(cols, &plan2.ColDef{
@@ -786,6 +788,13 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
 			properties := make([]*plan2.Property, len(pro.Properties))
 			for i, p := range pro.Properties {
+				switch p.Key {
+				case catalog.SystemRelAttr_Kind:
+					TableType = p.Value
+				case catalog.SystemRelAttr_CreateSQL:
+					Createsql = p.Value
+				default:
+				}
 				properties[i] = &plan2.Property{
 					Key:   p.Key,
 					Value: p.Value,
@@ -833,9 +842,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	}
 
 	tableDef := &plan2.TableDef{
-		Name: tableName,
-		Cols: cols,
-		Defs: defs,
+		Name:      tableName,
+		Cols:      cols,
+		Defs:      defs,
+		TableType: TableType,
+		Createsql: Createsql,
 	}
 	return obj, tableDef
 }
