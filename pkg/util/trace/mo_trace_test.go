@@ -72,3 +72,61 @@ func TestMOTracer_Start(t1 *testing.T) {
 		})
 	}
 }
+
+func TestSpanContext_MarshalTo(t *testing.T) {
+	type fields struct {
+		TraceID TraceID
+		SpanID  SpanID
+	}
+	type args struct {
+		dAtA []byte
+	}
+	tests := []struct {
+		name      string
+		fields    fields
+		args      args
+		want      int
+		wantBytes []byte
+	}{
+		{
+			name: "normal",
+			fields: fields{
+				TraceID: 0,
+				SpanID:  0x123456,
+			},
+			args: args{dAtA: make([]byte, 16)},
+			want: 16,
+			//                1  2  3  4  5  6  7  8--1  2  3  4  5  6     7     8
+			wantBytes: []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x12, 0x34, 0x56},
+		},
+		{
+			name: "not-zero",
+			fields: fields{
+				TraceID: 0x0987654321FFFFFF,
+				SpanID:  0x123456,
+			},
+			args: args{dAtA: make([]byte, 16)},
+			want: 16,
+			//                1  2  3  4  5  6  7  8--1  2  3  4  5  6     7     8
+			wantBytes: []byte{0x09, 0x87, 0x65, 0x43, 0x21, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0x12, 0x34, 0x56},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &SpanContext{
+				TraceID: tt.fields.TraceID,
+				SpanID:  tt.fields.SpanID,
+			}
+			got, err := c.MarshalTo(tt.args.dAtA)
+			require.Equal(t, nil, err)
+			require.Equal(t, got, tt.want)
+			require.Equal(t, tt.wantBytes, tt.args.dAtA)
+			newC := &SpanContext{}
+			err = newC.Unmarshal(tt.args.dAtA)
+			require.Equal(t, nil, err)
+			require.Equal(t, c, newC)
+			require.Equal(t, tt.fields.TraceID, newC.TraceID)
+			require.Equal(t, tt.fields.SpanID, newC.SpanID)
+		})
+	}
+}
