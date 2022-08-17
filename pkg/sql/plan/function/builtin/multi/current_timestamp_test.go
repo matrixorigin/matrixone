@@ -16,11 +16,13 @@ package multi
 
 import (
 	"fmt"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestCurrentTimestamp(t *testing.T) {
@@ -28,7 +30,7 @@ func TestCurrentTimestamp(t *testing.T) {
 	resultVector, err := CurrentTimestamp(nil, myProc)
 	require.NoError(t, err)
 	resultValues := vector.MustTCols[types.Timestamp](resultVector)
-	resultStr := resultValues[0].String2(6)
+	resultStr := resultValues[0].String2(time.Local, 6)
 	fmt.Println(resultStr)
 
 	inputVector0 := testutil.MakeScalarInt64(3, 4)
@@ -36,6 +38,6 @@ func TestCurrentTimestamp(t *testing.T) {
 	resultVector, err = CurrentTimestamp(inputVectors, myProc)
 	require.NoError(t, err)
 	resultValues = vector.MustTCols[types.Timestamp](resultVector)
-	resultStr = resultValues[0].String2(resultVector.Typ.Precision)
+	resultStr = resultValues[0].String2(time.Local, resultVector.Typ.Precision)
 	fmt.Println(resultStr)
 }

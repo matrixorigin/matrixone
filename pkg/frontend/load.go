@@ -19,11 +19,6 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/simdcsv"
 	"math"
 	"os"
 	"runtime"
@@ -32,6 +27,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/simdcsv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -1001,7 +1002,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
 						fs := field
-						d, err := types.ParseTimestamp(fs, vec.Typ.Precision)
+						d, err := types.ParseTimestamp(handler.ses.timeZone, fs, vec.Typ.Precision)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
@@ -1514,7 +1515,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					} else {
 						field := line[j]
 						//logutil.Infof("==== > field string [%s] ",fs)
-						d, err := types.ParseTimestamp(field, vec.Typ.Precision)
+						d, err := types.ParseTimestamp(handler.ses.timeZone, field, vec.Typ.Precision)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
