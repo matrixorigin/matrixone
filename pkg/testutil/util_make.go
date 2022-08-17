@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -188,7 +189,7 @@ var (
 			if nulls.Contains(vec.Nsp, uint64(i)) {
 				continue
 			}
-			d, err := types.ParseTimestamp(s, 6)
+			d, err := types.ParseTimestamp(time.Local, s, 6)
 			if err != nil {
 				panic(err)
 			}
@@ -289,7 +290,7 @@ var (
 	MakeScalarTimeStamp = func(value string, length int) *vector.Vector {
 		vec := NewProc().AllocScalarVector(timestampType)
 		vec.Length = length
-		d, err := types.ParseTimestamp(value, 6)
+		d, err := types.ParseTimestamp(time.Local, value, 6)
 		if err != nil {
 			panic(err)
 		}
@@ -334,7 +335,9 @@ type vecType interface {
 }
 
 func NewProc() *process.Process {
-	return process.New(mheap.New(guest.New(1<<20, host.New(1<<20))))
+	proc := process.New(mheap.New(guest.New(1<<20, host.New(1<<20))))
+	proc.SessionInfo.TimeZone = time.Local
+	return proc
 }
 
 func makeVector[T vecType](values []T, nsp []uint64, typ types.Type) *vector.Vector {
