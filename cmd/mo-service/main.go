@@ -71,13 +71,6 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 	// TODO: start other service
 	switch strings.ToUpper(cfg.ServiceType) {
 	case cnServiceType:
-		cfg.CN.Frontend.LogLevel = cfg.Log.Level
-		cfg.CN.Frontend.LogFormat = cfg.Log.Format
-		cfg.CN.Frontend.LogFilename = cfg.Log.Filename
-		cfg.CN.Frontend.LogMaxSize = int64(cfg.Log.MaxSize)
-		cfg.CN.Frontend.LogMaxDays = int64(cfg.Log.MaxDays)
-		cfg.CN.Frontend.LogMaxBackups = int64(cfg.Log.MaxBackups)
-		cfg.CN.Frontend.MoVersion = Version
 		return startCNService(cfg, stopper)
 	case dnServiceType:
 		return startDNService(cfg, stopper)
@@ -91,6 +84,7 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 }
 
 func startCNService(cfg *Config, stopper *stopper.Stopper) error {
+	cfg.CN.Frontend.SetLogAndVersion(&cfg.Log, Version)
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		s, err := cnservice.NewService(&cfg.CN, ctx)
 		if err != nil {

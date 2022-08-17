@@ -49,7 +49,7 @@ func NewService(cfg *Config, ctx context.Context) (Service, error) {
 	srv.server = server
 
 	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil, nil)
-
+	cfg.Frontend.SetDefaultValues()
 	err = srv.initMOServer(ctx, pu)
 	if err != nil {
 		return nil, err
@@ -130,7 +130,7 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 		if _, err := trace.Init(moServerCtx,
 			trace.WithMOVersion(pu.SV.MoVersion),
 			trace.WithNode(0, trace.NodeTypeNode),
-			trace.EnableTracer(pu.SV.EnableTrace),
+			trace.EnableTracer(!pu.SV.DisableTrace),
 			trace.WithBatchProcessMode(pu.SV.TraceBatchProcessor),
 			trace.DebugMode(pu.SV.EnableTraceDebug),
 			trace.WithSQLExecutor(func() ie.InternalExecutor {
@@ -141,7 +141,7 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 		}
 	}
 
-	if pu.SV.EnableMetric {
+	if !pu.SV.DisableMetric {
 		ieFactory := func() ie.InternalExecutor {
 			return frontend.NewInternalExecutor(pu)
 		}

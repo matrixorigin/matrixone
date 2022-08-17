@@ -71,7 +71,7 @@ func createMOServer(inputCtx context.Context, pu *config.ParameterUnit) {
 		if _, err := trace.Init(moServerCtx,
 			trace.WithMOVersion(MoVersion),
 			trace.WithNode(0, trace.NodeTypeNode),
-			trace.EnableTracer(pu.SV.EnableTrace),
+			trace.EnableTracer(!pu.SV.DisableTrace),
 			trace.WithBatchProcessMode(pu.SV.TraceBatchProcessor),
 			trace.DebugMode(pu.SV.EnableTraceDebug),
 			trace.WithSQLExecutor(func() ie.InternalExecutor {
@@ -82,7 +82,7 @@ func createMOServer(inputCtx context.Context, pu *config.ParameterUnit) {
 		}
 	}
 
-	if pu.SV.EnableMetric {
+	if !pu.SV.DisableMetric {
 		ieFactory := func() ie.InternalExecutor {
 			return frontend.NewInternalExecutor(pu)
 		}
@@ -178,23 +178,23 @@ func main() {
 
 	configFilePath := args[0]
 
-	gSystemVariables := &config.FrontendParameters{}
-	pu := config.NewParameterUnit(gSystemVariables, nil, nil, nil, nil)
+	params := &config.FrontendParameters{}
+	pu := config.NewParameterUnit(params, nil, nil, nil, nil)
 
 	//before anything using the configuration
-	_, err := toml.DecodeFile(configFilePath, gSystemVariables)
+	_, err := toml.DecodeFile(configFilePath, params)
 	if err != nil {
 		os.Exit(LoadConfigExit)
 	}
 
 	logConf := logutil.LogConfig{
-		Level:       gSystemVariables.LogLevel,
-		Format:      gSystemVariables.LogFormat,
-		Filename:    gSystemVariables.LogFilename,
-		MaxSize:     int(gSystemVariables.LogMaxSize),
-		MaxDays:     int(gSystemVariables.LogMaxDays),
-		MaxBackups:  int(gSystemVariables.LogMaxBackups),
-		EnableStore: gSystemVariables.EnableTrace,
+		Level:       params.LogLevel,
+		Format:      params.LogFormat,
+		Filename:    params.LogFilename,
+		MaxSize:     int(params.LogMaxSize),
+		MaxDays:     int(params.LogMaxDays),
+		MaxBackups:  int(params.LogMaxBackups),
+		EnableStore: !params.DisableTrace,
 	}
 
 	logutil.SetupMOLogger(&logConf)
@@ -226,7 +226,7 @@ func main() {
 
 	logutil.Infof("Shutdown The Server With Ctrl+C | Ctrl+\\.")
 
-	pu.HostMmu = host.New(gSystemVariables.HostMmuLimitation)
+	pu.HostMmu = host.New(params.HostMmuLimitation)
 
 	var tae *taeHandler
 	fmt.Println("Initialize the TAE engine ...")

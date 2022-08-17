@@ -37,7 +37,7 @@ func TestMetric(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 		pu.SV.Host = "0.0.0.0"
 		pu.SV.StatusPort = 7001
-		pu.SV.MetricToProm = true
+		pu.SV.DisableMetricToProm = false
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
 		InitMetric(context.TODO(), factory, pu, 0, "test")
@@ -89,7 +89,7 @@ func TestMetricNoProm(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 		pu.SV.Host = "0.0.0.0"
 		pu.SV.StatusPort = 7001
-		pu.SV.MetricToProm = false
+		pu.SV.DisableMetricToProm = true
 
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
@@ -104,7 +104,7 @@ func TestMetricNoProm(t *testing.T) {
 		require.Contains(t, err.Error(), "connection refused")
 
 		// make static-check(errcheck) happay
-		pu.SV.MetricToProm = true
+		pu.SV.DisableMetricToProm = false
 	})
 }
 

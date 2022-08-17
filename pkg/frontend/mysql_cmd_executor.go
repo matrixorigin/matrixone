@@ -1937,7 +1937,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		stmt = cw.GetAst()
 
 		runner = ret.(ComputationRunner)
-		if ses.Pu.SV.RecordTimeElapsedOfSqlRequest {
+		if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
 			logutil2.Infof(ctx, "time of Exec.Build : %s", time.Since(cmpBegin).String())
 		}
 
@@ -2028,7 +2028,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				}
 			}
 
-			if ses.Pu.SV.RecordTimeElapsedOfSqlRequest {
+			if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
 				logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
 			}
 			/*
@@ -2062,13 +2062,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleFailed
 			}
 
-			if ses.Pu.SV.RecordTimeElapsedOfSqlRequest {
+			if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
 				logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
 			}
 
 			rspLen = cw.GetAffectedRows()
 			echoTime := time.Now()
-			if ses.Pu.SV.RecordTimeElapsedOfSqlRequest {
+			if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
 				logutil.Infof("time of SendResponse %s", time.Since(echoTime).String())
 			}
 		}

@@ -1941,7 +1941,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 			dbName:           dbName,
 			txnHandler:       ses.GetTxnHandler(),
 			ses:              ses,
-			oneTxnPerBatch:   ses.Pu.SV.OneTxnPerBatchDuringLoad,
+			oneTxnPerBatch:   !ses.Pu.SV.DisableOneTxnPerBatchDuringLoad,
 			lineCount:        0,
 			batchSize:        curBatchSize,
 			result:           result,

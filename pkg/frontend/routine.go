@@ -121,7 +121,7 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 			}
 		}
 
-		if mgr.getParameterUnit().SV.RecordTimeElapsedOfSqlRequest {
+		if !mgr.getParameterUnit().SV.DisableRecordTimeElapsedOfSqlRequest {
 			logutil.Infof("connection id %d , the time of handling the request %s", routine.getConnID(), time.Since(reqBegin).String())
 		}
 

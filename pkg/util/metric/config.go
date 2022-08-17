@@ -34,7 +34,7 @@ var (
 )
 
 func initConfigByParamaterUnit(pu *config.ParameterUnit) {
-	setExportToProm(pu.SV.MetricToProm)
+	setExportToProm(!pu.SV.DisableMetricToProm)
 }
 
 func envOrDefaultBool(key string, defaultValue int32) int32 {
