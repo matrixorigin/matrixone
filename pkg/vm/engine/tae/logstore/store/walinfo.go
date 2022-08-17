@@ -261,7 +261,7 @@ func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
 		var drLsn uint64
 		var err error
 		if lsn == 0 {
-			drLsn, err := w.retryGetDriverLsn(g, 1)
+			drLsn, err = w.retryGetDriverLsn(g, 1)
 			if err != nil {
 				logutil.Infof("%d-%d", g, lsn)
 				panic(err)
