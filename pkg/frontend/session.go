@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -94,6 +95,7 @@ type Session struct {
 	optionBits uint32
 
 	prepareStmts map[string]*PrepareStmt
+	lastStmtId   uint32
 
 	requestCtx context.Context
 
@@ -164,6 +166,18 @@ func (bgs *BackgroundSession) Close() {
 	if bgs.cancel != nil {
 		bgs.cancel()
 	}
+}
+func (ses *Session) GenNewStmtId() uint32 {
+	if ses.lastStmtId == math.MaxUint32 {
+		// reused old id
+		ses.lastStmtId = 0
+	}
+	ses.lastStmtId = ses.lastStmtId + 1
+	return ses.lastStmtId
+}
+
+func (ses *Session) GetLastStmtId() uint32 {
+	return ses.lastStmtId
 }
 
 func (ses *Session) SetRequestContext(reqCtx context.Context) {

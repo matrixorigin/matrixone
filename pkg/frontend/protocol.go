@@ -279,6 +279,14 @@ type FakeProtocol struct {
 	database string
 }
 
+func (fp *FakeProtocol) SendPrepareResponse(stmt *PrepareStmt) error {
+	return nil
+}
+
+func (fp *FakeProtocol) ParseExecuteData(stmt *PrepareStmt, data []byte, pos int) (sql string, names []string, vars []any, err error) {
+	return "", nil, nil, nil
+}
+
 func (fp *FakeProtocol) SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt uint64) error {
 	return nil
 }
