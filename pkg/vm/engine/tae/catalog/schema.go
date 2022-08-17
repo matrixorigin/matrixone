@@ -126,6 +126,8 @@ type Schema struct {
 	BlockMaxRows     uint32
 	SegmentMaxBlocks uint16
 	Comment          string
+	Relkind          string
+	Createsql        string
 	View             string
 
 	SortKey    *SortKey
@@ -261,6 +263,15 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
+	if s.Relkind, sn, err = common.ReadString(r); err != nil {
+		return
+	}
+	n += sn
+	if s.Createsql, sn, err = common.ReadString(r); err != nil {
+		return
+	}
+	n += sn
+
 	if s.View, sn, err = common.ReadString(r); err != nil {
 		return
 	}
@@ -339,6 +350,12 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		return
 	}
 	if _, err = common.WriteString(s.Comment, &w); err != nil {
+		return
+	}
+	if _, err = common.WriteString(s.Relkind, &w); err != nil {
+		return
+	}
+	if _, err = common.WriteString(s.Createsql, &w); err != nil {
 		return
 	}
 	if _, err = common.WriteString(s.View, &w); err != nil {

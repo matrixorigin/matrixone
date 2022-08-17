@@ -25,7 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -44,7 +43,7 @@ func Test_readTextFile(t *testing.T) {
 	fmt.Printf("%v\n", data)
 }
 
-func Test_load(t *testing.T) {
+/*func Test_load(t *testing.T) {
 	convey.Convey("load succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -433,7 +432,7 @@ func Test_load(t *testing.T) {
 			}
 		}
 	})
-}
+}*/
 
 func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 	ctx := context.TODO()

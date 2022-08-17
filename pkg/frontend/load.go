@@ -210,7 +210,7 @@ func (plh *ParseLineHandler) getLineOutCallback(lineOut simdcsv.LineOut) error {
 	}
 	if lineOut.Line != nil {
 		//step 1 : skip dropped lines
-		if plh.lineCount < plh.load.IgnoredLines {
+		if plh.lineCount < plh.load.Param.Tail.IgnoredLines {
 			plh.lineCount++
 			return nil
 		}
@@ -368,14 +368,14 @@ func initParseLineHandler(requestCtx context.Context, handler *ParseLineHandler)
 
 	//define the peer column for LOAD DATA's column list.
 	var dataColumnId2TableColumnId []int
-	if len(load.ColumnList) == 0 {
+	if len(load.Param.Tail.ColumnList) == 0 {
 		dataColumnId2TableColumnId = make([]int, len(cols))
 		for i := 0; i < len(cols); i++ {
 			dataColumnId2TableColumnId[i] = i
 		}
 	} else {
-		dataColumnId2TableColumnId = make([]int, len(load.ColumnList))
-		for i, col := range load.ColumnList {
+		dataColumnId2TableColumnId = make([]int, len(load.Param.Tail.ColumnList))
+		for i, col := range load.Param.Tail.ColumnList {
 			switch realCol := col.(type) {
 			case *tree.UnresolvedName:
 				tid, ok := tableName2ColumnId[realCol.Parts[0]]
@@ -591,7 +591,6 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 			rowIdx := batchBegin + i
 			offset := i + 1
 			base := handler.lineCount - uint64(fetchCnt)
-			//fmt.Println(line)
 			//logutil.Infof("------ linecount %d fetchcnt %d base %d offset %d",
 			//	handler.lineCount,fetchCnt,base,offset)
 			//record missing column
@@ -1913,7 +1912,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 	/*
 		step1 : read block from file
 	*/
-	dataFile, err := os.Open(load.File)
+	dataFile, err := os.Open(load.Param.Filepath)
 	if err != nil {
 		logutil.Errorf("open file failed. err:%v", err)
 		return nil, err
@@ -1977,7 +1976,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 	notifyChanSize = Max(100, notifyChanSize)
 
 	handler.simdCsvReader = simdcsv.NewReaderWithOptions(dataFile,
-		rune(load.Fields.Terminated[0]),
+		rune(load.Param.Tail.Fields.Terminated[0]),
 		'#',
 		false,
 		false)
