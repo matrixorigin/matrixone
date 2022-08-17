@@ -20,8 +20,9 @@ import (
 )
 
 type EncodeBatch struct {
-	Zs   []int64
-	Vecs []*vector.Vector
+	Zs    []int64
+	Vecs  []*vector.Vector
+	Attrs []string
 }
 
 // Batch represents a part of a relationship
