@@ -70,8 +70,7 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 			return false, nil
 
 		case end:
-			arg.ctr.hashTable.Free()
-			arg.ctr.freeSels(proc)
+			arg.ctr.freeContainer(proc)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -129,85 +128,94 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 }
 
 func (c *container) probeHashTable(proc *process.Process, analyze process.Analyze, idx int) (bool, error) {
-	btc := <-proc.Reg.MergeReceivers[idx].Ch
+	for {
+		btc := <-proc.Reg.MergeReceivers[idx].Ch
 
-	// last batch of block
-	if btc == nil {
-		return true, nil
-	}
-
-	// empty batch
-	if btc.Length() == 0 {
-		return false, nil
-	}
-
-	analyze.Input(btc)
-	defer btc.Clean(proc.Mp)
-
-	c.btc = batch.NewWithSize(len(btc.Vecs))
-	for i := range btc.Vecs {
-		c.btc.Vecs[i] = vector.New(btc.Vecs[i].Typ)
-	}
-	needInsert := make([]uint8, hashmap.UnitLimit)
-	resetsNeedInsert := make([]uint8, hashmap.UnitLimit)
-	cnt := btc.Length()
-	itr := c.hashTable.NewIterator()
-	for i := 0; i < cnt; i += hashmap.UnitLimit {
-		n := cnt - i
-		if n > hashmap.UnitLimit {
-			n = hashmap.UnitLimit
+		// last batch of block
+		if btc == nil {
+			return true, nil
 		}
 
-		copy(c.inBuckets, hashmap.OneUInt8s)
-		copy(needInsert, resetsNeedInsert)
-		insertcnt := 0
-
-		vs, zs := itr.Find(i, n, btc.Vecs, c.inBuckets)
-
-		for j, v := range vs {
-			// not in the processed bucket
-			if c.inBuckets[j] == 0 {
-				continue
-			}
-
-			// null value
-			if zs[j] == 0 {
-				continue
-			}
-
-			// not found
-			if v == 0 {
-				continue
-			}
-
-			// has been added into output batch
-			if c.cnts[v-1][0] == 0 {
-				continue
-			}
-
-			needInsert[j] = 1
-			c.cnts[v-1][0] = 0
-			c.btc.Zs = append(c.btc.Zs, 1)
-			insertcnt++
+		// empty batch
+		if btc.Length() == 0 {
+			continue
 		}
 
-		if insertcnt > 0 {
-			for pos := range btc.Vecs {
-				if err := vector.UnionBatch(c.btc.Vecs[pos], btc.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp); err != nil {
-					return false, err
+		analyze.Input(btc)
+		defer btc.Clean(proc.Mp)
+
+		c.btc = batch.NewWithSize(len(btc.Vecs))
+		for i := range btc.Vecs {
+			c.btc.Vecs[i] = vector.New(btc.Vecs[i].Typ)
+		}
+		needInsert := make([]uint8, hashmap.UnitLimit)
+		resetsNeedInsert := make([]uint8, hashmap.UnitLimit)
+		cnt := btc.Length()
+		itr := c.hashTable.NewIterator()
+		for i := 0; i < cnt; i += hashmap.UnitLimit {
+			n := cnt - i
+			if n > hashmap.UnitLimit {
+				n = hashmap.UnitLimit
+			}
+
+			copy(c.inBuckets, hashmap.OneUInt8s)
+			copy(needInsert, resetsNeedInsert)
+			insertcnt := 0
+
+			vs, zs := itr.Find(i, n, btc.Vecs, c.inBuckets)
+
+			for j, v := range vs {
+				// not in the processed bucket
+				if c.inBuckets[j] == 0 {
+					continue
+				}
+
+				// null value
+				if zs[j] == 0 {
+					continue
+				}
+
+				// not found
+				if v == 0 {
+					continue
+				}
+
+				// has been added into output batch
+				if c.cnts[v-1][0] == 0 {
+					continue
+				}
+
+				needInsert[j] = 1
+				c.cnts[v-1][0] = 0
+				c.btc.Zs = append(c.btc.Zs, 1)
+				insertcnt++
+			}
+
+			if insertcnt > 0 {
+				for pos := range btc.Vecs {
+					if err := vector.UnionBatch(c.btc.Vecs[pos], btc.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp); err != nil {
+						return false, err
+					}
 				}
 			}
 		}
-	}
 
-	analyze.Output(c.btc)
-	proc.SetInputBatch(c.btc)
-	return false, nil
+		analyze.Output(c.btc)
+		proc.SetInputBatch(c.btc)
+		return false, nil
+	}
 }
 
-func (c *container) freeSels(proc *process.Process) {
-	for i := range c.cnts {
-		proc.GetMheap().PutSels(c.cnts[i])
+func (c *container) freeContainer(proc *process.Process) {
+	if c.cnts != nil {
+		for i := range c.cnts {
+			proc.GetMheap().PutSels(c.cnts[i])
+		}
+		c.cnts = nil
 	}
-	c.cnts = nil
+
+	if c.hashTable != nil {
+		c.hashTable.Free()
+		c.hashTable = nil
+	}
 }
