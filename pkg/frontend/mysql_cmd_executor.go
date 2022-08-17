@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
 	goErrors "errors"
 	"fmt"
 
@@ -126,17 +127,21 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 }
 
 func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, proc *process.Process, sql string, beginIns time.Time) context.Context {
-	statementId := util.Fastrand64()
 	sessInfo := proc.SessionInfo
-	txnID := uint64(0)
+	var stmID [16]byte
+	binary.BigEndian.PutUint64(stmID[:8], util.Fastrand64())
+	binary.BigEndian.PutUint64(stmID[8:], util.Fastrand64())
+	var txnID [16]byte
 	if ses.GetTxnHandler().IsValidTxn() { // fixme: how Could I get an valid txn ID.
-		txnID = ses.GetTxnHandler().GetTxn().GetID()
+		binary.BigEndian.PutUint64(txnID[:], ses.GetTxnHandler().GetTxn().GetID())
 	}
+	var sesID [16]byte
+	binary.BigEndian.PutUint64(sesID[:], sessInfo.GetConnectionID())
 	trace.ReportStatement(
 		ctx,
 		&trace.StatementInfo{
-			StatementID:          statementId,
-			SessionID:            sessInfo.GetConnectionID(),
+			StatementID:          stmID,
+			SessionID:            sesID,
 			TransactionID:        txnID,
 			Account:              "account", //fixme: sessInfo.GetAccount()
 			User:                 sessInfo.GetUser(),
@@ -148,7 +153,7 @@ func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, 
 			RequestAt:            util.NowNS(),
 		},
 	)
-	return trace.ContextWithSpanContext(ctx, trace.SpanContextWithID(trace.TraceID(statementId)))
+	return trace.ContextWithSpanContext(ctx, trace.SpanContextWithID(stmID))
 }
 
 // outputPool outputs the data
