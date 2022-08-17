@@ -199,15 +199,11 @@ insert into t3 values (NULL), (NULL);
 select a, oref, a in (select max(ie) from t1 where oref=t2.oref group by grp) Z from t2;
 -- @bvt:issue
 select a, oref from t2 where a in (select max(ie) from t1 where oref=t2.oref group by grp);
--- @bvt:issue#4354
--- @bvt:issue#3419
+-- @bvt:issue#3312
 select a, oref, a in (
   select max(ie) from t1 where oref=t2.oref group by grp union
   select max(ie) from t1 where oref=t2.oref group by grp
   ) Z from t2;
--- @bvt:issue
--- @bvt:issue
--- @bvt:issue#3312
 select a in (select max(ie) from t1 where oref=4 group by grp) from t3;
 -- @bvt:issue
 
@@ -619,13 +615,9 @@ INSERT INTO t1 VALUES (1),(2);
 CREATE TABLE t2( a INT, b INT );
 SELECT * FROM t2 WHERE (a, b) IN (SELECT a, b FROM t2);
 -- error
--- @bvt:issue#4354
--- @bvt:issue#3419
 SELECT * FROM t1 WHERE a IN    ( SELECT 1 UNION ( SELECT 1 UNION SELECT 1 ) );
 SELECT * FROM t1 WHERE a IN    ( ( SELECT 1 UNION SELECT 1 )  UNION SELECT 1 );
 SELECT * FROM t1 WHERE a IN    ( SELECT 1 UNION SELECT 1 UNION SELECT 1 );
--- @bvt:issue
--- @bvt:issue
 
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
@@ -876,12 +868,8 @@ create table t1 (a int, b int, primary key (a));
 insert into t1 values (1,1), (3,1),(100,1);
 create table t2 (a int, b int);
 insert into t2 values (1,1),(2,1),(NULL,1),(NULL,0);
--- @bvt:issue#4354
--- @bvt:issue#3419
-select a,b, a in (select a from t1 where t1.b = t2.b union select a from t1 where t1.b = t2.b) Z from t2 ;
--- @bvt:issue
--- @bvt:issue
 -- @bvt:issue#3312
+select a,b, a in (select a from t1 where t1.b = t2.b union select a from t1 where t1.b = t2.b) Z from t2 ;
 select a,b, a in (select a from t1 where t1.b = t2.b) Z from t2 ;
 -- @bvt:issue
 

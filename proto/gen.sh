@@ -1,10 +1,8 @@
 #!/bin/bash
 #
-# Generate all matrixcube protobuf bindings.
-# Run from repository root.
+# Generate all MatrixOne protobuf bindings. Run from repository root.
 #
 set -ex
-
 
 program_exists() {
   if command -v "${1}" > /dev/null 2>&1; then

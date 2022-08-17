@@ -41,6 +41,7 @@ const (
 	GTNoop
 	GTCKp
 	GTUncommit
+	GTCommit
 	GTInternal
 	GTCustomizedStart
 )
