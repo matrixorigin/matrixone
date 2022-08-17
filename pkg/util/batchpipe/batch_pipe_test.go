@@ -105,7 +105,7 @@ func (b *posBuf) Reset() { b.posList = b.posList[:0]; b.RemindReset() }
 
 func (b *posBuf) IsEmpty() bool {
 	select {
-	case b.wakeupCh <- time.Now():
+	case b.wakeupCh <- time.Now(): // when the reminder fires, it will check IsEmpty
 	default:
 	}
 	return len(b.posList) == 0
@@ -204,7 +204,7 @@ func TestBaseCollector(t *testing.T) {
 	require.Equal(t, 2, len(collector.Received()))
 }
 
-func TestBaseCollectorReminder(t *testing.T) {
+func TestBaseCollectorReminderBackOff(t *testing.T) {
 	collector := newTestCollector(PipeWithBatchWorkerNum(1))
 	require.True(t, collector.Start(context.TODO()))
 	err := collector.SendItem(
@@ -222,7 +222,7 @@ func TestBaseCollectorReminder(t *testing.T) {
 			goOn = true
 			prev = element
 		} else {
-			goOn = assert.InDelta(t, gap, element.Sub(prev).Milliseconds(), 10)
+			goOn = assert.InDelta(t, gap, element.Sub(prev).Milliseconds(), 30)
 			prev = element
 			gap *= 2
 		}
