@@ -255,6 +255,9 @@ func (node *appendableNode) ApplyAppend(bat *containers.Batch, txn txnif.AsyncTx
 		return
 	}
 	schema := node.block.meta.GetSchema()
+	if node.data == nil {
+		node.OnLoad()
+	}
 	from = int(node.rows)
 	for srcPos, attr := range bat.Attrs {
 		def := schema.ColDefs[schema.GetColIdx(attr)]
