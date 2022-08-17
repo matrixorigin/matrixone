@@ -141,6 +141,9 @@ func (w *StoreImpl) onCheckpoint() {
 func (w *StoreImpl) CkpCkp() {
 	e := w.makeInternalCheckpointEntry()
 	_, err := w.Append(GroupInternal, e)
+	if err == common.ErrClose {
+		return
+	}
 	if err != nil {
 		panic(err)
 	}
