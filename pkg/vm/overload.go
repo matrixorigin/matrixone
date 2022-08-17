@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
@@ -92,6 +93,7 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	Deletion: deletion.String,
 	Insert:   insert.String,
 	Update:   update.String,
+	External: external.String,
 
 	Minus:     minus.String,
 	Intersect: intersect.String,
@@ -133,6 +135,7 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Deletion: deletion.Prepare,
 	Insert:   insert.Prepare,
 	Update:   update.Prepare,
+	External: external.Prepare,
 
 	Minus:     minus.Prepare,
 	Intersect: intersect.Prepare,
@@ -174,6 +177,7 @@ var execFunc = [...]func(int, *process.Process, any) (bool, error){
 	Deletion: deletion.Call,
 	Insert:   insert.Call,
 	Update:   update.Call,
+	External: external.Call,
 
 	Minus:     minus.Call,
 	Intersect: intersect.Call,
