@@ -38,6 +38,8 @@ type TracerOption interface {
 	apply(*TracerConfig)
 }
 
+var _ TracerOption = tracerOptionFunc(nil)
+
 type tracerOptionFunc func(*TracerConfig)
 
 func (f tracerOptionFunc) apply(cfg *TracerConfig) {
