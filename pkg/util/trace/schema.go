@@ -38,7 +38,7 @@ const (
 	sqlCreateSpanInfoTable = `CREATE TABLE IF NOT EXISTS span_info(
  span_id varchar(16),
  statement_id varchar(36),
- parent_span_id BIGINT UNSIGNED,
+ parent_span_id varchar(16),
  node_uuid varchar(36) COMMENT "node uuid in MO, which node accept this request",
  node_type varchar(64) COMMENT "node type in MO, enum: DN, CN, LogService;",
  name varchar(1024) COMMENT "span name, for example: step name of execution plan, function name in code, ...",
@@ -78,7 +78,7 @@ const (
 )`
 	sqlCreateErrorInfoTable = `CREATE TABLE IF NOT EXISTS error_info(
  statement_id varchar(36),
- span_id BIGINT varchar(16),
+ span_id varchar(16),
  node_uuid varchar(36) COMMENT "node uuid in MO, which node accept this request",
  node_type varchar(64) COMMENT "node type in MO, enum: DN, CN, LogService;",
  err_code varchar(1024),
