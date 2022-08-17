@@ -494,7 +494,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		if bat.Zs[j] <= 0 {
 			continue
 		}
-		row, err := extractRowFromEveryVector(bat, int64(j), oq)
+		row, err := extractRowFromEveryVector(ses, bat, int64(j), oq)
 		if err != nil {
 			return err
 		}
@@ -541,7 +541,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 }
 
 // extractRowFromEveryVector gets the j row from the every vector and outputs the row
-func extractRowFromEveryVector(dataSet *batch.Batch, j int64, oq outputPool) ([]interface{}, error) {
+func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int64, oq outputPool) ([]interface{}, error) {
 	row, err := oq.getEmptyRow()
 	if err != nil {
 		return nil, err
@@ -557,7 +557,7 @@ func extractRowFromEveryVector(dataSet *batch.Batch, j int64, oq outputPool) ([]
 			rowIndex = 0
 		}
 
-		err = extractRowFromVector(vec, i, row, rowIndex)
+		err = extractRowFromVector(ses, vec, i, row, rowIndex)
 		if err != nil {
 			return nil, err
 		}
@@ -577,7 +577,7 @@ func extractRowFromEveryVector(dataSet *batch.Batch, j int64, oq outputPool) ([]
 }
 
 // extractRowFromVector gets the rowIndex row from the i vector
-func extractRowFromVector(vec *vector.Vector, i int, row []interface{}, rowIndex int64) error {
+func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interface{}, rowIndex int64) error {
 	switch vec.Typ.Oid { //get col
 	case types.T_json:
 		if !nulls.Any(vec.Nsp) {
@@ -786,13 +786,13 @@ func extractRowFromVector(vec *vector.Vector, i int, row []interface{}, rowIndex
 		precision := vec.Typ.Precision
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]types.Timestamp)
-			row[i] = vs[rowIndex].String2(precision)
+			row[i] = vs[rowIndex].String2(ses.timeZone, precision)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]types.Timestamp)
-				row[i] = vs[rowIndex].String2(precision)
+				row[i] = vs[rowIndex].String2(ses.timeZone, precision)
 			}
 		}
 	case types.T_decimal64:
@@ -920,25 +920,24 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 	if load.Local {
 		return fmt.Errorf("LOCAL is unsupported now")
 	}
-
-	if load.Fields == nil || len(load.Fields.Terminated) == 0 {
+	if load.Param.Tail.Fields == nil || len(load.Param.Tail.Fields.Terminated) == 0 {
 		return fmt.Errorf("load need FIELDS TERMINATED BY ")
 	}
 
-	if load.Fields != nil && load.Fields.EscapedBy != 0 {
+	if load.Param.Tail.Fields != nil && load.Param.Tail.Fields.EscapedBy != 0 {
 		return fmt.Errorf("EscapedBy field is unsupported now")
 	}
 
 	/*
 		check file
 	*/
-	exist, isfile, err := PathExists(load.File)
+	exist, isfile, err := PathExists(load.Param.Filepath)
 	if err != nil || !exist {
-		return fmt.Errorf("file %s does exist. err:%v", load.File, err)
+		return fmt.Errorf("file %s does exist. err:%v", load.Param.Filepath, err)
 	}
 
 	if !isfile {
-		return fmt.Errorf("file %s is a directory", load.File)
+		return fmt.Errorf("file %s is a directory", load.Param.Filepath)
 	}
 
 	/*
@@ -1326,7 +1325,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	}
 
 	//get query optimizer and execute Optimize
-	buildPlan, err := buildPlan(mce.ses.txnCompileCtx, stmt.Statement)
+	plan, err := buildPlan(mce.ses.txnCompileCtx, stmt.Statement)
 	if err != nil {
 		return err
 	}
@@ -1339,7 +1338,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	// build explain data buffer
 	buffer := explain.NewExplainDataBuffer()
 	// generator query explain
-	explainQuery := explain.NewExplainQueryImpl(buildPlan.GetQuery())
+	explainQuery := explain.NewExplainQueryImpl(plan.GetQuery())
 	err = explainQuery.ExplainPlan(buffer, es)
 	if err != nil {
 		logutil.Errorf("explain Query statement error: %v", err)
@@ -1397,6 +1396,12 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 
 // handlePrepareStmt
 func (mce *MysqlCmdExecutor) handlePrepareStmt(st *tree.PrepareStmt) error {
+	switch st.Stmt.(type) {
+	case *tree.Update:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+	case *tree.Delete:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
+	}
 	preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
 	if err != nil {
 		return err
@@ -1411,15 +1416,21 @@ func (mce *MysqlCmdExecutor) handlePrepareStmt(st *tree.PrepareStmt) error {
 
 // handlePrepareString
 func (mce *MysqlCmdExecutor) handlePrepareString(st *tree.PrepareString) error {
-	preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
-	if err != nil {
-		return err
-	}
 	stmts, err := mysql.Parse(st.Sql)
 	if err != nil {
 		return err
 	}
+	switch stmts[0].(type) {
+	case *tree.Update:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+	case *tree.Delete:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
+	}
 
+	preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
+	if err != nil {
+		return err
+	}
 	return mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), &PrepareStmt{
 		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
 		PreparePlan: preparePlan,
@@ -1724,6 +1735,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ConnectionID: uint64(proto.ConnectionID()),
 		Database:     ses.GetDatabaseName(),
 		Version:      serverVersion,
+		TimeZone:     ses.timeZone,
 	}
 
 	var rootCtx = mce.RecordStatement(trace.DefaultContext(), ses, proc, sql, beginInstant)
@@ -1838,13 +1850,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetUserName("")
 			}
-		case *tree.Load:
-			fromLoadData = true
-			selfHandle = true
-			err = mce.handleLoadData(requestCtx, st)
-			if err != nil {
-				goto handleFailed
-			}
+		/*case *tree.Load:
+		fromLoadData = true
+		selfHandle = true
+		err = mce.handleLoadData(requestCtx, st)
+		if err != nil {
+			goto handleFailed
+		}*/
 		case *tree.PrepareStmt:
 			selfHandle = true
 			err = mce.handlePrepareStmt(st)
@@ -1922,6 +1934,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if ret, err = cw.Compile(requestCtx, ses, ses.outputCallback); err != nil {
 			goto handleFailed
 		}
+		stmt = cw.GetAst()
 
 		runner = ret.(ComputationRunner)
 		if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
@@ -2069,7 +2082,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			switch stmt.(type) {
 			case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
-				*tree.CreateView, *tree.DropView,
+				*tree.CreateView, *tree.DropView, *tree.Load,
 				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete,

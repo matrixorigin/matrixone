@@ -20,7 +20,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	prom "github.com/prometheus/client_golang/prometheus"
@@ -52,7 +51,7 @@ func newMetricExporter(gather prom.Gatherer, collector MetricCollector, node int
 		nodeid:         node,
 		role:           role,
 		gather:         gather,
-		now:            func() int64 { return int64(types.Now()) },
+		now:            func() int64 { return time.Now().UnixMicro() },
 	}
 	return m
 }

@@ -16,6 +16,7 @@ package product
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 const (
@@ -37,4 +38,5 @@ type ResultPos struct {
 type Argument struct {
 	ctr    *container
 	Result []ResultPos
+	Typs   []types.Type
 }

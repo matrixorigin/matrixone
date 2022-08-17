@@ -31,17 +31,11 @@ func String(_ any, buf *bytes.Buffer) {
 }
 
 func Prepare(proc *process.Process, arg any) error {
-	var err error
-
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.sels = make([]int64, 0, 65536)
-	if ap.ctr.mp, err = hashmap.NewStrMap(false, ap.Ibucket, ap.Nbucket, proc.GetMheap()); err != nil {
-		return err
-	}
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
+	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	ap.ctr.bat.Zs = proc.GetMheap().GetSels()
 	for i, typ := range ap.Typs {
@@ -61,7 +55,9 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
 				ctr.state = End
-				ctr.mp.Free()
+				if ctr.mp != nil {
+					ctr.mp.Free()
+				}
 				return true, err
 			}
 			ctr.state = Probe
@@ -69,7 +65,9 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
-				ctr.mp.Free()
+				if ctr.mp != nil {
+					ctr.mp.Free()
+				}
 				if ctr.bat != nil {
 					ctr.bat.Clean(proc.GetMheap())
 				}
@@ -81,7 +79,9 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			if ctr.bat.Length() == 0 {
 				if err := ctr.emptyProbe(bat, ap, proc, anal); err != nil {
 					ctr.state = End
-					ctr.mp.Free()
+					if ctr.mp != nil {
+						ctr.mp.Free()
+					}
 					proc.SetInputBatch(nil)
 					return true, err
 				}
@@ -89,7 +89,9 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			} else {
 				if err := ctr.probe(bat, ap, proc, anal); err != nil {
 					ctr.state = End
-					ctr.mp.Free()
+					if ctr.mp != nil {
+						ctr.mp.Free()
+					}
 					proc.SetInputBatch(nil)
 					return true, err
 				}
@@ -103,56 +105,10 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
-	var err error
-
-	for {
-		bat := <-proc.Reg.MergeReceivers[1].Ch
-		if bat == nil {
-			break
-		}
-		if bat.Length() == 0 {
-			continue
-		}
-		anal.Input(bat)
-		anal.Alloc(int64(bat.Size()))
-		if ctr.bat, err = ctr.bat.Append(proc.GetMheap(), bat); err != nil {
-			bat.Clean(proc.GetMheap())
-			ctr.bat.Clean(proc.GetMheap())
-			return err
-		}
-		bat.Clean(proc.GetMheap())
-	}
-	if ctr.bat == nil || ctr.bat.Length() == 0 {
-		return nil
-	}
-	if err := ctr.evalJoinCondition(ctr.bat, ap.Conditions[1], proc); err != nil {
-		return err
-	}
-	defer ctr.freeJoinCondition(proc)
-	rows := ctr.mp.GroupCount()
-	itr := ctr.mp.NewIterator()
-	count := ctr.bat.Length()
-	for i := 0; i < count; i += hashmap.UnitLimit {
-		n := count - i
-		if n > hashmap.UnitLimit {
-			n = hashmap.UnitLimit
-		}
-		vals, zvals, err := itr.Insert(i, n, ctr.vecs)
-		if err != nil {
-			return err
-		}
-		for k, v := range vals[:n] {
-			if zvals[k] == 0 {
-				continue
-			}
-			if v > rows {
-				rows++
-				ctr.mp.AddGroup()
-				ctr.sels = append(ctr.sels, int64(i+k))
-			} else {
-				ctr.sels[v-1] = -1
-			}
-		}
+	bat := <-proc.Reg.MergeReceivers[1].Ch
+	if bat != nil {
+		ctr.bat = bat
+		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
 	}
 	return nil
 }
@@ -215,7 +171,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	defer ctr.freeJoinCondition(proc)
 	count := bat.Length()
-	itr := ctr.mp.NewIterator()
+	mSels := ctr.mp.Sels()
+	itr := ctr.mp.Map().NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -244,10 +201,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 				continue
 			}
-			sel := ctr.sels[vals[k]-1]
-			if sel == -1 {
+			sels := mSels[vals[k]-1]
+			if len(sels) > 1 {
 				return errors.New("scalar subquery returns more than 1 row")
 			}
+			sel := sels[0]
 			for j, rp := range ap.Result {
 				if rp.Rel == 0 {
 					if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.GetMheap()); err != nil {
