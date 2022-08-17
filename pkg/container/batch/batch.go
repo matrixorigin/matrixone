@@ -75,7 +75,11 @@ func NewWithSize(n int) *Batch {
 }
 
 func (bat *Batch) MarshalBinary() ([]byte, error) {
-	return types.Encode(&EncodeBatch{Zs: bat.Zs, Vecs: bat.Vecs})
+	return types.Encode(&EncodeBatch{
+		Zs:    bat.Zs,
+		Vecs:  bat.Vecs,
+		Attrs: bat.Attrs,
+	})
 }
 
 func (bat *Batch) UnmarshalBinary(data []byte) error {
@@ -86,6 +90,7 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 	bat.Cnt = 1
 	bat.Zs = rbat.Zs
 	bat.Vecs = rbat.Vecs
+	bat.Attrs = rbat.Attrs
 	return nil
 }
 

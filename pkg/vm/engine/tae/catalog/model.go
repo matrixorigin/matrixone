@@ -60,6 +60,7 @@ const (
 	SystemSequenceRel     = "S"
 	SystemViewRel         = "v"
 	SystemMaterializedRel = "m"
+	SystemExternalRel     = "e"
 
 	SystemColPKConstraint = "p"
 	SystemColNoConstraint = "n"
