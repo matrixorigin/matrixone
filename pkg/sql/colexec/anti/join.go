@@ -155,6 +155,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	defer ctr.freeJoinCondition(proc)
 	count := bat.Length()
+	mSels := ctr.mp.Sels()
 	itr := ctr.mp.Map().NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
@@ -170,16 +171,43 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if zvals[k] == 0 {
 				continue
 			}
-			if vals[k] != 0 {
+			if vals[k] == 0 {
+				for j, pos := range ap.Result {
+					if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.GetMheap()); err != nil {
+						rbat.Clean(proc.GetMheap())
+						return err
+					}
+				}
+				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 				continue
 			}
-			for j, pos := range ap.Result {
-				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.GetMheap()); err != nil {
-					rbat.Clean(proc.GetMheap())
-					return err
+			if ap.Cond != nil {
+				flg := true // mark no tuple satisfies the condition
+				sels := mSels[vals[k]-1]
+				for _, sel := range sels {
+					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
+					if err != nil {
+						return err
+					}
+					bs := vec.Col.([]bool)
+					if bs[0] {
+						flg = false
+						vec.Free(proc.Mp)
+						break
+					}
+					vec.Free(proc.Mp)
 				}
+				if !flg {
+					continue
+				}
+				for j, pos := range ap.Result {
+					if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.GetMheap()); err != nil {
+						rbat.Clean(proc.GetMheap())
+						return err
+					}
+				}
+				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 			}
-			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 		}
 	}
 	rbat.ExpandNulls()

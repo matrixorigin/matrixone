@@ -16,6 +16,7 @@ package agg
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -116,6 +117,9 @@ type UnaryAgg[T1, T2 any] struct {
 	//  fifth represents whether it is a new group
 	//  sixth represents whether the value to be fed is null
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool)
+
+	// Optional optimisation function for functions where cgo is used in a single pass.
+	batchFill func(any, any, int64, int64, []uint64, []int64, *nulls.Nulls) error
 }
 
 // UnaryDistAgg generic aggregation function with one input vector and with distinct
