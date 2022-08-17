@@ -1414,7 +1414,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 }
 
 // handlePrepareStmt
-func (mce *MysqlCmdExecutor) handlePrepareStmt(st *tree.PrepareStmt) error {
+func (mce *MysqlCmdExecutor) handlePrepareStmt(st *tree.PrepareStmt) (*PrepareStmt, error) {
 	switch st.Stmt.(type) {
 	case *tree.Update:
 		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
@@ -1423,38 +1423,16 @@ func (mce *MysqlCmdExecutor) handlePrepareStmt(st *tree.PrepareStmt) error {
 	}
 	preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	return mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), &PrepareStmt{
+	prepareStmt := &PrepareStmt{
 		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
 		PreparePlan: preparePlan,
-		PrepareStmt: st.Stmt,
-	})
-}
+		PrepareStmt: st,
+	}
+	err = mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
 
-// handlePrepareString
-func (mce *MysqlCmdExecutor) handlePrepareString(st *tree.PrepareString) error {
-	stmts, err := mysql.Parse(st.Sql)
-	if err != nil {
-		return err
-	}
-	switch stmts[0].(type) {
-	case *tree.Update:
-		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
-	case *tree.Delete:
-		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
-	}
-
-	preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
-	if err != nil {
-		return err
-	}
-	return mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), &PrepareStmt{
-		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
-		PreparePlan: preparePlan,
-		PrepareStmt: stmts[0],
-	})
+	return prepareStmt, err
 }
 
 // handleDeallocate
@@ -1781,6 +1759,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var fromLoadData = false
 	var txnErr error
 	var rspLen uint64
+	var prepareStmt *PrepareStmt
 
 	stmt := cws[0].GetAst()
 	mce.beforeRun(stmt)
@@ -1878,13 +1857,18 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}*/
 		case *tree.PrepareStmt:
 			selfHandle = true
-			err = mce.handlePrepareStmt(st)
+			prepareStmt, err = mce.handlePrepareStmt(st)
 			if err != nil {
 				goto handleFailed
 			}
 		case *tree.PrepareString:
 			selfHandle = true
-			err = mce.handlePrepareString(st)
+			stmts, err := mysql.Parse(st.Sql)
+			if err != nil {
+				goto handleFailed
+			}
+			newSt := tree.NewPrepareStmt(st.Name, stmts[0])
+			prepareStmt, err = mce.handlePrepareStmt(newSt)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2113,7 +2097,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 			case *tree.PrepareStmt, *tree.PrepareString:
 				if mce.ses.Cmd == int(COM_STMT_PREPARE) {
-					//
+					if err := mce.ses.protocol.SendPrepareResponse(prepareStmt); err != nil {
+						return fmt.Errorf("routine send response failed. error:%v ", err)
+					}
 				} else {
 					resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 					if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
@@ -2258,7 +2244,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		stmtName := getPrepareStmtName(stmtID)
 		sql := fmt.Sprintf("deallocate prepare %s", stmtName)
 
-		err := mce.doComQuery(sql)
+		err := mce.doComQuery(requestCtx, sql)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, err)
 		}

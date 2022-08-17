@@ -916,18 +916,8 @@ func Test_HandlePrepareStmt(t *testing.T) {
 	}
 	runTestHandle("handlePrepareStmt", t, func(mce *MysqlCmdExecutor) error {
 		stmt := stmt.(*tree.PrepareStmt)
-		return mce.handlePrepareStmt(stmt)
-	})
-}
-
-func Test_HandlePrepareString(t *testing.T) {
-	stmt, err := parsers.ParseOne(dialect.MYSQL, "prepare stmt1 from 'select 1, 2'")
-	if err != nil {
-		t.Errorf("parser sql error %v", err)
-	}
-	runTestHandle("handlePrepareString", t, func(mce *MysqlCmdExecutor) error {
-		stmt := stmt.(*tree.PrepareString)
-		return mce.handlePrepareString(stmt)
+		_, err := mce.handlePrepareStmt(stmt)
+		return err
 	})
 }
 
