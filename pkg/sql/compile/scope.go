@@ -15,15 +15,14 @@
 package compile
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
@@ -126,6 +125,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 func (s *Scope) ParallelRun(c *Compile) error {
 	var rds []engine.Reader
 
+	if s.IsJoin {
+		return s.JoinRun(c)
+	}
 	if s.DataSource == nil {
 		return s.MergeRun(c)
 	}
@@ -155,154 +157,189 @@ func (s *Scope) ParallelRun(c *Compile) error {
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
-	{
-		var flg bool
+	s = newParallelScope(c, s, ss)
+	return s.MergeRun(c)
+}
 
-		for i, in := range s.Instructions {
-			if flg {
-				break
+func (s *Scope) JoinRun(c *Compile) error {
+	mcpu := s.NodeInfo.Mcpu
+	if mcpu < 1 {
+		mcpu = 1
+	}
+	chp := s.PreScopes[0]
+	chp.IsEnd = true
+	ss := make([]*Scope, mcpu)
+	for i := 0; i < mcpu; i++ {
+		ss[i] = &Scope{
+			Magic: Merge,
+		}
+		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 2, c.anal.Nodes())
+		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
+	}
+	left, right := c.newLeftScope(s, ss), c.newRightScope(s, ss)
+	s = newParallelScope(c, s, ss)
+	s.PreScopes = append(s.PreScopes, chp)
+	s.PreScopes = append(s.PreScopes, left)
+	s.PreScopes = append(s.PreScopes, right)
+	return s.MergeRun(c)
+}
+
+func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
+	var flg bool
+
+	for i, in := range s.Instructions {
+		if flg {
+			break
+		}
+		switch in.Op {
+		case vm.Top:
+			flg = true
+			arg := in.Arg.(*top.Argument)
+			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+			s.Instructions[0] = vm.Instruction{
+				Op:  vm.MergeTop,
+				Idx: in.Idx,
+				Arg: &mergetop.Argument{
+					Fs:    arg.Fs,
+					Limit: arg.Limit,
+				},
 			}
-			switch in.Op {
-			case vm.Top:
-				flg = true
-				arg := in.Arg.(*top.Argument)
-				s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
-				s.Instructions[0] = vm.Instruction{
-					Op:  vm.MergeTop,
+			for i := range ss {
+				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+					Op:  vm.Top,
 					Idx: in.Idx,
-					Arg: &mergetop.Argument{
+					Arg: &top.Argument{
 						Fs:    arg.Fs,
 						Limit: arg.Limit,
 					},
-				}
-				for i := range ss {
-					ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-						Op:  vm.Top,
-						Idx: in.Idx,
-						Arg: &top.Argument{
-							Fs:    arg.Fs,
-							Limit: arg.Limit,
-						},
-					})
-				}
-			case vm.Order:
-				flg = true
-				arg := in.Arg.(*order.Argument)
-				s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
-				s.Instructions[0] = vm.Instruction{
-					Op:  vm.MergeOrder,
+				})
+			}
+		case vm.Order:
+			flg = true
+			arg := in.Arg.(*order.Argument)
+			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+			s.Instructions[0] = vm.Instruction{
+				Op:  vm.MergeOrder,
+				Idx: in.Idx,
+				Arg: &mergeorder.Argument{
+					Fs: arg.Fs,
+				},
+			}
+			for i := range ss {
+				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+					Op:  vm.Order,
 					Idx: in.Idx,
-					Arg: &mergeorder.Argument{
+					Arg: &order.Argument{
 						Fs: arg.Fs,
 					},
-				}
-				for i := range ss {
-					ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-						Op:  vm.Order,
-						Idx: in.Idx,
-						Arg: &order.Argument{
-							Fs: arg.Fs,
-						},
-					})
-				}
-			case vm.Limit:
-				flg = true
-				arg := in.Arg.(*limit.Argument)
-				s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
-				s.Instructions[0] = vm.Instruction{
-					Op:  vm.MergeLimit,
+				})
+			}
+		case vm.Limit:
+			flg = true
+			arg := in.Arg.(*limit.Argument)
+			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+			s.Instructions[0] = vm.Instruction{
+				Op:  vm.MergeLimit,
+				Idx: in.Idx,
+				Arg: &mergelimit.Argument{
+					Limit: arg.Limit,
+				},
+			}
+			for i := range ss {
+				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+					Op:  vm.Limit,
 					Idx: in.Idx,
-					Arg: &mergelimit.Argument{
+					Arg: &limit.Argument{
 						Limit: arg.Limit,
 					},
-				}
-				for i := range ss {
-					ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-						Op:  vm.Limit,
-						Idx: in.Idx,
-						Arg: &limit.Argument{
-							Limit: arg.Limit,
-						},
-					})
-				}
-			case vm.Group:
-				flg = true
-				arg := in.Arg.(*group.Argument)
-				s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
-				s.Instructions[0] = vm.Instruction{
-					Op: vm.MergeGroup,
-					Arg: &mergegroup.Argument{
-						NeedEval: false,
+				})
+			}
+		case vm.Group:
+			flg = true
+			arg := in.Arg.(*group.Argument)
+			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+			s.Instructions[0] = vm.Instruction{
+				Op: vm.MergeGroup,
+				Arg: &mergegroup.Argument{
+					NeedEval: false,
+				},
+			}
+			for i := range ss {
+				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+					Op: vm.Group,
+					Arg: &group.Argument{
+						Aggs:  arg.Aggs,
+						Exprs: arg.Exprs,
+						Types: arg.Types,
 					},
-				}
-				for i := range ss {
-					ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-						Op: vm.Group,
-						Arg: &group.Argument{
-							Aggs:  arg.Aggs,
-							Exprs: arg.Exprs,
-							Types: arg.Types,
-						},
-					})
-				}
-			case vm.Offset:
-				flg = true
-				arg := in.Arg.(*offset.Argument)
-				s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
-				s.Instructions[0] = vm.Instruction{
-					Op: vm.MergeOffset,
-					Arg: &mergeoffset.Argument{
+				})
+			}
+		case vm.Offset:
+			flg = true
+			arg := in.Arg.(*offset.Argument)
+			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+			s.Instructions[0] = vm.Instruction{
+				Op: vm.MergeOffset,
+				Arg: &mergeoffset.Argument{
+					Offset: arg.Offset,
+				},
+			}
+			for i := range ss {
+				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+					Op: vm.Offset,
+					Arg: &offset.Argument{
 						Offset: arg.Offset,
 					},
-				}
-				for i := range ss {
-					ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-						Op: vm.Offset,
-						Arg: &offset.Argument{
-							Offset: arg.Offset,
-						},
-					})
-				}
-			default:
-				for i := range ss {
-					ss[i].Instructions = append(ss[i].Instructions, dupInstruction(in))
-				}
+				})
 			}
-		}
-		if !flg {
+		default:
 			for i := range ss {
-				ss[i].Instructions = ss[i].Instructions[:len(ss[i].Instructions)-1]
+				ss[i].Instructions = append(ss[i].Instructions, dupInstruction(in))
 			}
-			s.Instructions[0] = vm.Instruction{
-				Op:  vm.Merge,
-				Arg: &merge.Argument{},
-			}
-			s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
-			s.Instructions = s.Instructions[:2]
 		}
 	}
-	ctx, cancel := context.WithCancel(c.ctx)
+	if !flg {
+		for i := range ss {
+			ss[i].Instructions = ss[i].Instructions[:len(ss[i].Instructions)-1]
+		}
+		s.Instructions[0] = vm.Instruction{
+			Op:  vm.Merge,
+			Arg: &merge.Argument{},
+		}
+		s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
+		s.Instructions = s.Instructions[:2]
+	}
 	s.Magic = Merge
 	s.PreScopes = ss
-	s.Proc.Cancel = cancel
-	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
+	cnt := 0
+	for _, s := range ss {
+		if s.IsEnd {
+			continue
+		}
+		cnt++
+	}
+	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, cnt)
 	{
-		for i := 0; i < len(ss); i++ {
+		for i := 0; i < cnt; i++ {
 			s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
-				Ctx: ctx,
+				Ctx: s.Proc.Ctx,
 				Ch:  make(chan *batch.Batch, 1),
 			}
 		}
 	}
+	j := 0
 	for i := range ss {
-		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Reg: s.Proc.Reg.MergeReceivers[i],
-			},
-		})
+		if !ss[i].IsEnd {
+			ss[i].appendInstruction(vm.Instruction{
+				Op: vm.Connector,
+				Arg: &connector.Argument{
+					Reg: s.Proc.Reg.MergeReceivers[i],
+				},
+			})
+			j++
+		}
 	}
-	return s.MergeRun(c)
+	return s
 }
 
 func (s *Scope) appendInstruction(in vm.Instruction) {
