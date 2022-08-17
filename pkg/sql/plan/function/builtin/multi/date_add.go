@@ -162,7 +162,7 @@ func TimeStampAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 		}
 		resultVector := proc.AllocScalarVector(resultType)
 		rs := make([]types.Timestamp, 1)
-		res, err := date_add.TimestampAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
+		res, err := date_add.TimestampAdd(proc.SessionInfo.TimeZone, firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	} else {
@@ -179,7 +179,7 @@ func TimeStampAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 		resultValues := types.DecodeTimestampSlice(resultVector.Data)
 		resultValues = resultValues[:maxLen]
 		nulls.Set(resultVector.Nsp, firstVector.Nsp)
-		resultValues, err = date_add.TimestampAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
+		resultValues, err = date_add.TimestampAdd(proc.SessionInfo.TimeZone, firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, err
 	}

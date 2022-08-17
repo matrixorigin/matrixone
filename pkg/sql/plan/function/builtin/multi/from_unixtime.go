@@ -35,7 +35,7 @@ func FromUnixTime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, e
 			nulls.Add(inVec.Nsp, 0)
 		}
 		nulls.Set(vec.Nsp, inVec.Nsp)
-		vector.SetCol(vec, fromunixtime.UnixToDatetime(times, rs))
+		vector.SetCol(vec, fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, times, rs))
 		return vec, nil
 	}
 	vec, err := proc.AllocVector(types.Type{Oid: types.T_datetime, Size: int32(size)}, int64(len(times))*int64(size))
@@ -49,7 +49,7 @@ func FromUnixTime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		}
 	}
 	nulls.Set(vec.Nsp, inVec.Nsp)
-	vector.SetCol(vec, fromunixtime.UnixToDatetime(times, rs))
+	vector.SetCol(vec, fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, times, rs))
 	return vec, nil
 }
 
@@ -74,7 +74,7 @@ func FromUnixTimeUint64(lv []*vector.Vector, proc *process.Process) (*vector.Vec
 			nulls.Add(inVec.Nsp, 0)
 		}
 		nulls.Set(vec.Nsp, inVec.Nsp)
-		vector.SetCol(vec, fromunixtime.UnixToDatetime(uint64ToInt64(times), rs))
+		vector.SetCol(vec, fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, uint64ToInt64(times), rs))
 		return vec, nil
 	}
 	vec, err := proc.AllocVector(types.Type{Oid: types.T_datetime, Size: int32(size)}, int64(len(times))*int64(size))
@@ -88,7 +88,7 @@ func FromUnixTimeUint64(lv []*vector.Vector, proc *process.Process) (*vector.Vec
 		}
 	}
 	nulls.Set(vec.Nsp, inVec.Nsp)
-	vector.SetCol(vec, fromunixtime.UnixToDatetime(uint64ToInt64(times), rs))
+	vector.SetCol(vec, fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, uint64ToInt64(times), rs))
 	return vec, nil
 }
 
@@ -113,7 +113,7 @@ func FromUnixTimeFloat64(lv []*vector.Vector, proc *process.Process) (*vector.Ve
 			nulls.Add(inVec.Nsp, 0)
 		}
 		nulls.Set(vec.Nsp, inVec.Nsp)
-		vector.SetCol(vec, fromunixtime.UnixToDatetime(float64Toint64(times), rs))
+		vector.SetCol(vec, fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, float64Toint64(times), rs))
 		return vec, nil
 	}
 	vec, err := proc.AllocVector(types.Type{Oid: types.T_datetime, Size: int32(size)}, int64(len(times))*int64(size))
@@ -127,6 +127,14 @@ func FromUnixTimeFloat64(lv []*vector.Vector, proc *process.Process) (*vector.Ve
 		}
 	}
 	nulls.Set(vec.Nsp, inVec.Nsp)
-	vector.SetCol(vec, fromunixtime.UnixToDatetime(float64Toint64(times), rs))
+	vector.SetCol(vec, fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, float64Toint64(times), rs))
 	return vec, nil
+}
+
+func MustDatetime(s string) types.Datetime {
+	dt, err := types.ParseDatetime(s, 6)
+	if err != nil {
+		panic("bad datetime")
+	}
+	return dt
 }

@@ -14,19 +14,23 @@
 
 package fromunixtime
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
 
 var (
-	UnixToDatetime func([]int64, []types.Datetime) []types.Datetime
+	UnixToDatetime func(*time.Location, []int64, []types.Datetime) []types.Datetime
 )
 
 func init() {
 	UnixToDatetime = unixToDatetime
 }
 
-func unixToDatetime(xs []int64, rs []types.Datetime) []types.Datetime {
+func unixToDatetime(loc *time.Location, xs []int64, rs []types.Datetime) []types.Datetime {
 	for i := range xs {
-		rs[i] = types.FromUnix(xs[i])
+		rs[i] = types.FromUnix(loc, xs[i])
 	}
 	return rs
 }

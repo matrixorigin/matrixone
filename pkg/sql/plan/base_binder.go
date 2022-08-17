@@ -823,6 +823,14 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				return nil, err
 			}
 		}
+	case "like":
+		// sql 'select * from t where col like ?'  the ? Expr's type will be T_any
+		if args[0].Typ.Id == int32(types.T_any) {
+			args[0].Typ.Id = int32(types.T_varchar)
+		}
+		if args[1].Typ.Id == int32(types.T_any) {
+			args[1].Typ.Id = int32(types.T_varchar)
+		}
 	}
 
 	// get args(exprs) & types
@@ -1023,22 +1031,8 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_bit:
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_char:
-		if typ != nil && typ.Id == int32(types.T_timestamp) {
-			val, err := types.ParseTimestamp(astExpr.String(), typ.Precision)
-			if err != nil {
-				return nil, err
-			}
-			return &Expr{
-				Expr: &plan.Expr_C{
-					C: &Const{
-						Isnull: false,
-						Value: &plan.Const_Timestampval{
-							Timestampval: int64(val),
-						},
-					},
-				},
-				Typ: typ,
-			}, nil
+		if typ != nil && typ.Id != int32(types.T_char) && typ.Id != int32(types.T_varchar) {
+			return appendCastBeforeExpr(getStringExpr(astExpr.String()), typ)
 		}
 		expr := getStringExpr(astExpr.String())
 		return expr, nil

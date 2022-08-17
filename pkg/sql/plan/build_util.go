@@ -17,15 +17,14 @@ package plan
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 )
 
 func appendQueryNode(query *Query, node *Node) int32 {
@@ -150,14 +149,16 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 	}
 
 	// try to calculate default value, return err if fails
-	r := rule.NewConstantFlod()
-	if _, err := colexec.EvalExpr(r.GetBatch(), nil, defaultExpr); err != nil {
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	newExpr, err := ConstantFold(bat, DeepCopyExpr(defaultExpr))
+	if err != nil {
 		return nil, err
 	}
 
 	return &plan.Default{
 		NullAbility:  nullAbility,
-		Expr:         defaultExpr,
+		Expr:         newExpr,
 		OriginString: tree.String(expr, dialect.MYSQL),
 	}, nil
 }

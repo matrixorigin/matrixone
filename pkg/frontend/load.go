@@ -19,11 +19,6 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/simdcsv"
 	"math"
 	"os"
 	"runtime"
@@ -32,6 +27,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/simdcsv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -236,7 +237,7 @@ func (plh *ParseLineHandler) getLineOutCallback(lineOut simdcsv.LineOut) error {
 	}
 	if lineOut.Line != nil {
 		//step 1 : skip dropped lines
-		if plh.lineCount < plh.load.IgnoredLines {
+		if plh.lineCount < plh.load.Param.Tail.IgnoredLines {
 			plh.lineCount++
 			return nil
 		}
@@ -277,7 +278,6 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 	var lineOut simdcsv.LineOut
 	var status bool
 	for {
-		fmt.Println("11111111")
 		quit := false
 		select {
 		case <-plh.loadCtx.Done():
@@ -289,19 +289,16 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 			}
 		}
 
-		fmt.Println("xxxxxx")
-		fmt.Println(lineOut)
 		if quit {
 			break
 		}
 		wait_d := time.Now()
 		if lineOut.Line == nil && lineOut.Lines == nil {
-			fmt.Println("tttttttttt")
 			break
 		}
 		if lineOut.Line != nil {
 			//step 1 : skip dropped lines
-			if plh.lineCount < plh.load.IgnoredLines {
+			if plh.lineCount < plh.load.Param.Tail.IgnoredLines {
 				plh.lineCount++
 				continue
 			}
@@ -465,14 +462,14 @@ func initParseLineHandler(requestCtx context.Context, handler *ParseLineHandler)
 
 	//define the peer column for LOAD DATA's column list.
 	var dataColumnId2TableColumnId []int
-	if len(load.ColumnList) == 0 {
+	if len(load.Param.Tail.ColumnList) == 0 {
 		dataColumnId2TableColumnId = make([]int, len(cols))
 		for i := 0; i < len(cols); i++ {
 			dataColumnId2TableColumnId[i] = i
 		}
 	} else {
-		dataColumnId2TableColumnId = make([]int, len(load.ColumnList))
-		for i, col := range load.ColumnList {
+		dataColumnId2TableColumnId = make([]int, len(load.Param.Tail.ColumnList))
+		for i, col := range load.Param.Tail.ColumnList {
 			switch realCol := col.(type) {
 			case *tree.UnresolvedName:
 				tid, ok := tableName2ColumnId[realCol.Parts[0]]
@@ -688,7 +685,6 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 			rowIdx := batchBegin + i
 			offset := i + 1
 			base := handler.lineCount - uint64(fetchCnt)
-			//fmt.Println(line)
 			//logutil.Infof("------ linecount %d fetchcnt %d base %d offset %d",
 			//	handler.lineCount,fetchCnt,base,offset)
 			//record missing column
@@ -1008,7 +1004,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 						cols[rowIdx] = d
 					}
-				case types.T_char, types.T_varchar, types.T_json:
+				case types.T_char, types.T_varchar:
 					vBytes := vec.Col.(*types.Bytes)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -1018,6 +1014,25 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
 						vBytes.Data = append(vBytes.Data, field...)
 						vBytes.Lengths[rowIdx] = uint32(len(field))
+					}
+				case types.T_json:
+					vBytes := vec.Col.(*types.Bytes)
+					if isNullOrEmpty {
+						nulls.Add(vec.Nsp, uint64(rowIdx))
+						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
+						vBytes.Lengths[rowIdx] = uint32(len(field))
+					} else {
+						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
+						json, err := types.ParseStringToByteJson(field)
+						if err != nil {
+							return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+						}
+						jsonBytes, err := types.EncodeJson(json)
+						if err != nil {
+							return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+						}
+						vBytes.Data = append(vBytes.Data, jsonBytes...)
+						vBytes.Lengths[rowIdx] = uint32(len(jsonBytes))
 					}
 				case types.T_date:
 					cols := vec.Col.([]types.Date)
@@ -1099,7 +1114,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
 						fs := field
-						d, err := types.ParseTimestamp(fs, vec.Typ.Precision)
+						d, err := types.ParseTimestamp(handler.ses.timeZone, fs, vec.Typ.Precision)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
@@ -1498,7 +1513,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						cols[i] = d
 					}
 				}
-			case types.T_char, types.T_varchar, types.T_json:
+			case types.T_char, types.T_varchar:
 				vBytes := vec.Col.(*types.Bytes)
 				//row
 				for i := 0; i < countOfLineArray; i++ {
@@ -1512,6 +1527,41 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						vBytes.Offsets[i] = uint32(len(vBytes.Data))
 						vBytes.Data = append(vBytes.Data, field...)
 						vBytes.Lengths[i] = uint32(len(field))
+					}
+				}
+			case types.T_json:
+				vBytes := vec.Col.(*types.Bytes)
+				//row
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						nulls.Add(vec.Nsp, uint64(i))
+						vBytes.Offsets[i] = uint32(len(vBytes.Data))
+						vBytes.Lengths[i] = uint32(len(line[j]))
+					} else {
+						field := line[j]
+						vBytes.Offsets[i] = uint32(len(vBytes.Data))
+						//vBytes.Data = append(vBytes.Data, field...)
+						json, err := types.ParseStringToByteJson(field)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return err
+							}
+							result.Warnings++
+							//break
+						}
+						jsonBytes, err := types.EncodeJson(json)
+						if err != nil {
+							logutil.Errorf("encode field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return err
+							}
+							result.Warnings++
+							//break
+						}
+						vBytes.Data = append(vBytes.Data, jsonBytes...)
+						vBytes.Lengths[i] = uint32(len(jsonBytes))
 					}
 				}
 			case types.T_date:
@@ -1612,7 +1662,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					} else {
 						field := line[j]
 						//logutil.Infof("==== > field string [%s] ",fs)
-						d, err := types.ParseTimestamp(field, vec.Typ.Precision)
+						d, err := types.ParseTimestamp(handler.ses.timeZone, field, vec.Typ.Precision)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
@@ -2010,7 +2060,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 	/*
 		step1 : read block from file
 	*/
-	dataFile, err := os.Open(load.File)
+	dataFile, err := os.Open(load.Param.Filepath)
 	if err != nil {
 		logutil.Errorf("open file failed. err:%v", err)
 		return nil, err
@@ -2077,9 +2127,9 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 	notifyChanSize = Max(100, notifyChanSize)
 
 	handler.simdCsvReader = simdcsv.NewReaderWithOptions(dataFile,
-		rune(load.Fields.Terminated[0]),
+		rune(load.Param.Tail.Fields.Terminated[0]),
 		'#',
-		false,
+		true,
 		false)
 
 	/*
@@ -2106,30 +2156,12 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 	wg := sync.WaitGroup{}
 
 	/*
-		read from the output channel of the simdcsv parser, make a batch,
-		deliver it to async routine writing batch
-	*/
-	//wg.Add(1)
-	//go func() {
-	//	defer wg.Done()
-	//	fmt.Println("ccccccccc")
-	//	//TODO:remove it
-	//	err := handler.getLineOutFromSimdCsvRoutine()
-	//	fmt.Println("ddddddddd")
-	//	if err != nil {
-	//		logutil.Errorf("get line from simdcsv failed. err:%v", err)
-	//		handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_OUTPUT_SIMDCSV_ERROR, err, nil)
-	//	}
-	//}()
-
-	/*
 		get lines from simdcsv, deliver them to the output channel.
 	*/
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		wait_b := time.Now()
-		fmt.Println("aaaaaaaaaa")
 		//TODO: add a output callback
 		//TODO: remove the channel
 		err = handler.simdCsvReader.ReadLoop(requestCtx, nil, handler.getLineOutCallback)
@@ -2139,7 +2171,6 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 			logutil.Errorf("get line from simdcsv failed. err:%v", err)
 			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_OUTPUT_SIMDCSV_ERROR, err, nil)
 		}
-		fmt.Println("bbbbbbbbbb")
 		if err != nil {
 			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_READ_SIMDCSV_ERROR, err, nil)
 		}

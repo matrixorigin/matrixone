@@ -395,9 +395,9 @@ SELECT * FROM t1 WHERE NOT EXISTS
 (SELECT i FROM t1) UNION
 (SELECT i FROM t1)
 );
-'union' will be supported in future version.
+i
 SELECT * FROM t1 WHERE NOT EXISTS (((SELECT i FROM t1) UNION (SELECT i FROM t1)));
-'union' will be supported in future version.
+i
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -436,7 +436,9 @@ SELECT 2 FROM t1 WHERE EXISTS ((SELECT 1 FROM t2 WHERE t1.a=t2.a));
 2
 2
 SELECT 2 FROM t1 WHERE EXISTS ((SELECT 1 FROM t2 WHERE t1.a=t2.a) UNION (SELECT 1 FROM t2 WHERE t1.a = t2.a));
-'union' will be supported in future version.
+2
+2
+2
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t1;
