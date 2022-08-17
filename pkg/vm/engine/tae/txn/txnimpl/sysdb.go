@@ -15,21 +15,34 @@
 package txnimpl
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
 
 var sysTableNames map[string]bool
 
+// any tenant is able to see these db, but access them is required to be upgraded as Sys tenant in a tricky way.
+// this can be done in frontend
+var sysSharedDBNames map[string]bool
+
 func init() {
 	sysTableNames = make(map[string]bool)
 	sysTableNames[catalog.SystemTable_Columns_Name] = true
 	sysTableNames[catalog.SystemTable_Table_Name] = true
 	sysTableNames[catalog.SystemTable_DB_Name] = true
+
+	sysSharedDBNames = make(map[string]bool)
+	sysSharedDBNames[catalog.SystemDBName] = true
+	sysSharedDBNames[metric.MetricDBConst] = true
 }
 
 func isSysTable(name string) bool {
 	return sysTableNames[name]
+}
+
+func isSysSharedDB(name string) bool {
+	return sysSharedDBNames[name]
 }
 
 func buildDB(db *txnDB) handle.Database {

@@ -117,7 +117,7 @@ func (c *metricCollector) SendMetrics(ctx context.Context, mfs []*pb.MetricFamil
 
 func (c *metricCollector) NewItemBatchHandler(ctx context.Context) func(batch string) {
 	exec := c.ieFactory()
-	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(metricDBConst).Internal(true).Finish())
+	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(MetricDBConst).Internal(true).Finish())
 	return func(batch string) {
 		if err := exec.Exec(ctx, batch, ie.NewOptsBuilder().Finish()); err != nil {
 			logutil.Errorf("[Trace] insert error. sql: %s; err: %v", batch, err)
@@ -183,7 +183,7 @@ func (s *mfset) IsEmpty() bool {
 // used to mitigate memory allocation
 func (s *mfset) GetBatch(buf *bytes.Buffer) string {
 	buf.Reset()
-	buf.WriteString(fmt.Sprintf("insert into %s.%s values ", metricDBConst, s.mfs[0].GetName()))
+	buf.WriteString(fmt.Sprintf("insert into %s.%s values ", MetricDBConst, s.mfs[0].GetName()))
 	lblsBuf := new(bytes.Buffer)
 	writeValues := func(t string, v float64, lbls string) {
 		buf.WriteString("(")
