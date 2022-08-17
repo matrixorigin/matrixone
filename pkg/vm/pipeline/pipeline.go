@@ -95,10 +95,14 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, erro
 	}
 	bat.Cnt = 1
 	// processing the batch according to the instructions
-	proc.Reg.InputBatch = bat
-	end, err = vm.Run(p.instructions, proc)
-	proc.Reg.InputBatch = nil
-	_, _ = vm.Run(p.instructions, proc)
+	for {
+		proc.Reg.InputBatch = bat
+		end, err = vm.Run(p.instructions, proc)
+		proc.Reg.InputBatch = nil
+		if end2, err2 := vm.Run(p.instructions, proc); err2 != nil || end2 {
+			break
+		}
+	}
 	return end, err
 }
 

@@ -18,6 +18,9 @@ import (
 	"bufio"
 	"os"
 	"strconv"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
 // update statement
@@ -98,14 +101,41 @@ func NewUpdateExpr(t bool, n []*UnresolvedName, e Expr) *UpdateExpr {
 	}
 }
 
-// Load data statement
-type Load struct {
-	statementImpl
-	Local             bool
-	File              string
-	DuplicateHandling DuplicateKey
-	Table             *TableName
-	//Partition
+const (
+	LOCAL = iota
+	S3
+	MinIO
+)
+
+const (
+	AUTO       = "auto"
+	NOCOMPRESS = "none"
+	GZIP       = "gzip"
+	BZIP2      = "bz2"
+	FLATE      = "flate"
+	LZW        = "lzw"
+	ZLIB       = "zlib"
+	LZ4        = "lz4"
+)
+
+type ExternParam struct {
+	ScanType     int
+	Filepath     string
+	CompressType string
+	Tail         *TailParameter
+	S3Param      *S3Parameter
+	S3option     []string
+}
+
+type S3Parameter struct {
+	//s3 parameter
+	Config    fileservice.S3Config
+	Region    string
+	APIKey    string
+	APISecret string
+}
+
+type TailParameter struct {
 	//Fields
 	Fields *Fields
 	//Lines
@@ -118,13 +148,34 @@ type Load struct {
 	Assignments UpdateExprs
 }
 
+// Load data statement
+type Load struct {
+	statementImpl
+	Local             bool
+	DuplicateHandling DuplicateKey
+	Table             *TableName
+	//Partition
+	Param *ExternParam
+}
+
 func (node *Load) Format(ctx *FmtCtx) {
 	ctx.WriteString("load data")
 	if node.Local {
 		ctx.WriteString(" local")
 	}
-	ctx.WriteString(" infile ")
-	ctx.WriteString(node.File)
+
+	if node.Param.ScanType == LOCAL && (node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS) {
+		ctx.WriteString(" infile ")
+		ctx.WriteString(node.Param.Filepath)
+	} else if node.Param.ScanType == LOCAL {
+		ctx.WriteString(" infile ")
+		ctx.WriteString("{'filepath':'" + node.Param.Filepath + "', 'compression':'" + strings.ToLower(node.Param.CompressType) + "'}")
+	} else {
+		ctx.WriteString(" url s3option ")
+		ctx.WriteString("{'endpoint'='" + node.Param.S3option[0] + "', 'access_key_id'='" + node.Param.S3option[3] +
+			"', 'secret_access_key'='" + node.Param.S3option[5] + "', 'bucket'='" + node.Param.S3option[7] + "', 'filepath'='" +
+			node.Param.S3option[9] + "', 'region'='" + node.Param.S3option[11] + "'}")
+	}
 
 	switch node.DuplicateHandling.(type) {
 	case *DuplicateKeyError:
@@ -137,49 +188,33 @@ func (node *Load) Format(ctx *FmtCtx) {
 	ctx.WriteString(" into table ")
 	node.Table.Format(ctx)
 
-	if node.Fields != nil {
+	if node.Param.Tail.Fields != nil {
 		ctx.WriteByte(' ')
-		node.Fields.Format(ctx)
+		node.Param.Tail.Fields.Format(ctx)
 	}
 
-	if node.Lines != nil {
+	if node.Param.Tail.Lines != nil {
 		ctx.WriteByte(' ')
-		node.Lines.Format(ctx)
+		node.Param.Tail.Lines.Format(ctx)
 	}
 
-	if node.IgnoredLines != 0 {
+	if node.Param.Tail.IgnoredLines != 0 {
 		ctx.WriteString(" ignore ")
-		ctx.WriteString(strconv.FormatUint(node.IgnoredLines, 10))
+		ctx.WriteString(strconv.FormatUint(node.Param.Tail.IgnoredLines, 10))
 		ctx.WriteString(" lines")
 	}
-	if node.ColumnList != nil {
+	if node.Param.Tail.ColumnList != nil {
 		prefix := " ("
-		for _, c := range node.ColumnList {
+		for _, c := range node.Param.Tail.ColumnList {
 			ctx.WriteString(prefix)
 			c.Format(ctx)
 			prefix = ", "
 		}
 		ctx.WriteByte(')')
 	}
-	if node.Assignments != nil {
+	if node.Param.Tail.Assignments != nil {
 		ctx.WriteString(" set ")
-		node.Assignments.Format(ctx)
-	}
-}
-
-func NewLoad(l bool, f string, d DuplicateKey, t *TableName,
-	fie *Fields, li *Lines, il uint64, cl []LoadColumn,
-	a UpdateExprs) *Load {
-	return &Load{
-		Local:             l,
-		File:              f,
-		DuplicateHandling: d,
-		Table:             t,
-		Fields:            fie,
-		Lines:             li,
-		IgnoredLines:      il,
-		ColumnList:        cl,
-		Assignments:       a,
+		node.Param.Tail.Assignments.Format(ctx)
 	}
 }
 

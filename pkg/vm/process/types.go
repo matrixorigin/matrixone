@@ -71,6 +71,7 @@ type SessionInfo struct {
 	ConnectionID uint64
 	Database     string
 	Version      string
+	TimeZone     *time.Location
 }
 
 // AnalyzeInfo  analyze information for query
