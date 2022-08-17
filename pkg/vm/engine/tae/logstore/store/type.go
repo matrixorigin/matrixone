@@ -19,10 +19,10 @@ import (
 )
 
 const (
-	GroupC = entry.GTCustomizedStart + iota
-	GroupCKP
-	GroupInternal
-	GroupUC
+	GroupC        = entry.GTCommit
+	GroupCKP      = entry.GTCKp
+	GroupInternal = entry.GTInternal
+	GroupUC       = entry.GTUncommit
 )
 
 type Store interface {

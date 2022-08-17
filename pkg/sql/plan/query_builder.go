@@ -661,6 +661,14 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 		return 0, err
 	}
 
+	if len(selectStmts) == 1 {
+		if slt, ok := selectStmts[0].(*tree.Select); ok {
+			return builder.buildSelect(slt, ctx, false)
+		} else {
+			return builder.buildSelect(&tree.Select{Select: selectStmts[0]}, ctx, false)
+		}
+	}
+
 	// build selects
 	var projectTypList [][]types.Type
 	selectStmtLength := len(selectStmts)
@@ -1898,7 +1906,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 		joinSides := make([]int8, len(filters))
 
 		for i, filter := range filters {
-			canTurnInner := false
+			canTurnInner := true
 
 			joinSides[i] = getJoinSide(filter, leftTags, rightTags)
 			if f, ok := filter.Expr.(*plan.Expr_F); ok {
@@ -2089,14 +2097,6 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 
 	if node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_ANTI {
 		return nodeID
-	}
-
-	for _, filter := range node.OnList {
-		if f, ok := filter.Expr.(*plan.Expr_F); ok {
-			if f.F.Func.ObjName != "=" {
-				return nodeID
-			}
-		}
 	}
 
 	var targetNode *plan.Node
