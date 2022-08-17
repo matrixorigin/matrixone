@@ -25,6 +25,8 @@ import (
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 )
 
+const defaultDatabase = "db"
+
 type testEnv struct {
 	txnClient client.TxnClient
 	engine    *txnengine.Engine
@@ -42,7 +44,7 @@ func (t *testEnv) Close() error {
 	return nil
 }
 
-func newEnv() *testEnv {
+func newEnv(ctx context.Context) (*testEnv, error) {
 	env := &testEnv{}
 
 	sender := &Sender{
@@ -74,5 +76,14 @@ func newEnv() *testEnv {
 		},
 	)
 
-	return env
+	// create default database
+	op := env.txnClient.New()
+	if err := env.engine.Create(ctx, defaultDatabase, op); err != nil {
+		return nil, err
+	}
+	if err := op.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	return env, nil
 }

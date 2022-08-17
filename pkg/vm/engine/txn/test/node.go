@@ -21,8 +21,10 @@ import (
 	"github.com/google/uuid"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	txnstorage "github.com/matrixorigin/matrixone/pkg/txn/storage/txn"
+	"go.uber.org/zap"
 )
 
 type Node struct {
@@ -44,7 +46,7 @@ func (t *testEnv) NewNode(id uint64) *Node {
 	}
 
 	storage, err := txnstorage.New(
-		txnstorage.NewMemHandler(),
+		txnstorage.NewMemHandler(testutil.NewMheap()),
 	)
 	if err != nil {
 		panic(err)
@@ -56,8 +58,21 @@ func (t *testEnv) NewNode(id uint64) *Node {
 		State:          logservicepb.NormalState,
 	}
 
+	loggerConfig := zap.Config{
+		Level:            zap.NewAtomicLevelAt(zap.InfoLevel),
+		Development:      true,
+		Encoding:         "console",
+		EncoderConfig:    zap.NewDevelopmentEncoderConfig(),
+		OutputPaths:      []string{"stderr"},
+		ErrorOutputPaths: []string{"stderr"},
+	}
+	logger, err := loggerConfig.Build()
+	if err != nil {
+		panic(err)
+	}
+
 	service := service.NewTxnService(
-		nil,
+		logger,
 		shard,
 		storage,
 		t.sender,
