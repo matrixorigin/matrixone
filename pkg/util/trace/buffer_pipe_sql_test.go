@@ -66,7 +66,7 @@ func setup() {
 	errors.SetErrorReporter(noopReportError)
 
 	sc := SpanFromContext(DefaultContext()).SpanContext()
-	nodeStateSpanIdStr = fmt.Sprintf("%d, %d", sc.TraceID, sc.SpanID)
+	nodeStateSpanIdStr = fmt.Sprintf(`"%s", "%s"`, sc.TraceID.String(), sc.SpanID.String())
 
 	if err := agent.Listen(agent.Options{}); err != nil {
 		_ = fmt.Errorf("listen gops agent failed: %s", err)
@@ -145,374 +145,13 @@ func Test_batchSqlHandler_NewItemBuffer_Check_genBatchFunc(t1 *testing.T) {
 	}
 }
 
-func Test_batchSqlHandler_genErrorBatchSql(t1 *testing.T) {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
-	type args struct {
-		in  []IBuffer2SqlItem
-		buf *bytes.Buffer
-	}
-	buf := new(bytes.Buffer)
-	newCtx, span := Start(DefaultContext(), "Test_batchSqlHandler_genErrorBatchSql")
-	defer span.End()
-	sc := SpanFromContext(newCtx).SpanContext()
-	newStatementSpanIdStr := fmt.Sprintf("%d, %d", sc.TraceID, sc.SpanID)
-	tests := []struct {
-		name string
-		args args
-		want string
-	}{
-		{
-			name: "single_error",
-			args: args{
-				in: []IBuffer2SqlItem{
-					&MOErrorHolder{Error: err1, Timestamp: uint64(0)},
-				},
-				buf: buf,
-			},
-			want: `insert into system.error_info (` +
-				"`statement_id`, `span_id`, `node_id`, `node_type`, `err_code`, `stack`, `timestamp`" +
-				`) values (` + nodeStateSpanIdStr + `, 0, "Node", "test1", "test1", "1970-01-01 00:00:00.000000")`,
-		},
-		{
-			name: "multi_error",
-			args: args{
-				in: []IBuffer2SqlItem{
-					&MOErrorHolder{Error: err1, Timestamp: uint64(0)},
-					&MOErrorHolder{Error: err2, Timestamp: uint64(time.Millisecond + time.Microsecond)},
-					&MOErrorHolder{Error: errors.WithContext(newCtx, err2),
-						Timestamp: uint64(time.Millisecond + time.Microsecond)},
-				},
-				buf: buf,
-			},
-			want: `insert into system.error_info (` +
-				"`statement_id`, `span_id`, `node_id`, `node_type`, `err_code`, `stack`, `timestamp`" +
-				`) values (` + nodeStateSpanIdStr + `, 0, "Node", "test1", "test1", "1970-01-01 00:00:00.000000")` +
-				`,(` + nodeStateSpanIdStr + `, 0, "Node", "test2: test1", "test2: test1", "1970-01-01 00:00:00.001001")` +
-				`,(` + newStatementSpanIdStr + `, 0, "Node", "test2: test1", "test2: test1", "1970-01-01 00:00:00.001001")`,
-		},
-	}
-	errorFormatter.Store("%v")
-	for _, tt := range tests {
-		t1.Run(tt.name, func(t1 *testing.T) {
-			if got := genErrorBatchSql(tt.args.in, tt.args.buf); got != tt.want {
-				t1.Errorf("genErrorBatchSql() = %v,\n want %v", got, tt.want)
-			} else {
-				t1.Logf("SQL: %s", got)
-			}
-		})
-	}
-}
-
-func Test_batchSqlHandler_genZapBatchSql(t1 *testing.T) {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
-	type args struct {
-		in  []IBuffer2SqlItem
-		buf *bytes.Buffer
-	}
-	buf := new(bytes.Buffer)
-	sc := SpanContextWithIDs(1, 1)
-	tests := []struct {
-		name string
-		args args
-		want string
-	}{
-		{
-			name: "single",
-			args: args{
-				in: []IBuffer2SqlItem{
-					&MOZap{
-						Level:       zapcore.InfoLevel,
-						SpanContext: &sc,
-						Timestamp:   time.Unix(0, 0),
-						Caller:      "trace/buffer_pipe_sql_test.go:100",
-						Message:     "info message",
-						Extra:       "{}",
-					},
-				},
-				buf: buf,
-			},
-			want: `insert into system.log_info (` +
-				"`span_id`, `statement_id`, `node_id`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
-				`) values (1, 1, 0, "Node", "1970-01-01 00:00:00.000000", "", "info", "trace/buffer_pipe_sql_test.go:100", "info message", "{}")`,
-		},
-		{
-			name: "multi",
-			args: args{
-				in: []IBuffer2SqlItem{
-					&MOZap{
-						Level:       zapcore.InfoLevel,
-						SpanContext: &sc,
-						Timestamp:   time.Unix(0, 0),
-						Caller:      "trace/buffer_pipe_sql_test.go:100",
-						Message:     "info message",
-						Extra:       "{}",
-					},
-					&MOZap{
-						Level:       zapcore.DebugLevel,
-						SpanContext: &sc,
-						Timestamp:   time.Unix(0, int64(time.Microsecond+time.Millisecond)),
-						Caller:      "trace/buffer_pipe_sql_test.go:100",
-						Message:     "debug message",
-						Extra:       "{}",
-					},
-				},
-				buf: buf,
-			},
-			want: `insert into system.log_info (` +
-				"`span_id`, `statement_id`, `node_id`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
-				`) values (1, 1, 0, "Node", "1970-01-01 00:00:00.000000", "", "info", "trace/buffer_pipe_sql_test.go:100", "info message", "{}")` +
-				`,(1, 1, 0, "Node", "1970-01-01 00:00:00.001001", "", "debug", "trace/buffer_pipe_sql_test.go:100", "debug message", "{}")`,
-		},
-	}
-	for _, tt := range tests {
-		t1.Run(tt.name, func(t1 *testing.T) {
-			if got := genZapLogBatchSql(tt.args.in, tt.args.buf); got != tt.want {
-				t1.Errorf("genZapLogBatchSql() = %v,\n want %v", got, tt.want)
-			} else {
-				t1.Logf("SQL: %s", got)
-			}
-		})
-	}
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
-}
-
-func Test_batchSqlHandler_genLogBatchSql(t1 *testing.T) {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
-	type args struct {
-		in  []IBuffer2SqlItem
-		buf *bytes.Buffer
-	}
-	buf := new(bytes.Buffer)
-	tests := []struct {
-		name string
-		args args
-		want string
-	}{
-		{
-			name: "single",
-			args: args{
-				in: []IBuffer2SqlItem{
-					&MOLog{
-						StatementId: 1,
-						SpanId:      1,
-						Timestamp:   uint64(0),
-						Level:       zapcore.InfoLevel,
-						Caller:      util.Caller(0),
-						Message:     "info message",
-						Extra:       "{}",
-					},
-				},
-				buf: buf,
-			},
-			want: `insert into system.log_info (` +
-				"`span_id`, `statement_id`, `node_id`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
-				`) values (1, 1, 0, "Node", "1970-01-01 00:00:00.000000", "", "info", "Test_batchSqlHandler_genLogBatchSql", "info message", "{}")`,
-		},
-		{
-			name: "multi",
-			args: args{
-				in: []IBuffer2SqlItem{
-					&MOLog{
-						StatementId: 1,
-						SpanId:      1,
-						Timestamp:   uint64(0),
-						Level:       zapcore.InfoLevel,
-						Caller:      util.Caller(0),
-						Message:     "info message",
-						Extra:       "{}",
-					},
-					&MOLog{
-						StatementId: 1,
-						SpanId:      1,
-						Timestamp:   uint64(time.Millisecond + time.Microsecond),
-						Level:       zapcore.DebugLevel,
-						Caller:      util.Caller(0),
-						Message:     "debug message",
-						Extra:       "{}",
-					},
-				},
-				buf: buf,
-			},
-			want: `insert into system.log_info (` +
-				"`span_id`, `statement_id`, `node_id`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
-				`) values (1, 1, 0, "Node", "1970-01-01 00:00:00.000000", "", "info", "Test_batchSqlHandler_genLogBatchSql", "info message", "{}")` +
-				`,(1, 1, 0, "Node", "1970-01-01 00:00:00.001001", "", "debug", "Test_batchSqlHandler_genLogBatchSql", "debug message", "{}")`,
-		},
-	}
-	logStackFormatter.Store("%n")
-	t1.Logf("%%n : %n", tests[0].args.in[0].(*MOLog).Caller)
-	t1.Logf("%%s : %s", tests[0].args.in[0].(*MOLog).Caller)
-	t1.Logf("%%+s: %+s", tests[0].args.in[0].(*MOLog).Caller)
-	t1.Logf("%%v : %v", tests[0].args.in[0].(*MOLog).Caller)
-	t1.Logf("%%+v: %+v", tests[0].args.in[0].(*MOLog).Caller)
-	for _, tt := range tests {
-		t1.Run(tt.name, func(t1 *testing.T) {
-			if got := genLogBatchSql(tt.args.in, tt.args.buf); got != tt.want {
-				t1.Errorf("genLogBatchSql() = %v, want %v", got, tt.want)
-			} else {
-				t1.Logf("SQL: %s", got)
-			}
-		})
-	}
-}
-
-func Test_batchSqlHandler_genSpanBatchSql(t1 *testing.T) {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
-	type args struct {
-		in  []IBuffer2SqlItem
-		buf *bytes.Buffer
-	}
-	tests := []struct {
-		name string
-		args args
-		want string
-	}{
-		{
-			name: "single_span",
-			args: args{
-				in: []IBuffer2SqlItem{
-					&MOSpan{
-						SpanConfig:  SpanConfig{SpanContext: SpanContext{TraceID: 1, SpanID: 1}, parent: noopSpan{}},
-						Name:        *bytes.NewBuffer([]byte("span1")),
-						StartTimeNS: util.TimeNano(0),
-						EndTimeNS:   util.TimeNano(time.Microsecond),
-						Duration:    util.TimeNano(time.Microsecond),
-						tracer:      gTracer.(*MOTracer),
-					},
-				},
-				buf: buf,
-			},
-			want: `insert into system.span_info (` +
-				"`span_id`, `statement_id`, `parent_span_id`, `node_id`, `node_type`, `resource`, `name`, `start_time`, `end_time`, `duration`" +
-				`) values (1, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000001", 1000)`,
-		},
-		{
-			name: "multi_span",
-			args: args{
-				in: []IBuffer2SqlItem{
-					&MOSpan{
-						SpanConfig:  SpanConfig{SpanContext: SpanContext{TraceID: 1, SpanID: 1}, parent: noopSpan{}},
-						Name:        *bytes.NewBuffer([]byte("span1")),
-						StartTimeNS: util.TimeNano(0),
-						EndTimeNS:   util.TimeNano(time.Microsecond),
-						Duration:    util.TimeNano(time.Microsecond),
-						tracer:      gTracer.(*MOTracer),
-					},
-					&MOSpan{
-						SpanConfig:  SpanConfig{SpanContext: SpanContext{TraceID: 1, SpanID: 2}, parent: noopSpan{}},
-						Name:        *bytes.NewBuffer([]byte("span2")),
-						StartTimeNS: util.TimeNano(time.Microsecond),
-						EndTimeNS:   util.TimeNano(time.Millisecond),
-						Duration:    util.TimeNano(time.Millisecond - time.Microsecond),
-						tracer:      gTracer.(*MOTracer),
-					},
-				},
-				buf: buf,
-			},
-			want: `insert into system.span_info (` +
-				"`span_id`, `statement_id`, `parent_span_id`, `node_id`, `node_type`, `resource`, `name`, `start_time`, `end_time`, `duration`" +
-				`) values (1, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000001", 1000)` +
-				`,(2, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span2", "1970-01-01 00:00:00.000001", "1970-01-01 00:00:00.001000", 999000)`,
-		},
-	}
-	for _, tt := range tests {
-		t1.Run(tt.name, func(t1 *testing.T) {
-			got := genSpanBatchSql(tt.args.in, tt.args.buf)
-			require.Equal(t1, tt.want, got)
-		})
-	}
-}
-
-func Test_batchSqlHandler_genStatementBatchSql(t1 *testing.T) {
-	type args struct {
-		in  []IBuffer2SqlItem
-		buf *bytes.Buffer
-	}
-	tests := []struct {
-		name string
-		args args
-		want string
-	}{
-		{
-			name: "single_statement",
-			args: args{
-				in: []IBuffer2SqlItem{
-					&StatementInfo{
-						StatementID:          1,
-						TransactionID:        1,
-						SessionID:            1,
-						Account:              "MO",
-						User:                 "moroot",
-						Database:             "system",
-						Statement:            "show tables",
-						StatementFingerprint: "show tables",
-						StatementTag:         "",
-						RequestAt:            util.TimeNano(0),
-						Status:               StatementStatusRunning,
-						ExecPlan:             "",
-					},
-				},
-				buf: buf,
-			},
-			want: `insert into system.statement_info (` +
-				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_id`, `node_type`, `request_at`, `status`, `exec_plan`" +
-				`) values (1, 1, 1, "MO", "moroot", "", "system", "show tables", "show tables", "", 0, "Node", "1970-01-01 00:00:00.000000", "Running", "")`,
-		},
-		{
-			name: "multi_statement",
-			args: args{
-				in: []IBuffer2SqlItem{
-					&StatementInfo{
-						StatementID:          1,
-						TransactionID:        1,
-						SessionID:            1,
-						Account:              "MO",
-						User:                 "moroot",
-						Database:             "system",
-						Statement:            "show tables",
-						StatementFingerprint: "show tables",
-						StatementTag:         "",
-						RequestAt:            util.TimeNano(0),
-						Status:               StatementStatusRunning,
-						ExecPlan:             "",
-					},
-					&StatementInfo{
-						StatementID:          2,
-						TransactionID:        1,
-						SessionID:            1,
-						Account:              "MO",
-						User:                 "moroot",
-						Database:             "system",
-						Statement:            "show databases",
-						StatementFingerprint: "show databases",
-						StatementTag:         "dcl",
-						RequestAt:            util.TimeNano(time.Microsecond),
-						Status:               StatementStatusFailed,
-						ExecPlan:             "",
-					},
-				},
-				buf: buf,
-			},
-			want: `insert into system.statement_info (` +
-				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_id`, `node_type`, `request_at`, `status`, `exec_plan`" +
-				`) values (1, 1, 1, "MO", "moroot", "", "system", "show tables", "show tables", "", 0, "Node", "1970-01-01 00:00:00.000000", "Running", "")` +
-				`,(2, 1, 1, "MO", "moroot", "", "system", "show databases", "show databases", "dcl", 0, "Node", "1970-01-01 00:00:00.000001", "Failed", "")`,
-		},
-	}
-	for _, tt := range tests {
-		t1.Run(tt.name, func(t1 *testing.T) {
-			if got := genStatementBatchSql(tt.args.in, tt.args.buf); got != tt.want {
-				t1.Errorf("genStatementBatchSql() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
+	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
 	type fields struct {
 		Reminder      batchpipe.Reminder
 		sizeThreshold int64
 	}
+	sc := SpanContextWithIDs(_1TraceID, _1SpanID)
 	defaultFields := fields{
 		Reminder:      batchpipe.NewConstantClock(15 * time.Second),
 		sizeThreshold: MB,
@@ -539,8 +178,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			},
 			wantFunc: genErrorBatchSql,
 			want: `insert into system.error_info (` +
-				"`statement_id`, `span_id`, `node_id`, `node_type`, `err_code`, `stack`, `timestamp`" +
-				`) values (` + nodeStateSpanIdStr + `, 0, "Node", "test1", "test1", "1970-01-01 00:00:00.000000")`,
+				"`statement_id`, `span_id`, `node_uuid`, `node_type`, `err_code`, `stack`, `timestamp`" +
+				`) values (` + nodeStateSpanIdStr + `, "node_uuid", "Node", "test1", "test1", "1970-01-01 00:00:00.000000")`,
 		},
 		{
 			name:   "multi_error",
@@ -554,9 +193,9 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			},
 			wantFunc: genErrorBatchSql,
 			want: `insert into system.error_info (` +
-				"`statement_id`, `span_id`, `node_id`, `node_type`, `err_code`, `stack`, `timestamp`" +
-				`) values (` + nodeStateSpanIdStr + `, 0, "Node", "test1", "test1", "1970-01-01 00:00:00.000000")` +
-				`,(` + nodeStateSpanIdStr + `, 0, "Node", "test2: test1", "test2: test1", "1970-01-01 00:00:00.001001")`,
+				"`statement_id`, `span_id`, `node_uuid`, `node_type`, `err_code`, `stack`, `timestamp`" +
+				`) values (` + nodeStateSpanIdStr + `, "node_uuid", "Node", "test1", "test1", "1970-01-01 00:00:00.000000")` +
+				`,(` + nodeStateSpanIdStr + `, "node_uuid", "Node", "test2: test1", "test2: test1", "1970-01-01 00:00:00.001001")`,
 		},
 		{
 			name:   "single_log",
@@ -564,21 +203,21 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			args: args{
 				in: []IBuffer2SqlItem{
 					&MOLog{
-						StatementId: 1,
-						SpanId:      1,
-						Timestamp:   uint64(0),
-						Level:       zapcore.InfoLevel,
-						Caller:      util.Caller(0),
-						Message:     "info message",
-						Extra:       "{}",
+						TraceID:   _1TraceID,
+						SpanID:    _1SpanID,
+						Timestamp: uint64(0),
+						Level:     zapcore.InfoLevel,
+						Caller:    util.Caller(0),
+						Message:   "info message",
+						Extra:     "{}",
 					},
 				},
 				buf: buf,
 			},
 			wantFunc: genLogBatchSql,
 			want: `insert into system.log_info (` +
-				"`span_id`, `statement_id`, `node_id`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
-				`) values (1, 1, 0, "Node", "1970-01-01 00:00:00.000000", "", "info", "Test_buffer2Sql_GetBatch_AllType", "info message", "{}")`,
+				"`span_id`, `statement_id`, `node_uuid`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
+				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "node_uuid", "Node", "1970-01-01 00:00:00.000000", "", "info", "Test_buffer2Sql_GetBatch_AllType", "info message", "{}")`,
 		},
 		{
 			name:   "multi_log",
@@ -586,31 +225,31 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			args: args{
 				in: []IBuffer2SqlItem{
 					&MOLog{
-						StatementId: 1,
-						SpanId:      1,
-						Timestamp:   uint64(0),
-						Level:       zapcore.InfoLevel,
-						Caller:      util.Caller(0),
-						Message:     "info message",
-						Extra:       "{}",
+						TraceID:   _1TraceID,
+						SpanID:    _1SpanID,
+						Timestamp: uint64(0),
+						Level:     zapcore.InfoLevel,
+						Caller:    util.Caller(0),
+						Message:   "info message",
+						Extra:     "{}",
 					},
 					&MOLog{
-						StatementId: 1,
-						SpanId:      1,
-						Timestamp:   uint64(time.Millisecond + time.Microsecond),
-						Level:       zapcore.DebugLevel,
-						Caller:      util.Caller(0),
-						Message:     "debug message",
-						Extra:       "{}",
+						TraceID:   _1TraceID,
+						SpanID:    _1SpanID,
+						Timestamp: uint64(time.Millisecond + time.Microsecond),
+						Level:     zapcore.DebugLevel,
+						Caller:    util.Caller(0),
+						Message:   "debug message",
+						Extra:     "{}",
 					},
 				},
 				buf: buf,
 			},
 			wantFunc: genLogBatchSql,
 			want: `insert into system.log_info (` +
-				"`span_id`, `statement_id`, `node_id`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
-				`) values (1, 1, 0, "Node", "1970-01-01 00:00:00.000000", "", "info", "Test_buffer2Sql_GetBatch_AllType", "info message", "{}")` +
-				`,(1, 1, 0, "Node", "1970-01-01 00:00:00.001001", "", "debug", "Test_buffer2Sql_GetBatch_AllType", "debug message", "{}")`,
+				"`span_id`, `statement_id`, `node_uuid`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
+				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "node_uuid", "Node", "1970-01-01 00:00:00.000000", "", "info", "Test_buffer2Sql_GetBatch_AllType", "info message", "{}")` +
+				`,("0000000000000001", "00000000-0000-0000-0000-000000000001", "node_uuid", "Node", "1970-01-01 00:00:00.001001", "", "debug", "Test_buffer2Sql_GetBatch_AllType", "debug message", "{}")`,
 		},
 		{
 			name:   "single_span",
@@ -618,7 +257,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			args: args{
 				in: []IBuffer2SqlItem{
 					&MOSpan{
-						SpanConfig:  SpanConfig{SpanContext: SpanContext{TraceID: 1, SpanID: 1}, parent: noopSpan{}},
+						SpanConfig:  SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _1SpanID}, parent: noopSpan{}},
 						Name:        *bytes.NewBuffer([]byte("span1")),
 						StartTimeNS: util.TimeNano(0),
 						EndTimeNS:   util.TimeNano(time.Microsecond),
@@ -630,8 +269,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			},
 			wantFunc: genSpanBatchSql,
 			want: `insert into system.span_info (` +
-				"`span_id`, `statement_id`, `parent_span_id`, `node_id`, `node_type`, `resource`, `name`, `start_time`, `end_time`, `duration`" +
-				`) values (1, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000001", 1000)`,
+				"`span_id`, `statement_id`, `parent_span_id`, `node_uuid`, `node_type`, `resource`, `name`, `start_time`, `end_time`, `duration`" +
+				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "0000000000000000", "node_uuid", "Node", "{\"Node\":{\"node_uuid\":\"node_uuid\",\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000001", 1000)`,
 		},
 		{
 			name:   "multi_span",
@@ -639,7 +278,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			args: args{
 				in: []IBuffer2SqlItem{
 					&MOSpan{
-						SpanConfig:  SpanConfig{SpanContext: SpanContext{TraceID: 1, SpanID: 1}, parent: noopSpan{}},
+						SpanConfig:  SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _1SpanID}, parent: noopSpan{}},
 						Name:        *bytes.NewBuffer([]byte("span1")),
 						StartTimeNS: util.TimeNano(0),
 						EndTimeNS:   util.TimeNano(time.Microsecond),
@@ -647,7 +286,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						tracer:      gTracer.(*MOTracer),
 					},
 					&MOSpan{
-						SpanConfig:  SpanConfig{SpanContext: SpanContext{TraceID: 1, SpanID: 2}, parent: noopSpan{}},
+						SpanConfig:  SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _2SpanID}, parent: noopSpan{}},
 						Name:        *bytes.NewBuffer([]byte("span2")),
 						StartTimeNS: util.TimeNano(time.Microsecond),
 						EndTimeNS:   util.TimeNano(time.Millisecond),
@@ -659,9 +298,9 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			},
 			wantFunc: genSpanBatchSql,
 			want: `insert into system.span_info (` +
-				"`span_id`, `statement_id`, `parent_span_id`, `node_id`, `node_type`, `resource`, `name`, `start_time`, `end_time`, `duration`" +
-				`) values (1, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000001", 1000)` +
-				`,(2, 1, 0, 0, "Node", "{\"Node\":{\"node_id\":0,\"node_type\":0},\"version\":\"v0.test.0\"}", "span2", "1970-01-01 00:00:00.000001", "1970-01-01 00:00:00.001000", 999000)`,
+				"`span_id`, `statement_id`, `parent_span_id`, `node_uuid`, `node_type`, `resource`, `name`, `start_time`, `end_time`, `duration`" +
+				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "0000000000000000", "node_uuid", "Node", "{\"Node\":{\"node_uuid\":\"node_uuid\",\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000001", 1000)` +
+				`,("0000000000000002", "00000000-0000-0000-0000-000000000001", "0000000000000000", "node_uuid", "Node", "{\"Node\":{\"node_uuid\":\"node_uuid\",\"node_type\":0},\"version\":\"v0.test.0\"}", "span2", "1970-01-01 00:00:00.000001", "1970-01-01 00:00:00.001000", 999000)`,
 		},
 		{
 			name:   "single_statement",
@@ -669,9 +308,9 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			args: args{
 				in: []IBuffer2SqlItem{
 					&StatementInfo{
-						StatementID:          1,
-						TransactionID:        1,
-						SessionID:            1,
+						StatementID:          _1TraceID,
+						TransactionID:        _1TxnID,
+						SessionID:            _1SesID,
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
@@ -687,8 +326,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			},
 			wantFunc: genStatementBatchSql,
 			want: `insert into system.statement_info (` +
-				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_id`, `node_type`, `request_at`, `status`, `exec_plan`" +
-				`) values (1, 1, 1, "MO", "moroot", "", "system", "show tables", "show tables", "", 0, "Node", "1970-01-01 00:00:00.000000", "Running", "")`,
+				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `status`, `exec_plan`" +
+				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Node", "1970-01-01 00:00:00.000000", "Running", "")`,
 		},
 		{
 			name:   "multi_statement",
@@ -696,9 +335,9 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			args: args{
 				in: []IBuffer2SqlItem{
 					&StatementInfo{
-						StatementID:          1,
-						TransactionID:        1,
-						SessionID:            1,
+						StatementID:          _1TraceID,
+						TransactionID:        _1TxnID,
+						SessionID:            _1SesID,
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
@@ -710,9 +349,9 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						ExecPlan:             "",
 					},
 					&StatementInfo{
-						StatementID:          2,
-						TransactionID:        1,
-						SessionID:            1,
+						StatementID:          _2TraceID,
+						TransactionID:        _1TxnID,
+						SessionID:            _1SesID,
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
@@ -728,9 +367,60 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			},
 			wantFunc: genStatementBatchSql,
 			want: `insert into system.statement_info (` +
-				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_id`, `node_type`, `request_at`, `status`, `exec_plan`" +
-				`) values (1, 1, 1, "MO", "moroot", "", "system", "show tables", "show tables", "", 0, "Node", "1970-01-01 00:00:00.000000", "Running", "")` +
-				`,(2, 1, 1, "MO", "moroot", "", "system", "show databases", "show databases", "dcl", 0, "Node", "1970-01-01 00:00:00.000001", "Failed", "")`,
+				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `status`, `exec_plan`" +
+				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Node", "1970-01-01 00:00:00.000000", "Running", "")` +
+				`,("00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show databases", "show databases", "dcl", "node_uuid", "Node", "1970-01-01 00:00:00.000001", "Failed", "")`,
+		},
+		{
+			name:   "single_zap",
+			fields: defaultFields,
+			args: args{
+				in: []IBuffer2SqlItem{
+					&MOZap{
+						Level:       zapcore.InfoLevel,
+						SpanContext: &sc,
+						Timestamp:   time.Unix(0, 0),
+						Caller:      "trace/buffer_pipe_sql_test.go:100",
+						Message:     "info message",
+						Extra:       "{}",
+					},
+				},
+				buf: buf,
+			},
+			wantFunc: genZapLogBatchSql,
+			want: `insert into system.log_info (` +
+				"`span_id`, `statement_id`, `node_uuid`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
+				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "node_uuid", "Node", "1970-01-01 00:00:00.000000", "", "info", "trace/buffer_pipe_sql_test.go:100", "info message", "{}")`,
+		},
+		{
+			name:   "multi_zap",
+			fields: defaultFields,
+			args: args{
+				in: []IBuffer2SqlItem{
+					&MOZap{
+						Level:       zapcore.InfoLevel,
+						SpanContext: &sc,
+						Timestamp:   time.Unix(0, 0),
+						Caller:      "trace/buffer_pipe_sql_test.go:100",
+						Message:     "info message",
+						Extra:       "{}",
+					},
+					&MOZap{
+						Level:       zapcore.DebugLevel,
+						SpanContext: &sc,
+						Timestamp:   time.Unix(0, int64(time.Microsecond+time.Millisecond)),
+						Caller:      "trace/buffer_pipe_sql_test.go:100",
+						Message:     "debug message",
+						Extra:       "{}",
+					},
+				},
+				buf: buf,
+			},
+			wantFunc: genZapLogBatchSql,
+			want: `insert into system.log_info (` +
+				"`span_id`, `statement_id`, `node_uuid`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
+				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "node_uuid", "Node", "1970-01-01 00:00:00.000000", "", "info", "trace/buffer_pipe_sql_test.go:100", "info message", "{}")` +
+				`,("0000000000000001", "00000000-0000-0000-0000-000000000001", "node_uuid", "Node", "1970-01-01 00:00:00.001001", "", "debug", "trace/buffer_pipe_sql_test.go:100", "debug message", "{}")`,
 		},
 	}
 
@@ -750,9 +440,10 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			if got := b.(*buffer2Sql).genBatchFunc; reflect.ValueOf(got).Pointer() != reflect.ValueOf(tt.wantFunc).Pointer() {
 				t.Errorf("buffer2Sql's genBatchFunc = %v, want %v", got, tt.wantFunc)
 			}
-			if got := b.GetBatch(tt.args.buf); got.(string) != tt.want {
-				t.Errorf("GetBatch() = %v,\n want %v", got, tt.want)
-			}
+
+			got := b.GetBatch(tt.args.buf)
+			require.Equal(t, tt.want, got)
+			t.Logf("GetBatch() = %v", got)
 		})
 	}
 }

@@ -149,7 +149,7 @@ func genSpanBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.WriteString("`span_id`")
 	buf.WriteString(", `statement_id`")
 	buf.WriteString(", `parent_span_id`")
-	buf.WriteString(", `node_id`")
+	buf.WriteString(", `node_uuid`")
 	buf.WriteString(", `node_type`")
 	buf.WriteString(", `resource`")
 	buf.WriteString(", `name`")
@@ -194,7 +194,7 @@ func genLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.WriteString("(")
 	buf.WriteString("`span_id`")
 	buf.WriteString(", `statement_id`")
-	buf.WriteString(", `node_id`")
+	buf.WriteString(", `node_uuid`")
 	buf.WriteString(", `node_type`")
 	buf.WriteString(", `timestamp`")
 	buf.WriteString(", `name`")
@@ -238,7 +238,7 @@ func genZapLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.WriteString("(")
 	buf.WriteString("`span_id`")
 	buf.WriteString(", `statement_id`")
-	buf.WriteString(", `node_id`")
+	buf.WriteString(", `node_uuid`")
 	buf.WriteString(", `node_type`")
 	buf.WriteString(", `timestamp`")
 	buf.WriteString(", `name`")
@@ -291,7 +291,7 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.WriteString(", `statement`")
 	buf.WriteString(", `statement_tag`")
 	buf.WriteString(", `statement_fingerprint`")
-	buf.WriteString(", `node_id`")
+	buf.WriteString(", `node_uuid`")
 	buf.WriteString(", `node_type`")
 	buf.WriteString(", `request_at`")
 	buf.WriteString(", `status`")
@@ -300,7 +300,7 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 
 	moNode := GetNodeResource()
 
-	var uuid [36]byte
+	var uuid = make([]byte, 36)
 	for _, item := range in {
 		s, ok := item.(*StatementInfo)
 		if !ok {
@@ -341,7 +341,7 @@ func genErrorBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.WriteString("(")
 	buf.WriteString("`statement_id`")
 	buf.WriteString(", `span_id`")
-	buf.WriteString(", `node_id`")
+	buf.WriteString(", `node_uuid`")
 	buf.WriteString(", `node_type`")
 	buf.WriteString(", `err_code`")
 	buf.WriteString(", `stack`")

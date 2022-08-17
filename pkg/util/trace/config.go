@@ -192,7 +192,7 @@ func (t TraceID) IsZero() bool {
 
 func (t TraceID) String() string {
 	var dst [36]byte
-	bytes2Uuid(dst, t)
+	bytes2Uuid(dst[:], t)
 	return string(dst[:])
 }
 
@@ -203,7 +203,7 @@ var nilSpanID SpanID
 // SetByUUID use prefix of uuid as value
 func (s *SpanID) SetByUUID(uuid string) {
 	var dst [16]byte
-	uuid2Bytes(dst, uuid)
+	uuid2Bytes(dst[:], uuid)
 	copy(s[:], dst[0:8])
 }
 
@@ -211,7 +211,8 @@ func (s SpanID) String() string {
 	return hex.EncodeToString(s[:])
 }
 
-func uuid2Bytes(dst [16]byte, uuid string) {
+func uuid2Bytes(dst []byte, uuid string) {
+	_ = dst[15]
 	l := len(uuid)
 	if l != 36 || uuid[8] != '-' || uuid[13] != '-' || uuid[18] != '-' || uuid[23] != '-' {
 		return
@@ -223,13 +224,14 @@ func uuid2Bytes(dst [16]byte, uuid string) {
 	hex.Decode(dst[10:], []byte(uuid[24:]))
 }
 
-func bytes2Uuid(dst [36]byte, src [16]byte) {
+func bytes2Uuid(dst []byte, src [16]byte) {
+	_, _ = dst[35], src[15]
 	hex.Encode(dst[0:8], src[0:4])
 	hex.Encode(dst[9:13], src[4:6])
 	hex.Encode(dst[14:18], src[6:8])
 	hex.Encode(dst[19:23], src[8:10])
 	hex.Encode(dst[24:], src[10:])
-	dst[9] = '-'
+	dst[8] = '-'
 	dst[13] = '-'
 	dst[18] = '-'
 	dst[23] = '-'
@@ -397,6 +399,6 @@ func (t NodeType) String() string {
 }
 
 type MONodeResource struct {
-	NodeUuid string   `json:"node_id"`
+	NodeUuid string   `json:"node_uuid"`
 	NodeType NodeType `json:"node_type"`
 }

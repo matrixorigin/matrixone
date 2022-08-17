@@ -64,7 +64,7 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 
 func initExport(ctx context.Context, config *tracerProviderConfig) {
 	if !config.IsEnable() {
-		logutil2.Infof(context.TODO(), "initExport pass.")
+		logutil.Info("initExport pass.")
 		return
 	}
 	var p export.BatchProcessor
@@ -91,8 +91,8 @@ func initExport(ctx context.Context, config *tracerProviderConfig) {
 	}
 	if p != nil {
 		config.spanProcessors = append(config.spanProcessors, NewBatchSpanProcessor(p))
-		logutil2.Infof(context.TODO(), "trace span processor")
-		logutil2.Info(context.TODO(), "[Debug]", zap.String("operation", "value1"), zap.String("operation_1", "value2"))
+		logutil.Info("trace span processor")
+		logutil.Info("[Debug]", zap.String("operation", "value1"), zap.String("operation_1", "value2"))
 	}
 }
 
