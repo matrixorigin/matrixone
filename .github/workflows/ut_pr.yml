@@ -5,15 +5,15 @@ on:
     branches:
       - main
     paths-ignore:
-      - "etc/"
-      - "optools/"
-      - "LICENSES/"
-      - "cgo/"
-      - "cmd/"
-      - "proto/"
-      - "test/"
-      - "docs/"
-      - ".github/"
+      - "etc/**"
+      - "optools/**"
+      - "LICENSES/**"
+      - "cgo/**"
+      - "cmd/**"
+      - "proto/**"
+      - "test/**"
+      - "docs/**"
+      - ".github/**"
 
 jobs:
   test-name:
