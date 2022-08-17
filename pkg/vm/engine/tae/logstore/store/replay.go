@@ -64,6 +64,7 @@ func (w *StoreImpl) replayEntry(e *entry.Entry, h ApplyHandle) error {
 	switch info.Group {
 	case GroupInternal:
 		w.unmarshalPostCommitEntry(walEntry.GetPayload())
+		w.checkpointed[GroupCKP] = info.TargetLsn
 		return nil
 	case GroupCKP:
 		w.logCheckpointInfo(info)

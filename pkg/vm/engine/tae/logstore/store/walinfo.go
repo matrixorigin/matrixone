@@ -131,6 +131,7 @@ func (w *StoreInfo) logDriverLsn(driverEntry *driverEntry.Entry) {
 	if info.Group == GroupInternal {
 		w.checkpointedMu.Lock()
 		w.checkpointed[GroupCKP] = info.TargetLsn
+		w.checkpointed[GroupInternal] = info.GroupLSN - 1
 		w.checkpointedMu.Unlock()
 	}
 
@@ -242,21 +243,45 @@ func (w *StoreInfo) onCheckpoint() {
 }
 
 func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
+	groups := make([]uint32, 0)
+	w.syncedMu.RLock()
+	for g := range w.synced {
+		groups = append(groups, g)
+	}
+	w.syncedMu.RUnlock()
+
 	w.checkpointedMu.RLock()
 	if len(w.checkpointed) == 0 {
 		w.checkpointedMu.RUnlock()
 		return
 	}
 	driverLsn = math.MaxInt64
-	for g, lsn := range w.checkpointed {
-		drLsn, err := w.retryGetDriverLsn(g, lsn)
-		if err != nil {
-			if err == ErrLsnTooSmall {
-				logutil.Infof("%d-%d too small", g, lsn)
-				continue
+	for _, g := range groups {
+		lsn := w.checkpointed[g]
+		var drLsn uint64
+		var err error
+		if lsn == 0 {
+			drLsn, err := w.retryGetDriverLsn(g, 1)
+			if err != nil {
+				logutil.Infof("%d-%d", g, lsn)
+				panic(err)
 			}
-			logutil.Infof("%d-%d", g, lsn)
-			panic(err)
+			drLsn--
+		} else {
+			drLsn, err = w.retryGetDriverLsn(g, lsn)
+			if err != nil {
+				if err == ErrLsnTooSmall {
+					logutil.Infof("%d-%d too small", g, lsn)
+					synced := w.GetSynced(g)
+					if drLsn == synced {
+						continue
+					} else {
+						return 0, 0
+					}
+				}
+				logutil.Infof("%d-%d", g, lsn)
+				panic(err)
+			}
 		}
 		if drLsn < driverLsn {
 			gid = g

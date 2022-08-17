@@ -155,7 +155,7 @@ func (w *StoreImpl) onTruncatingQueue(items ...any) {
 	if gid == 0 {
 		return
 	}
-	if gid == GroupCKP {
+	if gid == GroupCKP || gid == GroupInternal {
 		w.CkpCkp()
 		gid, driverLsn = w.getDriverCheckpointed()
 		if gid == 0 {
