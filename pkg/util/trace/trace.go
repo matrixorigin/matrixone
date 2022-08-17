@@ -18,12 +18,10 @@ import (
 	"context"
 	goErrors "errors"
 	"sync/atomic"
-	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errors"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 
@@ -56,9 +54,7 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	config := &gTracerProvider.tracerProviderConfig
 
 	// init Tracer
-	gTracer = gTracerProvider.Tracer("MatrixOrigin",
-		WithReminder(batchpipe.NewConstantClock(5*time.Second)),
-	)
+	gTracer = gTracerProvider.Tracer("MatrixOrigin")
 
 	// init Node DefaultContext
 	sc := SpanContextWithIDs(TraceID(0), SpanID(config.getNodeResource().NodeID))

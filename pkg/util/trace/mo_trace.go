@@ -17,20 +17,20 @@ package trace
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"io"
 	"sync"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/util"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
 // TracerConfig is a group of options for a Tracer.
 type TracerConfig struct {
-	Name     string
-	reminder batchpipe.Reminder // WithReminder
+	Name string
 }
 
 // TracerOption applies an option to a TracerConfig.
@@ -38,16 +38,12 @@ type TracerOption interface {
 	apply(*TracerConfig)
 }
 
+var _ TracerOption = tracerOptionFunc(nil)
+
 type tracerOptionFunc func(*TracerConfig)
 
 func (f tracerOptionFunc) apply(cfg *TracerConfig) {
 	f(cfg)
-}
-
-func WithReminder(r batchpipe.Reminder) tracerOptionFunc {
-	return tracerOptionFunc(func(cfg *TracerConfig) {
-		cfg.reminder = r
-	})
 }
 
 const (
@@ -95,6 +91,7 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (
 
 	if span.NewRoot {
 		span.TraceID, span.SpanID = t.provider.idGenerator.NewIDs()
+		span.parent = noopSpan{}
 	} else {
 		span.TraceID, span.SpanID = parent.SpanContext().TraceID, t.provider.idGenerator.NewSpanID()
 		span.parent = parent
@@ -137,6 +134,30 @@ func (c *SpanContext) IsEmpty() bool {
 func (c *SpanContext) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddUint64("TraceId", uint64(c.TraceID))
 	enc.AddUint64("SpanId", uint64(c.SpanID))
+	return nil
+}
+
+func (c *SpanContext) Size() (n int) {
+	return 16
+}
+
+func (c *SpanContext) MarshalTo(dAtA []byte) (int, error) {
+	l := cap(dAtA)
+	if l < c.Size() {
+		return -1, io.ErrUnexpectedEOF
+	}
+	binary.BigEndian.PutUint64(dAtA, uint64(c.TraceID))
+	binary.BigEndian.PutUint64(dAtA[8:], uint64(c.SpanID))
+	return c.Size(), nil
+}
+
+func (c *SpanContext) Unmarshal(dAtA []byte) error {
+	l := cap(dAtA)
+	if l < c.Size() {
+		return io.ErrUnexpectedEOF
+	}
+	c.TraceID = TraceID(binary.BigEndian.Uint64(dAtA))
+	c.SpanID = SpanID(binary.BigEndian.Uint64(dAtA[8:]))
 	return nil
 }
 
