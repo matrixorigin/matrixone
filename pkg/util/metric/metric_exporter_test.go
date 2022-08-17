@@ -103,7 +103,7 @@ func TestExporter(t *testing.T) {
 		reg := prom.NewRegistry()
 		iexp := newMetricExporter(reg, dumCollect, 0, "monolithic")
 		exp = iexp.(*metricExporter)
-		exp.Start()
+		exp.Start(context.TODO())
 		defer exp.Stop(false)
 		exp.now = dumClock
 		c := prom.NewCounter(prom.CounterOpts{Subsystem: "test", Name: "test_counter"})

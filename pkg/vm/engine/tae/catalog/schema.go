@@ -24,10 +24,10 @@ import (
 	"sort"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type IndexT uint16
@@ -126,6 +126,7 @@ type Schema struct {
 	BlockMaxRows     uint32
 	SegmentMaxBlocks uint16
 	Comment          string
+	View             string
 
 	SortKey    *SortKey
 	PhyAddrKey *ColDef
@@ -260,17 +261,21 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
+	if s.View, sn, err = common.ReadString(r); err != nil {
+		return
+	}
+	n += sn
 	colCnt := uint16(0)
 	if err = binary.Read(r, binary.BigEndian, &colCnt); err != nil {
 		return
 	}
 	n += 2
-	colBuf := make([]byte, types.TypeSize)
+	colBuf := make([]byte, types.TSize)
 	for i := uint16(0); i < colCnt; i++ {
 		if _, err = r.Read(colBuf); err != nil {
 			return
 		}
-		n += int64(types.TypeSize)
+		n += int64(types.TSize)
 		def := new(ColDef)
 		def.Type = types.DecodeType(colBuf)
 		if def.Name, sn, err = common.ReadString(r); err != nil {
@@ -334,6 +339,9 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		return
 	}
 	if _, err = common.WriteString(s.Comment, &w); err != nil {
+		return
+	}
+	if _, err = common.WriteString(s.View, &w); err != nil {
 		return
 	}
 	if err = binary.Write(&w, binary.BigEndian, uint16(len(s.ColDefs))); err != nil {
@@ -659,11 +667,11 @@ func MockCompoundSchema(colCnt int, pkIdx ...int) *Schema {
 	}
 	for i := 0; i < colCnt; i++ {
 		if pos, ok := m[i]; ok {
-			if err := schema.AppendPKCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.Type_INT32, Size: 4, Width: 32}, pos); err != nil {
+			if err := schema.AppendPKCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 32}, pos); err != nil {
 				panic(err)
 			}
 		} else {
-			if err := schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.Type_INT32, Size: 4, Width: 32}); err != nil {
+			if err := schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 32}); err != nil {
 				panic(err)
 			}
 		}
@@ -680,9 +688,9 @@ func MockSchema(colCnt int, pkIdx int) *Schema {
 	prefix := "mock_"
 	for i := 0; i < colCnt; i++ {
 		if pkIdx == i {
-			_ = schema.AppendPKCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.Type_INT32, Size: 4, Width: 4}, 0)
+			_ = schema.AppendPKCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4}, 0)
 		} else {
-			_ = schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.Type_INT32, Size: 4, Width: 4})
+			_ = schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4})
 		}
 	}
 	_ = schema.Finalize(false)
@@ -706,58 +714,58 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 		var typ types.Type
 		switch i % 18 {
 		case 0:
-			typ = types.Type_INT8.ToType()
+			typ = types.T_int8.ToType()
 			typ.Width = 8
 		case 1:
-			typ = types.Type_INT16.ToType()
+			typ = types.T_int16.ToType()
 			typ.Width = 16
 		case 2:
-			typ = types.Type_INT32.ToType()
+			typ = types.T_int32.ToType()
 			typ.Width = 32
 		case 3:
-			typ = types.Type_INT64.ToType()
+			typ = types.T_int64.ToType()
 			typ.Width = 64
 		case 4:
-			typ = types.Type_UINT8.ToType()
+			typ = types.T_uint8.ToType()
 			typ.Width = 8
 		case 5:
-			typ = types.Type_UINT16.ToType()
+			typ = types.T_uint16.ToType()
 			typ.Width = 16
 		case 6:
-			typ = types.Type_UINT32.ToType()
+			typ = types.T_uint32.ToType()
 			typ.Width = 32
 		case 7:
-			typ = types.Type_UINT64.ToType()
+			typ = types.T_uint64.ToType()
 			typ.Width = 64
 		case 8:
-			typ = types.Type_FLOAT32.ToType()
+			typ = types.T_float32.ToType()
 			typ.Width = 32
 		case 9:
-			typ = types.Type_FLOAT64.ToType()
+			typ = types.T_float64.ToType()
 			typ.Width = 64
 		case 10:
-			typ = types.Type_DATE.ToType()
+			typ = types.T_date.ToType()
 			typ.Width = 32
 		case 11:
-			typ = types.Type_DATETIME.ToType()
+			typ = types.T_datetime.ToType()
 			typ.Width = 64
 		case 12:
-			typ = types.Type_VARCHAR.ToType()
+			typ = types.T_varchar.ToType()
 			typ.Width = 100
 		case 13:
-			typ = types.Type_CHAR.ToType()
+			typ = types.T_char.ToType()
 			typ.Width = 100
 		case 14:
-			typ = types.Type_TIMESTAMP.ToType()
+			typ = types.T_timestamp.ToType()
 			typ.Width = 64
 		case 15:
-			typ = types.Type_DECIMAL64.ToType()
+			typ = types.T_decimal64.ToType()
 			typ.Width = 64
 		case 16:
-			typ = types.Type_DECIMAL128.ToType()
+			typ = types.T_decimal128.ToType()
 			typ.Width = 128
 		case 17:
-			typ = types.Type_BOOL.ToType()
+			typ = types.T_bool.ToType()
 			typ.Width = 8
 		}
 

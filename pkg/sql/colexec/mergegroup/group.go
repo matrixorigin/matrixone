@@ -207,7 +207,6 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 	}
 	if flg {
 		ctr.bat = bat
-		ctr.intHashMap.AddGroups(ctr.intHashMap.Cardinality())
 	}
 	return nil
 }
@@ -237,7 +236,6 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 	}
 	if flg {
 		ctr.bat = bat
-		ctr.strHashMap.AddGroups(ctr.strHashMap.Cardinality())
 	}
 	return nil
 }

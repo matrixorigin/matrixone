@@ -15,10 +15,11 @@
 package frontend
 
 import (
+	"context"
 	"fmt"
 	"sync/atomic"
 
-	"github.com/fagongzi/goetty"
+	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
@@ -58,15 +59,16 @@ func nextConnectionID() uint32 {
 	return atomic.AddUint32(&initConnectionID, 1)
 }
 
-func NewMOServer(addr string, pu *config.ParameterUnit) *MOServer {
-	encoder, decoder := NewSqlCodec()
-	rm := NewRoutineManager(pu)
+func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit) *MOServer {
+	codec := NewSqlCodec()
+	rm := NewRoutineManager(ctx, pu)
 	// TODO asyncFlushBatch
-	app, err := goetty.NewTCPApplication(addr, rm.Handler,
+	app, err := goetty.NewApplication(addr, rm.Handler,
+		goetty.WithAppLogger(logutil.GetGlobalLogger()),
 		goetty.WithAppSessionOptions(
-			goetty.WithCodec(encoder, decoder),
-			goetty.WithLogger(logutil.GetGlobalLogger()),
-			goetty.WithBufSize(1024*1024, 1024*1024)),
+			goetty.WithSessionCodec(codec),
+			goetty.WithSessionLogger(logutil.GetGlobalLogger()),
+			goetty.WithSessionRWBUfferSize(1024*1024, 1024*1024)),
 		goetty.WithAppSessionAware(rm))
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)

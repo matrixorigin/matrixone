@@ -18,15 +18,15 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/require"
 )
 
 func TestARTIndexNumeric(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	typ := types.Type{Oid: types.Type_INT32}
+	typ := types.Type{Oid: types.T_int32}
 	idx := NewSimpleARTMap(typ)
 
 	var res bool
@@ -112,7 +112,7 @@ func TestARTIndexNumeric(t *testing.T) {
 
 func TestArtIndexString(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	typ := types.Type{Oid: types.Type_VARCHAR}
+	typ := types.Type{Oid: types.T_varchar}
 	idx := NewSimpleARTMap(typ)
 
 	var res bool
@@ -171,7 +171,7 @@ func TestArtIndexString(t *testing.T) {
 
 func TestMVART(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	typ := types.Type{Oid: types.Type_INT32}
+	typ := types.Type{Oid: types.T_int32}
 	m := NewMultiplRowsART(typ)
 	require.Equal(t, 0, m.Size())
 	keys := []int32{2, 4, 12, 9}

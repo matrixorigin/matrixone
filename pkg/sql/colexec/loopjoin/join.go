@@ -77,31 +77,9 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
-	var err error
-
-	for {
-		bat := <-proc.Reg.MergeReceivers[1].Ch
-		if bat == nil {
-			break
-		}
-		if bat.Length() == 0 {
-			continue
-		}
-		if ctr.bat == nil {
-			ctr.bat = batch.NewWithSize(len(bat.Vecs))
-			for i, vec := range bat.Vecs {
-				ctr.bat.Vecs[i] = vector.New(vec.Typ)
-			}
-			ctr.bat.Zs = proc.GetMheap().GetSels()
-		}
-		anal.Input(bat)
-		anal.Alloc(int64(bat.Size()))
-		if ctr.bat, err = ctr.bat.Append(proc.GetMheap(), bat); err != nil {
-			bat.Clean(proc.GetMheap())
-			ctr.bat.Clean(proc.GetMheap())
-			return err
-		}
-		bat.Clean(proc.GetMheap())
+	bat := <-proc.Reg.MergeReceivers[1].Ch
+	if bat != nil {
+		ctr.bat = bat
 	}
 	return nil
 }

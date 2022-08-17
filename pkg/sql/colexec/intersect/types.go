@@ -12,36 +12,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package intersect
 
-import "math"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+)
 
-type IOVector struct {
-	// path to file, '/' separated
-	FilePath string
-	// io entries
-	// empty entry not allowed
-	Entries []IOEntry
+const (
+	build = iota
+	probe
+	end
+)
+
+type Argument struct {
+	ctr container
+
+	// hash table bucket related information.
+	IBucket uint64
+	NBucket uint64
 }
 
-func (i IOVector) offsetRange() (
-	min int,
-	max int,
-	readToEnd bool,
-) {
-	min = math.MaxInt
-	max = 0
-	for _, entry := range i.Entries {
-		if entry.Offset < min {
-			min = entry.Offset
-		}
-		if entry.Size < 0 {
-			entry.Size = 0
-			readToEnd = true
-		}
-		if end := entry.Offset + entry.Size; end > max {
-			max = end
-		}
-	}
-	return
+type container struct {
+	// operator state
+	state int
+
+	// cnt record for intersect
+	cnts [][]int64
+
+	// Hash table for checking duplicate data
+	hashTable *hashmap.StrHashMap
+
+	// Result batch of intersec column execute operator
+	btc *batch.Batch
+
+	// process bucket mark
+	inBuckets []uint8
 }

@@ -21,11 +21,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -35,11 +35,11 @@ const (
 
 func TestCompoundPKSchema(t *testing.T) {
 	schema := NewEmptySchema(t.Name())
-	err := schema.AppendPKCol("pk1", types.Type_INT32.ToType(), 1)
+	err := schema.AppendPKCol("pk1", types.T_int32.ToType(), 1)
 	assert.NoError(t, err)
-	err = schema.AppendPKCol("pk0", types.Type_INT32.ToType(), 0)
+	err = schema.AppendPKCol("pk0", types.T_int32.ToType(), 0)
 	assert.NoError(t, err)
-	err = schema.AppendPKCol("pk2", types.Type_INT32.ToType(), 2)
+	err = schema.AppendPKCol("pk2", types.T_int32.ToType(), 2)
 	assert.NoError(t, err)
 	err = schema.Finalize(false)
 	assert.NoError(t, err)
@@ -52,9 +52,9 @@ func TestCompoundPKSchema(t *testing.T) {
 	assert.Equal(t, "pk2", schema.SortKey.GetDef(2).Name)
 
 	schema = NewEmptySchema(t.Name())
-	err = schema.AppendPKCol("pk1", types.Type_INT32.ToType(), 0)
+	err = schema.AppendPKCol("pk1", types.T_int32.ToType(), 0)
 	assert.NoError(t, err)
-	err = schema.AppendPKCol("pk0", types.Type_INT32.ToType(), 0)
+	err = schema.AppendPKCol("pk0", types.T_int32.ToType(), 0)
 	assert.NoError(t, err)
 	err = schema.Finalize(false)
 	assert.ErrorIs(t, err, ErrSchemaValidation)

@@ -28,10 +28,16 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/syshealth"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+)
+
+var (
+	defaultWaitInterval = 100 * time.Millisecond
 )
 
 // Cluster describes behavior of test framwork.
@@ -116,15 +122,37 @@ type ClusterState interface {
 
 	// GetHAKeeperState returns hakeeper state from running hakeeper.
 	GetHAKeeperState() logpb.HAKeeperState
+	// GetHAKeeperConfig returns hakeeper configuration.
+	GetHAKeeperConfig() hakeeper.Config
+
+	// DNStoreExpired checks dn store expired or not by uuid.
+	DNStoreExpired(uuid string) (bool, error)
+	// DNStoreExpiredIndexed checks dn store expired or not by index.
+	DNStoreExpiredIndexed(index int) (bool, error)
+	// LogStoreExpired checks log store expired or not by uuid.
+	LogStoreExpired(uuid string) (bool, error)
+	// LogStoreExpiredIndexed checks log store expired or not by index.
+	LogStoreExpiredIndexed(index int) (bool, error)
+
+	// IsClusterHealthy checks whether cluster is healthy or not.
+	IsClusterHealthy() bool
 }
 
 // ClusterWaitState waits cluster state until timeout.
 type ClusterWaitState interface {
+	// WaitHAKeeperLeader waits hakeeper leader elected and return it.
 	WaitHAKeeperLeader(ctx context.Context) LogService
+	// WaitHAKeeperState waits the specific hakeeper state.
 	WaitHAKeeperState(ctx context.Context, expected logpb.HAKeeperState)
-	// WaitClusterHealth(ctx context.Context)
-	// WaitShardByNum(typ string, batch int, ctx context.Context)
-	// WaitReplicaByNum(shardID uint64, batch int, ctx context.Context)
+
+	// WaitDNShardsReported waits the expected count of dn shards reported.
+	WaitDNShardsReported(ctx context.Context)
+	// WaitLogShardsReported waits the expected count of log shards reported.
+	WaitLogShardsReported(ctx context.Context)
+	// WaitDNReplicaReported waits dn replica reported.
+	WaitDNReplicaReported(ctx context.Context, shardID uint64)
+	// WaitLogReplicaReported waits log replicas reported.
+	WaitLogReplicaReported(ctx context.Context, shardID uint64)
 }
 
 // ----------------------------------------------------
@@ -233,6 +261,326 @@ func (c *testCluster) Close() error {
 	return nil
 }
 
+// ----------------------------------------------------------
+// The following are implements for interface `ClusterState`.
+// ----------------------------------------------------------
+func (c *testCluster) ListDNShards(
+	ctx context.Context,
+) ([]metadata.DNShardRecord, error) {
+	state, err := c.GetClusterState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return state.ClusterInfo.DNShards, nil
+}
+
+func (c *testCluster) ListLogShards(
+	ctx context.Context,
+) ([]metadata.LogShardRecord, error) {
+	state, err := c.GetClusterState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return state.ClusterInfo.LogShards, nil
+}
+
+func (c *testCluster) GetDNStoreInfo(
+	ctx context.Context, uuid string,
+) (logpb.DNStoreInfo, error) {
+	state, err := c.GetClusterState(ctx)
+	if err != nil {
+		return logpb.DNStoreInfo{}, err
+	}
+	stores := state.DNState.Stores
+	if storeInfo, ok := stores[uuid]; ok {
+		return storeInfo, nil
+	}
+	return logpb.DNStoreInfo{}, ErrServiceNotExist
+}
+
+func (c *testCluster) GetDNStoreInfoIndexed(
+	ctx context.Context, index int,
+) (logpb.DNStoreInfo, error) {
+	ds, err := c.GetDNServiceIndexed(index)
+	if err != nil {
+		return logpb.DNStoreInfo{}, err
+	}
+	return c.GetDNStoreInfo(ctx, ds.ID())
+}
+
+func (c *testCluster) GetLogStoreInfo(
+	ctx context.Context, uuid string,
+) (logpb.LogStoreInfo, error) {
+	state, err := c.GetClusterState(ctx)
+	if err != nil {
+		return logpb.LogStoreInfo{}, err
+	}
+	stores := state.LogState.Stores
+	if storeInfo, ok := stores[uuid]; ok {
+		return storeInfo, nil
+	}
+	return logpb.LogStoreInfo{}, ErrServiceNotExist
+}
+
+func (c *testCluster) GetLogStoreInfoIndexed(
+	ctx context.Context, index int,
+) (logpb.LogStoreInfo, error) {
+	ls, err := c.GetLogServiceIndexed(index)
+	if err != nil {
+		return logpb.LogStoreInfo{}, err
+	}
+	return c.GetLogStoreInfo(ctx, ls.ID())
+}
+
+func (c *testCluster) GetHAKeeperState() logpb.HAKeeperState {
+	state := c.getClusterState()
+	require.NotNil(c.t, state)
+	return state.State
+}
+
+func (c *testCluster) GetHAKeeperConfig() hakeeper.Config {
+	return c.opt.BuildHAKeeperConfig()
+}
+
+func (c *testCluster) DNStoreExpired(uuid string) (bool, error) {
+	state := c.getClusterState()
+	require.NotNil(c.t, state)
+
+	dnStore, ok := state.DNState.Stores[uuid]
+	if !ok {
+		return false, wrappedError(ErrStoreNotReported, uuid)
+	}
+
+	hkcfg := c.GetHAKeeperConfig()
+	return hkcfg.DnStoreExpired(dnStore.Tick, state.Tick), nil
+}
+
+func (c *testCluster) DNStoreExpiredIndexed(index int) (bool, error) {
+	ds, err := c.GetDNServiceIndexed(index)
+	if err != nil {
+		return false, err
+	}
+	return c.DNStoreExpired(ds.ID())
+}
+
+func (c *testCluster) LogStoreExpired(uuid string) (bool, error) {
+	state := c.getClusterState()
+	require.NotNil(c.t, state)
+
+	logStore, ok := state.LogState.Stores[uuid]
+	if !ok {
+		return false, wrappedError(ErrStoreNotReported, uuid)
+	}
+
+	hkcfg := c.GetHAKeeperConfig()
+	return hkcfg.LogStoreExpired(logStore.Tick, state.Tick), nil
+}
+
+func (c *testCluster) LogStoreExpiredIndexed(index int) (bool, error) {
+	ls, err := c.GetLogServiceIndexed(index)
+	if err != nil {
+		return false, err
+	}
+	return c.LogStoreExpired(ls.ID())
+}
+
+func (c *testCluster) IsClusterHealthy() bool {
+	hkcfg := c.GetHAKeeperConfig()
+	state := c.getClusterState()
+	_, healthy := syshealth.Check(
+		hkcfg,
+		state.GetClusterInfo(),
+		state.GetDNState(),
+		state.GetLogState(),
+		state.GetTick(),
+	)
+	return healthy
+}
+
+// --------------------------------------------------------------
+// The following are implements for interface `ClusterWaitState`.
+// --------------------------------------------------------------
+func (c *testCluster) WaitHAKeeperLeader(ctx context.Context) LogService {
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting for hakeeper leader",
+				"error: %s", ctx.Err(),
+			)
+		default:
+			time.Sleep(defaultWaitInterval)
+
+			leader := c.getHAKeeperLeader()
+			if leader != nil {
+				return leader
+			}
+		}
+	}
+}
+
+func (c *testCluster) WaitHAKeeperState(
+	ctx context.Context, expected logpb.HAKeeperState,
+) {
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting for hakeeper state",
+				"error: %s", ctx.Err(),
+			)
+		default:
+			time.Sleep(defaultWaitInterval)
+
+			state := c.getClusterState()
+			if state == nil {
+				continue
+			}
+			if state.State == expected {
+				return
+			}
+		}
+	}
+}
+
+func (c *testCluster) WaitDNShardsReported(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting for all dn shards reported",
+				"error: %s", ctx.Err(),
+			)
+		default:
+			time.Sleep(defaultWaitInterval)
+
+			state := c.getClusterState()
+			if state == nil {
+				continue
+			}
+
+			expected := ParseExpectedDNShardCount(state.ClusterInfo)
+			reported := ParseReportedDNShardCount(
+				state.DNState, c.GetHAKeeperConfig(), state.Tick,
+			)
+			// FIXME: what about reported larger than expected
+			if reported >= expected {
+				return
+			}
+		}
+	}
+}
+
+func (c *testCluster) WaitLogShardsReported(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting for all log shards reported",
+				"error: %s", ctx.Err(),
+			)
+		default:
+			time.Sleep(defaultWaitInterval)
+
+			state := c.getClusterState()
+			if state == nil {
+				continue
+			}
+
+			expected := ParseExpectedLogShardCount(state.ClusterInfo)
+			reported := ParseReportedLogShardCount(
+				state.LogState, c.GetHAKeeperConfig(), state.Tick,
+			)
+			// FIXME: what about reported larger than expected
+			if reported >= expected {
+				return
+			}
+		}
+	}
+}
+
+func (c *testCluster) WaitDNReplicaReported(ctx context.Context, shardID uint64) {
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting replica of dn shard reported",
+				"shard %d, error: %s", shardID, ctx.Err(),
+			)
+		default:
+			time.Sleep(defaultWaitInterval)
+
+			state := c.getClusterState()
+			if state == nil {
+				continue
+			}
+
+			reported := ParseDNShardReportedSize(
+				shardID, state.DNState, c.GetHAKeeperConfig(), state.Tick,
+			)
+			if reported >= DNShardExpectedSize {
+				return
+			}
+		}
+	}
+}
+
+func (c *testCluster) WaitLogReplicaReported(ctx context.Context, shardID uint64) {
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting replica of log shard reported",
+				"shard %d, error: %s", shardID, ctx.Err(),
+			)
+		default:
+			time.Sleep(defaultWaitInterval)
+
+			state := c.getClusterState()
+			if state == nil {
+				continue
+			}
+
+			expected := ParseLogShardExpectedSize(shardID, state.ClusterInfo)
+			reported := ParseLogShardReportedSize(
+				shardID, state.LogState, c.GetHAKeeperConfig(), state.Tick,
+			)
+			if reported >= expected {
+				return
+			}
+		}
+	}
+}
+
+// --------------------------------------------------------------
+// The following are implements for interface `ClusterAwareness`.
+// --------------------------------------------------------------
+func (c *testCluster) ListDNServices() []string {
+	ids := make([]string, 0, len(c.dn.svcs))
+	for _, cfg := range c.dn.cfgs {
+		ids = append(ids, cfg.UUID)
+	}
+	return ids
+}
+
+func (c *testCluster) ListLogServices() []string {
+	ids := make([]string, 0, len(c.log.svcs))
+	for _, svc := range c.log.svcs {
+		ids = append(ids, svc.ID())
+	}
+	return ids
+}
+
+func (c *testCluster) ListHAKeeperServices() []LogService {
+	return c.selectHAkeeperServices()
+}
+
 func (c *testCluster) GetDNService(uuid string) (DNService, error) {
 	c.dn.Lock()
 	defer c.dn.Unlock()
@@ -290,164 +638,9 @@ func (c *testCluster) GetClusterState(
 	return leader.GetClusterState()
 }
 
-func (c *testCluster) ListDNShards(
-	ctx context.Context,
-) ([]metadata.DNShardRecord, error) {
-	state, err := c.GetClusterState(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return state.ClusterInfo.DNShards, nil
-}
-
-func (c *testCluster) ListLogShards(
-	ctx context.Context,
-) ([]metadata.LogShardRecord, error) {
-	state, err := c.GetClusterState(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return state.ClusterInfo.LogShards, nil
-}
-
-func (c *testCluster) GetDNStoreInfo(
-	ctx context.Context, uuid string,
-) (logpb.DNStoreInfo, error) {
-	state, err := c.GetClusterState(ctx)
-	if err != nil {
-		return logpb.DNStoreInfo{}, err
-	}
-	stores := state.DNState.Stores
-	if storeInfo, ok := stores[uuid]; ok {
-		return storeInfo, nil
-	}
-	return logpb.DNStoreInfo{}, ErrServiceNotExist
-}
-
-func (c *testCluster) GetLogStoreInfo(
-	ctx context.Context, uuid string,
-) (logpb.LogStoreInfo, error) {
-	state, err := c.GetClusterState(ctx)
-	if err != nil {
-		return logpb.LogStoreInfo{}, err
-	}
-	stores := state.LogState.Stores
-	if storeInfo, ok := stores[uuid]; ok {
-		return storeInfo, nil
-	}
-	return logpb.LogStoreInfo{}, ErrServiceNotExist
-}
-
-func (c *testCluster) GetDNStoreInfoIndexed(
-	ctx context.Context, index int,
-) (logpb.DNStoreInfo, error) {
-	state, err := c.GetClusterState(ctx)
-	if err != nil {
-		return logpb.DNStoreInfo{}, err
-	}
-
-	ds, err := c.GetDNServiceIndexed(index)
-	if err != nil {
-		return logpb.DNStoreInfo{}, err
-	}
-	uuid := ds.ID()
-
-	stores := state.DNState.Stores
-	if storeInfo, ok := stores[uuid]; ok {
-		return storeInfo, nil
-	}
-	return logpb.DNStoreInfo{}, ErrServiceNotExist
-}
-
-func (c *testCluster) GetLogStoreInfoIndexed(
-	ctx context.Context, index int,
-) (logpb.LogStoreInfo, error) {
-	state, err := c.GetClusterState(ctx)
-	if err != nil {
-		return logpb.LogStoreInfo{}, err
-	}
-
-	ls, err := c.GetLogServiceIndexed(index)
-	if err != nil {
-		return logpb.LogStoreInfo{}, err
-	}
-	uuid := ls.ID()
-
-	stores := state.LogState.Stores
-	if storeInfo, ok := stores[uuid]; ok {
-		return storeInfo, nil
-	}
-	return logpb.LogStoreInfo{}, ErrServiceNotExist
-}
-
-func (c *testCluster) GetHAKeeperState() logpb.HAKeeperState {
-	state := c.getClusterState()
-	require.NotNil(c.t, state)
-	return state.State
-}
-
-func (c *testCluster) WaitHAKeeperLeader(ctx context.Context) LogService {
-	for {
-		select {
-		case <-ctx.Done():
-			assert.FailNow(
-				c.t,
-				"terminated when waiting for hakeeper leader: %s", ctx.Err(),
-			)
-		default:
-			time.Sleep(time.Millisecond * 100)
-
-			leader := c.getHAKeeperLeader()
-			if leader != nil {
-				return leader
-			}
-		}
-	}
-}
-func (c *testCluster) WaitHAKeeperState(
-	ctx context.Context, expected logpb.HAKeeperState,
-) {
-	for {
-		select {
-		case <-ctx.Done():
-			assert.FailNow(
-				c.t,
-				"terminated when waiting for hakeeper state: %s", ctx.Err(),
-			)
-		default:
-			time.Sleep(100 * time.Millisecond)
-
-			state := c.getClusterState()
-			if state == nil {
-				continue
-			}
-			if state.State == expected {
-				return
-			}
-		}
-	}
-}
-
-func (c *testCluster) ListDNServices() []string {
-	ids := make([]string, 0, len(c.dn.svcs))
-	for _, cfg := range c.dn.cfgs {
-		ids = append(ids, cfg.UUID)
-	}
-	return ids
-}
-
-func (c *testCluster) ListLogServices() []string {
-	ids := make([]string, 0, len(c.log.svcs))
-	for _, svc := range c.log.svcs {
-		ids = append(ids, svc.ID())
-	}
-	return ids
-}
-
-func (c *testCluster) ListHAKeeperServices() []LogService {
-	return c.selectHAkeeperServices()
-}
-
+// --------------------------------------------------------------
+// The following are implements for interface `ClusterOperation`.
+// --------------------------------------------------------------
 func (c *testCluster) CloseDNService(uuid string) error {
 	ds, err := c.GetDNService(uuid)
 	if err != nil {
@@ -694,6 +887,8 @@ func (c *testCluster) closeLogServices() error {
 }
 
 // getClusterState fetches cluster state from arbitrary hakeeper.
+//
+// NB: it's possible that getClusterState returns nil value.
 func (c *testCluster) getClusterState() *logpb.CheckerState {
 	var state *logpb.CheckerState
 	fn := func(index int, svc LogService) bool {

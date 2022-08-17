@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/power"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -45,7 +44,7 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
+		resultValues := types.DecodeFloat64Slice(resultVector.Data)
 		resultValues = resultValues[:len(rightValues)]
 		nulls.Set(resultVector.Nsp, right.Nsp)
 		vector.SetCol(resultVector, power.PowerScalarLeftConst(leftValues[0], rightValues, resultValues))
@@ -58,7 +57,7 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
+		resultValues := types.DecodeFloat64Slice(resultVector.Data)
 		resultValues = resultValues[:len(leftValues)]
 		nulls.Set(resultVector.Nsp, left.Nsp)
 		vector.SetCol(resultVector, power.PowerScalarRightConst(rightValues[0], leftValues, resultValues))
@@ -68,7 +67,7 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	if err != nil {
 		return nil, err
 	}
-	resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
+	resultValues := types.DecodeFloat64Slice(resultVector.Data)
 	resultValues = resultValues[:len(leftValues)]
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
 	vector.SetCol(resultVector, power.Power(leftValues, rightValues, resultValues))

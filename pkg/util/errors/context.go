@@ -25,10 +25,10 @@ import (
 // ReportError at the mean time.
 // If err is nil, WithContext returns nil.
 func WithContext(ctx context.Context, err error) error {
-	return ContextErrWithDepth(ctx, err, 1)
+	return WithContextWithDepth(ctx, err, 1)
 }
 
-func ContextErrWithDepth(ctx context.Context, err error, depth int) error {
+func WithContextWithDepth(ctx context.Context, err error, depth int) error {
 	if err == nil {
 		return nil
 	}

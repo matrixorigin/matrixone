@@ -604,7 +604,7 @@ func FillInitialDataForMoUser() *batch.Batch {
 }
 
 // InitDB setups the initial catalog tables in tae
-func InitDB(tae engine.Engine) error {
+func InitDB(ctx context.Context, tae engine.Engine) error {
 	taeEngine, ok := tae.(moengine.TxnEngine)
 	if !ok {
 		return errorIsNotTaeEngine
@@ -632,7 +632,6 @@ func InitDB(tae engine.Engine) error {
 	//	return err
 	//}
 
-	ctx := context.TODO()
 	catalogDB, err := tae.Database(ctx, catalogDbName, engine.Snapshot(txnCtx.GetCtx()))
 	if err != nil {
 		logutil.Infof("get database %v failed.error:%v", catalogDbName, err)
@@ -756,11 +755,11 @@ func InitDB(tae engine.Engine) error {
 		return err
 	}
 
-	return sanityCheck(tae)
+	return sanityCheck(ctx, tae)
 }
 
 // sanityCheck checks the catalog is ready or not
-func sanityCheck(tae engine.Engine) error {
+func sanityCheck(ctx context.Context, tae engine.Engine) error {
 	taeEngine, ok := tae.(moengine.TxnEngine)
 	if !ok {
 		return errorIsNotTaeEngine
@@ -770,7 +769,6 @@ func sanityCheck(tae engine.Engine) error {
 	if err != nil {
 		return err
 	}
-	ctx := context.TODO()
 	// databases: mo_catalog,information_schema
 	dbs, err := tae.Databases(ctx, engine.Snapshot(txnCtx.GetCtx()))
 	if err != nil {
@@ -792,7 +790,7 @@ func sanityCheck(tae engine.Engine) error {
 		DefineSchemaForMoUser(),
 	}
 	catalogDbName := "mo_catalog"
-	err = isWantedDatabase(taeEngine, txnCtx, catalogDbName, wantTablesOfMoCatalog, wantSchemasOfCatalog)
+	err = isWantedDatabase(ctx, taeEngine, txnCtx, catalogDbName, wantTablesOfMoCatalog, wantSchemasOfCatalog)
 	if err != nil {
 		return err
 	}
@@ -821,9 +819,7 @@ func isWanted(want, actual []string) bool {
 }
 
 // isWantedDatabase checks the database has the right tables
-func isWantedDatabase(taeEngine moengine.TxnEngine, txnCtx moengine.Txn,
-	dbName string, tables []string, schemas []*CatalogSchema) error {
-	ctx := context.TODO()
+func isWantedDatabase(ctx context.Context, taeEngine moengine.TxnEngine, txnCtx moengine.Txn, dbName string, tables []string, schemas []*CatalogSchema) error {
 	db, err := taeEngine.Database(ctx, dbName, engine.Snapshot(txnCtx.GetCtx()))
 	if err != nil {
 		logutil.Infof("get database %v failed.error:%v", dbName, err)
@@ -846,7 +842,7 @@ func isWantedDatabase(taeEngine moengine.TxnEngine, txnCtx moengine.Txn,
 	//TODO:fix it after tae is ready
 	//check table attributes
 	for i, tableName := range tables {
-		err = isWantedTable(db, txnCtx, tableName, schemas[i])
+		err = isWantedTable(ctx, db, txnCtx, tableName, schemas[i])
 		if err != nil {
 			return err
 		}
@@ -856,9 +852,7 @@ func isWantedDatabase(taeEngine moengine.TxnEngine, txnCtx moengine.Txn,
 }
 
 // isWantedTable checks the table has the right attributes
-func isWantedTable(db engine.Database, txnCtx moengine.Txn,
-	tableName string, schema *CatalogSchema) error {
-	ctx := context.TODO()
+func isWantedTable(ctx context.Context, db engine.Database, txnCtx moengine.Txn, tableName string, schema *CatalogSchema) error {
 	table, err := db.Relation(ctx, tableName)
 	if err != nil {
 		logutil.Infof("get table %v failed.error:%v", tableName, err)

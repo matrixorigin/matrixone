@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package union
+package intersect
 
 import (
 	"context"
@@ -27,51 +27,49 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type unionTestCase struct {
+type intersectTestCase struct {
 	proc   *process.Process
 	arg    *Argument
 	cancel context.CancelFunc
 }
 
-func TestUnion(t *testing.T) {
+func TestIntersect(t *testing.T) {
 	proc := testutil.NewProcess()
-	// [4 rows + 3 rows, 2 columns] union [3 rows + 4 rows, 2 columns]
+	// [2 rows + 2 row, 3 columns] intersect [1 row + 1 rows, 3 columns]
 	/*
-		{1, 1}				{1, 1}
-		{2, 2}				{2, 2}
-		{3, 3}				{3, 3}
-		{4, 4}   union  	{1, 1}
-		{1, 1}				{2, 2}
-		{2, 2}				{3, 3}
-		{3, 3}				{4, 4}
+		{1, 2, 3}	    {1, 2, 3}
+		{1, 2, 3} intersect {4, 5, 6} ==> {1, 2, 3}
+		{3, 4, 5}
+		{3, 4, 5}
 	*/
-	c := newUnionTestCase(
+	c := newIntersectTestCase(
 		proc,
 		[]*batch.Batch{
 			testutil.NewBatchWithVectors(
 				[]*vector.Vector{
-					testutil.NewVector(4, types.T_int64.ToType(), proc.Mp, false, []int64{1, 2, 3, 4}),
-					testutil.NewVector(4, types.T_int64.ToType(), proc.Mp, false, []int64{1, 2, 3, 4}),
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp, false, []int64{1, 1}),
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp, false, []int64{2, 2}),
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp, false, []int64{3, 3}),
 				}, nil),
-
 			testutil.NewBatchWithVectors(
 				[]*vector.Vector{
-					testutil.NewVector(3, types.T_int64.ToType(), proc.Mp, false, []int64{1, 2, 3}),
-					testutil.NewVector(3, types.T_int64.ToType(), proc.Mp, false, []int64{1, 2, 3}),
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp, false, []int64{3, 3}),
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp, false, []int64{4, 4}),
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp, false, []int64{5, 5}),
 				}, nil),
 		},
-
 		[]*batch.Batch{
 			testutil.NewBatchWithVectors(
 				[]*vector.Vector{
-					testutil.NewVector(3, types.T_int64.ToType(), proc.Mp, false, []int64{1, 2, 3}),
-					testutil.NewVector(3, types.T_int64.ToType(), proc.Mp, false, []int64{1, 2, 3}),
+					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp, false, []int64{1}),
+					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp, false, []int64{2}),
+					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp, false, []int64{3}),
 				}, nil),
-
 			testutil.NewBatchWithVectors(
 				[]*vector.Vector{
-					testutil.NewVector(4, types.T_int64.ToType(), proc.Mp, false, []int64{1, 2, 3, 4}),
-					testutil.NewVector(4, types.T_int64.ToType(), proc.Mp, false, []int64{1, 2, 3, 4}),
+					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp, false, []int64{4}),
+					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp, false, []int64{5}),
+					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp, false, []int64{6}),
 				}, nil),
 		},
 	)
@@ -79,28 +77,29 @@ func TestUnion(t *testing.T) {
 	err := Prepare(c.proc, c.arg)
 	require.NoError(t, err)
 	cnt := 0
+	end := false
 	for {
-		end, err := Call(0, c.proc, c.arg)
+		end, err = Call(0, c.proc, c.arg)
 		if end {
 			break
 		}
-		result := c.proc.InputBatch()
 		require.NoError(t, err)
-		if result != nil {
+		result := c.proc.InputBatch()
+		if result != nil && len(result.Zs) != 0 {
 			cnt += result.Length()
-			require.Equal(t, 2, len(result.Vecs)) // 2 columns
-			c.proc.InputBatch().Clean(c.proc.Mp)  // clean the final result
+			require.Equal(t, 3, len(result.Vecs)) // 3 column
+			c.proc.InputBatch().Clean(c.proc.Mp)
 		}
 	}
-	require.Equal(t, 4, cnt) // 4 rows
+	require.Equal(t, 1, cnt) // 1 row
 	require.Equal(t, int64(0), mheap.Size(c.proc.Mp))
 }
 
-func newUnionTestCase(proc *process.Process, leftBatches, rightBatches []*batch.Batch) unionTestCase {
+func newIntersectTestCase(proc *process.Process, leftBatches, rightBatches []*batch.Batch) intersectTestCase {
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	{
-		c := make(chan *batch.Batch, len(leftBatches)+1)
+		c := make(chan *batch.Batch, len(leftBatches)+10)
 		for i := range leftBatches {
 			c <- leftBatches[i]
 		}
@@ -111,7 +110,7 @@ func newUnionTestCase(proc *process.Process, leftBatches, rightBatches []*batch.
 		}
 	}
 	{
-		c := make(chan *batch.Batch, len(rightBatches)+1)
+		c := make(chan *batch.Batch, len(rightBatches)+10)
 		for i := range rightBatches {
 			c <- rightBatches[i]
 		}
@@ -122,7 +121,7 @@ func newUnionTestCase(proc *process.Process, leftBatches, rightBatches []*batch.
 		}
 	}
 	arg := new(Argument)
-	return unionTestCase{
+	return intersectTestCase{
 		proc:   proc,
 		arg:    arg,
 		cancel: cancel,

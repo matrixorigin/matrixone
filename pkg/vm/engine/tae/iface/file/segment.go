@@ -14,7 +14,7 @@
 
 package file
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 type Segment interface {
 	Base
