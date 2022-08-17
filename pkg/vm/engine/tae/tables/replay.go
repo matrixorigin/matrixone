@@ -68,32 +68,29 @@ func (blk *dataBlock) ReplayIndex() (err error) {
 			return
 		}
 		keysCtx := new(index.KeysCtx)
-		err = blk.node.DoWithPin(func() (err error) {
-			var vec containers.Vector
-			if blk.meta.GetSchema().IsSinglePK() {
-				// TODO: use mempool
-				vec, err = blk.node.GetColumnDataCopy(blk.node.rows, blk.meta.GetSchema().GetSingleSortKeyIdx(), nil)
+		var vec containers.Vector
+		if blk.meta.GetSchema().IsSinglePK() {
+			// TODO: use mempool
+			vec, err = blk.node.GetColumnDataCopy(blk.node.rows, blk.meta.GetSchema().GetSingleSortKeyIdx(), nil)
+			if err != nil {
+				return
+			}
+			// TODO: apply deletes
+			keysCtx.Keys = vec
+		} else {
+			sortKeys := blk.meta.GetSchema().SortKey
+			vs := make([]containers.Vector, sortKeys.Size())
+			for i := range vs {
+				vec, err = blk.node.GetColumnDataCopy(blk.node.rows, sortKeys.Defs[i].Idx, nil)
 				if err != nil {
 					return
 				}
 				// TODO: apply deletes
-				keysCtx.Keys = vec
-			} else {
-				sortKeys := blk.meta.GetSchema().SortKey
-				vs := make([]containers.Vector, sortKeys.Size())
-				for i := range vs {
-					vec, err = blk.node.GetColumnDataCopy(blk.node.rows, sortKeys.Defs[i].Idx, nil)
-					if err != nil {
-						return
-					}
-					// TODO: apply deletes
-					vs[i] = vec
-					defer vs[i].Close()
-				}
-				keysCtx.Keys = model.EncodeCompoundColumn(vs...)
+				vs[i] = vec
+				defer vs[i].Close()
 			}
-			return
-		})
+			keysCtx.Keys = model.EncodeCompoundColumn(vs...)
+		}
 		if err != nil {
 			return
 		}

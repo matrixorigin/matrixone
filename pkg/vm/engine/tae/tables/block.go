@@ -460,24 +460,22 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 	}
 
 	view = model.NewColumnView(ts, colIdx)
-	err = blk.node.DoWithPin(func() (err error) {
-		if raw {
-			var data containers.Vector
-			data, err = blk.node.GetColumnDataCopy(maxRow, colIdx, buffer)
-			if err != nil {
-				return
-			}
-			view.SetData(data)
-			return
-		}
-
-		vec, err := blk.node.GetColumnDataCopy(maxRow, colIdx, buffer)
+	if raw {
+		var data containers.Vector
+		data, err = blk.node.GetColumnDataCopy(maxRow, colIdx, buffer)
 		if err != nil {
 			return
 		}
-		view.SetData(vec)
+		view.SetData(data)
 		return
-	})
+	}
+
+	vec, err := blk.node.GetColumnDataCopy(maxRow, colIdx, buffer)
+	if err != nil {
+		return
+	}
+	view.SetData(vec)
+	return
 
 	if err != nil {
 		return
@@ -725,62 +723,56 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts type
 	// If any pk defined, update index
 	if blk.meta.GetSchema().IsSinglePK() {
 		var row uint32
-		err = blk.node.DoWithPin(func() (err error) {
-			blk.mvcc.RLock()
-			vecview := blk.node.data.Vecs[blk.meta.GetSchema().GetSingleSortKeyIdx()].GetView()
-			blk.mvcc.RUnlock()
-			blk.mvcc.Lock()
-			defer blk.mvcc.Unlock()
-			var currRow uint32
-			for gen.HasNext() {
-				row = gen.Next()
-				v := vecview.Get(int(row))
-				currRow, err = blk.index.GetActiveRow(v)
-				if err != nil || currRow == row {
-					if err = blk.index.Delete(v, ts); err != nil {
-						return
-					}
+		blk.mvcc.RLock()
+		vecview := blk.node.data.Vecs[blk.meta.GetSchema().GetSingleSortKeyIdx()].GetView()
+		blk.mvcc.RUnlock()
+		blk.mvcc.Lock()
+		defer blk.mvcc.Unlock()
+		var currRow uint32
+		for gen.HasNext() {
+			row = gen.Next()
+			v := vecview.Get(int(row))
+			currRow, err = blk.index.GetActiveRow(v)
+			if err != nil || currRow == row {
+				if err = blk.index.Delete(v, ts); err != nil {
+					return
 				}
 			}
-			blk.meta.GetSegment().GetTable().RemoveRows(deleted)
-			return
-		})
+		}
+		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 	} else {
 		var row uint32
-		err = blk.node.DoWithPin(func() (err error) {
-			var w bytes.Buffer
-			sortKeys := blk.meta.GetSchema().SortKey
-			vals := make([]any, sortKeys.Size())
-			vecs := make([]containers.VectorView, sortKeys.Size())
-			blk.mvcc.RLock()
-			for i := range vecs {
-				vec := blk.node.data.Vecs[sortKeys.Defs[i].Idx].GetView()
-				if err != nil {
-					blk.mvcc.RUnlock()
-					return err
-				}
-				vecs[i] = vec
+		var w bytes.Buffer
+		sortKeys := blk.meta.GetSchema().SortKey
+		vals := make([]any, sortKeys.Size())
+		vecs := make([]containers.VectorView, sortKeys.Size())
+		blk.mvcc.RLock()
+		for i := range vecs {
+			vec := blk.node.data.Vecs[sortKeys.Defs[i].Idx].GetView()
+			if err != nil {
+				blk.mvcc.RUnlock()
+				return err
 			}
-			blk.mvcc.RUnlock()
-			blk.mvcc.Lock()
-			defer blk.mvcc.Unlock()
-			var currRow uint32
-			for gen.HasNext() {
-				row = gen.Next()
-				for i := range vals {
-					vals[i] = vecs[i].Get(int(row))
-				}
-				v := model.EncodeTypedVals(&w, vals...)
-				currRow, err = blk.index.GetActiveRow(v)
-				if err != nil || currRow == row {
-					if err = blk.index.Delete(v, ts); err != nil {
-						return
-					}
+			vecs[i] = vec
+		}
+		blk.mvcc.RUnlock()
+		blk.mvcc.Lock()
+		defer blk.mvcc.Unlock()
+		var currRow uint32
+		for gen.HasNext() {
+			row = gen.Next()
+			for i := range vals {
+				vals[i] = vecs[i].Get(int(row))
+			}
+			v := model.EncodeTypedVals(&w, vals...)
+			currRow, err = blk.index.GetActiveRow(v)
+			if err != nil || currRow == row {
+				if err = blk.index.Delete(v, ts); err != nil {
+					return
 				}
 			}
-			blk.meta.GetSegment().GetTable().RemoveRows(deleted)
-			return
-		})
+		}
+		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 	}
 	return
 }

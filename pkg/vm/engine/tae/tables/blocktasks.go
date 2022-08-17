@@ -15,8 +15,6 @@
 package tables
 
 import (
-	"time"
-
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -177,18 +175,7 @@ func (blk *dataBlock) ForceCompact() (err error) {
 		panic("todo")
 	}
 	ts := blk.mvcc.LoadMaxVisible()
-	if blk.node.GetBlockMaxflushTS().GreaterEq(ts) {
-		return
-	}
-	h, err := blk.bufMgr.TryPin(blk.node, time.Second)
-	if err != nil {
-		return
-	}
-	defer h.Close()
 	// Why check again? May be a flush was executed in between
-	if blk.node.GetBlockMaxflushTS().GreaterEq(ts) {
-		return
-	}
 	blk.mvcc.RLock()
 	maxRow, _, err := blk.mvcc.GetMaxVisibleRowLocked(ts)
 	blk.mvcc.RUnlock()
@@ -221,14 +208,6 @@ func (blk *dataBlock) ABlkFlushData(
 	masks map[uint16]*roaring.Bitmap,
 	vals map[uint16]map[uint32]any,
 	deletes *roaring.Bitmap) (err error) {
-	flushTS := blk.node.GetBlockMaxflushTS()
-	if ts.LessEq(flushTS) {
-		logutil.Info("[Cancelled]",
-			common.ReprerField("blk", blk.meta),
-			common.OperationField("flush"),
-			common.ReasonField("State Request: Already Flushed"))
-		return data.ErrStaleRequest
-	}
 	// ckpTs := blk.GetMaxCheckpointTS()
 	// if ts <= ckpTs {
 	// 	logutil.Info("[Cancelled]",
@@ -244,7 +223,6 @@ func (blk *dataBlock) ABlkFlushData(
 	if err = blk.file.Sync(); err != nil {
 		return
 	}
-	blk.node.SetBlockMaxflushTS(ts)
 	blk.resetNice()
 	logutil.Info("[Done]",
 		common.ReprerField("blk", blk.meta),
