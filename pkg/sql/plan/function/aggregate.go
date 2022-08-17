@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregate"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 )
 
 func initAggregateFunction() {
@@ -687,6 +688,9 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
+				if !operator.IsNumeric(inputs[0]) {
+					return wrongFuncParamForAgg, nil
+				}
 				_, err := aggregate.ReturnType(aggregate.Variance, types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
@@ -710,6 +714,9 @@ var aggregates = map[int]Functions{
 			if len(inputs) == 1 {
 				if inputs[0] == types.T_any {
 					return 0, nil
+				}
+				if !operator.IsNumeric(inputs[0]) {
+					return wrongFuncParamForAgg, nil
 				}
 				_, err := aggregate.ReturnType(aggregate.StdDevPop, types.Type{Oid: inputs[0]})
 				if err == nil {
