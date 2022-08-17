@@ -31,14 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 )
 
-var (
-	GoVersion    = ""
-	BranchName   = ""
-	LastCommitId = ""
-	BuildTime    = ""
-	MoVersion    = ""
-)
-
 func NewService(cfg *Config, ctx context.Context) (Service, error) {
 	srv := &service{cfg: cfg}
 	srv.logger = logutil.Adjust(srv.logger)
@@ -136,7 +128,7 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 	{
 		// init trace/log/error framework
 		if _, err := trace.Init(moServerCtx,
-			trace.WithMOVersion(MoVersion),
+			trace.WithMOVersion(pu.SV.MoVersion),
 			trace.WithNode(0, trace.NodeTypeNode),
 			trace.EnableTracer(pu.SV.EnableTrace),
 			trace.WithBatchProcessMode(pu.SV.TraceBatchProcessor),
@@ -155,7 +147,7 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 		}
 		metric.InitMetric(moServerCtx, ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
 	}
-	frontend.InitServerVersion(MoVersion)
+	frontend.InitServerVersion(pu.SV.MoVersion)
 }
 
 func (s *service) runMoServer() error {

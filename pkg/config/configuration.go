@@ -29,6 +29,8 @@ const (
 
 // FrontendParameters of the frontend
 type FrontendParameters struct {
+	MoVersion string
+
 	//root name
 	RootName string `toml:"rootname"`
 

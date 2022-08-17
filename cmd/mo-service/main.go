@@ -71,6 +71,7 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 	// TODO: start other service
 	switch strings.ToUpper(cfg.ServiceType) {
 	case cnServiceType:
+		cfg.CN.Frontend.MoVersion = Version
 		return startCNService(cfg, stopper)
 	case dnServiceType:
 		return startDNService(cfg, stopper)
