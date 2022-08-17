@@ -341,6 +341,9 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		}
 		ds.DataSource = &Source{Bat: bat}
 		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
+	case plan.Node_EXTERNAL_SCAN:
+		ss := c.compileExternScan(n)
+		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_TABLE_SCAN:
 		ss := c.compileTableScan(n)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
@@ -472,6 +475,27 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 	default:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", n))
 	}
+}
+
+func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
+	ds := &Scope{Magic: Normal}
+	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+	bat := batch.NewWithSize(1)
+	{
+		bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
+		bat.Vecs[0].Col = make([]int64, 1)
+		bat.InitZsOne(1)
+	}
+	ds.DataSource = &Source{Bat: bat}
+	ss := []*Scope{ds}
+	for i := range ss {
+		ss[i].appendInstruction(vm.Instruction{
+			Op:  vm.External,
+			Idx: c.anal.curr,
+			Arg: constructExternal(n, c.ctx),
+		})
+	}
+	return ss
 }
 
 func (c *Compile) compileTableScan(n *plan.Node) []*Scope {
@@ -665,8 +689,9 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 			}
 		}
 	case plan.Node_ANTI:
+		_, conds := extraJoinConditions(n.OnList)
 		for i := range rs {
-			if isEq && len(n.OnList) == 1 {
+			if isEq && len(conds) == 1 {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Anti,
 					Idx: c.anal.curr,

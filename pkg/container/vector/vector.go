@@ -4435,6 +4435,9 @@ func (v *Vector) Read(data []byte) error {
 			v.Col = types.DecodeTimestampSlice(data[size:])
 		}
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+		if v.Col == nil {
+			v.Col = &types.Bytes{}
+		}
 		Col := v.Col.(*types.Bytes)
 		Col.Reset()
 		size := types.DecodeUint32(data)

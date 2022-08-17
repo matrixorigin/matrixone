@@ -17,12 +17,15 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
@@ -143,7 +146,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 			properties := []*plan.Property{
 				{
-					Key:   "Comment",
+					Key:   catalog.SystemRelAttr_Comment,
 					Value: opt.Comment,
 				},
 			}
@@ -171,6 +174,37 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	}
 
 	// After handleTableOptions, so begin the partitions processing depend on TableDef
+	if stmt.Param != nil {
+		for i := 0; i < len(stmt.Param.S3option); i += 2 {
+			switch strings.ToLower(stmt.Param.S3option[i]) {
+			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression":
+			default:
+				return nil, fmt.Errorf("the keyword '%s' is not support", strings.ToLower(stmt.Param.S3option[i]))
+			}
+		}
+		json_byte, err := json.Marshal(stmt.Param)
+		if err != nil {
+			return nil, err
+		}
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemExternalRel,
+			},
+			{
+				Key:   catalog.SystemRelAttr_CreateSQL,
+				Value: string(json_byte),
+			},
+		}
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			},
+		})
+	}
+	// set partition(unsupport now)
 	if stmt.PartitionOption != nil {
 		nodeID := builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_TABLE_SCAN,

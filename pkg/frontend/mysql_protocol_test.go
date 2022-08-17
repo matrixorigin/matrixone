@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/BurntSushi/toml"
 	"math"
 	"reflect"
 	"strconv"
@@ -258,20 +259,15 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	//client connection method: mysql -h 127.0.0.1 -P 6001 -udump -p
 
 	//before anything using the configuration
-	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
-		fmt.Printf("error:%v\n", err)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
+	if err != nil {
 		panic(err)
 	}
 
-	if err := config.LoadvarsConfigFromFile("test/system_vars_config.toml",
-		&config.GlobalSystemVariables); err != nil {
-		fmt.Printf("error:%v\n", err)
-		panic(err)
-	}
+	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
+	pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
 
-	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
-	config.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	rm := NewRoutineManager(ctx, pu)
 	rm.SetSkipCheckUser(true)
@@ -1188,20 +1184,14 @@ func TestMysqlResultSet(t *testing.T) {
 	//	mysql-8.0.23 success
 	//./mysql-test-run 1st --extern user=root --extern port=6001 --extern host=127.0.0.1
 	//	matrixone failed: mysql-test-run: *** ERROR: Could not connect to extern server using command: '/Users/pengzhen/Documents/mysql-server-mysql-8.0.23/bld/runtime_output_directory//mysql --no-defaults --user=root --user=root --port=6001 --host=127.0.0.1 --silent --database=mysql --execute="SHOW GLOBAL VARIABLES"'
-	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
-		fmt.Printf("error:%v\n", err)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
+	if err != nil {
 		panic(err)
 	}
 
-	if err := config.LoadvarsConfigFromFile("test/system_vars_config.toml",
-		&config.GlobalSystemVariables); err != nil {
-		fmt.Printf("error:%v\n", err)
-		panic(err)
-	}
-
-	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
-	config.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
+	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
+	pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
 
 	trm := NewTestRoutineManager(pu)
 
@@ -1995,7 +1985,7 @@ func Test_handleHandshake(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		var IO IOPackageImpl
-		var SV = &config.SystemVariables{}
+		var SV = &config.FrontendParameters{}
 		mp := &MysqlProtocolImpl{SV: SV}
 		mp.io = &IO
 		mp.tcpConn = ioses
@@ -2026,7 +2016,7 @@ func Test_handleHandshake_Recover(t *testing.T) {
 
 	convey.Convey("handleHandshake succ", t, func() {
 		var IO IOPackageImpl
-		var SV = &config.SystemVariables{}
+		var SV = &config.FrontendParameters{}
 		mp := &MysqlProtocolImpl{SV: SV}
 		mp.io = &IO
 		mp.tcpConn = ioses

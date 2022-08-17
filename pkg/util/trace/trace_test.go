@@ -54,10 +54,10 @@ func Test_initExport(t *testing.T) {
 			empty: false,
 		},
 	}
-	sysVar := &config.GlobalSystemVariables
+	sysVar := &config.FrontendParameters{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sysVar.SetEnableTrace(tt.args.enableTracer)
+			sysVar.DisableTrace = !tt.args.enableTracer
 			export.ResetGlobalBatchProcessor()
 			initExport(context.TODO(), tt.args.config)
 			if tt.empty {

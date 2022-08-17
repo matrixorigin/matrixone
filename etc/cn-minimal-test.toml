@@ -1,0 +1,7 @@
+# service node type, [DN|CN|LOG]
+service-type = "CN"
+
+[log]
+level = "debug"
+format = "json"
+max-size = 512
