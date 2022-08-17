@@ -129,7 +129,7 @@ func TestSession_TxnBegin(t *testing.T) {
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		proto := NewMysqlClientProtocol(0, ioses, 1024, nil)
-		return NewSession(proto, nil, nil, config.NewParameterUnit(&config.SystemVariables{}, nil, nil, nil, nil), gSysVars)
+		return NewSession(proto, nil, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil), gSysVars)
 	}
 	convey.Convey("new session", t, func() {
 		ctrl := gomock.NewController(t)
@@ -165,7 +165,7 @@ func TestVariables(t *testing.T) {
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		proto := NewMysqlClientProtocol(0, ioses, 1024, nil)
-		return NewSession(proto, nil, nil, config.NewParameterUnit(&config.SystemVariables{}, nil, nil, nil, nil), gSysVars)
+		return NewSession(proto, nil, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil), gSysVars)
 	}
 
 	checkWant := func(ses, existSes, newSesAfterSession *Session,
@@ -461,7 +461,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
 		storage.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 
-		pu := config.NewParameterUnit(&config.SystemVariables{}, nil, nil, storage, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, storage, nil)
 
 		gSysVars := &GlobalSystemVariables{}
 		InitGlobalSystemVariables(gSysVars)

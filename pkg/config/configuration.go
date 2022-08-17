@@ -27,20 +27,20 @@ const (
 	ParameterUnitKey ConfigurationKeyType = 1
 )
 
-// SystemVariables parameters of the frontend
-type SystemVariables struct {
+// FrontendParameters of the frontend
+type FrontendParameters struct {
 	//root name
-	Rootname string `toml:"rootname"`
+	RootName string `toml:"rootname"`
 
 	//root password
-	Rootpassword string `toml:"rootpassword"`
+	RootPassword string `toml:"rootpassword"`
 
-	Dumpuser string `toml:"dumpuser"`
+	DumpUser string `toml:"dumpuser"`
 
-	Dumppassword string `toml:"dumppassword"`
+	DumpPassword string `toml:"dumppassword"`
 
 	//dump database
-	Dumpdatabase string `toml:"dumpdatabase"`
+	DumpDatabase string `toml:"dumpdatabase"`
 
 	//port defines which port the mo-server listens on and clients connect to
 	Port int64 `toml:"port"`
@@ -87,10 +87,10 @@ type SystemVariables struct {
 	//default is 4. The count of go routine writing batch into the storage.
 	LoadDataConcurrencyCount int64 `toml:"loadDataConcurrencyCount"`
 
-	//default is fase. Skip writing batch into the storage
+	//default is false. Skip writing batch into the storage
 	LoadDataSkipWritingBatch bool `toml:"loadDataSkipWritingBatch"`
 
-	//defult is false. true for profiling the getDataFromPipeline
+	//default is false. true for profiling the getDataFromPipeline
 	EnableProfileGetDataFromPipeline bool `toml:"enableProfileGetDataFromPipeline"`
 
 	//KB. When the number of bytes in the outbuffer exceeds it,the outbuffer will be flushed.
@@ -146,7 +146,7 @@ type SystemVariables struct {
 }
 
 type ParameterUnit struct {
-	SV *SystemVariables
+	SV *FrontendParameters
 
 	//host memory
 	HostMmu *host.Mmu
@@ -161,7 +161,7 @@ type ParameterUnit struct {
 	ClusterNodes engine.Nodes
 }
 
-func NewParameterUnit(sv *SystemVariables, hostMmu *host.Mmu, mempool *mempool.Mempool, storageEngine engine.Engine, clusterNodes engine.Nodes) *ParameterUnit {
+func NewParameterUnit(sv *FrontendParameters, hostMmu *host.Mmu, mempool *mempool.Mempool, storageEngine engine.Engine, clusterNodes engine.Nodes) *ParameterUnit {
 	return &ParameterUnit{
 		SV:            sv,
 		HostMmu:       hostMmu,

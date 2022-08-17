@@ -54,7 +54,7 @@ func Test_initExport(t *testing.T) {
 			empty: false,
 		},
 	}
-	sysVar := &config.SystemVariables{}
+	sysVar := &config.FrontendParameters{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sysVar.EnableTrace = tt.args.enableTracer

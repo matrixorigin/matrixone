@@ -56,7 +56,7 @@ type Config struct {
 		BatchSize int64 `toml:"batch-size"`
 	}
 	//parameters for the frontend
-	Frontend config.SystemVariables `toml:"frontend"`
+	Frontend config.FrontendParameters `toml:"frontend"`
 }
 
 type service struct {

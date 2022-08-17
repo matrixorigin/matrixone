@@ -296,8 +296,8 @@ func MakeDebugInfo(data []byte, bytesCount int, bytesPerLine int) string {
 	return ps
 }
 
-func getSystemVariables(configFile string) (*mo_config.SystemVariables, error) {
-	sv := &mo_config.SystemVariables{}
+func getSystemVariables(configFile string) (*mo_config.FrontendParameters, error) {
+	sv := &mo_config.FrontendParameters{}
 	var err error
 	_, err = toml.DecodeFile(configFile, sv)
 	if err != nil {

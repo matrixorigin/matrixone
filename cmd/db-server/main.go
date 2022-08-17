@@ -178,7 +178,7 @@ func main() {
 
 	configFilePath := args[0]
 
-	gSystemVariables := &config.SystemVariables{}
+	gSystemVariables := &config.FrontendParameters{}
 	pu := config.NewParameterUnit(gSystemVariables, nil, nil, nil, nil)
 
 	//before anything using the configuration
