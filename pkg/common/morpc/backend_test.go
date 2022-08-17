@@ -25,6 +25,7 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
@@ -57,16 +58,20 @@ func TestSend(t *testing.T) {
 }
 
 func TestCloseWhileContinueSending(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
 			return conn.Write(msg, goetty.WriteOptions{Flush: true})
 		},
 		func(b *remoteBackend) {
 			c := make(chan struct{})
-
+			stopC := make(chan struct{})
+			var wg sync.WaitGroup
+			wg.Add(1)
 			go func() {
+				defer wg.Done()
 				sendFunc := func() {
-					ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 					defer cancel()
 					req := newTestMessage(1)
 					f, err := b.Send(ctx, req, SendOptions{})
@@ -76,8 +81,9 @@ func TestCloseWhileContinueSending(t *testing.T) {
 					defer f.Close()
 
 					resp, err := f.Get()
-					assert.NoError(t, err)
-					assert.Equal(t, req, resp)
+					if err == nil {
+						assert.Equal(t, req, resp)
+					}
 					select {
 					case c <- struct{}{}:
 					default:
@@ -85,11 +91,18 @@ func TestCloseWhileContinueSending(t *testing.T) {
 				}
 
 				for {
-					sendFunc()
+					select {
+					case <-stopC:
+						return
+					default:
+						sendFunc()
+					}
 				}
 			}()
 			<-c
 			b.Close()
+			close(stopC)
+			wg.Wait()
 		},
 		WithBackendConnectWhenCreate())
 }
@@ -468,6 +481,7 @@ func TestTCPProxyExample(t *testing.T) {
 	defer func() {
 		assert.NoError(t, p.Stop())
 	}()
+	p.AddUpStream(testAddr, time.Second*10)
 
 	testBackendSendWithAddr(t,
 		testProxyAddr,
@@ -475,8 +489,6 @@ func TestTCPProxyExample(t *testing.T) {
 			return conn.Write(msg, goetty.WriteOptions{Flush: true})
 		},
 		func(b *remoteBackend) {
-			p.AddUpStream(testAddr, b.options.connectTimeout)
-
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := newTestMessage(1)
@@ -647,6 +659,10 @@ func (tm *testMessage) SetPayloadField(data []byte) {
 
 func newTestCodec() Codec {
 	return NewMessageCodec(func() Message { return messagePool.Get().(*testMessage) }, 1024)
+}
+
+func newTestCodecWithChecksum() Codec {
+	return NewMessageCodecWithChecksum(func() Message { return messagePool.Get().(*testMessage) }, 1024)
 }
 
 var (

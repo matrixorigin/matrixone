@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
@@ -117,7 +116,7 @@ func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mheap.Mheap) error {
 		a.es = make([]bool, 0, size)
 		a.srcs = make([][]T1, 0, size)
 		a.maps = make([]*hashmap.StrHashMap, 0, size)
-		a.vs = encoding.DecodeSlice[T2](a.da, sz)
+		a.vs = types.DecodeSlice[T2](a.da, sz)
 	} else if n+size >= cap(a.vs) {
 		a.da = a.da[:n*sz]
 		data, err := m.Grow(a.da, int64(n+size)*int64(sz))
@@ -126,7 +125,7 @@ func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mheap.Mheap) error {
 		}
 		m.Free(a.da)
 		a.da = data
-		a.vs = encoding.DecodeSlice[T2](a.da, sz)
+		a.vs = types.DecodeSlice[T2](a.da, sz)
 	}
 	a.vs = a.vs[:n+size]
 	a.da = a.da[:(n+size)*sz]

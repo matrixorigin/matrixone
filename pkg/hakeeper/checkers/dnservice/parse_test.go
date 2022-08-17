@@ -56,14 +56,14 @@ func TestCheckInitatingShards(t *testing.T) {
 	config := hakeeper.Config{
 		TickPerSecond:   10,
 		LogStoreTimeout: 10 * time.Second,
-		DnStoreTimeout:  10 * time.Second,
+		DNStoreTimeout:  10 * time.Second,
 	}
 
 	// mock ShardMapper
 	mapper := mockShardMapper()
 
 	earliestTick := uint64(10)
-	expiredTick := config.ExpiredTick(earliestTick, config.DnStoreTimeout) + 1
+	expiredTick := config.ExpiredTick(earliestTick, config.DNStoreTimeout) + 1
 
 	// discover an initial shard => no operators generated
 	ops := checkInitatingShards(rs, mapper, workingStores, idAlloc, cluster, config, earliestTick)
@@ -149,7 +149,7 @@ func TestParseDNState(t *testing.T) {
 	// construct current tick in order to make heartbeat tick expired
 	cfg := hakeeper.Config{}
 	cfg.Fill()
-	currTick := cfg.ExpiredTick(expiredTick, cfg.DnStoreTimeout) + 1
+	currTick := cfg.ExpiredTick(expiredTick, cfg.DNStoreTimeout) + 1
 
 	// 1. no working dn stores
 	{

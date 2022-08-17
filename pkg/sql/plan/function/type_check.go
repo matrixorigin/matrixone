@@ -23,6 +23,7 @@ const (
 
 	tooManyFunctionsMatched = -2
 	wrongFunctionParameters = -1
+	wrongFuncParamForAgg    = -3
 
 	matchedDirectly = iota
 	matchedByConvert
@@ -431,7 +432,7 @@ func generalTypeCheckForUnaryAggregate(overloads []Function, inputs []types.T) (
 			}
 		}
 	}
-	return wrongFunctionParameters, nil
+	return wrongFuncParamForAgg, nil
 }
 
 // tryToMatch checks whether the types of the two input parameters match directly

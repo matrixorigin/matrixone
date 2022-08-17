@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -36,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
@@ -404,7 +404,7 @@ func TestApplyToColumn1(t *testing.T) {
 	assert.Nil(t, err)
 	deletes.AddRange(3, 4)
 
-	vec := containers.MakeVector(types.Type_VARCHAR.ToType(), true)
+	vec := containers.MakeVector(types.T_varchar.ToType(), true)
 	defer vec.Close()
 	for i := 0; i < 5; i++ {
 		data := "val" + strconv.Itoa(i)
@@ -437,7 +437,7 @@ func TestApplyToColumn2(t *testing.T) {
 	assert.Nil(t, err)
 	deletes.AddRange(2, 4)
 
-	vec := containers.MakeVector(types.Type_INT32.ToType(), true)
+	vec := containers.MakeVector(types.T_int32.ToType(), true)
 	defer vec.Close()
 	vec.AppendMany(int32(1), int32(2), int32(3), int32(4))
 
@@ -464,7 +464,7 @@ func TestApplyToColumn3(t *testing.T) {
 	err := node.UpdateLocked(3, []byte("update"))
 	assert.Nil(t, err)
 
-	vec := containers.MakeVector(types.Type_VARCHAR.ToType(), true)
+	vec := containers.MakeVector(types.T_varchar.ToType(), true)
 	defer vec.Close()
 	for i := 0; i < 5; i++ {
 		data := "val" + strconv.Itoa(i)
@@ -491,7 +491,7 @@ func TestApplyToColumn4(t *testing.T) {
 	err := node.UpdateLocked(3, int32(8))
 	assert.Nil(t, err)
 
-	vec := containers.MakeVector(types.Type_INT32.ToType(), true)
+	vec := containers.MakeVector(types.T_int32.ToType(), true)
 	defer vec.Close()
 	vec.AppendMany(int32(1), int32(2), int32(3), int32(4))
 

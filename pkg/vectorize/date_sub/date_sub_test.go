@@ -14,8 +14,10 @@
 package date_sub
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"testing"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
@@ -163,7 +165,7 @@ func TestTimeStampSub(t *testing.T) {
 			xnu := &nulls.Nulls{}
 			ynu := &nulls.Nulls{}
 			rnu := &nulls.Nulls{}
-			rs, err := timestampSub(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
+			rs, err := timestampSub(time.Local, c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
 			require.Equal(t, c.want, rs)
 			require.Equal(t, err, nil)
 		})

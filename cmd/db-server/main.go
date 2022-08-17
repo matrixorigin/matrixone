@@ -15,6 +15,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -23,6 +24,7 @@ import (
 
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 
@@ -31,6 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+
+	"github.com/google/gops/agent"
 )
 
 const (
@@ -57,15 +61,33 @@ var (
 	MoVersion    = ""
 )
 
-func createMOServer() {
+func createMOServer(inputCtx context.Context) {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
-	mo = frontend.NewMOServer(address, pu)
+
+	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
+	mo = frontend.NewMOServer(moServerCtx, address, pu)
+	{
+		// init trace/log/error framework
+		if _, err := trace.Init(moServerCtx,
+			trace.WithMOVersion(MoVersion),
+			trace.WithNode(0, trace.NodeTypeNode),
+			trace.EnableTracer(config.GlobalSystemVariables.GetEnableTrace()),
+			trace.WithBatchProcessMode(config.GlobalSystemVariables.GetTraceBatchProcessor()),
+			trace.DebugMode(config.GlobalSystemVariables.GetEnableTraceDebug()),
+			trace.WithSQLExecutor(func() ie.InternalExecutor {
+				return frontend.NewInternalExecutor(pu)
+			}),
+		); err != nil {
+			panic(err)
+		}
+	}
+
 	if config.GlobalSystemVariables.GetEnableMetric() {
 		ieFactory := func() ie.InternalExecutor {
 			return frontend.NewInternalExecutor(pu)
 		}
-		metric.InitMetric(ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
+		metric.InitMetric(moServerCtx, ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
 	}
 	frontend.InitServerVersion(MoVersion)
 }
@@ -75,6 +97,10 @@ func runMOServer() error {
 }
 
 func serverShutdown(isgraceful bool) error {
+	// flush trace/log/error framework
+	if err := trace.Shutdown(trace.DefaultContext()); err != nil {
+		logutil.Errorf("Shutdown trace err: %v", err)
+	}
 	return mo.Stop()
 }
 
@@ -165,21 +191,25 @@ func main() {
 	}
 
 	logConf := logutil.LogConfig{
-		Level:      config.GlobalSystemVariables.GetLogLevel(),
-		Format:     config.GlobalSystemVariables.GetLogFormat(),
-		Filename:   config.GlobalSystemVariables.GetLogFilename(),
-		MaxSize:    int(config.GlobalSystemVariables.GetLogMaxSize()),
-		MaxDays:    int(config.GlobalSystemVariables.GetLogMaxDays()),
-		MaxBackups: int(config.GlobalSystemVariables.GetLogMaxBackups()),
+		Level:       config.GlobalSystemVariables.GetLogLevel(),
+		Format:      config.GlobalSystemVariables.GetLogFormat(),
+		Filename:    config.GlobalSystemVariables.GetLogFilename(),
+		MaxSize:     int(config.GlobalSystemVariables.GetLogMaxSize()),
+		MaxDays:     int(config.GlobalSystemVariables.GetLogMaxDays()),
+		MaxBackups:  int(config.GlobalSystemVariables.GetLogMaxBackups()),
+		EnableStore: config.GlobalSystemVariables.GetEnableTrace(),
 	}
 
 	logutil.SetupMOLogger(&logConf)
+
+	rootCtx := context.Background()
+	cancelMoServerCtx, cancelMoServerFunc := context.WithCancel(rootCtx)
 
 	//just initialize the tae after configuration has been loaded
 	if len(args) == 2 && args[1] == "initdb" {
 		fmt.Println("Initialize the TAE engine ...")
 		taeWrapper := initTae()
-		err := frontend.InitDB(taeWrapper.eng)
+		err := frontend.InitDB(cancelMoServerCtx, taeWrapper.eng)
 		if err != nil {
 			logutil.Infof("Initialize catalog failed. error:%v", err)
 			os.Exit(InitCatalogExit)
@@ -209,7 +239,7 @@ func main() {
 	if engineName == "tae" {
 		fmt.Println("Initialize the TAE engine ...")
 		tae = initTae()
-		err := frontend.InitDB(tae.eng)
+		err := frontend.InitDB(cancelMoServerCtx, tae.eng)
 		if err != nil {
 			logutil.Infof("Initialize catalog failed. error:%v", err)
 			os.Exit(InitCatalogExit)
@@ -220,7 +250,12 @@ func main() {
 		os.Exit(LoadConfigExit)
 	}
 
-	createMOServer()
+	if err := agent.Listen(agent.Options{}); err != nil {
+		logutil.Errorf("listen gops agent failed: %s", err)
+		os.Exit(StartMOExit)
+	}
+
+	createMOServer(cancelMoServerCtx)
 
 	err := runMOServer()
 	if err != nil {
@@ -234,6 +269,11 @@ func main() {
 		logutil.Infof("Server shutdown failed, %v", err)
 		os.Exit(ShutdownExit)
 	}
+
+	agent.Close()
+
+	//cancel mo server
+	cancelMoServerFunc()
 
 	cleanup()
 

@@ -23,7 +23,7 @@ import (
 	"github.com/shirou/gopsutil/v3/mem"
 )
 
-var HardwareStatsCollector = newBatchStatsCollector(
+var hardwareStatsCollector = newBatchStatsCollector(
 	cpuTotal{},
 	cpuPercent{},
 	memUsed{},
@@ -99,7 +99,7 @@ func (m memUsed) Desc() *prom.Desc {
 }
 
 func (m memUsed) Metric(s *statCaches) (prom.Metric, error) {
-	val := s.getOrInsert(CacheKey_MemStats, getMemStats)
+	val := s.getOrInsert(cacheKeyMemStats, getMemStats)
 	if val == nil {
 		return nil, errors.New("empty available memomry")
 	}
@@ -119,7 +119,7 @@ func (m memAvail) Desc() *prom.Desc {
 }
 
 func (m memAvail) Metric(s *statCaches) (prom.Metric, error) {
-	val := s.getOrInsert(CacheKey_MemStats, getMemStats)
+	val := s.getOrInsert(cacheKeyMemStats, getMemStats)
 	if val == nil {
 		return nil, errors.New("empty available memomry")
 	}

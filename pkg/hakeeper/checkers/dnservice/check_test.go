@@ -194,7 +194,7 @@ func TestCheck(t *testing.T) {
 	// construct current tick in order to make heartbeat tick expired
 	config := hakeeper.Config{}
 	config.Fill()
-	currTick := config.ExpiredTick(staleTick, config.DnStoreTimeout) + 1
+	currTick := config.ExpiredTick(staleTick, config.DNStoreTimeout) + 1
 
 	enough := true
 	newReplicaID := uint64(100)

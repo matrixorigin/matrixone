@@ -341,6 +341,9 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		}
 		ds.DataSource = &Source{Bat: bat}
 		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
+	case plan.Node_EXTERNAL_SCAN:
+		ss := c.compileExternScan(n)
+		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_TABLE_SCAN:
 		ss := c.compileTableScan(n)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
@@ -420,7 +423,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		}
 		c.anal.curr = curr
 		return c.compileSort(n, c.compileUnion(n, ss, children, ns)), nil
-	case plan.Node_MINUS:
+	case plan.Node_MINUS, plan.Node_INTERSECT:
 		curr := c.anal.curr
 		c.anal.curr = int(n.Children[0])
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
@@ -472,6 +475,27 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 	default:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", n))
 	}
+}
+
+func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
+	ds := &Scope{Magic: Normal}
+	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+	bat := batch.NewWithSize(1)
+	{
+		bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
+		bat.Vecs[0].Col = make([]int64, 1)
+		bat.InitZsOne(1)
+	}
+	ds.DataSource = &Source{Bat: bat}
+	ss := []*Scope{ds}
+	for i := range ss {
+		ss[i].appendInstruction(vm.Instruction{
+			Op:  vm.External,
+			Idx: c.anal.curr,
+			Arg: constructExternal(n, c.ctx),
+		})
+	}
+	return ss
 }
 
 func (c *Compile) compileTableScan(n *plan.Node) []*Scope {
@@ -529,7 +553,7 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns []*plan.Node) []*Scope {
 	ss = append(ss, children...)
-	rs := c.newGroupScopeList(validScopeCount(ss))
+	rs := c.newScopeList(validScopeCount(ss))
 	regs := extraGroupRegisters(rs)
 	for i := range ss {
 		if !ss[i].IsEnd {
@@ -554,7 +578,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns 
 }
 
 func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	rs, left, right := c.newJoinScopeListWithBucket(c.newGroupScopeList(2), ss, children)
+	rs, left, right := c.newJoinScopeListWithBucket(c.newScopeList(2), ss, children)
 	switch nodeType {
 	case plan.Node_MINUS:
 		for i := range rs {
@@ -562,6 +586,14 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 				Op:  vm.Minus,
 				Idx: c.anal.curr,
 				Arg: constructMinus(n, c.proc, i, len(rs)),
+			}
+		}
+	case plan.Node_INTERSECT:
+		for i := range rs {
+			rs[i].Instructions[0] = vm.Instruction{
+				Op:  vm.Intersect,
+				Idx: c.anal.curr,
+				Arg: constructIntersect(n, c.proc, i, len(rs)),
 			}
 		}
 	}
@@ -577,6 +609,10 @@ func (c *Compile) compileUnionAll(n *plan.Node, ss []*Scope, children []*Scope) 
 func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
 	rs, chp := c.newJoinScopeList(ss, children)
 	isEq := isEquiJoin(n.OnList)
+	typs := make([]types.Type, len(right.ProjectList))
+	for i, expr := range right.ProjectList {
+		typs[i] = dupType(expr.Typ)
+	}
 	switch joinTyp {
 	case plan.Node_INNER:
 		if len(n.OnList) == 0 {
@@ -584,7 +620,7 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Product,
 					Idx: c.anal.curr,
-					Arg: constructProduct(n, c.proc),
+					Arg: constructProduct(n, typs, c.proc),
 				})
 			}
 		} else {
@@ -593,13 +629,13 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.Join,
 						Idx: c.anal.curr,
-						Arg: constructJoin(n, c.proc),
+						Arg: constructJoin(n, typs, c.proc),
 					})
 				} else {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.LoopJoin,
 						Idx: c.anal.curr,
-						Arg: constructLoopJoin(n, c.proc),
+						Arg: constructLoopJoin(n, typs, c.proc),
 					})
 				}
 			}
@@ -610,21 +646,17 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Semi,
 					Idx: c.anal.curr,
-					Arg: constructSemi(n, c.proc),
+					Arg: constructSemi(n, typs, c.proc),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopSemi,
 					Idx: c.anal.curr,
-					Arg: constructLoopSemi(n, c.proc),
+					Arg: constructLoopSemi(n, typs, c.proc),
 				})
 			}
 		}
 	case plan.Node_LEFT:
-		typs := make([]types.Type, len(right.ProjectList))
-		for i, expr := range right.ProjectList {
-			typs[i] = dupType(expr.Typ)
-		}
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -641,10 +673,6 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 			}
 		}
 	case plan.Node_SINGLE:
-		typs := make([]types.Type, len(right.ProjectList))
-		for i, expr := range right.ProjectList {
-			typs[i] = dupType(expr.Typ)
-		}
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -666,13 +694,13 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Anti,
 					Idx: c.anal.curr,
-					Arg: constructAnti(n, c.proc),
+					Arg: constructAnti(n, typs, c.proc),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopAnti,
 					Idx: c.anal.curr,
-					Arg: constructLoopAnti(n, c.proc),
+					Arg: constructLoopAnti(n, typs, c.proc),
 				})
 			}
 		}
@@ -782,7 +810,7 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 }
 
 func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
-	rs := c.newGroupScopeList(validScopeCount(ss))
+	rs := c.newScopeList(validScopeCount(ss))
 	regs := extraGroupRegisters(rs)
 	for i := range ss {
 		if !ss[i].IsEnd {
@@ -835,16 +863,16 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	return rs
 }
 
-func (c *Compile) newGroupScopeList(childrenCount int) []*Scope {
+func (c *Compile) newScopeList(childrenCount int) []*Scope {
 	var ss []*Scope
 
 	for _, n := range c.cnList {
-		ss = append(ss, c.newGroupScopeListWithNode(n.Mcpu, childrenCount)...)
+		ss = append(ss, c.newScopeListWithNode(n.Mcpu, childrenCount)...)
 	}
 	return ss
 }
 
-func (c *Compile) newGroupScopeListWithNode(mcpu, childrenCount int) []*Scope {
+func (c *Compile) newScopeListWithNode(mcpu, childrenCount int) []*Scope {
 	ss := make([]*Scope, mcpu)
 	for i := range ss {
 		ss[i] = new(Scope)
@@ -877,7 +905,6 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) ([]*Scop
 }
 
 func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) ([]*Scope, *Scope) {
-	regs := make([]*process.WaitRegister, 0, len(ss))
 	chp := c.newMergeScope(children)
 	chp.IsEnd = true
 	rs := make([]*Scope, len(ss))
@@ -887,10 +914,11 @@ func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) ([]*Scope, *S
 			continue
 		}
 		rs[i] = new(Scope)
-		rs[i].Magic = Merge
+		rs[i].Magic = Remote
+		rs[i].IsJoin = true
+		rs[i].NodeInfo = ss[i].NodeInfo
 		rs[i].PreScopes = []*Scope{ss[i]}
 		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
-		regs = append(regs, rs[i].Proc.Reg.MergeReceivers[1])
 		ss[i].appendInstruction(vm.Instruction{
 			Op: vm.Connector,
 			Arg: &connector.Argument{
@@ -900,9 +928,46 @@ func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) ([]*Scope, *S
 	}
 	chp.Instructions = append(chp.Instructions, vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructDispatch(true, regs),
+		Arg: constructDispatch(true, extraJoinRegisters(rs, 1)),
 	})
 	return rs, chp
+}
+
+func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
+	rs := &Scope{
+		Magic: Merge,
+	}
+	rs.appendInstruction(vm.Instruction{
+		Op:  vm.Merge,
+		Arg: &merge.Argument{},
+	})
+	rs.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructDispatch(false, extraJoinRegisters(ss, 0)),
+	})
+	rs.IsEnd = true
+	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
+	rs.Proc.Reg.MergeReceivers[0] = s.Proc.Reg.MergeReceivers[0]
+	return rs
+}
+
+func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
+	rs := &Scope{
+		Magic: Merge,
+	}
+	rs.appendInstruction(vm.Instruction{
+		Op:  vm.HashBuild,
+		Idx: s.Instructions[0].Idx,
+		Arg: constructHashBuild(s.Instructions[0]),
+	})
+	rs.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructDispatch(true, extraJoinRegisters(ss, 1)),
+	})
+	rs.IsEnd = true
+	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
+	rs.Proc.Reg.MergeReceivers[0] = s.Proc.Reg.MergeReceivers[1]
+	return rs
 }
 
 // Number of cpu's available on the current machine

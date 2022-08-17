@@ -17,17 +17,19 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
@@ -77,7 +79,6 @@ type Session struct {
 	ep           *tree.ExportParam
 	showStmtType ShowStatementType
 
-	closeRef      *CloseExportData
 	txnHandler    *TxnHandler
 	txnCompileCtx *TxnCompilerContext
 	storage       engine.Engine
@@ -95,6 +96,8 @@ type Session struct {
 
 	prepareStmts map[string]*PrepareStmt
 
+	requestCtx context.Context
+
 	//it gets the result set from the pipeline and send it to the client
 	outputCallback func(interface{}, *batch.Batch) error
 
@@ -102,6 +105,8 @@ type Session struct {
 	allResultSet []*MysqlResultSet
 
 	tenant *TenantInfo
+
+	timeZone *time.Location
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
@@ -129,11 +134,53 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 
 		prepareStmts:   make(map[string]*PrepareStmt),
 		outputCallback: getDataFromPipeline,
+		timeZone:       time.Local,
 	}
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.txnCompileCtx.SetSession(ses)
 	ses.txnHandler.SetSession(ses)
 	return ses
+}
+
+// BackgroundSession executing the sql in background
+type BackgroundSession struct {
+	*Session
+	cancel context.CancelFunc
+}
+
+// NewBackgroundSession generates an independent background session executing the sql
+func NewBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *BackgroundSession {
+	ses := NewSession(&FakeProtocol{}, gm, mp, PU, gSysVars)
+	ses.SetOutputCallback(fakeDataSetFetcher)
+	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(ctx)
+	ses.SetRequestContext(cancelBackgroundCtx)
+	backSes := &BackgroundSession{
+		Session: ses,
+		cancel:  cancelBackgroundFunc,
+	}
+	return backSes
+}
+
+func (bgs *BackgroundSession) Close() {
+	if bgs.cancel != nil {
+		bgs.cancel()
+	}
+}
+
+func (ses *Session) SetRequestContext(reqCtx context.Context) {
+	ses.requestCtx = reqCtx
+}
+
+func (ses *Session) GetRequestContext() context.Context {
+	return ses.requestCtx
+}
+
+func (ses *Session) SetTimeZone(loc *time.Location) {
+	ses.timeZone = loc
+}
+
+func (ses *Session) GetTimeZone() *time.Location {
+	return ses.timeZone
 }
 
 func (ses *Session) SetMysqlResultSet(mrs *MysqlResultSet) {
@@ -218,7 +265,12 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 		if err != nil {
 			return err
 		}
-		ses.sysVars[def.GetName()] = cv
+
+		if def.UpdateSessVar == nil {
+			ses.sysVars[def.GetName()] = cv
+		} else {
+			return def.UpdateSessVar(ses, ses.sysVars, def.GetName(), cv)
+		}
 	} else {
 		return errorSystemVariableDoesNotExist
 	}
@@ -522,7 +574,7 @@ func (ses *Session) AuthenticateUser(userInput string) error {
 	ses.SetTenantInfo(tenant)
 
 	//Get the password of the user in an independent session
-	err = executeSQLInBackgroundSession(ses.GuestMmu, ses.Mempool, ses.Pu, "use mo_catalog; select * from mo_database;")
+	err = executeSQLInBackgroundSession(ses.requestCtx, ses.GuestMmu, ses.Mempool, ses.Pu, "use mo_catalog; select * from mo_database;")
 	return err
 }
 
@@ -633,11 +685,14 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 	return tcc.dbName
 }
 
+func (tcc *TxnCompilerContext) GetRootSql() string {
+	return tcc.ses.GetSql()
+}
+
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	var err error
 	//open database
-	ctx := context.TODO()
-	_, err = tcc.txnHandler.GetStorage().Database(ctx, name, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
+	_, err = tcc.txnHandler.GetStorage().Database(tcc.ses.GetRequestContext(), name, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
 	if err != nil {
 		logutil.Errorf("get database %v failed. error %v", name, err)
 		return false
@@ -652,7 +707,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 		return nil, err
 	}
 
-	ctx := context.TODO()
+	ctx := tcc.ses.GetRequestContext()
 	//open database
 	db, err := tcc.txnHandler.GetStorage().Database(ctx, dbName, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
 	if err != nil {
@@ -694,25 +749,57 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	if err != nil {
 		return nil, nil
 	}
-	ctx := context.TODO()
+	ctx := tcc.ses.GetRequestContext()
 	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
 		return nil, nil
 	}
 
-	var defs []*plan2.ColDef
+	var cols []*plan2.ColDef
+	var defs []*plan2.TableDefType
+	var TableType, Createsql string
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
-			defs = append(defs, &plan2.ColDef{
+			cols = append(cols, &plan2.ColDef{
 				Name: attr.Attr.Name,
 				Typ: &plan2.Type{
-					Id:        plan.Type_TypeId(attr.Attr.Type.Oid),
+					Id:        int32(attr.Attr.Type.Oid),
 					Width:     attr.Attr.Type.Width,
 					Precision: attr.Attr.Type.Precision,
 					Scale:     attr.Attr.Type.Scale,
 				},
 				Primary: attr.Attr.Primary,
 				Default: attr.Attr.Default,
+			})
+		} else if pro, ok := def.(*engine.PropertiesDef); ok {
+			properties := make([]*plan2.Property, len(pro.Properties))
+			for i, p := range pro.Properties {
+				switch p.Key {
+				case catalog.SystemRelAttr_Kind:
+					TableType = p.Value
+				case catalog.SystemRelAttr_CreateSQL:
+					Createsql = p.Value
+				default:
+				}
+				properties[i] = &plan2.Property{
+					Key:   p.Key,
+					Value: p.Value,
+				}
+			}
+			defs = append(defs, &plan2.TableDefType{
+				Def: &plan2.TableDef_DefType_Properties{
+					Properties: &plan2.PropertiesDef{
+						Properties: properties,
+					},
+				},
+			})
+		} else if viewDef, ok := def.(*engine.ViewDef); ok {
+			defs = append(defs, &plan2.TableDefType{
+				Def: &plan2.TableDef_DefType_View{
+					View: &plan2.ViewDef{
+						View: viewDef.View,
+					},
+				},
 			})
 		}
 	}
@@ -722,10 +809,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 			return nil, nil
 		}
 		hideKey := hideKeys[0]
-		defs = append(defs, &plan2.ColDef{
+		cols = append(cols, &plan2.ColDef{
 			Name: hideKey.Name,
 			Typ: &plan2.Type{
-				Id:        plan.Type_TypeId(hideKey.Type.Oid),
+				Id:        int32(hideKey.Type.Oid),
 				Width:     hideKey.Type.Width,
 				Precision: hideKey.Type.Precision,
 				Scale:     hideKey.Type.Scale,
@@ -741,8 +828,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	}
 
 	tableDef := &plan2.TableDef{
-		Name: tableName,
-		Cols: defs,
+		Name:      tableName,
+		Cols:      cols,
+		Defs:      defs,
+		TableType: TableType,
+		Createsql: Createsql,
 	}
 	return obj, tableDef
 }
@@ -761,7 +851,7 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 }
 
 func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*plan2.ColDef {
-	ctx := context.TODO()
+	ctx := tcc.ses.GetRequestContext()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
@@ -784,7 +874,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 		priDefs = append(priDefs, &plan2.ColDef{
 			Name: key.Name,
 			Typ: &plan2.Type{
-				Id:        plan.Type_TypeId(key.Type.Oid),
+				Id:        int32(key.Type.Oid),
 				Width:     key.Type.Width,
 				Precision: key.Type.Precision,
 				Scale:     key.Type.Scale,
@@ -797,7 +887,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 }
 
 func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *plan2.ColDef {
-	ctx := context.TODO()
+	ctx := tcc.ses.GetRequestContext()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
@@ -819,7 +909,7 @@ func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *p
 	hideDef := &plan2.ColDef{
 		Name: hideKey.Name,
 		Typ: &plan2.Type{
-			Id:        plan.Type_TypeId(hideKey.Type.Oid),
+			Id:        int32(hideKey.Type.Oid),
 			Width:     hideKey.Type.Width,
 			Precision: hideKey.Type.Precision,
 			Scale:     hideKey.Type.Scale,
@@ -859,7 +949,7 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 		if dataSet.Zs[j] <= 0 {
 			continue
 		}
-		_, err := extractRowFromEveryVector(dataSet, int64(j), oq)
+		_, err := extractRowFromEveryVector(ses, dataSet, int64(j), oq)
 		if err != nil {
 			return err
 		}
@@ -874,13 +964,13 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 
 // executeSQLInBackgroundSession executes the sql in an independent session and transaction.
 // It sends nothing to the client.
-func executeSQLInBackgroundSession(gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) error {
+func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) error {
 	mce := NewMysqlCmdExecutor()
 	defer mce.Close()
-	ses := NewSession(&FakeProtocol{}, gm, mp, pu, gSysVariables)
-	ses.SetOutputCallback(fakeDataSetFetcher)
-	mce.PrepareSessionBeforeExecRequest(ses)
-	err := mce.doComQuery(sql)
+	backSess := NewBackgroundSession(ctx, gm, mp, pu, gSysVariables)
+	mce.PrepareSessionBeforeExecRequest(backSess.Session)
+	defer backSess.Close()
+	err := mce.doComQuery(backSess.GetRequestContext(), sql)
 	if err != nil {
 		return err
 	}

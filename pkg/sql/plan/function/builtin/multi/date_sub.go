@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/date_sub"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -52,7 +51,7 @@ func DateSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeDateSlice(resultVector.Data)
+		resultValues := types.DecodeDateSlice(resultVector.Data)
 		resultValues = resultValues[:maxLen]
 		res, err := date_sub.DateSub(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		vector.SetCol(resultVector, res)
@@ -95,7 +94,7 @@ func DatetimeSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeDatetimeSlice(resultVector.Data)
+		resultValues := types.DecodeDatetimeSlice(resultVector.Data)
 		resultValues = resultValues[:maxLen]
 		res, err := date_sub.DatetimeSub(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		vector.SetCol(resultVector, res)
@@ -132,7 +131,7 @@ func DateStringSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeDatetimeSlice(resultVector.Data)
+		resultValues := types.DecodeDatetimeSlice(resultVector.Data)
 		resultValues = resultValues[:maxLen]
 		res, err := date_sub.DateStringSub(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		vector.SetCol(resultVector, res)
@@ -161,7 +160,7 @@ func TimeStampSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 		}
 		resultVector := proc.AllocScalarVector(resultType)
 		rs := make([]types.Timestamp, 1)
-		res, err := date_sub.TimestampSub(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
+		res, err := date_sub.TimestampSub(proc.SessionInfo.TimeZone, firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
 		vector.SetCol(resultVector, res)
 		return resultVector, err
 	} else {
@@ -175,10 +174,10 @@ func TimeStampSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeTimestampSlice(resultVector.Data)
+		resultValues := types.DecodeTimestampSlice(resultVector.Data)
 		resultValues = resultValues[:maxLen]
 		nulls.Set(resultVector.Nsp, firstVector.Nsp)
-		resultValues, err = date_sub.TimestampSub(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
+		resultValues, err = date_sub.TimestampSub(proc.SessionInfo.TimeZone, firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, err
 	}
