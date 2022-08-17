@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/abs"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -42,7 +41,7 @@ func AbsUInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeUint64Slice(resultVector.Data)
+		resultValues := types.DecodeUint64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		vector.SetCol(resultVector, abs.AbsUint64(inputValues, resultValues))
@@ -69,7 +68,7 @@ func AbsInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
+		resultValues := types.DecodeInt64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		vector.SetCol(resultVector, abs.AbsInt64(inputValues, resultValues))
@@ -96,7 +95,7 @@ func AbsFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
+		resultValues := types.DecodeFloat64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		vector.SetCol(resultVector, abs.AbsFloat64(inputValues, resultValues))

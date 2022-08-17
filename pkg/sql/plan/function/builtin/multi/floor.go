@@ -16,10 +16,10 @@ package multi
 
 import (
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -42,7 +42,7 @@ func FloorUInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if err != nil {
 			return nil, err
 		}
-		rs := encoding.DecodeUint64Slice(vec.Data)
+		rs := types.DecodeUint64Slice(vec.Data)
 		rs = rs[:len(vs)]
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
 		vector.SetCol(vec, floor.FloorUint64(vs, rs, digits))
@@ -68,7 +68,7 @@ func FloorInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		if err != nil {
 			return nil, err
 		}
-		rs := encoding.DecodeInt64Slice(vec.Data)
+		rs := types.DecodeInt64Slice(vec.Data)
 		rs = rs[:len(vs)]
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
 		vector.SetCol(vec, floor.FloorInt64(vs, rs, digits))
@@ -94,7 +94,7 @@ func FloorFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if err != nil {
 			return nil, err
 		}
-		rs := encoding.DecodeFloat64Slice(vec.Data)
+		rs := types.DecodeFloat64Slice(vec.Data)
 		rs = rs[:len(vs)]
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
 		vector.SetCol(vec, floor.FloorFloat64(vs, rs, digits))
@@ -125,7 +125,7 @@ func FloorUInt64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Vec
 		if err != nil {
 			return nil, err
 		}
-		rs := encoding.DecodeUint64Slice(vec.Data)
+		rs := types.DecodeUint64Slice(vec.Data)
 		rs = rs[:len(vs)]
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
 		vector.SetCol(vec, floor.FloorUint64(vs, rs, digits))
@@ -156,7 +156,7 @@ func FloorInt64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Vect
 		if err != nil {
 			return nil, err
 		}
-		rs := encoding.DecodeInt64Slice(vec.Data)
+		rs := types.DecodeInt64Slice(vec.Data)
 		rs = rs[:len(vs)]
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
 		vector.SetCol(vec, floor.FloorInt64(vs, rs, digits))
@@ -188,10 +188,35 @@ func FloorFloat64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Ve
 		if err != nil {
 			return nil, err
 		}
-		rs := encoding.DecodeFloat64Slice(vec.Data)
+		rs := types.DecodeFloat64Slice(vec.Data)
 		rs = rs[:len(vs)]
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
 		vector.SetCol(vec, floor.FloorFloat64(vs, rs, digits))
+		return vec, nil
+	}
+}
+
+func FloorDecimal128(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	digits := int64(0)
+	vs := vector.MustTCols[types.Decimal128](vecs[0])
+	if vecs[0].IsScalar() {
+		if vecs[0].IsScalarNull() {
+			return proc.AllocScalarNullVector(types.Type{Oid: types.T_decimal128, Size: 16}), nil
+		}
+		vec := proc.AllocScalarVector(types.Type{Oid: types.T_decimal128, Size: 16})
+		rs := make([]types.Decimal128, 1)
+		nulls.Set(vec.Nsp, vecs[0].Nsp)
+		vector.SetCol(vec, floor.FloorDecimal128(vs, rs, digits))
+		return vec, nil
+	} else {
+		vec, err := proc.AllocVector(types.Type{Oid: types.T_decimal128, Size: 16}, 16*int64(len(vs)))
+		if err != nil {
+			return nil, err
+		}
+		rs := types.DecodeDecimal128Slice(vec.Data)
+		rs = rs[:len(vs)]
+		nulls.Set(vec.Nsp, vecs[0].Nsp)
+		vector.SetCol(vec, floor.FloorDecimal128(vs, rs, digits))
 		return vec, nil
 	}
 }

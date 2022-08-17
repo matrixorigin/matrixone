@@ -12,21 +12,22 @@ require (
 	github.com/axiomhq/hyperloglog v0.0.0-20220105174342-98591331716a
 	github.com/cespare/xxhash/v2 v2.1.2
 	github.com/docker/go-units v0.4.0
-	github.com/fagongzi/goetty v1.13.0
-	github.com/fagongzi/goetty/v2 v2.0.3-0.20220730091829-0a8222eaa708
+	github.com/fagongzi/goetty/v2 v2.0.3-0.20220812142536-dfcb3d33cfdc
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/mock v1.6.0
 	github.com/google/btree v1.0.1
 	github.com/google/gofuzz v1.2.0
+	github.com/google/gops v0.3.25
 	github.com/google/uuid v1.3.0
-	github.com/lni/dragonboat/v4 v4.0.0-20220803152440-a83f853de8b1
+	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/matrixorigin/matrixcube v0.3.1-0.20220606032431-c944d801f1e5
-	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
+	github.com/matrixorigin/simdcsv v0.0.0-20220816072029-cbd764f09dc5
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
 	github.com/panjf2000/ants/v2 v2.4.6
+	github.com/pierrec/lz4 v2.6.1+incompatible
 	github.com/pierrec/lz4/v4 v4.1.14
 	github.com/plar/go-adaptive-radix-tree v1.0.4
 	github.com/prashantv/gostub v1.1.0
@@ -56,6 +57,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.16.7 // indirect
 	github.com/aws/smithy-go v1.11.3 // indirect
 	github.com/cockroachdb/pebble v0.0.0-20220407171941-2120d145e292 // indirect
+	github.com/frankban/quicktest v1.14.3 // indirect
 	github.com/getsentry/sentry-go v0.12.0 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
@@ -71,7 +73,7 @@ require (
 	github.com/valyala/fastrand v1.1.0 // indirect
 	github.com/valyala/histogram v1.2.0 // indirect
 	go.etcd.io/etcd/raft/v3 v3.5.1 // indirect
-	golang.org/x/sys v0.0.0-20220622161953-175b2fd9d664 // indirect
+	golang.org/x/sys v0.0.0-20220728004956-3c1f35247d10 // indirect
 )
 
 require (
@@ -97,7 +99,7 @@ require (
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e // indirect
 	github.com/pingcap/errors v0.11.5-0.20201029093017-5a7df2af2ac7 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
+	github.com/pkg/errors v0.9.1
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
 	github.com/prometheus/client_golang v1.11.0
@@ -105,7 +107,7 @@ require (
 	github.com/prometheus/common v0.26.0 // indirect
 	github.com/prometheus/procfs v0.6.0 // indirect
 	github.com/rogpeppe/go-internal v1.8.1 // indirect
-	github.com/shirou/gopsutil/v3 v3.22.3
+	github.com/shirou/gopsutil/v3 v3.22.4
 	github.com/tklauser/go-sysconf v0.3.10 // indirect
 	github.com/tklauser/numcpus v0.4.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.2 // indirect
@@ -118,6 +120,10 @@ require (
 	gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// required until memberlist issue 272 is resolved
+// see https://github.com/hashicorp/memberlist/pull/273 for progress
+replace github.com/hashicorp/memberlist => github.com/lni/memberlist v0.3.2-0.20220811084252-8a89d1ea99cb
 
 replace go.etcd.io/etcd/raft/v3 => github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2
 

@@ -15,6 +15,7 @@ package metric
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -39,7 +40,7 @@ func TestMetric(t *testing.T) {
 		_ = pu.SV.SetMetricToProm(true)
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
-		InitMetric(factory, pu, 0, "test")
+		InitMetric(context.TODO(), factory, pu, 0, "test")
 		defer StopMetricSync()
 
 		const (
@@ -92,7 +93,7 @@ func TestMetricNoProm(t *testing.T) {
 
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
-		InitMetric(factory, pu, 0, "test")
+		InitMetric(context.TODO(), factory, pu, 0, "test")
 		defer StopMetricSync()
 
 		client := http.Client{
@@ -122,12 +123,12 @@ func TestCreateTable(t *testing.T) {
 	sql := createTableSqlFromMetricFamily(prom.NewDesc(name, "", []string{"zzz", "aaa"}, nil), buf)
 	assert.Equal(t, sql, fmt.Sprintf(
 		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` int, `%s` varchar(20), `aaa` varchar(20), `zzz` varchar(20))",
-		METRIC_DB, name, LBL_TIME, LBL_VALUE, LBL_NODE, LBL_ROLE,
+		metricDBConst, name, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
 	))
 
 	sql = createTableSqlFromMetricFamily(prom.NewDesc(name, "", nil, nil), buf)
 	assert.Equal(t, sql, fmt.Sprintf(
 		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` int, `%s` varchar(20))",
-		METRIC_DB, name, LBL_TIME, LBL_VALUE, LBL_NODE, LBL_ROLE,
+		metricDBConst, name, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
 	))
 }

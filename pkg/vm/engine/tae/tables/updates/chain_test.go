@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -36,12 +38,12 @@ const (
 
 func mockTxn() *txnbase.Txn {
 	txn := new(txnbase.Txn)
-	txn.TxnCtx = txnbase.NewTxnCtx(nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
+	txn.TxnCtx = txnbase.NewTxnCtx(common.NextGlobalSeqNum(), types.NextGlobalTsForTest(), nil)
 	return txn
 }
 
 func commitTxn(txn *txnbase.Txn) {
-	txn.CommitTS = common.NextGlobalSeqNum()
+	txn.CommitTS = types.NextGlobalTsForTest()
 }
 
 func TestColumnChain1(t *testing.T) {
@@ -65,10 +67,11 @@ func TestColumnChain1(t *testing.T) {
 	cnt4 := 5
 	for i := 0; i < cnt1+cnt2+cnt3+cnt4; i++ {
 		txn := new(txnbase.Txn)
-		txn.TxnCtx = txnbase.NewTxnCtx(nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
+		txn.TxnCtx = txnbase.NewTxnCtx(common.NextGlobalSeqNum(),
+			types.NextGlobalTsForTest(), nil)
 		n := chain.AddNode(txn)
 		if (i >= cnt1 && i < cnt1+cnt2) || (i >= cnt1+cnt2+cnt3) {
-			txn.CommitTS = common.NextGlobalSeqNum()
+			txn.CommitTS = types.NextGlobalTsForTest()
 			_ = n.PrepareCommit()
 			_ = n.ApplyCommit(nil)
 		}
@@ -93,7 +96,7 @@ func TestColumnChain2(t *testing.T) {
 	controller := NewMVCCHandle(blk)
 	chain := NewColumnChain(nil, 0, controller)
 	txn1 := new(txnbase.Txn)
-	txn1.TxnCtx = txnbase.NewTxnCtx(nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
+	txn1.TxnCtx = txnbase.NewTxnCtx(common.NextGlobalSeqNum(), types.NextGlobalTsForTest(), nil)
 	n1 := chain.AddNode(txn1)
 
 	err := chain.TryUpdateNodeLocked(1, int32(11), n1)
@@ -107,7 +110,8 @@ func TestColumnChain2(t *testing.T) {
 	assert.Equal(t, 3, chain.view.RowCnt())
 
 	txn2 := new(txnbase.Txn)
-	txn2.TxnCtx = txnbase.NewTxnCtx(nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
+	txn2.TxnCtx = txnbase.NewTxnCtx(common.NextGlobalSeqNum(),
+		types.NextGlobalTsForTest(), nil)
 	n2 := chain.AddNode(txn2)
 	err = chain.TryUpdateNodeLocked(2, int32(222), n2)
 	assert.Equal(t, txnif.ErrTxnWWConflict, err)
@@ -115,7 +119,7 @@ func TestColumnChain2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 4, chain.view.RowCnt())
 
-	txn1.CommitTS = common.NextGlobalSeqNum()
+	txn1.CommitTS = types.NextGlobalTsForTest()
 	_ = n1.PrepareCommit()
 	_ = n1.ApplyCommit(nil)
 
@@ -128,7 +132,8 @@ func TestColumnChain2(t *testing.T) {
 	assert.Equal(t, 1, chain.view.links[4].Depth())
 
 	txn3 := new(txnbase.Txn)
-	txn3.TxnCtx = txnbase.NewTxnCtx(nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
+	txn3.TxnCtx = txnbase.NewTxnCtx(common.NextGlobalSeqNum(),
+		types.NextGlobalTsForTest(), nil)
 	n3 := chain.AddNode(txn3)
 	err = chain.TryUpdateNodeLocked(2, int32(2222), n3)
 	assert.Nil(t, err)
@@ -139,7 +144,8 @@ func TestColumnChain2(t *testing.T) {
 		return func() {
 			defer wg.Done()
 			txn := new(txnbase.Txn)
-			txn.TxnCtx = txnbase.NewTxnCtx(nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
+			txn.TxnCtx = txnbase.NewTxnCtx(common.NextGlobalSeqNum(),
+				types.NextGlobalTsForTest(), nil)
 			n := chain.AddNode(txn)
 			for j := 0; j < 4; j++ {
 				n.GetChain().Lock()
@@ -172,10 +178,10 @@ func TestColumnChain2(t *testing.T) {
 	v, err = chain.view.GetValue(2, txn3.GetStartTS())
 	assert.Equal(t, int32(2222), v)
 	assert.Nil(t, err)
-	v, err = chain.view.GetValue(2, common.NextGlobalSeqNum())
+	v, err = chain.view.GetValue(2, types.NextGlobalTsForTest())
 	assert.Equal(t, int32(22), v)
 	assert.Nil(t, err)
-	_, err = chain.view.GetValue(2000, common.NextGlobalSeqNum())
+	_, err = chain.view.GetValue(2000, types.NextGlobalTsForTest())
 	assert.NotNil(t, err)
 
 	mask, vals, err := chain.view.CollectUpdates(txn1.GetStartTS())
@@ -266,9 +272,9 @@ func TestColumnChain4(t *testing.T) {
 
 	controller := NewMVCCHandle(blk)
 	chain := NewColumnChain(nil, 0, controller)
-	var ts1 uint64
-	var ts2 uint64
-	var ts3 uint64
+	var ts1 types.TS
+	var ts2 types.TS
+	var ts3 types.TS
 	{
 		txn := mockTxn()
 		node := chain.AddNode(txn)
@@ -306,7 +312,8 @@ func TestColumnChain4(t *testing.T) {
 		_ = node.ApplyCommit(nil)
 		ts3 = txn.GetCommitTS()
 	}
-	mask, vals, _, err := chain.CollectCommittedInRangeLocked(0, common.NextGlobalSeqNum())
+	var startTs types.TS
+	mask, vals, _, err := chain.CollectCommittedInRangeLocked(startTs, types.NextGlobalTsForTest())
 	assert.NoError(t, err)
 	assert.True(t, mask.Contains(10))
 	assert.True(t, mask.Contains(20))
@@ -316,7 +323,7 @@ func TestColumnChain4(t *testing.T) {
 	assert.Equal(t, int32(20), vals[20])
 	assert.Equal(t, int32(40), vals[40])
 
-	mask, vals, _, err = chain.CollectCommittedInRangeLocked(ts1, common.NextGlobalSeqNum())
+	mask, vals, _, err = chain.CollectCommittedInRangeLocked(ts1, types.NextGlobalTsForTest())
 	assert.NoError(t, err)
 	assert.True(t, mask.Contains(10))
 	assert.True(t, mask.Contains(20))
@@ -326,7 +333,7 @@ func TestColumnChain4(t *testing.T) {
 	assert.Equal(t, int32(20), vals[20])
 	assert.Equal(t, int32(40), vals[40])
 
-	mask, vals, _, err = chain.CollectCommittedInRangeLocked(ts2, common.NextGlobalSeqNum())
+	mask, vals, _, err = chain.CollectCommittedInRangeLocked(ts2, types.NextGlobalTsForTest())
 	assert.NoError(t, err)
 	assert.True(t, mask.Contains(20))
 	assert.True(t, mask.Contains(40))
@@ -334,13 +341,13 @@ func TestColumnChain4(t *testing.T) {
 	assert.Equal(t, int32(20), vals[20])
 	assert.Equal(t, int32(40), vals[40])
 
-	mask, vals, _, err = chain.CollectCommittedInRangeLocked(ts3, common.NextGlobalSeqNum())
+	mask, vals, _, err = chain.CollectCommittedInRangeLocked(ts3, types.NextGlobalTsForTest())
 	assert.NoError(t, err)
 	assert.True(t, mask.Contains(40))
 	assert.Equal(t, uint64(1), mask.GetCardinality())
 	assert.Equal(t, int32(40), vals[40])
 
-	mask, _, _, err = chain.CollectCommittedInRangeLocked(ts3+1, common.NextGlobalSeqNum())
+	mask, _, _, err = chain.CollectCommittedInRangeLocked(ts3.Next(), types.NextGlobalTsForTest())
 	assert.NoError(t, err)
 	assert.Nil(t, mask)
 
@@ -370,7 +377,7 @@ func TestDeleteChain1(t *testing.T) {
 	controller := NewMVCCHandle(blk)
 	chain := NewDeleteChain(nil, controller)
 	txn1 := new(txnbase.Txn)
-	txn1.TxnCtx = txnbase.NewTxnCtx(nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
+	txn1.TxnCtx = txnbase.NewTxnCtx(common.NextGlobalSeqNum(), types.NextGlobalTsForTest(), nil)
 	n1 := chain.AddNodeLocked(txn1, handle.DeleteType(handle.DT_Normal)).(*DeleteNode)
 	assert.Equal(t, 1, chain.Depth())
 
@@ -409,10 +416,11 @@ func TestDeleteChain1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(11), collected.GetCardinalityLocked())
 
-	collected, err = chain.CollectDeletesLocked(0, false, nil)
+	var startTs1 types.TS
+	collected, err = chain.CollectDeletesLocked(startTs1, false, nil)
 	assert.NoError(t, err)
 	assert.Nil(t, collected)
-	collected, err = chain.CollectDeletesLocked(common.NextGlobalSeqNum(), false, nil)
+	collected, err = chain.CollectDeletesLocked(types.NextGlobalTsForTest(), false, nil)
 	assert.NoError(t, err)
 	assert.Nil(t, collected)
 
@@ -421,10 +429,11 @@ func TestDeleteChain1(t *testing.T) {
 	assert.Nil(t, n1.ApplyCommit(nil))
 	t.Log(chain.StringLocked())
 
-	collected, err = chain.CollectDeletesLocked(0, false, nil)
+	var startTs2 types.TS
+	collected, err = chain.CollectDeletesLocked(startTs2, false, nil)
 	assert.NoError(t, err)
 	assert.Nil(t, collected)
-	collected, err = chain.CollectDeletesLocked(common.NextGlobalSeqNum(), false, nil)
+	collected, err = chain.CollectDeletesLocked(types.NextGlobalTsForTest(), false, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(10), collected.GetCardinalityLocked())
 	collected, err = chain.CollectDeletesLocked(txn2.GetStartTS(), false, nil)
@@ -503,7 +512,7 @@ func TestDeleteChain2(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(chain.StringLocked())
 
-	m, err := chain.CollectDeletesLocked(common.NextGlobalSeqNum(), false, nil)
+	m, err := chain.CollectDeletesLocked(types.NextGlobalTsForTest(), false, nil)
 	assert.NoError(t, err)
 	mask := m.(*DeleteNode).mask
 	assert.Equal(t, uint64(8), mask.GetCardinality())
@@ -515,21 +524,23 @@ func TestDeleteChain2(t *testing.T) {
 	assert.NoError(t, err)
 	mask = m.(*DeleteNode).mask
 	assert.Equal(t, uint64(4), mask.GetCardinality())
-	m, err = chain.CollectDeletesLocked(txn1.GetCommitTS()-1, false, nil)
+	m, err = chain.CollectDeletesLocked(txn1.GetCommitTS().Prev(), false, nil)
 	assert.NoError(t, err)
 	assert.Nil(t, m)
 
-	mask, _, err = chain.CollectDeletesInRange(0, txn3.GetCommitTS(), nil)
+	var startTs1 types.TS
+	mask, _, err = chain.CollectDeletesInRange(startTs1, txn3.GetCommitTS(), nil)
 	assert.NoError(t, err)
 	t.Log(mask.String())
 	assert.Equal(t, uint64(8), mask.GetCardinality())
 
-	mask, _, err = chain.CollectDeletesInRange(0, txn3.GetCommitTS()+1, nil)
+	var startTs2 types.TS
+	mask, _, err = chain.CollectDeletesInRange(startTs2, txn3.GetCommitTS().Next(), nil)
 	assert.NoError(t, err)
 	t.Log(mask.String())
 	assert.Equal(t, uint64(8), mask.GetCardinality())
 
-	mask, _, err = chain.CollectDeletesInRange(txn1.GetCommitTS(), txn3.GetCommitTS()+1, nil)
+	mask, _, err = chain.CollectDeletesInRange(txn1.GetCommitTS(), txn3.GetCommitTS().Next(), nil)
 	assert.NoError(t, err)
 	t.Log(mask.String())
 	assert.Equal(t, uint64(4), mask.GetCardinality())

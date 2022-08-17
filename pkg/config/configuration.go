@@ -15,9 +15,16 @@
 package config
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+)
+
+type ConfigurationKeyType int
+
+const (
+	ParameterUnitKey ConfigurationKeyType = 1
 )
 
 var GlobalSystemVariables SystemVariables
@@ -58,4 +65,13 @@ func NewParameterUnit(sv *SystemVariables, hostMmu *host.Mmu, mempool *mempool.M
 		StorageEngine: storageEngine,
 		ClusterNodes:  clusterNodes,
 	}
+}
+
+// GetParameterUnit gets the configuration from the context.
+func GetParameterUnit(ctx context.Context) *ParameterUnit {
+	pu := ctx.Value(ParameterUnitKey).(*ParameterUnit)
+	if pu == nil {
+		panic("parameter unit is invalid")
+	}
+	return pu
 }

@@ -20,12 +20,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func GetBindings(expr *plan.Expr) []int32 {
@@ -288,7 +290,7 @@ func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, e
 		// expr must be bool type, if not, try to do type convert
 		// but just ignore the subQuery. It will be solved at optimizer.
 		if expr.GetSub() == nil {
-			expr, err = makePlan2CastExpr(expr, &plan.Type{Id: plan.Type_BOOL})
+			expr, err = makePlan2CastExpr(expr, &plan.Type{Id: int32(types.T_bool)})
 			if err != nil {
 				return nil, err
 			}
@@ -415,21 +417,22 @@ func rejectsNull(filter *plan.Expr) bool {
 
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	vec, err := colexec.EvalExpr(bat, nil, filter)
+	filter, err := ConstantFold(bat, filter)
 	if err != nil {
 		return false
 	}
-	if nulls.Any(vec.Nsp) {
-		return true
+
+	if f, ok := filter.Expr.(*plan.Expr_C); ok {
+		if f.C.Isnull {
+			return true
+		}
+
+		if fbool, ok := f.C.Value.(*plan.Const_Bval); ok {
+			return !fbool.Bval
+		}
 	}
 
-	switch vec.Typ.Oid {
-	case types.T_bool:
-		return !vec.Col.([]bool)[0]
-
-	default:
-		return false
-	}
+	return false
 }
 
 func replaceColRefWithNull(expr *plan.Expr) *plan.Expr {
@@ -540,4 +543,101 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 		}
 	}
 	return nil
+}
+
+func ConstantFold(bat *batch.Batch, e *plan.Expr) (*plan.Expr, error) {
+	var err error
+
+	ef, ok := e.Expr.(*plan.Expr_F)
+	if !ok {
+		return e, nil
+	}
+	overloadID := ef.F.Func.GetObj()
+	f, err := function.GetFunctionByID(overloadID)
+	if err != nil {
+		return nil, err
+	}
+	if f.Volatile { // function cannot be fold
+		return e, nil
+	}
+	for i := range ef.F.Args {
+		ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !isConstant(e) {
+		return e, nil
+	}
+	vec, err := colexec.EvalExpr(bat, nil, e)
+	if err != nil {
+		return nil, err
+	}
+	c := getConstantValue(vec)
+	if c == nil {
+		return e, nil
+	}
+	ec := &plan.Expr_C{
+		C: c,
+	}
+	e.Expr = ec
+	return e, nil
+}
+
+func getConstantValue(vec *vector.Vector) *plan.Const {
+	if nulls.Any(vec.Nsp) {
+		return &plan.Const{Isnull: true}
+	}
+	switch vec.Typ.Oid {
+	case types.T_bool:
+		return &plan.Const{
+			Value: &plan.Const_Bval{
+				Bval: vec.Col.([]bool)[0],
+			},
+		}
+	case types.T_int64:
+		return &plan.Const{
+			Value: &plan.Const_Ival{
+				Ival: vec.Col.([]int64)[0],
+			},
+		}
+	case types.T_float64:
+		return &plan.Const{
+			Value: &plan.Const_Dval{
+				Dval: vec.Col.([]float64)[0],
+			},
+		}
+	case types.T_varchar:
+		return &plan.Const{
+			Value: &plan.Const_Sval{
+				Sval: string(vec.Col.(*types.Bytes).Data),
+			},
+		}
+	default:
+		return nil
+	}
+}
+
+func isConstant(e *plan.Expr) bool {
+	switch ef := e.Expr.(type) {
+	case *plan.Expr_C:
+		return true
+	case *plan.Expr_F:
+		overloadID := ef.F.Func.GetObj()
+		f, err := function.GetFunctionByID(overloadID)
+		if err != nil {
+			return false
+		}
+		if f.Volatile { // function cannot be fold
+			return false
+		}
+		for i := range ef.F.Args {
+			if !isConstant(ef.F.Args[i]) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }

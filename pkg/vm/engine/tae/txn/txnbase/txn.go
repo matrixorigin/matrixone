@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -44,19 +46,17 @@ func (txn *OpTxn) Repr() string {
 	}
 }
 
-var DefaultTxnFactory = func(mgr *TxnManager, store txnif.TxnStore, id, startTS uint64, info []byte) txnif.AsyncTxn {
+var DefaultTxnFactory = func(mgr *TxnManager, store txnif.TxnStore, id uint64, startTS types.TS, info []byte) txnif.AsyncTxn {
 	return NewTxn(mgr, store, id, startTS, info)
 }
 
 type Txn struct {
-	sync.RWMutex
 	sync.WaitGroup
 	*TxnCtx
-	Mgr      *TxnManager
-	Store    txnif.TxnStore
-	Err      error
-	DoneCond sync.Cond
-	LSN      uint64
+	Mgr   *TxnManager
+	Store txnif.TxnStore
+	Err   error
+	LSN   uint64
 
 	PrepareCommitFn   func(txnif.AsyncTxn) error
 	PrepareRollbackFn func(txnif.AsyncTxn) error
@@ -64,13 +64,12 @@ type Txn struct {
 	ApplyRollbackFn   func(txnif.AsyncTxn) error
 }
 
-func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId uint64, start uint64, info []byte) *Txn {
+func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId uint64, start types.TS, info []byte) *Txn {
 	txn := &Txn{
 		Mgr:   mgr,
 		Store: store,
 	}
-	txn.TxnCtx = NewTxnCtx(&txn.RWMutex, txnId, start, info)
-	txn.DoneCond = *sync.NewCond(txn)
+	txn.TxnCtx = NewTxnCtx(txnId, start, info)
 	return txn
 }
 
@@ -98,7 +97,8 @@ func (txn *Txn) Commit() (err error) {
 	if err != nil {
 		txn.SetError(err)
 		txn.Lock()
-		_ = txn.ToRollbackingLocked(txn.GetStartTS() + 1)
+		//_ = txn.ToRollbackingLocked(txn.GetStartTS() + 1)
+		_ = txn.ToRollbackingLocked(txn.GetStartTS().Next())
 		txn.Unlock()
 		_ = txn.PrepareRollback()
 		_ = txn.ApplyRollback()
@@ -160,30 +160,6 @@ func (txn *Txn) DoneWithErr(err error) {
 func (txn *Txn) IsTerminated(waitIfcommitting bool) bool {
 	state := txn.GetTxnState(waitIfcommitting)
 	return state == txnif.TxnStateCommitted || state == txnif.TxnStateRollbacked
-}
-
-func (txn *Txn) GetTxnState(waitIfcommitting bool) txnif.TxnState {
-	txn.RLock()
-	state := txn.State
-	if !waitIfcommitting {
-		txn.RUnlock()
-		return state
-	}
-	if state != txnif.TxnStateCommitting {
-		txn.RUnlock()
-		return state
-	}
-	txn.RUnlock()
-	txn.DoneCond.L.Lock()
-	state = txn.State
-	if state != txnif.TxnStateCommitting {
-		txn.DoneCond.L.Unlock()
-		return state
-	}
-	txn.DoneCond.Wait()
-	state = txn.State
-	txn.DoneCond.L.Unlock()
-	return state
 }
 
 func (txn *Txn) PrepareCommit() (err error) {

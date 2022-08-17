@@ -15,14 +15,84 @@
 package plan
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
+
+func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
+	viewName := stmt.Name.ObjectName
+	createTable := &plan.CreateTable{
+		IfNotExists: stmt.IfNotExists,
+		Temporary:   stmt.Temporary,
+		TableDef: &TableDef{
+			Name: string(viewName),
+		},
+	}
+
+	// get database name
+	if len(stmt.Name.SchemaName) == 0 {
+		createTable.Database = ""
+	} else {
+		createTable.Database = string(stmt.Name.SchemaName)
+	}
+
+	// check view statement
+	stmtPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.AsSource)
+	if err != nil {
+		return nil, err
+	}
+
+	query := stmtPlan.GetQuery()
+	cols := make([]*plan.ColDef, len(query.Headings))
+	for idx, expr := range query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList {
+		cols[idx] = &plan.ColDef{
+			Name: query.Headings[idx],
+			Alg:  plan.CompressType_Lz4,
+			Typ:  expr.Typ,
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+	}
+	createTable.TableDef.Cols = cols
+
+	viewData, err := json.Marshal(ViewData{
+		Stmt:            ctx.GetRootSql(),
+		DefaultDatabase: ctx.DefaultDatabase(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_View{
+			View: &plan.ViewDef{
+				View: string(viewData),
+			},
+		},
+	})
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_CREATE_TABLE,
+				Definition: &plan.DataDefinition_CreateTable{
+					CreateTable: createTable,
+				},
+			},
+		},
+	}, nil
+}
 
 func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error) {
 	createTable := &plan.CreateTable{
@@ -73,7 +143,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 			properties := []*plan.Property{
 				{
-					Key:   "Comment",
+					Key:   catalog.SystemRelAttr_Comment,
 					Value: opt.Comment,
 				},
 			}
@@ -100,6 +170,36 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		}
 	}
 
+	if stmt.Param != nil {
+		for i := 0; i < len(stmt.Param.S3option); i += 2 {
+			switch strings.ToLower(stmt.Param.S3option[i]) {
+			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression":
+			default:
+				return nil, fmt.Errorf("the keyword '%s' is not support", strings.ToLower(stmt.Param.S3option[i]))
+			}
+		}
+		json_byte, err := json.Marshal(stmt.Param)
+		if err != nil {
+			return nil, err
+		}
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemExternalRel,
+			},
+			{
+				Key:   catalog.SystemRelAttr_CreateSQL,
+				Value: string(json_byte),
+			},
+		}
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			},
+		})
+	}
 	// set partition(unsupport now)
 	if stmt.PartitionOption != nil {
 		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("partition unsupport now; statement: '%v'", tree.String(stmt, dialect.MYSQL)))
@@ -120,7 +220,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef) error {
 	var primaryKeys []string
 	var indexs []string
-	colNameMap := make(map[string]plan.Type_TypeId)
+	colNameMap := make(map[string]int32)
 	for _, item := range defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
@@ -128,7 +228,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			if err != nil {
 				return err
 			}
-			if colType.Id == plan.Type_CHAR || colType.Id == plan.Type_VARCHAR {
+			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) {
 				if colType.GetWidth() > types.MaxStringSize {
 					return errors.New(errno.DataException, "width out of 1GB is unexpected for char/varchar type")
 				}
@@ -138,7 +238,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			var comment string
 			for _, attr := range def.Attributes {
 				if _, ok := attr.(*tree.AttributePrimaryKey); ok {
-					if colType.GetId() == plan.Type_BLOB {
+					if colType.GetId() == int32(types.T_blob) {
 						return errors.New(errno.InvalidColumnDefinition, "Type text don't support primary key")
 					}
 					pks = append(pks, def.Name.Parts[0])
@@ -242,7 +342,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 	// check index invalid on the type
 	// for example, the text type don't support index
 	for _, str := range indexs {
-		if colNameMap[str] == plan.Type_BLOB {
+		if colNameMap[str] == int32(types.T_blob) {
 			return errors.New(errno.InvalidColumnDefinition, "Type text don't support index")
 		}
 	}
@@ -261,6 +361,67 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		dropTable.Database = ctx.DefaultDatabase()
 	}
 	dropTable.Table = string(stmt.Names[0].ObjectName)
+
+	_, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
+	if tableDef == nil {
+		if !dropTable.IfExists {
+			return nil, errors.New("", fmt.Sprintf("table %s is not exists", dropTable.Table))
+		}
+	} else {
+		isView := false
+		for _, def := range tableDef.Defs {
+			if _, ok := def.Def.(*plan.TableDef_DefType_View); ok {
+				isView = true
+				break
+			}
+		}
+		if isView {
+			return nil, errors.New("", fmt.Sprintf("table %s is not exists", dropTable.Table))
+		}
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_DROP_TABLE,
+				Definition: &plan.DataDefinition_DropTable{
+					DropTable: dropTable,
+				},
+			},
+		},
+	}, nil
+}
+
+func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
+	dropTable := &plan.DropTable{
+		IfExists: stmt.IfExists,
+	}
+	if len(stmt.Names) != 1 {
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "support drop one view now")
+	}
+	dropTable.Database = string(stmt.Names[0].SchemaName)
+	if dropTable.Database == "" {
+		dropTable.Database = ctx.DefaultDatabase()
+	}
+	dropTable.Table = string(stmt.Names[0].ObjectName)
+
+	_, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
+	if tableDef == nil {
+		if !dropTable.IfExists {
+			return nil, errors.New("", fmt.Sprintf("view %s is not exists", dropTable.Table))
+		}
+	} else {
+		isView := false
+		for _, def := range tableDef.Defs {
+			if _, ok := def.Def.(*plan.TableDef_DefType_View); ok {
+				isView = true
+				break
+			}
+		}
+		if !isView {
+			return nil, errors.New("", fmt.Sprintf("%s is not a view", dropTable.Table))
+		}
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{

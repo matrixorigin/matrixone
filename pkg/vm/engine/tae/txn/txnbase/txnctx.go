@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
@@ -33,26 +35,25 @@ func IDCtxToID(buf []byte) uint64 {
 }
 
 type TxnCtx struct {
-	*sync.RWMutex
+	sync.RWMutex
+	DoneCond          sync.Cond
 	ID                uint64
 	IDCtx             []byte
-	StartTS, CommitTS uint64
+	StartTS, CommitTS types.TS
 	Info              []byte
 	State             txnif.TxnState
 }
 
-func NewTxnCtx(rwlocker *sync.RWMutex, id, start uint64, info []byte) *TxnCtx {
-	if rwlocker == nil {
-		rwlocker = new(sync.RWMutex)
-	}
-	return &TxnCtx{
+func NewTxnCtx(id uint64, start types.TS, info []byte) *TxnCtx {
+	ctx := &TxnCtx{
 		ID:       id,
 		IDCtx:    IDToIDCtx(id),
-		RWMutex:  rwlocker,
 		StartTS:  start,
 		CommitTS: txnif.UncommitTS,
 		Info:     info,
 	}
+	ctx.DoneCond = *sync.NewCond(ctx)
+	return ctx
 }
 
 func (ctx *TxnCtx) GetCtx() []byte {
@@ -62,44 +63,82 @@ func (ctx *TxnCtx) GetCtx() []byte {
 func (ctx *TxnCtx) Repr() string {
 	ctx.RLock()
 	defer ctx.RUnlock()
-	repr := fmt.Sprintf("Txn[%d][%d->%d][%s]", ctx.ID, ctx.StartTS, ctx.CommitTS, txnif.TxnStrState(ctx.State))
+	repr := fmt.Sprintf("ctx[%d][%d->%d][%s]", ctx.ID, ctx.StartTS, ctx.CommitTS, txnif.TxnStrState(ctx.State))
 	return repr
 }
 
-func (ctx *TxnCtx) SameTxn(startTs uint64) bool { return ctx.StartTS == startTs }
-func (ctx *TxnCtx) CommitBefore(startTs uint64) bool {
-	return ctx.GetCommitTS() < startTs
+func (ctx *TxnCtx) SameTxn(startTs types.TS) bool { return ctx.StartTS.Equal(startTs) }
+func (ctx *TxnCtx) CommitBefore(startTs types.TS) bool {
+	return ctx.GetCommitTS().Less(startTs)
 }
-func (ctx *TxnCtx) CommitAfter(startTs uint64) bool {
-	return ctx.GetCommitTS() > startTs
+func (ctx *TxnCtx) CommitAfter(startTs types.TS) bool {
+	return ctx.GetCommitTS().Greater(startTs)
 }
 
-func (ctx *TxnCtx) String() string     { return ctx.Repr() }
-func (ctx *TxnCtx) GetID() uint64      { return ctx.ID }
-func (ctx *TxnCtx) GetInfo() []byte    { return ctx.Info }
-func (ctx *TxnCtx) GetStartTS() uint64 { return ctx.StartTS }
-func (ctx *TxnCtx) GetCommitTS() uint64 {
+func (ctx *TxnCtx) String() string       { return ctx.Repr() }
+func (ctx *TxnCtx) GetID() uint64        { return ctx.ID }
+func (ctx *TxnCtx) GetInfo() []byte      { return ctx.Info }
+func (ctx *TxnCtx) GetStartTS() types.TS { return ctx.StartTS }
+func (ctx *TxnCtx) GetCommitTS() types.TS {
 	ctx.RLock()
 	defer ctx.RUnlock()
 	return ctx.CommitTS
+}
+
+// Atomically returns the current txn state
+func (ctx *TxnCtx) getTxnState() txnif.TxnState {
+	ctx.RLock()
+	defer ctx.RUnlock()
+	return ctx.State
+}
+
+// Wait txn state to be rollbacked or committed
+func (ctx *TxnCtx) resolveTxnState() txnif.TxnState {
+	ctx.DoneCond.L.Lock()
+	defer ctx.DoneCond.L.Unlock()
+	state := ctx.State
+	if state != txnif.TxnStateCommitting {
+		return state
+	}
+	ctx.DoneCond.Wait()
+	return ctx.State
+}
+
+// False when atomically get the current txn state
+//
+// True when the txn state is committing, wait it to be committed or rollbacked. It
+// is used during snapshot reads. If TxnStateActive is currently returned, this value will
+// definitely not be used, because even if it becomes TxnStateCommitting later, the timestamp
+// would be larger than the current read timestamp.
+func (ctx *TxnCtx) GetTxnState(waitIfcommitting bool) (state txnif.TxnState) {
+	// Quick get the current txn state
+	// If waitIfcommitting is false, return the state
+	// If state is not txnif.TxnStateCommitting, return the state
+	if state = ctx.getTxnState(); !waitIfcommitting || state != txnif.TxnStateCommitting {
+		return state
+	}
+
+	// Wait the committing txn to be committed or rollbacked
+	state = ctx.resolveTxnState()
+	return
 }
 
 func (ctx *TxnCtx) IsVisible(o txnif.TxnReader) bool {
 	ostart := o.GetStartTS()
 	ctx.RLock()
 	defer ctx.RUnlock()
-	return ostart <= ctx.StartTS
+	return ostart.LessEq(ctx.StartTS)
 }
 
 func (ctx *TxnCtx) IsActiveLocked() bool {
 	return ctx.CommitTS == txnif.UncommitTS
 }
 
-func (ctx *TxnCtx) ToCommittingLocked(ts uint64) error {
-	if ts <= ctx.StartTS {
+func (ctx *TxnCtx) ToCommittingLocked(ts types.TS) error {
+	if ts.LessEq(ctx.StartTS) {
 		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
 	}
-	if ctx.CommitTS != txnif.UncommitTS {
+	if !ctx.CommitTS.Equal(txnif.UncommitTS) {
 		return ErrTxnNotActive
 	}
 	ctx.CommitTS = ts
@@ -115,8 +154,8 @@ func (ctx *TxnCtx) ToCommittedLocked() error {
 	return nil
 }
 
-func (ctx *TxnCtx) ToRollbackingLocked(ts uint64) error {
-	if ts <= ctx.StartTS {
+func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
+	if ts.LessEq(ctx.StartTS) {
 		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
 	}
 	if (ctx.State != txnif.TxnStateActive) && (ctx.State != txnif.TxnStateCommitting) {
@@ -140,4 +179,4 @@ func (ctx *TxnCtx) ToUnknownLocked() {
 }
 
 // MockSetCommitTSLocked is for testing
-func (ctx *TxnCtx) MockSetCommitTSLocked(ts uint64) { ctx.CommitTS = ts }
+func (ctx *TxnCtx) MockSetCommitTSLocked(ts types.TS) { ctx.CommitTS = ts }

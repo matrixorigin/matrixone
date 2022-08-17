@@ -17,7 +17,9 @@ package db
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"os"
+
 	"path"
 	"sync"
 
@@ -39,7 +41,7 @@ const DefaultReplayCacheSize = 2 * common.M
 type Replayer struct {
 	DataFactory  *tables.DataFactory
 	db           *DB
-	maxTs        uint64
+	maxTs        types.TS
 	cache        *bytes.Buffer
 	staleIndexes []*wal.Index
 	once         sync.Once
@@ -212,12 +214,12 @@ func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload [
 	}
 }
 
-func (replayer *Replayer) GetMaxTS() uint64 {
+func (replayer *Replayer) GetMaxTS() types.TS {
 	return replayer.maxTs
 }
 
-func (replayer *Replayer) OnTimeStamp(ts uint64) {
-	if ts > replayer.maxTs {
+func (replayer *Replayer) OnTimeStamp(ts types.TS) {
+	if ts.Greater(replayer.maxTs) {
 		replayer.maxTs = ts
 	}
 }
@@ -274,7 +276,7 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObser
 		if observer != nil {
 			observer.OnTimeStamp(blk.GetBlockData().GetMaxCheckpointTS())
 		}
-		if cmd.Ts <= blk.GetBlockData().GetMaxCheckpointTS() {
+		if cmd.Ts.LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
 			continue
 		}
 		hasActive = true
@@ -324,7 +326,7 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObser
 		if observer != nil {
 			observer.OnTimeStamp(blk.GetBlockData().GetMaxCheckpointTS())
 		}
-		if cmd.Ts <= blk.GetBlockData().GetMaxCheckpointTS() {
+		if cmd.Ts.LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
 			continue
 		}
 		start := info.GetSrcOff()
@@ -365,7 +367,7 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
-	if deleteNode.GetCommitTSLocked() <= blk.GetBlockData().GetMaxCheckpointTS() {
+	if deleteNode.GetCommitTSLocked().LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
@@ -395,7 +397,7 @@ func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
-	if appendNode.GetCommitTS() <= blk.GetBlockData().GetMaxCheckpointTS() {
+	if appendNode.GetCommitTS().LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
@@ -423,7 +425,7 @@ func (db *DB) onReplayUpdate(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
-	if updateNode.GetCommitTSLocked() <= blk.GetBlockData().GetMaxCheckpointTS() {
+	if updateNode.GetCommitTSLocked().LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
 		observer.OnStaleIndex(idxCtx)
 		return
 	}

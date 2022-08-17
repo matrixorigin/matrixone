@@ -18,13 +18,14 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestEval(t *testing.T) {
-	view := NewBlockView(123455)
+	var zeroV types.TS
+	view := NewBlockView(zeroV.Next().Next())
 	colTypes := types.MockColTypes(14)
 	rows := 64
 	bat := containers.MockBatch(colTypes, rows, 3, nil)

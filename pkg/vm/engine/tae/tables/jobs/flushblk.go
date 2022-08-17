@@ -15,6 +15,7 @@
 package jobs
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -28,13 +29,13 @@ type flushBlkTask struct {
 	sortCol containers.Vector
 	meta    *catalog.BlockEntry
 	file    file.Block
-	ts      uint64
+	ts      types.TS
 }
 
 func NewFlushBlkTask(
 	ctx *tasks.Context,
 	bf file.Block,
-	ts uint64,
+	ts types.TS,
 	meta *catalog.BlockEntry,
 	data *containers.Batch,
 	sortCol containers.Vector) *flushBlkTask {

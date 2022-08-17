@@ -182,6 +182,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			if view, err = block.GetColumnDataById(schema.SortKey.Defs[0].Idx, nil); err != nil {
 				return
 			}
+			task.deletes[i] = view.DeleteMask
 			view.ApplyDeletes()
 			vec = view.Orphan()
 		} else {
@@ -190,6 +191,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 				if view, err = block.GetColumnDataById(schema.SortKey.Defs[idx].Idx, nil); err != nil {
 					return
 				}
+				task.deletes[i] = view.DeleteMask
 				view.ApplyDeletes()
 				cols[idx] = view.Orphan()
 				defer cols[idx].Close()

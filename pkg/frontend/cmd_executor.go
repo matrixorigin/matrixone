@@ -14,12 +14,14 @@
 
 package frontend
 
+import "context"
+
 // CmdExecutor handle the command from the client
 type CmdExecutor interface {
 	PrepareSessionBeforeExecRequest(*Session)
 
 	// ExecRequest execute the request and get the response
-	ExecRequest(req *Request) (*Response, error)
+	ExecRequest(context.Context, *Request) (*Response, error)
 
 	Close()
 }

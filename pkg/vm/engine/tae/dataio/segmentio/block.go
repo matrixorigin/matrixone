@@ -21,12 +21,12 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/adaptors"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type blockFile struct {
@@ -34,7 +34,7 @@ type blockFile struct {
 	seg       *segmentFile
 	rows      uint32
 	id        uint64
-	ts        uint64
+	ts        types.TS
 	columns   []*columnBlock
 	deletes   *deletesFile
 	indexMeta *dataFile
@@ -97,16 +97,18 @@ func (bf *blockFile) ReadRows() uint32 {
 	return bf.rows
 }
 
-func (bf *blockFile) WriteTS(ts uint64) (err error) {
+func (bf *blockFile) WriteTS(ts types.TS) (err error) {
 	bf.ts = ts
 	bf.deletes.SetFile(
-		bf.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.del", len(bf.columns), bf.id, ts)),
+		//bf.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.del", len(bf.columns), bf.id, ts)),
+		bf.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%s.del",
+			len(bf.columns), bf.id, ts.ToString())),
 		uint32(len(bf.columns)),
 		uint32(len(bf.columns[0].indexes)))
 	return
 }
 
-func (bf *blockFile) ReadTS() (ts uint64, err error) {
+func (bf *blockFile) ReadTS() (ts types.TS, err error) {
 	ts = bf.ts
 	return
 }
@@ -227,7 +229,7 @@ func (bf *blockFile) LoadBatch(
 	return
 }
 
-func (bf *blockFile) WriteColumnVec(ts uint64, colIdx int, vec containers.Vector) (err error) {
+func (bf *blockFile) WriteColumnVec(ts types.TS, colIdx int, vec containers.Vector) (err error) {
 	cb, err := bf.OpenColumn(colIdx)
 	if err != nil {
 		return err
@@ -243,7 +245,7 @@ func (bf *blockFile) WriteColumnVec(ts uint64, colIdx int, vec containers.Vector
 	return
 }
 
-func (bf *blockFile) WriteBatch(bat *containers.Batch, ts uint64) (err error) {
+func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (err error) {
 	if err = bf.WriteTS(ts); err != nil {
 		return
 	}
@@ -289,7 +291,7 @@ func (bf *blockFile) PrepareUpdates(
 
 func (bf *blockFile) WriteSnapshot(
 	bat *containers.Batch,
-	ts uint64,
+	ts types.TS,
 	masks map[uint16]*roaring.Bitmap,
 	vals map[uint16]map[uint32]any,
 	deletes *roaring.Bitmap) (err error) {

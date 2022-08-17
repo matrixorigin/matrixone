@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -40,7 +41,7 @@ type CheckpointItem interface {
 	StringLocked() string
 }
 
-func CheckpointSelectOp(entry *BaseEntry, minTs, maxTs uint64) bool {
+func CheckpointSelectOp(entry *BaseEntry, minTs, maxTs types.TS) bool {
 	entry.RLock()
 	defer entry.RUnlock()
 	if entry.InTxnOrRollbacked() {
@@ -68,7 +69,7 @@ func CheckpointSelectOp(entry *BaseEntry, minTs, maxTs uint64) bool {
 	return true
 }
 
-func CheckpointOp(ckpEntry *CheckpointEntry, entry *BaseEntry, item CheckpointItem, minTs, maxTs uint64) {
+func CheckpointOp(ckpEntry *CheckpointEntry, entry *BaseEntry, item CheckpointItem, minTs, maxTs types.TS) {
 	entry.RLock()
 	if entry.InTxnOrRollbacked() {
 		entry.RUnlock()
@@ -105,7 +106,7 @@ func CheckpointOp(ckpEntry *CheckpointEntry, entry *BaseEntry, item CheckpointIt
 	}
 	// 4. entry was created at|after minTs
 	// 4.1 entry was deleted at|before maxTs
-	if entry.DeleteBefore(maxTs + 1) {
+	if entry.DeleteBefore(maxTs.Next()) {
 		ckpEntry.AddIndex(entry.LogIndex)
 		ckpEntry.AddIndex(entry.PrevCommit.LogIndex)
 		cloned := item.Clone()
@@ -129,7 +130,7 @@ func CheckpointOp(ckpEntry *CheckpointEntry, entry *BaseEntry, item CheckpointIt
 }
 
 type Checkpoint struct {
-	MaxTS    uint64
+	MaxTS    types.TS
 	LSN      uint64
 	CommitId uint64
 }
@@ -142,7 +143,7 @@ func (ckp *Checkpoint) String() string {
 }
 
 type CheckpointEntry struct {
-	MinTS, MaxTS uint64
+	MinTS, MaxTS types.TS
 	LogIndexes   []*wal.Index
 	MaxIndex     wal.Index
 	Entries      []*EntryCommand
@@ -154,7 +155,7 @@ func NewEmptyCheckpointEntry() *CheckpointEntry {
 	}
 }
 
-func NewCheckpointEntry(minTs, maxTs uint64) *CheckpointEntry {
+func NewCheckpointEntry(minTs, maxTs types.TS) *CheckpointEntry {
 	return &CheckpointEntry{
 		MinTS:      minTs,
 		MaxTS:      maxTs,

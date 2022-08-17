@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -24,7 +25,7 @@ import (
 )
 
 func MockTxnFactory(catalog *Catalog) txnbase.TxnFactory {
-	return func(mgr *txnbase.TxnManager, store txnif.TxnStore, id uint64, ts uint64, info []byte) txnif.AsyncTxn {
+	return func(mgr *txnbase.TxnManager, store txnif.TxnStore, id uint64, ts types.TS, info []byte) txnif.AsyncTxn {
 		txn := new(mockTxn)
 		txn.Txn = txnbase.NewTxn(mgr, store, id, ts, info)
 		txn.catalog = catalog

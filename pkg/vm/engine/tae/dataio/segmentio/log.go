@@ -211,6 +211,10 @@ func (l *Log) replayData(data *bytes.Buffer, offset int64) (pos int, hole uint32
 }
 
 func (l *Log) RemoveInode(file *DriverFile) error {
+	if file.snode.logExtents.length == 0 {
+		logutil.Infof("remove file: %v, but it is empty", file.name)
+		return nil
+	}
 	file.snode.state = REMOVE
 	err := l.Append(file)
 	if err != nil {
@@ -297,10 +301,6 @@ func (l *Log) Append(file *DriverFile) error {
 		return err
 	}
 	if file.snode.state == REMOVE {
-		if file.snode.logExtents.length == 0 {
-			logutil.Infof("remove file: %v, but it is empty", file.name)
-			return nil
-		}
 		err = l.CoverState(file.snode.logExtents.offset, REMOVE)
 		if err != nil {
 			return err

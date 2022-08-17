@@ -22,12 +22,12 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -38,8 +38,8 @@ type ColumnUpdateNode struct {
 	vals map[uint32]any
 	// nulls    *roaring.Bitmap
 	chain    *ColumnChain
-	startTs  uint64
-	commitTs uint64
+	startTs  types.TS
+	commitTs types.TS
 	txn      txnif.AsyncTxn
 	logIndex *wal.Index
 	id       *common.ID
@@ -52,7 +52,7 @@ func NewSimpleColumnUpdateNode() *ColumnUpdateNode {
 	}
 	return node
 }
-func NewCommittedColumnUpdateNode(startTs, commitTs uint64, id *common.ID, rwlocker *sync.RWMutex) *ColumnUpdateNode {
+func NewCommittedColumnUpdateNode(startTs, commitTs types.TS, id *common.ID, rwlocker *sync.RWMutex) *ColumnUpdateNode {
 	if rwlocker == nil {
 		rwlocker = &sync.RWMutex{}
 	}
@@ -126,9 +126,9 @@ func (node *ColumnUpdateNode) Compare(o common.NodePayload) int {
 	op.RLock()
 	defer op.RUnlock()
 	if node.commitTs == op.commitTs {
-		if node.startTs < op.startTs {
+		if node.startTs.Less(op.startTs) {
 			return -1
-		} else if node.startTs > op.startTs {
+		} else if node.startTs.Greater(op.startTs) {
 			return 1
 		}
 		return 0
@@ -196,7 +196,7 @@ func (node *ColumnUpdateNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = node.mask.UnmarshalBinary(buf); err != nil {
 		return
 	}
-	buf = make([]byte, types.TypeSize)
+	buf = make([]byte, types.TSize)
 	if _, err = r.Read(buf); err != nil {
 		return
 	}
@@ -290,8 +290,8 @@ func (node *ColumnUpdateNode) MergeLocked(o *ColumnUpdateNode) {
 	}
 }
 
-func (node *ColumnUpdateNode) GetStartTS() uint64        { return node.startTs }
-func (node *ColumnUpdateNode) GetCommitTSLocked() uint64 { return node.commitTs }
+func (node *ColumnUpdateNode) GetStartTS() types.TS        { return node.startTs }
+func (node *ColumnUpdateNode) GetCommitTSLocked() types.TS { return node.commitTs }
 
 func (node *ColumnUpdateNode) ApplyToColumn(vec containers.Vector, deletes *roaring.Bitmap) containers.Vector {
 	containers.ApplyUpdates(vec, node.mask, node.vals)

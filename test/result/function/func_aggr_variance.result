@@ -40,11 +40,9 @@ select variance(l) from t1;
 variance(l)
 1.2268750007375E22
 select variance(m) from t1;
-variance(m)
-1.6875
+Aggregate function of 'variance' do not support implicit conversions for param of [CHAR]
 select variance(n) from t1;
-variance(n)
-1.6875
+Aggregate function of 'variance' do not support implicit conversions for param of [VARCHAR]
 drop table t1;
 select variance(99999999999999999.99999);
 variance(99999999999999999.99999)

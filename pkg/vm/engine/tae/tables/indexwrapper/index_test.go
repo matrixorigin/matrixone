@@ -17,14 +17,14 @@ package indexwrapper
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestRevert(t *testing.T) {
-	vec := containers.MockVector2(types.Type_INT64.ToType(), 20, 0)
+	vec := containers.MockVector2(types.T_int64.ToType(), 20, 0)
 	vec1 := vec.CloneWindow(0, 10)
 	vec2 := vec.CloneWindow(8, 10)
 	defer vec.Close()
@@ -37,14 +37,16 @@ func TestRevert(t *testing.T) {
 	ctx.Keys = vec1
 	ctx.SelectAll()
 
-	ts1 := uint64(99)
+	//ts1 := uint64(99)
+	ts1 := types.NextGlobalTsForTest().Next()
 	resp, err := idx.BatchUpsert(ctx, 0, ts1)
 	assert.NoError(t, err)
 	assert.Nil(t, resp)
 	_, err = idx.BatchDedup(vec1, nil)
 	assert.Error(t, err)
 
-	ts2 := uint64(109)
+	//ts2 := uint64(109)
+	ts2 := ts1.Next()
 	ctx.Keys = vec2
 	ctx.SelectAll()
 	resp, err = idx.BatchUpsert(ctx, vec1.Length(), ts2)
@@ -67,7 +69,8 @@ func TestRevert(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.Equal(t, 10, idx.art.Size())
-	assert.Equal(t, uint64(0), idx.deletes.GetMaxTS())
+	var zeroV types.TS
+	assert.Equal(t, zeroV, idx.deletes.GetMaxTS())
 	assert.False(t, idx.HasDeleteFrom(vec1.Get(7), ts2))
 	assert.False(t, idx.HasDeleteFrom(vec1.Get(8), ts2))
 	assert.False(t, idx.HasDeleteFrom(vec1.Get(9), ts2))
