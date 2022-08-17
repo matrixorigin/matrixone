@@ -661,6 +661,14 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 		return 0, err
 	}
 
+	if len(selectStmts) == 1 {
+		if slt, ok := selectStmts[0].(*tree.Select); ok {
+			return builder.buildSelect(slt, ctx, false)
+		} else {
+			return builder.buildSelect(&tree.Select{Select: selectStmts[0]}, ctx, false)
+		}
+	}
+
 	// build selects
 	var projectTypList [][]types.Type
 	selectStmtLength := len(selectStmts)

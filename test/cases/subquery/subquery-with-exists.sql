@@ -286,16 +286,12 @@ drop table if exists t1;
 -- @label:bvt
 drop table if exists t1;
 CREATE TABLE t1 (i INT);
--- @bvt:issue#4354
--- @bvt:issue#3419
 SELECT * FROM t1 WHERE NOT EXISTS
   (
    (SELECT i FROM t1) UNION
    (SELECT i FROM t1)
   );
 SELECT * FROM t1 WHERE NOT EXISTS (((SELECT i FROM t1) UNION (SELECT i FROM t1)));
--- @bvt:issue
--- @bvt:issue
 
 drop table if exists t1;
 drop table if exists t2;
@@ -341,11 +337,7 @@ CREATE TABLE t2 (a INT);
 INSERT INTO t1 VALUES (1),(2);
 INSERT INTO t2 VALUES (1),(2);
 SELECT 2 FROM t1 WHERE EXISTS ((SELECT 1 FROM t2 WHERE t1.a=t2.a));
--- @bvt:issue#4354
--- @bvt:issue#3419
 SELECT 2 FROM t1 WHERE EXISTS ((SELECT 1 FROM t2 WHERE t1.a=t2.a) UNION (SELECT 1 FROM t2 WHERE t1.a = t2.a));
--- @bvt:issue
--- @bvt:issue
 
 drop table if exists t1;
 drop table if exists t2;

@@ -1562,8 +1562,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 			return nil, err
 		}
 
-		preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
-
 		// TODO check if schema change, obj.Obj is zero all the time in 0.6
 		// for _, obj := range preparePlan.GetSchemas() {
 		// 	newObj, _ := cwft.ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName)
@@ -1572,32 +1570,27 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// 	}
 		// }
 
-		query := plan2.DeepCopyQuery(preparePlan.Plan.GetQuery())
+		newPlan := plan2.DeepCopyPlan(prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan)
 
 		// replace ? and @var with their values
 		resetParamRule := plan2.NewResetParamRefRule(executePlan.Args)
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompilerContext())
-		VisitQuery := plan2.NewVisitQuery(query, []plan2.VisitRule{resetParamRule, resetVarRule})
-		err = VisitQuery.Visit()
+		vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule})
+		err = vp.Visit()
 		if err != nil {
 			return nil, err
 		}
 
 		// reset plan & stmt
 		cwft.stmt = prepareStmt.PrepareStmt
-		cwft.plan = &plan2.Plan{Plan: &plan2.Plan_Query{
-			Query: query,
-		}}
+		cwft.plan = newPlan
 	} else {
 		// replace @var with their values
-		query := cwft.plan.GetQuery()
-		if query != nil {
-			resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompilerContext())
-			VisitQuery := plan2.NewVisitQuery(query, []plan2.VisitRule{resetVarRule})
-			err = VisitQuery.Visit()
-			if err != nil {
-				return nil, err
-			}
+		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompilerContext())
+		vp := plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{resetVarRule})
+		err = vp.Visit()
+		if err != nil {
+			return nil, err
 		}
 	}
 

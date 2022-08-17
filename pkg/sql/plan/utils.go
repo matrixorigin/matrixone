@@ -515,8 +515,22 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 	// right is not UNION allways
 	switch rightStmt := stmt.Right.(type) {
 	case *tree.SelectClause:
+		if stmt.Type == tree.UNION && !stmt.All {
+			rightStr := tree.String(rightStmt, dialect.MYSQL)
+			if len(*selects) == 1 && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
+				return nil
+			}
+		}
+
 		*selects = append(*selects, rightStmt)
 	case *tree.ParenSelect:
+		if stmt.Type == tree.UNION && !stmt.All {
+			rightStr := tree.String(rightStmt.Select, dialect.MYSQL)
+			if len(*selects) == 1 && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
+				return nil
+			}
+		}
+
 		*selects = append(*selects, rightStmt.Select)
 	default:
 		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL)))
@@ -531,13 +545,13 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 		}
 	case tree.INTERSECT:
 		if stmt.All {
-			return errors.New("", "INTERSECT ALL clause will support in future version.")
+			return errors.New("", "INTERSECT ALL clause will be supported in future version.")
 		} else {
 			*unionTypes = append(*unionTypes, plan.Node_INTERSECT)
 		}
 	case tree.EXCEPT, tree.UT_MINUS:
 		if stmt.All {
-			return errors.New("", "EXCEPT/MINUS ALL clause will support in future version.")
+			return errors.New("", "EXCEPT/MINUS ALL clause will be supported in future version.")
 		} else {
 			*unionTypes = append(*unionTypes, plan.Node_MINUS)
 		}
