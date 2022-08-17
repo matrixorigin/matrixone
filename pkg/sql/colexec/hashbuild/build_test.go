@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package semi
+package hashbuild
 
 import (
 	"bytes"
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -35,38 +35,27 @@ const (
 )
 
 // add unit tests for cases
-type joinTestCase struct {
+type buildTestCase struct {
 	arg    *Argument
 	flgs   []bool // flgs[i] == true: nullable
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
-	barg   *hashbuild.Argument
 }
 
 var (
-	tcs []joinTestCase
+	tcs []buildTestCase
 )
 
 func init() {
-	tcs = []joinTestCase{
-		newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
-				},
-				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
-				},
+	tcs = []buildTestCase{
+		newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int8}},
+			[]*plan.Expr{
+				newExpr(0, types.Type{Oid: types.T_int8}),
 			}),
-		newTestCase(testutil.NewMheap(), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
-				},
-				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
-				},
+		newTestCase(testutil.NewMheap(), []bool{true}, []types.Type{{Oid: types.T_int8}},
+			[]*plan.Expr{
+				newExpr(0, types.Type{Oid: types.T_int8}),
 			}),
 	}
 }
@@ -78,67 +67,49 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestJoin(t *testing.T) {
-	for _, tc := range tcs {
-		bat := hashBuild(t, tc)
+func TestBuild(t *testing.T) {
+	for _, tc := range tcs[:1] {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- bat
 		for {
-			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
-				break
-			}
+			ok, err := Call(0, tc.proc, tc.arg)
+			require.NoError(t, err)
+			require.Equal(t, true, ok)
+			mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
+			mp.Free()
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+			break
 		}
 		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
 	}
 }
 
-func BenchmarkJoin(b *testing.B) {
+func BenchmarkBuild(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		tcs = []joinTestCase{
-			newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
-				[][]*plan.Expr{
-					{
-						newExpr(0, types.Type{Oid: types.T_int8}),
-					},
-					{
-						newExpr(0, types.Type{Oid: types.T_int8}),
-					},
-				}),
-			newTestCase(testutil.NewMheap(), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
-				[][]*plan.Expr{
-					{
-						newExpr(0, types.Type{Oid: types.T_int8}),
-					},
-					{
-						newExpr(0, types.Type{Oid: types.T_int8}),
-					},
+		tcs = []buildTestCase{
+			newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int8}},
+				[]*plan.Expr{
+					newExpr(0, types.Type{Oid: types.T_int8}),
 				}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
-			bat := hashBuild(t, tc)
 			err := Prepare(tc.proc, tc.arg)
 			require.NoError(t, err)
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- bat
 			for {
-				if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
-					break
-				}
+				ok, err := Call(0, tc.proc, tc.arg)
+				require.NoError(t, err)
+				require.Equal(t, true, ok)
+				mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
+				mp.Free()
 				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+				break
 			}
 		}
 	}
@@ -160,45 +131,25 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 	}
 }
 
-func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) joinTestCase {
+func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 	proc := process.New(m)
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
+	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ctx: ctx,
 		Ch:  make(chan *batch.Batch, 10),
 	}
-	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
-	}
-	return joinTestCase{
+	return buildTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
 		arg: &Argument{
-			Typs:       ts,
-			Result:     rp,
-			Conditions: cs,
-		},
-		barg: &hashbuild.Argument{
 			Typs:        ts,
+			Conditions:  cs,
 			NeedHashMap: true,
-			Conditions:  cs[1],
 		},
 	}
-}
-
-func hashBuild(t *testing.T, tc joinTestCase) *batch.Batch {
-	err := hashbuild.Prepare(tc.proc, tc.barg)
-	require.NoError(t, err)
-	tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-	tc.proc.Reg.MergeReceivers[0].Ch <- nil
-	ok, err := hashbuild.Call(0, tc.proc, tc.barg)
-	require.NoError(t, err)
-	require.Equal(t, true, ok)
-	return tc.proc.Reg.InputBatch
 }
 
 // create a new block based on the type information, flgs[i] == ture: has null

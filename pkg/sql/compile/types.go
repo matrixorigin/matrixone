@@ -76,6 +76,9 @@ type Scope struct {
 	// 2 -  execution unit that requires remote call.
 	Magic int
 
+	// IsEnd means the pipeline is join
+	IsJoin bool
+
 	// IsEnd means the pipeline is end
 	IsEnd bool
 

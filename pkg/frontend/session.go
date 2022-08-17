@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -103,6 +104,8 @@ type Session struct {
 	allResultSet []*MysqlResultSet
 
 	tenant *TenantInfo
+
+	timeZone *time.Location
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
@@ -130,6 +133,7 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 
 		prepareStmts:   make(map[string]*PrepareStmt),
 		outputCallback: getDataFromPipeline,
+		timeZone:       time.Local,
 	}
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.txnCompileCtx.SetSession(ses)
@@ -168,6 +172,14 @@ func (ses *Session) SetRequestContext(reqCtx context.Context) {
 
 func (ses *Session) GetRequestContext() context.Context {
 	return ses.requestCtx
+}
+
+func (ses *Session) SetTimeZone(loc *time.Location) {
+	ses.timeZone = loc
+}
+
+func (ses *Session) GetTimeZone() *time.Location {
+	return ses.timeZone
 }
 
 func (ses *Session) SetMysqlResultSet(mrs *MysqlResultSet) {
@@ -252,7 +264,12 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 		if err != nil {
 			return err
 		}
-		ses.sysVars[def.GetName()] = cv
+
+		if def.UpdateSessVar == nil {
+			ses.sysVars[def.GetName()] = cv
+		} else {
+			return def.UpdateSessVar(ses, ses.sysVars, def.GetName(), cv)
+		}
 	} else {
 		return errorSystemVariableDoesNotExist
 	}
@@ -921,7 +938,7 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 		if dataSet.Zs[j] <= 0 {
 			continue
 		}
-		_, err := extractRowFromEveryVector(dataSet, int64(j), oq)
+		_, err := extractRowFromEveryVector(ses, dataSet, int64(j), oq)
 		if err != nil {
 			return err
 		}

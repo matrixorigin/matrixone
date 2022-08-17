@@ -33,7 +33,7 @@ func TestDate(t *testing.T) {
 	for i := 1; i <= 3000; i++ {
 		for j := 1; j <= len(dayInMonth); j++ {
 			for k := 1; k < days(i, j); k++ {
-				tsys := time.Date(i, time.Month(j), k, 0, 0, 0, 0, time.Local)
+				tsys := time.Date(i, time.Month(j), k, 0, 0, 0, 0, time.UTC)
 				y, m, d := tsys.Date()
 				yw, w := tsys.ISOWeek()
 				wd := tsys.Weekday()
@@ -64,7 +64,12 @@ func TestDatetime(t *testing.T) {
 	fmt.Println(dt.ToDate().Calendar(true))
 	fmt.Println(dt.Clock())
 
-	dt = Now()
+	dt = Now(time.UTC)
+	fmt.Println(dt.ToDate().Calendar(true))
+	fmt.Println(dt.Clock())
+
+	loc, _ := time.LoadLocation("America/Los_Angeles")
+	dt = Now(loc)
 	fmt.Println(dt.ToDate().Calendar(true))
 	fmt.Println(dt.Clock())
 }
@@ -289,25 +294,16 @@ func TestParseDatetime(t *testing.T) {
 	}
 }
 
-func TestUTC(t *testing.T) {
-	args, _ := ParseDatetime("1987-08-25 00:00:00", 6)
-	utc := args.UTC()
-	_, offset := time.Now().Local().Zone()
-	if args.sec()-utc.sec() != localTZ {
-		t.Errorf("UTC() args %v got %v and time zone UTC+%v", args, utc, offset/secsPerHour)
-	}
-}
-
 func TestUnix(t *testing.T) {
 	for _, timestr := range []string{"1955-08-25 09:21:34", "2012-01-25 09:21:34"} {
 		motime, _ := ParseDatetime(timestr, 6)
-		motimeUnix := motime.UnixTimestamp()
-		goLcoalTime, _ := time.ParseInLocation("2006-01-02 15:04:05", timestr, time.Local)
+		motimeUnix := motime.UnixTimestamp(time.UTC)
+		goLcoalTime, _ := time.ParseInLocation("2006-01-02 15:04:05", timestr, time.UTC)
 		goUnix := goLcoalTime.Unix()
 
 		require.Equal(t, motimeUnix, goUnix)
 
-		parse_time := FromUnix(motimeUnix)
+		parse_time := FromUnix(time.UTC, motimeUnix)
 		require.Equal(t, motime, parse_time)
 	}
 }
