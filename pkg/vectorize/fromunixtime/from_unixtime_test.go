@@ -40,7 +40,7 @@ func TestFromUnixTimestamp(t *testing.T) {
 		wantDatetimeFromUnix(xs[2]),
 	}
 
-	got := unixToDatetime(xs, rs)
+	got := unixToDatetime(time.Local, xs, rs)
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("unixtimestamp() want %v but got %v", want, got)
 	}

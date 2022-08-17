@@ -33,7 +33,7 @@ func DateToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]types.Timestamp, 1)
-		vector.SetCol(resultVector, timestamp.DateToTimestamp(inputValues, resultVector.Nsp, resultValues))
+		vector.SetCol(resultVector, timestamp.DateToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.Nsp, resultValues))
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	} else {
@@ -44,7 +44,7 @@ func DateToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		resultValues := types.DecodeTimestampSlice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, timestamp.DateToTimestamp(inputValues, resultVector.Nsp, resultValues))
+		vector.SetCol(resultVector, timestamp.DateToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	}
 }
@@ -60,7 +60,7 @@ func DatetimeToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vect
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]types.Timestamp, 1)
-		vector.SetCol(resultVector, timestamp.DatetimeToTimestamp(inputValues, resultVector.Nsp, resultValues))
+		vector.SetCol(resultVector, timestamp.DatetimeToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
@@ -70,7 +70,7 @@ func DatetimeToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vect
 		resultValues := types.DecodeTimestampSlice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, timestamp.DatetimeToTimestamp(inputValues, resultVector.Nsp, resultValues))
+		vector.SetCol(resultVector, timestamp.DatetimeToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	}
 }
@@ -115,7 +115,7 @@ func DateStringToTimestamp(vectors []*vector.Vector, proc *process.Process) (*ve
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]types.Timestamp, 1)
-		vector.SetCol(resultVector, timestamp.DateStringToTimestamp(inputValues, resultVector.Nsp, resultValues))
+		vector.SetCol(resultVector, timestamp.DateStringToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
@@ -125,7 +125,7 @@ func DateStringToTimestamp(vectors []*vector.Vector, proc *process.Process) (*ve
 		resultValues := types.DecodeTimestampSlice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues.Lengths)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, timestamp.DateStringToTimestamp(inputValues, resultVector.Nsp, resultValues))
+		vector.SetCol(resultVector, timestamp.DateStringToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	}
 }
