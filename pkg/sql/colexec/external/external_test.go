@@ -122,7 +122,8 @@ func Test_Call(t *testing.T) {
 			},
 		}
 		param.extern = extern
-		param.FileList = []string{"a.txt"}
+		param.End = false
+		param.FileList = []string{"abc.txt"}
 		end, err := Call(1, tcs.proc, tcs.arg)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(end, convey.ShouldBeFalse)

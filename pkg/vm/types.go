@@ -50,9 +50,10 @@ const (
 	Update
 	External
 
-	Union
 	Minus
 	Intersect
+
+	HashBuild
 )
 
 // Instruction contains relational algebra

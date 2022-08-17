@@ -17,6 +17,7 @@ package semi
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
@@ -35,15 +36,14 @@ type evalVector struct {
 type container struct {
 	state int
 
-	sels [][]int64
-
 	inBuckets []uint8
-	bat       *batch.Batch
+
+	bat *batch.Batch
 
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *hashmap.StrHashMap
+	mp *hashmap.JoinMap
 }
 
 type Argument struct {
@@ -51,5 +51,6 @@ type Argument struct {
 	Ibucket    uint64 // index in buckets
 	Nbucket    uint64 // buckets count
 	Result     []int32
+	Typs       []types.Type
 	Conditions [][]*plan.Expr
 }
