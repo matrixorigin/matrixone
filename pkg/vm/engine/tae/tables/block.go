@@ -292,13 +292,8 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	if dropped || inTxn {
 		return
 	}
-	if !blk.meta.IsAppendable() || (blk.meta.IsAppendable() && blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows)) {
-		factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
-		taskType = tasks.DataCompactionTask
-	} else if blk.meta.IsAppendable() {
-		factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
-		taskType = tasks.DataCompactionTask
-	}
+	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
+	taskType = tasks.DataCompactionTask
 	scopes = append(scopes, *blk.meta.AsCommonID())
 	return
 }
