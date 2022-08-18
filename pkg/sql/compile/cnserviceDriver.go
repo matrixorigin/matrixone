@@ -336,7 +336,127 @@ func convertToVmInstruction(opr *pipeline.Instruction) vm.Instruction {
 			Result: t.Result,
 		}
 	case vm.Dispatch:
+		t := opr.GetDispatch()
+		v.Arg = &dispatch.Argument{
+			All: t.All,
+		}
 	case vm.Group:
+		t := opr.GetAgg()
+		v.Arg = &group.Argument{
+			NeedEval: t.NeedEval,
+			Ibucket:  t.Ibucket,
+			Nbucket:  t.Nbucket,
+			Exprs:    t.Exprs,
+			Types:    convertToTypes(t.Types),
+			Aggs:     convertToAggregates(t.Aggs),
+		}
+	case vm.Join:
+		t := opr.GetJoin()
+		v.Arg = &join.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     convertToResultPos(t.RelList, t.ColList),
+			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+		}
+	case vm.Left:
+		t := opr.GetJoin()
+		v.Arg = &left.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     convertToResultPos(t.RelList, t.ColList),
+			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+		}
+	case vm.Limit:
+		v.Arg = &limit.Argument{Limit: opr.Limit}
+	case vm.LoopAnti:
+		t := opr.GetAnti()
+		v.Arg = &loopanti.Argument{
+			Result: t.Result,
+			Cond:   t.LeftCond[0],
+		}
+	case vm.LoopJoin:
+		t := opr.GetJoin()
+		v.Arg = &loopjoin.Argument{
+			Result: convertToResultPos(t.RelList, t.ColList),
+			Cond:   t.LeftCond[0],
+		}
+	case vm.LoopLeft:
+		t := opr.GetLeftJoin()
+		v.Arg = &loopleft.Argument{
+			Result: convertToResultPos(t.RelList, t.ColList),
+			Typs:   convertToTypes(t.Types),
+			Cond:   t.LeftCond[0],
+		}
+	case vm.LoopSemi:
+		t := opr.GetSemiJoin()
+		v.Arg = &loopsemi.Argument{
+			Result: t.Result,
+			Cond:   t.LeftCond[0],
+		}
+	case vm.LoopSingle:
+		t := opr.GetSingleJoin()
+		v.Arg = &loopsingle.Argument{
+			Result: convertToResultPos(t.RelList, t.ColList),
+			Typs:   convertToTypes(t.Types),
+			Cond:   t.LeftCond[0],
+		}
+	case vm.Offset:
+		v.Arg = &offset.Argument{Offset: opr.Offset}
+	case vm.Order:
+		v.Arg = &order.Argument{Fs: convertToColExecField(opr.OrderBy)}
+	case vm.Product:
+		t := opr.GetProduct()
+		v.Arg = &product.Argument{
+			Result: convertToResultPos(t.RelList, t.ColList),
+		}
+	case vm.Projection:
+		v.Arg = &projection.Argument{Es: opr.ProjectList}
+	case vm.Restrict:
+		v.Arg = &restrict.Argument{E: opr.Filter}
+	case vm.Semi:
+		t := opr.GetSemiJoin()
+		v.Arg = &semi.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+		}
+	case vm.Single:
+		t := opr.GetSingleJoin()
+		v.Arg = &single.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     convertToResultPos(t.RelList, t.ColList),
+			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+		}
+	case vm.Top:
+		v.Arg = &top.Argument{
+			Limit: int64(opr.Limit),
+			Fs:    convertToColExecField(opr.OrderBy),
+		}
+	// should change next day?
+	case vm.Intersect:
+		t := opr.GetAnti()
+		v.Arg = &intersect.Argument{
+			IBucket: t.Ibucket,
+			NBucket: t.Nbucket,
+		}
+	case vm.Minus:
+		t := opr.GetAnti()
+		v.Arg = &minus.Argument{
+			IBucket: t.Ibucket,
+			NBucket: t.Nbucket,
+		}
+	case vm.Union:
+		t := opr.GetAnti()
+		v.Arg = &union.Argument{
+			Ibucket: t.Ibucket,
+			Nbucket: t.Nbucket,
+		}
+	case vm.Connector:
+		v.Arg = &connector.Argument{}
+	case vm.Output:
+		v.Arg = &output.Argument{}
 	}
 	return v
 }
@@ -437,6 +557,20 @@ func convertToPlanTypes(ts []types.Type) []*plan.Type {
 	return result
 }
 
+func convertToTypes(ts []*plan.Type) []types.Type {
+	result := make([]types.Type, len(ts))
+	for i, t := range ts {
+		result[i] = types.Type{
+			Oid:       types.T(t.Id),
+			Width:     t.Width,
+			Precision: t.Precision,
+			Size:      t.Size,
+			Scale:     t.Scale,
+		}
+	}
+	return result
+}
+
 func convertToPipelineAggregates(ags []aggregate.Aggregate) []*pipeline.Aggregate {
 	result := make([]*pipeline.Aggregate, len(ags))
 	for i, a := range ags {
@@ -449,8 +583,50 @@ func convertToPipelineAggregates(ags []aggregate.Aggregate) []*pipeline.Aggregat
 	return result
 }
 
+func convertToAggregates(ags []*pipeline.Aggregate) []aggregate.Aggregate {
+	result := make([]aggregate.Aggregate, len(ags))
+	for i, a := range ags {
+		result[i] = aggregate.Aggregate{
+			Op:   int(a.Op),
+			Dist: a.Dist,
+			E:    a.Expr,
+		}
+	}
+	return result
+}
+
 func convertToPlanOrderByList(field []colexec.Field) []*plan.OrderBySpec {
-	return nil
+	// default order direction is DESC.
+	convToPlanOrderFlag := func(source colexec.Direction) plan.OrderBySpec_OrderByFlag {
+		if source == colexec.Ascending {
+			return plan.OrderBySpec_ASC
+		}
+		return plan.OrderBySpec_DESC
+	}
+
+	res := make([]*plan.OrderBySpec, len(field))
+	for i, f := range field {
+		res[i] = &plan.OrderBySpec{
+			Expr: f.E,
+			Flag: convToPlanOrderFlag(f.Type),
+		}
+	}
+	return res
+}
+
+func convertToColExecField(list []*plan.OrderBySpec) []colexec.Field {
+	convToColExecDirection := func(source plan.OrderBySpec_OrderByFlag) colexec.Direction {
+		if source == plan.OrderBySpec_ASC {
+			return colexec.Ascending
+		}
+		return colexec.Descending
+	}
+
+	res := make([]colexec.Field, len(list))
+	for i, l := range list {
+		res[i].E, res[i].Type = l.Expr, convToColExecDirection(l.Flag)
+	}
+	return res
 }
 
 func getRelColList(resultPos []colexec.ResultPos) (relList []int32, colList []int32) {
@@ -460,6 +636,14 @@ func getRelColList(resultPos []colexec.ResultPos) (relList []int32, colList []in
 		relList[i], colList[i] = resultPos[i].Rel, resultPos[i].Pos
 	}
 	return
+}
+
+func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
+	res := make([]colexec.ResultPos, len(relList))
+	for i := range res {
+		res[i].Rel, res[i].Pos = relList[i], colList[i]
+	}
+	return res
 }
 
 func decodeBatch(proc *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
