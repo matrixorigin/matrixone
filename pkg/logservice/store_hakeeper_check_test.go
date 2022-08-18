@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -194,25 +195,41 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg4.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
 	cfg4.HAKeeperConfig.DNStoreTimeout.Duration = 10 * time.Second
 	cfg1.Fill()
-	service1, err := NewService(cfg1)
+	service1, err := NewService(cfg1,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, service1.Close())
 	}()
 	cfg2.Fill()
-	service2, err := NewService(cfg2)
+	service2, err := NewService(cfg2,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, service2.Close())
 	}()
 	cfg3.Fill()
-	service3, err := NewService(cfg3)
+	service3, err := NewService(cfg3,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, service3.Close())
 	}()
 	cfg4.Fill()
-	service4, err := NewService(cfg4)
+	service4, err := NewService(cfg4,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, service4.Close())
