@@ -655,7 +655,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 					}
 					cols[rowIdx] = d
 				}
-			case types.T_char, types.T_varchar, types.T_json:
+			case types.T_char, types.T_varchar:
 				vBytes := vec.Col.(*types.Bytes)
 				if isNullOrEmpty {
 					nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -665,6 +665,27 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 					vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
 					vBytes.Data = append(vBytes.Data, field...)
 					vBytes.Lengths[rowIdx] = uint32(len(field))
+				}
+			case types.T_json:
+				vBytes := vec.Col.(*types.Bytes)
+				if isNullOrEmpty {
+					nulls.Add(vec.Nsp, uint64(rowIdx))
+					vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
+					vBytes.Lengths[rowIdx] = uint32(len(field))
+				} else {
+					vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
+					byteJson, err := types.ParseStringToByteJson(field)
+					if err != nil {
+						logutil.Errorf("parse field[%v] err:%v", field, err)
+						return nil, fmt.Errorf("the input value '%v' is not json type for colnum %d", field, colIdx)
+					}
+					jsonBytes, err := types.EncodeJson(byteJson)
+					if err != nil {
+						logutil.Errorf("encode json[%v] err:%v", field, err)
+						return nil, fmt.Errorf("the input value '%v' is not json type for colnum %d", field, colIdx)
+					}
+					vBytes.Data = append(vBytes.Data, jsonBytes...)
+					vBytes.Lengths[rowIdx] = uint32(len(jsonBytes))
 				}
 			case types.T_date:
 				cols := vec.Col.([]types.Date)
@@ -774,8 +795,8 @@ func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 	plh.simdCsvReader = simdcsv.NewReaderWithOptions(param.reader,
 		rune(param.extern.Tail.Fields.Terminated[0]),
 		'#',
-		false,
-		false)
+		true,
+		true)
 
 	return plh, nil
 }
