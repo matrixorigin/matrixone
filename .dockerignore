@@ -1,3 +1,5 @@
+# https://docs.docker.com/engine/reference/builder/#dockerignore-file
+
 # macOS
 .DS_Store
 
@@ -11,9 +13,9 @@
 # generate files
 mo-service
 mo-server
-system_vars_config.toml
 gen_config
+store/
 
-# cgo
-*.o
-*.a
+# cgo compiler files linked system lib, so ignore it
+**/*.o
+**/*.a
