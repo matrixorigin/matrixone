@@ -296,7 +296,7 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 		factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
 		taskType = tasks.DataCompactionTask
 	} else if blk.meta.IsAppendable() {
-		factory = jobs.CompactABlockTaskFactory(blk.meta, blk.scheduler)
+		factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
 		taskType = tasks.DataCompactionTask
 	}
 	scopes = append(scopes, *blk.meta.AsCommonID())
@@ -475,7 +475,6 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 		return
 	}
 	view.SetData(vec)
-	return
 
 	if err != nil {
 		return
