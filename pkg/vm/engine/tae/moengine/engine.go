@@ -35,7 +35,7 @@ func NewEngine(impl *db.DB) *txnEngine {
 
 func (e *txnEngine) Delete(ctx context.Context, name string, txnOp client.TxnOperator) (err error) {
 	var txn txnif.AsyncTxn
-	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
+	if txn, err = e.impl.GetTxnByCtx(txnOp); err != nil {
 		panic(err)
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)
@@ -45,7 +45,7 @@ func (e *txnEngine) Delete(ctx context.Context, name string, txnOp client.TxnOpe
 
 func (e *txnEngine) Create(ctx context.Context, name string, txnOp client.TxnOperator) (err error) {
 	var txn txnif.AsyncTxn
-	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
+	if txn, err = e.impl.GetTxnByCtx(txnOp); err != nil {
 		panic(err)
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)
@@ -57,7 +57,7 @@ func (e *txnEngine) Databases(ctx context.Context, txnOp client.TxnOperator) ([]
 	var err error
 	var txn txnif.AsyncTxn
 
-	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
+	if txn, err = e.impl.GetTxnByCtx(txnOp); err != nil {
 		panic(err)
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)
@@ -68,7 +68,7 @@ func (e *txnEngine) Database(ctx context.Context, name string, txnOp client.TxnO
 	var err error
 	var txn txnif.AsyncTxn
 
-	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
+	if txn, err = e.impl.GetTxnByCtx(txnOp); err != nil {
 		panic(err)
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)

@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
@@ -35,6 +36,7 @@ func init() {
 	sysSharedDBNames = make(map[string]bool)
 	sysSharedDBNames[catalog.SystemDBName] = true
 	sysSharedDBNames[metric.MetricDBConst] = true
+	sysSharedDBNames[trace.SystemDBConst] = true
 }
 
 func isSysTable(name string) bool {

@@ -38,8 +38,10 @@ func txnBindAccessInfoFromCtx(txn txnif.AsyncTxn, ctx context.Context) {
 	tid, okt := ctx.Value(TenantIDKey{}).(uint32)
 	uid, oku := ctx.Value(UserIDKey{}).(uint32)
 	rid, okr := ctx.Value(RoleIDKey{}).(uint32)
-	txn.BindAccessInfo(tid, uid, rid)
-	logutil2.Debugf(ctx, "set %d txn access info to t%d(%v) u%d(%v) r%d(%v), ", txn.GetID(), tid, okt, uid, oku, rid, okr)
+	logutil2.Debugf(ctx, "try set %d txn access info to t%d(%v) u%d(%v) r%d(%v), ", txn.GetID(), tid, okt, uid, oku, rid, okr)
+	if okt { // TODO: tenantID is required, or all need to be ok?
+		txn.BindAccessInfo(tid, uid, rid)
+	}
 }
 
 func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
