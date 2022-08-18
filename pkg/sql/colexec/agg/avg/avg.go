@@ -122,6 +122,9 @@ func (a *Decimal64Avg) BatchFill(rs, vs any, start, count int64, vps []uint64, z
 		if nsp.Contains(uint64(i + start)) {
 			continue
 		}
+		if vps[i] == 0 {
+			continue
+		}
 		j := vps[i] - 1
 		a.cnts[j] += zs[j]
 	}
@@ -171,6 +174,9 @@ func (a *Decimal128Avg) BatchFill(rs, vs any, start, count int64, vps []uint64, 
 	}
 	for i := int64(0); i < count; i++ {
 		if nsp.Contains(uint64(i + start)) {
+			continue
+		}
+		if vps[i] == 0 {
 			continue
 		}
 		j := vps[i] - 1

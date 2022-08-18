@@ -150,11 +150,17 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 		if nsp.Any() {
 			for i := range os {
 				if !nsp.Contains(uint64(i) + uint64(start)) {
+					if vps[i] == 0 {
+						continue
+					}
 					a.es[vps[i]-1] = false
 				}
 			}
 		} else {
 			for i := range os {
+				if vps[i] == 0 {
+					continue
+				}
 				a.es[vps[i]-1] = false
 			}
 		}
