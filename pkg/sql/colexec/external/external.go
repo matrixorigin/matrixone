@@ -97,9 +97,11 @@ func ReadFromS3(param *tree.ExternParam) ([]string, error) {
 	config.Bucket = param.S3Param.Config.Bucket
 	config.Endpoint = param.S3Param.Config.Endpoint
 
-	os.Setenv("AWS_REGION", param.S3Param.Region)
-	os.Setenv("AWS_ACCESS_KEY_ID", param.S3Param.APIKey)
-	os.Setenv("AWS_SECRET_ACCESS_KEY", param.S3Param.APISecret)
+	if param.S3Param.APIKey != "" {
+		os.Setenv("AWS_REGION", param.S3Param.Region)
+		os.Setenv("AWS_ACCESS_KEY_ID", param.S3Param.APIKey)
+		os.Setenv("AWS_SECRET_ACCESS_KEY", param.S3Param.APISecret)
+	}
 
 	fs, err := fileservice.NewS3FS(
 		config.Endpoint,
@@ -143,9 +145,11 @@ func ReadFromS3File(param *tree.ExternParam) (io.ReadCloser, error) {
 	config.Bucket = param.S3Param.Config.Bucket
 	config.Endpoint = param.S3Param.Config.Endpoint
 
-	os.Setenv("AWS_REGION", param.S3Param.Region)
-	os.Setenv("AWS_ACCESS_KEY_ID", param.S3Param.APIKey)
-	os.Setenv("AWS_SECRET_ACCESS_KEY", param.S3Param.APISecret)
+	if param.S3Param.APIKey != "" {
+		os.Setenv("AWS_REGION", param.S3Param.Region)
+		os.Setenv("AWS_ACCESS_KEY_ID", param.S3Param.APIKey)
+		os.Setenv("AWS_SECRET_ACCESS_KEY", param.S3Param.APISecret)
+	}
 
 	fs, err := fileservice.NewS3FS(
 		config.Endpoint,
