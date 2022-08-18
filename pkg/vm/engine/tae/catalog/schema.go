@@ -120,7 +120,7 @@ func (cpk *SortKey) HasColumn(idx int) (found bool) { _, found = cpk.search[idx]
 func (cpk *SortKey) GetSingleIdx() int              { return cpk.Defs[0].Idx }
 
 type Schema struct {
-	AcInfo           acessInfo
+	AcInfo           accessInfo
 	Name             string
 	ColDefs          []*ColDef
 	NameIndex        map[string]int

@@ -108,7 +108,7 @@ func (e *testEngine) mergeBlocks(skipConflict bool) {
 
 func (e *testEngine) getDB(name string) (txn txnif.AsyncTxn, db handle.Database) {
 	txn, err := e.DB.StartTxn(nil)
-	txn.BindAcessInfo(e.tenantID, 0, 0)
+	txn.BindAccessInfo(e.tenantID, 0, 0)
 	assert.NoError(e.t, err)
 	db, err = txn.GetDatabase(name)
 	assert.NoError(e.t, err)
@@ -128,7 +128,7 @@ func (e *testEngine) doAppend(bat *containers.Batch) {
 
 func (e *testEngine) tryAppend(bat *containers.Batch) {
 	txn, err := e.DB.StartTxn(nil)
-	txn.BindAcessInfo(e.tenantID, 0, 0)
+	txn.BindAccessInfo(e.tenantID, 0, 0)
 	assert.NoError(e.t, err)
 	db, err := txn.GetDatabase(defaultTestDB)
 	assert.NoError(e.t, err)
@@ -284,7 +284,7 @@ func createRelationAndAppend(
 	bat *containers.Batch,
 	createDB bool) (db handle.Database, rel handle.Relation) {
 	txn, err := e.StartTxn(nil)
-	txn.BindAcessInfo(tenantID, 0, 0)
+	txn.BindAccessInfo(tenantID, 0, 0)
 	assert.NoError(t, err)
 	if createDB {
 		db, err = txn.CreateDatabase(dbName)
@@ -303,7 +303,7 @@ func createRelationAndAppend(
 
 func getRelation(t *testing.T, tenantID uint32, e *DB, dbName, tblName string) (txn txnif.AsyncTxn, rel handle.Relation) {
 	txn, err := e.StartTxn(nil)
-	txn.BindAcessInfo(tenantID, 0, 0)
+	txn.BindAccessInfo(tenantID, 0, 0)
 	assert.NoError(t, err)
 	db, err := txn.GetDatabase(dbName)
 	assert.NoError(t, err)
@@ -486,7 +486,7 @@ func compactBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *
 
 func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
 	txn, _ := e.StartTxn(nil)
-	txn.BindAcessInfo(tenantID, 0, 0)
+	txn.BindAccessInfo(tenantID, 0, 0)
 	db, _ := txn.GetDatabase(dbName)
 	rel, _ := db.GetRelationByName(schema.Name)
 
@@ -502,7 +502,7 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 	_ = txn.Commit()
 	for _, seg := range segs {
 		txn, _ = e.StartTxn(nil)
-		txn.BindAcessInfo(tenantID, 0, 0)
+		txn.BindAccessInfo(tenantID, 0, 0)
 		db, _ = txn.GetDatabase(dbName)
 		rel, _ = db.GetRelationByName(schema.Name)
 		segHandle, err := rel.GetSegment(seg.ID)

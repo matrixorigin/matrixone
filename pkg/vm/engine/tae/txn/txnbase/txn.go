@@ -241,7 +241,7 @@ func (txn *Txn) WaitDone(err error) error {
 	return txn.Err
 }
 
-func (txn *Txn) BindAcessInfo(tenantID, userID, roleID uint32) {
+func (txn *Txn) BindAccessInfo(tenantID, userID, roleID uint32) {
 	txn.TenantID = tenantID
 	txn.UserID = userID
 	txn.RoleID = roleID

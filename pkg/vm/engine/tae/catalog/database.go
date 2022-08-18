@@ -27,11 +27,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
-type acessInfo struct {
+type accessInfo struct {
 	TenantID, UserID, RoleID uint32
 }
 
-func (ai *acessInfo) WriteTo(w io.Writer) (n int64, err error) {
+func (ai *accessInfo) WriteTo(w io.Writer) (n int64, err error) {
 	for _, id := range []uint32{ai.TenantID, ai.UserID, ai.RoleID} {
 		if err = binary.Write(w, binary.BigEndian, id); err != nil {
 			return
@@ -40,7 +40,7 @@ func (ai *acessInfo) WriteTo(w io.Writer) (n int64, err error) {
 	return 12, nil
 }
 
-func (ai *acessInfo) ReadFrom(r io.Reader) (n int64, err error) {
+func (ai *accessInfo) ReadFrom(r io.Reader) (n int64, err error) {
 	for _, idPtr := range []*uint32{&ai.TenantID, &ai.UserID, &ai.RoleID} {
 		if err = binary.Read(r, binary.BigEndian, idPtr); err != nil {
 			return
@@ -52,7 +52,7 @@ func (ai *acessInfo) ReadFrom(r io.Reader) (n int64, err error) {
 type DBEntry struct {
 	*BaseEntry
 	catalog  *Catalog
-	acInfo   acessInfo
+	acInfo   accessInfo
 	name     string
 	fullName string
 	isSys    bool

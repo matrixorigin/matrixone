@@ -15,14 +15,32 @@
 package moengine
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
+
+type TenantIDKey struct{}
+type UserIDKey struct{}
+type RoleIDKey struct{}
+
+func txnBindAccessInfoFromCtx(txn txnif.AsyncTxn, ctx context.Context) {
+	if ctx == nil {
+		return
+	}
+	tid, okt := ctx.Value(TenantIDKey{}).(uint32)
+	uid, oku := ctx.Value(UserIDKey{}).(uint32)
+	rid, okr := ctx.Value(RoleIDKey{}).(uint32)
+	txn.BindAccessInfo(tid, uid, rid)
+	logutil2.Debugf(ctx, "set %d txn access info to t%d(%v) u%d(%v) r%d(%v), ", txn.GetID(), tid, okt, uid, oku, rid, okr)
+}
 
 func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 	if schema.Comment != "" {

@@ -2753,7 +2753,7 @@ func TestTruncateZonemap(t *testing.T) {
 func mustStartTxn(t *testing.T, tae *testEngine, tenantID uint32) txnif.AsyncTxn {
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	txn.BindAcessInfo(tenantID, 0, 0)
+	txn.BindAccessInfo(tenantID, 0, 0)
 	return txn
 }
 

@@ -27,19 +27,18 @@ var (
 	_ engine.Engine = (*txnEngine)(nil)
 )
 
-type TenantIDKey struct{}
-
 func NewEngine(impl *db.DB) *txnEngine {
 	return &txnEngine{
 		impl: impl,
 	}
 }
 
-func (e *txnEngine) Delete(_ context.Context, name string, ctx client.TxnOperator) (err error) {
+func (e *txnEngine) Delete(ctx context.Context, name string, txnOp client.TxnOperator) (err error) {
 	var txn txnif.AsyncTxn
 	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
 		panic(err)
 	}
+	txnBindAccessInfoFromCtx(txn, ctx)
 	_, err = txn.DropDatabase(name)
 	return
 }
@@ -49,11 +48,7 @@ func (e *txnEngine) Create(ctx context.Context, name string, txnOp client.TxnOpe
 	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
 		panic(err)
 	}
-	if ctx != nil {
-		if tid, ok := ctx.Value(TenantIDKey{}).(uint32); ok {
-			txn.BindAcessInfo(tid, 100, 100)
-		}
-	}
+	txnBindAccessInfoFromCtx(txn, ctx)
 	_, err = txn.CreateDatabase(name)
 	return
 }
@@ -65,12 +60,7 @@ func (e *txnEngine) Databases(ctx context.Context, txnOp client.TxnOperator) ([]
 	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
 		panic(err)
 	}
-	if ctx != nil {
-		if tid, ok := ctx.Value(TenantIDKey{}).(uint32); ok {
-			txn.BindAcessInfo(tid, 100, 100)
-		}
-	}
-
+	txnBindAccessInfoFromCtx(txn, ctx)
 	return txn.DatabaseNames(), nil
 }
 
@@ -81,13 +71,7 @@ func (e *txnEngine) Database(ctx context.Context, name string, txnOp client.TxnO
 	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
 		panic(err)
 	}
-	// TODO(aptend): remove ctx check
-	if ctx != nil {
-		if tid, ok := ctx.Value(TenantIDKey{}).(uint32); ok {
-			txn.BindAcessInfo(tid, 100, 100)
-		}
-	}
-
+	txnBindAccessInfoFromCtx(txn, ctx)
 	h, err := txn.GetDatabase(name)
 	if err != nil {
 		return nil, err

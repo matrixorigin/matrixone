@@ -58,7 +58,7 @@ type TxnReader interface {
 }
 
 type TxnHandle interface {
-	BindAcessInfo(tenantID, userID, roleID uint32)
+	BindAccessInfo(tenantID, userID, roleID uint32)
 	GetTenantID() uint32
 	GetUserAndRoleID() (uint32, uint32)
 	CreateDatabase(name string) (handle.Database, error)
