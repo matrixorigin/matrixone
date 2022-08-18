@@ -15,11 +15,11 @@
 package multi
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestConcat(t *testing.T) {
@@ -30,6 +30,5 @@ func TestConcat(t *testing.T) {
 	proc := testutil.NewProc()
 	outputVector, err := Concat(inputVectors, proc)
 	require.NoError(t, err)
-	outputBytes := outputVector.Col.(*types.Bytes)
-	require.Equal(t, []byte("hello world"), outputBytes.Data)
+	require.Equal(t, "hello world", outputVector.GetString(0))
 }

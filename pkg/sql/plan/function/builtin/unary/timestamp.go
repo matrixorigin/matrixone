@@ -106,8 +106,7 @@ func TimestampToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vec
 func DateStringToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_timestamp, Precision: 6, Size: 8}
-	resultElementSize := int(resultType.Size)
-	inputValues := vector.MustBytesCols(inputVector)
+	inputValues := vector.MustStrCols(inputVector)
 
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -118,14 +117,12 @@ func DateStringToTimestamp(vectors []*vector.Vector, proc *process.Process) (*ve
 		vector.SetCol(resultVector, timestamp.DateStringToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeTimestampSlice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues.Lengths)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, timestamp.DateStringToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.Nsp, resultValues))
+		resultValues := vector.MustTCols[types.Timestamp](resultVector)
+		timestamp.DateStringToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.Nsp, resultValues)
 		return resultVector, nil
 	}
 }

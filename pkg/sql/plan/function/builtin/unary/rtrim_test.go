@@ -15,10 +15,12 @@
 package unary
 
 import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/smartystreets/goconvey/convey"
-	"testing"
 )
 
 func TestRtrim(t *testing.T) {
@@ -75,65 +77,65 @@ func TestRtrim(t *testing.T) {
 			"ｱｲｳｴｵ ",
 			"ｱｲｳｴｵ  ",
 			"ｱｲｳｴｵ   ",
-			"ｱｲｳｴｵ　",
-			"ｱｲｳｴｵ　　",
-			"ｱｲｳｴｵ　　　",
+			"ｱｲｳｴｵ ",
+			"ｱｲｳｴｵ    ",
+			"ｱｲｳｴｵ      ",
 			"あいうえお",
 			"あいうえお ",
 			"あいうえお  ",
 			"あいうえお   ",
 			"あいうえお　",
-			"あいうえお　　",
-			"あいうえお　　　",
+			"あいうえお　 ",
+			"あいうえお　   ",
 			"龔龖龗龞龡",
 			"龔龖龗龞龡 ",
 			"龔龖龗龞龡  ",
 			"龔龖龗龞龡   ",
 			"龔龖龗龞龡　",
-			"龔龖龗龞龡　　",
-			"龔龖龗龞龡　　　",
+			"龔龖龗龞龡　 ",
+			"龔龖龗龞龡　   ",
 			"ｱｲｳｴｵ",
 			"ｱｲｳｴｵ ",
 			"ｱｲｳｴｵ  ",
 			"ｱｲｳｴｵ   ",
 			"ｱｲｳｴｵ　",
-			"ｱｲｳｴｵ　　",
-			"ｱｲｳｴｵ　　　",
+			"ｱｲｳｴｵ　  ",
+			"ｱｲｳｴｵ　    ",
 			"あいうえお",
 			"あいうえお ",
 			"あいうえお  ",
 			"あいうえお   ",
 			"あいうえお　",
-			"あいうえお　　",
-			"あいうえお　　　",
+			"あいうえお　  ",
+			"あいうえお　     ",
 			"龔龖龗龞龡",
 			"龔龖龗龞龡 ",
 			"龔龖龗龞龡  ",
 			"龔龖龗龞龡   ",
 			"龔龖龗龞龡　",
-			"龔龖龗龞龡　　",
-			"龔龖龗龞龡　　　",
+			"龔龖龗龞龡　 ",
+			"龔龖龗龞龡　  ",
 			"ｱｲｳｴｵ",
 			"ｱｲｳｴｵ ",
 			"ｱｲｳｴｵ  ",
 			"ｱｲｳｴｵ   ",
 			"ｱｲｳｴｵ　",
-			"ｱｲｳｴｵ　　",
-			"ｱｲｳｴｵ　　　",
+			"ｱｲｳｴｵ　 ",
+			"ｱｲｳｴｵ　  ",
 			"あいうえお",
 			"あいうえお ",
 			"あいうえお  ",
 			"あいうえお   ",
 			"あいうえお　",
-			"あいうえお　　",
-			"あいうえお　　　",
+			"あいうえお　  ",
+			"あいうえお　    ",
 			"龔龖龗龞龡",
 			"龔龖龗龞龡 ",
 			"龔龖龗龞龡  ",
 			"龔龖龗龞龡   ",
 			"龔龖龗龞龡　",
-			"龔龖龗龞龡　　",
-			"龔龖龗龞龡　　　",
+			"龔龖龗龞龡　  ",
+			"龔龖龗龞龡　      ",
 			"2017-06-15    ",
 			"2019-06-25    ",
 			"    2019-06-25  ",
@@ -241,8 +243,8 @@ func TestRtrim(t *testing.T) {
 		convey.So(ret, convey.ShouldBeTrue)
 	})
 	convey.Convey("null", t, func() {
-		ivec := testutil.MakeScalarNull(10)
-		wantvec := testutil.MakeScalarNull(10)
+		ivec := testutil.MakeScalarNull(types.T_char, 10)
+		wantvec := testutil.MakeScalarNull(types.T_char, 10)
 		proc := testutil.NewProc()
 		ovec, err := Rtrim([]*vector.Vector{ivec}, proc)
 		convey.So(err, convey.ShouldBeNil)

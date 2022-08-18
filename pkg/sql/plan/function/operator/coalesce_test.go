@@ -29,7 +29,7 @@ func TestCoalesceGeneral(t *testing.T) {
 		{
 			info: "coalesce(null, 1)", proc: testutil.NewProc(),
 			vs: []*vector.Vector{
-				testutil.MakeScalarNull(1),
+				testutil.MakeScalarNull(types.T_any, 1),
 				testutil.MakeScalarInt64(1, 1),
 			},
 			match:  true,
@@ -40,9 +40,9 @@ func TestCoalesceGeneral(t *testing.T) {
 		{
 			info: "coalesce(null, 1, null, 3)", proc: testutil.NewProc(),
 			vs: []*vector.Vector{
-				testutil.MakeScalarNull(1),
+				testutil.MakeScalarNull(types.T_any, 1),
 				testutil.MakeScalarInt64(1, 1),
-				testutil.MakeScalarNull(1),
+				testutil.MakeScalarNull(types.T_any, 1),
 				testutil.MakeScalarInt64(1, 3),
 			},
 			match:  true,
@@ -55,7 +55,7 @@ func TestCoalesceGeneral(t *testing.T) {
 			vs: []*vector.Vector{
 				testutil.MakeInt64Vector([]int64{1, 0, 3, 0}, []uint64{1, 3}),
 				testutil.MakeScalarInt64(1, 1),
-				testutil.MakeScalarNull(1),
+				testutil.MakeScalarNull(types.T_any, 1),
 				testutil.MakeScalarInt64(1, 3),
 			},
 			match:  true,
@@ -67,7 +67,7 @@ func TestCoalesceGeneral(t *testing.T) {
 			info: "coalesce(a, null, b)", proc: testutil.NewProc(),
 			vs: []*vector.Vector{
 				testutil.MakeInt64Vector([]int64{1, 0, 3, 0}, []uint64{1, 3}),
-				testutil.MakeScalarNull(1),
+				testutil.MakeScalarNull(types.T_any, 1),
 				testutil.MakeInt64Vector([]int64{1, 11, 3, 0}, []uint64{3}),
 			},
 			match:  true,
@@ -79,7 +79,7 @@ func TestCoalesceGeneral(t *testing.T) {
 			info: "coalesce(a, null, 33)", proc: testutil.NewProc(),
 			vs: []*vector.Vector{
 				testutil.MakeInt64Vector([]int64{1, 0, 3, 0}, []uint64{1, 3}),
-				testutil.MakeScalarNull(1),
+				testutil.MakeScalarNull(types.T_any, 1),
 				testutil.MakeScalarInt64(33, 4),
 			},
 			match:  true,
@@ -119,9 +119,9 @@ func TestCoalesceString(t *testing.T) {
 		{
 			info: "coalesce(null, 'a', null, 'b')", proc: testutil.NewProc(),
 			vs: []*vector.Vector{
-				testutil.MakeScalarNull(1),
+				testutil.MakeScalarNull(types.T_any, 1),
 				testutil.MakeScalarVarchar("a", 1),
-				testutil.MakeScalarNull(1),
+				testutil.MakeScalarNull(types.T_any, 1),
 				testutil.MakeScalarVarchar("b", 1),
 			},
 			match:  true,
@@ -145,7 +145,7 @@ func TestCoalesceString(t *testing.T) {
 			vs: []*vector.Vector{
 				testutil.MakeVarcharVector([]string{"kk", "", "ss", ""}, []uint64{1, 3}),
 				testutil.MakeScalarVarchar("a", 1),
-				testutil.MakeScalarNull(1),
+				testutil.MakeScalarNull(types.T_any, 1),
 				testutil.MakeScalarVarchar("b", 1),
 			},
 			match:  true,
@@ -157,7 +157,7 @@ func TestCoalesceString(t *testing.T) {
 			info: "coalesce(a, null, 'b')", proc: testutil.NewProc(),
 			vs: []*vector.Vector{
 				testutil.MakeVarcharVector([]string{"kk", "", "ss", ""}, []uint64{1, 3}),
-				testutil.MakeScalarNull(1),
+				testutil.MakeScalarNull(types.T_any, 1),
 				testutil.MakeScalarVarchar("b", 1),
 			},
 			match:  true,
@@ -169,7 +169,7 @@ func TestCoalesceString(t *testing.T) {
 			info: "coalesce(a, null, b)", proc: testutil.NewProc(),
 			vs: []*vector.Vector{
 				testutil.MakeVarcharVector([]string{"a1", "", "a2", ""}, []uint64{1, 3}),
-				testutil.MakeScalarNull(1),
+				testutil.MakeScalarNull(types.T_any, 1),
 				testutil.MakeVarcharVector([]string{"b1", "b2", "", ""}, []uint64{2, 3}),
 			},
 			match:  true,

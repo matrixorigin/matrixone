@@ -344,7 +344,7 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 			}
 		}
 		for _, ag := range ctr.bat.Aggs {
-			if err := ag.Grows(cnt, proc.Mp); err != nil {
+			if err := ag.Grows(cnt, proc.Mp()); err != nil {
 				return err
 			}
 		}

@@ -15,11 +15,12 @@
 package multi
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
 )
 
 const (
@@ -38,50 +39,26 @@ func Lpad(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 	if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() || vecs[2].IsScalarNull() {
 		return proc.AllocScalarNullVector(vecs[0].Typ), nil
 	}
-	sourceStr := vector.MustBytesCols(vecs[ParameterSourceString]) //Get the first arg
+	sourceStr := vector.MustStrCols(vecs[ParameterSourceString]) //Get the first arg
 
 	//characters length not bytes length
 	lengthsOfChars := getLensForLpad(vecs[ParameterLengths].Col)
 
 	//pad string
-	padStr := vector.MustBytesCols(vecs[ParameterPadString])
+	padStr := vector.MustStrCols(vecs[ParameterPadString])
 
 	constVectors := []bool{vecs[ParameterSourceString].IsScalar(), vecs[ParameterLengths].IsScalar(), vecs[ParameterPadString].IsScalar()}
 	inputNulls := []*nulls.Nulls{vecs[ParameterSourceString].Nsp, vecs[ParameterLengths].Nsp, vecs[ParameterPadString].Nsp}
 	//evaluate bytes space for every row
 	rowCount := vector.Length(vecs[ParameterSourceString])
 
-	//space length of result output
-	neededSpaceLength := getSpaceLengthOfLpad(sourceStr, lengthsOfChars, padStr, rowCount, constVectors, inputNulls)
-
 	var resultVec *vector.Vector = nil
-	var results *types.Bytes = nil
-	var err error = nil
-	if constVectors[ParameterSourceString] && constVectors[ParameterLengths] && constVectors[ParameterPadString] {
-		resultVec = proc.AllocScalarVector(types.T_varchar.ToType())
-		results = &types.Bytes{
-			Data:    make([]byte, neededSpaceLength),
-			Offsets: make([]uint32, rowCount),
-			Lengths: make([]uint32, rowCount),
-		}
-	} else {
-		resultVec, err = proc.AllocVector(types.T_varchar.ToType(), neededSpaceLength)
-		if err != nil {
-			return nil, err
-		}
-		results = &types.Bytes{
-			Data:    resultVec.Data,
-			Offsets: make([]uint32, rowCount),
-			Lengths: make([]uint32, rowCount),
-		}
-	}
+	resultValues := make([]string, rowCount)
+	resultNUll := nulls.NewWithSize(rowCount)
 
-	resultNUll := new(nulls.Nulls)
+	fillLpad(sourceStr, lengthsOfChars, padStr, rowCount, constVectors, resultValues, resultNUll, inputNulls)
 
-	fillLpad(sourceStr, lengthsOfChars, padStr, rowCount, constVectors, results, resultNUll, inputNulls)
-
-	resultVec.Nsp = resultNUll
-	vector.SetCol(resultVec, results)
+	resultVec = vector.NewWithStrings(types.T_varchar.ToType(), resultValues, resultNUll, proc.GetMheap())
 	return resultVec, nil
 }
 
@@ -115,103 +92,33 @@ func getLensForLpad(col interface{}) []int64 {
 	panic("unexpected parameter types were received")
 }
 
-func getSpaceLengthOfLpad(sourceStr *types.Bytes, lengths []int64, padStr *types.Bytes, rowCount int, constVectors []bool, inputNulls []*nulls.Nulls) int64 {
-	neededSpace := int64(0)
-	for i := 0; i < rowCount; i++ {
-		if ui := uint64(i); nulls.Contains(inputNulls[ParameterSourceString], ui) ||
-			nulls.Contains(inputNulls[ParameterLengths], ui) ||
-			nulls.Contains(inputNulls[ParameterPadString], ui) {
-			//null
-			continue
-		}
-		//1.count characters in source and pad
-		var source []byte
-		if constVectors[ParameterSourceString] {
-			source = sourceStr.Get(int64(0))
-		} else {
-			source = sourceStr.Get(int64(i))
-		}
-
-		sourceLen := len(source)
-		sourceRune := []rune(string(source))
-		sourceCharCnt := int64(len(sourceRune))
-		var pad []byte
-		if constVectors[ParameterPadString] {
-			pad = padStr.Get(int64(0))
-		} else {
-			pad = padStr.Get(int64(i))
-		}
-
-		padLen := len(pad)
-		if padLen == 0 {
-			//empty string
-			continue
-		}
-		padRune := []rune(string(pad))
-		padCharCnt := int64(len(padRune))
-		var targetLength int64
-		if constVectors[ParameterLengths] {
-			targetLength = lengths[0]
-		} else {
-			targetLength = lengths[i]
-		}
-
-		if targetLength < 0 || targetLength > MaxSpacePerRowOfLpad {
-			//NULL
-		} else if targetLength == 0 {
-			//empty string
-		} else if targetLength < sourceCharCnt {
-			//shorten source string
-			sourcePart := sourceRune[:targetLength]
-			sourcePartLen := len([]byte(string(sourcePart)))
-			neededSpace += int64(sourcePartLen)
-		} else if targetLength >= sourceCharCnt {
-			//calculate the space count
-			r := targetLength - sourceCharCnt
-			//complete pad count
-			p := r / padCharCnt
-			//partial pad count
-			m := r % padCharCnt
-			padSpaceCount := p*int64(padLen) + int64(len(string(padRune[:m]))) + int64(sourceLen)
-			neededSpace += padSpaceCount
-		}
-	}
-	return neededSpace
-}
-
-func fillLpad(sourceStr *types.Bytes, lengths []int64, padStr *types.Bytes, rowCount int, constVectors []bool, results *types.Bytes, resultNUll *nulls.Nulls, inputNulls []*nulls.Nulls) {
-	target := uint32(0)
+func fillLpad(sourceStr []string, lengths []int64, padStr []string, rowCount int, constVectors []bool, results []string, resultNUll *nulls.Nulls, inputNulls []*nulls.Nulls) {
 	for i := 0; i < rowCount; i++ {
 		if ui := uint64(i); nulls.Contains(inputNulls[ParameterSourceString], ui) ||
 			nulls.Contains(inputNulls[ParameterLengths], ui) ||
 			nulls.Contains(inputNulls[ParameterPadString], ui) {
 			//null
 			nulls.Add(resultNUll, ui)
-			results.Offsets[i] = target
-			results.Lengths[i] = 0
 			continue
 		}
 		//1.count characters in source and pad
-		var source []byte
+		var source string
 		if constVectors[ParameterSourceString] {
-			source = sourceStr.Get(int64(0))
+			source = sourceStr[0]
 		} else {
-			source = sourceStr.Get(int64(i))
+			source = sourceStr[i]
 		}
-		sourceLen := len(source)
 		sourceRune := []rune(string(source))
 		sourceCharCnt := int64(len(sourceRune))
-		var pad []byte
+		var pad string
 		if constVectors[ParameterPadString] {
-			pad = padStr.Get(int64(0))
+			pad = padStr[0]
 		} else {
-			pad = padStr.Get(int64(i))
+			pad = padStr[i]
 		}
 		padLen := len(pad)
 		if padLen == 0 {
 			//empty string
-			results.Offsets[i] = target
-			results.Lengths[i] = 0
 			continue
 		}
 		padRune := []rune(string(pad))
@@ -226,21 +133,13 @@ func fillLpad(sourceStr *types.Bytes, lengths []int64, padStr *types.Bytes, rowC
 		if targetLength < 0 || targetLength > MaxSpacePerRowOfLpad {
 			//NULL
 			nulls.Add(resultNUll, uint64(i))
-			results.Offsets[i] = target
-			results.Lengths[i] = 0
 		} else if targetLength == 0 {
 			//empty string
-			results.Offsets[i] = target
-			results.Lengths[i] = 0
 		} else if targetLength < sourceCharCnt {
 			//shorten source string
 			sourcePart := sourceRune[:targetLength]
-			sourcePartSlice := []byte(string(sourcePart))
-			sourcePartLen := len(sourcePartSlice)
-			copy(results.Data[target:], sourcePartSlice)
-			results.Offsets[i] = target
-			results.Lengths[i] = uint32(sourcePartLen)
-			target += uint32(sourcePartLen)
+			sourcePartSlice := string(sourcePart)
+			results[i] = sourcePartSlice
 		} else if targetLength >= sourceCharCnt {
 			//calculate the space count
 			r := targetLength - sourceCharCnt
@@ -248,21 +147,14 @@ func fillLpad(sourceStr *types.Bytes, lengths []int64, padStr *types.Bytes, rowC
 			p := r / padCharCnt
 			//partial pad count
 			m := r % padCharCnt
-			padPartSlice := []byte(string(padRune[:m]))
-			padPartSliceLen := len(padPartSlice)
-			padSpaceCount := p*int64(padLen) + int64(padPartSliceLen) + int64(sourceLen)
-			results.Offsets[i] = target
-			results.Lengths[i] = uint32(padSpaceCount)
+			padPartSlice := string(padRune[:m])
 			for j := int64(0); j < p; j++ {
-				copy(results.Data[target:], pad)
-				target += uint32(padLen)
+				results[i] += pad
 			}
 			if m != 0 {
-				copy(results.Data[target:], padPartSlice)
-				target += uint32(padPartSliceLen)
+				results[i] += padPartSlice
 			}
-			copy(results.Data[target:], source)
-			target += uint32(sourceLen)
+			results[i] += source
 		}
 	}
 }
