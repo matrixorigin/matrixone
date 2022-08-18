@@ -1,0 +1,98 @@
+#Start MatrixOne cluster on docker or kubernetes, please refer to this repo [matrixorigin/matrixone-operator](https://github.com/matrixorigin/matrixone-operator)
+
+
+#root name
+rootname = "root"
+
+#dump user name
+dumpuser = "dump"
+
+#dump user password
+dumppassword = "111"
+
+#port defines which port the mo-server listens on and clients connect to
+port = 6001
+
+#listening ip
+host = "0.0.0.0"
+
+#host mmu limitation. 1 << 40 = 1099511627776
+hostMmuLimitation = 1099511627776
+
+#guest mmu limitation.  1 << 40 = 1099511627776
+guestMmuLimitation = 1099511627776
+
+#mempool maxsize.  1 << 40 = 1099511627776
+mempoolMaxSize = 1099511627776
+
+#mempool factor.
+mempoolFactor = 8
+
+#process.Limitation.Size.  10 << 32 = 42949672960
+processLimitationSize = 42949672960
+
+#process.Limitation.BatchRows.  10 << 32 = 42949672960
+processLimitationBatchRows = 42949672960
+
+#process.Limitation.PartitionRows.  10 << 32 = 42949672960
+processLimitationPartitionRows = 42949672960
+
+#record the time elapsed of executing sql request
+DisableRecordTimeElapsedOfSqlRequest = false
+
+#the root directory of the storage and matrixcube's data.
+storePath = "./store"
+
+#the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
+lengthOfQueryPrinted = 50
+
+#the count of rows in vector of batch in load data
+batchSizeInLoadData = 40000
+
+#initial value is 4. The count of go routine writing batch into the storage.
+loadDataConcurrencyCount = 4
+
+#KB. When the number of bytes in the outbuffer exceeds the it,the outbuffer will be flushed.
+maxBytesInOutbufToFlush = 1024
+
+#printLog Interval is 10s.
+printLogInterVal = 10
+
+#export data to csv file default flush size
+exportDataDefaultFlushSize = 1
+
+#port defines which port the rpc server listens on
+portOfRpcServerInComputationEngine = 20000
+
+#false : one txn for an independent batch. true : only one txn during loading data
+DisableOneTxnPerBatchDuringLoad = false
+
+#statusPort defines which port the mo status server (for metric etc.) listens on and clients connect to
+statusPort = 7001
+
+#if false, metrics can be scraped through host:status/metrics endpoint
+disableMetricToProm = false
+
+#if false, enable metric at booting
+disableMetric = false
+
+#if false, enable trace at booting
+disableTrace = false
+
+#default is InternalExecutor. if InternalExecutor, use internal sql executor, FileService will implement soon.
+traceBatchProcessor = "InternalExecutor"
+
+#With true, system will check all the children span is ended, which belong to the closing span.
+enableTraceDebug = false
+
+#the level of log.
+logLevel = "debug"
+
+#the format of log.
+logFormat = "json"
+
+#the filename of log file.
+logFilename = ""
+
+#MB. the maximum of log file size
+logMaxSize = 512

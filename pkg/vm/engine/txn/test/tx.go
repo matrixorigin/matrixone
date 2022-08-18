@@ -16,9 +16,14 @@ package testtxnengine
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -26,55 +31,82 @@ import (
 )
 
 type Tx struct {
-	operator client.TxnOperator
-	engine   *txnengine.Engine
+	operator     client.TxnOperator
+	engine       *txnengine.Engine
+	databaseName string
 }
 
 func (t *testEnv) NewTx() *Tx {
 	operator := t.txnClient.New()
 	tx := &Tx{
-		operator: operator,
-		engine:   t.engine,
+		operator:     operator,
+		engine:       t.engine,
+		databaseName: defaultDatabase,
 	}
 	return tx
 }
 
-func (t *Tx) Exec(ctx context.Context, stmtText string) error {
+func (t *Tx) Exec(ctx context.Context, filePath string, stmtText string) error {
 
 	stmts, err := mysql.Parse(stmtText)
 	if err != nil {
 		return err
 	}
-	stmt := stmts[0]
 
-	proc := testutil.NewProcess()
-	proc.Snapshot = txnengine.OperatorToSnapshot(t.operator) //TODO remove this
-	compileCtx := compile.New("test", stmtText, "", ctx, t.engine, proc, stmt)
+	for _, stmt := range stmts {
 
-	//optimizer := plan.NewBaseOptimizer(t)
-	//query, err := optimizer.Optimize(stmt)
-	//if err != nil {
-	//	return err
-	//}
+		stmtText := tree.String(stmt, dialect.MYSQL)
+		println(stmtText)
 
-	exec := &Execution{
-		tx:  t,
-		ctx: ctx,
-	}
+		switch stmt := stmt.(type) {
 
-	execPlan, err := plan.BuildPlan(exec, stmt)
-	if err != nil {
-		return err
-	}
+		case *tree.Use:
+			t.databaseName = stmt.Name
+			continue
 
-	err = compileCtx.Compile(execPlan, nil, nil)
-	if err != nil {
-		return err
-	}
+		}
 
-	err = compileCtx.Run(0)
-	if err != nil {
-		return err
+		proc := testutil.NewProcess()
+		proc.Snapshot = txnengine.OperatorToSnapshot(t.operator) //TODO remove this
+		compileCtx := compile.New(t.databaseName, stmtText, "", ctx, t.engine, proc, stmt)
+
+		//optimizer := plan.NewBaseOptimizer(t)
+		//query, err := optimizer.Optimize(stmt)
+		//if err != nil {
+		//	return err
+		//}
+
+		exec := &Execution{
+			ctx:  ctx,
+			tx:   t,
+			stmt: stmt,
+		}
+
+		execPlan, err := plan.BuildPlan(exec, stmt)
+		if err != nil {
+			return err
+		}
+
+		err = compileCtx.Compile(execPlan, nil, func(i any, batch *batch.Batch) error {
+			fmt.Printf("%v\n", batch) //TODO
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+
+		err = compileCtx.Run(0)
+		if err != nil {
+
+			sqlError, ok := err.(*errors.SqlError)
+			if ok {
+				fmt.Printf("%s\n", sqlError.Error())
+				return nil
+			}
+
+			panic(err)
+		}
+
 	}
 
 	return nil

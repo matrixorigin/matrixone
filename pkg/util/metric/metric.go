@@ -92,7 +92,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, pu *c
 		// http.HandleFunc("/query", makeDebugHandleFunc(ieFactory))
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.HandlerFor(prom.DefaultGatherer, promhttp.HandlerOpts{}))
-		addr := fmt.Sprintf("%s:%d", pu.SV.GetHost(), pu.SV.GetStatusPort())
+		addr := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.StatusPort)
 		statusSvr = &statusServer{Server: &http.Server{Addr: addr, Handler: mux}}
 		statusSvr.Add(1)
 		go func() {

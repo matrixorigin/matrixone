@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"reflect"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -65,13 +66,30 @@ func doTxnRequest[
 		return
 	}
 
+	var respErrors Errors
 	for _, res := range result.Responses {
 		var resp Resp
 		if err = gob.NewDecoder(bytes.NewReader(res.CNOpResponse.Payload)).Decode(&resp); err != nil {
 			return
 		}
+
+		respValue := reflect.ValueOf(resp)
+		for i := 0; i < respValue.NumField(); i++ {
+			field := respValue.Field(i)
+			if field.Type().Implements(errorType) &&
+				!field.IsZero() {
+				respErrors = append(respErrors, field.Interface().(error))
+			}
+		}
+
 		resps = append(resps, resp)
+	}
+
+	if len(respErrors) > 0 {
+		err = respErrors
 	}
 
 	return
 }
+
+var errorType = reflect.TypeOf((*error)(nil)).Elem()
