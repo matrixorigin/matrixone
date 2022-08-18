@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
@@ -136,6 +137,15 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Cond:       arg.Cond,
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
+		}
+	case *mark.Argument:
+		{
+			rin.Arg = &mark.Argument{
+				Typs:       arg.Typs,
+				Cond:       arg.Cond,
+				Result:     arg.Result,
+				Conditions: arg.Conditions,
+			}
 		}
 	case *offset.Argument:
 		rin.Arg = &offset.Argument{
@@ -403,21 +413,42 @@ func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *p
 	return &product.Argument{Typs: typs, Result: result}
 }
 
-func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti.Argument {
+// func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti.Argument {
+// 	result := make([]int32, len(n.ProjectList))
+// 	for i, expr := range n.ProjectList {
+// 		rel, pos := constructJoinResult(expr)
+// 		if rel != 0 {
+// 			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("anti result '%s' not support now", expr)))
+// 		}
+// 		result[i] = pos
+// 	}
+// 	cond, conds := extraJoinConditions(n.OnList)
+// 	return &anti.Argument{
+// 		Typs:       typs,
+// 		Result:     result,
+// 		Cond:       cond,
+// 		Conditions: constructJoinConditions(conds),
+// 	}
+// }
+
+func constructMark(n *plan.Node, typs []types.Type, proc *process.Process) *mark.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr)
 		if rel != 0 {
-			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("anti result '%s' not support now", expr)))
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("mark result '%s' not support now", expr)))
 		}
 		result[i] = pos
 	}
 	cond, conds := extraJoinConditions(n.OnList)
-	return &anti.Argument{
-		Typs:       typs,
-		Result:     result,
-		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+	return &mark.Argument{
+		Typs:        typs,
+		Result:      result,
+		Cond:        cond,
+		Conditions:  constructJoinConditions(conds),
+		OutputMark:  false,
+		OutputNull:  false,
+		MarkMeaning: false,
 	}
 }
 
@@ -645,6 +676,13 @@ func constructHashBuild(in vm.Instruction) *hashbuild.Argument {
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
 		}
+	case vm.Mark:
+		arg := in.Arg.(*mark.Argument)
+		return &hashbuild.Argument{
+			NeedHashMap: true,
+			Typs:        arg.Typs,
+			Conditions:  arg.Conditions[1],
+		}
 	case vm.Join:
 		arg := in.Arg.(*join.Argument)
 		return &hashbuild.Argument{
@@ -709,6 +747,7 @@ func constructHashBuild(in vm.Instruction) *hashbuild.Argument {
 			NeedHashMap: false,
 			Typs:        arg.Typs,
 		}
+
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join type '%v'", in.Op)))
 	}
