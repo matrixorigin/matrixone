@@ -21,6 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
 
+func (s Snapshot) Txn() txn.TxnMeta {
+	return txn.TxnMeta{}
+}
+
 func (s Snapshot) Snapshot() ([]byte, error) {
 	return nil, nil
 }
