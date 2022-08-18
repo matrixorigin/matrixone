@@ -152,6 +152,8 @@ func (ie *internalExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions)
 // 	logutil.Infof("[Metric] called: %s", callFunc.Name())
 // }
 
+var _ MysqlProtocol = &internalProtocol{}
+
 type internalProtocol struct {
 	sync.Mutex
 	stashResult bool
@@ -162,6 +164,14 @@ type internalProtocol struct {
 
 func (ip *internalProtocol) IsEstablished() bool {
 	return true
+}
+
+func (ip *internalProtocol) ParseExecuteData(stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
+	return nil, nil, nil
+}
+
+func (ip *internalProtocol) SendPrepareResponse(stmt *PrepareStmt) error {
+	return nil
 }
 
 func (ip *internalProtocol) SetEstablished() {}
