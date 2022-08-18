@@ -51,10 +51,10 @@ func WithConfigAdjust(adjustConfigFunc func(c *Config)) Option {
 	}
 }
 
-// WithRequestFilter set filtering txn.TxnRequest sent to other DNShard
-func WithRequestFilter(filter func(*txn.TxnRequest) bool) Option {
+// WithBackendFilter set filtering txn.TxnRequest sent to other DNShard
+func WithBackendFilter(filter func(*txn.TxnRequest, string) bool) Option {
 	return func(s *store) {
-		s.options.requestFilter = filter
+		s.options.backendFilter = filter
 	}
 }
 
@@ -88,7 +88,7 @@ type store struct {
 	options struct {
 		logServiceClientFactory func(metadata.DNShard) (logservice.Client, error)
 		hakeekerClientFactory   func() (logservice.DNHAKeeperClient, error)
-		requestFilter           func(*txn.TxnRequest) bool
+		backendFilter           func(req *txn.TxnRequest, backendAddr string) bool
 		adjustConfigFunc        func(c *Config)
 	}
 
@@ -390,8 +390,8 @@ func (s *store) initFileService() error {
 func (s *store) getBackendOptions() []morpc.BackendOption {
 	return []morpc.BackendOption{
 		morpc.WithBackendLogger(s.logger),
-		morpc.WithBackendFilter(func(m morpc.Message) bool {
-			return s.options.requestFilter == nil || s.options.requestFilter(m.(*txn.TxnRequest))
+		morpc.WithBackendFilter(func(m morpc.Message, backendAddr string) bool {
+			return s.options.backendFilter == nil || s.options.backendFilter(m.(*txn.TxnRequest), backendAddr)
 		}),
 		morpc.WithBackendBusyBufferSize(s.cfg.RPC.BusyQueueSize),
 		morpc.WithBackendBufferSize(s.cfg.RPC.SendQueueSize),
