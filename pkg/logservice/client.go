@@ -408,8 +408,7 @@ func (c *client) request(ctx context.Context,
 	r := c.pool.Get().(*RPCRequest)
 	r.Request = req
 	r.payload = payload
-	future, err := c.client.Send(ctx,
-		c.addr, r, morpc.SendOptions{Timeout: time.Duration(timeout)})
+	future, err := c.client.Send(ctx, c.addr, r)
 	if err != nil {
 		return pb.Response{}, nil, err
 	}
@@ -449,8 +448,7 @@ func (c *client) tsoRequest(ctx context.Context, count uint64) (uint64, error) {
 	}
 	r := c.pool.Get().(*RPCRequest)
 	r.Request = req
-	future, err := c.client.Send(ctx,
-		c.addr, r, morpc.SendOptions{Timeout: time.Duration(timeout)})
+	future, err := c.client.Send(ctx, c.addr, r)
 	if err != nil {
 		return 0, err
 	}

@@ -71,7 +71,7 @@ type server struct {
 	logger      *zap.Logger
 	application goetty.NetApplication
 	stopper     *stopper.Stopper
-	handler     func(request Message, sequence uint64, cs ClientSession) error
+	handler     func(ctx context.Context, request Message, sequence uint64, cs ClientSession) error
 	sessions    *sync.Map // session-id => *clientSession
 	options     struct {
 		goettyOptions []goetty.Option
@@ -136,7 +136,7 @@ func (s *server) Close() error {
 	return err
 }
 
-func (s *server) RegisterRequestHandler(handler func(request Message, sequence uint64, cs ClientSession) error) {
+func (s *server) RegisterRequestHandler(handler func(ctx context.Context, request Message, sequence uint64, cs ClientSession) error) {
 	s.handler = handler
 }
 
@@ -160,15 +160,15 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 	if err != nil {
 		return err
 	}
-	request := value.(Message)
+	request := value.(RPCMessage)
 	if ce := s.logger.Check(zap.DebugLevel, "received request"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
 			zap.String("client", rs.RemoteAddress()),
-			zap.Uint64("request-id", request.GetID()),
-			zap.String("request", request.DebugString()))
+			zap.Uint64("request-id", request.Message.GetID()),
+			zap.String("request", request.Message.DebugString()))
 	}
 
-	if err := s.handler(request, sequence, cs); err != nil {
+	if err := s.handler(request.Ctx, request.Message, sequence, cs); err != nil {
 		s.logger.Error("handle request failed",
 			zap.Uint64("sequence", sequence),
 			zap.String("client", rs.RemoteAddress()),
@@ -179,7 +179,7 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 	if ce := s.logger.Check(zap.DebugLevel, "handle request completed"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
 			zap.String("client", rs.RemoteAddress()),
-			zap.Uint64("request-id", request.GetID()))
+			zap.Uint64("request-id", request.Message.GetID()))
 	}
 	return nil
 }
@@ -188,10 +188,10 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 	return s.stopper.RunTask(func(ctx context.Context) {
 		defer s.closeClientSession(cs)
 
-		responses := make([]sendMessage, 0, s.options.batchSendSize)
+		responses := make([]RPCMessage, 0, s.options.batchSendSize)
 		fetch := func() {
 			for i := 0; i < len(responses); i++ {
-				responses[i] = sendMessage{}
+				responses[i] = RPCMessage{}
 			}
 			responses = responses[:0]
 
@@ -229,16 +229,23 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					written := 0
 					sendResponses := responses[:0]
 					for idx := range responses {
-						if s.options.filter(responses[idx].message) {
+						if s.options.filter(responses[idx].Message) {
 							sendResponses = append(sendResponses, responses[idx])
 						}
 					}
 					timeout := time.Duration(0)
 					for idx := range sendResponses {
-						timeout += sendResponses[idx].opts.Timeout
-						if err := cs.conn.Write(sendResponses[idx].message, goetty.WriteOptions{}); err != nil {
+						if sendResponses[idx].Timeout() {
+							continue
+						}
+						v, err := sendResponses[idx].GetTimeoutFromContext()
+						if err != nil {
+							continue
+						}
+						timeout += v
+						if err := cs.conn.Write(sendResponses[idx], goetty.WriteOptions{}); err != nil {
 							s.logger.Error("write response failed",
-								zap.Uint64("request-id", sendResponses[idx].message.GetID()),
+								zap.Uint64("request-id", sendResponses[idx].Message.GetID()),
 								zap.Error(err))
 							return
 						}
@@ -249,7 +256,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						if err := cs.conn.Flush(timeout); err != nil {
 							for idx := range sendResponses {
 								s.logger.Error("write response failed",
-									zap.Uint64("request-id", sendResponses[idx].message.GetID()),
+									zap.Uint64("request-id", sendResponses[idx].Message.GetID()),
 									zap.Error(err))
 							}
 							return
@@ -259,9 +266,9 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 							fields = append(fields, zap.String("client", cs.conn.RemoteAddress()))
 							for idx := range sendResponses {
 								fields = append(fields, zap.Uint64("request-id",
-									sendResponses[idx].message.GetID()))
+									sendResponses[idx].Message.GetID()))
 								fields = append(fields, zap.String("response",
-									sendResponses[idx].message.DebugString()))
+									sendResponses[idx].Message.DebugString()))
 							}
 
 							ce.Write(fields...)
@@ -304,7 +311,7 @@ func (s *server) getSession(rs goetty.IOSession) (*clientSession, error) {
 
 type clientSession struct {
 	conn goetty.IOSession
-	c    chan sendMessage
+	c    chan RPCMessage
 
 	mu struct {
 		sync.RWMutex
@@ -314,7 +321,7 @@ type clientSession struct {
 
 func newClientSession(conn goetty.IOSession) *clientSession {
 	return &clientSession{
-		c:    make(chan sendMessage, 16),
+		c:    make(chan RPCMessage, 16),
 		conn: conn,
 	}
 }
@@ -331,7 +338,7 @@ func (cs *clientSession) close() error {
 	return cs.conn.Close()
 }
 
-func (cs *clientSession) Write(message Message, opts SendOptions) error {
+func (cs *clientSession) Write(ctx context.Context, message Message) error {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
@@ -339,11 +346,6 @@ func (cs *clientSession) Write(message Message, opts SendOptions) error {
 		return errClientClosed
 	}
 
-	cs.c <- sendMessage{message: message, opts: opts}
+	cs.c <- RPCMessage{Ctx: ctx, Message: message}
 	return nil
-}
-
-type sendMessage struct {
-	message Message
-	opts    SendOptions
 }

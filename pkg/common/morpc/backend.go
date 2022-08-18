@@ -228,14 +228,14 @@ func (rb *remoteBackend) adjust() {
 		goetty.WithSessionLogger(rb.logger))
 }
 
-func (rb *remoteBackend) Send(ctx context.Context, request Message, opts SendOptions) (*Future, error) {
+func (rb *remoteBackend) Send(ctx context.Context, request Message) (*Future, error) {
 	rb.active()
 	request.SetID(rb.nextID())
 
 	f := rb.newFuture()
 	f.init(request.GetID(), ctx)
 	rb.addFuture(f)
-	if err := rb.doSend(backendSendMessage{ctx: f.ctx, request: request, opts: opts, completed: f.unRef}); err != nil {
+	if err := rb.doSend(backendSendMessage{message: RPCMessage{Ctx: ctx, Message: request}, completed: f.unRef}); err != nil {
 		f.Close()
 		return nil, err
 	}
@@ -275,9 +275,9 @@ func (rb *remoteBackend) doSend(m backendSendMessage) error {
 		case rb.writeC <- m:
 			rb.stateMu.RUnlock()
 			return nil
-		case <-m.ctx.Done():
+		case <-m.message.Ctx.Done():
 			rb.stateMu.RUnlock()
-			return m.ctx.Err()
+			return m.message.Ctx.Err()
 		default:
 			rb.stateMu.RUnlock()
 		}
@@ -413,11 +413,16 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 				written := 0
 				writeTimeout := time.Duration(0)
 				for _, f := range futures {
-					if rb.options.filter(f.request) && !f.timeout() {
-						writeTimeout += f.opts.Timeout
-						if err := rb.conn.Write(f.request, goetty.WriteOptions{}); err != nil {
+					if rb.options.filter(f.message.Message) && !f.message.Timeout() {
+						v, err := f.message.GetTimeoutFromContext()
+						if err != nil {
+							continue
+						}
+
+						writeTimeout += v
+						if err := rb.conn.Write(f.message, goetty.WriteOptions{}); err != nil {
 							rb.logger.Error("write request failed",
-								zap.Uint64("request-id", f.request.GetID()),
+								zap.Uint64("request-id", f.message.Message.GetID()),
 								zap.Error(err))
 							retry = true
 							written = 0
@@ -430,9 +435,9 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 				if written > 0 {
 					if err := rb.conn.Flush(writeTimeout); err != nil {
 						for _, f := range futures {
-							if rb.options.filter(f.request) {
+							if rb.options.filter(f.message.Message) {
 								rb.logger.Error("write request failed",
-									zap.Uint64("request-id", f.request.GetID()),
+									zap.Uint64("request-id", f.message.Message.GetID()),
 									zap.Error(err))
 							}
 						}
@@ -476,7 +481,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 				}
 
 				rb.active()
-				rb.requestDone(msg.(Message))
+				rb.requestDone(msg.(RPCMessage).Message)
 			}
 		}
 	}
@@ -730,7 +735,7 @@ func (s *stream) destroy() {
 	s.cancel()
 }
 
-func (s *stream) Send(request Message, opts SendOptions) error {
+func (s *stream) Send(ctx context.Context, request Message) error {
 	if s.id != request.GetID() {
 		panic("request.id != stream.id")
 	}
@@ -741,7 +746,7 @@ func (s *stream) Send(request Message, opts SendOptions) error {
 		return errStreamClosed
 	}
 
-	return s.sendFunc(backendSendMessage{ctx: s.ctx, request: request, opts: opts})
+	return s.sendFunc(backendSendMessage{message: RPCMessage{Ctx: ctx, Message: request}})
 }
 
 func (s *stream) Receive() (chan Message, error) {
@@ -783,17 +788,6 @@ func (s *stream) done(message Message) {
 }
 
 type backendSendMessage struct {
-	ctx       context.Context
-	request   Message
-	opts      SendOptions
+	message   RPCMessage
 	completed func()
-}
-
-func (m backendSendMessage) timeout() bool {
-	select {
-	case <-m.ctx.Done():
-		return true
-	default:
-		return false
-	}
 }

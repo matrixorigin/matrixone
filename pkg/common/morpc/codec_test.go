@@ -15,6 +15,7 @@
 package morpc
 
 import (
+	"context"
 	"io"
 	"testing"
 
@@ -26,7 +27,7 @@ func TestEncodeAndDecode(t *testing.T) {
 	codec := newTestCodec()
 	buf := buf.NewByteBuf(32)
 
-	msg := newTestMessage(1)
+	msg := RPCMessage{Ctx: context.TODO(), Message: newTestMessage(1)}
 	err := codec.Encode(msg, buf, nil)
 	assert.NoError(t, err)
 
@@ -41,7 +42,7 @@ func TestEncodeAndDecodeAndChecksum(t *testing.T) {
 	buf1 := buf.NewByteBuf(32)
 
 	msg := newTestMessage(1)
-	err := codec.Encode(msg, buf1, nil)
+	err := codec.Encode(RPCMessage{Message: msg}, buf1, nil)
 	assert.NoError(t, err)
 
 	buf.Uint64ToBytesTo(0, buf1.RawSlice(5, 5+8))
@@ -54,7 +55,7 @@ func TestEncodeAndDecodeAndChecksumMismatch(t *testing.T) {
 	codec := newTestCodecWithChecksum()
 	buf := buf.NewByteBuf(32)
 
-	msg := newTestMessage(1)
+	msg := RPCMessage{Ctx: context.TODO(), Message: newTestMessage(1)}
 	err := codec.Encode(msg, buf, nil)
 	assert.NoError(t, err)
 
@@ -69,8 +70,8 @@ func TestEncodeAndDecodeWithPayload(t *testing.T) {
 	buf1 := buf.NewByteBuf(32)
 	buf2 := buf.NewByteBuf(32)
 
-	msg := newTestMessage(1)
-	msg.payload = []byte("payload")
+	msg := RPCMessage{Ctx: context.TODO(), Message: newTestMessage(1)}
+	msg.Message.(*testMessage).payload = []byte("payload")
 	err := codec.Encode(msg, buf1, buf2)
 	assert.NoError(t, err)
 
@@ -85,8 +86,8 @@ func TestEncodeAndDecodeWithPayloadAndChecksum(t *testing.T) {
 	buf1 := buf.NewByteBuf(32)
 	buf2 := buf.NewByteBuf(32)
 
-	msg := newTestMessage(1)
-	msg.payload = []byte("payload")
+	msg := RPCMessage{Ctx: context.TODO(), Message: newTestMessage(1)}
+	msg.Message.(*testMessage).payload = []byte("payload")
 	err := codec.Encode(msg, buf1, buf2)
 	assert.NoError(t, err)
 
@@ -101,7 +102,7 @@ func TestEncodeAndDecodeWithEmptyPayloadAndChecksum(t *testing.T) {
 	buf1 := buf.NewByteBuf(32)
 	buf2 := buf.NewByteBuf(32)
 
-	msg := newTestMessage(1)
+	msg := RPCMessage{Ctx: context.TODO(), Message: newTestMessage(1)}
 	err := codec.Encode(msg, buf1, buf2)
 	assert.NoError(t, err)
 	io.Copy(buf2, buf1)
@@ -117,7 +118,7 @@ func TestEncodeAndDecodeWithEmptyPayloadAndChecksumMismatch(t *testing.T) {
 	buf1 := buf.NewByteBuf(32)
 	buf2 := buf.NewByteBuf(32)
 
-	msg := newTestMessage(1)
+	msg := RPCMessage{Ctx: context.TODO(), Message: newTestMessage(1)}
 	err := codec.Encode(msg, buf1, buf2)
 	assert.NoError(t, err)
 	io.Copy(buf2, buf1)
