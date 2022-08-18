@@ -84,6 +84,9 @@ func (node *appendableNode) GetColumnDataCopy(
 		return
 	}
 	node.block.RLock()
+	if node.data == nil {
+		node.OnLoad()
+	}
 	if buffer != nil {
 		win := node.data.Vecs[colIdx]
 		if maxRow < uint32(node.data.Vecs[colIdx].Length()) {
