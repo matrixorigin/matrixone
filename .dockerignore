@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Visual Studio Code
+.vscode/
+.devcontainer/
+
+# JetBrains
+.idea/
+
+# generate files
+mo-service
+mo-server
+system_vars_config.toml
+gen_config
+
+# cgo
+*.o
+*.a
