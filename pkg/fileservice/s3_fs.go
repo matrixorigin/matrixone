@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"path"
 	"sort"
@@ -283,7 +284,24 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
 
 func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
-	min, max, readToEnd := vector.offsetRange()
+	min := math.MaxInt
+	max := 0
+	readToEnd := false
+	for _, entry := range vector.Entries {
+		if entry.ignore {
+			continue
+		}
+		if entry.Offset < min {
+			min = entry.Offset
+		}
+		if entry.Size < 0 {
+			entry.Size = 0
+			readToEnd = true
+		}
+		if end := entry.Offset + entry.Size; end > max {
+			max = end
+		}
+	}
 
 	var content []byte
 

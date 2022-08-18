@@ -16,28 +16,17 @@ package frontend
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"os"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/fagongzi/goetty/buf"
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/simdcsv"
-	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
@@ -48,7 +37,119 @@ func Test_readTextFile(t *testing.T) {
 	fmt.Printf("%v\n", data)
 }
 
-func Test_load(t *testing.T) {
+/*func Test_loadJSON(t *testing.T) {
+	convey.Convey("loadJSON succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		eng := mock_frontend.NewMockTxnEngine(ctrl)
+		txn := mock_frontend.NewMockTxn(ctrl)
+		txn.EXPECT().GetCtx().Return(nil).AnyTimes()
+		txn.EXPECT().Commit().Return(nil).AnyTimes()
+		txn.EXPECT().Rollback().Return(nil).AnyTimes()
+		txn.EXPECT().String().Return("txn0").AnyTimes()
+		eng.EXPECT().StartTxn(nil).Return(txn, nil).AnyTimes()
+
+		db := mock_frontend.NewMockDatabase(ctrl)
+		rel := mock_frontend.NewMockRelation(ctrl)
+		tableDefs := []engine.TableDef{
+			&engine.AttributeDef{
+				Attr: engine.Attribute{
+					Type: types.Type{Oid: types.T_json},
+					Name: "a"}},
+			&engine.AttributeDef{
+				Attr: engine.Attribute{
+					Type: types.Type{Oid: types.T_varchar},
+					Name: "b"}},
+			&engine.AttributeDef{
+				Attr: engine.Attribute{
+					Type: types.Type{Oid: types.T_uint8},
+					Name: "c"}},
+		}
+		ctx := context.TODO()
+		rel.EXPECT().TableDefs(gomock.Any()).Return(tableDefs, nil).AnyTimes()
+		cnt := 0
+		rel.EXPECT().Write(ctx, gomock.Any()).DoAndReturn(
+			func(a, b interface{}) error {
+				cnt++
+				if cnt == 1 {
+					return nil
+				} else if cnt == 2 {
+					return context.DeadlineExceeded
+				}
+
+				return nil
+			},
+		).AnyTimes()
+		db.EXPECT().Relation(ctx, gomock.Any()).Return(rel, nil).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(db, nil).AnyTimes()
+
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+
+		cws := []ComputationWrapper{}
+		var self_handle_sql = []string{
+			"load data " +
+				"infile 'test/loadfile6' " +
+				"ignore " +
+				"INTO TABLE T.A " +
+				"FIELDS TERMINATED BY '\t' " +
+				"ignore 1 lines ",
+			"load data " +
+				"infile 'test/loadfile6' " +
+				"ignore " +
+				"INTO TABLE T.A " +
+				"FIELDS TERMINATED BY '\t' " +
+				"ignore 1 lines " +
+				"(a, b, c)",
+		}
+		for i := 0; i < len(self_handle_sql); i++ {
+			select_2 := mock_frontend.NewMockComputationWrapper(ctrl)
+			stmts, err := parsers.Parse(dialect.MYSQL, self_handle_sql[i])
+			convey.So(err, convey.ShouldBeNil)
+			select_2.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
+			select_2.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
+			select_2.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+			select_2.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
+
+			cws = append(cws, select_2)
+		}
+
+		stubs := gostub.StubFunc(&GetComputationWrapper, cws, nil)
+		defer stubs.Reset()
+
+		stubs2 := gostub.StubFunc(&PathExists, true, true, nil)
+		defer stubs2.Reset()
+
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		convey.So(err, convey.ShouldBeNil)
+
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+
+		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
+		config.StorageEngine = eng
+		defer func() {
+			config.StorageEngine = nil
+		}()
+		ses := NewSession(proto, guestMmu, pu.Mempool, pu, gSysVariables)
+
+		mce := NewMysqlCmdExecutor()
+
+		mce.PrepareSessionBeforeExecRequest(ses)
+
+		req := &Request{
+			cmd:  int(COM_QUERY),
+			data: []byte("test anywhere"),
+		}
+
+		resp, err := mce.ExecRequest(req)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(resp, convey.ShouldBeNil)
+	})
+}*/
+
+/*func Test_load(t *testing.T) {
 	convey.Convey("load succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -173,7 +274,7 @@ func Test_load(t *testing.T) {
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		cws := []ComputationWrapper{}
 
@@ -214,11 +315,7 @@ func Test_load(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
-		config.StorageEngine = eng
-		defer func() {
-			config.StorageEngine = nil
-		}()
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, gSysVariables)
 
 		mce := NewMysqlCmdExecutor()
@@ -230,7 +327,7 @@ func Test_load(t *testing.T) {
 			data: []byte("test anywhere"),
 		}
 
-		resp, err := mce.ExecRequest(req)
+		resp, err := mce.ExecRequest(ctx, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldBeNil)
 	})
@@ -358,7 +455,7 @@ func Test_load(t *testing.T) {
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		cws := []*tree.Load{}
 
@@ -415,12 +512,7 @@ func Test_load(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
-
-		config.StorageEngine = eng
-		defer func() {
-			config.StorageEngine = nil
-		}()
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, gSysVariables)
 
@@ -434,7 +526,7 @@ func Test_load(t *testing.T) {
 				row2col = gostub.Stub(&row2colChoose, false)
 			}
 
-			_, err := mce.LoadLoop(cws[i], db, rel, "T")
+			_, err := mce.LoadLoop(context.TODO(), cws[i], db, rel, "T")
 			if kases[i].fail {
 				convey.So(err, convey.ShouldBeError)
 			} else {
@@ -446,38 +538,7 @@ func Test_load(t *testing.T) {
 			}
 		}
 	})
-}
-
-func getParsedLinesChan(simdCsvGetParsedLinesChan chan simdcsv.LineOut) {
-	var str = [][]string{{"123"}, {"456"}, {"789"}, {"78910"}}
-	for i := 0; i < len(str); i++ {
-		simdCsvGetParsedLinesChan <- simdcsv.LineOut{Lines: nil, Line: str[i]}
-	}
-	simdCsvGetParsedLinesChan <- simdcsv.LineOut{Lines: nil, Line: nil}
-}
-func Test_getLineOutFromSimdCsvRoutine(t *testing.T) {
-	convey.Convey("getLineOutFromSimdCsvRoutine succ", t, func() {
-		handler := &ParseLineHandler{
-			closeRef:                  &CloseLoadData{stopLoadData: make(chan interface{}, 1)},
-			simdCsvGetParsedLinesChan: atomic.Value{},
-			SharePart: SharePart{
-				load:             &tree.Load{IgnoredLines: 1},
-				simdCsvLineArray: make([][]string, 100)},
-		}
-		handler.simdCsvGetParsedLinesChan.Store(make(chan simdcsv.LineOut, 100))
-		handler.closeRef.stopLoadData <- 1
-		gostub.StubFunc(&saveLinesToStorage, nil)
-		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldBeNil)
-
-		handler.closeRef.stopLoadData <- 1
-		gostub.StubFunc(&saveLinesToStorage, errors.New("1"))
-		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldNotBeNil)
-
-		getParsedLinesChan(getLineOutChan(handler.simdCsvGetParsedLinesChan))
-		stubs := gostub.StubFunc(&saveLinesToStorage, nil)
-		defer stubs.Reset()
-	})
-}
+}*/
 
 func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 	ctx := context.TODO()
@@ -495,6 +556,7 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 				maxFieldCnt:                curBatchSize,
 				simdCsvLineArray:           make([][]string, curBatchSize),
 				dataColumnId2TableColumnId: make([]int, curBatchSize),
+				ses:                        &Session{timeZone: time.Local},
 				result:                     &LoadResult{},
 				ignoreFieldError:           true},
 			batchData: &batch.Batch{

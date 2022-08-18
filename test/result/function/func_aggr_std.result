@@ -82,11 +82,9 @@ select STDDEV_POP(l) from t1;
 STDDEV_POP(l)
 1.1076438961767E11
 select STDDEV_POP(m) from t1;
-STDDEV_POP(m)
-1.299038105676658
+Aggregate function of 'stddev_pop' do not support implicit conversions for param of [CHAR]
 select STDDEV_POP(n) from t1;
-STDDEV_POP(n)
-1.299038105676658
+Aggregate function of 'stddev_pop' do not support implicit conversions for param of [VARCHAR]
 drop table t1;
 select STDDEV_POP(99999999999999999.99999);
 STDDEV_POP(99999999999999999.99999)

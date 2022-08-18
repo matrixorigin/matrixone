@@ -17,8 +17,9 @@ package txnbase
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
@@ -34,7 +35,8 @@ func IDCtxToID(buf []byte) uint64 {
 }
 
 type TxnCtx struct {
-	*sync.RWMutex
+	sync.RWMutex
+	DoneCond          sync.Cond
 	ID                uint64
 	IDCtx             []byte
 	StartTS, CommitTS types.TS
@@ -42,18 +44,16 @@ type TxnCtx struct {
 	State             txnif.TxnState
 }
 
-func NewTxnCtx(rwlocker *sync.RWMutex, id uint64, start types.TS, info []byte) *TxnCtx {
-	if rwlocker == nil {
-		rwlocker = new(sync.RWMutex)
-	}
-	return &TxnCtx{
+func NewTxnCtx(id uint64, start types.TS, info []byte) *TxnCtx {
+	ctx := &TxnCtx{
 		ID:       id,
 		IDCtx:    IDToIDCtx(id),
-		RWMutex:  rwlocker,
 		StartTS:  start,
 		CommitTS: txnif.UncommitTS,
 		Info:     info,
 	}
+	ctx.DoneCond = *sync.NewCond(ctx)
+	return ctx
 }
 
 func (ctx *TxnCtx) GetCtx() []byte {
@@ -63,7 +63,7 @@ func (ctx *TxnCtx) GetCtx() []byte {
 func (ctx *TxnCtx) Repr() string {
 	ctx.RLock()
 	defer ctx.RUnlock()
-	repr := fmt.Sprintf("Txn[%d][%d->%d][%s]", ctx.ID, ctx.StartTS, ctx.CommitTS, txnif.TxnStrState(ctx.State))
+	repr := fmt.Sprintf("ctx[%d][%d->%d][%s]", ctx.ID, ctx.StartTS, ctx.CommitTS, txnif.TxnStrState(ctx.State))
 	return repr
 }
 
@@ -83,6 +83,44 @@ func (ctx *TxnCtx) GetCommitTS() types.TS {
 	ctx.RLock()
 	defer ctx.RUnlock()
 	return ctx.CommitTS
+}
+
+// Atomically returns the current txn state
+func (ctx *TxnCtx) getTxnState() txnif.TxnState {
+	ctx.RLock()
+	defer ctx.RUnlock()
+	return ctx.State
+}
+
+// Wait txn state to be rollbacked or committed
+func (ctx *TxnCtx) resolveTxnState() txnif.TxnState {
+	ctx.DoneCond.L.Lock()
+	defer ctx.DoneCond.L.Unlock()
+	state := ctx.State
+	if state != txnif.TxnStateCommitting {
+		return state
+	}
+	ctx.DoneCond.Wait()
+	return ctx.State
+}
+
+// False when atomically get the current txn state
+//
+// True when the txn state is committing, wait it to be committed or rollbacked. It
+// is used during snapshot reads. If TxnStateActive is currently returned, this value will
+// definitely not be used, because even if it becomes TxnStateCommitting later, the timestamp
+// would be larger than the current read timestamp.
+func (ctx *TxnCtx) GetTxnState(waitIfcommitting bool) (state txnif.TxnState) {
+	// Quick get the current txn state
+	// If waitIfcommitting is false, return the state
+	// If state is not txnif.TxnStateCommitting, return the state
+	if state = ctx.getTxnState(); !waitIfcommitting || state != txnif.TxnStateCommitting {
+		return state
+	}
+
+	// Wait the committing txn to be committed or rollbacked
+	state = ctx.resolveTxnState()
+	return
 }
 
 func (ctx *TxnCtx) IsVisible(o txnif.TxnReader) bool {

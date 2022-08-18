@@ -58,7 +58,7 @@ func WithBackendBusyBufferSize(size int) BackendOption {
 
 // WithBackendFilter set send fiter func. Input ready to send futures, output
 // is really need to be send futures.
-func WithBackendFilter(filter func(Message) bool) BackendOption {
+func WithBackendFilter(filter func(Message, string) bool) BackendOption {
 	return func(rb *remoteBackend) {
 		rb.options.filter = filter
 	}
@@ -120,7 +120,7 @@ type remoteBackend struct {
 		busySize         int
 		batchSendSize    int
 		streamBufferSize int
-		filter           func(Message) bool
+		filter           func(msg Message, backendAddr string) bool
 	}
 
 	stateMu struct {
@@ -217,7 +217,7 @@ func (rb *remoteBackend) adjust() {
 		rb.options.streamBufferSize = 16
 	}
 	if rb.options.filter == nil {
-		rb.options.filter = func(Message) bool {
+		rb.options.filter = func(Message, string) bool {
 			return true
 		}
 	}
@@ -413,7 +413,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 				written := 0
 				writeTimeout := time.Duration(0)
 				for _, f := range futures {
-					if rb.options.filter(f.request) && !f.timeout() {
+					if rb.options.filter(f.request, rb.remote) && !f.timeout() {
 						writeTimeout += f.opts.Timeout
 						if err := rb.conn.Write(f.request, goetty.WriteOptions{}); err != nil {
 							rb.logger.Error("write request failed",
@@ -430,7 +430,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 				if written > 0 {
 					if err := rb.conn.Flush(writeTimeout); err != nil {
 						for _, f := range futures {
-							if rb.options.filter(f.request) {
+							if rb.options.filter(f.request, rb.remote) {
 								rb.logger.Error("write request failed",
 									zap.Uint64("request-id", f.request.GetID()),
 									zap.Error(err))

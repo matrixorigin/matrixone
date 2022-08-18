@@ -22,9 +22,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fagongzi/goetty"
-	"github.com/fagongzi/goetty/codec"
-	"github.com/fagongzi/goetty/codec/simple"
+	"github.com/fagongzi/goetty/v2"
+	"github.com/fagongzi/goetty/v2/codec"
+	"github.com/fagongzi/goetty/v2/codec/simple"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -239,7 +239,7 @@ func echoHandler(session goetty.IOSession, msg interface{}, received uint64) err
 		return errors.New("convert to string failed")
 	}
 
-	err := session.WriteAndFlush(value)
+	err := session.Write(value, goetty.WriteOptions{Flush: true})
 	if err != nil {
 		return err
 	}
@@ -247,11 +247,11 @@ func echoHandler(session goetty.IOSession, msg interface{}, received uint64) err
 }
 
 func echoServer(handler func(goetty.IOSession, interface{}, uint64) error, aware goetty.IOSessionAware,
-	encoder codec.Encoder, decoder codec.Decoder) {
-	echoServer, err := goetty.NewTCPApplication("127.0.0.1:6001", handler,
+	codec codec.Codec) {
+	echoServer, err := goetty.NewApplication("127.0.0.1:6001", handler,
 		goetty.WithAppSessionOptions(
-			goetty.WithCodec(encoder, decoder),
-			goetty.WithLogger(logutil.GetGlobalLogger())),
+			goetty.WithSessionCodec(codec),
+			goetty.WithSessionLogger(logutil.GetGlobalLogger())),
 		goetty.WithAppSessionAware(aware))
 	if err != nil {
 		panic(err)
@@ -275,9 +275,8 @@ func echoServer(handler func(goetty.IOSession, interface{}, uint64) error, aware
 
 func echoClient() {
 	addrPort := "localhost:6001"
-	encoder, decoder := simple.NewStringCodec()
-	io := goetty.NewIOSession(goetty.WithCodec(encoder, decoder))
-	_, err := io.Connect(addrPort, time.Second*3)
+	io := goetty.NewIOSession(goetty.WithSessionCodec(simple.NewStringCodec()))
+	err := io.Connect(addrPort, time.Second*3)
 	if err != nil {
 		fmt.Println("connect server failed.", err.Error())
 		return
@@ -286,13 +285,13 @@ func echoClient() {
 	alphabet := [10]string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
 
 	for i := 0; i < 10; i++ {
-		err := io.WriteAndFlush(alphabet[i])
+		err := io.Write(alphabet[i], goetty.WriteOptions{Flush: true})
 		if err != nil {
 			fmt.Println("client writes packet failed.", err.Error())
 			break
 		}
 		fmt.Printf("client writes %s.\n", alphabet[i])
-		data, err := io.Read()
+		data, err := io.Read(goetty.ReadOptions{})
 		if err != nil {
 			fmt.Println("client reads packet failed.", err.Error())
 			break
@@ -315,12 +314,11 @@ func echoClient() {
 }
 
 func TestIOPackageImpl_ReadPacket(t *testing.T) {
-	encoder, decoder := simple.NewStringCodec()
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		echoServer(echoHandler, nil, encoder, decoder)
+		echoServer(echoHandler, nil, simple.NewStringCodec())
 	}()
 
 	to := NewTimeout(1*time.Minute, false)

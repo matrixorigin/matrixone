@@ -69,6 +69,11 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 	meta := storeMeta{
 		serviceAddress: cfg.ServiceAddress,
 	}
+	if cfg.GossipProbeInterval.Duration == 0 {
+		panic("cfg.GossipProbeInterval.Duration is 0")
+	}
+	logdb := config.GetTinyMemLogDBConfig()
+	logdb.KVWriteBufferSize = cfg.LogDBBufferSize
 	return config.NodeHostConfig{
 		DeploymentID:        cfg.DeploymentID,
 		NodeHostID:          cfg.UUID,
@@ -82,7 +87,8 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 			LogDBFactory: tee.TanPebbleLogDBFactory,
 			// FIXME: dragonboat need to be updated to make this field a first class
 			// citizen
-			TestGossipProbeInterval: 50 * time.Millisecond,
+			TestGossipProbeInterval: cfg.GossipProbeInterval.Duration,
+			LogDB:                   logdb,
 		},
 		Gossip: config.GossipConfig{
 			BindAddress:      cfg.GossipListenAddress,

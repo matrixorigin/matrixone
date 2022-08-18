@@ -26,7 +26,7 @@ import (
 )
 
 func String(_ any, buf *bytes.Buffer) {
-	buf.WriteString(" loop left join ")
+	buf.WriteString(" loop single join ")
 }
 
 func Prepare(proc *process.Process, arg any) error {
@@ -89,24 +89,9 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
-	var err error
-
-	for {
-		bat := <-proc.Reg.MergeReceivers[1].Ch
-		if bat == nil {
-			break
-		}
-		if bat.Length() == 0 {
-			continue
-		}
-		anal.Input(bat)
-		anal.Alloc(int64(bat.Size()))
-		if ctr.bat, err = ctr.bat.Append(proc.GetMheap(), bat); err != nil {
-			bat.Clean(proc.GetMheap())
-			ctr.bat.Clean(proc.GetMheap())
-			return err
-		}
-		bat.Clean(proc.GetMheap())
+	bat := <-proc.Reg.MergeReceivers[1].Ch
+	if bat != nil {
+		ctr.bat = bat
 	}
 	return nil
 }

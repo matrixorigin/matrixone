@@ -124,6 +124,10 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {
 			exeDefs[i] = &engine.PropertiesDef{
 				Properties: properties,
 			}
+		case *plan.TableDef_DefType_View:
+			exeDefs[i] = &engine.ViewDef{
+				View: defVal.View.View,
+			}
 		}
 	}
 	return exeDefs

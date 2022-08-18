@@ -17,14 +17,14 @@ package indexwrapper
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestRevert(t *testing.T) {
-	vec := containers.MockVector2(types.Type_INT64.ToType(), 20, 0)
+	vec := containers.MockVector2(types.T_int64.ToType(), 20, 0)
 	vec1 := vec.CloneWindow(0, 10)
 	vec2 := vec.CloneWindow(8, 10)
 	defer vec.Close()

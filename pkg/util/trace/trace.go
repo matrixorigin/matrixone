@@ -18,12 +18,10 @@ import (
 	"context"
 	goErrors "errors"
 	"sync/atomic"
-	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errors"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 
@@ -56,24 +54,22 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	config := &gTracerProvider.tracerProviderConfig
 
 	// init Tracer
-	gTracer = gTracerProvider.Tracer("MatrixOrigin",
-		WithReminder(batchpipe.NewConstantClock(5*time.Second)),
-	)
+	gTracer = gTracerProvider.Tracer("MatrixOrigin")
 
 	// init Node DefaultContext
 	sc := SpanContextWithIDs(TraceID(0), SpanID(config.getNodeResource().NodeID))
 	gSpanContext.Store(&sc)
 	gTraceContext = ContextWithSpanContext(ctx, sc)
 
-	initExport(config)
+	initExport(ctx, config)
 
 	errors.WithContext(DefaultContext(), goErrors.New("finish trace init"))
 
 	return gTraceContext, nil
 }
 
-func initExport(config *tracerProviderConfig) {
-	if !config.enableTracer {
+func initExport(ctx context.Context, config *tracerProviderConfig) {
+	if !config.IsEnable() {
 		logutil2.Infof(context.TODO(), "initExport pass.")
 		return
 	}
@@ -82,7 +78,7 @@ func initExport(config *tracerProviderConfig) {
 	switch {
 	case config.batchProcessMode == InternalExecutor:
 		// init schema
-		InitSchemaByInnerExecutor(config.sqlExecutor)
+		InitSchemaByInnerExecutor(ctx, config.sqlExecutor)
 		// register buffer pipe implements
 		export.Register(&MOSpan{}, NewBufferPipe2SqlWorker(
 			bufferWithSizeThreshold(MB),
@@ -107,11 +103,11 @@ func initExport(config *tracerProviderConfig) {
 }
 
 func Shutdown(ctx context.Context) error {
-	if !gTracerProvider.enableTracer {
+	if !gTracerProvider.IsEnable() {
 		return nil
 	}
 
-	gTracerProvider.enableTracer = false
+	gTracerProvider.EnableTracer(false)
 	tracer := noopTracer{}
 	_ = atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(gTracer.(*MOTracer))), unsafe.Pointer(&tracer))
 

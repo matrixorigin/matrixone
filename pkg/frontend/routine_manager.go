@@ -15,16 +15,18 @@
 package frontend
 
 import (
+	"context"
 	"errors"
 	"sync"
 
-	"github.com/fagongzi/goetty"
+	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type RoutineManager struct {
 	rwlock        sync.RWMutex
+	ctx           context.Context
 	clients       map[goetty.IOSession]*Routine
 	pu            *config.ParameterUnit
 	skipCheckUser bool
@@ -47,14 +49,15 @@ func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
 }
 
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
-	pro := NewMysqlClientProtocol(nextConnectionID(), rs, int(rm.pu.SV.GetMaxBytesInOutbufToFlush()), rm.pu.SV)
+	pro := NewMysqlClientProtocol(nextConnectionID(), rs, int(rm.pu.SV.MaxBytesInOutbufToFlush), rm.pu.SV)
 	pro.SetSkipCheckUser(rm.GetSkipCheckUser())
 	exe := NewMysqlCmdExecutor()
 	exe.SetRoutineManager(rm)
 
-	routine := NewRoutine(pro, exe, rm.pu)
+	routine := NewRoutine(rm.ctx, pro, exe, rm.pu)
 	routine.SetRoutineMgr(rm)
 	ses := NewSession(routine.protocol, routine.guestMmu, routine.mempool, rm.pu, gSysVariables)
+	ses.SetRequestContext(routine.cancelRoutineCtx)
 	routine.SetSession(ses)
 	pro.SetSession(ses)
 
@@ -66,7 +69,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 
 	rm.rwlock.Lock()
 	defer rm.rwlock.Unlock()
-
+	rs.Ref()
 	rm.clients[rs] = routine
 }
 
@@ -131,7 +134,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	payload := packet.Payload
 	for uint32(length) == MaxPayloadSize {
 		var err error
-		msg, err = protocol.tcpConn.Read()
+		msg, err = protocol.tcpConn.Read(goetty.ReadOptions{})
 		if err != nil {
 			return errors.New("read msg error")
 		}
@@ -171,8 +174,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	return nil
 }
 
-func NewRoutineManager(pu *config.ParameterUnit) *RoutineManager {
+func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) *RoutineManager {
 	rm := &RoutineManager{
+		ctx:     ctx,
 		clients: make(map[goetty.IOSession]*Routine),
 		pu:      pu,
 	}

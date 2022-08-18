@@ -48,7 +48,7 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 
 type col struct {
 	Name      string
-	Id        plan.Type_TypeId
+	Id        types.T
 	Nullable  bool
 	Width     int32
 	Precision int32
@@ -80,138 +80,138 @@ func NewMockCompilerContext() *MockCompilerContext {
 
 	tpchSchema["nation"] = &Schema{
 		cols: []col{
-			{"n_nationkey", plan.Type_INT32, false, 0, 0},
-			{"n_name", plan.Type_VARCHAR, false, 25, 0},
-			{"n_regionkey", plan.Type_INT32, false, 0, 0},
-			{"n_comment", plan.Type_VARCHAR, true, 152, 0},
+			{"n_nationkey", types.T_int32, false, 0, 0},
+			{"n_name", types.T_varchar, false, 25, 0},
+			{"n_regionkey", types.T_int32, false, 0, 0},
+			{"n_comment", types.T_varchar, true, 152, 0},
 		},
 		card: 25,
 	}
 	tpchSchema["nation2"] = &Schema{
 		cols: []col{ //not exist in tpch, create for test NaturalJoin And UsingJoin
-			{"n_nationkey", plan.Type_INT32, false, 0, 0},
-			{"n_name", plan.Type_VARCHAR, false, 25, 0},
-			{"r_regionkey", plan.Type_INT32, false, 0, 0}, //change N_REGIONKEY to R_REGIONKEY for test NaturalJoin And UsingJoin
-			{"n_comment", plan.Type_VARCHAR, true, 152, 0},
+			{"n_nationkey", types.T_int32, false, 0, 0},
+			{"n_name", types.T_varchar, false, 25, 0},
+			{"r_regionkey", types.T_int32, false, 0, 0}, //change N_REGIONKEY to R_REGIONKEY for test NaturalJoin And UsingJoin
+			{"n_comment", types.T_varchar, true, 152, 0},
 		},
 		card: 25,
 	}
 	tpchSchema["region"] = &Schema{
 		cols: []col{
-			{"r_regionkey", plan.Type_INT32, false, 0, 0},
-			{"r_name", plan.Type_VARCHAR, false, 25, 0},
-			{"r_comment", plan.Type_VARCHAR, true, 152, 0},
+			{"r_regionkey", types.T_int32, false, 0, 0},
+			{"r_name", types.T_varchar, false, 25, 0},
+			{"r_comment", types.T_varchar, true, 152, 0},
 		},
 		card: 5,
 	}
 	tpchSchema["part"] = &Schema{
 		cols: []col{
-			{"p_partkey", plan.Type_INT32, false, 0, 0},
-			{"p_name", plan.Type_VARCHAR, false, 55, 0},
-			{"p_mfgr", plan.Type_VARCHAR, false, 25, 0},
-			{"p_brand", plan.Type_VARCHAR, false, 10, 0},
-			{"p_type", plan.Type_VARCHAR, false, 25, 0},
-			{"p_size", plan.Type_INT32, false, 0, 0},
-			{"p_container", plan.Type_VARCHAR, false, 10, 0},
-			{"p_retailprice", plan.Type_FLOAT64, false, 15, 2},
-			{"p_comment", plan.Type_VARCHAR, false, 23, 0},
+			{"p_partkey", types.T_int32, false, 0, 0},
+			{"p_name", types.T_varchar, false, 55, 0},
+			{"p_mfgr", types.T_varchar, false, 25, 0},
+			{"p_brand", types.T_varchar, false, 10, 0},
+			{"p_type", types.T_varchar, false, 25, 0},
+			{"p_size", types.T_int32, false, 0, 0},
+			{"p_container", types.T_varchar, false, 10, 0},
+			{"p_retailprice", types.T_float64, false, 15, 2},
+			{"p_comment", types.T_varchar, false, 23, 0},
 		},
 		card: SF * 2e4,
 	}
 	tpchSchema["supplier"] = &Schema{
 		cols: []col{
-			{"s_suppkey", plan.Type_INT32, false, 0, 0},
-			{"s_name", plan.Type_VARCHAR, false, 25, 0},
-			{"s_address", plan.Type_VARCHAR, false, 40, 0},
-			{"s_nationkey", plan.Type_INT32, false, 0, 0},
-			{"s_phone", plan.Type_VARCHAR, false, 15, 0},
-			{"s_acctbal", plan.Type_FLOAT64, false, 15, 2},
-			{"s_comment", plan.Type_VARCHAR, false, 101, 0},
+			{"s_suppkey", types.T_int32, false, 0, 0},
+			{"s_name", types.T_varchar, false, 25, 0},
+			{"s_address", types.T_varchar, false, 40, 0},
+			{"s_nationkey", types.T_int32, false, 0, 0},
+			{"s_phone", types.T_varchar, false, 15, 0},
+			{"s_acctbal", types.T_float64, false, 15, 2},
+			{"s_comment", types.T_varchar, false, 101, 0},
 		},
 		card: SF * 1e3,
 	}
 	tpchSchema["partsupp"] = &Schema{
 		cols: []col{
-			{"ps_partkey", plan.Type_INT32, false, 0, 0},
-			{"ps_suppkey", plan.Type_INT32, false, 0, 0},
-			{"ps_availqty", plan.Type_INT32, false, 0, 0},
-			{"ps_supplycost", plan.Type_FLOAT64, false, 15, 2},
-			{"ps_comment", plan.Type_VARCHAR, false, 199, 0},
+			{"ps_partkey", types.T_int32, false, 0, 0},
+			{"ps_suppkey", types.T_int32, false, 0, 0},
+			{"ps_availqty", types.T_int32, false, 0, 0},
+			{"ps_supplycost", types.T_float64, false, 15, 2},
+			{"ps_comment", types.T_varchar, false, 199, 0},
 		},
 		card: SF * 8e4,
 	}
 	tpchSchema["customer"] = &Schema{
 		cols: []col{
-			{"c_custkey", plan.Type_INT32, false, 0, 0},
-			{"c_name", plan.Type_VARCHAR, false, 25, 0},
-			{"c_address", plan.Type_VARCHAR, false, 40, 0},
-			{"c_nationkey", plan.Type_INT32, false, 0, 0},
-			{"c_phone", plan.Type_VARCHAR, false, 15, 0},
-			{"c_acctbal", plan.Type_FLOAT64, false, 15, 2},
-			{"c_mktsegment", plan.Type_VARCHAR, false, 10, 0},
-			{"c_comment", plan.Type_VARCHAR, false, 117, 0},
+			{"c_custkey", types.T_int32, false, 0, 0},
+			{"c_name", types.T_varchar, false, 25, 0},
+			{"c_address", types.T_varchar, false, 40, 0},
+			{"c_nationkey", types.T_int32, false, 0, 0},
+			{"c_phone", types.T_varchar, false, 15, 0},
+			{"c_acctbal", types.T_float64, false, 15, 2},
+			{"c_mktsegment", types.T_varchar, false, 10, 0},
+			{"c_comment", types.T_varchar, false, 117, 0},
 		},
 		card: SF * 15e3,
 	}
 	tpchSchema["orders"] = &Schema{
 		cols: []col{
-			{"o_orderkey", plan.Type_INT64, false, 0, 0},
-			{"o_custkey", plan.Type_INT32, false, 0, 0},
-			{"o_orderstatus", plan.Type_VARCHAR, false, 1, 0},
-			{"o_totalprice", plan.Type_FLOAT64, false, 15, 2},
-			{"o_orderdate", plan.Type_DATE, false, 0, 0},
-			{"o_orderpriority", plan.Type_VARCHAR, false, 15, 0},
-			{"o_clerk", plan.Type_VARCHAR, false, 15, 0},
-			{"o_shippriority", plan.Type_INT32, false, 0, 0},
-			{"o_comment", plan.Type_VARCHAR, false, 79, 0},
+			{"o_orderkey", types.T_int64, false, 0, 0},
+			{"o_custkey", types.T_int32, false, 0, 0},
+			{"o_orderstatus", types.T_varchar, false, 1, 0},
+			{"o_totalprice", types.T_float64, false, 15, 2},
+			{"o_orderdate", types.T_date, false, 0, 0},
+			{"o_orderpriority", types.T_varchar, false, 15, 0},
+			{"o_clerk", types.T_varchar, false, 15, 0},
+			{"o_shippriority", types.T_int32, false, 0, 0},
+			{"o_comment", types.T_varchar, false, 79, 0},
 		},
 		card: SF * 15e4,
 	}
 	tpchSchema["lineitem"] = &Schema{
 		cols: []col{
-			{"l_orderkey", plan.Type_INT64, false, 0, 0},
-			{"l_partkey", plan.Type_INT32, false, 0, 0},
-			{"l_suppkey", plan.Type_INT32, false, 0, 0},
-			{"l_linenumber", plan.Type_INT32, false, 0, 0},
-			{"l_quantity", plan.Type_INT32, false, 0, 0},
-			{"l_extendedprice", plan.Type_FLOAT64, false, 15, 2},
-			{"l_discount", plan.Type_FLOAT64, false, 15, 2},
-			{"l_tax", plan.Type_FLOAT64, false, 15, 2},
-			{"l_returnflag", plan.Type_VARCHAR, false, 1, 0},
-			{"l_linestatus", plan.Type_VARCHAR, false, 1, 0},
-			{"l_shipdate", plan.Type_DATE, false, 0, 0},
-			{"l_commitdate", plan.Type_DATE, false, 0, 0},
-			{"l_receiptdate", plan.Type_DATE, false, 0, 0},
-			{"l_shipinstruct", plan.Type_VARCHAR, false, 25, 0},
-			{"l_shipmode", plan.Type_VARCHAR, false, 10, 0},
-			{"l_comment", plan.Type_VARCHAR, false, 44, 0},
+			{"l_orderkey", types.T_int64, false, 0, 0},
+			{"l_partkey", types.T_int32, false, 0, 0},
+			{"l_suppkey", types.T_int32, false, 0, 0},
+			{"l_linenumber", types.T_int32, false, 0, 0},
+			{"l_quantity", types.T_int32, false, 0, 0},
+			{"l_extendedprice", types.T_float64, false, 15, 2},
+			{"l_discount", types.T_float64, false, 15, 2},
+			{"l_tax", types.T_float64, false, 15, 2},
+			{"l_returnflag", types.T_varchar, false, 1, 0},
+			{"l_linestatus", types.T_varchar, false, 1, 0},
+			{"l_shipdate", types.T_date, false, 0, 0},
+			{"l_commitdate", types.T_date, false, 0, 0},
+			{"l_receiptdate", types.T_date, false, 0, 0},
+			{"l_shipinstruct", types.T_varchar, false, 25, 0},
+			{"l_shipmode", types.T_varchar, false, 10, 0},
+			{"l_comment", types.T_varchar, false, 44, 0},
 		},
 		card: SF * 6e5,
 	}
 
 	moSchema["mo_database"] = &Schema{
 		cols: []col{
-			{"datname", plan.Type_VARCHAR, false, 50, 0},
+			{"datname", types.T_varchar, false, 50, 0},
 		},
 	}
 	moSchema["mo_tables"] = &Schema{
 		cols: []col{
-			{"reldatabase", plan.Type_VARCHAR, false, 50, 0},
-			{"relname", plan.Type_VARCHAR, false, 50, 0},
+			{"reldatabase", types.T_varchar, false, 50, 0},
+			{"relname", types.T_varchar, false, 50, 0},
 		},
 	}
 	moSchema["mo_columns"] = &Schema{
 		cols: []col{
-			{"att_database", plan.Type_VARCHAR, false, 50, 0},
-			{"att_relname", plan.Type_VARCHAR, false, 50, 0},
-			{"attname", plan.Type_VARCHAR, false, 50, 0},
-			{"atttyp", plan.Type_INT32, false, 0, 0},
-			{"attnum", plan.Type_INT32, false, 0, 0},
-			{"att_length", plan.Type_INT32, false, 0, 0},
-			{"attnotnull", plan.Type_INT8, false, 0, 0},
-			{"att_constraint_type", plan.Type_CHAR, false, 1, 0},
-			{"att_default", plan.Type_VARCHAR, false, 1024, 0},
-			{"att_comment", plan.Type_VARCHAR, false, 1024, 0},
+			{"att_database", types.T_varchar, false, 50, 0},
+			{"att_relname", types.T_varchar, false, 50, 0},
+			{"attname", types.T_varchar, false, 50, 0},
+			{"atttyp", types.T_int32, false, 0, 0},
+			{"attnum", types.T_int32, false, 0, 0},
+			{"att_length", types.T_int32, false, 0, 0},
+			{"attnotnull", types.T_int8, false, 0, 0},
+			{"att_constraint_type", types.T_char, false, 1, 0},
+			{"att_default", types.T_varchar, false, 1024, 0},
+			{"att_comment", types.T_varchar, false, 1024, 0},
 		},
 	}
 
@@ -227,7 +227,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			for _, col := range table.cols {
 				colDefs = append(colDefs, &ColDef{
 					Typ: &plan.Type{
-						Id:        col.Id,
+						Id:        int32(col.Id),
 						Nullable:  col.Nullable,
 						Width:     col.Width,
 						Precision: col.Precision,
@@ -276,6 +276,10 @@ func (m *MockCompilerContext) DatabaseExists(name string) bool {
 
 func (m *MockCompilerContext) DefaultDatabase() string {
 	return "tpch"
+}
+
+func (m *MockCompilerContext) GetRootSql() string {
+	return ""
 }
 
 func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectRef, *TableDef) {

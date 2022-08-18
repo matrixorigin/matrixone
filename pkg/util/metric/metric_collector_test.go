@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
@@ -34,7 +33,7 @@ func (e *dummySqlExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions) 
 	e.opts = opts
 }
 
-func (e *dummySqlExecutor) Exec(sql string, opts ie.SessionOverrideOptions) error {
+func (e *dummySqlExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) error {
 	select {
 	case e.ch <- sql:
 	default:
@@ -42,7 +41,7 @@ func (e *dummySqlExecutor) Exec(sql string, opts ie.SessionOverrideOptions) erro
 	return nil
 }
 
-func (e *dummySqlExecutor) Query(sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+func (e *dummySqlExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 	return nil
 }
 
@@ -73,12 +72,12 @@ func TestCollector(t *testing.T) {
 	sqlch := make(chan string, 100)
 	factory := newExecutorFactory(sqlch)
 	collector := newMetricCollector(factory, WithFlushInterval(200*time.Millisecond), WithMetricThreshold(2))
-	collector.Start()
+	collector.Start(context.TODO())
 	defer collector.Stop(false)
 	names := []string{"m1", "m2"}
 	nodes := []int32{1, 2}
 	roles := []string{"ping", "pong"}
-	ts := int64(types.Now())
+	ts := time.Now().UnixMicro()
 	go func() {
 		_ = collector.SendMetrics(context.TODO(), []*pb.MetricFamily{
 			{Name: names[0], Type: pb.MetricType_COUNTER, Node: nodes[0], Role: roles[0], Metric: []*pb.Metric{

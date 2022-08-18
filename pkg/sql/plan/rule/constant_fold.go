@@ -28,7 +28,7 @@ type ConstantFold struct {
 	bat *batch.Batch
 }
 
-func NewConstantFlod() *ConstantFold {
+func NewConstantFold() *ConstantFold {
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
 	return &ConstantFold{

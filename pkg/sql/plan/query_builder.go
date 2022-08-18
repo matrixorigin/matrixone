@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -23,8 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *QueryBuilder {
@@ -80,7 +83,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 	}
 
 	switch node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, colRefCnt)
 		}
@@ -91,8 +94,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		tag := node.BindingTags[0]
 		newTableDef := &plan.TableDef{
-			Name: node.TableDef.Name,
-			Defs: node.TableDef.Defs,
+			Name:          node.TableDef.Name,
+			Defs:          node.TableDef.Defs,
+			Name2ColIndex: node.TableDef.Name2ColIndex,
+			Createsql:     node.TableDef.Createsql,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -267,7 +272,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ: &plan.Type{
-					Id:       plan.Type_BOOL,
+					Id:       int32(types.T_bool),
 					Nullable: true,
 					Size:     1,
 				},
@@ -611,7 +616,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 	case plan.Node_VALUE_SCAN:
 		// VALUE_SCAN always have one column now
 		node.ProjectList = append(node.ProjectList, &plan.Expr{
-			Typ:  &plan.Type{Id: plan.Type_INT64},
+			Typ:  &plan.Type{Id: int32(types.T_int64)},
 			Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_Ival{Ival: 0}}},
 		})
 
@@ -654,6 +659,14 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 	err := getUnionSelects(stmt.Select.(*tree.UnionClause), &selectStmts, &unionTypes)
 	if err != nil {
 		return 0, err
+	}
+
+	if len(selectStmts) == 1 {
+		if slt, ok := selectStmts[0].(*tree.Select); ok {
+			return builder.buildSelect(slt, ctx, false)
+		} else {
+			return builder.buildSelect(&tree.Select{Select: selectStmts[0]}, ctx, false)
+		}
 	}
 
 	// build selects
@@ -1467,6 +1480,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 				subCtx := NewBindContext(builder, ctx)
 				subCtx.maskedCTEs = cteRef.maskedCTEs
 				subCtx.cteName = table
+				//reset defaultDatabase
+				if len(cteRef.defaultDatabase) > 0 {
+					subCtx.defaultDatabase = cteRef.defaultDatabase
+				}
 
 				switch stmt := cteRef.ast.Stmt.(type) {
 				case *tree.Select:
@@ -1503,6 +1520,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 				break
 			}
+			schema = ctx.defaultDatabase
 		}
 
 		obj, tableDef := builder.compCtx.Resolve(schema, table)
@@ -1510,8 +1528,75 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 			return 0, errors.New("", fmt.Sprintf("table %q does not exist", table))
 		}
 
+		tableDef.Name2ColIndex = map[string]int32{}
+		for i := 0; i < len(tableDef.Cols); i++ {
+			tableDef.Name2ColIndex[tableDef.Cols[i].Name] = int32(i)
+		}
+		nodeType := plan.Node_TABLE_SCAN
+		if tableDef.TableType == catalog.SystemExternalRel {
+			nodeType = plan.Node_EXTERNAL_SCAN
+		}
+		// set view statment to CTE
+		viewDefString := ""
+		for _, def := range tableDef.Defs {
+			if viewDef, ok := def.Def.(*plan.TableDef_DefType_View); ok {
+				viewDefString = viewDef.View.View
+				break
+			}
+		}
+		if viewDefString != "" {
+			if ctx.cteByName == nil {
+				ctx.cteByName = make(map[string]*CTERef)
+			}
+
+			viewData := ViewData{}
+			err := json.Unmarshal([]byte(viewDefString), &viewData)
+			if err != nil {
+				return 0, err
+			}
+
+			originStmts, err := mysql.Parse(viewData.Stmt)
+			if err != nil {
+				return 0, err
+			}
+			viewStmt, ok := originStmts[0].(*tree.CreateView)
+			if !ok {
+				return 0, errors.New("", "can not get view statement")
+			}
+
+			// when use db1.v1 in db2 context, if you use v1 as ViewName， that may conflict
+			viewName := fmt.Sprintf("%s.%s", viewData.DefaultDatabase, viewStmt.Name.ObjectName)
+			var maskedCTEs map[string]any
+			if len(ctx.cteByName) > 0 {
+				maskedCTEs := make(map[string]any)
+				for name := range ctx.cteByName {
+					maskedCTEs[name] = nil
+				}
+			}
+
+			ctx.cteByName[string(viewName)] = &CTERef{
+				ast: &tree.CTE{
+					Name: &tree.AliasClause{
+						Alias: tree.Identifier(viewName),
+						Cols:  viewStmt.ColNames,
+					},
+					Stmt: viewStmt.AsSource,
+				},
+				defaultDatabase: viewData.DefaultDatabase,
+				maskedCTEs:      maskedCTEs,
+			}
+
+			newTableName := tree.NewTableName(tree.Identifier(viewName), tree.ObjectNamePrefix{
+				CatalogName:     tbl.CatalogName, // TODO unused now, if used in some code, that will be save in view
+				SchemaName:      tree.Identifier(""),
+				ExplicitCatalog: false,
+				ExplicitSchema:  false,
+			})
+			return builder.buildTable(newTableName, ctx)
+		}
+
 		nodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_TABLE_SCAN,
+			NodeType:    nodeType,
 			Cost:        builder.compCtx.Cost(obj, nil),
 			ObjRef:      obj,
 			TableDef:    tableDef,
@@ -1568,7 +1653,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var types []*plan.Type
 	var binding *Binding
 
-	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN {
+	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN {
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return errors.New("", fmt.Sprintf("table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols)))
 		}
@@ -1821,7 +1906,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 		joinSides := make([]int8, len(filters))
 
 		for i, filter := range filters {
-			canTurnInner := false
+			canTurnInner := true
 
 			joinSides[i] = getJoinSide(filter, leftTags, rightTags)
 			if f, ok := filter.Expr.(*plan.Expr_F); ok {
@@ -2012,14 +2097,6 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 
 	if node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_ANTI {
 		return nodeID
-	}
-
-	for _, filter := range node.OnList {
-		if f, ok := filter.Expr.(*plan.Expr_F); ok {
-			if f.F.Func.ObjName != "=" {
-				return nodeID
-			}
-		}
 	}
 
 	var targetNode *plan.Node

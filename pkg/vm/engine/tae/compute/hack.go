@@ -15,8 +15,8 @@
 package compute
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 func InplaceDeleteRowsFromSlice[T types.FixedSizeT](v any, rowGen common.RowGen) any {

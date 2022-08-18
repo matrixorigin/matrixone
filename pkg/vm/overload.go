@@ -16,13 +16,16 @@ package vm
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/union"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 
@@ -90,9 +93,12 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	Deletion: deletion.String,
 	Insert:   insert.String,
 	Update:   update.String,
+	External: external.String,
 
-	Union: union.String,
-	Minus: minus.String,
+	Minus:     minus.String,
+	Intersect: intersect.String,
+
+	HashBuild: hashbuild.String,
 }
 
 var prepareFunc = [...]func(*process.Process, any) error{
@@ -129,9 +135,12 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Deletion: deletion.Prepare,
 	Insert:   insert.Prepare,
 	Update:   update.Prepare,
+	External: external.Prepare,
 
-	Union: union.Prepare,
-	Minus: minus.Prepare,
+	Minus:     minus.Prepare,
+	Intersect: intersect.Prepare,
+
+	HashBuild: hashbuild.Prepare,
 }
 
 var execFunc = [...]func(int, *process.Process, any) (bool, error){
@@ -168,7 +177,10 @@ var execFunc = [...]func(int, *process.Process, any) (bool, error){
 	Deletion: deletion.Call,
 	Insert:   insert.Call,
 	Update:   update.Call,
+	External: external.Call,
 
-	Union: union.Call,
-	Minus: minus.Call,
+	Minus:     minus.Call,
+	Intersect: intersect.Call,
+
+	HashBuild: hashbuild.Call,
 }

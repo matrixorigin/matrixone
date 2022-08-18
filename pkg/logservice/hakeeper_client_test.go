@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -303,13 +304,21 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 		DisableWorkers:      true,
 	}
 	cfg1.Fill()
-	service1, err := NewService(cfg1)
+	service1, err := NewService(cfg1,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, service1.Close())
 	}()
 	cfg2.Fill()
-	service2, err := NewService(cfg2)
+	service2, err := NewService(cfg2,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, service2.Close())

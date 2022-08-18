@@ -18,6 +18,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/BurntSushi/toml"
 	"os"
 	"os/signal"
 	"syscall"
@@ -38,9 +39,8 @@ import (
 )
 
 const (
-	InitialValuesExit = 1
-	LoadConfigExit    = 2
-	RecreateDirExit   = 3
+	LoadConfigExit  = 2
+	RecreateDirExit = 3
 	//	CreateRPCExit     = 10
 	StartMOExit = 12
 	//	RunRPCExit        = 14
@@ -61,18 +61,19 @@ var (
 	MoVersion    = ""
 )
 
-func createMOServer() {
-	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
-	mo = frontend.NewMOServer(address, pu)
+func createMOServer(inputCtx context.Context, pu *config.ParameterUnit) {
+	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
+
+	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
+	mo = frontend.NewMOServer(moServerCtx, address, pu)
 	{
 		// init trace/log/error framework
-		if _, err := trace.Init(context.Background(),
+		if _, err := trace.Init(moServerCtx,
 			trace.WithMOVersion(MoVersion),
 			trace.WithNode(0, trace.NodeTypeNode),
-			trace.EnableTracer(config.GlobalSystemVariables.GetEnableTrace()),
-			trace.WithBatchProcessMode(config.GlobalSystemVariables.GetTraceBatchProcessor()),
-			trace.DebugMode(config.GlobalSystemVariables.GetEnableTraceDebug()),
+			trace.EnableTracer(!pu.SV.DisableTrace),
+			trace.WithBatchProcessMode(pu.SV.TraceBatchProcessor),
+			trace.DebugMode(pu.SV.EnableTraceDebug),
 			trace.WithSQLExecutor(func() ie.InternalExecutor {
 				return frontend.NewInternalExecutor(pu)
 			}),
@@ -80,11 +81,12 @@ func createMOServer() {
 			panic(err)
 		}
 	}
-	if config.GlobalSystemVariables.GetEnableMetric() {
+
+	if !pu.SV.DisableMetric {
 		ieFactory := func() ie.InternalExecutor {
 			return frontend.NewInternalExecutor(pu)
 		}
-		metric.InitMetric(ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
+		metric.InitMetric(moServerCtx, ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
 	}
 	frontend.InitServerVersion(MoVersion)
 }
@@ -123,8 +125,8 @@ type taeHandler struct {
 	tae *db.DB
 }
 
-func initTae() *taeHandler {
-	targetDir := config.GlobalSystemVariables.GetStorePath()
+func initTae(pu *config.ParameterUnit) *taeHandler {
+	targetDir := pu.SV.StorePath
 	if err := recreateDir(targetDir); err != nil {
 		logutil.Infof("Recreate dir error:%v\n", err)
 		os.Exit(RecreateDirExit)
@@ -139,7 +141,7 @@ func initTae() *taeHandler {
 	eng := moengine.NewEngine(tae)
 
 	//test storage aoe_storage
-	config.StorageEngine = eng
+	pu.StorageEngine = eng
 
 	return &taeHandler{
 		eng: eng,
@@ -176,34 +178,35 @@ func main() {
 
 	configFilePath := args[0]
 
-	//before anything using the configuration
-	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
-		logutil.Infof("Initial values error:%v\n", err)
-		os.Exit(InitialValuesExit)
-	}
+	params := &config.FrontendParameters{}
+	pu := config.NewParameterUnit(params, nil, nil, nil, nil)
 
-	if err := config.LoadvarsConfigFromFile(configFilePath, &config.GlobalSystemVariables); err != nil {
-		logutil.Infof("Load config error:%v\n", err)
+	//before anything using the configuration
+	_, err := toml.DecodeFile(configFilePath, params)
+	if err != nil {
 		os.Exit(LoadConfigExit)
 	}
 
 	logConf := logutil.LogConfig{
-		Level:       config.GlobalSystemVariables.GetLogLevel(),
-		Format:      config.GlobalSystemVariables.GetLogFormat(),
-		Filename:    config.GlobalSystemVariables.GetLogFilename(),
-		MaxSize:     int(config.GlobalSystemVariables.GetLogMaxSize()),
-		MaxDays:     int(config.GlobalSystemVariables.GetLogMaxDays()),
-		MaxBackups:  int(config.GlobalSystemVariables.GetLogMaxBackups()),
-		EnableStore: config.GlobalSystemVariables.GetEnableTrace(),
+		Level:       params.LogLevel,
+		Format:      params.LogFormat,
+		Filename:    params.LogFilename,
+		MaxSize:     int(params.LogMaxSize),
+		MaxDays:     int(params.LogMaxDays),
+		MaxBackups:  int(params.LogMaxBackups),
+		EnableStore: !params.DisableTrace,
 	}
 
 	logutil.SetupMOLogger(&logConf)
 
+	rootCtx := context.Background()
+	cancelMoServerCtx, cancelMoServerFunc := context.WithCancel(rootCtx)
+
 	//just initialize the tae after configuration has been loaded
 	if len(args) == 2 && args[1] == "initdb" {
 		fmt.Println("Initialize the TAE engine ...")
-		taeWrapper := initTae()
-		err := frontend.InitDB(taeWrapper.eng)
+		taeWrapper := initTae(pu)
+		err := frontend.InitDB(cancelMoServerCtx, taeWrapper.eng)
 		if err != nil {
 			logutil.Infof("Initialize catalog failed. error:%v", err)
 			os.Exit(InitCatalogExit)
@@ -223,35 +226,26 @@ func main() {
 
 	logutil.Infof("Shutdown The Server With Ctrl+C | Ctrl+\\.")
 
-	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
-
-	//	Host := config.GlobalSystemVariables.GetHost()
-	engineName := config.GlobalSystemVariables.GetStorageEngine()
-	//	port := config.GlobalSystemVariables.GetPortOfRpcServerInComputationEngine()
+	pu.HostMmu = host.New(params.HostMmuLimitation)
 
 	var tae *taeHandler
-	if engineName == "tae" {
-		fmt.Println("Initialize the TAE engine ...")
-		tae = initTae()
-		err := frontend.InitDB(tae.eng)
-		if err != nil {
-			logutil.Infof("Initialize catalog failed. error:%v", err)
-			os.Exit(InitCatalogExit)
-		}
-		fmt.Println("Initialize the TAE engine Done")
-	} else {
-		logutil.Errorf("undefined engine %s", engineName)
-		os.Exit(LoadConfigExit)
+	fmt.Println("Initialize the TAE engine ...")
+	tae = initTae(pu)
+	err = frontend.InitDB(cancelMoServerCtx, tae.eng)
+	if err != nil {
+		logutil.Infof("Initialize catalog failed. error:%v", err)
+		os.Exit(InitCatalogExit)
 	}
+	fmt.Println("Initialize the TAE engine Done")
 
 	if err := agent.Listen(agent.Options{}); err != nil {
 		logutil.Errorf("listen gops agent failed: %s", err)
 		os.Exit(StartMOExit)
 	}
 
-	createMOServer()
+	createMOServer(cancelMoServerCtx, pu)
 
-	err := runMOServer()
+	err = runMOServer()
 	if err != nil {
 		logutil.Infof("Start MOServer failed, %v", err)
 		os.Exit(StartMOExit)
@@ -266,9 +260,10 @@ func main() {
 
 	agent.Close()
 
+	//cancel mo server
+	cancelMoServerFunc()
+
 	cleanup()
 
-	if engineName == "tae" {
-		closeTae(tae)
-	}
+	closeTae(tae)
 }

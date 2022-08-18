@@ -27,7 +27,8 @@ import (
 
 func Test_initExport(t *testing.T) {
 	type args struct {
-		config *tracerProviderConfig
+		enableTracer bool
+		config       *tracerProviderConfig
 	}
 	ch := make(chan string, 10)
 	tests := []struct {
@@ -38,25 +39,27 @@ func Test_initExport(t *testing.T) {
 		{
 			name: "disable",
 			args: args{
-				config: &tracerProviderConfig{enableTracer: false},
+				enableTracer: false,
+				config:       &tracerProviderConfig{enableTracer: 0},
 			},
 			empty: true,
 		},
 		{
 			name: "enable_InternalExecutor",
 			args: args{
+				enableTracer: true,
 				config: &tracerProviderConfig{
-					enableTracer: true, batchProcessMode: InternalExecutor, sqlExecutor: newExecutorFactory(ch),
+					enableTracer: 1, batchProcessMode: InternalExecutor, sqlExecutor: newExecutorFactory(ch),
 				}},
 			empty: false,
 		},
 	}
-	sysVar := &config.GlobalSystemVariables
+	sysVar := &config.FrontendParameters{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sysVar.SetEnableTrace(tt.args.config.enableTracer)
+			sysVar.DisableTrace = !tt.args.enableTracer
 			export.ResetGlobalBatchProcessor()
-			initExport(tt.args.config)
+			initExport(context.TODO(), tt.args.config)
 			if tt.empty {
 				require.Equal(t, "*export.noopBatchProcessor", fmt.Sprintf("%v", reflect.ValueOf(export.GetGlobalBatchProcessor()).Type()))
 			} else {

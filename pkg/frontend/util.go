@@ -17,7 +17,7 @@ package frontend
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/BurntSushi/toml"
 	"go/constant"
 	"os"
 	"runtime"
@@ -25,13 +25,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -295,17 +296,11 @@ func MakeDebugInfo(data []byte, bytesCount int, bytesPerLine int) string {
 	return ps
 }
 
-func getSystemVariables(configFile string) (*mo_config.SystemVariables, error) {
-	sv := &mo_config.SystemVariables{}
+func getSystemVariables(configFile string) (*mo_config.FrontendParameters, error) {
+	sv := &mo_config.FrontendParameters{}
 	var err error
-	//before anything using the configuration
-	if err = sv.LoadInitialValues(); err != nil {
-		logutil.Errorf("error:%v", err)
-		return nil, err
-	}
-
-	if err = mo_config.LoadvarsConfigFromFile(configFile, sv); err != nil {
-		logutil.Errorf("error:%v", err)
+	_, err = toml.DecodeFile(configFile, sv)
+	if err != nil {
 		return nil, err
 	}
 	return sv, err
@@ -317,7 +312,7 @@ func getParameterUnit(configFile string, eng engine.Engine) (*mo_config.Paramete
 		return nil, err
 	}
 
-	hostMmu := host.New(sv.GetHostMmuLimitation())
+	hostMmu := host.New(sv.HostMmuLimitation)
 	mempool := mempool.New( /*int(sv.GetMempoolMaxSize()), int(sv.GetMempoolFactor())*/ )
 
 	fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
@@ -369,37 +364,37 @@ func AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs []*engine.Attri
 		switch vec.Typ.Oid {
 		case types.T_bool:
 			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_bool).Size))
-			vec.Col = encoding.DecodeBoolSlice(vec.Data)
+			vec.Col = types.DecodeBoolSlice(vec.Data)
 		case types.T_int8:
 			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_int8).Size))
-			vec.Col = encoding.DecodeInt8Slice(vec.Data)
+			vec.Col = types.DecodeInt8Slice(vec.Data)
 		case types.T_int16:
 			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_int16).Size))
-			vec.Col = encoding.DecodeInt16Slice(vec.Data)
+			vec.Col = types.DecodeInt16Slice(vec.Data)
 		case types.T_int32:
 			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_int32).Size))
-			vec.Col = encoding.DecodeInt32Slice(vec.Data)
+			vec.Col = types.DecodeInt32Slice(vec.Data)
 		case types.T_int64:
 			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_int64).Size))
-			vec.Col = encoding.DecodeInt64Slice(vec.Data)
+			vec.Col = types.DecodeInt64Slice(vec.Data)
 		case types.T_uint8:
 			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_uint8).Size))
-			vec.Col = encoding.DecodeUint8Slice(vec.Data)
+			vec.Col = types.DecodeUint8Slice(vec.Data)
 		case types.T_uint16:
 			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_uint16).Size))
-			vec.Col = encoding.DecodeUint16Slice(vec.Data)
+			vec.Col = types.DecodeUint16Slice(vec.Data)
 		case types.T_uint32:
 			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_uint32).Size))
-			vec.Col = encoding.DecodeUint32Slice(vec.Data)
+			vec.Col = types.DecodeUint32Slice(vec.Data)
 		case types.T_uint64:
 			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_uint64).Size))
-			vec.Col = encoding.DecodeUint64Slice(vec.Data)
+			vec.Col = types.DecodeUint64Slice(vec.Data)
 		case types.T_float32:
 			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_float32).Size))
-			vec.Col = encoding.DecodeFloat32Slice(vec.Data)
+			vec.Col = types.DecodeFloat32Slice(vec.Data)
 		case types.T_float64:
 			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_float64).Size))
-			vec.Col = encoding.DecodeFloat64Slice(vec.Data)
+			vec.Col = types.DecodeFloat64Slice(vec.Data)
 		case types.T_char, types.T_varchar, types.T_json:
 			vBytes := &types.Bytes{
 				Offsets: make([]uint32, rowCount),
@@ -410,10 +405,10 @@ func AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs []*engine.Attri
 			vec.Data = vBytes.Data
 		case types.T_date:
 			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_date).Size))
-			vec.Col = encoding.DecodeDateSlice(vec.Data)
+			vec.Col = types.DecodeDateSlice(vec.Data)
 		case types.T_datetime:
 			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_datetime).Size))
-			vec.Col = encoding.DecodeDatetimeSlice(vec.Data)
+			vec.Col = types.DecodeDatetimeSlice(vec.Data)
 		default:
 			panic("unsupported vector type")
 		}

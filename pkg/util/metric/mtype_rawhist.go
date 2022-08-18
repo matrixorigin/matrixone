@@ -18,8 +18,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	prom "github.com/prometheus/client_golang/prometheus"
@@ -122,7 +122,7 @@ func newRawHist(desc *prom.Desc, compatHist prom.Observer, opts *prom.HistogramO
 
 		mutex:    &sync.Mutex{},
 		exporter: &moExporter,
-		now:      func() int64 { return int64(types.Now()) },
+		now:      func() int64 { return time.Now().UnixMicro() },
 	}
 	return raw
 }

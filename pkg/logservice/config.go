@@ -34,15 +34,15 @@ const (
 	defaultServiceAddress = "0.0.0.0:32000"
 	defaultRaftAddress    = "0.0.0.0:32001"
 	defaultGossipAddress  = "0.0.0.0:32002"
+
+	defaultGossipProbeInterval = 50 * time.Millisecond
+	defaultHeartbeatInterval   = time.Second
+	defaultLogDBBufferSize     = 768 * 1024
 )
 
 var (
 	ErrInvalidBootstrapConfig = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid bootstrap configuration")
 	ErrInvalidConfig          = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid log configuration")
-)
-
-const (
-	defaultHeartbeatInterval = time.Second
 )
 
 // Config defines the Configurations supported by the Log Service.
@@ -71,6 +71,8 @@ type Config struct {
 	RaftAddress string `toml:"raft-address"`
 	// RaftListenAddress is the local listen address of the RaftAddress.
 	RaftListenAddress string `toml:"raft-listen-address"`
+	// LogDBBufferSize is the size of the logdb buffer in bytes.
+	LogDBBufferSize uint64 `toml:"logdb-buffer-size"`
 	// GossipAddress is the address used for accepting gossip communication.
 	GossipAddress string `toml:"gossip-address"`
 	// GossipListenAddress is the local listen address of the GossipAddress
@@ -78,6 +80,8 @@ type Config struct {
 	// GossipSeedAddresses is list of seed addresses that are used for
 	// introducing the local node into the gossip network.
 	GossipSeedAddresses []string `toml:"gossip-seed-addresses"`
+	// GossipProbeInternval how often gossip nodes probe each other.
+	GossipProbeInterval toml.Duration `toml:"gossip-probe-interval"`
 	// HeartbeatInterval is the interval of how often log service node should be
 	// sending heartbeat message to the HAKeeper.
 	HeartbeatInterval toml.Duration `toml:"logservice-heartbeat-interval"`
@@ -227,6 +231,9 @@ func (c *Config) Validate() error {
 	if len(c.RaftAddress) == 0 && len(c.RaftListenAddress) != 0 {
 		return errors.Wrapf(ErrInvalidConfig, "RaftAddress not set")
 	}
+	if c.LogDBBufferSize == 0 {
+		return errors.Wrapf(ErrInvalidConfig, "LogDBBufferSize not set")
+	}
 	if len(c.GossipAddress) == 0 && len(c.GossipListenAddress) != 0 {
 		return errors.Wrapf(ErrInvalidConfig, "GossipAddress not set")
 	}
@@ -241,6 +248,9 @@ func (c *Config) Validate() error {
 	}
 	if c.HAKeeperConfig.DNStoreTimeout.Duration == 0 {
 		return errors.Wrapf(ErrInvalidConfig, "DNStoreTimeout not set")
+	}
+	if c.GossipProbeInterval.Duration == 0 {
+		return errors.Wrapf(ErrInvalidConfig, "GossipProbeInterval not set")
 	}
 	// validate BootstrapConfig
 	if c.BootstrapConfig.BootstrapCluster {
@@ -293,6 +303,9 @@ func (c *Config) Fill() {
 	} else if len(c.RaftAddress) != 0 && len(c.RaftListenAddress) == 0 {
 		c.RaftListenAddress = c.RaftAddress
 	}
+	if c.LogDBBufferSize == 0 {
+		c.LogDBBufferSize = defaultLogDBBufferSize
+	}
 	if len(c.GossipAddress) == 0 {
 		c.GossipAddress = defaultGossipAddress
 		c.GossipListenAddress = defaultGossipAddress
@@ -317,7 +330,9 @@ func (c *Config) Fill() {
 	if c.HAKeeperCheckInterval.Duration == 0 {
 		c.HAKeeperCheckInterval.Duration = hakeeper.CheckDuration
 	}
-
+	if c.GossipProbeInterval.Duration == 0 {
+		c.GossipProbeInterval.Duration = defaultGossipProbeInterval
+	}
 }
 
 // HAKeeperClientConfig is the config for HAKeeper clients.

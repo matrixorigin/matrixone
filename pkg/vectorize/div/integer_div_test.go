@@ -83,8 +83,7 @@ func TestF32IntegerDiv(t *testing.T) {
 
 	err := NumericIntegerDivFloat[float32](av, bv, cv)
 	if err != nil {
-		t.Fatal(err)
-		t.Fatalf("decimal64 integer div failed")
+		t.Fatal(err, "decimal64 integer div failed")
 	}
 }
 

@@ -12,9 +12,54 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnengine
+package testtxnengine
 
-import "testing"
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+)
 
 func TestEngine(t *testing.T) {
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	env, err := newEnv(ctx)
+	assert.Nil(t, err)
+	defer func() {
+		if err := env.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	tx := env.NewTx()
+	err = tx.Exec(ctx, "", `
+    create table foo (
+      a int primary key,
+      b int
+    )
+  `)
+	assert.Nil(t, err)
+
+	err = tx.Exec(ctx, "", `insert into foo (a, b) values (1, 2)`)
+	assert.Nil(t, err)
+
+	err = tx.Exec(ctx, "", `select a, b from foo where b = 2`)
+	assert.Nil(t, err)
+
+	err = tx.Exec(ctx, "", `update foo set b = 3 where a = 1`)
+	assert.Nil(t, err)
+
+	err = tx.Exec(ctx, "", `delete from foo where a = 1`)
+	assert.Nil(t, err)
+
+	err = tx.Exec(ctx, "", `drop table foo`)
+	assert.Nil(t, err)
+
+	err = tx.Commit(ctx)
+	assert.Nil(t, err)
+
 }

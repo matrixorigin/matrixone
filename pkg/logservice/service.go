@@ -65,9 +65,14 @@ type Service struct {
 	respPool *sync.Pool
 	stopper  *stopper.Stopper
 	haClient LogHAKeeperClient
+
+	options struct {
+		// morpc client would filter remote backend via this
+		backendFilter func(msg morpc.Message, backendAddr string) bool
+	}
 }
 
-func NewService(cfg Config) (*Service, error) {
+func NewService(cfg Config, opts ...Option) (*Service, error) {
 	cfg.Fill()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -111,6 +116,9 @@ func NewService(cfg Config) (*Service, error) {
 		respPool: respPool,
 		stopper:  stopper.NewStopper("log-service"),
 	}
+	for _, opt := range opts {
+		opt(service)
+	}
 	server.RegisterRequestHandler(service.handleRPCRequest)
 	// TODO: before making the service available to the outside world, restore all
 	// replicas already known to the local store
@@ -125,6 +133,10 @@ func NewService(cfg Config) (*Service, error) {
 	if !cfg.DisableWorkers {
 		if err := service.stopper.RunNamedTask("log-heartbeat-worker", func(ctx context.Context) {
 			plog.Infof("logservice heartbeat worker started")
+
+			// transfer morpc options via context
+			ctx = SetBackendOptions(ctx, service.getBackendOptions()...)
+			ctx = SetClientOptions(ctx, service.getClientOptions()...)
 			service.heartbeatWorker(ctx)
 		}); err != nil {
 			return nil, err
@@ -372,4 +384,18 @@ func (s *Service) handleCheckHAKeeper(req pb.Request) pb.Response {
 		resp.IsHAKeeper = true
 	}
 	return resp
+}
+
+func (s *Service) getBackendOptions() []morpc.BackendOption {
+	return []morpc.BackendOption{
+		morpc.WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return s.options.backendFilter == nil ||
+				s.options.backendFilter(msg.(*RPCRequest), backendAddr)
+		}),
+	}
+}
+
+// NB: leave an empty method for future extension.
+func (s *Service) getClientOptions() []morpc.ClientOption {
+	return nil
 }

@@ -125,7 +125,7 @@ func TestSendWithAlreadyContextDone(t *testing.T) {
 			assert.Nil(t, resp)
 		},
 		WithBackendConnectWhenCreate(),
-		WithBackendFilter(func(Message) bool {
+		WithBackendFilter(func(Message, string) bool {
 			cancel()
 			return true
 		}))
@@ -150,7 +150,7 @@ func TestSendWithResetConnAndRetry(t *testing.T) {
 			assert.Equal(t, req, resp)
 			assert.True(t, retry > 0)
 		},
-		WithBackendFilter(func(Message) bool {
+		WithBackendFilter(func(Message, string) bool {
 			retry++
 			return true
 		}))
@@ -201,7 +201,7 @@ func TestSendWithReconnect(t *testing.T) {
 			}
 		},
 		WithBackendConnectWhenCreate(),
-		WithBackendFilter(func(m Message) bool {
+		WithBackendFilter(func(Message, string) bool {
 			idx++
 			if idx%2 == 0 {
 				rb.closeConn(false)
@@ -231,7 +231,7 @@ func TestSendWithCannotConnectWillTimeout(t *testing.T) {
 			assert.Nil(t, resp)
 			assert.Equal(t, err, ctx.Err())
 		},
-		WithBackendFilter(func(m Message) bool {
+		WithBackendFilter(func(Message, string) bool {
 			assert.NoError(t, rb.conn.Disconnect())
 			rb.remote = ""
 			return true
@@ -319,7 +319,7 @@ func TestBusy(t *testing.T) {
 			c <- struct{}{}
 		},
 		WithBackendConnectWhenCreate(),
-		WithBackendFilter(func(Message) bool {
+		WithBackendFilter(func(Message, string) bool {
 			if n == 0 {
 				<-c
 				n++
@@ -481,6 +481,7 @@ func TestTCPProxyExample(t *testing.T) {
 	defer func() {
 		assert.NoError(t, p.Stop())
 	}()
+	p.AddUpStream(testAddr, time.Second*10)
 
 	testBackendSendWithAddr(t,
 		testProxyAddr,
@@ -488,8 +489,6 @@ func TestTCPProxyExample(t *testing.T) {
 			return conn.Write(msg, goetty.WriteOptions{Flush: true})
 		},
 		func(b *remoteBackend) {
-			p.AddUpStream(testAddr, b.options.connectTimeout)
-
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := newTestMessage(1)
