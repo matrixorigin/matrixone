@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -40,6 +42,7 @@ type antiTestCase struct {
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
+	barg   *hashbuild.Argument
 }
 
 var (
@@ -78,6 +81,7 @@ func TestString(t *testing.T) {
 
 func TestAnti(t *testing.T) {
 	for _, tc := range tcs {
+		bat := hashBuild(t, tc)
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
@@ -86,9 +90,7 @@ func TestAnti(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
-		tc.proc.Reg.MergeReceivers[1].Ch <- nil
+		tc.proc.Reg.MergeReceivers[1].Ch <- bat
 		for {
 			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 				break
@@ -141,6 +143,7 @@ func BenchmarkAnti(b *testing.B) {
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
+			bat := hashBuild(t, tc)
 			err := Prepare(tc.proc, tc.arg)
 			require.NoError(t, err)
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
@@ -149,9 +152,7 @@ func BenchmarkAnti(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[1].Ch <- nil
+			tc.proc.Reg.MergeReceivers[1].Ch <- bat
 			for {
 				if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 					break
@@ -190,16 +191,72 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []int32, cs []
 		Ctx: ctx,
 		Ch:  make(chan *batch.Batch, 3),
 	}
+	fid := function.EncodeOverloadID(function.EQUAL, 4)
+	args := make([]*plan.Expr, 0, 2)
+	args = append(args, &plan.Expr{
+		Typ: &plan.Type{
+			Size: ts[0].Size,
+			Id:   int32(ts[0].Oid),
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: 0,
+			},
+		},
+	})
+	args = append(args, &plan.Expr{
+		Typ: &plan.Type{
+			Size: ts[0].Size,
+			Id:   int32(ts[0].Oid),
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 1,
+				ColPos: 0,
+			},
+		},
+	})
+	cond := &plan.Expr{
+		Typ: &plan.Type{
+			Size: 1,
+			Id:   int32(types.T_bool),
+		},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Args: args,
+				Func: &plan.ObjectRef{Obj: fid},
+			},
+		},
+	}
 	return antiTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
 		arg: &Argument{
+			Typs:       ts,
 			Result:     rp,
 			Conditions: cs,
+			Cond:       cond,
+		},
+		barg: &hashbuild.Argument{
+			Typs:        ts,
+			NeedHashMap: true,
+			Conditions:  cs[1],
 		},
 	}
+}
+
+func hashBuild(t *testing.T, tc antiTestCase) *batch.Batch {
+	err := hashbuild.Prepare(tc.proc, tc.barg)
+	require.NoError(t, err)
+	tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+	tc.proc.Reg.MergeReceivers[0].Ch <- nil
+	ok, err := hashbuild.Call(0, tc.proc, tc.barg)
+	require.NoError(t, err)
+	require.Equal(t, true, ok)
+	return tc.proc.Reg.InputBatch
 }
 
 // create a new block based on the type information, flgs[i] == ture: has null

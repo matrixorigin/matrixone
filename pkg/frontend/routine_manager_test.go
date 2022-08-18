@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -28,22 +29,16 @@ import (
 
 func create_test_server() *MOServer {
 	//before anything using the configuration
-	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
-		fmt.Printf("error:%v\n", err)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
+	if err != nil {
 		panic(err)
 	}
 
-	if err := config.LoadvarsConfigFromFile("test/system_vars_config.toml",
-		&config.GlobalSystemVariables); err != nil {
-		fmt.Printf("error:%v\n", err)
-		panic(err)
-	}
+	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
+	pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
 
-	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
-	config.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
-
-	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
+	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	return NewMOServer(moServerCtx, address, pu)
 }

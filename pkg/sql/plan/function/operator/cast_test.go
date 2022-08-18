@@ -2289,7 +2289,7 @@ func TestCastTimestampAsDate(t *testing.T) {
 		{
 			name:      "TEST01",
 			vecs:      makeTempVectors([]types.Timestamp{types.Timestamp(382331223)}, leftType, rightType),
-			proc:      makeProcess(),
+			proc:      testutil.NewProc(),
 			wantBytes: []types.Date{types.Date(0)},
 		},
 	}

@@ -21,7 +21,6 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
@@ -228,9 +227,6 @@ func (s *mfset) GetBatch(buf *bytes.Buffer) string {
 	return sql
 }
 
-var _, localOffset = time.Now().Zone()
-
-// temp timezone workaround, fix it in 0.6 version
-func localTimeStr(time int64) string {
-	return types.Datetime((time>>20 + int64(localOffset)) << 20).String()
+func localTimeStr(value int64) string {
+	return time.UnixMicro(value).In(time.Local).Format("2006-01-02 15:04:05.000000")
 }

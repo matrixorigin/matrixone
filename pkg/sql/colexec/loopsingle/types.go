@@ -38,7 +38,7 @@ type ResultPos struct {
 
 type Argument struct {
 	ctr    *container
-	Typs   []types.Type
 	Cond   *plan.Expr
 	Result []ResultPos
+	Typs   []types.Type
 }

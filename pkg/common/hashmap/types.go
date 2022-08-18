@@ -17,6 +17,7 @@ package hashmap
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
@@ -56,6 +57,16 @@ type Iterator interface {
 	// vs  : the number of rows corresponding to each value in the hash table (start with 1, and 0 means not found.)
 	// zvs : if zvs[i] is 0 indicates the presence null, 1 indicates the absence of a null.
 	Find(start, count int, vecs []*vector.Vector, inBuckets []uint8) (vs []uint64, zvs []int64)
+}
+
+// JoinMap is used for join
+type JoinMap struct {
+	cnt  int64
+	sels [][]int64
+	// push-down filter expression, possibly a bloomfilter
+	expr    *plan.Expr
+	mp      *StrHashMap
+	hasNull bool
 }
 
 // StrHashMap key is []byte, value is an uint64 value (starting from 1)

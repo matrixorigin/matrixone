@@ -481,6 +481,7 @@ func TestTCPProxyExample(t *testing.T) {
 	defer func() {
 		assert.NoError(t, p.Stop())
 	}()
+	p.AddUpStream(testAddr, time.Second*10)
 
 	testBackendSendWithAddr(t,
 		testProxyAddr,
@@ -488,8 +489,6 @@ func TestTCPProxyExample(t *testing.T) {
 			return conn.Write(msg, goetty.WriteOptions{Flush: true})
 		},
 		func(b *remoteBackend) {
-			p.AddUpStream(testAddr, b.options.connectTimeout)
-
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := newTestMessage(1)

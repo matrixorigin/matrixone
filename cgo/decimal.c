@@ -1299,6 +1299,38 @@ int32_t Decimal64_VecSum(int64_t *rs, int64_t *vs, int64_t start, int64_t count,
     return RC_SUCCESS;
 }
 
+/*
+ rs is a pointer to the first element of the decimal128 array
+ vs is a pointer to the first element of the decimal64 array
+ zs is a pointer to the first element of the int64_t array
+*/
+int32_t Decimal64_VecSumToDecimal128(int64_t *rs, int64_t *vs, int64_t start, int64_t count, uint64_t *vps ,int64_t *zs, uint64_t *nulls) {
+    for (uint64_t i = 0; i < count; i++) {
+        if (vps[i] == 0) {
+            continue;
+        }
+        if (Bitmap_Contains(nulls, i+start)){
+            continue;
+        }
+
+        decQuad tmp1;
+        int ret = Decimal64_ToDecimal128((int64_t *) &tmp1, vs + i + start);
+        if (ret != RC_SUCCESS) {
+            return ret;
+        }
+
+        ret = Decimal128_MulInt64(Int64tPtr(&tmp1) , Int64tPtr(&tmp1), zs[i + start]);
+        if (ret != RC_SUCCESS) {
+            return ret;
+        }
+
+        ret = Decimal128_Add(rs + (vps[i] - 1)*2, rs + (vps[i] - 1)*2, Int64tPtr(&tmp1));
+        if (ret != RC_SUCCESS) {
+            return ret;
+        }
+    }
+    return RC_SUCCESS;
+}
 
 int32_t Decimal128_VecSum(int64_t *rs, int64_t *vs, int64_t start, int64_t count, uint64_t *vps ,int64_t *zs, uint64_t *nulls) {
     for (uint64_t i = 0; i < count; i++) {
