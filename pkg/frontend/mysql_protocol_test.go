@@ -1709,6 +1709,74 @@ func TestSendPrepareResponse(t *testing.T) {
 	})
 }
 
+func FuzzParseExecuteData(f *testing.F) {
+
+	convey.Convey("send parseExecuteData succ", f, func() {
+		ctrl := gomock.NewController(f)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			f.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+
+		st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), "select ?, 1")
+		stmts, err := mysql.Parse(st.Sql)
+		if err != nil {
+			f.Error(err)
+		}
+		preparePlan, err := buildPlan(nil, st)
+		if err != nil {
+			f.Error(err)
+		}
+		prepareStmt := &PrepareStmt{
+			Name:        preparePlan.GetDcl().GetPrepare().GetName(),
+			PreparePlan: preparePlan,
+			PrepareStmt: stmts[0],
+		}
+
+		var testData []byte
+		testData = append(testData, 0)          //flag
+		testData = append(testData, 0, 0, 0, 0) // skip iteration-count
+		nullBitmapLen := (1 + 7) >> 3
+		//nullBitmapLen
+		for i := 0; i < nullBitmapLen; i++ {
+			testData = append(testData, 0)
+		}
+		testData = append(testData, 1)                       // new param bound flag
+		testData = append(testData, defines.MYSQL_TYPE_TINY) // type
+		testData = append(testData, 0)                       //is unsigned
+		testData = append(testData, 10)                      //tiny value
+
+		f.Add(testData)
+
+		testData = []byte{}
+		testData = append(testData, 0)          //flag
+		testData = append(testData, 0, 0, 0, 0) // skip iteration-count
+		nullBitmapLen = (1 + 7) >> 3
+		//nullBitmapLen
+		for i := 0; i < nullBitmapLen; i++ {
+			testData = append(testData, 0)
+		}
+		testData = append(testData, 1)                       // new param bound flag
+		testData = append(testData, defines.MYSQL_TYPE_TINY) // type
+		testData = append(testData, 0)                       //is unsigned
+		testData = append(testData, 4)                       //tiny value
+		f.Add(testData)
+
+		f.Fuzz(func(t *testing.T, data []byte) {
+			proto.ParseExecuteData(prepareStmt, testData, 0)
+		})
+
+	})
+}
+
 func TestParseExecuteData(t *testing.T) {
 	convey.Convey("send parseExecuteData succ", t, func() {
 		ctrl := gomock.NewController(t)
