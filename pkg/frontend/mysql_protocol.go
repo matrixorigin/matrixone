@@ -376,7 +376,6 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(stmt *PrepareStmt) error {
 	columns := plan2.GetResultColumnsFromPlan(stmt.PreparePlan)
 	numColumns := len(columns)
 
-	// data := make([]byte, 12)
 	var data []byte
 	// status ok
 	data = append(data, 0)
@@ -395,41 +394,47 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(stmt *PrepareStmt) error {
 	}
 
 	cmd := int(COM_STMT_PREPARE)
+	for i := 0; i < numParams; i++ {
+		column := new(MysqlColumn)
+		column.SetName("?")
+
+		err = convertEngineTypeToMysqlType(types.T(paramTypes[i]), column)
+		if err != nil {
+			return err
+		}
+
+		err = mp.SendColumnDefinitionPacket(column, cmd)
+		if err != nil {
+			return err
+		}
+	}
 	if numParams > 0 {
-		for i := 0; i < numParams; i++ {
-			column := new(MysqlColumn)
-			column.SetName("?")
-
-			err = convertEngineTypeToMysqlType(types.T(paramTypes[i]), column)
-			if err != nil {
-				return err
-			}
-			mp.SendColumnDefinitionPacket(column, cmd)
-		}
-
 		if err := mp.SendEOFPacketIf(0, 0); err != nil {
 			return err
 		}
 	}
 
+	for i := 0; i < numColumns; i++ {
+		column := new(MysqlColumn)
+		column.SetName(columns[i].Name)
+
+		err = convertEngineTypeToMysqlType(types.T(columns[i].Typ.Id), column)
+		if err != nil {
+			return err
+		}
+
+		err = mp.SendColumnDefinitionPacket(column, cmd)
+		if err != nil {
+			return err
+		}
+	}
 	if numColumns > 0 {
-		for i := 0; i < numColumns; i++ {
-			column := new(MysqlColumn)
-			column.SetName(columns[i].Name)
-
-			err = convertEngineTypeToMysqlType(types.T(columns[i].Typ.Id), column)
-			if err != nil {
-				return err
-			}
-			mp.SendColumnDefinitionPacket(column, cmd)
-		}
-
 		if err := mp.SendEOFPacketIf(0, 0); err != nil {
 			return err
 		}
 	}
 
-	return mp.flushOutBuffer()
+	return nil
 }
 
 func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
@@ -440,8 +445,12 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 	}
 	numParams := len(dcPrepare.Prepare.ParamTypes)
 
-	flag := data[pos]
-	pos++
+	var flag uint8
+	flag, pos, ok = mp.io.ReadUint8(data, pos)
+	if !ok {
+		err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+		return
+	}
 	if flag != 0 {
 		// TODO only support CURSOR_TYPE_NO_CURSOR flag now
 		err = moerr.NewError(moerr.INVALID_INPUT, fmt.Sprintf("unsupported flag %d", flag))
@@ -457,27 +466,39 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			paramValues []byte
 		)
 		nullBitmapLen := (numParams + 7) >> 3
-		if len(data) < (pos + nullBitmapLen + 1) {
+		nullBitmaps, pos, ok = mp.readCountOfBytes(data, pos, nullBitmapLen)
+		if !ok {
 			err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
 			return
 		}
-		nullBitmaps = data[pos : pos+nullBitmapLen]
-		pos += nullBitmapLen
+
+		// if len(data) < (pos + nullBitmapLen + 1) {
+		// 	err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+		// 	return
+		// }
+		// nullBitmaps = data[pos : pos+nullBitmapLen]
+		// pos += nullBitmapLen
 
 		// new param bound flag
 		if data[pos] == 1 {
 			pos++
-			if len(data) < (pos + (numParams << 1)) {
+
+			stmt.ParamTypes, pos, ok = mp.readCountOfBytes(data, pos, numParams<<1)
+			if !ok {
 				err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
 				return
 			}
-			// Just the first StmtExecute packet contain parameters type,
-			// we need save it for further use.
-			stmt.ParamTypes = data[pos : pos+(numParams<<1)]
-			pos += numParams << 1
-			paramValues = data[pos:]
+
+			// if len(data) < (pos + (numParams << 1)) {
+			// 	err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+			// 	return
+			// }
+			// // Just the first StmtExecute packet contain parameters type,
+			// // we need save it for further use.
+			// stmt.ParamTypes = data[pos : pos+(numParams<<1)]
+			// pos += numParams << 1
 		} else {
-			paramValues = data[pos+1:]
+			pos++
 		}
 
 		// get paramters and set value to session variables
@@ -563,24 +584,26 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				}
 
 			case defines.MYSQL_TYPE_FLOAT:
-				if len(paramValues) < (pos + 4) {
+				val, newPos, ok := mp.io.ReadUint32(data, pos)
+				if !ok {
 					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
 					return
 				}
-
-				val := math.Float32frombits(binary.LittleEndian.Uint32(paramValues[pos : pos+4]))
-				vars[i] = val
-				pos += 4
+				pos = newPos
+				vars[i] = math.Float32frombits(val)
 
 			case defines.MYSQL_TYPE_DOUBLE:
+				val, newPos, ok := mp.io.ReadUint64(data, pos)
+				if !ok {
+					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+					return
+				}
+				pos = newPos
+				vars[i] = math.Float64frombits(val)
 				if len(paramValues) < (pos + 4) {
 					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
 					return
 				}
-
-				val := math.Float64frombits(binary.LittleEndian.Uint64(paramValues[pos : pos+8]))
-				vars[i] = val
-				pos += 4
 
 			case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_DECIMAL,
 				defines.MYSQL_TYPE_ENUM, defines.MYSQL_TYPE_SET, defines.MYSQL_TYPE_GEOMETRY, defines.MYSQL_TYPE_BIT:
@@ -603,14 +626,14 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 
 			case defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
 				// Not tested
-				if len(paramValues) < (pos + 1) {
+				// See https://dev.mysql.com/doc/internals/en/binary-protocol-value.html
+				// for more details.
+				length, newPos, ok := mp.io.ReadUint8(data, pos)
+				if !ok {
 					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
 					return
 				}
-				// See https://dev.mysql.com/doc/internals/en/binary-protocol-value.html
-				// for more details.
-				length := paramValues[pos]
-				pos++
+				pos = newPos
 				switch length {
 				case 0:
 					vars[i] = "0000-00-00 00:00:00"

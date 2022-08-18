@@ -85,6 +85,9 @@ func getPrepareStmtName(stmtID uint32) string {
 
 func GetPrepareStmtID(name string) (int, error) {
 	idx := len(prefixPrepareStmtName) + 1
+	if idx >= len(name) {
+		return -1, moerr.NewError(moerr.INTERNAL_ERROR, "can not get prepare stmtID")
+	}
 	return strconv.Atoi(name[idx:])
 }
 
