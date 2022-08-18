@@ -511,16 +511,27 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RP
 	mf := func() morpc.Message {
 		return pool.Get().(*RPCResponse)
 	}
+
+	// construct morpc.BackendOption
+	backendOpts := []morpc.BackendOption{
+		morpc.WithBackendConnectWhenCreate(),
+		morpc.WithBackendConnectTimeout(time.Second),
+	}
+	backendOpts = append(backendOpts, GetBackendOptions(ctx)...)
+
+	// construct morpc.ClientOption
+	clientOpts := []morpc.ClientOption{
+		morpc.WithClientInitBackends([]string{target}, []int{1}),
+		morpc.WithClientMaxBackendPerHost(1),
+	}
+	clientOpts = append(clientOpts, GetClientOptions(ctx)...)
+
 	// we set connection timeout to a constant value so if ctx's deadline is much
 	// larger, then we can ensure that all specified potential nodes have a chance
 	// to be attempted
 	codec := morpc.NewMessageCodec(mf, defaultWriteSocketSize)
-	bf := morpc.NewGoettyBasedBackendFactory(codec,
-		morpc.WithBackendConnectWhenCreate(),
-		morpc.WithBackendConnectTimeout(time.Second))
-	return morpc.NewClient(bf,
-		morpc.WithClientInitBackends([]string{target}, []int{1}),
-		morpc.WithClientMaxBackendPerHost(1))
+	bf := morpc.NewGoettyBasedBackendFactory(codec, backendOpts...)
+	return morpc.NewClient(bf, clientOpts...)
 }
 
 func getTimeoutFromContext(ctx context.Context) (time.Duration, error) {

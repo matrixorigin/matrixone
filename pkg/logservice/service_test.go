@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -56,7 +57,11 @@ func runServiceTest(t *testing.T,
 	defer leaktest.AfterTest(t)()
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	service, err := NewService(cfg)
+	service, err := NewService(cfg,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
 	require.NoError(t, err)
 	peers := make(map[uint64]dragonboat.Target)
 	peers[1] = service.ID()
@@ -79,7 +84,11 @@ func TestNewService(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	service, err := NewService(cfg)
+	service, err := NewService(cfg,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
 	require.NoError(t, err)
 	assert.NoError(t, service.Close())
 }
@@ -508,7 +517,11 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		DisableWorkers:      true,
 	}
 	cfg1.Fill()
-	service1, err := NewService(cfg1)
+	service1, err := NewService(cfg1,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, service1.Close())
@@ -517,7 +530,11 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	peers1[1] = service1.ID()
 	assert.NoError(t, service1.store.startReplica(1, 1, peers1, false))
 	cfg2.Fill()
-	service2, err := NewService(cfg2)
+	service2, err := NewService(cfg2,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, service2.Close())
@@ -629,7 +646,11 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 		}
 		cfg.GossipProbeInterval.Duration = 350 * time.Millisecond
 		configs = append(configs, cfg)
-		service, err := NewService(cfg)
+		service, err := NewService(cfg,
+			WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+				return true
+			}),
+		)
 		require.NoError(t, err)
 		services = append(services, service)
 	}
@@ -732,7 +753,11 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 	require.NoError(t, services[12].Close())
 	services[12] = nil
 	time.Sleep(2 * time.Second)
-	service, err := NewService(configs[12])
+	service, err := NewService(configs[12],
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, service.Close())
