@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -36,11 +35,23 @@ type Service interface {
 	Close() error
 }
 
+type EngineType string
+
+const (
+	EngineTAE            EngineType = "tae"
+	EngineDistributedTAE EngineType = "distributed-tae"
+	EngineMemory         EngineType = "memory"
+)
+
 // Config cn service
 type Config struct {
 	// ListenAddress listening address for receiving external requests
 	ListenAddress string `toml:"listen-address"`
 	// FileService file service configuration
+
+	Engine struct {
+		Type EngineType `toml:"type"`
+	}
 
 	FileService struct {
 		// Backend file service backend implementation. [Mem|DISK|S3|MINIO]. Default is DISK.
@@ -85,7 +96,6 @@ type service struct {
 	logger             *zap.Logger
 	server             morpc.RPCServer
 	cancelMoServerFunc context.CancelFunc
-	engine             engine.Engine
 	mo                 *frontend.MOServer
 	hakeeperClient     logservice.CNHAKeeperClient
 	txnSender          rpc.TxnSender

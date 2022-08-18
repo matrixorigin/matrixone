@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	goErrors "errors"
 	"fmt"
+	"hash/fnv"
 
 	"os"
 	"runtime/pprof"
@@ -152,9 +153,12 @@ func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, 
 	sessInfo := proc.SessionInfo
 	txnID := uint64(0)
 	if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
-		//TODO
-		//id ;= handler.GetTxn().Txn().ID
-		txnID = 42
+		idBytes := handler.GetTxn().Txn().ID
+		hasher := fnv.New64()
+		if _, err := hasher.Write(idBytes); err != nil {
+			panic(err)
+		}
+		txnID = hasher.Sum64()
 	}
 	trace.ReportStatement(
 		ctx,
@@ -868,7 +872,7 @@ func (mce *MysqlCmdExecutor) handleChangeDB(requestCtx context.Context, db strin
 	ses := mce.GetSession()
 	txnHandler := ses.GetTxnHandler()
 	//TODO: check meta data
-	if _, err := ses.Pu.StorageEngine.Database(requestCtx, db, txnHandler.GetTxn().AsEngineMethodArgument()); err != nil {
+	if _, err := ses.Pu.StorageEngine.Database(requestCtx, db, txnHandler.GetTxn()); err != nil {
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, db)
 	}
@@ -981,7 +985,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 	if ses.InMultiStmtTransactionMode() {
 		return fmt.Errorf("do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
 	}
-	dbHandler, err := ses.GetStorage().Database(requestCtx, loadDb, txnHandler.GetTxn().AsEngineMethodArgument())
+	dbHandler, err := ses.GetStorage().Database(requestCtx, loadDb, txnHandler.GetTxn())
 	if err != nil {
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, loadDb)
@@ -1044,7 +1048,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl
 		if mce.tableInfos == nil || mce.db != dbName {
 			txnHandler := ses.GetTxnHandler()
 			eng := ses.GetStorage()
-			db, err := eng.Database(requestCtx, dbName, txnHandler.GetTxn().AsEngineMethodArgument())
+			db, err := eng.Database(requestCtx, dbName, txnHandler.GetTxn())
 			if err != nil {
 				return err
 			}
@@ -1629,7 +1633,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 	cwft.proc.UnixTime = time.Now().UnixNano()
 	txnHandler := cwft.ses.GetTxnHandler()
-	cwft.proc.Snapshot = txnHandler.GetTxn().ToBytes()
+	cwft.proc.TxnOperator = txnHandler.GetTxn()
 	cwft.compile = compile.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), requestCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
 	err = cwft.compile.Compile(cwft.plan, cwft.ses, fill)
 	if err != nil {

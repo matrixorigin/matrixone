@@ -27,20 +27,9 @@ import (
 )
 
 type (
-	TxnOperator interface {
-		client.TxnOperator
-
-		// for compatibility
-		AsEngineMethodArgument() client.TxnOperator
-		ToBytes() []byte
-	}
-
-	TxnClient interface {
-		New(options ...TxnOption) TxnOperator
-		NewWithSnapshot(snapshot []byte) (TxnOperator, error)
-	}
-
-	TxnOption = client.TxnOption
+	TxnOperator = client.TxnOperator
+	TxnClient   = client.TxnClient
+	TxnOption   = client.TxnOption
 )
 
 type ComputationRunner interface {

@@ -64,7 +64,7 @@ func NewService(cfg *Config, ctx context.Context) (Service, error) {
 	server.RegisterRequestHandler(srv.handleRequest)
 	srv.server = server
 
-	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil, nil)
+	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil, nil, nil)
 	cfg.Frontend.SetDefaultValues()
 	err = srv.initMOServer(ctx, pu)
 	if err != nil {
@@ -115,26 +115,40 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
 
 	fmt.Println("Initialize the engine ...")
-	err = s.initEngine(ctx, pu)
+	err = s.initEngine(ctx, cancelMoServerCtx, pu)
 	if err != nil {
 		return err
 	}
-
-	err = frontend.InitTAE(cancelMoServerCtx, s.engine)
-	if err != nil {
-		return err
-	}
-	fmt.Println("Initialize the engine Done")
 
 	s.createMOServer(cancelMoServerCtx, pu)
 
 	return nil
 }
 
-func (s *service) initEngine(ctx context.Context, pu *config.ParameterUnit) error {
-	//TODO: initialize the engine
-	pu.StorageEngine = nil
-	s.engine = nil
+func (s *service) initEngine(
+	ctx context.Context,
+	cancelMoServerCtx context.Context,
+	pu *config.ParameterUnit,
+) error {
+
+	switch s.cfg.Engine.Type {
+
+	case EngineTAE:
+		if err := initTAE(cancelMoServerCtx, pu); err != nil {
+			return err
+		}
+
+	case EngineDistributedTAE:
+		//TODO
+
+	case EngineMemory:
+		//TODO
+
+	default:
+		return fmt.Errorf("unknown engine type: %s", s.cfg.Engine.Type)
+
+	}
+
 	return nil
 }
 

@@ -16,7 +16,9 @@ package config
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
@@ -336,16 +338,27 @@ type ParameterUnit struct {
 	//Storage Engine
 	StorageEngine engine.Engine
 
+	//TxnClient
+	TxnClient client.TxnClient
+
 	//Cluster Nodes
 	ClusterNodes engine.Nodes
 }
 
-func NewParameterUnit(sv *FrontendParameters, hostMmu *host.Mmu, mempool *mempool.Mempool, storageEngine engine.Engine, clusterNodes engine.Nodes) *ParameterUnit {
+func NewParameterUnit(
+	sv *FrontendParameters,
+	hostMmu *host.Mmu,
+	mempool *mempool.Mempool,
+	storageEngine engine.Engine,
+	txnClient client.TxnClient,
+	clusterNodes engine.Nodes,
+) *ParameterUnit {
 	return &ParameterUnit{
 		SV:            sv,
 		HostMmu:       hostMmu,
 		Mempool:       mempool,
 		StorageEngine: storageEngine,
+		TxnClient:     txnClient,
 		ClusterNodes:  clusterNodes,
 	}
 }

@@ -53,17 +53,10 @@ type TxnHandler struct {
 	txn       TxnOperator
 }
 
-func InitTxnHandler(storage engine.Engine) *TxnHandler {
+func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
 	h := &TxnHandler{
-		storage: storage,
-	}
-	if storage != nil {
-		if tae, ok := storage.(moengine.TxnEngine); ok {
-			//TODO this should be a real TxnClient
-			h.txnClient = &wrappedTAEEngine{
-				engine: tae,
-			}
-		}
+		storage:   storage,
+		txnClient: txnClient,
 	}
 	return h
 }
@@ -121,7 +114,7 @@ type Session struct {
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
-	txnHandler := InitTxnHandler(PU.StorageEngine)
+	txnHandler := InitTxnHandler(PU.StorageEngine, PU.TxnClient)
 	ses := &Session{
 		protocol: proto,
 		GuestMmu: gm,
@@ -613,8 +606,7 @@ func (th *TxnHandler) NewTxn() error {
 	}
 	th.SetInvalid()
 	if th.txnClient == nil {
-		// ignore
-		return nil
+		panic("must set txn client")
 	}
 	th.txn, err = th.txnClient.NewWithSnapshot(nil)
 	if err != nil {
@@ -723,7 +715,7 @@ func (tcc *TxnCompilerContext) GetRootSql() string {
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	var err error
 	//open database
-	_, err = tcc.txnHandler.GetStorage().Database(tcc.ses.GetRequestContext(), name, tcc.txnHandler.GetTxn().AsEngineMethodArgument())
+	_, err = tcc.txnHandler.GetStorage().Database(tcc.ses.GetRequestContext(), name, tcc.txnHandler.GetTxn())
 	if err != nil {
 		logutil.Errorf("get database %v failed. error %v", name, err)
 		return false
@@ -740,7 +732,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 
 	ctx := tcc.ses.GetRequestContext()
 	//open database
-	db, err := tcc.txnHandler.GetStorage().Database(ctx, dbName, tcc.txnHandler.GetTxn().AsEngineMethodArgument())
+	db, err := tcc.txnHandler.GetStorage().Database(ctx, dbName, tcc.txnHandler.GetTxn())
 	if err != nil {
 		logutil.Errorf("get database %v error %v", dbName, err)
 		return nil, err
