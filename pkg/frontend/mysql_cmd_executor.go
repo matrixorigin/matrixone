@@ -1425,13 +1425,42 @@ func (mce *MysqlCmdExecutor) handlePrepareStmt(st *tree.PrepareStmt) (*PrepareSt
 	if err != nil {
 		return nil, err
 	}
+
 	prepareStmt := &PrepareStmt{
 		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
 		PreparePlan: preparePlan,
-		PrepareStmt: st,
+		PrepareStmt: st.Stmt,
 	}
-	err = mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
 
+	err = mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
+	return prepareStmt, err
+}
+
+// handlePrepareString
+func (mce *MysqlCmdExecutor) handlePrepareString(st *tree.PrepareString) (*PrepareStmt, error) {
+	stmts, err := mysql.Parse(st.Sql)
+	if err != nil {
+		return nil, err
+	}
+	switch stmts[0].(type) {
+	case *tree.Update:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+	case *tree.Delete:
+		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
+	}
+
+	preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
+	if err != nil {
+		return nil, err
+	}
+
+	prepareStmt := &PrepareStmt{
+		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
+		PreparePlan: preparePlan,
+		PrepareStmt: stmts[0],
+	}
+
+	err = mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
 	return prepareStmt, err
 }
 
@@ -1856,12 +1885,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.PrepareString:
 			selfHandle = true
-			stmts, err := mysql.Parse(st.Sql)
-			if err != nil {
-				goto handleFailed
-			}
-			newSt := tree.NewPrepareStmt(st.Name, stmts[0])
-			prepareStmt, err = mce.handlePrepareStmt(newSt)
+			prepareStmt, err = mce.handlePrepareString(st)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2203,13 +2227,14 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		return resp, nil
 
 	case COM_STMT_PREPARE:
+		mce.ses.Cmd = int(COM_STMT_PREPARE)
 		sql := string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 
 		// rewrite to "prepare stmt_name from 'xxx'"
 		newLastStmtID := mce.ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
-		sql = fmt.Sprintf("prepare %s from '%s'", newStmtName, sql)
+		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
 
 		err := mce.doComQuery(requestCtx, sql)
 		if err != nil {
@@ -2253,6 +2278,9 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 func (mce *MysqlCmdExecutor) parseStmtExecute(data []byte) (string, error) {
 	// see https://dev.mysql.com/doc/internals/en/com-stmt-execute.html
 	pos := 0
+	if len(data) < 4 {
+		return "", moerr.NewError(moerr.INVALID_INPUT, "error malform packet")
+	}
 	stmtID := binary.LittleEndian.Uint32(data[0:4])
 	pos += 4
 
@@ -2261,14 +2289,18 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(data []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sql, names, vars, err := mce.ses.GetMysqlProtocol().ParseExecuteData(preStmt, data, pos)
+	names, vars, err := mce.ses.GetMysqlProtocol().ParseExecuteData(preStmt, data, pos)
 	if err != nil {
 		return "", err
 	}
-	for i := 0; i < len(names); i++ {
-		err := mce.ses.SetSessionVar(names[i], vars[i])
-		if err != nil {
-			return "", err
+	sql := fmt.Sprintf("execute %s", stmtName)
+	if len(names) > 0 {
+		sql = sql + fmt.Sprintf(" using @%s", strings.Join(names, ",@"))
+		for i := 0; i < len(names); i++ {
+			err := mce.ses.SetUserDefinedVar(names[i], vars[i])
+			if err != nil {
+				return "", err
+			}
 		}
 	}
 	return sql, nil

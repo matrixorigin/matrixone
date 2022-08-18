@@ -166,8 +166,8 @@ func (ip *internalProtocol) IsEstablished() bool {
 	return true
 }
 
-func (ip *internalProtocol) ParseExecuteData(stmt *PrepareStmt, data []byte, pos int) (sql string, names []string, vars []any, err error) {
-	return "", nil, nil, nil
+func (ip *internalProtocol) ParseExecuteData(stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
+	return nil, nil, nil
 }
 
 func (ip *internalProtocol) SendPrepareResponse(stmt *PrepareStmt) error {

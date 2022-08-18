@@ -169,9 +169,7 @@ type MysqlProtocol interface {
 
 	GetStats() string
 
-	ParseExecuteData(stmt *PrepareStmt, data []byte, pos int) (sql string, names []string, vars []any, err error)
-
-	SendPrepareResponse(stmt *PrepareStmt) error
+	ParseExecuteData(stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error)
 }
 
 var _ MysqlProtocol = &MysqlProtocolImpl{}
@@ -378,7 +376,8 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(stmt *PrepareStmt) error {
 	columns := plan2.GetResultColumnsFromPlan(stmt.PreparePlan)
 	numColumns := len(columns)
 
-	data := make([]byte, 4, 128)
+	// data := make([]byte, 12)
+	var data []byte
 	// status ok
 	data = append(data, 0)
 	// stmt id
@@ -433,7 +432,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(stmt *PrepareStmt) error {
 	return mp.flushOutBuffer()
 }
 
-func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, pos int) (sql string, names []string, vars []any, err error) {
+func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
 		err = moerr.NewError(moerr.INTERNAL_ERROR, "can not get prepare plan in prepareStmt")
@@ -481,12 +480,12 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			paramValues = data[pos+1:]
 		}
 
-		sql = fmt.Sprintf("execute %s using", stmt.Name)
 		// get paramters and set value to session variables
+		names = make([]string, numParams)
+		vars = make([]any, numParams)
 		for i := 0; i < numParams; i++ {
 			varName := getPrepareStmtSessionVarName(i)
 			names[i] = varName
-			sql = sql + " @" + varName
 
 			// TODO :if params had received via COM_STMT_SEND_LONG_DATA, use them directly.
 			// ref https://dev.mysql.com/doc/internals/en/com-stmt-send-long-data.html
@@ -609,9 +608,8 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				return
 			}
 		}
-	} else {
-		sql = fmt.Sprintf("execute %s", stmt.Name)
 	}
+
 	return
 }
 
