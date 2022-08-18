@@ -72,6 +72,7 @@ type PrepareStmt struct {
 	Name        string
 	PreparePlan *plan.Plan
 	PrepareStmt tree.Statement
+	ParamTypes  []byte
 }
 
 /*
