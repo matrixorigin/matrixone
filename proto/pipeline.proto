@@ -52,6 +52,15 @@ message Group {
     repeated Aggregate  aggs = 6;
 }
 
+message Join {
+    uint64 ibucket = 1;
+    uint64 nbucket = 2;
+    repeated int32 rel_list = 3;
+    repeated int32 col_list = 4;
+    repeated plan.Expr left_cond = 5;
+    repeated plan.Expr right_cond = 6;
+}
+
 message AntiJoin{
     uint64 ibucket = 1;
     uint64 nbucket = 2;
@@ -114,12 +123,13 @@ message Instruction{
     LeftJoin  left_join = 7;
     SemiJoin  semi_join = 8;
     SingleJoin single_join = 9;
-    Product    product = 10;
-	repeated plan.OrderBySpec order_by = 11;
-    repeated plan.Expr    project_list = 12;
-    plan.Expr    filter = 13;
-    uint64    limit = 14;
-    uint64    offset = 15;
+    Join    join = 10;
+    Product    product = 11;
+	repeated plan.OrderBySpec order_by = 12;
+    repeated plan.Expr    project_list = 13;
+    plan.Expr    filter = 14;
+    uint64    limit = 15;
+    uint64    offset = 16;
 }
 
 message Source {

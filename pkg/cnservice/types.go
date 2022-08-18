@@ -15,9 +15,9 @@
 package cnservice
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"go.uber.org/zap"
 )
@@ -38,6 +38,10 @@ type Config struct {
 		// S3 s3 configuration
 		S3 fileservice.S3Config `toml:"s3"`
 	}
+	// buffer related.
+	PayLoadCopyBufferSize int
+	ReadBufferSize        int
+	WriteBufferSize       int
 	// Pipeline configuration
 	Pipeline struct {
 		// HostSize is the memory limit
@@ -54,8 +58,13 @@ type Config struct {
 }
 
 type service struct {
-	cfg    *Config
-	pool   *sync.Pool
-	logger *zap.Logger
+	cfg *Config
+
 	server morpc.RPCServer
+	// requestHandler method to handle the request message
+	requestHandler func(message morpc.Message, cs morpc.ClientSession) error
+
+	requestPool  *sync.Pool
+	responsePool *sync.Pool
+	logger       *zap.Logger
 }
