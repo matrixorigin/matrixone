@@ -458,7 +458,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 		)
 		nullBitmapLen := (numParams + 7) >> 3
 		if len(data) < (pos + nullBitmapLen + 1) {
-			err = moerr.NewError(moerr.INVALID_INPUT, "error malform packet")
+			err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
 			return
 		}
 		nullBitmaps = data[pos : pos+nullBitmapLen]
@@ -468,7 +468,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 		if data[pos] == 1 {
 			pos++
 			if len(data) < (pos + (numParams << 1)) {
-				err = moerr.NewError(moerr.INVALID_INPUT, "error malform packet")
+				err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
 				return
 			}
 			// Just the first StmtExecute packet contain parameters type,
@@ -496,7 +496,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			}
 
 			if (i<<1)+1 >= len(stmt.ParamTypes) {
-				err = moerr.NewError(moerr.INVALID_INPUT, "error malform packet")
+				err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
 				return
 			}
 			tp := stmt.ParamTypes[i<<1]
@@ -509,7 +509,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			case defines.MYSQL_TYPE_TINY:
 				val, newPos, ok := mp.io.ReadUint8(data, pos)
 				if !ok {
-					err = moerr.NewError(moerr.INVALID_INPUT, "error malform packet")
+					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
 					return
 				}
 
@@ -523,7 +523,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_YEAR:
 				val, newPos, ok := mp.io.ReadUint16(data, pos)
 				if !ok {
-					err = moerr.NewError(moerr.INVALID_INPUT, "error malform packet")
+					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
 					return
 				}
 
@@ -537,7 +537,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			case defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG:
 				val, newPos, ok := mp.io.ReadUint32(data, pos)
 				if !ok {
-					err = moerr.NewError(moerr.INVALID_INPUT, "error malform packet")
+					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
 					return
 				}
 
@@ -551,7 +551,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			case defines.MYSQL_TYPE_LONGLONG:
 				val, newPos, ok := mp.io.ReadUint64(data, pos)
 				if !ok {
-					err = moerr.NewError(moerr.INVALID_INPUT, "error malform packet")
+					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
 					return
 				}
 
@@ -564,7 +564,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 
 			case defines.MYSQL_TYPE_FLOAT:
 				if len(paramValues) < (pos + 4) {
-					err = moerr.NewError(moerr.INVALID_INPUT, "error malform packet")
+					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
 					return
 				}
 
@@ -574,7 +574,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 
 			case defines.MYSQL_TYPE_DOUBLE:
 				if len(paramValues) < (pos + 4) {
-					err = moerr.NewError(moerr.INVALID_INPUT, "error malform packet")
+					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
 					return
 				}
 
@@ -582,27 +582,59 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				vars[i] = val
 				pos += 4
 
-			case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
+			case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_DECIMAL,
 				defines.MYSQL_TYPE_ENUM, defines.MYSQL_TYPE_SET, defines.MYSQL_TYPE_GEOMETRY, defines.MYSQL_TYPE_BIT:
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
 				if !ok {
-					err = moerr.NewError(moerr.INVALID_INPUT, "error malform packet")
+					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
 					return
 				}
 				pos = newPos
 				vars[i] = val
+
 			case defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB:
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
 				if !ok {
-					err = moerr.NewError(moerr.INVALID_INPUT, "error malform packet")
+					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
 					return
 				}
 				pos = newPos
 				vars[i] = []byte(val)
+
 			case defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
-				//
-			case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
-				//
+				// Not tested
+				if len(paramValues) < (pos + 1) {
+					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+					return
+				}
+				// See https://dev.mysql.com/doc/internals/en/binary-protocol-value.html
+				// for more details.
+				length := paramValues[pos]
+				pos++
+				switch length {
+				case 0:
+					vars[i] = "0000-00-00 00:00:00"
+				case 4:
+					pos, vars[i] = mp.readDate(paramValues, pos)
+				case 7:
+					pos, vars[i] = mp.readDateTime(paramValues, pos)
+				case 11:
+					pos, vars[i] = mp.readTimestamp(paramValues, pos)
+				default:
+					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+					return
+				}
+
+			case defines.MYSQL_TYPE_NEWDECIMAL:
+				// use string for decimal.  Not tested
+				val, newPos, ok := mp.readStringLenEnc(data, pos)
+				if !ok {
+					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+					return
+				}
+				pos = newPos
+				vars[i] = val
+
 			default:
 				err = moerr.NewError(moerr.INTERNAL_ERROR, "unsupport parameter type")
 				return
@@ -611,6 +643,32 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 	}
 
 	return
+}
+
+func (mp *MysqlProtocolImpl) readDate(data []byte, pos int) (int, string) {
+	year, pos, _ := mp.io.ReadUint16(data, pos)
+	month := data[pos]
+	pos++
+	day := data[pos]
+	pos++
+	return pos, fmt.Sprintf("%04d-%02d-%02d", year, month, day)
+}
+
+func (mp *MysqlProtocolImpl) readDateTime(data []byte, pos int) (int, string) {
+	pos, date := mp.readDate(data, pos)
+	hour := data[pos]
+	pos++
+	minute := data[pos]
+	pos++
+	second := data[pos]
+	pos++
+	return pos, fmt.Sprintf("%s %02d:%02d:%02d", date, hour, minute, second)
+}
+
+func (mp *MysqlProtocolImpl) readTimestamp(data []byte, pos int) (int, string) {
+	pos, dateTime := mp.readDateTime(data, pos)
+	microSecond, pos, _ := mp.io.ReadUint32(data, pos)
+	return pos, fmt.Sprintf("%s.%06d", dateTime, microSecond)
 }
 
 // read an int with length encoded from the buffer at the position

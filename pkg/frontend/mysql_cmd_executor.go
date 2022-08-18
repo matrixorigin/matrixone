@@ -2279,7 +2279,7 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(data []byte) (string, error) {
 	// see https://dev.mysql.com/doc/internals/en/com-stmt-execute.html
 	pos := 0
 	if len(data) < 4 {
-		return "", moerr.NewError(moerr.INVALID_INPUT, "error malform packet")
+		return "", moerr.NewError(moerr.INVALID_INPUT, "malform packet")
 	}
 	stmtID := binary.LittleEndian.Uint32(data[0:4])
 	pos += 4
