@@ -12,29 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package loopleft
+package compile
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 )
 
-const (
-	Build = iota
-	Probe
-	End
-)
+var CNClient *cnservice.CNClient
 
-type container struct {
-	state int
-	bat   *batch.Batch
-}
-
-type Argument struct {
-	ctr    *container
-	Typs   []types.Type
-	Cond   *plan.Expr
-	Result []colexec.ResultPos
+func InitCNClient(ctx context.Context, cfg *cnservice.ClientConfig) error {
+	client, err := cnservice.NewCNClient(cfg)
+	if err != nil {
+		return err
+	}
+	CNClient = client.(*cnservice.CNClient)
+	return nil
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
@@ -47,15 +48,10 @@ type container struct {
 	mp *hashmap.StrHashMap
 }
 
-type ResultPos struct {
-	Rel int32
-	Pos int32
-}
-
 type Argument struct {
 	ctr        *container
 	Ibucket    uint64 // index in buckets
 	Nbucket    uint64 // buckets count
-	Result     []ResultPos
+	Result     []colexec.ResultPos
 	Conditions [][]*plan.Expr
 }

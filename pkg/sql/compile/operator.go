@@ -287,11 +287,11 @@ func constructTop(n *plan.Node, proc *process.Process) *top.Argument {
 	if err != nil {
 		panic(err)
 	}
-	fs := make([]top.Field, len(n.OrderBy))
+	fs := make([]colexec.Field, len(n.OrderBy))
 	for i, e := range n.OrderBy {
 		fs[i].E = e.Expr
 		if e.Flag == plan.OrderBySpec_DESC {
-			fs[i].Type = top.Descending
+			fs[i].Type = colexec.Descending
 		}
 	}
 	return &top.Argument{
@@ -301,7 +301,7 @@ func constructTop(n *plan.Node, proc *process.Process) *top.Argument {
 }
 
 func constructJoin(n *plan.Node, proc *process.Process) *join.Argument {
-	result := make([]join.ResultPos, len(n.ProjectList))
+	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
@@ -327,7 +327,7 @@ func constructSemi(n *plan.Node, proc *process.Process) *semi.Argument {
 }
 
 func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left.Argument {
-	result := make([]left.ResultPos, len(n.ProjectList))
+	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
@@ -339,7 +339,7 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 }
 
 func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *single.Argument {
-	result := make([]single.ResultPos, len(n.ProjectList))
+	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
@@ -351,7 +351,7 @@ func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *si
 }
 
 func constructProduct(n *plan.Node, proc *process.Process) *product.Argument {
-	result := make([]product.ResultPos, len(n.ProjectList))
+	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
@@ -374,11 +374,11 @@ func constructAnti(n *plan.Node, proc *process.Process) *anti.Argument {
 }
 
 func constructOrder(n *plan.Node, proc *process.Process) *order.Argument {
-	fs := make([]order.Field, len(n.OrderBy))
+	fs := make([]colexec.Field, len(n.OrderBy))
 	for i, e := range n.OrderBy {
 		fs[i].E = e.Expr
 		if e.Flag == plan.OrderBySpec_DESC {
-			fs[i].Type = order.Descending
+			fs[i].Type = colexec.Descending
 		}
 	}
 	return &order.Argument{
@@ -475,11 +475,11 @@ func constructMergeTop(n *plan.Node, proc *process.Process) *mergetop.Argument {
 	if err != nil {
 		panic(err)
 	}
-	fs := make([]top.Field, len(n.OrderBy))
+	fs := make([]colexec.Field, len(n.OrderBy))
 	for i, e := range n.OrderBy {
 		fs[i].E = e.Expr
 		if e.Flag == plan.OrderBySpec_DESC {
-			fs[i].Type = top.Descending
+			fs[i].Type = colexec.Descending
 		}
 	}
 	return &mergetop.Argument{
@@ -509,11 +509,11 @@ func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argume
 }
 
 func constructMergeOrder(n *plan.Node, proc *process.Process) *mergeorder.Argument {
-	fs := make([]order.Field, len(n.OrderBy))
+	fs := make([]colexec.Field, len(n.OrderBy))
 	for i, e := range n.OrderBy {
 		fs[i].E = e.Expr
 		if e.Flag == plan.OrderBySpec_DESC {
-			fs[i].Type = order.Descending
+			fs[i].Type = colexec.Descending
 		}
 	}
 	return &mergeorder.Argument{
@@ -522,7 +522,7 @@ func constructMergeOrder(n *plan.Node, proc *process.Process) *mergeorder.Argume
 }
 
 func constructLoopJoin(n *plan.Node, proc *process.Process) *loopjoin.Argument {
-	result := make([]loopjoin.ResultPos, len(n.ProjectList))
+	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
@@ -548,7 +548,7 @@ func constructLoopSemi(n *plan.Node, proc *process.Process) *loopsemi.Argument {
 }
 
 func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *loopleft.Argument {
-	result := make([]loopleft.ResultPos, len(n.ProjectList))
+	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
@@ -560,7 +560,7 @@ func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *
 }
 
 func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process) *loopsingle.Argument {
-	result := make([]loopsingle.ResultPos, len(n.ProjectList))
+	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}

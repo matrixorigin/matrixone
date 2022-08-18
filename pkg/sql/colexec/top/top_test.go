@@ -16,6 +16,7 @@ package top
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -49,9 +50,9 @@ func init() {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	tcs = []topTestCase{
-		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, 3, []Field{{E: newExpression(0), Type: 0}}),
-		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, 3, []Field{{E: newExpression(0), Type: 2}}),
-		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, 3, []Field{{E: newExpression(0), Type: 2}, {E: newExpression(1), Type: 0}}),
+		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, 3, []colexec.Field{{E: newExpression(0), Type: 0}}),
+		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, 3, []colexec.Field{{E: newExpression(0), Type: 2}}),
+		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, 3, []colexec.Field{{E: newExpression(0), Type: 2}, {E: newExpression(1), Type: 0}}),
 	}
 }
 
@@ -95,8 +96,8 @@ func BenchmarkTop(b *testing.B) {
 		hm := host.New(1 << 30)
 		gm := guest.New(1<<30, hm)
 		tcs = []topTestCase{
-			newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, 3, []Field{{E: newExpression(0), Type: 0}}),
-			newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, 3, []Field{{E: newExpression(0), Type: 2}}),
+			newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, 3, []colexec.Field{{E: newExpression(0), Type: 0}}),
+			newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, 3, []colexec.Field{{E: newExpression(0), Type: 2}}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
@@ -117,7 +118,7 @@ func BenchmarkTop(b *testing.B) {
 	}
 }
 
-func newTestCase(m *mheap.Mheap, ts []types.Type, limit int64, fs []Field) topTestCase {
+func newTestCase(m *mheap.Mheap, ts []types.Type, limit int64, fs []colexec.Field) topTestCase {
 	return topTestCase{
 		types: ts,
 		proc:  process.New(m),
@@ -139,6 +140,6 @@ func newExpression(pos int32) *plan.Expr {
 }
 
 // create a new block based on the type information
-func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(_ *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp)
 }

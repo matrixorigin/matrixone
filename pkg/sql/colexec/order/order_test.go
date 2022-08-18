@@ -16,6 +16,7 @@ package order
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -49,10 +50,10 @@ func init() {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	tcs = []orderTestCase{
-		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []Field{{E: newExpression(0), Type: 0}}),
-		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []Field{{E: newExpression(0), Type: 2}}),
-		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []Field{{E: newExpression(0), Type: 0}, {E: newExpression(1), Type: 0}}),
-		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []Field{{E: newExpression(0), Type: 2}, {E: newExpression(1), Type: 2}}),
+		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []colexec.Field{{E: newExpression(0), Type: 0}}),
+		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []colexec.Field{{E: newExpression(0), Type: 2}}),
+		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []colexec.Field{{E: newExpression(0), Type: 0}, {E: newExpression(1), Type: 0}}),
+		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []colexec.Field{{E: newExpression(0), Type: 2}, {E: newExpression(1), Type: 2}}),
 	}
 }
 
@@ -97,8 +98,8 @@ func BenchmarkOrder(b *testing.B) {
 		hm := host.New(1 << 30)
 		gm := guest.New(1<<30, hm)
 		tcs = []orderTestCase{
-			newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []Field{{E: newExpression(0), Type: 0}}),
-			newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []Field{{E: newExpression(0), Type: 2}}),
+			newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []colexec.Field{{E: newExpression(0), Type: 0}}),
+			newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []colexec.Field{{E: newExpression(0), Type: 2}}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
@@ -122,7 +123,7 @@ func BenchmarkOrder(b *testing.B) {
 	}
 }
 
-func newTestCase(m *mheap.Mheap, ts []types.Type, fs []Field) orderTestCase {
+func newTestCase(m *mheap.Mheap, ts []types.Type, fs []colexec.Field) orderTestCase {
 	return orderTestCase{
 		types: ts,
 		proc:  process.New(m),
@@ -143,6 +144,6 @@ func newExpression(pos int32) *plan.Expr {
 }
 
 // create a new block based on the type information
-func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(_ *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp)
 }
