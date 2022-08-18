@@ -472,31 +472,17 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			return
 		}
 
-		// if len(data) < (pos + nullBitmapLen + 1) {
-		// 	err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
-		// 	return
-		// }
-		// nullBitmaps = data[pos : pos+nullBitmapLen]
-		// pos += nullBitmapLen
-
 		// new param bound flag
 		if data[pos] == 1 {
 			pos++
 
+			// Just the first StmtExecute packet contain parameters type,
+			// we need save it for further use.
 			stmt.ParamTypes, pos, ok = mp.readCountOfBytes(data, pos, numParams<<1)
 			if !ok {
 				err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
 				return
 			}
-
-			// if len(data) < (pos + (numParams << 1)) {
-			// 	err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
-			// 	return
-			// }
-			// // Just the first StmtExecute packet contain parameters type,
-			// // we need save it for further use.
-			// stmt.ParamTypes = data[pos : pos+(numParams<<1)]
-			// pos += numParams << 1
 		} else {
 			pos++
 		}
