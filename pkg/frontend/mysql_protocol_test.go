@@ -1711,7 +1711,7 @@ func TestSendPrepareResponse(t *testing.T) {
 
 func FuzzParseExecuteData(f *testing.F) {
 
-	convey.Convey("send parseExecuteData succ", f, func() {
+	convey.Convey("fuzz parseExecuteData succ", f, func() {
 		ctrl := gomock.NewController(f)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1771,14 +1771,14 @@ func FuzzParseExecuteData(f *testing.F) {
 		f.Add(testData)
 
 		f.Fuzz(func(t *testing.T, data []byte) {
-			proto.ParseExecuteData(prepareStmt, testData, 0)
+			proto.ParseExecuteData(prepareStmt, data, 0)
 		})
 
 	})
 }
 
 func TestParseExecuteData(t *testing.T) {
-	convey.Convey("send parseExecuteData succ", t, func() {
+	convey.Convey("parseExecuteData succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
