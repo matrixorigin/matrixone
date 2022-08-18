@@ -113,8 +113,8 @@ func (t batchSqlHandler) NewItemBatchHandler(ctx context.Context) func(batch any
 		if err := exec.Exec(ctx, batch, ie.NewOptsBuilder().Finish()); err != nil {
 			// fixme: error -> log -> exec.Exec -> ... cycle
 			// fixme: handle error situation re-try
-			logutil.Error(fmt.Sprintf("[Trace] faield to insert. sql: %s", batch), NoReportFiled())
-			logutil.Error(fmt.Sprintf("[Trace] faield to insert. err: %v", err), NoReportFiled())
+			logutil.Error(fmt.Sprintf("[Trace] faield to insert. sql: %s", batch), logutil.NoReportFiled())
+			logutil.Error(fmt.Sprintf("[Trace] faield to insert. err: %v", err), logutil.NoReportFiled())
 		}
 	}
 	return f

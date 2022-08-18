@@ -97,7 +97,7 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(statsDatabase).Internal(true).Finish())
 	mustExec := func(sql string) {
 		if err := exec.Exec(ctx, sql, ie.NewOptsBuilder().Finish()); err != nil {
-			panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
+			panic(fmt.Errorf("[Metric] init metric tables error: %v, sql: %s", err, sql))
 		}
 	}
 

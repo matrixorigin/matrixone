@@ -127,12 +127,6 @@ func (m MOZap) Size() int64 {
 
 func (m MOZap) Free() {}
 
-const moInternalFiledKeyNoopReport = "moInternalFiledKeyNoopReport"
-
-func NoReportFiled() zap.Field {
-	return zap.Bool(moInternalFiledKeyNoopReport, false)
-}
-
 func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
 	var needReport = true
 	if !gTracerProvider.IsEnable() {
@@ -148,10 +142,6 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 	for _, v := range fields {
 		if IsSpanField(v) {
 			log.SpanContext = v.Interface.(*SpanContext)
-			break
-		}
-		if v.Type == zapcore.BoolType && v.Key == moInternalFiledKeyNoopReport {
-			needReport = false
 			break
 		}
 	}
