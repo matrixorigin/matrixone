@@ -126,7 +126,7 @@ func (a *Decimal64Avg) BatchFill(rs, vs any, start, count int64, vps []uint64, z
 			continue
 		}
 		j := vps[i] - 1
-		a.cnts[j] += zs[j]
+		a.cnts[j] += zs[i+start]
 	}
 	return nil
 }
@@ -180,7 +180,7 @@ func (a *Decimal128Avg) BatchFill(rs, vs any, start, count int64, vps []uint64, 
 			continue
 		}
 		j := vps[i] - 1
-		a.cnts[j] += zs[j]
+		a.cnts[j] += zs[i+start]
 	}
 	return nil
 }
