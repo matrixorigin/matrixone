@@ -206,7 +206,7 @@ func main() {
 	if len(args) == 2 && args[1] == "initdb" {
 		fmt.Println("Initialize the TAE engine ...")
 		taeWrapper := initTae(pu)
-		err := frontend.InitDB(cancelMoServerCtx, taeWrapper.eng)
+		err := frontend.InitTAE(cancelMoServerCtx, taeWrapper.eng)
 		if err != nil {
 			logutil.Infof("Initialize catalog failed. error:%v", err)
 			os.Exit(InitCatalogExit)
@@ -231,7 +231,7 @@ func main() {
 	var tae *taeHandler
 	fmt.Println("Initialize the TAE engine ...")
 	tae = initTae(pu)
-	err = frontend.InitDB(cancelMoServerCtx, tae.eng)
+	err = frontend.InitTAE(cancelMoServerCtx, tae.eng)
 	if err != nil {
 		logutil.Infof("Initialize catalog failed. error:%v", err)
 		os.Exit(InitCatalogExit)

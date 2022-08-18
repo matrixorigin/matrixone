@@ -603,8 +603,8 @@ func FillInitialDataForMoUser() *batch.Batch {
 	return PrepareInitialDataForSchema(schema, data)
 }
 
-// InitDB setups the initial catalog tables in tae
-func InitDB(ctx context.Context, tae engine.Engine) error {
+// InitTAE setups the initial catalog tables in tae
+func InitTAE(ctx context.Context, tae engine.Engine) error {
 	taeEngine, ok := tae.(moengine.TxnEngine)
 	if !ok {
 		return errorIsNotTaeEngine

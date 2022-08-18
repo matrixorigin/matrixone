@@ -23,6 +23,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+)
+
+type (
+	TxnOperator interface {
+		client.TxnOperator
+
+		// for compatibility
+		AsEngineMethodArgument() client.TxnOperator
+		ToBytes() []byte
+	}
+
+	TxnClient interface {
+		New(options ...TxnOption) TxnOperator
+		NewWithSnapshot(snapshot []byte) (TxnOperator, error)
+	}
+
+	TxnOption = client.TxnOption
 )
 
 type ComputationRunner interface {

@@ -17,13 +17,17 @@ package cnservice
 import (
 	"context"
 	"fmt"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"sync"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -32,6 +36,7 @@ import (
 )
 
 func NewService(cfg *Config, ctx context.Context) (Service, error) {
+
 	srv := &service{cfg: cfg}
 	srv.logger = logutil.Adjust(srv.logger)
 	srv.pool = &sync.Pool{
@@ -39,6 +44,17 @@ func NewService(cfg *Config, ctx context.Context) (Service, error) {
 			return &pipeline.Message{}
 		},
 	}
+
+	if err := srv.initHAKeeperClient(); err != nil {
+		return nil, err
+	}
+	if err := srv.initTxnSender(); err != nil {
+		return nil, err
+	}
+	if err := srv.initTxnClient(); err != nil {
+		return nil, err
+	}
+
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
 		morpc.NewMessageCodec(srv.acquireMessage, 16<<20),
 		morpc.WithServerGoettyOptions(goetty.WithSessionRWBUfferSize(1<<20, 1<<20)))
@@ -54,6 +70,7 @@ func NewService(cfg *Config, ctx context.Context) (Service, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return srv, nil
 }
 
@@ -103,7 +120,7 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 		return err
 	}
 
-	err = frontend.InitDB(cancelMoServerCtx, s.engine)
+	err = frontend.InitTAE(cancelMoServerCtx, s.engine)
 	if err != nil {
 		return err
 	}
@@ -160,4 +177,33 @@ func (s *service) serverShutdown(isgraceful bool) error {
 		logutil.Errorf("Shutdown trace err: %v", err)
 	}
 	return s.mo.Stop()
+}
+
+func (s *service) initHAKeeperClient() error {
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		s.cfg.HAKeeper.DiscoveryTimeout.Duration,
+	)
+	defer cancel()
+	client, err := logservice.NewCNHAKeeperClient(ctx, s.cfg.HAKeeper.ClientConfig)
+	if err != nil {
+		return err
+	}
+	s.hakeeperClient = client
+	return nil
+}
+
+func (s *service) initTxnSender() error {
+	sender, err := rpc.NewSender(s.logger) //TODO set proper options
+	if err != nil {
+		return err
+	}
+	s.txnSender = sender
+	return nil
+}
+
+func (s *service) initTxnClient() error {
+	txnClient := client.NewTxnClient(s.txnSender) //TODO other options
+	s.txnClient = txnClient
+	return nil
 }
