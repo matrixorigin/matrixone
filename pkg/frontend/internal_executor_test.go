@@ -51,7 +51,7 @@ func (e *miniExec) PrepareSessionBeforeExecRequest(sess *Session) {
 }
 
 func TestIe(t *testing.T) {
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 	executor := newIe(pu, &miniExec{})
 	executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
 	sess := executor.newCmdSession(ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
@@ -65,7 +65,7 @@ func TestIe(t *testing.T) {
 }
 
 func TestIeProto(t *testing.T) {
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 	executor := NewInternalExecutor(pu)
 	p := executor.proto
 	assert.True(t, p.IsEstablished())

@@ -57,7 +57,7 @@ func testDatabase(
 				Name: "foo",
 			},
 		)
-		assert.Equal(t, true, resp.ErrNotFound)
+		assert.Equal(t, "foo", resp.ErrNotFound.Name)
 	}
 
 	// create database
@@ -69,7 +69,7 @@ func testDatabase(
 				Name: "foo",
 			},
 		)
-		assert.Equal(t, false, resp.ErrExisted)
+		assert.Equal(t, txnengine.ErrExisted(false), resp.ErrExisted)
 	}
 
 	// get databases
@@ -93,7 +93,7 @@ func testDatabase(
 				Name: "foo",
 			},
 		)
-		assert.Equal(t, false, resp.ErrNotFound)
+		assert.Equal(t, "", resp.ErrNotFound.Name)
 		assert.NotNil(t, resp.ID)
 		dbID = resp.ID
 
@@ -107,7 +107,7 @@ func testDatabase(
 						Name: "foo",
 					},
 				)
-				assert.Equal(t, false, resp.ErrNotFound)
+				assert.Equal(t, "", resp.ErrNotFound.Name)
 			}
 			{
 				resp := testRead[txnengine.GetDatabasesResp](
@@ -130,7 +130,7 @@ func testDatabase(
 				Name:       "table",
 			},
 		)
-		assert.Equal(t, true, resp.ErrNotFound)
+		assert.Equal(t, "table", resp.ErrNotFound.Name)
 	}
 
 	// create relation
@@ -160,7 +160,7 @@ func testDatabase(
 				},
 			},
 		)
-		assert.Equal(t, false, resp.ErrExisted)
+		assert.Equal(t, txnengine.ErrExisted(false), resp.ErrExisted)
 	}
 
 	// get relations
@@ -187,7 +187,7 @@ func testDatabase(
 				Name:       "table",
 			},
 		)
-		assert.Equal(t, false, resp.ErrNotFound)
+		assert.Equal(t, "", resp.ErrNotFound.Name)
 		assert.NotNil(t, resp.ID)
 		relID = resp.ID
 		assert.Equal(t, txnengine.RelationTable, resp.Type)
@@ -205,7 +205,7 @@ func testDatabase(
 					Name:       "table",
 				},
 			)
-			assert.Equal(t, false, resp.ErrNotFound)
+			assert.Equal(t, "", resp.ErrNotFound.Name)
 		}
 		{
 			resp := testRead[txnengine.GetRelationsResp](

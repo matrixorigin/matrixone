@@ -201,11 +201,44 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 				continue
 			}
+			idx := 0
+			cnt := 0
 			sels := mSels[vals[k]-1]
-			if len(sels) > 1 {
+			if ap.Cond != nil {
+				for j, sel := range sels {
+					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
+					if err != nil {
+						return err
+					}
+					bs := vec.Col.([]bool)
+					if bs[0] {
+						cnt++
+						idx = j
+					}
+					vec.Free(proc.Mp)
+				}
+			}
+			if (ap.Cond != nil && cnt > 1) || (ap.Cond == nil && len(sels) > 1) {
 				return errors.New("scalar subquery returns more than 1 row")
 			}
-			sel := sels[0]
+			if ap.Cond != nil && cnt == 0 {
+				for j, rp := range ap.Result {
+					if rp.Rel == 0 {
+						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.GetMheap()); err != nil {
+							rbat.Clean(proc.GetMheap())
+							return err
+						}
+					} else {
+						if err := vector.UnionNull(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], proc.GetMheap()); err != nil {
+							rbat.Clean(proc.GetMheap())
+							return err
+						}
+					}
+				}
+				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
+				continue
+			}
+			sel := sels[idx]
 			for j, rp := range ap.Result {
 				if rp.Rel == 0 {
 					if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.GetMheap()); err != nil {

@@ -121,7 +121,7 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 			}
 		}
 
-		if mgr.getParameterUnit().SV.GetRecordTimeElapsedOfSqlRequest() {
+		if !mgr.getParameterUnit().SV.DisableRecordTimeElapsedOfSqlRequest {
 			logutil.Infof("connection id %d , the time of handling the request %s", routine.getConnID(), time.Since(reqBegin).String())
 		}
 
@@ -159,7 +159,7 @@ func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecuto
 		protocol:          protocol,
 		executor:          executor,
 		requestChan:       make(chan *Request, 1),
-		guestMmu:          guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu),
+		guestMmu:          guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu),
 		mempool:           pu.Mempool,
 		cancelRoutineCtx:  cancelRoutineCtx,
 		cancelRoutineFunc: cancelRoutineFunc,

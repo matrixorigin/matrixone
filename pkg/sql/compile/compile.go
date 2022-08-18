@@ -689,8 +689,9 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 			}
 		}
 	case plan.Node_ANTI:
+		_, conds := extraJoinConditions(n.OnList)
 		for i := range rs {
-			if isEq && len(n.OnList) == 1 {
+			if isEq && len(conds) == 1 {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Anti,
 					Idx: c.anal.curr,

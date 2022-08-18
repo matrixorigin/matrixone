@@ -285,7 +285,7 @@ type MysqlProtocolImpl struct {
 
 	rowHandler
 
-	SV *config.SystemVariables
+	SV *config.FrontendParameters
 
 	m sync.Mutex
 
@@ -893,8 +893,8 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 	//TODO:check the user and the connection
 	//TODO:get the user's password
 	var psw []byte
-	if mp.username == mp.SV.GetDumpuser() { //the user dump for test
-		psw = []byte(mp.SV.GetDumppassword())
+	if mp.username == mp.SV.DumpUser { //the user dump for test
+		psw = []byte(mp.SV.DumpPassword)
 	}
 
 	if !mp.GetSkipCheckUser() {
@@ -2071,7 +2071,7 @@ func generate_salt(n int) []byte {
 	return buf
 }
 
-func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesToFlush int, SV *config.SystemVariables) *MysqlProtocolImpl {
+func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
 	rand.Seed(time.Now().UTC().UnixNano())
 	salt := generate_salt(20)
 

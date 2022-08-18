@@ -136,7 +136,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 }
 
 func (ie *internalExecutor) newCmdSession(opts ie.SessionOverrideOptions) *Session {
-	sess := NewSession(ie.proto, guest.New(ie.pu.SV.GetGuestMmuLimitation(), ie.pu.HostMmu), ie.pu.Mempool, ie.pu, gSysVariables)
+	sess := NewSession(ie.proto, guest.New(ie.pu.SV.GuestMmuLimitation, ie.pu.HostMmu), ie.pu.Mempool, ie.pu, gSysVariables)
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)
 	return sess
