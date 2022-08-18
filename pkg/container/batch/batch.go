@@ -180,6 +180,7 @@ func (bat *Batch) Clean(m *mheap.Mheap) {
 	}
 	if len(bat.Zs) != 0 {
 		m.PutSels(bat.Zs)
+		bat.Zs = nil
 	}
 	bat.Vecs = nil
 }
