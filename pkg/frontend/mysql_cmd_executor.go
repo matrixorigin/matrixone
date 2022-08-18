@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
 	goErrors "errors"
 	"fmt"
 
@@ -72,6 +73,27 @@ var (
 	errorParameterModificationInTxn                = goErrors.New(parameterModificationInTxnErrorInfo())
 	errorUnclassifiedStatement                     = goErrors.New("unclassified statement appears in uncommitted transaction")
 )
+
+const (
+	prefixPrepareStmtName       = "__mo_stmt_id"
+	prefixPrepareStmtSessionVar = "__mo_stmt_var"
+)
+
+func getPrepareStmtName(stmtID uint32) string {
+	return fmt.Sprintf("%s_%d", prefixPrepareStmtName, stmtID)
+}
+
+func GetPrepareStmtID(name string) (int, error) {
+	idx := len(prefixPrepareStmtName) + 1
+	if idx >= len(name) {
+		return -1, moerr.NewError(moerr.INTERNAL_ERROR, "can not get prepare stmtID")
+	}
+	return strconv.Atoi(name[idx:])
+}
+
+func getPrepareStmtSessionVarName(index int) string {
+	return fmt.Sprintf("%s_%d", prefixPrepareStmtSessionVar, index)
+}
 
 // TableInfoCache tableInfos of a database
 type TableInfoCache struct {
@@ -1395,7 +1417,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 }
 
 // handlePrepareStmt
-func (mce *MysqlCmdExecutor) handlePrepareStmt(st *tree.PrepareStmt) error {
+func (mce *MysqlCmdExecutor) handlePrepareStmt(st *tree.PrepareStmt) (*PrepareStmt, error) {
 	switch st.Stmt.(type) {
 	case *tree.Update:
 		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
@@ -1404,21 +1426,24 @@ func (mce *MysqlCmdExecutor) handlePrepareStmt(st *tree.PrepareStmt) error {
 	}
 	preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), &PrepareStmt{
+	prepareStmt := &PrepareStmt{
 		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
 		PreparePlan: preparePlan,
 		PrepareStmt: st.Stmt,
-	})
+	}
+
+	err = mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
+	return prepareStmt, err
 }
 
 // handlePrepareString
-func (mce *MysqlCmdExecutor) handlePrepareString(st *tree.PrepareString) error {
+func (mce *MysqlCmdExecutor) handlePrepareString(st *tree.PrepareString) (*PrepareStmt, error) {
 	stmts, err := mysql.Parse(st.Sql)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	switch stmts[0].(type) {
 	case *tree.Update:
@@ -1429,13 +1454,17 @@ func (mce *MysqlCmdExecutor) handlePrepareString(st *tree.PrepareString) error {
 
 	preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), &PrepareStmt{
+
+	prepareStmt := &PrepareStmt{
 		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
 		PreparePlan: preparePlan,
 		PrepareStmt: stmts[0],
-	})
+	}
+
+	err = mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
+	return prepareStmt, err
 }
 
 // handleDeallocate
@@ -1755,6 +1784,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var fromLoadData = false
 	var txnErr error
 	var rspLen uint64
+	var prepareStmt *PrepareStmt
 
 	stmt := cws[0].GetAst()
 	mce.beforeRun(stmt)
@@ -1852,13 +1882,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}*/
 		case *tree.PrepareStmt:
 			selfHandle = true
-			err = mce.handlePrepareStmt(st)
+			prepareStmt, err = mce.handlePrepareStmt(st)
 			if err != nil {
 				goto handleFailed
 			}
 		case *tree.PrepareString:
 			selfHandle = true
-			err = mce.handlePrepareString(st)
+			prepareStmt, err = mce.handlePrepareString(st)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2079,10 +2109,22 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete,
-				*tree.PrepareStmt, *tree.PrepareString, *tree.Deallocate:
+				*tree.Deallocate:
 				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 				if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
 					return fmt.Errorf("routine send response failed. error:%v ", err)
+				}
+
+			case *tree.PrepareStmt, *tree.PrepareString:
+				if mce.ses.Cmd == int(COM_STMT_PREPARE) {
+					if err := mce.ses.protocol.SendPrepareResponse(prepareStmt); err != nil {
+						return fmt.Errorf("routine send response failed. error:%v ", err)
+					}
+				} else {
+					resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
+					if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
+						return fmt.Errorf("routine send response failed. error:%v ", err)
+					}
 				}
 			}
 		}
@@ -2186,11 +2228,85 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		resp = NewGeneralOkResponse(COM_PING)
 
 		return resp, nil
+
+	case COM_STMT_PREPARE:
+		mce.ses.Cmd = int(COM_STMT_PREPARE)
+		sql := string(req.GetData().([]byte))
+		mce.addSqlCount(1)
+
+		// rewrite to "prepare stmt_name from 'xxx'"
+		newLastStmtID := mce.ses.GenNewStmtId()
+		newStmtName := getPrepareStmtName(newLastStmtID)
+		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
+
+		err := mce.doComQuery(requestCtx, sql)
+		if err != nil {
+			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, err)
+		}
+		return resp, nil
+
+	case COM_STMT_EXECUTE:
+		data := req.GetData().([]byte)
+		sql, err := mce.parseStmtExecute(data)
+		if err != nil {
+			return NewGeneralErrorResponse(COM_STMT_PREPARE, err), nil
+		}
+		err = mce.doComQuery(requestCtx, sql)
+		if err != nil {
+			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, err)
+		}
+		return resp, nil
+
+	case COM_STMT_CLOSE:
+		data := req.GetData().([]byte)
+
+		// rewrite to "deallocate prepare stmt_name"
+		stmtID := binary.LittleEndian.Uint32(data[0:4])
+		stmtName := getPrepareStmtName(stmtID)
+		sql := fmt.Sprintf("deallocate prepare %s", stmtName)
+
+		err := mce.doComQuery(requestCtx, sql)
+		if err != nil {
+			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, err)
+		}
+		return resp, nil
+
 	default:
 		err := fmt.Errorf("unsupported command. 0x%x", req.GetCmd())
 		resp = NewGeneralErrorResponse(uint8(req.GetCmd()), err)
 	}
 	return resp, nil
+}
+
+func (mce *MysqlCmdExecutor) parseStmtExecute(data []byte) (string, error) {
+	// see https://dev.mysql.com/doc/internals/en/com-stmt-execute.html
+	pos := 0
+	if len(data) < 4 {
+		return "", moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+	}
+	stmtID := binary.LittleEndian.Uint32(data[0:4])
+	pos += 4
+
+	stmtName := fmt.Sprintf("%s_%d", prefixPrepareStmtName, stmtID)
+	preStmt, err := mce.ses.GetPrepareStmt(stmtName)
+	if err != nil {
+		return "", err
+	}
+	names, vars, err := mce.ses.GetMysqlProtocol().ParseExecuteData(preStmt, data, pos)
+	if err != nil {
+		return "", err
+	}
+	sql := fmt.Sprintf("execute %s", stmtName)
+	if len(names) > 0 {
+		sql = sql + fmt.Sprintf(" using @%s", strings.Join(names, ",@"))
+		for i := 0; i < len(names); i++ {
+			err := mce.ses.SetUserDefinedVar(names[i], vars[i])
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+	return sql, nil
 }
 
 func (mce *MysqlCmdExecutor) setCancelRequestFunc(cancelFunc context.CancelFunc) {
