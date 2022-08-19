@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 type txnStore struct {
 	txnbase.NoopTxnStore
 	dbs         map[uint64]*txnDB
+	mu          sync.RWMutex
 	driver      wal.Driver
 	nodesMgr    base.INodeManager
 	txn         txnif.AsyncTxn
@@ -284,16 +286,25 @@ func (store *txnStore) CreateNonAppendableSegment(dbId, tid uint64) (seg handle.
 }
 
 func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
+	store.mu.RLock()
 	db = store.dbs[id]
-	if db == nil {
-		var entry *catalog.DBEntry
-		if entry, err = store.catalog.GetDatabaseByID(id); err != nil {
-			return
-		}
-		db = newTxnDB(store, entry)
-		db.idx = len(store.dbs)
-		store.dbs[id] = db
+	store.mu.RUnlock()
+	if db != nil {
+		return
 	}
+	var entry *catalog.DBEntry
+	if entry, err = store.catalog.GetDatabaseByID(id); err != nil {
+		return
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	db = store.dbs[id]
+	if db != nil {
+		return
+	}
+	db = newTxnDB(store, entry)
+	db.idx = len(store.dbs)
+	store.dbs[id] = db
 	return
 }
 
