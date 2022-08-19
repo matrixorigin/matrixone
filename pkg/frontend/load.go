@@ -1695,7 +1695,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		if !handler.skipWriteBatch {
 			if handler.oneTxnPerBatch {
 				txnHandler = tmpSes.GetTxnHandler()
-				dbHandler, err = tmpSes.GetStorage().Database(ctx, handler.dbName, engine.Snapshot(txnHandler.GetTxn().GetCtx()))
+				dbHandler, err = tmpSes.GetStorage().Database(ctx, handler.dbName, txnHandler.GetTxn())
 				if err != nil {
 					goto handleError
 				}
@@ -1843,7 +1843,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				if !handler.skipWriteBatch {
 					if handler.oneTxnPerBatch {
 						txnHandler = tmpSes.GetTxnHandler()
-						dbHandler, err = tmpSes.GetStorage().Database(ctx, handler.dbName, engine.Snapshot(txnHandler.GetTxn().GetCtx()))
+						dbHandler, err = tmpSes.GetStorage().Database(ctx, handler.dbName, txnHandler.GetTxn())
 						if err != nil {
 							goto handleError2
 						}
