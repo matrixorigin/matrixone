@@ -26,9 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-// Snapshot a tricky approach
-type Snapshot []byte
-
 type Nodes []Node
 
 type Node struct {

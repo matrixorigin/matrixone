@@ -21,6 +21,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -33,6 +36,7 @@ import (
 )
 
 func NewService(cfg *Config, ctx context.Context) (Service, error) {
+
 	srv := &service{cfg: cfg}
 	srv.logger = logutil.Adjust(srv.logger)
 	srv.pool = &sync.Pool{
@@ -40,6 +44,17 @@ func NewService(cfg *Config, ctx context.Context) (Service, error) {
 			return &pipeline.Message{}
 		},
 	}
+
+	if err := srv.initHAKeeperClient(); err != nil {
+		return nil, err
+	}
+	if err := srv.initTxnSender(); err != nil {
+		return nil, err
+	}
+	if err := srv.initTxnClient(); err != nil {
+		return nil, err
+	}
+
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
 		morpc.NewMessageCodec(srv.acquireMessage, 16<<20),
 		morpc.WithServerGoettyOptions(goetty.WithSessionRWBUfferSize(1<<20, 1<<20)))
@@ -49,12 +64,13 @@ func NewService(cfg *Config, ctx context.Context) (Service, error) {
 	server.RegisterRequestHandler(srv.handleRequest)
 	srv.server = server
 
-	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil, nil)
+	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil, nil, nil)
 	cfg.Frontend.SetDefaultValues()
 	err = srv.initMOServer(ctx, pu)
 	if err != nil {
 		return nil, err
 	}
+
 	return srv, nil
 }
 
@@ -99,26 +115,40 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
 
 	fmt.Println("Initialize the engine ...")
-	err = s.initEngine(ctx, pu)
+	err = s.initEngine(ctx, cancelMoServerCtx, pu)
 	if err != nil {
 		return err
 	}
-
-	err = frontend.InitDB(cancelMoServerCtx, s.engine)
-	if err != nil {
-		return err
-	}
-	fmt.Println("Initialize the engine Done")
 
 	s.createMOServer(cancelMoServerCtx, pu)
 
 	return nil
 }
 
-func (s *service) initEngine(ctx context.Context, pu *config.ParameterUnit) error {
-	//TODO: initialize the engine
-	pu.StorageEngine = nil
-	s.engine = nil
+func (s *service) initEngine(
+	ctx context.Context,
+	cancelMoServerCtx context.Context,
+	pu *config.ParameterUnit,
+) error {
+
+	switch s.cfg.Engine.Type {
+
+	case EngineTAE:
+		if err := initTAE(cancelMoServerCtx, pu); err != nil {
+			return err
+		}
+
+	case EngineDistributedTAE:
+		//TODO
+
+	case EngineMemory:
+		//TODO
+
+	default:
+		return fmt.Errorf("unknown engine type: %s", s.cfg.Engine.Type)
+
+	}
+
 	return nil
 }
 
@@ -161,4 +191,33 @@ func (s *service) serverShutdown(isgraceful bool) error {
 		logutil.Errorf("Shutdown trace err: %v", err)
 	}
 	return s.mo.Stop()
+}
+
+func (s *service) initHAKeeperClient() error {
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		s.cfg.HAKeeper.DiscoveryTimeout.Duration,
+	)
+	defer cancel()
+	client, err := logservice.NewCNHAKeeperClient(ctx, s.cfg.HAKeeper.ClientConfig)
+	if err != nil {
+		return err
+	}
+	s.hakeeperClient = client
+	return nil
+}
+
+func (s *service) initTxnSender() error {
+	sender, err := rpc.NewSender(s.logger) //TODO set proper options
+	if err != nil {
+		return err
+	}
+	s.txnSender = sender
+	return nil
+}
+
+func (s *service) initTxnClient() error {
+	txnClient := client.NewTxnClient(s.txnSender) //TODO other options
+	s.txnClient = txnClient
+	return nil
 }
