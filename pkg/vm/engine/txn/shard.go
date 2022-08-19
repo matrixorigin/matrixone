@@ -26,7 +26,7 @@ type Shard = metadata.DNShard
 type ShardPolicy interface {
 	Vector(vec *vector.Vector, nodes []logservicepb.DNStore) ([]*ShardedVector, error)
 	Batch(batch *batch.Batch, nodes []logservicepb.DNStore) ([]*ShardedBatch, error)
-	Shards(stores []logservicepb.DNStore) ([]Shard, error)
+	Stores(stores []logservicepb.DNStore) ([]Shard, error)
 }
 
 type ShardedVector struct {
@@ -44,7 +44,7 @@ func (e *Engine) allNodesShards() ([]Shard, error) {
 	if err != nil {
 		return nil, err
 	}
-	return e.shardPolicy.Shards(clusterDetails.DNStores)
+	return e.shardPolicy.Stores(clusterDetails.DNStores)
 }
 
 func (e *Engine) firstNodeShard() ([]Shard, error) {
@@ -52,7 +52,7 @@ func (e *Engine) firstNodeShard() ([]Shard, error) {
 	if err != nil {
 		return nil, err
 	}
-	return e.shardPolicy.Shards(clusterDetails.DNStores[:1])
+	return e.shardPolicy.Stores(clusterDetails.DNStores[:1])
 }
 
 func thisShard(shard Shard) func() ([]Shard, error) {

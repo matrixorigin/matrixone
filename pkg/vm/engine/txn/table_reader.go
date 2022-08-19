@@ -67,7 +67,7 @@ func (t *Table) NewReader(
 		}
 		stores = filteredNodes
 	}
-	dnShards, err := t.engine.shardPolicy.Shards(stores)
+	dnShards, err := t.engine.shardPolicy.Stores(stores)
 	if err != nil {
 		return nil, err
 	}
