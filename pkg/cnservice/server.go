@@ -17,13 +17,14 @@ package cnservice
 import (
 	"context"
 	"fmt"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"sync"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -85,7 +86,7 @@ func (s *service) releaseMessage(msg *pipeline.Message) {
 }
 */
 
-func (s *service) handleRequest(req morpc.Message, _ uint64, cs morpc.ClientSession) error {
+func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
 	return nil
 }
 

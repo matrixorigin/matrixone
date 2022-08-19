@@ -129,8 +129,6 @@ func (s *sender) Close() error {
 }
 
 func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResult, error) {
-	s.mustSetupTimeoutAt(ctx, requests)
-
 	sr := s.acquireSendResult()
 	if len(requests) == 1 {
 		sr.reset(requests)
@@ -158,7 +156,7 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 		}
 
 		requests[idx].RequestID = st.ID()
-		if err := st.Send(&requests[idx], morpc.SendOptions{}); err != nil {
+		if err := st.Send(ctx, &requests[idx]); err != nil {
 			sr.Release()
 			return nil, err
 		}
@@ -192,7 +190,7 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 		}
 	}
 
-	f, err := s.client.Send(ctx, dn.Address, &request, morpc.SendOptions{})
+	f, err := s.client.Send(ctx, dn.Address, &request)
 	if err != nil {
 		return txn.TxnResponse{}, err
 	}
@@ -203,16 +201,6 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 		return txn.TxnResponse{}, err
 	}
 	return *(v.(*txn.TxnResponse)), nil
-}
-
-func (s *sender) mustSetupTimeoutAt(ctx context.Context, requests []txn.TxnRequest) {
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		s.logger.Fatal("context deadline not set")
-	}
-	for idx := range requests {
-		requests[idx].TimeoutAt = deadline.UnixNano()
-	}
 }
 
 func (s *sender) createStream(ctx context.Context, dn metadata.DNShard, size int) (morpc.Stream, error) {
@@ -295,14 +283,13 @@ func (ls *localStream) ID() uint64 {
 	return 0
 }
 
-func (ls *localStream) Send(request morpc.Message, opts morpc.SendOptions) error {
+func (ls *localStream) Send(ctx context.Context, request morpc.Message) error {
 	if ls.closed {
 		panic("send after closed")
 	}
 
 	ls.in <- sendMessage{
-		request: request,
-		// opts:            opts,
+		request:         request,
 		handleFunc:      ls.handleFunc,
 		responseFactory: ls.responseFactory,
 		ctx:             ls.ctx,

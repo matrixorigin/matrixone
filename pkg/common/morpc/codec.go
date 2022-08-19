@@ -96,9 +96,11 @@ func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 	var payloadData []byte
 	if flag&flagPayloadMessage != 0 {
 		msize := buf.Byte2Int(data)
+		// custom header + msg + payload
 		data = data[4:]
-		payloadData = data[msize:]
-		data = data[:msize]
+		v := len(data) - msize
+		payloadData = data[v:]
+		data = data[:v]
 	}
 
 	if flag&flagCustomHeader != 0 {
@@ -183,6 +185,10 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 			}
 		}
 
+		if len(c.headerCodecs) > 0 {
+			flag |= flagCustomHeader
+		}
+
 		msize := message.Size()
 		size += msize
 
@@ -197,13 +203,12 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 			out.Grow(8)
 			out.SetWriteIndex(checksumIdx + 8)
 		}
-		// 4 bytes message size
+		// 4 bytes payload message size
 		if hasPayload {
-			out.WriteInt(msize)
+			out.WriteInt(len(payloadData))
 		}
 
 		if len(c.headerCodecs) > 0 {
-			flag |= flagCustomHeader
 			for _, hc := range c.headerCodecs {
 				v, err := hc.Encode(&rpcMessage, out)
 				if err != nil {

@@ -391,13 +391,8 @@ func (c *client) connectReadOnly(ctx context.Context) error {
 func (c *client) request(ctx context.Context,
 	mt pb.MethodType, payload []byte, lsn Lsn,
 	maxSize uint64) (pb.Response, []pb.LogRecord, error) {
-	timeout, err := getTimeoutFromContext(ctx)
-	if err != nil {
-		return pb.Response{}, nil, err
-	}
 	req := pb.Request{
-		Method:  mt,
-		Timeout: int64(timeout),
+		Method: mt,
 		LogRequest: pb.LogRequest{
 			ShardID: c.cfg.LogShardID,
 			DNID:    c.cfg.DNReplicaID,
@@ -435,13 +430,8 @@ func (c *client) request(ctx context.Context,
 }
 
 func (c *client) tsoRequest(ctx context.Context, count uint64) (uint64, error) {
-	timeout, err := getTimeoutFromContext(ctx)
-	if err != nil {
-		return 0, err
-	}
 	req := pb.Request{
-		Method:  pb.TSO_UPDATE,
-		Timeout: int64(timeout),
+		Method: pb.TSO_UPDATE,
 		TsoRequest: &pb.TsoRequest{
 			Count: count,
 		},
@@ -530,16 +520,4 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RP
 	codec := morpc.NewMessageCodec(mf, defaultWriteSocketSize)
 	bf := morpc.NewGoettyBasedBackendFactory(codec, backendOpts...)
 	return morpc.NewClient(bf, clientOpts...)
-}
-
-func getTimeoutFromContext(ctx context.Context) (time.Duration, error) {
-	d, ok := ctx.Deadline()
-	if !ok {
-		return 0, ErrDeadlineNotSet
-	}
-	now := time.Now()
-	if now.After(d) {
-		return 0, ErrInvalidDeadline
-	}
-	return d.Sub(now), nil
 }

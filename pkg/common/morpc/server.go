@@ -168,6 +168,9 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 			zap.String("request", request.Message.DebugString()))
 	}
 
+	if request.cancel != nil {
+		defer request.cancel()
+	}
 	if err := s.handler(request.Ctx, request.Message, sequence, cs); err != nil {
 		s.logger.Error("handle request failed",
 			zap.Uint64("sequence", sequence),
@@ -235,9 +238,6 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					}
 					timeout := time.Duration(0)
 					for idx := range sendResponses {
-						if sendResponses[idx].Timeout() {
-							continue
-						}
 						v, err := sendResponses[idx].GetTimeoutFromContext()
 						if err != nil {
 							continue
