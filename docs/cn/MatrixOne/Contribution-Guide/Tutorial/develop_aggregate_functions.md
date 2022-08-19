@@ -1,44 +1,44 @@
-# **Develop an aggregate function**
+# **开发聚合函数**
 
-## **Prerequisite**
+## **前提条件**
 
-To develop an aggregate function for MatrixOne, you need a basic knowledge of Golang programming. You can go through this excellent [Golang tutorial](https://www.educative.io/blog/golang-tutorial) to learn some basic Golang concepts.
+为 MatrixOne 开发聚合函数，你需要具备 Golang 编程的基本知识。你可以通过[Golang 教程](https://www.educative.io/blog/golang-tutorial)来学习一些基本的 Golang 概念。
 
-## **Before you start**
+## **开始前准备**
 
-Make sure that you have `Go` installed and have cloned the `MatrixOne` code base.
-Please refer to [Preparation](../How-to-Contribute/preparation.md) and [Contribute Code](../How-to-Contribute/contribute-code.md) for more details.
+在你开始之前，请确保你已经安装了 Golang，并将 MatrixOne 代码库克隆到你的本地。
 
-## **What is an aggregation function?**
+更多信息，参见[准备工作](../How-to-Contribute/preparation.md) 和[代码贡献](../How-to-Contribute/contribute-code.md)。
 
-In database systems, an aggregate function or aggregation function is a function where the values of multiple rows are grouped together to form a single summary value.
+## **什么是聚合函数**
 
-Common aggregate functions include:
+在数据库系统中，聚合函数是将多行的值组合在一起以形成单个汇总值的函数。
 
-* `COUNT` counts how many rows are in a particular column.
-* `SUM` adds together all the values in a particular column.
-* `MIN` and `MAX` return the lowest and highest values in a particular column, respectively.
-* `AVG` calculates the average of a group of selected values.
+常用的聚合函数包括:
 
-## **Aggregate function in MatrixOne**
+* `COUNT` 计算在一个特定列中有多少行。
 
-The function `join` in MatrixOne's database is highly efficient and less redundant in comparison with
-other state-of-the-art databases via factorisation making it a key feature. Therefore, many operations in MatrixOne need to be adapted to the factorisation method, in order
-to improve efficiency when performing `join`. Aggregate functions are an example of an important feature among these operations.
+* `SUM` 指将特定列中的所有值相加。
 
-To implement aggragate functions in MatrixOne, we design a data structure named `Ring`. Every aggregate function needs to implement the `Ring` interface
-in order to be factorized when `join` occurs.
+* `MIN` 和 `MAX` 分别返回特定列中的最低值和最高值。
 
-For the common aggregate function `AVG` as an example, we need to calculate the number of groups and their total numeric sum, then get an average result.
-This is common practice for any database design. However, when a query with `join` occurs between two tables, the common method is to get a Cartesian product by joining tables first,
-then perform an `AVG` with that Cartesian product. This is an expensive computational cost as a Cartesian product can be very large.
-In MatrixOne's implementation, the factorisation method pushs down the calculation of group statistics and sum before the `join` operation is performed. This method helps to reduce
-a lot in computational and storage cost. Factorisation
-is realized by the `Ring` interface and its inner functions.
+* `AVG` 计算一组选定值的平均值。
 
-To checkout more about the factorisation theory and factorised database, please refer to [Principles of Factorised Databases](https://fdbresearch.github.io/principles.html).
+## **MatrixOne 中的聚合函数**
 
-## **What is a `Ring`**
+与其他先进的数据库相比，MatrixOne 数据库中的 `JOIN` 函数非常高效。聚合函数就是提高执行 `JOIN` 时的效率中一个重要特性。
+
+为了在 MatrixOne 中实现聚合函数，我们设计了一个名为 `Ring` 的数据结构。每个聚合函数都需要执行 `Ring` 接口，以便在 `join` 发生时进行因数分解。
+
+以常见的聚合函数 `AVG` 为例，我们需要计算组的数量和它们的总数，然后得到一个平均结果。
+
+这是数据库设计中常见的实践。然而，当在两个表之间进行 `join` 查询时，通常的方法是通过先连接表来获得一个笛卡尔积，然后用笛卡尔积进行 `AVG` 运算，因此，得到的笛卡尔积可能非常大，计算成本非常高。
+
+在 MatrixOne 中，执行 `join` 操作之前， MatrixOne 采用因数分解方法下推组统计和，以及求和计算。这种方法大大降低了计算和存储成本。因式分解是通过 `Ring` 接口及其内部函数实现的。
+
+更多关于因式分解理论和因式分解数据库，参见[分解数据库原理](https://fdbresearch.github.io/principles.html)。
+
+## **什么是 `Ring`**
 
 `Ring` is an important data structure for MatrixOne factorisation, as well as a mathematical algebraic concept with a clear [definition](https://en.wikipedia.org/wiki/Ring_(mathematics)).
 An algebraic `Ring` is a set equipped with two binary operations  `+` (addition) and `⋅` (multiplication) satisfying several axioms.
@@ -46,7 +46,14 @@ An algebraic `Ring` is a set equipped with two binary operations  `+` (addition)
 A `Ring` in MatrixOne is an interface with several functions similar to the algebraic `Ring` structure. We use `Ring` interface to implement aggragate functions.
 The `+`(addition) is defined as merging two `Ring`s groups and the `⋅`(multiplication) operation is defined as the computation of a grouped aggregate value combined with its grouping key frequency information.
 
-| Method of Ring Interface | Do What                                                |
+`Ring` 是 MatrixOne 因式分解的重要数据结构，也是一个具有明确[定义](https://en.wikipedia.org/wiki/Ring_(mathematics))的数学代数概念。
+代数 `Ring` 是一个包含两个二元运算 “+”（加法）和 “⋅”（乘法）组成的集合，并且满足多个公理。
+
+MatrixOne 中的 `Ring` 是一个接口，具有类似于代数 `Ring` 结构的多个功能。我们使用 `Ring` 接口来实现聚合函数。
+
+`+`（加法）表示合并两个 `Ring` 组；`⋅`（乘法）表示定义为计算分组聚合值及其分组关键频率信息。
+
+| `Ring` 接口的方法 | 它能做什么                                                |
 | ------------------------ | ------------------------------------------------------ |
 | Count                    | Return the number of groups                                       |
 | Size                     | Return the memory size of Ring                                   |
@@ -66,20 +73,17 @@ The `+`(addition) is defined as merging two `Ring`s groups and the `⋅`(multipl
 | BatchAdd                 | Merge several couples of groups for two Rings                           |
 | Mul                      | Multiplication between groups for two Rings, called when join occurs      |
 
-The implementation of `Ring` data structure is under `/pkg/container/ring/`.
+`Ring` 数据结构在路径 `/pkg/container/ring/` 下实现。
 
-## **How does `Ring` work with query:**
+## **`Ring` 如何进行查询**
 
-To better understand the `Ring` interface, we can take aggregate function `sum()` as an example. We'll walk you through the whole process
-of `Ring`.
+为了更好地理解 `Ring` 接口，这里以聚合函数 `sum()` 为例，讲述整个 `Ring` 的执行过程。
 
-There are two different scenarios for aggregation functions with `Ring`s.
+`Ring` 数据结构下的聚合函数，有两种不同的场景，参见下面的章节。
 
-*1. Query with single table.*
+### 1. 单表查询
 
-In the single table scenario, when we run the below query, it generates one or several `Ring`s,
-depending on the storage blocks the `T1` table is stored. The number of blocks depends on the storage strategy. Each `Ring` will
-store several groups of sums. The number of the group depends on how many duplicate rows are in this `Ring`.
+在单表查询场景中，运行下面的查询时，根据表 T1 存储的存储块的情况，它会生成一个或多个 `Ring`。存储块的数量取决于存储策略，每个 `Ring` 将存储几组 `sums`，而组的数量取决于有多少重复的行在执行 `Ring`。
 
 ```sql
 T1 (id, class, age)
@@ -101,21 +105,21 @@ T1 (id, class, age)
 select class, sum(age) from T1 group by class;
 ```
 
-For example, if two `Ring`s were generated, the first `Ring` holds the group sums of the first 4 rows, which will be like:
+例如，如果生成了两个 `Ring` ，第一个 `Ring` 包含前4行的总和，如下所示：
 
 ```sql
 |  one   |  23+20+22 |
 |  two   |  20       |
 ```
 
-The second `Ring` holds the group sums of the last 6 rows, which will be like:
+第二个 `Ring` 包含了最后6行的总和，如下所示：
 
 ```sql
 |  two   |  19       |
 |  three |  18+20+21+24+19 |
 ```
 
-Then the `Add` method of `Ring` will be called to merge two groups together, and at last the `Eval` method will return the overall result to user.
+先调用 `Ring` 的 `Add` 方法将两个组合并到一起，再调用 `Eval` 方法将整体结果返回。
 
 ```sql
 |  one   |  23+20+22       |
@@ -123,9 +127,9 @@ Then the `Add` method of `Ring` will be called to merge two groups together, and
 |  three |  18+20+21+24+19 |
 ```
 
-*2. Query with joining multiple tables.*
+### 2. 连接多个表的查询
 
-In the multiple tables join scenario, we have two tables `Tc` and `Ts`. The query looks like the following.
+在多表连接查询场景中，假设已建好两个表 `Tc` 和 `Ts`，查询示例如下所示：
 
 ```sql
 Tc (id, class)
@@ -163,29 +167,25 @@ Ts (id, age)
 select class, sum(age) from Tc join Ts on Tc.id = Ts.id group by class;
 ```
 
-When we run this query, it will firstly generate `Ring`s for the `Ts` table since we are performing an aggeration over the `age` column.
-It might also generate one or several `Ring`s same as the single table. For simplicity, we imagine only one `Ring` is created for each table.
-The `Ring-Ts` will start to count sums for the group of `id` as all `id`s are different, so it will maintain the same. Then a hashtable will be created
-for performing `join` operation.
+执行这个查询时，这个查询首先是对 `age` 这列执行聚合，那么它将首先为 `Ts` 表生成 `Ring`。
 
-The `Ring-Tc` is created in the same time as `join` is performed. This `Ring-Tc` will count the appearing frequency `f` of id. Then the `Mul` method
-of `Ring-Ts` is called to calculate the sum calculated from the `Ring-Ts` and frequency from `Ring-Tc`.
+它也可能生成一个或多个 `Ring` 相同的单表。为了易理解，这里假设每个表只创建一个 `Ring`。
+
+`Ring-Ts` 将开始计算 *id* 组的和。然后创建一个哈希表来执行 `join` 操作。
+
+在执行 `join` 的同时创建`Ring-Tc`，`Ring-Tc` 将计算 *id* 出现的频率 `f`，然后调用 `Ring-Ts` 的 `Mul` 方法来计算从 `Ring-Ts` 计算的总和和从 `Ring-Tc` 计算出的频率。
 
 ```
 sum[i] = sum[i] * f[i]
 ```
 
-Now we get values of `[class, sum(age)]`, then perform a group by with class which will give us the final result.
+首先得到 `[class, sum(age)]` 的值，然后执行 `group by class`，得到最终结果。
 
-## **The secret of factorisation**
+## **详解因式分解**
 
-From the above example, you can see that the `Ring` performs some pre calculations and only the result(like `sum`) is stored in its structure. When performing operations like `join`,
-only simple `Add` or `Multiplication` is needed to get the result, which is called a push down calculation in `factorisation`. With the help of this push down, we no longer need to
-deal with a costly Cartesian product. As the joined table number increases, the factorisation allows us to take linear cost of performing that instead of exponential increase.
+从上面的例子中，你可以看到 `Ring` 执行一些预计算，只有结果(如 `sum`)存储在它的结构中。当执行 `join` 这样的运算时，只需要简单的 `Add` 或 `Multiplication` 就可以得到结果，这在**因式分解**中被称为下推运算。在下推运算的帮助下，数据库将无需处理高成本的笛卡尔积，并且随着连接表数量的增加，因式分解执行仅仅线性增长，而不是指数增长。
 
-Take the implementation of `Variance` function as an example.
-
-The variance formula is as below:
+本章节以“方差”函数的实现为例，详细讲解因式分解，方差公式如下：
 
 ```
 Variance = Σ [(xi - x̅)^2]/n
@@ -194,12 +194,17 @@ Example: xi = 10,8,6,12,14, x̅ = 10
 Calculation: ((10-10)^2+(8-10)^2+(6-10)^2+(12-10)^2+(14-10)^2)/5 = 8
 ```
 
-If we proceed with implementing this formula, we have to record all values of each group, and also maintain these values
-with `Add` and `Mul` operations of `Ring`. Eventually the result is calculated in an `Eval()` function. This implementation has a drawback of high memory cost since we have to store all the values during processing.
+If we proceed with implementing this formula, we have to record all values of each group, and also maintain these values with `Add` and `Mul` operations of `Ring`. Eventually the result is calculated in an `Eval()` function. This implementation has a drawback of high memory cost since we have to store all the values during processing.
 
 In the `Avg` implementation, it doesn't store all values in the `Ring`. Instead it stores only the `sum` of each group and the null numbers.  It returns the final result with a simple division. This method saves a lot of memory space.
 
 Now let's turn the `Variance` formula a bit into a different form:
+
+执行这个公式，必须记录每组的值，并通过 `Ring` 的 `Add` 和 `Mul` 操作来操作这些值，最终结果将在 `Eval()` 函数中进行计算。在处理计算过程中，需要存储所有值，这种实现方法的缺点是内存成本高
+
+在 `Avg` 实现过程中，它没有将所有值存储在 `Ring` 中。相反，它只存储每个组的 `sum` 和空值。返回结果为只含有简单除法的结果，这种方法节省了大量的内存空间。
+
+下面示例，将“方差”公式转换成另一种形式：
 
 ```
 Variance = Σ (xi^2)/n-x̅^2
@@ -208,11 +213,16 @@ Example: xi = 10,8,6,12,14, x̅ = 10
 Calculation: (10^2+8^2+6^2+12^2+14^2)/5-10^2 = 8
 ```
 
-This formula's result is exactly the same as the previous one, but we only have to record the values sum of `xi^2` and the sum of `xi`. We can largely reduce the memory space
-with this kind of reformulation.
+This formula's result is exactly the same as the previous one, but we only have to record the values sum of `xi^2` and the sum of `xi`. We can largely reduce the memory space with this kind of reformulation.
 
 To conclude, every aggregate function needs to find a way to record as little values as possible in order to reduce memory cost.
 Below are two different implementations for `Variance` (the second one has a better performance):
+
+这个公式的结果和上一条公式的计算结果完全一样，在计算过程中，只需要记录 *xi^2* 和 *xi* 的和。通过这种重构，大大减少了内存空间。
+
+总之，每个聚合函数都可以找到一种方法来记录尽可能少的值，以降低使用内存空间。
+
+下面是“方差”的两种不同实现过程，且第二个实现过程具有更好的性能：
 
 ```go
    //Implementation1
@@ -243,16 +253,17 @@ Below are two different implementations for `Variance` (the second one has a bet
    }
 ```
 
-## **Develop an var() function**
+## **开发 `var()` 函数**
 
-In this tutorial, we will walk you through the complete implementation of the Variance (get the standard overall variance value) aggregate function as an example with two different methods.
+在本教程中，我们将以两种不同的方法为例，介绍 Variance(获得标准总体方差值)聚合函数的完整实现过程。
 
-Step 1: register function
+### 步骤 1：注册函数
 
-MatrixOne doesn't distinguish between operators and functions.
-In our code repository, the file `pkg/sql/viewexec/transformer/types.go` registers aggregate functions as operators
-and we assign each operator a distinct integer number.
-To add a new function `var()`, first add a new const `Variance` in the const declaration and `var` in the name declaration.
+MatrixOne 不区分运算符和函数。
+
+在代码存储库中，文件 `pkg/sql/viewexec/transformer/types.go` 将聚合函数注册为操作符，并为每个操作符赋值一个不同的整数。
+
+新增一个新函数 `var()`，首先在常量声明中添加一个新的常量 `Variance`，在名称声明中添加一个 `var`。
 
 ```go
    const (
@@ -278,16 +289,14 @@ To add a new function `var()`, first add a new const `Variance` in the const dec
    }
 ```
 
-Step2: implement the `Ring` interface
+### 步骤 2：执行 `Ring` 接口
 
-*1. Define `Ring` structure*
+1. 定义 `Ring` 结构：在 `pkg/container/ring` 下创建 `variance.go`，定义 `VarRing` 的结构。
 
-Create `variance.go` under `pkg/container/ring`, and define a structure of `VarRing`.
+   当我们计算总体方差时，我们需要计算：
 
-As we calculate the overall variance, we need to calculate:
-
-* The numeric `Sums` and the null value numbers of each group, to calculate the average.
-* Values of each group, to calculate the variance.
+   - 计算数值 `Sums` 和每组的空值的平均值。
+   - 计算各组值的方差。
 
 ```go
    //Implementation1
@@ -318,11 +327,11 @@ As we calculate the overall variance, we need to calculate:
    }
 ```
 
-*2. Implement the functions of `Ring` interface*
+2. 实现 `Ring` 接口的功能
 
-You can checkout the full implmetation at [variance.go](https://github.com/matrixorigin/matrixone/blob/main/pkg/container/ring/variance/variance.go).
+有关完整实现过程，参见[variance.go](https://github.com/matrixorigin/matrixone/blob/main/pkg/container/ring/variance/variance.go)。
 
-* `Fill` function
+* `Fill` 函数
 
 ```go
       //Implementation1
@@ -366,7 +375,7 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
       }
 ```
 
-* `Add` function   
+* `Add` 函数
 
 ```go
 
@@ -388,7 +397,7 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
 
 ```
 
-* `Mul` function   
+* `Mul` 函数  
 
 ```go
 
@@ -416,7 +425,7 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
 
 ```
 
-* `Eval` function  
+* `Eval` 函数
 
 ```go
          //Implementation1
@@ -468,15 +477,13 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
       }
 ```
 
-*3. Implement encoding and decoding for `VarRing`*
+3. 实现 `VarRing` 的编码和解码：在`pkg/sql/protocol/protocol.go`文件中，实现`VarRing`的序列化和反序列化代码。
 
-In the `pkg/sql/protocol/protocol.go` file, implement the code for serialization and deserialization of `VarRing`.
-
-   | Serialization function | Deserialization function    |
+   | 序列化函数 | 反序列化函数   |
    | ------------------ | ----------------------------------- |
    | EncodeRing         | DecodeRing<br>DecodeRingWithProcess |
 
-Serialization:
+   - 序列化：
 
 ```go
    case *variance.VarRing:
@@ -505,7 +512,7 @@ Serialization:
    		return nil
 ```
 
-Deserialization:
+   - 反序列化：
 
 ```go
   case VarianceRing:
@@ -544,13 +551,14 @@ Deserialization:
    		return r, data, nil
 ```
 
-Here we go. Now we can fire up MatrixOne and try with our `var()` function.
+现在我们可以启动 MatrixOne 并尝试使用 `var()` 函数了。
 
-## **Compile and run MatrixOne**
+## **编译并运行 MatrixOne**
 
+本章节讲述编译并运行 MatrixOne 来查看函数的行为。
 Once the aggregation function is ready, we can compile and run MatrixOne to see the function behavior.
 
-Step1: Run `make config` and `make build` to compile the MatrixOne project and build binary file.
+### 步骤 1：运行 `make config` 和 `make build` 来编译 MatrixOne 并构建二进制文件
 
 ```
 make config
@@ -558,36 +566,42 @@ make build
 ```
 
 !!! info
-    `make config` generates a new configuration file. In this tutorial you only need to run it once. If you modify some code and want to recompile, you only have to run `make build`.  
+    `make config` 运行完成将生成一个新的配置文件。在本教程中，你只需要运行一次。如果你修改了一些代码并想重新编译，你只需要运行 `make build`。
 
-Step2: Run `./mo-server system_vars_config.toml` to launch MatrixOne, the MatrixOne server will start to listen for client connecting.
+### 步骤 2：运行 `./mo-server system_vars_config.toml` 启动 MatrixOne，MatrixOne 服务将开始监听客户端连接
 
 ```
 ./mo-server system_vars_config.toml
 ```
 
 !!! info
-	The logger print level of `system_vars_config.toml` is set to default as `DEBUG`, which will print a lot of information for you. If you only care about what your function will print, you can modify the `system_vars_config.toml` and set `cubeLogLevel` and `level` to `ERROR` level.
 
-	cubeLogLevel = "error"
+   `system_vars_config.toml` 的记录器打印级别设置为默认为 `DEBUG`，它将为您打印很多信息。如果你只想获得函数的打印信息，你可以修改 `system_vars_config.toml` 并将 `cubeLogLevel` 和 `level` 设置为 `ERROR` 级别。
 
-	level = "error"
+	 cubeLogLevel = "error"
+
+	 level = "error"
 
 !!! info
-	Sometimes a `port is in use` error at port 50000 will occur. You could checkout what process in occupying port 50000 by `lsof -i:50000`. This command helps you to get the PIDNAME of this process, then you can kill the process by `kill -9 PIDNAME`.
+    如果端口 50000 产生 `port is in use` 错误。你可以通过 `lsof -i:50000` 来查看占用 50000 端口的进程。`lsof -i:50000` 命令帮助你获取该进程的 PIDNAME，然后你可以通过 `kill -9 PIDNAME` 关闭该进程。
 
-Step3: Connect to MatrixOne server with a MySQL client. Use the built-in test account for example:
+### 步骤 3：通过 MySQL Client 连接 MatrixOne
 
-user: dump
-password: 111
+使用内置账户：
+
+- user: dump
+- password: 111
 
 ```
 mysql -h 127.0.0.1 -P 6001 -udump -p
 Enter password:
 ```
 
-Step4: Test your function behavior with some data. Below is an example. You can check if you get the right mathematical variance result.
-You can also try an `inner join` and check the result, if the result is correct, the factorisation is valid.
+### 步骤 4：使用数据测试你的函数行为
+
+参考下面的示例，检查是否得到正确的方差结果。
+
+你也可以使用 `inner join` 并检查结果，如果结果正确，则表示因数分解是有效的。
 
 ```sql
 mysql>select * from variance;
@@ -633,25 +647,23 @@ mysql> select variance.a, var(variance.b) from variance inner join variance2 on 
 2 rows in set (0.04 sec)
 ```
 
-Bingo!
-
 !!! info
-    Except for `var()`, MatrixOne has already some neat examples for aggregate functions, such as `sum()`, `count()`, `max()`, `min()` and `avg()`. With some minor corresponding changes, the procedure is quite the same as other functions.
+    除了 `var()` 之外，MatrixOne 已经有一些聚合函数的简洁示例，例如 `sum()`、`count()`、`max()`、`min()` 和 `avg()`。稍作相应改动后，过程与其他功能基本相同。
 ​
 
-## **Write unit Test for your function**
+## **为你的函数编写测试单元**
 
-We recommend that you also write a unit test for the new function.
-Go has a built-in testing command called `go test` and a package `testing` which combine to give a minimal yet complete testing experience. It automates execution of any function of the form.
+本章节将指导你为新函数编写一个单元测试。
+
+Go 有一个名为 `go test` 的内置测试命令和一个名为 *testing* 的测试包，它们结合起来可以提供最小但完整的测试体验。它自动执行表单的任何函数。
 
 ```
 func TestXxx(*testing.T)
 ```
 
-To write a new test suite, create a file whose name ends `_test.go` that contains the `TestXxx` functions as described here. Put the file in the same package as the one being tested. The file will be excluded from regular package builds but will be included when the `go test` command is run.
+编写一个新的测试套件，先创建一个以 *_test.go* 结尾的文件，命名需要描述函数名称，例如 *variance_test.go*；将 *variance_test.go* 文件与测试文件放在同一个包中，打包构建时，不包含 *variance_test.go* 文件，但在运行 `go test` 命令时会包含 *variance_test.go* 文件，详细步骤，参见下述步骤。
 
-Step1: Create a file named `variance_test.go` under `pkg/container/ring/variance/` directory.
-Import the `testing` framework and the `reflect` framework we are going to use for testing.
+### 步骤 1：在 `pkg/container/ring/variance/` 目录下新建一个名为 `variance_test.go` 的文件，并导入用于测试的 `testing` 框架和 `reflect` 框架。
 
 ```go
 package variance
@@ -669,7 +681,7 @@ func TestVariance(t *testing.T) {
 }
 ```
 
-Step2: Implement the `TestVariance` function with some predefined values.
+### 步骤 2：通过一些预定义值执行 `TestVariance` 函数
 
 ```go
   func TestVariance(t *testing.T) {
@@ -705,8 +717,9 @@ Step2: Implement the `TestVariance` function with some predefined values.
    }
 ```
 
-Step3: Complete the unit test for Serialization and Deserialization in the function `TestRing` in the file `pkg/sql/protocol/protocol_test.go`.
-You can check the complete test code of `VarRing` there.
+### 步骤 3：在 `pkg/sql/protocol/protocol_test.go` 文件内的函数 `TestRing` 中完成序列化和反序列化的单元测试
+
+你可以检查 `VarRing` 的完整测试代码。
 
 ```go
   &variance.VarRing{
@@ -740,43 +753,46 @@ You can check the complete test code of `VarRing` there.
 
 ```
 
-Step4: Launch Test.
+### 步骤 4：启动测试
 
-Within the same directory as the test:
+1. 在与步骤 3 同一个目录下进行测试：
 
-```
-go test
-```
+   ```
+   go test
+   ```
 
-This picks up any files matching packagename_test.go.
-If you are getting a `PASS`, you are passing the unit test.
+   这条命令会选取任何与 *packagename_test.go* 匹配的文件，在本示例中，执行 `go test` 将会选取测试 *variance_test.go* 文件。
 
-In MatrixOne, we have a `bvt` test framework which will run all the unit tests defined in the whole package, and each time your make a pull request to the code base, the test will automatically run.
-You code will be merged only if the `bvt` test pass.
+2. 运行结果为 `PASS`，表示通过了单元测试。
 
-## **Conduct a Performance Test**
+   在 MatrixOne 中，我们有一个 `bvt` 测试框架，它将运行整个包中定义的所有单元测试，并且每次你向代码库发出拉取请求时，测试将自动运行。
 
-Aggregate functions are an important feature of a database system, with queries on hundreds of millions of data rows, the time consumption of an aggregate function is quite significant.
-Thus, we recommend you to run a performance test.
+3. `bvt` 测试通过，你的代码将被合并。
 
-Step1: Download the standard test dataset.
+## **进行性能测试**
 
-We have prepared a single table SSB query dataset with 10 million rows of data. The raw data file size is about 4GB, 500MB after being zipped.  You can get the data files directly:
+聚合函数是数据库系统的一个重要特性，当查询数以亿计的数据行时，聚合函数的时间消耗是相当大的。
+
+因此，你可以试运行一个性能测试。
+
+### 步骤 1：载标准测试数据集
+
+本章节为你准备了一个包含1000万行数据的单表SSB查询数据集。原始数据文件大小约为4GB，压缩后为500MB。点击下面的链接，直接获取数据文件：
 
 ```
 https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/lineorder_flat.tar.bz2
 ```
 
-Step2: Unzip the file and Load the data into MatrixOne.
+### 步骤 2：解压文件，将数据加载到 MatrixOne
 
-With the following SQL you can create the database and table, and load the `lineorder_flat.tbl` into MatrixOne.
+使用下面的 SQL 命令，可以创建数据库和表，加载数据 `lineorder_flat.tbl` 到 MatrixOne。
 
 ```sql
 create database if not exists ssb;
 use ssb;
 drop table if exists lineorder_flat;
 CREATE TABLE lineorder_flat(
-  LO_ORDERKEY bigint primary key,
+  LO_ORDERKEY bigint key,
   LO_LINENUMBER int,
   LO_CUSTKEY int,
   LO_PARTKEY int,
@@ -820,13 +836,13 @@ load data infile '/Users/YOURPATH/lineorder_flat.tbl' into table lineorder_flat 
 
 ```
 
-If you load successfully this dataset, you are normally getting a result as:
+加载数据集成功，则代码示例如下：
 
 ```
 Query OK, 10272594 rows affected (1 min 7.09 sec)
 ```
 
-Step3: Run your aggregate function and `sum()`, `avg()` on the column `LO_SUPPKEY` respectively to check the performance.
+### 步骤 3：分别在 `LO_SUPPKEY` 列上运行聚合函数 `sum()` 和 `avg()` 来验证性能
 
 ```sql
 select avg(LO_SUPPKEY) from lineorder_flat;
@@ -834,4 +850,4 @@ select sum(LO_SUPPKEY) from lineorder_flat;
 select yourfunction(LO_SUPPKEY) from lineorder_flat;
 ```
 
-Step4: When you submit your PR, please submit these performance results in your PR comment as well.
+### 步骤 4：提交你的 PR，并且在你的 PR 评论中提交测试结果
