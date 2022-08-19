@@ -67,7 +67,7 @@ func (t *Tx) Exec(ctx context.Context, filePath string, stmtText string) error {
 		}
 
 		proc := testutil.NewProcess()
-		proc.Snapshot = txnengine.OperatorToSnapshot(t.operator) //TODO remove this
+		proc.TxnOperator = t.operator
 		compileCtx := compile.New(t.databaseName, stmtText, "", ctx, t.engine, proc, stmt)
 
 		//optimizer := plan.NewBaseOptimizer(t)
