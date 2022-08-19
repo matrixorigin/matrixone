@@ -18,13 +18,14 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"math/rand"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
@@ -84,9 +85,9 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 }
 
 func startCNService(cfg *Config, stopper *stopper.Stopper) error {
-	cfg.CN.Frontend.SetLogAndVersion(&cfg.Log, Version)
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
-		s, err := cnservice.NewService(&cfg.CN, ctx)
+		c := cfg.getCNServiceConfig()
+		s, err := cnservice.NewService(&c, ctx)
 		if err != nil {
 			panic(err)
 		}
@@ -103,7 +104,8 @@ func startCNService(cfg *Config, stopper *stopper.Stopper) error {
 
 func startDNService(cfg *Config, stopper *stopper.Stopper) error {
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
-		s, err := dnservice.NewService(&cfg.DN,
+		c := cfg.getDNServiceConfig()
+		s, err := dnservice.NewService(&c,
 			cfg.createFileService,
 			dnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service")))
 		if err != nil {
