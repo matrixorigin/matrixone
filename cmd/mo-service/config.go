@@ -16,13 +16,12 @@ package main
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"net"
 	"os"
 	"strings"
 
 	"github.com/BurntSushi/toml"
-
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -57,7 +56,7 @@ type Config struct {
 	ServiceType string `toml:"service-type"`
 	// FileServices the config for file services
 	FileServices []fileservice.Config `toml:"fileservice"`
-
+	// HAKeeperClient hakeeper client config
 	HAKeeperClient logservice.HAKeeperClientConfig `toml:"hakeeper-client"`
 	// DN dn service config
 	DN dnservice.Config `toml:"dn"`
@@ -113,6 +112,19 @@ func (c *Config) getLogServiceConfig() logservice.Config {
 	cfg := c.LogService
 	fmt.Printf("hakeeper client cfg: %v", c.HAKeeperClient)
 	cfg.HAKeeperClientConfig = c.HAKeeperClient
+	return cfg
+}
+
+func (c *Config) getDNServiceConfig() dnservice.Config {
+	cfg := c.DN
+	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
+	return cfg
+}
+
+func (c *Config) getCNServiceConfig() cnservice.Config {
+	cfg := c.CN
+	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
+	cfg.Frontend.SetLogAndVersion(&c.Log, Version)
 	return cfg
 }
 

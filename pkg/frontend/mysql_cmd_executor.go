@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	goErrors "errors"
 	"fmt"
+	"hash/fnv"
 
 	"os"
 	"runtime/pprof"
@@ -151,8 +152,13 @@ func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, 
 	statementId := util.Fastrand64()
 	sessInfo := proc.SessionInfo
 	txnID := uint64(0)
-	if ses.GetTxnHandler().IsValidTxn() { // fixme: how Could I get an valid txn ID.
-		txnID = ses.GetTxnHandler().GetTxn().GetID()
+	if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
+		idBytes := handler.GetTxn().Txn().ID
+		hasher := fnv.New64()
+		if _, err := hasher.Write(idBytes); err != nil {
+			panic(err)
+		}
+		txnID = hasher.Sum64()
 	}
 	trace.ReportStatement(
 		ctx,
@@ -297,17 +303,17 @@ func (foq *fakeOutputQueue) flush() error {
 }
 
 const (
-	tableNamePos    = 0
-	tableCommentPos = 4
+	tableNamePos    = 1
+	tableCommentPos = 6
 
-	attrNamePos    = 8
-	attrTypPos     = 9
-	charWidthPos   = 11
-	defaultPos     = 13
-	primaryKeyPos  = 16
-	attrCommentPos = 19
+	attrNamePos    = 16
+	attrTypPos     = 17
+	charWidthPos   = 19
+	nullablePos    = 20
+	primaryKeyPos  = 24
+	attrCommentPos = 27
 
-	showCreateTableAttrCount = 21
+	showCreateTableAttrCount = 29
 )
 
 /*
@@ -323,10 +329,8 @@ func handleShowCreateTable(ses *Session) error {
 		if colName == "PADDR" {
 			continue
 		}
-		nullOrNot := ""
-		if d[defaultPos].(int8) != 0 {
-			nullOrNot = "NOT NULL"
-		} else {
+		nullOrNot := "NOT NULL"
+		if d[nullablePos].(int8) == 1 {
 			nullOrNot = "DEFAULT NULL"
 		}
 
@@ -865,9 +869,8 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 func (mce *MysqlCmdExecutor) handleChangeDB(requestCtx context.Context, db string) error {
 	ses := mce.GetSession()
 	txnHandler := ses.GetTxnHandler()
-	txnCtx := txnHandler.GetTxn().GetCtx()
 	//TODO: check meta data
-	if _, err := ses.Pu.StorageEngine.Database(requestCtx, db, engine.Snapshot(txnCtx)); err != nil {
+	if _, err := ses.Pu.StorageEngine.Database(requestCtx, db, txnHandler.GetTxn()); err != nil {
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, db)
 	}
@@ -980,7 +983,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 	if ses.InMultiStmtTransactionMode() {
 		return fmt.Errorf("do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
 	}
-	dbHandler, err := ses.GetStorage().Database(requestCtx, loadDb, engine.Snapshot(txnHandler.GetTxn().GetCtx()))
+	dbHandler, err := ses.GetStorage().Database(requestCtx, loadDb, txnHandler.GetTxn())
 	if err != nil {
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, loadDb)
@@ -1043,7 +1046,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl
 		if mce.tableInfos == nil || mce.db != dbName {
 			txnHandler := ses.GetTxnHandler()
 			eng := ses.GetStorage()
-			db, err := eng.Database(requestCtx, dbName, engine.Snapshot(txnHandler.GetTxn().GetCtx()))
+			db, err := eng.Database(requestCtx, dbName, txnHandler.GetTxn())
 			if err != nil {
 				return err
 			}
@@ -1628,7 +1631,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 	cwft.proc.UnixTime = time.Now().UnixNano()
 	txnHandler := cwft.ses.GetTxnHandler()
-	cwft.proc.Snapshot = txnHandler.GetTxn().GetCtx()
+	cwft.proc.TxnOperator = txnHandler.GetTxn()
 	cwft.compile = compile.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), requestCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
 	err = cwft.compile.Compile(cwft.plan, cwft.ses, fill)
 	if err != nil {

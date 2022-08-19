@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -73,8 +74,9 @@ func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {
 	return txn.Commit()
 }
 
-func (db *DB) GetTxnByCtx(ctx []byte) (txn txnif.AsyncTxn, err error) {
-	txn = db.TxnMgr.GetTxnByCtx(ctx)
+func (db *DB) GetTxnByCtx(txnOperator client.TxnOperator) (txn txnif.AsyncTxn, err error) {
+	txnID := txnOperator.Txn().ID
+	txn = db.TxnMgr.GetTxnByCtx(txnID)
 	if txn == nil {
 		err = data.ErrNotFound
 	}

@@ -44,7 +44,7 @@ func TestHardwareCPU(t *testing.T) {
 		deltaBusy := mf2[1].Metric[0].Counter.GetValue() - mf[1].Metric[0].Counter.GetValue()
 		deltaPercent := mf2[0].Metric[0].Gauge.GetValue()
 
-		So(deltaBusy*100, ShouldAlmostEqual, deltaPercent, 10 /* 10% diff will be ok anyway */)
+		So(deltaBusy*100, ShouldAlmostEqual, deltaPercent, 20 /* 20% diff will be ok anyway */)
 	})
 }
 

@@ -6,6 +6,14 @@ level = "debug"
 format = "json"
 max-size = 512
 
+
+[hakeeper-client]
+service-addresses = [
+    "127.0.0.1:32001",
+    "127.0.0.1:32011",
+    "127.0.0.1:32021",
+]
+
 [[fileservice]]
 # local fileservice instance, used to store TAE Data and DNStore metadata.
 name = "local"
@@ -33,9 +41,3 @@ service-address = "127.0.0.1:41020"
 # txn storage backend implementation. [TAE|MEM]
 backend = "MEM"
 
-[dn.HAKeeper.hakeeper-client]
-service-addresses = [
-    "127.0.0.1:32001",
-    "127.0.0.1:32011",
-    "127.0.0.1:32021",
-]
