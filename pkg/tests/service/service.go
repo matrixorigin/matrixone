@@ -167,6 +167,15 @@ type ClusterWaitState interface {
 	WaitDNStoreReported(ctx context.Context, uuid string)
 	// WaitDNStoreReportedIndexed waits dn store reported by index.
 	WaitDNStoreReportedIndexed(ctx context.Context, index int)
+
+	// WaitLogStoreTimeout waits log store timeout by uuid.
+	WaitLogStoreTimeout(ctx context.Context, uuid string)
+	// WaitLogStoreTimeoutIndexed waits log store timeout by index.
+	WaitLogStoreTimeoutIndexed(ctx context.Context, index int)
+	// WaitLogStoreReported waits log store reported by uuid.
+	WaitLogStoreReported(ctx context.Context, uuid string)
+	// WaitLogStoreReportedIndexed waits log store reported by index.
+	WaitLogStoreReportedIndexed(ctx context.Context, index int)
 }
 
 // ----------------------------------------------------
@@ -506,6 +515,7 @@ func (c *testCluster) WaitDNShardsReported(ctx context.Context) {
 			reported := ParseReportedDNShardCount(
 				state.DNState, c.GetHAKeeperConfig(), state.Tick,
 			)
+
 			// FIXME: what about reported larger than expected
 			if reported >= expected {
 				return
@@ -666,6 +676,76 @@ func (c *testCluster) WaitDNStoreReportedIndexed(ctx context.Context, index int)
 	require.NoError(c.t, err)
 
 	c.WaitDNStoreReported(ctx, ds.ID())
+}
+
+func (c *testCluster) WaitLogStoreTimeout(ctx context.Context, uuid string) {
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting log store timeout",
+				"log store %s, error: %s", uuid, ctx.Err(),
+			)
+		default:
+			time.Sleep(defaultWaitInterval)
+
+			expired, err := c.LogStoreExpired(uuid)
+			if err != nil {
+				c.logger.Error("fail to check log store expired or not",
+					zap.Error(err),
+					zap.String("uuid", uuid),
+				)
+				continue
+			}
+
+			if expired {
+				return
+			}
+		}
+	}
+}
+
+func (c *testCluster) WaitLogStoreTimeoutIndexed(ctx context.Context, index int) {
+	ls, err := c.GetLogServiceIndexed(index)
+	require.NoError(c.t, err)
+
+	c.WaitLogStoreTimeout(ctx, ls.ID())
+}
+
+func (c *testCluster) WaitLogStoreReported(ctx context.Context, uuid string) {
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting log store reported",
+				"log store %s, error: %s", uuid, ctx.Err(),
+			)
+		default:
+			time.Sleep(defaultWaitInterval)
+
+			expired, err := c.LogStoreExpired(uuid)
+			if err != nil {
+				c.logger.Error("fail to check log store expired or not",
+					zap.Error(err),
+					zap.String("uuid", uuid),
+				)
+				continue
+			}
+
+			if !expired {
+				return
+			}
+		}
+	}
+}
+
+func (c *testCluster) WaitLogStoreReportedIndexed(ctx context.Context, index int) {
+	ls, err := c.GetLogServiceIndexed(index)
+	require.NoError(c.t, err)
+
+	c.WaitLogStoreReported(ctx, ls.ID())
 }
 
 // --------------------------------------------------------------
@@ -1116,7 +1196,6 @@ func (c *testCluster) rangeHAKeeperService(
 // FilterFunc returns true if traffic was allowed.
 type FilterFunc func(morpc.Message, string) bool
 
-// FIXME: unit test
 // backendFilterFactory constructs a closure with the type of FilterFunc.
 func (c *testCluster) backendFilterFactory(localAddr string) FilterFunc {
 	return func(_ morpc.Message, backendAddr string) bool {
@@ -1126,21 +1205,10 @@ func (c *testCluster) backendFilterFactory(localAddr string) FilterFunc {
 		c.network.RUnlock()
 
 		if len(addressSets) == 0 {
-			c.logger.Info("network partition not enabled",
-				zap.String("localAddr", localAddr),
-				zap.String("backendAddr", backendAddr),
-			)
 			return true
 		}
 
-		for i, addrSet := range addressSets {
-			c.logger.Info(
-				"network partition addresses",
-				zap.Int("index", i),
-				zap.Any("addresses", addrSet),
-				zap.String("localAddr", localAddr),
-				zap.String("backendAddr", backendAddr),
-			)
+		for _, addrSet := range addressSets {
 			if addrSet.contains(localAddr) &&
 				addrSet.contains(backendAddr) {
 				return true
