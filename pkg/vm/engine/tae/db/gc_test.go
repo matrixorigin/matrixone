@@ -39,7 +39,7 @@ func TestGCBlock1(t *testing.T) {
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
 	defer bat.Close()
-	createRelationAndAppend(t, tae, "db", schema, bat, true)
+	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
 
 	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.GetDatabase("db")
@@ -144,7 +144,7 @@ func TestGCTable(t *testing.T) {
 	bats := bat.Split(4)
 
 	// 3. Create a table and append 7 rows
-	db, _ = createRelationAndAppend(t, tae, "db", schema, bats[0], false)
+	db, _ = createRelationAndAppend(t, 0, tae, "db", schema, bats[0], false)
 
 	names := getSegmentFileNames(tae)
 	assert.Equal(t, 1, len(names))
@@ -164,13 +164,13 @@ func TestGCTable(t *testing.T) {
 	assert.Equal(t, 0, len(names))
 
 	// 5. Create a table and append 3 block
-	createRelationAndAppend(t, tae, "db", schema, bat, false)
+	createRelationAndAppend(t, 0, tae, "db", schema, bat, false)
 	names = getSegmentFileNames(tae)
 	t.Log(names)
 	assert.Equal(t, 2, len(names))
 	printCheckpointStats(t, tae)
 
-	compactBlocks(t, tae, "db", schema, true)
+	compactBlocks(t, 0, tae, "db", schema, true)
 
 	// 6. Drop the table
 	dropRelation(t, tae, "db", schema.Name)
@@ -269,8 +269,8 @@ func TestGCDB(t *testing.T) {
 	createRelation(t, tae, "db", schema2, false)
 	appendClosure(t, bat1, schema1.Name, tae, nil)()
 	appendClosure(t, bat2, schema2.Name, tae, nil)()
-	compactBlocks(t, tae, "db", schema1, true)
-	compactBlocks(t, tae, "db", schema2, true)
+	compactBlocks(t, 0, tae, "db", schema1, true)
+	compactBlocks(t, 0, tae, "db", schema2, true)
 	dropDB(t, tae, "db")
 
 	testutils.WaitExpect(4000, func() bool {

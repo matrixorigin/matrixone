@@ -102,7 +102,7 @@ func NewSender(logger *zap.Logger, options ...SenderOption) (TxnSender, error) {
 		},
 	}
 
-	codec := morpc.NewMessageCodec(func() morpc.Message { return s.acquireResponse() },
+	codec := morpc.NewMessageCodecWithChecksum(func() morpc.Message { return s.acquireResponse() },
 		s.options.payloadCopyBufferSize)
 	bf := morpc.NewGoettyBasedBackendFactory(codec, s.options.backendCreateOptions...)
 	client, err := morpc.NewClient(bf, s.options.clientOptions...)
