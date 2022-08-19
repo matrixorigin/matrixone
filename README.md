@@ -14,11 +14,11 @@
   <a href="https://www.codefactor.io/repository/github/matrixorigin/matrixone">
     <img src="https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0" alt="codefactor"/>
   </a>
-  <a href="https://docs.matrixorigin.io/0.5.0/MatrixOne/Release-Notes/v0.5.0/">
-   <img src="https://img.shields.io/badge/Release-v0.5.0-green.svg" alt="release"/>
+  <a href="https://docs.matrixorigin.io/0.5.1/MatrixOne/Release-Notes/v0.5.1/">
+   <img src="https://img.shields.io/badge/Release-v0.5.1-green.svg" alt="release"/>
   </a>
   <br>
-  <a href="https://docs.matrixorigin.io/0.5.0/">
+  <a href="https://docs.matrixorigin.io/0.5.1/">
     <b>Docs</b>
   </a>
   <b>||</b>
@@ -147,7 +147,7 @@ MatrixOne's architecture is as below:
   <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone_new_arch.png?raw=true">
 </p>
 
-For more details, you can checkout [MatrixOne Architecture](https://docs.matrixorigin.io/0.5.0/MatrixOne/Overview/matrixone-architecture/).
+For more details, you can checkout [MatrixOne Architecture](https://docs.matrixorigin.io/0.5.1/MatrixOne/Overview/matrixone-architecture/).
 
 
 ## ⚡️ <a id="quick-start">Quick start</a>
@@ -155,7 +155,7 @@ For more details, you can checkout [MatrixOne Architecture](https://docs.matrixo
 
 ### ⚙️ Install MatrixOne
 MatrixOne supports Linux and MacOS. You can install MatrixOne either by [building from source](#building-from-source) or [using docker](#using-docker).
-For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.io/0.5.0/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
+For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.io/0.5.1/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
 #### **Building from source**
 
 1. Install Go (version 1.18 is required).
@@ -173,11 +173,11 @@ $ cd matrixone
 
 - *Option 2*: Get the MatrixOne(Stable Version) code
 
-If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **0.5.0** first.
+If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **0.5.1** first.
 
 ```
 $ git clone https://github.com/matrixorigin/matrixone.git
-$ git checkout 0.5.0
+$ git checkout 0.5.1
 $ cd matrixone
 ```
 
@@ -214,10 +214,18 @@ It will pull the image from Docker Hub if not exists. You can choose to pull the
 $ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
 ```
 
-- 0.5.0 Version Image
+- 0.5.1 Version Image
 
 ```
-$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
+$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1
+```
+
+3. Mount the data directory(Optional)
+
+   To customize the configuration file, you can mount the custom configuration file stored on the local disk.
+
+```
+docker run -d -p 6001:6001 -v ${path_name}/system_vars_config.toml:/system_vars_config.toml:ro -v ${path_name}/store:/store:rw --name matrixone matrixorigin/matrixone:0.5.1
 ```
 
 ### 🌟 Connecting to MatrixOne server
@@ -251,7 +259,7 @@ Now, MatrixOne only supports the TCP listener.
 ## 🙌 <a id="contributing">Contributing</a>
 
 Contributions to MatrixOne are welcome from everyone.  
- See [Contribution Guide](https://docs.matrixorigin.io/0.5.0/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow.
+ See [Contribution Guide](https://docs.matrixorigin.io/0.5.1/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow.
 
 ### 👏 All contributors
 
