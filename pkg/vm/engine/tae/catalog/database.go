@@ -18,21 +18,44 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
+type accessInfo struct {
+	TenantID, UserID, RoleID uint32
+}
+
+func (ai *accessInfo) WriteTo(w io.Writer) (n int64, err error) {
+	for _, id := range []uint32{ai.TenantID, ai.UserID, ai.RoleID} {
+		if err = binary.Write(w, binary.BigEndian, id); err != nil {
+			return
+		}
+	}
+	return 12, nil
+}
+
+func (ai *accessInfo) ReadFrom(r io.Reader) (n int64, err error) {
+	for _, idPtr := range []*uint32{&ai.TenantID, &ai.UserID, &ai.RoleID} {
+		if err = binary.Read(r, binary.BigEndian, idPtr); err != nil {
+			return
+		}
+	}
+	return 12, nil
+}
+
 type DBEntry struct {
-	// *BaseEntry
 	*BaseEntry
-	catalog *Catalog
-	name    string
-	isSys   bool
+	catalog  *Catalog
+	acInfo   accessInfo
+	name     string
+	fullName string
+	isSys    bool
 
 	entries   map[uint64]*common.DLNode
 	nameNodes map[string]*nodeList
@@ -43,6 +66,7 @@ type DBEntry struct {
 
 func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
 	id := catalog.NextDB()
+
 	e := &DBEntry{
 		BaseEntry: &BaseEntry{
 			CommitInfo: CommitInfo{
@@ -57,6 +81,11 @@ func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
 		entries:   make(map[uint64]*common.DLNode),
 		nameNodes: make(map[string]*nodeList),
 		link:      new(common.Link),
+	}
+	if txnCtx != nil {
+		// Only in unit test, txnCtx can be nil
+		e.acInfo.TenantID = txnCtx.GetTenantID()
+		e.acInfo.UserID, e.acInfo.RoleID = txnCtx.GetUserAndRoleID()
 	}
 	return e
 }
@@ -105,16 +134,25 @@ func (e *DBEntry) Compare(o common.NodePayload) int {
 	return e.DoCompre(oe)
 }
 
-func (e *DBEntry) GetName() string { return e.name }
+func (e *DBEntry) GetTenantID() uint32 { return e.acInfo.TenantID }
+func (e *DBEntry) GetUserID() uint32   { return e.acInfo.UserID }
+func (e *DBEntry) GetRoleID() uint32   { return e.acInfo.RoleID }
+func (e *DBEntry) GetName() string     { return e.name }
+func (e *DBEntry) GetFullName() string {
+	if len(e.fullName) == 0 {
+		e.fullName = genDBFullName(e.acInfo.TenantID, e.name)
+	}
+	return e.fullName
+}
 
 func (e *DBEntry) String() string {
 	e.RLock()
 	defer e.RUnlock()
-	return fmt.Sprintf("DB%s[name=%s]", e.BaseEntry.String(), e.name)
+	return e.StringLocked()
 }
 
 func (e *DBEntry) StringLocked() string {
-	return fmt.Sprintf("DB%s[name=%s]", e.BaseEntry.String(), e.name)
+	return fmt.Sprintf("DB%s[name=%s]", e.BaseEntry.String(), e.GetFullName())
 }
 
 func (e *DBEntry) MakeTableIt(reverse bool) *common.LinkIt {
@@ -333,6 +371,11 @@ func (e *DBEntry) WriteTo(w io.Writer) (n int64, err error) {
 	if n, err = e.BaseEntry.WriteTo(w); err != nil {
 		return
 	}
+	x, err := e.acInfo.WriteTo(w)
+	if err != nil {
+		return
+	}
+	n += x
 	if err = binary.Write(w, binary.BigEndian, uint16(len(e.name))); err != nil {
 		return
 	}
@@ -346,6 +389,11 @@ func (e *DBEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	if n, err = e.BaseEntry.ReadFrom(r); err != nil {
 		return
 	}
+	x, err := e.acInfo.ReadFrom(r)
+	if err != nil {
+		return
+	}
+	n += x
 	size := uint16(0)
 	if err = binary.Read(r, binary.BigEndian, &size); err != nil {
 		return
@@ -367,6 +415,7 @@ func (e *DBEntry) MakeLogEntry() *EntryCommand {
 func (e *DBEntry) Clone() CheckpointItem {
 	cloned := &DBEntry{
 		BaseEntry: e.BaseEntry.Clone(),
+		acInfo:    e.acInfo,
 		name:      e.name,
 	}
 	return cloned
@@ -375,6 +424,7 @@ func (e *DBEntry) Clone() CheckpointItem {
 func (e *DBEntry) CloneCreate() CheckpointItem {
 	cloned := &DBEntry{
 		BaseEntry: e.BaseEntry.CloneCreate(),
+		acInfo:    e.acInfo,
 		name:      e.name,
 	}
 	return cloned
@@ -383,6 +433,7 @@ func (e *DBEntry) CloneCreate() CheckpointItem {
 func (e *DBEntry) CloneCreateEntry() *DBEntry {
 	cloned := &DBEntry{
 		BaseEntry: e.BaseEntry.Clone(),
+		acInfo:    e.acInfo,
 		name:      e.name,
 	}
 	cloned.RWMutex = &sync.RWMutex{}
