@@ -10,6 +10,9 @@ You can update the standalone MatrixOne version by 3 methods:
 
 - If MatrixOne is installed with Docker, you can use Docker to update MatrixOne's version.
 
+!!! note
+    This document is only applicable to the v0.5.0 version updating. Not for v0.4.0/v0.3.0/v0.2.0/v0.1.0 update to v0.5.0 version.
+    
 ## Before You Start
 
 - MatrixOne V0.5.0 has been installed.
