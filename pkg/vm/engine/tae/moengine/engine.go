@@ -35,7 +35,7 @@ func NewEngine(impl *db.DB) *txnEngine {
 
 func (e *txnEngine) Delete(_ context.Context, name string, ctx client.TxnOperator) (err error) {
 	var txn txnif.AsyncTxn
-	if txn, err = e.impl.GetTxnByCtx(ctx.(engine.Snapshot)); err != nil {
+	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
 		panic(err)
 	}
 	_, err = txn.DropDatabase(name)
@@ -44,7 +44,7 @@ func (e *txnEngine) Delete(_ context.Context, name string, ctx client.TxnOperato
 
 func (e *txnEngine) Create(_ context.Context, name string, ctx client.TxnOperator) (err error) {
 	var txn txnif.AsyncTxn
-	if txn, err = e.impl.GetTxnByCtx(ctx.(engine.Snapshot)); err != nil {
+	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
 		panic(err)
 	}
 	_, err = txn.CreateDatabase(name)
@@ -55,7 +55,7 @@ func (e *txnEngine) Databases(_ context.Context, ctx client.TxnOperator) ([]stri
 	var err error
 	var txn txnif.AsyncTxn
 
-	if txn, err = e.impl.GetTxnByCtx(ctx.(engine.Snapshot)); err != nil {
+	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
 		panic(err)
 	}
 	return txn.DatabaseNames(), nil
@@ -65,7 +65,7 @@ func (e *txnEngine) Database(_ context.Context, name string, ctx client.TxnOpera
 	var err error
 	var txn txnif.AsyncTxn
 
-	if txn, err = e.impl.GetTxnByCtx(ctx.(engine.Snapshot)); err != nil {
+	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
 		panic(err)
 	}
 	h, err := txn.GetDatabase(name)

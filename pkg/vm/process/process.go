@@ -46,7 +46,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.Id = p.Id
 	proc.Mp = p.Mp
 	proc.Lim = p.Lim
-	proc.Snapshot = p.Snapshot
+	proc.TxnOperator = p.TxnOperator
 	proc.AnalInfos = p.AnalInfos
 	proc.SessionInfo = p.SessionInfo
 

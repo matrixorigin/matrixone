@@ -142,6 +142,7 @@ func initTae(pu *config.ParameterUnit) *taeHandler {
 
 	//test storage aoe_storage
 	pu.StorageEngine = eng
+	pu.TxnClient = moengine.EngineToTxnClient(eng)
 
 	return &taeHandler{
 		eng: eng,
@@ -179,7 +180,7 @@ func main() {
 	configFilePath := args[0]
 
 	params := &config.FrontendParameters{}
-	pu := config.NewParameterUnit(params, nil, nil, nil, nil)
+	pu := config.NewParameterUnit(params, nil, nil, nil, nil, nil)
 
 	//before anything using the configuration
 	_, err := toml.DecodeFile(configFilePath, params)

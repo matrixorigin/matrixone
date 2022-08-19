@@ -430,7 +430,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint8},
-				ReturnTyp: types.T_varchar,
+				ReturnTyp: types.T_decimal128,
 				Fn:        unary.Oct[uint8],
 			},
 			{
@@ -438,7 +438,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint16},
-				ReturnTyp: types.T_varchar,
+				ReturnTyp: types.T_decimal128,
 				Fn:        unary.Oct[uint16],
 			},
 			{
@@ -446,7 +446,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint32},
-				ReturnTyp: types.T_varchar,
+				ReturnTyp: types.T_decimal128,
 				Fn:        unary.Oct[uint32],
 			},
 			{
@@ -454,7 +454,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint64},
-				ReturnTyp: types.T_varchar,
+				ReturnTyp: types.T_decimal128,
 				Fn:        unary.Oct[uint64],
 			},
 			{
@@ -462,7 +462,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int8},
-				ReturnTyp: types.T_varchar,
+				ReturnTyp: types.T_decimal128,
 				Fn:        unary.Oct[int8],
 			},
 			{
@@ -470,7 +470,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int16},
-				ReturnTyp: types.T_varchar,
+				ReturnTyp: types.T_decimal128,
 				Fn:        unary.Oct[int16],
 			},
 			{
@@ -478,7 +478,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int32},
-				ReturnTyp: types.T_varchar,
+				ReturnTyp: types.T_decimal128,
 				Fn:        unary.Oct[int32],
 			},
 			{
@@ -486,7 +486,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int64},
-				ReturnTyp: types.T_varchar,
+				ReturnTyp: types.T_decimal128,
 				Fn:        unary.Oct[int64],
 			},
 			{
@@ -494,7 +494,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float32},
-				ReturnTyp: types.T_varchar,
+				ReturnTyp: types.T_decimal128,
 				Fn:        unary.OctFloat[float32],
 			},
 			{
@@ -502,7 +502,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64},
-				ReturnTyp: types.T_varchar,
+				ReturnTyp: types.T_decimal128,
 				Fn:        unary.OctFloat[float64],
 			},
 		},
