@@ -184,10 +184,16 @@ func TimestampToDatetime(loc *time.Location, xs []Timestamp, rs []Datetime) ([]D
 }
 
 // FromClockUTC gets the utc time value in Timestamp
-func FromClockUTC(year int32, month, day, hour, min, sec uint8, msec uint32) Timestamp {
+func FromClockUTC(year int32, month, day, hour, minute, sec uint8, msec uint32) Timestamp {
 	days := FromCalendar(year, month, day)
-	secs := int64(days)*secsPerDay + int64(hour)*secsPerHour + int64(min)*secsPerMinute + int64(sec)
+	secs := int64(days)*secsPerDay + int64(hour)*secsPerHour + int64(minute)*secsPerMinute + int64(sec)
 	return Timestamp(secs*microSecsPerSec + int64(msec))
+}
+
+// FromClockZone gets the local time value in Timestamp
+func FromClockZone(loc *time.Location, year int32, month, day, hour, minute, sec uint8, msec uint32) Timestamp {
+	t := time.Date(int(year), time.Month(month), int(day), int(hour), int(minute), int(sec), int(msec*1000), loc)
+	return Timestamp(t.UnixMicro() + unixEpoch)
 }
 
 func CurrentTimestamp() Timestamp {
@@ -196,4 +202,12 @@ func CurrentTimestamp() Timestamp {
 
 func ValidTimestamp(timestamp Timestamp) bool {
 	return timestamp > TimestampMinValue
+}
+
+func UnixToTimestamp(ts int64) Timestamp {
+	return Timestamp(ts*microSecsPerSec + unixEpoch)
+}
+
+func UnixMicroToTimestamp(ts int64) Timestamp {
+	return Timestamp(ts + unixEpoch)
 }
