@@ -15,7 +15,7 @@ You can update the standalone MatrixOne version by 3 methods:
     
 ## Before You Start
 
-- MatrixOne V0.5.0 has been installed.
+- MatrixOne v0.5.0 has been installed.
 
 ## <h2><a name="code_source_update">Method 1: Updating from source</a></h2>
 
