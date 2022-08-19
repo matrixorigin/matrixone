@@ -28,11 +28,12 @@ import (
 var (
 	flagPayloadMessage byte = 1
 	flagWithChecksum   byte = 2
+	flagCustomHeader   byte = 4
 )
 
 type messageCodec struct {
 	codec codec.Codec
-	bc    codec.Codec
+	bc    *baseCodec
 }
 
 // NewMessageCodec create a message codec. If the message is a PayloadMessage, payloadCopyBufSize
@@ -53,7 +54,9 @@ func newMessageCodec(messageFactory func() Message, payloadCopyBufSize int, enab
 		payloadBufSize: payloadCopyBufSize,
 		enableChecksum: enableChecksum,
 	}
-	return &messageCodec{codec: length.New(bc), bc: bc}
+	c := &messageCodec{codec: length.New(bc), bc: bc}
+	c.AddHeaderCodec(&deadlineContextCodec{})
+	return c
 }
 
 func (c *messageCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
@@ -64,14 +67,19 @@ func (c *messageCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer
 	return c.bc.Encode(data, out, conn)
 }
 
+func (c *messageCodec) AddHeaderCodec(hc HeaderCodec) {
+	c.bc.headerCodecs = append(c.bc.headerCodecs, hc)
+}
+
 type baseCodec struct {
 	enableChecksum bool
 	payloadBufSize int
 	messageFactory func() Message
+	headerCodecs   []HeaderCodec
 }
 
 func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
-	message := c.messageFactory()
+	message := RPCMessage{Message: c.messageFactory()}
 	data := in.RawSlice(in.GetReadIndex(), in.GetMarkIndex())
 	flag := data[0]
 	data = data[1:]
@@ -88,9 +96,21 @@ func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 	var payloadData []byte
 	if flag&flagPayloadMessage != 0 {
 		msize := buf.Byte2Int(data)
+		// custom header + msg + payload
 		data = data[4:]
-		payloadData = data[msize:]
-		data = data[:msize]
+		v := len(data) - msize
+		payloadData = data[v:]
+		data = data[:v]
+	}
+
+	if flag&flagCustomHeader != 0 {
+		for _, hc := range c.headerCodecs {
+			n, err := hc.Decode(&message, data)
+			if err != nil {
+				return nil, false, err
+			}
+			data = data[n:]
+		}
 	}
 
 	if flag&flagWithChecksum != 0 {
@@ -112,13 +132,13 @@ func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 		}
 	}
 
-	err := message.Unmarshal(data)
+	err := message.Message.Unmarshal(data)
 	if err != nil {
 		return nil, false, err
 	}
 
 	if len(payloadData) > 0 {
-		message.(PayloadMessage).SetPayloadField(payloadData)
+		message.Message.(PayloadMessage).SetPayloadField(payloadData)
 	}
 
 	in.SetReadIndex(in.GetMarkIndex())
@@ -132,10 +152,12 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 	// 1 bytes flag
 	// 8 bytes checksum if has check flag
 	// 4 bytes message size if has payload flag
+	// custom headers
 	// message body
 	// payload body
 
-	if message, ok := data.(Message); ok {
+	if rpcMessage, ok := data.(RPCMessage); ok {
+		message := rpcMessage.Message
 		var checksum *xxhash.Digest
 		checksumIdx := 0
 		flag := byte(0)
@@ -162,11 +184,17 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 				size += 4 + len(payloadData) // 4 bytes payload size + payload bytes
 			}
 		}
+
+		if len(c.headerCodecs) > 0 {
+			flag |= flagCustomHeader
+		}
+
 		msize := message.Size()
 		size += msize
 
 		// 4 bytes total length
-		out.WriteInt(size)
+		sizeIdx := out.GetWriteIndex()
+		out.SetWriteIndex(sizeIdx + 4)
 		// 1 byte flag
 		out.MustWriteByte(flag)
 		// 8 bytes checksum
@@ -175,10 +203,22 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 			out.Grow(8)
 			out.SetWriteIndex(checksumIdx + 8)
 		}
-		// 4 bytes message size
+		// 4 bytes payload message size
 		if hasPayload {
-			out.WriteInt(msize)
+			out.WriteInt(len(payloadData))
 		}
+
+		if len(c.headerCodecs) > 0 {
+			for _, hc := range c.headerCodecs {
+				v, err := hc.Encode(&rpcMessage, out)
+				if err != nil {
+					return err
+				}
+				size += v
+			}
+		}
+		// message size
+		buf.Int2BytesTo(size, out.RawSlice(sizeIdx, sizeIdx+4))
 
 		// message body
 		index := out.GetWriteIndex()

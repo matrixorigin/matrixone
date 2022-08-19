@@ -21,7 +21,6 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/dragonboat/v4"
@@ -103,7 +102,7 @@ func NewService(cfg Config, opts ...Option) (*Service, error) {
 	codec := morpc.NewMessageCodec(mf, 16*1024)
 	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.ServiceListenAddress, codec,
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
-			respPool.Put(i)
+			respPool.Put(i.(morpc.RPCMessage).Message)
 		})))
 	if err != nil {
 		return nil, err
@@ -165,14 +164,14 @@ func (s *Service) ID() string {
 	return s.store.id()
 }
 
-func (s *Service) handleRPCRequest(req morpc.Message,
+func (s *Service) handleRPCRequest(ctx context.Context, req morpc.Message,
 	seq uint64, cs morpc.ClientSession) error {
 	rr, ok := req.(*RPCRequest)
 	if !ok {
 		panic("unexpected message type")
 	}
 	defer rr.Release()
-	resp, records := s.handle(rr.Request, rr.GetPayloadField())
+	resp, records := s.handle(ctx, rr.Request, rr.GetPayloadField())
 	var recs []byte
 	if len(records.Records) > 0 {
 		recs = MustMarshal(&records)
@@ -181,39 +180,38 @@ func (s *Service) handleRPCRequest(req morpc.Message,
 	response := s.respPool.Get().(*RPCResponse)
 	response.Response = resp
 	response.payload = recs
-	return cs.Write(response,
-		morpc.SendOptions{Timeout: time.Duration(rr.Request.Timeout)})
+	return cs.Write(ctx, response)
 }
 
-func (s *Service) handle(req pb.Request,
+func (s *Service) handle(ctx context.Context, req pb.Request,
 	payload []byte) (pb.Response, pb.LogRecordResponse) {
 	switch req.Method {
 	case pb.TSO_UPDATE:
-		return s.handleTsoUpdate(req), pb.LogRecordResponse{}
+		return s.handleTsoUpdate(ctx, req), pb.LogRecordResponse{}
 	case pb.APPEND:
-		return s.handleAppend(req, payload), pb.LogRecordResponse{}
+		return s.handleAppend(ctx, req, payload), pb.LogRecordResponse{}
 	case pb.READ:
-		return s.handleRead(req)
+		return s.handleRead(ctx, req)
 	case pb.TRUNCATE:
-		return s.handleTruncate(req), pb.LogRecordResponse{}
+		return s.handleTruncate(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_TRUNCATE:
-		return s.handleGetTruncatedIndex(req), pb.LogRecordResponse{}
+		return s.handleGetTruncatedIndex(ctx, req), pb.LogRecordResponse{}
 	case pb.CONNECT:
-		return s.handleConnect(req), pb.LogRecordResponse{}
+		return s.handleConnect(ctx, req), pb.LogRecordResponse{}
 	case pb.CONNECT_RO:
-		return s.handleConnectRO(req), pb.LogRecordResponse{}
+		return s.handleConnectRO(ctx, req), pb.LogRecordResponse{}
 	case pb.LOG_HEARTBEAT:
-		return s.handleLogHeartbeat(req), pb.LogRecordResponse{}
+		return s.handleLogHeartbeat(ctx, req), pb.LogRecordResponse{}
 	case pb.CN_HEARTBEAT:
-		return s.handleCNHeartbeat(req), pb.LogRecordResponse{}
+		return s.handleCNHeartbeat(ctx, req), pb.LogRecordResponse{}
 	case pb.DN_HEARTBEAT:
-		return s.handleDNHeartbeat(req), pb.LogRecordResponse{}
+		return s.handleDNHeartbeat(ctx, req), pb.LogRecordResponse{}
 	case pb.CHECK_HAKEEPER:
-		return s.handleCheckHAKeeper(req), pb.LogRecordResponse{}
+		return s.handleCheckHAKeeper(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_CLUSTER_DETAILS:
-		return s.handleGetClusterDetails(req), pb.LogRecordResponse{}
+		return s.handleGetClusterDetails(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_SHARD_INFO:
-		return s.handleGetShardInfo(req), pb.LogRecordResponse{}
+		return s.handleGetShardInfo(ctx, req), pb.LogRecordResponse{}
 	default:
 		panic("unknown log service method type")
 	}
@@ -223,7 +221,7 @@ func getResponse(req pb.Request) pb.Response {
 	return pb.Response{Method: req.Method}
 }
 
-func (s *Service) handleGetShardInfo(req pb.Request) pb.Response {
+func (s *Service) handleGetShardInfo(ctx context.Context, req pb.Request) pb.Response {
 	resp := getResponse(req)
 	if result, ok := s.getShardInfo(req.LogRequest.ShardID); !ok {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(dragonboat.ErrShardNotFound)
@@ -233,9 +231,7 @@ func (s *Service) handleGetShardInfo(req pb.Request) pb.Response {
 	return resp
 }
 
-func (s *Service) handleGetClusterDetails(req pb.Request) pb.Response {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
-	defer cancel()
+func (s *Service) handleGetClusterDetails(ctx context.Context, req pb.Request) pb.Response {
 	resp := getResponse(req)
 	if v, err := s.store.getClusterDetails(ctx); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
@@ -245,9 +241,7 @@ func (s *Service) handleGetClusterDetails(req pb.Request) pb.Response {
 	return resp
 }
 
-func (s *Service) handleTsoUpdate(req pb.Request) pb.Response {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
-	defer cancel()
+func (s *Service) handleTsoUpdate(ctx context.Context, req pb.Request) pb.Response {
 	r := req.TsoRequest
 	resp := getResponse(req)
 	if v, err := s.store.tsoUpdate(ctx, r.Count); err != nil {
@@ -258,9 +252,7 @@ func (s *Service) handleTsoUpdate(req pb.Request) pb.Response {
 	return resp
 }
 
-func (s *Service) handleConnect(req pb.Request) pb.Response {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
-	defer cancel()
+func (s *Service) handleConnect(ctx context.Context, req pb.Request) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
 	if err := s.store.getOrExtendDNLease(ctx, r.ShardID, r.DNID); err != nil {
@@ -269,9 +261,7 @@ func (s *Service) handleConnect(req pb.Request) pb.Response {
 	return resp
 }
 
-func (s *Service) handleConnectRO(req pb.Request) pb.Response {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
-	defer cancel()
+func (s *Service) handleConnectRO(ctx context.Context, req pb.Request) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
 	// we only check whether the specified shard is available
@@ -281,9 +271,7 @@ func (s *Service) handleConnectRO(req pb.Request) pb.Response {
 	return resp
 }
 
-func (s *Service) handleAppend(req pb.Request, payload []byte) pb.Response {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
-	defer cancel()
+func (s *Service) handleAppend(ctx context.Context, req pb.Request, payload []byte) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
 	lsn, err := s.store.append(ctx, r.ShardID, payload)
@@ -295,9 +283,7 @@ func (s *Service) handleAppend(req pb.Request, payload []byte) pb.Response {
 	return resp
 }
 
-func (s *Service) handleRead(req pb.Request) (pb.Response, pb.LogRecordResponse) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
-	defer cancel()
+func (s *Service) handleRead(ctx context.Context, req pb.Request) (pb.Response, pb.LogRecordResponse) {
 	r := req.LogRequest
 	resp := getResponse(req)
 	records, lsn, err := s.store.queryLog(ctx, r.ShardID, r.Lsn, r.MaxSize)
@@ -309,9 +295,7 @@ func (s *Service) handleRead(req pb.Request) (pb.Response, pb.LogRecordResponse)
 	return resp, pb.LogRecordResponse{Records: records}
 }
 
-func (s *Service) handleTruncate(req pb.Request) pb.Response {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
-	defer cancel()
+func (s *Service) handleTruncate(ctx context.Context, req pb.Request) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
 	if err := s.store.truncateLog(ctx, r.ShardID, r.Lsn); err != nil {
@@ -320,9 +304,7 @@ func (s *Service) handleTruncate(req pb.Request) pb.Response {
 	return resp
 }
 
-func (s *Service) handleGetTruncatedIndex(req pb.Request) pb.Response {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
-	defer cancel()
+func (s *Service) handleGetTruncatedIndex(ctx context.Context, req pb.Request) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
 	lsn, err := s.store.getTruncatedLsn(ctx, r.ShardID)
@@ -335,9 +317,7 @@ func (s *Service) handleGetTruncatedIndex(req pb.Request) pb.Response {
 }
 
 // TODO: add tests to see what happens when request is sent to non hakeeper stores
-func (s *Service) handleLogHeartbeat(req pb.Request) pb.Response {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
-	defer cancel()
+func (s *Service) handleLogHeartbeat(ctx context.Context, req pb.Request) pb.Response {
 	hb := req.LogHeartbeat
 	resp := getResponse(req)
 	if cb, err := s.store.addLogStoreHeartbeat(ctx, *hb); err != nil {
@@ -350,9 +330,7 @@ func (s *Service) handleLogHeartbeat(req pb.Request) pb.Response {
 	return resp
 }
 
-func (s *Service) handleCNHeartbeat(req pb.Request) pb.Response {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
-	defer cancel()
+func (s *Service) handleCNHeartbeat(ctx context.Context, req pb.Request) pb.Response {
 	hb := req.CNHeartbeat
 	resp := getResponse(req)
 	if err := s.store.addCNStoreHeartbeat(ctx, *hb); err != nil {
@@ -363,9 +341,7 @@ func (s *Service) handleCNHeartbeat(req pb.Request) pb.Response {
 	return resp
 }
 
-func (s *Service) handleDNHeartbeat(req pb.Request) pb.Response {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
-	defer cancel()
+func (s *Service) handleDNHeartbeat(ctx context.Context, req pb.Request) pb.Response {
 	hb := req.DNHeartbeat
 	resp := getResponse(req)
 	if cb, err := s.store.addDNStoreHeartbeat(ctx, *hb); err != nil {
@@ -378,7 +354,7 @@ func (s *Service) handleDNHeartbeat(req pb.Request) pb.Response {
 	return resp
 }
 
-func (s *Service) handleCheckHAKeeper(req pb.Request) pb.Response {
+func (s *Service) handleCheckHAKeeper(ctx context.Context, req pb.Request) pb.Response {
 	resp := getResponse(req)
 	if atomic.LoadUint64(&s.store.haKeeperReplicaID) != 0 {
 		resp.IsHAKeeper = true
