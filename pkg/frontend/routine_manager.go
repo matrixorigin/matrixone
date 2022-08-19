@@ -164,6 +164,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			return err
 		}
 		protocol.SetEstablished()
+		if protocol.ses != nil && protocol.database != "" {
+			protocol.ses.SetDatabaseName(protocol.database)
+		}
 		return nil
 	}
 
