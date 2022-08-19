@@ -102,7 +102,7 @@ func (s *service) releaseMessage(msg *pipeline.Message) {
 }
 */
 
-func (s *service) handleRequest(req morpc.Message, _ uint64, cs morpc.ClientSession) error {
+func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
 	return nil
 }
 

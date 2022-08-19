@@ -18,9 +18,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -388,6 +388,10 @@ func (cmd *EntryCommand) WriteTo(w io.Writer) (n int64, err error) {
 		if err = binary.Write(w, binary.BigEndian, cmd.entry.CreateAt); err != nil {
 			return
 		}
+		if sn, err = cmd.DB.acInfo.WriteTo(w); err != nil {
+			return
+		}
+		n += sn
 		if sn, err = common.WriteString(cmd.DB.name, w); err != nil {
 			return
 		}
@@ -574,6 +578,10 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		cmd.entry.CurrOp = OpCreate
 		cmd.DB = NewReplayDBEntry()
 		cmd.DB.BaseEntry = cmd.entry
+		if sn, err = cmd.DB.acInfo.ReadFrom(r); err != nil {
+			return
+		}
+		n += sn
 		if cmd.DB.name, sn, err = common.ReadString(r); err != nil {
 			return
 		}
