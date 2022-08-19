@@ -286,18 +286,25 @@ func (store *txnStore) CreateNonAppendableSegment(dbId, tid uint64) (seg handle.
 }
 
 func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
+	store.mu.RLock()
+	db = store.dbs[id]
+	store.mu.RUnlock()
+	if db != nil {
+		return
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	db = store.dbs[id]
-	if db == nil {
-		var entry *catalog.DBEntry
-		if entry, err = store.catalog.GetDatabaseByID(id); err != nil {
-			return
-		}
-		db = newTxnDB(store, entry)
-		db.idx = len(store.dbs)
-		store.dbs[id] = db
+	if db != nil {
+		return
 	}
+	var entry *catalog.DBEntry
+	if entry, err = store.catalog.GetDatabaseByID(id); err != nil {
+		return
+	}
+	db = newTxnDB(store, entry)
+	db.idx = len(store.dbs)
+	store.dbs[id] = db
 	return
 }
 
