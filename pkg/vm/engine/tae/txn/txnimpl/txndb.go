@@ -30,7 +30,7 @@ import (
 type txnDB struct {
 	store       *txnStore
 	tables      map[uint64]*txnTable
-	tablesMu    sync.RWMutex
+	mu          sync.RWMutex
 	entry       *catalog.DBEntry
 	createEntry txnif.TxnEntry
 	dropEntry   txnif.TxnEntry
@@ -40,10 +40,9 @@ type txnDB struct {
 
 func newTxnDB(store *txnStore, entry *catalog.DBEntry) *txnDB {
 	db := &txnDB{
-		store:    store,
-		tables:   make(map[uint64]*txnTable),
-		entry:    entry,
-		tablesMu: sync.RWMutex{},
+		store:  store,
+		tables: make(map[uint64]*txnTable),
+		entry:  entry,
 	}
 	return db
 }
@@ -237,9 +236,9 @@ func (db *txnDB) CreateNonAppendableSegment(tid uint64) (seg handle.Segment, err
 }
 
 func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
-	db.tablesMu.RLock()
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	table = db.tables[id]
-	db.tablesMu.RUnlock()
 	if table == nil {
 		var entry *catalog.TableEntry
 		if entry, err = db.entry.GetTableEntryByID(id); err != nil {
@@ -249,10 +248,8 @@ func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
 			db.store.warChecker = newWarChecker(db.store.txn, db.store.catalog)
 		}
 		table = newTxnTable(db.store, entry)
-		db.tablesMu.Lock()
 		table.idx = len(db.tables)
 		db.tables[id] = table
-		db.tablesMu.Unlock()
 	}
 	return
 }

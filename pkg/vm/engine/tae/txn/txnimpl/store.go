@@ -35,7 +35,7 @@ import (
 type txnStore struct {
 	txnbase.NoopTxnStore
 	dbs         map[uint64]*txnDB
-	dbsMu       sync.RWMutex
+	mu          sync.RWMutex
 	driver      wal.Driver
 	nodesMgr    base.INodeManager
 	txn         txnif.AsyncTxn
@@ -56,7 +56,6 @@ var TxnStoreFactory = func(catalog *catalog.Catalog, driver wal.Driver, txnBufMg
 func newStore(catalog *catalog.Catalog, driver wal.Driver, txnBufMgr base.INodeManager, dataFactory *tables.DataFactory) *txnStore {
 	return &txnStore{
 		dbs:         make(map[uint64]*txnDB),
-		dbsMu:       sync.RWMutex{},
 		catalog:     catalog,
 		cmdMgr:      newCommandManager(driver),
 		driver:      driver,
@@ -287,19 +286,17 @@ func (store *txnStore) CreateNonAppendableSegment(dbId, tid uint64) (seg handle.
 }
 
 func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
-	store.dbsMu.RLock()
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	db = store.dbs[id]
-	store.dbsMu.RUnlock()
 	if db == nil {
 		var entry *catalog.DBEntry
 		if entry, err = store.catalog.GetDatabaseByID(id); err != nil {
 			return
 		}
 		db = newTxnDB(store, entry)
-		store.dbsMu.Lock()
 		db.idx = len(store.dbs)
 		store.dbs[id] = db
-		store.dbsMu.Unlock()
 	}
 	return
 }
