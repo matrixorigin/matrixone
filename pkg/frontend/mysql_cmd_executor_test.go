@@ -48,16 +48,15 @@ func Test_mce(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		eng := mock_frontend.NewMockTxnEngine(ctrl)
-		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		eng.EXPECT().Database(ctx, gomock.Any(), txnOperator).Return(nil, nil).AnyTimes()
 
-		txn := mock_frontend.NewMockTxn(ctrl)
-		txn.EXPECT().GetCtx().Return(nil).AnyTimes()
-		txn.EXPECT().GetID().Return(uint64(0)).AnyTimes()
-		txn.EXPECT().Commit().Return(nil).AnyTimes()
-		txn.EXPECT().Rollback().Return(nil).AnyTimes()
-		txn.EXPECT().String().Return("txn0").AnyTimes()
-		eng.EXPECT().StartTxn(nil).Return(txn, nil).AnyTimes()
+		txnOperator.EXPECT().Commit(nil).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(nil).Return(nil).AnyTimes()
+
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().NewWithSnapshot(nil).Return(txnOperator, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
@@ -178,7 +177,7 @@ func Test_mce(t *testing.T) {
 		stubs := gostub.StubFunc(&GetComputationWrapper, cws, nil)
 		defer stubs.Reset()
 
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
 			t.Error(err)
 		}
@@ -259,7 +258,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		eng := mock_frontend.NewMockTxnEngine(ctrl)
+		eng := mock_frontend.NewMockEngine(ctrl)
 		cnt := 0
 		eng.EXPECT().Database(ctx, gomock.Any(), gomock.Any()).DoAndReturn(
 			func(ctx2 context.Context, db string, dump interface{}) (engine.Database, error) {
@@ -271,18 +270,17 @@ func Test_mce_selfhandle(t *testing.T) {
 			},
 		).AnyTimes()
 
-		txn := mock_frontend.NewMockTxn(ctrl)
-		txn.EXPECT().GetCtx().Return(nil).AnyTimes()
-		txn.EXPECT().GetID().Return(uint64(0)).AnyTimes()
-		txn.EXPECT().Commit().Return(nil).AnyTimes()
-		txn.EXPECT().Rollback().Return(nil).AnyTimes()
-		txn.EXPECT().String().Return("txn0").AnyTimes()
-		eng.EXPECT().StartTxn(nil).Return(txn, nil).AnyTimes()
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().NewWithSnapshot(nil).Return(txnOperator, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
 			t.Error(err)
 		}
@@ -311,12 +309,13 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
 			t.Error(err)
 		}
@@ -411,14 +410,14 @@ func Test_getDataFromPipeline(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
-
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
 			t.Error(err)
 		}
@@ -488,10 +487,11 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		ioses := mock_frontend.NewMockIOSession(ctrl)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
 			t.Error(err)
 		}
@@ -677,12 +677,13 @@ func Test_handleSelectVariables(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
 			t.Error(err)
 		}
@@ -715,12 +716,13 @@ func Test_handleShowVariables(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
 			t.Error(err)
 		}
@@ -768,7 +770,8 @@ func Test_handleShowCreateTable(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
 			t.Error(err)
 		}
@@ -803,7 +806,8 @@ func Test_handleShowCreateDatabase(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
 			t.Error(err)
 		}
@@ -834,7 +838,8 @@ func Test_handleShowColumns(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
 			t.Error(err)
 		}
@@ -865,12 +870,13 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
 			t.Error(err)
 		}
@@ -927,7 +933,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		eng := mock_frontend.NewMockTxnEngine(ctrl)
+		eng := mock_frontend.NewMockEngine(ctrl)
 		db := mock_frontend.NewMockDatabase(ctrl)
 		db.EXPECT().Relations(ctx).Return([]string{"t"}, nil).AnyTimes()
 
@@ -941,23 +947,24 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		table.EXPECT().TableDefs(ctx).Return(defs, nil).AnyTimes()
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(db, nil).AnyTimes()
 
-		txn := mock_frontend.NewMockTxn(ctrl)
-		txn.EXPECT().GetCtx().Return(nil).AnyTimes()
-		txn.EXPECT().Commit().Return(nil).AnyTimes()
-		txn.EXPECT().Rollback().Return(nil).AnyTimes()
-		txn.EXPECT().String().Return("txn0").AnyTimes()
-		eng.EXPECT().StartTxn(nil).Return(txn, nil).AnyTimes()
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().NewWithSnapshot(nil).Return(txnOperator, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
 			t.Error(err)
 		}
 
 		pu.StorageEngine = eng
+		pu.TxnClient = txnClient
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
@@ -1028,10 +1035,11 @@ func Test_handleLoadData(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		eng := mock_frontend.NewMockTxnEngine(ctrl)
+		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
 			t.Error(err)
 		}
