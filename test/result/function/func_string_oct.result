@@ -70,7 +70,11 @@ drop table if exists t1;
 create table t1(a INT,  b int);
 insert into t1 values(1, 2),(2, 3),(3, 4),(4, 5);
 select oct(a)+oct(b) from t1 where oct(a)+oct(b)<>0;
-Operator '+' with parameters [VARCHAR VARCHAR] will be implemented in future version.
+oct(a) + oct(b)
+3
+5
+7
+9
 drop table t1;
 CREATE TABLE t1 (a int);
 CREATE TABLE t2 (a int);

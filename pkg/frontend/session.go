@@ -47,15 +47,18 @@ const (
 )
 
 type TxnHandler struct {
-	storage engine.Engine
-	txn     moengine.Txn
-	ses     *Session
+	storage   engine.Engine
+	txnClient TxnClient
+	ses       *Session
+	txn       TxnOperator
 }
 
-func InitTxnHandler(storage engine.Engine) *TxnHandler {
-	return &TxnHandler{
-		storage: storage,
+func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
+	h := &TxnHandler{
+		storage:   storage,
+		txnClient: txnClient,
 	}
+	return h
 }
 
 type Session struct {
@@ -95,6 +98,7 @@ type Session struct {
 	optionBits uint32
 
 	prepareStmts map[string]*PrepareStmt
+	lastStmtId   uint32
 
 	requestCtx context.Context
 
@@ -110,7 +114,7 @@ type Session struct {
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
-	txnHandler := InitTxnHandler(config.StorageEngine)
+	txnHandler := InitTxnHandler(PU.StorageEngine, PU.TxnClient)
 	ses := &Session{
 		protocol: proto,
 		GuestMmu: gm,
@@ -124,7 +128,7 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 		txnHandler: txnHandler,
 		//TODO:fix database name after the catalog is ready
 		txnCompileCtx:   InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
-		storage:         config.StorageEngine,
+		storage:         PU.StorageEngine,
 		sysVars:         gSysVars.CopySysVarsToSession(),
 		userDefinedVars: make(map[string]interface{}),
 		gSysVars:        gSysVars,
@@ -165,6 +169,14 @@ func (bgs *BackgroundSession) Close() {
 	if bgs.cancel != nil {
 		bgs.cancel()
 	}
+}
+func (ses *Session) GenNewStmtId() uint32 {
+	ses.lastStmtId = ses.lastStmtId + 1
+	return ses.lastStmtId
+}
+
+func (ses *Session) GetLastStmtId() uint32 {
+	return ses.lastStmtId
 }
 
 func (ses *Session) SetRequestContext(reqCtx context.Context) {
@@ -593,15 +605,14 @@ func (th *TxnHandler) NewTxn() error {
 		}
 	}
 	th.SetInvalid()
-	if taeEng, ok := th.storage.(moengine.TxnEngine); ok {
-		//begin a transaction
-		th.txn, err = taeEng.StartTxn(nil)
-		if err != nil {
-			logutil.Errorf("start tae txn error:%v", err)
-			return err
-		}
+	if th.txnClient == nil {
+		panic("must set txn client")
 	}
-	return err
+	th.txn, err = th.txnClient.NewWithSnapshot(nil)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // IsValidTxn checks the transaction is true or not.
@@ -617,7 +628,13 @@ func (th *TxnHandler) CommitTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	err := th.txn.Commit()
+	var ctx context.Context
+	if th.ses != nil {
+		ctx = th.ses.GetRequestContext()
+	} else {
+		ctx = context.Background()
+	}
+	err := th.txn.Commit(ctx)
 	th.SetInvalid()
 	return err
 }
@@ -626,7 +643,13 @@ func (th *TxnHandler) RollbackTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	err := th.txn.Rollback()
+	var ctx context.Context
+	if th.ses != nil {
+		ctx = th.ses.GetRequestContext()
+	} else {
+		ctx = context.Background()
+	}
+	err := th.txn.Rollback(ctx)
 	th.SetInvalid()
 	return err
 }
@@ -640,7 +663,7 @@ func (th *TxnHandler) IsTaeEngine() bool {
 	return ok
 }
 
-func (th *TxnHandler) GetTxn() moengine.Txn {
+func (th *TxnHandler) GetTxn() TxnOperator {
 	err := th.ses.TxnStart()
 	if err != nil {
 		panic(err)
@@ -692,7 +715,7 @@ func (tcc *TxnCompilerContext) GetRootSql() string {
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	var err error
 	//open database
-	_, err = tcc.txnHandler.GetStorage().Database(tcc.ses.GetRequestContext(), name, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
+	_, err = tcc.txnHandler.GetStorage().Database(tcc.ses.GetRequestContext(), name, tcc.txnHandler.GetTxn())
 	if err != nil {
 		logutil.Errorf("get database %v failed. error %v", name, err)
 		return false
@@ -709,7 +732,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 
 	ctx := tcc.ses.GetRequestContext()
 	//open database
-	db, err := tcc.txnHandler.GetStorage().Database(ctx, dbName, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
+	db, err := tcc.txnHandler.GetStorage().Database(ctx, dbName, tcc.txnHandler.GetTxn())
 	if err != nil {
 		logutil.Errorf("get database %v error %v", dbName, err)
 		return nil, err

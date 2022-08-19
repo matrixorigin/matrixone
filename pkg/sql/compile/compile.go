@@ -239,7 +239,7 @@ func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	}
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc.Snapshot)
+		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
@@ -248,7 +248,7 @@ func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: scp,
 		})
 	case plan.Query_INSERT:
-		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.Snapshot)
+		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
@@ -257,7 +257,7 @@ func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: arg,
 		})
 	case plan.Query_UPDATE:
-		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc.Snapshot)
+		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
@@ -290,7 +290,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	}
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc.Snapshot)
+		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
@@ -299,7 +299,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: scp,
 		})
 	case plan.Query_INSERT:
-		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.Snapshot)
+		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
@@ -308,7 +308,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: arg,
 		})
 	case plan.Query_UPDATE:
-		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc.Snapshot)
+		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
@@ -554,13 +554,14 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns []*plan.Node) []*Scope {
 	ss = append(ss, children...)
 	rs := c.newScopeList(validScopeCount(ss))
-	regs := extraGroupRegisters(rs)
+	j := 0
 	for i := range ss {
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
-				Arg: constructDispatch(true, regs),
+				Arg: constructDispatch(true, extraRegisters(rs, j)),
 			})
+			j++
 			ss[i].IsEnd = true
 		}
 	}
@@ -812,13 +813,14 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 
 func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	rs := c.newScopeList(validScopeCount(ss))
-	regs := extraGroupRegisters(rs)
+	j := 0
 	for i := range ss {
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
-				Arg: constructDispatch(true, regs),
+				Arg: constructDispatch(true, extraRegisters(rs, j)),
 			})
+			j++
 			ss[i].IsEnd = true
 		}
 	}
@@ -890,12 +892,12 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int) []*Scope {
 func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) ([]*Scope, *Scope, *Scope) {
 	left := c.newMergeScope(ss)
 	right := c.newMergeScope(children)
-	leftRegs := extraJoinRegisters(rs, 0)
+	leftRegs := extraRegisters(rs, 0)
 	left.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: constructDispatch(true, leftRegs),
 	})
-	rightRegs := extraJoinRegisters(rs, 1)
+	rightRegs := extraRegisters(rs, 1)
 	right.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: constructDispatch(true, rightRegs),
@@ -929,7 +931,7 @@ func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) ([]*Scope, *S
 	}
 	chp.Instructions = append(chp.Instructions, vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructDispatch(true, extraJoinRegisters(rs, 1)),
+		Arg: constructDispatch(true, extraRegisters(rs, 1)),
 	})
 	return rs, chp
 }
@@ -944,7 +946,7 @@ func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
 	})
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructDispatch(false, extraJoinRegisters(ss, 0)),
+		Arg: constructDispatch(false, extraRegisters(ss, 0)),
 	})
 	rs.IsEnd = true
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
@@ -963,7 +965,7 @@ func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 	})
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructDispatch(true, extraJoinRegisters(ss, 1)),
+		Arg: constructDispatch(true, extraRegisters(ss, 1)),
 	})
 	rs.IsEnd = true
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
@@ -1018,19 +1020,7 @@ func validScopeCount(ss []*Scope) int {
 	return cnt
 }
 
-func extraGroupRegisters(ss []*Scope) []*process.WaitRegister {
-	var regs []*process.WaitRegister
-
-	for _, s := range ss {
-		if s.IsEnd {
-			continue
-		}
-		regs = append(regs, s.Proc.Reg.MergeReceivers...)
-	}
-	return regs
-}
-
-func extraJoinRegisters(ss []*Scope, i int) []*process.WaitRegister {
+func extraRegisters(ss []*Scope, i int) []*process.WaitRegister {
 	regs := make([]*process.WaitRegister, 0, len(ss))
 	for _, s := range ss {
 		if s.IsEnd {

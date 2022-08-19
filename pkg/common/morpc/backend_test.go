@@ -46,7 +46,7 @@ func TestSend(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := newTestMessage(1)
-			f, err := b.Send(ctx, req, SendOptions{})
+			f, err := b.Send(ctx, req)
 			assert.NoError(t, err)
 			defer f.Close()
 
@@ -74,7 +74,7 @@ func TestCloseWhileContinueSending(t *testing.T) {
 					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 					defer cancel()
 					req := newTestMessage(1)
-					f, err := b.Send(ctx, req, SendOptions{})
+					f, err := b.Send(ctx, req)
 					if err != nil {
 						return
 					}
@@ -117,7 +117,7 @@ func TestSendWithAlreadyContextDone(t *testing.T) {
 		func(b *remoteBackend) {
 
 			req := newTestMessage(1)
-			f, err := b.Send(ctx, req, SendOptions{})
+			f, err := b.Send(ctx, req)
 			assert.NoError(t, err)
 			defer f.Close()
 			resp, err := f.Get()
@@ -125,7 +125,7 @@ func TestSendWithAlreadyContextDone(t *testing.T) {
 			assert.Nil(t, resp)
 		},
 		WithBackendConnectWhenCreate(),
-		WithBackendFilter(func(Message) bool {
+		WithBackendFilter(func(Message, string) bool {
 			cancel()
 			return true
 		}))
@@ -141,7 +141,7 @@ func TestSendWithResetConnAndRetry(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := &testMessage{id: 1}
-			f, err := b.Send(ctx, req, SendOptions{})
+			f, err := b.Send(ctx, req)
 			assert.NoError(t, err)
 			defer f.Close()
 
@@ -150,7 +150,7 @@ func TestSendWithResetConnAndRetry(t *testing.T) {
 			assert.Equal(t, req, resp)
 			assert.True(t, retry > 0)
 		},
-		WithBackendFilter(func(Message) bool {
+		WithBackendFilter(func(Message, string) bool {
 			retry++
 			return true
 		}))
@@ -165,7 +165,7 @@ func TestSendWithTimeout(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
 			defer cancel()
 			req := &testMessage{id: 1}
-			f, err := b.Send(ctx, req, SendOptions{})
+			f, err := b.Send(ctx, req)
 			assert.NoError(t, err)
 			defer f.Close()
 
@@ -191,7 +191,7 @@ func TestSendWithReconnect(t *testing.T) {
 
 			for i := 0; i < 10; i++ {
 				req := newTestMessage(1)
-				f, err := b.Send(ctx, req, SendOptions{})
+				f, err := b.Send(ctx, req)
 				assert.NoError(t, err)
 				defer f.Close()
 
@@ -201,7 +201,7 @@ func TestSendWithReconnect(t *testing.T) {
 			}
 		},
 		WithBackendConnectWhenCreate(),
-		WithBackendFilter(func(m Message) bool {
+		WithBackendFilter(func(Message, string) bool {
 			idx++
 			if idx%2 == 0 {
 				rb.closeConn(false)
@@ -222,7 +222,7 @@ func TestSendWithCannotConnectWillTimeout(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*50)
 			defer cancel()
 			req := &testMessage{id: 1}
-			f, err := b.Send(ctx, req, SendOptions{})
+			f, err := b.Send(ctx, req)
 			assert.NoError(t, err)
 			defer f.Close()
 
@@ -231,7 +231,7 @@ func TestSendWithCannotConnectWillTimeout(t *testing.T) {
 			assert.Nil(t, resp)
 			assert.Equal(t, err, ctx.Err())
 		},
-		WithBackendFilter(func(m Message) bool {
+		WithBackendFilter(func(Message, string) bool {
 			assert.NoError(t, rb.conn.Disconnect())
 			rb.remote = ""
 			return true
@@ -255,10 +255,13 @@ func TestStream(t *testing.T) {
 				b.mu.RUnlock()
 			}()
 
+			ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+			defer cancel()
+
 			n := 1
 			for i := 0; i < n; i++ {
 				req := &testMessage{id: st.ID()}
-				assert.NoError(t, st.Send(req, SendOptions{}))
+				assert.NoError(t, st.Send(ctx, req))
 			}
 
 			rc, err := st.Receive()
@@ -278,6 +281,9 @@ func TestStreamClosedByConnReset(t *testing.T) {
 			return conn.Disconnect()
 		},
 		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+			defer cancel()
+
 			st, err := b.NewStream()
 			assert.NoError(t, err)
 			defer func() {
@@ -285,7 +291,7 @@ func TestStreamClosedByConnReset(t *testing.T) {
 			}()
 			c, err := st.Receive()
 			assert.NoError(t, err)
-			assert.NoError(t, st.Send(&testMessage{id: st.ID()}, SendOptions{}))
+			assert.NoError(t, st.Send(ctx, &testMessage{id: st.ID()}))
 
 			v, ok := <-c
 			assert.True(t, ok)
@@ -307,11 +313,11 @@ func TestBusy(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
 			defer cancel()
 			req := &testMessage{id: 1}
-			f1, err := b.Send(ctx, req, SendOptions{})
+			f1, err := b.Send(ctx, req)
 			assert.NoError(t, err)
 			defer f1.Close()
 
-			f2, err := b.Send(ctx, req, SendOptions{})
+			f2, err := b.Send(ctx, req)
 			assert.NoError(t, err)
 			defer f2.Close()
 
@@ -319,7 +325,7 @@ func TestBusy(t *testing.T) {
 			c <- struct{}{}
 		},
 		WithBackendConnectWhenCreate(),
-		WithBackendFilter(func(Message) bool {
+		WithBackendFilter(func(Message, string) bool {
 			if n == 0 {
 				<-c
 				n++
@@ -332,6 +338,9 @@ func TestBusy(t *testing.T) {
 }
 
 func TestDoneWithClosedStreamCannotPanic(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+	defer cancel()
+
 	c := make(chan Message, 1)
 	s := newStream(c,
 		func(m backendSendMessage) error {
@@ -340,7 +349,7 @@ func TestDoneWithClosedStreamCannotPanic(t *testing.T) {
 		func(s *stream) {},
 		func() {})
 	s.init(1)
-	assert.NoError(t, s.Send(&testMessage{id: s.ID()}, SendOptions{}))
+	assert.NoError(t, s.Send(ctx, &testMessage{id: s.ID()}))
 	assert.NoError(t, s.Close())
 	assert.Nil(t, <-c)
 
@@ -386,7 +395,7 @@ func TestLastActiveWithSend(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := newTestMessage(1)
-			f, err := b.Send(ctx, req, SendOptions{})
+			f, err := b.Send(ctx, req)
 			assert.NoError(t, err)
 			defer f.Close()
 
@@ -413,6 +422,9 @@ func TestLastActiveWithStream(t *testing.T) {
 			return conn.Write(msg, goetty.WriteOptions{Flush: true})
 		},
 		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+			defer cancel()
+
 			t1 := b.LastActiveTime()
 
 			st, err := b.NewStream()
@@ -424,7 +436,7 @@ func TestLastActiveWithStream(t *testing.T) {
 			n := 1
 			for i := 0; i < n; i++ {
 				req := &testMessage{id: st.ID()}
-				assert.NoError(t, st.Send(req, SendOptions{}))
+				assert.NoError(t, st.Send(ctx, req))
 				t2 := b.LastActiveTime()
 				assert.NotEqual(t, t1, t2)
 				assert.True(t, t2.After(t1))
@@ -453,7 +465,7 @@ func TestInactiveAfterCannotConnect(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := newTestMessage(1)
-			f, err := b.Send(ctx, req, SendOptions{})
+			f, err := b.Send(ctx, req)
 			assert.NoError(t, err)
 			defer f.Close()
 
@@ -492,7 +504,7 @@ func TestTCPProxyExample(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := newTestMessage(1)
-			f, err := b.Send(ctx, req, SendOptions{})
+			f, err := b.Send(ctx, req)
 			assert.NoError(t, err)
 			defer f.Close()
 
@@ -579,7 +591,7 @@ type testBackend struct {
 	closed     bool
 }
 
-func (b *testBackend) Send(ctx context.Context, request Message, opts SendOptions) (*Future, error) {
+func (b *testBackend) Send(ctx context.Context, request Message) (*Future, error) {
 	b.active()
 	f := newFuture(nil)
 	f.init(request.GetID(), ctx)
