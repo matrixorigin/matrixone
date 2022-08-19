@@ -15,35 +15,17 @@
 package fileservice
 
 import (
-	"testing"
-
-	"github.com/stretchr/testify/assert"
+	"fmt"
+	"strings"
 )
 
-func TestMemoryFS(t *testing.T) {
-
-	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func() FileService {
-			fs, err := NewMemoryFS("memory")
-			assert.Nil(t, err)
-			return fs
-		})
-	})
-
-	t.Run("replaceable file service", func(t *testing.T) {
-		testReplaceableFileService(t, func() ReplaceableFileService {
-			fs, err := NewMemoryFS("memory")
-			assert.Nil(t, err)
-			return fs
-		})
-	})
-
-}
-
-func BenchmarkMemoryFS(b *testing.B) {
-	benchmarkFileService(b, func() FileService {
-		fs, err := NewMemoryFS("memory")
-		assert.Nil(b, err)
-		return fs
-	})
+func splitPath(serviceName string, path string) (string, string, error) {
+	parts := strings.SplitN(path, ":", 2)
+	if len(parts) == 2 {
+		if serviceName != "" && parts[0] != "" && parts[0] != serviceName {
+			return "", "", fmt.Errorf("wrong file service name, expecting %s, got %s", serviceName, parts[0])
+		}
+		return parts[0], parts[1], nil
+	}
+	return "", parts[0], nil
 }
