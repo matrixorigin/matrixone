@@ -308,11 +308,3 @@ func (c *txnContext) changeStatusLocked(status txn.TxnStatus) {
 		c.nt.notify(status)
 	}
 }
-
-func (s *service) mustGetTimeoutAtFromContext(ctx context.Context) int64 {
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		s.logger.Fatal("context deadline not set")
-	}
-	return deadline.UnixNano()
-}
