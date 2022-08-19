@@ -184,7 +184,7 @@ func TestAppend4(t *testing.T) {
 		checkAllColRowsByScan(t, rel, bat.Length()-1, true)
 		err = txn.Commit()
 		assert.NoError(t, err)
-		compactBlocks(t, tae, defaultTestDB, schema, false)
+		compactBlocks(t, 0, tae, defaultTestDB, schema, false)
 		txn, rel = getDefaultRelation(t, tae, schema.Name)
 		checkAllColRowsByScan(t, rel, bat.Length()-1, false)
 		err = txn.Commit()
@@ -204,7 +204,7 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 		updateColIdx = schema.GetSingleSortKeyIdx() + 1
 	}
 
-	createRelationAndAppend(t, tae, defaultTestDB, schema, bats[0], false)
+	createRelationAndAppend(t, 0, tae, defaultTestDB, schema, bats[0], false)
 
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	err := rel.Append(bats[0])
@@ -240,7 +240,7 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 	checkAllColRowsByScan(t, rel, bat.Length()-1, true)
 	assert.NoError(t, txn.Commit())
 
-	compactBlocks(t, tae, defaultTestDB, schema, false)
+	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, bat.Length()-1, false)
@@ -427,7 +427,7 @@ func TestCompactBlock1(t *testing.T) {
 	schema.SegmentMaxBlocks = 4
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
 	defer bat.Close()
-	createRelationAndAppend(t, db, "db", schema, bat, true)
+	createRelationAndAppend(t, 0, db, "db", schema, bat, true)
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 
 	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(2)
@@ -550,7 +550,7 @@ func TestCompactBlock2(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
 	defer bat.Close()
-	createRelationAndAppend(t, db, "db", schema, bat, true)
+	createRelationAndAppend(t, 0, db, "db", schema, bat, true)
 	var newBlockFp *common.ID
 	{
 		txn, rel := getDefaultRelation(t, db, schema.Name)
@@ -690,7 +690,7 @@ func TestAutoCompactABlk1(t *testing.T) {
 	totalRows := schema.BlockMaxRows / 5
 	bat := catalog.MockBatch(schema, int(totalRows))
 	defer bat.Close()
-	createRelationAndAppend(t, tae, "db", schema, bat, true)
+	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
 	err := tae.Catalog.Checkpoint(tae.Scheduler.GetSafeTS())
 	assert.Nil(t, err)
 	testutils.WaitExpect(1000, func() bool {
@@ -796,7 +796,7 @@ func TestCompactABlk(t *testing.T) {
 	totalRows := schema.BlockMaxRows / 5
 	bat := catalog.MockBatch(schema, int(totalRows))
 	defer bat.Close()
-	createRelationAndAppend(t, tae, "db", schema, bat, true)
+	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
 	{
 		txn, rel := getDefaultRelation(t, tae, schema.Name)
 		blk := getOneBlock(rel)
@@ -1133,7 +1133,7 @@ func TestDelete1(t *testing.T) {
 	schema.BlockMaxRows = 10
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
 	defer bat.Close()
-	createRelationAndAppend(t, tae, "db", schema, bat, true)
+	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
 	var id *common.ID
 	var row uint32
 	{
@@ -1635,7 +1635,7 @@ func TestUpdatePrimaryKey(t *testing.T) {
 	schema := catalog.MockSchemaAll(13, 12)
 	bat := catalog.MockBatch(schema, 100)
 	defer bat.Close()
-	createRelationAndAppend(t, tae, "db", schema, bat, true)
+	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
 
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(2)
@@ -1657,7 +1657,7 @@ func TestADA(t *testing.T) {
 	defer bat.Close()
 
 	// Append to a block
-	createRelationAndAppend(t, tae, "db", schema, bat, true)
+	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
 
 	// Delete a row from the block
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
@@ -1757,7 +1757,7 @@ func TestUpdateByFilter(t *testing.T) {
 	bat := catalog.MockBatch(schema, 100)
 	defer bat.Close()
 
-	createRelationAndAppend(t, tae, "db", schema, bat, true)
+	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
 
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(2)
@@ -1795,7 +1795,7 @@ func TestGetByFilter(t *testing.T) {
 	defer bat.Close()
 
 	// Step 1
-	createRelationAndAppend(t, tae, "db", schema, bat, true)
+	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
 
 	// Step 2
 	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(2)
@@ -1926,7 +1926,7 @@ func TestSnapshotIsolation1(t *testing.T) {
 	filter := handle.NewEQFilter(v)
 
 	// Step 1
-	createRelationAndAppend(t, tae, "db", schema, bat, true)
+	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
 
 	// Step 2
 	txn1, rel1 := getDefaultRelation(t, tae, schema.Name)
@@ -2019,7 +2019,7 @@ func TestMergeBlocks(t *testing.T) {
 	bat := catalog.MockBatch(schema, 30)
 	defer bat.Close()
 
-	createRelationAndAppend(t, tae, "db", schema, bat, true)
+	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
 
 	txn, err := tae.StartTxn(nil)
 	assert.Nil(t, err)
@@ -2045,7 +2045,7 @@ func TestMergeBlocks(t *testing.T) {
 	}
 	assert.Nil(t, txn.Commit())
 
-	mergeBlocks(t, tae, "db", schema, false)
+	mergeBlocks(t, 0, tae, "db", schema, false)
 
 	txn, err = tae.StartTxn(nil)
 	assert.Nil(t, err)
@@ -2748,4 +2748,183 @@ func TestTruncateZonemap(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(9), row)
 	assert.NoError(t, txn.Commit())
+}
+
+func mustStartTxn(t *testing.T, tae *testEngine, tenantID uint32) txnif.AsyncTxn {
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	txn.BindAccessInfo(tenantID, 0, 0)
+	return txn
+}
+
+func TestMultiTenantDBOps(t *testing.T) {
+	var err error
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	txn11 := mustStartTxn(t, tae, 1)
+	_, err = txn11.CreateDatabase("db")
+	assert.NoError(t, err)
+	txn12 := mustStartTxn(t, tae, 1)
+	_, err = txn11.CreateDatabase("db")
+	assert.Error(t, err)
+
+	txn21 := mustStartTxn(t, tae, 2)
+	_, err = txn21.CreateDatabase("db")
+	assert.NoError(t, err)
+
+	assert.NoError(t, txn11.Commit())
+	assert.NoError(t, txn12.Commit())
+	assert.NoError(t, txn21.Commit())
+
+	txn22 := mustStartTxn(t, tae, 2)
+	_, _ = txn22.CreateDatabase("db2")
+
+	txn23 := mustStartTxn(t, tae, 2)
+	// [mo_catalog, db]
+	assert.Equal(t, 2, len(txn23.DatabaseNames()))
+	assert.NoError(t, txn23.Commit())
+
+	txn22.Commit()
+	tae.restart()
+
+	txn24 := mustStartTxn(t, tae, 2)
+	// [mo_catalog, db, db2]
+	assert.Equal(t, 3, len(txn24.DatabaseNames()))
+	assert.NoError(t, txn24.Commit())
+
+	txn13 := mustStartTxn(t, tae, 1)
+	// [mo_catalog, db]
+	assert.Equal(t, 2, len(txn13.DatabaseNames()))
+
+	_, err = txn13.GetDatabase("db2")
+	assert.Error(t, err)
+	dbHdl, err := txn13.GetDatabase("db")
+	assert.NoError(t, err)
+	assert.Equal(t, uint32(1), dbHdl.GetMeta().(*catalog.DBEntry).GetTenantID())
+
+	_, err = txn13.DropDatabase("db2")
+	assert.Error(t, err)
+	_, err = txn13.DropDatabase("db")
+	assert.NoError(t, err)
+	assert.NoError(t, txn13.Commit())
+
+	txn14 := mustStartTxn(t, tae, 1)
+	// [mo_catalog]
+	assert.Equal(t, 1, len(txn14.DatabaseNames()))
+	assert.NoError(t, txn14.Commit())
+}
+
+func TestMultiTenantMoCatalogOps(t *testing.T) {
+	var err error
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	s := catalog.MockSchemaAll(1, 0)
+	s.Name = "mo_accounts"
+	txn0, sysDB := tae.getDB(catalog.SystemDBName)
+	_, err = sysDB.CreateRelation(s)
+	assert.NoError(t, err)
+	assert.NoError(t, txn0.Commit())
+
+	schema11 := catalog.MockSchemaAll(3, 0)
+	schema11.BlockMaxRows = 10
+	schema11.SegmentMaxBlocks = 2
+	tae.bindSchema(schema11)
+	tae.bindTenantID(1)
+
+	bat1 := catalog.MockBatch(schema11, int(schema11.BlockMaxRows*2+9))
+	tae.createRelAndAppend(bat1, true)
+	// pretend 'mo_users'
+	s = catalog.MockSchemaAll(1, 0)
+	s.Name = "mo_users_t1"
+	txn11, sysDB := tae.getDB(catalog.SystemDBName)
+	_, err = sysDB.CreateRelation(s)
+	assert.NoError(t, err)
+	assert.NoError(t, txn11.Commit())
+
+	tae.compactBlocks(false)
+	tae.mergeBlocks(false)
+
+	schema21 := catalog.MockSchemaAll(2, 1)
+	schema21.BlockMaxRows = 10
+	schema21.SegmentMaxBlocks = 2
+	tae.bindSchema(schema21)
+	tae.bindTenantID(2)
+
+	bat2 := catalog.MockBatch(schema21, int(schema21.BlockMaxRows*3+5))
+	tae.createRelAndAppend(bat2, true)
+	txn21, sysDB := tae.getDB(catalog.SystemDBName)
+	s = catalog.MockSchemaAll(1, 0)
+	s.Name = "mo_users_t2"
+	_, err = sysDB.CreateRelation(s)
+	assert.NoError(t, err)
+	assert.NoError(t, txn21.Commit())
+
+	tae.compactBlocks(false)
+	tae.mergeBlocks(false)
+
+	tae.restart()
+
+	{
+		// account 2
+		// check data for good
+		_, tbl := tae.getRelation()
+		checkAllColRowsByScan(t, tbl, 35, false)
+		// [mo_catalog, db]
+		assert.Equal(t, 2, len(mustStartTxn(t, tae, 2).DatabaseNames()))
+		_, sysDB = tae.getDB(catalog.SystemDBName)
+		sysDB.Relations()
+		sysDBTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_DB_Name)
+		// [mo_catalog, db]
+		checkAllColRowsByScan(t, sysDBTbl, 2, true)
+		sysTblTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Table_Name)
+		// [mo_database, mo_tables, mo_columns, 'mo_users_t2' 'test-table-a-timestamp']
+		checkAllColRowsByScan(t, sysTblTbl, 5, true)
+		sysColTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Columns_Name)
+		// [mo_database(7), mo_tables(11), mo_columns(18), 'mo_users_t2'(1+1), 'test-table-a-timestamp'(2+1)]
+		checkAllColRowsByScan(t, sysColTbl, 41, true)
+	}
+	{
+		// account 1
+		tae.bindSchema(schema11)
+		tae.bindTenantID(1)
+		// check data for good
+		_, tbl := tae.getRelation()
+		checkAllColRowsByScan(t, tbl, 29, false)
+		// [mo_catalog, db]
+		assert.Equal(t, 2, len(mustStartTxn(t, tae, 1).DatabaseNames()))
+		_, sysDB = tae.getDB(catalog.SystemDBName)
+		sysDB.Relations()
+		sysDBTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_DB_Name)
+		// [mo_catalog, db]
+		checkAllColRowsByScan(t, sysDBTbl, 2, true)
+		sysTblTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Table_Name)
+		// [mo_database, mo_tables, mo_columns, 'mo_users_t1' 'test-table-a-timestamp']
+		checkAllColRowsByScan(t, sysTblTbl, 5, true)
+		sysColTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Columns_Name)
+		// [mo_database(7), mo_tables(11), mo_columns(18), 'mo_users_t1'(1+1), 'test-table-a-timestamp'(3+1)]
+		checkAllColRowsByScan(t, sysColTbl, 42, true)
+	}
+	{
+		// sys account
+		tae.bindSchema(nil)
+		tae.bindTenantID(0)
+		// [mo_catalog]
+		assert.Equal(t, 1, len(mustStartTxn(t, tae, 0).DatabaseNames()))
+		_, sysDB = tae.getDB(catalog.SystemDBName)
+		sysDB.Relations()
+		sysDBTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_DB_Name)
+		// [mo_catalog]
+		checkAllColRowsByScan(t, sysDBTbl, 1, true)
+		sysTblTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Table_Name)
+		// [mo_database, mo_tables, mo_columns, 'mo_accounts']
+		checkAllColRowsByScan(t, sysTblTbl, 4, true)
+		sysColTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Columns_Name)
+		// [mo_database(7), mo_tables(11), mo_columns(18), 'mo_accounts'(1+1)]
+		checkAllColRowsByScan(t, sysColTbl, 38, true)
+	}
+
 }
