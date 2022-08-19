@@ -86,7 +86,7 @@ type Config struct {
 		// DiscoveryTimeout discovery HAKeeper service timeout. Default is 30s
 		DiscoveryTimeout toml.Duration `toml:"hakeeper-discovery-timeout"`
 		// ClientConfig hakeeper client configuration
-		ClientConfig logservice.HAKeeperClientConfig `toml:"hakeeper-client"`
+		ClientConfig logservice.HAKeeperClientConfig
 	}
 }
 
