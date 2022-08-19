@@ -39,7 +39,7 @@ func (t *testEnv) Vector(vec *vector.Vector, nodes []logservicepb.DNStore) (shar
 	return
 }
 
-func (t *testEnv) Nodes(nodes []logservicepb.DNStore) (shards []txnengine.Shard, err error) {
+func (t *testEnv) Shards(nodes []logservicepb.DNStore) (shards []txnengine.Shard, err error) {
 	for _, node := range nodes {
 		for _, n := range t.nodes {
 			if n.info.UUID == node.UUID {
