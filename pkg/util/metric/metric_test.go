@@ -34,7 +34,7 @@ func TestMetric(t *testing.T) {
 	factory := newExecutorFactory(sqlch)
 
 	withModifiedConfig(func() {
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
 		pu.SV.Host = "0.0.0.0"
 		pu.SV.StatusPort = 7001
 		pu.SV.DisableMetricToProm = false
@@ -86,7 +86,7 @@ func TestMetricNoProm(t *testing.T) {
 	factory := newExecutorFactory(sqlch)
 
 	withModifiedConfig(func() {
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
 		pu.SV.Host = "0.0.0.0"
 		pu.SV.StatusPort = 7001
 		pu.SV.DisableMetricToProm = true

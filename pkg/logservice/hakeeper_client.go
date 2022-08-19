@@ -18,7 +18,6 @@ import (
 	"context"
 	"math/rand"
 	"sync"
-	"time"
 
 	"github.com/cockroachdb/errors"
 
@@ -386,15 +385,9 @@ func (c *hakeeperClient) checkIsHAKeeper(ctx context.Context) (bool, error) {
 }
 
 func (c *hakeeperClient) request(ctx context.Context, req pb.Request) (pb.Response, error) {
-	timeout, err := getTimeoutFromContext(ctx)
-	if err != nil {
-		return pb.Response{}, err
-	}
-	req.Timeout = int64(timeout)
 	r := c.pool.Get().(*RPCRequest)
 	r.Request = req
-	future, err := c.client.Send(ctx,
-		c.addr, r, morpc.SendOptions{Timeout: time.Duration(timeout)})
+	future, err := c.client.Send(ctx, c.addr, r)
 	if err != nil {
 		return pb.Response{}, err
 	}
