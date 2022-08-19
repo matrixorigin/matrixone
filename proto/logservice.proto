@@ -185,12 +185,11 @@ message TsoRequest {
 message Request {
   uint64 RequestID               = 1;
   MethodType Method              = 2;
-  int64 Timeout                  = 3;
-  LogRequest LogRequest          = 4 [(gogoproto.nullable) = false];
-  LogStoreHeartbeat LogHeartbeat = 5;
-  CNStoreHeartbeat CNHeartbeat   = 6;
-  DNStoreHeartbeat DNHeartbeat   = 7;
-  TsoRequest TsoRequest          = 8;
+  LogRequest LogRequest          = 3 [(gogoproto.nullable) = false];
+  LogStoreHeartbeat LogHeartbeat = 4;
+  CNStoreHeartbeat CNHeartbeat   = 5;
+  DNStoreHeartbeat DNHeartbeat   = 6;
+  TsoRequest TsoRequest          = 7;
 };
 
 enum ErrorCode {

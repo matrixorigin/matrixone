@@ -42,15 +42,15 @@ func TestHandleServer(t *testing.T) {
 			assert.NoError(t, c.Close())
 		}()
 
-		rs.RegisterRequestHandler(func(request Message, sequence uint64, cs ClientSession) error {
-			return cs.Write(request, SendOptions{})
-		})
-
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
 
+		rs.RegisterRequestHandler(func(_ context.Context, request Message, sequence uint64, cs ClientSession) error {
+			return cs.Write(ctx, request)
+		})
+
 		req := newTestMessage(1)
-		f, err := c.Send(ctx, testAddr, req, SendOptions{})
+		f, err := c.Send(ctx, testAddr, req)
 		assert.NoError(t, err)
 
 		defer f.Close()
@@ -67,15 +67,15 @@ func TestHandleServerWithPayloadMessage(t *testing.T) {
 			assert.NoError(t, c.Close())
 		}()
 
-		rs.RegisterRequestHandler(func(request Message, sequence uint64, cs ClientSession) error {
-			return cs.Write(request, SendOptions{})
-		})
-
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
 
+		rs.RegisterRequestHandler(func(_ context.Context, request Message, sequence uint64, cs ClientSession) error {
+			return cs.Write(ctx, request)
+		})
+
 		req := &testMessage{id: 1, payload: []byte("payload")}
-		f, err := c.Send(ctx, testAddr, req, SendOptions{})
+		f, err := c.Send(ctx, testAddr, req)
 		assert.NoError(t, err)
 
 		defer f.Close()
@@ -90,18 +90,18 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 	defer close(wc)
 
 	testRPCServer(t, func(rs *server) {
-		c := newTestClient(t)
-		rs.RegisterRequestHandler(func(request Message, _ uint64, cs ClientSession) error {
-			assert.NoError(t, c.Close())
-			wc <- struct{}{}
-			return cs.Write(request, SendOptions{})
-		})
-
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 
+		c := newTestClient(t)
+		rs.RegisterRequestHandler(func(_ context.Context, request Message, _ uint64, cs ClientSession) error {
+			assert.NoError(t, c.Close())
+			wc <- struct{}{}
+			return cs.Write(ctx, request)
+		})
+
 		req := newTestMessage(1)
-		f, err := c.Send(ctx, testAddr, req, SendOptions{})
+		f, err := c.Send(ctx, testAddr, req)
 		assert.NoError(t, err)
 
 		defer f.Close()
@@ -116,6 +116,9 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 
 func TestStreamServer(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
+		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+		defer cancel()
+
 		c := newTestClient(t)
 		defer func() {
 			assert.NoError(t, c.Close())
@@ -124,11 +127,11 @@ func TestStreamServer(t *testing.T) {
 		wg := sync.WaitGroup{}
 		wg.Add(1)
 		n := 10
-		rs.RegisterRequestHandler(func(request Message, _ uint64, cs ClientSession) error {
+		rs.RegisterRequestHandler(func(_ context.Context, request Message, _ uint64, cs ClientSession) error {
 			go func() {
 				defer wg.Done()
 				for i := 0; i < n; i++ {
-					assert.NoError(t, cs.Write(request, SendOptions{}))
+					assert.NoError(t, cs.Write(ctx, request))
 				}
 			}()
 			return nil
@@ -141,7 +144,7 @@ func TestStreamServer(t *testing.T) {
 		}()
 
 		req := newTestMessage(st.ID())
-		assert.NoError(t, st.Send(req, SendOptions{}))
+		assert.NoError(t, st.Send(ctx, req))
 
 		rc, err := st.Receive()
 		assert.NoError(t, err)
@@ -154,28 +157,26 @@ func TestStreamServer(t *testing.T) {
 }
 
 func BenchmarkSend(b *testing.B) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+
 	testRPCServer(b, func(rs *server) {
 		c := newTestClient(b,
 			WithClientMaxBackendPerHost(1),
 			WithClientInitBackends([]string{testAddr}, []int{1}))
 		defer func() {
-			c.(*client).logger.Info("55")
 			assert.NoError(b, c.Close())
-			c.(*client).logger.Info("66")
 		}()
 
-		rs.RegisterRequestHandler(func(request Message, sequence uint64, cs ClientSession) error {
-			return cs.Write(request, SendOptions{})
+		rs.RegisterRequestHandler(func(_ context.Context, request Message, sequence uint64, cs ClientSession) error {
+			return cs.Write(ctx, request)
 		})
-
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-		defer cancel()
 
 		req := newTestMessage(1)
 
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			f, err := c.Send(ctx, testAddr, req, SendOptions{})
+			f, err := c.Send(ctx, testAddr, req)
 			if err == nil {
 				_, err := f.Get()
 				if err != nil {
@@ -185,7 +186,7 @@ func BenchmarkSend(b *testing.B) {
 			}
 		}
 	}, WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
-		messagePool.Put(i)
+		messagePool.Put(i.(RPCMessage).Message)
 	})))
 }
 

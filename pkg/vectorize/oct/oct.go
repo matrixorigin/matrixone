@@ -16,21 +16,21 @@ package oct
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strconv"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"golang.org/x/exp/constraints"
 )
 
 var (
-	OctUint8  func([]uint8, *types.Bytes) *types.Bytes
-	OctUint16 func([]uint16, *types.Bytes) *types.Bytes
-	OctUint32 func([]uint32, *types.Bytes) *types.Bytes
-	OctUint64 func([]uint64, *types.Bytes) *types.Bytes
-	OctInt8   func([]int8, *types.Bytes) *types.Bytes
-	OctInt16  func([]int16, *types.Bytes) *types.Bytes
-	OctInt32  func([]int32, *types.Bytes) *types.Bytes
-	OctInt64  func([]int64, *types.Bytes) *types.Bytes
+	OctUint8  func([]uint8, []types.Decimal128) ([]types.Decimal128, error)
+	OctUint16 func([]uint16, []types.Decimal128) ([]types.Decimal128, error)
+	OctUint32 func([]uint32, []types.Decimal128) ([]types.Decimal128, error)
+	OctUint64 func([]uint64, []types.Decimal128) ([]types.Decimal128, error)
+	OctInt8   func([]int8, []types.Decimal128) ([]types.Decimal128, error)
+	OctInt16  func([]int16, []types.Decimal128) ([]types.Decimal128, error)
+	OctInt32  func([]int32, []types.Decimal128) ([]types.Decimal128, error)
+	OctInt64  func([]int64, []types.Decimal128) ([]types.Decimal128, error)
 )
 
 func init() {
@@ -44,62 +44,44 @@ func init() {
 	OctInt64 = Oct[int64]
 }
 
-func Oct[T constraints.Unsigned | constraints.Signed](xs []T, rs *types.Bytes) *types.Bytes {
-	var cursor uint32
-
+func Oct[T constraints.Unsigned | constraints.Signed](xs []T, rs []types.Decimal128) ([]types.Decimal128, error) {
 	for idx := range xs {
-		octbytes := uint64ToOctonary(uint64(xs[idx]))
-		for i := range octbytes {
-			rs.Data = append(rs.Data, octbytes[i])
+		res, err := oct(uint64(xs[idx]))
+		if err != nil {
+			return nil, err
 		}
-		rs.Offsets[idx] = cursor
-		rs.Lengths[idx] = uint32(len(octbytes))
-		cursor += uint32(len(octbytes))
+		rs[idx] = res
 	}
-
-	return rs
+	return rs, nil
 }
 
-func OctFloat[T constraints.Float](xs []T, rs *types.Bytes) (*types.Bytes, error) {
-	var cursor uint32
-
-	var octbytes []byte
+func OctFloat[T constraints.Float](xs []T, rs []types.Decimal128) ([]types.Decimal128, error) {
+	var res types.Decimal128
 	for idx := range xs {
 		if xs[idx] < 0 {
 			val, err := strconv.ParseInt(fmt.Sprintf("%1.0f", xs[idx]), 10, 64)
 			if err != nil {
 				return nil, err
 			}
-			octbytes = uint64ToOctonary(uint64(val))
+			res, err = oct(uint64(val))
+			if err != nil {
+				return nil, err
+			}
 		} else {
 			val, err := strconv.ParseUint(fmt.Sprintf("%1.0f", xs[idx]), 10, 64)
 			if err != nil {
 				return nil, err
 			}
-			octbytes = uint64ToOctonary(val)
+			res, err = oct(val)
+			if err != nil {
+				return nil, err
+			}
 		}
-
-		for i := range octbytes {
-			rs.Data = append(rs.Data, octbytes[i])
-		}
-		rs.Offsets[idx] = cursor
-		rs.Lengths[idx] = uint32(len(octbytes))
-		cursor += uint32(len(octbytes))
+		rs[idx] = res
 	}
 	return rs, nil
 }
 
-func uint64ToOctonary(x uint64) []byte {
-	var a [21 + 1]byte // 64bit value in base 8 [64/3+(64%3!=0)]
-	i := len(a)
-	// Use shifts and masks instead of / and %.
-	for x >= 8 {
-		i--
-		a[i] = byte(x&7 + '0')
-		x >>= 3
-	}
-	// x < 8
-	i--
-	a[i] = byte(x + '0')
-	return a[i:]
+func oct(val uint64) (types.Decimal128, error) {
+	return types.Decimal128_FromStringWithScale(fmt.Sprintf("%o", val), 0)
 }

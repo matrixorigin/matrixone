@@ -17,7 +17,6 @@ package rpc
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -62,7 +61,8 @@ func NewTxnServer(address string, logger *zap.Logger) (TxnServer, error) {
 		morpc.NewMessageCodec(s.acquireRequest, 16*1024),
 		morpc.WithServerLogger(s.logger),
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
-			s.releaseResponse(v.(*txn.TxnResponse))
+			m := v.(morpc.RPCMessage)
+			s.releaseResponse(m.Message.(*txn.TxnResponse))
 		})))
 	if err != nil {
 		return nil, err
@@ -90,7 +90,7 @@ func (s *server) SetFilter(filter func(*txn.TxnRequest) bool) {
 }
 
 // onMessage a client connection has a separate read goroutine. The onMessage invoked in this read goroutine.
-func (s *server) onMessage(request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+func (s *server) onMessage(ctx context.Context, request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
 	m, ok := request.(*txn.TxnRequest)
 	if !ok {
 		s.logger.Fatal("received invalid message", zap.Any("message", request))
@@ -106,13 +106,12 @@ func (s *server) onMessage(request morpc.Message, sequence uint64, cs morpc.Clie
 		s.logger.Fatal("missing txn request handler",
 			zap.String("method", m.Method.String()))
 	}
-	timeout := time.Until(time.Unix(0, m.TimeoutAt))
-	if timeout <= 0 {
-		return nil
-	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	select {
+	case <-ctx.Done():
+		return nil
+	default:
+	}
 
 	resp := s.acquireResponse()
 	if err := handler(ctx, m, resp); err != nil {
@@ -121,7 +120,7 @@ func (s *server) onMessage(request morpc.Message, sequence uint64, cs morpc.Clie
 	}
 
 	resp.RequestID = m.RequestID
-	return cs.Write(resp, morpc.SendOptions{Timeout: timeout})
+	return cs.Write(ctx, resp)
 }
 
 func (s *server) acquireResponse() *txn.TxnResponse {

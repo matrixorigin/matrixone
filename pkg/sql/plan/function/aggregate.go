@@ -640,6 +640,9 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
+				if !operator.IsNumeric(inputs[0]) {
+					return wrongFuncParamForAgg, nil
+				}
 				_, err := aggregate.ReturnType(aggregate.BitOr, types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
@@ -663,6 +666,9 @@ var aggregates = map[int]Functions{
 			if len(inputs) == 1 {
 				if inputs[0] == types.T_any {
 					return 0, nil
+				}
+				if !operator.IsNumeric(inputs[0]) {
+					return wrongFuncParamForAgg, nil
 				}
 				_, err := aggregate.ReturnType(aggregate.BitXor, types.Type{Oid: inputs[0]})
 				if err == nil {
