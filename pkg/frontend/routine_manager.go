@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"sync"
 
@@ -159,11 +160,34 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			logutil.Infof("RP[%v] Payload80[%v]",rs.RemoteAddr(),di)
 		*/
 
-		err := protocol.handleHandshake(payload)
-		if err != nil {
-			return err
+		if protocol.capability&CLIENT_SSL != 0 && !protocol.IsTlsEstablished() {
+			isTlsHeader, err := protocol.handleHandshake(payload)
+			if err != nil {
+				return err
+			}
+			if isTlsHeader {
+				// do upgradeTls
+				tlsConn := tls.Server(rs.RawConn(), protocol.tlsConfig)
+				if err := tlsConn.Handshake(); err != nil {
+					return err
+				}
+				rs.UseConn(tlsConn)
+
+				// tls upgradeOk
+				protocol.SetTlsEstablished()
+			} else {
+				// client don't ask server to upgrade TLS
+				protocol.SetTlsEstablished()
+				protocol.SetEstablished()
+			}
+		} else {
+			_, err := protocol.handleHandshake(payload)
+			if err != nil {
+				return err
+			}
+			protocol.SetEstablished()
 		}
-		protocol.SetEstablished()
+
 		if protocol.ses != nil && protocol.database != "" {
 			protocol.ses.SetDatabaseName(protocol.database)
 		}

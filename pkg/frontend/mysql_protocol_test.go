@@ -984,7 +984,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 
 	// finish handshake process
 	if !pro.IsEstablished() {
-		err := pro.handleHandshake(payload)
+		_, err := pro.handleHandshake(payload)
 		if err != nil {
 			return err
 		}
@@ -2181,15 +2181,15 @@ func Test_handleHandshake(t *testing.T) {
 		mp.tcpConn = ioses
 		mp.SetSkipCheckUser(true)
 		payload := []byte{'a'}
-		err := mp.handleHandshake(payload)
+		_, err := mp.handleHandshake(payload)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		payload = append(payload, []byte{'b', 'c'}...)
-		err = mp.handleHandshake(payload)
+		_, err = mp.handleHandshake(payload)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		payload = append(payload, []byte{'c', 'd', 0}...)
-		err = mp.handleHandshake(payload)
+		_, err = mp.handleHandshake(payload)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
@@ -2214,14 +2214,14 @@ func Test_handleHandshake_Recover(t *testing.T) {
 		var payload []byte
 		for i := 0; i < count; i++ {
 			f.Fuzz(&payload)
-			_ = mp.handleHandshake(payload)
+			_, _ = mp.handleHandshake(payload)
 			maxLen = Max(maxLen, len(payload))
 		}
 		maxLen = 0
 		var payload2 string
 		for i := 0; i < count; i++ {
 			f.Fuzz(&payload2)
-			_ = mp.handleHandshake([]byte(payload2))
+			_, _ = mp.handleHandshake([]byte(payload2))
 			maxLen = Max(maxLen, len(payload2))
 		}
 	})

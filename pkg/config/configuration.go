@@ -16,6 +16,7 @@ package config
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -218,6 +219,18 @@ type FrontendParameters struct {
 
 	//default is 0. the maximum numbers of log file to be retained
 	LogMaxBackups int64 `toml:"logMaxBackups"`
+
+	//default is false. With true. Server will support tls
+	EnableTls bool `toml:"enableTls"`
+
+	//default is ''. Path of file that contains list of trusted SSL CAs for client
+	TlsCaFile string `toml:"tlsCaFile"`
+
+	//default is ''. Path of file that contains X509 certificate in PEM format for client
+	TlsCertFile string `toml:"tlsCertFile"`
+
+	//default is ''. Path of file that contains X509 key in PEM format for client
+	TlsKeyFile string `toml:"tlsKeyFile"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
