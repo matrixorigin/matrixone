@@ -118,10 +118,12 @@ func convertScopeToPipeline(s *Scope) *pipeline.Pipeline {
 	// Plan
 	p.Qry = s.Plan
 	// DataSource
-	p.DataSource = &pipeline.Source{
-		SchemaName: s.DataSource.SchemaName,
-		TableName:  s.DataSource.RelationName,
-		ColList:    s.DataSource.Attributes,
+	if s.DataSource != nil { // if select 1, DataSource is nil
+		p.DataSource = &pipeline.Source{
+			SchemaName: s.DataSource.SchemaName,
+			TableName:  s.DataSource.RelationName,
+			ColList:    s.DataSource.Attributes,
+		}
 	}
 	// PreScope
 	p.Children = make([]*pipeline.Pipeline, len(s.PreScopes))
@@ -143,10 +145,12 @@ func convertPipelineToScope(p *pipeline.Pipeline) *Scope {
 		Plan:  p.Qry,
 	}
 	dsc := p.GetDataSource()
-	s.DataSource = &Source{
-		SchemaName:   dsc.SchemaName,
-		RelationName: dsc.TableName,
-		Attributes:   dsc.ColList,
+	if dsc != nil {
+		s.DataSource = &Source{
+			SchemaName:   dsc.SchemaName,
+			RelationName: dsc.TableName,
+			Attributes:   dsc.ColList,
+		}
 	}
 	s.Instructions = make([]vm.Instruction, len(p.InstructionList))
 	// Instructions
