@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
@@ -105,8 +106,7 @@ type Process struct {
 	// unix timestamp
 	UnixTime int64
 
-	// snapshot is transaction context
-	Snapshot []byte
+	TxnOperator client.TxnOperator
 
 	AnalInfos []*AnalyzeInfo
 

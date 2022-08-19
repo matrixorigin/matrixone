@@ -15,6 +15,7 @@
 package morpc
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -203,10 +204,12 @@ func TestCloseIdleBackends(t *testing.T) {
 	assert.NotEqual(t, b, b2)
 
 	go func() {
+		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+		defer cancel()
 		st, err := b2.NewStream()
 		assert.NoError(t, err)
 		for {
-			assert.NoError(t, st.Send(newTestMessage(1), SendOptions{}))
+			assert.NoError(t, st.Send(ctx, newTestMessage(1)))
 		}
 	}()
 

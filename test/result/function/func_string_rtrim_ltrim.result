@@ -249,9 +249,9 @@ a	a
 drop table t1;
 drop table t2;
 SELECT RTRIM(space(100000000)+"123");
-Operator '+' with parameters [VARCHAR VARCHAR] will be implemented in future version.
+the space count exceeds maxallowedCount 8000
 SELECT LTRIM("123"+space(100000000));
-Operator '+' with parameters [VARCHAR VARCHAR] will be implemented in future version.
+the space count exceeds maxallowedCount 8000
 SELECT LTRIM("    1241241^&@%#^*^!@#&*(!&");
 LTRIM("    1241241^&@%#^*^!@#&*(!&")
 1241241^&@%#^*^!@#&*(!&

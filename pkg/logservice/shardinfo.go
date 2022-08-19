@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -36,12 +35,11 @@ type ShardInfo struct {
 // address is usually the reverse proxy that randomly redirect the request to
 // a known Log Service node.
 func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
-	timeout := time.Second
 	respPool := &sync.Pool{}
 	respPool.New = func() interface{} {
 		return &RPCResponse{pool: respPool}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	cc, err := getRPCClient(ctx, address, respPool)
 	if err != nil {
@@ -53,8 +51,7 @@ func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
 		}
 	}()
 	req := pb.Request{
-		Method:  pb.GET_SHARD_INFO,
-		Timeout: int64(timeout),
+		Method: pb.GET_SHARD_INFO,
 		LogRequest: pb.LogRequest{
 			ShardID: shardID,
 		},
@@ -62,8 +59,7 @@ func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
 	rpcReq := &RPCRequest{
 		Request: req,
 	}
-	future, err := cc.Send(ctx,
-		address, rpcReq, morpc.SendOptions{Timeout: time.Duration(timeout)})
+	future, err := cc.Send(ctx, address, rpcReq)
 	if err != nil {
 		return ShardInfo{}, false, err
 	}

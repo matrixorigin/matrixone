@@ -27,10 +27,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
+var _ handle.RelationIt = (*txnRelationIt)(nil)
+
 type txnRelationIt struct {
 	*sync.RWMutex
 	txnDB  *txnDB
 	linkIt *common.LinkIt
+	itered bool // linkIt has no dummy head, use this to avoid duplicate filter logic for the very first entry
 	curr   *catalog.TableEntry
 	err    error
 }
@@ -41,25 +44,7 @@ func newRelationIt(db *txnDB) *txnRelationIt {
 		linkIt:  db.entry.MakeTableIt(true),
 		txnDB:   db,
 	}
-	var err error
-	var ok bool
-	for it.linkIt.Valid() {
-		curr := it.linkIt.Get().GetPayload().(*catalog.TableEntry)
-		curr.RLock()
-		ok, err = curr.TxnCanRead(it.txnDB.store.txn, curr.RWMutex)
-		if err != nil {
-			curr.RUnlock()
-			it.err = err
-			return it
-		}
-		if ok {
-			curr.RUnlock()
-			it.curr = curr
-			break
-		}
-		curr.RUnlock()
-		it.linkIt.Next()
-	}
+	it.Next()
 	return it
 }
 
@@ -76,8 +61,12 @@ func (it *txnRelationIt) Valid() bool {
 func (it *txnRelationIt) Next() {
 	var err error
 	var valid bool
+	txn := it.txnDB.store.txn
 	for {
-		it.linkIt.Next()
+		if it.itered {
+			it.linkIt.Next()
+		}
+		it.itered = true
 		node := it.linkIt.Get()
 		if node == nil {
 			it.curr = nil
@@ -85,6 +74,13 @@ func (it *txnRelationIt) Next() {
 		}
 		entry := node.GetPayload().(*catalog.TableEntry)
 		entry.RLock()
+		// SystemDB can hold table created by different tenant, filter needed.
+		// while the 3 shared tables are not affected
+		if it.txnDB.entry.IsSystemDB() && !isSysTable(entry.GetSchema().Name) &&
+			entry.GetSchema().AcInfo.TenantID != txn.GetTenantID() {
+			entry.RUnlock()
+			continue
+		}
 		valid, err = entry.TxnCanRead(it.txnDB.store.txn, entry.RWMutex)
 		entry.RUnlock()
 		if err != nil {
@@ -96,6 +92,10 @@ func (it *txnRelationIt) Next() {
 			break
 		}
 	}
+}
+
+func (it *txnRelationIt) GetCurr() *catalog.TableEntry {
+	return it.curr
 }
 
 func (it *txnRelationIt) GetRelation() handle.Relation {
