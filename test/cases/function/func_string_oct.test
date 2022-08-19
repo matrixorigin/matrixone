@@ -61,13 +61,11 @@ HAVING oct(a) <>0;
 DROP TABLE t1;
 
 #WHERE, 算术运算
--- @bvt:issue#3716
 drop table if exists t1;
 create table t1(a INT,  b int);
 insert into t1 values(1, 2),(2, 3),(3, 4),(4, 5);
 select oct(a)+oct(b) from t1 where oct(a)+oct(b)<>0;
 drop table t1;
--- @bvt:issue
 
 #ON CONDITION
 CREATE TABLE t1 (a int);

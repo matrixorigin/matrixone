@@ -369,7 +369,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		}
 	}
 
-	if isString(lv.Typ.Oid) && isDecimal(rv.Typ.Oid) {
+	if isString(lv.Typ.Oid) && IsDecimal(rv.Typ.Oid) {
 		switch rv.Typ.Oid {
 		case types.T_decimal64:
 			return CastStringAsDecimal64(lv, rv, proc)
@@ -407,7 +407,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 			return CastSpecials2Float[float64](lv, rv, proc)
 		}
 	}
-	if isDecimal(lv.Typ.Oid) && isString(rv.Typ.Oid) {
+	if IsDecimal(lv.Typ.Oid) && isString(rv.Typ.Oid) {
 		switch lv.Typ.Oid {
 		case types.T_decimal64:
 			return CastDecimal64ToString(lv, rv, proc)
@@ -559,7 +559,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		}
 	}
 
-	if isDecimal(lv.Typ.Oid) && rv.Typ.Oid == types.T_timestamp {
+	if IsDecimal(lv.Typ.Oid) && rv.Typ.Oid == types.T_timestamp {
 		switch lv.Typ.Oid {
 		case types.T_decimal64:
 			return CastDecimal64AsTimestamp(lv, rv, proc)
@@ -2482,8 +2482,8 @@ func isDateSeries(t types.T) bool {
 	return false
 }
 
-// isDecimal: return true if the types.T is decimal64 or decimal128
-func isDecimal(t types.T) bool {
+// IsDecimal: return true if the types.T is decimal64 or decimal128
+func IsDecimal(t types.T) bool {
 	if t == types.T_decimal64 || t == types.T_decimal128 {
 		return true
 	}
