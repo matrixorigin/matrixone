@@ -378,38 +378,38 @@ func makeBatch(param *ExternalParam, plh *ParseLineHandler) *batch.Batch {
 		vec := vector.New(typ)
 		switch vec.Typ.Oid {
 		case types.T_bool:
-			vec.Col = make([]bool, batchSize)
 			vec.Data = make([]byte, batchSize)
+			vec.Col = types.DecodeBoolSlice(vec.Data)
 		case types.T_int8:
-			vec.Col = make([]int8, batchSize)
 			vec.Data = make([]byte, batchSize)
+			vec.Col = types.DecodeInt8Slice(vec.Data)
 		case types.T_int16:
-			vec.Col = make([]int16, batchSize)
 			vec.Data = make([]byte, 2*batchSize)
+			vec.Col = types.DecodeInt16Slice(vec.Data)
 		case types.T_int32:
-			vec.Col = make([]int32, batchSize)
 			vec.Data = make([]byte, 4*batchSize)
+			vec.Col = types.DecodeInt32Slice(vec.Data)
 		case types.T_int64:
-			vec.Col = make([]int64, batchSize)
 			vec.Data = make([]byte, 8*batchSize)
+			vec.Col = types.DecodeInt64Slice(vec.Data)
 		case types.T_uint8:
-			vec.Col = make([]uint8, batchSize)
 			vec.Data = make([]byte, batchSize)
+			vec.Col = types.DecodeUint8Slice(vec.Data)
 		case types.T_uint16:
-			vec.Col = make([]uint16, batchSize)
 			vec.Data = make([]byte, 2*batchSize)
+			vec.Col = types.DecodeUint16Slice(vec.Data)
 		case types.T_uint32:
-			vec.Col = make([]uint32, batchSize)
 			vec.Data = make([]byte, 4*batchSize)
+			vec.Col = types.DecodeUint32Slice(vec.Data)
 		case types.T_uint64:
-			vec.Col = make([]uint64, batchSize)
 			vec.Data = make([]byte, 8*batchSize)
+			vec.Col = types.DecodeUint64Slice(vec.Data)
 		case types.T_float32:
-			vec.Col = make([]float32, batchSize)
 			vec.Data = make([]byte, 4*batchSize)
+			vec.Col = types.DecodeFloat32Slice(vec.Data)
 		case types.T_float64:
-			vec.Col = make([]float64, batchSize)
 			vec.Data = make([]byte, 8*batchSize)
+			vec.Col = types.DecodeFloat64Slice(vec.Data)
 		case types.T_char, types.T_varchar, types.T_json:
 			vBytes := &types.Bytes{
 				Offsets: make([]uint32, batchSize),
@@ -419,20 +419,20 @@ func makeBatch(param *ExternalParam, plh *ParseLineHandler) *batch.Batch {
 			vec.Col = vBytes
 			vec.Data = make([]byte, batchSize)
 		case types.T_date:
-			vec.Col = make([]types.Date, batchSize)
 			vec.Data = make([]byte, 4*batchSize)
+			vec.Col = types.DecodeDateSlice(vec.Data)
 		case types.T_datetime:
-			vec.Col = make([]types.Datetime, batchSize)
 			vec.Data = make([]byte, 8*batchSize)
+			vec.Col = types.DecodeDatetimeSlice(vec.Data)
 		case types.T_decimal64:
-			vec.Col = make([]types.Decimal64, batchSize)
 			vec.Data = make([]byte, 8*batchSize)
+			vec.Col = types.DecodeDecimal64Slice(vec.Data)
 		case types.T_decimal128:
-			vec.Col = make([]types.Decimal128, batchSize)
 			vec.Data = make([]byte, 16*batchSize)
+			vec.Col = types.DecodeDecimal128Slice(vec.Data)
 		case types.T_timestamp:
-			vec.Col = make([]types.Timestamp, batchSize)
 			vec.Data = make([]byte, 8*batchSize)
+			vec.Col = types.DecodeTimestampSlice(vec.Data)
 		default:
 			panic("unsupported vector type")
 		}
@@ -450,9 +450,15 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 			return nil, errors.New("the table colnum is larger than input data colnum")
 		}
 		for colIdx := range param.Attrs {
-			field := strings.TrimSpace(Line[param.Name2ColIndex[param.Attrs[colIdx]]])
+			field := Line[param.Name2ColIndex[param.Attrs[colIdx]]]
+			if types.T(param.Cols[colIdx].Typ.Id) != types.T_char && types.T(param.Cols[colIdx].Typ.Id) != types.T_varchar {
+				field = strings.TrimSpace(field)
+			}
 			vec := bat.Vecs[colIdx]
-			isNullOrEmpty := len(field) == 0 || field == NULL_FLAG
+			isNullOrEmpty := field == NULL_FLAG
+			if types.T(param.Cols[colIdx].Typ.Id) != types.T_char && types.T(param.Cols[colIdx].Typ.Id) != types.T_varchar {
+				isNullOrEmpty = isNullOrEmpty || len(field) == 0
+			}
 			switch types.T(param.Cols[colIdx].Typ.Id) {
 			case types.T_bool:
 				cols := vec.Col.([]bool)
@@ -778,8 +784,8 @@ func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 	plh.simdCsvReader = simdcsv.NewReaderWithOptions(param.reader,
 		rune(param.extern.Tail.Fields.Terminated[0]),
 		'#',
-		false,
-		false)
+		true,
+		true)
 
 	return plh, nil
 }
