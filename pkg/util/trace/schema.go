@@ -17,15 +17,15 @@ package trace
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
 const (
-	systemDBConst    = "system"
-	statsDatabase    = systemDBConst
+	SystemDBConst    = "system"
+	statsDatabase    = SystemDBConst
 	spanInfoTbl      = "span_info"
 	logInfoTbl       = "log_info"
 	statementInfoTbl = "statement_info"

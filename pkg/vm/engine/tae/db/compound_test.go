@@ -157,7 +157,7 @@ func TestCompoundPK1(t *testing.T) {
 
 	assert.NoError(t, txn.Commit())
 
-	compactBlocks(t, tae, "db", schema, false)
+	compactBlocks(t, 0, tae, "db", schema, false)
 
 	// TODO
 	// txn, _ = tae.StartTxn(nil)

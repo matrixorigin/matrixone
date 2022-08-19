@@ -58,7 +58,9 @@ func TestHandleMessage(t *testing.T) {
 		defer close(c)
 		cs := newTestClientSession(c)
 
-		assert.NoError(t, s.onMessage(&txn.TxnRequest{RequestID: 1, TimeoutAt: time.Now().Add(time.Hour).UnixNano()}, 0, cs))
+		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		defer cancel()
+		assert.NoError(t, s.onMessage(ctx, &txn.TxnRequest{RequestID: 1}, 0, cs))
 		v := <-c
 		assert.Equal(t, uint64(1), v.GetID())
 	})
@@ -75,7 +77,9 @@ func TestHandleMessageWithFilter(t *testing.T) {
 			return false
 		})
 
-		assert.NoError(t, s.onMessage(&txn.TxnRequest{RequestID: 1, TimeoutAt: time.Now().Add(time.Hour).UnixNano()},
+		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		defer cancel()
+		assert.NoError(t, s.onMessage(ctx, &txn.TxnRequest{RequestID: 1},
 			0, nil))
 		assert.Equal(t, 0, n)
 	})
@@ -89,7 +93,9 @@ func TestHandleInvalidMessageWillPanic(t *testing.T) {
 			}
 			assert.Fail(t, "must panic")
 		}()
-		assert.NoError(t, s.onMessage(&txn.TxnResponse{}, 0, nil))
+		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		defer cancel()
+		assert.NoError(t, s.onMessage(ctx, &txn.TxnResponse{}, 0, nil))
 	})
 }
 
@@ -101,7 +107,7 @@ func TestHandleNotRegisterWillPanic(t *testing.T) {
 			}
 			assert.Fail(t, "must panic")
 		}()
-		assert.NoError(t, s.onMessage(&txn.TxnRequest{}, 0, nil))
+		assert.NoError(t, s.onMessage(context.Background(), &txn.TxnRequest{}, 0, nil))
 	})
 }
 
@@ -114,8 +120,10 @@ func TestTimeoutRequestCannotHandled(t *testing.T) {
 				return nil
 			})
 
-		req := &txn.TxnRequest{Method: txn.TxnMethod_Read, TimeoutAt: time.Now().UnixNano() - 1}
-		assert.NoError(t, s.onMessage(req, 0, nil))
+		ctx, cancel := context.WithTimeout(context.Background(), 1)
+		cancel()
+		req := &txn.TxnRequest{Method: txn.TxnMethod_Read}
+		assert.NoError(t, s.onMessage(ctx, req, 0, nil))
 		assert.Equal(t, 0, n)
 	})
 }
@@ -142,7 +150,7 @@ func newTestClientSession(c chan morpc.Message) *testClientSession {
 	}
 }
 
-func (cs *testClientSession) Write(response morpc.Message, opts morpc.SendOptions) error {
+func (cs *testClientSession) Write(ctx context.Context, response morpc.Message) error {
 	cs.c <- response
 	return nil
 }

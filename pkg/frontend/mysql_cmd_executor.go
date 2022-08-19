@@ -308,17 +308,17 @@ func (foq *fakeOutputQueue) flush() error {
 }
 
 const (
-	tableNamePos    = 0
-	tableCommentPos = 4
+	tableNamePos    = 1
+	tableCommentPos = 6
 
-	attrNamePos    = 8
-	attrTypPos     = 9
-	charWidthPos   = 11
-	defaultPos     = 13
-	primaryKeyPos  = 16
-	attrCommentPos = 19
+	attrNamePos    = 16
+	attrTypPos     = 17
+	charWidthPos   = 19
+	nullablePos    = 20
+	primaryKeyPos  = 24
+	attrCommentPos = 27
 
-	showCreateTableAttrCount = 21
+	showCreateTableAttrCount = 29
 )
 
 /*
@@ -334,10 +334,8 @@ func handleShowCreateTable(ses *Session) error {
 		if colName == "PADDR" {
 			continue
 		}
-		nullOrNot := ""
-		if d[defaultPos].(int8) != 0 {
-			nullOrNot = "NOT NULL"
-		} else {
+		nullOrNot := "NOT NULL"
+		if d[nullablePos].(int8) == 1 {
 			nullOrNot = "DEFAULT NULL"
 		}
 

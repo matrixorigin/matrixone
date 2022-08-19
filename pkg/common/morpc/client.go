@@ -156,13 +156,13 @@ func (c *client) maybeInitBackends() error {
 	return nil
 }
 
-func (c *client) Send(ctx context.Context, backend string, request Message, opts SendOptions) (*Future, error) {
+func (c *client) Send(ctx context.Context, backend string, request Message) (*Future, error) {
 	b, err := c.getBackend(backend)
 	if err != nil {
 		return nil, err
 	}
 
-	f, err := b.Send(ctx, request, opts)
+	f, err := b.Send(ctx, request)
 	if err != nil {
 		return nil, err
 	}
