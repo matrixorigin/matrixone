@@ -17,6 +17,7 @@ package anti
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
@@ -37,15 +38,14 @@ type container struct {
 
 	hasNull bool
 
-	sels [][]int64
-
 	inBuckets []uint8
 
 	bat *batch.Batch
 
 	evecs []evalVector
 	vecs  []*vector.Vector
-	mp    *hashmap.StrHashMap
+
+	mp *hashmap.JoinMap
 }
 
 type Argument struct {
@@ -53,5 +53,7 @@ type Argument struct {
 	Ibucket    uint64
 	Nbucket    uint64
 	Result     []int32
+	Typs       []types.Type
+	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
 }

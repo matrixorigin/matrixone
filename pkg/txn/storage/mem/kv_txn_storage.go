@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"math"
 	"sync"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -89,7 +88,7 @@ type KVTxnStorage struct {
 	sync.RWMutex
 	logClient            logservice.Client
 	clock                clock.Clock
-	latest               logservice.Lsn
+	recoverFrom          logservice.Lsn
 	uncommittedTxn       map[string]*txn.TxnMeta
 	uncommittedKeyTxnMap map[string]*txn.TxnMeta
 	uncommitted          *KV
@@ -98,11 +97,11 @@ type KVTxnStorage struct {
 }
 
 // NewKVTxnStorage create KV-based implementation of TxnStorage
-func NewKVTxnStorage(latest logservice.Lsn, logClient logservice.Client, clock clock.Clock) *KVTxnStorage {
+func NewKVTxnStorage(recoverFrom logservice.Lsn, logClient logservice.Client, clock clock.Clock) *KVTxnStorage {
 	return &KVTxnStorage{
 		logClient:            logClient,
 		clock:                clock,
-		latest:               latest,
+		recoverFrom:          recoverFrom,
 		uncommittedKeyTxnMap: make(map[string]*txn.TxnMeta),
 		uncommittedTxn:       make(map[string]*txn.TxnMeta),
 		uncommitted:          NewKV(),
@@ -130,14 +129,15 @@ func (kv *KVTxnStorage) GetUncommittedKV() *KV {
 	return kv.uncommitted
 }
 
-func (kv *KVTxnStorage) StartRecovery(c chan txn.TxnMeta) {
+func (kv *KVTxnStorage) StartRecovery(ctx context.Context, c chan txn.TxnMeta) {
 	defer close(c)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
+	if kv.recoverFrom < 1 {
+		return
+	}
 
 	for {
-		logs, lsn, err := kv.logClient.Read(ctx, kv.latest, math.MaxUint64)
+		logs, lsn, err := kv.logClient.Read(ctx, kv.recoverFrom, math.MaxUint64)
 		if err != nil {
 			panic(err)
 		}
@@ -152,7 +152,7 @@ func (kv *KVTxnStorage) StartRecovery(c chan txn.TxnMeta) {
 					req := &message{}
 					req.Keys = klog.Keys
 					req.Values = klog.Values
-					_, err := kv.Write(klog.Txn, setOpCode, req.mustMarshal())
+					_, err := kv.Write(ctx, klog.Txn, setOpCode, req.mustMarshal())
 					if err != nil {
 						panic(err)
 					}
@@ -174,31 +174,24 @@ func (kv *KVTxnStorage) StartRecovery(c chan txn.TxnMeta) {
 				}
 
 				c <- klog.Txn
-				kv.Lock()
-				kv.latest = log.Lsn
-				kv.Unlock()
 			}
 		}
 
-		if lsn == kv.latest {
+		if lsn == kv.recoverFrom {
 			return
 		}
 	}
 }
 
-func (kv *KVTxnStorage) Close() error {
+func (kv *KVTxnStorage) Close(ctx context.Context) error {
 	return nil
 }
 
-func (kv *KVTxnStorage) Destroy() error {
+func (kv *KVTxnStorage) Destroy(ctx context.Context) error {
 	return nil
 }
 
-func (kv *KVTxnStorage) GetLatestLsn() logservice.Lsn {
-	return kv.latest
-}
-
-func (kv *KVTxnStorage) Read(txnMeta txn.TxnMeta, op uint32, payload []byte) (storage.ReadResult, error) {
+func (kv *KVTxnStorage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) (storage.ReadResult, error) {
 	kv.RLock()
 	defer kv.RUnlock()
 
@@ -252,7 +245,7 @@ func (kv *KVTxnStorage) readValue(key []byte, txnMeta txn.TxnMeta) []byte {
 	return value
 }
 
-func (kv *KVTxnStorage) Write(txnMeta txn.TxnMeta, op uint32, payload []byte) ([]byte, error) {
+func (kv *KVTxnStorage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) ([]byte, error) {
 	kv.Lock()
 	defer kv.Unlock()
 
@@ -278,7 +271,7 @@ func (kv *KVTxnStorage) Write(txnMeta txn.TxnMeta, op uint32, payload []byte) ([
 	return nil, nil
 }
 
-func (kv *KVTxnStorage) Prepare(txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
+func (kv *KVTxnStorage) Prepare(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
 	kv.Lock()
 	defer kv.Unlock()
 
@@ -304,12 +297,12 @@ func (kv *KVTxnStorage) Prepare(txnMeta txn.TxnMeta) (timestamp.Timestamp, error
 	newTxn := kv.changeUncommittedTxnStatusLocked(txnMeta.ID, txn.TxnStatus_Prepared)
 	newTxn.PreparedTS = txnMeta.PreparedTS
 	newTxn.DNShards = txnMeta.DNShards
-	kv.latest = lsn
+	kv.recoverFrom = lsn
 	kv.eventC <- Event{Txn: *newTxn, Type: PrepareType}
 	return txnMeta.PreparedTS, nil
 }
 
-func (kv *KVTxnStorage) Committing(txnMeta txn.TxnMeta) error {
+func (kv *KVTxnStorage) Committing(ctx context.Context, txnMeta txn.TxnMeta) error {
 	kv.Lock()
 	defer kv.Unlock()
 
@@ -326,12 +319,12 @@ func (kv *KVTxnStorage) Committing(txnMeta txn.TxnMeta) error {
 
 	newTxn := kv.changeUncommittedTxnStatusLocked(txnMeta.ID, txn.TxnStatus_Committing)
 	newTxn.CommitTS = txnMeta.CommitTS
-	kv.latest = lsn
+	kv.recoverFrom = lsn
 	kv.eventC <- Event{Txn: *newTxn, Type: CommittingType}
 	return nil
 }
 
-func (kv *KVTxnStorage) Commit(txnMeta txn.TxnMeta) error {
+func (kv *KVTxnStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) error {
 	kv.Lock()
 	defer kv.Unlock()
 
@@ -360,12 +353,12 @@ func (kv *KVTxnStorage) Commit(txnMeta txn.TxnMeta) error {
 	}
 
 	kv.commitKeysLocked(txnMeta, writeKeys)
-	kv.latest = lsn
+	kv.recoverFrom = lsn
 	kv.eventC <- Event{Txn: log.Txn, Type: CommitType}
 	return nil
 }
 
-func (kv *KVTxnStorage) Rollback(txnMeta txn.TxnMeta) error {
+func (kv *KVTxnStorage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error {
 	kv.Lock()
 	defer kv.Unlock()
 

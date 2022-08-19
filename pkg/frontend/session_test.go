@@ -16,14 +16,15 @@ package frontend
 
 import (
 	"errors"
-	"github.com/fagongzi/goetty/buf"
-	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"testing"
+
+	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/golang/mock/gomock"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/smartystreets/goconvey/convey"
-	"testing"
 )
 
 func TestTxnHandler_NewTxn(t *testing.T) {
@@ -126,9 +127,9 @@ func TestSession_TxnBegin(t *testing.T) {
 	genSession := func(ctrl *gomock.Controller, gSysVars *GlobalSystemVariables) *Session {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		proto := NewMysqlClientProtocol(0, ioses, 1024, nil)
-		return NewSession(proto, nil, nil, nil, gSysVars)
+		return NewSession(proto, nil, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil), gSysVars)
 	}
 	convey.Convey("new session", t, func() {
 		ctrl := gomock.NewController(t)
@@ -162,9 +163,9 @@ func TestVariables(t *testing.T) {
 	genSession := func(ctrl *gomock.Controller, gSysVars *GlobalSystemVariables) *Session {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		proto := NewMysqlClientProtocol(0, ioses, 1024, nil)
-		return NewSession(proto, nil, nil, nil, gSysVars)
+		return NewSession(proto, nil, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil), gSysVars)
 	}
 
 	checkWant := func(ses, existSes, newSesAfterSession *Session,
@@ -426,12 +427,12 @@ func TestVariables(t *testing.T) {
 }
 
 func TestSession_TxnCompilerContext(t *testing.T) {
-	genSession := func(ctrl *gomock.Controller, gSysVars *GlobalSystemVariables) *Session {
+	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		proto := NewMysqlClientProtocol(0, ioses, 1024, nil)
-		return NewSession(proto, nil, nil, nil, gSysVars)
+		return NewSession(proto, nil, nil, pu, gSysVars)
 	}
 
 	convey.Convey("test", t, func() {
@@ -460,15 +461,12 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
 		storage.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 
-		config.StorageEngine = storage
-		defer func() {
-			config.StorageEngine = nil
-		}()
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, storage, nil)
 
 		gSysVars := &GlobalSystemVariables{}
 		InitGlobalSystemVariables(gSysVars)
 
-		ses := genSession(ctrl, gSysVars)
+		ses := genSession(ctrl, pu, gSysVars)
 
 		tcc := ses.GetTxnCompilerContext()
 		defDBName := tcc.DefaultDatabase()

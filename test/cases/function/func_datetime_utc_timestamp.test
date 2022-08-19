@@ -7,13 +7,13 @@ select unix_timestamp(utc_timestamp());
 
 
 create table t1 (ts timestamp);
-#set time_zone='+00:00';
+set time_zone='+00:00';
 select unix_timestamp(utc_timestamp())-unix_timestamp(utc_timestamp());
 insert into t1 (ts) values ('2003-03-30 02:30:00');
-#set time_zone='+10:30';
+set time_zone='+10:30';
 select unix_timestamp(utc_timestamp())-unix_timestamp(utc_timestamp());
 insert into t1 (ts) values ('2003-03-30 02:30:00');
-#set time_zone='-10:00';
+set time_zone='-10:00';
 #select unix_timestamp(utc_timestamp())-unix_timestamp(current_timestamp());
 insert into t1 (ts) values ('2003-03-30 02:30:00');
 select * from t1;

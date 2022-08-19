@@ -43,7 +43,7 @@ func TestMax(t *testing.T) {
 	vec2 := testutil.NewVector(Rows, testTyp, m, false, vs2)
 	{
 		// test single agg with Grow & Fill function
-		agg := agg.NewUnaryAgg(nil, true, testTyp, testTyp, mx.Grows, mx.Eval, mx.Merge, mx.Fill)
+		agg := agg.NewUnaryAgg(nil, true, testTyp, testTyp, mx.Grows, mx.Eval, mx.Merge, mx.Fill, nil)
 		err := agg.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -56,13 +56,13 @@ func TestMax(t *testing.T) {
 	}
 	{
 		// test two agg with Merge function
-		agg0 := agg.NewUnaryAgg(nil, true, testTyp, testTyp, mx.Grows, mx.Eval, mx.Merge, mx.Fill)
+		agg0 := agg.NewUnaryAgg(nil, true, testTyp, testTyp, mx.Grows, mx.Eval, mx.Merge, mx.Fill, nil)
 		err := agg0.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
 			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
 		}
-		agg1 := agg.NewUnaryAgg(nil, true, testTyp, testTyp, mx.Grows, mx.Eval, mx.Merge, mx.Fill)
+		agg1 := agg.NewUnaryAgg(nil, true, testTyp, testTyp, mx.Grows, mx.Eval, mx.Merge, mx.Fill, nil)
 		err = agg1.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -97,7 +97,7 @@ func TestDecimalMax(t *testing.T) {
 	vec2 := testutil.MakeDecimal128Vector(input2, nil, testTyp)
 	{
 		// test single agg with Grow & Fill function
-		agg := agg.NewUnaryAgg(nil, true, testTyp, testTyp, dmx.Grows, dmx.Eval, dmx.Merge, dmx.Fill)
+		agg := agg.NewUnaryAgg(nil, true, testTyp, testTyp, dmx.Grows, dmx.Eval, dmx.Merge, dmx.Fill, nil)
 		err := agg.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -110,13 +110,13 @@ func TestDecimalMax(t *testing.T) {
 	}
 	{
 		// test two agg with Merge function
-		agg0 := agg.NewUnaryAgg(nil, true, testTyp, testTyp, dmx.Grows, dmx.Eval, dmx.Merge, dmx.Fill)
+		agg0 := agg.NewUnaryAgg(nil, true, testTyp, testTyp, dmx.Grows, dmx.Eval, dmx.Merge, dmx.Fill, nil)
 		err := agg0.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
 			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
 		}
-		agg1 := agg.NewUnaryAgg(nil, true, testTyp, testTyp, dmx.Grows, dmx.Eval, dmx.Merge, dmx.Fill)
+		agg1 := agg.NewUnaryAgg(nil, true, testTyp, testTyp, dmx.Grows, dmx.Eval, dmx.Merge, dmx.Fill, nil)
 		err = agg1.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -151,7 +151,7 @@ func TestBoollMax(t *testing.T) {
 	vec2 := testutil.MakeBoolVector(input2)
 	{
 		// test single agg with Grow & Fill function
-		agg := agg.NewUnaryAgg(nil, true, testTyp, testTyp, dmx.Grows, dmx.Eval, dmx.Merge, dmx.Fill)
+		agg := agg.NewUnaryAgg(nil, true, testTyp, testTyp, dmx.Grows, dmx.Eval, dmx.Merge, dmx.Fill, nil)
 		err := agg.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -164,13 +164,13 @@ func TestBoollMax(t *testing.T) {
 	}
 	{
 		// test two agg with Merge function
-		agg0 := agg.NewUnaryAgg(nil, true, testTyp, testTyp, dmx.Grows, dmx.Eval, dmx.Merge, dmx.Fill)
+		agg0 := agg.NewUnaryAgg(nil, true, testTyp, testTyp, dmx.Grows, dmx.Eval, dmx.Merge, dmx.Fill, nil)
 		err := agg0.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
 			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
 		}
-		agg1 := agg.NewUnaryAgg(nil, true, testTyp, testTyp, dmx.Grows, dmx.Eval, dmx.Merge, dmx.Fill)
+		agg1 := agg.NewUnaryAgg(nil, true, testTyp, testTyp, dmx.Grows, dmx.Eval, dmx.Merge, dmx.Fill, nil)
 		err = agg1.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -205,7 +205,7 @@ func TestStrlMax(t *testing.T) {
 	vec2 := testutil.MakeVarcharVector(input2, nil)
 	{
 		// test single agg with Grow & Fill function
-		agg := agg.NewUnaryAgg(nil, true, testTyp, testTyp, smx.Grows, smx.Eval, smx.Merge, smx.Fill)
+		agg := agg.NewUnaryAgg(nil, true, testTyp, testTyp, smx.Grows, smx.Eval, smx.Merge, smx.Fill, nil)
 		err := agg.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -218,13 +218,13 @@ func TestStrlMax(t *testing.T) {
 	}
 	{
 		// test two agg with Merge function
-		agg0 := agg.NewUnaryAgg(nil, true, testTyp, testTyp, smx.Grows, smx.Eval, smx.Merge, smx.Fill)
+		agg0 := agg.NewUnaryAgg(nil, true, testTyp, testTyp, smx.Grows, smx.Eval, smx.Merge, smx.Fill, nil)
 		err := agg0.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
 			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
 		}
-		agg1 := agg.NewUnaryAgg(nil, true, testTyp, testTyp, smx.Grows, smx.Eval, smx.Merge, smx.Fill)
+		agg1 := agg.NewUnaryAgg(nil, true, testTyp, testTyp, smx.Grows, smx.Eval, smx.Merge, smx.Fill, nil)
 		err = agg1.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {

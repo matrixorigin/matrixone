@@ -25,15 +25,23 @@ import (
 )
 
 func TestVectorGobEncoding(t *testing.T) {
+	//vec := vector.New(types.Type{
+	//	Oid: types.T_char,
+	//})
+	//vec.Col = &types.Bytes{}
+
 	vec := vector.New(types.Type{
 		Oid: types.T_int16,
 	})
+
 	buf := new(bytes.Buffer)
 	err := gob.NewEncoder(buf).Encode(vec)
 	assert.Nil(t, err)
+
 	var v vector.Vector
 	err = gob.NewDecoder(buf).Decode(&v)
 	assert.Nil(t, err)
+
 	_, ok := v.Col.([]int16)
 	assert.True(t, ok)
 }

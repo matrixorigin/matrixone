@@ -23,7 +23,10 @@ void Bitmap_Remove(uint64_t *p, uint64_t pos) {
     bitmap_clear(p, pos);
 }
 bool Bitmap_Contains(uint64_t *p, uint64_t pos) {
-    return bitmap_test(p, pos);
+    if (p != NULL) {
+        return bitmap_test(p, pos);
+    }
+    return false;
 }
 
 bool Bitmap_IsEmpty(uint64_t *p, uint64_t nbits) {

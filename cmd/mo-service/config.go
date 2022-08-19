@@ -16,6 +16,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"net"
 	"os"
 	"strings"
@@ -62,6 +63,8 @@ type Config struct {
 	DN dnservice.Config `toml:"dn"`
 	// LogService is the config for log service
 	LogService logservice.Config `toml:"logservice"`
+	// CN cn service config
+	CN cnservice.Config `toml:"cn"`
 }
 
 func parseConfigFromFile(file string) (*Config, error) {

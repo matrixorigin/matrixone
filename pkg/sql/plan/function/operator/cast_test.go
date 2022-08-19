@@ -15,7 +15,6 @@
 package operator
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"testing"
 	"time"
 
@@ -63,7 +62,7 @@ func TestCastStringToJson(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.JSONEq(t, c.wantValues.(string), encoding.DecodeJson(castRes.Col.(*types.Bytes).Data).String())
+			require.JSONEq(t, c.wantValues.(string), types.DecodeJson(castRes.Col.(*types.Bytes).Data).String())
 			require.Equal(t, c.wantScalar, castRes.IsScalar())
 		})
 	}
@@ -2290,7 +2289,7 @@ func TestCastTimestampAsDate(t *testing.T) {
 		{
 			name:      "TEST01",
 			vecs:      makeTempVectors([]types.Timestamp{types.Timestamp(382331223)}, leftType, rightType),
-			proc:      makeProcess(),
+			proc:      testutil.NewProc(),
 			wantBytes: []types.Date{types.Date(0)},
 		},
 	}

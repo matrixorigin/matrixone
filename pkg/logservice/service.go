@@ -65,9 +65,14 @@ type Service struct {
 	respPool *sync.Pool
 	stopper  *stopper.Stopper
 	haClient LogHAKeeperClient
+
+	options struct {
+		// morpc client would filter remote backend via this
+		backendFilter func(msg morpc.Message, backendAddr string) bool
+	}
 }
 
-func NewService(cfg Config) (*Service, error) {
+func NewService(cfg Config, opts ...Option) (*Service, error) {
 	cfg.Fill()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -111,6 +116,9 @@ func NewService(cfg Config) (*Service, error) {
 		respPool: respPool,
 		stopper:  stopper.NewStopper("log-service"),
 	}
+	for _, opt := range opts {
+		opt(service)
+	}
 	server.RegisterRequestHandler(service.handleRPCRequest)
 	// TODO: before making the service available to the outside world, restore all
 	// replicas already known to the local store
@@ -125,6 +133,10 @@ func NewService(cfg Config) (*Service, error) {
 	if !cfg.DisableWorkers {
 		if err := service.stopper.RunNamedTask("log-heartbeat-worker", func(ctx context.Context) {
 			plog.Infof("logservice heartbeat worker started")
+
+			// transfer morpc options via context
+			ctx = SetBackendOptions(ctx, service.getBackendOptions()...)
+			ctx = SetClientOptions(ctx, service.getClientOptions()...)
 			service.heartbeatWorker(ctx)
 		}); err != nil {
 			return nil, err
@@ -228,7 +240,7 @@ func (s *Service) handleGetClusterDetails(req pb.Request) pb.Response {
 	if v, err := s.store.getClusterDetails(ctx); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.ClusterDetails = v
+		resp.ClusterDetails = &v
 	}
 	return resp
 }
@@ -241,7 +253,7 @@ func (s *Service) handleTsoUpdate(req pb.Request) pb.Response {
 	if v, err := s.store.tsoUpdate(ctx, r.Count); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.TsoResponse.Value = v
+		resp.TsoResponse = &pb.TsoResponse{Value: v}
 	}
 	return resp
 }
@@ -328,11 +340,11 @@ func (s *Service) handleLogHeartbeat(req pb.Request) pb.Response {
 	defer cancel()
 	hb := req.LogHeartbeat
 	resp := getResponse(req)
-	if cb, err := s.store.addLogStoreHeartbeat(ctx, hb); err != nil {
+	if cb, err := s.store.addLogStoreHeartbeat(ctx, *hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
-		resp.CommandBatch = cb
+		resp.CommandBatch = &cb
 	}
 
 	return resp
@@ -343,7 +355,7 @@ func (s *Service) handleCNHeartbeat(req pb.Request) pb.Response {
 	defer cancel()
 	hb := req.CNHeartbeat
 	resp := getResponse(req)
-	if err := s.store.addCNStoreHeartbeat(ctx, hb); err != nil {
+	if err := s.store.addCNStoreHeartbeat(ctx, *hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	}
@@ -356,11 +368,11 @@ func (s *Service) handleDNHeartbeat(req pb.Request) pb.Response {
 	defer cancel()
 	hb := req.DNHeartbeat
 	resp := getResponse(req)
-	if cb, err := s.store.addDNStoreHeartbeat(ctx, hb); err != nil {
+	if cb, err := s.store.addDNStoreHeartbeat(ctx, *hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
-		resp.CommandBatch = cb
+		resp.CommandBatch = &cb
 	}
 
 	return resp
@@ -372,4 +384,18 @@ func (s *Service) handleCheckHAKeeper(req pb.Request) pb.Response {
 		resp.IsHAKeeper = true
 	}
 	return resp
+}
+
+func (s *Service) getBackendOptions() []morpc.BackendOption {
+	return []morpc.BackendOption{
+		morpc.WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return s.options.backendFilter == nil ||
+				s.options.backendFilter(msg.(*RPCRequest), backendAddr)
+		}),
+	}
+}
+
+// NB: leave an empty method for future extension.
+func (s *Service) getClientOptions() []morpc.ClientOption {
+	return nil
 }

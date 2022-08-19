@@ -16,6 +16,7 @@ package txnstorage
 
 import (
 	"bytes"
+	"context"
 	"encoding/gob"
 	"testing"
 
@@ -35,7 +36,7 @@ func testDatabase(
 	// new
 	s, err := newStorage()
 	assert.Nil(t, err)
-	defer s.Close()
+	defer s.Close(context.TODO())
 
 	// txn
 	txnMeta := txn.TxnMeta{
@@ -56,7 +57,7 @@ func testDatabase(
 				Name: "foo",
 			},
 		)
-		assert.Equal(t, true, resp.ErrNotFound)
+		assert.Equal(t, "foo", resp.ErrNotFound.Name)
 	}
 
 	// create database
@@ -68,7 +69,7 @@ func testDatabase(
 				Name: "foo",
 			},
 		)
-		assert.Equal(t, false, resp.ErrExisted)
+		assert.Equal(t, txnengine.ErrExisted(false), resp.ErrExisted)
 	}
 
 	// get databases
@@ -92,7 +93,7 @@ func testDatabase(
 				Name: "foo",
 			},
 		)
-		assert.Equal(t, false, resp.ErrNotFound)
+		assert.Equal(t, "", resp.ErrNotFound.Name)
 		assert.NotNil(t, resp.ID)
 		dbID = resp.ID
 
@@ -106,7 +107,7 @@ func testDatabase(
 						Name: "foo",
 					},
 				)
-				assert.Equal(t, false, resp.ErrNotFound)
+				assert.Equal(t, "", resp.ErrNotFound.Name)
 			}
 			{
 				resp := testRead[txnengine.GetDatabasesResp](
@@ -129,7 +130,7 @@ func testDatabase(
 				Name:       "table",
 			},
 		)
-		assert.Equal(t, true, resp.ErrNotFound)
+		assert.Equal(t, "table", resp.ErrNotFound.Name)
 	}
 
 	// create relation
@@ -159,7 +160,7 @@ func testDatabase(
 				},
 			},
 		)
-		assert.Equal(t, false, resp.ErrExisted)
+		assert.Equal(t, txnengine.ErrExisted(false), resp.ErrExisted)
 	}
 
 	// get relations
@@ -186,7 +187,7 @@ func testDatabase(
 				Name:       "table",
 			},
 		)
-		assert.Equal(t, false, resp.ErrNotFound)
+		assert.Equal(t, "", resp.ErrNotFound.Name)
 		assert.NotNil(t, resp.ID)
 		relID = resp.ID
 		assert.Equal(t, txnengine.RelationTable, resp.Type)
@@ -204,7 +205,7 @@ func testDatabase(
 					Name:       "table",
 				},
 			)
-			assert.Equal(t, false, resp.ErrNotFound)
+			assert.Equal(t, "", resp.ErrNotFound.Name)
 		}
 		{
 			resp := testRead[txnengine.GetRelationsResp](
@@ -244,7 +245,7 @@ func testRead[
 	err := gob.NewEncoder(buf).Encode(req)
 	assert.Nil(t, err)
 
-	res, err := s.Read(txnMeta, op, buf.Bytes())
+	res, err := s.Read(context.TODO(), txnMeta, op, buf.Bytes())
 	assert.Nil(t, err)
 	data, err := res.Read()
 	assert.Nil(t, err)
@@ -272,7 +273,7 @@ func testWrite[
 	err := gob.NewEncoder(buf).Encode(req)
 	assert.Nil(t, err)
 
-	data, err := s.Write(txnMeta, op, buf.Bytes())
+	data, err := s.Write(context.TODO(), txnMeta, op, buf.Bytes())
 	assert.Nil(t, err)
 
 	err = gob.NewDecoder(bytes.NewReader(data)).Decode(&resp)

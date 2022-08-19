@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -37,7 +38,7 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 }
 
 type internalMiniExec interface {
-	doComQuery(string) error
+	doComQuery(requestCtx context.Context, sql string) error
 	PrepareSessionBeforeExecRequest(*Session)
 }
 
@@ -113,29 +114,29 @@ func (res *internalExecResult) StringValueByName(ridx uint64, col string) (strin
 	}
 }
 
-func (ie *internalExecutor) Exec(sql string, opts ie.SessionOverrideOptions) (err error) {
+func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (err error) {
 	ie.Lock()
 	defer ie.Unlock()
 	sess := ie.newCmdSession(opts)
 	ie.executor.PrepareSessionBeforeExecRequest(sess)
 	ie.proto.stashResult = false
-	return ie.executor.doComQuery(sql)
+	return ie.executor.doComQuery(ctx, sql)
 }
 
-func (ie *internalExecutor) Query(sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 	ie.Lock()
 	defer ie.Unlock()
 	sess := ie.newCmdSession(opts)
 	ie.executor.PrepareSessionBeforeExecRequest(sess)
 	ie.proto.stashResult = true
-	err := ie.executor.doComQuery(sql)
+	err := ie.executor.doComQuery(ctx, sql)
 	res := ie.proto.swapOutResult()
 	res.err = err
 	return res
 }
 
 func (ie *internalExecutor) newCmdSession(opts ie.SessionOverrideOptions) *Session {
-	sess := NewSession(ie.proto, guest.New(ie.pu.SV.GetGuestMmuLimitation(), ie.pu.HostMmu), ie.pu.Mempool, ie.pu, gSysVariables)
+	sess := NewSession(ie.proto, guest.New(ie.pu.SV.GuestMmuLimitation, ie.pu.HostMmu), ie.pu.Mempool, ie.pu, gSysVariables)
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)
 	return sess
@@ -151,6 +152,8 @@ func (ie *internalExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions)
 // 	logutil.Infof("[Metric] called: %s", callFunc.Name())
 // }
 
+var _ MysqlProtocol = &internalProtocol{}
+
 type internalProtocol struct {
 	sync.Mutex
 	stashResult bool
@@ -161,6 +164,14 @@ type internalProtocol struct {
 
 func (ip *internalProtocol) IsEstablished() bool {
 	return true
+}
+
+func (ip *internalProtocol) ParseExecuteData(stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
+	return nil, nil, nil
+}
+
+func (ip *internalProtocol) SendPrepareResponse(stmt *PrepareStmt) error {
+	return nil
 }
 
 func (ip *internalProtocol) SetEstablished() {}

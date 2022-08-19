@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -35,7 +36,11 @@ func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 		DisableWorkers:       true,
 	}
 	cfg.Fill()
-	service, err := NewService(cfg)
+	service, err := NewService(cfg,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
 	if err != nil {
 		return nil, ClientConfig{}, err
 	}

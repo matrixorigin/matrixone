@@ -226,12 +226,12 @@ func Test_exportDataToCSVFile(t *testing.T) {
 			},
 		}
 
-		var col = make([]MysqlColumn, 12)
+		var col = make([]MysqlColumn, 13)
 		col[5].flag = 0
 		col[6].flag = 1 << 5
 		var colType = []uint8{defines.MYSQL_TYPE_YEAR, defines.MYSQL_TYPE_YEAR, defines.MYSQL_TYPE_YEAR, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_DOUBLE,
 			defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_DATETIME,
-			defines.MYSQL_TYPE_BOOL, defines.MYSQL_TYPE_DECIMAL}
+			defines.MYSQL_TYPE_BOOL, defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_JSON}
 		for i := 0; i < len(col); i++ {
 			col[i].SetColumnType(colType[i])
 			oq.mrs.AddColumn(&col[i])
@@ -248,6 +248,7 @@ func Test_exportDataToCSVFile(t *testing.T) {
 		data[9] = "2022-02-28 23:59:59.9999"
 		data[10] = true
 		data[11] = 1.2
+		data[12], _ = types.ParseStringToByteJson(`{"a":1}`)
 
 		oq.mrs.AddRow(data)
 

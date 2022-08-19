@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/add"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -68,7 +67,7 @@ func Arith[T1 arithT, T2 arithT](vectors []*vector.Vector, proc *process.Process
 		return nil, err
 	}
 
-	resultValues := encoding.DecodeFixedSlice[T2](resultVector.Data, resultElementSize)
+	resultValues := types.DecodeFixedSlice[T2](resultVector.Data, resultElementSize)
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
 	vector.SetCol(resultVector, resultValues)
 	if err = afn(left, right, resultVector); err != nil {

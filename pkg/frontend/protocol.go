@@ -20,7 +20,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/fagongzi/goetty"
+	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
@@ -160,6 +160,8 @@ type Protocol interface {
 
 	// Quit
 	Quit()
+
+	SendPrepareResponse(stmt *PrepareStmt) error
 }
 
 type ProtocolImpl struct {
@@ -211,7 +213,7 @@ func (cpi *ProtocolImpl) SetTcpConnection(tcp goetty.IOSession) {
 }
 
 func (cpi *ProtocolImpl) Peer() (string, string) {
-	addr := cpi.tcpConn.RemoteAddr()
+	addr := cpi.tcpConn.RemoteAddress()
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		logutil.Errorf("get peer host:port failed. error:%v ", err)
@@ -277,6 +279,14 @@ const (
 type FakeProtocol struct {
 	username string
 	database string
+}
+
+func (fp *FakeProtocol) SendPrepareResponse(stmt *PrepareStmt) error {
+	return nil
+}
+
+func (fp *FakeProtocol) ParseExecuteData(stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
+	return nil, nil, nil
 }
 
 func (fp *FakeProtocol) SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt uint64) error {

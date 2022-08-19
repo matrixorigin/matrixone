@@ -39,7 +39,7 @@ func TestVariance(t *testing.T) {
 	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
 	vec := testutil.NewVector(Rows, inputType, m, false, nil)
 	{
-		agg := agg.NewUnaryAgg(variance1, true, inputType, types.New(types.T_float64, 0, 0, 0), variance1.Grows, variance1.Eval, variance1.Merge, variance1.Fill)
+		agg := agg.NewUnaryAgg(variance1, true, inputType, types.New(types.T_float64, 0, 0, 0), variance1.Grows, variance1.Eval, variance1.Merge, variance1.Fill, nil)
 		err := agg.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -51,13 +51,13 @@ func TestVariance(t *testing.T) {
 		v.Free(m)
 	}
 	{
-		agg0 := agg.NewUnaryAgg(variance2, true, inputType, types.New(types.T_float64, 0, 0, 0), variance2.Grows, variance2.Eval, variance2.Merge, variance2.Fill)
+		agg0 := agg.NewUnaryAgg(variance2, true, inputType, types.New(types.T_float64, 0, 0, 0), variance2.Grows, variance2.Eval, variance2.Merge, variance2.Fill, nil)
 		err := agg0.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
 			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
 		}
-		agg1 := agg.NewUnaryAgg(variance3, true, inputType, types.New(types.T_float64, 0, 0, 0), variance3.Grows, variance3.Eval, variance3.Merge, variance3.Fill)
+		agg1 := agg.NewUnaryAgg(variance3, true, inputType, types.New(types.T_float64, 0, 0, 0), variance3.Grows, variance3.Eval, variance3.Merge, variance3.Fill, nil)
 		err = agg1.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {

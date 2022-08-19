@@ -20,8 +20,8 @@ import (
 
 	"github.com/FastFilter/xorfilter"
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type StaticFilter interface {
@@ -126,8 +126,8 @@ func (filter *binaryFuseFilter) Marshal() (buf []byte, err error) {
 }
 
 func (filter *binaryFuseFilter) Unmarshal(buf []byte) error {
-	filter.typ = types.DecodeType(buf[:types.TypeSize])
-	buf = buf[types.TypeSize:]
+	filter.typ = types.DecodeType(buf[:types.TSize])
+	buf = buf[types.TSize:]
 	filter.inner = &xorfilter.BinaryFuse8{}
 	filter.inner.Seed = types.DecodeFixed[uint64](buf[:8])
 	buf = buf[8:]
