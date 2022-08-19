@@ -994,19 +994,17 @@ func TestMVCC2(t *testing.T) {
 	{
 		txn, rel := getDefaultRelation(t, db, schema.Name)
 		it := rel.MakeBlockIt()
-		rows := 0
 		var buffer bytes.Buffer
 		for it.Valid() {
 			block := it.GetBlock()
 			view, err := block.GetColumnDataByName(schema.GetSingleSortKey().Name, &buffer)
 			assert.Nil(t, err)
 			assert.Nil(t, view.DeleteMask)
-			rows += view.Length()
+			assert.Equal(t, bats[1].Vecs[0].Length()*2-1, view.Length())
 			// TODO: exclude deleted rows when apply appends
 			it.Next()
 			view.Close()
 		}
-		assert.Equal(t, bats[1].Vecs[0].Length()*2-1, rows)
 		assert.NoError(t, txn.Commit())
 	}
 }
