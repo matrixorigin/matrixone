@@ -39,6 +39,7 @@ const (
 	DECIMAL128_ZSTR_LEN = 43
 	DECIMAL128_WIDTH    = 34
 	DECIMAL128_NBYTES   = 16
+	MYSQL_DEFAULT_SCALE = 4
 )
 
 func dec64PtrToC(p *Decimal64) *C.int64_t {
