@@ -1527,6 +1527,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		if tableDef == nil {
 			return 0, errors.New("", fmt.Sprintf("table %q does not exist", table))
 		}
+		fmt.Println("wangjian sql4 is", tableDef)
 
 		tableDef.Name2ColIndex = map[string]int32{}
 		for i := 0; i < len(tableDef.Cols); i++ {

@@ -182,10 +182,11 @@ message ColDef {
 	string name 		= 1;
 	CompressType alg 	= 2;
 	Type typ			= 3;
-	Default default = 4;
+	Default default 	= 4;
 	bool primary        = 5;
-	int32 pkidx 		= 6;
-	string comment	=7;
+	bool auto_increment = 6;
+	int32 pkidx 		= 7;
+	string comment		= 8;
 }
 
 message Default {

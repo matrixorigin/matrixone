@@ -1686,6 +1686,7 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 		stmts = append(stmts, cmdFieldStmt)
 	} else {
 		stmts, err = parsers.Parse(dialect.MYSQL, sql)
+		fmt.Println("wangjian sql1 is", stmts)
 		if err != nil {
 			return nil, err
 		}
@@ -1742,6 +1743,7 @@ func (mce *MysqlCmdExecutor) afterRun(stmt tree.Statement, beginInstant time.Tim
 
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) (retErr error) {
+	fmt.Println("wangjian sql-1 is", sql)
 	beginInstant := time.Now()
 	ses := mce.GetSession()
 	ses.showStmtType = NotShowStatement

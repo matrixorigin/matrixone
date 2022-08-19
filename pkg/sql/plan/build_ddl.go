@@ -95,6 +95,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 }
 
 func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error) {
+	fmt.Println("wangjian sql2 is", stmt.Defs)
 	createTable := &plan.CreateTable{
 		IfNotExists: stmt.IfNotExists,
 		Temporary:   stmt.Temporary,
@@ -116,6 +117,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		return nil, err
 	}
 
+	fmt.Println("wangjian sql2b is", createTable.TableDef.Defs)
 	// set option
 	for _, option := range stmt.Options {
 		switch opt := option.(type) {
@@ -170,6 +172,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		}
 	}
 
+	fmt.Println("wangjian sql2c is", createTable.TableDef.Defs, createTable.TableDef.Cols)
 	if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.S3option); i += 2 {
 			switch strings.ToLower(stmt.Param.S3option[i]) {
@@ -222,6 +225,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 	var indexs []string
 	colNameMap := make(map[string]int32)
 	for _, item := range defs {
+		fmt.Printf("wangjian sql3 is %T\n", item)
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
 			colType, err := getTypeFromAst(def.Type)
@@ -237,6 +241,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			var pks []string
 			var comment string
 			for _, attr := range def.Attributes {
+				fmt.Printf("wangjian sql3b is %T\n", attr)
 				if _, ok := attr.(*tree.AttributePrimaryKey); ok {
 					if colType.GetId() == int32(types.T_blob) {
 						return errors.New(errno.InvalidColumnDefinition, "Type text don't support primary key")
@@ -249,6 +254,13 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 					if getNumOfCharacters(comment) > maxLengthOfColumnComment {
 						errmsg := fmt.Sprintf("Comment for field '%s' is too long (max = %d)", def.Name.Parts[0], maxLengthOfColumnComment)
 						return errors.New(errno.InvalidOptionValue, errmsg)
+					}
+				}
+
+				if incr, ok := attr.(*tree.AttributeAutoIncrement); ok {
+					fmt.Println("wangjian sql3c is", incr)
+					if colType.GetId() != int32(types.T_int32) && colType.GetId() != int32(types.T_int64) {
+						return errors.New(errno.InvalidColumnDefinition, "the auto_incr column is only support int32 and int64 type now")
 					}
 				}
 			}
@@ -273,6 +285,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			}
 			colNameMap[col.Name] = col.Typ.GetId()
 			tableDef.Cols = append(tableDef.Cols, col)
+			fmt.Println("wangjian sql3f is", col.Primary)
 		case *tree.PrimaryKeyIndex:
 			if len(primaryKeys) > 0 {
 				return errors.New(errno.SyntaxErrororAccessRuleViolation, "Multiple primary key defined")
@@ -330,6 +343,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 	}
 
 	if len(primaryKeys) > 0 {
+		fmt.Println("wangjian sql3d is", primaryKeys)
 		tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
 			Def: &plan.TableDef_DefType_Pk{
 				Pk: &plan.PrimaryKeyDef{
@@ -337,6 +351,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 				},
 			},
 		})
+		fmt.Println("wangjian sql3e is", tableDef.Defs)
 	}
 
 	// check index invalid on the type

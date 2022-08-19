@@ -776,7 +776,7 @@ func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 		rune(param.extern.Tail.Fields.Terminated[0]),
 		'#',
 		true,
-		false)
+		true)
 
 	return plh, nil
 }

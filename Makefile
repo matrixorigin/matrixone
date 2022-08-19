@@ -113,7 +113,7 @@ cgo:
 BUILD_NAME=binary
 # build mo-server binary
 .PHONY: build
-build: config cgo cmd/db-server/$(wildcard *.go)
+build: cgo cmd/db-server/$(wildcard *.go)
 	$(info [Build $(BUILD_NAME)])
 	$(GO) build $(DEBUG_OPT) $(RACE_OPT) $(GOLDFLAGS) -o $(BIN_NAME) ./cmd/db-server
 

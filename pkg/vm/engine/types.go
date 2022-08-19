@@ -53,6 +53,8 @@ type Attribute struct {
 	Primary bool
 	// Comment of attribute
 	Comment string
+	// AutoIncrement is auto incr or not
+	AutoIncrement bool
 }
 
 type PrimaryIndexDef struct {

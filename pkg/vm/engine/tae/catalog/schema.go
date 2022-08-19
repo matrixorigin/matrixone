@@ -79,11 +79,12 @@ type ColDef struct {
 func (def *ColDef) GetName() string     { return def.Name }
 func (def *ColDef) GetType() types.Type { return def.Type }
 
-func (def *ColDef) Nullable() bool  { return def.NullAbility }
-func (def *ColDef) IsHidden() bool  { return def.Hidden }
-func (def *ColDef) IsPhyAddr() bool { return def.PhyAddr }
-func (def *ColDef) IsPrimary() bool { return def.Primary }
-func (def *ColDef) IsSortKey() bool { return def.SortKey }
+func (def *ColDef) Nullable() bool        { return def.NullAbility }
+func (def *ColDef) IsHidden() bool        { return def.Hidden }
+func (def *ColDef) IsPhyAddr() bool       { return def.PhyAddr }
+func (def *ColDef) IsPrimary() bool       { return def.Primary }
+func (def *ColDef) IsAutoIncrement() bool { return def.AutoIncrement }
+func (def *ColDef) IsSortKey() bool       { return def.SortKey }
 
 type SortKey struct {
 	Defs      []*ColDef
@@ -441,6 +442,17 @@ func (s *Schema) AppendPKCol(name string, typ types.Type, idx int) error {
 		SortIdx: int8(idx),
 		SortKey: true,
 		Primary: true,
+	}
+	return s.AppendColDef(def)
+}
+
+func (s *Schema) AppendAutoIncr(name string, typ types.Type, idx int) error {
+	def := &ColDef{
+		Name:          name,
+		Type:          typ,
+		SortIdx:       int8(idx),
+		SortKey:       true,
+		AutoIncrement: true,
 	}
 	return s.AppendColDef(def)
 }

@@ -45,6 +45,7 @@ func txnBindAccessInfoFromCtx(txn txnif.AsyncTxn, ctx context.Context) {
 }
 
 func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
+	fmt.Println("wangjian sql7 is")
 	if schema.Comment != "" {
 		commentDef := new(engine.CommentDef)
 		commentDef.Comment = schema.Comment
@@ -80,6 +81,7 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 					OriginString: col.Default.OriginString,
 					Expr:         expr,
 				},
+				AutoIncrement: col.IsAutoIncrement(),
 			},
 		}
 		defs = append(defs, def)
@@ -156,6 +158,9 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 	}
 	if schema.IsCompoundSortKey() {
 		err = fmt.Errorf("%w: compound idx not supported yet", catalog.ErrSchemaValidation)
+	}
+	for i := 0; i < len(schema.ColDefs); i++ {
+		fmt.Println("wangjian sql6 is", schema.ColDefs[i], schema.ColDefs[i].AutoIncrement, schema.ColDefs[i].Primary)
 	}
 	return
 }
