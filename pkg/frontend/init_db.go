@@ -614,6 +614,7 @@ func InitDB(ctx context.Context, tae engine.Engine) error {
 	if err != nil {
 		return err
 	}
+	txnOperator := moengine.TxnToTxnOperator(txnCtx)
 
 	/*
 		stage 1: create catalog tables
@@ -632,7 +633,7 @@ func InitDB(ctx context.Context, tae engine.Engine) error {
 	//	return err
 	//}
 
-	catalogDB, err := tae.Database(ctx, catalogDbName, engine.Snapshot(txnCtx.GetCtx()))
+	catalogDB, err := tae.Database(ctx, catalogDbName, txnOperator)
 	if err != nil {
 		logutil.Infof("get database %v failed.error:%v", catalogDbName, err)
 		err2 := txnCtx.Rollback()
@@ -733,10 +734,10 @@ func InitDB(ctx context.Context, tae engine.Engine) error {
 	*/
 	//1. create database information_schema
 	infoSchemaName := "information_schema"
-	db, _ := tae.Database(ctx, infoSchemaName, engine.Snapshot(txnCtx.GetCtx()))
+	db, _ := tae.Database(ctx, infoSchemaName, txnOperator)
 
 	if db == nil {
-		err = tae.Create(ctx, infoSchemaName, engine.Snapshot(txnCtx.GetCtx()))
+		err = tae.Create(ctx, infoSchemaName, txnOperator)
 		if err != nil {
 			logutil.Infof("create database %v failed.error:%v", infoSchemaName, err)
 			err2 := txnCtx.Rollback()
@@ -769,8 +770,10 @@ func sanityCheck(ctx context.Context, tae engine.Engine) error {
 	if err != nil {
 		return err
 	}
+	txnOperator := moengine.TxnToTxnOperator(txnCtx)
+
 	// databases: mo_catalog,information_schema
-	dbs, err := tae.Databases(ctx, engine.Snapshot(txnCtx.GetCtx()))
+	dbs, err := tae.Databases(ctx, txnOperator)
 	if err != nil {
 		return err
 	}
@@ -790,7 +793,7 @@ func sanityCheck(ctx context.Context, tae engine.Engine) error {
 		DefineSchemaForMoUser(),
 	}
 	catalogDbName := "mo_catalog"
-	err = isWantedDatabase(ctx, taeEngine, txnCtx, catalogDbName, wantTablesOfMoCatalog, wantSchemasOfCatalog)
+	err = isWantedDatabase(ctx, taeEngine, txnOperator, catalogDbName, wantTablesOfMoCatalog, wantSchemasOfCatalog)
 	if err != nil {
 		return err
 	}
@@ -819,11 +822,11 @@ func isWanted(want, actual []string) bool {
 }
 
 // isWantedDatabase checks the database has the right tables
-func isWantedDatabase(ctx context.Context, taeEngine moengine.TxnEngine, txnCtx moengine.Txn, dbName string, tables []string, schemas []*CatalogSchema) error {
-	db, err := taeEngine.Database(ctx, dbName, engine.Snapshot(txnCtx.GetCtx()))
+func isWantedDatabase(ctx context.Context, taeEngine moengine.TxnEngine, txnOperator TxnOperator, dbName string, tables []string, schemas []*CatalogSchema) error {
+	db, err := taeEngine.Database(ctx, dbName, txnOperator)
 	if err != nil {
 		logutil.Infof("get database %v failed.error:%v", dbName, err)
-		err2 := txnCtx.Rollback()
+		err2 := txnOperator.Rollback(ctx)
 		if err2 != nil {
 			logutil.Infof("txnCtx rollback failed. error:%v", err2)
 			return err2
@@ -842,7 +845,7 @@ func isWantedDatabase(ctx context.Context, taeEngine moengine.TxnEngine, txnCtx 
 	//TODO:fix it after tae is ready
 	//check table attributes
 	for i, tableName := range tables {
-		err = isWantedTable(ctx, db, txnCtx, tableName, schemas[i])
+		err = isWantedTable(ctx, db, txnOperator, tableName, schemas[i])
 		if err != nil {
 			return err
 		}
@@ -852,11 +855,11 @@ func isWantedDatabase(ctx context.Context, taeEngine moengine.TxnEngine, txnCtx 
 }
 
 // isWantedTable checks the table has the right attributes
-func isWantedTable(ctx context.Context, db engine.Database, txnCtx moengine.Txn, tableName string, schema *CatalogSchema) error {
+func isWantedTable(ctx context.Context, db engine.Database, txnOperator TxnOperator, tableName string, schema *CatalogSchema) error {
 	table, err := db.Relation(ctx, tableName)
 	if err != nil {
 		logutil.Infof("get table %v failed.error:%v", tableName, err)
-		err2 := txnCtx.Rollback()
+		err2 := txnOperator.Rollback(ctx)
 		if err2 != nil {
 			logutil.Infof("txnCtx rollback failed. error:%v", err2)
 			return err2
