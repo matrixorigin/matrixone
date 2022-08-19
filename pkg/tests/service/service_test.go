@@ -396,14 +396,14 @@ func TestClusterWaitState(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	// --------------------------------------------
-	// the following would test `ClusterWaitState`.
-	// --------------------------------------------
-
 	// we must wait for hakeeper's running state, or hakeeper wouldn't receive hearbeat.
 	ctx1, cancel1 := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel1()
 	c.WaitHAKeeperState(ctx1, logpb.HAKeeperRunning)
+
+	// --------------------------------------------
+	// the following would test `ClusterWaitState`.
+	// --------------------------------------------
 
 	// test WaitDNShardsReported
 	{
@@ -446,4 +446,55 @@ func TestClusterWaitState(t *testing.T) {
 		defer cancel7()
 		c.WaitLogReplicaReported(ctx7, logShardID)
 	}
+}
+
+func TestNetworkPartition(t *testing.T) {
+	dnSvcNum := 2
+	logSvcNum := 3
+	opt := DefaultOptions().
+		WithDNServiceNum(dnSvcNum).
+		WithLogServiceNum(logSvcNum)
+
+	// initialize cluster
+	c, err := NewCluster(t, opt)
+	require.NoError(t, err)
+
+	// start the cluster
+	err = c.Start()
+	require.NoError(t, err)
+
+	// close the cluster after all
+	defer func() {
+		err := c.Close()
+		require.NoError(t, err)
+	}()
+
+	// we must wait for hakeeper's running state, or hakeeper wouldn't receive hearbeat.
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel1()
+	c.WaitHAKeeperState(ctx1, logpb.HAKeeperRunning)
+
+	// --------------------------------------------
+	// the following would test network partition
+	// --------------------------------------------
+
+	// dn service index: 0, 1
+	// log service index: 0, 1, 2
+	partition1 := c.NewNetworkPartition([]uint32{1}, nil)
+	require.Equal(t, []uint32{1}, partition1.ListDNServiceIndex())
+	require.Nil(t, partition1.ListLogServiceIndex())
+
+	partition2 := c.RemainingNetworkPartition(partition1)
+	require.Equal(t, []uint32{0}, partition2.ListDNServiceIndex())
+	require.Equal(t, []uint32{0, 1, 2}, partition2.ListLogServiceIndex())
+
+	c.StartNetworkPartition(partition1, partition2)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel2()
+	c.WaitDNStoreTimeoutIndexed(ctx2, 1)
+
+	c.CloseNetworkPartition()
+	ctx3, cancel3 := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel3()
+	c.WaitDNStoreReportedIndexed(ctx3, 1)
 }

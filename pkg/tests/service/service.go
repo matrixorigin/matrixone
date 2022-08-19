@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -75,9 +76,14 @@ type ClusterOperation interface {
 	// StartLogServiceIndexed starts log service by its index.
 	StartLogServiceIndexed(index int) error
 
-	// FXIME: support this in the end of development
-	// StartNetworkPartition(partitions [][]int) error
-	// CloseNetworkPartition() error
+	// NewNetworkPartition constructs network partition from service index.
+	NewNetworkPartition(dnIndexes, logIndexes []uint32) NetworkPartition
+	// RemainingNetworkPartition returns partition for the remaining services.
+	RemainingNetworkPartition(partitions ...NetworkPartition) NetworkPartition
+	// StartNetworkPartition enables network partition feature.
+	StartNetworkPartition(partitions ...NetworkPartition)
+	// CloseNetworkPartition disables network partition feature.
+	CloseNetworkPartition()
 }
 
 // ClusterAwareness provides cluster awareness information.
@@ -102,7 +108,6 @@ type ClusterAwareness interface {
 	GetClusterState(ctx context.Context) (*logpb.CheckerState, error)
 }
 
-// FIXME: add more convenient methods
 // ClusterState provides cluster running state.
 type ClusterState interface {
 	// ListDNShards lists all dn shards within the cluster.
@@ -153,6 +158,15 @@ type ClusterWaitState interface {
 	WaitDNReplicaReported(ctx context.Context, shardID uint64)
 	// WaitLogReplicaReported waits log replicas reported.
 	WaitLogReplicaReported(ctx context.Context, shardID uint64)
+
+	// WaitDNStoreTimeout waits dn store timeout by uuid.
+	WaitDNStoreTimeout(ctx context.Context, uuid string)
+	// WaitDNStoreTimeoutIndexed waits dn store timeout by index.
+	WaitDNStoreTimeoutIndexed(ctx context.Context, index int)
+	// WaitDNStoreReported waits dn store reported by uuid.
+	WaitDNStoreReported(ctx context.Context, uuid string)
+	// WaitDNStoreReportedIndexed waits dn store reported by index.
+	WaitDNStoreReportedIndexed(ctx context.Context, index int)
 }
 
 // ----------------------------------------------------
@@ -177,10 +191,16 @@ type testCluster struct {
 
 		sync.Mutex
 		cfgs []logservice.Config
+		opts []logOptions
 		svcs []LogService
 	}
 
-	address serviceAddress
+	network struct {
+		addresses serviceAddresses
+
+		sync.RWMutex
+		addressSets []addressSet
+	}
 
 	fileservices *fileServices
 
@@ -203,16 +223,16 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 	)
 
 	// build addresses for all services
-	c.address = c.buildServiceAddress()
+	c.network.addresses = c.buildServiceAddresses()
 
 	// build FileService instances
 	c.fileservices = c.buildFileServices()
 
 	// build log service configurations
-	c.log.cfgs = c.buildLogConfigs(c.address)
+	c.log.cfgs, c.log.opts = c.buildLogConfigs(c.network.addresses)
 
 	// build dn service configurations
-	c.dn.cfgs, c.dn.opts = c.buildDnConfigs(c.address)
+	c.dn.cfgs, c.dn.opts = c.buildDnConfigs(c.network.addresses)
 
 	return c, nil
 }
@@ -352,7 +372,17 @@ func (c *testCluster) DNStoreExpired(uuid string) (bool, error) {
 	}
 
 	hkcfg := c.GetHAKeeperConfig()
-	return hkcfg.DnStoreExpired(dnStore.Tick, state.Tick), nil
+	expired := hkcfg.DnStoreExpired(dnStore.Tick, state.Tick)
+
+	c.logger.Info(
+		"check dn store expired or not",
+		zap.Any("hakeeper config", hkcfg),
+		zap.Uint64("dn store tick", dnStore.Tick),
+		zap.Uint64("current tick", state.Tick),
+		zap.Bool("expired", expired),
+	)
+
+	return expired, nil
 }
 
 func (c *testCluster) DNStoreExpiredIndexed(index int) (bool, error) {
@@ -373,7 +403,17 @@ func (c *testCluster) LogStoreExpired(uuid string) (bool, error) {
 	}
 
 	hkcfg := c.GetHAKeeperConfig()
-	return hkcfg.LogStoreExpired(logStore.Tick, state.Tick), nil
+	expired := hkcfg.LogStoreExpired(logStore.Tick, state.Tick)
+
+	c.logger.Info(
+		"check log store expired or not",
+		zap.Any("hakeeper config", hkcfg),
+		zap.Uint64("log store tick", logStore.Tick),
+		zap.Uint64("current tick", state.Tick),
+		zap.Bool("expired", expired),
+	)
+
+	return expired, nil
 }
 
 func (c *testCluster) LogStoreExpiredIndexed(index int) (bool, error) {
@@ -558,6 +598,76 @@ func (c *testCluster) WaitLogReplicaReported(ctx context.Context, shardID uint64
 	}
 }
 
+func (c *testCluster) WaitDNStoreTimeout(ctx context.Context, uuid string) {
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting dn store timeout",
+				"dn store %s, error: %s", uuid, ctx.Err(),
+			)
+		default:
+			time.Sleep(defaultWaitInterval)
+
+			expired, err := c.DNStoreExpired(uuid)
+			if err != nil {
+				c.logger.Error("fail to check dn store expired or not",
+					zap.Error(err),
+					zap.String("uuid", uuid),
+				)
+				continue
+			}
+
+			if expired {
+				return
+			}
+		}
+	}
+}
+
+func (c *testCluster) WaitDNStoreTimeoutIndexed(ctx context.Context, index int) {
+	ds, err := c.GetDNServiceIndexed(index)
+	require.NoError(c.t, err)
+
+	c.WaitDNStoreTimeout(ctx, ds.ID())
+}
+
+func (c *testCluster) WaitDNStoreReported(ctx context.Context, uuid string) {
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting dn store reported",
+				"dn store %s, error: %s", uuid, ctx.Err(),
+			)
+		default:
+			time.Sleep(defaultWaitInterval)
+
+			expired, err := c.DNStoreExpired(uuid)
+			if err != nil {
+				c.logger.Error("fail to check dn store expired or not",
+					zap.Error(err),
+					zap.String("uuid", uuid),
+				)
+				continue
+			}
+
+			if !expired {
+				return
+			}
+		}
+	}
+}
+
+func (c *testCluster) WaitDNStoreReportedIndexed(ctx context.Context, index int) {
+	ds, err := c.GetDNServiceIndexed(index)
+	require.NoError(c.t, err)
+
+	c.WaitDNStoreReported(ctx, ds.ID())
+}
+
 // --------------------------------------------------------------
 // The following are implements for interface `ClusterAwareness`.
 // --------------------------------------------------------------
@@ -705,13 +815,47 @@ func (c *testCluster) StartLogServiceIndexed(index int) error {
 	return ls.Start()
 }
 
+func (c *testCluster) NewNetworkPartition(
+	dnIndexes, logIndexes []uint32,
+) NetworkPartition {
+	return newNetworkPartition(
+		c.opt.initial.logServiceNum, logIndexes,
+		c.opt.initial.dnServiceNum, dnIndexes,
+	)
+}
+
+func (c *testCluster) RemainingNetworkPartition(
+	partitions ...NetworkPartition,
+) NetworkPartition {
+	return remainingNetworkPartition(
+		c.opt.initial.logServiceNum,
+		c.opt.initial.dnServiceNum,
+		partitions...,
+	)
+}
+
+func (c *testCluster) StartNetworkPartition(parts ...NetworkPartition) {
+	c.network.Lock()
+	defer c.network.Unlock()
+
+	addressSets := c.network.addresses.buildPartitionAddressSets(parts...)
+	c.network.addressSets = addressSets
+}
+
+func (c *testCluster) CloseNetworkPartition() {
+	c.network.Lock()
+	defer c.network.Unlock()
+
+	c.network.addressSets = nil
+}
+
 // ------------------------------------------------------
 // The following are private utilities for `testCluster`.
 // ------------------------------------------------------
 
-// buildServiceAddress builds addresses for all services.
-func (c *testCluster) buildServiceAddress() serviceAddress {
-	return newServiceAddress(
+// buildServiceAddresses builds addresses for all services.
+func (c *testCluster) buildServiceAddresses() serviceAddresses {
+	return newServiceAddresses(
 		c.t,
 		c.opt.initial.logServiceNum,
 		c.opt.initial.dnServiceNum,
@@ -726,15 +870,18 @@ func (c *testCluster) buildFileServices() *fileServices {
 
 // buildDnConfigs builds configurations for all dn services.
 func (c *testCluster) buildDnConfigs(
-	address serviceAddress,
+	address serviceAddresses,
 ) ([]*dnservice.Config, []dnOptions) {
 	batch := c.opt.initial.dnServiceNum
 
 	cfgs := make([]*dnservice.Config, 0, batch)
 	opts := make([]dnOptions, 0, batch)
 	for i := 0; i < batch; i++ {
-		cfg, opt := buildDnConfig(i, c.opt, address)
+		cfg := buildDnConfig(i, c.opt, address)
 		cfgs = append(cfgs, cfg)
+
+		localAddr := cfg.ListenAddress
+		opt := buildDnOptions(cfg, c.backendFilterFactory(localAddr))
 		opts = append(opts, opt)
 	}
 	return cfgs, opts
@@ -742,16 +889,21 @@ func (c *testCluster) buildDnConfigs(
 
 // buildLogConfigs builds configurations for all log services.
 func (c *testCluster) buildLogConfigs(
-	address serviceAddress,
-) []logservice.Config {
+	address serviceAddresses,
+) ([]logservice.Config, []logOptions) {
 	batch := c.opt.initial.logServiceNum
 
 	cfgs := make([]logservice.Config, 0, batch)
+	opts := make([]logOptions, 0, batch)
 	for i := 0; i < batch; i++ {
 		cfg := buildLogConfig(i, c.opt, address)
 		cfgs = append(cfgs, cfg)
+
+		localAddr := cfg.ServiceAddress
+		opt := buildLogOptions(cfg, c.backendFilterFactory(localAddr))
+		opts = append(opts, opt)
 	}
-	return cfgs
+	return cfgs, opts
 }
 
 // initDNServices builds all dn services.
@@ -802,7 +954,8 @@ func (c *testCluster) initLogServices() []LogService {
 	svcs := make([]LogService, 0, batch)
 	for i := 0; i < batch; i++ {
 		cfg := c.log.cfgs[i]
-		ls, err := newLogService(cfg)
+		opt := c.log.opts[i]
+		ls, err := newLogService(cfg, opt)
 		require.NoError(c.t, err)
 
 		c.logger.Info(
@@ -957,5 +1110,49 @@ func (c *testCluster) rangeHAKeeperService(
 		if fn(index, svc) {
 			break
 		}
+	}
+}
+
+// FilterFunc returns true if traffic was allowed.
+type FilterFunc func(morpc.Message, string) bool
+
+// FIXME: unit test
+// backendFilterFactory constructs a closure with the type of FilterFunc.
+func (c *testCluster) backendFilterFactory(localAddr string) FilterFunc {
+	return func(_ morpc.Message, backendAddr string) bool {
+		// NB: it's possible that partition takes effect once more after disabled.
+		c.network.RLock()
+		addressSets := c.network.addressSets
+		c.network.RUnlock()
+
+		if len(addressSets) == 0 {
+			c.logger.Info("network partition not enabled",
+				zap.String("localAddr", localAddr),
+				zap.String("backendAddr", backendAddr),
+			)
+			return true
+		}
+
+		for i, addrSet := range addressSets {
+			c.logger.Info(
+				"network partition addresses",
+				zap.Int("index", i),
+				zap.Any("addresses", addrSet),
+				zap.String("localAddr", localAddr),
+				zap.String("backendAddr", backendAddr),
+			)
+			if addrSet.contains(localAddr) &&
+				addrSet.contains(backendAddr) {
+				return true
+			}
+		}
+
+		c.logger.Info(
+			"traffic not allowed",
+			zap.String("local", localAddr),
+			zap.String("backend", backendAddr),
+		)
+
+		return false
 	}
 }
