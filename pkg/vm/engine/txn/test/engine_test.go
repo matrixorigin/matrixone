@@ -35,8 +35,9 @@ func TestEngine(t *testing.T) {
 		}
 	}()
 
-	tx := env.NewTx()
-	err = tx.Exec(ctx, "", `
+	session := env.NewSession()
+
+	err = session.Exec(ctx, "", `
     create table foo (
       a int primary key,
       b int
@@ -44,22 +45,19 @@ func TestEngine(t *testing.T) {
   `)
 	assert.Nil(t, err)
 
-	err = tx.Exec(ctx, "", `insert into foo (a, b) values (1, 2)`)
+	err = session.Exec(ctx, "", `insert into foo (a, b) values (1, 2)`)
 	assert.Nil(t, err)
 
-	err = tx.Exec(ctx, "", `select a, b from foo where b = 2`)
+	err = session.Exec(ctx, "", `select a, b from foo where b = 2`)
 	assert.Nil(t, err)
 
-	err = tx.Exec(ctx, "", `update foo set b = 3 where a = 1`)
+	err = session.Exec(ctx, "", `update foo set b = 3 where a = 1`)
 	assert.Nil(t, err)
 
-	err = tx.Exec(ctx, "", `delete from foo where a = 1`)
+	err = session.Exec(ctx, "", `delete from foo where a = 1`)
 	assert.Nil(t, err)
 
-	err = tx.Exec(ctx, "", `drop table foo`)
-	assert.Nil(t, err)
-
-	err = tx.Commit(ctx)
+	err = session.Exec(ctx, "", `drop table foo`)
 	assert.Nil(t, err)
 
 }
