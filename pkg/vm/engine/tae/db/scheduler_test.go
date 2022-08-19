@@ -187,7 +187,7 @@ func TestSchedule1(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
-	compactBlocks(t, db, "db", schema, false)
+	compactBlocks(t, 0, db, "db", schema, false)
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 	db.Close()
 }

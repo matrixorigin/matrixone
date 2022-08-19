@@ -15,9 +15,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc/examples/message"
@@ -54,7 +56,10 @@ func main() {
 		}
 	}()
 
-	if err := st.Send(&message.ExampleMessage{MsgID: st.ID(), Content: "first message"}, morpc.SendOptions{}); err != nil {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+	defer cancel()
+
+	if err := st.Send(ctx, &message.ExampleMessage{MsgID: st.ID(), Content: "first message"}); err != nil {
 		panic(err)
 	}
 
@@ -76,12 +81,11 @@ func startServer() error {
 	if err != nil {
 		return err
 	}
-	s.RegisterRequestHandler(func(request morpc.Message, _ uint64, cs morpc.ClientSession) error {
+	s.RegisterRequestHandler(func(ctx context.Context, request morpc.Message, _ uint64, cs morpc.ClientSession) error {
 		// send more message back
 		go func() {
 			for i := 0; i < 10; i++ {
-				if err := cs.Write(&message.ExampleMessage{MsgID: request.GetID(), Content: fmt.Sprintf("stream-%d", i)},
-					morpc.SendOptions{}); err != nil {
+				if err := cs.Write(ctx, &message.ExampleMessage{MsgID: request.GetID(), Content: fmt.Sprintf("stream-%d", i)}); err != nil {
 					panic(err)
 				}
 			}

@@ -306,7 +306,7 @@ func getSystemVariables(configFile string) (*mo_config.FrontendParameters, error
 	return sv, err
 }
 
-func getParameterUnit(configFile string, eng engine.Engine) (*mo_config.ParameterUnit, error) {
+func getParameterUnit(configFile string, eng engine.Engine, txnClient TxnClient) (*mo_config.ParameterUnit, error) {
 	sv, err := getSystemVariables(configFile)
 	if err != nil {
 		return nil, err
@@ -317,7 +317,7 @@ func getParameterUnit(configFile string, eng engine.Engine) (*mo_config.Paramete
 
 	fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
 
-	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, engine.Nodes{})
+	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, txnClient, engine.Nodes{})
 
 	return pu, nil
 }

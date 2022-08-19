@@ -95,15 +95,17 @@ func TestNewService(t *testing.T) {
 
 func TestServiceConnect(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
 		req := pb.Request{
-			Method:  pb.CONNECT,
-			Timeout: int64(time.Second),
+			Method: pb.CONNECT,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
 				DNID:    100,
 			},
 		}
-		resp := s.handleConnect(req)
+		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
@@ -112,15 +114,17 @@ func TestServiceConnect(t *testing.T) {
 
 func TestServiceConnectTimeout(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		defer cancel()
+
 		req := pb.Request{
-			Method:  pb.CONNECT,
-			Timeout: 50 * int64(time.Millisecond),
+			Method: pb.CONNECT,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
 				DNID:    100,
 			},
 		}
-		resp := s.handleConnect(req)
+		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, pb.Timeout, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
@@ -129,15 +133,17 @@ func TestServiceConnectTimeout(t *testing.T) {
 
 func TestServiceConnectRO(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
 		req := pb.Request{
-			Method:  pb.CONNECT_RO,
-			Timeout: int64(time.Second),
+			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
 				DNID:    100,
 			},
 		}
-		resp := s.handleConnect(req)
+		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
@@ -154,9 +160,11 @@ func getTestAppendCmd(id uint64, data []byte) []byte {
 
 func TestServiceHandleLogHeartbeat(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
 		req := pb.Request{
-			Method:  pb.LOG_HEARTBEAT,
-			Timeout: int64(time.Second),
+			Method: pb.LOG_HEARTBEAT,
 			LogHeartbeat: &pb.LogStoreHeartbeat{
 				UUID: "uuid1",
 			},
@@ -185,11 +193,9 @@ func TestServiceHandleLogHeartbeat(t *testing.T) {
 				},
 			},
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
 		require.NoError(t,
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
-		resp := s.handleLogHeartbeat(req)
+		resp := s.handleLogHeartbeat(ctx, req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
 	}
 	runServiceTest(t, true, true, fn)
@@ -197,14 +203,16 @@ func TestServiceHandleLogHeartbeat(t *testing.T) {
 
 func TestServiceHandleCNHeartbeat(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
 		req := pb.Request{
-			Method:  pb.CN_HEARTBEAT,
-			Timeout: int64(time.Second),
+			Method: pb.CN_HEARTBEAT,
 			CNHeartbeat: &pb.CNStoreHeartbeat{
 				UUID: "uuid1",
 			},
 		}
-		resp := s.handleCNHeartbeat(req)
+		resp := s.handleCNHeartbeat(ctx, req)
 		assert.Nil(t, resp.CommandBatch)
 		assert.Equal(t, pb.ErrorCode(0), resp.ErrorCode)
 	}
@@ -213,9 +221,11 @@ func TestServiceHandleCNHeartbeat(t *testing.T) {
 
 func TestServiceHandleDNHeartbeat(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
 		req := pb.Request{
-			Method:  pb.DN_HEARTBEAT,
-			Timeout: int64(time.Second),
+			Method: pb.DN_HEARTBEAT,
 			DNHeartbeat: &pb.DNStoreHeartbeat{
 				UUID: "uuid1",
 			},
@@ -244,11 +254,9 @@ func TestServiceHandleDNHeartbeat(t *testing.T) {
 				},
 			},
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
 		require.NoError(t,
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
-		resp := s.handleDNHeartbeat(req)
+		resp := s.handleDNHeartbeat(ctx, req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
 	}
 	runServiceTest(t, true, true, fn)
@@ -256,28 +264,29 @@ func TestServiceHandleDNHeartbeat(t *testing.T) {
 
 func TestServiceHandleAppend(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
 		req := pb.Request{
-			Method:  pb.CONNECT_RO,
-			Timeout: int64(time.Second),
+			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
 				DNID:    100,
 			},
 		}
-		resp := s.handleConnect(req)
+		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
 		cmd := getTestAppendCmd(req.LogRequest.DNID, data)
 		req = pb.Request{
-			Method:  pb.APPEND,
-			Timeout: int64(time.Second),
+			Method: pb.APPEND,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
 			},
 		}
-		resp = s.handleAppend(req, cmd)
+		resp = s.handleAppend(ctx, req, cmd)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
@@ -287,28 +296,29 @@ func TestServiceHandleAppend(t *testing.T) {
 
 func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
 		req := pb.Request{
-			Method:  pb.CONNECT_RO,
-			Timeout: int64(time.Second),
+			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
 				DNID:    100,
 			},
 		}
-		resp := s.handleConnect(req)
+		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
 		cmd := getTestAppendCmd(req.LogRequest.DNID+1, data)
 		req = pb.Request{
-			Method:  pb.APPEND,
-			Timeout: int64(time.Second),
+			Method: pb.APPEND,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
 			},
 		}
-		resp = s.handleAppend(req, cmd)
+		resp = s.handleAppend(ctx, req, cmd)
 		assert.Equal(t, pb.NotLeaseHolder, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(0), resp.LogResponse.Lsn)
@@ -318,42 +328,42 @@ func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
 
 func TestServiceHandleRead(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
 		req := pb.Request{
-			Method:  pb.CONNECT_RO,
-			Timeout: int64(time.Second),
+			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
 				DNID:    100,
 			},
 		}
-		resp := s.handleConnect(req)
+		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
 		cmd := getTestAppendCmd(req.LogRequest.DNID, data)
 		req = pb.Request{
-			Method:  pb.APPEND,
-			Timeout: int64(time.Second),
+			Method: pb.APPEND,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
 			},
 		}
-		resp = s.handleAppend(req, cmd)
+		resp = s.handleAppend(ctx, req, cmd)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
 
 		req = pb.Request{
-			Method:  pb.READ,
-			Timeout: int64(time.Second),
+			Method: pb.READ,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
 				Lsn:     1,
 				MaxSize: 1024 * 32,
 			},
 		}
-		resp, records := s.handleRead(req)
+		resp, records := s.handleRead(ctx, req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(1), resp.LogResponse.LastLsn)
@@ -369,66 +379,64 @@ func TestServiceHandleRead(t *testing.T) {
 
 func TestServiceTruncate(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
 		req := pb.Request{
-			Method:  pb.CONNECT_RO,
-			Timeout: int64(time.Second),
+			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
 				DNID:    100,
 			},
 		}
-		resp := s.handleConnect(req)
+		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
 		cmd := getTestAppendCmd(req.LogRequest.DNID, data)
 		req = pb.Request{
-			Method:  pb.APPEND,
-			Timeout: int64(time.Second),
+			Method: pb.APPEND,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
 			},
 		}
-		resp = s.handleAppend(req, cmd)
+		resp = s.handleAppend(ctx, req, cmd)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
 
 		req = pb.Request{
-			Method:  pb.TRUNCATE,
-			Timeout: int64(time.Second),
+			Method: pb.TRUNCATE,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
 				Lsn:     4,
 			},
 		}
-		resp = s.handleTruncate(req)
+		resp = s.handleTruncate(ctx, req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(0), resp.LogResponse.Lsn)
 
 		req = pb.Request{
-			Method:  pb.GET_TRUNCATE,
-			Timeout: int64(time.Second),
+			Method: pb.GET_TRUNCATE,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
 			},
 		}
-		resp = s.handleGetTruncatedIndex(req)
+		resp = s.handleGetTruncatedIndex(ctx, req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
 
 		req = pb.Request{
-			Method:  pb.TRUNCATE,
-			Timeout: int64(time.Second),
+			Method: pb.TRUNCATE,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
 				Lsn:     3,
 			},
 		}
-		resp = s.handleTruncate(req)
+		resp = s.handleTruncate(ctx, req)
 		assert.Equal(t, pb.LsnAlreadyTruncated, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
@@ -437,25 +445,27 @@ func TestServiceTruncate(t *testing.T) {
 
 func TestServiceTsoUpdate(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
 		req := pb.Request{
-			Method:  pb.TSO_UPDATE,
-			Timeout: int64(time.Second),
+			Method: pb.TSO_UPDATE,
 			TsoRequest: &pb.TsoRequest{
 				Count: 100,
 			},
 		}
-		resp := s.handleTsoUpdate(req)
+		resp := s.handleTsoUpdate(ctx, req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(1), resp.TsoResponse.Value)
 
 		req.TsoRequest.Count = 1000
-		resp = s.handleTsoUpdate(req)
+		resp = s.handleTsoUpdate(ctx, req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(101), resp.TsoResponse.Value)
 
-		resp = s.handleTsoUpdate(req)
+		resp = s.handleTsoUpdate(ctx, req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(1101), resp.TsoResponse.Value)
@@ -465,25 +475,29 @@ func TestServiceTsoUpdate(t *testing.T) {
 
 func TestServiceCheckHAKeeper(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
 		req := pb.Request{
-			Method:  pb.CHECK_HAKEEPER,
-			Timeout: int64(time.Second),
+			Method: pb.CHECK_HAKEEPER,
 		}
-		resp := s.handleCheckHAKeeper(req)
+		resp := s.handleCheckHAKeeper(ctx, req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.False(t, resp.IsHAKeeper)
 	}
 	runServiceTest(t, false, false, fn)
 
 	fn = func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
 		init := make(map[uint64]dragonboat.Target)
 		init[1] = s.ID()
 		require.NoError(t, s.store.startHAKeeperReplica(1, init, false))
 		req := pb.Request{
-			Method:  pb.CHECK_HAKEEPER,
-			Timeout: int64(time.Second),
+			Method: pb.CHECK_HAKEEPER,
 		}
-		resp := s.handleCheckHAKeeper(req)
+		resp := s.handleCheckHAKeeper(ctx, req)
 		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.True(t, resp.IsHAKeeper)
 	}
