@@ -141,7 +141,7 @@ func (e *Engine) Nodes() (engine.Nodes, error) {
 	}
 
 	var nodes engine.Nodes
-	for _, node := range clusterDetails.CNNodes {
+	for _, node := range clusterDetails.CNStores {
 		nodes = append(nodes, engine.Node{
 			Mcpu: 1,
 			Id:   node.UUID,

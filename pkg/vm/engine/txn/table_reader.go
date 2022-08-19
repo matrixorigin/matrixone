@@ -52,7 +52,7 @@ func (t *Table) NewReader(
 	}
 
 	readers = make([]engine.Reader, parallel)
-	nodes := clusterDetails.DNNodes
+	nodes := clusterDetails.DNStores
 
 	if len(shards) > 0 {
 		uuidSet := make(map[string]bool)

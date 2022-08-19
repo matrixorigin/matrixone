@@ -23,7 +23,7 @@ import (
 
 var _ txnengine.ShardPolicy = new(testEnv)
 
-func (t *testEnv) Batch(batch *batch.Batch, nodes []logservicepb.DNNode) (shards []*txnengine.ShardedBatch, err error) {
+func (t *testEnv) Batch(batch *batch.Batch, nodes []logservicepb.DNStore) (shards []*txnengine.ShardedBatch, err error) {
 	shards = append(shards, &txnengine.ShardedBatch{
 		Shard: t.nodes[0].shard,
 		Batch: batch,
@@ -31,7 +31,7 @@ func (t *testEnv) Batch(batch *batch.Batch, nodes []logservicepb.DNNode) (shards
 	return
 }
 
-func (t *testEnv) Vector(vec *vector.Vector, nodes []logservicepb.DNNode) (shards []*txnengine.ShardedVector, err error) {
+func (t *testEnv) Vector(vec *vector.Vector, nodes []logservicepb.DNStore) (shards []*txnengine.ShardedVector, err error) {
 	shards = append(shards, &txnengine.ShardedVector{
 		Shard:  t.nodes[0].shard,
 		Vector: vec,
@@ -39,7 +39,7 @@ func (t *testEnv) Vector(vec *vector.Vector, nodes []logservicepb.DNNode) (shard
 	return
 }
 
-func (t *testEnv) Nodes(nodes []logservicepb.DNNode) (shards []txnengine.Shard, err error) {
+func (t *testEnv) Nodes(nodes []logservicepb.DNStore) (shards []txnengine.Shard, err error) {
 	for _, node := range nodes {
 		for _, n := range t.nodes {
 			if n.info.UUID == node.UUID {
