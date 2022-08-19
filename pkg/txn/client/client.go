@@ -74,7 +74,7 @@ func (client *txnClient) adjust() {
 	if client.clock == nil {
 		client.clock = clock.NewHLCClock(func() int64 {
 			return time.Now().Unix()
-		}, 0)
+		}, time.Millisecond*500)
 	}
 }
 
