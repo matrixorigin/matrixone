@@ -372,6 +372,7 @@ func makeBatch(param *ExternalParam, plh *ParseLineHandler) *batch.Batch {
 	for i := 0; i < len(param.Attrs); i++ {
 		typ := types.New(types.T(param.Cols[i].Typ.Id), param.Cols[i].Typ.Width, param.Cols[i].Typ.Scale, param.Cols[i].Typ.Precision)
 		vec := vector.New(typ)
+		vec.Or = true
 		switch vec.Typ.Oid {
 		case types.T_bool:
 			vec.Col = make([]bool, batchSize)
@@ -774,7 +775,7 @@ func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 	plh.simdCsvReader = simdcsv.NewReaderWithOptions(param.reader,
 		rune(param.extern.Tail.Fields.Terminated[0]),
 		'#',
-		false,
+		true,
 		false)
 
 	return plh, nil

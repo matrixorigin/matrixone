@@ -95,6 +95,7 @@ type Session struct {
 	optionBits uint32
 
 	prepareStmts map[string]*PrepareStmt
+	lastStmtId   uint32
 
 	requestCtx context.Context
 
@@ -165,6 +166,14 @@ func (bgs *BackgroundSession) Close() {
 	if bgs.cancel != nil {
 		bgs.cancel()
 	}
+}
+func (ses *Session) GenNewStmtId() uint32 {
+	ses.lastStmtId = ses.lastStmtId + 1
+	return ses.lastStmtId
+}
+
+func (ses *Session) GetLastStmtId() uint32 {
+	return ses.lastStmtId
 }
 
 func (ses *Session) SetRequestContext(reqCtx context.Context) {
