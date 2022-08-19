@@ -203,10 +203,6 @@ func FromUnix(loc *time.Location, ts int64) Datetime {
 	return Datetime((ts+int64(offset))*microSecsPerSec + unixEpoch)
 }
 
-func UnixToTimestamp(ts int64) Timestamp {
-	return Timestamp(ts*microSecsPerSec + unixEpoch)
-}
-
 func Now(loc *time.Location) Datetime {
 	now := time.Now().In(loc)
 	_, offset := now.Zone()

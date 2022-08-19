@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/fagongzi/goetty/v2/codec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -66,12 +67,15 @@ type PayloadMessage interface {
 	SetPayloadField(data []byte)
 }
 
-// SendOptions send options
-type SendOptions struct {
-	// Timeout set write deadline for backend connection
-	Timeout time.Duration
-	// Arg send arg
-	Arg any
+// RPCMessage any message sent via morpc needs to have a Context set, which is transmitted across the network.
+// So messages sent and received at the network level are RPCMessage.
+type RPCMessage struct {
+	// Ctx context
+	Ctx context.Context
+	// Message raw rpc message
+	Message Message
+
+	cancel context.CancelFunc
 }
 
 // RPCClient morpc is not a normal remote method call, rather it is a message-based asynchronous
@@ -80,7 +84,7 @@ type SendOptions struct {
 type RPCClient interface {
 	// Send send a request message to the corresponding server and return a Future to get the
 	// response message.
-	Send(ctx context.Context, backend string, request Message, opts SendOptions) (*Future, error)
+	Send(ctx context.Context, backend string, request Message) (*Future, error)
 	// NewStream create a stream used to asynchronous stream of sending and receiving messages.
 	// If the underlying connection is reset during the duration of the stream, then the stream will
 	// be closed.
@@ -93,7 +97,7 @@ type RPCClient interface {
 // Note that it is not thread-safe.
 type ClientSession interface {
 	// Write writing the response message to the client.
-	Write(response Message, opts SendOptions) error
+	Write(ctx context.Context, response Message) error
 }
 
 // RPCServer RPC server implementation corresponding to RPCClient.
@@ -108,12 +112,23 @@ type RPCServer interface {
 	// read goroutine of the current client connection. Sequence is the sequence of message received
 	// by the current client connection. If error returned by handler, client connection will closed.
 	// Handler can use the ClientSession to write response, both synchronous and asynchronous.
-	RegisterRequestHandler(func(request Message, sequence uint64, cs ClientSession) error)
+	RegisterRequestHandler(func(ctx context.Context, request Message, sequence uint64, cs ClientSession) error)
 }
 
 // Codec codec
 type Codec interface {
 	codec.Codec
+	// AddHeaderCodec add header codec. The HeaderCodecs are added sequentially and the headercodecs are
+	// executed in the order in which they are added at codec time.
+	AddHeaderCodec(HeaderCodec)
+}
+
+// HeaderCodec encode and decode header
+type HeaderCodec interface {
+	// Encode encode header into output buffer
+	Encode(*RPCMessage, *buf.ByteBuf) (int, error)
+	// Decode decode header from input buffer
+	Decode(*RPCMessage, []byte) (int, error)
 }
 
 // BackendFactory backend factory
@@ -127,7 +142,7 @@ type BackendFactory interface {
 type Backend interface {
 	// Send send the request for future to the corresponding backend.
 	// moerr.ErrBackendClosed returned if backend is closed.
-	Send(ctx context.Context, request Message, opts SendOptions) (*Future, error)
+	Send(ctx context.Context, request Message) (*Future, error)
 	// NewStream create a stream used to asynchronous stream of sending and receiving messages.
 	// If the underlying connection is reset during the duration of the stream, then the stream will
 	// be closed.
@@ -147,7 +162,7 @@ type Stream interface {
 	// stream ID as the message ID
 	ID() uint64
 	// Send send message to stream
-	Send(request Message, opts SendOptions) error
+	Send(ctx context.Context, request Message) error
 	// Receive returns a channel to read stream message from server. If nil is received, the receive
 	// loop needs to exit. In any case, Stream.Close needs to be called.
 	Receive() (chan Message, error)

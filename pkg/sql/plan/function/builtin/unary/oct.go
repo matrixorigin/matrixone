@@ -27,7 +27,7 @@ import (
 
 func Oct[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.Type{Oid: types.T_decimal128, Size: 16}
 	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[T](inputVector)
 	if inputVector.IsScalar() {
@@ -35,32 +35,33 @@ func Oct[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, 
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
-		resultValues := &types.Bytes{
-			Data:    []byte{},
-			Offsets: make([]uint32, 1),
-			Lengths: make([]uint32, 1),
+		resultValues := make([]types.Decimal128, 1)
+		col, err := oct.Oct(inputValues, resultValues)
+		if err != nil {
+			return nil, err
 		}
-		vector.SetCol(resultVector, oct.Oct(inputValues, resultValues))
+		vector.SetCol(resultVector, col)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err
 		}
-		resultValues := &types.Bytes{
-			Data:    []byte{},
-			Offsets: make([]uint32, len(inputValues)),
-			Lengths: make([]uint32, len(inputValues)),
-		}
+		resultValues := types.DecodeDecimal128Slice(resultVector.Data)
+		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, oct.Oct(inputValues, resultValues))
+		col, err := oct.Oct(inputValues, resultValues)
+		if err != nil {
+			return nil, err
+		}
+		vector.SetCol(resultVector, col)
 		return resultVector, nil
 	}
 }
 
 func OctFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.Type{Oid: types.T_decimal128, Size: 16}
 	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[T](inputVector)
 	if inputVector.IsScalar() {
@@ -68,11 +69,7 @@ func OctFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
-		resultValues := &types.Bytes{
-			Data:    []byte{},
-			Offsets: make([]uint32, 1),
-			Lengths: make([]uint32, 1),
-		}
+		resultValues := make([]types.Decimal128, 1)
 		col, err := oct.OctFloat(inputValues, resultValues)
 		if err != nil {
 			return nil, fmt.Errorf("the input value is out of integer range")
@@ -84,11 +81,8 @@ func OctFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 		if err != nil {
 			return nil, err
 		}
-		resultValues := &types.Bytes{
-			Data:    []byte{},
-			Offsets: make([]uint32, len(inputValues)),
-			Lengths: make([]uint32, len(inputValues)),
-		}
+		resultValues := types.DecodeDecimal128Slice(resultVector.Data)
+		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		col, err := oct.OctFloat(inputValues, resultValues)
 		if err != nil {
