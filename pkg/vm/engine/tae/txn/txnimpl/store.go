@@ -292,14 +292,14 @@ func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
 	if db != nil {
 		return
 	}
+	var entry *catalog.DBEntry
+	if entry, err = store.catalog.GetDatabaseByID(id); err != nil {
+		return
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	db = store.dbs[id]
 	if db != nil {
-		return
-	}
-	var entry *catalog.DBEntry
-	if entry, err = store.catalog.GetDatabaseByID(id); err != nil {
 		return
 	}
 	db = newTxnDB(store, entry)

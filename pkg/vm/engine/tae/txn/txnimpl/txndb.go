@@ -242,14 +242,14 @@ func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
 	if table != nil {
 		return
 	}
+	var entry *catalog.TableEntry
+	if entry, err = db.entry.GetTableEntryByID(id); err != nil {
+		return
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	table = db.tables[id]
 	if table != nil {
-		return
-	}
-	var entry *catalog.TableEntry
-	if entry, err = db.entry.GetTableEntryByID(id); err != nil {
 		return
 	}
 	if db.store.warChecker == nil {
