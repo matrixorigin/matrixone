@@ -256,7 +256,7 @@ func TestNewSenderWithOptions(t *testing.T) {
 
 func newTestTxnServer(t assert.TestingT, addr string) morpc.RPCServer {
 	assert.NoError(t, os.RemoveAll(addr[7:]))
-	codec := morpc.NewMessageCodec(func() morpc.Message { return &txn.TxnRequest{} }, 0)
+	codec := morpc.NewMessageCodecWithChecksum(func() morpc.Message { return &txn.TxnRequest{} }, 0)
 	s, err := morpc.NewRPCServer("test-txn-server", addr, codec)
 	assert.NoError(t, err)
 	assert.NoError(t, s.Start())
