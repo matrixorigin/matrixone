@@ -99,7 +99,7 @@ func NewService(cfg Config, opts ...Option) (*Service, error) {
 		return pool.Get().(*RPCRequest)
 	}
 	// TODO: check and fix all these magic numbers
-	codec := morpc.NewMessageCodec(mf, 16*1024)
+	codec := morpc.NewMessageCodecWithChecksum(mf, 16*1024)
 	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.ServiceListenAddress, codec,
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
 			respPool.Put(i.(morpc.RPCMessage).Message)

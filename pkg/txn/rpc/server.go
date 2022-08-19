@@ -58,7 +58,7 @@ func NewTxnServer(address string, logger *zap.Logger) (TxnServer, error) {
 	}
 
 	rpc, err := morpc.NewRPCServer("txn-server", address,
-		morpc.NewMessageCodec(s.acquireRequest, 16*1024),
+		morpc.NewMessageCodecWithChecksum(s.acquireRequest, 16*1024),
 		morpc.WithServerLogger(s.logger),
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
 			m := v.(morpc.RPCMessage)
