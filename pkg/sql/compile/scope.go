@@ -132,9 +132,8 @@ func (s *Scope) ParallelRun(c *Compile) error {
 		return s.MergeRun(c)
 	}
 	mcpu := s.NodeInfo.Mcpu
-	snap := engine.Snapshot(s.Proc.Snapshot)
 	{
-		db, err := c.e.Database(c.ctx, s.DataSource.SchemaName, snap)
+		db, err := c.e.Database(c.ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
 		if err != nil {
 			return err
 		}

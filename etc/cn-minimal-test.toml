@@ -5,3 +5,7 @@ service-type = "CN"
 level = "debug"
 format = "json"
 max-size = 512
+
+[engine]
+type = "tae"
+
