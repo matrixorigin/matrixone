@@ -443,6 +443,35 @@ func testFileService(
 
 	})
 
+	t.Run("named path", func(t *testing.T) {
+		ctx := context.Background()
+		fs := newFS()
+
+		err := fs.Write(ctx, IOVector{
+			FilePath: fs.Name() + ":foo",
+			Entries: []IOEntry{
+				{
+					Size: 4,
+					Data: []byte("1234"),
+				},
+			},
+		})
+		assert.Nil(t, err)
+
+		vec := IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size: -1,
+				},
+			},
+		}
+		err = fs.Read(ctx, &vec)
+		assert.Nil(t, err)
+		assert.Equal(t, []byte("1234"), vec.Entries[0].Data)
+
+	})
+
 }
 
 func randomSplit(data []byte, maxLen int) (ret [][]byte) {

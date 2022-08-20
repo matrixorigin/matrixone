@@ -367,3 +367,4 @@ insert into t1 values('');
 select * from t1;
 c0
 null
+

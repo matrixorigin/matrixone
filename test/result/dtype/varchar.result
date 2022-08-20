@@ -57,7 +57,7 @@ select concat_ws(LastName,FirstName) as fullname from Demovarchar where Age > 40
 fullname
 Kelly
 David
-Andrea 
+Andrea
 select concat_ws(LastName,FirstName),Gender,Age from Demovarchar where Gender='F' order by Age asc;
 concat_ws(LastName,FirstName)	Gender	Age
 Carole	F	29

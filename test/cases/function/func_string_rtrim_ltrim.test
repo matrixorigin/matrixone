@@ -1,8 +1,10 @@
 #SELECT
 SELECT RTRIM('barbar   ');
 SELECT LTRIM('  barbar');
+-- @separator:table
 SELECT '    geeksforgeeks'  As OriginalString,
 LTRIM ('    geeksforgeeks')  AS LeftTrimmedString;
+-- @separator:table
 SELECT '    MySQL' AS String, RTRIM ('MySQL')  AS Tstring;
 
 #SELECT 嵌套

@@ -38,8 +38,11 @@ insert into t1 values('adsf  sdfad','2022-02-02 22:22:22');
 insert into t1 values('    sdfad','2022-02-02 22:22:22');
 -- @case
 -- @desc:test for func reverse() select
+-- @separator:table
 select reverse(a),reverse(c) from t1;
+-- @separator:table
 select a from t1 where reverse(a) like 'daf%';
+-- @separator:table
 select reverse(a) reversea,reverse(reverse(a)) normala from t1;
 
 
@@ -276,6 +279,8 @@ VALUES
 
 -- @case
 -- @desc:test for func LTRIM() select
+-- @sortkey:1
+-- @separator:table
 SELECT LTRIM( Employee_name) LTrimName,RTRIM(Employee_name) AS RTrimName FROM t1 order by  RTrimName desc;
 SELECT LTRIM(RTRIM(Employee_name)) as TrimName from t1 where Employee_name like '%Ani%' order by TrimName asc;
 drop table if exists t1;
@@ -321,6 +326,7 @@ VALUES
 ('  Shreya Ghosh', '2020-09-10') ;
 INSERT INTO t1
 (Employee_name, Joining_Date ) values('     ','2014-12-01');
+-- @separator:table
 select * from t1 where Employee_name=space(5);
 drop table if exists t1;
 CREATE TABLE t1(a INT,b VARCHAR(100),c CHAR(20));
