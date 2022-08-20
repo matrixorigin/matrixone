@@ -201,6 +201,11 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			IBucket: arg.IBucket,
 			NBucket: arg.NBucket,
 		}
+	case *intersectall.Argument:
+		rin.Arg = &intersectall.Argument{
+			IBucket: arg.IBucket,
+			NBucket: arg.NBucket,
+		}
 	case *external.Argument:
 		rin.Arg = &external.Argument{
 			Es: arg.Es,
@@ -492,9 +497,9 @@ func constructGroup(n, cn *plan.Node, ibucket, nbucket int, needEval bool) *grou
 	}
 }
 
-//ibucket: bucket number
-//nbucket:
-//construct operator argument
+// ibucket: bucket number
+// nbucket:
+// construct operator argument
 func constructIntersectAll(_ *plan.Node, proc *process.Process, ibucket, nbucket int) *intersectall.Argument {
 	return &intersectall.Argument{
 		IBucket: uint64(ibucket),
