@@ -876,6 +876,8 @@ func GetSimpleExprValue(e tree.Expr) (interface{}, error) {
 				value = -1 * iival
 			case int64:
 				value = -1 * iival
+			case uint64:
+				value = -1 * int64(iival)
 			default:
 				return nil, errorUnaryMinusForNonNumericTypeIsNotSupported
 			}
