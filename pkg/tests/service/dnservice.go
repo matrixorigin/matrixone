@@ -15,12 +15,16 @@
 package service
 
 import (
+	"context"
+	"fmt"
 	"sync"
 
 	"github.com/google/uuid"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
@@ -138,8 +142,8 @@ func newDNService(
 
 // buildDnConfig builds configuration for a dn service.
 func buildDnConfig(
-	index int, opt Options, address serviceAddress,
-) (*dnservice.Config, []dnservice.Option) {
+	index int, opt Options, address serviceAddresses,
+) *dnservice.Config {
 	cfg := &dnservice.Config{
 		UUID:          uuid.New().String(),
 		ListenAddress: address.getDnListenAddress(index),
@@ -149,5 +153,59 @@ func buildDnConfig(
 	// FIXME: support different storage, consult @reusee
 	cfg.Txn.Storage.Backend = opt.dn.txnStorageBackend
 
-	return cfg, nil
+	// We need the filled version of configuration.
+	// It's necessary when building dnservice.Option.
+	if err := cfg.Validate(); err != nil {
+		panic(fmt.Sprintf("fatal when building dnservice.Config: %s", err))
+	}
+
+	return cfg
+}
+
+// buildDnOptions builds options for a dn service.
+//
+// NB: We need the filled version of dnservice.Config.
+func buildDnOptions(cfg *dnservice.Config, filter FilterFunc) dnOptions {
+	// factory to construct client for hakeeper
+	hakeeperClientFactory := func() (logservice.DNHAKeeperClient, error) {
+		ctx, cancel := context.WithTimeout(
+			context.Background(), cfg.HAKeeper.DiscoveryTimeout.Duration,
+		)
+		defer cancel()
+
+		// transfer morpc.BackendOption via context
+		ctx = logservice.SetBackendOptions(ctx, morpc.WithBackendFilter(filter))
+
+		client, err := logservice.NewDNHAKeeperClient(
+			ctx, cfg.HAKeeper.ClientConfig,
+		)
+		if err != nil {
+			return nil, err
+		}
+		return client, nil
+	}
+
+	// factory to construct client for log service
+	logServiceClientFactory := func(shard metadata.DNShard) (logservice.Client, error) {
+		ctx, cancel := context.WithTimeout(
+			context.Background(), cfg.LogService.ConnectTimeout.Duration,
+		)
+		defer cancel()
+
+		// transfer morpc.BackendOption via context
+		ctx = logservice.SetBackendOptions(ctx, morpc.WithBackendFilter(filter))
+
+		return logservice.NewClient(ctx, logservice.ClientConfig{
+			ReadOnly:         false,
+			LogShardID:       shard.LogShardID,
+			DNReplicaID:      shard.ReplicaID,
+			ServiceAddresses: cfg.HAKeeper.ClientConfig.ServiceAddresses,
+		})
+	}
+
+	return []dnservice.Option{
+		dnservice.WithHAKeeperClientFactory(hakeeperClientFactory),
+		dnservice.WithLogServiceClientFactory(logServiceClientFactory),
+		dnservice.WithBackendFilter(filter),
+	}
 }
