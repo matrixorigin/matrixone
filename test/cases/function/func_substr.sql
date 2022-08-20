@@ -131,12 +131,15 @@ insert into t1 values (10,'','');
 -- @case
 -- @desc:test for ltrim,rtrim
 -- @label:bvt
-
+-- @separator:table
 select ltrim(c),ltrim(vc) from t1;
-
+-- @separator:table
 select rtrim(c),rtrim(vc) from t1;
+-- @separator:table
 select ltrim(rtrim(c)),rtrim(ltrim(vc)) from t1;
+-- @separator:table
 select * from t1 where ltrim(c) = 'BestSeller';
+-- @separator:table
 select * from t1 where ltrim(c) = 'BestSeller' and rtrim(vc) = 'OneHeckuvabook';
 
 
@@ -146,8 +149,8 @@ select * from t1 where ltrim(c) = 'BestSeller' and rtrim(vc) = 'OneHeckuvabook';
 drop table if exists t1;
 create table t1 ( d int);
 insert into t1 values(0),(-1),(2),(10);
+-- @separator:table
 select space(d) from t1 where d <> -1;
+-- @separator:table
 select space(d) from t1;
-
-
 drop table t1;
