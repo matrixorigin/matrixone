@@ -47,7 +47,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	f, err := cli.Send(ctx, addr, &message.ExampleMessage{MsgID: 1, Content: "hello"}, morpc.SendOptions{})
+	f, err := cli.Send(ctx, addr, &message.ExampleMessage{MsgID: 1, Content: "hello"})
 	if err != nil {
 		panic(err)
 	}
@@ -66,9 +66,9 @@ func startServer() error {
 	if err != nil {
 		return err
 	}
-	s.RegisterRequestHandler(func(request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+	s.RegisterRequestHandler(func(ctx context.Context, request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
 		// write request back to client
-		return cs.Write(request, morpc.SendOptions{})
+		return cs.Write(ctx, request)
 	})
 
 	return s.Start()

@@ -29,6 +29,7 @@ type txnDBIt struct {
 	*sync.RWMutex
 	txn    txnif.AsyncTxn
 	linkIt *common.LinkIt
+	itered bool // linkIt has no dummy head, use this to avoid duplicate filter logic for the very first entry
 	curr   *catalog.DBEntry
 	err    error
 }
@@ -39,25 +40,7 @@ func newDBIt(txn txnif.AsyncTxn, c *catalog.Catalog) *txnDBIt {
 		txn:     txn,
 		linkIt:  c.MakeDBIt(true),
 	}
-	var err error
-	var ok bool
-	for it.linkIt.Valid() {
-		curr := it.linkIt.Get().GetPayload().(*catalog.DBEntry)
-		curr.RLock()
-		ok, err = curr.TxnCanRead(it.txn, curr.RWMutex)
-		if err != nil {
-			curr.RUnlock()
-			it.err = err
-			break
-		}
-		if ok {
-			curr.RUnlock()
-			it.curr = curr
-			break
-		}
-		curr.RUnlock()
-		it.linkIt.Next()
-	}
+	it.Next()
 	return it
 }
 
@@ -74,22 +57,27 @@ func (it *txnDBIt) Next() {
 	var err error
 	var valid bool
 	for {
-		it.linkIt.Next()
+		if it.itered {
+			it.linkIt.Next()
+		}
 		node := it.linkIt.Get()
+		it.itered = true
 		if node == nil {
 			it.curr = nil
 			break
 		}
-		entry := node.GetPayload().(*catalog.DBEntry)
-		entry.RLock()
-		valid, err = entry.TxnCanRead(it.txn, entry.RWMutex)
-		entry.RUnlock()
+		curr := node.GetPayload().(*catalog.DBEntry)
+		curr.RLock()
+		if curr.GetTenantID() == it.txn.GetTenantID() || isSysSharedDB(curr.GetName()) {
+			valid, err = curr.TxnCanRead(it.txn, curr.RWMutex)
+		}
+		curr.RUnlock()
 		if err != nil {
 			it.err = err
 			break
 		}
 		if valid {
-			it.curr = entry
+			it.curr = curr
 			break
 		}
 	}

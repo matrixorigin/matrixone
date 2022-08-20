@@ -33,9 +33,9 @@ import (
 )
 
 const (
-	metricDBConst    = "system_metrics"
-	sqlCreateDBConst = "create database if not exists " + metricDBConst
-	sqlDropDBConst   = "drop database if exists " + metricDBConst
+	MetricDBConst    = "system_metrics"
+	sqlCreateDBConst = "create database if not exists " + MetricDBConst
+	sqlDropDBConst   = "drop database if exists " + MetricDBConst
 	ALL_IN_ONE_MODE  = "monolithic"
 )
 
@@ -144,7 +144,7 @@ func mustRegister(collector Collector) {
 // initTables gathers all metrics and extract metadata to format create table sql
 func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor) {
 	exec := ieFactory()
-	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(metricDBConst).Internal(true).Finish())
+	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(MetricDBConst).Internal(true).Finish())
 	mustExec := func(sql string) {
 		if err := exec.Exec(ctx, sql, ie.NewOptsBuilder().Finish()); err != nil {
 			panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
@@ -186,7 +186,7 @@ func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer) string {
 	extra := newDescExtra(desc)
 	buf.WriteString(fmt.Sprintf(
 		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` int, `%s` varchar(20)",
-		metricDBConst, extra.fqName, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
+		MetricDBConst, extra.fqName, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
 	))
 	for _, lbl := range extra.labels {
 		buf.WriteString(", `")

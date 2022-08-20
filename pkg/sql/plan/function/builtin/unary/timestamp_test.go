@@ -16,6 +16,7 @@ package unary
 
 import (
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,7 +37,7 @@ func TestDateToTimestamp(t *testing.T) {
 			name: "TEST01",
 			vecs: makeDateToTimestampVectors("2022-01-01", true),
 			proc: testutil.NewProc(),
-			want: []types.Timestamp{types.FromClockUTC(2022, 1, 1, 0, 0, 0, 0)},
+			want: []types.Timestamp{types.FromClockZone(time.Local, 2022, 1, 1, 0, 0, 0, 0)},
 		},
 	}
 
@@ -63,7 +64,7 @@ func TestDatetimeToTimestamp(t *testing.T) {
 			name: "TEST01",
 			vecs: makeDatetimeToTimestampVectors("2022-01-01 00:00:00", true),
 			proc: testutil.NewProc(),
-			want: []types.Timestamp{types.FromClockUTC(2022, 1, 1, 0, 0, 0, 0)},
+			want: []types.Timestamp{types.FromClockZone(time.Local, 2022, 1, 1, 0, 0, 0, 0)},
 		},
 	}
 
@@ -91,14 +92,14 @@ func TestDateStringAdd(t *testing.T) {
 			name:    "TEST01",
 			vecs:    makeDateStringToTimestampVectors("2022-01-01", true),
 			proc:    testutil.NewProc(),
-			want:    []types.Timestamp{types.FromClockUTC(2022, 1, 1, 0, 0, 0, 0)},
+			want:    []types.Timestamp{types.FromClockZone(time.Local, 2022, 1, 1, 0, 0, 0, 0)},
 			contain: false,
 		},
 		{
 			name:    "TEST02",
 			vecs:    makeDateStringToTimestampVectors("2022-01-01 00:00:00", true),
 			proc:    testutil.NewProc(),
-			want:    []types.Timestamp{types.FromClockUTC(2022, 1, 1, 0, 0, 0, 0)},
+			want:    []types.Timestamp{types.FromClockZone(time.Local, 2022, 1, 1, 0, 0, 0, 0)},
 			contain: false,
 		},
 		{

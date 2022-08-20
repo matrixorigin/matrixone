@@ -17,13 +17,14 @@ package frontend
 import (
 	"bytes"
 	"fmt"
-	"github.com/BurntSushi/toml"
 	"go/constant"
 	"os"
 	"runtime"
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/BurntSushi/toml"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
@@ -306,7 +307,7 @@ func getSystemVariables(configFile string) (*mo_config.FrontendParameters, error
 	return sv, err
 }
 
-func getParameterUnit(configFile string, eng engine.Engine) (*mo_config.ParameterUnit, error) {
+func getParameterUnit(configFile string, eng engine.Engine, txnClient TxnClient) (*mo_config.ParameterUnit, error) {
 	sv, err := getSystemVariables(configFile)
 	if err != nil {
 		return nil, err
@@ -317,7 +318,7 @@ func getParameterUnit(configFile string, eng engine.Engine) (*mo_config.Paramete
 
 	fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
 
-	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, engine.Nodes{})
+	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, txnClient, engine.Nodes{})
 
 	return pu, nil
 }
@@ -835,19 +836,32 @@ func WildcardMatch(pattern, target string) bool {
 // only support single value and unary minus
 func GetSimpleExprValue(e tree.Expr) (interface{}, error) {
 	var value interface{}
+	var err error
 	switch v := e.(type) {
 	case *tree.NumVal:
-		switch v.Value.Kind() {
-		case constant.Unknown:
+		switch v.ValType {
+		case tree.P_null:
 			value = nil
-		case constant.Bool:
+		case tree.P_bool:
 			value = constant.BoolVal(v.Value)
-		case constant.String:
+		case tree.P_char:
 			value = constant.StringVal(v.Value)
-		case constant.Int:
+		case tree.P_int64:
 			value, _ = constant.Int64Val(v.Value)
-		case constant.Float:
+		case tree.P_uint64:
+			value, _ = constant.Uint64Val(v.Value)
+		case tree.P_float64:
 			value, _ = constant.Float64Val(v.Value)
+		case tree.P_hexnum:
+			value, _, err = types.ParseStringToDecimal128WithoutTable(v.String())
+			if err != nil {
+				return nil, err
+			}
+		case tree.P_bit:
+			value, _, err = types.ParseStringToDecimal128WithoutTable(v.String())
+			if err != nil {
+				return nil, err
+			}
 		default:
 			return nil, errorNumericTypeIsNotSupported
 		}
@@ -862,6 +876,8 @@ func GetSimpleExprValue(e tree.Expr) (interface{}, error) {
 				value = -1 * iival
 			case int64:
 				value = -1 * iival
+			case uint64:
+				value = -1 * int64(iival)
 			default:
 				return nil, errorUnaryMinusForNonNumericTypeIsNotSupported
 			}

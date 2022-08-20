@@ -57,7 +57,7 @@ type Config struct {
 		// DiscoveryTimeout discovery HAKeeper service timeout. Default is 30s
 		DiscoveryTimeout toml.Duration `toml:"hakeeper-discovery-timeout"`
 		// ClientConfig hakeeper client configuration
-		ClientConfig logservice.HAKeeperClientConfig `toml:"hakeeper-client"`
+		ClientConfig logservice.HAKeeperClientConfig
 	}
 
 	// LogService log service configuration
@@ -119,7 +119,7 @@ type Config struct {
 	}
 }
 
-func (c *Config) validate() error {
+func (c *Config) Validate() error {
 	if c.UUID == "" {
 		return fmt.Errorf("Config.UUID not set")
 	}

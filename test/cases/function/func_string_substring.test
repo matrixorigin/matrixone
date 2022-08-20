@@ -157,13 +157,11 @@ select * from t1 where substring(b,1,1) = 'a';
 drop table t1;
 
 #HAVING & 逻辑运算
--- @bvt:issue#3716
 drop table if exists t1;
 create table t1(b varchar(5));
 insert into t1 values('ab'), ('abc'), ('abcd'), ('abcde');
 select b from t1 group by b having substring(b,1,1)+'a'='aa';
 drop table t1;
--- @bvt:issue
 
 #ON CONDITION
 drop table if exists t1;
