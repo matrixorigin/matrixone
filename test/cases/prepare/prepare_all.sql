@@ -35,7 +35,7 @@ DEALLOCATE PREPARE s1;
 
 PREPARE s2 FROM 'SELECT * FROM numbers WHERE si=?';
 EXECUTE s2 USING @ui_min;
--- @bvt:issue#4604
+-- @bvt:issue#3588
 EXECUTE s2 USING @ui_max;
 -- @bvt:issue
 EXECUTE s2 USING @si_min;
@@ -472,7 +472,6 @@ drop table t6;
 -- @desc:test maxint operation
 -- @label:bvt
 
--- @bvt:issue#4512
 set @maxint=18446744073709551615;
 select @maxint;
 
@@ -495,11 +494,12 @@ DEALLOCATE PREPARE s;
 
 PREPARE s FROM 'SELECT 0 + ?';
 
+-- @bvt:issue#3588
 EXECUTE s USING @maxint;
+-- @bvt:issue
 DEALLOCATE PREPARE s;
 
 PREPARE s FROM 'SELECT concat(?,"")';
 
 EXECUTE s USING @maxint;
 DEALLOCATE PREPARE s;
--- @bvt:issue
