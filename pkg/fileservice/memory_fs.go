@@ -27,23 +27,34 @@ import (
 
 // MemoryFS is an in-memory FileService implementation
 type MemoryFS struct {
+	name string
 	sync.RWMutex
 	tree *btree.Generic[*_MemFSEntry]
 }
 
 var _ FileService = new(MemoryFS)
 
-func NewMemoryFS() (*MemoryFS, error) {
+func NewMemoryFS(name string) (*MemoryFS, error) {
 	return &MemoryFS{
+		name: name,
 		tree: btree.NewGeneric(func(a, b *_MemFSEntry) bool {
 			return a.FilePath < b.FilePath
 		}),
 	}, nil
 }
 
+func (m *MemoryFS) Name() string {
+	return m.name
+}
+
 func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
 	m.RLock()
 	defer m.RUnlock()
+
+	_, dirPath, err = splitPath(m.name, dirPath)
+	if err != nil {
+		return nil, err
+	}
 
 	iter := m.tree.Iter()
 	defer iter.Release()
@@ -79,8 +90,13 @@ func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
 	m.Lock()
 	defer m.Unlock()
 
+	_, path, err := splitPath(m.name, vector.FilePath)
+	if err != nil {
+		return err
+	}
+
 	pivot := &_MemFSEntry{
-		FilePath: vector.FilePath,
+		FilePath: path,
 	}
 	_, ok := m.tree.Get(pivot)
 	if ok {
@@ -91,6 +107,11 @@ func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
 }
 
 func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
+
+	_, path, err := splitPath(m.name, vector.FilePath)
+	if err != nil {
+		return err
+	}
 
 	if len(vector.Entries) == 0 {
 		vector.Entries = []IOEntry{
@@ -112,7 +133,7 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 		return err
 	}
 	entry := &_MemFSEntry{
-		FilePath: vector.FilePath,
+		FilePath: path,
 		Data:     data,
 	}
 	m.tree.Set(entry)
@@ -122,6 +143,11 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 
 func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 
+	_, path, err := splitPath(m.name, vector.FilePath)
+	if err != nil {
+		return err
+	}
+
 	if len(vector.Entries) == 0 {
 		return ErrEmptyVector
 	}
@@ -130,7 +156,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 	defer m.RUnlock()
 
 	pivot := &_MemFSEntry{
-		FilePath: vector.FilePath,
+		FilePath: path,
 	}
 
 	fsEntry, ok := m.tree.Get(pivot)
@@ -191,8 +217,13 @@ func (m *MemoryFS) Delete(ctx context.Context, filePath string) error {
 	m.Lock()
 	defer m.Unlock()
 
+	_, path, err := splitPath(m.name, filePath)
+	if err != nil {
+		return err
+	}
+
 	pivot := &_MemFSEntry{
-		FilePath: filePath,
+		FilePath: path,
 	}
 	m.tree.Delete(pivot)
 

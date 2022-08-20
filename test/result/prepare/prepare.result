@@ -60,10 +60,10 @@ drop table t1;
 prepare stmt2 from 'select @var_t1';
 set @var_t1 = 0;
 execute stmt2;
- @var_t1
- 0
+@var_t1
+0
 set @var_t1= 'aa';
 execute stmt2;
- @var_t1
- aa
+@var_t1
+aa
 deallocate prepare stmt2;

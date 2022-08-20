@@ -25,6 +25,7 @@ EveryoneBu	Thisverybook
 SanFran	Itisasanfranlifetyle
 BerkAuthor	Cool.Berkly.the.book
 null	null
+
 select SUBSTRING(c,2),SUBSTR(vc,2) from t1;
 SUBSTRING(c,2)	SUBSTR(vc,2)
 affy	ducklife
@@ -38,12 +39,14 @@ veryoneBu	hisverybook
 anFran	tisasanfranlifetyle
 erkAuthor	ool.Berkly.the.book
 null	null
+
 select SUBSTRING(c,5),SUBSTR(vc,9) from t1 where id = 1 ;
 SUBSTRING(c,5)	SUBSTR(vc,9)
 y	e
 y	e
 select substring(c,11),substr(vc,13) from t1 where id = 6 ;
 substring(c,11)	substr(vc,13)
+
 select SUBSTRING(c,-1),SUBSTR(vc,-1) from t1;
 SUBSTRING(c,-1)	SUBSTR(vc,-1)
 y	e
@@ -57,6 +60,7 @@ u	k
 n	e
 r	k
 null	null
+
 select SUBSTRING(c,-2),SUBSTR(vc,-2) from t1;
 SUBSTRING(c,-2)	SUBSTR(vc,-2)
 fy	fe
@@ -70,12 +74,14 @@ Bu	ok
 an	le
 or	ok
 null	null
+
 select SUBSTRING(c,-5),SUBSTR(vc,-9) from t1 where id = 1 ;
 SUBSTRING(c,-5)	SUBSTR(vc,-9)
 Daffy	Aducklife
 Daffy	Aducklife
 select substring(c,-11),substr(vc,-13) from t1 where id = 6 ;
 substring(c,-11)	substr(vc,-13)
+
 select SUBSTRING(c,1,1),SUBSTR(vc,1,1) from t1 where id = 1 ;
 SUBSTRING(c,1,1)	SUBSTR(vc,1,1)
 D	A
@@ -99,8 +105,10 @@ substring(c,5,4)	substr(vc,5,4)
 ymou	abuy
 select substring(c,10,10),substr(vc,18,18) from t1 where id = 4 ;
 substring(c,10,10)	substr(vc,18,18)
+
 select substring(c,2,-1),substr(vc,3,-1) from t1 where id = 4 ;
 substring(c,2,-1)	substr(vc,3,-1)
+
 select SUBSTRING(c,-1,1),SUBSTR(vc,1,1) from t1 where id = 1 ;
 SUBSTRING(c,-1,1)	SUBSTR(vc,1,1)
 y	A
@@ -121,6 +129,7 @@ substring(c,-2,10)	substr(vc,3,18)
 us	nnabuythisbook?
 select substring(c,1,-1),substr(vc,3,-2) from t1 where id = 4 ;
 substring(c,1,-1)	substr(vc,3,-2)
+
 select substring(c,1,a),substr(vc,3,1) from t1 where id = 4 ;
 Column 'a' does not exist
 select substring(c,1,2),substr(vc,a,1) from t1 where id = 4 ;
@@ -130,6 +139,7 @@ max(substr(c,2))
 veryoneBu
 select min(substr(c,2)) from t1;
 min(substr(c,2))
+
 select * from t1 where substr(c,2) = 'affy';
 id	c	vc
 1	Daffy	Aducklife
@@ -274,6 +284,7 @@ lpad(c,0,'*')
 
 
 null
+
 select lpad(c,1,'*') from t1;
 lpad(c,1,'*')
 D
@@ -343,6 +354,7 @@ rpad(c,0,'*')
 
 
 null
+
 select rpad(c,1,'*') from t1;
 rpad(c,1,'*')
 D
@@ -426,6 +438,7 @@ EveryoneBu	Thisverybook
 SanFran	Itisasanfranlifetyle 
 BerkAuthor	Cool.Berkly.the.book 
 null	null
+
 select rtrim(c),rtrim(vc) from t1;
 rtrim(c)	rtrim(vc)
 Daffy	  Aducklife
@@ -439,6 +452,7 @@ Daffy	  Aducklife
  SanFran	 Itisasanfranlifetyle
  BerkAuthor	  Cool.Berkly.the.book
 null	null
+
 select ltrim(rtrim(c)),rtrim(ltrim(vc)) from t1;
 ltrim(rtrim(c))	rtrim(ltrim(vc))
 Daffy	Aducklife
@@ -452,18 +466,26 @@ EveryoneBu	Thisverybook
 SanFran	Itisasanfranlifetyle
 BerkAuthor	Cool.Berkly.the.book
 null	null
+
 select * from t1 where ltrim(c) = 'BestSeller';
 id	c	vc
 5	  BestSeller	 OneHeckuvabook 
-5	  BestSeller	OneHeckuvabook
+5	  BestSeller	OneHeckuvabook 
 select * from t1 where ltrim(c) = 'BestSeller' and rtrim(vc) = 'OneHeckuvabook';
 id	c	vc
-5	  BestSeller	OneHeckuvabook
+5	  BestSeller	OneHeckuvabook 
 drop table if exists t1;
 create table t1 ( d int);
 insert into t1 values(0),(-1),(2),(10);
 select space(d) from t1 where d <> -1;
 space(d)
+
+  
+          
 select space(d) from t1;
 space(d)
+
+
+  
+          
 drop table t1;
