@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -80,8 +79,8 @@ type store struct {
 	server         rpc.TxnServer
 	hakeeperClient logservice.DNHAKeeperClient
 	fsFactory      fileservice.FileServiceFactory
-	localFS        fileservice.ReplaceableFileService
-	s3FS           fileservice.FileService
+	fs             fileservice.FileService
+	metadataFS     fileservice.ReplaceableFileService
 	replicas       *sync.Map
 	stopper        *stopper.Stopper
 
@@ -369,21 +368,24 @@ func (s *store) initHAKeeperClient() error {
 }
 
 func (s *store) initFileService() error {
-	fs, err := s.fsFactory(localFileServiceName)
+	localFS, err := s.fsFactory(localFileServiceName)
 	if err != nil {
 		return err
 	}
-	rfs, ok := fs.(fileservice.ReplaceableFileService)
-	if !ok {
-		return moerr.NewError(moerr.BAD_CONFIGURATION, "local fileservice must implmented ReplaceableFileService")
+	rfs, err := fileservice.Get[fileservice.ReplaceableFileService](
+		localFS, localFileServiceName)
+	if err != nil {
+		return err
 	}
-	s.localFS = rfs
 
-	fs, err = s.fsFactory(s3FileServiceName)
+	s3FS, err := s.fsFactory(s3FileServiceName)
 	if err != nil {
 		return err
 	}
-	s.s3FS = fs
+
+	s.fs = fileservice.NewFileServices(localFileServiceName, localFS, s3FS)
+	s.metadataFS = rfs
+
 	return nil
 }
 

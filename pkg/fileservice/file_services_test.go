@@ -20,30 +20,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestMemoryFS(t *testing.T) {
-
+func TestFileServices(t *testing.T) {
 	t.Run("file service", func(t *testing.T) {
 		testFileService(t, func() FileService {
-			fs, err := NewMemoryFS("memory")
+			dir := t.TempDir()
+			fs, err := NewLocalFS("local", dir, 0)
 			assert.Nil(t, err)
-			return fs
+			return NewFileServices("local", fs)
 		})
-	})
-
-	t.Run("replaceable file service", func(t *testing.T) {
-		testReplaceableFileService(t, func() ReplaceableFileService {
-			fs, err := NewMemoryFS("memory")
-			assert.Nil(t, err)
-			return fs
-		})
-	})
-
-}
-
-func BenchmarkMemoryFS(b *testing.B) {
-	benchmarkFileService(b, func() FileService {
-		fs, err := NewMemoryFS("memory")
-		assert.Nil(b, err)
-		return fs
 	})
 }

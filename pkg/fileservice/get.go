@@ -14,30 +14,31 @@
 
 package fileservice
 
-import (
-	"testing"
+import "fmt"
 
-	"github.com/stretchr/testify/assert"
-)
-
-func TestLocalETLFS(t *testing.T) {
-
-	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func() FileService {
-			dir := t.TempDir()
-			fs, err := NewLocalETLFS("etl", dir)
-			assert.Nil(t, err)
-			return fs
-		})
-	})
-
-	t.Run("mutable file service", func(t *testing.T) {
-		testMutableFileService(t, func() MutableFileService {
-			dir := t.TempDir()
-			fs, err := NewLocalETLFS("etl", dir)
-			assert.Nil(t, err)
-			return fs
-		})
-	})
-
+func Get[T any](fs FileService, name string) (res T, err error) {
+	if fs, ok := fs.(*FileServices); ok {
+		f, ok := fs.mappings[name]
+		if !ok {
+			err = fmt.Errorf("file service not found: %s", name)
+			return
+		}
+		res, ok = f.(T)
+		if !ok {
+			err = fmt.Errorf("%T does not implement %T", f, res)
+			return
+		}
+		return
+	}
+	var ok bool
+	res, ok = fs.(T)
+	if !ok {
+		err = fmt.Errorf("%T does not implement %T", fs, res)
+		return
+	}
+	if fs.Name() != name {
+		err = fmt.Errorf("file service name not match, expecting %s, got %s", name, fs.Name())
+		return
+	}
+	return
 }
