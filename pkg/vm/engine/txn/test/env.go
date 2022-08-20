@@ -52,13 +52,15 @@ func newEnv(ctx context.Context) (*testEnv, error) {
 	}
 	env.sender = sender
 
-	env.txnClient = client.NewTxnClient(sender)
-
 	env.clock = clock.NewHLCClock(
 		func() int64 {
 			return time.Now().Unix()
 		},
 		math.MaxInt64,
+	)
+
+	env.txnClient = client.NewTxnClient(sender,
+		client.WithClock(env.clock),
 	)
 
 	env.nodes = []*Node{
@@ -70,7 +72,7 @@ func newEnv(ctx context.Context) (*testEnv, error) {
 		env,
 		func() (details logservicepb.ClusterDetails, err error) {
 			for _, node := range env.nodes {
-				details.DNNodes = append(details.DNNodes, node.info)
+				details.DNStores = append(details.DNStores, node.info)
 			}
 			return
 		},
