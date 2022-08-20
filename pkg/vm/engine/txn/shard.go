@@ -15,6 +15,8 @@
 package txnengine
 
 import (
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -66,4 +68,66 @@ func theseShards(shards []Shard) func() ([]Shard, error) {
 	return func() ([]Shard, error) {
 		return shards, nil
 	}
+}
+
+type ShardToSingleStatic struct {
+	setOnce sync.Once
+	shard   Shard
+}
+
+func (s *ShardToSingleStatic) setShard(nodes []logservicepb.DNStore) {
+	s.setOnce.Do(func() {
+		info := nodes[0].Shards[0]
+		s.shard = Shard{
+			DNShardRecord: metadata.DNShardRecord{
+				ShardID: info.ShardID,
+			},
+			ReplicaID: info.ReplicaID,
+		}
+	})
+}
+
+var _ ShardPolicy = new(ShardToSingleStatic)
+
+func (s *ShardToSingleStatic) Vector(
+	vec *vector.Vector,
+	nodes []logservicepb.DNStore,
+) (
+	sharded []*ShardedVector,
+	err error,
+) {
+	s.setShard(nodes)
+	sharded = append(sharded, &ShardedVector{
+		Shard:  s.shard,
+		Vector: vec,
+	})
+	return
+}
+
+func (s *ShardToSingleStatic) Batch(
+	bat *batch.Batch,
+	nodes []logservicepb.DNStore,
+) (
+	sharded []*ShardedBatch,
+	err error,
+) {
+	s.setShard(nodes)
+	sharded = append(sharded, &ShardedBatch{
+		Shard: s.shard,
+		Batch: bat,
+	})
+	return
+}
+
+func (s *ShardToSingleStatic) Stores(stores []logservicepb.DNStore) (shards []Shard, err error) {
+	for _, store := range stores {
+		info := store.Shards[0]
+		shards = append(shards, Shard{
+			DNShardRecord: metadata.DNShardRecord{
+				ShardID: info.ShardID,
+			},
+			ReplicaID: info.ReplicaID,
+		})
+	}
+	return
 }
