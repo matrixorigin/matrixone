@@ -23,9 +23,9 @@ import (
 
 func TestValidate(t *testing.T) {
 	c := &Config{}
-	assert.Error(t, c.validate())
+	assert.Error(t, c.Validate())
 	c.UUID = "dn1"
-	assert.NoError(t, c.validate())
+	assert.NoError(t, c.Validate())
 
 	assert.Equal(t, defaultListenAddress, c.ListenAddress)
 	assert.Equal(t, c.ListenAddress, defaultListenAddress)

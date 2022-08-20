@@ -31,4 +31,13 @@ func TestLocalETLFS(t *testing.T) {
 		})
 	})
 
+	t.Run("mutable file service", func(t *testing.T) {
+		testMutableFileService(t, func() MutableFileService {
+			dir := t.TempDir()
+			fs, err := NewLocalETLFS(dir)
+			assert.Nil(t, err)
+			return fs
+		})
+	})
+
 }
