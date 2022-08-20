@@ -277,9 +277,6 @@ insert into t1 values("2004-10-31 15:30:00");
 insert into t1 values("2004-12-12 11:22:33");
 insert into t1 values("2004-12-12 10:22:59");
 insert into t1 values(null);
-select count(*) from t1 where STR_TO_DATE('2004.12.12 10:22:61','%Y.%m.%d %T') IS NULL;
-count(*)
-4
 select count(*) from t1 where YEAR(col1) IS NULL;
 count(*)
 1

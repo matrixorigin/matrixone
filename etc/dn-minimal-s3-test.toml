@@ -6,6 +6,12 @@ level = "debug"
 format = "json"
 max-size = 512
 
+[hakeeper-client]
+service-addresses = [
+    "1",
+    "2"
+]
+
 [[fileservice]]
 # local fileservice instance, used to store TAE Data and DNStore metadata.
 name = "local"

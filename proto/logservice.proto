@@ -35,21 +35,23 @@ enum NodeState {
   TimeoutState = 1;
 }
 
-message CNNode {
+message CNStore {
   string    UUID           = 1;
   string    ServiceAddress = 2;
   uint64    Tick           = 3;
   NodeState State          = 4;
 }
 
-message DNNode {
+message DNStore {
   string    UUID           = 1;
   string    ServiceAddress = 2;
   uint64    Tick           = 3;
   NodeState State          = 4;
+
+  repeated DNShardInfo Shards = 5 [(gogoproto.nullable) = false];
 }
 
-message LogNode {
+message LogStore {
   string    UUID           = 1;
   string    ServiceAddress = 2;
   uint64    Tick           = 3;
@@ -183,12 +185,11 @@ message TsoRequest {
 message Request {
   uint64 RequestID               = 1;
   MethodType Method              = 2;
-  int64 Timeout                  = 3;
-  LogRequest LogRequest          = 4 [(gogoproto.nullable) = false];
-  LogStoreHeartbeat LogHeartbeat = 5;
-  CNStoreHeartbeat CNHeartbeat   = 6;
-  DNStoreHeartbeat DNHeartbeat   = 7;
-  TsoRequest TsoRequest          = 8;
+  LogRequest LogRequest          = 3 [(gogoproto.nullable) = false];
+  LogStoreHeartbeat LogHeartbeat = 4;
+  CNStoreHeartbeat CNHeartbeat   = 5;
+  DNStoreHeartbeat DNHeartbeat   = 6;
+  TsoRequest TsoRequest          = 7;
 };
 
 enum ErrorCode {
@@ -347,9 +348,9 @@ message DNState {
 }
 
 message ClusterDetails {
-  repeated DNNode  DNNodes  = 1 [(gogoproto.nullable) = false];
-  repeated CNNode  CNNodes  = 2 [(gogoproto.nullable) = false];
-  repeated LogNode LogNodes = 3 [(gogoproto.nullable) = false];
+  repeated DNStore  DNStores    = 1 [(gogoproto.nullable) = false];
+  repeated CNStore  CNStores    = 2 [(gogoproto.nullable) = false];
+  repeated LogStore LogStores   = 3 [(gogoproto.nullable) = false];
 }
 
 // ClusterInfo provides a global view of all shards in the cluster. It

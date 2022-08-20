@@ -173,25 +173,25 @@ id
 SELECT * from t_bigint WHERE id = 1.1e0;
 id
 SELECT * from t_bigint WHERE id = '1.1';
-can't cast '1.1' from VARCHAR type to BIGINT type.
+Can't cast '1.1' from VARCHAR type to BIGINT type.
 SELECT * from t_bigint WHERE id = '1.1e0';
-can't cast '1.1e0' from VARCHAR type to BIGINT type.
+Can't cast '1.1e0' from VARCHAR type to BIGINT type.
 SELECT * from t_bigint WHERE id IN (1.1, 2.2);
 id
 SELECT * from t_bigint WHERE id IN (1.1e0, 2.2e0);
 id
 SELECT * from t_bigint WHERE id IN ('1.1', '2.2');
-can't cast '1.1' from VARCHAR type to BIGINT type.
+Can't cast '1.1' from VARCHAR type to BIGINT type.
 SELECT * from t_bigint WHERE id IN ('1.1e0', '2.2e0');
-can't cast '1.1e0' from VARCHAR type to BIGINT type.
+Can't cast '1.1e0' from VARCHAR type to BIGINT type.
 SELECT * from t_bigint WHERE id BETWEEN 1.1 AND 1.9;
 id
 SELECT * from t_bigint WHERE id BETWEEN 1.1e0 AND 1.9e0;
-can't cast '1.1' from VARCHAR type to BIGINT type.
+Can't cast '1.1' from VARCHAR type to BIGINT type.
 SELECT * from t_bigint WHERE id BETWEEN '1.1' AND '1.9';
-can't cast '1.1' from VARCHAR type to BIGINT type.
+Can't cast '1.1' from VARCHAR type to BIGINT type.
 SELECT * from t_bigint WHERE id BETWEEN '1.1e0' AND '1.9e0';
-can't cast '1.1e0' from VARCHAR type to BIGINT type.
+Can't cast '1.1e0' from VARCHAR type to BIGINT type.
 drop table t1;
 CREATE TABLE t1 (a BIGINT);
 insert INTO t1 VALUES (1);

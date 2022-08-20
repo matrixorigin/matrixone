@@ -764,7 +764,7 @@ func (m *MemHandler) HandleTruncate(meta txn.TxnMeta, req txnengine.TruncateReq,
 	}
 	m.tables.Lock()
 	defer m.tables.Unlock()
-	delete(m.tables.Map, req.TableID)
+	m.tables.Map[req.TableID] = NewTable[AnyKey, *AnyRow]()
 	return nil
 }
 

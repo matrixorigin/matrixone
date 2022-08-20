@@ -120,6 +120,7 @@ func (cpk *SortKey) HasColumn(idx int) (found bool) { _, found = cpk.search[idx]
 func (cpk *SortKey) GetSingleIdx() int              { return cpk.Defs[0].Idx }
 
 type Schema struct {
+	AcInfo           accessInfo
 	Name             string
 	ColDefs          []*ColDef
 	NameIndex        map[string]int
@@ -255,6 +256,10 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n = 4 + 4
 	var sn int64
+	if sn, err = s.AcInfo.ReadFrom(r); err != nil {
+		return
+	}
+	n += sn
 	if s.Name, sn, err = common.ReadString(r); err != nil {
 		return
 	}
@@ -344,6 +349,9 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		return
 	}
 	if err = binary.Write(&w, binary.BigEndian, s.SegmentMaxBlocks); err != nil {
+		return
+	}
+	if _, err = s.AcInfo.WriteTo(&w); err != nil {
 		return
 	}
 	if _, err = common.WriteString(s.Name, &w); err != nil {

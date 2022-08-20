@@ -130,8 +130,6 @@ func (s *TestSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.
 
 	responses := make([]txn.TxnResponse, 0, len(requests))
 	for _, req := range requests {
-		v, _ := ctx.Deadline()
-		req.TimeoutAt = v.UnixNano()
 		resp := txn.TxnResponse{}
 		h := s.router[s.getRouteKey(req.Method, req.GetTargetDN())]
 		if err := h(ctx, &req, &resp); err != nil {

@@ -62,7 +62,7 @@ func SortBlockColumns(cols []containers.Vector, pk int) ([]uint32, error) {
 		decimal128s.Sort(cols[pk], sortedIdx)
 	case types.T_timestamp:
 		numerics.Sort[types.Timestamp](cols[pk], sortedIdx)
-	case types.T_char, types.T_json, types.T_varchar:
+	case types.T_char, types.T_json, types.T_varchar, types.T_blob:
 		varchar.Sort(cols[pk], sortedIdx)
 	default:
 		panic(fmt.Sprintf("%s not supported", cols[pk].GetType().String()))
@@ -111,7 +111,7 @@ func MergeSortedColumn(column []containers.Vector, sortedIdx *[]uint32, fromLayo
 		ret, mapping = decimal128s.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.T_timestamp:
 		ret, mapping = numerics.Merge[types.Timestamp](column, sortedIdx, fromLayout, toLayout)
-	case types.T_char, types.T_json, types.T_varchar:
+	case types.T_char, types.T_json, types.T_varchar, types.T_blob:
 		ret, mapping = varchar.Merge(column, sortedIdx, fromLayout, toLayout)
 	default:
 		panic(fmt.Sprintf("%s not supported", column[0].GetType().String()))
@@ -191,7 +191,7 @@ func ShuffleColumn(column []containers.Vector, sortedIdx []uint32, fromLayout, t
 //		dates.Merge(col, mergedSrc)
 //	case types.T_datetime:
 //		datetimes.Merge(col, mergedSrc)
-//	case types.T_char, types.T_json, types.T_varchar:
+//	case types.T_char, types.T_json, types.T_varchar, types.T_blob:
 //		varchar.Merge(col, mergedSrc)
 //	}
 //
@@ -228,7 +228,7 @@ func ShuffleColumn(column []containers.Vector, sortedIdx []uint32, fromLayout, t
 //			dates.Multiplex(col, mergedSrc)
 //		case types.T_datetime:
 //			datetimes.Multiplex(col, mergedSrc)
-//		case types.T_char, types.T_json, types.T_varchar:
+//		case types.T_char, types.T_json, types.T_varchar, types.T_blob:
 //			varchar.Multiplex(col, mergedSrc)
 //		}
 //	}

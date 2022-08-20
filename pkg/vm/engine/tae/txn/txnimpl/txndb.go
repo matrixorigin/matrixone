@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -29,6 +30,7 @@ import (
 type txnDB struct {
 	store       *txnStore
 	tables      map[uint64]*txnTable
+	mu          sync.RWMutex
 	entry       *catalog.DBEntry
 	createEntry txnif.TxnEntry
 	dropEntry   txnif.TxnEntry
@@ -234,19 +236,28 @@ func (db *txnDB) CreateNonAppendableSegment(tid uint64) (seg handle.Segment, err
 }
 
 func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
+	db.mu.RLock()
 	table = db.tables[id]
-	if table == nil {
-		var entry *catalog.TableEntry
-		if entry, err = db.entry.GetTableEntryByID(id); err != nil {
-			return
-		}
-		if db.store.warChecker == nil {
-			db.store.warChecker = newWarChecker(db.store.txn, db.store.catalog)
-		}
-		table = newTxnTable(db.store, entry)
-		table.idx = len(db.tables)
-		db.tables[id] = table
+	db.mu.RUnlock()
+	if table != nil {
+		return
 	}
+	var entry *catalog.TableEntry
+	if entry, err = db.entry.GetTableEntryByID(id); err != nil {
+		return
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	table = db.tables[id]
+	if table != nil {
+		return
+	}
+	if db.store.warChecker == nil {
+		db.store.warChecker = newWarChecker(db.store.txn, db.store.catalog)
+	}
+	table = newTxnTable(db.store, entry)
+	table.idx = len(db.tables)
+	db.tables[id] = table
 	return
 }
 

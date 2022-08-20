@@ -222,13 +222,13 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 	}
 }
 
-func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*deletion.Argument, error) {
+func constructDeletion(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*deletion.Argument, error) {
 	ctx := context.TODO()
 	count := len(n.DeleteTablesCtx)
 	ds := make([]*deletion.DeleteCtx, count)
 	for i := 0; i < count; i++ {
 
-		dbSource, err := eg.Database(ctx, n.DeleteTablesCtx[i].DbName, snapshot)
+		dbSource, err := eg.Database(ctx, n.DeleteTablesCtx[i].DbName, txnOperator)
 		if err != nil {
 			return nil, err
 		}
@@ -250,9 +250,9 @@ func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot)
 	}, nil
 }
 
-func constructInsert(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*insert.Argument, error) {
+func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*insert.Argument, error) {
 	ctx := context.TODO()
-	db, err := eg.Database(ctx, n.ObjRef.SchemaName, snapshot)
+	db, err := eg.Database(ctx, n.ObjRef.SchemaName, txnOperator)
 	if err != nil {
 		return nil, err
 	}
@@ -266,12 +266,12 @@ func constructInsert(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (
 	}, nil
 }
 
-func constructUpdate(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*update.Argument, error) {
+func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*update.Argument, error) {
 	ctx := context.TODO()
 	us := make([]*update.UpdateCtx, len(n.UpdateCtxs))
 	for i, updateCtx := range n.UpdateCtxs {
 
-		dbSource, err := eg.Database(ctx, updateCtx.DbName, snapshot)
+		dbSource, err := eg.Database(ctx, updateCtx.DbName, txnOperator)
 		if err != nil {
 			return nil, err
 		}
