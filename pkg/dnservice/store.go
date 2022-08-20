@@ -52,7 +52,7 @@ func WithConfigAdjust(adjustConfigFunc func(c *Config)) Option {
 }
 
 // WithBackendFilter set filtering txn.TxnRequest sent to other DNShard
-func WithBackendFilter(filter func(*txn.TxnRequest, string) bool) Option {
+func WithBackendFilter(filter func(morpc.Message, string) bool) Option {
 	return func(s *store) {
 		s.options.backendFilter = filter
 	}
@@ -88,7 +88,7 @@ type store struct {
 	options struct {
 		logServiceClientFactory func(metadata.DNShard) (logservice.Client, error)
 		hakeekerClientFactory   func() (logservice.DNHAKeeperClient, error)
-		backendFilter           func(req *txn.TxnRequest, backendAddr string) bool
+		backendFilter           func(msg morpc.Message, backendAddr string) bool
 		adjustConfigFunc        func(c *Config)
 	}
 
@@ -102,7 +102,7 @@ type store struct {
 func NewService(cfg *Config,
 	fsFactory fileservice.FileServiceFactory,
 	opts ...Option) (Service, error) {
-	if err := cfg.validate(); err != nil {
+	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
