@@ -97,6 +97,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze) err
 			itr := ctr.hashTable.NewIterator()
 			count := bat.Length()
 			for i := 0; i < count; i += hashmap.UnitLimit {
+
 				n := count - i
 				if n > hashmap.UnitLimit {
 					n = hashmap.UnitLimit
@@ -106,11 +107,14 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze) err
 					bat.Clean(proc.GetMheap())
 					return err
 				}
-				if uint64(cap(ctr.counter)) < vs[len(vs)-1] {
-					gap := vs[len(vs)-1] - uint64(cap(ctr.counter))
+				if uint64(cap(ctr.counter)) < ctr.hashTable.GroupCount() {
+					gap := ctr.hashTable.GroupCount() - uint64(cap(ctr.counter))
 					ctr.counter = append(ctr.counter, make([]uint64, gap)...)
 				}
 				for _, v := range vs {
+					if v == 0 {
+						continue
+					}
 					ctr.counter[v-1]++
 				}
 			}
