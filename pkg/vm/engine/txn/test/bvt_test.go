@@ -17,20 +17,16 @@ package testtxnengine
 import (
 	"bytes"
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func testBVT(t *testing.T, globPattern string) {
-	files, err := filepath.Glob(globPattern)
-	assert.Nil(t, err)
-	assert.True(t, len(files) > 0)
-	sort.Strings(files)
+func testBVT(t *testing.T, dir string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -43,16 +39,19 @@ func testBVT(t *testing.T, globPattern string) {
 		}
 	}()
 
-	tx := env.NewTx()
-	defer func() {
-		if err == nil {
-			err = tx.Commit(ctx)
-		}
-	}()
+	session := env.NewSession()
 
-	for _, file := range files {
-		content, err := os.ReadFile(file)
+	err = filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+
+		content, err := os.ReadFile(path)
 		assert.Nil(t, err)
+		//fmt.Printf("FILE: %s\n", path)
 
 		// trim comment lines
 		lines := bytes.Split(content, []byte("\n"))
@@ -61,42 +60,50 @@ func testBVT(t *testing.T, globPattern string) {
 			if bytes.HasPrefix(line, []byte("--")) {
 				continue
 			}
+			if bytes.HasPrefix(line, []byte("#")) {
+				continue
+			}
 			filtered = append(filtered, line)
 		}
 		content = bytes.Join(filtered, []byte("\n"))
 
-		err = tx.Exec(ctx, file, string(content))
-		assert.Nil(t, err)
-	}
+		err = session.Exec(ctx, path, string(content))
+		if err != nil {
+			panic(err)
+		}
+
+		return nil
+	})
+	assert.Nil(t, err)
 
 }
 
 func TestTPCH(t *testing.T) {
-	_ = testBVT
-	t.Skip()
 	testBVT(
 		t,
 		filepath.Join(
 			"..", "..", "..", "..", "..",
-			"test", "cases", "benchmark", "tpch", "*", "*",
+			"test", "cases", "benchmark", "tpch",
 		),
 	)
 }
 
 func TestDML(t *testing.T) {
-	t.Skip()
-	for _, dir := range []string{
-		"select",
-		"insert",
-		"update",
-		"delete",
-	} {
-		testBVT(
-			t,
-			filepath.Join(
-				"..", "..", "..", "..", "..",
-				"test", "cases", "dml", dir, "*",
-			),
-		)
-	}
+	testBVT(
+		t,
+		filepath.Join(
+			"..", "..", "..", "..", "..",
+			"test", "cases", "dml",
+		),
+	)
+}
+
+func TestBVT(t *testing.T) {
+	testBVT(
+		t,
+		filepath.Join(
+			"..", "..", "..", "..", "..",
+			"test", "cases",
+		),
+	)
 }

@@ -141,7 +141,6 @@ select * from t1 where ((a = 255) and (b = '255')) order by 1 desc, 2 asc;
 id	a	b
 4	255	255
 drop table t1;
-
 CREATE TABLE t_tinyint(id TINYINT);
 INSERT INTO t_tinyint VALUES (1), (2);
 SELECT id, id >= 1.1 FROM t_tinyint;

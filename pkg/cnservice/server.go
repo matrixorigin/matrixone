@@ -27,6 +27,7 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 
 	"github.com/fagongzi/goetty/v2"
@@ -142,7 +143,15 @@ func (s *service) initEngine(
 		//TODO
 
 	case EngineMemory:
-		//TODO
+		pu.TxnClient = s.txnClient
+		pu.StorageEngine = txnengine.New(
+			ctx,
+			new(txnengine.ShardToSingleStatic), //TODO use hashing shard policy
+			txnengine.GetClusterDetailsFromHAKeeper(
+				ctx,
+				s.hakeeperClient,
+			),
+		)
 
 	default:
 		return fmt.Errorf("unknown engine type: %s", s.cfg.Engine.Type)
@@ -208,7 +217,7 @@ func (s *service) initHAKeeperClient() error {
 }
 
 func (s *service) initTxnSender() error {
-	sender, err := rpc.NewSender(s.logger) //TODO set proper options
+	sender, err := rpc.NewSender(s.logger) //TODO options
 	if err != nil {
 		return err
 	}
@@ -217,7 +226,7 @@ func (s *service) initTxnSender() error {
 }
 
 func (s *service) initTxnClient() error {
-	txnClient := client.NewTxnClient(s.txnSender) //TODO other options
+	txnClient := client.NewTxnClient(s.txnSender) //TODO options
 	s.txnClient = txnClient
 	return nil
 }
