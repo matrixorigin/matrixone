@@ -197,7 +197,9 @@ set @min_timestamp='2038-01-19 03:14:07.999999';
 prepare s1 from 'select * from t2 where time1=?';
 
 execute s1 using @max_date;
+-- @bvt:issue#4604
 execute s1 using @min_date;
+-- @bvt:issue
 execute s1 using @max_datetime;
 execute s1 using @min_datetime;
 execute s1 using @max_timestamp;
@@ -211,7 +213,9 @@ prepare s2 from 'select * from t2 where time2=?';
 execute s2 using @max_date;
 execute s2 using @min_date;
 execute s2 using @max_datetime;
+-- @bvt:issue#4604
 execute s2 using @min_datetime;
+-- @bvt:issue
 execute s2 using @max_timestamp;
 execute s2 using @min_timestamp;
 
@@ -290,8 +294,9 @@ prepare s6 from 'select * from t3 where dec1!=?';
 prepare s7 from 'select * from t3 where dec1 between ? and ?';
 prepare s8 from 'select * from t3 where dec1 not between ? and ?';
 
-
+-- @bvt:issue#4604
 execute s1 using @hit_dec1;
+-- @bvt:issue
 execute s1 using @dec1_max;
 execute s1 using @dec1_min;
 
@@ -302,16 +307,19 @@ execute s2 using @dec1_min;
 execute s3 using @hit_dec1;
 execute s3 using @dec1_max;
 execute s3 using @dec1_min;
-
+-- @bvt:issue#4604
 execute s4 using @hit_dec1;
+-- @bvt:issue
 execute s4 using @dec1_max;
 execute s4 using @dec1_min;
-
+-- @bvt:issue#4604
 execute s5 using @hit_dec1;
+-- @bvt:issue
 execute s5 using @dec1_max;
 execute s5 using @dec1_min;
-
+-- @bvt:issue#4604
 execute s6 using @hit_dec1;
+-- @bvt:issue
 execute s6 using @dec1_max;
 execute s6 using @dec1_min;
 

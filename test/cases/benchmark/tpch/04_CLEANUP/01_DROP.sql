@@ -1,4 +1,4 @@
-use tpch;
+use TPCH;
 drop table if exists customer;
 drop table if exists lineitem;
 drop table if exists nation;
