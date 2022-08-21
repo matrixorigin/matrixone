@@ -69,7 +69,7 @@ func newEnv(ctx context.Context) (*testEnv, error) {
 
 	env.engine = txnengine.New(
 		context.Background(),
-		env,
+		new(txnengine.ShardToSingleStatic),
 		func() (details logservicepb.ClusterDetails, err error) {
 			for _, node := range env.nodes {
 				details.DNStores = append(details.DNStores, node.info)

@@ -56,6 +56,12 @@ func (t *testEnv) NewNode(id uint64) *Node {
 		UUID:           uuid.NewString(),
 		ServiceAddress: shard.Address,
 		State:          logservicepb.NormalState,
+		Shards: []logservicepb.DNShardInfo{
+			{
+				ShardID:   id,
+				ReplicaID: id,
+			},
+		},
 	}
 
 	loggerConfig := zap.Config{

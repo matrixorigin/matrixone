@@ -20,6 +20,7 @@ drop table t1;
 #SELECT, 嵌套，NULL
 select concat_ws(', ','monty','was here','again');
 select concat_ws(',','',NULL,'a');
+-- @separator:table
 SELECT CONCAT_WS('"',CONCAT_WS('";"',space(60),space(60),space(60),space(100)), '"');
 
 

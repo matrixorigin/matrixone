@@ -17,6 +17,7 @@ select length(a) from t1;
 drop table t1;
 
 #嵌套，EXTREME VALUE
+-- @separator:table
 select space(5),concat_ws('*',space(5),'*');
 select space(-1);
 select space(-4294967295);
@@ -46,8 +47,10 @@ SELECT length(space(9223372036854775809));
 SELECT SPACE(NULL);
 
 #DATE TYPE
+-- @separator:table
 SELECT SPACE(12)+"123";
 SELECT SPACE(12314.14123)+"123";
+-- @separator:table
 SELECT SPACE("1231")+"123";
 SELECT SPACE("2012-03-12")+"123";
 

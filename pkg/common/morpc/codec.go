@@ -56,6 +56,7 @@ func newMessageCodec(messageFactory func() Message, payloadCopyBufSize int, enab
 	}
 	c := &messageCodec{codec: length.New(bc), bc: bc}
 	c.AddHeaderCodec(&deadlineContextCodec{})
+	c.AddHeaderCodec(&traceCodec{})
 	return c
 }
 
