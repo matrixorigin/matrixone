@@ -182,4 +182,5 @@ message Pipeline {
     bool is_join = 8;
     NodeInfo node = 9;
     int32 push_down_info = 10;
+    int32 children_count = 11;
 }

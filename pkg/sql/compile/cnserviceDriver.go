@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -117,6 +118,7 @@ func convertScopeToPipeline(s *Scope) *pipeline.Pipeline {
 	p.IsJoin = s.IsJoin
 	// Plan
 	p.Qry = s.Plan
+	p.ChildrenCount = int32(len(s.Proc.Reg.MergeReceivers))
 	// DataSource
 	if s.DataSource != nil { // if select 1, DataSource is nil
 		p.DataSource = &pipeline.Source{
@@ -127,7 +129,7 @@ func convertScopeToPipeline(s *Scope) *pipeline.Pipeline {
 		if s.DataSource.Bat != nil {
 			data, err := types.Encode(s.DataSource.Bat)
 			if err != nil {
-				return nil
+				panic(moerr.New(moerr.INTERNAL_ERROR, err.Error()))
 			}
 			p.DataSource.Block = string(data)
 		}
