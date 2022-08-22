@@ -69,7 +69,9 @@ func (l *SortedDList) GetTail() *DLNode {
 // Update the node to keep the list be sorted
 //
 // [List] [1,x1] <-> [3,x3] <-> [10,x10] <-> [20,x20]
-//                                 |
+//
+//	|
+//
 // [Node]                       [10,x10]
 //
 // --------- UPDATE [10,x10] TO [2, x10]--------------
@@ -113,7 +115,9 @@ func (l *SortedDList) Insert(payload NodePayload) *DLNode {
 }
 
 // Given a node and remove it from the list
-//                                        Delete [node]
+//
+//	Delete [node]
+//
 // [prev node] <-> [node] <-> [next node] =============> [prev node] <-> [next node]
 func (l *SortedDList) Delete(n *DLNode) {
 	prev := n.prev
