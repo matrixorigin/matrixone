@@ -327,7 +327,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genStatementBatchSql,
 			want: `insert into system.statement_info (` +
 				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `status`, `exec_plan`" +
-				`) values ("00000000-0000-0000-0000-000000000001", "0000000000000001", "0000000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Node", "1970-01-01 00:00:00.000000", "Running", "")`,
+				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Node", "1970-01-01 00:00:00.000000", "Running", "")`,
 		},
 		{
 			name:   "multi_statement",
@@ -368,8 +368,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genStatementBatchSql,
 			want: `insert into system.statement_info (` +
 				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `status`, `exec_plan`" +
-				`) values ("00000000-0000-0000-0000-000000000001", "0000000000000001", "0000000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Node", "1970-01-01 00:00:00.000000", "Running", "")` +
-				`,("00000000-0000-0000-0000-000000000002", "0000000000000001", "0000000000000001", "MO", "moroot", "", "system", "show databases", "show databases", "dcl", "node_uuid", "Node", "1970-01-01 00:00:00.000001", "Failed", "")`,
+				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Node", "1970-01-01 00:00:00.000000", "Running", "")` +
+				`,("00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show databases", "show databases", "dcl", "node_uuid", "Node", "1970-01-01 00:00:00.000001", "Failed", "")`,
 		},
 		{
 			name:   "single_zap",

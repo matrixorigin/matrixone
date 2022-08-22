@@ -29,6 +29,8 @@ import (
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errors"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+
+	"github.com/google/uuid"
 )
 
 var errorFormatter atomic.Value
@@ -300,17 +302,15 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 
 	moNode := GetNodeResource()
 
-	var uuid = make([]byte, 36)
 	for _, item := range in {
 		s, ok := item.(*StatementInfo)
 		if !ok {
 			panic("Not StatementInfo")
 		}
 		buf.WriteString("(")
-		bytes2Uuid(uuid, s.StatementID)
-		buf.WriteString(fmt.Sprintf(`"%s"`, uuid))
-		buf.WriteString(fmt.Sprintf(`, "%x"`, s.TransactionID))
-		buf.WriteString(fmt.Sprintf(`, "%x"`, s.SessionID))
+		buf.WriteString(fmt.Sprintf(`"%s"`, uuid.UUID(s.StatementID).String()))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, uuid.UUID(s.TransactionID).String()))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, uuid.UUID(s.SessionID).String()))
 		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Account)))
 		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.User)))
 		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Host)))
