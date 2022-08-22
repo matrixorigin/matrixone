@@ -26,12 +26,10 @@ drop table t1;
 drop table t2;
 
 #HAVING
--- @bvt:issue#3588
 CREATE TABLE t1 (name char(1) default NULL, val int default NULL);
 INSERT INTO t1 VALUES ('a',1),  ('a',2),  ('a',2),  ('a',2),  ('a',3),  ('a',6), ('a',7), ('a',11), ('a',11), ('a',12), ('a',13), ('a',13), ('a',20), ('b',2), ('b',3), ('b',4), ('b',5);
 SELECT s.name, AVG(s.val) AS median FROM (SELECT x.name, x.val FROM t1 x, t1 y WHERE x.name=y.name GROUP BY x.name, x.val HAVING SUM(y.val <= x.val) >= COUNT(*)/2 AND SUM(y.val >= x.val) >= COUNT(*)/2) AS s GROUP BY s.name;
 drop table t1;
--- @bvt:issue
 
 #DISTINCT
 create table t1 (a integer, b integer);
@@ -135,10 +133,8 @@ create table t1 (df decimal(5,1));
 insert into t1 values(1.1);
 insert into t1 values(2.2);
 
--- @bvt:issue#3588
 select cast(sum( df) as signed) from t1;
 select cast(min(df) as signed) from t1;
--- @bvt:issue
 select 1e8 * sum( df) from t1;
 select 1e8 * min(df) from t1;
 
