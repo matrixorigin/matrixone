@@ -35,7 +35,7 @@ type SegmentEntry struct {
 	*BaseEntry
 	table   *TableEntry
 	entries map[uint64]*common.DLNode
-	link    *common.Link
+	link    *common.SortedDList
 	state   EntryState
 	segData data.Segment
 }
@@ -45,7 +45,7 @@ func NewSegmentEntry(table *TableEntry, txn txnif.AsyncTxn, state EntryState, da
 	e := &SegmentEntry{
 		BaseEntry: NewBaseEntry(id),
 		table:     table,
-		link:      new(common.Link),
+		link:      new(common.SortedDList),
 		entries:   make(map[uint64]*common.DLNode),
 		state:     state,
 	}
@@ -59,7 +59,7 @@ func NewSegmentEntry(table *TableEntry, txn txnif.AsyncTxn, state EntryState, da
 func NewReplaySegmentEntry() *SegmentEntry {
 	e := &SegmentEntry{
 		BaseEntry: NewReplayBaseEntry(),
-		link:      new(common.Link),
+		link:      new(common.SortedDList),
 		entries:   make(map[uint64]*common.DLNode),
 	}
 	return e
@@ -69,7 +69,7 @@ func NewStandaloneSegment(table *TableEntry, id uint64, ts types.TS) *SegmentEnt
 	e := &SegmentEntry{
 		BaseEntry: NewBaseEntry(id),
 		table:     table,
-		link:      new(common.Link),
+		link:      new(common.SortedDList),
 		entries:   make(map[uint64]*common.DLNode),
 		state:     ES_Appendable,
 	}
@@ -81,7 +81,7 @@ func NewSysSegmentEntry(table *TableEntry, id uint64) *SegmentEntry {
 	e := &SegmentEntry{
 		BaseEntry: NewBaseEntry(id),
 		table:     table,
-		link:      new(common.Link),
+		link:      new(common.SortedDList),
 		entries:   make(map[uint64]*common.DLNode),
 		state:     ES_Appendable,
 	}
@@ -227,10 +227,10 @@ func (entry *SegmentEntry) DropBlockEntry(id uint64, txn txnif.AsyncTxn) (delete
 	return
 }
 
-func (entry *SegmentEntry) MakeBlockIt(reverse bool) *common.LinkIt {
+func (entry *SegmentEntry) MakeBlockIt(reverse bool) *common.SortedDListIt {
 	entry.RLock()
 	defer entry.RUnlock()
-	return common.NewLinkIt(entry.RWMutex, entry.link, reverse)
+	return common.NewSortedDListIt(entry.RWMutex, entry.link, reverse)
 }
 
 func (entry *SegmentEntry) AddEntryLocked(block *BlockEntry) {

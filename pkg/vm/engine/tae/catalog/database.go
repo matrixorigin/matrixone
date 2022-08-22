@@ -59,7 +59,7 @@ type DBEntry struct {
 
 	entries   map[uint64]*common.DLNode
 	nameNodes map[string]*nodeList
-	link      *common.Link
+	link      *common.SortedDList
 
 	nodesMu sync.RWMutex
 }
@@ -73,7 +73,7 @@ func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
 		name:      name,
 		entries:   make(map[uint64]*common.DLNode),
 		nameNodes: make(map[string]*nodeList),
-		link:      new(common.Link),
+		link:      new(common.SortedDList),
 	}
 	if txnCtx != nil {
 		// Only in unit test, txnCtx can be nil
@@ -92,7 +92,7 @@ func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 		name:      SystemDBName,
 		entries:   make(map[uint64]*common.DLNode),
 		nameNodes: make(map[string]*nodeList),
-		link:      new(common.Link),
+		link:      new(common.SortedDList),
 		isSys:     true,
 	}
 	entry.CreateWithTS(types.SystemDBTS)
@@ -104,7 +104,7 @@ func NewReplayDBEntry() *DBEntry {
 		BaseEntry: NewReplayBaseEntry(),
 		entries:   make(map[uint64]*common.DLNode),
 		nameNodes: make(map[string]*nodeList),
-		link:      new(common.Link),
+		link:      new(common.SortedDList),
 	}
 	return entry
 }
@@ -142,10 +142,10 @@ func (e *DBEntry) StringLocked() string {
 	return fmt.Sprintf("DB%s[name=%s]", e.BaseEntry.StringLocked(), e.GetFullName())
 }
 
-func (e *DBEntry) MakeTableIt(reverse bool) *common.LinkIt {
+func (e *DBEntry) MakeTableIt(reverse bool) *common.SortedDListIt {
 	e.RLock()
 	defer e.RUnlock()
-	return common.NewLinkIt(e.RWMutex, e.link, reverse)
+	return common.NewSortedDListIt(e.RWMutex, e.link, reverse)
 }
 
 func (e *DBEntry) PPString(level common.PPLevel, depth int, prefix string) string {
