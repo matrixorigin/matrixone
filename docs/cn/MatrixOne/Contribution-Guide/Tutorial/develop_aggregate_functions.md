@@ -649,7 +649,6 @@ mysql> select variance.a, var(variance.b) from variance inner join variance2 on 
 
 !!! info
     除了 `var()` 之外，MatrixOne 已经有一些聚合函数的简洁示例，例如 `sum()`、`count()`、`max()`、`min()` 和 `avg()`。稍作相应改动后，过程与其他功能基本相同。
-​
 
 ## **为你的函数编写测试单元**
 
@@ -663,7 +662,7 @@ func TestXxx(*testing.T)
 
 编写一个新的测试套件，先创建一个以 *_test.go* 结尾的文件，命名需要描述函数名称，例如 *variance_test.go*；将 *variance_test.go* 文件与测试文件放在同一个包中，打包构建时，不包含 *variance_test.go* 文件，但在运行 `go test` 命令时会包含 *variance_test.go* 文件，详细步骤，参见下述步骤。
 
-### 步骤 1：在 `pkg/container/ring/variance/` 目录下新建一个名为 `variance_test.go` 的文件，并导入用于测试的 `testing` 框架和 `reflect` 框架。
+### 步骤 1：在 `pkg/container/ring/variance/` 目录下新建一个名为 `variance_test.go` 的文件，并导入用于测试的 `testing` 框架和 `reflect` 框架
 
 ```go
 package variance
