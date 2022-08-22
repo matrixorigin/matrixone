@@ -64,6 +64,7 @@ execute stmt1;
 select count(*) from (select distinct a from t1) t;
 count(*)
 2
+drop table t1;
 
 prepare stmt2 from 'select @var_t1';
 set @var_t1 = 0;
