@@ -79,8 +79,11 @@ func (s *Session) Exec(ctx context.Context, filePath string, content string) (er
 		//fmt.Printf("SQL: %s @%s\n", stmtText, filePath)
 
 		if s.currentTx == nil {
-			tx := s.NewTx()
-			err := tx.Exec(ctx, stmtText, stmt)
+			tx, err := s.NewTx()
+			if err != nil {
+				return err
+			}
+			err = tx.Exec(ctx, stmtText, stmt)
 			if err != nil {
 				tx.Rollback(ctx)
 				return err
