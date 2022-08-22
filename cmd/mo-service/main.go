@@ -18,6 +18,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"math/rand"
 	"os"
@@ -93,6 +94,10 @@ func startCNService(cfg *Config, stopper *stopper.Stopper) error {
 			panic(err)
 		}
 		if err := s.Start(); err != nil {
+			panic(err)
+		}
+		err = cnclient.NewCNClient(nil)
+		if err != nil {
 			panic(err)
 		}
 

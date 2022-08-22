@@ -19,6 +19,7 @@ import (
 	"errors"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -88,7 +89,7 @@ func refactorScope(ctx context.Context, s *Scope, cs morpc.ClientSession) {
 	}
 }
 
-func convertScopeToPipeline(s *Scope, ctx *scopeContext) (*pipeline.Pipeline, error) {
+func convertScopeToPipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipeline, int32, error) {
 	var err error
 
 	p := &pipeline.Pipeline{}
@@ -126,7 +127,7 @@ func convertScopeToPipeline(s *Scope, ctx *scopeContext) (*pipeline.Pipeline, er
 		if s.DataSource.Bat != nil {
 			data, err := types.Encode(s.DataSource.Bat)
 			if err != nil {
-				return nil, err
+				return nil, -1, err
 			}
 			p.DataSource.Block = string(data)
 		}
@@ -138,21 +139,22 @@ func convertScopeToPipeline(s *Scope, ctx *scopeContext) (*pipeline.Pipeline, er
 		ctx.children[i] = &scopeContext{
 			parent: ctx,
 			root:   ctx.root,
-			id:     ctx.id + int32(i),
+			id:     ctxId,
 			regs:   make(map[*process.WaitRegister]int32),
 		}
-		if p.Children[i], err = convertScopeToPipeline(s.PreScopes[i], ctx.children[i]); err != nil {
-			return nil, err
+		ctxId++
+		if p.Children[i], ctxId, err = convertScopeToPipeline(s.PreScopes[i], ctx.children[i], ctxId); err != nil {
+			return nil, -1, err
 		}
 	}
 	// Instructions
 	p.InstructionList = make([]*pipeline.Instruction, len(s.Instructions))
 	for i := range p.InstructionList {
 		if p.InstructionList[i], err = convertToPipelineInstruction(&s.Instructions[i], ctx); err != nil {
-			return nil, err
+			return nil, -1, err
 		}
 	}
-	return p, nil
+	return p, ctxId, nil
 }
 
 func convertPipelineToScope(proc *process.Process, p *pipeline.Pipeline, par *scopeContext, analNodes []*process.AnalyzeInfo) (*Scope, error) {
@@ -554,7 +556,7 @@ func encodeScope(s *Scope) ([]byte, error) {
 		regs:   make(map[*process.WaitRegister]int32),
 	}
 	ctx.root = ctx
-	p, err := convertScopeToPipeline(s, ctx)
+	p, _, err := convertScopeToPipeline(s, ctx, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -620,13 +622,17 @@ func (s *Scope) remoteRun(c *Compile) error {
 		}
 		m := val.(*pipeline.Message)
 
-		errMessage := m.GetData()
+		errMessage := m.GetCode()
 		if len(errMessage) > 0 {
 			return errors.New(string(errMessage))
 		}
 
 		sid := m.GetID()
 		if sid == pipeline.MessageEnd {
+			// get analyse information
+			// data := m.GetAnalyse()
+			// if len(data) > 0 ...
+			// ...
 			break
 		}
 		// decoded message
