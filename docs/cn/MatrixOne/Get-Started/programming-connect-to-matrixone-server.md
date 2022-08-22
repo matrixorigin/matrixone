@@ -5,7 +5,6 @@ MatrixOne 现在支持通过以下几种编程语言的方式连接 MatrixOne �
 - Java
 - Python
 - Golang
-- Node.js
 
 ## 前期准备
 
