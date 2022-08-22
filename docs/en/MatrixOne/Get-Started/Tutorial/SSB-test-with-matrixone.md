@@ -193,7 +193,7 @@ load data infile '/ssb-dbgen-path/lineorder_flat.tbl' into table lineorder_flat 
 ## **5. Run SSB Queries**
 
 !!! note
-    `GROUP BY` does noe support using the alias name for now。
+    `GROUP BY` does not support using the alias name for now。
 
 ### **Flat table queries**
 

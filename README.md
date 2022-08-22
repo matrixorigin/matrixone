@@ -158,7 +158,7 @@ MatrixOne supports Linux and MacOS. You can install MatrixOne either by [buildin
 For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.io/0.5.1/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
 #### **Building from source**
 
-1. Install Go (version 1.18 is required).
+1. Install Go (version 1.19 is required).
 
 2. Get the MatrixOne code: Depending on your needs, choose whether you want to keep your code up to date, or if you want to get the latest stable version of the code.
 
