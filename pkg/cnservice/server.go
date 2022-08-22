@@ -219,7 +219,7 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 
 func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 	s.initTxnSenderOnce.Do(func() {
-		sender, err = rpc.NewSender(s.logger) //TODO options
+		sender, err = rpc.NewSenderWithConfig(s.cfg.RPC, s.logger)
 		if err != nil {
 			return
 		}
