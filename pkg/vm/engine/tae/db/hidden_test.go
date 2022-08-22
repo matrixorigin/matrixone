@@ -109,7 +109,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	compactBlocks(t, tae, "db", schema, false)
+	compactBlocks(t, 0, tae, "db", schema, false)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	var segMeta *catalog.SegmentEntry

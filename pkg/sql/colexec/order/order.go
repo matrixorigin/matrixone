@@ -44,7 +44,7 @@ func Prepare(_ *process.Process, arg any) error {
 		ap.ctr.ds = make([]bool, len(ap.Fs))
 		ap.ctr.vecs = make([]evalVector, len(ap.Fs))
 		for i, f := range ap.Fs {
-			ap.ctr.ds[i] = f.Type == colexec.Descending
+			ap.ctr.ds[i] = f.Type == Descending
 		}
 	}
 	return nil

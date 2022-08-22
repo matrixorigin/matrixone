@@ -16,8 +16,8 @@ package loopjoin
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 )
 
 const (
@@ -31,8 +31,14 @@ type container struct {
 	bat   *batch.Batch
 }
 
+type ResultPos struct {
+	Rel int32
+	Pos int32
+}
+
 type Argument struct {
 	ctr    *container
 	Cond   *plan.Expr
-	Result []colexec.ResultPos
+	Result []ResultPos
+	Typs   []types.Type
 }

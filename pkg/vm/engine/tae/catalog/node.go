@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/google/btree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
@@ -37,10 +36,6 @@ func newNodeList(host any, rwlocker *sync.RWMutex, name string) *nodeList {
 		rwlocker: rwlocker,
 		name:     name,
 	}
-}
-
-func (n *nodeList) Less(item btree.Item) bool {
-	return n.name < item.(*nodeList).name
 }
 
 func (n *nodeList) CreateNode(id uint64) *nameNode {

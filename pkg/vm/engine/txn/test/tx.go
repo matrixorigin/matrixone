@@ -16,58 +16,93 @@ package testtxnengine
 
 import (
 	"context"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 )
 
 type Tx struct {
 	operator client.TxnOperator
-	engine   *txnengine.Engine
+	session  *Session
 }
 
-func (t *testEnv) NewTx() *Tx {
-	operator := t.txnClient.New()
+func (s *Session) NewTx() *Tx {
+	operator := s.env.txnClient.New()
 	tx := &Tx{
 		operator: operator,
-		engine:   t.engine,
+		session:  s,
 	}
 	return tx
 }
 
-func (t *Tx) Exec(ctx context.Context, stmtText string) error {
+func (t *Tx) Exec(ctx context.Context, stmtText string, stmt tree.Statement) (err error) {
 
-	stmts, err := mysql.Parse(stmtText)
-	if err != nil {
-		return err
+	switch stmt := stmt.(type) {
+
+	case *tree.Use:
+		t.session.currentDB = stmt.Name
+		return
+
+	case *tree.ExplainStmt:
+		//TODO
+		return
+
 	}
-	stmt := stmts[0]
 
 	proc := testutil.NewProcess()
-	proc.Snapshot = txnengine.OperatorToSnapshot(t.operator) //TODO remove this
-	compileCtx := compile.New("test", stmtText, "", ctx, t.engine, proc, stmt)
-
-	//optimizer := plan.NewBaseOptimizer(t)
-	//query, err := optimizer.Optimize(stmt)
-	//if err != nil {
-	//	return err
-	//}
+	proc.TxnOperator = t.operator
+	proc.SessionInfo.TimeZone = time.Local
+	compileCtx := compile.New(
+		t.session.currentDB,
+		stmtText,
+		"",
+		ctx,
+		t.session.env.engine,
+		proc,
+		stmt,
+	)
 
 	exec := &Execution{
-		tx:  t,
-		ctx: ctx,
+		ctx:  ctx,
+		tx:   t,
+		stmt: stmt,
 	}
 
-	execPlan, err := plan.BuildPlan(exec, stmt)
-	if err != nil {
-		return err
+	var execPlan *plan.Plan
+	switch stmt := stmt.(type) {
+
+	case *tree.Select,
+		*tree.ParenSelect,
+		*tree.Update,
+		*tree.Delete:
+		optimizer := plan.NewBaseOptimizer(exec)
+		query, err := optimizer.Optimize(stmt)
+		if err != nil {
+			return err
+		}
+		execPlan = &plan.Plan{
+			Plan: &plan.Plan_Query{
+				Query: query,
+			},
+		}
+
+	default:
+		var err error
+		execPlan, err = plan.BuildPlan(exec, stmt)
+		if err != nil {
+			return err
+		}
 	}
 
-	err = compileCtx.Compile(execPlan, nil, nil)
+	err = compileCtx.Compile(execPlan, nil, func(i any, batch *batch.Batch) error {
+		//fmt.Printf("%v\n", batch) //TODO
+		return nil
+	})
 	if err != nil {
 		return err
 	}
@@ -82,4 +117,8 @@ func (t *Tx) Exec(ctx context.Context, stmtText string) error {
 
 func (t *Tx) Commit(ctx context.Context) error {
 	return t.operator.Commit(ctx)
+}
+
+func (t *Tx) Rollback(ctx context.Context) error {
+	return t.operator.Rollback(ctx)
 }

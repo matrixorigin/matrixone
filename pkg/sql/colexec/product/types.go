@@ -16,7 +16,7 @@ package product
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 const (
@@ -30,7 +30,13 @@ type container struct {
 	bat   *batch.Batch
 }
 
+type ResultPos struct {
+	Rel int32
+	Pos int32
+}
+
 type Argument struct {
 	ctr    *container
-	Result []colexec.ResultPos
+	Result []ResultPos
+	Typs   []types.Type
 }

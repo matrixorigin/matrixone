@@ -170,38 +170,25 @@ select std(s1/s2) from bug22555 where i=2 group by i;
 select std(s1/s2) from bug22555 where i=3 group by i;
 select std(s1/s2) from bug22555 group by i order by i;
 select i, count(*), std(o1/o2) from bug22555 group by i order by i;
--- @bvt:issue#3588
 select i, count(*), std(e1/e2) from bug22555 group by i order by i;
--- @bvt:issue
 select i, count(*), variance(s1/s2) from bug22555 group by i order by i;
 select i, count(*), variance(o1/o2) from bug22555 group by i order by i;
-
--- @bvt:issue#3588
 select i, count(*), variance(e1/e2) from bug22555 group by i order by i;
--- @bvt:issue
 select i, count(*), std(s1/s2) from bug22555 group by i order by i;
 select i, count(*), std(o1/o2) from bug22555 group by i order by i;
--- @bvt:issue#3588
 select i, count(*), std(e1/e2) from bug22555 group by i order by i;
--- @bvt:issue
 select i, count(*), variance(s1/s2) from bug22555 group by i order by i;
 select i, count(*), variance(o1/o2) from bug22555 group by i order by i;
--- @bvt:issue#3588
 select i, count(*), variance(e1/e2) from bug22555 group by i order by i;
--- @bvt:issue
 select i, count(*), std(s1/s2) from bug22555 group by i order by i;
 select i, count(*), std(o1/o2) from bug22555 group by i order by i;
--- @bvt:issue#3588
 select i, count(*), std(e1/e2) from bug22555 group by i order by i;
--- @bvt:issue
 insert into bug22555 values (1,53,78,53,78,53,78),(2,17,78,17,78,17,78),(3,18,76,18,76,18,76);
 insert into bug22555 values (1,53,78,53,78,53,78),(2,17,78,17,78,17,78),(3,18,76,18,76,18,76);
 insert into bug22555 values (1,53,78,53,78,53,78),(2,17,78,17,78,17,78),(3,18,76,18,76,18,76);
 select i, count(*), std(s1/s2) from bug22555 group by i order by i;
 select i, count(*), round(std(o1/o2), 16) from bug22555 group by i order by i;
--- @bvt:issue#3588
 select i, count(*), std(e1/e2) from bug22555 group by i order by i;
--- @bvt:issue
 select std(s1/s2) from bug22555;
 select std(o1/o2) from bug22555;
 -- @bvt:issue#3588
@@ -209,9 +196,7 @@ select std(e1/e2) from bug22555;
 -- @bvt:issue
 select i, count(*), std(s1/s2) from bug22555 group by i order by i;
 select i, count(*), round(std(o1/o2), 16) from bug22555 group by i order by i;
--- @bvt:issue#3588
 select i, count(*), std(e1/e2) from bug22555 group by i order by i;
--- @bvt:issue
 select round(std(s1/s2), 17) from bug22555;
 select std(o1/o2) from bug22555;
 -- @bvt:issue#3588

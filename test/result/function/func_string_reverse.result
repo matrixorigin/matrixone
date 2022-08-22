@@ -1,11 +1,11 @@
 SELECT REVERSE('abc');
-REVERSE('abc')
+reverse(abc)
 cba
 select reverse('abc'),reverse('abcd');
-reverse('abc')	reverse('abcd')
+reverse(abc)	reverse(abcd)
 cba	dcba
 select reverse(NULL);
-reverse(NULL)
+reverse(null)
 null
 create table t1 (a varchar(20));
 insert into t1 values ("empty"),(""),("hello");
@@ -77,10 +77,10 @@ DROP TABLE `Ｔ７`;
 DROP TABLE `Ｔ８`;
 DROP TABLE `Ｔ９`;
 SELECT REVERSE("你好");
-REVERSE("你好")
+reverse(你好)
 好你
 SELECT REVERSE("再 见");
-REVERSE("再 见")
+reverse(再 见)
 见 再
 drop table if exists t1;
 create table t1(a varchar(255));
@@ -111,22 +111,23 @@ a	a
 drop table t1;
 drop table t2;
 SELECT REVERSE("@($)@($#)_@(#");
-REVERSE("@($)@($#)_@(#")
+reverse(@($)@($#)_@(#)
 #(@_)#$(@)$(@
 SELECT REVERSE(space(500)+space(600));
-Operator '+' with parameters [VARCHAR VARCHAR] will be implemented in future version.
+reverse(space(500) + space(600))
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
 SELECT REVERSE(123124);
-REVERSE(123124)
+reverse(123124)
 421321
 SELECT REVERSE(123.124);
-REVERSE(123.124)
+reverse(123.124)
 421.321
 SELECT REVERSE(0.3414);
-REVERSE(0.3414)
+reverse(0.3414)
 4143.0
 SELECT REVERSE("2023-04-24");
-REVERSE("2023-04-24")
+reverse(2023-04-24)
 42-40-3202
 SELECT REVERSE("10:03:23.021412");
-REVERSE("10:03:23.021412")
+reverse(10:03:23.021412)
 214120.32:30:01

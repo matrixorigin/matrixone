@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	y "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -65,10 +64,9 @@ func (s *Scope) Update(c *Compile) (uint64, error) {
 }
 
 func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
-	snapshot := engine.Snapshot(c.proc.Snapshot)
 	p := s.Plan.GetIns()
 
-	dbSource, err := c.e.Database(c.ctx, p.DbName, snapshot)
+	dbSource, err := c.e.Database(c.ctx, p.DbName, c.proc.TxnOperator)
 	if err != nil {
 		return 0, err
 	}

@@ -110,7 +110,7 @@ func (ctr *Container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 		ctr.cmps = make([]compare.Compare, len(bat.Vecs))
 		for i := range ctr.cmps {
 			if pos, ok := mp[i]; ok {
-				ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, ap.Fs[pos].Type == colexec.Descending)
+				ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, ap.Fs[pos].Type == Descending)
 			} else {
 				ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, true)
 			}

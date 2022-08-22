@@ -17,7 +17,7 @@ package mergetop
 import (
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 )
 
 const (
@@ -37,9 +37,9 @@ type container struct {
 }
 
 type Argument struct {
-	Fs    []colexec.Field // Fs store the order information
-	Limit int64           // Limit store the number of mergeTop-operator
-	ctr   *container      // ctr stores the attributes needn't do Serialization work
+	Fs    []top.Field // Fs store the order information
+	Limit int64       // Limit store the number of mergeTop-operator
+	ctr   *container  // ctr stores the attributes needn't do Serialization work
 }
 
 func (ctr *container) compare(vi, vj int, i, j int64) int {

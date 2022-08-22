@@ -15,16 +15,27 @@
 package top
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 const (
 	Build = iota
 	Eval
 	End
+)
+
+// Direction for ordering results.
+type Direction int8
+
+// Direction values.
+const (
+	DefaultDirection Direction = iota
+	Ascending
+	Descending
 )
 
 type Container struct {
@@ -37,10 +48,36 @@ type Container struct {
 	bat *batch.Batch
 }
 
+type Field struct {
+	E    *plan.Expr
+	Type Direction
+}
+
 type Argument struct {
 	Limit int64
-	Fs    []colexec.Field
+	Fs    []Field
 	ctr   *Container
+}
+
+var directionName = [...]string{
+	DefaultDirection: "",
+	Ascending:        "ASC",
+	Descending:       "DESC",
+}
+
+func (n Field) String() string {
+	s := fmt.Sprintf("%v", n.E)
+	if n.Type != DefaultDirection {
+		s += " " + n.Type.String()
+	}
+	return s
+}
+
+func (i Direction) String() string {
+	if i < 0 || i > Direction(len(directionName)-1) {
+		return fmt.Sprintf("Direction(%d)", i)
+	}
+	return directionName[i]
 }
 
 func (ctr *Container) compare(vi, vj int, i, j int64) int {

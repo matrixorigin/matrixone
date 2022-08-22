@@ -44,7 +44,7 @@ func TestAnyvalue(t *testing.T) {
 	vec2 := testutil.NewVector(Rows, testTyp, m, false, vs2)
 	{
 		// test single agg with Grow & Fill function
-		agg := agg.NewUnaryAgg(a, true, testTyp, testTyp, a.Grows, a.Eval, a.Merge, a.Fill)
+		agg := agg.NewUnaryAgg(a, true, testTyp, testTyp, a.Grows, a.Eval, a.Merge, a.Fill, nil)
 		err := agg.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -57,13 +57,13 @@ func TestAnyvalue(t *testing.T) {
 	}
 	{
 		// test two agg with Merge function
-		agg0 := agg.NewUnaryAgg(a2, true, testTyp, testTyp, a2.Grows, a2.Eval, a2.Merge, a2.Fill)
+		agg0 := agg.NewUnaryAgg(a2, true, testTyp, testTyp, a2.Grows, a2.Eval, a2.Merge, a2.Fill, nil)
 		err := agg0.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
 			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
 		}
-		agg1 := agg.NewUnaryAgg(a3, true, testTyp, testTyp, a3.Grows, a3.Eval, a3.Merge, a3.Fill)
+		agg1 := agg.NewUnaryAgg(a3, true, testTyp, testTyp, a3.Grows, a3.Eval, a3.Merge, a3.Fill, nil)
 		err = agg1.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -100,7 +100,7 @@ func TestDecimalAnyva(t *testing.T) {
 	vec2 := testutil.MakeDecimal128Vector(input2, nil, testTyp)
 	{
 		// test single agg with Grow & Fill function
-		agg := agg.NewUnaryAgg(da, true, testTyp, testTyp, da.Grows, da.Eval, da.Merge, da.Fill)
+		agg := agg.NewUnaryAgg(da, true, testTyp, testTyp, da.Grows, da.Eval, da.Merge, da.Fill, nil)
 		err := agg.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -113,13 +113,13 @@ func TestDecimalAnyva(t *testing.T) {
 	}
 	{
 		// test two agg with Merge function
-		agg0 := agg.NewUnaryAgg(da2, true, testTyp, testTyp, da2.Grows, da2.Eval, da2.Merge, da2.Fill)
+		agg0 := agg.NewUnaryAgg(da2, true, testTyp, testTyp, da2.Grows, da2.Eval, da2.Merge, da2.Fill, nil)
 		err := agg0.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
 			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
 		}
-		agg1 := agg.NewUnaryAgg(da3, true, testTyp, testTyp, da3.Grows, da3.Eval, da3.Merge, da3.Fill)
+		agg1 := agg.NewUnaryAgg(da3, true, testTyp, testTyp, da3.Grows, da3.Eval, da3.Merge, da3.Fill, nil)
 		err = agg1.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {

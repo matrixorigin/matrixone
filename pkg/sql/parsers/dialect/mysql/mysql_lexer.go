@@ -44,14 +44,21 @@ func ParseOne(sql string) (tree.Statement, error) {
 }
 
 type Lexer struct {
-	scanner *Scanner
-	stmts   []tree.Statement
+	scanner    *Scanner
+	stmts      []tree.Statement
+	paramIndex int
 }
 
 func NewLexer(dialectType dialect.DialectType, sql string) *Lexer {
 	return &Lexer{
-		scanner: NewScanner(dialectType, sql),
+		scanner:    NewScanner(dialectType, sql),
+		paramIndex: 0,
 	}
+}
+
+func (l *Lexer) GetParamIndex() int {
+	l.paramIndex = l.paramIndex + 1
+	return l.paramIndex
 }
 
 func (l *Lexer) Lex(lval *yySymType) int {

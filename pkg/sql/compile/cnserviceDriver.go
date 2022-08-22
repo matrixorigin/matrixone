@@ -16,9 +16,7 @@ package compile
 
 import (
 	"context"
-	"errors"
-	"github.com/matrixorigin/matrixone/pkg/cnservice"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -56,12 +54,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/union"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+/*
 var CNClient *cnservice.CNClient
 
 func StartCNClient(cfg *cnservice.ClientConfig) error {
@@ -109,12 +107,14 @@ func refactorScope(s *Scope, cs morpc.ClientSession) {
 		},
 	}
 }
+*/
 
 func convertScopeToPipeline(s *Scope) *pipeline.Pipeline {
 	p := &pipeline.Pipeline{}
 	// Magic and IsEnd
 	p.PipelineType = pipeline.Pipeline_PipelineType(s.Magic)
 	p.IsEnd = s.IsEnd
+	p.IsJoin = s.IsJoin
 	// Plan
 	p.Qry = s.Plan
 	// DataSource
@@ -123,6 +123,13 @@ func convertScopeToPipeline(s *Scope) *pipeline.Pipeline {
 			SchemaName: s.DataSource.SchemaName,
 			TableName:  s.DataSource.RelationName,
 			ColList:    s.DataSource.Attributes,
+		}
+		if s.DataSource.Bat != nil {
+			data, err := types.Encode(s.DataSource.Bat)
+			if err != nil {
+				return nil
+			}
+			p.DataSource.Block = string(data)
 		}
 	}
 	// PreScope
@@ -174,6 +181,8 @@ func convertToPipelineInstruction(opr *vm.Instruction) *pipeline.Instruction {
 		p.Anti = &pipeline.AntiJoin{
 			Ibucket:   t.Ibucket,
 			Nbucket:   t.Nbucket,
+			Expr:      t.Cond,
+			Types:     convertToPlanTypes(t.Typs),
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 			Result:    t.Result,
@@ -199,6 +208,8 @@ func convertToPipelineInstruction(opr *vm.Instruction) *pipeline.Instruction {
 			Nbucket:   t.Nbucket,
 			RelList:   relList,
 			ColList:   colList,
+			Expr:      t.Cond,
+			Types:     convertToPlanTypes(t.Typs),
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 		}
@@ -209,6 +220,8 @@ func convertToPipelineInstruction(opr *vm.Instruction) *pipeline.Instruction {
 			Nbucket:   t.Nbucket,
 			RelList:   relList,
 			ColList:   colList,
+			Expr:      t.Cond,
+			Types:     convertToPlanTypes(t.Typs),
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 		}
@@ -216,36 +229,39 @@ func convertToPipelineInstruction(opr *vm.Instruction) *pipeline.Instruction {
 		p.Limit = t.Limit
 	case *loopanti.Argument:
 		p.Anti = &pipeline.AntiJoin{
-			Result:   t.Result,
-			LeftCond: []*plan.Expr{t.Cond},
+			Result: t.Result,
+			Expr:   t.Cond,
+			Types:  convertToPlanTypes(t.Typs),
 		}
 	case *loopjoin.Argument:
 		relList, colList := getRelColList(t.Result)
 		p.Join = &pipeline.Join{
-			RelList:  relList,
-			ColList:  colList,
-			LeftCond: []*plan.Expr{t.Cond},
+			RelList: relList,
+			ColList: colList,
+			Expr:    t.Cond,
+			Types:   convertToPlanTypes(t.Typs),
 		}
 	case *loopleft.Argument:
 		relList, colList := getRelColList(t.Result)
 		p.LeftJoin = &pipeline.LeftJoin{
-			RelList:  relList,
-			ColList:  colList,
-			Types:    convertToPlanTypes(t.Typs),
-			LeftCond: []*plan.Expr{t.Cond},
+			RelList: relList,
+			ColList: colList,
+			Expr:    t.Cond,
+			Types:   convertToPlanTypes(t.Typs),
 		}
 	case *loopsemi.Argument:
 		p.SemiJoin = &pipeline.SemiJoin{
-			Result:   t.Result,
-			LeftCond: []*plan.Expr{t.Cond},
+			Result: t.Result,
+			Expr:   t.Cond,
+			Types:  convertToPlanTypes(t.Typs),
 		}
 	case *loopsingle.Argument:
 		relList, colList := getRelColList(t.Result)
 		p.SingleJoin = &pipeline.SingleJoin{
-			RelList:  relList,
-			ColList:  colList,
-			Types:    convertToPlanTypes(t.Typs),
-			LeftCond: []*plan.Expr{t.Cond},
+			RelList: relList,
+			ColList: colList,
+			Expr:    t.Cond,
+			Types:   convertToPlanTypes(t.Typs),
 		}
 	case *offset.Argument:
 		p.Offset = t.Offset
@@ -256,6 +272,7 @@ func convertToPipelineInstruction(opr *vm.Instruction) *pipeline.Instruction {
 		p.Product = &pipeline.Product{
 			RelList: relList,
 			ColList: colList,
+			Types:   convertToPlanTypes(t.Typs),
 		}
 	case *projection.Argument:
 		p.ProjectList = t.Es
@@ -266,6 +283,8 @@ func convertToPipelineInstruction(opr *vm.Instruction) *pipeline.Instruction {
 			Ibucket:   t.Ibucket,
 			Nbucket:   t.Nbucket,
 			Result:    t.Result,
+			Expr:      t.Cond,
+			Types:     convertToPlanTypes(t.Typs),
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 		}
@@ -276,6 +295,7 @@ func convertToPipelineInstruction(opr *vm.Instruction) *pipeline.Instruction {
 			Nbucket:   t.Nbucket,
 			RelList:   relList,
 			ColList:   colList,
+			Expr:      t.Cond,
 			Types:     convertToPlanTypes(t.Typs),
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
@@ -293,11 +313,6 @@ func convertToPipelineInstruction(opr *vm.Instruction) *pipeline.Instruction {
 		p.Anti = &pipeline.AntiJoin{
 			Ibucket: t.IBucket,
 			Nbucket: t.NBucket,
-		}
-	case *union.Argument: // 3
-		p.Anti = &pipeline.AntiJoin{
-			Ibucket: t.Ibucket,
-			Nbucket: t.Nbucket,
 		}
 	// may useless.
 	case *merge.Argument:
@@ -334,6 +349,8 @@ func convertToVmInstruction(opr *pipeline.Instruction) vm.Instruction {
 		v.Arg = &anti.Argument{
 			Ibucket: t.Ibucket,
 			Nbucket: t.Nbucket,
+			Cond:    t.Expr,
+			Typs:    convertToTypes(t.Types),
 			Conditions: [][]*plan.Expr{
 				t.LeftCond, t.RightCond,
 			},
@@ -359,6 +376,8 @@ func convertToVmInstruction(opr *pipeline.Instruction) vm.Instruction {
 		v.Arg = &join.Argument{
 			Ibucket:    t.Ibucket,
 			Nbucket:    t.Nbucket,
+			Cond:       t.Expr,
+			Typs:       convertToTypes(t.Types),
 			Result:     convertToResultPos(t.RelList, t.ColList),
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}
@@ -367,6 +386,8 @@ func convertToVmInstruction(opr *pipeline.Instruction) vm.Instruction {
 		v.Arg = &left.Argument{
 			Ibucket:    t.Ibucket,
 			Nbucket:    t.Nbucket,
+			Cond:       t.Expr,
+			Typs:       convertToTypes(t.Types),
 			Result:     convertToResultPos(t.RelList, t.ColList),
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}
@@ -376,33 +397,36 @@ func convertToVmInstruction(opr *pipeline.Instruction) vm.Instruction {
 		t := opr.GetAnti()
 		v.Arg = &loopanti.Argument{
 			Result: t.Result,
-			Cond:   t.LeftCond[0],
+			Cond:   t.Expr,
+			Typs:   convertToTypes(t.Types),
 		}
 	case vm.LoopJoin:
 		t := opr.GetJoin()
 		v.Arg = &loopjoin.Argument{
 			Result: convertToResultPos(t.RelList, t.ColList),
-			Cond:   t.LeftCond[0],
+			Cond:   t.Expr,
+			Typs:   convertToTypes(t.Types),
 		}
 	case vm.LoopLeft:
 		t := opr.GetLeftJoin()
 		v.Arg = &loopleft.Argument{
 			Result: convertToResultPos(t.RelList, t.ColList),
+			Cond:   t.Expr,
 			Typs:   convertToTypes(t.Types),
-			Cond:   t.LeftCond[0],
 		}
 	case vm.LoopSemi:
 		t := opr.GetSemiJoin()
 		v.Arg = &loopsemi.Argument{
 			Result: t.Result,
-			Cond:   t.LeftCond[0],
+			Cond:   t.Expr,
+			Typs:   convertToTypes(t.Types),
 		}
 	case vm.LoopSingle:
 		t := opr.GetSingleJoin()
 		v.Arg = &loopsingle.Argument{
 			Result: convertToResultPos(t.RelList, t.ColList),
+			Cond:   t.Expr,
 			Typs:   convertToTypes(t.Types),
-			Cond:   t.LeftCond[0],
 		}
 	case vm.Offset:
 		v.Arg = &offset.Argument{Offset: opr.Offset}
@@ -412,6 +436,7 @@ func convertToVmInstruction(opr *pipeline.Instruction) vm.Instruction {
 		t := opr.GetProduct()
 		v.Arg = &product.Argument{
 			Result: convertToResultPos(t.RelList, t.ColList),
+			Typs:   convertToTypes(t.Types),
 		}
 	case vm.Projection:
 		v.Arg = &projection.Argument{Es: opr.ProjectList}
@@ -423,6 +448,8 @@ func convertToVmInstruction(opr *pipeline.Instruction) vm.Instruction {
 			Ibucket:    t.Ibucket,
 			Nbucket:    t.Nbucket,
 			Result:     t.Result,
+			Cond:       t.Expr,
+			Typs:       convertToTypes(t.Types),
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}
 	case vm.Single:
@@ -431,6 +458,8 @@ func convertToVmInstruction(opr *pipeline.Instruction) vm.Instruction {
 			Ibucket:    t.Ibucket,
 			Nbucket:    t.Nbucket,
 			Result:     convertToResultPos(t.RelList, t.ColList),
+			Cond:       t.Expr,
+			Typs:       convertToTypes(t.Types),
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}
 	case vm.Top:
@@ -450,12 +479,6 @@ func convertToVmInstruction(opr *pipeline.Instruction) vm.Instruction {
 		v.Arg = &minus.Argument{
 			IBucket: t.Ibucket,
 			NBucket: t.Nbucket,
-		}
-	case vm.Union:
-		t := opr.GetAnti()
-		v.Arg = &union.Argument{
-			Ibucket: t.Ibucket,
-			Nbucket: t.Nbucket,
 		}
 	case vm.Connector:
 		v.Arg = &connector.Argument{}
@@ -503,6 +526,7 @@ func newCompile() *Compile {
 	return c
 }
 
+/*
 func (s *Scope) remoteRun(c *Compile) error {
 	// encode the scope
 	sData, errEncode := encodeScope(s)
@@ -546,6 +570,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 
 	return nil
 }
+*/
 
 func convertToPlanTypes(ts []types.Type) []*plan.Type {
 	result := make([]*plan.Type, len(ts))

@@ -15,9 +15,17 @@
 package cnservice
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
+
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"go.uber.org/zap"
 )
@@ -27,21 +35,30 @@ type Service interface {
 	Close() error
 }
 
+type EngineType string
+
+const (
+	EngineTAE            EngineType = "tae"
+	EngineDistributedTAE EngineType = "distributed-tae"
+	EngineMemory         EngineType = "memory"
+)
+
 // Config cn service
 type Config struct {
 	// ListenAddress listening address for receiving external requests
 	ListenAddress string `toml:"listen-address"`
 	// FileService file service configuration
+
+	Engine struct {
+		Type EngineType `toml:"type"`
+	}
+
 	FileService struct {
 		// Backend file service backend implementation. [Mem|DISK|S3|MINIO]. Default is DISK.
 		Backend string `toml:"backend"`
 		// S3 s3 configuration
 		S3 fileservice.S3Config `toml:"s3"`
 	}
-	// buffer related.
-	PayLoadCopyBufferSize int
-	ReadBufferSize        int
-	WriteBufferSize       int
 	// Pipeline configuration
 	Pipeline struct {
 		// HostSize is the memory limit
@@ -55,16 +72,31 @@ type Config struct {
 		// BatchSize is the memory limit for one batch
 		BatchSize int64 `toml:"batch-size"`
 	}
+
+	//parameters for the frontend
+	Frontend config.FrontendParameters `toml:"frontend"`
+
+	// HAKeeper configuration
+	HAKeeper struct {
+		// HeatbeatDuration heartbeat duration to send message to hakeeper. Default is 1s
+		HeatbeatDuration toml.Duration `toml:"hakeeper-heartbeat-duration"`
+		// HeatbeatTimeout heartbeat request timeout. Default is 500ms
+		HeatbeatTimeout toml.Duration `toml:"hakeeper-heartbeat-timeout"`
+		// DiscoveryTimeout discovery HAKeeper service timeout. Default is 30s
+		DiscoveryTimeout toml.Duration `toml:"hakeeper-discovery-timeout"`
+		// ClientConfig hakeeper client configuration
+		ClientConfig logservice.HAKeeperClientConfig
+	}
 }
 
 type service struct {
-	cfg *Config
-
-	server morpc.RPCServer
-	// requestHandler method to handle the request message
-	requestHandler func(message morpc.Message, cs morpc.ClientSession) error
-
-	requestPool  *sync.Pool
-	responsePool *sync.Pool
-	logger       *zap.Logger
+	cfg                *Config
+	pool               *sync.Pool
+	logger             *zap.Logger
+	server             morpc.RPCServer
+	cancelMoServerFunc context.CancelFunc
+	mo                 *frontend.MOServer
+	hakeeperClient     logservice.CNHAKeeperClient
+	txnSender          rpc.TxnSender
+	txnClient          client.TxnClient
 }

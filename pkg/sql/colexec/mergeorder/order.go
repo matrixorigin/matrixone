@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -127,7 +128,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				ctr.cmps = make([]compare.Compare, len(bat.Vecs))
 				for i := range ctr.cmps {
 					if pos, ok := mp[i]; ok {
-						ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, ap.Fs[pos].Type == colexec.Descending)
+						ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, ap.Fs[pos].Type == order.Descending)
 					} else {
 						ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, true)
 					}

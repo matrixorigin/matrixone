@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -51,10 +50,10 @@ func WithConfigAdjust(adjustConfigFunc func(c *Config)) Option {
 	}
 }
 
-// WithRequestFilter set filtering txn.TxnRequest sent to other DNShard
-func WithRequestFilter(filter func(*txn.TxnRequest) bool) Option {
+// WithBackendFilter set filtering txn.TxnRequest sent to other DNShard
+func WithBackendFilter(filter func(morpc.Message, string) bool) Option {
 	return func(s *store) {
-		s.options.requestFilter = filter
+		s.options.backendFilter = filter
 	}
 }
 
@@ -80,15 +79,15 @@ type store struct {
 	server         rpc.TxnServer
 	hakeeperClient logservice.DNHAKeeperClient
 	fsFactory      fileservice.FileServiceFactory
-	localFS        fileservice.ReplaceableFileService
-	s3FS           fileservice.FileService
+	fs             fileservice.FileService
+	metadataFS     fileservice.ReplaceableFileService
 	replicas       *sync.Map
 	stopper        *stopper.Stopper
 
 	options struct {
 		logServiceClientFactory func(metadata.DNShard) (logservice.Client, error)
 		hakeekerClientFactory   func() (logservice.DNHAKeeperClient, error)
-		requestFilter           func(*txn.TxnRequest) bool
+		backendFilter           func(msg morpc.Message, backendAddr string) bool
 		adjustConfigFunc        func(c *Config)
 	}
 
@@ -102,7 +101,7 @@ type store struct {
 func NewService(cfg *Config,
 	fsFactory fileservice.FileServiceFactory,
 	opts ...Option) (Service, error) {
-	if err := cfg.validate(); err != nil {
+	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
@@ -369,29 +368,32 @@ func (s *store) initHAKeeperClient() error {
 }
 
 func (s *store) initFileService() error {
-	fs, err := s.fsFactory(localFileServiceName)
+	localFS, err := s.fsFactory(localFileServiceName)
 	if err != nil {
 		return err
 	}
-	rfs, ok := fs.(fileservice.ReplaceableFileService)
-	if !ok {
-		return moerr.NewError(moerr.BAD_CONFIGURATION, "local fileservice must implmented ReplaceableFileService")
+	rfs, err := fileservice.Get[fileservice.ReplaceableFileService](
+		localFS, localFileServiceName)
+	if err != nil {
+		return err
 	}
-	s.localFS = rfs
 
-	fs, err = s.fsFactory(s3FileServiceName)
+	s3FS, err := s.fsFactory(s3FileServiceName)
 	if err != nil {
 		return err
 	}
-	s.s3FS = fs
+
+	s.fs = fileservice.NewFileServices(localFileServiceName, localFS, s3FS)
+	s.metadataFS = rfs
+
 	return nil
 }
 
 func (s *store) getBackendOptions() []morpc.BackendOption {
 	return []morpc.BackendOption{
 		morpc.WithBackendLogger(s.logger),
-		morpc.WithBackendFilter(func(m morpc.Message) bool {
-			return s.options.requestFilter == nil || s.options.requestFilter(m.(*txn.TxnRequest))
+		morpc.WithBackendFilter(func(m morpc.Message, backendAddr string) bool {
+			return s.options.backendFilter == nil || s.options.backendFilter(m.(*txn.TxnRequest), backendAddr)
 		}),
 		morpc.WithBackendBusyBufferSize(s.cfg.RPC.BusyQueueSize),
 		morpc.WithBackendBufferSize(s.cfg.RPC.SendQueueSize),

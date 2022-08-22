@@ -341,7 +341,7 @@ Student_id	Student_name	LeftPaddedString
 3	Aniket Sharma	XI _ _ _ _
 4	Anik Das	X _ _ _ _ 
 5	Riya Jain	IX _ _ _ _
-6	Tapan Samanta	X _ _ _ _
+6	Tapan Samanta	X _ _ _ _ 
 SELECT Student_id, rpad(Student_name,4,'new') AS LeftPaddedString FROM t1;
 Student_id	LeftPaddedString
 1	Anan

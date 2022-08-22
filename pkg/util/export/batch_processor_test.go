@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
@@ -37,10 +36,10 @@ func init() {
 	logutil.SetupMOLogger(&logutil.LogConfig{
 		Level:       zapcore.DebugLevel.String(),
 		Format:      "console",
-		Filename:    config.GlobalSystemVariables.GetLogFilename(),
-		MaxSize:     int(config.GlobalSystemVariables.GetLogMaxSize()),
-		MaxDays:     int(config.GlobalSystemVariables.GetLogMaxDays()),
-		MaxBackups:  int(config.GlobalSystemVariables.GetLogMaxBackups()),
+		Filename:    "",
+		MaxSize:     512,
+		MaxDays:     0,
+		MaxBackups:  0,
 		EnableStore: false,
 	})
 	if err := agent.Listen(agent.Options{}); err != nil {

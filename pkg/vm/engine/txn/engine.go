@@ -16,6 +16,7 @@ package txnengine
 
 import (
 	"context"
+	"strings"
 
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -47,7 +48,6 @@ func New(
 var _ engine.Engine = new(Engine)
 
 func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.TxnOperator) error {
-	txnOperator = ToOperator(txnOperator) //TODO remove this
 
 	_, err := doTxnRequest[CreateDatabaseResp](
 		ctx,
@@ -56,7 +56,7 @@ func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.T
 		e.allNodesShards,
 		OpCreateDatabase,
 		CreateDatabaseReq{
-			Name: dbName,
+			Name: strings.ToLower(dbName),
 		},
 	)
 	if err != nil {
@@ -67,7 +67,6 @@ func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.T
 }
 
 func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client.TxnOperator) (engine.Database, error) {
-	txnOperator = ToOperator(txnOperator) //TODO remove this
 
 	resps, err := doTxnRequest[OpenDatabaseResp](
 		ctx,
@@ -76,7 +75,7 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 		e.firstNodeShard,
 		OpOpenDatabase,
 		OpenDatabaseReq{
-			Name: dbName,
+			Name: strings.ToLower(dbName),
 		},
 	)
 	if err != nil {
@@ -95,7 +94,6 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 }
 
 func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) ([]string, error) {
-	txnOperator = ToOperator(txnOperator) //TODO remove this
 
 	resps, err := doTxnRequest[GetDatabasesResp](
 		ctx,
@@ -118,7 +116,6 @@ func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) 
 }
 
 func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.TxnOperator) error {
-	txnOperator = ToOperator(txnOperator) //TODO remove this
 
 	_, err := doTxnRequest[DeleteDatabaseResp](
 		ctx,
@@ -127,7 +124,7 @@ func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.T
 		e.allNodesShards,
 		OpDeleteDatabase,
 		DeleteDatabaseReq{
-			Name: dbName,
+			Name: strings.ToLower(dbName),
 		},
 	)
 	if err != nil {
@@ -144,11 +141,11 @@ func (e *Engine) Nodes() (engine.Nodes, error) {
 	}
 
 	var nodes engine.Nodes
-	for _, node := range clusterDetails.CNNodes {
+	for _, store := range clusterDetails.CNStores {
 		nodes = append(nodes, engine.Node{
 			Mcpu: 1,
-			Id:   node.UUID,
-			Addr: node.ServiceAddress,
+			Id:   store.UUID,
+			Addr: store.ServiceAddress,
 		})
 	}
 

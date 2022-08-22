@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
@@ -71,6 +72,7 @@ type SessionInfo struct {
 	ConnectionID uint64
 	Database     string
 	Version      string
+	TimeZone     *time.Location
 }
 
 // AnalyzeInfo  analyze information for query
@@ -104,14 +106,14 @@ type Process struct {
 	// unix timestamp
 	UnixTime int64
 
-	// snapshot is transaction context
-	Snapshot []byte
+	TxnOperator client.TxnOperator
 
 	AnalInfos []*AnalyzeInfo
 
 	SessionInfo SessionInfo
 
-	// snapshot is transaction context
+	Ctx context.Context
+
 	Cancel context.CancelFunc
 }
 

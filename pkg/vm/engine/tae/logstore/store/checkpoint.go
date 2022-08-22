@@ -141,6 +141,9 @@ func (w *StoreImpl) onCheckpoint() {
 func (w *StoreImpl) CkpCkp() {
 	e := w.makeInternalCheckpointEntry()
 	_, err := w.Append(GroupInternal, e)
+	if err == common.ErrClose {
+		return
+	}
 	if err != nil {
 		panic(err)
 	}
@@ -152,12 +155,15 @@ func (w *StoreImpl) CkpCkp() {
 
 func (w *StoreImpl) onTruncatingQueue(items ...any) {
 	gid, driverLsn := w.getDriverCheckpointed()
-	if driverLsn == 0 && gid == 0 {
+	if gid == 0 {
 		return
 	}
-	if gid == GroupCKP {
+	if gid == GroupCKP || gid == GroupInternal {
 		w.CkpCkp()
-		_, driverLsn = w.getDriverCheckpointed()
+		gid, driverLsn = w.getDriverCheckpointed()
+		if gid == 0 {
+			panic("logic error")
+		}
 	}
 	atomic.StoreUint64(&w.driverCheckpointing, driverLsn)
 	_, err := w.truncateQueue.Enqueue(struct{}{})

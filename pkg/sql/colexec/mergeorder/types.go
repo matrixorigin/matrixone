@@ -17,7 +17,7 @@ package mergeorder
 import (
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 )
 
 const (
@@ -36,6 +36,6 @@ type container struct {
 }
 
 type Argument struct {
-	Fs  []colexec.Field // Fields store the order information
-	ctr *container      // ctr stores the attributes needn't do Serialization work
+	Fs  []order.Field // Fields store the order information
+	ctr *container    // ctr stores the attributes needn't do Serialization work
 }

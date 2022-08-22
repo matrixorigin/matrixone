@@ -22,9 +22,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+type (
+	TxnOperator = client.TxnOperator
 )
 
 // type of scope
@@ -75,6 +80,9 @@ type Scope struct {
 	// 1 -  execution unit for processing intermediate results.
 	// 2 -  execution unit that requires remote call.
 	Magic int
+
+	// IsEnd means the pipeline is join
+	IsJoin bool
 
 	// IsEnd means the pipeline is end
 	IsEnd bool

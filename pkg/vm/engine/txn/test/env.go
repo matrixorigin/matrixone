@@ -25,6 +25,8 @@ import (
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 )
 
+const defaultDatabase = "db"
+
 type testEnv struct {
 	txnClient client.TxnClient
 	engine    *txnengine.Engine
@@ -42,15 +44,13 @@ func (t *testEnv) Close() error {
 	return nil
 }
 
-func newEnv() *testEnv {
+func newEnv(ctx context.Context) (*testEnv, error) {
 	env := &testEnv{}
 
 	sender := &Sender{
 		env: env,
 	}
 	env.sender = sender
-
-	env.txnClient = client.NewTxnClient(sender)
 
 	env.clock = clock.NewHLCClock(
 		func() int64 {
@@ -59,20 +59,33 @@ func newEnv() *testEnv {
 		math.MaxInt64,
 	)
 
+	env.txnClient = client.NewTxnClient(sender,
+		client.WithClock(env.clock),
+	)
+
 	env.nodes = []*Node{
 		env.NewNode(1),
 	}
 
 	env.engine = txnengine.New(
 		context.Background(),
-		env,
+		new(txnengine.ShardToSingleStatic),
 		func() (details logservicepb.ClusterDetails, err error) {
 			for _, node := range env.nodes {
-				details.DNNodes = append(details.DNNodes, node.info)
+				details.DNStores = append(details.DNStores, node.info)
 			}
 			return
 		},
 	)
 
-	return env
+	// create default database
+	op := env.txnClient.New()
+	if err := env.engine.Create(ctx, defaultDatabase, op); err != nil {
+		return nil, err
+	}
+	if err := op.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	return env, nil
 }

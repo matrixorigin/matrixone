@@ -321,6 +321,7 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 
 func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, hashRows uint64, proc *process.Process) error {
 	cnt := 0
+	valCnt := 0
 	copy(ctr.inserted[:n], ctr.zInserted[:n])
 	for k, v := range vals[:n] {
 		if v == 0 {
@@ -332,6 +333,7 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 			cnt++
 			ctr.bat.Zs = append(ctr.bat.Zs, 0)
 		}
+		valCnt++
 		ai := int64(v) - 1
 		ctr.bat.Zs[ai] += bat.Zs[i+k]
 	}
@@ -346,6 +348,9 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 				return err
 			}
 		}
+	}
+	if valCnt == 0 {
+		return nil
 	}
 	for j, ag := range ctr.bat.Aggs {
 		err := ag.BatchFill(int64(i), ctr.inserted[:n], vals, bat.Zs, []*vector.Vector{ctr.aggVecs[j].vec})

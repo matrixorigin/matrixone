@@ -9,10 +9,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: size-label
-        uses: "guguducken/label-size-action@v0.0.1"
+        uses: "guguducken/label-size-action@v0.0.2"
         with:
           size_token: ${{ secrets.TOKEN_ACTION }}
-          ignore: ".txt,.md"
+          ignore: ".md,.pb.go"
           sizes: >
             {
               "XS":0,

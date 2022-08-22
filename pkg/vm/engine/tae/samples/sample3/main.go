@@ -65,11 +65,12 @@ func main() {
 	schema := catalog.MockSchema(13, 12)
 	{
 		txn, _ := eng.StartTxn(nil)
-		err := eng.Create(ctx, dbName, engine.Snapshot(txn.GetCtx()))
+		txnOperator := moengine.TxnToTxnOperator(txn)
+		err := eng.Create(ctx, dbName, txnOperator)
 		if err != nil {
 			panic(err)
 		}
-		db, err := eng.Database(ctx, dbName, engine.Snapshot(txn.GetCtx()))
+		db, err := eng.Database(ctx, dbName, txnOperator)
 		if err != nil {
 			panic(err)
 		}
@@ -94,11 +95,12 @@ func main() {
 		return func() {
 			defer wg.Done()
 			txn, _ := eng.StartTxn(nil)
+			txnOperator := moengine.TxnToTxnOperator(txn)
 			// {
 			// 	db, _ := txn.GetDatabase(dbName)
 			// 	rel, _ := db.GetRelationByName(schema.Name)
 			// }
-			db, err := eng.Database(ctx, dbName, engine.Snapshot(txn.GetCtx()))
+			db, err := eng.Database(ctx, dbName, txnOperator)
 			if err != nil {
 				panic(err)
 			}
@@ -126,7 +128,8 @@ func main() {
 	logutil.Infof("Append takes: %s", time.Since(now))
 	{
 		txn, _ := eng.StartTxn(nil)
-		db, err := eng.Database(ctx, dbName, engine.Snapshot(txn.GetCtx()))
+		txnOperator := moengine.TxnToTxnOperator(txn)
+		db, err := eng.Database(ctx, dbName, txnOperator)
 		if err != nil {
 			panic(err)
 		}

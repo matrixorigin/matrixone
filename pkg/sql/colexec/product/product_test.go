@@ -17,11 +17,11 @@ package product
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
@@ -42,6 +42,7 @@ type productTestCase struct {
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
+	barg   *hashbuild.Argument
 }
 
 var (
@@ -52,8 +53,8 @@ func init() {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	tcs = []productTestCase{
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []colexec.ResultPos{{0, 0}, {1, 0}}),
-		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []colexec.ResultPos{{0, 0}, {1, 0}}),
+		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}}),
+		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}}),
 	}
 }
 
@@ -73,6 +74,7 @@ func TestPrepare(t *testing.T) {
 
 func TestProduct(t *testing.T) {
 	for _, tc := range tcs {
+		bat := hashBuild(t, tc)
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
@@ -81,10 +83,7 @@ func TestProduct(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
-		tc.proc.Reg.MergeReceivers[1].Ch <- nil
+		tc.proc.Reg.MergeReceivers[1].Ch <- bat
 		for {
 			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 				break
@@ -100,11 +99,12 @@ func BenchmarkProduct(b *testing.B) {
 		hm := host.New(1 << 30)
 		gm := guest.New(1<<30, hm)
 		tcs = []productTestCase{
-			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []colexec.ResultPos{{0, 0}, {1, 0}}),
-			newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []colexec.ResultPos{{0, 0}, {1, 0}}),
+			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}}),
+			newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
+			bat := hashBuild(t, tc)
 			err := Prepare(tc.proc, tc.arg)
 			require.NoError(t, err)
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
@@ -113,9 +113,7 @@ func BenchmarkProduct(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[1].Ch <- nil
+			tc.proc.Reg.MergeReceivers[1].Ch <- bat
 			for {
 				if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 					break
@@ -126,7 +124,7 @@ func BenchmarkProduct(b *testing.B) {
 	}
 }
 
-func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []colexec.ResultPos) productTestCase {
+func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []ResultPos) productTestCase {
 	proc := process.New(m)
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -144,9 +142,24 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []colexec.Resu
 		proc:   proc,
 		cancel: cancel,
 		arg: &Argument{
+			Typs:   ts,
 			Result: rp,
 		},
+		barg: &hashbuild.Argument{
+			Typs: ts,
+		},
 	}
+}
+
+func hashBuild(t *testing.T, tc productTestCase) *batch.Batch {
+	err := hashbuild.Prepare(tc.proc, tc.barg)
+	require.NoError(t, err)
+	tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+	tc.proc.Reg.MergeReceivers[0].Ch <- nil
+	ok, err := hashbuild.Call(0, tc.proc, tc.barg)
+	require.NoError(t, err)
+	require.Equal(t, true, ok)
+	return tc.proc.Reg.InputBatch
 }
 
 // create a new block based on the type information, flgs[i] == ture: has null
