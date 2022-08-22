@@ -19,13 +19,16 @@ import (
 	"context"
 	"encoding/gob"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"go.uber.org/zap"
 )
 
 type Shard = metadata.DNShard
@@ -45,6 +48,28 @@ func DoTxnRequest[
 	resps []Resp,
 	err error,
 ) {
+
+	logutil.Debug("memengine: request on CN",
+		zap.String("type", fmt.Sprintf("%T", req)),
+		zap.Any("data", req),
+	)
+	defer func() {
+		for _, resp := range resps {
+			logutil.Debug("memengine: response on CN",
+				zap.String("type", fmt.Sprintf("%T", resp)),
+				zap.Any("data", resp),
+			)
+		}
+		if err != nil {
+			logutil.Debug("memengine: response on CN",
+				zap.Any("error", err),
+			)
+		}
+	}()
+
+	if ctx == nil {
+		panic("context should not be nil")
+	}
 
 	shards, err := shardsFunc()
 	if err != nil {
