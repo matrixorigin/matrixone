@@ -55,8 +55,6 @@ const (
 	IntersectAll
 
 	HashBuild
-
-
 )
 
 // Instruction contains relational algebra
