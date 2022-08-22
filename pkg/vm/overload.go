@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
@@ -95,8 +96,9 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	Update:   update.String,
 	External: external.String,
 
-	Minus:     minus.String,
-	Intersect: intersect.String,
+	Minus:        minus.String,
+	Intersect:    intersect.String,
+	IntersectAll: intersectall.String,
 
 	HashBuild: hashbuild.String,
 }
@@ -137,8 +139,9 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Update:   update.Prepare,
 	External: external.Prepare,
 
-	Minus:     minus.Prepare,
-	Intersect: intersect.Prepare,
+	Minus:        minus.Prepare,
+	Intersect:    intersect.Prepare,
+	IntersectAll: intersectall.Prepare,
 
 	HashBuild: hashbuild.Prepare,
 }
@@ -179,8 +182,9 @@ var execFunc = [...]func(int, *process.Process, any) (bool, error){
 	Update:   update.Call,
 	External: external.Call,
 
-	Minus:     minus.Call,
-	Intersect: intersect.Call,
+	Minus:        minus.Call,
+	Intersect:    intersect.Call,
+	IntersectAll: intersectall.Call,
 
 	HashBuild: hashbuild.Call,
 }
