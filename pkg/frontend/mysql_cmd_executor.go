@@ -1785,9 +1785,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.SetMysqlResultSet(nil)
 	}()
 
-	//ctx, span := trace.Start(rootCtx, "doComQuery")
-	//defer span.End()
-
 	var cmpBegin time.Time
 	var ret interface{}
 	var runner ComputationRunner
@@ -2178,6 +2175,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		return resp, nil
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
+		mce.addSqlCount(1)
 		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), SubStringFromBegin(query, int(ses.Pu.SV.LengthOfQueryPrinted)))
 		seps := strings.Split(query, " ")
 		if len(seps) <= 0 {
