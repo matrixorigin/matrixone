@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 type deadlineContextCodec struct {
@@ -49,4 +50,44 @@ func (hc *deadlineContextCodec) Decode(msg *RPCMessage, data []byte) (int, error
 
 	msg.Ctx, msg.cancel = context.WithTimeout(msg.Ctx, time.Duration(buf.Byte2Int64(data)))
 	return 8, nil
+}
+
+type traceCodec struct {
+}
+
+func (hc *traceCodec) Encode(msg *RPCMessage, out *buf.ByteBuf) (int, error) {
+	if msg.Ctx == nil {
+		return 0, nil
+	}
+
+	span := trace.SpanFromContext(msg.Ctx)
+	c := span.SpanContext()
+	n := c.Size()
+	out.MustWriteByte(byte(n))
+	out.Grow(n)
+	idx := out.GetWriteIndex()
+	out.SetWriteIndex(idx + n)
+	c.MarshalTo(out.RawSlice(idx, idx+n))
+	return 1 + n, nil
+}
+
+func (hc *traceCodec) Decode(msg *RPCMessage, data []byte) (int, error) {
+	if len(data) < 1 {
+		return 0, io.ErrShortBuffer
+	}
+
+	if len(data) < int(data[0]) {
+		return 0, io.ErrShortBuffer
+	}
+
+	c := &trace.SpanContext{}
+	if err := c.Unmarshal(data[1 : 1+data[0]]); err != nil {
+		return 0, err
+	}
+
+	if msg.Ctx == nil {
+		msg.Ctx = context.Background()
+	}
+	msg.Ctx = trace.ContextWithSpanContext(msg.Ctx, *c)
+	return int(1 + data[0]), nil
 }

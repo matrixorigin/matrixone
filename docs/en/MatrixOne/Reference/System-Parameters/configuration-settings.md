@@ -1,13 +1,13 @@
 # MatrixOne Server Setting
 
-As user launches a MatrixOne instance, a configuration file is required. 
-The configuration file will be generated in `make config`, it's located in `matrixone/system_vars_config.toml`.
+To launch a MatrixOne instance, a configuration file is required.
+The configuration file will be generated in `make config`, it's located in `matrixone/system_vars_config.toml` file.
 
-The settings are listed below:
+The settings are listed as below:
 
 ### General Settings
 
-|  Parameter   | Type  |  Default Value   | Range  | Functionality | 
+|  Parameter   | Type  |  Default Value   | Range  | Functionality |
 |  ----  | ----  |  --------  |  --- | --- |
 | rootpassword  | string | 	""  | string value | password for root user|
 | dumpdatabase  | string | 	default  | string value |  dump database name for backup|
@@ -16,7 +16,7 @@ The settings are listed below:
 
 ### Log Settings
 
-|  Parameter   | Type  |  Default Value   | Range  | Functionality | 
+|  Parameter   | Type  |  Default Value   | Range  | Functionality |
 |  ----  | ----  |  --------  |  --- | --- |
 | logLevel  | string | debug  | [debug, info, warn, error, fatal] | the log output level |
 | logFormat  | string | 	json  | [json, console] |  output log style |
@@ -29,13 +29,13 @@ The settings are listed below:
 
 ### Data Storage Settings
 
-|  Parameter   | Type  |  Default Value   | Range  | Functionality | 
+|  Parameter   | Type  |  Default Value   | Range  | Functionality |
 |  ----  | ----  |  --------  |  --- | --- |
 | storePath  | string | ./store  | file path | the root directory of data storage |
 
 ### Memory Settings
 
-|  Parameter   | Type  |  Default Value   | Range  | Functionality | 
+|  Parameter   | Type  |  Default Value   | Range  | Functionality |
 |  ----  | ----  |  --------  |  --- | --- |
 | hostMmuLimitation  | int64 | 1099511627776  | [0 - 1099511627776] | host mmu limitation. default: 1 << 40 = 1099511627776  |
 | guestMmuLimitation  | int64 | 1099511627776  | [0 - 1099511627776] | guest mmu limitation. default: 1 << 40 = 1099511627776  |
@@ -47,7 +47,7 @@ The settings are listed below:
 
 ### Metrics Settings
 
-|  Parameter   | Type  |  Default Value   | Range  | Functionality | 
+|  Parameter   | Type  |  Default Value   | Range  | Functionality |
 |  ----  | ----  |  --------  |  --- | --- |
 | statusPort  | int64 | 7001  | All ports | statusPort defines which port the mo status server (for metric etc.) listens on and clients connect to |
 | metricToProm  | bool | true  | true false | if true, metrics can be scraped through host:status/metrics endpoint |
@@ -55,7 +55,7 @@ The settings are listed below:
 
 ### Other Settings
 
-|  Parameter   | Type  |  Default Value   | Range  | Functionality | 
+|  Parameter   | Type  |  Default Value   | Range  | Functionality |
 |  ----  | ----  |  --------  |  --- | --- |
 | batchSizeInLoadData  | int64 | 50  | 10 - 40000 | the number of rows for a batch in loading data |
 | loadDataConcurrencyCount  | int64 | 4  | 1 - 16 | the concurrent threads to load data |

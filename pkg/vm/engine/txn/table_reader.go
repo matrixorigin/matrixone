@@ -52,22 +52,22 @@ func (t *Table) NewReader(
 	}
 
 	readers = make([]engine.Reader, parallel)
-	nodes := clusterDetails.DNNodes
+	stores := clusterDetails.DNStores
 
 	if len(shards) > 0 {
 		uuidSet := make(map[string]bool)
 		for _, shard := range shards {
 			uuidSet[string(shard)] = true
 		}
-		filteredNodes := nodes[:0]
-		for _, node := range nodes {
+		filteredNodes := stores[:0]
+		for _, node := range stores {
 			if uuidSet[node.UUID] {
 				filteredNodes = append(filteredNodes, node)
 			}
 		}
-		nodes = filteredNodes
+		stores = filteredNodes
 	}
-	dnShards, err := t.engine.shardPolicy.Nodes(nodes)
+	dnShards, err := t.engine.shardPolicy.Stores(stores)
 	if err != nil {
 		return nil, err
 	}

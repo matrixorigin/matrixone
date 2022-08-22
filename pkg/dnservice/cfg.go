@@ -119,7 +119,7 @@ type Config struct {
 	}
 }
 
-func (c *Config) validate() error {
+func (c *Config) Validate() error {
 	if c.UUID == "" {
 		return fmt.Errorf("Config.UUID not set")
 	}
