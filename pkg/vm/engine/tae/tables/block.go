@@ -292,6 +292,9 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	if dropped || inTxn {
 		return
 	}
+	if blk.IsAppendable() {
+		blk.meta.SetNotAppendable()
+	}
 	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
 	taskType = tasks.DataCompactionTask
 	scopes = append(scopes, *blk.meta.AsCommonID())
@@ -302,9 +305,9 @@ func (blk *dataBlock) IsAppendable() bool {
 	if !blk.meta.IsAppendable() {
 		return false
 	}
-	/*if blk.node.Rows(nil, true) == blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows {
+	if blk.node.Rows(nil, true) == blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows {
 		return false
-	}*/
+	}
 	return true
 }
 
@@ -384,7 +387,7 @@ func (blk *dataBlock) FillBlockView(colIdx uint16, view *model.BlockView) (err e
 
 func (blk *dataBlock) MakeAppender() (appender data.BlockAppender, err error) {
 	if !blk.meta.IsAppendable() {
-		panic("can not create appender on non-appendable block")
+		return
 	}
 	appender = newAppender(blk.node)
 	return
@@ -402,7 +405,7 @@ func (blk *dataBlock) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	colIdx int,
 	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
-	if blk.meta.IsAppendable() {
+	if blk.meta.IsAppendable() || blk.node.Rows(nil, true) < blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows {
 		return blk.ResolveABlkColumnMVCCData(txn.GetStartTS(), colIdx, buffer, false)
 	}
 	view, err = blk.ResolveColumnMVCCData(txn.GetStartTS(), colIdx, buffer)
