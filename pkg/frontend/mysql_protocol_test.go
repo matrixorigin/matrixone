@@ -268,6 +268,7 @@ func TestMysqlClientProtocol_TlsHandshake(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
+	pu.SV.EnableTls = true
 
 	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
 	pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
@@ -1311,7 +1312,7 @@ func open_tls_db(t *testing.T, port int) *sql.DB {
 		require.NoError(t, err)
 	}
 
-	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=10s&timeout=10s&writeTimeout=10s&tls=%s", port, tlsName)
+	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=12s&timeout=12s&writeTimeout=12s&tls=%s", port, tlsName)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		require.NoError(t, err)

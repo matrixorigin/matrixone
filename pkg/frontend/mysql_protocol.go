@@ -2229,17 +2229,17 @@ func initTlsConfig(mysql *MysqlProtocolImpl, SV *config.FrontendParameters) {
 
 	// This excludes ciphers listed in tls.InsecureCipherSuites() and can be used to filter out more
 	var cipherSuites []uint16
-	var cipherNames []string
+	// var cipherNames []string
 	for _, sc := range tls.CipherSuites() {
 		switch sc.ID {
 		case tls.TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA, tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA:
 			logutil.Info("Disabling weak cipherSuite", zap.String("cipherSuite", sc.Name))
 		default:
-			cipherNames = append(cipherNames, sc.Name)
+			// cipherNames = append(cipherNames, sc.Name)
 			cipherSuites = append(cipherSuites, sc.ID)
 		}
 	}
-	logutil.Info("Enabled ciphersuites", zap.Strings("cipherNames", cipherNames))
+	// logutil.Info("Enabled ciphersuites", zap.Strings("cipherNames", cipherNames))
 
 	mysql.capability = mysql.capability | CLIENT_SSL
 	mysql.tlsConfig = &tls.Config{
