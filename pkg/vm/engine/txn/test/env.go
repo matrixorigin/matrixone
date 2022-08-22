@@ -79,7 +79,10 @@ func newEnv(ctx context.Context) (*testEnv, error) {
 	)
 
 	// create default database
-	op := env.txnClient.New()
+	op, err := env.txnClient.New()
+	if err != nil {
+		return nil, err
+	}
 	if err := env.engine.Create(ctx, defaultDatabase, op); err != nil {
 		return nil, err
 	}
