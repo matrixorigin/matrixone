@@ -31,13 +31,16 @@ type Tx struct {
 	session  *Session
 }
 
-func (s *Session) NewTx() *Tx {
-	operator := s.env.txnClient.New()
+func (s *Session) NewTx() (*Tx, error) {
+	operator, err := s.env.txnClient.New()
+	if err != nil {
+		return nil, err
+	}
 	tx := &Tx{
 		operator: operator,
 		session:  s,
 	}
-	return tx
+	return tx, nil
 }
 
 func (t *Tx) Exec(ctx context.Context, stmtText string, stmt tree.Statement) (err error) {
