@@ -45,10 +45,11 @@ func (t *testEnv) NewNode(id uint64) *Node {
 		Address:   fmt.Sprintf("shard-%d", id),
 	}
 
-	storage, err := txnstorage.New(
-		txnstorage.NewMemHandler(testutil.NewMheap(), txnstorage.IsolationPolicy{
+	storage, err := txnstorage.NewMemoryStorage(
+		testutil.NewMheap(),
+		txnstorage.IsolationPolicy{
 			Read: txnstorage.ReadCommitted,
-		}),
+		},
 	)
 	if err != nil {
 		panic(err)
