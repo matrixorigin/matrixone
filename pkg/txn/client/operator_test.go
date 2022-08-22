@@ -30,7 +30,7 @@ import (
 )
 
 func TestRead(t *testing.T) {
-	runOperatorTests(func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 		result, err := tc.Read(ctx, []txn.TxnRequest{newDNRequest(1, 1), newDNRequest(2, 2)})
 		assert.NoError(t, err)
 		assert.Equal(t, 2, len(result.Responses))
@@ -40,7 +40,7 @@ func TestRead(t *testing.T) {
 }
 
 func TestWrite(t *testing.T) {
-	runOperatorTests(func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 		assert.Empty(t, tc.mu.txn.DNShards)
 		result, err := tc.Write(ctx, []txn.TxnRequest{newDNRequest(1, 1), newDNRequest(2, 2)})
 		assert.NoError(t, err)
@@ -54,7 +54,7 @@ func TestWrite(t *testing.T) {
 }
 
 func TestWriteWithCacheWriteEnabled(t *testing.T) {
-	runOperatorTests(func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		assert.Empty(t, tc.mu.txn.DNShards)
 		responses, err := tc.Write(ctx, []txn.TxnRequest{newDNRequest(1, 1), newDNRequest(2, 2)})
 		assert.NoError(t, err)
@@ -66,7 +66,7 @@ func TestWriteWithCacheWriteEnabled(t *testing.T) {
 }
 
 func TestRollback(t *testing.T) {
-	runOperatorTests(func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
 		err := tc.Rollback(ctx)
 		assert.NoError(t, err)
@@ -78,7 +78,7 @@ func TestRollback(t *testing.T) {
 }
 
 func TestRollbackWithNoWrite(t *testing.T) {
-	runOperatorTests(func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		err := tc.Rollback(ctx)
 		assert.NoError(t, err)
 		assert.Empty(t, ts.getLastRequests())
@@ -86,7 +86,7 @@ func TestRollbackWithNoWrite(t *testing.T) {
 }
 
 func TestRollbackReadOnly(t *testing.T) {
-	runOperatorTests(func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		err := tc.Rollback(ctx)
 		assert.NoError(t, err)
 		assert.Empty(t, ts.getLastRequests())
@@ -94,7 +94,7 @@ func TestRollbackReadOnly(t *testing.T) {
 }
 
 func TestCommit(t *testing.T) {
-	runOperatorTests(func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
 		err := tc.Commit(ctx)
 		assert.NoError(t, err)
@@ -106,7 +106,7 @@ func TestCommit(t *testing.T) {
 }
 
 func TestCommitWithNoWrite(t *testing.T) {
-	runOperatorTests(func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		err := tc.Commit(ctx)
 		assert.NoError(t, err)
 		assert.Empty(t, ts.getLastRequests())
@@ -114,7 +114,7 @@ func TestCommitWithNoWrite(t *testing.T) {
 }
 
 func TestCommitReadOnly(t *testing.T) {
-	runOperatorTests(func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		err := tc.Commit(ctx)
 		assert.NoError(t, err)
 		assert.Empty(t, ts.getLastRequests())
@@ -122,7 +122,7 @@ func TestCommitReadOnly(t *testing.T) {
 }
 
 func TestContextWithoutDeadlineWillPanic(t *testing.T) {
-	runOperatorTests(func(_ context.Context, tc *txnOperator, _ *testTxnSender) {
+	runOperatorTests(t, func(_ context.Context, tc *txnOperator, _ *testTxnSender) {
 		defer func() {
 			if err := recover(); err != nil {
 				return
@@ -180,7 +180,7 @@ func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
 }
 
 func TestWriteOnReadyOnlyTxnWillPanic(t *testing.T) {
-	runOperatorTests(func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 		defer func() {
 			if err := recover(); err != nil {
 				return
@@ -194,7 +194,7 @@ func TestWriteOnReadyOnlyTxnWillPanic(t *testing.T) {
 }
 
 func TestWriteOnClosedTxnWillPanic(t *testing.T) {
-	runOperatorTests(func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 		tc.mu.closed = true
 		_, err := tc.Write(ctx, nil)
 		assert.Error(t, err)
@@ -203,7 +203,7 @@ func TestWriteOnClosedTxnWillPanic(t *testing.T) {
 }
 
 func TestReadOnClosedTxnWillPanic(t *testing.T) {
-	runOperatorTests(func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 		tc.mu.closed = true
 		_, err := tc.Read(ctx, nil)
 		assert.Error(t, err)
@@ -212,7 +212,7 @@ func TestReadOnClosedTxnWillPanic(t *testing.T) {
 }
 
 func TestCacheWrites(t *testing.T) {
-	runOperatorTests(func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 		responses, err := tc.Write(ctx, []txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1})})
 		assert.NoError(t, err)
 		assert.Empty(t, responses)
@@ -222,7 +222,7 @@ func TestCacheWrites(t *testing.T) {
 }
 
 func TestCacheWritesWillInsertBeforeRead(t *testing.T) {
-	runOperatorTests(func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		result, err := tc.Write(ctx, []txn.TxnRequest{newDNRequest(1, 1), newDNRequest(2, 2), newDNRequest(3, 3)})
 		assert.NoError(t, err)
 		assert.Empty(t, result)
@@ -254,7 +254,7 @@ func TestCacheWritesWillInsertBeforeRead(t *testing.T) {
 }
 
 func TestReadOnAbortedTxn(t *testing.T) {
-	runOperatorTests(func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
 			for idx := range result.Responses {
 				result.Responses[idx].Txn = &txn.TxnMeta{Status: txn.TxnStatus_Aborted}
@@ -269,7 +269,7 @@ func TestReadOnAbortedTxn(t *testing.T) {
 }
 
 func TestWriteOnAbortedTxn(t *testing.T) {
-	runOperatorTests(func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
 			for idx := range result.Responses {
 				result.Responses[idx].Txn = &txn.TxnMeta{Status: txn.TxnStatus_Aborted}
@@ -284,7 +284,7 @@ func TestWriteOnAbortedTxn(t *testing.T) {
 }
 
 func TestWriteOnCommittedTxn(t *testing.T) {
-	runOperatorTests(func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
 			for idx := range result.Responses {
 				result.Responses[idx].Txn = &txn.TxnMeta{Status: txn.TxnStatus_Committed}
@@ -299,7 +299,7 @@ func TestWriteOnCommittedTxn(t *testing.T) {
 }
 
 func TestWriteOnCommittingTxn(t *testing.T) {
-	runOperatorTests(func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
 			for idx := range result.Responses {
 				result.Responses[idx].Txn = &txn.TxnMeta{Status: txn.TxnStatus_Committing}
@@ -314,7 +314,7 @@ func TestWriteOnCommittingTxn(t *testing.T) {
 }
 
 func TestSnapshotTxnOperator(t *testing.T) {
-	runOperatorTests(func(_ context.Context, tc *txnOperator, _ *testTxnSender) {
+	runOperatorTests(t, func(_ context.Context, tc *txnOperator, _ *testTxnSender) {
 		v, err := tc.Snapshot()
 		assert.NoError(t, err)
 
@@ -329,7 +329,7 @@ func TestSnapshotTxnOperator(t *testing.T) {
 }
 
 func TestApplySnapshotTxnOperator(t *testing.T) {
-	runOperatorTests(func(_ context.Context, tc *txnOperator, _ *testTxnSender) {
+	runOperatorTests(t, func(_ context.Context, tc *txnOperator, _ *testTxnSender) {
 		snapshot := &txn.CNTxnSnapshot{}
 		snapshot.Txn.ID = tc.mu.txn.ID
 		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
@@ -345,10 +345,11 @@ func TestApplySnapshotTxnOperator(t *testing.T) {
 	})
 }
 
-func runOperatorTests(tc func(context.Context, *txnOperator, *testTxnSender), options ...TxnOption) {
+func runOperatorTests(t *testing.T, tc func(context.Context, *txnOperator, *testTxnSender), options ...TxnOption) {
 	ts := newTestTxnSender()
 	c := NewTxnClient(ts, WithLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel)))
-	txn := c.New(options...)
+	txn, err := c.New(options...)
+	assert.Nil(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 
