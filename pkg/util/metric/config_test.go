@@ -15,7 +15,6 @@
 package metric
 
 import (
-	"os"
 	"strconv"
 	"testing"
 
@@ -26,16 +25,16 @@ func TestEnvOrDefaultBool(t *testing.T) {
 	key := "MO_TEST"
 	assert.Equal(t, envOrDefaultBool(key, 42), int32(42))
 	for _, s := range []string{"1", "True", "T", "true"} {
-		os.Setenv(key, s)
+		t.Setenv(key, s)
 		assert.Equal(t, envOrDefaultBool(key, 42), int32(1))
 	}
 	for _, s := range []string{"0", "f", "false"} {
-		os.Setenv(key, s)
+		t.Setenv(key, s)
 		assert.Equal(t, envOrDefaultBool(key, 42), int32(0))
 	}
 
 	for _, s := range []string{"", "nope", "stop"} {
-		os.Setenv(key, s)
+		t.Setenv(key, s)
 		assert.Equal(t, envOrDefaultBool(key, 42), int32(42))
 	}
 }
@@ -45,11 +44,11 @@ func TestEnvOrDefaultInt(t *testing.T) {
 	assert.Equal(t, envOrDefaultInt[int32](key, 42), int32(42))
 
 	for _, i := range []int{1, 2, 3, 5} {
-		os.Setenv(key, strconv.Itoa(i))
+		t.Setenv(key, strconv.Itoa(i))
 		assert.Equal(t, envOrDefaultInt[int32](key, 42), int32(i))
 	}
 	for _, s := range []string{"x", "02f1", "ffs", "0x12"} {
-		os.Setenv(key, s)
+		t.Setenv(key, s)
 		assert.Equal(t, envOrDefaultInt[int64](key, 42), int64(42))
 	}
 }
