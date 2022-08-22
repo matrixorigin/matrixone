@@ -18,9 +18,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
-	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -43,19 +43,13 @@ type SegmentEntry struct {
 func NewSegmentEntry(table *TableEntry, txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {
 	id := table.GetDB().catalog.NextSegment()
 	e := &SegmentEntry{
-		BaseEntry: &BaseEntry{
-			CommitInfo: CommitInfo{
-				Txn:    txn,
-				CurrOp: OpCreate,
-			},
-			RWMutex: new(sync.RWMutex),
-			ID:      id,
-		},
-		table:   table,
-		link:    new(common.Link),
-		entries: make(map[uint64]*common.DLNode),
-		state:   state,
+		BaseEntry: NewBaseEntry(id),
+		table:     table,
+		link:      new(common.Link),
+		entries:   make(map[uint64]*common.DLNode),
+		state:     state,
 	}
+	e.CreateWithTxn(txn)
 	if dataFactory != nil {
 		e.segData = dataFactory(e)
 	}
@@ -64,7 +58,7 @@ func NewSegmentEntry(table *TableEntry, txn txnif.AsyncTxn, state EntryState, da
 
 func NewReplaySegmentEntry() *SegmentEntry {
 	e := &SegmentEntry{
-		BaseEntry: new(BaseEntry),
+		BaseEntry: NewReplayBaseEntry(),
 		link:      new(common.Link),
 		entries:   make(map[uint64]*common.DLNode),
 	}
@@ -73,37 +67,25 @@ func NewReplaySegmentEntry() *SegmentEntry {
 
 func NewStandaloneSegment(table *TableEntry, id uint64, ts types.TS) *SegmentEntry {
 	e := &SegmentEntry{
-		BaseEntry: &BaseEntry{
-			CommitInfo: CommitInfo{
-				CurrOp: OpCreate,
-			},
-			RWMutex:  new(sync.RWMutex),
-			ID:       id,
-			CreateAt: ts,
-		},
-		table:   table,
-		link:    new(common.Link),
-		entries: make(map[uint64]*common.DLNode),
-		state:   ES_Appendable,
+		BaseEntry: NewBaseEntry(id),
+		table:     table,
+		link:      new(common.Link),
+		entries:   make(map[uint64]*common.DLNode),
+		state:     ES_Appendable,
 	}
+	e.CreateWithTS(ts)
 	return e
 }
 
 func NewSysSegmentEntry(table *TableEntry, id uint64) *SegmentEntry {
 	e := &SegmentEntry{
-		BaseEntry: &BaseEntry{
-			CommitInfo: CommitInfo{
-				CurrOp: OpCreate,
-			},
-			RWMutex:  new(sync.RWMutex),
-			ID:       id,
-			CreateAt: types.SystemDBTS,
-		},
-		table:   table,
-		link:    new(common.Link),
-		entries: make(map[uint64]*common.DLNode),
-		state:   ES_Appendable,
+		BaseEntry: NewBaseEntry(id),
+		table:     table,
+		link:      new(common.Link),
+		entries:   make(map[uint64]*common.DLNode),
+		state:     ES_Appendable,
 	}
+	e.CreateWithTS(types.SystemDBTS)
 	var bid uint64
 	if table.schema.Name == SystemTableSchema.Name {
 		bid = SystemBlock_Table_ID
@@ -136,12 +118,9 @@ func (entry *SegmentEntry) GetBlockEntryByIDLocked(id uint64) (blk *BlockEntry, 
 }
 
 func (entry *SegmentEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
-	cmdType := CmdCreateSegment
+	cmdType := CmdUpdateSegment
 	entry.RLock()
 	defer entry.RUnlock()
-	if entry.CurrOp == OpSoftDelete {
-		cmdType = CmdDropSegment
-	}
 	return newSegmentCmd(id, cmdType, entry), nil
 }
 
@@ -164,7 +143,7 @@ func (entry *SegmentEntry) PPString(level common.PPLevel, depth int, prefix stri
 }
 
 func (entry *SegmentEntry) StringLocked() string {
-	return fmt.Sprintf("[%s]SEGMENT%s", entry.state.Repr(), entry.BaseEntry.String())
+	return fmt.Sprintf("[%s]SEGMENT%s", entry.state.Repr(), entry.BaseEntry.StringLocked())
 }
 
 func (entry *SegmentEntry) Repr() string {
@@ -235,6 +214,12 @@ func (entry *SegmentEntry) DropBlockEntry(id uint64, txn txnif.AsyncTxn) (delete
 	}
 	blk.Lock()
 	defer blk.Unlock()
+	needWait, waitTxn := blk.NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		blk.Unlock()
+		waitTxn.GetTxnState(true)
+		blk.Lock()
+	}
 	err = blk.DropEntryLocked(txn)
 	if err == nil {
 		deleted = blk
@@ -290,11 +275,15 @@ func (entry *SegmentEntry) RemoveEntry(block *BlockEntry) (err error) {
 }
 
 func (entry *SegmentEntry) PrepareRollback() (err error) {
-	entry.RLock()
-	currOp := entry.CurrOp
+	entry.Lock()
 	logutil.Infof("PrepareRollback %s", entry.StringLocked())
-	entry.RUnlock()
-	if currOp == OpCreate {
+	if err = entry.BaseEntry.PrepareRollbackLocked(); err != nil {
+		entry.Unlock()
+		return
+	}
+	isEmpty := entry.BaseEntry.IsEmpty()
+	entry.Unlock()
+	if isEmpty {
 		if err = entry.GetTable().RemoveEntry(entry); err != nil {
 			return
 		}
@@ -305,15 +294,12 @@ func (entry *SegmentEntry) PrepareRollback() (err error) {
 			return
 		}
 	}
-	if err = entry.BaseEntry.PrepareRollback(); err != nil {
-		return
-	}
 	return
 }
 
 func (entry *SegmentEntry) WriteTo(w io.Writer) (n int64, err error) {
 	sn := int64(0)
-	if sn, err = entry.BaseEntry.WriteTo(w); err != nil {
+	if sn, err = entry.BaseEntry.WriteAllTo(w); err != nil {
 		return
 	}
 	if err = binary.Write(w, binary.BigEndian, entry.state); err != nil {
@@ -324,7 +310,7 @@ func (entry *SegmentEntry) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (entry *SegmentEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = entry.BaseEntry.ReadFrom(r); err != nil {
+	if n, err = entry.BaseEntry.ReadAllFrom(r); err != nil {
 		return
 	}
 	err = binary.Read(r, binary.BigEndian, &entry.state)
@@ -336,22 +322,16 @@ func (entry *SegmentEntry) MakeLogEntry() *EntryCommand {
 	return newSegmentCmd(0, CmdLogSegment, entry)
 }
 
-func (entry *SegmentEntry) Clone() CheckpointItem {
-	cloned := &SegmentEntry{
-		BaseEntry: entry.BaseEntry.Clone(),
+func (entry *SegmentEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
+	ret := entry.CloneCommittedInRange(start, end)
+	if ret == nil {
+		return nil
+	}
+	return &SegmentEntry{
+		BaseEntry: ret,
 		state:     entry.state,
 		table:     entry.table,
 	}
-	return cloned
-}
-
-func (entry *SegmentEntry) CloneCreate() CheckpointItem {
-	cloned := &SegmentEntry{
-		BaseEntry: entry.BaseEntry.CloneCreate(),
-		state:     entry.state,
-		table:     entry.table,
-	}
-	return cloned
 }
 
 func (entry *SegmentEntry) GetScheduler() tasks.TaskScheduler {

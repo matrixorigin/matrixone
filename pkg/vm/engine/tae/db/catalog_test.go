@@ -16,10 +16,11 @@ package db
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sort"
 	"sync"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -153,7 +154,8 @@ func TestLogBlock(t *testing.T) {
 	meta := blk.GetMeta().(*catalog.BlockEntry)
 	err := txn.Commit()
 	assert.Nil(t, err)
-	cmd := meta.MakeLogEntry()
+	ts := tae.Scheduler.GetSafeTS()
+	cmd := meta.GetCheckpointItems(types.TS{}, ts).MakeLogEntry()
 	assert.NotNil(t, cmd)
 
 	var w bytes.Buffer
@@ -168,9 +170,9 @@ func TestLogBlock(t *testing.T) {
 	t.Log(meta.StringLocked())
 	t.Log(entryCmd.Block.StringLocked())
 	assert.Equal(t, meta.ID, entryCmd.Block.ID)
-	assert.Equal(t, meta.CurrOp, entryCmd.Block.CurrOp)
-	assert.Equal(t, meta.CreateAt, entryCmd.Block.CreateAt)
-	assert.Equal(t, meta.DeleteAt, entryCmd.Block.DeleteAt)
+	assert.Equal(t, meta.GetCurrOp(), entryCmd.Block.GetCurrOp())
+	assert.True(t, meta.GetCreateAt().Equal(entryCmd.Block.GetCreateAt()))
+	assert.True(t, meta.GetDeleteAt().Equal(entryCmd.Block.GetDeleteAt()))
 }
 
 func TestLogSegment(t *testing.T) {
@@ -185,7 +187,8 @@ func TestLogSegment(t *testing.T) {
 	meta := seg.GetMeta().(*catalog.SegmentEntry)
 	err := txn.Commit()
 	assert.Nil(t, err)
-	cmd := meta.MakeLogEntry()
+	ts := tae.Scheduler.GetSafeTS()
+	cmd := meta.GetCheckpointItems(types.TS{}, ts).MakeLogEntry()
 	assert.NotNil(t, cmd)
 
 	var w bytes.Buffer
@@ -200,9 +203,9 @@ func TestLogSegment(t *testing.T) {
 	t.Log(meta.StringLocked())
 	t.Log(entryCmd.Segment.StringLocked())
 	assert.Equal(t, meta.ID, entryCmd.Segment.ID)
-	assert.Equal(t, meta.CurrOp, entryCmd.Segment.CurrOp)
-	assert.Equal(t, meta.CreateAt, entryCmd.Segment.CreateAt)
-	assert.Equal(t, meta.DeleteAt, entryCmd.Segment.DeleteAt)
+	assert.Equal(t, meta.GetCurrOp(), entryCmd.Segment.GetCurrOp())
+	assert.True(t, meta.GetCreateAt().Equal(entryCmd.Segment.GetCreateAt()))
+	assert.True(t, meta.GetDeleteAt().Equal(entryCmd.Segment.GetDeleteAt()))
 }
 
 func TestLogTable(t *testing.T) {
@@ -216,7 +219,8 @@ func TestLogTable(t *testing.T) {
 	meta := rel.GetMeta().(*catalog.TableEntry)
 	err := txn.Commit()
 	assert.Nil(t, err)
-	cmd := meta.MakeLogEntry()
+	ts := tae.Scheduler.GetSafeTS()
+	cmd := meta.GetCheckpointItems(types.TS{}, ts).MakeLogEntry()
 	assert.NotNil(t, cmd)
 
 	var w bytes.Buffer
@@ -231,9 +235,9 @@ func TestLogTable(t *testing.T) {
 	t.Log(meta.StringLocked())
 	t.Log(entryCmd.Table.StringLocked())
 	assert.Equal(t, meta.ID, entryCmd.Table.ID)
-	assert.Equal(t, meta.CurrOp, entryCmd.Table.CurrOp)
-	assert.Equal(t, meta.CreateAt, entryCmd.Table.CreateAt)
-	assert.Equal(t, meta.DeleteAt, entryCmd.Table.DeleteAt)
+	assert.Equal(t, meta.GetCurrOp(), entryCmd.Table.GetCurrOp())
+	assert.True(t, meta.GetCreateAt().Equal(entryCmd.Table.GetCreateAt()))
+	assert.True(t, meta.GetDeleteAt().Equal(entryCmd.Table.GetDeleteAt()))
 	assert.Equal(t, meta.GetSchema().Name, entryCmd.Table.GetSchema().Name)
 	assert.Equal(t, meta.GetSchema().BlockMaxRows, entryCmd.Table.GetSchema().BlockMaxRows)
 	assert.Equal(t, meta.GetSchema().SegmentMaxBlocks, entryCmd.Table.GetSchema().SegmentMaxBlocks)
@@ -250,7 +254,8 @@ func TestLogDatabase(t *testing.T) {
 	meta := db.GetMeta().(*catalog.DBEntry)
 	err := txn.Commit()
 	assert.Nil(t, err)
-	cmd := meta.MakeLogEntry()
+	ts := tae.Scheduler.GetSafeTS()
+	cmd := meta.GetCheckpointItems(types.TS{}, ts).MakeLogEntry()
 	assert.NotNil(t, cmd)
 
 	var w bytes.Buffer
@@ -265,9 +270,9 @@ func TestLogDatabase(t *testing.T) {
 	t.Log(meta.StringLocked())
 	t.Log(entryCmd.DB.StringLocked())
 	assert.Equal(t, meta.ID, entryCmd.DB.ID)
-	assert.Equal(t, meta.CurrOp, entryCmd.DB.CurrOp)
-	assert.Equal(t, meta.CreateAt, entryCmd.DB.CreateAt)
-	assert.Equal(t, meta.DeleteAt, entryCmd.DB.DeleteAt)
+	assert.Equal(t, meta.GetCurrOp(), entryCmd.DB.GetCurrOp())
+	assert.True(t, meta.GetCreateAt().Equal(entryCmd.DB.GetCreateAt()))
+	assert.True(t, meta.GetDeleteAt().Equal(entryCmd.DB.GetDeleteAt()))
 	assert.Equal(t, meta.GetName(), entryCmd.DB.GetName())
 }
 
@@ -437,13 +442,13 @@ func TestCheckpointCatalog(t *testing.T) {
 	t.Log(blk.String())
 	assert.Nil(t, err)
 	assert.True(t, blk.HasDropped())
-	assert.True(t, blk.DeleteAt.Greater(endTs))
-	assert.True(t, blk.CreateAt.Greater(startTs))
-	assert.Equal(t, blk.CreateAt, blockEntry.CreateAt)
+	assert.True(t, blk.GetDeleteAt().Greater(endTs))
+	assert.True(t, blk.GetCreateAt().Greater(startTs))
+	assert.Equal(t, blk.GetCreateAt(), blockEntry.GetCreateAt())
 
 	var zeroV1 types.TS
 	//assert.Equal(t, uint64(0), blockEntry.DeleteAt)
-	assert.Equal(t, zeroV1, blockEntry.DeleteAt)
+	assert.Equal(t, zeroV1, blockEntry.GetDeleteAt())
 
 	buf, err := entry.Marshal()
 	assert.Nil(t, err)
@@ -460,9 +465,9 @@ func TestCheckpointCatalog(t *testing.T) {
 			blk1 := entry.Entries[i].Block
 			blk2 := replayEntry.Entries[i].Block
 			assert.Equal(t, blk1.ID, blk2.ID)
-			assert.Equal(t, blk1.CreateAt, blk2.CreateAt)
-			assert.Equal(t, blk1.DeleteAt, blk2.DeleteAt)
-			assert.Equal(t, blk1.CurrOp, blk2.CurrOp)
+			assert.Equal(t, blk1.GetCreateAt(), blk2.GetCreateAt())
+			assert.Equal(t, blk1.GetDeleteAt(), blk2.GetDeleteAt())
+			assert.Equal(t, blk1.GetCurrOp(), blk2.GetCurrOp())
 		}
 	}
 	replayEntry.PrintItems()

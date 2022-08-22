@@ -2638,8 +2638,8 @@ func TestDropCreated1(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).CreateAt)
-	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).DeleteAt)
+	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreateAt())
+	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreateAt())
 
 	tae.restart()
 }
@@ -2660,8 +2660,8 @@ func TestDropCreated2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).CreateAt)
-	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).DeleteAt)
+	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreateAt())
+	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreateAt())
 
 	tae.restart()
 }

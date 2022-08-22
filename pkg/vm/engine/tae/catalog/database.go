@@ -68,14 +68,7 @@ func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
 	id := catalog.NextDB()
 
 	e := &DBEntry{
-		BaseEntry: &BaseEntry{
-			CommitInfo: CommitInfo{
-				CurrOp: OpCreate,
-				Txn:    txnCtx,
-			},
-			RWMutex: new(sync.RWMutex),
-			ID:      id,
-		},
+		BaseEntry: NewBaseEntry(id),
 		catalog:   catalog,
 		name:      name,
 		entries:   make(map[uint64]*common.DLNode),
@@ -87,21 +80,14 @@ func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
 		e.acInfo.TenantID = txnCtx.GetTenantID()
 		e.acInfo.UserID, e.acInfo.RoleID = txnCtx.GetUserAndRoleID()
 	}
+	e.CreateWithTxn(txnCtx)
 	return e
 }
 
 func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 	id := SystemDBID
 	entry := &DBEntry{
-		BaseEntry: &BaseEntry{
-			CommitInfo: CommitInfo{
-				CurrOp: OpCreate,
-			},
-			RWMutex: new(sync.RWMutex),
-			ID:      id,
-			//CreateAt: 1,
-			CreateAt: types.SystemDBTS,
-		},
+		BaseEntry: NewBaseEntry(id),
 		catalog:   catalog,
 		name:      SystemDBName,
 		entries:   make(map[uint64]*common.DLNode),
@@ -109,12 +95,13 @@ func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 		link:      new(common.Link),
 		isSys:     true,
 	}
+	entry.CreateWithTS(types.SystemDBTS)
 	return entry
 }
 
 func NewReplayDBEntry() *DBEntry {
 	entry := &DBEntry{
-		BaseEntry: new(BaseEntry),
+		BaseEntry: NewReplayBaseEntry(),
 		entries:   make(map[uint64]*common.DLNode),
 		nameNodes: make(map[string]*nodeList),
 		link:      new(common.Link),
@@ -152,7 +139,7 @@ func (e *DBEntry) String() string {
 }
 
 func (e *DBEntry) StringLocked() string {
-	return fmt.Sprintf("DB%s[name=%s]", e.BaseEntry.String(), e.GetFullName())
+	return fmt.Sprintf("DB%s[name=%s]", e.BaseEntry.StringLocked(), e.GetFullName())
 }
 
 func (e *DBEntry) MakeTableIt(reverse bool) *common.LinkIt {
@@ -232,6 +219,12 @@ func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (deleted *T
 	entry := dn.GetPayload().(*TableEntry)
 	entry.Lock()
 	defer entry.Unlock()
+	needWait, txn := entry.NeedWaitCommitting(txnCtx.GetStartTS())
+	if needWait {
+		entry.Unlock()
+		txn.GetTxnState(true)
+		entry.Lock()
+	}
 	err = entry.DropEntryLocked(txnCtx)
 	if err == nil {
 		deleted = entry
@@ -242,7 +235,7 @@ func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (deleted *T
 func (e *DBEntry) CreateTableEntry(schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) (created *TableEntry, err error) {
 	e.Lock()
 	created = NewTableEntry(e, schema, txnCtx, dataFactory)
-	err = e.AddEntryLocked(created)
+	err = e.AddEntryLocked(created, txnCtx)
 	e.Unlock()
 
 	return created, err
@@ -273,7 +266,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 	return
 }
 
-func (e *DBEntry) AddEntryLocked(table *TableEntry) (err error) {
+func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.AsyncTxn) (err error) {
 	defer func() {
 		if err == nil {
 			e.catalog.AddTableCnt(1)
@@ -287,27 +280,34 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry) (err error) {
 
 		nn := newNodeList(e, &e.nodesMu, table.schema.Name)
 		e.nameNodes[table.schema.Name] = nn
-
 		nn.CreateNode(table.GetID())
 	} else {
 		node := nn.GetTableNode()
 		record := node.GetPayload().(*TableEntry)
 		record.RLock()
-		err = record.PrepareWrite(table.GetTxn(), record.RWMutex)
-		if err != nil {
-			record.RUnlock()
-			return
-		}
-		if record.HasActiveTxn() {
-			if !record.IsDroppedUncommitted() {
+		if txn != nil {
+			needWait, waitTxn := record.NeedWaitCommitting(txn.GetStartTS())
+			if needWait {
 				record.RUnlock()
-				err = ErrDuplicate
+				waitTxn.GetTxnState(true)
+				record.RLock()
+			}
+			err = record.PrepareWrite(table.GetTxn(), record.RWMutex)
+			if err != nil {
+				record.RUnlock()
 				return
 			}
-		} else if !record.HasDropped() {
-			record.RUnlock()
-			err = ErrDuplicate
-			return
+		}
+		if txn == nil || record.GetTxn() != txn {
+			if !record.HasDropped() {
+				record.RUnlock()
+				return ErrDuplicate
+			}
+		} else {
+			if record.ExistedForTs(txn.GetStartTS()) {
+				record.RUnlock()
+				return ErrDuplicate
+			}
 		}
 		record.RUnlock()
 		n := e.link.Insert(table)
@@ -318,12 +318,9 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry) (err error) {
 }
 
 func (e *DBEntry) MakeCommand(id uint32) (txnif.TxnCmd, error) {
-	cmdType := CmdCreateDatabase
+	cmdType := CmdUpdateDatabase
 	e.RLock()
 	defer e.RUnlock()
-	if e.CurrOp == OpSoftDelete {
-		cmdType = CmdDropDatabase
-	}
 	return newDBCmd(id, cmdType, e), nil
 }
 
@@ -353,22 +350,23 @@ func (e *DBEntry) RecurLoop(processor Processor) (err error) {
 }
 
 func (e *DBEntry) PrepareRollback() (err error) {
-	e.RLock()
-	currOp := e.CurrOp
-	e.RUnlock()
-	if currOp == OpCreate {
+	e.Lock()
+	if err = e.BaseEntry.PrepareRollbackLocked(); err != nil {
+		e.Unlock()
+		return
+	}
+	isEmpty := e.BaseEntry.IsEmpty()
+	e.Unlock()
+	if isEmpty {
 		if err = e.catalog.RemoveEntry(e); err != nil {
 			return
 		}
-	}
-	if err = e.BaseEntry.PrepareRollback(); err != nil {
-		return
 	}
 	return
 }
 
 func (e *DBEntry) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = e.BaseEntry.WriteTo(w); err != nil {
+	if n, err = e.BaseEntry.WriteAllTo(w); err != nil {
 		return
 	}
 	x, err := e.acInfo.WriteTo(w)
@@ -386,7 +384,7 @@ func (e *DBEntry) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (e *DBEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = e.BaseEntry.ReadFrom(r); err != nil {
+	if n, err = e.BaseEntry.ReadAllFrom(r); err != nil {
 		return
 	}
 	x, err := e.acInfo.ReadFrom(r)
@@ -412,33 +410,25 @@ func (e *DBEntry) MakeLogEntry() *EntryCommand {
 	return newDBCmd(0, CmdLogDatabase, e)
 }
 
-func (e *DBEntry) Clone() CheckpointItem {
-	cloned := &DBEntry{
-		BaseEntry: e.BaseEntry.Clone(),
-		acInfo:    e.acInfo,
-		name:      e.name,
+func (entry *DBEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
+	ret := entry.CloneCommittedInRange(start, end)
+	if ret == nil {
+		return nil
 	}
-	return cloned
+	return &DBEntry{
+		BaseEntry: ret,
+		acInfo:    entry.acInfo,
+		name:      entry.name,
+		catalog:   entry.catalog,
+	}
 }
 
-func (e *DBEntry) CloneCreate() CheckpointItem {
-	cloned := &DBEntry{
-		BaseEntry: e.BaseEntry.CloneCreate(),
-		acInfo:    e.acInfo,
-		name:      e.name,
+func (entry *DBEntry) CloneCreateEntry() *DBEntry {
+	return &DBEntry{
+		acInfo:    entry.acInfo,
+		BaseEntry: entry.BaseEntry.CloneCreateEntry(),
+		name:      entry.name,
 	}
-	return cloned
-}
-
-func (e *DBEntry) CloneCreateEntry() *DBEntry {
-	cloned := &DBEntry{
-		BaseEntry: e.BaseEntry.Clone(),
-		acInfo:    e.acInfo,
-		name:      e.name,
-	}
-	cloned.RWMutex = &sync.RWMutex{}
-	cloned.CurrOp = OpCreate
-	return cloned
 }
 
 // IsActive is coarse API: no consistency check

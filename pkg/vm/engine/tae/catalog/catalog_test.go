@@ -15,7 +15,6 @@
 package catalog
 
 import (
-	"bytes"
 	"fmt"
 	"sync"
 	"testing"
@@ -369,101 +368,101 @@ func TestTable1(t *testing.T) {
 	wg.Wait()
 }
 
-func TestCommand(t *testing.T) {
-	dir := testutils.InitTestEnv(ModuleName, t)
-	catalog := MockCatalog(dir, "mock", nil, nil)
-	defer catalog.Close()
-	name := "db"
+// func TestCommand(t *testing.T) {
+// 	dir := testutils.InitTestEnv(ModuleName, t)
+// 	catalog := MockCatalog(dir, "mock", nil, nil)
+// 	defer catalog.Close()
+// 	name := "db"
 
-	db := NewDBEntry(catalog, name, nil)
-	//db.CreateAt = common.NextGlobalSeqNum()
-	db.CreateAt = types.NextGlobalTsForTest()
-	db.CurrOp = OpCreate
-	db.ID = uint64(99)
+// 	db := NewDBEntry(catalog, name, nil)
+// 	//db.CreateAt = common.NextGlobalSeqNum()
+// 	db.CreateAt = types.NextGlobalTsForTest()
+// 	db.CurrOp = OpCreate
+// 	db.ID = uint64(99)
 
-	cdb, err := db.MakeCommand(0)
-	assert.Nil(t, err)
+// 	cdb, err := db.MakeCommand(0)
+// 	assert.Nil(t, err)
 
-	var w bytes.Buffer
-	_, err = cdb.WriteTo(&w)
-	assert.Nil(t, err)
+// 	var w bytes.Buffer
+// 	_, err = cdb.WriteTo(&w)
+// 	assert.Nil(t, err)
 
-	buf := w.Bytes()
-	r := bytes.NewBuffer(buf)
+// 	buf := w.Bytes()
+// 	r := bytes.NewBuffer(buf)
 
-	cmd, _, err := txnbase.BuildCommandFrom(r)
-	assert.Nil(t, err)
-	t.Log(cmd.GetType())
-	eCmd := cmd.(*EntryCommand)
-	assert.Equal(t, db.CreateAt, eCmd.DB.CreateAt)
-	assert.Equal(t, db.name, eCmd.DB.name)
-	assert.Equal(t, db.ID, eCmd.entry.ID)
+// 	cmd, _, err := txnbase.BuildCommandFrom(r)
+// 	assert.Nil(t, err)
+// 	t.Log(cmd.GetType())
+// 	eCmd := cmd.(*EntryCommand)
+// 	assert.Equal(t, db.CreateAt, eCmd.DB.CreateAt)
+// 	assert.Equal(t, db.name, eCmd.DB.name)
+// 	assert.Equal(t, db.ID, eCmd.entry.ID)
 
-	db.CurrOp = OpSoftDelete
-	//db.DeleteAt = common.NextGlobalSeqNum()
-	db.DeleteAt = types.NextGlobalTsForTest()
+// 	db.CurrOp = OpSoftDelete
+// 	//db.DeleteAt = common.NextGlobalSeqNum()
+// 	db.DeleteAt = types.NextGlobalTsForTest()
 
-	cdb, err = db.MakeCommand(1)
-	assert.Nil(t, err)
+// 	cdb, err = db.MakeCommand(1)
+// 	assert.Nil(t, err)
 
-	w.Reset()
-	_, err = cdb.WriteTo(&w)
-	assert.Nil(t, err)
+// 	w.Reset()
+// 	_, err = cdb.WriteTo(&w)
+// 	assert.Nil(t, err)
 
-	buf = w.Bytes()
-	r = bytes.NewBuffer(buf)
+// 	buf = w.Bytes()
+// 	r = bytes.NewBuffer(buf)
 
-	cmd, _, err = txnbase.BuildCommandFrom(r)
-	assert.Nil(t, err)
+// 	cmd, _, err = txnbase.BuildCommandFrom(r)
+// 	assert.Nil(t, err)
 
-	eCmd = cmd.(*EntryCommand)
-	assert.Equal(t, db.DeleteAt, eCmd.entry.DeleteAt)
-	assert.Equal(t, db.ID, eCmd.entry.ID)
+// 	eCmd = cmd.(*EntryCommand)
+// 	assert.Equal(t, db.DeleteAt, eCmd.entry.DeleteAt)
+// 	assert.Equal(t, db.ID, eCmd.entry.ID)
 
-	schema := MockSchemaAll(13, 0)
-	tb := NewTableEntry(db, schema, nil, nil)
-	//tb.CreateAt = common.NextGlobalSeqNum()
-	tb.CreateAt = types.NextGlobalTsForTest()
-	tb.ID = common.NextGlobalSeqNum()
+// 	schema := MockSchemaAll(13, 0)
+// 	tb := NewTableEntry(db, schema, nil, nil)
+// 	//tb.CreateAt = common.NextGlobalSeqNum()
+// 	tb.CreateAt = types.NextGlobalTsForTest()
+// 	tb.ID = common.NextGlobalSeqNum()
 
-	w.Reset()
-	cmd, err = tb.MakeCommand(2)
-	assert.Nil(t, err)
+// 	w.Reset()
+// 	cmd, err = tb.MakeCommand(2)
+// 	assert.Nil(t, err)
 
-	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, err)
+// 	_, err = cmd.WriteTo(&w)
+// 	assert.Nil(t, err)
 
-	buf = w.Bytes()
-	r = bytes.NewBuffer(buf)
+// 	buf = w.Bytes()
+// 	r = bytes.NewBuffer(buf)
 
-	cmd, _, err = txnbase.BuildCommandFrom(r)
-	assert.Nil(t, err)
-	eCmd = cmd.(*EntryCommand)
-	assert.Equal(t, tb.ID, eCmd.Table.ID)
-	assert.Equal(t, tb.CreateAt, eCmd.Table.CreateAt)
-	assert.Equal(t, tb.GetSchema().Name, eCmd.Table.GetSchema().Name)
-	assert.Equal(t, tb.db.ID, eCmd.DBID)
+// 	cmd, _, err = txnbase.BuildCommandFrom(r)
+// 	assert.Nil(t, err)
+// 	eCmd = cmd.(*EntryCommand)
+// 	assert.Equal(t, tb.ID, eCmd.Table.ID)
+// 	assert.Equal(t, tb.CreateAt, eCmd.Table.CreateAt)
+// 	assert.Equal(t, tb.GetSchema().Name, eCmd.Table.GetSchema().Name)
+// 	assert.Equal(t, tb.db.ID, eCmd.DBID)
 
-	tb.DeleteAt = types.NextGlobalTsForTest()
-	tb.CurrOp = OpSoftDelete
+// 	tb.DeleteAt = types.NextGlobalTsForTest()
+// 	tb.CurrOp = OpSoftDelete
 
-	cmd, err = tb.MakeCommand(3)
-	assert.Nil(t, err)
+// 	cmd, err = tb.MakeCommand(3)
+// 	assert.Nil(t, err)
 
-	w.Reset()
-	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, err)
+// 	w.Reset()
+// 	_, err = cmd.WriteTo(&w)
+// 	assert.Nil(t, err)
 
-	buf = w.Bytes()
-	r = bytes.NewBuffer(buf)
+// 	buf = w.Bytes()
+// 	r = bytes.NewBuffer(buf)
 
-	cmd, _, err = txnbase.BuildCommandFrom(r)
-	assert.Nil(t, err)
-	eCmd = cmd.(*EntryCommand)
-	assert.Equal(t, tb.ID, eCmd.entry.ID)
-	assert.Equal(t, tb.DeleteAt, eCmd.entry.DeleteAt)
-	assert.Equal(t, tb.db.ID, eCmd.DBID)
-}
+// 	cmd, _, err = txnbase.BuildCommandFrom(r)
+// 	assert.Nil(t, err)
+// 	eCmd = cmd.(*EntryCommand)
+// 	assert.Equal(t, tb.ID, eCmd.entry.ID)
+// 	assert.Equal(t, tb.DeleteAt, eCmd.entry.DeleteAt)
+// 	assert.Equal(t, tb.db.ID, eCmd.DBID)
+// }
 
 // UT Steps
 // 1. Start Txn1, create a database "db", table "tb" and segment "seg1", then commit Txn1

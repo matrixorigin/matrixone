@@ -208,9 +208,13 @@ func (it *LinkIt) Valid() bool {
 }
 
 func (it *LinkIt) Next() {
-	it.linkLocker.RLock()
-	it.curr = it.nextFunc(it.curr)
-	it.linkLocker.RUnlock()
+	if it.linkLocker != nil {
+		it.linkLocker.RLock()
+		it.curr = it.nextFunc(it.curr)
+		it.linkLocker.RUnlock()
+	} else {
+		it.curr = it.nextFunc(it.curr)
+	}
 }
 
 func (it *LinkIt) Get() *DLNode {
