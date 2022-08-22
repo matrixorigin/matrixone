@@ -336,7 +336,7 @@ func constructTop(n *plan.Node, proc *process.Process) *top.Argument {
 }
 
 func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join.Argument {
-	result := make([]join.ResultPos, len(n.ProjectList))
+	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
@@ -396,7 +396,7 @@ func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *si
 }
 
 func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *product.Argument {
-	result := make([]product.ResultPos, len(n.ProjectList))
+	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
@@ -570,7 +570,7 @@ func constructMergeOrder(n *plan.Node, proc *process.Process) *mergeorder.Argume
 }
 
 func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *loopjoin.Argument {
-	result := make([]loopjoin.ResultPos, len(n.ProjectList))
+	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}

@@ -59,6 +59,12 @@ type Config struct {
 		// S3 s3 configuration
 		S3 fileservice.S3Config `toml:"s3"`
 	}
+
+	// parameters for cn-server related buffer.
+	PayLoadCopyBufferSize int
+	ReadBufferSize        int
+	WriteBufferSize       int
+
 	// Pipeline configuration
 	Pipeline struct {
 		// HostSize is the memory limit
@@ -91,9 +97,10 @@ type Config struct {
 
 type service struct {
 	cfg                    *Config
-	pool                   *sync.Pool
+	responsePool           *sync.Pool
 	logger                 *zap.Logger
 	server                 morpc.RPCServer
+	requestHandler         func(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error
 	cancelMoServerFunc     context.CancelFunc
 	mo                     *frontend.MOServer
 	initHakeeperClientOnce sync.Once
