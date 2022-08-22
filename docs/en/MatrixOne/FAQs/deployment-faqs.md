@@ -4,7 +4,7 @@
 
 * **What are the required operating system versions for deploying MatrixOne?**
 
-For standalone installation, MatrixOne 0.5.0 supports the following operating system:
+For standalone installation, MatrixOne supports the following operating system:
 
 | Linux OS                 | Version                   |
 | :----------------------- | :------------------------ |
@@ -23,7 +23,7 @@ MatrixOne also supports macOS operating system, but it's only recommended to run
 
 * **What are the required hardware for deploying MatrixOne?**
 
-For standalone installation, MatrixOne 0.5.0 can be running on the 64-bit generic hardware server platform in the Intel x86-64 architecture. The requirements and recommendations about server hardware configuration for development, testing and production environments are as follows:
+For standalone installation, MatrixOne can be running on the 64-bit generic hardware server platform in the Intel x86-64 architecture. The requirements and recommendations about server hardware configuration for development, testing and production environments are as follows:
 
 * Development and testing environments
 
@@ -85,7 +85,7 @@ To complete the following configuration, then compiling 'SSB-DBgen' for a PC wit
 
 1. Download and install [GCC11](https://gcc.gnu.org/install/).
 
-2. To ensure the gcc-11 is successful installed, run the following ccommand:
+2. To ensure the gcc-11 is successful installed, run the following command:
 
    ```
    gcc-11 -v

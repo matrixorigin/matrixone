@@ -46,7 +46,7 @@ type UnionTypeRecord struct {
 	Distinct bool
 }
 
-// set operations
+// UnionType set operations
 type UnionType int
 
 const (
