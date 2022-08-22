@@ -43,7 +43,7 @@ func TestTable(t *testing.T) {
 	// get
 	r, err := table.Get(tx, Int(42))
 	assert.Nil(t, err)
-	assert.Equal(t, row, r)
+	assert.Equal(t, &row, r)
 
 	// update
 	row.Value = 2
@@ -52,7 +52,7 @@ func TestTable(t *testing.T) {
 
 	r, err = table.Get(tx, Int(42))
 	assert.Nil(t, err)
-	assert.Equal(t, row, r)
+	assert.Equal(t, &row, r)
 
 	// delete
 	err = table.Delete(tx, Int(42))

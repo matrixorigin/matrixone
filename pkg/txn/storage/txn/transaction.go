@@ -52,3 +52,21 @@ func (e ErrWriteConflict) Error() string {
 func (t *Transaction) Tick() {
 	t.CurrentTime = t.CurrentTime.Next()
 }
+
+type ErrStaleWrite struct {
+	WritingTx *Transaction
+	NewerTx   *Transaction
+}
+
+func (e ErrStaleWrite) Error() string {
+	return fmt.Sprintf("stale write: %s %s", e.WritingTx.ID, e.NewerTx.ID)
+}
+
+type ErrStaleRead struct {
+	ReadingTx *Transaction
+	NewerTx   *Transaction
+}
+
+func (e ErrStaleRead) Error() string {
+	return fmt.Sprintf("stale read: %s %s", e.ReadingTx.ID, e.NewerTx.ID)
+}

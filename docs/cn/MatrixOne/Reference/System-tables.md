@@ -2,7 +2,7 @@
 
 MatrixOne Catalog 是 MatrixOne 存储系统信息的组件。你可以通过 `mo_catalog` 数据库访问系统信息。`mo_catalog` 数据库由 `MatrixOne` 在初始化时创建。
 
-在 0.5.0 中，`mo_catalog` 还未完全实现，仅支持查看数据库和数据表的基本信息，暂不支持将值写入 `mo_catalog` 。
+在 0.5.1 中，`mo_catalog` 还未完全实现，仅支持查看数据库和数据表的基本信息，暂不支持将值写入 `mo_catalog` 。
 
 在 `mo_catalog` 数据库中有三个表:
 
