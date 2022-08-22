@@ -289,7 +289,7 @@ func TestMysqlClientProtocol_TlsHandshake(t *testing.T) {
 	for isClosed() && !to.isTimeout() {
 	}
 
-	time.Sleep(time.Second * 5)
+	time.Sleep(time.Second * 8)
 	db := open_tls_db(t, 6001)
 	close_db(t, db)
 
@@ -1323,9 +1323,7 @@ func open_tls_db(t *testing.T, port int) *sql.DB {
 
 		// ping opens the connection
 		err = db.Ping()
-		if err != nil {
-			require.NoError(t, err)
-		}
+		require.NoError(t, err)
 	}
 	return db
 }
