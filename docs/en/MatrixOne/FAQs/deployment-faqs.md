@@ -45,6 +45,14 @@ The Macbook M1/M2 with ARM architecture is also a good fit for a development env
 
 Normally you don't need to change anything for installation. A default setting of `system_vars_config.toml` is enough to run MatrixOne directly. But if you want to customize your listening port, ip address, stored data files path, you may modify the corresponding records of`system_vars_config.toml`.
 
+* **After the MySQL client is installed, I open the terminal and run `mysql`, I got an error of `command not found: mysql`.**
+
+To solve the error, you need to set the environment variable. Run the following command:
+
+```
+export PATH=${PATH}:/usr/local/mysql/bin
+```
+
 * **When I install MatrixOne by building from source, I got an error of the following and the build failed, how can I proceed?**
 
 Error: `Get "https://proxy.golang.org/........": dial tcp 142.251.43.17:443: i/o timeout`
