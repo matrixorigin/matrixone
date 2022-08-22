@@ -410,24 +410,24 @@ func (e *DBEntry) MakeLogEntry() *EntryCommand {
 	return newDBCmd(0, CmdLogDatabase, e)
 }
 
-func (entry *DBEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
-	ret := entry.CloneCommittedInRange(start, end)
+func (e *DBEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
+	ret := e.CloneCommittedInRange(start, end)
 	if ret == nil {
 		return nil
 	}
 	return &DBEntry{
 		BaseEntry: ret,
-		acInfo:    entry.acInfo,
-		name:      entry.name,
-		catalog:   entry.catalog,
+		acInfo:    e.acInfo,
+		name:      e.name,
+		catalog:   e.catalog,
 	}
 }
 
-func (entry *DBEntry) CloneCreateEntry() *DBEntry {
+func (e *DBEntry) CloneCreateEntry() *DBEntry {
 	return &DBEntry{
-		acInfo:    entry.acInfo,
-		BaseEntry: entry.BaseEntry.CloneCreateEntry(),
-		name:      entry.name,
+		acInfo:    e.acInfo,
+		BaseEntry: e.BaseEntry.CloneCreateEntry(),
+		name:      e.name,
 	}
 }
 

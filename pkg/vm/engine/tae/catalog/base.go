@@ -59,11 +59,11 @@ func NewBaseEntry(id uint64) *BaseEntry {
 		RWMutex: &sync.RWMutex{},
 	}
 }
-func (e *BaseEntry) StringLocked() string {
+func (be *BaseEntry) StringLocked() string {
 	var w bytes.Buffer
 
-	_, _ = w.WriteString(fmt.Sprintf("[%d %p]", e.ID, e.RWMutex))
-	it := common.NewLinkIt(nil, e.MVCC, false)
+	_, _ = w.WriteString(fmt.Sprintf("[%d %p]", be.ID, be.RWMutex))
+	it := common.NewLinkIt(nil, be.MVCC, false)
 	for it.Valid() {
 		version := it.Get().GetPayload().(*UpdateNode)
 		_, _ = w.WriteString(" -> ")
@@ -73,20 +73,20 @@ func (e *BaseEntry) StringLocked() string {
 	return w.String()
 }
 
-func (e *BaseEntry) String() string {
-	e.RLock()
-	defer e.RUnlock()
-	return e.StringLocked()
+func (be *BaseEntry) String() string {
+	be.RLock()
+	defer be.RUnlock()
+	return be.StringLocked()
 }
 
-func (e *BaseEntry) PPString(level common.PPLevel, depth int, prefix string) string {
-	s := fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, e.StringLocked())
+func (be *BaseEntry) PPString(level common.PPLevel, depth int, prefix string) string {
+	s := fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, be.StringLocked())
 	return s
 }
 
 // for replay
-func (entry *BaseEntry) GetTs() types.TS {
-	return entry.GetUpdateNodeLocked().End
+func (be *BaseEntry) GetTs() types.TS {
+	return be.GetUpdateNodeLocked().End
 }
 func (be *BaseEntry) GetTxn() txnif.TxnReader { return be.GetUpdateNodeLocked().Txn }
 
@@ -111,18 +111,18 @@ func (be *BaseEntry) GetIndexes() []*wal.Index {
 	}, true)
 	return ret
 }
-func (e *BaseEntry) InsertNode(un *UpdateNode) {
-	e.MVCC.Insert(un)
+func (be *BaseEntry) InsertNode(un *UpdateNode) {
+	be.MVCC.Insert(un)
 }
-func (e *BaseEntry) CreateWithTS(ts types.TS) {
+func (be *BaseEntry) CreateWithTS(ts types.TS) {
 	node := &UpdateNode{
 		CreatedAt: ts,
 		Start:     ts,
 		End:       ts,
 	}
-	e.InsertNode(node)
+	be.InsertNode(node)
 }
-func (e *BaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
+func (be *BaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	var startTS types.TS
 	if txn != nil {
 		startTS = txn.GetStartTS()
@@ -131,10 +131,10 @@ func (e *BaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 		Start: startTS,
 		Txn:   txn,
 	}
-	e.InsertNode(node)
+	be.InsertNode(node)
 }
-func (e *BaseEntry) ExistUpdate(minTs, MaxTs types.TS) (exist bool) {
-	e.MVCC.Loop(func(n *common.DLNode) bool {
+func (be *BaseEntry) ExistUpdate(minTs, MaxTs types.TS) (exist bool) {
+	be.MVCC.Loop(func(n *common.DLNode) bool {
 		un := n.GetPayload().(*UpdateNode)
 		if un.End.IsEmpty() {
 			return true
@@ -152,18 +152,18 @@ func (e *BaseEntry) ExistUpdate(minTs, MaxTs types.TS) (exist bool) {
 }
 
 // TODO update create
-func (e *BaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node INode, err error) {
-	be := e.MVCC.GetHead().GetPayload().(*UpdateNode)
-	if be.Txn == nil || be.IsSameTxn(txn.GetStartTS()) {
+func (be *BaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node INode, err error) {
+	entry := be.MVCC.GetHead().GetPayload().(*UpdateNode)
+	if entry.Txn == nil || entry.IsSameTxn(txn.GetStartTS()) {
 		if be.HasDropped() {
 			err = ErrNotFound
 			return
 		}
-		nbe := be.CloneData()
+		nbe := entry.CloneData()
 		nbe.Start = txn.GetStartTS()
 		nbe.End = types.TS{}
 		nbe.Txn = txn
-		e.InsertNode(nbe)
+		be.InsertNode(nbe)
 		node = impl
 		err = nbe.ApplyDeleteLocked()
 		return
@@ -173,8 +173,8 @@ func (e *BaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node INode, e
 	return
 }
 
-func (e *BaseEntry) GetUpdateNodeLocked() *UpdateNode {
-	head := e.MVCC.GetHead()
+func (be *BaseEntry) GetUpdateNodeLocked() *UpdateNode {
+	head := be.MVCC.GetHead()
 	if head == nil {
 		return nil
 	}
@@ -182,8 +182,8 @@ func (e *BaseEntry) GetUpdateNodeLocked() *UpdateNode {
 	if payload == nil {
 		return nil
 	}
-	be := payload.(*UpdateNode)
-	return be
+	entry := payload.(*UpdateNode)
+	return entry
 }
 
 func (be *BaseEntry) GetCommittedNode() (node *UpdateNode) {
@@ -225,8 +225,8 @@ func (be *BaseEntry) DeleteBefore(ts types.TS) bool {
 }
 
 // for replay
-func (e *BaseEntry) GetExactUpdateNode(startts types.TS) (node *UpdateNode) {
-	e.MVCC.Loop(func(n *common.DLNode) bool {
+func (be *BaseEntry) GetExactUpdateNode(startts types.TS) (node *UpdateNode) {
+	be.MVCC.Loop(func(n *common.DLNode) bool {
 		un := n.GetPayload().(*UpdateNode)
 		if un.Start == startts {
 			node = un
@@ -238,8 +238,8 @@ func (e *BaseEntry) GetExactUpdateNode(startts types.TS) (node *UpdateNode) {
 	return
 }
 
-func (e *BaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
-	un := e.GetUpdateNodeLocked()
+func (be *BaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
+	un := be.GetUpdateNodeLocked()
 	if un == nil {
 		return false, nil
 	}
@@ -260,16 +260,16 @@ func (e *BaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader)
 // get committed
 // get same node
 // get to read
-func (e *BaseEntry) InTxnOrRollbacked() bool {
-	un := e.GetUpdateNodeLocked()
+func (be *BaseEntry) InTxnOrRollbacked() bool {
+	un := be.GetUpdateNodeLocked()
 	if un == nil {
 		return true
 	}
 	return un.IsActive()
 }
 
-func (e *BaseEntry) IsDroppedCommitted() bool {
-	un := e.GetUpdateNodeLocked()
+func (be *BaseEntry) IsDroppedCommitted() bool {
+	un := be.GetUpdateNodeLocked()
 	if un == nil {
 		return false
 	}
@@ -510,8 +510,8 @@ func (be *BaseEntry) IsCommitted() bool {
 	return un.Txn == nil
 }
 
-func (e *BaseEntry) CloneCommittedInRange(start, end types.TS) (ret *BaseEntry) {
-	e.MVCC.Loop(func(n *common.DLNode) bool {
+func (be *BaseEntry) CloneCommittedInRange(start, end types.TS) (ret *BaseEntry) {
+	be.MVCC.Loop(func(n *common.DLNode) bool {
 		un := n.GetPayload().(*UpdateNode)
 		if un.IsActive() {
 			return true
@@ -519,7 +519,7 @@ func (e *BaseEntry) CloneCommittedInRange(start, end types.TS) (ret *BaseEntry) 
 		// 1. Committed
 		if un.End.GreaterEq(start) && un.End.LessEq(end) {
 			if ret == nil {
-				ret = NewBaseEntry(e.ID)
+				ret = NewBaseEntry(be.ID)
 			}
 			ret.InsertNode(un.CloneAll())
 			ret.length++
@@ -531,8 +531,8 @@ func (e *BaseEntry) CloneCommittedInRange(start, end types.TS) (ret *BaseEntry) 
 	return
 }
 
-func (e *BaseEntry) GetCurrOp() OpT {
-	un := e.GetUpdateNodeLocked()
+func (be *BaseEntry) GetCurrOp() OpT {
+	un := be.GetUpdateNodeLocked()
 	if un == nil {
 		return OpCreate
 	}
@@ -542,16 +542,16 @@ func (e *BaseEntry) GetCurrOp() OpT {
 	return OpSoftDelete
 }
 
-func (e *BaseEntry) GetCreateAt() types.TS {
-	un := e.GetUpdateNodeLocked()
+func (be *BaseEntry) GetCreateAt() types.TS {
+	un := be.GetUpdateNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}
 	return un.CreatedAt
 }
 
-func (e *BaseEntry) GetDeleteAt() types.TS {
-	un := e.GetUpdateNodeLocked()
+func (be *BaseEntry) GetDeleteAt() types.TS {
+	un := be.GetUpdateNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}
