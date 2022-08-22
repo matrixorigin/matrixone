@@ -38,7 +38,7 @@ func CompareUint64(left, right uint64) int {
 
 type BaseEntry struct {
 	*sync.RWMutex
-	MVCC   *common.SortedDLink
+	MVCC   *common.SortedDList
 	length uint64
 	// meta *
 	ID uint64
@@ -47,7 +47,7 @@ type BaseEntry struct {
 func NewReplayBaseEntry() *BaseEntry {
 	be := &BaseEntry{
 		RWMutex: &sync.RWMutex{},
-		MVCC:    new(common.SortedDLink),
+		MVCC:    new(common.SortedDList),
 	}
 	return be
 }
@@ -55,7 +55,7 @@ func NewReplayBaseEntry() *BaseEntry {
 func NewBaseEntry(id uint64) *BaseEntry {
 	return &BaseEntry{
 		ID:      id,
-		MVCC:    new(common.SortedDLink),
+		MVCC:    new(common.SortedDList),
 		RWMutex: &sync.RWMutex{},
 	}
 }
@@ -63,7 +63,7 @@ func (be *BaseEntry) StringLocked() string {
 	var w bytes.Buffer
 
 	_, _ = w.WriteString(fmt.Sprintf("[%d %p]", be.ID, be.RWMutex))
-	it := common.NewSortedDLinkIt(nil, be.MVCC, false)
+	it := common.NewSortedDListIt(nil, be.MVCC, false)
 	for it.Valid() {
 		version := it.Get().GetPayload().(*UpdateNode)
 		_, _ = w.WriteString(" -> ")
@@ -430,7 +430,7 @@ func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead b
 }
 func (be *BaseEntry) CloneCreateEntry() *BaseEntry {
 	cloned := &BaseEntry{
-		MVCC:    &common.SortedDLink{},
+		MVCC:    &common.SortedDList{},
 		RWMutex: &sync.RWMutex{},
 		ID:      be.ID,
 	}

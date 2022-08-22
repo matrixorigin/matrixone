@@ -28,7 +28,7 @@ import (
 )
 
 type ColumnChain struct {
-	*common.SortedDLink
+	*common.SortedDList
 	*sync.RWMutex
 	id   *common.ID
 	view *ColumnView
@@ -38,7 +38,7 @@ type ColumnChain struct {
 
 func MockColumnUpdateChain() *ColumnChain {
 	chain := &ColumnChain{
-		SortedDLink: new(common.SortedDLink),
+		SortedDList: new(common.SortedDList),
 		RWMutex:     new(sync.RWMutex),
 		id:          &common.ID{},
 	}
@@ -53,7 +53,7 @@ func NewColumnChain(rwlocker *sync.RWMutex, colIdx uint16, mvcc *MVCCHandle) *Co
 	id := *mvcc.GetID()
 	id.Idx = colIdx
 	chain := &ColumnChain{
-		SortedDLink: new(common.SortedDLink),
+		SortedDList: new(common.SortedDList),
 		RWMutex:     rwlocker,
 		mvcc:        mvcc,
 		id:          &id,

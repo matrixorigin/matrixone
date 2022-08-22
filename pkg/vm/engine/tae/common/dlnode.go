@@ -18,20 +18,21 @@ import (
 	"sync"
 )
 
-type SortedDLink struct {
+// Sorted doubly linked-list
+type SortedDList struct {
 	head *DLNode
 	tail *DLNode
 }
 
-func (l *SortedDLink) GetHead() *DLNode {
+func (l *SortedDList) GetHead() *DLNode {
 	return l.head
 }
 
-func (l *SortedDLink) GetTail() *DLNode {
+func (l *SortedDList) GetTail() *DLNode {
 	return l.tail
 }
 
-func (l *SortedDLink) Update(n *DLNode) {
+func (l *SortedDList) Update(n *DLNode) {
 	nhead, ntail := n.KeepSorted()
 	if nhead != nil {
 		l.head = nhead
@@ -41,7 +42,7 @@ func (l *SortedDLink) Update(n *DLNode) {
 	}
 }
 
-func (l *SortedDLink) Depth() int {
+func (l *SortedDList) Depth() int {
 	depth := 0
 	l.Loop(func(_ *DLNode) bool {
 		depth++
@@ -50,7 +51,7 @@ func (l *SortedDLink) Depth() int {
 	return depth
 }
 
-func (l *SortedDLink) Insert(payload NodePayload) *DLNode {
+func (l *SortedDList) Insert(payload NodePayload) *DLNode {
 	var (
 		n    *DLNode
 		tail *DLNode
@@ -62,7 +63,7 @@ func (l *SortedDLink) Insert(payload NodePayload) *DLNode {
 	return n
 }
 
-func (l *SortedDLink) Delete(n *DLNode) {
+func (l *SortedDList) Delete(n *DLNode) {
 	prev := n.prev
 	next := n.next
 	if prev != nil && next != nil {
@@ -80,7 +81,7 @@ func (l *SortedDLink) Delete(n *DLNode) {
 	}
 }
 
-func (l *SortedDLink) Loop(fn func(n *DLNode) bool, reverse bool) {
+func (l *SortedDList) Loop(fn func(n *DLNode) bool, reverse bool) {
 	if reverse {
 		LoopDLink(l.tail, fn, reverse)
 	} else {
@@ -179,14 +180,14 @@ func LoopDLink(head *DLNode, fn func(node *DLNode) bool, reverse bool) {
 	}
 }
 
-type SortedDLinkIt struct {
+type SortedDListIt struct {
 	linkLocker *sync.RWMutex
 	curr       *DLNode
 	nextFunc   func(*DLNode) *DLNode
 }
 
-func NewSortedDLinkIt(linkLocker *sync.RWMutex, link *SortedDLink, reverse bool) *SortedDLinkIt {
-	it := &SortedDLinkIt{
+func NewSortedDListIt(linkLocker *sync.RWMutex, link *SortedDList, reverse bool) *SortedDListIt {
+	it := &SortedDListIt{
 		linkLocker: linkLocker,
 	}
 	if reverse {
@@ -203,11 +204,11 @@ func NewSortedDLinkIt(linkLocker *sync.RWMutex, link *SortedDLink, reverse bool)
 	return it
 }
 
-func (it *SortedDLinkIt) Valid() bool {
+func (it *SortedDListIt) Valid() bool {
 	return it.curr != nil
 }
 
-func (it *SortedDLinkIt) Next() {
+func (it *SortedDListIt) Next() {
 	if it.linkLocker == nil {
 		it.curr = it.nextFunc(it.curr)
 		return
@@ -217,6 +218,6 @@ func (it *SortedDLinkIt) Next() {
 	it.linkLocker.RUnlock()
 }
 
-func (it *SortedDLinkIt) Get() *DLNode {
+func (it *SortedDListIt) Get() *DLNode {
 	return it.curr
 }

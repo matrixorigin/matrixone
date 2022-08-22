@@ -32,7 +32,7 @@ import (
 
 type DeleteChain struct {
 	*sync.RWMutex
-	*common.SortedDLink
+	*common.SortedDList
 	mvcc *MVCCHandle
 	cnt  uint32
 }
@@ -43,7 +43,7 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 	}
 	chain := &DeleteChain{
 		RWMutex:     rwlocker,
-		SortedDLink: new(common.SortedDLink),
+		SortedDList: new(common.SortedDList),
 		mvcc:        mvcc,
 	}
 	return chain
@@ -151,7 +151,7 @@ func (chain *DeleteChain) RemoveNodeLocked(node txnif.DeleteNode) {
 	chain.Delete(node.(*DeleteNode).DLNode)
 }
 
-func (chain *DeleteChain) DepthLocked() int { return chain.SortedDLink.Depth() }
+func (chain *DeleteChain) DepthLocked() int { return chain.SortedDList.Depth() }
 
 func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn, deleteType handle.DeleteType) txnif.DeleteNode {
 	node := NewDeleteNode(txn, deleteType)

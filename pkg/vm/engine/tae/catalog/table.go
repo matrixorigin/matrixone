@@ -34,7 +34,7 @@ type TableEntry struct {
 	db        *DBEntry
 	schema    *Schema
 	entries   map[uint64]*common.DLNode
-	link      *common.SortedDLink
+	link      *common.SortedDList
 	tableData data.Table
 	rows      uint64
 }
@@ -51,7 +51,7 @@ func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFacto
 		BaseEntry: NewBaseEntry(id),
 		db:        db,
 		schema:    schema,
-		link:      new(common.SortedDLink),
+		link:      new(common.SortedDList),
 		entries:   make(map[uint64]*common.DLNode),
 	}
 	if dataFactory != nil {
@@ -66,7 +66,7 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 		BaseEntry: NewBaseEntry(id),
 		db:        db,
 		schema:    schema,
-		link:      new(common.SortedDLink),
+		link:      new(common.SortedDList),
 		entries:   make(map[uint64]*common.DLNode),
 	}
 	e.CreateWithTS(types.SystemDBTS)
@@ -88,7 +88,7 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 func NewReplayTableEntry() *TableEntry {
 	e := &TableEntry{
 		BaseEntry: NewReplayBaseEntry(),
-		link:      new(common.SortedDLink),
+		link:      new(common.SortedDList),
 		entries:   make(map[uint64]*common.DLNode),
 	}
 	return e
@@ -98,7 +98,7 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	return &TableEntry{
 		BaseEntry: NewBaseEntry(id),
 		schema:    schema,
-		link:      new(common.SortedDLink),
+		link:      new(common.SortedDList),
 		entries:   make(map[uint64]*common.DLNode),
 	}
 }
@@ -134,10 +134,10 @@ func (entry *TableEntry) GetSegmentByID(id uint64) (seg *SegmentEntry, err error
 	return node.GetPayload().(*SegmentEntry), nil
 }
 
-func (entry *TableEntry) MakeSegmentIt(reverse bool) *common.SortedDLinkIt {
+func (entry *TableEntry) MakeSegmentIt(reverse bool) *common.SortedDListIt {
 	entry.RLock()
 	defer entry.RUnlock()
-	return common.NewSortedDLinkIt(entry.RWMutex, entry.link, reverse)
+	return common.NewSortedDListIt(entry.RWMutex, entry.link, reverse)
 }
 
 func (entry *TableEntry) CreateSegment(txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) (created *SegmentEntry, err error) {
