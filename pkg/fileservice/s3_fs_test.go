@@ -50,9 +50,9 @@ func TestS3FS(t *testing.T) {
 	err = json.Unmarshal(content, &config)
 	assert.Nil(t, err)
 
-	os.Setenv("AWS_REGION", config.Region)
-	os.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
-	os.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
+	t.Setenv("AWS_REGION", config.Region)
+	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
+	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
 
 	t.Run("file service", func(t *testing.T) {
 		testFileService(t, func() FileService {
@@ -129,9 +129,9 @@ func TestS3FSMinioServer(t *testing.T) {
 	assert.Nil(t, err)
 
 	// set s3 credentials
-	os.Setenv("AWS_REGION", "test")
-	os.Setenv("AWS_ACCESS_KEY_ID", "minioadmin")
-	os.Setenv("AWS_SECRET_ACCESS_KEY", "minioadmin")
+	t.Setenv("AWS_REGION", "test")
+	t.Setenv("AWS_ACCESS_KEY_ID", "minioadmin")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "minioadmin")
 
 	endpoint := "http://localhost:9000"
 
@@ -195,9 +195,9 @@ func BenchmarkS3FS(b *testing.B) {
 	err = json.Unmarshal(content, &config)
 	assert.Nil(b, err)
 
-	os.Setenv("AWS_REGION", config.Region)
-	os.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
-	os.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
+	b.Setenv("AWS_REGION", config.Region)
+	b.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
+	b.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
 
 	b.ResetTimer()
 

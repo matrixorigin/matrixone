@@ -34,14 +34,14 @@ func EngineToTxnClient(engine TxnEngine) client.TxnClient {
 
 var _ client.TxnClient = new(wrappedEngine)
 
-func (w *wrappedEngine) New(options ...client.TxnOption) client.TxnOperator {
+func (w *wrappedEngine) New(options ...client.TxnOption) (client.TxnOperator, error) {
 	tx, err := w.engine.StartTxn(nil)
 	if err != nil {
 		panic(err)
 	}
 	return &wrappedTx{
 		tx: tx,
-	}
+	}, nil
 }
 
 func (w *wrappedEngine) NewWithSnapshot(snapshot []byte) (client.TxnOperator, error) {
