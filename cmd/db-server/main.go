@@ -19,6 +19,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/BurntSushi/toml"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"os"
 	"os/signal"
 	"syscall"
@@ -67,6 +68,9 @@ func createMOServer(inputCtx context.Context, pu *config.ParameterUnit) {
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
 	mo = frontend.NewMOServer(moServerCtx, address, pu)
 	{
+		if err := util.SetUUIDNodeID(nil); err != nil {
+			panic(err)
+		}
 		// init trace/log/error framework
 		if _, err := trace.Init(moServerCtx,
 			trace.WithMOVersion(MoVersion),

@@ -161,6 +161,8 @@ func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, 
 	}
 	var sesID uuid.UUID
 	copy(sesID[:], ses.GetUUID())
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+	cw.GetAst().Format(fmtCtx)
 	trace.ReportStatement(
 		ctx,
 		&trace.StatementInfo{
@@ -171,7 +173,7 @@ func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, 
 			User:                 sessInfo.GetUser(),
 			Host:                 sessInfo.GetHost(),
 			Database:             sessInfo.GetDatabase(),
-			Statement:            cw.GetAst().String(),
+			Statement:            fmtCtx.String(),
 			StatementFingerprint: "", // fixme
 			StatementTag:         "", // fixme
 			RequestAt:            util.NowNS(),
