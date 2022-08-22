@@ -138,13 +138,11 @@ func (entry *BlockEntry) GetFileTs() (types.TS, error) {
 	return entry.GetBlockData().GetBlockFile().ReadTS()
 }
 func (entry *BlockEntry) PrepareRollback() (err error) {
-	entry.Lock()
-	err = entry.BaseEntry.PrepareRollbackLocked()
+	var empty bool
+	empty, err = entry.BaseEntry.PrepareRollback()
 	if err != nil {
 		panic(err)
 	}
-	empty := entry.IsEmpty()
-	entry.Unlock()
 	if empty {
 		if err = entry.GetSegment().RemoveEntry(entry); err != nil {
 			return

@@ -275,14 +275,10 @@ func (entry *SegmentEntry) RemoveEntry(block *BlockEntry) (err error) {
 }
 
 func (entry *SegmentEntry) PrepareRollback() (err error) {
-	entry.Lock()
-	logutil.Infof("PrepareRollback %s", entry.StringLocked())
-	if err = entry.BaseEntry.PrepareRollbackLocked(); err != nil {
-		entry.Unlock()
+	var isEmpty bool
+	if isEmpty, err = entry.BaseEntry.PrepareRollback(); err != nil {
 		return
 	}
-	isEmpty := entry.BaseEntry.IsEmpty()
-	entry.Unlock()
 	if isEmpty {
 		if err = entry.GetTable().RemoveEntry(entry); err != nil {
 			return

@@ -490,10 +490,13 @@ func (be *BaseEntry) PrepareCommit() error {
 	return be.GetUpdateNodeLocked().PrepareCommit()
 }
 
-func (be *BaseEntry) PrepareRollbackLocked() error {
+func (be *BaseEntry) PrepareRollback() (bool, error) {
+	be.Lock()
+	defer be.Unlock()
 	node := be.MVCC.GetHead()
 	be.MVCC.Delete(node)
-	return nil
+	isEmpty := be.IsEmpty()
+	return isEmpty, nil
 }
 func (be *BaseEntry) DeleteAfter(ts types.TS) bool {
 	un := be.GetUpdateNodeLocked()

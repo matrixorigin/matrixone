@@ -628,6 +628,8 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 }
 
 func (catalog *Catalog) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTxn) (*common.DLNode, error) {
+	catalog.RLock()
+	defer catalog.RUnlock()
 	fullName := genDBFullName(txnCtx.GetTenantID(), name)
 	node := catalog.nameNodes[fullName]
 	if node == nil {
@@ -637,9 +639,7 @@ func (catalog *Catalog) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTx
 }
 
 func (catalog *Catalog) GetDBEntry(name string, txnCtx txnif.AsyncTxn) (*DBEntry, error) {
-	catalog.RLock()
 	n, err := catalog.txnGetNodeByNameLocked(name, txnCtx)
-	catalog.RUnlock()
 	if err != nil {
 		return nil, err
 	}
@@ -651,8 +651,6 @@ func (catalog *Catalog) DropDBEntry(name string, txnCtx txnif.AsyncTxn) (deleted
 		err = ErrNotPermitted
 		return
 	}
-	catalog.Lock()
-	defer catalog.Unlock()
 	dn, err := catalog.txnGetNodeByNameLocked(name, txnCtx)
 	if err != nil {
 		return
@@ -670,9 +668,9 @@ func (catalog *Catalog) DropDBEntry(name string, txnCtx txnif.AsyncTxn) (deleted
 func (catalog *Catalog) CreateDBEntry(name string, txnCtx txnif.AsyncTxn) (*DBEntry, error) {
 	var err error
 	catalog.Lock()
+	defer catalog.Unlock()
 	entry := NewDBEntry(catalog, name, txnCtx)
 	err = catalog.AddEntryLocked(entry, txnCtx)
-	catalog.Unlock()
 
 	return entry, err
 }
@@ -747,24 +745,32 @@ func (catalog *Catalog) CheckpointClosure(maxTs types.TS) tasks.FuncT {
 		return catalog.Checkpoint(maxTs)
 	}
 }
-
-func (catalog *Catalog) Checkpoint(maxTs types.TS) (err error) {
-	var minTs types.TS
+func (catalog *Catalog) NeedCheckpoint(maxTS types.TS) (needCheckpoint bool, minTS types.TS, err error) {
 	catalog.ckpmu.RLock()
+	defer catalog.ckpmu.RUnlock()
 	if len(catalog.checkpoints) != 0 {
 		lastMax := catalog.checkpoints[len(catalog.checkpoints)-1].MaxTS
-		if maxTs.Less(lastMax) {
+		if maxTS.Less(lastMax) {
 			err = ErrCheckpoint
+			return
 		}
-		if maxTs.Equal(lastMax) {
-			catalog.ckpmu.RUnlock()
+		if maxTS.Equal(lastMax) {
 			return
 		}
 		//minTs = lastMax + 1
-		minTs = lastMax.Next()
+		minTS = lastMax.Next()
 	}
-	catalog.ckpmu.RUnlock()
+	needCheckpoint = true
+	return
+}
+
+func (catalog *Catalog) Checkpoint(maxTs types.TS) (err error) {
 	now := time.Now()
+	var minTs types.TS
+	var needCheckpoint bool
+	if needCheckpoint, minTs, err = catalog.NeedCheckpoint(maxTs); !needCheckpoint {
+		return
+	}
 	entry := catalog.PrepareCheckpoint(minTs, maxTs)
 	logutil.Debugf("PrepareCheckpoint: %s", time.Since(now))
 	if len(entry.LogIndexes) == 0 {

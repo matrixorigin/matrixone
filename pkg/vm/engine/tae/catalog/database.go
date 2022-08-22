@@ -190,7 +190,9 @@ func (e *DBEntry) GetTableEntryByID(id uint64) (table *TableEntry, err error) {
 	return
 }
 
-func (e *DBEntry) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTxn) (*common.DLNode, error) {
+func (e *DBEntry) txnGetNodeByName(name string, txnCtx txnif.AsyncTxn) (*common.DLNode, error) {
+	e.RLock()
+	defer e.RUnlock()
 	node := e.nameNodes[name]
 	if node == nil {
 		return nil, ErrNotFound
@@ -199,9 +201,7 @@ func (e *DBEntry) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTxn) (*c
 }
 
 func (e *DBEntry) GetTableEntry(name string, txnCtx txnif.AsyncTxn) (entry *TableEntry, err error) {
-	e.RLock()
-	n, err := e.txnGetNodeByNameLocked(name, txnCtx)
-	e.RUnlock()
+	n, err := e.txnGetNodeByName(name, txnCtx)
 	if err != nil {
 		return
 	}
@@ -210,9 +210,7 @@ func (e *DBEntry) GetTableEntry(name string, txnCtx txnif.AsyncTxn) (entry *Tabl
 }
 
 func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (deleted *TableEntry, err error) {
-	e.Lock()
-	defer e.Unlock()
-	dn, err := e.txnGetNodeByNameLocked(name, txnCtx)
+	dn, err := e.txnGetNodeByName(name, txnCtx)
 	if err != nil {
 		return
 	}
@@ -350,13 +348,10 @@ func (e *DBEntry) RecurLoop(processor Processor) (err error) {
 }
 
 func (e *DBEntry) PrepareRollback() (err error) {
-	e.Lock()
-	if err = e.BaseEntry.PrepareRollbackLocked(); err != nil {
-		e.Unlock()
+	var isEmpty bool
+	if isEmpty, err = e.BaseEntry.PrepareRollback(); err != nil {
 		return
 	}
-	isEmpty := e.BaseEntry.IsEmpty()
-	e.Unlock()
 	if isEmpty {
 		if err = e.catalog.RemoveEntry(e); err != nil {
 			return
@@ -434,7 +429,7 @@ func (e *DBEntry) CloneCreateEntry() *DBEntry {
 // IsActive is coarse API: no consistency check
 func (e *DBEntry) IsActive() bool {
 	e.RLock()
+	defer e.RUnlock()
 	dropped := e.IsDroppedCommitted()
-	e.RUnlock()
 	return !dropped
 }

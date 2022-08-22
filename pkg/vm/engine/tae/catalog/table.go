@@ -297,14 +297,11 @@ func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
 }
 
 func (entry *TableEntry) PrepareRollback() (err error) {
-	entry.Lock()
-	err = entry.BaseEntry.PrepareRollbackLocked()
+	var isEmpty bool
+	isEmpty, err = entry.BaseEntry.PrepareRollback()
 	if err != nil {
-		entry.Unlock()
 		return
 	}
-	isEmpty := entry.BaseEntry.IsEmpty()
-	entry.Unlock()
 	if isEmpty {
 		err = entry.GetDB().RemoveEntry(entry)
 		if err != nil {
