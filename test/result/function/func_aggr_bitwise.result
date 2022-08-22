@@ -201,19 +201,6 @@ select BIT_AND(a),BIT_OR(a), BIT_XOR(a) from t1;
 bit_and(a)	bit_or(a)	bit_xor(a)
 2097187	140668768616447	17479809270168
 drop table t1;
-create table t1(a bigint);
-select BIT_AND(a),BIT_OR(a), BIT_XOR(a) from t1;
-BIT_AND(a)	BIT_OR(a)	BIT_XOR(a)
-18446744073709551615	0	0
-insert into t1 values(null),(null),(null),(null);
-select BIT_AND(a),BIT_OR(a), BIT_XOR(a)  from t1;
-BIT_AND(a)	BIT_OR(a)	BIT_XOR(a)
-18446744073709551615	0	0
-insert into t1 values(12417249128419),(124124125124151),(5124125151415),(124125152651515);
-select BIT_AND(a),BIT_OR(a), BIT_XOR(a) from t1;
-BIT_AND(a)	BIT_OR(a)	BIT_XOR(a)
-2097187	140668768616447	17479809270168
-drop table t1;
 create table t1 ( a int not null default 1, big bigint );
 insert into t1 (big) values (-1),(1234567890167),(92233720368547),(18446744073709515);
 select * from t1;

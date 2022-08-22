@@ -46,9 +46,9 @@ const (
 
 	// default hakeeper configuration
 	defaultTickPerSecond   = 10
-	defaultLogStoreTimeout = 10 * time.Second
-	defaultDNStoreTimeout  = 10 * time.Second
-	defaultCheckInterval   = 3 * time.Second
+	defaultLogStoreTimeout = 4 * time.Second
+	defaultDNStoreTimeout  = 3 * time.Second
+	defaultCheckInterval   = 1 * time.Second
 
 	// default heartbeat configuration
 	defaultLogHeartbeatInterval = 1 * time.Second
