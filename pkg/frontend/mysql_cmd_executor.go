@@ -19,8 +19,6 @@ import (
 	"encoding/binary"
 	goErrors "errors"
 	"fmt"
-	"hash/fnv"
-
 	"os"
 	"runtime/pprof"
 	"sort"
@@ -55,6 +53,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+
+	"github.com/google/uuid"
 )
 
 func onlyCreateStatementErrorInfo() string {
@@ -116,6 +116,8 @@ type MysqlCmdExecutor struct {
 	routineMgr *RoutineManager
 
 	cancelRequestFunc context.CancelFunc
+
+	uuid uuid.UUID
 }
 
 func (mce *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session) {
@@ -148,23 +150,17 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
 }
 
-func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, proc *process.Process, sql string, beginIns time.Time) context.Context {
+func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, beginIns time.Time) context.Context {
 	sessInfo := proc.SessionInfo
 	// HEAD
-	var stmID [16]byte
-	binary.BigEndian.PutUint64(stmID[:8], util.Fastrand64())
-	binary.BigEndian.PutUint64(stmID[8:], util.Fastrand64())
-	var txnID [8]byte
+	var stmID uuid.UUID
+	copy(stmID[:], cw.GetUUID())
+	var txnID uuid.UUID
 	if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
-		idBytes := handler.GetTxn().Txn().ID
-		hasher := fnv.New64()
-		if _, err := hasher.Write(idBytes); err != nil {
-			panic(err)
-		}
-		binary.BigEndian.PutUint64(txnID[:], hasher.Sum64())
+		copy(txnID[:], handler.GetTxn().Txn().ID)
 	}
-	var sesID [8]byte
-	binary.BigEndian.PutUint64(sesID[:], sessInfo.GetConnectionID())
+	var sesID uuid.UUID
+	copy(sesID[:], ses.GetUUID())
 	trace.ReportStatement(
 		ctx,
 		&trace.StatementInfo{
@@ -175,13 +171,13 @@ func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, 
 			User:                 sessInfo.GetUser(),
 			Host:                 sessInfo.GetHost(),
 			Database:             sessInfo.GetDatabase(),
-			Statement:            sql,
+			Statement:            cw.GetAst().String(),
 			StatementFingerprint: "", // fixme
 			StatementTag:         "", // fixme
 			RequestAt:            util.NowNS(),
 		},
 	)
-	return trace.ContextWithSpanContext(ctx, trace.SpanContextWithID(stmID))
+	return trace.ContextWithSpanContext(ctx, trace.SpanContextWithID(trace.TraceID(stmID)))
 }
 
 // outputPool outputs the data
@@ -1533,13 +1529,17 @@ type TxnComputationWrapper struct {
 	proc    *process.Process
 	ses     *Session
 	compile *compile.Compile
+
+	uuid uuid.UUID
 }
 
 func InitTxnComputationWrapper(ses *Session, stmt tree.Statement, proc *process.Process) *TxnComputationWrapper {
+	uuid, _ := uuid.NewUUID()
 	return &TxnComputationWrapper{
 		stmt: stmt,
 		proc: proc,
 		ses:  ses,
+		uuid: uuid,
 	}
 }
 
@@ -1643,6 +1643,10 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		return nil, err
 	}
 	return cwft.compile, err
+}
+
+func (cwft *TxnComputationWrapper) GetUUID() []byte {
+	return cwft.uuid[:]
 }
 
 func (cwft *TxnComputationWrapper) Run(ts uint64) error {
@@ -1768,10 +1772,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		TimeZone:     ses.timeZone,
 	}
 
-	var rootCtx = mce.RecordStatement(trace.DefaultContext(), ses, proc, sql, beginInstant)
-	ctx, span := trace.Start(rootCtx, "doComQuery")
-	defer span.End()
-
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		sql,
 		ses.GetUserName(),
@@ -1784,6 +1784,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	defer func() {
 		ses.SetMysqlResultSet(nil)
 	}()
+
+	//ctx, span := trace.Start(rootCtx, "doComQuery")
+	//defer span.End()
 
 	var cmpBegin time.Time
 	var ret interface{}
@@ -1800,6 +1803,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	for _, cw := range cws {
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
+		ctx := mce.RecordStatement(requestCtx, ses, proc, cw, beginInstant)
 
 		/*
 				if it is in an active or multi-statement transaction, we check the type of the statement.
@@ -2174,7 +2178,6 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		return resp, nil
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
-		mce.addSqlCount(1)
 		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), SubStringFromBegin(query, int(ses.Pu.SV.LengthOfQueryPrinted)))
 		seps := strings.Split(query, " ")
 		if len(seps) <= 0 {

@@ -26,8 +26,8 @@ var _ IBuffer2SqlItem = &StatementInfo{}
 
 type StatementInfo struct {
 	StatementID          [16]byte            `json:"statement_id"`
-	TransactionID        [8]byte             `json:"transaction_id"`
-	SessionID            [8]byte             `jons:"session_id"`
+	TransactionID        [16]byte            `json:"transaction_id"`
+	SessionID            [16]byte            `jons:"session_id"`
 	Account              string              `json:"account"`
 	User                 string              `json:"user"`
 	Host                 string              `json:"host"`
