@@ -302,9 +302,9 @@ func (blk *dataBlock) IsAppendable() bool {
 	if !blk.meta.IsAppendable() {
 		return false
 	}
-	if blk.node.Rows(nil, true) == blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows {
+	/*if blk.node.Rows(nil, true) == blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows {
 		return false
-	}
+	}*/
 	return true
 }
 
@@ -455,26 +455,12 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 	}
 
 	view = model.NewColumnView(ts, colIdx)
-	if raw {
-		var data containers.Vector
-		data, err = blk.node.GetColumnDataCopy(maxRow, colIdx, buffer)
-		if err != nil {
-			return
-		}
-		view.SetData(data)
-		return
-	}
-
-	vec, err := blk.node.GetColumnDataCopy(maxRow, colIdx, buffer)
+	var data containers.Vector
+	data, err = blk.node.GetColumnDataCopy(maxRow, colIdx, buffer)
 	if err != nil {
 		return
 	}
-	view.SetData(vec)
-
-	if err != nil {
-		return
-	}
-
+	view.SetData(data)
 	blk.mvcc.RLock()
 	err = blk.FillColumnUpdates(view)
 	if err == nil {

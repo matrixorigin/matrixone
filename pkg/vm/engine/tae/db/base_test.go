@@ -443,10 +443,10 @@ func compactBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, s
 	for it.Valid() {
 		blk := it.GetBlock()
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		/*if blk.Rows() < int(schema.BlockMaxRows) {
+		if blk.Rows() < int(schema.BlockMaxRows) {
 			it.Next()
 			continue
-		}*/
+		}
 		metas = append(metas, meta)
 		it.Next()
 	}

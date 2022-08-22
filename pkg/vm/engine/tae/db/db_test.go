@@ -775,7 +775,7 @@ func TestAutoCompactABlk2(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	wg.Wait()
-	testutils.WaitExpect(8000, func() bool {
+	testutils.WaitExpect(10000, func() bool {
 		return db.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	assert.Equal(t, uint64(0), db.Scheduler.GetPenddingLSNCnt())

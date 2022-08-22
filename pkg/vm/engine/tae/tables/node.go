@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -194,6 +195,25 @@ func (node *appendableNode) Close() (err error) {
 	if node.data != nil {
 		node.data.Close()
 		node.data = nil
+	}
+	return
+}
+
+func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
+	if exception := node.exception.Load(); exception != nil {
+		logutil.Errorf("%v", exception)
+		err = exception.(error)
+		return
+	}
+	left := node.block.meta.GetSchema().BlockMaxRows - node.rows
+	if left == 0 {
+		err = data.ErrNotAppendable
+		return
+	}
+	if rows > left {
+		n = left
+	} else {
+		n = rows
 	}
 	return
 }
