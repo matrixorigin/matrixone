@@ -104,6 +104,7 @@ func ReadFromS3(param *tree.ExternParam) ([]string, error) {
 	}
 
 	fs, err := fileservice.NewS3FS(
+		"s3",
 		config.Endpoint,
 		config.Bucket,
 		config.KeyPrefix,
@@ -152,6 +153,7 @@ func ReadFromS3File(param *tree.ExternParam) (io.ReadCloser, error) {
 	}
 
 	fs, err := fileservice.NewS3FS(
+		"s3",
 		config.Endpoint,
 		config.Bucket,
 		config.KeyPrefix,
@@ -188,7 +190,7 @@ func ReadFromLocal(param *tree.ExternParam) ([]string, error) {
 		file = string([]byte(param.Filepath)[index+1:])
 	}
 
-	fs, err := fileservice.NewLocalETLFS(dir)
+	fs, err := fileservice.NewLocalETLFS("etl", dir)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +220,7 @@ func ReadFromLocalFile(param *tree.ExternParam) (io.ReadCloser, error) {
 		file = string([]byte(param.Filepath)[index+1:])
 	}
 
-	fs, err := fileservice.NewLocalETLFS(dir)
+	fs, err := fileservice.NewLocalETLFS("etl", dir)
 	if err != nil {
 		return nil, err
 	}

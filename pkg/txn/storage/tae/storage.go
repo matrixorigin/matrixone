@@ -29,24 +29,21 @@ import (
 type Storage struct {
 	shard     metadata.DNShard
 	logClient logservice.Client
-	s3FS      fileservice.FileService
-	localFS   fileservice.FileService
+	fs        fileservice.FileService
 	clock     clock.Clock
 }
 
 func New(
 	shard metadata.DNShard,
 	logClient logservice.Client,
-	s3FS fileservice.FileService,
-	localFS fileservice.FileService,
+	fs fileservice.FileService,
 	clock clock.Clock,
 ) (*Storage, error) {
 
 	return &Storage{
 		shard:     shard,
 		logClient: logClient,
-		s3FS:      s3FS,
-		localFS:   localFS,
+		fs:        fs,
 		clock:     clock,
 	}, nil
 }

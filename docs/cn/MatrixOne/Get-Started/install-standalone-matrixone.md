@@ -12,7 +12,7 @@
 
 #### 1. 安装部署 Go 语言环境
 
-Go 语言需要升级到 1.18 版本。
+Go 语言需要升级到 1.19 版本。
 
 #### 2. 获取 MatrixOne 源码
 
@@ -120,7 +120,15 @@ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
 
 运行 Docker Hub 时需要输入用户名和密码，获取用户名和密码可以参考下一步骤 - 连接 MatrixOne 服务
 
-#### 3. 连接 MatrixOne 服务
+#### 3. 挂载数据（选做）
+
+如果你需要自定义配置文件或者数据目录，可以直接挂载存放在本地磁盘的自定义配置文件：
+
+```
+docker run -d -p 6001:6001 -v ${path_name}/system_vars_config.toml:/system_vars_config.toml:ro -v ${path_name}/store:/store:rw --name matrixone matrixorigin/matrixone:0.5.1
+```
+
+#### 4. 连接 MatrixOne 服务
 
 当你完成安装 MatrixOne，你可以参考下面的章节，连接到 MatrixOne 服务器。
 
@@ -128,4 +136,5 @@ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
 
 ## 参考文档
 
+升级版本，参见[升级单机版 MatrixOne](update-standalone-matrixone.md)。
 常见的安装和部署问题，参见[安装和部署常见问题](../FAQs/deployment-faqs.md)。
