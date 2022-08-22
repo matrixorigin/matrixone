@@ -2,11 +2,11 @@
 
 ## **Prerequisite**
 
-To develop an aggregate function for MatrixOne, you need a basic knowledge of Golang programming. You can go through this excellent [Golang tutorial](https://www.educative.io/blog/golang-tutorial) to learn some basic Golang concepts. 
+To develop an aggregate function for MatrixOne, you need a basic knowledge of Golang programming. You can go through this excellent [Golang tutorial](https://www.educative.io/blog/golang-tutorial) to learn some basic Golang concepts.
 
-## **Preparation**
+## **Before you start**
 
-Before you start, please make sure that you have `Go` installed and have cloned the `MatrixOne` code base.
+Make sure that you have `Go` installed and have cloned the `MatrixOne` code base.
 Please refer to [Preparation](../How-to-Contribute/preparation.md) and [Contribute Code](../How-to-Contribute/contribute-code.md) for more details.
 
 ## **What is an aggregation function?**
@@ -24,17 +24,17 @@ Common aggregate functions include:
 
 The function `join` in MatrixOne's database is highly efficient and less redundant in comparison with
 other state-of-the-art databases via factorisation making it a key feature. Therefore, many operations in MatrixOne need to be adapted to the factorisation method, in order
-to improve efficiency when performing `join`. Aggregate functions are an example of an important feature among these operations. 
+to improve efficiency when performing `join`. Aggregate functions are an example of an important feature among these operations.
 
 To implement aggragate functions in MatrixOne, we design a data structure named `Ring`. Every aggregate function needs to implement the `Ring` interface
-in order to be factorized when `join` occurs. 
+in order to be factorized when `join` occurs.
 
 For the common aggregate function `AVG` as an example, we need to calculate the number of groups and their total numeric sum, then get an average result.
 This is common practice for any database design. However, when a query with `join` occurs between two tables, the common method is to get a Cartesian product by joining tables first,
-then perform an `AVG` with that Cartesian product. This is an expensive computational cost as a Cartesian product can be very large. 
+then perform an `AVG` with that Cartesian product. This is an expensive computational cost as a Cartesian product can be very large.
 In MatrixOne's implementation, the factorisation method pushs down the calculation of group statistics and sum before the `join` operation is performed. This method helps to reduce
-a lot in computational and storage cost. Factorisation 
-is realized by the `Ring` interface and its inner functions. 
+a lot in computational and storage cost. Factorisation
+is realized by the `Ring` interface and its inner functions.
 
 To checkout more about the factorisation theory and factorised database, please refer to [Principles of Factorised Databases](https://fdbresearch.github.io/principles.html).
 
@@ -66,7 +66,7 @@ The `+`(addition) is defined as merging two `Ring`s groups and the `⋅`(multipl
 | BatchAdd                 | Merge several couples of groups for two Rings                           |
 | Mul                      | Multiplication between groups for two Rings, called when join occurs      |
 
-The implementation of `Ring` data structure is under `/pkg/container/ring/`. 
+The implementation of `Ring` data structure is under `/pkg/container/ring/`.
 
 ## **How does `Ring` work with query:**
 
@@ -77,12 +77,12 @@ There are two different scenarios for aggregation functions with `Ring`s.
 
 *1. Query with single table.*
 
-In the single table scenario, when we run the below query, it generates one or several `Ring`s, 
-depending on the storage blocks the `T1` table is stored. The number of blocks depends on the storage strategy. Each `Ring` will 
-store several groups of sums. The number of the group depends on how many duplicate rows are in this `Ring`. 
+In the single table scenario, when we run the below query, it generates one or several `Ring`s,
+depending on the storage blocks the `T1` table is stored. The number of blocks depends on the storage strategy. Each `Ring` will
+store several groups of sums. The number of the group depends on how many duplicate rows are in this `Ring`.
 
 ```sql
-T1 (id, class, age) 
+T1 (id, class, age)
 +------+-------+------+
 | id   | class | age  |
 +------+-------+------+
@@ -128,7 +128,7 @@ Then the `Add` method of `Ring` will be called to merge two groups together, and
 In the multiple tables join scenario, we have two tables `Tc` and `Ts`. The query looks like the following.
 
 ```sql
-Tc (id, class) 
+Tc (id, class)
 +------+-------+
 | id   | class |
 +------+-------+
@@ -142,7 +142,7 @@ Tc (id, class)
 |    8 | three |
 |    9 | three |
 |   10 | three |
-+------+-------+ 
++------+-------+
 
 Ts (id, age)
 +------+------+
@@ -180,10 +180,10 @@ Now we get values of `[class, sum(age)]`, then perform a group by with class whi
 ## **The secret of factorisation**
 
 From the above example, you can see that the `Ring` performs some pre calculations and only the result(like `sum`) is stored in its structure. When performing operations like `join`,
-only simple `Add` or `Multiplication` is needed to get the result, which is called a push down calculation in `factorisation`. With the help of this push down, we no longer need to 
+only simple `Add` or `Multiplication` is needed to get the result, which is called a push down calculation in `factorisation`. With the help of this push down, we no longer need to
 deal with a costly Cartesian product. As the joined table number increases, the factorisation allows us to take linear cost of performing that instead of exponential increase.
 
-Take the implementation of `Variance` function as an example. 
+Take the implementation of `Variance` function as an example.
 
 The variance formula is as below:
 
@@ -192,9 +192,9 @@ Variance = Σ [(xi - x̅)^2]/n
 
 Example: xi = 10,8,6,12,14, x̅ = 10
 Calculation: ((10-10)^2+(8-10)^2+(6-10)^2+(12-10)^2+(14-10)^2)/5 = 8
-``` 
+```
 
-If we proceed with implementing this formula, we have to record all values of each group, and also maintain these values 
+If we proceed with implementing this formula, we have to record all values of each group, and also maintain these values
 with `Add` and `Mul` operations of `Ring`. Eventually the result is calculated in an `Eval()` function. This implementation has a drawback of high memory cost since we have to store all the values during processing.
 
 In the `Avg` implementation, it doesn't store all values in the `Ring`. Instead it stores only the `sum` of each group and the null numbers.  It returns the final result with a simple division. This method saves a lot of memory space.
@@ -206,9 +206,9 @@ Variance = Σ (xi^2)/n-x̅^2
 
 Example: xi = 10,8,6,12,14, x̅ = 10
 Calculation: (10^2+8^2+6^2+12^2+14^2)/5-10^2 = 8
-``` 
+```
 
-This formula's result is exactly the same as the previous one, but we only have to record the values sum of `xi^2` and the sum of `xi`. We can largely reduce the memory space 
+This formula's result is exactly the same as the previous one, but we only have to record the values sum of `xi^2` and the sum of `xi`. We can largely reduce the memory space
 with this kind of reformulation.
 
 To conclude, every aggregate function needs to find a way to record as little values as possible in order to reduce memory cost.
@@ -220,38 +220,38 @@ Below are two different implementations for `Variance` (the second one has a bet
    type VarRing struct {
     // Typ is vector's value type
     Typ types.Type
-   
+
     // attributes for computing the variance
     Data []byte    // store all the Sums' bytes
     Sums  []float64 // sums of each group, its memory address is same to Data
-   
+
     Values [][]float64  // values of each group
     NullCounts []int64   // group to record number of the null value
    }
-   
+
    //Implementation2
    type VarRing struct {
    	// Typ is vector's value type
    	Typ types.Type
-   
+
    	// attributes for computing the variance
    	Data  []byte
    	SumX  []float64 // sum of x, its memory address is same to Data, because we will use it to store result finally.
    	SumX2 []float64 // sum of x^2
-   
+
    	NullCounts []int64 // group to record number of the null value
    }
 ```
 
 ## **Develop an var() function**
 
-In this tutorial, we will walk you through the complete implementation of the Variance (get the standard overall variance value) aggregate function as an example with two different methods. 
+In this tutorial, we will walk you through the complete implementation of the Variance (get the standard overall variance value) aggregate function as an example with two different methods.
 
 Step 1: register function
 
-MatrixOne doesn't distinguish between operators and functions. 
-In our code repository, the file `pkg/sql/viewexec/transformer/types.go` registers aggregate functions as operators 
-and we assign each operator a distinct integer number. 
+MatrixOne doesn't distinguish between operators and functions.
+In our code repository, the file `pkg/sql/viewexec/transformer/types.go` registers aggregate functions as operators
+and we assign each operator a distinct integer number.
 To add a new function `var()`, first add a new const `Variance` in the const declaration and `var` in the name declaration.
 
 ```go
@@ -265,7 +265,7 @@ To add a new function `var()`, first add a new const `Variance` in the const dec
    	ApproxCountDistinct
    	Variance
    )
-   
+
    var TransformerNames = [...]string{
    	Sum:                 "sum",
    	Avg:                 "avg",
@@ -287,7 +287,7 @@ Create `variance.go` under `pkg/container/ring`, and define a structure of `VarR
 As we calculate the overall variance, we need to calculate:
 
 * The numeric `Sums` and the null value numbers of each group, to calculate the average.
-* Values of each group, to calculate the variance. 
+* Values of each group, to calculate the variance.
 
 ```go
    //Implementation1
@@ -295,25 +295,25 @@ As we calculate the overall variance, we need to calculate:
    type VarRing struct {
     // Typ is vector's value type
     Typ types.Type
-   
+
     // attributes for computing the variance
     Data []byte    // store all the Sums' bytes
     Sums  []float64 // sums of each group, its memory address is same to Data
-   
+
     Values [][]float64  // values of each group
     NullCounts []int64   // group to record number of the null value
    }
-   
+
    //Implementation2
    type VarRing struct {
    	// Typ is vector's value type
    	Typ types.Type
-   
+
    	// attributes for computing the variance
    	Data  []byte
    	SumX  []float64 // sum of x, its memory address is same to Data, because we will use it to store result finally.
    	SumX2 []float64 // sum of x^2
-   
+
    	NullCounts []int64 // group to record number of the null value
    }
 ```
@@ -329,7 +329,7 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
 
     func (v *VarRing) Fill(i, j int64, z int64, vec *vector.Vector) {
        	var value float64 = 0
-      
+
        	switch vec.Typ.Oid {
        	case types.T_int8:
        		value = float64(vec.Col.([]int8)[j])
@@ -338,9 +338,9 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
        	for k := z; k > 0; k-- {
        		v.Values[i] = append(v.Values[i], value)
        	}
-      
+
        	v.Sums[i] += value * float64(z)
-      
+
        	if nulls.Contains(vec.Nsp, uint64(z)) {
        		v.NullCounts[i] += z
        	}
@@ -350,16 +350,16 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
 
     func (v *VarRing) Fill(i, j int64, z int64, vec *vector.Vector) {
       	var value float64 = 0
-      
+
       	switch vec.Typ.Oid {
       	case types.T_int8:
       		value = float64(vec.Col.([]int8)[j])
       	case ...
       	}
-      
+
       	v.SumX[i] += value * float64(z)
       	v.SumX2[i] += math.Pow(value, 2) * float64(z)
-      
+
       	if nulls.Contains(vec.Nsp, uint64(z)) {
       		v.NullCounts[i] += z
       	}
@@ -377,7 +377,7 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
           v.NullCounts[x] += v2.NullCounts[y]
           v.Values[x] = append(v.Values[x], v2.Values[y]...)
       }
-      
+
       //Implementation2
       func (v *VarRing) Add(a interface{}, x, y int64) {
       	v2 := a.(*VarRing)
@@ -403,7 +403,7 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
               }
           }
       }
-      
+
       //Implementation2
       func (v *VarRing) Mul(a interface{}, x, y, z int64) {
       	v2 := a.(*VarRing)
@@ -424,14 +424,14 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
           defer func() {
               ...
           }()
-      
+
           nsp := new(nulls.Nulls)
           for i, z := range zs {
               if n := z - v.NullCounts[i]; n == 0 {
                   nulls.Add(nsp, uint64(i))
               } else {
                   v.Sums[i] /= float64(n)
-      
+
                   var variance float64 = 0
                   avg := v.Sums[i]
                   for _, value := range v.Values[i] {
@@ -440,16 +440,16 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
                   v.Sums[i] = variance
               }
           }
-      
+
           return ...
       }
-      
+
        //Implementation2
       func (v *VarRing) Eval(zs []int64) *vector.Vector {
       	defer func() {
       		...
       	}()
-      
+
       	nsp := new(nulls.Nulls)
       	for i, z := range zs {
       		if n := z - v.NullCounts[i]; n == 0 {
@@ -457,26 +457,26 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
       		} else {
       			v.SumX[i] /= float64(n)  // compute E(x)
       			v.SumX2[i] /= float64(n) // compute E(x^2)
-      
+
       			variance := v.SumX2[i] - math.Pow(v.SumX[i], 2)
-      
+
       			v.SumX[i] = variance // using v.SumX to record the result and return.
       		}
       	}
-      
+
       	return ...
       }
 ```
 
 *3. Implement encoding and decoding for `VarRing`*
 
-In the `pkg/sql/protocol/protocol.go` file, implement the code for serialization and deserialization of `VarRing`. 
+In the `pkg/sql/protocol/protocol.go` file, implement the code for serialization and deserialization of `VarRing`.
 
    | Serialization function | Deserialization function    |
    | ------------------ | ----------------------------------- |
    | EncodeRing         | DecodeRing<br>DecodeRingWithProcess |
 
-Serialization: 
+Serialization:
 
 ```go
    case *variance.VarRing:
@@ -511,7 +511,7 @@ Deserialization:
   case VarianceRing:
    		r := new(variance.VarRing)
    		data = data[1:]
-   
+
    		// decode NullCounts
    		n := encoding.DecodeUint32(data[:4])
    		data = data[4:]
@@ -548,32 +548,32 @@ Here we go. Now we can fire up MatrixOne and try with our `var()` function.
 
 ## **Compile and run MatrixOne**
 
-Once the aggregation function is ready, we can compile and run MatrixOne to see the function behavior. 
+Once the aggregation function is ready, we can compile and run MatrixOne to see the function behavior.
 
-Step1: Run `make config` and `make build` to compile the MatrixOne project and build binary file. 
+Step1: Run `make config` and `make build` to compile the MatrixOne project and build binary file.
 
 ```
 make config
 make build
-``` 
+```
 
-!!! info 
+!!! info
     `make config` generates a new configuration file. In this tutorial you only need to run it once. If you modify some code and want to recompile, you only have to run `make build`.  
 
-Step2: Run `./mo-server system_vars_config.toml` to launch MatrixOne, the MatrixOne server will start to listen for client connecting. 
+Step2: Run `./mo-server system_vars_config.toml` to launch MatrixOne, the MatrixOne server will start to listen for client connecting.
 
 ```
 ./mo-server system_vars_config.toml
 ```
 
-!!! info 
+!!! info
 	The logger print level of `system_vars_config.toml` is set to default as `DEBUG`, which will print a lot of information for you. If you only care about what your function will print, you can modify the `system_vars_config.toml` and set `cubeLogLevel` and `level` to `ERROR` level.
-	
+
 	cubeLogLevel = "error"
-	
+
 	level = "error"
 
-!!! info 
+!!! info
 	Sometimes a `port is in use` error at port 50000 will occur. You could checkout what process in occupying port 50000 by `lsof -i:50000`. This command helps you to get the PIDNAME of this process, then you can kill the process by `kill -9 PIDNAME`.
 
 Step3: Connect to MatrixOne server with a MySQL client. Use the built-in test account for example:
@@ -586,8 +586,8 @@ mysql -h 127.0.0.1 -P 6001 -udump -p
 Enter password:
 ```
 
-Step4: Test your function behavior with some data. Below is an example. You can check if you get the right mathematical variance result. 
-You can also try an `inner join` and check the result, if the result is correct, the factorisation is valid. 
+Step4: Test your function behavior with some data. Below is an example. You can check if you get the right mathematical variance result.
+You can also try an `inner join` and check the result, if the result is correct, the factorisation is valid.
 
 ```sql
 mysql>select * from variance;
@@ -635,23 +635,23 @@ mysql> select variance.a, var(variance.b) from variance inner join variance2 on 
 
 Bingo!
 
-!!! info 
+!!! info
     Except for `var()`, MatrixOne has already some neat examples for aggregate functions, such as `sum()`, `count()`, `max()`, `min()` and `avg()`. With some minor corresponding changes, the procedure is quite the same as other functions.
 ​
 
 ## **Write unit Test for your function**
 
-We recommend that you also write a unit test for the new function. 
+We recommend that you also write a unit test for the new function.
 Go has a built-in testing command called `go test` and a package `testing` which combine to give a minimal yet complete testing experience. It automates execution of any function of the form.
 
 ```
 func TestXxx(*testing.T)
 ```
 
-To write a new test suite, create a file whose name ends `_test.go` that contains the `TestXxx` functions as described here. Put the file in the same package as the one being tested. The file will be excluded from regular package builds but will be included when the `go test` command is run. 
+To write a new test suite, create a file whose name ends `_test.go` that contains the `TestXxx` functions as described here. Put the file in the same package as the one being tested. The file will be excluded from regular package builds but will be included when the `go test` command is run.
 
-Step1: Create a file named `variance_test.go` under `pkg/container/ring/variance/` directory. 
-Import the `testing` framework and the `reflect` framework we are going to use for testing. 
+Step1: Create a file named `variance_test.go` under `pkg/container/ring/variance/` directory.
+Import the `testing` framework and the `reflect` framework we are going to use for testing.
 
 ```go
 package variance
@@ -675,7 +675,7 @@ Step2: Implement the `TestVariance` function with some predefined values.
   func TestVariance(t *testing.T) {
    	// verify that if we can calculate
    	// the variance of {1, 2, null, 0, 3, 4} and {2, 3, null, null, 4, 5} correctly
-   
+
    	// 1. make the test case
    	v1 := NewVarianceRing(types.Type{Oid: types.T_float64})
    	v2 := v1.Dup().(*VarRing)
@@ -695,9 +695,9 @@ Step2: Implement the `TestVariance` function with some predefined values.
    	}
    	v1.Add(v2, 0, 0)
    	v1.Add(v2, 1, 1)
-   
+
    	result := v1.Eval([]int64{6, 6})
-   
+
    	expected := []float64{2.0, 1.25}
    	if !reflect.DeepEqual(result.Col, expected) {
    		t.Errorf(fmt.Sprintf("TestVariance wrong, expected %v, but got %v", expected, result.Col))
@@ -715,7 +715,7 @@ You can check the complete test code of `VarRing` there.
    			SumX2: []float64{16, 81, 169},
    			Typ: types.Type{Oid: types.T(types.T_float64), Size: 8},
    }
-   
+
    case *variance.VarRing:
    			oriRing := r.(*variance.VarRing)
    			// Sumx
@@ -749,7 +749,7 @@ go test
 ```
 
 This picks up any files matching packagename_test.go.
-If you are getting a `PASS`, you are passing the unit test. 
+If you are getting a `PASS`, you are passing the unit test.
 
 In MatrixOne, we have a `bvt` test framework which will run all the unit tests defined in the whole package, and each time your make a pull request to the code base, the test will automatically run.
 You code will be merged only if the `bvt` test pass.
@@ -757,7 +757,7 @@ You code will be merged only if the `bvt` test pass.
 ## **Conduct a Performance Test**
 
 Aggregate functions are an important feature of a database system, with queries on hundreds of millions of data rows, the time consumption of an aggregate function is quite significant.
-Thus, we recommend you to run a performance test. 
+Thus, we recommend you to run a performance test.
 
 Step1: Download the standard test dataset.
 
@@ -767,7 +767,7 @@ We have prepared a single table SSB query dataset with 10 million rows of data. 
 https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/lineorder_flat.tar.bz2
 ```
 
-Step2: Unzip the file and Load the data into MatrixOne. 
+Step2: Unzip the file and Load the data into MatrixOne.
 
 With the following SQL you can create the database and table, and load the `lineorder_flat.tbl` into MatrixOne.
 
@@ -834,4 +834,4 @@ select sum(LO_SUPPKEY) from lineorder_flat;
 select yourfunction(LO_SUPPKEY) from lineorder_flat;
 ```
 
-Step4: When you submit your PR, please submit these performance results in your PR comment as well. 
+Step4: When you submit your PR, please submit these performance results in your PR comment as well.

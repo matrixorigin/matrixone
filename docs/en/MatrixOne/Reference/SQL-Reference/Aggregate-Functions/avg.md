@@ -66,4 +66,4 @@ NaN if the input parameter is empty.
 
 ## Constraints
 
-AVG(DISTINCT) is not supported for the 0.5.0 version.
+AVG(DISTINCT) is not supported for the 0.5.1 version.

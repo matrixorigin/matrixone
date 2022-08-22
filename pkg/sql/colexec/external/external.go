@@ -672,8 +672,6 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 				vBytes := vec.Col.(*types.Bytes)
 				if isNullOrEmpty {
 					nulls.Add(vec.Nsp, uint64(rowIdx))
-					vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
-					vBytes.Lengths[rowIdx] = uint32(len(field))
 				} else {
 					vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
 					vBytes.Data = append(vBytes.Data, field...)
