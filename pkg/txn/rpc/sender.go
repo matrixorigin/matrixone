@@ -37,7 +37,7 @@ func WithSenderPayloadBufferSize(value int) SenderOption {
 // WithSenderBackendOptions set options for create backend connections
 func WithSenderBackendOptions(options ...morpc.BackendOption) SenderOption {
 	return func(s *sender) {
-		s.options.backendCreateOptions = options
+		s.options.backendCreateOptions = append(s.options.backendCreateOptions, options...)
 	}
 }
 
@@ -71,6 +71,14 @@ type sender struct {
 		responsePool    *sync.Pool
 		localStreamPool *sync.Pool
 	}
+}
+
+// NewSenderWithConfig create a txn sender by config and options
+func NewSenderWithConfig(cfg Config, logger *zap.Logger, options ...SenderOption) (TxnSender, error) {
+	cfg.adjust()
+	options = append(options, WithSenderBackendOptions(cfg.getBackendOptions(logger)...))
+	options = append(options, WithSenderClientOptions(cfg.getClientOptions(logger)...))
+	return NewSender(logger, options...)
 }
 
 // NewSender create a txn sender
