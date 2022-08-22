@@ -119,6 +119,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 // RemoteRun send the scope to a remote node (if target node is itself, it is same to function ParallelRun) and run it.
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if address itself, just run it parallel at local.
+	//return s.ParallelRun(c)
 	/*
 		if len(s.NodeInfo.Addr) == 0 {
 			return s.ParallelRun(c)
@@ -129,6 +130,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		sendToConnectOperator(arg, nil)
 	*/
 
+	n := len(s.Instructions) - 1
+	in := s.Instructions[n]
+	s.Instructions = s.Instructions[:n-1]
 	data, err := encodeScope(s)
 	if err != nil {
 		return err
@@ -137,6 +141,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	rs.Instructions = append(rs.Instructions, in)
 	return rs.ParallelRun(c)
 }
 

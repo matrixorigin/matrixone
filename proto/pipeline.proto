@@ -32,15 +32,15 @@ message Message {
     bytes   data = 4;
 }
 
+message Connector {
+    int32 pipeline_id = 1;
+    int32 connector_index = 2;
+}
+
 message Dispatch {
     bool all = 1;
-    repeated int32 children = 2;
+    repeated Connector connector = 2;
 }
-
-message Connect {
-    int32 children = 1;
-}
-
 
 message Aggregate {
     int32 op = 1;
@@ -133,7 +133,7 @@ message Instruction{
     // Idx specified the anaylze information index.
     int32 idx = 2;
     AntiJoin  anti = 3;
-    Connect   connect = 4;
+    Connector   connect = 4;
     Dispatch  dispatch = 5;
     Group     agg = 6;
     InnerJoin inner_join = 7;

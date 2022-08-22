@@ -26,10 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregate"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
@@ -48,14 +46,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -110,15 +107,34 @@ func refactorScope(s *Scope, cs morpc.ClientSession) {
 }
 */
 
-func convertScopeToPipeline(s *Scope) *pipeline.Pipeline {
+func convertScopeToPipeline(s *Scope, ctx *scopeContext) (*pipeline.Pipeline, error) {
+	var err error
+
 	p := &pipeline.Pipeline{}
 	// Magic and IsEnd
 	p.PipelineType = pipeline.Pipeline_PipelineType(s.Magic)
+	p.PipelineId = ctx.id
 	p.IsEnd = s.IsEnd
 	p.IsJoin = s.IsJoin
 	// Plan
 	p.Qry = s.Plan
+	p.Node = &pipeline.NodeInfo{
+		Id:      s.NodeInfo.Id,
+		Addr:    s.NodeInfo.Addr,
+		Mcpu:    int32(s.NodeInfo.Mcpu),
+		Payload: make([]string, len(s.NodeInfo.Data)),
+	}
+	{
+		for i := range s.NodeInfo.Data {
+			p.Node.Payload[i] = string(s.NodeInfo.Data[i])
+		}
+	}
 	p.ChildrenCount = int32(len(s.Proc.Reg.MergeReceivers))
+	{
+		for i := range s.Proc.Reg.MergeReceivers {
+			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
+		}
+	}
 	// DataSource
 	if s.DataSource != nil { // if select 1, DataSource is nil
 		p.DataSource = &pipeline.Source{
@@ -129,29 +145,43 @@ func convertScopeToPipeline(s *Scope) *pipeline.Pipeline {
 		if s.DataSource.Bat != nil {
 			data, err := types.Encode(s.DataSource.Bat)
 			if err != nil {
-				panic(moerr.New(moerr.INTERNAL_ERROR, err.Error()))
+				return nil, err
 			}
 			p.DataSource.Block = string(data)
 		}
 	}
 	// PreScope
 	p.Children = make([]*pipeline.Pipeline, len(s.PreScopes))
+	ctx.children = make([]*scopeContext, len(s.PreScopes))
 	for i := range s.PreScopes {
-		p.Children[i] = convertScopeToPipeline(s.PreScopes[i])
+		ctx.children[i] = &scopeContext{
+			parent: ctx,
+			root:   ctx.root,
+			id:     ctx.id + int32(i),
+			regs:   make(map[*process.WaitRegister]int32),
+		}
+		if p.Children[i], err = convertScopeToPipeline(s.PreScopes[i], ctx.children[i]); err != nil {
+			return nil, err
+		}
 	}
 	// Instructions
 	p.InstructionList = make([]*pipeline.Instruction, len(s.Instructions))
 	for i := range p.InstructionList {
-		p.InstructionList[i] = convertToPipelineInstruction(&s.Instructions[i])
+		if p.InstructionList[i], err = convertToPipelineInstruction(&s.Instructions[i], ctx); err != nil {
+			return nil, err
+		}
 	}
-	return p
+	return p, nil
 }
 
-func convertPipelineToScope(p *pipeline.Pipeline) *Scope {
+func convertPipelineToScope(proc *process.Process, p *pipeline.Pipeline, par *scopeContext, analNodes []*process.AnalyzeInfo) (*Scope, error) {
+	var err error
+
 	s := &Scope{
-		Magic: int(p.GetPipelineType()),
-		IsEnd: p.IsEnd,
-		Plan:  p.Qry,
+		Magic:  int(p.GetPipelineType()),
+		IsEnd:  p.IsEnd,
+		IsJoin: p.IsJoin,
+		Plan:   p.Qry,
 	}
 	dsc := p.GetDataSource()
 	if dsc != nil {
@@ -160,27 +190,63 @@ func convertPipelineToScope(p *pipeline.Pipeline) *Scope {
 			RelationName: dsc.TableName,
 			Attributes:   dsc.ColList,
 		}
+		if len(dsc.Block) > 0 {
+			bat := new(batch.Batch)
+			if err := types.Decode([]byte(dsc.Block), bat); err != nil {
+				return nil, err
+			}
+			s.DataSource.Bat = bat
+		}
+	}
+	{
+		s.NodeInfo.Id = p.Node.Id
+		s.NodeInfo.Addr = p.Node.Addr
+		s.NodeInfo.Mcpu = int(p.Node.Mcpu)
+		s.NodeInfo.Data = make([][]byte, len(p.Node.Payload))
+		for i := range p.Node.Payload {
+			s.NodeInfo.Data[i] = []byte(p.Node.Payload[i])
+		}
+	}
+	ctx := &scopeContext{
+		parent: par,
+		id:     p.PipelineId,
+		regs:   make(map[*process.WaitRegister]int32),
+	}
+	if par == nil {
+		ctx.root = ctx
+	} else {
+		ctx.root = par.root
+	}
+	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
+	{
+		for i := range s.Proc.Reg.MergeReceivers {
+			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
+		}
+
 	}
 	s.Instructions = make([]vm.Instruction, len(p.InstructionList))
 	// Instructions
 	for i := range s.Instructions {
-		s.Instructions[i] = convertToVmInstruction(p.InstructionList[i])
+		if s.Instructions[i], err = convertToVmInstruction(p.InstructionList[i], ctx); err != nil {
+			return nil, err
+		}
 	}
 	// PreScope
 	s.PreScopes = make([]*Scope, len(s.PreScopes))
 	for i := range s.PreScopes {
-		s.PreScopes[i] = convertPipelineToScope(p.Children[i])
+		if s.PreScopes[i], err = convertPipelineToScope(s.Proc, p.Children[i], ctx, analNodes); err != nil {
+			return nil, err
+		}
 	}
-	return s
+	return s, nil
 }
 
 // convert vm.Instruction to pipeline.Instruction
-func convertToPipelineInstruction(opr *vm.Instruction) *pipeline.Instruction {
-	p := &pipeline.Instruction{Op: int32(opr.Op), Idx: int32(opr.Idx)}
-
+func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext) (*pipeline.Instruction, error) {
+	in := &pipeline.Instruction{Op: int32(opr.Op), Idx: int32(opr.Idx)}
 	switch t := opr.Arg.(type) {
 	case *anti.Argument:
-		p.Anti = &pipeline.AntiJoin{
+		in.Anti = &pipeline.AntiJoin{
 			Ibucket:   t.Ibucket,
 			Nbucket:   t.Nbucket,
 			Expr:      t.Cond,
@@ -190,12 +256,15 @@ func convertToPipelineInstruction(opr *vm.Instruction) *pipeline.Instruction {
 			Result:    t.Result,
 		}
 	case *dispatch.Argument:
-		p.Dispatch = &pipeline.Dispatch{
+		in.Dispatch = &pipeline.Dispatch{
 			All: t.All,
 			// Children: nil,
 		}
+		for i := range t.Regs {
+			in.Dispatch.Connector[i] = ctx.root.findRegister(t.Regs[i])
+		}
 	case *group.Argument:
-		p.Agg = &pipeline.Group{
+		in.Agg = &pipeline.Group{
 			NeedEval: t.NeedEval,
 			Ibucket:  t.Ibucket,
 			Nbucket:  t.Nbucket,
@@ -205,7 +274,7 @@ func convertToPipelineInstruction(opr *vm.Instruction) *pipeline.Instruction {
 		}
 	case *join.Argument:
 		relList, colList := getRelColList(t.Result)
-		p.Join = &pipeline.Join{
+		in.Join = &pipeline.Join{
 			Ibucket:   t.Ibucket,
 			Nbucket:   t.Nbucket,
 			RelList:   relList,
@@ -217,7 +286,7 @@ func convertToPipelineInstruction(opr *vm.Instruction) *pipeline.Instruction {
 		}
 	case *left.Argument:
 		relList, colList := getRelColList(t.Result)
-		p.LeftJoin = &pipeline.LeftJoin{
+		in.LeftJoin = &pipeline.LeftJoin{
 			Ibucket:   t.Ibucket,
 			Nbucket:   t.Nbucket,
 			RelList:   relList,
@@ -228,16 +297,16 @@ func convertToPipelineInstruction(opr *vm.Instruction) *pipeline.Instruction {
 			RightCond: t.Conditions[1],
 		}
 	case *limit.Argument:
-		p.Limit = t.Limit
+		in.Limit = t.Limit
 	case *loopanti.Argument:
-		p.Anti = &pipeline.AntiJoin{
+		in.Anti = &pipeline.AntiJoin{
 			Result: t.Result,
 			Expr:   t.Cond,
 			Types:  convertToPlanTypes(t.Typs),
 		}
 	case *loopjoin.Argument:
 		relList, colList := getRelColList(t.Result)
-		p.Join = &pipeline.Join{
+		in.Join = &pipeline.Join{
 			RelList: relList,
 			ColList: colList,
 			Expr:    t.Cond,
@@ -245,43 +314,43 @@ func convertToPipelineInstruction(opr *vm.Instruction) *pipeline.Instruction {
 		}
 	case *loopleft.Argument:
 		relList, colList := getRelColList(t.Result)
-		p.LeftJoin = &pipeline.LeftJoin{
+		in.LeftJoin = &pipeline.LeftJoin{
 			RelList: relList,
 			ColList: colList,
 			Expr:    t.Cond,
 			Types:   convertToPlanTypes(t.Typs),
 		}
 	case *loopsemi.Argument:
-		p.SemiJoin = &pipeline.SemiJoin{
+		in.SemiJoin = &pipeline.SemiJoin{
 			Result: t.Result,
 			Expr:   t.Cond,
 			Types:  convertToPlanTypes(t.Typs),
 		}
 	case *loopsingle.Argument:
 		relList, colList := getRelColList(t.Result)
-		p.SingleJoin = &pipeline.SingleJoin{
+		in.SingleJoin = &pipeline.SingleJoin{
 			RelList: relList,
 			ColList: colList,
 			Expr:    t.Cond,
 			Types:   convertToPlanTypes(t.Typs),
 		}
 	case *offset.Argument:
-		p.Offset = t.Offset
+		in.Offset = t.Offset
 	case *order.Argument:
-		p.OrderBy = convertToPlanOrderByList(t.Fs)
+		in.OrderBy = convertToPlanOrderByList(t.Fs)
 	case *product.Argument:
 		relList, colList := getRelColList(t.Result)
-		p.Product = &pipeline.Product{
+		in.Product = &pipeline.Product{
 			RelList: relList,
 			ColList: colList,
 			Types:   convertToPlanTypes(t.Typs),
 		}
 	case *projection.Argument:
-		p.ProjectList = t.Es
+		in.ProjectList = t.Es
 	case *restrict.Argument:
-		p.Filter = t.E
+		in.Filter = t.E
 	case *semi.Argument:
-		p.SemiJoin = &pipeline.SemiJoin{
+		in.SemiJoin = &pipeline.SemiJoin{
 			Ibucket:   t.Ibucket,
 			Nbucket:   t.Nbucket,
 			Result:    t.Result,
@@ -292,7 +361,7 @@ func convertToPipelineInstruction(opr *vm.Instruction) *pipeline.Instruction {
 		}
 	case *single.Argument:
 		relList, colList := getRelColList(t.Result)
-		p.SingleJoin = &pipeline.SingleJoin{
+		in.SingleJoin = &pipeline.SingleJoin{
 			Ibucket:   t.Ibucket,
 			Nbucket:   t.Nbucket,
 			RelList:   relList,
@@ -303,47 +372,45 @@ func convertToPipelineInstruction(opr *vm.Instruction) *pipeline.Instruction {
 			RightCond: t.Conditions[1],
 		}
 	case *top.Argument:
-		p.Limit = uint64(t.Limit)
-		p.OrderBy = convertToPlanOrderByList(t.Fs)
+		in.Limit = uint64(t.Limit)
+		in.OrderBy = convertToPlanOrderByList(t.Fs)
 	// we reused ANTI to store the information here because of the lack of related structure.
 	case *intersect.Argument: // 1
-		p.Anti = &pipeline.AntiJoin{
+		in.Anti = &pipeline.AntiJoin{
 			Ibucket: t.IBucket,
 			Nbucket: t.NBucket,
 		}
 	case *minus.Argument: // 2
-		p.Anti = &pipeline.AntiJoin{
+		in.Anti = &pipeline.AntiJoin{
 			Ibucket: t.IBucket,
 			Nbucket: t.NBucket,
 		}
 	// may useless.
 	case *merge.Argument:
 	case *mergegroup.Argument:
-		p.Agg = &pipeline.Group{
+		in.Agg = &pipeline.Group{
 			NeedEval: t.NeedEval,
 		}
 	case *mergelimit.Argument:
-		p.Limit = t.Limit
+		in.Limit = t.Limit
 	case *mergeoffset.Argument:
-		p.Offset = t.Offset
+		in.Offset = t.Offset
 	case *mergetop.Argument:
-		p.Limit = uint64(t.Limit)
-		p.OrderBy = convertToPlanOrderByList(t.Fs)
+		in.Limit = uint64(t.Limit)
+		in.OrderBy = convertToPlanOrderByList(t.Fs)
 	case *mergeorder.Argument:
-		p.OrderBy = convertToPlanOrderByList(t.Fs)
-	// unexpected.
-	case *update.Argument:
-	case *deletion.Argument:
-	case *insert.Argument:
+		in.OrderBy = convertToPlanOrderByList(t.Fs)
 	// operators that nothing need to do.
 	case *connector.Argument:
-	case *output.Argument:
+		in.Connect = ctx.root.findRegister(t.Reg)
+	default:
+		return nil, moerr.New(moerr.INTERNAL_ERROR, "unexpected operator: %v", opr.Op)
 	}
-	return p
+	return in, nil
 }
 
 // convert pipeline.Instruction to vm.Instruction
-func convertToVmInstruction(opr *pipeline.Instruction) vm.Instruction {
+func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.Instruction, error) {
 	v := vm.Instruction{Op: int(opr.Op), Idx: int(opr.Idx)}
 	switch opr.Op {
 	case vm.Anti:
@@ -360,8 +427,13 @@ func convertToVmInstruction(opr *pipeline.Instruction) vm.Instruction {
 		}
 	case vm.Dispatch:
 		t := opr.GetDispatch()
+		regs := make([]*process.WaitRegister, len(t.Connector))
+		for i, cp := range t.Connector {
+			regs[i] = ctx.root.getRegister(cp.PipelineId, cp.ConnectorIndex)
+		}
 		v.Arg = &dispatch.Argument{
-			All: t.All,
+			Regs: regs,
+			All:  t.All,
 		}
 	case vm.Group:
 		t := opr.GetAgg()
@@ -483,16 +555,28 @@ func convertToVmInstruction(opr *pipeline.Instruction) vm.Instruction {
 			NBucket: t.Nbucket,
 		}
 	case vm.Connector:
-		v.Arg = &connector.Argument{}
-	case vm.Output:
-		v.Arg = &output.Argument{}
+		t := opr.GetConnect()
+		v.Arg = &connector.Argument{
+			Reg: ctx.root.getRegister(t.PipelineId, t.ConnectorIndex),
+		}
+	default:
+		return v, moerr.New(moerr.INTERNAL_ERROR, "unexpected operator: %v", opr.Op)
 	}
-	return v
+	return v, nil
 }
 
 func encodeScope(s *Scope) ([]byte, error) {
 	// convert scope to pipeline.Pipeline
-	p := convertScopeToPipeline(s)
+	ctx := &scopeContext{
+		id:     0,
+		parent: nil,
+		regs:   make(map[*process.WaitRegister]int32),
+	}
+	ctx.root = ctx
+	p, err := convertScopeToPipeline(s, ctx)
+	if err != nil {
+		return nil, err
+	}
 	// marshal to pipeline
 	data, err := p.Marshal()
 	if err != nil {
@@ -508,9 +592,12 @@ func decodeScope(data []byte) (*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
+	// test
+	proc := testutil.NewProcess()
+	proc.Ctx = context.TODO()
+
 	// convert pipeline.Pipeline to scope.
-	s := convertPipelineToScope(p)
-	return s, nil
+	return convertPipelineToScope(proc, p, nil, nil)
 }
 
 func newCompile() *Compile {
@@ -686,4 +773,34 @@ func sendToConnectOperator(arg *connector.Argument, bat *batch.Batch) {
 	case <-arg.Reg.Ctx.Done():
 	case arg.Reg.Ch <- bat:
 	}
+}
+
+func (ctx *scopeContext) getRegister(id, idx int32) *process.WaitRegister {
+	if ctx.id == id {
+		for k, v := range ctx.regs {
+			if v == idx {
+				return k
+			}
+		}
+	}
+	for i := range ctx.children {
+		if reg := ctx.children[i].getRegister(id, idx); reg != nil {
+			return reg
+		}
+	}
+	return nil
+}
+func (ctx *scopeContext) findRegister(reg *process.WaitRegister) *pipeline.Connector {
+	if index, ok := ctx.regs[reg]; ok {
+		return &pipeline.Connector{
+			PipelineId:     ctx.id,
+			ConnectorIndex: index,
+		}
+	}
+	for i := range ctx.children {
+		if cp := ctx.children[i].findRegister(reg); cp != nil {
+			return cp
+		}
+	}
+	return nil
 }

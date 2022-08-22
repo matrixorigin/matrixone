@@ -102,6 +102,14 @@ type Scope struct {
 	Reg *process.WaitRegister
 }
 
+type scopeContext struct {
+	id       int32
+	root     *scopeContext
+	parent   *scopeContext
+	children []*scopeContext
+	regs     map[*process.WaitRegister]int32
+}
+
 // anaylze information
 type anaylze struct {
 	// curr is the current index of plan
