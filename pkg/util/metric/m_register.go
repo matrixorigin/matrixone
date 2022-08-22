@@ -16,7 +16,7 @@ package metric
 
 import prom "github.com/prometheus/client_golang/prometheus"
 
-const constTenantKey = "tenant"
+const constTenantKey = "tenant_id"
 
 // this constant lable is used for sys_* and process_* table
 var sysTenantID = prom.Labels{constTenantKey: "0"}
