@@ -81,6 +81,11 @@ func (m *MockComputationWrapper) GetUUID() []byte {
 	return ret0[:]
 }
 
+func (mr *MockComputationWrapperMockRecorder) GetUUID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUUID", reflect.TypeOf((*MockComputationWrapper)(nil).GetUUID))
+}
+
 // Compile mocks base method.
 func (m *MockComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	m.ctrl.T.Helper()
