@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	y "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -34,6 +35,8 @@ type Argument struct {
 	TargetTable   engine.Relation
 	TargetColDefs []*plan.ColDef
 	Affected      uint64
+	Engine        engine.Engine
+	NamePre       string
 }
 
 func String(_ any, buf *bytes.Buffer) {
@@ -91,6 +94,9 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		}
 	}
 	ctx := context.TODO()
+	if err := y.UpdateInsertBatch(n.Engine, ctx, proc, n.TargetColDefs, bat, n.NamePre); err != nil {
+		return false, err
+	}
 	err := n.TargetTable.Write(ctx, bat)
 	n.Affected += uint64(len(bat.Zs))
 	return false, err

@@ -128,12 +128,13 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 
 	// build update node
 	node := &Node{
-		NodeType:   plan.Node_UPDATE,
-		ObjRef:     nil,
-		TableDef:   nil,
-		Children:   []int32{qry.Steps[len(qry.Steps)-1]},
-		NodeId:     int32(len(qry.Nodes)),
-		UpdateCtxs: updateCtxs,
+		NodeType:    plan.Node_UPDATE,
+		ObjRef:      nil,
+		TableDef:    nil,
+		TableDefVec: tblRefs,
+		Children:    []int32{qry.Steps[len(qry.Steps)-1]},
+		NodeId:      int32(len(qry.Nodes)),
+		UpdateCtxs:  updateCtxs,
 	}
 	qry.Nodes = append(qry.Nodes, node)
 	qry.Steps[len(qry.Steps)-1] = node.NodeId

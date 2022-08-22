@@ -86,6 +86,9 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	}
 	batch.Reorder(bat, p.OrderAttrs)
 
+	if err = y.UpdateInsertValueBatch(c.e, c.ctx, c.proc, s.Plan.GetIns(), bat); err != nil {
+		return 0, err
+	}
 	if err := relation.Write(c.ctx, bat); err != nil {
 		return 0, err
 	}
@@ -428,6 +431,10 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 		default:
 			return fmt.Errorf("data truncation: type of '%v' doesn't implement", v.Typ)
 		}
+	}
+	bat.Zs = make([]int64, len(rows))
+	for i := 0; i < len(rows); i++ {
+		bat.Zs[i] = 1
 	}
 	return nil
 }

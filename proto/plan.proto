@@ -406,14 +406,15 @@ message Node {
 	Expr limit = 15;
 	Expr offset = 16;
 	TableDef table_def = 17;
-	ObjectRef obj_ref = 18;
-	RowsetData rowset_data = 19;
-	string extra_options = 20;
-	repeated DeleteTableCtx deleteTablesCtx = 21;
+	repeated TableDef table_def_vec = 18;
+	ObjectRef obj_ref = 19;
+	RowsetData rowset_data = 20;
+	string extra_options = 21;
+	repeated DeleteTableCtx deleteTablesCtx = 22;
 
-	repeated int32 binding_tags = 22;
+	repeated int32 binding_tags = 23;
 
-    AnalyzeInfo analyze_info = 23;
+    AnalyzeInfo analyze_info = 24;
 }
 
 message DeleteTableCtx {

@@ -86,7 +86,7 @@ traceBatchProcessor = "InternalExecutor"
 enableTraceDebug = false
 
 #the level of log.
-logLevel = "error"
+logLevel = "debug"
 
 #the format of log.
 logFormat = "json"

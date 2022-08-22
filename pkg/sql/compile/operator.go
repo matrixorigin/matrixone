@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -200,6 +202,11 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			IBucket: arg.IBucket,
 			NBucket: arg.NBucket,
 		}
+	case *intersectall.Argument:
+		rin.Arg = &intersectall.Argument{
+			IBucket: arg.IBucket,
+			NBucket: arg.NBucket,
+		}
 	case *external.Argument:
 		rin.Arg = &external.Argument{
 			Es: arg.Es,
@@ -257,18 +264,21 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 	return &insert.Argument{
 		TargetTable:   relation,
 		TargetColDefs: n.TableDef.Cols,
+		Engine:        eg,
+		NamePre:       n.ObjRef.SchemaName + "_" + n.TableDef.Name + "_",
 	}, nil
 }
 
 func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*update.Argument, error) {
 	ctx := context.TODO()
 	us := make([]*update.UpdateCtx, len(n.UpdateCtxs))
+	var namePre []string
 	for i, updateCtx := range n.UpdateCtxs {
-
 		dbSource, err := eg.Database(ctx, updateCtx.DbName, txnOperator)
 		if err != nil {
 			return nil, err
 		}
+		namePre = append(namePre, updateCtx.DbName+"_"+updateCtx.TblName+"_")
 		relation, err := dbSource.Relation(ctx, updateCtx.TblName)
 		if err != nil {
 			return nil, err
@@ -291,7 +301,10 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		}
 	}
 	return &update.Argument{
-		UpdateCtxs: us,
+		UpdateCtxs:  us,
+		Engine:      eg,
+		NamePre:     namePre,
+		TableDefVec: n.TableDefVec,
 	}, nil
 }
 
@@ -488,6 +501,16 @@ func constructGroup(n, cn *plan.Node, ibucket, nbucket int, needEval bool) *grou
 		Exprs:    n.GroupBy,
 		Ibucket:  uint64(ibucket),
 		Nbucket:  uint64(nbucket),
+	}
+}
+
+// ibucket: bucket number
+// nbucket:
+// construct operator argument
+func constructIntersectAll(_ *plan.Node, proc *process.Process, ibucket, nbucket int) *intersectall.Argument {
+	return &intersectall.Argument{
+		IBucket: uint64(ibucket),
+		NBucket: uint64(nbucket),
 	}
 }
 

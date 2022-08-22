@@ -14,12 +14,18 @@
 
 package update
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine"
+import (
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+)
 
 type Argument struct {
 	Ts           uint64
 	AffectedRows uint64
 	UpdateCtxs   []*UpdateCtx
+	TableDefVec  []*plan.TableDef
+	Engine       engine.Engine
+	NamePre      []string
 }
 
 type UpdateCtx struct {

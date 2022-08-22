@@ -1742,7 +1742,6 @@ func (mce *MysqlCmdExecutor) afterRun(stmt tree.Statement, beginInstant time.Tim
 
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) (retErr error) {
-	fmt.Println("wangjian sql-1 is", sql)
 	beginInstant := time.Now()
 	ses := mce.GetSession()
 	ses.showStmtType = NotShowStatement
@@ -2088,6 +2087,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = runner.Run(0); err != nil {
 				goto handleFailed
 			}
+
 			if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
 				logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
 			}

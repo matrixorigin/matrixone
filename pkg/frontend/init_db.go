@@ -611,7 +611,7 @@ func DefineSchemaForMoIincrement() *CatalogSchema {
 	nameAttr := &CatalogSchemaAttribute{
 		AttributeName: "name",
 		AttributeType: types.T_varchar.ToType(),
-		IsPrimaryKey:  false,
+		IsPrimaryKey:  true,
 		Comment:       "Name of the db_table_col",
 	}
 	nameAttr.AttributeType.Width = 770
@@ -720,7 +720,6 @@ func InitDB(ctx context.Context, tae engine.Engine) error {
 			return err
 		}
 	}
-
 	userSch := DefineSchemaForMoUser()
 	userDefs := convertCatalogSchemaToTableDef(userSch)
 	rel, _ = catalogDB.Relation(ctx, userSch.GetName())
