@@ -62,6 +62,7 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 		case Build:
 			if err = arg.ctr.build(proc, analyzer); err != nil {
 				arg.ctr.hashTable.Free()
+				arg.ctr.hashTable = nil
 				arg.ctr.state = End
 				return true, err
 			}
@@ -71,6 +72,7 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 			last, err = arg.ctr.probe(proc, analyzer)
 			if err != nil {
 				arg.ctr.hashTable.Free()
+				arg.ctr.hashTable = nil
 				arg.ctr.state = End
 				return true, err
 			}
@@ -80,7 +82,10 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 			}
 			return false, nil
 		case End:
-			arg.ctr.hashTable.Free()
+			if arg.ctr.hashTable != nil {
+				arg.ctr.hashTable.Free()
+				arg.ctr.hashTable = nil
+			}
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -218,6 +223,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze) (bo
 					for colNum := range bat.Vecs {
 						if err := vector.UnionBatch(outputBat.Vecs[colNum], bat.Vecs[colNum], int64(i), cnt, ctr.inserted[:n], proc.GetMheap()); err != nil {
 							outputBat.Clean(proc.Mp)
+							bat.Clean(proc.GetMheap())
 							return false, err
 						}
 					}
