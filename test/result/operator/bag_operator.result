@@ -103,8 +103,6 @@ USA	NULL
 USA	Chicago
 USA	New York
 select * from (select country,city from t1 where country='JAPAN' intersect all select country,city from t2)t order by 1,2;
-
 select * from (select country,city from t1 intersect all select country,city from t2 where country='JAPAN')t order by 1,2;
-
 select * from t1 intersect all select * from t2 ;
 The used SELECT statements have a different number of columns
