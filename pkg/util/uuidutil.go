@@ -69,8 +69,8 @@ func SetUUIDNodeID(nodeUuid []byte) error {
 	} else if _, err := hasher.Write(num[:]); err != nil {
 		return err
 	}
-	var hash [16]byte
-	hasher.Sum(hash[:])
+	var hash = make([]byte, 0, 16)
+	hash = hasher.Sum(hash[:])
 	if !uuid.SetNodeID(hash[:]) {
 		return ErrUUIDNodeIDTooShort
 	}
