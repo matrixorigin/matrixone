@@ -12,7 +12,7 @@ where option can be one of:
     FORMAT { TEXT | JSON }
 ```
 
-For 0.5.0, only `TEXT` format is supported.
+For 0.5.1, only `TEXT` format is supported.
 
 ## Description
 
@@ -36,7 +36,7 @@ Specifies whether the selected option should be turned on or off. You can write 
 
 * STETEMENT
 
-MatrixOne supports any `SELECT`, `UPDATE`, `DELETE` statement execution plan. For `INSERT` statement, only `INSERT INTO..SELECT` is supported in 0.5.0 version. `INSERT INTO...VALUES` is not supported yet.
+MatrixOne supports any `SELECT`, `UPDATE`, `DELETE` statement execution plan. For `INSERT` statement, only `INSERT INTO..SELECT` is supported in 0.5.1 version. `INSERT INTO...VALUES` is not supported yet.
 
 ## Examples
 
