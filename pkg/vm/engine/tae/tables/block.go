@@ -405,7 +405,9 @@ func (blk *dataBlock) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	colIdx int,
 	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
-	if blk.meta.IsAppendable() || blk.node.Rows(nil, true) < blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows {
+	if blk.meta.IsAppendable() ||
+		(blk.node != nil &&
+			blk.node.Rows(nil, true) < blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows) {
 		return blk.ResolveABlkColumnMVCCData(txn.GetStartTS(), colIdx, buffer, false)
 	}
 	view, err = blk.ResolveColumnMVCCData(txn.GetStartTS(), colIdx, buffer)
