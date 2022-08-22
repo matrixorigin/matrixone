@@ -188,7 +188,7 @@ func init() {
 
 ```
 
-#### some annotations for this code snippet above:
+上面的代码中的关键注释如下：
 
 1. process.Get：MatrixOne 为每个查询分配一个“虚拟进程”，在执行查询期间，我需要生成新的 Vector，并为它分配内存，参见下面的命令：
 
@@ -197,7 +197,7 @@ func init() {
 func Get(proc *Process, size int64, typ types.Type) (*vector.Vector, error)
 ```
 
-   `abs()` 函数的参数类型为 `float32`，它的大小应该是 *4 * len(origVecCol)*，每个 `float32` 对应4个字节。
+   `abs()` 函数的参数类型为 `float32`，它的大小应该是 4*len(origVecCol)，每个 `float32` 对应4个字节。
 
 2. encoding.DecodeFloat32Slice：对参数类型做类型转换。
 
@@ -446,7 +446,7 @@ Bingo!
 
 !!! info
 		除了 `abs()` 之外，MatrixOne 已经有一些系统函数的简洁示例，例如 `floor()`、`round()`、`year()`。稍作相应改动后，过程与其他功能基本相同。
-​
+
 ## **为你的函数编写测试单元**
 
 本章节将指导你为新函数编写一个单元测试。
@@ -459,7 +459,7 @@ func TestXxx(*testing.T)
 
 编写一个新的测试套件，先创建一个以 *_test.go* 结尾的文件，命名需要描述函数名称，例如 *variance_test.go*；将 *variance_test.go* 文件与测试文件放在同一个包中，打包构建时，不包含 *variance_test.go* 文件，但在运行 `go test` 命令时会包含 *variance_test.go* 文件，详细步骤，参见下述步骤。
 
-### 步骤 1：在 `vectorize/abs/` 目录下新建一个名为 `abs_test.go` 的文件，并导入用于测试的 `testing` 框架和 `testify` 框架，测试数学上的 `equal`。
+### 步骤 1：在 `vectorize/abs/` 目录下新建一个名为 `abs_test.go` 的文件，并导入用于测试的 `testing` 框架和 `testify` 框架，测试数学上的 `equal`
 
 ```
 package abs
