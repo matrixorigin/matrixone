@@ -15,6 +15,7 @@ select * from t1 where a>20220102;
 -- @bvt:issue
 select * from t1 where a!='2022-01-02';
 update t1 set a=DATE_ADD(a ,INTERVAL 1 WEEK) where a>'20220102';
+select * from t1;
 -- @bvt:issue
 drop table t1;
 create table t1 ( a int not null default 1, big timestamp(4) primary key);

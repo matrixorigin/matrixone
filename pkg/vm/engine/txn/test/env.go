@@ -52,13 +52,15 @@ func newEnv(ctx context.Context) (*testEnv, error) {
 	}
 	env.sender = sender
 
-	env.txnClient = client.NewTxnClient(sender)
-
 	env.clock = clock.NewHLCClock(
 		func() int64 {
 			return time.Now().Unix()
 		},
 		math.MaxInt64,
+	)
+
+	env.txnClient = client.NewTxnClient(sender,
+		client.WithClock(env.clock),
 	)
 
 	env.nodes = []*Node{
@@ -67,17 +69,20 @@ func newEnv(ctx context.Context) (*testEnv, error) {
 
 	env.engine = txnengine.New(
 		context.Background(),
-		env,
+		new(txnengine.ShardToSingleStatic),
 		func() (details logservicepb.ClusterDetails, err error) {
 			for _, node := range env.nodes {
-				details.DNNodes = append(details.DNNodes, node.info)
+				details.DNStores = append(details.DNStores, node.info)
 			}
 			return
 		},
 	)
 
 	// create default database
-	op := env.txnClient.New()
+	op, err := env.txnClient.New()
+	if err != nil {
+		return nil, err
+	}
 	if err := env.engine.Create(ctx, defaultDatabase, op); err != nil {
 		return nil, err
 	}

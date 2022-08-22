@@ -617,7 +617,7 @@ func (th *TxnHandler) NewTxn() error {
 	if th.txnClient == nil {
 		panic("must set txn client")
 	}
-	th.txn, err = th.txnClient.NewWithSnapshot(nil)
+	th.txn, err = th.txnClient.New()
 	if err != nil {
 		return err
 	}

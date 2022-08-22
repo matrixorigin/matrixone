@@ -27,6 +27,7 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 
 	"github.com/fagongzi/goetty/v2"
@@ -43,16 +44,6 @@ func NewService(cfg *Config, ctx context.Context) (Service, error) {
 		New: func() any {
 			return &pipeline.Message{}
 		},
-	}
-
-	if err := srv.initHAKeeperClient(); err != nil {
-		return nil, err
-	}
-	if err := srv.initTxnSender(); err != nil {
-		return nil, err
-	}
-	if err := srv.initTxnClient(); err != nil {
-		return nil, err
 	}
 
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
@@ -142,7 +133,23 @@ func (s *service) initEngine(
 		//TODO
 
 	case EngineMemory:
-		//TODO
+		client, err := s.getTxnClient()
+		if err != nil {
+			return err
+		}
+		pu.TxnClient = client
+		hakeeper, err := s.getHAKeeperClient()
+		if err != nil {
+			return err
+		}
+		pu.StorageEngine = txnengine.New(
+			ctx,
+			new(txnengine.ShardToSingleStatic), //TODO use hashing shard policy
+			txnengine.GetClusterDetailsFromHAKeeper(
+				ctx,
+				hakeeper,
+			),
+		)
 
 	default:
 		return fmt.Errorf("unknown engine type: %s", s.cfg.Engine.Type)
@@ -193,31 +200,45 @@ func (s *service) serverShutdown(isgraceful bool) error {
 	return s.mo.Stop()
 }
 
-func (s *service) initHAKeeperClient() error {
-	ctx, cancel := context.WithTimeout(
-		context.Background(),
-		s.cfg.HAKeeper.DiscoveryTimeout.Duration,
-	)
-	defer cancel()
-	client, err := logservice.NewCNHAKeeperClient(ctx, s.cfg.HAKeeper.ClientConfig)
-	if err != nil {
-		return err
-	}
-	s.hakeeperClient = client
-	return nil
+func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err error) {
+	s.initHakeeperClientOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(
+			context.Background(),
+			s.cfg.HAKeeper.DiscoveryTimeout.Duration,
+		)
+		defer cancel()
+		client, err = logservice.NewCNHAKeeperClient(ctx, s.cfg.HAKeeper.ClientConfig)
+		if err != nil {
+			return
+		}
+		s._hakeeperClient = client
+	})
+	client = s._hakeeperClient
+	return
 }
 
-func (s *service) initTxnSender() error {
-	sender, err := rpc.NewSender(s.logger) //TODO set proper options
-	if err != nil {
-		return err
-	}
-	s.txnSender = sender
-	return nil
+func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
+	s.initTxnSenderOnce.Do(func() {
+		sender, err = rpc.NewSenderWithConfig(s.cfg.RPC, s.logger)
+		if err != nil {
+			return
+		}
+		s._txnSender = sender
+	})
+	sender = s._txnSender
+	return
 }
 
-func (s *service) initTxnClient() error {
-	txnClient := client.NewTxnClient(s.txnSender) //TODO other options
-	s.txnClient = txnClient
-	return nil
+func (s *service) getTxnClient() (c client.TxnClient, err error) {
+	s.initTxnClientOnce.Do(func() {
+		var sender rpc.TxnSender
+		sender, err = s.getTxnSender()
+		if err != nil {
+			return
+		}
+		c = client.NewTxnClient(sender) //TODO options
+		s._txnClient = c
+	})
+	c = s._txnClient
+	return
 }

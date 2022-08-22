@@ -28,7 +28,7 @@ import (
 )
 
 type Node struct {
-	info logservicepb.DNNode
+	info logservicepb.DNStore
 	// one node, one shard, one service
 	service service.TxnService
 	shard   metadata.DNShard
@@ -52,10 +52,16 @@ func (t *testEnv) NewNode(id uint64) *Node {
 		panic(err)
 	}
 
-	nodeInfo := logservicepb.DNNode{
+	nodeInfo := logservicepb.DNStore{
 		UUID:           uuid.NewString(),
 		ServiceAddress: shard.Address,
 		State:          logservicepb.NormalState,
+		Shards: []logservicepb.DNShardInfo{
+			{
+				ShardID:   id,
+				ReplicaID: id,
+			},
+		},
 	}
 
 	loggerConfig := zap.Config{

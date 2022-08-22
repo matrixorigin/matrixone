@@ -37,7 +37,7 @@ func (e *Execution) Cost(obj *plan.ObjectRef, expr *plan.Expr) *plan.Cost {
 }
 
 func (e *Execution) DatabaseExists(name string) bool {
-	_, err := e.tx.engine.Database(
+	_, err := e.tx.session.env.engine.Database(
 		e.ctx,
 		name,
 		e.tx.operator,
@@ -46,7 +46,7 @@ func (e *Execution) DatabaseExists(name string) bool {
 }
 
 func (e *Execution) DefaultDatabase() string {
-	return e.tx.databaseName
+	return e.tx.session.currentDB
 }
 
 func (e *Execution) GetRootSql() string {
@@ -82,7 +82,7 @@ func (e *Execution) GetPrimaryKeyDef(dbName string, tableName string) (defs []*p
 
 func (e *Execution) Resolve(schemaName string, tableName string) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
 	if schemaName == "" {
-		schemaName = e.tx.databaseName
+		schemaName = e.tx.session.currentDB
 	}
 
 	objRef = &plan.ObjectRef{
@@ -132,7 +132,7 @@ func (e *Execution) ResolveVariable(varName string, isSystemVar bool, isGlobalVa
 }
 
 func (e *Execution) getTableAttrs(dbName string, tableName string) (attrs []*engine.Attribute, err error) {
-	db, err := e.tx.engine.Database(
+	db, err := e.tx.session.env.engine.Database(
 		e.ctx,
 		dbName,
 		e.tx.operator,

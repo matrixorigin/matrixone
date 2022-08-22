@@ -12,6 +12,6 @@ service-addresses = [
     "2"
 ]
 
-[engine]
+[cn.Engine]
 type = "tae"
 

@@ -20,22 +20,19 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
 var (
 	defaultListenAddress    = "0.0.0.0:22000"
 	defaultServiceAddress   = "127.0.0.1:22000"
-	defaultMaxConnections   = 400
-	defaultMaxIdleDuration  = time.Minute
-	defaultSendQueueSize    = 10240
 	defaultMaxClockOffset   = time.Millisecond * 500
 	defaultZombieTimeout    = time.Hour
 	defaultDiscoveryTimeout = time.Second * 30
 	defaultHeatbeatDuration = time.Second
 	defaultConnectTimeout   = time.Second * 30
 	defaultHeatbeatTimeout  = time.Millisecond * 500
-	defaultBufferSize       = 1024
 )
 
 // Config dn store configuration
@@ -67,26 +64,7 @@ type Config struct {
 	}
 
 	// RPC configuration
-	RPC struct {
-		// MaxConnections maximum number of connections to communicate with each DNStore.
-		// Default is 400.
-		MaxConnections int `toml:"max-connections"`
-		// MaxIdleDuration maximum connection idle time, connection will be closed automatically
-		// if this value is exceeded. Default is 1 min.
-		MaxIdleDuration toml.Duration `toml:"max-idle-duration"`
-		// SendQueueSize maximum capacity of the send request queue per connection, when the
-		// queue is full, the send request will be blocked. Default is 10240.
-		SendQueueSize int `toml:"send-queue-size"`
-		// BusyQueueSize when the length of the send queue reaches the currently set value, the
-		// current connection is busy with high load. When any connection with Busy status exists,
-		// a new connection will be created until the value set by MaxConnections is reached.
-		// Default is 3/4 of SendQueueSize.
-		BusyQueueSize int `toml:"busy-queue-size"`
-		// WriteBufferSize buffer size for write messages per connection. Default is 1kb
-		WriteBufferSize toml.ByteSize `toml:"write-buffer-size"`
-		// ReadBufferSize buffer size for read messages per connection. Default is 1kb
-		ReadBufferSize toml.ByteSize `toml:"read-buffer-size"`
-	}
+	RPC rpc.Config `toml:"rpc"`
 
 	// Txn transactions configuration
 	Txn struct {
@@ -119,7 +97,7 @@ type Config struct {
 	}
 }
 
-func (c *Config) validate() error {
+func (c *Config) Validate() error {
 	if c.UUID == "" {
 		return fmt.Errorf("Config.UUID not set")
 	}
@@ -129,24 +107,6 @@ func (c *Config) validate() error {
 	}
 	if c.ServiceAddress == "" {
 		c.ServiceAddress = c.ListenAddress
-	}
-	if c.RPC.MaxConnections == 0 {
-		c.RPC.MaxConnections = defaultMaxConnections
-	}
-	if c.RPC.SendQueueSize == 0 {
-		c.RPC.SendQueueSize = defaultSendQueueSize
-	}
-	if c.RPC.BusyQueueSize == 0 {
-		c.RPC.BusyQueueSize = c.RPC.SendQueueSize * 3 / 4
-	}
-	if c.RPC.WriteBufferSize == 0 {
-		c.RPC.WriteBufferSize = toml.ByteSize(defaultBufferSize)
-	}
-	if c.RPC.ReadBufferSize == 0 {
-		c.RPC.ReadBufferSize = toml.ByteSize(defaultBufferSize)
-	}
-	if c.RPC.MaxIdleDuration.Duration == 0 {
-		c.RPC.MaxIdleDuration.Duration = defaultMaxIdleDuration
 	}
 	if c.Txn.Clock.MaxClockOffset.Duration == 0 {
 		c.Txn.Clock.MaxClockOffset.Duration = defaultMaxClockOffset

@@ -423,7 +423,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		}
 		c.anal.curr = curr
 		return c.compileSort(n, c.compileUnion(n, ss, children, ns)), nil
-	case plan.Node_MINUS, plan.Node_INTERSECT:
+	case plan.Node_MINUS, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
 		curr := c.anal.curr
 		c.anal.curr = int(n.Children[0])
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
@@ -597,7 +597,17 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 				Arg: constructIntersect(n, c.proc, i, len(rs)),
 			}
 		}
+	case plan.Node_INTERSECT_ALL:
+		for i := range rs {
+			rs[i].Instructions[0] = vm.Instruction{
+				Op:  vm.IntersectAll,
+				Idx: c.anal.curr,
+				Arg: constructIntersectAll(n, c.proc, i, len(rs)),
+			}
+		}
+
 	}
+
 	return []*Scope{c.newMergeScope(append(append(rs, left), right))}
 }
 

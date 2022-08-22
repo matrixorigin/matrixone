@@ -16,97 +16,103 @@ package testtxnengine
 
 import (
 	"context"
-	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 )
 
 type Tx struct {
-	operator     client.TxnOperator
-	engine       *txnengine.Engine
-	databaseName string
+	operator client.TxnOperator
+	session  *Session
 }
 
-func (t *testEnv) NewTx() *Tx {
-	operator := t.txnClient.New()
-	tx := &Tx{
-		operator:     operator,
-		engine:       t.engine,
-		databaseName: defaultDatabase,
+func (s *Session) NewTx() (*Tx, error) {
+	operator, err := s.env.txnClient.New()
+	if err != nil {
+		return nil, err
 	}
-	return tx
+	tx := &Tx{
+		operator: operator,
+		session:  s,
+	}
+	return tx, nil
 }
 
-func (t *Tx) Exec(ctx context.Context, filePath string, stmtText string) error {
+func (t *Tx) Exec(ctx context.Context, stmtText string, stmt tree.Statement) (err error) {
 
-	stmts, err := mysql.Parse(stmtText)
+	switch stmt := stmt.(type) {
+
+	case *tree.Use:
+		t.session.currentDB = stmt.Name
+		return
+
+	case *tree.ExplainStmt:
+		//TODO
+		return
+
+	}
+
+	proc := testutil.NewProcess()
+	proc.TxnOperator = t.operator
+	proc.SessionInfo.TimeZone = time.Local
+	compileCtx := compile.New(
+		t.session.currentDB,
+		stmtText,
+		"",
+		ctx,
+		t.session.env.engine,
+		proc,
+		stmt,
+	)
+
+	exec := &Execution{
+		ctx:  ctx,
+		tx:   t,
+		stmt: stmt,
+	}
+
+	var execPlan *plan.Plan
+	switch stmt := stmt.(type) {
+
+	case *tree.Select,
+		*tree.ParenSelect,
+		*tree.Update,
+		*tree.Delete:
+		optimizer := plan.NewBaseOptimizer(exec)
+		query, err := optimizer.Optimize(stmt)
+		if err != nil {
+			return err
+		}
+		execPlan = &plan.Plan{
+			Plan: &plan.Plan_Query{
+				Query: query,
+			},
+		}
+
+	default:
+		var err error
+		execPlan, err = plan.BuildPlan(exec, stmt)
+		if err != nil {
+			return err
+		}
+	}
+
+	err = compileCtx.Compile(execPlan, nil, func(i any, batch *batch.Batch) error {
+		//fmt.Printf("%v\n", batch) //TODO
+		return nil
+	})
 	if err != nil {
 		return err
 	}
 
-	for _, stmt := range stmts {
-
-		stmtText := tree.String(stmt, dialect.MYSQL)
-		println(stmtText)
-
-		switch stmt := stmt.(type) {
-
-		case *tree.Use:
-			t.databaseName = stmt.Name
-			continue
-
-		}
-
-		proc := testutil.NewProcess()
-		proc.TxnOperator = t.operator
-		compileCtx := compile.New(t.databaseName, stmtText, "", ctx, t.engine, proc, stmt)
-
-		//optimizer := plan.NewBaseOptimizer(t)
-		//query, err := optimizer.Optimize(stmt)
-		//if err != nil {
-		//	return err
-		//}
-
-		exec := &Execution{
-			ctx:  ctx,
-			tx:   t,
-			stmt: stmt,
-		}
-
-		execPlan, err := plan.BuildPlan(exec, stmt)
-		if err != nil {
-			return err
-		}
-
-		err = compileCtx.Compile(execPlan, nil, func(i any, batch *batch.Batch) error {
-			fmt.Printf("%v\n", batch) //TODO
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-
-		err = compileCtx.Run(0)
-		if err != nil {
-
-			sqlError, ok := err.(*errors.SqlError)
-			if ok {
-				fmt.Printf("%s\n", sqlError.Error())
-				return nil
-			}
-
-			panic(err)
-		}
-
+	err = compileCtx.Run(0)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -114,4 +120,8 @@ func (t *Tx) Exec(ctx context.Context, filePath string, stmtText string) error {
 
 func (t *Tx) Commit(ctx context.Context) error {
 	return t.operator.Commit(ctx)
+}
+
+func (t *Tx) Rollback(ctx context.Context) error {
+	return t.operator.Rollback(ctx)
 }

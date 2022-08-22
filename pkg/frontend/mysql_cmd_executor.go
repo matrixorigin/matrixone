@@ -307,14 +307,14 @@ const (
 	tableNamePos    = 1
 	tableCommentPos = 6
 
-	attrNamePos    = 16
-	attrTypPos     = 17
-	charWidthPos   = 19
-	nullablePos    = 20
-	primaryKeyPos  = 24
-	attrCommentPos = 27
+	attrNamePos    = 17
+	attrTypPos     = 18
+	charWidthPos   = 20
+	nullablePos    = 21
+	primaryKeyPos  = 25
+	attrCommentPos = 28
 
-	showCreateTableAttrCount = 29
+	showCreateTableAttrCount = 30
 )
 
 /*
