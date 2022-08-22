@@ -91,13 +91,16 @@ type Config struct {
 }
 
 type service struct {
-	cfg                *Config
-	pool               *sync.Pool
-	logger             *zap.Logger
-	server             morpc.RPCServer
-	cancelMoServerFunc context.CancelFunc
-	mo                 *frontend.MOServer
-	hakeeperClient     logservice.CNHAKeeperClient
-	txnSender          rpc.TxnSender
-	txnClient          client.TxnClient
+	cfg                    *Config
+	pool                   *sync.Pool
+	logger                 *zap.Logger
+	server                 morpc.RPCServer
+	cancelMoServerFunc     context.CancelFunc
+	mo                     *frontend.MOServer
+	initHakeeperClientOnce sync.Once
+	_hakeeperClient        logservice.CNHAKeeperClient
+	initTxnSenderOnce      sync.Once
+	_txnSender             rpc.TxnSender
+	initTxnClientOnce      sync.Once
+	_txnClient             client.TxnClient
 }

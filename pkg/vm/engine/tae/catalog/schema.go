@@ -446,17 +446,6 @@ func (s *Schema) AppendPKCol(name string, typ types.Type, idx int) error {
 	return s.AppendColDef(def)
 }
 
-func (s *Schema) AppendAutoIncr(name string, typ types.Type, idx int) error {
-	def := &ColDef{
-		Name:          name,
-		Type:          typ,
-		SortIdx:       int8(idx),
-		SortKey:       true,
-		AutoIncrement: true,
-	}
-	return s.AppendColDef(def)
-}
-
 func (s *Schema) AppendPKColWithAttribute(attr engine.Attribute, idx int) error {
 	var bs []byte = nil
 	var err error
@@ -472,14 +461,15 @@ func (s *Schema) AppendPKColWithAttribute(attr engine.Attribute, idx int) error 
 		OriginString: attr.Default.OriginString,
 	}
 	def := &ColDef{
-		Name:    attr.Name,
-		Type:    attr.Type,
-		SortIdx: int8(idx),
-		Hidden:  attr.IsHidden,
-		SortKey: true,
-		Primary: true,
-		Comment: attr.Comment,
-		Default: attrDefault,
+		Name:          attr.Name,
+		Type:          attr.Type,
+		SortIdx:       int8(idx),
+		Hidden:        attr.IsHidden,
+		SortKey:       true,
+		Primary:       true,
+		Comment:       attr.Comment,
+		Default:       attrDefault,
+		AutoIncrement: attr.AutoIncrement,
 	}
 	return s.AppendColDef(def)
 }
@@ -518,12 +508,13 @@ func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 		OriginString: attr.Default.OriginString,
 	}
 	def := &ColDef{
-		Name:    attr.Name,
-		Type:    attr.Type,
-		Hidden:  attr.IsHidden,
-		SortIdx: -1,
-		Comment: attr.Comment,
-		Default: attrDefault,
+		Name:          attr.Name,
+		Type:          attr.Type,
+		Hidden:        attr.IsHidden,
+		SortIdx:       -1,
+		Comment:       attr.Comment,
+		Default:       attrDefault,
+		AutoIncrement: attr.AutoIncrement,
 	}
 	return s.AppendColDef(def)
 }

@@ -85,6 +85,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 		return 0, err
 	}
 	batch.Reorder(bat, p.OrderAttrs)
+
 	if err := relation.Write(c.ctx, bat); err != nil {
 		return 0, err
 	}

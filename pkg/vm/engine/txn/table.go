@@ -87,7 +87,7 @@ func (t *Table) Delete(ctx context.Context, vec *vector.Vector, _ string) error 
 	}
 	shards, err := t.engine.shardPolicy.Vector(
 		vec,
-		clusterDetails.DNNodes,
+		clusterDetails.DNStores,
 	)
 	if err != nil {
 		return err
@@ -147,7 +147,7 @@ func (t *Table) Ranges(ctx context.Context) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	nodes := clusterDetails.DNNodes
+	nodes := clusterDetails.DNStores
 	shards := make([][]byte, 0, len(nodes))
 	for _, node := range nodes {
 		shards = append(shards, []byte(node.UUID))
@@ -209,7 +209,7 @@ func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 
 	shards, err := t.engine.shardPolicy.Batch(
 		data,
-		clusterDetails.DNNodes,
+		clusterDetails.DNStores,
 	)
 	if err != nil {
 		return err
@@ -244,7 +244,7 @@ func (t *Table) Write(ctx context.Context, data *batch.Batch) error {
 
 	shards, err := t.engine.shardPolicy.Batch(
 		data,
-		clusterDetails.DNNodes,
+		clusterDetails.DNStores,
 	)
 	if err != nil {
 		return err

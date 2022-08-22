@@ -421,44 +421,45 @@ func (s *stateMachine) handleScheduleCommandQuery(uuid string) *pb.CommandBatch 
 func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails {
 	cfg.Fill()
 	cd := &pb.ClusterDetails{
-		CNNodes:  make([]pb.CNNode, 0, len(s.state.CNState.Stores)),
-		DNNodes:  make([]pb.DNNode, 0, len(s.state.DNState.Stores)),
-		LogNodes: make([]pb.LogNode, 0, len(s.state.LogState.Stores)),
+		CNStores:  make([]pb.CNStore, 0, len(s.state.CNState.Stores)),
+		DNStores:  make([]pb.DNStore, 0, len(s.state.DNState.Stores)),
+		LogStores: make([]pb.LogStore, 0, len(s.state.LogState.Stores)),
 	}
 	for uuid, info := range s.state.CNState.Stores {
-		n := pb.CNNode{
+		n := pb.CNStore{
 			UUID:           uuid,
 			Tick:           info.Tick,
 			ServiceAddress: info.ServiceAddress,
 		}
-		cd.CNNodes = append(cd.CNNodes, n)
+		cd.CNStores = append(cd.CNStores, n)
 	}
 	for uuid, info := range s.state.DNState.Stores {
 		state := pb.NormalState
 		if cfg.DnStoreExpired(info.Tick, s.state.Tick) {
 			state = pb.TimeoutState
 		}
-		n := pb.DNNode{
+		n := pb.DNStore{
 			UUID:           uuid,
 			Tick:           info.Tick,
 			State:          state,
 			ServiceAddress: info.ServiceAddress,
+			Shards:         info.Shards,
 		}
-		cd.DNNodes = append(cd.DNNodes, n)
+		cd.DNStores = append(cd.DNStores, n)
 	}
 	for uuid, info := range s.state.LogState.Stores {
 		state := pb.NormalState
 		if cfg.LogStoreExpired(info.Tick, s.state.Tick) {
 			state = pb.TimeoutState
 		}
-		n := pb.LogNode{
+		n := pb.LogStore{
 			UUID:           uuid,
 			Tick:           info.Tick,
 			State:          state,
 			ServiceAddress: info.ServiceAddress,
 			Replicas:       info.Replicas,
 		}
-		cd.LogNodes = append(cd.LogNodes, n)
+		cd.LogStores = append(cd.LogStores, n)
 	}
 	return cd
 }

@@ -24,6 +24,10 @@ import (
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
+const (
+	defaultTimeout = 10 * time.Second
+)
+
 func TestClusterStart(t *testing.T) {
 	// initialize cluster
 	c, err := NewCluster(t, DefaultOptions())
@@ -79,17 +83,17 @@ func TestClusterAwareness(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ServiceStarted, log.Status())
 
-	ctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx1, cancel1 := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel1()
 	leader := c.WaitHAKeeperLeader(ctx1)
 	require.NotNil(t, leader)
 
 	// we must wait for hakeeper's running state, or hakeeper wouldn't receive hearbeat.
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel2()
 	c.WaitHAKeeperState(ctx2, logpb.HAKeeperRunning)
 
-	ctx3, cancel3 := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx3, cancel3 := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel3()
 	state, err := c.GetClusterState(ctx3)
 	require.NoError(t, err)
@@ -275,7 +279,7 @@ func TestClusterState(t *testing.T) {
 	// ----------------------------------------
 	// the following would test `ClusterState`.
 	// ----------------------------------------
-	ctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx1, cancel1 := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel1()
 	leader := c.WaitHAKeeperLeader(ctx1)
 	require.NotNil(t, leader)
@@ -287,7 +291,7 @@ func TestClusterState(t *testing.T) {
 	require.Equal(t, logSvcNum, len(lsuuids))
 
 	// we must wait for hakeeper's running state, or hakeeper wouldn't receive hearbeat.
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel2()
 	c.WaitHAKeeperState(ctx2, logpb.HAKeeperRunning)
 
@@ -297,7 +301,7 @@ func TestClusterState(t *testing.T) {
 	// cluster should be healthy
 	require.True(t, c.IsClusterHealthy())
 
-	ctx3, cancel3 := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx3, cancel3 := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel3()
 	state, err := c.GetClusterState(ctx3)
 	require.NoError(t, err)
@@ -305,13 +309,13 @@ func TestClusterState(t *testing.T) {
 	require.Equal(t, logSvcNum, len(state.LogState.Stores))
 
 	// FIXME: validate the result list of dn shards
-	ctx4, cancel4 := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx4, cancel4 := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel4()
 	_, err = c.ListDNShards(ctx4)
 	require.NoError(t, err)
 
 	// FIXME: validate the result list of log shards
-	ctx5, cancel5 := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx5, cancel5 := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel5()
 	_, err = c.ListLogShards(ctx5)
 	require.NoError(t, err)
@@ -325,12 +329,12 @@ func TestClusterState(t *testing.T) {
 		dnIndex := 0
 		dsuuid := dsuuids[dnIndex]
 
-		ctx6, cancel6 := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx6, cancel6 := context.WithTimeout(context.Background(), defaultTimeout)
 		defer cancel6()
 		dnStoreInfo1, err := c.GetDNStoreInfo(ctx6, dsuuid)
 		require.NoError(t, err)
 
-		ctx7, cancel7 := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx7, cancel7 := context.WithTimeout(context.Background(), defaultTimeout)
 		defer cancel7()
 		dnStoreInfo2, err := c.GetDNStoreInfoIndexed(ctx7, dnIndex)
 		require.NoError(t, err)
@@ -354,12 +358,12 @@ func TestClusterState(t *testing.T) {
 		logIndex := 1
 		lsuuid := lsuuids[logIndex]
 
-		ctx8, cancel8 := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx8, cancel8 := context.WithTimeout(context.Background(), defaultTimeout)
 		defer cancel8()
 		logStoreInfo1, err := c.GetLogStoreInfo(ctx8, lsuuid)
 		require.NoError(t, err)
 
-		ctx9, cancel9 := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx9, cancel9 := context.WithTimeout(context.Background(), defaultTimeout)
 		defer cancel9()
 		logStoreInfo2, err := c.GetLogStoreInfoIndexed(ctx9, logIndex)
 		require.NoError(t, err)
@@ -396,54 +400,131 @@ func TestClusterWaitState(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
+	// we must wait for hakeeper's running state, or hakeeper wouldn't receive hearbeat.
+	ctx1, cancel1 := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel1()
+	c.WaitHAKeeperState(ctx1, logpb.HAKeeperRunning)
+
 	// --------------------------------------------
 	// the following would test `ClusterWaitState`.
 	// --------------------------------------------
 
-	// we must wait for hakeeper's running state, or hakeeper wouldn't receive hearbeat.
-	ctx1, cancel1 := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel1()
-	c.WaitHAKeeperState(ctx1, logpb.HAKeeperRunning)
-
 	// test WaitDNShardsReported
 	{
-		ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx2, cancel2 := context.WithTimeout(context.Background(), defaultTimeout)
 		defer cancel2()
 		c.WaitDNShardsReported(ctx2)
 	}
 
 	// test WaitLogShardsReported
 	{
-		ctx3, cancel3 := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx3, cancel3 := context.WithTimeout(context.Background(), defaultTimeout)
 		defer cancel3()
 		c.WaitLogShardsReported(ctx3)
 	}
 
 	// test WaitDNReplicaReported
 	{
-		ctx4, cancel4 := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx4, cancel4 := context.WithTimeout(context.Background(), defaultTimeout)
 		defer cancel4()
 		dnShards, err := c.ListDNShards(ctx4)
 		require.NoError(t, err)
 		require.NotZero(t, len(dnShards))
 
 		dnShardID := dnShards[0].ShardID
-		ctx5, cancel5 := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx5, cancel5 := context.WithTimeout(context.Background(), defaultTimeout)
 		defer cancel5()
 		c.WaitDNReplicaReported(ctx5, dnShardID)
 	}
 
 	// test WaitLogReplicaReported
 	{
-		ctx6, cancel6 := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx6, cancel6 := context.WithTimeout(context.Background(), defaultTimeout)
 		defer cancel6()
 		logShards, err := c.ListLogShards(ctx6)
 		require.NotZero(t, len(logShards))
 		require.NoError(t, err)
 
 		logShardID := logShards[0].ShardID
-		ctx7, cancel7 := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx7, cancel7 := context.WithTimeout(context.Background(), defaultTimeout)
 		defer cancel7()
 		c.WaitLogReplicaReported(ctx7, logShardID)
 	}
+}
+
+func TestNetworkPartition(t *testing.T) {
+	dnSvcNum := 2
+	logSvcNum := 4
+	opt := DefaultOptions().
+		WithDNServiceNum(dnSvcNum).
+		WithLogServiceNum(logSvcNum)
+
+	// initialize cluster
+	c, err := NewCluster(t, opt)
+	require.NoError(t, err)
+
+	// start the cluster
+	err = c.Start()
+	require.NoError(t, err)
+
+	// close the cluster after all
+	defer func() {
+		err := c.Close()
+		require.NoError(t, err)
+	}()
+
+	// we must wait for hakeeper's running state, or hakeeper wouldn't receive hearbeat.
+	ctx1, cancel1 := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel1()
+	c.WaitHAKeeperState(ctx1, logpb.HAKeeperRunning)
+
+	// --------------------------------------------
+	// the following would test network partition
+	// --------------------------------------------
+
+	// dn service index: 0, 1
+	// log service index: 0, 1, 2, 3
+	// seperate dn service 1 from other services
+	partition1 := c.NewNetworkPartition([]uint32{1}, nil)
+	require.Equal(t, []uint32{1}, partition1.ListDNServiceIndex())
+	require.Nil(t, partition1.ListLogServiceIndex())
+
+	partition2 := c.RemainingNetworkPartition(partition1)
+	require.Equal(t, []uint32{0}, partition2.ListDNServiceIndex())
+	require.Equal(t, []uint32{0, 1, 2, 3}, partition2.ListLogServiceIndex())
+
+	// enable network partition
+	c.StartNetworkPartition(partition1, partition2)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel2()
+	c.WaitDNStoreTimeoutIndexed(ctx2, 1)
+
+	// disable network partition
+	c.CloseNetworkPartition()
+	ctx3, cancel3 := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel3()
+	c.WaitDNStoreReportedIndexed(ctx3, 1)
+
+	// dn service index: 0, 1
+	// log service index: 0, 1, 2, 3
+	// seperate log service 3 from other services
+	partition3 := c.NewNetworkPartition(nil, []uint32{3})
+	require.Nil(t, partition3.ListDNServiceIndex())
+	require.Equal(t, []uint32{3}, partition3.ListLogServiceIndex())
+
+	partition4 := c.RemainingNetworkPartition(partition3)
+	require.Equal(t, []uint32{0, 1}, partition4.ListDNServiceIndex())
+	require.Equal(t, []uint32{0, 1, 2}, partition4.ListLogServiceIndex())
+
+	// enable network partition
+	c.StartNetworkPartition(partition3, partition4)
+	ctx4, cancel4 := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel4()
+	c.WaitLogStoreTimeoutIndexed(ctx4, 3)
+
+	// disable network partition
+	c.CloseNetworkPartition()
+	ctx5, cancel5 := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel5()
+	c.WaitLogStoreReportedIndexed(ctx5, 3)
 }

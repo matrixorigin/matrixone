@@ -1527,7 +1527,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		if tableDef == nil {
 			return 0, errors.New("", fmt.Sprintf("table %q does not exist", table))
 		}
-		fmt.Println("wangjian sql4 is", tableDef)
 
 		tableDef.Name2ColIndex = map[string]int32{}
 		for i := 0; i < len(tableDef.Cols); i++ {
@@ -2038,7 +2037,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 	case plan.Node_PROJECT:
 		child := builder.qry.Nodes[node.Children[0]]
-		if child.NodeType == plan.Node_VALUE_SCAN && child.RowsetData == nil {
+		if (child.NodeType == plan.Node_VALUE_SCAN || child.NodeType == plan.Node_EXTERNAL_SCAN) && child.RowsetData == nil {
 			cantPushdown = filters
 			break
 		}
@@ -2061,7 +2060,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 		node.Children[0] = childID
 
-	case plan.Node_TABLE_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
 		node.FilterList = append(node.FilterList, filters...)
 
 	default:

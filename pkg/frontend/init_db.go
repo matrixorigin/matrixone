@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -597,6 +598,38 @@ func PrepareInitialDataForMoUser() [][]string {
 	return data
 }
 
+// DefineSchemaForMoUser decides the schema of the mo_table
+func DefineSchemaForMoIincrement() *CatalogSchema {
+	/*
+		mo_increment_columns schema
+		| Attribute |     Type     | Primary Key |             Note         |
+		| -------   | ------------ | ----------- | ------------------------ |
+		|   name    | varchar(770) |             | Name of the db_table_col |
+		|   num     |    int64     |             |   current index number   |
+	*/
+
+	nameAttr := &CatalogSchemaAttribute{
+		AttributeName: "name",
+		AttributeType: types.T_varchar.ToType(),
+		IsPrimaryKey:  false,
+		Comment:       "Name of the db_table_col",
+	}
+	nameAttr.AttributeType.Width = 770
+
+	numAttr := &CatalogSchemaAttribute{
+		AttributeName: "num",
+		AttributeType: types.T_int64.ToType(),
+		IsPrimaryKey:  false,
+		Comment:       "current index number",
+	}
+
+	attrs := []*CatalogSchemaAttribute{
+		nameAttr,
+		numAttr,
+	}
+	return &CatalogSchema{Name: "mo_increment_columns", Attributes: attrs}
+}
+
 func FillInitialDataForMoUser() *batch.Batch {
 	schema := DefineSchemaForMoUser()
 	data := PrepareInitialDataForMoUser()
@@ -687,6 +720,7 @@ func InitDB(ctx context.Context, tae engine.Engine) error {
 			return err
 		}
 	}
+
 	userSch := DefineSchemaForMoUser()
 	userDefs := convertCatalogSchemaToTableDef(userSch)
 	rel, _ = catalogDB.Relation(ctx, userSch.GetName())
@@ -719,6 +753,23 @@ func InitDB(ctx context.Context, tae engine.Engine) error {
 		err = userTable.Write(ctx, userBatch)
 		if err != nil {
 			logutil.Infof("write into table %v failed.error:%v", userSch.GetName(), err)
+			err2 := txnCtx.Rollback()
+			if err2 != nil {
+				logutil.Infof("txnCtx rollback failed. error:%v", err2)
+				return err2
+			}
+			return err
+		}
+	}
+
+	// 4. create table mo_increment_columns
+	incrSch := DefineSchemaForMoIincrement()
+	incrDefs := convertCatalogSchemaToTableDef(incrSch)
+	rel, _ = catalogDB.Relation(ctx, incrSch.GetName())
+	if rel == nil {
+		err = catalogDB.Create(ctx, incrSch.GetName(), incrDefs)
+		if err != nil {
+			logutil.Infof("create table %v failed.error:%v", incrSch.GetName(), err)
 			err2 := txnCtx.Rollback()
 			if err2 != nil {
 				logutil.Infof("txnCtx rollback failed. error:%v", err2)
