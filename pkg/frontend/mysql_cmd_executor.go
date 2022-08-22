@@ -116,8 +116,6 @@ type MysqlCmdExecutor struct {
 	routineMgr *RoutineManager
 
 	cancelRequestFunc context.CancelFunc
-
-	uuid uuid.UUID
 }
 
 func (mce *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session) {

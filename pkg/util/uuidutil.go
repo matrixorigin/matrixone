@@ -51,7 +51,7 @@ func SetUUIDNodeID(nodeUuid []byte) error {
 	var hwAddr []byte
 	// situation 1: set by mac addr
 	hwAddr, err = getDefaultHardwareAddr()
-	if err == nil && bytes.Compare(hwAddr[:len(dockerMacPrefix)], dockerMacPrefix) != 0 && uuid.SetNodeID(hwAddr) {
+	if err == nil && !bytes.Equal(hwAddr[:len(dockerMacPrefix)], dockerMacPrefix) && uuid.SetNodeID(hwAddr) {
 		return nil
 	}
 	// case 2: set by nodeUuid prefix
