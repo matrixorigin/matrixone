@@ -30,6 +30,7 @@ message Message {
     uint64  cmd = 2;
     bytes   code = 3;
     bytes   data = 4;
+    bytes   analyse = 5;
 }
 
 message Connector {

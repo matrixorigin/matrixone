@@ -630,9 +630,13 @@ func (s *Scope) remoteRun(c *Compile) error {
 		sid := m.GetID()
 		if sid == pipeline.MessageEnd {
 			// get analyse information
-			// data := m.GetAnalyse()
-			// if len(data) > 0 ...
-			// ...
+			anaData := m.GetAnalyse()
+			if len(anaData) > 0 {
+				// decode analyse
+				ana := decodeAnalyse(anaData)
+				// merge into process
+				mergeAnalyseInfo(c.anal)
+			}
 			break
 		}
 		// decoded message
@@ -644,6 +648,26 @@ func (s *Scope) remoteRun(c *Compile) error {
 	}
 
 	return nil
+}
+
+func encodeAnalyse(query *plan.Plan) []byte {
+	return nil
+}
+
+func decodeAnalyse(data []byte) []*process.AnalyzeInfo {
+	return nil
+}
+
+func mergeAnalyseInfo(target *anaylze, source []*process.AnalyzeInfo) {
+	if len(target.analInfos) != len(source) {
+		return
+	}
+	for i := range target.analInfos {
+		target.analInfos[i].OutputSize += source[i].OutputSize
+		target.analInfos[i].OutputRows += source[i].OutputRows
+		target.analInfos[i].InputRows += source[i].InputRows
+		target.analInfos[i].InputSize += source[i].InputSize
+	}
 }
 
 func convertToPlanTypes(ts []types.Type) []*plan.Type {
@@ -750,7 +774,9 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 }
 
 func decodeBatch(proc *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
-	return nil, nil
+	bat := new(batch.Batch) // TODO: allocate the memory from process may suitable.
+	err := types.Decode(msg.GetData(), bat)
+	return bat, err
 }
 
 func sendToConnectOperator(arg *connector.Argument, bat *batch.Batch) {
