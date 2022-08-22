@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cnservice
+package cnclient
 
 import (
 	"context"
@@ -22,6 +22,8 @@ import (
 	"sync"
 )
 
+var Client *CNClient
+
 type CNClient struct {
 	config *ClientConfig
 	client morpc.RPCClient
@@ -30,8 +32,8 @@ type CNClient struct {
 	responsePool *sync.Pool
 }
 
-func (c *CNClient) Send(ctx context.Context, backend string, request morpc.Message, opts morpc.SendOptions) (*morpc.Future, error) {
-	return c.client.Send(ctx, backend, request, opts)
+func (c *CNClient) Send(ctx context.Context, backend string, request morpc.Message) (*morpc.Future, error) {
+	return c.client.Send(ctx, backend, request)
 }
 
 func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
@@ -59,24 +61,24 @@ type ClientConfig struct {
 	WriteBufferSize       int
 }
 
-func NewCNClient(cfg *ClientConfig) (morpc.RPCClient, error) {
+func NewCNClient(cfg *ClientConfig) error {
 	var err error
 	cfg.Fill()
-	cnClient := &CNClient{config: cfg}
-	cnClient.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
-	cnClient.responsePool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
+	Client = &CNClient{config: cfg}
+	Client.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
+	Client.responsePool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
 
-	codec := morpc.NewMessageCodec(cnClient.acquireMessage, cfg.PayLoadCopyBufferSize)
+	codec := morpc.NewMessageCodec(Client.acquireMessage, cfg.PayLoadCopyBufferSize)
 	factory := morpc.NewGoettyBasedBackendFactory(codec,
 		morpc.WithBackendConnectWhenCreate(),
 		morpc.WithBackendGoettyOptions(goetty.WithSessionRWBUfferSize(
 			cfg.ReadBufferSize, cfg.WriteBufferSize)),
 	)
 
-	cnClient.client, err = morpc.NewClient(factory,
+	Client.client, err = morpc.NewClient(factory,
 		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
 	)
-	return cnClient, err
+	return err
 }
 
 func (c *CNClient) acquireMessage() morpc.Message {

@@ -36,14 +36,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 )
 
-func NewService(cfg *Config, ctx context.Context) (Service, error) {
+type Options func(*service)
+
+func NewService(cfg *Config, ctx context.Context, options ...Options) (Service, error) {
 
 	srv := &service{cfg: cfg}
 	srv.logger = logutil.Adjust(srv.logger)
-	srv.pool = &sync.Pool{
+	srv.responsePool = &sync.Pool{
 		New: func() any {
 			return &pipeline.Message{}
 		},
+	}
+
+	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil, nil, nil)
+	cfg.Frontend.SetDefaultValues()
+	err := srv.initMOServer(ctx, pu)
+	if err != nil {
+		return nil, err
 	}
 
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
@@ -55,11 +64,9 @@ func NewService(cfg *Config, ctx context.Context) (Service, error) {
 	server.RegisterRequestHandler(srv.handleRequest)
 	srv.server = server
 
-	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil, nil, nil)
-	cfg.Frontend.SetDefaultValues()
-	err = srv.initMOServer(ctx, pu)
-	if err != nil {
-		return nil, err
+	srv.requestHandler = defaultRequestHandler
+	for _, opt := range options {
+		opt(srv)
 	}
 
 	return srv, nil
@@ -86,23 +93,23 @@ func (s *service) acquireMessage() morpc.Message {
 	return s.responsePool.Get().(*pipeline.Message)
 }
 
-func (s *service) handleRequest(req morpc.Message, _ uint64, cs morpc.ClientSession) error {
+func defaultRequestHandler(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
+	return nil
+}
+
+func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
 	m, ok := req.(*pipeline.Message)
 	if !ok {
 		panic("unexpected message type for cn-server")
 	}
 
 	var errCode []byte
-	err := s.requestHandler(m, cs)
+	err := s.requestHandler(ctx, m, cs)
 	if err != nil {
 		errCode = []byte(err.Error())
 	}
 	// send response back
-	return cs.Write(&pipeline.Message{Sid: MessageEnd, Code: errCode}, morpc.SendOptions{})
-}
-
-func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
-	return nil
+	return cs.Write(ctx, &pipeline.Message{Sid: pipeline.MessageEnd, Code: errCode})
 }
 
 func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) error {
@@ -251,7 +258,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	return
 }
 
-func WithMessageHandle(f func(message morpc.Message, cs morpc.ClientSession) error) Options {
+func WithMessageHandle(f func(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error) Options {
 	return func(s *service) {
 		s.requestHandler = f
 	}

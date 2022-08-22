@@ -14,7 +14,9 @@
 
 package pipeline
 
-import fmt "fmt"
+import "fmt"
+
+const MessageEnd = 1
 
 func (m *Message) Size() int {
 	return m.ProtoSize()

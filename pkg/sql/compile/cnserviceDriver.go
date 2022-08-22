@@ -16,6 +16,9 @@ package compile
 
 import (
 	"context"
+	"errors"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -57,41 +60,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-/*
-var CNClient *cnservice.CNClient
-
-func StartCNClient(cfg *cnservice.ClientConfig) error {
-	client, err := cnservice.NewCNClient(cfg)
-	if err != nil {
-		return err
-	}
-	CNClient = client.(*cnservice.CNClient)
-	return nil
-}
-
-func StartCNService(cfg *cnservice.Config) error {
-	server, err := cnservice.NewService(cfg,
-		cnservice.WithMessageHandle(pipelineMessageHandle))
-	if err != nil {
-		return err
-	}
-	return server.Start()
-}
-
-func pipelineMessageHandle(message morpc.Message, cs morpc.ClientSession) error {
+func PipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
 	m := message.(*pipeline.Message)
 	s, err := decodeScope(m.GetData())
 	if err != nil {
 		return err
 	}
 	// refactor the last operator connect to output
-	refactorScope(s, cs)
+	refactorScope(ctx, s, cs)
 
-	c := newCompile()
+	c := newCompile(ctx)
 	return s.Run(c)
 }
 
-func refactorScope(s *Scope, cs morpc.ClientSession) {
+func refactorScope(ctx context.Context, s *Scope, cs morpc.ClientSession) {
 	// refactor the scope
 	s.Instructions[len(s.Instructions)-1] = vm.Instruction{
 		Op: vm.Output,
@@ -100,12 +82,11 @@ func refactorScope(s *Scope, cs morpc.ClientSession) {
 			Data: nil,
 			Func: func(i interface{}, b *batch.Batch) error {
 				msg := &pipeline.Message{}
-				return cs.Write(msg, morpc.SendOptions{})
+				return cs.Write(ctx, msg)
 			},
 		},
 	}
 }
-*/
 
 func convertScopeToPipeline(s *Scope, ctx *scopeContext) (*pipeline.Pipeline, error) {
 	var err error
@@ -600,10 +581,10 @@ func decodeScope(data []byte) (*Scope, error) {
 	return convertPipelineToScope(proc, p, nil, nil)
 }
 
-func newCompile() *Compile {
+func newCompile(ctx context.Context) *Compile {
 	// TODO: fill method should send by stream
 	c := &Compile{
-		ctx: context.Background(),
+		ctx: ctx,
 	}
 	//c.fill = func(a any, b *batch.Batch) error {
 	//	stream, err := CNClient.NewStream("target")
@@ -615,7 +596,6 @@ func newCompile() *Compile {
 	return c
 }
 
-/*
 func (s *Scope) remoteRun(c *Compile) error {
 	// encode the scope
 	sData, errEncode := encodeScope(s)
@@ -625,7 +605,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 
 	// send encoded message
 	message := &pipeline.Message{Data: sData}
-	r, errSend := CNClient.Send(c.ctx, s.NodeInfo.Addr, message, morpc.SendOptions{})
+	r, errSend := cnclient.Client.Send(c.ctx, s.NodeInfo.Addr, message)
 	defer r.Close()
 	if errSend != nil {
 		return errSend
@@ -646,7 +626,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 		}
 
 		sid := m.GetID()
-		if sid == cnservice.MessageEnd {
+		if sid == pipeline.MessageEnd {
 			break
 		}
 		// decoded message
@@ -659,7 +639,6 @@ func (s *Scope) remoteRun(c *Compile) error {
 
 	return nil
 }
-*/
 
 func convertToPlanTypes(ts []types.Type) []*plan.Type {
 	result := make([]*plan.Type, len(ts))

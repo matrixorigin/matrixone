@@ -18,6 +18,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"math/rand"
 	"os"
 	"os/signal"
@@ -87,7 +88,7 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 func startCNService(cfg *Config, stopper *stopper.Stopper) error {
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		c := cfg.getCNServiceConfig()
-		s, err := cnservice.NewService(&c, ctx)
+		s, err := cnservice.NewService(&c, ctx, cnservice.WithMessageHandle(compile.PipelineMessageHandle))
 		if err != nil {
 			panic(err)
 		}
