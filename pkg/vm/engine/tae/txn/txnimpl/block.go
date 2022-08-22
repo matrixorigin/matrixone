@@ -37,7 +37,7 @@ type txnBlock struct {
 
 type blockIt struct {
 	sync.RWMutex
-	linkIt *common.LinkIt
+	linkIt *common.SortedDLinkIt
 	curr   *catalog.BlockEntry
 	table  *txnTable
 	err    error

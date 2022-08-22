@@ -18,21 +18,21 @@ import (
 	"sync"
 )
 
-type Link struct {
+type SortedDLink struct {
 	head *DLNode
 	tail *DLNode
 }
 
-func (l *Link) GetHead() *DLNode {
+func (l *SortedDLink) GetHead() *DLNode {
 	return l.head
 }
 
-func (l *Link) GetTail() *DLNode {
+func (l *SortedDLink) GetTail() *DLNode {
 	return l.tail
 }
 
-func (l *Link) Update(n *DLNode) {
-	nhead, ntail := n.Sort()
+func (l *SortedDLink) Update(n *DLNode) {
+	nhead, ntail := n.KeepSorted()
 	if nhead != nil {
 		l.head = nhead
 	}
@@ -41,7 +41,7 @@ func (l *Link) Update(n *DLNode) {
 	}
 }
 
-func (l *Link) Depth() int {
+func (l *SortedDLink) Depth() int {
 	depth := 0
 	l.Loop(func(_ *DLNode) bool {
 		depth++
@@ -50,7 +50,7 @@ func (l *Link) Depth() int {
 	return depth
 }
 
-func (l *Link) Insert(payload NodePayload) *DLNode {
+func (l *SortedDLink) Insert(payload NodePayload) *DLNode {
 	var (
 		n    *DLNode
 		tail *DLNode
@@ -62,7 +62,7 @@ func (l *Link) Insert(payload NodePayload) *DLNode {
 	return n
 }
 
-func (l *Link) Delete(n *DLNode) {
+func (l *SortedDLink) Delete(n *DLNode) {
 	prev := n.prev
 	next := n.next
 	if prev != nil && next != nil {
@@ -80,7 +80,7 @@ func (l *Link) Delete(n *DLNode) {
 	}
 }
 
-func (l *Link) Loop(fn func(n *DLNode) bool, reverse bool) {
+func (l *SortedDLink) Loop(fn func(n *DLNode) bool, reverse bool) {
 	if reverse {
 		LoopDLink(l.tail, fn, reverse)
 	} else {
@@ -105,7 +105,7 @@ func (l *DLNode) GetPayload() NodePayload { return l.payload }
 func (l *DLNode) GetPrev() *DLNode        { return l.prev }
 func (l *DLNode) GetNext() *DLNode        { return l.next }
 
-func (l *DLNode) Sort() (*DLNode, *DLNode) {
+func (l *DLNode) KeepSorted() (*DLNode, *DLNode) {
 	curr := l
 	head := curr
 	prev := l.prev
@@ -152,7 +152,7 @@ func InsertDLNode(payload NodePayload, head *DLNode) (node, nhead, ntail *DLNode
 
 	node.next = head
 	head.prev = node
-	nhead, ntail = node.Sort()
+	nhead, ntail = node.KeepSorted()
 	return
 }
 
@@ -179,14 +179,14 @@ func LoopDLink(head *DLNode, fn func(node *DLNode) bool, reverse bool) {
 	}
 }
 
-type LinkIt struct {
+type SortedDLinkIt struct {
 	linkLocker *sync.RWMutex
 	curr       *DLNode
 	nextFunc   func(*DLNode) *DLNode
 }
 
-func NewLinkIt(linkLocker *sync.RWMutex, link *Link, reverse bool) *LinkIt {
-	it := &LinkIt{
+func NewSortedDLinkIt(linkLocker *sync.RWMutex, link *SortedDLink, reverse bool) *SortedDLinkIt {
+	it := &SortedDLinkIt{
 		linkLocker: linkLocker,
 	}
 	if reverse {
@@ -203,11 +203,11 @@ func NewLinkIt(linkLocker *sync.RWMutex, link *Link, reverse bool) *LinkIt {
 	return it
 }
 
-func (it *LinkIt) Valid() bool {
+func (it *SortedDLinkIt) Valid() bool {
 	return it.curr != nil
 }
 
-func (it *LinkIt) Next() {
+func (it *SortedDLinkIt) Next() {
 	if it.linkLocker == nil {
 		it.curr = it.nextFunc(it.curr)
 		return
@@ -217,6 +217,6 @@ func (it *LinkIt) Next() {
 	it.linkLocker.RUnlock()
 }
 
-func (it *LinkIt) Get() *DLNode {
+func (it *SortedDLinkIt) Get() *DLNode {
 	return it.curr
 }

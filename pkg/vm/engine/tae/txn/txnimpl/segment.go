@@ -32,7 +32,7 @@ type txnSegment struct {
 
 type segmentIt struct {
 	sync.RWMutex
-	linkIt *common.LinkIt
+	linkIt *common.SortedDLinkIt
 	curr   *catalog.SegmentEntry
 	table  *txnTable
 	err    error

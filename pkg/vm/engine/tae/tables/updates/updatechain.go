@@ -15,9 +15,10 @@
 package updates
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -27,7 +28,7 @@ import (
 )
 
 type ColumnChain struct {
-	*common.Link
+	*common.SortedDLink
 	*sync.RWMutex
 	id   *common.ID
 	view *ColumnView
@@ -37,9 +38,9 @@ type ColumnChain struct {
 
 func MockColumnUpdateChain() *ColumnChain {
 	chain := &ColumnChain{
-		Link:    new(common.Link),
-		RWMutex: new(sync.RWMutex),
-		id:      &common.ID{},
+		SortedDLink: new(common.SortedDLink),
+		RWMutex:     new(sync.RWMutex),
+		id:          &common.ID{},
 	}
 	chain.view = NewColumnView()
 	return chain
@@ -52,10 +53,10 @@ func NewColumnChain(rwlocker *sync.RWMutex, colIdx uint16, mvcc *MVCCHandle) *Co
 	id := *mvcc.GetID()
 	id.Idx = colIdx
 	chain := &ColumnChain{
-		Link:    new(common.Link),
-		RWMutex: rwlocker,
-		mvcc:    mvcc,
-		id:      &id,
+		SortedDLink: new(common.SortedDLink),
+		RWMutex:     rwlocker,
+		mvcc:        mvcc,
+		id:          &id,
 	}
 	chain.view = NewColumnView()
 	return chain

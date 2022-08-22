@@ -56,7 +56,7 @@ type Catalog struct {
 
 	entries   map[uint64]*common.DLNode
 	nameNodes map[string]*nodeList
-	link      *common.Link
+	link      *common.SortedDLink
 
 	nodesMu sync.RWMutex
 
@@ -79,7 +79,7 @@ func MockCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tas
 		store:       driver,
 		entries:     make(map[uint64]*common.DLNode),
 		nameNodes:   make(map[string]*nodeList),
-		link:        new(common.Link),
+		link:        new(common.SortedDLink),
 		checkpoints: make([]*Checkpoint, 0),
 		scheduler:   scheduler,
 	}
@@ -95,7 +95,7 @@ func OpenCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tas
 		store:       driver,
 		entries:     make(map[uint64]*common.DLNode),
 		nameNodes:   make(map[string]*nodeList),
-		link:        new(common.Link),
+		link:        new(common.SortedDLink),
 		checkpoints: make([]*Checkpoint, 0),
 		scheduler:   scheduler,
 	}
@@ -570,10 +570,10 @@ func (catalog *Catalog) AddEntryLocked(database *DBEntry, txn txnif.TxnReader) e
 	return nil
 }
 
-func (catalog *Catalog) MakeDBIt(reverse bool) *common.LinkIt {
+func (catalog *Catalog) MakeDBIt(reverse bool) *common.SortedDLinkIt {
 	catalog.RLock()
 	defer catalog.RUnlock()
-	return common.NewLinkIt(catalog.RWMutex, catalog.link, reverse)
+	return common.NewSortedDLinkIt(catalog.RWMutex, catalog.link, reverse)
 }
 
 func (catalog *Catalog) SimplePPString(level common.PPLevel) string {
