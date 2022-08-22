@@ -47,6 +47,14 @@ ARM 架构的 Macbook M1/M2 也适合开发环境。
 
 通常情况下，安装时，你无需更改任何设置。`system_vars_config.toml` 默认设置完全可以直接运行 MatrixOne。但是如果你需要自定义监听端口、IP 地址、存储数据文件路径，你可以修改相应的 `system_vars_config.toml` 记录。
 
+* **当我安装完成 MySQL 客户端后，打开终端运行 `mysql` 产生报错 `command not found: mysql`，我该如何解决？**
+
+产生这个报错是环境变量未设置的原因，可以执行以下命令：
+
+```
+export PATH=${PATH}:/usr/local/mysql/bin
+```
+
 * **当我安装选择从源代码安装构建 MatrixOne时，产生了以下错误或构建失败提示，我该如何继续？**
 
 报错： `Get "https://proxy.golang.org/........": dial tcp 142.251.43.17:443: i/o timeout`
