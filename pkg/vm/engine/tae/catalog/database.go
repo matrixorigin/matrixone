@@ -282,32 +282,10 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.AsyncTxn) (err err
 	} else {
 		node := nn.GetTableNode()
 		record := node.GetPayload().(*TableEntry)
-		record.RLock()
-		if txn != nil {
-			needWait, waitTxn := record.NeedWaitCommitting(txn.GetStartTS())
-			if needWait {
-				record.RUnlock()
-				waitTxn.GetTxnState(true)
-				record.RLock()
-			}
-			err = record.PrepareWrite(table.GetTxn(), record.RWMutex)
-			if err != nil {
-				record.RUnlock()
-				return
-			}
+		err = record.PrepareAdd(txn)
+		if err != nil {
+			return
 		}
-		if txn == nil || record.GetTxn() != txn {
-			if !record.HasDropped() {
-				record.RUnlock()
-				return ErrDuplicate
-			}
-		} else {
-			if record.ExistedForTs(txn.GetStartTS()) {
-				record.RUnlock()
-				return ErrDuplicate
-			}
-		}
-		record.RUnlock()
 		n := e.link.Insert(table)
 		e.entries[table.GetID()] = n
 		nn.CreateNode(table.GetID())

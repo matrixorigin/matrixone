@@ -498,6 +498,34 @@ func (be *BaseEntry) PrepareRollback() (bool, error) {
 	isEmpty := be.IsEmpty()
 	return isEmpty, nil
 }
+
+func (be *BaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
+	be.RLock()
+	defer be.RUnlock()
+	if txn != nil {
+		needWait, waitTxn := be.NeedWaitCommitting(txn.GetStartTS())
+		if needWait {
+			be.RUnlock()
+			waitTxn.GetTxnState(true)
+			be.RLock()
+		}
+		err = be.PrepareWrite(txn, be.RWMutex)
+		if err != nil {
+			return
+		}
+	}
+	if txn == nil || be.GetTxn() != txn {
+		if !be.HasDropped() {
+			return ErrDuplicate
+		}
+	} else {
+		if be.ExistedForTs(txn.GetStartTS()) {
+			return ErrDuplicate
+		}
+	}
+	return
+}
+
 func (be *BaseEntry) DeleteAfter(ts types.TS) bool {
 	un := be.GetUpdateNodeLocked()
 	if un == nil {

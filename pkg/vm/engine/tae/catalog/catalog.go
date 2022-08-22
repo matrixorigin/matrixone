@@ -536,33 +536,10 @@ func (catalog *Catalog) AddEntryLocked(database *DBEntry, txn txnif.TxnReader) e
 	} else {
 		node := nn.GetDBNode()
 		record := node.GetPayload().(*DBEntry)
-		record.RLock()
-		if txn != nil {
-			needWait, waitTxn := record.NeedWaitCommitting(txn.GetStartTS())
-			if needWait {
-				record.RUnlock()
-				waitTxn.GetTxnState(true)
-				record.RLock()
-			}
-			err := record.PrepareWrite(database.GetTxn(), record.RWMutex)
-			if err != nil {
-				record.RUnlock()
-				return err
-			}
+		err := record.PrepareAdd(txn)
+		if err != nil {
+			return err
 		}
-		// logutil.Infof("lalala txn %v",txn)
-		if txn == nil || record.GetTxn() != txn {
-			if !record.HasDropped() {
-				record.RUnlock()
-				return ErrDuplicate
-			}
-		} else {
-			if record.ExistedForTs(txn.GetStartTS()) {
-				record.RUnlock()
-				return ErrDuplicate
-			}
-		}
-		record.RUnlock()
 		n := catalog.link.Insert(database)
 		catalog.entries[database.GetID()] = n
 		nn.CreateNode(database.GetID())
@@ -658,6 +635,12 @@ func (catalog *Catalog) DropDBEntry(name string, txnCtx txnif.AsyncTxn) (deleted
 	entry := dn.GetPayload().(*DBEntry)
 	entry.Lock()
 	defer entry.Unlock()
+	needWait, txn := entry.NeedWaitCommitting(txnCtx.GetStartTS())
+	if needWait {
+		entry.Unlock()
+		txn.GetTxnState(true)
+		entry.Lock()
+	}
 	err = entry.DropEntryLocked(txnCtx)
 	if err == nil {
 		deleted = entry
