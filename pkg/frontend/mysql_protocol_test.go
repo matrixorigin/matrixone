@@ -261,45 +261,6 @@ func TestReadStringLenEnc(t *testing.T) {
 	}
 }
 
-func TestMysqlClientProtocol_TlsHandshake(t *testing.T) {
-	//before anything using the configuration
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
-	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
-	if err != nil {
-		panic(err)
-	}
-	pu.SV.EnableTls = true
-
-	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-	pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
-
-	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-	rm := NewRoutineManager(ctx, pu)
-	rm.SetSkipCheckUser(true)
-
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-
-	//running server
-	go func() {
-		defer wg.Done()
-		echoServer(rm.Handler, rm, NewSqlCodec())
-	}()
-
-	to := NewTimeout(1*time.Minute, false)
-	for isClosed() && !to.isTimeout() {
-	}
-
-	time.Sleep(time.Second * 15)
-	db := open_tls_db(t, 6001)
-	close_db(t, db)
-
-	time.Sleep(time.Millisecond * 10)
-	//close server
-	setServer(1)
-	wg.Wait()
-}
-
 func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
 	//client connection method: mysql -h 127.0.0.1 -P 6001 -udump -p
@@ -333,6 +294,45 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 
 	time.Sleep(time.Second * 15)
 	db := open_db(t, 6001)
+	close_db(t, db)
+
+	time.Sleep(time.Millisecond * 10)
+	//close server
+	setServer(1)
+	wg.Wait()
+}
+
+func TestMysqlClientProtocol_TlsHandshake(t *testing.T) {
+	//before anything using the configuration
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
+	if err != nil {
+		panic(err)
+	}
+	pu.SV.EnableTls = true
+
+	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
+	pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
+
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm := NewRoutineManager(ctx, pu)
+	rm.SetSkipCheckUser(true)
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+
+	//running server
+	go func() {
+		defer wg.Done()
+		echoServer(rm.Handler, rm, NewSqlCodec())
+	}()
+
+	to := NewTimeout(1*time.Minute, false)
+	for isClosed() && !to.isTimeout() {
+	}
+
+	time.Sleep(time.Second * 18)
+	db := open_tls_db(t, 6001)
 	close_db(t, db)
 
 	time.Sleep(time.Millisecond * 10)
@@ -1312,15 +1312,15 @@ func open_tls_db(t *testing.T, port int) *sql.DB {
 		require.NoError(t, err)
 	}
 
-	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=12s&timeout=12s&writeTimeout=12s&tls=%s", port, tlsName)
+	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=18s&timeout=18s&writeTimeout=18s&tls=%s", port, tlsName)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		require.NoError(t, err)
 	} else {
-		db.SetConnMaxLifetime(time.Minute * 3)
-		db.SetMaxOpenConns(1)
-		db.SetMaxIdleConns(1)
-		time.Sleep(time.Millisecond * 100)
+		// db.SetConnMaxLifetime(time.Minute * 3)
+		// db.SetMaxOpenConns(1)
+		// db.SetMaxIdleConns(1)
+		// time.Sleep(time.Millisecond * 100)
 
 		// ping opens the connection
 		err = db.Ping()
