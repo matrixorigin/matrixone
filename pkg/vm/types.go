@@ -52,6 +52,7 @@ const (
 
 	Minus
 	Intersect
+	IntersectAll
 
 	HashBuild
 )
