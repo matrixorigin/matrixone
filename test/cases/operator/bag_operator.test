@@ -28,8 +28,8 @@ insert into t2 values (1,2,1);
 -- @desc:test for bag operators
 -- @label:bvt
 
-select * from (select * from t1 intersect all select * from t2) t order by a,b,c;
-select * from (select a,b from t1 intersect all select b,c from t2) t order by a,b;
+(select * from t1 intersect all select * from t2) order by 1,2,3;
+(select a,b from t1 intersect all select b,c from t2) order by 1,2;
 
 
 drop table if exists t1;
@@ -66,10 +66,10 @@ insert into t2 values(666, 'CHINA', null);
 insert into t2 values(404, 'USA', null);
 insert into t2 values(0, null, null);
 
-select * from (select country from t1 intersect all select country from t2)t order by 1;
-select * from (select city from t1 intersect all select city from t2)t order by 1;
-select * from (select city from t1 intersect all select city from t2 where city is not null)t order by 1;
-select * from (select country,city from t1 intersect all select country,city from t2)t order by 1,2;
-select * from (select country,city from t1 where country='JAPAN' intersect all select country,city from t2)t order by 1,2;
-select * from (select country,city from t1 intersect all select country,city from t2 where country='JAPAN')t order by 1,2;
-select * from t1 intersect all select * from t2 ;
+(select country from t1 intersect all select country from t2) order by 1;
+(select city from t1 intersect all select city from t2) order by 1;
+(select city from t1 intersect all select city from t2 where city is not null) order by 1;
+(select country,city from t1 intersect all select country,city from t2) order by 1,2;
+(select country,city from t1 where country='JAPAN' intersect all select country,city from t2) order by 1,2;
+(select country,city from t1 intersect all select country,city from t2 where country='JAPAN') order by 1,2;
+t1 intersect all select * from t2 ;
