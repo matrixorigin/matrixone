@@ -605,6 +605,9 @@ func FillInitialDataForMoUser() *batch.Batch {
 
 // InitDB setups the initial catalog tables in tae
 func InitDB(ctx context.Context, tae engine.Engine) error {
+	//TODO: remove it before commit
+	return nil
+
 	taeEngine, ok := tae.(moengine.TxnEngine)
 	if !ok {
 		return errorIsNotTaeEngine

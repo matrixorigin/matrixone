@@ -17,7 +17,10 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"math/rand"
 	"strings"
@@ -393,6 +396,17 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 }
 
 var (
+	sysWantedTables = map[string]int8{
+		"mo_database":   0,
+		"mo_tables":     0,
+		"mo_columns":    0,
+		"mo_user":       0,
+		"mo_account":    0,
+		"mo_role":       0,
+		"mo_user_grant": 0,
+		"mo_role_grant": 0,
+		"mo_role_priv":  0,
+	}
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	createSqls = []string{
@@ -457,7 +471,7 @@ var (
 				account_name,
 				status,
 				created_time,
-				comments) values (%d,"%s","%s","%s","%s")`
+				comments) values (%d,"%s","%s","%s","%s");`
 	initMoRoleFormat = `insert into mo_role(
 				role_id,
 				role_name,
@@ -465,7 +479,7 @@ var (
 				owner,
 				created_time,
 				comments
-			) values (%d,"%s",%d,%d,"%s","%s")`
+			) values (%d,"%s",%d,%d,"%s","%s");`
 	initMoUserFormat = `insert into mo_user(
 				user_id,
 				user_host,
@@ -478,7 +492,7 @@ var (
 				creator,
 				owner,
 				default_role
-    		) values(%d,"%s","%s","%s","%s","%s","%s","%s",%d,%d,%d)`
+    		) values(%d,%s,"%s","%s","%s","%s",%s,"%s",%d,%d,%d);`
 	initMoRolePrivFormat = `insert into mo_role_priv(
 				role_id,
 				role_name,
@@ -490,13 +504,13 @@ var (
 				operation_user_id,
 				granted_time,
 				with_grant_option
-			) values(%d,"%s","%s",%d,%d,"%s","%s",%d,"%s",%v)`
+			) values(%d,"%s","%s",%d,%d,"%s","%s",%d,"%s",%v);`
 	initMoUserGrantFormat = `insert into mo_user_grant(
             	role_id,
 				user_id,
 				granted_time,
 				with_grant_option
-			) values(%d,%d,"%s",%v)`
+			) values(%d,%d,"%s",%v);`
 )
 
 type role struct {
@@ -573,8 +587,41 @@ var (
 
 // checkSysExistsOrNot checks the SYS tenant exists or not.
 func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, error) {
-	//TODO: add log
-	return false, nil
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	sql := "show tables from mo_catalog;"
+	err := bh.Exec(sql)
+	if err != nil {
+		return false, err
+	}
+
+	rsset := bh.ses.GetAllMysqlResultSet()
+	if len(rsset) != 1 {
+		panic("it must have result set")
+	}
+
+	tableNames := []string{}
+
+	for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+		tableName, err := rsset[0].GetString(i, 0)
+		if err != nil {
+			return false, err
+		}
+		tableNames = append(tableNames, tableName)
+	}
+
+	if len(tableNames) != len(sysWantedTables) {
+		return false, moerr.NewInternalError("sys tenant does not have right number of tables")
+	}
+
+	for _, name := range tableNames {
+		if _, ok := sysWantedTables[name]; !ok {
+			return false, moerr.NewInternalError(fmt.Sprintf("sys tenant does not have the table %s", name))
+		}
+	}
+
+	return true, nil
 }
 
 // InitSysTenant initializes the tenant SYS before any tenants and accepting any requests
@@ -587,13 +634,17 @@ func InitSysTenant(ctx context.Context, tenant *TenantInfo) error {
 	pu := config.GetParameterUnit(ctx)
 	isSys := tenant.IsSysTenant()
 
+	ctx = context.WithValue(ctx, moengine.TenantIDKey{}, uint32(sysAccountID))
+	ctx = context.WithValue(ctx, moengine.UserIDKey{}, uint32(rootID))
+	ctx = context.WithValue(ctx, moengine.RoleIDKey{}, uint32(moAdminRoleID))
+
 	exists, err = checkSysExistsOrNot(ctx, pu)
+	if err != nil {
+		return err
+	}
 	if exists {
 		return nil
 	}
-
-	//wrap
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 
 	addSqlIntoSet := func(sql string) {
 		initDataSqls = append(initDataSqls, sql)
@@ -616,24 +667,24 @@ func InitSysTenant(ctx context.Context, tenant *TenantInfo) error {
 	//initialize the default data of tables for the tenant
 	//step 1: add new tenant entry to the mo_account
 	if isSys {
-		initMoAccount = fmt.Sprintf(initMoAccountFormat, sysAccountID, sysAccountName, sysAccountStatus, time.Now(), sysAccountComments)
+		initMoAccount = fmt.Sprintf(initMoAccountFormat, sysAccountID, sysAccountName, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), sysAccountComments)
 	} else {
 		//TODO: use auto increment
-		initMoAccount = fmt.Sprintf(initMoAccountFormat, rand.Int(), tenant.GetTenant(), sysAccountStatus, time.Now(), "")
+		initMoAccount = fmt.Sprintf(initMoAccountFormat, rand.Int(), tenant.GetTenant(), sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), "")
 	}
 	addSqlIntoSet(initMoAccount)
 
 	//step 2:add new role entries to the mo_role
 	if isSys {
-		initMoRole1 := fmt.Sprintf(initMoRoleFormat, moAdminRoleID, moAdminRoleName, rootID, moAdminRoleID, time.Now(), moAdminRoleComment)
-		initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, rootID, moAdminRoleID, time.Now(), publicRoleComment)
+		initMoRole1 := fmt.Sprintf(initMoRoleFormat, moAdminRoleID, moAdminRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), moAdminRoleComment)
+		initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), publicRoleComment)
 		addSqlIntoSet(initMoRole1)
 		addSqlIntoSet(initMoRole2)
 	}
 
 	//step 3:add new user entry to the mo_user
 	if isSys {
-		initMoUser := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, rootPassword, rootStatus, time.Now(), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
+		initMoUser := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, rootPassword, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
 		addSqlIntoSet(initMoUser)
 	}
 
@@ -645,11 +696,14 @@ func InitSysTenant(ctx context.Context, tenant *TenantInfo) error {
 					r := sysRoles[i]
 					o := sysObjects[j]
 					p := sysPrivileges[k]
+					if r.id == publicRoleID && p.id != PrivilegeTypeConnect {
+						continue
+					}
 					initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
 						r.id, r.name,
 						o.typ, o.id,
 						p.id, p.id.String(), p.level,
-						rootID, time.Now(),
+						rootID, types.CurrentTimestamp().String2(time.UTC, 0),
 						p.withGrantOption)
 					addSqlIntoSet(initMoRolePriv)
 				}
@@ -659,8 +713,8 @@ func InitSysTenant(ctx context.Context, tenant *TenantInfo) error {
 
 	//step5: add new entries to the mo_user_grant
 	if isSys {
-		initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, moAdminRoleID, rootID, time.Now(), false)
-		initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, rootID, time.Now(), true)
+		initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, moAdminRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), false)
+		initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), true)
 		addSqlIntoSet(initMoUserGrant1)
 		addSqlIntoSet(initMoUserGrant2)
 	}
@@ -668,13 +722,16 @@ func InitSysTenant(ctx context.Context, tenant *TenantInfo) error {
 	addSqlIntoSet("commit;")
 
 	//fill the mo_account, mo_role, mo_user, mo_role_priv, mo_user_grant
-	sql := strings.Join(initDataSqls, "\n")
-	fmt.Println("-------> ", sql)
+	//wrap
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
-	err = bh.Exec(sql)
-	if err != nil {
-		goto handleFailed
+	for _, sql := range initDataSqls {
+		fmt.Println("-------> ", sql)
+		err = bh.Exec(sql)
+		if err != nil {
+			goto handleFailed
+		}
 	}
 
 	return nil
