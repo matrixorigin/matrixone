@@ -15,6 +15,7 @@
 package unary
 
 import (
+	"errors"
 	"io/ioutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,13 +27,15 @@ func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	inputVector := vectors[0]
 	resultType := types.New(types.T_varchar, 0, 0, 0)
 	vec := vector.New(resultType)
-
+	const blobsize = 2 ^ 16 - 1
 	fileName := vector.GetStrColumn(inputVector).GetString(0)
 	content, err := ioutil.ReadFile(fileName)
 	if err != nil {
 		return nil, err
 	}
-
+	if len(content) > blobsize {
+		return nil, errors.New("Data too long for blob")
+	}
 	if err := vec.Append(content, proc.GetMheap()); err != nil {
 		return nil, err
 	}
