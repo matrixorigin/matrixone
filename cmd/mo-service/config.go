@@ -110,7 +110,7 @@ func (c *Config) createFileService(name string) (fileservice.FileService, error)
 
 func (c *Config) getLogServiceConfig() logservice.Config {
 	cfg := c.LogService
-	fmt.Printf("hakeeper client cfg: %v", c.HAKeeperClient)
+	logutil.Infof("hakeeper client cfg: %v", c.HAKeeperClient)
 	cfg.HAKeeperClientConfig = c.HAKeeperClient
 	return cfg
 }

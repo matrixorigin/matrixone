@@ -110,7 +110,7 @@ func waitSignal() {
 }
 
 func cleanup() {
-	fmt.Println("\rBye!")
+	logutil.Info("\rBye!")
 }
 
 func recreateDir(dir string) (err error) {
@@ -157,12 +157,12 @@ func closeTae(tae *taeHandler) {
 func main() {
 	// if the argument passed in is "--version", return version info and exit
 	if len(os.Args) == 2 && os.Args[1] == "--version" {
-		fmt.Println("MatrixOne build info:")
-		fmt.Printf("  The golang version used to build this binary: %s\n", GoVersion)
-		fmt.Printf("  Git branch name: %s\n", BranchName)
-		fmt.Printf("  Last git commit ID: %s\n", LastCommitId)
-		fmt.Printf("  Buildtime: %s\n", BuildTime)
-		fmt.Printf("  Current Matrixone version: %s\n", MoVersion)
+		logutil.Info("MatrixOne build info:")
+		logutil.Infof("  The golang version used to build this binary: %s", GoVersion)
+		logutil.Infof("  Git branch name: %s", BranchName)
+		logutil.Infof("  Last git commit ID: %s", LastCommitId)
+		logutil.Infof("  Buildtime: %s", BuildTime)
+		logutil.Infof("  Current Matrixone version: %s", MoVersion)
 		os.Exit(0)
 	}
 
@@ -172,7 +172,7 @@ func main() {
 	handleDebugFlags()
 
 	if len(args) < 1 {
-		fmt.Printf("Usage: %s configFile\n", os.Args[0])
+		logutil.Infof("Usage: %s configFile", os.Args[0])
 		flag.PrintDefaults()
 		os.Exit(-1)
 	}
@@ -205,14 +205,14 @@ func main() {
 
 	//just initialize the tae after configuration has been loaded
 	if len(args) == 2 && args[1] == "initdb" {
-		fmt.Println("Initialize the TAE engine ...")
+		logutil.Info("Initialize the TAE engine ...")
 		taeWrapper := initTae(pu)
 		err := frontend.InitDB(cancelMoServerCtx, taeWrapper.eng)
 		if err != nil {
 			logutil.Infof("Initialize catalog failed. error:%v", err)
 			os.Exit(InitCatalogExit)
 		}
-		fmt.Println("Initialize the TAE engine Done")
+		logutil.Info("Initialize the TAE engine Done")
 		closeTae(taeWrapper)
 		os.Exit(0)
 	}
@@ -230,14 +230,14 @@ func main() {
 	pu.HostMmu = host.New(params.HostMmuLimitation)
 
 	var tae *taeHandler
-	fmt.Println("Initialize the TAE engine ...")
+	logutil.Info("Initialize the TAE engine ...")
 	tae = initTae(pu)
 	err = frontend.InitDB(cancelMoServerCtx, tae.eng)
 	if err != nil {
 		logutil.Infof("Initialize catalog failed. error:%v", err)
 		os.Exit(InitCatalogExit)
 	}
-	fmt.Println("Initialize the TAE engine Done")
+	logutil.Info("Initialize the TAE engine Done")
 
 	if err := agent.Listen(agent.Options{}); err != nil {
 		logutil.Errorf("listen gops agent failed: %s", err)

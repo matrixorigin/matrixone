@@ -137,6 +137,7 @@ func NewService(cfg *Config,
 	if err := s.initMetadata(); err != nil {
 		return nil, err
 	}
+	if err := s.init
 	return s, nil
 }
 

@@ -15,7 +15,7 @@
 package compile
 
 import (
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -44,7 +44,7 @@ func PrintScope(prefix []byte, ss []*Scope) {
 			PrintScope(append(prefix, '\t'), s.PreScopes)
 		}
 		p := pipeline.NewMerge(s.Instructions, nil)
-		fmt.Printf("%s:%v %v\n", prefix, s.Magic, p)
+		logutil.Infof("%s:%v %v", prefix, s.Magic, p)
 	}
 }
 

@@ -1764,7 +1764,7 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 // open a new row of the resultset
 func (mp *MysqlProtocolImpl) openRow(_ []byte) error {
 	if mp.enableLog {
-		fmt.Println("openRow")
+		logutil.Info("openRow")
 	}
 	return mp.openPacket()
 }
@@ -1772,7 +1772,7 @@ func (mp *MysqlProtocolImpl) openRow(_ []byte) error {
 // close a finished row of the resultset
 func (mp *MysqlProtocolImpl) closeRow(_ []byte) error {
 	if mp.enableLog {
-		fmt.Println("closeRow")
+		logutil.Info("closeRow")
 	}
 
 	err := mp.closePacket(true)
@@ -1790,7 +1790,7 @@ func (mp *MysqlProtocolImpl) closeRow(_ []byte) error {
 // flushOutBuffer the data in the outbuf into the network
 func (mp *MysqlProtocolImpl) flushOutBuffer() error {
 	if mp.enableLog {
-		fmt.Println("flush")
+		logutil.Info("flush")
 	}
 
 	if mp.bytesInOutBuffer >= mp.untilBytesInOutbufToFlush {
@@ -1809,7 +1809,7 @@ func (mp *MysqlProtocolImpl) flushOutBuffer() error {
 // open a new mysql protocol packet
 func (mp *MysqlProtocolImpl) openPacket() error {
 	if mp.enableLog {
-		fmt.Println("openPacket")
+		logutil.Info("openPacket")
 	}
 
 	outbuf := mp.tcpConn.OutBuf()
@@ -1885,7 +1885,7 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 // close a mysql protocol packet
 func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) error {
 	if mp.enableLog {
-		fmt.Println("closePacket")
+		logutil.Info("closePacket")
 	}
 	if !mp.isInPacket() {
 		return nil
