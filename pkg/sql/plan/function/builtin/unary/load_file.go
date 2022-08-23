@@ -16,7 +16,7 @@ package unary
 
 import (
 	"errors"
-	"io/ioutil"
+	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -29,7 +29,7 @@ func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	vec := vector.New(resultType)
 	const blobsize = 2 ^ 16 - 1
 	fileName := vector.GetStrColumn(inputVector).GetString(0)
-	content, err := ioutil.ReadFile(fileName)
+	content, err := os.ReadFile(fileName)
 	if err != nil {
 		return nil, err
 	}
