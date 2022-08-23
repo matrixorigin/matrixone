@@ -29,11 +29,11 @@ cd matrixone
 
 ##### Option 2: Get the MatrixOne(Stable Version) code
 
-If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **0.5.0** first.
+If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **0.5.1** first.
 
 ```
 git clone https://github.com/matrixorigin/matrixone.git
-git checkout 0.5.0
+git checkout 0.5.1
 cd matrixone
 ```
 
@@ -67,15 +67,15 @@ For each release, you can download binary packages directly to run MatrixOne in 
 Linux Environment
 
 ```bash
-wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.0/mo-server-v0.5.0-linux-amd64.zip
-unzip mo-server-v0.5.0-linux-amd64.zip
+wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.1/mo-server-v0.5.1-linux-amd64.zip
+unzip mo-server-v0.5.1-linux-amd64.zip
 ```
 
 MacOS Environment
 
 ```bash
-wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.0/mo-server-v0.5.0-darwin-x86_64.zip
-unzip mo-server-v0.5.0-darwin-x86_64.zip
+wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.1/mo-server-v0.5.1-darwin-x86_64.zip
+unzip mo-server-v0.5.1-darwin-x86_64.zip
 ```
 
 #### 2.Launch MatrixOne server
@@ -110,10 +110,10 @@ Latest Image
 docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
 ```
 
-0.5.0 Version Image
+0.5.1 Version Image
 
 ```
-docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1
 ```
 
 For the information on the user name and password, see the next step - Connect to MatrixOne Server.

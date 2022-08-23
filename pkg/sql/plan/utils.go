@@ -545,7 +545,7 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 		}
 	case tree.INTERSECT:
 		if stmt.All {
-			return errors.New("", "INTERSECT ALL clause will be supported in future version.")
+			*unionTypes = append(*unionTypes, plan.Node_INTERSECT_ALL)
 		} else {
 			*unionTypes = append(*unionTypes, plan.Node_INTERSECT)
 		}

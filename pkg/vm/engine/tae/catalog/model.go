@@ -75,6 +75,7 @@ const (
 	SystemDBAttr_CreateSQL   = "dat_createsql"
 	SystemDBAttr_Owner       = "owner"
 	SystemDBAttr_Creator     = "creator"
+	SystemDBAttr_CreateAt    = "created_time"
 	SystemDBAttr_AccID       = "account_id"
 
 	SystemRelAttr_ID          = "rel_id"
@@ -87,6 +88,7 @@ const (
 	SystemRelAttr_CreateSQL   = "rel_createsql"
 	SystemRelAttr_Owner       = "owner"
 	SystemRelAttr_Creator     = "creator"
+	SystemRelAttr_CreateAt    = "created_time"
 	SystemRelAttr_AccID       = "account_id"
 
 	SystemColAttr_AccID           = "account_id"
@@ -141,6 +143,10 @@ func init() {
 		Oid:  types.T_uint64,
 		Size: 8,
 	}
+	ttimestamp := types.Type{
+		Oid:  types.T_timestamp,
+		Size: 8,
+	}
 
 	/*
 
@@ -180,6 +186,9 @@ func init() {
 		panic(err)
 	}
 	if err = SystemDBSchema.AppendCol(SystemDBAttr_Creator, tu32); err != nil {
+		panic(err)
+	}
+	if err = SystemDBSchema.AppendCol(SystemDBAttr_CreateAt, ttimestamp); err != nil {
 		panic(err)
 	}
 	if err = SystemDBSchema.AppendCol(SystemDBAttr_AccID, tu32); err != nil {
@@ -255,6 +264,9 @@ func init() {
 		panic(err)
 	}
 	if err = SystemTableSchema.AppendCol(SystemRelAttr_Creator, tu32); err != nil {
+		panic(err)
+	}
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_CreateAt, ttimestamp); err != nil {
 		panic(err)
 	}
 	if err = SystemTableSchema.AppendCol(SystemRelAttr_AccID, tu32); err != nil {
