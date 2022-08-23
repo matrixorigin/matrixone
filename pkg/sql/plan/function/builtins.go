@@ -2047,4 +2047,33 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	LOAD_FILE: {
+		Id: LOAD_FILE,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_blob,
+				Fn:        unary.LoadFile,
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_char},
+				ReturnTyp: types.T_blob,
+				Fn:        unary.LoadFile,
+			},
+			// {
+			// 	Index:     2,
+			// 	Flag:      plan.Function_STRICT,
+			// 	Layout:    STANDARD_FUNCTION,
+			// 	Args:      []types.T{types.T_text},
+			// 	ReturnTyp: types.T_blob,
+			// 	Fn:        unary.LoadFile,
+			// },
+		},
+	},
 }
