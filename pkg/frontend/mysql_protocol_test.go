@@ -304,6 +304,7 @@ func TestReadStringLenEnc(t *testing.T) {
 }
 
 func TestMysqlClientProtocol_TlsHandshake(t *testing.T) {
+	time.Sleep(time.Second * 3)
 	//before anything using the configuration
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
 	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
@@ -1221,6 +1222,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 }
 
 func TestMysqlResultSet(t *testing.T) {
+	time.Sleep(time.Second * 5)
 	//client connection method: mysql -h 127.0.0.1 -P 6001 -udump -p
 	//pwd: mysql-server-mysql-8.0.23/mysql-test
 	//with mysqltest: mysqltest --test-file=t/1st.test --result-file=r/1st.result --user=dump -p111 -P 6001 --host=127.0.0.1
@@ -1298,15 +1300,15 @@ func open_tls_db(t *testing.T, port int) *sql.DB {
 	if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
 		log.Fatal("Failed to append PEM.")
 	}
-	// clientCert := make([]tls.Certificate, 0, 1)
-	// certs, err := tls.LoadX509KeyPair("test/client-cert.pem", "test/client-key.pem")
-	// if err != nil {
-	// 	require.NoError(t, err)
-	// }
-	// clientCert = append(clientCert, certs)
+	clientCert := make([]tls.Certificate, 0, 1)
+	certs, err := tls.LoadX509KeyPair("test/client-cert.pem", "test/client-key.pem")
+	if err != nil {
+		require.NoError(t, err)
+	}
+	clientCert = append(clientCert, certs)
 	err = mysqlDriver.RegisterTLSConfig(tlsName, &tls.Config{
-		// RootCAs:            rootCertPool,
-		// Certificates:       clientCert,
+		RootCAs:            rootCertPool,
+		Certificates:       clientCert,
 		InsecureSkipVerify: true,
 	})
 	if err != nil {
