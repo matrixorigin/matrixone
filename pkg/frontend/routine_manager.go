@@ -249,7 +249,8 @@ func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) {
 		}
 		certPool = x509.NewCertPool()
 		if certPool.AppendCertsFromPEM(caCert) {
-			clientAuthPolicy = tls.VerifyClientCertIfGiven
+			// clientAuthPolicy = tls.VerifyClientCertIfGiven
+			clientAuthPolicy = tls.NoClientCert
 		}
 	}
 
@@ -261,6 +262,7 @@ func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) {
 		case tls.TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA, tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
 			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305, tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305:
 			// logutil.Info("Disabling weak cipherSuite", zap.String("cipherSuite", sc.Name))
+			cipherSuites = append(cipherSuites, sc.ID)
 		default:
 			// cipherNames = append(cipherNames, sc.Name)
 			cipherSuites = append(cipherSuites, sc.ID)
