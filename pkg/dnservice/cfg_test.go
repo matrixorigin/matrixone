@@ -17,7 +17,6 @@ package dnservice
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -26,15 +25,9 @@ func TestValidate(t *testing.T) {
 	assert.Error(t, c.Validate())
 	c.UUID = "dn1"
 	assert.NoError(t, c.Validate())
-
 	assert.Equal(t, defaultListenAddress, c.ListenAddress)
 	assert.Equal(t, c.ListenAddress, defaultListenAddress)
 	assert.Equal(t, c.ServiceAddress, defaultServiceAddress)
-	assert.Equal(t, defaultMaxConnections, c.RPC.MaxConnections)
-	assert.Equal(t, defaultSendQueueSize, c.RPC.SendQueueSize)
-	assert.Equal(t, defaultMaxIdleDuration, c.RPC.MaxIdleDuration.Duration)
-	assert.Equal(t, toml.ByteSize(defaultBufferSize), c.RPC.WriteBufferSize)
-	assert.Equal(t, toml.ByteSize(defaultBufferSize), c.RPC.ReadBufferSize)
 	assert.Equal(t, defaultMaxClockOffset, c.Txn.Clock.MaxClockOffset.Duration)
 	assert.Equal(t, localClockBackend, c.Txn.Clock.Backend)
 	assert.Equal(t, taeStorageBackend, c.Txn.Storage.Backend)

@@ -269,6 +269,8 @@ func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err
 			colData.Append(schema.AcInfo.RoleID)
 		case catalog.SystemRelAttr_Creator:
 			colData.Append(schema.AcInfo.UserID)
+		case catalog.SystemRelAttr_CreateAt:
+			colData.Append(schema.AcInfo.CreateAt)
 		case catalog.SystemRelAttr_AccID:
 			colData.Append(schema.AcInfo.TenantID)
 		default:
@@ -304,6 +306,8 @@ func (blk *txnSysBlock) getDBTableData(colIdx int) (view *model.ColumnView, err 
 			colData.Append(db.GetRoleID())
 		case catalog.SystemDBAttr_Creator:
 			colData.Append(db.GetUserID())
+		case catalog.SystemDBAttr_CreateAt:
+			colData.Append(db.GetCreateAt())
 		case catalog.SystemDBAttr_AccID:
 			colData.Append(db.GetTenantID())
 		default:

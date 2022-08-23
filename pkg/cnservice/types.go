@@ -93,6 +93,9 @@ type Config struct {
 		// ClientConfig hakeeper client configuration
 		ClientConfig logservice.HAKeeperClientConfig
 	}
+
+	// RPC rpc config used to build txn sender
+	RPC rpc.Config `toml:"rpc"`
 }
 
 type service struct {
