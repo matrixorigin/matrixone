@@ -690,13 +690,12 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 			}
 		}
 	case plan.Node_ANTI:
-		_, conds := extraJoinConditions(n.OnList)
 		for i := range rs {
-			if isEq && len(conds) == 1 {
+			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
-					Op:  vm.Anti,
+					Op:  vm.Mark,
 					Idx: c.anal.curr,
-					Arg: constructAnti(n, typs, c.proc),
+					Arg: constructMark(n, typs, c.proc),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
@@ -1066,6 +1065,8 @@ func joinType(n *plan.Node, ns []*plan.Node) (bool, plan.Node_JoinFlag) {
 		return true, plan.Node_LEFT
 	case plan.Node_SINGLE:
 		return false, plan.Node_SINGLE
+	case plan.Node_MARK:
+		return false, plan.Node_MARK
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join typ '%v' not support now", n.JoinType)))
 	}

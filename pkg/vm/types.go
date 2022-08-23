@@ -32,6 +32,7 @@ const (
 	Projection
 	Anti
 	Single
+	Mark
 
 	LoopJoin
 	LoopLeft
