@@ -64,7 +64,7 @@ func Errorf(msg string, fields ...interface{}) {
 	if len(fields) == 0 {
 		GetErrorLogger().Error(msg)
 	} else {
-		GetErrorLogger().Error(fmt.Sprintf(msg, fields))
+		GetErrorLogger().Error(fmt.Sprintf(msg, fields...))
 	}
 }
 
