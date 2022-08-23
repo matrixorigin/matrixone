@@ -292,7 +292,7 @@ func (db *txnDB) SoftDeleteSegment(id *common.ID) (err error) {
 
 func (db *txnDB) ApplyRollback() (err error) {
 	if db.createEntry != nil {
-		if err = db.createEntry.ApplyRollback(); err != nil {
+		if err = db.createEntry.ApplyRollback(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
 			return
 		}
 	}
@@ -302,10 +302,20 @@ func (db *txnDB) ApplyRollback() (err error) {
 		}
 	}
 	if db.dropEntry != nil {
-		if err = db.dropEntry.ApplyRollback(); err != nil {
+		if err = db.dropEntry.ApplyRollback(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
 			return
 		}
 	}
+	return
+}
+
+// ApplyPrepare apply preparing for a 2PC distributed transaction
+func (db *txnDB) Apply2PCPrepare() (err error) {
+	now := time.Now()
+	for _, table := range db.tables {
+		table.WaitSynced()
+	}
+	logutil.Debugf("Txn-%d ApplyCommit Takes %s", db.store.txn.GetID(), time.Since(now))
 	return
 }
 
@@ -333,14 +343,14 @@ func (db *txnDB) ApplyCommit() (err error) {
 	return
 }
 
-func (db *txnDB) PreCommit() (err error) {
+func (db *txnDB) PreCommitOr2PCPrepare() (err error) {
 	for _, table := range db.tables {
-		if err = table.PreCommitDedup(); err != nil {
+		if err = table.PreCommitOr2PCPrepareDedup(); err != nil {
 			return
 		}
 	}
 	for _, table := range db.tables {
-		if err = table.PreCommit(); err != nil {
+		if err = table.PreCommitOr2PCPrepare(); err != nil {
 			panic(err)
 		}
 	}
@@ -367,6 +377,39 @@ func (db *txnDB) PrepareCommit() (err error) {
 
 	logutil.Debugf("Txn-%d PrepareCommit Takes %s", db.store.txn.GetID(), time.Since(now))
 
+	return
+}
+
+func (db *txnDB) Prepare2PCPrepare() (err error) {
+	now := time.Now()
+	if db.createEntry != nil {
+		if err = db.createEntry.Prepare2PCPrepare(); err != nil {
+			return
+		}
+	}
+	for _, table := range db.tables {
+		if err = table.Prepare2PCPrepare(); err != nil {
+			break
+		}
+	}
+	if db.dropEntry != nil {
+		if err = db.dropEntry.Prepare2PCPrepare(); err != nil {
+			return
+		}
+	}
+
+	logutil.Debugf("Txn-%d PrepareCommit Takes %s", db.store.txn.GetID(), time.Since(now))
+
+	return
+}
+
+func (db *txnDB) PreApply2PCPrepare() (err error) {
+	for _, table := range db.tables {
+		// table.ApplyAppend()
+		if err = table.PreApply2PCPrepare(); err != nil {
+			return
+		}
+	}
 	return
 }
 

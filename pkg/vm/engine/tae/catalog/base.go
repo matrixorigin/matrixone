@@ -201,6 +201,18 @@ func (be *BaseEntry) PrepareCommit() error {
 	return nil
 }
 
+func (be *BaseEntry) Prepare2PCPrepare() error {
+	be.Lock()
+	defer be.Unlock()
+	if be.CreateAt.IsEmpty() {
+		be.CreateAt = be.Txn.GetPrepareTS()
+	}
+	if be.CurrOp == OpSoftDelete {
+		be.DeleteAt = be.Txn.GetPrepareTS()
+	}
+	return nil
+}
+
 func (be *BaseEntry) PrepareRollback() error {
 	be.Lock()
 	if be.PrevCommit != nil {
@@ -212,7 +224,10 @@ func (be *BaseEntry) PrepareRollback() error {
 	return nil
 }
 
-func (be *BaseEntry) ApplyRollback() error {
+func (be *BaseEntry) ApplyRollback(index *wal.Index) error {
+	be.Lock()
+	defer be.Unlock()
+	be.LogIndex = index
 	return nil
 }
 

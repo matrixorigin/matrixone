@@ -16,10 +16,6 @@ package txnif
 
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
-const (
-// UncommitTS = ^uint64(0)
-)
-
 var UncommitTS types.TS
 
 func init() {
@@ -37,6 +33,17 @@ const (
 	TxnStateUnknown
 )
 
+type TxnStatus int32
+
+const (
+	TxnStatusActive TxnStatus = iota
+	TxnStatusPrepared
+	TxnStatusPrepareTimeOut
+	TxnStatusCommittingFinished
+	TxnStatusCommitted
+	TxnStatusRollbacked
+)
+
 func TxnStrState(state TxnState) string {
 	switch state {
 	case TxnStateActive:
@@ -51,6 +58,22 @@ func TxnStrState(state TxnState) string {
 		return "Rollbacked"
 	case TxnStateUnknown:
 		return "Unknown"
+	}
+	panic("state not support")
+}
+
+func TxnStrStatus(state TxnStatus) string {
+	switch state {
+	case TxnStatusActive:
+		return "TxnStatusActive"
+	case TxnStatusPrepared:
+		return "TxnStatusPrepared"
+	case TxnStatusRollbacked:
+		return "TxnStatusRollbacked"
+	case TxnStatusCommittingFinished:
+		return "TxnStatusCommittingFinished"
+	case TxnStatusCommitted:
+		return "TxnStatusCommitted"
 	}
 	panic("state not support")
 }

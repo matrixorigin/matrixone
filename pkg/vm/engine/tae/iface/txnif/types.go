@@ -29,9 +29,12 @@ import (
 type Txn2PC interface {
 	PrepareRollback() error
 	ApplyRollback() error
-	PreCommit() error
+	PreCommitOr2PCPrepare() error
 	PrepareCommit() error
+	Prepare2PCPrepare() error
 	PreApplyCommit() error
+	PreApply2PCPrepare() error
+	Apply2PCPrepare() error
 	ApplyCommit() error
 }
 
@@ -42,6 +45,7 @@ type TxnReader interface {
 	GetCtx() []byte
 	GetStartTS() types.TS
 	GetCommitTS() types.TS
+	GetPrepareTS() types.TS
 	GetInfo() []byte
 	IsTerminated(bool) bool
 	IsVisible(o TxnReader) bool
@@ -51,6 +55,7 @@ type TxnReader interface {
 	String() string
 	Repr() string
 	GetLSN() uint64
+	Event() int
 
 	SameTxn(startTs types.TS) bool
 	CommitBefore(startTs types.TS) bool
@@ -70,6 +75,7 @@ type TxnChanger interface {
 	RUnlock()
 	ToCommittedLocked() error
 	ToCommittingLocked(ts types.TS) error
+	ToPreparingLocked(ts types.TS) error
 	ToRollbackedLocked() error
 	ToRollbackingLocked(ts types.TS) error
 	ToUnknownLocked()
@@ -224,8 +230,9 @@ type TxnEntry interface {
 	RLock()
 	RUnlock()
 	PrepareCommit() error
+	Prepare2PCPrepare() error
 	PrepareRollback() error
 	ApplyCommit(index *wal.Index) error
-	ApplyRollback() error
+	ApplyRollback(index *wal.Index) error
 	MakeCommand(uint32) (TxnCmd, error)
 }
