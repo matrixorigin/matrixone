@@ -17,11 +17,15 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 	"math"
+	"os"
 	"reflect"
 	"strconv"
 	"sync"
@@ -32,7 +36,7 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
-	_ "github.com/go-sql-driver/mysql"
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
 	fuzz "github.com/google/gofuzz"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -1286,28 +1290,28 @@ func TestMysqlResultSet(t *testing.T) {
 
 func open_tls_db(t *testing.T, port int) *sql.DB {
 	tlsName := "custom"
-	// rootCertPool := x509.NewCertPool()
-	// pem, err := os.ReadFile("test/ca.pem")
-	// if err != nil {
-	// 	require.NoError(t, err)
-	// }
-	// if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
-	// 	log.Fatal("Failed to append PEM.")
-	// }
-	// clientCert := make([]tls.Certificate, 0, 1)
-	// certs, err := tls.LoadX509KeyPair("test/client-cert.pem", "test/client-key.pem")
-	// if err != nil {
-	// 	require.NoError(t, err)
-	// }
-	// clientCert = append(clientCert, certs)
-	// err = mysqlDriver.RegisterTLSConfig(tlsName, &tls.Config{
-	// 	RootCAs:            rootCertPool,
-	// 	Certificates:       clientCert,
-	// 	InsecureSkipVerify: true,
-	// })
-	// if err != nil {
-	// 	require.NoError(t, err)
-	// }
+	rootCertPool := x509.NewCertPool()
+	pem, err := os.ReadFile("test/ca.pem")
+	if err != nil {
+		require.NoError(t, err)
+	}
+	if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
+		log.Fatal("Failed to append PEM.")
+	}
+	clientCert := make([]tls.Certificate, 0, 1)
+	certs, err := tls.LoadX509KeyPair("test/client-cert.pem", "test/client-key.pem")
+	if err != nil {
+		require.NoError(t, err)
+	}
+	clientCert = append(clientCert, certs)
+	err = mysqlDriver.RegisterTLSConfig(tlsName, &tls.Config{
+		RootCAs:            rootCertPool,
+		Certificates:       clientCert,
+		InsecureSkipVerify: true,
+	})
+	if err != nil {
+		require.NoError(t, err)
+	}
 
 	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?tls=%s", port, tlsName)
 	db, err := sql.Open("mysql", dsn)
