@@ -1480,6 +1480,13 @@ func (mce *MysqlCmdExecutor) handleDeallocate(st *tree.Deallocate) error {
 	return nil
 }
 
+// handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
+// which has been initialized.
+func (mce *MysqlCmdExecutor) handleCreateAccount(ca *tree.CreateAccount) error {
+	//TODO:
+	return nil
+}
+
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
 	cols := []*plan2.ColDef{
 		{Typ: &plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
@@ -1944,6 +1951,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *InternalCmdFieldList:
 			selfHandle = true
 			if err = mce.handleCmdFieldList(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.CreateAccount:
+			selfHandle = true
+			if err = mce.handleCreateAccount(st); err != nil {
 				goto handleFailed
 			}
 		}

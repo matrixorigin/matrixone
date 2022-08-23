@@ -1012,3 +1012,30 @@ func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempo
 
 	return nil
 }
+
+type BackgroundHandler struct {
+	mce *MysqlCmdExecutor
+	ses *BackgroundSession
+}
+
+func NewBackgroundHandler(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit) *BackgroundHandler {
+	bh := &BackgroundHandler{
+		mce: NewMysqlCmdExecutor(),
+		ses: NewBackgroundSession(ctx, gm, mp, pu, gSysVariables),
+	}
+	return bh
+}
+
+func (bh *BackgroundHandler) Close() {
+	bh.mce.Close()
+	bh.ses.Close()
+}
+
+func (bh *BackgroundHandler) Exec(sql string) error {
+	bh.mce.PrepareSessionBeforeExecRequest(bh.ses.Session)
+	err := bh.mce.doComQuery(bh.ses.GetRequestContext(), sql)
+	if err != nil {
+		return err
+	}
+	return err
+}
