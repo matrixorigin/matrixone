@@ -38,13 +38,34 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
+	ap.ctr.buildEqVec = make([]*vector.Vector, len(ap.Conditions[1]))
+	ap.ctr.buildEqEvecs = make([]evalVector, len(ap.Conditions[1]))
 	return nil
 }
 
-// New Logic: frist the right table is used to build a hashtable.
-// different from before, the hashtable has been build before the
-// Call func. And note that, the all batches from the right has been
-// used to build it and not only one batch.
+// Note: before mark join, right table has been used in hashbuild operator to build JoinMap, which only contains those tuples without null
+// the idx of tuples contains null is stored in nullSels
+
+// 1. for each tuple in left table, join with tuple(s) in right table based on Three-valued logic. Conditions may contain equal conditions and non-equal conditions
+// logic state for same row is Three-valued AND, for different rows is Three-valued OR
+
+// 2.1 if a probe tuple has null(i.e. zvals[k] == 0)
+//       scan whole right table directly and join with each tuple to determine state
+
+// 2.2 if a probe tuple has no null. then scan JoinMap firstly to check equal condtions.(condEq)
+//	    2.2.1 if condEq is condtrue in JoinMap(i.e. vals[k] > 0)
+//	 		    further check non-eq condtions in those tupe IN JoinMap
+//				2.2.1.1 if condNonEq is condTrue
+//						   mark as condTrue
+//	 	        2.2.1.2 if condNonEq is condUnkown
+//						   mark as condUnkown
+//	 	        2.2.1.3 if condNonEq is condFalse in JoinMap
+//						   further check eq and non-eq conds IN nullSels
+//                         (probe state could still be unknown BUT NOT FALSE as long as one unknown state exists, so have to scan the whole right table)
+
+//	    2.2.2 if condEq is condFalse in JoinMap
+//				check eq and non-eq conds in nullSels to determine condState. (same as 2.2.1.3)
+
 func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
@@ -66,6 +87,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
+				ctr.freeBuildEqVec(proc)
 				if ctr.mp != nil {
 					ctr.mp.Free()
 				}
@@ -88,6 +110,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				}
 			} else {
 				if err := ctr.probe(bat, ap, proc, anal); err != nil {
+					ctr.freeBuildEqVec(proc)
 					ctr.state = End
 					if ctr.mp != nil {
 						ctr.mp.Free()
@@ -107,8 +130,13 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
 	bat := <-proc.Reg.MergeReceivers[1].Ch
 	if bat != nil {
+		joinMap := bat.Ht.(*hashmap.JoinMap)
+		ctr.evalNullSels(bat)
+		if err := ctr.evalJoinBuildCondition(bat, ap.Conditions[1], proc); err != nil {
+			return err
+		}
 		ctr.bat = bat
-		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+		ctr.mp = joinMap.Dup()
 		ctr.hasNull = ctr.mp.HasNull()
 	}
 	return nil
@@ -169,10 +197,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat.Vecs[lastIndex] = vector.New(types.T_bool.ToType())
 	ctr.joinFlags = make([]bool, bat.Length())
 	ctr.Nsp = nulls.NewWithSize(bat.Length())
-	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
+	if err := ctr.evalJoinProbeCondition(bat, ap.Conditions[0], proc); err != nil {
 		return err
 	}
-	defer ctr.freeJoinCondition(proc)
+	defer ctr.freeProbeEqVec(proc)
 	count := bat.Length()
 	itr := ctr.mp.Map().NewIterator()
 	mSels := ctr.mp.Sels()
@@ -183,15 +211,28 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 		copy(ctr.inBuckets, hashmap.OneUInt8s)
 		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+		var condState resultType
+		var condNonEq resultType
+		var condEq resultType
+		var err error
 		for k := 0; k < n; k++ {
 			if ctr.inBuckets[k] == 0 {
 				continue
 			}
-			if zvals[k] == 0 {
-				ctr.Nsp.Np.Add(uint64(i + k))
-			} else if vals[k] > 0 {
-				ctr.joinFlags[i+k] = true
-				flag, err := ctr.NoneEqJoin(ap, mSels, vals, k, i, proc, bat, rbat)
+			if zvals[k] == 0 { // 2.1 : probe tuple has null
+				condState = condFalse
+				for sel := 0; sel < ctr.bat.Length(); sel++ {
+					condNonEq, err = ctr.nonEqJoin(bat, rbat, i+k, sel, ap, proc)
+					if err != nil {
+						return err
+					}
+					// equal condition check
+					condEq = ctr.eqJoin(i+k, sel)
+					condState = threeValueOr(threeValueAnd(condEq, condNonEq), condState)
+				}
+				ctr.handleResultType(i+k, condState)
+			} else if vals[k] > 0 { // 2.2.1 : condEq is condTrue in JoinMap
+				condNonEq, err = ctr.nonEqJoinInMap(ap, mSels, vals, k, i, proc, bat, rbat)
 				if err != nil {
 					rbat.Clean(proc.GetMheap())
 					if ctr.mp != nil {
@@ -202,11 +243,36 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					}
 					return err
 				}
-				ctr.joinFlags[i+k] = ctr.joinFlags[i+k] && flag
-			} else if ctr.hasNull {
-				ctr.Nsp.Np.Add(uint64(i + k))
+				if condNonEq == condTrue { // 2.2.1.1 : condNonEq is condTrue in JoinMap
+					ctr.joinFlags[i+k] = true
+				} else if condNonEq == condUnkown { // 2.2.1.2 : condNonEq is condUnkown in JoinMap
+					ctr.Nsp.Np.Add(uint64(i + k))
+				} else { // 2.2.1.3 : condNonEq is condFalse in JoinMap, further check in nullSels
+					condState = condFalse
+					for _, sel := range ctr.nullSels {
+						condNonEq, err = ctr.nonEqJoin(bat, rbat, i+k, int(sel), ap, proc)
+						if err != nil {
+							return err
+						}
+						condEq = ctr.eqJoin(i+k, int(sel))
+						condState = threeValueOr(threeValueAnd(condEq, condNonEq), condState)
+					}
+					ctr.handleResultType(i+k, condState)
+				}
+			} else { // 2.2.2 : condEq in condFalse in JoinMap, further check in nullSels
+				condState = condFalse
+				for _, sel := range ctr.nullSels {
+					condNonEq, err = ctr.nonEqJoin(bat, rbat, i+k, int(sel), ap, proc)
+					if err != nil {
+						return err
+					}
+					condEq = ctr.eqJoin(i+k, int(sel))
+					condState = threeValueOr(threeValueAnd(condEq, condNonEq), condState)
+				}
+				ctr.handleResultType(i+k, condState)
 			}
 		}
+
 		data := unsafe.Slice((*byte)(unsafe.Pointer(&ctr.joinFlags[0])), cap(ctr.joinFlags))[:len(ctr.joinFlags)]
 		// add mark flag, the initial
 		rbat.Vecs[len(ap.Result)] = vector.NewWithData(types.T_bool.ToType(), data, ctr.joinFlags, ctr.Nsp)
@@ -238,7 +304,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	return nil
 }
 
-func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
+// store the results of the calculation on the probe side of the equation condition
+func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil || vec.ConstExpand(proc.GetMheap()) == nil {
@@ -262,7 +329,32 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 	return nil
 }
 
-func (ctr *container) freeJoinCondition(proc *process.Process) {
+// store the results of the calculation on the build side of the equation condition
+func (ctr *container) evalJoinBuildCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
+	for i, cond := range conds {
+		vec, err := colexec.EvalExpr(bat, proc, cond)
+		if err != nil || vec.ConstExpand(proc.GetMheap()) == nil {
+			for j := 0; j < i; j++ {
+				if ctr.evecs[j].needFree {
+					vector.Clean(ctr.evecs[j].vec, proc.GetMheap())
+				}
+			}
+			return err
+		}
+		ctr.buildEqVec[i] = vec
+		ctr.buildEqEvecs[i].vec = vec
+		ctr.buildEqEvecs[i].needFree = true
+		for j := range bat.Vecs {
+			if bat.Vecs[j] == vec {
+				ctr.buildEqEvecs[i].needFree = false
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func (ctr *container) freeProbeEqVec(proc *process.Process) {
 	for i := range ctr.evecs {
 		if ctr.evecs[i].needFree {
 			ctr.evecs[i].vec.Free(proc.GetMheap())
@@ -270,37 +362,138 @@ func (ctr *container) freeJoinCondition(proc *process.Process) {
 	}
 }
 
-// func (ctr *container) freeSels(proc *process.Process) {
-// 	for i := range ctr.sels {
-// 		proc.GetMheap().PutSels(ctr.sels[i])
-// 	}
-// 	ctr.sels = nil
-// }
+func (ctr *container) freeBuildEqVec(proc *process.Process) {
+	for i := range ctr.buildEqEvecs {
+		if ctr.buildEqEvecs[i].needFree {
+			ctr.buildEqEvecs[i].vec.Free(proc.GetMheap())
+		}
+	}
+}
 
-// return true means Joined successfully, false means Joining falied
-func (ctr *container) NoneEqJoin(ap *Argument, mSels [][]int64, vals []uint64, k int, i int, proc *process.Process, bat *batch.Batch, rbat *batch.Batch) (bool, error) {
+// calculate the state of non-equal conditions for those tuples in JoinMap
+func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int64, vals []uint64, k int, i int, proc *process.Process, bat *batch.Batch, rbat *batch.Batch) (resultType, error) {
 	if ap.Cond != nil {
-		flg := true // mark no tuple satisfies the condition
+		condState := condFalse
 		sels := mSels[vals[k]-1]
 		for _, sel := range sels {
 			vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
 			if err != nil {
-				return false, err
+				return condUnkown, err
+			}
+			if vec.Nsp.Contains(0) {
+				condState = condUnkown
 			}
 			bs := vec.Col.([]bool)
 			if bs[0] {
-				flg = false
+				condState = condTrue
 				vec.Free(proc.Mp)
 				break
 			}
 			vec.Free(proc.Mp)
 		}
-		if !flg {
-			return true, nil
-		} else {
-			return false, nil
-		}
+		return condState, nil
 	} else {
-		return true, nil
+		return condTrue, nil
 	}
+}
+
+// calculate equal conditions between probe tuple(ctr.vecs - pidx) and build tuple(buildEqVec - bidx).
+func (ctr *container) eqJoin(pidx, bidx int) resultType {
+	condEq := condTrue
+	for col := 0; col < len(ctr.buildEqVec); col++ {
+		if ctr.vecs[col].Nsp.Contains(uint64(pidx)) || ctr.buildEqVec[col].Nsp.Contains(uint64(bidx)) {
+			condEq = condUnkown
+		} else {
+			// String type need to special
+			typeSize := ctr.vecs[col].GetType().TypeSize()
+			var res int
+			if typeSize == 24 {
+				res = bytes.Compare(ctr.vecs[col].Col.(*types.Bytes).Get(int64(pidx)), ctr.buildEqVec[col].Col.(*types.Bytes).Get(int64(bidx)))
+			} else {
+				res = bytes.Compare(ctr.vecs[col].Data[(pidx)*typeSize:(pidx+1)*typeSize], ctr.buildEqVec[col].Data[bidx*typeSize:(bidx+1)*typeSize])
+			}
+			if res != 0 {
+				condEq = condFalse
+				break
+			}
+		}
+	}
+	return condEq
+}
+
+// calculate non-equal conditions between pbat(pidx) and ctr.bat(bidx)
+func (ctr *container) nonEqJoin(pbat, rbat *batch.Batch, pidx, bidx int, ap *Argument, proc *process.Process) (resultType, error) {
+	if ap.Cond != nil {
+		vec, err := colexec.JoinFilterEvalExprInBucket(pbat, ctr.bat, bidx, pidx, proc, ap.Cond)
+		bs := vec.Col.([]bool)
+		if err != nil {
+			rbat.Clean(proc.GetMheap())
+			if ctr.mp != nil {
+				ctr.mp.Free()
+			}
+			if ctr.bat != nil {
+				ctr.bat.Clean(proc.GetMheap())
+			}
+			return condFalse, err
+		}
+		if vec.Nsp.Contains(0) {
+			return condUnkown, nil
+		} else if !bs[0] {
+			return condFalse, nil
+		}
+		vec.Free(proc.Mp)
+	}
+	return condTrue, nil
+}
+
+// collect the idx of tuple which contains null values
+func (ctr *container) evalNullSels(bat *batch.Batch) {
+	joinMap := bat.Ht.(*hashmap.JoinMap)
+	jmSels := joinMap.Sels()
+	selsMap := make(map[int64]bool)
+	for _, sel := range jmSels {
+		for _, i := range sel {
+			selsMap[i] = true
+		}
+	}
+	var nullSels []int64
+	for i := 0; i < bat.Length(); i++ {
+		if selsMap[int64(i)] {
+			continue
+		}
+		nullSels = append(nullSels, int64(i))
+	}
+	ctr.nullSels = nullSels
+}
+
+// mark probe tuple state
+func (ctr *container) handleResultType(idx int, r resultType) {
+	switch r {
+	case condTrue:
+		ctr.joinFlags[idx] = true
+	case condFalse:
+		ctr.joinFlags[idx] = false
+	case condUnkown:
+		ctr.Nsp.Np.Add(uint64(idx))
+	}
+}
+
+// calculate the three-valued logic And
+func threeValueAnd(a, b resultType) resultType {
+	if a == condTrue && b == condTrue {
+		return condTrue
+	} else if a == condFalse || b == condFalse {
+		return condFalse
+	}
+	return condUnkown
+}
+
+// calculate the three-valued logic Or
+func threeValueOr(a, b resultType) resultType {
+	if a == condTrue || b == condTrue {
+		return condTrue
+	} else if a == condFalse && b == condFalse {
+		return condFalse
+	}
+	return condUnkown
 }

@@ -29,6 +29,14 @@ const (
 	End
 )
 
+type resultType int
+
+const (
+	condFalse resultType = iota
+	condTrue
+	condUnkown
+)
+
 type evalVector struct {
 	// In MO,for example, select a from t1 where a+1 > 1, col a will be transformed as a vector,
 	// when it comes to be accepted by the operator,will firstly calculate the a+1, so it's up to
@@ -65,6 +73,14 @@ type container struct {
 	// when we use the Insert func to build the hashtable, we need
 	// vecs not evecs
 	vecs []*vector.Vector
+
+	// record those tuple that contain null value in build table
+	nullSels []int64
+
+	// the result of eval join condtion for conds[1] and cons[0], those two vectors is used to
+	// check equal condition when zval == 0 or condState is False from JoinMap
+	buildEqVec   []*vector.Vector
+	buildEqEvecs []evalVector
 
 	// a tag means wheretr the build table has null
 	hasNull bool
