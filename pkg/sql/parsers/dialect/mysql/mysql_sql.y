@@ -315,7 +315,7 @@ import (
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
 //JSON function
-%token <str> JSON_EXTRACT
+%token <str> JQ
 
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE
@@ -5466,7 +5466,7 @@ function_call_generic:
         }
 	}
 function_call_json:
-	JSON_EXTRACT '(' STRING ',' STRING ')'
+	JQ '(' STRING ',' STRING ')'
 	{
 		name := tree.SetUnresolvedName(strings.ToLower($1))
 		a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)

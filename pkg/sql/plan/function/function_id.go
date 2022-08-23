@@ -222,9 +222,9 @@ const (
 	VERSION
 	COLLATION
 
-	TIMESTAMP    // TIMESTAMP
-	DATE_FORMAT  // DATE_FORMAT
-	JSON_EXTRACT // JSON_EXTRACT
+	TIMESTAMP   // TIMESTAMP
+	DATE_FORMAT // DATE_FORMAT
+	JQ          // json query
 
 	ENABLE_FAULT_INJECTION
 	DISABLE_FAULT_INJECTION
@@ -374,7 +374,7 @@ var functionIdRegister = map[string]int32{
 	"row_count":               ROW_COUNT,
 	"version":                 VERSION,
 	"collation":               COLLATION,
-	"json_extract":            JSON_EXTRACT,
+	"jq":                      JQ,
 	"enable_fault_injection":  ENABLE_FAULT_INJECTION,
 	"disable_fault_injection": DISABLE_FAULT_INJECTION,
 	"add_fault_point":         ADD_FAULT_POINT,

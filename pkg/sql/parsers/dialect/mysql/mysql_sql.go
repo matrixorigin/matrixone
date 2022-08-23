@@ -474,7 +474,7 @@ const VARIANCE = 57796
 const VAR_POP = 57797
 const VAR_SAMP = 57798
 const AVG = 57799
-const JSON_EXTRACT = 57800
+const JQ = 57800
 const ROW = 57801
 const OUTFILE = 57802
 const HEADER = 57803
@@ -957,7 +957,7 @@ var yyToknames = [...]string{
 	"VAR_POP",
 	"VAR_SAMP",
 	"AVG",
-	"JSON_EXTRACT",
+	"JQ",
 	"ROW",
 	"OUTFILE",
 	"HEADER",
