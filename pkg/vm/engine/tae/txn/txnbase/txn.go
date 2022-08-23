@@ -328,7 +328,7 @@ func (txn *Txn) PreApply2PCPrepare() (err error) {
 	return
 }
 
-// ApplyPrepare apply preparing for a 2PC distributed transaction
+// Apply2PCPrepare apply preparing for a 2PC distributed transaction
 func (txn *Txn) Apply2PCPrepare() (err error) {
 	defer func() {
 		//Get the lsn of ETTxnRecord entry in GroupC
