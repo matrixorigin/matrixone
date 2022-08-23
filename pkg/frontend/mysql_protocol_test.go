@@ -1313,7 +1313,7 @@ func open_tls_db(t *testing.T, port int) *sql.DB {
 		require.NoError(t, err)
 	}
 
-	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?tls=%s", port, tlsName)
+	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=10s&timeout=10s&writeTimeout=10s&tls=%s", port, tlsName)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		require.NoError(t, err)
