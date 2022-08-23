@@ -93,8 +93,8 @@ func (s *service) acquireMessage() morpc.Message {
 	return s.responsePool.Get().(*pipeline.Message)
 }
 
-func defaultRequestHandler(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
-	return nil
+func defaultRequestHandler(ctx context.Context, message morpc.Message, cs morpc.ClientSession) ([]byte, error) {
+	return nil, nil
 }
 
 func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
@@ -104,12 +104,12 @@ func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64
 	}
 
 	var errCode []byte
-	err := s.requestHandler(ctx, m, cs)
+	extraData, err := s.requestHandler(ctx, m, cs)
 	if err != nil {
 		errCode = []byte(err.Error())
 	}
 	// send response back
-	return cs.Write(ctx, &pipeline.Message{Sid: pipeline.MessageEnd, Code: errCode})
+	return cs.Write(ctx, &pipeline.Message{Sid: pipeline.MessageEnd, Code: errCode, Analyse: extraData})
 }
 
 func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) error {
@@ -258,7 +258,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	return
 }
 
-func WithMessageHandle(f func(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error) Options {
+func WithMessageHandle(f func(ctx context.Context, message morpc.Message, cs morpc.ClientSession) ([]byte, error)) Options {
 	return func(s *service) {
 		s.requestHandler = f
 	}

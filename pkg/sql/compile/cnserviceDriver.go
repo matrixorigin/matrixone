@@ -61,17 +61,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func PipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
+// PipelineMessageHandle deal the message that received at cn-server.
+// return an extra data and error info if error occurs.
+func PipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession) ([]byte, error) {
 	m := message.(*pipeline.Message)
 	s, err := decodeScope(m.GetData())
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// refactor the last operator connect to output
 	refactorScope(ctx, s, cs)
 
 	c := newCompile(ctx)
-	return s.Run(c)
+	err = s.Run(c)
+	if err != nil {
+		return nil, err
+	}
+	// get analyse related information
+	if query, ok := s.Plan.Plan.(*plan.Plan_Query); ok {
+		nodes := query.Query.GetNodes()
+		anas := &pipeline.AnalysisList{}
+		anas.List = make([]*plan.AnalyzeInfo, len(nodes))
+		for i := range anas.List {
+			anas.List[i] = nodes[i].AnalyzeInfo
+		}
+		anaData, errAna := anas.Marshal()
+		if errAna != nil {
+			return nil, errAna
+		}
+		return anaData, nil
+	}
+	return nil, nil
 }
 
 func refactorScope(ctx context.Context, s *Scope, cs morpc.ClientSession) {
@@ -633,9 +653,12 @@ func (s *Scope) remoteRun(c *Compile) error {
 			anaData := m.GetAnalyse()
 			if len(anaData) > 0 {
 				// decode analyse
-				ana := decodeAnalyse(anaData)
-				// merge into process
-				mergeAnalyseInfo(c.anal)
+				ana := new(pipeline.AnalysisList)
+				err := ana.Unmarshal(anaData)
+				if err != nil {
+					return err
+				}
+				mergeAnalyseInfo(c.anal, ana)
 			}
 			break
 		}
@@ -650,23 +673,19 @@ func (s *Scope) remoteRun(c *Compile) error {
 	return nil
 }
 
-func encodeAnalyse(query *plan.Plan) []byte {
-	return nil
-}
-
-func decodeAnalyse(data []byte) []*process.AnalyzeInfo {
-	return nil
-}
-
-func mergeAnalyseInfo(target *anaylze, source []*process.AnalyzeInfo) {
+func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
+	source := ana.List
 	if len(target.analInfos) != len(source) {
 		return
 	}
 	for i := range target.analInfos {
-		target.analInfos[i].OutputSize += source[i].OutputSize
-		target.analInfos[i].OutputRows += source[i].OutputRows
-		target.analInfos[i].InputRows += source[i].InputRows
-		target.analInfos[i].InputSize += source[i].InputSize
+		n := source[i]
+		target.analInfos[i].OutputSize += n.OutputSize
+		target.analInfos[i].OutputRows += n.OutputRows
+		target.analInfos[i].InputRows += n.InputRows
+		target.analInfos[i].InputSize += n.InputSize
+		target.analInfos[i].MemorySize += n.MemorySize
+		target.analInfos[i].TimeConsumed += n.TimeConsumed
 	}
 }
 

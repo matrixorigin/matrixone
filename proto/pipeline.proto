@@ -150,6 +150,10 @@ message Instruction{
     uint64    offset = 17;
 }
 
+message AnalysisList {
+    repeated plan.AnalyzeInfo list = 1;
+}
+
 message Source {
     string schema_name = 1;
     string table_name = 2;
