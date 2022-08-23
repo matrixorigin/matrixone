@@ -169,9 +169,11 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				logutil.Infof("upgrade to TLS")
 				// do upgradeTls
 				tlsConn := tls.Server(rs.RawConn(), protocol.tlsConfig)
+				logutil.Infof("get TLS conn ok")
 				if err := tlsConn.Handshake(); err != nil {
 					return err
 				}
+				logutil.Infof("TLS handshake ok")
 				rs.UseConn(tlsConn)
 				logutil.Infof("TLS handshake finished")
 
