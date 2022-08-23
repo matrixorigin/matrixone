@@ -17,13 +17,10 @@ package frontend
 import (
 	"bytes"
 	"crypto/sha1"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/binary"
 	"fmt"
 	"math"
 	"math/rand"
-	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -37,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"go.uber.org/zap"
 )
 
 // DefaultCapability means default capabilities of the server
@@ -297,8 +293,6 @@ type MysqlProtocolImpl struct {
 
 	//skip checking the password of the user
 	skipCheckUser bool
-
-	tlsConfig *tls.Config
 }
 
 func (mp *MysqlProtocolImpl) SetSkipCheckUser(b bool) {
@@ -2195,64 +2189,10 @@ func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesT
 	}
 
 	if SV.EnableTls {
-		initTlsConfig(mysql, SV)
+		mysql.capability = mysql.capability | CLIENT_SSL
 	}
 
 	mysql.resetPacket()
 
 	return mysql
-}
-
-func initTlsConfig(mysql *MysqlProtocolImpl, SV *config.FrontendParameters) {
-	if len(SV.TlsCertFile) == 0 || len(SV.TlsKeyFile) == 0 {
-		logutil.Warn("init TLS config error : cert file or key file is empty")
-		return
-	}
-
-	var tlsCert tls.Certificate
-	var err error
-	tlsCert, err = tls.LoadX509KeyPair(SV.TlsCertFile, SV.TlsKeyFile)
-	if err != nil {
-		logutil.Warn("load x509 failed", zap.Error(err))
-		return
-	}
-
-	clientAuthPolicy := tls.RequestClientCert
-	var certPool *x509.CertPool
-	if len(SV.TlsCaFile) > 0 {
-		var caCert []byte
-		caCert, err = os.ReadFile(SV.TlsCaFile)
-		if err != nil {
-			logutil.Warn("read TlsCaFile failed", zap.Error(err))
-			return
-		}
-		certPool = x509.NewCertPool()
-		if certPool.AppendCertsFromPEM(caCert) {
-			clientAuthPolicy = tls.VerifyClientCertIfGiven
-		}
-	}
-
-	// This excludes ciphers listed in tls.InsecureCipherSuites() and can be used to filter out more
-	var cipherSuites []uint16
-	// var cipherNames []string
-	for _, sc := range tls.CipherSuites() {
-		switch sc.ID {
-		case tls.TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA, tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA:
-			// logutil.Info("Disabling weak cipherSuite", zap.String("cipherSuite", sc.Name))
-		default:
-			// cipherNames = append(cipherNames, sc.Name)
-			cipherSuites = append(cipherSuites, sc.ID)
-		}
-	}
-	// logutil.Info("Enabled ciphersuites", zap.Strings("cipherNames", cipherNames))
-
-	mysql.capability = mysql.capability | CLIENT_SSL
-	mysql.tlsConfig = &tls.Config{
-		Certificates: []tls.Certificate{tlsCert},
-		ClientCAs:    certPool,
-		ClientAuth:   clientAuthPolicy,
-		MinVersion:   tls.VersionTLS12,
-		CipherSuites: cipherSuites,
-	}
-	logutil.Info("init TLS config finished")
 }

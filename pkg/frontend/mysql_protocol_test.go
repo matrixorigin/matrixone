@@ -304,7 +304,6 @@ func TestReadStringLenEnc(t *testing.T) {
 }
 
 func TestMysqlClientProtocol_TlsHandshake(t *testing.T) {
-	time.Sleep(time.Second * 3)
 	//before anything using the configuration
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
 	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
@@ -333,7 +332,7 @@ func TestMysqlClientProtocol_TlsHandshake(t *testing.T) {
 	// for isClosed() && !to.isTimeout() {
 	// }
 
-	time.Sleep(time.Second * 2)
+	time.Sleep(time.Second * 10)
 	db := open_tls_db(t, 6001)
 	close_db(t, db)
 
@@ -1222,7 +1221,6 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 }
 
 func TestMysqlResultSet(t *testing.T) {
-	time.Sleep(time.Second * 5)
 	//client connection method: mysql -h 127.0.0.1 -P 6001 -udump -p
 	//pwd: mysql-server-mysql-8.0.23/mysql-test
 	//with mysqltest: mysqltest --test-file=t/1st.test --result-file=r/1st.result --user=dump -p111 -P 6001 --host=127.0.0.1
@@ -1295,6 +1293,7 @@ func open_tls_db(t *testing.T, port int) *sql.DB {
 	rootCertPool := x509.NewCertPool()
 	pem, err := os.ReadFile("test/ca.pem")
 	if err != nil {
+		setServer(1)
 		require.NoError(t, err)
 	}
 	if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
@@ -1303,15 +1302,18 @@ func open_tls_db(t *testing.T, port int) *sql.DB {
 	clientCert := make([]tls.Certificate, 0, 1)
 	certs, err := tls.LoadX509KeyPair("test/client-cert.pem", "test/client-key.pem")
 	if err != nil {
+		setServer(1)
 		require.NoError(t, err)
 	}
 	clientCert = append(clientCert, certs)
 	err = mysqlDriver.RegisterTLSConfig(tlsName, &tls.Config{
 		RootCAs:            rootCertPool,
 		Certificates:       clientCert,
+		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: true,
 	})
 	if err != nil {
+		setServer(1)
 		require.NoError(t, err)
 	}
 
@@ -1328,7 +1330,10 @@ func open_tls_db(t *testing.T, port int) *sql.DB {
 		// ping opens the connection
 		logutil.Info("start ping")
 		err = db.Ping()
-		require.NoError(t, err)
+		if err != nil {
+			setServer(1)
+			require.NoError(t, err)
+		}
 	}
 	return db
 }

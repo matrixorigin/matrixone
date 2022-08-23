@@ -17,8 +17,11 @@ package frontend
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"os"
 	"sync"
+	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -31,6 +34,7 @@ type RoutineManager struct {
 	clients       map[goetty.IOSession]*Routine
 	pu            *config.ParameterUnit
 	skipCheckUser bool
+	tlsConfig     *tls.Config
 }
 
 func (rm *RoutineManager) SetSkipCheckUser(b bool) {
@@ -168,11 +172,14 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			if isTlsHeader {
 				logutil.Infof("upgrade to TLS")
 				// do upgradeTls
-				tlsConn := tls.Server(rs.RawConn(), protocol.tlsConfig)
+				tlsConn := tls.Server(rs.RawConn(), rm.tlsConfig)
 				logutil.Infof("get TLS conn ok")
-				if err := tlsConn.Handshake(); err != nil {
+				newCtx, cancelFun := context.WithTimeout(protocol.ses.requestCtx, 20*time.Second)
+				if err := tlsConn.HandshakeContext(newCtx); err != nil {
+					cancelFun()
 					return err
 				}
+				cancelFun()
 				logutil.Infof("TLS handshake ok")
 				rs.UseConn(tlsConn)
 				logutil.Infof("TLS handshake finished")
@@ -211,5 +218,62 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) *RoutineMa
 		clients: make(map[goetty.IOSession]*Routine),
 		pu:      pu,
 	}
+	if pu.SV.EnableTls {
+		initTlsConfig(rm, pu.SV)
+	}
 	return rm
+}
+
+func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) {
+	if len(SV.TlsCertFile) == 0 || len(SV.TlsKeyFile) == 0 {
+		logutil.Warn("init TLS config error : cert file or key file is empty")
+		return
+	}
+
+	var tlsCert tls.Certificate
+	var err error
+	tlsCert, err = tls.LoadX509KeyPair(SV.TlsCertFile, SV.TlsKeyFile)
+	if err != nil {
+		logutil.Warn("load x509 failed")
+		return
+	}
+
+	clientAuthPolicy := tls.NoClientCert
+	var certPool *x509.CertPool
+	if len(SV.TlsCaFile) > 0 {
+		var caCert []byte
+		caCert, err = os.ReadFile(SV.TlsCaFile)
+		if err != nil {
+			logutil.Warn("read TlsCaFile failed")
+			return
+		}
+		certPool = x509.NewCertPool()
+		if certPool.AppendCertsFromPEM(caCert) {
+			clientAuthPolicy = tls.VerifyClientCertIfGiven
+		}
+	}
+
+	// This excludes ciphers listed in tls.InsecureCipherSuites() and can be used to filter out more
+	var cipherSuites []uint16
+	// var cipherNames []string
+	for _, sc := range tls.CipherSuites() {
+		switch sc.ID {
+		case tls.TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA, tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
+			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305, tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305:
+			// logutil.Info("Disabling weak cipherSuite", zap.String("cipherSuite", sc.Name))
+		default:
+			// cipherNames = append(cipherNames, sc.Name)
+			cipherSuites = append(cipherSuites, sc.ID)
+		}
+	}
+	// logutil.Info("Enabled ciphersuites", zap.Strings("cipherNames", cipherNames))
+
+	rm.tlsConfig = &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+		ClientCAs:    certPool,
+		ClientAuth:   clientAuthPolicy,
+		MinVersion:   tls.VersionTLS12,
+		CipherSuites: cipherSuites,
+	}
+	logutil.Info("init TLS config finished")
 }
