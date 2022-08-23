@@ -2201,6 +2201,7 @@ func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesT
 
 func initTlsConfig(mysql *MysqlProtocolImpl, SV *config.FrontendParameters) {
 	if len(SV.TlsCertFile) == 0 || len(SV.TlsKeyFile) == 0 {
+		logutil.Warn("init TLS config error : cert file or key file is empty")
 		return
 	}
 
@@ -2233,7 +2234,7 @@ func initTlsConfig(mysql *MysqlProtocolImpl, SV *config.FrontendParameters) {
 	for _, sc := range tls.CipherSuites() {
 		switch sc.ID {
 		case tls.TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA, tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA:
-			logutil.Info("Disabling weak cipherSuite", zap.String("cipherSuite", sc.Name))
+			// logutil.Info("Disabling weak cipherSuite", zap.String("cipherSuite", sc.Name))
 		default:
 			// cipherNames = append(cipherNames, sc.Name)
 			cipherSuites = append(cipherSuites, sc.ID)
@@ -2249,4 +2250,5 @@ func initTlsConfig(mysql *MysqlProtocolImpl, SV *config.FrontendParameters) {
 		MinVersion:   tls.VersionTLS12,
 		CipherSuites: cipherSuites,
 	}
+	logutil.Info("init TLS config finished")
 }
