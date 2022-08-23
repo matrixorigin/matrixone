@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *QueryBuilder {
@@ -82,7 +83,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 	}
 
 	switch node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, colRefCnt)
 		}
@@ -93,8 +94,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		tag := node.BindingTags[0]
 		newTableDef := &plan.TableDef{
-			Name: node.TableDef.Name,
-			Defs: node.TableDef.Defs,
+			Name:          node.TableDef.Name,
+			Defs:          node.TableDef.Defs,
+			Name2ColIndex: node.TableDef.Name2ColIndex,
+			Createsql:     node.TableDef.Createsql,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -656,6 +659,14 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 	err := getUnionSelects(stmt.Select.(*tree.UnionClause), &selectStmts, &unionTypes)
 	if err != nil {
 		return 0, err
+	}
+
+	if len(selectStmts) == 1 {
+		if slt, ok := selectStmts[0].(*tree.Select); ok {
+			return builder.buildSelect(slt, ctx, false)
+		} else {
+			return builder.buildSelect(&tree.Select{Select: selectStmts[0]}, ctx, false)
+		}
 	}
 
 	// build selects
@@ -1517,6 +1528,14 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 			return 0, errors.New("", fmt.Sprintf("table %q does not exist", table))
 		}
 
+		tableDef.Name2ColIndex = map[string]int32{}
+		for i := 0; i < len(tableDef.Cols); i++ {
+			tableDef.Name2ColIndex[tableDef.Cols[i].Name] = int32(i)
+		}
+		nodeType := plan.Node_TABLE_SCAN
+		if tableDef.TableType == catalog.SystemExternalRel {
+			nodeType = plan.Node_EXTERNAL_SCAN
+		}
 		// set view statment to CTE
 		viewDefString := ""
 		for _, def := range tableDef.Defs {
@@ -1577,7 +1596,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		}
 
 		nodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_TABLE_SCAN,
+			NodeType:    nodeType,
 			Cost:        builder.compCtx.Cost(obj, nil),
 			ObjRef:      obj,
 			TableDef:    tableDef,
@@ -1634,7 +1653,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var types []*plan.Type
 	var binding *Binding
 
-	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN {
+	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN {
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return errors.New("", fmt.Sprintf("table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols)))
 		}
@@ -1887,7 +1906,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 		joinSides := make([]int8, len(filters))
 
 		for i, filter := range filters {
-			canTurnInner := false
+			canTurnInner := true
 
 			joinSides[i] = getJoinSide(filter, leftTags, rightTags)
 			if f, ok := filter.Expr.(*plan.Expr_F); ok {
@@ -2018,7 +2037,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 	case plan.Node_PROJECT:
 		child := builder.qry.Nodes[node.Children[0]]
-		if child.NodeType == plan.Node_VALUE_SCAN && child.RowsetData == nil {
+		if (child.NodeType == plan.Node_VALUE_SCAN || child.NodeType == plan.Node_EXTERNAL_SCAN) && child.RowsetData == nil {
 			cantPushdown = filters
 			break
 		}
@@ -2041,7 +2060,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 		node.Children[0] = childID
 
-	case plan.Node_TABLE_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
 		node.FilterList = append(node.FilterList, filters...)
 
 	default:
@@ -2078,14 +2097,6 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 
 	if node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_ANTI {
 		return nodeID
-	}
-
-	for _, filter := range node.OnList {
-		if f, ok := filter.Expr.(*plan.Expr_F); ok {
-			if f.F.Func.ObjName != "=" {
-				return nodeID
-			}
-		}
 	}
 
 	var targetNode *plan.Node

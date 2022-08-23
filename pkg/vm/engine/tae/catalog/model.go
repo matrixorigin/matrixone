@@ -35,6 +35,8 @@ const (
 	PhyAddrColumnComment = "Physical address"
 	SortKeyNamePrefx     = "_SORT_"
 
+	TenantSysID = uint32(0)
+
 	SystemDBID               = uint64(1)
 	SystemDBName             = "mo_catalog"
 	CatalogName              = "taec"
@@ -60,25 +62,40 @@ const (
 	SystemSequenceRel     = "S"
 	SystemViewRel         = "v"
 	SystemMaterializedRel = "m"
+	SystemExternalRel     = "e"
 
 	SystemColPKConstraint = "p"
 	SystemColNoConstraint = "n"
 )
 
 const (
+	SystemDBAttr_ID          = "dat_id"
 	SystemDBAttr_Name        = "datname"
 	SystemDBAttr_CatalogName = "dat_catalog_name"
 	SystemDBAttr_CreateSQL   = "dat_createsql"
+	SystemDBAttr_Owner       = "owner"
+	SystemDBAttr_Creator     = "creator"
+	SystemDBAttr_CreateAt    = "created_time"
+	SystemDBAttr_AccID       = "account_id"
 
+	SystemRelAttr_ID          = "rel_id"
 	SystemRelAttr_Name        = "relname"
 	SystemRelAttr_DBName      = "reldatabase"
+	SystemRelAttr_DBID        = "reldatabase_id"
 	SystemRelAttr_Persistence = "relpersistence"
 	SystemRelAttr_Kind        = "relkind"
 	SystemRelAttr_Comment     = "rel_comment"
 	SystemRelAttr_CreateSQL   = "rel_createsql"
+	SystemRelAttr_Owner       = "owner"
+	SystemRelAttr_Creator     = "creator"
+	SystemRelAttr_CreateAt    = "created_time"
+	SystemRelAttr_AccID       = "account_id"
 
+	SystemColAttr_AccID           = "account_id"
 	SystemColAttr_Name            = "attname"
+	SystemColAttr_DBID            = "att_database_id"
 	SystemColAttr_DBName          = "att_database"
+	SystemColAttr_RelID           = "att_relname_id"
 	SystemColAttr_RelName         = "att_relname"
 	SystemColAttr_Type            = "atttyp"
 	SystemColAttr_Num             = "attnum"
@@ -118,13 +135,35 @@ func init() {
 		Width: 128,
 	}
 
+	tu32 := types.Type{
+		Oid:  types.T_uint32,
+		Size: 4,
+	}
+	tu64 := types.Type{
+		Oid:  types.T_uint64,
+		Size: 8,
+	}
+	ttimestamp := types.Type{
+		Oid:  types.T_timestamp,
+		Size: 8,
+	}
+
+	/*
+
+		SystemDBSchema
+
+	*/
+
 	SystemDBSchema = NewEmptySchema(SystemTable_DB_Name)
+	if err = SystemDBSchema.AppendPKCol(SystemDBAttr_ID, tu64, 0); err != nil {
+		panic(err)
+	}
 	t := types.Type{
 		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
-	if err = SystemDBSchema.AppendPKCol(SystemDBAttr_Name, t, 0); err != nil {
+	if err = SystemDBSchema.AppendCol(SystemDBAttr_Name, t); err != nil {
 		panic(err)
 	}
 	t = types.Type{
@@ -143,17 +182,39 @@ func init() {
 	if err = SystemDBSchema.AppendCol(SystemDBAttr_CreateSQL, t); err != nil {
 		panic(err)
 	}
+	if err = SystemDBSchema.AppendCol(SystemDBAttr_Owner, tu32); err != nil {
+		panic(err)
+	}
+	if err = SystemDBSchema.AppendCol(SystemDBAttr_Creator, tu32); err != nil {
+		panic(err)
+	}
+	if err = SystemDBSchema.AppendCol(SystemDBAttr_CreateAt, ttimestamp); err != nil {
+		panic(err)
+	}
+	if err = SystemDBSchema.AppendCol(SystemDBAttr_AccID, tu32); err != nil {
+		panic(err)
+	}
+
 	if err = SystemDBSchema.Finalize(true); err != nil {
 		panic(err)
 	}
 
+	/*
+
+		SystemTableSchema
+
+	*/
+
 	SystemTableSchema = NewEmptySchema(SystemTable_Table_Name)
+	if err = SystemTableSchema.AppendPKCol(SystemRelAttr_ID, tu64, 0); err != nil {
+		panic(err)
+	}
 	t = types.Type{
 		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
-	if err = SystemTableSchema.AppendPKCol(SystemRelAttr_Name, t, 0); err != nil {
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_Name, t); err != nil {
 		panic(err)
 	}
 	t = types.Type{
@@ -162,6 +223,9 @@ func init() {
 		Width: 100,
 	}
 	if err = SystemTableSchema.AppendCol(SystemRelAttr_DBName, t); err != nil {
+		panic(err)
+	}
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_DBID, tu64); err != nil {
 		panic(err)
 	}
 	t = types.Type{
@@ -196,15 +260,39 @@ func init() {
 	if err = SystemTableSchema.AppendCol(SystemRelAttr_CreateSQL, t); err != nil {
 		panic(err)
 	}
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_Owner, tu32); err != nil {
+		panic(err)
+	}
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_Creator, tu32); err != nil {
+		panic(err)
+	}
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_CreateAt, ttimestamp); err != nil {
+		panic(err)
+	}
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_AccID, tu32); err != nil {
+		panic(err)
+	}
 	if err = SystemTableSchema.Finalize(true); err != nil {
 		panic(err)
 	}
 
+	/*
+
+		SystemColumnSchema
+
+	*/
+
 	SystemColumnSchema = NewEmptySchema(SystemTable_Columns_Name)
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_AccID, tu32); err != nil {
+		panic(err)
+	}
 	t = types.Type{
 		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
+	}
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_DBID, tu64); err != nil {
+		panic(err)
 	}
 	if err = SystemColumnSchema.AppendCol(SystemColAttr_DBName, t); err != nil {
 		panic(err)
@@ -213,6 +301,9 @@ func init() {
 		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
+	}
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_RelID, tu64); err != nil {
+		panic(err)
 	}
 	if err = SystemColumnSchema.AppendCol(SystemColAttr_RelName, t); err != nil {
 		panic(err)

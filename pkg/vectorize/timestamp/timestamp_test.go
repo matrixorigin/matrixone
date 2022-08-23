@@ -15,9 +15,11 @@
 package timestamp
 
 import (
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/stretchr/testify/require"
-	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -40,7 +42,7 @@ func TestDateToTimestamp(t *testing.T) {
 	for _, v := range testCases {
 		reply := make([]types.Timestamp, len(v.args))
 		ns := &nulls.Nulls{}
-		reply = DateToTimestamp(v.args, ns, reply)
+		reply = DateToTimestamp(time.UTC, v.args, ns, reply)
 		require.Equal(t, reply, v.want)
 		require.Equal(t, !nulls.Contains(ns, 0), v.success)
 	}
@@ -64,7 +66,7 @@ func TestDatetimeToTimestamp(t *testing.T) {
 	for _, v := range testCases {
 		reply := make([]types.Timestamp, len(v.args))
 		ns := &nulls.Nulls{}
-		reply = DatetimeToTimestamp(v.args, ns, reply)
+		reply = DatetimeToTimestamp(time.UTC, v.args, ns, reply)
 		require.Equal(t, reply, v.want)
 		require.Equal(t, !nulls.Contains(ns, 0), v.success)
 	}
@@ -88,7 +90,7 @@ func TestDateStringToTimestamp(t *testing.T) {
 	for _, v := range testCases {
 		reply := make([]types.Timestamp, len(v.args.Lengths))
 		ns := &nulls.Nulls{}
-		reply = DateStringToTimestamp(v.args, ns, reply)
+		reply = DateStringToTimestamp(time.UTC, v.args, ns, reply)
 		require.Equal(t, reply, v.want)
 		require.Equal(t, !nulls.Contains(ns, 0), v.success)
 	}

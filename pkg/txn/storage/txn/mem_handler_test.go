@@ -14,10 +14,14 @@
 
 package txnstorage
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+)
 
 func TestMemHandler(t *testing.T) {
 	testDatabase(t, func() (*Storage, error) {
-		return New(NewMemHandler())
+		return New(NewMemHandler(testutil.NewMheap()))
 	})
 }

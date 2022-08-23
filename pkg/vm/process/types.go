@@ -19,10 +19,11 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-// Analyze analyze information for operator
+// Analyze analyzes information for operator
 type Analyze interface {
 	Stop()
 	Start()
@@ -39,7 +40,7 @@ type WaitRegister struct {
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.
 type Register struct {
-	// Ss, temporarily stores the row number list in the execution of operators
+	// Ss, temporarily stores the row number list in the execution of operators,
 	// and it can be reused in the future execution.
 	Ss [][]int64
 	// InputBatch, stores the result of the previous operator.
@@ -71,6 +72,7 @@ type SessionInfo struct {
 	ConnectionID uint64
 	Database     string
 	Version      string
+	TimeZone     *time.Location
 }
 
 // AnalyzeInfo  analyze information for query
@@ -104,8 +106,7 @@ type Process struct {
 	// unix timestamp
 	UnixTime int64
 
-	// snapshot is transaction context
-	Snapshot []byte
+	TxnOperator client.TxnOperator
 
 	AnalInfos []*AnalyzeInfo
 

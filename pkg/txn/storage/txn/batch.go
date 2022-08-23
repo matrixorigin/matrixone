@@ -22,78 +22,168 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-type BatchIter func() (cols []any)
+type BatchIter func() (tuple []any)
 
 func NewBatchIter(b *batch.Batch) BatchIter {
 	i := 0
-	max := b.Vecs[0].Length
 
-	iter := func() (cols []any) {
-		if i >= max {
-			return nil
-		}
+	iter := func() (tuple []any) {
 
 		for _, vec := range b.Vecs {
 			switch vec.Typ.Oid {
 
 			case types.T_bool:
-				cols = append(cols, vec.Col.([]bool)[i])
+				col := vec.Col.([]bool)
+				if i < len(col) {
+					tuple = append(tuple, col[i])
+				} else {
+					return
+				}
 
 			case types.T_int8:
-				cols = append(cols, vec.Col.([]int8)[i])
+				col := vec.Col.([]int8)
+				if i < len(col) {
+					tuple = append(tuple, col[i])
+				} else {
+					return
+				}
 
 			case types.T_int16:
-				cols = append(cols, vec.Col.([]int16)[i])
+				col := vec.Col.([]int16)
+				if i < len(col) {
+					tuple = append(tuple, col[i])
+				} else {
+					return
+				}
 
 			case types.T_int32:
-				cols = append(cols, vec.Col.([]int32)[i])
+				col := vec.Col.([]int32)
+				if i < len(col) {
+					tuple = append(tuple, col[i])
+				} else {
+					return
+				}
 
 			case types.T_int64:
-				cols = append(cols, vec.Col.([]int64)[i])
+				col := vec.Col.([]int64)
+				if i < len(col) {
+					tuple = append(tuple, col[i])
+				} else {
+					return
+				}
 
 			case types.T_uint8:
-				cols = append(cols, vec.Col.([]uint8)[i])
+				col := vec.Col.([]uint8)
+				if i < len(col) {
+					tuple = append(tuple, col[i])
+				} else {
+					return
+				}
 
 			case types.T_uint16:
-				cols = append(cols, vec.Col.([]uint16)[i])
+				col := vec.Col.([]uint16)
+				if i < len(col) {
+					tuple = append(tuple, col[i])
+				} else {
+					return
+				}
 
 			case types.T_uint32:
-				cols = append(cols, vec.Col.([]uint32)[i])
+				col := vec.Col.([]uint32)
+				if i < len(col) {
+					tuple = append(tuple, col[i])
+				} else {
+					return
+				}
 
 			case types.T_uint64:
-				cols = append(cols, vec.Col.([]uint64)[i])
+				col := vec.Col.([]uint64)
+				if i < len(col) {
+					tuple = append(tuple, col[i])
+				} else {
+					return
+				}
 
 			case types.T_float32:
-				cols = append(cols, vec.Col.([]float32)[i])
+				col := vec.Col.([]float32)
+				if i < len(col) {
+					tuple = append(tuple, col[i])
+				} else {
+					return
+				}
 
 			case types.T_float64:
-				cols = append(cols, vec.Col.([]float64)[i])
+				col := vec.Col.([]float64)
+				if i < len(col) {
+					tuple = append(tuple, col[i])
+				} else {
+					return
+				}
 
 			case types.T_sel:
-				cols = append(cols, vec.Col.([]int64)[i])
+				col := vec.Col.([]int64)
+				if i < len(col) {
+					tuple = append(tuple, col[i])
+				} else {
+					return
+				}
 
 			case types.T_tuple:
-				cols = append(cols, vec.Col.([][]any)[i])
+				col := vec.Col.([][]any)
+				if i < len(col) {
+					tuple = append(tuple, col[i])
+				} else {
+					return
+				}
 
 			case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 				info := vec.Col.(*types.Bytes)
-				str := vec.Data[info.Offsets[i] : info.Offsets[i]+info.Lengths[i]]
-				cols = append(cols, str)
+				if i < len(info.Offsets) {
+					str := vec.Data[info.Offsets[i] : info.Offsets[i]+info.Lengths[i]]
+					tuple = append(tuple, str)
+				} else {
+					return
+				}
 
 			case types.T_date:
-				cols = append(cols, vec.Col.([]types.Date)[i])
+				col := vec.Col.([]types.Date)
+				if i < len(col) {
+					tuple = append(tuple, col[i])
+				} else {
+					return
+				}
 
 			case types.T_datetime:
-				cols = append(cols, vec.Col.([]types.Datetime)[i])
+				col := vec.Col.([]types.Datetime)
+				if i < len(col) {
+					tuple = append(tuple, col[i])
+				} else {
+					return
+				}
 
 			case types.T_timestamp:
-				cols = append(cols, vec.Col.([]types.Timestamp)[i])
+				col := vec.Col.([]types.Timestamp)
+				if i < len(col) {
+					tuple = append(tuple, col[i])
+				} else {
+					return
+				}
 
 			case types.T_decimal64:
-				cols = append(cols, vec.Col.([]types.Decimal64)[i])
+				col := vec.Col.([]types.Decimal64)
+				if i < len(col) {
+					tuple = append(tuple, col[i])
+				} else {
+					return
+				}
 
 			case types.T_decimal128:
-				cols = append(cols, vec.Col.([]types.Decimal128)[i])
+				col := vec.Col.([]types.Decimal128)
+				if i < len(col) {
+					tuple = append(tuple, col[i])
+				} else {
+					return
+				}
 
 			}
 		}

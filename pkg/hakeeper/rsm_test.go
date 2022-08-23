@@ -339,6 +339,13 @@ func TestClusterDetailsQuery(t *testing.T) {
 	tsm.state.DNState.Stores["uuid3"] = pb.DNStoreInfo{
 		Tick:           3,
 		ServiceAddress: "addr3",
+
+		Shards: []pb.DNShardInfo{
+			{
+				ShardID:   2,
+				ReplicaID: 1,
+			},
+		},
 	}
 	tsm.state.LogState.Shards[1] = pb.LogShardInfo{
 		ShardID:  1,
@@ -385,14 +392,20 @@ func TestClusterDetailsQuery(t *testing.T) {
 	v, err := tsm.Lookup(&ClusterDetailsQuery{})
 	require.NoError(t, err)
 	expected := &pb.ClusterDetails{
-		DNNodes: []pb.DNNode{
+		DNStores: []pb.DNStore{
 			{
 				UUID:           "uuid3",
 				Tick:           3,
 				ServiceAddress: "addr3",
+				Shards: []pb.DNShardInfo{
+					{
+						ShardID:   2,
+						ReplicaID: 1,
+					},
+				},
 			},
 		},
-		CNNodes: []pb.CNNode{
+		CNStores: []pb.CNStore{
 			{
 				UUID:           "uuid1",
 				Tick:           1,
@@ -404,7 +417,7 @@ func TestClusterDetailsQuery(t *testing.T) {
 				ServiceAddress: "addr2",
 			},
 		},
-		LogNodes: []pb.LogNode{
+		LogStores: []pb.LogStore{
 			{
 				UUID:           "store-1",
 				ServiceAddress: "addr-log-1",
@@ -447,11 +460,11 @@ func TestClusterDetailsQuery(t *testing.T) {
 		},
 	}
 	result := v.(*pb.ClusterDetails)
-	sort.Slice(result.CNNodes, func(i, j int) bool {
-		return result.CNNodes[i].UUID < result.CNNodes[j].UUID
+	sort.Slice(result.CNStores, func(i, j int) bool {
+		return result.CNStores[i].UUID < result.CNStores[j].UUID
 	})
-	sort.Slice(result.LogNodes, func(i, j int) bool {
-		return result.LogNodes[i].UUID < result.LogNodes[j].UUID
+	sort.Slice(result.LogStores, func(i, j int) bool {
+		return result.LogStores[i].UUID < result.LogStores[j].UUID
 	})
 	assert.Equal(t, expected, result)
 }

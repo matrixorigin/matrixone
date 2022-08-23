@@ -773,6 +773,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_varchar) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[1], args[0])
+		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar) {
+			name = "concat"
 		}
 		if err != nil {
 			return nil, err
@@ -802,7 +804,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				return nil, err
 			}
 		}
-	case "variance":
+	case "variance", "oct", "stddev_pop", "std":
 		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
 				Id:       int32(types.T_float64),
@@ -811,17 +813,14 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			if err != nil {
 				return nil, err
 			}
-
 		}
-	case "stddev_pop":
-		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
-			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
-				Id:       int32(types.T_float64),
-				Nullable: false,
-			})
-			if err != nil {
-				return nil, err
-			}
+	case "like":
+		// sql 'select * from t where col like ?'  the ? Expr's type will be T_any
+		if args[0].Typ.Id == int32(types.T_any) {
+			args[0].Typ.Id = int32(types.T_varchar)
+		}
+		if args[1].Typ.Id == int32(types.T_any) {
+			args[1].Typ.Id = int32(types.T_varchar)
 		}
 	}
 
@@ -1023,22 +1022,8 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_bit:
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_char:
-		if typ != nil && typ.Id == int32(types.T_timestamp) {
-			val, err := types.ParseTimestamp(astExpr.String(), typ.Precision)
-			if err != nil {
-				return nil, err
-			}
-			return &Expr{
-				Expr: &plan.Expr_C{
-					C: &Const{
-						Isnull: false,
-						Value: &plan.Const_Timestampval{
-							Timestampval: int64(val),
-						},
-					},
-				},
-				Typ: typ,
-			}, nil
+		if typ != nil && typ.Id != int32(types.T_char) && typ.Id != int32(types.T_varchar) {
+			return appendCastBeforeExpr(getStringExpr(astExpr.String()), typ)
 		}
 		expr := getStringExpr(astExpr.String())
 		return expr, nil

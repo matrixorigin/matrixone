@@ -17,9 +17,9 @@ package txnbase
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -62,11 +62,12 @@ var DefaultTxnFactory = func(mgr *TxnManager, store txnif.TxnStore, id uint64, s
 type Txn struct {
 	sync.WaitGroup
 	*TxnCtx
-	Ch    chan int
-	Mgr   *TxnManager
-	Store txnif.TxnStore
-	Err   error
-	LSN   uint64
+	Ch                       chan int
+	Mgr                      *TxnManager
+	Store                    txnif.TxnStore
+	Err                      error
+	LSN                      uint64
+	TenantID, UserID, RoleID uint32
 
 	PrepareCommitFn     func(txnif.AsyncTxn) error
 	Prepare2PCPrepareFn func(txnif.AsyncTxn) error
@@ -406,6 +407,20 @@ func (txn *Txn) WaitDone(err error) error {
 	// logutil.Infof("Wait %s Done", txn.String())
 	txn.DoneWithErr(err)
 	return txn.Err
+}
+
+func (txn *Txn) BindAccessInfo(tenantID, userID, roleID uint32) {
+	atomic.StoreUint32(&txn.TenantID, tenantID)
+	atomic.StoreUint32(&txn.UserID, userID)
+	atomic.StoreUint32(&txn.RoleID, roleID)
+}
+
+func (txn *Txn) GetTenantID() uint32 {
+	return atomic.LoadUint32(&txn.TenantID)
+}
+
+func (txn *Txn) GetUserAndRoleID() (uint32, uint32) {
+	return atomic.LoadUint32(&txn.UserID), atomic.LoadUint32(&txn.RoleID)
 }
 
 func (txn *Txn) CreateDatabase(name string) (db handle.Database, err error) {

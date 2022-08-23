@@ -136,7 +136,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 }
 
 func (ie *internalExecutor) newCmdSession(opts ie.SessionOverrideOptions) *Session {
-	sess := NewSession(ie.proto, guest.New(ie.pu.SV.GetGuestMmuLimitation(), ie.pu.HostMmu), ie.pu.Mempool, ie.pu, gSysVariables)
+	sess := NewSession(ie.proto, guest.New(ie.pu.SV.GuestMmuLimitation, ie.pu.HostMmu), ie.pu.Mempool, ie.pu, gSysVariables)
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)
 	return sess
@@ -152,6 +152,8 @@ func (ie *internalExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions)
 // 	logutil.Infof("[Metric] called: %s", callFunc.Name())
 // }
 
+var _ MysqlProtocol = &internalProtocol{}
+
 type internalProtocol struct {
 	sync.Mutex
 	stashResult bool
@@ -162,6 +164,14 @@ type internalProtocol struct {
 
 func (ip *internalProtocol) IsEstablished() bool {
 	return true
+}
+
+func (ip *internalProtocol) ParseExecuteData(stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
+	return nil, nil, nil
+}
+
+func (ip *internalProtocol) SendPrepareResponse(stmt *PrepareStmt) error {
+	return nil
 }
 
 func (ip *internalProtocol) SetEstablished() {}

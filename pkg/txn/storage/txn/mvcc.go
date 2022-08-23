@@ -36,7 +36,7 @@ type MVCCValue[T any] struct {
 
 // Read reads the visible value from Values
 // readTime's logical time should be monotonically increasing in one transaction to reflect commands order
-func (m *MVCC[T]) Read(tx *Transaction, readTime Timestamp) *T {
+func (m *MVCC[T]) Read(tx *Transaction, readTime Timestamp) (*T, error) {
 	if tx.State.Load() != Active {
 		panic("should not call Read")
 	}
@@ -44,12 +44,19 @@ func (m *MVCC[T]) Read(tx *Transaction, readTime Timestamp) *T {
 	m.RLock()
 	defer m.RUnlock()
 	for i := len(m.Values) - 1; i >= 0; i-- {
-		if m.Values[i].Visible(tx.ID, readTime) {
-			return m.Values[i].Value
+		value := m.Values[i]
+		if value.Visible(tx.ID, readTime) {
+			if value.BornTx != tx && value.BornTime.Greater(tx.BeginTime) {
+				return nil, &ErrStaleRead{
+					ReadingTx: tx,
+					NewerTx:   value.BornTx,
+				}
+			}
+			return m.Values[i].Value, nil
 		}
 	}
 
-	return nil
+	return nil, nil
 }
 
 func (m *MVCC[T]) Visible(tx *Transaction, readTime Timestamp) bool {
@@ -91,6 +98,7 @@ func (m *MVCCValue[T]) Visible(txID string, readTime Timestamp) bool {
 	if m.BornTx.State.Load() == Committed {
 		// not been deleted
 		if m.LockTx == nil {
+			// for isolation levels stricter than read-committed, instead of checking timestamps here, let the caller do it.
 			return true
 		}
 		// being deleted by current tx after the read time
@@ -138,6 +146,12 @@ func (m *MVCC[T]) Delete(tx *Transaction, writeTime Timestamp) error {
 					ConflictingTx: value.LockTx,
 				}
 			}
+			if value.BornTx != tx && value.BornTime.Greater(tx.BeginTime) {
+				return &ErrStaleWrite{
+					WritingTx: tx,
+					NewerTx:   value.BornTx,
+				}
+			}
 			value.LockTx = tx
 			value.LockTime = writeTime
 			return nil
@@ -162,6 +176,12 @@ func (m *MVCC[T]) Update(tx *Transaction, writeTime Timestamp, newValue T) error
 				return &ErrWriteConflict{
 					WritingTx:     tx,
 					ConflictingTx: value.LockTx,
+				}
+			}
+			if value.BornTx != tx && value.BornTime.Greater(tx.BeginTime) {
+				return &ErrStaleWrite{
+					WritingTx: tx,
+					NewerTx:   value.BornTx,
 				}
 			}
 			value.LockTx = tx

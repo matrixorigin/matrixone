@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/timestamp"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
@@ -368,7 +369,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		}
 	}
 
-	if isString(lv.Typ.Oid) && isDecimal(rv.Typ.Oid) {
+	if isString(lv.Typ.Oid) && IsDecimal(rv.Typ.Oid) {
 		switch rv.Typ.Oid {
 		case types.T_decimal64:
 			return CastStringAsDecimal64(lv, rv, proc)
@@ -406,7 +407,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 			return CastSpecials2Float[float64](lv, rv, proc)
 		}
 	}
-	if isDecimal(lv.Typ.Oid) && isString(rv.Typ.Oid) {
+	if IsDecimal(lv.Typ.Oid) && isString(rv.Typ.Oid) {
 		switch lv.Typ.Oid {
 		case types.T_decimal64:
 			return CastDecimal64ToString(lv, rv, proc)
@@ -558,7 +559,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		}
 	}
 
-	if isDecimal(lv.Typ.Oid) && rv.Typ.Oid == types.T_timestamp {
+	if IsDecimal(lv.Typ.Oid) && rv.Typ.Oid == types.T_timestamp {
 		switch lv.Typ.Oid {
 		case types.T_decimal64:
 			return CastDecimal64AsTimestamp(lv, rv, proc)
@@ -648,7 +649,7 @@ func CastTimestampAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Datetime, 1)
-		if _, err := binary.TimestampToDatetime(lvs, rs); err != nil {
+		if _, err := binary.TimestampToDatetime(proc.SessionInfo.TimeZone, lvs, rs); err != nil {
 			return nil, err
 		}
 		rs2 := make([]types.Date, 1)
@@ -664,7 +665,7 @@ func CastTimestampAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.
 	rs := types.DecodeDatetimeSlice(vec.Data)
 	rs = rs[:len(lvs)]
 	rs2 := make([]types.Date, len(lvs), cap(lvs))
-	if _, err := binary.TimestampToDatetime(lvs, rs); err != nil {
+	if _, err := binary.TimestampToDatetime(proc.SessionInfo.TimeZone, lvs, rs); err != nil {
 		return nil, err
 	}
 	for i := 0; i < len(rs2); i++ {
@@ -1436,7 +1437,7 @@ func CastVarcharAsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vect
 		scalarVector := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Timestamp, 1)
 		strBytes := vs.Get(0)
-		data, err := types.ParseTimestamp(string(strBytes), 6)
+		data, err := types.ParseTimestamp(proc.SessionInfo.TimeZone, string(strBytes), rv.Typ.Precision)
 		if err != nil {
 			return nil, err
 		}
@@ -1454,7 +1455,7 @@ func CastVarcharAsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vect
 	rs = rs[:len(vs.Lengths)]
 	for i := range vs.Lengths {
 		strBytes := vs.Get(int64(i))
-		data, err := types.ParseTimestamp(string(strBytes), 6)
+		data, err := types.ParseTimestamp(proc.SessionInfo.TimeZone, string(strBytes), rv.Typ.Precision)
 		if err != nil {
 			return nil, err
 		}
@@ -1581,7 +1582,7 @@ func castTimeStampAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vec
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Datetime, 1)
-		if _, err := binary.TimestampToDatetime(lvs, rs); err != nil {
+		if _, err := binary.TimestampToDatetime(proc.SessionInfo.TimeZone, lvs, rs); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -1595,7 +1596,7 @@ func castTimeStampAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vec
 	}
 	rs := types.DecodeDatetimeSlice(vec.Data)
 	rs = rs[:len(lvs)]
-	if _, err := binary.TimestampToDatetime(lvs, rs); err != nil {
+	if _, err := binary.TimestampToDatetime(proc.SessionInfo.TimeZone, lvs, rs); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
@@ -1619,7 +1620,7 @@ func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vect
 			Offsets: make([]uint32, 1),
 			Lengths: make([]uint32, 1),
 		}
-		if _, err := binary.TimestampToVarchar(lvs, rs, precision); err != nil {
+		if _, err := binary.TimestampToVarchar(proc.SessionInfo.TimeZone, lvs, rs, precision); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -1636,7 +1637,7 @@ func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vect
 		Offsets: make([]uint32, len(lvs)),
 		Lengths: make([]uint32, len(lvs)),
 	}
-	if _, err := binary.TimestampToVarchar(lvs, rs, precision); err != nil {
+	if _, err := binary.TimestampToVarchar(proc.SessionInfo.TimeZone, lvs, rs, precision); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
@@ -1807,9 +1808,7 @@ func CastDatetimeAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vec
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Timestamp, 1)
-		if _, err := binary.DatetimeToTimestamp(lvs, rs); err != nil {
-			return nil, err
-		}
+		timestamp.DatetimeToTimestamp(proc.SessionInfo.TimeZone, lvs, lv.Nsp, rs)
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, rs)
 		return vec, nil
@@ -1821,9 +1820,7 @@ func CastDatetimeAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vec
 	}
 	rs := types.DecodeTimestampSlice(vec.Data)
 	rs = rs[:len(lvs)]
-	if _, err := binary.DatetimeToTimestamp(lvs, rs); err != nil {
-		return nil, err
-	}
+	timestamp.DatetimeToTimestamp(proc.SessionInfo.TimeZone, lvs, lv.Nsp, rs)
 	nulls.Set(vec.Nsp, lv.Nsp)
 	vector.SetCol(vec, rs)
 	return vec, nil
@@ -1836,9 +1833,7 @@ func CastDateAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vector.
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Timestamp, 1)
-		if _, err := binary.DateToTimestamp(lvs, rs); err != nil {
-			return nil, err
-		}
+		timestamp.DateToTimestamp(proc.SessionInfo.TimeZone, lvs, lv.Nsp, rs)
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, rs)
 		return vec, nil
@@ -1850,9 +1845,7 @@ func CastDateAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vector.
 	}
 	rs := types.DecodeTimestampSlice(vec.Data)
 	rs = rs[:len(lvs)]
-	if _, err := binary.DateToTimestamp(lvs, rs); err != nil {
-		return nil, err
-	}
+	timestamp.DateToTimestamp(proc.SessionInfo.TimeZone, lvs, lv.Nsp, rs)
 	nulls.Set(vec.Nsp, lv.Nsp)
 	vector.SetCol(vec, rs)
 	return vec, nil
@@ -2489,8 +2482,8 @@ func isDateSeries(t types.T) bool {
 	return false
 }
 
-// isDecimal: return true if the types.T is decimal64 or decimal128
-func isDecimal(t types.T) bool {
+// IsDecimal: return true if the types.T is decimal64 or decimal128
+func IsDecimal(t types.T) bool {
 	if t == types.T_decimal64 || t == types.T_decimal128 {
 		return true
 	}

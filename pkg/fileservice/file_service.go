@@ -21,6 +21,9 @@ import (
 
 // FileService is a write-once file system
 type FileService interface {
+	// Name is file service's name
+	Name() string
+
 	// Write writes a new file
 	// returns ErrFileExisted if file already existed
 	// returns ErrSizeNotMatch if provided size does not match data
@@ -44,6 +47,8 @@ type FileService interface {
 
 type IOVector struct {
 	// path to file, '/' separated
+	// add a file service name prefix to select different service
+	// for example, 's3:a/b/c' refer to the path 'a/b/c' in S3
 	FilePath string
 	// io entries
 	// empty entry not allowed

@@ -48,9 +48,11 @@ const (
 	Deletion
 	Insert
 	Update
+	External
 
 	Minus
 	Intersect
+	IntersectAll
 
 	HashBuild
 )

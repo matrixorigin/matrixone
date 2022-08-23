@@ -17,7 +17,6 @@ package trace
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,10 +53,8 @@ func Test_initExport(t *testing.T) {
 			empty: false,
 		},
 	}
-	sysVar := &config.GlobalSystemVariables
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sysVar.SetEnableTrace(tt.args.enableTracer)
 			export.ResetGlobalBatchProcessor()
 			initExport(context.TODO(), tt.args.config)
 			if tt.empty {

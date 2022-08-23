@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
@@ -45,15 +47,18 @@ const (
 )
 
 type TxnHandler struct {
-	storage engine.Engine
-	txn     moengine.Txn
-	ses     *Session
+	storage   engine.Engine
+	txnClient TxnClient
+	ses       *Session
+	txn       TxnOperator
 }
 
-func InitTxnHandler(storage engine.Engine) *TxnHandler {
-	return &TxnHandler{
-		storage: storage,
+func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
+	h := &TxnHandler{
+		storage:   storage,
+		txnClient: txnClient,
 	}
+	return h
 }
 
 type Session struct {
@@ -93,6 +98,7 @@ type Session struct {
 	optionBits uint32
 
 	prepareStmts map[string]*PrepareStmt
+	lastStmtId   uint32
 
 	requestCtx context.Context
 
@@ -103,10 +109,12 @@ type Session struct {
 	allResultSet []*MysqlResultSet
 
 	tenant *TenantInfo
+
+	timeZone *time.Location
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
-	txnHandler := InitTxnHandler(config.StorageEngine)
+	txnHandler := InitTxnHandler(PU.StorageEngine, PU.TxnClient)
 	ses := &Session{
 		protocol: proto,
 		GuestMmu: gm,
@@ -120,7 +128,7 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 		txnHandler: txnHandler,
 		//TODO:fix database name after the catalog is ready
 		txnCompileCtx:   InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
-		storage:         config.StorageEngine,
+		storage:         PU.StorageEngine,
 		sysVars:         gSysVars.CopySysVarsToSession(),
 		userDefinedVars: make(map[string]interface{}),
 		gSysVars:        gSysVars,
@@ -130,6 +138,7 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 
 		prepareStmts:   make(map[string]*PrepareStmt),
 		outputCallback: getDataFromPipeline,
+		timeZone:       time.Local,
 	}
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.txnCompileCtx.SetSession(ses)
@@ -161,6 +170,14 @@ func (bgs *BackgroundSession) Close() {
 		bgs.cancel()
 	}
 }
+func (ses *Session) GenNewStmtId() uint32 {
+	ses.lastStmtId = ses.lastStmtId + 1
+	return ses.lastStmtId
+}
+
+func (ses *Session) GetLastStmtId() uint32 {
+	return ses.lastStmtId
+}
 
 func (ses *Session) SetRequestContext(reqCtx context.Context) {
 	ses.requestCtx = reqCtx
@@ -168,6 +185,14 @@ func (ses *Session) SetRequestContext(reqCtx context.Context) {
 
 func (ses *Session) GetRequestContext() context.Context {
 	return ses.requestCtx
+}
+
+func (ses *Session) SetTimeZone(loc *time.Location) {
+	ses.timeZone = loc
+}
+
+func (ses *Session) GetTimeZone() *time.Location {
+	return ses.timeZone
 }
 
 func (ses *Session) SetMysqlResultSet(mrs *MysqlResultSet) {
@@ -252,7 +277,12 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 		if err != nil {
 			return err
 		}
-		ses.sysVars[def.GetName()] = cv
+
+		if def.UpdateSessVar == nil {
+			ses.sysVars[def.GetName()] = cv
+		} else {
+			return def.UpdateSessVar(ses, ses.sysVars, def.GetName(), cv)
+		}
 	} else {
 		return errorSystemVariableDoesNotExist
 	}
@@ -575,15 +605,14 @@ func (th *TxnHandler) NewTxn() error {
 		}
 	}
 	th.SetInvalid()
-	if taeEng, ok := th.storage.(moengine.TxnEngine); ok {
-		//begin a transaction
-		th.txn, err = taeEng.StartTxn(nil)
-		if err != nil {
-			logutil.Errorf("start tae txn error:%v", err)
-			return err
-		}
+	if th.txnClient == nil {
+		panic("must set txn client")
 	}
-	return err
+	th.txn, err = th.txnClient.New()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // IsValidTxn checks the transaction is true or not.
@@ -599,7 +628,13 @@ func (th *TxnHandler) CommitTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	err := th.txn.Commit()
+	var ctx context.Context
+	if th.ses != nil {
+		ctx = th.ses.GetRequestContext()
+	} else {
+		ctx = context.Background()
+	}
+	err := th.txn.Commit(ctx)
 	th.SetInvalid()
 	return err
 }
@@ -608,7 +643,13 @@ func (th *TxnHandler) RollbackTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	err := th.txn.Rollback()
+	var ctx context.Context
+	if th.ses != nil {
+		ctx = th.ses.GetRequestContext()
+	} else {
+		ctx = context.Background()
+	}
+	err := th.txn.Rollback(ctx)
 	th.SetInvalid()
 	return err
 }
@@ -622,7 +663,7 @@ func (th *TxnHandler) IsTaeEngine() bool {
 	return ok
 }
 
-func (th *TxnHandler) GetTxn() moengine.Txn {
+func (th *TxnHandler) GetTxn() TxnOperator {
 	err := th.ses.TxnStart()
 	if err != nil {
 		panic(err)
@@ -674,7 +715,7 @@ func (tcc *TxnCompilerContext) GetRootSql() string {
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	var err error
 	//open database
-	_, err = tcc.txnHandler.GetStorage().Database(tcc.ses.GetRequestContext(), name, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
+	_, err = tcc.txnHandler.GetStorage().Database(tcc.ses.GetRequestContext(), name, tcc.txnHandler.GetTxn())
 	if err != nil {
 		logutil.Errorf("get database %v failed. error %v", name, err)
 		return false
@@ -691,7 +732,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 
 	ctx := tcc.ses.GetRequestContext()
 	//open database
-	db, err := tcc.txnHandler.GetStorage().Database(ctx, dbName, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
+	db, err := tcc.txnHandler.GetStorage().Database(ctx, dbName, tcc.txnHandler.GetTxn())
 	if err != nil {
 		logutil.Errorf("get database %v error %v", dbName, err)
 		return nil, err
@@ -739,6 +780,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 
 	var cols []*plan2.ColDef
 	var defs []*plan2.TableDefType
+	var TableType, Createsql string
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			cols = append(cols, &plan2.ColDef{
@@ -755,6 +797,13 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
 			properties := make([]*plan2.Property, len(pro.Properties))
 			for i, p := range pro.Properties {
+				switch p.Key {
+				case catalog.SystemRelAttr_Kind:
+					TableType = p.Value
+				case catalog.SystemRelAttr_CreateSQL:
+					Createsql = p.Value
+				default:
+				}
 				properties[i] = &plan2.Property{
 					Key:   p.Key,
 					Value: p.Value,
@@ -802,9 +851,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	}
 
 	tableDef := &plan2.TableDef{
-		Name: tableName,
-		Cols: cols,
-		Defs: defs,
+		Name:      tableName,
+		Cols:      cols,
+		Defs:      defs,
+		TableType: TableType,
+		Createsql: Createsql,
 	}
 	return obj, tableDef
 }
@@ -921,7 +972,7 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 		if dataSet.Zs[j] <= 0 {
 			continue
 		}
-		_, err := extractRowFromEveryVector(dataSet, int64(j), oq)
+		_, err := extractRowFromEveryVector(ses, dataSet, int64(j), oq)
 		if err != nil {
 			return err
 		}

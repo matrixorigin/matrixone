@@ -60,4 +60,4 @@ If there are no matching rows, SUM() returns NULL.
 
 ## Constraints
 
-SUM(DISTINCT) is not supported for the 0.5.0 version.
+SUM(DISTINCT) is not supported for the 0.5.1 version.

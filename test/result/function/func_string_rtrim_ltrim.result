@@ -233,7 +233,6 @@ drop table t1;
 drop table if exists t1;
 create table t1(a INT,  b datetime);
 insert into t1 values(1, "2017-06-15    "),(1, "2019-06-25    "),(2, "    2019-06-25  "),(3, "   2019-06-25   ");
-Data truncation: Incorrect DATETIME value: '2017-06-15    ' for column 'b' at row 0
 select b from t1 group by b having rtrim(ltrim(b))>"2018-01-01";
 b
 2019-06-25 00:00:00
@@ -249,9 +248,9 @@ a	a
 drop table t1;
 drop table t2;
 SELECT RTRIM(space(100000000)+"123");
-Operator '+' with parameters [VARCHAR VARCHAR] will be implemented in future version.
+the space count exceeds maxallowedCount 8000
 SELECT LTRIM("123"+space(100000000));
-Operator '+' with parameters [VARCHAR VARCHAR] will be implemented in future version.
+the space count exceeds maxallowedCount 8000
 SELECT LTRIM("    1241241^&@%#^*^!@#&*(!&");
 LTRIM("    1241241^&@%#^*^!@#&*(!&")
 1241241^&@%#^*^!@#&*(!&

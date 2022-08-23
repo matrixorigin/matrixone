@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
+	"go.uber.org/zap"
 )
 
 const (
@@ -63,15 +64,28 @@ func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, er
 	if err != nil {
 		return nil, err
 	}
+	closeLogClient := func() {
+		if err := logClient.Close(); err != nil {
+			s.logger.Error("close log client failed",
+				zap.Error(err))
+		}
+	}
 
 	switch s.cfg.Txn.Storage.Backend {
-
 	case memStorageBackend:
-		return s.newMemTxnStorage(shard, logClient)
-
+		ts, err := s.newMemTxnStorage(shard, logClient)
+		if err != nil {
+			closeLogClient()
+			return nil, err
+		}
+		return ts, nil
 	case taeStorageBackend:
-		return s.newTAEStorage(shard, logClient)
-
+		ts, err := s.newTAEStorage(shard, logClient)
+		if err != nil {
+			closeLogClient()
+			return nil, err
+		}
+		return ts, nil
 	default:
 		return nil, fmt.Errorf("not implment for %s", s.cfg.Txn.Storage.Backend)
 	}
@@ -104,5 +118,5 @@ func (s *store) newMemTxnStorage(shard metadata.DNShard, logClient logservice.Cl
 }
 
 func (s *store) newTAEStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
-	return taestorage.New(shard, logClient, s.s3FS, s.localFS, s.clock)
+	return taestorage.New(shard, logClient, s.fs, s.clock)
 }
