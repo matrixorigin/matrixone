@@ -235,7 +235,7 @@ func convertPipelineToScope(proc *process.Process, p *pipeline.Pipeline, par *sc
 		}
 	}
 	// PreScope
-	s.PreScopes = make([]*Scope, len(s.PreScopes))
+	s.PreScopes = make([]*Scope, len(p.Children))
 	for i := range s.PreScopes {
 		if s.PreScopes[i], err = convertPipelineToScope(s.Proc, p.Children[i], ctx, analNodes); err != nil {
 			return nil, err
@@ -260,8 +260,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext) (*pipe
 		}
 	case *dispatch.Argument:
 		in.Dispatch = &pipeline.Dispatch{
-			All: t.All,
-			// Children: nil,
+			All:       t.All,
+			Connector: make([]*pipeline.Connector, len(t.Regs)),
 		}
 		for i := range t.Regs {
 			in.Dispatch.Connector[i] = ctx.root.findRegister(t.Regs[i])
@@ -459,7 +459,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}
 	case vm.Left:
-		t := opr.GetJoin()
+		t := opr.GetLeftJoin()
 		v.Arg = &left.Argument{
 			Ibucket:    t.Ibucket,
 			Nbucket:    t.Nbucket,
@@ -561,6 +561,30 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		t := opr.GetConnect()
 		v.Arg = &connector.Argument{
 			Reg: ctx.root.getRegister(t.PipelineId, t.ConnectorIndex),
+		}
+	// may useless
+	case vm.Merge:
+		v.Arg = &merge.Argument{}
+	case vm.MergeGroup:
+		v.Arg = &mergegroup.Argument{
+			NeedEval: opr.Agg.NeedEval,
+		}
+	case vm.MergeLimit:
+		v.Arg = &mergelimit.Argument{
+			Limit: opr.Limit,
+		}
+	case vm.MergeOffset:
+		v.Arg = &mergeoffset.Argument{
+			Offset: opr.Offset,
+		}
+	case vm.MergeTop:
+		v.Arg = &mergetop.Argument{
+			Limit: int64(opr.Limit),
+			Fs:    convertToColExecField(opr.OrderBy),
+		}
+	case vm.MergeOrder:
+		v.Arg = &mergeorder.Argument{
+			Fs: convertToColExecField(opr.OrderBy),
 		}
 	default:
 		return v, moerr.New(moerr.INTERNAL_ERROR, "unexpected operator: %v", opr.Op)
@@ -792,7 +816,7 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 	return res
 }
 
-func decodeBatch(proc *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
+func decodeBatch(_ *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
 	bat := new(batch.Batch) // TODO: allocate the memory from process may suitable.
 	err := types.Decode(msg.GetData(), bat)
 	return bat, err
@@ -820,6 +844,7 @@ func (ctx *scopeContext) getRegister(id, idx int32) *process.WaitRegister {
 	}
 	return nil
 }
+
 func (ctx *scopeContext) findRegister(reg *process.WaitRegister) *pipeline.Connector {
 	if index, ok := ctx.regs[reg]; ok {
 		return &pipeline.Connector{

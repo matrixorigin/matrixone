@@ -14,9 +14,30 @@
 
 package compile
 
-/*
+import (
+	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
+	"github.com/stretchr/testify/require"
+	"testing"
+)
+
 func TestScopeSerialization(t *testing.T) {
-	var sourceScopes = generateScopeCases(t)
+	testCases := []string{
+		"select 1",
+		"select * from R",
+		"select count(*) from R",
+		"select * from R limit 2, 1",
+		"select * from R left join S on R.uid = S.uid",
+	}
+
+	var sourceScopes = generateScopeCases(t, testCases)
 
 	for i, sourceScope := range sourceScopes {
 		data, errEncode := encodeScope(sourceScope)
@@ -27,12 +48,17 @@ func TestScopeSerialization(t *testing.T) {
 		fmt.Println(fmt.Sprintf("sourceScope : %v", sourceScope))
 		fmt.Println(fmt.Sprintf("targetScope : %v", targetScope))
 
-		// require.Equal(t, sourceScope, targetScope, fmt.Sprintf("index is %d", i))
+		// Just do simple check
+		require.Equal(t, len(sourceScope.PreScopes), len(targetScope.PreScopes), fmt.Sprintf("related SQL is '%s'", testCases[i]))
+		require.Equal(t, len(sourceScope.Instructions), len(targetScope.Instructions), fmt.Sprintf("related SQL is '%s'", testCases[i]))
+		for j := 0; j < len(sourceScope.Instructions); j++ {
+			require.Equal(t, sourceScope.Instructions[j].Op, targetScope.Instructions[j].Op)
+		}
 	}
 
 }
 
-func generateScopeCases(t *testing.T) []*Scope {
+func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 	// getScope method generate and return the scope of a SQL string.
 	getScope := func(t1 *testing.T, sql string) *Scope {
 		proc := testutil.NewProcess()
@@ -47,20 +73,16 @@ func generateScopeCases(t *testing.T) []*Scope {
 			return nil
 		})
 		require.NoError(t1, err)
+		// ignore the last operator if it's output
+		if c.scope.Instructions[len(c.scope.Instructions)-1].Op == vm.Output {
+			c.scope.Instructions = c.scope.Instructions[:len(c.scope.Instructions)-1]
+		}
 		return c.scope
 	}
 
-	testCases := []string{
-		"select 1",
-		"select * from R",
-		"select count(*) from R",
-		"select * from R limit 2, 1",
-		"select * from R left join S on R.uid = S.uid",
-	}
 	result := make([]*Scope, len(testCases))
 	for i, sql := range testCases {
 		result[i] = getScope(t, sql)
 	}
 	return result
 }
-*/
