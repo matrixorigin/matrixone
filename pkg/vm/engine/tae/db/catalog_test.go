@@ -171,7 +171,7 @@ func TestLogBlock(t *testing.T) {
 	t.Log(entryCmd.Block.StringLocked())
 	assert.Equal(t, meta.ID, entryCmd.Block.ID)
 	assert.Equal(t, meta.GetCurrOp(), entryCmd.Block.GetCurrOp())
-	assert.True(t, meta.GetCreateAt().Equal(entryCmd.Block.GetCreateAt()))
+	assert.True(t, meta.GetCreatedAt().Equal(entryCmd.Block.GetCreatedAt()))
 	assert.True(t, meta.GetDeleteAt().Equal(entryCmd.Block.GetDeleteAt()))
 }
 
@@ -204,7 +204,7 @@ func TestLogSegment(t *testing.T) {
 	t.Log(entryCmd.Segment.StringLocked())
 	assert.Equal(t, meta.ID, entryCmd.Segment.ID)
 	assert.Equal(t, meta.GetCurrOp(), entryCmd.Segment.GetCurrOp())
-	assert.True(t, meta.GetCreateAt().Equal(entryCmd.Segment.GetCreateAt()))
+	assert.True(t, meta.GetCreatedAt().Equal(entryCmd.Segment.GetCreatedAt()))
 	assert.True(t, meta.GetDeleteAt().Equal(entryCmd.Segment.GetDeleteAt()))
 }
 
@@ -236,7 +236,7 @@ func TestLogTable(t *testing.T) {
 	t.Log(entryCmd.Table.StringLocked())
 	assert.Equal(t, meta.ID, entryCmd.Table.ID)
 	assert.Equal(t, meta.GetCurrOp(), entryCmd.Table.GetCurrOp())
-	assert.True(t, meta.GetCreateAt().Equal(entryCmd.Table.GetCreateAt()))
+	assert.True(t, meta.GetCreatedAt().Equal(entryCmd.Table.GetCreatedAt()))
 	assert.True(t, meta.GetDeleteAt().Equal(entryCmd.Table.GetDeleteAt()))
 	assert.Equal(t, meta.GetSchema().Name, entryCmd.Table.GetSchema().Name)
 	assert.Equal(t, meta.GetSchema().BlockMaxRows, entryCmd.Table.GetSchema().BlockMaxRows)
@@ -271,7 +271,7 @@ func TestLogDatabase(t *testing.T) {
 	t.Log(entryCmd.DB.StringLocked())
 	assert.Equal(t, meta.ID, entryCmd.DB.ID)
 	assert.Equal(t, meta.GetCurrOp(), entryCmd.DB.GetCurrOp())
-	assert.True(t, meta.GetCreateAt().Equal(entryCmd.DB.GetCreateAt()))
+	assert.True(t, meta.GetCreatedAt().Equal(entryCmd.DB.GetCreatedAt()))
 	assert.True(t, meta.GetDeleteAt().Equal(entryCmd.DB.GetDeleteAt()))
 	assert.Equal(t, meta.GetName(), entryCmd.DB.GetName())
 }
@@ -443,8 +443,8 @@ func TestCheckpointCatalog(t *testing.T) {
 	assert.Nil(t, err)
 	assert.True(t, blk.HasDropped())
 	assert.True(t, blk.GetDeleteAt().Greater(endTs))
-	assert.True(t, blk.GetCreateAt().Greater(startTs))
-	assert.Equal(t, blk.GetCreateAt(), blockEntry.GetCreateAt())
+	assert.True(t, blk.GetCreatedAt().Greater(startTs))
+	assert.Equal(t, blk.GetCreatedAt(), blockEntry.GetCreatedAt())
 
 	var zeroV1 types.TS
 	//assert.Equal(t, uint64(0), blockEntry.DeleteAt)
@@ -465,7 +465,7 @@ func TestCheckpointCatalog(t *testing.T) {
 			blk1 := entry.Entries[i].Block
 			blk2 := replayEntry.Entries[i].Block
 			assert.Equal(t, blk1.ID, blk2.ID)
-			assert.Equal(t, blk1.GetCreateAt(), blk2.GetCreateAt())
+			assert.Equal(t, blk1.GetCreatedAt(), blk2.GetCreatedAt())
 			assert.Equal(t, blk1.GetDeleteAt(), blk2.GetDeleteAt())
 			assert.Equal(t, blk1.GetCurrOp(), blk2.GetCurrOp())
 		}

@@ -573,7 +573,7 @@ func (be *BaseEntry) GetCurrOp() OpT {
 	return OpSoftDelete
 }
 
-func (be *BaseEntry) GetCreateAt() types.TS {
+func (be *BaseEntry) GetCreatedAt() types.TS {
 	un := be.GetUpdateNodeLocked()
 	if un == nil {
 		return types.TS{}
