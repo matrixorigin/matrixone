@@ -150,7 +150,6 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 
 func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, beginIns time.Time) context.Context {
 	sessInfo := proc.SessionInfo
-	// HEAD
 	var stmID uuid.UUID
 	copy(stmID[:], cw.GetUUID())
 	var txnID uuid.UUID
