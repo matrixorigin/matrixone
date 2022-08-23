@@ -31,7 +31,7 @@
 
 * **我怎么知道我的查询是如何执行的？**
 
-  要查看 MatrixOne 对给定查询的执行情况，可以使用[`EXPLAIN`](https://docs.matrixorigin.io/0.5.0/MatrixOne/Reference/SQL-Reference/Explain/explain/)语句，它将打印出查询计划。
+  要查看 MatrixOne 对给定查询的执行情况，可以使用[`EXPLAIN`](https://docs.matrixorigin.io/0.5.1/MatrixOne/Reference/SQL-Reference/Explain/explain/)语句，它将打印出查询计划。
 
   ```
   EXPLAIN SELECT col1 FROM tbl1;

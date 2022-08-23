@@ -78,7 +78,7 @@ func (client *txnClient) adjust() {
 	}
 }
 
-func (client *txnClient) New(options ...TxnOption) TxnOperator {
+func (client *txnClient) New(options ...TxnOption) (TxnOperator, error) {
 	txnMeta := txn.TxnMeta{}
 	txnMeta.ID = client.generator.Generate()
 
@@ -88,7 +88,7 @@ func (client *txnClient) New(options ...TxnOption) TxnOperator {
 	// conflicts due to clock uncertainty.
 	txnMeta.SnapshotTS = now
 	options = append(options, WithTxnLogger(client.logger), WithTxnCNCoordinator())
-	return newTxnOperator(client.sender, txnMeta, options...)
+	return newTxnOperator(client.sender, txnMeta, options...), nil
 }
 
 func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {

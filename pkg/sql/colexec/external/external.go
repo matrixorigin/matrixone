@@ -104,6 +104,7 @@ func ReadFromS3(param *tree.ExternParam) ([]string, error) {
 	}
 
 	fs, err := fileservice.NewS3FS(
+		"s3",
 		config.Endpoint,
 		config.Bucket,
 		config.KeyPrefix,
@@ -152,6 +153,7 @@ func ReadFromS3File(param *tree.ExternParam) (io.ReadCloser, error) {
 	}
 
 	fs, err := fileservice.NewS3FS(
+		"s3",
 		config.Endpoint,
 		config.Bucket,
 		config.KeyPrefix,
@@ -188,7 +190,7 @@ func ReadFromLocal(param *tree.ExternParam) ([]string, error) {
 		file = string([]byte(param.Filepath)[index+1:])
 	}
 
-	fs, err := fileservice.NewLocalETLFS(dir)
+	fs, err := fileservice.NewLocalETLFS("etl", dir)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +220,7 @@ func ReadFromLocalFile(param *tree.ExternParam) (io.ReadCloser, error) {
 		file = string([]byte(param.Filepath)[index+1:])
 	}
 
-	fs, err := fileservice.NewLocalETLFS(dir)
+	fs, err := fileservice.NewLocalETLFS("etl", dir)
 	if err != nil {
 		return nil, err
 	}
@@ -670,8 +672,6 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 				vBytes := vec.Col.(*types.Bytes)
 				if isNullOrEmpty {
 					nulls.Add(vec.Nsp, uint64(rowIdx))
-					vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
-					vBytes.Lengths[rowIdx] = uint32(len(field))
 				} else {
 					vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
 					vBytes.Data = append(vBytes.Data, field...)
