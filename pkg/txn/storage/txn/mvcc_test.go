@@ -46,11 +46,13 @@ func TestMVCC(t *testing.T) {
 	now = now.Next()
 
 	// read
-	res := m.Read(tx1, now)
+	res, err := m.Read(tx1, now)
+	assert.Nil(t, err)
 	assert.NotNil(t, res)
 	assert.Equal(t, 1, *res)
 
-	res = m.Read(tx2, now)
+	res, err = m.Read(tx2, now)
+	assert.Nil(t, err)
 	assert.NotNil(t, res)
 	assert.Equal(t, 2, *res)
 
@@ -59,22 +61,27 @@ func TestMVCC(t *testing.T) {
 	// delete
 	err = m.Delete(tx1, now)
 	assert.Nil(t, err)
-	res = m.Read(tx1, now)
+	res, err = m.Read(tx1, now)
+	assert.Nil(t, err)
 	assert.Nil(t, res)
 
-	res = m.Read(tx2, now)
+	res, err = m.Read(tx2, now)
+	assert.Nil(t, err)
 	assert.NotNil(t, res)
 	assert.Equal(t, 2, *res)
 
 	err = m.Delete(tx2, now)
 	assert.Nil(t, err)
-	res = m.Read(tx2, now)
+	res, err = m.Read(tx2, now)
+	assert.Nil(t, err)
 	assert.Nil(t, res)
 
-	res = m.Read(tx2, now)
+	res, err = m.Read(tx2, now)
+	assert.Nil(t, err)
 	assert.Nil(t, res)
 
-	res = m.Read(tx1, now)
+	res, err = m.Read(tx1, now)
+	assert.Nil(t, err)
 	assert.Nil(t, res)
 
 	now = now.Next()
@@ -93,10 +100,12 @@ func TestMVCC(t *testing.T) {
 
 	now = now.Next()
 
-	res = m.Read(tx1, now)
+	res, err = m.Read(tx1, now)
+	assert.Nil(t, err)
 	assert.NotNil(t, res)
 	assert.Equal(t, 3, *res)
-	res = m.Read(tx2, now)
+	res, err = m.Read(tx2, now)
+	assert.Nil(t, err)
 	assert.NotNil(t, res)
 	assert.Equal(t, 2, *res)
 
@@ -105,10 +114,12 @@ func TestMVCC(t *testing.T) {
 
 	now = now.Next()
 
-	res = m.Read(tx1, now)
+	res, err = m.Read(tx1, now)
+	assert.Nil(t, err)
 	assert.NotNil(t, res)
 	assert.Equal(t, 3, *res)
-	res = m.Read(tx2, now)
+	res, err = m.Read(tx2, now)
+	assert.Nil(t, err)
 	assert.NotNil(t, res)
 	assert.Equal(t, 4, *res)
 
@@ -117,11 +128,13 @@ func TestMVCC(t *testing.T) {
 	// commit and read
 	tx1.State.Store(Committed)
 
-	tx3 := NewTransaction("3", Timestamp{})
-	tx4 := NewTransaction("4", Timestamp{})
+	now = now.Next()
+	tx3 := NewTransaction("3", now)
+	tx4 := NewTransaction("4", now)
 
 	// read committed
-	res = m.Read(tx3, now)
+	res, err = m.Read(tx3, now)
+	assert.Nil(t, err)
 	assert.NotNil(t, res)
 	assert.Equal(t, 3, *res)
 
@@ -130,12 +143,14 @@ func TestMVCC(t *testing.T) {
 	// concurrent delete
 	err = m.Delete(tx4, now)
 	assert.Nil(t, err)
-	res = m.Read(tx4, now)
+	res, err = m.Read(tx4, now)
+	assert.Nil(t, err)
 	assert.Nil(t, res)
 
 	now = now.Next()
 
-	res = m.Read(tx3, now)
+	res, err = m.Read(tx3, now)
+	assert.Nil(t, err)
 	assert.NotNil(t, res)
 	assert.Equal(t, 3, *res)
 
