@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
@@ -288,11 +289,11 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 		echoServer(rm.Handler, rm, NewSqlCodec())
 	}()
 
-	to := NewTimeout(1*time.Minute, false)
-	for isClosed() && !to.isTimeout() {
-	}
+	// to := NewTimeout(1*time.Minute, false)
+	// for isClosed() && !to.isTimeout() {
+	// }
 
-	time.Sleep(time.Second * 15)
+	time.Sleep(time.Second * 3)
 	db := open_db(t, 6001)
 	close_db(t, db)
 
@@ -321,17 +322,17 @@ func TestMysqlClientProtocol_TlsHandshake(t *testing.T) {
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 
-	//running server
+	// //running server
 	go func() {
 		defer wg.Done()
 		echoServer(rm.Handler, rm, NewSqlCodec())
 	}()
 
-	to := NewTimeout(1*time.Minute, false)
-	for isClosed() && !to.isTimeout() {
-	}
+	// to := NewTimeout(1*time.Minute, false)
+	// for isClosed() && !to.isTimeout() {
+	// }
 
-	time.Sleep(time.Second * 18)
+	time.Sleep(time.Second * 2)
 	db := open_tls_db(t, 6001)
 	close_db(t, db)
 
@@ -1249,11 +1250,11 @@ func TestMysqlResultSet(t *testing.T) {
 		echoServer(trm.resultsetHandler, trm, NewSqlCodec())
 	}()
 
-	to := NewTimeout(1*time.Minute, false)
-	for isClosed() && !to.isTimeout() {
-	}
+	// to := NewTimeout(1*time.Minute, false)
+	// for isClosed() && !to.isTimeout() {
+	// }
 
-	time.Sleep(time.Second * 15)
+	time.Sleep(time.Second * 3)
 	db := open_db(t, 6001)
 
 	do_query_resp_resultset(t, db, false, false, "tiny", makeMysqlTinyIntResultSet(false))
@@ -1312,17 +1313,18 @@ func open_tls_db(t *testing.T, port int) *sql.DB {
 		require.NoError(t, err)
 	}
 
-	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=18s&timeout=18s&writeTimeout=18s&tls=%s", port, tlsName)
+	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?tls=%s", port, tlsName)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		require.NoError(t, err)
 	} else {
-		// db.SetConnMaxLifetime(time.Minute * 3)
-		// db.SetMaxOpenConns(1)
-		// db.SetMaxIdleConns(1)
-		// time.Sleep(time.Millisecond * 100)
+		db.SetConnMaxLifetime(time.Minute * 3)
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+		time.Sleep(time.Millisecond * 100)
 
 		// ping opens the connection
+		logutil.Info("start ping")
 		err = db.Ping()
 		require.NoError(t, err)
 	}
