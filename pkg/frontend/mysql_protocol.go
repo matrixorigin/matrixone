@@ -350,22 +350,24 @@ func (mp *MysqlProtocolImpl) SetSession(ses *Session) {
 
 // handshake response 41
 type response41 struct {
-	capabilities     uint32
-	maxPacketSize    uint32
-	collationID      uint8
-	username         string
-	authResponse     []byte
-	database         string
-	clientPluginName string
+	capabilities      uint32
+	maxPacketSize     uint32
+	collationID       uint8
+	username          string
+	authResponse      []byte
+	database          string
+	clientPluginName  string
+	isAskForTlsHeader bool
 }
 
 // handshake response 320
 type response320 struct {
-	capabilities  uint32
-	maxPacketSize uint32
-	username      string
-	authResponse  []byte
-	database      string
+	capabilities      uint32
+	maxPacketSize     uint32
+	username          string
+	authResponse      []byte
+	database          string
+	isAskForTlsHeader bool
 }
 
 func (mp *MysqlProtocolImpl) SendPrepareResponse(stmt *PrepareStmt) error {
@@ -1007,7 +1009,7 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 		}
 
 		// client ask server to upgradeTls
-		if len(resp41.username) == 0 && resp41.capabilities&CLIENT_SSL != 0 {
+		if resp41.isAskForTlsHeader {
 			return true, nil
 		}
 
@@ -1034,7 +1036,7 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 		}
 
 		// client ask server to upgradeTls
-		if len(resp320.username) == 0 && resp320.capabilities&CLIENT_SSL != 0 {
+		if resp320.isAskForTlsHeader {
 			return true, nil
 		}
 
@@ -1161,6 +1163,7 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse41(data []byte) (bool, resp
 
 	// if client reply for upgradeTls, then data will contains header only.
 	if pos == len(data) && (info.capabilities&CLIENT_SSL) != 0 {
+		info.isAskForTlsHeader = true
 		return true, info, nil
 	}
 
@@ -1297,6 +1300,7 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse320(data []byte) (bool, res
 
 	// if client reply for upgradeTls, then data will contains header only.
 	if pos == len(data) && (info.capabilities&CLIENT_SSL) != 0 {
+		info.isAskForTlsHeader = true
 		return true, info, nil
 	}
 
