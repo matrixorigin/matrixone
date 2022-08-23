@@ -45,8 +45,8 @@ func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFacto
 		// Only in unit test, txnCtx can be nil
 		schema.AcInfo.TenantID = txnCtx.GetTenantID()
 		schema.AcInfo.UserID, schema.AcInfo.RoleID = txnCtx.GetUserAndRoleID()
-
 	}
+	schema.AcInfo.CreateAt = types.CurrentTimestamp()
 	e := &TableEntry{
 		BaseEntry: NewBaseEntry(id),
 		db:        db,

@@ -2884,8 +2884,8 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 		// [mo_database, mo_tables, mo_columns, 'mo_users_t2' 'test-table-a-timestamp']
 		checkAllColRowsByScan(t, sysTblTbl, 5, true)
 		sysColTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Columns_Name)
-		// [mo_database(7), mo_tables(11), mo_columns(18), 'mo_users_t2'(1+1), 'test-table-a-timestamp'(2+1)]
-		checkAllColRowsByScan(t, sysColTbl, 41, true)
+		// [mo_database(8), mo_tables(12), mo_columns(18), 'mo_users_t2'(1+1), 'test-table-a-timestamp'(2+1)]
+		checkAllColRowsByScan(t, sysColTbl, 43, true)
 	}
 	{
 		// account 1
@@ -2905,8 +2905,8 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 		// [mo_database, mo_tables, mo_columns, 'mo_users_t1' 'test-table-a-timestamp']
 		checkAllColRowsByScan(t, sysTblTbl, 5, true)
 		sysColTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Columns_Name)
-		// [mo_database(7), mo_tables(11), mo_columns(18), 'mo_users_t1'(1+1), 'test-table-a-timestamp'(3+1)]
-		checkAllColRowsByScan(t, sysColTbl, 42, true)
+		// [mo_database(8), mo_tables(12), mo_columns(18), 'mo_users_t1'(1+1), 'test-table-a-timestamp'(3+1)]
+		checkAllColRowsByScan(t, sysColTbl, 44, true)
 	}
 	{
 		// sys account
@@ -2923,8 +2923,8 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 		// [mo_database, mo_tables, mo_columns, 'mo_accounts']
 		checkAllColRowsByScan(t, sysTblTbl, 4, true)
 		sysColTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Columns_Name)
-		// [mo_database(7), mo_tables(11), mo_columns(18), 'mo_accounts'(1+1)]
-		checkAllColRowsByScan(t, sysColTbl, 38, true)
+		// [mo_database(8), mo_tables(12), mo_columns(18), 'mo_accounts'(1+1)]
+		checkAllColRowsByScan(t, sysColTbl, 40, true)
 	}
 
 }

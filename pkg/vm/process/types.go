@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-// Analyze analyze information for operator
+// Analyze analyzes information for operator
 type Analyze interface {
 	Stop()
 	Start()
@@ -40,7 +40,7 @@ type WaitRegister struct {
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.
 type Register struct {
-	// Ss, temporarily stores the row number list in the execution of operators
+	// Ss, temporarily stores the row number list in the execution of operators,
 	// and it can be reused in the future execution.
 	Ss [][]int64
 	// InputBatch, stores the result of the previous operator.

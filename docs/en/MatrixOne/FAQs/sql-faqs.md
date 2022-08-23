@@ -27,7 +27,7 @@
 
 * **How do I know how my query is executed?**
 
-  To see how MatrixOne executes for a given query, you can use the [`EXPLAIN`](https://docs.matrixorigin.io/0.5.0/MatrixOne/Reference/SQL-Reference/Explain/explain/) statement, which will print out the query plan.
+  To see how MatrixOne executes for a given query, you can use the [`EXPLAIN`](https://docs.matrixorigin.io/0.5.1/MatrixOne/Reference/SQL-Reference/Explain/explain/) statement, which will print out the query plan.
 
   ```
   EXPLAIN SELECT col1 FROM tbl1;

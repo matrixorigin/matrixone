@@ -38,7 +38,7 @@ func (m *MockTxnClient) EXPECT() *MockTxnClientMockRecorder {
 }
 
 // New mocks base method.
-func (m *MockTxnClient) New(options ...client.TxnOption) client.TxnOperator {
+func (m *MockTxnClient) New(options ...client.TxnOption) (client.TxnOperator, error) {
 	m.ctrl.T.Helper()
 	varargs := []interface{}{}
 	for _, a := range options {
@@ -46,7 +46,8 @@ func (m *MockTxnClient) New(options ...client.TxnOption) client.TxnOperator {
 	}
 	ret := m.ctrl.Call(m, "New", varargs...)
 	ret0, _ := ret[0].(client.TxnOperator)
-	return ret0
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // New indicates an expected call of New.

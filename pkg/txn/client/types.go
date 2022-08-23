@@ -32,7 +32,7 @@ type TxnClientCreateOption func(*txnClient)
 type TxnClient interface {
 	// New returns a TxnOperator to handle read and write operation for a
 	// transaction.
-	New(options ...TxnOption) TxnOperator
+	New(options ...TxnOption) (TxnOperator, error)
 	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
 	// be from a CN coordinator txn operator.
 	NewWithSnapshot(snapshot []byte) (TxnOperator, error)

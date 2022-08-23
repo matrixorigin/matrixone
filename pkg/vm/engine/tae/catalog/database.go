@@ -29,6 +29,7 @@ import (
 
 type accessInfo struct {
 	TenantID, UserID, RoleID uint32
+	CreateAt                 types.Timestamp
 }
 
 func (ai *accessInfo) WriteTo(w io.Writer) (n int64, err error) {
@@ -37,7 +38,10 @@ func (ai *accessInfo) WriteTo(w io.Writer) (n int64, err error) {
 			return
 		}
 	}
-	return 12, nil
+	if err = binary.Write(w, binary.BigEndian, int64(ai.CreateAt)); err != nil {
+		return
+	}
+	return 20, nil
 }
 
 func (ai *accessInfo) ReadFrom(r io.Reader) (n int64, err error) {
@@ -46,7 +50,12 @@ func (ai *accessInfo) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 	}
-	return 12, nil
+	at := int64(0)
+	if err = binary.Read(r, binary.BigEndian, &at); err != nil {
+		return
+	}
+	ai.CreateAt = types.Timestamp(at)
+	return 20, nil
 }
 
 type DBEntry struct {
@@ -81,6 +90,7 @@ func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
 		e.acInfo.UserID, e.acInfo.RoleID = txnCtx.GetUserAndRoleID()
 	}
 	e.CreateWithTxn(txnCtx)
+	e.acInfo.CreateAt = types.CurrentTimestamp()
 	return e
 }
 
@@ -121,10 +131,11 @@ func (e *DBEntry) Compare(o common.NodePayload) int {
 	return e.DoCompre(oe)
 }
 
-func (e *DBEntry) GetTenantID() uint32 { return e.acInfo.TenantID }
-func (e *DBEntry) GetUserID() uint32   { return e.acInfo.UserID }
-func (e *DBEntry) GetRoleID() uint32   { return e.acInfo.RoleID }
-func (e *DBEntry) GetName() string     { return e.name }
+func (e *DBEntry) GetTenantID() uint32          { return e.acInfo.TenantID }
+func (e *DBEntry) GetUserID() uint32            { return e.acInfo.UserID }
+func (e *DBEntry) GetRoleID() uint32            { return e.acInfo.RoleID }
+func (e *DBEntry) GetCreateAt() types.Timestamp { return e.acInfo.CreateAt }
+func (e *DBEntry) GetName() string              { return e.name }
 func (e *DBEntry) GetFullName() string {
 	if len(e.fullName) == 0 {
 		e.fullName = genDBFullName(e.acInfo.TenantID, e.name)
