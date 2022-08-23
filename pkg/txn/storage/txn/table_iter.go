@@ -40,10 +40,13 @@ func (t *Table[K, R]) NewIter(
 	return
 }
 
-func (t *TableIter[K, R]) Read() (key K, row *R) {
+func (t *TableIter[K, R]) Read() (key K, row *R, err error) {
 	physicalRow := t.iter.Item()
 	key = physicalRow.PrimaryKey
-	row = physicalRow.Values.Read(t.tx, t.readTime)
+	row, err = physicalRow.Values.Read(t.tx, t.readTime)
+	if err != nil {
+		return
+	}
 	return
 }
 

@@ -12,7 +12,7 @@ where option can be one of:
     FORMAT { TEXT | JSON }
 ```
 
-0.5.0 版本仅支持 `TEXT` 格式。
+0.5.1 版本仅支持 `TEXT` 格式。
 
 ## 语法描述
 
@@ -38,7 +38,7 @@ where option can be one of:
 
 * STETEMENT
 
-MatrixOne 支持任何`SELECT`，`UPDATE`，`DELETE` 语句执行计划。在 MatrixOne 0.5.0 版本中仅支持 `INSERT`语句类型中的 `INSERT INTO..SELECT` 语句，暂不支持 `INSERT INTO...VALUES` 语句。
+MatrixOne 支持任何`SELECT`，`UPDATE`，`DELETE` 语句执行计划。在 MatrixOne 0.5.1 版本中仅支持 `INSERT`语句类型中的 `INSERT INTO..SELECT` 语句，暂不支持 `INSERT INTO...VALUES` 语句。
 
 ## 示例
 
