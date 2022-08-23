@@ -35,6 +35,10 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	retryCreateStorageInterval = time.Second * 5
+)
+
 // WithLogger set logger
 func WithLogger(logger *zap.Logger) Option {
 	return func(s *store) {
@@ -268,24 +272,31 @@ func (s *store) createReplica(shard metadata.DNShard) error {
 		return nil
 	}
 
-	storage, err := s.createTxnStorage(shard)
-	if err != nil {
-		return err
-	}
-	err = s.stopper.RunTask(func(ctx context.Context) {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			err := r.start(service.NewTxnService(r.logger,
-				shard,
-				storage,
-				s.sender,
-				s.clock,
-				s.cfg.Txn.ZombieTimeout.Duration))
-			if err != nil {
-				r.logger.Fatal("start DNShard failed",
-					zap.Error(err))
+	err := s.stopper.RunTask(func(ctx context.Context) {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				storage, err := s.createTxnStorage(shard)
+				if err != nil {
+					r.logger.Error("start DNShard failed",
+						zap.Error(err))
+					time.Sleep(retryCreateStorageInterval)
+					continue
+				}
+
+				err = r.start(service.NewTxnService(r.logger,
+					shard,
+					storage,
+					s.sender,
+					s.clock,
+					s.cfg.Txn.ZombieTimeout.Duration))
+				if err != nil {
+					r.logger.Fatal("start DNShard failed",
+						zap.Error(err))
+				}
+				return
 			}
 		}
 	})
