@@ -35,6 +35,10 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	retryCreateStorageInterval = time.Second * 5
+)
+
 // WithLogger set logger
 func WithLogger(logger *zap.Logger) Option {
 	return func(s *store) {
@@ -278,6 +282,7 @@ func (s *store) createReplica(shard metadata.DNShard) error {
 				if err != nil {
 					r.logger.Error("start DNShard failed",
 						zap.Error(err))
+					time.Sleep(retryCreateStorageInterval)
 					continue
 				}
 
@@ -291,6 +296,7 @@ func (s *store) createReplica(shard metadata.DNShard) error {
 					r.logger.Fatal("start DNShard failed",
 						zap.Error(err))
 				}
+				return
 			}
 		}
 	})
