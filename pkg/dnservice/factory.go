@@ -104,5 +104,5 @@ func (s *store) newMemTxnStorage(shard metadata.DNShard, logClient logservice.Cl
 }
 
 func (s *store) newTAEStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
-	return taestorage.New(shard, logClient, s.s3FS, s.localFS, s.clock)
+	return taestorage.New(shard, logClient, s.fs, s.clock)
 }

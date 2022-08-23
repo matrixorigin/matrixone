@@ -18,7 +18,6 @@ import (
 	"context"
 	"math/rand"
 	"sync"
-	"time"
 
 	"github.com/cockroachdb/errors"
 
@@ -71,6 +70,8 @@ var _ DNHAKeeperClient = (*managedHAKeeperClient)(nil)
 var _ LogHAKeeperClient = (*managedHAKeeperClient)(nil)
 
 // NewCNHAKeeperClient creates a HAKeeper client to be used by a CN node.
+//
+// NB: caller could specify options for morpc.Client via ctx.
 func NewCNHAKeeperClient(ctx context.Context,
 	cfg HAKeeperClientConfig) (CNHAKeeperClient, error) {
 	if err := cfg.Validate(); err != nil {
@@ -80,6 +81,8 @@ func NewCNHAKeeperClient(ctx context.Context,
 }
 
 // NewDNHAKeeperClient creates a HAKeeper client to be used by a DN node.
+//
+// NB: caller could specify options for morpc.Client via ctx.
 func NewDNHAKeeperClient(ctx context.Context,
 	cfg HAKeeperClientConfig) (DNHAKeeperClient, error) {
 	if err := cfg.Validate(); err != nil {
@@ -89,6 +92,8 @@ func NewDNHAKeeperClient(ctx context.Context,
 }
 
 // NewLogHAKeeperClient creates a HAKeeper client to be used by a Log Service node.
+//
+// NB: caller could specify options for morpc.Client via ctx.
 func NewLogHAKeeperClient(ctx context.Context,
 	cfg HAKeeperClientConfig) (LogHAKeeperClient, error) {
 	if err := cfg.Validate(); err != nil {
@@ -103,12 +108,23 @@ func newManagedHAKeeperClient(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	return &managedHAKeeperClient{client: c, cfg: cfg}, nil
+
+	return &managedHAKeeperClient{
+		client:         c,
+		cfg:            cfg,
+		backendOptions: GetBackendOptions(ctx),
+		clientOptions:  GetClientOptions(ctx),
+	}, nil
 }
 
 type managedHAKeeperClient struct {
 	cfg    HAKeeperClientConfig
 	client *hakeeperClient
+
+	// Method `prepareClient` may update moprc.Client.
+	// So we need to keep options for morpc.Client.
+	backendOptions []morpc.BackendOption
+	clientOptions  []morpc.ClientOption
 }
 
 func (c *managedHAKeeperClient) Close() error {
@@ -203,6 +219,11 @@ func (c *managedHAKeeperClient) prepareClient(ctx context.Context) error {
 	if c.client != nil {
 		return nil
 	}
+
+	// we must use the recoreded options for morpc.Client
+	ctx = SetBackendOptions(ctx, c.backendOptions...)
+	ctx = SetClientOptions(ctx, c.clientOptions...)
+
 	cc, err := newHAKeeperClient(ctx, c.cfg)
 	if err != nil {
 		return err
@@ -386,15 +407,9 @@ func (c *hakeeperClient) checkIsHAKeeper(ctx context.Context) (bool, error) {
 }
 
 func (c *hakeeperClient) request(ctx context.Context, req pb.Request) (pb.Response, error) {
-	timeout, err := getTimeoutFromContext(ctx)
-	if err != nil {
-		return pb.Response{}, err
-	}
-	req.Timeout = int64(timeout)
 	r := c.pool.Get().(*RPCRequest)
 	r.Request = req
-	future, err := c.client.Send(ctx,
-		c.addr, r, morpc.SendOptions{Timeout: time.Duration(timeout)})
+	future, err := c.client.Send(ctx, c.addr, r)
 	if err != nil {
 		return pb.Response{}, err
 	}

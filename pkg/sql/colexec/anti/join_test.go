@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -190,6 +191,44 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []int32, cs []
 		Ctx: ctx,
 		Ch:  make(chan *batch.Batch, 3),
 	}
+	fid := function.EncodeOverloadID(function.EQUAL, 4)
+	args := make([]*plan.Expr, 0, 2)
+	args = append(args, &plan.Expr{
+		Typ: &plan.Type{
+			Size: ts[0].Size,
+			Id:   int32(ts[0].Oid),
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: 0,
+			},
+		},
+	})
+	args = append(args, &plan.Expr{
+		Typ: &plan.Type{
+			Size: ts[0].Size,
+			Id:   int32(ts[0].Oid),
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 1,
+				ColPos: 0,
+			},
+		},
+	})
+	cond := &plan.Expr{
+		Typ: &plan.Type{
+			Size: 1,
+			Id:   int32(types.T_bool),
+		},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Args: args,
+				Func: &plan.ObjectRef{Obj: fid},
+			},
+		},
+	}
 	return antiTestCase{
 		types:  ts,
 		flgs:   flgs,
@@ -199,6 +238,7 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []int32, cs []
 			Typs:       ts,
 			Result:     rp,
 			Conditions: cs,
+			Cond:       cond,
 		},
 		barg: &hashbuild.Argument{
 			Typs:        ts,

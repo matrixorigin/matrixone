@@ -17,6 +17,7 @@ package txnengine
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -42,7 +43,7 @@ func (d *Database) Create(ctx context.Context, relName string, defs []engine.Tab
 		CreateRelationReq{
 			DatabaseID: d.id,
 			Type:       RelationTable,
-			Name:       relName,
+			Name:       strings.ToLower(relName),
 			Defs:       defs,
 		},
 	)
@@ -63,7 +64,7 @@ func (d *Database) Delete(ctx context.Context, relName string) error {
 		OpDeleteRelation,
 		DeleteRelationReq{
 			DatabaseID: d.id,
-			Name:       relName,
+			Name:       strings.ToLower(relName),
 		},
 	)
 	if err != nil {
@@ -83,7 +84,7 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 		OpOpenRelation,
 		OpenRelationReq{
 			DatabaseID: d.id,
-			Name:       relName,
+			Name:       strings.ToLower(relName),
 		},
 	)
 	if err != nil {
@@ -91,9 +92,6 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 	}
 
 	resp := resps[0]
-	if resp.ErrNotFound {
-		return nil, fmt.Errorf("relation not found: %s", relName)
-	}
 
 	switch resp.Type {
 

@@ -54,5 +54,6 @@ type Argument struct {
 	Nbucket    uint64
 	Result     []int32
 	Typs       []types.Type
+	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
 }

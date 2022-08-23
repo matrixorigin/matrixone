@@ -41,7 +41,7 @@ func TestApproxcdCount(t *testing.T) {
 	vec2 := testutil.NewVector(Rows, testTyp, m, false, vs2)
 	{
 		a := NewApproxc[int8]()
-		agg := agg.NewUnaryAgg(a, true, testTyp, retTyp, a.Grows, a.Eval, a.Merge, a.Fill)
+		agg := agg.NewUnaryAgg(a, true, testTyp, retTyp, a.Grows, a.Eval, a.Merge, a.Fill, nil)
 		err := agg.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -55,13 +55,13 @@ func TestApproxcdCount(t *testing.T) {
 	{
 		a1 := NewApproxc[int8]()
 		a2 := NewApproxc[int8]()
-		agg0 := agg.NewUnaryAgg(a1, true, testTyp, retTyp, a1.Grows, a1.Eval, a1.Merge, a1.Fill)
+		agg0 := agg.NewUnaryAgg(a1, true, testTyp, retTyp, a1.Grows, a1.Eval, a1.Merge, a1.Fill, nil)
 		err := agg0.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
 			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
 		}
-		agg1 := agg.NewUnaryAgg(a2, true, testTyp, retTyp, a2.Grows, a2.Eval, a2.Merge, a2.Fill)
+		agg1 := agg.NewUnaryAgg(a2, true, testTyp, retTyp, a2.Grows, a2.Eval, a2.Merge, a2.Fill, nil)
 		err = agg1.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {

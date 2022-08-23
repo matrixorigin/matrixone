@@ -1,0 +1,21 @@
+# https://docs.docker.com/engine/reference/builder/#dockerignore-file
+
+# macOS
+.DS_Store
+
+# Visual Studio Code
+.vscode/
+.devcontainer/
+
+# JetBrains
+.idea/
+
+# generate files
+mo-service
+mo-server
+gen_config
+store/
+
+# cgo compiler files linked system lib, so ignore it
+**/*.o
+**/*.a

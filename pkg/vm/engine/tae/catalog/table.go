@@ -17,11 +17,11 @@ package catalog
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -42,6 +42,12 @@ type TableEntry struct {
 
 func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) *TableEntry {
 	id := db.catalog.NextTable()
+	if txnCtx != nil {
+		// Only in unit test, txnCtx can be nil
+		schema.AcInfo.TenantID = txnCtx.GetTenantID()
+		schema.AcInfo.UserID, schema.AcInfo.RoleID = txnCtx.GetUserAndRoleID()
+	}
+	schema.AcInfo.CreateAt = types.CurrentTimestamp()
 	e := &TableEntry{
 		BaseEntry: &BaseEntry{
 			CommitInfo: CommitInfo{

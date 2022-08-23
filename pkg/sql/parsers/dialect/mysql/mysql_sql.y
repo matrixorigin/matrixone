@@ -3886,6 +3886,7 @@ create_table_stmt:
 |   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' load_param_opt_2
     {
         $$ = &tree.CreateTable {
+            IfNotExists: $4,
             Table: *$5,
             Defs: $7,
             Param: $9,
@@ -6050,7 +6051,7 @@ literal:
 	}
 |   VALUE_ARG
     {
-        $$ = tree.NewParamExpr(yyp)
+        $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
     }
 
 column_type:

@@ -12,7 +12,6 @@ y.go
 .vscode
 *.iml
 tags
-system_vars_config.toml
 coverage.txt
 out.txt
 vendor/

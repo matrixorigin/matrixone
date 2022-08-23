@@ -2,7 +2,7 @@
 
 MatrixOne supports bundling multiple SQL statements into a single all-or-nothing transaction. Each transaction guarantees ACID semantics spanning arbitrary tables and rows. If a transaction succeeds, all mutations are applied together with virtual simultaneity. If any part of a transaction fails, the entire transaction is aborted, and the database is left unchanged. MatrixOne guarantees that while a transaction is pending, it is isolated from other concurrent transactions with snapshot isolation.
 
-In 0.5.0 version, MatrixOne supports standalone database transaction. MatrixOne supports optimistic transaction mode.
+In 0.5.1 version, MatrixOne supports standalone database transaction. MatrixOne supports optimistic transaction mode.
 
 This document introduces commonly used transaction-related statements, explicit and implicit transactions, isolation levels, lazy check for constraints, and transaction sizes.
 
@@ -13,7 +13,7 @@ The following SQL statements control transactions：
 - `START TRANSACTION` or `BEGIN` start a new transaction.
 - `COMMIT` commits the current transaction, making its changes permanent.
 - `ROLLBACK` rolls back the current transaction, canceling its changes.
-- `SET autocommit` disables or enables the default autocommit mode for the current session. (It's not fully implemented in 0.5.0 version, MatrixOne only supports autocommit mode enabled, it cannot be switched off yet). 
+- `SET autocommit` disables or enables the default autocommit mode for the current session. (It's not fully implemented in 0.5.1 version, MatrixOne only supports autocommit mode enabled, it cannot be switched off yet).
 
 #### Starting a transaction
 
@@ -89,7 +89,7 @@ mysql> select * from test;
 In the above example, the `ROLLBACK` statement has no effect. This is because the `INSERT` statement is executed in autocommit. `ROLLBACK` only works with a `BEGIN` or `START TRANSACTION`. That is, it was the equivalent of the following single-statement transaction:
 
 ```
-START TRANSACTION; 
+START TRANSACTION;
 Insert into test values(1,1);
 COMMIT;
 ```
@@ -121,7 +121,7 @@ mysql> SELECT * from test;
 Empty set (0.01 sec)
 ```
 
-The `autocommit` system variable cannot be changed on either a global nor session basis for now. 
+The `autocommit` system variable cannot be changed on either a global nor session basis for now.
 
 #### Explicit and implicit transaction
 
@@ -169,7 +169,7 @@ mysql> select * from t1;
 
 In the above example, the transaction remains open after the failed `INSERT` statements. The final insert statement is then successful and changes are committed.
 
-#### Snapshot Isolation Level 
+#### Snapshot Isolation Level
 
 Transaction isolation is one of the foundations of database transaction processing. Isolation is one of the four key properties of a transaction (commonly referred as ACID).
 
@@ -194,7 +194,7 @@ If we look at the isolation levels with the possible anomalies allowed proposed 
 
 #### Optimistic Transaction Model
 
-MatrixOne supports an optimistic transaction model. Users who use optimistic concurrency do not lock a row when reading it. When a user wants to update a row, the application must determine whether another user has changed the row since it was read. Optimistic concurrency is generally used in environments with a low contention for data. 
+MatrixOne supports an optimistic transaction model. Users who use optimistic concurrency do not lock a row when reading it. When a user wants to update a row, the application must determine whether another user has changed the row since it was read. Optimistic concurrency is generally used in environments with a low contention for data.
 
 In an optimistic concurrency model, a violation is considered to have occurred if, after a user receives a value from the database, another user modifies the value before the first user has attempted to modify it. How the server resolves a concurrency violation is best shown by first describing the following example.
 

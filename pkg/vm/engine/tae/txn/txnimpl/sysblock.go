@@ -46,12 +46,12 @@ func bool2i8(v bool) int8 {
 	if v {
 		return int8(1)
 	} else {
-		return int8(1)
+		return int8(0)
 	}
 }
 
 func (blk *txnSysBlock) isSysTable() bool {
-	return sysTableNames[blk.table.entry.GetSchema().Name]
+	return isSysTable(blk.table.entry.GetSchema().Name)
 }
 
 func (blk *txnSysBlock) GetTotalChanges() int {
@@ -97,45 +97,35 @@ func (blk *txnSysBlock) tableRows() int {
 }
 
 func (blk *txnSysBlock) processDB(fn func(*catalog.DBEntry) error, ignoreErr bool) (err error) {
-	canRead := false
-	dbIt := blk.catalog.MakeDBIt(true)
-	for dbIt.Valid() {
-		db := dbIt.Get().GetPayload().(*catalog.DBEntry)
-		db.RLock()
-		canRead, err = db.TxnCanRead(blk.Txn, db.RWMutex)
-		db.RUnlock()
-		if err != nil && !ignoreErr {
+	it := newDBIt(blk.Txn, blk.catalog)
+	for it.linkIt.Valid() {
+		if err = it.GetError(); err != nil && !ignoreErr {
 			break
 		}
-		if canRead {
-			err = fn(db)
-			if err != nil && !ignoreErr {
-				break
-			}
+		db := it.GetCurr()
+		if err = fn(db); err != nil && !ignoreErr {
+			break
 		}
-		dbIt.Next()
+		it.Next()
 	}
 	return
 }
 
 func (blk *txnSysBlock) processTable(entry *catalog.DBEntry, fn func(*catalog.TableEntry) error, ignoreErr bool) (err error) {
-	canRead := false
-	tableIt := entry.MakeTableIt(true)
-	for tableIt.Valid() {
-		table := tableIt.Get().GetPayload().(*catalog.TableEntry)
-		table.RLock()
-		canRead, err = table.TxnCanRead(blk.Txn, table.RWMutex)
-		table.RUnlock()
-		if err != nil && !ignoreErr {
+	txnDB, err := blk.table.store.getOrSetDB(entry.GetID())
+	if err != nil {
+		return
+	}
+	it := newRelationIt(txnDB)
+	for it.linkIt.Valid() {
+		if err = it.GetError(); err != nil && !ignoreErr {
 			break
 		}
-		if canRead {
-			err = fn(table)
-			if err != nil && ignoreErr {
-				break
-			}
+		table := it.GetCurr()
+		if err = fn(table); err != nil && !ignoreErr {
+			break
 		}
-		tableIt.Next()
+		it.Next()
 	}
 	return
 }
@@ -175,9 +165,9 @@ func (blk *txnSysBlock) isPrimaryKey(schema *catalog.Schema, colIdx int) bool {
 	case catalog.SystemTable_Columns_Name:
 		return attrName == catalog.SystemColAttr_Name || attrName == catalog.SystemColAttr_DBName || attrName == catalog.SystemColAttr_RelName
 	case catalog.SystemTable_Table_Name:
-		return attrName == catalog.SystemRelAttr_DBName || attrName == catalog.SystemRelAttr_Name
+		return attrName == catalog.SystemRelAttr_ID
 	case catalog.SystemTable_DB_Name:
-		return attrName == catalog.SystemDBAttr_Name
+		return attrName == catalog.SystemDBAttr_ID
 	}
 	return schema.IsPartOfPK(colIdx)
 }
@@ -187,16 +177,23 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 	col := catalog.SystemColumnSchema.ColDefs[colIdx]
 	colData := containers.MakeVector(col.Type, col.Nullable())
 	tableFn := func(table *catalog.TableEntry) error {
+		schema := table.GetSchema()
 		for i, colDef := range table.GetSchema().ColDefs {
 			switch col.Name {
+			case catalog.SystemColAttr_AccID:
+				colData.Append(schema.AcInfo.TenantID)
 			case catalog.SystemColAttr_Name:
 				colData.Append([]byte(colDef.Name))
 			case catalog.SystemColAttr_Num:
 				colData.Append(int32(i + 1))
 			case catalog.SystemColAttr_Type:
 				colData.Append(int32(colDef.Type.Oid))
+			case catalog.SystemColAttr_DBID:
+				colData.Append(table.GetDB().GetID())
 			case catalog.SystemColAttr_DBName:
 				colData.Append([]byte(table.GetDB().GetName()))
+			case catalog.SystemColAttr_RelID:
+				colData.Append(table.GetID())
 			case catalog.SystemColAttr_RelName:
 				colData.Append([]byte(table.GetSchema().Name))
 			case catalog.SystemColAttr_ConstraintType:
@@ -250,11 +247,16 @@ func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err
 	colDef := catalog.SystemTableSchema.ColDefs[colIdx]
 	colData := containers.MakeVector(colDef.Type, colDef.Nullable())
 	tableFn := func(table *catalog.TableEntry) error {
+		schema := table.GetSchema()
 		switch colDef.Name {
+		case catalog.SystemRelAttr_ID:
+			colData.Append(table.GetID())
 		case catalog.SystemRelAttr_Name:
-			colData.Append([]byte(table.GetSchema().Name))
+			colData.Append([]byte(schema.Name))
 		case catalog.SystemRelAttr_DBName:
 			colData.Append([]byte(table.GetDB().GetName()))
+		case catalog.SystemRelAttr_DBID:
+			colData.Append(table.GetDB().GetID())
 		case catalog.SystemRelAttr_Comment:
 			colData.Append([]byte(table.GetSchema().Comment))
 		case catalog.SystemRelAttr_Persistence:
@@ -263,6 +265,14 @@ func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err
 			colData.Append([]byte(table.GetSchema().Relkind))
 		case catalog.SystemRelAttr_CreateSQL:
 			colData.Append([]byte(table.GetSchema().Createsql))
+		case catalog.SystemRelAttr_Owner:
+			colData.Append(schema.AcInfo.RoleID)
+		case catalog.SystemRelAttr_Creator:
+			colData.Append(schema.AcInfo.UserID)
+		case catalog.SystemRelAttr_CreateAt:
+			colData.Append(schema.AcInfo.CreateAt)
+		case catalog.SystemRelAttr_AccID:
+			colData.Append(schema.AcInfo.TenantID)
 		default:
 			panic("unexpected")
 		}
@@ -284,12 +294,22 @@ func (blk *txnSysBlock) getDBTableData(colIdx int) (view *model.ColumnView, err 
 	colData := containers.MakeVector(colDef.Type, colDef.Nullable())
 	fn := func(db *catalog.DBEntry) error {
 		switch colDef.Name {
+		case catalog.SystemDBAttr_ID:
+			colData.Append(db.GetID())
 		case catalog.SystemDBAttr_Name:
 			colData.Append([]byte(db.GetName()))
 		case catalog.SystemDBAttr_CatalogName:
 			colData.Append([]byte(catalog.SystemCatalogName))
 		case catalog.SystemDBAttr_CreateSQL:
 			colData.Append([]byte("todosql"))
+		case catalog.SystemDBAttr_Owner:
+			colData.Append(db.GetRoleID())
+		case catalog.SystemDBAttr_Creator:
+			colData.Append(db.GetUserID())
+		case catalog.SystemDBAttr_CreateAt:
+			colData.Append(db.GetCreateAt())
+		case catalog.SystemDBAttr_AccID:
+			colData.Append(db.GetTenantID())
 		default:
 			panic("unexpected")
 		}

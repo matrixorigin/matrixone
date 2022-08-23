@@ -1,4 +1,4 @@
-# **连接MatrixOne服务**
+# **连接 MatrixOne 服务**
 
 ## **准备工作**
 
@@ -6,15 +6,15 @@
 
 [安装单机版MatrixOne](install-standalone-matrixone.md)
 
-## **1. 安装MySQL客户端**
+## **1. 安装 MySQL 客户端**
 
-MatrixOne支持MySQL连接协议，因此您可以使用各种语言通过MySQL客户机程序进行连接。
+MatrixOne 支持 MySQL 连接协议，因此您可以使用各种语言通过MySQL客户机程序进行连接。关于 MySQL 客户端连接 MatrixOne，参见[通过客户端连接 MatrixOne 服务](client-connect-to-matrixone-server.md)。
 
-目前，MatrixOne只兼容Oracle MySQL客户端，因此一些特性可能无法在MariaDB、Percona客户端下正常工作。
+目前，MatrixOne只兼容 Oracle MySQL 客户端，因此一些特性可能无法在 MariaDB、Percona 客户端下正常工作。
 
-## **2. 连接MatrixOne服务**
+## **2. 连接 MatrixOne 服务**
 
-你可以使用MySQL命令行客户端来连接MatrixOne服务。
+你可以使用 MySQL 命令行客户端来连接 MatrixOne 服务。
 
 ```
 mysql -h IP -P PORT -uUsername -p
@@ -32,4 +32,4 @@ mysql -h 127.0.0.1 -P 6001 -udump -p
 Enter password:
 ```
 
-目前，MatrixOne只支持TCP监听。
+目前，MatrixOne 只支持TCP监听。

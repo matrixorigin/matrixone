@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -46,7 +47,11 @@ func TestBackgroundTickAndHeartbeat(t *testing.T) {
 	cfg.HAKeeperTickInterval.Duration = 5 * time.Millisecond
 	cfg.HAKeeperClientConfig.ServiceAddresses = []string{"127.0.0.1:9002"}
 	cfg.Fill()
-	service, err := NewService(cfg)
+	service, err := NewService(cfg,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, service.Close())

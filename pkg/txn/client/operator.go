@@ -169,6 +169,10 @@ func (tc *txnOperator) adjust() {
 	}
 }
 
+func (tc *txnOperator) Txn() txn.TxnMeta {
+	return tc.getTxnMeta(false)
+}
+
 func (tc *txnOperator) Snapshot() ([]byte, error) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
