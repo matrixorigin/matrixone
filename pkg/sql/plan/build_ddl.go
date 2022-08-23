@@ -237,42 +237,20 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 }
 
 //  buildPartitionByClause build partition by clause info and semantic check.
-func buildPartitionByClause(partitionBinder *PartitionBinder, partitionOption *tree.PartitionOption, tableDef *TableDef) error {
+func buildPartitionByClause(partitionBinder *PartitionBinder, partitionOption *tree.PartitionOption, tableDef *TableDef) (err error) {
 	switch partitionOption.PartBy.PType.(type) {
 	case *tree.HashType:
-		err := buildHashPartition(partitionBinder, partitionOption, tableDef)
-		if err != nil {
-			return err
-		}
+		err = buildHashPartition(partitionBinder, partitionOption, tableDef)
 	case *tree.KeyType:
-		err := buildKeyPartition(partitionBinder, partitionOption, tableDef)
-		if err != nil {
-			return err
-		}
+		err = buildKeyPartition(partitionBinder, partitionOption, tableDef)
 	case *tree.RangeType:
-		err := buildRangePartition(partitionBinder, partitionOption, tableDef)
-		if err != nil {
-			return err
-		}
+		err = buildRangePartition(partitionBinder, partitionOption, tableDef)
 	case *tree.ListType:
-		err := buildListPartitiion(partitionBinder, partitionOption, tableDef)
-		if err != nil {
-			return err
-		}
+		err = buildListPartitiion(partitionBinder, partitionOption, tableDef)
 	}
-
-	partitionNum := partitionOption.PartBy.Num
-	if partitionOption.Partitions != nil {
-		for i, partition := range partitionOption.Partitions {
-			fmt.Println(i, partition)
-		}
+	if err != nil {
+		return err
 	}
-	fmt.Println(partitionNum)
-
-	if partitionOption.SubPartBy != nil {
-
-	}
-
 	return nil
 }
 

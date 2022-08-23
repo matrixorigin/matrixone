@@ -1663,6 +1663,25 @@ type ValuesIn struct {
 	ValueList []Exprs
 }
 
+func (node *ValuesIn) Format(ctx *FmtCtx) {
+	ctx.WriteString("values in (")
+	isFirst := true
+	for _, exprs := range node.ValueList {
+		if !isFirst {
+			ctx.WriteString(",")
+		}
+		isFirst = false
+		if len(exprs) > 1 {
+			ctx.WriteByte('(')
+			exprs.Format(ctx)
+			ctx.WriteByte(')')
+		} else {
+			exprs.Format(ctx)
+		}
+	}
+	ctx.WriteByte(')')
+}
+
 func NewValuesIn(vl []Exprs) *ValuesIn {
 	return &ValuesIn{
 		ValueList: vl,

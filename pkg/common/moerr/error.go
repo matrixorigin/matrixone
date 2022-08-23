@@ -70,6 +70,18 @@ const (
 	ErrPartitionSubpartition
 	ErrWrongExprInPartitionFunc
 	ErrFieldTypeNotAllowedAsPartitionField
+	ErrSameNamePartition
+	ErrSameNamePartitionField
+	ErrTooManyPartitions
+	ErrPartitionMaxvalue
+	ErrPartitionConstDomain
+	ErrValuesIsNotIntType
+	ErrRangeNotIncreasing
+	ErrPartitionsMustBeDefined
+	ErrPartitionColumnList
+	ErrWrongTypeColumnValue
+	ErrUniqueKeyNeedAllFieldsInPf
+	ErrMultipleDefConstInListPart
 
 	// Group 10: txn
 	// ErrTxnAborted read and write a transaction that has been rolled back.
@@ -134,6 +146,18 @@ var errorMsgRefer = map[int32]moErrorMsgItem{
 	ErrPartitionSubpartition:               {26003, 1482, "It is only possible to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning"},
 	ErrWrongExprInPartitionFunc:            {26004, 1486, "Constant, random or timezone-dependent expressions in (sub)partitioning function are not allowed"},
 	ErrFieldTypeNotAllowedAsPartitionField: {26005, 1659, "Field '%-.192s' is of a not allowed type for this type of partitioning"},
+	ErrSameNamePartition:                   {26006, 1517, "Duplicate partition field name '%-.192s'"},
+	ErrSameNamePartitionField:              {26007, 1652, "Duplicate partition field name '%-.192s'"},
+	ErrTooManyPartitions:                   {26008, 1499, "Too many partitions (including subpartitions) were defined"},
+	ErrPartitionMaxvalue:                   {26009, 1481, "MAXVALUE can only be used in last partition definition"},
+	ErrPartitionConstDomain:                {26010, 1563, "Partition constant is out of partition function domain"},
+	ErrValuesIsNotIntType:                  {26011, 1697, "VALUES value for partition '%-.64s' must have type INT"},
+	ErrRangeNotIncreasing:                  {26012, 1493, "VALUES LESS THAN value must be strictly increasing for each partition"},
+	ErrPartitionsMustBeDefined:             {26013, 1492, "For %-.64s partitions each partition must be defined"},
+	ErrPartitionColumnList:                 {26014, 1653, "Inconsistency in usage of column lists for partitioning"},
+	ErrWrongTypeColumnValue:                {26015, 1654, "Partition column values of incorrect type"},
+	ErrUniqueKeyNeedAllFieldsInPf:          {26016, 1503, "A %-.192s must include all columns in the table's partitioning function"},
+	ErrMultipleDefConstInListPart:          {26017, 1495, "Multiple definition of same constant in list partitioning"},
 
 	// Group 10: txn
 	ErrTxnClosed:          {30000, 0, "the transaction has been committed or aborted"},

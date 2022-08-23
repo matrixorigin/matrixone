@@ -801,14 +801,6 @@ func NewDefaultVal(e Expr) *DefaultVal {
 	}
 }
 
-type MaxValue struct {
-	exprImpl
-}
-
-func NewMaxValue() *MaxValue {
-	return &MaxValue{}
-}
-
 type TypeExpr interface {
 	Expr
 }
@@ -866,14 +858,14 @@ func NewParamExpr(offset int) *ParamExpr {
 	}
 }
 
-type MaxValueExpr struct {
+type MaxValue struct {
 	exprImpl
 }
 
-func (node *MaxValueExpr) Format(ctx *FmtCtx) {
+func (node *MaxValue) Format(ctx *FmtCtx) {
 	ctx.WriteString("MAXVALUE")
 }
 
-func NewMaxValueExpr() *MaxValueExpr {
-	return &MaxValueExpr{}
+func NewMaxValue() *MaxValue {
+	return &MaxValue{}
 }
