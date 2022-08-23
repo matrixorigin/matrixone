@@ -58,6 +58,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 // the following are adjustable
