@@ -54,6 +54,25 @@ Reference: <https://dev.mysql.com/doc/refman/8.0/en/data-types.html>
 
 ## **JSON Types(Beta)**
 
+| Data Type | Example                                     | Note                                        |
+|-----------|---------------------------------------------|---------------------------------------------|
+| Object    | {"k1":"v1"}                                 | key length cannot be larger than MaxUint16  |
+| Array     | ["k1",null, false,true,123,1.2,{"k2":"v2"}] |                                             |
+| String    | "123"                                       |                                             |
+
+| Data Type | Size   | Min Value            | Max Value            |
+|-----------|--------|----------------------|----------------------|
+| Boolean   | 1 byte | false                | true                 |
+| Null      | 1 byte | null                 | null                 |
+| Int64     | 8 byte | -9223372036854775808 | 9223372036854775807  |
+| Uint64    | 8 byte | 0                    | 18446744073709551615 |
+
+
+| Data Type | Size   | Precision |
+|-----------|--------|-----------|
+| Float64   | 8 byte | 52 digits |
+
+
 
 ## **Examples**
 
@@ -132,4 +151,14 @@ Reference: <https://dev.mysql.com/doc/refman/8.0/en/data-types.html>
 | 2022-01-02 00:00:01 |
 | 2022-01-02 00:00:02 |
 +---------------------+
+
+//Create a table named "jsonTest" with 1 attribute of a "json"
+> create table jsonTest (a json);
+> insert into jsonTest values ('{"k1":"v1"}'), ('["k1",null, false,true,123,1.2,{"k2":"v2"}]');
+> select * from jsonTest;
++----------------+
+| a              |
++----------------+
+| {"k1": "v1"}    |
+| ["k1", null, false, true, 123, 1.2, {"k2": "v2"}] |
 ```
