@@ -17,7 +17,6 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -98,7 +97,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	stmtStr := strings.ReplaceAll(viewData.Stmt, "\"", "\\\"")
 	sqlStr = fmt.Sprintf(sqlStr, tblName, fmt.Sprint(stmtStr))
 
-	log.Println(sqlStr)
+	// log.Println(sqlStr)
 
 	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATETABLE)
 }
