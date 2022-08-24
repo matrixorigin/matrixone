@@ -626,6 +626,7 @@ func checkReadResponses(t *testing.T, response []txn.TxnResponse, expectValues .
 	for idx, resp := range response {
 		values := mem.MustParseGetPayload(resp.CNOpResponse.Payload)
 		assert.Equal(t, expectValues[idx], string(values[0]))
+		assert.NotNil(t, resp.Txn)
 	}
 }
 
