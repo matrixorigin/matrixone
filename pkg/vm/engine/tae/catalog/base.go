@@ -379,36 +379,11 @@ func (be *BaseEntry) IsEmpty() bool {
 	head := be.MVCC.GetHead()
 	return head == nil
 }
-
-func (be *BaseEntry) Prepare2PCPrepare() error {
-	be.Lock()
-	defer be.Unlock()
-	if be.CreateAt.IsEmpty() {
-		be.CreateAt = be.Txn.GetPrepareTS()
-	}
-	if be.CurrOp == OpSoftDelete {
-		be.DeleteAt = be.Txn.GetPrepareTS()
-	}
-	return nil
-}
-
-func (be *BaseEntry) PrepareRollback() error {
-	be.Lock()
-	if be.PrevCommit != nil {
-		be.CurrOp = be.PrevCommit.CurrOp
-		be.LogIndex = be.PrevCommit.LogIndex
-	}
-	be.Txn = nil
-	be.Unlock()
-	return nil
-}
-
 func (be *BaseEntry) ApplyRollback(index *wal.Index) error {
 	be.Lock()
 	defer be.Unlock()
-	be.LogIndex = index
-func (be *BaseEntry) ApplyRollback() error {
-	return nil
+	return be.GetUpdateNodeLocked().ApplyRollback(index)
+
 }
 
 func (be *BaseEntry) ApplyCommit(index *wal.Index) error {
@@ -510,6 +485,12 @@ func (be *BaseEntry) IsCommitting() bool {
 
 func (be *BaseEntry) GetDeleted() bool {
 	return be.GetUpdateNodeLocked().Deleted
+}
+
+func (be *BaseEntry) Prepare2PCPrepare() error {
+	be.Lock()
+	defer be.Unlock()
+	return be.GetUpdateNodeLocked().Prepare2PCPrepare()
 }
 
 func (be *BaseEntry) PrepareCommit() error {
