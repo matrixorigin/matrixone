@@ -46,10 +46,18 @@ func (m *MVCC[T]) Read(tx *Transaction, readTime Timestamp) (*T, error) {
 	for i := len(m.Values) - 1; i >= 0; i-- {
 		value := m.Values[i]
 		if value.Visible(tx.ID, readTime) {
-			if value.BornTx != tx && value.BornTime.Greater(tx.BeginTime) {
-				return nil, &ErrStaleRead{
-					ReadingTx: tx,
-					NewerTx:   value.BornTx,
+			switch tx.IsolationPolicy.Read {
+			case ReadCommitted:
+			case ReadSnapshot:
+				if value.BornTx != tx && value.BornTime.Greater(tx.BeginTime) {
+					continue
+				}
+			case ReadNoStale:
+				if value.BornTx != tx && value.BornTime.Greater(tx.BeginTime) {
+					return nil, &ErrReadConflict{
+						ReadingTx: tx,
+						Stale:     value.BornTx,
+					}
 				}
 			}
 			return m.Values[i].Value, nil
@@ -142,14 +150,14 @@ func (m *MVCC[T]) Delete(tx *Transaction, writeTime Timestamp) error {
 		if value.Visible(tx.ID, writeTime) {
 			if value.LockTx != nil {
 				return &ErrWriteConflict{
-					WritingTx:     tx,
-					ConflictingTx: value.LockTx,
+					WritingTx: tx,
+					Locked:    value.LockTx,
 				}
 			}
 			if value.BornTx != tx && value.BornTime.Greater(tx.BeginTime) {
-				return &ErrStaleWrite{
+				return &ErrWriteConflict{
 					WritingTx: tx,
-					NewerTx:   value.BornTx,
+					Stale:     value.BornTx,
 				}
 			}
 			value.LockTx = tx
@@ -174,14 +182,14 @@ func (m *MVCC[T]) Update(tx *Transaction, writeTime Timestamp, newValue T) error
 		if value.Visible(tx.ID, writeTime) {
 			if value.LockTx != nil {
 				return &ErrWriteConflict{
-					WritingTx:     tx,
-					ConflictingTx: value.LockTx,
+					WritingTx: tx,
+					Locked:    value.LockTx,
 				}
 			}
 			if value.BornTx != tx && value.BornTime.Greater(tx.BeginTime) {
-				return &ErrStaleWrite{
+				return &ErrWriteConflict{
 					WritingTx: tx,
-					NewerTx:   value.BornTx,
+					Stale:     value.BornTx,
 				}
 			}
 			value.LockTx = tx
