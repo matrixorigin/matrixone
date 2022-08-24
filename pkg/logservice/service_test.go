@@ -47,6 +47,7 @@ func getServiceTestConfig() Config {
 		ServiceListenAddress: testServiceAddress,
 		ServiceAddress:       testServiceAddress,
 		DisableWorkers:       true,
+		UseTeeLogDB:          true,
 	}
 	c.Fill()
 	return c
