@@ -95,17 +95,15 @@ func TestKeyPartition(t *testing.T) {
 		"CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY ALGORITHM = 1 (col3);",
 		"CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR KEY ALGORITHM = 1 (col3) PARTITIONS 5;",
 		"CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col1, col2) PARTITIONS 4;",
-		`CREATE TABLE employees (
-				id INT NOT NULL,
-				fname VARCHAR(30),
-				lname VARCHAR(30),
-				hired DATE NOT NULL DEFAULT '1970-01-01',
-				separated DATE NOT NULL DEFAULT '9999-12-31',
-				job_code INT,
-				store_id INT
-			)
-			PARTITION BY LINEAR HASH( YEAR(hired) )
-			PARTITIONS 4;`,
+		`CREATE TABLE t1 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			PRIMARY KEY (col1, col2)
+		)
+		PARTITION BY KEY(col1)
+		PARTITIONS 4;`,
 	}
 
 	mock := NewMockOptimizer()
@@ -124,6 +122,15 @@ func TestKeyPartitionError(t *testing.T) {
 		"CREATE TABLE ts (id INT, purchased DATE) PARTITION BY KEY( id ) PARTITIONS 4 SUBPARTITION BY HASH( TO_DAYS(purchased) ) SUBPARTITIONS 2;",
 		"CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col4) PARTITIONS 4;",
 		"CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY ALGORITHM = 3 (col3);",
+		`CREATE TABLE t1 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			PRIMARY KEY (col1, col2)
+		)
+		PARTITION BY KEY(col3)
+		PARTITIONS 4;`,
 	}
 	mock := NewMockOptimizer()
 	for _, sql := range sqls {
@@ -185,6 +192,17 @@ func TestHashPartition(t *testing.T) {
 		)
 		PARTITION BY HASH(col1+10)
 		PARTITIONS 4;`,
+		`CREATE TABLE employees (
+				id INT NOT NULL,
+				fname VARCHAR(30),
+				lname VARCHAR(30),
+				hired DATE NOT NULL DEFAULT '1970-01-01',
+				separated DATE NOT NULL DEFAULT '9999-12-31',
+				job_code INT,
+				store_id INT
+			)
+			PARTITION BY LINEAR HASH( YEAR(hired) )
+			PARTITIONS 4;`,
 	}
 
 	mock := NewMockOptimizer()
@@ -714,6 +732,17 @@ func TestListPartition(t *testing.T) {
 			PARTITION pWest VALUES IN (4,12,13,14,18),
 			PARTITION pCentral VALUES IN (7,8,15,16)
 		);`,
+
+		`CREATE TABLE t1 (
+			id   INT PRIMARY KEY,
+			name VARCHAR(35)
+		)
+		PARTITION BY LIST (id) (
+			PARTITION r0 VALUES IN (1, 5, 9, 13, 17, 21),
+			PARTITION r1 VALUES IN (2, 6, 10, 14, 18, 22),
+			PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),
+			PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
+		);`,
 	}
 
 	mock := NewMockOptimizer()
@@ -744,6 +773,18 @@ func TestListPartitionError(t *testing.T) {
 			PARTITION r1 VALUES IN (2, 6, 10, 14, 18, 22),
 			PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),
 			PARTITION r2 VALUES IN (4, 8, 12, 16, 20, 24)
+		);`,
+
+		`CREATE TABLE t1 (
+			id   INT PRIMARY KEY,
+			name VARCHAR(35),
+			age INT unsigned
+		)
+		PARTITION BY LIST (age) (
+			PARTITION r0 VALUES IN (1, 5, 9, 13, 17, 21),
+			PARTITION r1 VALUES IN (2, 6, 10, 14, 18, 22),
+			PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),
+			PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
 		);`,
 	}
 
@@ -870,58 +911,6 @@ func TestListColumnsPartitionError(t *testing.T) {
 		}
 	}
 }
-
-//func TestSubPartition(t *testing.T) {
-//	sql := `CREATE TABLE ts (id INT, purchased DATE)
-//		PARTITION BY RANGE( YEAR(purchased) )
-//		SUBPARTITION BY HASH( TO_DAYS(purchased) )
-//		SUBPARTITIONS 2 (
-//			PARTITION p0 VALUES LESS THAN (1990),
-//			PARTITION p1 VALUES LESS THAN (2000),
-//			PARTITION p2 VALUES LESS THAN MAXVALUE
-//		);`
-//
-//	//sql := `CREATE TABLE ts (id INT, purchased DATE)
-//	//PARTITION BY RANGE( YEAR(purchased) )
-//	//SUBPARTITION BY HASH( TO_DAYS(purchased) ) (
-//	//    PARTITION p0 VALUES LESS THAN (1990) (
-//	//        SUBPARTITION s0,
-//	//        SUBPARTITION s1
-//	//    ),
-//	//    PARTITION p1 VALUES LESS THAN (2000) (
-//	//        SUBPARTITION s2,
-//	//        SUBPARTITION s3
-//	//    ),
-//	//    PARTITION p2 VALUES LESS THAN MAXVALUE (
-//	//        SUBPARTITION s4,
-//	//        SUBPARTITION s5
-//	//    )
-//	//);`
-//
-//	//sql := `CREATE TABLE ts2 (id INT, purchased DATE)
-//	//		PARTITION BY RANGE( YEAR(purchased) )
-//	//		SUBPARTITION BY HASH( TO_DAYS(purchased) ) (
-//	//			PARTITION p0 VALUES LESS THAN (1990) COMMENT 'comment1990' (
-//	//				SUBPARTITION s0 COMMENT 'sub comment1990 s0',
-//	//				SUBPARTITION s1 COMMENT 'sub comment1990 s1'
-//	//			),
-//	//			PARTITION p1 VALUES LESS THAN (2000) COMMENT 'comment2000'(
-//	//				SUBPARTITION s2 COMMENT 'sub comment2000 s2',
-//	//				SUBPARTITION s3 COMMENT 'sub comment2000 s3'
-//	//			),
-//	//			PARTITION p2 VALUES LESS THAN MAXVALUE COMMENT 'commentMaxValue'(
-//	//				SUBPARTITION s4 COMMENT 'sub commentMaxValue s4',
-//	//				SUBPARTITION s5 COMMENT 'sub commentMaxValue s5'
-//	//			)
-//	//		);`
-//
-//	mock := NewMockOptimizer()
-//	logicPlan, err := buildSingleStmt(mock, t, sql)
-//	if err != nil {
-//		t.Fatalf("%+v", err)
-//	}
-//	outPutPlan(logicPlan, false, t)
-//}
 
 func buildSingleStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 	statements, err := mysql.Parse(sql)
