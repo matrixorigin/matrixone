@@ -212,7 +212,7 @@ func (mgr *TxnManager) onPreparing(items ...any) {
 		}
 		op.Txn.Unlock()
 		mgr.Unlock()
-		//for 1PC
+		//for 1PC Commit
 		if op.Op == OpCommit {
 			mgr.onPreparCommit(op.Txn)
 			if op.Txn.GetError() != nil {
@@ -231,7 +231,7 @@ func (mgr *TxnManager) onPreparing(items ...any) {
 					panic(op.Txn.GetID())
 				}
 			}
-			//for 2PC
+			//for 2PC Prepare
 		} else if op.Op == OpPrepare {
 			mgr.onPrepar2PCPrepare(op.Txn)
 			if op.Txn.GetError() != nil {
@@ -251,7 +251,7 @@ func (mgr *TxnManager) onPreparing(items ...any) {
 				}
 			}
 		} else {
-			//for 1PC or 2PC
+			//for 1PC or 2PC Rollback
 			mgr.onPreparRollback(op.Txn)
 		}
 		if err := mgr.EnqueueFlushing(op); err != nil {
@@ -270,10 +270,12 @@ func (mgr *TxnManager) onFlushing(items ...any) {
 	for _, item := range items {
 		op := item.(*OpTxn)
 		switch op.Op {
+		//for 1PC Commit
 		case OpCommit:
 			if err = op.Txn.ApplyCommit(); err != nil {
 				panic(err)
 			}
+		//for 2PC Prepare
 		case OpPrepare:
 			//wait for redo log synced.
 			if err = op.Txn.Apply2PCPrepare(); err != nil {
@@ -286,6 +288,7 @@ func (mgr *TxnManager) onFlushing(items ...any) {
 			if err != nil {
 				panic(err)
 			}
+		//for 1PC or 2PC Rollback
 		case OpRollback:
 			if err = op.Txn.ApplyRollback(); err != nil {
 				mgr.OnException(err)

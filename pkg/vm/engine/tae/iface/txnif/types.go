@@ -82,6 +82,8 @@ type TxnChanger interface {
 	ToRollbackedLocked() error
 	ToRollbackingLocked(ts types.TS) error
 	ToUnknownLocked()
+	Prepare() error
+	Committing() error
 	Commit() error
 	Rollback() error
 	SetError(error)

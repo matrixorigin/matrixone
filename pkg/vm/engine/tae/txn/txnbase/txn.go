@@ -97,7 +97,17 @@ func (txn *Txn) SetPrepareRollbackFn(fn func(txnif.AsyncTxn) error) { txn.Prepar
 func (txn *Txn) SetApplyCommitFn(fn func(txnif.AsyncTxn) error)     { txn.ApplyCommitFn = fn }
 func (txn *Txn) SetApplyRollbackFn(fn func(txnif.AsyncTxn) error)   { txn.ApplyRollbackFn = fn }
 
-// Prepare is used only for 2PC distributed transaction.
+//The state transition of transaction is as follows:
+// 1PC: TxnStatusActive--->TxnStatusCommitted/TxnStatusRollbacked
+// 2PC running on Coordinator: TxnStatusActive--->TxnStatusPrepared
+//								-->TxnStatusCommittingFinished--->TxnStatusCommitted or
+//								TxnStatusActive--->TxnStatusPrepared-->TxnStatusRollbacked or
+//                             TxnStatusActive--->TxnStatusRollbacked.
+// 2PC running on Participant: TxnStatusActive--->TxnStatusPrepared-->TxnStatusCommitted or
+//                             TxnStatusActive--->TxnStatusPrepared-->TxnStatusRollbacked or
+//                             TxnStatusActive--->TxnStatusRollbacked.
+
+// Prepare is used to pre-commit a 2PC distributed transaction.
 // Notice that once any error happened, we should rollback the txn.
 // TODO: 1. How to handle the case in which log service timed out?
 //  2. For a 2pc transaction, Rollback message may arrive before Prepare message,
@@ -139,7 +149,8 @@ func (txn *Txn) Prepare() (err error) {
 	return txn.GetError()
 }
 
-// Rollback message's idempotent is handled here, Although Prepare/Commit/Committing message's idempotent
+// Rollback is used to roll back a 1PC or 2PC transaction.
+// rollback's idempotent is handled here, Although Prepare/Commit/Committing message's idempotent
 // is handled by the transaction framework.
 // Notice that there may be a such scenario in which a 2PC distributed transaction in ACTIVE will be rollbacked,
 // since Rollback message may arrive before the Prepare message. Should handle this case by TxnStorage?
@@ -183,8 +194,9 @@ func (txn *Txn) Rollback() (err error) {
 	return txn.Err
 }
 
-// Committing is used only for 2PC distributed transaction running in Coordinator
-// Notice that once committing message arrives, transaction must be committed.
+// Committing is used to record a log for 2PC distributed transaction running in Coordinator.
+// Notice that transaction must be committed once committing message arrives, since Preparing
+// had already succeeded.
 func (txn *Txn) Committing() (err error) {
 	if txn.Status != txnif.TxnStatusPrepared {
 		logutil.Warnf("unexpected txn status : %s", txnif.TxnStrStatus(txn.Status))
@@ -198,8 +210,9 @@ func (txn *Txn) Committing() (err error) {
 	return txn.Err
 }
 
-// Commit Notice that the commit of a 2PC transaction must be
-// success once the commit message arrives.
+// Commit is used to commit a 1PC or 2PC transaction running in Coordinator or running in Participant.
+// Notice that the Commit of a 2PC transaction must be success once the commit message arrives,
+// since Preparing had already succeeded.
 func (txn *Txn) Commit() (err error) {
 	if (!txn.Is2PC && txn.Status != txnif.TxnStatusActive) ||
 		txn.Is2PC && txn.Status != txnif.TxnStatusCommittingFinished &&
@@ -213,7 +226,7 @@ func (txn *Txn) Commit() (err error) {
 		return nil
 	}
 	//It's a 1PC--single DNShard transaction
-	if txn.Status == txnif.TxnStatusActive {
+	if !txn.Is2PC && txn.Status == txnif.TxnStatusActive {
 		txn.Add(1)
 		err = txn.Mgr.OnOpTxn(&OpTxn{
 			Txn: txn,
@@ -237,7 +250,7 @@ func (txn *Txn) Commit() (err error) {
 		return txn.GetError()
 	}
 	//It's a 2PC transaction running in Coordinator
-	if txn.Status == txnif.TxnStatusCommittingFinished {
+	if txn.Is2PC && txn.Status == txnif.TxnStatusCommittingFinished {
 		//TODO:Append committed log entry into log service asynchronously
 		//     for checkpointing the committing log entry
 		//txn.SetError(txn.LogTxnEntry())
@@ -248,8 +261,9 @@ func (txn *Txn) Commit() (err error) {
 		return txn.GetError()
 	}
 	//It's a 2PC transaction running in Participant.
-	//Notice that commit must be success once the commit message arrives
-	if txn.Status == txnif.TxnStatusPrepared {
+	//Notice that Commit must be success once the commit message arrives,
+	//since Preparing had already succeeded.
+	if txn.Is2PC && txn.Status == txnif.TxnStatusPrepared {
 		txn.Add(1)
 		txn.Ch <- EventCommit
 		txn.Wait()
