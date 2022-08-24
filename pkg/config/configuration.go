@@ -16,7 +16,9 @@ package config
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
@@ -218,6 +220,18 @@ type FrontendParameters struct {
 
 	//default is 0. the maximum numbers of log file to be retained
 	LogMaxBackups int64 `toml:"logMaxBackups"`
+
+	//default is false. With true. Server will support tls
+	EnableTls bool `toml:"enableTls"`
+
+	//default is ''. Path of file that contains list of trusted SSL CAs for client
+	TlsCaFile string `toml:"tlsCaFile"`
+
+	//default is ''. Path of file that contains X509 certificate in PEM format for client
+	TlsCertFile string `toml:"tlsCertFile"`
+
+	//default is ''. Path of file that contains X509 key in PEM format for client
+	TlsKeyFile string `toml:"tlsKeyFile"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -336,16 +350,27 @@ type ParameterUnit struct {
 	//Storage Engine
 	StorageEngine engine.Engine
 
+	//TxnClient
+	TxnClient client.TxnClient
+
 	//Cluster Nodes
 	ClusterNodes engine.Nodes
 }
 
-func NewParameterUnit(sv *FrontendParameters, hostMmu *host.Mmu, mempool *mempool.Mempool, storageEngine engine.Engine, clusterNodes engine.Nodes) *ParameterUnit {
+func NewParameterUnit(
+	sv *FrontendParameters,
+	hostMmu *host.Mmu,
+	mempool *mempool.Mempool,
+	storageEngine engine.Engine,
+	txnClient client.TxnClient,
+	clusterNodes engine.Nodes,
+) *ParameterUnit {
 	return &ParameterUnit{
 		SV:            sv,
 		HostMmu:       hostMmu,
 		Mempool:       mempool,
 		StorageEngine: storageEngine,
+		TxnClient:     txnClient,
 		ClusterNodes:  clusterNodes,
 	}
 }

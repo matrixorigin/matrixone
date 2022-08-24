@@ -5,3 +5,13 @@ service-type = "CN"
 level = "debug"
 format = "json"
 max-size = 512
+
+[hakeeper-client]
+service-addresses = [
+    "1",
+    "2"
+]
+
+[cn.Engine]
+type = "tae"
+

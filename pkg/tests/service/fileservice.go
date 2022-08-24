@@ -39,12 +39,12 @@ type fileServices struct {
 func newFileServices(t *testing.T, dnServiceNum int) *fileServices {
 	locals := make([]fileservice.FileService, 0, dnServiceNum)
 	for i := 0; i < dnServiceNum; i++ {
-		fs, err := fileservice.NewMemoryFS()
+		fs, err := fileservice.NewMemoryFS("LOCAL")
 		require.NoError(t, err)
 		locals = append(locals, fs)
 	}
 
-	s3fs, err := fileservice.NewMemoryFS()
+	s3fs, err := fileservice.NewMemoryFS("S3")
 	require.NoError(t, err)
 
 	return &fileServices{

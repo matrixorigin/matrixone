@@ -19,6 +19,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/BurntSushi/toml"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"os"
 	"os/signal"
 	"syscall"
@@ -67,10 +68,13 @@ func createMOServer(inputCtx context.Context, pu *config.ParameterUnit) {
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
 	mo = frontend.NewMOServer(moServerCtx, address, pu)
 	{
+		if err := util.SetUUIDNodeID(nil); err != nil {
+			panic(err)
+		}
 		// init trace/log/error framework
 		if _, err := trace.Init(moServerCtx,
 			trace.WithMOVersion(MoVersion),
-			trace.WithNode(0, trace.NodeTypeNode),
+			trace.WithNode("node_uuid", trace.NodeTypeNode),
 			trace.EnableTracer(!pu.SV.DisableTrace),
 			trace.WithBatchProcessMode(pu.SV.TraceBatchProcessor),
 			trace.DebugMode(pu.SV.EnableTraceDebug),
@@ -142,6 +146,7 @@ func initTae(pu *config.ParameterUnit) *taeHandler {
 
 	//test storage aoe_storage
 	pu.StorageEngine = eng
+	pu.TxnClient = moengine.EngineToTxnClient(eng)
 
 	return &taeHandler{
 		eng: eng,
@@ -179,7 +184,7 @@ func main() {
 	configFilePath := args[0]
 
 	params := &config.FrontendParameters{}
-	pu := config.NewParameterUnit(params, nil, nil, nil, nil)
+	pu := config.NewParameterUnit(params, nil, nil, nil, nil, nil)
 
 	//before anything using the configuration
 	_, err := toml.DecodeFile(configFilePath, params)

@@ -54,13 +54,13 @@ func TestAddReplica(t *testing.T) {
 }
 
 func TestStartWithReplicas(t *testing.T) {
-	localFS, err := fileservice.NewMemoryFS()
+	localFS, err := fileservice.NewMemoryFS(localFileServiceName)
 	assert.NoError(t, err)
 	factory := func(name string) (fileservice.FileService, error) {
 		if name == localFileServiceName {
 			return localFS, nil
 		}
-		return fileservice.NewMemoryFS()
+		return fileservice.NewMemoryFS(name)
 	}
 
 	runDNStoreTestWithFileServiceFactory(t, func(s *store) {
@@ -132,7 +132,7 @@ func runDNStoreTest(
 	testFn func(*store),
 	opts ...Option) {
 	runDNStoreTestWithFileServiceFactory(t, testFn, func(name string) (fileservice.FileService, error) {
-		return fileservice.NewMemoryFS()
+		return fileservice.NewMemoryFS(name)
 	}, opts...)
 }
 
@@ -151,12 +151,12 @@ func runDNStoreTestWithFileServiceFactory(
 		}),
 		WithConfigAdjust(func(c *Config) {
 			c.HAKeeper.HeatbeatDuration.Duration = time.Millisecond * 10
-			c.Txn.Storage.Backend = memStorageBackend
+			c.Txn.Storage.Backend = memKVStorageBackend
 		}))
 
 	if fsFactory == nil {
 		fsFactory = func(name string) (fileservice.FileService, error) {
-			return fileservice.NewMemoryFS()
+			return fileservice.NewMemoryFS(name)
 		}
 	}
 	s := newTestStore(t, "u1", fsFactory, opts...)

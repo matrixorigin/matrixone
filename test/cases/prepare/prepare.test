@@ -36,6 +36,13 @@ deallocate prepare stmt1;
 
 drop table t1;
 
+create table t1(a timestamp);
+prepare stmt1 from "insert into t1 values (current_timestamp())";
+execute stmt1;
+execute stmt1;
+select count(*) from (select distinct a from t1) t;
+drop table t1;
+
 prepare stmt2 from 'select @var_t1';
 set @var_t1 = 0;
 execute stmt2;

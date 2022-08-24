@@ -17,7 +17,6 @@ package trace
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,10 +53,8 @@ func Test_initExport(t *testing.T) {
 			empty: false,
 		},
 	}
-	sysVar := &config.FrontendParameters{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sysVar.DisableTrace = !tt.args.enableTracer
 			export.ResetGlobalBatchProcessor()
 			initExport(context.TODO(), tt.args.config)
 			if tt.empty {
@@ -77,7 +74,7 @@ func TestDefaultContext(t *testing.T) {
 	}{
 		{
 			name: "normal",
-			want: ContextWithSpanContext(context.Background(), SpanContextWithIDs(0, 0)),
+			want: ContextWithSpanContext(context.Background(), SpanContextWithIDs(nilTraceID, nilSpanID)),
 		},
 	}
 	for _, tt := range tests {
@@ -88,7 +85,7 @@ func TestDefaultContext(t *testing.T) {
 }
 
 func TestDefaultSpanContext(t *testing.T) {
-	sc := SpanContextWithIDs(0, 0)
+	sc := SpanContextWithIDs(nilTraceID, nilSpanID)
 	tests := []struct {
 		name string
 		want *SpanContext
@@ -112,7 +109,7 @@ func TestGetNodeResource(t *testing.T) {
 	}{
 		{
 			name: "normal",
-			want: &MONodeResource{0, NodeTypeNode},
+			want: &MONodeResource{"node_uuid", NodeTypeNode},
 		},
 	}
 	for _, tt := range tests {

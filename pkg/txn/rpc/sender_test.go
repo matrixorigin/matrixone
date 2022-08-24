@@ -41,11 +41,11 @@ func TestSendWithSingleRequest(t *testing.T) {
 		assert.NoError(t, s.Close())
 	}()
 
-	s.RegisterRequestHandler(func(request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
-		return cs.Write(&txn.TxnResponse{
+	s.RegisterRequestHandler(func(ctx context.Context, request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+		return cs.Write(ctx, &txn.TxnResponse{
 			RequestID: request.GetID(),
 			Method:    txn.TxnMethod_Write,
-		}, morpc.SendOptions{})
+		})
 	})
 
 	sd, err := NewSender(nil)
@@ -80,12 +80,12 @@ func TestSendWithMultiDN(t *testing.T) {
 			assert.NoError(t, s.Close())
 		}()
 
-		s.RegisterRequestHandler(func(m morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+		s.RegisterRequestHandler(func(ctx context.Context, m morpc.Message, sequence uint64, cs morpc.ClientSession) error {
 			request := m.(*txn.TxnRequest)
-			return cs.Write(&txn.TxnResponse{
+			return cs.Write(ctx, &txn.TxnResponse{
 				RequestID:    request.GetID(),
 				CNOpResponse: &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", request.GetTargetDN().Address, sequence))},
-			}, morpc.SendOptions{})
+			})
 		})
 	}
 
@@ -139,12 +139,12 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 			assert.NoError(t, s.Close())
 		}()
 
-		s.RegisterRequestHandler(func(m morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+		s.RegisterRequestHandler(func(ctx context.Context, m morpc.Message, sequence uint64, cs morpc.ClientSession) error {
 			request := m.(*txn.TxnRequest)
-			return cs.Write(&txn.TxnResponse{
+			return cs.Write(ctx, &txn.TxnResponse{
 				RequestID:    request.GetID(),
 				CNOpResponse: &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", request.GetTargetDN().Address, sequence))},
-			}, morpc.SendOptions{})
+			})
 		})
 	}
 
@@ -256,7 +256,7 @@ func TestNewSenderWithOptions(t *testing.T) {
 
 func newTestTxnServer(t assert.TestingT, addr string) morpc.RPCServer {
 	assert.NoError(t, os.RemoveAll(addr[7:]))
-	codec := morpc.NewMessageCodec(func() morpc.Message { return &txn.TxnRequest{} }, 0)
+	codec := morpc.NewMessageCodecWithChecksum(func() morpc.Message { return &txn.TxnRequest{} }, 0)
 	s, err := morpc.NewRPCServer("test-txn-server", addr, codec)
 	assert.NoError(t, err)
 	assert.NoError(t, s.Start())

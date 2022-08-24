@@ -21,12 +21,14 @@ import (
 	"github.com/google/uuid"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	txnstorage "github.com/matrixorigin/matrixone/pkg/txn/storage/txn"
+	"go.uber.org/zap"
 )
 
 type Node struct {
-	info logservicepb.DNNode
+	info logservicepb.DNStore
 	// one node, one shard, one service
 	service service.TxnService
 	shard   metadata.DNShard
@@ -44,20 +46,41 @@ func (t *testEnv) NewNode(id uint64) *Node {
 	}
 
 	storage, err := txnstorage.New(
-		txnstorage.NewMemHandler(),
+		txnstorage.NewMemHandler(testutil.NewMheap(), txnstorage.IsolationPolicy{
+			Read: txnstorage.ReadCommitted,
+		}),
 	)
 	if err != nil {
 		panic(err)
 	}
 
-	nodeInfo := logservicepb.DNNode{
+	nodeInfo := logservicepb.DNStore{
 		UUID:           uuid.NewString(),
 		ServiceAddress: shard.Address,
 		State:          logservicepb.NormalState,
+		Shards: []logservicepb.DNShardInfo{
+			{
+				ShardID:   id,
+				ReplicaID: id,
+			},
+		},
+	}
+
+	loggerConfig := zap.Config{
+		Level:            zap.NewAtomicLevelAt(zap.InfoLevel),
+		Development:      true,
+		Encoding:         "console",
+		EncoderConfig:    zap.NewDevelopmentEncoderConfig(),
+		OutputPaths:      []string{"stderr"},
+		ErrorOutputPaths: []string{"stderr"},
+	}
+	logger, err := loggerConfig.Build()
+	if err != nil {
+		panic(err)
 	}
 
 	service := service.NewTxnService(
-		nil,
+		logger,
 		shard,
 		storage,
 		t.sender,

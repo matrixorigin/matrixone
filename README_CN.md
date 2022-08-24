@@ -13,11 +13,11 @@
   <a href="https://www.codefactor.io/repository/github/matrixorigin/matrixone">
     <img src="https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0" alt="codefactor"/>
   </a>
-  <a href="https://docs.matrixorigin.io/0.5.0/MatrixOne/Release-Notes/v0.5.0/">
-   <img src="https://img.shields.io/badge/Release-v0.5.0-green.svg" alt="release"/>
+  <a href="https://docs.matrixorigin.io/0.5.1/MatrixOne/Release-Notes/v0.5.1/">
+   <img src="https://img.shields.io/badge/Release-v0.5.1-green.svg" alt="release"/>
   </a>
   <br>
-  <a href="https://docs.matrixorigin.io/cn/0.5.0/">
+  <a href="https://docs.matrixorigin.io/cn/0.5.1/">
     <b>Docs</b>
   </a>
   <b>||</b>
@@ -139,17 +139,17 @@ MatrixOne的架构图如下图所示：
   <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone_new_arch.png?raw=true">
 </p>
 
-关于更详细的MatrixOne技术架构，可以参考[MatrixOne架构](https://docs.matrixorigin.io/cn/0.5.0/MatrixOne/Overview/matrixone-architecture/)。
+关于更详细的MatrixOne技术架构，可以参考[MatrixOne架构](https://docs.matrixorigin.io/cn/0.5.1/MatrixOne/Overview/matrixone-architecture/)。
 
 ## ⚡️ <a id="quick-start">快速上手</a>
 
 ### ⚙️ 安装MatrixOne
 
-MatrixOne目前支持Linux及MacOS系统，您可以通过源码安装或者docker安装。其他安装方式请参见[MatrixOne安装指南](https://docs.matrixorigin.io/cn/0.5.0/MatrixOne/Get-Started/install-standalone-matrixone/)
+MatrixOne目前支持Linux及MacOS系统，您可以通过源码安装或者docker安装。其他安装方式请参见[MatrixOne安装指南](https://docs.matrixorigin.io/cn/0.5.1/MatrixOne/Get-Started/install-standalone-matrixone/)
 
 #### 使用源代码搭建
 
-**步骤 1.** 搭建Go语言环境（至少需要1.18版本）。
+**步骤 1.** 搭建Go语言环境（至少需要1.19版本）。
 
 **步骤 2.** 获取MatrixOne源码
 
@@ -168,11 +168,11 @@ $ cd matrixone
 
 - *选项 2*：获取 MatrixOne(稳定版本) 代码
 
-如果您想获得 MatrixOne 发布的最新稳定版本代码，请先从 **main** 切换选择至 **0.5.0** 版本分支。
+如果您想获得 MatrixOne 发布的最新稳定版本代码，请先从 **main** 切换选择至 **0.5.1** 版本分支。
 
 ```
 $ git clone https://github.com/matrixorigin/matrixone.git
-$ git checkout 0.5.0
+$ git checkout 0.5.1
 $ cd matrixone
 ```
 
@@ -209,15 +209,23 @@ $ docker --version
 $ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
 ```
 
-- 0.5.0 稳定版本的镜像
+- 0.5.1 稳定版本的镜像
 
 ```
-$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
+$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1
 ```
 
-运行 Docker Hub 时需要输入用户名和密码，获取用户名和密码可以参考下一步骤 - 连接 MatrixOne 服务。
+运行 Docker Hub 时需要输入用户名和密码，获取用户名和密码可以参考**连接 MatrixOne 服务**章节所述。
 
-### 🌟 连接MatrixOne服务
+**步骤 3.**  挂载数据（选做）
+
+如果你需要自定义配置文件或者数据目录，可以直接挂载存放在本地磁盘的自定义配置文件：
+
+```
+docker run -d -p 6001:6001 -v ${path_name}/system_vars_config.toml:/system_vars_config.toml:ro -v ${path_name}/store:/store:rw --name matrixone matrixorigin/matrixone:0.5.1
+```
+
+### 🌟 连接 MatrixOne 服务
 
 1. 安装MySQL客户端
 
@@ -248,7 +256,7 @@ Enter password:
 ## 🙌 <a id="contributing">参与贡献</a>
 
 欢迎大家对MatrixOne的贡献。  
-请查看[贡献指南](https://docs.matrixorigin.io/cn/0.5.0/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
+请查看[贡献指南](https://docs.matrixorigin.io/cn/0.5.1/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
 
 ### 👏贡献者们
 

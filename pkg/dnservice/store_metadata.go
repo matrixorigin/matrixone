@@ -41,7 +41,7 @@ func (s *store) initMetadata() error {
 			},
 		},
 	}
-	if err := s.localFS.Read(ctx, vec); err != nil {
+	if err := s.metadataFS.Read(ctx, vec); err != nil {
 		if err == fileservice.ErrFileNotFound {
 			return nil
 		}
@@ -100,7 +100,7 @@ func (s *store) mustUpdateMetadataLocked() {
 			},
 		},
 	}
-	if err := s.localFS.Replace(ctx, vec); err != nil {
+	if err := s.metadataFS.Replace(ctx, vec); err != nil {
 		s.logger.Fatal("update metadata to local file failed",
 			zap.Error(err))
 	}

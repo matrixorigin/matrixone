@@ -18,77 +18,103 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
+type accessInfo struct {
+	TenantID, UserID, RoleID uint32
+	CreateAt                 types.Timestamp
+}
+
+func (ai *accessInfo) WriteTo(w io.Writer) (n int64, err error) {
+	for _, id := range []uint32{ai.TenantID, ai.UserID, ai.RoleID} {
+		if err = binary.Write(w, binary.BigEndian, id); err != nil {
+			return
+		}
+	}
+	if err = binary.Write(w, binary.BigEndian, int64(ai.CreateAt)); err != nil {
+		return
+	}
+	return 20, nil
+}
+
+func (ai *accessInfo) ReadFrom(r io.Reader) (n int64, err error) {
+	for _, idPtr := range []*uint32{&ai.TenantID, &ai.UserID, &ai.RoleID} {
+		if err = binary.Read(r, binary.BigEndian, idPtr); err != nil {
+			return
+		}
+	}
+	at := int64(0)
+	if err = binary.Read(r, binary.BigEndian, &at); err != nil {
+		return
+	}
+	ai.CreateAt = types.Timestamp(at)
+	return 20, nil
+}
+
 type DBEntry struct {
-	// *BaseEntry
 	*BaseEntry
-	catalog *Catalog
-	name    string
-	isSys   bool
+	catalog  *Catalog
+	acInfo   accessInfo
+	name     string
+	fullName string
+	isSys    bool
 
 	entries   map[uint64]*common.DLNode
 	nameNodes map[string]*nodeList
-	link      *common.Link
+	link      *common.SortedDList
 
 	nodesMu sync.RWMutex
 }
 
 func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
 	id := catalog.NextDB()
+
 	e := &DBEntry{
-		BaseEntry: &BaseEntry{
-			CommitInfo: CommitInfo{
-				CurrOp: OpCreate,
-				Txn:    txnCtx,
-			},
-			RWMutex: new(sync.RWMutex),
-			ID:      id,
-		},
+		BaseEntry: NewBaseEntry(id),
 		catalog:   catalog,
 		name:      name,
 		entries:   make(map[uint64]*common.DLNode),
 		nameNodes: make(map[string]*nodeList),
-		link:      new(common.Link),
+		link:      new(common.SortedDList),
 	}
+	if txnCtx != nil {
+		// Only in unit test, txnCtx can be nil
+		e.acInfo.TenantID = txnCtx.GetTenantID()
+		e.acInfo.UserID, e.acInfo.RoleID = txnCtx.GetUserAndRoleID()
+	}
+	e.CreateWithTxn(txnCtx)
+	e.acInfo.CreateAt = types.CurrentTimestamp()
 	return e
 }
 
 func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 	id := SystemDBID
 	entry := &DBEntry{
-		BaseEntry: &BaseEntry{
-			CommitInfo: CommitInfo{
-				CurrOp: OpCreate,
-			},
-			RWMutex: new(sync.RWMutex),
-			ID:      id,
-			//CreateAt: 1,
-			CreateAt: types.SystemDBTS,
-		},
+		BaseEntry: NewBaseEntry(id),
 		catalog:   catalog,
 		name:      SystemDBName,
 		entries:   make(map[uint64]*common.DLNode),
 		nameNodes: make(map[string]*nodeList),
-		link:      new(common.Link),
+		link:      new(common.SortedDList),
 		isSys:     true,
 	}
+	entry.CreateWithTS(types.SystemDBTS)
 	return entry
 }
 
 func NewReplayDBEntry() *DBEntry {
 	entry := &DBEntry{
-		BaseEntry: new(BaseEntry),
+		BaseEntry: NewReplayBaseEntry(),
 		entries:   make(map[uint64]*common.DLNode),
 		nameNodes: make(map[string]*nodeList),
-		link:      new(common.Link),
+		link:      new(common.SortedDList),
 	}
 	return entry
 }
@@ -105,22 +131,32 @@ func (e *DBEntry) Compare(o common.NodePayload) int {
 	return e.DoCompre(oe)
 }
 
-func (e *DBEntry) GetName() string { return e.name }
+func (e *DBEntry) GetTenantID() uint32          { return e.acInfo.TenantID }
+func (e *DBEntry) GetUserID() uint32            { return e.acInfo.UserID }
+func (e *DBEntry) GetRoleID() uint32            { return e.acInfo.RoleID }
+func (e *DBEntry) GetCreateAt() types.Timestamp { return e.acInfo.CreateAt }
+func (e *DBEntry) GetName() string              { return e.name }
+func (e *DBEntry) GetFullName() string {
+	if len(e.fullName) == 0 {
+		e.fullName = genDBFullName(e.acInfo.TenantID, e.name)
+	}
+	return e.fullName
+}
 
 func (e *DBEntry) String() string {
 	e.RLock()
 	defer e.RUnlock()
-	return fmt.Sprintf("DB%s[name=%s]", e.BaseEntry.String(), e.name)
+	return e.StringLocked()
 }
 
 func (e *DBEntry) StringLocked() string {
-	return fmt.Sprintf("DB%s[name=%s]", e.BaseEntry.String(), e.name)
+	return fmt.Sprintf("DB%s[name=%s]", e.BaseEntry.StringLocked(), e.GetFullName())
 }
 
-func (e *DBEntry) MakeTableIt(reverse bool) *common.LinkIt {
+func (e *DBEntry) MakeTableIt(reverse bool) *common.SortedDListIt {
 	e.RLock()
 	defer e.RUnlock()
-	return common.NewLinkIt(e.RWMutex, e.link, reverse)
+	return common.NewSortedDListIt(e.RWMutex, e.link, reverse)
 }
 
 func (e *DBEntry) PPString(level common.PPLevel, depth int, prefix string) string {
@@ -165,7 +201,9 @@ func (e *DBEntry) GetTableEntryByID(id uint64) (table *TableEntry, err error) {
 	return
 }
 
-func (e *DBEntry) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTxn) (*common.DLNode, error) {
+func (e *DBEntry) txnGetNodeByName(name string, txnCtx txnif.AsyncTxn) (*common.DLNode, error) {
+	e.RLock()
+	defer e.RUnlock()
 	node := e.nameNodes[name]
 	if node == nil {
 		return nil, ErrNotFound
@@ -174,9 +212,7 @@ func (e *DBEntry) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTxn) (*c
 }
 
 func (e *DBEntry) GetTableEntry(name string, txnCtx txnif.AsyncTxn) (entry *TableEntry, err error) {
-	e.RLock()
-	n, err := e.txnGetNodeByNameLocked(name, txnCtx)
-	e.RUnlock()
+	n, err := e.txnGetNodeByName(name, txnCtx)
 	if err != nil {
 		return
 	}
@@ -185,15 +221,19 @@ func (e *DBEntry) GetTableEntry(name string, txnCtx txnif.AsyncTxn) (entry *Tabl
 }
 
 func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (deleted *TableEntry, err error) {
-	e.Lock()
-	defer e.Unlock()
-	dn, err := e.txnGetNodeByNameLocked(name, txnCtx)
+	dn, err := e.txnGetNodeByName(name, txnCtx)
 	if err != nil {
 		return
 	}
 	entry := dn.GetPayload().(*TableEntry)
 	entry.Lock()
 	defer entry.Unlock()
+	needWait, txn := entry.NeedWaitCommitting(txnCtx.GetStartTS())
+	if needWait {
+		entry.Unlock()
+		txn.GetTxnState(true)
+		entry.Lock()
+	}
 	err = entry.DropEntryLocked(txnCtx)
 	if err == nil {
 		deleted = entry
@@ -204,7 +244,7 @@ func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (deleted *T
 func (e *DBEntry) CreateTableEntry(schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) (created *TableEntry, err error) {
 	e.Lock()
 	created = NewTableEntry(e, schema, txnCtx, dataFactory)
-	err = e.AddEntryLocked(created)
+	err = e.AddEntryLocked(created, txnCtx)
 	e.Unlock()
 
 	return created, err
@@ -235,7 +275,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 	return
 }
 
-func (e *DBEntry) AddEntryLocked(table *TableEntry) (err error) {
+func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.AsyncTxn) (err error) {
 	defer func() {
 		if err == nil {
 			e.catalog.AddTableCnt(1)
@@ -249,29 +289,14 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry) (err error) {
 
 		nn := newNodeList(e, &e.nodesMu, table.schema.Name)
 		e.nameNodes[table.schema.Name] = nn
-
 		nn.CreateNode(table.GetID())
 	} else {
 		node := nn.GetTableNode()
 		record := node.GetPayload().(*TableEntry)
-		record.RLock()
-		err = record.PrepareWrite(table.GetTxn(), record.RWMutex)
+		err = record.PrepareAdd(txn)
 		if err != nil {
-			record.RUnlock()
 			return
 		}
-		if record.HasActiveTxn() {
-			if !record.IsDroppedUncommitted() {
-				record.RUnlock()
-				err = ErrDuplicate
-				return
-			}
-		} else if !record.HasDropped() {
-			record.RUnlock()
-			err = ErrDuplicate
-			return
-		}
-		record.RUnlock()
 		n := e.link.Insert(table)
 		e.entries[table.GetID()] = n
 		nn.CreateNode(table.GetID())
@@ -280,12 +305,9 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry) (err error) {
 }
 
 func (e *DBEntry) MakeCommand(id uint32) (txnif.TxnCmd, error) {
-	cmdType := CmdCreateDatabase
+	cmdType := CmdUpdateDatabase
 	e.RLock()
 	defer e.RUnlock()
-	if e.CurrOp == OpSoftDelete {
-		cmdType = CmdDropDatabase
-	}
 	return newDBCmd(id, cmdType, e), nil
 }
 
@@ -315,24 +337,27 @@ func (e *DBEntry) RecurLoop(processor Processor) (err error) {
 }
 
 func (e *DBEntry) PrepareRollback() (err error) {
-	e.RLock()
-	currOp := e.CurrOp
-	e.RUnlock()
-	if currOp == OpCreate {
+	var isEmpty bool
+	if isEmpty, err = e.BaseEntry.PrepareRollback(); err != nil {
+		return
+	}
+	if isEmpty {
 		if err = e.catalog.RemoveEntry(e); err != nil {
 			return
 		}
-	}
-	if err = e.BaseEntry.PrepareRollback(); err != nil {
-		return
 	}
 	return
 }
 
 func (e *DBEntry) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = e.BaseEntry.WriteTo(w); err != nil {
+	if n, err = e.BaseEntry.WriteAllTo(w); err != nil {
 		return
 	}
+	x, err := e.acInfo.WriteTo(w)
+	if err != nil {
+		return
+	}
+	n += x
 	if err = binary.Write(w, binary.BigEndian, uint16(len(e.name))); err != nil {
 		return
 	}
@@ -343,9 +368,14 @@ func (e *DBEntry) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (e *DBEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = e.BaseEntry.ReadFrom(r); err != nil {
+	if n, err = e.BaseEntry.ReadAllFrom(r); err != nil {
 		return
 	}
+	x, err := e.acInfo.ReadFrom(r)
+	if err != nil {
+		return
+	}
+	n += x
 	size := uint16(0)
 	if err = binary.Read(r, binary.BigEndian, &size); err != nil {
 		return
@@ -364,36 +394,31 @@ func (e *DBEntry) MakeLogEntry() *EntryCommand {
 	return newDBCmd(0, CmdLogDatabase, e)
 }
 
-func (e *DBEntry) Clone() CheckpointItem {
-	cloned := &DBEntry{
-		BaseEntry: e.BaseEntry.Clone(),
-		name:      e.name,
+func (e *DBEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
+	ret := e.CloneCommittedInRange(start, end)
+	if ret == nil {
+		return nil
 	}
-	return cloned
-}
-
-func (e *DBEntry) CloneCreate() CheckpointItem {
-	cloned := &DBEntry{
-		BaseEntry: e.BaseEntry.CloneCreate(),
+	return &DBEntry{
+		BaseEntry: ret,
+		acInfo:    e.acInfo,
 		name:      e.name,
+		catalog:   e.catalog,
 	}
-	return cloned
 }
 
 func (e *DBEntry) CloneCreateEntry() *DBEntry {
-	cloned := &DBEntry{
-		BaseEntry: e.BaseEntry.Clone(),
+	return &DBEntry{
+		acInfo:    e.acInfo,
+		BaseEntry: e.BaseEntry.CloneCreateEntry(),
 		name:      e.name,
 	}
-	cloned.RWMutex = &sync.RWMutex{}
-	cloned.CurrOp = OpCreate
-	return cloned
 }
 
 // IsActive is coarse API: no consistency check
 func (e *DBEntry) IsActive() bool {
 	e.RLock()
+	defer e.RUnlock()
 	dropped := e.IsDroppedCommitted()
-	e.RUnlock()
 	return !dropped
 }

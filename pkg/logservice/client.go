@@ -391,13 +391,8 @@ func (c *client) connectReadOnly(ctx context.Context) error {
 func (c *client) request(ctx context.Context,
 	mt pb.MethodType, payload []byte, lsn Lsn,
 	maxSize uint64) (pb.Response, []pb.LogRecord, error) {
-	timeout, err := getTimeoutFromContext(ctx)
-	if err != nil {
-		return pb.Response{}, nil, err
-	}
 	req := pb.Request{
-		Method:  mt,
-		Timeout: int64(timeout),
+		Method: mt,
 		LogRequest: pb.LogRequest{
 			ShardID: c.cfg.LogShardID,
 			DNID:    c.cfg.DNReplicaID,
@@ -408,8 +403,7 @@ func (c *client) request(ctx context.Context,
 	r := c.pool.Get().(*RPCRequest)
 	r.Request = req
 	r.payload = payload
-	future, err := c.client.Send(ctx,
-		c.addr, r, morpc.SendOptions{Timeout: time.Duration(timeout)})
+	future, err := c.client.Send(ctx, c.addr, r)
 	if err != nil {
 		return pb.Response{}, nil, err
 	}
@@ -436,21 +430,15 @@ func (c *client) request(ctx context.Context,
 }
 
 func (c *client) tsoRequest(ctx context.Context, count uint64) (uint64, error) {
-	timeout, err := getTimeoutFromContext(ctx)
-	if err != nil {
-		return 0, err
-	}
 	req := pb.Request{
-		Method:  pb.TSO_UPDATE,
-		Timeout: int64(timeout),
+		Method: pb.TSO_UPDATE,
 		TsoRequest: &pb.TsoRequest{
 			Count: count,
 		},
 	}
 	r := c.pool.Get().(*RPCRequest)
 	r.Request = req
-	future, err := c.client.Send(ctx,
-		c.addr, r, morpc.SendOptions{Timeout: time.Duration(timeout)})
+	future, err := c.client.Send(ctx, c.addr, r)
 	if err != nil {
 		return 0, err
 	}
@@ -511,26 +499,25 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RP
 	mf := func() morpc.Message {
 		return pool.Get().(*RPCResponse)
 	}
+
+	// construct morpc.BackendOption
+	backendOpts := []morpc.BackendOption{
+		morpc.WithBackendConnectWhenCreate(),
+		morpc.WithBackendConnectTimeout(time.Second),
+	}
+	backendOpts = append(backendOpts, GetBackendOptions(ctx)...)
+
+	// construct morpc.ClientOption
+	clientOpts := []morpc.ClientOption{
+		morpc.WithClientInitBackends([]string{target}, []int{1}),
+		morpc.WithClientMaxBackendPerHost(1),
+	}
+	clientOpts = append(clientOpts, GetClientOptions(ctx)...)
+
 	// we set connection timeout to a constant value so if ctx's deadline is much
 	// larger, then we can ensure that all specified potential nodes have a chance
 	// to be attempted
-	codec := morpc.NewMessageCodec(mf, defaultWriteSocketSize)
-	bf := morpc.NewGoettyBasedBackendFactory(codec,
-		morpc.WithBackendConnectWhenCreate(),
-		morpc.WithBackendConnectTimeout(time.Second))
-	return morpc.NewClient(bf,
-		morpc.WithClientInitBackends([]string{target}, []int{1}),
-		morpc.WithClientMaxBackendPerHost(1))
-}
-
-func getTimeoutFromContext(ctx context.Context) (time.Duration, error) {
-	d, ok := ctx.Deadline()
-	if !ok {
-		return 0, ErrDeadlineNotSet
-	}
-	now := time.Now()
-	if now.After(d) {
-		return 0, ErrInvalidDeadline
-	}
-	return d.Sub(now), nil
+	codec := morpc.NewMessageCodecWithChecksum(mf, defaultWriteSocketSize)
+	bf := morpc.NewGoettyBasedBackendFactory(codec, backendOpts...)
+	return morpc.NewClient(bf, clientOpts...)
 }

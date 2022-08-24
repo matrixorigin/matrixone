@@ -107,6 +107,7 @@ func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *t
 	}
 
 	response.CNOpResponse.Payload = data
+	response.Txn = &request.Txn
 	return nil
 }
 
@@ -236,7 +237,6 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 		txnCtx.mu.requests = append(txnCtx.mu.requests, txn.TxnRequest{
 			Txn:            newTxn,
 			Method:         txn.TxnMethod_Prepare,
-			TimeoutAt:      s.mustGetTimeoutAtFromContext(ctx),
 			PrepareRequest: &txn.TxnPrepareRequest{DNShard: dn},
 		})
 	}
