@@ -27,8 +27,8 @@ func TestMVCC(t *testing.T) {
 	m.dump(io.Discard)
 
 	// tx
-	tx1 := NewTransaction("1", Timestamp{})
-	tx2 := NewTransaction("2", Timestamp{})
+	tx1 := NewTransaction("1", Timestamp{}, Serializable)
+	tx2 := NewTransaction("2", Timestamp{}, Serializable)
 
 	// time
 	now := Timestamp{
@@ -129,8 +129,8 @@ func TestMVCC(t *testing.T) {
 	tx1.State.Store(Committed)
 
 	now = now.Next()
-	tx3 := NewTransaction("3", now)
-	tx4 := NewTransaction("4", now)
+	tx3 := NewTransaction("3", now, Serializable)
+	tx4 := NewTransaction("4", now, Serializable)
 
 	// read committed
 	res, err = m.Read(tx3, now)
