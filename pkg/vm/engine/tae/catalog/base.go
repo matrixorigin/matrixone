@@ -187,19 +187,19 @@ func (be *BaseEntry) GetUpdateNodeLocked() *UpdateNode {
 }
 
 func (be *BaseEntry) GetCommittedNode() (node *UpdateNode) {
-	be.MVCC.Loop((func(n *common.DLNode) bool {
+	be.MVCC.Loop(func(n *common.DLNode) bool {
 		un := n.GetPayload().(*UpdateNode)
 		if !un.IsActive() {
 			node = un
 			return false
 		}
 		return true
-	}), false)
+	}, false)
 	return
 }
 
 func (be *BaseEntry) GetNodeToRead(startts types.TS) (node *UpdateNode) {
-	be.MVCC.Loop((func(n *common.DLNode) bool {
+	be.MVCC.Loop(func(n *common.DLNode) bool {
 		un := n.GetPayload().(*UpdateNode)
 		if un.IsActive() {
 			if un.IsSameTxn(startts) {
@@ -213,7 +213,7 @@ func (be *BaseEntry) GetNodeToRead(startts types.TS) (node *UpdateNode) {
 			return false
 		}
 		return true
-	}), false)
+	}, false)
 	return
 }
 func (be *BaseEntry) DeleteBefore(ts types.TS) bool {
