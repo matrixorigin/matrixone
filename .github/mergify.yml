@@ -1,7 +1,7 @@
 queue_rules:
   - name: default
     conditions: []
-    checks_timeout: 30m
+    checks_timeout: 1h
 
 pull_request_rules:
   - name: Automatic merge on approval
