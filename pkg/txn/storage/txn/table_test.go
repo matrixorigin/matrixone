@@ -32,7 +32,7 @@ func (t TestRow) PrimaryKey() Int {
 func TestTable(t *testing.T) {
 	table := NewTable[Int, TestRow]()
 
-	tx := NewTransaction("1", Timestamp{})
+	tx := NewTransaction("1", Timestamp{}, Serializable)
 
 	row := TestRow{Key: 42, Value: 1}
 
