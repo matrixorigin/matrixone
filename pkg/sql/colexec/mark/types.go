@@ -76,7 +76,8 @@ type container struct {
 
 	// record those tuple that contain null value in build table
 	nullSels []int64
-
+	// record those tuple that contain normal value in build table
+	sels []int64
 	// the result of eval join condtion for conds[1] and cons[0], those two vectors is used to
 	// check equal condition when zval == 0 or condState is False from JoinMap
 	buildEqVec   []*vector.Vector
@@ -89,6 +90,12 @@ type container struct {
 	joinFlags []bool
 
 	mp *hashmap.JoinMap
+
+	nullWithBatch *batch.Batch
+
+	buildBatch *batch.Batch
+
+	rewriteCond *plan.Expr
 }
 
 // // for join operator, it's a two-ary operator, we will reference to two table
@@ -142,10 +149,16 @@ type Argument struct {
 	OutputMark bool
 
 	Typs []types.Type
+
 	// markMeaning means,if MarkMeaning is true and a tuple is marked as true, output it,if is marked with false,
 	// don't output. The same way that if MarkMeaning is false and a tuple is marked as false, output it,if is
 	// marked with true, don't output.
 	MarkMeaning bool
 
+	// if OutputAnyway is true,we will output all tuples from left table
+	OutputAnyway bool
+
 	Cond *plan.Expr
+
+	OnList []*plan.Expr
 }

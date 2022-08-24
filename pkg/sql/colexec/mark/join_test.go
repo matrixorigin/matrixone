@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -81,66 +80,8 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestThreeValueLogic(t *testing.T) {
-	a := condTrue
-	b := condFalse
-	c := condUnkown
-
-	// three values or
-	require.Equal(t, condTrue, threeValueOr(a, a))
-	require.Equal(t, condTrue, threeValueOr(a, b))
-	require.Equal(t, condTrue, threeValueOr(a, c))
-
-	require.Equal(t, condTrue, threeValueOr(b, a))
-	require.Equal(t, condFalse, threeValueOr(b, b))
-	require.Equal(t, condUnkown, threeValueOr(b, c))
-
-	require.Equal(t, condTrue, threeValueOr(c, a))
-	require.Equal(t, condUnkown, threeValueOr(c, b))
-	require.Equal(t, condUnkown, threeValueOr(c, c))
-
-	// three values and
-	require.Equal(t, condTrue, threeValueAnd(a, a))
-	require.Equal(t, condFalse, threeValueAnd(a, b))
-	require.Equal(t, condUnkown, threeValueAnd(a, c))
-	require.Equal(t, condFalse, threeValueAnd(b, a))
-	require.Equal(t, condFalse, threeValueAnd(b, b))
-	require.Equal(t, condFalse, threeValueAnd(b, c))
-	require.Equal(t, condUnkown, threeValueAnd(c, a))
-	require.Equal(t, condFalse, threeValueAnd(c, b))
-	require.Equal(t, condUnkown, threeValueAnd(c, c))
-}
-
-func TestEqualJoin(t *testing.T) {
-	for _, tc := range tcs {
-		tc.arg.ctr.vecs[0].Nsp = nulls.NewWithSize(Rows)
-		tc.arg.ctr.vecs[0].Nsp.Np.Add(0)
-		tc.arg.ctr.buildEqVec[0].Nsp = nulls.NewWithSize(Rows)
-		tc.arg.ctr.buildEqVec[0].Nsp.Np.Add(1)
-		for i := 0; i < Rows; i++ {
-			tc.arg.ctr.eqJoin(i, i)
-		}
-	}
-}
-
-func TestNonEqJoin(t *testing.T) {
-	for _, tc := range tcs {
-		pbat := newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		pbat.Vecs[0].Nsp.Np.Add(0)
-		rbat := newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		tc.arg.ctr.bat = newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		for i := 0; i < Rows; i++ {
-			tc.arg.ctr.nonEqJoin(pbat, rbat, i, i, tc.arg, tc.proc)
-		}
-		pbat.Clean(tc.proc.GetMheap())
-		rbat.Clean(tc.proc.GetMheap())
-		tc.arg.ctr.bat.Clean(tc.proc.GetMheap())
-	}
-}
-
 func TestMark(t *testing.T) {
 	for _, tc := range tcs {
-		freeTestVecs(tc.arg.ctr, tc.proc)
 		bat := hashBuild(t, tc)
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
@@ -301,29 +242,6 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []int32, cs []
 		},
 	}
 
-	ctr := new(container)
-	ctr.vecs = make([]*vector.Vector, 2)
-	ctr.vecs[0] = testutil.NewVector(Rows, types.T_varchar.ToType(), m, false, nil)
-	ctr.vecs[1] = testutil.NewVector(Rows, types.T_int32.ToType(), m, false, nil)
-
-	ctr.evecs = make([]evalVector, 2)
-	ctr.evecs[0].vec = testutil.NewVector(Rows, types.T_varchar.ToType(), m, false, nil)
-	ctr.evecs[1].vec = testutil.NewVector(Rows, types.T_int32.ToType(), m, false, nil)
-
-	ctr.evecs[0].needFree = true
-	ctr.evecs[1].needFree = true
-
-	ctr.buildEqVec = make([]*vector.Vector, 2)
-	ctr.buildEqVec[0] = testutil.NewVector(Rows, types.T_varchar.ToType(), m, true, nil)
-	ctr.buildEqVec[1] = testutil.NewVector(Rows, types.T_int32.ToType(), m, false, nil)
-
-	ctr.buildEqEvecs = make([]evalVector, 2)
-	ctr.buildEqEvecs[0].vec = testutil.NewVector(Rows, types.T_varchar.ToType(), m, true, nil)
-	ctr.buildEqEvecs[1].vec = testutil.NewVector(Rows, types.T_int32.ToType(), m, false, nil)
-
-	ctr.buildEqEvecs[0].needFree = true
-	ctr.buildEqEvecs[1].needFree = true
-
 	c := markTestCase{
 		types:  ts,
 		flgs:   flgs,
@@ -334,7 +252,7 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []int32, cs []
 			Result:     rp,
 			Conditions: cs,
 			Cond:       cond,
-			ctr:        ctr,
+			OnList:     []*plan.Expr{cond},
 		},
 		barg: &hashbuild.Argument{
 			Typs:        ts,
@@ -359,13 +277,4 @@ func hashBuild(t *testing.T, tc markTestCase) *batch.Batch {
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp)
-}
-
-func freeTestVecs(ctr *container, proc *process.Process) {
-	ctr.vecs[0].Free(proc.GetMheap())
-	ctr.vecs[1].Free(proc.GetMheap())
-	ctr.freeProbeEqVec(proc)
-	ctr.freeBuildEqVec(proc)
-	ctr.buildEqVec[0].Free(proc.GetMheap())
-	ctr.buildEqVec[1].Free(proc.GetMheap())
 }

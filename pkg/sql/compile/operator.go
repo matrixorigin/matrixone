@@ -142,10 +142,15 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 	case *mark.Argument:
 		{
 			rin.Arg = &mark.Argument{
-				Typs:       arg.Typs,
-				Cond:       arg.Cond,
-				Result:     arg.Result,
-				Conditions: arg.Conditions,
+				Typs:         arg.Typs,
+				Cond:         arg.Cond,
+				Result:       arg.Result,
+				Conditions:   arg.Conditions,
+				OutputNull:   arg.OutputNull,
+				OutputMark:   arg.OutputMark,
+				MarkMeaning:  arg.MarkMeaning,
+				OutputAnyway: arg.OutputAnyway,
+				OnList:       arg.OnList,
 			}
 		}
 	case *offset.Argument:
@@ -437,7 +442,7 @@ func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *p
 // 	}
 // }
 
-func constructMark(n *plan.Node, typs []types.Type, proc *process.Process) *mark.Argument {
+func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onList []*plan.Expr) *mark.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr)
@@ -448,13 +453,15 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process) *mark
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &mark.Argument{
-		Typs:        typs,
-		Result:      result,
-		Cond:        cond,
-		Conditions:  constructJoinConditions(conds),
-		OutputMark:  false,
-		OutputNull:  false,
-		MarkMeaning: false,
+		Typs:         typs,
+		Result:       result,
+		Cond:         cond,
+		Conditions:   constructJoinConditions(conds),
+		OutputMark:   false,
+		OutputNull:   false,
+		MarkMeaning:  false,
+		OutputAnyway: false,
+		OnList:       onList,
 	}
 }
 

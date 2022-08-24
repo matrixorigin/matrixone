@@ -705,7 +705,7 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Mark,
 					Idx: c.anal.curr,
-					Arg: constructMark(n, typs, c.proc),
+					Arg: constructMark(n, typs, c.proc, n.OnList),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
