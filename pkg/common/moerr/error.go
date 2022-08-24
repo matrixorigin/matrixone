@@ -82,6 +82,7 @@ const (
 	ErrWrongTypeColumnValue
 	ErrUniqueKeyNeedAllFieldsInPf
 	ErrMultipleDefConstInListPart
+	ErrPartitionWrongNoPart
 
 	// Group 10: txn
 	// ErrTxnAborted read and write a transaction that has been rolled back.
@@ -158,6 +159,7 @@ var errorMsgRefer = map[int32]moErrorMsgItem{
 	ErrWrongTypeColumnValue:                {26015, 1654, "Partition column values of incorrect type"},
 	ErrUniqueKeyNeedAllFieldsInPf:          {26016, 1503, "A %-.192s must include all columns in the table's partitioning function"},
 	ErrMultipleDefConstInListPart:          {26017, 1495, "Multiple definition of same constant in list partitioning"},
+	ErrPartitionWrongNoPart:                {26018, 1064, "Wrong number of partitions defined, mismatch with previous setting"},
 
 	// Group 10: txn
 	ErrTxnClosed:          {30000, 0, "the transaction has been committed or aborted"},

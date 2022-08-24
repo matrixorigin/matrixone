@@ -220,8 +220,6 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		if err != nil {
 			return nil, err
 		}
-
-		//return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("partition unsupport now; statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 	}
 
 	return &Plan{
@@ -237,16 +235,17 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 }
 
 //  buildPartitionByClause build partition by clause info and semantic check.
-func buildPartitionByClause(partitionBinder *PartitionBinder, partitionOption *tree.PartitionOption, tableDef *TableDef) (err error) {
-	switch partitionOption.PartBy.PType.(type) {
+//  Currently, sub partition and partition value verification are not supported
+func buildPartitionByClause(partitionBinder *PartitionBinder, partitionOp *tree.PartitionOption, tableDef *TableDef) (err error) {
+	switch partitionOp.PartBy.PType.(type) {
 	case *tree.HashType:
-		err = buildHashPartition(partitionBinder, partitionOption, tableDef)
+		err = buildHashPartition(partitionBinder, partitionOp, tableDef)
 	case *tree.KeyType:
-		err = buildKeyPartition(partitionBinder, partitionOption, tableDef)
+		err = buildKeyPartition(partitionBinder, partitionOp, tableDef)
 	case *tree.RangeType:
-		err = buildRangePartition(partitionBinder, partitionOption, tableDef)
+		err = buildRangePartition(partitionBinder, partitionOp, tableDef)
 	case *tree.ListType:
-		err = buildListPartitiion(partitionBinder, partitionOption, tableDef)
+		err = buildListPartitiion(partitionBinder, partitionOp, tableDef)
 	}
 	if err != nil {
 		return err

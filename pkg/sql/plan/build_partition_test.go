@@ -19,13 +19,13 @@ import (
 	"testing"
 )
 
-/*func TestSingleDDLPartition(t *testing.T) {
-	sql := `CREATE TABLE k1 (
-			id INT NOT NULL PRIMARY KEY,
-			name VARCHAR(20)
-		)
-		PARTITION BY KEY()
-		PARTITIONS 2;`
+func TestSingleDDLPartition(t *testing.T) {
+	//sql := `CREATE TABLE k1 (
+	//		id INT NOT NULL PRIMARY KEY,
+	//		name VARCHAR(20)
+	//	)
+	//	PARTITION BY KEY()
+	//	PARTITIONS 2;`
 
 	//sql := `CREATE TABLE k1 (
 	//		id INT NOT NULL PRIMARY KEY,
@@ -34,13 +34,56 @@ import (
 	//	PARTITION BY KEY()
 	//	PARTITIONS 2;`
 
+	//sql := `CREATE TABLE employees (
+	//			id INT NOT NULL,
+	//			fname VARCHAR(30),
+	//			lname VARCHAR(30),
+	//			hired DATE NOT NULL DEFAULT '1970-01-01',
+	//			separated DATE NOT NULL DEFAULT '9999-12-31',
+	//			job_code INT,
+	//			store_id INT
+	//		)
+	//		PARTITION BY LINEAR HASH( YEAR(hired) )
+	//		PARTITIONS 4;`
+
+	//sql := `CREATE TABLE t1 (
+	//			year_col  INT,
+	//			some_data INT
+	//		)
+	//		PARTITION BY RANGE (year_col) (
+	//			PARTITION p0 VALUES LESS THAN (1991),
+	//			PARTITION p1 VALUES LESS THAN (1995),
+	//			PARTITION p2 VALUES LESS THAN (1999),
+	//			PARTITION p3 VALUES LESS THAN (2002),
+	//			PARTITION p4 VALUES LESS THAN (2006),
+	//			PARTITION p5 VALUES LESS THAN (2012)
+	//		);`
+
+	sql := `CREATE TABLE quarterly_report_status (
+				report_id INT NOT NULL,
+				report_status VARCHAR(20) NOT NULL,
+				report_updated TIMESTAMP NOT NULL
+			)
+			PARTITION BY RANGE ( UNIX_TIMESTAMP(report_updated) ) (
+				PARTITION p0 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-01-01 00:00:00') ),
+				PARTITION p1 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-04-01 00:00:00') ),
+				PARTITION p2 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-07-01 00:00:00') ),
+				PARTITION p3 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-10-01 00:00:00') ),
+				PARTITION p4 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-01-01 00:00:00') ),
+				PARTITION p5 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-04-01 00:00:00') ),
+				PARTITION p6 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-07-01 00:00:00') ),
+				PARTITION p7 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-10-01 00:00:00') ),
+				PARTITION p8 VALUES LESS THAN ( UNIX_TIMESTAMP('2010-01-01 00:00:00') ),
+				PARTITION p9 VALUES LESS THAN (MAXVALUE)
+			);`
+
 	mock := NewMockOptimizer()
 	logicPlan, err := buildSingleStmt(mock, t, sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
 	outPutPlan(logicPlan, false, t)
-}*/
+}
 
 // ---------------------------------- Key Partition ----------------------------------
 func TestKeyPartition(t *testing.T) {
@@ -161,6 +204,7 @@ func TestHashPartitionError(t *testing.T) {
 		"CREATE TABLE t1 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col2);",
 		"CREATE TABLE t1 (col1 INT, col2 DECIMAL) PARTITION BY HASH(col2);",
 		"CREATE TABLE t1 (col1 INT, col2 DECIMAL) PARTITION BY HASH(col1+0.5);",
+		"CREATE TABLE t1 (col1 INT, col2 DECIMAL) PARTITION BY HASH(12);",
 		"CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3)) PARTITIONS 4 SUBPARTITION BY KEY(col1);",
 		"CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY HASH( YEAR(col3) ) PARTITIONS;",
 		`CREATE TABLE employees (
@@ -350,6 +394,39 @@ func TestRangePartition(t *testing.T) {
 			PARTITION p2 VALUES LESS THAN (16),
 			PARTITION p3 VALUES LESS THAN (21)
 		);`,
+
+		`CREATE TABLE members (
+			firstname VARCHAR(25) NOT NULL,
+			lastname VARCHAR(25) NOT NULL,
+			username VARCHAR(16) NOT NULL,
+			email VARCHAR(35),
+			joined DATE NOT NULL
+		)
+		PARTITION BY RANGE( YEAR(joined) ) PARTITIONS 5 (
+			PARTITION p0 VALUES LESS THAN (1960),
+			PARTITION p1 VALUES LESS THAN (1970),
+			PARTITION p2 VALUES LESS THAN (1980),
+			PARTITION p3 VALUES LESS THAN (1990),
+			PARTITION p4 VALUES LESS THAN MAXVALUE
+		);`,
+
+		`CREATE TABLE quarterly_report_status (
+			report_id INT NOT NULL,
+			report_status VARCHAR(20) NOT NULL,
+			report_updated TIMESTAMP NOT NULL
+		)
+			PARTITION BY RANGE ( UNIX_TIMESTAMP(report_updated) ) (
+			PARTITION p0 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-01-01 00:00:00') ),
+			PARTITION p1 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-04-01 00:00:00') ),
+			PARTITION p2 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-07-01 00:00:00') ),
+			PARTITION p3 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-10-01 00:00:00') ),
+			PARTITION p4 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-01-01 00:00:00') ),
+			PARTITION p5 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-04-01 00:00:00') ),
+			PARTITION p6 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-07-01 00:00:00') ),
+			PARTITION p7 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-10-01 00:00:00') ),
+			PARTITION p8 VALUES LESS THAN ( UNIX_TIMESTAMP('2010-01-01 00:00:00') ),
+			PARTITION p9 VALUES LESS THAN (MAXVALUE)
+		);`,
 	}
 
 	mock := NewMockOptimizer()
@@ -380,28 +457,6 @@ func TestRangePartitionError(t *testing.T) {
 			PARTITION p1 VALUES LESS THAN (11),
 			PARTITION p2 VALUES LESS THAN (16),
 			PARTITION p3 VALUES LESS THAN (21)
-		);`,
-
-		`CREATE TABLE rc3 (
-			a INT NOT NULL,
-			b INT NOT NULL
-		)
-		PARTITION BY RANGE COLUMNS(a,b) (
-			PARTITION p0 VALUES LESS THAN (a,5),
-			PARTITION p1 VALUES LESS THAN (20,10),
-			PARTITION p2 VALUES LESS THAN (50,20),
-			PARTITION p3 VALUES LESS THAN (65,30)
-		);`,
-
-		`CREATE TABLE rc3 (
-			a INT NOT NULL,
-			b INT NOT NULL
-		)
-		PARTITION BY RANGE COLUMNS(a,b) (
-			PARTITION p0 VALUES LESS THAN (a+7,5),
-			PARTITION p1 VALUES LESS THAN (20,10),
-			PARTITION p2 VALUES LESS THAN (50,20),
-			PARTITION p3 VALUES LESS THAN (65,30)
 		);`,
 
 		`CREATE TABLE employees (
@@ -453,6 +508,21 @@ func TestRangePartitionError(t *testing.T) {
 			PARTITION p1 VALUES LESS THAN (11),
 			PARTITION p2 VALUES LESS THAN (16),
 			PARTITION p3 VALUES LESS THAN (21)
+		);`,
+
+		`CREATE TABLE members (
+			firstname VARCHAR(25) NOT NULL,
+			lastname VARCHAR(25) NOT NULL,
+			username VARCHAR(16) NOT NULL,
+			email VARCHAR(35),
+			joined DATE NOT NULL
+		)
+		PARTITION BY RANGE( YEAR(joined) ) PARTITIONS 4 (
+			PARTITION p0 VALUES LESS THAN (1960),
+			PARTITION p1 VALUES LESS THAN (1970),
+			PARTITION p2 VALUES LESS THAN (1980),
+			PARTITION p3 VALUES LESS THAN (1990),
+			PARTITION p4 VALUES LESS THAN MAXVALUE
 		);`,
 	}
 
@@ -531,6 +601,17 @@ func TestRangeColumnsPartition(t *testing.T) {
 			PARTITION p2 VALUES LESS THAN (50,20),
 			PARTITION p3 VALUES LESS THAN (65,30)
 		);`,
+
+		`CREATE TABLE rc (
+				a INT NOT NULL,
+				b INT NOT NULL
+			)
+			PARTITION BY RANGE COLUMNS(a,b) PARTITIONS 4 (
+				PARTITION p0 VALUES LESS THAN (10,5),
+				PARTITION p1 VALUES LESS THAN (20,10),
+				PARTITION p2 VALUES LESS THAN (50,20),
+				PARTITION p3 VALUES LESS THAN (65,30)
+         );`,
 	}
 	mock := NewMockOptimizer()
 	for _, sql := range sqls {
@@ -580,6 +661,17 @@ func TestRangeColumnsPartitionError(t *testing.T) {
 			PARTITION p2 VALUES LESS THAN (50,20),
 			PARTITION p3 VALUES LESS THAN (65,30)
 		);`,
+
+		`CREATE TABLE rc (
+				a INT NOT NULL,
+				b INT NOT NULL
+			)
+			PARTITION BY RANGE COLUMNS(a,b) PARTITIONS 5 (
+				PARTITION p0 VALUES LESS THAN (10,5),
+				PARTITION p1 VALUES LESS THAN (20,10),
+				PARTITION p2 VALUES LESS THAN (50,20),
+				PARTITION p3 VALUES LESS THAN (65,30)
+         );`,
 	}
 
 	mock := NewMockOptimizer()
@@ -713,6 +805,17 @@ func TestListColumnsPartition(t *testing.T) {
 			PARTITION pWeek_4 VALUES IN('2010-02-22', '2010-02-23', '2010-02-24',
 				'2010-02-25', '2010-02-26', '2010-02-27', '2010-02-28')
 		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST COLUMNS(a,b) PARTITIONS 4 (
+			PARTITION p0 VALUES IN( (0,0), (NULL,NULL) ),
+			PARTITION p1 VALUES IN( (0,1), (0,2), (0,3), (1,1), (1,2) ),
+			PARTITION p2 VALUES IN( (1,0), (2,0), (2,1), (3,0), (3,1) ),
+			PARTITION p3 VALUES IN( (1,3), (2,2), (2,3), (3,2), (3,3) )
+		);`,
 	}
 
 	mock := NewMockOptimizer()
@@ -743,6 +846,17 @@ func TestListColumnsPartitionError(t *testing.T) {
 			PARTITION p1 VALUES IN( (0,1), (0,2), (0,3), (1,1), (1,2) ),
 			PARTITION p2 VALUES IN( (1,0), (2,0), (2,1), (3,0), (3,1) ),
 			PARTITION p2 VALUES IN( (1,3), (2,2), (2,3), (3,2), (3,3) )
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST COLUMNS(a,b) PARTITIONS 5 (
+			PARTITION p0 VALUES IN( (0,0), (NULL,NULL) ),
+			PARTITION p1 VALUES IN( (0,1), (0,2), (0,3), (1,1), (1,2) ),
+			PARTITION p2 VALUES IN( (1,0), (2,0), (2,1), (3,0), (3,1) ),
+			PARTITION p3 VALUES IN( (1,3), (2,2), (2,3), (3,2), (3,3) )
 		);`,
 	}
 
