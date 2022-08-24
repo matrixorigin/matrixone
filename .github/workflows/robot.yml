@@ -51,7 +51,7 @@ jobs:
 
       - name: Build MatrixOne
         run: |
-          cd $GITHUB_WORKSPACE/matrixone && make clean && make config && make build
+          cd $GITHUB_WORKSPACE/matrixone && make clean && make build
 
       - name: Static Code Analysis
         continue-on-error: true
@@ -107,45 +107,13 @@ jobs:
           distribution: 'adopt'
           architecture: x64
 
-      - name: Start Test Server
-        timeout-minutes: 10
-        run: |
-          cd $GITHUB_WORKSPACE/matrixone
-          if  [ -d  "./store"  ]; then rm -rf ./store; fi
-          CGO_CFLAGS="-I${GITHUB_WORKSPACE}/matrixone/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/matrixone/cgo -lmo" go test -c -tags server_test -covermode=count -coverpkg=./pkg/... ./cmd/db-server -o server_test
-          ./server_test -test.coverprofile=${{ env.raw_bvt_coverage }} &>log &
-
-      - name: Start BVT Test
-        if: ${{ env.Job-Status }} == 2
-        id: bvt_on_pr_version
-        continue-on-error: true
-        run: |
-          sleep 30s
-          cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n 2>&1
-
-      - name: Generate BVT Coverage File
-        timeout-minutes: 10
-        run: |
-          cd $GITHUB_WORKSPACE/matrixone
-          ps aux|grep 'server_test' | grep -v 'grep' | awk '{print $2}'
-          ps aux|grep 'server_test' | grep -v 'grep' | awk '{print $2}' | xargs kill
-          sleep 3
-          cat ${{ env.raw_bvt_coverage }} | grep -v ${{ env.bvt_excluded_pkg }} > ${{ env.bvt_coverage }}
-          echo "bvt_coverage finished"
-          go tool cover -o ${{ env.bvt_html_coverage }} -html=${{ env.bvt_coverage }}
-          echo "bvt_html_coverage finished"
 
       - name: Coverage Calculate
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           echo "UT_CODE_COVERAGE: $(awk 'BEGIN {covered_line=0;all_line=0} {if ($3>=1 && !($1 in covered)) {covered[$1] = $2; covered_line+=$2;} if (!($1 in all)) { all[$1] = $2; all_line+=$2;}} END {print covered_line/all_line}' ${{ env.ut_coverage }})" > coverage_report.txt
-          echo "BVT_CODE_COVERAGE: $(awk 'BEGIN {covered_line=0;all_line=0} {if ($3>=1 && !($1 in covered)) {covered[$1] = $2; covered_line+=$2;} if (!($1 in all)) { all[$1] = $2; all_line+=$2;}} END {print covered_line/all_line}' ${{ env.bvt_coverage }})"  >> coverage_report.txt
           echo "UT_CODE_COVERAGE=$(awk 'BEGIN {covered_line=0;all_line=0} {if ($3>=1 && !($1 in covered)) {covered[$1] = $2; covered_line+=$2;} if (!($1 in all)) { all[$1] = $2; all_line+=$2;}} END {print covered_line/all_line}' ${{ env.ut_coverage }})" >> $GITHUB_ENV
-          echo "BVT_CODE_COVERAGE=$(awk 'BEGIN {covered_line=0;all_line=0} {if ($3>=1 && !($1 in covered)) {covered[$1] = $2; covered_line+=$2;} if (!($1 in all)) { all[$1] = $2; all_line+=$2;}} END {print covered_line/all_line}' ${{ env.bvt_coverage }})" >> $GITHUB_ENV
-          coverage="$(cat ${{ env.ut_coverage }} ${{ env.bvt_coverage }} | awk 'BEGIN {covered_line=0;all_line=0} {if ($3>=1 && !($1 in covered)) {covered[$1] = $2; covered_line+=$2;} if (!($1 in all)) { all[$1] = $2; all_line+=$2;}} END {print covered_line/all_line}')"
-          echo "Overall Coverage: ${coverage}"  >> coverage_report.txt
-          echo "GENERAL_CODE_COVERAGE=${coverage}" >> $GITHUB_ENV
+          
           pkgs=$(go list ./pkg/... | awk -v FS='/' -v OFS='/' '{if ($5=="vm" || $5=="sql") print $4,$5,$6"/"; else print $4,$5"/"}' | sort -u | grep -v ${{ env.ut_excluded_pkg }} | grep -v '//')
 
           echo -e "\n------------ut detail coverage----------"  >> coverage_report.txt
@@ -163,21 +131,8 @@ jobs:
 
           cat ut_tmp.txt | sort -k 1 -k 2n  >> coverage_report.txt
 
-          pkgs=$(go list ./pkg/... | awk -v FS='/' -v OFS='/' '{if ($5=="vm" || $5=="sql") print $4,$5,$6"/"; else print $4,$5"/"}' | sort -u | grep -v ${{ env.bvt_excluded_pkg }} | grep -v '//')
-          echo -e "\n------------bvt detail coverage----------" >> coverage_report.txt
-          echo "" > bvt_tmp.txt
-          for pkg in ${pkgs[@]}
-          do
-          if [ "$(cat ${{ env.bvt_coverage }} |grep $pkg | grep -v "grep" | wc -l)" -gt 0 ];
-          then
-              c="$(cat ${{ env.bvt_coverage }} |grep $pkg|awk 'BEGIN {covered_line=0;all_line=0} {if ($3>=1 && !($1 in covered)) {covered[$1] = $2; covered_line+=$2;} if (!($1 in all)) { all[$1] = $2; all_line+=$2;}} END {print covered_line/all_line}')";
-              echo -e "${pkg}:\t${c}" >> bvt_tmp.txt;
-          else
-              echo -e "${pkg}:\t0" >> bvt_tmp.txt;
-          fi
-          done
-          cat bvt_tmp.txt | sort -k 1 -k 2n >> coverage_report.txt
-          zip -r code_quality_reports.zip ${{ env.bvt_html_coverage }} ${{ env.ut_html_coverage }} coverage_report.txt lint.out UT-Report.out
+          
+          zip -r code_quality_reports.zip ${{ env.ut_html_coverage }} coverage_report.txt lint.out UT-Report.out
 
       - name: Generate Notice Content
         run: |
@@ -192,7 +147,7 @@ jobs:
         with:
           msgtype: markdown
           mentioned_list: '["@all"]'
-          content: "<font color=\"warning\">Nightly Code Quality - ${{ env.Today }} </font>\nNumber of files failed static checks:<font color=\"warning\">${{ env.FAILED_FILES_NUM }}</font>\nUT Coverage Summary:<font color=\"warning\">${{ env.UT_CODE_COVERAGE }}</font>\nBVT Coverage Summary:<font color=\"warning\">${{ env.BVT_CODE_COVERAGE }}</font>\nGeneral Coverage Summary:<font color=\"warning\">${{ env.GENERAL_CODE_COVERAGE }}</font>\nFor details, please visit [Action Run](${{ env.Url }})\n"
+          content: "<font color=\"warning\">Nightly Code Quality - ${{ env.Today }} </font>\nNumber of files failed static checks:<font color=\"warning\">${{ env.FAILED_FILES_NUM }}</font>\nUT Coverage Summary:<font color=\"warning\">${{ env.UT_CODE_COVERAGE }}</font>\nGeneral Coverage Summary:<font color=\"warning\">${{ env.GENERAL_CODE_COVERAGE }}</font>\nFor details, please visit [Action Run](${{ env.Url }})\n"
 
       - uses: actions/upload-artifact@v2
         if: ${{ always() }}

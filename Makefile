@@ -15,7 +15,7 @@
 #
 # Examples
 #
-# By default, make builds the mo-server
+# By default, make builds the mo-service
 #
 # make
 #
@@ -43,8 +43,7 @@
 # where am I
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 GOBIN := go
-BIN_NAME := mo-server
-SERVICE_BIN_NAME := mo-service
+BIN_NAME := mo-service
 BUILD_CFG := gen_config
 UNAME_S := $(shell uname -s)
 GOPATH := $(shell go env GOPATH)
@@ -96,7 +95,7 @@ pb: vendor-build generate-pb fmt
 	$(info all protos are generated) 
 
 ###############################################################################
-# build mo-server
+# build mo-service
 ###############################################################################
 
 RACE_OPT := 
@@ -111,13 +110,13 @@ cgo:
 	@(cd cgo; make ${CGO_DEBUG_OPT})
 
 BUILD_NAME=binary
-# build mo-server binary
+# build mo-service binary
 .PHONY: build
-build: config cgo cmd/db-server/$(wildcard *.go)
+build: config cgo cmd/mo-service/$(wildcard *.go)
 	$(info [Build $(BUILD_NAME)])
-	$(GO) build $(DEBUG_OPT) $(RACE_OPT) $(GOLDFLAGS) -o $(BIN_NAME) ./cmd/db-server
+	$(GO) build $(RACE_OPT) $(GOLDFLAGS) -o $(BIN_NAME) ./cmd/mo-service
 
-# build mo-server binary for debugging with go's race detector enabled
+# build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
 .PHONY: debug
 debug: override BUILD_NAME := debug-binary
@@ -125,22 +124,6 @@ debug: override RACE_OPT := -race
 debug: override DEBUG_OPT := -gcflags=all="-N -l"
 debug: override CGO_DEBUG_OPT := debug
 debug: build
-
-###############################################################################
-# build mo-service
-###############################################################################
-
-# build mo-service binary
-.PHONY: service
-service: config cgo cmd/mo-service/$(wildcard *.go)
-	$(info [Build $(BUILD_NAME)])
-	$(GO) build $(RACE_OPT) $(GOLDFLAGS) -o $(SERVICE_BIN_NAME) ./cmd/mo-service
-
-.PHONY: debug-service
-debug-service: override BUILD_NAME := debug-binary
-debug-service: override RACE_OPT := -race
-debug-service: service
-
 
 ###############################################################################
 # run unit tests
@@ -165,7 +148,7 @@ clean:
 	$(info [Clean up])
 	$(info Clean go test cache)
 	@go clean -testcache
-	rm -f $(BIN_NAME) $(SERVICE_BIN_NAME) $(BUILD_CFG)
+	rm -f $(BIN_NAME) $(BUILD_CFG)
 	rm -rf $(VENDOR_DIRECTORY)
 	$(MAKE) -C cgo clean
 
