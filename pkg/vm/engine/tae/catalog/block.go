@@ -18,7 +18,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -38,59 +37,41 @@ type BlockEntry struct {
 
 func NewReplayBlockEntry() *BlockEntry {
 	return &BlockEntry{
-		BaseEntry: new(BaseEntry),
+		BaseEntry: NewReplayBaseEntry(),
 	}
 }
 
 func NewBlockEntry(segment *SegmentEntry, txn txnif.AsyncTxn, state EntryState, dataFactory BlockDataFactory) *BlockEntry {
 	id := segment.GetTable().GetDB().catalog.NextBlock()
 	e := &BlockEntry{
-		BaseEntry: &BaseEntry{
-			CommitInfo: CommitInfo{
-				Txn:    txn,
-				CurrOp: OpCreate,
-			},
-			RWMutex: new(sync.RWMutex),
-			ID:      id,
-		},
-		segment: segment,
-		state:   state,
+		BaseEntry: NewBaseEntry(id),
+		segment:   segment,
+		state:     state,
 	}
 	if dataFactory != nil {
 		e.blkData = dataFactory(e)
 	}
+	e.BaseEntry.CreateWithTxn(txn)
 	return e
 }
 
 func NewStandaloneBlock(segment *SegmentEntry, id uint64, ts types.TS) *BlockEntry {
 	e := &BlockEntry{
-		BaseEntry: &BaseEntry{
-			CommitInfo: CommitInfo{
-				CurrOp: OpCreate,
-			},
-			RWMutex:  new(sync.RWMutex),
-			ID:       id,
-			CreateAt: ts,
-		},
-		segment: segment,
-		state:   ES_Appendable,
+		BaseEntry: NewBaseEntry(id),
+		segment:   segment,
+		state:     ES_Appendable,
 	}
+	e.BaseEntry.CreateWithTS(ts)
 	return e
 }
 
 func NewSysBlockEntry(segment *SegmentEntry, id uint64) *BlockEntry {
 	e := &BlockEntry{
-		BaseEntry: &BaseEntry{
-			CommitInfo: CommitInfo{
-				CurrOp: OpCreate,
-			},
-			RWMutex:  new(sync.RWMutex),
-			ID:       id,
-			CreateAt: types.SystemDBTS,
-		},
-		segment: segment,
-		state:   ES_Appendable,
+		BaseEntry: NewBaseEntry(id),
+		segment:   segment,
+		state:     ES_Appendable,
 	}
+	e.BaseEntry.CreateWithTS(types.SystemDBTS)
 	return e
 }
 
@@ -105,12 +86,9 @@ func (entry *BlockEntry) GetSegment() *SegmentEntry {
 }
 
 func (entry *BlockEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
-	cmdType := CmdCreateBlock
+	cmdType := CmdUpdateBlock
 	entry.RLock()
 	defer entry.RUnlock()
-	if entry.CurrOp == OpSoftDelete {
-		cmdType = CmdDropBlock
-	}
 	return newBlockCmd(id, cmdType, entry), nil
 }
 
@@ -136,7 +114,7 @@ func (entry *BlockEntry) String() string {
 }
 
 func (entry *BlockEntry) StringLocked() string {
-	return fmt.Sprintf("[%s]BLOCK%s", entry.state.Repr(), entry.BaseEntry.String())
+	return fmt.Sprintf("[%s]BLOCK%s", entry.state.Repr(), entry.BaseEntry.StringLocked())
 }
 
 func (entry *BlockEntry) AsCommonID() *common.ID {
@@ -160,22 +138,21 @@ func (entry *BlockEntry) GetFileTs() (types.TS, error) {
 	return entry.GetBlockData().GetBlockFile().ReadTS()
 }
 func (entry *BlockEntry) PrepareRollback() (err error) {
-	entry.RLock()
-	currOp := entry.CurrOp
-	entry.RUnlock()
-	if currOp == OpCreate {
+	var empty bool
+	empty, err = entry.BaseEntry.PrepareRollback()
+	if err != nil {
+		panic(err)
+	}
+	if empty {
 		if err = entry.GetSegment().RemoveEntry(entry); err != nil {
 			return
 		}
-	}
-	if err = entry.BaseEntry.PrepareRollback(); err != nil {
-		return
 	}
 	return
 }
 
 func (entry *BlockEntry) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = entry.BaseEntry.WriteTo(w); err != nil {
+	if n, err = entry.BaseEntry.WriteAllTo(w); err != nil {
 		return
 	}
 	if err = binary.Write(w, binary.BigEndian, entry.state); err != nil {
@@ -186,7 +163,7 @@ func (entry *BlockEntry) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (entry *BlockEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = entry.BaseEntry.ReadFrom(r); err != nil {
+	if n, err = entry.BaseEntry.ReadAllFrom(r); err != nil {
 		return
 	}
 	err = binary.Read(r, binary.BigEndian, &entry.state)
@@ -198,22 +175,16 @@ func (entry *BlockEntry) MakeLogEntry() *EntryCommand {
 	return newBlockCmd(0, CmdLogBlock, entry)
 }
 
-func (entry *BlockEntry) Clone() CheckpointItem {
-	cloned := &BlockEntry{
-		BaseEntry: entry.BaseEntry.Clone(),
+func (entry *BlockEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
+	ret := entry.CloneCommittedInRange(start, end)
+	if ret == nil {
+		return nil
+	}
+	return &BlockEntry{
+		BaseEntry: ret,
 		state:     entry.state,
 		segment:   entry.segment,
 	}
-	return cloned
-}
-
-func (entry *BlockEntry) CloneCreate() CheckpointItem {
-	cloned := &BlockEntry{
-		BaseEntry: entry.BaseEntry.CloneCreate(),
-		state:     entry.state,
-		segment:   entry.segment,
-	}
-	return cloned
 }
 
 func (entry *BlockEntry) DestroyData() (err error) {
@@ -246,29 +217,23 @@ func (entry *BlockEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 	dbEntry := tableEntry.GetDB()
 
 	dbEntry.RLock()
-	terminated = dbEntry.IsDroppedCommitted()
+	terminated, ts = dbEntry.TryGetTerminatedTS(true)
 	if terminated {
-		ts = dbEntry.DeleteAt
-	}
-	dbEntry.RUnlock()
-	if terminated {
+		dbEntry.RUnlock()
 		return
 	}
+	dbEntry.RUnlock()
 
 	tableEntry.RLock()
-	terminated = tableEntry.IsDroppedCommitted()
+	terminated, ts = tableEntry.TryGetTerminatedTS(true)
 	if terminated {
-		ts = tableEntry.DeleteAt
+		tableEntry.RUnlock()
+		return
 	}
 	tableEntry.RUnlock()
-	return
+
 	// segmentEntry.RLock()
-	// terminated = segmentEntry.IsDroppedCommitted()
-	// if terminated {
-	// 	ts = segmentEntry.DeleteAt
-	// }
+	// terminated,ts = segmentEntry.TryGetTerminatedTS(true)
 	// segmentEntry.RUnlock()
-	// if terminated {
-	// 	return
-	// }
+	return
 }
