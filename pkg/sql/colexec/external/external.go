@@ -104,6 +104,7 @@ func ReadFromS3(param *tree.ExternParam) ([]string, error) {
 	}
 
 	fs, err := fileservice.NewS3FS(
+		"",
 		"s3",
 		config.Endpoint,
 		config.Bucket,
@@ -153,6 +154,7 @@ func ReadFromS3File(param *tree.ExternParam) (io.ReadCloser, error) {
 	}
 
 	fs, err := fileservice.NewS3FS(
+		"",
 		"s3",
 		config.Endpoint,
 		config.Bucket,
