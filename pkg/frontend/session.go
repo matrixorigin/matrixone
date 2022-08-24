@@ -33,6 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+
+	"github.com/google/uuid"
 )
 
 const MaxPrepareNumberInOneSession = 64
@@ -110,6 +112,8 @@ type Session struct {
 
 	tenant *TenantInfo
 
+	uuid uuid.UUID
+
 	timeZone *time.Location
 }
 
@@ -140,6 +144,7 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 		outputCallback: getDataFromPipeline,
 		timeZone:       time.Local,
 	}
+	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.txnCompileCtx.SetSession(ses)
 	ses.txnHandler.SetSession(ses)
@@ -213,6 +218,10 @@ func (ses *Session) GetAllMysqlResultSet() []*MysqlResultSet {
 
 func (ses *Session) GetTenantInfo() *TenantInfo {
 	return ses.tenant
+}
+
+func (ses *Session) GetUUID() []byte {
+	return ses.uuid[:]
 }
 
 func (ses *Session) SetTenantInfo(ti *TenantInfo) {
