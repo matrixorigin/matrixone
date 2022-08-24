@@ -117,7 +117,7 @@ func (res *internalExecResult) StringValueByName(ridx uint64, col string) (strin
 func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (err error) {
 	ie.Lock()
 	defer ie.Unlock()
-	sess := ie.newCmdSession(opts)
+	sess := ie.newCmdSession(ctx, opts)
 	ie.executor.PrepareSessionBeforeExecRequest(sess)
 	ie.proto.stashResult = false
 	return ie.executor.doComQuery(ctx, sql)
@@ -126,7 +126,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 	ie.Lock()
 	defer ie.Unlock()
-	sess := ie.newCmdSession(opts)
+	sess := ie.newCmdSession(ctx, opts)
 	ie.executor.PrepareSessionBeforeExecRequest(sess)
 	ie.proto.stashResult = true
 	err := ie.executor.doComQuery(ctx, sql)
@@ -135,8 +135,9 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	return res
 }
 
-func (ie *internalExecutor) newCmdSession(opts ie.SessionOverrideOptions) *Session {
+func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOverrideOptions) *Session {
 	sess := NewSession(ie.proto, guest.New(ie.pu.SV.GuestMmuLimitation, ie.pu.HostMmu), ie.pu.Mempool, ie.pu, gSysVariables)
+	sess.SetRequestContext(ctx)
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)
 	return sess
