@@ -126,7 +126,7 @@ func (s *store) newMemTxnStorage(shard metadata.DNShard, logClient logservice.Cl
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	return txnstorage.New(
-		txnstorage.NewMemHandler(mheap.New(gm)),
+		txnstorage.NewMemHandler(mheap.New(gm), txnstorage.SnapshotIsolation),
 	)
 }
 
