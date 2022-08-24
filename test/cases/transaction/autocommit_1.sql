@@ -95,7 +95,7 @@ select * from tab1;
 create view view_tab1 as select * from tab1;
 select * from view_tab1;
 
--- @bvt:issue#4598
+
 insert into view_tab1 values (200, 300);
 insert into view_tab1 values (10, 10);
 commit;
@@ -111,7 +111,7 @@ delete from view_tab1 where a=10;
 rollback;
 select * from view_tab1;
 delete from view_tab1 where a=10;
--- @bvt:issue
+
 commit;
 select * from view_tab1;
 commit;
