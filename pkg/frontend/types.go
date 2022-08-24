@@ -48,6 +48,8 @@ type ComputationWrapper interface {
 	GetAffectedRows() uint64
 
 	Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error)
+
+	GetUUID() []byte
 }
 
 type ColumnInfo interface {
