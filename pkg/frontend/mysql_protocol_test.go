@@ -17,15 +17,11 @@ package frontend
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"database/sql"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"log"
 	"math"
-	"os"
 	"reflect"
 	"strconv"
 	"sync"
@@ -36,14 +32,12 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
-	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
 	fuzz "github.com/google/gofuzz"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
@@ -1289,55 +1283,55 @@ func TestMysqlResultSet(t *testing.T) {
 	wg.Wait()
 }
 
-func open_tls_db(t *testing.T, port int) *sql.DB {
-	tlsName := "custom"
-	rootCertPool := x509.NewCertPool()
-	pem, err := os.ReadFile("test/ca.pem")
-	if err != nil {
-		setServer(1)
-		require.NoError(t, err)
-	}
-	if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
-		log.Fatal("Failed to append PEM.")
-	}
-	clientCert := make([]tls.Certificate, 0, 1)
-	certs, err := tls.LoadX509KeyPair("test/client-cert.pem", "test/client-key.pem")
-	if err != nil {
-		setServer(1)
-		require.NoError(t, err)
-	}
-	clientCert = append(clientCert, certs)
-	err = mysqlDriver.RegisterTLSConfig(tlsName, &tls.Config{
-		RootCAs:            rootCertPool,
-		Certificates:       clientCert,
-		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: true,
-	})
-	if err != nil {
-		setServer(1)
-		require.NoError(t, err)
-	}
+// func open_tls_db(t *testing.T, port int) *sql.DB {
+// 	tlsName := "custom"
+// 	rootCertPool := x509.NewCertPool()
+// 	pem, err := os.ReadFile("test/ca.pem")
+// 	if err != nil {
+// 		setServer(1)
+// 		require.NoError(t, err)
+// 	}
+// 	if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
+// 		log.Fatal("Failed to append PEM.")
+// 	}
+// 	clientCert := make([]tls.Certificate, 0, 1)
+// 	certs, err := tls.LoadX509KeyPair("test/client-cert.pem", "test/client-key.pem")
+// 	if err != nil {
+// 		setServer(1)
+// 		require.NoError(t, err)
+// 	}
+// 	clientCert = append(clientCert, certs)
+// 	err = mysqlDriver.RegisterTLSConfig(tlsName, &tls.Config{
+// 		RootCAs:            rootCertPool,
+// 		Certificates:       clientCert,
+// 		MinVersion:         tls.VersionTLS12,
+// 		InsecureSkipVerify: true,
+// 	})
+// 	if err != nil {
+// 		setServer(1)
+// 		require.NoError(t, err)
+// 	}
 
-	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=5s&timeout=5s&writeTimeout=5s&tls=%s", port, tlsName)
-	db, err := sql.Open("mysql", dsn)
-	if err != nil {
-		require.NoError(t, err)
-	} else {
-		db.SetConnMaxLifetime(time.Minute * 3)
-		db.SetMaxOpenConns(1)
-		db.SetMaxIdleConns(1)
-		time.Sleep(time.Millisecond * 100)
+// 	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=5s&timeout=5s&writeTimeout=5s&tls=%s", port, tlsName)
+// 	db, err := sql.Open("mysql", dsn)
+// 	if err != nil {
+// 		require.NoError(t, err)
+// 	} else {
+// 		db.SetConnMaxLifetime(time.Minute * 3)
+// 		db.SetMaxOpenConns(1)
+// 		db.SetMaxIdleConns(1)
+// 		time.Sleep(time.Millisecond * 100)
 
-		// ping opens the connection
-		logutil.Info("start ping")
-		err = db.Ping()
-		if err != nil {
-			setServer(1)
-			require.NoError(t, err)
-		}
-	}
-	return db
-}
+// 		// ping opens the connection
+// 		logutil.Info("start ping")
+// 		err = db.Ping()
+// 		if err != nil {
+// 			setServer(1)
+// 			require.NoError(t, err)
+// 		}
+// 	}
+// 	return db
+// }
 
 func open_db(t *testing.T, port int) *sql.DB {
 	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=10s&timeout=10s&writeTimeout=10s", port)
