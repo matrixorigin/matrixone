@@ -14,14 +14,22 @@
 
 package txnstorage
 
-import (
-	"testing"
+type IsolationPolicy struct {
+	Read ReadPolicy
+}
 
-	"github.com/matrixorigin/matrixone/pkg/testutil"
+type ReadPolicy uint8
+
+const (
+	ReadCommitted ReadPolicy = iota + 1
+	ReadSnapshot
+	ReadNoStale
 )
 
-func TestMemHandler(t *testing.T) {
-	testDatabase(t, func() (*Storage, error) {
-		return New(NewMemHandler(testutil.NewMheap(), Serializable))
-	})
+var SnapshotIsolation = IsolationPolicy{
+	Read: ReadSnapshot,
+}
+
+var Serializable = IsolationPolicy{
+	Read: ReadNoStale,
 }
