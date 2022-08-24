@@ -2666,6 +2666,20 @@ func TestDropCreated2(t *testing.T) {
 	tae.restart()
 }
 
+// records create at 1 and commit
+// read by ts 1, err should be nil
+func TestReadEqualTS(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	tae.Catalog.CreateDBEntryByTS("db", txn.GetStartTS())
+	assert.Nil(t, err)
+	_, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+}
+
 func TestTruncateZonemap(t *testing.T) {
 	type Mod struct {
 		offset int
