@@ -164,7 +164,7 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 		// init trace/log/error framework
 		if _, err := trace.Init(moServerCtx,
 			trace.WithMOVersion(pu.SV.MoVersion),
-			trace.WithNode(0, trace.NodeTypeNode),
+			trace.WithNode("node_uuid", trace.NodeTypeCN),
 			trace.EnableTracer(!pu.SV.DisableTrace),
 			trace.WithBatchProcessMode(pu.SV.TraceBatchProcessor),
 			trace.DebugMode(pu.SV.EnableTraceDebug),

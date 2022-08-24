@@ -61,7 +61,10 @@ func nextConnectionID() uint32 {
 
 func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit) *MOServer {
 	codec := NewSqlCodec()
-	rm := NewRoutineManager(ctx, pu)
+	rm, err := NewRoutineManager(ctx, pu)
+	if err != nil {
+		logutil.Panicf("start server failed with %+v", err)
+	}
 	// TODO asyncFlushBatch
 	app, err := goetty.NewApplication(addr, rm.Handler,
 		goetty.WithAppLogger(logutil.GetGlobalLogger()),

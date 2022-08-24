@@ -71,6 +71,10 @@ type Config struct {
 	RaftAddress string `toml:"raft-address"`
 	// RaftListenAddress is the local listen address of the RaftAddress.
 	RaftListenAddress string `toml:"raft-listen-address"`
+	// UseTeeLogDB enables the log service to use tee based LogDB which is backed
+	// by both a pebble and a tan based LogDB. This field should only be set to
+	// true during testing.
+	UseTeeLogDB bool `toml:"use-tee-logdb"`
 	// LogDBBufferSize is the size of the logdb buffer in bytes.
 	LogDBBufferSize uint64 `toml:"logdb-buffer-size"`
 	// GossipAddress is the address used for accepting gossip communication.
