@@ -20,6 +20,15 @@ import (
 	"testing"
 )
 
+var _1TxnID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
+var _1SesID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
+var _1TraceID TraceID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
+var _2TraceID TraceID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x2}
+var _10F0TraceID TraceID = [16]byte{0x09, 0x87, 0x65, 0x43, 0x21, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0, 0, 0}
+var _1SpanID SpanID = [8]byte{0, 0, 0, 0, 0, 0, 0, 1}
+var _2SpanID SpanID = [8]byte{0, 0, 0, 0, 0, 0, 0, 2}
+var _16SpanID SpanID = [8]byte{0, 0, 0, 0, 0, 0x12, 0x34, 0x56}
+
 func TestMOTracer_Start(t1 *testing.T) {
 	type fields struct {
 		TracerConfig TracerConfig
@@ -29,7 +38,7 @@ func TestMOTracer_Start(t1 *testing.T) {
 		name string
 		opts []SpanOption
 	}
-	rootCtx := ContextWithSpanContext(context.Background(), SpanContextWithIDs(1, 1))
+	rootCtx := ContextWithSpanContext(context.Background(), SpanContextWithIDs(_1TraceID, _1SpanID))
 	tests := []struct {
 		name             string
 		fields           fields
@@ -49,8 +58,8 @@ func TestMOTracer_Start(t1 *testing.T) {
 				opts: []SpanOption{},
 			},
 			wantNewRoot:      false,
-			wantTraceId:      1,
-			wantParentSpanId: 1,
+			wantTraceId:      _1TraceID,
+			wantParentSpanId: _1SpanID,
 		},
 		{
 			name: "newRoot",
@@ -63,8 +72,8 @@ func TestMOTracer_Start(t1 *testing.T) {
 				opts: []SpanOption{WithNewRoot(true)},
 			},
 			wantNewRoot:      true,
-			wantTraceId:      1,
-			wantParentSpanId: 1,
+			wantTraceId:      _1TraceID,
+			wantParentSpanId: _1SpanID,
 		},
 	}
 	for _, tt := range tests {
@@ -105,24 +114,24 @@ func TestSpanContext_MarshalTo(t *testing.T) {
 		{
 			name: "normal",
 			fields: fields{
-				TraceID: 0,
-				SpanID:  0x123456,
+				TraceID: nilTraceID,
+				SpanID:  _16SpanID,
 			},
-			args: args{dAtA: make([]byte, 16)},
-			want: 16,
-			//                1  2  3  4  5  6  7  8--1  2  3  4  5  6     7     8
-			wantBytes: []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x12, 0x34, 0x56},
+			args: args{dAtA: make([]byte, 24)},
+			want: 24,
+			//                1  2  3  4  5  6  7  8, 1  2  3  4  5  6  7  8--1  2  3  4  5  6     7     8
+			wantBytes: []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x12, 0x34, 0x56},
 		},
 		{
 			name: "not-zero",
 			fields: fields{
-				TraceID: 0x0987654321FFFFFF,
-				SpanID:  0x123456,
+				TraceID: _10F0TraceID,
+				SpanID:  _16SpanID,
 			},
-			args: args{dAtA: make([]byte, 16)},
-			want: 16,
-			//                1  2  3  4  5  6  7  8--1  2  3  4  5  6     7     8
-			wantBytes: []byte{0x09, 0x87, 0x65, 0x43, 0x21, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0x12, 0x34, 0x56},
+			args: args{dAtA: make([]byte, 24)},
+			want: 24,
+			//                1     2     3     4     5     6     7     8,    1  2  3  4  5  6  7  8--1  2  3  4  5  6     7     8
+			wantBytes: []byte{0x09, 0x87, 0x65, 0x43, 0x21, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x12, 0x34, 0x56},
 		},
 	}
 	for _, tt := range tests {
