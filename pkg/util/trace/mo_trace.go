@@ -17,11 +17,7 @@ package trace
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/hex"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-	"io"
 	"sync"
 	"unsafe"
 
@@ -98,118 +94,6 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (
 	}
 
 	return ContextWithSpan(ctx, span), span
-}
-
-var _ zapcore.ObjectMarshaler = (*SpanContext)(nil)
-
-const SpanFieldKey = "span"
-
-func SpanField(sc SpanContext) zap.Field {
-	return zap.Object(SpanFieldKey, &sc)
-}
-
-func IsSpanField(field zapcore.Field) bool {
-	return field.Key == SpanFieldKey
-}
-
-// SpanContext contains identifying trace information about a Span.
-type SpanContext struct {
-	TraceID TraceID `json:"trace_id"`
-	SpanID  SpanID  `json:"span_id"`
-}
-
-func (c SpanContext) GetIDs() (TraceID, SpanID) {
-	return c.TraceID, c.SpanID
-}
-
-func (c *SpanContext) Reset() {
-	c.TraceID = 0
-	c.SpanID = 0
-}
-
-func (c *SpanContext) IsEmpty() bool {
-	return c.TraceID == 0
-}
-
-func (c *SpanContext) MarshalLogObject(enc zapcore.ObjectEncoder) error {
-	enc.AddUint64("TraceId", uint64(c.TraceID))
-	enc.AddUint64("SpanId", uint64(c.SpanID))
-	return nil
-}
-
-func (c *SpanContext) Size() (n int) {
-	return 16
-}
-
-func (c *SpanContext) MarshalTo(dAtA []byte) (int, error) {
-	l := cap(dAtA)
-	if l < c.Size() {
-		return -1, io.ErrUnexpectedEOF
-	}
-	binary.BigEndian.PutUint64(dAtA, uint64(c.TraceID))
-	binary.BigEndian.PutUint64(dAtA[8:], uint64(c.SpanID))
-	return c.Size(), nil
-}
-
-func (c *SpanContext) Unmarshal(dAtA []byte) error {
-	l := cap(dAtA)
-	if l < c.Size() {
-		return io.ErrUnexpectedEOF
-	}
-	c.TraceID = TraceID(binary.BigEndian.Uint64(dAtA))
-	c.SpanID = SpanID(binary.BigEndian.Uint64(dAtA[8:]))
-	return nil
-}
-
-func SpanContextWithID(id TraceID) SpanContext {
-	return SpanContext{TraceID: id}
-}
-
-func SpanContextWithIDs(tid TraceID, sid SpanID) SpanContext {
-	return SpanContext{TraceID: tid, SpanID: sid}
-}
-
-// SpanConfig is a group of options for a Span.
-type SpanConfig struct {
-	SpanContext
-
-	// NewRoot identifies a Span as the root Span for a new trace. This is
-	// commonly used when an existing trace crosses trust boundaries and the
-	// remote parent span context should be ignored for security.
-	NewRoot bool `json:"NewRoot"` // see WithNewRoot
-	parent  Span `json:"-"`
-}
-
-// SpanStartOption applies an option to a SpanConfig. These options are applicable
-// only when the span is created.
-type SpanStartOption interface {
-	applySpanStart(*SpanConfig)
-}
-
-type SpanEndOption interface {
-	applySpanEnd(*SpanConfig)
-}
-
-// SpanOption applies an option to a SpanConfig.
-type SpanOption interface {
-	SpanStartOption
-	SpanEndOption
-}
-
-type spanOptionFunc func(*SpanConfig)
-
-func (f spanOptionFunc) applySpanEnd(cfg *SpanConfig) {
-	f(cfg)
-}
-
-func (f spanOptionFunc) applySpanStart(cfg *SpanConfig) {
-	f(cfg)
-}
-
-func WithNewRoot(newRoot bool) spanOptionFunc {
-	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.NewRoot = newRoot
-	})
 }
 
 var _ Span = &MOSpan{}

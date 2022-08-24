@@ -35,6 +35,8 @@ import (
 )
 
 type MemHandler struct {
+	defaultIsolationPolicy IsolationPolicy
+
 	// catalog
 	databases  *Table[Text, DatabaseRow]
 	relations  *Table[Text, RelationRow]
@@ -77,6 +79,7 @@ type Iter[
 
 func NewMemHandler(
 	mheap *mheap.Mheap,
+	defaultIsolationPolicy IsolationPolicy,
 ) *MemHandler {
 	h := &MemHandler{}
 	h.transactions.Map = make(map[string]*Transaction)
@@ -87,6 +90,7 @@ func NewMemHandler(
 	h.attributes = NewTable[Text, AttributeRow]()
 	h.indexes = NewTable[Text, IndexRow]()
 	h.mheap = mheap
+	h.defaultIsolationPolicy = defaultIsolationPolicy
 	return h
 }
 
@@ -959,7 +963,7 @@ func (m *MemHandler) getTx(meta txn.TxnMeta) *Transaction {
 	defer m.transactions.Unlock()
 	tx, ok := m.transactions.Map[id]
 	if !ok {
-		tx = NewTransaction(id, meta.SnapshotTS)
+		tx = NewTransaction(id, meta.SnapshotTS, m.defaultIsolationPolicy)
 		m.transactions.Map[id] = tx
 	}
 	return tx
@@ -980,7 +984,7 @@ func (m *MemHandler) HandleCommitting(meta txn.TxnMeta) error {
 }
 
 func (m *MemHandler) HandleDestroy() error {
-	*m = *NewMemHandler(m.mheap)
+	*m = *NewMemHandler(m.mheap, m.defaultIsolationPolicy)
 	return nil
 }
 

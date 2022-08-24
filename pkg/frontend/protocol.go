@@ -180,6 +180,9 @@ type ProtocolImpl struct {
 
 	// whether the handshake succeeded
 	established bool
+
+	// whether the tls handshake succeeded
+	tlsEstablished bool
 }
 
 func (cpi *ProtocolImpl) IsEstablished() bool {
@@ -189,6 +192,15 @@ func (cpi *ProtocolImpl) IsEstablished() bool {
 func (cpi *ProtocolImpl) SetEstablished() {
 	logutil.Infof("SWITCH ESTABLISHED to true")
 	cpi.established = true
+}
+
+func (cpi *ProtocolImpl) IsTlsEstablished() bool {
+	return cpi.tlsEstablished
+}
+
+func (cpi *ProtocolImpl) SetTlsEstablished() {
+	logutil.Infof("SWITCH TLS_ESTABLISHED to true")
+	cpi.tlsEstablished = true
 }
 
 func (cpi *ProtocolImpl) ConnectionID() uint32 {
