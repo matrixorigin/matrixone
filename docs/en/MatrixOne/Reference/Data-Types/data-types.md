@@ -52,6 +52,9 @@ Reference: <https://dev.mysql.com/doc/refman/8.0/en/data-types.html>
 | Decimal64  | 8 byte | 	19 digits  | Decimal(N,S), N range(1,18), S range(0,N) |
 | Decimal128  | 16 byte | 	38 digits  | Decimal(N,S), N range(19,38), S range(0,N) |
 
+## **JSON Types(Beta)**
+
+
 ## **Examples**
 
 ```sql
