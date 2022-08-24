@@ -74,7 +74,7 @@ func TestDefaultContext(t *testing.T) {
 	}{
 		{
 			name: "normal",
-			want: ContextWithSpanContext(context.Background(), SpanContextWithIDs(0, 0)),
+			want: ContextWithSpanContext(context.Background(), SpanContextWithIDs(nilTraceID, nilSpanID)),
 		},
 	}
 	for _, tt := range tests {
@@ -85,7 +85,7 @@ func TestDefaultContext(t *testing.T) {
 }
 
 func TestDefaultSpanContext(t *testing.T) {
-	sc := SpanContextWithIDs(0, 0)
+	sc := SpanContextWithIDs(nilTraceID, nilSpanID)
 	tests := []struct {
 		name string
 		want *SpanContext
@@ -109,7 +109,7 @@ func TestGetNodeResource(t *testing.T) {
 	}{
 		{
 			name: "normal",
-			want: &MONodeResource{0, NodeTypeNode},
+			want: &MONodeResource{"node_uuid", NodeTypeNode},
 		},
 	}
 	for _, tt := range tests {
