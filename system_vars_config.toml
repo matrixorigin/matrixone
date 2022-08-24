@@ -96,3 +96,15 @@ logFilename = ""
 
 #MB. the maximum of log file size
 logMaxSize = 512
+
+#default is false. With true. Server will support tls
+enableTls = false
+
+#default is ''. Path of file that contains list of trusted SSL CAs for client
+tlsCaFile = ""
+
+#default is ''. Path of file that contains X509 certificate in PEM format for client
+tlsCertFile = ""
+
+#default is ''. Path of file that contains X509 key in PEM format for client
+tlsKeyFile = ""

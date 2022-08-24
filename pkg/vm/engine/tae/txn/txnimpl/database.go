@@ -28,7 +28,7 @@ import (
 type txnDBIt struct {
 	*sync.RWMutex
 	txn    txnif.AsyncTxn
-	linkIt *common.LinkIt
+	linkIt *common.SortedDListIt
 	itered bool // linkIt has no dummy head, use this to avoid duplicate filter logic for the very first entry
 	curr   *catalog.DBEntry
 	err    error

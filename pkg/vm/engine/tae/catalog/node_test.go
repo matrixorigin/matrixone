@@ -41,7 +41,7 @@ func (n *testNode) Compare(o common.NodePayload) int {
 }
 
 func TestDLNode(t *testing.T) {
-	link := new(common.Link)
+	link := new(common.SortedDList)
 	now := time.Now()
 	var node *common.DLNode
 	// for i := 10; i >= 0; i-- {

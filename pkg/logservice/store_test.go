@@ -62,6 +62,7 @@ func getStoreTestConfig() Config {
 		GossipSeedAddresses: []string{"127.0.0.1:9000"},
 		DeploymentID:        1,
 		FS:                  vfs.NewStrictMem(),
+		UseTeeLogDB:         true,
 	}
 	cfg.Fill()
 	return cfg

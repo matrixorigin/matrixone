@@ -6,6 +6,7 @@ package mock_frontend
 
 import (
 	"context"
+	"github.com/google/uuid"
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
@@ -71,6 +72,18 @@ func NewMockComputationWrapper(ctrl *gomock.Controller) *MockComputationWrapper 
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockComputationWrapper) EXPECT() *MockComputationWrapperMockRecorder {
 	return m.recorder
+}
+
+func (m *MockComputationWrapper) GetUUID() []byte {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetUUID")
+	ret0, _ := ret[0].(uuid.UUID)
+	return ret0[:]
+}
+
+func (mr *MockComputationWrapperMockRecorder) GetUUID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUUID", reflect.TypeOf((*MockComputationWrapper)(nil).GetUUID))
 }
 
 // Compile mocks base method.
