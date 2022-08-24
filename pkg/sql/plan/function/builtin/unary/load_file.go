@@ -15,11 +15,14 @@
 package unary
 
 import (
+	"context"
 	"errors"
-	"os"
+	"io"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -27,17 +30,50 @@ func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	inputVector := vectors[0]
 	resultType := types.New(types.T_varchar, 0, 0, 0)
 	vec := vector.New(resultType)
-	const blobsize = 2 ^ 16 - 1
-	fileName := vector.GetStrColumn(inputVector).GetString(0)
-	content, err := os.ReadFile(fileName)
+	const blobsize = 65536 // 2^16-1
+	Filepath := vector.GetStrColumn(inputVector).GetString(0)
+	r, err := ReadFromLocalFile(Filepath)
 	if err != nil {
 		return nil, err
 	}
-	if len(content) > blobsize {
+	ctx, err := io.ReadAll(r)
+	defer r.Close()
+	if len(ctx) > blobsize {
 		return nil, errors.New("Data too long for blob")
 	}
-	if err := vec.Append(content, proc.GetMheap()); err != nil {
+	if err := vec.Append(ctx, proc.GetMheap()); err != nil {
 		return nil, err
 	}
 	return vec, nil
+}
+
+func ReadFromLocalFile(Filepath string) (io.ReadCloser, error) {
+	var r io.ReadCloser
+	index := strings.LastIndex(Filepath, "/")
+	dir, file := "", Filepath
+	if index != -1 {
+		dir = string([]byte(Filepath)[0:index])
+		file = string([]byte(Filepath)[index+1:])
+	}
+
+	fs, err := fileservice.NewLocalETLFS("etl", dir)
+	if err != nil {
+		return nil, err
+	}
+	ctx := context.Background()
+	vec := fileservice.IOVector{
+		FilePath: file,
+		Entries: []fileservice.IOEntry{
+			0: {
+				Offset:            0,
+				Size:              -1,
+				ReadCloserForRead: &r,
+			},
+		},
+	}
+	err = fs.Read(ctx, &vec)
+	if err != nil {
+		return nil, err
+	}
+	return r, nil
 }
