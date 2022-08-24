@@ -14,20 +14,7 @@
 
 package compile
 
-import (
-	"context"
-	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
-	"github.com/stretchr/testify/require"
-	"testing"
-)
-
+/*
 func TestScopeSerialization(t *testing.T) {
 	testCases := []string{
 		"select 1",
@@ -86,3 +73,4 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 	}
 	return result
 }
+*/

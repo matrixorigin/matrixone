@@ -88,7 +88,13 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return nil
 	}
 
-	//PrintScope(nil, []*Scope{c.scope})
+	//	PrintScope(nil, []*Scope{c.scope})
+
+	if c.info.Typ == plan2.ExecTypeAP {
+		if err = fillPipeline(c.scope); err != nil {
+			return err
+		}
+	}
 
 	switch c.scope.Magic {
 	case Normal:

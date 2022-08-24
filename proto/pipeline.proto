@@ -159,6 +159,8 @@ message Source {
     string table_name = 2;
     repeated string col_list = 3;
     string    block = 4;
+    uint64    pushdown_id = 5;
+    string    pushdown_addr = 6;
 }
 
 message NodeInfo {

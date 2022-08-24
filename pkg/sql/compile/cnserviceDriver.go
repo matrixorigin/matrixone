@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
@@ -109,10 +110,28 @@ func refactorScope(ctx context.Context, s *Scope, cs morpc.ClientSession) {
 	}
 }
 
-func convertScopeToPipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipeline, int32, error) {
+func fillPipeline(s *Scope) error {
+	ctx := &scopeContext{
+		id:     0,
+		parent: nil,
+		regs:   make(map[*process.WaitRegister]int32),
+	}
+	ctx.root = ctx
+	p, ctxId, err := generatePipeline(s, ctx, 0)
+	if err != nil {
+		return err
+	}
+	if _, err := fillInstructionsForPipeline(s, ctx, p, ctxId); err != nil {
+		return err
+	}
+	return nil
+}
+
+func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipeline, int32, error) {
 	var err error
 
 	p := &pipeline.Pipeline{}
+	s.pipe = p
 	// Magic and IsEnd
 	p.PipelineType = pipeline.Pipeline_PipelineType(s.Magic)
 	p.PipelineId = ctx.id
@@ -126,6 +145,8 @@ func convertScopeToPipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline
 		Mcpu:    int32(s.NodeInfo.Mcpu),
 		Payload: make([]string, len(s.NodeInfo.Data)),
 	}
+	ctx.pipe = p
+	ctx.scope = s
 	{
 		for i := range s.NodeInfo.Data {
 			p.Node.Payload[i] = string(s.NodeInfo.Data[i])
@@ -140,9 +161,11 @@ func convertScopeToPipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline
 	// DataSource
 	if s.DataSource != nil { // if select 1, DataSource is nil
 		p.DataSource = &pipeline.Source{
-			SchemaName: s.DataSource.SchemaName,
-			TableName:  s.DataSource.RelationName,
-			ColList:    s.DataSource.Attributes,
+			SchemaName:   s.DataSource.SchemaName,
+			TableName:    s.DataSource.RelationName,
+			ColList:      s.DataSource.Attributes,
+			PushdownId:   s.DataSource.PushdownId,
+			PushdownAddr: s.DataSource.PushdownAddr,
 		}
 		if s.DataSource.Bat != nil {
 			data, err := types.Encode(s.DataSource.Bat)
@@ -158,23 +181,34 @@ func convertScopeToPipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline
 	for i := range s.PreScopes {
 		ctx.children[i] = &scopeContext{
 			parent: ctx,
-			root:   ctx.root,
 			id:     ctxId,
+			root:   ctx.root,
 			regs:   make(map[*process.WaitRegister]int32),
 		}
 		ctxId++
-		if p.Children[i], ctxId, err = convertScopeToPipeline(s.PreScopes[i], ctx.children[i], ctxId); err != nil {
+		if p.Children[i], ctxId, err = generatePipeline(s.PreScopes[i], ctx.children[i], ctxId); err != nil {
 			return nil, -1, err
+		}
+	}
+	return p, ctxId, nil
+}
+
+func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeline, ctxId int32) (int32, error) {
+	var err error
+
+	for i := range s.PreScopes {
+		if ctxId, err = fillInstructionsForPipeline(s.PreScopes[i], ctx.children[i], p.Children[i], ctxId); err != nil {
+			return ctxId, err
 		}
 	}
 	// Instructions
 	p.InstructionList = make([]*pipeline.Instruction, len(s.Instructions))
 	for i := range p.InstructionList {
-		if p.InstructionList[i], err = convertToPipelineInstruction(&s.Instructions[i], ctx); err != nil {
-			return nil, -1, err
+		if ctxId, p.InstructionList[i], err = convertToPipelineInstruction(&s.Instructions[i], ctx, ctxId); err != nil {
+			return ctxId, err
 		}
 	}
-	return p, ctxId, nil
+	return ctxId, nil
 }
 
 func convertPipelineToScope(proc *process.Process, p *pipeline.Pipeline, par *scopeContext, analNodes []*process.AnalyzeInfo) (*Scope, error) {
@@ -192,6 +226,8 @@ func convertPipelineToScope(proc *process.Process, p *pipeline.Pipeline, par *sc
 			SchemaName:   dsc.SchemaName,
 			RelationName: dsc.TableName,
 			Attributes:   dsc.ColList,
+			PushdownId:   dsc.PushdownId,
+			PushdownAddr: dsc.PushdownAddr,
 		}
 		if len(dsc.Block) > 0 {
 			bat := new(batch.Batch)
@@ -201,7 +237,7 @@ func convertPipelineToScope(proc *process.Process, p *pipeline.Pipeline, par *sc
 			s.DataSource.Bat = bat
 		}
 	}
-	{
+	if p.Node != nil {
 		s.NodeInfo.Id = p.Node.Id
 		s.NodeInfo.Addr = p.Node.Addr
 		s.NodeInfo.Mcpu = int(p.Node.Mcpu)
@@ -245,7 +281,9 @@ func convertPipelineToScope(proc *process.Process, p *pipeline.Pipeline, par *sc
 }
 
 // convert vm.Instruction to pipeline.Instruction
-func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext) (*pipeline.Instruction, error) {
+func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
+	var err error
+
 	in := &pipeline.Instruction{Op: int32(opr.Op), Idx: int32(opr.Idx)}
 	switch t := opr.Arg.(type) {
 	case *anti.Argument:
@@ -260,11 +298,21 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext) (*pipe
 		}
 	case *dispatch.Argument:
 		in.Dispatch = &pipeline.Dispatch{
-			All:       t.All,
-			Connector: make([]*pipeline.Connector, len(t.Regs)),
+			All: t.All,
 		}
+		in.Dispatch.Connector = make([]*pipeline.Connector, len(t.Regs))
 		for i := range t.Regs {
-			in.Dispatch.Connector[i] = ctx.root.findRegister(t.Regs[i])
+			idx, ctx0 := ctx.root.findRegister(t.Regs[i])
+			if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
+				id := srv.RegistConnector(t.Regs[i])
+				if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId); err != nil {
+					return ctxId, nil, err
+				}
+			}
+			in.Dispatch.Connector[i] = &pipeline.Connector{
+				ConnectorIndex: idx,
+				PipelineId:     ctx0.id,
+			}
 		}
 	case *group.Argument:
 		in.Agg = &pipeline.Group{
@@ -403,13 +451,24 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext) (*pipe
 		in.OrderBy = convertToPlanOrderByList(t.Fs)
 	case *mergeorder.Argument:
 		in.OrderBy = convertToPlanOrderByList(t.Fs)
-	// operators that nothing need to do.
 	case *connector.Argument:
-		in.Connect = ctx.root.findRegister(t.Reg)
-	default:
-		return nil, moerr.New(moerr.INTERNAL_ERROR, "unexpected operator: %v", opr.Op)
+		idx, ctx0 := ctx.root.findRegister(t.Reg)
+		if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
+			id := srv.RegistConnector(t.Reg)
+			if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId); err != nil {
+				return ctxId, nil, err
+			}
+		}
+		in.Connect = &pipeline.Connector{
+			ConnectorIndex: idx,
+			PipelineId:     ctx0.id,
+		}
+		/*
+			default:
+				return ctxId, nil, moerr.New(moerr.INTERNAL_ERROR, fmt.Sprintf("unexpected operator: %v", opr.Op))
+		*/
 	}
-	return in, nil
+	return ctxId, in, nil
 }
 
 // convert pipeline.Instruction to vm.Instruction
@@ -593,23 +652,14 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 }
 
 func encodeScope(s *Scope) ([]byte, error) {
-	// convert scope to pipeline.Pipeline
-	ctx := &scopeContext{
-		id:     0,
-		parent: nil,
-		regs:   make(map[*process.WaitRegister]int32),
+	if s.pipe == nil {
+		if err := fillPipeline(s); err != nil {
+			return nil, err
+		}
+	} else {
+		s.pipe.InstructionList = s.pipe.InstructionList[:len(s.pipe.InstructionList)-1]
 	}
-	ctx.root = ctx
-	p, _, err := convertScopeToPipeline(s, ctx, 0)
-	if err != nil {
-		return nil, err
-	}
-	// marshal to pipeline
-	data, err := p.Marshal()
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	return s.pipe.Marshal()
 }
 
 func decodeScope(data []byte) (*Scope, error) {
@@ -845,17 +895,81 @@ func (ctx *scopeContext) getRegister(id, idx int32) *process.WaitRegister {
 	return nil
 }
 
-func (ctx *scopeContext) findRegister(reg *process.WaitRegister) *pipeline.Connector {
-	if index, ok := ctx.regs[reg]; ok {
-		return &pipeline.Connector{
-			PipelineId:     ctx.id,
-			ConnectorIndex: index,
-		}
+func (ctx *scopeContext) findRegister(reg *process.WaitRegister) (int32, *scopeContext) {
+	if idx, ok := ctx.regs[reg]; ok {
+		return idx, ctx
 	}
 	for i := range ctx.children {
-		if cp := ctx.children[i].findRegister(reg); cp != nil {
-			return cp
+		if idx, ctx := ctx.children[i].findRegister(reg); idx >= 0 {
+			return idx, ctx
 		}
 	}
-	return nil
+	return -1, nil
+}
+
+func (ctx *scopeContext) addSubPipeline(id uint64, idx int32, ctxId int32) (int32, error) {
+	ds := &Scope{Magic: Pushdown}
+	ds.Proc = process.NewWithAnalyze(ctx.scope.Proc, ctx.scope.Proc.Ctx, 0, nil)
+	ds.DataSource = &Source{
+		PushdownId:   id,
+		PushdownAddr: cnAddr,
+	}
+	ds.appendInstruction(vm.Instruction{
+		Op: vm.Connector,
+		Arg: &connector.Argument{
+			Reg: ctx.scope.Proc.Reg.MergeReceivers[idx],
+		},
+	})
+	ctx.scope.PreScopes = append(ctx.scope.PreScopes, ds)
+	p := &pipeline.Pipeline{}
+	ds.pipe = p
+	p.PipelineId = ctxId
+	p.PipelineType = Pushdown
+	ctxId++
+	p.DataSource = &pipeline.Source{
+		PushdownId:   id,
+		PushdownAddr: cnAddr,
+	}
+	p.InstructionList = append(p.InstructionList, &pipeline.Instruction{
+		Op: vm.Connector,
+		Connect: &pipeline.Connector{
+			ConnectorIndex: idx,
+			PipelineId:     ctx.id,
+		},
+	})
+	ctx.pipe.Children = append(ctx.pipe.Children, p)
+	return ctxId, nil
+}
+
+func (ctx *scopeContext) isDescendant(dsc *scopeContext) bool {
+	if ctx.id == dsc.id {
+		return true
+	}
+	for i := range ctx.children {
+		if ctx.children[i].isDescendant(dsc) {
+			return true
+		}
+	}
+	return false
+}
+
+func (root *scopeContext) isRemote(ctx *scopeContext, depth int) bool {
+	if ctx.scope.Magic != Remote {
+		return false
+	}
+	if root.id == ctx.id && depth == 0 {
+		return true
+	}
+	for i := range root.children {
+		if root.children[i].scope.Magic == Remote {
+			if root.children[i].isRemote(ctx, depth+1) {
+				return true
+			}
+		} else {
+			if root.children[i].isRemote(ctx, depth) {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -100,13 +100,20 @@ func (s *Scope) MergeRun(c *Compile) error {
 				}()
 				err = cs.ParallelRun(c)
 			}(s.PreScopes[i])
+		case Pushdown:
+			go func(cs *Scope) {
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+				err = cs.PushdownRun(c)
+			}(s.PreScopes[i])
 		}
 	}
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
 	if _, err := p.MergeRun(s.Proc); err != nil {
 		return err
 	}
-
 	// check sub-goroutine's error
 	for i := 0; i < len(s.PreScopes); i++ {
 		if err := <-errChan; err != nil {
@@ -129,10 +136,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
 		sendToConnectOperator(arg, nil)
 	*/
-
 	n := len(s.Instructions) - 1
 	in := s.Instructions[n]
-	s.Instructions = s.Instructions[:n-1]
+	s.Instructions = s.Instructions[:n]
 	data, err := encodeScope(s)
 	if err != nil {
 		return err
@@ -184,13 +190,38 @@ func (s *Scope) ParallelRun(c *Compile) error {
 	return s.MergeRun(c)
 }
 
+func (s *Scope) PushdownRun(c *Compile) error {
+	var end bool // exist flag
+	var err error
+
+	reg := srv.GetConnector(s.DataSource.PushdownId)
+	for {
+		bat := <-reg.Ch
+		if bat == nil {
+			s.Proc.Reg.InputBatch = bat
+			_, err = vm.Run(s.Instructions, s.Proc)
+			s.Proc.Cancel()
+			return err
+		}
+		if bat.Length() == 0 {
+			continue
+		}
+		s.Proc.Reg.InputBatch = bat
+		if end, err = vm.Run(s.Instructions, s.Proc); err != nil || end {
+			return err
+		}
+	}
+}
+
 func (s *Scope) JoinRun(c *Compile) error {
 	mcpu := s.NodeInfo.Mcpu
 	if mcpu < 1 {
 		mcpu = 1
 	}
-	chp := s.PreScopes[0]
-	chp.IsEnd = true
+	chp := s.PreScopes
+	for i := range chp {
+		chp[i].IsEnd = true
+	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{
@@ -201,7 +232,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 	}
 	left, right := c.newLeftScope(s, ss), c.newRightScope(s, ss)
 	s = newParallelScope(c, s, ss)
-	s.PreScopes = append(s.PreScopes, chp)
+	s.PreScopes = append(s.PreScopes, chp...)
 	s.PreScopes = append(s.PreScopes, left)
 	s.PreScopes = append(s.PreScopes, right)
 	return s.MergeRun(c)

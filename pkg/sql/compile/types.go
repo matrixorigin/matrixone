@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -39,6 +40,7 @@ const (
 	Normal
 	Remote
 	Parallel
+	Pushdown
 	CreateDatabase
 	CreateTable
 	CreateIndex
@@ -51,15 +53,10 @@ const (
 	InsertValues
 )
 
-type EncodeSource struct {
-	SchemaName   string
-	RelationName string
-	Attributes   []string
-	Bat          *batch.Batch
-}
-
 // Source contains information of a relation which will be used in execution,
 type Source struct {
+	PushdownId   uint64
+	PushdownAddr string
 	SchemaName   string
 	RelationName string
 	Attributes   []string
@@ -101,13 +98,17 @@ type Scope struct {
 	Proc *process.Process
 
 	Reg *process.WaitRegister
+
+	pipe *pipeline.Pipeline
 }
 
 type scopeContext struct {
 	id       int32
+	scope    *Scope
 	root     *scopeContext
 	parent   *scopeContext
 	children []*scopeContext
+	pipe     *pipeline.Pipeline
 	regs     map[*process.WaitRegister]int32
 }
 
@@ -121,8 +122,8 @@ type anaylze struct {
 
 type Server struct {
 	sync.Mutex
-	curr uint64
-	mp   map[uint64]*process.WaitRegister
+	id uint64
+	mp map[uint64]*process.WaitRegister // k = id, v = reg
 }
 
 // Compile contains all the information needed for compilation.
