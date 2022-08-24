@@ -909,9 +909,9 @@ func (mp *MysqlProtocolImpl) writeZeros(data []byte, pos int, count int) int {
 // and judges it with the authentication data from the client.
 // Algorithm: SHA1( password ) XOR SHA1( slat + SHA1( SHA1( password ) ) )
 func (mp *MysqlProtocolImpl) checkPassword(password, salt, auth []byte) bool {
-	if len(password) == 0 {
-		return false
-	}
+	//if len(password) == 0 {
+	//	return false
+	//}
 	//hash1 = SHA1(password)
 	sha := sha1.New()
 	_, err := sha.Write(password)
@@ -960,12 +960,13 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 	//TODO:check the user and the connection
 	//TODO:get the user's password
 	var psw []byte
-	if mp.username == mp.SV.DumpUser { //the user dump for test
-		psw = []byte(mp.SV.DumpPassword)
-	}
+	var err error
+	//if mp.username == mp.SV.DumpUser { //the user dump for test
+	//	psw = []byte(mp.SV.DumpPassword)
+	//}
 
 	if !mp.GetSkipCheckUser() {
-		err := mp.ses.AuthenticateUser(mp.username)
+		psw, err = mp.ses.AuthenticateUser(mp.username)
 		if err != nil {
 			return err
 		}

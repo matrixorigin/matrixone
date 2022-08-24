@@ -151,13 +151,24 @@ const (
 	rootID            = 0
 	rootHost          = "NULL"
 	rootName          = "root"
-	rootPassword      = ""
+	rootPassword      = "111"
 	rootStatus        = "open"
 	rootExpiredTime   = "NULL"
 	rootLoginType     = "PASSWORD"
 	rootCreatorID     = rootID
 	rootOwnerRoleID   = moAdminRoleID
 	rootDefaultRoleID = moAdminRoleID
+
+	dumpID            = 1
+	dumpHost          = "NULL"
+	dumpName          = "dump"
+	dumpPassword      = "111"
+	dumpStatus        = "open"
+	dumpExpiredTime   = "NULL"
+	dumpLoginType     = "PASSWORD"
+	dumpCreatorID     = rootID
+	dumpOwnerRoleID   = moAdminRoleID
+	dumpDefaultRoleID = moAdminRoleID
 )
 
 const (
@@ -396,16 +407,23 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 }
 
 var (
+	sysWantedDatabases = map[string]int8{
+		"mo_catalog":         0,
+		"information_schema": 0,
+		"system":             0,
+		"system_metrics":     0,
+	}
 	sysWantedTables = map[string]int8{
-		"mo_database":   0,
-		"mo_tables":     0,
-		"mo_columns":    0,
-		"mo_user":       0,
-		"mo_account":    0,
-		"mo_role":       0,
-		"mo_user_grant": 0,
-		"mo_role_grant": 0,
-		"mo_role_priv":  0,
+		"mo_database":         0,
+		"mo_tables":           0,
+		"mo_columns":          0,
+		"mo_user":             0,
+		"mo_account":          0,
+		"mo_role":             0,
+		"mo_user_grant":       0,
+		"mo_role_grant":       0,
+		"mo_role_priv":        0,
+		"mo_global_variables": 0,
 	}
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
@@ -464,6 +482,10 @@ var (
 				granted_time timestamp,
 				with_grant_option bool
 			);`,
+		`create table mo_global_variables(
+    			gv_variable_name varchar(256),
+    			gv_variable_value varchar(1024)
+    		);`,
 	}
 
 	initMoAccountFormat = `insert into mo_account(
@@ -511,6 +533,14 @@ var (
 				granted_time,
 				with_grant_option
 			) values(%d,%d,"%s",%v);`
+)
+
+var (
+	//privilege verification
+	getPasswordOfUserFormat = `select user_id,authentication_string from mo_catalog.mo_user where user_name = "%s";`
+
+	//TODO:add
+	getPrivilegeOfUserOnCreateAlterDropAccountFormat = `;`
 )
 
 type role struct {
@@ -590,8 +620,9 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
-	sql := "show tables from mo_catalog;"
-	err := bh.Exec(sql)
+
+	dbSql := "show databases;"
+	err := bh.Exec(dbSql)
 	if err != nil {
 		return false, err
 	}
@@ -601,8 +632,39 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 		panic("it must have result set")
 	}
 
-	tableNames := []string{}
+	dbNames := []string{}
+	for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+		dbName, err := rsset[0].GetString(i, 0)
+		if err != nil {
+			return false, err
+		}
+		dbNames = append(dbNames, dbName)
+	}
 
+	for _, name := range dbNames {
+		if _, ok := sysWantedDatabases[name]; !ok {
+			return false, moerr.NewInternalError(fmt.Sprintf("sys tenant does not have the database %s", name))
+		}
+	}
+
+	if len(dbNames) != len(sysWantedDatabases) {
+		return false, nil
+	}
+
+	bh.ses.ClearAllMysqlResultSet()
+
+	sql := "show tables from mo_catalog;"
+	err = bh.Exec(sql)
+	if err != nil {
+		return false, err
+	}
+
+	rsset = bh.ses.GetAllMysqlResultSet()
+	if len(rsset) != 1 {
+		panic("it must have result set")
+	}
+
+	tableNames := []string{}
 	for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
 		tableName, err := rsset[0].GetString(i, 0)
 		if err != nil {
@@ -611,14 +673,14 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 		tableNames = append(tableNames, tableName)
 	}
 
-	if len(tableNames) != len(sysWantedTables) {
-		return false, moerr.NewInternalError("sys tenant does not have right number of tables")
-	}
-
 	for _, name := range tableNames {
 		if _, ok := sysWantedTables[name]; !ok {
 			return false, moerr.NewInternalError(fmt.Sprintf("sys tenant does not have the table %s", name))
 		}
+	}
+
+	if len(tableNames) != len(sysWantedTables) {
+		return false, nil
 	}
 
 	return true, nil
@@ -629,10 +691,7 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 func InitSysTenant(ctx context.Context, tenant *TenantInfo) error {
 	var err error
 	var exists bool
-	var initMoAccount string
-	var initDataSqls []string
 	pu := config.GetParameterUnit(ctx)
-	isSys := tenant.IsSysTenant()
 
 	ctx = context.WithValue(ctx, moengine.TenantIDKey{}, uint32(sysAccountID))
 	ctx = context.WithValue(ctx, moengine.UserIDKey{}, uint32(rootID))
@@ -645,6 +704,26 @@ func InitSysTenant(ctx context.Context, tenant *TenantInfo) error {
 	if exists {
 		return nil
 	}
+
+	err = createTablesInMoCatalog(ctx, tenant, pu)
+	if err != nil {
+		return err
+	}
+
+	err = createTablesInInformationSchema(ctx, tenant, pu)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// createTablesInMoCatalog creates catalog tables in the database mo_catalog.
+func createTablesInMoCatalog(ctx context.Context, tenant *TenantInfo, pu *config.ParameterUnit) error {
+	var err error
+	var initMoAccount string
+	var initDataSqls []string
+	isSys := tenant.IsSysTenant()
 
 	addSqlIntoSet := func(sql string) {
 		initDataSqls = append(initDataSqls, sql)
@@ -684,8 +763,10 @@ func InitSysTenant(ctx context.Context, tenant *TenantInfo) error {
 
 	//step 3:add new user entry to the mo_user
 	if isSys {
-		initMoUser := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, rootPassword, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
-		addSqlIntoSet(initMoUser)
+		initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, rootPassword, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
+		initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, dumpPassword, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
+		addSqlIntoSet(initMoUser1)
+		addSqlIntoSet(initMoUser2)
 	}
 
 	//step4: add new entries to the mo_role_priv
@@ -722,12 +803,10 @@ func InitSysTenant(ctx context.Context, tenant *TenantInfo) error {
 	addSqlIntoSet("commit;")
 
 	//fill the mo_account, mo_role, mo_user, mo_role_priv, mo_user_grant
-	//wrap
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
 	for _, sql := range initDataSqls {
-		fmt.Println("-------> ", sql)
 		err = bh.Exec(sql)
 		if err != nil {
 			goto handleFailed
@@ -739,6 +818,18 @@ func InitSysTenant(ctx context.Context, tenant *TenantInfo) error {
 handleFailed:
 	//ROLLBACK the transaction
 	err = bh.Exec("rollback;")
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// createTablesInInformationSchema creates the database information_schema and the views or tables.
+func createTablesInInformationSchema(ctx context.Context, tenant *TenantInfo, pu *config.ParameterUnit) error {
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	err := bh.Exec("create database information_schema;")
 	if err != nil {
 		return err
 	}

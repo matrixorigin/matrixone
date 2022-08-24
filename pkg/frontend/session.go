@@ -211,6 +211,12 @@ func (ses *Session) GetAllMysqlResultSet() []*MysqlResultSet {
 	return ses.allResultSet
 }
 
+func (ses *Session) ClearAllMysqlResultSet() {
+	if ses.allResultSet != nil {
+		ses.allResultSet = ses.allResultSet[:0]
+	}
+}
+
 func (ses *Session) GetTenantInfo() *TenantInfo {
 	return ses.tenant
 }
@@ -576,18 +582,28 @@ func (ses *Session) SetOutputCallback(callback func(interface{}, *batch.Batch) e
 }
 
 // AuthenticateUser verifies the password of the user.
-func (ses *Session) AuthenticateUser(userInput string) error {
+func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	//Get tenant info
 	tenant, err := GetTenantInfo(userInput)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	ses.SetTenantInfo(tenant)
 
 	//Get the password of the user in an independent session
-	err = executeSQLInBackgroundSession(ses.requestCtx, ses.GuestMmu, ses.Mempool, ses.Pu, "use mo_catalog; select * from mo_database;")
-	return err
+	getPasswordSql := fmt.Sprintf(getPasswordOfUserFormat, tenant.GetUser())
+	rsset, err := executeSQLInBackgroundSession(ses.requestCtx, ses.GuestMmu, ses.Mempool, ses.Pu, getPasswordSql)
+	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		return nil, fmt.Errorf("there is no password of the user %s", tenant.GetUser())
+	}
+
+	pwd, err := rsset[0].GetString(0, 1)
+	if err != nil {
+		return nil, fmt.Errorf("there is no password of the user %s", tenant.GetUser())
+	}
+
+	return []byte(pwd), nil
 }
 
 func (th *TxnHandler) SetSession(ses *Session) {
@@ -987,16 +1003,14 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 
 // executeSQLInBackgroundSession executes the sql in an independent session and transaction.
 // It sends nothing to the client.
-func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) error {
-	mce := NewMysqlCmdExecutor()
-	defer mce.Close()
-	backSess := NewBackgroundSession(ctx, gm, mp, pu, gSysVariables)
-	mce.PrepareSessionBeforeExecRequest(backSess.Session)
-	defer backSess.Close()
-	err := mce.doComQuery(backSess.GetRequestContext(), sql)
+func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) ([]*MysqlResultSet, error) {
+	bh := NewBackgroundHandler(ctx, gm, mp, pu)
+	defer bh.Close()
+	err := bh.Exec(sql)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	rsset := bh.ses.GetAllMysqlResultSet()
 	//get the result set
 	//TODO: debug further
 	//mrsArray := ses.GetAllMysqlResultSet()
@@ -1010,7 +1024,7 @@ func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempo
 	//	}
 	//}
 
-	return nil
+	return rsset, nil
 }
 
 type BackgroundHandler struct {
