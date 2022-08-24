@@ -28,17 +28,9 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	InternalExecutor = "InternalExecutor"
-	FileService      = "FileService"
-)
-
-type TraceID uint64
-type SpanID uint64
-
 var gTracerProvider *MOTracerProvider
 var gTracer Tracer
-var gTraceContext context.Context = context.Background()
+var gTraceContext = context.Background()
 var gSpanContext atomic.Value
 
 func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, error) {
@@ -57,7 +49,9 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	gTracer = gTracerProvider.Tracer("MatrixOrigin")
 
 	// init Node DefaultContext
-	sc := SpanContextWithIDs(TraceID(0), SpanID(config.getNodeResource().NodeID))
+	var spanId SpanID
+	spanId.SetByUUID(config.getNodeResource().NodeUuid)
+	sc := SpanContextWithIDs(nilTraceID, spanId)
 	gSpanContext.Store(&sc)
 	gTraceContext = ContextWithSpanContext(ctx, sc)
 
@@ -70,7 +64,7 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 
 func initExport(ctx context.Context, config *tracerProviderConfig) {
 	if !config.IsEnable() {
-		logutil2.Infof(context.TODO(), "initExport pass.")
+		logutil.Info("initExport pass.")
 		return
 	}
 	var p export.BatchProcessor
@@ -97,8 +91,8 @@ func initExport(ctx context.Context, config *tracerProviderConfig) {
 	}
 	if p != nil {
 		config.spanProcessors = append(config.spanProcessors, NewBatchSpanProcessor(p))
-		logutil2.Infof(context.TODO(), "trace span processor")
-		logutil2.Info(context.TODO(), "[Debug]", zap.String("operation", "value1"), zap.String("operation_1", "value2"))
+		logutil.Info("trace span processor")
+		logutil.Info("[Debug]", zap.String("operation", "value1"), zap.String("operation_1", "value2"))
 	}
 }
 
