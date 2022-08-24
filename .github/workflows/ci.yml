@@ -4,7 +4,7 @@ name: MatrixOne CI
 on:
   pull_request:
     types: [ opened, synchronize, reopened ]
-    branches: main
+    branches: [ main ]
 
   workflow_dispatch:
 
@@ -105,15 +105,13 @@ jobs:
 
       - name: Build MatrixOne
         run: |
-          cd $GITHUB_WORKSPACE/head && make clean && make config && make build
+          cd $GITHUB_WORKSPACE/head && make clean && make debug
           git rev-parse --short HEAD
-          echo "base sha: ${{ github.event.pull_request.base.sha }}"
-          echo "head sha: ${{ github.event.pull_request.head.sha }}"
 
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
-          ./mo-server ./system_vars_config.toml &>mo-server.log &
+          ./mo-service -cfg ./etc/cn-standalone-test.toml &>mo-service.log &
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2
@@ -139,18 +137,17 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
 
-      - name: Check MO-Server Status
+      - name: Check mo-service Status
         if: ${{ always() }}
         run: |
-          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
         
       - name: remove some files
         if: ${{ always() }}
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
-          if  [ -d  "./head/mo-server"  ]; then rm -rf ./head/mo-server; fi
-          if  [ -d  "./base/"  ]; then rm -rf ./base/; fi
+          if  [ -d  "./head/mo-service"  ]; then rm -rf ./head/mo-service; fi
           rm -rf ./mo-tester/.git
           rm -rf ./mo-tester/lib
 
@@ -180,15 +177,13 @@ jobs:
 
       - name: Build MatrixOne
         run: |
-          cd $GITHUB_WORKSPACE/head && make clean && make config && make build
+          cd $GITHUB_WORKSPACE/head && make clean && make debug
           git rev-parse --short HEAD
-          echo "base sha: ${{ github.event.pull_request.base.sha }}"
-          echo "head sha: ${{ github.event.pull_request.head.sha }}"
 
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
-          ./mo-server ./system_vars_config.toml &>mo-server.log &
+          ./mo-service -cfg ./etc/cn-standalone-test.toml &>mo-service.log &
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2
@@ -214,18 +209,17 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
 
-      - name: Check MO-Server Status
+      - name: Check mo-service Status
         if: ${{ always() }}
         run: |
-          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
         
       - name: remove some files
         if: ${{ always() }}
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
-          if  [ -d  "./head/mo-server"  ]; then rm -rf ./head/mo-server; fi
-          if  [ -d  "./base/"  ]; then rm -rf ./base/; fi
+          if  [ -d  "./head/mo-service"  ]; then rm -rf ./head/mo-service; fi
           rm -rf ./mo-tester/.git
           rm -rf ./mo-tester/lib
 
@@ -255,15 +249,13 @@ jobs:
 
       - name: Build MatrixOne
         run: |
-          cd $GITHUB_WORKSPACE/head && make clean && make config && make build
+          cd $GITHUB_WORKSPACE/head && make clean && make debug
           git rev-parse --short HEAD
-          echo "base sha: ${{ github.event.pull_request.base.sha }}"
-          echo "head sha: ${{ github.event.pull_request.head.sha }}"
 
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
-          ./mo-server ./system_vars_config.toml &>mo-server.log &
+          ./mo-service -cfg ./etc/cn-standalone-test.toml &>mo-service.log &
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2
@@ -287,18 +279,17 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
 
-      - name: Check MO-Server Status
+      - name: Check MO-Service Status
         if: ${{ always() }}
         run: |
-          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
         
       - name: remove some files
         if: ${{ always() }}
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
-          if  [ -d  "./head/mo-server"  ]; then rm -rf ./head/mo-server; fi
-          if  [ -d  "./base/"  ]; then rm -rf ./base/; fi
+          if  [ -d  "./head/mo-service"  ]; then rm -rf ./head/mo-service; fi
           rm -rf ./mo-tester/.git
           rm -rf ./mo-tester/lib
 
@@ -310,100 +301,6 @@ jobs:
           path: |
             ${{ github.workspace }}
           retention-days: 7
-
-  linux-x86-bvt-race:
-    runs-on: ubuntu-latest
-    name: BVT RACE Test on CentOS/x64
-    timeout-minutes: 30
-
-    steps:
-      - name: checkout head
-        uses: actions/checkout@v2
-        with:
-          fetch-depth: '3'
-          path: ./head
-
-      - name: Set up Go
-        uses: ./head/.github/actions/setup_env
-
-      - name: Build MatrixOne
-        run: |
-          cd $GITHUB_WORKSPACE/head && make clean && make config && make debug
-          git rev-parse --short HEAD
-          echo "base sha: ${{ github.event.pull_request.base.sha }}"
-          echo "head sha: ${{ github.event.pull_request.head.sha }}"
-
-      - name: Start MO
-        run: |
-          cd $GITHUB_WORKSPACE/head
-          ./mo-server ./system_vars_config.toml &>mo-server.log &
-
-      - name: Clone test-tool repository
-        uses: actions/checkout@v2
-        with:
-          repository: matrixorigin/mo-tester
-          path: ./mo-tester
-          ref: main
-
-      - name: Set up JDK 8
-        uses: actions/setup-java@v3
-        with:
-          java-version: '8'
-          distribution: 'adopt'
-          architecture: x64
-
-      - name: Start BVT Test
-        id: bvt_on_pr_version
-        run: |
-          timedatectl status
-          sudo timedatectl set-timezone "Asia/Shanghai"
-          timedatectl status
-          sleep 60s
-          cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
-
-      - name: Check MO-Server Status
-        if: ${{ always() }}
-        run: |
-          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
-          
-      - name: Check race warnings
-        run: |
-          if [ "$(grep 'DATA RACE' $GITHUB_WORKSPACE/head/mo-server.log | wc -l || 0)" -gt 0 ]; then grep -A 5 'DATA RACE' $GITHUB_WORKSPACE/head/mo-server.log; exit 1; fi
-                          
-      - name: remove some files
-        if: ${{ always() }}
-        continue-on-error: true
-        run: |
-          cd $GITHUB_WORKSPACE
-          if  [ -d  "./head/mo-server"  ]; then rm -rf ./head/mo-server; fi
-          rm -rf ./mo-tester/.git
-          rm -rf ./mo-tester/lib
-
-      - uses: actions/upload-artifact@v2
-        if: ${{ always() }}
-        continue-on-error: true
-        with:
-          name: linux_x86_race_ci_reports
-          path: |
-            ${{ github.workspace }}
-          retention-days: 7
- 
-  build-services:
-    name: Build mo-service
-    runs-on: ubuntu-latest
-    steps:
-      - name: checkout
-        uses: actions/checkout@v2
-        with:
-          fetch-depth: '3'
-
-      - name: Set up Go
-        uses: ./.github/actions/setup_env
-
-      - name: Build mo-service
-        run: |
-          cd $GITHUB_WORKSPACE && make service 
 
   lint-docs:
     name: Lint Docs
