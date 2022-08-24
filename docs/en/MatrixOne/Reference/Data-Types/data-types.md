@@ -161,4 +161,6 @@ Reference: <https://dev.mysql.com/doc/refman/8.0/en/data-types.html>
 +----------------+
 | {"k1": "v1"}    |
 | ["k1", null, false, true, 123, 1.2, {"k2": "v2"}] |
++----------------+
+2 rows in set (0.00 sec)
 ```
