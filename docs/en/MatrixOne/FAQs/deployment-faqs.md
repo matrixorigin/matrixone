@@ -4,7 +4,7 @@
 
 * **What are the required operating system versions for deploying MatrixOne?**
 
-For standalone installation, MatrixOne 0.5.0 supports the following operating system:
+For standalone installation, MatrixOne supports the following operating system:
 
 | Linux OS                 | Version                   |
 | :----------------------- | :------------------------ |
@@ -23,7 +23,7 @@ MatrixOne also supports macOS operating system, but it's only recommended to run
 
 * **What are the required hardware for deploying MatrixOne?**
 
-For standalone installation, MatrixOne 0.5.0 can be running on the 64-bit generic hardware server platform in the Intel x86-64 architecture. The requirements and recommendations about server hardware configuration for development, testing and production environments are as follows:
+For standalone installation, MatrixOne can be running on the 64-bit generic hardware server platform in the Intel x86-64 architecture. The requirements and recommendations about server hardware configuration for development, testing and production environments are as follows:
 
 * Development and testing environments
 
@@ -44,6 +44,14 @@ The Macbook M1/M2 with ARM architecture is also a good fit for a development env
 * **What settings do I need to change for installation?**
 
 Normally you don't need to change anything for installation. A default setting of `system_vars_config.toml` is enough to run MatrixOne directly. But if you want to customize your listening port, ip address, stored data files path, you may modify the corresponding records of`system_vars_config.toml`.
+
+* **After the MySQL client is installed, I open the terminal and run `mysql`, I got an error of `command not found: mysql`.**
+
+To solve the error, you need to set the environment variable. Run the following command:
+
+```
+export PATH=${PATH}:/usr/local/mysql/bin
+```
 
 * **When I install MatrixOne by building from source, I got an error of the following and the build failed, how can I proceed?**
 
@@ -77,7 +85,7 @@ To complete the following configuration, then compiling 'SSB-DBgen' for a PC wit
 
 1. Download and install [GCC11](https://gcc.gnu.org/install/).
 
-2. To ensure the gcc-11 is successful installed, run the following ccommand:
+2. To ensure the gcc-11 is successful installed, run the following command:
 
    ```
    gcc-11 -v

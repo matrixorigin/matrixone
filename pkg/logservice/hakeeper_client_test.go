@@ -189,16 +189,16 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 
 		cd, err := c1.GetClusterDetails(ctx)
 		require.NoError(t, err)
-		cn := pb.CNNode{
+		cn := pb.CNStore{
 			UUID:           s.ID(),
 			ServiceAddress: "addr1",
 		}
-		dn := pb.DNNode{
+		dn := pb.DNStore{
 			UUID:           s.ID(),
 			ServiceAddress: "addr2",
 		}
-		assert.Equal(t, []pb.CNNode{cn}, cd.CNNodes)
-		assert.Equal(t, []pb.DNNode{dn}, cd.DNNodes)
+		assert.Equal(t, []pb.CNStore{cn}, cd.CNStores)
+		assert.Equal(t, []pb.DNStore{dn}, cd.DNStores)
 	}
 	runServiceTest(t, true, true, fn)
 }

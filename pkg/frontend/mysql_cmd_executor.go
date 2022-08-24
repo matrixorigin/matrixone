@@ -19,8 +19,6 @@ import (
 	"encoding/binary"
 	goErrors "errors"
 	"fmt"
-	"hash/fnv"
-
 	"os"
 	"runtime/pprof"
 	"sort"
@@ -55,6 +53,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+
+	"github.com/google/uuid"
 )
 
 func onlyCreateStatementErrorInfo() string {
@@ -148,35 +148,35 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
 }
 
-func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, proc *process.Process, sql string, beginIns time.Time) context.Context {
-	statementId := util.Fastrand64()
+func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, beginIns time.Time) context.Context {
 	sessInfo := proc.SessionInfo
-	txnID := uint64(0)
+	var stmID uuid.UUID
+	copy(stmID[:], cw.GetUUID())
+	var txnID uuid.UUID
 	if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
-		idBytes := handler.GetTxn().Txn().ID
-		hasher := fnv.New64()
-		if _, err := hasher.Write(idBytes); err != nil {
-			panic(err)
-		}
-		txnID = hasher.Sum64()
+		copy(txnID[:], handler.GetTxn().Txn().ID)
 	}
+	var sesID uuid.UUID
+	copy(sesID[:], ses.GetUUID())
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+	cw.GetAst().Format(fmtCtx)
 	trace.ReportStatement(
 		ctx,
 		&trace.StatementInfo{
-			StatementID:          statementId,
-			SessionID:            sessInfo.GetConnectionID(),
+			StatementID:          stmID,
 			TransactionID:        txnID,
+			SessionID:            sesID,
 			Account:              "account", //fixme: sessInfo.GetAccount()
 			User:                 sessInfo.GetUser(),
 			Host:                 sessInfo.GetHost(),
 			Database:             sessInfo.GetDatabase(),
-			Statement:            sql,
+			Statement:            fmtCtx.String(),
 			StatementFingerprint: "", // fixme
 			StatementTag:         "", // fixme
 			RequestAt:            util.NowNS(),
 		},
 	)
-	return trace.ContextWithSpanContext(ctx, trace.SpanContextWithID(trace.TraceID(statementId)))
+	return trace.ContextWithSpanContext(ctx, trace.SpanContextWithID(trace.TraceID(stmID)))
 }
 
 // outputPool outputs the data
@@ -306,14 +306,14 @@ const (
 	tableNamePos    = 1
 	tableCommentPos = 6
 
-	attrNamePos    = 16
-	attrTypPos     = 17
-	charWidthPos   = 19
-	nullablePos    = 20
-	primaryKeyPos  = 24
-	attrCommentPos = 27
+	attrNamePos    = 17
+	attrTypPos     = 18
+	charWidthPos   = 20
+	nullablePos    = 21
+	primaryKeyPos  = 25
+	attrCommentPos = 28
 
-	showCreateTableAttrCount = 29
+	showCreateTableAttrCount = 30
 )
 
 /*
@@ -1528,13 +1528,17 @@ type TxnComputationWrapper struct {
 	proc    *process.Process
 	ses     *Session
 	compile *compile.Compile
+
+	uuid uuid.UUID
 }
 
 func InitTxnComputationWrapper(ses *Session, stmt tree.Statement, proc *process.Process) *TxnComputationWrapper {
+	uuid, _ := uuid.NewUUID()
 	return &TxnComputationWrapper{
 		stmt: stmt,
 		proc: proc,
 		ses:  ses,
+		uuid: uuid,
 	}
 }
 
@@ -1638,6 +1642,10 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		return nil, err
 	}
 	return cwft.compile, err
+}
+
+func (cwft *TxnComputationWrapper) GetUUID() []byte {
+	return cwft.uuid[:]
 }
 
 func (cwft *TxnComputationWrapper) Run(ts uint64) error {
@@ -1763,10 +1771,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		TimeZone:     ses.timeZone,
 	}
 
-	var rootCtx = mce.RecordStatement(trace.DefaultContext(), ses, proc, sql, beginInstant)
-	ctx, span := trace.Start(rootCtx, "doComQuery")
-	defer span.End()
-
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		sql,
 		ses.GetUserName(),
@@ -1795,6 +1799,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	for _, cw := range cws {
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
+		ctx := mce.RecordStatement(requestCtx, ses, proc, cw, beginInstant)
 
 		/*
 				if it is in an active or multi-statement transaction, we check the type of the statement.

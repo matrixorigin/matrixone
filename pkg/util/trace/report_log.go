@@ -38,14 +38,14 @@ var _ batchpipe.HasName = &MOLog{}
 var _ IBuffer2SqlItem = &MOLog{}
 
 type MOLog struct {
-	StatementId TraceID       `json:"statement_id"`
-	SpanId      SpanID        `json:"span_id"`
-	Timestamp   util.TimeNano `json:"timestamp"`
-	Level       zapcore.Level `json:"level"`
-	Caller      util.Frame    `json:"caller"` // like "util/trace/trace.go:666"
-	Name        string        `json:"name"`
-	Message     string        `json:"Message"`
-	Extra       string        `json:"extra"` // like json text
+	TraceID   TraceID       `json:"trace_id"`
+	SpanID    SpanID        `json:"span_id"`
+	Timestamp util.TimeNano `json:"timestamp"`
+	Level     zapcore.Level `json:"level"`
+	Caller    util.Frame    `json:"caller"` // like "util/trace/trace.go:666"
+	Name      string        `json:"name"`
+	Message   string        `json:"Message"`
+	Extra     string        `json:"extra"` // like json text
 }
 
 func newMOLog() *MOLog {
@@ -85,8 +85,8 @@ func ReportLog(ctx context.Context, level zapcore.Level, depth int, formatter st
 		sc = span.SpanContext()
 	}
 	log := newMOLog()
-	log.StatementId = sc.TraceID
-	log.SpanId = sc.SpanID
+	log.TraceID = sc.TraceID
+	log.SpanID = sc.SpanID
 	log.Timestamp = util.NowNS()
 	log.Level = level
 	log.Caller = util.Caller(depth + 1)
@@ -127,12 +127,6 @@ func (m MOZap) Size() int64 {
 
 func (m MOZap) Free() {}
 
-const moInternalFiledKeyNoopReport = "moInternalFiledKeyNoopReport"
-
-func NoReportFiled() zap.Field {
-	return zap.Bool(moInternalFiledKeyNoopReport, false)
-}
-
 func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
 	var needReport = true
 	if !gTracerProvider.IsEnable() {
@@ -148,10 +142,6 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 	for _, v := range fields {
 		if IsSpanField(v) {
 			log.SpanContext = v.Interface.(*SpanContext)
-			break
-		}
-		if v.Type == zapcore.BoolType && v.Key == moInternalFiledKeyNoopReport {
-			needReport = false
 			break
 		}
 	}

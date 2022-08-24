@@ -56,13 +56,14 @@ func Test_mce(t *testing.T) {
 		txnOperator.EXPECT().Rollback(nil).Return(nil).AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-		txnClient.EXPECT().NewWithSnapshot(nil).Return(txnOperator, nil).AnyTimes()
+		txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		use_t := mock_frontend.NewMockComputationWrapper(ctrl)
+		use_t.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
 		stmts, err := parsers.Parse(dialect.MYSQL, "use T")
 		if err != nil {
 			t.Error(err)
@@ -78,6 +79,7 @@ func Test_mce(t *testing.T) {
 			t.Error(err)
 		}
 		create_1.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
+		create_1.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
 		create_1.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 		create_1.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 		create_1.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
@@ -89,6 +91,7 @@ func Test_mce(t *testing.T) {
 			t.Error(err)
 		}
 		select_1.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
+		select_1.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
 		select_1.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 		select_1.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 		select_1.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
@@ -166,6 +169,7 @@ func Test_mce(t *testing.T) {
 				t.Error(err)
 			}
 			select_2.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
+			select_2.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
 			select_2.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 			select_2.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 			select_2.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
@@ -275,7 +279,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-		txnClient.EXPECT().NewWithSnapshot(nil).Return(txnOperator, nil).AnyTimes()
+		txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -952,7 +956,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-		txnClient.EXPECT().NewWithSnapshot(nil).Return(txnOperator, nil).AnyTimes()
+		txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()

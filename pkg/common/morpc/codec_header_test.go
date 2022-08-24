@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -46,4 +47,30 @@ func TestDecodeContext(t *testing.T) {
 	ts, ok := msg.Ctx.Deadline()
 	assert.True(t, ok)
 	assert.True(t, !ts.IsZero())
+}
+
+func TestEncodeAndDecodeTrace(t *testing.T) {
+	hc := &traceCodec{}
+	out := buf.NewByteBuf(8)
+	span := trace.SpanContextWithIDs(trace.TraceID{}, trace.SpanID{})
+	n, err := hc.Encode(&RPCMessage{Ctx: trace.ContextWithSpanContext(context.Background(), span)}, out)
+	assert.Equal(t, 1+span.Size(), n)
+	assert.NoError(t, err)
+
+	msg := &RPCMessage{}
+	_, data := out.ReadBytes(1 + span.Size())
+
+	n, err = hc.Decode(msg, nil)
+	assert.Equal(t, 0, n)
+	assert.Error(t, err)
+
+	n, err = hc.Decode(msg, data[:1])
+	assert.Equal(t, 0, n)
+	assert.Error(t, err)
+
+	n, err = hc.Decode(msg, data)
+	assert.Equal(t, 1+span.Size(), n)
+	assert.NoError(t, err)
+
+	assert.Equal(t, span, trace.SpanFromContext(msg.Ctx).SpanContext())
 }

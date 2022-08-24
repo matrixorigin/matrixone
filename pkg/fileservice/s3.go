@@ -15,8 +15,9 @@
 package fileservice
 
 type S3Config struct {
-	Endpoint string `toml:"endpoint"`
-	Bucket   string `toml:"bucket"`
+	SharedConfigProfile string `toml:"shared-config-profile"`
+	Endpoint            string `toml:"endpoint"`
+	Bucket              string `toml:"bucket"`
 	// KeyPrefix enables multiple fs instances in one bucket
 	KeyPrefix string `toml:"key-prefix"`
 }
