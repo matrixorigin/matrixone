@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
@@ -212,30 +213,31 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	return nil
 }
 
-func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) *RoutineManager {
+func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineManager, error) {
 	rm := &RoutineManager{
 		ctx:     ctx,
 		clients: make(map[goetty.IOSession]*Routine),
 		pu:      pu,
 	}
 	if pu.SV.EnableTls {
-		initTlsConfig(rm, pu.SV)
+		err := initTlsConfig(rm, pu.SV)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return rm
+	return rm, nil
 }
 
-func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) {
+func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) error {
 	if len(SV.TlsCertFile) == 0 || len(SV.TlsKeyFile) == 0 {
-		logutil.Warn("init TLS config error : cert file or key file is empty")
-		return
+		return moerr.NewInternalError("init TLS config error : cert file or key file is empty")
 	}
 
 	var tlsCert tls.Certificate
 	var err error
 	tlsCert, err = tls.LoadX509KeyPair(SV.TlsCertFile, SV.TlsKeyFile)
 	if err != nil {
-		logutil.Warn("load x509 failed")
-		return
+		return moerr.NewInternalError("init TLS config error :load x509 failed")
 	}
 
 	clientAuthPolicy := tls.NoClientCert
@@ -244,13 +246,11 @@ func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) {
 		var caCert []byte
 		caCert, err = os.ReadFile(SV.TlsCaFile)
 		if err != nil {
-			logutil.Warn("read TlsCaFile failed")
-			return
+			return moerr.NewInternalError("init TLS config error :read TlsCaFile failed")
 		}
 		certPool = x509.NewCertPool()
 		if certPool.AppendCertsFromPEM(caCert) {
-			// clientAuthPolicy = tls.VerifyClientCertIfGiven
-			clientAuthPolicy = tls.NoClientCert
+			clientAuthPolicy = tls.VerifyClientCertIfGiven
 		}
 	}
 
@@ -278,4 +278,5 @@ func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) {
 		CipherSuites: cipherSuites,
 	}
 	logutil.Info("init TLS config finished")
+	return nil
 }
