@@ -71,10 +71,10 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 			panic(err)
 		}
 	}
-	if !h.appender.IsAppendable() || h.appender.GetMeta().(*catalog.BlockEntry).HasDropped() {
+	if !h.appender.IsAppendable() || !h.appender.GetMeta().(*catalog.BlockEntry).GetBlockData().IsAppendable() {
 		id := h.appender.GetID()
 		segEntry, _ = h.table.meta.GetSegmentByID(id.SegmentID)
-		if segEntry.GetBlockCnt() >= int(segEntry.GetTable().GetSchema().SegmentMaxBlocks) {
+		if segEntry.GetAppendableBlockCnt() >= int(segEntry.GetTable().GetSchema().SegmentMaxBlocks) {
 			err = data.ErrAppendableSegmentNotFound
 		} else {
 			err = data.ErrAppendableBlockNotFound

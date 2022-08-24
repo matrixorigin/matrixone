@@ -48,6 +48,14 @@ func init() {
 	ImmutMemAllocator = stl.NewSimpleAllocator()
 }
 
+type BlockState int8
+
+const (
+	BS_Appendable BlockState = iota
+	BS_NotAppendable
+	ES_Frozen
+)
+
 type dataBlock struct {
 	*sync.RWMutex
 	common.ClosedState
@@ -62,6 +70,7 @@ type dataBlock struct {
 	nice      uint32
 	ckpTs     atomic.Value
 	prefix    []byte
+	state     BlockState
 }
 
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
@@ -126,6 +135,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 
 func (blk *dataBlock) GetMeta() any                 { return blk.meta }
 func (blk *dataBlock) GetBufMgr() base.INodeManager { return blk.bufMgr }
+func (blk *dataBlock) SetNotAppendable()            { blk.state = BS_NotAppendable }
 
 func (blk *dataBlock) SetMaxCheckpointTS(ts types.TS) {
 	blk.ckpTs.Store(ts)
@@ -292,9 +302,6 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	if dropped || inTxn {
 		return
 	}
-	if blk.IsAppendable() {
-		blk.meta.SetNotAppendable()
-	}
 	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
 	taskType = tasks.DataCompactionTask
 	scopes = append(scopes, *blk.meta.AsCommonID())
@@ -305,6 +312,11 @@ func (blk *dataBlock) IsAppendable() bool {
 	if !blk.meta.IsAppendable() {
 		return false
 	}
+
+	if blk.state == BS_NotAppendable {
+		return false
+	}
+
 	if blk.node.Rows(nil, true) == blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows {
 		return false
 	}
