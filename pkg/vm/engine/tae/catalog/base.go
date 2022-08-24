@@ -22,196 +22,363 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-func CompareTs(left, right types.TS) int {
-	if left.Greater(right) {
+func CompareUint64(left, right uint64) int {
+	if left > right {
 		return 1
-	} else if left.Less(right) {
+	} else if left < right {
 		return -1
 	}
 	return 0
 }
 
-type CommitInfo struct {
-	CurrOp   OpT
-	Txn      txnif.TxnReader
-	LogIndex *wal.Index
-}
-
-func (info *CommitInfo) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, info.CurrOp); err != nil {
-		return
-	}
-	n = 1
-	var ni int64
-	if ni, err = info.LogIndex.WriteTo(w); err != nil {
-		return
-	}
-	n += ni
-	return
-}
-
-func (info *CommitInfo) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &info.CurrOp); err != nil {
-		return
-	}
-	n = 1
-	var ni int64
-	info.LogIndex = new(wal.Index)
-	if ni, err = info.LogIndex.ReadFrom(r); err != nil {
-		return
-	}
-	n += ni
-	return
-}
-
-func (info *CommitInfo) Clone() *CommitInfo {
-	return &CommitInfo{
-		CurrOp:   info.CurrOp,
-		LogIndex: info.LogIndex.Clone(),
-	}
-}
-
 type BaseEntry struct {
 	*sync.RWMutex
-	CommitInfo
-	PrevCommit         *CommitInfo
-	ID                 uint64
-	CreateAt, DeleteAt types.TS
+	MVCC   *common.SortedDList
+	length uint64
+	// meta *
+	ID uint64
 }
 
 func NewReplayBaseEntry() *BaseEntry {
+	be := &BaseEntry{
+		RWMutex: &sync.RWMutex{},
+		MVCC:    new(common.SortedDList),
+	}
+	return be
+}
+
+func NewBaseEntry(id uint64) *BaseEntry {
 	return &BaseEntry{
+		ID:      id,
+		MVCC:    new(common.SortedDList),
 		RWMutex: &sync.RWMutex{},
 	}
 }
+func (be *BaseEntry) StringLocked() string {
+	var w bytes.Buffer
 
-func (be *BaseEntry) MaxCommittedTS() types.TS {
-	if be.Txn == nil {
-		if !be.DeleteAt.IsEmpty() {
-			return be.DeleteAt
+	_, _ = w.WriteString(fmt.Sprintf("[%d %p]", be.ID, be.RWMutex))
+	it := common.NewSortedDListIt(nil, be.MVCC, false)
+	for it.Valid() {
+		version := it.Get().GetPayload().(*UpdateNode)
+		_, _ = w.WriteString(" -> ")
+		_, _ = w.WriteString(version.String())
+		it.Next()
+	}
+	return w.String()
+}
+
+func (be *BaseEntry) String() string {
+	be.RLock()
+	defer be.RUnlock()
+	return be.StringLocked()
+}
+
+func (be *BaseEntry) PPString(level common.PPLevel, depth int, prefix string) string {
+	s := fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, be.StringLocked())
+	return s
+}
+
+// for replay
+func (be *BaseEntry) GetTs() types.TS {
+	return be.GetUpdateNodeLocked().End
+}
+func (be *BaseEntry) GetTxn() txnif.TxnReader { return be.GetUpdateNodeLocked().Txn }
+
+func (be *BaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS) {
+	node := be.GetCommittedNode()
+	if node == nil {
+		return
+	}
+	if node.Deleted {
+		return true, node.DeletedAt
+	}
+	return
+}
+func (be *BaseEntry) GetID() uint64 { return be.ID }
+
+func (be *BaseEntry) GetIndexes() []*wal.Index {
+	ret := make([]*wal.Index, 0)
+	be.MVCC.Loop(func(n *common.DLNode) bool {
+		un := n.GetPayload().(*UpdateNode)
+		ret = append(ret, un.LogIndex...)
+		return true
+	}, true)
+	return ret
+}
+func (be *BaseEntry) InsertNode(un *UpdateNode) {
+	be.MVCC.Insert(un)
+}
+func (be *BaseEntry) CreateWithTS(ts types.TS) {
+	node := &UpdateNode{
+		CreatedAt: ts,
+		Start:     ts,
+		End:       ts,
+	}
+	be.InsertNode(node)
+}
+func (be *BaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
+	var startTS types.TS
+	if txn != nil {
+		startTS = txn.GetStartTS()
+	}
+	node := &UpdateNode{
+		Start: startTS,
+		Txn:   txn,
+	}
+	be.InsertNode(node)
+}
+func (be *BaseEntry) ExistUpdate(minTs, MaxTs types.TS) (exist bool) {
+	be.MVCC.Loop(func(n *common.DLNode) bool {
+		un := n.GetPayload().(*UpdateNode)
+		if un.End.IsEmpty() {
+			return true
 		}
-		return be.CreateAt
-	}
-	if be.CreateAt != be.Txn.GetCommitTS() {
-		return be.CreateAt
-	}
-	var cts types.TS
-	return cts
+		if un.End.Less(minTs) {
+			return false
+		}
+		if un.End.GreaterEq(minTs) && un.End.LessEq(MaxTs) {
+			exist = true
+			return false
+		}
+		return true
+	}, false)
+	return
 }
 
-func (be *BaseEntry) CloneCreate() *BaseEntry {
-	info := be.PrevCommit.Clone()
-	cloned := &BaseEntry{
-		CommitInfo: *info,
-		ID:         be.ID,
-		CreateAt:   be.CreateAt,
+// TODO update create
+func (be *BaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node INode, err error) {
+	entry := be.MVCC.GetHead().GetPayload().(*UpdateNode)
+	if entry.Txn == nil || entry.IsSameTxn(txn.GetStartTS()) {
+		if be.HasDropped() {
+			err = ErrNotFound
+			return
+		}
+		nbe := entry.CloneData()
+		nbe.Start = txn.GetStartTS()
+		nbe.End = types.TS{}
+		nbe.Txn = txn
+		be.InsertNode(nbe)
+		node = impl
+		err = nbe.ApplyDeleteLocked()
+		return
+	} else {
+		err = txnif.ErrTxnWWConflict
 	}
-	return cloned
+	return
 }
 
-func (be *BaseEntry) Clone() *BaseEntry {
-	info := be.CommitInfo.Clone()
-	cloned := &BaseEntry{
-		CommitInfo: *info,
-		ID:         be.ID,
-		CreateAt:   be.CreateAt,
-		DeleteAt:   be.DeleteAt,
+func (be *BaseEntry) GetUpdateNodeLocked() *UpdateNode {
+	head := be.MVCC.GetHead()
+	if head == nil {
+		return nil
 	}
-	return cloned
+	payload := head.GetPayload()
+	if payload == nil {
+		return nil
+	}
+	entry := payload.(*UpdateNode)
+	return entry
 }
 
-func (be *BaseEntry) WriteTo(w io.Writer) (n int64, err error) {
+func (be *BaseEntry) GetCommittedNode() (node *UpdateNode) {
+	be.MVCC.Loop((func(n *common.DLNode) bool {
+		un := n.GetPayload().(*UpdateNode)
+		if !un.IsActive() {
+			node = un
+			return false
+		}
+		return true
+	}), false)
+	return
+}
+
+func (be *BaseEntry) GetNodeToRead(startts types.TS) (node *UpdateNode) {
+	be.MVCC.Loop((func(n *common.DLNode) bool {
+		un := n.GetPayload().(*UpdateNode)
+		if un.IsActive() {
+			if un.IsSameTxn(startts) {
+				node = un
+				return false
+			}
+			return true
+		}
+		if un.End.Less(startts) {
+			node = un
+			return false
+		}
+		return true
+	}), false)
+	return
+}
+func (be *BaseEntry) DeleteBefore(ts types.TS) bool {
+	createAt := be.GetDeleteAt()
+	if createAt.IsEmpty() {
+		return false
+	}
+	return createAt.Less(ts)
+}
+
+// for replay
+func (be *BaseEntry) GetExactUpdateNode(startts types.TS) (node *UpdateNode) {
+	be.MVCC.Loop(func(n *common.DLNode) bool {
+		un := n.GetPayload().(*UpdateNode)
+		if un.Start == startts {
+			node = un
+			return false
+		}
+		// return un.Start < startts
+		return true
+	}, false)
+	return
+}
+
+func (be *BaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
+	un := be.GetUpdateNodeLocked()
+	if un == nil {
+		return false, nil
+	}
+	if !un.IsCommitting() {
+		return false, nil
+	}
+	if un.Txn.GetStartTS().Equal(startTS) {
+		return false, nil
+	}
+	return true, un.Txn
+}
+
+// active -> w-w/same
+// rollbacked/ing -> next
+// committing shouldRead
+
+// get first
+// get committed
+// get same node
+// get to read
+func (be *BaseEntry) InTxnOrRollbacked() bool {
+	un := be.GetUpdateNodeLocked()
+	if un == nil {
+		return true
+	}
+	return un.IsActive()
+}
+
+func (be *BaseEntry) IsDroppedCommitted() bool {
+	un := be.GetUpdateNodeLocked()
+	if un == nil {
+		return false
+	}
+	if un.IsActive() {
+		return false
+	}
+	return un.HasDropped()
+}
+
+func (be *BaseEntry) PrepareWrite(txn txnif.TxnReader, rwlocker *sync.RWMutex) (err error) {
+	node := be.GetUpdateNodeLocked()
+	if node.IsActive() {
+		if node.IsSameTxn(txn.GetStartTS()) {
+			return
+		}
+		return txnif.ErrTxnWWConflict
+	}
+
+	if node.Start.Greater(txn.GetStartTS()) {
+		return txnif.ErrTxnWWConflict
+	}
+	return
+}
+
+func (be *BaseEntry) WriteOneNodeTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, be.ID); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, be.CreateAt); err != nil {
+	n += 8
+	var n2 int64
+	n2, err = be.GetUpdateNodeLocked().WriteTo(w)
+	if err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, be.DeleteAt); err != nil {
-		return
-	}
-	sn := int64(0)
-	if sn, err = be.CommitInfo.WriteTo(w); err != nil {
-		return
-	}
-	n = sn + 8 + 8 + 8
+	n += n2
 	return
 }
 
-func (be *BaseEntry) ReadFrom(r io.Reader) (n int64, err error) {
+func (be *BaseEntry) WriteAllTo(w io.Writer) (n int64, err error) {
+	if err = binary.Write(w, binary.BigEndian, be.ID); err != nil {
+		return
+	}
+	n += 8
+	if err = binary.Write(w, binary.BigEndian, be.length); err != nil {
+		return
+	}
+	n += 8
+	be.MVCC.Loop(func(node *common.DLNode) bool {
+		var n2 int64
+		n2, err = node.GetPayload().(*UpdateNode).WriteTo(w)
+		if err != nil {
+			return false
+		}
+		n += n2
+		return true
+	}, true)
+	return
+}
+
+func (be *BaseEntry) ReadOneNodeFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &be.ID); err != nil {
 		return
 	}
-	if err = binary.Read(r, binary.BigEndian, &be.CreateAt); err != nil {
+	var n2 int64
+	un := NewEmptyUpdateNode()
+	n2, err = un.ReadFrom(r)
+	if err != nil {
 		return
 	}
-	if err = binary.Read(r, binary.BigEndian, &be.DeleteAt); err != nil {
-		return
-	}
-	sn := int64(0)
-	sn, err = be.CommitInfo.ReadFrom(r)
-	n = sn + 8 + 8 + 8
-	be.RWMutex = new(sync.RWMutex)
+	be.InsertNode(un)
+	n += n2
 	return
 }
 
-func (be *BaseEntry) GetTxn() txnif.TxnReader { return be.Txn }
-
-func (be *BaseEntry) IsTerminated(waitIfcommitting bool) bool {
-	return be.Txn.IsTerminated(waitIfcommitting)
+func (be *BaseEntry) ReadAllFrom(r io.Reader) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &be.ID); err != nil {
+		return
+	}
+	n += 8
+	if err = binary.Read(r, binary.BigEndian, &be.length); err != nil {
+		return
+	}
+	n += 8
+	for i := 0; i < int(be.length); i++ {
+		var n2 int64
+		un := NewEmptyUpdateNode()
+		n2, err = un.ReadFrom(r)
+		if err != nil {
+			return
+		}
+		be.MVCC.Insert(un)
+		n += n2
+	}
+	return
 }
-
-func (be *BaseEntry) IsCommitted() bool {
-	return be.Txn == nil && !be.CreateAt.IsEmpty()
-}
-
-func (be *BaseEntry) GetID() uint64 { return be.ID }
 
 func (be *BaseEntry) DoCompre(oe *BaseEntry) int {
 	be.RLock()
 	defer be.RUnlock()
 	oe.RLock()
 	defer oe.RUnlock()
-	r := 0
-	if !be.CreateAt.IsEmpty() && !oe.CreateAt.IsEmpty() {
-		r = CompareTs(be.CreateAt, oe.CreateAt)
-	} else if !be.CreateAt.IsEmpty() {
-		r = -1
-	} else if !oe.CreateAt.IsEmpty() {
-		r = 1
-	} else {
-		r = CompareTs(be.Txn.GetStartTS(), oe.Txn.GetStartTS())
-	}
-	return r
+	// return be.GetUpdateNodeLocked().Compare(oe.GetUpdateNodeLocked())
+	return CompareUint64(be.ID, oe.ID)
 }
 
-func (be *BaseEntry) PrepareCommit() error {
-	be.Lock()
-	defer be.Unlock()
-	if be.CreateAt.IsEmpty() {
-		be.CreateAt = be.Txn.GetCommitTS()
-	}
-	if be.CurrOp == OpSoftDelete {
-		be.DeleteAt = be.Txn.GetCommitTS()
-	}
-	return nil
+func (be *BaseEntry) IsEmpty() bool {
+	head := be.MVCC.GetHead()
+	return head == nil
 }
-
-func (be *BaseEntry) PrepareRollback() error {
-	be.Lock()
-	if be.PrevCommit != nil {
-		be.CurrOp = be.PrevCommit.CurrOp
-		be.LogIndex = be.PrevCommit.LogIndex
-	}
-	be.Txn = nil
-	be.Unlock()
-	return nil
-}
-
 func (be *BaseEntry) ApplyRollback() error {
 	return nil
 }
@@ -219,269 +386,205 @@ func (be *BaseEntry) ApplyRollback() error {
 func (be *BaseEntry) ApplyCommit(index *wal.Index) error {
 	be.Lock()
 	defer be.Unlock()
-	// if be.Txn == nil {
-	// 	panic("logic error")
-	// }
-	// if be.PrevCommit != nil {
-	// 	be.PrevCommit = nil
-	// }
-	be.Txn = nil
-	be.LogIndex = index
-	// logutil.Infof("Apply0Index %s", index.String())
-	return nil
+	return be.GetUpdateNodeLocked().ApplyCommit(index)
 }
 
 func (be *BaseEntry) HasDropped() bool {
-	return !be.DeleteAt.IsEmpty()
-}
-
-func (be *BaseEntry) CreateBefore(ts types.TS) bool {
-	if !be.CreateAt.IsEmpty() {
-		return be.CreateAt.Less(ts)
+	node := be.GetCommittedNode()
+	if node == nil {
+		return false
 	}
-	return false
+	return node.HasDropped()
 }
-
-func (be *BaseEntry) CreateAfter(ts types.TS) bool {
-	if !be.CreateAt.IsEmpty() {
-		return be.CreateAt.Greater(ts)
+func (be *BaseEntry) ExistedForTs(ts types.TS) bool {
+	un := be.GetExactUpdateNode(ts)
+	if un == nil {
+		un = be.GetNodeToRead(ts)
 	}
-	return false
-}
-
-func (be *BaseEntry) DeleteBefore(ts types.TS) bool {
-	if !be.DeleteAt.IsEmpty() {
-		return be.DeleteAt.Less(ts)
+	if un == nil {
+		return false
 	}
-	return false
+	return !un.HasDropped()
 }
-
-func (be *BaseEntry) GetLogIndex() *wal.Index {
-	return be.LogIndex
-}
-
-func (be *BaseEntry) DeleteAfter(ts types.TS) bool {
-	if !be.DeleteAt.IsEmpty() {
-		return be.DeleteAt.Greater(ts)
+func (be *BaseEntry) GetLogIndex() []*wal.Index {
+	node := be.GetUpdateNodeLocked()
+	if node == nil {
+		return nil
 	}
-	return false
+	return node.LogIndex
 }
 
-func (be *BaseEntry) HasCreated() bool {
-	return !be.CreateAt.IsEmpty()
+func (be *BaseEntry) OnReplay(node *UpdateNode) error {
+	be.InsertNode(node)
+	return nil
 }
-
-func (be *BaseEntry) ApplyDeleteCmd(ts types.TS, index *wal.Index) error {
-	if be.HasDropped() || ts.Less(be.CreateAt) {
-		panic("logic error")
+func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead bool, err error) {
+	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		mu.RUnlock()
+		txnToWait.GetTxnState(true)
+		mu.RLock()
 	}
-	be.PrevCommit = &CommitInfo{
-		CurrOp:   be.CurrOp,
-		LogIndex: be.LogIndex,
+	canRead = be.ExistedForTs(txn.GetStartTS())
+	return
+}
+func (be *BaseEntry) CloneCreateEntry() *BaseEntry {
+	cloned := &BaseEntry{
+		MVCC:    &common.SortedDList{},
+		RWMutex: &sync.RWMutex{},
+		ID:      be.ID,
 	}
-	be.DeleteAt = ts
-	be.CurrOp = OpSoftDelete
-	be.LogIndex = index
+	un := be.GetUpdateNodeLocked()
+	uncloned := un.CloneData()
+	uncloned.DeletedAt = types.TS{}
+	cloned.InsertNode(un)
+	return cloned
+}
+func (be *BaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
+	node := be.GetUpdateNodeLocked()
+	if node.IsActive() && !node.IsSameTxn(txnCtx.GetStartTS()) {
+		return txnif.ErrTxnWWConflict
+	}
+	if be.HasDropped() {
+		return ErrNotFound
+	}
+	_, err := be.DeleteLocked(txnCtx, nil)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
-func (be *BaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
-	if be.Txn == nil || be.Txn == txnCtx {
-		if be.HasDropped() {
-			return ErrNotFound
-		}
-		if be.CreateAt.Greater(txnCtx.GetStartTS()) {
-			panic("unexpected")
-		}
-		be.PrevCommit = &CommitInfo{
-			CurrOp:   be.CurrOp,
-			LogIndex: be.LogIndex,
-		}
-		be.Txn = txnCtx
-		be.CurrOp = OpSoftDelete
-		return nil
-	}
-	if be.Txn.GetID() == txnCtx.GetID() {
-		if be.CurrOp == OpSoftDelete {
-			return ErrNotFound
-		}
-		be.CurrOp = OpSoftDelete
-		return nil
-	}
-	return txnif.ErrTxnWWConflict
-}
-
 func (be *BaseEntry) SameTxn(o *BaseEntry) bool {
-	if be.Txn != nil && o.Txn != nil {
-		return be.Txn.GetID() == o.Txn.GetID()
+	id := be.GetTxnID()
+	if id == 0 {
+		return false
 	}
-	return false
-}
-
-func (be *BaseEntry) IsCreatedUncommitted() bool {
-	if be.Txn != nil {
-		return be.CurrOp == OpCreate
-	}
-	return false
-}
-
-func (be *BaseEntry) IsDroppedUncommitted() bool {
-	if be.Txn != nil {
-		return be.CurrOp == OpSoftDelete
-	}
-	return false
-}
-
-func (be *BaseEntry) IsDroppedCommitted() bool {
-	return be.Txn == nil && be.CurrOp == OpSoftDelete
-}
-
-func (be *BaseEntry) InTxnOrRollbacked() bool {
-	return be.CreateAt.IsEmpty() && be.DeleteAt.IsEmpty()
-}
-
-func (be *BaseEntry) HasActiveTxn() bool {
-	return be.Txn != nil
+	return id == o.GetTxnID()
 }
 
 func (be *BaseEntry) GetTxnID() uint64 {
-	if be.Txn != nil {
-		return be.Txn.GetID()
+	node := be.GetUpdateNodeLocked()
+	if node.Txn != nil {
+		return node.Txn.GetID()
 	}
 	return 0
 }
 
 func (be *BaseEntry) IsSameTxn(ctx txnif.TxnReader) bool {
-	if be.Txn != nil {
-		return be.Txn.GetID() == ctx.GetID()
-	}
-	return false
+	return be.GetTxnID() == ctx.GetID()
 }
 
 func (be *BaseEntry) IsCommitting() bool {
-	if be.Txn != nil && be.Txn.GetCommitTS() != txnif.UncommitTS {
-		return true
-	}
-	return false
+	node := be.GetUpdateNodeLocked()
+	return node.State == txnif.TxnStateCommitting
 }
 
-func (be *BaseEntry) CreateAndDropInSameTxn() bool {
-	if !be.CreateAt.IsEmpty() && (be.CreateAt == be.DeleteAt) {
-		return true
-	}
-	return false
+func (be *BaseEntry) GetDeleted() bool {
+	return be.GetUpdateNodeLocked().Deleted
 }
 
-func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) (ok bool, err error) {
-	// defer func() {
-	// 	if ok {
-	// 		logutil.Infof("%s [Can Read] %s", txn.String(), be.String())
-	// 	} else {
-	// 		logutil.Infof("%s [Cannot Read] %s", txn.String(), be.String())
-	// 	}
-	// }()
-	thisTxn := be.Txn
-	if txn == nil {
-		ok, err = true, nil
-		return
-	}
-	// No active txn is on this entry
-	if !be.HasActiveTxn() {
-		// This entry is created after txn starts, skip this entry
-		// This entry is deleted before txn starts, skip this entry
-		if be.CreateAfter(txn.GetStartTS()) || be.DeleteBefore(txn.GetStartTS()) {
-			ok, err = false, nil
+func (be *BaseEntry) PrepareCommit() error {
+	be.Lock()
+	defer be.Unlock()
+	return be.GetUpdateNodeLocked().PrepareCommit()
+}
+
+func (be *BaseEntry) PrepareRollback() (bool, error) {
+	be.Lock()
+	defer be.Unlock()
+	node := be.MVCC.GetHead()
+	be.MVCC.Delete(node)
+	isEmpty := be.IsEmpty()
+	return isEmpty, nil
+}
+
+func (be *BaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
+	be.RLock()
+	defer be.RUnlock()
+	if txn != nil {
+		needWait, waitTxn := be.NeedWaitCommitting(txn.GetStartTS())
+		if needWait {
+			be.RUnlock()
+			waitTxn.GetTxnState(true)
+			be.RLock()
+		}
+		err = be.PrepareWrite(txn, be.RWMutex)
+		if err != nil {
 			return
 		}
-		// Otherwise, use this entry
-		ok, err = true, nil
-		return
 	}
-	// If this entry was written by the same txn as txn
-	if be.IsSameTxn(txn) {
-		// This entry was deleted by the same txn, skip this entry
-		// This entry was created by the same txn, use this entry
-		ok = !be.IsDroppedUncommitted()
-		return
-	}
-
-	// If this txn is uncommitted or committing after txn start ts
-	if thisTxn.GetCommitTS().Greater(txn.GetStartTS()) {
-		if be.CreateAfter(txn.GetStartTS()) || be.DeleteBefore(txn.GetStartTS()) || be.InTxnOrRollbacked() {
-			ok = false
-		} else {
-			ok = true
+	if txn == nil || be.GetTxn() != txn {
+		if !be.HasDropped() {
+			return ErrDuplicate
 		}
-		return
-	}
-
-	// Txn is committing before txn start ts, wait till committed or rollbacked
-	if rwlocker != nil {
-		rwlocker.RUnlock()
-	}
-	state := thisTxn.GetTxnState(true)
-	// logutil.Infof("%s -- wait --> %s: %d", txn.Repr(), thisTxn.Repr(), state)
-	if rwlocker != nil {
-		rwlocker.RLock()
-	}
-	if state == txnif.TxnStateUnknown {
-		ok, err = false, txnif.ErrTxnInternal
-		return
-	}
-	if be.CreateAfter(txn.GetStartTS()) || be.DeleteBefore(txn.GetStartTS()) || be.InTxnOrRollbacked() {
-		ok = false
 	} else {
-		ok = true
+		if be.ExistedForTs(txn.GetStartTS()) {
+			return ErrDuplicate
+		}
 	}
 	return
 }
 
-func (be *BaseEntry) String() string {
-	var w bytes.Buffer
-	_, _ = w.WriteString(fmt.Sprintf("[Op=%s][ID=%d][%d=>%d]%s",
-		OpNames[be.CurrOp],
-		be.ID,
-		be.CreateAt,
-		be.DeleteAt,
-		be.LogIndex.String()))
-	if be.Txn != nil {
-		_, _ = w.WriteString(be.Txn.Repr())
+func (be *BaseEntry) DeleteAfter(ts types.TS) bool {
+	un := be.GetUpdateNodeLocked()
+	if un == nil {
+		return false
 	}
-	return w.String()
+	return un.DeletedAt.Greater(ts)
+}
+func (be *BaseEntry) IsCommitted() bool {
+	un := be.GetUpdateNodeLocked()
+	if un == nil {
+		return false
+	}
+	return un.Txn == nil
 }
 
-func (be *BaseEntry) PrepareWrite(txn txnif.TxnReader, rwlocker *sync.RWMutex) (err error) {
-	if txn == nil {
-		return
-	}
-	eTxn := be.Txn
-	// No active txn is on this entry
-	if eTxn == nil {
-		return
-	}
-	// The same txn is on this entry
-	if eTxn.GetID() == txn.GetID() {
-		return
-	}
-	commitTS := be.Txn.GetCommitTS()
-	// Another active txn is on this entry
-	if commitTS == txnif.UncommitTS {
-		err = txnif.ErrTxnWWConflict
-		return
-	}
-	// Another committing|rollbacking|committed|rollbacked txn commits|rollbacks after txn starts
-	if commitTS.Greater(txn.GetStartTS()) {
-		return
-	}
-	if rwlocker != nil {
-		rwlocker.RUnlock()
-	}
-	state := eTxn.GetTxnState(true)
-	if rwlocker != nil {
-		rwlocker.RLock()
-	}
-	if state == txnif.TxnStateUnknown {
-		err = txnif.ErrTxnInternal
-	}
+func (be *BaseEntry) CloneCommittedInRange(start, end types.TS) (ret *BaseEntry) {
+	be.MVCC.Loop(func(n *common.DLNode) bool {
+		un := n.GetPayload().(*UpdateNode)
+		if un.IsActive() {
+			return true
+		}
+		// 1. Committed
+		if un.End.GreaterEq(start) && un.End.LessEq(end) {
+			if ret == nil {
+				ret = NewBaseEntry(be.ID)
+			}
+			ret.InsertNode(un.CloneAll())
+			ret.length++
+		} else if un.End.Greater(end) {
+			return false
+		}
+		return true
+	}, true)
 	return
+}
+
+func (be *BaseEntry) GetCurrOp() OpT {
+	un := be.GetUpdateNodeLocked()
+	if un == nil {
+		return OpCreate
+	}
+	if !un.Deleted {
+		return OpCreate
+	}
+	return OpSoftDelete
+}
+
+func (be *BaseEntry) GetCreatedAt() types.TS {
+	un := be.GetUpdateNodeLocked()
+	if un == nil {
+		return types.TS{}
+	}
+	return un.CreatedAt
+}
+
+func (be *BaseEntry) GetDeleteAt() types.TS {
+	un := be.GetUpdateNodeLocked()
+	if un == nil {
+		return types.TS{}
+	}
+	return un.DeletedAt
 }

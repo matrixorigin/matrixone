@@ -559,6 +559,12 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 		}
 		{
 			seg.RLock()
+			needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
+			if needwait {
+				seg.RUnlock()
+				txnToWait.GetTxnState(true)
+				seg.RLock()
+			}
 			invalid := seg.IsDroppedCommitted() || seg.InTxnOrRollbacked()
 			seg.RUnlock()
 			if invalid {
