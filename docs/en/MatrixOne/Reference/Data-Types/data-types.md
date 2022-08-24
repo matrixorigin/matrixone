@@ -156,11 +156,11 @@ Reference: <https://dev.mysql.com/doc/refman/8.0/en/data-types.html>
 > create table jsonTest (a json);
 > insert into jsonTest values ('{"k1":"v1"}'), ('["k1",null, false,true,123,1.2,{"k2":"v2"}]');
 > select * from jsonTest;
-+----------------+
-| a              |
-+----------------+
-| {"k1": "v1"}    |
++---------------------------------------------------+
+| a                                                 |
++---------------------------------------------------+
+| {"k1": "v1"}                                      |
 | ["k1", null, false, true, 123, 1.2, {"k2": "v2"}] |
-+----------------+
++---------------------------------------------------+
 2 rows in set (0.00 sec)
 ```
