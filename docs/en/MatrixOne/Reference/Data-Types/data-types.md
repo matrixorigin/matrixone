@@ -59,18 +59,17 @@ Reference: <https://dev.mysql.com/doc/refman/8.0/en/data-types.html>
 | Object    | {"k1":"v1"}                                 | key length cannot be larger than MaxUint16  |
 | Array     | ["k1",null, false,true,123,1.2,{"k2":"v2"}] |                                             |
 | String    | "123"                                       |                                             |
+| Literal   | null,false,true                             |                                             |
 
 | Data Type | Size   | Min Value            | Max Value            |
 |-----------|--------|----------------------|----------------------|
-| Boolean   | 1 byte | false                | true                 |
-| Null      | 1 byte | null                 | null                 |
 | Int64     | 8 byte | -9223372036854775808 | 9223372036854775807  |
 | Uint64    | 8 byte | 0                    | 18446744073709551615 |
 
 
 | Data Type | Size   | Precision |
 |-----------|--------|-----------|
-| Float64   | 8 byte | 52 digits |
+| Float64   | 8 byte | 52 bits   |
 
 
 
