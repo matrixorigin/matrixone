@@ -31,22 +31,50 @@ type TenantInfo struct {
 	Tenant      string
 	User        string
 	DefaultRole string
+
+	TenantID      int
+	UserID        int
+	DefaultRoleID int
 }
 
 func (ti *TenantInfo) String() string {
-	return fmt.Sprintf("%s:%s:%s", ti.Tenant, ti.User, ti.DefaultRole)
+	return fmt.Sprintf("{tenantInfo %s:%s:%s -- %d:%d:%d}", ti.Tenant, ti.User, ti.DefaultRole, ti.TenantID, ti.UserID, ti.DefaultRoleID)
 }
 
 func (ti *TenantInfo) GetTenant() string {
 	return ti.Tenant
 }
 
+func (ti *TenantInfo) GetTenantID() int {
+	return ti.TenantID
+}
+
+func (ti *TenantInfo) SetTenantID(id int) {
+	ti.TenantID = id
+}
+
 func (ti *TenantInfo) GetUser() string {
 	return ti.User
 }
 
+func (ti *TenantInfo) GetUserID() int {
+	return ti.UserID
+}
+
+func (ti *TenantInfo) SetUserID(id int) {
+	ti.UserID = id
+}
+
 func (ti *TenantInfo) GetDefaultRole() string {
 	return ti.DefaultRole
+}
+
+func (ti *TenantInfo) GetDefaultRoleID() int {
+	return ti.DefaultRoleID
+}
+
+func (ti *TenantInfo) SetDefaultRoleID(id int) {
+	ti.DefaultRoleID = id
 }
 
 func (ti *TenantInfo) IsSysTenant() bool {
@@ -537,11 +565,30 @@ var (
 
 var (
 	//privilege verification
-	getPasswordOfUserFormat = `select user_id,authentication_string from mo_catalog.mo_user where user_name = "%s";`
+	checkTenantFormat = `select account_id,account_name from mo_catalog.mo_account where account_name = "%s";`
 
-	//TODO:add
-	getPrivilegeOfUserOnCreateAlterDropAccountFormat = `;`
+	getPasswordOfUserFormat = `select user_id,authentication_string,default_role from mo_catalog.mo_user where user_name = "%s";`
+
+	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
+
+	getRoleOfUserFormat = `select r.role_id from  mo_catalog.mo_role r, mo_catalog.mo_user_grant ug where ug.role_id = r.role_id and ug.user_id = %d and r.role_name = "%s";`
 )
+
+func getSqlForCheckTenant(tenant string) string {
+	return fmt.Sprintf(checkTenantFormat, tenant)
+}
+
+func getSqlForPasswordOfUser(user string) string {
+	return fmt.Sprintf(getPasswordOfUserFormat, user)
+}
+
+func getSqlForCheckRoleExists(roleID int, roleName string) string {
+	return fmt.Sprintf(checkRoleExistsFormat, roleID, roleName)
+}
+
+func getSqlForRoleOfUser(userID int, roleName string) string {
+	return fmt.Sprintf(getRoleOfUserFormat, userID, roleName)
+}
 
 type role struct {
 	id   int

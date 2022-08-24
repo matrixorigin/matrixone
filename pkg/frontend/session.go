@@ -591,17 +591,84 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 	ses.SetTenantInfo(tenant)
 
-	//Get the password of the user in an independent session
-	getPasswordSql := fmt.Sprintf(getPasswordOfUserFormat, tenant.GetUser())
-	rsset, err := executeSQLInBackgroundSession(ses.requestCtx, ses.GuestMmu, ses.Mempool, ses.Pu, getPasswordSql)
+	//step1 : check tenant exists or not
+	sqlForCheckTenant := getSqlForCheckTenant(tenant.GetTenant())
+	rsset, err := executeSQLInBackgroundSession(ses.requestCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForCheckTenant)
+	if err != nil {
+		return nil, err
+	}
 	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
-		return nil, fmt.Errorf("there is no password of the user %s", tenant.GetUser())
+		return nil, fmt.Errorf("there is no tenant %s", tenant.GetTenant())
+	}
+
+	tenantID, err := rsset[0].GetInt64(0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	tenant.SetTenantID(int(tenantID))
+	//step2 : check user exists or not
+	//step3 : get the password of the user
+
+	//Get the password of the user in an independent session
+	sqlForPasswordOfUser := getSqlForPasswordOfUser(tenant.GetUser())
+	rsset, err = executeSQLInBackgroundSession(ses.requestCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForPasswordOfUser)
+	if err != nil {
+		return nil, err
+	}
+	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		return nil, fmt.Errorf("there is no user %s", tenant.GetUser())
+	}
+
+	userID, err := rsset[0].GetInt64(0, 0)
+	if err != nil {
+		return nil, err
 	}
 
 	pwd, err := rsset[0].GetString(0, 1)
 	if err != nil {
-		return nil, fmt.Errorf("there is no password of the user %s", tenant.GetUser())
+		return nil, err
 	}
+
+	defaultRoleID, err := rsset[0].GetInt64(0, 2)
+	if err != nil {
+		return nil, err
+	}
+
+	tenant.SetUserID(int(userID))
+	tenant.SetDefaultRoleID(int(defaultRoleID))
+
+	//step4 : check role exists or not
+	//step4.1 : check default role exits or not
+	sqlForCheckRoleExists := getSqlForCheckRoleExists(int(defaultRoleID), tenant.GetDefaultRole())
+	rsset, err = executeSQLInBackgroundSession(ses.requestCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForCheckRoleExists)
+	if err != nil {
+		return nil, err
+	}
+	hasDefaultRole := true
+	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		hasDefaultRole = false
+	}
+
+	//step4.2 : check the user has the role or not
+	if !hasDefaultRole {
+		sqlForRoleOfUser := getSqlForRoleOfUser(int(userID), tenant.GetDefaultRole())
+		rsset, err = executeSQLInBackgroundSession(ses.requestCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForRoleOfUser)
+		if err != nil {
+			return nil, err
+		}
+		if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+			return nil, fmt.Errorf("there is no role %s of the user %s", tenant.GetDefaultRole(), tenant.GetUser())
+		}
+
+		defaultRoleID, err = rsset[0].GetInt64(0, 0)
+		if err != nil {
+			return nil, err
+		}
+		tenant.SetDefaultRoleID(int(defaultRoleID))
+	}
+
+	logutil.Info(tenant.String())
 
 	return []byte(pwd), nil
 }

@@ -74,10 +74,10 @@ statusPort = 7001
 disableMetricToProm = false
 
 #if false, enable metric at booting
-disableMetric = false
+disableMetric = true
 
 #if false, enable trace at booting
-disableTrace = false
+disableTrace = true
 
 #default is InternalExecutor. if InternalExecutor, use internal sql executor, FileService will implement soon.
 traceBatchProcessor = "InternalExecutor"
