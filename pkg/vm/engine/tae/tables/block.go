@@ -48,6 +48,14 @@ func init() {
 	ImmutMemAllocator = stl.NewSimpleAllocator()
 }
 
+type BlockState int8
+
+const (
+	BS_Appendable BlockState = iota
+	BS_NotAppendable
+	ES_Frozen
+)
+
 type dataBlock struct {
 	*sync.RWMutex
 	common.ClosedState
@@ -62,6 +70,7 @@ type dataBlock struct {
 	nice      uint32
 	ckpTs     atomic.Value
 	prefix    []byte
+	state     BlockState
 }
 
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
@@ -126,6 +135,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 
 func (blk *dataBlock) GetMeta() any                 { return blk.meta }
 func (blk *dataBlock) GetBufMgr() base.INodeManager { return blk.bufMgr }
+func (blk *dataBlock) SetNotAppendable()            { blk.state = BS_NotAppendable }
 
 func (blk *dataBlock) SetMaxCheckpointTS(ts types.TS) {
 	blk.ckpTs.Store(ts)
@@ -292,13 +302,8 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	if dropped || inTxn {
 		return
 	}
-	if !blk.meta.IsAppendable() || (blk.meta.IsAppendable() && blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows)) {
-		factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
-		taskType = tasks.DataCompactionTask
-	} else if blk.meta.IsAppendable() {
-		factory = jobs.CompactABlockTaskFactory(blk.meta, blk.scheduler)
-		taskType = tasks.DataCompactionTask
-	}
+	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
+	taskType = tasks.DataCompactionTask
 	scopes = append(scopes, *blk.meta.AsCommonID())
 	return
 }
@@ -307,6 +312,11 @@ func (blk *dataBlock) IsAppendable() bool {
 	if !blk.meta.IsAppendable() {
 		return false
 	}
+
+	if blk.state == BS_NotAppendable {
+		return false
+	}
+
 	if blk.node.Rows(nil, true) == blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows {
 		return false
 	}
@@ -389,7 +399,7 @@ func (blk *dataBlock) FillBlockView(colIdx uint16, view *model.BlockView) (err e
 
 func (blk *dataBlock) MakeAppender() (appender data.BlockAppender, err error) {
 	if !blk.meta.IsAppendable() {
-		panic("can not create appender on non-appendable block")
+		return
 	}
 	appender = newAppender(blk.node)
 	return
@@ -407,7 +417,9 @@ func (blk *dataBlock) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	colIdx int,
 	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
-	if blk.meta.IsAppendable() {
+	if blk.meta.IsAppendable() ||
+		(blk.node != nil &&
+			blk.node.Rows(nil, true) < blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows) {
 		return blk.ResolveABlkColumnMVCCData(txn.GetStartTS(), colIdx, buffer, false)
 	}
 	view, err = blk.ResolveColumnMVCCData(txn.GetStartTS(), colIdx, buffer)
@@ -460,29 +472,12 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 	}
 
 	view = model.NewColumnView(ts, colIdx)
-	err = blk.node.DoWithPin(func() (err error) {
-		if raw {
-			var data containers.Vector
-			data, err = blk.node.GetColumnDataCopy(maxRow, colIdx, buffer)
-			if err != nil {
-				return
-			}
-			view.SetData(data)
-			return
-		}
-
-		vec, err := blk.node.GetColumnDataCopy(maxRow, colIdx, buffer)
-		if err != nil {
-			return
-		}
-		view.SetData(vec)
-		return
-	})
-
+	var data containers.Vector
+	data, err = blk.node.GetColumnDataCopy(maxRow, colIdx, buffer)
 	if err != nil {
 		return
 	}
-
+	view.SetData(data)
 	blk.mvcc.RLock()
 	err = blk.FillColumnUpdates(view)
 	if err == nil {
@@ -725,62 +720,56 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts type
 	// If any pk defined, update index
 	if blk.meta.GetSchema().IsSinglePK() {
 		var row uint32
-		err = blk.node.DoWithPin(func() (err error) {
-			blk.mvcc.RLock()
-			vecview := blk.node.data.Vecs[blk.meta.GetSchema().GetSingleSortKeyIdx()].GetView()
-			blk.mvcc.RUnlock()
-			blk.mvcc.Lock()
-			defer blk.mvcc.Unlock()
-			var currRow uint32
-			for gen.HasNext() {
-				row = gen.Next()
-				v := vecview.Get(int(row))
-				currRow, err = blk.index.GetActiveRow(v)
-				if err != nil || currRow == row {
-					if err = blk.index.Delete(v, ts); err != nil {
-						return
-					}
+		blk.mvcc.RLock()
+		vecview := blk.node.data.Vecs[blk.meta.GetSchema().GetSingleSortKeyIdx()].GetView()
+		blk.mvcc.RUnlock()
+		blk.mvcc.Lock()
+		defer blk.mvcc.Unlock()
+		var currRow uint32
+		for gen.HasNext() {
+			row = gen.Next()
+			v := vecview.Get(int(row))
+			currRow, err = blk.index.GetActiveRow(v)
+			if err != nil || currRow == row {
+				if err = blk.index.Delete(v, ts); err != nil {
+					return
 				}
 			}
-			blk.meta.GetSegment().GetTable().RemoveRows(deleted)
-			return
-		})
+		}
+		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 	} else {
 		var row uint32
-		err = blk.node.DoWithPin(func() (err error) {
-			var w bytes.Buffer
-			sortKeys := blk.meta.GetSchema().SortKey
-			vals := make([]any, sortKeys.Size())
-			vecs := make([]containers.VectorView, sortKeys.Size())
-			blk.mvcc.RLock()
-			for i := range vecs {
-				vec := blk.node.data.Vecs[sortKeys.Defs[i].Idx].GetView()
-				if err != nil {
-					blk.mvcc.RUnlock()
-					return err
-				}
-				vecs[i] = vec
+		var w bytes.Buffer
+		sortKeys := blk.meta.GetSchema().SortKey
+		vals := make([]any, sortKeys.Size())
+		vecs := make([]containers.VectorView, sortKeys.Size())
+		blk.mvcc.RLock()
+		for i := range vecs {
+			vec := blk.node.data.Vecs[sortKeys.Defs[i].Idx].GetView()
+			if err != nil {
+				blk.mvcc.RUnlock()
+				return err
 			}
-			blk.mvcc.RUnlock()
-			blk.mvcc.Lock()
-			defer blk.mvcc.Unlock()
-			var currRow uint32
-			for gen.HasNext() {
-				row = gen.Next()
-				for i := range vals {
-					vals[i] = vecs[i].Get(int(row))
-				}
-				v := model.EncodeTypedVals(&w, vals...)
-				currRow, err = blk.index.GetActiveRow(v)
-				if err != nil || currRow == row {
-					if err = blk.index.Delete(v, ts); err != nil {
-						return
-					}
+			vecs[i] = vec
+		}
+		blk.mvcc.RUnlock()
+		blk.mvcc.Lock()
+		defer blk.mvcc.Unlock()
+		var currRow uint32
+		for gen.HasNext() {
+			row = gen.Next()
+			for i := range vals {
+				vals[i] = vecs[i].Get(int(row))
+			}
+			v := model.EncodeTypedVals(&w, vals...)
+			currRow, err = blk.index.GetActiveRow(v)
+			if err != nil || currRow == row {
+				if err = blk.index.Delete(v, ts); err != nil {
+					return
 				}
 			}
-			blk.meta.GetSegment().GetTable().RemoveRows(deleted)
-			return
-		})
+		}
+		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 	}
 	return
 }

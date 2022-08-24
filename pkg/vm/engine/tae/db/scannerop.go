@@ -106,6 +106,7 @@ func (processor *calibrationOp) onBlock(blockEntry *catalog.BlockEntry) (err err
 	data.RunCalibration()
 	score := data.EstimateScore()
 	if score > 0 {
+		data.SetNotAppendable()
 		processor.db.CKPDriver.EnqueueCheckpointUnit(data)
 	}
 	return
