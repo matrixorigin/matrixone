@@ -16,6 +16,8 @@ package metric
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"io"
 	"regexp"
 	"testing"
 	"time"
@@ -128,6 +130,88 @@ func TestCollector(t *testing.T) {
 		t.Errorf("m2 should be flushed after a period")
 	}
 	name, cnt = nameAndValueCnt(sql)
+	if name != names[1] || cnt != 2 {
+		t.Errorf("m2 metric should be flushed first with 2 rows, got %s with %d rows", name, cnt)
+	}
+}
+
+type channelStringWriter struct {
+	name string
+	ch   chan string
+}
+
+func (w *channelStringWriter) WriteString(s string) (n int, err error) {
+	n = len(s)
+	w.ch <- w.name
+	w.ch <- s
+	return n, nil
+}
+
+func newFSWriterFactory(csvCh chan string) fsFactoryFunc {
+	return fsFactoryFunc(func(_ context.Context, dir string, name batchpipe.HasName) io.StringWriter {
+		return &channelStringWriter{name: name.GetName(), ch: csvCh}
+	})
+}
+
+func TestCsvFSCollector(t *testing.T) {
+	csvCh := make(chan string, 100)
+	factory := newFSWriterFactory(csvCh)
+	collector := newMetricFSCollector(factory, WithFlushInterval(200*time.Millisecond), WithMetricThreshold(2))
+	collector.Start(context.TODO())
+	defer collector.Stop(false)
+	names := []string{"m1", "m2"}
+	nodes := []int32{1, 2}
+	roles := []string{"ping", "pong"}
+	ts := time.Now().UnixMicro()
+	go func() {
+		_ = collector.SendMetrics(context.TODO(), []*pb.MetricFamily{
+			{Name: names[0], Type: pb.MetricType_COUNTER, Node: nodes[0], Role: roles[0], Metric: []*pb.Metric{
+				{
+					Counter: &pb.Counter{Value: 12.0}, Collecttime: ts,
+				},
+			}},
+			{Name: names[1], Type: pb.MetricType_RAWHIST, Metric: []*pb.Metric{
+				{
+					Label:   []*pb.LabelPair{{Name: "sqltype", Value: "select"}, {Name: "internal", Value: "false"}},
+					RawHist: &pb.RawHist{Samples: []*pb.Sample{{Datetime: ts, Value: 12.0}, {Datetime: ts, Value: 12.0}}},
+				},
+			}},
+		})
+
+		_ = collector.SendMetrics(context.TODO(), []*pb.MetricFamily{
+			{Name: names[0], Type: pb.MetricType_COUNTER, Node: nodes[1], Role: roles[1], Metric: []*pb.Metric{
+				{
+					Counter: &pb.Counter{Value: 21.0}, Collecttime: ts,
+				},
+				{
+					Counter: &pb.Counter{Value: 66.0}, Collecttime: ts,
+				},
+			}},
+		})
+	}()
+	instant := time.Now()
+	valuesRe := regexp.MustCompile(`(.+[,]?)+\n`) // find pattern like **{str}**,**{num}**,**{time}**\n
+	nameAndValueCnt := func(n, s string) (name string, cnt int) {
+		t.Logf("name: %s, csv: %s", n, s)
+		cnt = len(valuesRe.FindAllString(s, -1))
+		if cnt > 0 {
+			name = n
+		} else {
+			name = "<nil>"
+		}
+		return name, cnt
+	}
+
+	name, cnt := nameAndValueCnt(<-csvCh, <-csvCh)
+	if name != names[0] || cnt != 3 {
+		t.Errorf("m1 metric should be flushed first with 3 rows, got %s with %d rows", name, cnt)
+	}
+
+	name2, csvContent := <-csvCh, <-csvCh
+	if time.Since(instant) < 200*time.Millisecond {
+		t.Errorf("m2 should be flushed after a period")
+	}
+	name, cnt = nameAndValueCnt(name2, csvContent)
 	if name != names[1] || cnt != 2 {
 		t.Errorf("m2 metric should be flushed first with 2 rows, got %s with %d rows", name, cnt)
 	}

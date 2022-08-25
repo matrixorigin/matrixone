@@ -99,7 +99,7 @@ type metricCollector struct {
 	opts      collectorOpts
 }
 
-func newMetricCollector(factory func() ie.InternalExecutor, opts ...collectorOpt) *metricCollector {
+func newMetricCollector(factory func() ie.InternalExecutor, opts ...collectorOpt) MetricCollector {
 	initOpts := defaultCollectorOpts()
 	for _, o := range opts {
 		o.ApplyTo(&initOpts)
@@ -159,7 +159,7 @@ func (c *metricFSCollector) SendMetrics(ctx context.Context, mfs []*pb.MetricFam
 	return nil
 }
 
-func newMetricFSCollector(fsFactory fsFactoryFunc, opts ...collectorOpt) *metricFSCollector {
+func newMetricFSCollector(fsFactory fsFactoryFunc, opts ...collectorOpt) MetricCollector {
 	initOpts := defaultCollectorOpts()
 	for _, o := range opts {
 		o.ApplyTo(&initOpts)
@@ -317,7 +317,7 @@ func (s *mfsetCSV) GetBatch(buf *bytes.Buffer) *trace.CSVRequest {
 	//buf.WriteString(fmt.Sprintf("insert into %s.%s values ", MetricDBConst, s.mfs[0].GetName()))
 	writeValues := func(t string, v float64, lbls ...string) {
 		var fields []string
-		fields = append(fields, fmt.Sprintf("%q", t))
+		fields = append(fields, t)
 		fields = append(fields, fmt.Sprintf("%f", v))
 		fields = append(fields, lbls...)
 		s.writeCsvOneLine(buf, fields)
@@ -329,7 +329,7 @@ func (s *mfsetCSV) GetBatch(buf *bytes.Buffer) *trace.CSVRequest {
 			var lbls []string
 			// reserved labels
 			lbls = append(lbls, fmt.Sprintf("%d", mf.GetNode()))
-			lbls = append(lbls, fmt.Sprintf("%q", mf.GetRole()))
+			lbls = append(lbls, mf.GetRole())
 			// custom labels
 			for _, lbl := range metric.Label {
 				lbls = append(lbls, lbl.GetValue())
