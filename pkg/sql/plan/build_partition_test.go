@@ -20,45 +20,6 @@ import (
 )
 
 func TestSingleDDLPartition(t *testing.T) {
-	//sql := `CREATE TABLE k1 (
-	//		id INT NOT NULL PRIMARY KEY,
-	//		name VARCHAR(20)
-	//	)
-	//	PARTITION BY KEY()
-	//	PARTITIONS 2;`
-
-	//sql := `CREATE TABLE k1 (
-	//		id INT NOT NULL PRIMARY KEY,
-	//		name VARCHAR(20)
-	//	)
-	//	PARTITION BY KEY()
-	//	PARTITIONS 2;`
-
-	//sql := `CREATE TABLE employees (
-	//			id INT NOT NULL,
-	//			fname VARCHAR(30),
-	//			lname VARCHAR(30),
-	//			hired DATE NOT NULL DEFAULT '1970-01-01',
-	//			separated DATE NOT NULL DEFAULT '9999-12-31',
-	//			job_code INT,
-	//			store_id INT
-	//		)
-	//		PARTITION BY LINEAR HASH( YEAR(hired) )
-	//		PARTITIONS 4;`
-
-	//sql := `CREATE TABLE t1 (
-	//			year_col  INT,
-	//			some_data INT
-	//		)
-	//		PARTITION BY RANGE (year_col) (
-	//			PARTITION p0 VALUES LESS THAN (1991),
-	//			PARTITION p1 VALUES LESS THAN (1995),
-	//			PARTITION p2 VALUES LESS THAN (1999),
-	//			PARTITION p3 VALUES LESS THAN (2002),
-	//			PARTITION p4 VALUES LESS THAN (2006),
-	//			PARTITION p5 VALUES LESS THAN (2012)
-	//		);`
-
 	sql := `CREATE TABLE quarterly_report_status (
 				report_id INT NOT NULL,
 				report_status VARCHAR(20) NOT NULL,
@@ -82,7 +43,7 @@ func TestSingleDDLPartition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	outPutPlan(logicPlan, false, t)
+	outPutPlan(logicPlan, true, t)
 }
 
 // ---------------------------------- Key Partition ----------------------------------
@@ -113,7 +74,7 @@ func TestKeyPartition(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		outPutPlan(logicPlan, false, t)
+		outPutPlan(logicPlan, true, t)
 	}
 }
 
@@ -212,7 +173,7 @@ func TestHashPartition(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		outPutPlan(logicPlan, false, t)
+		outPutPlan(logicPlan, true, t)
 	}
 }
 
@@ -454,7 +415,7 @@ func TestRangePartition(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		outPutPlan(logicPlan, false, t)
+		outPutPlan(logicPlan, true, t)
 	}
 }
 
@@ -638,7 +599,7 @@ func TestRangeColumnsPartition(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		outPutPlan(logicPlan, false, t)
+		outPutPlan(logicPlan, true, t)
 	}
 }
 
@@ -752,7 +713,7 @@ func TestListPartition(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		outPutPlan(logicPlan, false, t)
+		outPutPlan(logicPlan, true, t)
 	}
 }
 
@@ -866,7 +827,7 @@ func TestListColumnsPartition(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		outPutPlan(logicPlan, false, t)
+		outPutPlan(logicPlan, true, t)
 	}
 }
 

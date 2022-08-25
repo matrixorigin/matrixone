@@ -228,6 +228,9 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		}, bindContext)
 
 		err = builder.addBinding(nodeID, tree.AliasClause{}, bindContext)
+		if err != nil {
+			return nil, err
+		}
 		partitionBinder := NewPartitionBinder(builder, bindContext)
 		err = buildPartitionByClause(partitionBinder, stmt.PartitionOption, createTable.TableDef)
 		if err != nil {
@@ -260,10 +263,7 @@ func buildPartitionByClause(partitionBinder *PartitionBinder, partitionOp *tree.
 	case *tree.ListType:
 		err = buildListPartitiion(partitionBinder, partitionOp, tableDef)
 	}
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef) error {
