@@ -51,15 +51,16 @@ func (e *miniExec) PrepareSessionBeforeExecRequest(sess *Session) {
 }
 
 func TestIe(t *testing.T) {
+	ctx := context.TODO()
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
 	executor := newIe(pu, &miniExec{})
 	executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
-	sess := executor.newCmdSession(ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
+	sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
 	assert.Equal(t, "dump", sess.GetMysqlProtocol().GetUserName())
 
-	err := executor.Exec(context.TODO(), "whatever", ie.NewOptsBuilder().Finish())
+	err := executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
 	assert.NoError(t, err)
-	res := executor.Query(context.TODO(), "whatever", ie.NewOptsBuilder().Finish())
+	res := executor.Query(ctx, "whatever", ie.NewOptsBuilder().Finish())
 	assert.NoError(t, err)
 	assert.Equal(t, uint64(0), res.RowCount())
 }

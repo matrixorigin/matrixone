@@ -637,11 +637,9 @@ func (th *TxnHandler) CommitTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	var ctx context.Context
-	if th.ses != nil {
-		ctx = th.ses.GetRequestContext()
-	} else {
-		ctx = context.Background()
+	ctx := th.ses.GetRequestContext()
+	if ctx == nil {
+		panic("context should not be nil")
 	}
 	err := th.txn.Commit(ctx)
 	th.SetInvalid()
@@ -652,11 +650,9 @@ func (th *TxnHandler) RollbackTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	var ctx context.Context
-	if th.ses != nil {
-		ctx = th.ses.GetRequestContext()
-	} else {
-		ctx = context.Background()
+	ctx := th.ses.GetRequestContext()
+	if ctx == nil {
+		panic("context should not be nil")
 	}
 	err := th.txn.Rollback(ctx)
 	th.SetInvalid()
