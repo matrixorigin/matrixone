@@ -618,7 +618,7 @@ func (c *Compile) compileUnionAll(n *plan.Node, ss []*Scope, children []*Scope) 
 }
 
 func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
-	rs, chp := c.newJoinScopeList(ss, children)
+	rs := c.newJoinScopeList(ss, children)
 	isEq := isEquiJoin(n.OnList)
 	typs := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
@@ -727,7 +727,7 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join typ '%v' not support now", n.JoinType)))
 	}
-	return append(rs, chp)
+	return rs
 }
 
 func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
@@ -925,33 +925,38 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) ([]*Scop
 	return rs, left, right
 }
 
-func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) ([]*Scope, *Scope) {
-	chp := c.newMergeScope(children)
-	chp.IsEnd = true
+func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
 	rs := make([]*Scope, len(ss))
 	for i := range ss {
 		if ss[i].IsEnd {
 			rs[i] = ss[i]
 			continue
 		}
+		chp := c.newMergeScope(children)
 		rs[i] = new(Scope)
 		rs[i].Magic = Remote
 		rs[i].IsJoin = true
 		rs[i].NodeInfo = ss[i].NodeInfo
-		rs[i].PreScopes = []*Scope{ss[i]}
+		rs[i].PreScopes = []*Scope{ss[i], chp}
 		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+		if ss[i].Magic == Remote {
+			ss[i].Magic = Parallel
+		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op: vm.Connector,
 			Arg: &connector.Argument{
 				Reg: rs[i].Proc.Reg.MergeReceivers[0],
 			},
 		})
+		chp.appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Reg: rs[i].Proc.Reg.MergeReceivers[1],
+			},
+		})
+		chp.IsEnd = true
 	}
-	chp.Instructions = append(chp.Instructions, vm.Instruction{
-		Op:  vm.Dispatch,
-		Arg: constructDispatch(true, extraRegisters(rs, 1)),
-	})
-	return rs, chp
+	return rs
 }
 
 func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
