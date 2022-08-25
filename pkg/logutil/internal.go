@@ -75,8 +75,8 @@ type LogConfig struct {
 	MaxSize    int    `toml:"max-size"`
 	MaxDays    int    `toml:"max-days"`
 	MaxBackups int    `toml:"max-backups"`
-
-	DisableStore bool `toml:"disable-store"` // for mo, store log into db
+	// DisableStore ctrl store log into db
+	DisableStore bool `toml:"disable-store"`
 }
 
 func (cfg *LogConfig) getSyncer() zapcore.WriteSyncer {

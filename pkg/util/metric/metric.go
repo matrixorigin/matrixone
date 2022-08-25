@@ -73,9 +73,9 @@ var moExporter MetricExporter
 var moCollector MetricCollector
 var statusSvr *statusServer
 
-func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, pu *config.ParameterUnit, nodeId int, role string) {
+func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *config.FrontendParameters, nodeId int, role string) {
 	// init global variables
-	initConfigByParamaterUnit(pu)
+	initConfigByParamaterUnit(SV)
 	registry = prom.NewRegistry()
 	moCollector = newMetricCollector(ieFactory)
 	moExporter = newMetricExporter(registry, moCollector, int32(nodeId), role)
@@ -92,7 +92,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, pu *c
 		// http.HandleFunc("/query", makeDebugHandleFunc(ieFactory))
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.HandlerFor(prom.DefaultGatherer, promhttp.HandlerOpts{}))
-		addr := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.StatusPort)
+		addr := fmt.Sprintf("%s:%d", SV.Host, SV.StatusPort)
 		statusSvr = &statusServer{Server: &http.Server{Addr: addr, Handler: mux}}
 		statusSvr.Add(1)
 		go func() {

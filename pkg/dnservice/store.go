@@ -16,6 +16,10 @@ package dnservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
 	"time"
 
@@ -139,6 +143,9 @@ func NewService(cfg *Config,
 		return nil, err
 	}
 	if err := s.initMetadata(); err != nil {
+		return nil, err
+	}
+	if err := s.initTraceMetric(); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -397,5 +404,38 @@ func (s *store) initFileService() error {
 	s.fs = fileservice.NewFileServices(localFileServiceName, localFS, s3FS)
 	s.metadataFS = rfs
 
+	return nil
+}
+
+func (s *store) initTraceMetric() error {
+	var fs fileservice.FileService
+	var err error
+	ctx := context.Background()
+	SV := &s.cfg.Frontend
+	if !SV.DisableTrace || !SV.DisableMetric {
+		if fs, err = s.fsFactory(s3FileServiceName); err != nil {
+			return err
+		}
+	}
+	if SV.DisableTrace {
+		logutil.Warnf("trace is disable")
+	} else if ctx, err = trace.Init(ctx,
+		trace.WithMOVersion(SV.MoVersion),
+		trace.WithNode(SV.NodeUUID, trace.NodeTypeDN),
+		trace.EnableTracer(!SV.DisableTrace),
+		trace.WithBatchProcessMode(SV.TraceBatchProcessor),
+		trace.WithFSWriterFactory(export.GetFSWriterFactory(fs, SV.NodeUUID, trace.NodeTypeDN.String())),
+		trace.WithFSConfig(nil),
+		trace.DebugMode(SV.EnableTraceDebug),
+		trace.WithSQLExecutor(nil),
+	); err != nil {
+		return err
+	}
+	if !SV.DisableMetric {
+		ieFactory := func() ie.InternalExecutor {
+			return nil
+		}
+		metric.InitMetric(ctx, ieFactory, SV, 0, metric.ALL_IN_ONE_MODE)
+	}
 	return nil
 }

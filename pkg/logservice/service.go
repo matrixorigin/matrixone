@@ -29,6 +29,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 var (
@@ -374,4 +381,35 @@ func (s *Service) getBackendOptions() []morpc.BackendOption {
 // NB: leave an empty method for future extension.
 func (s *Service) getClientOptions() []morpc.ClientOption {
 	return nil
+}
+
+const s3FileServiceName = "S3" // same as dnservice/factory.go s3FileServiceName
+func (s *Service) initTraceMetric(ctx context.Context) (context.Context, error) {
+	SV := &s.cfg.Frontend
+	var fs fileservice.FileService
+	var err error
+	if fs, err = s.cfg.FSFactory(s3FileServiceName); err != nil {
+		return nil, err
+	}
+	if SV.DisableTrace {
+		logutil.Warnf("trace is disable")
+	} else if ctx, err = trace.Init(ctx,
+		trace.WithMOVersion(SV.MoVersion),
+		trace.WithNode(SV.NodeUUID, trace.NodeTypeLogService),
+		trace.EnableTracer(!SV.DisableTrace),
+		trace.WithBatchProcessMode(SV.TraceBatchProcessor),
+		trace.WithFSWriterFactory(export.GetFSWriterFactory(fs, SV.NodeUUID, trace.NodeTypeLogService.String())),
+		trace.WithFSConfig(nil),
+		trace.DebugMode(SV.EnableTraceDebug),
+		trace.WithSQLExecutor(nil),
+	); err != nil {
+		return nil, err
+	}
+	if !SV.DisableMetric {
+		ieFactory := func() ie.InternalExecutor {
+			return nil
+		}
+		metric.InitMetric(ctx, ieFactory, SV, 0, metric.ALL_IN_ONE_MODE)
+	}
+	return ctx, nil
 }

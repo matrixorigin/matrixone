@@ -23,6 +23,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -64,6 +65,8 @@ type Config struct {
 	LogService logservice.Config `toml:"logservice"`
 	// CN cn service config
 	CN cnservice.Config `toml:"cn"`
+	// Frontend parameters for the frontend
+	Frontend config.FrontendParameters `toml:"frontend"`
 }
 
 func parseConfigFromFile(file string) (*Config, error) {
@@ -112,19 +115,38 @@ func (c *Config) getLogServiceConfig() logservice.Config {
 	cfg := c.LogService
 	fmt.Printf("hakeeper client cfg: %v", c.HAKeeperClient)
 	cfg.HAKeeperClientConfig = c.HAKeeperClient
+	cfg.Frontend = c.getFrontendConfig()
+	cfg.FSFactory = c.createFileService
+	if len(cfg.UUID) != 0 {
+		cfg.Frontend.NodeUUID = cfg.UUID
+	}
 	return cfg
 }
 
 func (c *Config) getDNServiceConfig() dnservice.Config {
 	cfg := c.DN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
+	cfg.Frontend = c.getFrontendConfig()
+	if len(cfg.UUID) != 0 {
+		cfg.Frontend.NodeUUID = cfg.UUID
+	}
 	return cfg
 }
 
 func (c *Config) getCNServiceConfig() cnservice.Config {
 	cfg := c.CN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
-	cfg.Frontend.SetLogAndVersion(&c.Log, Version)
+	cfg.Frontend = c.getFrontendConfig()
+	if len(cfg.UUID) != 0 {
+		cfg.Frontend.NodeUUID = c.CN.UUID
+	}
+	return cfg
+}
+
+func (c *Config) getFrontendConfig() config.FrontendParameters {
+	cfg := c.Frontend
+	cfg.SetLogAndVersion(&c.Log, Version)
+	cfg.SetDefaultValues()
 	return cfg
 }
 

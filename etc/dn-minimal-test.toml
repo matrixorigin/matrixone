@@ -37,3 +37,6 @@ uuid = "dn uuid"
 # txn storage backend implementation. [TAE|MEM]
 backend = "MEM"
 
+[frontend]
+disableMetric = true
+disableTrace  = true

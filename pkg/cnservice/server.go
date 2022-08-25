@@ -19,12 +19,16 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -35,6 +39,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+
+	"github.com/google/uuid"
 )
 
 func NewService(cfg *Config, ctx context.Context) (Service, error) {
@@ -57,7 +63,7 @@ func NewService(cfg *Config, ctx context.Context) (Service, error) {
 	srv.server = server
 
 	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil, nil, nil)
-	cfg.Frontend.SetDefaultValues()
+	pu.SetFileServiceConfig(&cfg.FileService)
 	err = srv.initMOServer(ctx, pu)
 	if err != nil {
 		return nil, err
@@ -108,7 +114,9 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 		return err
 	}
 
-	s.createMOServer(cancelMoServerCtx, pu)
+	if _, err = s.createMOServer(cancelMoServerCtx, pu); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -156,23 +164,41 @@ func (s *service) initEngine(
 	return nil
 }
 
-func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterUnit) {
+func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterUnit) (context.Context, error) {
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
 	s.mo = frontend.NewMOServer(moServerCtx, address, pu)
-	{
+	var fs fileservice.FileService
+	var cfg export.Config
+	var err error
+	if fs, cfg, err = export.ParseFileService(moServerCtx, *pu.FileService); err != nil {
+		return nil, err
+	}
+	if pu.SV.DisableTrace {
+		logutil.Warnf("trace is disable")
+	} else {
+		// validate node_uuid
+		var nodeUUID uuid.UUID
+		if nodeUUID, err = uuid.Parse(pu.SV.NodeUUID); err != nil {
+			nodeUUID = uuid.New()
+			pu.SV.NodeUUID = nodeUUID.String()
+		}
 		// init trace/log/error framework
-		if _, err := trace.Init(moServerCtx,
+		if err = util.SetUUIDNodeID(nodeUUID[:]); err != nil {
+			return nil, moerr.NewPanicError(err)
+		} else if moServerCtx, err = trace.Init(moServerCtx,
 			trace.WithMOVersion(pu.SV.MoVersion),
-			trace.WithNode("node_uuid", trace.NodeTypeCN),
+			trace.WithNode(pu.SV.NodeUUID, trace.NodeTypeCN),
 			trace.EnableTracer(!pu.SV.DisableTrace),
 			trace.WithBatchProcessMode(pu.SV.TraceBatchProcessor),
+			trace.WithFSWriterFactory(export.GetFSWriterFactory(fs, pu.SV.NodeUUID, trace.NodeTypeCN.String())),
+			trace.WithFSConfig(&cfg),
 			trace.DebugMode(pu.SV.EnableTraceDebug),
 			trace.WithSQLExecutor(func() ie.InternalExecutor {
 				return frontend.NewInternalExecutor(pu)
 			}),
 		); err != nil {
-			panic(err)
+			return nil, err
 		}
 	}
 
@@ -180,9 +206,10 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 		ieFactory := func() ie.InternalExecutor {
 			return frontend.NewInternalExecutor(pu)
 		}
-		metric.InitMetric(moServerCtx, ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
+		metric.InitMetric(moServerCtx, ieFactory, pu.SV, 0, metric.ALL_IN_ONE_MODE)
 	}
 	frontend.InitServerVersion(pu.SV.MoVersion)
+	return moServerCtx, nil
 }
 
 func (s *service) runMoServer() error {

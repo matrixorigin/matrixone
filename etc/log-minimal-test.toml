@@ -26,3 +26,7 @@ init-hakeeper-members = [
 service-addresses = [
   "127.0.0.1:32000",
 ]
+
+[frontend]
+disableMetric = true
+disableTrace  = true

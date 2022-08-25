@@ -95,7 +95,7 @@ func createMOServer(inputCtx context.Context, pu *config.ParameterUnit) {
 		ieFactory := func() ie.InternalExecutor {
 			return frontend.NewInternalExecutor(pu)
 		}
-		metric.InitMetric(moServerCtx, ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
+		metric.InitMetric(moServerCtx, ieFactory, pu.SV, 0, metric.ALL_IN_ONE_MODE)
 	}
 	frontend.InitServerVersion(MoVersion)
 }

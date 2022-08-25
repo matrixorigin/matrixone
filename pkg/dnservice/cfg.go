@@ -16,6 +16,8 @@ package dnservice
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"strings"
 	"time"
 
@@ -56,6 +58,11 @@ type Config struct {
 		// ClientConfig hakeeper client configuration
 		ClientConfig logservice.HAKeeperClientConfig
 	}
+
+	// Frontend parameters for the frontend, assign by mo-service's Config
+	Frontend config.FrontendParameters
+
+	FileService fileservice.Config `toml:"fileservice"`
 
 	// LogService log service configuration
 	LogService struct {

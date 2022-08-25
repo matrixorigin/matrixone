@@ -16,9 +16,9 @@ package cnservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -45,6 +45,8 @@ const (
 
 // Config cn service
 type Config struct {
+	UUID string `toml"uuid"`
+
 	// ListenAddress listening address for receiving external requests
 	ListenAddress string `toml:"listen-address"`
 	// FileService file service configuration
@@ -53,12 +55,9 @@ type Config struct {
 		Type EngineType `toml:"type"`
 	}
 
-	FileService struct {
-		// Backend file service backend implementation. [Mem|DISK|S3|MINIO]. Default is DISK.
-		Backend string `toml:"backend"`
-		// S3 s3 configuration
-		S3 fileservice.S3Config `toml:"s3"`
-	}
+	// FileService hold fs config.
+	// Backend file service backend implementation. val in [Mem|DISK|S3|MINIO]
+	FileService fileservice.Config `toml:"fileservice"`
 
 	// Pipeline configuration
 	Pipeline struct {
@@ -74,8 +73,8 @@ type Config struct {
 		BatchSize int64 `toml:"batch-size"`
 	}
 
-	//parameters for the frontend
-	Frontend config.FrontendParameters `toml:"frontend"`
+	// Frontend parameters for the frontend, assign by mo-service's Config
+	Frontend config.FrontendParameters
 
 	// HAKeeper configuration
 	HAKeeper struct {

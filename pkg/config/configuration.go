@@ -16,6 +16,7 @@ package config
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -99,12 +100,13 @@ var (
 	defaultStatusPort = 7001
 
 	//default is InternalExecutor. if InternalExecutor, use internal sql executor, FileService will implement soon.
-	defaultTraceBatchProcessor = "InternalExecutor"
+	defaultTraceBatchProcessor = "FileService"
 )
 
 // FrontendParameters of the frontend
 type FrontendParameters struct {
 	MoVersion string
+	NodeUUID  string
 
 	//root name
 	RootName string `toml:"rootname"`
@@ -355,6 +357,9 @@ type ParameterUnit struct {
 
 	//Cluster Nodes
 	ClusterNodes engine.Nodes
+
+	// FSConfig
+	FileService *fileservice.Config
 }
 
 func NewParameterUnit(
@@ -373,6 +378,10 @@ func NewParameterUnit(
 		TxnClient:     txnClient,
 		ClusterNodes:  clusterNodes,
 	}
+}
+
+func (PU *ParameterUnit) SetFileServiceConfig(cfg *fileservice.Config) {
+	PU.FileService = cfg
 }
 
 // GetParameterUnit gets the configuration from the context.

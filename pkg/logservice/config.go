@@ -15,6 +15,8 @@
 package logservice
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"strconv"
 	"strings"
 	"time"
@@ -152,6 +154,11 @@ type Config struct {
 	// DisableWorkers disables the HAKeeper ticker and HAKeeper client in tests.
 	// Never set this field to true in production
 	DisableWorkers bool
+
+	// Frontend parameters for the frontend, assign by mo-service's Config
+	Frontend config.FrontendParameters
+
+	FSFactory fileservice.FileServiceFactory
 }
 
 func (c *Config) GetHAKeeperConfig() hakeeper.Config {

@@ -12,15 +12,12 @@ service-addresses = [
     "2"
 ]
 
+[cn]
+
 [cn.Engine]
 type = "tae"
 
-[[fileservice]]
-# s3 fileservice instance, used to store data.
-name = "s3"
-# use disk as fileservice backend.
+[cn.fileservice]
 backend = "DISK"
-# set the directory used by DISK backend. There must has a file named "thisisalocalfileservicedir"
-# in the data dir
 data-dir = "store"
 
