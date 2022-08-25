@@ -2118,6 +2118,11 @@ show_create_stmt:
     {
         $$ = &tree.ShowCreateTable{Name: $4}
     }
+| 
+    SHOW CREATE VIEW table_name_unresolved
+    {
+        $$ = &tree.ShowCreateView{Name: $4}
+    }
 |   SHOW CREATE DATABASE not_exists_opt db_name
     {
         $$ = &tree.ShowCreateDatabase{IfNotExists: $4, Name: $5}

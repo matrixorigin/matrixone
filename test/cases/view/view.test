@@ -15,3 +15,11 @@ drop table t1;
 select * from v1;
 drop table v1;
 drop view v1;
+
+show create view vvvv;
+create view v1 as select "a";
+show create view v1;
+create view v2 as select 'a';
+show create view v2;
+drop view v1;
+drop view v2;
