@@ -378,17 +378,16 @@ Once the aggregation function is ready, we can compile and run MatrixOne to see 
 ### 步骤 1：运行 `make config` 和 `make build` 来编译 MatrixOne 并构建二进制文件
 
 ```
-make config
 make build
 ```
 
 !!! info
     `make config` 运行完成将生成一个新的配置文件。在本教程中，你只需要运行一次。如果你修改了一些代码并想重新编译，你只需要运行 `make build`。
 
-### 步骤 2：运行 `./mo-server system_vars_config.toml` 启动 MatrixOne，MatrixOne 服务将开始监听客户端连接
+### 步骤 2：运行 `./mo-service -cfg ./etc/cn-standalone-test.toml` 启动 MatrixOne，MatrixOne 服务将开始监听客户端连接
 
 ```
-./mo-server system_vars_config.toml
+./mo-service -cfg ./etc/cn-standalone-test.toml
 ```
 
 !!! info
