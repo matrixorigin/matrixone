@@ -220,7 +220,8 @@ func (e *DBEntry) GetTableEntryByID(id uint64) (table *TableEntry, err error) {
 func (e *DBEntry) txnGetNodeByName(name string, txnCtx txnif.AsyncTxn) (*common.DLNode, error) {
 	e.RLock()
 	defer e.RUnlock()
-	node := e.nameNodes[name]
+	fullName := genTblFullName(txnCtx.GetTenantID(), name)
+	node := e.nameNodes[fullName]
 	if node == nil {
 		return nil, ErrNotFound
 	}
@@ -280,11 +281,11 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 	if n, ok := e.entries[table.GetID()]; !ok {
 		return ErrNotFound
 	} else {
-		nn := e.nameNodes[table.GetSchema().Name]
+		nn := e.nameNodes[table.GetFullName()]
 		nn.DeleteNode(table.GetID())
 		e.link.Delete(n)
 		if nn.Length() == 0 {
-			delete(e.nameNodes, table.GetSchema().Name)
+			delete(e.nameNodes, table.GetFullName())
 		}
 		delete(e.entries, table.GetID())
 	}
@@ -298,13 +299,15 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.AsyncTxn) (err err
 			e.catalog.AddColumnCnt(len(table.schema.ColDefs))
 		}
 	}()
-	nn := e.nameNodes[table.schema.Name]
+	fullName := table.GetFullName()
+	nn := e.nameNodes[fullName]
 	if nn == nil {
 		n := e.link.Insert(table)
 		e.entries[table.GetID()] = n
 
-		nn := newNodeList(e, &e.nodesMu, table.schema.Name)
-		e.nameNodes[table.schema.Name] = nn
+		nn := newNodeList(e, &e.nodesMu, fullName)
+		e.nameNodes[fullName] = nn
+
 		nn.CreateNode(table.GetID())
 	} else {
 		node := nn.GetTableNode()

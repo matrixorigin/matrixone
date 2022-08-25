@@ -15,7 +15,6 @@
 package txnengine
 
 import (
-	"bytes"
 	"encoding/gob"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -46,14 +45,6 @@ const (
 	OpRead
 	OpCloseTableIter
 )
-
-func mustEncodePayload(o any) []byte {
-	buf := new(bytes.Buffer)
-	if err := gob.NewEncoder(buf).Encode(o); err != nil {
-		panic(err)
-	}
-	return buf.Bytes()
-}
 
 func init() {
 

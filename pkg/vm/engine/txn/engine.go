@@ -49,7 +49,7 @@ var _ engine.Engine = new(Engine)
 
 func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.TxnOperator) error {
 
-	_, err := doTxnRequest[CreateDatabaseResp](
+	_, err := engine.DoTxnRequest[CreateDatabaseResp](
 		ctx,
 		e,
 		txnOperator.Write,
@@ -68,7 +68,7 @@ func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.T
 
 func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client.TxnOperator) (engine.Database, error) {
 
-	resps, err := doTxnRequest[OpenDatabaseResp](
+	resps, err := engine.DoTxnRequest[OpenDatabaseResp](
 		ctx,
 		e,
 		txnOperator.Read,
@@ -95,7 +95,7 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 
 func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) ([]string, error) {
 
-	resps, err := doTxnRequest[GetDatabasesResp](
+	resps, err := engine.DoTxnRequest[GetDatabasesResp](
 		ctx,
 		e,
 		txnOperator.Read,
@@ -117,7 +117,7 @@ func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) 
 
 func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.TxnOperator) error {
 
-	_, err := doTxnRequest[DeleteDatabaseResp](
+	_, err := engine.DoTxnRequest[DeleteDatabaseResp](
 		ctx,
 		e,
 		txnOperator.Write,
