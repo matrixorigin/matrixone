@@ -148,6 +148,10 @@ func NewService(cfg Config, opts ...Option) (*Service, error) {
 			return nil, err
 		}
 	}
+	// init trace & metric
+	if _, err = service.initTraceMetric(context.TODO()); err != nil {
+		return nil, err
+	}
 	return service, nil
 }
 
@@ -384,6 +388,7 @@ func (s *Service) getClientOptions() []morpc.ClientOption {
 }
 
 const s3FileServiceName = "S3" // same as dnservice/factory.go s3FileServiceName
+
 func (s *Service) initTraceMetric(ctx context.Context) (context.Context, error) {
 	SV := &s.cfg.Frontend
 	var fs fileservice.FileService
