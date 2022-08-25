@@ -15,7 +15,9 @@
 package plan
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -23,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 const MO_CATALOG_DB_NAME = "mo_catalog"
@@ -59,6 +62,44 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	// log.Println(sql)
 
 	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
+}
+
+// buildShowCreateView
+func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan, error) {
+	tblName := stmt.Name.Parts[0]
+	dbName := ctx.DefaultDatabase()
+	if stmt.Name.NumParts == 2 {
+		dbName = stmt.Name.Parts[1]
+	}
+
+	_, tableDef := ctx.Resolve(dbName, tblName)
+	if tableDef == nil || tableDef.TableType != catalog.SystemViewRel {
+		return nil, errors.New(errno.UndefinedTable, fmt.Sprintf("view '%v' doesn't exist", tblName))
+	}
+	sqlStr := "select \"%s\" as `View`, \"%s\" as `Create View`"
+	var viewStr string
+	if tableDef.TableType == catalog.SystemViewRel {
+		for _, def := range tableDef.Defs {
+			if viewDef, ok := def.Def.(*plan.TableDef_DefType_View); ok {
+				viewStr = viewDef.View.View
+				break
+			}
+		}
+	}
+
+	var viewData ViewData
+	err := json.Unmarshal([]byte(viewStr), &viewData)
+	if err != nil {
+		return nil, err
+	}
+
+	// FixMe  We need a better escape function
+	stmtStr := strings.ReplaceAll(viewData.Stmt, "\"", "\\\"")
+	sqlStr = fmt.Sprintf(sqlStr, tblName, fmt.Sprint(stmtStr))
+
+	// log.Println(sqlStr)
+
+	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATETABLE)
 }
 
 func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, error) {

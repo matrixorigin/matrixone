@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
@@ -137,6 +139,20 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Cond:       arg.Cond,
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
+		}
+	case *mark.Argument:
+		{
+			rin.Arg = &mark.Argument{
+				Typs:         arg.Typs,
+				Cond:         arg.Cond,
+				Result:       arg.Result,
+				Conditions:   arg.Conditions,
+				OutputNull:   arg.OutputNull,
+				OutputMark:   arg.OutputMark,
+				MarkMeaning:  arg.MarkMeaning,
+				OutputAnyway: arg.OutputAnyway,
+				OnList:       arg.OnList,
+			}
 		}
 	case *offset.Argument:
 		rin.Arg = &offset.Argument{
@@ -427,6 +443,29 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 	}
 }
 
+func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onList []*plan.Expr) *mark.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		rel, pos := constructJoinResult(expr)
+		if rel != 0 {
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("mark result '%s' not support now", expr)))
+		}
+		result[i] = pos
+	}
+	cond, conds := extraJoinConditions(n.OnList)
+	return &mark.Argument{
+		Typs:         typs,
+		Result:       result,
+		Cond:         cond,
+		Conditions:   constructJoinConditions(conds),
+		OutputMark:   false,
+		OutputNull:   false,
+		MarkMeaning:  false,
+		OutputAnyway: false,
+		OnList:       onList,
+	}
+}
+
 func constructOrder(n *plan.Node, proc *process.Process) *order.Argument {
 	fs := make([]colexec.Field, len(n.OrderBy))
 	for i, e := range n.OrderBy {
@@ -661,6 +700,13 @@ func constructHashBuild(in vm.Instruction) *hashbuild.Argument {
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
 		}
+	case vm.Mark:
+		arg := in.Arg.(*mark.Argument)
+		return &hashbuild.Argument{
+			NeedHashMap: true,
+			Typs:        arg.Typs,
+			Conditions:  arg.Conditions[1],
+		}
 	case vm.Join:
 		arg := in.Arg.(*join.Argument)
 		return &hashbuild.Argument{
@@ -725,6 +771,7 @@ func constructHashBuild(in vm.Instruction) *hashbuild.Argument {
 			NeedHashMap: false,
 			Typs:        arg.Typs,
 		}
+
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join type '%v'", in.Op)))
 	}

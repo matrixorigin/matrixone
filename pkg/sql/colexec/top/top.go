@@ -63,6 +63,12 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			if len(bat.Zs) == 0 {
 				return false, nil
 			}
+			if ap.Limit == 0 {
+				ctr.state = End
+				bat.Clean(proc.GetMheap())
+				proc.Reg.InputBatch = nil
+				return true, nil
+			}
 			return false, ctr.build(ap, bat, proc)
 		case Eval:
 			ctr.state = End
