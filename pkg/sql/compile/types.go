@@ -51,13 +51,6 @@ const (
 	InsertValues
 )
 
-type EncodeSource struct {
-	SchemaName   string
-	RelationName string
-	Attributes   []string
-	Bat          *batch.Batch
-}
-
 // Source contains information of a relation which will be used in execution,
 type Source struct {
 	SchemaName   string
@@ -120,6 +113,9 @@ type Server struct {
 // Compile contains all the information needed for compilation.
 type Compile struct {
 	scope *Scope
+
+	// isEmpty the pipeline not need to run
+	isEmpty bool
 
 	info plan2.ExecInfo
 

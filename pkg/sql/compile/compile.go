@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -84,7 +85,7 @@ func (c *Compile) GetAffectedRows() uint64 {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (err error) {
-	if c.scope == nil {
+	if c.scope == nil || c.isEmpty {
 		return nil
 	}
 
@@ -723,6 +724,16 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 }
 
 func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
+	if n.Limit != nil {
+		vec, err := colexec.EvalExpr(constBat, c.proc, n.Limit)
+		if err != nil {
+			panic(err)
+		}
+		if vec.Col.([]int64)[0] == 0 {
+			c.isEmpty = true
+		}
+
+	}
 	switch {
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileTop(n, ss)
