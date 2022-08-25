@@ -36,6 +36,7 @@ type ObjectRef = plan.ObjectRef
 type ColRef = plan.ColRef
 type Cost = plan.Cost
 type Const = plan.Const
+type MaxValue = plan.MaxValue
 type Expr = plan.Expr
 type Node = plan.Node
 type RowsetData = plan.RowsetData

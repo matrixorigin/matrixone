@@ -151,10 +151,9 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}, nil
 	case *tree.MaxValue:
 		return &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Isnull:     false,
-					IsMaxValue: true,
+			Expr: &plan.Expr_Max{
+				Max: &MaxValue{
+					Value: "maxvalue",
 				},
 			},
 		}, nil
