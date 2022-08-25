@@ -1,6 +1,6 @@
 select log(exp(10)),log(-1),log(NULL),log(1,1),log(3,9),log(-1,2),log(NULL,2);
-log(exp(10))	log(-1)	log(NULL)	log(1,1)	log(3,9)	log(-1,2)	log(NULL,2)
-10.0	null	null	null	2.0	null	null
+log(exp(10))	log(-1)	log(null)	log(1, 1)	log(3, 9)	log(-1, 2)	log(null, 2)
+10.0	null	null	null	2.0000000000000004	null	null
 SELECT LOG(2);
 LOG(2)
 0.6931471805599453
@@ -56,8 +56,7 @@ drop table t1;
 create table t1(a tinyint, b SMALLINT, c bigint, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19), i DATE, k datetime, l TIMESTAMP, m char(255), n varchar(255));
 insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
 select log(a),log(b),log(c),log(d),log(e),log(f),log(g),log(h),log(i),log(k),log(l),log(m),log(n) from t1;
-log(a)	log(b)	log(c)	log(d)	log(e)	log(f)	log(g)	log(h)	log(i)	log(k)	log(l)	log(m)	log(n)
-0.0	0.0	0.6931471805599453	1.3862943611198906	1.6094379124341003	1.7047480922384253	3.4381719844535166	2.661238079316406	16.817240410033833	30.632750972983715	30.632750974474746	null	null
+Function 'log' with parameters [DATE] is not supported.
 select log(a,b), log(b,c),log(c,d),log(d,e),log(e,f),log(f,g),log(g,h), log(h,i), log(i,k),log(k,l),log(l,m),log(m,n) from t1;
 log(a,b)	log(b,c)	log(c,d)	log(d,e)	log(e,f)	log(f,g)	log(g,h)	log(h,i)	log(i,k)	log(k,l)	log(l,m)	log(m,n)
 null	null	2.0	1.160964047443681	1.059219544331585	2.0168211362765116	0.7740270385977794	6.319329540915667	1.8215087746921308	1.0000000000486744	null	null

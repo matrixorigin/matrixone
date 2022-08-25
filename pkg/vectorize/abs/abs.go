@@ -16,20 +16,22 @@ package abs
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"golang.org/x/exp/constraints"
 )
 
 var (
-	AbsUint8   func([]uint8, []uint8) []uint8
-	AbsUint16  func([]uint16, []uint16) []uint16
-	AbsUint32  func([]uint32, []uint32) []uint32
-	AbsUint64  func([]uint64, []uint64) []uint64
-	AbsInt8    func([]int8, []int8) []int8
-	AbsInt16   func([]int16, []int16) []int16
-	AbsInt32   func([]int32, []int32) []int32
-	AbsInt64   func([]int64, []int64) []int64
-	AbsFloat32 func([]float32, []float32) []float32
-	AbsFloat64 func([]float64, []float64) []float64
+	AbsUint8      func([]uint8, []uint8) []uint8
+	AbsUint16     func([]uint16, []uint16) []uint16
+	AbsUint32     func([]uint32, []uint32) []uint32
+	AbsUint64     func([]uint64, []uint64) []uint64
+	AbsInt8       func([]int8, []int8) []int8
+	AbsInt16      func([]int16, []int16) []int16
+	AbsInt32      func([]int32, []int32) []int32
+	AbsInt64      func([]int64, []int64) []int64
+	AbsFloat32    func([]float32, []float32) []float32
+	AbsFloat64    func([]float64, []float64) []float64
+	AbsDecimal128 func([]types.Decimal128, []types.Decimal128) []types.Decimal128
 )
 
 func init() {
@@ -43,6 +45,7 @@ func init() {
 	AbsInt64 = absSigned[int64]
 	AbsFloat32 = absSigned[float32]
 	AbsFloat64 = absSigned[float64]
+	AbsDecimal128 = absDecimal128
 }
 
 // Unsigned simply return
@@ -60,6 +63,17 @@ func absSigned[T constraints.Signed | constraints.Float](xs, rs []T) []T {
 		}
 		if rs[i] < 0 {
 			panic(moerr.NewError(moerr.OUT_OF_RANGE, "abs int value out of range"))
+		}
+	}
+	return rs
+}
+
+func absDecimal128(xs []types.Decimal128, rs []types.Decimal128) []types.Decimal128 {
+	for i := range xs {
+		if xs[i].Lt(types.Decimal128_FromInt32(0)) {
+			rs[i] = types.NegDecimal128(xs[i])
+		} else {
+			rs[i] = xs[i]
 		}
 	}
 	return rs
