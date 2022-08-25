@@ -801,37 +801,37 @@ func Test_handleShowCreateTable(t *testing.T) {
 	})
 }
 
-func Test_handleShowCreateDatabase(t *testing.T) {
-	convey.Convey("handleShowCreateDatabase succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-		ioses := mock_frontend.NewMockIOSession(ctrl)
-		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+// func Test_handleShowCreateDatabase(t *testing.T) {
+// 	convey.Convey("handleShowCreateDatabase succ", t, func() {
+// 		ctrl := gomock.NewController(t)
+// 		defer ctrl.Finish()
+// 		ioses := mock_frontend.NewMockIOSession(ctrl)
+// 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+// 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-		eng := mock_frontend.NewMockEngine(ctrl)
-		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
-		if err != nil {
-			t.Error(err)
-		}
-		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+// 		eng := mock_frontend.NewMockEngine(ctrl)
+// 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+// 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+// 		if err != nil {
+// 			t.Error(err)
+// 		}
+// 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+// 		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+// 		var gSys GlobalSystemVariables
+// 		InitGlobalSystemVariables(&gSys)
+// 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
 
-		ses.Mrs = &MysqlResultSet{}
-		ses.Mrs.Name2Index = make(map[string]uint64)
-		ses.Mrs.Name2Index["Database"] = 1
-		ses.Mrs.Name2Index["Create Database"] = 2
-		ses.Data = make([][]interface{}, 1)
-		ses.Data[0] = make([]interface{}, 3)
+// 		ses.Mrs = &MysqlResultSet{}
+// 		ses.Mrs.Name2Index = make(map[string]uint64)
+// 		ses.Mrs.Name2Index["Database"] = 1
+// 		ses.Mrs.Name2Index["Create Database"] = 2
+// 		ses.Data = make([][]interface{}, 1)
+// 		ses.Data[0] = make([]interface{}, 3)
 
-		err = handleShowCreateDatabase(ses)
-		convey.So(err, convey.ShouldBeNil)
-	})
-}
+// 		err = handleShowCreateDatabase(ses)
+// 		convey.So(err, convey.ShouldBeNil)
+// 	})
+// }
 
 func Test_handleShowColumns(t *testing.T) {
 	convey.Convey("handleShowColumns succ", t, func() {

@@ -265,7 +265,7 @@ func (o *outputQueue) flush() error {
 		}
 	} else {
 		//send group of row
-		if o.showStmtType == ShowCreateTable || o.showStmtType == ShowCreateDatabase || o.showStmtType == ShowColumns {
+		if o.showStmtType == ShowColumns {
 			o.rowIdx = 0
 			return nil
 		}
@@ -394,25 +394,25 @@ func handleShowCreateTable(ses *Session) error {
 /*
 handle show create database in plan2 and tae
 */
-func handleShowCreateDatabase(ses *Session) error {
-	dbNameIndex := ses.Mrs.Name2Index["Database"]
-	dbsqlIndex := ses.Mrs.Name2Index["Create Database"]
-	firstRow := ses.Data[0]
-	dbName := firstRow[dbNameIndex]
-	createDBSql := fmt.Sprintf("CREATE DATABASE `%s`", dbName)
-	firstRow[dbsqlIndex] = createDBSql
+// func handleShowCreateDatabase(ses *Session) error {
+// 	dbNameIndex := ses.Mrs.Name2Index["Database"]
+// 	dbsqlIndex := ses.Mrs.Name2Index["Create Database"]
+// 	firstRow := ses.Data[0]
+// 	dbName := firstRow[dbNameIndex]
+// 	createDBSql := fmt.Sprintf("CREATE DATABASE `%s`", dbName)
+// 	firstRow[dbsqlIndex] = createDBSql
 
-	row := make([]interface{}, 2)
-	row[0] = dbName
-	row[1] = createDBSql
+// 	row := make([]interface{}, 2)
+// 	row[0] = dbName
+// 	row[1] = createDBSql
 
-	ses.Mrs.AddRow(row)
-	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, 1); err != nil {
-		logutil.Errorf("handleShowCreateDatabase error %v \n", err)
-		return err
-	}
-	return nil
-}
+// 	ses.Mrs.AddRow(row)
+// 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, 1); err != nil {
+// 		logutil.Errorf("handleShowCreateDatabase error %v \n", err)
+// 		return err
+// 	}
+// 	return nil
+// }
 
 /*
 handle show columns from table in plan2 and tae
@@ -524,7 +524,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		if err != nil {
 			return err
 		}
-		if oq.showStmtType == ShowCreateDatabase || oq.showStmtType == ShowCreateTable || oq.showStmtType == ShowColumns {
+		if oq.showStmtType == ShowColumns {
 			row2 := make([]interface{}, len(row))
 			copy(row2, row)
 			ses.Data = append(ses.Data, row2)
@@ -1554,11 +1554,11 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	var err error
 	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
 	switch cwft.GetAst().(type) {
-	case *tree.ShowCreateTable:
-		cols = []*plan2.ColDef{
-			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Table"},
-			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Create Table"},
-		}
+	// case *tree.ShowCreateTable:
+	// 	cols = []*plan2.ColDef{
+	// 		{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Table"},
+	// 		{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Create Table"},
+	// 	}
 	case *tree.ShowColumns:
 		cols = []*plan2.ColDef{
 			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
@@ -1936,12 +1936,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.ShowColumns:
 			ses.showStmtType = ShowColumns
 			ses.Data = nil
-		case *tree.ShowCreateDatabase:
-			ses.showStmtType = ShowCreateDatabase
-			ses.Data = nil
-		case *tree.ShowCreateTable:
-			ses.showStmtType = ShowCreateTable
-			ses.Data = nil
+		// case *tree.ShowCreateTable:
+		// 	ses.showStmtType = ShowCreateTable
+		// 	ses.Data = nil
 		case *tree.Delete:
 			ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 		case *tree.Update:
@@ -2036,15 +2033,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = runner.Run(0); err != nil {
 				goto handleFailed
 			}
-			if ses.showStmtType == ShowCreateTable {
-				if err = handleShowCreateTable(ses); err != nil {
-					goto handleFailed
-				}
-			} else if ses.showStmtType == ShowCreateDatabase {
-				if err = handleShowCreateDatabase(ses); err != nil {
-					goto handleFailed
-				}
-			} else if ses.showStmtType == ShowColumns {
+			if ses.showStmtType == ShowColumns {
 				if err = handleShowColumns(ses); err != nil {
 					goto handleFailed
 				}
