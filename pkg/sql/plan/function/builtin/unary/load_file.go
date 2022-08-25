@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -26,13 +25,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func LoadFile(vectors []*vector.Vector, proc *process.Process, fs fileservice.FileService) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.New(types.T_varchar, 0, 0, 0)
 	vec := vector.New(resultType)
 	const blobsize = 65536 // 2^16-1
 	Filepath := vector.GetStrColumn(inputVector).GetString(0)
-	r, err := ReadFromLocalFile(Filepath)
+	r, err := ReadFromFile(Filepath, fs)
 	if err != nil {
 		return nil, err
 	}
@@ -47,22 +46,22 @@ func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	return vec, nil
 }
 
-func ReadFromLocalFile(Filepath string) (io.ReadCloser, error) {
+func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
 	var r io.ReadCloser
-	index := strings.LastIndex(Filepath, "/")
-	dir, file := "", Filepath
-	if index != -1 {
-		dir = string([]byte(Filepath)[0:index])
-		file = string([]byte(Filepath)[index+1:])
-	}
+	// index := strings.LastIndex(Filepath, "/")
+	// dir, file := "", Filepath
+	// if index != -1 {
+	// 	dir = string([]byte(Filepath)[0:index])
+	// 	file = string([]byte(Filepath)[index+1:])
+	// }
 
-	fs, err := fileservice.NewLocalETLFS("etl", dir)
-	if err != nil {
-		return nil, err
-	}
+	// fs, err := fileservice.NewLocalETLFS("etl", dir)
+	// if err != nil {
+	// 	return nil, err
+	// }
 	ctx := context.Background()
 	vec := fileservice.IOVector{
-		FilePath: file,
+		FilePath: Filepath,
 		Entries: []fileservice.IOEntry{
 			0: {
 				Offset:            0,
@@ -71,7 +70,7 @@ func ReadFromLocalFile(Filepath string) (io.ReadCloser, error) {
 			},
 		},
 	}
-	err = fs.Read(ctx, &vec)
+	err := fs.Read(ctx, &vec)
 	if err != nil {
 		return nil, err
 	}

@@ -15,26 +15,39 @@
 package unary
 
 import (
+	"context"
 	"errors"
-	"log"
-	"os"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestLoadFile(t *testing.T) {
-	f, err := os.CreateTemp("", "testfile.txt")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer os.Remove(f.Name())
-	content := []byte("Test load_file function")
-	if _, err = f.Write(content); err != nil {
-		log.Fatal(err)
-	}
+	dir := t.TempDir()
+	fs, err := fileservice.NewLocalETLFS("etl", dir)
+	assert.Nil(t, err)
+	ctx := context.Background()
+	filepath := dir + "test"
+	err = fs.Write(ctx, fileservice.IOVector{
+		FilePath: filepath,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: 0,
+				Size:   4,
+				Data:   []byte("1234"),
+			},
+			{
+				Offset: 4,
+				Size:   4,
+				Data:   []byte("5678"),
+			},
+		},
+	})
+	assert.Nil(t, err)
 
 	convey.Convey("FileCase", t, func() {
 		cases := []struct {
@@ -42,8 +55,8 @@ func TestLoadFile(t *testing.T) {
 			want     []byte
 		}{
 			{
-				filename: f.Name(),
-				want:     content,
+				filename: filepath,
+				want:     []byte("12345678"),
 			},
 		}
 		var inStrs []string
@@ -52,32 +65,45 @@ func TestLoadFile(t *testing.T) {
 		}
 		inVector := testutil.MakeVarcharVector(inStrs, nil)
 		proc := testutil.NewProc()
-		res, err := LoadFile([]*vector.Vector{inVector}, proc)
+		res, err := LoadFile([]*vector.Vector{inVector}, proc, fs)
 		if err != nil {
 			t.Fatal(err)
 		}
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(res.Data, convey.ShouldResemble, content)
+		convey.So(res.Data, convey.ShouldResemble, []byte("12345678"))
 
 	})
 
 	// Test Error
-	size := int64(1024 * 1024 * 1)
-	bigf, err := os.CreateTemp("", "bigfile.bin")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer os.Remove(bigf.Name())
-	if err := bigf.Truncate(size); err != nil {
-		t.Fatal(err)
-	}
+	size := 1024 * 1024 * 1
+	data := make([]byte, size)
+	filepath = dir + "bigfile"
+	err = fs.Write(ctx, fileservice.IOVector{
+		FilePath: filepath,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: 0,
+				Size:   size,
+				Data:   data,
+			},
+		},
+	})
+	assert.Nil(t, err)
+	// bigf, err := os.CreateTemp("", "bigfile.bin")
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+	// defer os.Remove(bigf.Name())
+	// if err := bigf.Truncate(size); err != nil {
+	// 	t.Fatal(err)
+	// }
 	convey.Convey("ErrorCase", t, func() {
 		cases := []struct {
 			filename string
 			want     error
 		}{
 			{
-				filename: bigf.Name(),
+				filename: filepath,
 				want:     errors.New("Data too long for blob"),
 			},
 		}
@@ -87,7 +113,7 @@ func TestLoadFile(t *testing.T) {
 		}
 		inVector := testutil.MakeVarcharVector(inStrs, nil)
 		proc := testutil.NewProc()
-		_, err := LoadFile([]*vector.Vector{inVector}, proc)
+		_, err := LoadFile([]*vector.Vector{inVector}, proc, fs)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
