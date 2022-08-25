@@ -56,6 +56,11 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	for {
 		switch ctr.state {
 		case Build:
+			if ap.Limit == 0 {
+				ctr.state = End
+				proc.Reg.InputBatch = nil
+				return true, nil
+			}
 			if err := ctr.build(ap, proc, anal); err != nil {
 				ctr.state = End
 				return true, err

@@ -133,6 +133,7 @@ func Test_readTextFile(t *testing.T) {
 			config.StorageEngine = nil
 		}()
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, gSysVariables)
+    ses.SetRequestContext(ctx)
 
 		mce := NewMysqlCmdExecutor()
 
@@ -317,6 +318,7 @@ func Test_readTextFile(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, gSysVariables)
+    ses.SetRequestContext(ctx)
 
 		mce := NewMysqlCmdExecutor()
 
@@ -515,6 +517,7 @@ func Test_readTextFile(t *testing.T) {
 		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, gSysVariables)
+    ses.SetRequestContext(ctx)
 
 		mce := NewMysqlCmdExecutor()
 

@@ -38,6 +38,8 @@ func TestSingleDDLPartition(t *testing.T) {
 				PARTITION p9 VALUES LESS THAN (MAXVALUE)
 			);`
 
+	//sql := `SELECT a FROM t1 WHERE (1,2) > ANY (SELECT a FROM t1 WHERE b = 2);`
+
 	mock := NewMockOptimizer()
 	logicPlan, err := buildSingleStmt(mock, t, sql)
 	if err != nil {

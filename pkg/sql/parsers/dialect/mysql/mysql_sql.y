@@ -14,7 +14,7 @@
 
 %{
 package mysql
-    
+
 import (
 	"fmt"
     "strings"
@@ -798,7 +798,7 @@ load_fields:
         for _, f := range $2 {
             if f.Terminated != "" {
                 res.Terminated = f.Terminated
-            } 
+            }
             if f.Optionally {
                 res.Optionally = f.Optionally
             }
@@ -1445,7 +1445,7 @@ set_expr:
     }
 
 equal_or_assignment:
-    '=' 
+    '='
     {
         $$ = string($1)
     }
@@ -1775,7 +1775,7 @@ utility_option_arg:
 
 
 analyze_stmt:
-    ANALYZE TABLE table_name '(' column_list ')' 
+    ANALYZE TABLE table_name '(' column_list ')'
     {
         $$ = tree.NewAnalyzeStmt($3, $5)
     }
@@ -2118,6 +2118,11 @@ show_create_stmt:
     {
         $$ = &tree.ShowCreateTable{Name: $4}
     }
+|
+    SHOW CREATE VIEW table_name_unresolved
+    {
+        $$ = &tree.ShowCreateView{Name: $4}
+    }
 |   SHOW CREATE DATABASE not_exists_opt db_name
     {
         $$ = &tree.ShowCreateDatabase{IfNotExists: $4, Name: $5}
@@ -2207,7 +2212,7 @@ drop_role_stmt:
             IfExists: $3,
             Roles: $4,
         }
-    } 
+    }
 
 drop_index_stmt:
     DROP INDEX exists_opt ident ON table_name
@@ -2863,7 +2868,7 @@ union_op:
         $$ = &tree.UnionTypeRecord{
             Type: tree.UNION,
             All: true,
-            Distinct: false, 
+            Distinct: false,
         }
     }
 |   UNION DISTINCT
@@ -2874,7 +2879,7 @@ union_op:
             Distinct: true,
         }
     }
-| 
+|
     EXCEPT
     {
         $$ = &tree.UnionTypeRecord{
@@ -2888,7 +2893,7 @@ union_op:
         $$ = &tree.UnionTypeRecord{
             Type: tree.EXCEPT,
             All: true,
-            Distinct: false, 
+            Distinct: false,
         }
     }
 |   EXCEPT DISTINCT
@@ -3218,7 +3223,7 @@ column_list:
         $$ = append($1, tree.Identifier($3))
     }
 
-table_factor:   
+table_factor:
     aliased_table_name
     {
         $$ = $1
@@ -4112,6 +4117,7 @@ values_opt:
 	$$ = &tree.ValuesIn{ValueList: $4}
     }
 
+
 in_value_list:
     in_value
     {
@@ -4131,7 +4137,6 @@ in_value:
     {
 	    $$ = $2
     }
-
 
 
 sub_partition_num_opt:
@@ -4630,7 +4635,7 @@ index_name:
 |	ident
 
 column_def:
-    column_name column_type column_attribute_list_opt 
+    column_name column_type column_attribute_list_opt
     {
         $$ = tree.NewColumnTableDef($1, $2, $3)
     }
@@ -4774,7 +4779,7 @@ constraint_keyword:
         $$ = $2
     }
 
-references_def:    
+references_def:
     REFERENCES table_name index_column_list_opt match_opt on_delete_update_opt
     {
         $$ = &tree.AttributeReference{
@@ -5033,7 +5038,7 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
-|   CONVERT '(' expression USING charset_name ')' 
+|   CONVERT '(' expression USING charset_name ')'
     {
         name := tree.SetUnresolvedName("convert")
         es := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
@@ -5793,7 +5798,6 @@ func_type_opt:
     {
         $$ = tree.FUNC_TYPE_ALL
     }
-
 
 tuple_expression:
     '(' expression_list ')'

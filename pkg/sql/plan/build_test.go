@@ -760,6 +760,7 @@ func TestShow(t *testing.T) {
 		"show columns from nation",
 		"show columns from nation from tpch",
 		"show columns from nation where `Field` like '%ff' or `Type` = 1 or `Null` = 0",
+		"show create view v1",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -767,6 +768,7 @@ func TestShow(t *testing.T) {
 	sqls = []string{
 		"show create database db_not_exist",                    //db no exist
 		"show create table tpch.nation22",                      //table not exist
+		"show create view vvv",                                 //view not exist
 		"show databases where d ='a'",                          //Column not exist,  show databases only have one column named 'Database'
 		"show databases where `Databaseddddd` = '11'",          //column not exist
 		"show tables from tpch22222",                           //database not exist
