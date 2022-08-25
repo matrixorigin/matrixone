@@ -59,7 +59,8 @@ func getStoreTestConfig() Config {
 	cfg := Config{
 		UUID:                uuid.New().String(),
 		RTTMillisecond:      10,
-		GossipSeedAddresses: []string{"127.0.0.1:9000"},
+		GossipAddress:       testGossipAddress,
+		GossipSeedAddresses: []string{testGossipAddress, dummyGossipSeedAddress},
 		DeploymentID:        1,
 		FS:                  vfs.NewStrictMem(),
 		UseTeeLogDB:         true,
