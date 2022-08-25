@@ -18,3 +18,14 @@ type = "tae"
 # you can move your vars in system_vars_config.toml to here. empty for default value
 # log vars in system_vars_config.toml was removed. use [log] to set log vars
 [cn.frontend]
+
+
+#[[fileservice]]
+## s3 fileservice instance, used to store data.
+#name = "s3"
+## use disk as fileservice backend.
+#backend = "DISK"
+## set the directory used by DISK backend. There must has a file named "thisisalocalfileservicedir"
+## in the data dir
+#data-dir = "store"
+
