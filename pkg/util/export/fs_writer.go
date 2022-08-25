@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -111,6 +112,8 @@ func (w *FSWriter) Write(p []byte) (n int, err error) {
 	w.mux.Lock()
 	defer w.mux.Unlock()
 	n = len(p)
+	mkdirTried := false
+mkdirRetry:
 	if err = w.fs.Write(w.ctx, fileservice.IOVector{
 		FilePath: path.Join(w.dir, w.filename) + csvExtension,
 		Entries: []fileservice.IOEntry{
@@ -120,8 +123,12 @@ func (w *FSWriter) Write(p []byte) (n int, err error) {
 				Data:   p,
 			},
 		},
-	}); err != nil {
+	}); err == nil {
 		w.offset += n
+	} else if (err == fileservice.ErrFileExisted || strings.Index(err.Error(), "file exists") > -1) && !mkdirTried {
+		// like "mkdir xxx/xxx: file exists"
+		mkdirTried = true
+		goto mkdirRetry
 	}
 	_ = errors.WithContext(w.ctx, err)
 	return
