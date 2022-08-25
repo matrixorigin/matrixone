@@ -16,6 +16,7 @@ package updates
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
@@ -26,14 +27,14 @@ import (
 )
 
 type ColumnView struct {
-	links map[uint32]*common.Link
+	links map[uint32]*common.SortedDList
 	mask  *roaring.Bitmap
 }
 
 func NewColumnView() *ColumnView {
 	// func NewColumnView(chain *ColumnChain) *ColumnView {
 	return &ColumnView{
-		links: make(map[uint32]*common.Link),
+		links: make(map[uint32]*common.SortedDList),
 		mask:  roaring.New(),
 	}
 }
@@ -129,7 +130,7 @@ func (view *ColumnView) GetValue(key uint32, startTs types.TS) (v any, err error
 
 func (view *ColumnView) PrepapreInsert(key uint32, ts types.TS) (err error) {
 	// First update to key
-	var link *common.Link
+	var link *common.SortedDList
 	if link = view.links[key]; link == nil {
 		return
 	}
@@ -163,9 +164,9 @@ func (view *ColumnView) PrepapreInsert(key uint32, ts types.TS) (err error) {
 func (view *ColumnView) Insert(key uint32, un txnif.UpdateNode) (err error) {
 	n := un.(*ColumnUpdateNode)
 	// First update to key
-	var link *common.Link
+	var link *common.SortedDList
 	if link = view.links[key]; link == nil {
-		link = new(common.Link)
+		link = new(common.SortedDList)
 		link.Insert(n)
 		view.mask.Add(key)
 		view.links[key] = link
@@ -221,7 +222,7 @@ func (view *ColumnView) Delete(key uint32, n *ColumnUpdateNode) (err error) {
 	return
 }
 
-func (view *ColumnView) RowStringLocked(row uint32, link *common.Link) string {
+func (view *ColumnView) RowStringLocked(row uint32, link *common.SortedDList) string {
 	s := fmt.Sprintf("[ROW=%d]:", row)
 	link.Loop(func(dlnode *common.DLNode) bool {
 		n := dlnode.GetPayload().(*ColumnUpdateNode)
