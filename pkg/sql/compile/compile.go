@@ -42,6 +42,7 @@ import (
 // New is used to new an object of compile
 func New(db string, sql string, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
+	NewServer()
 	return &Compile{
 		e:    e,
 		db:   db,
@@ -90,7 +91,7 @@ func (c *Compile) Run(_ uint64) (err error) {
 
 	//	PrintScope(nil, []*Scope{c.scope})
 
-	if c.info.Typ == plan2.ExecTypeAP {
+	if c.info.Typ == plan2.ExecTypeAP && (c.scope.Magic == Merge || c.scope.Magic == Remote) {
 		if err = fillPipeline(c.scope); err != nil {
 			return err
 		}
