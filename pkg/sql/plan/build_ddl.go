@@ -108,9 +108,6 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 }
 
 func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error) {
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
-	bindContext := NewBindContext(builder, nil)
-
 	createTable := &plan.CreateTable{
 		IfNotExists: stmt.IfNotExists,
 		Temporary:   stmt.Temporary,
@@ -217,6 +214,10 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			},
 		})
 	}
+
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	bindContext := NewBindContext(builder, nil)
+
 	// set partition(unsupport now)
 	if stmt.PartitionOption != nil {
 		nodeID := builder.appendNode(&plan.Node{

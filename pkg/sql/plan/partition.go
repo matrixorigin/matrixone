@@ -16,6 +16,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -397,7 +398,8 @@ func buildKeyPartitionDefinitions(partitionBinder *PartitionBinder, defs []*tree
 func checkColumnsPartitionType(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionInfo, columnPlanExprs []*plan.Expr) error {
 	columnNames := partitionInfo.PartitionColumns
 	for i, planexpr := range columnPlanExprs {
-		if !IsIntegerType(planexpr) && !isStringType(planexpr) && !isDateRelateType(planexpr) {
+		t := types.T(planexpr.Typ.Id)
+		if !types.IsInteger(t) && !types.IsString(t) && !types.IsDateRelate(t) {
 			return moerr.New(moerr.ErrFieldTypeNotAllowedAsPartitionField, columnNames[i])
 		}
 	}
@@ -428,7 +430,8 @@ func checkPartitionFuncType(partitionBinder *PartitionBinder, tableDef *TableDef
 		if isConstant(expr) {
 			return moerr.New(moerr.ErrWrongExprInPartitionFunc)
 		}
-		if !IsIntegerType(expr) {
+
+		if !types.IsInteger(types.T(expr.Typ.Id)) {
 			return moerr.New(moerr.ErrFieldTypeNotAllowedAsPartitionField, partitionInfo.PartitionExpression)
 		}
 	}
