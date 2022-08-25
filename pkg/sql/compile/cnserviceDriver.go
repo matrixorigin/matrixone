@@ -117,7 +117,7 @@ func fillPipeline(s *Scope) error {
 		regs:   make(map[*process.WaitRegister]int32),
 	}
 	ctx.root = ctx
-	p, ctxId, err := generatePipeline(s, ctx, 0)
+	p, ctxId, err := generatePipeline(s, ctx, 1)
 	if err != nil {
 		return err
 	}
