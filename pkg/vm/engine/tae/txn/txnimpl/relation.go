@@ -32,7 +32,7 @@ var _ handle.RelationIt = (*txnRelationIt)(nil)
 type txnRelationIt struct {
 	*sync.RWMutex
 	txnDB  *txnDB
-	linkIt *common.LinkIt
+	linkIt *common.SortedDListIt
 	itered bool // linkIt has no dummy head, use this to avoid duplicate filter logic for the very first entry
 	curr   *catalog.TableEntry
 	err    error

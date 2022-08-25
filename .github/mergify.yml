@@ -1,7 +1,7 @@
 queue_rules:
   - name: default
     conditions: []
-    checks_timeout: 30m
+    checks_timeout: 1h
 
 pull_request_rules:
   - name: Automatic merge on approval
@@ -16,7 +16,6 @@ pull_request_rules:
       - "check-success=BVT Test on Ubuntu/x64"
       - "check-success=BVT Test on Linux/Arm"
       # - "check-success=BVT Test on Darwin/x86"
-      - "check-success=BVT RACE Test on CentOS/x64"
       - "check-success=SCA Test on Ubuntu/x64"  
     actions:
       queue:

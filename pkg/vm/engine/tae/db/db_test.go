@@ -2638,8 +2638,8 @@ func TestDropCreated1(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).CreateAt)
-	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).DeleteAt)
+	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAt())
+	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAt())
 
 	tae.restart()
 }
@@ -2660,10 +2660,24 @@ func TestDropCreated2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).CreateAt)
-	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).DeleteAt)
+	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAt())
+	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAt())
 
 	tae.restart()
+}
+
+// records create at 1 and commit
+// read by ts 1, err should be nil
+func TestReadEqualTS(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	tae.Catalog.CreateDBEntryByTS("db", txn.GetStartTS())
+	assert.Nil(t, err)
+	_, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
 }
 
 func TestTruncateZonemap(t *testing.T) {
