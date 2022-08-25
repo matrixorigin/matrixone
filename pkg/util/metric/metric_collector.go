@@ -174,7 +174,7 @@ func newMetricFSCollector(fsFactory export.FSWriterFactory, opts ...collectorOpt
 func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch *trace.CSVRequest) {
 	return func(batch *trace.CSVRequest) {
 		if _, err := batch.Handle(); err != nil {
-			logutil.Error(fmt.Sprintf("[Trace] faield to write csv: %s", batch.Content()))
+			logutil.Error(fmt.Sprintf("[Trace] faield to write csv: %s, err: %v", batch.Content(), err))
 		}
 	}
 }
