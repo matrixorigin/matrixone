@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -49,13 +50,6 @@ const (
 	Update
 	InsertValues
 )
-
-type EncodeSource struct {
-	SchemaName   string
-	RelationName string
-	Attributes   []string
-	Bat          *batch.Batch
-}
 
 // Source contains information of a relation which will be used in execution,
 type Source struct {
@@ -108,6 +102,12 @@ type anaylze struct {
 	curr      int
 	qry       *plan.Query
 	analInfos []*process.AnalyzeInfo
+}
+
+type Server struct {
+	sync.Mutex
+	curr uint64
+	mp   map[uint64]*process.WaitRegister
 }
 
 // Compile contains all the information needed for compilation.

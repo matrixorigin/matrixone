@@ -58,6 +58,7 @@ func TestS3FS(t *testing.T) {
 		testFileService(t, func() FileService {
 
 			fs, err := NewS3FS(
+				"",
 				"s3",
 				config.Endpoint,
 				config.Bucket,
@@ -72,6 +73,7 @@ func TestS3FS(t *testing.T) {
 
 	t.Run("list root", func(t *testing.T) {
 		fs, err := NewS3FS(
+			"",
 			"s3",
 			config.Endpoint,
 			config.Bucket,
@@ -88,6 +90,7 @@ func TestS3FS(t *testing.T) {
 	t.Run("caching file service", func(t *testing.T) {
 		testCachingFileService(t, func() CachingFileService {
 			fs, err := NewS3FS(
+				"",
 				"s3",
 				config.Endpoint,
 				config.Bucket,
@@ -169,6 +172,7 @@ func TestS3FSMinioServer(t *testing.T) {
 		testFileService(t, func() FileService {
 
 			fs, err := NewS3FSOnMinio(
+				"",
 				"s3",
 				endpoint,
 				"test",
@@ -203,6 +207,7 @@ func BenchmarkS3FS(b *testing.B) {
 
 	benchmarkFileService(b, func() FileService {
 		fs, err := NewS3FS(
+			"",
 			"s3",
 			config.Endpoint,
 			config.Bucket,

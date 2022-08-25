@@ -541,6 +541,7 @@ func TestUnionSqlBuilder(t *testing.T) {
 		"select n_name from nation union select n_comment from nation order by n_name",
 		"with qn (foo, bar) as (select 1 as col, 2 as coll union select 4, 5) select qn1.bar from qn qn1",
 		"select n_name, n_comment from nation union all select n_name, n_comment from nation2",
+		"select n_name from nation intersect all select n_name from nation2",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -548,8 +549,7 @@ func TestUnionSqlBuilder(t *testing.T) {
 	sqls = []string{
 		"select 1 union select 2, 'a'",
 		"select n_name as a from nation union select n_comment from nation order by n_name",
-		"select n_name from nation minus all select n_name from nation2",     // not support
-		"select n_name from nation intersect all select n_name from nation2", // not support
+		"select n_name from nation minus all select n_name from nation2", // not support
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -759,6 +759,7 @@ func TestShow(t *testing.T) {
 		"show columns from nation",
 		"show columns from nation from tpch",
 		"show columns from nation where `Field` like '%ff' or `Type` = 1 or `Null` = 0",
+		"show create view v1",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -766,6 +767,7 @@ func TestShow(t *testing.T) {
 	sqls = []string{
 		"show create database db_not_exist",                    //db no exist
 		"show create table tpch.nation22",                      //table not exist
+		"show create view vvv",                                 //view not exist
 		"show databases where d ='a'",                          //Column not exist,  show databases only have one column named 'Database'
 		"show databases where `Databaseddddd` = '11'",          //column not exist
 		"show tables from tpch22222",                           //database not exist

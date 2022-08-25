@@ -2,7 +2,7 @@
 
 MatrixOne catalog is a component where MatrixOne stores system information. We can access the system information by `mo_catalog` database.  The `mo_catalog` database is created by MatrixOne at initialization.
 
-In 0.5.0, the `mo_catalog` is not fully implemented, users can check basic information about the their database and tables, but writing values into `mo_catalog` by users is not supported yet.
+In 0.5.1, the `mo_catalog` is not fully implemented, users can check basic information about the their database and tables, but writing values into `mo_catalog` by users is not supported yet.
 
 There are three tables in the `mo_catalog` database:
 

@@ -14,25 +14,30 @@
 
 package compile
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"context"
 
-func (s *Source) MarshalBinary() ([]byte, error) {
-	return types.Encode(&EncodeSource{
-		Bat:          s.Bat,
-		SchemaName:   s.SchemaName,
-		RelationName: s.RelationName,
-		Attributes:   s.Attributes,
-	})
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+var srv *Server
+
+func NewServer() *Server {
+	if srv != nil {
+		return srv
+	}
+	srv := &Server{}
+	return srv
 }
 
-func (s *Source) UnmarshalBinary(data []byte) error {
-	rs := new(EncodeSource)
-	if err := types.Decode(data, rs); err != nil {
-		return err
-	}
-	s.Bat = rs.Bat
-	s.SchemaName = rs.SchemaName
-	s.RelationName = rs.RelationName
-	s.Attributes = rs.Attributes
+func (srv *Server) RegistConnector(reg *process.WaitRegister) {
+	srv.Lock()
+	defer srv.Unlock()
+	srv.mp[srv.curr] = reg
+	srv.curr++
+}
+
+func (srv *Server) HandleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
 	return nil
 }

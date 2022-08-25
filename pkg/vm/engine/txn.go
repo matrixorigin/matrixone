@@ -12,25 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnengine
+package engine
 
 import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"errors"
 	"reflect"
+	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
 
-func doTxnRequest[
+type Shard = metadata.DNShard
+
+func DoTxnRequest[
 	Resp any,
 	Req any,
 ](
 	ctx context.Context,
-	e *Engine,
+	e Engine,
+	// TxnOperator.Read or TxnOperator.Write
 	reqFunc func(context.Context, []txn.TxnRequest) (*rpc.SendResult, error),
 	shardsFunc func() ([]Shard, error),
 	op uint32,
@@ -46,10 +52,14 @@ func doTxnRequest[
 	}
 	requests := make([]txn.TxnRequest, 0, len(shards))
 	for _, shard := range shards {
+		buf := new(bytes.Buffer)
+		if err := gob.NewEncoder(buf).Encode(req); err != nil {
+			panic(err)
+		}
 		requests = append(requests, txn.TxnRequest{
 			CNRequest: &txn.CNOpRequest{
 				OpCode:  op,
-				Payload: mustEncodePayload(req),
+				Payload: buf.Bytes(),
 				Target:  shard,
 			},
 		})
@@ -93,3 +103,51 @@ func doTxnRequest[
 }
 
 var errorType = reflect.TypeOf((*error)(nil)).Elem()
+
+type TxnError struct {
+	txnError *txn.TxnError
+}
+
+var _ error = TxnError{}
+
+func (e TxnError) Error() string {
+	if e.txnError != nil {
+		return e.txnError.DebugString()
+	}
+	panic("impossible")
+}
+
+func errorFromTxnResponses(resps []txn.TxnResponse) error {
+	for _, resp := range resps {
+		if resp.TxnError != nil {
+			return TxnError{
+				txnError: resp.TxnError,
+			}
+		}
+	}
+	return nil
+}
+
+type Errors []error
+
+var _ error = Errors{}
+
+func (e Errors) Error() string {
+	buf := new(strings.Builder)
+	for i, err := range e {
+		if i > 0 {
+			buf.WriteRune('\n')
+		}
+		buf.WriteString(err.Error())
+	}
+	return buf.String()
+}
+
+func (e Errors) As(target any) bool {
+	for _, err := range e {
+		if errors.As(err, target) {
+			return true
+		}
+	}
+	return false
+}

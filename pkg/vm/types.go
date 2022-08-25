@@ -32,6 +32,7 @@ const (
 	Projection
 	Anti
 	Single
+	Mark
 
 	LoopJoin
 	LoopLeft
@@ -52,6 +53,7 @@ const (
 
 	Minus
 	Intersect
+	IntersectAll
 
 	HashBuild
 )

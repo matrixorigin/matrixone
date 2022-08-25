@@ -112,7 +112,7 @@ func (t *Table[K, R]) Get(
 	tx *Transaction,
 	key K,
 ) (
-	row R,
+	row *R,
 	err error,
 ) {
 	t.Lock()
@@ -122,7 +122,11 @@ func (t *Table[K, R]) Get(
 		err = sql.ErrNoRows
 		return
 	}
-	row = *physicalRow.Values.Read(tx, tx.CurrentTime)
+	mvccValues := physicalRow.Values
+	row, err = mvccValues.Read(tx, tx.CurrentTime)
+	if err != nil {
+		return
+	}
 	return
 }
 

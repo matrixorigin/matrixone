@@ -151,7 +151,7 @@ func runDNStoreTestWithFileServiceFactory(
 		}),
 		WithConfigAdjust(func(c *Config) {
 			c.HAKeeper.HeatbeatDuration.Duration = time.Millisecond * 10
-			c.Txn.Storage.Backend = memStorageBackend
+			c.Txn.Storage.Backend = memKVStorageBackend
 		}))
 
 	if fsFactory == nil {

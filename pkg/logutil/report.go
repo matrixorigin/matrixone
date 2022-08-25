@@ -132,7 +132,18 @@ func (e *TraceLogEncoder) EncodeEntry(entry zapcore.Entry, fields []zapcore.Fiel
 	if e.spanContextField.Key == SpanFieldKey.Load().(string) {
 		fields = append(fields, e.spanContextField)
 	}
+	for _, v := range fields {
+		if v.Type == zapcore.BoolType && v.Key == MOInternalFiledKeyNoopReport {
+			return e.Encoder.EncodeEntry(entry, fields[:0])
+		}
+	}
 	return GetReportZapFunc()(e.Encoder, entry, fields)
+}
+
+const MOInternalFiledKeyNoopReport = "MOInternalFiledKeyNoopReport"
+
+func NoReportFiled() zap.Field {
+	return zap.Bool(MOInternalFiledKeyNoopReport, false)
 }
 
 func newTraceLogEncoder() *TraceLogEncoder {

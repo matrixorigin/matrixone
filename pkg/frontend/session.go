@@ -33,6 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+
+	"github.com/google/uuid"
 )
 
 const MaxPrepareNumberInOneSession = 64
@@ -110,6 +112,8 @@ type Session struct {
 
 	tenant *TenantInfo
 
+	uuid uuid.UUID
+
 	timeZone *time.Location
 }
 
@@ -140,6 +144,7 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 		outputCallback: getDataFromPipeline,
 		timeZone:       time.Local,
 	}
+	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.txnCompileCtx.SetSession(ses)
 	ses.txnHandler.SetSession(ses)
@@ -219,6 +224,10 @@ func (ses *Session) ClearAllMysqlResultSet() {
 
 func (ses *Session) GetTenantInfo() *TenantInfo {
 	return ses.tenant
+}
+
+func (ses *Session) GetUUID() []byte {
+	return ses.uuid[:]
 }
 
 func (ses *Session) SetTenantInfo(ti *TenantInfo) {
@@ -691,7 +700,7 @@ func (th *TxnHandler) NewTxn() error {
 	if th.txnClient == nil {
 		panic("must set txn client")
 	}
-	th.txn, err = th.txnClient.NewWithSnapshot(nil)
+	th.txn, err = th.txnClient.New()
 	if err != nil {
 		return err
 	}
@@ -711,11 +720,9 @@ func (th *TxnHandler) CommitTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	var ctx context.Context
-	if th.ses != nil {
-		ctx = th.ses.GetRequestContext()
-	} else {
-		ctx = context.Background()
+	ctx := th.ses.GetRequestContext()
+	if ctx == nil {
+		panic("context should not be nil")
 	}
 	err := th.txn.Commit(ctx)
 	th.SetInvalid()
@@ -726,11 +733,9 @@ func (th *TxnHandler) RollbackTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	var ctx context.Context
-	if th.ses != nil {
-		ctx = th.ses.GetRequestContext()
-	} else {
-		ctx = context.Background()
+	ctx := th.ses.GetRequestContext()
+	if ctx == nil {
+		panic("context should not be nil")
 	}
 	err := th.txn.Rollback(ctx)
 	th.SetInvalid()

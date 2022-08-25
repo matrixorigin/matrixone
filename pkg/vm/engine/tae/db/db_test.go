@@ -2638,8 +2638,8 @@ func TestDropCreated1(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).CreateAt)
-	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).DeleteAt)
+	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAt())
+	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAt())
 
 	tae.restart()
 }
@@ -2660,10 +2660,24 @@ func TestDropCreated2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).CreateAt)
-	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).DeleteAt)
+	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAt())
+	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAt())
 
 	tae.restart()
+}
+
+// records create at 1 and commit
+// read by ts 1, err should be nil
+func TestReadEqualTS(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	tae.Catalog.CreateDBEntryByTS("db", txn.GetStartTS())
+	assert.Nil(t, err)
+	_, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
 }
 
 func TestTruncateZonemap(t *testing.T) {
@@ -2839,7 +2853,7 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 	tae.createRelAndAppend(bat1, true)
 	// pretend 'mo_users'
 	s = catalog.MockSchemaAll(1, 0)
-	s.Name = "mo_users_t1"
+	s.Name = "mo_users"
 	txn11, sysDB := tae.getDB(catalog.SystemDBName)
 	_, err = sysDB.CreateRelation(s)
 	assert.NoError(t, err)
@@ -2858,7 +2872,7 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 	tae.createRelAndAppend(bat2, true)
 	txn21, sysDB := tae.getDB(catalog.SystemDBName)
 	s = catalog.MockSchemaAll(1, 0)
-	s.Name = "mo_users_t2"
+	s.Name = "mo_users"
 	_, err = sysDB.CreateRelation(s)
 	assert.NoError(t, err)
 	assert.NoError(t, txn21.Commit())
@@ -2884,8 +2898,8 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 		// [mo_database, mo_tables, mo_columns, 'mo_users_t2' 'test-table-a-timestamp']
 		checkAllColRowsByScan(t, sysTblTbl, 5, true)
 		sysColTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Columns_Name)
-		// [mo_database(7), mo_tables(11), mo_columns(18), 'mo_users_t2'(1+1), 'test-table-a-timestamp'(2+1)]
-		checkAllColRowsByScan(t, sysColTbl, 41, true)
+		// [mo_database(8), mo_tables(12), mo_columns(18), 'mo_users_t2'(1+1), 'test-table-a-timestamp'(2+1)]
+		checkAllColRowsByScan(t, sysColTbl, 43, true)
 	}
 	{
 		// account 1
@@ -2905,8 +2919,8 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 		// [mo_database, mo_tables, mo_columns, 'mo_users_t1' 'test-table-a-timestamp']
 		checkAllColRowsByScan(t, sysTblTbl, 5, true)
 		sysColTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Columns_Name)
-		// [mo_database(7), mo_tables(11), mo_columns(18), 'mo_users_t1'(1+1), 'test-table-a-timestamp'(3+1)]
-		checkAllColRowsByScan(t, sysColTbl, 42, true)
+		// [mo_database(8), mo_tables(12), mo_columns(18), 'mo_users_t1'(1+1), 'test-table-a-timestamp'(3+1)]
+		checkAllColRowsByScan(t, sysColTbl, 44, true)
 	}
 	{
 		// sys account
@@ -2923,8 +2937,8 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 		// [mo_database, mo_tables, mo_columns, 'mo_accounts']
 		checkAllColRowsByScan(t, sysTblTbl, 4, true)
 		sysColTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Columns_Name)
-		// [mo_database(7), mo_tables(11), mo_columns(18), 'mo_accounts'(1+1)]
-		checkAllColRowsByScan(t, sysColTbl, 38, true)
+		// [mo_database(8), mo_tables(12), mo_columns(18), 'mo_accounts'(1+1)]
+		checkAllColRowsByScan(t, sysColTbl, 40, true)
 	}
 
 }

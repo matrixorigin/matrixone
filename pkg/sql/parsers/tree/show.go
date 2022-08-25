@@ -37,6 +37,21 @@ func NewShowCreate(n *UnresolvedObjectName) *ShowCreateTable {
 	return &ShowCreateTable{Name: n}
 }
 
+// SHOW CREATE VIEW statement
+type ShowCreateView struct {
+	showImpl
+	Name *UnresolvedObjectName
+}
+
+func (node *ShowCreateView) Format(ctx *FmtCtx) {
+	ctx.WriteString("show create view ")
+	node.Name.ToTableName().Format(ctx)
+}
+
+func NewShowCreateView(n *UnresolvedObjectName) *ShowCreateView {
+	return &ShowCreateView{Name: n}
+}
+
 // SHOW CREATE DATABASE statement
 type ShowCreateDatabase struct {
 	showImpl

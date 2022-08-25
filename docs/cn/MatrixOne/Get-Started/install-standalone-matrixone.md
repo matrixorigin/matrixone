@@ -31,11 +31,11 @@ cd matrixone
 
 ##### 选项 2：获取 MatrixOne(稳定版本) 代码
 
-如果您想获得 MatrixOne 发布的最新稳定版本代码，请先从 **main** 切换选择至 **0.5.0** 版本分支。
+如果您想获得 MatrixOne 发布的最新稳定版本代码，请先从 **main** 切换选择至 **0.5.1** 版本分支。
 
 ```
 git clone https://github.com/matrixorigin/matrixone.git
-git checkout 0.5.0
+git checkout 0.5.1
 cd matrixone
 ```
 
@@ -69,15 +69,15 @@ make build
 - **Linux 环境**
 
 ```bash
-wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.0/mo-server-v0.5.0-linux-amd64.zip
-unzip mo-server-v0.5.0-linux-amd64.zip
+wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.1/mo-server-v0.5.1-linux-amd64.zip
+unzip mo-server-v0.5.1-linux-amd64.zip
 ```
 
 - **MacOS 环境**
 
 ```bash
-wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.0/mo-server-v0.5.0-darwin-x86_64.zip
-unzip mo-server-v0.5.0-darwin-x86_64.zip
+wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.1/mo-server-v0.5.1-darwin-x86_64.zip
+unzip mo-server-v0.5.1-darwin-x86_64.zip
 ```
 
 #### 2. 启动 MatrixOne 服务
@@ -112,10 +112,10 @@ docker --version
 docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
 ```
 
-- 0.5.0 稳定版本的镜像
+- 0.5.1 稳定版本的镜像
 
 ```bash
-docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1
 ```
 
 运行 Docker Hub 时需要输入用户名和密码，获取用户名和密码可以参考下一步骤 - 连接 MatrixOne 服务

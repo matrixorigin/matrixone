@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -52,7 +53,7 @@ func NewService(cfg *Config, ctx context.Context) (Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	server.RegisterRequestHandler(srv.handleRequest)
+	server.RegisterRequestHandler(compile.NewServer().HandleRequest)
 	srv.server = server
 
 	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil, nil, nil)
@@ -92,10 +93,6 @@ func (s *service) releaseMessage(msg *pipeline.Message) {
 	s.pool.Put(msg)
 }
 */
-
-func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
-	return nil
-}
 
 func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) error {
 	var err error
@@ -167,7 +164,7 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 		// init trace/log/error framework
 		if _, err := trace.Init(moServerCtx,
 			trace.WithMOVersion(pu.SV.MoVersion),
-			trace.WithNode(0, trace.NodeTypeNode),
+			trace.WithNode("node_uuid", trace.NodeTypeCN),
 			trace.EnableTracer(!pu.SV.DisableTrace),
 			trace.WithBatchProcessMode(pu.SV.TraceBatchProcessor),
 			trace.DebugMode(pu.SV.EnableTraceDebug),
@@ -219,7 +216,7 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 
 func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 	s.initTxnSenderOnce.Do(func() {
-		sender, err = rpc.NewSender(s.logger) //TODO options
+		sender, err = rpc.NewSenderWithConfig(s.cfg.RPC, s.logger)
 		if err != nil {
 			return
 		}

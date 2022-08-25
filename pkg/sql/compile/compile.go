@@ -423,7 +423,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		}
 		c.anal.curr = curr
 		return c.compileSort(n, c.compileUnion(n, ss, children, ns)), nil
-	case plan.Node_MINUS, plan.Node_INTERSECT:
+	case plan.Node_MINUS, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
 		curr := c.anal.curr
 		c.anal.curr = int(n.Children[0])
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
@@ -597,7 +597,17 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 				Arg: constructIntersect(n, c.proc, i, len(rs)),
 			}
 		}
+	case plan.Node_INTERSECT_ALL:
+		for i := range rs {
+			rs[i].Instructions[0] = vm.Instruction{
+				Op:  vm.IntersectAll,
+				Idx: c.anal.curr,
+				Arg: constructIntersectAll(n, c.proc, i, len(rs)),
+			}
+		}
+
 	}
+
 	return []*Scope{c.newMergeScope(append(append(rs, left), right))}
 }
 
@@ -692,12 +702,20 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 	case plan.Node_ANTI:
 		_, conds := extraJoinConditions(n.OnList)
 		for i := range rs {
-			if isEq && len(conds) == 1 {
-				rs[i].appendInstruction(vm.Instruction{
-					Op:  vm.Anti,
-					Idx: c.anal.curr,
-					Arg: constructAnti(n, typs, c.proc),
-				})
+			if isEq {
+				if len(conds) > 1 {
+					rs[i].appendInstruction(vm.Instruction{
+						Op:  vm.Mark,
+						Idx: c.anal.curr,
+						Arg: constructMark(n, typs, c.proc, n.OnList),
+					})
+				} else {
+					rs[i].appendInstruction(vm.Instruction{
+						Op:  vm.Anti,
+						Idx: c.anal.curr,
+						Arg: constructAnti(n, typs, c.proc),
+					})
+				}
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopAnti,
@@ -1066,6 +1084,8 @@ func joinType(n *plan.Node, ns []*plan.Node) (bool, plan.Node_JoinFlag) {
 		return true, plan.Node_LEFT
 	case plan.Node_SINGLE:
 		return false, plan.Node_SINGLE
+	case plan.Node_MARK:
+		return false, plan.Node_MARK
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join typ '%v' not support now", n.JoinType)))
 	}

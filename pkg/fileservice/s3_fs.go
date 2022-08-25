@@ -49,6 +49,7 @@ type S3FS struct {
 var _ FileService = new(S3FS)
 
 func NewS3FS(
+	sharedConfigProfile string,
 	name string,
 	endpoint string,
 	bucket string,
@@ -66,6 +67,7 @@ func NewS3FS(
 	endpoint = u.String()
 
 	return newS3FS(
+		sharedConfigProfile,
 		name,
 		endpoint,
 		bucket,
@@ -80,6 +82,7 @@ func NewS3FS(
 // NewS3FSOnMinio creates S3FS on minio server
 // this is needed because the URL scheme of minio server does not compatible with AWS'
 func NewS3FSOnMinio(
+	sharedConfigProfile string,
 	name string,
 	endpoint string,
 	bucket string,
@@ -97,6 +100,7 @@ func NewS3FSOnMinio(
 	endpoint = u.String()
 
 	return newS3FS(
+		sharedConfigProfile,
 		name,
 		endpoint,
 		bucket,
@@ -120,9 +124,11 @@ func NewS3FSOnMinio(
 			),
 		),
 	)
+
 }
 
 func newS3FS(
+	sharedConfigProfile string,
 	name string,
 	endpoint string,
 	bucket string,
@@ -133,7 +139,10 @@ func newS3FS(
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*7)
 	defer cancel()
-	cfg, err := config.LoadDefaultConfig(ctx)
+
+	cfg, err := config.LoadDefaultConfig(ctx,
+		config.WithSharedConfigProfile(sharedConfigProfile),
+	)
 	if err != nil {
 		return nil, err
 	}

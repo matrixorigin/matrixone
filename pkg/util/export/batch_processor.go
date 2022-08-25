@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
-const defaultQueueSize = 262144 // queue mem cost = 2MB
+const defaultQueueSize = 1310720 // queue mem cost = 10MB
 
 // bufferHolder hold ItemBuffer content, handle buffer's new/flush/reset/reminder(base on timer) operations.
 // work like:
@@ -321,7 +321,7 @@ func (c *MOCollector) Stop(graceful bool) error {
 	var buf = new(bytes.Buffer)
 	c.stopOnce.Do(func() {
 		for len(c.awakeCollect) > 0 {
-			logutil.Debugf("doCollect left %d job", len(c.awakeCollect))
+			logutil.Debugf("doCollect left %d job", len(c.awakeCollect), logutil.NoReportFiled())
 			time.Sleep(250 * time.Second)
 		}
 		for _, buffer := range c.buffers {
