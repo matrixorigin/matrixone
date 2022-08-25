@@ -25,7 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	//"github.com/matrixorigin/simdcsv"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -460,6 +460,25 @@ type CsvFields interface {
 	CsvFields() []string
 }
 
+var QuoteFieldFunc = func(buf *bytes.Buffer, value string, enclose rune) string {
+	replaceRules := map[rune]string{
+		'"':  `""`,
+		'\'': `\'`,
+	}
+	quotedClose, hasRule := replaceRules[enclose]
+	if !hasRule {
+		panic(moerr.NewPanicError(fmt.Errorf("not support csv enclose: %c", enclose)))
+	}
+	for _, c := range value {
+		if c == enclose {
+			buf.WriteString(quotedClose)
+		} else {
+			buf.WriteRune(c)
+		}
+	}
+	return value
+}
+
 func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
@@ -471,25 +490,6 @@ func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		panic("not MalCsv, dont support output CSV")
 	}
 	opts := i.CsvOptions()
-
-	quoteFieldFunc := func(buf *bytes.Buffer, value string, enclose rune) string {
-		replaceRules := map[rune]string{
-			'"':  `""`,
-			'\'': `\'`,
-		}
-		quotedClose, hasRule := replaceRules[enclose]
-		if !hasRule {
-			panic(fmt.Sprintf("not support csv enclose: %c", enclose))
-		}
-		for _, c := range value {
-			if c == enclose {
-				buf.WriteString(quotedClose)
-			} else {
-				buf.WriteRune(c)
-			}
-		}
-		return value
-	}
 
 	writer := gTracerProvider.fsFactory(DefaultContext(), StatsDatabase, i)
 
@@ -505,7 +505,7 @@ func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 			}
 			if strings.ContainsRune(field, opts.FieldTerminator) || strings.ContainsRune(field, opts.EncloseRune) || strings.ContainsRune(field, opts.Terminator) {
 				buf.WriteRune(opts.EncloseRune)
-				quoteFieldFunc(buf, field, opts.EncloseRune)
+				QuoteFieldFunc(buf, field, opts.EncloseRune)
 				buf.WriteRune(opts.EncloseRune)
 			} else {
 				buf.WriteString(field)
