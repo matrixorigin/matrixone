@@ -401,3 +401,7 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 		s.Instructions = append(s.Instructions, in)
 	}
 }
+
+func (s *Scope) isQuery() bool {
+	return s.Magic == Deletion || s.Magic == Update || s.Magic == Insert
+}
