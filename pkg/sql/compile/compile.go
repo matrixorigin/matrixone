@@ -946,9 +946,6 @@ func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
 		rs[i].NodeInfo = ss[i].NodeInfo
 		rs[i].PreScopes = []*Scope{ss[i], chp}
 		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
-		if ss[i].Magic == Remote {
-			ss[i].Magic = Parallel
-		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op: vm.Connector,
 			Arg: &connector.Argument{
