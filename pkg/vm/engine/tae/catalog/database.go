@@ -94,6 +94,22 @@ func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
 	return e
 }
 
+func NewDBEntryByTS(catalog *Catalog, name string, ts types.TS) *DBEntry {
+	id := catalog.NextDB()
+
+	e := &DBEntry{
+		BaseEntry: NewBaseEntry(id),
+		catalog:   catalog,
+		name:      name,
+		entries:   make(map[uint64]*common.DLNode),
+		nameNodes: make(map[string]*nodeList),
+		link:      new(common.SortedDList),
+	}
+	e.CreateWithTS(ts)
+	e.acInfo.CreateAt = types.CurrentTimestamp()
+	return e
+}
+
 func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 	id := SystemDBID
 	entry := &DBEntry{
