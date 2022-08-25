@@ -55,6 +55,8 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	}
 	if tblRef.TableType == catalog.SystemExternalRel {
 		return nil, fmt.Errorf("the external table '%s' is not support insert operation", tblName)
+	} else if tblRef.TableType == catalog.SystemViewRel {
+		return nil, fmt.Errorf("view is not support insert operation")
 	}
 
 	// build columns
@@ -225,7 +227,10 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	}
 	if tableDef.TableType == catalog.SystemExternalRel {
 		return nil, fmt.Errorf("the external table is not support insert operation")
+	} else if tableDef.TableType == catalog.SystemViewRel {
+		return nil, fmt.Errorf("view is not support insert operation")
 	}
+
 	valueCount := len(stmt.Columns)
 	if len(stmt.Columns) == 0 {
 		valueCount = len(tableDef.Cols)

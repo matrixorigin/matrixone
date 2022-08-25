@@ -15,36 +15,8 @@
 package txnengine
 
 import (
-	"errors"
 	"fmt"
-	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
-
-type TxnError struct {
-	txnError *txn.TxnError
-}
-
-var _ error = TxnError{}
-
-func (e TxnError) Error() string {
-	if e.txnError != nil {
-		return e.txnError.DebugString()
-	}
-	panic("impossible")
-}
-
-func errorFromTxnResponses(resps []txn.TxnResponse) error {
-	for _, resp := range resps {
-		if resp.TxnError != nil {
-			return TxnError{
-				txnError: resp.TxnError,
-			}
-		}
-	}
-	return nil
-}
 
 type ErrExisted bool
 
@@ -105,28 +77,4 @@ var _ error = ErrColumnNotFound{}
 
 func (e ErrColumnNotFound) Error() string {
 	return fmt.Sprintf("column not found: %s", e.Name)
-}
-
-type Errors []error
-
-var _ error = Errors{}
-
-func (e Errors) Error() string {
-	buf := new(strings.Builder)
-	for i, err := range e {
-		if i > 0 {
-			buf.WriteRune('\n')
-		}
-		buf.WriteString(err.Error())
-	}
-	return buf.String()
-}
-
-func (e Errors) As(target any) bool {
-	for _, err := range e {
-		if errors.As(err, target) {
-			return true
-		}
-	}
-	return false
 }

@@ -2666,6 +2666,20 @@ func TestDropCreated2(t *testing.T) {
 	tae.restart()
 }
 
+// records create at 1 and commit
+// read by ts 1, err should be nil
+func TestReadEqualTS(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	tae.Catalog.CreateDBEntryByTS("db", txn.GetStartTS())
+	assert.Nil(t, err)
+	_, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+}
+
 func TestTruncateZonemap(t *testing.T) {
 	type Mod struct {
 		offset int
@@ -2839,7 +2853,7 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 	tae.createRelAndAppend(bat1, true)
 	// pretend 'mo_users'
 	s = catalog.MockSchemaAll(1, 0)
-	s.Name = "mo_users_t1"
+	s.Name = "mo_users"
 	txn11, sysDB := tae.getDB(catalog.SystemDBName)
 	_, err = sysDB.CreateRelation(s)
 	assert.NoError(t, err)
@@ -2858,7 +2872,7 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 	tae.createRelAndAppend(bat2, true)
 	txn21, sysDB := tae.getDB(catalog.SystemDBName)
 	s = catalog.MockSchemaAll(1, 0)
-	s.Name = "mo_users_t2"
+	s.Name = "mo_users"
 	_, err = sysDB.CreateRelation(s)
 	assert.NoError(t, err)
 	assert.NoError(t, txn21.Commit())

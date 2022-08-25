@@ -208,7 +208,7 @@ func (be *BaseEntry) GetNodeToRead(startts types.TS) (node *UpdateNode) {
 			}
 			return true
 		}
-		if un.End.Less(startts) {
+		if un.End.LessEq(startts) {
 			node = un
 			return false
 		}
