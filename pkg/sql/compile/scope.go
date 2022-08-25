@@ -15,7 +15,6 @@
 package compile
 
 import (
-	"bytes"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -38,28 +37,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// PrintScope Print is to format scope list
-func PrintScope(buf *bytes.Buffer, prefix []byte, ss []*Scope) {
-	for _, s := range ss {
-		if s.Magic == Merge || s.Magic == Remote {
-			PrintScope(buf, append(prefix, '\t'), s.PreScopes)
-		}
-		p := pipeline.NewMerge(s.Instructions, nil)
-		buf.WriteString(fmt.Sprintf("%s:%v %v\n", prefix, s.Magic, p))
-	}
-}
-
-/*
 func PrintScope(prefix []byte, ss []*Scope) {
 	for _, s := range ss {
-		if s.Magic == Merge || s.Magic == Remote {
-			PrintScope(append(prefix, '\t'), s.PreScopes)
-		}
+		PrintScope(append(prefix, '\t'), s.PreScopes)
 		p := pipeline.NewMerge(s.Instructions, nil)
 		fmt.Printf("%s:%v %v\n", prefix, s.Magic, p)
 	}
 }
-*/
 
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(c *Compile) (err error) {
@@ -152,17 +136,6 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	n := len(s.Instructions) - 1
 	in := s.Instructions[n]
 	s.Instructions = s.Instructions[:n]
-	{
-		var buf bytes.Buffer
-
-		buf.WriteString(fmt.Sprintf("++++++%p, %p++++++\n", s, s.pipe))
-		PrintScope(&buf, nil, []*Scope{s})
-		for i := range s.Proc.Reg.MergeReceivers {
-			buf.WriteString(fmt.Sprintf("\t[%v] = %p\n", i, s.Proc.Reg.MergeReceivers[i]))
-		}
-		buf.WriteString("+++++++++++\n")
-		fmt.Printf("%s\n", buf.String())
-	}
 	data, err := encodeScope(s)
 	if err != nil {
 		return err
@@ -171,18 +144,6 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	{
-		var buf bytes.Buffer
-
-		buf.WriteString(fmt.Sprintf("++++++rs %p, %p++++++\n", rs, rs.pipe))
-		PrintScope(&buf, nil, []*Scope{rs})
-		for i := range rs.Proc.Reg.MergeReceivers {
-			buf.WriteString(fmt.Sprintf("\t[%v] = %p\n", i, rs.Proc.Reg.MergeReceivers[i]))
-		}
-		buf.WriteString("+++++++++++\n")
-		fmt.Printf("%s\n", buf.String())
-	}
-
 	rs.Instructions = append(rs.Instructions, in)
 	return rs.ParallelRun(c)
 }
@@ -436,8 +397,4 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 	if !s.IsEnd {
 		s.Instructions = append(s.Instructions, in)
 	}
-}
-
-func (s *Scope) isQuery() bool {
-	return s.Magic == Merge || s.Magic == Remote || s.Magic == Deletion || s.Magic == Update || s.Magic == Insert
 }

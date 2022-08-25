@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -110,28 +109,27 @@ func refactorScope(ctx context.Context, s *Scope, cs morpc.ClientSession) {
 	}
 }
 
-func fillPipeline(s *Scope) error {
+func fillPipeline(s *Scope) (*pipeline.Pipeline, error) {
 	ctx := &scopeContext{
 		id:     0,
 		parent: nil,
 		regs:   make(map[*process.WaitRegister]int32),
 	}
 	ctx.root = ctx
-	p, ctxId, err := generatePipeline(s, ctx, 0)
+	p, ctxId, err := generatePipeline(s, ctx, 1)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := fillInstructionsForPipeline(s, ctx, p, ctxId); err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return p, nil
 }
 
 func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipeline, int32, error) {
 	var err error
 
 	p := &pipeline.Pipeline{}
-	s.pipe = p
 	// Magic and IsEnd
 	p.PipelineType = pipeline.Pipeline_PipelineType(s.Magic)
 	p.PipelineId = ctx.id
@@ -458,13 +456,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.OrderBy = convertToPlanOrderByList(t.Fs)
 	case *connector.Argument:
 		idx, ctx0 := ctx.root.findRegister(t.Reg)
-		{
-			if ctx0 != nil {
-				fmt.Printf("+++idx: %v, %v,  ctx0: %p: %p\n", idx, ctx0.id, ctx0, t.Reg)
-			} else {
-				fmt.Printf("+++idx: %v, ctx0: %p: %p\n", idx, ctx0, t.Reg)
-			}
-		}
 		if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
 			id := srv.RegistConnector(t.Reg)
 			if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId); err != nil {
@@ -475,10 +466,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			ConnectorIndex: idx,
 			PipelineId:     ctx0.id,
 		}
-		/*
-			default:
-				return ctxId, nil, moerr.New(moerr.INTERNAL_ERROR, fmt.Sprintf("unexpected operator: %v", opr.Op))
-		*/
 	}
 	return ctxId, in, nil
 }
@@ -630,10 +617,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		}
 	case vm.Connector:
 		t := opr.GetConnect()
-		{
-			fmt.Printf("recover id: %v, index: %v, %p\n",
-				t.PipelineId, t.ConnectorIndex, ctx.root.getRegister(t.PipelineId, t.ConnectorIndex))
-		}
 		v.Arg = &connector.Argument{
 			Reg: ctx.root.getRegister(t.PipelineId, t.ConnectorIndex),
 		}
@@ -668,14 +651,11 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 }
 
 func encodeScope(s *Scope) ([]byte, error) {
-	if s.pipe == nil {
-		if err := fillPipeline(s); err != nil {
-			return nil, err
-		}
-	} else {
-		s.pipe.InstructionList = s.pipe.InstructionList[:len(s.pipe.InstructionList)-1]
+	p, err := fillPipeline(s)
+	if err != nil {
+		return nil, err
 	}
-	return s.pipe.Marshal()
+	return p.Marshal()
 }
 
 func decodeScope(data []byte, proc *process.Process) (*Scope, error) {
@@ -839,7 +819,7 @@ func convertToAggregates(ags []*pipeline.Aggregate) []aggregate.Aggregate {
 func convertToPlanOrderByList(field []colexec.Field) []*plan.OrderBySpec {
 	// default order direction is DESC.
 	convToPlanOrderFlag := func(source colexec.Direction) plan.OrderBySpec_OrderByFlag {
-		if source == colexec.Ascending {
+		if source == colexec.Ascending || source == colexec.DefaultDirection {
 			return plan.OrderBySpec_ASC
 		}
 		return plan.OrderBySpec_DESC
@@ -943,7 +923,6 @@ func (ctx *scopeContext) addSubPipeline(id uint64, idx int32, ctxId int32) (int3
 	})
 	ctx.scope.PreScopes = append(ctx.scope.PreScopes, ds)
 	p := &pipeline.Pipeline{}
-	ds.pipe = p
 	p.PipelineId = ctxId
 	p.PipelineType = Pushdown
 	ctxId++

@@ -98,8 +98,6 @@ type Scope struct {
 	Proc *process.Process
 
 	Reg *process.WaitRegister
-
-	pipe *pipeline.Pipeline
 }
 
 type scopeContext struct {

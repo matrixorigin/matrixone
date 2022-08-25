@@ -91,12 +91,6 @@ func (c *Compile) Run(_ uint64) (err error) {
 
 	//	PrintScope(nil, []*Scope{c.scope})
 
-	if c.info.Typ == plan2.ExecTypeAP && c.scope.isQuery() {
-		if err = fillPipeline(c.scope); err != nil {
-			return err
-		}
-	}
-
 	switch c.scope.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -946,9 +940,6 @@ func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
 		rs[i].NodeInfo = ss[i].NodeInfo
 		rs[i].PreScopes = []*Scope{ss[i], chp}
 		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
-		if ss[i].Magic == Remote {
-			ss[i].Magic = Parallel
-		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op: vm.Connector,
 			Arg: &connector.Argument{
