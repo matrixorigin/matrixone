@@ -91,7 +91,7 @@ func (c *Compile) Run(_ uint64) (err error) {
 
 	//	PrintScope(nil, []*Scope{c.scope})
 
-	if c.info.Typ == plan2.ExecTypeAP && (c.scope.Magic == Merge || c.scope.Magic == Remote || c.scope.Magic == Deletion) {
+	if c.info.Typ == plan2.ExecTypeAP && c.scope.isQuery() {
 		if err = fillPipeline(c.scope); err != nil {
 			return err
 		}
