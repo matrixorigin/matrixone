@@ -34,7 +34,7 @@ var _ engine.Database = new(Database)
 
 func (d *Database) Create(ctx context.Context, relName string, defs []engine.TableDef) error {
 
-	_, err := doTxnRequest[CreateDatabaseResp](
+	_, err := engine.DoTxnRequest[CreateDatabaseResp](
 		ctx,
 		d.engine,
 		d.txnOperator.Write,
@@ -56,7 +56,7 @@ func (d *Database) Create(ctx context.Context, relName string, defs []engine.Tab
 
 func (d *Database) Delete(ctx context.Context, relName string) error {
 
-	_, err := doTxnRequest[DeleteRelationResp](
+	_, err := engine.DoTxnRequest[DeleteRelationResp](
 		ctx,
 		d.engine,
 		d.txnOperator.Write,
@@ -76,7 +76,7 @@ func (d *Database) Delete(ctx context.Context, relName string) error {
 
 func (d *Database) Relation(ctx context.Context, relName string) (engine.Relation, error) {
 
-	resps, err := doTxnRequest[OpenRelationResp](
+	resps, err := engine.DoTxnRequest[OpenRelationResp](
 		ctx,
 		d.engine,
 		d.txnOperator.Read,
@@ -111,7 +111,7 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 
 func (d *Database) Relations(ctx context.Context) ([]string, error) {
 
-	resps, err := doTxnRequest[GetRelationsResp](
+	resps, err := engine.DoTxnRequest[GetRelationsResp](
 		ctx,
 		d.engine,
 		d.txnOperator.Read,
