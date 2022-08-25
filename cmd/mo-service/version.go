@@ -15,7 +15,7 @@
 package main
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"fmt"
 	"os"
 )
 
@@ -37,11 +37,11 @@ func maybePrintVersion() {
 		return
 	}
 
-	logutil.Info("MatrixOne build info:")
-	logutil.Infof("  The golang version used to build this binary: %s", GoVersion)
-	logutil.Infof("  Git branch name: %s", BranchName)
-	logutil.Infof("  Git commit ID: %s", CommitID)
-	logutil.Infof("  Buildtime: %s", BuildTime)
-	logutil.Infof("  Version: %s", Version)
+	fmt.Print("MatrixOne build info:")
+	fmt.Printf("  The golang version used to build this binary: %s\n", GoVersion)
+	fmt.Printf("  Git branch name: %s\n", BranchName)
+	fmt.Printf("  Git commit ID: %s\n", CommitID)
+	fmt.Printf("  Buildtime: %s\n", BuildTime)
+	fmt.Printf("  Version: %s\n", Version)
 	os.Exit(0)
 }

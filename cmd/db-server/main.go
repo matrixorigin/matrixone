@@ -161,12 +161,12 @@ func closeTae(tae *taeHandler) {
 func main() {
 	// if the argument passed in is "--version", return version info and exit
 	if len(os.Args) == 2 && os.Args[1] == "--version" {
-		logutil.Info("MatrixOne build info:")
-		logutil.Infof("  The golang version used to build this binary: %s", GoVersion)
-		logutil.Infof("  Git branch name: %s", BranchName)
-		logutil.Infof("  Last git commit ID: %s", LastCommitId)
-		logutil.Infof("  Buildtime: %s", BuildTime)
-		logutil.Infof("  Current Matrixone version: %s", MoVersion)
+		fmt.Println("MatrixOne build info:")
+		fmt.Printf("  The golang version used to build this binary: %s\n", GoVersion)
+		fmt.Printf("  Git branch name: %s\n", BranchName)
+		fmt.Printf("  Last git commit ID: %s\n", LastCommitId)
+		fmt.Printf("  Buildtime: %s\n", BuildTime)
+		fmt.Printf("  Current Matrixone version: %s\n", MoVersion)
 		os.Exit(0)
 	}
 
