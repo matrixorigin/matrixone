@@ -72,7 +72,7 @@ func (t *Table) NewReader(
 		return nil, err
 	}
 
-	resps, err := doTxnRequest[NewTableIterResp](
+	resps, err := engine.DoTxnRequest[NewTableIterResp](
 		ctx,
 		t.engine,
 		t.txnOperator.Read,
@@ -136,7 +136,7 @@ func (t *TableReader) Read(colNames []string, plan *plan.Expr, mh *mheap.Mheap) 
 			return nil, nil
 		}
 
-		resps, err := doTxnRequest[ReadResp](
+		resps, err := engine.DoTxnRequest[ReadResp](
 			t.ctx,
 			t.engine,
 			t.txnOperator.Read,
@@ -169,7 +169,7 @@ func (t *TableReader) Close() error {
 		return nil
 	}
 	for _, info := range t.iterInfos {
-		_, err := doTxnRequest[CloseTableIterResp](
+		_, err := engine.DoTxnRequest[CloseTableIterResp](
 			t.ctx,
 			t.engine,
 			t.txnOperator.Read,

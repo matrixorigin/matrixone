@@ -37,6 +37,15 @@ type TableEntry struct {
 	link      *common.SortedDList
 	tableData data.Table
 	rows      uint64
+	// fullname is format as 'tenantID-tableName', the tenantID prefix is only used 'mo_catalog' database
+	fullName string
+}
+
+func genTblFullName(tenantID uint32, name string) string {
+	if name == SystemTable_DB_Name || name == SystemTable_Table_Name || name == SystemTable_Columns_Name {
+		tenantID = 0
+	}
+	return fmt.Sprintf("%d-%s", tenantID, name)
 }
 
 func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) *TableEntry {
@@ -172,6 +181,13 @@ func (entry *TableEntry) deleteEntryLocked(segment *SegmentEntry) error {
 
 func (entry *TableEntry) GetSchema() *Schema {
 	return entry.schema
+}
+
+func (entry *TableEntry) GetFullName() string {
+	if len(entry.fullName) == 0 {
+		entry.fullName = genTblFullName(entry.schema.AcInfo.TenantID, entry.schema.Name)
+	}
+	return entry.fullName
 }
 
 func (entry *TableEntry) Compare(o common.NodePayload) int {
