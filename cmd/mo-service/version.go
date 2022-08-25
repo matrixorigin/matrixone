@@ -37,7 +37,7 @@ func maybePrintVersion() {
 		return
 	}
 
-	fmt.Print("MatrixOne build info:")
+	fmt.Println("MatrixOne build info:")
 	fmt.Printf("  The golang version used to build this binary: %s\n", GoVersion)
 	fmt.Printf("  Git branch name: %s\n", BranchName)
 	fmt.Printf("  Git commit ID: %s\n", CommitID)
