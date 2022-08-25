@@ -2853,7 +2853,7 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 	tae.createRelAndAppend(bat1, true)
 	// pretend 'mo_users'
 	s = catalog.MockSchemaAll(1, 0)
-	s.Name = "mo_users_t1"
+	s.Name = "mo_users"
 	txn11, sysDB := tae.getDB(catalog.SystemDBName)
 	_, err = sysDB.CreateRelation(s)
 	assert.NoError(t, err)
@@ -2872,7 +2872,7 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 	tae.createRelAndAppend(bat2, true)
 	txn21, sysDB := tae.getDB(catalog.SystemDBName)
 	s = catalog.MockSchemaAll(1, 0)
-	s.Name = "mo_users_t2"
+	s.Name = "mo_users"
 	_, err = sysDB.CreateRelation(s)
 	assert.NoError(t, err)
 	assert.NoError(t, txn21.Commit())
