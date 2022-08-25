@@ -303,12 +303,7 @@ func (foq *fakeOutputQueue) flush() error {
 }
 
 const (
-	attrNamePos    = 17
-	attrTypPos     = 18
-	charWidthPos   = 20
-	nullablePos    = 21
-	primaryKeyPos  = 25
-	attrCommentPos = 28
+	primaryKeyPos = 25
 )
 
 /*
