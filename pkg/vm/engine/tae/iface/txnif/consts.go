@@ -26,7 +26,14 @@ type TxnState int32
 
 const (
 	TxnStateActive TxnState = iota
+	//TxnStateCommitting only for 1PC
 	TxnStateCommitting
+	//TxnStatePreparing only for 2PC
+	TxnStatePreparing
+	//TxnStatePrepared only for 2PC
+	TxnStatePrepared
+	//TxnStateCommittingFinished only for 2PC
+	TxnStateCommittingFinished
 	TxnStateRollbacking
 	TxnStateCommitted
 	TxnStateRollbacked
@@ -36,12 +43,11 @@ const (
 type TxnStatus int32
 
 const (
-	TxnStatusActive TxnStatus = iota
-	TxnStatusPrepared
-	TxnStatusPrepareTimeOut
-	TxnStatusCommittingFinished
-	TxnStatusCommitted
-	TxnStatusRollbacked
+// TxnStatusActive TxnStatus = iota
+// TxnStatusPrepared
+// TxnStatusCommittingFinished
+// TxnStatusCommitted
+// TxnStatusRollbacked
 )
 
 func TxnStrState(state TxnState) string {
@@ -50,6 +56,10 @@ func TxnStrState(state TxnState) string {
 		return "Active"
 	case TxnStateCommitting:
 		return "Committing"
+	case TxnStatePrepared:
+		return "Prepared"
+	case TxnStateCommittingFinished:
+		return "CommittingFinished"
 	case TxnStateRollbacking:
 		return "Rollbacking"
 	case TxnStateCommitted:
@@ -58,22 +68,6 @@ func TxnStrState(state TxnState) string {
 		return "Rollbacked"
 	case TxnStateUnknown:
 		return "Unknown"
-	}
-	panic("state not support")
-}
-
-func TxnStrStatus(state TxnStatus) string {
-	switch state {
-	case TxnStatusActive:
-		return "TxnStatusActive"
-	case TxnStatusPrepared:
-		return "TxnStatusPrepared"
-	case TxnStatusRollbacked:
-		return "TxnStatusRollbacked"
-	case TxnStatusCommittingFinished:
-		return "TxnStatusCommittingFinished"
-	case TxnStatusCommitted:
-		return "TxnStatusCommitted"
 	}
 	panic("state not support")
 }

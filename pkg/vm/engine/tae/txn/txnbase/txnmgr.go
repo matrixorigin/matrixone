@@ -187,14 +187,20 @@ func (mgr *TxnManager) onPreparRollback(txn txnif.AsyncTxn) {
 	_ = txn.PrepareRollback()
 }
 
+// onPreparing the commit of 1PC txn and prepare of 2PC txn
+// must both enter into this queue for conflict check.
+// OpCommit : the commit of 1PC txn
+// OpPrepare: the prepare of 2PC txn
+// OPRollback:the rollback of 2PC or 1PC
 func (mgr *TxnManager) onPreparing(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
 		if op.Op == OpCommit || op.Op == OpPrepare {
-			//conflict check for 1PC Commit or 2PC Prepare
+			//Mainly do conflict check for 1PC Commit or 2PC Prepare
 			mgr.onPreCommitOr2PCPrepare(op.Txn)
 		}
+		//Before this moment, all mvcc nodes of a txn has been pushed into the MVCCHandle.
 		mgr.Lock()
 		ts := mgr.TsAlloc.Alloc()
 		op.Txn.Lock()

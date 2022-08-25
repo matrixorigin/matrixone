@@ -42,7 +42,6 @@ type TxnCtx struct {
 	StartTS, CommitTS, PrepareTS types.TS
 	Info                         []byte
 	State                        txnif.TxnState
-	Status                       txnif.TxnStatus
 	Is2PC                        bool
 }
 
@@ -150,7 +149,7 @@ func (ctx *TxnCtx) ToPreparingLocked(ts types.TS) error {
 	}
 	ctx.PrepareTS = ts
 	ctx.CommitTS = ts
-	ctx.State = txnif.TxnStateCommitting
+	ctx.State = txnif.TxnStatePreparing
 	return nil
 }
 
@@ -183,6 +182,7 @@ func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
 		return ErrTxnCannotRollback
 	}
 	ctx.CommitTS = ts
+	ctx.PrepareTS = ts
 	ctx.State = txnif.TxnStateRollbacking
 	return nil
 }

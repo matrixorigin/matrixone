@@ -98,14 +98,15 @@ func (txn *Txn) SetApplyCommitFn(fn func(txnif.AsyncTxn) error)     { txn.ApplyC
 func (txn *Txn) SetApplyRollbackFn(fn func(txnif.AsyncTxn) error)   { txn.ApplyRollbackFn = fn }
 
 //The state transition of transaction is as follows:
-// 1PC: TxnStatusActive--->TxnStatusCommitted/TxnStatusRollbacked
-// 2PC running on Coordinator: TxnStatusActive--->TxnStatusPrepared
-//								-->TxnStatusCommittingFinished--->TxnStatusCommitted or
-//								TxnStatusActive--->TxnStatusPrepared-->TxnStatusRollbacked or
-//                             TxnStatusActive--->TxnStatusRollbacked.
-// 2PC running on Participant: TxnStatusActive--->TxnStatusPrepared-->TxnStatusCommitted or
-//                             TxnStatusActive--->TxnStatusPrepared-->TxnStatusRollbacked or
-//                             TxnStatusActive--->TxnStatusRollbacked.
+// 1PC: TxnStateActive--->TxnStateCommitting--->TxnStateCommitted/TxnStateRollbacked
+//         TxnStateActive--->TxnStateRollbacking--->TxnStateRollbacked
+// 2PC running on Coordinator: TxnStateActive--->TxnStatePreparing-->TxnStatePrepared
+//								-->TxnStateCommittingFinished--->TxnStateCommitted or
+//								TxnStateActive--->TxnStatePreparing-->TxnStatePrepared-->TxnStateRollbacked or
+//                             TxnStateActive--->TxnStateRollbacking--->TxnStateRollbacked.
+// 2PC running on Participant: TxnStateActive--->TxnStatePrepared-->TxnStateCommitted or
+//                             TxnStateActive--->TxnStatePrepared-->TxnStateRollbacked or
+//                             TxnStateActive--->TxnStateRollbacking-->TxnStateRollbacked.
 
 // Prepare is used to pre-commit a 2PC distributed transaction.
 // Notice that once any error happened, we should rollback the txn.
@@ -116,12 +117,13 @@ func (txn *Txn) Prepare() (err error) {
 	//TODO::should handle this by TxnStorage?
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
 		logutil.Warn("tae : txn is not found in TxnManager")
-		txn.Err = ErrTxnNotFound
-		return txn.Err
+		//txn.Err = ErrTxnNotFound
+		return ErrTxnNotFound
 	}
-	if txn.Status != txnif.TxnStatusActive {
-		logutil.Warnf("unexpected txn status : %s", txnif.TxnStrStatus(txn.Status))
-		txn.Err = ErrTxnStatusNotActive
+	state := (txnif.TxnState)(atomic.LoadInt32((*int32)(&txn.State)))
+	if state != txnif.TxnStateActive {
+		logutil.Warnf("unexpected txn status : %s", txnif.TxnStrState(txn.State))
+		txn.Err = ErrTxnStateNotActive
 		return txn.Err
 	}
 	txn.Add(1)
@@ -141,9 +143,10 @@ func (txn *Txn) Prepare() (err error) {
 	}
 	txn.Wait()
 	if txn.Err == nil {
-		txn.Status = txnif.TxnStatusPrepared
+		//txn.State = txnif.TxnStatePrepared
+		atomic.StoreInt32((*int32)(&txn.State), (int32)(txnif.TxnStatePrepared))
 	} else {
-		txn.Status = txnif.TxnStatusRollbacked
+		//txn.Status = txnif.TxnStatusRollbacked
 		txn.Mgr.DeleteTxn(txn.GetID())
 	}
 	return txn.GetError()
@@ -160,37 +163,60 @@ func (txn *Txn) Rollback() (err error) {
 		logutil.Warn("tae : txn is not found in TxnManager")
 		return
 	}
+
+	state := (txnif.TxnState)(atomic.LoadInt32((*int32)(&txn.State)))
+	if (!txn.Is2PC && state != txnif.TxnStateActive) ||
+		txn.Is2PC && state != txnif.TxnStateActive &&
+			state != txnif.TxnStatePrepared {
+		logutil.Warnf("unexpected txn status : %s", txnif.TxnStrState(txn.State))
+		return ErrTxnStateCannotRollback
+	}
 	if txn.Store.IsReadonly() {
 		txn.Mgr.DeleteTxn(txn.GetID())
 		return
 	}
-	if txn.Status == txnif.TxnStatusActive {
-		txn.Add(1)
-		err = txn.Mgr.OnOpTxn(&OpTxn{
-			Txn: txn,
-			Op:  OpRollback,
-		})
-		if err != nil {
-			_ = txn.PrepareRollback()
-			_ = txn.ApplyRollback()
-			txn.DoneWithErr(err)
+	//2PC
+	if txn.Is2PC {
+		if state == txnif.TxnStateActive {
+			txn.Add(1)
+			err = txn.Mgr.OnOpTxn(&OpTxn{
+				Txn: txn,
+				Op:  OpRollback,
+			})
+			if err != nil {
+				_ = txn.PrepareRollback()
+				_ = txn.ApplyRollback()
+				txn.DoneWithErr(err)
+			}
+			txn.Wait()
+			//txn.Status = txnif.TxnStatusRollbacked
+			//atomic.StoreInt32((*int32)(&txn.State), (int32)(txnif.TxnStateRollbacked))
+			txn.Mgr.DeleteTxn(txn.GetID())
 		}
-		txn.Wait()
-		txn.Status = txnif.TxnStatusRollbacked
-		txn.Mgr.DeleteTxn(txn.GetID())
-		return txn.Err
+		if state == txnif.TxnStatePrepared {
+			txn.Add(1)
+			txn.Ch <- EventRollback
+			//Wait txn rollbacked
+			txn.Wait()
+			//txn.Status = txnif.TxnStatusRollbacked
+			txn.Mgr.DeleteTxn(txn.GetID())
+		}
+		return txn.GetError()
 	}
-	if txn.Status == txnif.TxnStatusPrepared {
-		txn.Add(1)
-		txn.Ch <- EventRollback
-		//Wait txn rollbacked
-		txn.Wait()
-		txn.Status = txnif.TxnStatusRollbacked
-		txn.Mgr.DeleteTxn(txn.GetID())
-		return txn.Err
+	//1PC
+	txn.Add(1)
+	err = txn.Mgr.OnOpTxn(&OpTxn{
+		Txn: txn,
+		Op:  OpRollback,
+	})
+	if err != nil {
+		_ = txn.PrepareRollback()
+		_ = txn.ApplyRollback()
+		txn.DoneWithErr(err)
 	}
-	logutil.Warnf("unexpected txn status : %s", txnif.TxnStrStatus(txn.Status))
-	txn.Err = ErrTxnStatusCannotRollback
+	txn.Wait()
+	//txn.Status = txnif.TxnStatusRollbacked
+	txn.Mgr.DeleteTxn(txn.GetID())
 	return txn.Err
 }
 
@@ -198,15 +224,17 @@ func (txn *Txn) Rollback() (err error) {
 // Notice that transaction must be committed once committing message arrives, since Preparing
 // had already succeeded.
 func (txn *Txn) Committing() (err error) {
-	if txn.Status != txnif.TxnStatusPrepared {
-		logutil.Warnf("unexpected txn status : %s", txnif.TxnStrStatus(txn.Status))
-		txn.Err = ErrTxnStatusNotPrepared
-		return txn.Err
+	state := (txnif.TxnState)(atomic.LoadInt32((*int32)(&txn.State)))
+	if state != txnif.TxnStatePrepared {
+		logutil.Warnf("unexpected txn status : %s", txnif.TxnStrState(txn.State))
+		//txn.Err = ErrTxnStatusNotPrepared
+		return ErrTxnStateNotPrepared
 	}
 	txn.Add(1)
 	txn.Ch <- EventCommitting
 	txn.Wait()
-	txn.Status = txnif.TxnStatusCommittingFinished
+	//txn.Status = txnif.TxnStatusCommittingFinished
+	atomic.StoreInt32((*int32)(&txn.State), (int32)(txnif.TxnStateCommittingFinished))
 	return txn.Err
 }
 
@@ -214,63 +242,65 @@ func (txn *Txn) Committing() (err error) {
 // Notice that the Commit of a 2PC transaction must be success once the commit message arrives,
 // since Preparing had already succeeded.
 func (txn *Txn) Commit() (err error) {
-	if (!txn.Is2PC && txn.Status != txnif.TxnStatusActive) ||
-		txn.Is2PC && txn.Status != txnif.TxnStatusCommittingFinished &&
-			txn.Status != txnif.TxnStatusPrepared {
-		logutil.Warnf("unexpected txn status : %s", txnif.TxnStrStatus(txn.Status))
-		txn.Err = ErrTxnStatusCannotCommit
-		return txn.Err
+	state := (txnif.TxnState)(atomic.LoadInt32((*int32)(&txn.State)))
+	if (!txn.Is2PC && state != txnif.TxnStateActive) ||
+		txn.Is2PC && state != txnif.TxnStateCommittingFinished &&
+			state != txnif.TxnStatePrepared {
+		logutil.Warnf("unexpected txn state : %s", txnif.TxnStrState(txn.State))
+		//txn.Err = ErrTxnStatusCannotCommit
+		return ErrTxnStateCannotCommit
 	}
 	if txn.Store.IsReadonly() {
 		txn.Mgr.DeleteTxn(txn.GetID())
 		return nil
 	}
-	//It's a 1PC--single DNShard transaction
-	if !txn.Is2PC && txn.Status == txnif.TxnStatusActive {
-		txn.Add(1)
-		err = txn.Mgr.OnOpTxn(&OpTxn{
-			Txn: txn,
-			Op:  OpCommit,
-		})
-		// TxnManager is closed
-		if err != nil {
-			txn.SetError(err)
-			txn.Lock()
-			_ = txn.ToRollbackingLocked(txn.GetStartTS().Next())
-			txn.Unlock()
-			_ = txn.PrepareRollback()
-			_ = txn.ApplyRollback()
-			txn.DoneWithErr(err)
+	if txn.Is2PC {
+		//It's a 2PC transaction running in Coordinator
+		if state == txnif.TxnStateCommittingFinished {
+			//TODO:Append committed log entry into log service asynchronously
+			//     for checkpointing the committing log entry
+			//txn.SetError(txn.LogTxnEntry())
+			if txn.Err == nil {
+				//txn.State = txnif.TxnStateCommitted
+				atomic.StoreInt32((*int32)(&txn.State), (int32)(txnif.TxnStateCommitted))
+			}
+			txn.Mgr.DeleteTxn(txn.GetID())
 		}
-		txn.Wait()
-		if txn.Err == nil {
-			txn.Status = txnif.TxnStatusCommitted
+		//It's a 2PC transaction running in Participant.
+		//Notice that Commit must be success once the commit message arrives,
+		//since Preparing had already succeeded.
+		if state == txnif.TxnStatePrepared {
+			txn.Add(1)
+			txn.Ch <- EventCommit
+			txn.Wait()
+			//txn.Status = txnif.TxnStatusCommitted
+			atomic.StoreInt32((*int32)(&txn.State), (int32)(txnif.TxnStateCommitted))
+			txn.Mgr.DeleteTxn(txn.GetID())
 		}
-		txn.Mgr.DeleteTxn(txn.GetID())
 		return txn.GetError()
 	}
-	//It's a 2PC transaction running in Coordinator
-	if txn.Is2PC && txn.Status == txnif.TxnStatusCommittingFinished {
-		//TODO:Append committed log entry into log service asynchronously
-		//     for checkpointing the committing log entry
-		//txn.SetError(txn.LogTxnEntry())
-		if txn.Err == nil {
-			txn.Status = txnif.TxnStatusCommitted
-		}
-		txn.Mgr.DeleteTxn(txn.GetID())
-		return txn.GetError()
+	//It's a 1PC transaction
+	txn.Add(1)
+	err = txn.Mgr.OnOpTxn(&OpTxn{
+		Txn: txn,
+		Op:  OpCommit,
+	})
+	// TxnManager is closed
+	if err != nil {
+		txn.SetError(err)
+		txn.Lock()
+		_ = txn.ToRollbackingLocked(txn.GetStartTS().Next())
+		txn.Unlock()
+		_ = txn.PrepareRollback()
+		_ = txn.ApplyRollback()
+		txn.DoneWithErr(err)
 	}
-	//It's a 2PC transaction running in Participant.
-	//Notice that Commit must be success once the commit message arrives,
-	//since Preparing had already succeeded.
-	if txn.Is2PC && txn.Status == txnif.TxnStatusPrepared {
-		txn.Add(1)
-		txn.Ch <- EventCommit
-		txn.Wait()
-		txn.Status = txnif.TxnStatusCommitted
-		txn.Mgr.DeleteTxn(txn.GetID())
-	}
-	return
+	txn.Wait()
+	//if txn.Err == nil {
+	//txn.Status = txnif.TxnStatusCommitted
+	//}
+	txn.Mgr.DeleteTxn(txn.GetID())
+	return txn.GetError()
 }
 
 func (txn *Txn) GetStore() txnif.TxnStore {
@@ -284,6 +314,7 @@ func (txn *Txn) Event() (e int) {
 	return
 }
 
+// TODO::need to take 2PC txn account into.
 func (txn *Txn) DoneWithErr(err error) {
 	txn.DoneCond.L.Lock()
 	if err != nil {
