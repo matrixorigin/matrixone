@@ -145,7 +145,7 @@ func (s *MOSpan) GetName() string {
 }
 
 func (s *MOSpan) CsvOptions() *CsvOptions {
-	return commonCsvOptions
+	return CommonCsvOptions
 }
 
 func (s *MOSpan) CsvFields() []string {

@@ -46,7 +46,7 @@ func (h MOErrorHolder) Size() int64 {
 func (h MOErrorHolder) Free() {}
 
 func (h MOErrorHolder) CsvOptions() *CsvOptions {
-	return commonCsvOptions
+	return CommonCsvOptions
 }
 
 func (h MOErrorHolder) CsvFields() []string {

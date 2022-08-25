@@ -409,6 +409,18 @@ type CSVRequest struct {
 	content string
 }
 
+func NewCSVRequest(writer io.StringWriter, content string) *CSVRequest {
+	return &CSVRequest{writer, content}
+}
+
+func (r *CSVRequest) Handle() (int, error) {
+	return r.writer.WriteString(r.content)
+}
+
+func (r *CSVRequest) Content() string {
+	return r.content
+}
+
 // NewItemBatchHandler implement batchpipe.PipeImpl
 func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 	var f = func(b any) {
@@ -436,7 +448,7 @@ type CsvOptions struct {
 	Terminator      rune // like: '\n'
 }
 
-var commonCsvOptions = &CsvOptions{
+var CommonCsvOptions = &CsvOptions{
 	FieldTerminator: ',',
 	EncloseRune:     '"',
 	Terminator:      '\n',

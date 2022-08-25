@@ -64,7 +64,7 @@ func (l MOLog) Size() int64 {
 func (l MOLog) Free() {}
 
 func (l MOLog) CsvOptions() *CsvOptions {
-	return commonCsvOptions
+	return CommonCsvOptions
 }
 
 func (l MOLog) CsvFields() []string {
@@ -149,7 +149,7 @@ func (m MOZap) Size() int64 {
 func (m MOZap) Free() {}
 
 func (m MOZap) CsvOptions() *CsvOptions {
-	return commonCsvOptions
+	return CommonCsvOptions
 }
 
 func (m MOZap) CsvFields() []string {

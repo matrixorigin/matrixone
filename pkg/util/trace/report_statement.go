@@ -57,7 +57,7 @@ func (s StatementInfo) Size() int64 {
 func (s StatementInfo) Free() {}
 
 func (s StatementInfo) CsvOptions() *CsvOptions {
-	return commonCsvOptions
+	return CommonCsvOptions
 }
 
 func (s StatementInfo) CsvFields() []string {
