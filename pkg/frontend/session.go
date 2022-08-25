@@ -43,9 +43,7 @@ type ShowStatementType int
 
 const (
 	NotShowStatement ShowStatementType = 0
-	// ShowCreateDatabase ShowStatementType = 1
-	// ShowCreateTable ShowStatementType = 2
-	ShowColumns ShowStatementType = 3
+	ShowColumns      ShowStatementType = 1
 )
 
 type TxnHandler struct {

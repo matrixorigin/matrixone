@@ -61,8 +61,8 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, errors.New(errno.UndefinedTable, fmt.Sprintf("table '%v' doesn't exist", tblName))
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
-		newStmt := tree.NewShowCreate(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
-		return buildShowCreateTable(newStmt, ctx)
+		newStmt := tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
+		return buildShowCreateView(newStmt, ctx)
 	}
 
 	// sql := `
@@ -85,7 +85,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			continue
 		}
 		nullOrNot := "NOT NULL"
-		if col.Default.NullAbility {
+		if col.Default != nil && col.Default.NullAbility {
 			nullOrNot = "DEFAULT NULL"
 		}
 
