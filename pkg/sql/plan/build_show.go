@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -35,18 +36,20 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase, ctx CompilerContext)
 		return nil, errors.New(errno.InvalidDatabaseDefinition, fmt.Sprintf("database '%v' is not exist", stmt.Name))
 	}
 
+	// get data from schema
 	//sql := fmt.Sprintf("SELECT md.datname as `Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
-	sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
-	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
+	// sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
+	// return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
+
+	sqlStr := "select \"%s\" as `Database`, \"%s\" as `Create Database`"
+	createSql := fmt.Sprintf("CREATE DATABASE `%s`", stmt.Name)
+	sqlStr = fmt.Sprintf(sqlStr, stmt.Name, createSql)
+	// log.Println(sqlStr)
+
+	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATEDATABASE)
 }
 
 func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Plan, error) {
-	sql := `
-		SELECT * 
-			FROM %s.mo_tables mt JOIN %s.mo_columns mc 
-				ON mt.relname = mc.att_relname and mt.reldatabase=mc.att_database 
-		WHERE mt.reldatabase = '%s' AND mt.relname = '%s'
-	`
 	tblName := stmt.Name.Parts[0]
 	dbName := ctx.DefaultDatabase()
 	if stmt.Name.NumParts == 2 {
@@ -57,9 +60,85 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	if tableDef == nil {
 		return nil, errors.New(errno.UndefinedTable, fmt.Sprintf("table '%v' doesn't exist", tblName))
 	}
+	if tableDef.TableType == catalog.SystemViewRel {
+		newStmt := tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
+		return buildShowCreateView(newStmt, ctx)
+	}
 
-	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
+	// sql := `
+	// 	SELECT *
+	// 		FROM %s.mo_tables mt JOIN %s.mo_columns mc
+	// 			ON mt.relname = mc.att_relname and mt.reldatabase=mc.att_database
+	// 	WHERE mt.reldatabase = '%s' AND mt.relname = '%s'
+	// `
+	// sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 	// log.Println(sql)
+
+	createStr := fmt.Sprintf("CREATE TABLE `%s` (", tblName)
+	rowCount := 0
+	var pkDefs []string
+
+	for _, col := range tableDef.Cols {
+
+		colName := col.Name
+		if colName == "PADDR" {
+			continue
+		}
+		nullOrNot := "NOT NULL"
+		if col.Default != nil && col.Default.NullAbility {
+			nullOrNot = "DEFAULT NULL"
+		}
+
+		var hasAttrComment string
+		if col.Comment != "" {
+			hasAttrComment = " COMMENT '" + col.Comment + "'"
+		}
+
+		if rowCount == 0 {
+			createStr += "\n"
+		} else {
+			createStr += ",\n"
+		}
+		typ := types.Type{Oid: types.T(col.Typ.Id)}
+		typeStr := typ.String()
+		if typ.Oid == types.T_varchar || typ.Oid == types.T_char {
+			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
+		}
+		createStr += fmt.Sprintf("`%s` %s %s%s", colName, typeStr, nullOrNot, hasAttrComment)
+		rowCount++
+		if col.Primary {
+			pkDefs = append(pkDefs, colName)
+		}
+	}
+	if len(pkDefs) != 0 {
+		pkStr := "PRIMARY KEY ("
+		for _, def := range pkDefs {
+			pkStr += fmt.Sprintf("`%s`", def)
+		}
+		pkStr += ")"
+		if rowCount != 0 {
+			createStr += ",\n"
+		}
+		createStr += pkStr
+	}
+
+	if rowCount != 0 {
+		createStr += "\n"
+	}
+	createStr += ")"
+
+	for _, def := range tableDef.Defs {
+		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
+			for _, kv := range proDef.Properties.Properties {
+				if kv.Key == catalog.SystemRelAttr_Comment {
+					createStr += " COMMENT='" + kv.Value + "',"
+				}
+			}
+		}
+	}
+
+	sql := "select \"%s\" as `Table`, \"%s\" as `Create Table`"
+	sql = fmt.Sprintf(sql, tblName, createStr)
 
 	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
 }
