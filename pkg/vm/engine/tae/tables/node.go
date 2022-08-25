@@ -16,13 +16,9 @@ package tables
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"sync/atomic"
-	"time"
-
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -33,58 +29,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"sync/atomic"
 )
 
 type appendableNode struct {
-	*buffer.Node
-	file    file.Block
-	block   *dataBlock
-	data    *containers.Batch
-	rows    uint32
-	mgr     base.INodeManager
-	flushTS atomic.Value
-	//mu      struct {
-	//	sync.RWMutex
-	//	flushTS types.TS
-	//}
-
-	// ckpTs     uint64 // unused
+	file      file.Block
+	block     *dataBlock
+	data      *containers.Batch
+	rows      uint32
 	exception *atomic.Value
 }
 
 func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendableNode {
-	flushTS, err := file.ReadTS()
-	if err != nil {
-		panic(err)
-	}
 	impl := new(appendableNode)
 	impl.exception = new(atomic.Value)
-	id := block.meta.AsCommonID()
-	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(catalog.EstimateBlockSize(block.meta, block.meta.GetSchema().BlockMaxRows)))
-	impl.UnloadFunc = impl.OnUnload
-	impl.LoadFunc = impl.OnLoad
-	impl.UnloadableFunc = impl.CheckUnloadable
-	impl.file = file
-	impl.mgr = mgr
 	impl.block = block
-	impl.flushTS.Store(flushTS)
+	impl.file = file
 	impl.rows = file.ReadRows()
-	mgr.RegisterNode(impl)
 	return impl
-}
-
-func (node *appendableNode) TryPin() (base.INodeHandle, error) {
-	return node.mgr.TryPin(node.Node, time.Second)
-}
-
-func (node *appendableNode) DoWithPin(do func() error) (err error) {
-	h, err := node.TryPin()
-	if err != nil {
-		return
-	}
-	defer h.Close()
-	err = do()
-	return
 }
 
 func (node *appendableNode) Rows(txn txnif.AsyncTxn, coarse bool) uint32 {
@@ -123,6 +85,9 @@ func (node *appendableNode) GetColumnDataCopy(
 		return
 	}
 	node.block.RLock()
+	if node.data == nil {
+		node.OnLoad()
+	}
 	if buffer != nil {
 		win := node.data.Vecs[colIdx]
 		if maxRow < uint32(node.data.Vecs[colIdx].Length()) {
@@ -132,17 +97,8 @@ func (node *appendableNode) GetColumnDataCopy(
 	} else {
 		vec = node.data.Vecs[colIdx].CloneWindow(0, int(maxRow), containers.DefaultAllocator)
 	}
-	// logutil.Infof("src-length: %d, to copy-[0->%d]: %s", node.data.Vecs[colIdx].Length(), maxRow, node.block.meta.String())
 	node.block.RUnlock()
 	return
-}
-
-func (node *appendableNode) SetBlockMaxflushTS(ts types.TS) {
-	node.flushTS.Store(ts)
-}
-
-func (node *appendableNode) GetBlockMaxflushTS() types.TS {
-	return node.flushTS.Load().(types.TS)
 }
 
 func (node *appendableNode) OnLoad() {
@@ -174,15 +130,6 @@ func (node *appendableNode) flushData(ts types.TS, colsData *containers.Batch, o
 		return
 	}
 	mvcc := node.block.mvcc
-	if node.GetBlockMaxflushTS().Equal(ts) {
-		err = data.ErrStaleRequest
-		logutil.Info("[Done]", common.TimestampField(ts),
-			common.OperationField(opCtx.OpName()),
-			common.ErrorField(err),
-			common.ReasonField("already flushed"),
-			common.OperandField(node.block.meta.AsCommonID().String()))
-		return
-	}
 	masks := make(map[uint16]*roaring.Bitmap)
 	vals := make(map[uint16]map[uint32]any)
 	mvcc.RLock()
@@ -240,36 +187,11 @@ func (node *appendableNode) OnUnload() {
 		logutil.Errorf("%v", exception)
 		return
 	}
-	ts := node.block.mvcc.LoadMaxVisible()
-	needCkp := true
-	if err := node.flushData(ts, node.data, new(unloadOp)); err != nil {
-		needCkp = false
-		if err == data.ErrStaleRequest {
-			// err = nil
-		} else {
-			logutil.Warnf("%s: %v", node.block.meta.String(), err)
-			node.exception.Store(err)
-		}
-	}
 	node.data.Close()
 	node.data = nil
-	if needCkp {
-		_, _ = node.block.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, node.block.meta.AsCommonID(), node.block.CheckpointWALClosure(ts))
-	}
 }
 
 func (node *appendableNode) Close() (err error) {
-	if exception := node.exception.Load(); exception != nil {
-		logutil.Warnf("%v", exception)
-		err = exception.(error)
-		return
-	}
-	node.Node.Close()
-	if exception := node.exception.Load(); exception != nil {
-		logutil.Warnf("%v", exception)
-		err = exception.(error)
-		return
-	}
 	if node.data != nil {
 		node.data.Close()
 		node.data = nil
@@ -316,6 +238,9 @@ func (node *appendableNode) ApplyAppend(bat *containers.Batch, txn txnif.AsyncTx
 		return
 	}
 	schema := node.block.meta.GetSchema()
+	if node.data == nil {
+		node.OnLoad()
+	}
 	from = int(node.rows)
 	for srcPos, attr := range bat.Attrs {
 		def := schema.ColDefs[schema.GetColIdx(attr)]

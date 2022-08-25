@@ -81,6 +81,10 @@ func (entry *BlockEntry) IsAppendable() bool {
 	return entry.state == ES_Appendable
 }
 
+func (entry *BlockEntry) SetNotAppendable() {
+	entry.state = ES_NotAppendable
+}
+
 func (entry *BlockEntry) GetSegment() *SegmentEntry {
 	return entry.segment
 }

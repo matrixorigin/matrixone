@@ -48,6 +48,8 @@ type BlockAppender interface {
 	) (int, error)
 	IsAppendable() bool
 	ReplayAppend(bat *containers.Batch) error
+	Ref()
+	UnRef()
 }
 
 type BlockReplayer interface {
@@ -64,6 +66,8 @@ type Block interface {
 	GetRowsOnReplay() uint64
 	GetID() *common.ID
 	IsAppendable() bool
+	SetNotAppendable()
+
 	Rows(txn txnif.AsyncTxn, coarse bool) int
 	GetColumnDataByName(txn txnif.AsyncTxn, attr string, buffer *bytes.Buffer) (*model.ColumnView, error)
 	GetColumnDataById(txn txnif.AsyncTxn, colIdx int, buffer *bytes.Buffer) (*model.ColumnView, error)

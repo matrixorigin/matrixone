@@ -775,7 +775,7 @@ func TestAutoCompactABlk2(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	wg.Wait()
-	testutils.WaitExpect(2000, func() bool {
+	testutils.WaitExpect(8000, func() bool {
 		return db.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	assert.Equal(t, uint64(0), db.Scheduler.GetPenddingLSNCnt())
@@ -999,11 +999,11 @@ func TestMVCC2(t *testing.T) {
 			block := it.GetBlock()
 			view, err := block.GetColumnDataByName(schema.GetSingleSortKey().Name, &buffer)
 			assert.Nil(t, err)
-			defer view.Close()
 			assert.Nil(t, view.DeleteMask)
-			// TODO: exclude deleted rows when apply appends
 			assert.Equal(t, bats[1].Vecs[0].Length()*2-1, view.Length())
+			// TODO: exclude deleted rows when apply appends
 			it.Next()
+			view.Close()
 		}
 		assert.NoError(t, txn.Commit())
 	}
