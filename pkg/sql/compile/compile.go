@@ -700,13 +700,22 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 			}
 		}
 	case plan.Node_ANTI:
+		_, conds := extraJoinConditions(n.OnList)
 		for i := range rs {
 			if isEq {
-				rs[i].appendInstruction(vm.Instruction{
-					Op:  vm.Mark,
-					Idx: c.anal.curr,
-					Arg: constructMark(n, typs, c.proc, n.OnList),
-				})
+				if len(conds) > 1 {
+					rs[i].appendInstruction(vm.Instruction{
+						Op:  vm.Mark,
+						Idx: c.anal.curr,
+						Arg: constructMark(n, typs, c.proc, n.OnList),
+					})
+				} else {
+					rs[i].appendInstruction(vm.Instruction{
+						Op:  vm.Anti,
+						Idx: c.anal.curr,
+						Arg: constructAnti(n, typs, c.proc),
+					})
+				}
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopAnti,

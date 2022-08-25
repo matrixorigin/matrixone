@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -424,23 +425,23 @@ func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *p
 	return &product.Argument{Typs: typs, Result: result}
 }
 
-// func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti.Argument {
-// 	result := make([]int32, len(n.ProjectList))
-// 	for i, expr := range n.ProjectList {
-// 		rel, pos := constructJoinResult(expr)
-// 		if rel != 0 {
-// 			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("anti result '%s' not support now", expr)))
-// 		}
-// 		result[i] = pos
-// 	}
-// 	cond, conds := extraJoinConditions(n.OnList)
-// 	return &anti.Argument{
-// 		Typs:       typs,
-// 		Result:     result,
-// 		Cond:       cond,
-// 		Conditions: constructJoinConditions(conds),
-// 	}
-// }
+func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		rel, pos := constructJoinResult(expr)
+		if rel != 0 {
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("anti result '%s' not support now", expr)))
+		}
+		result[i] = pos
+	}
+	cond, conds := extraJoinConditions(n.OnList)
+	return &anti.Argument{
+		Typs:       typs,
+		Result:     result,
+		Cond:       cond,
+		Conditions: constructJoinConditions(conds),
+	}
+}
 
 func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onList []*plan.Expr) *mark.Argument {
 	result := make([]int32, len(n.ProjectList))

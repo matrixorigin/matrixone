@@ -91,9 +91,6 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				if ctr.nullWithBatch != nil {
 					ctr.nullWithBatch.Clean(proc.GetMheap())
 				}
-				if ctr.buildBatch != nil {
-					ctr.buildBatch.Clean(proc.GetMheap())
-				}
 				if ctr.mp != nil {
 					ctr.mp.Free()
 				}
@@ -120,9 +117,6 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 					if ctr.nullWithBatch != nil {
 						ctr.nullWithBatch.Clean(proc.GetMheap())
 					}
-					if ctr.buildBatch != nil {
-						ctr.buildBatch.Clean(proc.GetMheap())
-					}
 					ctr.state = End
 					if ctr.mp != nil {
 						ctr.mp.Free()
@@ -148,7 +142,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		joinMap := bat.Ht.(*hashmap.JoinMap)
 		ctr.evalNullSels(bat)
 		ctr.nullWithBatch = DumpBatch(bat, proc, ctr.nullSels)
-		ctr.buildBatch = DumpBatch(bat, proc, ctr.sels)
 		if err := ctr.evalJoinBuildCondition(bat, ap.Conditions[1], proc); err != nil {
 			return err
 		}

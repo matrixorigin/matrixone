@@ -93,8 +93,6 @@ type container struct {
 
 	nullWithBatch *batch.Batch
 
-	buildBatch *batch.Batch
-
 	rewriteCond *plan.Expr
 }
 

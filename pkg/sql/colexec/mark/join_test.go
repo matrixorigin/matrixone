@@ -276,5 +276,5 @@ func hashBuild(t *testing.T, tc markTestCase) *batch.Batch {
 
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, false, int(rows), proc.Mp)
+	return testutil.NewBatch(ts, true, int(rows), proc.Mp)
 }
