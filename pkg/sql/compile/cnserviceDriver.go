@@ -463,8 +463,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			}
 		}
 		in.Connect = &pipeline.Connector{
-			ConnectorIndex: idx,
 			PipelineId:     ctx0.id,
+			ConnectorIndex: idx, // receiver
 		}
 	}
 	return ctxId, in, nil
