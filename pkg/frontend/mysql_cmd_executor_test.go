@@ -810,8 +810,8 @@ func Test_handleShowCreateTable(t *testing.T) {
 	})
 }
 
-<<<<<<< HEAD
 // func Test_handleShowCreateDatabase(t *testing.T) {
+// 	ctx := context.TODO()
 // 	convey.Convey("handleShowCreateDatabase succ", t, func() {
 // 		ctrl := gomock.NewController(t)
 // 		defer ctrl.Finish()
@@ -830,6 +830,7 @@ func Test_handleShowCreateTable(t *testing.T) {
 // 		var gSys GlobalSystemVariables
 // 		InitGlobalSystemVariables(&gSys)
 // 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+// 		ses.SetRequestContext(ctx)
 
 // 		ses.Mrs = &MysqlResultSet{}
 // 		ses.Mrs.Name2Index = make(map[string]uint64)
@@ -842,41 +843,6 @@ func Test_handleShowCreateTable(t *testing.T) {
 // 		convey.So(err, convey.ShouldBeNil)
 // 	})
 // }
-=======
-func Test_handleShowCreateDatabase(t *testing.T) {
-	ctx := context.TODO()
-	convey.Convey("handleShowCreateDatabase succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-		ioses := mock_frontend.NewMockIOSession(ctrl)
-		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-
-		eng := mock_frontend.NewMockEngine(ctrl)
-		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
-		if err != nil {
-			t.Error(err)
-		}
-		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
-		ses.SetRequestContext(ctx)
-
-		ses.Mrs = &MysqlResultSet{}
-		ses.Mrs.Name2Index = make(map[string]uint64)
-		ses.Mrs.Name2Index["Database"] = 1
-		ses.Mrs.Name2Index["Create Database"] = 2
-		ses.Data = make([][]interface{}, 1)
-		ses.Data[0] = make([]interface{}, 3)
-
-		err = handleShowCreateDatabase(ses)
-		convey.So(err, convey.ShouldBeNil)
-	})
-}
->>>>>>> 13921832f3047cf51e57ac096bec69f562be2f77
 
 func Test_handleShowColumns(t *testing.T) {
 	ctx := context.TODO()
