@@ -606,7 +606,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, err
 	}
 
-	tenant.SetTenantID(int(tenantID))
+	tenant.SetTenantID(uint32(tenantID))
 	//step2 : check user exists or not
 	//step3 : get the password of the user
 
@@ -635,8 +635,8 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, err
 	}
 
-	tenant.SetUserID(int(userID))
-	tenant.SetDefaultRoleID(int(defaultRoleID))
+	tenant.SetUserID(uint32(userID))
+	tenant.SetDefaultRoleID(uint32(defaultRoleID))
 
 	//step4 : check role exists or not
 	//step4.1 : check default role exits or not
@@ -665,7 +665,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		tenant.SetDefaultRoleID(int(defaultRoleID))
+		tenant.SetDefaultRoleID(uint32(defaultRoleID))
 	}
 
 	logutil.Info(tenant.String())
@@ -1073,7 +1073,7 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) ([]*MysqlResultSet, error) {
 	bh := NewBackgroundHandler(ctx, gm, mp, pu)
 	defer bh.Close()
-	err := bh.Exec(sql)
+	err := bh.Exec(nil, sql)
 	if err != nil {
 		return nil, err
 	}
@@ -1112,9 +1112,12 @@ func (bh *BackgroundHandler) Close() {
 	bh.ses.Close()
 }
 
-func (bh *BackgroundHandler) Exec(sql string) error {
+func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	bh.mce.PrepareSessionBeforeExecRequest(bh.ses.Session)
-	err := bh.mce.doComQuery(bh.ses.GetRequestContext(), sql)
+	if ctx == nil {
+		ctx = bh.ses.GetRequestContext()
+	}
+	err := bh.mce.doComQuery(ctx, sql)
 	if err != nil {
 		return err
 	}

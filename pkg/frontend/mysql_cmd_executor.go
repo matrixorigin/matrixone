@@ -1482,13 +1482,12 @@ func (mce *MysqlCmdExecutor) handleDeallocate(st *tree.Deallocate) error {
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
 // which has been initialized.
-func (mce *MysqlCmdExecutor) handleCreateAccount(ca *tree.CreateAccount) error {
-	//ses := mce.GetSession()
-	//tenant := ses.GetTenantInfo()
-	//step1 : Do I have the privilege to create new account
-	//sqlForRoleOfUser := getSqlForRoleOfUser(0, moAdminRoleID)
-	//step2 : create new account.
-	return nil
+func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount) error {
+	ses := mce.GetSession()
+	tenant := ses.GetTenantInfo()
+	//step1 : create new account.
+	err := InitApplicationLevelTenant(ctx, tenant, ca)
+	return err
 }
 
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
@@ -1959,7 +1958,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.CreateAccount:
 			selfHandle = true
-			if err = mce.handleCreateAccount(st); err != nil {
+			if err = mce.handleCreateAccount(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		}

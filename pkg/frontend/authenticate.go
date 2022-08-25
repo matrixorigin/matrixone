@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"math/rand"
@@ -32,9 +33,9 @@ type TenantInfo struct {
 	User        string
 	DefaultRole string
 
-	TenantID      int
-	UserID        int
-	DefaultRoleID int
+	TenantID      uint32
+	UserID        uint32
+	DefaultRoleID uint32
 }
 
 func (ti *TenantInfo) String() string {
@@ -45,11 +46,11 @@ func (ti *TenantInfo) GetTenant() string {
 	return ti.Tenant
 }
 
-func (ti *TenantInfo) GetTenantID() int {
+func (ti *TenantInfo) GetTenantID() uint32 {
 	return ti.TenantID
 }
 
-func (ti *TenantInfo) SetTenantID(id int) {
+func (ti *TenantInfo) SetTenantID(id uint32) {
 	ti.TenantID = id
 }
 
@@ -57,11 +58,11 @@ func (ti *TenantInfo) GetUser() string {
 	return ti.User
 }
 
-func (ti *TenantInfo) GetUserID() int {
+func (ti *TenantInfo) GetUserID() uint32 {
 	return ti.UserID
 }
 
-func (ti *TenantInfo) SetUserID(id int) {
+func (ti *TenantInfo) SetUserID(id uint32) {
 	ti.UserID = id
 }
 
@@ -69,11 +70,11 @@ func (ti *TenantInfo) GetDefaultRole() string {
 	return ti.DefaultRole
 }
 
-func (ti *TenantInfo) GetDefaultRoleID() int {
+func (ti *TenantInfo) GetDefaultRoleID() uint32 {
 	return ti.DefaultRoleID
 }
 
-func (ti *TenantInfo) SetDefaultRoleID(id int) {
+func (ti *TenantInfo) SetDefaultRoleID(id uint32) {
 	ti.DefaultRoleID = id
 }
 
@@ -83,6 +84,10 @@ func (ti *TenantInfo) IsSysTenant() bool {
 
 func (ti *TenantInfo) IsDefaultRole() bool {
 	return ti.GetDefaultRole() == GetDefaultRole()
+}
+
+func (ti *TenantInfo) IsMoAdminRole() bool {
+	return ti.GetDefaultRole() == moAdminRoleName
 }
 
 func GetDefaultTenant() string {
@@ -660,6 +665,22 @@ var (
 		{PrivilegeTypeIndex, privilegeLevelTable, true},
 		{PrivilegeTypeExecute, privilegeLevelTable, true},
 	}
+
+	applicationLevelRoles = []role{
+		{publicRoleID, publicRoleName},
+	}
+
+	applicationLevelObjects = []object{
+		{objectTypeDatabase, objectIDAll},
+		{objectTypeTable, objectIDAll},
+		{objectTypeView, objectIDAll},
+		{objectTypeIndex, objectIDAll},
+		{objectTypeFunction, objectIDAll},
+	}
+
+	applicationLevelPrivileges = []privilege{
+		{PrivilegeTypeConnect, privilegeLevelStar, true},
+	}
 )
 
 // checkSysExistsOrNot checks the SYS tenant exists or not.
@@ -669,7 +690,7 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 	defer bh.Close()
 
 	dbSql := "show databases;"
-	err := bh.Exec(dbSql)
+	err := bh.Exec(nil, dbSql)
 	if err != nil {
 		return false, err
 	}
@@ -701,7 +722,7 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 	bh.ses.ClearAllMysqlResultSet()
 
 	sql := "show tables from mo_catalog;"
-	err = bh.Exec(sql)
+	err = bh.Exec(nil, sql)
 	if err != nil {
 		return false, err
 	}
@@ -854,21 +875,21 @@ func createTablesInMoCatalog(ctx context.Context, tenant *TenantInfo, pu *config
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
 	for _, sql := range initDataSqls {
-		err = bh.Exec(sql)
+		err = bh.Exec(nil, sql)
 		if err != nil {
 			goto handleFailed
 		}
 	}
 
-	return nil
+	return err
 
 handleFailed:
 	//ROLLBACK the transaction
-	err = bh.Exec("rollback;")
-	if err != nil {
-		return err
+	rbErr := bh.Exec(nil, "rollback;")
+	if rbErr != nil {
+		return rbErr
 	}
-	return nil
+	return err
 }
 
 // createTablesInInformationSchema creates the database information_schema and the views or tables.
@@ -876,9 +897,268 @@ func createTablesInInformationSchema(ctx context.Context, tenant *TenantInfo, pu
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
-	err := bh.Exec("create database information_schema;")
+	err := bh.Exec(nil, "create database information_schema;")
 	if err != nil {
 		return err
 	}
+	return err
+}
+
+func checkTenantExistsOrNot(ctx context.Context, pu *config.ParameterUnit, tenantName string) (bool, error) {
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+
+	sqlForCheckTenant := getSqlForCheckTenant(tenantName)
+	rsset, err := executeSQLInBackgroundSession(ctx, guestMMu, pu.Mempool, pu, sqlForCheckTenant)
+	if err != nil {
+		return false, err
+	}
+
+	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+// InitApplicationLevelTenant initializes the application level tenan
+func InitApplicationLevelTenant(ctx context.Context, tenant *TenantInfo, ca *tree.CreateAccount) error {
+	var err error
+	var exists bool
+	pu := config.GetParameterUnit(ctx)
+
+	if !(tenant.IsSysTenant() && tenant.IsMoAdminRole()) {
+		return moerr.NewInternalError("tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
+	}
+
+	ctx = context.WithValue(ctx, moengine.TenantIDKey{}, tenant.GetTenantID())
+	ctx = context.WithValue(ctx, moengine.UserIDKey{}, tenant.GetUserID())
+	ctx = context.WithValue(ctx, moengine.RoleIDKey{}, tenant.GetDefaultRoleID())
+
+	exists, err = checkTenantExistsOrNot(ctx, pu, ca.Name)
+	if err != nil {
+		return err
+	}
+
+	if exists {
+		if ca.IfNotExists { //do nothing
+			return nil
+		}
+		return moerr.NewInternalError("the tenant %s exists", ca.Name)
+	}
+
+	var newTenant *TenantInfo
+	newTenant, err = createTablesInMoCatalogOfApplicationLevelTenant(ctx, tenant, pu, ca)
+	if err != nil {
+		return err
+	}
+
+	err = createTablesInInformationSchemaOfApplicationLevelTenant(ctx, tenant, pu, newTenant)
+	if err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// createTablesInMoCatalog creates catalog tables in the database mo_catalog.
+func createTablesInMoCatalogOfApplicationLevelTenant(ctx context.Context, tenant *TenantInfo, pu *config.ParameterUnit, ca *tree.CreateAccount) (*TenantInfo, error) {
+	var err error
+	var initMoAccount string
+	var initDataSqls []string
+	isSys := false
+
+	addSqlIntoSet := func(sql string) {
+		initDataSqls = append(initDataSqls, sql)
+	}
+
+	//USE the mo_catalog
+	addSqlIntoSet("use mo_catalog;")
+
+	//BEGIN the transaction
+	addSqlIntoSet("begin;")
+
+	//!!!NOTE : Insert into mo_account with original context.
+	// Other operations with a new context with new tenant info
+	//step 1: add new tenant entry to the mo_account
+	newTenantID := uint32(sysAccountID)
+	if isSys {
+		initMoAccount = fmt.Sprintf(initMoAccountFormat, newTenantID, sysAccountName, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), sysAccountComments)
+	} else {
+		//TODO: use auto increment
+		comment := ""
+		if ca.Comment.Exist {
+			comment = ca.Comment.Comment
+		}
+		newTenantID = rand.Uint32()
+		initMoAccount = fmt.Sprintf(initMoAccountFormat, newTenantID, tenant.GetTenant(), sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), comment)
+	}
+	insertIntoMoAccountSqlIdx := len(initDataSqls)
+	addSqlIntoSet(initMoAccount)
+
+	//create tables for the tenant
+	for i, sql := range createSqls {
+		//only the SYS tenant has the table mo_account
+		if !isSys && i == createMoAccountIndex {
+			continue
+		}
+		addSqlIntoSet(sql)
+	}
+
+	//initialize the default data of tables for the tenant
+
+	//step 2:add new role entries to the mo_role
+	if isSys {
+		initMoRole1 := fmt.Sprintf(initMoRoleFormat, moAdminRoleID, moAdminRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), moAdminRoleComment)
+		initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), publicRoleComment)
+		addSqlIntoSet(initMoRole1)
+		addSqlIntoSet(initMoRole2)
+	} else {
+		initMoRole1 := fmt.Sprintf(initMoRoleFormat, accountAdminRoleID, accountAdminRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), accountAdminRoleComment)
+		initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), publicRoleComment)
+		addSqlIntoSet(initMoRole1)
+		addSqlIntoSet(initMoRole2)
+	}
+
+	//step 3:add new user entry to the mo_user
+	newUserId := uint32(rootID)
+	if isSys {
+		initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, rootPassword, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
+		initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, dumpPassword, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
+		addSqlIntoSet(initMoUser1)
+		addSqlIntoSet(initMoUser2)
+	} else {
+		//TODO:use auto_increment column for the userid
+		if ca.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
+			return nil, moerr.NewInternalError("only support password verification now")
+		}
+		name := ca.AuthOption.AdminName
+		password := ca.AuthOption.IdentifiedType.Str
+		if len(password) == 0 {
+			return nil, moerr.NewInternalError("password is empty string")
+		}
+		status := rootStatus
+		if ca.StatusOption.Exist {
+			if ca.StatusOption.Option == tree.AccountStatusSuspend {
+				status = "suspend"
+			}
+		}
+		newUserId = rand.Uint32()
+		initMoUser1 := fmt.Sprintf(initMoUserFormat, newUserId, rootHost, name, password, status,
+			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
+			tenant.GetUserID(), tenant.GetDefaultRoleID(), publicRoleID)
+		addSqlIntoSet(initMoUser1)
+	}
+
+	//step4: add new entries to the mo_role_priv
+	if isSys {
+		for i := 0; i < len(sysRoles); i++ {
+			for j := 0; j < len(sysObjects); j++ {
+				for k := 0; k < len(sysPrivileges); k++ {
+					r := sysRoles[i]
+					o := sysObjects[j]
+					p := sysPrivileges[k]
+					if r.id == publicRoleID && p.id != PrivilegeTypeConnect {
+						continue
+					}
+					initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
+						r.id, r.name,
+						o.typ, o.id,
+						p.id, p.id.String(), p.level,
+						rootID, types.CurrentTimestamp().String2(time.UTC, 0),
+						p.withGrantOption)
+					addSqlIntoSet(initMoRolePriv)
+				}
+			}
+		}
+	} else {
+		for i := 0; i < len(applicationLevelRoles); i++ {
+			for j := 0; j < len(applicationLevelObjects); j++ {
+				for k := 0; k < len(applicationLevelPrivileges); k++ {
+					r := applicationLevelRoles[i]
+					o := applicationLevelObjects[j]
+					p := applicationLevelPrivileges[k]
+					if r.id == publicRoleID && p.id != PrivilegeTypeConnect {
+						continue
+					}
+					initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
+						r.id, r.name,
+						o.typ, o.id,
+						p.id, p.id.String(), p.level,
+						tenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
+						p.withGrantOption)
+					addSqlIntoSet(initMoRolePriv)
+				}
+			}
+		}
+	}
+
+	//step5: add new entries to the mo_user_grant
+	if isSys {
+		initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, moAdminRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), false)
+		initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), true)
+		addSqlIntoSet(initMoUserGrant1)
+		addSqlIntoSet(initMoUserGrant2)
+	} else {
+		initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
+		addSqlIntoSet(initMoUserGrant2)
+	}
+
+	addSqlIntoSet("commit;")
+
+	//with new tenant
+	//TODO: when we have the auto_increment column, we need new strategy.
+	newTenantCtx := context.WithValue(ctx, moengine.TenantIDKey{}, newTenantID)
+	newTenantCtx = context.WithValue(newTenantCtx, moengine.UserIDKey{}, newUserId)
+	newTenantCtx = context.WithValue(newTenantCtx, moengine.RoleIDKey{}, uint32(publicRoleID))
+
+	newTenant := &TenantInfo{
+		Tenant:        ca.Name,
+		User:          ca.AuthOption.AdminName,
+		DefaultRole:   publicRoleName,
+		TenantID:      newTenantID,
+		UserID:        newUserId,
+		DefaultRoleID: publicRoleID,
+	}
+
+	//fill the mo_account, mo_role, mo_user, mo_role_priv, mo_user_grant
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	for i, sql := range initDataSqls {
+		inputCtx := ctx
+		if insertIntoMoAccountSqlIdx != i {
+			inputCtx = newTenantCtx
+		}
+		err = bh.Exec(inputCtx, sql)
+		if err != nil {
+			goto handleFailed
+		}
+	}
+
+	return newTenant, err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(nil, "rollback;")
+	if rbErr != nil {
+		return nil, rbErr
+	}
+	return newTenant, err
+}
+
+// createTablesInInformationSchema creates the database information_schema and the views or tables.
+func createTablesInInformationSchemaOfApplicationLevelTenant(ctx context.Context, tenant *TenantInfo, pu *config.ParameterUnit, newTenant *TenantInfo) error {
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	//with new tenant
+	//TODO: when we have the auto_increment column, we need new strategy.
+	ctx = context.WithValue(ctx, moengine.TenantIDKey{}, uint32(newTenant.GetTenantID()))
+	ctx = context.WithValue(ctx, moengine.UserIDKey{}, uint32(newTenant.GetUserID()))
+	ctx = context.WithValue(ctx, moengine.RoleIDKey{}, uint32(newTenant.GetDefaultRoleID()))
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	err := bh.Exec(nil, "create database information_schema;")
+	if err != nil {
+		return err
+	}
+	return err
 }
