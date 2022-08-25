@@ -96,7 +96,7 @@ func startCNService(cfg *Config, stopper *stopper.Stopper) error {
 		if err := s.Start(); err != nil {
 			panic(err)
 		}
-		err = cnclient.NewCNClient(nil)
+		err = cnclient.NewCNClient(&cnclient.ClientConfig{})
 		if err != nil {
 			panic(err)
 		}
