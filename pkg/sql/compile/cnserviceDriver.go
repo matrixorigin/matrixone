@@ -817,12 +817,12 @@ func convertToAggregates(ags []*pipeline.Aggregate) []aggregate.Aggregate {
 }
 
 func convertToPlanOrderByList(field []colexec.Field) []*plan.OrderBySpec {
-	// default order direction is DESC.
+	// default order direction is ASC.
 	convToPlanOrderFlag := func(source colexec.Direction) plan.OrderBySpec_OrderByFlag {
-		if source == colexec.Ascending || source == colexec.DefaultDirection {
-			return plan.OrderBySpec_ASC
+		if source == colexec.Descending {
+			return plan.OrderBySpec_DESC
 		}
-		return plan.OrderBySpec_DESC
+		return plan.OrderBySpec_ASC
 	}
 
 	res := make([]*plan.OrderBySpec, len(field))
