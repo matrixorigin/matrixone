@@ -415,7 +415,7 @@ import (
 %type <expr> simple_expr else_opt
 %type <expr> expression like_escape_opt boolean_primary col_tuple expression_opt
 %type <exprs> expression_list_opt
-%type <exprs> expression_list row_value in_value
+%type <exprs> expression_list row_value
 %type <expr> datetime_precision_opt datetime_precision
 %type <tuple> tuple_expression
 %type <comparisonOp> comparison_operator and_or_some
@@ -478,7 +478,7 @@ import (
 %type <item> pwd_expire clear_pwd_opt
 %type <str> name_confict distinct_keyword
 %type <insert> insert_data
-%type <rowsExprs> values_list in_value_list
+%type <rowsExprs> values_list
 %type <str> name_datetime_precision braces_opt name_braces
 %type <str> std_dev_pop
 %type <expr> expr_or_default
@@ -4105,39 +4105,16 @@ values_opt:
 |   VALUES LESS THAN MAXVALUE
     {
     	expr := tree.NewMaxValue()
-    	exprs := tree.Exprs{expr}
-    	$$ = &tree.ValuesLessThan{ValueList: exprs}
+    	$$ = &tree.ValuesLessThan{ValueList: tree.Exprs{expr}}
     }
 |   VALUES LESS THAN '(' expression_list ')'
     {
         $$ = &tree.ValuesLessThan{ValueList: $5}
     }
-|   VALUES IN '(' in_value_list ')'
+|   VALUES IN '(' expression_list ')'
     {
 	$$ = &tree.ValuesIn{ValueList: $4}
     }
-
-
-in_value_list:
-    in_value
-    {
-    	$$ = []tree.Exprs{$1}
-    }
-|   in_value_list ',' in_value
-    {
-	$$ = append($1, $3)
-    }
-
-in_value:
-    expression
-    {
-    	$$ = tree.Exprs{$1}
-    }
-|   '(' expression_list ')'
-    {
-	    $$ = $2
-    }
-
 
 sub_partition_num_opt:
     {
