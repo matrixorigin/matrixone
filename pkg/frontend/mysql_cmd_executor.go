@@ -1483,10 +1483,40 @@ func (mce *MysqlCmdExecutor) handleDeallocate(st *tree.Deallocate) error {
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
 // which has been initialized.
 func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount) error {
+	var err error
 	ses := mce.GetSession()
 	tenant := ses.GetTenantInfo()
+	proto := ses.GetMysqlProtocol()
+
 	//step1 : create new account.
-	err := InitApplicationLevelTenant(ctx, tenant, ca)
+	err = InitGeneralTenant(ctx, tenant, ca)
+	if err != nil {
+		return err
+	}
+	resp := NewOkResponse(0, 0, 0, 0, int(COM_QUERY), "")
+	if err = proto.SendResponse(resp); err != nil {
+		return fmt.Errorf("routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
+// handleCreateUser creates the user for the tenant
+func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.CreateUser) error {
+	var err error
+	ses := mce.GetSession()
+	tenant := ses.GetTenantInfo()
+	proto := ses.GetMysqlProtocol()
+
+	//step1 : create the account
+	err = InitUser(ctx, tenant, cu)
+	if err != nil {
+		return err
+	}
+
+	resp := NewOkResponse(0, 0, 0, 0, int(COM_QUERY), "")
+	if err = proto.SendResponse(resp); err != nil {
+		return fmt.Errorf("routine send response failed. error:%v ", err)
+	}
 	return err
 }
 
@@ -1964,6 +1994,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.CreateAccount:
 			selfHandle = true
 			if err = mce.handleCreateAccount(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.CreateUser:
+			selfHandle = true
+			if err = mce.handleCreateUser(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		}

@@ -535,7 +535,7 @@ var (
 				created_time,
 				comments
 			) values (%d,"%s",%d,%d,"%s","%s");`
-	initMoUserFormat = `insert into mo_user(
+	initMoUserFormat = `insert into mo_catalog.mo_user(
 				user_id,
 				user_host,
 				user_name,
@@ -904,10 +904,10 @@ func createTablesInInformationSchema(ctx context.Context, tenant *TenantInfo, pu
 	return err
 }
 
-func checkTenantExistsOrNot(ctx context.Context, pu *config.ParameterUnit, tenantName string) (bool, error) {
+func checkTenantExistsOrNot(ctx context.Context, pu *config.ParameterUnit, userName string) (bool, error) {
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 
-	sqlForCheckTenant := getSqlForCheckTenant(tenantName)
+	sqlForCheckTenant := getSqlForCheckTenant(userName)
 	rsset, err := executeSQLInBackgroundSession(ctx, guestMMu, pu.Mempool, pu, sqlForCheckTenant)
 	if err != nil {
 		return false, err
@@ -920,8 +920,8 @@ func checkTenantExistsOrNot(ctx context.Context, pu *config.ParameterUnit, tenan
 	return true, nil
 }
 
-// InitApplicationLevelTenant initializes the application level tenan
-func InitApplicationLevelTenant(ctx context.Context, tenant *TenantInfo, ca *tree.CreateAccount) error {
+// InitGeneralTenant initializes the application level tenan
+func InitGeneralTenant(ctx context.Context, tenant *TenantInfo, ca *tree.CreateAccount) error {
 	var err error
 	var exists bool
 	pu := config.GetParameterUnit(ctx)
@@ -947,12 +947,12 @@ func InitApplicationLevelTenant(ctx context.Context, tenant *TenantInfo, ca *tre
 	}
 
 	var newTenant *TenantInfo
-	newTenant, err = createTablesInMoCatalogOfApplicationLevelTenant(ctx, tenant, pu, ca)
+	newTenant, err = createTablesInMoCatalogOfGeneralTenant(ctx, tenant, pu, ca)
 	if err != nil {
 		return err
 	}
 
-	err = createTablesInInformationSchemaOfApplicationLevelTenant(ctx, tenant, pu, newTenant)
+	err = createTablesInInformationSchemaOfGeneralTenant(ctx, tenant, pu, newTenant)
 	if err != nil {
 		return err
 	}
@@ -960,8 +960,8 @@ func InitApplicationLevelTenant(ctx context.Context, tenant *TenantInfo, ca *tre
 	return nil
 }
 
-// createTablesInMoCatalog creates catalog tables in the database mo_catalog.
-func createTablesInMoCatalogOfApplicationLevelTenant(ctx context.Context, tenant *TenantInfo, pu *config.ParameterUnit, ca *tree.CreateAccount) (*TenantInfo, error) {
+// createTablesInMoCatalogOfGeneralTenant creates catalog tables in the database mo_catalog.
+func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantInfo, pu *config.ParameterUnit, ca *tree.CreateAccount) (*TenantInfo, error) {
 	var err error
 	var initMoAccount string
 	var initDataSqls []string
@@ -990,7 +990,7 @@ func createTablesInMoCatalogOfApplicationLevelTenant(ctx context.Context, tenant
 			comment = ca.Comment.Comment
 		}
 		newTenantID = rand.Uint32()
-		initMoAccount = fmt.Sprintf(initMoAccountFormat, newTenantID, tenant.GetTenant(), sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), comment)
+		initMoAccount = fmt.Sprintf(initMoAccountFormat, newTenantID, ca.Name, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), comment)
 	}
 	insertIntoMoAccountSqlIdx := len(initDataSqls)
 	addSqlIntoSet(initMoAccount)
@@ -1037,6 +1037,7 @@ func createTablesInMoCatalogOfApplicationLevelTenant(ctx context.Context, tenant
 			return nil, moerr.NewInternalError("password is empty string")
 		}
 		status := rootStatus
+		//TODO: fix the status of user or account
 		if ca.StatusOption.Exist {
 			if ca.StatusOption.Option == tree.AccountStatusSuspend {
 				status = "suspend"
@@ -1146,8 +1147,8 @@ handleFailed:
 	return newTenant, err
 }
 
-// createTablesInInformationSchema creates the database information_schema and the views or tables.
-func createTablesInInformationSchemaOfApplicationLevelTenant(ctx context.Context, tenant *TenantInfo, pu *config.ParameterUnit, newTenant *TenantInfo) error {
+// createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
+func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, tenant *TenantInfo, pu *config.ParameterUnit, newTenant *TenantInfo) error {
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	//with new tenant
 	//TODO: when we have the auto_increment column, we need new strategy.
@@ -1159,6 +1160,103 @@ func createTablesInInformationSchemaOfApplicationLevelTenant(ctx context.Context
 	err := bh.Exec(nil, "create database information_schema;")
 	if err != nil {
 		return err
+	}
+	return err
+}
+
+func checkUserExistsOrNot(ctx context.Context, pu *config.ParameterUnit, tenantName string) (bool, error) {
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+
+	sqlForCheckUser := getSqlForPasswordOfUser(tenantName)
+	rsset, err := executeSQLInBackgroundSession(ctx, guestMMu, pu.Mempool, pu, sqlForCheckUser)
+	if err != nil {
+		return false, err
+	}
+
+	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+// InitUser creates new user for the tenant
+func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) error {
+	var err error
+	var exists bool
+	pu := config.GetParameterUnit(ctx)
+
+	//check the count of user is equal to the count of password_lock_option or not
+	if len(cu.Users) != len(cu.MiscOpts) {
+		return moerr.NewInternalError("the count of user is not equal to the count of password_option | lock_option")
+	}
+
+	var initUserSqls []string
+
+	appendSql := func(sql string) {
+		initUserSqls = append(initUserSqls, sql)
+	}
+
+	appendSql("begin;")
+
+	for _, user := range cu.Users {
+		exists, err = checkUserExistsOrNot(ctx, pu, user.Username)
+		if err != nil {
+			return err
+		}
+
+		if exists {
+			if cu.IfNotExists { //do nothing
+				continue
+			}
+			return moerr.NewInternalError("the tenant %s exists", user.Username)
+		}
+
+		if user.AuthOption == nil {
+			return moerr.NewInternalError("the user %s misses the auth_option", user.Username)
+		}
+
+		if user.AuthOption.Typ != tree.AccountIdentifiedByPassword {
+			return moerr.NewInternalError("only support password verification now")
+		}
+
+		password := user.AuthOption.Str
+		if len(password) == 0 {
+			return moerr.NewInternalError("password is empty string")
+		}
+
+		//TODO: get role and the id of role
+		//TODO: get password_option or lock_option
+		//TODO: get comment or attribute
+
+		newUserId := rand.Uint32()
+		initMoUser1 := fmt.Sprintf(initMoUserFormat, newUserId, rootHost, user.Username, password, rootStatus,
+			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
+			tenant.GetUserID(), tenant.GetDefaultRoleID(), publicRoleID)
+
+		appendSql(initMoUser1)
+	}
+
+	appendSql("commit;")
+
+	//fill the mo_user
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	for _, sql := range initUserSqls {
+		err = bh.Exec(nil, sql)
+		if err != nil {
+			goto handleFailed
+		}
+	}
+
+	return err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(nil, "rollback;")
+	if rbErr != nil {
+		return rbErr
 	}
 	return err
 }

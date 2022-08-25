@@ -600,9 +600,12 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 	ses.SetTenantInfo(tenant)
 
-	//step1 : check tenant exists or not
+	//step1 : check tenant exists or not in SYS tenant context
+	sysTenantCtx := context.WithValue(ses.requestCtx, moengine.TenantIDKey{}, uint32(sysAccountID))
+	sysTenantCtx = context.WithValue(sysTenantCtx, moengine.UserIDKey{}, uint32(rootID))
+	sysTenantCtx = context.WithValue(sysTenantCtx, moengine.RoleIDKey{}, uint32(moAdminRoleID))
 	sqlForCheckTenant := getSqlForCheckTenant(tenant.GetTenant())
-	rsset, err := executeSQLInBackgroundSession(ses.requestCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForCheckTenant)
+	rsset, err := executeSQLInBackgroundSession(sysTenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForCheckTenant)
 	if err != nil {
 		return nil, err
 	}
@@ -616,12 +619,14 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	}
 
 	tenant.SetTenantID(uint32(tenantID))
-	//step2 : check user exists or not
+	//step2 : check user exists or not in general tenant.
 	//step3 : get the password of the user
+
+	tenantCtx := context.WithValue(ses.requestCtx, moengine.TenantIDKey{}, uint32(tenantID))
 
 	//Get the password of the user in an independent session
 	sqlForPasswordOfUser := getSqlForPasswordOfUser(tenant.GetUser())
-	rsset, err = executeSQLInBackgroundSession(ses.requestCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForPasswordOfUser)
+	rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForPasswordOfUser)
 	if err != nil {
 		return nil, err
 	}
@@ -650,7 +655,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	//step4 : check role exists or not
 	//step4.1 : check default role exits or not
 	sqlForCheckRoleExists := getSqlForCheckRoleExists(int(defaultRoleID), tenant.GetDefaultRole())
-	rsset, err = executeSQLInBackgroundSession(ses.requestCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForCheckRoleExists)
+	rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForCheckRoleExists)
 	if err != nil {
 		return nil, err
 	}
@@ -662,7 +667,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	//step4.2 : check the user has the role or not
 	if !hasDefaultRole {
 		sqlForRoleOfUser := getSqlForRoleOfUser(int(userID), tenant.GetDefaultRole())
-		rsset, err = executeSQLInBackgroundSession(ses.requestCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForRoleOfUser)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForRoleOfUser)
 		if err != nil {
 			return nil, err
 		}
@@ -1078,7 +1083,7 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) ([]*MysqlResultSet, error) {
 	bh := NewBackgroundHandler(ctx, gm, mp, pu)
 	defer bh.Close()
-	err := bh.Exec(nil, sql)
+	err := bh.Exec(ctx, sql)
 	if err != nil {
 		return nil, err
 	}
