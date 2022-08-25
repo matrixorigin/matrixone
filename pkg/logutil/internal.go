@@ -69,13 +69,14 @@ func replaceGlobalLogger(logger *zap.Logger) {
 }
 
 type LogConfig struct {
-	Level       string `toml:"level"`
-	Format      string `toml:"format"`
-	Filename    string `toml:"filename"`
-	MaxSize     int    `toml:"max-size"`
-	MaxDays     int    `toml:"max-days"`
-	MaxBackups  int    `toml:"max-backups"`
-	EnableStore bool   `toml:"enable-report"` // for mo, store log into db
+	Level      string `toml:"level"`
+	Format     string `toml:"format"`
+	Filename   string `toml:"filename"`
+	MaxSize    int    `toml:"max-size"`
+	MaxDays    int    `toml:"max-days"`
+	MaxBackups int    `toml:"max-backups"`
+
+	DisableStore bool `toml:"disable-store"` // for mo, store log into db
 }
 
 func (cfg *LogConfig) getSyncer() zapcore.WriteSyncer {
@@ -119,7 +120,7 @@ func (cfg *LogConfig) getLevel() zap.AtomicLevel {
 func (cfg *LogConfig) getSinks() (sinks []ZapSink) {
 	encoder, syncer := cfg.getEncoder(), cfg.getSyncer()
 	sinks = append(sinks, ZapSink{encoder, syncer})
-	if cfg.EnableStore {
+	if !cfg.DisableStore {
 		encoder, syncer := getTraceLogSinks()
 		sinks = append(sinks, ZapSink{encoder, syncer})
 	}

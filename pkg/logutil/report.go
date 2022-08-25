@@ -26,7 +26,7 @@ import (
 var gLogConfigs atomic.Value
 
 func EnableStoreDB() bool {
-	return gLogConfigs.Load().(*LogConfig).EnableStore
+	return !gLogConfigs.Load().(*LogConfig).DisableStore
 }
 
 func setGlobalLogConfig(cfg *LogConfig) {

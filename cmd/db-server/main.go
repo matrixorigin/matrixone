@@ -198,13 +198,13 @@ func main() {
 	}
 
 	logConf := logutil.LogConfig{
-		Level:       params.LogLevel,
-		Format:      params.LogFormat,
-		Filename:    params.LogFilename,
-		MaxSize:     int(params.LogMaxSize),
-		MaxDays:     int(params.LogMaxDays),
-		MaxBackups:  int(params.LogMaxBackups),
-		EnableStore: !params.DisableTrace,
+		Level:        params.LogLevel,
+		Format:       params.LogFormat,
+		Filename:     params.LogFilename,
+		MaxSize:      int(params.LogMaxSize),
+		MaxDays:      int(params.LogMaxDays),
+		MaxBackups:   int(params.LogMaxBackups),
+		DisableStore: params.DisableTrace,
 	}
 
 	logutil.SetupMOLogger(&logConf)
