@@ -58,8 +58,6 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 // the following are adjustable
@@ -882,14 +880,14 @@ func gettok() int {
 	switch c {
 	case EOF:
 		if tokflag {
-			logutil.Infof(">>> ENDFILE %v", lineno)
+			fmt.Printf(">>> ENDFILE %v\n", lineno)
 		}
 		return ENDFILE
 
 	case '{':
 		ungetrune(finput, c)
 		if tokflag {
-			logutil.Infof(">>> ={ %v", lineno)
+			fmt.Printf(">>> ={ %v\n", lineno)
 		}
 		return '='
 
@@ -909,7 +907,7 @@ func gettok() int {
 			if typeset[i] == tokname {
 				numbval = i
 				if tokflag {
-					logutil.Infof(">>> TYPENAME old <%v> %v", tokname, lineno)
+					fmt.Printf(">>> TYPENAME old <%v> %v\n", tokname, lineno)
 				}
 				return TYPENAME
 			}
@@ -918,7 +916,7 @@ func gettok() int {
 		numbval = ntypes
 		typeset[numbval] = tokname
 		if tokflag {
-			logutil.Infof(">>> TYPENAME new <%v> %v", tokname, lineno)
+			fmt.Printf(">>> TYPENAME new <%v> %v\n", tokname, lineno)
 		}
 		return TYPENAME
 
@@ -935,7 +933,7 @@ func gettok() int {
 				c = getrune(finput)
 			} else if c == match {
 				if tokflag {
-					logutil.Infof(">>> IDENTIFIER \"%v\" %v", tokname, lineno)
+					fmt.Printf(">>> IDENTIFIER \"%v\" %v\n", tokname, lineno)
 				}
 				tokname += string(c)
 				return IDENTIFIER
@@ -948,17 +946,17 @@ func gettok() int {
 		switch c {
 		case '%':
 			if tokflag {
-				logutil.Infof(">>> MARK %%%% %v", lineno)
+				fmt.Printf(">>> MARK %%%% %v\n", lineno)
 			}
 			return MARK
 		case '=':
 			if tokflag {
-				logutil.Infof(">>> PREC %%= %v", lineno)
+				fmt.Printf(">>> PREC %%= %v\n", lineno)
 			}
 			return PREC
 		case '{':
 			if tokflag {
-				logutil.Infof(">>> LCURLY %%{ %v", lineno)
+				fmt.Printf(">>> LCURLY %%{ %v\n", lineno)
 			}
 			return LCURLY
 		}
@@ -968,7 +966,7 @@ func gettok() int {
 		for i := range resrv {
 			if tokname == resrv[i].name {
 				if tokflag {
-					logutil.Infof(">>> %%%v %v %v", tokname,
+					fmt.Printf(">>> %%%v %v %v\n", tokname,
 						resrv[i].value-PRIVATE, lineno)
 				}
 				return resrv[i].value
@@ -987,7 +985,7 @@ func gettok() int {
 		}
 		ungetrune(finput, c)
 		if tokflag {
-			logutil.Infof(">>> NUMBER %v %v", numbval, lineno)
+			fmt.Printf(">>> NUMBER %v %v\n", numbval, lineno)
 		}
 		return NUMBER
 
@@ -997,7 +995,7 @@ func gettok() int {
 			break
 		}
 		if tokflag {
-			logutil.Infof(">>> OPERATOR %v %v", string(c), lineno)
+			fmt.Printf(">>> OPERATOR %v %v\n", string(c), lineno)
 		}
 		return int(c)
 	}
@@ -1016,14 +1014,14 @@ func gettok() int {
 	}
 	if c == ':' {
 		if tokflag {
-			logutil.Infof(">>> IDENTCOLON %v: %v", tokname, lineno)
+			fmt.Printf(">>> IDENTCOLON %v: %v\n", tokname, lineno)
 		}
 		return IDENTCOLON
 	}
 
 	ungetrune(finput, c)
 	if tokflag {
-		logutil.Infof(">>> IDENTIFIER %v %v", tokname, lineno)
+		fmt.Printf(">>> IDENTIFIER %v %v\n", tokname, lineno)
 	}
 	return IDENTIFIER
 }
@@ -1672,10 +1670,10 @@ func cpres() {
 
 	if false {
 		for j := 0; j <= nnonter; j++ {
-			logutil.Infof("nnonter[%v] = %v", j, nontrst[j].name)
+			fmt.Printf("nnonter[%v] = %v\n", j, nontrst[j].name)
 		}
 		for j := 0; j < nprod; j++ {
-			logutil.Infof("prdptr[%v][0] = %v+NTBASE", j, prdptr[j][0]-NTBASE)
+			fmt.Printf("prdptr[%v][0] = %v+NTBASE\n", j, prdptr[j][0]-NTBASE)
 		}
 	}
 
@@ -2697,13 +2695,13 @@ func hideprod() {
 				fmt.Fprintf(foutput, "Rule not reduced: %v\n",
 					writem(Pitem{prdptr[i], 0, 0, i}))
 			}
-			logutil.Infof("rule %v never reduced", writem(Pitem{prdptr[i], 0, 0, i}))
+			fmt.Printf("rule %v never reduced\n", writem(Pitem{prdptr[i], 0, 0, i}))
 			nred++
 		}
 		levprd[i] = prdptr[i][0] - NTBASE
 	}
 	if nred != 0 {
-		logutil.Infof("%v rules never reduced", nred)
+		fmt.Printf("%v rules never reduced\n", nred)
 	}
 }
 
@@ -2991,8 +2989,8 @@ func others() {
 		j = tokset[i].value
 		if j >= 0 && j < 256 {
 			if temp1[j] != 0 {
-				logutil.Info("yacc bug -- cannot have 2 different Ts with same value")
-				logutil.Infof("	%s and %s", tokset[i].name, tokset[temp1[j]].name)
+				fmt.Print("yacc bug -- cannot have 2 different Ts with same value\n")
+				fmt.Printf("	%s and %s\n", tokset[i].name, tokset[temp1[j]].name)
 				nerrors++
 			}
 			temp1[j] = i
@@ -3015,8 +3013,8 @@ func others() {
 		j = tokset[i].value - PRIVATE
 		if j >= 0 && j < 256 {
 			if temp1[j] != 0 {
-				logutil.Info("yacc bug -- cannot have 2 different Ts with same value")
-				logutil.Infof("	%s and %s", tokset[i].name, tokset[temp1[j]].name)
+				fmt.Print("yacc bug -- cannot have 2 different Ts with same value\n")
+				fmt.Printf("	%s and %s\n", tokset[i].name, tokset[temp1[j]].name)
 				nerrors++
 			}
 			temp1[j] = i
@@ -3189,17 +3187,17 @@ func summary() {
 		fmt.Fprintf(foutput, "%v entries saved by goto default\n", zzgobest)
 	}
 	if zzsrconf != 0 || zzrrconf != 0 {
-		logutil.Infof("\nconflicts: ")
+		fmt.Printf("\nconflicts: ")
 		if zzsrconf != 0 {
-			logutil.Infof("%v shift/reduce", zzsrconf)
+			fmt.Printf("%v shift/reduce", zzsrconf)
 		}
 		if zzsrconf != 0 && zzrrconf != 0 {
-			logutil.Infof(", ")
+			fmt.Printf(", ")
 		}
 		if zzrrconf != 0 {
-			logutil.Infof("%v reduce/reduce", zzrrconf)
+			fmt.Printf("%v reduce/reduce", zzrrconf)
 		}
-		logutil.Infof("")
+		fmt.Printf("\n")
 	}
 }
 
