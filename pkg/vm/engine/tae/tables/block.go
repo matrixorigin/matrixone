@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync"
 	"sync/atomic"
 
@@ -57,6 +58,7 @@ const (
 )
 
 type dataBlock struct {
+	common.RefHelper
 	*sync.RWMutex
 	common.ClosedState
 	meta      *catalog.BlockEntry
@@ -295,6 +297,10 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	taskType tasks.TaskType,
 	scopes []common.ID,
 	err error) {
+	if blk.RefCount() > 0 {
+		logutil.Infof("blk.RefCount() > 0 : %d", blk.meta.ID)
+		return
+	}
 	blk.meta.RLock()
 	dropped := blk.meta.IsDroppedCommitted()
 	inTxn := blk.meta.HasActiveTxn()

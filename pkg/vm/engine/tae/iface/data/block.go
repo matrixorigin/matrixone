@@ -48,6 +48,8 @@ type BlockAppender interface {
 	) (int, error)
 	IsAppendable() bool
 	ReplayAppend(bat *containers.Batch) error
+	Ref()
+	UnRef()
 }
 
 type BlockReplayer interface {

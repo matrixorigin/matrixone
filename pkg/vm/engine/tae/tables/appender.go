@@ -58,6 +58,14 @@ func (appender *blockAppender) IsAppendable() bool {
 	return appender.rows+appender.placeholder < appender.node.block.meta.GetSchema().BlockMaxRows
 }
 
+func (appender *blockAppender) Ref() {
+	appender.node.block.Ref()
+}
+
+func (appender *blockAppender) UnRef() {
+	appender.node.block.Unref()
+}
+
 func (appender *blockAppender) PrepareAppend(
 	rows uint32,
 	txn txnif.AsyncTxn) (node txnif.AppendNode, created bool, n uint32, err error) {
