@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"io"
 	"net/http"
 	"strings"
@@ -117,16 +118,25 @@ func TestDescExtra(t *testing.T) {
 	assert.Equal(t, extra.labels[2].GetName(), "xy")
 }
 
+type dummyTableOptions struct{}
+
+func (o dummyTableOptions) GetCreateOptions() string { return "" }
+func (o dummyTableOptions) GetTableOptions() string  { return "" }
+
+var dummyOptionsFactory = func(db, tbl string) trace.TableOptions {
+	return &dummyTableOptions{}
+}
+
 func TestCreateTable(t *testing.T) {
 	buf := new(bytes.Buffer)
 	name := "sql_test_counter"
-	sql := createTableSqlFromMetricFamily(prom.NewDesc(name, "", []string{"zzz", "aaa"}, nil), buf)
+	sql := createTableSqlFromMetricFamily(prom.NewDesc(name, "", []string{"zzz", "aaa"}, nil), buf, dummyOptionsFactory)
 	assert.Equal(t, sql, fmt.Sprintf(
 		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` int, `%s` varchar(20), `aaa` varchar(20), `zzz` varchar(20))",
 		MetricDBConst, name, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
 	))
 
-	sql = createTableSqlFromMetricFamily(prom.NewDesc(name, "", nil, nil), buf)
+	sql = createTableSqlFromMetricFamily(prom.NewDesc(name, "", nil, nil), buf, dummyOptionsFactory)
 	assert.Equal(t, sql, fmt.Sprintf(
 		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` int, `%s` varchar(20))",
 		MetricDBConst, name, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,

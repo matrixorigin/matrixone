@@ -19,7 +19,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"io"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"runtime"
 	"strings"
 	"time"
@@ -140,13 +140,11 @@ func (c *metricCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily
 	}
 }
 
-type fsFactoryFunc func(ctx context.Context, dir string, name bp.HasName) io.StringWriter
-
 var _ MetricCollector = (*metricFSCollector)(nil)
 
 type metricFSCollector struct {
 	*bp.BaseBatchPipe[*pb.MetricFamily, *trace.CSVRequest]
-	fsFactory fsFactoryFunc
+	fsFactory export.FSWriterFactory
 	opts      collectorOpts
 }
 
@@ -159,7 +157,7 @@ func (c *metricFSCollector) SendMetrics(ctx context.Context, mfs []*pb.MetricFam
 	return nil
 }
 
-func newMetricFSCollector(fsFactory fsFactoryFunc, opts ...collectorOpt) MetricCollector {
+func newMetricFSCollector(fsFactory export.FSWriterFactory, opts ...collectorOpt) MetricCollector {
 	initOpts := defaultCollectorOpts()
 	for _, o := range opts {
 		o.ApplyTo(&initOpts)
@@ -288,7 +286,7 @@ func (s *mfset) GetBatch(buf *bytes.Buffer) string {
 
 type mfsetCSV struct {
 	mfset
-	fsFactory fsFactoryFunc
+	fsFactory export.FSWriterFactory
 }
 
 func (s *mfsetCSV) writeCsvOneLine(buf *bytes.Buffer, fields []string) {

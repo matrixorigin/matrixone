@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"path"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -144,22 +144,7 @@ func InitExternalTblSchema(ctx context.Context, ieFactory func() ie.InternalExec
 		return nil
 	}
 
-	var infileFormatter string
-	switch cfg.Backend() {
-	case diskFSBackend:
-		infileFormatter = fmt.Sprintf(` infile{"filepath"="%s/%%s_*.csv","compression"="none"}`+
-			` FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`,
-			path.Join(cfg.BaseDir(), StatsDatabase))
-	case s3FSBackend:
-		infileFormatter = fmt.Sprintf(` URL s3option {`+
-			`"endpoint"="%s", "access_key_id"="%s", "secret_access_key"="%s",`+
-			`"bucket"="%s", "region"="%s", "filepath"="%s/%%s_*.csv"}`+
-			` FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`,
-			cfg.Endpoint(), cfg.AccessKeyID(), cfg.SecretAccessKey(),
-			cfg.Bucket(), cfg.Region(), path.Join(cfg.BaseDir(), StatsDatabase))
-	default:
-		return moerr.NewPanicError(fmt.Errorf("unsupport csv, fileservice: %v", cfg.Bucket()))
-	}
+	optFactory := GetOptionFactory(cfg)
 
 	if err := mustExec(sqlCreateDBConst); err != nil {
 		return err
@@ -180,7 +165,8 @@ func InitExternalTblSchema(ctx context.Context, ieFactory func() ie.InternalExec
 		{getExternalTableDDLPrefix(sqlCreateErrorInfoTable), MOErrorType},
 	}
 	for _, ddl := range initDDLs {
-		sql := ddl.sqlPrefix + fmt.Sprintf(infileFormatter, ddl.filePrefix)
+		opts := optFactory(StatsDatabase, ddl.filePrefix)
+		sql := ddl.sqlPrefix + opts.GetTableOptions()
 		if err := mustExec(sql); err != nil {
 			return err
 		}
@@ -192,4 +178,59 @@ func InitExternalTblSchema(ctx context.Context, ieFactory func() ie.InternalExec
 
 func getExternalTableDDLPrefix(sql string) string {
 	return strings.Replace(sql, "CREATE TABLE", "CREATE EXTERNAL TABLE", 1)
+}
+
+type TableOptions interface {
+	// GetCreateOptions return option for `create {option}table`, which should end with ' '
+	GetCreateOptions() string
+	GetTableOptions() string
+}
+
+var _ TableOptions = (*CsvTableOptions)(nil)
+
+type CsvTableOptions struct {
+	formatter string
+	dbName    string
+	tblName   string
+}
+
+func (o *CsvTableOptions) GetCreateOptions() string {
+	return "EXTERNAL "
+}
+
+func (o *CsvTableOptions) GetTableOptions() string {
+	return fmt.Sprintf(o.formatter, o.dbName, o.tblName)
+}
+
+var _ TableOptions = (*noopTableOptions)(nil)
+
+type noopTableOptions struct{}
+
+func (o noopTableOptions) GetCreateOptions() string { return "" }
+func (o noopTableOptions) GetTableOptions() string  { return "" }
+
+func GetOptionFactory(cfg FSConfig) func(db, tbl string) TableOptions {
+	if reflect.ValueOf(cfg).IsNil() {
+		return func(_, _ string) TableOptions { return noopTableOptions{} }
+	}
+	var infileFormatter string
+	switch cfg.Backend() {
+	case diskFSBackend:
+		infileFormatter = fmt.Sprintf(` infile{"filepath"="%s/%%s/%%s_*.csv","compression"="none"}`+
+			` FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`,
+			cfg.BaseDir())
+	case s3FSBackend:
+		infileFormatter = fmt.Sprintf(` URL s3option {`+
+			`"endpoint"="%s", "access_key_id"="%s", "secret_access_key"="%s",`+
+			`"bucket"="%s", "region"="%s", "filepath"="%s/%%s/%%s_*.csv"}`+
+			` FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`,
+			cfg.Endpoint(), cfg.AccessKeyID(), cfg.SecretAccessKey(),
+			cfg.Bucket(), cfg.Region(), cfg.BaseDir())
+	default:
+		panic(moerr.NewPanicError(fmt.Errorf("unsupport csv, fileservice: %v", cfg.Bucket())))
+	}
+
+	return func(db, tbl string) TableOptions {
+		return &CsvTableOptions{formatter: infileFormatter, dbName: db, tblName: tbl}
+	}
 }

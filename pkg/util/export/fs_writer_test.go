@@ -227,7 +227,7 @@ func TestParseFileService(t *testing.T) {
 		name    string
 		args    args
 		wantFs  fileservice.FileService
-		wantCfg Config
+		wantCfg FSConfig
 		wantErr bool
 	}{
 		{
@@ -243,7 +243,7 @@ func TestParseFileService(t *testing.T) {
 				},
 			},
 			wantFs:  localETLFS,
-			wantCfg: Config{backend: DiskFSBackend, baseDir: "store"},
+			wantCfg: FSConfig{backend: DiskFSBackend, baseDir: "store"},
 			wantErr: false,
 		},
 		{
@@ -264,7 +264,7 @@ func TestParseFileService(t *testing.T) {
 				},
 			},
 			wantFs: localETLFS,
-			wantCfg: Config{
+			wantCfg: FSConfig{
 				backend:         S3FSBackend,
 				baseDir:         "store",
 				endpoint:        "s3.us-west-2.amazonaws.com",

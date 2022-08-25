@@ -45,7 +45,7 @@ const (
 
 // Config cn service
 type Config struct {
-	UUID string `toml"uuid"`
+	UUID string `toml:"uuid"`
 
 	// ListenAddress listening address for receiving external requests
 	ListenAddress string `toml:"listen-address"`

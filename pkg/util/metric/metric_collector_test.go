@@ -17,6 +17,7 @@ package metric
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"io"
 	"regexp"
 	"testing"
@@ -147,8 +148,8 @@ func (w *channelStringWriter) WriteString(s string) (n int, err error) {
 	return n, nil
 }
 
-func newFSWriterFactory(csvCh chan string) fsFactoryFunc {
-	return fsFactoryFunc(func(_ context.Context, dir string, name batchpipe.HasName) io.StringWriter {
+func newFSWriterFactory(csvCh chan string) export.FSWriterFactory {
+	return export.FSWriterFactory(func(_ context.Context, dir string, name batchpipe.HasName) io.StringWriter {
 		return &channelStringWriter{name: name.GetName(), ch: csvCh}
 	})
 }

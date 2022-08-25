@@ -133,7 +133,9 @@ func (w *FSWriter) WriteString(s string) (n int, err error) {
 	return w.Write(b)
 }
 
-func GetFSWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string) func(context.Context, string, batchpipe.HasName) io.StringWriter {
+type FSWriterFactory func(context.Context, string, batchpipe.HasName) io.StringWriter
+
+func GetFSWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string) FSWriterFactory {
 	return func(_ context.Context, dir string, i batchpipe.HasName) io.StringWriter {
 		return NewFSWriter(DefaultContext(), fs,
 			WithPrefix(i),
@@ -143,7 +145,7 @@ func GetFSWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string) f
 	}
 }
 
-type Config struct {
+type FSConfig struct {
 	// base FileService config
 	backend string
 	baseDir string
@@ -155,31 +157,31 @@ type Config struct {
 	region          string
 }
 
-func (c *Config) Backend() string {
+func (c *FSConfig) Backend() string {
 	return c.backend
 }
 
-func (c *Config) BaseDir() string {
+func (c *FSConfig) BaseDir() string {
 	return c.baseDir
 }
 
-func (c *Config) Endpoint() string {
+func (c *FSConfig) Endpoint() string {
 	return c.endpoint
 }
 
-func (c *Config) AccessKeyID() string {
+func (c *FSConfig) AccessKeyID() string {
 	return c.accessKeyID
 }
 
-func (c *Config) SecretAccessKey() string {
+func (c *FSConfig) SecretAccessKey() string {
 	return c.secretAccessKey
 }
 
-func (c *Config) Bucket() string {
+func (c *FSConfig) Bucket() string {
 	return c.bucket
 }
 
-func (c *Config) Region() string {
+func (c *FSConfig) Region() string {
 	return c.region
 }
 
@@ -191,7 +193,7 @@ const (
 	S3FSBackend   = "S3"
 )
 
-func ParseFileService(ctx context.Context, fsConfig fileservice.Config) (fs fileservice.FileService, cfg Config, err error) {
+func ParseFileService(ctx context.Context, fsConfig fileservice.Config) (fs fileservice.FileService, cfg FSConfig, err error) {
 	switch fsConfig.Backend {
 	case DiskFSBackend, MemFSBackend:
 		if fs, err = fileservice.NewLocalETLFS(fsConfig.Name+"ETL", fsConfig.DataDir); err != nil {

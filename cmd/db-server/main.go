@@ -69,33 +69,39 @@ func createMOServer(inputCtx context.Context, pu *config.ParameterUnit) {
 
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
 	mo = frontend.NewMOServer(moServerCtx, address, pu)
-	{
-		// init trace/log/error framework
-		if err := util.SetUUIDNodeID(nil); err != nil {
-			panic(err)
-		} else if fs, cfg, err := export.ParseFileService(moServerCtx, fileservice.Config{Name: "local", Backend: "DISK", DataDir: pu.SV.StorePath}); err != nil {
-			panic(err)
-		} else if _, err := trace.Init(moServerCtx,
-			trace.WithMOVersion(MoVersion),
-			trace.WithNode("node_uuid", trace.NodeTypeNode),
-			trace.EnableTracer(!pu.SV.DisableTrace),
-			trace.WithBatchProcessMode(pu.SV.TraceBatchProcessor),
-			trace.DebugMode(pu.SV.EnableTraceDebug),
-			trace.WithFSWriterFactory(export.GetFSWriterFactory(fs, "node_uuid", trace.NodeTypeNode.String())),
-			trace.WithFSConfig(&cfg),
-			trace.WithSQLExecutor(func() ie.InternalExecutor {
-				return frontend.NewInternalExecutor(pu)
-			}),
-		); err != nil {
+	var fs fileservice.FileService
+	var cfg export.FSConfig
+	var fsFactory export.FSWriterFactory
+	var err error
+	if !pu.SV.DisableTrace || !pu.SV.DisableMetric {
+		if fs, cfg, err = export.ParseFileService(moServerCtx, fileservice.Config{Name: "local", Backend: "DISK", DataDir: pu.SV.StorePath}); err != nil {
 			panic(err)
 		}
+		fsFactory = export.GetFSWriterFactory(fs, "node_uuid", trace.NodeTypeNode.String())
+	}
+	// init trace/log/error framework
+	if err := util.SetUUIDNodeID(nil); err != nil {
+		panic(err)
+	} else if _, err := trace.Init(moServerCtx,
+		trace.WithMOVersion(MoVersion),
+		trace.WithNode("node_uuid", trace.NodeTypeNode),
+		trace.EnableTracer(!pu.SV.DisableTrace),
+		trace.WithBatchProcessMode(pu.SV.TraceBatchProcessor),
+		trace.DebugMode(pu.SV.EnableTraceDebug),
+		trace.WithFSWriterFactory(fsFactory),
+		trace.WithFSConfig(&cfg),
+		trace.WithSQLExecutor(func() ie.InternalExecutor {
+			return frontend.NewInternalExecutor(pu)
+		}),
+	); err != nil {
+		panic(err)
 	}
 
 	if !pu.SV.DisableMetric {
 		ieFactory := func() ie.InternalExecutor {
 			return frontend.NewInternalExecutor(pu)
 		}
-		metric.InitMetric(moServerCtx, ieFactory, pu.SV, 0, metric.ALL_IN_ONE_MODE)
+		metric.InitMetric(moServerCtx, ieFactory, pu.SV, 0, metric.ALL_IN_ONE_MODE, metric.WithFileService(fsFactory, &cfg))
 	}
 	frontend.InitServerVersion(MoVersion)
 }
