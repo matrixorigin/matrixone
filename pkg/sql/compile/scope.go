@@ -143,7 +143,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	rs, err := decodeScope(data)
+	rs, err := decodeScope(data, s.Proc)
 	if err != nil {
 		return err
 	}

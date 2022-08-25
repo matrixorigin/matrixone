@@ -57,7 +57,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -66,7 +65,7 @@ import (
 // return an extra data and error info if error occurs.
 func PipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession) ([]byte, error) {
 	m := message.(*pipeline.Message)
-	s, err := decodeScope(m.GetData())
+	s, err := decodeScope(m.GetData(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -662,17 +661,13 @@ func encodeScope(s *Scope) ([]byte, error) {
 	return s.pipe.Marshal()
 }
 
-func decodeScope(data []byte) (*Scope, error) {
+func decodeScope(data []byte, proc *process.Process) (*Scope, error) {
 	// unmarshal to pipeline
 	p := &pipeline.Pipeline{}
 	err := p.Unmarshal(data)
 	if err != nil {
 		return nil, err
 	}
-	// test
-	proc := testutil.NewProcess()
-	proc.Ctx = context.TODO()
-
 	// convert pipeline.Pipeline to scope.
 	return convertPipelineToScope(proc, p, nil, nil)
 }
