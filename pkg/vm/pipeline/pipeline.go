@@ -146,8 +146,8 @@ func cleanup(p *Pipeline, proc *process.Process) {
 	for i, in := range p.instructions {
 		if in.Op == vm.Connector {
 			arg := p.instructions[i].Arg.(*connector.Argument)
-			for len(arg.Reg.Ch) > 0 {
-				<-arg.Reg.Ch
+			if len(arg.Reg.Ch) > 0 {
+				break
 			}
 			select {
 			case <-arg.Reg.Ctx.Done():
@@ -158,8 +158,8 @@ func cleanup(p *Pipeline, proc *process.Process) {
 		if in.Op == vm.Dispatch {
 			arg := p.instructions[i].Arg.(*dispatch.Argument)
 			for _, reg := range arg.Regs {
-				for len(reg.Ch) > 0 {
-					<-reg.Ch
+				if len(reg.Ch) > 0 {
+					break
 				}
 				select {
 				case <-reg.Ctx.Done():

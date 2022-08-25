@@ -123,7 +123,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 // RemoteRun send the scope to a remote node (if target node is itself, it is same to function ParallelRun) and run it.
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if address itself, just run it parallel at local.
-	//return s.ParallelRun(c)
+	//	return s.ParallelRun(c)
 	/*
 		if len(s.NodeInfo.Addr) == 0 {
 			return s.ParallelRun(c)
@@ -145,6 +145,10 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		return err
 	}
 	rs.Instructions = append(rs.Instructions, in)
+	{
+		fmt.Printf("+++rs remote run: %p, %p: %v\n", rs, rs.Proc, rs.Instructions)
+		defer fmt.Printf("+++remote run end: %p\n", rs)
+	}
 	return rs.ParallelRun(c)
 }
 

@@ -250,7 +250,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
 		}
 	}
-	s.Instructions = make([]vm.Instruction, len(p.InstructionList))
 	s.PreScopes = make([]*Scope, len(p.Children))
 	ctx.children = make([]*scopeContext, len(s.PreScopes))
 	for i := range s.PreScopes {
@@ -270,13 +269,14 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline) error {
 	var err error
 
-	for i := range s.Instructions {
-		if s.Instructions[i], err = convertToVmInstruction(p.InstructionList[i], ctx); err != nil {
+	for i := range s.PreScopes {
+		if err = fillInstructionsForScope(s.PreScopes[i], ctx.children[i], p.Children[i]); err != nil {
 			return err
 		}
 	}
-	for i := range s.PreScopes {
-		if err = fillInstructionsForScope(s.PreScopes[i], ctx, p.Children[i]); err != nil {
+	s.Instructions = make([]vm.Instruction, len(p.InstructionList))
+	for i := range s.Instructions {
+		if s.Instructions[i], err = convertToVmInstruction(p.InstructionList[i], ctx); err != nil {
 			return err
 		}
 	}

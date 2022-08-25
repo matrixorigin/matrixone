@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -42,7 +41,9 @@ import (
 // New is used to new an object of compile
 func New(db string, sql string, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
-	NewServer()
+	{
+		fmt.Printf("sql: %s\n", sql)
+	}
 	return &Compile{
 		e:    e,
 		db:   db,
@@ -996,7 +997,9 @@ func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 
 // Number of cpu's available on the current machine
 func (c *Compile) NumCPU() int {
-	return runtime.NumCPU()
+	return 4
+	//return runtime.NumCPU()
+	//return 1
 }
 
 func (c *Compile) initAnalyze(qry *plan.Query) {
